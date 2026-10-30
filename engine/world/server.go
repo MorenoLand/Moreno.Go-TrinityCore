@@ -5085,6 +5085,131 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// MSG_AUCTION_HELLO is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:728), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm runs the auctioneer interact
+			// gate, strips a faked death, then answers
+			// MSG_AUCTION_HELLO with the house id and enabled
+			// byte, subject to the level gate
+			// (AuctionHouseHandler.cpp:39-66); the logout
+			// sends no hello. The unknown/non-auctioneer arm
+			// is silent in both. No arm clears logoutAt, so
+			// dispatch it here like the toggle-PvP leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_AUCTION_HELLO) && state.authed && !hookBlocked {
+				if !state.handleAuctionHello(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_AUCTION_SELL_ITEM is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:729), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm runs the item-count, max-money,
+			// auctioneer-interact and faction-house gates, then
+			// mints the auction (AuctionHouseHandler.cpp:119-
+			// 425); Go's handler INSERTs the auctionhouse row
+			// and UPDATEs the money row eagerly while the
+			// logout save writes no auctionhouse rows, so a
+			// drop loses the listing outright. The gate arms
+			// answer DATABASE_ERROR or stay silent in both.
+			// No arm clears logoutAt, so dispatch it here like
+			// the hello leg, then fall through to the expiry
+			// logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUCTION_SELL_ITEM) && state.authed && !hookBlocked {
+				if !state.handleAuctionSellItem(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_AUCTION_REMOVE_ITEM is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:730), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm runs the auctioneer-interact
+			// gate, strips a faked death, pays the bidder cut
+			// and mails, then DELETEs the auction
+			// (AuctionHouseHandler.cpp:575-640); Go's handler
+			// DELETEs the auctionhouse and auctionbidders rows
+			// eagerly while the logout save writes no auction
+			// rows, so a drop resurrects the auction at next
+			// login. The non-owner/missing-item arms answer
+			// DATABASE_ERROR in both. No arm clears logoutAt,
+			// so dispatch it here like the sell leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUCTION_REMOVE_ITEM) && state.authed && !hookBlocked {
+				if !state.handleAuctionRemoveItem(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_AUCTION_LIST_ITEMS is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:731), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm runs the auctioneer-interact
+			// gate, strips a faked death, then answers
+			// SMSG_AUCTION_LIST_RESULT with the browse page
+			// (AuctionHouseHandler.cpp:745-811); the logout
+			// sends no list. The no-auctioneer arm is silent
+			// in both. No arm clears logoutAt, so dispatch it
+			// here like the remove leg, then fall through to
+			// the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUCTION_LIST_ITEMS) && state.authed && !hookBlocked {
+				if !state.handleAuctionListItems(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_AUCTION_LIST_OWNER_ITEMS is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:732), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm runs the auctioneer-interact
+			// gate, strips a faked death, then answers
+			// SMSG_AUCTION_OWNER_LIST_RESULT with count and
+			// totalcount (AuctionHouseHandler.cpp:708-727);
+			// the logout sends no list. The no-auctioneer arm
+			// is silent in both. No arm clears logoutAt, so
+			// dispatch it here like the list leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUCTION_LIST_OWNER_ITEMS) && state.authed && !hookBlocked {
+				if !state.handleAuctionListOwnerItems(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_AUCTION_PLACE_BID is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:733), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm runs the auctioneer-interact
+			// gate, strips a faked death, then takes the bid
+			// (own/own-account and min-bid gates, diff top-up,
+			// outbid mail and notification)
+			// (AuctionHouseHandler.cpp:427-574); Go's handler
+			// UPDATEs the auction bid/bidder and money rows
+			// and INSERTs the auctionbidders row eagerly while
+			// the logout save writes no auction rows, so a
+			// drop loses the bid outright. The gate arms
+			// answer the bid error or stay silent in both. No
+			// arm clears logoutAt, so dispatch it here like
+			// the owner-list leg, then fall through to the
+			// expiry logout below; the handler returns true
+			// on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_AUCTION_PLACE_BID) && state.authed && !hookBlocked {
+				if !state.handleAuctionPlaceBid(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
