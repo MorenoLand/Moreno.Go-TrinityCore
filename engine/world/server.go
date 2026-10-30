@@ -2946,6 +2946,21 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			state.server.TraceRecorder.Record(protocoltrace.ClientToServer, header.Opcode, payload, opcodeName(header.Opcode))
 		}
 		if !state.logoutAt.IsZero() && !time.Now().Before(state.logoutAt) {
+			// WorldSession::Update (WorldSession.cpp:302-472) drains the
+			// recv queue before the ShouldLogOut check, so a LogoutCancel
+			// read in the same tick as the countdown expiry still
+			// cancels: dispatch it here instead of logging out, or a
+			// cancel read just past logoutAt would be discarded and
+			// the expiry logout would fire instead. Gated on the expiry
+			// condition so ordinary cancels keep the normal dispatch
+			// path (hooks, idle-timer refresh) below; the dispatch arm
+			// returns on a failed ack write, so this leg mirrors it.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL) && state.authed {
+				if !state.handleLogoutCancel() {
+					return
+				}
+				continue
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
