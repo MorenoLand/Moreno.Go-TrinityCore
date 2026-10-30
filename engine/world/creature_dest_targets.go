@@ -49,7 +49,9 @@ func spellHasCreatureDestTarget(spell wotlk.Spell) bool {
 //
 // Later effects overwrite earlier ones and each effect's A arm runs before
 // its B arm, matching the player path and the C++ per-effect order.
-// ok is false when the spell carries no bridgeable dest-family target;
+// ok is false when the spell carries no bridgeable dest-family target and
+// its explicit mask needs no DEST_LOCATION; a no-dest-family spell whose
+// mask needs DEST_LOCATION returns the InitExplicit seed below.
 // destFailed is true when a 46 arm found no match.
 //
 // TARGET_DEST_TRAJ (89) runs through the shared Server trajectory core
@@ -87,6 +89,15 @@ type creatureDestTraj struct {
 	SrcX, SrcY, SrcZ    float32
 	HasSeed             bool
 	SeedX, SeedY, SeedZ float32
+	// HasSeedTarget/SeedTargetGUID pin the InitExplicit seed anchor to
+	// the pre-redirect object target: InitExplicitTargets (Spell.cpp:700-712)
+	// runs at prepare time, before SelectExplicitTargets redirects the unit
+	// target (Spell.cpp:724-757), so the seed reads the ORIGINAL target
+	// while the target-dest arms anchor on the redirected one. Redirect
+	// re-resolution call sites set these; all other callers leave them zero
+	// and the seed anchors on targetGUID as before.
+	HasSeedTarget  bool
+	SeedTargetGUID uint64
 }
 
 // creatureDestSnapshot is one effect's Spell::m_destTargets slot
@@ -143,6 +154,35 @@ func creatureEffectDestTarget(base protocol.SpellTargetData, m *creatureMotion, 
 	return base
 }
 
+// creatureDestAnchor resolves the SelectImplicitTargetDestTargets anchor
+// (Spell.cpp:1433-1436) for one object guid: a unit via the threat-position
+// lookup, else a gameobject via the live state or the static DB row plus
+// its orientation (mirroring the player leg); an unresolvable guid keeps
+// the seed fallback the target-dest arm documents. The target-dest arms
+// and the InitExplicit seed share this anchor except on redirect
+// re-resolution, where the seed takes the pre-redirect guid's anchor.
+func (s *Server) creatureDestAnchor(ctx context.Context, m *creatureMotion, guid uint64) (float32, float32, float32, float32, bool) {
+	if guid == 0 {
+		return 0, 0, 0, 0, false
+	}
+	if ux, uy, uz, _, _, found := s.aiThreatUnitPos(m, guid, nil, true); found {
+		return ux, uy, uz, s.creatureDestTargetOrientation(m, guid), true
+	}
+	if uint16(guid>>48) == 0xF110 {
+		if st := s.gameObjectState(m.Map, m.InstanceID, guid); st != nil {
+			return st.X, st.Y, st.Z, st.Orientation, true
+		}
+		if gx, gy, gz, ok := s.gameObjectAnchorPosition(ctx, guid, m.Map, m.InstanceID); ok {
+			var ori float64
+			if s.WorldStore != nil && s.WorldStore.DB != nil {
+				_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT orientation FROM gameobject WHERE guid = ?", uint32(guid&0xFFFFFF)).Scan(&ori)
+			}
+			return gx, gy, gz, float32(ori), true
+		}
+	}
+	return 0, 0, 0, 0, false
+}
+
 func (s *Server) resolveCreatureSpellDestination(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool, bool) {
 	x, y, z, hasDest, destFailed, _ := s.resolveCreatureSpellDestinationSnapshots(ctx, m, spell, targetGUID)
 	return x, y, z, hasDest, destFailed
@@ -161,7 +201,7 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 	if s == nil || m == nil {
 		return 0, 0, 0, false, false, nil
 	}
-	if !spellHasCreatureDestTarget(spell) {
+	if !spellHasCreatureDestTarget(spell) && !spellExplicitDestLocationNeeded(spell) {
 		return 0, 0, 0, false, false, nil
 	}
 	x, y, z := m.X, m.Y, m.Z
@@ -186,32 +226,39 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 	// (Spell.cpp:1433-1436); on this path that is the explicit object
 	// target (Unit::CastSpell sets it before _cast) — a unit via the
 	// threat-position lookup, a gameobject via the GO anchor leg below.
-	var unitX, unitY, unitZ, unitO float32
-	hasUnitTarget := false
-	if targetGUID != 0 {
-		if ux, uy, uz, _, _, found := s.aiThreatUnitPos(m, targetGUID, nil, true); found {
-			unitX, unitY, unitZ = ux, uy, uz
-			unitO = s.creatureDestTargetOrientation(m, targetGUID)
-			hasUnitTarget = true
-		}
+	unitX, unitY, unitZ, unitO, hasUnitTarget := s.creatureDestAnchor(ctx, m, targetGUID)
+	// The InitExplicit seed anchor is the target-dest anchor above, except
+	// on redirect re-resolution, where it stays on the pre-redirect target
+	// (see the creatureDestTraj seed-target comment): the target-dest arms
+	// below keep anchoring on targetGUID, only the seed moves.
+	seedUnitX, seedUnitY, seedUnitZ, seedHasUnitTarget := unitX, unitY, unitZ, hasUnitTarget
+	if traj.HasSeedTarget {
+		seedUnitX, seedUnitY, seedUnitZ, _, seedHasUnitTarget = s.creatureDestAnchor(ctx, m, traj.SeedTargetGUID)
 	}
-	// Spell::SelectImplicitTargetDestTargets anchors on the wire object
-	// target (Spell.cpp:1433), any WorldObject, not just units — the
-	// player-path twin already anchors GO wire targets this way, but
-	// the creature resolver kept the caster seed for a GO target. A
-	// live GO state wins, else the static DB row plus its orientation,
-	// mirroring the player leg; an unresolvable GO keeps the seed
-	// fallback the target-dest arm below documents.
-	if !hasUnitTarget && uint16(targetGUID>>48) == 0xF110 {
-		if st := s.gameObjectState(m.Map, m.InstanceID, targetGUID); st != nil {
-			unitX, unitY, unitZ, unitO, hasUnitTarget = st.X, st.Y, st.Z, st.Orientation, true
-		} else if gx, gy, gz, ok := s.gameObjectAnchorPosition(ctx, targetGUID, m.Map, m.InstanceID); ok {
-			var ori float64
-			if s.WorldStore != nil && s.WorldStore.DB != nil {
-				_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT orientation FROM gameobject WHERE guid = ?", uint32(targetGUID&0xFFFFFF)).Scan(&ori)
-			}
-			unitX, unitY, unitZ, unitO, hasUnitTarget = gx, gy, gz, float32(ori), true
+	// No dest-family arm runs for this spell, but the explicit mask needs
+	// DEST_LOCATION, so InitExplicitTargets left HasDst set (Spell.cpp:700-712)
+	// and AddDestTarget stamps every non-empty effect's slot with it
+	// (Spell.cpp:789; empty effects are skipped, :765-767): the client
+	// destination when the traj seed carries one (Spell.cpp:702), else the
+	// explicit object target's position resolved above, else the motion
+	// position. Without this branch the early return above discarded the
+	// seed, the GO packet carried no destination, and summon/DynObj effects
+	// fell back to the caster position instead of the seed.
+	if !spellHasCreatureDestTarget(spell) {
+		seedX, seedY, seedZ := m.X, m.Y, m.Z
+		if traj.HasSeed {
+			seedX, seedY, seedZ = traj.SeedX, traj.SeedY, traj.SeedZ
+		} else if seedHasUnitTarget {
+			seedX, seedY, seedZ = seedUnitX, seedUnitY, seedUnitZ
 		}
+		snapshots := make([]creatureDestSnapshot, len(spell.Effects))
+		for i, eff := range spell.Effects {
+			if eff.Effect == 0 {
+				continue
+			}
+			snapshots[i] = creatureDestSnapshot{Has: true, X: seedX, Y: seedY, Z: seedZ}
+		}
+		return seedX, seedY, seedZ, true, false, snapshots
 	}
 	// Spell::InitExplicitTargets (Spell.cpp:700-712): when the spell's
 	// explicit mask needs DEST_LOCATION and no traj seed is present (a
@@ -222,8 +269,8 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 	seedApplied := false
 	if !traj.HasSeed && spellExplicitDestLocationNeeded(spell) {
 		seedApplied = true
-		if hasUnitTarget {
-			x, y, z = unitX, unitY, unitZ
+		if seedHasUnitTarget {
+			x, y, z = seedUnitX, seedUnitY, seedUnitZ
 		}
 	}
 	// TARGET_DEST_NEARBY_ENTRY (46) scans per effect in the loop below:

@@ -3738,7 +3738,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						areaCreatureHits = append(areaCreatureHits, redirectGUID)
 						var redirectDestFailed bool
 						var redirectDestSnapshots []creatureDestSnapshot
-						destX, destY, destZ, hasDest, redirectDestFailed, redirectDestSnapshots = s.resolveCreatureSpellDestinationSnapshots(ctx, motion, spellInfo, redirectGUID)
+						destX, destY, destZ, hasDest, redirectDestFailed, redirectDestSnapshots = s.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, motion, spellInfo, redirectGUID, creatureDestTraj{HasSeedTarget: true, SeedTargetGUID: target.GUID})
 						inlineDynHasDest, inlineDynX, inlineDynY, inlineDynZ = persistentAreaAuraDest(spellInfo, redirectDestSnapshots)
 						inlineSummonSnapshots = redirectDestSnapshots
 						if redirectDestFailed {
@@ -3775,7 +3775,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						}
 						var redirectDestFailed bool
 						var redirectDestSnapshots []creatureDestSnapshot
-						destX, destY, destZ, hasDest, redirectDestFailed, redirectDestSnapshots = s.resolveCreatureSpellDestinationSnapshots(ctx, motion, spellInfo, redirectGUID)
+						destX, destY, destZ, hasDest, redirectDestFailed, redirectDestSnapshots = s.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, motion, spellInfo, redirectGUID, creatureDestTraj{HasSeedTarget: true, SeedTargetGUID: target.GUID})
 						inlineDynHasDest, inlineDynX, inlineDynY, inlineDynZ = persistentAreaAuraDest(spellInfo, redirectDestSnapshots)
 						inlineSummonSnapshots = redirectDestSnapshots
 						if redirectDestFailed {

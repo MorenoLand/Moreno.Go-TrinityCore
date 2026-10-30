@@ -3733,10 +3733,14 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// redirect). Runs for triggered casts too (no C++ triggered
 	// exemption on SelectExplicitTargets).
 	if redirectGUID, ok := s.server.creatureGroundingTotemRedirect(ctx, motion, spell, targetGUID); ok {
+		preRedirectTargetGUID := targetGUID
 		targetGUID = redirectGUID
 		target.UnitGUID = redirectGUID
 		var destFailed bool
-		dx, dy, dz, hasDest, destFailed, destSnapshots = s.server.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, motion, spell, targetGUID, petDestTrajOptions(motion, target))
+		redirectTraj := petDestTrajOptions(motion, target)
+		redirectTraj.HasSeedTarget = true
+		redirectTraj.SeedTargetGUID = preRedirectTargetGUID
+		dx, dy, dz, hasDest, destFailed, destSnapshots = s.server.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, motion, spell, targetGUID, redirectTraj)
 		if destFailed {
 			return true
 		}

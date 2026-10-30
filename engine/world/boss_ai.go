@@ -1669,6 +1669,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// magnet on the victim pulls the cast onto the totem; the GO
 		// packet below carries the redirected target.
 		if redirectGUID, ok := s.creatureGroundingTotemRedirect(ctx, m, spellInfo, targetGUID); ok {
+			preRedirectTargetGUID := targetGUID
 			targetGUID = redirectGUID
 			spellTarget.UnitGUID = redirectGUID
 			hitTargets = []uint64{redirectGUID}
@@ -1679,8 +1680,12 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			// 724-757 redirect precedes the 900-975 dest arms). The
 			// dest-LOS gate above keeps the pre-redirect resolution — C++
 			// evaluates that arm at CheckCast time, before the redirect.
+			// The InitExplicit seed likewise stays on the pre-redirect
+			// target (Spell.cpp:700-712 runs at prepare time, ahead of
+			// the 724-757 redirect), via the traj seed-target above;
+			// only the target-dest arms anchor on the redirected target.
 			var destFailed bool
-			destX, destY, destZ, hasDest, destFailed, destSnapshots = s.resolveCreatureSpellDestinationSnapshots(ctx, m, spellInfo, targetGUID)
+			destX, destY, destZ, hasDest, destFailed, destSnapshots = s.resolveCreatureSpellDestinationWithTrajSnapshots(ctx, m, spellInfo, targetGUID, creatureDestTraj{HasSeedTarget: true, SeedTargetGUID: preRedirectTargetGUID})
 			if destFailed {
 				return
 			}
