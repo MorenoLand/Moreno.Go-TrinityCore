@@ -10040,6 +10040,49 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
 		rejoinLaunchGOs(coneTargets, coneMasks)
 	}
+	// Friendly-area + 37/61 combo: the area branch above kept only the
+	// caster-centered list (or, for a pure friendly-area spell, hitTargets is
+	// that list), so a 37/61 effect never got its ref-centered selection and
+	// rode the wrong list. Compute it here, ahead of the channeled check and
+	// the area rolls, with the same explicit-target seed the pure
+	// ref-centered branch uses.
+	if hasFriendlyAreaEffect(spell) && hasRefCenteredAreaEffect(spell) {
+		refCenteredFriendlyTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, target, []uint64{target.UnitGUID})
+		if refCenteredFriendlyTargets == nil {
+			refCenteredFriendlyTargets = []uint64{}
+		}
+	}
+	// Per-effect partitions for mixed spells the selection chain above never
+	// reaches, the launch-path twin of the triggered funnel's fallback: a
+	// harmful spell pairing a friendly-area effect with single-target effects
+	// (no area-enemy arm, so neither the area-enemy nor the friendly-area
+	// branch runs), and an entry/cone/GO/nearby spell carrying a friendly-area
+	// or 37/61 effect (an earlier chain branch wins over the effect's own
+	// selection), all still select those effects' own targets in C++
+	// (Spell.cpp:758-779, per-effect SelectSpellTargets with no spell-level
+	// area gate). Only the partitions still nil are filled, so the switches
+	// below see the same lists the area branches produce; non-nil even when
+	// empty, like the branch computations, so an empty selection seeds nobody
+	// rather than falling back to the merged list. The guards keep the
+	// branch-equivalent cases from duplicating: the friendly-area branch
+	// (hitTargets already IS that list), the ref-centered branch (same), and
+	// the area branch's else-if (friendlyEffectTargets already holds the ref
+	// list for a ref spell with no friendly-area effect). Entry/cone spells
+	// roll the new partitions in the area-roll block below (Spell.cpp:2152);
+	// nearby/GO/no-branch spells take them unrolled, like the combo block's
+	// ref list for those spells.
+	if friendlyEffectTargets == nil && hasFriendlyAreaEffect(spell) && !friendlyAreaSpell {
+		friendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, target)
+		if friendlyEffectTargets == nil {
+			friendlyEffectTargets = []uint64{}
+		}
+	}
+	if refCenteredFriendlyTargets == nil && hasRefCenteredAreaEffect(spell) && !refCenteredBranch && !(areaSpell && !hasFriendlyAreaEffect(spell)) {
+		refCenteredFriendlyTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, target, []uint64{target.UnitGUID})
+		if refCenteredFriendlyTargets == nil {
+			refCenteredFriendlyTargets = []uint64{}
+		}
+	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-800): a channeled spell whose
 	// target selection produced no unit, gameobject, or item targets and no
 	// destination fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS. The check runs
@@ -10052,7 +10095,28 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// pre-gate), and Go likewise removes nothing before the reflect rolls,
 	// so a non-empty hitTargets here is exactly the non-empty-containers
 	// case; the dest flag already carries resolveImplicitSpellDestination.
-	if isChanneledSpell(spell) && len(hitTargets) == 0 && target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+	// The area-enemy branch's friendly/ref partition counts too: C++ adds
+	// those per-effect area selections to m_UniqueTargetInfo via AddUnitTarget
+	// (Spell.cpp:1227-1309), so a channeled harmful spell with an empty enemy
+	// list but allies in the friendly partition passes the check. The
+	// per-effect fallback partitions are hoisted above this check, so the
+	// probe below counts them too.
+	partitionHasTarget := false
+	for _, g := range friendlyEffectTargets {
+		if g != 0 {
+			partitionHasTarget = true
+			break
+		}
+	}
+	if !partitionHasTarget {
+		for _, g := range refCenteredFriendlyTargets {
+			if g != 0 {
+				partitionHasTarget = true
+				break
+			}
+		}
+	}
+	if isChanneledSpell(spell) && len(hitTargets) == 0 && !partitionHasTarget && target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
 		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "channeled spell with no targets")
 		return
@@ -10110,48 +10174,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// The wire-target reflect blocks below are gated !areaSpell, so area
 	// targets never rolled reflect here before this; they took full
 	// effects and the reflector's aura was never consumed.
-	// Friendly-area + 37/61 combo: the area branch above kept only the
-	// caster-centered list (or, for a pure friendly-area spell, hitTargets is
-	// that list), so a 37/61 effect never got its ref-centered selection and
-	// rode the wrong list. Compute it here, ahead of the area rolls, with the
-	// same explicit-target seed the pure ref-centered branch uses.
-	if hasFriendlyAreaEffect(spell) && hasRefCenteredAreaEffect(spell) {
-		refCenteredFriendlyTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, target, []uint64{target.UnitGUID})
-		if refCenteredFriendlyTargets == nil {
-			refCenteredFriendlyTargets = []uint64{}
-		}
-	}
-	// Per-effect partitions for mixed spells the selection chain above never
-	// reaches, the launch-path twin of the triggered funnel's fallback: a
-	// harmful spell pairing a friendly-area effect with single-target effects
-	// (no area-enemy arm, so neither the area-enemy nor the friendly-area
-	// branch runs), and an entry/cone/GO/nearby spell carrying a friendly-area
-	// or 37/61 effect (an earlier chain branch wins over the effect's own
-	// selection), all still select those effects' own targets in C++
-	// (Spell.cpp:758-779, per-effect SelectSpellTargets with no spell-level
-	// area gate). Only the partitions still nil are filled, so the switches
-	// below see the same lists the area branches produce; non-nil even when
-	// empty, like the branch computations, so an empty selection seeds nobody
-	// rather than falling back to the merged list. The guards keep the
-	// branch-equivalent cases from duplicating: the friendly-area branch
-	// (hitTargets already IS that list), the ref-centered branch (same), and
-	// the area branch's else-if (friendlyEffectTargets already holds the ref
-	// list for a ref spell with no friendly-area effect). Entry/cone spells
-	// roll the new partitions in the area-roll block below (Spell.cpp:2152);
-	// nearby/GO/no-branch spells take them unrolled, like the combo block's
-	// ref list for those spells.
-	if friendlyEffectTargets == nil && hasFriendlyAreaEffect(spell) && !friendlyAreaSpell {
-		friendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, target)
-		if friendlyEffectTargets == nil {
-			friendlyEffectTargets = []uint64{}
-		}
-	}
-	if refCenteredFriendlyTargets == nil && hasRefCenteredAreaEffect(spell) && !refCenteredBranch && !(areaSpell && !hasFriendlyAreaEffect(spell)) {
-		refCenteredFriendlyTargets = s.spellFriendlyRefCenteredAreaTargets(ctx, spell, target, []uint64{target.UnitGUID})
-		if refCenteredFriendlyTargets == nil {
-			refCenteredFriendlyTargets = []uint64{}
-		}
-	}
 	var reflectedAoETrips []uint64
 	var reflectedAllyTrips []uint64
 	if areaSpell || friendlyAreaSpell || entryAreaSpell || friendlyConeSpell || friendlyLastTargetAreaSpell || friendlyTargetAreaRaidClassSpell {
@@ -23224,7 +23246,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// (Spell.cpp:789-797 counts any unique target, not just the flat list):
 			// a nearby/chain primary or jump keeps a channeled cast alive even when
 			// the area list came back empty. GO-wire primaries already rejoined
-			// hitTargets above; friendly/ref partitions stay a separate residual.
+			// hitTargets above; friendly/ref partitions are counted below.
 			if chainUnitPrimary != 0 || winSecondPrimary != 0 || plainObjectPrimary != 0 || len(chainJumpGUIDs) > 0 || len(nearbyPrimaryList) > 0 {
 				hasTarget = true
 			}
@@ -23249,6 +23271,31 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					if primary != 0 {
 						hasTarget = true
 						break
+					}
+				}
+			}
+			if !hasTarget {
+				// Friendly/ref-centered partitions are per-effect area selections
+				// C++ adds to m_UniqueTargetInfo via AddUnitTarget
+				// (Spell.cpp:1227-1309, TARGET_REFERENCE_TYPE_* arms), so a
+				// non-empty partition keeps a channeled cast alive even when the
+				// flat list came back empty: the area-enemy branch replaces
+				// hitTargets with the enemy list while the friendly effect's own
+				// allies live only in the partition, and a nearby/entry/cone/GO
+				// branch likewise shadows them. An empty non-nil partition
+				// counts nothing, matching the "no allies in radius" seed.
+				for _, g := range triggeredFriendlyEffectTargets {
+					if g != 0 {
+						hasTarget = true
+						break
+					}
+				}
+				if !hasTarget {
+					for _, g := range triggeredRefCenteredFriendlyTargets {
+						if g != 0 {
+							hasTarget = true
+							break
+						}
 					}
 				}
 			}
