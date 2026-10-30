@@ -3400,6 +3400,52 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_LEARN_PREVIEW_TALENTS is STATUS_LOGGEDIN and
+			// PROCESS_INPLACE (Opcodes.cpp:1348), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler learns up to 150 preview
+			// talents and resends the talents info (SkillHandler.cpp:36)
+			// while the logout learns nothing and sends none. Dispatch
+			// it here like the projectile-position leg, then fall
+			// through to the expiry logout below; it returns true on
+			// every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LEARN_PREVIEW_TALENTS) && state.authed && !hookBlocked {
+				if !state.handleLearnPreviewTalents(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_LEARN_PREVIEW_TALENTS_PET is STATUS_LOGGEDIN and
+			// PROCESS_INPLACE (Opcodes.cpp:1349), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler learns up to 30 preview pet
+			// talents and resends the pet talents info (PetHandler.cpp:864)
+			// while the logout learns nothing and sends none. Dispatch
+			// it here like the preview-talents leg, then fall through
+			// to the expiry logout below; it returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LEARN_PREVIEW_TALENTS_PET) && state.authed && !hookBlocked {
+				if !state.handleLearnPreviewTalentsPet(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_EQUIPMENT_SET_USE is STATUS_LOGGEDIN and
+			// PROCESS_INPLACE (Opcodes.cpp:1368), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler swaps the named set pieces
+			// into their slots (weapons only in combat) and answers
+			// SMSG_EQUIPMENT_SET_USE_RESULT (CharacterHandler.cpp:1554)
+			// while the logout swaps nothing and sends no result.
+			// Dispatch it here like the pet-preview leg, then fall
+			// through to the expiry logout below; it returns true on
+			// every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_EQUIPMENT_SET_USE) && state.authed && !hookBlocked {
+				if !state.handleEquipmentSetUse(ctx, payload) {
+					return
+				}
+			}
 			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
 			// PROCESS_THREADSAFE, so the session-update drain does NOT run
 			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
