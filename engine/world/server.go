@@ -6987,6 +6987,36 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_GAMEOBJ_REPORT_USE (0x481) and CMSG_REMOVE_GLYPH (0x48A) are
+			// STATUS_LOGGEDIN, PROCESS_INPLACE, and CMSG_DISMISS_CRITTER (0x48D)
+			// is STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:1284, 1293,
+			// 1296), so the session update drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472), and the expiry logout does NOT
+			// subsume them. The report-use arm runs the gameobject AI OnReportUse
+			// or updates the USE_GAMEOBJECT achievement criteria
+			// (SpellHandler.cpp:318); the remove-glyph arm removes the glyph's
+			// granted aura, clears the slot and resends the talents info
+			// (CharacterHandler.cpp:1341); the dismiss-critter arm unsummons the
+			// player's tracked critter (PetHandler.cpp:40) — none of which the
+			// logout does. None of the three arms clears logoutAt, so dispatch
+			// them here, then fall through to the expiry logout below; all three
+			// handlers return true on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GAMEOBJ_REPORT_USE) && state.authed && !hookBlocked {
+				if !state.handleGameObjectReportUse(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REMOVE_GLYPH) && state.authed && !hookBlocked {
+				if !state.handleRemoveGlyph(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DISMISS_CRITTER) && state.authed && !hookBlocked {
+				if !state.handleDismissCritter(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
