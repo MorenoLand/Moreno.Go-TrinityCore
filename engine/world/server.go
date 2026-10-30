@@ -3575,6 +3575,52 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// Expiry-direction verdict: a STATUS_AUTHED leg CAN exist. The
+			// STATUS_AUTHED drain arm (WorldSession.cpp:370-390) checks only
+			// m_inQueue, never _player, and a player past logoutAt is not in
+			// queue, so the drain calls the handler before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) exactly like the LOGGEDIN arms;
+			// WorldSessionFilter::Process (WorldSession.cpp:92-104) yields
+			// every PROCESS_THREADUNSAFE packet regardless of in-world state,
+			// which covers all AUTHED opcodes except THREADSAFE warden-data.
+			// CMSG_CHAR_CREATE, CMSG_CHAR_ENUM and CMSG_CHAR_DELETE are
+			// STATUS_AUTHED, PROCESS_THREADUNSAFE (Opcodes.cpp:185-187), so
+			// the session update drains them before the ShouldLogOut check —
+			// and the expiry logout does NOT subsume them: create has no
+			// _player guard in C++ (CharacterHandler.cpp:278) and inserts
+			// the character, enum has no _player guard either (:259) and
+			// answers SMSG_CHAR_ENUM, and delete removes any character
+			// except a loaded one (:634-646, FindPlayer gate) and answers
+			// SMSG_CHAR_DELETE, while the logout creates, lists and deletes
+			// nothing. Ordering note: C++ queues the enum answer and the
+			// create success path as query callbacks, which
+			// ProcessQueryCallbacks runs before ShouldLogOut only when
+			// already ready (:458, 472) — a callback queued in this same
+			// drain normally fires in a later Update, after the logout,
+			// while Go's handlers answer synchronously; the effects
+			// survive the logout either way (the session persists until
+			// socket close), so dispatching here preserves them rather
+			// than dropping them, matching the add-friend offline arm.
+			// None of the three arms clears logoutAt, so dispatch them
+			// here like the gm-report-lag leg, then fall through to the
+			// expiry logout below; each returns false only on a failed
+			// answer write, where returning matches the normal dispatch's
+			// write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHAR_CREATE) && state.authed && !hookBlocked {
+				if !state.handleCharCreate(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHAR_ENUM) && state.authed && !hookBlocked {
+				if !state.handleCharEnum(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHAR_DELETE) && state.authed && !hookBlocked {
+				if !state.handleCharDelete(ctx, payload) {
+					return
+				}
+			}
 			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
 			// PROCESS_THREADSAFE, so the session-update drain does NOT run
 			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
