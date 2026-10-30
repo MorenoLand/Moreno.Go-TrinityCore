@@ -3752,6 +3752,70 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			// world). The drop stands — dispatching it here would answer
 			// a query C++ never answers — so WHO is deliberately NOT
 			// dispatched below, unlike its THREADUNSAFE sibling WHOIS.
+			// CMSG_OPT_OUT_OF_LOOT, CMSG_SET_PLAYER_DECLINED_NAMES,
+			// CMSG_CHAR_CUSTOMIZE, CMSG_CHAR_FACTION_CHANGE,
+			// CMSG_CHAR_RACE_CHANGE and CMSG_READY_FOR_ACCOUNT_DATA_TIMES
+			// are STATUS_AUTHED, PROCESS_THREADUNSAFE (Opcodes.cpp:1164,
+			// 1180, 1270, 1372, 1403, 1410), so the session update drains
+			// them before the ShouldLogOut check (WorldSession.cpp:302-472),
+			// and the expiry logout does NOT subsume them. The
+			// opt-out arm sets the loaded player's group-loot pass flag
+			// (GroupHandler.cpp:1066; its GetPlayer guard passes here --
+			// the expiry block implies a loaded player, since logoutAt is
+			// armed only by the logout-request path on a loaded player),
+			// while the logout sets no loot flag. The declined-names arm
+			// has no _player guard (CharacterHandler.cpp:1198) and answers
+			// SMSG_SET_PLAYER_DECLINED_NAMES_RESULT, which the logout
+			// sends none of. Customize and faction/race change have no
+			// _player guard either (:1363, :1616) and answer their
+			// SMSG_CHAR_CUSTOMIZE / SMSG_CHAR_FACTION_CHANGE echoes,
+			// while the logout answers neither; like char-create, C++
+			// queues their DB work as callbacks but Go answers
+			// synchronously, and the effects survive the logout either
+			// way. The ready arm answers SMSG_ACCOUNT_DATA_TIMES
+			// (MiscHandler.cpp:1444), which the logout sends none of.
+			// Cheat path note: a customize/faction/race change for
+			// another account's character kicks the session in both
+			// (KickPlayer closes the socket, WorldSession.cpp:648-657),
+			// and the fall-through expiry logout still runs after the
+			// kick exactly as C++ runs LogoutPlayer(true) in the same
+			// Update (:472-473). None of the six arms clears logoutAt,
+			// so dispatch them here, then fall through to the expiry
+			// logout below; the opt-out, declined-names, customize,
+			// faction-change and race-change arms return true on every
+			// path, and the ready arm returns false only on a failed
+			// answer write, where returning matches the normal
+			// dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_OPT_OUT_OF_LOOT) && state.authed && !hookBlocked {
+				if !state.handleOptOutOfLoot(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_PLAYER_DECLINED_NAMES) && state.authed && !hookBlocked {
+				if !state.handleSetPlayerDeclinedNames(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHAR_CUSTOMIZE) && state.authed && !hookBlocked {
+				if !state.handleCharCustomize(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHAR_FACTION_CHANGE) && state.authed && !hookBlocked {
+				if !state.handleCharFactionChange(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CHAR_RACE_CHANGE) && state.authed && !hookBlocked {
+				if !state.handleCharRaceChange(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_READY_FOR_ACCOUNT_DATA_TIMES) && state.authed && !hookBlocked {
+				if !state.handleReadyForAccountDataTimes() {
+					return
+				}
+			}
 			// CMSG_QUESTGIVER_STATUS_QUERY is STATUS_LOGGEDIN
 			// (Opcodes.cpp:517) and PROCESS_INPLACE, so both filters yield
 			// it and the session-update drain runs its handler before the
