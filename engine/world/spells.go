@@ -43282,6 +43282,7 @@ func (s *session) delayCurrentChannel() {
 	spell := channel.Spell
 	targetGUID := channel.TargetGUID
 	targetKey := channel.TargetKey
+	hitTargets := append([]uint64(nil), channel.HitTargets...)
 	pushbacks := channel.Pushbacks
 	s.castMu.Unlock()
 
@@ -43289,7 +43290,7 @@ func (s *session) delayCurrentChannel() {
 	// interrupts the channel's hit targets — every unit the channel hit
 	// (m_UniqueTargetInfo, SPELL_MISS_NONE) has its owned auras of this
 	// spell, cast by the channel caster, shortened by the (clamped) delay.
-	s.delayChannelOwnedAuras(spell, delayMs, targetGUID, targetKey)
+	s.delayChannelOwnedAuras(spell, delayMs, targetGUID, targetKey, hitTargets)
 	// Spell::DelayedChannel (Spell.cpp:7324-7326): the caster's
 	// persistent-area object for the channeled spell is delayed too.
 	if s.server != nil {
@@ -43303,27 +43304,58 @@ func (s *session) delayCurrentChannel() {
 // Spell::DelayedChannel (Spell.cpp:7316-7320): every unit the channel hit
 // (m_UniqueTargetInfo with SPELL_MISS_NONE) has the auras it owns of this
 // spell, cast by the channel caster, shortened by the pushback delay.
-// Go's hit set is the caster, the explicit channel target, and — for
-// persistent-area (dynobj) channels — every unit carrying the channel's
-// persistent-area aura.
-func (s *session) delayChannelOwnedAuras(spell wotlk.Spell, delayMs int32, targetGUID uint64, targetKey creatureAuraKey) {
+// Go's hit set is the caster, the explicit channel target, every
+// recorded HitTarget, and — for persistent-area (dynobj) channels —
+// every unit carrying the channel's persistent-area aura. The HitTargets
+// sweep runs before the persistent-area arm and the handled sets below
+// keep a unit already delayed there from being delayed twice.
+func (s *session) delayChannelOwnedAuras(spell wotlk.Spell, delayMs int32, targetGUID uint64, targetKey creatureAuraKey, hitTargets []uint64) {
 	if s == nil || s.player == nil || s.server == nil || delayMs <= 0 {
 		return
 	}
 	spellID := spell.ID
 	casterGUID := s.playerGUID
 	s.delayOwnedAura(spellID, casterGUID, delayMs, false)
-	handledCreature := creatureAuraKey{}
+	handledGUIDs := map[uint64]struct{}{casterGUID: {}}
+	handledCreatures := map[creatureAuraKey]struct{}{}
 	if targetGUID != 0 && targetGUID != casterGUID {
+		handledGUIDs[targetGUID] = struct{}{}
 		if target := s.server.findSessionByGUID(targetGUID); target != nil && target.player != nil {
 			target.delayOwnedAura(spellID, casterGUID, delayMs, false)
 		} else {
-			handledCreature = targetKey
+			handledCreature := targetKey
 			if handledCreature.GUID == 0 {
 				handledCreature = creatureAuraKeyForPlayer(*s.player, targetGUID)
 			}
+			handledCreatures[handledCreature] = struct{}{}
 			s.server.delayCreatureOwnedAura(handledCreature, spellID, casterGUID, delayMs, false)
 		}
+	}
+	// The recorded HitTargets list is the Go analog of the
+	// m_UniqueTargetInfo sweep: an area channel hits targets beyond the
+	// explicit TargetGUID, and each one's owned aura of this spell is
+	// shortened too. The seeded lists are the hit lists (misses ride a
+	// separate list), so the C++ SPELL_MISS_NONE filter holds by
+	// construction; GO GUIDs carry no unit auras and are skipped, as in
+	// the cancel strip.
+	for _, guid := range hitTargets {
+		if guid == 0 || guid == casterGUID || guid == targetGUID {
+			continue
+		}
+		if uint16(guid>>48) == 0xF110 {
+			continue
+		}
+		if target := s.server.findSessionByGUID(guid); target != nil && target.player != nil {
+			handledGUIDs[guid] = struct{}{}
+			target.delayOwnedAura(spellID, casterGUID, delayMs, false)
+			continue
+		}
+		key := creatureAuraKeyForPlayer(*s.player, guid)
+		if _, dup := handledCreatures[key]; dup {
+			continue
+		}
+		handledCreatures[key] = struct{}{}
+		s.server.delayCreatureOwnedAura(key, spellID, casterGUID, delayMs, false)
 	}
 	if !spellHasEffect(spell, spellEffectPersistentAreaAura) {
 		return
@@ -43337,7 +43369,7 @@ func (s *session) delayChannelOwnedAuras(spell wotlk.Spell, delayMs int32, targe
 		if sess == nil || sess == s || sess.player == nil {
 			continue
 		}
-		if sess.playerGUID == targetGUID {
+		if _, handled := handledGUIDs[sess.playerGUID]; handled {
 			continue
 		}
 		if sess.player.Map != s.player.Map || sess.player.InstanceID != s.player.InstanceID {
@@ -43352,7 +43384,7 @@ func (s *session) delayChannelOwnedAuras(spell wotlk.Spell, delayMs int32, targe
 	s.server.auraMu.Lock()
 	var creatureKeys []creatureAuraKey
 	for key, auras := range s.server.activeCreatureAuras {
-		if key == handledCreature {
+		if _, handled := handledCreatures[key]; handled {
 			continue
 		}
 		if aura := auras[spellID]; aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID && aura.PersistentAreaAura {
