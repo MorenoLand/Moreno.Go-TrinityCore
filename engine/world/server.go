@@ -3791,6 +3791,95 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_DELETEEQUIPMENT_SET is STATUS_LOGGEDIN
+			// (Opcodes.cpp:449) and PROCESS_THREADUNSAFE, so the
+			// session update (WorldSessionFilter) drains it before
+			// the ShouldLogOut check (WorldSession.cpp:302-472) —
+			// and the expiry logout does NOT subsume it. The C++
+			// handler only marks the set DELETED in memory
+			// (Player.cpp:26098-26110); the row leaves the DB via
+			// _SaveEquipmentSets at logout save (:26027, :19811).
+			// Go's handler DELETEs the character_equipmentsets row
+			// eagerly, while the logout save writes no
+			// equipmentsets rows at all — so a dropped delete is
+			// lost outright at next login, like the action-button
+			// leg. No packet is sent on any arm, and the arm
+			// clears no logoutAt, so dispatch it here like the
+			// action-button leg, then fall through to the expiry
+			// logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_DELETEEQUIPMENT_SET) && state.authed && !hookBlocked {
+				if !state.handleEquipmentSetDelete(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_INSTANCE_LOCK_RESPONSE is STATUS_LOGGEDIN
+			// (Opcodes.cpp:450) and PROCESS_THREADUNSAFE, so the
+			// session update (WorldSessionFilter) drains it before
+			// the ShouldLogOut check (WorldSession.cpp:302-472) —
+			// and the expiry logout does NOT subsume it whole.
+			// The C++ handler (MiscHandler.cpp:1525-1543) answers
+			// a pending bind: accept binds the instance
+			// (BindToInstance, Player.cpp:19187-19201:
+			// SMSG_INSTANCE_SAVE_CREATED, character_instance row,
+			// calendar raid lockout), decline repops at the
+			// graveyard, and either way clears the pending bind.
+			// Go's completeLogout already mirrors the logout
+			// leg (WorldSession.cpp:529-532: repop + clear), so a
+			// dropped decline is identical — but a dropped accept
+			// loses the bind outright, and the logout's repop leg
+			// would answer the pending bind as a decline instead.
+			// Go's handler takes (and clears) the pending bind up
+			// front, so the logout leg below cannot double-fire
+			// after a dispatch. The no-pending arm is log-only in
+			// C++ and a silent true in Go — same observable. No
+			// arm clears logoutAt, so dispatch it here like the
+			// equipment-set leg, then fall through to the expiry
+			// logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_INSTANCE_LOCK_RESPONSE) && state.authed && !hookBlocked {
+				if !state.handleInstanceLockResponse(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_ATTACK_SWING / CMSG_ATTACK_STOP are
+			// STATUS_LOGGEDIN (Opcodes.cpp:452-453) and
+			// PROCESS_INPLACE, so the session update
+			// (WorldSessionFilter::Process returns true for
+			// INPLACE, WorldSession.cpp:92-104) drains them before
+			// the ShouldLogOut check (:302-472) — and the expiry
+			// logout does NOT subsume them whole. Neither handler
+			// nor Unit::Attack gates on the countdown's root/stun,
+			// so a swing read past logoutAt starts melee in the
+			// drain: SMSG_ATTACK_START to self and the visible
+			// set (CombatHandler.cpp:29-61, Unit.cpp:5650+). The
+			// expiry logout then stops it (CleanupBeforeRemove-
+			// FromMap -> CombatStop -> AttackStop, Unit.cpp:5809+:
+			// SMSG_ATTACK_STOP to the set), and no swing lands —
+			// the player leaves the map before the next combat
+			// tick, and Go's stopPlayerCombat clears attackTarget
+			// the same way. Dispatch reproduces the C++
+			// START-then-STOP sequence; dropping it loses both
+			// packets and the reject arms' SMSG_ATTACK_STOP
+			// answers. A stop read past logoutAt sends
+			// SMSG_ATTACK_STOP and cancels the next-swing spell
+			// when attacking (Unit.cpp:5763-5786), and is a silent
+			// no-op when not — Go mirrors both. Neither arm
+			// clears logoutAt, so dispatch them here like the
+			// instance-lock leg, then fall through to the expiry
+			// logout below; the write-failure arms mirror the
+			// normal arms (a failed SMSG_ATTACK_STOP write
+			// returns false, and the deferred logout follows).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ATTACK_SWING) && state.authed && !hookBlocked {
+				if !state.handleAttackSwing(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ATTACK_STOP) && state.authed && !hookBlocked {
+				if !state.handleAttackStop() {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
