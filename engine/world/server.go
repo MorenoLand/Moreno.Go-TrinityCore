@@ -6602,6 +6602,32 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_CLEAR_CHANNEL_WATCH (0x3F3) and CMSG_SET_TITLE_SUFFIX
+			// (0x3F7) need no leg: both are STATUS_NEVER with
+			// Handle_NULL (Opcodes.cpp:1142, 1146), so the C++ drain
+			// hits the STATUS_NEVER arm (WorldSession.cpp:394-401),
+			// logs the disallowed opcode and calls no handler, and
+			// Go drops both as null opcodes with no hooks fired;
+			// 0x3F0-0x3F2, 0x3F4-0x3F6 are SMSG STATUS_NEVER and need
+			// no leg either. CMSG_SPELLCLICK (0x3F8) is drained
+			// before the ShouldLogOut check: STATUS_LOGGEDIN,
+			// PROCESS_INPLACE (Opcodes.cpp:1147), and
+			// WorldSessionFilter passes INPLACE unconditionally
+			// (WorldSession.cpp:92-104). The click arm resolves the
+			// creature/pet/vehicle, checks the spellclick rows,
+			// requirements and conditions, then casts the row's spell
+			// or seats the clicker (SpellHandler.cpp:616,
+			// Unit.cpp:12982); the logout casts nothing and seats
+			// nobody, so a drop loses the cast or the vehicle entry
+			// outright. The arm clears no logoutAt, so dispatch it
+			// here like the channel-watch leg, then fall through to
+			// the expiry logout below; the handler returns true on
+			// every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SPELLCLICK) && state.authed && !hookBlocked {
+				if !state.handleSpellClick(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
