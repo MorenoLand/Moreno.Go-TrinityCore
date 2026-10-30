@@ -6628,6 +6628,39 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// MSG_GUILD_PERMISSIONS (0x3FD), MSG_GUILD_BANK_MONEY_WITHDRAWN
+			// (0x3FE) and MSG_GUILD_EVENT_LOG_QUERY (0x3FF) are drained
+			// before the ShouldLogOut check: all three are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:1152-1154),
+			// and the expiry logout does NOT subsume them. The
+			// permissions arm answers the rank rights, gold limit and
+			// per-tab rights (GuildHandler.cpp:244), the money-withdrawn
+			// arm answers the remaining daily money allowance
+			// (GuildHandler.cpp:238), and the event-log arm answers the
+			// guild event log (GuildHandler.cpp:230); the logout sends
+			// none of the three packets, so a drop leaves each query
+			// unanswered outright. Guildless players are silent in both:
+			// the C++ arms gate on a non-null guild and the Go arms on
+			// a non-zero guild id. None of the arms clears logoutAt, so
+			// dispatch them here like the spellclick leg, then fall
+			// through to the expiry logout below; all three handlers
+			// return true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_GUILD_PERMISSIONS) && state.authed && !hookBlocked {
+				if !state.handleGuildPermissions(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_GUILD_BANK_MONEY_WITHDRAWN) && state.authed && !hookBlocked {
+				if !state.handleGuildBankMoneyWithdrawn(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_GUILD_EVENT_LOG_QUERY) && state.authed && !hookBlocked {
+				if !state.handleGuildEventLogQuery(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
