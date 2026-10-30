@@ -318,16 +318,31 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 		snapshots := make([]sessionDestSnapshot, len(spell.Effects))
 		// Spell::InitExplicitTargets (Spell.cpp:716): when the mask needs
 		// no DEST_LOCATION the packet destination is removed, so it stamps
-		// no slot here either — the slots stay unstamped and HIT arms fall
-		// back to the caster position (the Spell.cpp:630 slot init).
-		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 && spellExplicitDestLocationNeeded(spell) {
+		// no slot here either — the slots stay unstamped and the returned
+		// target drops the flag, matching m_targets after RemoveDst. The
+		// GO packet mask (spellGoPacketTarget) and the HasDst gates of the
+		// summon/knockback HIT arms (SpellEffects.cpp:4231/4552) read that
+		// flag, so a surviving packet flag would misroute them; a kept
+		// packet destination or an InitExplicit seed sets the flag and the
+		// returned destination, like SetDst does. RemoveDst clears only the
+		// mask, so the position field is left stale when the flag drops.
+		dstKept := target.Flags&protocol.SpellTargetFlagDestLocation != 0 && spellExplicitDestLocationNeeded(spell)
+		seedX, seedY, seedZ, seeded := float32(0), float32(0), float32(0), false
+		if !dstKept {
+			seedX, seedY, seedZ, seeded = s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID)
+		}
+		if dstKept {
 			for i := range snapshots {
 				snapshots[i] = sessionDestSnapshot{Has: true, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z}
 			}
-		} else if sx, sy, sz, seeded := s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID); seeded {
+		} else if seeded {
 			for i := range snapshots {
-				snapshots[i] = sessionDestSnapshot{Has: true, X: sx, Y: sy, Z: sz}
+				snapshots[i] = sessionDestSnapshot{Has: true, X: seedX, Y: seedY, Z: seedZ}
 			}
+			target.Flags |= protocol.SpellTargetFlagDestLocation
+			target.Destination = protocol.SpellTargetLocation{X: seedX, Y: seedY, Z: seedZ}
+		} else {
+			target.Flags &^= protocol.SpellTargetFlagDestLocation
 		}
 		return target, snapshots, true
 	}
@@ -441,6 +456,13 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				x, y, z = resolveTargetDestPosition(s.server.Data, targetType, eff.RadiusIndex, unitTarget.X, unitTarget.Y, unitTarget.Z, unitTarget.Orientation)
 				hasDst = true
 			case isDestDestTarget(targetType):
+				// Spell::SelectImplicitDestDestTargets (Spell.cpp:1464):
+				// CheckDst runs before the switch, so the arm sets HasDst
+				// even for the unchanged 28/29/87/88 legs (ModDst runs only
+				// for the offset legs) — this effect's slot and every later
+				// effect's slot stamp the CheckDst caster position when
+				// nothing else set one.
+				hasDst = true
 				// SpellInfo.cpp:551-574: CalcRadius(m_caster) folds SPELLMOD_RADIUS
 				// through the player's spell-mod owner.
 				modRadius := func(r float32) float32 {
@@ -449,7 +471,6 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				nx, ny, nz, changed := resolveDestDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), x, y, z, s.player.Orientation, modRadius)
 				if changed {
 					x, y, z = nx, ny, nz
-					hasDst = true
 				}
 			case targetType == implicitTargetDestTraj:
 				// Spell::SelectImplicitTrajTargets (Spell.cpp:1626):
@@ -498,7 +519,22 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 			snapshots[effIndex] = sessionDestSnapshot{Has: true, X: x, Y: y, Z: z}
 		}
 	}
-	target.Flags |= protocol.SpellTargetFlagDestLocation
-	target.Destination = protocol.SpellTargetLocation{X: x, Y: y, Z: z}
+	// The returned flag is m_targets.HasDst after selection, not "a
+	// dest-family spell ran": with no kept packet destination, no seed,
+	// and no arm setting it (target-dest with no resolvable object,
+	// traj with no shortening, channel with no live channel), C++
+	// leaves the mask clear — the GO packet carries no destination, the
+	// channeled BAD_IMPLICIT_TARGETS check (Spell.cpp:794) sees !HasDst,
+	// and the summon/knockback HIT arms (SpellEffects.cpp:4231/4552)
+	// take their !HasDst legs (close point / no knockback) instead of
+	// the slot's caster position. RemoveDst clears only the mask, so
+	// the position field is left stale when the flag drops; every
+	// consumer gates on the flag.
+	if hasDst {
+		target.Flags |= protocol.SpellTargetFlagDestLocation
+		target.Destination = protocol.SpellTargetLocation{X: x, Y: y, Z: z}
+	} else {
+		target.Flags &^= protocol.SpellTargetFlagDestLocation
+	}
 	return target, snapshots, true
 }
