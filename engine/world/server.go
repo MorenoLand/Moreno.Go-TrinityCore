@@ -3353,6 +3353,53 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_CALENDAR_EVENT_SIGNUP is STATUS_LOGGEDIN and
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1341), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler adds the invite, broadcasts
+			// it to the event relatives and clears the signer's pending
+			// action, or answers the guild/invalid-event result
+			// (CalendarHandler.cpp:604-628). Dispatch it here like the
+			// corpse-query leg, then fall through to the expiry logout
+			// below; it returns false only on a failed command-result
+			// write, and the deferred logout then follows.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_SIGNUP) && state.authed && !hookBlocked {
+				if !state.handleCalendarEventSignup(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_EQUIPMENT_SET_SAVE is STATUS_LOGGEDIN and
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1344), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler persists the equipment set
+			// (and answers SMSG_EQUIPMENT_SET_SAVED for a new set)
+			// while the logout save would persist only the pre-save
+			// sets (CharacterHandler.cpp:1492-1542). Dispatch it here
+			// like the signup leg, then fall through to the expiry
+			// logout below; it returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_EQUIPMENT_SET_SAVE) && state.authed && !hookBlocked {
+				if !state.handleEquipmentSetSave(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_UPDATE_PROJECTILE_POSITION is STATUS_LOGGEDIN and
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1345), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler broadcasts
+			// SMSG_SET_PROJECTILE_POSITION to the caster's set
+			// (SpellHandler.cpp:847-853) while the logout broadcasts
+			// nothing. Dispatch it here like the equipment-set leg,
+			// then fall through to the expiry logout below; it returns
+			// true on every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_UPDATE_PROJECTILE_POSITION) && state.authed && !hookBlocked {
+				if !state.handleUpdateProjectilePosition(ctx, payload) {
+					return
+				}
+			}
 			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
 			// PROCESS_THREADSAFE, so the session-update drain does NOT run
 			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
