@@ -4442,6 +4442,84 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SET_SHEATHED / CMSG_QUEST_POI_QUERY are
+			// STATUS_LOGGEDIN, PROCESS_INPLACE (Opcodes.cpp:610,
+			// 612), so the session update (WorldSessionFilter::
+			// Process returns true for INPLACE, WorldSession.cpp:
+			// 92-104) drains them before the ShouldLogOut check
+			// (:302-472) - and the expiry logout does NOT subsume
+			// them. Sheathed: a live arm sets the sheath byte and
+			// the three virtual-item slots (CombatHandler.cpp:
+			// 69-78, Player::SetSheath) and Go sends the values
+			// update; the logout save writes no sheath column,
+			// so a drop loses the packet outright, and the
+			// out-of-range arm is log-only in C++ and a silent
+			// drop in Go. Quest POI: a live arm answers
+			// SMSG_QUEST_POI_QUERY_RESPONSE (QueryHandler.cpp:
+			// 332-363); the logout sends none, and the
+			// over-count arm is silent in both. None of the two
+			// arms clears logoutAt, so dispatch them here like
+			// the minimap-ping leg, then fall through to the
+			// expiry logout below; both handlers return true on
+			// every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_SHEATHED) && state.authed && !hookBlocked {
+				if !state.handleSetSheathed(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUEST_POI_QUERY) && state.authed && !hookBlocked {
+				if !state.handleQuestPoiQuery(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_PET_CAST_SPELL / MSG_SAVE_GUILD_EMBLEM /
+			// MSG_TABARDVENDOR_ACTIVATE are STATUS_LOGGEDIN,
+			// PROCESS_INPLACE / PROCESS_THREADUNSAFE / PROCESS_
+			// INPLACE (Opcodes.cpp:627-629), so the session
+			// update drains them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) - and the expiry logout
+			// does NOT subsume them. Pet cast: a live arm casts
+			// the pet or charmed unit's spell (PetHandler.cpp:
+			// 744-797); the logout teardown stops the player's
+			// own spell lifecycle, not a pet cast already
+			// started, and the silent arms (no pet/charmed unit,
+			// unknown or passive or unlearned spell) are
+			// identical either way. Guild emblem: a live arm
+			// deducts the 10g price, UPDATEs the guild emblem
+			// rows, and answers SUCCESS plus the guild query
+			// (GuildHandler.cpp:205-228, Guild.cpp:1341-1357);
+			// Go's handler writes those rows eagerly while the
+			// logout save writes no guild rows, so a drop loses
+			// the emblem change outright. Tabard vendor: a live
+			// arm strips a faked death and answers
+			// MSG_TABARDVENDOR_ACTIVATE (NPCHandler.cpp:58-72);
+			// the logout sends none. The interact gate
+			// (Player.cpp:2314-2358) checks in-world, flight,
+			// death, flags, charmer, reaction and distance -
+			// never stunned or rooted - so the countdown's
+			// root/stun does not block a vendor the player
+			// already stands at. None of the three arms clears
+			// logoutAt, so dispatch them here like the sheathed
+			// leg, then fall through to the expiry logout below;
+			// pet-cast returns false only on a failed embedded-
+			// movement write, mirroring the normal arm (deferred
+			// logout follows), and the other two return true on
+			// every path.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_CAST_SPELL) && state.authed && !hookBlocked {
+				if !state.handlePetCastSpell(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_SAVE_GUILD_EMBLEM) && state.authed && !hookBlocked {
+				if !state.handleSaveGuildEmblem(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE) && state.authed && !hookBlocked {
+				if !state.handleTabardVendorActivate(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
