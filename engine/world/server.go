@@ -6540,6 +6540,68 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_GUILD_BANK_SWAP_ITEMS, CMSG_GUILD_BANK_BUY_TAB,
+			// CMSG_GUILD_BANK_UPDATE_TAB, CMSG_GUILD_BANK_DEPOSIT_MONEY,
+			// CMSG_GUILD_BANK_WITHDRAW_MONEY, MSG_GUILD_BANK_LOG_QUERY and
+			// CMSG_SET_CHANNEL_WATCH are drained before the
+			// ShouldLogOut check: all seven are STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1132-1138), and the
+			// expiry logout does NOT subsume them. The swap arm moves
+			// items bank<->bank or bank<->inventory
+			// (GuildHandler.cpp:305), the buy-tab arm purchases a tab
+			// (GuildHandler.cpp:340), the update-tab arm renames and
+			// re-icons a tab (GuildHandler.cpp:349), the deposit and
+			// withdraw arms move money in and out of the guild bank
+			// (GuildHandler.cpp:284, 295), and the log-query arm
+			// answers the tab log (GuildHandler.cpp:360); the logout
+			// moves no items, buys no tab, renames nothing, moves no
+			// money and sends no log packet. The channel-watch arm is
+			// a pure parse no-op on both sides — the C++ JoinNotify
+			// call is commented out (ChannelHandler.cpp:343) — so the
+			// leg is drain-order fidelity, like the
+			// voice-session-enable leg. None of the arms clears
+			// logoutAt, so dispatch them here like the query-tab
+			// leg, then fall through to the expiry logout below;
+			// the swap/buy/update/deposit/withdraw/channel-watch arms
+			// return true on every path, and the log-query arm
+			// returns false only on a failed answer write, where
+			// returning matches the normal dispatch's write-failure
+			// arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_BANK_SWAP_ITEMS) && state.authed && !hookBlocked {
+				if !state.handleGuildBankSwapItems(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_BANK_BUY_TAB) && state.authed && !hookBlocked {
+				if !state.handleGuildBankBuyTab(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_BANK_UPDATE_TAB) && state.authed && !hookBlocked {
+				if !state.handleGuildBankUpdateTab(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_BANK_DEPOSIT_MONEY) && state.authed && !hookBlocked {
+				if !state.handleGuildBankDepositMoney(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_BANK_WITHDRAW_MONEY) && state.authed && !hookBlocked {
+				if !state.handleGuildBankWithdrawMoney(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY) && state.authed && !hookBlocked {
+				if !state.handleGuildBankLogQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_CHANNEL_WATCH) && state.authed && !hookBlocked {
+				if !state.handleSetChannelWatch(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
