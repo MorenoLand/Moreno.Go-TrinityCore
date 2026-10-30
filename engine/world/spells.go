@@ -22537,9 +22537,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		switch winTarget {
 		case 6, 21, 25, 35, 45, 57, 90, 95:
-			if spellTarget.UnitGUID != 0 {
-				anchor = spellTarget.UnitGUID
-			}
+			// TARGET-object legs anchor strictly on the wire target:
+			// SelectImplicitTargetObjectTargets chains only from
+			// m_targets.GetObjectTarget() (Spell.cpp:1558-1560), and
+			// the nearby/caster-object arms above never rewrite
+			// m_targets, so a wire-0 leg keeps anchor 0 (searches
+			// nothing, records no primary) instead of chaining from
+			// the nearby/caster pick left in targetGUID.
+			anchor = spellTarget.UnitGUID
 		case 2, 3, 4, 38, 58:
 			// NEARBY chain effect: anchor on the winning effect's own
 			// pick (spellChainNearbyPick). On the nearbySelected path the
@@ -22601,9 +22606,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		skipFirstLeg := false
 		switch chainTarget {
 		case 6, 21, 25, 35, 45, 57, 90, 95:
-			if spellTarget.UnitGUID != 0 {
-				anchor = spellTarget.UnitGUID
-			}
+			// Same wire-only anchor as the winning block above
+			// (Spell.cpp:1558-1560): a wire-0 object leg keeps
+			// anchor 0 instead of the nearby/caster pick in targetGUID.
+			anchor = spellTarget.UnitGUID
 		case 2, 3, 4, 38, 58:
 			pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), chainTarget)
 			if status == nearbyPickGenuineMiss {
@@ -22635,10 +22641,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// arm runs beside A's with its own check type; the mixed
 		// second legs follow below.
 		if targetObjectTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
-			secondAnchor := targetGUID
-			if spellTarget.UnitGUID != 0 {
-				secondAnchor = spellTarget.UnitGUID
-			}
+			// Wire-only anchor (Spell.cpp:1558-1560): a wire-0
+			// object second leg searches nothing instead of chaining
+			// from the nearby/caster pick in targetGUID.
+			secondAnchor := spellTarget.UnitGUID
 			for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
 				dup := false
 				for _, listed := range chainJumpsByEffect[i] {
@@ -22691,10 +22697,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 		if nearbyUnitTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
-			secondAnchor := targetGUID
-			if spellTarget.UnitGUID != 0 {
-				secondAnchor = spellTarget.UnitGUID
-			}
+			// Wire-only anchor (Spell.cpp:1558-1560): a wire-0
+			// object second leg searches nothing and records no
+			// second primary instead of chaining from the nearby
+			// branch pick (or caster-object pick) in targetGUID.
+			secondAnchor := spellTarget.UnitGUID
 			for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
 				dup := false
 				for _, listed := range chainJumpsByEffect[i] {
