@@ -3353,6 +3353,73 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
+			// PROCESS_THREADSAFE, so the session-update drain does NOT run
+			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
+			// yields a threadsafe packet only for a player not in world,
+			// and the ShouldLogOut check runs in that same session update
+			// (WorldSession.cpp:472-473) BEFORE World::Update reaches
+			// sMapMgr->Update (World.cpp:2418, 2462), where MapSessionFilter
+			// would have run it. A who packet read past logoutAt therefore
+			// never gets its SMSG_WHO in C++: the expiry logout fires
+			// first, and the queued packet is then deleted unhandled by
+			// the STATUS_LOGGEDIN arm (no player, or player no longer in
+			// world). The drop stands — dispatching it here would answer
+			// a query C++ never answers — so WHO is deliberately NOT
+			// dispatched below, unlike its THREADUNSAFE sibling WHOIS.
+			// CMSG_QUESTGIVER_STATUS_QUERY is STATUS_LOGGEDIN
+			// (Opcodes.cpp:517) and PROCESS_INPLACE, so both filters yield
+			// it and the session-update drain runs its handler before the
+			// ShouldLogOut check (WorldSession.cpp:302-472) — and the
+			// expiry logout does NOT subsume it: the handler is a pure
+			// read whose only effect is the SMSG_QUESTGIVER_STATUS
+			// response (no packet on an unknown giver, DIALOG_STATUS_NONE
+			// for a hostile creature, QuestHandler.cpp:41-56), sent while
+			// the socket is still open ahead of SMSG_LOGOUT_COMPLETE.
+			// Dispatch it here like the query leg, then fall through to
+			// the expiry logout below; it returns false only on a failed
+			// response write, and the deferred logout then follows.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_STATUS_QUERY) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverStatusQuery(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GOSSIP_SELECT_OPTION is STATUS_LOGGEDIN
+			// (Opcodes.cpp:511) and PROCESS_THREADUNSAFE, so the session
+			// update (WorldSessionFilter) drains it before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: before the menu/script arms the handler
+			// strips feign death (MiscHandler.cpp:162-164), and the AI /
+			// script OnGossipSelect hooks plus the native arms (vendor,
+			// trainer, taxi, bank, spirit-healer resurrect, menu sends)
+			// run effects the logout save would otherwise miss or
+			// re-persist. The countdown's root/stun does not move the
+			// player, so the interaction-range gate still passes exactly
+			// as in the C++ drain. No arm clears logoutAt, so dispatch
+			// it here like the query leg, then fall through to the
+			// expiry logout below; the write-failure arm mirrors the
+			// normal dispatch arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GOSSIP_SELECT_OPTION) && state.authed && !hookBlocked {
+				if !state.handleGossipSelectOption(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_WHOIS rides with WHO but takes the opposite leg: it is
+			// STATUS_LOGGEDIN (Opcodes.cpp:231) and PROCESS_THREADUNSAFE,
+			// so the session update drains it before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler is a permission-gated account
+			// lookup whose only effect is the SMSG_WHOIS reply (or the
+			// denial notification, MiscHandler.cpp:1090-1149), sent while
+			// the socket is still open ahead of SMSG_LOGOUT_COMPLETE.
+			// Dispatch it here like the gossip-select leg, then fall
+			// through to the expiry logout below; it returns false only
+			// on a failed reply write, and the deferred logout follows.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_WHOIS) && state.authed && !hookBlocked {
+				if !state.handleWhoIs(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
