@@ -22497,7 +22497,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (!nearbySelected), the pick comes from spellChainNearbyPick instead
 	// (wire anchor kept if none).
 	chainUnitPrimary := uint64(0)
-	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 && targetGUID != 0 {
+	// A nearby chain leg selects from the caster regardless of an explicit
+	// target (Spell.cpp:1036 -> 1173), so this block no longer gates on
+	// targetGUID; an object leg with no wire anchor searches nothing
+	// (anchor 0) and records no primary, matching the null-target arm of :1558.
+	if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
 		anchor := targetGUID
 		winTarget := uint32(0)
 		for i, eff := range spell.Effects {
@@ -22548,132 +22552,133 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	chainPrimaryByEffect := make(map[int]uint64)
 	chainSecondPrimaryByEffect := make(map[int]uint64)
 	chainSecondTargetByEffect := make(map[int]uint32)
-	if targetGUID != 0 {
-		_, _, _, winMask := chainSpellJumps(s, spell)
-		for i, eff := range spell.Effects {
-			if eff.Effect == 0 && eff.Aura == 0 {
+	// Chain legs run even with no explicit target: a nearby leg selects from
+	// the caster (Spell.cpp:1036), while an object leg anchors on the wire
+	// target and records nothing when it is 0 (record guard below).
+	_, _, _, winMask := chainSpellJumps(s, spell)
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 && eff.Aura == 0 {
+			continue
+		}
+		chainTarget := uint32(0)
+		if chainSelectionEligibleTarget(eff.ImplicitTargetA) {
+			chainTarget = eff.ImplicitTargetA
+		} else if chainSelectionEligibleTarget(eff.ImplicitTargetB) {
+			chainTarget = eff.ImplicitTargetB
+		} else {
+			continue
+		}
+		if winMask == 1<<uint(i) {
+			continue
+		}
+		modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets))
+		if modded <= 1 {
+			continue
+		}
+		anchor := targetGUID
+		switch chainTarget {
+		case 6, 21, 25, 35, 45, 57, 90, 95:
+			if spellTarget.UnitGUID != 0 {
+				anchor = spellTarget.UnitGUID
+			}
+		case 2, 3, 4, 38, 58:
+			pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), chainTarget)
+			if status == nearbyPickGenuineMiss {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+				s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for chain effect")
+				return
+			}
+			if status != nearbyPickFound || pick == 0 {
 				continue
 			}
-			chainTarget := uint32(0)
-			if chainSelectionEligibleTarget(eff.ImplicitTargetA) {
-				chainTarget = eff.ImplicitTargetA
-			} else if chainSelectionEligibleTarget(eff.ImplicitTargetB) {
-				chainTarget = eff.ImplicitTargetB
-			} else {
-				continue
+			anchor = pick
+		default:
+			continue
+		}
+		if anchor != 0 && uint16(anchor>>48) != 0xF110 {
+			chainPrimaryByEffect[i] = anchor
+		}
+		chainJumpsByEffect[i] = s.spellSearchChainTargets(ctx, spell, spellID, anchor, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i))
+		// A second TARGET-object leg unions here too: DEFAULT never marks
+		// the effect processed (Spell.cpp:866-900), so the B leg's chain
+		// arm runs beside A's with its own check type; the mixed
+		// second legs follow below.
+		if targetObjectTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+			secondAnchor := targetGUID
+			if spellTarget.UnitGUID != 0 {
+				secondAnchor = spellTarget.UnitGUID
 			}
-			if winMask == 1<<uint(i) {
-				continue
-			}
-			modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets))
-			if modded <= 1 {
-				continue
-			}
-			anchor := targetGUID
-			switch chainTarget {
-			case 6, 21, 25, 35, 45, 57, 90, 95:
-				if spellTarget.UnitGUID != 0 {
-					anchor = spellTarget.UnitGUID
-				}
-			case 2, 3, 4, 38, 58:
-				pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), chainTarget)
-				if status == nearbyPickGenuineMiss {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
-					s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for chain effect")
-					return
-				}
-				if status != nearbyPickFound || pick == 0 {
-					continue
-				}
-				anchor = pick
-			default:
-				continue
-			}
-			if uint16(anchor>>48) != 0xF110 {
-				chainPrimaryByEffect[i] = anchor
-			}
-			chainJumpsByEffect[i] = s.spellSearchChainTargets(ctx, spell, spellID, anchor, uint32(modded-1), chainTarget == spellImplicitTargetChainHealAlly, chainCheckType(chainTarget), 1<<uint(i))
-			// A second TARGET-object leg unions here too: DEFAULT never marks
-			// the effect processed (Spell.cpp:866-900), so the B leg's chain
-			// arm runs beside A's with its own check type; the mixed
-			// second legs follow below.
-			if targetObjectTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
-				secondAnchor := targetGUID
-				if spellTarget.UnitGUID != 0 {
-					secondAnchor = spellTarget.UnitGUID
-				}
-				for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
-					dup := false
-					for _, listed := range chainJumpsByEffect[i] {
-						if listed == jumpGUID {
-							dup = true
-							break
-						}
-					}
-					if !dup {
-						chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
+			for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+				dup := false
+				for _, listed := range chainJumpsByEffect[i] {
+					if listed == jumpGUID {
+						dup = true
+						break
 					}
 				}
-			}
-			// A mixed second leg unions here too: a DEFAULT first slot never
-			// marks the effect processed, and a DEFAULT second slot still runs
-			// even when the first slot is NEARBY (Spell.cpp:866-900), so an
-			// A-object+B-nearby effect chains its nearby leg from its own
-			// scoped pick with its own check type, and an A-nearby+B-object
-			// effect chains its object leg from the wire target. NEARBY+NEARBY
-			// pairs stay out: a NEARBY first slot marks the effect processed,
-			// so the second NEARBY slot never runs (same :866-900 arm). A
-			// second nearby pick records as this effect's second primary (the
-			// chain block above threads only the first leg's primary); a second
-			// object leg's wire primary records the same way, and the plain
-			// block below covers it when no chain primary was set.
-			if targetObjectTarget(chainTarget) && nearbyUnitTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
-				pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), eff.ImplicitTargetB)
-				if status == nearbyPickGenuineMiss {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
-					s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for second chain leg")
-					return
-				}
-				if status == nearbyPickFound && pick != 0 {
-					if uint16(pick>>48) != 0xF110 {
-						chainSecondPrimaryByEffect[i] = pick
-						chainSecondTargetByEffect[i] = eff.ImplicitTargetB
-					}
-					for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, pick, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
-						dup := false
-						for _, listed := range chainJumpsByEffect[i] {
-							if listed == jumpGUID {
-								dup = true
-								break
-							}
-						}
-						if !dup {
-							chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
-						}
-					}
+				if !dup {
+					chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
 				}
 			}
-			if nearbyUnitTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
-				secondAnchor := targetGUID
-				if spellTarget.UnitGUID != 0 {
-					secondAnchor = spellTarget.UnitGUID
-				}
-				for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
-					dup := false
-					for _, listed := range chainJumpsByEffect[i] {
-						if listed == jumpGUID {
-							dup = true
-							break
-						}
-					}
-					if !dup {
-						chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
-					}
-				}
-				if secondAnchor != 0 && uint16(secondAnchor>>48) != 0xF110 {
-					chainSecondPrimaryByEffect[i] = secondAnchor
+		}
+		// A mixed second leg unions here too: a DEFAULT first slot never
+		// marks the effect processed, and a DEFAULT second slot still runs
+		// even when the first slot is NEARBY (Spell.cpp:866-900), so an
+		// A-object+B-nearby effect chains its nearby leg from its own
+		// scoped pick with its own check type, and an A-nearby+B-object
+		// effect chains its object leg from the wire target. NEARBY+NEARBY
+		// pairs stay out: a NEARBY first slot marks the effect processed,
+		// so the second NEARBY slot never runs (same :866-900 arm). A
+		// second nearby pick records as this effect's second primary (the
+		// chain block above threads only the first leg's primary); a second
+		// object leg's wire primary records the same way, and the plain
+		// block below covers it when no chain primary was set.
+		if targetObjectTarget(chainTarget) && nearbyUnitTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+			pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), eff.ImplicitTargetB)
+			if status == nearbyPickGenuineMiss {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+				s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for second chain leg")
+				return
+			}
+			if status == nearbyPickFound && pick != 0 {
+				if uint16(pick>>48) != 0xF110 {
+					chainSecondPrimaryByEffect[i] = pick
 					chainSecondTargetByEffect[i] = eff.ImplicitTargetB
 				}
+				for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, pick, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+					dup := false
+					for _, listed := range chainJumpsByEffect[i] {
+						if listed == jumpGUID {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
+					}
+				}
+			}
+		}
+		if nearbyUnitTarget(chainTarget) && targetObjectTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
+			secondAnchor := targetGUID
+			if spellTarget.UnitGUID != 0 {
+				secondAnchor = spellTarget.UnitGUID
+			}
+			for _, jumpGUID := range s.spellSearchChainTargets(ctx, spell, spellID, secondAnchor, uint32(modded-1), eff.ImplicitTargetB == spellImplicitTargetChainHealAlly, chainCheckType(eff.ImplicitTargetB), 1<<uint(i)) {
+				dup := false
+				for _, listed := range chainJumpsByEffect[i] {
+					if listed == jumpGUID {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					chainJumpsByEffect[i] = append(chainJumpsByEffect[i], jumpGUID)
+				}
+			}
+			if secondAnchor != 0 && uint16(secondAnchor>>48) != 0xF110 {
+				chainSecondPrimaryByEffect[i] = secondAnchor
+				chainSecondTargetByEffect[i] = eff.ImplicitTargetB
 			}
 		}
 	}
@@ -22694,62 +22699,60 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	winSecondIndex := -1
 	winSecondTarget := uint32(0)
 	winSecondPrimary := uint64(0)
-	if targetGUID != 0 {
-		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
-			if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok {
-				for i := range spell.Effects {
-					if winMask == 1<<uint(i) {
-						winSecondIndex = i
-						break
+	if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
+		if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok {
+			for i := range spell.Effects {
+				if winMask == 1<<uint(i) {
+					winSecondIndex = i
+					break
+				}
+			}
+			winSecondTarget = secondTarget
+			anchor := uint64(0)
+			if targetObjectTarget(secondTarget) {
+				anchor = spellTarget.UnitGUID
+				if anchor != 0 {
+					winSecondPrimary = anchor
+				}
+			} else {
+				pick, status := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
+				if status == nearbyPickGenuineMiss {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+					s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning second leg")
+					return
+				}
+				if status == nearbyPickFound && pick != 0 {
+					anchor = pick
+					winSecondPrimary = pick
+				}
+			}
+			if anchor != 0 && winSecondIndex >= 0 {
+				secondJumps := s.spellSearchChainTargets(ctx, spell, spellID, anchor, jumps, secondTarget == spellImplicitTargetChainHealAlly, chainCheckType(secondTarget), winMask)
+				union := append([]uint64{}, chainJumpGUIDs...)
+				for _, jumpGUID := range secondJumps {
+					dup := false
+					for _, listed := range union {
+						if listed == jumpGUID {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						union = append(union, jumpGUID)
+					}
+					inList := false
+					for _, listed := range hitTargets {
+						if listed == jumpGUID {
+							inList = true
+							break
+						}
+					}
+					if !inList {
+						hitTargets = append(hitTargets, jumpGUID)
+						chainJumpGUIDs = append(chainJumpGUIDs, jumpGUID)
 					}
 				}
-				winSecondTarget = secondTarget
-				anchor := uint64(0)
-				if targetObjectTarget(secondTarget) {
-					anchor = spellTarget.UnitGUID
-					if anchor != 0 {
-						winSecondPrimary = anchor
-					}
-				} else {
-					pick, status := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
-					if status == nearbyPickGenuineMiss {
-						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
-						s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning second leg")
-						return
-					}
-					if status == nearbyPickFound && pick != 0 {
-						anchor = pick
-						winSecondPrimary = pick
-					}
-				}
-				if anchor != 0 && winSecondIndex >= 0 {
-					secondJumps := s.spellSearchChainTargets(ctx, spell, spellID, anchor, jumps, secondTarget == spellImplicitTargetChainHealAlly, chainCheckType(secondTarget), winMask)
-					union := append([]uint64{}, chainJumpGUIDs...)
-					for _, jumpGUID := range secondJumps {
-						dup := false
-						for _, listed := range union {
-							if listed == jumpGUID {
-								dup = true
-								break
-							}
-						}
-						if !dup {
-							union = append(union, jumpGUID)
-						}
-						inList := false
-						for _, listed := range hitTargets {
-							if listed == jumpGUID {
-								inList = true
-								break
-							}
-						}
-						if !inList {
-							hitTargets = append(hitTargets, jumpGUID)
-							chainJumpGUIDs = append(chainJumpGUIDs, jumpGUID)
-						}
-					}
-					chainJumpsByEffect[winSecondIndex] = union
-				}
+				chainJumpsByEffect[winSecondIndex] = union
 			}
 		}
 	}
@@ -23212,6 +23215,41 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if eff.ImplicitTargetA == targetUnitCaster || eff.ImplicitTargetB == targetUnitCaster {
 					hasTarget = true
 					break
+				}
+			}
+		}
+		if !hasTarget {
+			// The area/cone switch above replaced hitTargets, stripping the chain
+			// jumps and rejoined primaries C++ still holds in m_UniqueTargetInfo
+			// (Spell.cpp:789-797 counts any unique target, not just the flat list):
+			// a nearby/chain primary or jump keeps a channeled cast alive even when
+			// the area list came back empty. GO-wire primaries already rejoined
+			// hitTargets above; friendly/ref partitions stay a separate residual.
+			if chainUnitPrimary != 0 || winSecondPrimary != 0 || plainObjectPrimary != 0 || len(chainJumpGUIDs) > 0 || len(nearbyPrimaryList) > 0 {
+				hasTarget = true
+			}
+			if !hasTarget {
+				for _, jumps := range chainJumpsByEffect {
+					if len(jumps) > 0 {
+						hasTarget = true
+						break
+					}
+				}
+			}
+			if !hasTarget {
+				for _, primary := range chainPrimaryByEffect {
+					if primary != 0 {
+						hasTarget = true
+						break
+					}
+				}
+			}
+			if !hasTarget {
+				for _, primary := range chainSecondPrimaryByEffect {
+					if primary != 0 {
+						hasTarget = true
+						break
+					}
 				}
 			}
 		}
