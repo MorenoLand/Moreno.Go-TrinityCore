@@ -300,12 +300,29 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 	// live channel must keep the pre-change no-dest result, so the
 	// end-gate below returns false unless either flag is set.
 	otherDest, channelResolved := false, false
+	// seenSrcCaster tracks whether a TARGET_SRC_CASTER (22) arm has
+	// already run at an earlier (effect, slot) in SelectSpellTargets
+	// order (Spell.cpp:758-779: effects in index order, TargetA
+	// before TargetB), mirroring the session resolver: the 22 arm
+	// re-sets m_src to the live caster (Spell.cpp:930-936), so a traj
+	// arm after it reads the live motion, while a traj arm before it
+	// reads the pre-22 src. Only the pet client path stamps a src
+	// (petDestTrajOptions); twin/inline/redirect callers pass no src
+	// and already read the live motion either way, so the gate is a
+	// no-op for them. Pet casts resolve synchronously in the packet
+	// handler, so no Read-seed gap exists on this path: a pre-22
+	// no-packet-src traj arm reads the live motion, which is the
+	// packet-Read-time caster position C++ seeded.
+	seenSrcCaster := false
 	snapshots := make([]creatureDestSnapshot, len(spell.Effects))
 	for effIndex, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
 		for slotIndex, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if targetType == 22 {
+				seenSrcCaster = true
+			}
 			switch {
 			case isCasterDestTarget(targetType):
 				otherDest = true
@@ -333,7 +350,7 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 				// collision; the core early-returns on speed 0, so the
 				// twin/inline zero input keeps the seed untouched.
 				srcX, srcY, srcZ := m.X, m.Y, m.Z
-				if traj.HasSrc {
+				if traj.HasSrc && !seenSrcCaster {
 					srcX, srcY, srcZ = traj.SrcX, traj.SrcY, traj.SrcZ
 				}
 				if nx, ny, nz, changed := s.resolveTrajDestinationForCaster(ctx, trajCasterFromMotion(m), spell, eff, traj.Speed, traj.Elevation, srcX, srcY, srcZ, x, y, z); changed {

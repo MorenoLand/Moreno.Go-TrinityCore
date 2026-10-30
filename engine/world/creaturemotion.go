@@ -4851,7 +4851,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// Per-effect GO mask (Spell.cpp:2193, :4512), inline-path twin of
 			// the player-path filter.
 			packetHits = s.filterGOPacketTargetsByEffectMaskWithMasks(ctx, motion.Map, motion.InstanceID, inlineSpell, spellTarget, packetHits, goEffectMasks)
-			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, spellTarget)
+			// Twin of the boss_ai.go GO-copy src gate: C++ SendSpellGo
+			// writes m_targets after InitExplicitTargets (SetSrc to
+			// the caster when the explicit mask needs SOURCE_LOCATION,
+			// Spell.cpp:720-727) and the TARGET_SRC_CASTER arm
+			// (Spell.cpp:931). GO copy only; the cast's own target
+			// struct is untouched for the HIT legs below.
+			goTarget := finalizeSessionSrcTarget(inlineSpell, spellTarget, false, motion.X, motion.Y, motion.Z)
+			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, packetHits, missStatus, goTarget)
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 			}

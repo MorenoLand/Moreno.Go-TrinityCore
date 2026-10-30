@@ -2491,7 +2491,15 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// Per-effect GO mask (Spell.cpp:2193, :4512), twin-path twin of the
 		// player-path filter.
 		packetHits = s.filterGOPacketTargetsByEffectMaskWithMasks(ctx, m.Map, m.InstanceID, spellInfo, spellTarget, packetHits, goEffectMasks)
-		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, spellTarget)
+		// The twin cast carries no packet src, but C++ SendSpellGo
+		// writes m_targets after InitExplicitTargets (SetSrc to the
+		// caster when the explicit mask needs SOURCE_LOCATION,
+		// Spell.cpp:720-727) and the TARGET_SRC_CASTER arm
+		// (Spell.cpp:931) — the same final-HasSrc rule the pet GO
+		// copy applies. Applied to the GO copy only, so the cast's
+		// own target struct keeps no src flag for the HIT legs.
+		goTarget := finalizeSessionSrcTarget(spellInfo, spellTarget, false, m.X, m.Y, m.Z)
+		goPkt := protocol.BuildSpellGo(m.GUID, m.GUID, castID, spellID, castFlags, castTimeStamp, packetHits, missStatus, goTarget)
 
 		if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
