@@ -6134,6 +6134,60 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_ARENA_TEAM_INVITE, CMSG_ARENA_TEAM_ACCEPT,
+			// CMSG_ARENA_TEAM_DECLINE and CMSG_ARENA_TEAM_LEAVE are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:
+			// 978, 980-982), so the session update drains them
+			// before the ShouldLogOut check — and the expiry
+			// logout does NOT subsume them. Invite gates on the
+			// target existing, max level, team membership and
+			// permissions, ignore/faction/already-in/already-
+			// invited/full, then sets the target session's
+			// invited team id and sends SMSG_ARENA_TEAM_INVITE
+			// (ArenaTeamHandler.cpp:86-168); the logout sends no
+			// invite and touches no other session's invited
+			// field, so a drop loses the invite outright.
+			// Accept INSERTs the arena_team_member row, DELETEs
+			// the joiner's arena petition rows, sets the live
+			// slot and broadcasts the join event (:170-201);
+			// the logout save writes no arena_team_member or
+			// petition rows and sends no join event, so a drop
+			// leaves the player unjoined. Decline only clears
+			// the own session's invited id (:203-208), which
+			// dies with the session anyway, so dispatch changes
+			// no observable state — the leg is drain-order
+			// fidelity, like the set-active-mover leg. Leave
+			// gates on in-arena, captain-with-members and the
+			// queue lock, then DELETEs the member row (or
+			// disbands team and members for a solo captain)
+			// and broadcasts the leave event (:211-261); the
+			// logout writes no arena rows and sends neither
+			// broadcast, so a drop leaves the membership
+			// intact. None of the four arms clears logoutAt,
+			// so dispatch them here like the roster leg, then
+			// fall through to the expiry logout below; all
+			// four handlers return true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_INVITE) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamInvite(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_ACCEPT) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamAccept(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_DECLINE) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamDecline(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ARENA_TEAM_LEAVE) && state.authed && !hookBlocked {
+				if !state.handleArenaTeamLeave(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
