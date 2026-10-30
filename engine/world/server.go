@@ -3880,6 +3880,59 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_REPOP_REQUEST, CMSG_RESURRECT_RESPONSE and CMSG_LOOT
+			// are STATUS_LOGGEDIN (Opcodes.cpp:477, 479-480) and
+			// PROCESS_THREADUNSAFE, so the session update
+			// (WorldSessionFilter) drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them whole. Repop: the handler's
+			// alive/ghost/prevent-resurrection guards return silently
+			// in both C++ (MiscHandler.cpp:61-67) and Go, but a live
+			// arm fires the OnRepop hook, dismisses the pet with
+			// PET_SAVE_NOT_IN_SLOT, and converts to ghost at the
+			// graveyard; the logout leg (WorldSession.cpp:514-520)
+			// reproduces only the ghost+graveyard end state, and only
+			// while its deathTimer gate holds — it never fires the
+			// hook and it dismisses the pet as current instead. After
+			// a dispatch the logout dead leg cannot double-fire: the
+			// ghost flag is set and repopAtGraveyard clears the death
+			// timer. Resurrect-response: the accept arm resurrects
+			// the player alive at the caster's location with bones
+			// (MiscHandler.cpp:609-628) before the logout save, so a
+			// drop saves a dead player at the corpse instead; the
+			// reject arm only clears request data the logout discards
+			// anyway, but the leg dispatches the handler wholesale
+			// like the sibling legs. Loot: the cheat gates (dead
+			// player, non-creature/vehicle GUID, LootHandler.cpp:229)
+			// are silent in both, but a live arm opens the window
+			// (SMSG_LOOT_RESPONSE, group looter broadcast, lazy fill)
+			// ahead of SMSG_LOGOUT_COMPLETE, and the logout's
+			// releaseActiveLoot then mirrors C++ DoLootRelease at
+			// logout start — dispatch reproduces the open-then-release
+			// sequence, dropping it loses both packets. The
+			// interrupt-cast arm is subsumed by the logout's
+			// stopSpellLifecycle, but not the window. None of the
+			// three arms clears logoutAt, so dispatch them here like
+			// the attack leg, then fall through to the expiry logout
+			// below; repop and resurrect return true on every path,
+			// and loot returns false only on a failed response/error
+			// write, mirroring the normal arm (deferred logout
+			// follows).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REPOP_REQUEST) && state.authed && !hookBlocked {
+				if !state.handleRepopRequest(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_RESURRECT_RESPONSE) && state.authed && !hookBlocked {
+				if !state.handleResurrectResponse(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_LOOT) && state.authed && !hookBlocked {
+				if !state.handleLoot(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
