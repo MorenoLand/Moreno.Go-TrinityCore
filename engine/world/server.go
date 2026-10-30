@@ -3713,6 +3713,56 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SET_FACTION_ATWAR, CMSG_SET_FACTION_CHEAT,
+			// CMSG_SET_FACTION_INACTIVE and CMSG_SET_WATCHED_FACTION
+			// are STATUS_LOGGEDIN (Opcodes.cpp:424-425, 922-923) and
+			// PROCESS_THREADUNSAFE, so the session update
+			// (WorldSessionFilter) drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them. At-war and inactive only set
+			// needSend/needSave in C++ (ReputationMgr.cpp:493, 522),
+			// and the logout SaveToDB persists the needSave flags — but
+			// only because the drain ran the handler first; Go's
+			// logout save writes no character_reputation rows at all
+			// (savePlayerState persists the characters row only), so a
+			// dropped toggle is lost outright, and Go's handler also
+			// sends the SMSG_SET_FACTION_STANDING the drain would have
+			// flushed, ahead of SMSG_LOGOUT_COMPLETE. The cheat handler
+			// is SendState(nullptr) alone (CharacterHandler.cpp:1043):
+			// it flushes whatever needSend standings are pending (empty
+			// in Go's eager-flush model, but the drain runs it, so the
+			// leg runs it too) and resets _sendFactionIncreased, which
+			// has no Go counterpart. Watched-faction sets
+			// PLAYER_FIELD_WATCHED_FACTION_INDEX (CharacterHandler
+			// .cpp:1077-1083); Go's handler sends the values update and
+			// the logout save then persists the new watched faction
+			// into the characters row — a drop loses the packet and
+			// saves the old value instead. None of the four arms clears
+			// logoutAt, so dispatch them here like the trade leg, then
+			// fall through to the expiry logout below; all four
+			// handlers return true on every path, so the write-failure
+			// arm never fires. CMSG_RESET_FACTION_CHEAT needs no leg:
+			// it is STATUS_NEVER with Handle_NULL (Opcodes.cpp:772).
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_FACTION_ATWAR) && state.authed && !hookBlocked {
+				if !state.handleSetFactionAtWar(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_FACTION_CHEAT) && state.authed && !hookBlocked {
+				if !state.handleSetFactionCheat(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_FACTION_INACTIVE) && state.authed && !hookBlocked {
+				if !state.handleSetFactionInactive(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_WATCHED_FACTION) && state.authed && !hookBlocked {
+				if !state.handleSetWatchedFaction(payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
