@@ -4982,6 +4982,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					s.maybeCreditDungeonEncounterSpellCast(ctx, motion, spellID, hitTargets, reflected, evadedSet, immuneSet, missSet)
 				}
 			}
+			// Twin of the boss_ai.go arm: Spell::handle_immediate
+			// (Spell.cpp:3493) sends MSG_CHANNEL_START after SendSpellGo
+			// (:3468) for channeled casts. The firing run reaches this
+			// site only at fire time; the t0 schedule run returns early.
+			if isChanneledSpell(inlineSpell) && s != nil && s.Data != nil {
+				if dur, ok, derr := s.Data.SpellDuration(inlineSpell.DurationIndex, 1); derr == nil && ok && (dur > 0 || dur == -1) {
+					channelPkt := protocol.BuildChannelStart(motion.GUID, spellID, uint32(dur))
+					if target.Sess != nil {
+						_ = target.Sess.write(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, true)
+					}
+					s.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, target.Sess)
+				}
+			}
 
 			schoolMask := uint8(1)
 			damage, hasDBCSpell := uint32(0), false

@@ -4694,6 +4694,19 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 		nearbyPacket := protocol.BuildSpellGo(motion.GUID, motion.GUID, castCount, spell.ID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, stamp, packetHits, missStatus, goTarget)
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPacket, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
+		// Twin of the boss_ai.go arm: Spell::handle_immediate
+		// (Spell.cpp:3493) sends MSG_CHANNEL_START after SendSpellGo
+		// (:3468) for channeled casts. Unlike SMSG_SPELL_START, this
+		// packet has no client-sent equivalent, so the pet START
+		// exemption does not extend to it: observers learn of a pet
+		// channel only from this broadcast.
+		if isChanneledSpell(spell) && s.server != nil && s.server.Data != nil {
+			if dur, ok, derr := s.server.Data.SpellDuration(spell.DurationIndex, 1); derr == nil && ok && (dur > 0 || dur == -1) {
+				channelPkt := protocol.BuildChannelStart(motion.GUID, spell.ID, uint32(dur))
+				_ = s.write(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, true)
+				s.server.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
+			}
+		}
 	}
 	// spell_gen_dungeon_credit AfterHit (spell_generic.cpp:1553-1580),
 	// pet-path twin of the creature funnels: once per cast, on the

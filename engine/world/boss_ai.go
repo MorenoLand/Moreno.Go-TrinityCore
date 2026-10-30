@@ -2508,9 +2508,10 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// a -1 (infinite) duration stamps nothing, since C++ holds the
 		// state until the channel is interrupted and Go has no
 		// creature-channel-interrupt model — an infinite stamp would
-		// soft-lock the motion. SendChannelStart (Spell.cpp:4669) stays
-		// packet-only downstream: no SMSG_SPELL_START_CHANNEL is sent on
-		// the creature path.
+		// soft-lock the motion. The SendChannelStart packet itself
+		// (Spell.cpp:4669) is sent after the GO packet at the GO site
+		// below (MSG_CHANNEL_START, DBC duration; the -1 arm sends
+		// uint32 max) — only the state stamp skips -1.
 		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); isChanneledSpell(spellInfo) && s != nil && s.Data != nil {
 			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur > 0 {
 				channelMs := castMs + uint32(dur)
@@ -2629,6 +2630,24 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, targetSess)
 		} else {
 			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		}
+		// Spell::handle_immediate (Spell.cpp:3493, :3569-3596) runs after
+		// SendSpellGo (:3468): a channeled cast sends MSG_CHANNEL_START
+		// with the DBC channel duration (the stamp's duration leg, not
+		// the cast-time-inclusive window). The -1 infinite arm (:3588)
+		// sends too, as uint32 max, matching the C++ int32-to-uint32
+		// conversion; the stamp stays dur>0-only. Deferred-fire runs
+		// reach this site only at fire time, never at the t0 deferral.
+		if isChanneledSpell(spellInfo) && s != nil && s.Data != nil {
+			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && (dur > 0 || dur == -1) {
+				channelPkt := protocol.BuildChannelStart(m.GUID, spellID, uint32(dur))
+				if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil {
+					_ = targetSess.write(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, true)
+					s.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, targetSess)
+				} else {
+					s.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+				}
+			}
 		}
 	}
 	// Spell::EffectInterruptCast (SpellEffects.cpp:3511) for a creature

@@ -210,6 +210,19 @@ func BuildSpellStartWithPower(casterGUID, casterUnitGUID uint64, castID uint8, s
 	return packet.Bytes()
 }
 
+// BuildChannelStart mirrors Spell::SendChannelStart (Spell.cpp:4661-4681):
+// MSG_CHANNEL_START carries only the caster's packed GUID, the spell ID,
+// and the channel duration in milliseconds — no target bytes. The channel
+// object GUID, spell focus, and UNIT_CHANNEL_SPELL state ride the separate
+// channel-state stamps, not this packet.
+func BuildChannelStart(casterGUID uint64, spellID, durationMs uint32) []byte {
+	packet := NewBuffer(16)
+	packet.WritePackedGUID(casterGUID)
+	packet.WriteU32(spellID)
+	packet.WriteU32(durationMs)
+	return packet.Bytes()
+}
+
 func BuildSpellGo(casterGUID, casterUnitGUID uint64, castID uint8, spellID, castFlags, castTime uint32, hitTargets []uint64, missStatus []SpellMissStatus, target SpellTargetData) []byte {
 	return BuildSpellGoWithPower(casterGUID, casterUnitGUID, castID, spellID, castFlags, castTime, hitTargets, missStatus, target, nil)
 }
