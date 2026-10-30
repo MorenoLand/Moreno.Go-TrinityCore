@@ -445,26 +445,39 @@ func winningSecondChainLeg(spell wotlk.Spell, effectMask uint32) (uint32, bool) 
 // the chain pick must carry the winning effect's check type and conditions
 // (Spell.cpp:1066, the selecting effect's ImplicitTargetConditions). The
 // predicate arms mirror the three helpers exactly (same range sides,
-// totem/GM gates, LOS gate); no pick returns false and the caller keeps its
-// prior anchor behavior.
-func (s *session) spellChainNearbyPick(ctx context.Context, spell wotlk.Spell, spellID uint32, effectMask uint32, winTarget uint32) (uint64, bool) {
+// totem/GM gates, LOS gate); a miss returns nearbyPickGenuineMiss when the search ran with valid
+// range data and a known check type and no candidate passed, and
+// nearbyPickUnknown for range/data/unknown misses (including the LOS
+// tail-drop: C++ found the target and AddUnitTarget drops it silently,
+// so no :1111 fail); unknown-miss callers keep their prior anchor behavior.
+// nearbyPickStatus distinguishes a scoped nearby pick's miss kinds for
+// the :1111 fail-cast arm: only a genuine miss fails the cast.
+type nearbyPickStatus uint8
+
+const (
+	nearbyPickFound nearbyPickStatus = iota
+	nearbyPickGenuineMiss
+	nearbyPickUnknown
+)
+
+func (s *session) spellChainNearbyPick(ctx context.Context, spell wotlk.Spell, spellID uint32, effectMask uint32, winTarget uint32) (uint64, nearbyPickStatus) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
 	rangeEntry, ok, err := s.server.Data.SpellRange(spell.RangeIndex)
 	if err != nil || !ok {
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
 	var maxRange float64
 	switch winTarget {
 	case implicitTargetNearbyEnemy:
 		if rangeEntry.MaxHostile <= 0 {
-			return 0, false
+			return 0, nearbyPickUnknown
 		}
 		maxRange = float64(rangeEntry.MaxHostile)
 	case implicitTargetNearbyParty, implicitTargetNearbyAlly, implicitTargetNearbyRaid:
 		if rangeEntry.MaxFriendly <= 0 {
-			return 0, false
+			return 0, nearbyPickUnknown
 		}
 		maxRange = float64(rangeEntry.MaxFriendly)
 	case implicitTargetNearbyEntry:
@@ -473,18 +486,20 @@ func (s *session) spellChainNearbyPick(ctx context.Context, spell wotlk.Spell, s
 			maxRange = float64(rangeEntry.MaxFriendly)
 		}
 	default:
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
 	// SelectImplicitNearbyTargets (Spell.cpp:1047-1057) ranges the search
 	// with GetMaxRange, which folds SPELLMOD_RANGE (SpellInfo.cpp:3070-3072).
 	maxRange = s.applySpellModFloat(spell, spellModRange, maxRange)
 	if maxRange <= 0 {
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
 	// WorldObject::IsValidAttackTarget (Object.cpp:2977): a UBER-flagged
-	// player attacker cannot attack, so an ENEMY pick selects nothing.
+	// player attacker cannot attack, so an ENEMY pick selects nothing; the
+	// rejection sits inside the search predicate (Spell.cpp:8341), so this
+	// is a genuine miss, not a data miss.
 	if winTarget == implicitTargetNearbyEnemy && sessionIsUber(s) {
-		return 0, false
+		return 0, nearbyPickGenuineMiss
 	}
 	condRows := s.loadImplicitTargetConditions(ctx, spellID, effectMask)
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
@@ -567,15 +582,15 @@ func (s *session) spellChainNearbyPick(ctx context.Context, spell wotlk.Spell, s
 		}
 	})
 	if bestGUID == 0 {
-		return 0, false
+		return 0, nearbyPickGenuineMiss
 	}
 	// Spell::CheckEffectTarget (Spell.cpp:1130: AddUnitTarget with
 	// checkIfValid=true) drops a nearby unit target without line of sight
 	// to the caster.
 	if !s.implicitUnitTargetLOSPasses(spell, bestGUID, bestX, bestY, bestZ) {
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
-	return bestGUID, true
+	return bestGUID, nearbyPickFound
 }
 
 // chainScaledAmount applies the per-jump falloff of a chain spell:

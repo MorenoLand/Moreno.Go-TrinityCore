@@ -10760,7 +10760,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// NEARBY chain effect: anchor on the winning effect's own
 				// nearby pick (spellChainNearbyPick); no pick leaves anchor
 				// 0 and the block chains nothing, as before.
-				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickFound {
 					anchor = pick
 				}
 			}
@@ -10922,7 +10922,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// NEARBY chain effect: anchor on the winning effect's own
 				// nearby pick (spellChainNearbyPick); no pick leaves anchor
 				// 0 and the block chains nothing, as before.
-				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickFound {
 					anchor = pick
 				}
 			}
@@ -11082,7 +11082,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// (selectionTargetGUID) — in a multi-family spell the branch
 				// that won the selection else-if chain may be a sibling
 				// family. No pick keeps the branch pick, the prior behavior.
-				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickFound {
 					anchor = pick
 					scopedAnchor = true
 				}
@@ -11239,7 +11239,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// NEARBY chain effect: anchor on the winning effect's own
 				// nearby pick (spellChainNearbyPick); no pick leaves anchor
 				// 0 and the block chains nothing, as before.
-				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickFound {
 					anchor = pick
 				}
 			}
@@ -11484,8 +11484,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets)); modded > 1 {
 				continue
 			}
-			pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget)
-			if !ok || pick == 0 {
+			pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget)
+			if status != nearbyPickFound || pick == 0 {
 				continue
 			}
 			primaryInList := false
@@ -11583,8 +11583,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if winMask == 1<<uint(i) {
 				continue
 			}
-			pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget)
-			if !ok || pick == 0 {
+			pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget)
+			if status != nearbyPickFound || pick == 0 {
 				continue
 			}
 			primaryInList := false
@@ -11818,8 +11818,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if areaSpell || friendlyListSpell || unitNearbySpell {
 		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
 			if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok && nearbyUnitTarget(secondTarget) {
-				pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
-				if ok && pick != 0 {
+				pick, status := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
+				if status == nearbyPickFound && pick != 0 {
 					primaryInList := false
 					for _, guid := range hitTargets {
 						if guid == pick {
@@ -22520,8 +22520,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// branch pick is the spell-wide pick, which differs from the
 			// winning effect's pick in multi-family spells; on the shadowed
 			// path the wire anchor was the prior fallback. No pick keeps
-			// the prior anchor rather than dropping the chain.
-			if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); ok {
+			// the prior anchor on an unknown miss; a genuine miss fails the
+			// cast at selection time (Spell.cpp:1111).
+			if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickGenuineMiss {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+				s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning chain effect")
+				return
+			} else if status == nearbyPickFound {
 				anchor = pick
 			}
 		}
@@ -22571,8 +22576,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					anchor = spellTarget.UnitGUID
 				}
 			case 2, 3, 4, 38, 58:
-				pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), chainTarget)
-				if !ok || pick == 0 {
+				pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), chainTarget)
+				if status == nearbyPickGenuineMiss {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+					s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for chain effect")
+					return
+				}
+				if status != nearbyPickFound || pick == 0 {
 					continue
 				}
 				anchor = pick
@@ -22618,7 +22628,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// object leg's wire primary records the same way, and the plain
 			// block below covers it when no chain primary was set.
 			if targetObjectTarget(chainTarget) && nearbyUnitTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
-				if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), eff.ImplicitTargetB); ok && pick != 0 {
+				pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), eff.ImplicitTargetB)
+				if status == nearbyPickGenuineMiss {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+					s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for second chain leg")
+					return
+				}
+				if status == nearbyPickFound && pick != 0 {
 					if uint16(pick>>48) != 0xF110 {
 						chainSecondPrimaryByEffect[i] = pick
 						chainSecondTargetByEffect[i] = eff.ImplicitTargetB
@@ -22695,8 +22711,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						winSecondPrimary = anchor
 					}
 				} else {
-					pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
-					if ok && pick != 0 {
+					pick, status := s.spellChainNearbyPick(ctx, spell, spellID, winMask, secondTarget)
+					if status == nearbyPickGenuineMiss {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+						s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning second leg")
+						return
+					}
+					if status == nearbyPickFound && pick != 0 {
 						anchor = pick
 						winSecondPrimary = pick
 					}
@@ -22766,8 +22787,8 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// own effect's fan-out. One scoped pick per such effect
 	// (spellChainNearbyPick, that effect's check type + conditions),
 	// keyed by effect index for per-effect threading below; a missing
-	// pick joins nothing (the chain-block precedent, not the nearby
-	// arm's cast failure). Non-winning ChainTarget > 1 nearby effects
+	// pick joins nothing on an unknown miss; a genuine miss fails the
+	// cast at selection time (Spell.cpp:1111). Non-winning ChainTarget > 1 nearby effects
 	// stay out (the standing single-anchor approximation). When
 	// nearbySelected the spell-wide pick already rides hitTargets, so
 	// only a differing scoped pick joins (downstream dedup absorbs
@@ -22793,7 +22814,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets)); modded > 1 {
 			continue
 		}
-		if pick, ok := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget); ok && pick != 0 {
+		pick, status := s.spellChainNearbyPick(ctx, spell, spellID, 1<<uint(i), nearbyTarget)
+		if status == nearbyPickGenuineMiss {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+			s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby target for effect")
+			return
+		}
+		if status == nearbyPickFound && pick != 0 {
 			nearbyPrimaries[i] = pick
 			dup := false
 			for _, listed := range nearbyPrimaryList {
@@ -24151,15 +24178,11 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// own pick with its own mask), so its own scoped pick
 		// replaces it — on the area-shadowed path too, where the
 		// prior nearbySelected-only gate left it on the winner
-		// anchor beside its own pick. When its own pick lookup
-		// missed, C++ fails the whole cast (Spell.cpp:1111), but a
-		// scoped miss is not proof of a genuine miss
-		// (spellChainNearbyPick also fails on missing range data
-		// or range sides), so the effect threads nothing rather
-		// than the winner anchor — the nearbyPrimaries "missing
-		// pick joins nothing" precedent, not a fabricated primary.
-		// The genuine-miss fail-cast upgrade needs a miss-reason
-		// distinction in spellChainNearbyPick and stays parked.
+		// anchor beside its own pick. A genuine miss fails the cast at selection time
+		// (Spell.cpp:1111), so a miss reaching this loop is an unknown miss
+		// (range/data) and the effect threads nothing rather than the winner
+		// anchor — the nearbyPrimaries "missing pick joins nothing" precedent,
+		// not a fabricated primary.
 		if chainUnitPrimary != 0 && !hasChainPrimary && !isChainWinner && !effHasObjectLeg && effectHasNearbyLeg(eff) {
 			if pick, ok := nearbyPrimaries[effectIndex]; ok {
 				effPrimary = pick
