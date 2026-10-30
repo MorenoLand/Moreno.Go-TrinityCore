@@ -10121,7 +10121,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "channeled spell with no targets")
 		return
 	}
-	s.spawnPersistentAreaAura(ctx, spell, target)
 	targetGUID := uint64(0)
 	if len(hitTargets) > 0 {
 		targetGUID = hitTargets[0]
@@ -12142,6 +12141,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Spell::EffectPersistentAA (SpellEffects.cpp:1730) runs only at
+	// SPELL_EFFECT_HANDLE_HIT, after SendSpellGo in _cast: a cast that
+	// fails at selection (channeled check, chain genuine-miss, aura-scale
+	// LOWLEVEL) never reaches it, so the spawn sits here, behind every
+	// pre-GO fail point, instead of ahead of target selection.
+	s.spawnPersistentAreaAura(ctx, spell, target)
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	castFlags := spellCastFlagGo
 	// Spell::SendSpellGo (Spell.cpp:4325): !StartRecoveryTime sets
