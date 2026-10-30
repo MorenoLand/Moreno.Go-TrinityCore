@@ -3927,6 +3927,27 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		// timer down to cast(!m_casttime). The bar itself stays a single
 		// AfterFunc timer; the per-tick target-removal arm runs on a 50ms
 		// ticker started below.
+		// Spell::prepare (Spell.cpp:3039) ran InitExplicitTargets once at
+		// cast start, and the cast-bar Spell object persists to _cast
+		// (Spell.cpp:3410 re-runs SelectSpellTargets, never prepare), so
+		// the InitExplicit seed is a prepare-time snapshot, not a
+		// completion-time lookup: stamp it into the in-flight target
+		// here, mirroring the queued-next-swing stamp, so a wire object
+		// that moves mid-bar cannot shift the completion-time seed.
+		// The parse-time packetHasDst gates the stamp (the gauntlet may
+		// rewrite target.Flags before this point); a packet destination
+		// always beats the seed, and the seed is unseeded when the mask
+		// needs no destination. The START build above already ran, so
+		// stamping this copy cannot change it; the completion closure
+		// reads this copy back, and the trajectory gate now matches C++
+		// (MiscHandler.cpp:1561: HasDst holds after the SetDst seed).
+		castTarget := target
+		if !packetHasDst {
+			if sx, sy, sz, seeded := s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID); seeded {
+				castTarget.Flags |= protocol.SpellTargetFlagDestLocation
+				castTarget.Destination = protocol.SpellTargetLocation{X: sx, Y: sy, Z: sz}
+			}
+		}
 		s.castMu.Lock()
 		castState := &activeCastState{
 			CastID:               castID,
@@ -3934,7 +3955,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			StartAt:              time.Now(),
 			CastTimeMs:           castTime,
 			InterruptFlg:         spell.InterruptFlags,
-			Target:               target,
+			Target:               castTarget,
 			SelectionOrientation: s.player.Orientation,
 			Taking:               &spellModTakingContext{applied: make(map[*activeAura]struct{})},
 		}

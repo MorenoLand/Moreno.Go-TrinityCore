@@ -4983,6 +4983,20 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// client path (spells.go:3595-3611): a cancelled or replaced
 			// cast never fires, and finishSpellCast claims and clears
 			// the slot.
+			// Same prepare-time seed snapshot as the client cast-bar path
+			// (spells.go): Spell::prepare (Spell.cpp:3039) ran
+			// InitExplicitTargets once, and _cast (Spell.cpp:3410)
+			// never re-runs it, so stamp the seed into the in-flight
+			// target here instead of live-resolving it at completion.
+			// Parse-time packetHasDst gates the stamp; the START build
+			// above already ran, so this copy cannot change it.
+			castTarget := target
+			if !packetHasDst {
+				if sx, sy, sz, seeded := s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID); seeded {
+					castTarget.Flags |= protocol.SpellTargetFlagDestLocation
+					castTarget.Destination = protocol.SpellTargetLocation{X: sx, Y: sy, Z: sz}
+				}
+			}
 			s.castMu.Lock()
 			castState := &activeCastState{
 				CastID:               castCount,
@@ -4990,7 +5004,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				StartAt:              time.Now(),
 				CastTimeMs:           castTime,
 				InterruptFlg:         spell.InterruptFlags,
-				Target:               target,
+				Target:               castTarget,
 				SelectionOrientation: s.player.Orientation,
 			}
 			castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
