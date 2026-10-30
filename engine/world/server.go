@@ -5456,6 +5456,46 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_REQUEST_PET_INFO is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:764), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm initializes the live pet's
+			// spells, or the charmed unit's possess, vehicle
+			// or charm spells, and answers SMSG_PET_SPELLS
+			// (PetHandler.cpp:891-910); the logout sends no
+			// pet-spells packet. Go answers SMSG_PET_SPELLS
+			// for a live pet and stays silent otherwise. No
+			// arm clears logoutAt, so dispatch it here like
+			// the quest-push leg, then fall through to the
+			// expiry logout below; the handler returns true
+			// on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_REQUEST_PET_INFO) && state.authed && !hookBlocked {
+				if !state.handleRequestPetInfo(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_FAR_SIGHT is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:765), so the
+			// session update drains it before the ShouldLogOut
+			// check — and the expiry logout does NOT subsume
+			// it: the live arm sets the seer to the viewpoint
+			// on apply, or back to self, then refreshes
+			// visibility (MiscHandler.cpp:1212-1234); the
+			// logout sends no visibility update. Go's
+			// handler runs the same seer arm (the camera
+			// already follows PLAYER_FARSIGHT, so SetSeer
+			// has no wire arm). No arm clears logoutAt, so
+			// dispatch it here like the pet-info leg, then
+			// fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_FAR_SIGHT) && state.authed && !hookBlocked {
+				if !state.handleFarSight(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
