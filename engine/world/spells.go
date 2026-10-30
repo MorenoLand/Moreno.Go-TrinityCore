@@ -29130,6 +29130,9 @@ func (s *session) stopSpellLifecycle() {
 	s.autoRepeatSpell = 0
 	s.autoRepeatTarget = 0
 	channel := s.activeChannel
+	var chanCastID uint8
+	var chanSpellID uint32
+	haveChan := false
 	if channel != nil {
 		if channel.Timer != nil {
 			channel.Timer.Stop()
@@ -29139,6 +29142,13 @@ func (s *session) stopSpellLifecycle() {
 		}
 		if channel.DrainTimer != nil {
 			channel.DrainTimer.Stop()
+		}
+		// Same IsInterruptable gate as the preparing leg above:
+		// only a non-executing channel runs the CASTING leg below.
+		if !channel.Executing {
+			chanCastID = channel.CastID
+			chanSpellID = channel.SpellID
+			haveChan = true
 		}
 		channel.Stopped = true
 		s.activeChannel = nil
@@ -29188,13 +29198,32 @@ func (s *session) stopSpellLifecycle() {
 	// funnel, honors the IsInterruptable gate: a tick currently executing
 	// its effects keeps the pre-existing silent clear plus the later
 	// BY_DEFAULT leave-world sweep instead of a mid-execution strip.
-	// Packets are deliberately not sent: the session is leaving, and
-	// completeLogout sends SMSG_LOGOUT_COMPLETE right after. The
-	// dynamic objects need no leg here: completeLogout's
+	// The dynamic objects need no leg here: completeLogout's
 	// despawnAllCasterDynObjects sweep subsumes the per-spell dynobj arm.
 	if channel != nil && !channel.Executing {
 		s.expireChannelAuras(channel)
 		s.removeChannelGameObjects(channel.SpellID)
+	}
+	// Spell::cancel's SPELL_STATE_CASTING leg (Spell.cpp:3230-3236)
+	// sends SendChannelUpdate(0), then SendInterrupted(0), then
+	// SendCastResult(SPELL_FAILED_INTERRUPTED) — the same composition
+	// interruptCurrentChannel runs, in the same order (strip first,
+	// then the packets). The prior "session is leaving" rationale for
+	// sending none does not survive the logout chain: LogoutPlayer
+	// runs CleanupsBeforeDelete -> CleanupBeforeRemoveFromMap ->
+	// InterruptNonMeleeSpells(true) BEFORE RemoveFromWorld and before
+	// SMSG_LOGOUT_COMPLETE, while the socket is still open, and none
+	// of the three sends carries a logout gate (SendCastResult gates
+	// only on IsLoading, SendChannelUpdate only on a non-unit caster,
+	// SendInterrupted on nothing). Go mirrors that order:
+	// stopSpellLifecycle runs at the head of completeLogoutWithPacket
+	// and SMSG_LOGOUT_COMPLETE is written only later, so the channel
+	// bar clears on the client exactly like the preparing leg fixed
+	// last tick. On a disconnect the writes fail silently, as there.
+	if haveChan {
+		s.sendChannelUpdate(0)
+		s.sendInterrupted(chanCastID, chanSpellID, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(chanCastID, chanSpellID, spellFailedInterrupted), true)
 	}
 }
 
