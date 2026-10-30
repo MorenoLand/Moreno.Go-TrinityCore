@@ -1992,9 +1992,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 				switch winTarget {
 				case 6, 21, 25, 35, 45, 57, 90, 95:
-					if spellTarget.UnitGUID != 0 {
-						anchor = spellTarget.UnitGUID
-					}
+					// TARGET-object legs anchor strictly on the wire target
+					// (Spell.cpp:1558-1560): a wire-0 leg keeps anchor 0
+					// (searches nothing) instead of chaining from the
+					// nearby pick left in targetGUID.
+					anchor = spellTarget.UnitGUID
 				case 2, 3, 4, 38, 58:
 					if pick, ok := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, effectMask, winTarget); ok {
 						anchor = pick
@@ -2116,10 +2118,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				if winMask == 1<<uint(i) {
 					continue
 				}
-				anchor := targetGUID
-				if spellTarget.UnitGUID != 0 {
-					anchor = spellTarget.UnitGUID
-				}
+				// Wire-only anchor (Spell.cpp:1558-1560): a wire-0
+				// object leg (and its second leg, which reuses anchor)
+				// searches nothing instead of chaining from the nearby
+				// pick in targetGUID.
+				anchor := spellTarget.UnitGUID
 				if anchor == 0 {
 					continue
 				}
