@@ -6397,6 +6397,45 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SET_TITLE, MSG_INSPECT_ARENA_TEAMS and
+			// CMSG_SET_TAXI_BENCHMARK_MODE are STATUS_LOGGEDIN
+			// (Opcodes.cpp:1015, 1018, 1036), so the session update
+			// drains them before the ShouldLogOut check — and the
+			// expiry logout does NOT subsume them. The title arm
+			// writes PLAYER_CHOSEN_TITLE (MiscHandler.cpp:1236):
+			// a known title sets it, an out-of-range value clears
+			// it, and the logout save would persist the old value,
+			// so a drop loses the change and skips the values
+			// broadcast. The inspect arm is a pure query answer
+			// (ArenaTeamHandler.cpp:32): one inspect packet per
+			// arena team of a nearby, non-hostile, online target,
+			// which the logout never sends, so a drop loses the
+			// answer outright. The benchmark arm sets or clears
+			// PLAYER_FLAGS_TAXI_BENCHMARK (MiscHandler.cpp:1403),
+			// which the logout never touches, so a drop loses
+			// the flag change and its player update. (CMSG_CANCEL_
+			// MOUNT_AURA, 0x375, needs no new leg: the cancel
+			// family above already dispatches it.) None of the
+			// three arms clears logoutAt, so dispatch them here
+			// like the party-lock leg, then fall through to the
+			// expiry logout below; all three handlers return
+			// true on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_TITLE) && state.authed && !hookBlocked {
+				if !state.handleSetTitle(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_INSPECT_ARENA_TEAMS) && state.authed && !hookBlocked {
+				if !state.handleInspectArenaTeams(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_TAXI_BENCHMARK_MODE) && state.authed && !hookBlocked {
+				if !state.handleSetTaxiBenchmarkMode(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
