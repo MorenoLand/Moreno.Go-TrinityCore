@@ -257,6 +257,22 @@ type creatureMotion struct {
 	// creature casts stay packet-only SPELL_GO; this field is the
 	// scheduling gate only.
 	CastingUntil time.Time
+	// PendingCastToken / PendingInline* carry the creature-cast deferral
+	// queue (Spell::prepare, Spell.cpp:3174-3206): a non-triggered cast
+	// with a nonzero cast time sends SMSG_SPELL_START at t0 and fires GO +
+	// effects at t0+casttime. The twin path arms a time.AfterFunc holding
+	// the token captured at schedule time; the fire callback re-looks-up
+	// the motion and drops the cast when the motion is gone or dead, or
+	// the token moved (a newer cast, an interrupt, an evade, or a combat
+	// stop — all through cancelPendingCreatureCast). The inline victim
+	// path is tick-driven instead: the combat tick stores the pending
+	// spell + target + fire time and re-enters the victim body when the
+	// time arrives. A motion holds at most one pending cast of either
+	// kind: scheduling either cancels the other through the token.
+	PendingCastToken        uint64
+	PendingInlineSpellID    uint32
+	PendingInlineTargetGUID uint64
+	PendingInlineFireAt     time.Time
 	// ChannelSpellID/ChannelTargetGUID/ChannelHasDest/ChannelDest*/ChannelUntil
 	// carry the creature's live channeled spell (Spell::SendChannelStart,
 	// Spell.cpp:4669-4690): the channel spell id, its channel object (the
@@ -2318,6 +2334,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	// non-melee cast in flight (Unit.cpp:5809-5812), so the cast-state
 	// gate clears with the event schedule.
 	motion.CastingUntil = time.Time{}
+	s.cancelPendingCreatureCast(motion)
 	motion.Health = motion.MaxHealth
 	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:311): the leash's
 	// last-damaged timer resets with the evade.
@@ -3296,12 +3313,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// control.
 		if motion.AIName == "CasterAI" && target.Sess != nil && s != nil && s.aiVictimHasBreakableCC(motion, target.Sess) {
 			motion.CastingUntil = time.Time{}
+			s.cancelPendingCreatureCast(motion)
 			return
+		}
+		// Pending inline cast (deferral queue, boss_ai.go twin arm): a
+		// cast-time victim cast scheduled on an earlier tick fires when
+		// its time arrives, even past a CastingUntil another cast
+		// extended; a stale pending (caster dead, victim gone or switched)
+		// drops and the still-due event re-fires normally next tick.
+		firingPendingInline := false
+		if motion.PendingInlineSpellID != 0 && !motion.PendingInlineFireAt.IsZero() && !now.Before(motion.PendingInlineFireAt) {
+			if motion.Health == 0 || target == nil || target.GUID != motion.PendingInlineTargetGUID {
+				motion.PendingInlineSpellID = 0
+				motion.PendingInlineTargetGUID = 0
+				motion.PendingInlineFireAt = time.Time{}
+			} else {
+				firingPendingInline = true
+			}
 		}
 		// CombatAI::UpdateAI / CasterAI::UpdateAI (CombatAI.cpp:97, 159):
 		// UNIT_STATE_CASTING early-out — no spell event fires and no
 		// melee swing starts while a non-triggered cast is in flight.
-		if now.Before(motion.CastingUntil) {
+		if !firingPendingInline && now.Before(motion.CastingUntil) {
 			return
 		}
 		// TurretAI::CanAIAttack (CombatAI.cpp:245-251) fails while the
@@ -3315,6 +3348,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 		spellID, dueSpell, dueTargetGUID, dueOK := s.dueAISpell(ctx, motion, target.GUID, now, players, true)
+		// A pending inline cast outranks any other due event: its cast
+		// already started (START sent), so it completes first and the
+		// other due spell waits for the next tick. The pending fields
+		// clear before the body runs, so a fizzle + rearm never refires
+		// the same pending cast.
+		if firingPendingInline {
+			if spellInfo, found, err := s.Data.Spell(motion.PendingInlineSpellID); s != nil && s.Data != nil && err == nil && found {
+				spellID, dueSpell, dueTargetGUID, dueOK = motion.PendingInlineSpellID, spellInfo, motion.PendingInlineTargetGUID, true
+				motion.PendingInlineSpellID = 0
+				motion.PendingInlineTargetGUID = 0
+				motion.PendingInlineFireAt = time.Time{}
+			} else {
+				motion.PendingInlineSpellID = 0
+				motion.PendingInlineTargetGUID = 0
+				motion.PendingInlineFireAt = time.Time{}
+				firingPendingInline = false
+			}
+		}
 		// ArcherAI::UpdateAI (CombatAI.cpp:217-229) casts only m_spells[0]
 		// and only outside _minimumRange: inside the band it melee-attacks
 		// instead. The generic event path above can arm any template spell,
@@ -3418,10 +3469,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// Spell::prepare START snapshot (Spell.cpp:3194): the inline cast is a
 					// non-triggered UnitAI::DoCast, so C++ sends SMSG_SPELL_START before _cast.
 					// Snapshot the pre-selection target here — spellGoPacketTarget and the dest
-					// legs below mutate spellTarget into its post-selection GO shape. Instant
-					// casts only, as in the twin; target.GUID is captured because the nearby
-					// block below may reassign target before the GO send.
-					if s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell) == 0 {
+					// legs below mutate spellTarget into its post-selection GO shape.
+					// Instant casts send it ahead of GO below; cast-time casts send it
+					// at the deferral point below, and the firing run suppresses its
+					// own snapshot so START is never sent twice. target.GUID is
+					// captured because the nearby block below may reassign target
+					// before the GO send.
+					if !firingPendingInline {
 						inlineStartTarget = s.creatureStartTarget(motion, spellInfo, spellTarget, target.GUID)
 						inlineStartTargetGUID = target.GUID
 						inlineStartKnown = true
@@ -3712,6 +3766,30 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								s.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagSpellAttack)
 								break
 							}
+						}
+					}
+					// Creature-cast deferral queue (twin of the boss_ai.go arm):
+					// a cast-time victim cast sends START at t0 and fires GO +
+					// effects at t0+casttime, when the combat tick re-enters with
+					// the pending spell due. Gates passed above; the redirect,
+					// selection, verdict, drain, and launch legs below re-run at
+					// fire time (C++ _cast re-runs CheckCast + SelectSpellTargets),
+					// so no totem-magnet consume, reflect arming, drain, or
+					// cooldown happens at t0. No rearm here: the event stays due
+					// through the window, and the firing run re-arms at the end
+					// like any completed cast. The START CastTime is the cast
+					// time (Spell.cpp:4260: CastTime = m_timer).
+					if !firingPendingInline {
+						if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 {
+							if inlineStartKnown {
+								s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStart(motion.GUID, motion.GUID, castID, spellID, creatureStartCastFlags(inlineSpell), castMs, inlineStartTarget))
+							}
+							s.cancelPendingCreatureCast(motion)
+							motion.PendingInlineSpellID = spellID
+							motion.PendingInlineTargetGUID = target.GUID
+							motion.PendingInlineFireAt = now.Add(time.Duration(castMs) * time.Millisecond)
+							motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+							return
 						}
 					}
 					// Spell::_cast creature SetInFront leg (Spell.cpp:3404-3409,
@@ -4873,7 +4951,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// struct is untouched for the HIT legs below.
 			goTarget := finalizeSessionSrcTarget(inlineSpell, spellTarget, false, motion.X, motion.Y, motion.Z)
 			// Instant non-triggered casts ride START immediately ahead of GO, the C++
-			// prepare->cast packet order for cast time 0 (twin comment above).
+			// prepare->cast packet order for cast time 0 (twin comment above);
+			// cast-time casts already sent START at the deferral point and
+			// reach GO only on the firing run, whose snapshot is suppressed.
 			if inlineStartKnown {
 				s.sendCreatureSpellStart(motion, inlineStartTargetGUID, protocol.BuildSpellStart(motion.GUID, motion.GUID, castID, spellID, creatureStartCastFlags(inlineSpell), 0, inlineStartTarget))
 			}
@@ -5272,8 +5352,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.LastSpell = now
 			// Unit::CastSpell: a non-triggered cast holds UNIT_STATE_CASTING
 			// for its DBC cast time; the tick's early-out above bridges
-			// CombatAI.cpp:97 / CasterAI.cpp:159.
-			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 {
+			// CombatAI.cpp:97 / CasterAI.cpp:159. A firing pending cast skips
+			// this stamp: its window already ran from t0.
+			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); castMs > 0 && !firingPendingInline {
 				motion.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 			}
 			// Spell::handle_immediate channel arms (Spell.cpp:3569-3596),
@@ -5289,7 +5370,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// C++'s EventMap does past the early-out return.
 			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(motion), dueSpell); isChanneledSpell(dueSpell) && s != nil && s.Data != nil {
 				if dur, ok, derr := s.Data.SpellDuration(dueSpell.DurationIndex, 1); derr == nil && ok && dur > 0 {
-					if channelUntil := now.Add(time.Duration(castMs+uint32(dur)) * time.Millisecond); channelUntil.After(motion.CastingUntil) {
+					channelMs := castMs + uint32(dur)
+					if firingPendingInline {
+						channelMs = uint32(dur)
+					}
+					if channelUntil := now.Add(time.Duration(channelMs) * time.Millisecond); channelUntil.After(motion.CastingUntil) {
 						motion.CastingUntil = channelUntil
 					}
 				}

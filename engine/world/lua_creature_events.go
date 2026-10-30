@@ -1232,6 +1232,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		victim := motion.TargetGUID
 		if includingCast {
 			motion.CastingUntil = time.Time{}
+			s.cancelPendingCreatureCast(motion)
 		}
 		motion.TargetGUID = 0
 		motion.AlreadyCallAssistance = false

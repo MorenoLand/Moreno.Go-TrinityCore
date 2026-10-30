@@ -1308,7 +1308,7 @@ func spellFirstEffectTargetsUnitPet(spell wotlk.Spell) bool {
 }
 
 func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
-	s.castCreatureSpellInternalWithBasePoints(ctx, m, spellID, targetGUID, triggered, nil)
+	s.castCreatureSpellInternalWithBasePoints(ctx, m, spellID, targetGUID, triggered, nil, false)
 }
 
 // castCreatureSpellInternalWithBasePoints is castCreatureSpellInternal
@@ -1318,8 +1318,10 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 // flat effects take the value, rolled effects take value-1 so the nested
 // CalcValue re-roll lands on it). The store builds a fresh Spell per
 // lookup, so patching the local copy never touches shared DBC data.
-// Callers pass nil for a plain cast.
-func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool, basePoints []int32) {
+// Callers pass nil for a plain cast. deferredFire marks the t0+casttime
+// fire of a deferred cast-time cast: it skips the deferral decision, the
+// START snapshot, and the cast-time CastingUntil stamp below.
+func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool, basePoints []int32, deferredFire bool) {
 	if s == nil || m == nil || spellID == 0 {
 		return
 	}
@@ -1367,13 +1369,13 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// non-triggered cast before _cast. Snapshot the pre-selection target here:
 	// spellGoPacketTarget and the selection legs below mutate spellTarget into
 	// its post-selection GO shape, while START writes post-InitExplicit targets.
-	// Instant casts only (Go-computed cast time 0): Go fires GO and effects in
-	// this same call, matching C++'s instant prepare->cast sequence. A cast-time
-	// cast sends its START at t0 and its GO at t0+casttime in C++; Go has no
-	// deferred-cast queue, so no START is faked at effect time for those.
+	// Instant casts send this START immediately ahead of GO below; cast-time
+	// casts send it at the deferral point below and fire GO + effects at
+	// t0+casttime through the deferred-fire call, which suppresses its own
+	// snapshot (deferredFire) so START is never sent twice.
 	var startTarget protocol.SpellTargetData
 	startTargetKnown := false
-	if spellKnown && !triggered && s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo) == 0 {
+	if spellKnown && !triggered && !deferredFire {
 		startTarget = s.creatureStartTarget(m, spellInfo, spellTarget, targetGUID)
 		startTargetKnown = true
 	}
@@ -1708,6 +1710,31 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 					s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagSpellAttack)
 					break
 				}
+			}
+		}
+		// Creature-cast deferral queue (Spell::prepare, Spell.cpp:3174-3206):
+		// a non-triggered cast-time cast sends START at t0 and fires GO +
+		// effects at t0+casttime, when the deferred-fire call re-runs this
+		// whole body (C++ _cast re-runs CheckCast, so the fire-time gates
+		// are the revalidation, not a second prepare). Placed after CheckCast
+		// + the prepare-correct stealth-break arm and ahead of every _cast
+		// leg: no facing, no totem-magnet consume, no selection, no reflect
+		// arming, no drain, and no cooldown has run yet, so the t0 run is
+		// side-effect free apart from the stealth-break C++ itself runs at
+		// prepare. Movement never cancels a creature cast (Spell.cpp:3812
+		// gates the movement arm on TYPEID_PLAYER); death, evade, interrupt,
+		// and combat-stop cancel through the token (cancelPendingCreatureCast).
+		// The START CastTime is the cast time (Spell.cpp:4260: CastTime =
+		// m_timer, set to m_casttime by ReSetTimer in prepare).
+		if !triggered && !deferredFire {
+			if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); castMs > 0 {
+				if startTargetKnown {
+					s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStart(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), castMs, startTarget))
+				}
+				m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
+				s.cancelPendingCreatureCast(m)
+				s.scheduleDeferredTwinCast(m, spellID, targetGUID, basePoints, castMs, m.PendingCastToken)
+				return
 			}
 		}
 		// Spell::_cast lost-explicit-target arm (Spell.cpp:3288-3293): an
@@ -2457,7 +2484,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// non-triggered cast (the kill.go AICOND_DIE death cast is
 		// C++-triggered, but its motion is dead and never ticks again),
 		// so the triggered stamp below is inert.
-		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); castMs > 0 {
+		// Deferred-fire casts skip this stamp: the t0 window already ran,
+		// and re-stamping would hold CASTING for a second cast time.
+		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); castMs > 0 && !deferredFire {
 			m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 		}
 		// Spell::handle_immediate channel arms (Spell.cpp:3569-3596):
@@ -2484,7 +2513,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// the creature path.
 		if castMs := s.creatureAISpellCastTimeMs(creatureAuraKeyForMotion(m), spellInfo); isChanneledSpell(spellInfo) && s != nil && s.Data != nil {
 			if dur, ok, derr := s.Data.SpellDuration(spellInfo.DurationIndex, 1); derr == nil && ok && dur > 0 {
-				channelUntil := now.Add(time.Duration(castMs+uint32(dur)) * time.Millisecond)
+				channelMs := castMs + uint32(dur)
+				if deferredFire {
+					channelMs = uint32(dur)
+				}
+				channelUntil := now.Add(time.Duration(channelMs) * time.Millisecond)
 				if channelUntil.After(m.CastingUntil) {
 					m.CastingUntil = channelUntil
 				}
@@ -2578,7 +2611,14 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// Instant non-triggered casts ride START immediately ahead of GO, the C++
 		// prepare->cast packet order for cast time 0. Triggered casts take the
 		// CAST_DIRECTLY branch (Spell.cpp:3174) and never send START; cast-time
-		// casts are excluded above (no deferred queue yet).
+		// casts already sent START at the deferral point and reach GO only
+		// through the deferred-fire call, whose snapshot is suppressed.
+		// A non-triggered GO starts a cast: it interrupts any pending
+		// cast-time cast (Unit::CastSpell replaces the current generic
+		// spell), so the pending token moves here.
+		if !triggered {
+			s.cancelPendingCreatureCast(m)
+		}
 		if startTargetKnown {
 			s.sendCreatureSpellStart(m, targetGUID, protocol.BuildSpellStart(m.GUID, m.GUID, castID, spellID, creatureStartCastFlags(spellInfo), 0, startTarget))
 		}
@@ -5600,7 +5640,7 @@ func (s *Server) creatureEffectTriggerSpell(ctx context.Context, m *creatureMoti
 	if eff.Effect == spellEffectTriggerSpellWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
 		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
-		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, []int32{damage, damage, damage})
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, []int32{damage, damage, damage}, false)
 		return
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
@@ -5664,7 +5704,7 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 				ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, []int32{bp0}, 0)
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil && tm.MaxHealth != 0 {
 				bp0 := int32(0.01 * float64(tm.MaxHealth) * float64(eff.BasePoints))
-				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, []int32{bp0})
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, []int32{bp0}, false)
 			}
 			return
 		case triggerReplenishManaSpell:
@@ -5677,7 +5717,7 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 				ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, []int32{eff.BasePoints}, 0)
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
-				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, []int32{eff.BasePoints})
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, []int32{eff.BasePoints}, false)
 			}
 			return
 		case triggerDemonicEmpowerSuccub:
@@ -5696,7 +5736,7 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 	if eff.Effect == spellEffectTriggerSpellWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
 		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
-		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, targetGUID, true, []int32{damage, damage, damage})
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, targetGUID, true, []int32{damage, damage, damage}, false)
 		return
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, targetGUID, true)
@@ -5794,7 +5834,7 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 				if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 					ts.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, guid, uint32(damage))
 				} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-					s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, tm.GUID, true, []int32{damage})
+					s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, tm.GUID, true, []int32{damage}, false)
 				}
 				continue
 			}
@@ -5812,7 +5852,7 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 				ts.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, m.GUID, []int32{scaled, scaled, scaled})
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-				s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, m.GUID, true, []int32{scaled, scaled, scaled})
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, m.GUID, true, []int32{scaled, scaled, scaled}, false)
 			}
 			continue
 		}
@@ -7077,7 +7117,7 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 			if eff.Effect == spellEffectTriggerMissileWithValue {
 				damage := eff.CalcValueForLevel(spell, uint32(m.Level))
 				damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
-				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, guid, true, []int32{damage, damage, damage})
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, guid, true, []int32{damage, damage, damage}, false)
 			} else {
 				s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, guid, true)
 			}
@@ -7093,7 +7133,7 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 	if eff.Effect == spellEffectTriggerMissileWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
 		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
-		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, []int32{damage, damage, damage})
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, []int32{damage, damage, damage}, false)
 		return
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
@@ -8913,7 +8953,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				if i >= 0 && i < len(aura.Amounts) && aura.Amounts[i] > 0 {
 					bp0 = uint32(aura.Amounts[i])
 				}
-				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, triggerTargetGUID, true, []int32{int32(bp0)})
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, triggerTargetGUID, true, []int32{int32(bp0)}, false)
 				continue
 			}
 			// m_caster->CastSpell(unit, triggeredSpell->Id, true): the

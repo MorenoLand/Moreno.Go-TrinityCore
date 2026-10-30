@@ -17721,6 +17721,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, effectTarget); motion != nil && time.Now().Before(motion.CastingUntil) {
 					motion.CastingUntil = time.Time{}
+					s.server.cancelPendingCreatureCast(motion)
 				}
 			}
 		}
