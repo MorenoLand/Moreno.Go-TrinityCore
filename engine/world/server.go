@@ -6661,6 +6661,41 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_GET_MIRRORIMAGE_DATA (0x401), MSG_QUERY_GUILD_BANK_TEXT
+			// (0x40A) and CMSG_SET_GUILD_BANK_TEXT (0x40B) are drained
+			// before the ShouldLogOut check: all three are
+			// STATUS_LOGGEDIN, PROCESS_THREADUNSAFE (Opcodes.cpp:1156,
+			// 1165-1166), and the expiry logout does NOT subsume them.
+			// The mirror-image arm answers the clone-caster appearance
+			// (SpellHandler.cpp:634), the bank-text-query arm answers
+			// the tab text (GuildHandler.cpp:368), and the set-text arm
+			// persists the tab text and broadcasts it to online guild
+			// members (GuildHandler.cpp:376); the logout sends no
+			// mirror-image packet, answers no tab text and persists
+			// nothing, so a drop loses the reply or the edit outright.
+			// Guildless players are silent in both: the C++ arms gate
+			// on a non-null guild and the Go arms on a non-zero guild
+			// id (the mirror-image arm additionally needs a live
+			// CLONE_CASTER aura). None of the arms clears logoutAt, so
+			// dispatch them here like the guild-event-log leg, then
+			// fall through to the expiry logout below; all three
+			// handlers return true on every path, so the write-failure
+			// arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GET_MIRRORIMAGE_DATA) && state.authed && !hookBlocked {
+				if !state.handleGetMirrorImageData(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeMSG_QUERY_GUILD_BANK_TEXT) && state.authed && !hookBlocked {
+				if !state.handleQueryGuildBankText(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_GUILD_BANK_TEXT) && state.authed && !hookBlocked {
+				if !state.handleSetGuildBankText(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
