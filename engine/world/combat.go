@@ -1827,7 +1827,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
 	if s.server != nil && s.server.Data != nil {
 		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found {
-			spellTarget = spellGoPacketTarget(spellInfo, spellTarget)
+			spellTarget = finalizeSessionSrcTarget(spellInfo, spellGoPacketTarget(spellInfo, spellTarget), false, s.player.X, s.player.Y, s.player.Z)
 		}
 	}
 	goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
