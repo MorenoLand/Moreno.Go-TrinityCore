@@ -4520,6 +4520,62 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_ZONEUPDATE is STATUS_LOGGEDIN, PROCESS_INPLACE
+			// (Opcodes.cpp:631), so the session-update drain runs its
+			// handler before the ShouldLogOut check — but the
+			// handler's ONLY effect is a deferred flag, so it is
+			// deliberately NOT dispatched here: HandleZoneUpdateOpcode
+			// only sets m_needsZoneUpdate (MiscHandler.cpp:511-521),
+			// whose sole consumer is Player::UpdatePosition
+			// (Player.cpp:6468-6473), driven by map updates that run
+			// only after the session update that fires the expiry
+			// logout (World.cpp:2418, 2462, as with the WHO/taxi
+			// legs). The flag therefore dies unconsumed and the
+			// logout save keeps the old zone, so dispatching Go's
+			// handler — which walks channels, explores, streams
+			// objects and writes CHAR_UPD_ZONE eagerly, and whose
+			// new zone the logout position save would then persist
+			// — would send packets and persist a zone change C++
+			// never produces on this path. The drop stands.
+			// MSG_RANDOM_ROLL is STATUS_LOGGEDIN, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:638), so the session update drains it
+			// before the ShouldLogOut check (WorldSession.cpp:302-472)
+			// — and the expiry logout does NOT subsume it: the
+			// handler validates min <= max <= 10000 and broadcasts
+			// the roll to the group, or answers the roller alone
+			// (GroupHandler.cpp:520-536, Player.cpp:27170-27188);
+			// the logout sends no roll. No arm clears logoutAt, so
+			// dispatch it here like the tabard leg, then fall
+			// through to the expiry logout below; the handler
+			// returns true on every path, so the write-failure arm
+			// never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_RANDOM_ROLL) && state.authed && !hookBlocked {
+				if !state.handleRandomRoll(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_UNLEARN_SKILL is STATUS_LOGGEDIN, PROCESS_INPLACE
+			// (Opcodes.cpp:645), so the session update drains it
+			// before the ShouldLogOut check (WorldSession.cpp:302-472)
+			// — and the expiry logout does NOT subsume it: the
+			// handler gates on SkillRaceClassInfo UNLEARNABLE for the
+			// race/class, then SetSkill(skill, 0, 0, 0) removes the
+			// skill and unlearns its first-rank spells
+			// (SkillHandler.cpp:93-104); Go's handler DELETEs the
+			// character_skills row eagerly and runs the remove-spell
+			// cascade, while the logout save writes no
+			// character_skills or character_spell rows, so a drop
+			// resurrects the skill and its spells at next login.
+			// The unknown, non-unlearnable and not-known arms are
+			// silent in both. No arm clears logoutAt, so dispatch it
+			// here like the roll leg, then fall through to the
+			// expiry logout below; the handler returns true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_UNLEARN_SKILL) && state.authed && !hookBlocked {
+				if !state.handleUnlearnSkill(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
