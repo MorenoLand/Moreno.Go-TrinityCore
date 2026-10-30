@@ -500,6 +500,9 @@ func (s *session) canShareQuest(ctx context.Context, questID uint32) bool {
 }
 
 func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	// WorldSession::HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:121):
 	// recvData >> guid >> questId >> startCheat throws on a short read, so
 	// the handler aborts silently. Go accepted 12-byte payloads and proceeded.

@@ -4827,6 +4827,9 @@ func (s *session) handleQueryGuildBankText(ctx context.Context, payload []byte) 
 // handleSetGuildBankText processes CMSG_SET_GUILD_BANK_TEXT (0x40B).
 // Reference: WorldSession::HandleGuildBankSetTabText (GuildHandler.cpp:376).
 func (s *session) handleSetGuildBankText(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if len(payload) < 2 {
 		return true
 	}

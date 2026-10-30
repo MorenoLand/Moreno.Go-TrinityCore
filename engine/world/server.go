@@ -8042,7 +8042,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CHAR_ENUM):
-			if !state.authed || !state.handleCharEnum(ctx) {
+			if !state.inQueue && (!state.authed || !state.handleCharEnum(ctx)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CREATURE_QUERY):
@@ -8238,7 +8238,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GUILD_QUERY):
-			if !state.authed || !state.handleGuildQuery(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleGuildQuery(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GUILD_ROSTER):
@@ -8484,15 +8484,15 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_REQUEST_ACCOUNT_DATA):
-			if !state.authed || !state.handleRequestAccountData(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleRequestAccountData(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_UPDATE_ACCOUNT_DATA):
-			if !state.authed || !state.handleUpdateAccountData(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleUpdateAccountData(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_SET_ACTIONBAR_TOGGLES):
-			if !state.authed || !state.handleSetActionBarToggles(payload) {
+			if !state.inQueue && (!state.authed || !state.handleSetActionBarToggles(payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_SET_ACTION_BUTTON):
@@ -8508,23 +8508,23 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_READY_FOR_ACCOUNT_DATA_TIMES):
-			if !state.authed || !state.handleReadyForAccountDataTimes() {
+			if !state.inQueue && (!state.authed || !state.handleReadyForAccountDataTimes()) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_REALM_SPLIT):
-			if !state.authed || !state.handleRealmSplit(payload) {
+			if !state.inQueue && (!state.authed || !state.handleRealmSplit(payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CHAR_CREATE):
-			if !state.authed || !state.handleCharCreate(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleCharCreate(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CHAR_DELETE):
-			if !state.authed || !state.handleCharDelete(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleCharDelete(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_PLAYER_LOGIN):
-			if !state.authed || !state.handlePlayerLogin(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handlePlayerLogin(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_OPENING_CINEMATIC):
@@ -8995,19 +8995,19 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CHAR_RENAME):
-			if !state.authed || !state.handleCharRename(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleCharRename(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CHAR_CUSTOMIZE):
-			if !state.authed || !state.handleCharCustomize(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleCharCustomize(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CHAR_RACE_CHANGE):
-			if !state.authed || !state.handleCharRaceChange(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleCharRaceChange(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_CHAR_FACTION_CHANGE):
-			if !state.authed || !state.handleCharFactionChange(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleCharFactionChange(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_COMPLETE_MOVIE):
@@ -9581,7 +9581,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_OPT_OUT_OF_LOOT):
-			if !state.authed || !state.handleOptOutOfLoot(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleOptOutOfLoot(ctx, payload)) {
 				return
 			}
 
@@ -9631,11 +9631,11 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 
 		// Voice & Channels
 		case uint32(protocol.OpcodeCMSG_SET_ACTIVE_VOICE_CHANNEL):
-			if !state.authed || !state.handleSetActiveVoiceChannel(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleSetActiveVoiceChannel(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_VOICE_SESSION_ENABLE):
-			if !state.authed || !state.handleVoiceSessionEnable(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleVoiceSessionEnable(ctx, payload)) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_SET_CHANNEL_WATCH):
@@ -9655,7 +9655,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 
 		// Character Declined Names
 		case uint32(protocol.OpcodeCMSG_SET_PLAYER_DECLINED_NAMES):
-			if !state.authed || !state.handleSetPlayerDeclinedNames(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleSetPlayerDeclinedNames(ctx, payload)) {
 				return
 			}
 
@@ -9667,7 +9667,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 
 		// Warden
 		case uint32(protocol.OpcodeCMSG_WARDEN_DATA):
-			if !state.authed || !state.handleWardenData(ctx, payload) {
+			if !state.inQueue && (!state.authed || !state.handleWardenData(ctx, payload)) {
 				return
 			}
 

@@ -1419,6 +1419,9 @@ func (s *session) handleCalendarUpdateEvent(ctx context.Context, payload []byte)
 // handleCalendarRemoveEvent processes CMSG_CALENDAR_REMOVE_EVENT (0x42F).
 // Reference: WorldSession::HandleCalendarRemoveEvent (CalendarHandler.cpp:304-308).
 func (s *session) handleCalendarRemoveEvent(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if len(payload) < 8 {
 		return true
 	}

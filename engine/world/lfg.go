@@ -4452,6 +4452,9 @@ func (s *session) handleLfgSetBootVote(ctx context.Context, payload []byte) bool
 // handleLfgSetRoles processes CMSG_LFG_SET_ROLES (0x36A).
 // Reference: WorldSession::HandleLfgSetRolesOpcode (LFGHandler.cpp:104).
 func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if len(payload) < 1 {
 		return true
 	}
@@ -4669,6 +4672,9 @@ func (s *session) handleSearchLfgLeave(ctx context.Context, payload []byte) bool
 // handleSetLfgComment processes CMSG_SET_LFG_COMMENT (0x366).
 // Reference: WorldSession::HandleLfgSetCommentOpcode (LFGHandler.cpp:122).
 func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if s.playerGUID == 0 {
 		return true
 	}
