@@ -1971,6 +1971,9 @@ func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte)
 // CALENDAR_ERROR_EVENT_INVALID; an unknown invite answers
 // CALENDAR_ERROR_NO_INVITE.
 func (s *session) handleCalendarEventRSVP(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if len(payload) < 20 {
 		return true
 	}
@@ -2022,6 +2025,9 @@ func (s *session) handleCalendarEventRSVP(ctx context.Context, payload []byte) b
 // CalendarMgr::RemoveInvite (CalendarMgr.cpp:216) only ever deletes the
 // invite matching both the invite id and the event id.
 func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if len(payload) < 24 {
 		return true
 	}
@@ -2101,6 +2107,9 @@ func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload [
 // changes invite status"); the SMSG_CALENDAR_EVENT_STATUS goes to every event
 // relative, then SendCalendarClearPendingAction targets the invitee.
 func (s *session) handleCalendarEventStatus(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if len(payload) < 25 {
 		return true
 	}
@@ -2150,6 +2159,9 @@ func (s *session) handleCalendarEventStatus(ctx context.Context, payload []byte)
 // answers CALENDAR_ERROR_NO_INVITE; the invite's rank is updated by invite id
 // only; SMSG_CALENDAR_EVENT_MODERATOR_STATUS_ALERT goes to every event relative.
 func (s *session) handleCalendarEventModeratorStatus(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	if len(payload) < 25 {
 		return true
 	}

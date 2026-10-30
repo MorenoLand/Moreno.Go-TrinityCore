@@ -10240,6 +10240,9 @@ func (s *session) saveTutorials(ctx context.Context) {
 }
 
 func (s *session) handleTutorialFlag(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	b := protocol.NewReader(payload)
 	data, err := b.ReadU32()
 	if err != nil {
@@ -10254,6 +10257,9 @@ func (s *session) handleTutorialFlag(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) handleTutorialClear(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	for i := range s.tutorials {
 		s.tutorials[i] = 0xFFFFFFFF
 	}
@@ -10262,6 +10268,9 @@ func (s *session) handleTutorialClear(ctx context.Context) bool {
 }
 
 func (s *session) handleTutorialReset(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
 	for i := range s.tutorials {
 		s.tutorials[i] = 0
 	}
