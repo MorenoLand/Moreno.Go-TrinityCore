@@ -3494,6 +3494,55 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// MSG_SET_RAID_DIFFICULTY is STATUS_LOGGEDIN and
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1390), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler resets the player's (or the
+			// leader's group's) instance binds and sets the raid
+			// difficulty (MiscHandler.cpp:1327) while the logout sets
+			// no difficulty and resets no binds. Dispatch it here
+			// like the exit-request leg, then fall through to the
+			// expiry logout below; it returns true on every path,
+			// so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeMSG_SET_RAID_DIFFICULTY) && state.authed && !hookBlocked {
+				if !state.handleSetRaidDifficulty(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_GMRESPONSE_RESOLVE is STATUS_LOGGEDIN and
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:1395), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler closes the player's open GM
+			// ticket and answers SMSG_GMRESPONSE_STATUS_UPDATE,
+			// SMSG_GMTICKET_DELETETICKET and the default ticket
+			// (TicketHandler.cpp:272) while the logout closes no
+			// ticket and sends none. Dispatch it here like the
+			// raid-difficulty leg, then fall through to the expiry
+			// logout below; it returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GMRESPONSE_RESOLVE) && state.authed && !hookBlocked {
+				if !state.handleGMResponseResolve(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_WORLD_STATE_UI_TIMER_UPDATE is STATUS_LOGGEDIN and
+			// PROCESS_INPLACE (Opcodes.cpp:1401), so the session
+			// update drains it before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume it: the handler answers
+			// SMSG_WORLD_STATE_UI_TIMER_UPDATE with the current time
+			// (MiscHandler.cpp:1434) while the logout sends none.
+			// Dispatch it here like the resolve leg, then fall
+			// through to the expiry logout below; it returns false
+			// only on a failed answer write, where returning matches
+			// the normal dispatch's write-failure arm.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_WORLD_STATE_UI_TIMER_UPDATE) && state.authed && !hookBlocked {
+				if !state.handleWorldStateUITimer() {
+					return
+				}
+			}
 			// CMSG_WHO is STATUS_LOGGEDIN (Opcodes.cpp:229) but
 			// PROCESS_THREADSAFE, so the session-update drain does NOT run
 			// it: WorldSessionFilter::Process (WorldSession.cpp:92-104)
