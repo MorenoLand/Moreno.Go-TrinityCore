@@ -3193,6 +3193,63 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_NAME_QUERY, CMSG_ITEM_QUERY_SINGLE,
+			// CMSG_ITEM_NAME_QUERY, CMSG_PAGE_TEXT_QUERY,
+			// CMSG_GAMEOBJECT_QUERY, CMSG_CREATURE_QUERY and
+			// CMSG_QUERY_TIME are STATUS_LOGGEDIN (Opcodes.cpp:211,
+			// 217, 839, 221, 225, 227, 593), so the C++ drain runs
+			// their handlers before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume them: every handler is a pure static-data
+			// read (character cache / template / page_text rows, or
+			// the game-time clock) whose only effect is the response
+			// packet to this session, sent while the socket is still
+			// open ahead of SMSG_LOGOUT_COMPLETE; the client caches
+			// template/name answers across sessions, so a dropped
+			// query is a lost cache fill, not a no-op. None of the
+			// seven arms writes DB state, mutates player state, or
+			// clears logoutAt, so dispatch them here like the
+			// chat/selection leg, then fall through to the expiry
+			// logout below; the write-failure arm mirrors the
+			// sibling legs (page-text always returns true, so its
+			// arm never fires). ITEM_NAME_QUERY rides with ITEM:
+			// it is the second STATUS_LOGGEDIN item-query opcode,
+			// and leaving it dropped would split the family.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_NAME_QUERY) && state.authed && !hookBlocked {
+				if !state.handleNameQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ITEM_QUERY_SINGLE) && state.authed && !hookBlocked {
+				if !state.handleItemQuerySingle(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_ITEM_NAME_QUERY) && state.authed && !hookBlocked {
+				if !state.handleItemNameQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PAGE_TEXT_QUERY) && state.authed && !hookBlocked {
+				if !state.handlePageTextQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GAMEOBJECT_QUERY) && state.authed && !hookBlocked {
+				if !state.handleGameObjectQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_CREATURE_QUERY) && state.authed && !hookBlocked {
+				if !state.handleCreatureQuery(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUERY_TIME) && state.authed && !hookBlocked {
+				if !state.handleQueryTime() {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
