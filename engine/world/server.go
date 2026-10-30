@@ -4006,6 +4006,73 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_MOUNTSPECIAL_ANIM, CMSG_PET_SET_ACTION,
+			// CMSG_PET_ACTION, CMSG_PET_ABANDON and CMSG_PET_RENAME are
+			// STATUS_LOGGEDIN (Opcodes.cpp:500, 503-506) and
+			// PROCESS_THREADUNSAFE, so the session update
+			// (WorldSessionFilter) drains them before the ShouldLogOut
+			// check (WorldSession.cpp:302-472) — and the expiry logout
+			// does NOT subsume them. Mount-special: a pure broadcast
+			// (SMSG_MOUNTSPECIAL_ANIM to the visible set,
+			// MovementHandler.cpp:545-551, no state, no DB write) that
+			// the logout never sends. Set-action: the handler rewrites
+			// the character_pet abdata string and the pet_spell active
+			// flags (PetHandler.cpp:460-577) plus the live autocast
+			// list, while the logout's unsummon-as-current save
+			// (pet_save.go savePetState) rewrites only slot, level,
+			// health, mana, happiness, exp, Reactstate and savetime —
+			// a drop loses the bar change and the autocast toggles
+			// outright. Pet-action: stay/follow/attack commands,
+			// reaction changes and real spell casts (SPELL_GO,
+			// damage, cooldowns, PetHandler.cpp:58-259) plus the
+			// COMMAND_ABANDON arm (hunter-pet delete, summoned-pet
+			// unsummon, charmed-creature release, :242-256) — the
+			// logout only unsummons the pet as current and stops
+			// combat, so a drop loses every live effect; the
+			// silent arms (unknown/non-owned/dead pet, pacified
+			// owner, invalid target) are identical either way, so
+			// the leg dispatches the handler wholesale like the
+			// sibling legs. Abandon: the handler drains 50000
+			// happiness and deletes the character_pet row
+			// (PetHandler.cpp:675-691), while the logout unsummons
+			// the same pet as current — a drop resurrects the
+			// abandoned pet at next login. Rename: the handler
+			// UPDATEs the character_pet name/renamed columns and
+			// the declined-name rows and broadcasts the new
+			// PET_NAME_TIMESTAMP (PetHandler.cpp:585-672); the
+			// logout save rewrites savetime but never name or
+			// renamed, so a drop loses the rename (and the
+			// SMSG_PET_NAME_INVALID replies on the reject arms).
+			// None of the five arms clears logoutAt, so dispatch
+			// them here like the duel leg, then fall through to
+			// the expiry logout below; all five handlers return
+			// true on every path, so the write-failure arm never
+			// fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_MOUNTSPECIAL_ANIM) && state.authed && !hookBlocked {
+				if !state.handleMountSpecialAnim(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_SET_ACTION) && state.authed && !hookBlocked {
+				if !state.handlePetSetAction(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_ACTION) && state.authed && !hookBlocked {
+				if !state.handlePetAction(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_ABANDON) && state.authed && !hookBlocked {
+				if !state.handlePetAbandon(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_PET_RENAME) && state.authed && !hookBlocked {
+				if !state.handlePetRename(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
