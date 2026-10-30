@@ -29117,10 +29117,31 @@ func (s *session) stopSpellLifecycle() {
 		if channel.TickTimer != nil {
 			channel.TickTimer.Stop()
 		}
+		if channel.DrainTimer != nil {
+			channel.DrainTimer.Stop()
+		}
 		channel.Stopped = true
 		s.activeChannel = nil
 	}
 	s.castMu.Unlock()
+	// Unit::CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) runs
+	// InterruptNonMeleeSpells(true) before RemoveFromWorld, so a logout
+	// (WorldSession::LogoutPlayer -> CleanupsBeforeDelete) cancels the
+	// live channel through Spell::cancel's CASTING leg (Spell.cpp:3230-3236)
+	// like any other interrupt — it does not silently drop the channel
+	// state. The strip runs after the unlock (expireChannelAuras takes
+	// castMu itself, as interruptCurrentChannel does) and, like that
+	// funnel, honors the IsInterruptable gate: a tick currently executing
+	// its effects keeps the pre-existing silent clear plus the later
+	// BY_DEFAULT leave-world sweep instead of a mid-execution strip.
+	// Packets are deliberately not sent: the session is leaving, and
+	// completeLogout sends SMSG_LOGOUT_COMPLETE right after. The
+	// dynamic objects need no leg here: completeLogout's
+	// despawnAllCasterDynObjects sweep subsumes the per-spell dynobj arm.
+	if channel != nil && !channel.Executing {
+		s.expireChannelAuras(channel)
+		s.removeChannelGameObjects(channel.SpellID)
+	}
 }
 
 // handleCancelCast mirrors WorldSession::HandleCancelCastOpcode
