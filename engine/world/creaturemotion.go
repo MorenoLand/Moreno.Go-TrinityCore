@@ -4302,7 +4302,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								anchor = spellTarget.UnitGUID
 							}
 						case 2, 3, 4, 38, 58:
-							if pick, ok := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, effectMask, winTarget); ok {
+							if pick, status := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, effectMask, winTarget); status == nearbyPickFound {
 								anchor = pick
 							} else if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
 								anchor = pick
@@ -4413,8 +4413,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if winMask == 1<<uint(i) {
 						continue
 					}
-					pick, ok := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, 1<<uint(i), nearbyTarget)
-					if !ok || pick == 0 {
+					pick, status := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, 1<<uint(i), nearbyTarget)
+					if status != nearbyPickFound || pick == 0 {
 						continue
 					}
 					joinInlineChainGUID(pick)
@@ -4497,8 +4497,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						if targetObjectTarget(secondTarget) {
 							anchor = spellTarget.UnitGUID
 						} else {
-							pick, ok := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, winMask, secondTarget)
-							if ok && pick != 0 {
+							pick, status := s.creatureChainNearbyPick(ctx, motion, inlineSpell, spellID, winMask, secondTarget)
+							if status == nearbyPickFound && pick != 0 {
 								anchor = pick
 								joinInlineChainGUID(pick)
 							}

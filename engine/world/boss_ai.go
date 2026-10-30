@@ -1976,7 +1976,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// wire target, which the nearby block above never rewrites even as it
 		// moves targetGUID to the pick — while a NEARBY winner anchors on
 		// its own pick (creatureChainNearbyPick), falling back to its
-		// family's pick, then targetGUID.
+		// family's pick, then targetGUID; a genuine scoped-pick miss
+		// fails the cast (Spell.cpp:1111) instead, an unknown miss
+		// keeps the fallback.
 		if spellKnown && targetGUID != 0 {
 			if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(nil, spellInfo); jumps > 0 {
 				anchor := targetGUID
@@ -1998,7 +2000,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 					// nearby pick left in targetGUID.
 					anchor = spellTarget.UnitGUID
 				case 2, 3, 4, 38, 58:
-					if pick, ok := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, effectMask, winTarget); ok {
+					if pick, status := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, effectMask, winTarget); status == nearbyPickGenuineMiss {
+						return
+					} else if status == nearbyPickFound {
 						anchor = pick
 					} else if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
 						anchor = pick
@@ -2027,8 +2031,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// type + conditions) with its own jump count - the winning block above
 		// searched only the largest ChainTarget. The pick joins hitTargets
 		// deduped (AddUnitTarget merge, Spell.cpp:2117) ahead of the verdict
-		// loop below, and jumps join the same way; a missing pick chains
-		// nothing (the session rejoin precedent). Creature casters have no
+		// loop below, and jumps join the same way; a genuine scoped-pick
+		// miss fails the cast (Spell.cpp:1111), an unknown miss chains
+		// nothing. Creature casters have no
 		// spell-mod owner, so the ChainTarget fold is a pass-through. The
 		// winning effect is skipped: its jumps are already listed.
 		if spellKnown {
@@ -2051,8 +2056,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				if winMask == 1<<uint(i) {
 					continue
 				}
-				pick, ok := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, 1<<uint(i), nearbyTarget)
-				if !ok || pick == 0 {
+				pick, status := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, 1<<uint(i), nearbyTarget)
+				if status == nearbyPickGenuineMiss {
+					return
+				}
+				if status != nearbyPickFound || pick == 0 {
 					continue
 				}
 				inList := false
@@ -2171,10 +2179,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// at :1173/:1575) — the winning block above searched only the first
 		// eligible leg (A else B), and the non-winning loops skip the winner.
 		// The second leg's pick (nearby) and jumps join hitTargets deduped
-		// ahead of the verdict loop below; a missing pick or wire victim
-		// chains nothing (the non-winning precedent: no family-pick
-		// fallback; the object leg anchors strictly on the wire target,
-		// never on a nearby pick).
+		// ahead of the verdict loop below; a genuine scoped-pick miss
+		// fails the cast (Spell.cpp:1111), an unknown miss or wire
+		// victim chains nothing (the non-winning precedent: no
+		// family-pick fallback; the object leg anchors strictly on the
+		// wire target, never on a nearby pick).
 		if spellKnown {
 			if jumps, _, _, winMask := chainSpellJumps(nil, spellInfo); jumps > 0 {
 				if secondTarget, ok := winningSecondChainLeg(spellInfo, winMask); ok {
@@ -2182,8 +2191,11 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 					if targetObjectTarget(secondTarget) {
 						anchor = spellTarget.UnitGUID
 					} else {
-						pick, ok := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, winMask, secondTarget)
-						if ok && pick != 0 {
+						pick, status := s.creatureChainNearbyPick(ctx, m, spellInfo, spellID, winMask, secondTarget)
+						if status == nearbyPickGenuineMiss {
+							return
+						}
+						if status == nearbyPickFound && pick != 0 {
 							anchor = pick
 							inList := false
 							for _, guid := range hitTargets {

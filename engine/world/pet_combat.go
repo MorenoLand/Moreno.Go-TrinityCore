@@ -4009,7 +4009,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// target, which the nearby block never rewrites even as it moves targetGUID
 	// to the pick — while a NEARBY winner anchors on its own
 	// pick (creatureChainNearbyPick), falling back to its family's
-	// pick, then targetGUID.
+	// pick, then targetGUID; a genuine scoped-pick miss fails the cast
+	// (Spell.cpp:1111) instead, an unknown miss keeps the fallback.
 	// The owner session is the spell-mod owner for pets (C++ GetSpellModOwner),
 	// so the SPELLMOD_JUMP_TARGETS fold runs here where the twin passes nil.
 	// Jumps join hitTargets ahead of the reflect/miss verdicts below so each
@@ -4041,7 +4042,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// pick or caster fallback left in targetGUID.
 				anchor = target.UnitGUID
 			case 2, 3, 4, 38, 58:
-				if pick, ok := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, effectMask, winTarget); ok {
+				if pick, status := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, effectMask, winTarget); status == nearbyPickGenuineMiss {
+					return true
+				} else if status == nearbyPickFound {
 					anchor = pick
 				} else if pick, ok := creatureChainFamilyPick(winTarget, chainUnitPick, chainHostilePick, chainFriendlyPick); ok {
 					anchor = pick
@@ -4075,8 +4078,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// jumps are already listed. Jumps join hitTargets deduped
 		// (AddUnitTarget, Spell.cpp:2152) ahead of the verdicts below, and
 		// a non-winning nearby pick joins too (C++ adds the nearby primary
-		// earlier, Spell.cpp:1036); a missing pick chains nothing (the
-		// session/creature non-winning precedent). The owner session is
+		// earlier, Spell.cpp:1036); a genuine scoped-pick miss fails the
+		// cast (Spell.cpp:1111), an unknown miss chains nothing. The owner session is
 		// the spell-mod owner for pets (C++ GetSpellModOwner), so the
 		// SPELLMOD_JUMP_TARGETS fold runs here like the winning block.
 		_, _, _, winMask := chainSpellJumps(s, spell)
@@ -4106,8 +4109,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// (Spell.cpp:1558-1560).
 				anchor = target.UnitGUID
 			case 2, 3, 4, 38, 58:
-				pick, ok := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, 1<<uint(i), chainTarget)
-				if !ok || pick == 0 {
+				pick, status := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, 1<<uint(i), chainTarget)
+				if status == nearbyPickGenuineMiss {
+					return true
+				}
+				if status != nearbyPickFound || pick == 0 {
 					continue
 				}
 				anchor = pick
@@ -4176,7 +4182,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// pairs stay out: a NEARBY first slot marks the effect processed,
 			// so the second NEARBY slot never runs (same :866-900 arm).
 			if targetObjectTarget(chainTarget) && nearbyUnitTarget(eff.ImplicitTargetB) && eff.ImplicitTargetB != chainTarget {
-				if pick, ok := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, 1<<uint(i), eff.ImplicitTargetB); ok && pick != 0 {
+				if pick, status := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, 1<<uint(i), eff.ImplicitTargetB); status == nearbyPickGenuineMiss {
+					return true
+				} else if status == nearbyPickFound && pick != 0 {
 					pickInList := false
 					for _, guid := range hitTargets {
 						if guid == pick {
@@ -4239,7 +4247,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// eligible leg (A else B), and the non-winning loop skips the winner.
 		// The second leg's jumps join the winner's shared list (chainHits)
 		// and hitTargets deduped; a nearby second pick joins hitTargets
-		// like the non-winning loop's pick, and a missing pick or wire
+		// like the non-winning loop's pick, and a genuine scoped-pick
+		// miss fails the cast (Spell.cpp:1111); an unknown miss or wire
 		// victim chains nothing (no family-pick fallback; the object leg
 		// anchors strictly on the wire target, never on a nearby pick).
 		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
@@ -4248,8 +4257,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				if targetObjectTarget(secondTarget) {
 					anchor = target.UnitGUID
 				} else {
-					pick, ok := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, winMask, secondTarget)
-					if ok && pick != 0 {
+					pick, status := s.server.creatureChainNearbyPick(ctx, motion, spell, spell.ID, winMask, secondTarget)
+					if status == nearbyPickGenuineMiss {
+						return true
+					}
+					if status == nearbyPickFound && pick != 0 {
 						anchor = pick
 						pickInList := false
 						for _, guid := range hitTargets {

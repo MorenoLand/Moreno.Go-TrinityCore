@@ -124,18 +124,23 @@ func creatureChainFamilyPick(winTarget uint32, unitPick, hostilePick, friendlyPi
 // ImplicitTargetConditions rows (effectMask), not the family helpers'
 // union checks / first-effect conditions. The predicate arms mirror the
 // three creature nearby helpers exactly (same range sides, totem/GM
-// gates, party/raid scope via motionChainRefererScope, LOS gate); no
-// pick returns false and the caller keeps its family-pick fallback.
-func (s *Server) creatureChainNearbyPick(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, effectMask uint32, winTarget uint32) (uint64, bool) {
+// gates, party/raid scope via motionChainRefererScope, LOS gate); a
+// miss returns nearbyPickGenuineMiss when the search ran with valid
+// range data and a known check type and no candidate passed, and
+// nearbyPickUnknown for range/data/unknown misses (including the LOS
+// tail-drop: C++ found the target and AddUnitTarget drops it silently,
+// so no :1111 fail) — the session spellChainNearbyPick split, mirrored
+// here. Unknown-miss callers keep their prior anchor behavior.
+func (s *Server) creatureChainNearbyPick(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, effectMask uint32, winTarget uint32) (uint64, nearbyPickStatus) {
 	if s == nil || m == nil || s.Data == nil {
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
 	var maxRange float64
 	switch winTarget {
 	case implicitTargetNearbyEnemy:
 		rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
 		if err != nil || !ok || rangeEntry.MaxHostile <= 0 {
-			return 0, false
+			return 0, nearbyPickUnknown
 		}
 		maxRange = spellDBCMaxRange(false, rangeEntry)
 		if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
@@ -144,7 +149,7 @@ func (s *Server) creatureChainNearbyPick(ctx context.Context, m *creatureMotion,
 	case implicitTargetNearbyParty, implicitTargetNearbyAlly, implicitTargetNearbyRaid:
 		rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
 		if err != nil || !ok || rangeEntry.MaxFriendly <= 0 {
-			return 0, false
+			return 0, nearbyPickUnknown
 		}
 		maxRange = spellDBCMaxRange(true, rangeEntry)
 		if modOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID); modOwner != nil {
@@ -153,10 +158,10 @@ func (s *Server) creatureChainNearbyPick(ctx context.Context, m *creatureMotion,
 	case implicitTargetNearbyEntry:
 		maxRange = s.creatureEntryNearbyObjectRange(m, spell)
 	default:
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
 	if maxRange <= 0 {
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
 	condRows := s.loadImplicitTargetConditionRows(ctx, spellID, effectMask)
 	allowPlayers, allowCreatures := true, true
@@ -303,12 +308,12 @@ func (s *Server) creatureChainNearbyPick(ctx context.Context, m *creatureMotion,
 		}
 	}
 	if bestGUID == 0 {
-		return 0, false
+		return 0, nearbyPickGenuineMiss
 	}
 	if !s.implicitUnitTargetLOSPassesForMotion(spell, m, bestGUID, bestX, bestY, bestZ) {
-		return 0, false
+		return 0, nearbyPickUnknown
 	}
-	return bestGUID, true
+	return bestGUID, nearbyPickFound
 }
 
 // spellHasTargetObjectEffect reports whether any live effect of the spell
