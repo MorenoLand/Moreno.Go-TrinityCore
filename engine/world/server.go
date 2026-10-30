@@ -5646,6 +5646,73 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SUMMON_RESPONSE is STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:815), so the session
+			// update drains it before the ShouldLogOut check — and
+			// the expiry logout does NOT subsume it. The accept arm
+			// gates on alive and not in combat — never on the
+			// countdown's root/stun — then drops a carried flag,
+			// clears the pending summon, fires the accepted-summonings
+			// achievement criteria and teleports to the summon location
+			// (MovementHandler.cpp:613-624, Player.cpp:23829-23857);
+			// the logout save persists the pre-teleport position and
+			// the session-only pending summon dies with the session,
+			// so a drop leaves the player un-summoned at the old spot
+			// with the criteria never fired. The decline arm clears
+			// the pending summon the same way. No arm clears logoutAt,
+			// so dispatch it here like the talent-wipe leg, then fall
+			// through to the expiry logout below; the handler returns
+			// true on every path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SUMMON_RESPONSE) && state.authed && !hookBlocked {
+				if !state.handleSummonResponse(ctx, payload) {
+					return
+				}
+			}
+			// CMSG_SELF_RES is STATUS_LOGGEDIN, PROCESS_THREADUNSAFE
+			// (Opcodes.cpp:822), so the session update drains it
+			// before the ShouldLogOut check — and the expiry logout
+			// does NOT subsume it. The arm gates only on the
+			// prevent-resurrection aura, then casts the stored
+			// self-resurrect spell — registering the resurrect
+			// request the client answers — and clears
+			// PLAYER_SELF_RES_SPELL unconditionally
+			// (SpellHandler.cpp:602-614); the logout's dead-player
+			// arm repops at the graveyard instead, so a drop casts
+			// nothing, answers nothing, and strands the dead player
+			// at the graveyard with the resurrect dialog never shown.
+			// No arm clears logoutAt, so dispatch it here like the
+			// summon leg, then fall through to the expiry logout
+			// below; the handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SELF_RES) && state.authed && !hookBlocked {
+				if !state.handleSelfRes(ctx) {
+					return
+				}
+			}
+			// CMSG_SHOWING_HELM and CMSG_SHOWING_CLOAK are
+			// STATUS_LOGGEDIN, PROCESS_INPLACE (Opcodes.cpp:828-829),
+			// so the session update drains them before the
+			// ShouldLogOut check — and the expiry logout does NOT
+			// subsume them. Each arm flips its PLAYER_FLAGS hide bit
+			// and broadcasts the player update
+			// (CharacterHandler.cpp:1095-1108); the logout save writes
+			// PlayerFlags verbatim, so a drop persists the pre-toggle
+			// preference and the visible set never sees the change —
+			// the player relogs with the old helm/cloak display. No
+			// arm clears logoutAt, so dispatch them here like the
+			// self-res leg, then fall through to the expiry logout
+			// below; both handlers return true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SHOWING_HELM) && state.authed && !hookBlocked {
+				if !state.handleShowingHelm(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SHOWING_CLOAK) && state.authed && !hookBlocked {
+				if !state.handleShowingCloak(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
