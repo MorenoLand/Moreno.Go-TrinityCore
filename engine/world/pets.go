@@ -1517,6 +1517,11 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 		s.server.clearCreatureAuras(creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: petGUID})
 	}
 
+	if s.server != nil {
+		if pm := s.findCreatureMotion(petGUID); pm != nil {
+			s.server.interruptCreatureCastsOnRemove(pm)
+		}
+	}
 	s.sendDestroyObject(petGUID, false)
 	if s.server != nil {
 		destroyBuf := protocol.NewBuffer(9)

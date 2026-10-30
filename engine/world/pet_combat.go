@@ -5744,6 +5744,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// the periodic done leg bakes at apply for unit auras.
 				amount = s.petPeriodicApplyDoneLegs(ctx, motion, auraSpell, i, victimGUID, victim, amount)
 				if s.applyPetAura(ctx, motion, auraSpell, auraEffect, victimGUID, durationMs, amount) {
+					s.server.recordCreatureChannelHitTarget(motion, spell, victimGUID)
 				}
 			}
 			// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (129, SharedDefines.h:940):
@@ -5767,7 +5768,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					}
 					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-					s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount)
+					if s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+						s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
+					}
 				}
 				// SelectImplicitAreaTargets (Spell.cpp:1227): the
 				// area-selected enemy creatures take the area aura
@@ -5788,7 +5791,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					}
 					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-					s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount)
+					if s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+						s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
+					}
 				}
 			}
 			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
@@ -5805,7 +5810,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					}
 					aAmount := uint32(aEffect.CalcValueForLevel(aSpell, uint32(motion.Level)))
 					aAmount = s.petPeriodicApplyDoneLegs(ctx, motion, aSpell, i, aVictimGUID, aVictim, aAmount)
-					s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount)
+					if s.applyPetAura(ctx, motion, aSpell, aEffect, aVictimGUID, aDurationMs, aAmount) {
+						s.server.recordCreatureChannelHitTarget(motion, spell, aVictimGUID)
+					}
 				}
 				for _, areaHit := range areaAllyHits {
 					if areaAllyChecks[areaHit.GUID]&wanted != 0 {
@@ -5832,7 +5839,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					}
 					cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
 					cAmount = s.petPeriodicApplyDoneLegs(ctx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
-					s.applyPetAura(ctx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount)
+					if s.applyPetAura(ctx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount) {
+						s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
+					}
 				}
 			}
 		}
