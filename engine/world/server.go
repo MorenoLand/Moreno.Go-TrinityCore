@@ -3763,6 +3763,34 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_SET_ACTION_BUTTON is STATUS_LOGGEDIN
+			// (Opcodes.cpp:428) and PROCESS_THREADUNSAFE, so the
+			// session update (WorldSessionFilter) drains it before
+			// the ShouldLogOut check (WorldSession.cpp:302-472) —
+			// and the expiry logout does NOT subsume it. The C++
+			// handler sends no packet; its whole effect is state the
+			// logout save then persists: nonzero data adds or
+			// changes the button (Player.cpp:6416-6430, NEW or
+			// CHANGED for _SaveActions, :19841+), zero data removes
+			// it (NEW erased at once, saved buttons marked DELETED
+			// for _SaveActions, :6432-6445), and invalid data is
+			// dropped by IsActionButtonDataValid (:6362-6414). Go's
+			// handler writes the same character_action row eagerly
+			// (upsert or delete by button+spec) and updates the
+			// in-memory Actions, while the logout save writes no
+			// character_action rows at all — so a dropped set or
+			// clear is lost outright at next login, and a dropped
+			// invalid payload is the only arm where dispatch-or-drop
+			// is identical (both drop it). The arm clears no
+			// logoutAt, so dispatch it here like the faction leg,
+			// then fall through to the expiry logout below; the
+			// handler returns true on every path, so the
+			// write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_ACTION_BUTTON) && state.authed && !hookBlocked {
+				if !state.handleSetActionButton(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
