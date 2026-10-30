@@ -10780,9 +10780,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				anchor = target.UnitGUID
 			case 2, 3, 4, 38, 58:
 				// NEARBY chain effect: anchor on the winning effect's own
-				// nearby pick (spellChainNearbyPick); no pick leaves anchor
-				// 0 and the block chains nothing, as before.
-				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickFound {
+				// nearby pick (spellChainNearbyPick); a genuine miss fails
+				// the cast (SelectImplicitNearbyTargets, Spell.cpp:1107-1113,
+				// and _cast aborts before TakePower/SendSpellGo, :3410-3423),
+				// while an unknown miss leaves anchor 0 and the block
+				// chains nothing, as before.
+				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickGenuineMiss {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning chain effect")
+					return
+				} else if status == nearbyPickFound {
 					anchor = pick
 				}
 			}
@@ -10942,9 +10949,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				anchor = target.UnitGUID
 			case 2, 3, 4, 38, 58:
 				// NEARBY chain effect: anchor on the winning effect's own
-				// nearby pick (spellChainNearbyPick); no pick leaves anchor
-				// 0 and the block chains nothing, as before.
-				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickFound {
+				// nearby pick (spellChainNearbyPick); a genuine miss fails
+				// the cast (SelectImplicitNearbyTargets, Spell.cpp:1107-1113,
+				// and _cast aborts before TakePower/SendSpellGo, :3410-3423),
+				// while an unknown miss leaves anchor 0 and the block
+				// chains nothing, as before.
+				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickGenuineMiss {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning chain effect")
+					return
+				} else if status == nearbyPickFound {
 					anchor = pick
 				}
 			}
@@ -11273,9 +11287,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				anchor = target.UnitGUID
 			case 2, 3, 4, 38, 58:
 				// NEARBY chain effect: anchor on the winning effect's own
-				// nearby pick (spellChainNearbyPick); no pick leaves anchor
-				// 0 and the block chains nothing, as before.
-				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickFound {
+				// nearby pick (spellChainNearbyPick); a genuine miss fails
+				// the cast (SelectImplicitNearbyTargets, Spell.cpp:1107-1113,
+				// and _cast aborts before TakePower/SendSpellGo, :3410-3423),
+				// while an unknown miss leaves anchor 0 and the block
+				// chains nothing, as before.
+				if pick, status := s.spellChainNearbyPick(ctx, spell, spellID, effectMask, winTarget); status == nearbyPickGenuineMiss {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "no nearby target for winning chain effect")
+					return
+				} else if status == nearbyPickFound {
 					anchor = pick
 				}
 			}
