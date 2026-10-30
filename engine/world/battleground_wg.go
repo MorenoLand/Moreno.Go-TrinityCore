@@ -1790,14 +1790,14 @@ func (s *Server) broadcastWGSpiritHeal(guideGUID uint64, safeLocID uint32, gyOK 
 		}
 	}
 	// SendSpellGo (Spell.cpp:4292/4297/4325): a triggered cast with cast
-	// count 0 carries CAST_FLAG_PENDING; POWER_LEFT_SELF (:4297) needs
+	// count 0 carries CAST_FLAG_PENDING and CastID 0 (Spell.cpp:4331/602); POWER_LEFT_SELF (:4297) needs
 	// a player or pet caster, and the guide is neither, so it stays
 	// off; NO_GCD (:4325) has no caster gate, so it applies when the
 	// resolved spell has no start recovery time. AMMO (:4295) stays off
 	// — the creature virtual-item ammo model is unbridged (boss_ai.go
 	// precedent) — and ADJUST_MISSILE (:4316) needs a packet traj speed
 	// this hand-built target never carries.
-	pkt := protocol.BuildSpellGo(guideGUID, guideGUID, 1, 22012, castFlags, uint32(time.Now().UnixMilli()), []uint64{guideGUID}, nil, target)
+	pkt := protocol.BuildSpellGo(guideGUID, guideGUID, 0, 22012, castFlags, uint32(time.Now().UnixMilli()), []uint64{guideGUID}, nil, target)
 	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt, mapID, instanceID, x, y, z, nil)
 }
 

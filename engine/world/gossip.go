@@ -1746,14 +1746,14 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 		}
 	}
 	// SendSpellGo (Spell.cpp:4292/4297/4325): NPCHandler.cpp:278 casts
-	// 3286 triggered, so PENDING applies; POWER_LEFT_SELF (:4297) needs
+	// 3286 triggered, so PENDING applies and CastID is 0 (Spell.cpp:4331/602); POWER_LEFT_SELF (:4297) needs
 	// a player or pet caster, and the innkeeper is neither, so it stays
 	// off; NO_GCD (:4325) has no caster gate, so it applies when the
 	// resolved spell has no start recovery time. AMMO (:4295) stays off
 	// — the creature virtual-item ammo model is unbridged (boss_ai.go
 	// precedent) — and ADJUST_MISSILE (:4316) needs a packet traj speed
 	// this hand-built target never carries.
-	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, target)
+	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 0, 3286, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, target)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt)

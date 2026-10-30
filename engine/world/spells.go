@@ -10229,7 +10229,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.startRealSpellCooldown(spell, rangedMs, catMs, catID, castItemEntry, time.Now())
 		}
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
-			s.executeRangedAttack(ctx, tgt, spellID)
+			s.executeRangedAttack(ctx, tgt, spellID, castID)
 		}
 		return
 	}
@@ -41948,14 +41948,14 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 		}
 	}
 	// SendSpellGo (Spell.cpp:4292/4297/4325): SkillHandler.cpp:90 casts
-	// 14867 triggered, so PENDING applies; POWER_LEFT_SELF (:4297) needs
+	// 14867 triggered, so PENDING applies and CastID is 0 (Spell.cpp:4331/602); POWER_LEFT_SELF (:4297) needs
 	// a player or pet caster, and the wiper is an NPC trainer, so it
 	// stays off; NO_GCD (:4325) has no caster gate, so it applies when
 	// the resolved spell has no start recovery time. AMMO (:4295) stays
 	// off — the creature virtual-item ammo model is unbridged (boss_ai.go
 	// precedent) — and ADJUST_MISSILE (:4316) needs a packet traj speed
 	// this hand-built target never carries.
-	goPkt := protocol.BuildSpellGo(wipeGUID, wipeGUID, 1, 14867, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, spellTarget)
+	goPkt := protocol.BuildSpellGo(wipeGUID, wipeGUID, 0, 14867, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, spellTarget)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)

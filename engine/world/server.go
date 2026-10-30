@@ -1675,7 +1675,7 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 							rangedSpeed = sess.getHastedRangedSpeed(time.Duration(sess.player.RangedAttackTime) * time.Millisecond)
 						}
 						if now.Sub(sess.lastRangedSwing) >= rangedSpeed {
-							sess.executeRangedAttack(ctx, rTarget, sess.autoRepeatSpell)
+							sess.executeRangedAttack(ctx, rTarget, sess.autoRepeatSpell, 0)
 						}
 					}
 				}

@@ -1782,7 +1782,7 @@ func (s *session) takeAmmo(ctx context.Context, spell wotlk.Spell) (consumed, ou
 	return true, false
 }
 
-func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, spellID uint32) {
+func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, spellID uint32, castID uint8) {
 	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
 	}
@@ -1821,7 +1821,6 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	}
 
 	// Visual: broadcast SMSG_SPELL_GO (TC Spell::SendSpellGo)
-	castID := uint8(1)
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{target.GUID}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
@@ -1837,7 +1836,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// speed (HasTraj is m_speed != 0, Spell.h:198), and the C++ re-fire
 	// reuses the original unit-targeted auto-repeat targets, which
 	// carry no trajectory speed either. An unresolved spell carries
-	// neither new flag.
+	// neither new flag. CastID rides the caller: the initial client-cast
+	// shot carries the client's count (SpellHandler.cpp:445), the loop
+	// re-fire carries 0 (Unit.cpp:3056 Spell, m_cast_count init Spell.cpp:602).
 	castFlags := spellCastFlagGo
 	var remainingPower *uint32
 	var goExtras protocol.SpellGoTrailerExtras
@@ -3866,7 +3867,7 @@ func (s *session) castVisualSpell(spellID uint32) {
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
 	// SendSpellGo (Spell.cpp:4292/4295/4297/4316/4325): every call site
 	// casts triggered (Unit.cpp:972, DuelHandler.cpp:71, Player.cpp:7399,
-	// Battleground.cpp:318), so PENDING applies; POWER_LEFT_SELF applies
+	// Battleground.cpp:318), so PENDING applies and CastID is 0 (Spell.cpp:4331/602); POWER_LEFT_SELF applies
 	// for the player caster when the resolved spell's power is not health
 	// (login-effect 836 precedent, characters.go); NO_GCD (:4325) has no
 	// caster gate, so it applies when the resolved spell has no start
@@ -3898,10 +3899,10 @@ func (s *session) castVisualSpell(spellID uint32) {
 			}
 		}
 	}
-	castPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 1, spellID, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, target, remainingPower, goExtras)
+	castPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 0, spellID, castFlags, castTimeStamp, []uint64{s.playerGUID}, nil, target, remainingPower, goExtras)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt, true)
 	if s.server != nil {
-		nearbyPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 1, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, []uint64{s.playerGUID}, nil, target, nil, goExtras)
+		nearbyPkt := protocol.BuildSpellGoWithPower(s.playerGUID, s.playerGUID, 0, spellID, castFlags&^protocol.SpellCastFlagPowerLeftSelf, castTimeStamp, []uint64{s.playerGUID}, nil, target, nil, goExtras)
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), nearbyPkt, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
 	}
 }
