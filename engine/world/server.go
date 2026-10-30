@@ -4073,6 +4073,70 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_QUESTGIVER_QUERY_QUEST, CMSG_QUESTGIVER_QUEST_AUTOLAUNCH,
+			// CMSG_QUESTGIVER_ACCEPT_QUEST, CMSG_QUESTGIVER_COMPLETE_QUEST,
+			// CMSG_QUESTGIVER_REQUEST_REWARD, CMSG_QUESTGIVER_CHOOSE_REWARD and
+			// CMSG_QUESTGIVER_CANCEL are STATUS_LOGGEDIN (Opcodes.cpp:521-531)
+			// and PROCESS_INPLACE, so the session update
+			// (WorldSessionFilter::Process returns true for INPLACE,
+			// WorldSession.cpp:92-104) drains them before the ShouldLogOut
+			// check (:302-472) — and the expiry logout does NOT subsume
+			// them. Query-quest: the details/invalid/close-gossip packets,
+			// plus the auto-accept add (QuestHandler.cpp:233-271). Accept:
+			// the quest add with its party-accept broadcasts, close-gossip
+			// and src-spell cast (:115-231); a drop leaves the quest
+			// unaccepted at next login, since the logout save writes no
+			// quest-log rows. Complete-quest: the request-items/offer
+			// dialog packets and the Alterac Valley HandleQuestComplete
+			// arm (:511-556) — it changes no quest state itself, so the
+			// dialog packets are the whole effect. Request-reward: the
+			// INCOMPLETE->COMPLETE transition plus the offer dialog
+			// (:371-395). Choose-reward: the reward grant (items, money,
+			// XP, reputation), the next-quest details, the menu clear and
+			// the giver AI OnQuestReward (:275-369). Cancel: the
+			// close-gossip packet (:397-402), which the logout never
+			// sends. Autolaunch: C++ only debug-logs (:558-561), so the
+			// leg mirrors the normal arm's debug log. The countdown's
+			// root/stun does not move the player, so the
+			// CanInteractWithQuestGiver gates still pass as in the C++
+			// drain. None of the seven arms clears logoutAt, so dispatch
+			// them here like the pet leg, then fall through to the
+			// expiry logout below; the handlers return false only on a
+			// failed response write, mirroring the normal arms (deferred
+			// logout follows), except autolaunch, which never fails.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_QUERY_QUEST) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverQueryQuest(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_QUEST_AUTOLAUNCH) && state.authed && !hookBlocked {
+				state.debug("quest autolaunch received", "account", state.accountName, "size", len(payload))
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_ACCEPT_QUEST) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverAcceptQuest(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_COMPLETE_QUEST) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverCompleteQuest(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_REQUEST_REWARD) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverRequestReward(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_CHOOSE_REWARD) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverChooseReward(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_QUESTGIVER_CANCEL) && state.authed && !hookBlocked {
+				if !state.handleQuestgiverCancel() {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
