@@ -14983,6 +14983,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					teleList = friendlyEffectTargets
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range teleList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(teleList), len(teleList)+1)
+						copy(joinedKept, teleList)
+						teleList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				if spellID == 8690 || spellID == 556 {
 					// Spell::SelectImplicitCasterDestTargets
 					// (Spell.cpp:1320-1322): TARGET_DEST_HOME (9) — Hearthstone
@@ -15108,6 +15129,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dismissList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					dismissList = friendlyEffectTargets
+				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range dismissList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(dismissList), len(dismissList)+1)
+						copy(joinedKept, dismissList)
+						dismissList = append(joinedKept, explicitAreaJoin)
+					}
 				}
 				for _, effectTarget := range dismissList {
 					if effectTarget == 0 {
@@ -15437,6 +15479,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						teleList = append(teleList, s.playerGUID)
 					}
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range teleList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(teleList), len(teleList)+1)
+						copy(joinedKept, teleList)
+						teleList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				for _, effectTarget := range teleList {
 					if effectTarget == 0 {
 						continue
@@ -15478,6 +15541,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					leapBackList = friendlyEffectTargets
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range leapBackList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(leapBackList), len(leapBackList)+1)
+						copy(joinedKept, leapBackList)
+						leapBackList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				hasUnitTarget := false
 				for _, effectTarget := range leapBackList {
 					if effectTarget != 0 && uint16(effectTarget>>48) != 0xF110 {
@@ -15507,6 +15591,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					pullList = friendlyEffectTargets
 					for range reflectedAllyTrips {
 						pullList = append(pullList, s.playerGUID)
+					}
+				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range pullList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(pullList), len(pullList)+1)
+						copy(joinedKept, pullList)
+						pullList = append(joinedKept, explicitAreaJoin)
 					}
 				}
 				s.handleEffectPullTowards(pullList)
@@ -15541,6 +15646,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						pullDestList = append(pullDestList, s.playerGUID)
 					}
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range pullDestList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(pullDestList), len(pullDestList)+1)
+						copy(joinedKept, pullDestList)
+						pullDestList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				s.handleEffectPullTowardsDest(target, pullDestList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): as above;
 				// the helper's dest-location + < 0.001 gates are the C++ HasDst
@@ -15570,6 +15696,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						soundList = append(soundList, s.playerGUID)
 					}
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range soundList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(soundList), len(soundList)+1)
+						copy(joinedKept, soundList)
+						soundList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				s.handleEffectPlaySound(eff, soundList)
 			case spellEffectPlayMusic: // 132: SPELL_EFFECT_PLAY_MUSIC (EffectPlayMusic, SpellEffects.cpp:5537)
 				// Per-effect target list (Spell.cpp:758-779), same switch as
@@ -15592,6 +15739,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						musicList = append(musicList, s.playerGUID)
 					}
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range musicList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(musicList), len(musicList)+1)
+						copy(joinedKept, musicList)
+						musicList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				s.handleEffectPlayMusic(eff, musicList)
 			case spellEffectScriptEffect: // 77: SPELL_EFFECT_SCRIPT_EFFECT (EffectScriptEffect, SpellEffects.cpp:3604)
 				// C++ runs the generic-family arms at SPELL_EFFECT_HANDLE_HIT_TARGET.
@@ -15605,6 +15773,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					scriptList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					scriptList = friendlyEffectTargets
+				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range scriptList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(scriptList), len(scriptList)+1)
+						copy(joinedKept, scriptList)
+						scriptList = append(joinedKept, explicitAreaJoin)
+					}
 				}
 				for _, effectTarget := range scriptList {
 					if effectTarget == 0 {
@@ -15668,6 +15857,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					tamedList = friendlyEffectTargets
 					for range reflectedAllyTrips {
 						tamedList = append(tamedList, s.playerGUID)
+					}
+				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range tamedList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(tamedList), len(tamedList)+1)
+						copy(joinedKept, tamedList)
+						tamedList = append(joinedKept, explicitAreaJoin)
 					}
 				}
 				for _, effectTarget := range tamedList {
@@ -16706,6 +16916,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					enchantList = friendlyEffectTargets
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range enchantList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(enchantList), len(enchantList)+1)
+						copy(joinedKept, enchantList)
+						enchantList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				s.handleEffectEnchantHeldItem(effCtx, spell, eff, enchantList, casterLevel)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm runs on the caster once per reflected target.
@@ -16747,6 +16978,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					inebriateList = friendlyEffectTargets
 				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range inebriateList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(inebriateList), len(inebriateList)+1)
+						copy(joinedKept, inebriateList)
+						inebriateList = append(joinedKept, explicitAreaJoin)
+					}
+				}
 				s.handleEffectInebriate(effCtx, spell, eff, inebriateList, castItemEntry, casterLevel)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm runs on the caster once per reflected target.
@@ -16787,6 +17039,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					unlearnList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					unlearnList = friendlyEffectTargets
+				}
+				// Self-cast kept-target join (Spell.cpp:1558
+				// SelectImplicitTargetObjectTargets): the kept explicit target carries
+				// this effect's bit alongside the caster when its B slot is a
+				// TARGET-reference unit type; the friendly/ref-centered switches above
+				// cannot fire for such an effect, so the flat list is this effect's list here.
+				if isSelfCastOnly(spell) && !isReflected &&
+					isTargetObjectExplicitUnitTargetType(eff.ImplicitTargetB) &&
+					explicitAreaJoin != 0 && explicitAreaJoin != s.playerGUID &&
+					uint16(explicitAreaJoin>>48) != 0xF110 {
+					inKeptList := false
+					for _, guid := range unlearnList {
+						if guid == explicitAreaJoin {
+							inKeptList = true
+						}
+					}
+					if !inKeptList {
+						joinedKept := make([]uint64, len(unlearnList), len(unlearnList)+1)
+						copy(joinedKept, unlearnList)
+						unlearnList = append(joinedKept, explicitAreaJoin)
+					}
 				}
 				s.handleEffectUnlearnSpecialization(effCtx, eff, unlearnList)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
