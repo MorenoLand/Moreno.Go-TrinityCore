@@ -3149,6 +3149,50 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					}
 				}
 			}
+			// CMSG_MESSAGECHAT, CMSG_EMOTE, CMSG_TEXT_EMOTE,
+			// CMSG_STANDSTATECHANGE and CMSG_SET_SELECTION are STATUS_LOGGEDIN
+			// (Opcodes.cpp:280, 389, 391, 388, 448), so the C++ drain runs
+			// their handlers before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and unlike the cast/auto-repeat
+			// cancels, the expiry logout does NOT subsume them: a dropped
+			// chat message never reaches its say/yell/whisper/channel
+			// audience, a dropped emote/text-emote never broadcasts and
+			// never records its DO_EMOTE achievement progress, and a
+			// dropped stand-to-STAND never breaks the NOT_SEATED auras
+			// that the logout save would then re-persist into
+			// character_aura. Dispatch them here like the movement leg,
+			// then fall through to the expiry logout below; all five
+			// handlers return true on every path, so the write-failure
+			// arm never fires. Selection dispatch is parity-only: C++
+			// SetSelection stores no persisted state (MiscHandler.cpp:524),
+			// and the values-update broadcast is immediately followed by
+			// the logout destroy — but the drain runs it, so the leg
+			// runs it too rather than inventing a drop.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_MESSAGECHAT) && state.authed && !hookBlocked {
+				if !state.handleMessageChat(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_EMOTE) && state.authed && !hookBlocked {
+				if !state.handleEmote(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_TEXT_EMOTE) && state.authed && !hookBlocked {
+				if !state.handleTextEmote(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_STANDSTATECHANGE) && state.authed && !hookBlocked {
+				if !state.handleStandStateChange(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_SET_SELECTION) && state.authed && !hookBlocked {
+				if !state.handleSetSelection(payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
