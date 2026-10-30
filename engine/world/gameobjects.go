@@ -1774,6 +1774,73 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 	s.server.spawnDynamicGameObject(dyn)
 }
 
+// transmittedClosePoint mirrors WorldObject::GetClosePoint
+// (DEFAULT_PLAYER_BOUNDING_RADIUS) (Object.cpp:3307-3311) for the no-dest
+// legs of Spell::EffectTransmitted (SpellEffects.cpp:4949-4965): GetNearPoint
+// with a nil searcher puts the point at casterCombatReach + dis + size along
+// the caster's orientation, at the caster's z. The UpdateAllowedPositionZ
+// ground clamp and the LoS walk (Object.cpp:3272-3305) have no Go model on
+// this path, matching the TeleUnitsFaceCaster precedent.
+func transmittedClosePoint(cx, cy, cz, ori, combatReach, dis float32) (float32, float32, float32) {
+	offset := combatReach + dis + defaultPlayerBoundingRadius
+	return cx + offset*float32(math.Cos(float64(ori))), cy + offset*float32(math.Sin(float64(ori))), cz
+}
+
+// transmittedNoDestDistance mirrors the no-dest legs of
+// Spell::EffectTransmitted (SpellEffects.cpp:4949-4965) for a player caster:
+// the radius arm when the effect has a radius entry and the spell has no
+// missile speed (CalcRadius, SpellInfo.cpp:551-574, with the SPELLMOD_RADIUS
+// fold), else the friendly min/max range roll (GetMinRange/GetMaxRange(true),
+// SpellInfo.cpp:3061-3072, with the SPELLMOD_RANGE fold on the max). A
+// failed radius lookup falls through to the range leg; a failed range
+// lookup leaves both bounds zero, so the roll is 0 and the point is the
+// close point at combat reach.
+func (s *session) transmittedNoDestDistance(spell wotlk.Spell, eff wotlk.SpellEffect) float32 {
+	if eff.RadiusIndex != 0 && spell.Speed == 0 && s.server != nil && s.server.Data != nil {
+		level := uint32(0)
+		if s.player != nil {
+			level = uint32(s.player.Level)
+		}
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, level); err == nil && ok {
+			return float32(s.applySpellModFloat(spell, spellModRadius, float64(value)))
+		}
+	}
+	var minRange, maxRange float32
+	if s.server != nil && s.server.Data != nil && spell.RangeIndex != 0 {
+		if entry, ok, err := s.server.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			minRange, maxRange = entry.MinFriendly, entry.MaxFriendly
+		}
+	}
+	maxRange = float32(s.applySpellModFloat(spell, spellModRange, float64(maxRange)))
+	if maxRange <= minRange {
+		return minRange
+	}
+	return minRange + rand.Float32()*(maxRange-minRange)
+}
+
+// transmittedNoDestDistance mirrors the no-dest legs of
+// Spell::EffectTransmitted (SpellEffects.cpp:4949-4965) for a creature
+// caster: the same radius and friendly-range arms with raw DBC values —
+// C++ folds spell mods through GetSpellModOwner, which is nil for creatures
+// (SpellInfo.cpp:551-574, 3061-3072; the NPCBot radius arm has no Go model).
+func (s *Server) transmittedNoDestDistance(spell wotlk.Spell, eff wotlk.SpellEffect, level uint32) float32 {
+	if eff.RadiusIndex != 0 && spell.Speed == 0 && s.Data != nil {
+		if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, level); err == nil && ok {
+			return value
+		}
+	}
+	var minRange, maxRange float32
+	if s.Data != nil && spell.RangeIndex != 0 {
+		if entry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			minRange, maxRange = entry.MinFriendly, entry.MaxFriendly
+		}
+	}
+	if maxRange <= minRange {
+		return minRange
+	}
+	return minRange + rand.Float32()*(maxRange-minRange)
+}
+
 // handleEffectTransmitted mirrors Spell::EffectTransmitted
 // (SpellEffects.cpp:4927-5045): the generic (non-fishing, non-ritual,
 // non-duel-arbiter) arm spawns the effect's MiscValue gameobject entry as a
@@ -1781,9 +1848,9 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 // duration. The fishing-node arm is already bridged (spawnFishingBobber,
 // called before the effect dispatch); the summoning-ritual AddUniqueUse /
 // AddGameObject cancel linkage and the linked-trap spawn have no Go model
-// and stay documented. Position: C++ prefers the spell dest target, then a
-// radius/random-range GetClosePoint; Go uses the dest target when present
-// and the caster position otherwise (the random-range arm is unbridged).
+// and stay documented. Position: C++ prefers the spell dest target, then the
+// radius GetClosePoint arm, then the friendly-range roll; Go mirrors all
+// three, with the ritual caster-position override preserved.
 func (s *session) handleEffectTransmitted(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
@@ -1803,8 +1870,12 @@ func (s *session) handleEffectTransmitted(ctx context.Context, target protocol.S
 		return
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
-	if tmpl.goType != GameObjectTypeRitual && target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
-		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+	if tmpl.goType != GameObjectTypeRitual {
+		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+			x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+		} else {
+			x, y, z = transmittedClosePoint(s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.CombatReach, s.transmittedNoDestDistance(spell, eff))
+		}
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
 	newGUID := gameObjectGUID(lowGUID, entry)
@@ -1844,9 +1915,9 @@ func (s *session) handleEffectTransmitted(ctx context.Context, target protocol.S
 // by the caster creature, despawning after the spell's DBC duration. The
 // fishing-node, summoning-ritual and linked-trap arms have no Go model and
 // stay documented, matching the player-path bridge (handleEffectTransmitted
-// above). Position: C++ prefers the spell dest target, then a
-// radius/random-range GetClosePoint; Go uses the dest target when present
-// and the creature position otherwise (the random-range arm is unbridged).
+// above). Position: C++ prefers the spell dest target, then the radius
+// GetClosePoint arm, then the friendly-range roll; Go mirrors all three,
+// with the ritual caster-position override preserved.
 func (s *Server) creatureEffectTransmitted(ctx context.Context, m *creatureMotion, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
@@ -1866,8 +1937,12 @@ func (s *Server) creatureEffectTransmitted(ctx context.Context, m *creatureMotio
 		return
 	}
 	x, y, z := m.X, m.Y, m.Z
-	if tmpl.goType != GameObjectTypeRitual && target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
-		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+	if tmpl.goType != GameObjectTypeRitual {
+		if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+			x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+		} else {
+			x, y, z = transmittedClosePoint(m.X, m.Y, m.Z, m.Orientation, m.CombatReach, s.transmittedNoDestDistance(spell, eff, uint32(m.Level)))
+		}
 	}
 	lowGUID := s.nextDynamicGameObjectLowGUID()
 	newGUID := gameObjectGUID(lowGUID, entry)
