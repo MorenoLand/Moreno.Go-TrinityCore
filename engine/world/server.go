@@ -7647,6 +7647,106 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 					return
 				}
 			}
+			// CMSG_GUILD_CREATE (0x081), CMSG_GUILD_INVITE (0x082),
+			// CMSG_GUILD_ACCEPT (0x084), CMSG_GUILD_DECLINE (0x085),
+			// CMSG_GUILD_INFO (0x087), CMSG_GUILD_ROSTER (0x089),
+			// CMSG_GUILD_PROMOTE (0x08B), CMSG_GUILD_DEMOTE (0x08C),
+			// CMSG_GUILD_LEAVE (0x08D), CMSG_GUILD_REMOVE (0x08E),
+			// CMSG_GUILD_DISBAND (0x08F), CMSG_GUILD_LEADER (0x090) and
+			// CMSG_GUILD_MOTD (0x091) are all STATUS_LOGGEDIN,
+			// PROCESS_THREADUNSAFE (Opcodes.cpp:260-276), so the
+			// session update drains them before the ShouldLogOut check
+			// (WorldSession.cpp:302-472) — and the expiry logout does
+			// NOT subsume them. Create is the triaged member of the
+			// family, not a routine leg: its C++ body only logs a
+			// cheat attempt (GuildHandler.cpp:38) and Go's handler is
+			// likewise a debug-log-only true, so the drain-then-logout
+			// sequence is exactly this leg followed by the expiry
+			// logout below, as with the player-logout leg. Invite sends
+			// the invitation (GuildHandler.cpp:43), accept joins the
+			// invited guild (GuildHandler.cpp:60), decline clears the
+			// pending invitation and in-guild flag and Go sends the
+			// player update (GuildHandler.cpp:69), info answers the
+			// guild info (GuildHandler.cpp:77) and roster answers the
+			// roster or the not-in-guild error (GuildHandler.cpp:85),
+			// promote/demote change a member's rank (GuildHandler.cpp:
+			// 95, 104), leave removes the member (GuildHandler.cpp:113),
+			// remove kicks a member (GuildHandler.cpp:51), disband
+			// deletes the guild (GuildHandler.cpp:121), leader transfers
+			// mastership (GuildHandler.cpp:129) and motd sets the message
+			// of the day (GuildHandler.cpp:138); Go mirrors each arm
+			// with eager guild-row writes and answers the logout save
+			// never rewrites, so dropping any of them would lose the
+			// change or the answer outright. None of the thirteen arms
+			// clears logoutAt (zero logoutAt references in guild.go),
+			// so dispatch them here, then fall through to the expiry
+			// logout below; all thirteen handlers return true on every
+			// path, so the write-failure arm never fires.
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_CREATE) && state.authed && !hookBlocked {
+				if !state.handleGuildCreate(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_INVITE) && state.authed && !hookBlocked {
+				if !state.handleGuildInvite(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_ACCEPT) && state.authed && !hookBlocked {
+				if !state.handleGuildAccept(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_DECLINE) && state.authed && !hookBlocked {
+				if !state.handleGuildDecline(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_INFO) && state.authed && !hookBlocked {
+				if !state.handleGuildInfo(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_ROSTER) && state.authed && !hookBlocked {
+				if !state.handleGuildRoster(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_PROMOTE) && state.authed && !hookBlocked {
+				if !state.handleGuildPromote(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_DEMOTE) && state.authed && !hookBlocked {
+				if !state.handleGuildDemote(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_LEAVE) && state.authed && !hookBlocked {
+				if !state.handleGuildLeave(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_REMOVE) && state.authed && !hookBlocked {
+				if !state.handleGuildRemove(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_DISBAND) && state.authed && !hookBlocked {
+				if !state.handleGuildDisband(ctx) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_LEADER) && state.authed && !hookBlocked {
+				if !state.handleGuildLeader(ctx, payload) {
+					return
+				}
+			}
+			if header.Opcode == uint32(protocol.OpcodeCMSG_GUILD_MOTD) && state.authed && !hookBlocked {
+				if !state.handleGuildMotd(ctx, payload) {
+					return
+				}
+			}
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
