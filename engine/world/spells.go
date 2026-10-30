@@ -29102,13 +29102,33 @@ func (s *session) stopSpellLifecycle() {
 		return
 	}
 	s.castMu.Lock()
+	var prepCastID uint8
+	var prepSpellID uint32
+	havePrep := false
 	if s.activeCast != nil {
 		if s.activeCast.Timer != nil {
 			s.activeCast.Timer.Stop()
 		}
+		// Unit::InterruptSpell (Unit.cpp:3140-3149) refuses an
+		// executing cast (Spell.h:548 IsInterruptable), so only a
+		// non-executing cast runs the PREPARING leg below; an
+		// executing cast is still nilled here as teardown — the
+		// player object is deleted, and C++ deletes its spells
+		// with it — but it sends no cancel packets.
+		if !s.activeCast.Executing {
+			prepCastID = s.activeCast.CastID
+			prepSpellID = s.activeCast.SpellID
+			havePrep = true
+		}
 		s.activeCast.Cancelled = true
 		s.activeCast = nil
 	}
+	// Unit::InterruptNonMeleeSpells (Unit.cpp:3212-3222) interrupts
+	// the autorepeat slot between the generic and channeled slots:
+	// for a player it sends SMSG_CANCEL_AUTO_REPEAT (Unit.cpp:3156-3158).
+	hadAutoRepeat := s.autoRepeatSpell != 0
+	s.autoRepeatSpell = 0
+	s.autoRepeatTarget = 0
 	channel := s.activeChannel
 	if channel != nil {
 		if channel.Timer != nil {
@@ -29123,6 +29143,40 @@ func (s *session) stopSpellLifecycle() {
 		channel.Stopped = true
 		s.activeChannel = nil
 	}
+	s.castMu.Unlock()
+	// Spell::cancel's SPELL_STATE_PREPARING leg (Spell.cpp:3220-3227):
+	// CancelGlobalCooldown, then SendInterrupted(0), then
+	// SendCastResult(SPELL_FAILED_INTERRUPTED) — the same composition
+	// interruptCurrentCast runs. C++ runs it at logout too:
+	// WorldSession::LogoutPlayer (WorldSession.cpp:624-636) calls
+	// CleanupsBeforeDelete -> CleanupBeforeRemoveFromMap ->
+	// InterruptNonMeleeSpells(true) BEFORE RemoveFromWorld and
+	// before SMSG_LOGOUT_COMPLETE, while the socket is still open,
+	// and cancel carries no logout gate (SendCastResult gates only
+	// on IsLoading). On a disconnect the writes fail silently and
+	// the set broadcast still explains the vanished cast bar.
+	// Go has no SPELL_STATE_DELAYED for the generic slot (missile
+	// flight is not a spell state here), so a non-executing
+	// activeCast is exactly PREPARING, and the refund is not
+	// gated on the DELAYED fallthrough.
+	if havePrep {
+		s.cancelGlobalCooldown(prepSpellID)
+		s.sendInterrupted(prepCastID, prepSpellID, 0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(prepCastID, prepSpellID, spellFailedInterrupted), true)
+	}
+	if hadAutoRepeat {
+		buf := protocol.NewBuffer(9)
+		buf.WritePackedGUID(s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+	}
+	// The refund above clears only the cancelled spell's category;
+	// C++ deletes the whole SpellHistory with the player object,
+	// so any other live category must not survive into a next
+	// character on this reused session (the login reset block
+	// clears autoRepeatSpell but never gcdCooldowns, and GCD
+	// entries live up to ~1.5s past logout).
+	s.castMu.Lock()
+	s.gcdCooldowns = nil
 	s.castMu.Unlock()
 	// Unit::CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) runs
 	// InterruptNonMeleeSpells(true) before RemoveFromWorld, so a logout
