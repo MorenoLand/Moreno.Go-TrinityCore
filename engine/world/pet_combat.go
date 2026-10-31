@@ -5405,17 +5405,23 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.fireCreatureHitTriggers(ctx, motion, spell, spell.ID, []uint64{motion.GUID})
 		}
 	}
-	// Spell::PreprocessSpellHit friendly-assist arm (Spell.cpp:2761-2765),
-	// per hit target ahead of the HIT_TARGET effect loop below: a hit on
-	// a friendly in-combat target by a spell with initial aggro forwards
-	// 0.0 threat from the original caster (the pet motion here) and, for
-	// a player-controlled caster, inherits the target's combat states.
-	// The verdict gates mirror PreprocessTarget (Spell.cpp:2347-2351):
-	// missed, immune and evaded targets have no _spellHitTarget, and a
-	// clean reflect retargets the arm to the pet itself, which the
-	// caster!=target gate inside the helper then drops. Dedupe mirrors
-	// C++'s m_UniqueTargetInfo iteration; GO targets fail the friendly
-	// gate inside the helper.
+	// Spell::PreprocessSpellHit friendly-assist arms (Spell.cpp:2752-2765),
+	// per hit target ahead of the HIT_TARGET effect loop below: the
+	// contested-PvP leg runs first (C++ order), flagging the owner
+	// contested when the friendly target carries ATTACK_PLAYER, then the
+	// 2761 forward runs for a friendly in-combat target by a spell with
+	// initial aggro, forwarding 0.0 threat from the original caster (the
+	// pet motion here) and, for a player-controlled caster, inheriting
+	// the target's combat states. The verdict gates mirror
+	// PreprocessTarget (Spell.cpp:2347-2351): missed, immune and evaded
+	// targets have no _spellHitTarget, and a clean reflect retargets the
+	// arms to the pet itself, which the caster!=target gate inside the
+	// forward helper then drops. Dedupe mirrors C++'s m_UniqueTargetInfo
+	// iteration; GO targets fail the friendly gate inside the helpers.
+	// Heal-effect targets ride this loop too (hitTargets includes the
+	// friendly picks), so the contested leg covers pet heals with no
+	// second call site; the standalone Devour Magic heal (dispel.go) is a
+	// direct heal application, not a spell hit, so it takes none.
 	assistSeen := make(map[uint64]bool, len(hitTargets))
 	for _, hitGUID := range hitTargets {
 		if hitGUID == 0 || assistSeen[hitGUID] || immuneSet[hitGUID] || evadedSet[hitGUID] || missedTarget(hitGUID) {
@@ -5423,6 +5429,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		}
 		assistSeen[hitGUID] = true
 		if armTarget := resolveReflectTarget(hitGUID); armTarget != 0 {
+			s.server.flagPetAssistContestedPvP(s, motion, armTarget)
 			s.server.forwardPetAssistThreat(motion, armTarget, spell)
 		}
 	}
