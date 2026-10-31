@@ -441,8 +441,11 @@ func (s *Server) removeCreatureAurasWithInterruptFlags(m *creatureMotion, flags 
 // unit outer gate (Spell.cpp:2737); the friendly gate is the IsValidAttackTarget
 // core twin (creatureFriendlyToTarget, same approximation the player path's
 // isFriendlyLaunchTarget uses). GO targets resolve to neither a session nor a
-// motion and no-op.
-func (s *Server) stripHitBySpellAurasForCreatureCaster(caster *creatureMotion, targetGUID uint64) {
+// motion and no-op. Pre-effect callers pass no exception: C++ strips
+// pre-existing auras of every spell at hit time, including the hitting
+// spell's own. Damage-time callers pass the hitting spell, so a
+// just-applied own aura survives its own damage leg (the damage-arm rule).
+func (s *Server) stripHitBySpellAurasForCreatureCaster(caster *creatureMotion, targetGUID uint64, exceptSpellID ...uint32) {
 	if s == nil || caster == nil || targetGUID == 0 || targetGUID == caster.GUID {
 		return
 	}
@@ -450,11 +453,11 @@ func (s *Server) stripHitBySpellAurasForCreatureCaster(caster *creatureMotion, t
 		return
 	}
 	if vs := s.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
-		vs.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell)
+		vs.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell, exceptSpellID...)
 		return
 	}
 	if tm := s.findCreatureMotion(caster.Map, caster.InstanceID, targetGUID); tm != nil {
-		s.removeCreatureAurasWithInterruptFlags(tm, auraInterruptFlagHitBySpell)
+		s.removeCreatureAurasWithInterruptFlags(tm, auraInterruptFlagHitBySpell, exceptSpellID...)
 	}
 }
 

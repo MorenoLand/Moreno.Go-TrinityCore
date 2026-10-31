@@ -5405,6 +5405,28 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.fireCreatureHitTriggers(ctx, motion, spell, spell.ID, []uint64{motion.GUID})
 		}
 	}
+	// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) HITBYSPELL arm for a
+	// pet caster, ahead of the assist loop below and the HIT_TARGET effect
+	// loop: a valid-attack-target hit strips the victim's pre-existing
+	// HITBYSPELL-flagged auras at hit time, before any effect — the
+	// boss_ai twin's position. The damage arms' strip (excepting the
+	// hitting spell) stays as damage-time coverage for standalone
+	// funnels, but on this path it now only sees auras applied by
+	// earlier effects of the same cast. Verdict gates mirror the assist
+	// loop, plus the reflect legs: a clean reflect retargets to the pet
+	// (dropped by the helper's self gate, but the original victim must
+	// not be stripped, so reflected GUIDs skip outright like the
+	// boss_ai twin) and a nulled reflect has no _spellHitTarget at all.
+	// No exception: C++ strips pre-existing auras of every spell here,
+	// including the hitting spell's own.
+	stripSeen := make(map[uint64]bool, len(hitTargets))
+	for _, hitGUID := range hitTargets {
+		if hitGUID == 0 || stripSeen[hitGUID] || immuneSet[hitGUID] || evadedSet[hitGUID] || reflectedSet[hitGUID] || reflectNulled[hitGUID] || missedTarget(hitGUID) {
+			continue
+		}
+		stripSeen[hitGUID] = true
+		s.server.stripHitBySpellAurasForCreatureCaster(motion, hitGUID)
+	}
 	// Spell::PreprocessSpellHit friendly-assist arms (Spell.cpp:2752-2765),
 	// per hit target ahead of the HIT_TARGET effect loop below: the
 	// contested-PvP leg runs first (C++ order), flagging the owner
@@ -7333,8 +7355,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// below runs no strip, and the damage arms' strip never fires
 		// here. Missed hits and reflect return trips stay out (the
 		// return trip's effective target is the caster itself).
+		// Excepting the hitting spell: the pre-effect loop in
+		// executePetSpellWithOptions already stripped pre-existing
+		// auras on the main path, so this leg must not strip a
+		// just-applied own aura from an earlier effect — the
+		// damage-arm rule, extended to the zero-damage tail.
 		if reflectorGUID == 0 && (!hasMissVerdict || missVerdict == protocol.SpellMissNone) {
-			s.server.stripHitBySpellAurasForCreatureCaster(caster, targetGUID)
+			s.server.stripHitBySpellAurasForCreatureCaster(caster, targetGUID, spellID)
 		}
 		s.executePetSpellZeroDamageTail(ctx, caster, target, spellID, schoolMask, triggered, reflectorGUID)
 		return

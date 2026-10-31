@@ -5215,6 +5215,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 
+			// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) HITBYSPELL arm
+			// for the inline victim cast, ahead of the assist loop below
+			// and the effect/damage dispatch: a valid-attack-target hit
+			// strips the victim's pre-existing HITBYSPELL-flagged auras
+			// at hit time, before any effect — the boss_ai twin's
+			// position. The inline damage arms' strip (excepting the
+			// hitting spell) stays as damage-time coverage, but on this
+			// path it now only sees auras applied by earlier effects of
+			// the same cast. Verdict gates mirror the assist loop;
+			// reflected targets skip outright (a landed reflect
+			// retargets to the caster, self-gated — but the original
+			// victim must not be stripped); GO GUIDs no-op in the
+			// helper. No exception: C++ strips pre-existing auras of
+			// every spell here, including the hitting spell's own.
+			// Cast-time casts reach this site only on the firing run,
+			// so the strip fires once, like the assist loop.
+			if inlineSpellKnown {
+				stripSeen := make(map[uint64]bool, len(hitTargets))
+				for _, guid := range hitTargets {
+					if guid == 0 || stripSeen[guid] {
+						continue
+					}
+					stripSeen[guid] = true
+					if reflectedSet[guid] || evadedSet[guid] || immuneSet[guid] || missSet[guid] != protocol.SpellMissNone {
+						continue
+					}
+					s.stripHitBySpellAurasForCreatureCaster(motion, guid)
+				}
+			}
 			// Spell::PreprocessSpellHit friendly-assist arms (Spell.cpp:2752-2765)
 			// for the inline victim cast: the boss_ai twin's loop, over the
 			// same final hitTargets ahead of the HandleThreatSpells block
