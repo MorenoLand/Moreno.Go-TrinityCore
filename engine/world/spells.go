@@ -23024,6 +23024,59 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 	}
+	// CheckCast range arm (Spell.cpp:5498-5500): prepare calls
+	// CheckCast(true) (Spell.cpp:3100), so strict=true — no instant-cast
+	// exemption (Spell.cpp:6531) and no 10% tolerance slack
+	// (Spell.cpp:6543-6546). C++ order: right after CheckItems, ahead of
+	// CheckPower. The gate judges the raw wire target pre-redirect, like
+	// the CheckTarget gate above — CheckCast precedes SelectSpellTargets.
+	// Unit leg (Spell.cpp:6552-6562): skipped for a zero wire target and
+	// for self targets (target == caster); otherwise the DBC min/max come
+	// from the spellRangeBounds twin with the client-path call shape
+	// (strict, target reach, hostility pair), and a min- or max-range
+	// violation fails OUT_OF_RANGE (min violations never emit TOO_CLOSE
+	// — the client-path twin's note). The both-moving +8/3 term stays
+	// unmodeled (targetMoving=false, the client twin's convention: no
+	// target movement state on this path). The facing leg rides the same
+	// unit arm (Spell.cpp:6559-6562): a player caster with
+	// SPELL_FACING_FLAG_INFRONT must have the target in its frontal
+	// 180-degree arc — distinct from the CheckTarget facing arm above
+	// (Spell.cpp:5385-5386), which judges the target facing the caster.
+	// GO leg (Spell.cpp:6565-6569): the validateSpellGORange twin
+	// (interact distance, spell-focus DBC max) judges a GO wire target.
+	// Dest leg (Spell.cpp:6571-6578): vacuous at prepare time — the funnel
+	// carries no caller-supplied dest (unit-GUID-only signature; the
+	// spellTarget below is built Unit/GO only), and the implicit dests
+	// from resolveImplicitSpellDestinationWithSnapshots are
+	// SelectSpellTargets dests, which CheckCast never re-judges; gating
+	// them would reject casts C++ casts (the dest-LOS tick's reasoning).
+	if targetGUID != 0 && s.server != nil && s.server.Data != nil {
+		if uint16(targetGUID>>48) == 0xF110 {
+			if failCode := s.validateSpellGORange(ctx, spell, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: targetGUID}); failCode != 0 {
+				rejectTriggeredCast("triggered spell gameobject target out of range")
+				return
+			}
+		} else if targetGUID != s.playerGUID {
+			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				if rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex); ok {
+					dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
+					minRange, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, true, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
+					if maxRange > 0 && dist > maxRange {
+						rejectTriggeredCast("triggered spell target out of range")
+						return
+					}
+					if minRange > 0 && dist < minRange {
+						rejectTriggeredCast("triggered spell target too close")
+						return
+					}
+					if spell.FacingCasterFlags&SpellFacingFlagInfront != 0 && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, math.Pi) {
+						rejectTriggeredCast("triggered spell target not in front")
+						return
+					}
+				}
+			}
+		}
+	}
 	// The vehicle arm (Spell.cpp:5332) is exempt: TRIGGERED_FULL_MASK
 	// carries TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE.
 	// Spell::prepare (Spell.cpp:3139-3149): the moving-cast arm carries no
