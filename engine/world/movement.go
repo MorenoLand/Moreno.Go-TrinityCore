@@ -271,7 +271,12 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	// orientation changed — via Unit::InterruptMovementBasedAuras
 	// (Unit.cpp:476-479, 562-570). Go has no world tick, so the strip rides
 	// the ack.
-	s.removeAurasWithInterruptFlags(auraInterruptFlagMove)
+	// Unit::InterruptMovementBasedAuras (Unit.cpp:562-570) strips MOVE only
+	// when the unit is not on a vehicle — a passenger re-boarded before the
+	// ack keeps its MOVE auras; TURNING strips regardless of vehicle.
+	if s.player.VehicleGUID == 0 {
+		s.removeAurasWithInterruptFlags(auraInterruptFlagMove)
+	}
 	if dest.Orientation != oldOrientation {
 		s.removeAurasWithInterruptFlags(auraInterruptFlagTurning)
 	}
