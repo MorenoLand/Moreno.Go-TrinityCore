@@ -403,7 +403,7 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 		return
 	}
 	var removed bool
-	var wasCharm, wasTaunt bool
+	var wasCharm, wasTaunt, wasPossessPet bool
 	var charmerGUID, taunterGUID uint64
 	var slot uint8
 	s.auraMu.Lock()
@@ -412,6 +412,7 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 			if aura, exists := auras[spellID]; exists && aura != nil &&
 				!aura.Stopped && aura.CasterGUID == casterGUID && aura.PersistentAreaAura {
 				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm || aura.AuraType == spellAuraModPossess
+				wasPossessPet = aura.AuraType == spellAuraModPossessPet
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
@@ -447,6 +448,9 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 			charmer.sendClientControl(key.GUID, false)
 			charmer.sendVehiclePetSpells(0, nil)
 		}
+	}
+	if wasPossessPet {
+		s.unpossessPetTail(key, charmerGUID)
 	}
 	removePkt := protocol.BuildAuraUpdate(key.GUID, 0, slot, 0, true, false, 0, 0, 1)
 	s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, key.Map, key.InstanceID, key.GUID)

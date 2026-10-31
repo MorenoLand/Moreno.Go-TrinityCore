@@ -2037,6 +2037,7 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	reactState, commandState := motion.ReactState, motion.PetCommand
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
+	petTarget := motionIsPet(motion)
 	s.motionMu.Unlock()
 	// Unit::SetCharmedBy -> CombatStop (Unit.cpp:11799) pairs the
 	// charmed unit's own ClearAllThreat above with RemoveMeFromThreatLists
@@ -2048,12 +2049,14 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	// spells (MAX_SPELL_CHARM = 4, like the packet addlist) are cast on
 	// the charmed unit as triggered self-casts at charm time; the
 	// possess arm casts the creature's own spells up to
-	// MAX_CREATURE_SPELLS (8).
+	// MAX_CREATURE_SPELLS (8). Pets skip both: a pet already has a
+	// properly initialized CharmInfo (Unit.cpp:11862-11868), so C++
+	// never re-casts its passives at charm time.
 	passiveCap := 4
 	if possess {
 		passiveCap = 8
 	}
-	if s.Data != nil {
+	if s.Data != nil && !petTarget {
 		for x := 0; x < len(spells) && x < passiveCap; x++ {
 			if spells[x] == 0 {
 				continue
@@ -2120,6 +2123,12 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.Moving = false
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
+	// The banked owner restored above: when the charmer IS the owner
+	// (a pet possessed by its owner), the engage/evade tails below must
+	// not fire — the unit resumes owner control instead of engaging its
+	// owner (Go's pet tick would otherwise attack the owner, since it
+	// drives combat from TargetGUID/InCombat without a hostility gate).
+	restoredOwner := motion.OwnerGUID
 	s.motionMu.Unlock()
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
 	// Unit::RemoveCharmedBy CHARM_TYPE_POSSESS (Unit.cpp:11979-11986):
@@ -2145,7 +2154,8 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	// bridge: the C++ gate `me->LastCharmerGUID` is false there, so C++ does
 	// nothing too.
 	engaged := false
-	if lastCharmer != 0 && !passive && s.charmerResolvesInInstance(mapID, instanceID, lastCharmer) {
+	ownerCharmer := lastCharmer != 0 && restoredOwner == lastCharmer
+	if lastCharmer != 0 && !passive && !ownerCharmer && s.charmerResolvesInInstance(mapID, instanceID, lastCharmer) {
 		s.motionMu.Lock()
 		m := s.findCreatureMotionLocked(mapID, instanceID, rawGUID)
 		if m != nil && !m.Charmed {
@@ -2163,7 +2173,7 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 			s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, instanceID, rawGUID)
 		}
 	}
-	if lastCharmer != 0 && !engaged {
+	if lastCharmer != 0 && !engaged && !ownerCharmer {
 		// The no-engage tail: C++ clears LastCharmerGUID and, still out of
 		// combat, evades home (EnterEvadeMode(EVADE_REASON_NO_HOSTILES)) —
 		// the evade clears the threat table CombatStop kept, restores health,
@@ -2179,6 +2189,70 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 			s.triggerCreatureEvade(context.Background(), m, time.Now())
 		}
 	}
+}
+
+// unpossessPetTail is the remove tail of AuraEffect::HandleModPossessPet
+// (SpellAuraEffects.cpp:2888-2922) for creature targets, after
+// RemoveCharmedBy (uncharmCreature above, whose possess arm already
+// restores the charmer's self-control): an out-of-range pet is removed
+// (PET_SAVE_NOT_IN_SLOT) and an in-range pet gets PetSpellInitialize plus
+// MoveFollow when it has no victim and is not stay-commanded. The bar
+// twin is sendPetSpells (PetSpellInitialize); the follow twin sets
+// PetCommandFollow, which the pet tick's follow branch drives. The C++
+// remove arm does not re-check own-pet (its ownership check is commented
+// out), but Go's dismiss is session-bound, so the dismiss/bar arms run
+// only while the charmer still owns this pet; a non-owned record still
+// uncharms. The stay-command gate is unrecoverable in Go (uncharm
+// restores Stay unconditionally and uncharm clears the victim), so the
+// follow arm runs for every in-range own pet — the common follow case.
+// Cross-map pets take the dismiss arm (IsWithinDistInMap is false across
+// maps); unsummonPet is player-map-keyed, so a leftover motion in the
+// pet's own map is swept.
+func (s *Server) unpossessPetTail(key creatureAuraKey, charmerGUID uint64) {
+	if s == nil || key.GUID == 0 {
+		return
+	}
+	s.uncharmCreature(key, charmerGUID)
+	if charmerGUID == 0 {
+		return
+	}
+	charmer := s.findSessionByGUID(charmerGUID)
+	if charmer == nil || charmer.player == nil {
+		return
+	}
+	if charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID {
+		charmer.sendClientControl(key.GUID, false)
+	}
+	if charmer.player.PetGUID != key.GUID {
+		return
+	}
+	motion := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID)
+	if !motionIsPet(motion) {
+		return
+	}
+	// WorldObject::IsWithinDistInMap (Object.cpp): same map and within
+	// the map's visibility range; Go's range twin is
+	// VisibilityDistanceContinents, and a zero/negative config never
+	// dismisses on a misconfiguration.
+	inRange := charmer.player.Map == key.Map && charmer.player.InstanceID == key.InstanceID &&
+		(s.Config.VisibilityDistanceContinents <= 0 ||
+			distance3D(motion.X, motion.Y, motion.Z, charmer.player.X, charmer.player.Y, charmer.player.Z) <= float64(s.Config.VisibilityDistanceContinents))
+	if !inRange {
+		charmer.unsummonPet(context.Background(), petSaveNotInSlot)
+		if m := s.findCreatureMotion(key.Map, key.InstanceID, key.GUID); m != nil {
+			s.motionMu.Lock()
+			delete(s.motionMapLocked(key.Map, key.InstanceID), key.GUID)
+			s.motionMu.Unlock()
+		}
+		return
+	}
+	entry, react, petID := motion.Entry, motion.PetReact, motion.PetID
+	s.motionMu.Lock()
+	if m := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID); m != nil {
+		m.PetCommand = PetCommandFollow
+	}
+	s.motionMu.Unlock()
+	charmer.sendPetSpells(context.Background(), petID, entry, react)
 }
 
 // charmerResolvesInInstance mirrors ObjectAccessor::GetUnit for the OnCharmed

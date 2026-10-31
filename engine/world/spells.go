@@ -35736,6 +35736,41 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 		}
 	}
+	// AuraEffect::HandleModPossessPet (SpellAuraEffects.cpp:2888-2922):
+	// a player caster possessing its own pet (caster->GetPet() == target,
+	// and the target IsPet) takes the CHARM_TYPE_POSSESS arm of
+	// Unit::SetCharmedBy — the same possess body as aura 2 above
+	// (POSSESSED flag, REMOVE_CLIENT_CONTROL on the charmer, possess bar).
+	// A non-player caster, a non-pet target, or another player's pet
+	// records only (C++ returns before SetCharmedBy); unlike aura 2 there
+	// is no charm fallback. The CheckCast gates (checkPossessPetCast, the
+	// creature twin creaturePossessPetAuraPreCast) already fail the cast
+	// itself for a missing/charmed pet; this leg is the triggered/proc
+	// application twin, where CheckCast never runs.
+	if eff.Aura == spellAuraModPossessPet && s.server != nil {
+		charmer := aura.CasterGUID
+		if charmer == 0 {
+			charmer = s.playerGUID
+		}
+		if charmerSess := s.server.findSessionByGUID(charmer); charmerSess != nil && charmerSess.player != nil && charmerSess.player.PetGUID == targetGUID {
+			if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); motionIsPet(m) {
+				// Unit::SetCharmedBy (Unit.cpp:11768-11769): a player
+				// charmer is dismounted when the charm lands.
+				charmerSess.removeAurasByType(spellAuraMounted)
+				spells, _, _, controlled := s.server.charmCreatureFaction(ctx, targetKey, charmer, s.server.raceFaction(charmerSess.player.Race), true)
+				if controlled {
+					// Unit::SetCharmedBy CHARM_TYPE_POSSESS
+					// (Unit.cpp:11879-11885): the charmer loses client
+					// control of itself and gains control of the pet,
+					// with the possess bar in place of the pet bar.
+					charmerSess.player.UnitFlags |= unitFlagRemoveClientControl
+					charmerSess.sendPlayerUnitFlagsUpdate()
+					charmerSess.sendClientControl(targetGUID, true)
+					charmerSess.sendPossessPetSpells(targetGUID, spells)
+				}
+			}
+		}
+	}
 	// AuraEffect::HandleAuraDummy scripted arms
 	// (SpellAuraEffects.cpp:4329-4444, REAL|REAPPLY at apply): 1515 Tame
 	// Beast adds 10 threat from the caster on a threat-list-capable
@@ -40493,6 +40528,7 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 		return
 	}
 	wasCharm := false
+	wasPossessPet := false
 	charmerGUID := uint64(0)
 	wasTaunt := false
 	taunterGUID := uint64(0)
@@ -40515,6 +40551,7 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 		if auras, ok := s.server.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm || aura.AuraType == spellAuraModPossess
+				wasPossessPet = aura.AuraType == spellAuraModPossessPet
 				charmerGUID = aura.CasterGUID
 				// The remove arm of AuraEffect::HandleModTaunt
 				// (SpellAuraEffects.cpp:2772-2781): dropping the MOD_TAUNT
@@ -40618,6 +40655,9 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 			charmer.sendClientControl(key.GUID, false)
 			charmer.sendVehiclePetSpells(0, nil)
 		}
+	}
+	if wasPossessPet {
+		s.server.unpossessPetTail(key, charmerGUID)
 	}
 	// AuraEffect::HandleFeignDeath creature remove leg
 	// (SpellAuraEffects.cpp:66): flags clear, react state restores.
@@ -40735,6 +40775,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	}
 	auraWasPresent := false
 	wasCharm := false
+	wasPossessPet := false
 	charmerGUID := uint64(0)
 	wasTaunt := false
 	taunterGUID := uint64(0)
@@ -40759,6 +40800,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				auraWasPresent = true
 				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm || aura.AuraType == spellAuraModPossess
+				wasPossessPet = aura.AuraType == spellAuraModPossessPet
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
@@ -40838,6 +40880,9 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 			charmer.sendClientControl(key.GUID, false)
 			charmer.sendVehiclePetSpells(0, nil)
 		}
+	}
+	if wasPossessPet {
+		s.unpossessPetTail(key, charmerGUID)
 	}
 	// AuraEffect::HandleFeignDeath creature remove leg
 	// (SpellAuraEffects.cpp:66): flags clear, react state restores.
