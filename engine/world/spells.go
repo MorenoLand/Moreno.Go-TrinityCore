@@ -9929,6 +9929,93 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		return
 	}
 
+	// Spell::SelectImplicitAreaTargets reads the RUNNING destination at arm
+	// time (Spell.cpp:1275-1282), not the spell-final destination above:
+	// a dest arm in a later slot of the same effect or in a later effect
+	// must not recenter an already-selected area leg. The closures below
+	// center each client-path area branch on its legs' arm-time
+	// destinations (areaArmTimeDestSnapshot over the resolver's per-effect
+	// slots, seeded from the InitExplicit seed for a leg with no earlier
+	// slot) — the finishSpellCast twin of the triggered funnel's arm-time
+	// centers. Cones (24/54/104/59/60/108) are CASTER-reference in C++
+	// (Spell.cpp:1176-1180) and ref-centered legs (37/61)
+	// TARGET-reference, so neither family takes a destination center here.
+	clientSeedX, clientSeedY, clientSeedZ, clientSeeded := s.sessionInitExplicitSeed(ctx, spell, wireObjectGUID)
+	clientAreaArmSnapshot := func(effIndex, slotIndex int) sessionDestSnapshot {
+		return areaArmTimeDestSnapshot(sessionDestSnapshots, clientSeedX, clientSeedY, clientSeedZ, clientSeeded, effIndex, slotIndex)
+	}
+	// clientFirstAreaLegTarget centers a single-center branch (enemy /
+	// friendly area, whose helpers merge all legs into one sweep) on the
+	// first DEST-centered leg's arm-time destination, else the first
+	// leg's: exact for a single leg and for C++'s grouped identical legs
+	// (Spell.cpp:866-900 selects them once, at the first effect). The
+	// 27/18 arm is not a genuine area leg, so a spell carrying only it
+	// keeps the spell-final target.
+	clientFirstAreaLegTarget := func(isLeg func(uint32) bool, isDestLeg func(uint32) bool) protocol.SpellTargetData {
+		find := func(wantDest bool) (protocol.SpellTargetData, bool) {
+			for i, eff := range spell.Effects {
+				if eff.Effect == 0 {
+					continue
+				}
+				for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+					if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+						continue
+					}
+					if !isLeg(targetType) || (wantDest && !isDestLeg(targetType)) {
+						continue
+					}
+					arm := clientAreaArmSnapshot(i, slot)
+					branch := target
+					if arm.Has {
+						branch.Flags |= protocol.SpellTargetFlagDestLocation
+						branch.Destination = protocol.SpellTargetLocation{X: arm.X, Y: arm.Y, Z: arm.Z}
+					} else {
+						branch.Flags &^= protocol.SpellTargetFlagDestLocation
+					}
+					return branch, true
+				}
+			}
+			return target, false
+		}
+		if branch, ok := find(true); ok {
+			return branch
+		}
+		if branch, ok := find(false); ok {
+			return branch
+		}
+		return target
+	}
+	clientEnemyAreaTarget := clientFirstAreaLegTarget(isAreaEnemyTargetType, func(t uint32) bool { return t == 16 })
+	clientFriendlyAreaTarget := clientFirstAreaLegTarget(isFriendlyAreaTargetType, friendlyAreaDestCentered)
+	// clientAreaLegCenters maps each DEST leg's effect to its arm-time
+	// destination for the per-leg helpers (entry 8, GO 52): a present
+	// entry centers that leg, a present-but-unstamped entry leaves it on
+	// the caster default, and a missing entry keeps the spell-final dest.
+	clientAreaLegCenters := func(isLeg func(uint32) bool, isDest func(uint32) bool) map[int]sessionDestSnapshot {
+		centers := make(map[int]sessionDestSnapshot)
+		for i, eff := range spell.Effects {
+			if eff.Effect == 0 {
+				continue
+			}
+			var legTarget uint32
+			var legSlot int
+			switch {
+			case isLeg(eff.ImplicitTargetA):
+				legTarget, legSlot = eff.ImplicitTargetA, 0
+			case isLeg(eff.ImplicitTargetB) && !implicitTargetBlocksSecondSlot(eff.ImplicitTargetA):
+				legTarget, legSlot = eff.ImplicitTargetB, 1
+			default:
+				continue
+			}
+			if isDest(legTarget) {
+				centers[i] = clientAreaArmSnapshot(i, legSlot)
+			}
+		}
+		return centers
+	}
+	clientEntryAreaCenters := clientAreaLegCenters(isEntryAreaTargetType, func(t uint32) bool { return t == implicitTargetDestAreaEntry })
+	clientGOAreaCenters := clientAreaLegCenters(func(t uint32) bool { return t == implicitTargetGOSrcArea || t == implicitTargetGODestArea }, func(t uint32) bool { return t == implicitTargetGODestArea })
+
 	areaSpell := isAreaEnemySpell(spell)
 	friendlyAreaSpell := isFriendlyAreaSpell(spell)
 	friendlyNearbySpell := isFriendlyNearbySpell(spell)
@@ -9972,13 +10059,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	wireGOMask := spellGOWireEffectMask(spell)
 	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
 	if areaSpell {
-		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
+		hitTargets = s.spellAreaEnemyTargets(ctx, spell, clientEnemyAreaTarget)
 		// C++ SelectImplicitAreaTargets runs per effect (Spell.cpp:1227-1309)
 		// with each effect's own check type (ENEMY vs ALLY/PARTY/RAID), so the
 		// friendly-area effect of a harmful spell selects allies — not the
 		// merged enemy list the heal arms would otherwise iterate.
 		if hasFriendlyAreaEffect(spell) {
-			friendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, target)
+			friendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, clientFriendlyAreaTarget)
 			if friendlyEffectTargets == nil {
 				friendlyEffectTargets = []uint64{}
 			}
@@ -10002,7 +10089,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): friendly
 		// PARTY/ALLY/RAID area targets (20/30/31/33/34/56) replace the
 		// hit-target list the same way enemy area targets do.
-		hitTargets = s.spellFriendlyAreaTargets(ctx, spell, target)
+		hitTargets = s.spellFriendlyAreaTargets(ctx, spell, clientFriendlyAreaTarget)
 	} else if friendlyNearbySpell {
 		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036): the single
 		// nearest PARTY/ALLY/RAID unit (3/4/58) becomes the target.
@@ -10058,7 +10145,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// TARGET_UNIT_SRC_AREA_ENTRY (7) / TARGET_UNIT_DEST_AREA_ENTRY (8)
 		// — every unit in the area matching the entry conditions becomes a
 		// target; an empty area never fails the cast.
-		hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, target)
+		hitTargets = s.spellEntryAreaTargetsWithCenters(ctx, spell, spellID, target, clientEntryAreaCenters)
 	} else if goNearbyEntrySpell {
 		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036):
 		// TARGET_GAMEOBJECT_NEARBY_ENTRY (40) — the single nearest
@@ -10086,7 +10173,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// area never fails the cast. The GO guids flow through hitTargets
 		// like C++'s AddGOTarget list; Go has no gameobject-effect
 		// consumer downstream.
-		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, target)
+		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasksAndCenters(ctx, spell, spellID, target, clientGOAreaCenters)
 		hitTargets = areaTargets
 		goAreaBranchRan = true
 		for guid, mask := range areaMasks {
@@ -10164,7 +10251,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 	if isGOAreaSpell(spell) && !goAreaBranchRan {
-		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, target)
+		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasksAndCenters(ctx, spell, spellID, target, clientGOAreaCenters)
 		rejoinLaunchGOs(areaTargets, areaMasks)
 	}
 	if isGOConeSpell(spell) && !goConeBranchRan {
@@ -10203,7 +10290,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// nearby/GO/no-branch spells take them unrolled, like the combo block's
 	// ref list for those spells.
 	if friendlyEffectTargets == nil && hasFriendlyAreaEffect(spell) && !friendlyAreaSpell {
-		friendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, target)
+		friendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, clientFriendlyAreaTarget)
 		if friendlyEffectTargets == nil {
 			friendlyEffectTargets = []uint64{}
 		}
