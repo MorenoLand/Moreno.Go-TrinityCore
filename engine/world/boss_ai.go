@@ -5122,7 +5122,7 @@ func (s *Server) creatureEffectHealCommon(ctx context.Context, m *creatureMotion
 		var tm *creatureMotion
 		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 			vs = ts
-			if vs.player.Health == 0 {
+			if vs.player.Health == 0 || vs.isDeadOrGhost() {
 				continue
 			}
 		} else if mv := s.findCreatureMotion(m.Map, m.InstanceID, guid); mv != nil {
@@ -5373,7 +5373,7 @@ func (s *Server) creatureEffectEnergizeCommon(ctx context.Context, m *creatureMo
 		var tm *creatureMotion
 		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 			vs = ts
-			if vs.player.Health == 0 || vs.player.MaxPowers[uint32(power)] == 0 {
+			if vs.player.Health == 0 || vs.isDeadOrGhost() || vs.player.MaxPowers[uint32(power)] == 0 {
 				continue
 			}
 			secondaryOK := spell.AttributesEx7&spellAttr7CanRestoreSecondaryPower != 0
@@ -5554,7 +5554,7 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 		var tm *creatureMotion
 		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 			vs = ts
-			if vs.player.Health == 0 || playerPowerType(vs.player) != uint8(powerType) || vs.player.MaxPowers[powerType] == 0 {
+			if vs.player.Health == 0 || vs.isDeadOrGhost() || playerPowerType(vs.player) != uint8(powerType) || vs.player.MaxPowers[powerType] == 0 {
 				continue
 			}
 		} else if mv := s.findCreatureMotion(m.Map, m.InstanceID, guid); mv != nil {

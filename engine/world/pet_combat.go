@@ -6548,6 +6548,9 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	if !ok || target.Health == 0 {
 		return
 	}
+	if ts := s.server.findSessionByGUID(target.GUID); ts != nil && ts.isDeadOrGhost() {
+		return
+	}
 	// Spell.cpp:2563-2579: a done-side amount of zero takes the no-damage
 	// arm, not silence; the health-gain legs below are skipped.
 	if heal == 0 {
