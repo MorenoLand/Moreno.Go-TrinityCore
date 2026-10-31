@@ -4565,6 +4565,28 @@ func (s *session) savePlayerState(ctx context.Context, online uint32, logout boo
 			stateCopy.TransportX, stateCopy.TransportY, stateCopy.TransportZ, stateCopy.TransportO = 0, 0, 0, 0
 			stateCopy.TransportSeat = 0
 		}
+		// Player::SaveToDB (Player.cpp:19672-19690): while being teleported
+		// the row carries the teleport destination with instance 0, not the
+		// origin instance — the near semaphore clears only on the client's
+		// ack, which never arrives before a logout or periodic save lands
+		// mid-pending. Only the snapshot takes the rule: the live player
+		// keeps its true instance until the ack applies the destination,
+		// and the next save after the ack rewrites it. A battleground/arena
+		// map keeps its BG instance instead of 0: C++ re-derives the BG from
+		// battleground data at login (Player.cpp:17591-17592), while Go's
+		// login trusts the saved row, so 0 would strand the player in the
+		// map's instance-0 bucket, invisible to the roster keyed on
+		// bgData.InstanceID — the same value the logout-loop arm repairs
+		// use. A failed map lookup falls back to the C++ literal 0.
+		if s.server != nil && s.server.Data != nil {
+			if mapEntry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && (mapEntry.IsBattleground() || mapEntry.IsBattleArena()) {
+				stateCopy.InstanceID = s.bgData.InstanceID
+			} else {
+				stateCopy.InstanceID = 0
+			}
+		} else {
+			stateCopy.InstanceID = 0
+		}
 	}
 	state := &stateCopy
 	// Player::SaveToDB (Player.cpp:19584/19709): logout_time is stamped
