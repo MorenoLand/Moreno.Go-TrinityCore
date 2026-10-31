@@ -5484,7 +5484,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						chainMult := petModOwner.applySpellModFloat(spell, spellModDamageMultiplier, float64(effect.ChainAmplitude)*100.0) / 100.0
 						heal = chainScaledAmount(heal, chainMult, chainJump)
 					}
-					s.executePetSpellHeal(ctx, motion, victimGUID, spell.ID, heal)
+					s.executePetSpellHeal(ctx, motion, victimGUID, spell.ID, heal, triggered, petTaking)
 				}
 			}
 			applyHeal(targetGUID, -1)
@@ -6451,10 +6451,11 @@ func (s *Server) creatureApplyHealAbsorb(key creatureAuraKey, schoolMask, heal u
 	return absorbed
 }
 
-func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, heal uint32) {
+func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, heal uint32, triggered bool, taking *spellModTakingContext) {
 	if s == nil || s.server == nil || caster == nil || heal == 0 {
 		return
 	}
+	rawHeal := heal
 	target, ok := s.getCombatTarget(ctx, uint64(targetGUID))
 	if !ok || target.Health == 0 {
 		return
@@ -6549,6 +6550,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 		}
 		targetSess.player.Health = newHealth
 		targetSess.sendPlayerUpdate()
+		s.firePetSpellHealProcs(ctx, caster, targetGUID, spellID, triggered, isCrit, rawHeal, taking)
 		return
 	}
 	s.server.motionMu.Lock()
@@ -6564,6 +6566,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	if targetMotion != nil {
 		s.server.broadcastCreatureValuesUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.GUID, map[int]uint32{unitFieldHealth: targetMotion.Health})
 	}
+	s.firePetSpellHealProcs(ctx, caster, targetGUID, spellID, triggered, isCrit, rawHeal, taking)
 }
 
 // petSpellReflectVerdict mirrors the AddUnitTarget reflect arm
@@ -6719,6 +6722,79 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 	// runs on the same event, after the pet's own auras, before any
 	// target-side evaluation — there is no target side on this arm.
 	s.server.firePetModOwnerAuraProcs(ctx, caster, targetGUID, ev, taking)
+}
+
+// firePetSpellHealProcs evaluates the heal proc leg of
+// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2496-2513, 2581-2586)
+// for a pet direct heal: with m_healing > 0 the spell is positive by
+// construction, so the done-side mask is the spellHealProcTypeMask
+// positivity fallback (magic/none damage class) with PROC_SPELL_TYPE_HEAL
+// / PROC_SPELL_PHASE_HIT and the crit-conditional hit mask, fired after
+// HealBySpell like the player twin. The mod-owner arm
+// (Unit.cpp:10395-10408) runs on the same event after the pet's own auras,
+// ahead of the taken side; a nil taking (the standalone dispel heal) means
+// no cast registry, so the arm evaluates nothing, matching the cobra tick.
+// The taken side mirrors the player twin: the victim's session runs
+// procSpellHealTakenAuraTriggers, a creature victim runs its own auras
+// against the taken-side mask. Unlike the damage done side, a self-heal
+// is NOT excluded — C++ fires done and taken on the same list, as the
+// player self-heal twin does. The whole pass is skipped when a player
+// victim sits inside its own proc evaluation (the canEffectTrigger
+// CanProc gate, Spell.cpp:2440-2442); creature victims carry no procDeep
+// model, matching the damage path.
+func (s *session) firePetSpellHealProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, triggered, isCrit bool, rawHeal uint32, taking *spellModTakingContext) {
+	if s == nil || s.server == nil || s.server.Data == nil || caster == nil || rawHeal == 0 {
+		return
+	}
+	if victim := s.server.findSessionByGUID(targetGUID); victim != nil && victim.player != nil && victim.procDeep > 0 {
+		return
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found || spell.AttributesEx3&spellAttr3CantTriggerProc != 0 {
+		return
+	}
+	typeMask := spellHealProcTypeMask(spell)
+	if typeMask == procFlagNone {
+		return
+	}
+	schoolMask := spell.SchoolMask
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	hitMask := procHitNormal
+	if isCrit {
+		hitMask = procHitCritical
+	}
+	spellCopy := spell
+	ev := procEventInfo{
+		typeMask:       typeMask,
+		schoolMask:     uint32(schoolMask),
+		spellTypeMask:  procSpellTypeHeal,
+		spellPhaseMask: procSpellPhaseHit,
+		hitMask:        hitMask,
+		triggered:      triggered,
+		eventSpell:     &spellCopy,
+		actorGUID:      caster.GUID,
+	}
+	s.server.fireCreatureAuraProcLoop(ctx, caster, targetGUID, ev)
+	s.server.firePetModOwnerAuraProcs(ctx, caster, targetGUID, ev, taking)
+	if victim := s.server.findSessionByGUID(targetGUID); victim != nil && victim.player != nil {
+		victim.procSpellHealTakenAuraTriggers(ctx, caster.GUID, spellID, rawHeal, isCrit, triggered, 0)
+	} else {
+		targetMotion := s.server.findCreatureMotion(caster.Map, caster.InstanceID, targetGUID)
+		if targetMotion == nil {
+			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				targetMotion = s.server.findCreatureMotion(tgt.Map, tgt.InstanceID, targetGUID)
+			}
+		}
+		if targetMotion != nil {
+			if takenMask := spellHealTakenProcTypeMask(spell); takenMask != procFlagNone {
+				takenEv := ev
+				takenEv.typeMask = takenMask
+				s.server.fireCreatureAuraProcLoop(ctx, targetMotion, caster.GUID, takenEv)
+			}
+		}
+	}
 }
 
 // firePetSpellMissNodmgProcs fires the no-damage proc arm for a missed

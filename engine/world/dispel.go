@@ -1634,7 +1634,7 @@ func (s *session) healDevourMagicPet(ctx context.Context, petCaster *creatureMot
 			}
 		}
 	}
-	s.executePetSpellHeal(ctx, petCaster, petCaster.GUID, 19658, heal)
+	s.executePetSpellHeal(ctx, petCaster, petCaster.GUID, 19658, heal, true, nil)
 	if s.player != nil && s.playerHasAura(56249) {
 		// SpellEffects.cpp:2527-2529: the glyph arm is owner->CastSpell(owner,
 		// 19658, args) — the 19658 caster is the OWNER, not the pet.
