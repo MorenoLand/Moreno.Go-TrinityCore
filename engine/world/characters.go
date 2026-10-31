@@ -1592,6 +1592,22 @@ func (s *session) hasPvPForcingQuest(ctx context.Context) bool {
 	return err == nil && found != 0
 }
 
+// persistAckInstanceID writes the ack-assigned instance over the initiation
+// row's origin instance. The initiation write carries the origin instance
+// for a far teleport, and a crash after a successful ack but before the
+// next full save otherwise reloads it: dungeon destinations re-derive from
+// bind rows and continents are zeroed at load, but a battleground/arena
+// login trusts the saved row and never repairs player.InstanceID from
+// bgData, so the relogger lands in the origin instance bucket, invisible
+// to the battleground's members. Best-effort like the initiation write: a
+// failure leaves the old row, no worse than before, and never fails the ack.
+func (s *session) persistAckInstanceID() {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.player == nil {
+		return
+	}
+	_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET instance_id = ? WHERE guid = ?", s.player.InstanceID, s.playerGUID)
+}
+
 func (s *session) completeWorldPort(ctx context.Context) bool {
 	if s == nil || s.server == nil || s.player == nil {
 		return false
@@ -1764,6 +1780,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 			s.initialLoginPending = false
 			s.server.autoBalanceTransferInstance(s, s.farTeleportOriginMap, s.farTeleportOriginInstanceID, s.player.Map, s.player.InstanceID)
 			s.farTeleportOriginMap, s.farTeleportOriginInstanceID = 0, 0
+			s.persistAckInstanceID()
 			return true
 		}
 		s.finishTaxiFlight()
@@ -1918,6 +1935,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	s.server.autoBalanceTransferInstance(s, s.farTeleportOriginMap, s.farTeleportOriginInstanceID, s.player.Map, s.player.InstanceID)
 	s.farTeleportOriginMap, s.farTeleportOriginInstanceID = 0, 0
 	s.lfgOnMapChanged(ctx, true)
+	s.persistAckInstanceID()
 	return true
 }
 
