@@ -766,6 +766,19 @@ func (s *Server) installVehicleAccessories(ctx context.Context, motion *creature
 	if s == nil || motion == nil || kit == nil {
 		return
 	}
+	s.installVehicleAccessoriesFromOrigin(ctx, s.summonOriginFromMotion(motion), motion.GUID, motion.X, motion.Y, motion.Z, motion.Orientation, kit)
+}
+
+// installVehicleAccessoriesFromOrigin is the shared InstallAllAccessories
+// (Vehicle.cpp:84-100) body for a base of either kind: the latch, the
+// per-accessory TempSummon + AddPassenger + seat bookkeeping, and the
+// failed-board despawn are identical; only the origin differs. The
+// creature caller passes a motion snapshot, the player caller a session
+// snapshot, because a player base has no creatureMotion.
+func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin tempSummonOrigin, baseGUID uint64, x, y, z, o float32, kit *VehicleKit) {
+	if s == nil || kit == nil {
+		return
+	}
 	kit.mu.Lock()
 	if kit.AccessoriesInstalled || len(kit.Accessories) == 0 {
 		kit.mu.Unlock()
@@ -774,9 +787,8 @@ func (s *Server) installVehicleAccessories(ctx context.Context, motion *creature
 	accessories := append([]VehicleAccessory(nil), kit.Accessories...)
 	kit.AccessoriesInstalled = true
 	kit.mu.Unlock()
-	origin := s.summonOriginFromMotion(motion)
 	for _, acc := range accessories {
-		summoned := s.summonTempCreature(ctx, origin, acc.AccessoryEntry, motion.X, motion.Y, motion.Z, motion.Orientation, acc.SummonType, acc.SummonTime)
+		summoned := s.summonTempCreature(ctx, origin, acc.AccessoryEntry, x, y, z, o, acc.SummonType, acc.SummonTime)
 		if summoned == nil {
 			continue
 		}
@@ -787,7 +799,7 @@ func (s *Server) installVehicleAccessories(ctx context.Context, motion *creature
 			continue
 		}
 		s.motionMu.Lock()
-		summoned.VehicleGUID = motion.GUID
+		summoned.VehicleGUID = baseGUID
 		summoned.VehicleSeat = assigned
 		summoned.VehicleAccessoryMinion = acc.IsMinion
 		summoned.Moving = false
@@ -796,6 +808,28 @@ func (s *Server) installVehicleAccessories(ctx context.Context, motion *creature
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
 		kit.mu.Unlock()
 	}
+}
+
+// installPlayerVehicleAccessories bridges Vehicle::InstallAllAccessories
+// (Vehicle.cpp:84-100) for a player mount base, the Unit::Mount tail
+// (Unit.cpp:8334): the kit was just created with the mount creature
+// entry, so its template accessories are the mount entry's rows. The
+// install runs at Mount time, not on a later sync — the kit is fresh,
+// so C++'s RemoveAllPassengers first is vacuous here, unlike the
+// creature path's tick-after-spawn skip. The relocate fan-out below
+// seats the accessories on their offsets at once (the creature sync's
+// own fan-out twin); later player moves relocate them through
+// movement.go's base-GUID arm. Seated-AI suppression and kit-drop fate
+// ride the shared gates: the stepCreatureMotion VehicleGUID gate and
+// removeVehicleKit's exitCreatureVehiclePassengers.
+func (s *Server) installPlayerVehicleAccessories(ctx context.Context, sess *session, kit *VehicleKit) {
+	if s == nil || sess == nil || sess.player == nil || kit == nil {
+		return
+	}
+	origin := tempSummonOrigin{Map: sess.player.Map, InstanceID: sess.player.InstanceID, GUID: sess.playerGUID, X: sess.player.X, Y: sess.player.Y, Z: sess.player.Z, O: sess.player.Orientation}
+	s.installVehicleAccessoriesFromOrigin(ctx, origin, sess.playerGUID, sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, kit)
+	kit.setPosition(sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation)
+	s.relocatePassengers(sess.player.Map, sess.player.InstanceID, sess.playerGUID, sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation)
 }
 
 // exitCreatureVehiclePassengers bridges the Unit::_ExitVehicle tail

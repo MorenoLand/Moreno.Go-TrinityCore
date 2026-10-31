@@ -664,6 +664,55 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 			}
 		}
 	}
+	// A restored mounted aura re-applies in C++ (Player::_LoadAuras ->
+	// AuraEffect::HandleAuraMounted -> Unit::Mount), so a relogging
+	// vehicle-mount base regains the kit the logout drop removed, with
+	// its template accessories installed. Go's load only registers the
+	// aura (loadPlayerAuras) and restores the display (loadMountDisplay),
+	// so the Mount leg never runs at login — this fold is its twin,
+	// placed after the 296 fold so s.player is set and the packet
+	// precedent there applies. Entry and the 62061 festive override
+	// mirror loadMountDisplay; the existing-kit skip is the same
+	// re-apply guard as the live Mount leg (a 296 kit restored above
+	// wins over a mount kit in the both-auras corner).
+	if s.server != nil && s.server.Data != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		hasMountedFlight := false
+		for _, aura := range s.loadedAuras() {
+			if s.activeAuraHasEffect(aura, wotlk.MountedFlightSpeedAura) {
+				hasMountedFlight = true
+				break
+			}
+		}
+		for _, aura := range s.loadedAuras() {
+			if aura == nil || aura.AuraType != spellAuraMounted || aura.MiscValue <= 0 {
+				continue
+			}
+			entry := uint32(aura.MiscValue)
+			if aura.SpellID == 62061 {
+				if hasMountedFlight {
+					entry = 24906
+				} else {
+					entry = 15665
+				}
+			}
+			var vehicleID uint32
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(VehicleId, 0) FROM creature_template WHERE entry = ?", entry).Scan(&vehicleID); err != nil || vehicleID == 0 {
+				continue
+			}
+			if _, ok, err := s.server.Data.Vehicle(vehicleID); err != nil || !ok {
+				continue
+			}
+			if s.server.getVehicleKit(state.Map, state.InstanceID, state.GUID) != nil {
+				continue
+			}
+			if kit := s.server.createVehicleKit(state.Map, state.InstanceID, state.GUID, vehicleID, entry, true); kit != nil {
+				s.sendPlayerVehicleData(vehicleID)
+				s.sendCancelExpectedRideVehicleAura()
+				s.server.installPlayerVehicleAccessories(ctx, s, kit)
+			}
+			break
+		}
+	}
 	// Player::CastAllObtainSpells (Player.cpp:4732, 7840-7856): inventory items
 	// present at login fire their ITEM_SPELLTRIGGER_ON_NO_DELAY_USE spells.
 	s.castAllObtainSpells(ctx)

@@ -31960,6 +31960,28 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			s.sendPlayerMountUpdate()
 			s.sendPlayerCollisionHeight()
 			s.sendPlayerDismount()
+			// Unit::Dismount's vehicle leg (Unit.cpp:8393-8401): the
+			// mount kit drops with SMSG_PLAYER_VEHICLE_DATA carrying 0
+			// and RemoveVehicleKit. Player passengers exit while the
+			// kit still exists (the SetVehicle remove leg's arm);
+			// creature accessories ride removeVehicleKit's
+			// exitCreatureVehiclePassengers (minions vanish, the rest
+			// unseat at their last relocated coords). The packet goes
+			// before the kit drop, matching C++'s order.
+			if s.server != nil {
+				if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); kit != nil {
+					for _, pg := range kit.seatedPassengerGUIDs() {
+						if pg == s.playerGUID {
+							continue
+						}
+						if ps := s.server.findSessionByGUID(pg); ps != nil && ps.player != nil {
+							ps.exitVehicle(context.Background())
+						}
+					}
+					s.sendPlayerVehicleData(0)
+					s.server.removeVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
+				}
+			}
 			// Unit::Dismount's RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_MOUNTED)
 			// runs after the SMSG_DISMOUNT broadcast, matching this placement.
 			s.removeAurasWithInterruptFlags(auraInterruptFlagNotMounted)
@@ -32594,15 +32616,21 @@ func (s *session) clearOtherMountedAuras(spellID uint32) {
 // applyMountedDisplay mirrors Unit::Mount (Unit.cpp:8310-8361) as reached from
 // AuraEffect::HandleAuraMounted's apply leg (SpellAuraEffects.cpp:2579-2611):
 // mount display id from the aura MiscValue (creature entry), UNIT_FLAG_MOUNT,
-// and the collision-height update, in C++ relative order. Documented deltas:
+// and the collision-height update, in C++ relative order, plus the vehicle
+// leg when the mount template carries a VehicleId: CreateVehicleKit with
+// the mount creature entry (so the kit's template accessories are the
+// mount entry's rows), SMSG_PLAYER_VEHICLE_DATA,
+// SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA, then InstallAllAccessories
+// (installPlayerVehicleAccessories). Documented deltas:
 // display selection uses the first nonzero modelid1..4, where C++ takes
 // ObjectMgr::GetRandomValidModelId (random among valid model ids) plus a 50%
-// GetCreatureModelRandomGender other-gender swap; the vehicle leg
-// (CreateVehicleKit, SMSG_PLAYER_VEHICLE_DATA, SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA,
-// InstallAllAccessories) has no bridge — createVehicleKit exists but the mount
-// path never invokes it; the charmed-NPC stun has no bridge; the festive
-// Holiday Mount 62061 check reads the applied aura's own spell id, which is
-// outcome-equivalent to C++'s target->HasAura(62061) during 62061's apply.
+// GetCreatureModelRandomGender other-gender swap; the charmed-NPC stun has
+// no bridge; the festive Holiday Mount 62061 check reads the applied
+// aura's own spell id, which is outcome-equivalent to C++'s
+// target->HasAura(62061) during 62061's apply. A kit already present
+// (a 296 kit, or a re-apply of the same mount) is left untouched rather
+// than replaced: recreating it would strand seated players, where C++
+// replaces the kit object outright.
 func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 	if s == nil || s.player == nil || aura == nil {
 		return
@@ -32616,12 +32644,31 @@ func (s *session) applyMountedDisplay(ctx context.Context, aura *activeAura) {
 		}
 	}
 	var displayID int64
+	var vehicleID uint32
 	if entry > 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID); err == nil && displayID > 0 {
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(modelid1, 0), NULLIF(modelid2, 0), NULLIF(modelid3, 0), NULLIF(modelid4, 0), 0), COALESCE(VehicleId, 0) FROM creature_template WHERE entry = ?", entry).Scan(&displayID, &vehicleID); err == nil && displayID > 0 {
 			s.player.MountDisplayID = uint32(displayID)
 		}
 	}
 	s.sendPlayerMountUpdate()
+	// Unit::Mount's vehicle leg (Unit.cpp:8320-8334): a mount template
+	// with a VehicleId makes the player a vehicle base, and the kit's
+	// creature entry is the mount entry — the template-accessory
+	// lookup key (ObjectMgr.cpp:10233 falls back to the entry list
+	// for a player base). The DBC gate mirrors CreateVehicleKit's
+	// false return without a Vehicle.dbc row; the existing-kit skip
+	// is the re-apply guard from the header comment.
+	if vehicleID != 0 && s.server != nil && s.server.Data != nil {
+		if _, ok, err := s.server.Data.Vehicle(vehicleID); err == nil && ok {
+			if s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID) == nil {
+				if kit := s.server.createVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID, vehicleID, entry, true); kit != nil {
+					s.sendPlayerVehicleData(vehicleID)
+					s.sendCancelExpectedRideVehicleAura()
+					s.server.installPlayerVehicleAccessories(ctx, s, kit)
+				}
+			}
+		}
+	}
 	// Unit::Mount unsummons the active pet (temporary-unsummon bookkeeping so
 	// it returns on dismount); the arena pet-stun leg has no bridge.
 	s.temporarilyUnsummonPet(ctx)
