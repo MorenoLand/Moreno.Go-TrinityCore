@@ -4169,6 +4169,14 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	// logout itself. See drainLogoutFarTeleport.
 	s.drainLogoutFarTeleport(ctx)
 
+	// WorldSession::LogoutPlayer sets m_playerLogout after the first drain
+	// loop (WorldSession.cpp:499-502) and clears it at :641, so the flag
+	// covers the invalid-instance arm, the second drain and the save but
+	// not teleports the first drain's fallbacks initiate. teleportTo
+	// gates its transfer packets on it (Player.cpp:1763, 1847, 1875).
+	s.loggingOut = true
+	defer func() { s.loggingOut = false }()
+
 	if !s.playerLoaded {
 		s.clearActiveAuras()
 		s.logoutAt = time.Time{}
@@ -4200,8 +4208,17 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	// instance is invalid is teleported to their homebind on logout. This
 	// reads the pre-removal validity — C++ logout keeps the group membership,
 	// so it runs before removeSessionFromGroup marks the dungeon arm.
+	// A same-map homebind teleport still leaves the player being-teleported
+	// at the save (the near semaphore clears only on the client's ack,
+	// MovementHandler.cpp:226, which never arrives mid-logout), so
+	// Player::SaveToDB takes its being-teleported branch (Player.cpp:19672-
+	// 19690) and writes the destination with instance 0, not the origin
+	// instance — the save must repair, not keep, the stale instance.
 	if s.player != nil && !s.instanceValid && !sessionIsGameMaster(s) {
-		s.teleportTo(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.player.Orientation)
+		sameMap := s.player.Map == s.player.HomebindMap
+		if s.teleportTo(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.player.Orientation) && sameMap {
+			s.repairStaleLogoutInstanceID()
+		}
 	}
 	// Player::CleanupsBeforeDelete (Player.cpp:26311): reactive timers drop
 	// (ClearAllReactives).

@@ -381,10 +381,17 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 			movement.Transport = nil
 		}
 		s.nearTeleportDest = nearTeleportDestination{X: x, Y: y, Z: z, Orientation: orientation, Movement: movement}
-		selfPacket, nearbyPacket := buildTeleportMovementPackets(s.playerGUID, movement)
-		_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), selfPacket, true)
-		if s.server != nil {
-			s.server.broadcastTeleportMovement(s, nearbyPacket)
+		// Player::TeleportTo (Player.cpp:1763-1764): the near-teleport
+		// packet is sent only when the session is not logging out; the
+		// destination itself is still recorded above for the save.
+		// C++ sends nothing to nearby players either, since their
+		// broadcast rides the client's ack, which never arrives.
+		if !s.loggingOut {
+			selfPacket, nearbyPacket := buildTeleportMovementPackets(s.playerGUID, movement)
+			_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), selfPacket, true)
+			if s.server != nil {
+				s.server.broadcastTeleportMovement(s, nearbyPacket)
+			}
 		}
 	} else {
 		// Player::TeleportTo far branch (Player.cpp:1836-1845), in C++ order:
@@ -411,7 +418,11 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 			pending.WriteU32(spawn.Entry)
 			pending.WriteU32(oldMap)
 		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRANSFER_PENDING), pending.Bytes(), true)
+		// Player::TeleportTo (Player.cpp:1847-1856): the transfer-pending
+		// packet is sent only when the session is not logging out.
+		if !s.loggingOut {
+			_ = s.write(uint16(protocol.OpcodeSMSG_TRANSFER_PENDING), pending.Bytes(), true)
+		}
 		packet := protocol.NewBuffer(20)
 		packet.WriteU32(mapID)
 		if transportAttached {
@@ -425,10 +436,13 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 			packet.WriteF32(z)
 			packet.WriteF32(orientation)
 		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
-		// Player::TeleportTo (Player.cpp:1878): SendSavedInstances follows
-		// every far teleport's SMSG_NEW_WORLD.
-		s.sendSavedInstances(context.Background())
+		// Player::TeleportTo (Player.cpp:1875-1878): SMSG_NEW_WORLD and the
+		// SendSavedInstances that follows it are sent only when the
+		// session is not logging out.
+		if !s.loggingOut {
+			_ = s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
+			s.sendSavedInstances(context.Background())
+		}
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

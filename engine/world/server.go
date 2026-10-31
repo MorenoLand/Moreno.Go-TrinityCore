@@ -447,6 +447,11 @@ type session struct {
 	// Player.cpp:324): false while the player sits in a dungeon instance
 	// without a valid group/instance bind, driving the homebind countdown.
 	instanceValid bool
+	// loggingOut mirrors WorldSession::m_playerLogout: set after the first
+	// LogoutPlayer drain loop (WorldSession.cpp:499-502) and cleared at
+	// :641, so it covers the logout body but not the first drain.
+	// teleportTo gates its transfer packets on it.
+	loggingOut bool
 	// homebindTimerMs mirrors Player::m_HomebindTimer: remaining milliseconds
 	// before an invalid-instance player is ported to the nearest graveyard
 	// (Player::UpdateHomebindTime, Player.cpp:22106-22147).
