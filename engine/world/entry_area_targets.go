@@ -66,6 +66,19 @@ func isEntryAreaSpell(spell wotlk.Spell) bool {
 // RandomResize). An empty area list adds no targets and never fails the
 // cast — area selection has no BAD_IMPLICIT_TARGETS gate (unlike 38).
 func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) []uint64 {
+	return s.spellEntryAreaTargetsWithCenters(ctx, spell, spellID, target, nil)
+}
+
+// spellEntryAreaTargetsWithCenters is spellEntryAreaTargets with per-effect
+// arm-time destination centers for its DEST legs: C++ selects each area
+// leg at its own position in the per-effect SelectSpellTargets loop
+// (Spell.cpp:758-779), so a DEST leg centers on the running destination
+// at its arm time (areaArmTimeDestSnapshot), not the spell-final one. A
+// nil centers map, or a leg with no entry, keeps the spell-final
+// destination (the previous behavior); a present-but-unstamped entry
+// leaves the leg on the caster default, since its arm-time destination
+// was unset and the spell-final dest must not center it.
+func (s *session) spellEntryAreaTargetsWithCenters(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, centers map[int]sessionDestSnapshot) []uint64 {
 	if s == nil || s.player == nil || s.server == nil || !isEntryAreaSpell(spell) || s.server.Data == nil {
 		return nil
 	}
@@ -130,7 +143,13 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 		}
 		leg := entryAreaLeg{cx: s.player.X, cy: s.player.Y, cz: s.player.Z, radius: r, condRows: s.loadImplicitTargetConditions(ctx, spellID, 1<<uint(i))}
 		if legTarget == implicitTargetDestAreaEntry {
-			leg.cx, leg.cy, leg.cz = destX, destY, destZ
+			if c, ok := centers[i]; ok {
+				if c.Has {
+					leg.cx, leg.cy, leg.cz = c.X, c.Y, c.Z
+				}
+			} else {
+				leg.cx, leg.cy, leg.cz = destX, destY, destZ
+			}
 		}
 		leg.allowPlayers, leg.allowCreatures = implicitTargetEntryMask(leg.condRows)
 		// Spell::GetSearcherTypeMask (Spell.cpp:1836-1842): the UNIT base
@@ -156,14 +175,14 @@ func (s *session) spellEntryAreaTargets(ctx context.Context, spell wotlk.Spell, 
 	// its own pass; a candidate matched on an earlier pass rides the
 	// seen set, and an unmatched candidate is re-evaluated per pass.
 	scanCenters := [][3]float32{{s.player.X, s.player.Y, s.player.Z}}
-	hasDestCenter := false
+	seenCenter := map[[3]float32]struct{}{{s.player.X, s.player.Y, s.player.Z}: {}}
 	for _, leg := range legs {
-		if leg.cx != s.player.X || leg.cy != s.player.Y || leg.cz != s.player.Z {
-			hasDestCenter = true
+		center := [3]float32{leg.cx, leg.cy, leg.cz}
+		if _, dup := seenCenter[center]; dup {
+			continue
 		}
-	}
-	if hasDestCenter {
-		scanCenters = append(scanCenters, [3]float32{destX, destY, destZ})
+		seenCenter[center] = struct{}{}
+		scanCenters = append(scanCenters, center)
 	}
 	for _, center := range scanCenters {
 		s.friendlyScanCandidates(ctx, center[0], center[1], float32(maxRadius), spell, func(c friendlyCandidate) {

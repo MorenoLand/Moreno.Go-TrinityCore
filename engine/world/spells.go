@@ -23441,6 +23441,91 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.debug("triggered cast failed target selection", "account", s.accountName, "spell", spellID, "reason", "no nearby entry object")
 		return
 	}
+	// Spell::SelectImplicitAreaTargets reads the RUNNING destination at arm
+	// time (Spell.cpp:1275-1282), not the spell-final destination above:
+	// a dest arm in a later slot of the same effect or in a later effect
+	// must not recenter an already-selected area leg. The closures below
+	// center each funnel area branch on its legs' arm-time destinations
+	// (areaArmTimeDestSnapshot over the resolver's per-effect slots,
+	// seeded from the InitExplicit seed for a leg with no earlier slot).
+	// Cones (24/54/104/59/60/108) are CASTER-reference in C++
+	// (Spell.cpp:1176-1180) and ref-centered legs (37/61)
+	// TARGET-reference, so neither family takes a destination center here.
+	funnelSeedX, funnelSeedY, funnelSeedZ, funnelSeeded := s.sessionInitExplicitSeed(ctx, spell, triggerWireGUID)
+	funnelAreaArmSnapshot := func(effIndex, slotIndex int) sessionDestSnapshot {
+		return areaArmTimeDestSnapshot(triggeredDestSnapshots, funnelSeedX, funnelSeedY, funnelSeedZ, funnelSeeded, effIndex, slotIndex)
+	}
+	// funnelFirstAreaLegTarget centers a single-center branch (enemy /
+	// friendly area, whose helpers merge all legs into one sweep) on the
+	// first DEST-centered leg's arm-time destination, else the first
+	// leg's: exact for a single leg and for C++'s grouped identical legs
+	// (Spell.cpp:866-900 selects them once, at the first effect). The
+	// 27/18 arm is not a genuine area leg, so a spell carrying only it
+	// keeps the spell-final target.
+	funnelFirstAreaLegTarget := func(isLeg func(uint32) bool, isDestLeg func(uint32) bool) protocol.SpellTargetData {
+		find := func(wantDest bool) (protocol.SpellTargetData, bool) {
+			for i, eff := range spell.Effects {
+				if eff.Effect == 0 {
+					continue
+				}
+				for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+					if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+						continue
+					}
+					if !isLeg(targetType) || (wantDest && !isDestLeg(targetType)) {
+						continue
+					}
+					arm := funnelAreaArmSnapshot(i, slot)
+					branch := spellTarget
+					if arm.Has {
+						branch.Flags |= protocol.SpellTargetFlagDestLocation
+						branch.Destination = protocol.SpellTargetLocation{X: arm.X, Y: arm.Y, Z: arm.Z}
+					} else {
+						branch.Flags &^= protocol.SpellTargetFlagDestLocation
+					}
+					return branch, true
+				}
+			}
+			return spellTarget, false
+		}
+		if branch, ok := find(true); ok {
+			return branch
+		}
+		if branch, ok := find(false); ok {
+			return branch
+		}
+		return spellTarget
+	}
+	funnelEnemyAreaTarget := funnelFirstAreaLegTarget(isAreaEnemyTargetType, func(t uint32) bool { return t == 16 })
+	funnelFriendlyAreaTarget := funnelFirstAreaLegTarget(isFriendlyAreaTargetType, friendlyAreaDestCentered)
+	// funnelAreaLegCenters maps each DEST leg's effect to its arm-time
+	// destination for the per-leg helpers (entry 8, GO 52): a present
+	// entry centers that leg, a present-but-unstamped entry leaves it on
+	// the caster default, and a missing entry keeps the spell-final dest.
+	funnelAreaLegCenters := func(isLeg func(uint32) bool, isDest func(uint32) bool) map[int]sessionDestSnapshot {
+		centers := make(map[int]sessionDestSnapshot)
+		for i, eff := range spell.Effects {
+			if eff.Effect == 0 {
+				continue
+			}
+			var legTarget uint32
+			var legSlot int
+			switch {
+			case isLeg(eff.ImplicitTargetA):
+				legTarget, legSlot = eff.ImplicitTargetA, 0
+			case isLeg(eff.ImplicitTargetB) && !implicitTargetBlocksSecondSlot(eff.ImplicitTargetA):
+				legTarget, legSlot = eff.ImplicitTargetB, 1
+			default:
+				continue
+			}
+			if isDest(legTarget) {
+				centers[i] = funnelAreaArmSnapshot(i, legSlot)
+			}
+		}
+		return centers
+	}
+	funnelEntryAreaCenters := funnelAreaLegCenters(isEntryAreaTargetType, func(t uint32) bool { return t == implicitTargetDestAreaEntry })
+	funnelGOAreaCenters := funnelAreaLegCenters(func(t uint32) bool { return t == implicitTargetGOSrcArea || t == implicitTargetGODestArea }, func(t uint32) bool { return t == implicitTargetGODestArea })
 	// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) runs on triggered
 	// casts too — SelectSpellTargets carries no IsTriggered gate. The
 	// single nearest PARTY/ALLY/RAID (3/4/58), ENEMY (2), ENTRY (38) or
@@ -23946,7 +24031,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if !nearbySelected {
 		switch {
 		case isAreaEnemySpell(spell):
-			hitTargets = s.spellAreaEnemyTargets(ctx, spell, spellTarget)
+			hitTargets = s.spellAreaEnemyTargets(ctx, spell, funnelEnemyAreaTarget)
 			// C++ SelectImplicitAreaTargets runs per effect (Spell.cpp:1227-1309)
 			// with each effect's own check type (ENEMY vs ALLY/PARTY/RAID) on
 			// triggered casts too — SelectSpellTargets carries no IsTriggered gate
@@ -23957,7 +24042,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// is non-nil even when empty so "no allies in radius" heals nobody
 			// rather than falling back to enemies.
 			if hasFriendlyAreaEffect(spell) {
-				triggeredFriendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, spellTarget)
+				triggeredFriendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, funnelFriendlyAreaTarget)
 				if triggeredFriendlyEffectTargets == nil {
 					triggeredFriendlyEffectTargets = []uint64{}
 				}
@@ -23978,7 +24063,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			selectionTargets = hitTargets
 		case isFriendlyAreaSpell(spell):
-			hitTargets = s.spellFriendlyAreaTargets(ctx, spell, spellTarget)
+			hitTargets = s.spellFriendlyAreaTargets(ctx, spell, funnelFriendlyAreaTarget)
 			// A positive spell pairing a friendly-area effect with a
 			// 37/61 effect: the ref-centered effect's own selection
 			// is around the explicit target, not the caster-centered
@@ -23991,14 +24076,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 			selectionTargets = hitTargets
 		case isEntryAreaSpell(spell):
-			hitTargets = s.spellEntryAreaTargets(ctx, spell, spellID, spellTarget)
+			hitTargets = s.spellEntryAreaTargetsWithCenters(ctx, spell, spellID, spellTarget, funnelEntryAreaCenters)
 			selectionTargets = hitTargets
 		case isFriendlyConeSpell(spell):
 			hitTargets = s.spellFriendlyConeTargets(ctx, spell, spellTarget)
 			selectionTargets = hitTargets
 		case isGOAreaSpell(spell):
 			goAreaBranchRan = true
-			areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, spellTarget)
+			areaTargets, areaMasks := s.spellGOAreaTargetsWithMasksAndCenters(ctx, spell, spellID, spellTarget, funnelGOAreaCenters)
 			hitTargets = areaTargets
 			for guid, mask := range areaMasks {
 				noteGOEffectMask(guid, mask)
@@ -24037,7 +24122,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// like the branch computations, so an empty selection seeds
 	// nobody rather than falling back to the merged list.
 	if triggeredFriendlyEffectTargets == nil && hasFriendlyAreaEffect(spell) && (!isFriendlyAreaSpell(spell) || nearbySelected) {
-		triggeredFriendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, spellTarget)
+		triggeredFriendlyEffectTargets = s.spellFriendlyAreaTargetsUnchecked(ctx, spell, funnelFriendlyAreaTarget)
 		if triggeredFriendlyEffectTargets == nil {
 			triggeredFriendlyEffectTargets = []uint64{}
 		}
@@ -24168,7 +24253,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 	}
 	if isGOAreaSpell(spell) && !goAreaBranchRan {
-		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasks(ctx, spell, spellID, spellTarget)
+		areaTargets, areaMasks := s.spellGOAreaTargetsWithMasksAndCenters(ctx, spell, spellID, spellTarget, funnelGOAreaCenters)
 		rejoinTriggeredGOs(areaTargets, areaMasks)
 	}
 	if isGOConeSpell(spell) && !goConeBranchRan {

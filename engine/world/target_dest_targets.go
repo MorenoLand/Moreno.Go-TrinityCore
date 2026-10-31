@@ -226,6 +226,37 @@ func sessionEffectDestTarget(base protocol.SpellTargetData, cx, cy, cz float32, 
 	return base
 }
 
+// areaArmTimeDestSnapshot is the running destination at the moment an
+// area-category leg on (effIndex, slotIndex) runs in C++'s per-effect
+// SelectSpellTargets loop (Spell.cpp:758-779): SelectImplicitAreaTargets
+// reads m_targets.GetDstPos() at arm time (Spell.cpp:1275-1282), not the
+// spell-final destination, so a dest arm in a later slot of the same
+// effect or in a later effect must not recenter an already-selected area
+// leg. The resolver's per-effect snapshots (Spell.cpp:789 AddDestTarget)
+// carry the running destination after each effect: a B-slot leg's
+// arm-time dest is its own effect's snapshot (the area arm never moves
+// the dest), while an A-slot leg's is the nearest stamped snapshot
+// before it — hasDst never resets in the resolver loop, so the nearest
+// stamped snapshot is the latest dest state. With no earlier stamp the
+// running dest is the InitExplicit seed (seeded) or unset.
+func areaArmTimeDestSnapshot(snapshots []sessionDestSnapshot, seedX, seedY, seedZ float32, seeded bool, effIndex, slotIndex int) sessionDestSnapshot {
+	if slotIndex == 1 {
+		if effIndex >= 0 && effIndex < len(snapshots) && snapshots[effIndex].Has {
+			return snapshots[effIndex]
+		}
+		return sessionDestSnapshot{}
+	}
+	for j := effIndex - 1; j >= 0; j-- {
+		if j < len(snapshots) && snapshots[j].Has {
+			return snapshots[j]
+		}
+	}
+	if seeded {
+		return sessionDestSnapshot{Has: true, X: seedX, Y: seedY, Z: seedZ}
+	}
+	return sessionDestSnapshot{}
+}
+
 // sessionPersistentAreaAuraTarget returns the SpellTargetData
 // spawnPersistentAreaAura must see: the LAST effect-27's own slot
 // (SpellEffects.cpp:1738 handles only the last one; Spell.cpp:5159 hands

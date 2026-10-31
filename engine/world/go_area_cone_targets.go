@@ -171,6 +171,19 @@ func (s *session) spellGOAreaTargets(ctx context.Context, spell wotlk.Spell, spe
 // entry but are never consulted, since the fan-out and packet filter
 // iterate the capped list.
 func (s *session) spellGOAreaTargetsWithMasks(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData) ([]uint64, map[uint64]uint32) {
+	return s.spellGOAreaTargetsWithMasksAndCenters(ctx, spell, spellID, target, nil)
+}
+
+// spellGOAreaTargetsWithMasksAndCenters is spellGOAreaTargetsWithMasks with
+// per-effect arm-time destination centers for its DEST legs: C++ selects
+// each area leg at its own position in the per-effect SelectSpellTargets
+// loop (Spell.cpp:758-779), so a DEST leg centers on the running
+// destination at its arm time (areaArmTimeDestSnapshot), not the
+// spell-final one. A nil centers map, or a leg with no entry, keeps the
+// spell-final destination (the previous behavior); a present-but-unstamped
+// entry leaves the leg on the caster default, since its arm-time
+// destination was unset and the spell-final dest must not center it.
+func (s *session) spellGOAreaTargetsWithMasksAndCenters(ctx context.Context, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, centers map[int]sessionDestSnapshot) ([]uint64, map[uint64]uint32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return nil, nil
 	}
@@ -228,7 +241,13 @@ func (s *session) spellGOAreaTargetsWithMasks(ctx context.Context, spell wotlk.S
 		}
 		leg := goAreaLeg{cx: s.player.X, cy: s.player.Y, cz: s.player.Z, radius: radius, condRows: condRows, effIndex: i}
 		if legTarget == implicitTargetGODestArea {
-			leg.cx, leg.cy, leg.cz = destX, destY, destZ
+			if c, ok := centers[i]; ok {
+				if c.Has {
+					leg.cx, leg.cy, leg.cz = c.X, c.Y, c.Z
+				}
+			} else {
+				leg.cx, leg.cy, leg.cz = destX, destY, destZ
+			}
 		}
 		legs = append(legs, leg)
 		if radius > maxRadius {
