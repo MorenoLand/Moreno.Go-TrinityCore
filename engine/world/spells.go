@@ -25041,6 +25041,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					instMap, instanceID := motion.Map, motion.InstanceID
 					s.server.motionMu.Unlock()
 					s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, teleGUID, dx, dy, dz)
+					// EffectTeleportUnits (SpellEffects.cpp:1223) runs
+					// NearTeleportTo per target, so a moved vehicle
+					// base fans out like the teleport-units arm above.
+					s.server.syncCreatureVehiclePassengers(motion)
 				}
 			}
 		}
@@ -46669,6 +46673,11 @@ func (s *session) teleportEffectUnitTargets(hitTargets []uint64, mapID uint32, x
 			continue
 		}
 		s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, effectTarget, x, y, z)
+		// EffectTeleportUnits (SpellEffects.cpp:1223) runs
+		// NearTeleportTo per target, so a moved vehicle base fans out
+		// like the teleport-units arm in boss_ai.go; cross-map
+		// targets skip above and keep no fan-out here.
+		s.server.syncCreatureVehiclePassengers(motion)
 	}
 }
 

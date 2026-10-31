@@ -831,6 +831,12 @@ func (s *session) luaPlayer() *scripting.Object {
 			}
 			position[index] = value
 		}
+		// Player::TeleportTo (Player.cpp:1703-1704) leaves the vehicle
+		// before any teleport, the same arm teleportToOptions runs;
+		// without it a script-teleported passenger kept a stale
+		// VehicleGUID pointing at a vehicle on the origin spot while
+		// the ack moved only the player.
+		s.exitVehicle(context.Background())
 		s.nearTeleportMove(position[0], position[1], position[2], position[3], false)
 		return nil, nil
 	}

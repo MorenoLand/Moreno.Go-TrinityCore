@@ -272,6 +272,18 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); kit != nil {
 			kit.setPosition(dest.X, dest.Y, dest.Z, dest.Orientation)
 		}
+		// UpdatePosition(dest, true) runs Map::PlayerRelocation
+		// (Map.cpp:1095), which fans out through
+		// Vehicle::RelocatePassengers when the player is a vehicle
+		// base; the walking arm already does this on packets, but
+		// the ack never did, so passengers seated on the player's
+		// kit sat at the origin coords until the base's next packet.
+		// No ridden-kit fan-out belongs here: the ack's mover is the
+		// player itself (a driven vehicle's ack is dropped in C++,
+		// MovementHandler.cpp:232, ToPlayer() null), and a
+		// passenger's own UpdatePosition never moves its base's
+		// other seats — the ridden base's own relocation owns them.
+		s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.playerGUID, dest.X, dest.Y, dest.Z, dest.Orientation)
 	}
 	// HandleMoveTeleportAck (MovementHandler.cpp:232) applies the destination
 	// via UpdatePosition(dest, true), which forces _positionUpdateInfo.Relocated

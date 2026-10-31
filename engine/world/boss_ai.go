@@ -5936,6 +5936,11 @@ func (s *Server) creatureMoveTargetTo(m *creatureMotion, guid uint64, x, y, z, o
 	mapID, instanceID := motion.Map, motion.InstanceID
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
+	// NearTeleportTo (Unit.cpp:13342-13344) runs UpdatePosition, so a
+	// moved vehicle base fans out through CreatureRelocation
+	// (Map.cpp:1136) — the teleport-units arm above already syncs,
+	// this leap/pull/tele-face arm never did.
+	s.syncCreatureVehiclePassengers(motion)
 }
 
 // creatureTargetPosition returns a hit target's position and combat reach
