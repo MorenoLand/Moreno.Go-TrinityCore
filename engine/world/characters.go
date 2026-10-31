@@ -1103,6 +1103,13 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			s.server.releaseWorldportInstanceID(loginSelection.InstanceID)
 		}
 	}
+	if mapEntry.IsDungeon() && !loginSelection.CreateSave {
+		if err := s.ensureWorldportInstanceSave(ctx, loginSelection, mapEntry); err != nil {
+			// C++ DB execs are fire-and-forget (CharacterHandler.cpp:843-847) —
+			// never a close. Drop; the session stays open.
+			return true
+		}
+	}
 	s.commitWorldportAdmission(loginSelection, loginAdmissionReserved)
 	loginAdmissionCommitted = true
 	s.sendWorldportGroupLockWarning(ctx, loginSelection)
