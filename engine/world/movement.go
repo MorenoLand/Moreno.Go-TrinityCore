@@ -264,6 +264,15 @@ func (s *session) handleMoveTeleportAck(ctx context.Context, payload []byte) boo
 	oldZone := s.player.Zone
 	oldOrientation := s.player.Orientation
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = dest.X, dest.Y, dest.Z, dest.Orientation
+	// A near-teleporting base keeps its kit (only far teleports eject at
+	// initiation), so the kit's position follows the acked destination
+	// the same way the walking arm syncs it on packets; a ridden kit is
+	// untouched here — its base, not the acking passenger, owns it.
+	if s.server != nil {
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); kit != nil {
+			kit.setPosition(dest.X, dest.Y, dest.Z, dest.Orientation)
+		}
+	}
 	// HandleMoveTeleportAck (MovementHandler.cpp:232) applies the destination
 	// via UpdatePosition(dest, true), which forces _positionUpdateInfo.Relocated
 	// (Unit.cpp:13418-13423); the next world tick then strips
@@ -698,9 +707,23 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			s.debug("transport attachment changed", "player_guid", s.playerGUID, "previous_transport_guid", previousTransportGUID, "transport_guid", s.player.TransportGUID, "reported_transport_guid", reportedTransportGUID, "reported_on_transport", reportedOnTransport)
 		}
 		if s.server != nil {
+			// The vehicle-mover branch above (579) and the creature sync
+			// both set the kit's position before relocating; the walking
+			// branch never did, so a player base's kit sat at its
+			// creation coords while its passengers relocated from packet
+			// coords. C++ has no separate kit position (the vehicle IS
+			// the unit), so the kit tracks the base here in both arms:
+			// the ridden kit when seated, the player's own kit when
+			// walking as a base.
 			if s.player.VehicleGUID != 0 {
+				if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
+					kit.setPosition(info.X, info.Y, info.Z, info.Orientation)
+				}
 				s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.player.VehicleGUID, info.X, info.Y, info.Z, info.Orientation)
 			} else {
+				if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); kit != nil {
+					kit.setPosition(info.X, info.Y, info.Z, info.Orientation)
+				}
 				s.server.relocatePassengers(s.player.Map, s.player.InstanceID, s.playerGUID, info.X, info.Y, info.Z, info.Orientation)
 			}
 		}

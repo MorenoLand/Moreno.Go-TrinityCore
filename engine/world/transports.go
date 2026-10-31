@@ -1037,9 +1037,18 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		}
 		relocated := false
 		if motion := s.findCreatureMotion(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID); motion != nil {
+			// Transport-riding bases skip the creature sync, so this arm
+			// is their only kit-position sync (movement.go walking arm
+			// twin): the kit tracks the motion, not its creation coords.
+			if kit := s.getVehicleKit(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID); kit != nil {
+				kit.setPosition(motion.X, motion.Y, motion.Z, motion.Orientation)
+			}
 			s.relocatePassengers(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID, motion.X, motion.Y, motion.Z, motion.Orientation)
 			relocated = true
 		} else if driver := s.findSessionByGUID(sess.player.VehicleGUID); driver != nil && driver.player != nil && s.getVehicleKit(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID) != nil {
+			if kit := s.getVehicleKit(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID); kit != nil {
+				kit.setPosition(driver.player.X, driver.player.Y, driver.player.Z, driver.player.Orientation)
+			}
 			s.relocatePassengers(sess.player.Map, sess.player.InstanceID, sess.player.VehicleGUID, driver.player.X, driver.player.Y, driver.player.Z, driver.player.Orientation)
 			relocated = true
 		}
