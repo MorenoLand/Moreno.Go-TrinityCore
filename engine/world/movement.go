@@ -1170,6 +1170,17 @@ func writeMovementInfo(b *protocol.Buffer, info movementInfo) {
 }
 
 func writeRawMovementInfo(b *protocol.Buffer, info movementInfo) {
+	// Unit::BuildMovementPacket (Unit.cpp:13269-13290) is flag-gated only:
+	// the transport block (and its interpolated time2) is written whenever
+	// the flag is set, because C++'s transport struct always exists. Go's
+	// Transport pointer can be nil (e.g. a flag-only copy such as the
+	// can-fly ack's, MiscHandler.cpp:1398), and a bare flag on the wire
+	// would make every flag-gated reader consume the following fields as
+	// the transport block. Drop the unserializable flag here instead; the
+	// struct-gated block below then matches the flag exactly.
+	if info.Flags&movementOnTransport != 0 && info.Transport == nil {
+		info.Flags &^= movementOnTransport
+	}
 	b.WriteU32(info.Flags)
 	b.WriteU16(info.Flags2)
 	b.WriteU32(info.Time)
@@ -1185,7 +1196,7 @@ func writeRawMovementInfo(b *protocol.Buffer, info movementInfo) {
 		b.WriteF32(info.Transport.Orientation)
 		b.WriteU32(info.Transport.Time)
 		b.WriteI8(info.Transport.Seat)
-		if info.Flags2&movement2Interpolated != 0 && info.Transport.HasTime2 {
+		if info.Flags2&movement2Interpolated != 0 {
 			b.WriteU32(info.Transport.Time2)
 		}
 	}
