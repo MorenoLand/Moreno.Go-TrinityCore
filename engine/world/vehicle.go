@@ -833,8 +833,40 @@ func (s *Server) relocatePassengers(mapID, instanceID uint32, vehicleGUID uint64
 			if dx*dx+dy*dy > 30*30 {
 				sess.streamNearbyObjects(context.Background())
 			}
+		} else {
+			s.relocateCreaturePassenger(mapID, instanceID, rel.guid, rel.x, rel.y, rel.z, rel.o)
 		}
 	}
+}
+
+// relocateCreaturePassenger moves a creature passenger with its base.
+// Reference: Vehicle::RelocatePassengers (Vehicle.cpp:554-578) resolves
+// every seat through ObjectAccessor::GetUnit, not players only, so a
+// creature passenger's UpdatePosition follows the base. Go seats are
+// player-only today (the sole AddPassenger call site boards
+// s.playerGUID; template accessories are data-only in createVehicleKit
+// and InstallAccessory has no bridge), so this arm is currently
+// unreachable — it closes the fan-out at the shared helper so a future
+// creature-boarding path cannot silently strand its passengers.
+// Creatures carry no zone/duel/stream state, so only the coords move,
+// plus a MonsterMoveStop at the new position (the
+// instantaneous-reposition twin the Lua Teleport bridge uses) so nearby
+// clients learn the new spot. Locking: findSessionByGUID releases
+// sessionsMu before this runs, and motionMu is released before the
+// broadcast takes sessionsMu, so the two locks never nest.
+func (s *Server) relocateCreaturePassenger(mapID, instanceID uint32, guid uint64, x, y, z, o float32) {
+	if s == nil {
+		return
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(mapID, instanceID, guid)
+	if motion == nil {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.X, motion.Y, motion.Z, motion.Orientation = x, y, z, o
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
 }
 
 // sendPlayerVehicleData broadcasts SMSG_PLAYER_VEHICLE_DATA (0x4A7).
