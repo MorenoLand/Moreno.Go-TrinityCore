@@ -8574,14 +8574,12 @@ func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
 // revalidation (Spell.cpp:3645-3663, DoProcessTargetContainer over the
 // delayed targets), which runs the full PreprocessTarget per delayed target
 // (Spell.cpp:2334-2382) plus the DoTargetSpellHit arrival arms (2384-2440):
-//   - a target that died or vanished mid-flight (DoTargetSpellHit,
-//     Spell.cpp:2430: unit->IsAlive() != IsAlive) is dropped silently — the
-//     arm sets no missinfo, so no SMSG_SPELLLOGMISS;
-//   - a delayed non-positive spell whose target was sanctuaried at or after
-//     launch (DoTargetSpellHit, Spell.cpp:2402-2404: (now - TimeDelay) <=
-//     unit->m_lastSanctuaryTime — Vanish dropping missiles already in
-//     flight; launchMs carries the cast-time anchor) is dropped silently —
-//     the C++ arm notes "No missinfo in that case";
+//   - DoProcessTargetContainer runs every target's PreprocessTarget before
+//     any target's DoTargetSpellHit (Spell.cpp:3554-3566), so the silent
+//     arms below run only after the LOGMISS arms: a dead-or-sanctuaried yet
+//     immune/flagged/evading target still gets its LOGMISS, then drops
+//     silently. An unresolvable target runs neither arm (PreprocessTarget
+//     returns early on a null unit) and drops silently.
 //   - a creature that began evading between launch and hit (PreprocessSpellHit,
 //     Spell.cpp:2715-2717 -> SPELL_MISS_EVADE) drops with SMSG_SPELLLOGMISS
 //     (PreprocessTarget, Spell.cpp:2366-2372 — every non-MISS late miss fires
@@ -8624,6 +8622,15 @@ func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
 // immunity arm because C++ runs immunity (:2720) ahead of :2740-2745, so an
 // immune target reports IMMUNE, not EVADE; its EVADE-vs-NON_ATTACKABLE
 // order is unobservable (both return EVADE).
+//   - a target that died mid-flight (DoTargetSpellHit, Spell.cpp:2430:
+//     unit->IsAlive() != IsAlive) is dropped silently — the arm sets no
+//     missinfo, so no SMSG_SPELLLOGMISS; a target that no longer resolves
+//     (vanished) drops the same way, having run neither arm;
+//   - a delayed non-positive spell whose target was sanctuaried at or after
+//     launch (DoTargetSpellHit, Spell.cpp:2402-2404: (now - TimeDelay) <=
+//     unit->m_lastSanctuaryTime — Vanish dropping missiles already in
+//     flight; launchMs carries the cast-time anchor) is dropped silently —
+//     the C++ arm notes "No missinfo in that case";
 func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.Spell, targets []uint64, launchMs uint32, isReflected bool, reflectSourceGUID uint64) []uint64 {
 	if len(targets) == 0 {
 		return targets
@@ -8650,10 +8657,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		}
 		reflectedEntry := isReflected && guid == s.playerGUID
 		tgt, ok := s.getCombatTarget(ctx, armGUID)
-		if !ok || tgt.Health == 0 {
-			continue
-		}
-		if !spellIsPositive(spell) && s.sanctuaryTimeFor(armGUID) >= launchMs {
+		if !ok {
 			continue
 		}
 		if s.server != nil && s.player != nil && !reflectedEntry && (uint16(armGUID>>48) == 0xF130 || uint16(armGUID>>48) == 0xF140 || uint16(armGUID>>48) == 0xF150) &&
@@ -8710,6 +8714,16 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 		if !reflectedEntry && guid != s.playerGUID && !spellIsPositive(spell) &&
 			s.triggeredSpeedGatedArrivalDrop(ctx, spell, guid) {
 			s.sendSpellMiss(guid, spell.ID, protocol.SpellMissEvade)
+			continue
+		}
+		// DoTargetSpellHit arms run only after every target's PreprocessTarget
+		// (Spell.cpp:3554-3566): a target that died mid-flight or was
+		// sanctuaried at or after launch drops silently here, but only after
+		// the LOGMISS arms above had their chance to fire on it.
+		if tgt.Health == 0 {
+			continue
+		}
+		if !spellIsPositive(spell) && s.sanctuaryTimeFor(armGUID) >= launchMs {
 			continue
 		}
 		live = append(live, guid)
@@ -8795,21 +8809,26 @@ func (s *session) revalidateUnk4ArrivalTargets(spell wotlk.Spell, targets []uint
 // hitTargets; applyEffects appends the caster per trip at effect time), so
 // without this filter a mid-flight change lands the return trip in Go
 // while C++ drops it:
-//   - alive (DoTargetSpellHit, Spell.cpp:2430): the reflector's current
-//     IsAlive vs its launch latch — Go keeps no latch, so a reflector
-//     that no longer resolves or reads Health == 0 drops, the same
-//     treatment revalidateDelayedHitTargets gives vanished/dead targets;
-//     dropped silently (the arm sets no missinfo);
-//   - sanctuary (DoTargetSpellHit, Spell.cpp:2402-2404): state-gated on
-//     SPELL_STATE_DELAYED, which both hook points model (the delayed
-//     branch and the UNK4 delayed-branch collapse), non-positive only,
-//     read on the reflector; dropped silently ("No missinfo");
+//   - DoProcessTargetContainer runs every trip's PreprocessTarget before any
+//     trip's DoTargetSpellHit (Spell.cpp:3554-3566), so the immunity LOGMISS
+//     below precedes the silent arms: a dead-or-sanctuaried reflector whose
+//     caster gained immunity still reports IMMUNE, then drops silently. A
+//     reflector that no longer resolves runs neither arm and drops silently.
 //   - immunity (PreprocessSpellHit, Spell.cpp:2720): Speed-gated, read on
 //     the caster (_spellHitTarget), so speedGated=false for UNK4 trips
 //     skips it; drops with SMSG_SPELLLOGMISS naming the reflector
 //     (PreprocessTarget, Spell.cpp:2370, SendSpellMiss takes the
 //     TargetInfo unit). No combat leg: PreprocessTarget :2354 keys on the
 //     launch MissCondition, and a trip launches as REFLECT, not IMMUNE.
+//   - alive (DoTargetSpellHit, Spell.cpp:2430): the reflector's current
+//     IsAlive vs its launch latch — Go keeps no latch, so a reflector
+//     that reads Health == 0 drops, the same treatment
+//     revalidateDelayedHitTargets gives dead targets; dropped silently
+//     (the arm sets no missinfo);
+//   - sanctuary (DoTargetSpellHit, Spell.cpp:2402-2404): state-gated on
+//     SPELL_STATE_DELAYED, which both hook points model (the delayed
+//     branch and the UNK4 delayed-branch collapse), non-positive only,
+//     read on the reflector; dropped silently ("No missinfo");
 //   - evade, NON_ATTACKABLE, duel-end need no arm: evade reads the caster
 //     (a player here, ToCreature null, vacuous) and the latter two sit
 //     inside the m_caster != unit gate (Spell.cpp:2740-2745), where unit
@@ -8821,14 +8840,21 @@ func (s *session) revalidateReflectedAreaTrips(ctx context.Context, spell wotlk.
 	live := make([]uint64, 0, len(trips))
 	for _, reflectorGUID := range trips {
 		tgt, ok := s.getCombatTarget(ctx, reflectorGUID)
-		if !ok || tgt.Health == 0 {
-			continue
-		}
-		if !spellIsPositive(spell) && s.sanctuaryTimeFor(reflectorGUID) >= launchMs {
+		if !ok {
 			continue
 		}
 		if speedGated && s.server != nil && s.isImmuneToSpell(spell, s) {
 			s.sendSpellMiss(reflectorGUID, spell.ID, protocol.SpellMissImmune)
+			continue
+		}
+		// DoTargetSpellHit arms run only after every trip's PreprocessTarget
+		// (Spell.cpp:3554-3566): the silent drops below follow the LOGMISS
+		// arm above, so a dead-or-sanctuaried reflector still reports the
+		// caster's immunity first.
+		if tgt.Health == 0 {
+			continue
+		}
+		if !spellIsPositive(spell) && s.sanctuaryTimeFor(reflectorGUID) >= launchMs {
 			continue
 		}
 		live = append(live, reflectorGUID)
