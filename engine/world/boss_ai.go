@@ -4239,6 +4239,7 @@ func (s *Server) creatureEffectTeleportUnits(ctx context.Context, m *creatureMot
 		mapID, instanceID := motion.Map, motion.InstanceID
 		s.motionMu.Unlock()
 		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, dx, dy, dz)
+		s.syncCreatureVehiclePassengers(motion)
 	}
 }
 

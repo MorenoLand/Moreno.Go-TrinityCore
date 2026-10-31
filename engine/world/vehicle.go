@@ -739,6 +739,33 @@ func (s *Server) loadVehicleAccessories(ctx context.Context) {
 	}
 }
 
+// syncCreatureVehiclePassengers moves a creature base's passengers with it.
+// Reference: Map::CreatureRelocation (Map.cpp:1136) and
+// Map::MoveAllCreaturesInMoveList (Map.cpp:1294) — every creature
+// relocation fans out through Vehicle::RelocatePassengers
+// (Vehicle.cpp:554-578), and Unit::UpdateOrientation/UpdateHeight do
+// the same for turn/height-only moves (Unit.cpp:13438-13446). The
+// player-packet path already does this (movement.go), but creature
+// bases move server-side (AI step, Lua Teleport, spell teleport) and
+// no creaturemotion path called relocatePassengers, so a passenger's
+// server coordinates stayed at the boarding point while the base
+// wandered, chased, or teleported away. The kit's canonical position
+// tracks the motion for the same reason: createVehicleKit never seeds
+// it, and only the player-packet path called setPosition, so a
+// creature base's kit sat at 0,0,0. Transport-riding bases stay out:
+// their passengers relocate through the transport arm (transports.go).
+func (s *Server) syncCreatureVehiclePassengers(motion *creatureMotion) {
+	if s == nil || motion == nil || motion.TransportGUID != 0 {
+		return
+	}
+	kit := s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
+	if kit == nil {
+		return
+	}
+	kit.setPosition(motion.X, motion.Y, motion.Z, motion.Orientation)
+	s.relocatePassengers(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.Orientation)
+}
+
 // relocatePassengers updates global coordinates for all passengers on vehicle.
 // Reference: Vehicle::RelocatePassengers (Vehicle.cpp:554-578).
 func (s *Server) relocatePassengers(mapID, instanceID uint32, vehicleGUID uint64, transX, transY, transZ, transO float32) {

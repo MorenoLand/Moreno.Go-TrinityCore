@@ -2758,6 +2758,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			// the recalc early-out keeps this cheap when nothing changed.
 			s.autoBalanceModifyCreatureAttributes(ctx, motion, false)
 			s.stepCreatureMotion(ctx, motion, players, now, false)
+			s.syncCreatureVehiclePassengers(motion)
 		}
 		rows.Close()
 	}
@@ -2849,7 +2850,9 @@ func (s *Server) stepSummonedVehicleMotions(ctx context.Context, players []playe
 		if s.checkTempSummonExpiry(ctx, motion, now) {
 			continue
 		}
-		s.stepVehicleAI(ctx, motion, now)
+		if !s.stepVehicleAI(ctx, motion, now) {
+			s.syncCreatureVehiclePassengers(motion)
+		}
 	}
 }
 
@@ -2906,6 +2909,7 @@ func (s *Server) stepSummonedNonVehicleMotions(ctx context.Context, players []pl
 			continue
 		}
 		s.stepCreatureMotion(ctx, motion, players, now, true)
+		s.syncCreatureVehiclePassengers(motion)
 	}
 }
 

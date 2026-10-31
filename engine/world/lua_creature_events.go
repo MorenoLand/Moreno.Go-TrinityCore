@@ -1501,6 +1501,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
 		s.broadcastCreatureTeleportMovement(mapID, instanceID, x, y, nearby)
+		s.syncCreatureVehiclePassengers(m)
 		return nil, nil
 	}
 	// SetDisableGravity is Creature::SetDisableGravity (Creature.cpp:3027):
