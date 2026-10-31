@@ -4503,6 +4503,25 @@ func (s *session) triggerLogout(ctx context.Context, disconnected bool) {
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogout, s.luaPlayer())
 }
 
+// saveTimeInstanceID is the instance a full save writes for this session:
+// the save-time rule value while a near teleport is pending (Player::SaveToDB,
+// Player.cpp:19672-19690: destination with instance 0, a battleground/arena
+// map keeping the BG instance because Go's login trusts the saved row),
+// else the live instance. savePlayerState and the savePlayerPosition
+// fallback share it, so a failed full save cannot leave a position row
+// paired with an instance the full save would not have written.
+func (s *session) saveTimeInstanceID() uint32 {
+	if !s.nearTeleportPending {
+		return s.player.InstanceID
+	}
+	if s.server != nil && s.server.Data != nil {
+		if mapEntry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && (mapEntry.IsBattleground() || mapEntry.IsBattleArena()) {
+			return s.bgData.InstanceID
+		}
+	}
+	return 0
+}
+
 func (s *session) savePlayerPosition(ctx context.Context) error {
 	if !s.playerLoaded || s.player == nil {
 		return nil
@@ -4513,6 +4532,20 @@ func (s *session) savePlayerPosition(ctx context.Context) error {
 	}
 	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER_POSITION", x, y, z, orientation, s.player.Map, s.player.Zone, s.player.GUID)
 	if err != nil {
+		return err
+	}
+	// CHAR_UPD_CHARACTER_POSITION carries no instance column, but the full
+	// save writes position, map and instance as one triple (CHAR_UPD_CHARACTER
+	// inside Player::SaveToDB's single transaction, Player.cpp:19500-19506):
+	// a fallback that advances position while leaving the previously saved
+	// instance would pair the new coords with a stale instance — under a
+	// pending near teleport, the origin dungeon instance on the destination
+	// coords, the pair the save-time rule rewrites to 0/bgData. Write the
+	// same value the full save would have written, so the fallback row stays
+	// a consistent triple; a failure here leaves the new position with the
+	// old instance, the pre-existing transport-leg failure mode, and the
+	// error surfaces to the caller.
+	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET instance_id = ? WHERE guid = ?", s.saveTimeInstanceID(), s.player.GUID); err != nil {
 		return err
 	}
 	// CHAR_UPD_CHARACTER_POSITION zeroes the transport columns, so a
@@ -4578,15 +4611,7 @@ func (s *session) savePlayerState(ctx context.Context, online uint32, logout boo
 		// map's instance-0 bucket, invisible to the roster keyed on
 		// bgData.InstanceID — the same value the logout-loop arm repairs
 		// use. A failed map lookup falls back to the C++ literal 0.
-		if s.server != nil && s.server.Data != nil {
-			if mapEntry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && (mapEntry.IsBattleground() || mapEntry.IsBattleArena()) {
-				stateCopy.InstanceID = s.bgData.InstanceID
-			} else {
-				stateCopy.InstanceID = 0
-			}
-		} else {
-			stateCopy.InstanceID = 0
-		}
+		stateCopy.InstanceID = s.saveTimeInstanceID()
 	}
 	state := &stateCopy
 	// Player::SaveToDB (Player.cpp:19584/19709): logout_time is stamped
