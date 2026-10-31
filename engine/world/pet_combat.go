@@ -3074,7 +3074,11 @@ func petTickHealDoneLegs(owner *session, ctx context.Context, motion *creatureMo
 		}
 		heal = uint32(tmp)
 	}
-	if out := owner.applySpellMod(spell, spellModDot, int32(heal)); out < 0 {
+	var modOwner *session
+	if owner != nil {
+		modOwner = owner.server.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+	}
+	if out := modOwner.applySpellMod(spell, spellModDot, int32(heal)); out < 0 {
 		heal = 0
 	} else {
 		heal = uint32(out)
@@ -3105,8 +3109,9 @@ func (s *session) petPeriodicApplyDoneLegs(ctx context.Context, motion *creature
 	// foldFlat applies the flat DoneTotal and the mod-owner SPELLMOD_DOT
 	// tail; the DmgClassNONE-no-row early-out (Unit.cpp:6707-6710,
 	// 7583-7587) applies only the pct leg, never the spellmod.
+	modOwner := s.server.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
 	foldTail := func(value uint32) uint32 {
-		if out := s.applySpellMod(spell, spellModDot, int32(value)); out < 0 {
+		if out := modOwner.applySpellMod(spell, spellModDot, int32(value)); out < 0 {
 			return 0
 		} else {
 			return uint32(out)
@@ -6017,10 +6022,11 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 	}
 	// AuraEffect::CalculatePeriodic (SpellAuraEffects.cpp:596-599): a pet
 	// caster's SPELLMOD_ACTIVATION_TIME mods fold through the spellmod owner
-	// (the pet's owner — this session). The haste legs read the pet's own
-	// UNIT_MOD_CAST_SPEED, which has no Go model.
+	// (the pet's owner; nil for a possessed wild caster). The haste legs read
+	// the pet's own UNIT_MOD_CAST_SPEED, which has no Go model.
 	if periodMs > 0 {
-		periodMs = uint32(max(s.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
+		modOwner := s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID)
+		periodMs = uint32(max(modOwner.applySpellMod(spell, spellModActivationTime, int32(periodMs)), 1))
 	}
 	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
 		// Aura::_casterInfo.ApplyResilience (SpellAuras.cpp:450): captured at
@@ -6484,8 +6490,8 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 			// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the owner's
 			// SPELLMOD_CRITICAL_CHANCE folds into the done chance — the
 			// mod arm has no done-gate in C++.
-			if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
-				chance = float64(s.applySpellMod(hs, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+			if modOwner := s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID); modOwner != nil {
+				chance = float64(modOwner.applySpellMod(hs, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 			}
 			isCrit = chance > 0 && rand.Float64() < chance
 			if isCrit {
@@ -7028,7 +7034,8 @@ func (s *session) petSpellMissVerdict(ctx context.Context, caster *creatureMotio
 		return protocol.SpellMissNone
 	}
 	if petSpellKnown {
-		baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
+		modOwner := s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID)
+		baseHit = modOwner.applySpellMod(petSpell, spellModResistMissChance, baseHit)
 	}
 	if miss := magicSpellHitResultFromBase(float64(baseHit), bonusHit); miss != protocol.SpellMissNone {
 		return miss
@@ -7090,16 +7097,17 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 		// WorldObject::MagicSpellHitResult (Object.cpp:2534-2536): the
 		// SPELLMOD_RESIST_MISS_CHANCE arm runs on the pet's mod owner —
-		// the owner player (Object.cpp:2246-2261), whose registry is this
-		// session's — folding the int32 level-diff base before the aura
-		// legs.
+		// the owner player (Object.cpp:2246-2261); nil for a possessed
+		// wild caster — folding the int32 level-diff base before the
+		// aura legs.
 		baseHit := int32(magicSpellHitBase(uint8(maxUint32(caster.Level, 1)), target.Level, isPlayerVictim))
 		var petSpell wotlk.Spell
 		petSpellKnown := false
 		if s.server != nil && s.server.Data != nil {
 			if ps, found, perr := s.server.Data.Spell(spellID); perr == nil && found {
 				petSpell, petSpellKnown = ps, true
-				baseHit = s.applySpellMod(petSpell, spellModResistMissChance, baseHit)
+				modOwner := s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID)
+				baseHit = modOwner.applySpellMod(petSpell, spellModResistMissChance, baseHit)
 			}
 		}
 		// SpellHitResult immune head (Object.cpp:2617-2627) on the
@@ -7227,10 +7235,10 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// fold runs unconditionally — no done-gate before it.
 			// Unit::SpellCritChanceDone (Unit.cpp:7209-7210): the
 			// owner's SPELLMOD_CRITICAL_CHANCE folds in via
-			// GetSpellModOwner() — the calling session is the pet's
-			// owner player.
-			if caster.OwnerGUID != 0 && s.player != nil && caster.OwnerGUID == s.playerGUID {
-				chance = float64(s.applySpellMod(critSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
+			// GetSpellModOwner() — the pet's mod owner, nil for a
+			// possessed wild caster.
+			if modOwner := s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID); modOwner != nil {
+				chance = float64(modOwner.applySpellMod(critSpell, spellModCriticalChance, int32(math.Round(chance*100)))) / 100.0
 			}
 			if critSpell.DefenseType == spellDamageClassMagic || critSpell.DefenseType == spellDamageClassMelee || critSpell.DefenseType == spellDamageClassRanged {
 				// Unit::SpellCritChanceTaken (Unit.cpp:7228-7240):
