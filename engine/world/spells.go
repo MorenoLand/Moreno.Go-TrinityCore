@@ -35676,7 +35676,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// SetCharmedBy as 6 SPELL_AURA_MOD_CHARM (CHARM_TYPE_CONVERT vs
 	// CHARM_TYPE_CHARM — Go's charmCreature does not model the charm
 	// type). Both run only in AURA_EFFECT_HANDLE_REAL mode.
-	if eff.Aura == spellAuraCharm || eff.Aura == spellAuraAoeCharm {
+	// AuraEffect::HandleModPossess (SpellAuraEffects.cpp:2866-2886):
+	// a creature caster falls back to HandleModCharm, so only a player
+	// charmer takes the CHARM_TYPE_POSSESS arm (POSSESSED flag on the
+	// target, REMOVE_CLIENT_CONTROL on the charmer, PossessSpellInitialize
+	// bar); a creature-cast possess rides the charm body below.
+	if eff.Aura == spellAuraCharm || eff.Aura == spellAuraAoeCharm || eff.Aura == spellAuraModPossess {
 		// Unit::SetCharmedBy (Unit.cpp): the charmer is the aura's caster —
 		// the recorded CasterGUID, not the casting session — and the charmed
 		// unit takes the charmer's faction. The common player-charm case is
@@ -35691,11 +35696,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// triggered (castSpellDirect skips the CheckCast mounted gate).
 		// findSessionByGUID is non-nil only for players, matching C++'s
 		// charmer->GetTypeId() == TYPEID_PLAYER gate.
+		var charmerSess *session
 		if s.server != nil {
-			if charmerSess := s.server.findSessionByGUID(charmer); charmerSess != nil {
+			if cs := s.server.findSessionByGUID(charmer); cs != nil {
+				charmerSess = cs
 				charmerSess.removeAurasByType(spellAuraMounted)
 			}
 		}
+		// HandleModPossess's ASSERT (type != CHARM_TYPE_POSSESS ||
+		// charmer is a player): the possess arm runs only when the
+		// charmer resolves to a live player session; anything else
+		// (a creature caster, an unresolvable GUID) rides the charm
+		// fallback C++ itself uses for creature casters.
+		possess := eff.Aura == spellAuraModPossess && charmerSess != nil && charmerSess.player != nil
 		charmerFaction := s.server.raceFaction(s.player.Race)
 		if charmer != s.playerGUID && s.server != nil {
 			if cs := s.server.findSessionByGUID(charmer); cs != nil && cs.player != nil {
@@ -35704,10 +35717,23 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				charmerFaction = m.Faction
 			}
 		}
-		spells, reactState, commandState, controlled := s.server.charmCreatureFaction(ctx, targetKey, charmer, charmerFaction)
+		spells, reactState, commandState, controlled := s.server.charmCreatureFaction(ctx, targetKey, charmer, charmerFaction, possess)
 		if controlled {
-			s.sendClientControl(targetGUID, true)
-			s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
+			if possess {
+				// Unit::SetCharmedBy CHARM_TYPE_POSSESS
+				// (Unit.cpp:11879-11885): the charmer loses client
+				// control of itself (REMOVE_CLIENT_CONTROL, which the
+				// player update below broadcasts) and gains control of
+				// the target, with the possess bar in place of the
+				// charm bar.
+				charmerSess.player.UnitFlags |= unitFlagRemoveClientControl
+				charmerSess.sendPlayerUnitFlagsUpdate()
+				charmerSess.sendClientControl(targetGUID, true)
+				charmerSess.sendPossessPetSpells(targetGUID, spells)
+			} else {
+				s.sendClientControl(targetGUID, true)
+				s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
+			}
 		}
 	}
 	// AuraEffect::HandleAuraDummy scripted arms
@@ -40488,7 +40514,7 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 	if s.server.activeCreatureAuras != nil {
 		if auras, ok := s.server.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
-				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm
+				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm || aura.AuraType == spellAuraModPossess
 				charmerGUID = aura.CasterGUID
 				// The remove arm of AuraEffect::HandleModTaunt
 				// (SpellAuraEffects.cpp:2772-2781): dropping the MOD_TAUNT
@@ -40732,7 +40758,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				auraWasPresent = true
-				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm
+				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm || aura.AuraType == spellAuraModPossess
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID

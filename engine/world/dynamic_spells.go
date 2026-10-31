@@ -411,7 +411,7 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil &&
 				!aura.Stopped && aura.CasterGUID == casterGUID && aura.PersistentAreaAura {
-				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm
+				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm || aura.AuraType == spellAuraModPossess
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID

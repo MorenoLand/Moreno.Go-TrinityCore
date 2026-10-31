@@ -329,6 +329,7 @@ type creatureMotion struct {
 	ObjectSlots    [4]uint64 // Unit::m_ObjectSlot[4] (Unit.h): the GUIDs of the game objects summoned by SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 on this creature, mirroring the player ObjectSlots twin (player_state.go)
 	CharmerGUID    uint64
 	Charmed        bool
+	Possessed      bool // CHARM_TYPE_POSSESS marker: drives the uncharm POSSESSED-flag and charmer REMOVE_CLIENT_CONTROL arms (HandleModPossess, SpellAuraEffects.cpp:2866)
 	CharmUnitFlags uint32
 	CharmFaction   uint32
 	CharmOwnerGUID uint64
@@ -1960,14 +1961,20 @@ func (s *Server) rearmAISpell(m *creatureMotion, spell wotlk.Spell, spellID uint
 }
 
 func (s *Server) charmCreature(ctx context.Context, key creatureAuraKey, charmerGUID uint64, charmerRace uint8) ([]uint32, uint8, uint8, bool) {
-	return s.charmCreatureFaction(ctx, key, charmerGUID, s.raceFaction(charmerRace))
+	return s.charmCreatureFaction(ctx, key, charmerGUID, s.raceFaction(charmerRace), false)
 }
 
 // charmCreatureFaction is the charmCreature twin keyed on the charmer's
 // faction directly: Unit::SetCharmedBy sets the charmed unit's faction from
 // the charmer's faction (Unit.cpp), and a creature charmer has no race to
-// map — the call site resolves its motion faction instead.
-func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, charmerGUID uint64, charmerFaction uint32) ([]uint32, uint8, uint8, bool) {
+// map — the call site resolves its motion faction instead. possess selects
+// the CHARM_TYPE_POSSESS arm (AuraEffect::HandleModPossess): the target
+// also gains UNIT_FLAG_POSSESSED, and the passive-cast cap is
+// MAX_CREATURE_SPELLS (8, CreatureData.h:144) instead of MAX_SPELL_CHARM
+// (4). A creature caster never reaches this arm — HandleModPossess falls
+// back to HandleModCharm for TYPEID_UNIT casters, so the call site passes
+// possess only for a player charmer.
+func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, charmerGUID uint64, charmerFaction uint32, possess bool) ([]uint32, uint8, uint8, bool) {
 	if s == nil || key.GUID == 0 || charmerGUID == 0 {
 		return nil, 0, 0, false
 	}
@@ -2005,6 +2012,14 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	}
 	motion.CharmerGUID = charmerGUID
 	motion.Charmed = true
+	if possess {
+		motion.Possessed = true
+		// Unit::SetCharmedBy CHARM_TYPE_POSSESS (Unit.cpp:11879-11885):
+		// the target gains UNIT_FLAG_POSSESSED (the charmer's
+		// REMOVE_CLIENT_CONTROL bit is the caller's, on the player
+		// session, not the motion).
+		motion.UnitFlags |= unitFlagPossessed
+	}
 	if charmerIsPlayer {
 		motion.UnitFlags |= unitFlagPlayerControlled
 	}
@@ -2028,11 +2043,18 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	// (ThreatManager.cpp:690-697): the charmed creature also drops as a
 	// victim from every other unit's threat table, with SMSG_THREAT_REMOVE.
 	s.removeThreatVictimFromAllLists(key.Map, key.InstanceID, key.GUID)
-	// CharmInfo::InitCharmCreateSpells (Unit.cpp:10003-10050): passive charm
-	// spells (MAX_SPELL_CHARM = 4, like the packet addlist) are cast on the
-	// charmed unit as triggered self-casts at charm time.
+	// CharmInfo::InitCharmCreateSpells (Unit.cpp:10003-10050) /
+	// InitPossessCreateSpells (Unit.cpp:9967-10001): passive charm
+	// spells (MAX_SPELL_CHARM = 4, like the packet addlist) are cast on
+	// the charmed unit as triggered self-casts at charm time; the
+	// possess arm casts the creature's own spells up to
+	// MAX_CREATURE_SPELLS (8).
+	passiveCap := 4
+	if possess {
+		passiveCap = 8
+	}
 	if s.Data != nil {
-		for x := 0; x < len(spells) && x < 4; x++ {
+		for x := 0; x < len(spells) && x < passiveCap; x++ {
 			if spells[x] == 0 {
 				continue
 			}
@@ -2057,9 +2079,11 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 		return
 	}
 	lastCharmer := motion.CharmerGUID
+	wasPossessed := motion.Possessed
 	passive := isCreaturePassive(motion)
 	motion.Charmed = false
 	motion.CharmerGUID = 0
+	motion.Possessed = false
 	// Unit::SetCharm (Unit.cpp:6254-6274) on uncharm touches only the
 	// PLAYER_CONTROLLED bit (set when the charmed unit is a player or
 	// has a player owner/charmer, cleared otherwise) — it does not
@@ -2069,6 +2093,14 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	// mid-charm (feign-death UNK_29, school-immunity IMMUNE, Lua MOUNT)
 	// instead of wiping them with the banked word.
 	motion.UnitFlags = motion.UnitFlags&^unitFlagPlayerControlled | motion.CharmUnitFlags&unitFlagPlayerControlled
+	// The possess arm's target flag clears unconditionally: the banked
+	// pre-charm word never carries POSSESSED (a unit cannot be charmed
+	// twice — the already-charmed refusal above), and
+	// RemoveCharmedBy's CHARM_TYPE_POSSESS arm (Unit.cpp:11979-11986)
+	// removes it alongside the charmer-side arms below.
+	if wasPossessed {
+		motion.UnitFlags &^= unitFlagPossessed
+	}
 	motion.Faction = motion.CharmFaction
 	motion.OwnerGUID = motion.CharmOwnerGUID
 	motion.PetCommand = PetCommandStay
@@ -2090,6 +2122,20 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	flags, faction := motion.UnitFlags, motion.Faction
 	s.motionMu.Unlock()
 	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, rawGUID, map[int]uint32{unitFieldFlags: flags, unitFieldFaction: faction})
+	// Unit::RemoveCharmedBy CHARM_TYPE_POSSESS (Unit.cpp:11979-11986):
+	// the player charmer regains self-control (SetClientControl(charmer,
+	// true)) and drops UNIT_FLAG_REMOVE_CLIENT_CONTROL. The target-side
+	// control-off packet rides the remove-leg callers (as for charm);
+	// this state lives on the charmer's session, so it is not gated on
+	// the charmer sharing the creature's map — an offline charmer has no
+	// session left to carry a stale bit.
+	if wasPossessed && lastCharmer != 0 {
+		if cs := s.findSessionByGUID(lastCharmer); cs != nil && cs.player != nil {
+			cs.player.UnitFlags &^= unitFlagRemoveClientControl
+			cs.sendPlayerUnitFlagsUpdate()
+			cs.sendClientControl(lastCharmer, true)
+		}
+	}
 	// CreatureAI::OnCharmed (CreatureAI.cpp:54-70): the restored AI engages
 	// the last charmer unless passive (the EngageWithTarget 0.0f threat seed,
 	// Unit.cpp:8429-8438). ObjectAccessor::GetUnit only resolves live units

@@ -917,6 +917,47 @@ func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, react
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 }
 
+// sendPossessPetSpells generates SMSG_PET_SPELLS (0x179) with the possess
+// action bar — Player::PossessSpellInitialize (Player.cpp:21147-21171):
+// GUID, u16 0, u32 0, u32 0 (react/command/disable all zero, unlike the
+// charm bar's live react/command bytes), then CharmInfo::BuildActionBar,
+// then zero spell and cooldown counts (no addlist, unlike charm).
+// The bar is CharmInfo::InitEmptyActionBar plus InitPossessCreateSpells
+// (Unit.cpp:9967-10001): the attack command at slot 0, then the
+// creature's own spells (MAX_CREATURE_SPELLS = 8) as ACT_PASSIVE —
+// AddSpellToActionBar skips the COMMAND slot 0 and fills the first empty
+// spell-type slot, so spell i lands at slot i+1. The five
+// no-InitEmptyActionBar entries (23575/24783/27664/40281/28511) keep an
+// attack-free bar in C++; Go keeps the attack slot for all entries, the
+// same simplification the charm bar already makes.
+func (s *session) sendPossessPetSpells(creatureGUID uint64, spells []uint32) {
+	if s == nil || s.conn == nil || creatureGUID == 0 {
+		return
+	}
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(creatureGUID)
+	buf.WriteU16(0)
+	buf.WriteU32(0)
+	buf.WriteU32(0)
+	bar := [10]uint32{0x07000002, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000}
+	n := len(spells)
+	if n > 8 {
+		n = 8
+	}
+	for x := 0; x < n; x++ {
+		if spells[x] == 0 {
+			continue
+		}
+		bar[1+x] = spells[x] | (uint32(charmActPassive) << 24)
+	}
+	for i := 0; i < 10; i++ {
+		buf.WriteU32(bar[i])
+	}
+	buf.WriteU8(0) // spells count
+	buf.WriteU8(0) // cooldowns count
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+}
+
 // sendCancelExpectedRideVehicleAura sends SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA (0x49D).
 // Reference: Unit.cpp:8330-8331.
 func (s *session) sendCancelExpectedRideVehicleAura() {
