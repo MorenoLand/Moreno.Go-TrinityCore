@@ -602,6 +602,11 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if s.updateOfflineItemLoadState(ctx, &state) {
 		state.Equipment = s.loadEquipmentCache(ctx, state.GUID, "")
 	}
+	// Player::InitStatsForLevel (Player.cpp:2974, called from LoadFromDB
+	// :17917 before _LoadAuras): UNIT_FLAG_PLAYER_CONTROLLED must be set
+	// on the loaded player; the aura load below re-applies, so a landed
+	// 243 effect clears it again via the fold in loadPlayerAuras.
+	state.UnitFlags |= unitFlagPlayerControlled
 	_ = s.loadPlayerAuras(ctx, &state)
 	s.startPlayerAuraDurations()
 	s.loadGlyphAuras(&state)
@@ -3770,7 +3775,7 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	if state.MountDisplayID != 0 || state.UnitFlags&unitFlagMount != 0 {
 		unitFlags |= unitFlagMount
 	}
-	values[unitFieldFlags] = unitFlagPlayerControlled | unitFlags
+	values[unitFieldFlags] = unitFlags
 	values[unitFieldAttackTime] = 2000
 	values[unitFieldAttackTimeOffhand] = 2000
 	values[unitFieldBoundingRadius] = math.Float32bits(0.306349)
@@ -4590,13 +4595,13 @@ func (s *session) sendPlayerMountUpdate() {
 		flags &^= unitFlagMount
 	}
 	s.player.UnitFlags = flags
-	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldFlags: unitFlagPlayerControlled | flags, unitFieldMountDisplayID: s.player.MountDisplayID})
+	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldFlags: flags, unitFieldMountDisplayID: s.player.MountDisplayID})
 	if err != nil {
 		return
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldFlags: unitFlagPlayerControlled | flags, unitFieldMountDisplayID: s.player.MountDisplayID})
+		s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldFlags: flags, unitFieldMountDisplayID: s.player.MountDisplayID})
 	}
 	s.sendPlayerCollisionHeight()
 }
@@ -4609,7 +4614,7 @@ func (s *session) sendPlayerUnitFlagsUpdate() {
 		return
 	}
 	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{
-		unitFieldFlags:  unitFlagPlayerControlled | s.player.UnitFlags,
+		unitFieldFlags:  s.player.UnitFlags,
 		unitFieldFlags2: unitFlag2RegeneratePower | s.player.UnitFlags2,
 	})
 	if err != nil {
@@ -4617,7 +4622,7 @@ func (s *session) sendPlayerUnitFlagsUpdate() {
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	if s.server != nil {
-		s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldFlags: unitFlagPlayerControlled | s.player.UnitFlags, unitFieldFlags2: unitFlag2RegeneratePower | s.player.UnitFlags2})
+		s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldFlags: s.player.UnitFlags, unitFieldFlags2: unitFlag2RegeneratePower | s.player.UnitFlags2})
 	}
 }
 

@@ -304,6 +304,15 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 						state.UnitFlags |= unitFlagPreparation
 						break
 					}
+					if effectMask&(1<<uint(index)) != 0 && effect.Aura == spellAuraModFaction {
+						// AuraEffect::HandleAuraModFaction apply leg
+						// (SpellAuraEffects.cpp:4815-4819): a 243 effect clears
+						// UNIT_FLAG_PLAYER_CONTROLLED on a player target, so a
+						// DB-restored flag aura must clear the bit seeded at
+						// load, like the live apply leg clears it.
+						state.UnitFlags &^= unitFlagPlayerControlled
+						break
+					}
 				}
 			}
 		}

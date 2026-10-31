@@ -1744,7 +1744,7 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 			s.motionMu.Unlock()
 			if !hasAggro {
 				p.UnitFlags &^= unitFlagInCombat
-				fields[unitFieldFlags] = unitFlagPlayerControlled | p.UnitFlags
+				fields[unitFieldFlags] = p.UnitFlags
 				changed = true
 				inCombat = false
 			}
