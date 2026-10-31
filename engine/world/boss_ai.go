@@ -6080,6 +6080,12 @@ func (s *Server) creatureEffectCharge(ctx context.Context, m *creatureMotion, hi
 		mapID, instanceID := m.Map, m.InstanceID
 		s.motionMu.Unlock()
 		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, destX, destY, tz)
+		// MoveCharge (MotionMaster.cpp:698) runs a PointMovementGenerator
+		// spline, whose ticks land in UpdateSplinePosition ->
+		// UpdatePosition -> CreatureRelocation (Map.cpp:1136), so a
+		// charging vehicle base fans its passengers out like the
+		// teleport arms above.
+		s.syncCreatureVehiclePassengers(m)
 	}
 }
 
@@ -6099,6 +6105,12 @@ func (s *Server) creatureEffectChargeDest(ctx context.Context, m *creatureMotion
 	mapID, instanceID := m.Map, m.InstanceID
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, dx, dy, dz)
+	// MoveCharge (MotionMaster.cpp:698) runs a PointMovementGenerator
+	// spline, whose ticks land in UpdateSplinePosition ->
+	// UpdatePosition -> CreatureRelocation (Map.cpp:1136), so a
+	// charging vehicle base fans its passengers out like the
+	// teleport arms above.
+	s.syncCreatureVehiclePassengers(m)
 }
 
 // creatureEffectPullTowards mirrors Spell::EffectPullTowards
