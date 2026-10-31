@@ -4034,6 +4034,25 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	// queue with the session, and its recently-logout arm drops lag packets
 	// rather than requeueing them for a later login.
 	s.preLoginQueue = nil
+	// WorldSession::LogoutPlayer (WorldSession.cpp:499-500, 566-567)
+	// finishes a pending far transfer before starting the logout:
+	// HandleMoveWorldportAck runs the worldport admission, so the
+	// logout save carries the destination map and instance instead
+	// of the destination coords with the origin instance (teleportTo
+	// overwrites Map/coords at initiation, completeWorldPort assigns
+	// InstanceID only at the ack). Without this, an expiry logout
+	// landing in the far-teleport window saved that mismatched pair
+	// and left farTeleportPending set on the logged-out session, so
+	// a lagged worldport ack after a fresh login could run the ack
+	// leg on the new player. A failed completion that leaves the
+	// transfer pending stops the loop rather than spinning: the ack
+	// leg clears the flag on every traced path, and a fallback
+	// homebind re-arms it for one more pass.
+	for s.farTeleportPending && s.player != nil {
+		if !s.completeWorldPort(ctx) && s.farTeleportPending {
+			break
+		}
+	}
 	if !s.playerLoaded {
 		s.clearActiveAuras()
 		s.logoutAt = time.Time{}
