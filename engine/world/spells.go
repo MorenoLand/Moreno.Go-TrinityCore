@@ -22545,6 +22545,83 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		rejectTriggeredCast("caster dead on aura-triggered cast")
 		return
 	}
+	// CheckCast GO-immunity arm (Spell.cpp:5181-5186): no triggered
+	// exemption — a player caster under UNIT_FLAG_IMMUNE casting on a
+	// CannotBeUsedUnderImmunity GO fails silently. The funnel caster is
+	// always the session player, so the ToPlayer gate is structural, and
+	// only a GO wire target carries a GO target (GetGOTarget); the
+	// lost-target arm above already validated GO resolvability. Type
+	// resolution mirrors the client-path twin (live state first,
+	// template DB fallback).
+	if targetGUID != 0 && uint16(targetGUID>>48) == 0xF110 && s.playerGOImmunityBlocked() {
+		entry := uint32((targetGUID >> 24) & 0xFFFFFF)
+		lowGUID := uint32(targetGUID & 0x00FFFFFF)
+		var goType uint8
+		haveType := false
+		if goState, _ := s.server.getOrLoadGameObjectState(ctx, targetGUID, lowGUID, entry, s.player.Map, s.player.InstanceID); goState != nil {
+			goType, haveType = goState.Type, true
+		} else if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var t int64
+			if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+				"SELECT COALESCE(type, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&t); err == nil {
+				goType, haveType = uint8(t), true
+			}
+		}
+		if haveType && goCannotBeUsedUnderImmunity(goType, s.loadGameObjectTemplateData(ctx, entry)) {
+			rejectTriggeredCast("triggered cast on immunity-blocked gameobject while immune")
+			return
+		}
+	}
+	// CheckCast cooldown block (Spell.cpp:5188-5226): the
+	// allow-only-ability leg (5193-5195) is EXEMPT — TRIGGERED_FULL_MASK
+	// carries TRIGGERED_IGNORE_CASTER_AURASTATE (SpellDefines.h:145),
+	// and the arm opens on that flag test. The potion leg (5198-5199)
+	// is VACUOUS on this path — it opens on !IsIgnoringCooldowns(), and
+	// a full-mask triggered cast always ignores cooldowns (Spell.cpp:
+	// 7506-7509: TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD sits in the
+	// full mask), so no funnel cast, item or otherwise, reaches it; the
+	// live potion bridge stays on the client item path (items.go). The
+	// creature HasSpellCooldown leg (5216-5225) is vacuous — the funnel
+	// caster is always the session player. What binds is
+	// SpellHistory::IsReady (SpellHistory.cpp:190-199) with
+	// ignoreCategoryCooldown=true: the school-lockout arm (SILENCE
+	// prevention only, inside isSchoolLocked) and the spell-cooldown
+	// entry arm fire, while the category arm is skipped (HasCooldown,
+	// SpellHistory.cpp:473-487, returns early on
+	// ignoreCategoryCooldown). The funnel records no cooldowns itself
+	// (HandleCooldowns early-returns on IsIgnoringCooldowns, matching
+	// C++), so this gate only ever fires on client-recorded cooldowns —
+	// a triggered recast of a spell the player just cast directly. C++
+	// returns DONT_REPORT for aura-triggered casts and NOT_READY
+	// otherwise; the funnel rewrites every failure to DONT_REPORT
+	// (Spell.cpp:4171-4172), so rejectTriggeredCast covers both. The
+	// !IsPassive wrapper is live: passive triggered casts skip the block.
+	if spell.Attributes&spellAttr0Passive == 0 {
+		if s.isSchoolLocked(spell) {
+			rejectTriggeredCast("triggered spell school locked out")
+			return
+		}
+		nowUnix := time.Now().Unix()
+		for _, cd := range s.player.Cooldowns {
+			if cd.Spell == spellID && cd.End > nowUnix {
+				rejectTriggeredCast("triggered spell on cooldown")
+				return
+			}
+		}
+	}
+	// CheckCast cheat-spell arm (Spell.cpp:5223-5227): no triggered
+	// exemption and outside the !IsPassive wrapper, so it fires for
+	// passive triggered casts too. The GM test mirrors the client-path
+	// twin: Go tracks session GM state as the ExtraFlags GMOn /
+	// PlayerFlags GM pair (commands.go:391), the SetGameMaster(true)
+	// mirror, not the raw UNIT_FIELD_FLAGS_2 bit (the creature twin
+	// reads UnitFlags2 off the motion because motions carry no
+	// ExtraFlags pair).
+	if spell.AttributesEx7&spellAttr7IsCheatSpell != 0 &&
+		s.player.ExtraFlags&playerExtraGMOn == 0 && s.player.PlayerFlags&playerFlagGM == 0 {
+		rejectTriggeredCast("triggered cheat spell without gm mode")
+		return
+	}
 	// CheckCast outdoors/indoors arms (Spell.cpp:5238-5245): no triggered
 	// exemption.
 	if spell.Attributes&spellAttr0OutdoorsOnly != 0 && !s.isOutdoors() {
