@@ -1604,11 +1604,13 @@ func (s *Server) forwardPetAssistThreat(caster *creatureMotion, targetGUID uint6
 // possessed wild, matching GetCharmerOrOwnerPlayerOrPlayerItself). The
 // guard-relocation notifier has no Go twin (contested-guard hostility reads
 // contestedPvPActive live), and SetPvP's controlled-unit fan-out is the
-// player flag alone (characters.go:1608 precedent). No caster==target gate:
-// C++ has none for this leg, and a self-hit only refreshes the timer when
-// the owner is already contested.
+// player flag alone (characters.go:1608 precedent). The caster==target gate
+// is the PreprocessSpellHit outer gate (Spell.cpp:2737): it drops self-hits
+// and landed-reflect retargets (Spell.cpp:2350) alike, matching the 2761
+// forward's gate above — the pet loop routes reflected targets to the pet
+// GUID with no self skip of its own, so the gate lives here.
 func (s *Server) flagPetAssistContestedPvP(owner *session, caster *creatureMotion, targetGUID uint64) {
-	if s == nil || owner == nil || owner.player == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 {
+	if s == nil || owner == nil || owner.player == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 || targetGUID == caster.GUID {
 		return
 	}
 	// The arm lives in the friendly branch of PreprocessSpellHit.

@@ -5415,8 +5415,8 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// the target's combat states. The verdict gates mirror
 	// PreprocessTarget (Spell.cpp:2347-2351): missed, immune and evaded
 	// targets have no _spellHitTarget, and a clean reflect retargets the
-	// arms to the pet itself, which the caster!=target gate inside the
-	// forward helper then drops. Dedupe mirrors C++'s m_UniqueTargetInfo
+	// arms to the pet itself, which the caster!=target gates inside both
+	// helpers then drop. Dedupe mirrors C++'s m_UniqueTargetInfo
 	// iteration; GO targets fail the friendly gate inside the helpers.
 	// Heal-effect targets ride this loop too (hitTargets includes the
 	// friendly picks), so the contested leg covers pet heals with no
