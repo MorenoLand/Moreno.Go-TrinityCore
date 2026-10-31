@@ -37025,6 +37025,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
+		// SpellAuraEffects.cpp:5110-5112 — HandlePeriodicDamageAurasTick
+		// returns on !target->IsAlive() before the isolated arm below;
+		// Go ghosts carry Health==1, so the shared Health==0 gate passes
+		// them and DoT ticks would damage ghosts over time.
+		if ts.isDeadOrGhost() {
+			return
+		}
 		// SpellAuraEffects.cpp:5128 — ignore negative values (can result from
 		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
 		dmg := uint32(max(int32(aura.Amount), 0))
@@ -37588,8 +37595,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		energizePT := uint32(energizePower)
 		// SpellAuraEffects.cpp:5555-5556 — no max power, no tick (and no
-		// log). The dead-target arm is the tick dispatch's global gate.
+		// log); the !IsAlive term rides the same line, and Go ghosts
+		// carry Health==1, so the shared Health==0 gate passes them.
 		if int(energizePT) >= len(ts.player.MaxPowers) || ts.player.MaxPowers[energizePT] == 0 {
+			break
+		}
+		if ts.isDeadOrGhost() {
 			break
 		}
 		// SpellAuraEffects.cpp:5558-5561 — an isolated target skips the tick
@@ -37635,6 +37646,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 	case 53: // SPELL_AURA_PERIODIC_LEECH
+		// SpellAuraEffects.cpp:5231-5232 — HandlePeriodicHealthLeechAuraTick
+		// returns on !target->IsAlive() before the isolated arm below;
+		// Go ghosts carry Health==1, so the shared Health==0 gate passes
+		// them and leech ticks would damage ghosts and heal the caster.
+		if ts.isDeadOrGhost() {
+			return
+		}
 		// SpellAuraEffects.cpp:5248 — ignore negative values (can result from
 		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
 		dmg := uint32(max(int32(aura.Amount), 0))
@@ -37886,7 +37904,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// ForwardThreatForAssistingMe; Unit::HealBySpell, Unit.cpp:6561-6574,
 		// adds none); C++ sends no periodic log for the funnel heal, so
 		// none is sent here either.
-		if ts.server == nil || ts.player.Health == 0 {
+		// SpellAuraEffects.cpp:5324 — the target-alive gate: Go ghosts
+		// carry Health==1, so the Health==0 term passes them and the
+		// funnel would heal ghosts over time. The ghost donator pays
+		// nothing (funnelDonatorCost caps at Health-1 == 0), so no
+		// caster-side gate is needed.
+		if ts.server == nil || ts.player.Health == 0 || ts.isDeadOrGhost() {
 			break
 		}
 		// SpellAuraEffects.cpp:5328-5332 — an isolated target skips the tick
@@ -37956,7 +37979,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// naturally no-ops when the target's MaxPowers[powerType] is 0.
 		// The persistent-area-aura SpellHitResult gate is bridged by
 		// persistentAreaTickMissed at the top of this case.
-		if leechCaster == nil || leechCaster.player == nil || leechCaster.player.Health == 0 || ts.player.Health == 0 {
+		if leechCaster == nil || leechCaster.player == nil || leechCaster.player.Health == 0 || leechCaster.isDeadOrGhost() || ts.player.Health == 0 || ts.isDeadOrGhost() {
 			break
 		}
 		var tickSpell wotlk.Spell
@@ -38038,6 +38061,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if int(obsPowerType) >= len(ts.player.MaxPowers) || ts.player.MaxPowers[obsPowerType] == 0 {
 			break
 		}
+		// SpellAuraEffects.cpp:5519-5520 — the !IsAlive term rides the
+		// max-power line; Go ghosts carry Health==1, so the shared
+		// Health==0 gate passes them.
+		if ts.isDeadOrGhost() {
+			break
+		}
 		// SpellAuraEffects.cpp:5524-5528 — an isolated target skips the tick
 		// with SendTickImmune, ahead of the permanent full-power skip.
 		if isolated {
@@ -38094,7 +38123,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// C++ gates: caster and target alive, and the target's power type
 		// matches the effect. Go has no player PowerType model; the drain
 		// below no-ops when MaxPowers[burnPowerType] is 0.
-		if burnCaster == nil || burnCaster.player == nil || burnCaster.player.Health == 0 || ts.player.Health == 0 {
+		if burnCaster == nil || burnCaster.player == nil || burnCaster.player.Health == 0 || burnCaster.isDeadOrGhost() || ts.player.Health == 0 || ts.isDeadOrGhost() {
 			break
 		}
 		// SpellAuraEffects.cpp:5592-5596 — the immune gate
