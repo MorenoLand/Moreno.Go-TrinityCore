@@ -40,6 +40,13 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 	s.auras = make(map[uint32]struct{})
 	s.auraSlots = make(map[uint32]uint8)
 	s.activeAuras = make(map[uint32]*activeAura)
+	// A fresh Player object in C++ has no RestoreFaction history, so a
+	// DB-restored 243 aura forces its faction on load. The session object
+	// outlives a Player lifetime (one connection, many characters), and
+	// the live remove leg sets factionNativeAfterRemove; without this
+	// reset a relogger whose session previously removed any 243 aura
+	// would keep its race faction despite the restored record.
+	s.factionNativeAfterRemove = false
 	state.FakeInebriation = 0
 	offlineMs := int64(0)
 	if state.LogoutTime > 0 && time.Now().Unix() > state.LogoutTime {
