@@ -3413,6 +3413,18 @@ func petDestTrajOptions(motion *creatureMotion, target protocol.SpellTargetData)
 	return opts
 }
 
+// petEnemyConeKeeps reports whether guid takes one effect's enemy leg on
+// the pet path: a cone-leg effect on a mixed area+cone spell hits only
+// cone-selected units (boss-ai/inline bossConeEffectTargets precedent);
+// every other effect keeps the flat area list.
+func petEnemyConeKeeps(guid uint64, eff wotlk.SpellEffect, part bossConePartition, coneSet map[uint64]struct{}) bool {
+	if !part.enemyActive || !effectHasEnemyConeLeg(eff) {
+		return true
+	}
+	_, ok := coneSet[guid]
+	return ok
+}
+
 func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, castCount uint8, target protocol.SpellTargetData, triggered bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
@@ -4048,6 +4060,26 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				hitTargets = append(hitTargets, coneGUID)
 			} else {
 				hitTargets = append(hitTargets, coneGUID)
+			}
+		}
+	}
+	// Enemy-cone (24/54/104) twin of the friendly-cone block above:
+	// the enemy-area sweep already joins cone members into areaHits /
+	// areaCreatureHits, so nothing joins hitTargets here — the capture
+	// exists only for the per-effect partition below. Active when
+	// another area family rides the spell (boss-ai/inline precedent);
+	// a pure-cone spell needs no filter. The set mirrors the capture
+	// so the per-effect legs filter by membership instead of
+	// rebuilding the sweep.
+	petConePart := bossConePartition{}
+	var petEnemyConeSet map[uint64]struct{}
+	if isEnemyConeSpell(spell) {
+		petConePart.enemyTargets = s.server.creatureEnemyConeTargets(ctx, motion, spell)
+		petConePart.enemyActive = hasEnemyNonConeAreaEffect(spell) || hasFriendlyAreaEffect(spell) || isEntryAreaSpell(spell) || hasRefCenteredAreaEffect(spell) || isFriendlyConeSpell(spell)
+		if petConePart.enemyActive {
+			petEnemyConeSet = make(map[uint64]struct{}, len(petConePart.enemyTargets))
+			for _, coneGUID := range petConePart.enemyTargets {
+				petEnemyConeSet[coneGUID] = struct{}{}
 			}
 		}
 	}
@@ -5333,6 +5365,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 	}
+	// Whole-spell damage union (bossConeKindSet precedent): when every
+	// damage effect carries a cone leg of the active family, the grouped
+	// damage fan-out below hits cone members only; otherwise it keeps
+	// the flat area list.
+	damageConeSet := bossConeKindSet(spell, bossConeDamageEffect, petConePart)
 	if hasDamage {
 		// Unit::SpellDamageBonusDone (Unit.cpp:6681-6683, 6725-6731): the
 		// guardian's GetBonusDamage() rides the advertised benefit into the
@@ -5473,6 +5510,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// executePetSpellDamage, matching DoTargetSpellHit per target.
 		if damageAreaEnemy {
 			for _, areaHit := range areaHits {
+				if damageConeSet != nil {
+					if _, ok := damageConeSet[areaHit.GUID]; !ok {
+						continue
+					}
+				}
 				if rt := resolveReflectTarget(areaHit.GUID); rt != 0 {
 					reflectorGUID := uint64(0)
 					if reflectedSet[areaHit.GUID] {
@@ -5492,6 +5534,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// resolves to 0 and skips, exactly like the player area hits.
 		if damageAreaEnemy {
 			for _, areaCreatureGUID := range areaCreatureHits {
+				if damageConeSet != nil {
+					if _, ok := damageConeSet[areaCreatureGUID]; !ok {
+						continue
+					}
+				}
 				if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 {
 					reflectorGUID := uint64(0)
 					if reflectedSet[areaCreatureGUID] {
@@ -5742,9 +5789,15 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
 				for _, areaHit := range areaHits {
+					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+						continue
+					}
 					applyHeal(areaHit.GUID, -1)
 				}
 				for _, areaCreatureGUID := range areaCreatureHits {
+					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+						continue
+					}
 					applyHeal(areaCreatureGUID, -1)
 				}
 			}
@@ -5826,10 +5879,14 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						}
 					}
 					for _, areaHit := range areaHits {
-						areaTrigger(areaHit.GUID)
+						if petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+							areaTrigger(areaHit.GUID)
+						}
 					}
 					for _, areaCreatureGUID := range areaCreatureHits {
-						areaTrigger(areaCreatureGUID)
+						if petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+							areaTrigger(areaCreatureGUID)
+						}
 					}
 				}
 				if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
@@ -5904,11 +5961,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// the area legs run only when this dispel effect itself selects
 				// the area (effect-mask merge rule, Spell.cpp:866-897).
 				for _, areaHit := range areaHits {
+					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+						continue
+					}
 					if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
 						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaHit.GUID])
 					}
 				}
 				for _, areaCreatureGUID := range areaCreatureHits {
+					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+						continue
+					}
 					if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
 						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[areaCreatureGUID])
 					}
@@ -5963,11 +6026,17 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
 				for _, areaHit := range areaHits {
+					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+						continue
+					}
 					if rt := resolveReflectTarget(areaHit.GUID); rt != 0 && !immuneSet[areaHit.GUID] && !missedTarget(areaHit.GUID) {
 						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
 					}
 				}
 				for _, areaCreatureGUID := range areaCreatureHits {
+					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+						continue
+					}
 					if rt := resolveReflectTarget(areaCreatureGUID); rt != 0 && !immuneSet[areaCreatureGUID] && !missedTarget(areaCreatureGUID) {
 						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
 					}
@@ -6036,9 +6105,15 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
 				for _, areaHit := range areaHits {
-					instaTargets = append(instaTargets, areaHit.GUID)
+					if petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+						instaTargets = append(instaTargets, areaHit.GUID)
+					}
 				}
-				instaTargets = append(instaTargets, areaCreatureHits...)
+				for _, areaCreatureGUID := range areaCreatureHits {
+					if petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+						instaTargets = append(instaTargets, areaCreatureGUID)
+					}
+				}
 			}
 			if wanted := petAreaAllyWantedMask(effect.ImplicitTargetA, effect.ImplicitTargetB); wanted != 0 {
 				for _, areaHit := range areaAllyHits {
@@ -6122,6 +6197,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// A plain ApplyAura effect with an area-enemy target selects the same area (Spell.cpp:1227).
 			if (effect.Effect == spellEffectApplyAreaAuraEnemy || effect.Effect == spellEffectApplyAura) && (isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB)) {
 				for _, areaHit := range areaHits {
+					if !petEnemyConeKeeps(areaHit.GUID, effect, petConePart, petEnemyConeSet) {
+						continue
+					}
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaHit.GUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(areaHit.GUID)
@@ -6145,6 +6223,9 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// downrank map above already covers these GUIDs
 				// through hitTargets.
 				for _, areaCreatureGUID := range areaCreatureHits {
+					if !petEnemyConeKeeps(areaCreatureGUID, effect, petConePart, petEnemyConeSet) {
+						continue
+					}
 					aSpell, aEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, areaCreatureGUID)
 					aDurationMs := petAuraDuration(s.server, aSpell, motion)
 					aVictimGUID := resolveReflectTarget(areaCreatureGUID)
