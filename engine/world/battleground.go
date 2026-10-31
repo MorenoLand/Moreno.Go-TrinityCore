@@ -4220,6 +4220,39 @@ func (s *session) armAFKIdleProgression() {
 	})
 }
 
+// enteredNonArenaBGInstance returns the InstanceID of sess's entered
+// (Active, InProgress) non-arena slot, if any: the Go form of C++
+// GetBattleground() for a sim match. InstanceIDs are minted monotonically
+// (battleground_mgr.go) and shared only by a group sim pop, so equality
+// of two sessions' values is the same-match predicate — two solo sims
+// on the same map hold distinct IDs and never match, where a map-only
+// gate would conflate them.
+func enteredNonArenaBGInstance(sess *session) (uint32, bool) {
+	if sess == nil {
+		return 0, false
+	}
+	for i := range sess.bgQueues {
+		e := &sess.bgQueues[i]
+		if e.Active && !e.IsArena && e.Status == BGStatusInProgress && e.InstanceID != 0 {
+			return e.InstanceID, true
+		}
+	}
+	return 0, false
+}
+
+// inLiveBGForAFK reports whether sess is in a live battleground for the
+// AFK chain: a live arena roster, or an entered non-arena sim slot.
+func (s *session) inLiveBGForAFK() bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	if s.server.findArenaStateForPlayer(s.playerGUID) != nil {
+		return true
+	}
+	_, ok := enteredNonArenaBGInstance(s)
+	return ok
+}
+
 // progressAFKIdle is the Idle periodic-trigger tick: a still-present,
 // still-rostered Idle becomes Inactive, and the kick timer starts. A
 // logged-out session (player nil) or a lost roster membership skips the
@@ -4235,7 +4268,7 @@ func (s *session) progressAFKIdle(gen uint64) {
 	if current != gen || !s.hasAura(bgAFKIdleSpellID) {
 		return
 	}
-	if s.server == nil || s.server.findArenaStateForPlayer(s.playerGUID) == nil {
+	if !s.inLiveBGForAFK() {
 		return
 	}
 	s.removeAura(bgAFKIdleSpellID)
@@ -4253,7 +4286,9 @@ func (s *session) progressAFKIdle(gen uint64) {
 // (SpellAuraEffects.cpp:4492): a still-present, still-rostered Inactive
 // leaves the battleground through the leave funnel, which runs the
 // arena erase + win check (and no deserter: arenas are not
-// battlegrounds for LeaveBattleground's deserter arms).
+// battlegrounds for LeaveBattleground's deserter arms). For a non-arena
+// slot the same funnel runs LeaveBattleground's deserter cast + track,
+// matching C++ LeaveBattleground on an Inactive-expire kick.
 func (s *session) kickAFKInactive(gen uint64) {
 	if s == nil || !s.playerLoaded || s.player == nil {
 		return
@@ -4264,7 +4299,7 @@ func (s *session) kickAFKInactive(gen uint64) {
 	if current != gen || !s.hasAura(honorAuraInactiveID) {
 		return
 	}
-	if s.server == nil || s.server.findArenaStateForPlayer(s.playerGUID) == nil {
+	if !s.inLiveBGForAFK() {
 		return
 	}
 	s.handleLeaveBattlefield(context.Background(), nil, false, false)
@@ -4310,18 +4345,27 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 
 	// Player::ReportedAfkBy (Player.cpp:22526-22529): the report only counts when both
 	// players share the same live battleground, that battleground is in progress, and
-	// both are on the same team. Go has no live battleground instance model outside
-	// arenas, so the gates are mapped onto the live arena state; reports on non-arena
-	// maps are silent no-ops, as they would be in C++ with GetBattleground() null.
-	arena := s.server.findArenaStateForPlayer(s.playerGUID)
-	if arena == nil {
-		return true
+	// both are on the same team. The arena arm maps the gates onto the live arena
+	// state; the non-arena arm maps them onto entered sim slots — same shared
+	// InstanceID (the same-match predicate; solo sims mint distinct IDs, so
+	// cross-sim reports still fail exactly as C++ cross-instance reports do)
+	// plus the same faction team. A map-only gate would conflate distinct
+	// sim matches on one map and is not used.
+	gates := false
+	if arena := s.server.findArenaStateForPlayer(s.playerGUID); arena != nil {
+		arena.mu.Lock()
+		reporterTeam, reporterIn := arena.PlayerTeams[s.playerGUID]
+		targetTeam, targetIn := arena.PlayerTeams[targetGUID]
+		gates = reporterIn && targetIn && reporterTeam == targetTeam && arena.Status == ArenaStatusInProgress
+		arena.mu.Unlock()
 	}
-	arena.mu.Lock()
-	reporterTeam, reporterIn := arena.PlayerTeams[s.playerGUID]
-	targetTeam, targetIn := arena.PlayerTeams[targetGUID]
-	gates := reporterIn && targetIn && reporterTeam == targetTeam && arena.Status == ArenaStatusInProgress
-	arena.mu.Unlock()
+	if !gates {
+		s.server.sessionsMu.RLock()
+		repInst, repOK := enteredNonArenaBGInstance(s)
+		tgtInst, tgtOK := enteredNonArenaBGInstance(targetSess)
+		s.server.sessionsMu.RUnlock()
+		gates = repOK && tgtOK && repInst == tgtInst && teamForRace(s.player.Race) == teamForRace(targetSess.player.Race)
+	}
 	if !gates {
 		return true
 	}
