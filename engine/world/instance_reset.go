@@ -436,7 +436,16 @@ func (s *Server) resetInstanceGlobal(ctx context.Context, key instanceResetKey) 
 // so a normal instance is never reset while players are inside.
 // Go keeps no loaded maps; a worldReady session admitted to the
 // map/instance pair (the hasActiveWorldportInstance signal) is the
-// occupancy equivalent, GMs included as in C++ HavePlayers.
+// occupancy equivalent, GMs included as in C++ HavePlayers. A session
+// in the ack window also counts: completeWorldPort assigns
+// player.InstanceID at selection (characters.go:1673) while worldReady
+// is still false (it commits only at admission), so a worldReady-only
+// test let the sweep delete the row and binds under an acking player
+// whose flag-gated persist then recreates nothing, where C++
+// InstanceMap::AddPlayerToMap recreates the save on entry
+// (Map.cpp:3887-3892). The player's live Map is already the dest map
+// (teleportToOptions overwrites it at initiation), so the Map match
+// keeps a pre-ack transfer from counting toward its origin instance.
 func (s *Server) instanceHasLivePlayers(mapID, instanceID uint32) bool {
 	if s == nil {
 		return false
@@ -445,10 +454,13 @@ func (s *Server) instanceHasLivePlayers(mapID, instanceID uint32) bool {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
-		if sess == nil || !sess.worldReady.Load() {
+		if sess == nil {
 			continue
 		}
-		if sess.worldInstance.Load() == target {
+		if sess.worldReady.Load() && sess.worldInstance.Load() == target {
+			return true
+		}
+		if sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
 			return true
 		}
 	}
