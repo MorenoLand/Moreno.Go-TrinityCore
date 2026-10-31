@@ -4548,6 +4548,20 @@ func (s *session) savePlayerPosition(ctx context.Context) error {
 	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET instance_id = ? WHERE guid = ?", s.saveTimeInstanceID(), s.player.GUID); err != nil {
 		return err
 	}
+	// CHAR_UPD_CHARACTER_POSITION also clears taxi_path and forces
+	// cinematic = 1 — correct at its C++ call sites (faction-change
+	// relocation, offline instance-reset graveyard move), where the
+	// player is not mid-flight, but not here: the full save writes the
+	// live taxi destinations and cinematic flag, and a failed full save
+	// in C++ leaves the whole old row untouched. A mid-flight logout is
+	// instant, completeLogout never clears TaxiPath, and login resumes
+	// the flight from the saved string (continueTaxiFlight), so a wipe
+	// would strand the player at saved mid-flight coords with no flight.
+	// Restore both live values before the transport legs below, which
+	// return early when no transport is attached.
+	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET taxi_path = ?, cinematic = ? WHERE guid = ?", s.player.TaxiPath, s.player.Cinematic, s.player.GUID); err != nil {
+		return err
+	}
 	// CHAR_UPD_CHARACTER_POSITION zeroes the transport columns, so a
 	// fallback save during a transport pending — or a plain logout on a
 	// transport — would strand the player transportless at world
