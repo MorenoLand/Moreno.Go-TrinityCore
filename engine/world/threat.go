@@ -1650,6 +1650,70 @@ func (s *Server) flagPetAssistContestedPvP(owner *session, caster *creatureMotio
 	}
 }
 
+// flagPlayerAssistContestedPvP runs the Spell::PreprocessSpellHit
+// contested-PvP arm (Spell.cpp:2752-2757) for a player cast: a hit on a
+// friendly target carrying UNIT_STATE_ATTACK_PLAYER flags the caster
+// contested (SetContestedPvP) and PvP-flagged (UpdatePvP(true)).
+// GetCharmerOrOwnerPlayerOrPlayerItself is the player itself here, so
+// the caster side is this session. The arm has no initial-aggro,
+// positivity, or Speed gate: it fires for any spell hit, which is why
+// callers run it from the PreprocessTarget position ahead of the effect
+// loops, over live hit targets only (misses carry no _spellHitTarget,
+// Spell.cpp:2347-2351; a clean reflect retargets to the caster, dropped
+// by the self gate). The friendly gate is isFriendlyLaunchTarget, the
+// established PreprocessSpellHit-arm twin (breakHitBySpellAuras
+// precedent); its same-raid cross-faction and forced-rank arms are
+// unmodeled there, so those targets read non-friendly here too. FFA is
+// corrected in this helper: both players FFA-flagged read HOSTILE in
+// C++ (Object.cpp GetReactionTo), not friendly. The target
+// ATTACK_PLAYER read reuses the pet helper's model: a player target
+// reads its own contested flag+timer, a creature target reads it
+// through its charmer/owner session, a wild creature never carries it.
+func (s *session) flagPlayerAssistContestedPvP(ctx context.Context, targetGUID uint64) {
+	if s == nil || s.server == nil || s.player == nil || targetGUID == 0 || targetGUID == s.playerGUID {
+		return
+	}
+	if !s.isFriendlyLaunchTarget(ctx, targetGUID) {
+		return
+	}
+	now := time.Now()
+	targetAttackPlayer := false
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		if ts.player.Map == s.player.Map && ts.player.InstanceID == s.player.InstanceID {
+			if s.player.PVPFlags&pvpFlagFFA != 0 && ts.player.PVPFlags&pvpFlagFFA != 0 {
+				return
+			}
+			targetAttackPlayer = ts.contestedPvPActive(now)
+		}
+	} else if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+		for _, guid := range []uint64{tm.CharmerGUID, tm.OwnerGUID} {
+			if guid == 0 {
+				continue
+			}
+			if os := s.server.findSessionByGUID(guid); os != nil && os.player != nil && os.player.Map == s.player.Map && os.player.InstanceID == s.player.InstanceID {
+				targetAttackPlayer = os.contestedPvPActive(now)
+				break
+			}
+		}
+	}
+	if !targetAttackPlayer {
+		return
+	}
+	// Player::SetContestedPvP (Player.cpp:20725-20747): the 30s timer
+	// refreshes unconditionally, the flag sets once.
+	// Player::UpdatePvP(true) (Player.cpp:22196-22210): SetPvP(true) with
+	// EndTimer = now, so the 5-minute toggle-off countdown runs from
+	// this hit.
+	changed := s.player.PlayerFlags&playerFlagContestedPVP == 0 || s.player.PVPFlags&pvpFlagPvP == 0
+	s.player.PlayerFlags |= playerFlagContestedPVP
+	s.contestedPVPEnd = now.Add(30 * time.Second)
+	s.player.PVPFlags |= pvpFlagPvP
+	s.pvpEnd = now
+	if changed {
+		s.sendPlayerUpdate()
+	}
+}
+
 // distributeHealingThreatLocked fans totalThreat out to every engaged creature
 // on the map. healerSess is the player healer's session (nil for creature
 // healers, which never register threat redirects). Callers hold no locks.

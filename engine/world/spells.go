@@ -12943,6 +12943,45 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			s.breakHitBySpellAuras(effCtx, spell, guid)
 		}
+		// Spell::PreprocessSpellHit (Spell.cpp:2752-2757) contested-PvP
+		// arm, at the same PreprocessTarget position and over the same
+		// target set as the HITBYSPELL pass above: live hit targets plus
+		// both friendly partitions, deduped, missed partitions skipped
+		// (no _spellHitTarget), clean-reflect caster entries dropped by
+		// the helper's self gate. Ahead of the effect loops below, so
+		// the C++ preprocess-before-effects order holds; the flag is
+		// idempotent, so pass order within the set does not matter.
+		// Delayed casts reach this closure only after the arrival
+		// revalidation above, matching handle_delayed's per-target
+		// PreprocessTarget at arrival.
+		contestedSeen := make(map[uint64]struct{}, len(hitTargets))
+		for _, guid := range hitTargets {
+			if _, dup := contestedSeen[guid]; dup {
+				continue
+			}
+			contestedSeen[guid] = struct{}{}
+			s.flagPlayerAssistContestedPvP(effCtx, guid)
+		}
+		for _, guid := range friendlyEffectTargets {
+			if _, dup := contestedSeen[guid]; dup {
+				continue
+			}
+			contestedSeen[guid] = struct{}{}
+			if _, missed := missedSet[guid]; missed {
+				continue
+			}
+			s.flagPlayerAssistContestedPvP(effCtx, guid)
+		}
+		for _, guid := range refCenteredFriendlyTargets {
+			if _, dup := contestedSeen[guid]; dup {
+				continue
+			}
+			contestedSeen[guid] = struct{}{}
+			if _, missed := missedSet[guid]; missed {
+				continue
+			}
+			s.flagPlayerAssistContestedPvP(effCtx, guid)
+		}
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2563-2579): failed
 		// pickpocket reveal. A SPELL_ATTR0_CU_PICKPOCKET spell resisted by a
 		// creature removes the caster's TALK-interrupt-flag auras (stealth
@@ -24092,6 +24131,27 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			continue
 		}
 		s.breakHitBySpellAuras(ctx, spell, partGUID)
+	}
+	// Spell::PreprocessSpellHit (Spell.cpp:2752-2757) contested-PvP
+	// arm on the triggered path, over the same merged TargetInfo set
+	// the break passes above assembled (selection, jumps, primaries,
+	// nearby picks, both friendly partitions), minus triggeredMiss
+	// entries (no _spellHitTarget) and minus the caster (helper self
+	// gate, covering the clean-reflect retarget). winSecondPrimary is
+	// not in brokenSet unless it rides a chain primary, so it joins
+	// explicitly. The flag is idempotent, so map iteration order does
+	// not matter; the pass sits ahead of the effect loop, at the
+	// PreprocessTarget position.
+	for guid := range brokenSet {
+		if _, missed := triggeredMiss[guid]; missed {
+			continue
+		}
+		s.flagPlayerAssistContestedPvP(ctx, guid)
+	}
+	if winSecondPrimary != 0 {
+		if _, missed := triggeredMiss[winSecondPrimary]; !missed {
+			s.flagPlayerAssistContestedPvP(ctx, winSecondPrimary)
+		}
 	}
 	// Per-(cast, target) first-merge marker for the aura re-apply path
 	// (Spell.cpp:2842): only the first aura effect per target runs the
