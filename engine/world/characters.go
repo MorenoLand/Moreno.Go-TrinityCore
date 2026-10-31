@@ -4047,9 +4047,42 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	// leg on the new player. A failed completion that leaves the
 	// transfer pending stops the loop rather than spinning: the ack
 	// leg clears the flag on every traced path, and a fallback
-	// homebind re-arms it for one more pass.
+	// homebind re-arms it for one more pass. A completion that fails
+	// WITHOUT re-arming (a packet-build, persist, or late-write
+	// failure after completeWorldPort assigned the new InstanceID)
+	// must not reach the logout save either: the save would claim a
+	// dungeon instance whose row and bind were never persisted, and
+	// the next login would recover to homebind instead of entering
+	// it. MovementHandler.cpp:122-126 (HandleMoveWorldportAck) sends
+	// that AddPlayerToMap-failure case to homebind, so the loop does
+	// the same: a far homebind teleport re-arms the loop for the
+	// homebind completion, and a same-map homebind teleport (the
+	// second failure round, when the player already stands on the
+	// homebind map) leaves the flag clear with homebind coords in
+	// nearTeleportDest, so the loop still terminates. An invalid
+	// homebind breaks out and saves as-is, the degenerate case the
+	// in-ack fallbackHomebind already leaves behind.
 	for s.farTeleportPending && s.player != nil {
-		if !s.completeWorldPort(ctx) && s.farTeleportPending {
+		if s.completeWorldPort(ctx) {
+			continue
+		}
+		if s.farTeleportPending {
+			continue
+		}
+		// Scoped to dungeon destinations: a non-dungeon save carries
+		// InstanceID 0, so it stays consistent without the fallback,
+		// and battleground instances already exist. Only a dungeon
+		// save can claim an instance row that was never created.
+		if s.server == nil || s.server.Data == nil {
+			break
+		}
+		if mapEntry, found, mapErr := s.server.Data.Map(s.player.Map); mapErr != nil || !found || !mapEntry.IsDungeon() {
+			break
+		}
+		if !s.validTrinityMapLocation(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.farTeleportOriginOrientation) {
+			break
+		}
+		if !s.teleportTo(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.farTeleportOriginOrientation) {
 			break
 		}
 	}
