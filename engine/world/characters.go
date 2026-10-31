@@ -960,6 +960,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		} else if err := s.recoverLoginHomebindOrStart(ctx, &state); err != nil {
 			return true
 		}
+		s.clearAFKLeaveState()
 		mapEntry, mapFound, err = s.server.Data.Map(state.Map)
 		if err != nil || !mapFound {
 			return true

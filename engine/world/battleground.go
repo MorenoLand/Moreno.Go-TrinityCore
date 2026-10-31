@@ -2079,6 +2079,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		if arena == nil {
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
+			s.clearAFKLeaveState()
 			s.relocateLoginToBGEntryPoint()
 			return
 		}
@@ -2128,6 +2129,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		if !inRoster || waitLeave {
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
+			s.clearAFKLeaveState()
 			s.relocateLoginToBGEntryPoint()
 			return
 		}
@@ -2167,6 +2169,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 			s.server.dropBGOfflineHolder(state.Map, s.playerGUID)
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
+			s.clearAFKLeaveState()
 			s.relocateLoginToBGEntryPoint()
 			return
 		}
@@ -2198,6 +2201,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 			s.server.dropBGOfflineHolder(state.Map, s.playerGUID)
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
+			s.clearAFKLeaveState()
 			s.relocateLoginToBGEntryPoint()
 			return
 		}
@@ -3153,12 +3157,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 		// flags go with the slot too and any pending Idle/Inactive
 		// timer is invalidated; otherwise a leaver would carry a
 		// permanent report block into their next match.
-		s.writeMu.Lock()
-		s.afkReporters = make(map[uint64]struct{})
-		s.writeMu.Unlock()
-		s.removeAura(bgAFKIdleSpellID)
-		s.removeAura(honorAuraInactiveID)
-		s.cancelAFKIdleProgression()
+		s.clearAFKLeaveState()
 	}
 	s.resetAchievementCriteriaByCondition(criteriaConditionBGMap, s.player.Map)
 	// The teleportToEntryPoint=false arm: Player::TeleportTo (Player.cpp:1814)
@@ -4348,6 +4347,23 @@ func (s *session) cancelAFKIdleProgression() {
 	s.afkIdleGen++
 	s.afkChainDeadline = time.Time{}
 	s.writeMu.Unlock()
+}
+
+// clearAFKLeaveState is the voluntary-leave funnel's AFK strip, shared
+// with the login relocate legs: a player leaving a match must not carry
+// its Idle/Inactive flags, its reporter set, or its paused chain deadline
+// into the next match, where the flags would block fresh reports and the
+// dead chain could never progress (resume runs only on a restore).
+func (s *session) clearAFKLeaveState() {
+	if s == nil {
+		return
+	}
+	s.writeMu.Lock()
+	s.afkReporters = make(map[uint64]struct{})
+	s.writeMu.Unlock()
+	s.removeAura(bgAFKIdleSpellID)
+	s.removeAura(honorAuraInactiveID)
+	s.cancelAFKIdleProgression()
 }
 
 // pauseAFKIdleProgression invalidates the pending Idle/Inactive timer
