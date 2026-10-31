@@ -1263,8 +1263,9 @@ func (s *Server) creatureEnemyConeTargets(ctx context.Context, motion *creatureM
 		return nil
 	}
 	coneSpell := spell
+	// Array value copy, so indexing the copy never touches the caller's spell.
 	coneEffects := spell.Effects
-	for i, eff := range spell.Effects {
+	for i, eff := range coneEffects {
 		if eff.Effect == 0 {
 			continue
 		}
@@ -1275,12 +1276,21 @@ func (s *Server) creatureEnemyConeTargets(ctx context.Context, motion *creatureM
 		case isEnemyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB):
 			coneTarget = eff.ImplicitTargetB
 		default:
+			// No cone leg: neutralize the effect's legs so the
+			// leg-group sweep builds no SRC/DEST group from it.
+			// The old code left such effects unchanged, so their
+			// area legs joined the partition and the hitTargets
+			// intersection below could not remove them — a cone
+			// effect on a mixed area+cone spell hit the whole
+			// area list. Indices are kept (not dropped) so
+			// IsPositiveEffect and the radius fallback still
+			// read the original effects.
+			coneEffects[i].ImplicitTargetA = 0
+			coneEffects[i].ImplicitTargetB = 0
 			continue
 		}
-		kept := eff
-		kept.ImplicitTargetA = coneTarget
-		kept.ImplicitTargetB = 0
-		coneEffects[i] = kept
+		coneEffects[i].ImplicitTargetA = coneTarget
+		coneEffects[i].ImplicitTargetB = 0
 	}
 	coneSpell.Effects = coneEffects
 	// A zero-GUID victim excludes nothing: the sweeps seed their seen set
