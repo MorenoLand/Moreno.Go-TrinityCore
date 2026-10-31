@@ -2216,24 +2216,38 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// through the player pipeline (no creature-caster pipeline on this
 	// path), so range/threat measure from the player's body, not the
 	// creature — positions do not coincide here as they do for a ridden
-	// vehicle. Residual delta, same class as the vehicle arm: a spell
-	// the player learned but the creature does not know still casts as
-	// the player, where C++ drops it (caster is the mover, HasSpell
-	// fails, and the IsOnVehicle fallback does not apply to possess).
-	// The mover-is-another-player drop has no Go trigger (no
-	// moved-player model: possessedCreatureGUID scans creature motions).
+	// vehicle. The caster-is-mover drop (SpellHandler.cpp:373-385) is
+	// ported: caster is the mover, so a spell the creature does not
+	// know drops here — player-learned, unlearned lock/trigger, and
+	// GM-mode opcode casts alike (C++ has no GM exemption on this arm,
+	// and the IsOnVehicle fallback does not apply to possess) — before
+	// the lock/trigger arms below, matching C++ relative order. The
+	// drop is silent like C++ (rfinish + return, no failure packet).
+	// A nil motion fails closed (mover gone, nothing to cast as).
+	// Remaining additive divergence, accepted: C++ then drops even
+	// creature-known spells at SpellHandler.cpp:413-415 (isPossessing),
+	// whose casts arrive via CMSG_PET_CAST_SPELL instead (PetHandler.cpp:757;
+	// Go's handlePetCastSpell accepts charmer motions and the possess
+	// bar is sent at possess time), but Go keeps the creature-knows
+	// arm on this opcode too. The mover-is-another-player drop has no
+	// Go trigger (no moved-player model: possessedCreatureGUID scans
+	// creature motions).
 	possessedSpell := false
-	if !learned && !gmMode && !vehicleSpell {
-		if pg := s.possessedCreatureGUID(); pg != 0 {
-			if m := s.findCreatureMotion(pg); m != nil {
-				for _, known := range s.server.loadCreatureSpells(ctx, m.Entry) {
-					if known == spellID {
-						possessedSpell = true
-						break
-					}
+	if pg := s.possessedCreatureGUID(); pg != 0 && !vehicleSpell {
+		possessedKnows := false
+		if m := s.findCreatureMotion(pg); m != nil {
+			for _, known := range s.server.loadCreatureSpells(ctx, m.Entry) {
+				if known == spellID {
+					possessedKnows = true
+					break
 				}
 			}
 		}
+		if !possessedKnows {
+			s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", "possessed creature does not know spell")
+			return true
+		}
+		possessedSpell = !learned && !gmMode
 	}
 	// HandleCastSpellOpcode unlearned-spell arms (SpellHandler.cpp:392-410).
 	// The lock-case arm (GameObject::GetSpellForLock, GameObject.cpp:2765)
