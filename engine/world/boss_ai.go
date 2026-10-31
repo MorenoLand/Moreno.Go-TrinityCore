@@ -1938,13 +1938,12 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// leg); the dedupe below merges area overlaps into one TargetInfo
 		// per unit (AddUnitTarget, Spell.cpp:2152), so a unit selected by
 		// several legs appears once ahead of the aura-scaling, chain,
-		// reflect and per-hit legs below. Delta: the ally sweeps return
-		// every non-hostile candidate without a per-effect party/raid
-		// filter (this path has no per-effect legs to gate, unlike the
-		// pet path), so a party/raid-only area spell also reaches
-		// non-hostile players in the area where C++ IsInPartyWith /
-		// IsInRaidWith (Unit.cpp:12126/12155) would admit same-faction
-		// creatures but not players, absent TREAT_AS_RAID_UNIT.
+		// reflect and per-hit legs below. The ally sweeps admit only
+		// candidates passing a leg family's check (geometry + center
+		// LOS + TARGET_CHECK_* membership, Unit.cpp:12126/12155), so
+		// this path joins the filtered list whole — it has no
+		// per-effect legs to gate further, unlike the pet path, whose
+		// bits stay membership-based rather than geometry-based.
 		if isAreaEnemySpell(spellInfo) || hasFriendlyAreaEffect(spellInfo) || hasRefCenteredAreaEffect(spellInfo) {
 			areaVictim := &playerPos{GUID: targetGUID}
 			seenArea := make(map[uint64]struct{}, len(hitTargets))

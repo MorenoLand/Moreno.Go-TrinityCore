@@ -848,19 +848,20 @@ func petAreaAllyWantedMask(targetA, targetB uint32) uint8 {
 	return wanted
 }
 
-// creatureAIAreaAllyGeometry is the radius/center computation for the
-// pet-caster area-ally sweeps, mirroring creatureAIAreaLegGroups with the
-// friendly-area target types: radius from the friendly-area effects
+// creatureAIAreaAllyLegGroups is the per-leg-family geometry computation
+// for the pet-caster area-ally sweeps, mirroring creatureAIAreaLegGroups
+// with the friendly-area target types: radius from the friendly-area effects
 // (CalcRadius, SpellInfo.cpp:551-574, zero-radius fallback to the spell's
 // max range per IsPositiveEffect, Spell.cpp:1282, both folded through the
-// mod owner), center on the caster except DEST-reference types (31/34), which
-// center on m_targets dest (Spell.cpp:1267): the pet path's resolved
-// destination when the spell carries a dest-family effect, else the
-// caster — Spell::CheckDst (Spell.cpp:6523) seeds an unset dst at the
-// caster, never at the wire victim. Ally areas
-// are never cones (24/54/104 are enemy-only), so no cone arm applies.
-func (s *Server) creatureAIAreaAllyGeometry(motion *creatureMotion, spell wotlk.Spell, destX, destY, destZ float32, hasDest bool) (radius, centerX, centerY, centerZ float32) {
-	destinationCenter := false
+// mod owner), split into a SRC family (caster center: 20/30/33/56) and a
+// DEST family (31/34, center on m_targets dest, Spell.cpp:1267): the pet
+// path's resolved destination when the spell carries a dest-family effect,
+// else the caster — Spell::CheckDst (Spell.cpp:6523) seeds an unset dst at
+// the caster, never at the wire victim. Ally areas are never cones
+// (24/54/104 are enemy-only), so no cone arm applies. Each group's checks
+// are the TARGET_CHECK_* selections of that family's legs; a candidate
+// passes when any group accepts it.
+func (s *Server) creatureAIAreaAllyLegGroups(motion *creatureMotion, spell wotlk.Spell, destX, destY, destZ float32, hasDest bool) []friendlyAreaLegGroup {
 	var maxRangePositive, maxRangeNegative float32
 	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
 	if s.Data != nil {
@@ -873,11 +874,30 @@ func (s *Server) creatureAIAreaAllyGeometry(motion *creatureMotion, spell wotlk.
 			}
 		}
 	}
+	var srcRadius, destRadius float32
+	srcChecks := make(map[uint8]struct{})
+	destChecks := make(map[uint8]struct{})
 	for i, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
 		}
-		hasFriendly := false
+		// Each effect's legs share that effect's radius, so it folds
+		// into a family only when the effect carries a leg of that
+		// family — a non-area effect's radius never inflates either.
+		var legRadius float32
+		if s.Data != nil {
+			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(motion.Level)); err == nil && ok && value > 0 {
+				if modOwner != nil {
+					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+				}
+				legRadius = value
+			} else {
+				legRadius = maxRangeNegative
+				if spell.IsPositiveEffect(i) {
+					legRadius = maxRangePositive
+				}
+			}
+		}
 		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
 				continue
@@ -885,38 +905,69 @@ func (s *Server) creatureAIAreaAllyGeometry(motion *creatureMotion, spell wotlk.
 			if !isFriendlyAreaTargetType(targetType) {
 				continue
 			}
-			hasFriendly = true
 			if friendlyAreaDestCentered(targetType) {
-				destinationCenter = true
+				if legRadius > destRadius {
+					destRadius = legRadius
+				}
+				destChecks[friendlyAreaCheck(targetType)] = struct{}{}
+			} else {
+				if legRadius > srcRadius {
+					srcRadius = legRadius
+				}
+				srcChecks[friendlyAreaCheck(targetType)] = struct{}{}
 			}
 		}
-		if !hasFriendly {
+	}
+	destCX, destCY, destCZ := motion.X, motion.Y, motion.Z
+	if len(destChecks) > 0 && hasDest {
+		destCX, destCY, destCZ = destX, destY, destZ
+	}
+	groups := make([]friendlyAreaLegGroup, 0, 2)
+	if len(srcChecks) > 0 {
+		groups = append(groups, friendlyAreaLegGroup{radius: srcRadius, centerX: motion.X, centerY: motion.Y, centerZ: motion.Z, checks: srcChecks})
+	}
+	if len(destChecks) > 0 {
+		groups = append(groups, friendlyAreaLegGroup{radius: destRadius, centerX: destCX, centerY: destCY, centerZ: destCZ, checks: destChecks})
+	}
+	maxRadius := float32(0)
+	for _, g := range groups {
+		if g.radius > maxRadius {
+			maxRadius = g.radius
+		}
+	}
+	if len(groups) == 0 || maxRadius <= 0 {
+		return nil
+	}
+	return groups
+}
+
+// creatureAllyGroupPasses reports whether a candidate at x, y, z with the
+// given ally/party/raid membership passes any leg family: cylinder within
+// that group's radius, line of sight from that group's center
+// (Spell.cpp:7479-7481, via the caller's losPasses closure over the
+// candidate position), and membership in one of that group's checks. LOS
+// stays per group — a candidate passing group A's geometry but failing
+// LOS from A's center must not borrow group B's LOS.
+func creatureAllyGroupPasses(groups []friendlyAreaLegGroup, x, y, z float32, ally, party, raid bool, losPasses func(centerX, centerY, centerZ float32) bool) bool {
+	for _, g := range groups {
+		dx, dy := float64(x-g.centerX), float64(y-g.centerY)
+		if dx*dx+dy*dy > float64(g.radius*g.radius) || math.Abs(float64(z-g.centerZ)) > float64(g.radius) {
 			continue
 		}
-		if s.Data != nil {
-			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(motion.Level)); err == nil && ok && value > 0 {
-				if modOwner != nil {
-					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
-				}
-				if value > radius {
-					radius = value
-				}
-			} else {
-				effMaxRange := maxRangeNegative
-				if spell.IsPositiveEffect(i) {
-					effMaxRange = maxRangePositive
-				}
-				if effMaxRange > radius {
-					radius = effMaxRange
-				}
-			}
+		if !losPasses(g.centerX, g.centerY, g.centerZ) {
+			continue
+		}
+		if _, wantAlly := g.checks[friendlyCheckAlly]; wantAlly && ally {
+			return true
+		}
+		if _, wantParty := g.checks[friendlyCheckParty]; wantParty && party {
+			return true
+		}
+		if _, wantRaid := g.checks[friendlyCheckRaid]; wantRaid && raid {
+			return true
 		}
 	}
-	centerX, centerY, centerZ = motion.X, motion.Y, motion.Z
-	if destinationCenter && hasDest {
-		centerX, centerY, centerZ = destX, destY, destZ
-	}
-	return radius, centerX, centerY, centerZ
+	return false
 }
 
 // petAreaAllyGroupScope resolves the pet owner's party/raid membership for
@@ -973,8 +1024,8 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) {
 		return nil, nil
 	}
-	radius, centerX, centerY, centerZ := s.creatureAIAreaAllyGeometry(motion, spell, destX, destY, destZ, hasDest)
-	if radius <= 0 {
+	groups := s.creatureAIAreaAllyLegGroups(motion, spell, destX, destY, destZ, hasDest)
+	if len(groups) == 0 {
 		return nil, nil
 	}
 	_, inParty, inRaid := petAreaAllyGroupScope(s, owner)
@@ -1005,12 +1056,14 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 		if spellTargetUnitBlocked(spell, targetSession.player.UnitFlags, 0, true) {
 			continue
 		}
-		dx, dy := float64(candidate.X-centerX), float64(candidate.Y-centerY)
-		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(candidate.Z-centerZ)) > float64(radius) {
-			continue
-		}
-		if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-			!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, candidate.X, candidate.Y, candidate.Z) {
+		// Per-leg-family acceptance: a candidate joins when any SRC/DEST
+		// family admits it (geometry + center LOS + that family's check),
+		// so a party-only spell no longer reaches non-party allies.
+		// The bits below stay membership-based (the pre-existing pet-leg
+		// approximation), not geometry-based.
+		if !creatureAllyGroupPasses(groups, candidate.X, candidate.Y, candidate.Z, !s.isAttackableFaction(motion.Faction, candidate), inParty(targetSession.playerGUID), inRaid(targetSession.playerGUID), func(cx, cy, cz float32) bool {
+			return spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 || s.hasLineOfSightSpellCheck(motion.Map, cx, cy, cz, candidate.X, candidate.Y, candidate.Z)
+		}) {
 			continue
 		}
 		seen[targetSession.playerGUID] = struct{}{}
@@ -1045,8 +1098,8 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 	if spellSearchPlayersOnly(spell) {
 		return nil, nil
 	}
-	radius, centerX, centerY, centerZ := s.creatureAIAreaAllyGeometry(motion, spell, destX, destY, destZ, hasDest)
-	if radius <= 0 {
+	groups := s.creatureAIAreaAllyLegGroups(motion, spell, destX, destY, destZ, hasDest)
+	if len(groups) == 0 {
 		return nil, nil
 	}
 	_, inParty, inRaid := petAreaAllyGroupScope(s, owner)
@@ -1077,19 +1130,16 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 		if s.factionTemplatesHostile(motion.Faction, cand.Faction) {
 			continue
 		}
-		dx, dy := float64(cand.X-centerX), float64(cand.Y-centerY)
-		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(cand.Z-centerZ)) > float64(radius) {
-			continue
-		}
-		if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-			!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, cand.X, cand.Y, cand.Z) {
-			continue
-		}
-		seen[cand.GUID] = struct{}{}
 		ownerGUID := cand.OwnerGUID
 		if ownerGUID == 0 {
 			ownerGUID = cand.CharmOwnerGUID
 		}
+		if !creatureAllyGroupPasses(groups, cand.X, cand.Y, cand.Z, true, inParty(ownerGUID), inRaid(ownerGUID), func(cx, cy, cz float32) bool {
+			return spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 || s.hasLineOfSightSpellCheck(motion.Map, cx, cy, cz, cand.X, cand.Y, cand.Z)
+		}) {
+			continue
+		}
+		seen[cand.GUID] = struct{}{}
 		bits := petAreaAllyCheckAlly
 		if inParty(ownerGUID) {
 			bits |= petAreaAllyCheckParty
@@ -1110,8 +1160,17 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 	// ally/false/false). Their GUIDs resolve through the legs'
 	// combatTargetByGUID DB fallback, so heal/aura/dispel legs reach
 	// them.
+	// Union box over the leg groups, so static spawns near a dest
+	// center are not missed when the SRC group is the wider one.
 	if s.WorldStore != nil && s.WorldStore.DB != nil {
-		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, float64(centerX-radius), float64(centerX+radius), float64(centerY-radius), float64(centerY+radius))
+		minX, maxX, minY, maxY := float64(groups[0].centerX-groups[0].radius), float64(groups[0].centerX+groups[0].radius), float64(groups[0].centerY-groups[0].radius), float64(groups[0].centerY+groups[0].radius)
+		for _, g := range groups[1:] {
+			minX = math.Min(minX, float64(g.centerX-g.radius))
+			maxX = math.Max(maxX, float64(g.centerX+g.radius))
+			minY = math.Min(minY, float64(g.centerY-g.radius))
+			maxY = math.Max(maxY, float64(g.centerY+g.radius))
+		}
+		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, minX, maxX, minY, maxY)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -1137,12 +1196,11 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 					continue
 				}
 				fx, fy, fz := float32(x), float32(y), float32(z)
-				dx, dy := float64(fx-centerX), float64(fy-centerY)
-				if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(fz-centerZ)) > float64(radius) {
-					continue
-				}
-				if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-					!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, fx, fy, fz) {
+				// Static spawns carry no owner tracking, so only an
+				// ally-check family can admit them (party/raid false).
+				if !creatureAllyGroupPasses(groups, fx, fy, fz, true, false, false, func(cx, cy, cz float32) bool {
+					return spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 || s.hasLineOfSightSpellCheck(motion.Map, cx, cy, cz, fx, fy, fz)
+				}) {
 					continue
 				}
 				seen[guid] = struct{}{}

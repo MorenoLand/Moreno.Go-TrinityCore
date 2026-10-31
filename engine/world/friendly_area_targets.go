@@ -137,6 +137,22 @@ func friendlyAreaDestCentered(targetType uint32) bool {
 	return targetType == implicitTargetDestAreaAlly || targetType == implicitTargetDestAreaParty
 }
 
+// friendlyAreaLegGroup is one leg family of a friendly area sweep: C++
+// selects each effect's targets separately (Spell::SelectImplicitAreaTargets,
+// Spell.cpp:1227) and unions the lists via AddUnitTarget effectMask, so a
+// spell mixing a SRC-area leg (30/33, caster center) with a DEST-area leg
+// (31/34, destination center) needs one geometry per family, not one merged
+// sweep. CASTER-reference legs (20/56) ride the SRC family (caster center,
+// Spell.cpp:1267). A candidate passes when any group accepts it: cylinder
+// within that group's radius, line of sight from that group's center, and
+// membership in one of that group's TARGET_CHECK_* selections. Each
+// group's radius is the max over that family's legs.
+type friendlyAreaLegGroup struct {
+	radius                    float32
+	centerX, centerY, centerZ float32
+	checks                    map[uint8]struct{}
+}
+
 // friendlyGroupSnapshot copies the caster's group membership: subgroup of the
 // caster and the GUIDs sharing it (party), plus every member GUID (raid).
 // Mirrors Player::IsInSameGroupWith (Player.cpp:2536: same group AND same
@@ -184,9 +200,6 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return nil
 	}
-	radius := float32(0)
-	destinationCenter := false
-	checks := make(map[uint8]struct{})
 	// Spell.cpp:1282: zero-radius fallback to the spell's max range — per
 	// effect via GetMaxRange(IsPositiveEffect(effIndex)); the caster
 	// overload of GetMaxRange folds SPELLMOD_RANGE (SpellInfo.cpp:3060-3072).
@@ -195,9 +208,29 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		maxRangePositive = float32(s.applySpellModFloat(spell, spellModRange, spellDBCMaxRange(true, rangeEntry)))
 		maxRangeNegative = float32(s.applySpellModFloat(spell, spellModRange, spellDBCMaxRange(false, rangeEntry)))
 	}
+	var srcRadius, destRadius float32
+	srcChecks := make(map[uint8]struct{})
+	destChecks := make(map[uint8]struct{})
 	for i, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
+		}
+		// Each effect's legs share that effect's radius (C++ calls
+		// SelectImplicitAreaTargets once per effect leg with the
+		// effect's CalcRadius), so the radius folds into a family
+		// only when the effect carries a leg of that family — a
+		// non-area effect's radius never inflates either family.
+		var legRadius float32
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
+			// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the DBC
+			// radius folds SPELLMOD_RADIUS via the mod owner.
+			legRadius = float32(s.applySpellModFloat(spell, spellModRadius, float64(value)))
+		} else {
+			// Spell.cpp:1282: zero-radius fallback — per effect.
+			legRadius = maxRangeNegative
+			if spell.IsPositiveEffect(i) {
+				legRadius = maxRangePositive
+			}
 		}
 		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
@@ -207,40 +240,43 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 				continue
 			}
 			if friendlyAreaDestCentered(targetType) {
-				destinationCenter = true
-			}
-			checks[friendlyAreaCheck(targetType)] = struct{}{}
-		}
-		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > 0 {
-			// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the DBC
-			// radius folds SPELLMOD_RADIUS via the mod owner.
-			value = float32(s.applySpellModFloat(spell, spellModRadius, float64(value)))
-			if value > radius {
-				radius = value
-			}
-		} else {
-			// Spell.cpp:1282: zero-radius fallback — per effect.
-			effMaxRange := maxRangeNegative
-			if spell.IsPositiveEffect(i) {
-				effMaxRange = maxRangePositive
-			}
-			if effMaxRange > radius {
-				radius = effMaxRange
+				if legRadius > destRadius {
+					destRadius = legRadius
+				}
+				destChecks[friendlyAreaCheck(targetType)] = struct{}{}
+			} else {
+				if legRadius > srcRadius {
+					srcRadius = legRadius
+				}
+				srcChecks[friendlyAreaCheck(targetType)] = struct{}{}
 			}
 		}
 	}
-	if radius <= 0 || len(checks) == 0 {
-		return nil
-	}
-	centerX, centerY, centerZ := s.player.X, s.player.Y, s.player.Z
-	if destinationCenter && target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
-		centerX, centerY, centerZ = target.Destination.X, target.Destination.Y, target.Destination.Z
-	} else if destinationCenter && target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+	destX, destY, destZ := s.player.X, s.player.Y, s.player.Z
+	if len(destChecks) > 0 && target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		destX, destY, destZ = target.Destination.X, target.Destination.Y, target.Destination.Z
+	} else if len(destChecks) > 0 && target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 		// Spell.cpp:1258 CheckDst: an explicit unit target becomes the
 		// destination for DEST-reference area selection.
 		if destination, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
-			centerX, centerY, centerZ = destination.X, destination.Y, destination.Z
+			destX, destY, destZ = destination.X, destination.Y, destination.Z
 		}
+	}
+	groups := make([]friendlyAreaLegGroup, 0, 2)
+	if len(srcChecks) > 0 {
+		groups = append(groups, friendlyAreaLegGroup{radius: srcRadius, centerX: s.player.X, centerY: s.player.Y, centerZ: s.player.Z, checks: srcChecks})
+	}
+	if len(destChecks) > 0 {
+		groups = append(groups, friendlyAreaLegGroup{radius: destRadius, centerX: destX, centerY: destY, centerZ: destZ, checks: destChecks})
+	}
+	maxRadius := float32(0)
+	for _, g := range groups {
+		if g.radius > maxRadius {
+			maxRadius = g.radius
+		}
+	}
+	if len(groups) == 0 || maxRadius <= 0 {
+		return nil
 	}
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	allyOf := func(faction uint32) bool { return !s.server.isHostileFaction(faction, caster) }
@@ -275,22 +311,31 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		if guid == 0 || mapID != caster.Map || instanceID != caster.InstanceID || health == 0 || spellTargetUnitBlocked(spell, unitFlags, flagsExtra, true) || s.server.isTotemGUID(guid) {
 			return
 		}
-		dx, dy := float64(x-centerX), float64(y-centerY)
-		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(z-centerZ)) > float64(radius) {
-			return
-		}
-		// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481): area
-		// candidates need line of sight from the area center.
-		if !s.implicitAreaTargetLOSPasses(spell, x, y, z, centerX, centerY, centerZ) {
-			return
-		}
 		if _, ok := seen[guid]; ok {
 			return
 		}
-		_, wantAlly := checks[friendlyCheckAlly]
-		_, wantParty := checks[friendlyCheckParty]
-		_, wantRaid := checks[friendlyCheckRaid]
-		if !((wantAlly && ally) || (wantParty && party) || (wantRaid && raid)) {
+		// A candidate passes when any leg family accepts it: cylinder
+		// within that group's radius, line of sight from that group's
+		// center (Spell::CheckEffectTarget default arm, Spell.cpp:7479-7481),
+		// and membership in one of that group's TARGET_CHECK_* selections.
+		accepted := false
+		for _, g := range groups {
+			dx, dy := float64(x-g.centerX), float64(y-g.centerY)
+			if dx*dx+dy*dy > float64(g.radius*g.radius) || math.Abs(float64(z-g.centerZ)) > float64(g.radius) {
+				continue
+			}
+			if !s.implicitAreaTargetLOSPasses(spell, x, y, z, g.centerX, g.centerY, g.centerZ) {
+				continue
+			}
+			_, wantAlly := g.checks[friendlyCheckAlly]
+			_, wantParty := g.checks[friendlyCheckParty]
+			_, wantRaid := g.checks[friendlyCheckRaid]
+			if (wantAlly && ally) || (wantParty && party) || (wantRaid && raid) {
+				accepted = true
+				break
+			}
+		}
+		if !accepted {
 			return
 		}
 		seen[guid] = struct{}{}
@@ -348,8 +393,18 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 	s.server.sessionsMu.RUnlock()
 
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
+	// The static-scan box is the union box over the leg groups, so DB
+	// candidates near a dest center are not missed when the SRC group is
+	// the wider one, and vice versa.
 	if !playersOnly && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, caster.Map, float64(centerX-radius), float64(centerX+radius), float64(centerY-radius), float64(centerY+radius))
+		minX, maxX, minY, maxY := float64(groups[0].centerX-groups[0].radius), float64(groups[0].centerX+groups[0].radius), float64(groups[0].centerY-groups[0].radius), float64(groups[0].centerY+groups[0].radius)
+		for _, g := range groups[1:] {
+			minX = math.Min(minX, float64(g.centerX-g.radius))
+			maxX = math.Max(maxX, float64(g.centerX+g.radius))
+			minY = math.Min(minY, float64(g.centerY-g.radius))
+			maxY = math.Max(maxY, float64(g.centerY+g.radius))
+		}
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, caster.Map, minX, maxX, minY, maxY)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
