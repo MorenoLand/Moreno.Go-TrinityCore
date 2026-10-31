@@ -22868,6 +22868,132 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 	}
+	// CheckCast zone/location arm (Spell.cpp:5452-5462): the npcbot
+	// TYPEID_UNIT arm is vacuous (this path is player-only) and game
+	// masters bypass the whole check (the client-path twin's GM
+	// condition). Zone/area are the session's tracked values
+	// (s.player.Zone / s.areaID, the Go model of
+	// Unit::GetZoneAndAreaId). C++ order: right after the arena gate,
+	// ahead of the mounted gate and the spell-focus arm. The
+	// Data-dependent legs fail open when the store is absent (the
+	// arena gate's convention above); the spell_area leg rides the
+	// nil-safe session helper.
+	if (s.player.ExtraFlags&playerExtraGMOn) == 0 && (s.player.PlayerFlags&playerFlagGM) == 0 {
+		zoneID, areaID := s.player.Zone, s.areaID
+		// Area-group leg (SpellInfo::CheckLocation, SpellInfo.cpp:1508-1527):
+		// AreaGroupId > 0 requires zone or area membership, else
+		// SPELL_FAILED_INCORRECT_AREA. Unknown/missing group data keeps
+		// the existing bridge convention (terrain.go) and does not reject.
+		if spell.AreaGroupID > 0 && s.server != nil && s.server.Data != nil {
+			if allowed, known, groupErr := s.server.Data.AreaGroupAllows(uint32(spell.AreaGroupID), zoneID, areaID); groupErr == nil && known && !allowed {
+				rejectTriggeredCast("triggered spell cast in wrong area group")
+				return
+			}
+		}
+		// Raid-instance leg (SpellInfo::CheckLocation, SpellInfo.cpp:1552-1556):
+		// SPELL_ATTR6_NOT_IN_RAID_INSTANCE fails on raid maps — and when
+		// the map entry is missing, matching the C++ !mapEntry arm.
+		if spell.AttributesEx6&spellAttr6NotInRaidInstance != 0 && s.server != nil && s.server.Data != nil {
+			if entry, found, err := s.server.Data.Map(s.player.Map); err != nil || !found || entry.IsRaid() {
+				rejectTriggeredCast("triggered spell not usable in raid instance")
+				return
+			}
+		}
+		// spell_area DB leg (SpellInfo::CheckLocation, SpellInfo.cpp:1558-1567):
+		// when the spell has spell_area rows, at least one must fit the
+		// player's zone/area (SpellArea::IsFitToRequirements), else
+		// SPELL_FAILED_INCORRECT_AREA.
+		if rules, hasRules := s.spellAreaRules(ctx, spellID); hasRules && !s.spellAreaRulesFit(ctx, spellID, rules, zoneID, areaID) {
+			rejectTriggeredCast("triggered spell cast in wrong area (spell_area)")
+			return
+		}
+		// Battleground-spell special cases (SpellInfo::CheckLocation,
+		// SpellInfo.cpp:1569-1631). Player::InBattleground is
+		// m_bgData.bgInstanceID != 0 (Player.h:1906), mirrored by
+		// s.bgData.InstanceID; the player argument is never nil on this
+		// path. A missing Map.dbc entry fails with
+		// SPELL_FAILED_INCORRECT_AREA (SpellInfo.cpp:1576/1588/1602/1617),
+		// not SPELL_FAILED_REQUIRES_AREA. The 44521 STATUS_WAIT_JOIN
+		// refinement has no bridge on this path either (the client-path
+		// twin's residual: battleground queue entries never model
+		// WAIT_JOIN), so the arm over-accepts any battleground stay,
+		// exactly like the client and item paths.
+		if s.server != nil && s.server.Data != nil {
+			inBattleground := s.bgData.InstanceID != 0
+			mapEntry, mapFound, mapErr := s.server.Data.Map(s.player.Map)
+			var locationFail bool
+			switch spellID {
+			case 23333, 23335: // Warsong Gulch / Silverwing flag
+				if !(s.player.Map == 489 && inBattleground) {
+					locationFail = true
+				}
+			case 34976: // Netherstorm flag
+				if !(s.player.Map == 566 && inBattleground) {
+					locationFail = true
+				}
+			case 2584, 22011, 22012, 42792, 43681, 44535: // spirit heal / dropped-flag spells
+				switch {
+				case mapErr != nil || !mapFound:
+					locationFail = true
+				case !(zoneID == WGZoneID || (mapEntry.IsBattleground() && inBattleground)):
+					locationFail = true
+				}
+			case 44521: // Preparation
+				switch {
+				case mapErr != nil || !mapFound:
+					locationFail = true
+				case !(mapEntry.IsBattleground() && inBattleground):
+					locationFail = true
+				}
+			case 32724, 32725, 35774, 35775: // arena team spells
+				switch {
+				case mapErr != nil || !mapFound:
+					locationFail = true
+				case !(mapEntry.IsBattleArena() && inBattleground):
+					locationFail = true
+				}
+			case 32727: // Arena Preparation
+				switch {
+				case mapErr != nil || !mapFound:
+					locationFail = true
+				default:
+					locationFail = true
+					if mapEntry.IsBattleArena() && inBattleground {
+						for i := range s.bgQueues {
+							if q := &s.bgQueues[i]; q.Active && q.IsArena && q.InstanceID == s.bgData.InstanceID && q.Status == ArenaStatusWaitJoin {
+								locationFail = false
+								break
+							}
+						}
+					}
+				}
+			}
+			if locationFail {
+				rejectTriggeredCast("triggered spell cast in wrong location")
+				return
+			}
+		}
+		// SPELL_ATTR4_CAST_ONLY_IN_OUTLAND (SpellInfo.cpp:1529-1550): no bridge.
+		// The strict leg needs AreaTableEntry flyability AND
+		// Player::CanFlyInZone (Cold Weather Flying known-spell check via
+		// GetVirtualMapForMapAndZone); Go has no WorldMapArea store and no
+		// known-spell model for the flight check (the client-path twin's
+		// stay-out, shared here).
+	}
+	// CheckCast mounted gate (Spell.cpp:5465-5476): EXEMPT on this path.
+	// TRIGGERED_FULL_MASK carries
+	// TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE (SpellDefines.h:153-156),
+	// and the gate opens with that flag test, so a triggered cast never
+	// reaches the mounted/not-on-taxi arms. The same flag exempts the
+	// vehicle arm (Spell.cpp:5332) noted below.
+	// CheckCast spell-focus arm (Spell.cpp:5479-5481): after the mounted
+	// gate, before CheckItems — SearchSpellFocus over nearby gameobjects.
+	// The funnel sets no focusObject for later use (unlike _cast's
+	// ReleaseSpellFocus leg), so only the pass/fail gate ports here.
+	if spell.RequiresSpellFocus != 0 && !s.spellFocusFound(ctx, spell) {
+		rejectTriggeredCast("triggered spell requires spell focus object")
+		return
+	}
 	// CheckCast BLOCK_SPELL_FAMILY arm (Spell.cpp:5277-5278): no triggered
 	// exemption.
 	if s.spellFamilyBlockedByAura(spell) {
