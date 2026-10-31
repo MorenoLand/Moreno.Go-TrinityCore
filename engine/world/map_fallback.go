@@ -87,6 +87,21 @@ func (s *session) recoverLoginMapCreationFailure(ctx context.Context, state *pla
 			s.debug("saved instance save unavailable; moved to map entrance trigger", "guid", state.GUID, "map", mapEntry.ID, "instance", state.InstanceID)
 			return nil
 		}
+		// No entrance trigger: C++ falls through the null areaTrigger arm to
+		// RelocateToHomebind and then the !map block, which relocates to the
+		// race/class start (Player.cpp:17789-17810), not the go-back trigger
+		// (that arm covers a missing map or a denied entry, not this one).
+		location, err := s.raceClassStartLocation(ctx, *state)
+		if err != nil {
+			return err
+		}
+		if !s.validMapFallbackLocation(location) {
+			return fmt.Errorf("race/class start location is invalid for character %d", state.GUID)
+		}
+		state.Map, state.Zone, state.X, state.Y, state.Z, state.Orientation = location.Map, location.Zone, location.X, location.Y, location.Z, 0
+		state.InstanceID = 0
+		state.TransportGUID, state.TransportX, state.TransportY, state.TransportZ, state.TransportO = 0, 0, 0, 0, 0
+		return nil
 	}
 	return s.recoverLoginInstanceMapFailure(ctx, state)
 }

@@ -103,7 +103,26 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 			}
 			groupBoundMismatch = groupErr == nil && loginGroupInstanceID != int64(state.InstanceID)
 		}
-		if savedMap == int64(state.Map) && !boundMismatch && !groupBoundMismatch && ((characterBound && characterInstanceID == int64(state.InstanceID)) || active) {
+		// A permanent bind to the saved instance keeps it even with no peers:
+		// _LoadBoundInstances loads binds with no extendState filter and
+		// re-creates the save from the surviving row (Player.cpp:18987), so
+		// CreateInstanceForPlayer takes the bind's save path (MapInstanced.cpp)
+		// instead of the login-instance block. The characterBound query above
+		// filters extendState <> 0, which a global reset demotes to 0 for
+		// permanent binds (CHAR_UPD_EXPIRE_CHAR_INSTANCE_BY_MAP_DIFF), so
+		// check permanence without the extendState filter here.
+		permanentSavedBind := false
+		if !boundMismatch && !groupBoundMismatch {
+			var permanentSaved int64
+			permErr := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ci.permanent FROM character_instance AS ci
+				JOIN instance AS i ON i.id = ci.instance WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ? AND ci.instance = ? AND ci.permanent <> 0 LIMIT 1`, state.GUID, state.Map, playerDifficulty, state.InstanceID).Scan(&permanentSaved)
+			if permErr == nil {
+				permanentSavedBind = true
+			} else if !errors.Is(permErr, sql.ErrNoRows) {
+				return selection, false, permErr
+			}
+		}
+		if savedMap == int64(state.Map) && !boundMismatch && !groupBoundMismatch && ((characterBound && characterInstanceID == int64(state.InstanceID)) || permanentSavedBind || active) {
 			selection.InstanceID, selection.Difficulty = state.InstanceID, uint32(savedDifficulty)
 			selection.GroupPermanent, err = s.groupInstancePermanent(ctx, selection)
 			if err != nil {
