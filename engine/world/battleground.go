@@ -2105,16 +2105,45 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 	// entry-point relocate. A nil state gets no score delete: C++ runs
 	// RemovePlayerAtLeave only when the battleground was found. The
 	// peek never creates a state, so it cannot resurrect a deleted
-	// match. Residual: per-map states carry no instance id or roster,
-	// so a stale InstanceID from a prior match on the same map still
-	// restores into a running successor match (the conflation
-	// deleteBattlegroundStateOnEmpty already documents).
+	// match. The stale-InstanceID conflation
+	// deleteBattlegroundStateOnEmpty documents is gated below by
+	// the live-session witness: a stale id restores only when no
+	// live InProgress witness exists on the map at all (the solo
+	// relog case, kept deliberately), never into a successor with
+	// live members of its own.
 	if !isArena && s.server != nil {
 		exists, ended := s.server.peekNonArenaBGState(state.Map)
 		if !exists || ended {
 			if ended {
 				s.server.deleteBGScoreRow(state.Map, s.bgData.InstanceID, s.playerGUID)
 			}
+			s.bgData.InstanceID = 0
+			s.bgData.Team = 0
+			s.relocateLoginToBGEntryPoint()
+			return
+		}
+		// C++ GetBattleground(saved id) miss, witnessed through live
+		// sessions: Go per-map states carry no instance id, so a stale
+		// InstanceID from a prior match on this map otherwise restores
+		// into a running successor (state reused via reset, or deleted
+		// and recreated pristine, both leave a live non-ended state).
+		// A live InProgress slot for this map holding the saved id is
+		// the witness that the saved instance still runs — the
+		// rearm scan's live-participant definition, MapID-keyed so a
+		// random queue resolved to this map counts, and merged
+		// multi-pop matches keep restoring (each pop's id is
+		// witnessed by its own online members). Live slots with no
+		// instance id carry no instance evidence and are skipped.
+		// When live witnesses exist but none holds the saved id, the
+		// saved instance is gone and C++ relocates to the entry
+		// point instead of restoring; no score delete here, matching
+		// the nil-state leg (C++ runs RemovePlayerAtLeave only when
+		// the battleground was found). When no live witness exists
+		// at all the restore stands: a solo relog into its own still
+		// live match is indistinguishable from a stale login into
+		// an all-offline successor, and the solo relog is the case
+		// the restore exists for.
+		if anyLive, witnessed := s.server.liveNonArenaBGInstanceWitness(state.Map, s.bgData.InstanceID, s); anyLive && !witnessed {
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
 			s.relocateLoginToBGEntryPoint()
@@ -2452,6 +2481,38 @@ func (s *Server) peekNonArenaBGState(mapID uint32) (exists, ended bool) {
 	default:
 		return false, false
 	}
+}
+
+// liveNonArenaBGInstanceWitness reports whether any live session holds
+// an InProgress slot for mapID, and whether any such slot holds
+// instanceID. It is the login-restore form of
+// rearmNonArenaBGMatchStartTimeOnFirstAccept's live-participant scan:
+// the per-map state cannot answer C++'s GetBattleground(saved id)
+// lookup, so the live slots are the only instance evidence the sim
+// keeps. The logging-in session is excluded; its slots are empty
+// until this restore fills one.
+func (s *Server) liveNonArenaBGInstanceWitness(mapID, instanceID uint32, except *session) (anyLive, witnessed bool) {
+	if s == nil {
+		return false, false
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == nil || sess == except {
+			continue
+		}
+		for i := range sess.bgQueues {
+			e := &sess.bgQueues[i]
+			if !e.Active || e.IsArena || e.Status != BGStatusInProgress || e.MapID != mapID || e.InstanceID == 0 {
+				continue
+			}
+			anyLive = true
+			if e.InstanceID == instanceID {
+				witnessed = true
+			}
+		}
+	}
+	return anyLive, witnessed
 }
 
 func battlegroundTypeForMap(mapID uint32) (uint32, uint8, bool, bool) {
