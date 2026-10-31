@@ -23645,6 +23645,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	reflectReturnStatus := s.spellReflectReturnStatus(spell)
 	triggeredMiss := make(map[uint64]uint8)
 	var triggeredMissGUIDs []uint64
+	// Arrival drops ride a separate nodmg list, not triggeredMissGUIDs:
+	// PreprocessTarget never rewrites TargetInfo.MissCondition
+	// (Spell.cpp:2373-2380), so a Speed-gated or sanctuary arrival
+	// drop keeps its launch NONE and its DoDamageAndTriggers nodmg
+	// arm carries the NORMAL mask — unlike a launch miss, whose
+	// MissCondition feeds the mask. Recording an arrival EVADE in
+	// triggeredMiss would give the nodmg pass the wrong mask, and
+	// overwriting it with NONE would re-admit the target to the
+	// effect loop (the assembly miss filter only skips non-NONE
+	// reasons). The nodmg victim is the effect recipient (et.guid):
+	// for a reflected sanctuary drop that is the caster, matching
+	// DoDamageAndTriggers' _spellHitTarget retarget.
+	triggeredArrivalDropGUIDs := make([]uint64, 0)
+	triggeredArrivalDropped := make(map[uint64]struct{})
 	// Spell::AddUnitTarget (Spell.cpp:2152) rolls every selected target,
 	// including the per-effect friendly-area ally selection of a harmful
 	// spell — the 2152 carve-out offers reflect to friendlies of a
@@ -23956,11 +23970,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// HITBYSPELL auras. A drop joins triggeredMiss with EVADE, so the
 	// effect loop skips it everywhere, and sends SMSG_SPELLLOGMISS
 	// (PreprocessTarget, Spell.cpp:2366-2372); the GO hit list keeps it,
-	// matching C++ GO-before-arrival. Drops do not join triggeredMissGUIDs:
-	// C++ leaves MissCondition at its launch value (NONE) for arrival drops,
-	// so their DoDamageAndTriggers runs the zero-damage hit path, not the
-	// miss arm the nodmg loop models — that path stays residual, as in the
-	// UNK4 strip. The Speed-gated immunity arm (:2720) is not repeated
+	// matching C++ GO-before-arrival. Drops join the arrival list, not
+	// triggeredMissGUIDs: C++ leaves MissCondition at its launch value
+	// (NONE) for arrival drops, so their DoDamageAndTriggers nodmg arm
+	// carries the NORMAL mask — the nodmg loop below runs them with
+	// NONE, where a triggeredMissGUIDs EVADE entry would feed the
+	// wrong (launch-miss) mask. The Speed-gated immunity arm (:2720)
+	// is not repeated
 	// here: it is launch-covered (see the audit unit in this tick's entry).
 	if spell.Speed > 0 {
 		for _, guid := range triggeredRollTargets {
@@ -23973,6 +23989,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			if s.triggeredSpeedGatedArrivalDrop(ctx, spell, guid) {
 				triggeredMiss[guid] = protocol.SpellMissEvade
 				s.sendSpellMiss(guid, spell.ID, protocol.SpellMissEvade)
+				if _, dup := triggeredArrivalDropped[guid]; !dup {
+					triggeredArrivalDropped[guid] = struct{}{}
+					triggeredArrivalDropGUIDs = append(triggeredArrivalDropGUIDs, guid)
+				}
 			}
 		}
 	}
@@ -24742,6 +24762,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			kept := effectTargets[:0]
 			for _, et := range effectTargets {
 				if s.sanctuaryTimeFor(et.originGUID) >= triggeredLaunchMs {
+					// The dropped TargetInfo still runs
+					// DoDamageAndTriggers (Spell.cpp:3570): its nodmg
+					// arm joins the arrival list with MissCondition
+					// NONE, the victim being the effect recipient
+					// (et.guid) — the caster for a reflected entry.
+					if _, dup := triggeredArrivalDropped[et.guid]; !dup {
+						triggeredArrivalDropped[et.guid] = struct{}{}
+						triggeredArrivalDropGUIDs = append(triggeredArrivalDropGUIDs, et.guid)
+					}
 					continue
 				}
 				kept = append(kept, et)
@@ -25401,6 +25430,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if healValue < 0 {
 					continue
 				}
+				// Spell::EffectHeal (SpellEffects.cpp:1399-1403): the
+				// !IsAlive gate — the DoTargetSpellHit alive arm's
+				// per-effect twin. The 136/75 arms ride
+				// effectTargetMaxHealth the same way; a dead or
+				// unresolvable target takes no heal, no heal log,
+				// no threat, and no procs from executeSpellHeal.
+				// EffectHeal carries no dead-target carve-out (unlike
+				// the resurrect effects), so the gate is unconditional.
+				if s.effectTargetMaxHealth(ctx, effectTarget) == 0 {
+					continue
+				}
 				healAmount := uint32(healValue)
 				if healAmount == 0 && spellID == ProcSpellCrusader {
 					healAmount = 100
@@ -25997,6 +26037,34 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			} else if high := uint16(guid >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
 				if motion := s.findCreatureMotion(guid); motion != nil {
 					s.server.fireCreatureMissNodmgTakenProcs(ctx, motion, s.playerGUID, spell, miss, s.triggeredNoProcEvents > 0, s.castTriggerAuraSpell)
+				}
+			}
+		}
+	}
+	// Arrival drops take the same DoDamageAndTriggers nodmg arm with
+	// MissCondition NONE (Spell.cpp:2373-2380 leaves it at the launch
+	// value; Spell.cpp:2563-2579 runs the nodmg arm when m_damage and
+	// m_healing are both 0): the NORMAL mask, never the LOGMISS
+	// EVADE. The gates mirror the launch-miss loop above — a spell
+	// with no explicit effects fires only the IMMUNE carve-out, so a
+	// NONE arrival drop fires nothing there, matching
+	// CanExecuteTriggersOnHit on an empty mask.
+	for _, guid := range triggeredArrivalDropGUIDs {
+		if !hasExplicitEffects {
+			continue
+		}
+		if s.server != nil {
+			if victimSess := s.server.findSessionByGUID(guid); victimSess != nil && victimSess.procDeep > 0 {
+				continue
+			}
+		}
+		s.procSpellDamageNoDmgAuraTriggers(ctx, guid, spellID, protocol.SpellMissNone, false, false)
+		if s.server != nil {
+			if victimSess := s.server.findSessionByGUID(guid); victimSess != nil {
+				victimSess.procSpellDamageNoDmgTakenAuraTriggers(ctx, s.playerGUID, spellID, protocol.SpellMissNone, false, s.triggeredNoProcEvents > 0, false, s.castTriggerAuraSpell)
+			} else if high := uint16(guid >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
+				if motion := s.findCreatureMotion(guid); motion != nil {
+					s.server.fireCreatureMissNodmgTakenProcs(ctx, motion, s.playerGUID, spell, protocol.SpellMissNone, s.triggeredNoProcEvents > 0, s.castTriggerAuraSpell)
 				}
 			}
 		}
