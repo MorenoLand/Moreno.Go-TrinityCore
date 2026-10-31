@@ -267,7 +267,7 @@ func (s *session) spellDamageStep1Gate(spellID uint32, engaged bool) bool {
 }
 
 func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool) (float32, bool) {
-	return s.damageThreatAmountWithModOwner(ctx, spellID, schoolMask, damage, engaged, s)
+	return s.damageThreatAmountWithModOwner(ctx, spellID, schoolMask, damage, engaged, s, nil)
 }
 
 // damageThreatAmountWithModOwner is damageThreatAmount with the SPELLMOD_THREAT
@@ -275,7 +275,11 @@ func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, school
 // WorldObject::GetSpellModOwner (Object.cpp:2246-2261) resolves an owner
 // player only for pet/totem casters, so a possessed wild creature's threat
 // takes no charmer spellmod. Player casters pass themselves, unchanged.
-func (s *session) damageThreatAmountWithModOwner(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool, modOwner *session) (float32, bool) {
+// attackerMotion, when non-nil, is the creature attacker: CalculateModifiedThreat
+// (ThreatManager.cpp:606-659) takes the ATTACKER as its unit argument, so the
+// school multipliers come from the attacker's own SPELL_AURA_MOD_THREAT auras
+// (the creature-aura store), never the executing session's player auras.
+func (s *session) damageThreatAmountWithModOwner(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool, modOwner *session, attackerMotion *creatureMotion) (float32, bool) {
 	if s == nil || s.server == nil {
 		return 0, false
 	}
@@ -308,6 +312,9 @@ func (s *session) damageThreatAmountWithModOwner(ctx context.Context, spellID ui
 		if spellKnown && modOwner != nil {
 			t = modOwner.applySpellModFloat(spell, spellModThreat, t)
 		}
+	}
+	if attackerMotion != nil {
+		return float32(t) * s.server.creatureThreatMultiplier(attackerMotion.Map, attackerMotion.InstanceID, attackerMotion.GUID, schoolMask), false
 	}
 	return float32(t) * s.getThreatMultiplier(schoolMask), false
 }

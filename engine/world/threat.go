@@ -1327,6 +1327,41 @@ func (s *session) getThreatMultiplier(schoolMask uint32) float32 {
 	return mult
 }
 
+// creatureThreatMultiplier mirrors getThreatMultiplier for a creature
+// attacker: ThreatManager::CalculateModifiedThreat (ThreatManager.cpp:606-659)
+// takes the attacker as its unit argument, so the school multipliers come
+// from the attacker's own SPELL_AURA_MOD_THREAT (aura 10) auras, gated on
+// the MiscValue school mask exactly like the player twin. Creature
+// attackers carry no player stances, so the hardcoded stance arms of the
+// player twin do not apply here; the 0.1 floor matches the player twin.
+func (s *Server) creatureThreatMultiplier(mapID, instanceID uint32, guid uint64, schoolMask uint32) float32 {
+	if s == nil {
+		return 1.0
+	}
+	mult := float32(1.0)
+	key := creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: guid}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	if s.activeCreatureAuras != nil {
+		if auras, ok := s.activeCreatureAuras[key]; ok {
+			for _, a := range auras {
+				if a == nil || a.Stopped {
+					continue
+				}
+				if a.AuraType == 10 {
+					if a.MiscValue&int32(schoolMask) != 0 {
+						mult *= (1.0 + float32(int32(a.Amount))/100.0)
+					}
+				}
+			}
+		}
+	}
+	if mult < 0.1 {
+		mult = 0.1
+	}
+	return mult
+}
+
 // isTauntSpell returns true if the spell is a Taunt ability.
 // Reference: TrinityCore SPELL_EFFECT_ATTACK_ME (114) and SPELL_AURA_MOD_TAUNT (11).
 func isTauntSpell(spellID uint32) bool {

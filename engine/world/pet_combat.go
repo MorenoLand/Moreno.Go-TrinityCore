@@ -3412,6 +3412,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if s == nil || s.server == nil || motion == nil {
 		return false
 	}
+	// WorldObject::GetSpellModOwner (Object.cpp:2246-2261): only
+	// pet/totem casters resolve to an owner player — a possessed wild
+	// creature has no mod owner, so every spellmod fold below runs
+	// against this session (nil-safe: a nil owner returns the base
+	// value) instead of the charmer's mods. True pets resolve to
+	// their owner session, unchanged.
+	petModOwner := s.server.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
 	// Triggered pet spells are built from the explicit unit target only:
 	// C++ EffectTriggerSpell casts the triggered spell without the parent
 	// packet's trajectory or destination, so the parent target copy that
@@ -3585,7 +3592,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// spellmod owner only for pet/totem casters: a possessed wild
 	// creature has none, so the charmer's SPELLMOD_RANGE must not stretch
 	// its range. True pets resolve to their owner session, unchanged.
-	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID, s.server.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)) {
+	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID, petModOwner) {
 		return true
 	}
 	// Spell::CheckCast CheckCasterAuras arm (Spell.cpp:5509): after
@@ -4045,7 +4052,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	var chainHitsByEffect = make(map[int][]uint64)
 	var chainEffectMask uint32
 	if targetGUID != 0 {
-		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(s, spell); jumps > 0 {
+		if jumps, isChainHeal, checkType, effectMask := chainSpellJumps(petModOwner, spell); jumps > 0 {
 			chainEffectMask = effectMask
 			anchor := targetGUID
 			winTarget := uint32(0)
@@ -4106,7 +4113,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// cast (Spell.cpp:1111), an unknown miss chains nothing. The owner session is
 		// the spell-mod owner for pets (C++ GetSpellModOwner), so the
 		// SPELLMOD_JUMP_TARGETS fold runs here like the winning block.
-		_, _, _, winMask := chainSpellJumps(s, spell)
+		_, _, _, winMask := chainSpellJumps(petModOwner, spell)
 		for i, eff := range spell.Effects {
 			if eff.Effect == 0 && eff.Aura == 0 {
 				continue
@@ -4122,7 +4129,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			if winMask == 1<<uint(i) {
 				continue
 			}
-			modded := s.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets))
+			modded := petModOwner.applySpellMod(spell, spellModJumpTargets, int32(eff.ChainTargets))
 			if modded <= 1 {
 				continue
 			}
@@ -4275,7 +4282,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		// miss fails the cast (Spell.cpp:1111); an unknown miss or wire
 		// victim chains nothing (no family-pick fallback; the object leg
 		// anchors strictly on the wire target, never on a nearby pick).
-		if jumps, _, _, winMask := chainSpellJumps(s, spell); jumps > 0 {
+		if jumps, _, _, winMask := chainSpellJumps(petModOwner, spell); jumps > 0 {
 			if secondTarget, ok := winningSecondChainLeg(spell, winMask); ok {
 				anchor := uint64(0)
 				if targetObjectTarget(secondTarget) {
@@ -5235,7 +5242,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			// after the pct leg — the cast loop carries direct damage effects
 			// only, so the op is SPELLMOD_DAMAGE (the DoT tick path is the
 			// dot twin).
-			if out := s.applySpellMod(spell, spellModDamage, int32(d)); out < 0 {
+			if out := petModOwner.applySpellMod(spell, spellModDamage, int32(d)); out < 0 {
 				d = 0
 			} else {
 				d = uint32(out)
@@ -5316,7 +5323,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			default:
 				continue
 			}
-			chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
+			chainMult := petModOwner.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
 			for jumpIdx, chainGUID := range chainJumps {
 				if rt := resolveReflectTarget(chainGUID); rt != 0 {
 					reflectorGUID := uint64(0)
@@ -5439,16 +5446,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					}
 					// Unit::SpellHealingBonusDone (Unit.cpp:7614-7616): the
 					// SPELLMOD_DAMAGE / SPELLMOD_DOT spellmod applies to the heal
-					// total via GetSpellModOwner — the owner player (s). The pet
+					// total via GetSpellModOwner — the pet's mod owner (petModOwner). The pet
 					// cast loop carries direct heal effects only, so the op is
 					// SPELLMOD_DAMAGE (the HoT tick path is the dot twin).
-					if out := s.applySpellMod(spell, spellModDamage, int32(heal)); out < 0 {
+					if out := petModOwner.applySpellMod(spell, spellModDamage, int32(heal)); out < 0 {
 						heal = 0
 					} else {
 						heal = uint32(out)
 					}
 					if chainJump >= 0 {
-						chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(effect.ChainAmplitude)*100.0) / 100.0
+						chainMult := petModOwner.applySpellModFloat(spell, spellModDamageMultiplier, float64(effect.ChainAmplitude)*100.0) / 100.0
 						heal = chainScaledAmount(heal, chainMult, chainJump)
 					}
 					s.executePetSpellHeal(ctx, motion, victimGUID, spell.ID, heal)
@@ -7873,7 +7880,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// pet/totem casters resolve to an owner player, so a possessed
 			// wild creature's threat takes no charmer SPELLMOD_THREAT.
 			// True pets resolve to their owner session, unchanged.
-			threat, step1Gate := s.damageThreatAmountWithModOwner(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat, s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID))
+			threat, step1Gate := s.damageThreatAmountWithModOwner(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat, s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID), caster)
 			// ThreatManager::AddThreat step 1 (ThreatManager.cpp:311-317)
 			// returns before SetInCombatWith: a gated spell neither adds
 			// threat nor engages the victim. Every other arm — including
