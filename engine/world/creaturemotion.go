@@ -43,22 +43,25 @@ type creatureMotionSpawnKey struct {
 // TrinityCore's MotionMaster fills: home position (for random wander around
 // spawn), current position, waypoint path/point and the next move deadline.
 type creatureMotion struct {
-	GUID          uint64
-	Entry         uint32
-	EntryOverride bool // scripted Creature::UpdateEntry latch (Creature.cpp:552): motion re-seated on a new template; grid sweep must not recreate/re-affirm from the DB row while set (evade respawn clears it)
-	Map           uint32
-	InstanceID    uint32
-	TransportGUID uint64
-	HomeX         float32
-	HomeY         float32
-	HomeZ         float32
-	HomeO         float32 // home orientation (C++ m_homePosition.GetOrientation()): spawn orientation, SetHomePosition o, or the waypoint end-of-path arm's owner orientation; returned as GetHomePosition's 4th value
-	X             float32
-	Y             float32
-	Z             float32
-	Orientation   float32
-	Speed         float32 // yd/s walk speed used for wander
-	RunSpeed      float32 // yd/s run speed used for pursuit
+	GUID                   uint64
+	Entry                  uint32
+	EntryOverride          bool // scripted Creature::UpdateEntry latch (Creature.cpp:552): motion re-seated on a new template; grid sweep must not recreate/re-affirm from the DB row while set (evade respawn clears it)
+	Map                    uint32
+	InstanceID             uint32
+	TransportGUID          uint64
+	VehicleGUID            uint64 // base GUID while seated on a vehicle (Vehicle::AddPassenger seat); 0 = not seated
+	VehicleSeat            int8   // seat id on VehicleGUID's kit; valid only while VehicleGUID != 0
+	VehicleAccessoryMinion bool   // UNIT_MASK_ACCESSORY twin (Vehicle.cpp:404): set only for minion accessories, whose fate is bound to the vehicle
+	HomeX                  float32
+	HomeY                  float32
+	HomeZ                  float32
+	HomeO                  float32 // home orientation (C++ m_homePosition.GetOrientation()): spawn orientation, SetHomePosition o, or the waypoint end-of-path arm's owner orientation; returned as GetHomePosition's 4th value
+	X                      float32
+	Y                      float32
+	Z                      float32
+	Orientation            float32
+	Speed                  float32 // yd/s walk speed used for wander
+	RunSpeed               float32 // yd/s run speed used for pursuit
 	// BaseRunRate banks the creature_template speed_run rate feeding
 	// refreshCreatureRunSpeed (the Unit::UpdateSpeed twin): the aura fold
 	// multiplies this DB rate, so it must survive aura changes. Walk has
@@ -3240,6 +3243,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 
 	s.stepCreatureRegen(motion)
 	s.stepCreatureCombatPulse(ctx, motion, players)
+
+	// A creature seated on a vehicle does not move itself: its position
+	// is owned by the base (Vehicle::RelocatePassengers, Vehicle.cpp:554),
+	// and Go's relocatePassengers/syncCreatureVehiclePassengers twin
+	// drives it. The gate sits after regen, the combat pulse and the
+	// Lua AIUpdate fire above, so a seated turret still regenerates,
+	// pulses and runs scripted casts; only the engine pursuit, wander,
+	// waypoint and flee movement below is suppressed. The transport
+	// gate at the head is the precedent (transport passengers do not
+	// step at all); seated accessories keep the earlier arms because
+	// their Lua AIUpdate is the turret-cast path.
+	if motion.VehicleGUID != 0 {
+		motion.Moving = false
+		return
+	}
 
 	// Pet AI handling if this creature is a player pet. Temp summons are
 	// not pets (UNIT_MASK_SUMMON, not UNIT_MASK_PET), so the summoned

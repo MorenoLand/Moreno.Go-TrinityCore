@@ -73,6 +73,7 @@ type VehicleKit struct {
 	UsableSeatNum        uint32
 	Accessories          []VehicleAccessory
 	InstalledAccessories []uint64
+	AccessoriesInstalled bool // install latch: InstallAllAccessories attempted once per kit; re-install on evade Reset(true) is a residual (Go has no evade Reset twin)
 	LastShootPos         [3]float32
 	X, Y, Z, Orientation float32
 }
@@ -492,11 +493,15 @@ func (s *Server) removeVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) 
 	}
 	s.vehicleMu.Lock()
 	key := vehicleKitKey{MapID: mapID, InstanceID: instanceID, GUID: vehicleGUID}
-	if kit := s.instanceVehicleKits[key]; kit != nil && s.vehicleKits[vehicleGUID] == kit {
+	kit := s.instanceVehicleKits[key]
+	if kit != nil && s.vehicleKits[vehicleGUID] == kit {
 		delete(s.vehicleKits, vehicleGUID)
 	}
 	delete(s.instanceVehicleKits, key)
 	s.vehicleMu.Unlock()
+	if kit != nil {
+		s.exitCreatureVehiclePassengers(mapID, instanceID, kit)
+	}
 }
 
 // vehicleKitLocation pairs a kit with the instance key it lives under.
@@ -739,6 +744,92 @@ func (s *Server) loadVehicleAccessories(ctx context.Context) {
 	}
 }
 
+// installVehicleAccessories bridges Vehicle::InstallAllAccessories
+// (Vehicle.cpp:84-100) for the non-evading case: Creature::AIM_Initialize
+// (Creature.cpp:1085) and LoadResetScript call Vehicle::Reset, which
+// installs every template accessory at spawn. Go kits copy the
+// vehicle_template_accessory rows as data only, so this runs on the
+// first passenger sync for the base: the step paths all funnel through
+// sync, and summoning needs motionMu, which the kit-creation sites
+// hold while the sync callers do not. Per accessory (Vehicle.cpp:386-412):
+// TempSummon at the base position via the summonTempCreature twin,
+// UNIT_MASK_ACCESSORY for minions, then the HandleSpellClick twin:
+// kit.AddPassenger seats the motion (the player-only enterVehicle
+// cannot board creatures), and this sync's own relocate fan-out below
+// moves it onto the seat offsets. Occupied seats are skipped, not
+// ejected: C++ clears passengers first, but Go installs a tick after
+// spawn, when a player may already have boarded. A failed board
+// despawns the just-summoned accessory (the VehicleJoinEvent::Abort
+// twin). GUID-based vehicle_accessory rows are not loaded in Go, so
+// the install covers the template list only.
+func (s *Server) installVehicleAccessories(ctx context.Context, motion *creatureMotion, kit *VehicleKit) {
+	if s == nil || motion == nil || kit == nil {
+		return
+	}
+	kit.mu.Lock()
+	if kit.AccessoriesInstalled || len(kit.Accessories) == 0 {
+		kit.mu.Unlock()
+		return
+	}
+	accessories := append([]VehicleAccessory(nil), kit.Accessories...)
+	kit.AccessoriesInstalled = true
+	kit.mu.Unlock()
+	origin := s.summonOriginFromMotion(motion)
+	for _, acc := range accessories {
+		summoned := s.summonTempCreature(ctx, origin, acc.AccessoryEntry, motion.X, motion.Y, motion.Z, motion.Orientation, acc.SummonType, acc.SummonTime)
+		if summoned == nil {
+			continue
+		}
+		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
+		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
+		if !ok {
+			s.expireTempSummonGuardian(ctx, summoned)
+			continue
+		}
+		s.motionMu.Lock()
+		summoned.VehicleGUID = motion.GUID
+		summoned.VehicleSeat = assigned
+		summoned.VehicleAccessoryMinion = acc.IsMinion
+		summoned.Moving = false
+		s.motionMu.Unlock()
+		kit.mu.Lock()
+		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
+		kit.mu.Unlock()
+	}
+}
+
+// exitCreatureVehiclePassengers bridges the Unit::_ExitVehicle tail
+// (Unit.cpp:13252-13266) for creature passengers when a kit drops: a
+// minion accessory (UNIT_MASK_ACCESSORY) unsummons with its vehicle
+// (and dies with it when the vehicle died — Go temp summons vanish
+// rather than leaving a corpse, the standing temp-summon delta), while
+// a non-minion accessory simply unseats and stays in the world at its
+// last relocated position. Player seats are untouched: the player
+// eject/logout arms own those sessions.
+func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *VehicleKit) {
+	if s == nil || kit == nil {
+		return
+	}
+	for _, guid := range kit.seatedPassengerGUIDs() {
+		if s.findSessionByGUID(guid) != nil {
+			continue
+		}
+		motion := s.findCreatureMotion(mapID, instanceID, guid)
+		if motion == nil {
+			continue
+		}
+		if motion.VehicleAccessoryMinion {
+			s.expireTempSummonGuardian(context.Background(), motion)
+			continue
+		}
+		s.motionMu.Lock()
+		motion.VehicleGUID = 0
+		motion.VehicleSeat = 0
+		motion.Moving = false
+		s.motionMu.Unlock()
+	}
+}
+
 // syncCreatureVehiclePassengers moves a creature base's passengers with it.
 // Reference: Map::CreatureRelocation (Map.cpp:1136) and
 // Map::MoveAllCreaturesInMoveList (Map.cpp:1294) — every creature
@@ -762,6 +853,7 @@ func (s *Server) syncCreatureVehiclePassengers(motion *creatureMotion) {
 	if kit == nil {
 		return
 	}
+	s.installVehicleAccessories(context.Background(), motion, kit)
 	kit.setPosition(motion.X, motion.Y, motion.Z, motion.Orientation)
 	s.relocatePassengers(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.Orientation)
 }

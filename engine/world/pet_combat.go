@@ -772,6 +772,7 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 		return
 	}
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	vehicleGUID := motion.VehicleGUID
 	tx, ty, tz := motion.X, motion.Y, motion.Z
 	ownerGUID, petID := motion.OwnerGUID, motion.PetID
 	s.motionMu.Lock()
@@ -781,6 +782,11 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	}
 	delete(s.motionMapLocked(mapID, instanceID), guid)
 	s.motionMu.Unlock()
+	if vehicleGUID != 0 {
+		if kit := s.getVehicleKit(mapID, instanceID, vehicleGUID); kit != nil {
+			kit.RemovePassenger(guid)
+		}
+	}
 	// TempSummon::UnSummon reaches CleanupBeforeRemoveFromMap
 	// (Unit.cpp:9826-9829) via the remove list, so a cast in flight
 	// cancels ahead of destroy — type 2 fires even in combat.
