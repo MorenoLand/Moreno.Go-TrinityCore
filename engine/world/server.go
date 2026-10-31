@@ -404,6 +404,14 @@ type session struct {
 	playerGUID      uint64
 	playerLoading   bool
 	playerLoaded    bool
+	// preLoginQueue holds STATUS_LOGGEDIN packets read while the player was
+	// not yet in world, for replay after login (see preLoginPacket).
+	preLoginQueue []preLoginPacket
+	// recentlyLoggedOut mirrors WorldSession::m_playerRecentlyLogout
+	// (WorldSession.cpp:643, set by LogoutPlayer; cleared by CMSG_CHAR_ENUM
+	// at WorldSession.cpp:381): while set, lag STATUS_LOGGEDIN packets are
+	// dropped, never requeued.
+	recentlyLoggedOut bool
 	// currentBankerGUID mirrors WorldSession::m_currentBankerGUID
 	// (WorldSession.h): the banker creature the player last opened the bank
 	// with, latched by SendShowBank (BankHandler.cpp:183-188) and consumed by
@@ -2886,6 +2894,238 @@ func socketHandledOpcode(opcode uint32) bool {
 	return false
 }
 
+// preLoginPacket is one STATUS_LOGGEDIN packet read before the player
+// was in world, held for replay after login completes. WorldSession::Update
+// (WorldSession.cpp:312-326) re-adds such packets to the bottom of the
+// recv queue instead of dropping them when _player is nil and the player
+// has not recently logged out; Go has no recv queue (Server.Handle reads
+// one frame at a time), so the session holds them until the loop-top
+// drain replays them through the normal dispatch once the player is loaded
+// and in world.
+type preLoginPacket struct {
+	header  protocol.ClientFrameHeader
+	payload []byte
+}
+
+// maxPreLoginQueuePackets bounds the requeue buffer. C++ requeues without
+// a cap across Updates (bounded only by the 100-packet per-Update drain),
+// but an unbounded Go buffer lets a char-screen client grow session memory
+// without limit; past the cap further pre-login packets drop like the
+// handler guards dropped them before this buffer existed.
+const maxPreLoginQueuePackets = 100
+
+// isPreLoginRequeueOpcode reports whether opcode is a STATUS_LOGGEDIN normal
+// case (status_arm_census.json, 399 rows). AUTHED, TRANSFER,
+// LOGGEDIN_OR_RECENTLY_LOGGOUT and NEVER opcodes are never requeued: C++
+// calls the AUTHED handler regardless of _player, logs TRANSFER and
+// LOGGEDIN_OR_RECENTLY_LOGGOUT unexpected without requeueing, and never
+// sees NEVER opcodes (WorldSocket consumes them first).
+func isPreLoginRequeueOpcode(opcode uint32) bool {
+	switch opcode {
+	case uint32(protocol.OpcodeCMSG_ACCEPT_LEVEL_GRANT), uint32(protocol.OpcodeCMSG_ACCEPT_TRADE), uint32(protocol.OpcodeCMSG_ACTIVATETAXI), uint32(protocol.OpcodeCMSG_ACTIVATETAXIEXPRESS):
+		return true
+	case uint32(protocol.OpcodeCMSG_ADD_FRIEND), uint32(protocol.OpcodeCMSG_ADD_IGNORE), uint32(protocol.OpcodeCMSG_ALTER_APPEARANCE), uint32(protocol.OpcodeCMSG_AREATRIGGER):
+		return true
+	case uint32(protocol.OpcodeCMSG_AREA_SPIRIT_HEALER_QUERY), uint32(protocol.OpcodeCMSG_AREA_SPIRIT_HEALER_QUEUE), uint32(protocol.OpcodeCMSG_ARENA_TEAM_ACCEPT), uint32(protocol.OpcodeCMSG_ARENA_TEAM_DECLINE):
+		return true
+	case uint32(protocol.OpcodeCMSG_ARENA_TEAM_DISBAND), uint32(protocol.OpcodeCMSG_ARENA_TEAM_INVITE), uint32(protocol.OpcodeCMSG_ARENA_TEAM_LEADER), uint32(protocol.OpcodeCMSG_ARENA_TEAM_LEAVE):
+		return true
+	case uint32(protocol.OpcodeCMSG_ARENA_TEAM_QUERY), uint32(protocol.OpcodeCMSG_ARENA_TEAM_REMOVE), uint32(protocol.OpcodeCMSG_ARENA_TEAM_ROSTER), uint32(protocol.OpcodeCMSG_ATTACK_STOP):
+		return true
+	case uint32(protocol.OpcodeCMSG_ATTACK_SWING), uint32(protocol.OpcodeCMSG_AUCTION_LIST_BIDDER_ITEMS), uint32(protocol.OpcodeCMSG_AUCTION_LIST_ITEMS), uint32(protocol.OpcodeCMSG_AUCTION_LIST_OWNER_ITEMS):
+		return true
+	case uint32(protocol.OpcodeCMSG_AUCTION_LIST_PENDING_SALES), uint32(protocol.OpcodeCMSG_AUCTION_PLACE_BID), uint32(protocol.OpcodeCMSG_AUCTION_REMOVE_ITEM), uint32(protocol.OpcodeCMSG_AUCTION_SELL_ITEM):
+		return true
+	case uint32(protocol.OpcodeCMSG_AUTOBANK_ITEM), uint32(protocol.OpcodeCMSG_AUTOEQUIP_ITEM), uint32(protocol.OpcodeCMSG_AUTOEQUIP_ITEM_SLOT), uint32(protocol.OpcodeCMSG_AUTOSTORE_BAG_ITEM):
+		return true
+	case uint32(protocol.OpcodeCMSG_AUTOSTORE_BANK_ITEM), uint32(protocol.OpcodeCMSG_AUTOSTORE_LOOT_ITEM), uint32(protocol.OpcodeCMSG_BANKER_ACTIVATE), uint32(protocol.OpcodeCMSG_BATTLEFIELD_LIST):
+		return true
+	case uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE), uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_EXIT_REQUEST), uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_QUEUE_INVITE_RESPONSE), uint32(protocol.OpcodeCMSG_BATTLEFIELD_PORT):
+		return true
+	case uint32(protocol.OpcodeCMSG_BATTLEFIELD_STATUS), uint32(protocol.OpcodeCMSG_BATTLEMASTER_HELLO), uint32(protocol.OpcodeCMSG_BATTLEMASTER_JOIN), uint32(protocol.OpcodeCMSG_BATTLEMASTER_JOIN_ARENA):
+		return true
+	case uint32(protocol.OpcodeCMSG_BEGIN_TRADE), uint32(protocol.OpcodeCMSG_BINDER_ACTIVATE), uint32(protocol.OpcodeCMSG_BUG), uint32(protocol.OpcodeCMSG_BUSY_TRADE):
+		return true
+	case uint32(protocol.OpcodeCMSG_BUYBACK_ITEM), uint32(protocol.OpcodeCMSG_BUY_BANK_SLOT), uint32(protocol.OpcodeCMSG_BUY_ITEM), uint32(protocol.OpcodeCMSG_BUY_ITEM_IN_SLOT):
+		return true
+	case uint32(protocol.OpcodeCMSG_BUY_STABLE_SLOT), uint32(protocol.OpcodeCMSG_CALENDAR_ADD_EVENT), uint32(protocol.OpcodeCMSG_CALENDAR_ARENA_TEAM), uint32(protocol.OpcodeCMSG_CALENDAR_COMPLAIN):
+		return true
+	case uint32(protocol.OpcodeCMSG_CALENDAR_COPY_EVENT), uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_INVITE), uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_MODERATOR_STATUS), uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_REMOVE_INVITE):
+		return true
+	case uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_RSVP), uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_SIGNUP), uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_STATUS), uint32(protocol.OpcodeCMSG_CALENDAR_GET_CALENDAR):
+		return true
+	case uint32(protocol.OpcodeCMSG_CALENDAR_GET_EVENT), uint32(protocol.OpcodeCMSG_CALENDAR_GET_NUM_PENDING), uint32(protocol.OpcodeCMSG_CALENDAR_GUILD_FILTER), uint32(protocol.OpcodeCMSG_CALENDAR_REMOVE_EVENT):
+		return true
+	case uint32(protocol.OpcodeCMSG_CALENDAR_UPDATE_EVENT), uint32(protocol.OpcodeCMSG_CANCEL_AURA), uint32(protocol.OpcodeCMSG_CANCEL_AUTO_REPEAT_SPELL), uint32(protocol.OpcodeCMSG_CANCEL_CAST):
+		return true
+	case uint32(protocol.OpcodeCMSG_CANCEL_CHANNELLING), uint32(protocol.OpcodeCMSG_CANCEL_GROWTH_AURA), uint32(protocol.OpcodeCMSG_CANCEL_MOUNT_AURA), uint32(protocol.OpcodeCMSG_CANCEL_TEMP_ENCHANTMENT):
+		return true
+	case uint32(protocol.OpcodeCMSG_CAST_SPELL), uint32(protocol.OpcodeCMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE), uint32(protocol.OpcodeCMSG_CHANNEL_ANNOUNCEMENTS), uint32(protocol.OpcodeCMSG_CHANNEL_BAN):
+		return true
+	case uint32(protocol.OpcodeCMSG_CHANNEL_DISPLAY_LIST), uint32(protocol.OpcodeCMSG_CHANNEL_INVITE), uint32(protocol.OpcodeCMSG_CHANNEL_KICK), uint32(protocol.OpcodeCMSG_CHANNEL_LIST):
+		return true
+	case uint32(protocol.OpcodeCMSG_CHANNEL_MODERATE), uint32(protocol.OpcodeCMSG_CHANNEL_MODERATOR), uint32(protocol.OpcodeCMSG_CHANNEL_MUTE), uint32(protocol.OpcodeCMSG_CHANNEL_OWNER):
+		return true
+	case uint32(protocol.OpcodeCMSG_CHANNEL_PASSWORD), uint32(protocol.OpcodeCMSG_CHANNEL_SET_OWNER), uint32(protocol.OpcodeCMSG_CHANNEL_UNBAN), uint32(protocol.OpcodeCMSG_CHANNEL_UNMODERATOR):
+		return true
+	case uint32(protocol.OpcodeCMSG_CHANNEL_UNMUTE), uint32(protocol.OpcodeCMSG_CHANNEL_VOICE_ON), uint32(protocol.OpcodeCMSG_CHAT_IGNORED), uint32(protocol.OpcodeCMSG_CLEAR_TRADE_ITEM):
+		return true
+	case uint32(protocol.OpcodeCMSG_COMPLAIN), uint32(protocol.OpcodeCMSG_COMPLETE_CINEMATIC), uint32(protocol.OpcodeCMSG_COMPLETE_MOVIE), uint32(protocol.OpcodeCMSG_CONTACT_LIST):
+		return true
+	case uint32(protocol.OpcodeCMSG_CONTROLLER_EJECT_PASSENGER), uint32(protocol.OpcodeCMSG_CORPSE_MAP_POSITION_QUERY), uint32(protocol.OpcodeCMSG_CREATURE_QUERY), uint32(protocol.OpcodeCMSG_DECLINE_CHANNEL_INVITE):
+		return true
+	case uint32(protocol.OpcodeCMSG_DELETEEQUIPMENT_SET), uint32(protocol.OpcodeCMSG_DEL_FRIEND), uint32(protocol.OpcodeCMSG_DEL_IGNORE), uint32(protocol.OpcodeCMSG_DESTROYITEM):
+		return true
+	case uint32(protocol.OpcodeCMSG_DISMISS_CONTROLLED_VEHICLE), uint32(protocol.OpcodeCMSG_DISMISS_CRITTER), uint32(protocol.OpcodeCMSG_DUEL_ACCEPTED), uint32(protocol.OpcodeCMSG_DUEL_CANCELLED):
+		return true
+	case uint32(protocol.OpcodeCMSG_EMOTE), uint32(protocol.OpcodeCMSG_ENABLETAXI), uint32(protocol.OpcodeCMSG_EQUIPMENT_SET_SAVE), uint32(protocol.OpcodeCMSG_EQUIPMENT_SET_USE):
+		return true
+	case uint32(protocol.OpcodeCMSG_FAR_SIGHT), uint32(protocol.OpcodeCMSG_FORCE_MOVE_ROOT_ACK), uint32(protocol.OpcodeCMSG_FORCE_MOVE_UNROOT_ACK), uint32(protocol.OpcodeCMSG_FORCE_TURN_RATE_CHANGE_ACK):
+		return true
+	case uint32(protocol.OpcodeCMSG_GAMEOBJECT_QUERY), uint32(protocol.OpcodeCMSG_GAMEOBJ_REPORT_USE), uint32(protocol.OpcodeCMSG_GAMEOBJ_USE), uint32(protocol.OpcodeCMSG_GET_CHANNEL_MEMBER_COUNT):
+		return true
+	case uint32(protocol.OpcodeCMSG_GET_MAIL_LIST), uint32(protocol.OpcodeCMSG_GET_MIRRORIMAGE_DATA), uint32(protocol.OpcodeCMSG_GMRESPONSE_RESOLVE), uint32(protocol.OpcodeCMSG_GMSURVEY_SUBMIT):
+		return true
+	case uint32(protocol.OpcodeCMSG_GMTICKET_CREATE), uint32(protocol.OpcodeCMSG_GMTICKET_DELETETICKET), uint32(protocol.OpcodeCMSG_GMTICKET_GETTICKET), uint32(protocol.OpcodeCMSG_GMTICKET_SYSTEMSTATUS):
+		return true
+	case uint32(protocol.OpcodeCMSG_GMTICKET_UPDATETEXT), uint32(protocol.OpcodeCMSG_GM_REPORT_LAG), uint32(protocol.OpcodeCMSG_GOSSIP_HELLO), uint32(protocol.OpcodeCMSG_GOSSIP_SELECT_OPTION):
+		return true
+	case uint32(protocol.OpcodeCMSG_GRANT_LEVEL), uint32(protocol.OpcodeCMSG_GROUP_ACCEPT), uint32(protocol.OpcodeCMSG_GROUP_ASSISTANT_LEADER), uint32(protocol.OpcodeCMSG_GROUP_CANCEL):
+		return true
+	case uint32(protocol.OpcodeCMSG_GROUP_CHANGE_SUB_GROUP), uint32(protocol.OpcodeCMSG_GROUP_DECLINE), uint32(protocol.OpcodeCMSG_GROUP_DISBAND), uint32(protocol.OpcodeCMSG_GROUP_INVITE):
+		return true
+	case uint32(protocol.OpcodeCMSG_GROUP_RAID_CONVERT), uint32(protocol.OpcodeCMSG_GROUP_SET_LEADER), uint32(protocol.OpcodeCMSG_GROUP_UNINVITE), uint32(protocol.OpcodeCMSG_GROUP_UNINVITE_GUID):
+		return true
+	case uint32(protocol.OpcodeCMSG_GUILD_ACCEPT), uint32(protocol.OpcodeCMSG_GUILD_ADD_RANK), uint32(protocol.OpcodeCMSG_GUILD_BANKER_ACTIVATE), uint32(protocol.OpcodeCMSG_GUILD_BANK_BUY_TAB):
+		return true
+	case uint32(protocol.OpcodeCMSG_GUILD_BANK_DEPOSIT_MONEY), uint32(protocol.OpcodeCMSG_GUILD_BANK_QUERY_TAB), uint32(protocol.OpcodeCMSG_GUILD_BANK_SWAP_ITEMS), uint32(protocol.OpcodeCMSG_GUILD_BANK_UPDATE_TAB):
+		return true
+	case uint32(protocol.OpcodeCMSG_GUILD_BANK_WITHDRAW_MONEY), uint32(protocol.OpcodeCMSG_GUILD_CREATE), uint32(protocol.OpcodeCMSG_GUILD_DECLINE), uint32(protocol.OpcodeCMSG_GUILD_DEL_RANK):
+		return true
+	case uint32(protocol.OpcodeCMSG_GUILD_DEMOTE), uint32(protocol.OpcodeCMSG_GUILD_DISBAND), uint32(protocol.OpcodeCMSG_GUILD_INFO), uint32(protocol.OpcodeCMSG_GUILD_INFO_TEXT):
+		return true
+	case uint32(protocol.OpcodeCMSG_GUILD_INVITE), uint32(protocol.OpcodeCMSG_GUILD_LEADER), uint32(protocol.OpcodeCMSG_GUILD_LEAVE), uint32(protocol.OpcodeCMSG_GUILD_MOTD):
+		return true
+	case uint32(protocol.OpcodeCMSG_GUILD_PROMOTE), uint32(protocol.OpcodeCMSG_GUILD_RANK), uint32(protocol.OpcodeCMSG_GUILD_REMOVE), uint32(protocol.OpcodeCMSG_GUILD_ROSTER):
+		return true
+	case uint32(protocol.OpcodeCMSG_GUILD_SET_OFFICER_NOTE), uint32(protocol.OpcodeCMSG_GUILD_SET_PUBLIC_NOTE), uint32(protocol.OpcodeCMSG_HEARTH_AND_RESURRECT), uint32(protocol.OpcodeCMSG_IGNORE_TRADE):
+		return true
+	case uint32(protocol.OpcodeCMSG_INITIATE_TRADE), uint32(protocol.OpcodeCMSG_INSPECT), uint32(protocol.OpcodeCMSG_INSTANCE_LOCK_RESPONSE), uint32(protocol.OpcodeCMSG_ITEM_NAME_QUERY):
+		return true
+	case uint32(protocol.OpcodeCMSG_ITEM_QUERY_SINGLE), uint32(protocol.OpcodeCMSG_ITEM_REFUND), uint32(protocol.OpcodeCMSG_ITEM_REFUND_INFO), uint32(protocol.OpcodeCMSG_ITEM_TEXT_QUERY):
+		return true
+	case uint32(protocol.OpcodeCMSG_JOIN_CHANNEL), uint32(protocol.OpcodeCMSG_LEARN_PREVIEW_TALENTS), uint32(protocol.OpcodeCMSG_LEARN_PREVIEW_TALENTS_PET), uint32(protocol.OpcodeCMSG_LEARN_TALENT):
+		return true
+	case uint32(protocol.OpcodeCMSG_LEAVE_BATTLEFIELD), uint32(protocol.OpcodeCMSG_LEAVE_CHANNEL), uint32(protocol.OpcodeCMSG_LFD_PARTY_LOCK_INFO_REQUEST), uint32(protocol.OpcodeCMSG_LFD_PLAYER_LOCK_INFO_REQUEST):
+		return true
+	case uint32(protocol.OpcodeCMSG_LFG_GET_STATUS), uint32(protocol.OpcodeCMSG_LFG_JOIN), uint32(protocol.OpcodeCMSG_LFG_LEAVE), uint32(protocol.OpcodeCMSG_LFG_PROPOSAL_RESULT):
+		return true
+	case uint32(protocol.OpcodeCMSG_LFG_SET_BOOT_VOTE), uint32(protocol.OpcodeCMSG_LFG_SET_ROLES), uint32(protocol.OpcodeCMSG_LFG_TELEPORT), uint32(protocol.OpcodeCMSG_LIST_INVENTORY):
+		return true
+	case uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST), uint32(protocol.OpcodeCMSG_LOOT), uint32(protocol.OpcodeCMSG_LOOT_MASTER_GIVE), uint32(protocol.OpcodeCMSG_LOOT_METHOD):
+		return true
+	case uint32(protocol.OpcodeCMSG_LOOT_MONEY), uint32(protocol.OpcodeCMSG_LOOT_RELEASE), uint32(protocol.OpcodeCMSG_LOOT_ROLL), uint32(protocol.OpcodeCMSG_MAIL_CREATE_TEXT_ITEM):
+		return true
+	case uint32(protocol.OpcodeCMSG_MAIL_DELETE), uint32(protocol.OpcodeCMSG_MAIL_MARK_AS_READ), uint32(protocol.OpcodeCMSG_MAIL_RETURN_TO_SENDER), uint32(protocol.OpcodeCMSG_MAIL_TAKE_ITEM):
+		return true
+	case uint32(protocol.OpcodeCMSG_MAIL_TAKE_MONEY), uint32(protocol.OpcodeCMSG_MESSAGECHAT), uint32(protocol.OpcodeCMSG_MOUNTSPECIAL_ANIM), uint32(protocol.OpcodeCMSG_MOVE_CHNG_TRANSPORT):
+		return true
+	case uint32(protocol.OpcodeCMSG_MOVE_FALL_RESET), uint32(protocol.OpcodeCMSG_MOVE_FEATHER_FALL_ACK), uint32(protocol.OpcodeCMSG_MOVE_HOVER_ACK), uint32(protocol.OpcodeCMSG_MOVE_KNOCK_BACK_ACK):
+		return true
+	case uint32(protocol.OpcodeCMSG_MOVE_NOT_ACTIVE_MOVER), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK), uint32(protocol.OpcodeCMSG_MOVE_SET_FLY), uint32(protocol.OpcodeCMSG_MOVE_SPLINE_DONE):
+		return true
+	case uint32(protocol.OpcodeCMSG_MOVE_TIME_SKIPPED), uint32(protocol.OpcodeCMSG_MOVE_WATER_WALK_ACK), uint32(protocol.OpcodeCMSG_NAME_QUERY), uint32(protocol.OpcodeCMSG_NEXT_CINEMATIC_CAMERA):
+		return true
+	case uint32(protocol.OpcodeCMSG_NPC_TEXT_QUERY), uint32(protocol.OpcodeCMSG_OFFER_PETITION), uint32(protocol.OpcodeCMSG_OPENING_CINEMATIC), uint32(protocol.OpcodeCMSG_OPEN_ITEM):
+		return true
+	case uint32(protocol.OpcodeCMSG_PAGE_TEXT_QUERY), uint32(protocol.OpcodeCMSG_PETITION_BUY), uint32(protocol.OpcodeCMSG_PETITION_QUERY), uint32(protocol.OpcodeCMSG_PETITION_SHOWLIST):
+		return true
+	case uint32(protocol.OpcodeCMSG_PETITION_SHOW_SIGNATURES), uint32(protocol.OpcodeCMSG_PETITION_SIGN), uint32(protocol.OpcodeCMSG_PET_ABANDON), uint32(protocol.OpcodeCMSG_PET_ACTION):
+		return true
+	case uint32(protocol.OpcodeCMSG_PET_CANCEL_AURA), uint32(protocol.OpcodeCMSG_PET_CAST_SPELL), uint32(protocol.OpcodeCMSG_PET_LEARN_TALENT), uint32(protocol.OpcodeCMSG_PET_NAME_QUERY):
+		return true
+	case uint32(protocol.OpcodeCMSG_PET_RENAME), uint32(protocol.OpcodeCMSG_PET_SET_ACTION), uint32(protocol.OpcodeCMSG_PET_SPELL_AUTOCAST), uint32(protocol.OpcodeCMSG_PET_STOP_ATTACK):
+		return true
+	case uint32(protocol.OpcodeCMSG_PLAYED_TIME), uint32(protocol.OpcodeCMSG_PLAYER_LOGOUT), uint32(protocol.OpcodeCMSG_PLAYER_VEHICLE_ENTER), uint32(protocol.OpcodeCMSG_PUSHQUESTTOPARTY):
+		return true
+	case uint32(protocol.OpcodeCMSG_QUERY_INSPECT_ACHIEVEMENTS), uint32(protocol.OpcodeCMSG_QUERY_QUESTS_COMPLETED), uint32(protocol.OpcodeCMSG_QUERY_TIME), uint32(protocol.OpcodeCMSG_QUESTGIVER_ACCEPT_QUEST):
+		return true
+	case uint32(protocol.OpcodeCMSG_QUESTGIVER_CANCEL), uint32(protocol.OpcodeCMSG_QUESTGIVER_CHOOSE_REWARD), uint32(protocol.OpcodeCMSG_QUESTGIVER_COMPLETE_QUEST), uint32(protocol.OpcodeCMSG_QUESTGIVER_HELLO):
+		return true
+	case uint32(protocol.OpcodeCMSG_QUESTGIVER_QUERY_QUEST), uint32(protocol.OpcodeCMSG_QUESTGIVER_QUEST_AUTOLAUNCH), uint32(protocol.OpcodeCMSG_QUESTGIVER_REQUEST_REWARD), uint32(protocol.OpcodeCMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY):
+		return true
+	case uint32(protocol.OpcodeCMSG_QUESTGIVER_STATUS_QUERY), uint32(protocol.OpcodeCMSG_QUESTLOG_REMOVE_QUEST), uint32(protocol.OpcodeCMSG_QUESTLOG_SWAP_QUEST), uint32(protocol.OpcodeCMSG_QUEST_CONFIRM_ACCEPT):
+		return true
+	case uint32(protocol.OpcodeCMSG_QUEST_POI_QUERY), uint32(protocol.OpcodeCMSG_QUEST_QUERY), uint32(protocol.OpcodeCMSG_READ_ITEM), uint32(protocol.OpcodeCMSG_RECLAIM_CORPSE):
+		return true
+	case uint32(protocol.OpcodeCMSG_REMOVE_GLYPH), uint32(protocol.OpcodeCMSG_REPAIR_ITEM), uint32(protocol.OpcodeCMSG_REPOP_REQUEST), uint32(protocol.OpcodeCMSG_REPORT_PVP_AFK):
+		return true
+	case uint32(protocol.OpcodeCMSG_REQUEST_PARTY_MEMBER_STATS), uint32(protocol.OpcodeCMSG_REQUEST_PET_INFO), uint32(protocol.OpcodeCMSG_REQUEST_RAID_INFO), uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_EXIT):
+		return true
+	case uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_NEXT_SEAT), uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_PREV_SEAT), uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_SWITCH_SEAT), uint32(protocol.OpcodeCMSG_RESET_INSTANCES):
+		return true
+	case uint32(protocol.OpcodeCMSG_RESURRECT_RESPONSE), uint32(protocol.OpcodeCMSG_SEARCH_LFG_JOIN), uint32(protocol.OpcodeCMSG_SEARCH_LFG_LEAVE), uint32(protocol.OpcodeCMSG_SELF_RES):
+		return true
+	case uint32(protocol.OpcodeCMSG_SELL_ITEM), uint32(protocol.OpcodeCMSG_SEND_MAIL), uint32(protocol.OpcodeCMSG_SET_ACTION_BUTTON), uint32(protocol.OpcodeCMSG_SET_ACTIVE_MOVER):
+		return true
+	case uint32(protocol.OpcodeCMSG_SET_AMMO), uint32(protocol.OpcodeCMSG_SET_CHANNEL_WATCH), uint32(protocol.OpcodeCMSG_SET_CONTACT_NOTES), uint32(protocol.OpcodeCMSG_SET_FACTION_ATWAR):
+		return true
+	case uint32(protocol.OpcodeCMSG_SET_FACTION_CHEAT), uint32(protocol.OpcodeCMSG_SET_FACTION_INACTIVE), uint32(protocol.OpcodeCMSG_SET_GUILD_BANK_TEXT), uint32(protocol.OpcodeCMSG_SET_LFG_COMMENT):
+		return true
+	case uint32(protocol.OpcodeCMSG_SET_SAVED_INSTANCE_EXTEND), uint32(protocol.OpcodeCMSG_SET_SELECTION), uint32(protocol.OpcodeCMSG_SET_SHEATHED), uint32(protocol.OpcodeCMSG_SET_TAXI_BENCHMARK_MODE):
+		return true
+	case uint32(protocol.OpcodeCMSG_SET_TITLE), uint32(protocol.OpcodeCMSG_SET_TRADE_GOLD), uint32(protocol.OpcodeCMSG_SET_TRADE_ITEM), uint32(protocol.OpcodeCMSG_SET_WATCHED_FACTION):
+		return true
+	case uint32(protocol.OpcodeCMSG_SHOWING_CLOAK), uint32(protocol.OpcodeCMSG_SHOWING_HELM), uint32(protocol.OpcodeCMSG_SOCKET_GEMS), uint32(protocol.OpcodeCMSG_SPELLCLICK):
+		return true
+	case uint32(protocol.OpcodeCMSG_SPIRIT_HEALER_ACTIVATE), uint32(protocol.OpcodeCMSG_SPLIT_ITEM), uint32(protocol.OpcodeCMSG_STABLE_PET), uint32(protocol.OpcodeCMSG_STABLE_REVIVE_PET):
+		return true
+	case uint32(protocol.OpcodeCMSG_STABLE_SWAP_PET), uint32(protocol.OpcodeCMSG_STANDSTATECHANGE), uint32(protocol.OpcodeCMSG_SUMMON_RESPONSE), uint32(protocol.OpcodeCMSG_SWAP_INV_ITEM):
+		return true
+	case uint32(protocol.OpcodeCMSG_SWAP_ITEM), uint32(protocol.OpcodeCMSG_TAXINODE_STATUS_QUERY), uint32(protocol.OpcodeCMSG_TAXIQUERYAVAILABLENODES), uint32(protocol.OpcodeCMSG_TELEPORT_TO_UNIT):
+		return true
+	case uint32(protocol.OpcodeCMSG_TEXT_EMOTE), uint32(protocol.OpcodeCMSG_TIME_SYNC_RESP), uint32(protocol.OpcodeCMSG_TOGGLE_PVP), uint32(protocol.OpcodeCMSG_TOTEM_DESTROYED):
+		return true
+	case uint32(protocol.OpcodeCMSG_TRAINER_BUY_SPELL), uint32(protocol.OpcodeCMSG_TRAINER_LIST), uint32(protocol.OpcodeCMSG_TURN_IN_PETITION), uint32(protocol.OpcodeCMSG_TUTORIAL_CLEAR):
+		return true
+	case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG), uint32(protocol.OpcodeCMSG_TUTORIAL_RESET), uint32(protocol.OpcodeCMSG_UNACCEPT_TRADE), uint32(protocol.OpcodeCMSG_UNLEARN_SKILL):
+		return true
+	case uint32(protocol.OpcodeCMSG_UNSTABLE_PET), uint32(protocol.OpcodeCMSG_UNUSED5), uint32(protocol.OpcodeCMSG_UPDATE_MISSILE_TRAJECTORY), uint32(protocol.OpcodeCMSG_UPDATE_PROJECTILE_POSITION):
+		return true
+	case uint32(protocol.OpcodeCMSG_USE_ITEM), uint32(protocol.OpcodeCMSG_WHO), uint32(protocol.OpcodeCMSG_WHOIS), uint32(protocol.OpcodeCMSG_WORLD_STATE_UI_TIMER_UPDATE):
+		return true
+	case uint32(protocol.OpcodeCMSG_WORLD_TELEPORT), uint32(protocol.OpcodeCMSG_WRAP_ITEM), uint32(protocol.OpcodeCMSG_ZONEUPDATE), uint32(protocol.OpcodeMSG_AUCTION_HELLO):
+		return true
+	case uint32(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS), uint32(protocol.OpcodeMSG_CORPSE_QUERY), uint32(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY), uint32(protocol.OpcodeMSG_GUILD_BANK_MONEY_WITHDRAWN):
+		return true
+	case uint32(protocol.OpcodeMSG_GUILD_EVENT_LOG_QUERY), uint32(protocol.OpcodeMSG_GUILD_PERMISSIONS), uint32(protocol.OpcodeMSG_INSPECT_ARENA_TEAMS), uint32(protocol.OpcodeMSG_INSPECT_HONOR_STATS):
+		return true
+	case uint32(protocol.OpcodeMSG_LIST_STABLED_PETS), uint32(protocol.OpcodeMSG_MINIMAP_PING), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT):
+		return true
+	case uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE):
+		return true
+	case uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_START_ASCEND), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_START_DESCEND):
+		return true
+	case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT):
+		return true
+	case uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT):
+		return true
+	case uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_STOP_ASCEND), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE):
+		return true
+	case uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), uint32(protocol.OpcodeMSG_PARTY_ASSIGNMENT):
+		return true
+	case uint32(protocol.OpcodeMSG_PETITION_DECLINE), uint32(protocol.OpcodeMSG_PETITION_RENAME), uint32(protocol.OpcodeMSG_PVP_LOG_DATA), uint32(protocol.OpcodeMSG_QUERY_GUILD_BANK_TEXT):
+		return true
+	case uint32(protocol.OpcodeMSG_QUERY_NEXT_MAIL_TIME), uint32(protocol.OpcodeMSG_QUEST_PUSH_RESULT), uint32(protocol.OpcodeMSG_RAID_READY_CHECK), uint32(protocol.OpcodeMSG_RAID_READY_CHECK_FINISHED):
+		return true
+	case uint32(protocol.OpcodeMSG_RAID_TARGET_UPDATE), uint32(protocol.OpcodeMSG_RANDOM_ROLL), uint32(protocol.OpcodeMSG_SAVE_GUILD_EMBLEM), uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY):
+		return true
+	case uint32(protocol.OpcodeMSG_SET_RAID_DIFFICULTY), uint32(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE), uint32(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM):
+		return true
+	}
+	return false
+}
+
 func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	closed := make(chan struct{})
@@ -2925,25 +3165,70 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		return
 	}
 	for {
-		if state.logoutAt.IsZero() {
-			_ = conn.SetReadDeadline(time.Time{})
-		} else {
-			_ = conn.SetReadDeadline(state.logoutAt)
-		}
-		header, payload, err := protocol.ReadClientFrame(conn, state.decrypt)
-		if err != nil {
-			state.debug("world connection closed", "account", state.accountName, "error", err)
-			if !state.logoutAt.IsZero() && isReadTimeout(err) {
-				if logoutErr := state.completeLogout(ctx); logoutErr != nil {
-					state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
-				}
-				continue
+		var header protocol.ClientFrameHeader
+		var payload []byte
+		replayed := false
+		// Pre-login requeue drain: a buffered packet replays through the
+		// normal dispatch below once the player is loaded and in world
+		// (playerLoaded set by handlePlayerLogin, worldReady by
+		// commitWorldportAdmission at the end of login — the Go analogue of
+		// C++ _player != nil && IsInWorld()). One packet per iteration, in
+		// arrival order, before any new socket read, so replayed effects land
+		// before post-login packets like C++ queue order. While the player
+		// is not in world the queue waits and socket reads continue.
+		if len(state.preLoginQueue) > 0 && state.playerLoaded && state.worldReady.Load() {
+			next := state.preLoginQueue[0]
+			state.preLoginQueue = state.preLoginQueue[1:]
+			if len(state.preLoginQueue) == 0 {
+				state.preLoginQueue = nil
 			}
-			return
+			header, payload = next.header, next.payload
+			replayed = true
+		} else {
+			if state.logoutAt.IsZero() {
+				_ = conn.SetReadDeadline(time.Time{})
+			} else {
+				_ = conn.SetReadDeadline(state.logoutAt)
+			}
+			readHeader, readPayload, err := protocol.ReadClientFrame(conn, state.decrypt)
+			if err != nil {
+				state.debug("world connection closed", "account", state.accountName, "error", err)
+				if !state.logoutAt.IsZero() && isReadTimeout(err) {
+					if logoutErr := state.completeLogout(ctx); logoutErr != nil {
+						state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
+					}
+					continue
+				}
+				return
+			}
+			header, payload = readHeader, readPayload
 		}
-		state.debug("world packet received", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
-		if state.server != nil && state.server.TraceRecorder != nil {
-			state.server.TraceRecorder.Record(protocoltrace.ClientToServer, header.Opcode, payload, opcodeName(header.Opcode))
+		if !replayed {
+			state.debug("world packet received", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
+			if state.server != nil && state.server.TraceRecorder != nil {
+				state.server.TraceRecorder.Record(protocoltrace.ClientToServer, header.Opcode, payload, opcodeName(header.Opcode))
+			}
+		}
+		// Pre-login requeue intercept (WorldSession.cpp:312-326): a
+		// STATUS_LOGGEDIN packet arriving while the player is not yet in
+		// world is held, not dropped and not dispatched — the handler
+		// guards used to drop it, losing the effect C++ defers. Buffered
+		// before hooks and dispatch so packet-receive hooks fire at replay
+		// time, when C++ fires OnPacketReceive on the actual call. The
+		// idle-timer refresh mirrors the socket read C++ performs regardless
+		// of queueing (buffered opcodes are never the ping/keep-alive/auth
+		// trio the normal path exempts). Post-logout lag packets are not
+		// buffered: recentlyLoggedOut drops them like C++.
+		if !replayed && state.authed && !state.playerLoaded && !state.recentlyLoggedOut && isPreLoginRequeueOpcode(header.Opcode) {
+			if len(state.preLoginQueue) < maxPreLoginQueuePackets {
+				queued := make([]byte, len(payload))
+				copy(queued, payload)
+				state.preLoginQueue = append(state.preLoginQueue, preLoginPacket{header: header, payload: queued})
+			} else {
+				state.debug("pre-login packet queue full, dropping", "account", state.accountName, "opcode", opcodeName(header.Opcode))
+			}
+			state.resetTimeoutTime(false)
+			continue
 		}
 		if !state.logoutAt.IsZero() && !time.Now().Before(state.logoutAt) {
 			// WorldSession::Update (WorldSession.cpp:302-472) drains the

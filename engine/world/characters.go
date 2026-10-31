@@ -116,6 +116,10 @@ func CharacterCreationDefaults() (uint32, uint32) {
 }
 
 func (s *session) handleCharEnum(ctx context.Context) bool {
+	// WorldSession.cpp:381: receiving CMSG_CHAR_ENUM clears
+	// m_playerRecentlyLogout, so pre-login packets may be requeued again
+	// for the next login instead of dropped as post-logout lag.
+	s.recentlyLoggedOut = false
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_EXPIRED_BANS"); err != nil {
 		s.debug("character enumeration cleanup failed", "account", s.accountName, "error", err)
 	}
@@ -4013,6 +4017,10 @@ func (s *session) completeLogout(ctx context.Context) error {
 }
 
 func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComplete bool) error {
+	// A logout discards the pre-login requeue buffer: C++ drops the recv
+	// queue with the session, and its recently-logout arm drops lag packets
+	// rather than requeueing them for a later login.
+	s.preLoginQueue = nil
 	if !s.playerLoaded {
 		s.clearActiveAuras()
 		s.logoutAt = time.Time{}
@@ -4156,6 +4164,7 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	}
 	s.playerLoaded = false
 	s.player = nil
+	s.recentlyLoggedOut = true
 	s.logoutAt = time.Time{}
 	s.logoutFlagsApplied = false
 	s.debug("player logged out", "account", s.accountName, "guid", s.playerGUID)
