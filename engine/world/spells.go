@@ -23106,6 +23106,99 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 	}
+	// CheckCast per-effect switch remainder (Spell.cpp:5662-6013): the
+	// client-path twins already bridge these arms, so the funnel reuses
+	// them on the raw wire target in C++ loop order, ahead of
+	// SelectSpellTargets; every failure rewrites to DONT_REPORT via
+	// rejectTriggeredCast. The wire target carries the unit wire mask,
+	// or the gameobject flag for a GO wire (open-lock's GO leg needs
+	// it; the unit-target twins fail closed on a GO wire exactly as
+	// C++ does when GetUnitTarget yields null). Charge is the one
+	// exception: its root leg opens on !TRIGGERED_IGNORE_CASTER_AURAS
+	// (Spell.cpp:5675-5676) and the full mask carries that flag, so a
+	// triggered charge cast is never rooted-failed — reusing
+	// checkChargeCast whole would over-reject. The funnel ports only
+	// its explicit-target + full-LOS legs (the PathGenerator NOPATH
+	// arms stay unbridged, no navmesh, same as the client twin; the
+	// Warbringer script-override aura strip is a SpellScript side
+	// effect with no bridge). Summon-pet's strict pet self-stun
+	// (32752) and charm legs stay out with the client twin (player
+	// casters never fail on an existing pet; the charm arm has no
+	// bridge); summon-player/RAF key on the caster's selection, not
+	// the wire target, exactly as C++ GetTarget does; open-lock's
+	// item-target leg reads no item here (the funnel carries no item
+	// target, and castItemGUID is the cast item, not GetItemTarget).
+	funnelWireTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+	if targetGUID != 0 && uint16(targetGUID>>48) == 0xF110 {
+		funnelWireTarget = protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: targetGUID}
+	}
+	hasChargeEffect := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectCharge {
+			hasChargeEffect = true
+			break
+		}
+	}
+	if hasChargeEffect && spellNeedsExplicitUnitTarget(spell) {
+		if targetGUID == 0 || uint16(targetGUID>>48) == 0xF110 {
+			rejectTriggeredCast("triggered charge spell without explicit unit target")
+			return
+		}
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok && s.server != nil {
+			if !s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) {
+				rejectTriggeredCast("triggered charge spell target not in line of sight")
+				return
+			}
+		}
+	}
+	if failure := s.checkSkinningCast(spell, funnelWireTarget); failure != 0 {
+		rejectTriggeredCast("triggered skinning target invalid")
+		return
+	}
+	if failure := s.checkOpenLockCast(spell, funnelWireTarget); failure != 0 {
+		rejectTriggeredCast("triggered open-lock target invalid")
+		return
+	}
+	if failure := s.checkResurrectPetCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered resurrect-pet with live pet")
+		return
+	}
+	if failure := s.checkSummonCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered summon with existing pet")
+		return
+	}
+	if failure := s.checkCreateTamedPetCast(spell, funnelWireTarget); failure != 0 {
+		rejectTriggeredCast("triggered create-tamed-pet target invalid")
+		return
+	}
+	if failure := s.checkSummonPetCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered summon-pet stable validation failed")
+		return
+	}
+	if failure := s.checkSummonPlayerCast(ctx, spell, spellID); failure != 0 {
+		rejectTriggeredCast("triggered summon-player target invalid")
+		return
+	}
+	if failure := s.checkSummonRafFriendCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered summon-raf-friend target invalid")
+		return
+	}
+	if failure := s.checkLeapCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered leap before battleground start")
+		return
+	}
+	if failure := s.checkStealPreCast(spell, targetGUID); failure != 0 {
+		rejectTriggeredCast("triggered steal with nothing to steal")
+		return
+	}
+	if failure := s.checkLeapBackCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered leap-back/jump while rooted")
+		return
+	}
+	if failure := s.checkTalentSpecSelectCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered talent spec change after battleground start")
+		return
+	}
 	// The vehicle arm (Spell.cpp:5332) is exempt: TRIGGERED_FULL_MASK
 	// carries TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE.
 	// Spell::prepare (Spell.cpp:3139-3149): the moving-cast arm carries no
