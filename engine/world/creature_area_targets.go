@@ -11,20 +11,33 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
-// creatureAIAreaGeometry is the shared radius/cone/center computation for
-// the creature-caster area sweeps (Spell.cpp:1227-1293). It duplicates the
-// geometry block of creatureAIAreaEnemyPlayers and of the player-path
-// spellAreaEnemyTargets rather than refactoring either: both twins are
-// live and behavior-verified, and the creature sweep below is the only
-// new consumer. A later tick may fold the twins onto it.
-func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spell, destX, destY, destZ float32, hasDest bool) (radius float32, cone, backCone bool, centerX, centerY, centerZ float32) {
-	destinationCenter := false
+// areaEnemyLegGroup is one leg family of an enemy area sweep: C++ selects
+// each effect's targets separately (Spell.cpp:1176 cone, 1227 area) and
+// unions the lists, so a spell mixing a cone leg with a DEST-area leg
+// needs one geometry per family, not one merged sweep. Cone legs center
+// on the caster with the M_PI/2 arc and caster LOS; SRC-area legs center
+// on the caster with center LOS; DEST-area legs center on the resolved
+// destination with center LOS. A candidate passes when any group accepts
+// it; each group's radius is the max over that family's legs.
+type areaEnemyLegGroup struct {
+	radius                    float32
+	cone                      bool
+	centerX, centerY, centerZ float32
+}
+
+// creatureAIAreaLegGroups is the shared per-leg-family geometry computation
+// for the creature-caster enemy sweeps (Spell.cpp:1176/1227-1293). It
+// duplicates the group block of creatureAIAreaEnemyPlayers and of the
+// player-path spellAreaEnemyTargets rather than refactoring either: both
+// twins are live and behavior-verified. A later tick may fold the twins
+// onto it.
+func (s *Server) creatureAIAreaLegGroups(motion *creatureMotion, spell wotlk.Spell, destX, destY, destZ float32, hasDest bool) ([]areaEnemyLegGroup, bool) {
 	// WorldObjectSpellConeTargetCheck::operator() (Spell.cpp:8432): the cone
 	// direction is C++-custom-attr driven — CU_CONE_BACK (set in
 	// SpellMgr.cpp:2840 when SpellVisual[0] == 3879) keeps targets in the back
 	// cone; otherwise the front cone at the hardcoded M_PI/2 (same read as
 	// the player-path area sweep).
-	backCone = len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
+	backCone := len(spell.SpellVisual) > 0 && spell.SpellVisual[0] == 3879
 	// Spell.cpp:1282: when an effect has no radius entry (CalcRadius == 0),
 	// the area radius falls back to the spell's max range — per effect via
 	// GetMaxRange(IsPositiveEffect(effIndex)); the caster overload folds
@@ -43,27 +56,15 @@ func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spel
 			}
 		}
 	}
+	var coneRadius, srcRadius, destRadius float32
+	var hasCone, hasSrc, hasDestLeg bool
 	for i, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
 		areaTargetB := (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
 		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
 			continue
 		}
-		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
-			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
-				continue
-			}
-			if targetType == 24 || targetType == 54 || targetType == 104 {
-				cone = true
-			}
-			// 28 is a dest-setter, not a selecting leg (OBJECT_TYPE_DEST,
-			// SELECT_CATEGORY_DEFAULT, SpellInfo.cpp:248; dynobj dests return
-			// early in SelectImplicitDestDestTargets, Spell.cpp:1474), so it
-			// must not drag a cone/src-area sweep onto the dest center.
-			if targetType == 16 || targetType == 18 {
-				destinationCenter = true
-			}
-		}
+		var legRadius float32
 		// SpellEffectInfo::CalcRadius(m_caster): per-level radius from the
 		// DBC entry; the creature path has no client-side radius override.
 		if s.Data != nil {
@@ -73,17 +74,41 @@ func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spel
 				if modOwner != nil {
 					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
 				}
-				if value > radius {
-					radius = value
-				}
+				legRadius = value
 			} else {
 				// Spell.cpp:1282: zero-radius fallback — per effect.
 				effMaxRange := maxRangeNegative
 				if spell.IsPositiveEffect(i) {
 					effMaxRange = maxRangePositive
 				}
-				if effMaxRange > radius {
-					radius = effMaxRange
+				legRadius = effMaxRange
+			}
+		}
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
+			// Only selecting slots contribute a group: 18 without effect 27
+			// is TARGET_DEST_CASTER, a dest-setter, not a selecting leg, so
+			// it must not drag a SRC-area sweep onto the dest center (28
+			// stays out the same way: OBJECT_TYPE_DEST,
+			// SELECT_CATEGORY_DEFAULT, SpellInfo.cpp:248; dynobj dests
+			// return early in SelectImplicitDestDestTargets, Spell.cpp:1474).
+			switch {
+			case targetType == 24 || targetType == 54 || targetType == 104:
+				hasCone = true
+				if legRadius > coneRadius {
+					coneRadius = legRadius
+				}
+			case targetType == 16 || (eff.Effect == 27 && targetType == 18):
+				hasDestLeg = true
+				if legRadius > destRadius {
+					destRadius = legRadius
+				}
+			case isAreaEnemyTargetType(targetType):
+				hasSrc = true
+				if legRadius > srcRadius {
+					srcRadius = legRadius
 				}
 			}
 		}
@@ -95,11 +120,30 @@ func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spel
 	// pet-path dest); without one CheckDst seeds the dst at the caster
 	// (Spell.cpp:6523), never at the wire victim — the old victim
 	// fallback centered DEST areas on the target instead.
-	centerX, centerY, centerZ = motion.X, motion.Y, motion.Z
-	if destinationCenter && hasDest {
-		centerX, centerY, centerZ = destX, destY, destZ
+	destCX, destCY, destCZ := motion.X, motion.Y, motion.Z
+	if hasDestLeg && hasDest {
+		destCX, destCY, destCZ = destX, destY, destZ
 	}
-	return radius, cone, backCone, centerX, centerY, centerZ
+	groups := make([]areaEnemyLegGroup, 0, 3)
+	if hasCone {
+		groups = append(groups, areaEnemyLegGroup{radius: coneRadius, cone: true, centerX: motion.X, centerY: motion.Y, centerZ: motion.Z})
+	}
+	if hasSrc {
+		groups = append(groups, areaEnemyLegGroup{radius: srcRadius, centerX: motion.X, centerY: motion.Y, centerZ: motion.Z})
+	}
+	if hasDestLeg {
+		groups = append(groups, areaEnemyLegGroup{radius: destRadius, centerX: destCX, centerY: destCY, centerZ: destCZ})
+	}
+	maxRadius := float32(0)
+	for _, g := range groups {
+		if g.radius > maxRadius {
+			maxRadius = g.radius
+		}
+	}
+	if len(groups) == 0 || maxRadius <= 0 {
+		return nil, backCone
+	}
+	return groups, backCone
 }
 
 // creatureAIAreaEnemyCreatures is the creature-motion twin of
@@ -129,9 +173,72 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 	if spellSearchPlayersOnly(spell) {
 		return nil
 	}
-	radius, cone, backCone, centerX, centerY, centerZ := s.creatureAIAreaGeometry(motion, spell, destX, destY, destZ, hasDest)
-	if radius <= 0 {
+	groups, backCone := s.creatureAIAreaLegGroups(motion, spell, destX, destY, destZ, hasDest)
+	maxRadius := float32(0)
+	for _, g := range groups {
+		if g.radius > maxRadius {
+			maxRadius = g.radius
+		}
+	}
+	if len(groups) == 0 || maxRadius <= 0 {
 		return nil
+	}
+	// A candidate passes when any leg family accepts it (Spell.cpp:7479-7492:
+	// cone selection needs caster LOS, area selection needs center LOS).
+	geometryPasses := func(x, y, z float32) bool {
+		for _, g := range groups {
+			// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): the
+			// area is a cylinder — 2D distance within the radius AND |dz| within
+			// the radius — not a 3D sphere.
+			dx, dy := float64(x-g.centerX), float64(y-g.centerY)
+			if dx*dx+dy*dy > float64(g.radius*g.radius) || math.Abs(float64(z-g.centerZ)) > float64(g.radius) {
+				continue
+			}
+			if g.cone {
+				if backCone {
+					// WorldObject::isInBack (Object.cpp:1417): !HasInArc(2*pi - arc, target).
+					if hasInArc(motion.Orientation, motion.X, motion.Y, x, y, 2*math.Pi-math.Pi/2) {
+						continue
+					}
+				} else if !hasInArc(motion.Orientation, motion.X, motion.Y, x, y, math.Pi/2) {
+					continue
+				}
+				// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
+				// cone selection passes losPosition == nullptr, so every cone
+				// candidate needs line of sight from the caster (the motion),
+				// unless SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS is set.
+				if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+					!s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, x, y, z) {
+					continue
+				}
+			} else if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+				!s.hasLineOfSightSpellCheck(motion.Map, g.centerX, g.centerY, g.centerZ, x, y, z) {
+				// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+				// area selection passes losPosition == center, so every area
+				// candidate needs line of sight from the area center.
+				continue
+			}
+			return true
+		}
+		return false
+	}
+	// The static-spawn sweep below boxes the union of the leg families so
+	// no family's candidates are cut off by another family's center.
+	boxMinX, boxMinY := groups[0].centerX-groups[0].radius, groups[0].centerY-groups[0].radius
+	boxMaxX, boxMaxY := groups[0].centerX+groups[0].radius, groups[0].centerY+groups[0].radius
+	for _, g := range groups[1:] {
+		if g.centerX-g.radius < boxMinX {
+			boxMinX = g.centerX - g.radius
+		}
+		if g.centerY-g.radius < boxMinY {
+			boxMinY = g.centerY - g.radius
+		}
+		if g.centerX+g.radius > boxMaxX {
+			boxMaxX = g.centerX + g.radius
+		}
+		if g.centerY+g.radius > boxMaxY {
+			boxMaxY = g.centerY + g.radius
+		}
 	}
 	s.motionMu.Lock()
 	motionMap := s.motionMapLocked(motion.Map, motion.InstanceID)
@@ -159,35 +266,8 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 		if !s.factionTemplatesHostile(motion.Faction, cand.Faction) {
 			continue
 		}
-		// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): the
-		// area is a cylinder — 2D distance within the radius AND |dz| within
-		// the radius — not a 3D sphere.
-		dx, dy := float64(cand.X-centerX), float64(cand.Y-centerY)
-		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(cand.Z-centerZ)) > float64(radius) {
-			continue
-		}
-		if cone {
-			if backCone {
-				// WorldObject::isInBack (Object.cpp:1417): !HasInArc(2*pi - arc, target).
-				if hasInArc(motion.Orientation, motion.X, motion.Y, cand.X, cand.Y, 2*math.Pi-math.Pi/2) {
-					continue
-				}
-			} else if !hasInArc(motion.Orientation, motion.X, motion.Y, cand.X, cand.Y, math.Pi/2) {
-				continue
-			}
-			// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
-			// cone selection passes losPosition == nullptr, so every cone
-			// candidate needs line of sight from the caster (the motion),
-			// unless SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS is set.
-			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-				!s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, cand.X, cand.Y, cand.Z) {
-				continue
-			}
-		} else if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-			!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, cand.X, cand.Y, cand.Z) {
-			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
-			// area selection passes losPosition == center, so every area
-			// candidate needs line of sight from the area center.
+		// Per-leg geometry: cylinder + arc + LOS of any leg family.
+		if !geometryPasses(cand.X, cand.Y, cand.Z) {
 			continue
 		}
 		seen[cand.GUID] = struct{}{}
@@ -201,7 +281,7 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 	// GUIDs that already have a motion. Static rows carry no instance
 	// data, so like the ally leg they join every instance of the map.
 	if s.WorldStore != nil && s.WorldStore.DB != nil {
-		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, float64(centerX-radius), float64(centerX+radius), float64(centerY-radius), float64(centerY+radius))
+		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, float64(boxMinX), float64(boxMaxX), float64(boxMinY), float64(boxMaxY))
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
@@ -227,24 +307,8 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 					continue
 				}
 				fx, fy, fz := float32(x), float32(y), float32(z)
-				dx, dy := float64(fx-centerX), float64(fy-centerY)
-				if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(fz-centerZ)) > float64(radius) {
-					continue
-				}
-				if cone {
-					if backCone {
-						if hasInArc(motion.Orientation, motion.X, motion.Y, fx, fy, 2*math.Pi-math.Pi/2) {
-							continue
-						}
-					} else if !hasInArc(motion.Orientation, motion.X, motion.Y, fx, fy, math.Pi/2) {
-						continue
-					}
-					if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-						!s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, fx, fy, fz) {
-						continue
-					}
-				} else if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-					!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, fx, fy, fz) {
+				// Per-leg geometry: cylinder + arc + LOS of any leg family.
+				if !geometryPasses(fx, fy, fz) {
 					continue
 				}
 				seen[guid] = struct{}{}
@@ -304,7 +368,7 @@ func (s *Server) creatureAIAreaEntryTargetsWithCenters(ctx context.Context, moti
 	}
 	// Spell.cpp:1282 zero-radius fallback, per effect via
 	// GetMaxRange(IsPositiveEffect); the mod owner folds SPELLMOD_RANGE
-	// (SpellInfo.cpp:3060-3072), like creatureAIAreaGeometry.
+	// (SpellInfo.cpp:3060-3072), like creatureAIAreaLegGroups.
 	var maxRangePositive, maxRangeNegative float32
 	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
 	if s.Data != nil {
@@ -547,9 +611,6 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	if s == nil || motion == nil || victim == nil || !isAreaEnemySpell(spell) {
 		return nil
 	}
-	radius := float32(0)
-	cone := false
-	destinationCenter := false
 	// WorldObjectSpellConeTargetCheck::operator() (Spell.cpp:8432): the cone
 	// direction is C++-custom-attr driven — CU_CONE_BACK (set in
 	// SpellMgr.cpp:2840 when SpellVisual[0] == 3879) keeps targets in the back
@@ -574,29 +635,17 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 			}
 		}
 	}
+	var coneRadius, srcRadius, destRadius float32
+	var hasCone, hasSrc, hasDestLeg bool
 	for i, eff := range spell.Effects {
 		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
 		areaTargetB := (isAreaEnemyTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
 		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
 			continue
 		}
-		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
-			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
-				continue
-			}
-			if targetType == 24 || targetType == 54 || targetType == 104 {
-				cone = true
-			}
-			// 28 is a dest-setter, not a selecting leg (OBJECT_TYPE_DEST,
-			// SELECT_CATEGORY_DEFAULT, SpellInfo.cpp:248; dynobj dests return
-			// early in SelectImplicitDestDestTargets, Spell.cpp:1474), so it
-			// must not drag a cone/src-area sweep onto the dest center.
-			if targetType == 16 || targetType == 18 {
-				destinationCenter = true
-			}
-		}
+		var legRadius float32
 		// SpellEffectInfo::CalcRadius(m_caster): per-level radius from the
-		// DBC entry; the inline path has no client-side radius override.
+		// DBC entry; the creature path has no client-side radius override.
 		if s.Data != nil {
 			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(motion.Level)); err == nil && ok && value > 0 {
 				// SpellEffectInfo::CalcRadius (SpellInfo.cpp:551-574): the
@@ -604,32 +653,111 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 				if modOwner != nil {
 					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
 				}
-				if value > radius {
-					radius = value
-				}
+				legRadius = value
 			} else {
 				// Spell.cpp:1282: zero-radius fallback — per effect.
 				effMaxRange := maxRangeNegative
 				if spell.IsPositiveEffect(i) {
 					effMaxRange = maxRangePositive
 				}
-				if effMaxRange > radius {
-					radius = effMaxRange
+				legRadius = effMaxRange
+			}
+		}
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
+			// Only selecting slots contribute a group: 18 without effect 27
+			// is TARGET_DEST_CASTER, a dest-setter, not a selecting leg, so
+			// it must not drag a SRC-area sweep onto the dest center (28
+			// stays out the same way: OBJECT_TYPE_DEST,
+			// SELECT_CATEGORY_DEFAULT, SpellInfo.cpp:248; dynobj dests
+			// return early in SelectImplicitDestDestTargets, Spell.cpp:1474).
+			switch {
+			case targetType == 24 || targetType == 54 || targetType == 104:
+				hasCone = true
+				if legRadius > coneRadius {
+					coneRadius = legRadius
+				}
+			case targetType == 16 || (eff.Effect == 27 && targetType == 18):
+				hasDestLeg = true
+				if legRadius > destRadius {
+					destRadius = legRadius
+				}
+			case isAreaEnemyTargetType(targetType):
+				hasSrc = true
+				if legRadius > srcRadius {
+					srcRadius = legRadius
 				}
 			}
 		}
-	}
-	if radius <= 0 {
-		return nil
 	}
 	// SelectImplicitAreaTargets (Spell.cpp:1227-1270): CASTER/SRC reference
 	// types center on the caster; DEST reference types center on the
 	// destination (m_targets.GetDstPos, Spell.cpp:1267). The resolved
 	// destination rides in from the call site; without one CheckDst seeds
 	// the dst at the caster (Spell.cpp:6523), never at the wire victim.
-	centerX, centerY, centerZ := motion.X, motion.Y, motion.Z
-	if destinationCenter && hasDest {
-		centerX, centerY, centerZ = destX, destY, destZ
+	destCX, destCY, destCZ := motion.X, motion.Y, motion.Z
+	if hasDestLeg && hasDest {
+		destCX, destCY, destCZ = destX, destY, destZ
+	}
+	groups := make([]areaEnemyLegGroup, 0, 3)
+	if hasCone {
+		groups = append(groups, areaEnemyLegGroup{radius: coneRadius, cone: true, centerX: motion.X, centerY: motion.Y, centerZ: motion.Z})
+	}
+	if hasSrc {
+		groups = append(groups, areaEnemyLegGroup{radius: srcRadius, centerX: motion.X, centerY: motion.Y, centerZ: motion.Z})
+	}
+	if hasDestLeg {
+		groups = append(groups, areaEnemyLegGroup{radius: destRadius, centerX: destCX, centerY: destCY, centerZ: destCZ})
+	}
+	maxRadius := float32(0)
+	for _, g := range groups {
+		if g.radius > maxRadius {
+			maxRadius = g.radius
+		}
+	}
+	if len(groups) == 0 || maxRadius <= 0 {
+		return nil
+	}
+	// A candidate passes when any leg family accepts it (Spell.cpp:7479-7492:
+	// cone selection needs caster LOS, area selection needs center LOS).
+	geometryPasses := func(x, y, z float32) bool {
+		for _, g := range groups {
+			// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): the
+			// area is a cylinder — 2D distance within the radius AND |dz| within
+			// the radius — not a 3D sphere.
+			dx, dy := float64(x-g.centerX), float64(y-g.centerY)
+			if dx*dx+dy*dy > float64(g.radius*g.radius) || math.Abs(float64(z-g.centerZ)) > float64(g.radius) {
+				continue
+			}
+			if g.cone {
+				if backCone {
+					// WorldObject::isInBack (Object.cpp:1417): !HasInArc(2*pi - arc, target).
+					if hasInArc(motion.Orientation, motion.X, motion.Y, x, y, 2*math.Pi-math.Pi/2) {
+						continue
+					}
+				} else if !hasInArc(motion.Orientation, motion.X, motion.Y, x, y, math.Pi/2) {
+					continue
+				}
+				// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
+				// cone selection passes losPosition == nullptr, so every cone
+				// candidate needs line of sight from the caster (the motion),
+				// unless SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS is set.
+				if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+					!s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, x, y, z) {
+					continue
+				}
+			} else if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
+				!s.hasLineOfSightSpellCheck(motion.Map, g.centerX, g.centerY, g.centerZ, x, y, z) {
+				// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
+				// area selection passes losPosition == center, so every area
+				// candidate needs line of sight from the area center.
+				continue
+			}
+			return true
+		}
+		return false
 	}
 	seen := map[uint64]struct{}{victim.GUID: {}}
 	var hits []*playerPos
@@ -661,35 +789,8 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 		if !s.isAttackableFaction(motion.Faction, candidate) {
 			continue
 		}
-		// WorldObjectSpellAreaTargetCheck::operator() (Spell.cpp:8409): the
-		// area is a cylinder — 2D distance within the radius AND |dz| within
-		// the radius — not a 3D sphere.
-		dx, dy := float64(candidate.X-centerX), float64(candidate.Y-centerY)
-		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(candidate.Z-centerZ)) > float64(radius) {
-			continue
-		}
-		if cone {
-			if backCone {
-				// WorldObject::isInBack (Object.cpp:1417): !HasInArc(2*pi - arc, target).
-				if hasInArc(motion.Orientation, motion.X, motion.Y, candidate.X, candidate.Y, 2*math.Pi-math.Pi/2) {
-					continue
-				}
-			} else if !hasInArc(motion.Orientation, motion.X, motion.Y, candidate.X, candidate.Y, math.Pi/2) {
-				continue
-			}
-			// Spell::CheckEffectTarget default arm (Spell.cpp:7483-7492):
-			// cone selection passes losPosition == nullptr, so every cone
-			// candidate needs line of sight from the caster (the motion),
-			// unless SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS is set.
-			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-				!s.hasLineOfSightSpellCheck(motion.Map, motion.X, motion.Y, motion.Z, candidate.X, candidate.Y, candidate.Z) {
-				continue
-			}
-		} else if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 &&
-			!s.hasLineOfSightSpellCheck(motion.Map, centerX, centerY, centerZ, candidate.X, candidate.Y, candidate.Z) {
-			// Spell::CheckEffectTarget default arm (Spell.cpp:7479-7481):
-			// area selection passes losPosition == center, so every area
-			// candidate needs line of sight from the area center.
+		// Per-leg geometry: cylinder + arc + LOS of any leg family.
+		if !geometryPasses(candidate.X, candidate.Y, candidate.Z) {
 			continue
 		}
 		seen[targetSession.playerGUID] = struct{}{}
@@ -748,7 +849,7 @@ func petAreaAllyWantedMask(targetA, targetB uint32) uint8 {
 }
 
 // creatureAIAreaAllyGeometry is the radius/center computation for the
-// pet-caster area-ally sweeps, mirroring creatureAIAreaGeometry with the
+// pet-caster area-ally sweeps, mirroring creatureAIAreaLegGroups with the
 // friendly-area target types: radius from the friendly-area effects
 // (CalcRadius, SpellInfo.cpp:551-574, zero-radius fallback to the spell's
 // max range per IsPositiveEffect, Spell.cpp:1282, both folded through the
