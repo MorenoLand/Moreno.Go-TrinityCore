@@ -2447,6 +2447,19 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 						missTargets[guid] = protocol.SpellMissImmune2
 					}
 				}
+				// Spell::PreprocessSpellHit NON_ATTACKABLE recheck (Spell.cpp:2740-2741)
+				// for a delayed creature spell: a clean target carrying the flag
+				// misses as EVADE unless its charmer/owner is the caster. It joins
+				// evadedTargets, so the GO miss list and every per-hit leg below
+				// skip it like the evade verdict above; the strip, assist and
+				// initial-threat loops gate on the same set, matching C++ where
+				// the EVADE return precedes those arms.
+				if !reflected && missTargets[guid] == protocol.SpellMissNone && s.serverSpellNonAttackableEvade(m.Map, m.InstanceID, m.GUID, spellInfo, guid) {
+					if evadedTargets == nil {
+						evadedTargets = map[uint64]bool{}
+					}
+					evadedTargets[guid] = true
+				}
 			}
 		}
 		// Spell::SelectSpellTargets dest-family arms (Spell.cpp:3410, ahead

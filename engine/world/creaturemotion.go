@@ -5003,6 +5003,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					} else if s.serverCreatureFullyEffectImmuneVerdict(ctx, motion, inlineSpell, p.GUID) {
 						missSet[p.GUID] = protocol.SpellMissImmune2
 					}
+					// Spell::PreprocessSpellHit NON_ATTACKABLE recheck (Spell.cpp:2740-2741)
+					// for a delayed inline spell: a clean player victim carrying the
+					// flag misses as EVADE (the charmer/owner exception is vacuous
+					// here — a player victim is never the motion caster, and Go
+					// models no charmed-player charmer). It joins evadedSet ahead
+					// of the GO miss list below and the strip/assist/threat/damage
+					// legs, matching C++ where the EVADE return precedes them.
+					if inlineSpell.Speed > 0 && !reflectedSet[p.GUID] && missSet[p.GUID] == protocol.SpellMissNone && s.serverSpellNonAttackableEvade(motion.Map, motion.InstanceID, motion.GUID, inlineSpell, p.GUID) {
+						evadedSet[p.GUID] = true
+					}
 				}
 				// Creature victims roll the generic verdict (serverCastCreatureReflectVerdict):
 				// reflect via creatureCheckSpellReflection, evade ahead of the roll
@@ -5033,6 +5043,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						} else if s.serverCreatureFullyEffectImmuneVerdict(ctx, motion, inlineSpell, guid) {
 							missSet[guid] = protocol.SpellMissImmune2
 						}
+					}
+					// Spell::PreprocessSpellHit NON_ATTACKABLE recheck (Spell.cpp:2740-2741)
+					// for a delayed inline spell, creature-victim twin of the player
+					// arm above: a clean creature victim carrying the flag misses
+					// as EVADE unless its charmer/owner is the motion.
+					if !reflected && missSet[guid] == protocol.SpellMissNone && s.serverSpellNonAttackableEvade(motion.Map, motion.InstanceID, motion.GUID, inlineSpell, guid) {
+						evadedSet[guid] = true
 					}
 				}
 			}

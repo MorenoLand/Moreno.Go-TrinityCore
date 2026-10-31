@@ -4577,6 +4577,23 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			petMissVerdicts[guid] = verdict
 		}
 	}
+	// Spell::PreprocessSpellHit NON_ATTACKABLE recheck (Spell.cpp:2740-2741)
+	// for a delayed pet spell: a clean target carrying the flag misses as
+	// EVADE unless its charmer/owner is the pet. It joins evadedSet, so the
+	// GO miss list appended below, the assist/strip loops and every effect
+	// leg skip it. Self, reflected, evaded, immune and miss-verdict targets
+	// never reach PreprocessSpellHit in C++ (null _spellHitTarget), so they
+	// are excluded here, matching the creature-path twin.
+	if spell.Speed > 0 {
+		for _, guid := range hitTargets {
+			if guid == 0 || guid == motion.GUID || reflectedSet[guid] || evadedSet[guid] || immuneSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone {
+				continue
+			}
+			if s.server.serverSpellNonAttackableEvade(motion.Map, motion.InstanceID, motion.GUID, spell, guid) {
+				evadedSet[guid] = true
+			}
+		}
+	}
 	// Spell::SendSpellGo (Spell.cpp:4494-4507): only MISS_NONE targets ride
 	// HitTargets — reflected victims and the return-trip caster report
 	// through MissStatus (REFLECT + ReflectStatus), never as hits.

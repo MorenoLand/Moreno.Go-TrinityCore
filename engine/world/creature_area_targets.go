@@ -2146,6 +2146,43 @@ func (s *Server) serverCreatureSpellImmuneVerdict(ctx context.Context, m *creatu
 	return spellHasOnlyDamageEffects(spell) && creatureImmuneToDamageSpell(s, key, spell, spell.SchoolMask)
 }
 
+// serverSpellNonAttackableEvade mirrors the delayed-spell recheck in
+// Spell::PreprocessSpellHit (Spell.cpp:2740-2741): a Speed > 0 spell whose
+// non-self target carries UNIT_FLAG_NON_ATTACKABLE misses as EVADE, unless
+// the target's charmer/owner is the caster. It runs only for targets that
+// survived the AddUnitTarget verdicts (PreprocessTarget runs
+// PreprocessSpellHit only on a non-null _spellHitTarget, Spell.cpp:2357),
+// so callers gate on clean verdicts. Player targets resolve through the
+// session — Go models no charmed-player charmer, so the flag alone decides
+// once the self gate excludes the caster (the player-path precedent in
+// revalidateDelayedHitTargets); creature targets resolve through the
+// motion, CharmerGUID else OwnerGUID, empty when neither, which is not the
+// caster for a non-self target. GO GUIDs and unresolvable targets never
+// evade here.
+func (s *Server) serverSpellNonAttackableEvade(mapID, instanceID uint32, casterGUID uint64, spell wotlk.Spell, targetGUID uint64) bool {
+	if s == nil || spell.Speed <= 0 || targetGUID == 0 || targetGUID == casterGUID {
+		return false
+	}
+	if uint16(targetGUID>>48) == 0xF110 {
+		return false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		return ts.player.UnitFlags&unitFlagNonAttackable != 0
+	}
+	tm := s.findCreatureMotion(mapID, instanceID, targetGUID)
+	if tm == nil {
+		return false
+	}
+	if tm.UnitFlags&unitFlagNonAttackable == 0 {
+		return false
+	}
+	charmerOrOwner := tm.CharmerGUID
+	if charmerOrOwner == 0 {
+		charmerOrOwner = tm.OwnerGUID
+	}
+	return charmerOrOwner != casterGUID
+}
+
 // serverCreatureSpellMissVerdict rolls the MAGIC leg of
 // WorldObject::SpellHitResult (Object.cpp:2617-2663) for a creature caster,
 // dispatching MELEE/RANGED spells to serverCreatureMeleeMissVerdict (the
