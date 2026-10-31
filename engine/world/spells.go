@@ -26286,6 +26286,13 @@ func (s *session) energizeEffectTarget(ctx context.Context, spell wotlk.Spell, s
 	if amount < 0 {
 		return
 	}
+	// SpellEffects.cpp:1784-1785: !IsAlive returns before EnergizeBySpell,
+	// and a ghost is !IsAlive (deathState CORPSE, Unit.h:1140) while Go
+	// ghosts carry Health=1, so adjustSpellPower's Health==0 gate passes
+	// them; the power leg must skip ghost player targets outright.
+	if tgt := s.spellPowerTarget(effectTarget); tgt != nil && tgt.isDeadOrGhost() {
+		return
+	}
 	s.applySpellEnergize(ctx, effectTarget, power, amount)
 	// SpellEffects.cpp:1784-1785: !IsAlive returns before EnergizeBySpell,
 	// so the log + assist-threat tail must not fire for a target that died
@@ -26389,7 +26396,7 @@ func (s *session) energizePctEffectTarget(ctx context.Context, spell wotlk.Spell
 	}
 	var maxPower uint32
 	if target := s.spellPowerTarget(effectTarget); target != nil && target.player != nil {
-		if target.player.Health == 0 {
+		if target.player.Health == 0 || target.isDeadOrGhost() {
 			return
 		}
 		maxPower = target.player.MaxPowers[uint32(power)]
@@ -27299,7 +27306,7 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 	// is skipped) are bridged via fireDealHealAIHooks before the motion
 	// write lands.
 	if targetGUID == s.playerGUID {
-		if s.player.Health == 0 {
+		if s.player.Health == 0 || s.isDeadOrGhost() {
 			return
 		}
 		var addhealth uint32
@@ -27315,7 +27322,7 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 		return
 	}
 	if target := s.server.findSessionByGUID(targetGUID); target != nil && target.player != nil {
-		if target.player.Health == 0 {
+		if target.player.Health == 0 || target.isDeadOrGhost() {
 			return
 		}
 		var addhealth uint32
@@ -27362,18 +27369,19 @@ func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint
 // SpellEffects.cpp:1477-1492 — Unit::CountPctFromMaxHealth lands on the
 // target's max health). Player targets resolve through their session;
 // creature targets through their combat motion. It returns 0 when the
-// target is dead or unresolvable, which also lands C++'s
-// !unitTarget->IsAlive() early-out for the pct/mechanical arms.
+// target is dead, a ghost, or unresolvable, which also lands C++'s
+// !unitTarget->IsAlive() early-out for the pct/mechanical arms (a ghost
+// carries Health=1 in Go, so the Health==0 check alone passes it).
 func (s *session) effectTargetMaxHealth(ctx context.Context, targetGUID uint64) uint32 {
 	if s.player != nil && (targetGUID == 0 || targetGUID == s.playerGUID) {
-		if s.player.Health == 0 {
+		if s.player.Health == 0 || s.isDeadOrGhost() {
 			return 0
 		}
 		return s.player.MaxHealth
 	}
 	if s.server != nil {
 		if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
-			if other.player.Health == 0 {
+			if other.player.Health == 0 || other.isDeadOrGhost() {
 				return 0
 			}
 			return other.player.MaxHealth
@@ -48278,8 +48286,9 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell
 		}
 		// Spell::EffectHealthLeech (SpellEffects.cpp:1550): the caster
 		// self-heal only lands when the caster is alive — the damage leg
-		// above runs regardless.
-		if s.player != nil && s.player.Health > 0 {
+		// above runs regardless. IsAlive is false for ghosts (CORPSE
+		// state), so the Health>0 check alone passes a ghost caster.
+		if s.player != nil && s.player.Health > 0 && !s.isDeadOrGhost() {
 			s.executeSpellHeal(ctx, s.playerGUID, spellID, effectValueMultiplied(dealt, eff.Amplitude), effIndex, 0, 1.0, 0)
 		}
 	}
