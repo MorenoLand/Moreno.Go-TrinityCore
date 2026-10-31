@@ -368,11 +368,15 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 	// The copied flags come from the sanitizing ReadMovementInfo in C++, so
 	// the ack runs the same anti-cheat pass before the copy.
 	info.Flags = s.sanitizeMovementFlags(info.Flags)
+	// A possessing player's ack belongs to the creature mover, which has no Go
+	// movement-info store — the player-scoped copies below skip it like
+	// the vehicle-mover copies do.
+	possessedMover := s.possessedCreatureGUID() != 0
 	// MiscHandler.cpp:1398 copies to GetUnitBeingMoved()->m_movementInfo.flags,
 	// so while driving the acked flags belong to the vehicle, not the player:
 	// the player-scoped copy and falling sync below run only when the mover
 	// is the player.
-	if !s.controlsVehicle() {
+	if !s.controlsVehicle() && !possessedMover {
 		s.movementMu.Lock()
 		s.lastMovementInfo.Flags = info.Flags
 		s.movementMu.Unlock()
@@ -384,7 +388,7 @@ func (s *session) handleMoveSetCanFlyAck(payload []byte) bool {
 	// FALLING still left an LFG teleport or logout wrongly denied, and
 	// one setting it wrongly allowed). Gated on the player mover above:
 	// a driving player's can-fly ack updates the vehicle's flags only.
-	if !s.controlsVehicle() {
+	if !s.controlsVehicle() && !possessedMover {
 		s.isFalling = info.Flags&movementFalling != 0
 		s.isFallingFar = info.Flags&movementFallingFar != 0
 	}
@@ -422,8 +426,20 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// server-side: the vehicle never moved and passengers never relocated.
 	vehicleMover := s.controlsVehicle()
 	moverGUID := s.playerGUID
+	// MovementHandler.cpp:261 — mover is _player->GetUnitBeingMoved(),
+	// which a possess hands to the creature (Player::SetClientControl ->
+	// SetMovedUnit, Player.cpp:24239-24272), so a possessing player's
+	// packets carry the creature GUID; plain charm never calls
+	// SetClientControl, so only Possessed motions qualify (the
+	// knockback-ack twin already resolves the same GUID).
+	possessedMover := false
+	possessedGUID := uint64(0)
 	if vehicleMover {
 		moverGUID = s.player.VehicleGUID
+	} else if pg := s.possessedCreatureGUID(); pg != 0 {
+		possessedMover = true
+		possessedGUID = pg
+		moverGUID = pg
 	}
 	if guid != moverGUID {
 		prefix := payload
@@ -443,10 +459,21 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.debug("movement rejected", "account", s.accountName, "reason", "invalid position", "guid", guid)
 		return true
 	}
+	// MovementHandler.cpp:307 — the stale-packet distance runs against
+	// the mover's position, which for a possessed mover is the creature's
+	// motion coords, not the possessing player's.
+	moverX, moverY := s.player.X, s.player.Y
+	if possessedMover && s.server != nil {
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, possessedGUID); motion != nil {
+			moverX, moverY = motion.X, motion.Y
+		}
+		s.server.motionMu.Unlock()
+	}
 	if info.Flags&movementOnTransport != 0 && info.Transport != nil {
 		// MovementHandler.cpp:307-311 — drop packets broadcast before a
 		// teleport: the reported world position is nowhere near the server's.
-		if math.Hypot(float64(info.X-s.player.X), float64(info.Y-s.player.Y)) > terrainGridSize {
+		if math.Hypot(float64(info.X-moverX), float64(info.Y-moverY)) > terrainGridSize {
 			s.debug("movement rejected", "account", s.accountName, "reason", "stale transport packet", "opcode", opcode)
 			return true
 		}
@@ -479,7 +506,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// state and the movement-interrupt/auto-repeat legs below run only
 	// for player-mover packets, and a falling/moving vehicle leaves the
 	// driver's cached flags exactly as C++ leaves them.
-	if !vehicleMover {
+	if !vehicleMover && !possessedMover {
 		s.isMoving = isMove
 		if isMove {
 			// Break casts/channels with SPELL_INTERRUPT_FLAG_MOVEMENT.
@@ -562,7 +589,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// SMSG_STANDSTATE_UPDATE to the player directly.
 	standState := s.player.StandState
 	isSitState := standState == 1 || standState == 2 || (standState >= 4 && standState <= 6)
-	if s.player.VehicleGUID == 0 && isSitState &&
+	if !possessedMover && s.player.VehicleGUID == 0 && isSitState &&
 		info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling|movementFallingFar|movementAscending|movementDescending|movementSplineElevation|movementTurnLeft|movementTurnRight|movementPitchUp|movementPitchDown) != 0 {
 		s.player.StandState = 0
 		s.removeAurasWithInterruptFlags(auraInterruptFlagNotSeated)
@@ -604,6 +631,37 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		// zone arm in this handler.
 		s.updateZoneAndArea(ctx, false)
 		s.checkDuelBounds()
+	} else if possessedMover {
+		// MovementHandler.cpp:261/389-439 — the mover is the possessed
+		// creature (plrMover null): it takes UpdatePosition, and every
+		// plrMover arm (sit-state, fall info, undermap, transport
+		// attach, swim, fall damage, DB save) is skipped. The broadcast
+		// tail below still carries the packet with the creature GUID to
+		// the set, like mover->SendMessageToSet.
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, possessedGUID)
+			var onTransportOrVehicle bool
+			if motion != nil {
+				motion.X, motion.Y, motion.Z, motion.Orientation = info.X, info.Y, info.Z, info.Orientation
+				onTransportOrVehicle = motion.TransportGUID != 0 || motion.VehicleGUID != 0
+			}
+			s.server.motionMu.Unlock()
+			if motion != nil {
+				// MovementHandler.cpp:344-350 — a mover with neither
+				// transport nor vehicle loses a stray ONTRANSPORT flag
+				// (the GO-type check has no creature bridge; a motion
+				// carrying a transport/vehicle GUID keeps it).
+				if !onTransportOrVehicle && info.Flags&movementOnTransport != 0 {
+					info.Flags &^= movementOnTransport
+					info.Transport = nil
+					broadcastInfo.Flags &^= movementOnTransport
+					broadcastInfo.Transport = nil
+				}
+				// Unlocked first: relocate locks motionMu itself.
+				s.server.syncCreatureVehiclePassengers(motion)
+			}
+		}
 	} else if !vehiclePassenger {
 		// Unit::InterruptMovementBasedAuras (Unit.cpp:562-570): every world
 		// tick C++ strips auras with AURA_INTERRUPT_FLAG_TURNING when the
@@ -749,7 +807,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// water-volume model. START_SWIM/STOP_SWIM carry no override in C++.
 	// The swim arm is plrMover-gated in C++ (MovementHandler.cpp:366-369);
 	// a driven vehicle's packets never touch the driver's swim state.
-	if !vehicleMover {
+	if !vehicleMover && !possessedMover {
 		wasSwimming := s.isSwimming
 		isSwimming := info.Flags&movementSwimming != 0
 		s.isSwimming = isSwimming
@@ -768,7 +826,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// Fall damage generation and parachute interrupts (TC MovementHandler.cpp:359-365)
 	// HandleFall is plrMover-gated; the LANDING-aura strip hits the mover —
 	// the vehicle, which has no aura model (documented gap) — never the driver.
-	if !vehicleMover {
+	if !vehicleMover && !possessedMover {
 		if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 			s.handleFall(ctx, info)
 		}
@@ -779,11 +837,11 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// Player::UpdateFallInformationIfNeed runs only on the non-vehicle path
 	// (after UpdatePosition, MovementHandler.cpp:404-406); a vehicle
 	// passenger keeps the fall state the vehicle controller's packets set.
-	if !vehicleMover && !vehiclePassenger {
+	if !vehicleMover && !vehiclePassenger && !possessedMover {
 		s.updateFallInformationIfNeed(info, uint16(opcode))
 	}
 
-	if !vehicleMover && !vehiclePassenger && (opcode == uint32(protocol.OpcodeMSG_MOVE_STOP) || opcode == uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT) || opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND)) {
+	if !vehicleMover && !vehiclePassenger && !possessedMover && (opcode == uint32(protocol.OpcodeMSG_MOVE_STOP) || opcode == uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT) || opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND)) {
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 				"UPDATE characters SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ?, zone = ? WHERE guid = ?",
@@ -810,14 +868,18 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// archer victim flying, movementInfoForCreate) must keep reading the
 	// frozen pre-boarding flags. The broadcast below still carries the
 	// vehicle packet to the set.
-	if !vehicleMover {
+	if !vehicleMover && !possessedMover {
 		s.setLastMovementInfo(broadcastInfo)
 	}
 	packet := protocol.NewBuffer(len(payload))
 	writeMovementInfo(packet, broadcastInfo)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), broadcastInfo, s)
 	s.debug("movement accepted", "account", s.accountName, "guid", guid, "x", broadcastInfo.X, "y", broadcastInfo.Y, "z", broadcastInfo.Z)
-	if !vehiclePassenger {
+	// A possessed mover's packets describe the creature, but this stream
+	// centers on the player's coords — streaming it would show the
+	// neighbourhood around the stationary player, not the creature, so
+	// the creature-centered stream stays a separate unit.
+	if !vehiclePassenger && !possessedMover {
 		dx := float64(info.X - s.lastStreamX)
 		dy := float64(info.Y - s.lastStreamY)
 		if dx*dx+dy*dy > 30.0*30.0 {
@@ -835,8 +897,8 @@ func (s *session) handleSetActiveMover(payload []byte) bool {
 	}
 	// MovementHandler.cpp:518-528 — the client names the active mover; C++
 	// only logs a mismatch against GetUnitBeingMoved() (the vehicle while
-	// driving) and applies nothing.
-	if moverGUID := s.moverGUID(); guid != moverGUID {
+	// driving, the possessed creature while possessing) and applies nothing.
+	if moverGUID := s.moverGUID(); guid != moverGUID && guid != s.possessedCreatureGUID() {
 		s.debug("active mover mismatch", "account", s.accountName, "guid", guid, "expected", moverGUID)
 	}
 	return true
@@ -1682,8 +1744,10 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	moverGUID, err := r.ReadPackedGUID()
 	// MovementHandler.cpp:626-651 — the check runs against the mover
-	// (m_unitMovedByMe), so a driver sends the vehicle GUID here.
-	if err != nil || moverGUID != s.moverGUID() {
+	// (m_unitMovedByMe), so a driver sends the vehicle GUID here and a
+	// possessing player sends the possessed creature GUID.
+	possessedGUID := s.possessedCreatureGUID()
+	if err != nil || (moverGUID != s.moverGUID() && moverGUID != possessedGUID) {
 		return true
 	}
 	timeSkipped, err := r.ReadU32()
@@ -1692,8 +1756,10 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	}
 	// MovementHandler.cpp:651 — mover->m_movementInfo.time += timeSkipped,
 	// so while driving the skipped time belongs to the vehicle's info, not
-	// the player-scoped store (same gate as the set-can-fly flag copy).
-	if !s.controlsVehicle() {
+	// the player-scoped store (same gate as the set-can-fly flag copy);
+	// a possessed mover's time belongs to the creature, which has no Go
+	// movement-info store, so it skips the player store too.
+	if !s.controlsVehicle() && possessedGUID == 0 {
 		s.movementMu.Lock()
 		s.lastMovementInfo.Time += timeSkipped
 		s.movementMu.Unlock()
@@ -1702,7 +1768,15 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 	buf.WritePackedGUID(moverGUID)
 	buf.WriteU32(timeSkipped)
 	if s.server != nil {
-		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
+		bx, by, bz := s.player.X, s.player.Y, s.player.Z
+		if possessedGUID != 0 {
+			s.server.motionMu.Lock()
+			if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, possessedGUID); motion != nil {
+				bx, by, bz = motion.X, motion.Y, motion.Z
+			}
+			s.server.motionMu.Unlock()
+		}
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s.player.Map, s.player.InstanceID, bx, by, bz, s)
 	}
 	// MovementHandler.cpp:647-650: GetPlayer()->SendMessageToSet(&data, false) —
 	// same Player bool overload as the knockback ack: self=false sends
