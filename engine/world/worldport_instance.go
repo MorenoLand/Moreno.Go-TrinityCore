@@ -21,6 +21,9 @@ type worldportInstanceSelection struct {
 	GroupPermanent         bool
 	UnbindPlayerInstanceID uint32
 	Reserved               bool
+	RestoreSoloBind        bool
+	RestoreSoloPermanent   bool
+	RestoreGroupBind       bool
 }
 
 type instanceAdmissionKey struct {
@@ -69,6 +72,7 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 	}
 	if characterBound && characterPermanent != 0 {
 		selection.InstanceID, selection.Difficulty = uint32(characterInstanceID), uint32(characterDifficulty)
+		selection.RestoreSoloBind, selection.RestoreSoloPermanent = true, true
 		return selection, true, nil
 	}
 	group := s.server.findGroupByID(s.groupID)
@@ -150,6 +154,7 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 	}
 	if groupBound {
 		selection.InstanceID, selection.Difficulty, selection.GroupPermanent = uint32(groupInstanceID), uint32(groupBoundDifficulty), groupPermanent != 0
+		selection.GroupDBID, selection.RestoreGroupBind = groupDBID, true
 		if characterBound {
 			selection.UnbindPlayerInstanceID = uint32(characterInstanceID)
 		}
@@ -157,6 +162,7 @@ func (s *session) resolveWorldportInstance(ctx context.Context, state playerStat
 	}
 	if characterBound {
 		selection.InstanceID, selection.Difficulty = uint32(characterInstanceID), uint32(characterDifficulty)
+		selection.RestoreSoloBind = true
 		if canBindGroup {
 			selection.BindGroup, selection.GroupDBID = true, groupDBID
 		}
@@ -519,6 +525,56 @@ func (s *session) persistWorldportInstance(ctx context.Context, selection worldp
 	}
 	if selection.BindPlayer {
 		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_CHAR_INSTANCE", s.playerGUID, selection.InstanceID, false, uint8(1)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ensureWorldportInstanceSave is the InstanceMap::Add get-or-create
+// analog (Map.cpp:3887-3892) for kept selections: resolve read the row
+// and binds, but the per-save sweep can delete them in the window
+// between resolve and the player.InstanceID assignment (the sweep's
+// occupancy test cannot see the acking session yet), and a kept
+// selection carries no persist flags, so nothing recreates them. Run
+// after the assignment, when the sweep already counts this session as
+// a live player and skips the save, so a recreated row is stable.
+// Fresh selections skip this: their row is created by persist itself.
+// A solo bind the persist step deliberately unbound (group-bound
+// takeover) is never restored; selections with no bind provenance
+// (login-kept active-only) recreate the row only, as C++ entry
+// creates the save before any bind leg.
+func (s *session) ensureWorldportInstanceSave(ctx context.Context, selection worldportInstanceSelection, entry wotlk.MapEntry) error {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || selection.InstanceID == 0 {
+		return nil
+	}
+	tx, err := s.server.CharactersStore.Begin(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var rowID int64
+	err = tx.QueryRowContext(ctx, "SELECT id FROM instance WHERE id = ?", selection.InstanceID).Scan(&rowID)
+	if err == nil {
+		return tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	resetTime := uint64(0)
+	if !entry.IsRaid() && selection.Difficulty == 0 {
+		resetTime = uint64(time.Now().Unix() + 2*60*60)
+	}
+	if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_INSTANCE_SAVE", selection.InstanceID, selection.MapID, resetTime, uint8(selection.Difficulty), uint32(0), ""); err != nil {
+		return err
+	}
+	if selection.RestoreSoloBind && selection.UnbindPlayerInstanceID == 0 {
+		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_INS_CHAR_INSTANCE", s.playerGUID, selection.InstanceID, selection.RestoreSoloPermanent, uint8(1)); err != nil {
+			return err
+		}
+	}
+	if selection.RestoreGroupBind && selection.GroupDBID != 0 {
+		if _, err := s.server.CharactersStore.ExecStatementTx(ctx, tx, "CHAR_REP_GROUP_INSTANCE", selection.GroupDBID, selection.InstanceID, selection.GroupPermanent); err != nil {
 			return err
 		}
 	}

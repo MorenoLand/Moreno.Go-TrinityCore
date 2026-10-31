@@ -441,9 +441,10 @@ func (s *Server) resetInstanceGlobal(ctx context.Context, key instanceResetKey) 
 // player.InstanceID at selection (characters.go:1673) while worldReady
 // is still false (it commits only at admission), so a worldReady-only
 // test let the sweep delete the row and binds under an acking player
-// whose flag-gated persist then recreates nothing, where C++
-// InstanceMap::AddPlayerToMap recreates the save on entry
-// (Map.cpp:3887-3892). The player's live Map is already the dest map
+// before the persist step; the kept selection recreates them there
+// (ensureWorldportInstanceSave, the InstanceMap::AddPlayerToMap
+// get-or-create analog, Map.cpp:3887-3892). The player's live Map is
+// already the dest map
 // (teleportToOptions overwrites it at initiation), so the Map match
 // keeps a pre-ack transfer from counting toward its origin instance.
 func (s *Server) instanceHasLivePlayers(mapID, instanceID uint32) bool {

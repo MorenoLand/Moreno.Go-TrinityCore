@@ -1725,6 +1725,11 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 			s.server.releaseWorldportInstanceID(selection.InstanceID)
 		}
 	}
+	if mapEntry.IsDungeon() && !selection.CreateSave {
+		if err := s.ensureWorldportInstanceSave(ctx, selection, mapEntry); err != nil {
+			return false
+		}
+	}
 	if err := s.write(initialUpdate.Opcode, initialUpdate.Payload.Bytes(), true); err != nil {
 		return false
 	}
