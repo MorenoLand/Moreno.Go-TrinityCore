@@ -37305,6 +37305,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 
 	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
+		// SpellAuraEffects.cpp:5355-5356 — HandlePeriodicHealAurasTick
+		// returns on !target->IsAlive() before the isolated arm below;
+		// Go ghosts carry Health==1, so the shared Health==0 gate above
+		// passes them and HoT ticks would heal ghosts over time.
+		if ts.isDeadOrGhost() {
+			break
+		}
 		// SpellAuraEffects.cpp:5373 — ignore negative values (can result from
 		// applying spellmods to aura damage): uint32 damage = std::max(GetAmount(), 0).
 		heal := uint32(max(int32(aura.Amount), 0))
