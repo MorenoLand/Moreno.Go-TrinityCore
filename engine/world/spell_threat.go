@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // redirectThreatTarget mirrors one flattened entry of
@@ -208,11 +209,20 @@ type spellThreatEntry struct {
 // table or row degrades to "no entry", which is exactly C++'s fallback to
 // the SpellLevel-based formula (Spell.cpp:5116-5118).
 func (s *session) loadSpellThreatEntry(ctx context.Context, spellID uint32) (spellThreatEntry, bool) {
-	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	if s == nil || s.server == nil {
+		return spellThreatEntry{}, false
+	}
+	return s.server.loadSpellThreatEntry(ctx, spellID)
+}
+
+// loadSpellThreatEntry is the Server-level spell_threat fetch, shared by the
+// player path above and the creature/pet initial-threat leg below.
+func (s *Server) loadSpellThreatEntry(ctx context.Context, spellID uint32) (spellThreatEntry, bool) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return spellThreatEntry{}, false
 	}
 	var row spellThreatEntry
-	err := s.server.WorldStore.DB.QueryRowContext(ctx,
+	err := s.WorldStore.DB.QueryRowContext(ctx,
 		"SELECT flatMod, pctMod, apPctMod FROM spell_threat WHERE entry = ?", spellID).
 		Scan(&row.flatMod, &row.pctMod, &row.apPctMod)
 	if err != nil {
@@ -384,14 +394,13 @@ func (s *Server) unitInCombatLocked(mapID, instanceID uint32, guid uint64) bool 
 // Positive spells forward the threat to every creature currently threatening
 // the target (ThreatManager::ForwardThreatForAssistingMe, ThreatManager.cpp:662);
 // negative spells add it to creature targets directly (ignoreModifiers, so
-// no caster multiplier on this path). Only player casts route through this
-// path: C++ runs HandleThreatSpells for any unit caster, but Go creature and
-// pet casts resolve instantly (executePetSpellWithOptions) with no
-// initial-threat pass. The negative half is vacuous for creature casts on
-// players — players cannot have threat lists (ThreatManager.cpp:156-179),
-// which is exactly C++'s CanHaveThreatList skip; creature-on-creature casts
-// and creature heal forwarding (a creature as the ForwardThreatForAssistingMe
-// assistant) have no Go analog. C++ takes the caster from m_originalCaster
+// no caster multiplier on this path). Creature and pet casts run the twin
+// leg handleCreatureSpellInitialThreat (below): the negative half is
+// vacuous for creature casts on players — players cannot have threat lists
+// (ThreatManager.cpp:156-179), which is exactly C++'s CanHaveThreatList
+// skip — and creature heal forwarding (a creature as the
+// ForwardThreatForAssistingMe assistant) rides the healing-threat
+// distributor there. C++ takes the caster from m_originalCaster
 // when set (Spell.cpp:5098); Go always uses the session player.
 func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spell, hitTargets []uint64, missGUIDs []uint64) {
 	if s == nil || s.server == nil || s.player == nil || (len(hitTargets) == 0 && len(missGUIDs) == 0) {
@@ -545,6 +554,211 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 	}
 	s.server.motionMu.Unlock()
 	pushCombatUpdate()
+}
+
+// creatureBaseAttackPower mirrors Unit::GetTotalAttackPowerValue(BASE_ATTACK)
+// (Unit.cpp:9507) for a wild creature caster: creature_classlevelstats
+// attackpower parks on UNIT_MOD_ATTACK_POWER BASE_VALUE (Creature.cpp:1549),
+// the aura-99 flat fold feeds TOTAL_VALUE and the aura-166 product feeds
+// TOTAL_PCT, and a negative sum floors at zero. A missing row (unknown
+// level/class) degrades to the aura folds alone, like the load-time fallback
+// in combat.go. True pets use the guardian twin instead
+// (petGuardianAttackPower, StatSystem.cpp:1386-1477); callers branch on it.
+func (s *Server) creatureBaseAttackPower(ctx context.Context, caster *creatureMotion) float64 {
+	if s == nil || caster == nil || caster.GUID == 0 {
+		return 0
+	}
+	var ap int64
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		// The motion carries no unit class (loadCreatureStats reads it
+		// from the template row), so resolve it here; this helper runs
+		// only when a spell_threat row carries apPctMod, never per cast.
+		var class uint8
+		_ = s.WorldStore.DB.QueryRowContext(ctx, `SELECT unit_class FROM creature_template WHERE entry = ?`, caster.Entry).Scan(&class)
+		_ = s.WorldStore.DB.QueryRowContext(ctx, `SELECT attackpower FROM creature_classlevelstats WHERE level = ? AND class = ?`, caster.Level, class).Scan(&ap)
+	}
+	key := creatureAuraKeyForMotion(caster)
+	total := float64(ap+int64(s.creatureAuraAttackPowerFlat(key))) * s.creatureAuraAttackPowerPct(key)
+	if total < 0 {
+		return 0
+	}
+	return total
+}
+
+// handleCreatureSpellInitialThreat mirrors Spell::HandleThreatSpells
+// (Spell.cpp:5096-5151) for a creature caster: the boss_ai and pet cast
+// paths previously took no initial-threat pass at all, so a creature's buff,
+// debuff or damage spell added only its effect threat (damage/heal legs)
+// and never the cast threat C++ adds ahead of the HIT effects
+// (_handle_immediate_phase, Spell.cpp:3718). The threat is the spell_threat
+// row (flatMod + apPctMod * the caster's base attack power) or, without a
+// row, the spell's SpellLevel, split evenly across ALL unique unit targets —
+// hits and misses alike (Spell.cpp:5123); GO GUIDs are not TargetInfos and
+// never count. Missed targets (missed, immune, evaded, reflected — the
+// reflector keeps the entry with MissCondition=REFLECT, per the player
+// path's AddUnitTarget note) take the zero leg, not a share. Positive spells
+// forward the folded share (spell_threat-row pctMod, the mod owner's
+// SPELLMOD_THREAT, then the caster's own school multipliers — the
+// CalculateModifiedThreat order, ThreatManager.cpp:606-659, all
+// assistant-constant so folded once) via the healing-threat distributor;
+// negative spells add the raw share (ignoreModifiers=true) to creature
+// targets with threat lists. A zero computed threat returns before any leg
+// (Spell.cpp:5119-5120); the zero-threat friendly forward is the separate
+// PreprocessSpellHit arm (Spell.cpp:2761-2765), already ported on both
+// paths. Callers run this ahead of their HIT effect loops, with isMiss
+// reporting their own verdict maps.
+func (s *Server) handleCreatureSpellInitialThreat(ctx context.Context, caster *creatureMotion, spell wotlk.Spell, attackPower func() float64, modOwner *session, hitTargets []uint64, isMiss func(uint64) bool) {
+	if s == nil || caster == nil || caster.GUID == 0 || isMiss == nil {
+		return
+	}
+	if !spellHasInitialThreat(spell) {
+		return
+	}
+	seen := make(map[uint64]struct{}, len(hitTargets))
+	var targets []uint64
+	for _, guid := range hitTargets {
+		if guid == 0 || uint16(guid>>48) == 0xF110 {
+			continue
+		}
+		if _, dup := seen[guid]; dup {
+			continue
+		}
+		seen[guid] = struct{}{}
+		targets = append(targets, guid)
+	}
+	if len(targets) == 0 {
+		return
+	}
+	var threat float32
+	var pctMod float32 = 1.0
+	if entry, ok := s.loadSpellThreatEntry(ctx, spell.ID); ok {
+		if entry.apPctMod != 0 && attackPower != nil {
+			threat += entry.apPctMod * float32(attackPower())
+		}
+		threat += entry.flatMod
+		pctMod = entry.pctMod
+	} else if !spellSuppressesInitialThreat(spell) {
+		threat += float32(spell.SpellLevel)
+	}
+	if threat == 0 {
+		return
+	}
+	threat /= float32(len(targets))
+	positive := !isHarmfulSpell(spell)
+	assistThreat := float32(0)
+	if positive {
+		t := float64(threat * pctMod)
+		t = modOwner.applySpellModFloat(spell, spellModThreat, t)
+		assistThreat = float32(t) * s.creatureThreatMultiplier(caster.Map, caster.InstanceID, caster.GUID, uint32(spell.SchoolMask))
+	}
+	for _, targetGUID := range targets {
+		share := threat
+		if isMiss(targetGUID) {
+			share = 0
+		}
+		if positive {
+			forwardShare := assistThreat
+			if isMiss(targetGUID) {
+				forwardShare = 0
+			}
+			s.forwardCreatureInitialAssistThreat(caster, targetGUID, forwardShare)
+			continue
+		}
+		s.addCreatureInitialNegativeThreat(caster, targetGUID, share)
+	}
+}
+
+// forwardCreatureInitialAssistThreat runs the Spell.cpp:5139 positive leg
+// for one target: ForwardThreatForAssistingMe with the pre-folded share,
+// via the healing-threat distributor (same recipient set and CC split as
+// the 2761 forward). C++ runs AddThreat per recipient, engaging the
+// assistant with each; the recipient pre-scan (the distributor's set plus
+// the threat-list gate, matching the player twin's recipient shape) decides
+// whether the caster engages — a recipient-less forward engages nothing.
+func (s *Server) forwardCreatureInitialAssistThreat(caster *creatureMotion, targetGUID uint64, amount float32) {
+	if s == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 {
+		return
+	}
+	hasRecipient := false
+	s.motionMu.Lock()
+	for _, m := range s.motionMapLocked(caster.Map, caster.InstanceID) {
+		if m == nil || m.GUID == targetGUID || m.Health == 0 || !m.InCombat || m.Evading || !motionCanHaveThreatList(m) {
+			continue
+		}
+		if m.TargetGUID == targetGUID || (m.ThreatMgr != nil && m.ThreatMgr.HasVictim(targetGUID)) {
+			hasRecipient = true
+			break
+		}
+	}
+	s.motionMu.Unlock()
+	s.distributeHealingThreatLocked(nil, caster.Map, caster.InstanceID, caster.X, caster.Y, caster.Z, caster.CombatReach, caster.GUID, targetGUID, amount)
+	if hasRecipient {
+		s.motionMu.Lock()
+		if cm := s.findCreatureMotionLocked(caster.Map, caster.InstanceID, caster.GUID); cm != nil {
+			cm.InCombat = true
+		}
+		s.motionMu.Unlock()
+	}
+}
+
+// addCreatureInitialNegativeThreat runs the Spell.cpp:5143 negative leg on
+// one creature target for a creature caster, in the creatureEffectThreat
+// shape (lock per target, AddThreat crediting the caster, switch broadcast
+// plus AI-reaction/attack-start packets on a newly engaged victim). The
+// CanHaveThreatList check (ThreatManager.cpp:156-179) runs before AddThreat,
+// exactly as C++ does: player targets resolve to no motion here and skip,
+// and list-less creature targets (pets, player-summoned minions) skip with
+// no engage — HandleThreatSpells never reaches AddThreat's engage-only
+// early leg for them. (The player twin's engage-only fallback for list-less
+// targets diverges from this reading; flagged, not changed this tick.)
+// ignoreModifiers=true, so no pctMod, spellmod or school fold; creature
+// casters carry no redirect registry (the redirect effect is player-cast
+// only in Go), so the nil-session split is a no-op and ignoreRedirects=false
+// is vacuous here.
+func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, targetGUID uint64, amount float32) {
+	if s == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(caster.Map, caster.InstanceID, targetGUID)
+	if motion == nil || !motionCanHaveThreatList(motion) {
+		s.motionMu.Unlock()
+		return
+	}
+	if motion.ThreatMgr == nil {
+		motion.ThreatMgr = NewThreatManager(motion)
+	}
+	var nilSess *session
+	share, rSwitched, rVictim := nilSess.splitThreatRedirects(motion, amount)
+	dist := distance3D(caster.X, caster.Y, caster.Z, motion.X, motion.Y, motion.Z)
+	inMelee := inMeleeThreatRange(motion.CombatReach, caster.CombatReach, dist)
+	switched, newVictim := motion.ThreatMgr.AddThreat(caster.GUID, share, inMelee)
+	if rSwitched {
+		switched, newVictim = true, rVictim
+	}
+	wasInCombat := motion.InCombat
+	if switched && newVictim != motion.TargetGUID {
+		motion.TargetGUID = newVictim
+	} else {
+		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
+	}
+	motion.InCombat = true
+	motion.Moving = true
+	if cm := s.findCreatureMotionLocked(caster.Map, caster.InstanceID, caster.GUID); cm != nil {
+		cm.InCombat = true
+	}
+	entries := motion.ThreatMgr.SortedEntries()
+	mapID, instanceID := motion.Map, motion.InstanceID
+	mx, my, mz, mguid := motion.X, motion.Y, motion.Z, motion.GUID
+	s.motionMu.Unlock()
+	if switched {
+		s.broadcastHighestThreatUpdateInInstance(mapID, instanceID, mx, my, mz, mguid, newVictim, entries)
+	}
+	if !wasInCombat {
+		s.broadcastAIReactionInInstance(mapID, instanceID, mguid, 2)
+		startPkt := buildAttackStart(mguid, caster.GUID)
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, instanceID, mx, my, mz, nil)
+	}
 }
 
 // addInitialNegativeThreatLocked runs the Spell.cpp:5143 negative leg on one

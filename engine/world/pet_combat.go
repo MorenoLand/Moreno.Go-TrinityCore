@@ -5433,6 +5433,27 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.forwardPetAssistThreat(motion, armTarget, spell)
 		}
 	}
+	// Spell::HandleThreatSpells (Spell.cpp:5096-5151) for a pet caster: the
+	// _handle_immediate head (Spell.cpp:3718) runs before the HIT_TARGET
+	// effect loop below, over ALL unique targets — hits and misses alike
+	// (Spell.cpp:5123). Missed, immune, evaded and reflected targets take
+	// the zero leg (reflect trips ride MissStatus with REFLECT, so the
+	// reflector keeps the entry). The AP twin is the guardian leg for true
+	// pets and the classlevelstats leg for possessed wild casters
+	// (spell_threat.go); the spellmod owner is the petModOwner resolved at
+	// the cast head.
+	{
+		attackPower := func() float64 {
+			if motion.PetID != 0 && motion.OwnerGUID != 0 {
+				total, _, _, _ := s.server.petGuardianAttackPower(s, motion)
+				return total
+			}
+			return s.server.creatureBaseAttackPower(ctx, motion)
+		}
+		s.server.handleCreatureSpellInitialThreat(ctx, motion, spell, attackPower, petModOwner, hitTargets, func(guid uint64) bool {
+			return immuneSet[guid] || evadedSet[guid] || reflectedSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone
+		})
+	}
 	for i, effect := range spell.Effects {
 		if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
 			// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE

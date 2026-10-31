@@ -2722,6 +2722,24 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			s.forwardCreatureAssistThreat(m, guid, spellInfo)
 		}
 	}
+	// Spell::HandleThreatSpells (Spell.cpp:5096-5151) for a creature caster:
+	// the _handle_immediate head (Spell.cpp:3718) runs before the HIT arms
+	// below, over ALL unique targets — hits and misses alike
+	// (Spell.cpp:5123). Missed, immune, evaded and reflected targets take
+	// the zero leg (the reflector keeps the entry with MissCondition=
+	// REFLECT, per the player path's AddUnitTarget note); the caster's own
+	// entry (a TARGET_UNIT_CASTER effect) takes a full share. GO GUIDs are
+	// not TargetInfos and never count. The AP twin is the classlevelstats
+	// leg (spell_threat.go); the spellmod owner resolves through the
+	// caster's charmer/owner session.
+	if spellKnown {
+		s.handleCreatureSpellInitialThreat(ctx, m, spellInfo, func() float64 { return s.creatureBaseAttackPower(ctx, m) }, s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID), hitTargets, func(guid uint64) bool {
+			if _, reflected := reflectedTargets[guid]; reflected {
+				return true
+			}
+			return evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone
+		})
+	}
 	// Spell::EffectTransmitted (SpellEffects.cpp:4927-5045) for a creature
 	// caster: the generic arm runs once per cast at SPELL_EFFECT_HANDLE_HIT
 	// (not per hit target), spawning the effect's MiscValue gameobject
