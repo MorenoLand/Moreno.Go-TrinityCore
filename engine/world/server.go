@@ -3230,6 +3230,27 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			state.resetTimeoutTime(false)
 			continue
 		}
+		// Transfer-window drop (WorldSession.cpp:312-336): a STATUS_LOGGEDIN
+		// packet arriving while the player exists but is not in world is
+		// dropped, not requeued and not dispatched — the requeue arm only
+		// covers !_player, and the call arm requires IsInWorld(). In Go the
+		// window is playerLoaded && !worldReady: teleportTo clears
+		// worldReady on a far teleport (commands.go) and
+		// commitWorldportAdmission restores it at the worldport ack, so
+		// this is the dispatch-level form of the arm, not a per-handler
+		// gate — the 399 LOGGEDIN cases share it via
+		// isPreLoginRequeueOpcode, which the census verified equals the
+		// STATUS_LOGGEDIN set. AUTHED, TRANSFER and
+		// LOGGEDIN_OR_RECENTLY_LOGGOUT packets are untouched: their C++
+		// arms call without an in-world check, and the worldport ack that
+		// ends the window is STATUS_TRANSFER, so it passes through.
+		// Dropped before hooks like C++, which fires OnPacketReceive only
+		// on the call path; the idle-timer refresh mirrors the socket read.
+		if !replayed && state.authed && state.playerLoaded && !state.worldReady.Load() && isPreLoginRequeueOpcode(header.Opcode) {
+			state.debug("transfer-window packet dropped", "account", state.accountName, "opcode", opcodeName(header.Opcode))
+			state.resetTimeoutTime(false)
+			continue
+		}
 		if !state.logoutAt.IsZero() && !time.Now().Before(state.logoutAt) {
 			// WorldSession::Update (WorldSession.cpp:302-472) drains the
 			// recv queue before the ShouldLogOut check, so a LogoutCancel
