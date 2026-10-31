@@ -9036,12 +9036,16 @@ func (s *Server) fireCreatureMeleeAuraProcs(ctx context.Context, m *creatureMoti
 // Unit.cpp:10388): the trigger spell resolves its own implicit targets, and
 // the CheckExplicitTarget twin fizzles the spells that need an explicit unit
 // target (SpellInfo.cpp:1784-1790). The modOwner arm
-// (Unit.cpp:10395-10408) has no Go model — GetSpellModOwner returns null for
-// wild and charmed creatures (only Pet objects carry UNIT_MASK_PET,
-// Pet.cpp:49), and the creature path never runs pets or totems. The
-// SetCantProc evaluation window (Unit.cpp:10424-10428) has no creature-side
-// reader yet (no per-motion m_procDeep model); the _cast proc leg carries no
-// CanProc gate in C++, so the omission is inert there.
+// (Unit.cpp:10395-10408) does not run inside this loop: it needs the
+// triggering cast's applied-mods registry, which only the pet spell
+// proc sites thread (firePetModOwnerAuraProcs, pet_combat.go) — the
+// wild-creature paths that reach this loop have a null modOwner
+// (GetSpellModOwner returns null for wild and charmed creatures; only
+// Pet objects carry UNIT_MASK_PET, Pet.cpp:49), and pet melee/kill
+// events carry no spell, so the arm's spell != nil gate keeps them out.
+// The SetCantProc evaluation window (Unit.cpp:10424-10428) has no
+// creature-side reader yet (no per-motion m_procDeep model); the _cast
+// proc leg carries no CanProc gate in C++, so the omission is inert there.
 func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion, triggerTargetGUID uint64, ev procEventInfo) {
 	if s == nil || m == nil {
 		return

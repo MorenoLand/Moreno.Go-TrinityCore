@@ -3424,6 +3424,22 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// value) instead of the charmer's mods. True pets resolve to
 	// their owner session, unchanged.
 	petModOwner := s.server.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+	// Spell::_cast head (Spell.cpp:3323) sets the taking spell for the cast,
+	// so every modOwner->ApplySpellMod leg of this cast (range, duration,
+	// cost, GCD, jump targets) registers its owner aura on the cast's
+	// m_appliedMods — the registry the mod-owner proc arm reads at proc
+	// time (Unit.cpp:10395-10408). The window is the cast's own: nested
+	// triggered pet casts push their own context, and the registry is
+	// threaded explicitly to the proc sites (never read as "current", so
+	// an unrelated live window on the owner session — e.g. a channel —
+	// cannot leak into a standalone damage call). A nil owner (possessed
+	// wild caster) takes no window, matching C++'s null modOwner.
+	var petTaking *spellModTakingContext
+	if petModOwner != nil {
+		petModOwner.beginSpellModTaking()
+		petTaking = petModOwner.spellModTakingCurrent()
+		defer petModOwner.endSpellModTaking()
+	}
 	// Triggered pet spells are built from the explicit unit target only:
 	// C++ EffectTriggerSpell casts the triggered spell without the parent
 	// packet's trajectory or destination, so the parent target copy that
@@ -5260,7 +5276,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				reflectorGUID = targetGUID
 			}
 			missVerdict, hasMissVerdict := petMissVerdicts[targetGUID]
-			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
+			s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
 		}
 		// The 77 channel target takes its own damage hit on the same
 		// shape: the wire leg above covers targetGUID only and the area
@@ -5275,7 +5291,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					reflectorGUID = petChannelHitGUID
 				}
 				missVerdict, hasMissVerdict := petMissVerdicts[petChannelHitGUID]
-				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
+				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
 			}
 		}
 		// SelectImplicitAreaTargets (Spell.cpp:1227): each area-selected
@@ -5290,7 +5306,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						reflectorGUID = areaHit.GUID
 					}
 					missVerdict, hasMissVerdict := petMissVerdicts[areaHit.GUID]
-					s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
+					s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
 				}
 			}
 		}
@@ -5309,7 +5325,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						reflectorGUID = areaCreatureGUID
 					}
 					missVerdict, hasMissVerdict := petMissVerdicts[areaCreatureGUID]
-					s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
+					s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
 				}
 			}
 		}
@@ -5336,7 +5352,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						reflectorGUID = chainGUID
 					}
 					missVerdict, hasMissVerdict := petMissVerdicts[chainGUID]
-					s.executePetSpellDamage(ctx, motion, rt, spell.ID, chainScaledAmount(petDamageFor(rt), chainMult, jumpIdx+1), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict)
+					s.executePetSpellDamage(ctx, motion, rt, spell.ID, chainScaledAmount(petDamageFor(rt), chainMult, jumpIdx+1), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
 				}
 			}
 		}
@@ -5366,7 +5382,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				typeMask := spellDamageProcTypeMask(spell) | spellDamageTakenProcTypeMask(spell)
 				if typeMask != 0 {
 					spellCopy := spell
-					s.server.fireCreatureAuraProcLoop(ctx, motion, motion.GUID, procEventInfo{
+					reflEv := procEventInfo{
 						typeMask:       typeMask,
 						schoolMask:     uint32(zeroSchoolMask),
 						spellTypeMask:  procSpellTypeNoDmgHeal,
@@ -5376,7 +5392,12 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 						eventSpell:     &spellCopy,
 						actorGUID:      motion.GUID,
 						damage:         0,
-					})
+					}
+					s.server.fireCreatureAuraProcLoop(ctx, motion, motion.GUID, reflEv)
+					// The reflected trip shares the original cast's Spell
+					// object in C++, so its m_appliedMods are this cast's
+					// registry — the mod-owner arm runs here too.
+					s.server.firePetModOwnerAuraProcs(ctx, motion, motion.GUID, reflEv, petTaking)
 				}
 			}
 			s.server.standPetReflectReflectorUp(motion, trip.victimGUID, spell)
@@ -6622,6 +6643,34 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 	return true, false, protocol.SpellMissNone
 }
 
+// firePetModOwnerAuraProcs runs the mod-owner arm of
+// Unit::TriggerAurasProcOnEvent (Unit.cpp:10395-10408) for a pet spell
+// proc event: "needed for example for Cobra Strikes, pet does the attack,
+// but aura is on owner". When the triggering spell is non-nil and the
+// caster's spell-mod owner (GetSpellModOwner, Object.cpp:2246-2261 — a
+// true pet resolves to its owner player, a possessed wild creature to
+// nil) differs from the caster, the owner's auras whose base sits in the
+// triggering spell's m_appliedMods join the triggering set, evaluated
+// against the same event. The registry is the threaded taking context
+// of this cast — never the owner's live "current" window, so a foreign
+// window (a channel, an unrelated cast) cannot leak in through a
+// standalone damage call, which passes nil and correctly evaluates
+// nothing. Trigger spells fire from the owner session, matching the
+// session loop's caster model for the owner's own auras; the taken side
+// is untouched (the arm is self-trigger only).
+func (s *Server) firePetModOwnerAuraProcs(ctx context.Context, caster *creatureMotion, triggerTargetGUID uint64, ev procEventInfo, taking *spellModTakingContext) {
+	if s == nil || caster == nil || taking == nil || ev.eventSpell == nil {
+		return
+	}
+	modOwner := s.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID)
+	if modOwner == nil {
+		return
+	}
+	modOwner.procAuraTriggerLoopFiltered(ctx, triggerTargetGUID, ev, func(aura *activeAura) bool {
+		return modOwner.spellModTakingApplied(taking, aura)
+	})
+}
+
 // firePetSpellDoneSideProcs evaluates the done-side proc leg of
 // Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586) on the pet
 // caster's own auras: Unit::ProcSkillsAndAuras(caster, unitTarget, ...) with
@@ -6636,7 +6685,7 @@ func (s *session) petSpellReflectVerdict(ctx context.Context, motion *creatureMo
 // bridge already fires the combined done+taken event on the pet's auras.
 // On an immune hit the damage arm ASSIGNS PROC_HIT_IMMUNE (Spell.cpp:2540-
 // 2546), so the done-side mask is IMMUNE, not the rolled crit.
-func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, schoolMask uint8, triggered, isCrit, immune bool) {
+func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, schoolMask uint8, triggered, isCrit, immune bool, taking *spellModTakingContext) {
 	if s == nil || s.server == nil || s.server.Data == nil || caster == nil || targetGUID == caster.GUID {
 		return
 	}
@@ -6655,7 +6704,7 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 	} else if isCrit {
 		hitMask = procHitCritical
 	}
-	s.server.fireCreatureAuraProcLoop(ctx, caster, targetGUID, procEventInfo{
+	ev := procEventInfo{
 		typeMask:       spellDamageProcTypeMask(spellCopy),
 		schoolMask:     uint32(schoolMask),
 		spellTypeMask:  procSpellTypeDamage,
@@ -6664,7 +6713,12 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 		triggered:      triggered,
 		eventSpell:     &spellCopy,
 		actorGUID:      caster.GUID,
-	})
+	}
+	s.server.fireCreatureAuraProcLoop(ctx, caster, targetGUID, ev)
+	// Unit::TriggerAurasProcOnEvent's mod-owner arm (Unit.cpp:10395-10408)
+	// runs on the same event, after the pet's own auras, before any
+	// target-side evaluation — there is no target side on this arm.
+	s.server.firePetModOwnerAuraProcs(ctx, caster, targetGUID, ev, taking)
 }
 
 // firePetSpellMissNodmgProcs fires the no-damage proc arm for a missed
@@ -6684,7 +6738,7 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 // its own proc evaluation fires nothing on either side (the launch loop's
 // procDeep gate). Return trips never reach this arm: the miss roll is gated
 // on target != caster, so missKind stays NONE there.
-func (s *session) firePetSpellMissNodmgProcs(ctx context.Context, caster *creatureMotion, target combatTarget, spellID uint32, miss uint8, triggered bool) {
+func (s *session) firePetSpellMissNodmgProcs(ctx context.Context, caster *creatureMotion, target combatTarget, spellID uint32, miss uint8, triggered bool, taking *spellModTakingContext) {
 	if s == nil || s.server == nil || s.server.Data == nil || caster == nil || miss == protocol.SpellMissNone {
 		return
 	}
@@ -6718,7 +6772,7 @@ func (s *session) firePetSpellMissNodmgProcs(ctx context.Context, caster *creatu
 		if schoolMask == 0 {
 			schoolMask = 1
 		}
-		s.server.fireCreatureAuraProcLoop(ctx, caster, target.GUID, procEventInfo{
+		ev := procEventInfo{
 			typeMask:       typeMask,
 			schoolMask:     uint32(schoolMask),
 			spellTypeMask:  procSpellTypeNoDmgHeal,
@@ -6727,7 +6781,11 @@ func (s *session) firePetSpellMissNodmgProcs(ctx context.Context, caster *creatu
 			triggered:      triggered,
 			eventSpell:     &spellCopy,
 			actorGUID:      caster.GUID,
-		})
+		}
+		s.server.fireCreatureAuraProcLoop(ctx, caster, target.GUID, ev)
+		// Mod-owner arm (Unit.cpp:10395-10408), same event, ahead of the
+		// taken-side evaluation below — the arm is self-trigger only.
+		s.server.firePetModOwnerAuraProcs(ctx, caster, target.GUID, ev, taking)
 	}
 	if victim := s.server.findSessionByGUID(target.GUID); victim != nil && victim.player != nil {
 		victim.procSpellDamageNoDmgTakenAuraTriggers(ctx, caster.GUID, spellID, miss, false, triggered, false, 0)
@@ -7051,7 +7109,7 @@ func (s *session) petSpellMissVerdict(ctx context.Context, caster *creatureMotio
 	return protocol.SpellMissNone
 }
 
-func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool, reflectorGUID uint64, missVerdict uint8, hasMissVerdict bool) {
+func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID, damage uint32, schoolMask uint8, triggered bool, reflectorGUID uint64, missVerdict uint8, hasMissVerdict bool, taking *spellModTakingContext) {
 	if s == nil || s.server == nil || caster == nil {
 		return
 	}
@@ -7360,7 +7418,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 						}
 					}
 				}
-				s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, true)
+				s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, true, taking)
 			}
 			if reflectorGUID != 0 {
 				s.server.standPetReflectReflectorUp(caster, reflectorGUID, petSpell)
@@ -7524,7 +7582,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// ahead of the god return and the strips — the player arm fires it
 		// like the creature arm below.
 		if hitInfo&0x01 != 0 {
-			s.firePetSpellMissNodmgProcs(ctx, caster, target, spellID, missKind, triggered)
+			s.firePetSpellMissNodmgProcs(ctx, caster, target, spellID, missKind, triggered, taking)
 			return
 		}
 		if isPlayerVictim {
@@ -7767,7 +7825,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 		// The pet caster's done-side leg (DoDamageAndTriggers, Spell.cpp:2581)
 		// runs after the taken side on both the lethal and non-lethal arms.
-		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, false)
+		s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, false, taking)
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617): a
 		// non-friendly non-positive (or dispel-effect) spell hit stands
 		// the target up. The EVADE-miss arm is vacuous — misses zero the
@@ -8025,7 +8083,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			}
 		}
 	}
-	s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, false)
+	s.firePetSpellDoneSideProcs(ctx, caster, target.GUID, spellID, schoolMask, triggered, isCrit, false, taking)
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2581-2586) on the
 	// reflect return trip: the pet is both caster and _spellHitTarget
 	// (Spell.cpp:2350), so its own auras evaluate the hit with the

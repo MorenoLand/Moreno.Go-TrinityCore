@@ -2912,15 +2912,22 @@ func (s *Server) checkCreatureEffectProc(aura *activeAura, eff *wotlk.SpellEffec
 // fires each eligible aura effect's trigger spell on triggerTargetGUID
 // (Aura::TriggerProcOnEvent, SpellAuras.cpp:2192-2212, calls
 // AuraEffect::HandleProc per effect in the proc effect mask,
-// SpellAuraEffects.cpp:1010-1043). No bridge for the modOwner arm of
-// Unit::ProcDamageAndSpellFor (Unit.cpp:10395-10408): "needed for example
-// for Cobra Strikes, pet does the attack, but aura is on owner" — the
-// spell-mod owner's auras whose base sits in the proc spell's
-// m_appliedMods join the triggering set. Go pet attacks
-// (executePetMeleeAttack, pet_combat.go) never enter the proc system and
-// there is no GetSpellModOwner model, so the filter has no event to attach
-// to; it engages with pet proc events as a whole.
+// SpellAuraEffects.cpp:1010-1043). The modOwner arm of
+// Unit::TriggerAurasProcOnEvent (Unit.cpp:10395-10408) — "needed for example
+// for Cobra Strikes, pet does the attack, but aura is on owner" — runs as
+// procAuraTriggerLoopFiltered from the pet spell proc sites
+// (firePetModOwnerAuraProcs, pet_combat.go): only the owner's auras
+// registered on the triggering cast's applied-mods registry join the
+// triggering set, evaluated against the same event. Pet melee/kill events
+// carry no spell, so the arm's spell != nil gate keeps them out there.
 func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uint64, ev procEventInfo) {
+	s.procAuraTriggerLoopFiltered(ctx, triggerTargetGUID, ev, nil)
+}
+
+// procAuraTriggerLoopFiltered is procAuraTriggerLoop over a filtered aura
+// set: a nil filter evaluates every active aura, a non-nil filter keeps
+// only the auras it accepts (the mod-owner arm's registry join).
+func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTargetGUID uint64, ev procEventInfo, filter func(*activeAura) bool) {
 	if s == nil || s.player == nil || len(s.activeAuras) == 0 {
 		return
 	}
@@ -2937,6 +2944,9 @@ func (s *session) procAuraTriggerLoop(ctx context.Context, triggerTargetGUID uin
 	}
 	auras := make([]*activeAura, 0, len(s.activeAuras))
 	for _, aura := range s.activeAuras {
+		if filter != nil && !filter(aura) {
+			continue
+		}
 		auras = append(auras, aura)
 	}
 	for _, aura := range auras {
