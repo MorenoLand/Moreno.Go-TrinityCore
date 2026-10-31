@@ -2100,10 +2100,20 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 	// the match was deleted on empty or never survived a restart, and a
 	// Winner>=0 state is the STATUS_WAIT_LEAVE form (markBGSlotsWaitLeave
 	// is the EndBattleground status flip). Either way the slot is not
-	// recreated; the ended leg also drops the score row, the
-	// RemovePlayerAtLeave player/score-map arm, before the clear and
-	// entry-point relocate. A nil state gets no score delete: C++ runs
-	// RemovePlayerAtLeave only when the battleground was found. The
+	// recreated. Both legs drop the relocating player's own score row
+	// before the clear and entry-point relocate, but for different
+	// reasons: the ended leg is the RemovePlayerAtLeave
+	// player/score-map arm (C++ calls it for a found, in-roster,
+	// WAIT_LEAVE relogger, LoadFromDB's player_at_bg leg), while the
+	// nil leg is object-destruction cleanup, not a RemovePlayerAtLeave
+	// arm: C++ never calls it when the battleground is not found, but
+	// the not-found object's PlayerScores dies with the object (Reset,
+	// Battleground.cpp:954-956, clears it on reuse), while Go's
+	// per-instance table outlives the state delete. The row is
+	// unreachable afterwards (instance ids are monotonic per
+	// mintBGInstanceID and every reader keys by a live id), so the
+	// delete only reclaims residue; no live match's row can carry the
+	// saved id when no state exists on the map. The
 	// peek never creates a state, so it cannot resurrect a deleted
 	// match. The stale-InstanceID conflation
 	// deleteBattlegroundStateOnEmpty documents is gated below by
@@ -2114,9 +2124,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 	if !isArena && s.server != nil {
 		exists, ended := s.server.peekNonArenaBGState(state.Map)
 		if !exists || ended {
-			if ended {
-				s.server.deleteBGScoreRow(state.Map, s.bgData.InstanceID, s.playerGUID)
-			}
+			s.server.deleteBGScoreRow(state.Map, s.bgData.InstanceID, s.playerGUID)
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
 			s.relocateLoginToBGEntryPoint()
@@ -2136,14 +2144,17 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		// instance id carry no instance evidence and are skipped.
 		// When live witnesses exist but none holds the saved id, the
 		// saved instance is gone and C++ relocates to the entry
-		// point instead of restoring; no score delete here, matching
-		// the nil-state leg (C++ runs RemovePlayerAtLeave only when
-		// the battleground was found). When no live witness exists
+		// point instead of restoring; the relocating player's own row
+		// under the dead id is deleted with it, the nil-leg
+		// object-destruction cleanup (live witnesses exist but none
+		// holds the saved id, so no live match's row can carry it).
+		// When no live witness exists
 		// at all the restore stands: a solo relog into its own still
 		// live match is indistinguishable from a stale login into
 		// an all-offline successor, and the solo relog is the case
 		// the restore exists for.
 		if anyLive, witnessed := s.server.liveNonArenaBGInstanceWitness(state.Map, s.bgData.InstanceID, s); anyLive && !witnessed {
+			s.server.deleteBGScoreRow(state.Map, s.bgData.InstanceID, s.playerGUID)
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
 			s.relocateLoginToBGEntryPoint()
