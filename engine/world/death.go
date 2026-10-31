@@ -145,10 +145,25 @@ func (s *Server) grantChannelDeathItems(ctx context.Context, auras []*activeAura
 	}
 }
 
+// isCharmFamilyAura reports whether an aura type is one of the four
+// Unit::RemoveCharmAuras types (Unit.cpp:6525-6530). Unit::setDeathState
+// (Unit.cpp:8916-8920) runs RemoveAllControlled before
+// RemoveAllAurasOnDeath, so a dying charmer releases its charmed units
+// unconditionally — the owned-aura loop's death-persistent gate never gets
+// a chance to spare a charm aura. The death sweep mirrors that order by
+// exempting the charm family from the gate; the remove funnels then run
+// their uncharm/unpossess tails (removeCreatureAuraWithMode, and the
+// player funnel's client-control restore).
+func isCharmFamilyAura(auraType uint32) bool {
+	return auraType == spellAuraCharm || auraType == spellAuraAoeCharm || auraType == spellAuraModPossess || auraType == spellAuraModPossessPet
+}
+
 // sweepOwnedAurasOnDeath mirrors the m_ownedAuras loop of
 // Unit::RemoveAllAurasOnDeath (Unit.cpp:4364-4370): auras the dying unit CAST
 // on other targets are destroyed with AURA_REMOVE_BY_DEATH — passive and
-// death-persistent auras are skipped, exactly like the applied loop. Go holds
+// death-persistent auras are skipped, exactly like the applied loop, except
+// the charm family (isCharmFamilyAura), which setDeathState's
+// RemoveAllControlled already released unconditionally. Go holds
 // no passive aura instances, so only the death-persistent gate is modeled.
 // Records are matched on aura.CasterGUID == casterGUID, which creature casts
 // set to the motion GUID (boss_ai.go:1063) and player casts to the player
@@ -175,7 +190,7 @@ func (s *Server) sweepOwnedAurasOnDeath(casterGUID uint64) {
 		var strip []uint32
 		if sess.activeAuras != nil {
 			for id, aura := range sess.activeAuras {
-				if aura == nil || aura.CasterGUID != casterGUID || spellDeathPersistent(s.Data, id) {
+				if aura == nil || aura.CasterGUID != casterGUID || (spellDeathPersistent(s.Data, id) && !isCharmFamilyAura(aura.AuraType)) {
 					continue
 				}
 				strip = append(strip, id)
@@ -196,7 +211,7 @@ func (s *Server) sweepOwnedAurasOnDeath(casterGUID uint64) {
 	if s.activeCreatureAuras != nil {
 		for key, auras := range s.activeCreatureAuras {
 			for id, aura := range auras {
-				if aura == nil || aura.CasterGUID != casterGUID || spellDeathPersistent(s.Data, id) {
+				if aura == nil || aura.CasterGUID != casterGUID || (spellDeathPersistent(s.Data, id) && !isCharmFamilyAura(aura.AuraType)) {
 					continue
 				}
 				cstrip = append(cstrip, ownedStrip{key: key, id: id})
