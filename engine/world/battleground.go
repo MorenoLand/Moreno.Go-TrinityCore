@@ -3141,6 +3141,20 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 			s.resurrectPlayer(ctx, 1.0)
 			s.spawnCorpseBones(ctx)
 		}
+		// Battleground::RemovePlayer (Battleground.cpp:894-900, via
+		// RemovePlayerAtLeave) clears the leaver's AFK reporter set
+		// (Player::ClearAfkReports, Player.h:1936). The sim's report
+		// gate reads the Idle/Inactive flags, and the sim has no
+		// area-check or aura-duration machinery to reset them, so the
+		// flags go with the slot too and any pending Idle/Inactive
+		// timer is invalidated; otherwise a leaver would carry a
+		// permanent report block into their next match.
+		s.writeMu.Lock()
+		s.afkReporters = make(map[uint64]struct{})
+		s.writeMu.Unlock()
+		s.removeAura(bgAFKIdleSpellID)
+		s.removeAura(honorAuraInactiveID)
+		s.cancelAFKIdleProgression()
 	}
 	s.resetAchievementCriteriaByCondition(criteriaConditionBGMap, s.player.Map)
 	// The teleportToEntryPoint=false arm: Player::TeleportTo (Player.cpp:1814)
@@ -3155,6 +3169,17 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 		// gate mirrors the arena-end twin (battleground_arena.go) - C++
 		// returns false with no teleport when the entry point is invalid.
 		s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
+	}
+	// Logout from a battleground: the C++ Player object is destroyed, and
+	// bgAfkReporter is runtime-only (Player.h:843, never persisted), so a
+	// relogger starts with an empty reporter set. The aura flags are NOT
+	// cleared here: they persist through savePlayerAuras like C++'s
+	// character_aura save, and a pending progression timer still fires
+	// only for a live roster member.
+	if fromLogout && leaveBGMap != 0 {
+		s.writeMu.Lock()
+		s.afkReporters = make(map[uint64]struct{})
+		s.writeMu.Unlock()
 	}
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {
@@ -4163,6 +4188,100 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 	}
 }
 
+// bgAFKIdleSpellID is the Idle debuff cast by Player::ReportedAfkBy
+// (Player.cpp:22539). honorAuraInactiveID (commands_honor.go) is the
+// Inactive twin (Battleground.h:139).
+const bgAFKIdleSpellID = 43680
+
+// Idle and Inactive each run 60 seconds: Idle's effect is a periodic
+// trigger whose duration equals its amplitude, so it fires exactly once
+// and the triggered spell survives Idle's removal (AuraEffect::
+// CleanupTriggeredSpells, SpellAuraEffects.cpp:1063), and Inactive's
+// own countdown is the 60-second one the client shows before removal.
+// Inactive's expiry in a battleground kicks the player
+// (SpellAuraEffects.cpp:4492).
+const bgAFKIdleDuration = 60 * time.Second
+const bgAFKInactiveDuration = 60 * time.Second
+
+// armAFKIdleProgression starts the Idle -> Inactive -> kick chain on the
+// session that just received Idle. The generation bump invalidates any
+// timer armed by an earlier Idle application; the leave funnel bumps it
+// again, so a timer firing after a leave is a no-op.
+func (s *session) armAFKIdleProgression() {
+	if s == nil {
+		return
+	}
+	s.writeMu.Lock()
+	s.afkIdleGen++
+	gen := s.afkIdleGen
+	s.writeMu.Unlock()
+	time.AfterFunc(bgAFKIdleDuration, func() {
+		s.progressAFKIdle(gen)
+	})
+}
+
+// progressAFKIdle is the Idle periodic-trigger tick: a still-present,
+// still-rostered Idle becomes Inactive, and the kick timer starts. A
+// logged-out session (player nil) or a lost roster membership skips the
+// step; the funnel clears the flags on a voluntary leave, so a stale
+// timer can only fire for a player who is still in the match.
+func (s *session) progressAFKIdle(gen uint64) {
+	if s == nil || !s.playerLoaded || s.player == nil {
+		return
+	}
+	s.writeMu.Lock()
+	current := s.afkIdleGen
+	s.writeMu.Unlock()
+	if current != gen || !s.hasAura(bgAFKIdleSpellID) {
+		return
+	}
+	if s.server == nil || s.server.findArenaStateForPlayer(s.playerGUID) == nil {
+		return
+	}
+	s.removeAura(bgAFKIdleSpellID)
+	s.applyAura(honorAuraInactiveID)
+	s.writeMu.Lock()
+	s.afkIdleGen++
+	next := s.afkIdleGen
+	s.writeMu.Unlock()
+	time.AfterFunc(bgAFKInactiveDuration, func() {
+		s.kickAFKInactive(next)
+	})
+}
+
+// kickAFKInactive is the Inactive AURA_REMOVE_BY_EXPIRE arm
+// (SpellAuraEffects.cpp:4492): a still-present, still-rostered Inactive
+// leaves the battleground through the leave funnel, which runs the
+// arena erase + win check (and no deserter: arenas are not
+// battlegrounds for LeaveBattleground's deserter arms).
+func (s *session) kickAFKInactive(gen uint64) {
+	if s == nil || !s.playerLoaded || s.player == nil {
+		return
+	}
+	s.writeMu.Lock()
+	current := s.afkIdleGen
+	s.writeMu.Unlock()
+	if current != gen || !s.hasAura(honorAuraInactiveID) {
+		return
+	}
+	if s.server == nil || s.server.findArenaStateForPlayer(s.playerGUID) == nil {
+		return
+	}
+	s.handleLeaveBattlefield(context.Background(), nil, false, false)
+}
+
+// cancelAFKIdleProgression invalidates any pending Idle/Inactive timer
+// for this session; the fired callbacks then no-op on the generation
+// mismatch.
+func (s *session) cancelAFKIdleProgression() {
+	if s == nil {
+		return
+	}
+	s.writeMu.Lock()
+	s.afkIdleGen++
+	s.writeMu.Unlock()
+}
+
 // handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).
 // Reference: WorldSession::HandleReportPvPAFK (BattleGroundHandler.cpp:795) and Player::ReportedAfkBy (Player.cpp:22524).
 func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
@@ -4230,7 +4349,7 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 		targetSess.afkReporters = make(map[uint64]struct{})
 	}
 	_, dup := targetSess.afkReporters[s.playerGUID]
-	fresh := !dup && !targetSess.hasAura(43680) && !targetSess.hasAura(43681)
+	fresh := !dup && !targetSess.hasAura(bgAFKIdleSpellID) && !targetSess.hasAura(honorAuraInactiveID)
 	existing := len(targetSess.afkReporters)
 	targetSess.writeMu.Unlock()
 
@@ -4255,7 +4374,8 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 
 	s.debug("reported player for pvp afk", "account", s.accountName, "target", targetGUID, "reports", reportCount)
 	if reportCount >= 3 {
-		targetSess.applyAura(43680) // Idle debuff
+		targetSess.applyAura(bgAFKIdleSpellID) // Idle debuff
+		targetSess.armAFKIdleProgression()
 	}
 	return true
 }

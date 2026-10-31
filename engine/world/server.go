@@ -678,6 +678,7 @@ type session struct {
 	afkReporters       map[uint64]struct{}
 	afkReportedCount   uint8     // Player::CanReportAfkDueToLimit (Player.cpp:22514): 15 reports per 5 minutes
 	afkReportWindowEnd time.Time // lazy reset point for afkReportedCount (== Player::UpdateAfkReport, Player.cpp:20715)
+	afkIdleGen         uint64    // generation for the Idle->Inactive->kick timers: bumped on leave/logout-clear so stale timer fires no-op
 	targetGlyphSlot    uint8
 	activeCast         *activeCastState
 	nextSwing          *queuedNextSwing // CURRENT_MELEE_SPELL slot (Unit.h:572), castMu-guarded like activeCast

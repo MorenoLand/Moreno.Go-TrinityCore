@@ -355,7 +355,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 		if typeID == chatAFK {
-			s.toggleChatAFK(message)
+			s.toggleChatAFK(ctx, message)
 		} else {
 			s.toggleChatDND(message)
 		}
@@ -715,7 +715,7 @@ func (s *session) sendAddonChannelSysMessage(msg string) {
 // (ChatHandler.cpp:575-601): when already AFK, an empty message removes AFK and a
 // non-empty one updates the auto-reply message; when not AFK, the auto-reply is set
 // (defaulting to the trinity_string 710 text) and any DND flag is cleared first.
-func (s *session) toggleChatAFK(message string) {
+func (s *session) toggleChatAFK(ctx context.Context, message string) {
 	if s.player == nil {
 		return
 	}
@@ -736,6 +736,21 @@ func (s *session) toggleChatAFK(message string) {
 		s.setPlayerDND(false)
 	}
 	s.setPlayerAFK(true)
+	// Player::ToggleAFK (Player.cpp:1641-1644): going AFK inside a live
+	// battleground (non-arena, non-GM) leaves it at once. The slot gate
+	// is the live-battleground test: an InProgress or WaitLeave slot
+	// carries an instance id, while an invited-not-entered slot does
+	// not (GetBattleground() null, Player.cpp:23546), so a merely
+	// queued player keeps their invite. The funnel runs the deserter
+	// arms for an InProgress slot, matching LeaveBattleground.
+	if !sessionIsGameMaster(s) && s.bgData.InstanceID != 0 {
+		for i := range s.bgQueues {
+			if e := &s.bgQueues[i]; e.Active && !e.IsArena {
+				s.handleLeaveBattlefield(ctx, nil, false, false)
+				break
+			}
+		}
+	}
 }
 
 // toggleChatDND mirrors the CHAT_MSG_DND arm of WorldSession::HandleMessagechatOpcode
@@ -764,8 +779,11 @@ func (s *session) toggleChatDND(message string) {
 	s.setPlayerDND(true)
 }
 
-// setPlayerAFK mirrors Player::ToggleAFK (Player.cpp:1628-1635): toggles the
-// PLAYER_FLAGS_AFK bit and pushes the update to the client.
+// setPlayerAFK mirrors the flag half of Player::ToggleAFK
+// (Player.cpp:1628-1635): toggles the PLAYER_FLAGS_AFK bit and pushes the
+// update to the client. The battleground-leave half (Player.cpp:1641-1644)
+// lives in toggleChatAFK, the only ON transition, not here: the WG
+// accept path clears AFK on join and must not leave the war.
 func (s *session) setPlayerAFK(on bool) {
 	if s.player == nil {
 		return
