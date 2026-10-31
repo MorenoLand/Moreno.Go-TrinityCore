@@ -1245,6 +1245,74 @@ func (s *Server) creatureAIAreaEnemyTargets(ctx context.Context, motion *creatur
 	return players, creatures
 }
 
+// creatureEnemyConeTargets is the cone-only enemy selection for the
+// boss-ai/inline cone partition: C++ selects cone targets per effect
+// (Spell.cpp:1176, AddUnitTarget effectMask), so a cone-leg effect on a
+// mixed area+cone spell hits only cone-selected units. The cone-only spell
+// copy keeps each effect's cone legs (normalized onto slot A) and drops
+// every other leg, so the leg-group sweep builds a cone group only — the
+// exact cone geometry (caster center, PI/2 front arc, back cone on
+// SpellVisual 3879, caster LOS, cylinder) of the merged sweep, without
+// its merged MaxTargets cap: the partition only ever intersects the
+// already-capped hit list, so an uncapped cone list cannot over-include.
+// The sweep victim is a zero GUID, not the wire victim: the wire victim
+// rides hitTargets separately and takes the cone effect when it stands
+// in the cone, like the friendly-cone capture (which excludes no victim).
+func (s *Server) creatureEnemyConeTargets(ctx context.Context, motion *creatureMotion, spell wotlk.Spell) []uint64 {
+	if s == nil || motion == nil || !isEnemyConeSpell(spell) {
+		return nil
+	}
+	coneSpell := spell
+	coneEffects := spell.Effects
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		var coneTarget uint32
+		switch {
+		case isEnemyConeTargetType(eff.ImplicitTargetA):
+			coneTarget = eff.ImplicitTargetA
+		case isEnemyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB):
+			coneTarget = eff.ImplicitTargetB
+		default:
+			continue
+		}
+		kept := eff
+		kept.ImplicitTargetA = coneTarget
+		kept.ImplicitTargetB = 0
+		coneEffects[i] = kept
+	}
+	coneSpell.Effects = coneEffects
+	// A zero-GUID victim excludes nothing: the sweeps seed their seen set
+	// with it, and GUID 0 never matches a real unit.
+	zeroVictim := &playerPos{}
+	players := s.creatureAIAreaEnemyPlayers(ctx, motion, coneSpell, zeroVictim, 0, 0, 0, false)
+	creatures := s.creatureAIAreaEnemyCreatures(ctx, motion, coneSpell, zeroVictim, 0, 0, 0, false)
+	targets := make([]uint64, 0, len(players)+len(creatures))
+	seen := make(map[uint64]struct{}, len(players)+len(creatures))
+	for _, p := range players {
+		if p == nil || p.GUID == 0 {
+			continue
+		}
+		if _, dup := seen[p.GUID]; dup {
+			continue
+		}
+		seen[p.GUID] = struct{}{}
+		targets = append(targets, p.GUID)
+	}
+	for _, guid := range creatures {
+		if guid == 0 {
+			continue
+		}
+		if _, dup := seen[guid]; dup {
+			continue
+		}
+		seen[guid] = struct{}{}
+		targets = append(targets, guid)
+	}
+	return targets
+}
+
 // creatureAIAreaAllyTargets is the ally twin of
 // creatureAIAreaEnemyTargets: one merged MaxAffectedTargets cap over the
 // player and creature ally sweeps (Spell.cpp:1293), with the check bits

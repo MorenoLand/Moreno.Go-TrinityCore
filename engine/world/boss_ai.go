@@ -1307,15 +1307,37 @@ func spellFirstEffectTargetsUnitPet(spell wotlk.Spell) bool {
 	return false
 }
 
-// bossConeEffectTargets restricts a single effect's target list to the
-// friendly-cone members on mixed area+cone spells: C++ selects per effect
+// bossConePartition carries the per-family cone selections for the
+// boss-ai/inline per-effect partition: C++ selects per effect
 // (Spell.cpp:761-900, AddUnitTarget effectMask), so a cone-leg effect hits
-// only cone-selected units while every other effect keeps the flat list,
-// the client/funnel partition's convention. Inactive (pure cone, or no
-// area leg) it returns hitTargets unchanged, so no other cast changes.
-func bossConeEffectTargets(eff wotlk.SpellEffect, hitTargets, coneTargets []uint64, partitionActive bool) []uint64 {
-	if !partitionActive || !effectHasFriendlyConeLeg(eff) {
+// only cone-selected units while every other effect keeps the flat list.
+// friendly covers the 59/60 legs, enemy the 24/54/104 legs; each family's
+// Active flag requires a cone spell AND another area leg family, so pure
+// cone spells (where the flat list already is the cone list) never filter.
+// An effect carrying legs of both families takes the union of both
+// families' members, matching C++'s per-effect union of its legs.
+type bossConePartition struct {
+	friendlyTargets []uint64
+	friendlyActive  bool
+	enemyTargets    []uint64
+	enemyActive     bool
+}
+
+// bossConeEffectTargets restricts a single effect's target list to its
+// cone members on mixed area+cone spells, or returns hitTargets unchanged
+// when the effect carries no cone leg of an active family.
+func bossConeEffectTargets(eff wotlk.SpellEffect, hitTargets []uint64, part bossConePartition) []uint64 {
+	friendlyLeg := part.friendlyActive && effectHasFriendlyConeLeg(eff)
+	enemyLeg := part.enemyActive && effectHasEnemyConeLeg(eff)
+	if !friendlyLeg && !enemyLeg {
 		return hitTargets
+	}
+	coneTargets := make([]uint64, 0, len(part.friendlyTargets)+len(part.enemyTargets))
+	if friendlyLeg {
+		coneTargets = append(coneTargets, part.friendlyTargets...)
+	}
+	if enemyLeg {
+		coneTargets = append(coneTargets, part.enemyTargets...)
 	}
 	return bossConeIntersectTargets(hitTargets, coneTargets)
 }
@@ -1340,11 +1362,12 @@ func bossConeIntersectTargets(hitTargets, coneTargets []uint64) []uint64 {
 // bossConeUnionTargets covers the whole-spell helpers (aura, damage),
 // which collapse several effects into one application per target: the
 // union is the flat list as soon as any effect of the kind lacks a cone
-// leg, and the cone intersection only when every effect of the kind
-// carries one. An effect carrying both a cone leg and an area leg is
-// treated as cone-only, matching the client partition precedent.
-func bossConeUnionTargets(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool, hitTargets, coneTargets []uint64, partitionActive bool) []uint64 {
-	if !partitionActive {
+// leg of an active family, and the per-effect cone intersections unioned
+// only when every effect of the kind carries one. An effect carrying
+// both a cone leg and an area leg is treated as cone-only, matching the
+// client partition precedent.
+func bossConeUnionTargets(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool, hitTargets []uint64, part bossConePartition) []uint64 {
+	if !part.friendlyActive && !part.enemyActive {
 		return hitTargets
 	}
 	anyKind := false
@@ -1353,23 +1376,36 @@ func bossConeUnionTargets(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool
 			continue
 		}
 		anyKind = true
-		if !effectHasFriendlyConeLeg(eff) {
+		if !(part.friendlyActive && effectHasFriendlyConeLeg(eff)) && !(part.enemyActive && effectHasEnemyConeLeg(eff)) {
 			return hitTargets
 		}
 	}
 	if !anyKind {
 		return hitTargets
 	}
+	coneTargets := make([]uint64, 0, len(part.friendlyTargets)+len(part.enemyTargets))
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 || !isKind(eff) {
+			continue
+		}
+		if part.friendlyActive && effectHasFriendlyConeLeg(eff) {
+			coneTargets = append(coneTargets, part.friendlyTargets...)
+		}
+		if part.enemyActive && effectHasEnemyConeLeg(eff) {
+			coneTargets = append(coneTargets, part.enemyTargets...)
+		}
+	}
 	return bossConeIntersectTargets(hitTargets, coneTargets)
 }
 
 // bossConeUnionActive reports whether the whole-spell union for one effect
-// kind is the cone intersection: the partition is active, at least one
-// effect of the kind exists, and every such effect carries a friendly-cone
-// leg. The inline path needs the boolean (to filter its direct areaHits /
-// areaCreatureHits loops) where bossConeUnionTargets returns the list.
-func bossConeUnionActive(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool, partitionActive bool) bool {
-	if !partitionActive {
+// kind is a cone intersection: some family is active, at least one effect
+// of the kind exists, and every such effect carries a cone leg of an
+// active family. The inline path needs the boolean alongside bossConeKindSet
+// (to filter its direct areaHits / areaCreatureHits loops) where
+// bossConeUnionTargets returns the list.
+func bossConeUnionActive(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool, part bossConePartition) bool {
+	if !part.friendlyActive && !part.enemyActive {
 		return false
 	}
 	anyKind := false
@@ -1378,11 +1414,39 @@ func bossConeUnionActive(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool,
 			continue
 		}
 		anyKind = true
-		if !effectHasFriendlyConeLeg(eff) {
+		if !(part.friendlyActive && effectHasFriendlyConeLeg(eff)) && !(part.enemyActive && effectHasEnemyConeLeg(eff)) {
 			return false
 		}
 	}
 	return anyKind
+}
+
+// bossConeKindSet returns the GUID set a whole-spell direct loop (inline
+// instakill/damage) must keep for one effect kind, or nil when the union
+// is the flat list. It mirrors bossConeUnionTargets' per-effect union,
+// without intersecting hitTargets first: the direct loops filter their
+// own area lists, which are subsets of the hit list.
+func bossConeKindSet(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool, part bossConePartition) map[uint64]struct{} {
+	if !bossConeUnionActive(spell, isKind, part) {
+		return nil
+	}
+	set := make(map[uint64]struct{})
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 || !isKind(eff) {
+			continue
+		}
+		if part.friendlyActive && effectHasFriendlyConeLeg(eff) {
+			for _, guid := range part.friendlyTargets {
+				set[guid] = struct{}{}
+			}
+		}
+		if part.enemyActive && effectHasEnemyConeLeg(eff) {
+			for _, guid := range part.enemyTargets {
+				set[guid] = struct{}{}
+			}
+		}
+	}
+	return set
 }
 
 func bossConeAuraEffect(eff wotlk.SpellEffect) bool {
@@ -1420,8 +1484,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	castFlags := uint32(spellCastFlagGo)
 	castTimeStamp := uint32(now.UnixMilli())
 	hitTargets := []uint64{targetGUID}
-	var bossConeTargets []uint64
-	bossConePartitionActive := false
+	bossConePart := bossConePartition{}
 	// Per-arm GO effect masks (Spell.cpp:2193 AddGOTarget EffectMask), threaded from the selection legs below.
 	goEffectMasks := make(map[uint64]uint32)
 	noteGOEffectMask := func(guid uint64, mask uint32) {
@@ -1975,7 +2038,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				seenCone[guid] = struct{}{}
 			}
 			coneTargets, _ := s.creatureFriendlyConeTargets(ctx, m, spellInfo)
-			bossConeTargets = coneTargets
+			bossConePart.friendlyTargets = coneTargets
 			for _, coneGUID := range coneTargets {
 				if coneGUID == 0 {
 					continue
@@ -1986,7 +2049,18 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				seenCone[coneGUID] = struct{}{}
 				hitTargets = append(hitTargets, coneGUID)
 			}
-			bossConePartitionActive = isAreaEnemySpell(spellInfo) || hasFriendlyAreaEffect(spellInfo) || isEntryAreaSpell(spellInfo) || hasRefCenteredAreaEffect(spellInfo)
+			bossConePart.friendlyActive = isAreaEnemySpell(spellInfo) || hasFriendlyAreaEffect(spellInfo) || isEntryAreaSpell(spellInfo) || hasRefCenteredAreaEffect(spellInfo)
+		}
+		// Enemy-cone (24/54/104) twin of the friendly-cone block above:
+		// the enemy-area sweep already joins cone members into hitTargets,
+		// so nothing joins here — the capture exists only for the
+		// per-effect partition below. Active when another area family
+		// rides the spell (non-cone enemy area, friendly area, entry
+		// area, ref-centered area, or a friendly cone); a pure-cone spell
+		// needs no filter.
+		if isEnemyConeSpell(spellInfo) {
+			bossConePart.enemyTargets = s.creatureEnemyConeTargets(ctx, m, spellInfo)
+			bossConePart.enemyActive = hasEnemyNonConeAreaEffect(spellInfo) || hasFriendlyAreaEffect(spellInfo) || isEntryAreaSpell(spellInfo) || hasRefCenteredAreaEffect(spellInfo) || isFriendlyConeSpell(spellInfo)
 		}
 		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): entry-area
 		// (7/8) legs select every entry-matched unit in the area — the
@@ -2849,7 +2923,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			if eff := spellInfo.Effects[i]; eff.Effect == spellEffectInterruptCast {
-				s.creatureEffectInterruptCast(ctx, m, spellInfo, eff, bossConeEffectTargets(eff, hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectInterruptCast(ctx, m, spellInfo, eff, bossConeEffectTargets(eff, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -2866,9 +2940,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
-				s.creatureEffectTriggerSpell(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectTriggerSpell(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectCharge:
-				s.creatureEffectCharge(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectCharge(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectChargeDest:
 				s.creatureEffectChargeDest(ctx, m, hasDest, destX, destY, destZ)
 			}
@@ -2969,7 +3043,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			if spellInfo.Effects[i].Effect == spellEffectInstaKill {
-				s.creatureEffectInstaKill(ctx, m, spellID, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectInstaKill(ctx, m, spellID, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3012,7 +3086,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			if spellInfo.Effects[i].Effect != spellEffectCreateTamedPet {
 				continue
 			}
-			for _, guid := range bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive) {
+			for _, guid := range bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart) {
 				if guid == 0 || evadedTargets[guid] || immuneTargets[guid] {
 					continue
 				}
@@ -3066,7 +3140,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	if spellKnown {
 		for i := range spellInfo.Effects {
 			if spellInfo.Effects[i].Effect == spellEffectTeleportUnits {
-				s.creatureEffectTeleportUnits(ctx, m, hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectTeleportUnits(ctx, m, hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3079,9 +3153,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectDispel:
-				s.creatureEffectDispel(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectDispel(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectDispelMechanic:
-				s.creatureEffectDispelMechanic(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectDispelMechanic(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3093,7 +3167,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectKnockBack, spellEffectKnockBackDest:
-				s.creatureEffectKnockBack(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectKnockBack(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3106,9 +3180,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectResurrect:
-				s.creatureEffectResurrect(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectResurrect(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectResurrectNew:
-				s.creatureEffectResurrectNew(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectResurrectNew(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3122,7 +3196,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// per cast, not once per effect-6 effect. Gated on spellKnown like
 	// the tail.
 	if spellKnown {
-		s.creatureEffectApplyAura(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeAuraEffect, hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		s.creatureEffectApplyAura(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeAuraEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 	}
 	// Spell::EffectSchoolDMG (SpellEffects.cpp:322) + EffectWeaponDmg
 	// (SpellEffects.cpp:3171) for a creature caster: the damage arms.
@@ -3143,8 +3217,8 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// the linked tail, matching the other effect-grouped arms above.
 	// Gated on spellKnown like the tail.
 	if spellKnown {
-		leechDealt := s.creatureEffectSpellDamage(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeDamageEffect, hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
-		leechDealt += s.creatureEffectSpellDamageCreature(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeDamageEffect, hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		leechDealt := s.creatureEffectSpellDamage(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeDamageEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		leechDealt += s.creatureEffectSpellDamageCreature(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeDamageEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 		if spellHasEffect(spellInfo, spellEffectHealthLeech) && leechDealt > 0 {
 			s.creatureEffectHealthLeech(ctx, m, spellInfo, leechDealt)
 		}
@@ -3159,17 +3233,17 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectHeal:
-				s.creatureEffectHeal(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectHeal(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectHealMechanical:
-				s.creatureEffectHealMechanical(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectHealMechanical(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectHealMaxHealth:
-				s.creatureEffectHealMaxHealth(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectHealMaxHealth(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectHealPct:
-				s.creatureEffectHealPct(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectHealPct(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectEnergize:
-				s.creatureEffectEnergize(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectEnergize(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectEnergizePct:
-				s.creatureEffectEnergizePct(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectEnergizePct(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3186,9 +3260,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectPowerDrain:
-				s.creatureEffectPowerDrain(ctx, m, spellInfo, spellInfo.Effects[i], i, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectPowerDrain(ctx, m, spellInfo, spellInfo.Effects[i], i, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPowerBurn:
-				s.creatureEffectPowerBurn(ctx, m, spellInfo, spellInfo.Effects[i], i, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectPowerBurn(ctx, m, spellInfo, spellInfo.Effects[i], i, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3200,7 +3274,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectRemoveAura:
-				s.creatureEffectRemoveAura(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectRemoveAura(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectModifyThreatPercent:
 				s.creatureEffectModifyThreatPercent(ctx, m, spellInfo, spellInfo.Effects[i], hitTargets, reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
@@ -3214,7 +3288,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
-				s.creatureEffectForceCast(ctx, m, spellInfo, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectForceCast(ctx, m, spellInfo, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3232,17 +3306,17 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectLeap:
-				s.creatureEffectLeap(ctx, m, hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectLeap(ctx, m, hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectTeleportUnitsFaceCaster:
-				s.creatureEffectTeleUnitsFaceCaster(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectTeleUnitsFaceCaster(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPullTowards:
-				s.creatureEffectPullTowards(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectPullTowards(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPullTowardsDest:
-				s.creatureEffectPullTowardsDest(ctx, m, hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectPullTowardsDest(ctx, m, hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectDistract:
-				s.creatureEffectDistract(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectDistract(ctx, m, spellInfo, spellInfo.Effects[i], hasDest, destX, destY, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectSanctuary:
-				s.creatureEffectSanctuary(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectSanctuary(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3277,17 +3351,17 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectQuestComplete, spellEffectQuestClear, spellEffectQuestFail, spellEffectQuestStart:
-				s.creatureEffectQuest(ctx, m, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectQuest(ctx, m, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectReputation:
-				s.creatureEffectReputation(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectReputation(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectAddHonor:
-				s.creatureEffectAddHonor(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectAddHonor(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectKillCredit, spellEffectKillCreditGroup:
-				s.creatureEffectKillCredit(ctx, m, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectKillCredit(ctx, m, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectSkillStep:
-				s.creatureEffectSkillStep(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectSkillStep(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectEnvironmentalDamage:
-				s.creatureEffectEnvironmentalDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectEnvironmentalDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3307,15 +3381,15 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectCreateItem, spellEffectCreateItem2:
-				s.creatureEffectCreateItem(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectCreateItem(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectLearnSpell:
-				s.creatureEffectLearnSpell(ctx, m, spellID, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectLearnSpell(ctx, m, spellID, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectPlaySound, spellEffectPlayMusic:
-				s.creatureEffectPlaySoundMusic(m, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectPlaySoundMusic(m, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectSendTaxi, spellEffectDiscoverTaxi:
-				s.creatureEffectTaxi(ctx, m, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectTaxi(ctx, m, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
-				s.creatureEffectTriggerMissile(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectTriggerMissile(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}
@@ -3349,33 +3423,33 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectLearnPetSpell:
-				s.creatureEffectLearnPetSpell(ctx, m, spellID, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectLearnPetSpell(ctx, m, spellID, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectDismissPet:
-				s.creatureEffectDismissPet(ctx, m, spellID, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectDismissPet(ctx, m, spellID, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectInebriate:
-				s.creatureEffectInebriate(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectInebriate(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectAllowRenamePet:
-				s.creatureEffectAllowRenamePet(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectAllowRenamePet(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectTalentSpecSelect:
-				s.creatureEffectTalentSpecSelect(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectTalentSpecSelect(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectDurabilityDamage, spellEffectDurabilityDamagePct:
-				s.creatureEffectDurabilityDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectDurabilityDamage(ctx, m, spellInfo, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectBind:
-				s.creatureEffectBind(ctx, m, spellInfo.Effects[i], hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectBind(ctx, m, spellInfo.Effects[i], hasDest, destX, destY, destZ, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectEnchantHeldItem:
-				s.creatureEffectEnchantHeldItem(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectEnchantHeldItem(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectUnlearnSpecialization:
-				s.creatureEffectUnlearnSpecialization(ctx, m, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectUnlearnSpecialization(ctx, m, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectCreateRandomItem:
-				s.creatureEffectCreateRandomItem(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectCreateRandomItem(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectUntrainTalents:
-				s.creatureEffectUntrainTalents(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectUntrainTalents(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectTalentSpecCount:
-				s.creatureEffectTalentSpecCount(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectTalentSpecCount(ctx, m, spellInfo, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectForceDeselect:
 				s.creatureEffectForceDeselect(ctx, m)
 			case spellEffectScriptEffect:
-				s.creatureEffectScriptEffect(ctx, m, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConeTargets, bossConePartitionActive), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				s.creatureEffectScriptEffect(ctx, m, spellID, spellInfo.Effects[i], bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			}
 		}
 	}

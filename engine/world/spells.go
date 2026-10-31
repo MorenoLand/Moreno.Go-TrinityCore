@@ -1195,6 +1195,53 @@ func effectHasFriendlyConeLeg(eff wotlk.SpellEffect) bool {
 	return isFriendlyConeTargetType(eff.ImplicitTargetA) || (isFriendlyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB))
 }
 
+// isEnemyConeTargetType reports the values Spell::SelectImplicitConeTargets
+// (Spell.cpp:1176) resolves with TARGET_CHECK_ENEMY (SpellInfo.cpp:244/274/324).
+func isEnemyConeTargetType(target uint32) bool {
+	switch target {
+	case 24, 54, 104:
+		return true
+	default:
+		return false
+	}
+}
+
+// isEnemyConeSpell mirrors isFriendlyConeSpell for the enemy-cone legs.
+func isEnemyConeSpell(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if isEnemyConeTargetType(eff.ImplicitTargetA) || (isEnemyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)) {
+			return true
+		}
+	}
+	return false
+}
+
+// effectHasEnemyConeLeg mirrors effectHasFriendlyConeLeg for 24/54/104.
+func effectHasEnemyConeLeg(eff wotlk.SpellEffect) bool {
+	return isEnemyConeTargetType(eff.ImplicitTargetA) || (isEnemyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB))
+}
+
+// hasEnemyNonConeAreaEffect reports whether any effect carries a non-cone
+// enemy-area leg (15/16 SRC/DEST area, or effect 27 with 18) — the area
+// family that makes an enemy-cone partition active on a mixed spell.
+func hasEnemyNonConeAreaEffect(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == 15 || eff.ImplicitTargetA == 16 || (eff.Effect == 27 && eff.ImplicitTargetA == 18) {
+			return true
+		}
+		if !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) && (eff.ImplicitTargetB == 15 || eff.ImplicitTargetB == 16 || (eff.Effect == 27 && eff.ImplicitTargetB == 18)) {
+			return true
+		}
+	}
+	return false
+}
+
 func effectHasRefCenteredLeg(eff wotlk.SpellEffect) bool {
 	return isRefCenteredAreaTargetType(eff.ImplicitTargetA) || (isRefCenteredAreaTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB))
 }
