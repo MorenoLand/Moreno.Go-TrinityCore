@@ -839,12 +839,17 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				// !_player requeue arm (WorldSession.cpp:312-326).
 				s.preLoginQueue = nil
 			}
-			if s.server != nil && loginAdmissionReserved && !loginAdmissionCommitted {
-				s.server.releaseWorldportAdmission(instanceAdmissionKey{MapID: loginSelection.MapID, InstanceID: loginSelection.InstanceID})
-			}
-			if s.server != nil && loginSelection.Reserved && !loginInstanceCommitted {
-				s.server.releaseWorldportInstanceID(loginSelection.InstanceID)
-			}
+		}
+		// The releases are not gated on success: post-reservation drop paths
+		// (persist/ensure errors, update-build failures) return true with the
+		// session left open, and neither pending admissions nor reserved IDs
+		// have a TTL or a session-close reaper, so gating on !success leaked
+		// both permanently. Committed paths skip via the committed flags.
+		if s.server != nil && loginAdmissionReserved && !loginAdmissionCommitted {
+			s.server.releaseWorldportAdmission(instanceAdmissionKey{MapID: loginSelection.MapID, InstanceID: loginSelection.InstanceID})
+		}
+		if s.server != nil && loginSelection.Reserved && !loginInstanceCommitted {
+			s.server.releaseWorldportInstanceID(loginSelection.InstanceID)
 		}
 		if !success {
 			s.debug("player login failed", "account", s.accountName, "guid", guid)
