@@ -203,7 +203,36 @@ func (s *Server) reserveWorldportInstanceID(ctx context.Context, avoid uint32) (
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return 0, errors.New("instance ID allocation requires a character database")
 	}
+	// Live instances are not in the instance table once a global reset deletes
+	// their rows, but their IDs stay allocated in C++: _ResetOrWarnAll never
+	// frees the MapManager bitmap, so GenerateInstanceId never reissues a
+	// loaded map's ID (MapManager.cpp:350-371, freed only on unload/reset of
+	// that map itself). Go has no loaded-map registry, so a DB-only scan
+	// could reissue a reset instance's ID to a fresh mint and merge the new
+	// player into the peers' bucket (worldInstance key, admission count,
+	// visibility). Exclude every ID a session currently holds or is
+	// mid-teleport into: worldInstance is only committed at admission, but
+	// player.InstanceID is assigned at selection (characters.go:1673).
+	live := make(map[uint32]struct{})
+	if s != nil {
+		s.sessionsMu.RLock()
+		for peer := range s.sessions {
+			if peer == nil {
+				continue
+			}
+			if v := peer.worldInstance.Load(); v != 0 {
+				live[uint32(v)] = struct{}{}
+			}
+			if peer.player != nil && peer.player.InstanceID != 0 {
+				live[peer.player.InstanceID] = struct{}{}
+			}
+		}
+		s.sessionsMu.RUnlock()
+	}
 	used := make(map[uint32]struct{})
+	for id := range live {
+		used[id] = struct{}{}
+	}
 	rows, err := s.CharactersStore.DB.QueryContext(ctx, "SELECT id FROM instance ORDER BY id")
 	if err != nil {
 		return 0, err
