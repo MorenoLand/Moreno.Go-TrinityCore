@@ -22761,9 +22761,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// wire targets skip (GetUnitTarget is null for a GO). No
 	// passive/self-cast-only exemption here: C++'s 5353 skip covers only
 	// the explicit-target block, and the unit block judges any non-caster
-	// unit target. The dest-LOS arm (Spell.cpp:5404-5413) stays out: dest
-	// targets are computed by the redirect/dest arms below, so it belongs
-	// to that unit, not this gate. The DisableMgr SPELL_DISABLE_LOS leg
+	// unit target. The dest-LOS arm (Spell.cpp:5404-5413) is vacuous on
+	// this path, not merely deferred: CheckCast runs in prepare
+	// (Spell.cpp:3100) ahead of _cast's SelectSpellTargets (Spell.cpp:3410),
+	// so it judges only a dest supplied by the trigger caller — and this
+	// funnel carries no wire dest (its signature takes a unit GUID only,
+	// and spellTarget below is built with Unit/GO flags, never
+	// DestLocation). The implicit dests computed by
+	// resolveImplicitSpellDestinationWithSnapshots below are C++'s
+	// SelectSpellTargets dests, which CheckCast never re-judges — gating
+	// them here would reject casts C++ casts. Note the dest arm's LOS
+	// origin is the caster itself (m_caster->IsWithinLOS), not the dynobj
+	// origin of the unit arm above. The DisableMgr SPELL_DISABLE_LOS leg
 	// stays out (no DisableMgr model, same gap as the client path).
 	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && targetGUID != s.playerGUID && s.player != nil && s.server != nil {
 		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
@@ -22802,6 +22811,60 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					rejectTriggeredCast("no line of sight to explicit target")
 					return
 				}
+			}
+		}
+	}
+	// CheckCast pet-presence arm (Spell.cpp:5411-5428): any effect with
+	// TargetA == TARGET_UNIT_PET requires the caster's guardian pet
+	// (Unit::GetGuardianPet); without one the cast fails — DONT_REPORT
+	// when triggered by an aura spell, else NO_PET. The funnel rewrites
+	// every failure to DONT_REPORT (Spell.cpp:4171-4172), so
+	// rejectTriggeredCast covers both cases. The npcbot leg is vacuous
+	// (this path is player-only). The guardian-pet model is
+	// activePetNumber (the client-path twin); TargetA only, like C++
+	// and the client path — the TargetB leg belongs to selection, not
+	// this gate. C++ order: right after the dest-LOS arm, ahead of the
+	// battleground gate. Without this gate a pet-targeted triggered
+	// spell with no pet sailed past selection (implicitCasterUnitTarget
+	// adds nothing) and its effects rode the wire target instead of
+	// failing the cast.
+	hasPetTarget := false
+	for _, effect := range spell.Effects {
+		if effect.ImplicitTargetA == spellImplicitTargetUnitPet {
+			hasPetTarget = true
+			break
+		}
+	}
+	if hasPetTarget && s.activePetNumber() == 0 {
+		rejectTriggeredCast("pet-targeted triggered spell without guardian pet")
+		return
+	}
+	// CheckCast battleground gate (Spell.cpp:5434-5437): no triggered
+	// exemption; the TYPEID_PLAYER arm is vacuous (this path is
+	// player-only). SPELL_ATTR3_BATTLEGROUND spells require
+	// Player::InBattleground (m_bgData.bgInstanceID != 0, Player.h:1906),
+	// mirrored by s.bgData.InstanceID (the client-path twin).
+	if spell.AttributesEx3&spellAttr3Battleground != 0 && s.bgData.InstanceID == 0 {
+		rejectTriggeredCast("battleground-only triggered spell outside battleground")
+		return
+	}
+	// CheckCast arena gate (Spell.cpp:5441-5447): no triggered exemption.
+	// SPELL_ATTR4_NOT_USABLE_IN_ARENA spells, or spells with a recovery
+	// time over 10 minutes without SPELL_ATTR4_USABLE_IN_ARENA, fail
+	// when the caster's map is a battle arena (MapEntry::IsBattleArena).
+	// GetRecoveryTime is max(RecoveryTime, CategoryRecoveryTime)
+	// (SpellInfo.cpp:3149-3152); a missing map entry skips the gate
+	// (C++ has no else arm), like the client-path twin.
+	arenaRecoveryTime := spell.RecoveryTime
+	if spell.CategoryRecoveryTime > arenaRecoveryTime {
+		arenaRecoveryTime = spell.CategoryRecoveryTime
+	}
+	if spell.AttributesEx4&spellAttr4NotUsableInArena != 0 ||
+		(arenaRecoveryTime > 10*60*1000 && spell.AttributesEx4&spellAttr4UsableInArena == 0) {
+		if s.server != nil && s.server.Data != nil {
+			if entry, found, err := s.server.Data.Map(s.player.Map); err == nil && found && entry.IsBattleArena() {
+				rejectTriggeredCast("triggered spell not usable in arena")
+				return
 			}
 		}
 	}
