@@ -159,15 +159,25 @@ func (s *Server) averageBGQueueWait(bgTypeID uint32, team uint8) uint32 {
 // when Battleground.TrackDeserters.Enable is set; the C++ default is false
 // (World.cpp:1193), so this stays silent unless the operator opts in.
 func (s *session) trackBGDeserter(ctx context.Context, desertionType uint8) {
-	if s == nil || s.server == nil || !s.server.Config.BattlegroundTrackDeserters {
+	if s == nil || s.server == nil {
 		return
 	}
-	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+	s.server.trackBGDeserterByGUID(ctx, s.playerGUID, desertionType)
+}
+
+// trackBGDeserterByGUID is the server-level form of trackBGDeserter for
+// expiry paths with no live session: the _ProcessOfflineQueue deserter arm
+// (Battleground.cpp:260-284) fires from the server tick, not a session.
+func (s *Server) trackBGDeserterByGUID(ctx context.Context, guid uint64, desertionType uint8) {
+	if s == nil || guid == 0 || !s.Config.BattlegroundTrackDeserters {
 		return
 	}
-	_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+	if s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	_, _ = s.CharactersStore.DB.ExecContext(ctx,
 		"INSERT INTO battleground_deserters (guid, type, datetime) VALUES (?, ?, CURRENT_TIMESTAMP)",
-		s.playerGUID, desertionType)
+		guid, desertionType)
 }
 
 // battlemasterBGType mirrors BattlegroundMgr::LoadBattleMastersEntry/GetBattleMasterBG
@@ -3264,9 +3274,98 @@ func (s *Server) bgOfflineHoldersLive(mapID uint32, now time.Time) bool {
 	}
 	s.bgOfflineMu.Unlock()
 	for _, row := range expired {
+		if s.bgStateNotEnded(mapID) {
+			s.trackBGDeserterByGUID(context.Background(), row.guid, bgDesertionTypeOffline)
+		}
 		s.deleteBGScoreRow(row.scoreMapID, row.instanceID, row.guid)
 	}
 	return live
+}
+
+// bgStateNotEnded reports whether mapID's per-map BG state exists and is
+// unended (Winner < 0): the _ProcessOfflineQueue deserter gate's Go form
+// (Battleground.cpp:268-274: isBattleground, TrackDeserters on, status
+// InProgress or WaitJoin). Holders register only from InProgress or
+// WaitLeave slots, so an unended state at expiry is the InProgress arm and
+// an ended state is the WaitLeave arm, which _ProcessLeave removes with no
+// deserter row. The peek mirrors updateBattlegroundWaitLeave's registry
+// and state-mu order. A missing state cannot prove the holder's own match
+// status, so it does not track; a successor's reset state on the same map
+// (the per-map conflation) can misattribute an old holder's expiry to the
+// successor's InProgress status, a known delta of the per-map model.
+func (s *Server) bgStateNotEnded(mapID uint32) bool {
+	if s == nil {
+		return false
+	}
+	switch mapID {
+	case WSGMapID:
+		s.wsgMu.RLock()
+		state := s.wsgState[WSGMapID]
+		s.wsgMu.RUnlock()
+		if state == nil {
+			return false
+		}
+		state.mu.Lock()
+		isEnded := state.Winner >= 0
+		state.mu.Unlock()
+		return !isEnded
+	case ABMapID:
+		s.abMu.RLock()
+		state := s.abState[ABMapID]
+		s.abMu.RUnlock()
+		if state == nil {
+			return false
+		}
+		state.mu.Lock()
+		isEnded := state.Winner >= 0
+		state.mu.Unlock()
+		return !isEnded
+	case AVMapID:
+		s.objectsMu.RLock()
+		state := s.avState[AVMapID]
+		s.objectsMu.RUnlock()
+		if state == nil {
+			return false
+		}
+		state.mu.Lock()
+		isEnded := state.Winner >= 0
+		state.mu.Unlock()
+		return !isEnded
+	case EOTSMapID:
+		s.eotsMu.RLock()
+		state := s.eotsState[EOTSMapID]
+		s.eotsMu.RUnlock()
+		if state == nil {
+			return false
+		}
+		state.mu.Lock()
+		isEnded := state.Winner >= 0
+		state.mu.Unlock()
+		return !isEnded
+	case SAMapID:
+		s.saMu.RLock()
+		state := s.saState[SAMapID]
+		s.saMu.RUnlock()
+		if state == nil {
+			return false
+		}
+		state.mu.Lock()
+		isEnded := state.Winner >= 0
+		state.mu.Unlock()
+		return !isEnded
+	case ICMapID:
+		s.icMu.RLock()
+		state := s.icState[ICMapID]
+		s.icMu.RUnlock()
+		if state == nil {
+			return false
+		}
+		state.mu.Lock()
+		isEnded := state.Winner >= 0
+		state.mu.Unlock()
+		return !isEnded
+	}
+	return false
 }
 
 // deleteBGOfflineHolderRows deletes the deferred score rows of every
