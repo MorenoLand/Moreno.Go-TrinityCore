@@ -1732,7 +1732,7 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 			s.server.handleSAPlayerLeave(s)
 			s.server.handleICPlayerLeave(s)
 			s.server.handleAVPlayerLeave(s)
-			s.server.handleArenaPlayerLeave(s)
+			s.server.handleArenaPlayerLeave(s, false)
 			s.server.handleWGPlayerLeave(s)
 			// Battleground::RemovePlayerAtLeave (Battleground.cpp:840):
 			// drop the resurrect-queue entry and SPELL_WAITING_FOR_RESURRECT.
@@ -2053,8 +2053,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 	// unconditional slot creation recreated an InProgress slot for exactly
 	// the players endArena and the timer sweep had already dropped: a
 	// member offline at match end (the sweep erases roster/score but has
-	// no session whose slot it could clear), a member the logout funnel
-	// erased from the roster, or a member relogging during WaitLeave.
+	// no session whose slot it could clear), or a member relogging during WaitLeave.
 	// That orphan slot is never flipped by endArena or cleared by the
 	// sweep (neither iterates non-roster sessions), so it blocks
 	// re-queueing through the join dup-block and reports a dead match
@@ -2073,6 +2072,8 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 			s.relocateLoginToBGEntryPoint()
 			return
 		}
+		var restoredGreenAlive, restoredGoldAlive uint32
+		restoredAlive := false
 		arena.mu.Lock()
 		_, inRoster := arena.PlayerTeams[s.playerGUID]
 		waitLeave := arena.Status == ArenaStatusWaitLeave
@@ -2084,8 +2085,36 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		if inRoster && waitLeave {
 			delete(arena.PlayerTeams, s.playerGUID)
 			delete(arena.Scores, s.playerGUID)
+			delete(arena.OfflineMembers, s.playerGUID)
+		}
+		if inRoster && !waitLeave {
+			delete(arena.OfflineMembers, s.playerGUID)
+			// Battleground::EventPlayerLoggedIn (Battleground.cpp:1064-1077) clears
+			// OfflineRemoveTime and re-adds the member to the running match: the
+			// logout arm dropped them from the alive count (the FindPlayer miss),
+			// so a living relogger is counted again. A member who died before
+			// logout relogs dead (Health 0, no atLoginResurrect) and stays uncounted.
+			if arena.Status == ArenaStatusInProgress && s.player != nil && s.player.Health > 0 {
+				if sc, ok := arena.Scores[s.playerGUID]; ok && !sc.CountedAlive {
+					sc.CountedAlive = true
+					if team, ok := arena.PlayerTeams[s.playerGUID]; ok {
+						if team == ArenaTeamGold {
+							arena.GoldAlive++
+						} else {
+							arena.GreenAlive++
+						}
+					}
+					restoredAlive = true
+					restoredGreenAlive = arena.GreenAlive
+					restoredGoldAlive = arena.GoldAlive
+				}
+			}
 		}
 		arena.mu.Unlock()
+		if restoredAlive {
+			s.server.updateArenaWorldState(arena, ArenaWorldStateAlivePlayersGreen, restoredGreenAlive)
+			s.server.updateArenaWorldState(arena, ArenaWorldStateAlivePlayersGold, restoredGoldAlive)
+		}
 		if !inRoster || waitLeave {
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
@@ -3020,7 +3049,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 		s.server.handleSAPlayerLeave(s)
 		s.server.handleICPlayerLeave(s)
 		s.server.handleAVPlayerLeave(s)
-		s.server.handleArenaPlayerLeave(s)
+		s.server.handleArenaPlayerLeave(s, fromLogout)
 		s.server.handleWGPlayerLeave(s)
 		// Battleground::RemovePlayerAtLeave (Battleground.cpp:840) dequeues the
 		// player from the resurrect queue on BG leave: drop the revive-queue

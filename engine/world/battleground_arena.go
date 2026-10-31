@@ -346,6 +346,7 @@ type arenaBattlegroundState struct {
 
 	Scores         map[uint64]*ArenaPlayerScore
 	PlayerTeams    map[uint64]uint8 // GUID -> team (0: Green, 1: Gold)
+	OfflineMembers map[uint64]time.Time
 	GoldTeamScore  ArenaTeamMatchScore
 	GreenTeamScore ArenaTeamMatchScore
 
@@ -396,19 +397,20 @@ func (s *Server) getOrCreateArenaState(mapID, instanceID uint32, arenaType uint8
 		}
 
 		state = &arenaBattlegroundState{
-			InstanceID:    instanceID,
-			MapID:         mapID,
-			TypeID:        typeID,
-			ArenaType:     arenaType,
-			IsRated:       isRated,
-			GoldTeamName:  "Gold Team",
-			GreenTeamName: "Green Team",
-			Status:        ArenaStatusWaitJoin,
-			StartTime:     time.Now(),
-			Winner:        ArenaTeamNone,
-			Scores:        make(map[uint64]*ArenaPlayerScore),
-			PlayerTeams:   make(map[uint64]uint8),
-			StopTicker:    make(chan struct{}),
+			InstanceID:     instanceID,
+			MapID:          mapID,
+			TypeID:         typeID,
+			ArenaType:      arenaType,
+			IsRated:        isRated,
+			GoldTeamName:   "Gold Team",
+			GreenTeamName:  "Green Team",
+			Status:         ArenaStatusWaitJoin,
+			StartTime:      time.Now(),
+			Winner:         ArenaTeamNone,
+			Scores:         make(map[uint64]*ArenaPlayerScore),
+			PlayerTeams:    make(map[uint64]uint8),
+			OfflineMembers: make(map[uint64]time.Time),
+			StopTicker:     make(chan struct{}),
 		}
 		s.arenaState[key] = state
 	}
@@ -691,8 +693,8 @@ func (s *Server) handleArenaPlayerDeath(sess *session) {
 	s.checkArenaWinConditions(arena)
 }
 
-// handleArenaPlayerLeave processes a player leaving an arena map or disconnecting.
-func (s *Server) handleArenaPlayerLeave(sess *session) {
+// handleArenaPlayerLeave processes a player leaving an arena map or disconnecting. fromLogout is the EventPlayerLoggedOut path (Battleground.cpp:1083): the member is retained, not erased.
+func (s *Server) handleArenaPlayerLeave(sess *session, fromLogout bool) {
 	if s == nil || sess == nil || sess.player == nil {
 		return
 	}
@@ -711,6 +713,10 @@ func (s *Server) handleArenaPlayerLeave(sess *session) {
 	arena.mu.Lock()
 	team, exists := arena.PlayerTeams[sess.playerGUID]
 	status := arena.Status
+	if fromLogout && !exists {
+		arena.mu.Unlock()
+		return
+	}
 	// C++ GetAlivePlayersCountByTeam (Battleground.cpp:1737) counts live
 	// players still in m_Players: a leaver already dead (death arm cleared
 	// CountedAlive) changes nothing on erase, and a leaver whose death
@@ -729,10 +735,29 @@ func (s *Server) handleArenaPlayerLeave(sess *session) {
 			}
 		}
 	}
-	// Battleground::RemovePlayerAtLeave (Battleground.cpp:818-839): the leaver is
-	// erased from the player and score maps.
-	delete(arena.PlayerTeams, sess.playerGUID)
-	delete(arena.Scores, sess.playerGUID)
+	if fromLogout {
+		// Battleground::EventPlayerLoggedOut (Battleground.cpp:1083-1095) keeps
+		// the member in m_Players with OfflineRemoveTime = now + MAX_OFFLINE_TIME;
+		// only _ProcessOfflineQueue erases after expiry. The alive decrement above
+		// already mirrored the FindPlayer miss, so only the flag is cleared here,
+		// and only on the InProgress gate the decrement used: a WaitJoin member
+		// keeps CountedAlive so the relogin restore stays a no-op there.
+		if status == ArenaStatusInProgress {
+			if sc, ok := arena.Scores[sess.playerGUID]; ok {
+				sc.CountedAlive = false
+			}
+		}
+		if arena.OfflineMembers == nil {
+			arena.OfflineMembers = make(map[uint64]time.Time)
+		}
+		arena.OfflineMembers[sess.playerGUID] = time.Now().Add(bgMaxOfflineTime)
+	} else {
+		// Battleground::RemovePlayerAtLeave (Battleground.cpp:818-839): the leaver is
+		// erased from the player and score maps.
+		delete(arena.PlayerTeams, sess.playerGUID)
+		delete(arena.Scores, sess.playerGUID)
+		delete(arena.OfflineMembers, sess.playerGUID)
+	}
 	greenAlive := arena.GreenAlive
 	goldAlive := arena.GoldAlive
 	arena.mu.Unlock()
@@ -744,7 +769,7 @@ func (s *Server) handleArenaPlayerLeave(sess *session) {
 	sess.removeAura(SpellHordeGreenFlag)
 	sess.removeAura(SpellArenaPreparation)
 
-	// Broadcast after the erase, to the remaining roster only: C++
+	// Broadcast after the roster update, to the remaining roster only: C++
 	// RemovePlayerAtLeave erases m_Players before the subclass
 	// RemovePlayer arm broadcasts (Battleground.cpp:826-828, :868).
 	// Arena::RemovePlayer (Arena.cpp:97-101) early-returns on
@@ -755,6 +780,57 @@ func (s *Server) handleArenaPlayerLeave(sess *session) {
 	}
 
 	s.checkArenaWinConditions(arena)
+}
+
+// pruneArenaOfflineMembers runs the _ProcessOfflineQueue arm
+// (Battleground.cpp:260-284) for arenas: an InProgress member still offline
+// bgMaxOfflineTime after logout is RemovePlayerAtLeave'd. C++ Update processes
+// the queue only in the InProgress branch, so WaitJoin offline members stay
+// until the match starts or the WaitLeave sweep clears them.
+func (s *Server) pruneArenaOfflineMembers(arena *arenaBattlegroundState, now time.Time) {
+	if s == nil || arena == nil {
+		return
+	}
+	arena.mu.Lock()
+	if arena.Status != ArenaStatusInProgress {
+		arena.mu.Unlock()
+		return
+	}
+	var expired []uint64
+	for guid, until := range arena.OfflineMembers {
+		if _, inRoster := arena.PlayerTeams[guid]; inRoster && !now.Before(until) {
+			expired = append(expired, guid)
+		}
+	}
+	arena.mu.Unlock()
+	if len(expired) == 0 {
+		return
+	}
+	ctx := context.Background()
+	for _, guid := range expired {
+		s.sessionsMu.RLock()
+		var live *session
+		for cand := range s.sessions {
+			if cand.playerGUID == guid && cand.worldReady.Load() && cand.player != nil {
+				live = cand
+				break
+			}
+		}
+		s.sessionsMu.RUnlock()
+		if live != nil {
+			arena.mu.Lock()
+			delete(arena.OfflineMembers, guid)
+			arena.mu.Unlock()
+			continue
+		}
+		s.removeArenaPlayerAtLeave(ctx, arena, guid)
+	}
+	arena.mu.Lock()
+	empty := len(arena.PlayerTeams) == 0
+	arena.mu.Unlock()
+	if empty {
+		s.deleteArenaState(arena)
+	}
 }
 
 // checkArenaWinConditions evaluates whether an arena team has won.
@@ -1183,6 +1259,7 @@ func (s *Server) removeArenaPlayerAtLeave(ctx context.Context, arena *arenaBattl
 	arena.mu.Lock()
 	delete(arena.PlayerTeams, guid)
 	delete(arena.Scores, guid)
+	delete(arena.OfflineMembers, guid)
 	arena.mu.Unlock()
 }
 
@@ -1556,6 +1633,9 @@ func (s *Server) updateArenaTick(arena *arenaBattlegroundState, now time.Time) {
 			s.startArenaMatch(arena)
 		}
 	} else if status == ArenaStatusInProgress {
+		// Battleground::Update (Battleground.cpp:192-196) processes the offline
+		// queue before the arena time-limit arm.
+		s.pruneArenaOfflineMembers(arena, now)
 		// Check match duration timeout (45 minutes)
 		if !matchStartTime.IsZero() && now.Sub(matchStartTime) >= ArenaMatchTimeLimit {
 			s.endArena(arena, ArenaTeamDraw)
