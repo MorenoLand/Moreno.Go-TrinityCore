@@ -762,12 +762,23 @@ func (s *Server) handleArenaPlayerLeave(sess *session, fromLogout bool) {
 	goldAlive := arena.GoldAlive
 	arena.mu.Unlock()
 
-	// Remove flag and prep auras
-	sess.removeAura(SpellAllianceGoldFlag)
-	sess.removeAura(SpellAllianceGreenFlag)
-	sess.removeAura(SpellHordeGoldFlag)
-	sess.removeAura(SpellHordeGreenFlag)
-	sess.removeAura(SpellArenaPreparation)
+	// Remove flag and prep auras on the voluntary path only:
+	// Battleground::EventPlayerLoggedOut (Battleground.cpp:1083-1100)
+	// strips neither (WaitJoin: no RemovePlayer call at all; InProgress:
+	// Arena::RemovePlayer is worldstate + wincheck only), and
+	// EventPlayerLoggedIn (Battleground.cpp:1064-1077) declines to
+	// re-cast preparation precisely because it is not removed at
+	// logout. Stripping here ran before completeLogout's save, so a
+	// WaitJoin relogger lost preparation (and the team flag) where
+	// C++ restores both from character_aura; on the logout path they
+	// persist through the save instead.
+	if !fromLogout {
+		sess.removeAura(SpellAllianceGoldFlag)
+		sess.removeAura(SpellAllianceGreenFlag)
+		sess.removeAura(SpellHordeGoldFlag)
+		sess.removeAura(SpellHordeGreenFlag)
+		sess.removeAura(SpellArenaPreparation)
+	}
 
 	// Broadcast after the roster update, to the remaining roster only: C++
 	// RemovePlayerAtLeave erases m_Players before the subclass

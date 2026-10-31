@@ -281,6 +281,25 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				}
 			}
 		}
+		// AuraEffect::HandleArenaPreparation apply leg
+		// (SpellAuraEffects.cpp:4271-4278), same fold as the immunity
+		// leg above: the live apply path sets UNIT_FLAG_PREPARATION,
+		// but the restore path built the aura record without it, so a
+		// WaitJoin arena relogger regained spell 32727 from
+		// character_aura yet failed the canNoReagentCast flag check
+		// and broadcast no preparation flag. Only auras that actually
+		// land reach here, and the remove leg clears the bit when no
+		// 215 aura remains, so the fold is exact.
+		if s.server.Data != nil {
+			if spell, found, _ := s.server.Data.Spell(id); found {
+				for index, effect := range spell.Effects {
+					if effectMask&(1<<uint(index)) != 0 && effect.Aura == spellAuraArenaPreparation {
+						state.UnitFlags |= unitFlagPreparation
+						break
+					}
+				}
+			}
+		}
 		s.auras[id] = struct{}{}
 		s.auraSlots[id] = aura.Slot
 		s.activeAuras[id] = aura
