@@ -4069,15 +4069,32 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		if s.farTeleportPending {
 			continue
 		}
-		// Scoped to dungeon destinations: a non-dungeon save carries
-		// InstanceID 0, so it stays consistent without the fallback,
-		// and battleground instances already exist. Only a dungeon
-		// save can claim an instance row that was never created.
+		// A non-dungeon save is consistent only when its InstanceID is
+		// already the destination's: 0 on a continent, the battleground
+		// instance on a BG/arena map (instances there already exist).
+		// A pre-assignment failure leaves the ORIGIN instance on the
+		// destination map instead, and the logout save would persist
+		// that mismatched pair: the next login keeps it verbatim (the
+		// login instance block runs only for dungeons), landing the
+		// player in a phantom instance bucket invisible to the map's
+		// other players, whose visibility filter keys on InstanceID.
+		// A dungeon save always falls back: only a dungeon save can
+		// claim an instance row that was never created.
 		if s.server == nil || s.server.Data == nil {
 			break
 		}
-		if mapEntry, found, mapErr := s.server.Data.Map(s.player.Map); mapErr != nil || !found || !mapEntry.IsDungeon() {
+		mapEntry, found, mapErr := s.server.Data.Map(s.player.Map)
+		if mapErr != nil || !found {
 			break
+		}
+		if !mapEntry.IsDungeon() {
+			expectedInstanceID := uint32(0)
+			if mapEntry.IsBattleground() || mapEntry.IsBattleArena() {
+				expectedInstanceID = s.bgData.InstanceID
+			}
+			if s.player.InstanceID == expectedInstanceID {
+				break
+			}
 		}
 		if !s.validTrinityMapLocation(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.farTeleportOriginOrientation) {
 			break
