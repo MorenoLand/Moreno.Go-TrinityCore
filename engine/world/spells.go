@@ -22560,6 +22560,68 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		rejectTriggeredCast("db spell condition unmet")
 		return
 	}
+	// Spell::CheckCast explicit-target block (Spell.cpp:5365-5376):
+	// CheckTarget runs on the explicit unit target for triggered casts
+	// too (prepare calls CheckCast unconditionally, Spell.cpp:3100; no
+	// TRIGGERED_* flag exempts the 5370 block), so the funnel's lack of
+	// it let dead/ghost wire targets take triggered casts whose effect
+	// legs gate only on Health==0 (ghosts carry Health=1). Position
+	// mirrors C++ order: right after the conditions block (5337-5348),
+	// ahead of the SelectSpellTargets redirect/dest arms below — the
+	// gate judges the raw wire target, never a redirected target or an
+	// area member, so area spells keep their implicit members: only the
+	// explicit target can fail the cast here, exactly like C++.
+	// Exemptions, all C++-shaped: a zero wire target (no explicit unit
+	// target); a gameobject wire guid (GetUnitTarget is null for a GO,
+	// Spell.cpp:248); passive spells on the caster (the 5353 skip:
+	// IsPassive && target == caster); self-cast-only spells (their
+	// TARGET_UNIT_CASTER leg selects the caster with checkIfValid=false,
+	// Spell.cpp:1500-1556, so no CheckTarget ever judges the caster).
+	// The arms ported here are the dead/ghost core of CheckTarget
+	// (SpellInfo.cpp:1637-1638, 1654-1662, 1712-1716): CANT_TARGET_SELF,
+	// ONLY_TARGET_GHOSTS mismatch (ghost = the player ghost flag, the
+	// SPELL_AURA_GHOST leg — a corpse without the flag is not a ghost),
+	// ONLY_TARGET_PLAYERS, and the !IsAlive dead gate (IsAllowingDeadTarget,
+	// SpellInfo.cpp:1177). Visibility, tapped/pickpocket/disarm,
+	// creature-type, aura-state/aura-spell, GM/invis, in-flight and
+	// behind/facing/LOS arms are a separate unit: they need the same
+	// explicit-vs-implicit scoping pass before they can ride this gate.
+	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && !(spell.Attributes&spellAttr0Passive != 0 && targetGUID == s.playerGUID) && !isSelfCastOnly(spell) {
+		if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID == s.playerGUID {
+			rejectTriggeredCast("explicit target is self on cant-target-self spell")
+			return
+		}
+		targetGhost := false
+		targetDead := false
+		targetIsPlayer := false
+		if s.server != nil {
+			if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				targetIsPlayer = true
+				targetGhost = ts.player.PlayerFlags&playerFlagGhost != 0
+				targetDead = ts.isDeadOrGhost()
+			} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				targetIsPlayer = uint16(targetGUID>>48) == 0
+				targetDead = tgt.Health == 0
+			}
+		}
+		if spell.AttributesEx3&spellAttr3OnlyTargetGhosts != 0 {
+			if !targetGhost {
+				rejectTriggeredCast("ghost-only spell on non-ghost explicit target")
+				return
+			}
+		} else if targetGhost {
+			rejectTriggeredCast("non-ghost spell on ghost explicit target")
+			return
+		}
+		if spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0 && !targetIsPlayer {
+			rejectTriggeredCast("player-only spell on non-player explicit target")
+			return
+		}
+		if targetDead && !spellAllowsDeadTarget(spell) {
+			rejectTriggeredCast("explicit target dead on spell that disallows dead targets")
+			return
+		}
+	}
 	// CheckCast BLOCK_SPELL_FAMILY arm (Spell.cpp:5277-5278): no triggered
 	// exemption.
 	if s.spellFamilyBlockedByAura(spell) {
