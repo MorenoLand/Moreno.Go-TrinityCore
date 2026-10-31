@@ -7822,12 +7822,13 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// skipped for SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS spells and
 			// excludes the damaging spell's own auras; the DIRECT_DAMAGE
 			// strip (Unit.cpp:897-898, past the !damage return) does not
-			// run here. The HITBYSPELL strip DOES run here:
-			// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) strips it at
-			// spell-hit time on every non-miss hit — including fully
-			// absorbed/resisted ones — and the pet funnel never models
-			// the hit arm, so the damage-time path is its only coverage
-			// (ungated, no exception, like C++). The absorbed-gated legs
+			// run here. The HITBYSPELL strip DOES run here, excepting the
+			// hitting spell: Spell::PreprocessSpellHit (Spell.cpp:2743-2744)
+			// strips it at spell-hit time on every non-miss hit — including
+			// fully absorbed/resisted ones — and the pet funnel never models
+			// the hit arm, so the damage-time path is its only coverage for
+			// other spells' auras; excepting the hitting spell keeps a spell's
+			// own just-applied HITBYSPELL aura out of its own damage leg. The absorbed-gated legs
 			// below (Unit.cpp:749-761, 814-818: ABORT_ON_DMG abort and
 			// absorbed rage, both keyed on cleanDamage->absorbed_damage)
 			// stay gated; the god arm above returns before all of these
@@ -7837,7 +7838,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 					if tickDamageBreaksAuras(s.server, spellID) {
 						victim.removeAurasWithInterruptFlags(auraInterruptFlagTakeDamage, spellID)
 					}
-					victim.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell)
+					victim.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell, spellID)
 					if absorbed > 0 {
 						victim.grantRageFromDamageTaken(ctx, absorbed)
 						victim.interruptAbsorbedCast()
@@ -7879,14 +7880,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// must not run under motionMu (damage_shield.go convention). The
 			// DIRECT_DAMAGE strip (Unit.cpp:897-898) lives past the !damage
 			// return and does not run on the zero arm. The HITBYSPELL strip
-			// does: Spell::PreprocessSpellHit (Spell.cpp:2743-2744) strips it
-			// at hit time on every non-miss spell hit and the pet funnel
-			// never models the hit arm (ungated, no exception, like C++).
+			// does, excepting the hitting spell: Spell::PreprocessSpellHit
+			// (Spell.cpp:2743-2744) strips it at hit time on every non-miss
+			// spell hit and the pet funnel never models the hit arm, so the
+			// damage-time path is its only coverage for other spells' auras.
 			if tm != nil {
 				if tickDamageBreaksAuras(s.server, spellID) {
 					s.server.removeCreatureAurasWithInterruptFlags(tm, auraInterruptFlagTakeDamage, spellID)
 				}
-				s.server.removeCreatureAurasWithInterruptFlags(tm, auraInterruptFlagHitBySpell)
+				s.server.removeCreatureAurasWithInterruptFlags(tm, auraInterruptFlagHitBySpell, spellID)
 			}
 			// Reflect return trip, fully mitigated: C++ still runs the
 			// DoDamageAndTriggers tail (Spell.cpp:2581-2652) — the damage

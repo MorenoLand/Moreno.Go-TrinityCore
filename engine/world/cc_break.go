@@ -179,16 +179,18 @@ func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 // strip — skipped when the damaging spell carries
 // SPELL_ATTR4_DAMAGE_DOESNT_BREAK_AURAS — and the DIRECT_DAMAGE strip, both
 // excepting the damaging spell's own aura; then the breakable-CC drain with
-// the taken-damage proc flag. HITBYSPELL rides along with no exception:
-// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) strips it at spell-hit
-// time on the player-cast path, and the pet/creature-spell funnels never
-// model that hit arm, so the damage-time strip is their only coverage.
+// the taken-damage proc flag. HITBYSPELL rides along excepting the hitting
+// spell: C++ strips it only at hit time (Spell.cpp:2743-2744, before
+// HandleEffects), never in DealDamage, so a damage-time re-strip must not
+// kill the aura the hitting spell itself just applied — the player path
+// pre-strips ahead of the effect loops and the pet/creature funnels keep
+// this as late coverage for other spells' auras.
 func (s *session) procSpellDirectDamageAuras(spellID uint32, damage ...uint32) {
 	if tickDamageBreaksAuras(s.server, spellID) {
 		s.removeAurasWithInterruptFlags(auraInterruptFlagTakeDamage, spellID)
 	}
 	s.removeAurasWithInterruptFlags(auraInterruptFlagDirectDamage, spellID)
-	s.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell)
+	s.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell, spellID)
 
 	dmg := uint32(0)
 	if len(damage) > 0 {
@@ -210,7 +212,9 @@ func (s *session) procSpellDirectDamageAuras(spellID uint32, damage ...uint32) {
 // Spell::PreprocessSpellHit (Spell.cpp:2743-2744) strips it at hit time on
 // every non-miss spell hit — melee never passes through that arm — and the
 // pet funnel never models the hit arm, so this is its only coverage
-// (ungated, no exception, like C++).
+// for other spells' auras — excepting the hitting spell, since C++ never
+// re-strips HITBYSPELL in DealDamage and a spell's own just-applied aura
+// must survive its own damage leg.
 func (s *Server) procCreatureDirectDamageAuras(key creatureAuraKey, spellID uint32, damage uint32, maxHealth uint32) {
 	if s != nil {
 		s.motionMu.Lock()
@@ -222,7 +226,7 @@ func (s *Server) procCreatureDirectDamageAuras(key creatureAuraKey, spellID uint
 			}
 			s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagDirectDamage, spellID)
 			if spellID != 0 {
-				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagHitBySpell)
+				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagHitBySpell, spellID)
 			}
 		}
 	}
@@ -233,7 +237,8 @@ func (s *Server) procCreatureDirectDamageAuras(key creatureAuraKey, spellID uint
 // run on a lethal pet-spell hit (Unit.cpp:738-748 fire before the
 // health<=damage check at :882): the TAKE_DAMAGE strip (attr4-gated,
 // excepting the damaging spell) and the HITBYSPELL strip for spell hits
-// (Spell.cpp:2743-2744) — then the breakable-CC drain. The DIRECT_DAMAGE
+// (Spell.cpp:2743-2744, excepting the hitting spell like the direct arm —
+// C++ strips it only at hit time, before effects) — then the breakable-CC drain. The DIRECT_DAMAGE
 // strip (Unit.cpp:897) sits inside the non-lethal else and never fires on a
 // lethal hit; Kill's death cleanup owns those auras instead.
 func (s *Server) procCreatureLethalDamageAuras(key creatureAuraKey, spellID uint32, damage uint32, maxHealth uint32) {
@@ -246,7 +251,7 @@ func (s *Server) procCreatureLethalDamageAuras(key creatureAuraKey, spellID uint
 				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagTakeDamage, spellID)
 			}
 			if spellID != 0 {
-				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagHitBySpell)
+				s.removeCreatureAurasWithInterruptFlags(m, auraInterruptFlagHitBySpell, spellID)
 			}
 		}
 	}
