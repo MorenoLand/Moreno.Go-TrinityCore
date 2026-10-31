@@ -399,20 +399,26 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	// MovementHandler.cpp:294-298 — movement packets are dropped while the
-	// mover's spline is not finalized. In Go that state is a taxi flight
-	// (the arrival position is pinned at flight start and the flight spline
-	// is server-driven), so mid-flight client movement is dropped like C++
-	// drops it — never applied, never rebroadcast.
-	if s.nearTeleportPending || s.farTeleportPending || s.inFlight {
-		return true
-	}
 	// The instance-validity reset lives at the worldport ack
 	// (MovementHandler.cpp:67-68, completeWorldPort), not here.
 	b := protocol.NewReader(payload)
 	guid, err := b.ReadPackedGUID()
 	if err != nil {
 		s.debug("movement rejected", "account", s.accountName, "reason", "malformed guid", "opcode", opcode)
+		return true
+	}
+	// MovementHandler.cpp:294-298 — movement packets are dropped while the
+	// mover's spline is not finalized. In Go that state is a taxi flight
+	// (the arrival position is pinned at flight start and the flight spline
+	// is server-driven), so mid-flight client movement is dropped like C++
+	// drops it — never applied, never rebroadcast. MovementHandler.cpp:269
+	// gates the teleport-pending drop on plrMover (plrMover &&
+	// IsBeingTeleported()), so a possessed mover — plrMover null — is
+	// exempt: its packets are not dropped while the possessing player's own
+	// teleport is pending, and the player's taxi flight is not the mover's
+	// spline either. A driven vehicle's packets keep the conservative drop.
+	possessedGateGUID := s.possessedCreatureGUID()
+	if (s.nearTeleportPending || s.farTeleportPending || s.inFlight) && (possessedGateGUID == 0 || guid != possessedGateGUID) {
 		return true
 	}
 	// Mover resolution (MovementHandler.cpp:261): the tamper check runs
@@ -824,14 +830,27 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 
 	// Fall damage generation and parachute interrupts (TC MovementHandler.cpp:359-365)
-	// HandleFall is plrMover-gated; the LANDING-aura strip hits the mover —
-	// the vehicle, which has no aura model (documented gap) — never the driver.
+	// HandleFall is plrMover-gated; the LANDING-aura strip hits the mover, not
+	// plrMover — the vehicle takes none (no vehicle-mover arm, documented
+	// gap), never the driver.
 	if !vehicleMover && !possessedMover {
 		if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 			s.handleFall(ctx, info)
 		}
 		if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM) {
 			s.removeAurasWithInterruptFlags(auraInterruptFlagLanding)
+		}
+	}
+	// MovementHandler.cpp:364 — the LANDING strip runs on the mover, so a
+	// possessed creature loses its LANDING auras (parachutes) on FALL_LAND /
+	// START_SWIM through the creature-aura bridge; HandleFall stays
+	// plrMover-gated above, so no fall damage belongs here.
+	if possessedMover && s.server != nil && (opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM)) {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, possessedGUID)
+		s.server.motionMu.Unlock()
+		if motion != nil {
+			s.server.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagLanding)
 		}
 	}
 	// Player::UpdateFallInformationIfNeed runs only on the non-vehicle path
@@ -875,15 +894,23 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	writeMovementInfo(packet, broadcastInfo)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), broadcastInfo, s)
 	s.debug("movement accepted", "account", s.accountName, "guid", guid, "x", broadcastInfo.X, "y", broadcastInfo.Y, "z", broadcastInfo.Z)
-	// A possessed mover's packets describe the creature, but this stream
-	// centers on the player's coords — streaming it would show the
-	// neighbourhood around the stationary player, not the creature, so
-	// the creature-centered stream stays a separate unit.
 	if !vehiclePassenger && !possessedMover {
 		dx := float64(info.X - s.lastStreamX)
 		dy := float64(info.Y - s.lastStreamY)
 		if dx*dx+dy*dy > 30.0*30.0 {
 			s.streamNearbyObjects(ctx)
+		}
+	}
+	// Player.cpp:24261-24269 — SetClientControl moves the possessing player's
+	// viewpoint onto the possessed creature, so its neighbourhood stream
+	// centers on the creature's coords, not the stationary player's; the
+	// shared lastStream anchor re-syncs on the player side at unpossess
+	// (the first player packet then streams the player's neighbourhood).
+	if possessedMover {
+		dx := float64(info.X - s.lastStreamX)
+		dy := float64(info.Y - s.lastStreamY)
+		if dx*dx+dy*dy > 30.0*30.0 {
+			s.streamNearbyObjectsAt(ctx, info.X, info.Y, info.Z)
 		}
 	}
 	return true

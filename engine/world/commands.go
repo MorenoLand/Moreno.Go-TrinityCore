@@ -1385,21 +1385,35 @@ func (s *session) streamNearbyObjects(ctx context.Context) {
 	if !s.playerLoaded || s.player == nil || s.server == nil {
 		return
 	}
-	s.lastStreamX = s.player.X
-	s.lastStreamY = s.player.Y
-	s.lastStreamZ = s.player.Z
-	if packet, count, err := s.server.buildNearbyCreatureUpdates(ctx, *s.player, s.currentPlayerPhaseMask(), s); err == nil && count > 0 && packet != nil {
+	s.streamNearbyObjectsAt(ctx, s.player.X, s.player.Y, s.player.Z)
+}
+
+// streamNearbyObjectsAt streams the neighbourhood around the given coords
+// instead of the player's own: a possessing player's viewpoint is the
+// possessed creature (Player.cpp:24261-24269), so its stream centers on the
+// creature. The viewpoint copy keeps the observer's GUID, map, phase and
+// flags; only the coords move, so the faction leg (Race-only) is unaffected.
+func (s *session) streamNearbyObjectsAt(ctx context.Context, x, y, z float32) {
+	if !s.playerLoaded || s.player == nil || s.server == nil {
+		return
+	}
+	s.lastStreamX = x
+	s.lastStreamY = y
+	s.lastStreamZ = z
+	viewpoint := *s.player
+	viewpoint.X, viewpoint.Y, viewpoint.Z = x, y, z
+	if packet, count, err := s.server.buildNearbyCreatureUpdates(ctx, viewpoint, s.currentPlayerPhaseMask(), s); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
-	if packet, _, created := s.server.buildNearbyPlayerUpdatesWithCreated(s); packet != nil {
+	if packet, _, created := s.server.buildNearbyPlayerUpdatesWithCreatedFrom(s, viewpoint); packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		s.sendVisiblePlayerAuras(created)
-		s.sendVisibleCreatureAuras(*s.player)
+		s.sendVisibleCreatureAuras(viewpoint)
 	}
-	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player, false, s); err == nil && count > 0 && packet != nil {
+	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, viewpoint, false, s); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
-	s.streamDynamicSpellObjects()
+	s.streamDynamicSpellObjectsAt(x, y)
 }
 
 func (s *session) sendDestroyObject(guid uint64, onDeath bool) {

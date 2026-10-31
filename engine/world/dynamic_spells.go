@@ -665,6 +665,13 @@ func (s *session) streamDynamicSpellObjects() {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
+	s.streamDynamicSpellObjectsAt(s.player.X, s.player.Y)
+}
+
+func (s *session) streamDynamicSpellObjectsAt(x, y float32) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
 	distance := float64(s.server.Config.VisibilityDistanceContinents)
 	if distance <= 0 {
 		distance = 150
@@ -672,7 +679,7 @@ func (s *session) streamDynamicSpellObjects() {
 	updates := protocol.NewUpdateData()
 	s.server.objectsMu.RLock()
 	for _, object := range s.server.dynamicSpellObjects {
-		if object == nil || object.Map != s.player.Map || object.InstanceID != s.player.InstanceID || math.Hypot(float64(object.X-s.player.X), float64(object.Y-s.player.Y)) > distance {
+		if object == nil || object.Map != s.player.Map || object.InstanceID != s.player.InstanceID || math.Hypot(float64(object.X-x), float64(object.Y-y)) > distance {
 			continue
 		}
 		updates.AddUpdateBlock(buildDynamicSpellObjectUpdate(object))

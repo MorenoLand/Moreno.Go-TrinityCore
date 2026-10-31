@@ -4311,7 +4311,20 @@ func (s *Server) buildNearbyPlayerUpdatesWithCreated(observer *session) (*protoc
 	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
 		return nil, 0, nil
 	}
-	state := *observer.player
+	return s.buildNearbyPlayerUpdatesWithCreatedFrom(observer, *observer.player)
+}
+
+// buildNearbyPlayerUpdatesWithCreatedFrom is the viewpoint variant of
+// buildNearbyPlayerUpdatesWithCreated: the distance filter and the recipient
+// pointer read the viewpoint's coords, so a possessing player's stream
+// centers on the possessed creature. The recipient's faction leg reads Race
+// only, and canSeePlayer reads map/flags only, so the viewpoint copy changes
+// nothing but the center.
+func (s *Server) buildNearbyPlayerUpdatesWithCreatedFrom(observer *session, viewpoint playerState) (*protocol.Packet, int, []uint64) {
+	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
+		return nil, 0, nil
+	}
+	state := viewpoint
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	updates := protocol.NewUpdateData()
 	count := 0
