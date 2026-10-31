@@ -2208,46 +2208,25 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !learned && !gmMode && s.player.VehicleGUID != 0 {
 		vehicleSpell = s.vehicleKnowsSpell(ctx, spellID)
 	}
-	// HandleCastSpellOpcode possessed-caster arm (SpellHandler.cpp:351-397):
-	// the "(for player case)" drop fires only when the mover is another
-	// player; a possessed creature mover casts as the creature, so a
-	// spell the creature knows is castable even though the player never
-	// learned it. Mirrors the vehicleSpell arm: the cast still runs
-	// through the player pipeline (no creature-caster pipeline on this
-	// path), so range/threat measure from the player's body, not the
-	// creature — positions do not coincide here as they do for a ridden
-	// vehicle. The caster-is-mover drop (SpellHandler.cpp:373-385) is
-	// ported: caster is the mover, so a spell the creature does not
-	// know drops here — player-learned, unlearned lock/trigger, and
-	// GM-mode opcode casts alike (C++ has no GM exemption on this arm,
-	// and the IsOnVehicle fallback does not apply to possess) — before
-	// the lock/trigger arms below, matching C++ relative order. The
-	// drop is silent like C++ (rfinish + return, no failure packet).
-	// A nil motion fails closed (mover gone, nothing to cast as).
-	// Remaining additive divergence, accepted: C++ then drops even
-	// creature-known spells at SpellHandler.cpp:413-415 (isPossessing),
-	// whose casts arrive via CMSG_PET_CAST_SPELL instead (PetHandler.cpp:757;
-	// Go's handlePetCastSpell accepts charmer motions and the possess
-	// bar is sent at possess time), but Go keeps the creature-knows
-	// arm on this opcode too. The mover-is-another-player drop has no
-	// Go trigger (no moved-player model: possessedCreatureGUID scans
-	// creature motions).
-	possessedSpell := false
-	if pg := s.possessedCreatureGUID(); pg != 0 && !vehicleSpell {
-		possessedKnows := false
-		if m := s.findCreatureMotion(pg); m != nil {
-			for _, known := range s.server.loadCreatureSpells(ctx, m.Entry) {
-				if known == spellID {
-					possessedKnows = true
-					break
-				}
-			}
-		}
-		if !possessedKnows {
-			s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", "possessed creature does not know spell")
-			return true
-		}
-		possessedSpell = !learned && !gmMode
+	// HandleCastSpellOpcode isPossessing arm (SpellHandler.cpp:413-415):
+	// a possessing player's CAST_SPELL casts never reach the Spell
+	// object — the possessed creature's spells arrive via
+	// CMSG_PET_CAST_SPELL instead (PetHandler.cpp:757), and Go's
+	// handlePetCastSpell accepts charmer motions with template-loaded
+	// motion.Spells (charmCreatureFaction) after the possess bar is sent
+	// at possess time, with range, threat and power all measured from
+	// the creature motion on that path. The drop is silent like C++
+	// (return, no failure packet) and unconditional: it covers
+	// creature-known spells (retiring the former possessedSpell arm,
+	// which ran them through the player pipeline with player-body
+	// range/threat/power), player-learned spells, and GM-mode opcode
+	// casts alike. It sits ahead of the lock/trigger arms below, whose
+	// C++ counterparts precede it — every path ends in the same silent
+	// drop. The mover-is-another-player drop has no Go trigger (no
+	// moved-player model: possessedCreatureGUID scans creature motions).
+	if s.possessedCreatureGUID() != 0 {
+		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", "possessing player cast spell")
+		return true
 	}
 	// HandleCastSpellOpcode unlearned-spell arms (SpellHandler.cpp:392-410).
 	// The lock-case arm (GameObject::GetSpellForLock, GameObject.cpp:2765)
@@ -2287,7 +2266,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// is Go's Unit::CastSpell(id, triggered=true); the wire unit target
 	// seeds its implicit target selection, matching C++ keeping the client
 	// targets while skipping the CheckCast gauntlet.
-	if !learned && !gmMode && !vehicleSpell && !possessedSpell && !lockAllowed && s.playerHasPeriodicTriggerAura(wireSpellID) {
+	if !learned && !gmMode && !vehicleSpell && !lockAllowed && s.playerHasPeriodicTriggerAura(wireSpellID) {
 		// Spell::prepare (Spell.cpp:3074-3080): the DisableMgr gate has no
 		// trigger exemption — it fires for the TRIGGERED_FULL_MASK arm too.
 		if s.spellDisabledForCaster(ctx, spellID) {
@@ -2302,7 +2281,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "reason", "periodic trigger from client")
 		return true
 	}
-	if !found || spell.Attributes&spellAttributePassive != 0 || (!vehicleSpell && !possessedSpell && !lockAllowed && !canPlayerCastSpell(learned, gmMode)) {
+	if !found || spell.Attributes&spellAttributePassive != 0 || (!vehicleSpell && !lockAllowed && !canPlayerCastSpell(learned, gmMode)) {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
 	}

@@ -267,6 +267,15 @@ func (s *session) spellDamageStep1Gate(spellID uint32, engaged bool) bool {
 }
 
 func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool) (float32, bool) {
+	return s.damageThreatAmountWithModOwner(ctx, spellID, schoolMask, damage, engaged, s)
+}
+
+// damageThreatAmountWithModOwner is damageThreatAmount with the SPELLMOD_THREAT
+// fold keyed on the caster's spellmod owner instead of the executing session:
+// WorldObject::GetSpellModOwner (Object.cpp:2246-2261) resolves an owner
+// player only for pet/totem casters, so a possessed wild creature's threat
+// takes no charmer spellmod. Player casters pass themselves, unchanged.
+func (s *session) damageThreatAmountWithModOwner(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool, modOwner *session) (float32, bool) {
 	if s == nil || s.server == nil {
 		return 0, false
 	}
@@ -296,8 +305,8 @@ func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, school
 		if entry, ok := s.loadSpellThreatEntry(ctx, spellID); ok && entry.pctMod != 1.0 {
 			t *= float64(entry.pctMod)
 		}
-		if spellKnown {
-			t = s.applySpellModFloat(spell, spellModThreat, t)
+		if spellKnown && modOwner != nil {
+			t = modOwner.applySpellModFloat(spell, spellModThreat, t)
 		}
 	}
 	return float32(t) * s.getThreatMultiplier(schoolMask), false

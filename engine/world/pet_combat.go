@@ -92,8 +92,14 @@ func (s *session) petSpellPowerCost(motion *creatureMotion, spell wotlk.Spell, c
 			cost += mod
 		}
 	}
+	// WorldObject::GetSpellModOwner (Object.cpp:2246-2261) resolves a
+	// spellmod owner only for pet/totem casters: a possessed wild
+	// creature has none, so the charmer's SPELLMOD_COST must not discount
+	// its power cost. True pets resolve to their owner session, unchanged.
 	if s != nil {
-		cost = s.applySpellMod(spell, spellModCost, cost)
+		if modOwner := s.server.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID); modOwner != nil {
+			cost = modOwner.applySpellMod(spell, spellModCost, cost)
+		}
 	}
 	var pct int32
 	if s != nil && s.server != nil {
@@ -3575,7 +3581,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.motionSpellFocusFound(ctx, motion, spell) {
 		return true
 	}
-	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID, s) {
+	// WorldObject::GetSpellModOwner (Object.cpp:2246-2261) resolves a
+	// spellmod owner only for pet/totem casters: a possessed wild
+	// creature has none, so the charmer's SPELLMOD_RANGE must not stretch
+	// its range. True pets resolve to their owner session, unchanged.
+	if !s.server.checkCreatureSpellRange(motion, spell, targetGUID, s.server.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)) {
 		return true
 	}
 	// Spell::CheckCast CheckCasterAuras arm (Spell.cpp:5509): after
@@ -7859,7 +7869,11 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// (ThreatManager::CalculateModifiedThreat, ThreatManager.cpp:606),
 			// and the caster's redirect registry applies on top
 			// (splitThreatRedirects).
-			threat, step1Gate := s.damageThreatAmount(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat)
+			// WorldObject::GetSpellModOwner (Object.cpp:2246-2261): only
+			// pet/totem casters resolve to an owner player, so a possessed
+			// wild creature's threat takes no charmer SPELLMOD_THREAT.
+			// True pets resolve to their owner session, unchanged.
+			threat, step1Gate := s.damageThreatAmountWithModOwner(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat, s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID))
 			// ThreatManager::AddThreat step 1 (ThreatManager.cpp:311-317)
 			// returns before SetInCombatWith: a gated spell neither adds
 			// threat nor engages the victim. Every other arm — including
