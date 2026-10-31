@@ -2208,6 +2208,33 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !learned && !gmMode && s.player.VehicleGUID != 0 {
 		vehicleSpell = s.vehicleKnowsSpell(ctx, spellID)
 	}
+	// HandleCastSpellOpcode possessed-caster arm (SpellHandler.cpp:351-397):
+	// the "(for player case)" drop fires only when the mover is another
+	// player; a possessed creature mover casts as the creature, so a
+	// spell the creature knows is castable even though the player never
+	// learned it. Mirrors the vehicleSpell arm: the cast still runs
+	// through the player pipeline (no creature-caster pipeline on this
+	// path), so range/threat measure from the player's body, not the
+	// creature — positions do not coincide here as they do for a ridden
+	// vehicle. Residual delta, same class as the vehicle arm: a spell
+	// the player learned but the creature does not know still casts as
+	// the player, where C++ drops it (caster is the mover, HasSpell
+	// fails, and the IsOnVehicle fallback does not apply to possess).
+	// The mover-is-another-player drop has no Go trigger (no
+	// moved-player model: possessedCreatureGUID scans creature motions).
+	possessedSpell := false
+	if !learned && !gmMode && !vehicleSpell {
+		if pg := s.possessedCreatureGUID(); pg != 0 {
+			if m := s.findCreatureMotion(pg); m != nil {
+				for _, known := range s.server.loadCreatureSpells(ctx, m.Entry) {
+					if known == spellID {
+						possessedSpell = true
+						break
+					}
+				}
+			}
+		}
+	}
 	// HandleCastSpellOpcode unlearned-spell arms (SpellHandler.cpp:392-410).
 	// The lock-case arm (GameObject::GetSpellForLock, GameObject.cpp:2765)
 	// allows the cast when the cast spell is the GO target's spell-for-lock;
@@ -2246,7 +2273,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// is Go's Unit::CastSpell(id, triggered=true); the wire unit target
 	// seeds its implicit target selection, matching C++ keeping the client
 	// targets while skipping the CheckCast gauntlet.
-	if !learned && !gmMode && !vehicleSpell && !lockAllowed && s.playerHasPeriodicTriggerAura(wireSpellID) {
+	if !learned && !gmMode && !vehicleSpell && !possessedSpell && !lockAllowed && s.playerHasPeriodicTriggerAura(wireSpellID) {
 		// Spell::prepare (Spell.cpp:3074-3080): the DisableMgr gate has no
 		// trigger exemption — it fires for the TRIGGERED_FULL_MASK arm too.
 		if s.spellDisabledForCaster(ctx, spellID) {
@@ -2261,7 +2288,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "reason", "periodic trigger from client")
 		return true
 	}
-	if !found || spell.Attributes&spellAttributePassive != 0 || (!vehicleSpell && !lockAllowed && !canPlayerCastSpell(learned, gmMode)) {
+	if !found || spell.Attributes&spellAttributePassive != 0 || (!vehicleSpell && !possessedSpell && !lockAllowed && !canPlayerCastSpell(learned, gmMode)) {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
 	}
@@ -29359,6 +29386,31 @@ func (s *session) handleCancelChanneling(payload []byte) bool {
 		return true
 	}
 	if spell.Attributes&spellAttr0CantCancel != 0 {
+		return true
+	}
+	// HandleCancelChanneling possessed-mover arm (SpellHandler.cpp:562-575):
+	// the "(for player case)" drop fires only when the mover is another
+	// player; a possessed creature mover interrupts the CREATURE's
+	// channeled spell, not the player's. The branch owns the outcome
+	// while possessing — C++ reads only the mover's current channeled
+	// spell, so a non-matching packet drops here instead of falling
+	// through to the player's activeChannel. Voluntary cancel, not
+	// EffectInterruptCast: no PreventionType/ChannelInterrupt gate —
+	// InterruptSpell (Unit.cpp:3140) cancels the channeled arm outright
+	// and only SPELL_ATTR0_CANT_CANCEL blocks, gated above. The channel
+	// leg mirrors interruptCreatureCast's without its effect-68 gate.
+	if pg := s.possessedCreatureGUID(); pg != 0 {
+		if m := s.findCreatureMotion(pg); m != nil && s.server.creatureChannelLive(m) && m.ChannelSpellID == channelSpell {
+			s.server.stripCreatureChannelAuras(m, channelSpell)
+			m.CastingUntil = time.Time{}
+			m.ChannelSpellID = 0
+			m.ChannelTargetGUID = 0
+			m.ChannelHasDest = false
+			m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
+			m.ChannelUntil = time.Time{}
+			m.ChannelHitTargets = nil
+			s.server.sendCreatureInterruptPackets(m, interruptedCreatureCast{spellID: channelSpell, channeled: true})
+		}
 		return true
 	}
 	// CMSG_CANCEL_CAST on the fishing spell ends the channel and deletes
