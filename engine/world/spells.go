@@ -47368,9 +47368,9 @@ func (s *session) handleEffectChargeDest(ctx context.Context, target protocol.Sp
 // the spell dest (HasDst gate) for 144. The ROOT/STUNNED gate and the instant
 // non-melee interrupt (Unit::InterruptNonMeleeSpells(true): generic +
 // channeled) land via the target session. Non-player hit targets run the
-// MoveKnockbackFrom spline in C++ and have no Go motion model (documented
-// no-bridge; the affecting-player world-boss/dungeon-boss gate applies only
-// to creature targets, so it is vacuous here). Player hit targets get the
+// MoveKnockbackFrom leg through the shared knockBackCreatureTarget helper
+// (spline-endpoint snap; the world-boss/dungeon-boss gate still runs first
+// on the creature leg). Player hit targets get the
 // client-visible arm of Unit::KnockbackFrom (Unit.cpp:12510-12547):
 // SMSG_MOVE_KNOCK_BACK with the packed GUID, a zero counter, vcos/vsin away
 // from the knock point (Position::GetSinCos, Position.cpp:67-79 — random
@@ -47405,14 +47405,17 @@ func (s *session) handleEffectKnockBack(ctx context.Context, spell wotlk.Spell, 
 			// Player caster, so the affecting-player world-boss/dungeon-boss
 			// gate (SpellEffects.cpp:4552-4562) applies to a vehicle target
 			// too; the driven-vehicle arm is the same Unit::KnockbackFrom
-			// leg as the creature-caster twin.
-			if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
-				if tm.TypeFlags&creatureTypeFlagBossMob != 0 || s.server.autoBalanceIsDungeonBoss(ctx, tm.Entry) {
-					continue
-				}
+			// leg as the creature-caster twin, and plain creature targets
+			// run the MoveKnockbackFrom leg through the shared helper.
+			tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID)
+			if tm != nil && (tm.TypeFlags&creatureTypeFlagBossMob != 0 || s.server.autoBalanceIsDungeonBoss(ctx, tm.Entry)) {
+				continue
 			}
 			if s.server.sendDrivenVehicleKnockBack(s.player.Map, s.player.InstanceID, targetGUID, fromX, fromY, speedXY, speedZ) {
 				continue
+			}
+			if tm != nil {
+				s.server.knockBackCreatureTarget(tm, fromX, fromY, speedXY, speedZ)
 			}
 			continue
 		}

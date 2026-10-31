@@ -4530,12 +4530,13 @@ func (s *Server) creatureDispelMechanicPlayerTarget(m *creatureMotion, eff wotlk
 // spell destination (effect 144, HasDst-gated like the session twin).
 // Player targets take the full session-twin legs: the root/stun gate,
 // the non-melee interrupt legs, and the SMSG_MOVE_KNOCK_BACK packet
-// (plus the flying re-enable leg). Creature-motion targets stay out:
-// KnockbackFrom drives a movement generator Go has no model for, and an
-// instant relocation would misread as a teleport; the world-boss /
-// dungeon-boss gate (which C++ applies only when the caster has an
-// affecting player) is therefore vacuous on the legs that do run, but it
-// is still evaluated for the record on the skipped creature leg.
+// (plus the flying re-enable leg). Creature-motion targets run the
+// MoveKnockbackFrom leg through knockBackCreatureTarget (root/stun gate,
+// non-melee interrupt, then the spline-endpoint snap with passenger
+// fan-out, the charge/pull snap precedent — the parabolic spline itself
+// has no Go model and the mmap first-collision clamp stays out). The
+// world-boss / dungeon-boss gate (which C++ applies only when the caster
+// has an affecting player) still runs first on the creature leg.
 func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hasDest bool, dx, dy, dz float32, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil {
 		return
@@ -4568,11 +4569,11 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 		}
 		targetSess := s.findSessionByGUID(guid)
 		if targetSess == nil || targetSess.player == nil {
+			var tm *creatureMotion
 			if affectingPlayer {
-				if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-					if tm.TypeFlags&creatureTypeFlagBossMob != 0 || s.autoBalanceIsDungeonBoss(ctx, tm.Entry) {
-						continue
-					}
+				tm = s.findCreatureMotion(m.Map, m.InstanceID, guid)
+				if tm != nil && (tm.TypeFlags&creatureTypeFlagBossMob != 0 || s.autoBalanceIsDungeonBoss(ctx, tm.Entry)) {
+					continue
 				}
 			}
 			// A driven vehicle is not a player session, but C++ still knocks
@@ -4581,6 +4582,12 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 			// knockback ack loop never ran.
 			if s.sendDrivenVehicleKnockBack(m.Map, m.InstanceID, guid, fromX, fromY, speedXY, speedZ) {
 				continue
+			}
+			if tm == nil {
+				tm = s.findCreatureMotion(m.Map, m.InstanceID, guid)
+			}
+			if tm != nil {
+				s.knockBackCreatureTarget(tm, fromX, fromY, speedXY, speedZ)
 			}
 			continue
 		}
@@ -4633,16 +4640,73 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 	}
 }
 
+// knockBackCreatureTarget mirrors MotionMaster::MoveKnockbackFrom
+// (MotionMaster.cpp:735) for a creature hit target, shared by the creature
+// and player caster twins (the boss gate already ran at the call site).
+// Order follows Spell::EffectKnockBack into Unit::KnockbackFrom: the
+// ROOT/STUN gate first (script root + root/stun auras, the Go unit-state
+// model), then InterruptNonMeleeSpells, then the MoveKnockbackFrom
+// speedXY < 0.01 early-out (the Effect-level both-speeds gate already ran
+// at the call site). The landing point is the spline endpoint: dist =
+// 2 * (speedZ / gravity) * speedXY along the away-from-source direction
+// (GetRelativeAngle + PI through MovePositionToFirstCollision nets the
+// source-to-target direction; the <0.001 coincidence arm takes a random
+// angle, the GetSinCos twin), Z kept — the mmap first-collision clamp
+// has no Go model, the charge/pull snap precedent. Orientation is fixed
+// by the spline (SetOrientationFixed), so it is untouched. The snap
+// rides broadcastMonsterMoveStop + syncCreatureVehiclePassengers: the
+// spline ticks land in UpdateSplinePosition -> CreatureRelocation
+// (Map.cpp:1136), so a knocked vehicle base fans its passengers out.
+func (s *Server) knockBackCreatureTarget(tm *creatureMotion, fromX, fromY float64, speedXY, speedZ float32) {
+	if s == nil || tm == nil {
+		return
+	}
+	if tm.ScriptRooted || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
+		return
+	}
+	for _, arm := range s.interruptCreatureNonMeleeCasts(tm) {
+		s.sendCreatureInterruptPackets(tm, arm)
+	}
+	if speedXY < 0.01 {
+		return
+	}
+	const knockbackGravity = 19.29110527038574
+	s.motionMu.Lock()
+	tx, ty, tz := tm.X, tm.Y, tm.Z
+	mapID, instanceID := tm.Map, tm.InstanceID
+	s.motionMu.Unlock()
+	ddx := float64(tx) - fromX
+	ddy := float64(ty) - fromY
+	var vcos, vsin float64
+	if math.Abs(ddx) < 0.001 && math.Abs(ddy) < 0.001 {
+		angle := rand.Float64() * 2 * math.Pi
+		vcos, vsin = math.Cos(angle), math.Sin(angle)
+	} else {
+		dist := math.Hypot(ddx, ddy)
+		vcos, vsin = ddx/dist, ddy/dist
+	}
+	moveTimeHalf := float64(speedZ) / knockbackGravity
+	flight := 2 * moveTimeHalf * float64(speedXY)
+	destX := tx + float32(flight*vcos)
+	destY := ty + float32(flight*vsin)
+	s.motionMu.Lock()
+	tm.X, tm.Y = destX, destY
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, tm.GUID, destX, destY, tz)
+	s.syncCreatureVehiclePassengers(tm)
+}
+
 // sendDrivenVehicleKnockBack mirrors the non-player arm of Unit::KnockbackFrom
 // (Unit.cpp:12510-12547) for a driven vehicle: a knockback spell whose hit
 // target is the vehicle base sends SMSG_MOVE_KNOCK_BACK with the VEHICLE guid
 // to the driving player (GetCharmer + GetUnitBeingMoved == this), never the
 // driver guid — the client then acks with the vehicle guid, which
 // HandleMoveKnockBackAck accepts as the mover. The ROOT/STUN gate runs on
-// the vehicle unit state (no Go vehicle-state model, so it is unevaluated
-// here, not borrowed from the driver), and InterruptNonMeleeSpells hits the
-// vehicle's casts only, so the driver's casts are left alone. The flying
-// re-enable leg reads the DRIVER's auras and carries the driver guid
+// the vehicle motion (script root + root/stun auras, the EffectKnockBack
+// gate on the vehicle unit itself, not borrowed from the driver), and
+// InterruptNonMeleeSpells hits the vehicle's casts only, so the driver's
+// casts are left alone. The flying re-enable leg reads the DRIVER's auras
+// and carries the driver guid
 // (Player::SetCanFly, Player.cpp:26852-26866). Returns false when the hit
 // target is not a driven vehicle on this map/instance.
 func (s *Server) sendDrivenVehicleKnockBack(mapID, instanceID uint32, vehicleGUID uint64, fromX, fromY float64, speedXY, speedZ float32) bool {
@@ -4659,6 +4723,12 @@ func (s *Server) sendDrivenVehicleKnockBack(mapID, instanceID uint32, vehicleGUI
 	}
 	tm := s.findCreatureMotion(mapID, instanceID, vehicleGUID)
 	if tm == nil {
+		return false
+	}
+	// Spell::EffectKnockBack gates the vehicle unit itself on ROOT/STUN
+	// before KnockbackFrom ever runs; a rooted/stunned base sends no
+	// packet to its driver.
+	if tm.ScriptRooted || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
 		return false
 	}
 	ddx := float64(tm.X) - fromX
