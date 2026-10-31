@@ -23199,6 +23199,53 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		rejectTriggeredCast("triggered talent spec change after battleground start")
 		return
 	}
+	// CheckCast ApplyAuraName switch (Spell.cpp:6033-6147) plus the
+	// per-effect loop's aura-bounced tail (Spell.cpp:6155-6162): the
+	// client-path twins already bridge these arms, so the funnel reuses
+	// them on the raw wire target in C++ switch order, ahead of
+	// SelectSpellTargets; every failure rewrites to DONT_REPORT via
+	// rejectTriggeredCast. The twins' stay-outs are shared with the
+	// client path (charm vehicle leg with no vehicle-kit model, the
+	// caster-charmed arm with no player charm state, the mounted twin's
+	// transform-spell carve-out). One funnel-only split: the
+	// periodic-mana-leech arm breaks on m_CastItem (Spell.cpp:6144),
+	// and item casts on this path carry a cast item (castItemGUID),
+	// so an item-cast leech skips only the power-type gate — the
+	// no-unit-target leg still fires — while non-item casts reuse
+	// the twin whole.
+	if failure := s.checkPossessPetCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered possess-pet spell without pet")
+		return
+	}
+	if failure := s.checkCharmCast(spell, funnelWireTarget); failure != 0 {
+		rejectTriggeredCast("triggered charm/possess spell invalid")
+		return
+	}
+	if failure := s.checkMountedCast(ctx, spell); failure != 0 {
+		rejectTriggeredCast("triggered mount spell invalid")
+		return
+	}
+	if failure := s.checkRangedAttackPowerAttackerBonusCast(spell, funnelWireTarget); failure != 0 {
+		rejectTriggeredCast("triggered ranged-AP-bonus spell invalid")
+		return
+	}
+	if failure := s.checkFlyCast(spell); failure != 0 {
+		rejectTriggeredCast("triggered fly spell in no-fly area")
+		return
+	}
+	if castItemGUID == 0 {
+		if failure := s.checkPeriodicManaLeechCast(spell, funnelWireTarget); failure != 0 {
+			rejectTriggeredCast("triggered periodic mana leech spell invalid")
+			return
+		}
+	} else if funnelWireTarget.Flags&protocol.SpellTargetFlagUnitWireMask == 0 || funnelWireTarget.UnitGUID == 0 {
+		rejectTriggeredCast("triggered periodic mana leech spell without unit target")
+		return
+	}
+	if failure := s.checkAuraBouncedCast(spell, funnelWireTarget); failure != 0 {
+		rejectTriggeredCast("triggered aura spell bounced by stronger aura")
+		return
+	}
 	// The vehicle arm (Spell.cpp:5332) is exempt: TRIGGERED_FULL_MASK
 	// carries TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE.
 	// Spell::prepare (Spell.cpp:3139-3149): the moving-cast arm carries no
