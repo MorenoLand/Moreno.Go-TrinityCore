@@ -1282,7 +1282,11 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			if targetType == 24 || targetType == 54 || targetType == 104 {
 				cone = true
 			}
-			if targetType == 16 || targetType == 18 || targetType == 28 {
+			// 28 is a dest-setter, not a selecting leg (OBJECT_TYPE_DEST,
+			// SELECT_CATEGORY_DEFAULT, SpellInfo.cpp:248; dynobj dests return
+			// early in SelectImplicitDestDestTargets, Spell.cpp:1474), so it
+			// must not drag a cone/src-area sweep onto the dest center.
+			if targetType == 16 || targetType == 18 {
 				destinationCenter = true
 			}
 		}

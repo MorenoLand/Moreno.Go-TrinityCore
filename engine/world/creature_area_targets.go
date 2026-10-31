@@ -56,7 +56,11 @@ func (s *Server) creatureAIAreaGeometry(motion *creatureMotion, spell wotlk.Spel
 			if targetType == 24 || targetType == 54 || targetType == 104 {
 				cone = true
 			}
-			if targetType == 16 || targetType == 18 || targetType == 28 {
+			// 28 is a dest-setter, not a selecting leg (OBJECT_TYPE_DEST,
+			// SELECT_CATEGORY_DEFAULT, SpellInfo.cpp:248; dynobj dests return
+			// early in SelectImplicitDestDestTargets, Spell.cpp:1474), so it
+			// must not drag a cone/src-area sweep onto the dest center.
+			if targetType == 16 || targetType == 18 {
 				destinationCenter = true
 			}
 		}
@@ -583,7 +587,11 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 			if targetType == 24 || targetType == 54 || targetType == 104 {
 				cone = true
 			}
-			if targetType == 16 || targetType == 18 || targetType == 28 {
+			// 28 is a dest-setter, not a selecting leg (OBJECT_TYPE_DEST,
+			// SELECT_CATEGORY_DEFAULT, SpellInfo.cpp:248; dynobj dests return
+			// early in SelectImplicitDestDestTargets, Spell.cpp:1474), so it
+			// must not drag a cone/src-area sweep onto the dest center.
+			if targetType == 16 || targetType == 18 {
 				destinationCenter = true
 			}
 		}
