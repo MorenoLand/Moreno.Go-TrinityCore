@@ -1390,7 +1390,17 @@ func (s *session) exitVehicle(ctx context.Context) {
 	// position on that other map is not a position on the passenger's
 	// map, so applying it would strand the passenger at foreign
 	// coordinates on its own map.
-	if !seatedOnOtherMap {
+	// A far-teleport-pending passenger's coords are its teleport
+	// destination, folded in at initiation (commands.go) — C++ keeps the
+	// pending destination apart from position (m_teleport_dest,
+	// Player.cpp:1796; the ack moves to GetTeleportDest(),
+	// MovementHandler.cpp:55), so _ExitVehicle's exit position never
+	// clobbers it. The other-map skip above covers a kit keyed on the
+	// origin map; this covers a passenger re-boarded onto a
+	// destination-map kit while pending, where the kit key matches and
+	// the exit position would otherwise overwrite the destination the
+	// ack still has to land on.
+	if !seatedOnOtherMap && !s.farTeleportPending {
 		s.applyVehicleExitPosition(oldVehGUID, seatAddon)
 	}
 
