@@ -5405,6 +5405,27 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.fireCreatureHitTriggers(ctx, motion, spell, spell.ID, []uint64{motion.GUID})
 		}
 	}
+	// Spell::PreprocessSpellHit friendly-assist arm (Spell.cpp:2761-2765),
+	// per hit target ahead of the HIT_TARGET effect loop below: a hit on
+	// a friendly in-combat target by a spell with initial aggro forwards
+	// 0.0 threat from the original caster (the pet motion here) and, for
+	// a player-controlled caster, inherits the target's combat states.
+	// The verdict gates mirror PreprocessTarget (Spell.cpp:2347-2351):
+	// missed, immune and evaded targets have no _spellHitTarget, and a
+	// clean reflect retargets the arm to the pet itself, which the
+	// caster!=target gate inside the helper then drops. Dedupe mirrors
+	// C++'s m_UniqueTargetInfo iteration; GO targets fail the friendly
+	// gate inside the helper.
+	assistSeen := make(map[uint64]bool, len(hitTargets))
+	for _, hitGUID := range hitTargets {
+		if hitGUID == 0 || assistSeen[hitGUID] || immuneSet[hitGUID] || evadedSet[hitGUID] || missedTarget(hitGUID) {
+			continue
+		}
+		assistSeen[hitGUID] = true
+		if armTarget := resolveReflectTarget(hitGUID); armTarget != 0 {
+			s.server.forwardPetAssistThreat(motion, armTarget, spell)
+		}
+	}
 	for i, effect := range spell.Effects {
 		if effect.Effect == spellEffectHeal || effect.Effect == spellEffectHealMechanical || effect.Effect == spellEffectHealPct {
 			// Spell::PreprocessTarget (Spell.cpp:2350): a non-NONE

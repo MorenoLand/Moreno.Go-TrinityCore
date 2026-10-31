@@ -1514,6 +1514,79 @@ func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, ins
 	s.distributeHealingThreatLocked(nil, mapID, instanceID, hx, hy, hz, hReach, healerGUID, targetGUID, float32(effectiveHeal)*0.5)
 }
 
+// forwardPetAssistThreat runs the Spell::PreprocessSpellHit friendly-assist
+// arm (Spell.cpp:2761-2765) for a pet cast: a hit on a friendly in-combat
+// target by a spell with initial aggro forwards 0.0 threat from the original
+// caster to every creature threatening the target, and a player-controlled
+// original caster inherits the target's combat states. The Go pet path
+// carries no originalCaster distinct from the caster (direct casts default
+// it to the caster, Spell.cpp:566-568, and EffectTriggerSpell builds its
+// Spell without an originalCaster argument, SpellEffects.cpp:2884), so the
+// pet motion is the assistant. The 0.0 forward reuses
+// distributeHealingThreatLocked: a zero total splits to zero shares and the
+// per-recipient AddThreat still creates the threat ref and engages combat
+// (ThreatManager.cpp:308-410), which is the arm's whole effect — unlike the
+// heal forward, there is no zero-amount early return here. The inherit leg
+// has no per-pair CombatManager model in Go (the player path's
+// forwardInitialAssistThreatLocked uses the same flag approximation), so it
+// sets the pet's InCombat flag; the forward's own AddThreats engage the pet
+// with each creature recipient, and the InheritCombatStatesFrom immunity
+// legs (CombatManager.cpp:270-290, IsImmuneToPC/NPC) have no Go model and
+// are not replicated. The forward runs even when the inherit gate is off
+// (a non-player-controlled caster still forwards; C++: "for creature v
+// creature combat, the threat forward does it for us"). Caller holds no
+// locks; the friendly and in-combat reads lock internally like the heal
+// forward's snapshot, so no motionMu is held across them.
+func (s *Server) forwardPetAssistThreat(caster *creatureMotion, targetGUID uint64, spell wotlk.Spell) {
+	if s == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 || targetGUID == caster.GUID {
+		return
+	}
+	// SpellInfo::HasInitialAggro (SpellInfo.cpp:1261): NO_THREAT or
+	// NO_INITIAL_AGGRO spells never reach the arm.
+	if !spellHasInitialThreat(spell) {
+		return
+	}
+	// The arm lives in the friendly branch of PreprocessSpellHit: a valid
+	// attack target takes the interrupt-flags leg instead, never this one.
+	if !s.creatureFriendlyToTarget(caster, targetGUID) {
+		return
+	}
+	// unit->IsInCombat(): player targets read the session flag/attack
+	// target, creature targets the motion flag — the unitInCombatLocked
+	// shape without holding motionMu across the friendly read above.
+	// C++ threat refs are map-local, so a player target on another
+	// map/instance is not a hit target here.
+	targetInCombat := false
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		if ts.player.Map == caster.Map && ts.player.InstanceID == caster.InstanceID {
+			targetInCombat = ts.attackTarget != 0 || ts.player.UnitFlags&unitFlagInCombat != 0
+		}
+	} else if tm := s.findCreatureMotion(caster.Map, caster.InstanceID, targetGUID); tm != nil {
+		targetInCombat = tm.InCombat
+	}
+	if !targetInCombat {
+		return
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(caster.Map, caster.InstanceID, caster.GUID)
+	if motion == nil {
+		s.motionMu.Unlock()
+		return
+	}
+	cx, cy, cz, cReach := motion.X, motion.Y, motion.Z, motion.CombatReach
+	playerControlled := motion.UnitFlags&unitFlagPlayerControlled != 0
+	// CombatManager::InheritCombatStatesFrom (CombatManager.cpp:270-290),
+	// gated on the original caster's PLAYER_CONTROLLED flag: true pets
+	// and player-charmed motions carry it, so the pet enters combat with
+	// the target's attackers; the flag approximation stands in for the
+	// per-pair refs Go does not model.
+	if playerControlled {
+		motion.InCombat = true
+	}
+	s.motionMu.Unlock()
+	s.distributeHealingThreatLocked(nil, caster.Map, caster.InstanceID, cx, cy, cz, cReach, caster.GUID, targetGUID, 0)
+}
+
 // distributeHealingThreatLocked fans totalThreat out to every engaged creature
 // on the map. healerSess is the player healer's session (nil for creature
 // healers, which never register threat redirects). Callers hold no locks.
