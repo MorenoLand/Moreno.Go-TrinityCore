@@ -23246,6 +23246,32 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		rejectTriggeredCast("triggered aura spell bounced by stronger aura")
 		return
 	}
+	// CheckCast trade-slot tail (Spell.cpp:6164-6187), DOCUMENTED VACUOUS:
+	// the block opens on the TARGET_FLAG_TRADE_ITEM mask, which the funnel
+	// never sets — funnelWireTarget carries UnitWireMask or GameObject, and
+	// the later spellTarget is Unit or GameObject only — so the m_CastItem
+	// ITEM_ENCHANT_TRADE_WINDOW arm, the NOT_TRADING arms, and the
+	// !IsTriggered already-enchanted leg (doubly dead: this path is always
+	// triggered) never fire here. A trade-slot value smuggled in as
+	// targetGUID dies earlier at the lost-target arm, which resolves only
+	// real unit/GO targets.
+	// CheckCast combo-points tail (Spell.cpp:6187-6211): the client-path
+	// twin checkComboPointsCast carries the whole arm — NeedsComboPoints
+	// (ATTR1 REQ_COMBO_POINTS1|2), the Spell.cpp:5286 ABILITY_IGNORE_AURASTATE
+	// clear leg, and the NeedsExplicitUnitTarget branch — and the npcbot /
+	// null-caster legs are vacuous (this path is always the session player).
+	// One funnel mapping: C++ reads m_targets.GetUnitTarget(), which is null
+	// for a GO wire, and Unit::GetComboPoints(nullptr) returns the banked
+	// points (Unit.h:1579), so a GO wire maps to target 0 (banked) rather
+	// than the GO guid the funnelWireTarget struct carries in UnitGUID.
+	funnelComboTarget := targetGUID
+	if targetGUID != 0 && uint16(targetGUID>>48) == 0xF110 {
+		funnelComboTarget = 0
+	}
+	if failure := s.checkComboPointsCast(spell, protocol.SpellTargetData{UnitGUID: funnelComboTarget}); failure != 0 {
+		rejectTriggeredCast("triggered combo-point spell without banked combo points")
+		return
+	}
 	// The vehicle arm (Spell.cpp:5332) is exempt: TRIGGERED_FULL_MASK
 	// carries TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE.
 	// Spell::prepare (Spell.cpp:3139-3149): the moving-cast arm carries no
