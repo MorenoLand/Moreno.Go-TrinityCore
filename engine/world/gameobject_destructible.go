@@ -511,6 +511,26 @@ func goMaskedTargetsForEffect(masks map[uint64]uint32, target protocol.SpellTarg
 	return out
 }
 
+// goMaskedTargetMemberForEffect is the single-target twin of
+// goMaskedTargetsForEffect's member check: a GO belongs to one effect iff
+// its recorded per-arm mask holds the effect's bit, falling back to the
+// category membership for a GUID no arm recorded (the list twin's
+// fallback, so an uninstrumented append keeps the old behavior). A nil
+// map falls through to the category filter the same way.
+func goMaskedTargetMemberForEffect(masks map[uint64]uint32, target protocol.SpellTargetData, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect, goGUID uint64) bool {
+	if m, ok := masks[goGUID]; ok {
+		return m&(1<<uint(effIndex)) != 0
+	}
+	wire := spellGameObjectTargetGUID(target)
+	hitGOs := make(map[uint64]struct{})
+	for _, guid := range hitTargets {
+		if uint16(guid>>48) == 0xF110 {
+			hitGOs[guid] = struct{}{}
+		}
+	}
+	return spellEffectGOTargetMember(eff, goGUID, wire, hitGOs)
+}
+
 // filterGOPacketTargetsByEffectMaskWithMasks is the threaded-mask twin of
 // filterGOPacketTargetsByEffectMask: a GO survives into the packet iff
 // some real effect's recorded per-arm mask holds it (a GUID absent from

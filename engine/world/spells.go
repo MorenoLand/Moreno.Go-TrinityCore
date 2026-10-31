@@ -27443,7 +27443,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// helper's own GO gate. castItem is the !m_CastItem
 				// skill-up gate (SpellEffects.cpp:2039): a triggered cast
 				// from an item grows no lockpicking skill.
-				s.handleEffectOpenLock(ctx, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: effectTarget}, spell, eff, castItemGUID != 0)
+				// The seed above is the merged selection list (the seed
+				// switch partitions unit cones only), so without a mask
+				// gate a GO-cone open-lock effect opened every GO in the
+				// list, including GO-area picks: DoProcessTargetContainer
+				// (Spell.cpp:3554) runs the effect only on targets whose
+				// EffectMask holds its bit, which the threaded per-arm
+				// mask records — the dedicated GO block's Masked handlers
+				// already filter this way, and open-lock is the loop's
+				// only GO arm outside it.
+				if uint16(effectTarget>>48) != 0xF110 || goMaskedTargetMemberForEffect(goEffectMasks, spellTarget, selectionTargets, effectIndex, eff, effectTarget) {
+					s.handleEffectOpenLock(ctx, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagGameObject, UnitGUID: effectTarget}, spell, eff, castItemGUID != 0)
+				}
 			} else if eff.Effect == spellEffectRedirectThreat {
 				// Spell::EffectRedirectThreat (SpellEffects.cpp:5411) runs
 				// at HIT_TARGET per unit target: the client arm's helper
