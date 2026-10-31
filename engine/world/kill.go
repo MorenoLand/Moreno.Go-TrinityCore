@@ -2137,13 +2137,15 @@ func (s *Server) deleteRespawnRowsForInstance(ctx context.Context, mapID, instan
 // loadCreatureRespawnTimes seeds records, delete instance saves whose
 // own resettime passed or whose map/difficulty global reset passed,
 // their character/group binds, and respawn rows orphaned by the delete
-// (plus pre-existing orphans). Deleting the instance row first is what
+// (plus pre-existing orphans, including group binds whose group row is
+// gone). Deleting the instance row first is what
 // keeps admissions from reusing an expired save: the bind queries join
 // the instance table, and a login left without a row falls back via
 // recoverLoginInstanceMapFailure. C++ additionally drops binds for
 // missing characters/groups and zeroes stale corpse/character
 // instance ids; Go tracks no corpse instance id and character deletion
-// already cascades its binds, so those arms are vacuous here. Runtime
+// already cascades its binds, so the character arm is vacuous here, while
+// the missing-group arm runs below. Runtime
 // expiry while the server runs stays unmodeled: Go keeps no reset
 // scheduler (resettime is read-only), so only startup expiry is
 // covered, matching the C++ server-down-across-a-reset case.
@@ -2178,6 +2180,7 @@ func (s *Server) cleanupExpiredInstanceSaves(ctx context.Context) {
 	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM respawn WHERE instanceId > 0 AND instanceId NOT IN (SELECT id FROM instance)")
 	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_instance WHERE instance > 0 AND instance NOT IN (SELECT id FROM instance)")
 	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM group_instance WHERE instance > 0 AND instance NOT IN (SELECT id FROM instance)")
+	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM group_instance USING group_instance LEFT JOIN `groups` AS g ON group_instance.guid = g.guid WHERE g.guid IS NULL")
 }
 
 // loadCreatureRespawnTimes mirrors Map::LoadRespawnTimes (Map.cpp:4497):

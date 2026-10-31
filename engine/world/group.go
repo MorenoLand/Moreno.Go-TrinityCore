@@ -1633,6 +1633,7 @@ func (s *session) removeFromGroup(ctx context.Context, g *groupState, target *se
 		if srv.CharactersStore != nil && srv.CharactersStore.DB != nil {
 			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER_ALL"), g.DBID)
 			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
+			srv.deleteDisbandedGroupInstanceBinds(ctx, g.DBID)
 			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_LFG_DATA"), g.DBID)
 		}
 		// LFGScripts::OnDisband (RemoveGroupData, LFGMgr.cpp:2010-2030):
@@ -1777,6 +1778,7 @@ func (s *Server) removeGroupMemberByGUID(ctx context.Context, g *groupState, gui
 		if s.CharactersStore != nil && s.CharactersStore.DB != nil {
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER_ALL"), g.DBID)
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
+			s.deleteDisbandedGroupInstanceBinds(ctx, g.DBID)
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_LFG_DATA"), g.DBID)
 		}
 		// LFGScripts::OnDisband (RemoveGroupData, LFGMgr.cpp:2010-2030):
@@ -1886,6 +1888,17 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 	return true
 }
 
+// deleteDisbandedGroupInstanceBinds drops a disbanded group's instance
+// binds: Group::Disband (Group.cpp:929-930) unbinds via ResetInstances,
+// and a new group reuses MAX(groups.guid)+1, so a surviving row would
+// bind the recycled DBID to the dead group's instance.
+func (s *Server) deleteDisbandedGroupInstanceBinds(ctx context.Context, dbid uint32) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || dbid == 0 {
+		return
+	}
+	_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM group_instance WHERE guid = ?", dbid)
+}
+
 // disbandGroup dissolves the whole group: every online member session is
 // detached and notified, pending invites are withdrawn, the persisted
 // member/leader/LFG rows are removed, and the in-memory group is dropped.
@@ -1941,6 +1954,7 @@ func (s *Server) disbandGroup(ctx context.Context, g *groupState, hideDestroy bo
 		if s.CharactersStore.DB != nil {
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP_MEMBER_ALL"), g.DBID)
 			_, _ = s.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_DEL_GROUP"), g.DBID)
+			s.deleteDisbandedGroupInstanceBinds(ctx, g.DBID)
 			// CHAR_DEL_LFG_DATA (Group.cpp:932-934): the group's LFG row dies with it.
 			_, _ = s.CharactersStore.DB.ExecContext(ctx, "DELETE FROM lfg_data WHERE guid = ?", g.DBID)
 		}
