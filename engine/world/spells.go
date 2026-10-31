@@ -10102,6 +10102,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// roll it twice).
 	refCenteredBranch := false
 	goAreaBranchRan, goConeBranchRan := false, false
+	friendlyConeBranchRan := false
 	wireGOMask := spellGOWireEffectMask(spell)
 	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
 	if areaSpell {
@@ -10211,6 +10212,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	} else if friendlyConeSpell {
 		// Spell::SelectImplicitConeTargets (Spell.cpp:1176): friendly
 		// ALLY/ENTRY cone targets (59/60).
+		friendlyConeBranchRan = true
 		hitTargets = s.spellFriendlyConeTargets(ctx, spell, target)
 	} else if goAreaSpell {
 		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227):
@@ -10303,6 +10305,33 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if isGOConeSpell(spell) && !goConeBranchRan {
 		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
 		rejoinLaunchGOs(coneTargets, coneMasks)
+	}
+	// Spell::SelectImplicitConeTargets (Spell.cpp:1176) runs per effect,
+	// so a friendly-cone (59/60) leg selects its cone even when an earlier
+	// switch branch won the spell-level selection (friendly-area,
+	// enemy-area, entry-area, GO, or a nearby pick) — previously the cone
+	// leg was dropped outright on those spells. The branch-ran guard keeps
+	// a pure cone spell on its own branch's single selection instead of
+	// scanning twice. Cone targets join hitTargets deduped, ahead of the
+	// channeled check and the area rolls, so they roll, ride the packet,
+	// and seed the cone effects' fan-out; the flat list over-hits the
+	// winning branch's members on cone effects, the standing mixed-effect
+	// approximation the nearby picks already make.
+	if isFriendlyConeSpell(spell) && !friendlyConeBranchRan {
+		seenCone := make(map[uint64]struct{}, len(hitTargets))
+		for _, guid := range hitTargets {
+			seenCone[guid] = struct{}{}
+		}
+		for _, coneGUID := range s.spellFriendlyConeTargets(ctx, spell, target) {
+			if coneGUID == 0 {
+				continue
+			}
+			if _, dup := seenCone[coneGUID]; dup {
+				continue
+			}
+			seenCone[coneGUID] = struct{}{}
+			hitTargets = append(hitTargets, coneGUID)
+		}
 	}
 	// Friendly-area + 37/61 combo: the area branch above kept only the
 	// caster-centered list (or, for a pure friendly-area spell, hitTargets is
@@ -24160,6 +24189,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	var triggeredFriendlyEffectTargets []uint64
 	var triggeredRefCenteredFriendlyTargets []uint64
 	goAreaBranchRan, goConeBranchRan := false, false
+	friendlyConeBranchRan := false
 	selectionTargets := hitTargets[:len(hitTargets)-len(chainJumpGUIDs)]
 	if !nearbySelected {
 		switch {
@@ -24212,6 +24242,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			hitTargets = s.spellEntryAreaTargetsWithCenters(ctx, spell, spellID, spellTarget, funnelEntryAreaCenters)
 			selectionTargets = hitTargets
 		case isFriendlyConeSpell(spell):
+			friendlyConeBranchRan = true
 			hitTargets = s.spellFriendlyConeTargets(ctx, spell, spellTarget)
 			selectionTargets = hitTargets
 		case isGOAreaSpell(spell):
@@ -24392,6 +24423,47 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	if isGOConeSpell(spell) && !goConeBranchRan {
 		coneTargets, coneMasks := s.spellGOConeTargetsWithMasks(ctx, spell, spellID)
 		rejoinTriggeredGOs(coneTargets, coneMasks)
+	}
+	// Spell::SelectImplicitConeTargets (Spell.cpp:1176) runs per effect,
+	// so a friendly-cone (59/60) leg selects its cone even when an earlier
+	// switch branch won the spell-level selection (friendly-area,
+	// enemy-area, entry-area, GO, or the nearby arm's switch skip) —
+	// previously the cone leg was dropped outright on those spells. The
+	// branch-ran guard keeps a pure cone spell on its own branch's single
+	// selection instead of scanning twice. Cone targets join hitTargets
+	// (roll base, GO packet, channeled check) and selectionTargets
+	// (fan-out seed) deduped, mirroring the GO rejoins above — the
+	// selectionTargets copy is rebuilt so the append cannot overwrite
+	// the chain-jump tail it aliases; the flat list over-hits the
+	// winning branch's members on cone effects, the standing mixed-effect
+	// approximation the nearby picks already make.
+	if isFriendlyConeSpell(spell) && !friendlyConeBranchRan {
+		seenCone := make(map[uint64]struct{}, len(hitTargets))
+		for _, guid := range hitTargets {
+			seenCone[guid] = struct{}{}
+		}
+		seenConeSel := make(map[uint64]struct{}, len(selectionTargets))
+		for _, guid := range selectionTargets {
+			seenConeSel[guid] = struct{}{}
+		}
+		for _, coneGUID := range s.spellFriendlyConeTargets(ctx, spell, spellTarget) {
+			if coneGUID == 0 {
+				continue
+			}
+			if _, dup := seenCone[coneGUID]; dup {
+				continue
+			}
+			seenCone[coneGUID] = struct{}{}
+			hitTargets = append(hitTargets, coneGUID)
+			if _, dup := seenConeSel[coneGUID]; dup {
+				continue
+			}
+			seenConeSel[coneGUID] = struct{}{}
+			grown := make([]uint64, 0, len(selectionTargets)+1)
+			grown = append(grown, selectionTargets...)
+			grown = append(grown, coneGUID)
+			selectionTargets = grown
+		}
 	}
 	// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500-1556) adds
 	// the caster via AddUnitTarget for every TARGET_UNIT_CASTER leg, so a
