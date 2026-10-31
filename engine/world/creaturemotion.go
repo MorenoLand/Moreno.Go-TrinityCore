@@ -339,7 +339,18 @@ type creatureMotion struct {
 	// restores it). PetReact mirrors the creature react-state numbering
 	// (creatureReact* / PetReact* both 0/1/2).
 	CharmOldReact uint8
-	PetCommand    uint8 // 0: stay, 1: follow, 2: attack
+	// CharmActionBar holds a player-rearranged action bar for a charmed
+	// wild creature (WorldSession::HandlePetSetAction, PetHandler.cpp:460-600:
+	// SetActionBar mutates the unit's CharmInfo in place). A pet persists
+	// its bar in character_pet.abdata; a wild creature's CharmInfo is
+	// transient — DeleteCharmInfo on uncharm (Unit.cpp:11926+) drops it —
+	// so this lives on the motion only, is applied by the charm/possess
+	// bar sends, and uncharmCreature clears it. CharmActionBarSet marks
+	// a rearranged bar; the zero bar alone is not a valid sentinel
+	// because a rearranged bar can legitimately hold empty spell slots.
+	CharmActionBar    [10]uint32
+	CharmActionBarSet bool
+	PetCommand        uint8 // 0: stay, 1: follow, 2: attack
 	// TempSummonLifetime is the TempSummon::m_lifetime twin
 	// (TemporarySummon.cpp:168-173, InitStats): the creating spell's
 	// duration stamped at summon for temporary-duration guardians
@@ -2118,6 +2129,11 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.PetReact = motion.CharmOldReact
 	motion.ReactState = motion.CharmOldReact
 	motion.CharmOldReact = 0
+	// The transient CharmInfo bar dies with the charm (DeleteCharmInfo,
+	// Unit.cpp:11926+): a re-charm rebuilds the default bar from the
+	// creature's spells, so a rearranged bar must not survive uncharm.
+	motion.CharmActionBar = [10]uint32{}
+	motion.CharmActionBarSet = false
 	motion.CharmUnitFlags = 0
 	motion.CharmFaction = 0
 	motion.CharmOwnerGUID = 0

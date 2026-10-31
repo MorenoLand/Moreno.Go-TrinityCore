@@ -838,44 +838,25 @@ const (
 	charmActPassive  uint8 = 0x01 // ACT_PASSIVE
 )
 
-func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, reactState, commandState uint8) {
-	if s == nil || s.conn == nil || creatureGUID == 0 {
-		return
-	}
-	buf := protocol.NewBuffer(64)
-	buf.WriteU64(creatureGUID)
-	buf.WriteU16(0)
-	buf.WriteU32(0)
-	buf.WriteU8(reactState)
-	buf.WriteU8(commandState)
-	buf.WriteU16(0)
-	// Player::CharmSpellInitialize (Player.cpp:21226-21277): the bar starts as
-	// the default pet command bar (CharmInfo::InitPetActionBar, Unit.cpp:9942 —
-	// attack/follow/stay as ACT_COMMAND, four empty spell slots, three
-	// reactions), then CharmInfo::InitCharmCreateSpells (Unit.cpp:10003) folds
-	// the creature's own spells (MAX_SPELL_CHARM = 4) into the middle spell
-	// slots via AddSpellToActionBar (Unit.cpp:10053).
+// buildCharmActionBar is the CharmInfo::InitPetActionBar +
+// InitCharmCreateSpells fold shared by sendCharmPetSpells and the
+// charmed-creature set-action seed: the default command/reaction bar with
+// the creature's own spells (MAX_SPELL_CHARM = 4) folded into the middle
+// spell slots via AddSpellToActionBar (Unit.cpp:10053). It returns the bar
+// and the _charmspells addlist (Player.cpp:21263-21271).
+func buildCharmActionBar(spells []uint32, spellFn func(uint32) (wotlk.Spell, bool)) ([10]uint32, []uint32) {
 	bar := [10]uint32{0x07000002, 0x07000001, 0x07000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x06000002, 0x06000001, 0x06000000}
 	var charmSpells []uint32
 	n := len(spells)
 	if n > 4 {
 		n = 4
 	}
-	haveData := s.server != nil && s.server.Data != nil
 	for x := 0; x < n; x++ {
 		spellID := spells[x]
 		if spellID == 0 {
 			continue
 		}
-		var spell wotlk.Spell
-		found := false
-		if haveData {
-			var err error
-			spell, found, err = s.server.Data.Spell(spellID)
-			if err != nil {
-				found = false
-			}
-		}
+		spell, found := spellFn(spellID)
 		if !found {
 			// No DBC row: CharmInfo::InitCharmCreateSpells still records the
 			// charm spell as ACT_DISABLED and skips the action bar.
@@ -903,6 +884,128 @@ func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, react
 				break
 			}
 		}
+	}
+	return bar, charmSpells
+}
+
+// buildPossessActionBar is the CharmInfo::InitEmptyActionBar +
+// InitPossessCreateSpells fold (Unit.cpp:9967-10001): the attack command
+// at slot 0, then the creature's own spells (MAX_CREATURE_SPELLS = 8) as
+// ACT_PASSIVE — AddSpellToActionBar skips the COMMAND slot 0 and fills
+// the first empty spell-type slot, so spell i lands at slot i+1.
+func buildPossessActionBar(spells []uint32) [10]uint32 {
+	bar := [10]uint32{0x07000002, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000}
+	n := len(spells)
+	if n > 8 {
+		n = 8
+	}
+	for x := 0; x < n; x++ {
+		if spells[x] == 0 {
+			continue
+		}
+		bar[1+x] = spells[x] | (uint32(charmActPassive) << 24)
+	}
+	return bar
+}
+
+// charmedActionBarSeed returns the bar a charm/possess re-send would
+// carry for a wild creature: a player-rearranged bar when one is stored,
+// else the freshly built bar for the creature's current charm type.
+func (s *Server) charmedActionBarSeed(motion *creatureMotion) [10]uint32 {
+	if motion == nil {
+		return [10]uint32{}
+	}
+	if motion.CharmActionBarSet {
+		return motion.CharmActionBar
+	}
+	if motion.Possessed {
+		return buildPossessActionBar(motion.Spells)
+	}
+	bar, _ := buildCharmActionBar(motion.Spells, func(id uint32) (wotlk.Spell, bool) {
+		if s == nil || s.Data == nil {
+			return wotlk.Spell{}, false
+		}
+		spell, found, err := s.Data.Spell(id)
+		if err != nil {
+			return wotlk.Spell{}, false
+		}
+		return spell, found
+	})
+	return bar
+}
+
+// setCharmedActionBarSpellState mirrors CharmInfo::SetSpellAutocast
+// (Unit.cpp:10160): the bar slot carrying the spell flips to
+// ACT_ENABLED/ACT_DISABLED. A toggle with no stored bar materializes
+// the override from the current built bar, because C++ mutates live
+// CharmInfo state — the next charm/possess re-send carries the flip
+// even when the player never dragged a button.
+func (s *Server) setCharmedActionBarSpellState(mapID, instanceID uint32, guid uint64, spellID uint32, enabled bool) {
+	if s == nil || guid == 0 || spellID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	motion := s.findCreatureMotionLocked(mapID, instanceID, guid)
+	if motion == nil || !motion.Charmed || motionIsPet(motion) {
+		return
+	}
+	bar := s.charmedActionBarSeed(motion)
+	newType := uint32(charmActDisabled)
+	if enabled {
+		newType = uint32(charmActEnabled)
+	}
+	flipped := false
+	for i := 0; i < 10 && !flipped; i++ {
+		// IsActionBarForSpell (Unit.h:594) admits ACT_DISABLED/ENABLED/
+		// PASSIVE; a command/reaction slot carrying the same action id
+		// is not a spell button and must not flip.
+		if bar[i]&0x00FFFFFF != spellID {
+			continue
+		}
+		switch bar[i] >> 24 {
+		case uint32(charmActEnabled), uint32(charmActDisabled), uint32(charmActPassive):
+			bar[i] = spellID | (newType << 24)
+			flipped = true
+		}
+	}
+	motion.CharmActionBar = bar
+	motion.CharmActionBarSet = true
+}
+
+func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, reactState, commandState uint8) {
+	if s == nil || s.conn == nil || creatureGUID == 0 {
+		return
+	}
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(creatureGUID)
+	buf.WriteU16(0)
+	buf.WriteU32(0)
+	buf.WriteU8(reactState)
+	buf.WriteU8(commandState)
+	buf.WriteU16(0)
+	// Player::CharmSpellInitialize (Player.cpp:21226-21277): the bar starts as
+	// the default pet command bar (CharmInfo::InitPetActionBar, Unit.cpp:9942 —
+	// attack/follow/stay as ACT_COMMAND, four empty spell slots, three
+	// reactions), then CharmInfo::InitCharmCreateSpells (Unit.cpp:10003) folds
+	// the creature's own spells (MAX_SPELL_CHARM = 4) into the middle spell
+	// slots via AddSpellToActionBar (Unit.cpp:10053).
+	bar, charmSpells := buildCharmActionBar(spells, func(id uint32) (wotlk.Spell, bool) {
+		if s.server == nil || s.server.Data == nil {
+			return wotlk.Spell{}, false
+		}
+		spell, found, err := s.server.Data.Spell(id)
+		if err != nil {
+			return wotlk.Spell{}, false
+		}
+		return spell, found
+	})
+	// A player-rearranged bar (HandlePetSetAction SetActionBar on the
+	// CharmInfo) replaces the rebuilt bar wholesale; the addlist above
+	// still derives from the creature's spells, as C++ keeps _charmspells
+	// apart from the action bar.
+	if m := s.findCreatureMotion(creatureGUID); m != nil && m.CharmActionBarSet {
+		bar = m.CharmActionBar
 	}
 	for i := 0; i < 10; i++ {
 		buf.WriteU32(bar[i])
@@ -995,16 +1098,11 @@ func (s *session) sendPossessPetSpells(creatureGUID uint64, spells []uint32) {
 	buf.WriteU16(0)
 	buf.WriteU32(0)
 	buf.WriteU32(0)
-	bar := [10]uint32{0x07000002, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000}
-	n := len(spells)
-	if n > 8 {
-		n = 8
-	}
-	for x := 0; x < n; x++ {
-		if spells[x] == 0 {
-			continue
-		}
-		bar[1+x] = spells[x] | (uint32(charmActPassive) << 24)
+	bar := buildPossessActionBar(spells)
+	// A player-rearranged bar replaces the rebuilt bar wholesale, as in
+	// the charm send above.
+	if m := s.findCreatureMotion(creatureGUID); m != nil && m.CharmActionBarSet {
+		bar = m.CharmActionBar
 	}
 	for i := 0; i < 10; i++ {
 		buf.WriteU32(bar[i])

@@ -4351,18 +4351,24 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	// anything that is not the first controlled unit — so while the player
 	// charms a wild creature, a set-action addressed to the pet must not
 	// mutate the pet's stored bar. A packet addressed to the charmed unit
-	// itself still falls through to the pet gate below (wild-creature bar
-	// mutation has no bridge yet and drops there); a charmed pet is the
+	// itself takes the wild-creature arm below; a charmed pet is the
 	// first controlled unit and its own PetGUID, so the pet path is
 	// unchanged.
 	if s.player == nil || petGUID == 0 {
 		return true
 	}
-	if first := s.charmedCreatureGUID(); first != 0 && petGUID != first {
+	first := s.charmedCreatureGUID()
+	if first != 0 && petGUID != first {
 		return true
 	}
 	if petGUID != s.player.PetGUID {
-		return true
+		// No single charmed unit (first == 0, ambiguous pair) means
+		// C++'s GetFirstControlled cannot be resolved here — drop
+		// rather than guess which unit the packet addresses.
+		if first == 0 {
+			return true
+		}
+		return s.handleCharmedCreatureSetAction(ctx, payload, petGUID)
 	}
 	// PetHandler.cpp:475: count is 2 only when the packet is exactly 24
 	// bytes (8 guid + 2x(4 pos + 4 data)); a longer malformed packet still
@@ -4520,6 +4526,137 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// handleCharmedCreatureSetAction processes CMSG_PET_SET_ACTION addressed
+// to a charmed wild creature — the same HandlePetSetAction
+// (PetHandler.cpp:460-600) body, but against transient CharmInfo state
+// instead of character_pet.abdata: C++ mutates the addressed unit's
+// CharmInfo bar in place (SetActionBar) and sends no packet, and
+// DeleteCharmInfo drops it on uncharm. Go stores the rearranged bar on
+// the motion (CharmActionBar), where the charm/possess sends apply it
+// until uncharmCreature clears it. The packet validation mirrors the
+// pet path exactly: out-of-range positions and single-entry
+// command/reaction updates drop the whole packet, and a command move is
+// checked against the CURRENT bar at the other position.
+func (s *session) handleCharmedCreatureSetAction(ctx context.Context, payload []byte, petGUID uint64) bool {
+	if s == nil || s.server == nil || s.player == nil {
+		return true
+	}
+	motion := s.controlledPetMotion(petGUID)
+	if motion == nil || motion.Health == 0 {
+		return true
+	}
+	type sameEntryUnit struct {
+		guid   uint64
+		spells []uint32
+	}
+	s.server.motionMu.Lock()
+	bar := s.server.charmedActionBarSeed(motion)
+	var sameEntry []sameEntryUnit
+	for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if m == nil || m.Entry != motion.Entry || m.Health == 0 ||
+			(m.OwnerGUID != s.playerGUID && m.CharmerGUID != s.playerGUID) {
+			continue
+		}
+		sameEntry = append(sameEntry, sameEntryUnit{guid: m.GUID, spells: append([]uint32(nil), m.Spells...)})
+	}
+	s.server.motionMu.Unlock()
+	if len(payload) < 16 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	if _, err := r.ReadU64(); err != nil {
+		return true
+	}
+	// PetHandler.cpp:475: count is 2 only when the packet is exactly 24
+	// bytes; a longer malformed packet still carries a single pair.
+	count := 1
+	if len(payload) == 24 {
+		count = 2
+	}
+	type charmSetActionPair struct {
+		pos     uint32
+		actType uint8
+		action  uint32
+	}
+	var pairs []charmSetActionPair
+	for i := 0; i < count; i++ {
+		pos, pErr := r.ReadU32()
+		data, dErr := r.ReadU32()
+		if pErr != nil || dErr != nil {
+			return true
+		}
+		if pos >= 10 {
+			return true
+		}
+		pairs = append(pairs, charmSetActionPair{pos: pos, actType: uint8((data >> 24) & 0xFF), action: data & 0x00FFFFFF})
+	}
+	// PetHandler.cpp:487-501: command and reaction buttons can only be
+	// MOVED, not removed, and each moved button must match the CURRENT
+	// bar entry at the OTHER position.
+	moveCommand := false
+	for _, p := range pairs {
+		if p.actType == charmActCommand || p.actType == charmActReaction {
+			if count == 1 {
+				return true
+			}
+			moveCommand = true
+		}
+	}
+	if moveCommand {
+		for i, p := range pairs {
+			if p.actType == charmActCommand || p.actType == charmActReaction {
+				other := bar[pairs[1-i].pos]
+				if other != p.action|(uint32(p.actType)<<24) {
+					return true
+				}
+			}
+		}
+	}
+	for _, p := range pairs {
+		// PetHandler.cpp:547-551: a spell-type button whose action no
+		// same-entry controlled unit knows is skipped entirely. C++
+		// checks per iterated unit but mutates only the addressed
+		// unit's CharmInfo, so any-knows is the faithful predicate.
+		if p.action != 0 && (p.actType == charmActEnabled || p.actType == charmActDisabled || p.actType == charmActPassive) {
+			known := false
+			for _, u := range sameEntry {
+				for _, sp := range u.spells {
+					if sp == p.action {
+						known = true
+						break
+					}
+				}
+				if known {
+					break
+				}
+			}
+			if !known {
+				continue
+			}
+			// PetHandler.cpp:553-577: the autocast arms fan out to
+			// every same-entry controlled unit (ToggleCreatureAutocast
+			// for non-pets); the bar entry below is addressed-only.
+			if p.actType == charmActEnabled || p.actType == charmActDisabled {
+				for _, u := range sameEntry {
+					s.server.onPetToggleAutocast(s.player.Map, s.player.InstanceID, u.guid, p.action, p.actType == charmActEnabled)
+				}
+			}
+		}
+		bar[p.pos] = p.action | (uint32(p.actType) << 24)
+	}
+	// Write back only while still charmed by this player: an uncharm in
+	// between already cleared the override, and re-storing it here
+	// would resurrect a dead CharmInfo's bar.
+	s.server.motionMu.Lock()
+	if m := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); m != nil && m.Charmed && m.CharmerGUID == s.playerGUID {
+		m.CharmActionBar = bar
+		m.CharmActionBarSet = true
+	}
+	s.server.motionMu.Unlock()
+	s.debug("charmed creature set action updated", "account", s.accountName, "creature", petGUID)
+	return true
+}
+
 // syncPetSpellAutocast updates pet_spell.active and synchronizes the action bar slot in character_pet.abdata.
 func (s *session) syncPetSpellAutocast(ctx context.Context, petID uint32, spellID uint32, active uint8) {
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || petID == 0 || spellID == 0 {
@@ -4594,13 +4731,15 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 		return true
 	}
 	// PetHandler.cpp:697-714: an unresolvable GUID, or one that isn't the
-	// player's guardian pet or charmed creature, drops silently. The
-	// pet-number gate admits the session's pet; charmed creatures have no
-	// spell-bar model in Go, so their ToggleCreatureAutocast arm is a
-	// documented delta.
+	// player's guardian pet or charmed creature, drops silently. A wild
+	// charmed creature has no pet number, so it is admitted by the
+	// GetCharmed twin (charmedCreatureGUID) instead — C++ toggles its
+	// _charmspells (ToggleCreatureAutocast) and flips its bar slot
+	// (SetSpellAutocast, Unit.cpp:10160), both in-memory arms Go now
+	// mirrors via onPetToggleAutocast + setCharmedActionBarSpellState.
 	petNumber := s.petNumberForGUID(petGUID)
 	addressed := s.controlledPetMotion(petGUID)
-	if petNumber == 0 || addressed == nil {
+	if addressed == nil || (petNumber == 0 && petGUID != s.charmedCreatureGUID()) {
 		return true
 	}
 	spell, found, spellErr := s.server.Data.Spell(spellID)
@@ -4638,14 +4777,18 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 	}
 	s.server.motionMu.Unlock()
 	for _, m := range units {
-		// Pet::ToggleAutocast persists (pet_spell + bar); the non-Pet arm
-		// (CharmInfo::ToggleCreatureAutocast) is in-memory only, so siblings
-		// without a pet number take the live toggle alone.
-		if m.GUID == petGUID {
+		// Pet::ToggleAutocast persists (pet_spell + bar) for the
+		// addressed pet; the non-Pet arm (CharmInfo::ToggleCreatureAutocast)
+		// is in-memory only, so siblings and wild charmed units take the
+		// live toggle alone. The SetSpellAutocast bar-slot flip runs for
+		// every unit (a no-op on pets, whose bar syncPetSpellAutocast
+		// already updates, and on uncharmed motions).
+		if petNumber > 0 && m.GUID == petGUID {
 			s.syncPetSpellAutocast(ctx, petNumber, spellID, state)
 		} else {
 			s.server.onPetToggleAutocast(s.player.Map, s.player.InstanceID, m.GUID, spellID, state != 0)
 		}
+		s.server.setCharmedActionBarSpellState(s.player.Map, s.player.InstanceID, m.GUID, spellID, state != 0)
 	}
 	s.debug("pet spell autocast", "account", s.accountName, "pet", petNumber, "spell", spellID, "state", state)
 	return true
