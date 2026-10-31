@@ -26452,14 +26452,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			} else if eff.Effect == spellEffectKnockBack || eff.Effect == spellEffectKnockBackDest {
 				// Spell::EffectKnockBack (SpellEffects.cpp:4552) runs at
 				// HIT_TARGET per unit target; the client arm's helper over
-				// the single miss-filtered target. The 144 dest leg is live,
-				// not gated off: this path's spellTarget carries the
-				// resolveImplicitSpellDestination result (target_dest_targets.go),
-				// which sets the DestLocation flag for dest-family spells, so
-				// the helper's HasDst gate fires exactly where C++'s does;
-				// a 144 spell with no dest-family implicit target still
-				// returns via that gate, matching C++'s !HasDst arm.
-				s.handleEffectKnockBack(ctx, spell, eff, []uint64{effectTarget}, spellTarget)
+				// the single miss-filtered target. The 144 dest leg reads
+				// this effect's own dest slot (Spell::HandleEffects,
+				// Spell.cpp:5159), not the spell-final destination: a
+				// later effect's dest arm must not move the knock-from
+				// point, so the slot helper rides here like the
+				// summon/transmitted arms above. The helper's HasDst
+				// gate still fires exactly where C++'s does; a 144 spell
+				// with no dest-family implicit target still returns
+				// via that gate, matching C++'s !HasDst arm.
+				s.handleEffectKnockBack(ctx, spell, eff, []uint64{effectTarget}, sessionEffectDestTarget(spellTarget, s.player.X, s.player.Y, s.player.Z, effectIndex, triggeredDestSnapshots))
 			} else if eff.Effect == spellEffectModifyThreatPercent {
 				// Spell::EffectModifyThreatPercent (SpellEffects.cpp:4915)
 				// runs at HIT_TARGET per unit target on the target's

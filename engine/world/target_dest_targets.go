@@ -487,13 +487,23 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 			case targetType == implicitTargetDestTraj:
 				// Spell::SelectImplicitTrajTargets (Spell.cpp:1626):
 				// shorten the destination to the first missile-body
-				// collision along the ballistic trajectory. CheckDst is
-				// the caster-position fallback already applied above.
-				// When a 22 arm already ran, m_src is the live caster
+				// collision along the ballistic trajectory. The TRAJ
+				// dispatch runs CheckDst first (Spell.cpp:918-923), so
+				// the arm stamps a destination even when it shortens
+				// nothing — and even when HasTraj is false, as on the
+				// triggered funnel where the wire carries no speed
+				// (Spell.h:198, m_speed != 0). The running destination
+				// is already the caster position when nothing else set
+				// one, so stamping it here is exactly CheckDst, not a
+				// new destination; without it a traj-only effect left
+				// its slot unstamped and the final flag cleared, while
+				// C++ hands the HIT arms the caster position. When a
+				// 22 arm already ran, m_src is the live caster
 				// at selection time, so the stamped packet/Read src
 				// must not feed the arm: pass a copy with both src
 				// legs cleared and let the arm fall through to the
 				// live caster position.
+				hasDst = true
 				trajTarget := target
 				if seenSrcCaster {
 					trajTarget.Flags &^= protocol.SpellTargetFlagSourceLocation
@@ -501,7 +511,6 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				}
 				if nx, ny, nz, changed := s.resolveTrajDestination(ctx, spell, eff, trajTarget, x, y, z); changed {
 					x, y, z = nx, ny, nz
-					hasDst = true
 				}
 			case targetType == implicitTargetDestChannelTarget || targetType == implicitTargetDestChannelCaster:
 				// Spell::SelectImplicitChannelTargets (Spell.cpp:980-1032):
