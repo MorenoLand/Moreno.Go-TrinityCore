@@ -1460,8 +1460,9 @@ func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bo
 	_, _ = b.ReadU32() // ack index
 	info, err := readMovementInfo(b)
 	// MovementHandler.cpp:553-560 — the check runs against the mover
-	// (GetUnitBeingMoved), so a driver acks with the vehicle GUID.
-	if err != nil || guid != s.moverGUID() {
+	// (GetUnitBeingMoved), so a driver acks with the vehicle GUID and a
+	// possessing player acks with the possessed creature GUID.
+	if err != nil || (guid != s.moverGUID() && guid != s.possessedCreatureGUID()) {
 		return true
 	}
 	// MovementHandler.cpp:553-576 — the acked info becomes m_movementInfo

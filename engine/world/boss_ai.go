@@ -4583,6 +4583,9 @@ func (s *Server) creatureEffectKnockBack(ctx context.Context, m *creatureMotion,
 			if s.sendDrivenVehicleKnockBack(m.Map, m.InstanceID, guid, fromX, fromY, speedXY, speedZ) {
 				continue
 			}
+			if s.sendPossessedCreatureKnockBack(m.Map, m.InstanceID, guid, fromX, fromY, speedXY, speedZ) {
+				continue
+			}
 			if tm == nil {
 				tm = s.findCreatureMotion(m.Map, m.InstanceID, guid)
 			}
@@ -4754,6 +4757,76 @@ func (s *Server) sendDrivenVehicleKnockBack(mapID, instanceID uint32, vehicleGUI
 		fly.WritePackedGUID(driver.playerGUID)
 		fly.WriteU32(0)
 		_ = driver.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), fly.Bytes(), true)
+	}
+	return true
+}
+
+// sendPossessedCreatureKnockBack mirrors the player-charmer arm of
+// Unit::KnockbackFrom (Unit.cpp:12510-12547) for a possessed creature hit
+// target: GetCharmer()->ToPlayer() with player->GetUnitBeingMoved() == this
+// holds only for CHARM_TYPE_POSSESS (SetCharmedBy calls SetClientControl,
+// hence SetMovedUnit, Unit.cpp:11879-11885; plain CHARM_TYPE_CHARM never
+// does, and a creature charmer's possess falls back to charm), so the
+// packet carries the CREATURE guid to the charming player, never the
+// charmer guid — the client then acks with the creature guid, which
+// handleMoveKnockBackAck accepts via possessedCreatureGUID. The ROOT/STUN
+// gate runs on the creature itself (EffectKnockBack, SpellEffects.cpp:4565)
+// and returns false so the caller falls through to the spline leg, which
+// no-ops on the same gate; the EffectKnockBack non-melee interrupt runs
+// before the packet, matching the spline leg's order. The flying re-enable
+// leg reads the CHARMER's auras and carries the charmer guid (Player::
+// SetCanFly twin, same as the driven-vehicle arm). Returns false when the
+// hit target is not a player-possessed creature on this map/instance.
+func (s *Server) sendPossessedCreatureKnockBack(mapID, instanceID uint32, targetGUID uint64, fromX, fromY float64, speedXY, speedZ float32) bool {
+	if s == nil {
+		return false
+	}
+	tm := s.findCreatureMotion(mapID, instanceID, targetGUID)
+	if tm == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	possessed := tm.Charmed && tm.Possessed
+	charmerGUID := tm.CharmerGUID
+	tx, ty := tm.X, tm.Y
+	scriptRooted := tm.ScriptRooted
+	s.motionMu.Unlock()
+	if !possessed || charmerGUID == 0 {
+		return false
+	}
+	charmer := s.findSessionByGUID(charmerGUID)
+	if charmer == nil || charmer.player == nil {
+		return false
+	}
+	if scriptRooted || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
+		return false
+	}
+	for _, arm := range s.interruptCreatureNonMeleeCasts(tm) {
+		s.sendCreatureInterruptPackets(tm, arm)
+	}
+	ddx := float64(tx) - fromX
+	ddy := float64(ty) - fromY
+	var vcos, vsin float64
+	if math.Abs(ddx) < 0.001 && math.Abs(ddy) < 0.001 {
+		angle := rand.Float64() * 2 * math.Pi
+		vcos, vsin = math.Cos(angle), math.Sin(angle)
+	} else {
+		dist := math.Hypot(ddx, ddy)
+		vcos, vsin = ddx/dist, ddy/dist
+	}
+	packet := protocol.NewBuffer(32)
+	packet.WritePackedGUID(targetGUID)
+	packet.WriteU32(0)
+	packet.WriteF32(float32(vcos))
+	packet.WriteF32(float32(vsin))
+	packet.WriteF32(speedXY)
+	packet.WriteF32(-speedZ)
+	_ = charmer.write(uint16(protocol.OpcodeSMSG_MOVE_KNOCK_BACK), packet.Bytes(), true)
+	if charmer.hasAuraType(spellAuraFly) || charmer.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) {
+		fly := protocol.NewBuffer(packedGUIDSize(charmer.playerGUID) + 4)
+		fly.WritePackedGUID(charmer.playerGUID)
+		fly.WriteU32(0)
+		_ = charmer.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), fly.Bytes(), true)
 	}
 	return true
 }

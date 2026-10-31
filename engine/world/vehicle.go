@@ -1916,6 +1916,33 @@ func (s *session) moverGUID() uint64 {
 	return s.playerGUID
 }
 
+// possessedCreatureGUID resolves Unit::GetUnitBeingMoved for a possessing
+// player (Player::SetClientControl -> SetMovedUnit, Player.cpp:24239-24272):
+// CHARM_TYPE_POSSESS hands the client control of the possessed unit, so its
+// knockback acks carry the creature GUID, not the player GUID. Plain charm
+// never calls SetClientControl, so only Possessed motions qualify; an
+// ambiguous pair returns 0 and callers fail closed, mirroring
+// charmedCreatureGUID. It intentionally does NOT feed moverGUID: the
+// item/object/spell mover gates assume self-movement, and widening them to
+// possessed creatures is a separate unit.
+func (s *session) possessedCreatureGUID() uint64 {
+	if s == nil || s.server == nil || s.player == nil {
+		return 0
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	var found uint64
+	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion != nil && motion.Charmed && motion.Possessed && motion.CharmerGUID == s.playerGUID {
+			if found != 0 {
+				return 0
+			}
+			found = motion.GUID
+		}
+	}
+	return found
+}
+
 func (s *session) controlsVehicle() bool {
 	if s == nil || s.player == nil || s.server == nil || s.player.VehicleGUID == 0 {
 		return false

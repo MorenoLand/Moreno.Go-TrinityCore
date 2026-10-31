@@ -47414,6 +47414,9 @@ func (s *session) handleEffectKnockBack(ctx context.Context, spell wotlk.Spell, 
 			if s.server.sendDrivenVehicleKnockBack(s.player.Map, s.player.InstanceID, targetGUID, fromX, fromY, speedXY, speedZ) {
 				continue
 			}
+			if s.server.sendPossessedCreatureKnockBack(s.player.Map, s.player.InstanceID, targetGUID, fromX, fromY, speedXY, speedZ) {
+				continue
+			}
 			if tm != nil {
 				s.server.knockBackCreatureTarget(tm, fromX, fromY, speedXY, speedZ)
 			}
