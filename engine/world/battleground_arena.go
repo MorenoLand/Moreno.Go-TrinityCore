@@ -1174,7 +1174,7 @@ func (s *Server) removeArenaPlayerAtLeave(ctx context.Context, arena *arenaBattl
 		sess.removeAura(SpellArenaPreparation)
 		// Transport=true arm (Battleground.cpp:925-927):
 		// Player::TeleportToBGEntryPoint.
-		if sess.bgData.JoinMap != 0 {
+		if sess.hasBattlegroundEntryPoint() {
 			sess.teleportTo(sess.bgData.JoinMap, sess.bgData.JoinX, sess.bgData.JoinY, sess.bgData.JoinZ, sess.bgData.JoinO)
 		}
 	}

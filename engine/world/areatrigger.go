@@ -180,10 +180,10 @@ func (s *session) handleAreaTrigger(ctx context.Context, payload []byte) bool {
 			}
 			// MiscHandler.cpp:766-768: an LFG-group member standing in a
 			// dungeon is redirected to the battleground entry point instead
-			// of the trigger target. An invalid entry point (JoinMap == 0,
-			// the MAPID_INVALID leg of Player::TeleportToBGEntryPoint,
+			// of the trigger target. An invalid entry point (the
+			// MAPID_INVALID leg of Player::TeleportToBGEntryPoint,
 			// Player.cpp:1896-1906) falls through to the normal teleport.
-			if g := s.server.findGroupByID(s.groupID); g != nil && g.IsLFG && s.bgData.JoinMap != 0 {
+			if g := s.server.findGroupByID(s.groupID); g != nil && g.IsLFG && s.hasBattlegroundEntryPoint() {
 				if mapEntry, found, mapErr := s.server.Data.Map(s.player.Map); mapErr == nil && found && mapEntry.IsDungeon() {
 					s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)
 					return true

@@ -2150,10 +2150,10 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 // battleground entry point, the Relocate(GetBattlegroundEntryPoint()) leg
 // of Player::LoadFromDB (Player.cpp:17614-17633). s.player aliases the
 // login state, so the move flows into LOGIN_VERIFY_WORLD and the map
-// add below. A JoinMap of 0 leaves the position untouched: no entry
-// point is recorded, and the homebind fallback is a separate leg.
+// add below. An unrecorded entry point leaves the position untouched,
+// and the homebind fallback is a separate leg.
 func (s *session) relocateLoginToBGEntryPoint() {
-	if s == nil || s.player == nil || s.bgData.JoinMap == 0 {
+	if s == nil || s.player == nil || !s.hasBattlegroundEntryPoint() {
 		return
 	}
 	s.player.Map = s.bgData.JoinMap
@@ -2998,7 +2998,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// the BG entry point. Battleground::RemovePlayerAtLeave gates the
 	// TeleportToBGEntryPoint arm on its teleportToEntryPoint parameter
 	// (Battleground.cpp:925-927).
-	if wasInBattleground && !skipEntryTeleport && s.bgData.JoinMap != 0 {
+	if wasInBattleground && !skipEntryTeleport && s.hasBattlegroundEntryPoint() {
 		// Battleground.cpp:925-927 with Transport=true:
 		// Player::TeleportToBGEntryPoint (Player.cpp:1896-1906); the JoinMap
 		// gate mirrors the arena-end twin (battleground_arena.go) - C++

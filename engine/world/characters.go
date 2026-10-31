@@ -954,7 +954,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		// without this an offline summon into a BG/arena map stranded the
 		// player in that map with the stale saved instance id and no
 		// battleground. C++ zeroes the instance id on this leg.
-		if s.bgData.JoinMap != 0 {
+		if s.hasBattlegroundEntryPoint() {
 			s.relocateLoginToBGEntryPoint()
 			state.InstanceID = 0
 		} else if err := s.recoverLoginHomebindOrStart(ctx, &state); err != nil {

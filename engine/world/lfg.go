@@ -3152,7 +3152,7 @@ func (s *session) teleportToBGEntryPoint() {
 	if s == nil || s.player == nil {
 		return
 	}
-	if s.bgData.JoinMap == 0 {
+	if !s.hasBattlegroundEntryPoint() {
 		return
 	}
 	s.teleportTo(s.bgData.JoinMap, s.bgData.JoinX, s.bgData.JoinY, s.bgData.JoinZ, s.bgData.JoinO)

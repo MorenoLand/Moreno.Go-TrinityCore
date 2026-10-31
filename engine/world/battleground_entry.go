@@ -50,6 +50,25 @@ func (s *session) setBattlegroundEntryPoint() {
 	s.setBattlegroundHomebind(context.Background())
 }
 
+// hasBattlegroundEntryPoint reports whether bgData carries a recorded
+// entry point. C++'s invalid sentinel is MAPID_INVALID
+// (Player::TeleportToBGEntryPoint, Player.cpp:1896-1906), stored as
+// UInt16 65535 in character_battleground_data — never map 0: Eastern
+// Kingdoms is a valid entry point, and a player who entered a
+// battleground from EK has JoinMap 0 with real EK coordinates. An
+// unrecorded entry point is the all-zero tuple, which is what a fresh
+// bgData (no row, or an InstanceID set without an entry-point
+// recording) carries.
+func (s *session) hasBattlegroundEntryPoint() bool {
+	if s == nil {
+		return false
+	}
+	if s.bgData.JoinMap == 65535 {
+		return false
+	}
+	return s.bgData.JoinMap != 0 || s.bgData.JoinX != 0 || s.bgData.JoinY != 0 || s.bgData.JoinZ != 0
+}
+
 func (s *session) setBattlegroundHomebind(ctx context.Context) {
 	if s == nil || s.server == nil || s.player == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
