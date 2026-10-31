@@ -826,6 +826,19 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		} else {
 			s.initialLoginPending = false
 			s.worldReady.Store(false)
+			if s.playerLoaded {
+				// A login that fails after the player is loaded leaves the
+				// transfer-window tail (playerLoaded, never in world): the
+				// drain needs worldReady, which only a successful login
+				// sets, and a retry login closes on the playerLoaded guard
+				// (CharacterHandler.cpp:707-711 kick analogue), so the
+				// pre-login buffer can never replay — drop it with the
+				// failed login like C++ drops the recv queue with the
+				// kicked session. A failure before the player loads keeps
+				// the buffer: the retry login drains it like the C++
+				// !_player requeue arm (WorldSession.cpp:312-326).
+				s.preLoginQueue = nil
+			}
 			if s.server != nil && loginAdmissionReserved && !loginAdmissionCommitted {
 				s.server.releaseWorldportAdmission(instanceAdmissionKey{MapID: loginSelection.MapID, InstanceID: loginSelection.InstanceID})
 			}
