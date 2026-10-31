@@ -5215,6 +5215,40 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 
+			// Spell::PreprocessSpellHit friendly-assist arms (Spell.cpp:2752-2765)
+			// for the inline victim cast: the boss_ai twin's loop, over the
+			// same final hitTargets ahead of the HandleThreatSpells block
+			// below. The wire-victim-only rationale does not cover this
+			// path: hitTargets also carries the friendly-area leg
+			// (hasFriendlyAreaEffect), the friendly-nearby pick
+			// (TARGET_UNIT_NEARBY_PARTY/ALLY/RAID), the friendly-cone leg,
+			// and entry-area matches, so a friendly in-combat target or a
+			// friendly target carrying UNIT_STATE_ATTACK_PLAYER can ride
+			// this cast. Verdict gates mirror the twin (reflected, evaded,
+			// immune and missed targets take no leg; a landed reflect
+			// retargets to the caster, dropped by the self gate alongside
+			// self-casts); GO GUIDs never reach a Unit hit leg. Dedupe
+			// mirrors the twin's m_UniqueTargetInfo iteration.
+			if inlineSpellKnown {
+				assistSeen := make(map[uint64]bool, len(hitTargets))
+				for _, guid := range hitTargets {
+					if guid == 0 || assistSeen[guid] {
+						continue
+					}
+					assistSeen[guid] = true
+					if uint16(guid>>48) == 0xF110 {
+						continue
+					}
+					if reflectedSet[guid] || evadedSet[guid] || immuneSet[guid] || missSet[guid] != protocol.SpellMissNone {
+						continue
+					}
+					if guid == motion.GUID {
+						continue
+					}
+					s.flagCreatureAssistContestedPvP(motion, guid)
+					s.forwardCreatureAssistThreat(motion, guid, inlineSpell)
+				}
+			}
 			// Spell::HandleThreatSpells (Spell.cpp:5096-5151) for the
 			// inline victim cast: _handle_immediate_phase runs it ahead
 			// of the HIT arms (Spell.cpp:3718), so it lands here, after
