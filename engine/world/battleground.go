@@ -2125,6 +2125,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		exists, ended := s.server.peekNonArenaBGState(state.Map)
 		if !exists || ended {
 			s.server.deleteBGScoreRow(state.Map, s.bgData.InstanceID, s.playerGUID)
+			s.server.dropBGOfflineHolder(state.Map, s.playerGUID)
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
 			s.relocateLoginToBGEntryPoint()
@@ -2155,6 +2156,7 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		// the restore exists for.
 		if anyLive, witnessed := s.server.liveNonArenaBGInstanceWitness(state.Map, s.bgData.InstanceID, s); anyLive && !witnessed {
 			s.server.deleteBGScoreRow(state.Map, s.bgData.InstanceID, s.playerGUID)
+			s.server.dropBGOfflineHolder(state.Map, s.playerGUID)
 			s.bgData.InstanceID = 0
 			s.bgData.Team = 0
 			s.relocateLoginToBGEntryPoint()
@@ -2182,6 +2184,9 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		// for the persisted internal id; arenas keep 0 (arenas have no
 		// client-instance ids, BattlegroundMgr.cpp:325-328).
 		s.bgQueues[index] = bgQueueEntry{Active: true, BgTypeID: bgTypeID, InstanceID: s.bgData.InstanceID, Status: BGStatusInProgress, ArenaType: arenaType, IsArena: isArena, MapID: state.Map, StartTime: startTime, ClientInstanceID: clientInstanceID, ArenaFaction: 1 - uint8(s.bgData.Team)}
+		if !isArena && s.server != nil {
+			s.server.dropBGOfflineHolder(state.Map, s.playerGUID)
+		}
 		return
 	}
 }
@@ -2887,6 +2892,23 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 			leaveBGMap = s.player.Map
 		}
 	}
+	// Offline-holder capture, read before the slot-deactivation loop below
+	// zeroes it: Battleground::EventPlayerLoggedOut (Battleground.cpp:1083)
+	// keeps a logging-out member in m_Players unless they were never in the
+	// battleground (a GM teleported inside), so only a logout from an active
+	// non-arena InProgress or WaitLeave slot registers, mirroring the
+	// empty-delete count's own predicate. A merely invited (WaitJoin) slot
+	// is not in m_Players, so it registers nothing; the invited arm of the
+	// C++ empty-delete stays the known delta it already was.
+	logoutBGHolder := false
+	if fromLogout && leaveBGMap != 0 {
+		for i := range s.bgQueues {
+			if e := &s.bgQueues[i]; e.Active && !e.IsArena && e.MapID == leaveBGMap && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
+				logoutBGHolder = true
+				break
+			}
+		}
+	}
 	// BattleGroundHandler.cpp:531-534: the opcode handler skips 8 bytes
 	// (u8 unk1, u8 unk2, u32 bgTypeId, u16 unk3) before the combat gate; a
 	// short packet throws and nothing happens. Internal callers pass nil and
@@ -3085,10 +3107,15 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 		}
 	}
 	// Last player out: delete the per-map state so the next match starts
-	// pristine (see the capture above). Runs for the logout path too — Go
-	// has no offline queue holding the BG open, and the score row is
-	// already deleted on logout.
+	// pristine (see the capture above). On the logout path the leaver
+	// first registers as an offline holder (Battleground::m_OfflineQueue),
+	// so an all-offline match survives up to bgMaxOfflineTime for relogin
+	// instead of being deleted the moment the last session drops; the
+	// score row is still deleted on logout (see above).
 	if leaveBGMap != 0 && s.server != nil {
+		if logoutBGHolder {
+			s.server.recordBGOfflineHolder(leaveBGMap, s.playerGUID, time.Now())
+		}
 		s.server.deleteBattlegroundStateOnEmpty(s, leaveBGMap)
 	}
 	return true
@@ -3106,30 +3133,112 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 // conflates concurrent instances on one map, so the count does too. A
 // state deleted here is recreated pristine by the next getOrCreate, which
 // is the CreateBattleground + Reset() pair (BattlegroundMgr.cpp:412).
-func (s *Server) deleteBattlegroundStateOnEmpty(leaver *session, mapID uint32) {
-	if s == nil || leaver == nil {
+// The count has a second arm besides live sessions: offline holders (below).
+// A state held open only by offline holders is NOT reset by a successor:
+// every new-match path resets through its reset*StateForNewMatch first, so
+// a lingering state is safe to reuse, and a relogging old-match member
+// during a successor is relocated by the live-witness gate in
+// restoreBattlegroundLoginQueue, never restored into the successor.
+
+// bgMaxOfflineTime mirrors MAX_OFFLINE_TIME (Battleground.h:152): an offline
+// battleground member stays in m_Players for 5 minutes after logout
+// (Battleground::EventPlayerLoggedOut, Battleground.cpp:1083-1095) and is
+// removed only by _ProcessOfflineQueue once OfflineRemoveTime passes
+// (Battleground.cpp:260-284). Until then the BG object survives an
+// all-offline roster, and EventPlayerLoggedIn restores the member into the
+// same match (Battleground.cpp:1066-1080).
+const bgMaxOfflineTime = 300 * time.Second
+
+// recordBGOfflineHolder is the Go form of the EventPlayerLoggedOut
+// m_OfflineQueue push: a logging-out member holds the per-map state open
+// until bgMaxOfflineTime passes, so deleteBattlegroundStateOnEmpty does not
+// delete an all-offline match the moment its last session drops.
+func (s *Server) recordBGOfflineHolder(mapID uint32, guid uint64, now time.Time) {
+	if s == nil || mapID == 0 || guid == 0 {
 		return
 	}
-	s.sessionsMu.RLock()
-	remaining := false
-	for sess := range s.sessions {
-		if sess == leaver || sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 {
-			continue
-		}
-		holder := false
-		for i := range sess.bgQueues {
-			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
-				holder = true
-				break
-			}
-		}
-		if holder {
-			remaining = true
-			break
+	s.bgOfflineMu.Lock()
+	defer s.bgOfflineMu.Unlock()
+	if s.bgOfflineHolders == nil {
+		s.bgOfflineHolders = make(map[uint32]map[uint64]time.Time)
+	}
+	holders := s.bgOfflineHolders[mapID]
+	if holders == nil {
+		holders = make(map[uint64]time.Time)
+		s.bgOfflineHolders[mapID] = holders
+	}
+	holders[guid] = now.Add(bgMaxOfflineTime)
+}
+
+// dropBGOfflineHolder is the Go form of the EventPlayerLoggedIn offline-queue
+// erase and the RemovePlayerAtLeave m_Players erase: a member who relogs
+// (restored or relocated) no longer holds the state open offline.
+func (s *Server) dropBGOfflineHolder(mapID uint32, guid uint64) {
+	if s == nil || mapID == 0 || guid == 0 {
+		return
+	}
+	s.bgOfflineMu.Lock()
+	defer s.bgOfflineMu.Unlock()
+	holders := s.bgOfflineHolders[mapID]
+	if holders == nil {
+		return
+	}
+	delete(holders, guid)
+	if len(holders) == 0 {
+		delete(s.bgOfflineHolders, mapID)
+	}
+}
+
+// bgOfflineHoldersLive prunes expired holders for mapID and reports whether
+// any unexpired holder remains, the _ProcessOfflineQueue expiry check.
+func (s *Server) bgOfflineHoldersLive(mapID uint32, now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	s.bgOfflineMu.Lock()
+	defer s.bgOfflineMu.Unlock()
+	holders := s.bgOfflineHolders[mapID]
+	if holders == nil {
+		return false
+	}
+	for guid, expiry := range holders {
+		if !now.Before(expiry) {
+			delete(holders, guid)
 		}
 	}
-	s.sessionsMu.RUnlock()
-	if remaining {
+	if len(holders) == 0 {
+		delete(s.bgOfflineHolders, mapID)
+		return false
+	}
+	return true
+}
+
+// bgStateHasLiveHolders is the live-session arm of the empty-delete count:
+// worldReady sessions holding an active non-arena InProgress or WaitLeave
+// slot on the map, excluding the leaver that triggered the check.
+func (s *Server) bgStateHasLiveHolders(mapID uint32, exclude *session) bool {
+	if s == nil {
+		return false
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == exclude || sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.bgData.InstanceID == 0 {
+			continue
+		}
+		for i := range sess.bgQueues {
+			if e := &sess.bgQueues[i]; e.Active && !e.IsArena && e.MapID == mapID && (e.Status == BGStatusInProgress || e.Status == BGStatusWaitLeave) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// deleteBGMapState runs the per-map deleters, the only callers being the
+// empty-delete paths below.
+func (s *Server) deleteBGMapState(mapID uint32) {
+	if s == nil {
 		return
 	}
 	switch mapID {
@@ -3145,6 +3254,58 @@ func (s *Server) deleteBattlegroundStateOnEmpty(leaver *session, mapID uint32) {
 		s.deleteSAState(mapID)
 	case ICMapID:
 		s.deleteICState(mapID)
+	}
+}
+
+// deleteBGStateIfNoHolders deletes a per-map state once neither live holders
+// nor unexpired offline holders remain, the Go form of Battleground::Update
+// deleting a BG with GetPlayersSize() == 0 and no invited players
+// (Battleground.cpp:164-186): m_Players counts offline members until their
+// OfflineRemoveTime passes, so an all-offline match is not empty yet.
+func (s *Server) deleteBGStateIfNoHolders(mapID uint32, exclude *session) {
+	if s == nil {
+		return
+	}
+	if s.bgStateHasLiveHolders(mapID, exclude) {
+		return
+	}
+	if s.bgOfflineHoldersLive(mapID, time.Now()) {
+		return
+	}
+	s.deleteBGMapState(mapID)
+}
+
+// deleteBattlegroundStateOnEmpty deletes a non-arena per-map BG state once
+// no BG player remains on the map, via deleteBGStateIfNoHolders.
+func (s *Server) deleteBattlegroundStateOnEmpty(leaver *session, mapID uint32) {
+	if s == nil || leaver == nil {
+		return
+	}
+	s.deleteBGStateIfNoHolders(mapID, leaver)
+}
+
+// pruneBGOfflineHolders is the _ProcessOfflineQueue reaper for states no
+// leaver ever revisits: once every offline holder on a map has expired and
+// no live holder remains, the state is deleted. Called from the server tick
+// next to updateBattlegroundWaitLeave.
+func (s *Server) pruneBGOfflineHolders(now time.Time) {
+	if s == nil {
+		return
+	}
+	s.bgOfflineMu.Lock()
+	mapIDs := make([]uint32, 0, len(s.bgOfflineHolders))
+	for mapID := range s.bgOfflineHolders {
+		mapIDs = append(mapIDs, mapID)
+	}
+	s.bgOfflineMu.Unlock()
+	for _, mapID := range mapIDs {
+		if s.bgStateHasLiveHolders(mapID, nil) {
+			continue
+		}
+		if s.bgOfflineHoldersLive(mapID, now) {
+			continue
+		}
+		s.deleteBGMapState(mapID)
 	}
 }
 
