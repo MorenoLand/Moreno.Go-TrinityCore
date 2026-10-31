@@ -1999,7 +1999,14 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 		s.motionMu.Unlock()
 		return nil, 0, 0, false
 	}
-	if len(motion.Spells) == 0 {
+	// Pets never take the template load below: a pet's spell list is its
+	// learned pet_spell rows (registerPetMotion), and C++ never fills a
+	// pet's bar from Creature::m_spells — SetCharmedBy skips both
+	// InitCharm/InitPossessCreateSpells for pets (Unit.cpp:11862-11868).
+	// Loading here would put template spells the pet never learned on
+	// its possess/charm bar whenever its learned list is empty.
+	petTarget := motionIsPet(motion)
+	if len(motion.Spells) == 0 && !petTarget {
 		motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
 	}
 	if !motion.Charmed {
@@ -2037,7 +2044,6 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	reactState, commandState := motion.ReactState, motion.PetCommand
 	mapID, rawGUID := motion.Map, motion.GUID
 	flags, faction := motion.UnitFlags, motion.Faction
-	petTarget := motionIsPet(motion)
 	s.motionMu.Unlock()
 	// Unit::SetCharmedBy -> CombatStop (Unit.cpp:11799) pairs the
 	// charmed unit's own ClearAllThreat above with RemoveMeFromThreatLists

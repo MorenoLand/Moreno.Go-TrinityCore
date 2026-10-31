@@ -917,6 +917,33 @@ func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, react
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 }
 
+// sendCharmPetActionBar sends the charm bar for a PET target: like the
+// possess arm, C++ Unit::SetCharmedBy skips InitCharmCreateSpells for pets,
+// so Player::CharmSpellInitialize (Player.cpp:21226) sends the pet's stored
+// action bar via CharmInfo::BuildActionBar. The _charmspells addlist stays
+// zero for a pet (the ctor banks all four entries action-less and only
+// InitCharmCreateSpells fills them), so the packet carries the stored bar
+// plus zero addlist and cooldown counts under the live react/command bytes.
+func (s *session) sendCharmPetActionBar(ctx context.Context, creatureGUID uint64, petID uint32, reactState, commandState uint8) {
+	if s == nil || s.conn == nil || creatureGUID == 0 {
+		return
+	}
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(creatureGUID)
+	buf.WriteU16(0)
+	buf.WriteU32(0)
+	buf.WriteU8(reactState)
+	buf.WriteU8(commandState)
+	buf.WriteU16(0)
+	bar := s.petActionBarSlots(ctx, petID)
+	for i := 0; i < 10; i++ {
+		buf.WriteU32(bar[i])
+	}
+	buf.WriteU8(0) // spells count
+	buf.WriteU8(0) // cooldowns count
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+}
+
 // sendPossessPetSpells generates SMSG_PET_SPELLS (0x179) with the possess
 // action bar — Player::PossessSpellInitialize (Player.cpp:21147-21171):
 // GUID, u16 0, u32 0, u32 0 (react/command/disable all zero, unlike the
@@ -930,6 +957,35 @@ func (s *session) sendCharmPetSpells(creatureGUID uint64, spells []uint32, react
 // no-InitEmptyActionBar entries (23575/24783/27664/40281/28511) keep an
 // attack-free bar in C++; Go keeps the attack slot for all entries, the
 // same simplification the charm bar already makes.
+// sendPossessPetActionBar sends the possess bar for a PET target: C++
+// Unit::SetCharmedBy (Unit.cpp:11862-11868) skips InitPossessCreateSpells
+// for pets (their CharmInfo already exists), so Player::PossessSpellInitialize
+// (Player.cpp:21147) sends the pet's stored action bar via
+// CharmInfo::BuildActionBar — the same slots PetSpellInitialize sends —
+// under the possess header (zero family/duration/react/command) with zero
+// spell and cooldown counts (no addlist, unlike PetSpellInitialize). The
+// spell-list sendPossessPetSpells below is the non-pet arm only: it would
+// rebuild a pet's bar from creature_template_spell order at slots 1..8,
+// wiping the follow/stay commands, the reactions, the abdata layout and
+// the per-spell active states.
+func (s *session) sendPossessPetActionBar(ctx context.Context, creatureGUID uint64, petID uint32) {
+	if s == nil || s.conn == nil || creatureGUID == 0 {
+		return
+	}
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(creatureGUID)
+	buf.WriteU16(0)
+	buf.WriteU32(0)
+	buf.WriteU32(0)
+	bar := s.petActionBarSlots(ctx, petID)
+	for i := 0; i < 10; i++ {
+		buf.WriteU32(bar[i])
+	}
+	buf.WriteU8(0) // spells count
+	buf.WriteU8(0) // cooldowns count
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+}
+
 func (s *session) sendPossessPetSpells(creatureGUID uint64, spells []uint32) {
 	if s == nil || s.conn == nil || creatureGUID == 0 {
 		return

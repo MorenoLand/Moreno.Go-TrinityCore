@@ -1709,6 +1709,63 @@ func (s *session) resummonTemporaryPet(ctx context.Context) {
 	s.spawnPet(ctx, petNumber, uint32(entry), name, petLevel, uint32(modelID), uint32(curHealth), maxHealth, uint32(curMana), maxMana, uint8(reactState))
 }
 
+// petActionBarSlots returns the pet's stored action bar: the character_pet
+// abdata layout (CharmInfo::PetActionBar, Unit.cpp:10154 BuildActionBar
+// writes it verbatim) with learned pet_spell rows filled into the first
+// empty middle slots, mirroring Player::PetSpellInitialize
+// (Player.cpp:21098). It is the bar a possessed pet keeps: C++
+// Unit::SetCharmedBy (Unit.cpp:11862-11868) never rebuilds a pet's bar
+// (its CharmInfo already exists), so PossessSpellInitialize sends this
+// stored bar, not a fresh derivation from the pet's spell list.
+func (s *session) petActionBarSlots(ctx context.Context, petID uint32) [10]uint32 {
+	slots := [10]uint32{0x07000002, 0x07000001, 0x07000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x06000002, 0x06000001, 0x06000000}
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || petID == 0 {
+		return slots
+	}
+	cdb := s.server.CharactersStore.DB
+	var abdata string
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(abdata, '') FROM character_pet WHERE id = ?", petID).Scan(&abdata)
+	if abdata != "" {
+		tokens := strings.Fields(abdata)
+		if len(tokens) == 20 {
+			for i := 0; i < 10; i++ {
+				t, typeErr := strconv.ParseUint(tokens[i*2], 10, 8)
+				a, actionErr := strconv.ParseUint(tokens[i*2+1], 10, 32)
+				if typeErr != nil || actionErr != nil {
+					continue
+				}
+				slots[i] = uint32(a) | (uint32(t) << 24)
+			}
+		}
+	}
+	for i := range slots {
+		slots[i] = s.normalizePetActionBarSlot(slots[i])
+	}
+	rows, sErr := cdb.QueryContext(ctx, "SELECT spell, active FROM pet_spell WHERE guid = ? ORDER BY spell", petID)
+	if sErr != nil {
+		return slots
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spID, act int64
+		if rows.Scan(&spID, &act) != nil || spID <= 0 || spID > int64(^uint32(0)) {
+			continue
+		}
+		if s.server.Data != nil {
+			if _, found, spellErr := s.server.Data.Spell(uint32(spID)); spellErr != nil || !found {
+				continue
+			}
+		}
+		for slot := 3; slot < 7; slot++ {
+			if slots[slot]&0x00FFFFFF == 0 {
+				slots[slot] = uint32(spID) | (uint32(act) << 24)
+				break
+			}
+		}
+	}
+	return slots
+}
+
 func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32, reactState uint8) {
 	if s.player == nil || petID == 0 {
 		buf := protocol.NewBuffer(8)
@@ -1724,7 +1781,6 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 		return
 	}
 
-	var abdata string
 	var family uint16
 	if entry == 0 {
 		_ = cdb.QueryRowContext(ctx, "SELECT entry FROM character_pet WHERE id = ?", petID).Scan(&entry)
@@ -1745,8 +1801,6 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 		return
 	}
 	permanent := petType == int64(petTypeHunter) || petType == int64(petTypeSummon) && (s.player.Class == 9 && uint32(creatureType) == creatureTypeDemon || s.player.Class == 6 && uint32(creatureType) == creatureTypeUndead)
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(abdata, '') FROM character_pet WHERE id = ?", petID).Scan(&abdata)
-
 	petGUID := s.petGUIDForNumber(petID)
 	if petGUID == 0 {
 		buf := protocol.NewBuffer(8)
@@ -1762,23 +1816,7 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 	buf.WriteU8(1)  // commandState (1 = FOLLOW)
 	buf.WriteU16(0) // flags
 
-	customSlots := [10]uint32{0x07000002, 0x07000001, 0x07000000, 0x01000000, 0x01000000, 0x01000000, 0x01000000, 0x06000002, 0x06000001, 0x06000000}
-	if abdata != "" {
-		tokens := strings.Fields(abdata)
-		if len(tokens) == 20 {
-			for i := 0; i < 10; i++ {
-				t, typeErr := strconv.ParseUint(tokens[i*2], 10, 8)
-				a, actionErr := strconv.ParseUint(tokens[i*2+1], 10, 32)
-				if typeErr != nil || actionErr != nil {
-					continue
-				}
-				customSlots[i] = uint32(a) | (uint32(t) << 24)
-			}
-		}
-	}
-	for i := range customSlots {
-		customSlots[i] = s.normalizePetActionBarSlot(customSlots[i])
-	}
+	customSlots := s.petActionBarSlots(ctx, petID)
 
 	type petSpellInfo struct {
 		spellID uint32
@@ -1802,14 +1840,6 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 		}
 	}
 
-	for _, spell := range allSpells {
-		for slot := 3; slot < 7; slot++ {
-			if customSlots[slot]&0x00FFFFFF == 0 {
-				customSlots[slot] = spell.spellID | (uint32(spell.active) << 24)
-				break
-			}
-		}
-	}
 	for i := 0; i < 10; i++ {
 		buf.WriteU32(customSlots[i])
 	}

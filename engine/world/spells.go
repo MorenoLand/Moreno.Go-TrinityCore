@@ -35729,10 +35729,25 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				charmerSess.player.UnitFlags |= unitFlagRemoveClientControl
 				charmerSess.sendPlayerUnitFlagsUpdate()
 				charmerSess.sendClientControl(targetGUID, true)
-				charmerSess.sendPossessPetSpells(targetGUID, spells)
+				// A pet target keeps its stored bar (Unit.cpp:11862-11868
+				// skips InitPossessCreateSpells for pets); only a wild
+				// creature takes the fresh m_spells possess bar.
+				if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); motionIsPet(m) {
+					charmerSess.sendPossessPetActionBar(ctx, targetGUID, m.PetID)
+				} else {
+					charmerSess.sendPossessPetSpells(targetGUID, spells)
+				}
 			} else {
 				s.sendClientControl(targetGUID, true)
-				s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
+				// A pet target keeps its stored bar here too
+				// (Unit.cpp:11862-11868 skips InitCharmCreateSpells
+				// for pets); only a wild creature takes the fresh
+				// m_spells charm bar.
+				if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); motionIsPet(m) {
+					s.sendCharmPetActionBar(ctx, targetGUID, m.PetID, reactState, commandState)
+				} else {
+					s.sendCharmPetSpells(targetGUID, spells, reactState, commandState)
+				}
 			}
 		}
 	}
@@ -35757,16 +35772,19 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				// Unit::SetCharmedBy (Unit.cpp:11768-11769): a player
 				// charmer is dismounted when the charm lands.
 				charmerSess.removeAurasByType(spellAuraMounted)
-				spells, _, _, controlled := s.server.charmCreatureFaction(ctx, targetKey, charmer, s.server.raceFaction(charmerSess.player.Race), true)
+				_, _, _, controlled := s.server.charmCreatureFaction(ctx, targetKey, charmer, s.server.raceFaction(charmerSess.player.Race), true)
 				if controlled {
 					// Unit::SetCharmedBy CHARM_TYPE_POSSESS
 					// (Unit.cpp:11879-11885): the charmer loses client
 					// control of itself and gains control of the pet,
-					// with the possess bar in place of the pet bar.
+					// with the possess bar in place of the pet bar. The
+					// pet keeps its stored bar (Unit.cpp:11862-11868
+					// skips InitPossessCreateSpells for pets), not a
+					// fresh m_spells derivation.
 					charmerSess.player.UnitFlags |= unitFlagRemoveClientControl
 					charmerSess.sendPlayerUnitFlagsUpdate()
 					charmerSess.sendClientControl(targetGUID, true)
-					charmerSess.sendPossessPetSpells(targetGUID, spells)
+					charmerSess.sendPossessPetActionBar(ctx, targetGUID, m.PetID)
 				}
 			}
 		}
