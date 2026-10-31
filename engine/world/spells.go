@@ -36985,6 +36985,26 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 				}
 			}
 		}
+		// SpellInfo::CheckTarget (SpellInfo.cpp:1715-1716) + Unit::AddAura
+		// (Unit.cpp:12274): a dead or ghost target takes a triggered spell
+		// only when the spell allows dead targets. This arm runs ahead of
+		// the shared Health==0 gate below, so without it a ghost holder
+		// (Health==1) received triggered spells from an alive caster —
+		// the damage/heal/energize legs already ghost-gate, but the aura
+		// leg (applyAuraToTarget's Health==0-only gate) and the other
+		// effect arms do not. Self-cast-only spells stay exempt: their
+		// TARGET_UNIT_CASTER leg bypasses CheckTarget (Spell.cpp:1500-1556,
+		// checkIfValid=false) and the caster, not the holder, is the real
+		// recipient. Area legs are a residual: skipping the whole cast
+		// would also drop an area spell's alive members, so the area-arm
+		// ghost filter is a separate unit.
+		if ts.server != nil && ts.server.Data != nil && ts.periodicTriggerTarget(aura) == ts.playerGUID {
+			if triggered, found, err := ts.server.Data.Spell(aura.TriggerSpell); err == nil && found {
+				if ts.isDeadOrGhost() && !spellAllowsDeadTarget(triggered) && !isSelfCastOnly(triggered) {
+					return
+				}
+			}
+		}
 		// SPELL_ATTR4_INHERIT_CRIT_FROM_AURA's SPELLVALUE_CRIT_CHANCE
 		// override (SpellAuraEffects.cpp:5059-5061, 5098-5100): the
 		// triggered spell's launch crit seeds from the aura's stored crit
