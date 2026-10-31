@@ -5032,6 +5032,69 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 				}
 			}
+			// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500-1556) on
+			// the inline path, the twin of the castCreatureSpellInternal arm:
+			// caster-reference unit legs (1/27/92/94/96-103) join hitTargets
+			// and the leg lists the verdicts and per-hit legs iterate
+			// (areaHits for a player, areaCreatureHits for a live motion —
+			// the channel leg's pattern above). Runs after the nearby
+			// replacement and the TARGET-object rejoin above so no rebuild
+			// drops it, and ahead of the verdict loop below. Deduped
+			// against hitTargets and the leg lists (AddUnitTarget,
+			// Spell.cpp:2152).
+			inlineCasterObjectTargets := s.creatureCasterObjectTargets(motion, inlineSpell)
+			for i := range inlineSpell.Effects {
+				for _, casterGUID := range inlineCasterObjectTargets[i] {
+					inList := false
+					for _, guid := range hitTargets {
+						if guid == casterGUID {
+							inList = true
+							break
+						}
+					}
+					if !inList {
+						hitTargets = append(hitTargets, casterGUID)
+					}
+					joined := false
+					if target != nil && casterGUID == target.GUID {
+						joined = true
+					}
+					for _, hit := range areaHits {
+						if hit != nil && hit.GUID == casterGUID {
+							joined = true
+							break
+						}
+					}
+					if !joined {
+						for pi := range players {
+							if players[pi].GUID == casterGUID {
+								areaHits = append(areaHits, &players[pi])
+								joined = true
+								break
+							}
+						}
+					}
+					if !joined {
+						if pickSess := s.findSessionByGUID(casterGUID); pickSess != nil && pickSess.player != nil {
+							p := pickSess.player
+							areaHits = append(areaHits, &playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: pickSess.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, IsGM: (p.ExtraFlags&playerExtraGMOn != 0) || (p.PlayerFlags&playerFlagGM != 0), SeesHidden: pickSess.gmVisibilityDetect != 0, IsDead: (p.Health == 0 && p.MaxHealth > 0) || p.PlayerFlags&playerFlagGhost != 0, FactionTemplate: pickSess.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: pickSess})
+							joined = true
+						}
+					}
+					if !joined {
+						creatureJoined := false
+						for _, guid := range areaCreatureHits {
+							if guid == casterGUID {
+								creatureJoined = true
+								break
+							}
+						}
+						if !creatureJoined && s.findCreatureMotion(motion.Map, motion.InstanceID, casterGUID) != nil {
+							areaCreatureHits = append(areaCreatureHits, casterGUID)
+						}
+					}
+				}
+			}
 			// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
 			// the inline path: a victim whose reflect roll succeeds becomes a
 			// REFLECT miss and the spell returns to the motion

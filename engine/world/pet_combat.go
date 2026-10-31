@@ -4474,6 +4474,30 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 	}
+	// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500-1556) for a
+	// pet caster, the twin of the castCreatureSpellInternal arm:
+	// caster-reference unit legs (1/27/92/94/96-103) join hitTargets so
+	// the verdicts, the packet and the hitTargets-riding legs below see
+	// them; the per-effect legs below take their own caster legs from
+	// this map (the petObjectWireLeg pattern). Runs after the nearby
+	// replacement and the TARGET-object rejoin above so no rebuild drops
+	// it, and ahead of the aura-scaling arm below. Deduped against
+	// hitTargets (AddUnitTarget, Spell.cpp:2152).
+	petCasterObjectTargets := s.server.creatureCasterObjectTargets(motion, spell)
+	for i := range spell.Effects {
+		for _, casterGUID := range petCasterObjectTargets[i] {
+			inList := false
+			for _, guid := range hitTargets {
+				if guid == casterGUID {
+					inList = true
+					break
+				}
+			}
+			if !inList {
+				hitTargets = append(hitTargets, casterGUID)
+			}
+		}
+	}
 	// Spell::prepare aura-scaling arm (Spell.cpp:3040-3056) + the AddUnitTarget
 	// min-level arm (Spell.cpp:2115-2150) + the SelectTargets removal leg
 	// (Spell.cpp:807-830) for a pet caster. The fill arm gates on
@@ -5264,6 +5288,32 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 	}
+	// The damage leg is cast-wide, so its caster-object legs resolve once
+	// here like damageObjectWire: any damage effect carrying a
+	// caster-reference leg earns its resolved unit a hit. Deduped across
+	// effects (AddUnitTarget, Spell.cpp:2152) and against the wire hit
+	// and the object wire above, so no target takes the damage twice.
+	var damageCasterWires []uint64
+	for i, eff := range spell.Effects {
+		switch eff.Effect {
+		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+			for _, casterGUID := range petCasterObjectTargets[i] {
+				if casterGUID == targetGUID || casterGUID == damageObjectWire {
+					continue
+				}
+				dup := false
+				for _, g := range damageCasterWires {
+					if g == casterGUID {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					damageCasterWires = append(damageCasterWires, casterGUID)
+				}
+			}
+		}
+	}
 	damage, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
@@ -5401,6 +5451,19 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					reflectorGUID = damageObjectWire
 				}
 				missVerdict, hasMissVerdict := petMissVerdicts[damageObjectWire]
+				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
+			}
+		}
+		// The caster-object legs on the wire leg's shape: each resolved
+		// caster unit of a damage effect takes its own hit, with its own
+		// reflect/miss verdicts (already rolled through hitTargets).
+		for _, casterGUID := range damageCasterWires {
+			if rt := resolveReflectTarget(casterGUID); rt != 0 {
+				reflectorGUID := uint64(0)
+				if reflectedSet[casterGUID] {
+					reflectorGUID = casterGUID
+				}
+				missVerdict, hasMissVerdict := petMissVerdicts[casterGUID]
 				s.executePetSpellDamage(ctx, motion, rt, spell.ID, petDamageFor(rt), schoolMask, triggered, reflectorGUID, missVerdict, hasMissVerdict, petTaking)
 			}
 		}
@@ -5672,6 +5735,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			if wire := petObjectWireLeg(effect); wire != 0 {
 				applyHeal(wire, -1)
 			}
+			for _, casterGUID := range petCasterObjectTargets[i] {
+				if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
+					applyHeal(casterGUID, -1)
+				}
+			}
 			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
 				for _, areaHit := range areaHits {
 					applyHeal(areaHit.GUID, -1)
@@ -5824,6 +5892,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[wire])
 				}
 			}
+			for _, casterGUID := range petCasterObjectTargets[i] {
+				if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
+					if rt := resolveReflectTarget(casterGUID); rt != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
+						s.executePetSpellDispel(ctx, motion, rt, spell, effect, reflectedSet[casterGUID])
+					}
+				}
+			}
 			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
 				// DoTargetSpellHit runs the leg per TargetInfo (Spell.cpp:2405);
 				// the area legs run only when this dispel effect itself selects
@@ -5877,6 +5952,13 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			if wire := petObjectWireLeg(effect); wire != 0 {
 				if rt := resolveReflectTarget(wire); rt != 0 && !immuneSet[wire] && !missedTarget(wire) {
 					s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+				}
+			}
+			for _, casterGUID := range petCasterObjectTargets[i] {
+				if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
+					if rt := resolveReflectTarget(casterGUID); rt != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
+						s.handleEffectDispelMechanic(ctx, rt, spell, effect)
+					}
 				}
 			}
 			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
@@ -5947,6 +6029,11 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			if wire := petObjectWireLeg(effect); wire != 0 {
 				instaTargets = append(instaTargets, wire)
 			}
+			for _, casterGUID := range petCasterObjectTargets[i] {
+				if casterGUID != targetGUID && casterGUID != petObjectWireLeg(effect) {
+					instaTargets = append(instaTargets, casterGUID)
+				}
+			}
 			if isAreaEnemyTargetType(effect.ImplicitTargetA) || isAreaEnemyTargetType(effect.ImplicitTargetB) {
 				for _, areaHit := range areaHits {
 					instaTargets = append(instaTargets, areaHit.GUID)
@@ -6005,6 +6092,24 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					wAmount = s.petPeriodicApplyDoneLegs(ctx, motion, wSpell, i, wVictimGUID, wVictim, wAmount)
 					if s.applyPetAura(ctx, motion, wSpell, wEffect, wVictimGUID, wDurationMs, wAmount) {
 						s.server.recordCreatureChannelHitTarget(motion, spell, wVictimGUID)
+					}
+				}
+			}
+			for _, casterGUID := range petCasterObjectTargets[i] {
+				if casterGUID == targetGUID || casterGUID == petObjectWireLeg(effect) {
+					continue
+				}
+				cSpell, cEffect := petAuraRankRow(spell, i, petAuraScaleDownranks, casterGUID)
+				cDurationMs := petAuraDuration(s.server, cSpell, motion)
+				if cVictimGUID := resolveReflectTarget(casterGUID); cVictimGUID != 0 && !immuneSet[casterGUID] && !missedTarget(casterGUID) {
+					var cVictim combatTarget
+					if ct, ok := s.getCombatTarget(ctx, cVictimGUID); ok {
+						cVictim = ct
+					}
+					cAmount := uint32(cEffect.CalcValueForLevel(cSpell, uint32(motion.Level)))
+					cAmount = s.petPeriodicApplyDoneLegs(ctx, motion, cSpell, i, cVictimGUID, cVictim, cAmount)
+					if s.applyPetAura(ctx, motion, cSpell, cEffect, cVictimGUID, cDurationMs, cAmount) {
+						s.server.recordCreatureChannelHitTarget(motion, spell, cVictimGUID)
 					}
 				}
 			}

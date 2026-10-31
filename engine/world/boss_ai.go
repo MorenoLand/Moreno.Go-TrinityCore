@@ -2426,6 +2426,32 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 			}
 		}
+		// Spell::SelectImplicitCasterObjectTargets (Spell.cpp:1500-1556) for a
+		// creature caster: caster-reference unit legs (1/27/92/94/96-103) join
+		// the hit list like the TARGET-object rejoin above — previously a
+		// boss self-buff cast at a victim, or a charmed/summoned/vehicle
+		// creature's master/summoner/passenger spell, hit the wire target
+		// only. Runs after the nearby replacement above so it is not wiped
+		// by it, and ahead of the verdict loop below so each caster-object
+		// target rolls its own verdict like any implicit target. Deduped
+		// against hitTargets (AddUnitTarget, Spell.cpp:2152); TARGET_UNIT_PET
+		// (5) adds nothing here — the CheckCast pet-presence arm above
+		// already fizzled TargetA == 5, and TargetB == 5 resolves to null.
+		casterObjectTargets := s.creatureCasterObjectTargets(m, spellInfo)
+		for i := range spellInfo.Effects {
+			for _, casterGUID := range casterObjectTargets[i] {
+				inList := false
+				for _, guid := range hitTargets {
+					if guid == casterGUID {
+						inList = true
+						break
+					}
+				}
+				if !inList {
+					hitTargets = append(hitTargets, casterGUID)
+				}
+			}
+		}
 		// Spell::AddUnitTarget reflect arm (Spell.cpp:2152, 2173-2188) on
 		// this path: a hit target whose reflect roll succeeds leaves the
 		// hit list and becomes a REFLECT miss in the GO packet below
