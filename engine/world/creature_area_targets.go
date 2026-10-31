@@ -274,6 +274,20 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 // player+creature list (Spell.cpp:1293); the motion has no aura model,
 // so no aura-modifier term applies (enemy twin precedent).
 func (s *Server) creatureAIAreaEntryTargets(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, wireGUID uint64, destX, destY, destZ float32, hasDest bool) ([]*playerPos, []uint64) {
+	return s.creatureAIAreaEntryTargetsWithCenters(ctx, motion, spell, wireGUID, destX, destY, destZ, hasDest, nil)
+}
+
+// creatureAIAreaEntryTargetsWithCenters is creatureAIAreaEntryTargets
+// with per-effect arm-time destination centers for its DEST legs, the
+// creature twin of spellEntryAreaTargetsWithCenters: C++ selects each
+// area leg at its own position in the per-effect SelectSpellTargets loop
+// (Spell.cpp:758-779), so a DEST leg centers on the running destination
+// at its arm time (creatureAreaArmTimeDestSnapshot), not the spell-final
+// one. A nil centers map, or a leg with no entry, keeps the spell-final
+// destination (the previous behavior); a present-but-unstamped entry
+// leaves the leg on the caster default, since its arm-time destination
+// was unset and the spell-final dest must not center it.
+func (s *Server) creatureAIAreaEntryTargetsWithCenters(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, wireGUID uint64, destX, destY, destZ float32, hasDest bool, centers map[int]creatureDestSnapshot) ([]*playerPos, []uint64) {
 	if s == nil || motion == nil || !isEntryAreaSpell(spell) {
 		return nil, nil
 	}
@@ -300,7 +314,6 @@ func (s *Server) creatureAIAreaEntryTargets(ctx context.Context, motion *creatur
 		}
 	}
 	legs := make([]entryAreaLeg, 0)
-	hasDestCenter := false
 	for i, eff := range spell.Effects {
 		if eff.Effect == 0 {
 			continue
@@ -333,9 +346,14 @@ func (s *Server) creatureAIAreaEntryTargets(ctx context.Context, motion *creatur
 			continue
 		}
 		leg := entryAreaLeg{cx: motion.X, cy: motion.Y, cz: motion.Z, radius: radius, condRows: s.loadImplicitTargetConditionRows(ctx, spell.ID, 1<<uint(i))}
-		if legTarget == implicitTargetDestAreaEntry && hasDest {
-			leg.cx, leg.cy, leg.cz = destX, destY, destZ
-			hasDestCenter = true
+		if legTarget == implicitTargetDestAreaEntry {
+			if c, ok := centers[i]; ok {
+				if c.Has {
+					leg.cx, leg.cy, leg.cz = c.X, c.Y, c.Z
+				}
+			} else if hasDest {
+				leg.cx, leg.cy, leg.cz = destX, destY, destZ
+			}
 		}
 		leg.allowPlayers, leg.allowCreatures = implicitTargetEntryMask(leg.condRows)
 		if spellSearchPlayersOnly(spell) {
@@ -432,8 +450,18 @@ func (s *Server) creatureAIAreaEntryTargets(ctx context.Context, motion *creatur
 	// GUIDs that already have a motion.
 	if s.WorldStore != nil && s.WorldStore.DB != nil {
 		scanCenters := [][3]float32{{motion.X, motion.Y, motion.Z}}
-		if hasDestCenter {
-			scanCenters = append(scanCenters, [3]float32{destX, destY, destZ})
+		for _, leg := range legs {
+			center := [3]float32{leg.cx, leg.cy, leg.cz}
+			dup := false
+			for _, prev := range scanCenters {
+				if prev == center {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				scanCenters = append(scanCenters, center)
+			}
 		}
 		maxRadius := float32(0)
 		for _, leg := range legs {

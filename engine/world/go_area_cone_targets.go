@@ -468,6 +468,21 @@ func (s *Server) creatureGOAreaTargets(ctx context.Context, m *creatureMotion, s
 // dropped by the MaxTargets cap keep a mask entry but are never
 // consulted, since the fan-out and packet filter iterate the capped list.
 func (s *Server) creatureGOAreaTargetsWithMasks(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, hasDest bool, destX, destY, destZ float32, targetGUID uint64) ([]uint64, map[uint64]uint32) {
+	return s.creatureGOAreaTargetsWithMasksAndCenters(ctx, m, spell, spellID, hasDest, destX, destY, destZ, targetGUID, nil)
+}
+
+// creatureGOAreaTargetsWithMasksAndCenters is
+// creatureGOAreaTargetsWithMasks with per-effect arm-time destination
+// centers for its DEST legs, the creature twin of
+// spellGOAreaTargetsWithMasksAndCenters: C++ selects each area leg at its
+// own position in the per-effect SelectSpellTargets loop
+// (Spell.cpp:758-779), so a DEST leg centers on the running destination
+// at its arm time (creatureAreaArmTimeDestSnapshot), not the spell-final
+// one. A nil centers map, or a leg with no entry, keeps the previous
+// creatureGOAreaDestCenter behavior; a present-but-unstamped entry
+// leaves the leg on the caster default, since its arm-time destination
+// was unset and the spell-final dest must not center it.
+func (s *Server) creatureGOAreaTargetsWithMasksAndCenters(ctx context.Context, m *creatureMotion, spell wotlk.Spell, spellID uint32, hasDest bool, destX, destY, destZ float32, targetGUID uint64, centers map[int]creatureDestSnapshot) ([]uint64, map[uint64]uint32) {
 	if s == nil || m == nil || s.Data == nil {
 		return nil, nil
 	}
@@ -499,7 +514,13 @@ func (s *Server) creatureGOAreaTargetsWithMasks(ctx context.Context, m *creature
 		}
 		leg := goAreaLeg{cx: m.X, cy: m.Y, cz: m.Z, radius: radius, condRows: condRows, effIndex: i}
 		if legTarget == implicitTargetGODestArea {
-			leg.cx, leg.cy, leg.cz = s.creatureGOAreaDestCenter(m, hasDest, destX, destY, destZ, targetGUID)
+			if c, ok := centers[i]; ok {
+				if c.Has {
+					leg.cx, leg.cy, leg.cz = c.X, c.Y, c.Z
+				}
+			} else {
+				leg.cx, leg.cy, leg.cz = s.creatureGOAreaDestCenter(m, hasDest, destX, destY, destZ, targetGUID)
+			}
 		}
 		legs = append(legs, leg)
 	}

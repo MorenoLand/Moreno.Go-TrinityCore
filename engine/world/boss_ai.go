@@ -1899,8 +1899,29 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// creature twin of the session spellEntryAreaTargets. Area
 		// selection never chains (spells.go list-spell note), so the
 		// chain arm below still anchors on the nearby pick alone.
+		// Spell::SelectImplicitAreaTargets reads the RUNNING destination
+		// at arm time (Spell.cpp:1275-1282), not the spell-final one:
+		// the area legs below center on their legs' arm-time
+		// destinations (creatureAreaArmTimeDestSnapshot over the
+		// resolver's per-effect slots, seeded from the InitExplicit
+		// seed) — the creature twin of the finishSpellCast arm-time
+		// centers. Single-center sweeps (enemy/friendly) take the first
+		// DEST leg's arm-time dest; per-leg helpers (entry, GO) take
+		// per-effect centers. Cones (24/54/104/59/60/108) are
+		// CASTER-reference (Spell.cpp:1176-1180) and take no center.
+		creatureSeedX, creatureSeedY, creatureSeedZ, creatureSeeded := s.creatureInitExplicitSeed(ctx, m, spellInfo, targetGUID)
+		creatureEntryCenters := creatureAreaLegCenters(spellInfo, destSnapshots, creatureSeedX, creatureSeedY, creatureSeedZ, creatureSeeded, isEntryAreaTargetType, func(t uint32) bool { return t == implicitTargetDestAreaEntry })
+		creatureGOCenters := creatureAreaLegCenters(spellInfo, destSnapshots, creatureSeedX, creatureSeedY, creatureSeedZ, creatureSeeded, func(t uint32) bool { return t == implicitTargetGOSrcArea || t == implicitTargetGODestArea }, func(t uint32) bool { return t == implicitTargetGODestArea })
+		enemyAreaDestX, enemyAreaDestY, enemyAreaDestZ, enemyAreaHasDest := destX, destY, destZ, hasDest
+		if cx, cy, cz, has, found := creatureFirstDestAreaCenter(spellInfo, destSnapshots, creatureSeedX, creatureSeedY, creatureSeedZ, creatureSeeded, isAreaEnemyTargetType, func(t uint32) bool { return t == 16 }); found {
+			enemyAreaDestX, enemyAreaDestY, enemyAreaDestZ, enemyAreaHasDest = cx, cy, cz, has
+		}
+		allyAreaDestX, allyAreaDestY, allyAreaDestZ, allyAreaHasDest := destX, destY, destZ, hasDest
+		if cx, cy, cz, has, found := creatureFirstDestAreaCenter(spellInfo, destSnapshots, creatureSeedX, creatureSeedY, creatureSeedZ, creatureSeeded, isFriendlyAreaTargetType, friendlyAreaDestCentered); found {
+			allyAreaDestX, allyAreaDestY, allyAreaDestZ, allyAreaHasDest = cx, cy, cz, has
+		}
 		if isEntryAreaSpell(spellInfo) {
-			entryPlayers, entryCreatures := s.creatureAIAreaEntryTargets(ctx, m, spellInfo, targetGUID, destX, destY, destZ, hasDest)
+			entryPlayers, entryCreatures := s.creatureAIAreaEntryTargetsWithCenters(ctx, m, spellInfo, targetGUID, destX, destY, destZ, hasDest, creatureEntryCenters)
 			for _, entryHit := range entryPlayers {
 				hitTargets = append(hitTargets, entryHit.GUID)
 			}
@@ -1941,7 +1962,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				hitTargets = append(hitTargets, guid)
 			}
 			if isAreaEnemySpell(spellInfo) {
-				enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, m, spellInfo, areaVictim, destX, destY, destZ, hasDest)
+				enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, m, spellInfo, areaVictim, enemyAreaDestX, enemyAreaDestY, enemyAreaDestZ, enemyAreaHasDest)
 				for _, enemyHit := range enemyPlayers {
 					if enemyHit != nil {
 						appendAreaGUID(enemyHit.GUID)
@@ -1953,7 +1974,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 			if hasFriendlyAreaEffect(spellInfo) {
 				allyOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
-				allyPlayers, allyCreatures, _ := s.creatureAIAreaAllyTargets(ctx, m, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
+				allyPlayers, allyCreatures, _ := s.creatureAIAreaAllyTargets(ctx, m, spellInfo, areaVictim, allyOwner, allyAreaDestX, allyAreaDestY, allyAreaDestZ, allyAreaHasDest)
 				for _, allyHit := range allyPlayers {
 					if allyHit != nil {
 						appendAreaGUID(allyHit.GUID)
@@ -1984,7 +2005,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				hitTargets = append(hitTargets, guid)
 			}
 			if isGOAreaSpell(spellInfo) {
-				areaTargets, areaMasks := s.creatureGOAreaTargetsWithMasks(ctx, m, spellInfo, spellID, hasDest, destX, destY, destZ, targetGUID)
+				areaTargets, areaMasks := s.creatureGOAreaTargetsWithMasksAndCenters(ctx, m, spellInfo, spellID, hasDest, destX, destY, destZ, targetGUID, creatureGOCenters)
 				for _, goGUID := range areaTargets {
 					appendGOGUID(goGUID)
 				}

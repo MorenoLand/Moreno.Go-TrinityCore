@@ -4104,7 +4104,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227): a
 					// creature-cast AoE hits every enemy in the area, so the
 					// GO packet's hit list extends past the wire victim.
-					enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, motion, spellInfo, areaVictim, destX, destY, destZ, hasDest)
+					// Spell::SelectImplicitAreaTargets reads the RUNNING
+					// destination at arm time (Spell.cpp:1275-1282), not
+					// the spell-final one: the area legs below center on
+					// their legs' arm-time destinations
+					// (creatureAreaArmTimeDestSnapshot over
+					// inlineSummonSnapshots, the latest resolver run) —
+					// the inline twin of the boss-ai arm-time centers.
+					inlineSeedX, inlineSeedY, inlineSeedZ, inlineSeeded := s.creatureInitExplicitSeed(ctx, motion, spellInfo, target.GUID)
+					inlineEntryCenters := creatureAreaLegCenters(spellInfo, inlineSummonSnapshots, inlineSeedX, inlineSeedY, inlineSeedZ, inlineSeeded, isEntryAreaTargetType, func(t uint32) bool { return t == implicitTargetDestAreaEntry })
+					inlineEnemyAreaDestX, inlineEnemyAreaDestY, inlineEnemyAreaDestZ, inlineEnemyAreaHasDest := destX, destY, destZ, hasDest
+					if cx, cy, cz, has, found := creatureFirstDestAreaCenter(spellInfo, inlineSummonSnapshots, inlineSeedX, inlineSeedY, inlineSeedZ, inlineSeeded, isAreaEnemyTargetType, func(t uint32) bool { return t == 16 }); found {
+						inlineEnemyAreaDestX, inlineEnemyAreaDestY, inlineEnemyAreaDestZ, inlineEnemyAreaHasDest = cx, cy, cz, has
+					}
+					inlineAllyAreaDestX, inlineAllyAreaDestY, inlineAllyAreaDestZ, inlineAllyAreaHasDest := destX, destY, destZ, hasDest
+					if cx, cy, cz, has, found := creatureFirstDestAreaCenter(spellInfo, inlineSummonSnapshots, inlineSeedX, inlineSeedY, inlineSeedZ, inlineSeeded, isFriendlyAreaTargetType, friendlyAreaDestCentered); found {
+						inlineAllyAreaDestX, inlineAllyAreaDestY, inlineAllyAreaDestZ, inlineAllyAreaHasDest = cx, cy, cz, has
+					}
+					enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, motion, spellInfo, areaVictim, inlineEnemyAreaDestX, inlineEnemyAreaDestY, inlineEnemyAreaDestZ, inlineEnemyAreaHasDest)
 					for _, areaHit := range enemyPlayers {
 						areaHits = append(areaHits, areaHit)
 						hitTargets = append(hitTargets, areaHit.GUID)
@@ -4123,7 +4140,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// slices so the nearby-pick filter below applies to
 					// them like the enemy legs above.
 					if isEntryAreaSpell(spellInfo) {
-						entryPlayers, entryCreatures := s.creatureAIAreaEntryTargets(ctx, motion, spellInfo, areaVictim.GUID, destX, destY, destZ, hasDest)
+						entryPlayers, entryCreatures := s.creatureAIAreaEntryTargetsWithCenters(ctx, motion, spellInfo, areaVictim.GUID, destX, destY, destZ, hasDest, inlineEntryCenters)
 						for _, entryHit := range entryPlayers {
 							areaHits = append(areaHits, entryHit)
 							hitTargets = append(hitTargets, entryHit.GUID)
@@ -4142,7 +4159,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// would otherwise double-hit in the area damage/dispatch loops below.
 					if hasFriendlyAreaEffect(spellInfo) {
 						allyOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
-						allyPlayers, allyCreatures, _ := s.creatureAIAreaAllyTargets(ctx, motion, spellInfo, areaVictim, allyOwner, destX, destY, destZ, hasDest)
+						allyPlayers, allyCreatures, _ := s.creatureAIAreaAllyTargets(ctx, motion, spellInfo, areaVictim, allyOwner, inlineAllyAreaDestX, inlineAllyAreaDestY, inlineAllyAreaDestZ, inlineAllyAreaHasDest)
 						for _, allyHit := range allyPlayers {
 							if allyHit == nil || allyHit.GUID == 0 {
 								continue
@@ -4420,7 +4437,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					}
 					if isAreaEnemySpell(inlineSpell) {
 						pickVictim := &playerPos{GUID: nearby}
-						enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, motion, inlineSpell, pickVictim, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest)
+						mergeSeedX, mergeSeedY, mergeSeedZ, mergeSeeded := s.creatureInitExplicitSeed(ctx, motion, inlineSpell, nearby)
+						mergeEnemyAreaDestX, mergeEnemyAreaDestY, mergeEnemyAreaDestZ, mergeEnemyAreaHasDest := mergeDestX, mergeDestY, mergeDestZ, mergeHasDest
+						if cx, cy, cz, has, found := creatureFirstDestAreaCenter(inlineSpell, inlineSummonSnapshots, mergeSeedX, mergeSeedY, mergeSeedZ, mergeSeeded, isAreaEnemyTargetType, func(t uint32) bool { return t == 16 }); found {
+							mergeEnemyAreaDestX, mergeEnemyAreaDestY, mergeEnemyAreaDestZ, mergeEnemyAreaHasDest = cx, cy, cz, has
+						}
+						enemyPlayers, enemyCreatures := s.creatureAIAreaEnemyTargets(ctx, motion, inlineSpell, pickVictim, mergeEnemyAreaDestX, mergeEnemyAreaDestY, mergeEnemyAreaDestZ, mergeEnemyAreaHasDest)
 						for _, areaHit := range enemyPlayers {
 							if areaHit == nil || areaHit.GUID == 0 {
 								continue
@@ -4457,7 +4479,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						}
 					}
 					if isEntryAreaSpell(inlineSpell) {
-						entryPlayers, entryCreatures := s.creatureAIAreaEntryTargets(ctx, motion, inlineSpell, nearby, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest)
+						mergeSeedX, mergeSeedY, mergeSeedZ, mergeSeeded := s.creatureInitExplicitSeed(ctx, motion, inlineSpell, nearby)
+						mergeEntryCenters := creatureAreaLegCenters(inlineSpell, inlineSummonSnapshots, mergeSeedX, mergeSeedY, mergeSeedZ, mergeSeeded, isEntryAreaTargetType, func(t uint32) bool { return t == implicitTargetDestAreaEntry })
+						entryPlayers, entryCreatures := s.creatureAIAreaEntryTargetsWithCenters(ctx, motion, inlineSpell, nearby, mergeDestX, mergeDestY, mergeDestZ, mergeHasDest, mergeEntryCenters)
 						for _, entryHit := range entryPlayers {
 							if entryHit == nil || entryHit.GUID == 0 {
 								continue
@@ -4577,7 +4601,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						hitTargets = append(hitTargets, goGUID)
 					}
 					if isGOAreaSpell(inlineSpell) {
-						areaTargets, areaMasks := s.creatureGOAreaTargetsWithMasks(ctx, motion, inlineSpell, spellID, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, target.GUID)
+						inlineGOSeedX, inlineGOSeedY, inlineGOSeedZ, inlineGOSeeded := s.creatureInitExplicitSeed(ctx, motion, inlineSpell, target.GUID)
+						inlineGOCenters := creatureAreaLegCenters(inlineSpell, inlineSummonSnapshots, inlineGOSeedX, inlineGOSeedY, inlineGOSeedZ, inlineGOSeeded, func(t uint32) bool { return t == implicitTargetGOSrcArea || t == implicitTargetGODestArea }, func(t uint32) bool { return t == implicitTargetGODestArea })
+						areaTargets, areaMasks := s.creatureGOAreaTargetsWithMasksAndCenters(ctx, motion, inlineSpell, spellID, (spellTarget.Flags&protocol.SpellTargetFlagDestLocation) != 0, spellTarget.Destination.X, spellTarget.Destination.Y, spellTarget.Destination.Z, target.GUID, inlineGOCenters)
 						for _, goGUID := range areaTargets {
 							appendInlineGOGUID(goGUID)
 						}

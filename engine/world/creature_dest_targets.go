@@ -115,6 +115,113 @@ type creatureDestSnapshot struct {
 	X, Y, Z float32
 }
 
+// creatureAreaArmTimeDestSnapshot is the creature-path twin of
+// areaArmTimeDestSnapshot (target_dest_targets.go): the running
+// destination at the moment an area-category leg on (effIndex, slotIndex)
+// runs in C++'s per-effect SelectSpellTargets loop (Spell.cpp:758-779) —
+// SelectImplicitAreaTargets reads m_targets.GetDstPos() at arm time
+// (Spell.cpp:1275-1282), not the spell-final destination, so a dest arm
+// in a later slot of the same effect or in a later effect must not
+// recenter an already-selected area leg. A B-slot leg's arm-time dest is
+// its own effect's snapshot (the area arm never moves the dest), while
+// an A-slot leg's is the nearest stamped snapshot before it — hasDst
+// never resets in the resolver loop, so the nearest stamped snapshot is
+// the latest dest state. With no earlier stamp the running dest is the
+// InitExplicit seed (seeded) or unset.
+func creatureAreaArmTimeDestSnapshot(snapshots []creatureDestSnapshot, seedX, seedY, seedZ float32, seeded bool, effIndex, slotIndex int) creatureDestSnapshot {
+	if slotIndex == 1 {
+		if effIndex >= 0 && effIndex < len(snapshots) && snapshots[effIndex].Has {
+			return snapshots[effIndex]
+		}
+		return creatureDestSnapshot{}
+	}
+	for j := effIndex - 1; j >= 0; j-- {
+		if j < len(snapshots) && snapshots[j].Has {
+			return snapshots[j]
+		}
+	}
+	if seeded {
+		return creatureDestSnapshot{Has: true, X: seedX, Y: seedY, Z: seedZ}
+	}
+	return creatureDestSnapshot{}
+}
+
+// creatureInitExplicitSeed is the creature-path twin of
+// sessionInitExplicitSeed: the InitExplicit seed (Spell.cpp:700-712) for
+// a spell whose explicit mask needs DEST_LOCATION — the explicit object
+// target's position (creatureDestAnchor), else the caster position. It
+// feeds only the arm-time fallback above: when the mask needs a dest,
+// the resolver stamps every pre-dest-arm slot with this seed anyway, so
+// the fallback fires only when the snapshots carry no stamp at all
+// (nil snapshots from the resolver's early return, or a mask that needs
+// no dest) — the seed anchor (pre- vs post-redirect target) is
+// unobservable there.
+func (s *Server) creatureInitExplicitSeed(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) (float32, float32, float32, bool) {
+	if s == nil || m == nil || !spellExplicitDestLocationNeeded(spell) {
+		return 0, 0, 0, false
+	}
+	if x, y, z, _, ok := s.creatureDestAnchor(ctx, m, targetGUID); ok {
+		return x, y, z, true
+	}
+	return m.X, m.Y, m.Z, true
+}
+
+// creatureAreaLegCenters maps each DEST leg's effect to its arm-time
+// destination for the per-leg creature helpers (entry 8, GO 52), the
+// creature twin of the session clientAreaLegCenters closure: a present
+// entry centers that leg, a present-but-unstamped entry leaves it on
+// the caster default, and a missing entry keeps the spell-final dest
+// (the helper's nil-center behavior).
+func creatureAreaLegCenters(spell wotlk.Spell, snapshots []creatureDestSnapshot, seedX, seedY, seedZ float32, seeded bool, isLeg func(uint32) bool, isDest func(uint32) bool) map[int]creatureDestSnapshot {
+	centers := make(map[int]creatureDestSnapshot)
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		var legTarget uint32
+		var legSlot int
+		switch {
+		case isLeg(eff.ImplicitTargetA):
+			legTarget, legSlot = eff.ImplicitTargetA, 0
+		case isLeg(eff.ImplicitTargetB) && !implicitTargetBlocksSecondSlot(eff.ImplicitTargetA):
+			legTarget, legSlot = eff.ImplicitTargetB, 1
+		default:
+			continue
+		}
+		if isDest(legTarget) {
+			centers[i] = creatureAreaArmTimeDestSnapshot(snapshots, seedX, seedY, seedZ, seeded, i, legSlot)
+		}
+	}
+	return centers
+}
+
+// creatureFirstDestAreaCenter returns the arm-time destination of the
+// first DEST-centered leg of a single-center creature sweep (enemy 16,
+// friendly 31/34), the creature twin of the session
+// clientFirstAreaLegTarget's dest-first search. found is false when the
+// spell carries no such leg, in which case the caller keeps the
+// spell-final destination (the previous behavior); when found but the
+// arm-time snapshot is unstamped, has is false and the caller passes
+// hasDest=false so the sweep centers on the caster, not the final dest.
+func creatureFirstDestAreaCenter(spell wotlk.Spell, snapshots []creatureDestSnapshot, seedX, seedY, seedZ float32, seeded bool, isLeg func(uint32) bool, isDest func(uint32) bool) (float32, float32, float32, bool, bool) {
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
+			if !isLeg(targetType) || !isDest(targetType) {
+				continue
+			}
+			arm := creatureAreaArmTimeDestSnapshot(snapshots, seedX, seedY, seedZ, seeded, i, slot)
+			return arm.X, arm.Y, arm.Z, arm.Has, true
+		}
+	}
+	return 0, 0, 0, false, false
+}
+
 // persistentAreaAuraDest returns the m_destTargets slot of the LAST
 // effect-27 in the spell (Spell::EffectPersistentAA, SpellEffects.cpp:1738,
 // handles only the last one; Spell::HandleEffects, Spell.cpp:5159, hands

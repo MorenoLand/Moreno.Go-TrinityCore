@@ -3822,13 +3822,34 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	var areaAllyHits []*playerPos
 	var areaAllyCreatureHits []uint64
 	var areaAllyChecks map[uint64]uint8
+	// Spell::SelectImplicitAreaTargets reads the RUNNING destination at
+	// arm time (Spell.cpp:1275-1282), not the spell-final one: the area
+	// legs below center on their legs' arm-time destinations
+	// (creatureAreaArmTimeDestSnapshot over the resolver's per-effect
+	// slots) — the pet twin of the boss-ai arm-time centers. The seed is
+	// the client destination when the packet carries one and the mask
+	// needs it (the resolver's traj seed), else the InitExplicit seed.
+	petSeedX, petSeedY, petSeedZ, petSeeded := s.server.creatureInitExplicitSeed(ctx, motion, spell, targetGUID)
+	if petSeeded && target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		petSeedX, petSeedY, petSeedZ = target.Destination.X, target.Destination.Y, target.Destination.Z
+	}
+	petEntryCenters := creatureAreaLegCenters(spell, destSnapshots, petSeedX, petSeedY, petSeedZ, petSeeded, isEntryAreaTargetType, func(t uint32) bool { return t == implicitTargetDestAreaEntry })
+	petGOCenters := creatureAreaLegCenters(spell, destSnapshots, petSeedX, petSeedY, petSeedZ, petSeeded, func(t uint32) bool { return t == implicitTargetGOSrcArea || t == implicitTargetGODestArea }, func(t uint32) bool { return t == implicitTargetGODestArea })
+	petEnemyAreaDestX, petEnemyAreaDestY, petEnemyAreaDestZ, petEnemyAreaHasDest := dx, dy, dz, hasDest
+	if cx, cy, cz, has, found := creatureFirstDestAreaCenter(spell, destSnapshots, petSeedX, petSeedY, petSeedZ, petSeeded, isAreaEnemyTargetType, func(t uint32) bool { return t == 16 }); found {
+		petEnemyAreaDestX, petEnemyAreaDestY, petEnemyAreaDestZ, petEnemyAreaHasDest = cx, cy, cz, has
+	}
+	petAllyAreaDestX, petAllyAreaDestY, petAllyAreaDestZ, petAllyAreaHasDest := dx, dy, dz, hasDest
+	if cx, cy, cz, has, found := creatureFirstDestAreaCenter(spell, destSnapshots, petSeedX, petSeedY, petSeedZ, petSeeded, isFriendlyAreaTargetType, friendlyAreaDestCentered); found {
+		petAllyAreaDestX, petAllyAreaDestY, petAllyAreaDestZ, petAllyAreaHasDest = cx, cy, cz, has
+	}
 	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) || isEntryAreaSpell(spell) {
 		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
 			if isAreaEnemySpell(spell) {
-				areaHits, areaCreatureHits = s.server.creatureAIAreaEnemyTargets(ctx, motion, spell, victimPos, dx, dy, dz, hasDest)
+				areaHits, areaCreatureHits = s.server.creatureAIAreaEnemyTargets(ctx, motion, spell, victimPos, petEnemyAreaDestX, petEnemyAreaDestY, petEnemyAreaDestZ, petEnemyAreaHasDest)
 			}
 			if hasFriendlyAreaEffect(spell) {
-				areaAllyHits, areaAllyCreatureHits, areaAllyChecks = s.server.creatureAIAreaAllyTargets(ctx, motion, spell, victimPos, s, dx, dy, dz, hasDest)
+				areaAllyHits, areaAllyCreatureHits, areaAllyChecks = s.server.creatureAIAreaAllyTargets(ctx, motion, spell, victimPos, s, petAllyAreaDestX, petAllyAreaDestY, petAllyAreaDestZ, petAllyAreaHasDest)
 			}
 			if isEntryAreaSpell(spell) {
 				// Spell::SelectImplicitAreaTargets (Spell.cpp:1227):
@@ -3837,7 +3858,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				// spellEntryAreaTargets — joining the area slices so
 				// the nearby-pick filter below drops the pick from
 				// them like the other legs.
-				entryPlayers, entryCreatures := s.server.creatureAIAreaEntryTargets(ctx, motion, spell, targetGUID, dx, dy, dz, hasDest)
+				entryPlayers, entryCreatures := s.server.creatureAIAreaEntryTargetsWithCenters(ctx, motion, spell, targetGUID, dx, dy, dz, hasDest, petEntryCenters)
 				areaHits = append(areaHits, entryPlayers...)
 				areaCreatureHits = append(areaCreatureHits, entryCreatures...)
 			}
@@ -4033,7 +4054,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			hitTargets = append(hitTargets, goGUID)
 		}
 		if isGOAreaSpell(spell) {
-			areaTargets, areaMasks := s.server.creatureGOAreaTargetsWithMasks(ctx, motion, spell, spell.ID, hasDest, dx, dy, dz, targetGUID)
+			areaTargets, areaMasks := s.server.creatureGOAreaTargetsWithMasksAndCenters(ctx, motion, spell, spell.ID, hasDest, dx, dy, dz, targetGUID, petGOCenters)
 			for _, goGUID := range areaTargets {
 				appendPetGOGUID(goGUID)
 			}
