@@ -118,6 +118,7 @@ const (
 	spellAttr6LimitPctDamageMods           uint32 = 0x20000000 // SPELL_ATTR6_LIMIT_PCT_DAMAGE_MODS (SharedDefines.h:663) — ATTR6 is Go's AttributesEx6
 	spellAttr6LimitPctHealingMods          uint32 = 0x08000000 // SPELL_ATTR6_LIMIT_PCT_HEALING_MODS (SharedDefines.h:661) — ATTR6 is Go's AttributesEx6
 	spellAttr6IgnoreCategoryCooldownMods   uint32 = 0x80000000 // SPELL_ATTR6_IGNORE_CATEGORY_COOLDOWN_MODS (SharedDefines.h:665) — ATTR6 is Go's AttributesEx6
+	spellAttr6CanTargetInvisible           uint32 = 0x00002000 // SPELL_ATTR6_CAN_TARGET_INVISIBLE (SharedDefines.h:647) — ATTR6 is Go's AttributesEx6 (Spell.dbc field 10 = AttributesExF)
 	spellAttr1DispelAurasOnImmunity        uint32 = 0x00008000 // SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY (SharedDefines.h:464) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	spellAttr2UnaffectedByAuraSchoolImmune uint32 = 0x04000000 // SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE (SharedDefines.h:512) — ATTR2 is Go's AttributesEx1
 	spellAttr2DamageReducedShield          uint32 = 0x00200000 // SPELL_ATTR2_DAMAGE_REDUCED_SHIELD (SharedDefines.h:507) — ATTR2 is Go's AttributesEx1
@@ -136,6 +137,7 @@ const (
 	spellAttr0Negative1                 uint32 = 0x04000000 // SPELL_ATTR0_NEGATIVE_1 (SharedDefines.h:438) — forces the spell to be treated as negative
 	spellAttr2Unk3                      uint32 = 0x00000008 // SPELL_ATTR2_UNK3 (SharedDefines.h:489) — "Ignore aura scaling"; GetAuraRankForLevel returns the cast rank — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr2CanTargetNotInLOS         uint32 = 0x00000004 // SPELL_ATTR2_CAN_TARGET_NOT_IN_LOS (SharedDefines.h:488) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
+	spellAttr2CantTargetTapped          uint32 = 0x00000040 // SPELL_ATTR2_CANT_TARGET_TAPPED (SharedDefines.h:492) — ATTR2 is Go's AttributesEx1 (Spell.dbc field 6 = AttributesExB)
 	spellAttr2HealthFunnel              uint32 = 0x00000800 // SPELL_ATTR2_HEALTH_FUNNEL (SharedDefines.h:497) — periodic-heal ticks cost the caster ManaPerSecond health — ATTR2 is Go's AttributesEx1
 	spellAttr3DrainSoul                 uint32 = 0x08000000 // SPELL_ATTR3_DRAIN_SOUL (SharedDefines.h:550) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
 	spellAttr3BlockableSpell            uint32 = 0x00000008 // SPELL_ATTR3_BLOCKABLE_SPELL (SharedDefines.h:526) — ATTR3 is Go's AttributesEx3 (Spell.dbc field 7 = AttributesExC)
@@ -22577,18 +22579,49 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// IsPassive && target == caster); self-cast-only spells (their
 	// TARGET_UNIT_CASTER leg selects the caster with checkIfValid=false,
 	// Spell.cpp:1500-1556, so no CheckTarget ever judges the caster).
-	// The arms ported here are the dead/ghost core of CheckTarget
-	// (SpellInfo.cpp:1637-1638, 1654-1662, 1712-1716): CANT_TARGET_SELF,
-	// ONLY_TARGET_GHOSTS mismatch (ghost = the player ghost flag, the
-	// SPELL_AURA_GHOST leg — a corpse without the flag is not a ghost),
-	// ONLY_TARGET_PLAYERS, and the !IsAlive dead gate (IsAllowingDeadTarget,
-	// SpellInfo.cpp:1177). Visibility, tapped/pickpocket/disarm,
-	// creature-type, aura-state/aura-spell, GM/invis, in-flight and
-	// behind/facing/LOS arms are a separate unit: they need the same
-	// explicit-vs-implicit scoping pass before they can ride this gate.
+	// The arms ported here now cover CheckTarget end to end except the
+	// documented stay-outs (SpellInfo.cpp:1637-1777): CANT_TARGET_SELF,
+	// visibility (player-target detect core only), CANT_TARGET_IN_COMBAT
+	// (IsInCombat half), ONLY_TARGET_GHOSTS mismatch (ghost = the player
+	// ghost flag, the SPELL_AURA_GHOST leg — a corpse without the flag is
+	// not a ghost), tapped (live-motion tap state), pickpocket, disarm
+	// (player leg), ONLY_TARGET_PLAYERS, the !IsAlive dead gate
+	// (IsAllowingDeadTarget, SpellInfo.cpp:1177), creature-type,
+	// GM/GM-invisible, in-flight (player targets), aura-state, aura-spell,
+	// and prevent-resurrection. Stay-outs: corpse checks (no
+	// corpse-target model on this path), the implicit crowd-control arm
+	// (implicit=false for explicit wire targets, so it never fires),
+	// creature-target visibility (no motion stealth/invisibility state),
+	// the creature disarm leg (no virtual-item model), and the
+	// CANT_TARGET_IN_COMBAT pet-in-combat half (no model).
 	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && !(spell.Attributes&spellAttr0Passive != 0 && targetGUID == s.playerGUID) && !isSelfCastOnly(spell) {
 		if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID == s.playerGUID {
 			rejectTriggeredCast("explicit target is self on cant-target-self spell")
+			return
+		}
+		// Visibility arm (SpellInfo.cpp:1641-1642): explicit targets carry
+		// implicit=false, so the stealth exemption never applies here.
+		// Player targets judge the C++ CanDetect core (CanSeeOrDetect,
+		// Object.cpp:1573-1664, minus the sight-range, ghost team/group,
+		// vehicle-accessory and despawn legs, which have no spell-target
+		// model): canDetectStealthOf + canDetectInvisibilityOfPlayer.
+		// Self targets pass (this == obj, Object.cpp:1575); GM casters
+		// pass via the GM arms inside both detect helpers. Creature
+		// targets stay out: motions carry no stealth/invisibility aura
+		// state to detect against.
+		if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != s.playerGUID && s.player != nil && s.server != nil {
+			if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+					rejectTriggeredCast("explicit target not visible to caster")
+					return
+				}
+			}
+		}
+		// Cannot-target-in-combat arm (SpellInfo.cpp:1650): the
+		// UNIT_FLAG_PET_IN_COMBAT half has no Go model (same gap as the
+		// client path); the IsInCombat half rides unitTargetInCombat.
+		if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.unitTargetInCombat(targetGUID) {
+			rejectTriggeredCast("explicit target in combat")
 			return
 		}
 		targetGhost := false
@@ -22613,6 +22646,49 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			rejectTriggeredCast("non-ghost spell on ghost explicit target")
 			return
 		}
+		// Tapped arm (SpellInfo.cpp:1667-1670): inside the caster !=
+		// unitTarget / player-caster block, so self targets skip it. A
+		// live creature motion with a loot recipient (TapPlayerGUID or
+		// TapGroupID, Creature::SetLootRecipient) that the caster did not
+		// tap fails: recipient == caster, or caster group == recipient
+		// group (Creature::isTappedBy, Creature.cpp:1362). Player targets
+		// skip (the arm reads ToCreature only); DB-row creatures skip
+		// (no live tap state).
+		if spell.AttributesEx1&spellAttr2CantTargetTapped != 0 && targetGUID != s.playerGUID && s.server != nil && s.player != nil {
+			s.server.motionMu.Lock()
+			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+			var tapPlayer, tapGroup uint64
+			if motion != nil {
+				tapPlayer, tapGroup = motion.TapPlayerGUID, motion.TapGroupID
+			}
+			s.server.motionMu.Unlock()
+			if motion != nil && (tapPlayer != 0 || tapGroup != 0) && tapPlayer != s.playerGUID && !(s.groupID != 0 && s.groupID == tapGroup) {
+				rejectTriggeredCast("explicit target tapped by another player")
+				return
+			}
+		}
+		// Pickpocket arm (SpellInfo.cpp:1669-1675): same caster !=
+		// unitTarget block. Player targets fail outright; creature targets
+		// fail unless their type mask carries HUMANOID_OR_UNDEAD (the
+		// client-path twin; unknown/zero masks fail NO_POCKETS).
+		if targetGUID != s.playerGUID && s.spellIsPickpocket(spell) {
+			if mask, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer || mask&creatureTypeMaskHumanoidOrUndead == 0 {
+				rejectTriggeredCast("pickpocket target invalid")
+				return
+			}
+		}
+		// Disarm arm (SpellInfo.cpp:1681-1692): same caster != unitTarget
+		// block. The player leg rides targetPlayerHasMainHandWeapon (the
+		// client-path twin, incl. the broken-weapon gate); the creature
+		// leg (!UNIT_VIRTUAL_ITEM_SLOT_ID) stays out — motions carry no
+		// virtual-item model. The IsUseEquipedWeapon legs (feral form,
+		// DISARMED flag) stay out with the client path.
+		if spell.Mechanic == mechanicDisarm && targetGUID != s.playerGUID {
+			if _, isPlayer := s.targetCreatureTypeMask(ctx, targetGUID); isPlayer && !s.targetPlayerHasMainHandWeapon(ctx, targetGUID) {
+				rejectTriggeredCast("disarm target unarmed")
+				return
+			}
+		}
 		if spell.AttributesEx3&spellAttr3OnlyTargetPlayers != 0 && !targetIsPlayer {
 			rejectTriggeredCast("player-only spell on non-player explicit target")
 			return
@@ -22620,6 +22696,113 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if targetDead && !spellAllowsDeadTarget(spell) {
 			rejectTriggeredCast("explicit target dead on spell that disallows dead targets")
 			return
+		}
+		// Creature-type arm (SpellInfo.cpp:1728): the client-path twin
+		// (incl. the warlock Curse of Doom category-1179 special case);
+		// unknown/zero masks pass, like C++'s !creatureType short-circuit.
+		if failReason := s.checkTargetCreatureType(ctx, spell, targetGUID); failReason != 0 {
+			rejectTriggeredCast("target creature type mismatch")
+			return
+		}
+		// GM/invisibility arm (SpellInfo.cpp:1734-1743): unitTarget !=
+		// caster, and the caster is a player, so the GetAffectingPlayer
+		// leg always holds on this path. gmAttackTargetBlocked carries
+		// both legs: GM-invisible (Unit::IsVisible, Unit.cpp:8651) and
+		// GM-on (Player::IsGameMaster); creature targets never match.
+		if targetGUID != s.playerGUID && s.server != nil && s.server.gmAttackTargetBlocked(targetGUID) {
+			rejectTriggeredCast("explicit target is GM or GM-invisible")
+			return
+		}
+		// Flying-target arm (SpellInfo.cpp:1745-1747): the client-path
+		// twin; creature targets stay out (no creature flight state in
+		// Go — explicitTargetFlyingBlocked answers player targets only).
+		if s.explicitTargetFlyingBlocked(spell, targetGUID) {
+			rejectTriggeredCast("explicit target in flight")
+			return
+		}
+		// Aura-state arms (SpellInfo.cpp:1760-1766): the client-path
+		// twins. The vehicle-caster and charmer-owned-target exemptions
+		// are vacuous here (no vehicle/charmer model on this path), so
+		// the arms always apply, as on the client path.
+		if spell.TargetAuraState != 0 && !s.targetHasAuraState(ctx, targetGUID, spell.TargetAuraState, spell) {
+			rejectTriggeredCast("required target aura state missing")
+			return
+		}
+		if spell.ExcludeTargetAuraState != 0 && s.targetHasAuraState(ctx, targetGUID, spell.ExcludeTargetAuraState, spell) {
+			rejectTriggeredCast("excluded target aura state present")
+			return
+		}
+		// Aura-spell arms (SpellInfo.cpp:1769-1772): the client-path
+		// twins. The GetSpellIdForDifficulty mapping C++ applies to
+		// TargetAuraSpell/ExcludeTargetAuraSpell is unmodeled (same gap
+		// as the client path); the raw DBC id is judged.
+		if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, targetGUID, spell.TargetAuraSpell) {
+			rejectTriggeredCast("required target aura missing")
+			return
+		}
+		if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, targetGUID, spell.ExcludeTargetAuraSpell) {
+			rejectTriggeredCast("excluded target aura present")
+			return
+		}
+		// Prevent-resurrection arm (SpellInfo.cpp:1774-1777): fires only
+		// for resurrect-effect spells. Player targets judge the session
+		// aura-type list; creature targets scan the live creature aura
+		// maps through the spell-effect table (DB-row creatures carry no
+		// live aura maps, so they pass).
+		if spellHasResurrectEffect(spell) && s.targetHasPreventResurrectionAura(ctx, targetGUID) {
+			rejectTriggeredCast("target cannot be resurrected")
+			return
+		}
+	}
+	// Unit-target positional block (Spell::CheckCast, Spell.cpp:5378-5401):
+	// the same unit block as the CheckTarget call above, after it in C++
+	// order, judging the raw wire target (never a redirected target or an
+	// area member) and skipping self targets (target != m_caster). GO
+	// wire targets skip (GetUnitTarget is null for a GO). No
+	// passive/self-cast-only exemption here: C++'s 5353 skip covers only
+	// the explicit-target block, and the unit block judges any non-caster
+	// unit target. The dest-LOS arm (Spell.cpp:5404-5413) stays out: dest
+	// targets are computed by the redirect/dest arms below, so it belongs
+	// to that unit, not this gate. The DisableMgr SPELL_DISABLE_LOS leg
+	// stays out (no DisableMgr model, same gap as the client path).
+	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && targetGUID != s.playerGUID && s.player != nil && s.server != nil {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			customAttr := s.server.getSpellCustomAttr(spellID)
+			// Behind arm (Spell.cpp:5381-5382): caster in the target's
+			// frontal 180-degree arc means the caster is NOT behind.
+			if customAttr&SpellCustomAttrReqCasterBehindTarget != 0 && hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
+				rejectTriggeredCast("caster not behind explicit target")
+				return
+			}
+			// Facing arm (Spell.cpp:5385-5386): the target must have the
+			// caster in its frontal 180-degree arc.
+			if customAttr&SpellCustomAttrReqTargetFacingCaster != 0 && !hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
+				rejectTriggeredCast("explicit target not facing caster")
+				return
+			}
+			// LOS arm (Spell.cpp:5391-5401): the GO-caster wrapper is
+			// vacuous (this path is player-only). For aura-triggered
+			// casts the LOS origin is the trigger aura's dynamic object
+			// when the caster has one (Spell.cpp:5394-5396), else the
+			// caster — the same dynobj scan shape as
+			// delayChannelDynamicObject.
+			losX, losY, losZ := s.player.X, s.player.Y, s.player.Z
+			if s.castTriggerAuraSpell != 0 {
+				s.server.objectsMu.RLock()
+				for _, object := range s.server.dynamicSpellObjects {
+					if object != nil && object.CasterGUID == s.playerGUID && object.SpellID == uint64(s.castTriggerAuraSpell) {
+						losX, losY, losZ = object.X, object.Y, object.Z
+						break
+					}
+				}
+				s.server.objectsMu.RUnlock()
+			}
+			if spell.AttributesEx1&spellAttr2CanTargetNotInLOS == 0 && spell.AttributesEx5&spellAttr5SkipCheckcastLosCheck == 0 {
+				if !s.server.hasLineOfSightSpellCheck(s.player.Map, losX, losY, losZ, tgt.X, tgt.Y, tgt.Z) {
+					rejectTriggeredCast("no line of sight to explicit target")
+					return
+				}
+			}
 		}
 	}
 	// CheckCast BLOCK_SPELL_FAMILY arm (Spell.cpp:5277-5278): no triggered
@@ -43205,6 +43388,61 @@ func isRangedWeaponSpell(spell wotlk.Spell) bool {
 	return (spell.SpellFamilyName == spellFamilyHunter && spell.SpellFamilyFlags[1]&0x10000000 == 0) ||
 		spell.EquippedItemSubClass&itemSubclassMaskWeaponRanged != 0 ||
 		spell.Attributes&spellAttr0ReqAmmo != 0
+}
+
+// spellHasResurrectEffect mirrors the effect gate of the CheckTarget
+// prevent-resurrection arm (SpellInfo.cpp:1774-1777): SELF_RESURRECT,
+// RESURRECT, or RESURRECT_NEW.
+func spellHasResurrectEffect(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == spellEffectSelfResurrect || eff.Effect == spellEffectResurrect || eff.Effect == spellEffectResurrectNew {
+			return true
+		}
+	}
+	return false
+}
+
+// targetHasPreventResurrectionAura mirrors the HasAuraType
+// (SPELL_AURA_PREVENT_RESURRECTION) leg of the CheckTarget
+// prevent-resurrection arm (SpellInfo.cpp:1774): player targets judge the
+// session aura-type list; creature targets scan the live creature aura
+// maps through the spell-effect table. Unresolvable targets pass (no
+// live aura state to judge).
+func (s *session) targetHasPreventResurrectionAura(ctx context.Context, targetGUID uint64) bool {
+	if targetGUID == 0 {
+		return false
+	}
+	if s.player != nil && targetGUID == s.playerGUID {
+		return s.hasAuraType(spellAuraPreventResurrection)
+	}
+	if s.server != nil {
+		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+			return targetSess.hasAuraType(spellAuraPreventResurrection)
+		}
+		target, ok := s.getCombatTarget(ctx, targetGUID)
+		if ok && s.server.Data != nil {
+			key := creatureAuraKeyForTarget(target)
+			s.server.auraMu.Lock()
+			spellIDs := make([]uint32, 0, len(s.server.creatureAuras[key])+len(s.server.activeCreatureAuras[key]))
+			for spellID := range s.server.creatureAuras[key] {
+				spellIDs = append(spellIDs, spellID)
+			}
+			for spellID := range s.server.activeCreatureAuras[key] {
+				spellIDs = append(spellIDs, spellID)
+			}
+			s.server.auraMu.Unlock()
+			for _, spellID := range spellIDs {
+				if auraSpell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+					for _, eff := range auraSpell.Effects {
+						if eff.Aura == spellAuraPreventResurrection {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // spellAllowsDeadTarget mirrors SpellInfo::IsAllowingDeadTarget (SpellInfo.cpp:1177):
