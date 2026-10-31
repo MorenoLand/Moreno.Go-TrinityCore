@@ -946,6 +946,26 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.updateHonorFields()
 	s.grantEarnedAchievementTitles()
 	s.restoreBattlegroundLoginQueue(state)
+	if (mapEntry.IsBattleground() || mapEntry.IsBattleArena()) && s.bgData.InstanceID == 0 {
+		// Player::LoadFromDB (Player.cpp:17603-17637) "Bg was not found"
+		// leg: a battleground map with no battleground instance relocates
+		// to the entry point, or homebind when none was ever recorded.
+		// restoreBattlegroundLoginQueue early-returns on bgData 0, so
+		// without this an offline summon into a BG/arena map stranded the
+		// player in that map with the stale saved instance id and no
+		// battleground. C++ zeroes the instance id on this leg.
+		if s.bgData.JoinMap != 0 {
+			s.relocateLoginToBGEntryPoint()
+			state.InstanceID = 0
+		} else if err := s.recoverLoginHomebindOrStart(ctx, &state); err != nil {
+			return true
+		}
+		mapEntry, mapFound, err = s.server.Data.Map(state.Map)
+		if err != nil || !mapFound {
+			return true
+		}
+		loginSelection = worldportInstanceSelection{MapID: state.Map, InstanceID: state.InstanceID}
+	}
 	s.visiblePlayersMu.Lock()
 	s.visiblePlayers = nil
 	s.visiblePlayersMu.Unlock()
