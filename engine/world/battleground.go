@@ -2226,6 +2226,10 @@ func (s *session) restoreBattlegroundLoginQueue(state playerState) {
 		if !isArena && s.server != nil {
 			s.server.dropBGOfflineHolder(state.Map, s.playerGUID)
 		}
+		// A paused Idle/Inactive step resumes here, not at aura load:
+		// the slot must exist first, or progressAFKIdle/kickAFKInactive
+		// would no-op on the roster gate and the chain would die.
+		s.resumeAFKIdleProgression()
 		return
 	}
 }
@@ -3174,12 +3178,14 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// bgAfkReporter is runtime-only (Player.h:843, never persisted), so a
 	// relogger starts with an empty reporter set. The aura flags are NOT
 	// cleared here: they persist through savePlayerAuras like C++'s
-	// character_aura save, and a pending progression timer still fires
-	// only for a live roster member.
+	// character_aura save, and a pending progression step is paused, not
+	// dropped — resumeAFKIdleProgression re-arms it from the wall-clock
+	// deadline on a successful login restore.
 	if fromLogout && leaveBGMap != 0 {
 		s.writeMu.Lock()
 		s.afkReporters = make(map[uint64]struct{})
 		s.writeMu.Unlock()
+		s.pauseAFKIdleProgression()
 	}
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {
@@ -3753,12 +3759,26 @@ func (s *Server) updateBattlegroundWaitLeave(ctx context.Context, now time.Time)
 	}
 }
 
-// bgPrematureFinishTime mirrors BattlegroundMgr::GetPrematureFinishTime
-// (BattlegroundMgr.cpp:867), the CONFIG_BATTLEGROUND_PREMATURE_FINISH_TIMER
-// default (World.cpp:1206: 5 * MINUTE * IN_MILLISECONDS). C++ arms
-// _ProcessProgress only when the config is nonzero; Go has no config load
-// for it, so the default applies unconditionally.
+// bgPrematureFinishTime is the CONFIG_BATTLEGROUND_PREMATURE_FINISH_TIMER
+// default (World.cpp:1206: 5 * MINUTE * IN_MILLISECONDS) and the fallback
+// for a nil server. Live servers read the config through
+// bgPrematureFinishTimerMs, so 0 disables the arm exactly as C++'s
+// nonzero check does (Battleground.cpp:208).
 const bgPrematureFinishTime = 5 * time.Minute
+
+// bgPrematureFinishTimerMs mirrors BattlegroundMgr::GetPrematureFinishTime
+// (BattlegroundMgr.cpp:867). A negative value has no C++ validation (it
+// would wrap to a near-49-day uint32 timer); Go treats it as disabled
+// rather than arming a wrapped timer.
+func (s *Server) bgPrematureFinishTimerMs() int64 {
+	if s == nil {
+		return int64(bgPrematureFinishTime / time.Millisecond)
+	}
+	if s.Config.BattlegroundPrematureFinishTimer < 0 {
+		return 0
+	}
+	return int64(s.Config.BattlegroundPrematureFinishTimer)
+}
 
 // bgPrematureMinPlayers returns the battleground_template MinPlayersPerTeam
 // for mapID: Battleground::GetMinPlayersPerTeam (Battleground.cpp:208),
@@ -3856,17 +3876,21 @@ func bgBasePrematureWinner(ally, horde, min int) int8 {
 // prematureCountdownStep is one Battleground::_ProcessProgress tick
 // (Battleground.cpp:355-388) for a single instance. trigger is the Update
 // arm (Battleground.cpp:208): the premature config is nonzero and either
-// team is below the minimum. When trigger is false an armed countdown is
-// cancelled (flag only, matching C++: the timer value is left stale). When
-// trigger is true and no countdown runs, it starts at the full premature
-// time; when the timer runs below diff the match expires. Otherwise the
-// timer decrements and, unless the new time crosses no boundary, announces
-// on minute boundaries above a minute and 15-second boundaries below it —
-// the message value is the OLD timer (C++ sends m_PrematureCountDownTimer
-// before assigning newtime), so "5 mins" fires as the timer crosses from
-// 5:00 to 4:59, not at 4:00. The caller holds the per-map state mu; the
-// returned message is empty unless a boundary fired.
-func prematureCountdownStep(active *bool, timerMs *int64, diffMs int64, trigger bool) (expired bool, message string) {
+// team is below the minimum — callers fold the config into trigger, so a
+// zero (disabled) config cancels an armed countdown here exactly as the
+// Update else-branch does. finishMs is GetPrematureFinishTime, the value
+// a fresh countdown starts at (Battleground.cpp:364). When trigger is
+// false an armed countdown is cancelled (flag only, matching C++: the
+// timer value is left stale). When trigger is true and no countdown runs,
+// it starts at finishMs; when the timer runs below diff the match
+// expires. Otherwise the timer decrements and, unless the new time
+// crosses no boundary, announces on minute boundaries above a minute and
+// 15-second boundaries below it — the message value is the OLD timer
+// (C++ sends m_PrematureCountDownTimer before assigning newtime), so
+// "5 mins" fires as the timer crosses from 5:00 to 4:59, not at 4:00. The
+// caller holds the per-map state mu; the returned message is empty
+// unless a boundary fired.
+func prematureCountdownStep(active *bool, timerMs *int64, diffMs int64, trigger bool, finishMs int64) (expired bool, message string) {
 	if !trigger {
 		if *active {
 			*active = false
@@ -3875,7 +3899,7 @@ func prematureCountdownStep(active *bool, timerMs *int64, diffMs int64, trigger 
 	}
 	if !*active {
 		*active = true
-		*timerMs = int64(bgPrematureFinishTime / time.Millisecond)
+		*timerMs = finishMs
 		return false, ""
 	}
 	if *timerMs < diffMs {
@@ -4011,6 +4035,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 		diffMs = now.Sub(s.bgPrematureTickLast).Milliseconds()
 	}
 	s.bgPrematureTickLast = now
+	prematureFinishMs := s.bgPrematureFinishTimerMs()
 
 	// WSG: score leg, base leg on ties.
 	s.wsgMu.RLock()
@@ -4025,7 +4050,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 			min := s.bgPrematureMinPlayers(WSGMapID)
 			wsg.mu.Lock()
 			if wsg.Winner < 0 {
-				expired, msg := prematureCountdownStep(&wsg.PrematureCountDown, &wsg.PrematureTimerMs, diffMs, ally < min || horde < min)
+				expired, msg := prematureCountdownStep(&wsg.PrematureCountDown, &wsg.PrematureTimerMs, diffMs, prematureFinishMs > 0 && (ally < min || horde < min), prematureFinishMs)
 				if msg != "" {
 					s.broadcastBattlegroundMessage(WSGMapID, msg)
 				}
@@ -4056,7 +4081,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 			min := s.bgPrematureMinPlayers(ABMapID)
 			ab.mu.Lock()
 			if ab.Winner < 0 {
-				expired, msg := prematureCountdownStep(&ab.PrematureCountDown, &ab.PrematureTimerMs, diffMs, ally < min || horde < min)
+				expired, msg := prematureCountdownStep(&ab.PrematureCountDown, &ab.PrematureTimerMs, diffMs, prematureFinishMs > 0 && (ally < min || horde < min), prematureFinishMs)
 				if msg != "" {
 					s.broadcastBattlegroundMessage(ABMapID, msg)
 				}
@@ -4087,7 +4112,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 			min := s.bgPrematureMinPlayers(AVMapID)
 			av.mu.Lock()
 			if av.Winner < 0 {
-				expired, msg := prematureCountdownStep(&av.PrematureCountDown, &av.PrematureTimerMs, diffMs, ally < min || horde < min)
+				expired, msg := prematureCountdownStep(&av.PrematureCountDown, &av.PrematureTimerMs, diffMs, prematureFinishMs > 0 && (ally < min || horde < min), prematureFinishMs)
 				if msg != "" {
 					s.broadcastBattlegroundMessage(AVMapID, msg)
 				}
@@ -4118,7 +4143,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 			min := s.bgPrematureMinPlayers(EOTSMapID)
 			eots.mu.Lock()
 			if eots.Winner < 0 {
-				expired, msg := prematureCountdownStep(&eots.PrematureCountDown, &eots.PrematureTimerMs, diffMs, ally < min || horde < min)
+				expired, msg := prematureCountdownStep(&eots.PrematureCountDown, &eots.PrematureTimerMs, diffMs, prematureFinishMs > 0 && (ally < min || horde < min), prematureFinishMs)
 				if msg != "" {
 					s.broadcastBattlegroundMessage(EOTSMapID, msg)
 				}
@@ -4150,7 +4175,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 			min := s.bgPrematureMinPlayers(SAMapID)
 			sa.mu.Lock()
 			if sa.Winner < 0 && (sa.Status == SAStatusRoundOne || sa.Status == SAStatusRoundTwo) {
-				expired, msg := prematureCountdownStep(&sa.PrematureCountDown, &sa.PrematureTimerMs, diffMs, ally < min || horde < min)
+				expired, msg := prematureCountdownStep(&sa.PrematureCountDown, &sa.PrematureTimerMs, diffMs, prematureFinishMs > 0 && (ally < min || horde < min), prematureFinishMs)
 				if msg != "" {
 					s.broadcastBattlegroundMessage(SAMapID, msg)
 				}
@@ -4175,7 +4200,7 @@ func (s *Server) updateBattlegroundPrematureFinish(now time.Time) {
 			min := s.bgPrematureMinPlayers(ICMapID)
 			ic.mu.Lock()
 			if ic.Winner < 0 {
-				expired, msg := prematureCountdownStep(&ic.PrematureCountDown, &ic.PrematureTimerMs, diffMs, ally < min || horde < min)
+				expired, msg := prematureCountdownStep(&ic.PrematureCountDown, &ic.PrematureTimerMs, diffMs, prematureFinishMs > 0 && (ally < min || horde < min), prematureFinishMs)
 				if msg != "" {
 					s.broadcastBattlegroundMessage(ICMapID, msg)
 				}
@@ -4206,7 +4231,9 @@ const bgAFKInactiveDuration = 60 * time.Second
 // armAFKIdleProgression starts the Idle -> Inactive -> kick chain on the
 // session that just received Idle. The generation bump invalidates any
 // timer armed by an earlier Idle application; the leave funnel bumps it
-// again, so a timer firing after a leave is a no-op.
+// again, so a timer firing after a leave is a no-op. The deadline is the
+// logout-resume anchor: pauseAFKIdleProgression keeps it while bumping
+// the generation, so a login can re-arm the remaining wall-clock time.
 func (s *session) armAFKIdleProgression() {
 	if s == nil {
 		return
@@ -4214,6 +4241,7 @@ func (s *session) armAFKIdleProgression() {
 	s.writeMu.Lock()
 	s.afkIdleGen++
 	gen := s.afkIdleGen
+	s.afkChainDeadline = time.Now().Add(bgAFKIdleDuration)
 	s.writeMu.Unlock()
 	time.AfterFunc(bgAFKIdleDuration, func() {
 		s.progressAFKIdle(gen)
@@ -4276,6 +4304,7 @@ func (s *session) progressAFKIdle(gen uint64) {
 	s.writeMu.Lock()
 	s.afkIdleGen++
 	next := s.afkIdleGen
+	s.afkChainDeadline = time.Now().Add(bgAFKInactiveDuration)
 	s.writeMu.Unlock()
 	time.AfterFunc(bgAFKInactiveDuration, func() {
 		s.kickAFKInactive(next)
@@ -4302,6 +4331,9 @@ func (s *session) kickAFKInactive(gen uint64) {
 	if !s.inLiveBGForAFK() {
 		return
 	}
+	s.writeMu.Lock()
+	s.afkChainDeadline = time.Time{}
+	s.writeMu.Unlock()
 	s.handleLeaveBattlefield(context.Background(), nil, false, false)
 }
 
@@ -4314,7 +4346,77 @@ func (s *session) cancelAFKIdleProgression() {
 	}
 	s.writeMu.Lock()
 	s.afkIdleGen++
+	s.afkChainDeadline = time.Time{}
 	s.writeMu.Unlock()
+}
+
+// pauseAFKIdleProgression invalidates the pending Idle/Inactive timer
+// for a logging-out session but keeps its deadline: the aura itself
+// persists through savePlayerAuras, and C++ negative auras keep counting
+// down while logged out (Player::_LoadAuras subtracts the offline span
+// from remainTime and drops the aura when the span covers it), so the
+// login leg resumes from the wall-clock deadline instead of restarting
+// the 60-second step. A timer firing after the pause no-ops on the
+// generation mismatch.
+func (s *session) pauseAFKIdleProgression() {
+	if s == nil {
+		return
+	}
+	s.writeMu.Lock()
+	if !s.afkChainDeadline.IsZero() {
+		s.afkIdleGen++
+	}
+	s.writeMu.Unlock()
+}
+
+// resumeAFKIdleProgression re-arms the paused Idle/Inactive step after a
+// successful battleground login restore, from the wall-clock deadline:
+// the offline span counts against the step (Player::_LoadAuras), so a
+// deadline already passed drops the aura with no progress and no kick —
+// a dropped aura never fires its periodic-trigger progress or its
+// expire arm — while a live deadline re-arms only the remaining time.
+// The step is derived from the aura actually present (Inactive wins when
+// both are somehow set), not from the stored stage, so a dispelled or
+// re-applied aura cannot resume the wrong leg.
+func (s *session) resumeAFKIdleProgression() {
+	if s == nil {
+		return
+	}
+	s.writeMu.Lock()
+	deadline := s.afkChainDeadline
+	s.writeMu.Unlock()
+	if deadline.IsZero() {
+		return
+	}
+	kick := s.hasAura(honorAuraInactiveID)
+	if !kick && !s.hasAura(bgAFKIdleSpellID) {
+		s.writeMu.Lock()
+		s.afkChainDeadline = time.Time{}
+		s.writeMu.Unlock()
+		return
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		s.removeAura(bgAFKIdleSpellID)
+		s.removeAura(honorAuraInactiveID)
+		s.writeMu.Lock()
+		s.afkChainDeadline = time.Time{}
+		s.writeMu.Unlock()
+		return
+	}
+	s.writeMu.Lock()
+	s.afkIdleGen++
+	gen := s.afkIdleGen
+	s.writeMu.Unlock()
+	if kick {
+		time.AfterFunc(remaining, func() {
+			s.kickAFKInactive(gen)
+		})
+		return
+	}
+	time.AfterFunc(remaining, func() {
+		s.progressAFKIdle(gen)
+	})
 }
 
 // handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).
@@ -4386,8 +4488,14 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 
 	// Player::ReportedAfkBy (Player.cpp:22531-22542): no duplicate reporters, and no
 	// report against a target already carrying Idle (43680) or Inactive (43681). On
-	// reaching CONFIG_BATTLEGROUND_REPORT_AFK reporters (default 3) the Idle debuff is
-	// cast and the reporter set is cleared.
+	// reaching CONFIG_BATTLEGROUND_REPORT_AFK reporters the Idle debuff is
+	// cast and the reporter set is cleared. The load-time fallback (World.cpp:1196-1203:
+	// out-of-range resets to 3) is re-applied here so a Config built without
+	// Default/setter (zero value) still needs 3 reports, never 0.
+	reportAFKThreshold := s.server.Config.BattlegroundReportAFK
+	if reportAFKThreshold < 1 || reportAFKThreshold > 9 {
+		reportAFKThreshold = 3
+	}
 	targetSess.writeMu.Lock()
 	if targetSess.afkReporters == nil {
 		targetSess.afkReporters = make(map[uint64]struct{})
@@ -4410,14 +4518,14 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 		targetSess.writeMu.Lock()
 		targetSess.afkReporters[s.playerGUID] = struct{}{}
 		reportCount = len(targetSess.afkReporters)
-		if reportCount >= 3 {
+		if reportCount >= reportAFKThreshold {
 			targetSess.afkReporters = make(map[uint64]struct{})
 		}
 		targetSess.writeMu.Unlock()
 	}
 
 	s.debug("reported player for pvp afk", "account", s.accountName, "target", targetGUID, "reports", reportCount)
-	if reportCount >= 3 {
+	if reportCount >= reportAFKThreshold {
 		targetSess.applyAura(bgAFKIdleSpellID) // Idle debuff
 		targetSess.armAFKIdleProgression()
 	}

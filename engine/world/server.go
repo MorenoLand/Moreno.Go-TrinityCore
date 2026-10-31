@@ -679,6 +679,7 @@ type session struct {
 	afkReportedCount   uint8     // Player::CanReportAfkDueToLimit (Player.cpp:22514): 15 reports per 5 minutes
 	afkReportWindowEnd time.Time // lazy reset point for afkReportedCount (== Player::UpdateAfkReport, Player.cpp:20715)
 	afkIdleGen         uint64    // generation for the Idle->Inactive->kick timers: bumped on leave/logout-clear so stale timer fires no-op
+	afkChainDeadline   time.Time // wall-clock fire time of the pending Idle->Inactive or Inactive->kick step; zero when no step is pending. Kept across logout so login can resume the countdown (negative auras keep counting down while logged out, Player.cpp _LoadAuras) or drop the aura when the deadline passed offline
 	targetGlyphSlot    uint8
 	activeCast         *activeCastState
 	nextSwing          *queuedNextSwing // CURRENT_MELEE_SPELL slot (Unit.h:572), castMu-guarded like activeCast
