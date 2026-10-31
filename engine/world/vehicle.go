@@ -499,6 +499,44 @@ func (s *Server) removeVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) 
 	s.vehicleMu.Unlock()
 }
 
+// vehicleKitLocation pairs a kit with the instance key it lives under.
+// A kit is normally keyed on its base's current map/instance, but a
+// player base that far-teleports leaves its kit keyed on the origin
+// map/instance: teleportTo exits the teleporter as passenger only, it
+// never re-keys the teleporter's own kit. The GUID scan below is the
+// twin of C++'s m_vehicleKit, which lives on the unit, not on a map
+// bucket, so a same-map lookup at logout misses the origin-keyed kit.
+type vehicleKitLocation struct {
+	key vehicleKitKey
+	kit *VehicleKit
+}
+
+// findVehicleKits returns every kit registered under vehicleGUID, in
+// (map, instance) key order. Normally exactly one; a teleported base
+// plus a relogin recreation can leave a stale origin-keyed kit beside
+// the live one, and logout must drop both, not just the current-key
+// one.
+func (s *Server) findVehicleKits(vehicleGUID uint64) []vehicleKitLocation {
+	if s == nil || vehicleGUID == 0 {
+		return nil
+	}
+	s.vehicleMu.RLock()
+	defer s.vehicleMu.RUnlock()
+	var found []vehicleKitLocation
+	for key, kit := range s.instanceVehicleKits {
+		if key.GUID == vehicleGUID && kit != nil {
+			found = append(found, vehicleKitLocation{key: key, kit: kit})
+		}
+	}
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].key.MapID != found[j].key.MapID {
+			return found[i].key.MapID < found[j].key.MapID
+		}
+		return found[i].key.InstanceID < found[j].key.InstanceID
+	})
+	return found
+}
+
 // conditionSourceCreatureTemplateVehicle is
 // CONDITION_SOURCE_TYPE_CREATURE_TEMPLATE_VEHICLE (ConditionMgr.h:139). It
 // cannot carry a SourceGroup (ConditionMgr.cpp:950), so its rows are keyed
@@ -1240,27 +1278,67 @@ func (s *session) exitVehicle(ctx context.Context) {
 	oldVehGUID := s.player.VehicleGUID
 	playerVehicleID := uint32(0)
 	var seatAddon *VehicleSeatAddon
+	seatedOnOtherMap := false
 	if s.server != nil {
-		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, oldVehGUID); kit != nil {
-			if kit.IsPlayer {
-				playerVehicleID = kit.VehicleID
+		kits := s.server.findVehicleKits(oldVehGUID)
+		// The seat addon and control handling ride the kit the
+		// passenger is actually seated in, preferring the
+		// passenger's own map/instance key; a kit keyed elsewhere
+		// (a base that teleported away) still seats the passenger,
+		// so its seat is removed below even though the same-map
+		// lookup the old code used missed it entirely.
+		// The old same-map lookup sent the vehicle-data clear for a
+		// player kit even when the passenger was not seated in it
+		// (stale VehicleGUID); keep that arm keyed the same way.
+		for _, loc := range kits {
+			if loc.key.MapID == s.player.Map && loc.key.InstanceID == s.player.InstanceID && loc.kit.IsPlayer {
+				playerVehicleID = loc.kit.VehicleID
+				break
+			}
+		}
+		var primary *VehicleKit
+		primarySameKey := false
+		for _, loc := range kits {
+			if _, seatInfo, _ := loc.kit.GetSeatForPassenger(s.playerGUID); seatInfo == nil {
+				continue
+			}
+			if loc.key.MapID == s.player.Map && loc.key.InstanceID == s.player.InstanceID {
+				primary = loc.kit
+				primarySameKey = true
+				break
+			}
+			if primary == nil {
+				primary = loc.kit
+			}
+		}
+		if primary != nil {
+			if primary.IsPlayer && playerVehicleID == 0 {
+				playerVehicleID = primary.VehicleID
 			}
 			// Unit::_ExitVehicle (Unit.cpp:13193): the seat addon is
 			// captured BEFORE RemovePassenger — after removal the seat is
 			// empty and the lookup finds nothing.
-			seatAddon = kit.GetSeatAddonForSeatOfPassenger(s.playerGUID)
-			_, seatInfo, wasUnselectable, _ := kit.RemovePassenger(s.playerGUID)
-			if seatInfo != nil {
-				if seatInfo.CanControl() {
-					s.sendClientControl(oldVehGUID, false)
-					s.sendVehiclePetSpells(0, nil)
-				}
-				// Vehicle::RemovePassenger (Vehicle.cpp:928-930): the
-				// NOT_SELECTABLE flag is only cleared when the passenger
-				// did not carry it before boarding.
-				if seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) && !wasUnselectable {
-					s.player.UnitFlags &^= 0x02000000
-				}
+			seatAddon = primary.GetSeatAddonForSeatOfPassenger(s.playerGUID)
+			seatedOnOtherMap = !primarySameKey
+		}
+		var seatInfo *wotlk.VehicleSeatEntry
+		wasUnselectable := false
+		for _, loc := range kits {
+			_, si, wu, ok := loc.kit.RemovePassenger(s.playerGUID)
+			if ok && loc.kit == primary {
+				seatInfo, wasUnselectable = si, wu
+			}
+		}
+		if seatInfo != nil {
+			if seatInfo.CanControl() {
+				s.sendClientControl(oldVehGUID, false)
+				s.sendVehiclePetSpells(0, nil)
+			}
+			// Vehicle::RemovePassenger (Vehicle.cpp:928-930): the
+			// NOT_SELECTABLE flag is only cleared when the passenger
+			// did not carry it before boarding.
+			if seatInfo.HasFlag(wotlk.VehicleSeatFlagPassengerNotSelectable) && !wasUnselectable {
+				s.player.UnitFlags &^= 0x02000000
 			}
 		}
 	}
@@ -1280,8 +1358,19 @@ func (s *session) exitVehicle(ctx context.Context) {
 	// is armed here and consumed by the vehicle step, and boarding again
 	// clears it (enterVehicle).
 	if s.server != nil && oldVehGUID != 0 {
-		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, oldVehGUID); kit != nil && !kit.IsVehicleInUse() {
-			if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, oldVehGUID); motion != nil && s.server.isVehicleAI(motion) && s.server.vehicleHasConditions(ctx, motion.Entry) {
+		kits := s.server.findVehicleKits(oldVehGUID)
+		inUse := false
+		motionMap, motionInstance := s.player.Map, s.player.InstanceID
+		for _, loc := range kits {
+			if loc.kit.IsVehicleInUse() {
+				inUse = true
+			}
+			if loc.key.MapID == s.player.Map && loc.key.InstanceID == s.player.InstanceID {
+				motionMap, motionInstance = loc.key.MapID, loc.key.InstanceID
+			}
+		}
+		if len(kits) > 0 && !inUse {
+			if motion := s.server.findCreatureMotion(motionMap, motionInstance, oldVehGUID); motion != nil && s.server.isVehicleAI(motion) && s.server.vehicleHasConditions(ctx, motion.Entry) {
 				motion.VehicleDismiss = true
 				motion.VehicleDismissAt = time.Now().Add(5 * time.Second)
 			}
@@ -1296,8 +1385,14 @@ func (s *session) exitVehicle(ctx context.Context) {
 
 	// Unit::_ExitVehicle (Unit.cpp:13215-13234): the exit position is the
 	// vehicle base position with the passenger's orientation, then the
-	// seat addon's Offset/Dest arms.
-	s.applyVehicleExitPosition(oldVehGUID, seatAddon)
+	// seat addon's Offset/Dest arms. A passenger seated in a kit keyed
+	// on another map/instance keeps its own coordinates: the base
+	// position on that other map is not a position on the passenger's
+	// map, so applying it would strand the passenger at foreign
+	// coordinates on its own map.
+	if !seatedOnOtherMap {
+		s.applyVehicleExitPosition(oldVehGUID, seatAddon)
+	}
 
 	s.player.VehicleGUID = 0
 	s.player.VehicleSeat = 0
@@ -1324,8 +1419,15 @@ func (s *session) releaseVehicleStateAtLogout(ctx context.Context) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
-	if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); kit != nil {
-		for _, pg := range kit.seatedPassengerGUIDs() {
+	// A base that far-teleported before logging out left its kit keyed
+	// on the origin map/instance, so the base's current key misses it
+	// and the origin kit — ghost seats and all — would survive the
+	// session discard. The GUID scan finds every kit for the base,
+	// ejects its seated passengers from each, and drops each kit under
+	// its own key; a kit on the current key is the normal case and
+	// behaves exactly as before.
+	for _, loc := range s.server.findVehicleKits(s.playerGUID) {
+		for _, pg := range loc.kit.seatedPassengerGUIDs() {
 			if pg == s.playerGUID {
 				continue
 			}
@@ -1333,14 +1435,33 @@ func (s *session) releaseVehicleStateAtLogout(ctx context.Context) {
 				ps.exitVehicle(ctx)
 			}
 		}
-		s.server.removeVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
+		s.server.removeVehicleKit(loc.key.MapID, loc.key.InstanceID, s.playerGUID)
 	}
 	if s.player.VehicleGUID != 0 {
 		vehGUID := s.player.VehicleGUID
-		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehGUID); kit != nil {
-			kit.RemovePassenger(s.playerGUID)
-			if !kit.IsVehicleInUse() {
-				if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, vehGUID); motion != nil && s.server.isVehicleAI(motion) && s.server.vehicleHasConditions(ctx, motion.Entry) {
+		// The logger-as-passenger arm is GUID-scoped for the mirror
+		// case: a logger drained from a pending far teleport carries
+		// the destination map with the origin instance, which misses
+		// the origin-keyed kit under the logger's own key. The
+		// conditioned-vehicle dismiss motion lookup rides the kit's
+		// own key for the same reason.
+		kits := s.server.findVehicleKits(vehGUID)
+		for _, loc := range kits {
+			loc.kit.RemovePassenger(s.playerGUID)
+		}
+		if len(kits) > 0 {
+			inUse := false
+			motionMap, motionInstance := kits[0].key.MapID, kits[0].key.InstanceID
+			for _, loc := range kits {
+				if loc.kit.IsVehicleInUse() {
+					inUse = true
+				}
+				if loc.key.MapID == s.player.Map && loc.key.InstanceID == s.player.InstanceID {
+					motionMap, motionInstance = loc.key.MapID, loc.key.InstanceID
+				}
+			}
+			if !inUse {
+				if motion := s.server.findCreatureMotion(motionMap, motionInstance, vehGUID); motion != nil && s.server.isVehicleAI(motion) && s.server.vehicleHasConditions(ctx, motion.Entry) {
 					motion.VehicleDismiss = true
 					motion.VehicleDismissAt = time.Now().Add(5 * time.Second)
 				}
