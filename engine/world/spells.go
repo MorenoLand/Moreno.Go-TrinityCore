@@ -23077,6 +23077,35 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 	}
+	// CheckCast power/caster-auras arms (Spell.cpp:5502-5508): EXEMPT on
+	// this path. TRIGGERED_FULL_MASK carries
+	// TRIGGERED_IGNORE_POWER_AND_REAGENT_COST and
+	// TRIGGERED_IGNORE_CASTER_AURAS (SpellDefines.h:153-156), and both
+	// arms open on those flag tests, so a triggered cast never reaches
+	// CheckPower or CheckCasterAuras here.
+	// CheckCast script hook (Spell.cpp:5510): STAY-OUT — it runs the
+	// loaded SpellScripts' OnCheckCast handlers (Spell.cpp:7977-7992),
+	// and Go has no SpellScript bridge (the no-SpellScript-bridge legs
+	// elsewhere in this file), so there is no handler list to consult.
+	// CheckCast dispel-only arm (Spell.cpp:5513-5557): EXEMPT on this
+	// path — the arm opens on !IsTriggered() (:5541), so it never fires
+	// for a triggered cast. Its other terms (dispel-only effects, no
+	// area/melee-combat-start leg, the sanctuary hostile leg, the
+	// GetDispellableAuraList emptiness test) are moot behind that guard.
+	// CheckCast per-effect power burn/drain arm (Spell.cpp:5652-5660):
+	// a burn/drain effect rejects when the explicit unit target (not the
+	// caster) uses a power type other than the effect's MiscValue. The
+	// client-path twin checkPowerBurnDrainCast already bridges it, so
+	// the funnel reuses it on the raw wire target — the C++ arm judges
+	// GetUnitTarget at prepare time, ahead of SelectSpellTargets, and a
+	// GO wire target carries no unit target (Spell.cpp:248), so it skips
+	// the gate like the CheckTarget gate above.
+	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 {
+		if failure := s.checkPowerBurnDrainCast(spell, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}); failure != 0 {
+			rejectTriggeredCast("triggered power burn/drain target power-type mismatch")
+			return
+		}
+	}
 	// The vehicle arm (Spell.cpp:5332) is exempt: TRIGGERED_FULL_MASK
 	// carries TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE.
 	// Spell::prepare (Spell.cpp:3139-3149): the moving-cast arm carries no
