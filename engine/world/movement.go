@@ -413,12 +413,13 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// is server-driven), so mid-flight client movement is dropped like C++
 	// drops it — never applied, never rebroadcast. MovementHandler.cpp:269
 	// gates the teleport-pending drop on plrMover (plrMover &&
-	// IsBeingTeleported()), so a possessed mover — plrMover null — is
-	// exempt: its packets are not dropped while the possessing player's own
-	// teleport is pending, and the player's taxi flight is not the mover's
-	// spline either. A driven vehicle's packets keep the conservative drop.
-	possessedGateGUID := s.possessedCreatureGUID()
-	if (s.nearTeleportPending || s.farTeleportPending || s.inFlight) && (possessedGateGUID == 0 || guid != possessedGateGUID) {
+	// IsBeingTeleported()), so only packets from the player mover drop:
+	// a possessed mover — plrMover null — is exempt, and so is a driven
+	// vehicle, whose mover is the creature base, not the player. The
+	// player's taxi flight is not the mover's spline either. Passenger
+	// packets still carry the player GUID, so a teleport-pending
+	// passenger still drops like C++'s plrMover arm.
+	if (s.nearTeleportPending || s.farTeleportPending || s.inFlight) && guid == s.playerGUID {
 		return true
 	}
 	// Mover resolution (MovementHandler.cpp:261): the tamper check runs
@@ -627,6 +628,17 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			broadcastInfo.Transport = nil
 		}
 		if s.server != nil {
+			// MovementHandler.cpp:404 — mover->UpdatePosition runs for the
+			// vehicle base itself (its GetVehicle() is null, so the
+			// vehicle block's early return does not apply); the kit
+			// position below is not the base's server-side coords, so
+			// write the motion too, unlocked before the relocate like
+			// the possessed branch (relocate locks motionMu itself).
+			s.server.motionMu.Lock()
+			if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); motion != nil {
+				motion.X, motion.Y, motion.Z, motion.Orientation = info.X, info.Y, info.Z, info.Orientation
+			}
+			s.server.motionMu.Unlock()
 			if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); kit != nil {
 				kit.setPosition(info.X, info.Y, info.Z, info.Orientation)
 			}
@@ -831,8 +843,8 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 
 	// Fall damage generation and parachute interrupts (TC MovementHandler.cpp:359-365)
 	// HandleFall is plrMover-gated; the LANDING-aura strip hits the mover, not
-	// plrMover — the vehicle takes none (no vehicle-mover arm, documented
-	// gap), never the driver.
+	// plrMover — a driven vehicle base loses its LANDING auras through the
+	// creature-aura bridge below, never the driver.
 	if !vehicleMover && !possessedMover {
 		if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 			s.handleFall(ctx, info)
@@ -848,6 +860,18 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	if possessedMover && s.server != nil && (opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM)) {
 		s.server.motionMu.Lock()
 		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, possessedGUID)
+		s.server.motionMu.Unlock()
+		if motion != nil {
+			s.server.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagLanding)
+		}
+	}
+	// MovementHandler.cpp:364 — the same mover strip for a driven vehicle
+	// base: the base is a world creature motion, so its auras live in the
+	// same activeCreatureAuras store the possessed arm reads (a nil motion
+	// — e.g. a kit with no world creature behind it — strips nothing).
+	if vehicleMover && s.server != nil && (opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM)) {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
 		s.server.motionMu.Unlock()
 		if motion != nil {
 			s.server.removeCreatureAurasWithInterruptFlags(motion, auraInterruptFlagLanding)
