@@ -31676,6 +31676,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	removedDetectAmoreMisc := int32(0)
 	wasUntrackable := false
 	wasSetVehicle := false
+	wasControlVehicle := false
 	var removedLinkedTriggers []linkedTriggerRef
 	wasPreparation := false
 	wasGhost := false
@@ -31826,6 +31827,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			}
 			wasUntrackable = aura.AuraType == spellAuraUntrackable
 			wasSetVehicle = s.activeAuraHasEffect(aura, spellAuraSetVehicle)
+			wasControlVehicle = s.activeAuraHasEffect(aura, spellAuraControlVehicle)
 			// AuraEffect::HandleAuraLinked remove leg
 			// (SpellAuraEffects.cpp:4898-4903): the linked trigger spell's
 			// aura leaves the target when the parent leaves. Captured
@@ -32234,8 +32236,33 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// present and SMSG_PLAYER_VEHICLE_DATA carries 0; C++ sends the packet
 	// unconditionally and has no HasAuraType gate here.
 	if wasSetVehicle && s.player != nil && s.server != nil {
+		// Vehicle::Uninstall (Vehicle.cpp:108-130): removing the kit
+		// ejects every passenger first — eject while the kit still
+		// exists so exitVehicle's RemovePassenger arm runs.
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); kit != nil {
+			for _, pg := range kit.seatedPassengerGUIDs() {
+				if ps := s.server.findSessionByGUID(pg); ps != nil && ps.player != nil {
+					ps.exitVehicle(context.Background())
+				}
+			}
+		}
 		s.server.removeVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
 		s.sendPlayerVehicleData(0)
+	}
+	// AuraEffect::HandleAuraControlVehicle remove leg
+	// (SpellAuraEffects.cpp:2987-3008): the caster leaves the target
+	// player's vehicle and a same-spell dummy aura on the caster is
+	// dropped (RemoveAurasDueToSpell). The caster==target gate mirrors
+	// the apply leg's C++ no-op; RemovePendingEventsForPassenger has no
+	// Go model, and the 53111 Devour Humanoid kill/despawn arm is vacuous
+	// here (player-target direction, creature-caster only).
+	if wasControlVehicle && removedCasterGUID != 0 && removedCasterGUID != s.playerGUID && s.server != nil {
+		if caster := s.server.findSessionByGUID(removedCasterGUID); caster != nil && caster.player != nil {
+			if caster.player.VehicleGUID == s.playerGUID {
+				caster.exitVehicle(context.Background())
+			}
+			caster.removeAura(spellID)
+		}
 	}
 	// AuraEffect::HandlePreventResurrection remove leg
 	// (SpellAuraEffects.cpp:5035-5044): the release-timer byte flag returns
@@ -35029,6 +35056,23 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 						targetSess.sendPlayerVehicleData(uint32(vehicleID))
 						targetSess.sendCancelExpectedRideVehicleAura()
 					}
+				}
+			}
+		}
+		// AuraEffect::HandleAuraControlVehicle player-target leg
+		// (SpellAuraEffects.cpp:2965-2986): the aura's caster boards the
+		// target player's vehicle kit at seat amount-1. The IsVehicle gate
+		// is the kit's presence (the 296 leg above creates player kits);
+		// caster==target is C++'s no-op (SpellAuraEffects.cpp:2975), and a
+		// creature caster has no Go boarding model (AddPassenger is
+		// player-only), so only a live player caster session boards. The
+		// same-map/instance gate mirrors the aura's in-world targeting;
+		// seat -1 rides AddPassenger's any-usable-seat fallback, the C++
+		// 0/0-seat convention.
+		if eff.Aura == spellAuraControlVehicle && s.server != nil {
+			if casterSess := s.server.findSessionByGUID(casterGUID); casterSess != nil && casterSess.player != nil && casterSess.playerGUID != targetGUID && casterSess.player.Map == targetSess.player.Map && casterSess.player.InstanceID == targetSess.player.InstanceID {
+				if kit := s.server.getVehicleKit(targetSess.player.Map, targetSess.player.InstanceID, targetGUID); kit != nil {
+					casterSess.enterVehicle(ctx, targetGUID, int8(int32(amount)-1))
 				}
 			}
 		}
