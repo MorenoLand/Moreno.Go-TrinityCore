@@ -1188,6 +1188,13 @@ func effectHasFriendlyAreaLeg(eff wotlk.SpellEffect) bool {
 	return isFriendlyAreaTargetType(eff.ImplicitTargetA) || (isFriendlyAreaTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB))
 }
 
+// effectHasFriendlyConeLeg reports whether one effect's own implicit targets
+// select friendly-cone targets (59/60 on a selecting slot) — the mirror of
+// effectHasFriendlyAreaLeg, with the same second-slot skip (Spell.cpp:866-900).
+func effectHasFriendlyConeLeg(eff wotlk.SpellEffect) bool {
+	return isFriendlyConeTargetType(eff.ImplicitTargetA) || (isFriendlyConeTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB))
+}
+
 func effectHasRefCenteredLeg(eff wotlk.SpellEffect) bool {
 	return isRefCenteredAreaTargetType(eff.ImplicitTargetA) || (isRefCenteredAreaTargetType(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB))
 }
@@ -9874,6 +9881,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	var refCenteredFriendlyTargets []uint64
 	var refCenteredAllyTrips []uint64
 	var refCenteredMissGUIDs map[uint64]struct{}
+	// Per-effect friendly-cone selection for mixed spells: a spell pairing a
+	// cone effect with another list branch (area, entry, GO, nearby) joins
+	// the cone picks into hitTargets above, but the cone effect's fan-out
+	// below must iterate only the cone picks, not the merged list — the
+	// pet path's per-leg bits, as a partition. Nil on a pure cone spell
+	// (hitTargets already is the cone list) and non-nil even when empty
+	// on a mixed spell, so an empty cone seeds nobody.
+	var friendlyConeEffectTargets []uint64
 	// The explicit unit target arrives resolved: handleCastSpell ran
 	// resolveExplicitUnitTarget at the CheckCast gauntlet (Spell.cpp:5353-5367),
 	// mirroring how C++ fills m_targets via Spell::InitExplicitTargets
@@ -10314,15 +10329,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// a pure cone spell on its own branch's single selection instead of
 	// scanning twice. Cone targets join hitTargets deduped, ahead of the
 	// channeled check and the area rolls, so they roll, ride the packet,
-	// and seed the cone effects' fan-out; the flat list over-hits the
-	// winning branch's members on cone effects, the standing mixed-effect
-	// approximation the nearby picks already make.
+	// and seed the cone effects' fan-out; the fan-out switches below
+	// iterate friendlyConeEffectTargets for cone effects, so the merged
+	// list no longer over-hits the winning branch's members on them.
 	if isFriendlyConeSpell(spell) && !friendlyConeBranchRan {
+		coneTargets := s.spellFriendlyConeTargets(ctx, spell, target)
+		friendlyConeEffectTargets = coneTargets
+		if friendlyConeEffectTargets == nil {
+			friendlyConeEffectTargets = []uint64{}
+		}
 		seenCone := make(map[uint64]struct{}, len(hitTargets))
 		for _, guid := range hitTargets {
 			seenCone[guid] = struct{}{}
 		}
-		for _, coneGUID := range s.spellFriendlyConeTargets(ctx, spell, target) {
+		for _, coneGUID := range coneTargets {
 			if coneGUID == 0 {
 				continue
 			}
@@ -13381,6 +13401,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						instaList = append(instaList, s.playerGUID)
 					}
 				}
+				if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) && !instaSwitched {
+					instaList = friendlyConeEffectTargets
+				}
 				// Caster-targeted instakill in a mixed spell (Spell.cpp:1500
 				// SelectImplicitCasterObjectTargets, same flat-list shape as the
 				// damage caster effect): C++ selects the caster alone for this
@@ -13526,6 +13549,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dmgList = refCenteredFriendlyTargets
 					dmgSwitched = true
 					dmgRefCentered = true
+				}
+				if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) && !dmgSwitched {
+					dmgList = friendlyConeEffectTargets
 				}
 				// Caster-targeted damage (TARGET_UNIT_CASTER, Spell.cpp:1500
 				// SelectImplicitCasterObjectTargets with checkIfValid=false):
@@ -14310,6 +14336,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						healList = append(healList, s.playerGUID)
 					}
 				}
+				if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) && !healSwitched {
+					healList = friendlyConeEffectTargets
+				}
 				// Caster-targeted heal in a mixed spell (Spell.cpp:1500, same
 				// flat-list shape as the damage caster effect): the heal fires
 				// on the caster alone for this effect's bit, not on the spell's
@@ -14463,6 +14492,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						healList = append(healList, s.playerGUID)
 					}
 				}
+				if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) && !mechSwitched {
+					healList = friendlyConeEffectTargets
+				}
 				// Caster-targeted mechanical heal in a mixed spell (Spell.cpp:1500,
 				// same flat-list shape as the heal arm above).
 				appendMechCaster := func(list []uint64) []uint64 {
@@ -14571,6 +14603,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						energizeList = append(energizeList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					energizeList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
@@ -14639,6 +14673,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						energizePctList = append(energizePctList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					energizePctList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
@@ -14702,6 +14738,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						burnTargets = append(burnTargets, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					burnTargets = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -14798,6 +14836,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						for range reflectedAllyTrips {
 							triggerList = append(triggerList, s.playerGUID)
 						}
+					} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+						triggerList = friendlyConeEffectTargets
 					}
 					// Self-cast kept-target join (Spell.cpp:1558
 					// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -14864,6 +14904,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						extraAttacksList = append(extraAttacksList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					extraAttacksList = friendlyConeEffectTargets
 				}
 				for _, effectTarget := range extraAttacksList {
 					if effectTarget == s.playerGUID && s.grantExtraAttacks(amount) {
@@ -14909,6 +14951,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						missileList = append(missileList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					missileList = friendlyConeEffectTargets
 				}
 				// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -14975,6 +15019,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						skillList = append(skillList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					skillList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15045,6 +15091,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						for range reflectedAllyTrips {
 							comboList = append(comboList, s.playerGUID)
 						}
+					} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+						comboList = friendlyConeEffectTargets
 					}
 					// Self-cast kept-target join (Spell.cpp:1558
 					// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15144,6 +15192,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					threatList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					threatList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					threatList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15194,6 +15244,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						maxHealthList = append(maxHealthList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					maxHealthList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15256,6 +15308,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if auraRefCentered {
 					auraSwitched = true
 				}
+				auraCone := friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff)
 				if auraSwitched {
 					auraList = friendlyEffectTargets
 					if auraRefCentered {
@@ -15275,6 +15328,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						auraList = append(auraList, s.playerGUID)
 					}
 					friendlyAuraList = true
+				}
+				if auraCone && !auraSwitched {
+					auraList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): a self-cast-only spell
@@ -15318,7 +15374,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						auraTarget = effectTarget
 					} else if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
 						auraTarget = s.playerGUID
-					} else if friendlyAuraList && (friendlyAuraEffect || auraSwitched) && effectTarget != 0 {
+					} else if ((friendlyAuraList && (friendlyAuraEffect || auraSwitched)) || auraCone) && effectTarget != 0 {
 						// Effect on its own list (friendly-area or ref-centered):
 						// the entry IS
 						// the unitTarget (SpellEffects.cpp:1233 EffectApplyAura
@@ -15410,6 +15466,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					teleList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					teleList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					teleList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15557,6 +15615,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dismissList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					dismissList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					dismissList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15607,6 +15667,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					dispelList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					dispelList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					dispelList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
@@ -15674,6 +15736,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						dispelMechanicList = append(dispelMechanicList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					dispelMechanicList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
@@ -15720,6 +15784,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					killCreditList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					killCreditList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					killCreditList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15770,6 +15836,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					killCreditGroupList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					killCreditGroupList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					killCreditGroupList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15906,6 +15974,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						teleList = append(teleList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					teleList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -15968,6 +16038,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					leapBackList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					leapBackList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					leapBackList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16020,6 +16092,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						pullList = append(pullList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					pullList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16073,6 +16147,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						pullDestList = append(pullDestList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					pullDestList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16123,6 +16199,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						soundList = append(soundList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					soundList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16166,6 +16244,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						musicList = append(musicList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					musicList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16201,6 +16281,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					scriptList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					scriptList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					scriptList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16286,6 +16368,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						tamedList = append(tamedList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					tamedList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16447,6 +16531,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					repList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					repList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					repList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -16516,6 +16602,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					questList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					questList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					questList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -16574,6 +16662,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					leechList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					leechList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					leechList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16658,6 +16748,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						drainTargets = append(drainTargets, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					drainTargets = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -16738,6 +16830,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					forceList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					forceList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					forceList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -16805,6 +16899,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						knockList = append(knockList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					knockList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -16851,6 +16947,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					durabList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					durabList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					durabList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -16898,6 +16996,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					questList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					questList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					questList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -16945,6 +17045,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					questList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					questList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					questList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -16991,6 +17093,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					questList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					questList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					questList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -17048,6 +17152,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						removeAuraList = append(removeAuraList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					removeAuraList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -17098,6 +17204,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					threatPctList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					threatPctList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					threatPctList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -17147,6 +17255,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						honorList = append(honorList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					honorList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -17206,6 +17316,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					distractList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					distractList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					distractList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -17260,6 +17372,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					sanctList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					sanctList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					sanctList = friendlyConeEffectTargets
 				}
 
 				// Self-cast kept-target join (Spell.cpp:1558
@@ -17344,6 +17458,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					enchantList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					enchantList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					enchantList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -17406,6 +17522,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					inebriateList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					inebriateList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					inebriateList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -17468,6 +17586,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					unlearnList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					unlearnList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					unlearnList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit target carries
@@ -17524,6 +17644,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					renameList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					renameList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					renameList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
@@ -17582,6 +17704,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						redirectList = append(redirectList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					redirectList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
@@ -17670,6 +17794,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					for range reflectedAllyTrips {
 						envList = append(envList, s.playerGUID)
 					}
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					envList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
@@ -17714,6 +17840,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					bindList = refCenteredFriendlyTargets
 				} else if friendlyEffectTargets != nil && !hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff) {
 					bindList = friendlyEffectTargets
+				} else if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+					bindList = friendlyConeEffectTargets
 				}
 				// Self-cast kept-target join (Spell.cpp:1558
 				// SelectImplicitTargetObjectTargets): the kept explicit
@@ -18140,6 +18268,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// hitTargets member.
 				friendlyEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyEffectTargets, launchMs, false, 0)
 				refCenteredFriendlyTargets = s.revalidateDelayedHitTargets(context.Background(), spell, refCenteredFriendlyTargets, launchMs, false, 0)
+				friendlyConeEffectTargets = s.revalidateDelayedHitTargets(context.Background(), spell, friendlyConeEffectTargets, launchMs, false, 0)
 				applyEffects(context.Background())
 				// Spell::_handle_finish_phase (Spell.cpp:3737-3752): the
 				// combo legs run at the last delayed tick (next_time == 0)
@@ -18261,6 +18390,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// Speed == 0, and the alive arm stays out as for hitTargets).
 		friendlyEffectTargets = s.revalidateUnk4ArrivalTargets(spell, friendlyEffectTargets, launchMs, false, 0)
 		refCenteredFriendlyTargets = s.revalidateUnk4ArrivalTargets(spell, refCenteredFriendlyTargets, launchMs, false, 0)
+		friendlyConeEffectTargets = s.revalidateUnk4ArrivalTargets(spell, friendlyConeEffectTargets, launchMs, false, 0)
 	}
 
 	applyEffects(ctx)
@@ -24188,6 +24318,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (hasFriendlyAreaEffect, spells.go:9113-9120).
 	var triggeredFriendlyEffectTargets []uint64
 	var triggeredRefCenteredFriendlyTargets []uint64
+	var triggeredFriendlyConeEffectTargets []uint64
 	goAreaBranchRan, goConeBranchRan := false, false
 	friendlyConeBranchRan := false
 	selectionTargets := hitTargets[:len(hitTargets)-len(chainJumpGUIDs)]
@@ -24434,10 +24565,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// (roll base, GO packet, channeled check) and selectionTargets
 	// (fan-out seed) deduped, mirroring the GO rejoins above — the
 	// selectionTargets copy is rebuilt so the append cannot overwrite
-	// the chain-jump tail it aliases; the flat list over-hits the
-	// winning branch's members on cone effects, the standing mixed-effect
-	// approximation the nearby picks already make.
+	// the chain-jump tail it aliases; the fan-out seed switch below
+	// iterates triggeredFriendlyConeEffectTargets for cone effects, so
+	// the merged list no longer over-hits the winning branch's members
+	// on them.
 	if isFriendlyConeSpell(spell) && !friendlyConeBranchRan {
+		coneTargets := s.spellFriendlyConeTargets(ctx, spell, spellTarget)
+		triggeredFriendlyConeEffectTargets = coneTargets
+		if triggeredFriendlyConeEffectTargets == nil {
+			triggeredFriendlyConeEffectTargets = []uint64{}
+		}
 		seenCone := make(map[uint64]struct{}, len(hitTargets))
 		for _, guid := range hitTargets {
 			seenCone[guid] = struct{}{}
@@ -24446,7 +24583,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		for _, guid := range selectionTargets {
 			seenConeSel[guid] = struct{}{}
 		}
-		for _, coneGUID := range s.spellFriendlyConeTargets(ctx, spell, spellTarget) {
+		for _, coneGUID := range coneTargets {
 			if coneGUID == 0 {
 				continue
 			}
@@ -24503,7 +24640,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// the caster: the area selection found nobody, but the A leg is
 		// independent of it). A nil partition falls back to the shared
 		// list, which the join above already covers.
-		for _, part := range []*[]uint64{&triggeredFriendlyEffectTargets, &triggeredRefCenteredFriendlyTargets} {
+		for _, part := range []*[]uint64{&triggeredFriendlyEffectTargets, &triggeredRefCenteredFriendlyTargets, &triggeredFriendlyConeEffectTargets} {
 			if *part == nil {
 				continue
 			}
@@ -25415,6 +25552,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			sharedSeed = false
 		} else if triggeredRefCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff) {
 			seedTargets = triggeredRefCenteredFriendlyTargets
+			sharedSeed = false
+		} else if triggeredFriendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) {
+			seedTargets = triggeredFriendlyConeEffectTargets
 			sharedSeed = false
 		}
 		// Spell::SelectSpellTargets per-effect masks (Spell.cpp:758-779;
