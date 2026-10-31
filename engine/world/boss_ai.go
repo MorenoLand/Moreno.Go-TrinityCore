@@ -9109,7 +9109,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		if len(eligible) == 0 {
 			continue
 		}
-		if !s.rollCreatureProcChance(entry) {
+		if !s.rollCreatureProcChance(m.Map, m.InstanceID, aura.CasterGUID, entry, auraSpell) {
 			continue
 		}
 		// C++ PrepareProcToTrigger (SpellAuras.cpp:2032): a charge is taken

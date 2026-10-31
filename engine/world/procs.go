@@ -2648,15 +2648,21 @@ func (s *session) rollAuraProcChance(entry spellProcEntry, auraSpell wotlk.Spell
 }
 
 // rollCreatureProcChance mirrors Aura::CalcProcChance (SpellAuras.cpp:2164-2190)
-// for the creature proc path: the plain DBC ProcChance roll. The
-// SPELLMOD_CHANCE_OF_SUCCESS arm is player-spellmod only — C++
-// ApplySpellMod consults the unit's spell-mod owner, which for a wild
-// creature is the creature itself with an empty mod list — and the
-// REDUCE_PROC_60 level arm has no creature-side model (it reads the
-// player's level from the session). Generated entries never carry
-// ProcsPerMinute, so the PPM arm stays vacuous here too.
-func (s *Server) rollCreatureProcChance(entry spellProcEntry) bool {
-	return rand.Float64()*100 < float64(entry.Chance)
+// for the creature proc path: the DBC ProcChance roll, folded through the
+// aura caster's spell-mod owner (SPELLMOD_CHANCE_OF_SUCCESS,
+// SpellAuras.cpp:2181 via WorldObject::GetSpellModOwner, Object.cpp:2246-2261):
+// a true pet's aura caster resolves to the owner player's session, so owner
+// talents modifying the aura's proc chance apply; a player caster resolves
+// to its own session; a wild creature's caster resolves to nil and the roll
+// stays plain. The PPM arm is vacuous (generated entries carry no
+// ProcsPerMinute) and the REDUCE_PROC_60 arm is vacuous too (generated
+// entries never set the attribute).
+func (s *Server) rollCreatureProcChance(mapID, instanceID uint32, casterGUID uint64, entry spellProcEntry, auraSpell wotlk.Spell) bool {
+	chance := float64(entry.Chance)
+	if modOwner := s.spellModOwnerSession(mapID, instanceID, casterGUID); modOwner != nil {
+		chance = modOwner.applySpellModFloat(auraSpell, spellModChanceOfSuccess, chance)
+	}
+	return rand.Float64()*100 < chance
 }
 
 // procAuraTriggers evaluates real aura procs on a melee hit: the done-side
