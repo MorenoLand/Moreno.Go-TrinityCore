@@ -1670,7 +1670,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	if !s.worldportInstanceHasRoom(selection, mapEntry) {
 		return fallbackHomebind()
 	}
-	if !s.initialLoginPending && mapEntry.IsRaid() && (s.server.instanceEncounterInProgress(state.Map, selection.InstanceID) || s.instanceEncounterHooked(ctx, state.Map, selection.InstanceID)) {
+	if !s.initialLoginPending && !s.isMapAdmissionGM() && mapEntry.IsRaid() && (s.server.instanceEncounterInProgress(state.Map, selection.InstanceID) || s.instanceEncounterHooked(ctx, state.Map, selection.InstanceID)) {
 		return fallbackHomebind()
 	}
 	admissionReserved := mapEntry.IsDungeon() && !s.isMapAdmissionGM()
