@@ -26220,9 +26220,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 // energizeEffectTarget mirrors the per-target legs of Spell::EffectEnergize
 // (SpellEffects.cpp:1775-1845): the power-type-mismatch gate, the "Some
 // level depends spells" per-spell amount adjustments, and the damage < 0
-// early return. The HIT_TARGET mode, null-caster/target, alive, power-range,
-// and max-power gates plus the ModifyPower tail ride
-// applySpellEnergize/adjustSpellPower (see the arm note).
+// early return. The HIT_TARGET mode, null-caster/target, power-range,
+// and max-power gates plus the ModifyPower leg ride
+// applySpellEnergize/adjustSpellPower (see the arm note); the !IsAlive
+// tail gate sits on the energizeBySpellTail call below.
 func (s *session) energizeEffectTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, eff wotlk.SpellEffect, effectTarget uint64) {
 	// Spell::EffectEnergize (SpellEffects.cpp:1775-1845) energizes `damage`
 	// (the HandleEffects CalculateDamage value); the per-spell level
@@ -26286,9 +26287,14 @@ func (s *session) energizeEffectTarget(ctx context.Context, spell wotlk.Spell, s
 		return
 	}
 	s.applySpellEnergize(ctx, effectTarget, power, amount)
-	// Unit::EnergizeBySpell (Unit.cpp:6590-6596): the log + assist-threat
-	// tail fires for every non-negative energize.
-	s.energizeBySpellTail(ctx, spell, spellID, effectTarget, power, amount)
+	// SpellEffects.cpp:1784-1785: !IsAlive returns before EnergizeBySpell,
+	// so the log + assist-threat tail must not fire for a target that died
+	// mid-flight; the power leg already no-ops via adjustSpellPower.
+	// effectTargetMaxHealth == 0 is the established alive gate (dead or
+	// unresolvable, both early-outs in C++).
+	if s != nil && s.effectTargetMaxHealth(ctx, effectTarget) != 0 {
+		s.energizeBySpellTail(ctx, spell, spellID, effectTarget, power, amount)
+	}
 }
 
 // energizeCreateMana mirrors Unit::GetCreateMana for the energize pct arms

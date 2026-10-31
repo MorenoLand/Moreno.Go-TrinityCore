@@ -5440,21 +5440,22 @@ func (s *Server) creatureEffectEnergizeCommon(ctx context.Context, m *creatureMo
 			if newPower > vs.player.MaxPowers[uint32(power)] {
 				newPower = vs.player.MaxPowers[uint32(power)]
 			}
-			if newPower == vs.player.Powers[uint32(power)] {
-				continue
+			if newPower != vs.player.Powers[uint32(power)] {
+				vs.player.Powers[uint32(power)] = newPower
+				packet := protocol.NewBuffer(13)
+				packet.WritePackedGUID(vs.playerGUID)
+				packet.WriteU8(uint8(power))
+				packet.WriteU32(newPower)
+				_ = vs.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), true)
 			}
-			vs.player.Powers[uint32(power)] = newPower
-			packet := protocol.NewBuffer(13)
-			packet.WritePackedGUID(vs.playerGUID)
-			packet.WriteU8(uint8(power))
-			packet.WriteU32(newPower)
-			_ = vs.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), true)
 		} else {
 			s.motionMu.Lock()
 			live := s.findCreatureMotionLocked(m.Map, m.InstanceID, guid)
 			var next uint32
 			changed := false
+			liveOK := false
 			if live != nil && live.Health > 0 {
+				liveOK = true
 				next = live.Powers[uint32(power)] + uint32(amount)
 				if next > live.MaxPowers[uint32(power)] {
 					next = live.MaxPowers[uint32(power)]
@@ -5470,10 +5471,12 @@ func (s *Server) creatureEffectEnergizeCommon(ctx context.Context, m *creatureMo
 				}
 			}
 			s.motionMu.Unlock()
-			if !changed {
+			if !liveOK {
 				continue
 			}
-			s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, map[int]uint32{unitFieldPower1 + int(power): next})
+			if changed {
+				s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, map[int]uint32{unitFieldPower1 + int(power): next})
+			}
 		}
 		logPkt := buildSpellEnergizeLog(guid, m.GUID, spell.ID, uint32(power), amount)
 		if vs != nil {
