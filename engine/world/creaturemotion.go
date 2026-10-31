@@ -5215,6 +5215,20 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 
+			// Spell::HandleThreatSpells (Spell.cpp:5096-5151) for the
+			// inline victim cast: _handle_immediate_phase runs it ahead
+			// of the HIT arms (Spell.cpp:3718), so it lands here, after
+			// GO + channel-start and ahead of the effect/damage dispatch
+			// below, over ALL unique targets with the same verdict gates
+			// as the boss_ai twin (reflected/evaded/immune/missed take
+			// the zero leg). Cast-time casts reach this site only on the
+			// firing run (the t0 schedule run returns early), so the
+			// threat fires once, like the twin's deferred fire.
+			if inlineSpellKnown {
+				s.handleCreatureSpellInitialThreat(ctx, motion, inlineSpell, func() float64 { return s.creatureBaseAttackPower(ctx, motion) }, s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID), hitTargets, func(guid uint64) bool {
+					return reflectedSet[guid] || evadedSet[guid] || immuneSet[guid] || missSet[guid] != protocol.SpellMissNone
+				})
+			}
 			schoolMask := uint8(1)
 			damage, hasDBCSpell := uint32(0), false
 			if s != nil && s.Data != nil {
