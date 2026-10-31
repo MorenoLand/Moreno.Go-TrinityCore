@@ -256,9 +256,12 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		// in Go, so the BG's map lives on the active queue slot. The
 		// skipEntryTeleport flag avoids the entry-point teleport bouncing
 		// the player back instead of landing at the far destination; the
-		// deserter-track arm still fires (Player.cpp:22499). The
-		// CONFIG_BATTLEGROUND_CAST_DESERTER spell cast (Player.cpp:22479) and
-		// the DELAYED_SPELL_CAST_DESERTER schedule have no Go twin.
+		// deserter-track arm still fires (Player.cpp:22499), and the
+		// deserter cast is immediate, not delayed: LeaveBattleground(false)
+		// runs inside TeleportTo before SetSemaphoreTeleportFar, so
+		// IsBeingTeleportedFar is false there (Player.cpp:1814 vs 22479).
+		// The DELAYED_SPELL_CAST_DESERTER schedule is the entry-point
+		// leave's arm, not this one's (see handleLeaveBattlefield).
 		// Resolve the arena roster BEFORE the leave arm below: the leave
 		// funnel deletes the PlayerTeams entry, and C++ gates this arm on
 		// the map being left (mEntry), not on surviving BG membership.

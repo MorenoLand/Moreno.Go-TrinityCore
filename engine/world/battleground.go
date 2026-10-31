@@ -3021,21 +3021,36 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// Player::LeaveBattleground (Player.cpp:22475-22485): leaving a live
 	// battleground marks the leaver deserter — spell 26013 cast triggered —
 	// unless they are a game master or Battleground.CastDeserter is off.
-	// A far-teleport leave defers the cast until the teleport completes
-	// (DELAYED_SPELL_CAST_DESERTER, Player.cpp:1918): Go arms
-	// pendingDeserterCast and fires it in completeWorldPort, the
-	// ProcessDelayedOperations analog for the far-teleport semaphore.
 	// A WaitJoin slot is NOT a live battleground: it is invited-not-entered,
 	// and GetBattleground() is null until the port accept sets the instance
 	// id (Player.cpp:23546: GetBattlegroundId() == 0 → nullptr), so
 	// Player::LeaveBattleground is a complete no-op for it — no deserter,
-	// no track, and the invite survives. The WaitJoin term below would have
-	// cast/tracked for a player who never entered.
+	// no track, and the invite survives.
+	// The two teleport legs split on the far semaphore. LeaveBattleground
+	// (false) (Player.cpp:1814, a far teleport away from the BG) runs
+	// inside TeleportTo BEFORE SetSemaphoreTeleportFar, so
+	// IsBeingTeleportedFar is false there: the cast is immediate and the
+	// track row fires. The entry-point leave (Transport=true) runs
+	// RemovePlayerAtLeave first, whose TeleportToBGEntryPoint sets the far
+	// semaphore for a cross-map entry point, so LeaveBattleground sees
+	// IsBeingTeleportedFar, schedules DELAYED_SPELL_CAST_DESERTER
+	// (Player.cpp:1918) and RETURNS before the track arm — no LEAVE_BG
+	// row. Entry points are never on the BG map (SetBattlegroundEntryPoint
+	// skips BG/arena maps), so a valid entry point always means the
+	// C++-far case. In Go the entry teleport is near for sim players
+	// (they never stand on the BG map), so no worldport ack runs to fire
+	// a deferred cast: the cast stays immediate and only the track row
+	// follows the C++ return. A genuinely far Go entry teleport (the
+	// player moved maps mid-BG) still defers via pendingDeserterCast,
+	// fired in completeWorldPort. Residual: if the entry teleport is
+	// denied after the arms run, the row is skipped where C++ (whose
+	// TeleportTo failed before setting the semaphore) would insert it.
+	entryTeleportFollows := !fromLogout && !skipEntryTeleport && s.bgData.InstanceID != 0 && s.hasBattlegroundEntryPoint()
 	if !fromLogout && s.server != nil && s.server.Config.BattlegroundCastDeserter && !sessionIsGameMaster(s) {
 		for i := range s.bgQueues {
 			e := &s.bgQueues[i]
 			if e.Active && !e.IsArena && e.Status == BGStatusInProgress {
-				if skipEntryTeleport {
+				if entryTeleportFollows && s.player.Map != s.bgData.JoinMap {
 					s.pendingDeserterCast = true
 				} else {
 					s.castSpellDirect(ctx, deserterSpellBG, s.playerGUID)
@@ -3044,7 +3059,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 			}
 		}
 	}
-	if !fromLogout {
+	if !fromLogout && !entryTeleportFollows {
 		for i := range s.bgQueues {
 			e := &s.bgQueues[i]
 			if e.Active && !e.IsArena && e.Status == BGStatusInProgress {
