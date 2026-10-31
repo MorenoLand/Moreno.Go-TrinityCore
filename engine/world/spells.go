@@ -42030,9 +42030,10 @@ func (s *session) handleTotemDestroyed(ctx context.Context, payload []byte) bool
 		return true
 	}
 	// SpellHandler.cpp:585-586 — ignore for remote control state: while the
-	// mover is a vehicle (or otherwise not the player), the destroy is
-	// dropped instead of despawning the player's totem.
-	if s.moverGUID() != s.playerGUID {
+	// mover is a vehicle or a possessed creature (or otherwise not the
+	// player), the destroy is dropped instead of despawning the player's
+	// totem.
+	if s.moverGUID() != s.playerGUID || s.possessedCreatureGUID() != 0 {
 		return true
 	}
 	slotID := payload[0]

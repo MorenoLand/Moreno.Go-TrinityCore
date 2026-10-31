@@ -678,11 +678,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	// HandleGameObjectUseOpcode (SpellHandler.cpp:306-309): the remote-control
-	// arm is NOT a drop — it only blocks when NOT (IsOnVehicle(mover) ||
-	// IsMounted() || goInfo.IsUsableMounted()). Go's only divergent mover is
-	// the driven control-seat vehicle, and the driver is on it, so the arm
-	// always permits: no gate needed. (Charm/possess movers, where the arm
-	// could fire, have no Go model.)
+	// arm is NOT a blanket drop — it only blocks when NOT (IsOnVehicle(mover)
+	// || IsMounted() || goInfo.IsUsableMounted()). A driven control-seat
+	// vehicle always permits (the driver is on it), but a possessed mover
+	// permits only when mounted or the GO is usable-mounted; the possessed
+	// leg runs below, once the template is loaded.
 
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	// ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT is updated by CMSG_GAMEOBJ_REPORT_USE
@@ -736,6 +736,15 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	// raw UNIT_FLAG_IMMUNE flag in C++; Go reads the maintained flag bit
 	// (playerGOImmunityBlocked).
 	goTpl := s.loadGameObjectTemplateData(ctx, entry)
+	// SpellHandler.cpp:306-309 — the remote-control arm, gated on the
+	// possessed mover only (a driver permits via IsOnVehicle, a plain
+	// player is the mover): a possessing player is on no vehicle carrying
+	// the possessed creature, so the use drops unless the player is
+	// mounted or the GO is usable-mounted. Placed before the Use head
+	// arms (immunity, dismount) like C++, which gates before obj->Use.
+	if s.possessedCreatureGUID() != 0 && !s.isPlayerMounted() && !goIsUsableMounted(goState.Type, goTpl) {
+		return true
+	}
 	if goCannotBeUsedUnderImmunity(goState.Type, goTpl) && s.playerGOImmunityBlocked() {
 		return true
 	}
@@ -1291,9 +1300,10 @@ func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte)
 		return true
 	}
 	// HandleGameobjectReportUse (SpellHandler.cpp:321-322) — ignore for
-	// remote control state: while the mover is a vehicle the achievement
-	// update is dropped, after the guid read like C++.
-	if s.moverGUID() != s.playerGUID {
+	// remote control state: while the mover is a vehicle or a possessed
+	// creature the achievement update is dropped, after the guid read
+	// like C++.
+	if s.moverGUID() != s.playerGUID || s.possessedCreatureGUID() != 0 {
 		return true
 	}
 	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2371): a player in

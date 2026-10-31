@@ -3551,9 +3551,10 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// SpellHandler.cpp:77-79 — ignore for remote control state: the gate
-	// fires before any packet read, while the mover is a vehicle (the
-	// mover model added in the 00:29 vehicle-mover strip).
-	if s.moverGUID() != s.playerGUID {
+	// fires before any packet read, while the mover is a vehicle or a
+	// possessed creature (GetUnitBeingMoved() != player covers both;
+	// moverGUID() alone misses the possessed mover).
+	if s.moverGUID() != s.playerGUID || s.possessedCreatureGUID() != 0 {
 		return true
 	}
 	r := protocol.NewReader(payload)
@@ -5856,8 +5857,10 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	// SpellHandler.cpp:190 — ignore for remote control state: the gate
-	// fires before the packet read and before the dead gate.
-	if s.moverGUID() != s.playerGUID {
+	// fires before the packet read and before the dead gate, while the
+	// mover is a vehicle or a possessed creature (same GetUnitBeingMoved
+	// arm as UseItem).
+	if s.moverGUID() != s.playerGUID || s.possessedCreatureGUID() != 0 {
 		return true
 	}
 	if s.player.Health == 0 {
