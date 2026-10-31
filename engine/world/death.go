@@ -163,7 +163,12 @@ func isCharmFamilyAura(auraType uint32) bool {
 // on other targets are destroyed with AURA_REMOVE_BY_DEATH — passive and
 // death-persistent auras are skipped, exactly like the applied loop, except
 // the charm family (isCharmFamilyAura), which setDeathState's
-// RemoveAllControlled already released unconditionally. Go holds
+// RemoveAllControlled already released unconditionally, and
+// SPELL_AURA_CONTROL_VEHICLE, which setDeathState's ExitVehicle
+// (Unit.cpp:8916, before RemoveAllControlled) already removed by type
+// with no death-persistence check — the sweep's strip of a vehicle aura
+// models ExitVehicle, not the death strip, and the remove funnel then
+// runs the wasControlVehicle exit tail. Go holds
 // no passive aura instances, so only the death-persistent gate is modeled.
 // Records are matched on aura.CasterGUID == casterGUID, which creature casts
 // set to the motion GUID (boss_ai.go:1063) and player casts to the player
@@ -190,7 +195,7 @@ func (s *Server) sweepOwnedAurasOnDeath(casterGUID uint64) {
 		var strip []uint32
 		if sess.activeAuras != nil {
 			for id, aura := range sess.activeAuras {
-				if aura == nil || aura.CasterGUID != casterGUID || (spellDeathPersistent(s.Data, id) && !isCharmFamilyAura(aura.AuraType)) {
+				if aura == nil || aura.CasterGUID != casterGUID || (spellDeathPersistent(s.Data, id) && !isCharmFamilyAura(aura.AuraType) && aura.AuraType != spellAuraControlVehicle) {
 					continue
 				}
 				strip = append(strip, id)
@@ -211,7 +216,7 @@ func (s *Server) sweepOwnedAurasOnDeath(casterGUID uint64) {
 	if s.activeCreatureAuras != nil {
 		for key, auras := range s.activeCreatureAuras {
 			for id, aura := range auras {
-				if aura == nil || aura.CasterGUID != casterGUID || (spellDeathPersistent(s.Data, id) && !isCharmFamilyAura(aura.AuraType)) {
+				if aura == nil || aura.CasterGUID != casterGUID || (spellDeathPersistent(s.Data, id) && !isCharmFamilyAura(aura.AuraType) && aura.AuraType != spellAuraControlVehicle) {
 					continue
 				}
 				cstrip = append(cstrip, ownedStrip{key: key, id: id})
