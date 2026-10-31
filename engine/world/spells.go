@@ -8586,9 +8586,6 @@ func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
 //     Spell.cpp:2715-2717 -> SPELL_MISS_EVADE) drops with SMSG_SPELLLOGMISS
 //     (PreprocessTarget, Spell.cpp:2366-2372 — every non-MISS late miss fires
 //     SendSpellMiss);
-//   - a target that gained UNIT_FLAG_NON_ATTACKABLE mid-flight
-//     (PreprocessSpellHit, Spell.cpp:2740-2741 -> SPELL_MISS_EVADE), unless
-//     the target's charmer/owner is the caster, drops with SMSG_SPELLLOGMISS;
 //   - a target that gained spell immunity between launch and hit
 //     (PreprocessSpellHit, Spell.cpp:2720 — the arm applies to any unit, so
 //     creatures re-run Creature::IsImmunedToSpell) drops with
@@ -8596,6 +8593,9 @@ func (s *session) creatureCharmerOrOwnerGUID(guid uint64) uint64 {
 //     put in combat when the player caster could validly attack it
 //     (PreprocessTarget, Spell.cpp:2354-2357, the taunt-vs-immune case; the
 //     harmful-spell path implies IsValidAttackTarget).
+//   - a target that gained UNIT_FLAG_NON_ATTACKABLE mid-flight
+//     (PreprocessSpellHit, Spell.cpp:2740-2741 -> SPELL_MISS_EVADE), unless
+//     the target's charmer/owner is the caster, drops with SMSG_SPELLLOGMISS;
 //
 // C++ sends no new SMSG_SPELL_GO for these, so missStatus is untouched; the
 // LOGMISS packet is the client's only arrival-time signal. The arms split
@@ -8661,17 +8661,6 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 			s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 			continue
 		}
-		if s.server != nil && s.player != nil && !reflectedEntry && armGUID != s.playerGUID &&
-			tgt.UnitFlags&unitFlagNonAttackable != 0 {
-			charmerOrOwner := armGUID
-			if high := uint16(armGUID >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
-				charmerOrOwner = s.creatureCharmerOrOwnerGUID(armGUID)
-			}
-			if charmerOrOwner != s.playerGUID {
-				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
-				continue
-			}
-		}
 		if s.server != nil {
 			// PreprocessSpellHit runs on _spellHitTarget: the caster for a
 			// reflected entry, the unit itself otherwise. The LOGMISS
@@ -8694,6 +8683,20 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 			}
 			if high := uint16(immuneGUID >> 48); (high == 0xF130 || high == 0xF140 || high == 0xF150) && s.creatureTargetImmuneToSpell(ctx, immuneGUID, spell, s, tgt.Faction) {
 				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
+				continue
+			}
+		}
+		// PreprocessSpellHit runs the immunity arm (Spell.cpp:2720) ahead of
+		// the NON_ATTACKABLE recheck (:2740-2741), so a target both immune
+		// and flagged at arrival reports IMMUNE, not EVADE.
+		if s.server != nil && s.player != nil && !reflectedEntry && armGUID != s.playerGUID &&
+			tgt.UnitFlags&unitFlagNonAttackable != 0 {
+			charmerOrOwner := armGUID
+			if high := uint16(armGUID >> 48); high == 0xF130 || high == 0xF140 || high == 0xF150 {
+				charmerOrOwner = s.creatureCharmerOrOwnerGUID(armGUID)
+			}
+			if charmerOrOwner != s.playerGUID {
+				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissEvade)
 				continue
 			}
 		}
