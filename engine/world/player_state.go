@@ -632,6 +632,38 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	restoreLoadedDeathState(&state)
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
+	// Player::_LoadAuras re-applies a restored 296 aura
+	// (SpellAuraEffects.cpp:5006-5035: CreateVehicleKit +
+	// SMSG_PLAYER_VEHICLE_DATA), so a relogging vehicle base regains
+	// the kit logout dropped (Unit::RemoveFromWorld RemoveVehicleKit).
+	// The fold scans every saved-mask effect, not just the record's
+	// first effect, and skips when a kit already exists.
+	if s.server != nil && s.server.Data != nil {
+		for _, aura := range s.loadedAuras() {
+			if aura == nil {
+				continue
+			}
+			spell, found, spellErr := s.server.Data.Spell(aura.SpellID)
+			if spellErr != nil || !found {
+				continue
+			}
+			for index, effect := range spell.Effects {
+				if aura.EffectMask&(1<<uint(index)) == 0 || effect.Aura != spellAuraSetVehicle || effect.MiscValue <= 0 {
+					continue
+				}
+				if _, ok, vehErr := s.server.Data.Vehicle(uint32(effect.MiscValue)); vehErr != nil || !ok {
+					continue
+				}
+				if s.server.getVehicleKit(state.Map, state.InstanceID, state.GUID) != nil {
+					continue
+				}
+				if kit := s.server.createVehicleKit(state.Map, state.InstanceID, state.GUID, uint32(effect.MiscValue), 0, true); kit != nil {
+					s.sendPlayerVehicleData(uint32(effect.MiscValue))
+					s.sendCancelExpectedRideVehicleAura()
+				}
+			}
+		}
+	}
 	// Player::CastAllObtainSpells (Player.cpp:4732, 7840-7856): inventory items
 	// present at login fire their ITEM_SPELLTRIGGER_ON_NO_DELAY_USE spells.
 	s.castAllObtainSpells(ctx)

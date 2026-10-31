@@ -4367,6 +4367,12 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		_ = s.savePlayerPosition(ctx)
 	}
 	s.clearActiveAuras()
+	// Unit::RemoveFromWorld (Unit.cpp:9786-9802) runs the vehicle arms
+	// before the area-aura sweep below: a logging-out base ejects its
+	// passengers and drops its kit, and a logging-out passenger frees
+	// its kit seat, so neither a ghost seat nor passengers riding a
+	// departed base survive the session discard.
+	s.releaseVehicleStateAtLogout(ctx)
 	// Unit::RemoveAreaAurasDueToLeaveWorld (Unit.cpp:4249-4266): auras
 	// the leaving player owns on other targets are stripped.
 	if s.server != nil {

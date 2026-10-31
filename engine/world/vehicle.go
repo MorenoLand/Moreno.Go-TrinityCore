@@ -1307,6 +1307,50 @@ func (s *session) exitVehicle(ctx context.Context) {
 	s.sendPlayerUpdate()
 }
 
+// releaseVehicleStateAtLogout mirrors Unit::RemoveFromWorld
+// (Unit.cpp:9786-9802): a leaving vehicle base drops its kit first
+// (RemoveVehicleKit -> Uninstall -> RemoveAllPassengers), then a leaving
+// passenger exits (ExitVehicle). It runs after the logout save, matching
+// C++ SaveToDB-before-RemovePlayerFromMap, so the saved position is the
+// riding position, not the exit position. The passenger arm deliberately
+// does NOT call exitVehicle: a full exit would resummon a
+// temporarily-unsummoned pet into a discarded session (spawnPet) and send
+// control/update packets to a departing client, while the seat release
+// itself is the only durable effect — the logger's player object is
+// discarded below. A 236-boarded logger is already freed before this runs
+// by the leave-world sweep (the base's remove tail exits the caster), so
+// this arm covers the packet/spell-click boardings that carry no aura.
+func (s *session) releaseVehicleStateAtLogout(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID); kit != nil {
+		for _, pg := range kit.seatedPassengerGUIDs() {
+			if pg == s.playerGUID {
+				continue
+			}
+			if ps := s.server.findSessionByGUID(pg); ps != nil && ps.player != nil {
+				ps.exitVehicle(ctx)
+			}
+		}
+		s.server.removeVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
+	}
+	if s.player.VehicleGUID != 0 {
+		vehGUID := s.player.VehicleGUID
+		if kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehGUID); kit != nil {
+			kit.RemovePassenger(s.playerGUID)
+			if !kit.IsVehicleInUse() {
+				if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, vehGUID); motion != nil && s.server.isVehicleAI(motion) && s.server.vehicleHasConditions(ctx, motion.Entry) {
+					motion.VehicleDismiss = true
+					motion.VehicleDismissAt = time.Now().Add(5 * time.Second)
+				}
+			}
+		}
+		s.player.VehicleGUID = 0
+		s.player.VehicleSeat = 0
+	}
+}
+
 // applyVehicleExitPosition resolves the passenger's exit coordinates.
 // Reference: Unit::_ExitVehicle (Unit.cpp:13215-13234).
 func (s *session) applyVehicleExitPosition(vehicleGUID uint64, addon *VehicleSeatAddon) {
