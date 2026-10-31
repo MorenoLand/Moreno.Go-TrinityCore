@@ -4195,6 +4195,51 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 							hitTargets = append(hitTargets, allyCreatureGUID)
 						}
 					}
+					// Spell::SelectImplicitAreaTargets (Spell.cpp:1227)
+					// ref-centered legs (37/61), the inline twin of the
+					// boss-ai block: centered on the explicit target
+					// (spellTarget, post-redirect), not the caster. No
+					// post-nearby re-sweep: the center is the explicit
+					// target, which the nearby pick never moves, and the
+					// helper excludes only the caster, so no exclusion
+					// changes across the nearby block.
+					if hasRefCenteredAreaEffect(spellInfo) {
+						refPlayers, refCreatures, _ := s.creatureRefCenteredAreaTargets(ctx, motion, spellInfo, spellTarget.UnitGUID)
+						for _, refHit := range refPlayers {
+							if refHit == nil || refHit.GUID == 0 {
+								continue
+							}
+							dup := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == refHit.GUID {
+									dup = true
+									break
+								}
+							}
+							if dup {
+								continue
+							}
+							areaHits = append(areaHits, refHit)
+							hitTargets = append(hitTargets, refHit.GUID)
+						}
+						for _, refCreatureGUID := range refCreatures {
+							if refCreatureGUID == 0 {
+								continue
+							}
+							dup := false
+							for _, hitGUID := range hitTargets {
+								if hitGUID == refCreatureGUID {
+									dup = true
+									break
+								}
+							}
+							if dup {
+								continue
+							}
+							areaCreatureHits = append(areaCreatureHits, refCreatureGUID)
+							hitTargets = append(hitTargets, refCreatureGUID)
+						}
+					}
 				}
 			}
 			// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036) for a

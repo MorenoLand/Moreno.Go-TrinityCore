@@ -1945,7 +1945,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		// non-hostile players in the area where C++ IsInPartyWith /
 		// IsInRaidWith (Unit.cpp:12126/12155) would admit same-faction
 		// creatures but not players, absent TREAT_AS_RAID_UNIT.
-		if isAreaEnemySpell(spellInfo) || hasFriendlyAreaEffect(spellInfo) {
+		if isAreaEnemySpell(spellInfo) || hasFriendlyAreaEffect(spellInfo) || hasRefCenteredAreaEffect(spellInfo) {
 			areaVictim := &playerPos{GUID: targetGUID}
 			seenArea := make(map[uint64]struct{}, len(hitTargets))
 			for _, guid := range hitTargets {
@@ -1982,6 +1982,25 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				}
 				for _, allyCreatureGUID := range allyCreatures {
 					appendAreaGUID(allyCreatureGUID)
+				}
+			}
+			// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) ref-centered
+			// legs (37/61): centered on the explicit target (spellTarget,
+			// post-redirect, which the nearby block never rewrites even
+			// as it moves targetGUID to the pick), not on the caster
+			// like the ally sweep above — previously this path selected
+			// no 37/61 targets at all. The flat hit list unions the
+			// ref picks with the other area families (the session
+			// path keeps per-effect partitions; this path has none).
+			if hasRefCenteredAreaEffect(spellInfo) {
+				refPlayers, refCreatures, _ := s.creatureRefCenteredAreaTargets(ctx, m, spellInfo, spellTarget.UnitGUID)
+				for _, refHit := range refPlayers {
+					if refHit != nil {
+						appendAreaGUID(refHit.GUID)
+					}
+				}
+				for _, refCreatureGUID := range refCreatures {
+					appendAreaGUID(refCreatureGUID)
 				}
 			}
 		}

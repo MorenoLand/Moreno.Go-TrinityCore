@@ -704,6 +704,8 @@ const (
 	petAreaAllyCheckRaid
 	petAreaAllyCheckConeAlly
 	petAreaAllyCheckConeEntry
+	petAreaAllyCheckRefParty
+	petAreaAllyCheckRefRaid
 )
 
 // petAreaAllyWantedMask maps an effect's two implicit targets to the check
@@ -717,6 +719,10 @@ func petAreaAllyWantedMask(targetA, targetB uint32) uint8 {
 			wanted |= petAreaAllyCheckConeAlly
 		case targetType == implicitTargetConeEntry:
 			wanted |= petAreaAllyCheckConeEntry
+		case targetType == implicitTargetLastTargetAreaParty:
+			wanted |= petAreaAllyCheckRefParty
+		case targetType == implicitTargetTargetAreaRaidClass:
+			wanted |= petAreaAllyCheckRefRaid
 		case !isFriendlyAreaTargetType(targetType):
 			continue
 		default:
@@ -1105,6 +1111,298 @@ func (s *Server) creatureAIAreaAllyTargets(ctx context.Context, motion *creature
 	}
 	for _, guid := range creatures {
 		checks[guid] |= creatureChecks[guid]
+	}
+	return players, creatures, checks
+}
+
+// creatureRefCenteredAreaTargets is the creature-caster twin of the session
+// spellFriendlyRefCenteredAreaTargets: Spell::SelectImplicitAreaTargets
+// (Spell.cpp:1227) for the non-caster reference types, 37
+// TARGET_UNIT_LASTTARGET_AREA_PARTY (TARGET_REFERENCE_TYPE_LAST,
+// TARGET_CHECK_PARTY) and 61 TARGET_UNIT_TARGET_AREA_RAID_CLASS
+// (TARGET_REFERENCE_TYPE_TARGET, TARGET_CHECK_RAID_CLASS). Both center on
+// the cast's explicit unit target: 61 reads m_targets.GetUnitTarget()
+// directly, and 37's per-effect last-added target has no flat-list
+// counterpart, so it takes the session path's approximation (the explicit
+// target, the seed's last entry there). The creature paths previously
+// selected no 37/61 targets at all: a pure ref-centered spell hit only
+// its wire target, and a mixed spell rode the caster-centered ally list.
+// The caster itself is excluded (the ally-sweep precedent); the explicit
+// target joins through the caller's wire leg, deduped there. Returned
+// check bits are ref-only (party/raid relative to the referer, not the
+// caster's owner), so on the bit-gated pet path only the ref legs fire.
+// Radius is the ref effects' CalcRadius with the zero-radius max-range
+// fallback per IsPositiveEffect (Spell.cpp:1282), folded through the
+// spell-mod owner like the ally geometry; the merged MaxAffectedTargets
+// cap shuffles like the ally twin, with no aura-mod term (the motion has
+// no aura model). A gameobject wire target resolves to no unit referer
+// (C++ GetUnitTarget null) and selects nothing.
+func (s *Server) creatureRefCenteredAreaTargets(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, explicitGUID uint64) ([]*playerPos, []uint64, map[uint64]uint8) {
+	if s == nil || motion == nil || explicitGUID == 0 || !hasRefCenteredAreaEffect(spell) {
+		return nil, nil, nil
+	}
+	if uint16(explicitGUID>>48) == 0xF110 {
+		return nil, nil, nil
+	}
+	var refX, refY, refZ float32
+	var scope friendlyRefererScope
+	found := false
+	if sess := s.findSessionByGUID(explicitGUID); sess != nil && sess.player != nil {
+		refX, refY, refZ = sess.player.X, sess.player.Y, sess.player.Z
+		_, party, raid, inGroup := groupMembershipSnapshot(s, sess.groupID, explicitGUID)
+		scope = playerGroupScope(explicitGUID, party, raid, inGroup, sess.player.Class)
+		found = true
+	} else if refMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, explicitGUID); refMotion != nil {
+		refX, refY, refZ = refMotion.X, refMotion.Y, refMotion.Z
+		scope = s.motionChainRefererScope(refMotion, explicitGUID)
+		found = true
+	} else if s.WorldStore != nil && s.WorldStore.DB != nil {
+		row := s.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ?`, uint32(explicitGUID&0xFFFFFF))
+		var mapID int64
+		var x, y, z float64
+		var faction int64
+		if err := row.Scan(&mapID, &x, &y, &z, &faction); err == nil && uint32(mapID) == motion.Map {
+			refX, refY, refZ = float32(x), float32(y), float32(z)
+			refFaction := uint32(faction)
+			sameFaction := func(c friendlyCandidate) bool {
+				return c.guid == explicitGUID || (!c.isPlayer && c.faction == refFaction)
+			}
+			scope = friendlyRefererScope{inParty: sameFaction, inRaid: sameFaction}
+			found = true
+		}
+	}
+	if !found {
+		return nil, nil, nil
+	}
+	var maxRangePositive, maxRangeNegative float32
+	modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
+	if s.Data != nil {
+		if rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex); err == nil && ok {
+			maxRangePositive = float32(spellDBCMaxRange(true, rangeEntry))
+			maxRangeNegative = float32(spellDBCMaxRange(false, rangeEntry))
+			if modOwner != nil {
+				maxRangePositive = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangePositive)))
+				maxRangeNegative = float32(modOwner.applySpellModFloat(spell, spellModRange, float64(maxRangeNegative)))
+			}
+		}
+	}
+	radius := float32(0)
+	hasParty, hasRaidClass := false, false
+	for i, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		effParty, effRaid := false, false
+		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
+				continue
+			}
+			if targetType == implicitTargetLastTargetAreaParty {
+				effParty = true
+			}
+			if targetType == implicitTargetTargetAreaRaidClass {
+				effRaid = true
+			}
+		}
+		if !effParty && !effRaid {
+			continue
+		}
+		hasParty = hasParty || effParty
+		hasRaidClass = hasRaidClass || effRaid
+		if s.Data != nil {
+			if value, ok, err := s.Data.SpellRadius(eff.RadiusIndex, uint32(motion.Level)); err == nil && ok && value > 0 {
+				if modOwner != nil {
+					value = float32(modOwner.applySpellModFloat(spell, spellModRadius, float64(value)))
+				}
+				if value > radius {
+					radius = value
+				}
+			} else {
+				effMaxRange := maxRangeNegative
+				if spell.IsPositiveEffect(i) {
+					effMaxRange = maxRangePositive
+				}
+				if effMaxRange > radius {
+					radius = effMaxRange
+				}
+			}
+		}
+	}
+	if radius <= 0 {
+		return nil, nil, nil
+	}
+	losOK := func(x, y, z float32) bool {
+		if spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 {
+			return true
+		}
+		return s.hasLineOfSightSpellCheck(motion.Map, refX, refY, refZ, x, y, z)
+	}
+	checkBits := func(c friendlyCandidate) uint8 {
+		var bits uint8
+		if hasParty && scope.inParty(c) {
+			bits |= petAreaAllyCheckRefParty
+		}
+		if hasRaidClass && c.class == scope.class && scope.inRaid(c) {
+			bits |= petAreaAllyCheckRefRaid
+		}
+		return bits
+	}
+	seen := make(map[uint64]struct{})
+	checks := make(map[uint64]uint8)
+	var players []*playerPos
+	var creatures []uint64
+	s.sessionsMu.RLock()
+	for targetSession := range s.sessions {
+		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 {
+			continue
+		}
+		if sessionIsGameMaster(targetSession) {
+			continue
+		}
+		if targetSession.player.Map != motion.Map || targetSession.player.InstanceID != motion.InstanceID {
+			continue
+		}
+		if targetSession.playerGUID == motion.GUID || s.isTotemGUID(targetSession.playerGUID) {
+			continue
+		}
+		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
+		if s.isAttackableFaction(motion.Faction, candidate) {
+			continue
+		}
+		if spellTargetUnitBlocked(spell, targetSession.player.UnitFlags, 0, true) {
+			continue
+		}
+		dx, dy := float64(candidate.X-refX), float64(candidate.Y-refY)
+		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(candidate.Z-refZ)) > float64(radius) {
+			continue
+		}
+		if !losOK(candidate.X, candidate.Y, candidate.Z) {
+			continue
+		}
+		bits := checkBits(friendlyCandidate{guid: candidate.GUID, isPlayer: true, class: candidate.Class, faction: candidate.FactionTemplate})
+		if bits == 0 {
+			continue
+		}
+		seen[candidate.GUID] = struct{}{}
+		checks[candidate.GUID] = bits
+		cp := candidate
+		players = append(players, &cp)
+	}
+	s.sessionsMu.RUnlock()
+	s.motionMu.Lock()
+	motionMap := s.motionMapLocked(motion.Map, motion.InstanceID)
+	motionCandidates := make([]*creatureMotion, 0, len(motionMap))
+	motionGUIDs := make(map[uint64]struct{}, len(motionMap))
+	for _, cand := range motionMap {
+		if cand != nil {
+			motionCandidates = append(motionCandidates, cand)
+			motionGUIDs[cand.GUID] = struct{}{}
+		}
+	}
+	s.motionMu.Unlock()
+	for _, cand := range motionCandidates {
+		if cand.Map != motion.Map || cand.InstanceID != motion.InstanceID || cand.Health == 0 {
+			continue
+		}
+		if _, dup := seen[cand.GUID]; dup {
+			continue
+		}
+		if cand.GUID == motion.GUID || s.isTotemGUID(cand.GUID) || spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, true) {
+			continue
+		}
+		if s.factionTemplatesHostile(motion.Faction, cand.Faction) {
+			continue
+		}
+		dx, dy := float64(cand.X-refX), float64(cand.Y-refY)
+		if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(cand.Z-refZ)) > float64(radius) {
+			continue
+		}
+		if !losOK(cand.X, cand.Y, cand.Z) {
+			continue
+		}
+		ownerGUID := cand.OwnerGUID
+		if ownerGUID == 0 {
+			ownerGUID = cand.CharmOwnerGUID
+		}
+		bits := checkBits(friendlyCandidate{guid: cand.GUID, faction: cand.Faction, ownerGUID: ownerGUID})
+		if bits == 0 {
+			continue
+		}
+		seen[cand.GUID] = struct{}{}
+		checks[cand.GUID] = bits
+		creatures = append(creatures, cand.GUID)
+	}
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, float64(refX-radius), float64(refX+radius), float64(refY-radius), float64(refY+radius))
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
+				var x, y, z float64
+				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) != nil {
+					continue
+				}
+				guid := creatureWorldGUID(uint32(low), uint32(entry))
+				if _, hasMotion := motionGUIDs[guid]; hasMotion {
+					continue
+				}
+				if _, dup := seen[guid]; dup {
+					continue
+				}
+				if uint32(mapID) != motion.Map || health <= 0 {
+					continue
+				}
+				if guid == motion.GUID || s.isTotemGUID(guid) || spellTargetUnitBlocked(spell, uint32(unitFlags), uint32(flagsExtra), true) {
+					continue
+				}
+				if s.factionTemplatesHostile(motion.Faction, uint32(faction)) {
+					continue
+				}
+				fx, fy, fz := float32(x), float32(y), float32(z)
+				dx, dy := float64(fx-refX), float64(fy-refY)
+				if dx*dx+dy*dy > float64(radius*radius) || math.Abs(float64(fz-refZ)) > float64(radius) {
+					continue
+				}
+				if !losOK(fx, fy, fz) {
+					continue
+				}
+				bits := checkBits(friendlyCandidate{guid: guid, faction: uint32(faction)})
+				if bits == 0 {
+					continue
+				}
+				seen[guid] = struct{}{}
+				checks[guid] = bits
+				creatures = append(creatures, guid)
+			}
+		}
+	}
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(players))+uint32(len(creatures)) > maxTargets {
+		order := make([]int, 0, len(players)+len(creatures))
+		for i := range players {
+			order = append(order, i)
+		}
+		for j := range creatures {
+			order = append(order, len(players)+j)
+		}
+		rand.Shuffle(len(order), func(a, b int) { order[a], order[b] = order[b], order[a] })
+		keptPlayers := make([]*playerPos, 0, maxTargets)
+		keptCreatures := make([]uint64, 0, maxTargets)
+		for _, idx := range order[:maxTargets] {
+			if idx < len(players) {
+				keptPlayers = append(keptPlayers, players[idx])
+			} else {
+				keptCreatures = append(keptCreatures, creatures[idx-len(players)])
+			}
+		}
+		players, creatures = keptPlayers, keptCreatures
+		keptChecks := make(map[uint64]uint8, len(players)+len(creatures))
+		for _, hit := range players {
+			keptChecks[hit.GUID] |= checks[hit.GUID]
+		}
+		for _, guid := range creatures {
+			keptChecks[guid] |= checks[guid]
+		}
+		checks = keptChecks
 	}
 	return players, creatures, checks
 }

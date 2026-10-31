@@ -3843,7 +3843,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if cx, cy, cz, has, found := creatureFirstDestAreaCenter(spell, destSnapshots, petSeedX, petSeedY, petSeedZ, petSeeded, isFriendlyAreaTargetType, friendlyAreaDestCentered); found {
 		petAllyAreaDestX, petAllyAreaDestY, petAllyAreaDestZ, petAllyAreaHasDest = cx, cy, cz, has
 	}
-	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) || isEntryAreaSpell(spell) {
+	if isAreaEnemySpell(spell) || hasFriendlyAreaEffect(spell) || isEntryAreaSpell(spell) || hasRefCenteredAreaEffect(spell) {
 		if victimPos := s.petAreaVictimPos(ctx, motion, targetGUID); victimPos != nil {
 			if isAreaEnemySpell(spell) {
 				areaHits, areaCreatureHits = s.server.creatureAIAreaEnemyTargets(ctx, motion, spell, victimPos, petEnemyAreaDestX, petEnemyAreaDestY, petEnemyAreaDestZ, petEnemyAreaHasDest)
@@ -3861,6 +3861,33 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 				entryPlayers, entryCreatures := s.server.creatureAIAreaEntryTargetsWithCenters(ctx, motion, spell, targetGUID, dx, dy, dz, hasDest, petEntryCenters)
 				areaHits = append(areaHits, entryPlayers...)
 				areaCreatureHits = append(areaCreatureHits, entryCreatures...)
+			}
+		}
+		// Spell::SelectImplicitAreaTargets (Spell.cpp:1227) ref-centered
+		// legs (37/61), the pet twin of the boss-ai block: centered on
+		// the explicit target (targetGUID here, pre-nearby and
+		// post-redirect), not the caster. Picks join the ally slices
+		// with ref-only check bits (petAreaAllyWantedMask maps 37 to the
+		// ref-party bit and 61 to the ref-raid bit), so the bit-gated
+		// ally legs fire only the ref effects on them, and the
+		// nearby-pick filter below drops picks from them like the
+		// other area families.
+		if hasRefCenteredAreaEffect(spell) {
+			refPlayers, refCreatures, refChecks := s.server.creatureRefCenteredAreaTargets(ctx, motion, spell, targetGUID)
+			if len(refPlayers) > 0 || len(refCreatures) > 0 {
+				if areaAllyChecks == nil {
+					areaAllyChecks = make(map[uint64]uint8)
+				}
+			}
+			for _, refHit := range refPlayers {
+				if refHit != nil {
+					areaAllyHits = append(areaAllyHits, refHit)
+					areaAllyChecks[refHit.GUID] |= refChecks[refHit.GUID]
+				}
+			}
+			for _, refCreatureGUID := range refCreatures {
+				areaAllyCreatureHits = append(areaAllyCreatureHits, refCreatureGUID)
+				areaAllyChecks[refCreatureGUID] |= refChecks[refCreatureGUID]
 			}
 		}
 	}
