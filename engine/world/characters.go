@@ -4591,6 +4591,23 @@ func (s *session) savePlayerState(ctx context.Context, online uint32, logout boo
 	if !s.playerLoaded || s.player == nil || s.server == nil || s.server.CharactersStore == nil {
 		return nil
 	}
+	// Player::SaveToDB (Player.cpp:19515-19518): a save while a far
+	// teleport is pending writes nothing — it schedules DELAYED_SAVE_PLAYER,
+	// replayed by ProcessDelayedOperations (Player.cpp:1915-1916) once the
+	// transfer completes. Go's far teleport overwrites Map/coords at
+	// initiation while InstanceID is assigned only at the ack, so a manual
+	// save (.save, .saveall, freeze, revive) landing in that window would
+	// persist destination map/coords with the origin instance, the phantom
+	// pair the logout drain exists to prevent. Skip the write, before the
+	// honor roll and the save hook, which C++ likewise never reaches for a
+	// deferred save. The delayed half has no Go equivalent — the next save
+	// after the ack persists the correct state — but the no-write-now half
+	// is what keeps the row consistent. Logout saves are exempt: logout
+	// drains the far transfer first, and the degenerate drain-break case
+	// (invalid homebind) must still save as-is.
+	if s.farTeleportPending && !logout {
+		return nil
+	}
 	// Eluna PLAYER_EVENT_ON_SAVE (25): Eluna::OnSave (PlayerHooks.cpp:361-366),
 	// (event, player), void (CallAllFunctions). Player::SaveToDB
 	// (Player.cpp:19528) fires it when !create, before the statements.
