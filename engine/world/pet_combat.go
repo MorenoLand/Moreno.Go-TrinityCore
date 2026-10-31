@@ -7327,6 +7327,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		return
 	}
 	if damage == 0 {
+		// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) HITBYSPELL arm for
+		// a pet caster: a non-damaging hit still strips the victim's
+		// HITBYSPELL-flagged auras at hit time — the zero-damage tail
+		// below runs no strip, and the damage arms' strip never fires
+		// here. Missed hits and reflect return trips stay out (the
+		// return trip's effective target is the caster itself).
+		if reflectorGUID == 0 && (!hasMissVerdict || missVerdict == protocol.SpellMissNone) {
+			s.server.stripHitBySpellAurasForCreatureCaster(caster, targetGUID)
+		}
 		s.executePetSpellZeroDamageTail(ctx, caster, target, spellID, schoolMask, triggered, reflectorGUID)
 		return
 	}

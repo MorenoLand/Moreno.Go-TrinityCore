@@ -429,6 +429,30 @@ func (s *Server) removeCreatureAurasWithInterruptFlags(m *creatureMotion, flags 
 	}
 }
 
+// stripHitBySpellAurasForCreatureCaster mirrors the AURA_INTERRUPT_FLAG_HITBYSPELL
+// arm of Spell::PreprocessSpellHit (Spell.cpp:2743-2744) for a creature caster:
+// on a valid-attack-target hit the victim loses its HITBYSPELL-flagged auras,
+// whether or not the spell deals damage. The self gate mirrors the m_caster !=
+// unit outer gate (Spell.cpp:2737); the friendly gate is the IsValidAttackTarget
+// core twin (creatureFriendlyToTarget, same approximation the player path's
+// isFriendlyLaunchTarget uses). GO targets resolve to neither a session nor a
+// motion and no-op.
+func (s *Server) stripHitBySpellAurasForCreatureCaster(caster *creatureMotion, targetGUID uint64) {
+	if s == nil || caster == nil || targetGUID == 0 || targetGUID == caster.GUID {
+		return
+	}
+	if s.creatureFriendlyToTarget(caster, targetGUID) {
+		return
+	}
+	if vs := s.findSessionByGUID(targetGUID); vs != nil && vs.player != nil {
+		vs.removeAurasWithInterruptFlags(auraInterruptFlagHitBySpell)
+		return
+	}
+	if tm := s.findCreatureMotion(caster.Map, caster.InstanceID, targetGUID); tm != nil {
+		s.removeCreatureAurasWithInterruptFlags(tm, auraInterruptFlagHitBySpell)
+	}
+}
+
 // breakCreatureChannelOnDamage mirrors the channeled-spell leg of
 // Unit::RemoveAurasWithInterruptFlags (Unit.cpp:4175-4180): a live channel
 // breaks when the damage mask intersects the channel spell's

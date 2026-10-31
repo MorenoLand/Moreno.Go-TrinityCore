@@ -2651,6 +2651,26 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
+	// Spell::PreprocessSpellHit (Spell.cpp:2743-2744) HITBYSPELL arm for a
+	// creature caster, ahead of the first effect arm: a valid-attack-target
+	// hit strips the victim's HITBYSPELL-flagged auras at hit time, before
+	// any effect — including hits that deal no damage (pure debuffs,
+	// dispels, interrupts), which never reach the damage arms' strip
+	// (creatureEffectSpellDamage returns early with no damage effect).
+	// Missed/evaded/immune out; reflected out (a landed reflect retargets
+	// to the caster, and self-hits never strip); friendly targets out
+	// (the IsValidAttackTarget arm, not the friendly assist leg).
+	if spellKnown {
+		for _, guid := range hitTargets {
+			if guid == 0 || evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone {
+				continue
+			}
+			if _, isReflected := reflectedTargets[guid]; isReflected {
+				continue
+			}
+			s.stripHitBySpellAurasForCreatureCaster(m, guid)
+		}
+	}
 	// Spell::EffectInterruptCast (SpellEffects.cpp:3511) for a creature
 	// caster: the LAUNCH_TARGET arm, placed ahead of the HIT arms below
 	// like the C++ launch phase. Gated on spellKnown like the tail.
