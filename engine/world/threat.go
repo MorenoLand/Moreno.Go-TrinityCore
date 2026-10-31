@@ -1650,6 +1650,49 @@ func (s *Server) flagPetAssistContestedPvP(owner *session, caster *creatureMotio
 	}
 }
 
+// flagCreatureAssistContestedPvP runs the Spell::PreprocessSpellHit
+// contested-PvP arm (Spell.cpp:2752-2757) for a boss_ai creature cast: a
+// hit on a friendly target carrying UNIT_STATE_ATTACK_PLAYER flags the
+// caster's charmer/owner player contested (SetContestedPvP) and PvP-flagged
+// (UpdatePvP(true)). GetCharmerOrOwnerPlayerOrPlayerItself
+// (Object.cpp:2226-2233, Unit.h:1170) resolves to the charmer's player when
+// charmed, else the owner's player, and to nil for a wild creature (ToPlayer
+// on a creature) or a creature-owned creature (a non-player GUID fails
+// IsPlayer) — so wild and creature-owned casters take no leg. The
+// caster-side session must be online on the caster's map/instance, the
+// map-local session model the target read already uses. The FFA arm
+// (Object.cpp GetReactionTo: both player-controlled units FFA-flagged read
+// HOSTILE) is corrected here: the shared creatureFriendlyToTarget gate
+// carries no FFA term, so an FFA caster-side player against an FFA player
+// target skips the leg. The m_caster != unit gate lives in the call-site
+// loop (self-casts and landed reflects retarget to the caster). The flag
+// application itself rides flagPetAssistContestedPvP: a pet motion casting
+// through the creature path resolves to the same owner session, and the
+// set is idempotent (the packet fires only on a newly set bit), so an
+// overlap with the pet path's own call site only refreshes the timer.
+func (s *Server) flagCreatureAssistContestedPvP(caster *creatureMotion, targetGUID uint64) {
+	if s == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 {
+		return
+	}
+	ownerGUID := caster.CharmerGUID
+	if ownerGUID == 0 {
+		ownerGUID = caster.OwnerGUID
+	}
+	if ownerGUID == 0 {
+		return
+	}
+	owner := s.findSessionByGUID(ownerGUID)
+	if owner == nil || owner.player == nil || owner.player.Map != caster.Map || owner.player.InstanceID != caster.InstanceID {
+		return
+	}
+	if owner.player.PVPFlags&pvpFlagFFA != 0 {
+		if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil && ts.player.PVPFlags&pvpFlagFFA != 0 {
+			return
+		}
+	}
+	s.flagPetAssistContestedPvP(owner, caster, targetGUID)
+}
+
 // flagPlayerAssistContestedPvP runs the Spell::PreprocessSpellHit
 // contested-PvP arm (Spell.cpp:2752-2757) for a player cast: a hit on a
 // friendly target carrying UNIT_STATE_ATTACK_PLAYER flags the caster

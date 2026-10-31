@@ -2682,6 +2682,43 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
+	// Spell::PreprocessSpellHit contested-PvP assist leg (Spell.cpp:2752-2757)
+	// for a creature caster: per hit target ahead of the HIT arms below
+	// (the launch pre-passes above already ran, matching C++'s
+	// launch-then-hit order; PreprocessSpellHit runs per TargetInfo before
+	// HandleEffects). A hit on a friendly target carrying
+	// UNIT_STATE_ATTACK_PLAYER flags the caster's charmer/owner player
+	// contested + PvP-flagged — wild and creature-owned casters resolve to
+	// no player and take nothing. The verdict gates mirror PreprocessTarget
+	// (Spell.cpp:2347-2351): missed, immune and evaded targets have no
+	// _spellHitTarget, a bounced reflect return trip nulls it, and a
+	// landed reflect retargets it to the caster, which the m_caster != unit
+	// gate (Spell.cpp:2744) then drops alongside self-casts. GO GUIDs
+	// never reach a Unit hit leg (AddGOTarget is separate, Spell.cpp:2193).
+	// Dedupe mirrors C++'s m_UniqueTargetInfo iteration. The 2761 forward
+	// is NOT run here: it belongs to the creature-forward audit below.
+	if spellKnown {
+		assistSeen := make(map[uint64]bool, len(hitTargets))
+		for _, guid := range hitTargets {
+			if guid == 0 || assistSeen[guid] {
+				continue
+			}
+			assistSeen[guid] = true
+			if uint16(guid>>48) == 0xF110 {
+				continue
+			}
+			if _, reflected := reflectedTargets[guid]; reflected {
+				continue
+			}
+			if evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone {
+				continue
+			}
+			if guid == m.GUID {
+				continue
+			}
+			s.flagCreatureAssistContestedPvP(m, guid)
+		}
+	}
 	// Spell::EffectTransmitted (SpellEffects.cpp:4927-5045) for a creature
 	// caster: the generic arm runs once per cast at SPELL_EFFECT_HANDLE_HIT
 	// (not per hit target), spawning the effect's MiscValue gameobject
