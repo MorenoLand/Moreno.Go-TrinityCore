@@ -1363,6 +1363,28 @@ func bossConeUnionTargets(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool
 	return bossConeIntersectTargets(hitTargets, coneTargets)
 }
 
+// bossConeUnionActive reports whether the whole-spell union for one effect
+// kind is the cone intersection: the partition is active, at least one
+// effect of the kind exists, and every such effect carries a friendly-cone
+// leg. The inline path needs the boolean (to filter its direct areaHits /
+// areaCreatureHits loops) where bossConeUnionTargets returns the list.
+func bossConeUnionActive(spell wotlk.Spell, isKind func(wotlk.SpellEffect) bool, partitionActive bool) bool {
+	if !partitionActive {
+		return false
+	}
+	anyKind := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 || !isKind(eff) {
+			continue
+		}
+		anyKind = true
+		if !effectHasFriendlyConeLeg(eff) {
+			return false
+		}
+	}
+	return anyKind
+}
+
 func bossConeAuraEffect(eff wotlk.SpellEffect) bool {
 	return eff.Effect == spellEffectApplyAura
 }
