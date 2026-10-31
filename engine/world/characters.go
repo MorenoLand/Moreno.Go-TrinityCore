@@ -4029,6 +4029,27 @@ func (s *session) completeLogout(ctx context.Context) error {
 	return s.completeLogoutWithPacket(ctx, true)
 }
 
+// repairStaleLogoutInstanceID resets the InstanceID a failed logout-loop
+// transfer leaves on the fallback map: 0 on a continent, the battleground
+// instance on a BG/arena map, and 0 on a dungeon map. A dungeon homebind
+// keeps no instance here because no round persisted one for it; the next
+// login re-derives a character/group bind for that map or creates a fresh
+// instance, instead of taking the recovery relocation a stale ID forces.
+func (s *session) repairStaleLogoutInstanceID() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	mapEntry, found, err := s.server.Data.Map(s.player.Map)
+	if err != nil || !found {
+		return
+	}
+	if mapEntry.IsBattleground() || mapEntry.IsBattleArena() {
+		s.player.InstanceID = s.bgData.InstanceID
+		return
+	}
+	s.player.InstanceID = 0
+}
+
 func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComplete bool) error {
 	// A logout discards the pre-login requeue buffer: C++ drops the recv
 	// queue with the session, and its recently-logout arm drops lag packets
@@ -4063,7 +4084,22 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 	// homebind breaks out and saves as-is, the degenerate case the
 	// in-ack fallbackHomebind already leaves behind.
 	for s.farTeleportPending && s.player != nil {
+		nearPendingBefore := s.nearTeleportPending
+		nearDestBefore := s.nearTeleportDest
 		if s.completeWorldPort(ctx) {
+			// An ack that succeeds through its own near fallback to
+			// homebind (a pre-assignment failure on the homebind map
+			// itself, or a first-round failure whose destination IS
+			// the homebind map) never assigned an instance for the
+			// homebind map, so the InstanceID it leaves behind
+			// belongs to another map: the loop exits on a success
+			// return without ever running its consistency check.
+			// The ack tail never lands a near teleport on a clean
+			// completion, so a near destination that appears during
+			// this ack is the fallback landing, not a leg.
+			if s.nearTeleportPending && (!nearPendingBefore || s.nearTeleportDest.X != nearDestBefore.X || s.nearTeleportDest.Y != nearDestBefore.Y || s.nearTeleportDest.Z != nearDestBefore.Z || s.nearTeleportDest.Orientation != nearDestBefore.Orientation) {
+				s.repairStaleLogoutInstanceID()
+			}
 			continue
 		}
 		if s.farTeleportPending {
@@ -4101,6 +4137,14 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		}
 		if !s.teleportTo(s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.farTeleportOriginOrientation) {
 			break
+		}
+		// A fallback that lands same-map is a near teleport: no
+		// further ack round runs, so an InstanceID assigned for
+		// the failed destination (or carried from the origin) would
+		// otherwise persist on the homebind map. A far fallback
+		// re-arms the loop and the next round governs instead.
+		if !s.farTeleportPending {
+			s.repairStaleLogoutInstanceID()
 		}
 	}
 	if !s.playerLoaded {
