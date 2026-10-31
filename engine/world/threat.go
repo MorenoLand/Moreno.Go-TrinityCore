@@ -1693,6 +1693,42 @@ func (s *Server) flagCreatureAssistContestedPvP(caster *creatureMotion, targetGU
 	s.flagPetAssistContestedPvP(owner, caster, targetGUID)
 }
 
+// forwardCreatureAssistThreat runs the Spell::PreprocessSpellHit
+// friendly-assist forward (Spell.cpp:2761-2765) for a boss_ai creature
+// cast: a hit on a friendly in-combat target by a spell with initial aggro
+// forwards 0.0 threat from the original caster to every creature
+// threatening the target, and a player-controlled original caster inherits
+// the target's combat states. Go creature casts carry no originalCaster
+// distinct from the caster (Spell ctor defaults it to the caster when no
+// originalCasterGUID is supplied, Spell.cpp:565-575, and trigger builds
+// pass none), so the motion itself is the assistant and its own
+// PLAYER_CONTROLLED flag is the inherit gate (charm sets it,
+// creaturemotion.go) — exactly the pet helper's model, reused here. The
+// FFA correction mirrors flagCreatureAssistContestedPvP above: the shared
+// creatureFriendlyToTarget gate carries no FFA term, so an FFA caster-side
+// player against an FFA player target skips the leg, keeping both arms of
+// the creature loop in agreement on the same target. The m_caster != unit
+// gate lives in the call-site loop (self-casts and landed reflects
+// retarget to the caster). A pet motion casting through the creature path
+// as well as the pet path double-fires idempotently (0.0 adds, flag set).
+func (s *Server) forwardCreatureAssistThreat(caster *creatureMotion, targetGUID uint64, spell wotlk.Spell) {
+	if s == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 {
+		return
+	}
+	ownerGUID := caster.CharmerGUID
+	if ownerGUID == 0 {
+		ownerGUID = caster.OwnerGUID
+	}
+	if ownerGUID != 0 {
+		if owner := s.findSessionByGUID(ownerGUID); owner != nil && owner.player != nil && owner.player.Map == caster.Map && owner.player.InstanceID == caster.InstanceID && owner.player.PVPFlags&pvpFlagFFA != 0 {
+			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil && ts.player.PVPFlags&pvpFlagFFA != 0 {
+				return
+			}
+		}
+	}
+	s.forwardPetAssistThreat(caster, targetGUID, spell)
+}
+
 // flagPlayerAssistContestedPvP runs the Spell::PreprocessSpellHit
 // contested-PvP arm (Spell.cpp:2752-2757) for a player cast: a hit on a
 // friendly target carrying UNIT_STATE_ATTACK_PLAYER flags the caster

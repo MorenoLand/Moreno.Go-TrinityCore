@@ -2682,7 +2682,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
-	// Spell::PreprocessSpellHit contested-PvP assist leg (Spell.cpp:2752-2757)
+	// Spell::PreprocessSpellHit friendly-assist arms (Spell.cpp:2752-2765)
 	// for a creature caster: per hit target ahead of the HIT arms below
 	// (the launch pre-passes above already ran, matching C++'s
 	// launch-then-hit order; PreprocessSpellHit runs per TargetInfo before
@@ -2696,7 +2696,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// gate (Spell.cpp:2744) then drops alongside self-casts. GO GUIDs
 	// never reach a Unit hit leg (AddGOTarget is separate, Spell.cpp:2193).
 	// Dedupe mirrors C++'s m_UniqueTargetInfo iteration. The 2761 forward
-	// is NOT run here: it belongs to the creature-forward audit below.
+	// runs in the same loop, after the contested leg (C++ order), via
+	// forwardCreatureAssistThreat: same verdict gates, same friendly /
+	// in-combat / initial-aggro gates inside the helper.
 	if spellKnown {
 		assistSeen := make(map[uint64]bool, len(hitTargets))
 		for _, guid := range hitTargets {
@@ -2717,6 +2719,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				continue
 			}
 			s.flagCreatureAssistContestedPvP(m, guid)
+			s.forwardCreatureAssistThreat(m, guid, spellInfo)
 		}
 	}
 	// Spell::EffectTransmitted (SpellEffects.cpp:4927-5045) for a creature
