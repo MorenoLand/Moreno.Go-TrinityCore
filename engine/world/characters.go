@@ -4050,39 +4050,48 @@ func (s *session) repairStaleLogoutInstanceID() {
 	s.player.InstanceID = 0
 }
 
-func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComplete bool) error {
-	// A logout discards the pre-login requeue buffer: C++ drops the recv
-	// queue with the session, and its recently-logout arm drops lag packets
-	// rather than requeueing them for a later login.
-	s.preLoginQueue = nil
-	// WorldSession::LogoutPlayer (WorldSession.cpp:499-500, 566-567)
-	// finishes a pending far transfer before starting the logout:
-	// HandleMoveWorldportAck runs the worldport admission, so the
-	// logout save carries the destination map and instance instead
-	// of the destination coords with the origin instance (teleportTo
-	// overwrites Map/coords at initiation, completeWorldPort assigns
-	// InstanceID only at the ack). Without this, an expiry logout
-	// landing in the far-teleport window saved that mismatched pair
-	// and left farTeleportPending set on the logged-out session, so
-	// a lagged worldport ack after a fresh login could run the ack
-	// leg on the new player. A failed completion that leaves the
-	// transfer pending stops the loop rather than spinning: the ack
-	// leg clears the flag on every traced path, and a fallback
-	// homebind re-arms it for one more pass. A completion that fails
-	// WITHOUT re-arming (a packet-build, persist, or late-write
-	// failure after completeWorldPort assigned the new InstanceID)
-	// must not reach the logout save either: the save would claim a
-	// dungeon instance whose row and bind were never persisted, and
-	// the next login would recover to homebind instead of entering
-	// it. MovementHandler.cpp:122-126 (HandleMoveWorldportAck) sends
-	// that AddPlayerToMap-failure case to homebind, so the loop does
-	// the same: a far homebind teleport re-arms the loop for the
-	// homebind completion, and a same-map homebind teleport (the
-	// second failure round, when the player already stands on the
-	// homebind map) leaves the flag clear with homebind coords in
-	// nearTeleportDest, so the loop still terminates. An invalid
-	// homebind breaks out and saves as-is, the degenerate case the
-	// in-ack fallbackHomebind already leaves behind.
+// drainLogoutFarTeleport runs the HandleMoveWorldportAck loop of
+// WorldSession::LogoutPlayer for a far teleport pending at logout time.
+// It serves both C++ drain sites: the pre-logout loop
+// (WorldSession.cpp:499-500) and the post-homebind loop
+// (WorldSession.cpp:566-567), which drains a far teleport initiated
+// during logout itself — the invalid-instance homebind teleport
+// (WorldSession.cpp:540-542), a RepopAtGraveyard cross-map grave, or
+// a battleground-leave entry-point teleport — before SaveToDB.
+// Without the second call, an invalid-instance far teleport reached
+// savePlayerState undrained: teleportTo already overwrote Map/coords
+// at initiation while InstanceID is assigned only at the ack, so the
+// save persisted homebind coords with the origin instance, and the
+// pending flag stayed set on the logged-out session.
+// WorldSession::LogoutPlayer (WorldSession.cpp:499-500, 566-567)
+// finishes a pending far transfer before starting the logout:
+// HandleMoveWorldportAck runs the worldport admission, so the
+// logout save carries the destination map and instance instead
+// of the destination coords with the origin instance (teleportTo
+// overwrites Map/coords at initiation, completeWorldPort assigns
+// InstanceID only at the ack). Without this, an expiry logout
+// landing in the far-teleport window saved that mismatched pair
+// and left farTeleportPending set on the logged-out session, so
+// a lagged worldport ack after a fresh login could run the ack
+// leg on the new player. A failed completion that leaves the
+// transfer pending stops the loop rather than spinning: the ack
+// leg clears the flag on every traced path, and a fallback
+// homebind re-arms it for one more pass. A completion that fails
+// WITHOUT re-arming (a packet-build, persist, or late-write
+// failure after completeWorldPort assigned the new InstanceID)
+// must not reach the logout save either: the save would claim a
+// dungeon instance whose row and bind were never persisted, and
+// the next login would recover to homebind instead of entering
+// it. MovementHandler.cpp:122-126 (HandleMoveWorldportAck) sends
+// that AddPlayerToMap-failure case to homebind, so the loop does
+// the same: a far homebind teleport re-arms the loop for the
+// homebind completion, and a same-map homebind teleport (the
+// second failure round, when the player already stands on the
+// homebind map) leaves the flag clear with homebind coords in
+// nearTeleportDest, so the loop still terminates. An invalid
+// homebind breaks out and saves as-is, the degenerate case the
+// in-ack fallbackHomebind already leaves behind.
+func (s *session) drainLogoutFarTeleport(ctx context.Context) {
 	for s.farTeleportPending && s.player != nil {
 		nearPendingBefore := s.nearTeleportPending
 		nearDestBefore := s.nearTeleportDest
@@ -4147,6 +4156,19 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 			s.repairStaleLogoutInstanceID()
 		}
 	}
+}
+
+func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComplete bool) error {
+	// A logout discards the pre-login requeue buffer: C++ drops the recv
+	// queue with the session, and its recently-logout arm drops lag packets
+	// rather than requeueing them for a later login.
+	s.preLoginQueue = nil
+	// WorldSession::LogoutPlayer (WorldSession.cpp:499-500) finishes a
+	// pending far transfer before starting the logout; the second drain
+	// below (WorldSession.cpp:566-567) covers teleports initiated during
+	// logout itself. See drainLogoutFarTeleport.
+	s.drainLogoutFarTeleport(ctx)
+
 	if !s.playerLoaded {
 		s.clearActiveAuras()
 		s.logoutAt = time.Time{}
@@ -4259,6 +4281,12 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 			s.unsummonPet(ctx, petSaveAsCurrent)
 		}
 	}
+	// WorldSession::LogoutPlayer (WorldSession.cpp:566-567): drain any far
+	// teleport initiated during logout (invalid-instance homebind,
+	// repop grave, battleground entry point) before the save, so the
+	// save carries the destination map and instance, not the
+	// initiation-time coords with the origin instance.
+	s.drainLogoutFarTeleport(ctx)
 	var firstErr error
 	if err := s.savePlayerState(ctx, 0, true); err != nil {
 		firstErr = err
