@@ -599,10 +599,10 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 
 // handleCmdSummon mirrors HandleSummonCommand (cs_misc.cpp:486-599, RBAC
 // 528): teleport the target player to the GM. Documented fidelity gaps (not
-// stubs): the battleground/instance group gates have no Go bridge (no BG
-// model, no instance-save manager), and the GetClosePoint offset math is
-// unmodeled — the target lands on the GM's exact position. The offline leg
-// (Player::SavePositionInDB) is native via the characters table.
+// stubs): the battleground gate has no Go bridge (no BG model), and the
+// GetClosePoint offset math is unmodeled — the target lands on the GM's
+// exact position. The instance gate below ports cs_misc.cpp:540-560; the
+// offline leg (Player::SavePositionInDB) is native via the characters table.
 func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -623,6 +623,26 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 		return
 	}
 	if target != nil && target.player != nil {
+		if s.isDungeonMap(s.player.Map) {
+			gmMapID, gmInstance := s.player.Map, s.player.InstanceID
+			targetMapID, targetInstance := target.player.Map, target.player.InstanceID
+			leaderOnGMInstance := false
+			if s.server != nil {
+				if group := s.server.groupOfGUID(target.playerGUID); group != nil {
+					if leader := s.server.findSessionByGUID(group.LeaderGUID); leader != nil && leader.player != nil && leader.player.Map == gmMapID && leader.player.InstanceID == gmInstance {
+						leaderOnGMInstance = true
+					}
+				}
+			}
+			if !leaderOnGMInstance && (targetMapID != gmMapID || targetInstance != gmInstance) {
+				s.sendSysMessage(miscCannotSummonToInst)
+				return
+			}
+			if targetMapID == gmMapID && targetInstance != gmInstance {
+				s.sendSysMessage(fmt.Sprintf("%s cannot be summoned from an instance to an instance.", miscPlayerLink(name)))
+				return
+			}
+		}
 		s.sendSysMessage(fmt.Sprintf(miscSummoning, miscPlayerLink(name), ""))
 		target.teleportTo(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.player.Orientation)
 		target.sendSysMessage(fmt.Sprintf(miscSummonedBy, miscPlayerLink(s.player.Name)))

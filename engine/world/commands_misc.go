@@ -56,6 +56,7 @@ const (
 	miscAppearingAt        = "Appearing at %s."                                     // LANG_APPEARING_AT 113
 	miscSummoning          = "Summoning %s%s."                                      // LANG_SUMMONING 108
 	miscSummonedBy         = "You have been summoned by %s."                        // LANG_SUMMONED_BY 109
+	miscCannotSummonToInst = "Cannot summon to instance."                           // LANG_CANNOT_SUMMON_TO_INST 103
 	miscIsTeleported       = "%s is being teleported."                              // LANG_IS_TELEPORTED 102
 	miscOfflineSuffix      = " (offline)"                                           // LANG_OFFLINE 37
 	miscSelectCharOrCreat  = "Select a character or a creature."                    // LANG_SELECT_CHAR_OR_CREATURE 1
