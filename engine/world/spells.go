@@ -24257,6 +24257,54 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 	}
+	// Spell::SelectImplicitChannelTargets (Spell.cpp:996-1004) for the
+	// player funnel: TARGET_UNIT_CHANNEL_TARGET (77) adds the live
+	// channel's object unit, independent of the wire target — the
+	// creature/pet twin's leg (boss_ai.go, creaturemotion.go,
+	// pet_combat.go) via creatureChannelUnitTarget, which the funnel
+	// never ran. The player paths previously reached it only when a
+	// caller wired it (periodic ticks via periodicTriggerTarget), so a
+	// proc, item cast, or effect-triggered 77 spell fired during a
+	// channel hit the wire target instead, and a wire-0 cast hit
+	// nothing (the seed loop maps 0 to the caster only for
+	// explicit-effect or self-cast-only spells). Runs after every
+	// selection leg above so no rebuild drops it, and ahead of the
+	// verdicts below so the channel target rolls its own verdict like
+	// any implicit target. The channeled-spell gate mirrors the twin:
+	// a channeled spell's own 77 effects resolve against its own
+	// channel object, which is not stamped until after selection.
+	// Flat-list approximation shared with the other rejoins: C++
+	// adds the target to the 77 effect's mask only (CHANNEL sets no
+	// processed mask, so a B-slot 77 runs even behind a NEARBY/AREA A
+	// leg), while this list also feeds sibling effects — the same
+	// class as the area+single mixes above.
+	if !isChanneledSpell(spell) && spellHasUnitChannelTarget(spell) {
+		if channelGUID, ok := s.playerChannelUnitTarget(ctx); ok {
+			seenChannel := false
+			for _, guid := range hitTargets {
+				if guid == channelGUID {
+					seenChannel = true
+					break
+				}
+			}
+			if !seenChannel {
+				hitTargets = append(hitTargets, channelGUID)
+			}
+			seenChannel = false
+			for _, guid := range selectionTargets {
+				if guid == channelGUID {
+					seenChannel = true
+					break
+				}
+			}
+			if !seenChannel {
+				grown := make([]uint64, 0, len(selectionTargets)+1)
+				grown = append(grown, selectionTargets...)
+				grown = append(grown, channelGUID)
+				selectionTargets = grown
+			}
+		}
+	}
 	// Spell::SelectSpellTargets (Spell.cpp:789-797): a channeled spell whose
 	// target selection produced no unit, gameobject, or item targets and no
 	// destination fails with SPELL_FAILED_BAD_IMPLICIT_TARGETS. The check

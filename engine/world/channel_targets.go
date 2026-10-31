@@ -95,3 +95,46 @@ func (s *session) channelDestForSpell(ctx context.Context, spell wotlk.Spell) (x
 	}
 	return 0, 0, 0, false
 }
+
+// playerChannelUnitTarget mirrors the unit half of
+// Spell::SelectImplicitChannelTargets (Spell.cpp:996-1004) for the
+// triggered funnel: the live channel's object GUID, resolved as a unit.
+// Unlike channelTargetForSpell it carries no spell-ID match — C++ reads
+// the caster's CURRENT_CHANNELED_SPELL whatever the triggered spell's
+// ID, so a proc, item cast, or effect-triggered 77 spell fired during
+// a channel resolves the channel target, not just the channeled spell
+// itself. A gameobject channel object is excluded (C++ GetUnit returns
+// null for it, same as the creature twin's gate), and a target that no
+// longer resolves on the caster's map/instance is skipped (C++ logs
+// "cannot find channel spell target" and adds nothing — the
+// teleported-out case). The session branch needs its own map/instance
+// match: combatTargetByGUID resolves sessions map-blind, while the
+// motion and DB-row branches are already map/instance-scoped. A
+// channeled spell's own 77 effects are excluded by the caller, since
+// its own channel object is not stamped until after selection — the
+// creature twin's gate (creature_dest_targets.go).
+func (s *session) playerChannelUnitTarget(ctx context.Context) (uint64, bool) {
+	if s == nil || s.player == nil || s.server == nil {
+		return 0, false
+	}
+	s.castMu.Lock()
+	channel := s.activeChannel
+	s.castMu.Unlock()
+	if channel == nil || channel.Stopped || channel.ChannelObjectGUID == 0 {
+		return 0, false
+	}
+	guid := channel.ChannelObjectGUID
+	if uint16(guid>>48) == 0xF110 {
+		return 0, false
+	}
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		if ts.player.Map == s.player.Map && ts.player.InstanceID == s.player.InstanceID {
+			return guid, true
+		}
+		return 0, false
+	}
+	if _, ok := s.getCombatTarget(ctx, guid); !ok {
+		return 0, false
+	}
+	return guid, true
+}
