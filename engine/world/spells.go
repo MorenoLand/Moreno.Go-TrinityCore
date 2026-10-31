@@ -23470,7 +23470,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	nearbySelected := false
 	nearbyBranchPick := uint64(0)
 	nearbyMatched := isFriendlyNearbySpell(spell) || isEntryNearbySpell(spell) || isHostileNearbySpell(spell) || isGONearbyEntrySpell(spell)
-	if nearbyMatched && !isAreaEnemySpell(spell) && !isFriendlyAreaSpell(spell) {
+	// Client-path precedence (finishSpellCast chain): the unit nearby branches
+	// precede the entry-area branch, but the GO-nearby-entry branch (40 alone)
+	// sits AFTER it — so a spell carrying only a 40 leg beside an entry-area
+	// leg (7/8) takes the entry-area branch on the client path and rejoins
+	// the 40 pick, while this block's pre-switch run would drop the whole
+	// entry-area list. Defer the pure-40 match to the switch when an
+	// entry-area leg exists; the 40 rejoin below still adds the pick.
+	goOnlyNearby := !isFriendlyNearbySpell(spell) && !isEntryNearbySpell(spell) && !isHostileNearbySpell(spell) && isGONearbyEntrySpell(spell)
+	if nearbyMatched && !isAreaEnemySpell(spell) && !isFriendlyAreaSpell(spell) && !(goOnlyNearby && isEntryAreaSpell(spell)) {
 		var nearby uint64
 		var goPick uint64
 		hasGoPick := false
