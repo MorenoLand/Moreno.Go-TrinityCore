@@ -1971,9 +1971,24 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	if s == nil || key.GUID == 0 || charmerGUID == 0 {
 		return nil, 0, 0, false
 	}
+	// Unit::SetCharm (Unit.cpp:6211-6226) sets UNIT_FLAG_PLAYER_CONTROLLED
+	// only when the charmer is a player; a creature charmer sets
+	// m_ControlledByPlayer=false and leaves the flag untouched. Resolve
+	// the charmer before motionMu: sessionsMu is never taken under
+	// motionMu, and the session lookup is the same player-charmer
+	// resolution the charm apply leg already uses.
+	charmerIsPlayer := s.findSessionByGUID(charmerGUID) != nil
 	s.motionMu.Lock()
 	motion := s.findCreatureMotionLocked(key.Map, key.InstanceID, key.GUID)
 	if motion == nil {
+		s.motionMu.Unlock()
+		return nil, 0, 0, false
+	}
+	// Unit::SetCharmedBy (Unit.cpp:11794-11799) refuses a unit that is
+	// already charmed; a second charmer's aura records but wins no
+	// control, and its later removal is a mismatch no-op in
+	// uncharmCreature. A same-charmer re-apply stays idempotent.
+	if motion.Charmed && motion.CharmerGUID != 0 && motion.CharmerGUID != charmerGUID {
 		s.motionMu.Unlock()
 		return nil, 0, 0, false
 	}
@@ -1990,7 +2005,9 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 	}
 	motion.CharmerGUID = charmerGUID
 	motion.Charmed = true
-	motion.UnitFlags |= unitFlagPlayerControlled
+	if charmerIsPlayer {
+		motion.UnitFlags |= unitFlagPlayerControlled
+	}
 	motion.Faction = charmerFaction
 	motion.OwnerGUID = charmerGUID
 	motion.PetCommand = PetCommandFollow
@@ -2043,7 +2060,15 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	passive := isCreaturePassive(motion)
 	motion.Charmed = false
 	motion.CharmerGUID = 0
-	motion.UnitFlags = motion.CharmUnitFlags
+	// Unit::SetCharm (Unit.cpp:6254-6274) on uncharm touches only the
+	// PLAYER_CONTROLLED bit (set when the charmed unit is a player or
+	// has a player owner/charmer, cleared otherwise) — it does not
+	// restore the whole pre-charm flag word. The banked bit is exactly
+	// that recompute for creatures (pets bank it set, wild creatures
+	// bank it clear), so restore only this bit and keep flags raised
+	// mid-charm (feign-death UNK_29, school-immunity IMMUNE, Lua MOUNT)
+	// instead of wiping them with the banked word.
+	motion.UnitFlags = motion.UnitFlags&^unitFlagPlayerControlled | motion.CharmUnitFlags&unitFlagPlayerControlled
 	motion.Faction = motion.CharmFaction
 	motion.OwnerGUID = motion.CharmOwnerGUID
 	motion.PetCommand = PetCommandStay
