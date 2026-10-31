@@ -468,7 +468,12 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 	// MovementHandler.cpp:307 — the stale-packet distance runs against
 	// the mover's position, which for a possessed mover is the creature's
-	// motion coords, not the possessing player's.
+	// motion coords, not the possessing player's. For a driven vehicle the
+	// driver coords suffice: every vehicle-mover packet relocates the
+	// driver to the previous packet's base coords plus the seat offset, so
+	// the check compares against a point within one seat offset (plus one
+	// packet of travel) of the base — far below the 533.33 threshold, and
+	// the genuine pre-teleport stale packet still reads nowhere near it.
 	moverX, moverY := s.player.X, s.player.Y
 	if possessedMover && s.server != nil {
 		s.server.motionMu.Lock()
@@ -618,14 +623,32 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		// out to every passenger (Map.cpp:1136) — and every plrMover-gated
 		// arm below (sit-state clear, fall info, undermap void damage,
 		// transport attach, swim state) is skipped.
-		// MovementHandler.cpp:345-349 — the mover is the vehicle itself
-		// (GetTransport/GetVehicle both null), so a client ONTRANSPORT
-		// flag on its packets is stripped: no gameobject transport backs it.
+		// MovementHandler.cpp:344-350 — the stray-flag strip runs only
+		// when the mover has neither transport nor vehicle: a vehicle base
+		// riding a transport (motion TransportGUID, set for transport-map
+		// spawn passengers) or seated in another vehicle keeps the flag,
+		// and so does a packet naming a real transport gameobject. The
+		// common driven vehicle has neither, so it still strips exactly
+		// as before; no attach leg rides the kept flag (plrMover-gated
+		// in C++, skipped for movers here).
 		if info.Flags&movementOnTransport != 0 {
-			info.Flags &^= movementOnTransport
-			info.Transport = nil
-			broadcastInfo.Flags &^= movementOnTransport
-			broadcastInfo.Transport = nil
+			keepTransport := false
+			if s.server != nil {
+				s.server.motionMu.Lock()
+				if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.VehicleGUID); motion != nil {
+					keepTransport = motion.TransportGUID != 0 || motion.VehicleGUID != 0
+				}
+				s.server.motionMu.Unlock()
+				if !keepTransport && info.Transport != nil {
+					_, keepTransport = s.server.transportSpawnForGUID(info.Transport.GUID)
+				}
+			}
+			if !keepTransport {
+				info.Flags &^= movementOnTransport
+				info.Transport = nil
+				broadcastInfo.Flags &^= movementOnTransport
+				broadcastInfo.Transport = nil
+			}
 		}
 		if s.server != nil {
 			// MovementHandler.cpp:404 — mover->UpdatePosition runs for the
@@ -667,14 +690,21 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			s.server.motionMu.Unlock()
 			if motion != nil {
 				// MovementHandler.cpp:344-350 — a mover with neither
-				// transport nor vehicle loses a stray ONTRANSPORT flag
-				// (the GO-type check has no creature bridge; a motion
-				// carrying a transport/vehicle GUID keeps it).
+				// transport nor vehicle loses a stray ONTRANSPORT flag,
+				// unless the packet's transport GUID names a real
+				// transport gameobject (the server-side spawn lookup is
+				// mover-agnostic, so the GO-type leg applies here too).
 				if !onTransportOrVehicle && info.Flags&movementOnTransport != 0 {
-					info.Flags &^= movementOnTransport
-					info.Transport = nil
-					broadcastInfo.Flags &^= movementOnTransport
-					broadcastInfo.Transport = nil
+					keepTransport := false
+					if info.Transport != nil {
+						_, keepTransport = s.server.transportSpawnForGUID(info.Transport.GUID)
+					}
+					if !keepTransport {
+						info.Flags &^= movementOnTransport
+						info.Transport = nil
+						broadcastInfo.Flags &^= movementOnTransport
+						broadcastInfo.Transport = nil
+					}
 				}
 				// Unlocked first: relocate locks motionMu itself.
 				s.server.syncCreatureVehiclePassengers(motion)
