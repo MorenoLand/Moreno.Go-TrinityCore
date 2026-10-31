@@ -179,7 +179,7 @@ type Server struct {
 	icState                   map[uint32]*icBattlegroundState
 	bgScores                  map[bgScoreKey]map[uint64]*bgPlayerScore // per-instance PlayerScores (battleground_scores.go), guarded by objectsMu
 	bgOfflineMu               sync.Mutex
-	bgOfflineHolders          map[uint32]map[uint64]time.Time // per-map offline BG members holding the state open (Battleground::m_OfflineQueue), guarded by bgOfflineMu
+	bgOfflineHolders          map[uint32]map[uint64]bgOfflineHolder // per-map offline BG members holding the state open (Battleground::m_OfflineQueue), guarded by bgOfflineMu
 	bgTemplatesMu             sync.Mutex
 	bgTemplates               map[uint32]*bgTemplate // _battlegroundTemplates by type id (battleground_mgr.go), guarded by bgTemplatesMu
 	bgTemplatesLoaded         bool

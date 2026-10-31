@@ -3073,13 +3073,16 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// 0 (Player.h:1906), mirrored by s.bgData.InstanceID.
 	// Battleground::RemovePlayerAtLeave (Battleground.cpp:833-837)
 	// deletes the leaver's PlayerScores row. Read before the
-	// wasInBattleground block zeroes InstanceID; the logout arm runs
-	// here too, since Go has no offline queue to defer it through
-	// (C++ holds the row up to 5 minutes in m_OfflineQueue, then
-	// RemovePlayerAtLeave deletes it — battleground.go's untracked
-	// OFFLINE site). A rejoin always mints a fresh instance id, so
-	// the deleted row's key is dead either way.
-	if s.server != nil {
+	// wasInBattleground block zeroes InstanceID. The logout arm defers
+	// when the leaver registers as an offline holder below: C++ keeps
+	// the row until _ProcessOfflineQueue removes the member (up to 5
+	// minutes, Battleground.cpp:260-284), and EventPlayerLoggedIn
+	// (Battleground.cpp:1066-1080) never recreates it — the row simply
+	// survives, so a relogger keeps kills/damage already banked and the
+	// score adds accumulate onto them instead of recreating a zero row.
+	// A non-holder logout (never in m_Players, no offline queue) and
+	// every voluntary leave still delete immediately.
+	if s.server != nil && !(fromLogout && logoutBGHolder) {
 		s.server.deleteBGScoreRow(s.player.Map, s.bgData.InstanceID, s.playerGUID)
 	}
 	wasInBattleground := !fromLogout && s.bgData.InstanceID != 0
@@ -3140,10 +3143,11 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fr
 	// first registers as an offline holder (Battleground::m_OfflineQueue),
 	// so an all-offline match survives up to bgMaxOfflineTime for relogin
 	// instead of being deleted the moment the last session drops; the
-	// score row is still deleted on logout (see above).
+	// holder also carries the leaver's deferred score row, deleted at
+	// holder expiry or by the WaitLeave sweep (see above).
 	if leaveBGMap != 0 && s.server != nil {
 		if logoutBGHolder {
-			s.server.recordBGOfflineHolder(leaveBGMap, s.playerGUID, time.Now())
+			s.server.recordBGOfflineHolder(leaveBGMap, s.playerGUID, s.player.Map, s.bgData.InstanceID, time.Now())
 		}
 		s.server.deleteBattlegroundStateOnEmpty(s, leaveBGMap)
 	}
@@ -3182,21 +3186,30 @@ const bgMaxOfflineTime = 300 * time.Second
 // m_OfflineQueue push: a logging-out member holds the per-map state open
 // until bgMaxOfflineTime passes, so deleteBattlegroundStateOnEmpty does not
 // delete an all-offline match the moment its last session drops.
-func (s *Server) recordBGOfflineHolder(mapID uint32, guid uint64, now time.Time) {
+// bgOfflineHolder is one m_OfflineQueue entry: the expiry plus the
+// score-row key (player.Map, InstanceID) as the leave funnel reads it, so
+// the _ProcessOfflineQueue expiry arm can delete the row it deferred.
+type bgOfflineHolder struct {
+	expiry     time.Time
+	scoreMapID uint32
+	instanceID uint32
+}
+
+func (s *Server) recordBGOfflineHolder(mapID uint32, guid uint64, scoreMapID, instanceID uint32, now time.Time) {
 	if s == nil || mapID == 0 || guid == 0 {
 		return
 	}
 	s.bgOfflineMu.Lock()
 	defer s.bgOfflineMu.Unlock()
 	if s.bgOfflineHolders == nil {
-		s.bgOfflineHolders = make(map[uint32]map[uint64]time.Time)
+		s.bgOfflineHolders = make(map[uint32]map[uint64]bgOfflineHolder)
 	}
 	holders := s.bgOfflineHolders[mapID]
 	if holders == nil {
-		holders = make(map[uint64]time.Time)
+		holders = make(map[uint64]bgOfflineHolder)
 		s.bgOfflineHolders[mapID] = holders
 	}
-	holders[guid] = now.Add(bgMaxOfflineTime)
+	holders[guid] = bgOfflineHolder{expiry: now.Add(bgMaxOfflineTime), scoreMapID: scoreMapID, instanceID: instanceID}
 }
 
 // dropBGOfflineHolder is the Go form of the EventPlayerLoggedIn offline-queue
@@ -3219,27 +3232,66 @@ func (s *Server) dropBGOfflineHolder(mapID uint32, guid uint64) {
 }
 
 // bgOfflineHoldersLive prunes expired holders for mapID and reports whether
-// any unexpired holder remains, the _ProcessOfflineQueue expiry check.
+// any unexpired holder remains, the _ProcessOfflineQueue expiry check. An
+// expired holder's deferred score row is deleted with it: _ProcessOfflineQueue
+// removes via RemovePlayerAtLeave (Battleground.cpp:260-284), whose score
+// arm deletes the row (Battleground.cpp:833-837).
 func (s *Server) bgOfflineHoldersLive(mapID uint32, now time.Time) bool {
 	if s == nil {
 		return false
 	}
 	s.bgOfflineMu.Lock()
-	defer s.bgOfflineMu.Unlock()
 	holders := s.bgOfflineHolders[mapID]
 	if holders == nil {
+		s.bgOfflineMu.Unlock()
 		return false
 	}
-	for guid, expiry := range holders {
-		if !now.Before(expiry) {
+	type expiredRow struct {
+		scoreMapID uint32
+		instanceID uint32
+		guid       uint64
+	}
+	var expired []expiredRow
+	for guid, holder := range holders {
+		if !now.Before(holder.expiry) {
 			delete(holders, guid)
+			expired = append(expired, expiredRow{scoreMapID: holder.scoreMapID, instanceID: holder.instanceID, guid: guid})
 		}
 	}
-	if len(holders) == 0 {
+	live := len(holders) > 0
+	if !live {
 		delete(s.bgOfflineHolders, mapID)
-		return false
 	}
-	return true
+	s.bgOfflineMu.Unlock()
+	for _, row := range expired {
+		s.deleteBGScoreRow(row.scoreMapID, row.instanceID, row.guid)
+	}
+	return live
+}
+
+// deleteBGOfflineHolderRows deletes the deferred score rows of every
+// offline holder on mapID without dropping the holders themselves: the
+// _ProcessLeave arm (Battleground.cpp:506-524) removes offline members
+// from an ended match at 120s, while the holders still hold the state open
+// until their own 300s expiry. A holder relogging into the ended match
+// hits the restore ended leg, which deletes the row again (a no-op) and
+// drops the holder.
+func (s *Server) deleteBGOfflineHolderRows(mapID uint32) {
+	if s == nil || mapID == 0 {
+		return
+	}
+	s.bgOfflineMu.Lock()
+	holders := s.bgOfflineHolders[mapID]
+	rows := make([]bgScoreKey, 0, len(holders))
+	guids := make([]uint64, 0, len(holders))
+	for guid, holder := range holders {
+		rows = append(rows, bgScoreKey{MapID: holder.scoreMapID, InstanceID: holder.instanceID})
+		guids = append(guids, guid)
+	}
+	s.bgOfflineMu.Unlock()
+	for i := range rows {
+		s.deleteBGScoreRow(rows[i].MapID, rows[i].InstanceID, guids[i])
+	}
 }
 
 // bgStateHasLiveHolders is the live-session arm of the empty-delete count:
@@ -3556,6 +3608,9 @@ func (s *Server) updateBattlegroundWaitLeave(ctx context.Context, now time.Time)
 	s.sessionsMu.RUnlock()
 	for _, sess := range stayers {
 		sess.handleLeaveBattlefield(ctx, nil, false, false)
+	}
+	for mapID := range due {
+		s.deleteBGOfflineHolderRows(mapID)
 	}
 }
 
