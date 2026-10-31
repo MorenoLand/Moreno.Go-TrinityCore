@@ -768,6 +768,22 @@ func (s *Server) syncCreatureVehiclePassengers(motion *creatureMotion) {
 
 // relocatePassengers updates global coordinates for all passengers on vehicle.
 // Reference: Vehicle::RelocatePassengers (Vehicle.cpp:554-578).
+// The C++ fan-out does not stop at coordinates: each passenger's
+// UpdatePosition runs Map::PlayerRelocation (Map.cpp:1086-1112), which
+// sends UpdatePositionData and refreshes object visibility, and the
+// passenger's own position tick then picks up zone/area (the 1s
+// ZONE_UPDATE_INTERVAL timer, Player.cpp:1218-1242) and area exploration
+// (Player::UpdatePosition, Player.cpp:6472-6480). Go has no per-tick
+// player update, so the follow-ups ride here: zone/area (throttled to
+// 1s inside updateZoneAndArea, matching the C++ interval), duel bounds
+// (the driver arm in movement.go already runs both for the mover), and
+// the >30-unit nearby-object stream (the mover arm in movement.go and
+// the transport arm in transports.go both stream at that threshold;
+// vehicle passengers are excluded from the mover stream, so without
+// this a carried passenger's own client never learns the new
+// neighbourhood). The mover's own arms still run after this call and
+// are idempotent under the throttle, so a driver seated on its own
+// vehicle is not double-processed.
 func (s *Server) relocatePassengers(mapID, instanceID uint32, vehicleGUID uint64, transX, transY, transZ, transO float32) {
 	if s == nil {
 		return
@@ -810,6 +826,13 @@ func (s *Server) relocatePassengers(mapID, instanceID uint32, vehicleGUID uint64
 			sess.player.Y = rel.y
 			sess.player.Z = rel.z
 			sess.player.Orientation = rel.o
+			sess.updateZoneAndArea(context.Background(), false)
+			sess.checkDuelBounds()
+			dx := float64(rel.x - sess.lastStreamX)
+			dy := float64(rel.y - sess.lastStreamY)
+			if dx*dx+dy*dy > 30*30 {
+				sess.streamNearbyObjects(context.Background())
+			}
 		}
 	}
 }
