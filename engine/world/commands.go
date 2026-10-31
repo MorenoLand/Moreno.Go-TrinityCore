@@ -348,6 +348,13 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		// overwrites player.Map/coords below, so the release must run here: by
 		// completeWorldPort time the map/distance gates would suppress those legs.
 		s.releaseActiveLoot()
+		// Far-teleport map-leave vehicle eject (Player.cpp:1855-1860,
+		// Unit.cpp:9789, Vehicle.cpp:253): the base's kit drops and its
+		// passengers exit at the origin position, before the overwrite
+		// below moves the base — an ack-time eject would read the
+		// destination coords instead. The near branch never reaches
+		// here, so near teleports keep passengers seated.
+		s.ejectVehiclePassengersAtMapLeave(context.Background())
 		s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation = mapID, x, y, z, orientation
 	}
 	if !sameMap {

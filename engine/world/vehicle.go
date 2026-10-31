@@ -1402,6 +1402,60 @@ func (s *session) exitVehicle(ctx context.Context) {
 	s.sendPlayerUpdate()
 }
 
+// ejectVehiclePassengersAtMapLeave mirrors the far-teleport map-leave in
+// Player::TeleportTo (Player.cpp:1855-1860): oldmap->RemovePlayerFromMap ->
+// Player::RemoveFromWorld (Player.cpp:1992) -> Unit::RemoveFromWorld
+// (Unit.cpp:9789) -> RemoveVehicleKit -> Uninstall -> RemoveAllPassengers
+// (Vehicle.cpp:253), which removes CONTROL_VEHICLE auras on the base and
+// whose unapply exits each passenger. The near branch has no
+// RemovePlayerFromMap, so it never runs this. Go has no RemoveFromWorld
+// step, so the caller runs this in the far branch BEFORE the Map/coords
+// overwrite, while the base still stands on the origin map: exit positions
+// read the base session's current coords (applyVehicleExitPosition), so
+// an ack-time eject would strand passengers at destination coords on the
+// origin map. A kit already dropped (chained teleport, logout drain) reads
+// as no kits and no 236 auras, so the helper is a safe no-op there.
+func (s *session) ejectVehiclePassengersAtMapLeave(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	// Vehicle::RemoveAllPassengers order: the 236 auras on the base go
+	// first, and their remove tails exit the aura-boarded passengers;
+	// the snapshot-then-remove shape mirrors
+	// removeAurasWithInterruptFlags (movement.go).
+	var controlSpells []uint32
+	s.castMu.Lock()
+	var snapshot []*activeAura
+	for _, aura := range s.activeAuras {
+		if aura != nil {
+			snapshot = append(snapshot, aura)
+		}
+	}
+	s.castMu.Unlock()
+	for _, aura := range snapshot {
+		if s.activeAuraHasEffect(aura, spellAuraControlVehicle) {
+			controlSpells = append(controlSpells, aura.SpellID)
+		}
+	}
+	for _, spellID := range controlSpells {
+		s.removeAura(spellID)
+	}
+	// Packet/spell-click boardings carry no aura, so any passenger still
+	// seated after the aura sweep exits directly; the GUID scan covers a
+	// kit keyed on the origin map, not just the base's current key.
+	for _, loc := range s.server.findVehicleKits(s.playerGUID) {
+		for _, pg := range loc.kit.seatedPassengerGUIDs() {
+			if pg == s.playerGUID {
+				continue
+			}
+			if ps := s.server.findSessionByGUID(pg); ps != nil && ps.player != nil {
+				ps.exitVehicle(ctx)
+			}
+		}
+		s.server.removeVehicleKit(loc.key.MapID, loc.key.InstanceID, s.playerGUID)
+	}
+}
+
 // releaseVehicleStateAtLogout mirrors Unit::RemoveFromWorld
 // (Unit.cpp:9786-9802): a leaving vehicle base drops its kit first
 // (RemoveVehicleKit -> Uninstall -> RemoveAllPassengers), then a leaving
