@@ -2641,6 +2641,29 @@ func (s *session) controlledPetMotion(petGUID uint64) *creatureMotion {
 	return s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
 }
 
+// charmedCreatureGUID resolves Unit::GetFirstControlled (Unit.cpp:6367) for
+// the set-action gate: the charmed unit comes first, ahead of the minion pet.
+// It returns the charmed creature's GUID only when exactly one motion on the
+// player's map is charmed by this player; zero means no charmed unit (or an
+// ambiguous stale pair, where callers keep their existing gates).
+func (s *session) charmedCreatureGUID() uint64 {
+	if s == nil || s.server == nil || s.player == nil {
+		return 0
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	var found uint64
+	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion != nil && motion.Charmed && motion.CharmerGUID == s.playerGUID {
+			if found != 0 {
+				return 0
+			}
+			found = motion.GUID
+		}
+	}
+	return found
+}
+
 // handlePetAbandon processes CMSG_PET_ABANDON (0x176).
 // Reference: WorldSession::HandlePetAbandonOpcode (PetHandler.cpp:695-710).
 func (s *session) handlePetAbandon(ctx context.Context, payload []byte) bool {
@@ -4323,10 +4346,22 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	// PetHandler.cpp:433-438: the GUID must be the player's first controlled
-	// pet — the Go action-bar model is the active pet's DB row, so charmed
-	// creatures have no bridge here and are dropped as well.
-	if s.player == nil || petGUID == 0 || petGUID != s.player.PetGUID {
+	// Unit::GetFirstControlled (Unit.cpp:6367) orders the charmed unit ahead
+	// of the minion pet, and HandlePetSetAction (PetHandler.cpp:471) drops
+	// anything that is not the first controlled unit — so while the player
+	// charms a wild creature, a set-action addressed to the pet must not
+	// mutate the pet's stored bar. A packet addressed to the charmed unit
+	// itself still falls through to the pet gate below (wild-creature bar
+	// mutation has no bridge yet and drops there); a charmed pet is the
+	// first controlled unit and its own PetGUID, so the pet path is
+	// unchanged.
+	if s.player == nil || petGUID == 0 {
+		return true
+	}
+	if first := s.charmedCreatureGUID(); first != 0 && petGUID != first {
+		return true
+	}
+	if petGUID != s.player.PetGUID {
 		return true
 	}
 	// PetHandler.cpp:475: count is 2 only when the packet is exactly 24
