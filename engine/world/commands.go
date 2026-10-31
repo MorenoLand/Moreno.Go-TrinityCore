@@ -446,13 +446,22 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
-			mapID, x, y, z, orientation, s.playerGUID)
+		_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, instance_id = ?, zone = ? WHERE guid = ?",
+			mapID, x, y, z, orientation, s.saveTimeInstanceID(), s.player.Zone, s.playerGUID)
 		// The initiation write persists the destination; when the
 		// teleport detached a transport, the origin transport row must
 		// not survive it, or a crash mid-pending would respawn the
 		// player back on the transport at stale offsets instead of at
-		// the destination.
+		// the destination. The row is also the anchor a logout
+		// double-failure leaves behind (full save and fallback both
+		// failed), so it carries the save-time instance and the live
+		// zone rather than whatever the last good save wrote: near,
+		// the save-time rule value (0/bgData, set above before this
+		// write); far, the live instance at initiation — which, for
+		// a homebind fallback initiated after an ack assignment, is
+		// the assigned instance, so the double-failure row matches
+		// the row the full save would have written. Login recomputes
+		// zone from map+coords, so the zone column is freshness only.
 		if hadTransport && s.player.TransportGUID == 0 {
 			_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET trans_x = 0, trans_y = 0, trans_z = 0, trans_o = 0, transguid = 0 WHERE guid = ?",
 				s.playerGUID)
