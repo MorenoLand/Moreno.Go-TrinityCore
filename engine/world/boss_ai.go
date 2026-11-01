@@ -4154,6 +4154,9 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 		}
 		wasInCombat := motion.InCombat
 		inMelee := inMeleeThreatRange(motion.CombatReach, m.CombatReach, distance3D(m.X, m.Y, m.Z, motion.X, motion.Y, motion.Z))
+		oldTarget := motion.TargetGUID
+		passive := isCreaturePassive(motion)
+		var switchStart pendingAttackStart
 		switched, victim := motion.ThreatMgr.AddThreat(m.GUID, float32(amount), inMelee)
 		motion.TargetGUID = victim
 		motion.InCombat = true
@@ -4161,7 +4164,11 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 		mapID := motion.Map
 		entries := motion.ThreatMgr.SortedEntries()
 		targetGUID := motion.GUID
+		if wasInCombat && switched && victim != oldTarget && !passive {
+			switchStart = pendingAttackStart{creature: targetGUID, victim: victim, mapID: mapID, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
+		}
 		s.motionMu.Unlock()
+		s.broadcastPendingAttackStarts(switchStart)
 		if switched {
 			s.broadcastHighestThreatUpdateInInstance(mapID, m.InstanceID, motion.X, motion.Y, motion.Z, targetGUID, victim, entries, motion.PhaseMask)
 		}

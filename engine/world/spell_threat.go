@@ -447,6 +447,7 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 		// here. Missed targets are not covered: the arm lives in
 		// DoTargetSpellHit, which only runs for hits.
 		if positive {
+			var pending []pendingAttackStart
 			s.server.motionMu.Lock()
 			for _, targetGUID := range hitTargets {
 				if targetGUID == 0 {
@@ -455,9 +456,10 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 				if !s.server.unitInCombatLocked(s.player.Map, s.player.InstanceID, targetGUID) {
 					continue
 				}
-				s.forwardInitialAssistThreatLocked(0, targetGUID)
+				pending = append(pending, s.forwardInitialAssistThreatLocked(0, targetGUID)...)
 			}
 			s.server.motionMu.Unlock()
+			s.server.broadcastPendingAttackStarts(pending...)
 			pushCombatUpdate()
 		}
 		return
@@ -521,6 +523,7 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 		assistThreat = float32(t) * s.getThreatMultiplier(uint32(spell.SchoolMask))
 	}
 
+	var pending []pendingAttackStart
 	s.server.motionMu.Lock()
 	// Missed targets are not in hitTargets, so dedupe them here (C++
 	// iterates m_UniqueTargetInfo, which holds each target once).
@@ -533,10 +536,10 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 			continue
 		}
 		if positive {
-			s.forwardInitialAssistThreatLocked(assistThreat, targetGUID)
+			pending = append(pending, s.forwardInitialAssistThreatLocked(assistThreat, targetGUID)...)
 			continue
 		}
-		s.addInitialNegativeThreatLocked(targetGUID, threat)
+		pending = append(pending, s.addInitialNegativeThreatLocked(targetGUID, threat)...)
 	}
 	for _, missGUID := range missGUIDs {
 		if missGUID == 0 {
@@ -547,12 +550,13 @@ func (s *session) handleSpellInitialThreat(ctx context.Context, spell wotlk.Spel
 		}
 		// Spell.cpp:5128-5130: a missed target takes a zero-threat add.
 		if positive {
-			s.forwardInitialAssistThreatLocked(0, missGUID)
+			pending = append(pending, s.forwardInitialAssistThreatLocked(0, missGUID)...)
 			continue
 		}
-		s.addInitialNegativeThreatLocked(missGUID, 0)
+		pending = append(pending, s.addInitialNegativeThreatLocked(missGUID, 0)...)
 	}
 	s.server.motionMu.Unlock()
+	s.server.broadcastPendingAttackStarts(pending...)
 	pushCombatUpdate()
 }
 
@@ -732,6 +736,8 @@ func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, target
 	share, rSwitched, rVictim := nilSess.splitThreatRedirects(motion, amount)
 	dist := distance3D(caster.X, caster.Y, caster.Z, motion.X, motion.Y, motion.Z)
 	inMelee := inMeleeThreatRange(motion.CombatReach, caster.CombatReach, dist)
+	oldTarget := motion.TargetGUID
+	passive := isCreaturePassive(motion)
 	switched, newVictim := motion.ThreatMgr.AddThreat(caster.GUID, share, inMelee)
 	if rSwitched {
 		switched, newVictim = true, rVictim
@@ -755,6 +761,9 @@ func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, target
 	if switched {
 		s.broadcastHighestThreatUpdateInInstance(mapID, instanceID, mx, my, mz, mguid, newVictim, entries, mphase)
 	}
+	if wasInCombat && switched && newVictim != oldTarget && !passive {
+		s.broadcastPendingAttackStarts(pendingAttackStart{creature: mguid, victim: newVictim, mapID: mapID, instanceID: instanceID, x: mx, y: my, z: mz, phase: mphase})
+	}
 	if !wasInCombat {
 		s.broadcastAIReactionInInstance(mapID, instanceID, mguid, 2)
 		startPkt := buildAttackStart(mguid, caster.GUID)
@@ -775,10 +784,10 @@ func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, target
 // threat ref and engages combat (ThreatManager.cpp:308-410). The vehicle
 // redirect leg (ThreatManager.cpp:316-322) has no Go analog — Go models no
 // vehicle threat. Caller holds motionMu.
-func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float32) {
+func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float32) []pendingAttackStart {
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
 	if motion == nil {
-		return
+		return nil
 	}
 	// Spell.cpp:5143-5144: the negative path skips the threat add for
 	// targets that cannot have a threat list (ThreatManager::CanHaveThreatList,
@@ -791,13 +800,14 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 		if s.player.UnitFlags&unitFlagInCombat == 0 {
 			s.player.UnitFlags |= unitFlagInCombat
 		}
-		return
+		return nil
 	}
 	if motion.ThreatMgr == nil {
 		motion.ThreatMgr = NewThreatManager(motion)
 	}
 	dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+	var pending []pendingAttackStart
 	amount, rSwitched, rVictim := s.splitThreatRedirects(motion, amount)
 	switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, amount, inMelee)
 	if rSwitched {
@@ -807,6 +817,9 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntries()
 		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+		if !isCreaturePassive(motion) {
+			pending = append(pending, pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask})
+		}
 	} else {
 		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 	}
@@ -820,6 +833,7 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	if s.player.UnitFlags&unitFlagInCombat == 0 {
 		s.player.UnitFlags |= unitFlagInCombat
 	}
+	return pending
 }
 
 // addDrainGainThreat runs the HandlePeriodicManaLeechAuraTick gain arm
@@ -882,6 +896,7 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 	threat := float32(gained) * 0.5
 	dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+	var switchStart pendingAttackStart
 	threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
 	switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 	if rSwitched {
@@ -891,6 +906,9 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntries()
 		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+		if !isCreaturePassive(motion) {
+			switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
+		}
 	} else {
 		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 	}
@@ -900,6 +918,7 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 		s.player.UnitFlags |= unitFlagInCombat
 	}
 	s.server.motionMu.Unlock()
+	s.server.broadcastPendingAttackStarts(switchStart)
 	s.sendPlayerUpdate()
 }
 
@@ -917,7 +936,7 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 // zero add and are excluded from the even-split denominator; Go reads the CC
 // state from the creature's live confuse/stun/fear auras plus the fleeing
 // timer, the same model as distributeHealingThreatLocked.
-func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID uint64) {
+func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID uint64) []pendingAttackStart {
 	var canBe, cannotBe []*creatureMotion
 	now := time.Now()
 	for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
@@ -952,7 +971,7 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 		canBe = append(canBe, m)
 	}
 	if len(canBe) == 0 && len(cannotBe) == 0 {
-		return
+		return nil
 	}
 	// CombatManager::SetInCombatWith (CombatManager.cpp:200-257) inserts into
 	// both managers and updates both units' combat states: every per-recipient
@@ -963,6 +982,7 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 	if s.player.UnitFlags&unitFlagInCombat == 0 {
 		s.player.UnitFlags |= unitFlagInCombat
 	}
+	var pending []pendingAttackStart
 	addShare := func(m *creatureMotion, amount float32) {
 		dist := distance3D(s.player.X, s.player.Y, s.player.Z, m.X, m.Y, m.Z)
 		inMelee := inMeleeThreatRange(m.CombatReach, s.player.CombatReach, dist)
@@ -978,6 +998,9 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()
 			s.server.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, entries, m.PhaseMask)
+			if !isCreaturePassive(m) {
+				pending = append(pending, pendingAttackStart{creature: m.GUID, victim: newVictim, mapID: m.Map, instanceID: m.InstanceID, x: m.X, y: m.Y, z: m.Z, phase: m.PhaseMask})
+			}
 		}
 		m.Moving = true
 	}
@@ -993,4 +1016,5 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 	for _, m := range cannotBe {
 		addShare(m, 0)
 	}
+	return pending
 }

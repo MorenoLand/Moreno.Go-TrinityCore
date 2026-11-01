@@ -23057,6 +23057,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		var rageGUID uint64
 		newlyTapped := false
 		tappedFlags := uint32(0)
+		var switchStart pendingAttackStart
 		// ThreatManager::AddThreat step-1 gate (ThreatManager.cpp:311-317):
 		// probed pre-lock for the motion==nil tail path (conservative:
 		// NO_INITIAL_AGGRO gates here) and refined in the threat block
@@ -23124,6 +23125,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			// AddThreat (the ref is created with 0 threat and the victim leg
 			// runs — Unit::EngageWithTarget seeds 0.0f the same way); only the
 			// redirect split is skipped (amount > 0.0f gate, ThreatManager.cpp:348).
+			passive := isCreaturePassive(motion)
 			if !step1Gate && motion.ThreatMgr.OwnerCanHaveThreatList() {
 				var switched bool
 				var newVictim uint64
@@ -23142,6 +23144,9 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
 					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+					if !passive {
+						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
+					}
 				} else {
 					motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 				}
@@ -23149,6 +23154,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			motion.Moving = true
 		}
 		s.server.motionMu.Unlock()
+		s.server.broadcastPendingAttackStarts(switchStart)
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
 		if rageChanged {
@@ -29297,6 +29303,9 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z))
 	switched := false
 	var victim uint64
+	oldTarget := motion.TargetGUID
+	passive := isCreaturePassive(motion)
+	var switchStart pendingAttackStart
 	{
 		threat := float32(amount)
 		var rSwitched bool
@@ -29317,7 +29326,14 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	mapID := motion.Map
 	entries := motion.ThreatMgr.SortedEntries()
 	guid := motion.GUID
+	if wasInCombat && switched && victim != oldTarget && !passive {
+		switchStart = pendingAttackStart{creature: guid, victim: victim, mapID: mapID, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
+	}
 	s.server.motionMu.Unlock()
+	s.server.broadcastPendingAttackStarts(switchStart)
+	if switchStart.creature != 0 && switchStart.victim == s.playerGUID {
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(switchStart.creature, switchStart.victim), true)
+	}
 	if switched {
 		s.server.broadcastHighestThreatUpdateInInstance(mapID, s.player.InstanceID, motion.X, motion.Y, motion.Z, guid, victim, entries, motion.PhaseMask)
 	}

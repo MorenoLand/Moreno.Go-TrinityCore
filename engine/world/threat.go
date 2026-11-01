@@ -966,6 +966,32 @@ func (s *Server) broadcastHighestThreatUpdateInInstance(mapID, instanceID uint32
 	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_HIGHEST_THREAT_UPDATE), payload, mapID, instanceID, x, y, z, phase)
 }
 
+// pendingAttackStart is a victim-switch SMSG_ATTACK_START captured under
+// motionMu: the visible-set broadcast reads motionMu through its seer
+// lookup, so it must run after the lock drops (the taunt/twin precedent).
+// CreatureAI::UpdateVictim (CreatureAI.cpp:240-260) AttackStarts a
+// differing SelectVictim on the non-passive leg; Go's eager AddThreat sync
+// hides the switch from the step tick, so direct-set threat sites capture
+// it here and flush after unlock. Zero creature/victim entries are skipped.
+type pendingAttackStart struct {
+	creature, victim  uint64
+	mapID, instanceID uint32
+	x, y, z           float32
+	phase             uint32
+}
+
+func (s *Server) broadcastPendingAttackStarts(pending ...pendingAttackStart) {
+	if s == nil {
+		return
+	}
+	for _, p := range pending {
+		if p.creature == 0 || p.victim == 0 {
+			continue
+		}
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(p.creature, p.victim), p.mapID, p.instanceID, p.x, p.y, p.z, p.phase)
+	}
+}
+
 // sumThreatTempModifier sums the SPELL_AURA_MOD_TOTAL_THREAT (aura 103)
 // effect amounts over a unit's active auras — the mod computed by
 // ThreatManager::UpdateMyTempModifiers (ThreatManager.cpp:699-704). The
@@ -1805,6 +1831,11 @@ func (s *session) flagPlayerAssistContestedPvP(ctx context.Context, targetGUID u
 // healers, which never register threat redirects). Callers hold no locks.
 func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, instanceID uint32, healerX, healerY, healerZ, healerReach float32, healerGUID, targetGUID uint64, totalThreat float32) {
 	s.motionMu.Lock()
+	var pending []pendingAttackStart
+	// Defers run LIFO, so this flush (registered first) runs after the
+	// unlock below: the visible-set broadcast reads motionMu through
+	// its seer lookup and must not run under the lock.
+	defer func() { s.broadcastPendingAttackStarts(pending...) }()
 	defer s.motionMu.Unlock()
 
 	var engaged, controlled []*creatureMotion
@@ -1875,6 +1906,9 @@ func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, insta
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()
 			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, entries, m.PhaseMask)
+			if !isCreaturePassive(m) {
+				pending = append(pending, pendingAttackStart{creature: m.GUID, victim: newVictim, mapID: m.Map, instanceID: m.InstanceID, x: m.X, y: m.Y, z: m.Z, phase: m.PhaseMask})
+			}
 		}
 		m.Moving = true
 	}

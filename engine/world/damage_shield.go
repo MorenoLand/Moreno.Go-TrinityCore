@@ -611,12 +611,14 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 	// the same damageThreatAmount fold the direct-spell path uses. The
 	// step-1 gate (ThreatManager.cpp:311-317) suppresses both threat and
 	// engagement for gated spells.
+	var switchStart pendingAttackStart
 	if m.ThreatMgr.OwnerCanHaveThreatList() {
 		threat := float32(damage)
 		step1Gate := false
 		if attackerSess != nil {
 			threat, step1Gate = attackerSess.damageThreatAmount(ctx, spellID, schoolMask, float32(damage), wasInCombat)
 		}
+		passive := isCreaturePassive(m)
 		if !step1Gate {
 			m.InCombat = true
 			switched, newVictim := m.ThreatMgr.AddThreat(attackerGUID, threat, true)
@@ -624,10 +626,14 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 				m.TargetGUID = newVictim
 				entries := m.ThreatMgr.SortedEntries()
 				s.broadcastHighestThreatUpdateInInstance(key.Map, key.InstanceID, m.X, m.Y, m.Z, key.GUID, newVictim, entries, m.PhaseMask)
+				if !passive {
+					switchStart = pendingAttackStart{creature: key.GUID, victim: newVictim, mapID: key.Map, instanceID: key.InstanceID, x: m.X, y: m.Y, z: m.Z, phase: m.PhaseMask}
+				}
 			}
 		}
 	}
 	s.motionMu.Unlock()
+	s.broadcastPendingAttackStarts(switchStart)
 	// Unit::DealDamage (Unit.cpp:897-898): the DIRECT_DAMAGE strip runs after
 	// the health leg; the breakable-CC drain rides the taken proc pass.
 	s.stripCreatureRecursiveDirectDamageAuras(key, spellID, damage, m.MaxHealth)

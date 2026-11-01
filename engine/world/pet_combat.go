@@ -8603,6 +8603,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	newlyTapped := false
 	rageChanged := false
 	var rageNext uint32
+	var switchStart pendingAttackStart
 	if targetMotion != nil {
 		if targetMotion.BossAI == nil {
 			targetMotion.BossAI = getBossAIForCreature(targetMotion, targetMotion.ScriptName)
@@ -8672,6 +8673,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// AddThreat (the ref is created with 0 threat and the victim leg
 			// runs — Unit::EngageWithTarget seeds 0.0f the same way); only the
 			// redirect split is skipped (amount > 0.0f gate, ThreatManager.cpp:348).
+			passive := isCreaturePassive(targetMotion)
 			if !step1Gate && targetMotion.ThreatMgr.OwnerCanHaveThreatList() {
 				var switched bool
 				var newVictim uint64
@@ -8690,6 +8692,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 					targetMotion.TargetGUID = newVictim
 					entries := targetMotion.ThreatMgr.SortedEntries()
 					s.server.broadcastHighestThreatUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.X, targetMotion.Y, targetMotion.Z, targetMotion.GUID, newVictim, entries, targetMotion.PhaseMask)
+					if !passive {
+						switchStart = pendingAttackStart{creature: targetMotion.GUID, victim: newVictim, mapID: targetMotion.Map, instanceID: targetMotion.InstanceID, x: targetMotion.X, y: targetMotion.Y, z: targetMotion.Z, phase: targetMotion.PhaseMask}
+					}
 				} else {
 					targetMotion.TargetGUID = targetMotion.ThreatMgr.GetCurrentVictim()
 				}
@@ -8703,6 +8708,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 	}
 	s.server.motionMu.Unlock()
+	s.server.broadcastPendingAttackStarts(switchStart)
 	if targetMotion == nil {
 		return
 	}

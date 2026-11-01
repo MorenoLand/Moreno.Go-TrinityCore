@@ -1592,6 +1592,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		var rageGUID uint64
 		newlyTapped := false
 		tappedFlags := uint32(0)
+		var switchStart pendingAttackStart
 		if motion != nil {
 			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fired above
 			// on the mutable damage ahead of the tap/health/threat/rage
@@ -1638,6 +1639,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			// alone is kept (the aggro path below sets InCombat).
 			if motion.ThreatMgr.OwnerCanHaveThreatList() {
 				threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
+				wasInCombat := motion.InCombat
+				passive := isCreaturePassive(motion)
 				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 				if rSwitched {
 					switched, newVictim = true, rVictim
@@ -1646,10 +1649,14 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
 					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+					if wasInCombat && !passive {
+						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
+					}
 				}
 			}
 		}
 		s.server.motionMu.Unlock()
+		s.server.broadcastPendingAttackStarts(switchStart)
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
@@ -2406,6 +2413,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		var rageGUID uint64
 		newlyTapped := false
 		tappedFlags := uint32(0)
+		var switchStart pendingAttackStart
 		if motion != nil {
 			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fired above
 			// on the mutable damage ahead of the tap/health/threat/rage
@@ -2447,6 +2455,8 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
 				dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 				inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
+				wasInCombat := motion.InCombat
+				passive := isCreaturePassive(motion)
 				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 				if rSwitched {
 					switched, newVictim = true, rVictim
@@ -2455,10 +2465,14 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
 					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+					if wasInCombat && !passive {
+						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
+					}
 				}
 			}
 		}
 		s.server.motionMu.Unlock()
+		s.server.broadcastPendingAttackStarts(switchStart)
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
