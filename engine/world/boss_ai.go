@@ -1286,8 +1286,9 @@ func (s *Server) creatureSpellTargetHasAura(m *creatureMotion, targetGUID uint64
 // fizzle. Bridged: self, visibility (controller seer), in-combat, ghost,
 // only-players, dead, creature-type, GM/invis, in-flight, aura-state,
 // aura-spell, PREVENT_RESURRECTION; no-bridge documented inline
-// (wild-creature seer detection, tapped/pickpocket/disarm vacuous,
-// corpses, CC implicit-only).
+// (tapped/pickpocket/disarm vacuous, corpses, CC implicit-only);
+// visibility now covers the wild seer too (wildCreatureCanDetectTarget),
+// not just the controller seer.
 func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
 	if s == nil || m == nil {
 		return true
@@ -1316,15 +1317,19 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	// session's detect core: canDetectStealthOf +
 	// canDetectInvisibilityOfPlayer, with implicit=false for a creature
 	// caster (Spell.cpp:5372), so no stealth exemption. A wild caster's
-	// seer is the creature itself (Object.cpp:1664-1666), and Go wires no
-	// creature-side detect read for a motion seer (no stealth/invisibility
-	// detect sums or combat reach on motions), so wild casters fail open
-	// here. Self targets pass automatically (a creature GUID never
-	// resolves to a session); creature targets pass (motions carry no
-	// stealth/invisibility aura state); CAN_TARGET_INVISIBLE exempts.
-	// Sight-range, ghost-team/group, vehicle-accessory and despawn legs
-	// stay out, as on the player path; the GM-visibility leg rides the
-	// GM/invisibility arm below.
+	// seer is the creature itself (Object.cpp:1664-1666), and it now
+	// judges through wildCreatureCanDetectTarget: the motion's live
+	// creature-aura detect sums against player targets (session folds)
+	// and creature targets (creature-aura sums), stalked first, then
+	// invisibility, then stealth. Self targets pass automatically
+	// (CanSeeOrDetect returns true for this == obj, Object.cpp:1575);
+	// CAN_TARGET_INVISIBLE exempts. A controlled caster whose controller
+	// session does not resolve (creature charmer/owner) still fails open
+	// here — the seer there is the controller motion, not the caster, so
+	// that leg needs its own motion-seer lookup. Sight-range,
+	// ghost-team/group, vehicle-accessory and despawn legs stay out, as on
+	// the player path; the GM-visibility leg rides the GM/invisibility arm
+	// below.
 	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 {
 		var seer *session
 		if m.CharmerGUID != 0 {
@@ -1337,6 +1342,10 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 				if !seer.canDetectStealthOf(ts) || !seer.canDetectInvisibilityOfPlayer(ts) {
 					return false
 				}
+			}
+		} else if m.CharmerGUID == 0 && m.OwnerGUID == 0 {
+			if !s.wildCreatureCanDetectTarget(m, targetGUID) {
+				return false
 			}
 		}
 	}
