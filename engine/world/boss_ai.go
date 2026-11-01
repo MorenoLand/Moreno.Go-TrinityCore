@@ -1052,6 +1052,69 @@ func (s *Server) creatureSpellTargetDead(m *creatureMotion, targetGUID uint64) b
 	return motion != nil && motion.Health == 0
 }
 
+// creatureSpellTargetGhost is the Server-level twin of the pet path's
+// ghost read for wild-creature casters (SpellInfo::CheckTarget,
+// SpellInfo.cpp:1654): a player target's PlayerFlags ghost bit, false for
+// a creature target (no ghost aura state on motions). The second result
+// reports whether the guid resolved at all — unresolvable targets fail
+// open at the ghost gate, like the dead gate.
+func (s *Server) creatureSpellTargetGhost(m *creatureMotion, targetGUID uint64) (bool, bool) {
+	if s == nil || targetGUID == 0 {
+		return false, false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		return ts.player.PlayerFlags&playerFlagGhost != 0, true
+	}
+	if m == nil {
+		return false, false
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, targetGUID)
+	s.motionMu.Unlock()
+	if motion != nil {
+		return false, true
+	}
+	return false, false
+}
+
+// creatureSpellTargetHasPreventResurrectionAura is the Server-level twin
+// of session.targetHasPreventResurrectionAura for wild-creature casters
+// (SpellInfo::CheckTarget, SpellInfo.cpp:1776-1778): a player target's
+// session aura-type list, or a creature target's live aura maps scanned
+// through the spell-effect table for SPELL_AURA_PREVENT_RESURRECTION
+// (314). Unresolvable targets pass (no live aura state to judge).
+func (s *Server) creatureSpellTargetHasPreventResurrectionAura(m *creatureMotion, targetGUID uint64) bool {
+	if s == nil || targetGUID == 0 {
+		return false
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		return ts.hasAuraType(spellAuraPreventResurrection)
+	}
+	if m == nil || s.Data == nil {
+		return false
+	}
+	key := creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: targetGUID}
+	s.auraMu.Lock()
+	spellIDs := make([]uint32, 0, len(s.creatureAuras[key])+len(s.activeCreatureAuras[key]))
+	for spellID := range s.creatureAuras[key] {
+		spellIDs = append(spellIDs, spellID)
+	}
+	for spellID := range s.activeCreatureAuras[key] {
+		spellIDs = append(spellIDs, spellID)
+	}
+	s.auraMu.Unlock()
+	for _, spellID := range spellIDs {
+		if auraSpell, found, err := s.Data.Spell(spellID); err == nil && found {
+			for _, eff := range auraSpell.Effects {
+				if eff.Aura == spellAuraPreventResurrection {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // creatureSpellTargetTypePasses is the Server-level twin of
 // session.checkTargetCreatureType for wild-creature casters
 // (SpellInfo::CheckTargetCreatureType, SpellInfo.cpp:1868-1886, as reached
@@ -1220,10 +1283,11 @@ func (s *Server) creatureSpellTargetHasAura(m *creatureMotion, targetGUID uint64
 // creature caster). C++ relative order: between the conditions block
 // (5337-5348) and the behind/facing arms (5379-5384); runs for triggered
 // casts too (no C++ triggered exemption). Returns false when the cast must
-// fizzle. Bridged: self, in-combat, only-players, dead, creature-type,
-// GM/invis, in-flight, aura-state, aura-spell; no-bridge documented inline
-// (visibility, ONLY_TARGET_GHOSTS, tapped/pickpocket/disarm vacuous,
-// corpses, CC implicit-only, PREVENT_RESURRECTION).
+// fizzle. Bridged: self, visibility (controller seer), in-combat, ghost,
+// only-players, dead, creature-type, GM/invis, in-flight, aura-state,
+// aura-spell, PREVENT_RESURRECTION; no-bridge documented inline
+// (wild-creature seer detection, tapped/pickpocket/disarm vacuous,
+// corpses, CC implicit-only).
 func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, targetGUID uint64) bool {
 	if s == nil || m == nil {
 		return true
@@ -1246,16 +1310,53 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1641-1642): the CanSeeOrDetect
-	// visibility gate is unbridged — Go has no stealth/invisibility-level
-	// model on either side (documented no-bridge, like the player path).
+	// visibility gate. C++ CanDetect (Object.cpp:1664-1680) routes a
+	// controlled caster through its controller (GetCharmerOrOwner, charmer
+	// first), so a charmed/owned caster judges through the controller
+	// session's detect core: canDetectStealthOf +
+	// canDetectInvisibilityOfPlayer, with implicit=false for a creature
+	// caster (Spell.cpp:5372), so no stealth exemption. A wild caster's
+	// seer is the creature itself (Object.cpp:1664-1666), and Go wires no
+	// creature-side detect read for a motion seer (no stealth/invisibility
+	// detect sums or combat reach on motions), so wild casters fail open
+	// here. Self targets pass automatically (a creature GUID never
+	// resolves to a session); creature targets pass (motions carry no
+	// stealth/invisibility aura state); CAN_TARGET_INVISIBLE exempts.
+	// Sight-range, ghost-team/group, vehicle-accessory and despawn legs
+	// stay out, as on the player path; the GM-visibility leg rides the
+	// GM/invisibility arm below.
+	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 {
+		var seer *session
+		if m.CharmerGUID != 0 {
+			seer = s.findSessionByGUID(m.CharmerGUID)
+		} else if m.OwnerGUID != 0 {
+			seer = s.findSessionByGUID(m.OwnerGUID)
+		}
+		if seer != nil {
+			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				if !seer.canDetectStealthOf(ts) || !seer.canDetectInvisibilityOfPlayer(ts) {
+					return false
+				}
+			}
+		}
+	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1650-1651):
 	// SPELL_ATTR1_CANT_TARGET_IN_COMBAT with an in-combat target.
 	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && (s.creatureSpellTargetInCombat(m, targetGUID) || s.creatureSpellTargetPetInCombat(m, targetGUID)) {
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1654-1662):
-	// SPELL_ATTR3_ONLY_TARGET_GHOSTS — no Go model (target-side ghost aura
-	// state is unmodeled); documented no-bridge.
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS — the attr bit and the target's ghost
+	// state must agree, both directions: a ghost-only spell rejects a
+	// non-ghost target and any other spell rejects a ghost target, ahead
+	// of the dead gate as in C++. Player targets judge the PlayerFlags
+	// ghost bit; creature targets carry no ghost aura state and read
+	// false. Unresolvable targets fail open, like the dead gate.
+	if ghost, resolves := s.creatureSpellTargetGhost(m, targetGUID); resolves {
+		if spell.AttributesEx3&spellAttr3OnlyTargetGhosts != 0 != ghost {
+			return false
+		}
+	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1667-1692): the CANT_TARGET_TAPPED,
 	// PICKPOCKET and DISARM arms sit inside C++'s
 	// `caster->GetTypeId() == TYPEID_PLAYER` block — vacuous for a creature
@@ -1270,7 +1371,14 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1715-1716): dead targets fail
 	// unless the spell allows them (IsAllowingDeadTarget, 1177).
-	if s.creatureSpellTargetDead(m, targetGUID) && !spellAllowsDeadTarget(spell) {
+	// C++ IsAlive() is false for ghosts too (deathState CORPSE); ghosts
+	// carry Health=1 in Go (death.go:473), so the health read alone
+	// misses them — the ghost read closes it, mirroring the pet path.
+	// The ghost arm above already fails ghost targets for non-ghost
+	// spells; this leg is what fails a ghost-only spell on a ghost
+	// target that does not allow dead targets.
+	ghost, _ := s.creatureSpellTargetGhost(m, targetGUID)
+	if (s.creatureSpellTargetDead(m, targetGUID) || ghost) && !spellAllowsDeadTarget(spell) {
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1718-1720): the implicit-only
@@ -1285,9 +1393,13 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1736-1743): GM-mode /
 	// GM-invisibility. A wild caster has no affecting player, so C++ fires
 	// this only for non-positive spells (GetAffectingPlayer() ||
-	// !IsPositive()); charmed/owned casters keep the owner leg via
-	// m.OwnerGUID. Self-targets are exempt (unitTarget != caster).
-	if targetGUID != m.GUID && (m.OwnerGUID != 0 || !spellIsPositive(spell)) && s.gmAttackTargetBlocked(targetGUID) {
+	// !IsPositive()); GetAffectingPlayer (Object.cpp) is the
+	// charmer-or-owner chain's player, so a charmed caster counts even
+	// when OwnerGUID is 0 (mind-controlled wild creature) — the charmer
+	// leg joins the owner leg. Go's CharmOwnerGUID is the banked
+	// pre-charm owner, not the charmer, and does not count here.
+	// Self-targets are exempt (unitTarget != caster).
+	if targetGUID != m.GUID && (m.OwnerGUID != 0 || m.CharmerGUID != 0 || !spellIsPositive(spell)) && s.gmAttackTargetBlocked(targetGUID) {
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1745-1747): in-flight targets
@@ -1301,8 +1413,15 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1757-1766): target aura-state
 	// requirements. C++ skips both arms for vehicle casters and when the
 	// target is the caster's charmer/owner (creature casters are never
-	// vehicles); the charmer/owner exemption mirrors the pet path.
-	charmerExempt := targetGUID == m.OwnerGUID || (m.CharmOwnerGUID != 0 && targetGUID == m.CharmOwnerGUID)
+	// vehicles). The exemption is a single unit, charmer-first (Unit.h:
+	// IsCharmed() ? GetCharmer() : GetOwner()) — not owner-or-banked-owner:
+	// Go's CharmOwnerGUID is the banked pre-charm owner, so the true
+	// charmer read is CharmerGUID (cleared on uncharm, like IsCharmed).
+	charmerOrOwner := m.OwnerGUID
+	if m.CharmerGUID != 0 {
+		charmerOrOwner = m.CharmerGUID
+	}
+	charmerExempt := targetGUID == charmerOrOwner
 	if !charmerExempt {
 		if spell.TargetAuraState != 0 && !s.creatureSpellTargetHasAuraState(m, spell, targetGUID, spell.TargetAuraState) {
 			return false
@@ -1320,8 +1439,14 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1776-1778):
-	// SPELL_AURA_PREVENT_RESURRECTION — unbridged on the player path too;
-	// documented no-bridge parity.
+	// SPELL_AURA_PREVENT_RESURRECTION — the last arm, after the
+	// aura-spell gates. Server twin of the session twin: player targets
+	// judge the session aura-type list, creature targets scan the live
+	// creature aura maps through the spell-effect table; unresolvable
+	// targets pass. No self exemption in C++.
+	if spellHasResurrectEffect(spell) && s.creatureSpellTargetHasPreventResurrectionAura(m, targetGUID) {
+		return false
+	}
 	return true
 }
 
