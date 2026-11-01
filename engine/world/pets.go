@@ -1320,19 +1320,13 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 	if petSaveTime > 0 && now > petSaveTime {
 		offlineMs = (now - petSaveTime) * 1000
 	}
-	s.server.auraMu.Lock()
-	if s.server.creatureAuras == nil {
-		s.server.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
-	}
-	if s.server.creatureAuras[petKey] == nil {
-		s.server.creatureAuras[petKey] = make(map[uint32]struct{})
-	}
-	if s.server.activeCreatureAuras == nil {
-		s.server.activeCreatureAuras = make(map[creatureAuraKey]map[uint32]*activeAura)
-	}
-	if s.server.activeCreatureAuras[petKey] == nil {
-		s.server.activeCreatureAuras[petKey] = make(map[uint32]*activeAura)
-	}
+	// Pet-aura load runs in two phases: the row scan below resolves each
+	// aura's caster level through the live session/motion (motionMu) and
+	// takes no auraMu, so a creature-caster row can no longer nest motionMu
+	// under auraMu — the reverse of the melee parry-hasten order
+	// (motionMu across creatureAttackTimeFactor). Only the map inserts in
+	// the second phase below run under auraMu, in row order.
+	pending := make([]*activeAura, 0)
 	for rows.Next() {
 		var casterValue any
 		var spellID, effectMask, recalculateMask, stackCount, maxDuration, remainTime, remainCharges int64
@@ -1363,7 +1357,8 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if casterGUID == 0 {
 			casterGUID = petGUID
 		}
-		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, TargetKey: petKey, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.server.activeCreatureAuras[petKey]) % 64), Positive: true, CasterLevel: s.auraStoredCasterLevel(casterGUID, spell), StoredCasterLevel: s.auraStoredCasterLevel(casterGUID, spell)}
+		casterLevel := s.auraStoredCasterLevel(casterGUID, spell)
+		aura := &activeAura{SpellID: uint32(spellID), CasterGUID: casterGUID, TargetGUID: petGUID, TargetKey: petKey, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Positive: true, CasterLevel: casterLevel, StoredCasterLevel: casterLevel}
 		for index := range amounts {
 			aura.Amounts[index] = int32(amounts[index])
 			aura.BaseAmounts[index] = int32(baseAmounts[index])
@@ -1421,9 +1416,7 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if aura.DurationMs > 0 && aura.RemainingMs > aura.DurationMs {
 			aura.RemainingMs = aura.DurationMs
 		}
-		s.server.creatureAuras[petKey][aura.SpellID] = struct{}{}
-		s.server.activeCreatureAuras[petKey][aura.SpellID] = aura
-		loaded = append(loaded, aura)
+		pending = append(pending, aura)
 		if spellHasStatModAura(spell) {
 			statAuraSpellID = uint32(spellID)
 		}
@@ -1436,6 +1429,25 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		if spellHasPetWeaponDamageAura(spell) {
 			dmgAuraSpellID = uint32(spellID)
 		}
+	}
+	s.server.auraMu.Lock()
+	if s.server.creatureAuras == nil {
+		s.server.creatureAuras = make(map[creatureAuraKey]map[uint32]struct{})
+	}
+	if s.server.creatureAuras[petKey] == nil {
+		s.server.creatureAuras[petKey] = make(map[uint32]struct{})
+	}
+	if s.server.activeCreatureAuras == nil {
+		s.server.activeCreatureAuras = make(map[creatureAuraKey]map[uint32]*activeAura)
+	}
+	if s.server.activeCreatureAuras[petKey] == nil {
+		s.server.activeCreatureAuras[petKey] = make(map[uint32]*activeAura)
+	}
+	for _, aura := range pending {
+		aura.Slot = uint8(len(s.server.activeCreatureAuras[petKey]) % 64)
+		s.server.creatureAuras[petKey][aura.SpellID] = struct{}{}
+		s.server.activeCreatureAuras[petKey][aura.SpellID] = aura
+		loaded = append(loaded, aura)
 	}
 	s.server.auraMu.Unlock()
 	if len(loaded) == 0 {

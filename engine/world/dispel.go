@@ -2671,15 +2671,18 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 			targetSess.dispelPlayerAura(spID)
 		}
 	} else if targetGUID != 0 && s.server != nil {
+		// SpellEffects.cpp:4749 keys offensiveness on IsFriendlyTo(m_caster)
+		// — the faction reaction, not the pet-only heuristic. It reads the
+		// target motion (motionMu), never aura state, so it runs before
+		// auraMu is taken: the reverse order deadlocks against a melee
+		// swing holding motionMu across creatureAttackTimeFactor.
+		offensive := !s.isFriendlyToCreatureTarget(targetGUID)
 		s.server.auraMu.Lock()
 		key := creatureAuraKeyForPlayer(*s.player, targetGUID)
 		auras := s.server.activeCreatureAuras[key]
 		// Creature-side CalcDispelChance: same per-aura 100-minus-resist roll
 		// as the creature dispel path (SpellEffects.cpp:4749), two passes so
 		// the caster-mod fold runs without auraMu held.
-		// SpellEffects.cpp:4749 keys offensiveness on IsFriendlyTo(m_caster)
-		// — the faction reaction, not the pet-only heuristic.
-		offensive := !s.isFriendlyToCreatureTarget(targetGUID)
 		resistTotal := int32(0)
 		if offensive {
 			for _, ra := range auras {
