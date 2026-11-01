@@ -1040,6 +1040,14 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	// all-sessions loop handed victory/defeat rewards to every player
 	// of the team anywhere in the world, not just war participants.
 	// Reference: BattlefieldWG::OnBattleEnd (BattlefieldWG.cpp:651-760).
+	// Snapshot the war roster under RLock first: the aura/achievement arms
+	// below fan out through sessionsMu.RLock-taking broadcast helpers, and a
+	// nested RLock deadlocks whenever a writer is queued behind this read.
+	type wgWarMember struct {
+		sess  *session
+		pTeam uint32
+	}
+	var warMembers []wgWarMember
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil {
@@ -1050,6 +1058,12 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		if !inWar {
 			continue
 		}
+		warMembers = append(warMembers, wgWarMember{sess: sess, pTeam: pTeam})
+	}
+	s.sessionsMu.RUnlock()
+	for _, member := range warMembers {
+		sess := member.sess
+		pTeam := member.pTeam
 
 		// Remove wartime auras (BattlefieldWG::RemoveAurasFromPlayer,
 		// BattlefieldWG.cpp:1049-1059)
@@ -1084,7 +1098,6 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 			sess.applyAura(WGSpellDefeatReward)
 		}
 	}
-	s.sessionsMu.RUnlock()
 
 	// BattlefieldWG::OnBattleEnd clears m_PlayersInWar per team after the
 	// aura strip above (BattlefieldWG.cpp:704-731); the zone roster
@@ -1117,11 +1130,18 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 		// are untouched. The old winner/loser arms applied the swap to
 		// every session of the team world-wide, and the winner arm did so
 		// even on a timer defense.
+		// Same snapshot idiom as the war-roster loop above: removeAura fans
+		// out through a sessionsMu.RLock-taking broadcast helper.
+		var zoneMembers []*session
 		s.sessionsMu.RLock()
 		for sess := range s.sessions {
 			if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != WGMapID || sess.player.Zone != WGZoneID {
 				continue
 			}
+			zoneMembers = append(zoneMembers, sess)
+		}
+		s.sessionsMu.RUnlock()
+		for _, sess := range zoneMembers {
 			if winningTeam == WGTeamAlliance {
 				sess.removeAura(WGSpellHordeControlPhaseShift)
 				sess.applyAura(WGSpellAllianceControlPhaseShift)
@@ -1130,7 +1150,6 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 				sess.applyAura(WGSpellHordeControlPhaseShift)
 			}
 		}
-		s.sessionsMu.RUnlock()
 	}
 
 	// Despawn vehicles
