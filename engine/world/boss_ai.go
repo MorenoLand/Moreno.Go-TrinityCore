@@ -4163,7 +4163,7 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 		targetGUID := motion.GUID
 		s.motionMu.Unlock()
 		if switched {
-			s.broadcastHighestThreatUpdateInInstance(mapID, m.InstanceID, motion.X, motion.Y, motion.Z, targetGUID, victim, entries)
+			s.broadcastHighestThreatUpdateInInstance(mapID, m.InstanceID, motion.X, motion.Y, motion.Z, targetGUID, victim, entries, motion.PhaseMask)
 		}
 		if !wasInCombat {
 			s.broadcastAIReactionInInstance(mapID, m.InstanceID, targetGUID, 2)
@@ -4227,7 +4227,7 @@ func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spe
 			mapID := motion.Map
 			targetGUID := motion.GUID
 			s.motionMu.Unlock()
-			s.broadcastHighestThreatUpdateInInstance(mapID, m.InstanceID, motion.X, motion.Y, motion.Z, targetGUID, newVictim, entries)
+			s.broadcastHighestThreatUpdateInInstance(mapID, m.InstanceID, motion.X, motion.Y, motion.Z, targetGUID, newVictim, entries, motion.PhaseMask)
 			s.motionMu.Lock()
 		}
 		motion.InCombat = true
@@ -9027,7 +9027,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 			s.procCreatureLethalDamageAuras(victimKey, spell.ID, damage, maxHealth)
 			s.stopCreatureMotionInInstance(m.Map, m.InstanceID, guid, liveX, liveY, liveZ)
 			s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})
-			s.broadcastThreatClearInInstance(m.Map, m.InstanceID, liveX, liveY, liveZ, guid)
+			s.broadcastThreatClearInInstance(m.Map, m.InstanceID, liveX, liveY, liveZ, guid, live.PhaseMask)
 			if live.CreatureType != creatureTypeCritter {
 				s.fireCreatureMeleeAuraProcs(ctx, m, guid, procEventInfo{
 					typeMask:       procFlagKill,
@@ -9249,7 +9249,7 @@ func (s *Server) creatureInstaKillVictim(ctx context.Context, m *creatureMotion,
 		unitFieldHealth:       0,
 		unitFieldDynamicFlags: tm.DynamicFlags,
 	})
-	s.broadcastThreatClearInInstance(tm.Map, tm.InstanceID, tm.X, tm.Y, tm.Z, tm.GUID)
+	s.broadcastThreatClearInInstance(tm.Map, tm.InstanceID, tm.X, tm.Y, tm.Z, tm.GUID, tm.PhaseMask)
 	if owner != nil && owner.player != nil {
 		// Unit::Kill's full chain on the charmer/owner player session.
 		owner.onCreatureKilled(ctx, killedTarget, m)

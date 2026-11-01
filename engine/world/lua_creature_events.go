@@ -1264,7 +1264,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.clearCreatureVisualTarget(motion)
 		s.removeCreatureAttackers(mapID, instanceID, guid)
 		s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
-		s.broadcastThreatClearInInstance(mapID, instanceID, motion.X, motion.Y, motion.Z, guid)
+		s.broadcastThreatClearInInstance(mapID, instanceID, motion.X, motion.Y, motion.Z, guid, motion.PhaseMask)
 		return nil, nil
 	}
 	// RemoveAllAttackers is Unit::RemoveAllAttackers (Unit.cpp:5867-5878)

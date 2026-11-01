@@ -527,11 +527,11 @@ func (s *Server) sendCreatureInterruptPackets(m *creatureMotion, interrupted int
 		channelPkt := protocol.NewBuffer(12)
 		channelPkt.WritePackedGUID(m.GUID)
 		channelPkt.WriteU32(0)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_CHANNEL_UPDATE), channelPkt.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeMSG_CHANNEL_UPDATE), channelPkt.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 	}
 	failure := protocol.BuildSpellFailure(m.GUID, 0, interrupted.spellID, 0)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), failure, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), failure, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELL_FAILURE), failure, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELL_FAILED_OTHER), failure, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 }
 
 // buildInterruptCastLog packs one SMSG_SPELLLOGEXECUTE interrupt row:

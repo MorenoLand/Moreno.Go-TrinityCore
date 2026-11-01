@@ -23031,7 +23031,11 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: corpseFlags,
 		})
-		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID)
+		threatPhase := uint32(0)
+		if motion != nil {
+			threatPhase = motion.PhaseMask
+		}
+		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID, threatPhase)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target, nil)
@@ -23137,7 +23141,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries)
+					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
 				} else {
 					motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 				}
@@ -29315,7 +29319,7 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	guid := motion.GUID
 	s.server.motionMu.Unlock()
 	if switched {
-		s.server.broadcastHighestThreatUpdateInInstance(mapID, s.player.InstanceID, motion.X, motion.Y, motion.Z, guid, victim, entries)
+		s.server.broadcastHighestThreatUpdateInInstance(mapID, s.player.InstanceID, motion.X, motion.Y, motion.Z, guid, victim, entries, motion.PhaseMask)
 	}
 	if !wasInCombat {
 		s.server.broadcastAIReactionInInstance(mapID, s.player.InstanceID, guid, 2)
@@ -42667,7 +42671,7 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 		unitFieldHealth:       0,
 		unitFieldDynamicFlags: corpseFlags,
 	})
-	srv.broadcastThreatClearInInstance(mapID, instanceID, cx, cy, cz, casterGUID)
+	srv.broadcastThreatClearInInstance(mapID, instanceID, cx, cy, cz, casterGUID, casterPhase)
 	srv.clearCreatureAuras(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: casterGUID})
 	if s.player != nil {
 		// C++ Unit::Kill runs with the caster as its own killer; no player
@@ -42847,7 +42851,11 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				unitFieldHealth:       0,
 				unitFieldDynamicFlags: corpseFlags,
 			})
-			s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID)
+			threatPhase := uint32(0)
+			if motion != nil {
+				threatPhase = motion.PhaseMask
+			}
+			s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID, threatPhase)
 			s.server.clearCreatureAuras(key)
 		}
 		_ = s.sendAttackStop(target.GUID, true)

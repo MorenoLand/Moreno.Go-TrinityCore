@@ -1566,7 +1566,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: corpseFlags,
 		})
-		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID)
+		threatPhase := uint32(0)
+		if motion != nil {
+			threatPhase = motion.PhaseMask
+		}
+		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID, threatPhase)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target, nil)
@@ -1641,7 +1645,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries)
+					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
 				}
 			}
 		}
@@ -2370,7 +2374,11 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: corpseFlags,
 		})
-		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID)
+		threatPhase := uint32(0)
+		if motion != nil {
+			threatPhase = motion.PhaseMask
+		}
+		s.server.broadcastThreatClearInInstance(target.Map, target.InstanceID, target.X, target.Y, target.Z, target.GUID, threatPhase)
 		s.autoRepeatSpell = 0
 		s.autoRepeatTarget = 0
 		buf := protocol.NewBuffer(9)
@@ -2446,7 +2454,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries)
+					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
 				}
 			}
 		}

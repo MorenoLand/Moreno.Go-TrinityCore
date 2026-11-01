@@ -1740,6 +1740,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		var killedTarget combatTarget
 		var killed bool
 		var killX, killY, killZ float32
+		var killPhase uint32
 		s.motionMu.Lock()
 		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
 		if cMotion != nil {
@@ -1783,6 +1784,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 					Level:      uint8(cMotion.Level),
 				}
 				killX, killY, killZ = cMotion.X, cMotion.Y, cMotion.Z
+				killPhase = cMotion.PhaseMask
 				cMotion.Health = 0
 				cMotion.DynamicFlags |= unitDynFlagLootable
 				cMotion.InCombat = false
@@ -1816,7 +1818,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			// the full death chain below (XP/loot/respawn/event 4), matching
 			// the pet-spell kill path and C++ Unit::Kill.
 			s.stopCreatureMotionInInstance(motion.Map, motion.InstanceID, targetGUID, killX, killY, killZ)
-			s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, killX, killY, killZ, targetGUID)
+			s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, killX, killY, killZ, targetGUID, killPhase)
 			if owner != nil && owner.player != nil {
 				owner.onCreatureKilled(ctx, killedTarget, motion)
 			} else if victim := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); victim != nil {
@@ -8630,7 +8632,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// (ThreatManager.cpp:483-490) — every other death path pairs the
 			// ClearThreat with the SMSG_THREAT_CLEAR broadcast; the pet-spell
 			// kill path omitted it, leaving client threat UIs stale.
-			s.server.broadcastThreatClearInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.X, targetMotion.Y, targetMotion.Z, targetMotion.GUID)
+			s.server.broadcastThreatClearInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.X, targetMotion.Y, targetMotion.Z, targetMotion.GUID, targetMotion.PhaseMask)
 		} else {
 			targetMotion.Health -= damage
 			// Unit::DealDamage's threat add runs on the victim's pre-damage
@@ -8687,7 +8689,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				if switched && newVictim != targetMotion.TargetGUID {
 					targetMotion.TargetGUID = newVictim
 					entries := targetMotion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.X, targetMotion.Y, targetMotion.Z, targetMotion.GUID, newVictim, entries)
+					s.server.broadcastHighestThreatUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.X, targetMotion.Y, targetMotion.Z, targetMotion.GUID, newVictim, entries, targetMotion.PhaseMask)
 				} else {
 					targetMotion.TargetGUID = targetMotion.ThreatMgr.GetCurrentVictim()
 				}

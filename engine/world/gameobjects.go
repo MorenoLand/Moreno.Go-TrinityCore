@@ -2026,7 +2026,7 @@ func (s *Server) creatureEffectTransmitted(ctx context.Context, m *creatureMotio
 	log.WriteU32(spellEffectTransmitted)
 	log.WriteU32(1)
 	log.WritePackedGUID(newGUID)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 }
 
 // cancelFishingBobber mirrors the channeled arm of Spell::cancel

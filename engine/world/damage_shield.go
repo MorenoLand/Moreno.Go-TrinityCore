@@ -229,7 +229,7 @@ func (s *Server) applyOneDamageShield(ctx context.Context, victim, attacker dama
 		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLDAMAGESHIELD), pkt.Bytes(), victim.sess.player.Map, victim.sess.player.InstanceID, victim.sess.player.X, victim.sess.player.Y, victim.sess.player.Z, victim.sess)
 	} else if !victim.isPlayer {
 		if m := s.findCreatureMotion(victim.key.Map, victim.key.InstanceID, victim.key.GUID); m != nil {
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLDAMAGESHIELD), pkt.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLDAMAGESHIELD), pkt.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 		}
 	}
 	// Unit.cpp:1597: no CalcAbsorbResist on shield damage — it bypasses
@@ -466,7 +466,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: corpseFlags,
 		})
-		s.broadcastThreatClearInInstance(key.Map, key.InstanceID, m.X, m.Y, m.Z, key.GUID)
+		s.broadcastThreatClearInInstance(key.Map, key.InstanceID, m.X, m.Y, m.Z, key.GUID, m.PhaseMask)
 		if attackerSess != nil {
 			_ = attackerSess.sendAttackStop(key.GUID, true)
 			attackerSess.attackTarget = 0
@@ -623,7 +623,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			if switched && newVictim != m.TargetGUID {
 				m.TargetGUID = newVictim
 				entries := m.ThreatMgr.SortedEntries()
-				s.broadcastHighestThreatUpdateInInstance(key.Map, key.InstanceID, m.X, m.Y, m.Z, key.GUID, newVictim, entries)
+				s.broadcastHighestThreatUpdateInInstance(key.Map, key.InstanceID, m.X, m.Y, m.Z, key.GUID, newVictim, entries, m.PhaseMask)
 			}
 		}
 	}
