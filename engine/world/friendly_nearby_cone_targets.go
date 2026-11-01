@@ -412,6 +412,30 @@ func (s *session) friendlyAssistOK(spell wotlk.Spell, c friendlyCandidate, caste
 		}
 		return c.reactionAlly
 	}
+	// IsValidAssistTarget PvP case (Object.cpp:3153-3171): a creature
+	// candidate carrying UNIT_FLAG_PLAYER_CONTROLLED (pets/charmed, flag
+	// set at creation/charm) takes the PvP case, not the PvC case, so
+	// its ally gate is the resolving owner's reaction (same owner/duel/
+	// group/FFA, GetReactionTo Object.cpp:2744-2762), exact for the
+	// both-reactions rule (Object.cpp:3149) because every arm is
+	// symmetric, plus the portable assist PvP block (dueling-someone-
+	// else, FFA-from-outside; sanctuary out, no creature sanctuary
+	// byte). The block precedes the decided-friendly return: a group-
+	// mate's pet whose owner is dueling someone else is still refused.
+	// An owner session that cannot resolve keeps the faction gate: the
+	// flag itself, not resolvability, selects the PvP case. Wild
+	// candidates (flag unset, or no owner) keep the faction gate here;
+	// the PvC type-flags gate is not yet ported for this helper.
+	if s.server != nil && c.unitFlags&unitFlagPlayerControlled != 0 && c.ownerGUID != 0 {
+		if ownerSess := s.server.findSessionByGUID(c.ownerGUID); ownerSess != nil {
+			if playerOwnedCreatureAssistPvPBlocked(s, ownerSess) {
+				return false
+			}
+			if reactionAlly, decided := playerOwnedCreatureReactionAlly(s, ownerSess); decided {
+				return reactionAlly
+			}
+		}
+	}
 	return allyOf(c.faction)
 }
 
