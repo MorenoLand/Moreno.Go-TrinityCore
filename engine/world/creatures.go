@@ -75,6 +75,7 @@ type creatureSpawn struct {
 	TransportO       float32
 	FlagsExtra       uint32
 	TypeFlags        uint32
+	PhaseMask        uint32 // live phase for the create fan-out gate (Object.cpp:1659-1662): DB c.phaseMask for respawns, summoner phase for summons/totems/pets; 0 = unset, read as PHASEMASK_NORMAL (1) by the helper
 }
 
 func creatureSpawnHealth(regenerate bool, current, maximum uint32) uint32 {

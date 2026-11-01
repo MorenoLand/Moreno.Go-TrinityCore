@@ -942,6 +942,7 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 			Health:         totemHealth,
 			MaxHealth:      totemHealth,
 			CreatedBySpell: def.SpellID,
+			PhaseMask:      s.currentPlayerPhaseMask(),
 		}
 		stats := s.server.loadCreatureStats(ctx, def.Entry)
 		spawn.UnitFlags = stats.UnitFlags
@@ -1132,6 +1133,7 @@ func (s *session) summonSessionNoSlotTotem(ctx context.Context, spell wotlk.Spel
 		Health:         totemHealth,
 		MaxHealth:      totemHealth,
 		CreatedBySpell: spell.ID,
+		PhaseMask:      s.currentPlayerPhaseMask(),
 	}
 	stats := s.server.loadCreatureStats(ctx, entry)
 	spawn.UnitFlags = stats.UnitFlags

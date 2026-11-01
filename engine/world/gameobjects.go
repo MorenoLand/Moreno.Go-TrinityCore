@@ -1714,7 +1714,7 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), dyn.Map, dyn.InstanceID, dyn.X, dyn.Y, dyn.Z, nil)
+		s.broadcastGameObjectCreateToVisibleSet(packet.Opcode, packet.Payload.Bytes(), dyn)
 	}
 	// Eluna GAMEOBJECT_EVENT_ON_ADD (event 12), fired from
 	// GameObject::AddToWorld (GameObject.cpp:233): (event, gameobject).

@@ -166,6 +166,7 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 	} else if summoner := s.findSessionByGUID(origin.GUID); summoner != nil {
 		summoned.PhaseMask = summoner.currentPlayerPhaseMask()
 	}
+	spawn.PhaseMask = summoned.PhaseMask
 	// Re-create the object client-side: the create block goes to the
 	// creature's visibility set (WorldObject::BuildUpdate fans out "for
 	// all visible players", Object.cpp:3620; C++ AddToWorld itself sends

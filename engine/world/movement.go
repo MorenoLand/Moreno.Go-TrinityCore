@@ -1499,10 +1499,15 @@ func (s *Server) broadcastToVisibleSet(opcode uint16, payload []byte, mapID, ins
 // CanSeeOrDetect(target, false, true) (Player.cpp:22658-22677), so a ghost
 // observer receives the create only when the grid-path ghost filter passes
 // it (creatureVisibleToGhostSeer: ghost-visible classes outright, ALIVE-only
-// rows via the corpse leg). The recipient snapshot is taken under
-// sessionsMu and the ghost predicate runs after the lock drops, so the
+// rows via the corpse leg). The CanNeverSee phase leg (Object.cpp:1659-1662,
+// InSamePhase mask intersection Object.h:324-325) gates every recipient too:
+// the spawn's stamped phase must intersect the recipient's
+// currentPlayerPhaseMask (GM players carry PHASEMASK_ANYWHERE, Player.cpp:2456,
+// so the intersection never fails for them); map/instance already gate above,
+// as GetMap mismatch does in C++. The recipient snapshot is taken under
+// sessionsMu and the ghost/phase predicates run after the lock drops, so the
 // motionMu read inside creatureScriptFarVisible never nests under
-// sessionsMu. GM seers (gmVisibilityDetect) skip the filter, as on the grid
+// sessionsMu. GM seers (gmVisibilityDetect) skip the ghost filter, as on the grid
 // path; a nil spawn fails open, matching the nil-observer convention.
 func (s *Server) broadcastCreatureCreateToVisibleSet(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, spawn *creatureSpawn, source *session) {
 	if s == nil {
@@ -1528,7 +1533,14 @@ func (s *Server) broadcastCreatureCreateToVisibleSet(opcode uint16, payload []by
 		targets = append(targets, recipient{sess: target, state: *target.player, gmSee: target.gmVisibilityDetect != 0})
 	}
 	s.sessionsMu.RUnlock()
+	targetPhase := uint32(1)
+	if spawn != nil && spawn.PhaseMask != 0 {
+		targetPhase = spawn.PhaseMask
+	}
 	for _, r := range targets {
+		if spawn != nil && targetPhase&r.sess.currentPlayerPhaseMask() == 0 {
+			continue
+		}
 		if spawn != nil && r.state.Health > 0 && r.state.PlayerFlags&playerFlagGhost != 0 && !r.gmSee && !s.creatureVisibleToGhostSeer(r.state, spawn) {
 			continue
 		}
@@ -1551,6 +1563,45 @@ func (s *Server) broadcastCreatureCreateToVisibleSetFromSession(sess *session, o
 		return
 	}
 	s.broadcastCreatureCreateToVisibleSet(opcode, payload, sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z, spawn, sess)
+}
+
+// broadcastGameObjectCreateToVisibleSet is the dynamic-GO-create twin of
+// broadcastCreatureCreateToVisibleSet: a runtime GO fans out through
+// GameObject::AddToWorld -> UpdateObjectVisibilityOnCreate, so the
+// CanNeverSee phase leg (Object.cpp:1659-1662) applies — dyn.PhaseMask is
+// the caster phase at both spell sites, and a recipient in a disjoint
+// phase never receives the create. GOs carry no ghost predicate here:
+// the WorldObject base visibility is ALIVE|GHOST (Object.cpp:988), so GOs
+// pass the ghost leg for alive and ghost seers alike.
+func (s *Server) broadcastGameObjectCreateToVisibleSet(opcode uint16, payload []byte, dyn *dynamicGameObjectState) {
+	if s == nil || dyn == nil {
+		return
+	}
+	targetPhase := dyn.PhaseMask
+	if targetPhase == 0 {
+		targetPhase = 1
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for target := range s.sessions {
+		if !target.authed || !target.worldReady.Load() || target.player == nil {
+			continue
+		}
+		if target.player.Map != dyn.Map || target.player.InstanceID != dyn.InstanceID {
+			continue
+		}
+		if distance3D(target.player.X, target.player.Y, target.player.Z, dyn.X, dyn.Y, dyn.Z) > 100.0 {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if targetPhase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = target.write(opcode, payload, true)
+	}
 }
 
 // broadcastToVisibleSetForCreature centers a visibility-set fan-out on a

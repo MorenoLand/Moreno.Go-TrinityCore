@@ -251,15 +251,15 @@ func (s *Server) processEvadeDespawns(ctx context.Context, now time.Time) {
 // ai->Reset()).
 func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
 	var moveType, model, npcFlags int64
-	var faction, dynFlags uint32
+	var faction, dynFlags, phaseMask uint32
 	var wander, walkSpeed, runSpeed, x, y, z, orientation, scale, mana float64
 	err := s.WorldStore.DB.QueryRowContext(ctx,
 		`SELECT c.MovementType, c.wander_distance, COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
 			c.position_x, c.position_y, c.position_z, c.orientation,
 			COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), NULLIF(t.modelid2, 0), NULLIF(t.modelid3, 0), NULLIF(t.modelid4, 0), 1),
-			t.npcflag, t.scale, c.curmana, COALESCE(t.faction, 0), COALESCE(t.dynamicflags, 0)
+			t.npcflag, t.scale, c.curmana, COALESCE(t.faction, 0), COALESCE(t.dynamicflags, 0), c.phaseMask
 			FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ?`,
-		rec.DBGuid).Scan(&moveType, &wander, &walkSpeed, &runSpeed, &x, &y, &z, &orientation, &model, &npcFlags, &scale, &mana, &faction, &dynFlags)
+		rec.DBGuid).Scan(&moveType, &wander, &walkSpeed, &runSpeed, &x, &y, &z, &orientation, &model, &npcFlags, &scale, &mana, &faction, &dynFlags, &phaseMask)
 	if err != nil {
 		return
 	}
@@ -278,6 +278,7 @@ func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
 	stats := s.loadCreatureStats(ctx, rec.Entry)
 	spawn.MaxHealth, spawn.Health = stats.MaxHealth, stats.MaxHealth
 	spawn.Faction, spawn.DynamicFlags = faction, dynFlags
+	spawn.PhaseMask = phaseMask
 	spawn.UnitFlags = stats.UnitFlags
 	spawn.FlagsExtra, spawn.TypeFlags = stats.FlagsExtra, stats.TypeFlags
 	spawn.Level = stats.Level

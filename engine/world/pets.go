@@ -1266,7 +1266,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			// ghost observers receive it only through the grid-path
 			// ghost filter; the owner's direct write above is ungated.
 			petStats := s.server.loadCreatureStats(ctx, entry)
-			filterSpawn := creatureSpawn{Entry: entry, X: petX, Y: petY, Z: petZ,
+			filterSpawn := creatureSpawn{Entry: entry, X: petX, Y: petY, Z: petZ, PhaseMask: s.currentPlayerPhaseMask(),
 				NPCFlags: petStats.NPCFlags, FlagsExtra: petStats.FlagsExtra, TypeFlags: petStats.TypeFlags}
 			s.server.broadcastCreatureCreateToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes(), &filterSpawn)
 		}
