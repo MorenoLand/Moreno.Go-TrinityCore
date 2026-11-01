@@ -153,6 +153,7 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 		UnitFlags: stats.UnitFlags, Level: stats.Level,
 		Health: stats.Health, MaxHealth: stats.MaxHealth,
 		Scale: stats.Scale, Mana: stats.Mana,
+		FlagsExtra: stats.FlagsExtra, TypeFlags: stats.TypeFlags,
 		WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed),
 	}
 	s.motionMu.Unlock()
@@ -173,7 +174,7 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, nil))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), mapID, instanceID, spawn.X, spawn.Y, spawn.Z, nil)
+		s.broadcastCreatureCreateToVisibleSet(packet.Opcode, packet.Payload.Bytes(), mapID, instanceID, spawn.X, spawn.Y, spawn.Z, &spawn, nil)
 	}
 	if origin.SummonerMotion != nil {
 		s.fireCreatureSummoned(ctx, origin.SummonerMotion, scripting.CreatureEventOnJustSummonedCreature, summoned)

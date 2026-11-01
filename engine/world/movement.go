@@ -1491,6 +1491,68 @@ func (s *Server) broadcastToVisibleSet(opcode uint16, payload []byte, mapID, ins
 	s.broadcastToSetWithin(opcode, payload, mapID, instanceID, cx, cy, cz, 100.0, source)
 }
 
+// broadcastCreatureCreateToVisibleSet is the creature-create twin of
+// broadcastToVisibleSet: a summon/respawn create block fans out through
+// WorldObject::UpdateObjectVisibilityOnCreate (Map.cpp:667-680) and
+// Creature::Respawn's UpdateObjectVisibility (Creature.cpp:2213), both of
+// which run VisibleChangesNotifier -> Player::UpdateVisibilityOf ->
+// CanSeeOrDetect(target, false, true) (Player.cpp:22658-22677), so a ghost
+// observer receives the create only when the grid-path ghost filter passes
+// it (creatureVisibleToGhostSeer: ghost-visible classes outright, ALIVE-only
+// rows via the corpse leg). The recipient snapshot is taken under
+// sessionsMu and the ghost predicate runs after the lock drops, so the
+// motionMu read inside creatureScriptFarVisible never nests under
+// sessionsMu. GM seers (gmVisibilityDetect) skip the filter, as on the grid
+// path; a nil spawn fails open, matching the nil-observer convention.
+func (s *Server) broadcastCreatureCreateToVisibleSet(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, spawn *creatureSpawn, source *session) {
+	if s == nil {
+		return
+	}
+	type recipient struct {
+		sess  *session
+		state playerState
+		gmSee bool
+	}
+	s.sessionsMu.RLock()
+	var targets []recipient
+	for target := range s.sessions {
+		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil {
+			continue
+		}
+		if target.player.Map != mapID || target.player.InstanceID != instanceID {
+			continue
+		}
+		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > 100.0 {
+			continue
+		}
+		targets = append(targets, recipient{sess: target, state: *target.player, gmSee: target.gmVisibilityDetect != 0})
+	}
+	s.sessionsMu.RUnlock()
+	for _, r := range targets {
+		if spawn != nil && r.state.Health > 0 && r.state.PlayerFlags&playerFlagGhost != 0 && !r.gmSee && !s.creatureVisibleToGhostSeer(r.state, spawn) {
+			continue
+		}
+		_ = r.sess.write(opcode, payload, true)
+	}
+}
+
+// broadcastCreatureCreateToVisibleSetFromSession is the session-centered
+// twin for creates whose self leg the caller already wrote (totem/pet
+// creates: the owner's direct write precedes the set fan-out, as with
+// broadcastToVisibleSetFromSession). The positionless fallback keeps the
+// old map-wide fan-out, so no recipient is dropped for a positionless
+// source.
+func (s *Server) broadcastCreatureCreateToVisibleSetFromSession(sess *session, opcode uint16, payload []byte, spawn *creatureSpawn) {
+	if s == nil {
+		return
+	}
+	if sess == nil || sess.player == nil {
+		s.broadcastToNearby(opcode, payload, sess)
+		return
+	}
+	s.broadcastCreatureCreateToVisibleSet(opcode, payload, sess.player.Map, sess.player.InstanceID, sess.player.X, sess.player.Y, sess.player.Z, spawn, sess)
+}
+
 // broadcastToVisibleSetForCreature centers a visibility-set fan-out on a
 // creature motion's position (AuraApplication::ClientUpdate and
 // Object::DestroyForPlayer both fan out to the target's visibility set, not

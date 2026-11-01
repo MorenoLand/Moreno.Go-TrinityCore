@@ -279,12 +279,13 @@ func (s *Server) respawnEvadedCreature(ctx context.Context, rec evadeDespawn) {
 	spawn.MaxHealth, spawn.Health = stats.MaxHealth, stats.MaxHealth
 	spawn.Faction, spawn.DynamicFlags = faction, dynFlags
 	spawn.UnitFlags = stats.UnitFlags
+	spawn.FlagsExtra, spawn.TypeFlags = stats.FlagsExtra, stats.TypeFlags
 	spawn.Level = stats.Level
 	s.applyCreatureMotionToSpawn(playerState{Map: rec.Map, InstanceID: rec.InstanceID}, &spawn)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, nil))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), rec.Map, rec.InstanceID, float32(x), float32(y), float32(z), nil)
+		s.broadcastCreatureCreateToVisibleSet(packet.Opcode, packet.Payload.Bytes(), rec.Map, rec.InstanceID, float32(x), float32(y), float32(z), &spawn, nil)
 	}
 	// motionFor already fired the Eluna spawn pair (23+5) when it created
 	// the motion; the native AI reset still runs after, matching the

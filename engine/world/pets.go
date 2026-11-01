@@ -1261,7 +1261,14 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		if s.server != nil {
-			s.server.broadcastToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes())
+			// The set fan-out is a creature create (Map::AddToMap ->
+			// UpdateObjectVisibilityOnCreate -> CanSeeOrDetect), so
+			// ghost observers receive it only through the grid-path
+			// ghost filter; the owner's direct write above is ungated.
+			petStats := s.server.loadCreatureStats(ctx, entry)
+			filterSpawn := creatureSpawn{Entry: entry, X: petX, Y: petY, Z: petZ,
+				NPCFlags: petStats.NPCFlags, FlagsExtra: petStats.FlagsExtra, TypeFlags: petStats.TypeFlags}
+			s.server.broadcastCreatureCreateToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes(), &filterSpawn)
 		}
 	}
 

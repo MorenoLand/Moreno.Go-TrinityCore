@@ -945,6 +945,7 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		}
 		stats := s.server.loadCreatureStats(ctx, def.Entry)
 		spawn.UnitFlags = stats.UnitFlags
+		spawn.FlagsExtra, spawn.TypeFlags = stats.FlagsExtra, stats.TypeFlags
 		spawn.BoundingRadius = stats.BoundingRadius
 		spawn.CombatReach = stats.CombatReach
 		spawn.WalkSpeed, spawn.RunSpeed = s.totemTemplateSpeeds(ctx, def.Entry)
@@ -952,7 +953,7 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, s))
 		if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-			s.server.broadcastToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes())
+			s.server.broadcastCreatureCreateToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes(), &spawn)
 		}
 	}
 
@@ -1134,6 +1135,7 @@ func (s *session) summonSessionNoSlotTotem(ctx context.Context, spell wotlk.Spel
 	}
 	stats := s.server.loadCreatureStats(ctx, entry)
 	spawn.UnitFlags = stats.UnitFlags
+	spawn.FlagsExtra, spawn.TypeFlags = stats.FlagsExtra, stats.TypeFlags
 	spawn.BoundingRadius = stats.BoundingRadius
 	spawn.CombatReach = stats.CombatReach
 	spawn.WalkSpeed, spawn.RunSpeed = s.totemTemplateSpeeds(ctx, entry)
@@ -1141,7 +1143,7 @@ func (s *session) summonSessionNoSlotTotem(ctx context.Context, spell wotlk.Spel
 	updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawn, s))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-		s.server.broadcastToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes())
+		s.server.broadcastCreatureCreateToVisibleSetFromSession(s, packet.Opcode, packet.Payload.Bytes(), &spawn)
 	}
 	srv, mapID, instanceID := s.server, s.player.Map, s.player.InstanceID
 	go func() {
