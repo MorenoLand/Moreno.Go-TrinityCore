@@ -249,6 +249,10 @@ func gobjectEulerFromQuat(x, y, z, w float32) (yaw, pitch, roll float32) {
 // phaseMask (LoadFromDB with addToWorld runs UpdateObjectVisibilityOnCreate);
 // the preceding despawn stays broad so old-phase seers who saw the object
 // still receive it, and a never-seen despawn is a client no-op.
+// No nil-player fallback: command dispatch guarantees a loaded player
+// (handleMessageChat gates on playerLoaded && player != nil, and packets
+// dispatch sequentially per session with player nilled only on logout),
+// so the gated create is the only arm.
 func (s *session) gobjectRefreshSpawn(ctx context.Context, db *sql.DB, spawnID uint32) {
 	row, ok := s.gobjectSpawnByGUID(ctx, db, spawnID)
 	if !ok {
@@ -281,11 +285,7 @@ func (s *session) gobjectRefreshSpawn(ctx context.Context, db *sql.DB, spawnID u
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		if s.player != nil {
-			s.server.broadcastGameObjectCreateToVisibleSetAt(packet.Opcode, packet.Payload.Bytes(), row.mapID, s.player.InstanceID, row.x, row.y, row.z, row.phaseMask)
-		} else {
-			s.server.broadcastToMap(row.mapID, packet.Opcode, packet.Payload.Bytes())
-		}
+		s.server.broadcastGameObjectCreateToVisibleSetAt(packet.Opcode, packet.Payload.Bytes(), row.mapID, s.player.InstanceID, row.x, row.y, row.z, row.phaseMask)
 	}
 }
 

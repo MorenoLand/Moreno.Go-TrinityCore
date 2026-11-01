@@ -4505,6 +4505,13 @@ func canSeePlayer(observer, target *session) bool {
 	if observer.player.Map != target.player.Map || observer.player.InstanceID != target.player.InstanceID {
 		return false
 	}
+	// CanNeverSee phase leg (Object.cpp:1659-1662): CanSeeOrDetect
+	// rejects disjoint phases before IsAlwaysVisibleFor, so no group
+	// or farsight exception overrides it; GM observers carry
+	// PHASEMASK_ANYWHERE via currentPlayerPhaseMask and pass.
+	if observer.currentPlayerPhaseMask()&target.currentPlayerPhaseMask() == 0 {
+		return false
+	}
 	if target.player.ExtraFlags&playerExtraGMInvisible != 0 && observer.security < target.security {
 		return false
 	}
