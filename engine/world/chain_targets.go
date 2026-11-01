@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"math"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
@@ -772,11 +773,13 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 // never calls friendlyAssistOK: a player-controlled candidate with a
 // resolving owner takes the PvP case (owner reaction + assist PvP block),
 // a wild candidate (flag unset) takes the PvC case (TREAT_AS_RAID_UNIT /
-// CAN_ASSIST unless the spell carries ASSIST_IGNORE_IMMUNE_FLAG), and a
-// player-controlled candidate with no resolving owner keeps the faction
-// gate — the flag, not resolvability, selects the case. The target-IsPvP
-// exemption has no creature-side Go model, like the friendly twin.
-func (s *session) chainCreatureAssistAlly(spell wotlk.Spell, unitFlags, typeFlags uint32, ownerGUID uint64, factionAlly bool) (bool, bool) {
+// CAN_ASSIST unless the spell carries ASSIST_IGNORE_IMMUNE_FLAG) followed
+// by the non-friendly both-directions gate (sessionChainWildAssist3149),
+// and a player-controlled candidate with no resolving owner keeps the
+// faction gate — the flag, not resolvability, selects the case. The
+// target-IsPvP exemption has no creature-side Go model, like the friendly
+// twin.
+func (s *session) chainCreatureAssistAlly(spell wotlk.Spell, unitFlags, typeFlags uint32, ownerGUID uint64, candFaction uint32, factionAlly bool) (bool, bool) {
 	if unitFlags&unitFlagPlayerControlled != 0 && ownerGUID != 0 {
 		if ownerSess := s.server.findSessionByGUID(ownerGUID); ownerSess != nil {
 			if playerOwnedCreatureAssistPvPBlocked(s, ownerSess) {
@@ -793,7 +796,55 @@ func (s *session) chainCreatureAssistAlly(spell wotlk.Spell, unitFlags, typeFlag
 		typeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
 		return false, false
 	}
+	if unitFlags&unitFlagPlayerControlled == 0 {
+		return s.sessionChainWildAssist3149(candFaction, factionAlly), false
+	}
 	return factionAlly, false
+}
+
+// sessionChainWildAssist3149 mirrors the non-friendly gate of
+// WorldObject::IsValidAssistTarget (Object.cpp:3149) for a player caster's
+// chain jump pick against a wild creature candidate: it refuses only when
+// BOTH reactions are below neutral, replacing the single-direction
+// isHostileFaction proxy that the wild arm previously returned once the
+// PvC type-flag gate passed. The forward reaction (caster -> candidate) is
+// the common template rank — a player caster's GetReactionTo falls through
+// to GetFactionReactionTo with no affecting player on the candidate side —
+// while the reverse reaction (candidate -> caster) takes the reputation arm
+// when the candidate's faction can have reputation: contested-guard hostile
+// outright, else the caster's saved rank against that faction clamped down
+// to neutral at war (Object.cpp:2817-2823). A reputation faction with no
+// saved caster row keeps the template rank, mirroring the wild-caster motion
+// twin (Initialize normally guarantees rep-faction rows). The caster is a
+// player, so the TREAT_AS_RAID_UNIT exemption (caster creature only) never
+// applies, and the caster's IGNORE_REPUTATION flag has no Go model. Data
+// gaps fall back to the passed-in faction gate.
+func (s *session) sessionChainWildAssist3149(candFaction uint32, factionAlly bool) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return factionAlly
+	}
+	casterTpl, casterFound, err := s.server.Data.FactionTemplate(s.effectiveFactionTemplate(s.player.Race))
+	if err != nil || !casterFound {
+		return factionAlly
+	}
+	candTpl, candFound, err := s.server.Data.FactionTemplate(candFaction)
+	if err != nil || !candFound {
+		return factionAlly
+	}
+	forwardHostile := commonFactionRankHostile(casterTpl, candTpl)
+	reverseHostile := commonFactionRankHostile(candTpl, casterTpl)
+	if s.server.factionCanHaveReputation(candTpl.Faction) {
+		if candTpl.Flags&factionTemplateFlagContested != 0 && s.contestedPvPActive(time.Now()) {
+			reverseHostile = true
+		} else if saved, ok := playerReputationMap(s.player.Reputations)[candTpl.Faction]; ok {
+			rank := reputationRank(int64(totalReputationStanding(saved)))
+			if saved.Flags&factionFlagAtWar != 0 && rank > 3 {
+				rank = 3
+			}
+			reverseHostile = rank < 3
+		}
+	}
+	return !(forwardHostile && reverseHostile)
 }
 
 // chainCreatureAttackHostile mirrors the player-owned arms of
@@ -993,7 +1044,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		}
 		candAlly, candBlocked := allyOf(motion.Faction), false
 		if checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid {
-			candAlly, candBlocked = s.chainCreatureAssistAlly(spell, motion.UnitFlags, motion.TypeFlags, motionOwner, allyOf(motion.Faction))
+			candAlly, candBlocked = s.chainCreatureAssistAlly(spell, motion.UnitFlags, motion.TypeFlags, motionOwner, motion.Faction, allyOf(motion.Faction))
 		}
 		if checkType == targetCheckEnemy {
 			candAlly = !chainCreatureAttackHostile(s, motionOwner, motion.UnitFlags, !candAlly)
@@ -1043,7 +1094,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 						st := s.server.loadCreatureStats(ctx, uint32(entry))
 						candAlly, candBlocked := allyOf(uint32(faction)), false
 						if checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid {
-							candAlly, candBlocked = s.chainCreatureAssistAlly(spell, uint32(unitFlags), uint32(typeFlags), 0, allyOf(uint32(faction)))
+							candAlly, candBlocked = s.chainCreatureAssistAlly(spell, uint32(unitFlags), uint32(typeFlags), 0, uint32(faction), allyOf(uint32(faction)))
 						}
 						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, candAlly, candBlocked, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}
