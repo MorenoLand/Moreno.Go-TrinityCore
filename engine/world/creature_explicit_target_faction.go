@@ -301,7 +301,7 @@ func (s *Server) creatureContestedHostile(creatureFaction uint32, ts *session) b
 	if err != nil || !found {
 		return false
 	}
-	return tpl.Flags&factionTemplateFlagContested != 0 && ts.contestedPvPActive(time.Now())
+	return tpl.Flags&factionTemplateFlagContested != 0 && ts.contestedPvPActiveQuery(time.Now())
 }
 
 // factionCanHaveReputation mirrors FactionEntry::CanHaveReputation

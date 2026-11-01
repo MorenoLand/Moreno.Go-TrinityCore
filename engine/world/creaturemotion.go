@@ -7431,6 +7431,24 @@ func (s *session) contestedPvPActive(now time.Time) bool {
 	return true
 }
 
+// contestedPvPActiveQuery reports the contestedPvPActive verdict without
+// running its expiry side effect (flag clear + values broadcast): query
+// contexts that already hold sessionsMu.RLock (area/chain target sweeps
+// evaluating isHostileFaction/creatureContestedHostile) must not nest
+// into broadcastPlayerValuesUpdateFromSession's RLock. The verdicts are
+// identical branch-for-branch; the deferred clear + send is the world
+// tick's updateContestedPvP, which snapshots under RLock and calls the
+// mutating form after unlock.
+func (s *session) contestedPvPActiveQuery(now time.Time) bool {
+	if s == nil || s.player == nil || s.player.PlayerFlags&playerFlagContestedPVP == 0 {
+		return false
+	}
+	if !s.contestedPVPEnd.IsZero() && !now.Before(s.contestedPVPEnd) && s.attackTarget == 0 && s.player.UnitFlags&unitFlagInCombat == 0 {
+		return false
+	}
+	return true
+}
+
 func (s *Server) updateContestedPvP(now time.Time) {
 	s.sessionsMu.RLock()
 	sessions := make([]*session, 0, len(s.sessions))
@@ -7476,7 +7494,7 @@ func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool
 		creatureTemplate, creatureFound, creatureErr := s.Data.FactionTemplate(creatureFaction)
 		playerTemplate, playerFound, playerErr := s.Data.FactionTemplate(player.FactionTemplate)
 		if creatureErr == nil && playerErr == nil && creatureFound && playerFound {
-			if player.Sess != nil && player.Sess.contestedPvPActive(time.Now()) && creatureTemplate.Flags&0x00001000 != 0 {
+			if player.Sess != nil && player.Sess.contestedPvPActiveQuery(time.Now()) && creatureTemplate.Flags&0x00001000 != 0 {
 				return true
 			}
 			if reputation, found, err := s.Data.Reputation(creatureTemplate.Faction, player.Race, player.Class); err == nil && found && reputation.ReputationList >= 0 {
