@@ -933,6 +933,97 @@ func (s *session) sessionChainOwnedAssist3149(candFaction uint32, ownerSess *ses
 	return !(forwardHostile && reverseHostile)
 }
 
+// motionChainOwnedAssist3149 is the creature-caster twin of
+// sessionChainOwnedAssist3149: the non-friendly gate of
+// WorldObject::IsValidAssistTarget (Object.cpp:3149) for a player-owned
+// creature caster's chain jump pick against a player-owned creature
+// candidate whose decided reaction arms (same owner/duel/group/FFA) did
+// not fire, or whose owner does not resolve. It refuses only when BOTH
+// reactions are below neutral, replacing the single-direction
+// isHostileFaction proxy. The caster subject is the caster's affecting
+// player (casterOwner) and the caster template is the caster creature's
+// own faction (casterFaction, not the owner's race template); the
+// candidate carries UNIT_FLAG_PLAYER_CONTROLLED, so the
+// player-controlled branch of GetReactionTo (Object.cpp:2744-2785) fires
+// on both directions even when the owner session is nil. Forward
+// (caster -> candidate): when the candidate faction can have reputation
+// the binary at-war arm decides — hostile on contested-guard plus
+// caster-owner contested-PvP, or caster-owner at war with the candidate
+// faction, friendly otherwise (standing alone never refuses); when it
+// cannot, a resolving owner's saved rank against the caster faction,
+// clamped down to neutral at war (GetFactionReactionTo,
+// Object.cpp:2817-2823), decides, and an unresolvable owner falls through
+// to the template rank. Reverse (candidate -> caster): a resolving owner
+// takes the same binary arm against the caster faction
+// (contested-guard plus owner contested-PvP, or owner at war); otherwise
+// the caster-owner's saved rank against the candidate faction, clamped
+// down to neutral at war, decides, as in the session twin. A
+// TREAT_AS_RAID_UNIT caster is exempt outright, as in the wild-caster
+// twin. A reputation faction with no saved row keeps the template rank
+// (Initialize normally guarantees rep-faction rows). Forced ranks, the
+// caster's and target's IGNORE_REPUTATION flags, and the PvP-case block
+// terms for an unresolvable owner have no Go model here; data gaps fall
+// back to the passed-in faction gate.
+func (s *Server) motionChainOwnedAssist3149(casterOwner *session, casterFaction, candFaction uint32, candOwner *session, casterTypeFlags uint32, factionAlly bool) bool {
+	if casterTypeFlags&creatureTypeFlagTreatAsRaidUnit != 0 {
+		return true
+	}
+	if s == nil || s.Data == nil || casterOwner == nil || casterOwner.player == nil {
+		return factionAlly
+	}
+	casterTpl, casterFound, err := s.Data.FactionTemplate(casterFaction)
+	if err != nil || !casterFound {
+		return factionAlly
+	}
+	candTpl, candFound, err := s.Data.FactionTemplate(candFaction)
+	if err != nil || !candFound {
+		return factionAlly
+	}
+	forwardHostile := commonFactionRankHostile(casterTpl, candTpl)
+	reverseHostile := commonFactionRankHostile(candTpl, casterTpl)
+	casterAtWar := func(factionID uint32) bool {
+		saved, ok := playerReputationMap(casterOwner.player.Reputations)[factionID]
+		return ok && saved.Flags&factionFlagAtWar != 0
+	}
+	ownerAtWar := func(factionID uint32) bool {
+		if candOwner == nil || candOwner.player == nil {
+			return false
+		}
+		saved, ok := playerReputationMap(candOwner.player.Reputations)[factionID]
+		return ok && saved.Flags&factionFlagAtWar != 0
+	}
+	clampedRankHostile := func(reps map[uint32]playerReputation, factionID uint32) (bool, bool) {
+		saved, ok := reps[factionID]
+		if !ok {
+			return false, false
+		}
+		rank := reputationRank(int64(totalReputationStanding(saved)))
+		if saved.Flags&factionFlagAtWar != 0 && rank > 3 {
+			rank = 3
+		}
+		return rank < 3, true
+	}
+	if s.factionCanHaveReputation(candTpl.Faction) {
+		forwardHostile = s.creatureContestedHostile(candFaction, casterOwner) || casterAtWar(candTpl.Faction)
+	} else if candOwner != nil && candOwner.player != nil && s.factionCanHaveReputation(casterTpl.Faction) {
+		if s.creatureContestedHostile(casterFaction, candOwner) {
+			forwardHostile = true
+		} else if hostile, ok := clampedRankHostile(playerReputationMap(candOwner.player.Reputations), casterTpl.Faction); ok {
+			forwardHostile = hostile
+		}
+	}
+	if candOwner != nil && candOwner.player != nil && s.factionCanHaveReputation(casterTpl.Faction) {
+		reverseHostile = s.creatureContestedHostile(casterFaction, candOwner) || ownerAtWar(casterTpl.Faction)
+	} else if s.factionCanHaveReputation(candTpl.Faction) {
+		if s.creatureContestedHostile(candFaction, casterOwner) {
+			reverseHostile = true
+		} else if hostile, ok := clampedRankHostile(playerReputationMap(casterOwner.player.Reputations), candTpl.Faction); ok {
+			reverseHostile = hostile
+		}
+	}
+	return !(forwardHostile && reverseHostile)
+}
+
 // chainCreatureAttackHostile mirrors the player-owned arms of
 // WorldObject::IsValidAttackTarget (Spell.cpp:8336) for a chain jump pick:
 // the "can't attack friendly targets" refusal (Object.cpp:3028-3030) runs
@@ -1332,7 +1423,9 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 // faction-template reaction (creatureFactionHostileTo). With a
 // player-owned caster, player candidates (and player-owned creature
 // candidates on ALLY/PARTY/RAID and on ENEMY) use the affecting-player
-// reaction arms (duel/group/FFA) ahead of the faction gate, and a wild
+// reaction arms (duel/group/FFA) ahead of the faction gate, with
+// undecided or unresolvable owned creature candidates taking the
+// both-directions 3149 gate (motionChainOwnedAssist3149), and a wild
 // caster's ENEMY creature candidates take the owner's at-war verdict
 // (wildCasterAttackHostile) instead of the template gate, and a wild
 // caster's ALLY/PARTY/RAID candidates take the both-directions assist
@@ -1477,16 +1570,26 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			if candOwnerSess := s.findSessionByGUID(motionOwner); candOwnerSess != nil {
 				if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterOwner, candOwnerSess); decided {
 					candAlly = reactionAlly
+				} else {
+					// Undecided owned candidate: the both-directions
+					// 3149 gate replaces the faction gate, mirroring
+					// the session twin.
+					candAlly = s.motionChainOwnedAssist3149(casterOwner, m.Faction, motion.Faction, candOwnerSess, m.TypeFlags, candAlly)
 				}
 				candBlocked = playerOwnedCreatureAssistPvPBlocked(casterOwner, candOwnerSess)
+			} else if motionOwner != 0 && motion.UnitFlags&unitFlagPlayerControlled != 0 {
+				// Unresolvable-owner owned candidate: the same gate
+				// with a nil owner session, mirroring the session twin.
+				candAlly = s.motionChainOwnedAssist3149(casterOwner, m.Faction, motion.Faction, nil, m.TypeFlags, candAlly)
 			} else if motionOwner == 0 && motion.UnitFlags&unitFlagPlayerControlled == 0 &&
 				spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
 				motion.TypeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
 				// Wild candidate under a player-owned caster: the PvC
 				// case (Object.cpp:3178-3183) refuses it without the
-				// type flags. An owner-present but unresolvable
-				// candidate keeps the faction gate — the flag, not
-				// resolvability, selects the PvP case.
+				// type flags. A flag-set owner-present but unresolvable
+				// candidate takes the owned 3149 gate above; only a
+				// flag-unset owner-present candidate keeps the faction
+				// gate here (its PvC arm is a separate residual).
 				candAlly = false
 			}
 		}
