@@ -22996,9 +22996,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 	// Unit::DealDamage vehicle-mounted duel leg (Unit.cpp:837-853): a blow
 	// that would leave a ridden vehicle at health-1 ends the rider's mounted
 	// duel instead — the hit is consumed, skipping the health legs below.
-	if motion != nil && duelDefeatOnVehicleDamage(s, motion, s.playerGUID, damage, victimHealth) {
-		s.server.motionMu.Unlock()
-		return damage
+	if motion != nil {
+		if defeat, ok := checkVehicleDuelDefeat(s, motion, s.playerGUID, damage, victimHealth); ok {
+			s.server.motionMu.Unlock()
+			s.server.completeVehicleDuelDefeat(defeat)
+			return damage
+		}
 	}
 	// Unit::RemoveAurasWithInterruptFlags channel leg (Unit.cpp:4175-4180):
 	// direct spell damage breaks a live channel whose ChannelInterruptFlags

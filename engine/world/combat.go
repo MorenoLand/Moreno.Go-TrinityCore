@@ -1530,9 +1530,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// Unit::DealDamage vehicle-mounted duel leg (Unit.cpp:837-853): a blow
 	// that would leave a ridden vehicle at health-1 ends the rider's mounted
 	// duel instead — the hit is consumed, skipping the health legs below.
-	if motion != nil && duelDefeatOnVehicleDamage(s, motion, s.playerGUID, damage, victimHealth) {
-		s.server.motionMu.Unlock()
-		return
+	if motion != nil {
+		if defeat, ok := checkVehicleDuelDefeat(s, motion, s.playerGUID, damage, victimHealth); ok {
+			s.server.motionMu.Unlock()
+			s.server.completeVehicleDuelDefeat(defeat)
+			return
+		}
 	}
 	// Unit::RemoveAurasWithInterruptFlags channel leg (Unit.cpp:4175-4180):
 	// melee damage breaks a live channel whose ChannelInterruptFlags carry
@@ -2347,9 +2350,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// Unit::DealDamage vehicle-mounted duel leg (Unit.cpp:837-853): a blow
 	// that would leave a ridden vehicle at health-1 ends the rider's mounted
 	// duel instead — the hit is consumed, skipping the health legs below.
-	if motion != nil && duelDefeatOnVehicleDamage(s, motion, s.playerGUID, damage, victimHealth) {
-		s.server.motionMu.Unlock()
-		return
+	if motion != nil {
+		if defeat, ok := checkVehicleDuelDefeat(s, motion, s.playerGUID, damage, victimHealth); ok {
+			s.server.motionMu.Unlock()
+			s.server.completeVehicleDuelDefeat(defeat)
+			return
+		}
 	}
 	// Unit::RemoveAurasWithInterruptFlags channel leg (Unit.cpp:4175-4180):
 	// the auto-shot strike breaks a live channel whose ChannelInterruptFlags
@@ -4211,7 +4217,7 @@ func (s *session) controllingPlayerGUID(guid uint64) uint64 {
 	return 0
 }
 
-// duelDefeatOnVehicleDamage mirrors the vehicle-mounted duel leg of
+// checkVehicleDuelDefeat + completeVehicleDuelDefeat mirror the vehicle-mounted duel leg of
 // Unit::DealDamage (Unit.cpp:837-853 + 957-973): a blow that would leave a
 // ridden vehicle at health-1 ends the rider's mounted duel. victim->IsVehicle()
 // is the vehicle kit on the victim motion; victim->GetCharmer() is the
@@ -4222,30 +4228,58 @@ func (s *session) controllingPlayerGUID(guid uint64) uint64 {
 // the duel as won, while its lethal hit falls through to the kill path (which
 // interrupts the duel via Unit::Kill, Unit.cpp:11359-11365). The vehicle is
 // left at 1 HP, both duelists combat-stop, the rider casts the beg visual
-// (7267), and DuelComplete(DUEL_WON) runs. Returns true when the leg consumed
-// the hit. The caller must hold motionMu and skip its normal health legs.
+// (7267), and DuelComplete(DUEL_WON) runs. The check's bool reports whether
+// the leg consumed the hit. The check caller must hold motionMu and skip
+// its normal health legs; the tail runs after the lock drops.
 // Damage of 0 never reaches the leg (the !damage early-return precedes it).
-func duelDefeatOnVehicleDamage(s *session, motion *creatureMotion, attackerPlayerGUID uint64, damage, health uint32) bool {
+// vehicleDuelDefeat captures a vehicle-mounted duel defeat decided under
+// motionMu: the check mutates the ridden motion, the tail broadcasts, so
+// the two halves must not share the lock.
+type vehicleDuelDefeat struct {
+	mapID, instanceID uint32
+	guid              uint64
+	x, y, z           float32
+	phase             uint32
+	riderGUID         uint64
+	partnerGUID       uint64
+}
+
+func checkVehicleDuelDefeat(s *session, motion *creatureMotion, attackerPlayerGUID uint64, damage, health uint32) (vehicleDuelDefeat, bool) {
 	if s == nil || s.server == nil || motion == nil {
-		return false
+		return vehicleDuelDefeat{}, false
 	}
 	kit := s.server.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
 	if kit == nil {
-		return false
+		return vehicleDuelDefeat{}, false
 	}
 	rider := s.server.findSessionByGUID(kit.CharmerGUID())
 	if rider == nil || rider.player == nil || rider.duelPartner == 0 || !rider.duelMounted {
-		return false
+		return vehicleDuelDefeat{}, false
 	}
 	if damage == 0 || health == 0 || damage+1 < health {
-		return false
+		return vehicleDuelDefeat{}, false
 	}
 	if attackerPlayerGUID != rider.duelPartner && damage >= health {
-		return false
+		return vehicleDuelDefeat{}, false
 	}
 	motion.Health = 1
-	s.server.broadcastCreatureValuesUpdateAtInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{unitFieldHealth: 1}, motion.X, motion.Y, motion.Z, motion.PhaseMask)
-	opp := s.server.findSessionByGUID(rider.duelPartner)
+	return vehicleDuelDefeat{
+		mapID: motion.Map, instanceID: motion.InstanceID, guid: motion.GUID,
+		x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask,
+		riderGUID: kit.CharmerGUID(), partnerGUID: rider.duelPartner,
+	}, true
+}
+
+func (s *Server) completeVehicleDuelDefeat(d vehicleDuelDefeat) {
+	if s == nil {
+		return
+	}
+	s.broadcastCreatureValuesUpdateAtInInstance(d.mapID, d.instanceID, d.guid, map[int]uint32{unitFieldHealth: 1}, d.x, d.y, d.z, d.phase)
+	rider := s.findSessionByGUID(d.riderGUID)
+	if rider == nil || rider.player == nil {
+		return
+	}
+	opp := s.findSessionByGUID(d.partnerGUID)
 	if opp == nil {
 		opp = rider
 	}
@@ -4259,8 +4293,7 @@ func duelDefeatOnVehicleDamage(s *session, motion *creatureMotion, attackerPlaye
 	rider.interruptCurrentChannel()
 	rider.stopControlledPetCombat()
 	rider.castVisualSpell(7267)
-	opp.endDuel(true, rider.duelPartner, false)
-	return true
+	opp.endDuel(true, d.partnerGUID, false)
 }
 
 // clearDuelState performs the shared end-of-duel cleanup: attack stops and

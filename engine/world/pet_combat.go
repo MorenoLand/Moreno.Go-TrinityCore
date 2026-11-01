@@ -1741,6 +1741,9 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		var killed bool
 		var killX, killY, killZ float32
 		var killPhase uint32
+		var pendingValues map[int]uint32
+		var pendingVX, pendingVY, pendingVZ float32
+		var pendingVPhase uint32
 		s.motionMu.Lock()
 		cMotion := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, targetGUID)
 		if cMotion != nil {
@@ -1795,7 +1798,8 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				}
 				// The corpse keeps TAPPED when the tap survived to death
 				// (Unit.cpp:11172-11175), so broadcast the real flags.
-				s.broadcastCreatureValuesUpdateAtInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: cMotion.DynamicFlags}, cMotion.X, cMotion.Y, cMotion.Z, cMotion.PhaseMask)
+				pendingValues = map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: cMotion.DynamicFlags}
+				pendingVX, pendingVY, pendingVZ, pendingVPhase = cMotion.X, cMotion.Y, cMotion.Z, cMotion.PhaseMask
 				killed = true
 			} else {
 				cMotion.Health -= damage
@@ -1807,10 +1811,14 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 				if newlyTapped {
 					healthUpdate[unitFieldDynamicFlags] = cMotion.DynamicFlags
 				}
-				s.broadcastCreatureValuesUpdateAtInInstance(cMotion.Map, cMotion.InstanceID, targetGUID, healthUpdate, cMotion.X, cMotion.Y, cMotion.Z, cMotion.PhaseMask)
+				pendingValues = healthUpdate
+				pendingVX, pendingVY, pendingVZ, pendingVPhase = cMotion.X, cMotion.Y, cMotion.Z, cMotion.PhaseMask
 			}
 		}
 		s.motionMu.Unlock()
+		if pendingValues != nil {
+			s.broadcastCreatureValuesUpdateAtInInstance(motion.Map, motion.InstanceID, targetGUID, pendingValues, pendingVX, pendingVY, pendingVZ, pendingVPhase)
+		}
 		if killed {
 			// Eluna CREATURE_EVENT_ON_TARGET_DIED (3): pet attacker → pet arm
 			// + branch arm double dispatch (Unit.cpp pet arm + 11385-11387),
@@ -8347,6 +8355,9 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		// (absorbed-gated, like C++'s cleanDamage->absorbed_damage check) and
 		// return before the tap, threat and engage legs, like C++.
 		var tm *creatureMotion
+		var pendingRage map[int]uint32
+		var pendingRX, pendingRY, pendingRZ float32
+		var pendingRPhase uint32
 		if s.server != nil {
 			s.server.motionMu.Lock()
 			if m := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID); m != nil {
@@ -8357,11 +8368,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				fireDealDamageAIHooks(ctx, s.server, tm, caster, caster.GUID, tm.GUID, &damage)
 				if absorbed > 0 {
 					if next, changed := s.server.addCreatureRageLocked(tm, tm.Level, absorbed); changed {
-						s.server.broadcastCreatureValuesUpdateAtInInstance(tm.Map, tm.InstanceID, tm.GUID, map[int]uint32{unitFieldPower1 + powerRage: next}, tm.X, tm.Y, tm.Z, tm.PhaseMask)
+						pendingRage = map[int]uint32{unitFieldPower1 + powerRage: next}
+						pendingRX, pendingRY, pendingRZ, pendingRPhase = tm.X, tm.Y, tm.Z, tm.PhaseMask
 					}
 				}
 			}
 			s.server.motionMu.Unlock()
+			if pendingRage != nil {
+				s.server.broadcastCreatureValuesUpdateAtInInstance(target.Map, target.InstanceID, target.GUID, pendingRage, pendingRX, pendingRY, pendingRZ, pendingRPhase)
+			}
 			// Unit::DealDamage (Unit.cpp:739-747): the TAKE_DAMAGE strip runs
 			// before the !damage early-return for any non-NODAMAGE hit — a
 			// fully resisted or absorbed pet-spell hit strips the creature
