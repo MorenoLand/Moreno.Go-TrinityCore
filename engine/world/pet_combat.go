@@ -2266,8 +2266,9 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	// (GetCharmerOrOwner, charmer first).
 	// Implicit is false for a creature caster (Spell.cpp:5372), so no
 	// stealth exemption. Self targets pass automatically (a creature
-	// GUID never resolves to a session); creature targets pass (motions
-	// carry no stealth/invisibility aura state); CAN_TARGET_INVISIBLE
+	// GUID never resolves to a session); creature targets pass on the
+	// session-seer leg and judge through the charmer motion's live aura
+	// sums on the creature-charmer leg; CAN_TARGET_INVISIBLE
 	// exempts. Sight-range, ghost-team/group, vehicle-accessory and
 	// despawn legs stay out, as on the player path; the GM-visibility
 	// leg rides the GM/invisibility arm below.
@@ -2276,13 +2277,20 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 		// 1664-1680, GetCharmerOrOwner), mirroring the wild twin: a
 		// charmed pet judges through its charmer session, not the owner
 		// session driving the cast; a creature charmer resolves to no
-		// session, so the gate fails open (no creature detect model).
+		// session, so the seer there is the charmer motion and the gate
+		// judges through its live creature-aura detect sums
+		// (wildCreatureCanDetectTarget). An unresolvable charmer motion
+		// still fails open.
 		seer := s
+		var charmerMotion *creatureMotion
 		if motion.CharmerGUID != 0 {
 			if cs := s.server.findSessionByGUID(motion.CharmerGUID); cs != nil {
 				seer = cs
 			} else {
 				seer = nil
+				if targetGUID != motion.GUID {
+					charmerMotion = s.server.findCreatureMotion(motion.Map, motion.InstanceID, motion.CharmerGUID)
+				}
 			}
 		}
 		if seer != nil {
@@ -2290,6 +2298,10 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 				if !seer.canDetectStealthOf(ts) || !seer.canDetectInvisibilityOfPlayer(ts) {
 					return false
 				}
+			}
+		} else if charmerMotion != nil {
+			if !s.server.wildCreatureCanDetectTarget(charmerMotion, targetGUID) {
+				return false
 			}
 		}
 	}
