@@ -2825,17 +2825,36 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// with SPELL_FAILED_BAD_TARGETS. C++ compares caster == target; the caster
 	// is always the session player on this path, so targetGUID == s.playerGUID
 	// is the self case. Only checked when a unit target exists, like C++ m_targets.GetUnitTarget().
-	// The visibility gate right below it (SpellInfo.cpp:1641-1642 — !HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE) &&
-	// !caster->CanSeeOrDetect(target, implicit)) is unbridged: Go has no CanSeeOrDetect
-	// model (no invisibility-level vs detect-invisibility-level comparison, no
-	// stealth-level vs detect-stealth skill machinery, and creature motions
-	// carry no aura state to answer "is the target stealthed"); the implicit-target
-	// stealth exemption has no Go analog either.
+	// The visibility gate (SpellInfo.cpp:1641-1642) sits right below it,
+	// ahead of in-combat in C++ order.
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
 	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && targetGUID != 0 && targetGUID == s.playerGUID {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot target self", "failReason", spellFailedBadTargets)
 		return true
+	}
+
+	// Visibility gate (SpellInfo::CheckTarget, SpellInfo.cpp:1641-1642):
+	// the first CheckTarget arm after self, ahead of in-combat in C++
+	// order. At cast start CheckCast passes implicit=false for a
+	// player caster (Spell.cpp:5372), so the stealth exemption never
+	// applies — same read as the completion recheck and the
+	// triggered path: canDetectStealthOf +
+	// canDetectInvisibilityOfPlayer, self targets pass, GM casters
+	// pass inside the helpers, creature targets pass (motions carry
+	// no stealth/invisibility aura state), and the sight-range,
+	// ghost team/group, vehicle-accessory and despawn legs of
+	// CanSeeOrDetect stay out. Spells carrying
+	// SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != 0 && targetGUID != s.playerGUID {
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not visible", "failReason", spellFailedBadTargets)
+				return true
+			}
+		}
 	}
 
 	// Cannot-target-in-combat gate (SpellInfo::CheckTarget, SpellInfo.cpp:1650):
@@ -2846,12 +2865,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// half has no bridge: Go tracks no pet-in-combat flag on player units.
 	// The ONLY_TARGET_GHOSTS arm (SpellInfo.cpp:1654-1662) is bridged by
 	// the gate below, ahead of pickpocket in C++ order. The
-	// CANT_TARGET_TAPPED arm (SpellInfo.cpp:1667-1670 — inside the caster !=
-	// unitTarget / player-caster block: SPELL_ATTR2_CANT_TARGET_TAPPED +
-	// creature hasLootRecipient && !isTappedBy(caster) →
-	// SPELL_FAILED_CANT_CAST_ON_TAPPED) is unbridged: Go has no
-	// loot-recipient/tapped-by model on creatures. Checked when a unit target
-	// exists, ahead of the caster != unitTarget block, matching C++ relative
+	// CANT_TARGET_TAPPED arm (SpellInfo.cpp:1667-1670) is bridged by the
+	// gate below the ghost gate, ahead of pickpocket in C++ order.
+	// Checked when a unit target exists, ahead of the caster != unitTarget block, matching C++ relative
 	// order (1650 ahead of 1667/1669).
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
 	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && targetGUID != 0 && s.unitTargetInCombat(targetGUID) {
@@ -2893,6 +2909,35 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target is ghost", "failReason", spellFailedBadTargets)
 				return true
 			}
+		}
+	}
+
+	// CANT_TARGET_TAPPED gate (SpellInfo::CheckTarget, SpellInfo.cpp:1667-1670):
+	// inside the caster != unitTarget / player-caster block, between
+	// ghost (1654) and pickpocket (1669) in C++ order. Reuses the
+	// completion recheck read verbatim: a live creature motion with
+	// a loot recipient (TapPlayerGUID or TapGroupID,
+	// Creature::SetLootRecipient) that the caster did not tap fails
+	// with SPELL_FAILED_CANT_CAST_ON_TAPPED (recipient == caster, or
+	// caster group == recipient group, Creature::isTappedBy,
+	// Creature.cpp:1362). Player targets skip (the arm reads
+	// ToCreature only); DB-row creatures skip (no live motion, no
+	// tap state). Previously the gauntlet never checked this arm,
+	// so an already-tapped target failed late at completion; now it
+	// fails at cast start, as in C++ CheckCast.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spell.AttributesEx1&spellAttr2CantTargetTapped != 0 && targetGUID != 0 && targetGUID != s.playerGUID {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+		var tapPlayer, tapGroup uint64
+		if motion != nil {
+			tapPlayer, tapGroup = motion.TapPlayerGUID, motion.TapGroupID
+		}
+		s.server.motionMu.Unlock()
+		if motion != nil && (tapPlayer != 0 || tapGroup != 0) && tapPlayer != s.playerGUID && !(s.groupID != 0 && s.groupID == tapGroup) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCantCastOnTapped), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target tapped by another player", "failReason", spellFailedCantCastOnTapped)
+			return true
 		}
 	}
 
@@ -9843,8 +9888,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// completion CheckCast(false) passes implicit=false for a
 			// player caster (Spell.cpp:5372), so the stealth exemption
 			// never applies — a target that stealths mid-bar fails here,
-			// as does one the gauntlet passed while already hidden (the
-			// client-path gauntlet never checks this arm). Reuses the
+			// The gauntlet now checks this arm at cast start, so this
+			// is the mid-bar net. Reuses the
 			// triggered-path detect core verbatim (canDetectStealthOf +
 			// canDetectInvisibilityOfPlayer): self targets pass, GM
 			// casters pass inside the helpers, creature targets pass
@@ -9917,11 +9962,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// recipient == caster, or caster group == recipient group
 			// (Creature::isTappedBy, Creature.cpp:1362). Player targets
 			// skip (the arm reads ToCreature only); DB-row creatures
-			// skip (no live motion, no tap state). The client gauntlet
-			// never checks this arm, so a cast that passed the gauntlet
-			// untapped and gained a foreign tap mid-bar fails here, and
-			// so does a cast the gauntlet passed on an already-tapped
-			// target — late, but the spell still never fires.
+			// skip (no live motion, no tap state). The gauntlet now
+			// checks this arm at cast start, so this is the mid-bar net:
+			// a cast that passed the gauntlet untapped and gained a
+			// foreign tap mid-bar fails here.
 			if spell.AttributesEx1&spellAttr2CantTargetTapped != 0 && target.UnitGUID != s.playerGUID {
 				s.server.motionMu.Lock()
 				motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.UnitGUID)

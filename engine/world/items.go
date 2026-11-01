@@ -4056,9 +4056,25 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "cannot target self")
 				return true
 			}
-			// Visibility (SpellInfo.cpp:1641-1642): unbridged — Go has no
-			// CanSeeOrDetect model (documented on the client path); the
-			// implicit-target stealth exemption has no Go analog either.
+			// Visibility (SpellInfo.cpp:1641-1642): the first
+			// CheckTarget arm after self, ahead of in-combat in C++
+			// order. At cast start CheckCast passes implicit=false for
+			// a player caster (Spell.cpp:5372), so the stealth exemption
+			// never applies — same read as the client-path twin and the
+			// triggered path: canDetectStealthOf +
+			// canDetectInvisibilityOfPlayer, self targets pass, GM
+			// casters pass inside the helpers, creature targets pass
+			// (motions carry no stealth/invisibility aura state).
+			// Spells carrying SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
+			if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != s.playerGUID {
+				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+					if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not visible")
+						return true
+					}
+				}
+			}
 			// Cannot-target-in-combat (SpellInfo.cpp:1650-1651): the
 			// UNIT_FLAG_PET_IN_COMBAT half has no bridge (no pet-in-combat
 			// flag on player units), like the client path.
@@ -4095,8 +4111,27 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 					return true
 				}
 			}
-			// CANT_TARGET_TAPPED (SpellInfo.cpp:1667-1674): unbridged — Go
-			// has no loot-recipient/tapped-by model on creatures.
+			// CANT_TARGET_TAPPED (SpellInfo.cpp:1667-1674): inside the
+			// caster != unitTarget / player-caster block, between ghost
+			// (1654) and pickpocket (1669) in C++ order. Same read as
+			// the client-path twin and the completion recheck: a live
+			// creature motion with a loot recipient the caster did not
+			// tap fails with SPELL_FAILED_CANT_CAST_ON_TAPPED; player
+			// targets and DB-row creatures skip.
+			if spell.AttributesEx1&spellAttr2CantTargetTapped != 0 && targetGUID != s.playerGUID {
+				s.server.motionMu.Lock()
+				motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
+				var tapPlayer, tapGroup uint64
+				if motion != nil {
+					tapPlayer, tapGroup = motion.TapPlayerGUID, motion.TapGroupID
+				}
+				s.server.motionMu.Unlock()
+				if motion != nil && (tapPlayer != 0 || tapGroup != 0) && tapPlayer != s.playerGUID && !(s.groupID != 0 && s.groupID == tapGroup) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCantCastOnTapped), true)
+					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target tapped by another player")
+					return true
+				}
+			}
 			// Pickpocket (SpellInfo.cpp:1676-1685): player targets fail
 			// BAD_TARGETS, non-humanoid/undead creature targets fail
 			// TARGET_NO_POCKETS. Inside the caster != unitTarget block, so
