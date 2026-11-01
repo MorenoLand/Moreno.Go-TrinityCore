@@ -575,8 +575,14 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 		// (Player.cpp:20791-20796).
 		duelHostile = s.duelPartner != 0 && s.duelPartner == targetSess.playerGUID &&
 			s.player.DuelTeam != 0 && targetSess.player.DuelTeam != 0
-		friendly = !duelHostile && targetSess.playerAlliance() == s.playerAlliance()
-		hostile = duelHostile || !friendly
+		// The ALLY/PARTY/RAID arms run IsValidAssistTarget, whose
+		// reaction is GetReactionTo, not faction alliance: a
+		// same-group member is friendly even cross-faction and a
+		// same-faction FFA pair is hostile (playerReactionAlly).
+		// Duel stays on its own arm: attackPvPBlocked below exempts
+		// duel opponents from the sanctuary/PvP-flag terms.
+		friendly = s.playerReactionAlly(targetSess)
+		hostile = !friendly
 	} else {
 		caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 		friendly = s.server.isFriendlyFaction(tgt.Faction, caster)
@@ -655,6 +661,35 @@ func (s *session) explicitTargetAttackPvPBlocked(targetSess *session, duelHostil
 		return false
 	}
 	return true
+}
+
+// playerReactionAlly mirrors the player-vs-player arms of
+// WorldObject::GetReactionTo (Object.cpp:2744-2762) ahead of the
+// faction-template tail: self is friendly, a duel opponent in progress
+// is hostile even same-faction, a same-group member is friendly even
+// cross-faction (the IsInSameRaidWith arm, Player.cpp:2543, exists so
+// AllowTwoSide.Interaction.Group groups can assist), and two FFA-flagged
+// players are hostile even same-faction (the group arm precedes the FFA
+// arm, so a same-group FFA pair stays friendly). Alliance equality alone
+// misses the cross-faction group case and over-admits duel/FFA pairs.
+// Forced-rank (SPELL_AURA_FORCE_REACTION) stays unmodeled: no Go model.
+func (s *session) playerReactionAlly(targetSess *session) bool {
+	if s == nil || s.player == nil || targetSess == nil || targetSess.player == nil {
+		return false
+	}
+	if targetSess.playerGUID == s.playerGUID {
+		return true
+	}
+	if s.duelPartner != 0 && s.duelPartner == targetSess.playerGUID && s.player.DuelTeam != 0 && targetSess.player.DuelTeam != 0 {
+		return false
+	}
+	if s.groupID != 0 && s.groupID == targetSess.groupID {
+		return true
+	}
+	if targetSess.playerAlliance() != s.playerAlliance() {
+		return false
+	}
+	return s.player.PVPFlags&pvpFlagFFA == 0 || targetSess.player.PVPFlags&pvpFlagFFA == 0
 }
 
 // explicitTargetAssistPvPBlocked mirrors the player-vs-player PvP terms of

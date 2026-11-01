@@ -195,7 +195,7 @@ func (s *session) spellHostileNearbyTarget(ctx context.Context, spell wotlk.Spel
 			if c.isGM {
 				return
 			}
-			if c.alliance {
+			if c.reactionAlly {
 				return
 			}
 		} else if !s.server.isAttackableFaction(c.faction, player) {
@@ -298,21 +298,22 @@ func isFriendlyTargetAreaRaidClassSpell(spell wotlk.Spell) bool {
 
 // friendlyCandidate is one plausible unit for friendly implicit selection.
 type friendlyCandidate struct {
-	guid       uint64
-	mapID      uint32
-	instanceID uint32
-	x, y, z    float32
-	unitFlags  uint32
-	flagsExtra uint32
-	health     uint32
-	faction    uint32 // creatures: template faction
-	alliance   bool   // players: same alliance as the caster
-	class      uint8  // players only; 0 = unknown (creatures)
-	isPlayer   bool
-	isGM       bool    // players: IsGameMaster (Object.cpp:3104)
-	ownerGUID  uint64  // creatures: charmer/owner resolution (Unit.cpp:12126)
-	entry      uint32  // creatures: template entry (0 for players)
-	reach      float32 // combat reach: GetDistance(Position) minus this, floored 0
+	guid          uint64
+	mapID         uint32
+	instanceID    uint32
+	x, y, z       float32
+	unitFlags     uint32
+	flagsExtra    uint32
+	health        uint32
+	faction       uint32 // creatures: template faction
+	reactionAlly  bool   // players: GetReactionTo player-player reaction (duel/group/FFA arms, not raw faction alliance)
+	assistBlocked bool   // players: IsValidAssistTarget PvP tail (dueling, FFA-from-outside, sanctuary-PvP); self exempt
+	class         uint8  // players only; 0 = unknown (creatures)
+	isPlayer      bool
+	isGM          bool    // players: IsGameMaster (Object.cpp:3104)
+	ownerGUID     uint64  // creatures: charmer/owner resolution (Unit.cpp:12126)
+	entry         uint32  // creatures: template entry (0 for players)
+	reach         float32 // combat reach: GetDistance(Position) minus this, floored 0
 }
 
 // friendlyScanCandidates visits every plausible unit once: motion creatures,
@@ -359,8 +360,9 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 		p := targetSession.player
 		visit(friendlyCandidate{guid: targetSession.playerGUID, mapID: p.Map, instanceID: p.InstanceID,
 			x: p.X, y: p.Y, z: p.Z, unitFlags: p.UnitFlags, health: p.Health,
-			alliance: targetSession.playerAlliance() == s.playerAlliance(), class: p.Class, isPlayer: true,
-			isGM: sessionIsGameMaster(targetSession), reach: p.CombatReach})
+			reactionAlly: s.playerReactionAlly(targetSession), class: p.Class, isPlayer: true,
+			assistBlocked: s.explicitTargetAssistPvPBlocked(targetSession),
+			isGM:          sessionIsGameMaster(targetSession), reach: p.CombatReach})
 	}
 	s.server.sessionsMu.RUnlock()
 	if playersOnly {
@@ -405,7 +407,10 @@ func (s *session) friendlyAssistOK(spell wotlk.Spell, c friendlyCandidate, caste
 		return false
 	}
 	if c.isPlayer {
-		return c.alliance
+		if c.assistBlocked {
+			return false
+		}
+		return c.reactionAlly
 	}
 	return allyOf(c.faction)
 }

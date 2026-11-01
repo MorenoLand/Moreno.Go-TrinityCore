@@ -1567,7 +1567,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 		// NON_ATTACKABLE_2 (0x10000) in player.UnitFlags (spells.go apply leg);
 		// TAXI_FLIGHT rides the TaxiPath gate above, and Go never sets the
 		// other two on players.
-		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.TaxiPath != "" || targetSession.player.UnitFlags&unitFlagNonAttackable2 != 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || targetSession.playerAlliance() == s.playerAlliance() || sessionIsGameMaster(targetSession) {
+		if targetSession == s || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 || targetSession.player.TaxiPath != "" || targetSession.player.UnitFlags&unitFlagNonAttackable2 != 0 || targetSession.player.Map != player.Map || targetSession.player.InstanceID != player.InstanceID || s.playerReactionAlly(targetSession) || sessionIsGameMaster(targetSession) {
 			continue
 		}
 		// Per-leg geometry: cylinder + arc + LOS of any leg family.
@@ -46448,7 +46448,7 @@ func (s *session) handleEffectForceDeselect() {
 	for target := range s.server.sessions {
 		if target == s || !target.authed || !target.worldReady.Load() || target.player == nil ||
 			target.player.Map != s.player.Map || target.player.InstanceID != s.player.InstanceID ||
-			target.playerAlliance() == s.playerAlliance() {
+			s.playerReactionAlly(target) {
 			continue
 		}
 		if distance3D(target.player.X, target.player.Y, target.player.Z, s.player.X, s.player.Y, s.player.Z) > 100.0 {

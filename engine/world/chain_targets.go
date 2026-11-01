@@ -530,7 +530,7 @@ func (s *session) spellChainNearbyPick(ctx context.Context, spell wotlk.Spell, s
 				return
 			}
 			if c.isPlayer {
-				if c.isGM || c.alliance {
+				if c.isGM || c.reactionAlly {
 					return
 				}
 			} else if !s.server.isAttackableFaction(c.faction, caster) {

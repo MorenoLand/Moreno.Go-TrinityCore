@@ -385,10 +385,17 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		if targetSession.playerGUID != s.playerGUID && sessionIsGameMaster(targetSession) {
 			continue
 		}
+		// TARGET_CHECK_ALLY/PARTY/RAID all run IsValidAssistTarget first
+		// (Spell.cpp:8344-8371), so the PvP tail (dueling, FFA-from-outside,
+		// sanctuary-PvP) blocks every leg family, not just the ally leg;
+		// self is exempt (explicitTargetAssistPvPBlocked returns false).
+		if s.explicitTargetAssistPvPBlocked(targetSession) {
+			continue
+		}
 		p := targetSession.player
 		accept(targetSession.playerGUID, p.Map, p.InstanceID, p.X, p.Y, p.Z,
 			p.UnitFlags, 0, p.Health,
-			targetSession.playerAlliance() == s.playerAlliance(), inParty(targetSession.playerGUID), inRaid(targetSession.playerGUID))
+			s.playerReactionAlly(targetSession), inParty(targetSession.playerGUID), inRaid(targetSession.playerGUID))
 	}
 	s.server.sessionsMu.RUnlock()
 
