@@ -4228,6 +4228,9 @@ func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spe
 			targetGUID := motion.GUID
 			s.motionMu.Unlock()
 			s.broadcastHighestThreatUpdateInInstance(mapID, m.InstanceID, motion.X, motion.Y, motion.Z, targetGUID, newVictim, entries, motion.PhaseMask)
+			if !isCreaturePassive(motion) {
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(targetGUID, newVictim), mapID, m.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+			}
 			s.motionMu.Lock()
 		}
 		motion.InCombat = true

@@ -1438,6 +1438,9 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntries()
 		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+		if !isCreaturePassive(motion) {
+			s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, newVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+		}
 	}
 	motion.InCombat = true
 	motion.Moving = true

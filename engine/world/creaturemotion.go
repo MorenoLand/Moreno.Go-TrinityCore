@@ -3313,6 +3313,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); !passive && switched && newVictim != 0 {
 			motion.TargetGUID = newVictim
 			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, motion.ThreatMgr.SortedEntries(), motion.PhaseMask)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, newVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		} else if !passive && motion.TargetGUID == 0 {
 			if victim := motion.ThreatMgr.GetCurrentVictim(); victim != 0 {
 				motion.TargetGUID = victim
@@ -3396,6 +3397,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				motion.TargetGUID = nextVictim
 				entries := motion.ThreatMgr.SortedEntries()
 				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries, motion.PhaseMask)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				return
 			}
 			s.triggerCreatureEvade(ctx, motion, now)
@@ -3487,6 +3489,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					motion.TargetGUID = nextVictim
 					entries := motion.ThreatMgr.SortedEntries()
 					s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries, motion.PhaseMask)
+					s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 					return
 				}
 				s.triggerCreatureEvade(ctx, motion, now)
