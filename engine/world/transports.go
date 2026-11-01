@@ -506,6 +506,17 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 	}
 	updates := protocol.NewUpdateData()
 	seesHidden := observer.gmVisibilityDetect != 0
+	// Seer distance leg (CanSeeOrDetect GetViewpoint leg,
+	// Object.cpp:1618, as on the creature-create helper): a bound
+	// observer receives a transport passenger when the viewpoint sits
+	// near the transport, not only when the observer's body does.
+	// Unresolvable viewpoints fail open to the body coords. Resolved
+	// after sessionsMu drops: the lookup takes motionMu and sessionsMu
+	// itself, and the refresh loop runs lock-free.
+	cx, cy := observer.player.X, observer.player.Y
+	if vx, vy, _, ok := s.seerDeliveryPosition(transport.Spawn.Map, observer.player.InstanceID, observer.player.GUID, observer.player.FarsightGUID); ok {
+		cx, cy = vx, vy
+	}
 	isGhost := observer.player.Health > 0 && observer.player.PlayerFlags&playerFlagGhost != 0
 	creatureGUIDs := make([]uint64, 0, len(transport.StaticCreatures))
 	creaturePositions := make([]string, 0, len(transport.StaticCreatures))
@@ -516,7 +527,7 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 		if guid == 0 {
 			guid = creatureWorldGUID(passenger.GUID, passenger.Entry)
 		}
-		if !validMovementPosition(passenger.X, passenger.Y, passenger.Z, passenger.Orientation) || distance <= 0 || passenger.Map != observer.player.Map || math.Hypot(float64(passenger.X-observer.player.X), float64(passenger.Y-observer.player.Y)) > distance {
+		if !validMovementPosition(passenger.X, passenger.Y, passenger.Z, passenger.Orientation) || distance <= 0 || passenger.Map != observer.player.Map || math.Hypot(float64(passenger.X-cx), float64(passenger.Y-cy)) > distance {
 			if observer.clearTransportPassengerVisible(guid, transportGUID) {
 				updates.AddOutOfRangeGUID(guid)
 				removedGUIDs = append(removedGUIDs, guid)
@@ -561,7 +572,7 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 	}
 	for _, passenger := range transport.passengerObjects() {
 		guid := gameObjectGUID(passenger.GUID, passenger.Entry)
-		if !validMovementPosition(passenger.X, passenger.Y, passenger.Z, passenger.Orientation) || distance <= 0 || passenger.Map != observer.player.Map || math.Hypot(float64(passenger.X-observer.player.X), float64(passenger.Y-observer.player.Y)) > distance {
+		if !validMovementPosition(passenger.X, passenger.Y, passenger.Z, passenger.Orientation) || distance <= 0 || passenger.Map != observer.player.Map || math.Hypot(float64(passenger.X-cx), float64(passenger.Y-cy)) > distance {
 			if observer.clearTransportPassengerVisible(guid, transportGUID) {
 				updates.AddOutOfRangeGUID(guid)
 				removedGUIDs = append(removedGUIDs, guid)

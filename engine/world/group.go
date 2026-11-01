@@ -577,18 +577,37 @@ func (s *Server) findGroupByID(id uint64) *groupState {
 // Group::UpdatePlayerOutOfRange (Group.cpp:1807-1819): a member receives the
 // stat delta when it is not in the same map instance as the changed player
 // (WorldObject::IsInMap compares map objects, so a different instance counts
-// as out-of-range) or lies beyond the viewer's sight range —
-// WorldObject::GetSightRange, 100 yards on continents (ObjectDefines.h:35).
-// Members in range already see the values through update packets.
-func groupMemberOutOfRange(owner, target *session) bool {
+// as out-of-range) or lies beyond the member's sight range. The check is a
+// plain body-distance check, not the visibility notifier: IsWithinDist
+// reads the member's own position (Object.cpp:1233-1235), so no seer leg
+// applies here — a farsight-bound member is classified on its body, and
+// its in-range values still arrive through the seer-gated update packets.
+// IsWithinDist(..., false) is 2D (Object.cpp:1163-1166) and adds both
+// combat reaches (Object.cpp:1149-1152, 1.5 each for players); the sight
+// range is the map's visibility range (Object.cpp:1544-1556, the no-arg
+// GetSightRange falls through to GetMap()->GetVisibilityRange), not a
+// flat 100 yards — instance and battleground maps see further.
+func (s *Server) groupMemberOutOfRange(owner, target *session) bool {
 	if target == nil || target.player == nil || owner == nil || owner.player == nil {
 		return false
 	}
 	if target.player.Map != owner.player.Map || target.player.InstanceID != owner.player.InstanceID {
 		return true
 	}
-	return distance3D(target.player.X, target.player.Y, target.player.Z,
-		owner.player.X, owner.player.Y, owner.player.Z) > 100.0
+	sightRange := 100.0
+	if s != nil {
+		sightRange = s.visibilityRangeForMap(owner.player.Map)
+	}
+	memberReach := target.player.CombatReach
+	if memberReach == 0 {
+		memberReach = 1.5
+	}
+	ownerReach := owner.player.CombatReach
+	if ownerReach == 0 {
+		ownerReach = 1.5
+	}
+	return distance2D(target.player.X, target.player.Y,
+		owner.player.X, owner.player.Y) > sightRange+float64(memberReach+ownerReach)
 }
 
 // sendGroupStatsToOutOfRange mirrors Group::UpdatePlayerOutOfRange
@@ -610,7 +629,7 @@ func (s *Server) sendGroupStatsToOutOfRange(owner *session, packet []byte) {
 			continue
 		}
 		target := s.findSessionByGUID(member.GUID)
-		if !groupMemberOutOfRange(owner, target) {
+		if !s.groupMemberOutOfRange(owner, target) {
 			continue
 		}
 		_ = target.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), packet, true)
