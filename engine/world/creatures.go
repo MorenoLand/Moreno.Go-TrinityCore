@@ -759,11 +759,11 @@ func maxUint32(value, fallback uint32) uint32 {
 	return value
 }
 
-func (s *Server) broadcastMonsterMove(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32) {
-	s.broadcastMonsterMoveMode(mapID, rawGUID, startX, startY, startZ, destX, destY, destZ, duration, false)
+func (s *Server) broadcastMonsterMove(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, phase uint32) {
+	s.broadcastMonsterMoveMode(mapID, rawGUID, startX, startY, startZ, destX, destY, destZ, duration, false, phase)
 }
 
-func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool) {
+func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, phase uint32) {
 	// Documented delta vs C++ (audited 2026-10-07): WaypointMovementGenerator
 	// selects walk speed via init.SetWalk (velocity only — MoveSplineInitArgs.h:58,
 	// MoveSplineInit.cpp:111) and never calls Creature::SetWalk, so C++ sends no
@@ -783,19 +783,30 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 		distance = 150.0
 	}
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	var targets []*session
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
-		if math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) <= distance {
-			_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
-			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	if phase == 0 {
+		phase = 1
+	}
+	for _, sess := range targets {
+		if sess.player == nil || math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) > distance {
+			continue
 		}
+		if phase&sess.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
+		_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
 	}
 }
 
-func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool) {
+func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32) {
 	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, facing, hasFacing)
 	modeOpcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
 	if walk {
@@ -808,15 +819,26 @@ func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUI
 		distance = 150.0
 	}
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	var targets []*session
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
 			continue
 		}
-		if math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) <= distance {
-			_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
-			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	if phase == 0 {
+		phase = 1
+	}
+	for _, sess := range targets {
+		if sess.player == nil || math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) > distance {
+			continue
 		}
+		if phase&sess.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
+		_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
 	}
 }
 

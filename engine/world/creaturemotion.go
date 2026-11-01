@@ -2406,13 +2406,14 @@ func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, at
 	}
 	duration := splineDurationMs(fleeDist, speed)
 	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	phase := motion.PhaseMask
 	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 	motion.X, motion.Y = destX, destY
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.FleeingUntil = now.Add(7 * time.Second)
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false)
+	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false, phase)
 }
 
 // clearCreatureVisualTarget is the engine half of Creature::SetTarget
@@ -2557,7 +2558,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			return
 		}
 		duration := splineDurationMs(float64(homeDist), speed)
-		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false)
+		s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false, motion.PhaseMask)
 		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 		motion.Moving = true
 		motion.Evading = true
@@ -2966,7 +2967,7 @@ func (s *Server) triggerCreatureAlert(ctx context.Context, motion *creatureMotio
 	// DistractMovementGenerator::Initialize launches an in-place MoveTo+SetFacing
 	// spline; Go reuses the facing arm of the monster move packet for the
 	// client-side turn, matching the Distract effect bridge.
-	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 1000, false, angle, true)
+	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 1000, false, angle, true, motion.PhaseMask)
 	_ = ctx
 }
 
@@ -3356,7 +3357,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				return
 			}
 			duration := splineDurationMs(float64(homeDist), speed)
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration, false, 0, false, motion.PhaseMask)
 			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
 			motion.Moving = true
 			motion.Evading = true
@@ -6053,7 +6054,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						// launch onto the victim's center in that case.
 						if speed := creatureSplineVelocity(motion, false); speed >= 0.001 && (archerChaseStop == 0 || dist > archerChaseStop) && (casterChaseStop == 0 || dist > casterChaseStop) {
 							duration := splineDurationMs(float64(dist), speed)
-							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true)
+							s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, target.Z, duration, false, faceAngle, true, motion.PhaseMask)
 							motion.X, motion.Y, motion.Z = destX, destY, target.Z
 							motion.ChaseTX, motion.ChaseTY = target.X, target.Y
 							motion.Moving = true
@@ -6987,7 +6988,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// so the heading would otherwise be lost.
 	motion.MoveHeading = float32(math.Atan2(float64(destY-motion.Y), float64(destX-motion.X)))
 	motion.MoveVelocity = speed
-	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk, facing, hasFacing)
+	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk, facing, hasFacing, motion.PhaseMask)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
@@ -7655,8 +7656,10 @@ func (s *Server) pruneCreatureMotion(ctx context.Context, now time.Time) {
 
 // stopCreatureMotion immediately halts creature movement and broadcasts MonsterMoveStop.
 func (s *Server) stopCreatureMotion(mapID uint32, guid uint64, x, y, z float32) {
+	phase := uint32(0)
 	s.motionMu.Lock()
 	if motion := s.findCreatureMotionLocked(mapID, 0, guid); motion != nil {
+		phase = motion.PhaseMask
 		motion.Moving = false
 		motion.Evading = false
 		motion.InCombat = false
@@ -7668,12 +7671,14 @@ func (s *Server) stopCreatureMotion(mapID uint32, guid uint64, x, y, z float32) 
 		}
 	}
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveStop(mapID, guid, x, y, z)
+	s.broadcastMonsterMoveStop(mapID, guid, x, y, z, phase)
 }
 
 func (s *Server) stopCreatureMotionInInstance(mapID, instanceID uint32, guid uint64, x, y, z float32) {
+	phase := uint32(0)
 	s.motionMu.Lock()
 	if motion := s.findCreatureMotionLocked(mapID, instanceID, guid); motion != nil {
+		phase = motion.PhaseMask
 		motion.Moving = false
 		motion.Evading = false
 		motion.InCombat = false
@@ -7683,10 +7688,10 @@ func (s *Server) stopCreatureMotionInInstance(mapID, instanceID uint32, guid uin
 		}
 	}
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase)
 }
 
-func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z float32) {
+func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z float32, phase uint32) {
 	packet := protocol.NewBuffer(32)
 	packet.WritePackedGUID(guid)
 	packet.WriteU8(0) // Transport flag
@@ -7700,18 +7705,29 @@ func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z flo
 		distance = 150.0
 	}
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	var targets []*session
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
-		if math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) <= distance {
-			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	if phase == 0 {
+		phase = 1
+	}
+	for _, sess := range targets {
+		if sess.player == nil || math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) > distance {
+			continue
 		}
+		if phase&sess.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
 	}
 }
 
-func (s *Server) broadcastMonsterMoveStopInInstance(mapID, instanceID uint32, guid uint64, x, y, z float32) {
+func (s *Server) broadcastMonsterMoveStopInInstance(mapID, instanceID uint32, guid uint64, x, y, z float32, phase uint32) {
 	packet := protocol.NewBuffer(32)
 	packet.WritePackedGUID(guid)
 	packet.WriteU8(0)
@@ -7725,14 +7741,25 @@ func (s *Server) broadcastMonsterMoveStopInInstance(mapID, instanceID uint32, gu
 		distance = 150.0
 	}
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	var targets []*session
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
 			continue
 		}
-		if math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) <= distance {
-			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	if phase == 0 {
+		phase = 1
+	}
+	for _, sess := range targets {
+		if sess.player == nil || math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) > distance {
+			continue
 		}
+		if phase&sess.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
 	}
 }
 

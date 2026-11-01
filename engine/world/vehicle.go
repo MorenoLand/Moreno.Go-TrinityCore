@@ -991,8 +991,9 @@ func (s *Server) relocateCreaturePassenger(mapID, instanceID uint32, guid uint64
 		return
 	}
 	motion.X, motion.Y, motion.Z, motion.Orientation = x, y, z, o
+	phase := motion.PhaseMask
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase)
 }
 
 // sendPlayerVehicleData broadcasts SMSG_PLAYER_VEHICLE_DATA (0x4A7).

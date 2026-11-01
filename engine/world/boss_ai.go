@@ -4771,9 +4771,9 @@ func (s *Server) creatureEffectTeleportUnits(ctx context.Context, m *creatureMot
 			continue
 		}
 		motion.X, motion.Y, motion.Z = dx, dy, dz
-		mapID, instanceID := motion.Map, motion.InstanceID
+		mapID, instanceID, phase := motion.Map, motion.InstanceID, motion.PhaseMask
 		s.motionMu.Unlock()
-		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, dx, dy, dz)
+		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, dx, dy, dz, phase)
 		s.syncCreatureVehiclePassengers(motion)
 	}
 }
@@ -5211,7 +5211,7 @@ func (s *Server) knockBackCreatureTarget(tm *creatureMotion, fromX, fromY float6
 	const knockbackGravity = 19.29110527038574
 	s.motionMu.Lock()
 	tx, ty, tz := tm.X, tm.Y, tm.Z
-	mapID, instanceID := tm.Map, tm.InstanceID
+	mapID, instanceID, phase := tm.Map, tm.InstanceID, tm.PhaseMask
 	s.motionMu.Unlock()
 	ddx := float64(tx) - fromX
 	ddy := float64(ty) - fromY
@@ -5230,7 +5230,7 @@ func (s *Server) knockBackCreatureTarget(tm *creatureMotion, fromX, fromY float6
 	s.motionMu.Lock()
 	tm.X, tm.Y = destX, destY
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, tm.GUID, destX, destY, tz)
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, tm.GUID, destX, destY, tz, phase)
 	s.syncCreatureVehiclePassengers(tm)
 }
 
@@ -6614,9 +6614,9 @@ func (s *Server) creatureMoveTargetTo(m *creatureMotion, guid uint64, x, y, z, o
 	if setOri {
 		motion.Orientation = ori
 	}
-	mapID, instanceID := motion.Map, motion.InstanceID
+	mapID, instanceID, phase := motion.Map, motion.InstanceID, motion.PhaseMask
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase)
 	// NearTeleportTo (Unit.cpp:13342-13344) runs UpdatePosition, so a
 	// moved vehicle base fans out through CreatureRelocation
 	// (Map.cpp:1136) — the teleport-units arm above already syncs,
@@ -6758,9 +6758,9 @@ func (s *Server) creatureEffectCharge(ctx context.Context, m *creatureMotion, hi
 		s.motionMu.Lock()
 		m.X, m.Y, m.Z = destX, destY, tz
 		m.Orientation = facing
-		mapID, instanceID := m.Map, m.InstanceID
+		mapID, instanceID, phase := m.Map, m.InstanceID, m.PhaseMask
 		s.motionMu.Unlock()
-		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, destX, destY, tz)
+		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, destX, destY, tz, phase)
 		// MoveCharge (MotionMaster.cpp:698) runs a PointMovementGenerator
 		// spline, whose ticks land in UpdateSplinePosition ->
 		// UpdatePosition -> CreatureRelocation (Map.cpp:1136), so a
@@ -6783,9 +6783,9 @@ func (s *Server) creatureEffectChargeDest(ctx context.Context, m *creatureMotion
 	_ = ctx
 	s.motionMu.Lock()
 	m.X, m.Y, m.Z = dx, dy, dz
-	mapID, instanceID := m.Map, m.InstanceID
+	mapID, instanceID, phase := m.Map, m.InstanceID, m.PhaseMask
 	s.motionMu.Unlock()
-	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, dx, dy, dz)
+	s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, dx, dy, dz, phase)
 	// MoveCharge (MotionMaster.cpp:698) runs a PointMovementGenerator
 	// spline, whose ticks land in UpdateSplinePosition ->
 	// UpdatePosition -> CreatureRelocation (Map.cpp:1136), so a
@@ -6919,8 +6919,9 @@ func (s *Server) creatureEffectDistract(ctx context.Context, m *creatureMotion, 
 		motion.DistractedUntil = time.Now().Add(time.Duration(duration) * time.Millisecond)
 		motion.Moving = false
 		mapID, instanceID, mguid, mx, my, mz := motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z
+		phase := motion.PhaseMask
 		s.motionMu.Unlock()
-		s.broadcastMonsterMoveInInstance(mapID, instanceID, mguid, mx, my, mz, mx, my, mz, 1000, false, angle, true)
+		s.broadcastMonsterMoveInInstance(mapID, instanceID, mguid, mx, my, mz, mx, my, mz, 1000, false, angle, true, phase)
 	}
 }
 

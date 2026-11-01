@@ -1290,10 +1290,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, nil
 		}
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		phase := motion.PhaseMask
 		x, y, z := motion.X, motion.Y, motion.Z
 		motion.Moving = false
 		s.motionMu.Unlock()
-		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z)
+		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase)
 		return nil, nil
 	}
 	// Despawn is Lua Creature::DespawnOrUnsummon() (Creature.cpp): the
@@ -2382,9 +2383,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Lock()
 		motion.Orientation = ori
 		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
+		phase := motion.PhaseMask
 		x, y, z := motion.X, motion.Y, motion.Z
 		s.motionMu.Unlock()
-		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true)
+		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase)
 		return nil, nil
 	}
 	// SetSpeedRate is Unit::SetSpeedRate (Unit.cpp:8821) for MOVE_RUN=1

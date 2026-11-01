@@ -915,7 +915,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 				motion.Orientation = owner.Sess.player.Orientation
 			}
 			motion.Moving = false
-			s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z)
+			s.broadcastMonsterMoveStopInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		} else if dist > petFollowDist+petFollowRangeTolerance+ownerReach+petReach {
 			// Run to catch up with owner.
 			// FollowMovementGenerator (FollowMovementGenerator.cpp:57-140):
@@ -985,7 +985,7 @@ func (s *Server) updatePetMotion(ctx context.Context, motion *creatureMotion, pl
 			} else {
 				motion.Orientation = ownerOrient
 				duration := splineDurationMs(float64(dist), speed)
-				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, ownerOrient, true)
+				s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, ownerOrient, true, motion.PhaseMask)
 				motion.X = destX
 				motion.Y = destY
 				motion.Z = destZ
@@ -1231,7 +1231,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			motion.Y = destY
 			motion.Z = destZ
 			motion.Moving = true
-			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false)
+			s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, false, 0, false, motion.PhaseMask)
 		}
 	} else {
 		motion.Moving = false

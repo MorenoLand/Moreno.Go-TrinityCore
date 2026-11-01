@@ -380,7 +380,7 @@ func (s *Server) launchFormationLeg(motion, leader *creatureMotion, now time.Tim
 	}
 	duration := splineDurationMs(slotDist, memberVel)
 	heading := float32(math.Atan2(float64(destY-motion.Y), float64(destX-motion.X)))
-	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, leader.Z, duration, false, leader.Orientation, true)
+	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, leader.Z, duration, false, leader.Orientation, true, motion.PhaseMask)
 	motion.X, motion.Y = destX, destY
 	motion.Z = leader.Z
 	motion.Moving = true
