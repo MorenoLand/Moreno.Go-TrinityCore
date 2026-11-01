@@ -786,7 +786,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
-	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
+	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, allyToCaster bool, assistPvPBlocked bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
 		if guid == 0 || guid == excludeGUID {
 			return
 		}
@@ -839,19 +839,23 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 			}
 		case targetCheckAlly:
 			// TARGET_CHECK_ALLY: Unit::IsValidAssistTarget (Spell.cpp:8347).
-			if !allyToCaster {
+			// The PvP tail (Object.cpp:3160-3171, via
+			// explicitTargetAssistPvPBlocked) refuses a dueling, FFA-from-
+			// outside, or sanctuary-outside PvP target; it never applies
+			// to the ENEMY arm.
+			if !allyToCaster || assistPvPBlocked {
 				return
 			}
 		case targetCheckParty:
 			// TARGET_CHECK_PARTY: assist target in the caster's party
 			// (Spell.cpp:8351-8359; Unit::IsInPartyWith, Unit.cpp:12126).
-			if !allyToCaster || !scope.inParty(cand) {
+			if !allyToCaster || assistPvPBlocked || !scope.inParty(cand) {
 				return
 			}
 		case targetCheckRaid:
 			// TARGET_CHECK_RAID: assist target in the caster's raid
 			// (Spell.cpp:8361-8374; Unit::IsInRaidWith, Unit.cpp:12155).
-			if !allyToCaster || !scope.inRaid(cand) {
+			if !allyToCaster || assistPvPBlocked || !scope.inRaid(cand) {
 				return
 			}
 		case targetCheckEntry:
@@ -905,14 +909,35 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if motionOwner == 0 {
 			motionOwner = motion.CharmOwnerGUID
 		}
-		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction), false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction), false, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
 			continue
 		}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, targetSession.playerAlliance() == s.playerAlliance(), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
+		// Player-vs-player assist reaction (WorldObject::GetReactionTo,
+		// Object.cpp:2744-2762, ahead of the faction-template tail):
+		// a duel opponent in progress is hostile even same-faction,
+		// a same-group member is friendly even cross-faction (the
+		// IsInRaidWith arm, Player.cpp:2543, exists so
+		// AllowTwoSide.Interaction.Group groups can assist), and two
+		// FFA-flagged players are hostile even same-faction (the
+		// group arm precedes the FFA arm, so a same-group FFA pair
+		// stays friendly). Alliance equality alone misses the
+		// cross-faction group case and over-admits duel/FFA pairs.
+		sameGroup := s.groupID != 0 && s.groupID == targetSession.groupID
+		duelOpponent := s.duelPartner != 0 && s.duelPartner == targetSession.playerGUID && s.player.DuelTeam != 0 && targetSession.player.DuelTeam != 0
+		bothFFA := s.player.PVPFlags&pvpFlagFFA != 0 && targetSession.player.PVPFlags&pvpFlagFFA != 0
+		playerAlly := false
+		switch {
+		case duelOpponent:
+		case sameGroup:
+			playerAlly = true
+		case targetSession.playerAlliance() == s.playerAlliance():
+			playerAlly = !bothFFA
+		}
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, playerAlly, s.explicitTargetAssistPvPBlocked(targetSession), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
 	s.server.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
@@ -927,7 +952,7 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						st := s.server.loadCreatureStats(ctx, uint32(entry))
-						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)), false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
+						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)), false, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}
 				}
 			}
