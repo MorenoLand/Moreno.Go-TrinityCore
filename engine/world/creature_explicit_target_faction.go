@@ -391,14 +391,63 @@ func (s *Server) creatureAttackPlayerPasses(m *creatureMotion, attacker, ts *ses
 	return !s.isFriendlyFaction(m.Faction, tpos) && !s.factionTemplatesFriendly(tpos.FactionTemplate, m.Faction)
 }
 
+// creatureAffectingReactionFriendly mirrors one direction of
+// WorldObject::GetReactionTo (Object.cpp:2744-2785 + GetFactionReactionTo,
+// Object.cpp:2806-2840) for the friendly half of the both-affecting
+// refusal: fromOwner is the reacting side's affecting player, toOwner the
+// other side's, fromFaction the reacting unit's template, toFaction the
+// subject unit's template. A reputation subject faction reads friendly
+// unless the owner is at war with it (a missing saved row reads
+// not-at-war, exactly as IsAtWar on a nil state); a contested-guard
+// subject is hostile to a contested-PvP owner. Otherwise the
+// GetFactionReactionTo leg runs: a contested-guard reacting faction is
+// hostile to a contested-PvP other owner, a reputation reacting faction
+// reads the other owner's rank clamped to neutral at war (only a
+// friendly-or-better unclamped rank is friendly; a missing saved row
+// keeps the template leg, as elsewhere), and any other pair reads
+// friendly when either template is friendly to the other. Forced ranks
+// and IGNORE_REPUTATION have no Go model.
+func (s *Server) creatureAffectingReactionFriendly(fromOwner, toOwner *session, fromFaction, toFaction uint32) bool {
+	if s == nil || s.Data == nil || fromOwner == nil || fromOwner.player == nil {
+		return false
+	}
+	if tpl, found, err := s.Data.FactionTemplate(toFaction); err == nil && found && s.factionCanHaveReputation(tpl.Faction) {
+		if s.creatureContestedHostile(toFaction, fromOwner) {
+			return false
+		}
+		return !s.playerAtWarWith(fromOwner, toFaction)
+	}
+	if s.creatureContestedHostile(fromFaction, toOwner) {
+		return false
+	}
+	if tpl, found, err := s.Data.FactionTemplate(fromFaction); err == nil && found && s.factionCanHaveReputation(tpl.Faction) {
+		if toOwner == nil || toOwner.player == nil || s.playerAtWarWith(toOwner, fromFaction) {
+			return false
+		}
+		if saved, ok := playerReputationMap(toOwner.player.Reputations)[tpl.Faction]; ok {
+			return reputationRank(int64(totalReputationStanding(saved))) >= 4
+		}
+	}
+	return s.factionTemplatesFriendly(fromFaction, toFaction) || s.factionTemplatesFriendly(toFaction, fromFaction)
+}
+
 // creatureAttackCreaturePasses mirrors IsValidAttackTarget against a
-// creature target. Wild casters run the CvC arm (Object.cpp:3018-3020):
-// hostile in either direction. A player-controlled caster (pet/charmed)
-// runs the PvC arm (Object.cpp:3022-3053): the friendly refusal first, then
-// the contested-guard carve-out and the at-war term against the target's
-// faction — with a reputation row the at-war flag alone decides (not at war
-// means no attack even when the templates are hostile); without a row the
-// template hostility stands.
+// creature target. Wild casters run the CvC arm (Object.cpp:3022-3024)
+// against a wild target: hostile in either direction; against a
+// player-owned target the exactly-one arm (Object.cpp:3036-3053) and its
+// friendly refusal apply instead (named residual, not yet ported). A
+// player-controlled caster (pet/charmed) against a wild target runs the
+// PvC arm: the friendly refusal first, then the contested-guard carve-out
+// and the at-war term against the target's faction — with a reputation row
+// the at-war flag alone decides (not at war means no attack even when the
+// templates are hostile); without a row the template hostility stands.
+// Against a player-owned target both sides have an affecting player, so
+// the exactly-one arm never fires: the decided arms (same group friendly,
+// duel hostile, both FFA hostile) decide first, then the both-directions
+// friendly refusal (reputation/template legs), then the duel arm admits
+// outright and the PvP tail (target owner PvP-flagged, or both FFA)
+// decides. The sanctuary arm has no creature-side Go model, as in the
+// chain twin, and an unresolvable target owner keeps the PvC arm.
 func (s *Server) creatureAttackCreaturePasses(m *creatureMotion, attacker *session, tm *creatureMotion) bool {
 	if creatureSameOwner(m, tm.GUID, tm, nil) {
 		return false
@@ -406,6 +455,29 @@ func (s *Server) creatureAttackCreaturePasses(m *creatureMotion, attacker *sessi
 	hostile := s.factionTemplatesHostile(m.Faction, tm.Faction) || s.factionTemplatesHostile(tm.Faction, m.Faction)
 	if attacker == nil || attacker.player == nil {
 		return hostile
+	}
+	// Both-affecting arm (Object.cpp:3036-3053 fires only with exactly
+	// one affecting player, so it never runs here): the friendly refusal
+	// (Object.cpp:3028-3030) runs GetReactionTo in both directions, the
+	// duel arm (Object.cpp:3062) admits outright, and the PvP tail
+	// (Object.cpp:3073-3078) decides the rest via the chain twin's
+	// owner-flag helper.
+	if tm.UnitFlags&unitFlagPlayerControlled != 0 && tm.OwnerGUID != 0 {
+		if targetOwner := s.findSessionByGUID(tm.OwnerGUID); targetOwner != nil && targetOwner.player != nil {
+			if reactionAlly, decided := playerOwnedCreatureReactionAlly(attacker, targetOwner); decided {
+				if reactionAlly {
+					return false
+				}
+				if attacker.duelPartner != 0 && attacker.duelPartner == targetOwner.playerGUID && attacker.player.DuelTeam != 0 && targetOwner.player.DuelTeam != 0 {
+					return true
+				}
+				return chainCreatureAttackPvPTail(attacker, targetOwner)
+			}
+			if s.creatureAffectingReactionFriendly(attacker, targetOwner, m.Faction, tm.Faction) || s.creatureAffectingReactionFriendly(targetOwner, attacker, tm.Faction, m.Faction) {
+				return false
+			}
+			return chainCreatureAttackPvPTail(attacker, targetOwner)
+		}
 	}
 	if s.factionTemplatesFriendly(m.Faction, tm.Faction) || s.factionTemplatesFriendly(tm.Faction, m.Faction) {
 		return false
@@ -472,8 +544,9 @@ func (s *Server) creatureTargetHostileTo(m *creatureMotion, targetGUID uint64) b
 // caster->IsValidAssistTarget(unitTarget, this) (Object.cpp:3087) for a
 // creature/pet caster. Bridged: the self arm, the both-direction
 // non-friendly refusal (with the TREAT_AS_RAID_UNIT caster exemption), the
-// PvP tail when both sides are player-controlled, and the PvC type-flags
-// arm. No-bridge: the dead and GM terms (outcome-equivalent with the
+// PvP case when both sides are player-controlled (player targets via the
+// player-path twin, creature targets via
+// playerOwnedCreatureAssistPvPBlocked), and the PvC type-flags arm. No-bridge: the dead and GM terms (outcome-equivalent with the
 // bridged CheckTarget arms), CanSeeOrDetect, UNIT_STATE_UNATTACKABLE,
 // UNIT_FLAG_NOT_SELECTABLE, the immunity flags, the caster-on-vehicle
 // exemption, and the npcbot arms. The target-side IsPvP term of the PvC arm
@@ -499,6 +572,18 @@ func (s *Server) creatureExplicitAssistPasses(m *creatureMotion, attacker *sessi
 		return true
 	}
 	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil && attacker != nil {
+		// PvP case (Object.cpp:3153-3171): a player-controlled target
+		// under a player-controlled caster takes the portable PvP terms
+		// instead of the PvC type-flags arm — a target owner dueling
+		// someone else, or FFA-flagged while the caster owner is not,
+		// refuses; the sanctuary term has no creature-side Go model
+		// (see playerOwnedCreatureAssistPvPBlocked), and an unresolvable
+		// target owner keeps the PvC arm below.
+		if tm.UnitFlags&unitFlagPlayerControlled != 0 && tm.OwnerGUID != 0 {
+			if targetOwner := s.findSessionByGUID(tm.OwnerGUID); targetOwner != nil && targetOwner.player != nil {
+				return !playerOwnedCreatureAssistPvPBlocked(attacker, targetOwner)
+			}
+		}
 		// PvC arm (Object.cpp:3172-3180): a player-controlled caster
 		// assists a creature only with the raid-unit/can-assist type
 		// flags, unless the spell ignores the immune flag.
