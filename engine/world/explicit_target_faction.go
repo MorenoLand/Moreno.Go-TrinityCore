@@ -610,7 +610,7 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 			if s.explicitOwnedCreatureAttackPasses(targetOwner, ownedFaction) {
 				return false
 			}
-		} else if !friendly && !s.explicitTargetAttackPvPBlocked(targetSess, duelHostile) {
+		} else if !friendly && !s.explicitWildCreatureAttackBlocked(tgt) && !s.explicitTargetAttackPvPBlocked(targetSess, duelHostile) {
 			return false
 		}
 	}
@@ -735,6 +735,38 @@ func (s *session) explicitOwnedCreatureAssistPasses(targetOwner *session, target
 		return reactionAlly
 	}
 	return s.sessionChainOwnedAssist3149(targetFaction, targetOwner, factionAlly)
+}
+
+// explicitWildCreatureAttackBlocked mirrors the exactly-one-affecting-player
+// arm of WorldObject::IsValidAttackTarget (Object.cpp:3036-3053) behind the
+// explicit TARGET_FLAG_UNIT_ENEMY check for a player caster against a wild
+// creature target: the else branch has no resolving player session, so the
+// both-affecting arms never fire, and an owner-unresolvable creature takes
+// the same arm since its affecting player is absent too. A contested-guard
+// target admits outright against a contested-PvP caster, and a saved caster
+// row against the target's faction decides on the at-war flag alone: not at
+// war refuses, at war and no saved row fall through to admit. The forced-rank
+// skip (GetForcedRankIfAny) stays unmodeled - no Go forced-rank model, as in
+// the creature-caster twin. Returns true when the cast must fail with
+// SPELL_FAILED_BAD_TARGETS.
+func (s *session) explicitWildCreatureAttackBlocked(tgt combatTarget) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return false
+	}
+	if s.server.creatureContestedHostile(tgt.Faction, s) {
+		return false
+	}
+	tpl, found, err := s.server.Data.FactionTemplate(tgt.Faction)
+	if err != nil || !found {
+		return false
+	}
+	if !s.server.factionCanHaveReputation(tpl.Faction) {
+		return false
+	}
+	if saved, ok := playerReputationMap(s.player.Reputations)[tpl.Faction]; ok && saved.Flags&factionFlagAtWar == 0 {
+		return true
+	}
+	return false
 }
 
 // explicitTargetAttackPvPBlocked mirrors the player-vs-player tail of
