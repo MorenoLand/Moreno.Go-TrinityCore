@@ -221,6 +221,7 @@ const (
 	spellFailedCantBeMilled              uint8  = 16    // SPELL_FAILED_CANT_BE_MILLED (SharedDefines.h:998)
 	spellFailedCantBeProspected          uint8  = 17    // SPELL_FAILED_CANT_BE_PROSPECTED (SharedDefines.h:999)
 	spellFailedCantCastOnTapped          uint8  = 18    // SPELL_FAILED_CANT_CAST_ON_TAPPED (SharedDefines.h:1000)
+	spellFailedTargetCannotBeResurrected uint8  = 186   // SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED (SharedDefines.h:1168)
 	spellFailedNeedMoreItems             uint8  = 55    // SPELL_FAILED_NEED_MORE_ITEMS (SharedDefines.h:1037)
 	spellFailedLowCastlevel              uint8  = 49    // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
 	spellFailedEquippedItem              uint8  = 28    // SPELL_FAILED_EQUIPPED_ITEM (SharedDefines.h:1010)
@@ -9803,6 +9804,44 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					return
 				}
 			}
+			// Visibility (SpellInfo.cpp:1641-1642): the first CheckTarget
+			// arm, ahead of in-combat and tapped in C++ order. At
+			// completion CheckCast(false) passes implicit=false for a
+			// player caster (Spell.cpp:5372), so the stealth exemption
+			// never applies — a target that stealths mid-bar fails here,
+			// as does one the gauntlet passed while already hidden (the
+			// client-path gauntlet never checks this arm). Reuses the
+			// triggered-path detect core verbatim (canDetectStealthOf +
+			// canDetectInvisibilityOfPlayer): self targets pass, GM
+			// casters pass inside the helpers, creature targets pass
+			// (motions carry no stealth/invisibility aura state), and
+			// the sight-range, ghost team/group, vehicle-accessory and
+			// despawn legs of CanSeeOrDetect stay out, as on the
+			// triggered path. Spells carrying
+			// SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
+			if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && target.UnitGUID != s.playerGUID && s.server != nil {
+				if ts := s.server.findSessionByGUID(target.UnitGUID); ts != nil && ts.player != nil {
+					if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+						s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+						s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target not visible")
+						return
+					}
+				}
+			}
+			// In-combat (SpellInfo.cpp:1650-1651): a target that enters
+			// combat mid-bar fails with
+			// SPELL_FAILED_TARGET_AFFECTING_COMBAT, as at the gauntlet;
+			// the UNIT_FLAG_PET_IN_COMBAT half stays unbridged, as
+			// there. Unlike tapped, this arm sits outside the caster
+			// != unitTarget block, so self targets judge the caster's
+			// own combat state via unitTargetInCombat.
+			if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.unitTargetInCombat(target.UnitGUID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAffectingCombat), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target in combat")
+				return
+			}
 			// Tapped (SpellInfo.cpp:1667-1674): inside the caster !=
 			// unitTarget / player-caster block, so self targets skip it
 			// and the caster here is always the session player. A live
@@ -9878,6 +9917,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target creature type", "failReason", failReason)
 				return
 			}
+			// GM/invisibility (SpellInfo.cpp:1736-1743): a player target
+			// whose GM mode toggles on, or whose GM-invisibility flag
+			// sets, mid-bar fails with SPELL_FAILED_BM_OR_INVISGOD.
+			// The caster here is always the session player, so the
+			// GetAffectingPlayer leg always holds and the arm applies
+			// regardless of the spell's positivity; self targets are
+			// exempt, as in C++. Reuses gmAttackTargetBlocked verbatim
+			// (the triggered-path twin); creature targets never match.
+			if target.UnitGUID != s.playerGUID && s.server != nil && s.server.gmAttackTargetBlocked(target.UnitGUID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBmOrInvisGod), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target GM or GM-invisible")
+				return
+			}
 			// In-flight (SpellInfo.cpp:1745-1747): a target that boards
 			// a taxi mid-bar fails with SPELL_FAILED_BAD_TARGETS unless
 			// the spell carries SPELL_ATTR0_CU_ALLOW_INFLIGHT_TARGET.
@@ -9921,6 +9974,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
 				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "excluded target aura gained")
+				return
+			}
+			// Prevent-resurrection (SpellInfo.cpp:1779-1782): the last
+			// CheckTarget arm, after the aura arms. A resurrect-effect
+			// spell (SELF_RESURRECT, RESURRECT, RESURRECT_NEW) whose
+			// target gains a SPELL_AURA_PREVENT_RESURRECTION aura
+			// mid-bar fails with
+			// SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED. No self
+			// exemption in C++ — a self-resurrect caster carrying the
+			// aura fails too. Reuses the triggered-path twin verbatim;
+			// unresolvable targets pass, as there.
+			if spellHasResurrectEffect(spell) && s.targetHasPreventResurrectionAura(ctx, target.UnitGUID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetCannotBeResurrected), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target cannot be resurrected")
 				return
 			}
 			// Behind/facing (Spell::CheckCast, Spell.cpp:5380-5387): the
