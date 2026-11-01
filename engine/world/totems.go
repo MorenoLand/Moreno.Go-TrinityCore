@@ -1182,7 +1182,7 @@ func (s *Server) expireSessionNoSlotTotem(mapID, instanceID uint32, guid uint64)
 	destroyBuf := protocol.NewBuffer(9)
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, tx, ty, tz, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, tx, ty, tz, motion.PhaseMask)
 }
 
 func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *activeTotem) {

@@ -38897,7 +38897,7 @@ func (ts *session) sendPeriodicTickImmune(aura *activeAura) {
 		return
 	}
 	if m := ts.server.findCreatureMotion(ts.player.Map, ts.player.InstanceID, aura.CasterGUID); m != nil {
-		ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		ts.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 	}
 }
 
@@ -40929,7 +40929,7 @@ func (s *session) sendCreaturePeriodicTickImmune(key creatureAuraKey, aura *acti
 		return
 	}
 	if m := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); m != nil {
-		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 	}
 }
 
@@ -40973,6 +40973,27 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			s.server.clearCreatureAuras(key)
 		}
 		return false
+	}
+	// The periodic-log fan-out keys on the aura owner's (target creature's)
+	// motion phase, resolved once here: SendMessageToSet on the owner
+	// (Unit::SendPeriodicAuraLog, Unit.cpp:5368). When the motion is gone
+	// the old phase-blind fan-out is kept rather than dropping recipients.
+	var targetPhase uint32
+	targetPhaseKnown := false
+	if s.server != nil {
+		if tm := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); tm != nil {
+			targetPhase, targetPhaseKnown = tm.PhaseMask, true
+		}
+	}
+	sendPeriodicLog := func(pkt []byte) {
+		if s.server == nil {
+			return
+		}
+		if targetPhaseKnown {
+			s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), pkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, targetPhase)
+			return
+		}
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), pkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
 	}
 
 	switch aura.AuraType {
@@ -41262,7 +41283,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SendMessageToSet on the aura owner — the target creature's
 		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
+			sendPeriodicLog(logPkt)
 		}
 
 		// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9): fires before damage
@@ -41484,7 +41505,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SendMessageToSet on the aura owner — the target creature's
 		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
+			sendPeriodicLog(logPkt)
 			s.server.motionMu.Lock()
 			motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, aura.TargetGUID)
 			if motion != nil {
@@ -41726,7 +41747,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SendMessageToSet on the aura owner — the target creature's
 		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), cEnergizeLog, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
+			sendPeriodicLog(cEnergizeLog)
 		}
 		// SpellAuraEffects.cpp:5576-5577 — half the actual gain as threat,
 		// ignoring modifiers. Creature healers carry no
@@ -41976,7 +41997,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SendMessageToSet on the aura owner — the target creature's
 		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
+			sendPeriodicLog(logPkt)
 		}
 		// Eluna CREATURE_EVENT_ON_DAMAGE_TAKEN (9), mirroring the damage tick.
 		if s.server != nil {
@@ -42175,7 +42196,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SendMessageToSet on the aura owner — the target creature's
 		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
+			sendPeriodicLog(logPkt)
 		}
 		s.applyPeriodicManaLeechGain(ctx, leechCaster, aura, tickSpell, tickKnown, powerType, drained)
 		return true
@@ -42247,7 +42268,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// SendMessageToSet on the aura owner — the target creature's
 		// visibility set; the creature has no session leg.
 		if s.server != nil {
-			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
+			sendPeriodicLog(logPkt21)
 		}
 		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
 		// distributeHealingThreat already folds the 0.5 in. The obs-mod-power
@@ -42606,6 +42627,7 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 	}
 	casterMap, casterInst := motion.Map, motion.InstanceID
 	casterX, casterY, casterZ := motion.X, motion.Y, motion.Z
+	casterPhase := motion.PhaseMask
 	casterHealth := motion.Health
 	overkill := uint32(0)
 	if funnelDamage >= casterHealth {
@@ -42635,7 +42657,7 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 	srv.motionMu.Unlock()
 	// SpellAuraEffects.cpp:5423: the log rides the caster's SendMessageToSet
 	// — the caster creature's visibility set, not the whole instance.
-	srv.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, casterMap, casterInst, casterX, casterY, casterZ, nil)
+	srv.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, casterMap, casterInst, casterX, casterY, casterZ, casterPhase)
 	if !casterDead {
 		srv.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, map[int]uint32{unitFieldHealth: newHealth})
 		return

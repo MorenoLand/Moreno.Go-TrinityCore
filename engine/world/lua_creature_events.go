@@ -695,7 +695,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
 		stopPkt := buildAttackStop(guid, victim, false)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		return []any{true}, nil
 	}
 	// SetNoCallAssistance is Creature::SetNoCallAssistance
@@ -1203,7 +1203,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.AlreadyCallAssistance = false
 		s.motionMu.Unlock()
 		stopPkt := buildAttackStop(guid, target, false)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		s.clearCreatureVisualTarget(motion)
 		return nil, nil
 	}
@@ -1259,7 +1259,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		if victim != 0 {
 			stopPkt := buildAttackStop(guid, victim, false)
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		}
 		s.clearCreatureVisualTarget(motion)
 		s.removeCreatureAttackers(mapID, instanceID, guid)
@@ -1325,7 +1325,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		destroyBuf := protocol.NewBuffer(9)
 		destroyBuf.WriteU64(guid)
 		destroyBuf.WriteU8(0)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, m.PhaseMask)
 		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
 		if maxHealth == 0 {
 			maxHealth = 1
@@ -1934,7 +1934,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		pkt := protocol.NewBuffer(12)
 		pkt.WriteU32(emote)
 		pkt.WriteU64(motion.GUID)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		return nil, nil
 	}
 	// GetAITargets is CreatureMethods::GetAITargets

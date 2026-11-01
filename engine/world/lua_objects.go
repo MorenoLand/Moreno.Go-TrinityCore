@@ -101,8 +101,8 @@ func (srv *Server) luaDeliverSound(self *session, sourceGUID uint64, opcode uint
 		srv.broadcastToVisibleSetFromSession(self, opcode, payload)
 		return nil
 	}
-	if mapID, instanceID, x, y, z, ok := srv.luaSoundSourcePosition(sourceGUID); ok {
-		srv.broadcastToVisibleSet(opcode, payload, mapID, instanceID, x, y, z, nil)
+	if mapID, instanceID, x, y, z, phase, ok := srv.luaSoundSourcePosition(sourceGUID); ok {
+		srv.broadcastToVisibleSetFromPhase(opcode, payload, mapID, instanceID, x, y, z, phase)
 		return nil
 	}
 	srv.broadcastToNearby(opcode, payload, nil)
@@ -110,38 +110,38 @@ func (srv *Server) luaDeliverSound(self *session, sourceGUID uint64, opcode uint
 }
 
 // luaSoundSourcePosition resolves a nil-session sound source (creature or
-// gameobject) to its live position for the visibility-set fan-out: creature
+// gameobject) to its live position and phase for the visibility-set fan-out: creature
 // motions are scanned across instances (the handler surface carries no map),
 // gameobject states across both dynamic maps. Static gameobjects live in no
 // runtime map, so they report not-found and the caller keeps the map-wide
 // fan-out rather than dropping the sound.
-func (srv *Server) luaSoundSourcePosition(sourceGUID uint64) (mapID, instanceID uint32, x, y, z float32, ok bool) {
+func (srv *Server) luaSoundSourcePosition(sourceGUID uint64) (mapID, instanceID uint32, x, y, z float32, phase uint32, ok bool) {
 	if srv == nil || sourceGUID == 0 {
-		return 0, 0, 0, 0, 0, false
+		return 0, 0, 0, 0, 0, 0, false
 	}
 	srv.motionMu.Lock()
 	for scope := range srv.instanceCreatureMotion {
 		if m := srv.findCreatureMotionLocked(scope.MapID, scope.InstanceID, sourceGUID); m != nil {
-			mapID, instanceID, x, y, z = m.Map, m.InstanceID, m.X, m.Y, m.Z
+			mapID, instanceID, x, y, z, phase = m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask
 			ok = true
 			break
 		}
 	}
 	srv.motionMu.Unlock()
 	if ok {
-		return mapID, instanceID, x, y, z, true
+		return mapID, instanceID, x, y, z, phase, true
 	}
 	srv.objectsMu.RLock()
 	defer srv.objectsMu.RUnlock()
 	if st := srv.dynamicGameObjects[sourceGUID]; st != nil {
-		return st.Map, st.InstanceID, st.X, st.Y, st.Z, true
+		return st.Map, st.InstanceID, st.X, st.Y, st.Z, st.PhaseMask, true
 	}
 	for _, byGUID := range srv.instanceGameObjects {
 		if st := byGUID[sourceGUID]; st != nil {
-			return st.Map, st.InstanceID, st.X, st.Y, st.Z, true
+			return st.Map, st.InstanceID, st.X, st.Y, st.Z, st.PhaseMask, true
 		}
 	}
-	return 0, 0, 0, 0, 0, false
+	return 0, 0, 0, 0, 0, 0, false
 }
 
 // luaWorldObjectSoundMethods registers the three Eluna WorldObject sound
@@ -454,7 +454,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		// HandleEmoteCommand fans out via SendMessageToSet (Unit.cpp),
 		// i.e. the visibility set around the creature, not the whole map.
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
-			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+			s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		} else {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_EMOTE), pkt.Bytes(), nil)
 		}

@@ -750,6 +750,7 @@ func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, target
 	entries := motion.ThreatMgr.SortedEntries()
 	mapID, instanceID := motion.Map, motion.InstanceID
 	mx, my, mz, mguid := motion.X, motion.Y, motion.Z, motion.GUID
+	mphase := motion.PhaseMask
 	s.motionMu.Unlock()
 	if switched {
 		s.broadcastHighestThreatUpdateInInstance(mapID, instanceID, mx, my, mz, mguid, newVictim, entries)
@@ -757,7 +758,7 @@ func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, target
 	if !wasInCombat {
 		s.broadcastAIReactionInInstance(mapID, instanceID, mguid, 2)
 		startPkt := buildAttackStart(mguid, caster.GUID)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, instanceID, mx, my, mz, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, instanceID, mx, my, mz, mphase)
 	}
 }
 

@@ -802,7 +802,7 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	destroyBuf := protocol.NewBuffer(9)
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, tx, ty, tz, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, tx, ty, tz, motion.PhaseMask)
 	if s.CharactersStore != nil && s.CharactersStore.DB != nil && petID != 0 {
 		cdb := s.CharactersStore.DB
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet WHERE id = ? AND owner = ?", petID, ownerGUID)
@@ -1115,12 +1115,12 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 		if targetFound && targetHealth == 0 && owner != nil {
 			if next := s.petSelectNextTarget(motion, owner.GUID); next != 0 {
 				stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
-				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				motion.TargetGUID = next
 				motion.InCombat = true
 				motion.Moving = true
 				startPkt := buildAttackStart(motion.GUID, next)
-				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				return
 			}
 		}
@@ -1138,7 +1138,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 			motion.PetCommand = PetCommandFollow
 		}
 		stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		return
 	}
 
@@ -1172,7 +1172,7 @@ func (s *Server) petCombatPursuitAndAttack(ctx context.Context, motion *creature
 				motion.PetCommand = PetCommandFollow
 			}
 			stopPkt := buildAttackStop(motion.GUID, targetGUID, false)
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 			return
 		}
 	}
@@ -1628,7 +1628,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 	if isTargetPlayer && targetSess != nil {
 		// Unit::SendAttackStateUpdate: SendMessageToSet on the attacker — the
 		// pet's visibility set; the pet has no session leg.
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 		// after the attacker-state update (sent pre-DealDamage in C++).
 		// shieldGateDamage keeps the pre-god value for the damage-shield
@@ -1736,7 +1736,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		}
 		// Unit::SendAttackStateUpdate: the pet attacker's visibility set, not
 		// the whole instance.
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		var killedTarget combatTarget
 		var killed bool
 		var killX, killY, killZ float32
