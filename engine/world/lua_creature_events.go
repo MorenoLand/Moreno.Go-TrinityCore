@@ -1803,6 +1803,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		mapID, instanceID, ownerGUID := motion.Map, motion.InstanceID, motion.GUID
+		phaseMask := motion.PhaseMask
 		sx, sy, sz, so := motion.X, motion.Y, motion.Z, motion.Orientation
 		reach := float64(motion.CombatReach)
 		s.motionMu.Unlock()
@@ -1822,7 +1823,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if size <= 0 {
 			size = 1.0
 		}
-		dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: ownerGUID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: o, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+		dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: ownerGUID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: o, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, PhaseMask: phaseMask, IsRuntimeSpawn: true}
 		if respawnSecs > 0 {
 			dyn.DespawnTimer = time.AfterFunc(time.Duration(respawnSecs)*time.Second, func() {
 				s.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)

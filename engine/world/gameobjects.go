@@ -159,15 +159,24 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		LEFT JOIN game_event_gameobject AS geg ON geg.guid = g.guid
 		WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
 		AND (g.spawnMask = 0 OR (g.spawnMask & 1) <> 0)
-		AND (? OR g.phaseMask = 0 OR (g.phaseMask & 1) <> 0)
+		AND (? OR g.phaseMask = 0 OR (g.phaseMask & ?) <> 0)
 		AND (geg.eventEntry IS NULL OR geg.eventEntry = 0)
 		ORDER BY g.guid`
 	isGM := state.ExtraFlags&playerExtraGMOn != 0 || state.PlayerFlags&playerFlagGM != 0
+	// InSamePhase leg (Object.h:324): DB GO rows were SQL-gated to
+	// phase 1 only, while the creature twin already gates on the
+	// observer's phase; a phased observer missed phased GOs and a
+	// phase-1-only observer received phased-out ones. A nil observer
+	// keeps the old phase-1 gate.
+	observerPhase := uint32(1)
+	if observer != nil {
+		observerPhase = observer.currentPlayerPhaseMask()
+	}
 	// Event gameobjects spawn only while their event runs.
 	goArgs := make([]any, 0, 4)
 	goEventClause := gameEventSpawnClause("geg.eventEntry", s.activeEventList(ctx), &goArgs)
 	query = strings.Replace(query, "AND (geg.eventEntry IS NULL OR geg.eventEntry = 0)", "AND "+goEventClause, 1)
-	queryArgs := append([]any{state.Map, float64(state.X) - distance, float64(state.X) + distance, float64(state.Y) - distance, float64(state.Y) + distance, isGM}, goArgs...)
+	queryArgs := append([]any{state.Map, float64(state.X) - distance, float64(state.X) + distance, float64(state.Y) - distance, float64(state.Y) + distance, isGM, observerPhase}, goArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		fallbackQuery := `SELECT g.guid, g.id, g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.rotation0, g.rotation1, g.rotation2, g.rotation3, g.state, g.animprogress, t.type, t.displayId, t.size, COALESCE(ta.flags, 0), COALESCE(ta.faction, 0), COALESCE(ta.artkit0, 0), COALESCE(ga.parent_rotation0, 0), COALESCE(ga.parent_rotation1, 0), COALESCE(ga.parent_rotation2, 0), COALESCE(ga.parent_rotation3, 1)
@@ -177,9 +186,9 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 			LEFT JOIN gameobject_addon AS ga ON ga.guid = g.guid
 			WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
 			AND (g.spawnMask = 0 OR (g.spawnMask & 1) <> 0)
-			AND (? OR g.phaseMask = 0 OR (g.phaseMask & 1) <> 0)
+			AND (? OR g.phaseMask = 0 OR (g.phaseMask & ?) <> 0)
 			ORDER BY g.guid`
-		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, observerPhase)
 		if err != nil {
 			if missingTable(err) {
 				return nil, 0, nil
@@ -278,7 +287,22 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 			Size:           dyn.Size,
 			Flags:          dyn.Flags,
 			Faction:        dyn.Faction,
+			PhaseMask:      dyn.PhaseMask,
 			ParentRotation: [4]float32{0, 0, 0, 1},
+		}
+		// Grid-stream phase leg (Object.cpp:1659-1662): runtime GOs
+		// reach observers through the same visibility path as DB rows,
+		// but this loop rebuilt the spawn without dyn.PhaseMask and
+		// gated nothing. A nil observer fails open, as on the
+		// passenger loop above.
+		if observer != nil {
+			dynPhase := dyn.PhaseMask
+			if dynPhase == 0 {
+				dynPhase = 1
+			}
+			if dynPhase&observer.currentPlayerPhaseMask() == 0 {
+				continue
+			}
 		}
 		updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 		count++
@@ -1772,7 +1796,7 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 		}
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
-	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spellID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateActive, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spellID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateActive, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, PhaseMask: s.currentPlayerPhaseMask(), IsRuntimeSpawn: true}
 	// SpellEffects.cpp:4982-4999: the bobber's lifetime is the spell
 	// duration shortened by a lastSec roll (urand(0,2) -> {3,7,13}s), and
 	// the bite lands FISHING_BOBBER_READY_TIME (5s, GameObject.h:77) before
@@ -1910,7 +1934,7 @@ func (s *session) handleEffectTransmitted(ctx context.Context, target protocol.S
 	if size <= 0 {
 		size = 1.0
 	}
-	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spell.ID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, SpellID: spell.ID, Map: s.player.Map, InstanceID: s.player.InstanceID, X: x, Y: y, Z: z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, PhaseMask: s.currentPlayerPhaseMask(), IsRuntimeSpawn: true}
 	if tmpl.goType == GameObjectTypeRitual {
 		// SpellEffects.cpp:5003-5005 (GAMEOBJECT_TYPE_SUMMONING_RITUAL, player
 		// caster only): the caster counts as the first unique user from summon
@@ -1977,7 +2001,7 @@ func (s *Server) creatureEffectTransmitted(ctx context.Context, m *creatureMotio
 	if size <= 0 {
 		size = 1.0
 	}
-	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: m.GUID, SpellID: spell.ID, Map: m.Map, InstanceID: m.InstanceID, X: x, Y: y, Z: z, Orientation: m.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: m.GUID, SpellID: spell.ID, Map: m.Map, InstanceID: m.InstanceID, X: x, Y: y, Z: z, Orientation: m.Orientation, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, PhaseMask: m.PhaseMask, IsRuntimeSpawn: true}
 	// SpellEffects.cpp:5019: the object's respawn time is the spell duration;
 	// a runtime spawn with a positive duration despawns when it elapses.
 	if spell.DurationIndex > 0 && s.Data != nil {
