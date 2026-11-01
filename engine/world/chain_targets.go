@@ -796,6 +796,34 @@ func (s *session) chainCreatureAssistAlly(spell wotlk.Spell, unitFlags, typeFlag
 	return factionAlly, false
 }
 
+// chainCreatureAttackHostile mirrors the player-owned arms of
+// WorldObject::IsValidAttackTarget (Spell.cpp:8336) for a chain jump pick:
+// the "can't attack friendly targets" refusal (Object.cpp:3028-3030) runs
+// GetReactionTo, whose player-controlled arms (Object.cpp:2744-2762) make
+// a same-owner or same-group creature friendly, a duel opponent's creature
+// hostile (confirmed by the duel arm, Object.cpp:3062), and a both-FFA
+// creature hostile, all ahead of the faction-template gate. A
+// player-controlled candidate with no resolving owner keeps the faction
+// gate — the flag, not resolvability, selects the PvP case, like the
+// assist twin. The sanctuary arm (Object.cpp:3065) and the PvP-flag tail
+// (Object.cpp:3073-3078, target-IsPvP / both-FFA / dead UNK1 term) stay
+// unmodeled residuals, like the area-enemy reaction gates: a motion
+// candidate carries no sanctuary byte, and the sweep convention is
+// reaction-only.
+func chainCreatureAttackHostile(casterSess *session, candOwnerGUID uint64, unitFlags uint32, factionHostile bool) bool {
+	if casterSess == nil || unitFlags&unitFlagPlayerControlled == 0 || candOwnerGUID == 0 {
+		return factionHostile
+	}
+	candOwnerSess := casterSess.server.findSessionByGUID(candOwnerGUID)
+	if candOwnerSess == nil {
+		return factionHostile
+	}
+	if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterSess, candOwnerSess); decided {
+		return !reactionAlly
+	}
+	return factionHostile
+}
+
 // chainCandidates collects units around the primary target within radius that
 // pass the chain spell's target check (WorldObjectSpellAreaTargetCheck,
 // Spell.cpp:8409, via WorldObjectSpellTargetCheck::operator(), Spell.cpp:8316).
@@ -942,6 +970,9 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		candAlly, candBlocked := allyOf(motion.Faction), false
 		if checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid {
 			candAlly, candBlocked = s.chainCreatureAssistAlly(spell, motion.UnitFlags, motion.TypeFlags, motionOwner, allyOf(motion.Faction))
+		}
+		if checkType == targetCheckEnemy {
+			candAlly = !chainCreatureAttackHostile(s, motionOwner, motion.UnitFlags, !candAlly)
 		}
 		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, candAlly, candBlocked, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
 	}
@@ -1139,9 +1170,9 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 // resolve through the
 // faction-template reaction (creatureFactionHostileTo). With a
 // player-owned caster, player candidates (and player-owned creature
-// candidates on ALLY/PARTY/RAID) use the affecting-player reaction arms
-// (duel/group/FFA) ahead of the faction gate. PARTY/RAID ride the
-// motion-rooted referer scope.
+// candidates on ALLY/PARTY/RAID and on ENEMY) use the affecting-player
+// reaction arms (duel/group/FFA) ahead of the faction gate. PARTY/RAID
+// ride the motion-rooted referer scope.
 func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion, spell wotlk.Spell, primary combatTarget, radius float32, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
@@ -1265,6 +1296,9 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 		}
 		hostile := s.creatureFactionHostileTo(m.Faction, motion.Faction)
 		candAlly, candBlocked := !hostile, false
+		if casterOwner != nil && checkType == targetCheckEnemy {
+			hostile = chainCreatureAttackHostile(casterOwner, motionOwner, motion.UnitFlags, hostile)
+		}
 		if casterOwner != nil && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
 			if candOwnerSess := s.findSessionByGUID(motionOwner); candOwnerSess != nil {
 				if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterOwner, candOwnerSess); decided {
