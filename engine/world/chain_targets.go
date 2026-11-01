@@ -933,6 +933,87 @@ func (s *session) sessionChainOwnedAssist3149(candFaction uint32, ownerSess *ses
 	return !(forwardHostile && reverseHostile)
 }
 
+// sessionChainPlayerAssist3149 mirrors the non-friendly gate of
+// WorldObject::IsValidAssistTarget (Object.cpp:3149) for a player caster's
+// chain jump pick against an undecided player candidate (no self, duel,
+// group, or both-FFA arm fired): it refuses only when BOTH reactions are
+// below neutral, replacing the alliance-equality proxy. Both sides are
+// player-controlled, so the player-controlled branch of GetReactionTo
+// (Object.cpp:2744-2785) fires on both directions, with each side's
+// effective faction template (a SPELL_AURA_MOD_FACTION aura rewrites it,
+// aura_unit.go) as that side's template. Forward (caster -> candidate):
+// when the candidate faction can have reputation the binary at-war arm
+// decides — hostile on contested-guard plus caster contested-PvP, or
+// caster at war with the candidate faction, friendly otherwise (a missing
+// row is not at war, ReputationMgr.cpp:59-65; standing alone never
+// refuses); when it cannot, the candidate's saved rank against the
+// caster faction, clamped down to neutral at war (GetFactionReactionTo,
+// Object.cpp:2817-2823), decides, with the contested term on the caster
+// template plus candidate contested-PvP ahead of it. Reverse mirrors it
+// with the roles swapped. For ordinary players both readings coincide
+// with alliance equality (same-team pairs pass on a friendly arm,
+// cross-team pairs refuse on both at-war arms, since a hostile rank
+// forces at war on load, ReputationMgr.cpp:570-571); the gate moves only
+// forced-faction players, contested-guard forced templates, and the
+// pathological both-at-war same-team pair. Forced ranks and both sides'
+// IGNORE_REPUTATION flags have no Go model here, as in the creature
+// twins; data gaps fall back to the passed-in faction gate. The ENEMY
+// arm does not use this helper: IsValidAttackTarget is not the 3149
+// gate, and its PvP-flag tail (Object.cpp:3073-3078) stays unmodeled.
+func (s *session) sessionChainPlayerAssist3149(targetSess *session, factionAlly bool) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil || targetSess == nil || targetSess.player == nil {
+		return factionAlly
+	}
+	casterTplID := s.effectiveFactionTemplate(s.player.Race)
+	targetTplID := targetSess.effectiveFactionTemplate(targetSess.player.Race)
+	casterTpl, casterFound, err := s.server.Data.FactionTemplate(casterTplID)
+	if err != nil || !casterFound {
+		return factionAlly
+	}
+	targetTpl, targetFound, err := s.server.Data.FactionTemplate(targetTplID)
+	if err != nil || !targetFound {
+		return factionAlly
+	}
+	casterReps := playerReputationMap(s.player.Reputations)
+	targetReps := playerReputationMap(targetSess.player.Reputations)
+	atWar := func(reps map[uint32]playerReputation, factionID uint32) bool {
+		saved, ok := reps[factionID]
+		return ok && saved.Flags&factionFlagAtWar != 0
+	}
+	clampedRankHostile := func(reps map[uint32]playerReputation, factionID uint32) (bool, bool) {
+		saved, ok := reps[factionID]
+		if !ok {
+			return false, false
+		}
+		rank := reputationRank(int64(totalReputationStanding(saved)))
+		if saved.Flags&factionFlagAtWar != 0 && rank > 3 {
+			rank = 3
+		}
+		return rank < 3, true
+	}
+	forwardHostile := commonFactionRankHostile(casterTpl, targetTpl)
+	reverseHostile := commonFactionRankHostile(targetTpl, casterTpl)
+	if s.server.factionCanHaveReputation(targetTpl.Faction) {
+		forwardHostile = s.server.creatureContestedHostile(targetTplID, s) || atWar(casterReps, targetTpl.Faction)
+	} else if s.server.factionCanHaveReputation(casterTpl.Faction) {
+		if s.server.creatureContestedHostile(casterTplID, targetSess) {
+			forwardHostile = true
+		} else if hostile, ok := clampedRankHostile(targetReps, casterTpl.Faction); ok {
+			forwardHostile = hostile
+		}
+	}
+	if s.server.factionCanHaveReputation(casterTpl.Faction) {
+		reverseHostile = s.server.creatureContestedHostile(casterTplID, targetSess) || atWar(targetReps, casterTpl.Faction)
+	} else if s.server.factionCanHaveReputation(targetTpl.Faction) {
+		if s.server.creatureContestedHostile(targetTplID, s) {
+			reverseHostile = true
+		} else if hostile, ok := clampedRankHostile(casterReps, targetTpl.Faction); ok {
+			reverseHostile = hostile
+		}
+	}
+	return !(forwardHostile && reverseHostile)
+}
+
 // motionChainOwnedAssist3149 is the creature-caster twin of
 // sessionChainOwnedAssist3149: the non-friendly gate of
 // WorldObject::IsValidAssistTarget (Object.cpp:3149) for a player-owned
@@ -1238,24 +1319,36 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		}
 		// Player-vs-player assist reaction (WorldObject::GetReactionTo,
 		// Object.cpp:2744-2762, ahead of the faction-template tail):
-		// a duel opponent in progress is hostile even same-faction,
+		// self is friendly ahead of every arm (Object.cpp:2711), a
+		// duel opponent in progress is hostile even same-faction,
 		// a same-group member is friendly even cross-faction (the
 		// IsInRaidWith arm, Player.cpp:2543, exists so
 		// AllowTwoSide.Interaction.Group groups can assist), and two
 		// FFA-flagged players are hostile even same-faction (the
 		// group arm precedes the FFA arm, so a same-group FFA pair
-		// stays friendly). Alliance equality alone misses the
-		// cross-faction group case and over-admits duel/FFA pairs.
+		// stays friendly). An undecided ALLY/PARTY/RAID candidate
+		// takes the both-directions 3149 gate
+		// (sessionChainPlayerAssist3149); the ENEMY arm keeps the
+		// decided/team verdict as its attackable proxy, as before.
 		sameGroup := s.groupID != 0 && s.groupID == targetSession.groupID
 		duelOpponent := s.duelPartner != 0 && s.duelPartner == targetSession.playerGUID && s.player.DuelTeam != 0 && targetSession.player.DuelTeam != 0
 		bothFFA := s.player.PVPFlags&pvpFlagFFA != 0 && targetSession.player.PVPFlags&pvpFlagFFA != 0
 		playerAlly := false
+		decided := false
 		switch {
+		case targetSession == s:
+			playerAlly, decided = true, true
 		case duelOpponent:
+			decided = true
 		case sameGroup:
-			playerAlly = true
+			playerAlly, decided = true, true
+		case bothFFA:
+			decided = true
 		case targetSession.playerAlliance() == s.playerAlliance():
-			playerAlly = !bothFFA
+			playerAlly = true
+		}
+		if !decided && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
+			playerAlly = s.sessionChainPlayerAssist3149(targetSession, playerAlly)
 		}
 		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, playerAlly, s.explicitTargetAssistPvPBlocked(targetSession), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
