@@ -1593,6 +1593,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		newlyTapped := false
 		tappedFlags := uint32(0)
 		var switchStart pendingAttackStart
+		var switchHighest pendingHighestThreatUpdate
 		if motion != nil {
 			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fired above
 			// on the mutable damage ahead of the tap/health/threat/rage
@@ -1648,7 +1649,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+					switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 					if wasInCombat && !passive {
 						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
 					}
@@ -1656,6 +1657,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 		}
 		s.server.motionMu.Unlock()
+		s.server.broadcastPendingHighestThreatUpdates(switchHighest)
 		s.server.broadcastPendingAttackStarts(switchStart)
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
@@ -2414,6 +2416,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		newlyTapped := false
 		tappedFlags := uint32(0)
 		var switchStart pendingAttackStart
+		var switchHighest pendingHighestThreatUpdate
 		if motion != nil {
 			// Unit::DealDamage (Unit.cpp:701-704): the AI hooks fired above
 			// on the mutable damage ahead of the tap/health/threat/rage
@@ -2464,7 +2467,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+					switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 					if wasInCombat && !passive {
 						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
 					}
@@ -2472,6 +2475,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			}
 		}
 		s.server.motionMu.Unlock()
+		s.server.broadcastPendingHighestThreatUpdates(switchHighest)
 		s.server.broadcastPendingAttackStarts(switchStart)
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{

@@ -612,6 +612,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 	// step-1 gate (ThreatManager.cpp:311-317) suppresses both threat and
 	// engagement for gated spells.
 	var switchStart pendingAttackStart
+	var switchHighest pendingHighestThreatUpdate
 	if m.ThreatMgr.OwnerCanHaveThreatList() {
 		threat := float32(damage)
 		step1Gate := false
@@ -625,7 +626,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			if switched && newVictim != m.TargetGUID {
 				m.TargetGUID = newVictim
 				entries := m.ThreatMgr.SortedEntries()
-				s.broadcastHighestThreatUpdateInInstance(key.Map, key.InstanceID, m.X, m.Y, m.Z, key.GUID, newVictim, entries, m.PhaseMask)
+				switchHighest = pendingHighestThreatUpdate{creature: key.GUID, highest: newVictim, mapID: key.Map, instanceID: key.InstanceID, x: m.X, y: m.Y, z: m.Z, list: entries, phase: m.PhaseMask}
 				if !passive {
 					switchStart = pendingAttackStart{creature: key.GUID, victim: newVictim, mapID: key.Map, instanceID: key.InstanceID, x: m.X, y: m.Y, z: m.Z, phase: m.PhaseMask}
 				}
@@ -633,6 +634,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		}
 	}
 	s.motionMu.Unlock()
+	s.broadcastPendingHighestThreatUpdates(switchHighest)
 	s.broadcastPendingAttackStarts(switchStart)
 	// Unit::DealDamage (Unit.cpp:897-898): the DIRECT_DAMAGE strip runs after
 	// the health leg; the breakable-CC drain rides the taken proc pass.

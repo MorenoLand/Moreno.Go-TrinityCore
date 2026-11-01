@@ -992,6 +992,30 @@ func (s *Server) broadcastPendingAttackStarts(pending ...pendingAttackStart) {
 	}
 }
 
+// pendingHighestThreatUpdate is a victim-switch SMSG_HIGHEST_THREAT_UPDATE
+// captured under motionMu: like pendingAttackStart, the visible-set
+// broadcast reads motionMu through its seer lookup, so it must run after
+// the lock drops. Zero creature entries are skipped.
+type pendingHighestThreatUpdate struct {
+	creature, highest uint64
+	mapID, instanceID uint32
+	x, y, z           float32
+	list              []protocol.ThreatEntry
+	phase             uint32
+}
+
+func (s *Server) broadcastPendingHighestThreatUpdates(pending ...pendingHighestThreatUpdate) {
+	if s == nil {
+		return
+	}
+	for _, p := range pending {
+		if p.creature == 0 {
+			continue
+		}
+		s.broadcastHighestThreatUpdateInInstance(p.mapID, p.instanceID, p.x, p.y, p.z, p.creature, p.highest, p.list, p.phase)
+	}
+}
+
 // sumThreatTempModifier sums the SPELL_AURA_MOD_TOTAL_THREAT (aura 103)
 // effect amounts over a unit's active auras — the mod computed by
 // ThreatManager::UpdateMyTempModifiers (ThreatManager.cpp:699-704). The
@@ -1436,7 +1460,13 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 		s.castSpellDirect(ctx, 67485, targetGUID)
 	}
 
+	var switchStart pendingAttackStart
+	var switchHighest pendingHighestThreatUpdate
 	s.server.motionMu.Lock()
+	defer func() {
+		s.server.broadcastPendingHighestThreatUpdates(switchHighest)
+		s.server.broadcastPendingAttackStarts(switchStart)
+	}()
 	defer s.server.motionMu.Unlock()
 
 	motion = s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
@@ -1463,9 +1493,9 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	if switched || newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntries()
-		s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+		switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 		if !isCreaturePassive(motion) {
-			s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, newVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+			switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
 		}
 	}
 	motion.InCombat = true
@@ -1832,10 +1862,14 @@ func (s *session) flagPlayerAssistContestedPvP(ctx context.Context, targetGUID u
 func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, instanceID uint32, healerX, healerY, healerZ, healerReach float32, healerGUID, targetGUID uint64, totalThreat float32) {
 	s.motionMu.Lock()
 	var pending []pendingAttackStart
+	var pendingHighest []pendingHighestThreatUpdate
 	// Defers run LIFO, so this flush (registered first) runs after the
 	// unlock below: the visible-set broadcast reads motionMu through
 	// its seer lookup and must not run under the lock.
-	defer func() { s.broadcastPendingAttackStarts(pending...) }()
+	defer func() {
+		s.broadcastPendingHighestThreatUpdates(pendingHighest...)
+		s.broadcastPendingAttackStarts(pending...)
+	}()
 	defer s.motionMu.Unlock()
 
 	var engaged, controlled []*creatureMotion
@@ -1905,7 +1939,7 @@ func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, insta
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
 			entries := m.ThreatMgr.SortedEntries()
-			s.broadcastHighestThreatUpdateInInstance(m.Map, m.InstanceID, m.X, m.Y, m.Z, m.GUID, newVictim, entries, m.PhaseMask)
+			pendingHighest = append(pendingHighest, pendingHighestThreatUpdate{creature: m.GUID, highest: newVictim, mapID: m.Map, instanceID: m.InstanceID, x: m.X, y: m.Y, z: m.Z, list: entries, phase: m.PhaseMask})
 			if !isCreaturePassive(m) {
 				pending = append(pending, pendingAttackStart{creature: m.GUID, victim: newVictim, mapID: m.Map, instanceID: m.InstanceID, x: m.X, y: m.Y, z: m.Z, phase: m.PhaseMask})
 			}

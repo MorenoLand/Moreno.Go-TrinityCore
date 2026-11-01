@@ -8604,6 +8604,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	rageChanged := false
 	var rageNext uint32
 	var switchStart pendingAttackStart
+	var switchHighest pendingHighestThreatUpdate
 	if targetMotion != nil {
 		if targetMotion.BossAI == nil {
 			targetMotion.BossAI = getBossAIForCreature(targetMotion, targetMotion.ScriptName)
@@ -8691,7 +8692,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				if switched && newVictim != targetMotion.TargetGUID {
 					targetMotion.TargetGUID = newVictim
 					entries := targetMotion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.X, targetMotion.Y, targetMotion.Z, targetMotion.GUID, newVictim, entries, targetMotion.PhaseMask)
+					switchHighest = pendingHighestThreatUpdate{creature: targetMotion.GUID, highest: newVictim, mapID: targetMotion.Map, instanceID: targetMotion.InstanceID, x: targetMotion.X, y: targetMotion.Y, z: targetMotion.Z, list: entries, phase: targetMotion.PhaseMask}
 					if !passive {
 						switchStart = pendingAttackStart{creature: targetMotion.GUID, victim: newVictim, mapID: targetMotion.Map, instanceID: targetMotion.InstanceID, x: targetMotion.X, y: targetMotion.Y, z: targetMotion.Z, phase: targetMotion.PhaseMask}
 					}
@@ -8708,6 +8709,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 	}
 	s.server.motionMu.Unlock()
+	s.server.broadcastPendingHighestThreatUpdates(switchHighest)
 	s.server.broadcastPendingAttackStarts(switchStart)
 	if targetMotion == nil {
 		return

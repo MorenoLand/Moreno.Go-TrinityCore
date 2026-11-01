@@ -23058,6 +23058,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 		newlyTapped := false
 		tappedFlags := uint32(0)
 		var switchStart pendingAttackStart
+		var switchHighest pendingHighestThreatUpdate
 		// ThreatManager::AddThreat step-1 gate (ThreatManager.cpp:311-317):
 		// probed pre-lock for the motion==nil tail path (conservative:
 		// NO_INITIAL_AGGRO gates here) and refined in the threat block
@@ -23143,7 +23144,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
 					entries := motion.ThreatMgr.SortedEntries()
-					s.server.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, entries, motion.PhaseMask)
+					switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 					if !passive {
 						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
 					}
@@ -23154,6 +23155,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			motion.Moving = true
 		}
 		s.server.motionMu.Unlock()
+		s.server.broadcastPendingHighestThreatUpdates(switchHighest)
 		s.server.broadcastPendingAttackStarts(switchStart)
 
 		s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
