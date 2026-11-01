@@ -238,10 +238,20 @@ func (s *session) disbandGuildRows(ctx context.Context, guildID uint32) {
 		return
 	}
 	execGuildDisband(ctx, cdb, int64(guildID))
+	// Snapshot the members under RLock first: sendPlayerUpdate fans out
+	// through broadcastPlayerValuesUpdateFromSession, which takes
+	// sessionsMu.RLock, so updating under this lock nests the read lock.
 	s.server.sessionsMu.RLock()
-	defer s.server.sessionsMu.RUnlock()
+	var members []*session
 	for target := range s.server.sessions {
 		if target.player == nil || target.player.GuildID != guildID {
+			continue
+		}
+		members = append(members, target)
+	}
+	s.server.sessionsMu.RUnlock()
+	for _, target := range members {
+		if target.player == nil {
 			continue
 		}
 		target.player.GuildID = 0
