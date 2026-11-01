@@ -2844,11 +2844,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// combat rides motion.InCombat; player-target combat rides the target
 	// session's UnitFlags (unitTargetInCombat). The UNIT_FLAG_PET_IN_COMBAT
 	// half has no bridge: Go tracks no pet-in-combat flag on player units.
-	// The ONLY_TARGET_GHOSTS arm right below it (SpellInfo.cpp:1654-1662 —
-	// HasAttribute(SPELL_ATTR3_ONLY_TARGET_GHOSTS) !=
-	// unitTarget->HasAuraType(SPELL_AURA_GHOST) → SPELL_FAILED_TARGET_NOT_GHOST
-	// / SPELL_FAILED_BAD_TARGETS) is unbridged: target-side aura state is
-	// unmodeled, so the Go target cannot answer "is the target a ghost". The
+	// The ONLY_TARGET_GHOSTS arm (SpellInfo.cpp:1654-1662) is bridged by
+	// the gate below, ahead of pickpocket in C++ order. The
 	// CANT_TARGET_TAPPED arm (SpellInfo.cpp:1667-1670 — inside the caster !=
 	// unitTarget / player-caster block: SPELL_ATTR2_CANT_TARGET_TAPPED +
 	// creature hasLootRecipient && !isTappedBy(caster) →
@@ -2861,6 +2858,42 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAffectingCombat), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in combat", "failReason", spellFailedTargetAffectingCombat)
 		return true
+	}
+
+	// ONLY_TARGET_GHOSTS gate (SpellInfo::CheckTarget, SpellInfo.cpp:1654-1662):
+	// sits between in-combat (1650) and tapped (1667) in C++ order, outside
+	// the caster != unitTarget block, so self targets judge it too. A ghost-only
+	// spell rejects a non-ghost target with SPELL_FAILED_TARGET_NOT_GHOST;
+	// any other spell rejects a ghost target with SPELL_FAILED_BAD_TARGETS.
+	// Reuses the completion read verbatim: a player target's ghost bit
+	// (PlayerFlags, the triggered-funnel read); creature targets carry no
+	// ghost aura state and read false, as on the funnel. Unresolvable targets
+	// fail open, like the dead gate. Previously the client gauntlet never
+	// checked this arm, so a ghost target passed here and failed late at
+	// completion; now it fails at cast start, as in C++ CheckCast(true).
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if targetGUID != 0 {
+		targetGhost := false
+		targetResolves := false
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			targetGhost = ts.player.PlayerFlags&playerFlagGhost != 0
+			targetResolves = true
+		} else if _, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			targetResolves = true
+		}
+		if targetResolves {
+			if spell.AttributesEx3&spellAttr3OnlyTargetGhosts != 0 {
+				if !targetGhost {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNotGhost), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not ghost", "failReason", spellFailedTargetNotGhost)
+					return true
+				}
+			} else if targetGhost {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target is ghost", "failReason", spellFailedBadTargets)
+				return true
+			}
+		}
 	}
 
 	// Pickpocket target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1669-1675):

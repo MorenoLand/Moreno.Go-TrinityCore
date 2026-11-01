@@ -4067,9 +4067,34 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in combat")
 				return true
 			}
-			// ONLY_TARGET_GHOSTS (SpellInfo.cpp:1654-1662): unbridged — the
-			// target cannot answer "is a ghost" (documented on the client
-			// path).
+			// ONLY_TARGET_GHOSTS (SpellInfo.cpp:1654-1662): outside the
+			// caster != unitTarget block, so self targets judge it too.
+			// A ghost-only spell rejects a non-ghost target with
+			// SPELL_FAILED_TARGET_NOT_GHOST; any other spell rejects a
+			// ghost target with SPELL_FAILED_BAD_TARGETS. Same read as
+			// the client-path twin: the player ghost bit, creatures
+			// read false, unresolvable targets fail open.
+			targetGhost := false
+			targetResolves := false
+			if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				targetGhost = ts.player.PlayerFlags&playerFlagGhost != 0
+				targetResolves = true
+			} else if _, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				targetResolves = true
+			}
+			if targetResolves {
+				if spell.AttributesEx3&spellAttr3OnlyTargetGhosts != 0 {
+					if !targetGhost {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedTargetNotGhost), true)
+						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not ghost")
+						return true
+					}
+				} else if targetGhost {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+					s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target is ghost")
+					return true
+				}
+			}
 			// CANT_TARGET_TAPPED (SpellInfo.cpp:1667-1674): unbridged — Go
 			// has no loot-recipient/tapped-by model on creatures.
 			// Pickpocket (SpellInfo.cpp:1676-1685): player targets fail
