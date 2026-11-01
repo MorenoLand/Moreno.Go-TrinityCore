@@ -4470,6 +4470,17 @@ func (s *session) markVisiblePlayers(guids []uint64) {
 	s.visiblePlayersMu.Unlock()
 }
 
+func (s *session) removeVisiblePlayers(guids []uint64) {
+	if s == nil || len(guids) == 0 {
+		return
+	}
+	s.visiblePlayersMu.Lock()
+	for _, guid := range guids {
+		delete(s.visiblePlayers, guid)
+	}
+	s.visiblePlayersMu.Unlock()
+}
+
 type playerCreateTarget struct {
 	sess        *session
 	guid        uint64

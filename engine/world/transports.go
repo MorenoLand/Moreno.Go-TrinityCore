@@ -596,6 +596,123 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 		objectGUIDs = append(objectGUIDs, guid)
 		updates.AddUpdateBlock(buildGameObjectUpdate(passenger))
 	}
+	// Player passengers (same arrival gap as the creature/GO loop):
+	// C++ re-visits every player around m_seer on its own update
+	// (Player::UpdateVisibilityForPlayer, Player.cpp:22794-22799) while
+	// Transport::UpdatePassengerPositions (Transport.cpp:692-744)
+	// relocates player passengers via PlayerRelocation, so a stationary
+	// observer sees a sailing boat's players arrive. Go has no per-tick
+	// observer sweep — the sweep runs only on the observer's own
+	// movement, spells, or login/worldport — so the transport refresh
+	// is the arrival trigger. Mirror the creature/GO loop: seer-gated
+	// distance (same cx, cy), canSeePlayer gate (phase, GM-invisible,
+	// stealth/detect legs), create-only for newly visible passengers,
+	// out-of-range prune for departed ones, visiblePlayers marked so
+	// the sweep never double-creates. Direct passengers (TransportGUID
+	// == transport GUID) plus vehicle riders whose vehicle is itself a
+	// transport passenger (a creature passenger GUID, or a direct
+	// passenger driver GUID); teleport-pending passengers are skipped,
+	// their positions are pre-move and the worldport broadcast covers
+	// their arrival. Runs only on a positive map sight range, as the
+	// sweep early-returns on a non-positive range. The canSeePlayer and
+	// distance verdicts are taken under sessionsMu, as the sweep does.
+	playerGUIDs := make([]uint64, 0)
+	playerRemovedGUIDs := make([]uint64, 0)
+	if playerDistance := s.visibilityRangeForMap(observer.player.Map); playerDistance > 0 {
+		type transportPlayerPassenger struct {
+			state       playerState
+			runtime     *session
+			partyMember bool
+			inRange     bool
+		}
+		creaturePassengerGUIDs := make(map[uint64]struct{}, len(transport.StaticCreatures))
+		for _, passenger := range transport.passengerCreatures() {
+			guid := passenger.RawGUID
+			if guid == 0 {
+				guid = creatureWorldGUID(passenger.GUID, passenger.Entry)
+			}
+			creaturePassengerGUIDs[guid] = struct{}{}
+		}
+		candidates := make([]transportPlayerPassenger, 0)
+		s.sessionsMu.RLock()
+		for sess := range s.sessions {
+			if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.player.GUID == observer.player.GUID || sess.player.Map != observer.player.Map || sess.player.InstanceID != observer.player.InstanceID || sess.nearTeleportPending || sess.farTeleportPending {
+				continue
+			}
+			inRange := canSeePlayer(observer, sess) && math.Hypot(float64(sess.player.X-cx), float64(sess.player.Y-cy)) <= playerDistance
+			candidates = append(candidates, transportPlayerPassenger{state: *sess.player, runtime: sess, partyMember: observer.groupID != 0 && sess.groupID == observer.groupID, inRange: inRange})
+		}
+		s.sessionsMu.RUnlock()
+		directGUIDs := make(map[uint64]struct{}, len(candidates))
+		for _, passenger := range candidates {
+			if passenger.state.TransportGUID == transportGUID || passenger.state.TransportGUID == uint64(transport.Spawn.GUID) {
+				directGUIDs[passenger.state.GUID] = struct{}{}
+			}
+		}
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].state.GUID < candidates[j].state.GUID })
+		observerState := *observer.player
+		for _, passenger := range candidates {
+			_, direct := directGUIDs[passenger.state.GUID]
+			if !direct {
+				if _, ok := creaturePassengerGUIDs[passenger.state.VehicleGUID]; !ok {
+					if _, ok := directGUIDs[passenger.state.VehicleGUID]; !ok {
+						continue
+					}
+				}
+			}
+			if !passenger.inRange {
+				observer.visiblePlayersMu.Lock()
+				_, visible := observer.visiblePlayers[passenger.state.GUID]
+				observer.visiblePlayersMu.Unlock()
+				if visible {
+					observer.removeVisiblePlayers([]uint64{passenger.state.GUID})
+					updates.AddOutOfRangeGUID(passenger.state.GUID)
+					playerRemovedGUIDs = append(playerRemovedGUIDs, passenger.state.GUID)
+				}
+				continue
+			}
+			observer.visiblePlayersMu.Lock()
+			_, visible := observer.visiblePlayers[passenger.state.GUID]
+			observer.visiblePlayersMu.Unlock()
+			if visible {
+				continue
+			}
+			packet, err := s.buildPlayerUpdateForRecipient(passenger.state, false, passenger.partyMember, passenger.runtime, &observerState)
+			if err != nil || packet == nil {
+				continue
+			}
+			var body []byte
+			if packet.Opcode == uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+				body = packet.Payload.Bytes()
+			} else {
+				body, err = protocol.DecompressUpdatePayload(packet.Payload.Bytes())
+			}
+			if err != nil || len(body) < 4 {
+				continue
+			}
+			reader := protocol.NewReader(body)
+			blockCount, err := reader.ReadU32()
+			if err != nil || blockCount == 0 {
+				continue
+			}
+			block, err := reader.Read(reader.Remaining())
+			if err != nil {
+				continue
+			}
+			observer.visiblePlayersMu.Lock()
+			if observer.visiblePlayers == nil {
+				observer.visiblePlayers = make(map[uint64]struct{})
+			}
+			if _, ok := observer.visiblePlayers[passenger.state.GUID]; ok {
+				observer.visiblePlayersMu.Unlock()
+				continue
+			}
+			observer.visiblePlayers[passenger.state.GUID] = struct{}{}
+			observer.visiblePlayersMu.Unlock()
+			updates.AddUpdateBlock(block)
+			playerGUIDs = append(playerGUIDs, passenger.state.GUID)
+		}
+	}
 	if !updates.HasData() {
 		return
 	}
@@ -609,6 +726,10 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 		for _, guid := range removedGUIDs {
 			observer.markTransportPassengerVisible(guid, transportGUID)
 		}
+		for _, guid := range playerGUIDs {
+			observer.removeVisiblePlayers([]uint64{guid})
+		}
+		observer.markVisiblePlayers(playerRemovedGUIDs)
 	}
 	packet, err := updates.BuildPacket(0)
 	if err != nil || packet == nil {
@@ -622,11 +743,11 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 	if err != nil || !sent {
 		rollbackVisibility()
 		if err != nil {
-			observer.debug("transport passenger update write failed", "player_guid", observer.playerGUID, "transport_guid", transportGUID, "creature_guids", creatureGUIDs, "object_guids", objectGUIDs, "removed_guids", removedGUIDs, "error", err)
+			observer.debug("transport passenger update write failed", "player_guid", observer.playerGUID, "transport_guid", transportGUID, "creature_guids", creatureGUIDs, "object_guids", objectGUIDs, "removed_guids", removedGUIDs, "player_guids", playerGUIDs, "player_removed_guids", playerRemovedGUIDs, "error", err)
 		}
 		return
 	}
-	observer.debug("transport passengers streamed", "player_guid", observer.playerGUID, "player_map", observer.player.Map, "player_x", observer.player.X, "player_y", observer.player.Y, "player_z", observer.player.Z, "transport_guid", transportGUID, "transport_map", transport.Spawn.Map, "transport_x", transport.Spawn.X, "transport_y", transport.Spawn.Y, "transport_z", transport.Spawn.Z, "transport_orientation", transport.Spawn.Orientation, "path_progress", transport.PathProgress, "creature_guids", creatureGUIDs, "creature_positions", creaturePositions, "object_guids", objectGUIDs, "removed_guids", removedGUIDs, "write_bytes", len(packet.Payload.Bytes()))
+	observer.debug("transport passengers streamed", "player_guid", observer.playerGUID, "player_map", observer.player.Map, "player_x", observer.player.X, "player_y", observer.player.Y, "player_z", observer.player.Z, "transport_guid", transportGUID, "transport_map", transport.Spawn.Map, "transport_x", transport.Spawn.X, "transport_y", transport.Spawn.Y, "transport_z", transport.Spawn.Z, "transport_orientation", transport.Spawn.Orientation, "path_progress", transport.PathProgress, "creature_guids", creatureGUIDs, "creature_positions", creaturePositions, "object_guids", objectGUIDs, "removed_guids", removedGUIDs, "player_guids", playerGUIDs, "player_removed_guids", playerRemovedGUIDs, "write_bytes", len(packet.Payload.Bytes()))
 }
 
 func (s *Server) buildAttachedTransportUpdate(ctx context.Context, state playerState) (*protocol.Packet, error) {
