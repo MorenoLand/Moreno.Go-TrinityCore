@@ -98,14 +98,21 @@ func (s *session) canDetectStealthOf(target *session) bool {
 	if (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0 {
 		return true
 	}
-	// Target is in the same party/group: party members can always see each other
-	if s.groupID != 0 && s.groupID == target.groupID {
-		return true
-	}
 	// SPELL_AURA_MOD_STALKED (68) cast by the observer: Unit::IsAlwaysDetectableFor
 	// (Unit.cpp:8640-8647) is checked by CanDetect before both invisibility and
 	// stealth arms (Object.cpp:1676-1682), so a marked target is always seen.
+	// The stalked arm is the Unit level of IsAlwaysDetectableFor and is
+	// checked before the Player-level duel arm below, so a marked duel
+	// opponent stays always detectable.
 	if target.hasStalkedAuraFrom(s.playerGUID) {
+		return true
+	}
+	// Player group leg of IsAlwaysDetectableFor (Player.cpp:22584-22597),
+	// replacing the old group-ID-equality arm: same group is not enough,
+	// the seer must be group-visible for the target (same subgroup under
+	// the default group-visibility config), and a duel opponent past
+	// CHALLENGED loses the leg and falls through to the range arms.
+	if target.playerGroupAlwaysDetectable(s) {
 		return true
 	}
 
@@ -169,6 +176,14 @@ func (s *session) canDetectInvisibilityOfPlayer(target *session) bool {
 	// MOD_STALKED arm of Unit::IsAlwaysDetectableFor, checked by CanDetect
 	// before the invisibility arms (Object.cpp:1676-1682).
 	if target.hasStalkedAuraFrom(s.playerGUID) {
+		return true
+	}
+	// Player group leg of IsAlwaysDetectableFor (Player.cpp:22584-22597):
+	// a group-visible player target is always detectable, so the
+	// invisibility arms below never ran for group members in C++ either.
+	// The stealth twin carried this leg as group-ID equality; the
+	// invisibility twin had no leg at all.
+	if target.playerGroupAlwaysDetectable(s) {
 		return true
 	}
 	// WorldObject::CanDetectInvisibilityOf (Object.cpp:1688-1717) works on
@@ -813,6 +828,39 @@ func ghostLegVerdict(seerDetect, targetVis ghostBits, seerIsPlayer, targetIsPlay
 		return true, sameTeamAndGroupVisible
 	}
 	return true, false
+}
+
+// playerGroupAlwaysDetectable mirrors the Player level of
+// IsAlwaysDetectableFor (Player.cpp:22584-22597) at the CanDetect level:
+// a player target is always detectable for a player seer group-visible
+// for it under the default group-visibility config (IsGroupVisibleFor
+// defaulting to IsInSameGroupWith: the same session, or the same group
+// in the same subgroup, via sessionsInSameGroupWith). The duel arm
+// suppresses the leg, not detection itself: while the target's duel
+// against the seer has left CHALLENGED (countdown running, or DuelTeam
+// set once in progress), the target is not always detectable for that
+// seer and the normal invisibility/stealth arms judge instead; a merely
+// challenged duel leaves the leg live. Callers check the Unit-level
+// stalked arm before this leg, as C++ does. Creature seers never reach
+// this leg (seer->ToPlayer() is null in C++), and creature targets have
+// no Player level at all, so the wild and creature-target twins are
+// untouched; the controlled/pet session-seer paths inherit it through
+// the two session detect functions.
+func (target *session) playerGroupAlwaysDetectable(seer *session) bool {
+	if target == nil || target.player == nil || seer == nil || seer.player == nil {
+		return false
+	}
+	if target.duelPartner == seer.playerGUID && (target.duelCountdown || target.player.DuelTeam != 0) {
+		return false
+	}
+	srv := target.server
+	if srv == nil {
+		srv = seer.server
+	}
+	if srv == nil {
+		return false
+	}
+	return srv.sessionsInSameGroupWith(seer, target)
 }
 
 // sessionsInSameGroupWith mirrors Player::IsInSameGroupWith
