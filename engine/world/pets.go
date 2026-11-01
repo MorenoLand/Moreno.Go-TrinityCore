@@ -3695,10 +3695,13 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	}
 	// SpellInfo::CheckTarget GM/invisibility leg (SpellInfo.cpp:1736-1743):
 	// a GM-mode or GM-invisible player target fails with
-	// SPELL_FAILED_BM_OR_INVISGOD. The pet caster's GetAffectingPlayer is the
-	// session player, so the gate fires for harmful and helpful casts alike,
-	// like C++; self-targets are exempt (unitTarget != caster).
-	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID && s.server != nil && s.server.gmAttackTargetBlocked(target.UnitGUID) {
+	// SPELL_FAILED_BM_OR_INVISGOD, firing only for non-positive spells
+	// (GetAffectingPlayer() || !IsPositive()). GetAffectingPlayer
+	// (Object.cpp:2235) is the charmer-or-owner chain's player; the
+	// client path's petMotionForCast gate guarantees a player GUID leg,
+	// so the gate fires for harmful and helpful casts alike here, like
+	// C++; self-targets are exempt (unitTarget != caster).
+	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID && (motion.OwnerGUID != 0 || motion.CharmerGUID != 0 || !spellIsPositive(spell)) && s.server != nil && s.server.gmAttackTargetBlocked(target.UnitGUID) {
 		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedBmOrInvisGod), true)
 		return false
 	}

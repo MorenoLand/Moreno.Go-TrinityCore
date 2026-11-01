@@ -2365,10 +2365,15 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1736-1743): GM-mode /
-	// GM-invisibility. The pet caster's GetAffectingPlayer is the owner
-	// session, so the gate fires for harmful and helpful casts alike,
-	// like C++; self-targets are exempt (unitTarget != caster).
-	if targetGUID != motion.GUID && s.server.gmAttackTargetBlocked(targetGUID) {
+	// GM-invisibility, firing only for non-positive spells
+	// (GetAffectingPlayer() || !IsPositive()). GetAffectingPlayer
+	// (Object.cpp:2235) is the charmer-or-owner chain's player, so a
+	// charmed caster's gate reads its charmer session, not the
+	// pre-charm owner; every reachable pet-path entry runs on the
+	// owner/charmer session, so the GUID legs always hold today and
+	// the condition keeps the arm C++-exact for ownerless motions.
+	// Self-targets are exempt (unitTarget != caster).
+	if targetGUID != motion.GUID && (motion.OwnerGUID != 0 || motion.CharmerGUID != 0 || !spellIsPositive(spell)) && s.server.gmAttackTargetBlocked(targetGUID) {
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1745-1747): in-flight targets.
@@ -3643,8 +3648,10 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// SpellInfo::CheckExplicitTarget faction arms (SpellInfo.cpp:1793-1811):
 	// the enemy/ally/party/raid/minipet/passenger verdict on the explicit
 	// unit target. C++ relative order: CheckExplicitTarget (5365) runs
-	// ahead of CheckTarget (5372). The pet's affecting player is the owner
-	// session. Only truly explicit targets reach the faction block — C++
+	// ahead of CheckTarget (5372). The pet's affecting player is the
+	// driving session — the owner session, or the charmer session for
+	// a player-charmed pet (charm apply rewrites OwnerGUID to the
+	// charmer, creaturemotion.go). Only truly explicit targets reach the faction block — C++
 	// returns before it when no target was sent (1784-1790, bridged above).
 	if explicitUnitTarget && !s.server.checkCreatureExplicitTargetFaction(motion, s, spell, targetGUID) {
 		return true
