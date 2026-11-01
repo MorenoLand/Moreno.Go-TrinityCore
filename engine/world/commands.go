@@ -813,7 +813,6 @@ func (s *session) handleCmdGMInGame(ctx context.Context) {
 	}
 	var list []gmEntry
 	s.server.sessionsMu.RLock()
-	defer s.server.sessionsMu.RUnlock()
 	for sess := range s.server.sessions {
 		if sess == nil || sess.player == nil {
 			continue
@@ -838,6 +837,7 @@ func (s *session) handleCmdGMInGame(ctx context.Context) {
 		}
 		list = append(list, gmEntry{name: sess.player.Name, security: psec})
 	}
+	s.server.sessionsMu.RUnlock()
 	if len(list) == 0 {
 		// LANG_GMS_NOT_LOGGED (17).
 		s.sendSysMessage("There are no GMs currently logged in.")
@@ -4843,7 +4843,7 @@ func (s *Server) sendGlobalGMMessage(ctx context.Context, msg string) {
 		return
 	}
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	var targets []*session
 	for sess := range s.sessions {
 		if sess == nil || !sess.worldReady.Load() || sess.player == nil {
 			continue
@@ -4851,6 +4851,10 @@ func (s *Server) sendGlobalGMMessage(ctx context.Context, msg string) {
 		if !sess.commandAllowed(ctx, permissionReceiveGlobalGMTextMessage) {
 			continue
 		}
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
 		sess.sendSysMessage(msg)
 	}
 }
