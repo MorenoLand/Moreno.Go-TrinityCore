@@ -3732,10 +3732,11 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	if !petKnows && !triggered {
 		return true
 	}
-	// Spell::CheckPetCast (Spell.cpp:6219-6220): the UNIT_STATE_CASTING arm has
-	// no Go bridge — creatureMotion carries no cast-in-progress state and pet
-	// casts resolve instantly through executePetSpellWithOptions, so the
-	// overlap the guard prevents cannot occur; the TRIGGERED_IGNORE_CAST_IN_PROGRESS
+	// Spell::CheckPetCast (Spell.cpp:6219-6220): the UNIT_STATE_CASTING arm's
+	// cast-time half has no Go bridge — pet casts resolve instantly through
+	// executePetSpellWithOptions and the pet path stamps no CastingUntil — but
+	// its channel half is gated in the backstop (creatureChannelLive), so a
+	// command issued mid-channel fizzles there; the TRIGGERED_IGNORE_CAST_IN_PROGRESS
 	// wrapper is vacuous here (this path never carries triggered flags).
 	// Dead-owner arm (Spell.cpp:6222-6225): the owner on this path is always
 	// the session player (petMotionForCast requires OwnerGUID/CharmerGUID ==

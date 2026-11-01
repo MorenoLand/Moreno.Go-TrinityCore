@@ -3558,6 +3558,29 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	// recursion below reach here with no gauntlet, and no gauntlet runs
 	// the cheat arm at all — so these are the shared backstop, and a
 	// failing gate fizzles before takePetSpellPower like the rest.
+	// Spell::CheckPetCast (Spell.cpp:6213-6225) arms ahead of the
+	// CheckCast(true) tail: C++ runs CheckPetCast in the client
+	// handlers and CanAutoCast, never inside prepare, so the
+	// backstop carries its arms for the non-gauntlet entries
+	// (autocast picks, login replay) and as a second net for client
+	// casts. Both arms are non-triggered only: TRIGGERED_IGNORE_CAST_IN_PROGRESS
+	// (0x20) rides TRIGGERED_FULL_MASK, which Go's triggered models,
+	// and triggered casts bypass CheckPetCast entirely (CastSpell ->
+	// prepare -> CheckCast). The CASTING-state arm's cast-time half is
+	// vacuous — pet casts resolve instantly and the pet path stamps no
+	// CastingUntil — but a live channeled spell holds UNIT_STATE_CASTING
+	// (Unit.cpp:3107), read here via creatureChannelLive; interrupt
+	// clears the stamp, expiry is by timestamp. The dead-owner arm
+	// reads the owner session (every non-triggered backstop entry runs
+	// on it); the IsGhouled() exemption has no Go model, as on the
+	// client path. A failing gate fizzles silently, the backstop
+	// convention — the gauntlet reports failures on client casts.
+	if !triggered && s.server.creatureChannelLive(motion) {
+		return true
+	}
+	if !triggered && s.isDeadOrGhost() {
+		return true
+	}
 	if !triggered && motion.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 {
 		return true
 	}
