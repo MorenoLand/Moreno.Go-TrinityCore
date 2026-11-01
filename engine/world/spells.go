@@ -9831,6 +9831,55 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					return
 				}
 			}
+			// Spell::_cast (Spell.cpp:3349) re-runs CheckCast(false) when the
+			// cast bar completes, and CheckTarget is not strict-gated, so
+			// the creature-type and aura gates re-run too — unlike the
+			// only-players gate (SpellInfo.cpp:1712), whose verdict is fixed
+			// by the target GUID's kind and needs no re-run. Order mirrors
+			// C++ CheckTarget: creature-type (1728) ahead of the aura arms.
+			// Creature-type (SpellInfo.cpp:1728, 1868-1886): a creature
+			// target's template type never changes, but a player target's
+			// mask follows the shapeshift form (playerCreatureTypeMask),
+			// so a druid target shifting form mid-bar moves the verdict;
+			// the gauntlet helper re-reads it live.
+			if failReason := s.checkTargetCreatureType(ctx, spell, target.UnitGUID); failReason != 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target creature type", "failReason", failReason)
+				return
+			}
+			// Target aura-state (SpellInfo.cpp:1760-1766) and aura-spell
+			// (1769-1778): auras come and go mid-bar, so a required state
+			// or aura lost, or an excluded state or aura gained, fails
+			// the cast with SPELL_FAILED_TARGET_AURASTATE, as at the
+			// gauntlet; the vehicle-caster and charmer-owned carve-outs
+			// have no Go model, so the check always applies, like the
+			// gauntlet. The reverse direction (required aura gained
+			// mid-bar) cannot rescue a cast: the gauntlet already failed it.
+			if spell.TargetAuraState != 0 && !s.targetHasAuraState(ctx, target.UnitGUID, spell.TargetAuraState, spell) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "required target aura state lost")
+				return
+			}
+			if spell.ExcludeTargetAuraState != 0 && s.targetHasAuraState(ctx, target.UnitGUID, spell.ExcludeTargetAuraState, spell) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "excluded target aura state gained")
+				return
+			}
+			if spell.TargetAuraSpell != 0 && !s.targetHasAura(ctx, target.UnitGUID, spell.TargetAuraSpell) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "required target aura lost")
+				return
+			}
+			if spell.ExcludeTargetAuraSpell != 0 && s.targetHasAura(ctx, target.UnitGUID, spell.ExcludeTargetAuraSpell) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAuraState), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "excluded target aura gained")
+				return
+			}
 		}
 	}
 
