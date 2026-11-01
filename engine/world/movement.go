@@ -1702,12 +1702,11 @@ func (s *Server) broadcastToVisibleSetForCreatureSession(sess *session, opcode u
 // broadcastToSetWithin is the radius-parameterized form of
 // broadcastToVisibleSet: the same map/instance + distance gate, with the
 // caller's radius instead of the 100yd visibility range, plus the
-// MessageDistDeliverer phase leg when the caller passes a positioned source
-// (nil-source creature-text legs stay phase-ungated: their motion phase is
-// not plumbed to this helper). CreatureTextMgr
-// listen ranges (CreatureTextMgr.cpp GetRangeForChatType: SAY/TEXTEMOTE
-// 25yd, YELL 300yd) fan out through SendMessageToSetInRange, not the
-// visibility range, so creature-talk legs use this form.
+// MessageDistDeliverer phase leg when the caller passes a positioned source.
+// Creature-sourced legs with no session use broadcastToSetWithinFromPhase.
+// CreatureTextMgr listen ranges (CreatureTextMgr.cpp GetRangeForChatType:
+// SAY/TEXTEMOTE 25yd, YELL 300yd) fan out through SendMessageToSetInRange,
+// not the visibility range, so creature-talk legs use this form.
 func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, source *session) {
 	if s == nil {
 		return
@@ -1733,6 +1732,44 @@ func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, inst
 	}
 	for _, target := range targets {
 		if source != nil && sourcePhase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = target.write(opcode, payload, true)
+	}
+}
+
+// broadcastToSetWithinFromPhase is the creature-sourced twin of
+// broadcastToSetWithin: the same map/instance + distance gate, with the
+// MessageDistDeliverer phase leg (GridNotifiers.cpp:253-274, InSamePhase
+// against the source creature's phase) keyed on the caller's motion phase
+// instead of a session. CreatureTextMgr::SendChat/SendEmote fan out through
+// SendMessageToSetInRange/SendMessageToSet, so a creature talking in a
+// phased-out mask never reaches a disjoint-phase listener; a 0 phase reads
+// as PHASEMASK_NORMAL (1), the motion convention for unstamped records.
+func (s *Server) broadcastToSetWithinFromPhase(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, sourcePhase uint32) {
+	if s == nil {
+		return
+	}
+	if sourcePhase == 0 {
+		sourcePhase = 1
+	}
+	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
+	for target := range s.sessions {
+		if !target.authed || !target.worldReady.Load() || target.player == nil {
+			continue
+		}
+		if target.player.Map != mapID || target.player.InstanceID != instanceID {
+			continue
+		}
+		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > radius {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if sourcePhase&target.currentPlayerPhaseMask() == 0 {
 			continue
 		}
 		_ = target.write(opcode, payload, true)

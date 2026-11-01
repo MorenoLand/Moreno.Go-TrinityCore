@@ -176,7 +176,7 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 		if whispered {
 			_ = whisperSess.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), true)
 		} else if chosen.TextRange == 0 && motion != nil {
-			s.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), mapID, instanceID, motion.X, motion.Y, motion.Z, listenDist, nil)
+			s.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), mapID, instanceID, motion.X, motion.Y, motion.Z, listenDist, motion.PhaseMask)
 		} else if chosen.TextRange == 4 {
 			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SOUND), soundPkt.Bytes(), nil)
 		} else {
@@ -194,7 +194,7 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 		// stays broadcast on the whisper arm, even when the chat message itself
 		// was dropped.
 		if motion != nil {
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), mapID, instanceID, motion.X, motion.Y, motion.Z, nil)
+			s.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), mapID, instanceID, motion.X, motion.Y, motion.Z, 100.0, motion.PhaseMask)
 		} else {
 			s.broadcastToInstance(mapID, instanceID, uint16(protocol.OpcodeSMSG_EMOTE), emotePkt.Bytes(), nil)
 		}
@@ -210,7 +210,7 @@ func (s *Server) broadcastCreatureTalk(ctx context.Context, mapID, instanceID ui
 		return
 	}
 	if chosen.TextRange == 0 && chatType != 0x0D && motion != nil { // not MONSTER_PARTY
-		s.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, listenDist, nil)
+		s.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, listenDist, motion.PhaseMask)
 	} else if chosen.TextRange == 4 || chatType == 0x0D {
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_MESSAGECHAT), chatPkt, nil)
 	} else {
