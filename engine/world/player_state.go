@@ -4545,6 +4545,7 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 		target.sess.visiblePlayers[state.GUID] = struct{}{}
 		target.sess.visiblePlayersMu.Unlock()
 		_ = target.sess.write(packet.Opcode, packet.Payload.Bytes(), true)
+		target.sess.sendAurasForTarget(state.GUID, source)
 	}
 }
 
