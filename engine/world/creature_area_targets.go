@@ -1009,10 +1009,14 @@ func petAreaAllyGroupScope(server *Server, owner *session) (ownerGUID uint64, in
 // twin of creatureAIAreaEnemyPlayers: Spell::SelectImplicitAreaTargets
 // (Spell.cpp:1227) with TARGET_CHECK_ALLY/PARTY/RAID selects every friendly
 // player in the area, not just the wire target, so a pet AoE heal or
-// party aura lands on the whole area. The ally test is the inverted enemy
-// gate (WorldObject::IsValidAssistTarget's faction arm, Object.cpp:3147:
-// both reactions >= NEUTRAL — the enemy sweep's isAttackableFaction gate
-// negated, so neutrals pass on both sides), plus the assist flag arm
+// party aura lands on the whole area. The ally test is the assist gate
+// (isHostileFaction exclusion, the session twin's allyOf), not the negated
+// enemy gate: IsValidAssistTarget's faction arm (Object.cpp:3149) refuses
+// only when both reactions are below neutral, and the CvP reaction clamps
+// to neutral at war (Object.cpp:2819-2822), so an at-war player with
+// non-hostile standing stays eligible; the attack gate's at-war term
+// wrongly excluded them. Neutrals pass on both sides, as before, plus
+// the assist flag arm
 // (spellTargetUnitBlocked, assist=true, like the session friendly twin),
 // the GM exclusion (IsValidAssistTarget, Object.cpp:3104),
 // the cylinder area (Spell.cpp:8409) and line of sight from the center
@@ -1050,7 +1054,7 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 			continue
 		}
 		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
-		if s.isAttackableFaction(motion.Faction, candidate) {
+		if s.isHostileFaction(motion.Faction, candidate) {
 			continue
 		}
 		if spellTargetUnitBlocked(spell, targetSession.player.UnitFlags, 0, true) {
@@ -1061,7 +1065,7 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 		// so a party-only spell no longer reaches non-party allies.
 		// The bits below stay membership-based (the pre-existing pet-leg
 		// approximation), not geometry-based.
-		if !creatureAllyGroupPasses(groups, candidate.X, candidate.Y, candidate.Z, !s.isAttackableFaction(motion.Faction, candidate), inParty(targetSession.playerGUID), inRaid(targetSession.playerGUID), func(cx, cy, cz float32) bool {
+		if !creatureAllyGroupPasses(groups, candidate.X, candidate.Y, candidate.Z, !s.isHostileFaction(motion.Faction, candidate), inParty(targetSession.playerGUID), inRaid(targetSession.playerGUID), func(cx, cy, cz float32) bool {
 			return spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 || s.hasLineOfSightSpellCheck(motion.Map, cx, cy, cz, candidate.X, candidate.Y, candidate.Z)
 		}) {
 			continue
@@ -1511,7 +1515,7 @@ func (s *Server) creatureRefCenteredAreaTargets(ctx context.Context, motion *cre
 			continue
 		}
 		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
-		if s.isAttackableFaction(motion.Faction, candidate) {
+		if s.isHostileFaction(motion.Faction, candidate) {
 			continue
 		}
 		if spellTargetUnitBlocked(spell, targetSession.player.UnitFlags, 0, true) {

@@ -213,9 +213,15 @@ func (s *Server) creatureChainNearbyPick(ctx context.Context, m *creatureMotion,
 				return
 			}
 			if isPlayer {
-				// The friendly helper's gate is non-attackable, not
-				// friendly-standing: neutrals pass here as there.
-				if s.isAttackableFaction(m.Faction, pp) {
+				// The friendly helper's gate is the assist gate
+				// (isHostileFaction, the session twin's allyOf), not the
+				// attack gate: IsValidAssistTarget refuses only when both
+				// reactions are below neutral (Object.cpp:3149), and the
+				// CvP reaction clamps to neutral at war
+				// (Object.cpp:2819-2822), so an at-war player with
+				// non-hostile standing stays eligible; isAttackableFaction
+				// wrongly excluded such players via its at-war term.
+				if s.isHostileFaction(m.Faction, pp) {
 					return
 				}
 			} else if s.factionTemplatesHostile(m.Faction, faction) {
@@ -1065,8 +1071,9 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 // (*session).chainCandidates for a creature caster. The per-candidate
 // faction predicates use the creature-rooted gates: ENEMY is the caster's
 // attackable check (isAttackableFaction, the same call shape as the
-// creature's own aggro pick), ALLY is the friendly check
-// (isFriendlyFaction); creature candidates resolve through the
+// creature's own aggro pick), ALLY is the assist check
+// (!isHostileFaction, the session twin's allyOf); creature candidates
+// resolve through the
 // faction-template reaction (creatureFactionHostileTo). PARTY/RAID ride the
 // motion-rooted referer scope.
 func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion, spell wotlk.Spell, primary combatTarget, radius float32, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
@@ -1194,7 +1201,7 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			continue
 		}
 		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, s.isAttackableFaction(m.Faction, candidate), s.isFriendlyFaction(m.Faction, candidate), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, s.isAttackableFaction(m.Faction, candidate), !s.isHostileFaction(m.Faction, candidate), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
 	s.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
