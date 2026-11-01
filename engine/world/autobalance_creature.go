@@ -665,12 +665,16 @@ func (s *Server) autoBalanceModifyCreatureAttributes(ctx context.Context, motion
 	}
 	// else branch (SetPowerType(pType)) is a no-op: the power type is unchanged.
 
-	s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{
+	// The spawn path reaches here with motionMu held (motionForLocked),
+	// and the lookup variant re-takes motionMu through findCreatureMotion,
+	// so the lock-held twin runs instead; these fields carry no DynamicFlags,
+	// so the twin's skipped loot-sparkle mask is a no-op here.
+	s.broadcastCreatureValuesUpdateAtInInstance(motion.Map, motion.InstanceID, motion.GUID, map[int]uint32{
 		unitFieldLevel:       motion.Level,
 		unitFieldMaxHealth:   motion.MaxHealth,
 		unitFieldHealth:      motion.Health,
 		unitFieldResistances: motion.Armor,
 		unitFieldMaxPower1:   motion.MaxPowers[0],
 		unitFieldPower1:      motion.Powers[0],
-	})
+	}, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 }
