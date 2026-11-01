@@ -1416,6 +1416,72 @@ func (s *Server) removeSession(session *session) {
 	}
 }
 
+// seerDeliveryPosition resolves the MessageDistDeliverer shared-vision leg
+// (GridNotifiers.cpp:253-274) for a SendMessageToSet recipient: a player
+// whose seer is not itself receives the packet through the viewpoint, not
+// through its own position - the deliverer sends to players in a unit's
+// shared-vision list when their m_seer is that unit (Visit CreatureMapType),
+// and to a dynamic object's caster when the caster's m_seer is the object
+// (Visit DynamicObjectMapType), while the direct leg fires only when
+// m_seer == target or the target is in a vehicle (Visit PlayerMapType).
+// Go models two seers: PLAYER_FARSIGHT (bind sight onto a unit, a far-sight
+// focus dynobj, or another player session) and the possessed creature (a
+// Charmed+Possessed motion whose CharmerGUID is the player, whose viewpoint
+// SetClientControl moves onto the creature, Player.cpp:24261-24269). The
+// farsight field wins when both are set - C++ holds a single m_seer and
+// the two arms never set it together. A viewpoint on another map/instance,
+// an ambiguous possess scan, or an unresolvable GUID falls back to the own
+// position (fail-open, as the other nil-source fallbacks); the recipient's
+// own phase gate is unchanged - C++ checks the viewpoint's phase on the
+// creature-visit path and the recipient's on the player-visit path, and Go
+// keeps the recipient leg, so a phase-shifted viewpoint owner still gates
+// on its own mask. Vehicle passengers need no leg: C++ keeps m_seer == self
+// for them (the GetVehicle() branch is belt-and-braces) and Go relocates
+// passenger coords onto the vehicle, so own position already is the
+// vehicle position. Call only after sessionsMu drops: the lookups take
+// motionMu, objectsMu, and sessionsMu themselves.
+func (s *Server) seerDeliveryPosition(mapID, instanceID uint32, playerGUID, farsightGUID uint64) (x, y, z float32, ok bool) {
+	if s == nil {
+		return 0, 0, 0, false
+	}
+	if farsightGUID != 0 {
+		if m := s.findCreatureMotion(mapID, instanceID, farsightGUID); m != nil {
+			return m.X, m.Y, m.Z, true
+		}
+		if obj := s.findDynamicSpellObject(farsightGUID); obj != nil && obj.Map == mapID && obj.InstanceID == instanceID {
+			return obj.X, obj.Y, obj.Z, true
+		}
+		if sess := s.findSessionByGUID(farsightGUID); sess != nil && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+			return sess.player.X, sess.player.Y, sess.player.Z, true
+		}
+		return 0, 0, 0, false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	var found *creatureMotion
+	for _, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion != nil && motion.Charmed && motion.Possessed && motion.CharmerGUID == playerGUID {
+			if found != nil {
+				return 0, 0, 0, false
+			}
+			found = motion
+		}
+	}
+	if found == nil {
+		return 0, 0, 0, false
+	}
+	return found.X, found.Y, found.Z, true
+}
+
+// seerRecipient snapshots a fan-out recipient's own position plus the
+// viewpoint key, so the seer leg resolves after sessionsMu drops.
+type seerRecipient struct {
+	sess     *session
+	guid     uint64
+	farsight uint64
+	x, y, z  float32
+}
+
 // broadcastMovement mirrors mover->SendMessageToSet (MovementHandler.cpp:387):
 // MessageDistDeliverer (GridNotifiers.cpp:253-274) visits same-map players
 // in the mover's phase (InSamePhase) within GetVisibilityRange 2D distance —
@@ -1425,8 +1491,12 @@ func (s *Server) removeSession(session *session) {
 // client no-op there. The distance gate centers on the packet coords (the
 // mover's new position); a non-positive range fails open to the old fan-out.
 func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementInfo, source *session) {
+	var mapID, instanceID uint32
+	if source != nil && source.player != nil {
+		mapID, instanceID = source.player.Map, source.player.InstanceID
+	}
 	s.sessionsMu.RLock()
-	targets := make([]*session, 0, len(s.sessions))
+	targets := make([]seerRecipient, 0, len(s.sessions))
 	distance := float64(0)
 	if source != nil && source.player != nil {
 		distance = s.visibilityRangeForMap(source.player.Map)
@@ -1435,13 +1505,10 @@ func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementI
 		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID {
 			continue
 		}
-		if distance > 0 && math.Hypot(float64(target.player.X-info.X), float64(target.player.Y-info.Y)) > distance {
-			continue
-		}
 		if source != nil && source.isStealthed() && !target.canDetectStealthOf(source) {
 			continue
 		}
-		targets = append(targets, target)
+		targets = append(targets, seerRecipient{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID, x: target.player.X, y: target.player.Y})
 	}
 	s.sessionsMu.RUnlock()
 	var sourcePhase uint32 = 1
@@ -1449,11 +1516,18 @@ func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementI
 		sourcePhase = source.currentPlayerPhaseMask()
 	}
 	for _, target := range targets {
-		if sourcePhase&target.currentPlayerPhaseMask() == 0 {
+		if sourcePhase&target.sess.currentPlayerPhaseMask() == 0 {
 			continue
 		}
-		if err := target.write(opcode, payload, true); err != nil {
-			target.debug("movement broadcast failed", "account", target.accountName, "guid", info.GUID, "error", err)
+		rx, ry := target.x, target.y
+		if sx, sy, _, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+			rx, ry = sx, sy
+		}
+		if distance > 0 && math.Hypot(float64(rx-info.X), float64(ry-info.Y)) > distance {
+			continue
+		}
+		if err := target.sess.write(opcode, payload, true); err != nil {
+			target.sess.debug("movement broadcast failed", "account", target.sess.accountName, "guid", info.GUID, "error", err)
 		}
 	}
 }
@@ -1506,8 +1580,14 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 	if source != nil && source.player == nil {
 		return
 	}
+	var mapID, instanceID uint32
+	var sx0, sy0 float32
+	if source != nil && source.player != nil {
+		mapID, instanceID = source.player.Map, source.player.InstanceID
+		sx0, sy0 = source.player.X, source.player.Y
+	}
 	s.sessionsMu.RLock()
-	targets := make([]*session, 0, len(s.sessions))
+	targets := make([]seerRecipient, 0, len(s.sessions))
 	distance := float64(0)
 	if source != nil && source.player != nil {
 		distance = s.visibilityRangeForMap(source.player.Map)
@@ -1519,10 +1599,7 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 		if source != nil && (target == source || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID) {
 			continue
 		}
-		if source != nil && distance > 0 && math.Hypot(float64(target.player.X-source.player.X), float64(target.player.Y-source.player.Y)) > distance {
-			continue
-		}
-		targets = append(targets, target)
+		targets = append(targets, seerRecipient{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID, x: target.player.X, y: target.player.Y})
 	}
 	s.sessionsMu.RUnlock()
 	var sourcePhase uint32 = 1
@@ -1530,10 +1607,19 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 		sourcePhase = source.currentPlayerPhaseMask()
 	}
 	for _, target := range targets {
-		if source != nil && sourcePhase&target.currentPlayerPhaseMask() == 0 {
+		if source != nil && sourcePhase&target.sess.currentPlayerPhaseMask() == 0 {
 			continue
 		}
-		_ = target.write(opcode, payload, true)
+		rx, ry := target.x, target.y
+		if source != nil {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+				rx, ry = vx, vy
+			}
+		}
+		if source != nil && distance > 0 && math.Hypot(float64(rx-sx0), float64(ry-sy0)) > distance {
+			continue
+		}
+		_ = target.sess.write(opcode, payload, true)
 	}
 }
 
@@ -1734,7 +1820,7 @@ func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, inst
 		return
 	}
 	s.sessionsMu.RLock()
-	targets := make([]*session, 0, len(s.sessions))
+	targets := make([]seerRecipient, 0, len(s.sessions))
 	for target := range s.sessions {
 		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil {
 			continue
@@ -1742,10 +1828,7 @@ func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, inst
 		if target.player.Map != mapID || target.player.InstanceID != instanceID {
 			continue
 		}
-		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > radius {
-			continue
-		}
-		targets = append(targets, target)
+		targets = append(targets, seerRecipient{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID, x: target.player.X, y: target.player.Y, z: target.player.Z})
 	}
 	s.sessionsMu.RUnlock()
 	var sourcePhase uint32 = 1
@@ -1753,10 +1836,17 @@ func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, inst
 		sourcePhase = source.currentPlayerPhaseMask()
 	}
 	for _, target := range targets {
-		if source != nil && sourcePhase&target.currentPlayerPhaseMask() == 0 {
+		if source != nil && sourcePhase&target.sess.currentPlayerPhaseMask() == 0 {
 			continue
 		}
-		_ = target.write(opcode, payload, true)
+		rx, ry, rz := target.x, target.y, target.z
+		if vx, vy, vz, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+			rx, ry, rz = vx, vy, vz
+		}
+		if distance3D(rx, ry, rz, cx, cy, cz) > radius {
+			continue
+		}
+		_ = target.sess.write(opcode, payload, true)
 	}
 }
 
@@ -1776,7 +1866,7 @@ func (s *Server) broadcastToSetWithinFromPhase(opcode uint16, payload []byte, ma
 		sourcePhase = 1
 	}
 	s.sessionsMu.RLock()
-	targets := make([]*session, 0, len(s.sessions))
+	targets := make([]seerRecipient, 0, len(s.sessions))
 	for target := range s.sessions {
 		if !target.authed || !target.worldReady.Load() || target.player == nil {
 			continue
@@ -1784,17 +1874,21 @@ func (s *Server) broadcastToSetWithinFromPhase(opcode uint16, payload []byte, ma
 		if target.player.Map != mapID || target.player.InstanceID != instanceID {
 			continue
 		}
-		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > radius {
-			continue
-		}
-		targets = append(targets, target)
+		targets = append(targets, seerRecipient{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID, x: target.player.X, y: target.player.Y, z: target.player.Z})
 	}
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
-		if sourcePhase&target.currentPlayerPhaseMask() == 0 {
+		if sourcePhase&target.sess.currentPlayerPhaseMask() == 0 {
 			continue
 		}
-		_ = target.write(opcode, payload, true)
+		rx, ry, rz := target.x, target.y, target.z
+		if vx, vy, vz, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+			rx, ry, rz = vx, vy, vz
+		}
+		if distance3D(rx, ry, rz, cx, cy, cz) > radius {
+			continue
+		}
+		_ = target.sess.write(opcode, payload, true)
 	}
 }
 
