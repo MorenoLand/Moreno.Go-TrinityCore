@@ -127,7 +127,7 @@ func petSpellPowerState(motion *creatureMotion, powerType uint32) (uint32, uint3
 	return motion.Powers[powerType], motion.MaxPowers[powerType], unitFieldPower1 + int(powerType), true, false
 }
 
-func (s *session) checkPetSpellPower(motion *creatureMotion, spell wotlk.Spell, castCount uint8) bool {
+func (s *session) checkPetSpellPower(motion *creatureMotion, spell wotlk.Spell, castCount uint8, actionBar bool) bool {
 	if s == nil || s.server == nil || motion == nil {
 		return false
 	}
@@ -135,7 +135,7 @@ func (s *session) checkPetSpellPower(motion *creatureMotion, spell wotlk.Spell, 
 	current, maximum, _, valid, healthPower := petSpellPowerState(motion, spell.PowerType)
 	s.server.motionMu.Unlock()
 	if !valid {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, petSpellFailedUnknown), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spell.ID, petSpellFailedUnknown), true)
 		return false
 	}
 	if cost := s.petSpellPowerCost(motion, spell, current, maximum); !petCanPayFullCost(spell, current, cost) {
@@ -143,7 +143,7 @@ func (s *session) checkPetSpellPower(motion *creatureMotion, spell wotlk.Spell, 
 		if healthPower {
 			failure = petSpellFailedCasterAuraState
 		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spell.ID, failure), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spell.ID, failure), true)
 		return false
 	}
 	return true

@@ -3413,7 +3413,7 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		if s.server != nil {
 			prevCommand = s.server.petCommandOnSpellCast(s.player.Map, s.player.InstanceID, petGUID)
 		}
-		if !s.checkPetCastGauntlet(ctx, motion, spellInfo, spellOrAction, castTarget, 0, false) {
+		if !s.checkPetCastGauntlet(ctx, motion, spellInfo, spellOrAction, castTarget, 0, false, true) {
 			// PetHandler.cpp:380-382: the cast failure resets the
 			// command-attack flag.
 			if s.server != nil {
@@ -3513,12 +3513,34 @@ func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool 
 	return true
 }
 
+// petActionBarCastFailedOpcode picks the failure packet for a pet-cast
+// gauntlet failure. PetHandler.cpp:373-382 sends SMSG_CAST_FAILED
+// (Spell::SendCastResult) instead of SMSG_PET_CAST_FAILED when the
+// action-bar caster is possessed or a vehicle, and SMSG_PET_CAST_FAILED
+// otherwise; the cast-spell path (PetHandler.cpp:824) always sends
+// SMSG_PET_CAST_FAILED, so the choice applies only on the action-bar arm.
+// Possessed mirrors Unit::isPossessed (Unit.h:1191, UNIT_STATE_POSSESSED,
+// kept in sync with motion.Possessed at charm apply/clear); vehicle mirrors
+// Unit::IsVehicle (Unit.h:842, UNIT_MASK_VEHICLE) via the creature's
+// vehicle kit.
+func (s *session) petActionBarCastFailedOpcode(motion *creatureMotion, actionBar bool) uint16 {
+	if !actionBar || s == nil || s.server == nil || motion == nil {
+		return uint16(protocol.OpcodeSMSG_PET_CAST_FAILED)
+	}
+	if motion.Possessed || motion.UnitFlags&unitFlagPossessed != 0 || s.server.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) != nil {
+		return uint16(protocol.OpcodeSMSG_CAST_FAILED)
+	}
+	return uint16(protocol.OpcodeSMSG_PET_CAST_FAILED)
+}
+
 // checkPetCastGauntlet runs the Spell::CheckPetCast (Spell.cpp:6219-6254) +
 // CheckCast(true) tail (Spell.cpp:6254) gauntlet shared by the client
 // cast-spell path (HandlePetCastSpellOpcode, PetHandler.cpp:775-797) and the
 // pet action-bar spell arm (PetHandler.cpp:273-382). Each failing arm sends
 // SMSG_PET_CAST_FAILED to the owner (Spell::SendPetCastResult,
-// Spell.cpp:SendPetCastResult) and the helper returns false; a true return
+// Spell.cpp:SendPetCastResult) and the helper returns false, except on the
+// action-bar arm for a possessed or vehicle caster, which sends
+// SMSG_CAST_FAILED instead (PetHandler.cpp:373-382); a true return
 // means the cast may proceed to executePetSpellWithOptions
 // (Spell::prepare/_cast). The cast-spell path resolves the target first
 // (self-cast spells, then the owner's selection); the action-bar arm passes
@@ -3530,9 +3552,9 @@ func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool 
 // SPELL_FAILED_CASTER_DEAD from the tail's head (Spell.cpp:5177-5179); the
 // action-bar path keeps its pre-filtered motion and its documented dead-pet
 // behavior, so the arm stays off there.
-func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, castCount uint8, deathGate bool) bool {
+func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, spellID uint32, target protocol.SpellTargetData, castCount uint8, deathGate bool, actionBar bool) bool {
 	if s.isDeadOrGhost() {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
 		return false
 	}
 	// Spell::CheckPetCast (Spell.cpp:6230-6235): a spell that needs an explicit
@@ -3541,13 +3563,13 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	// covered by the resolution above; the m_targets.SetUnitTarget(target) half
 	// is structural — target.UnitGUID carries the resolved target onward).
 	if spellNeedsExplicitUnitTarget(spell) && target.UnitGUID == 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadImplicitTargets), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedBadImplicitTargets), true)
 		return false
 	}
 	// Spell::CheckPetCast (Spell.cpp:6237-6247): power precedes cooldown, and
 	// both precede the CheckCast(true) tail (Spell.cpp:6254) — a cast that
 	// fails power and range together reports the power failure, like C++.
-	if !s.checkPetSpellPower(motion, spell, castCount) {
+	if !s.checkPetSpellPower(motion, spell, castCount, actionBar) {
 		return false
 	}
 	now := time.Now()
@@ -3561,11 +3583,11 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	}
 	s.server.motionMu.Unlock()
 	if !spellCooldownEnd.IsZero() && !spellCooldownEnd.Before(now) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 		return false
 	}
 	if !categoryEnd.IsZero() && !categoryEnd.Before(now) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 		return false
 	}
 	// Spell::CheckPetCast GCD arm (Spell.cpp:6249-6252): a pet or charmed
@@ -3579,7 +3601,7 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	// relative order: power, then IsReady (bridged above), then this arm,
 	// then CheckCast(true).
 	if spell.StartRecoveryCategory > 0 && s.server.petGlobalCooldownActive(motion, spell, now) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedNotReady), true)
 		return false
 	}
 	// Spell::CheckCast (Spell.cpp:5177-5179): the death-state arm opens
@@ -3590,7 +3612,7 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	// (PetHandler.cpp:791-796), i.e. triggered-by-aura, so C++'s
 	// triggered non-aura exemption does not apply to it.
 	if deathGate && motion.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.Attributes&spellAttr0CastableWhileDead == 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedCasterDead), true)
 		return false
 	}
 	// CheckCast(true) tail (Spell.cpp:6254), modeled subset in C++ relative
@@ -3603,7 +3625,7 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	// (5372); the backstop in executePetSpellWithOptions re-checks this for
 	// AI and triggered casts, which fizzle silently.
 	if target.UnitGUID != 0 && s.server != nil && !s.server.checkCreatureExplicitTargetFaction(motion, s, spell, target.UnitGUID) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 		return false
 	}
 	// SpellInfo::CheckTarget GM/invisibility leg (SpellInfo.cpp:1736-1743):
@@ -3612,7 +3634,7 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	// session player, so the gate fires for harmful and helpful casts alike,
 	// like C++; self-targets are exempt (unitTarget != caster).
 	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID && s.server != nil && s.server.gmAttackTargetBlocked(target.UnitGUID) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBmOrInvisGod), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedBmOrInvisGod), true)
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1636-1638):
@@ -3620,19 +3642,19 @@ func (s *session) checkPetCastGauntlet(ctx context.Context, motion *creatureMoti
 	// SPELL_FAILED_BAD_TARGETS. (The old isHarmfulSpell proxy is dropped:
 	// C++ keys on the attribute, not harmfulness.)
 	if spell.AttributesEx&spellAttr1CantTargetSelf != 0 && target.UnitGUID == motion.GUID {
-		_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+		_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 		return false
 	}
 	if target.UnitGUID != 0 && target.UnitGUID != motion.GUID {
 		targetState, targetFound := s.getCombatTarget(ctx, target.UnitGUID)
 		if !targetFound || targetState.Map != motion.Map {
-			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+			_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 			return false
 		}
 		if spell.RangeIndex > 0 {
 			if rangeInfo, rangeFound, rangeErr := s.server.Data.SpellRange(spell.RangeIndex); rangeErr == nil && rangeFound && rangeInfo.MaxHostile > 0 {
 				if distance3D(motion.X, motion.Y, motion.Z, targetState.X, targetState.Y, targetState.Z) > float64(rangeInfo.MaxHostile)+5 {
-					_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(castCount, spellID, 97), true)
+					_ = s.write(s.petActionBarCastFailedOpcode(motion, actionBar), buildCastFailed(castCount, spellID, 97), true)
 					return false
 				}
 			}
@@ -3750,7 +3772,7 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 			target.Flags |= protocol.SpellTargetFlagUnit
 		}
 	}
-	if !s.checkPetCastGauntlet(ctx, motion, spell, spellID, target, castCount, true) {
+	if !s.checkPetCastGauntlet(ctx, motion, spell, spellID, target, castCount, true, false) {
 		return true
 	}
 	if !s.executePetSpellWithOptions(ctx, motion, spell, castCount, target, triggered) {

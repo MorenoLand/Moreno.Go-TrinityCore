@@ -1368,7 +1368,7 @@ func replayCharacterLogin(ctx context.Context, server *Server, guid uint64, petC
 			motion.Mana = cost - 1
 		}
 		server.motionMu.Unlock()
-		if session.checkPetSpellPower(motion, spell, 0) {
+		if session.checkPetSpellPower(motion, spell, 0, false) {
 			server.motionMu.Lock()
 			motion.Powers[spell.PowerType], motion.Mana, motion.LastSpell = originalPower, originalMana, originalLastSpell
 			motion.SpellCooldowns, motion.SpellCategoryCooldowns = originalSpellCooldowns, originalCategoryCooldowns
