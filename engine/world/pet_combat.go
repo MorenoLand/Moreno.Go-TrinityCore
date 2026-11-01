@@ -2257,8 +2257,26 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1641-1642): the CanSeeOrDetect
-	// visibility gate is unbridged — Go has no stealth/invisibility-level
-	// model on either side (documented no-bridge, like the player path).
+	// visibility gate. C++ CanDetect (Object.cpp:1664-1680) routes pets
+	// through their master's detection ("Pets don't have detection, they
+	// use the detection of their masters"), so the owner session's
+	// detect core is the exact twin: canDetectStealthOf +
+	// canDetectInvisibilityOfPlayer, with the owner position, level and
+	// arcs as the seer read, matching C++'s seer = controller.
+	// Implicit is false for a creature caster (Spell.cpp:5372), so no
+	// stealth exemption. Self targets pass automatically (a creature
+	// GUID never resolves to a session); creature targets pass (motions
+	// carry no stealth/invisibility aura state); CAN_TARGET_INVISIBLE
+	// exempts. Sight-range, ghost-team/group, vehicle-accessory and
+	// despawn legs stay out, as on the player path; the GM-visibility
+	// leg rides the GM/invisibility arm below.
+	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && s.server != nil {
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+				return false
+			}
+		}
+	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1650-1651):
 	// SPELL_ATTR1_CANT_TARGET_IN_COMBAT with an in-combat target. The
 	// half rides unitTargetPetInCombat.
@@ -2266,8 +2284,33 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1654-1662):
-	// SPELL_ATTR3_ONLY_TARGET_GHOSTS — no Go model (target-side ghost aura
-	// state is unmodeled); documented no-bridge.
+	// SPELL_ATTR3_ONLY_TARGET_GHOSTS, between in-combat (1650) and the
+	// player-caster block in C++ order, outside the caster != target
+	// block, so self targets judge it too. Reuses the gauntlet read
+	// verbatim: a player target's ghost bit (PlayerFlags, the
+	// triggered-funnel read); creature targets carry no ghost aura
+	// state and read false, as on the funnel. A ghost-only spell
+	// rejects a non-ghost target; any other spell rejects a ghost
+	// target. Unresolvable targets fail open, like the dead gate.
+	if s.server != nil {
+		targetGhost := false
+		targetResolves := false
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			targetGhost = ts.player.PlayerFlags&playerFlagGhost != 0
+			targetResolves = true
+		} else if _, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			targetResolves = true
+		}
+		if targetResolves {
+			if spell.AttributesEx3&spellAttr3OnlyTargetGhosts != 0 {
+				if !targetGhost {
+					return false
+				}
+			} else if targetGhost {
+				return false
+			}
+		}
+	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1667-1692): the CANT_TARGET_TAPPED,
 	// PICKPOCKET and DISARM arms sit inside C++'s
 	// `caster->GetTypeId() == TYPEID_PLAYER` block — vacuous for a pet
@@ -2285,7 +2328,14 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	// unless the spell allows them (IsAllowingDeadTarget, 1177).
 	// Unresolvable targets fail open, like the LOS arms below.
 	if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
-		if tgt.Health == 0 && !spellAllowsDeadTarget(spell) {
+		// C++ IsAlive() is false for ghosts too (deathState CORPSE);
+		// ghosts carry Health=1 in Go (death.go:473), so the health
+		// read alone misses them — the session ghost read closes it,
+		// mirroring the completion net. The ghost arm above already
+		// fails ghost targets for non-ghost spells; this leg is what
+		// fails a ghost-only spell on a ghost target that does not
+		// allow dead targets.
+		if (tgt.Health == 0 || s.ghostAttackTargetBlocked(targetGUID)) && !spellAllowsDeadTarget(spell) {
 			return false
 		}
 	}
@@ -2333,8 +2383,15 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1776-1778):
-	// SPELL_AURA_PREVENT_RESURRECTION — unbridged on the player path too;
-	// documented no-bridge parity.
+	// SPELL_AURA_PREVENT_RESURRECTION — the last arm, after the
+	// aura-spell gates. Reuses the completion twin verbatim:
+	// spellHasResurrectEffect (SELF_RESURRECT, RESURRECT,
+	// RESURRECT_NEW) plus targetHasPreventResurrectionAura (player
+	// session aura-type list, creature live aura scan; unresolvable
+	// targets pass). No self exemption in C++.
+	if spellHasResurrectEffect(spell) && s.targetHasPreventResurrectionAura(ctx, targetGUID) {
+		return false
+	}
 	return true
 }
 
