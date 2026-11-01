@@ -505,6 +505,8 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 		return
 	}
 	updates := protocol.NewUpdateData()
+	seesHidden := observer.gmVisibilityDetect != 0
+	isGhost := observer.player.Health > 0 && observer.player.PlayerFlags&playerFlagGhost != 0
 	creatureGUIDs := make([]uint64, 0, len(transport.StaticCreatures))
 	creaturePositions := make([]string, 0, len(transport.StaticCreatures))
 	objectGUIDs := make([]uint64, 0, len(transport.StaticObjects))
@@ -522,6 +524,13 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 			continue
 		}
 		if s.creatureCorpseRemoved(passenger.GUID, observer.player.Map, 0) {
+			if observer.clearTransportPassengerVisible(guid, transportGUID) {
+				updates.AddOutOfRangeGUID(guid)
+				removedGUIDs = append(removedGUIDs, guid)
+			}
+			continue
+		}
+		if isGhost && !seesHidden && !s.creatureVisibleToGhostSeer(*observer.player, &passenger) {
 			if observer.clearTransportPassengerVisible(guid, transportGUID) {
 				updates.AddOutOfRangeGUID(guid)
 				removedGUIDs = append(removedGUIDs, guid)
@@ -608,6 +617,9 @@ func (s *Server) buildAttachedTransportPassengerUpdates(ctx context.Context, sta
 		if guid == 0 {
 			guid = creatureWorldGUID(passenger.GUID, passenger.Entry)
 		}
+		if observer != nil && observer.player != nil && observer.player.Health > 0 && observer.player.PlayerFlags&playerFlagGhost != 0 && observer.gmVisibilityDetect == 0 && !s.creatureVisibleToGhostSeer(*observer.player, &passenger) {
+			continue
+		}
 		if observer != nil && !observer.markTransportPassengerVisible(guid, transportGUID(transport.Spawn.GUID)) {
 			continue
 		}
@@ -654,6 +666,9 @@ func (s *Server) buildAttachedTransportPlayerUpdates(state playerState, exclude 
 	guids := make([]uint64, 0, len(players))
 	for _, passenger := range players {
 		runtime := runtimeSessions[passenger.GUID]
+		if observer != nil && runtime != nil && !canSeePlayer(observer, runtime) {
+			continue
+		}
 		partyMember := observer != nil && observer.groupID != 0 && runtime != nil && runtime.groupID == observer.groupID
 		recipient := state
 		packet, err := s.buildPlayerUpdateForRecipient(passenger, false, partyMember, runtime, &recipient)
