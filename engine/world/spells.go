@@ -6877,13 +6877,14 @@ func (s *session) checkRangedAttackPowerAttackerBonusCast(spell wotlk.Spell, tar
 		}
 		return 0
 	}
+	factionTemplate := s.effectiveFactionTemplate(s.player.Race)
 	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid)
 	if motion == nil {
 		return 0
 	}
-	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.effectiveFactionTemplate(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	caster := playerPos{Map: s.player.Map, InstanceID: s.player.InstanceID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: factionTemplate, Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	if s.server.isFriendlyFaction(motion.Faction, caster) {
 		return spellFailedTargetFriendly
 	}
