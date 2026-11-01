@@ -27206,9 +27206,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					}
 					s.server.motionMu.Lock()
 					motion.X, motion.Y, motion.Z = dx, dy, dz
-					instMap, instanceID, phase := motion.Map, motion.InstanceID, motion.PhaseMask
+					instMap, instanceID, phase, transportGUID := motion.Map, motion.InstanceID, motion.PhaseMask, motion.TransportGUID
 					s.server.motionMu.Unlock()
-					s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, teleGUID, dx, dy, dz, phase)
+					s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, teleGUID, dx, dy, dz, phase, transportGUID)
 					// EffectTeleportUnits (SpellEffects.cpp:1223) runs
 					// NearTeleportTo per target, so a moved vehicle
 					// base fans out like the teleport-units arm above.
@@ -49064,12 +49064,12 @@ func (s *session) teleportEffectUnitTargets(hitTargets []uint64, mapID uint32, x
 			motion.X, motion.Y, motion.Z = x, y, z
 			motion.Orientation = ori
 		}
-		instMap, instanceID, phase := motion.Map, motion.InstanceID, motion.PhaseMask
+		instMap, instanceID, phase, transportGUID := motion.Map, motion.InstanceID, motion.PhaseMask, motion.TransportGUID
 		s.server.motionMu.Unlock()
 		if !sameMap {
 			continue
 		}
-		s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, effectTarget, x, y, z, phase)
+		s.server.broadcastMonsterMoveStopInInstance(instMap, instanceID, effectTarget, x, y, z, phase, transportGUID)
 		// EffectTeleportUnits (SpellEffects.cpp:1223) runs
 		// NearTeleportTo per target, so a moved vehicle base fans out
 		// like the teleport-units arm in boss_ai.go; cross-map
@@ -50622,7 +50622,7 @@ func (s *session) handleEffectDistract(ctx context.Context, spell wotlk.Spell, e
 		// DistractMovementGenerator::Initialize launches an in-place
 		// MoveTo+SetFacing spline; Go reuses the facing arm of the monster
 		// move packet for the client-side turn.
-		s.server.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 1000, false, angle, true, motion.PhaseMask)
+		s.server.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, motion.X, motion.Y, motion.Z, 1000, false, angle, true, motion.PhaseMask, motion.TransportGUID)
 	}
 	_ = ctx
 }

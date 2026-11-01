@@ -1973,8 +1973,9 @@ func (s *session) refreshActivePetOnResummon(ctx context.Context, petID uint32, 
 	maxHealth, maxMana := motion.MaxHealth, motion.MaxMana
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
 	s.server.motionMu.Unlock()
-	s.server.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, petX, petY, petZ, phase)
+	s.server.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, petX, petY, petZ, phase, transportGUID)
 	if restore {
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_spell_cooldown WHERE guid = ?", petID)
@@ -2175,7 +2176,7 @@ func (s *session) handleResurrectPet(ctx context.Context, spellID uint32, eff wo
 				unitFieldHealth:       reviveHP,
 				unitFieldDynamicFlags: 0,
 			})
-			s.server.broadcastMonsterMoveStopInInstance(s.player.Map, s.player.InstanceID, s.player.PetGUID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+			s.server.broadcastMonsterMoveStopInInstance(s.player.Map, s.player.InstanceID, s.player.PetGUID, motion.X, motion.Y, motion.Z, motion.PhaseMask, motion.TransportGUID)
 			return
 		}
 		s.server.motionMu.Unlock()

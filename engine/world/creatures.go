@@ -718,9 +718,18 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 	return block.Bytes()
 }
 
-func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, facing float32, hasFacing bool) []byte {
+func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, facing float32, hasFacing bool, transportGUID uint64) []byte {
 	packet := protocol.NewBuffer(64)
 	packet.WritePackedGUID(rawGUID)
+	if transportGUID != 0 {
+		// MoveSplineInit::Launch/Stop (MoveSplineInit.cpp:131-136, 181-186):
+		// an on-transport spline switches opcode to SMSG_MONSTER_MOVE_TRANSPORT
+		// and inserts the transport GUID + seat after the mover GUID; the body
+		// is identical. Go models no creature transport seat; C++ defaults an
+		// unseated passenger to -1 (MovementInfo.h:40).
+		packet.WritePackedGUID(transportGUID)
+		packet.WriteI8(-1)
+	}
 	packet.WriteU8(0) // MOVEMENTFLAG2_UNK7
 	packet.WriteF32(startX)
 	packet.WriteF32(startY)
@@ -760,10 +769,10 @@ func maxUint32(value, fallback uint32) uint32 {
 }
 
 func (s *Server) broadcastMonsterMove(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, phase uint32) {
-	s.broadcastMonsterMoveMode(mapID, rawGUID, startX, startY, startZ, destX, destY, destZ, duration, false, phase)
+	s.broadcastMonsterMoveMode(mapID, rawGUID, startX, startY, startZ, destX, destY, destZ, duration, false, phase, 0)
 }
 
-func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, phase uint32) {
+func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, phase uint32, transportGUID uint64) {
 	// Documented delta vs C++ (audited 2026-10-07): WaypointMovementGenerator
 	// selects walk speed via init.SetWalk (velocity only — MoveSplineInitArgs.h:58,
 	// MoveSplineInit.cpp:111) and never calls Creature::SetWalk, so C++ sends no
@@ -771,7 +780,11 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 	// only by Creature::SetWalk, Creature.cpp:3017, i.e. persistent walk state).
 	// Go sends the mode packet per walk node so walk-speed splines animate as
 	// walk instead of run-in-place; deliberate client-visible improvement.
-	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, 0, false)
+	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, 0, false, transportGUID)
+	moveOpcode := protocol.OpcodeSMSG_MONSTER_MOVE
+	if transportGUID != 0 {
+		moveOpcode = protocol.OpcodeSMSG_MONSTER_MOVE_TRANSPORT
+	}
 	modeOpcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
 	if walk {
 		modeOpcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
@@ -802,12 +815,16 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 			continue
 		}
 		_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
-		_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
+		_ = sess.write(uint16(moveOpcode), packet, true)
 	}
 }
 
-func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32) {
-	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, facing, hasFacing)
+func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32, transportGUID uint64) {
+	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, facing, hasFacing, transportGUID)
+	moveOpcode := protocol.OpcodeSMSG_MONSTER_MOVE
+	if transportGUID != 0 {
+		moveOpcode = protocol.OpcodeSMSG_MONSTER_MOVE_TRANSPORT
+	}
 	modeOpcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
 	if walk {
 		modeOpcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
@@ -838,7 +855,7 @@ func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUI
 			continue
 		}
 		_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
-		_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
+		_ = sess.write(uint16(moveOpcode), packet, true)
 	}
 }
 
