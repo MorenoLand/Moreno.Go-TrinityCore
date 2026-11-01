@@ -985,6 +985,15 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 			s.streamNearbyObjectsAt(ctx, info.X, info.Y, info.Z)
 		}
 	}
+	// A player viewpoint target walks the same way a creature target does:
+	// observers bound to this player need the neighbourhood around the new
+	// coords re-streamed, or stationary objects the player approaches
+	// never arrive (see reStreamFarsightObservers). Vehicle and possessed
+	// movers carry another GUID, so only the plain player path re-streams
+	// here; the possessed creature's own legs are the creature-target arm.
+	if !vehicleMover && !possessedMover {
+		s.server.reStreamFarsightObservers(s.player.Map, s.player.InstanceID, true, guid, info.X, info.Y, info.Z)
+	}
 	return true
 }
 
@@ -1486,6 +1495,57 @@ type seerRecipient struct {
 	guid     uint64
 	farsight uint64
 	x, y, z  float32
+}
+
+// reStreamFarsightObservers re-streams the neighbourhood around a viewpoint
+// target that moved, for every observer bound to it (PLAYER_FARSIGHT ==
+// targetGUID on the same map, and the same instance when checkInstance).
+// C++ ground: the visibility tick re-centers on m_seer every tick
+// (Player.cpp:22794-22799, Cell::VisitAllObjects(m_seer, ...)), so a
+// walking viewpoint pulls newly-near pre-existing objects into the
+// observer's client set. Go has no visibility tick — streams fire only on
+// movement/teleport/zone events — so the set site streams once, and
+// nothing re-fired while the target walked: stationary objects the target
+// approached never arrived (spawns and updates are seer-gated fan-outs,
+// but a pre-existing stationary object sends nothing). The 30yd 2D arm
+// mirrors the player and possessed-mover stream arms in handleMovement;
+// the shared lastStream anchor already sits at the last viewpoint-stream
+// coords for a bound observer (body movement never moves it), so the
+// anchor check needs no new per-observer state. Call only after
+// sessionsMu drops: streamNearbyObjectsAt takes session and motion locks
+// itself.
+func (s *Server) reStreamFarsightObservers(mapID, instanceID uint32, checkInstance bool, targetGUID uint64, x, y, z float32) {
+	if s == nil || targetGUID == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	var observers []*session
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil {
+			continue
+		}
+		if sess.player.Map != mapID {
+			continue
+		}
+		if checkInstance && sess.player.InstanceID != instanceID {
+			continue
+		}
+		if sess.player.FarsightGUID != targetGUID {
+			continue
+		}
+		observers = append(observers, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, obs := range observers {
+		if obs.player == nil {
+			continue
+		}
+		dx := float64(x - obs.lastStreamX)
+		dy := float64(y - obs.lastStreamY)
+		if dx*dx+dy*dy > 30.0*30.0 {
+			obs.streamNearbyObjectsAt(context.Background(), x, y, z)
+		}
+	}
 }
 
 // broadcastMovement mirrors mover->SendMessageToSet (MovementHandler.cpp:387):

@@ -817,6 +817,11 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 		_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
 		_ = sess.write(uint16(moveOpcode), packet, true)
 	}
+	// Creature-target re-stream (see reStreamFarsightObservers): the spline
+	// destination is where the viewpoint now sits. Map-only, matching this
+	// form's map-wide fan-out; the form itself has no live callers (only
+	// the broadcastMonsterMove wrapper), so no seer gate is ported here.
+	s.reStreamFarsightObservers(mapID, 0, false, rawGUID, destX, destY, destZ)
 }
 
 func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32, transportGUID uint64) {
@@ -848,7 +853,22 @@ func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUI
 		phase = 1
 	}
 	for _, sess := range targets {
-		if sess.player == nil || math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) > distance {
+		if sess.player == nil {
+			continue
+		}
+		// Seer distance leg (CanSeeOrDetect GetViewpoint leg,
+		// Object.cpp:1618, as on the create helper): a bound observer
+		// receives the mover's spline when the mover is viewpoint-near,
+		// not only body-near — otherwise the viewpoint-near mover's own
+		// packets never reach the observer at all. Unresolvable viewpoints
+		// fail open to the body coords, preserving the old gate exactly.
+		cx, cy := sess.player.X, sess.player.Y
+		if sess.player.FarsightGUID != 0 {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, instanceID, sess.player.GUID, sess.player.FarsightGUID); ok {
+				cx, cy = vx, vy
+			}
+		}
+		if math.Hypot(float64(startX-cx), float64(startY-cy)) > distance {
 			continue
 		}
 		if phase&sess.currentPlayerPhaseMask() == 0 {
@@ -857,6 +877,9 @@ func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUI
 		_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
 		_ = sess.write(uint16(moveOpcode), packet, true)
 	}
+	// Creature-target re-stream (see reStreamFarsightObservers): the spline
+	// destination is where the viewpoint now sits.
+	s.reStreamFarsightObservers(mapID, instanceID, true, rawGUID, destX, destY, destZ)
 }
 
 func (s *Server) buildCreatureValuesUpdate(guid uint64, fields map[int]uint32) (*protocol.Packet, error) {
