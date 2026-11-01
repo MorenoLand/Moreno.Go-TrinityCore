@@ -1141,8 +1141,13 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 // player-owned caster, player-owned motion candidates use the
 // affecting-player reaction arms (duel/group/FFA) ahead of the faction
 // gate, plus the portable assist PvP block, mirroring the player half
-// and the chain twin; unresolvable owners and static DB spawns keep
-// the faction gate (static spawns carry no owner tracking).
+// and the chain twin. With a player-owned caster, a candidate with no
+// resolving player owner is wild for the PvC arm (Object.cpp:3178-3183)
+// and passes only with TREAT_AS_RAID_UNIT/CAN_ASSIST, unless the spell
+// carries ASSIST_IGNORE_IMMUNE_FLAG; the target-IsPvP exemption has no
+// creature-side Go model, like the explicit-target twin. Static DB
+// spawns are wild by definition (no owner tracking) and take the same
+// gate from their template type_flags.
 func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, owner *session, destX, destY, destZ float32, hasDest bool) ([]uint64, map[uint64]uint8) {
 	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) {
 		return nil, nil
@@ -1198,7 +1203,12 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 		// IsValidAssistTarget's both-reactions rule (Object.cpp:3149).
 		// The portable assist PvP block applies because a player-owned
 		// target carries UNIT_FLAG_PLAYER_CONTROLLED (Object.cpp:3156).
-		// Unresolvable owners degrade to the faction gate, as before.
+		// A candidate with no resolving player owner is not
+		// player-controlled, so the PvC arm (Object.cpp:3178-3183)
+		// admits it only with TREAT_AS_RAID_UNIT/CAN_ASSIST, unless
+		// the spell ignores the immune flag; an owner session that
+		// cannot resolve (offline owner) falls into this wild
+		// treatment, indistinguishable in the Go model.
 		ally := !s.factionTemplatesHostile(motion.Faction, cand.Faction)
 		ownerGUID := cand.OwnerGUID
 		if ownerGUID == 0 {
@@ -1212,6 +1222,9 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 				if playerOwnedCreatureAssistPvPBlocked(casterOwner, candOwnerSess) {
 					continue
 				}
+			} else if spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+				cand.TypeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
+				continue
 			}
 		}
 		if !ally {
@@ -1237,7 +1250,8 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 	// misses them: the session friendly twin's WorldStore sweep runs
 	// here too — same bounding-box query, same gates (map, alive,
 	// totem, assist flag arm, non-hostile faction, cylinder, LOS from
-	// the center), skipping GUIDs that already have a motion. Static
+	// the center, player-owned-caster PvC type-flag gate),
+	// skipping GUIDs that already have a motion. Static
 	// spawns carry no owner tracking, so they take the ally bit only
 	// (party/raid bits stay clear, like the session twin's
 	// ally/false/false). Their GUIDs resolve through the legs'
@@ -1253,13 +1267,13 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 			minY = math.Min(minY, float64(g.centerY-g.radius))
 			maxY = math.Max(maxY, float64(g.centerY+g.radius))
 		}
-		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, minX, maxX, minY, maxY)
+		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth, COALESCE(t.type_flags, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, motion.Map, minX, maxX, minY, maxY)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
-				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
+				var low, entry, mapID, faction, unitFlags, flagsExtra, health, typeFlags int64
 				var x, y, z float64
-				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) != nil {
+				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health, &typeFlags) != nil {
 					continue
 				}
 				guid := creatureWorldGUID(uint32(low), uint32(entry))
@@ -1276,6 +1290,15 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 					continue
 				}
 				if s.factionTemplatesHostile(motion.Faction, uint32(faction)) {
+					continue
+				}
+				// Static spawns are wild, so a player-owned caster
+				// admits them only under the PvC type-flag arm
+				// (Object.cpp:3178-3183), unless the spell ignores
+				// the immune flag; the target-IsPvP exemption has
+				// no creature-side Go model, like the motion arm.
+				if casterOwner != nil && spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+					uint32(typeFlags)&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
 					continue
 				}
 				fx, fy, fz := float32(x), float32(y), float32(z)
