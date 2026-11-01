@@ -504,7 +504,7 @@ func (s *session) ownerAttackTargetValid(ctx context.Context, targetGUID uint64)
 	if target.Map != s.player.Map {
 		return false
 	}
-	return !s.explicitTargetFactionBlocked(targetFlagUnitEnemy, targetGUID, target)
+	return !s.explicitTargetFactionBlocked(wotlk.Spell{}, targetFlagUnitEnemy, targetGUID, target)
 }
 
 // godCheatActive reports whether this session's player carries the CHEAT_GOD

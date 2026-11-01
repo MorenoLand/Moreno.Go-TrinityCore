@@ -2106,7 +2106,7 @@ func (s *session) groundingTotemMagnetGUID(ctx context.Context, spell wotlk.Spel
 	if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, false) {
 		return 0, false
 	}
-	if s.explicitTargetFactionBlocked(explicitMask, totemGUID, tgt) {
+	if s.explicitTargetFactionBlocked(spell, explicitMask, totemGUID, tgt) {
 		return 0, false
 	}
 	totem.mu.Lock()

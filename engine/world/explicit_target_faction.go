@@ -382,7 +382,7 @@ func (s *session) explicitSelectionTargetOK(ctx context.Context, spell wotlk.Spe
 	if spellTargetUnitBlocked(spell, tgt.UnitFlags, tgt.FlagsExtra, assist) {
 		return false
 	}
-	return !s.explicitTargetFactionBlocked(explicitMask, guid, tgt)
+	return !s.explicitTargetFactionBlocked(spell, explicitMask, guid, tgt)
 }
 
 // resolveExplicitUnitTarget mirrors Spell::InitExplicitTargets (Spell.cpp:659-700)
@@ -530,7 +530,7 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 				return 0, target, spellFailedBadTargets, "explicit target blocked"
 			}
 		}
-		if s.explicitTargetFactionBlocked(explicitMask, adoptedUnit, tgt) {
+		if s.explicitTargetFactionBlocked(spell, explicitMask, adoptedUnit, tgt) {
 			return 0, target, spellFailedBadTargets, "explicit target faction mismatch"
 		}
 		if adoptedUnit != s.playerGUID && s.explicitTargetGMBlocked(adoptedUnit) {
@@ -549,7 +549,10 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 // ALLY/PARTY/RAID runs the WorldObject::IsValidAssistTarget term ("can't
 // assist non-friendly targets" - GetReactionTo below REP_NEUTRAL in both
 // directions, Object.cpp:3145), with the PARTY/RAID membership terms
-// (Unit::IsInPartyWith/Unit::IsInRaidWith, Unit.cpp:12126).
+// (Unit::IsInPartyWith/Unit::IsInRaidWith, Unit.cpp:12126). A wild creature
+// target additionally takes the PvC type-flags case (Object.cpp:3173-3183)
+// via explicitWildCreatureAssistPasses, and a wild PARTY/RAID target passes
+// membership only on TREAT_AS_RAID_UNIT (Unit.cpp:12126).
 // TARGET_FLAG_UNIT_MINIPET runs the unitTarget->GetGUID() ==
 // unitCaster->GetCritterGUID() term (SpellInfo.cpp:1806-1808): only the
 // caster's own vanity-pet minion is a valid target. Go's per-player critter
@@ -560,7 +563,7 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 // term (SpellInfo.cpp:1809-1811) via explicitTargetPassengerBlocked.
 // Returns true when no branch passes and the cast must fail with
 // SPELL_FAILED_BAD_TARGETS.
-func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uint64, tgt combatTarget) bool {
+func (s *session) explicitTargetFactionBlocked(spell wotlk.Spell, mask uint32, explicitUnitGUID uint64, tgt combatTarget) bool {
 	if mask&(targetFlagUnitEnemy|targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid|targetFlagUnitMinipet|targetFlagUnitPassenger) == 0 {
 		return false
 	}
@@ -575,10 +578,14 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 	var targetOwner *session
 	var ownedFaction uint32
 	ownedCreature := false
+	var wildMotion *creatureMotion
 	if targetSess == nil || targetSess.player == nil {
-		if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, explicitUnitGUID); tm != nil && tm.UnitFlags&unitFlagPlayerControlled != 0 && tm.OwnerGUID != 0 {
-			if owner := s.server.findSessionByGUID(tm.OwnerGUID); owner != nil && owner.player != nil {
-				targetOwner, ownedFaction, ownedCreature = owner, tm.Faction, true
+		if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, explicitUnitGUID); tm != nil {
+			wildMotion = tm
+			if tm.UnitFlags&unitFlagPlayerControlled != 0 && tm.OwnerGUID != 0 {
+				if owner := s.server.findSessionByGUID(tm.OwnerGUID); owner != nil && owner.player != nil {
+					targetOwner, ownedFaction, ownedCreature = owner, tm.Faction, true
+				}
 			}
 		}
 	}
@@ -619,7 +626,9 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) {
 				return false
 			}
-		} else if !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) {
+		} else if targetSess != nil && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) {
+			return false
+		} else if targetSess == nil && s.explicitWildCreatureAssistPasses(spell, tgt, wildMotion, !hostile) {
 			return false
 		}
 	}
@@ -628,7 +637,9 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) && (targetOwner == s || s.sameGroupAs(targetOwner, false)) {
 				return false
 			}
-		} else if !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, false) {
+		} else if targetSess != nil && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, false) {
+			return false
+		} else if targetSess == nil && wildMotion != nil && wildMotion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0 && s.explicitWildCreatureAssistPasses(spell, tgt, wildMotion, !hostile) {
 			return false
 		}
 	}
@@ -637,7 +648,9 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) && (targetOwner == s || s.sameGroupAs(targetOwner, true)) {
 				return false
 			}
-		} else if !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, true) {
+		} else if targetSess != nil && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, true) {
+			return false
+		} else if targetSess == nil && wildMotion != nil && wildMotion.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0 && s.explicitWildCreatureAssistPasses(spell, tgt, wildMotion, !hostile) {
 			return false
 		}
 	}
@@ -767,6 +780,37 @@ func (s *session) explicitWildCreatureAttackBlocked(tgt combatTarget) bool {
 		return true
 	}
 	return false
+}
+
+// explicitWildCreatureAssistPasses mirrors WorldObject::IsValidAssistTarget
+// (Object.cpp:3149, 3173-3183) for a player caster against a wild creature
+// target behind the explicit TARGET_FLAG_UNIT_ALLY/PARTY/RAID checks: the
+// non-friendly gate refuses only when BOTH reactions are below neutral,
+// via the chain twin sessionChainWildAssist3149 (forward = common template
+// rank, reverse = the caster's reputation rank against the target faction,
+// contested-guard hostile outright), replacing the single-direction
+// isHostileFaction proxy — a template-hostile one-direction pair now
+// passes, and a hostile-standing rep pair with a neutral forward rank
+// passes too. Then the PvC case: a non-player-controlled target takes the
+// type-flags arm unless the spell carries ASSIST_IGNORE_IMMUNE_FLAG, so a
+// wild creature without TREAT_AS_RAID_UNIT or CAN_ASSIST refuses. A
+// player-controlled motion with an unresolvable owner skips the PvC arm
+// (the PvP case owns that flag, its terms unmodeled for an offline owner),
+// and an unresolvable motion skips it too (no flags to read, fail open).
+// The target-IsPvP exemption has no creature-side Go model, as in the
+// chain twin, so the arm also applies to PvP-flagged wild creatures.
+// Returns true when the cast may proceed; PARTY/RAID membership is the
+// caller's additional term (TREAT_AS_RAID_UNIT, Unit.cpp:12126).
+func (s *session) explicitWildCreatureAssistPasses(spell wotlk.Spell, tgt combatTarget, tm *creatureMotion, factionAlly bool) bool {
+	if !s.sessionChainWildAssist3149(tgt.Faction, factionAlly) {
+		return false
+	}
+	if tm != nil && tm.UnitFlags&unitFlagPlayerControlled == 0 &&
+		spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+		tm.TypeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
+		return false
+	}
+	return true
 }
 
 // explicitTargetAttackPvPBlocked mirrors the player-vs-player tail of
