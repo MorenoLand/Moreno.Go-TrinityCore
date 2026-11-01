@@ -245,6 +245,10 @@ func gobjectEulerFromQuat(x, y, z, w float32) (yaw, pitch, roll float32) {
 // gobjectRefreshSpawn mirrors the C++ Delete()+LoadFromDB() respawn trick
 // (cs_gobject.cpp:351-361, 396-406): the 3.3.5a client caches deleted objects,
 // so the object is despawned and re-broadcast as a fresh create block.
+// The re-broadcast runs the CanNeverSee phase leg on the DB row's
+// phaseMask (LoadFromDB with addToWorld runs UpdateObjectVisibilityOnCreate);
+// the preceding despawn stays broad so old-phase seers who saw the object
+// still receive it, and a never-seen despawn is a client no-op.
 func (s *session) gobjectRefreshSpawn(ctx context.Context, db *sql.DB, spawnID uint32) {
 	row, ok := s.gobjectSpawnByGUID(ctx, db, spawnID)
 	if !ok {
@@ -272,12 +276,13 @@ func (s *session) gobjectRefreshSpawn(ctx context.Context, db *sql.DB, spawnID u
 		Type:        tmpl.goType,
 		DisplayID:   tmpl.displayID,
 		Size:        tmpl.size,
+		PhaseMask:   row.phaseMask,
 	}
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		if s.player != nil {
-			s.server.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), row.mapID, s.player.InstanceID, row.x, row.y, row.z, nil)
+			s.server.broadcastGameObjectCreateToVisibleSetAt(packet.Opcode, packet.Payload.Bytes(), row.mapID, s.player.InstanceID, row.x, row.y, row.z, row.phaseMask)
 		} else {
 			s.server.broadcastToMap(row.mapID, packet.Opcode, packet.Payload.Bytes())
 		}

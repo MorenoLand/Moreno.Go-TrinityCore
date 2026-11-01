@@ -1577,7 +1577,20 @@ func (s *Server) broadcastGameObjectCreateToVisibleSet(opcode uint16, payload []
 	if s == nil || dyn == nil {
 		return
 	}
-	targetPhase := dyn.PhaseMask
+	s.broadcastGameObjectCreateToVisibleSetAt(opcode, payload, dyn.Map, dyn.InstanceID, dyn.X, dyn.Y, dyn.Z, dyn.PhaseMask)
+}
+
+// broadcastGameObjectCreateToVisibleSetAt is the position+phase form of
+// broadcastGameObjectCreateToVisibleSet for creates with no dynamic state,
+// such as the .gobject refresh path's DB-row re-broadcast (GameObject::
+// LoadFromDB with addToWorld runs the same UpdateObjectVisibilityOnCreate
+// phase leg, cs_gobject.cpp:351-361). A zero phase reads as
+// PHASEMASK_NORMAL, as on the dynamic form.
+func (s *Server) broadcastGameObjectCreateToVisibleSetAt(opcode uint16, payload []byte, mapID, instanceID uint32, x, y, z float32, phaseMask uint32) {
+	if s == nil {
+		return
+	}
+	targetPhase := phaseMask
 	if targetPhase == 0 {
 		targetPhase = 1
 	}
@@ -1587,10 +1600,10 @@ func (s *Server) broadcastGameObjectCreateToVisibleSet(opcode uint16, payload []
 		if !target.authed || !target.worldReady.Load() || target.player == nil {
 			continue
 		}
-		if target.player.Map != dyn.Map || target.player.InstanceID != dyn.InstanceID {
+		if target.player.Map != mapID || target.player.InstanceID != instanceID {
 			continue
 		}
-		if distance3D(target.player.X, target.player.Y, target.player.Z, dyn.X, dyn.Y, dyn.Z) > 100.0 {
+		if distance3D(target.player.X, target.player.Y, target.player.Z, x, y, z) > 100.0 {
 			continue
 		}
 		targets = append(targets, target)
