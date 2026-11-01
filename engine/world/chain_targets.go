@@ -938,7 +938,10 @@ func (s *session) sessionChainOwnedAssist3149(candFaction uint32, ownerSess *ses
 // WorldObject::IsValidAssistTarget (Object.cpp:3149) for a player-owned
 // creature caster's chain jump pick against a player-owned creature
 // candidate whose decided reaction arms (same owner/duel/group/FFA) did
-// not fire, or whose owner does not resolve. It refuses only when BOTH
+// not fire, or whose owner does not resolve, and against a player
+// candidate on the same terms with the candidate's own session as the
+// reputation subject (the candidate is player-controlled, so the
+// player-controlled branch fires on both directions). It refuses only when BOTH
 // reactions are below neutral, replacing the single-direction
 // isHostileFaction proxy. The caster subject is the caster's affecting
 // player (casterOwner) and the caster template is the caster creature's
@@ -1424,8 +1427,9 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 // player-owned caster, player candidates (and player-owned creature
 // candidates on ALLY/PARTY/RAID and on ENEMY) use the affecting-player
 // reaction arms (duel/group/FFA) ahead of the faction gate, with
-// undecided or unresolvable owned creature candidates taking the
-// both-directions 3149 gate (motionChainOwnedAssist3149), and a wild
+// undecided player candidates and undecided or unresolvable owned
+// creature candidates taking the both-directions 3149 gate
+// (motionChainOwnedAssist3149), and a wild
 // caster's ENEMY creature candidates take the owner's at-war verdict
 // (wildCasterAttackHostile) instead of the template gate, and a wild
 // caster's ALLY/PARTY/RAID candidates take the both-directions assist
@@ -1622,6 +1626,12 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 		if casterOwner != nil {
 			if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterOwner, targetSession); decided {
 				playerAlly = reactionAlly
+			} else if checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid {
+				// Undecided player candidate: the both-directions
+				// 3149 gate replaces the template gate, mirroring
+				// the owned creature candidates above; the
+				// candidate's own session is the reputation subject.
+				playerAlly = s.motionChainOwnedAssist3149(casterOwner, m.Faction, candidate.FactionTemplate, targetSession, m.TypeFlags, playerAlly)
 			}
 			playerBlocked = playerOwnedCreatureAssistPvPBlocked(casterOwner, targetSession)
 		}
