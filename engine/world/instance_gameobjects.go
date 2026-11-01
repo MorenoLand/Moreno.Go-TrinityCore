@@ -431,50 +431,50 @@ func (s *Server) isGameObjectHiddenInInstance(mapID, instanceID uint32, guid uin
 // "for all visible players" — so all four instance helpers center on the GO
 // instead of the whole instance. Unknown GUIDs keep the old instance-wide
 // fan-out so no recipient is dropped for an unlocated GO.
-func (s *Server) gameObjectPositionInInstance(mapID, instanceID uint32, guid uint64) (float32, float32, float32, bool) {
-	if s == nil {
-		return 0, 0, 0, false
-	}
-	s.objectsMu.RLock()
-	defer s.objectsMu.RUnlock()
-	st := s.gameObjectStateLocked(mapID, instanceID, guid)
-	if st == nil {
-		return 0, 0, 0, false
-	}
-	return st.X, st.Y, st.Z, true
-}
-
-func (s *Server) broadcastToVisibleSetForGameObject(opcode uint16, payload []byte, mapID, instanceID uint32, guid uint64) {
-	if x, y, z, ok := s.gameObjectPositionInInstance(mapID, instanceID, guid); ok {
-		s.broadcastToVisibleSet(opcode, payload, mapID, instanceID, x, y, z, nil)
-		return
-	}
-	s.broadcastToInstance(mapID, instanceID, opcode, payload, nil)
-}
-
-func (s *Server) gameObjectPositionOnMap(mapID uint32, guid uint64) (instanceID uint32, x, y, z float32, ok bool) {
+func (s *Server) gameObjectPositionInInstance(mapID, instanceID uint32, guid uint64) (float32, float32, float32, uint32, bool) {
 	if s == nil {
 		return 0, 0, 0, 0, false
 	}
 	s.objectsMu.RLock()
 	defer s.objectsMu.RUnlock()
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if st == nil {
+		return 0, 0, 0, 0, false
+	}
+	return st.X, st.Y, st.Z, st.PhaseMask, true
+}
+
+func (s *Server) broadcastToVisibleSetForGameObject(opcode uint16, payload []byte, mapID, instanceID uint32, guid uint64) {
+	if x, y, z, phase, ok := s.gameObjectPositionInInstance(mapID, instanceID, guid); ok {
+		s.broadcastToVisibleSetFromPhase(opcode, payload, mapID, instanceID, x, y, z, phase)
+		return
+	}
+	s.broadcastToInstance(mapID, instanceID, opcode, payload, nil)
+}
+
+func (s *Server) gameObjectPositionOnMap(mapID uint32, guid uint64) (instanceID uint32, x, y, z float32, phase uint32, ok bool) {
+	if s == nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	s.objectsMu.RLock()
+	defer s.objectsMu.RUnlock()
 	if st := s.dynamicGameObjects[guid]; st != nil && st.Map == mapID {
-		return st.InstanceID, st.X, st.Y, st.Z, true
+		return st.InstanceID, st.X, st.Y, st.Z, st.PhaseMask, true
 	}
 	for key, states := range s.instanceGameObjects {
 		if key.MapID != mapID {
 			continue
 		}
 		if st := states[guid]; st != nil {
-			return key.InstanceID, st.X, st.Y, st.Z, true
+			return key.InstanceID, st.X, st.Y, st.Z, st.PhaseMask, true
 		}
 	}
-	return 0, 0, 0, 0, false
+	return 0, 0, 0, 0, 0, false
 }
 
 func (s *Server) broadcastToVisibleSetForGameObjectOnMap(opcode uint16, payload []byte, mapID uint32, guid uint64) {
-	if instanceID, x, y, z, ok := s.gameObjectPositionOnMap(mapID, guid); ok {
-		s.broadcastToVisibleSet(opcode, payload, mapID, instanceID, x, y, z, nil)
+	if instanceID, x, y, z, phase, ok := s.gameObjectPositionOnMap(mapID, guid); ok {
+		s.broadcastToVisibleSetFromPhase(opcode, payload, mapID, instanceID, x, y, z, phase)
 		return
 	}
 	s.broadcastToMap(mapID, opcode, payload)
@@ -590,6 +590,7 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 	}
 	s.objectsMu.Lock()
 	var x, y, z float32
+	var phase uint32
 	state := s.gameObjectStateLocked(mapID, instanceID, guid)
 	if state != nil {
 		if state.AutoCloseTimer != nil {
@@ -610,6 +611,7 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 	}
 	if state != nil {
 		x, y, z = state.X, state.Y, state.Z
+		phase = state.PhaseMask
 	}
 	s.objectsMu.Unlock()
 	if state == nil {
@@ -639,7 +641,7 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 	// The state was deleted above, so the lookup-based despawn twin would
 	// always miss and fall back instance-wide — fan out from the captured
 	// coordinates instead (SendObjectDeSpawnAnim, Object.cpp:1826).
-	s.broadcastGameObjectDespawnAt(mapID, instanceID, guid, x, y, z)
+	s.broadcastGameObjectDespawnAt(mapID, instanceID, guid, x, y, z, phase)
 	// Eluna GAMEOBJECT_EVENT_ON_REMOVE (event 13), fired from
 	// GameObject::RemoveFromWorld (GameObject.cpp:244): (event, gameobject).
 	// Only dynamic despawns have a live server-side object — static template

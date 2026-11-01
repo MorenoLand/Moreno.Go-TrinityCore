@@ -1709,13 +1709,17 @@ func (s *Server) broadcastGameObjectDespawn(mapID uint32, guid uint64) {
 	s.broadcastToVisibleSetForGameObjectOnMap(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes(), mapID, guid)
 }
 
-func (s *Server) broadcastGameObjectDespawnAt(mapID, instanceID uint32, guid uint64, x, y, z float32) {
+func (s *Server) broadcastGameObjectDespawnAt(mapID, instanceID uint32, guid uint64, x, y, z float32, phase uint32) {
 	if s == nil {
 		return
 	}
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(guid)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes(), mapID, instanceID, x, y, z, nil)
+	// SendObjectDeSpawnAnim (Object.cpp:1826) fans out through the GO's
+	// own SendMessageToSet, so the despawn keys on the GO's stamped phase
+	// (0 reads as PHASEMASK_NORMAL in the phase form); callers capture it
+	// before deleting the state.
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), buf.Bytes(), mapID, instanceID, x, y, z, phase)
 }
 
 func (s *Server) nextDynamicGameObjectLowGUID() uint32 {
@@ -2109,6 +2113,7 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	var mapID uint32
 	var instanceID uint32
 	var x, y, z float32
+	var phase uint32
 	var ownerGUID uint64
 	var fishingHandled bool
 	var goType uint8
@@ -2117,6 +2122,7 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 		mapID = dyn.Map
 		instanceID = dyn.InstanceID
 		x, y, z = dyn.X, dyn.Y, dyn.Z
+		phase = dyn.PhaseMask
 		ownerGUID = dyn.OwnerGUID
 		fishingHandled = dyn.FishingHandled
 		goType = dyn.Type
@@ -2139,7 +2145,7 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 		}
 	}
 	if removed {
-		s.broadcastGameObjectDespawnAt(mapID, instanceID, guid, x, y, z)
+		s.broadcastGameObjectDespawnAt(mapID, instanceID, guid, x, y, z, phase)
 	} else {
 		s.broadcastGameObjectDespawn(mapID, guid)
 	}

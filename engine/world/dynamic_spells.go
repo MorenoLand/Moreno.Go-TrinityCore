@@ -20,6 +20,7 @@ const (
 type dynamicSpellObjectState struct {
 	GUID, CasterGUID, SpellID uint64
 	Map, InstanceID           uint32
+	PhaseMask                 uint32 // caster phase at spawn; 0 = unknown, fan-out stays phase-blind
 	X, Y, Z, Orientation      float32
 	Radius                    float32
 	CastTime                  uint32
@@ -141,6 +142,13 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	if caster := s.findSessionByGUID(object.CasterGUID); caster != nil && caster.player != nil {
 		object.Map, object.InstanceID = caster.player.Map, caster.player.InstanceID
 	}
+	// DynamicObject::Create takes the caster's phase (DynamicObject.cpp);
+	// the dynobj's own SendMessageToSet fan-out keys on it.
+	if caster := s.findSessionByGUID(object.CasterGUID); caster != nil && caster.player != nil {
+		object.PhaseMask = caster.currentPlayerPhaseMask()
+	} else if m := s.findCreatureMotion(object.Map, object.InstanceID, object.CasterGUID); m != nil {
+		object.PhaseMask = m.PhaseMask
+	}
 	s.objectsMu.Lock()
 	if s.dynamicSpellObjects == nil {
 		s.dynamicSpellObjects = make(map[uint64]*dynamicSpellObjectState)
@@ -152,7 +160,11 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(buildDynamicSpellObjectUpdate(object))
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
-		s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, nil)
+		if object.PhaseMask != 0 {
+			s.broadcastToVisibleSetFromPhase(packet.Opcode, packet.Payload.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, object.PhaseMask)
+		} else {
+			s.broadcastToVisibleSet(packet.Opcode, packet.Payload.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, nil)
+		}
 	}
 }
 
@@ -511,7 +523,11 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 	// SMSG_DESTROY_OBJECT.
 	packet := protocol.NewBuffer(8)
 	packet.WriteU64(object.GUID)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), packet.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, nil)
+	if object.PhaseMask != 0 {
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), packet.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, object.PhaseMask)
+	} else {
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_GAMEOBJECT_DESPAWN_ANIM), packet.Bytes(), object.Map, object.InstanceID, object.X, object.Y, object.Z, nil)
+	}
 }
 
 // removeDynamicAreaAuras mirrors DynamicObject::RemoveFromWorld's RemoveAura

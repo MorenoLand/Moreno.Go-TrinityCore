@@ -1754,8 +1754,11 @@ func (s *Server) broadcastSpiritHealCast(spiritGUID uint64, sess *session) {
 	}
 	mapID, instanceID := sess.player.Map, sess.player.InstanceID
 	x, y, z := sess.player.X, sess.player.Y, sess.player.Z
+	var spiritPhase uint32
+	spiritPhaseKnown := false
 	if m := s.findCreatureMotion(mapID, instanceID, spiritGUID); m != nil {
 		x, y, z = m.X, m.Y, m.Z
+		spiritPhase, spiritPhaseKnown = m.PhaseMask, true
 	}
 	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: spiritGUID}
 	castFlags := spellCastFlagGo | spellCastFlagPending
@@ -1776,7 +1779,14 @@ func (s *Server) broadcastSpiritHealCast(spiritGUID uint64, sess *session) {
 	// precedent) — and ADJUST_MISSILE (:4316) needs a packet traj speed
 	// this hand-built target never carries.
 	pkt := protocol.BuildSpellGo(spiritGUID, spiritGUID, 0, 22012, castFlags, uint32(time.Now().UnixMilli()), []uint64{spiritGUID}, nil, target)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt, mapID, instanceID, x, y, z, nil)
+	// SendMessageToSet on the healer (Battleground.cpp:311) carries the
+	// MessageDistDeliverer phase leg; without a motion the healer's phase
+	// is unknown, so the old phase-blind fan-out is kept there.
+	if spiritPhaseKnown {
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt, mapID, instanceID, x, y, z, spiritPhase)
+	} else {
+		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), pkt, mapID, instanceID, x, y, z, nil)
+	}
 }
 
 // spiritWavePending records a wave's visual pass for one ghost: the spirit
