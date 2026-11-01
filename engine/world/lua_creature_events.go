@@ -1500,9 +1500,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		m.X, m.Y, m.Z, m.Orientation = x, y, z, o
 		m.Moving = false
 		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+		phase := m.PhaseMask
 		s.motionMu.Unlock()
 		_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
-		s.broadcastCreatureTeleportMovement(mapID, instanceID, x, y, nearby)
+		s.broadcastCreatureTeleportMovement(mapID, instanceID, x, y, nearby, phase)
 		s.syncCreatureVehiclePassengers(m)
 		return nil, nil
 	}
@@ -1534,12 +1535,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		motion.GravityDisabled = disable
 		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		phase := motion.PhaseMask
 		s.motionMu.Unlock()
 		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_ENABLE
 		if disable {
 			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_GRAVITY_DISABLE
 		}
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
 		return nil, nil
 	}
 	// GetZoneId/GetAreaId are Unit::GetZoneId()/GetAreaId() via
@@ -1587,12 +1589,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		motion.Hovering = enable
 		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		phase := motion.PhaseMask
 		s.motionMu.Unlock()
 		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_HOVER
 		if enable {
 			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_HOVER
 		}
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
 		return nil, nil
 	}
 	// SetCanFly is Creature::SetCanFly (Creature.cpp:3060): flips
@@ -1616,12 +1619,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		motion.Flying = enable
 		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		phase := motion.PhaseMask
 		s.motionMu.Unlock()
 		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_UNSET_FLYING
 		if enable {
 			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_FLYING
 		}
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
 		return nil, nil
 	}
 	// SetSwim is Unit::SetSwim (Unit.cpp:13728): flips
@@ -1646,12 +1650,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		motion.Swimming = enable
 		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		phase := motion.PhaseMask
 		s.motionMu.Unlock()
 		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_STOP_SWIM
 		if enable {
 			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_START_SWIM
 		}
-		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode)
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
 		return nil, nil
 	}
 	// SetCombatPulseDelay is Creature::SetCombatPulseDelay (Creature.h:270):

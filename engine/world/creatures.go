@@ -942,10 +942,10 @@ func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint3
 	// the whole instance. An unlocated creature keeps the instance-wide
 	// fan-out so no recipient is dropped.
 	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
-		s.fanOutCreatureValuesUpdate(packet, masked, mapID, instanceID, guid, true, m.X, m.Y, m.Z)
+		s.fanOutCreatureValuesUpdate(packet, masked, mapID, instanceID, guid, true, m.X, m.Y, m.Z, m.PhaseMask)
 		return
 	}
-	s.fanOutCreatureValuesUpdate(packet, masked, mapID, instanceID, guid, false, 0, 0, 0)
+	s.fanOutCreatureValuesUpdate(packet, masked, mapID, instanceID, guid, false, 0, 0, 0, 0)
 }
 
 // broadcastCreatureValuesUpdateAtInInstance is the motionMu-held twin of
@@ -956,26 +956,36 @@ func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint3
 // the visibility set; the mask only matters for lootable-flag broadcasts,
 // and the one lock-held site carrying that flag deadlocked on the mask
 // path before this variant existed.
-func (s *Server) broadcastCreatureValuesUpdateAtInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32, x, y, z float32) {
+func (s *Server) broadcastCreatureValuesUpdateAtInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32, x, y, z float32, phase uint32) {
 	packet, err := s.buildCreatureValuesUpdate(guid, fields)
 	if err != nil || packet == nil {
 		return
 	}
-	s.fanOutCreatureValuesUpdate(packet, nil, mapID, instanceID, guid, true, x, y, z)
+	s.fanOutCreatureValuesUpdate(packet, nil, mapID, instanceID, guid, true, x, y, z, phase)
 }
 
 // fanOutCreatureValuesUpdate delivers a built creature values-update block
 // to an instance's sessions, distance-gated to the 100yd visibility range
 // around (cx, cy, cz) when gated, instance-wide otherwise. The masked
 // variant, when present, goes to viewers the loot sparkle is hidden from.
-func (s *Server) fanOutCreatureValuesUpdate(packet, masked *protocol.Packet, mapID, instanceID uint32, guid uint64, gated bool, cx, cy, cz float32) {
+func (s *Server) fanOutCreatureValuesUpdate(packet, masked *protocol.Packet, mapID, instanceID uint32, guid uint64, gated bool, cx, cy, cz float32, phase uint32) {
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	targets := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
 			continue
 		}
 		if gated && distance3D(sess.player.X, sess.player.Y, sess.player.Z, cx, cy, cz) > 100.0 {
+			continue
+		}
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	if gated && phase == 0 {
+		phase = 1
+	}
+	for _, sess := range targets {
+		if gated && phase&sess.currentPlayerPhaseMask() == 0 {
 			continue
 		}
 		if masked != nil && !s.creatureLootSparkleVisible(mapID, instanceID, guid, sess.player.GUID, sess.groupID, sess.hasPendingBind()) {

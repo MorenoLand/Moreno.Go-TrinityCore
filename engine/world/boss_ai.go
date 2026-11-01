@@ -7090,7 +7090,12 @@ func (s *Server) creatureEffectForceDeselect(ctx context.Context, m *creatureMot
 	breakPkt.WritePackedGUID(m.GUID)
 	clearPkt := protocol.NewBuffer(8)
 	clearPkt.WriteU64(m.GUID)
+	phase := m.PhaseMask
+	if phase == 0 {
+		phase = 1
+	}
 	s.sessionsMu.RLock()
+	targets := make([]*session, 0, len(s.sessions))
 	for target := range s.sessions {
 		if target == nil || !target.authed || !target.worldReady.Load() || target.player == nil ||
 			target.player.Map != m.Map || target.player.InstanceID != m.InstanceID {
@@ -7102,10 +7107,16 @@ func (s *Server) creatureEffectForceDeselect(ctx context.Context, m *creatureMot
 		if distance3D(target.player.X, target.player.Y, target.player.Z, m.X, m.Y, m.Z) > 100.0 {
 			continue
 		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if phase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
 		_ = target.write(uint16(protocol.OpcodeSMSG_BREAK_TARGET), breakPkt.Bytes(), true)
 		_ = target.write(uint16(protocol.OpcodeSMSG_CLEAR_TARGET), clearPkt.Bytes(), true)
 	}
-	s.sessionsMu.RUnlock()
 	type stoppedMotion struct{ guid, victim uint64 }
 	var stopped []stoppedMotion
 	s.motionMu.Lock()

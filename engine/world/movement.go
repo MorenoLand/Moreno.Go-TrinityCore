@@ -131,7 +131,7 @@ func (s *Server) broadcastTeleportMovement(source *session, payload []byte) {
 // player shares the creature's map/instance and stands within visibility
 // distance of the destination. It is the creature twin of
 // broadcastTeleportMovement, which centers on a player session.
-func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, x, y float32, payload []byte) {
+func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, x, y float32, payload []byte, phase uint32) {
 	if s == nil || s.visibilityRangeForMap(mapID) <= 0 {
 		return
 	}
@@ -148,7 +148,13 @@ func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, x, 
 		targets = append(targets, target)
 	}
 	s.sessionsMu.RUnlock()
+	if phase == 0 {
+		phase = 1
+	}
 	for _, target := range targets {
+		if phase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
 		if err := target.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT), payload, true); err != nil {
 			target.debug("creature teleport movement broadcast failed", "account", target.accountName, "error", err)
 		}
@@ -162,7 +168,7 @@ func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, x, 
 // visibility distance of the creature. It is the gravity/hover twin of
 // broadcastCreatureTeleportMovement, which reuses the same targeting loop
 // for a different movement packet.
-func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y float32, guid uint64, opcode protocol.Opcode) {
+func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y float32, guid uint64, opcode protocol.Opcode, phase uint32) {
 	if s == nil || s.Config.VisibilityDistanceContinents <= 0 {
 		return
 	}
@@ -182,7 +188,13 @@ func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y floa
 		targets = append(targets, target)
 	}
 	s.sessionsMu.RUnlock()
+	if phase == 0 {
+		phase = 1
+	}
 	for _, target := range targets {
+		if phase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
 		if err := target.write(uint16(opcode), payload, true); err != nil {
 			target.debug("creature spline-move broadcast failed", "account", target.accountName, "guid", guid, "opcode", uint32(opcode), "error", err)
 		}
