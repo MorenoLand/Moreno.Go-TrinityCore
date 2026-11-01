@@ -824,6 +824,30 @@ func chainCreatureAttackHostile(casterSess *session, candOwnerGUID uint64, unitF
 	return factionHostile
 }
 
+// chainPlayerAttackHostile is the player-candidate twin of
+// chainCreatureAttackHostile: WorldObject::IsValidAttackTarget
+// (Spell.cpp:8336) for a chain jump pick refuses friendly targets
+// (Object.cpp:3028-3030) via GetReactionTo, whose player-controlled arms
+// (Object.cpp:2744-2762) make a duel opponent hostile even same-faction,
+// a same-group member friendly even cross-faction, and a both-FFA pair
+// hostile, all ahead of the faction-template gate; the duel arm
+// (Object.cpp:3062) then admits the opponent outright. A player-owned
+// caster with no decided arm keeps the faction attack gate
+// (isAttackableFaction: template hostility plus the PvC at-war term,
+// which is the wild-caster verdict since the at-war arm at
+// Object.cpp:3036-3053 fires only when exactly one side has an affecting
+// player). The sanctuary arm (Object.cpp:3065) and the PvP-flag tail
+// (Object.cpp:3073-3078) stay unmodeled residuals, like the creature twin.
+func chainPlayerAttackHostile(casterSess, targetSess *session, factionHostile bool) bool {
+	if casterSess == nil {
+		return factionHostile
+	}
+	if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterSess, targetSess); decided {
+		return !reactionAlly
+	}
+	return factionHostile
+}
+
 // chainCandidates collects units around the primary target within radius that
 // pass the chain spell's target check (WorldObjectSpellAreaTargetCheck,
 // Spell.cpp:8409, via WorldObjectSpellTargetCheck::operator(), Spell.cpp:8316).
@@ -1331,7 +1355,8 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			}
 			playerBlocked = playerOwnedCreatureAssistPvPBlocked(casterOwner, targetSession)
 		}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, s.isAttackableFaction(m.Faction, candidate), playerAlly, playerBlocked, true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
+		playerHostile := chainPlayerAttackHostile(casterOwner, targetSession, s.isAttackableFaction(m.Faction, candidate))
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, playerHostile, playerAlly, playerBlocked, true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
 	s.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.

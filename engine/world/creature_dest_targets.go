@@ -1057,6 +1057,7 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 			bestDist, bestGUID, bestX, bestY, bestZ = dist, guid, x, y, z
 		}
 	}
+	casterOwner := s.creatureAffectingPlayerSession(m)
 	s.sessionsMu.RLock()
 	for targetSession := range s.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil {
@@ -1076,7 +1077,7 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 			continue
 		}
 		candidate := playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: targetSession.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: targetSession.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: targetSession}
-		if !s.isAttackableFaction(m.Faction, candidate) {
+		if !chainPlayerAttackHostile(casterOwner, targetSession, s.isAttackableFaction(m.Faction, candidate)) {
 			continue
 		}
 		consider(targetSession.playerGUID, p.X, p.Y, p.Z, p.CombatReach)

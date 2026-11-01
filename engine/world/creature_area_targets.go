@@ -761,6 +761,7 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 	}
 	seen := map[uint64]struct{}{victim.GUID: {}}
 	var hits []*playerPos
+	casterOwner := s.creatureAffectingPlayerSession(motion)
 	s.sessionsMu.RLock()
 	for targetSession := range s.sessions {
 		if targetSession == nil || !targetSession.authed || !targetSession.worldReady.Load() || targetSession.player == nil || targetSession.player.Health == 0 {
@@ -785,8 +786,11 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
 		// WorldObjectSpellTargetCheck::operator() (Spell.cpp:8316):
 		// TARGET_CHECK_ENEMY — the same call shape as the creature's own
-		// aggro pick (creaturemotion.go canCreatureStartAttack).
-		if !s.isAttackableFaction(motion.Faction, candidate) {
+		// aggro pick (creaturemotion.go canCreatureStartAttack), with
+		// the player-owned reaction arms of the chain twin: a duel
+		// opponent is swept even same-faction, a cross-faction
+		// groupmate is excluded, both-FFA is swept.
+		if !chainPlayerAttackHostile(casterOwner, targetSession, s.isAttackableFaction(motion.Faction, candidate)) {
 			continue
 		}
 		// Per-leg geometry: cylinder + arc + LOS of any leg family.
