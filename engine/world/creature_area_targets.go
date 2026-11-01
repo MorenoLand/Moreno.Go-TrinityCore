@@ -1137,7 +1137,12 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 // raid bits resolve through the candidate's charmer/owner GUID
 // (Unit.cpp:12126), like the session friendly twin. Static DB spawns
 // without a motion join via the WorldStore sweep below (session
-// friendly twin precedent); they carry the ally bit only.
+// friendly twin precedent); they carry the ally bit only. With a
+// player-owned caster, player-owned motion candidates use the
+// affecting-player reaction arms (duel/group/FFA) ahead of the faction
+// gate, plus the portable assist PvP block, mirroring the player half
+// and the chain twin; unresolvable owners and static DB spawns keep
+// the faction gate (static spawns carry no owner tracking).
 func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, victim *playerPos, owner *session, destX, destY, destZ float32, hasDest bool) ([]uint64, map[uint64]uint8) {
 	if s == nil || motion == nil || victim == nil || !hasFriendlyAreaEffect(spell) {
 		return nil, nil
@@ -1149,7 +1154,17 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 	if len(groups) == 0 {
 		return nil, nil
 	}
-	_, inParty, inRaid := petAreaAllyGroupScope(s, owner)
+	// A player-owned caster's creature gate is the affecting player's
+	// reaction, like the player half and the chain twin: boss-ai/inline
+	// pass a spell-mod owner that resolves pets only, so a charmed
+	// caster arrives with a nil owner and resolves here; the pet path
+	// already passes its owner session. The resolved owner also drives
+	// the group scope, so both halves of the merged sweep share it.
+	casterOwner := owner
+	if casterOwner == nil {
+		casterOwner = s.creatureAffectingPlayerSession(motion)
+	}
+	_, inParty, inRaid := petAreaAllyGroupScope(s, casterOwner)
 	s.motionMu.Lock()
 	motionMap := s.motionMapLocked(motion.Map, motion.InstanceID)
 	candidates := make([]*creatureMotion, 0, len(motionMap))
@@ -1174,14 +1189,35 @@ func (s *Server) creatureAIAreaAllyCreatures(ctx context.Context, motion *creatu
 		if s.isTotemGUID(cand.GUID) || spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, true) {
 			continue
 		}
-		if s.factionTemplatesHostile(motion.Faction, cand.Faction) {
-			continue
-		}
+		// With a player-owned caster, a player-owned candidate's ally
+		// gate is the affecting-player reaction arms (duel/group/FFA,
+		// GetReactionTo Object.cpp:2744-2762), ahead of the faction
+		// gate — the chain twin's rule, and exact here because every
+		// arm is symmetric (same owner, duel partners, group, both
+		// FFA), so the single-direction override also satisfies
+		// IsValidAssistTarget's both-reactions rule (Object.cpp:3149).
+		// The portable assist PvP block applies because a player-owned
+		// target carries UNIT_FLAG_PLAYER_CONTROLLED (Object.cpp:3156).
+		// Unresolvable owners degrade to the faction gate, as before.
+		ally := !s.factionTemplatesHostile(motion.Faction, cand.Faction)
 		ownerGUID := cand.OwnerGUID
 		if ownerGUID == 0 {
 			ownerGUID = cand.CharmOwnerGUID
 		}
-		if !creatureAllyGroupPasses(groups, cand.X, cand.Y, cand.Z, true, inParty(ownerGUID), inRaid(ownerGUID), func(cx, cy, cz float32) bool {
+		if casterOwner != nil {
+			if candOwnerSess := s.findSessionByGUID(ownerGUID); candOwnerSess != nil {
+				if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterOwner, candOwnerSess); decided {
+					ally = reactionAlly
+				}
+				if playerOwnedCreatureAssistPvPBlocked(casterOwner, candOwnerSess) {
+					continue
+				}
+			}
+		}
+		if !ally {
+			continue
+		}
+		if !creatureAllyGroupPasses(groups, cand.X, cand.Y, cand.Z, ally, inParty(ownerGUID), inRaid(ownerGUID), func(cx, cy, cz float32) bool {
 			return spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 || s.hasLineOfSightSpellCheck(motion.Map, cx, cy, cz, cand.X, cand.Y, cand.Z)
 		}) {
 			continue
