@@ -188,6 +188,7 @@ const (
 	spellFailedTargetNoPockets           uint8  = 123 // SPELL_FAILED_TARGET_NO_POCKETS (SharedDefines.h:1105)
 	spellFailedTargetNotPlayer           uint8  = 122 // SPELL_FAILED_TARGET_NOT_PLAYER (SharedDefines.h:1104)
 	spellFailedTargetNoWeapons           uint8  = 124 // SPELL_FAILED_TARGET_NO_WEAPONS (SharedDefines.h:1106)
+	spellFailedTargetNotGhost            uint8  = 143 // SPELL_FAILED_TARGET_NOT_GHOST (SharedDefines.h:1125)
 	spellFailedTargetAffectingCombat     uint8  = 110 // SPELL_FAILED_TARGET_AFFECTING_COMBAT (SharedDefines.h:1092)
 	spellFailedTargetsDead               uint8  = 109 // SPELL_FAILED_TARGETS_DEAD (SharedDefines.h:1091)
 	spellFailedAffectingCombat           uint8  = 1
@@ -9842,6 +9843,38 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target in combat")
 				return
 			}
+			// ONLY_TARGET_GHOSTS (SpellInfo.cpp:1653-1660): sits
+			// between in-combat and tapped in C++ order, outside
+			// the caster != unitTarget block, so self targets judge
+			// it too. A player target that releases to ghost mid-bar
+			// (the PlayerFlags ghost bit, the triggered-funnel read)
+			// fails a non-ghost spell with SPELL_FAILED_BAD_TARGETS
+			// — ahead of the dead gate, as in C++ — and a target
+			// resurrected mid-bar fails a ghost-only spell with
+			// SPELL_FAILED_TARGET_NOT_GHOST. Creature targets never
+			// carry the ghost aura in Go's model, so they read false,
+			// as on the funnel; the ghost caster's own early return
+			// ahead of this block already swallows non-resurrect
+			// self casts.
+			if s.server != nil {
+				targetGhost := false
+				if ts := s.server.findSessionByGUID(target.UnitGUID); ts != nil && ts.player != nil {
+					targetGhost = ts.player.PlayerFlags&playerFlagGhost != 0
+				}
+				if spell.AttributesEx3&spellAttr3OnlyTargetGhosts != 0 {
+					if !targetGhost {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNotGhost), true)
+						s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+						s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target not ghost")
+						return
+					}
+				} else if targetGhost {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+					s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target is ghost")
+					return
+				}
+			}
 			// Tapped (SpellInfo.cpp:1667-1674): inside the caster !=
 			// unitTarget / player-caster block, so self targets skip it
 			// and the caster here is always the session player. A live
@@ -9868,6 +9901,29 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCantCastOnTapped), true)
 					s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target tapped by another player")
+					return
+				}
+			}
+			// Disarm (SpellInfo.cpp:1681-1692): inside the caster !=
+			// unitTarget / player-caster block, so self targets skip
+			// it. A player target that unequips its main-hand weapon
+			// or breaks it mid-bar fails with
+			// SPELL_FAILED_TARGET_NO_WEAPONS, reusing the gauntlet
+			// player leg verbatim (targetPlayerHasMainHandWeapon:
+			// equipped main-hand weapon + IsBroken gate); the
+			// IsUseEquipedWeapon legs (feral form, DISARMED flag)
+			// stay unbridged, as at the gauntlet. The creature leg
+			// (!UNIT_VIRTUAL_ITEM_SLOT_ID) stays out: motions carry
+			// no virtual-item state (SetEquipmentSlots only
+			// broadcasts update packets) and spawn equipment is
+			// static, so no creature verdict can change mid-bar;
+			// the static-equipment gauntlet gap is not a completion
+			// question.
+			if spell.Mechanic == mechanicDisarm && target.UnitGUID != s.playerGUID {
+				if _, isPlayer := s.targetCreatureTypeMask(ctx, target.UnitGUID); isPlayer && !s.targetPlayerHasMainHandWeapon(ctx, target.UnitGUID) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNoWeapons), true)
+					s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "disarm target unarmed")
 					return
 				}
 			}
