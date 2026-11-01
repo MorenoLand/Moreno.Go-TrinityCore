@@ -1171,6 +1171,12 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 // (Unit.cpp:12126 tail), and the TREAT_AS_RAID_UNIT player-creature
 // arm has no Go template-flag model and stays unmodeled. Totem motions
 // are refused (TARGET_CHECK_ALLY/PARTY/RAID reject totems, Spell.cpp:8333).
+// The player gate is the assist gate (isHostileFaction, the session
+// twin's allyOf), not the attack gate: IsValidAssistTarget refuses only
+// when BOTH reactions are hostile (Object.cpp:3087 tail), and the CvP
+// reaction clamps to neutral at war (Object.cpp:2817-2823), so an at-war
+// player with non-hostile standing stays eligible; isAttackableFaction
+// wrongly excluded such players via its at-war term.
 // No match returns false and the caller fails the cast
 // (Spell.cpp:1111).
 func (s *Server) creatureFriendlyNearbyTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell) (uint64, bool) {
@@ -1303,7 +1309,7 @@ func (s *Server) creatureFriendlyNearbyTarget(ctx context.Context, m *creatureMo
 			continue
 		}
 		candidate := playerPos{Map: p.Map, InstanceID: p.InstanceID, X: p.X, Y: p.Y, Z: p.Z, GUID: targetSession.playerGUID, Race: p.Race, Class: p.Class, Level: p.Level, FactionTemplate: targetSession.effectiveFactionTemplate(p.Race), Reputations: playerReputationMap(p.Reputations), Sess: targetSession}
-		if s.isAttackableFaction(m.Faction, candidate) {
+		if s.isHostileFaction(m.Faction, candidate) {
 			continue
 		}
 		if !implicitEntryConditionsMet(condRows, true, 0, 0) {
