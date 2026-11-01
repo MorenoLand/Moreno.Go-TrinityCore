@@ -7730,7 +7730,23 @@ func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z flo
 		phase = 1
 	}
 	for _, sess := range targets {
-		if sess.player == nil || math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) > distance {
+		if sess.player == nil {
+			continue
+		}
+		// Seer distance leg (CanSeeOrDetect GetViewpoint leg,
+		// Object.cpp:1618, as on the StopInInstance twin): a bound
+		// observer receives the stopped creature's stop packet when the
+		// viewpoint sits near the stop position, not only when the
+		// observer's body does. Map-only form, so the viewpoint lookup
+		// carries no instance gate; unresolvable viewpoints fail open
+		// to the body coords, preserving the old gate exactly.
+		cx, cy := sess.player.X, sess.player.Y
+		if sess.player.FarsightGUID != 0 {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, 0, sess.player.GUID, sess.player.FarsightGUID); ok {
+				cx, cy = vx, vy
+			}
+		}
+		if math.Hypot(float64(x-cx), float64(y-cy)) > distance {
 			continue
 		}
 		if phase&sess.currentPlayerPhaseMask() == 0 {
@@ -7774,7 +7790,23 @@ func (s *Server) broadcastMonsterMoveStopInInstance(mapID, instanceID uint32, gu
 		phase = 1
 	}
 	for _, sess := range targets {
-		if sess.player == nil || math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) > distance {
+		if sess.player == nil {
+			continue
+		}
+		// Seer distance leg (CanSeeOrDetect GetViewpoint leg,
+		// Object.cpp:1618, as on the monster-move InInstance helper):
+		// a bound observer receives the stopped creature's stop packet
+		// when the viewpoint sits near the stop position, not only when
+		// the observer's body does. Unresolvable viewpoints fail open
+		// to the body coords, preserving the old gate exactly. No
+		// re-stream fires: a stop packet relocates nothing.
+		cx, cy := sess.player.X, sess.player.Y
+		if sess.player.FarsightGUID != 0 {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, instanceID, sess.player.GUID, sess.player.FarsightGUID); ok {
+				cx, cy = vx, vy
+			}
+		}
+		if math.Hypot(float64(x-cx), float64(y-cy)) > distance {
 			continue
 		}
 		if phase&sess.currentPlayerPhaseMask() == 0 {

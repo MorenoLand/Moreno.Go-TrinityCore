@@ -224,14 +224,11 @@ func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y floa
 	buf := protocol.NewBuffer(packedGUIDSize(guid))
 	buf.WritePackedGUID(guid)
 	payload := buf.Bytes()
-	distance := s.Config.VisibilityDistanceContinents
+	distance := float64(s.Config.VisibilityDistanceContinents)
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
 	for target := range s.sessions {
 		if !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != mapID || target.player.InstanceID != instanceID {
-			continue
-		}
-		if math.Hypot(float64(target.player.X-x), float64(target.player.Y-y)) > distance {
 			continue
 		}
 		targets = append(targets, target)
@@ -241,7 +238,27 @@ func (s *Server) broadcastCreatureSplineMove(mapID, instanceID uint32, x, y floa
 		phase = 1
 	}
 	for _, target := range targets {
+		if target.player == nil {
+			continue
+		}
 		if phase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		// Seer distance leg (CanSeeOrDetect GetViewpoint leg,
+		// Object.cpp:1618, as on the teleport/monster-move helpers): a
+		// bound observer receives the viewpoint creature's spline-move
+		// packet when the viewpoint sits near the creature, not only
+		// when the observer's body does. Unresolvable viewpoints fail
+		// open to the body coords, preserving the old gate exactly.
+		// The packet carries no new position, so no re-stream fires:
+		// gravity/hover/fly/swim flips do not relocate the creature.
+		rx, ry := target.player.X, target.player.Y
+		if target.player.FarsightGUID != 0 {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, instanceID, target.player.GUID, target.player.FarsightGUID); ok {
+				rx, ry = vx, vy
+			}
+		}
+		if math.Hypot(float64(rx-x), float64(ry-y)) > distance {
 			continue
 		}
 		if err := target.write(uint16(opcode), payload, true); err != nil {
