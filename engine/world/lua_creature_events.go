@@ -870,9 +870,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// threshold (inMelee=false, threat.go), where C++ defers selection
 	// to UpdateVictim — a 1000000.0f add switches either way. The
 	// who-redirect leg (3rd C++ arg, e.g. malchezaar axe) is not
-	// expressible here; this bridge is self-threat only.
+	// expressible here; this bridge is self-threat only. The eager
+	// switch hides from the step tick (ThreatManager.Update compares
+	// its reselect against the already-switched currentVictim, so it
+	// never re-fires), so the bridge syncs TargetGUID and broadcasts
+	// HIGHEST_THREAT_UPDATE + ATTACK_START itself on a switch, on the
+	// direct-set ports' gates (wasInCombat, non-passive); both
+	// broadcasts flush after motionMu drops, as the visible-set
+	// broadcast reads motionMu through its seer lookup.
 	methods["AddThreat"] = func(_ context.Context, args []any) ([]any, error) {
-		if len(args) < 2 || motion.ThreatMgr == nil {
+		if len(args) < 2 {
 			return nil, nil
 		}
 		victimGUID := luaObjectGUID(args[0])
@@ -883,7 +890,32 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		motion.ThreatMgr.AddThreat(victimGUID, amount, false)
+		s.motionMu.Lock()
+		wasInCombat := motion.InCombat
+		passive := isCreaturePassive(motion)
+		var switched bool
+		var newVictim uint64
+		var entries []protocol.ThreatEntry
+		var switchStart pendingAttackStart
+		var mapID, instanceID uint32
+		var x, y, z float32
+		var phase uint32
+		if motion.ThreatMgr != nil {
+			switched, newVictim = motion.ThreatMgr.AddThreat(victimGUID, amount, false)
+			if switched && newVictim != motion.TargetGUID {
+				motion.TargetGUID = newVictim
+				entries = motion.ThreatMgr.SortedEntries()
+				mapID, instanceID, x, y, z, phase = motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+				if wasInCombat && !passive {
+					switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: mapID, instanceID: instanceID, x: x, y: y, z: z, phase: phase}
+				}
+			}
+		}
+		s.motionMu.Unlock()
+		if entries != nil {
+			s.broadcastHighestThreatUpdateInInstance(mapID, instanceID, x, y, z, motion.GUID, newVictim, entries, phase)
+		}
+		s.broadcastPendingAttackStarts(switchStart)
 		return nil, nil
 	}
 	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554):

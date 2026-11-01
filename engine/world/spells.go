@@ -38181,7 +38181,39 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		case 1515:
 			if casterGUID != 0 {
 				if m := s.server.findCreatureMotion(targetKey.Map, targetKey.InstanceID, targetGUID); m != nil && m.ThreatMgr != nil && m.ThreatMgr.OwnerCanHaveThreatList() {
-					m.ThreatMgr.AddThreat(casterGUID, 10.0, true)
+					// The eager AddThreat switch hides from the step
+					// tick (ThreatManager.Update compares its reselect
+					// against the already-switched currentVictim), so
+					// this arm syncs TargetGUID and broadcasts
+					// HIGHEST_THREAT_UPDATE + ATTACK_START itself on a
+					// switch, on the direct-set ports' gates
+					// (wasInCombat, non-passive); both broadcasts flush
+					// after motionMu drops, as the visible-set broadcast
+					// reads motionMu through its seer lookup. No lock is
+					// held at this arm (findCreatureMotion above takes
+					// motionMu itself), so taking it here cannot nest.
+					s.server.motionMu.Lock()
+					wasInCombat := m.InCombat
+					passive := isCreaturePassive(m)
+					switched, newVictim := m.ThreatMgr.AddThreat(casterGUID, 10.0, true)
+					var entries []protocol.ThreatEntry
+					var switchStart pendingAttackStart
+					var mapID, instanceID uint32
+					var x, y, z float32
+					var phase uint32
+					if switched && newVictim != m.TargetGUID {
+						m.TargetGUID = newVictim
+						entries = m.ThreatMgr.SortedEntries()
+						mapID, instanceID, x, y, z, phase = m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask
+						if wasInCombat && !passive {
+							switchStart = pendingAttackStart{creature: m.GUID, victim: newVictim, mapID: mapID, instanceID: instanceID, x: x, y: y, z: z, phase: phase}
+						}
+					}
+					s.server.motionMu.Unlock()
+					if entries != nil {
+						s.server.broadcastHighestThreatUpdateInInstance(mapID, instanceID, x, y, z, m.GUID, newVictim, entries, phase)
+					}
+					s.server.broadcastPendingAttackStarts(switchStart)
 				}
 			}
 		case 39850:
