@@ -1416,6 +1416,34 @@ func (s *session) streamNearbyObjectsAt(ctx context.Context, x, y, z float32) {
 	s.streamDynamicSpellObjectsAt(x, y)
 }
 
+// streamFarsightNeighborhood streams the neighbourhood around a viewpoint
+// target after PLAYER_FARSIGHT moves onto it (Player::SetViewpoint apply arm,
+// Player.cpp:24618-24636): C++ re-centers the next UpdateVisibilityForPlayer
+// tick on m_seer (Player.cpp:22794-22799, Cell::VisitAllObjects(m_seer, ...)),
+// so viewpoint-near objects arrive as creates. Go has no visibility tick —
+// streams fire only on movement/teleport/zone events — so the set site must
+// stream explicitly, and the clear site must re-stream the body neighbourhood.
+// Resolves a creature motion or an online player on the caster's map and
+// instance; an unresolvable or cross-map target streams nothing (fail open:
+// the field update already went out, and the seer-gated fan-outs still deliver
+// viewpoint-near spawns and updates). The stream is additive like every other
+// Go stream — no range-out destroys, matching the walk-away path.
+func (s *session) streamFarsightNeighborhood(ctx context.Context, targetGUID uint64) {
+	if !s.playerLoaded || s.player == nil || s.server == nil {
+		return
+	}
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	if m := s.findCreatureMotion(targetGUID); m != nil {
+		s.streamNearbyObjectsAt(ctx, m.X, m.Y, m.Z)
+		return
+	}
+	if target := s.server.findSessionByGUID(targetGUID); target != nil && target.player != nil && target.player.Map == s.player.Map && target.player.InstanceID == s.player.InstanceID {
+		s.streamNearbyObjectsAt(ctx, target.player.X, target.player.Y, target.player.Z)
+	}
+}
+
 func (s *session) sendDestroyObject(guid uint64, onDeath bool) {
 	buf := protocol.NewBuffer(9)
 	buf.WriteU64(guid)

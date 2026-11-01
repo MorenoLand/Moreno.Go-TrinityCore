@@ -515,6 +515,10 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 		if caster := s.findSessionByGUID(object.CasterGUID); caster != nil && caster.player != nil && caster.player.FarsightGUID == guid {
 			caster.player.FarsightGUID = 0
 			caster.sendPlayerUpdate()
+			// SetViewpoint false arm (Player.cpp:24638-24652): the seer
+			// returns to the caster — re-stream the body neighbourhood
+			// (Go has no visibility tick to do it on the next pass).
+			caster.streamNearbyObjects(context.Background())
 		}
 	}
 	// DynamicObject::Remove (DynamicObject.cpp:176-182) despawns through

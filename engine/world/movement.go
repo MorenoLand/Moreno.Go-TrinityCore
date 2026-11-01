@@ -960,7 +960,13 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	writeMovementInfo(packet, broadcastInfo)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), broadcastInfo, s)
 	s.debug("movement accepted", "account", s.accountName, "guid", guid, "x", broadcastInfo.X, "y", broadcastInfo.Y, "z", broadcastInfo.Z)
-	if !vehiclePassenger && !possessedMover {
+	if !vehiclePassenger && !possessedMover && s.player.FarsightGUID == 0 {
+		// A bound/far-sighting observer's visibility stays centered on
+		// the viewpoint (UpdateVisibilityForPlayer visits around m_seer,
+		// Player.cpp:22794-22799), so body movement streams nothing —
+		// the viewpoint stream at the set site and the body re-stream at
+		// the clear site own the neighbourhood. The possessed-mover arm
+		// below is unaffected (possess sets no FarsightGUID in Go).
 		dx := float64(info.X - s.lastStreamX)
 		dy := float64(info.Y - s.lastStreamY)
 		if dx*dx+dy*dy > 30.0*30.0 {

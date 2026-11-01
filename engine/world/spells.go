@@ -34400,6 +34400,12 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 		if casterSess := s.server.findSessionByGUID(wasBindSightCaster); casterSess != nil && casterSess.player != nil && casterSess.player.FarsightGUID == wasBindSightTarget {
 			casterSess.player.FarsightGUID = 0
 			casterSess.sendPlayerUpdate()
+			// SetViewpoint false arm (Player.cpp:24638-24652): the
+			// seer returns to the caster, so the next C++ visibility
+			// tick re-centers on the body — Go has no tick, so the
+			// body neighbourhood is re-streamed here (also resets the
+			// shared lastStream anchor the viewpoint stream moved).
+			casterSess.streamNearbyObjects(context.Background())
 		}
 	}
 	if wasFleeing && !s.hasAuraType(spellAuraFear) && s.player != nil {
@@ -37214,9 +37220,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// to the target (Player::SetViewpoint apply arm, Player.cpp:24618:
 			// PLAYER_FARSIGHT takes the target GUID). The client follows
 			// PLAYER_FARSIGHT, so pushing the caster's own update is the
-			// whole wire arm (same as the farsight-focus bridge).
+			// wire arm (same as the farsight-focus bridge) — but the
+			// viewpoint-near objects still need a stream: C++ re-centers
+			// the next UpdateVisibilityForPlayer tick on m_seer
+			// (Player.cpp:22794-22799) and Go has no such tick.
 			s.player.FarsightGUID = targetGUID
 			s.sendPlayerUpdate()
+			s.streamFarsightNeighborhood(ctx, targetGUID)
 		}
 		if eff.Aura == spellAuraCharm {
 			targetSess.clearOtherMountedAuras(0)
@@ -50717,9 +50727,12 @@ func (s *session) handleEffectAddFarsight(ctx context.Context, spell wotlk.Spell
 	}
 	s.server.spawnDynamicSpellObject(object, time.Duration(duration)*time.Millisecond)
 	// Player::SetViewpoint apply arm (Player.cpp:24618-24631): PLAYER_FARSIGHT
-	// takes the dynobj GUID, pushed through the player's own update.
+	// takes the dynobj GUID, pushed through the player's own update, then
+	// the dynobj neighbourhood is streamed — the C++ visibility tick
+	// re-centers on m_seer and Go has no such tick (same leg as bind sight).
 	s.player.FarsightGUID = object.GUID
 	s.sendPlayerUpdate()
+	s.streamNearbyObjectsAt(ctx, target.Destination.X, target.Destination.Y, target.Destination.Z)
 	_ = ctx
 }
 
