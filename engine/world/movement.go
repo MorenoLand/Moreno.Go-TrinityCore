@@ -1661,15 +1661,23 @@ func (s *Server) broadcastToVisibleSetFromPhase(opcode uint16, payload []byte, m
 // sessionsMu and the ghost/phase predicates run after the lock drops, so the
 // motionMu read inside creatureScriptFarVisible never nests under
 // sessionsMu. GM seers (gmVisibilityDetect) skip the ghost filter, as on the grid
-// path; a nil spawn fails open, matching the nil-observer convention.
+// path; a nil spawn fails open, matching the nil-observer convention. The
+// distance gate reads the recipient's viewpoint position (CanSeeOrDetect's
+// GetViewpoint leg, Object.cpp:1618), not its body: a farsight/possessing
+// observer is gated on its seer, so a body-near/viewpoint-far spawn is not
+// created and a viewpoint-near one is, matching the deliverer legs; an
+// unresolvable viewpoint fails open to the body position.
 func (s *Server) broadcastCreatureCreateToVisibleSet(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, spawn *creatureSpawn, source *session) {
 	if s == nil {
 		return
 	}
 	type recipient struct {
-		sess  *session
-		state playerState
-		gmSee bool
+		sess     *session
+		state    playerState
+		gmSee    bool
+		guid     uint64
+		farsight uint64
+		x, y, z  float32
 	}
 	s.sessionsMu.RLock()
 	var targets []recipient
@@ -1680,10 +1688,7 @@ func (s *Server) broadcastCreatureCreateToVisibleSet(opcode uint16, payload []by
 		if target.player.Map != mapID || target.player.InstanceID != instanceID {
 			continue
 		}
-		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > 100.0 {
-			continue
-		}
-		targets = append(targets, recipient{sess: target, state: *target.player, gmSee: target.gmVisibilityDetect != 0})
+		targets = append(targets, recipient{sess: target, state: *target.player, gmSee: target.gmVisibilityDetect != 0, guid: target.player.GUID, farsight: target.player.FarsightGUID, x: target.player.X, y: target.player.Y, z: target.player.Z})
 	}
 	s.sessionsMu.RUnlock()
 	targetPhase := uint32(1)
@@ -1691,6 +1696,13 @@ func (s *Server) broadcastCreatureCreateToVisibleSet(opcode uint16, payload []by
 		targetPhase = spawn.PhaseMask
 	}
 	for _, r := range targets {
+		rx, ry, rz := r.x, r.y, r.z
+		if vx, vy, vz, ok := s.seerDeliveryPosition(mapID, instanceID, r.guid, r.farsight); ok {
+			rx, ry, rz = vx, vy, vz
+		}
+		if distance3D(rx, ry, rz, cx, cy, cz) > 100.0 {
+			continue
+		}
 		if spawn != nil && targetPhase&r.sess.currentPlayerPhaseMask() == 0 {
 			continue
 		}
@@ -1738,7 +1750,10 @@ func (s *Server) broadcastGameObjectCreateToVisibleSet(opcode uint16, payload []
 // such as the .gobject refresh path's DB-row re-broadcast (GameObject::
 // LoadFromDB with addToWorld runs the same UpdateObjectVisibilityOnCreate
 // phase leg, cs_gobject.cpp:351-361). A zero phase reads as
-// PHASEMASK_NORMAL, as on the dynamic form.
+// PHASEMASK_NORMAL, as on the dynamic form. The distance gate reads the
+// recipient's viewpoint position (CanSeeOrDetect's GetViewpoint leg,
+// Object.cpp:1618), as on the creature-create twin; an unresolvable
+// viewpoint fails open to the body position.
 func (s *Server) broadcastGameObjectCreateToVisibleSetAt(opcode uint16, payload []byte, mapID, instanceID uint32, x, y, z float32, phaseMask uint32) {
 	if s == nil {
 		return
@@ -1748,7 +1763,7 @@ func (s *Server) broadcastGameObjectCreateToVisibleSetAt(opcode uint16, payload 
 		targetPhase = 1
 	}
 	s.sessionsMu.RLock()
-	var targets []*session
+	targets := make([]seerRecipient, 0, len(s.sessions))
 	for target := range s.sessions {
 		if !target.authed || !target.worldReady.Load() || target.player == nil {
 			continue
@@ -1756,17 +1771,21 @@ func (s *Server) broadcastGameObjectCreateToVisibleSetAt(opcode uint16, payload 
 		if target.player.Map != mapID || target.player.InstanceID != instanceID {
 			continue
 		}
-		if distance3D(target.player.X, target.player.Y, target.player.Z, x, y, z) > 100.0 {
-			continue
-		}
-		targets = append(targets, target)
+		targets = append(targets, seerRecipient{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID, x: target.player.X, y: target.player.Y, z: target.player.Z})
 	}
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
-		if targetPhase&target.currentPlayerPhaseMask() == 0 {
+		rx, ry, rz := target.x, target.y, target.z
+		if vx, vy, vz, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+			rx, ry, rz = vx, vy, vz
+		}
+		if distance3D(rx, ry, rz, x, y, z) > 100.0 {
 			continue
 		}
-		_ = target.write(opcode, payload, true)
+		if targetPhase&target.sess.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = target.sess.write(opcode, payload, true)
 	}
 }
 

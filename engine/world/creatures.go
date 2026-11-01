@@ -1007,23 +1007,36 @@ func (s *Server) broadcastCreatureValuesUpdateAtInInstance(mapID, instanceID uin
 // to an instance's sessions, distance-gated to the 100yd visibility range
 // around (cx, cy, cz) when gated, instance-wide otherwise. The masked
 // variant, when present, goes to viewers the loot sparkle is hidden from.
+// C++ sends values updates only to players with the object at client
+// (HaveAtClient), and the client set is built around the viewpoint
+// viewpoint (UpdateVisibilityForPlayer visits around m_seer,
+// Player.cpp:22798), so the gated distance leg is a union: a recipient
+// qualifies on its body position or on its viewpoint position, matching
+// the create helpers' viewpoint set plus the body-centered grid stream;
+// an unresolvable viewpoint contributes nothing, never dropping a
+// body-qualified recipient.
 func (s *Server) fanOutCreatureValuesUpdate(packet, masked *protocol.Packet, mapID, instanceID uint32, guid uint64, gated bool, cx, cy, cz float32, phase uint32) {
 	s.sessionsMu.RLock()
-	targets := make([]*session, 0, len(s.sessions))
+	targets := make([]seerRecipient, 0, len(s.sessions))
 	for sess := range s.sessions {
 		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
 			continue
 		}
-		if gated && distance3D(sess.player.X, sess.player.Y, sess.player.Z, cx, cy, cz) > 100.0 {
-			continue
-		}
-		targets = append(targets, sess)
+		targets = append(targets, seerRecipient{sess: sess, guid: sess.player.GUID, farsight: sess.player.FarsightGUID, x: sess.player.X, y: sess.player.Y, z: sess.player.Z})
 	}
 	s.sessionsMu.RUnlock()
 	if gated && phase == 0 {
 		phase = 1
 	}
-	for _, sess := range targets {
+	for _, target := range targets {
+		sess := target.sess
+		if gated {
+			if distance3D(target.x, target.y, target.z, cx, cy, cz) > 100.0 {
+				if vx, vy, vz, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); !ok || distance3D(vx, vy, vz, cx, cy, cz) > 100.0 {
+					continue
+				}
+			}
+		}
 		if gated && phase&sess.currentPlayerPhaseMask() == 0 {
 			continue
 		}
