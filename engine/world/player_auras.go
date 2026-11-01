@@ -36,17 +36,18 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		}
 	}
 	defer rows.Close()
-	s.castMu.Lock()
-	s.auras = make(map[uint32]struct{})
-	s.auraSlots = make(map[uint32]uint8)
-	s.activeAuras = make(map[uint32]*activeAura)
-	// A fresh Player object in C++ has no RestoreFaction history, so a
-	// DB-restored 243 aura forces its faction on load. The session object
-	// outlives a Player lifetime (one connection, many characters), and
-	// the live remove leg sets factionNativeAfterRemove; without this
-	// reset a relogger whose session previously removed any 243 aura
-	// would keep its race faction despite the restored record.
-	s.factionNativeAfterRemove = false
+	// Player-aura load runs in two phases, like loadPetAuras: the row
+	// scan below resolves each aura's caster level through the live
+	// session/motion (motionMu) and takes no castMu, so a
+	// creature-caster row can no longer nest motionMu under castMu.
+	// Only the map inserts in the second phase below run under castMu,
+	// in row order, with Slot assigned at insert. state is the
+	// caller-local load state (not yet published as s.player), so its
+	// folds run in the scan phase; s.rooted is only ever set here, so
+	// the scan collects it and the insert phase applies it.
+	seen := make(map[uint32]struct{})
+	var pending []*activeAura
+	rooted := false
 	state.FakeInebriation = 0
 	offlineMs := int64(0)
 	if state.LogoutTime > 0 && time.Now().Unix() > state.LogoutTime {
@@ -80,14 +81,14 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 		if !casterOK || !itemOK {
 			continue
 		}
-		if spellID <= 0 || effectMask <= 0 || effectMask&^int64(0x07) != 0 || (remainTime == 0 || remainTime < -1) || spellID > int64(^uint32(0)) || len(s.activeAuras) >= 255 {
+		if spellID <= 0 || effectMask <= 0 || effectMask&^int64(0x07) != 0 || (remainTime == 0 || remainTime < -1) || spellID > int64(^uint32(0)) || len(pending) >= 255 {
 			continue
 		}
 		id := uint32(spellID)
 		if casterGUID == 0 {
 			casterGUID = state.GUID
 		}
-		if _, exists := s.activeAuras[id]; exists {
+		if _, exists := seen[id]; exists {
 			continue
 		}
 		procCharges := uint32(0)
@@ -133,7 +134,8 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				continue
 			}
 		}
-		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, ItemGUID: itemGUID, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: s.auraStoredCasterLevel(casterGUID, loadedSpell), StoredCasterLevel: s.auraStoredCasterLevel(casterGUID, loadedSpell)}
+		casterLevel := s.auraStoredCasterLevel(casterGUID, loadedSpell)
+		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, ItemGUID: itemGUID, EffectMask: uint8(effectMask) & 0x07, RecalculateMask: uint8(recalculateMask), CritChance: float32(critChance), ApplyResilience: applyResilience, Positive: true, CasterLevel: casterLevel, StoredCasterLevel: casterLevel}
 		for index := range amounts {
 			aura.Amounts[index] = int32(amounts[index])
 			aura.BaseAmounts[index] = int32(baseAmounts[index])
@@ -232,7 +234,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 					state.PlayerFieldBytes |= playerFieldByteTrackStealthed
 				}
 				if aura.AuraType == spellAuraStun || aura.AuraType == spellAuraRoot {
-					s.rooted = true
+					rooted = true
 					if aura.AuraType == spellAuraStun {
 						state.UnitFlags |= unitFlagStunned
 					}
@@ -316,14 +318,33 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 				}
 			}
 		}
-		s.auras[id] = struct{}{}
-		s.auraSlots[id] = aura.Slot
-		s.activeAuras[id] = aura
+		seen[id] = struct{}{}
+		pending = append(pending, aura)
 		if aura.PeriodMs > 0 && (aura.RemainingMs > 0 || aura.DurationMs == 0) {
 			periodic = append(periodic, aura)
 		}
 	}
 	rowErr := rows.Err()
+	s.castMu.Lock()
+	s.auras = make(map[uint32]struct{})
+	s.auraSlots = make(map[uint32]uint8)
+	s.activeAuras = make(map[uint32]*activeAura)
+	// A fresh Player object in C++ has no RestoreFaction history, so a
+	// DB-restored 243 aura forces its faction on load. The session object
+	// outlives a Player lifetime (one connection, many characters), and
+	// the live remove leg sets factionNativeAfterRemove; without this
+	// reset a relogger whose session previously removed any 243 aura
+	// would keep its race faction despite the restored record.
+	s.factionNativeAfterRemove = false
+	if rooted {
+		s.rooted = true
+	}
+	for _, aura := range pending {
+		aura.Slot = uint8(len(s.activeAuras))
+		s.auras[aura.SpellID] = struct{}{}
+		s.auraSlots[aura.SpellID] = aura.Slot
+		s.activeAuras[aura.SpellID] = aura
+	}
 	s.castMu.Unlock()
 	if rowErr != nil {
 		return rowErr
