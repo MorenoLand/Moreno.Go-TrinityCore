@@ -484,6 +484,77 @@ func (s *session) resetTransportPassengerVisibility() {
 	s.visibleTransportPassengersMu.Unlock()
 }
 
+// pruneVisibleTransportPlayers drops the given GUIDs from the observer's
+// visiblePlayers set and returns only the ones actually marked, so the
+// caller sends out-of-range destroys exactly for players the client
+// holds — the visiblePlayers twin of clearTransportPassengerVisible.
+func (s *session) pruneVisibleTransportPlayers(guids []uint64) []uint64 {
+	if s == nil || len(guids) == 0 {
+		return nil
+	}
+	s.visiblePlayersMu.Lock()
+	defer s.visiblePlayersMu.Unlock()
+	removed := make([]uint64, 0, len(guids))
+	for _, guid := range guids {
+		if guid == 0 {
+			continue
+		}
+		if _, ok := s.visiblePlayers[guid]; !ok {
+			continue
+		}
+		delete(s.visiblePlayers, guid)
+		removed = append(removed, guid)
+	}
+	return removed
+}
+
+// transportPlayerPassengerGUIDs returns the sorted GUIDs of one
+// transport's player passengers, using the same classification the
+// same-map refresh fan-out marks visiblePlayers with: direct passengers
+// (TransportGUID == transport GUID in either form) plus vehicle riders
+// whose vehicle is a transport passenger creature or a direct-passenger
+// driver. The caller holds no session lock; the scan takes sessionsMu.
+// Membership in the observer's visiblePlayers is the only further gate,
+// so unmarked, teleport-pending, or cross-map passengers are harmless
+// inclusions — they simply prune nothing.
+func (s *Server) transportPlayerPassengerGUIDs(rawGUID uint64, spawnGUID uint32, creaturePassengerGUIDs map[uint64]struct{}) []uint64 {
+	if s == nil || rawGUID == 0 {
+		return nil
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	direct := make(map[uint64]struct{})
+	for sess := range s.sessions {
+		if sess == nil || sess.player == nil {
+			continue
+		}
+		if sess.player.TransportGUID == rawGUID || sess.player.TransportGUID == uint64(spawnGUID) {
+			direct[sess.player.GUID] = struct{}{}
+		}
+	}
+	guids := make([]uint64, 0, len(direct))
+	for guid := range direct {
+		guids = append(guids, guid)
+	}
+	for sess := range s.sessions {
+		if sess == nil || sess.player == nil || sess.player.VehicleGUID == 0 {
+			continue
+		}
+		if _, ok := direct[sess.player.GUID]; ok {
+			continue
+		}
+		if _, ok := creaturePassengerGUIDs[sess.player.VehicleGUID]; ok {
+			guids = append(guids, sess.player.GUID)
+			continue
+		}
+		if _, ok := direct[sess.player.VehicleGUID]; ok {
+			guids = append(guids, sess.player.GUID)
+		}
+	}
+	sort.Slice(guids, func(i, j int) bool { return guids[i] < guids[j] })
+	return guids
+}
+
 func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observer *session, transport continentTransport) {
 	if s == nil || observer == nil || observer.player == nil {
 		return
@@ -492,11 +563,28 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	if observer.player.Map != transport.Spawn.Map {
 		guids := observer.clearTransportPassengerVisibility(transportGUID)
-		if len(guids) == 0 {
+		// Same gap as the cross-map broadcast arm: the branch cleared
+		// creature/GO passenger marks but left player passengers the
+		// same-map fan-out had marked visible, so a departed player
+		// stayed rendered until the observer's own sweep. A player on
+		// another map than the observer is out of range by itself.
+		creaturePassengerGUIDs := make(map[uint64]struct{}, len(transport.StaticCreatures))
+		for _, passenger := range transport.passengerCreatures() {
+			guid := passenger.RawGUID
+			if guid == 0 {
+				guid = creatureWorldGUID(passenger.GUID, passenger.Entry)
+			}
+			creaturePassengerGUIDs[guid] = struct{}{}
+		}
+		playerGUIDs := observer.pruneVisibleTransportPlayers(s.transportPlayerPassengerGUIDs(transportGUID, transport.Spawn.GUID, creaturePassengerGUIDs))
+		if len(guids) == 0 && len(playerGUIDs) == 0 {
 			return
 		}
 		updates := protocol.NewUpdateData()
 		for _, guid := range guids {
+			updates.AddOutOfRangeGUID(guid)
+		}
+		for _, guid := range playerGUIDs {
 			updates.AddOutOfRangeGUID(guid)
 		}
 		if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
@@ -960,6 +1048,22 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		return
 	}
 	rawGUID := transportGUID(change.Spawn.GUID)
+	// Departing player passengers, collected before the loop mutates
+	// anything: the cross-map out-of-range arms below must prune
+	// exactly the visiblePlayers marks the same-map fan-out created,
+	// and the loop's own iteration order cannot supply the full set.
+	var departedPlayerGUIDs []uint64
+	if change.OldSpawn.Map != change.Spawn.Map {
+		creaturePassengerGUIDs := make(map[uint64]struct{}, len(change.Passengers))
+		for _, passenger := range change.Passengers {
+			guid := passenger.RawGUID
+			if guid == 0 {
+				guid = creatureWorldGUID(passenger.GUID, passenger.Entry)
+			}
+			creaturePassengerGUIDs[guid] = struct{}{}
+		}
+		departedPlayerGUIDs = s.transportPlayerPassengerGUIDs(rawGUID, change.Spawn.GUID, creaturePassengerGUIDs)
+	}
 	transport, hasPassengers := s.attachedTransportSnapshot(playerState{TransportGUID: rawGUID})
 	if hasPassengers {
 		transport.Spawn = change.Spawn
@@ -1062,6 +1166,9 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			for _, guid := range sess.clearTransportPassengerVisibility(rawGUID) {
 				updates.AddOutOfRangeGUID(guid)
 			}
+			for _, guid := range sess.pruneVisibleTransportPlayers(departedPlayerGUIDs) {
+				updates.AddOutOfRangeGUID(guid)
+			}
 			if packet, err := updates.BuildPacket(0); err == nil {
 				_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
 			}
@@ -1142,6 +1249,9 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 		for _, guid := range sess.clearTransportPassengerVisibility(rawGUID) {
 			updates.AddOutOfRangeGUID(guid)
 		}
+		for _, guid := range sess.pruneVisibleTransportPlayers(departedPlayerGUIDs) {
+			updates.AddOutOfRangeGUID(guid)
+		}
 		if packet, err := updates.BuildPacket(0); err == nil {
 			_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}
@@ -1191,6 +1301,9 @@ func (s *Server) broadcastTransportMovement(change continentTransportMovement) {
 			updates := protocol.NewUpdateData()
 			updates.AddOutOfRangeGUID(rawGUID)
 			for _, guid := range passenger.session.clearTransportPassengerVisibility(rawGUID) {
+				updates.AddOutOfRangeGUID(guid)
+			}
+			for _, guid := range passenger.session.pruneVisibleTransportPlayers(departedPlayerGUIDs) {
 				updates.AddOutOfRangeGUID(guid)
 			}
 			if packet, err := updates.BuildPacket(0); err == nil {
