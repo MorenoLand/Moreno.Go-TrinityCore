@@ -1221,14 +1221,18 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// Apply to nearby party members
 			if s.server != nil && s.groupID != 0 {
 				s.server.sessionsMu.RLock()
+				var buffTargets []*session
 				for other := range s.server.sessions {
 					if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 						if totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) && ownerPhase&other.currentPlayerPhaseMask() != 0 {
-							other.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
+							buffTargets = append(buffTargets, other)
 						}
 					}
 				}
 				s.server.sessionsMu.RUnlock()
+				for _, other := range buffTargets {
+					other.applyAuraFromCaster(def.BuffSpell, 1800000, totem.TotemGUID, ownerLevel)
+				}
 			}
 		}
 		// Totem of Wrath enemy leg: Totem::InitSummon casts the totem's
@@ -1314,14 +1318,18 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// targets.
 			ownerPhase := s.currentPlayerPhaseMask()
 			s.server.sessionsMu.RLock()
+			var healTargets []*session
 			for other := range s.server.sessions {
 				if other != s && other.worldReady.Load() && other.player != nil && other.groupID == s.groupID && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID {
 					if totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) && ownerPhase&other.currentPlayerPhaseMask() != 0 {
-						s.totemHealPulseTick(ctx, def, totem, other)
+						healTargets = append(healTargets, other)
 					}
 				}
 			}
 			s.server.sessionsMu.RUnlock()
+			for _, other := range healTargets {
+				s.totemHealPulseTick(ctx, def, totem, other)
+			}
 		}
 
 	case TotemPulseAoEDamage:
@@ -1762,15 +1770,19 @@ func (s *session) totemSlowPulse(ctx context.Context, def TotemDef, totem *activ
 	// after the totem dies; the pulse re-applies, refreshing the timer.
 	if s.server != nil {
 		s.server.sessionsMu.RLock()
+		var pulseTargets []*session
 		for other := range s.server.sessions {
 			if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
 				totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) &&
 				ownerPhase&other.currentPlayerPhaseMask() != 0 &&
 				s.totemEnemySessionHostile(other) {
-				other.applyAuraFromCaster(def.PulseSpell, slowDurationMs, totem.TotemGUID, uint8(totemMotion.Level))
+				pulseTargets = append(pulseTargets, other)
 			}
 		}
 		s.server.sessionsMu.RUnlock()
+		for _, other := range pulseTargets {
+			other.applyAuraFromCaster(def.PulseSpell, slowDurationMs, totem.TotemGUID, uint8(totemMotion.Level))
+		}
 	}
 	// UpdateTargetMap drop (SpellAuras.cpp:643): each pulse rebuilds
 	// the area target list, so applications whose target left the
@@ -2456,14 +2468,18 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	// party members' 30-minute buff auras dangling after the totem died.
 	if buffSpell > 0 && s.server != nil && s.groupID != 0 {
 		s.server.sessionsMu.RLock()
+		var doomed []*session
 		for other := range s.server.sessions {
 			if other != nil && other != s && other.worldReady.Load() && other.player != nil &&
 				other.groupID == s.groupID &&
 				other.player.Map == mapID && other.player.InstanceID == instanceID {
-				other.removeAura(buffSpell)
+				doomed = append(doomed, other)
 			}
 		}
 		s.server.sessionsMu.RUnlock()
+		for _, other := range doomed {
+			other.removeAura(buffSpell)
+		}
 	}
 
 	// The enemy-debuff leg leaves with the totem: area-aura applications
