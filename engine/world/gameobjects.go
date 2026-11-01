@@ -135,6 +135,7 @@ type gameObjectSpawn struct {
 	Size              float32
 	Flags             uint32
 	Faction           uint32
+	PhaseMask         uint32
 	ParentRotation    [4]float32
 	TransportProgress uint32
 	TransportPeriod   uint32
