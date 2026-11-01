@@ -1195,14 +1195,17 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 // faction-template reaction (creatureFactionHostileTo). With a
 // player-owned caster, player candidates (and player-owned creature
 // candidates on ALLY/PARTY/RAID and on ENEMY) use the affecting-player
-// reaction arms (duel/group/FFA) ahead of the faction gate. PARTY/RAID
+// reaction arms (duel/group/FFA) ahead of the faction gate, and a wild
+// caster's ENEMY creature candidates take the owner's at-war verdict
+// (wildCasterAttackHostile) instead of the template gate. PARTY/RAID
 // ride the motion-rooted referer scope.
 func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion, spell wotlk.Spell, primary combatTarget, radius float32, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
 	// The caster's affecting player (owner/charmer session) drives the
 	// player-owned reaction arms below; wild casters resolve nil and keep
-	// the faction-template gates. Resolved before the session scan:
+	// the faction-template gates except on ENEMY, where player-owned
+	// creature candidates take the at-war verdict below. Resolved before the session scan:
 	// findSessionByGUID takes sessionsMu.RLock.
 	casterOwner := s.creatureAffectingPlayerSession(m)
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, hostileToCaster, allyToCaster, assistPvPBlocked bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
@@ -1322,6 +1325,12 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 		candAlly, candBlocked := !hostile, false
 		if casterOwner != nil && checkType == targetCheckEnemy {
 			hostile = chainCreatureAttackHostile(casterOwner, motionOwner, motion.UnitFlags, hostile)
+		} else if casterOwner == nil && checkType == targetCheckEnemy {
+			// Wild caster: a player-owned candidate takes the owner's
+			// at-war verdict (Object.cpp:3036-3053) via
+			// wildCasterAttackHostile, the area-enemy twin's arm; wild
+			// candidates and unresolvable owners keep the template gate.
+			hostile = s.wildCasterAttackHostile(m.Faction, motionOwner, motion.UnitFlags, hostile)
 		}
 		if casterOwner != nil && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
 			if candOwnerSess := s.findSessionByGUID(motionOwner); candOwnerSess != nil {
