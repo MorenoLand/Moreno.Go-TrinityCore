@@ -1404,11 +1404,26 @@ func (s *Server) removeSession(session *session) {
 	}
 }
 
+// broadcastMovement mirrors mover->SendMessageToSet (MovementHandler.cpp:387):
+// MessageDistDeliverer (GridNotifiers.cpp:253-274) visits same-map players
+// in the mover's phase (InSamePhase) within GetVisibilityRange 2D distance —
+// it runs no CanSeeOrDetect (ghost/corpse/GM/detect legs) and no HaveAtClient
+// gate, so neither is added here; the pre-existing stealth arm stays, since a
+// stealthed mover is absent from non-detector client sets and the packet is a
+// client no-op there. The distance gate centers on the packet coords (the
+// mover's new position); a non-positive range fails open to the old fan-out.
 func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementInfo, source *session) {
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
+	distance := float64(0)
+	if source != nil && source.player != nil {
+		distance = s.visibilityRangeForMap(source.player.Map)
+	}
 	for target := range s.sessions {
 		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID {
+			continue
+		}
+		if distance > 0 && math.Hypot(float64(target.player.X-info.X), float64(target.player.Y-info.Y)) > distance {
 			continue
 		}
 		if source != nil && source.isStealthed() && !target.canDetectStealthOf(source) {
@@ -1417,7 +1432,14 @@ func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementI
 		targets = append(targets, target)
 	}
 	s.sessionsMu.RUnlock()
+	var sourcePhase uint32 = 1
+	if source != nil {
+		sourcePhase = source.currentPlayerPhaseMask()
+	}
 	for _, target := range targets {
+		if sourcePhase&target.currentPlayerPhaseMask() == 0 {
+			continue
+		}
 		if err := target.write(opcode, payload, true); err != nil {
 			target.debug("movement broadcast failed", "account", target.accountName, "guid", info.GUID, "error", err)
 		}
@@ -1463,17 +1485,40 @@ func (s *session) discardMovementAck(payload []byte) bool {
 // a position-applying path — C++ never applies the acked
 // position on this opcode.
 
+// broadcastToNearby is the SendMessageToSet fan-out for positioned sources
+// (attack start/stop, Unit.cpp:2399/2404): same map/instance, mover phase
+// (InSamePhase, GridNotifiers.cpp:253) and GetVisibilityRange 2D distance.
+// A positionless source keeps the old map-wide fan-out, as the other
+// positionless fallbacks do.
 func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *session) {
 	if source != nil && source.player == nil {
 		return
 	}
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	targets := make([]*session, 0, len(s.sessions))
+	distance := float64(0)
+	if source != nil && source.player != nil {
+		distance = s.visibilityRangeForMap(source.player.Map)
+	}
 	for target := range s.sessions {
 		if !target.authed || !target.worldReady.Load() || target.player == nil {
 			continue
 		}
 		if source != nil && (target == source || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID) {
+			continue
+		}
+		if source != nil && distance > 0 && math.Hypot(float64(target.player.X-source.player.X), float64(target.player.Y-source.player.Y)) > distance {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	var sourcePhase uint32 = 1
+	if source != nil {
+		sourcePhase = source.currentPlayerPhaseMask()
+	}
+	for _, target := range targets {
+		if source != nil && sourcePhase&target.currentPlayerPhaseMask() == 0 {
 			continue
 		}
 		_ = target.write(opcode, payload, true)
@@ -1656,7 +1701,10 @@ func (s *Server) broadcastToVisibleSetForCreatureSession(sess *session, opcode u
 
 // broadcastToSetWithin is the radius-parameterized form of
 // broadcastToVisibleSet: the same map/instance + distance gate, with the
-// caller's radius instead of the 100yd visibility range. CreatureTextMgr
+// caller's radius instead of the 100yd visibility range, plus the
+// MessageDistDeliverer phase leg when the caller passes a positioned source
+// (nil-source creature-text legs stay phase-ungated: their motion phase is
+// not plumbed to this helper). CreatureTextMgr
 // listen ranges (CreatureTextMgr.cpp GetRangeForChatType: SAY/TEXTEMOTE
 // 25yd, YELL 300yd) fan out through SendMessageToSetInRange, not the
 // visibility range, so creature-talk legs use this form.
@@ -1665,7 +1713,7 @@ func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, inst
 		return
 	}
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	targets := make([]*session, 0, len(s.sessions))
 	for target := range s.sessions {
 		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil {
 			continue
@@ -1674,6 +1722,17 @@ func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, inst
 			continue
 		}
 		if distance3D(target.player.X, target.player.Y, target.player.Z, cx, cy, cz) > radius {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	s.sessionsMu.RUnlock()
+	var sourcePhase uint32 = 1
+	if source != nil {
+		sourcePhase = source.currentPlayerPhaseMask()
+	}
+	for _, target := range targets {
+		if source != nil && sourcePhase&target.currentPlayerPhaseMask() == 0 {
 			continue
 		}
 		_ = target.write(opcode, payload, true)
