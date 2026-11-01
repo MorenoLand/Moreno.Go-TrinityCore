@@ -530,6 +530,44 @@ func (s *session) resolveExplicitUnitTarget(ctx context.Context, spell wotlk.Spe
 				return 0, target, spellFailedBadTargets, "explicit target blocked"
 			}
 		}
+		// IsValidAttackTarget/IsValidAssistTarget pre-gates that run inside
+		// CheckExplicitTarget (SpellInfo.cpp:1793-1816) ahead of the
+		// hostility terms, for the ENEMY/ALLY/PARTY/RAID check bits only
+		// (plain-unit, minipet, and passenger masks never reach IsValid*
+		// Target, so their dead/in-flight handling stays with the later
+		// CheckTarget gates). Self is exempt, like the blocked and GM
+		// gates above (Object.cpp:3092 self arm).
+		if adoptedUnit != s.playerGUID && explicitMask&(targetFlagUnitEnemy|targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0 {
+			// Dead (Object.cpp:2968/3124): IsAllowingDeadTarget exempts.
+			// Player targets read isDeadOrGhost (ghosts carry Health=1,
+			// so the combatTarget health read would miss them); creature
+			// targets read the fetched health. This fires at the gauntlet
+			// with BAD_TARGETS, ahead of the completion-path TARGETS_DEAD
+			// recheck and ahead of the item path's own dead gate.
+			if !spellAllowsDeadTarget(spell) {
+				dead := tgt.Health == 0
+				if ts := s.server.findSessionByGUID(adoptedUnit); ts != nil && ts.player != nil {
+					dead = ts.isDeadOrGhost()
+				}
+				if dead {
+					return 0, target, spellFailedBadTargets, "explicit target dead"
+				}
+			}
+			// Unattackable (Object.cpp:2942/3100): UNIT_STATE_UNATTACKABLE
+			// is UNIT_STATE_IN_FLIGHT in this fork (Unit.h:249), so the
+			// arm refuses in-flight targets with no bypass — unlike the
+			// later CheckTarget in-flight gate, which honors
+			// CU_ALLOW_INFLIGHT_TARGET. Only player targets carry the
+			// state in Go (taxi paths); creatures fail open.
+			if ts := s.server.findSessionByGUID(adoptedUnit); ts != nil && ts.player != nil && ts.inFlight {
+				return 0, target, spellFailedBadTargets, "explicit target in flight"
+			}
+		}
+		// Vehicle (Object.cpp:3109-3117, assist only): a seated caster
+		// cannot assist its own vehicle or the vehicle carrying it.
+		if adoptedUnit != s.playerGUID && explicitMask&(targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) != 0 && s.explicitTargetVehicleBlocked(adoptedUnit) {
+			return 0, target, spellFailedBadTargets, "explicit target is caster vehicle"
+		}
 		if s.explicitTargetFactionBlocked(spell, explicitMask, adoptedUnit, tgt) {
 			return 0, target, spellFailedBadTargets, "explicit target faction mismatch"
 		}
@@ -686,6 +724,35 @@ func (s *session) explicitTargetPassengerBlocked(explicitUnitGUID uint64) bool {
 	}
 	seatID, _, _ := kit.GetSeatForPassenger(explicitUnitGUID)
 	return seatID < 0
+}
+
+// explicitTargetVehicleBlocked mirrors the vehicle arm of
+// WorldObject::IsValidAssistTarget (Object.cpp:3109-3117) for a player
+// caster against an explicit ALLY/PARTY/RAID target: when the caster is
+// seated, the target may not be the vehicle the caster rides
+// (unit->IsOnVehicle(unitTarget): the caster's m_vehicle is the target's
+// kit) nor the vehicle carrying that vehicle (GetVehicleBase()->
+// IsOnVehicle(unitTarget)). The caster's VehicleGUID is the base GUID
+// while seated, and a base's own VehicleGUID is the nested-vehicle leg;
+// a player base and a creature-motion base are both consulted, and an
+// unresolvable base fails open. IsValidAttackTarget has no vehicle arm,
+// so ENEMY masks never reach this helper.
+// Returns true when the cast must fail with SPELL_FAILED_BAD_TARGETS.
+func (s *session) explicitTargetVehicleBlocked(explicitUnitGUID uint64) bool {
+	if s == nil || s.player == nil || s.player.VehicleGUID == 0 {
+		return false
+	}
+	if explicitUnitGUID == s.player.VehicleGUID {
+		return true
+	}
+	base := s.player.VehicleGUID
+	if ts := s.server.findSessionByGUID(base); ts != nil && ts.player != nil {
+		return ts.player.VehicleGUID != 0 && ts.player.VehicleGUID == explicitUnitGUID
+	}
+	if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, base); tm != nil {
+		return tm.VehicleGUID != 0 && tm.VehicleGUID == explicitUnitGUID
+	}
+	return false
 }
 
 // explicitOwnedCreatureAttackPasses mirrors the hostility terms of

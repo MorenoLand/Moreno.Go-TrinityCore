@@ -7350,7 +7350,17 @@ func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {
 // per-call-site TaxiPath gates (player-only in C++, MoveTaxiFlight is
 // TYPEID_PLAYER-only) and Go never sets it at runtime.
 func spellTargetUnitBlocked(spell wotlk.Spell, unitFlags, flagsExtra uint32, assist bool) bool {
-	if !assist || isHarmfulSpell(spell) {
+	// The assist arms test C++ negativity, not harmfulness:
+	// IsValidAssistTarget's isNegativeSpell is bySpell && !IsPositive()
+	// (Object.cpp:3094, SpellInfo.cpp:1205: !SPELL_ATTR0_CU_NEGATIVE, the
+	// load-computed EFF bits), so the bundle arm (3131) and the immune
+	// arm (3134) key on the CU_NEGATIVE mask. The effect heuristic
+	// isHarmfulSpell diverges for negative-aura and attribute-negative
+	// spells, so it stays only on the attack shape below, whose C++
+	// arms carry no negativity condition on the bundle and whose immune
+	// arm keeps its own pre-existing approximation.
+	negative := spell.AttributesCu&spellAttr0CuNegativeMask != 0
+	if !assist || negative {
 		// 0x2 = UNIT_FLAG_NON_ATTACKABLE, 0x80 = UNIT_FLAG_NOT_ATTACKABLE_1,
 		// 0x10000 = UNIT_FLAG_NON_ATTACKABLE_2 (aura 93; Object.cpp:2980/3131
 		// list all four bundle flags in both the attack and negative-assist
@@ -7363,8 +7373,14 @@ func spellTargetUnitBlocked(spell wotlk.Spell, unitFlags, flagsExtra uint32, ass
 	if unitFlags&0x02000000 != 0 && spell.AttributesEx6&spellAttr6CanTargetUntargetable == 0 {
 		return true
 	}
-	if unitFlags&0x00000100 != 0 && (isHarmfulSpell(spell) || spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0) {
-		return true
+	if unitFlags&0x00000100 != 0 {
+		if assist {
+			if negative || spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 {
+				return true
+			}
+		} else if isHarmfulSpell(spell) || spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 {
+			return true
+		}
 	}
 	return false
 }
