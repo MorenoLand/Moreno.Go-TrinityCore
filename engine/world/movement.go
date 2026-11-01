@@ -1536,6 +1536,16 @@ func (s *Server) broadcastToVisibleSet(opcode uint16, payload []byte, mapID, ins
 	s.broadcastToSetWithin(opcode, payload, mapID, instanceID, cx, cy, cz, 100.0, source)
 }
 
+// broadcastToVisibleSetFromPhase is the creature-sourced twin of
+// broadcastToVisibleSet: the same 100yd visibility-set fan-out, with the
+// MessageDistDeliverer phase leg (GridNotifiers.cpp:253-274) keyed on the
+// source creature's motion phase instead of a session, as spell casts and
+// logs fan out in C++ through m_caster->SendMessageToSet (Spell.cpp:4280,
+// SendSpellGo, SendLogExecute). A 0 phase reads as PHASEMASK_NORMAL.
+func (s *Server) broadcastToVisibleSetFromPhase(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, sourcePhase uint32) {
+	s.broadcastToSetWithinFromPhase(opcode, payload, mapID, instanceID, cx, cy, cz, 100.0, sourcePhase)
+}
+
 // broadcastCreatureCreateToVisibleSet is the creature-create twin of
 // broadcastToVisibleSet: a summon/respawn create block fans out through
 // WorldObject::UpdateObjectVisibilityOnCreate (Map.cpp:667-680) and
@@ -1673,7 +1683,7 @@ func (s *Server) broadcastToVisibleSetForCreature(opcode uint16, payload []byte,
 		return
 	}
 	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
-		s.broadcastToVisibleSet(opcode, payload, mapID, instanceID, m.X, m.Y, m.Z, nil)
+		s.broadcastToVisibleSetFromPhase(opcode, payload, mapID, instanceID, m.X, m.Y, m.Z, m.PhaseMask)
 		return
 	}
 	s.broadcastToInstance(mapID, instanceID, opcode, payload, nil)

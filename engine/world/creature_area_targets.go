@@ -2491,7 +2491,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 	// (Spell.cpp:2538 first arm).
 	if !damageImmune {
 		logPkt := buildSpellNonMeleeDamageLog(victimGUID, motion.GUID, spellID, logDamage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 	}
 	if killed {
 		// Unit::DealDamage (Unit.cpp:738-748 + :882-889): the TAKE_DAMAGE
@@ -4015,7 +4015,7 @@ func (s *Server) applyInlineCreatureReflectReturnTrip(ctx context.Context, motio
 			}
 		},
 		deliverLog: func(payload []byte) {
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), payload, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		},
 		shareVehicle: vehicle,
 	})

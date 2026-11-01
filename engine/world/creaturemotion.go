@@ -699,7 +699,7 @@ func (s *Server) refreshCreatureRunSpeedMotion(motion *creatureMotion) {
 	packet := protocol.NewBuffer(16)
 	packet.WritePackedGUID(motion.GUID)
 	packet.WriteF32(newSpeed)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPLINE_SET_RUN_SPEED), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPLINE_SET_RUN_SPEED), packet.Bytes(), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 }
 
 const (
@@ -1116,13 +1116,13 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		motion.ThreatMgr.AddThreat(playerGUID, 0.0, true)
 		if !motion.InCombat {
 			enteredCombat = true
-			s.broadcastAIReactionAt(motion.Map, motion.InstanceID, creatureGUID, 2, motion.X, motion.Y, motion.Z)
+			s.broadcastAIReactionAt(motion.Map, motion.InstanceID, creatureGUID, 2, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 			startPkt := buildAttackStart(creatureGUID, playerGUID)
 			if playerSess != nil {
 				_ = playerSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
 				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, playerSess)
 			} else {
-				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 			}
 			if motion.BossAI != nil {
 				if playerSess != nil {
@@ -2463,7 +2463,7 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		motion.ThreatMgr.ClearThreat()
 	}
 	stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 	s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID)
 	// ThreatManager::RemoveMeFromThreatLists (ThreatManager.cpp:690-697):
 	// evade drops the creature from everyone else's threat table too, so no
@@ -3204,7 +3204,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// attackers, like the creature:AttackStop() Lua bridge; gated
 			// on an actual stop (C++ !m_attacking early-return).
 			motion.AlreadyCallAssistance = false
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, motion.TargetGUID, false), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(motion.GUID, motion.TargetGUID, false), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		}
 		motion.TargetGUID = 0
 		motion.Moving = false
@@ -3314,7 +3314,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		} else if !passive && motion.TargetGUID == 0 {
 			if victim := motion.ThreatMgr.GetCurrentVictim(); victim != 0 {
 				motion.TargetGUID = victim
-				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, victim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, victim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, victim, motion.ThreatMgr.SortedEntries())
 			}
 		} else if dirty {
@@ -6575,7 +6575,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// the creature's visibility set; the creature has no session leg
 			// (the victim is reached through the set).
 			if s != nil {
-				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 			}
 			target.Sess.sendPlayerUpdate()
 			if s != nil {
@@ -7748,11 +7748,11 @@ func (s *Server) broadcastAIReactionInInstance(mapID, instanceID uint32, guid ui
 // (visibility set), but triggerCreatureAggro calls it while holding motionMu,
 // so the motion lookup inside broadcastToVisibleSetForCreature would deadlock.
 // Callers pass the in-hand motion coordinates instead.
-func (s *Server) broadcastAIReactionAt(mapID, instanceID uint32, guid uint64, reactionType uint32, x, y, z float32) {
+func (s *Server) broadcastAIReactionAt(mapID, instanceID uint32, guid uint64, reactionType uint32, x, y, z float32, phase uint32) {
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(guid)
 	buf.WriteU32(reactionType)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), mapID, instanceID, x, y, z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), mapID, instanceID, x, y, z, phase)
 }
 
 // loadCreatureSpells queries spells configured for this creature entry from creature_template_spell.

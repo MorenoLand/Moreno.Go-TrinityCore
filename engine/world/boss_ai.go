@@ -217,7 +217,7 @@ func (s *Server) despawnAtEvade(ctx context.Context, m *creatureMotion, delay ti
 	destroyBuf := protocol.NewBuffer(9)
 	destroyBuf.WriteU64(m.GUID)
 	destroyBuf.WriteU8(0)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 	// Eluna::OnRemoveFromWorld (CreatureHooks.cpp:80-85,
 	// CREATURE_EVENT_ON_REMOVE (37)) fires from Creature::RemoveFromWorld
 	// (Creature.cpp:314) when a creature leaves the world.
@@ -559,7 +559,7 @@ func (s *Server) sendCreatureSpellStart(m *creatureMotion, targetGUID uint64, pk
 		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_START), pkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, sess)
 		return
 	}
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_START), pkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELL_START), pkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 }
 
 const (
@@ -3087,7 +3087,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, targetSess)
 		} else {
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 		}
 		// Spell::handle_immediate (Spell.cpp:3493, :3569-3596) runs after
 		// SendSpellGo (:3468): a channeled cast sends MSG_CHANNEL_START
@@ -3103,7 +3103,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 					_ = targetSess.write(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, true)
 					s.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, targetSess)
 				} else {
-					s.broadcastToVisibleSet(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+					s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeMSG_CHANNEL_START), channelPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 				}
 			}
 		}
@@ -4031,7 +4031,7 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 		packet.WriteU64(m.GUID)
 		packet.WriteU64(guid)
 		packet.WriteU32(spellID)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLINSTAKILLLOG), packet.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 		if vs := s.findSessionByGUID(guid); vs != nil && vs.player != nil {
 			// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled
 			// creatures are signaled OwnerAttackedBy on any non-DoT damage
@@ -4095,7 +4095,7 @@ func (s *Server) creatureEffectInterruptCast(ctx context.Context, m *creatureMot
 		}
 		if vm := s.findCreatureMotion(m.Map, m.InstanceID, guid); vm != nil {
 			for _, interrupted := range s.interruptCreatureCast(vm) {
-				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), buildInterruptCastLog(m.GUID, spell.ID, guid, interrupted.spellID), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), buildInterruptCastLog(m.GUID, spell.ID, guid, interrupted.spellID), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 				s.sendCreatureInterruptPackets(vm, interrupted)
 			}
 		}
@@ -4168,7 +4168,7 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 		if !wasInCombat {
 			s.broadcastAIReactionInInstance(mapID, m.InstanceID, targetGUID, 2)
 			startPkt := buildAttackStart(targetGUID, m.GUID)
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, m.InstanceID, motion.X, motion.Y, motion.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, m.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		}
 	}
 }
@@ -4337,7 +4337,7 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 			log.WriteU32(spellEffectSummon)
 			log.WriteU32(1)
 			log.WritePackedGUID(summoned.GUID)
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 			return summoned
 		}
 		// stampOwnerFaction mirrors the Minion::InitStats creator/faction
@@ -4656,7 +4656,7 @@ func (s *Server) creatureEffectSummonObject(ctx context.Context, m *creatureMoti
 	log.WriteU32(eff.Effect)
 	log.WriteU32(1)
 	log.WritePackedGUID(newGUID)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 	m.ObjectSlots[slot] = newGUID
 }
 
@@ -4723,7 +4723,7 @@ func (s *Server) creatureEffectSummonObjectWild(ctx context.Context, m *creature
 	log.WriteU32(eff.Effect)
 	log.WriteU32(1)
 	log.WritePackedGUID(newGUID)
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 }
 
 // creatureEffectTeleportUnits mirrors Spell::EffectTeleportUnits
@@ -4950,12 +4950,12 @@ func (s *Server) creatureDispelPlayerTarget(m *creatureMotion, spell wotlk.Spell
 	if len(failList) > 0 {
 		failPkt := buildDispelFailed(m.GUID, targetGUID, spell.ID, failList)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, true)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 	}
 	if len(successList) > 0 {
 		logPkt := buildSpellDispelLog(targetGUID, m.GUID, spell.ID, successList)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, true)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 	}
 }
 
@@ -5385,7 +5385,7 @@ func (s *Server) creatureResurrectLog(m *creatureMotion, spellID uint32, targetG
 	if ts := s.findSessionByGUID(targetGUID); ts != nil {
 		_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), true)
 	}
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 }
 
 // creatureEffectResurrect mirrors Spell::EffectResurrect
@@ -6107,7 +6107,7 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 					if changed {
 						s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, m.GUID, map[int]uint32{unitFieldPower1 + int(powerType): next})
 						logPkt := buildSpellEnergizeLog(m.GUID, m.GUID, spell.ID, powerType, gain)
-						s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+						s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 						s.distributeHealingThreat(ctx, m.GUID, m.GUID, uint32(gain), true, spell.ID)
 					}
 				}
@@ -6130,7 +6130,7 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 		log.WriteU32(t.powerType)
 		log.WriteF32(t.gainMultiplier)
 	}
-	s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLLOGEXECUTE), log.Bytes(), m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 }
 
 // creatureInstaKillVictim runs the creature-victim legs of a creature
@@ -7196,7 +7196,7 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			destroyBuf := protocol.NewBuffer(9)
 			destroyBuf.WriteU64(guid)
 			destroyBuf.WriteU8(0)
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), m.Map, m.InstanceID, tx, ty, tz, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), m.Map, m.InstanceID, tx, ty, tz, tm.PhaseMask)
 		}
 	}
 }
@@ -7684,7 +7684,7 @@ func (s *Server) creatureEffectEnvironmentalDamage(ctx context.Context, m *creat
 			overkill = remaining - victimHealth
 		}
 		logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spellID, remaining, overkill, schoolMask, absorbed, resisted, 0)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 	}
 }
 
@@ -9021,7 +9021,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		}
 		if !damageImmune {
 			logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spell.ID, logDamage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
-			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 		}
 		if killed {
 			s.procCreatureLethalDamageAuras(victimKey, spell.ID, damage, maxHealth)
@@ -9929,7 +9929,7 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 	// SendTickImmune and returns before any damage leg.
 	if vs.playerIsIsolated() || vs.isImmuneToDamageSpell(auraSpell, schoolMask) {
 		immunePkt := protocol.BuildSpellDamageImmune(m.GUID, victimGUID, auraSpell.ID)
-		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, nil)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLORDAMAGE_IMMUNE), immunePkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 		return
 	}
 	// Unit::CalculateSpellDamageTaken (Unit.cpp:987-1130): the taken fold
