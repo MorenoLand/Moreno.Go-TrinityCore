@@ -983,7 +983,8 @@ func (s *Server) creatureUnitTargetPos(m *creatureMotion, targetGUID uint64) (fl
 // for wild-creature casters (SpellInfo::CheckTarget, SpellInfo.cpp:1650):
 // a target player's session combat state, or a target creature's
 // motion.InCombat. Resolves nothing — returns false when the guid maps to
-// no unit. The UNIT_FLAG_PET_IN_COMBAT half of the C++ OR has no Go model.
+// no unit. The UNIT_FLAG_PET_IN_COMBAT half rides
+// creatureSpellTargetPetInCombat at the gate below.
 func (s *Server) creatureSpellTargetInCombat(m *creatureMotion, targetGUID uint64) bool {
 	if s == nil {
 		return false
@@ -998,6 +999,37 @@ func (s *Server) creatureSpellTargetInCombat(m *creatureMotion, targetGUID uint6
 	motion := s.findCreatureMotionLocked(m.Map, m.InstanceID, targetGUID)
 	s.motionMu.Unlock()
 	return motion != nil && motion.InCombat
+}
+
+// creatureSpellTargetPetInCombat is the Server-level twin of
+// unitTargetPetInCombat for wild-creature casters (SpellInfo::CheckTarget,
+// SpellInfo.cpp:1650, Unit::UpdatePetCombatState, Unit.cpp:8994-9007): any
+// live motion on the caster's map/instance whose OwnerGUID is the target
+// and which is in combat. The target player's session leg is unnecessary
+// here — the pet motion itself carries the owner's GUID — but the caster
+// motion m supplies the map/instance; a nil caster motion fails open.
+func (s *Server) creatureSpellTargetPetInCombat(m *creatureMotion, targetGUID uint64) bool {
+	if s == nil || m == nil || targetGUID == 0 {
+		return false
+	}
+	if uint16(targetGUID>>48) == 0xF110 {
+		return false
+	}
+	s.motionMu.Lock()
+	motions := s.motionMapLocked(m.Map, m.InstanceID)
+	owned := make([]*creatureMotion, 0, len(motions))
+	for _, cand := range motions {
+		if cand != nil {
+			owned = append(owned, cand)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, cand := range owned {
+		if cand.OwnerGUID == targetGUID && (cand.InCombat || cand.UnitFlags&unitFlagInCombat != 0) {
+			return true
+		}
+	}
+	return false
 }
 
 // creatureSpellTargetDead reports whether the explicit unit target is dead
@@ -1218,7 +1250,7 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	// model on either side (documented no-bridge, like the player path).
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1650-1651):
 	// SPELL_ATTR1_CANT_TARGET_IN_COMBAT with an in-combat target.
-	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.creatureSpellTargetInCombat(m, targetGUID) {
+	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && (s.creatureSpellTargetInCombat(m, targetGUID) || s.creatureSpellTargetPetInCombat(m, targetGUID)) {
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1654-1662):

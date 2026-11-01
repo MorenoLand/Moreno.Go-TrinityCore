@@ -2261,8 +2261,8 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	// model on either side (documented no-bridge, like the player path).
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1650-1651):
 	// SPELL_ATTR1_CANT_TARGET_IN_COMBAT with an in-combat target. The
-	// UNIT_FLAG_PET_IN_COMBAT half has no Go model (unitTargetInCombat).
-	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.unitTargetInCombat(targetGUID) {
+	// half rides unitTargetPetInCombat.
+	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && (s.unitTargetInCombat(targetGUID) || s.unitTargetPetInCombat(targetGUID)) {
 		return false
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1654-1662):

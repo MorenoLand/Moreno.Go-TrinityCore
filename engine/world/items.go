@@ -4076,9 +4076,9 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				}
 			}
 			// Cannot-target-in-combat (SpellInfo.cpp:1650-1651): the
-			// UNIT_FLAG_PET_IN_COMBAT half has no bridge (no pet-in-combat
-			// flag on player units), like the client path.
-			if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.unitTargetInCombat(targetGUID) {
+			// half rides unitTargetPetInCombat
+			// (any OwnerGUID minion in combat), like the client path.
+			if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && (s.unitTargetInCombat(targetGUID) || s.unitTargetPetInCombat(targetGUID)) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedTargetAffectingCombat), true)
 				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in combat")
 				return true
@@ -4240,8 +4240,17 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 				return true
 			}
 			// PREVENT_RESURRECTION + resurrect effects (SpellInfo.cpp:1779-1782):
-			// unbridged on the player path (no target-side aura query for
-			// SPELL_AURA_PREVENT_RESURRECTION), documented, not fabricated.
+			// the last CheckTarget arm, after the aura arms. A resurrect-effect
+			// spell whose target carries a SPELL_AURA_PREVENT_RESURRECTION aura
+			// fails with SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED; no self
+			// exemption in C++, like the completion recheck. Reuses the
+			// triggered-path twin (targetHasPreventResurrectionAura);
+			// unresolvable targets pass.
+			if spellHasResurrectEffect(spell) && s.targetHasPreventResurrectionAura(ctx, targetGUID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedTargetCannotBeResurrected), true)
+				s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target cannot be resurrected")
+				return true
+			}
 			// Unit-target positional block (Spell::CheckCast, Spell.cpp:5378-5401):
 			// behind/facing/LOS sit inside the same GetUnitTarget block as
 			// the CheckTarget call, after it and ahead of the dest-LOS arm.

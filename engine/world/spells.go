@@ -2862,7 +2862,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// in combat with SPELL_FAILED_TARGET_AFFECTING_COMBAT. Creature-target
 	// combat rides motion.InCombat; player-target combat rides the target
 	// session's UnitFlags (unitTargetInCombat). The UNIT_FLAG_PET_IN_COMBAT
-	// half has no bridge: Go tracks no pet-in-combat flag on player units.
+	// half rides unitTargetPetInCombat (any OwnerGUID minion in combat).
 	// The ONLY_TARGET_GHOSTS arm (SpellInfo.cpp:1654-1662) is bridged by
 	// the gate below, ahead of pickpocket in C++ order. The
 	// CANT_TARGET_TAPPED arm (SpellInfo.cpp:1667-1670) is bridged by the
@@ -2870,7 +2870,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Checked when a unit target exists, ahead of the caster != unitTarget block, matching C++ relative
 	// order (1650 ahead of 1667/1669).
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
-	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && targetGUID != 0 && s.unitTargetInCombat(targetGUID) {
+	if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && targetGUID != 0 && (s.unitTargetInCombat(targetGUID) || s.unitTargetPetInCombat(targetGUID)) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAffectingCombat), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in combat", "failReason", spellFailedTargetAffectingCombat)
 		return true
@@ -3109,6 +3109,20 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if s.explicitTargetFlyingBlocked(spell, targetGUID) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target in flight", "target", targetGUID)
+		return true
+	}
+	// Prevent-resurrection gate (SpellInfo::CheckTarget, SpellInfo.cpp:1779-1782):
+	// the last CheckTarget arm, after the aura arms. A resurrect-effect
+	// spell (SELF_RESURRECT, RESURRECT, RESURRECT_NEW) whose target
+	// carries a SPELL_AURA_PREVENT_RESURRECTION aura fails with
+	// SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED. No self exemption in
+	// C++, so self targets judge it too, like the completion recheck;
+	// unresolvable targets pass. Previously the book gauntlet never
+	// checked this arm, so the cast failed late at completion.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if spellHasResurrectEffect(spell) && targetGUID != 0 && s.targetHasPreventResurrectionAura(ctx, targetGUID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetCannotBeResurrected), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target cannot be resurrected")
 		return true
 	}
 
@@ -4922,7 +4936,8 @@ func (s *session) checkPowerBurnDrainCast(spell wotlk.Spell, target protocol.Spe
 // state (attackTarget or UnitFlags), a target player's in-combat state, or a
 // target creature's motion.InCombat. Resolves nothing — returns false when
 // the guid maps to no unit. The UNIT_FLAG_PET_IN_COMBAT half of the C++ OR
-// has no Go model.
+// rides unitTargetPetInCombat at the CheckTarget gates; this helper
+// stays the pure IsInCombat read.
 func (s *session) unitTargetInCombat(guid uint64) bool {
 	// A gameobject guid is not a unit target in C++: the CANT_TARGET_IN_COMBAT
 	// arm sits inside CheckTarget's unitTarget block (SpellInfo.cpp:1645-1651,
@@ -4949,6 +4964,62 @@ func (s *session) unitTargetInCombat(guid uint64) bool {
 		s.server.motionMu.Unlock()
 		if motion != nil {
 			return motion.InCombat
+		}
+	}
+	return false
+}
+
+// unitTargetPetInCombat mirrors the UNIT_FLAG_PET_IN_COMBAT half of the
+// CheckTarget CANT_TARGET_IN_COMBAT arm (SpellInfo.cpp:1650,
+// Unit::UpdatePetCombatState, Unit.cpp:8994-9007): the flag on a unit is
+// set exactly when any of its controlled minions is in combat. Go's minion
+// model is the live motion OwnerGUID: pets, charmed creatures and summons
+// all carry their controller's GUID (charm overwrites OwnerGUID with the
+// charmer, so the charmer's scan finds it; the banked CharmOwnerGUID is
+// not control). A target player's minions live on the target session's
+// map/instance, a target creature's on its motion's map/instance, and a
+// self target scans the caster's own map/instance — the arm sits outside
+// the caster != unitTarget block, so self judges too. Motion combat rides
+// the pets.go convention (InCombat or the UnitFlags in-combat bit).
+// DB-row creatures have no live minions and fail open, like the IsInCombat
+// half; gameobject guids never match.
+func (s *session) unitTargetPetInCombat(guid uint64) bool {
+	if s == nil || s.server == nil || guid == 0 {
+		return false
+	}
+	if uint16(guid>>48) == 0xF110 {
+		return false
+	}
+	var mapID, instanceID uint32
+	if s.player != nil && guid == s.playerGUID {
+		mapID, instanceID = s.player.Map, s.player.InstanceID
+	} else if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		mapID, instanceID = ts.player.Map, ts.player.InstanceID
+	} else if s.player != nil {
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, guid)
+		if motion != nil {
+			mapID, instanceID = motion.Map, motion.InstanceID
+		}
+		s.server.motionMu.Unlock()
+		if motion == nil {
+			return false
+		}
+	} else {
+		return false
+	}
+	s.server.motionMu.Lock()
+	motions := s.server.motionMapLocked(mapID, instanceID)
+	owned := make([]*creatureMotion, 0, len(motions))
+	for _, m := range motions {
+		if m != nil {
+			owned = append(owned, m)
+		}
+	}
+	s.server.motionMu.Unlock()
+	for _, m := range owned {
+		if m.OwnerGUID == guid && (m.InCombat || m.UnitFlags&unitFlagInCombat != 0) {
+			return true
 		}
 	}
 	return false
@@ -9911,11 +9982,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// In-combat (SpellInfo.cpp:1650-1651): a target that enters
 			// combat mid-bar fails with
 			// SPELL_FAILED_TARGET_AFFECTING_COMBAT, as at the gauntlet;
-			// the UNIT_FLAG_PET_IN_COMBAT half stays unbridged, as
-			// there. Unlike tapped, this arm sits outside the caster
+			// half rides unitTargetPetInCombat,
+			// as at the gauntlet. Unlike tapped, this arm sits outside the caster
 			// != unitTarget block, so self targets judge the caster's
 			// own combat state via unitTargetInCombat.
-			if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.unitTargetInCombat(target.UnitGUID) {
+			if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && (s.unitTargetInCombat(target.UnitGUID) || s.unitTargetPetInCombat(target.UnitGUID)) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetAffectingCombat), true)
 				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target in combat")
@@ -23617,9 +23688,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			}
 		}
 		// Cannot-target-in-combat arm (SpellInfo.cpp:1650): the
-		// UNIT_FLAG_PET_IN_COMBAT half has no Go model (same gap as the
-		// client path); the IsInCombat half rides unitTargetInCombat.
-		if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && s.unitTargetInCombat(targetGUID) {
+		// half rides unitTargetPetInCombat;
+		// the IsInCombat half rides unitTargetInCombat.
+		if spell.AttributesEx&spellAttr1CantTargetInCombat != 0 && (s.unitTargetInCombat(targetGUID) || s.unitTargetPetInCombat(targetGUID)) {
 			rejectTriggeredCast("explicit target in combat")
 			return
 		}
