@@ -1114,14 +1114,18 @@ func (s *Server) motionChainOwnedAssist3149(casterOwner *session, casterFaction,
 // GetReactionTo, whose player-controlled arms (Object.cpp:2744-2762) make
 // a same-owner or same-group creature friendly, a duel opponent's creature
 // hostile (confirmed by the duel arm, Object.cpp:3062), and a both-FFA
-// creature hostile, all ahead of the faction-template gate. A
+// creature hostile, all ahead of the faction-template gate. A decided
+// hostile pick takes the PvP-case tail below, except a duel opponent's
+// creature, which the duel arm admits outright ahead of the tail; an
+// undecided pick takes the faction gate narrowed by the tail. A
 // player-controlled candidate with no resolving owner keeps the faction
 // gate — the flag, not resolvability, selects the PvP case, like the
-// assist twin. The sanctuary arm (Object.cpp:3065) and the PvP-flag tail
-// (Object.cpp:3073-3078, target-IsPvP / both-FFA / dead UNK1 term) stay
-// unmodeled residuals, like the area-enemy reaction gates: a motion
-// candidate carries no sanctuary byte, and the sweep convention is
-// reaction-only.
+// assist twin. The sanctuary arm (Object.cpp:3065) stays unmodeled: it
+// reads the units' own sanctuary bytes, and a sweep creature's byte is
+// never set by area code (only Player.cpp:7179 sets it, plus Lua), so the
+// shared helper cannot take the caster owner's byte as a proxy for a
+// creature caster's byte — the player-caster sanctuary arm is the same
+// named residual as the area-enemy reaction gates.
 func chainCreatureAttackHostile(casterSess *session, candOwnerGUID uint64, unitFlags uint32, factionHostile bool) bool {
 	if casterSess == nil || unitFlags&unitFlagPlayerControlled == 0 || candOwnerGUID == 0 {
 		return factionHostile
@@ -1131,9 +1135,33 @@ func chainCreatureAttackHostile(casterSess *session, candOwnerGUID uint64, unitF
 		return factionHostile
 	}
 	if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterSess, candOwnerSess); decided {
-		return !reactionAlly
+		if reactionAlly {
+			return false
+		}
+		if casterSess.duelPartner != 0 && casterSess.duelPartner == candOwnerSess.playerGUID && casterSess.player.DuelTeam != 0 && candOwnerSess.player.DuelTeam != 0 {
+			return true
+		}
+		return chainCreatureAttackPvPTail(casterSess, candOwnerSess)
 	}
-	return factionHostile
+	return factionHostile && chainCreatureAttackPvPTail(casterSess, candOwnerSess)
+}
+
+// chainCreatureAttackPvPTail mirrors the owner-flag terms of the PvP-case
+// tail of WorldObject::IsValidAttackTarget (Object.cpp:3073-3078) for a
+// player-owned creature pick: both affecting players are sessions here
+// (the caster's owner and the candidate's owner), so the target owner's
+// IsPvP admits and both-FFA admits, exactly as in the player twin, while
+// the UNK1 byte term is dead (read only at Object.cpp:3079-3080, never
+// set). Sanctuary is deliberately not folded in: the arm reads the
+// target unit's own byte, not its owner's (see chainCreatureAttackHostile).
+func chainCreatureAttackPvPTail(casterSess, candOwnerSess *session) bool {
+	if casterSess == nil || casterSess.player == nil || candOwnerSess == nil || candOwnerSess.player == nil {
+		return false
+	}
+	if candOwnerSess.player.PVPFlags&pvpFlagPvP != 0 {
+		return true
+	}
+	return casterSess.player.PVPFlags&pvpFlagFFA != 0 && candOwnerSess.player.PVPFlags&pvpFlagFFA != 0
 }
 
 // chainPlayerAttackPvPTail mirrors the player-vs-player tail of
@@ -1173,8 +1201,8 @@ func chainPlayerAttackPvPTail(casterSess, targetSess *session) bool {
 // attack gate (isAttackableFaction: template hostility plus the PvC
 // at-war term, which is the wild-caster verdict since the at-war arm at
 // Object.cpp:3036-3053 fires only when exactly one side has an affecting
-// player). The creature twin keeps the tail unmodeled (no creature
-// sanctuary byte in the sweep model).
+// player). The creature twin takes the tail's owner-flag terms via
+// chainCreatureAttackPvPTail; only its sanctuary byte stays unmodeled.
 func chainPlayerAttackHostile(casterSess, targetSess *session, factionHostile bool) bool {
 	if casterSess == nil || casterSess.player == nil || targetSess == nil || targetSess.player == nil {
 		return factionHostile
