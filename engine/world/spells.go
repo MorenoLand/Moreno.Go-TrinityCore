@@ -2936,6 +2936,41 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// Dead-target gate (SpellInfo::CheckTarget, SpellInfo.cpp:1715-1716):
+	// a spell that does not allow dead targets (spellAllowsDeadTarget:
+	// SPELL_ATTR2_CAN_TARGET_DEAD or a corpse/dead-unit bit in Targets,
+	// SpellInfo.cpp:1177) rejects a dead explicit unit target with
+	// SPELL_FAILED_TARGETS_DEAD. It sits here in C++ CheckTarget order
+	// (after only-players 1712, before the crowd-control arm 1718) but
+	// covers only adopted units whose explicit mask carries none of the
+	// ENEMY/ALLY/PARTY/RAID check bits: check-bit targets already took
+	// the IsValidAttack/Assist dead arm inside resolveExplicitUnitTarget
+	// (BAD_TARGETS, Object.cpp:2968/3124), which is the C++
+	// CheckExplicitTarget verdict for them. Plain-unit/minipet/
+	// passenger-only masks never reach IsValid*Target, so without this
+	// gate their dead targets were left to the completion recheck — which
+	// reads combatTarget health only and misses ghost player targets
+	// (ghosts carry Health=1). The read mirrors the pre-gate and the
+	// item-path twin: player targets via isDeadOrGhost, creatures via
+	// the fetched health; unresolvable targets fail open. Self is exempt,
+	// like the item path and the completion recheck.
+	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
+	if targetGUID != 0 && targetGUID != s.playerGUID &&
+		spellExplicitUnitTargetMask(spell)&(targetFlagUnitEnemy|targetFlagUnitAlly|targetFlagUnitParty|targetFlagUnitRaid) == 0 &&
+		!spellAllowsDeadTarget(spell) {
+		dead := false
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			dead = ts.isDeadOrGhost()
+		} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			dead = tgt.Health == 0
+		}
+		if dead {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetsDead), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target dead", "failReason", spellFailedTargetsDead)
+			return true
+		}
+	}
+
 	// Implicit crowd-control gate (SpellInfo::CheckTarget, SpellInfo.cpp:1718-1720):
 	// documented no-bridge. SPELL_ATTR6_CANT_TARGET_CROWD_CONTROLLED
 	// (0x00000100, SharedDefines.h:642) with !unitTarget->CanFreeMove()
@@ -2943,8 +2978,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// and area targeting). handleCastSpell processes explicit client targets
 	// and Go has no CanFreeMove model (no root/snare/stun query on the
 	// target), so the arm has nothing to consult. Sits after the dead-target
-	// gate (1715-1716, bridged in the completion path) in C++ CheckTarget
-	// order.
+	// gate (1715-1716, bridged at the gauntlet above and in the completion
+	// path) in C++ CheckTarget order.
 
 	// Target creature-type gate (SpellInfo::CheckTarget, SpellInfo.cpp:1728):
 	// sits ahead of the aura-state/aura-spell gates in C++ CheckTarget order.
