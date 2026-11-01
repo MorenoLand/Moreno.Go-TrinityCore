@@ -102,10 +102,10 @@ func (s *Server) gameTimeMilliseconds() uint32 {
 }
 
 func (s *Server) broadcastTeleportMovement(source *session, payload []byte) {
-	if s == nil || source == nil || source.player == nil || !source.worldReady.Load() || s.Config.VisibilityDistanceContinents <= 0 {
+	if s == nil || source == nil || source.player == nil || !source.worldReady.Load() || s.visibilityRangeForMap(source.player.Map) <= 0 {
 		return
 	}
-	distance := s.Config.VisibilityDistanceContinents
+	distance := s.visibilityRangeForMap(source.player.Map)
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
 	for target := range s.sessions {
@@ -132,10 +132,10 @@ func (s *Server) broadcastTeleportMovement(source *session, payload []byte) {
 // distance of the destination. It is the creature twin of
 // broadcastTeleportMovement, which centers on a player session.
 func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, x, y float32, payload []byte) {
-	if s == nil || s.Config.VisibilityDistanceContinents <= 0 {
+	if s == nil || s.visibilityRangeForMap(mapID) <= 0 {
 		return
 	}
-	distance := s.Config.VisibilityDistanceContinents
+	distance := s.visibilityRangeForMap(mapID)
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
 	for target := range s.sessions {

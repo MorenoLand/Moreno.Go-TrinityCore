@@ -4308,7 +4308,7 @@ func (s *Server) buildNearbyPlayerUpdates(observer *session) (*protocol.Packet, 
 }
 
 func (s *Server) buildNearbyPlayerUpdatesWithCreated(observer *session) (*protocol.Packet, int, []uint64) {
-	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
+	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.visibilityRangeForMap(observer.player.Map) <= 0 {
 		return nil, 0, nil
 	}
 	return s.buildNearbyPlayerUpdatesWithCreatedFrom(observer, *observer.player)
@@ -4321,11 +4321,11 @@ func (s *Server) buildNearbyPlayerUpdatesWithCreated(observer *session) (*protoc
 // only, and canSeePlayer reads map/flags only, so the viewpoint copy changes
 // nothing but the center.
 func (s *Server) buildNearbyPlayerUpdatesWithCreatedFrom(observer *session, viewpoint playerState) (*protocol.Packet, int, []uint64) {
-	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.Config.VisibilityDistanceContinents <= 0 {
+	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.visibilityRangeForMap(observer.player.Map) <= 0 {
 		return nil, 0, nil
 	}
 	state := viewpoint
-	distance := float64(s.Config.VisibilityDistanceContinents)
+	distance := s.visibilityRangeForMap(state.Map)
 	updates := protocol.NewUpdateData()
 	count := 0
 	created := make([]uint64, 0)
@@ -4440,10 +4440,10 @@ func (s *session) markVisiblePlayers(guids []uint64) {
 }
 
 func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
-	if s == nil || source == nil || s.Config.VisibilityDistanceContinents <= 0 {
+	if s == nil || source == nil || s.visibilityRangeForMap(state.Map) <= 0 {
 		return
 	}
-	distance := float64(s.Config.VisibilityDistanceContinents)
+	distance := s.visibilityRangeForMap(state.Map)
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for target := range s.sessions {
@@ -4475,6 +4475,29 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 	}
 }
 
+// visibilityRangeForMap is the Map::GetVisibilityRange twin
+// (Map.cpp:311/3823/4326): the seer's map picks the range — continents
+// use Visibility.Distance.Continents, InstanceMaps (DBC InstanceType 1/2)
+// Visibility.Distance.Instances, BattlegroundMaps (InstanceType 3/4)
+// Visibility.Distance.BGArenas. Defaults mirror the C++ defaults
+// (100/170/533); an unresolvable map entry falls back to continents.
+func (s *Server) visibilityRangeForMap(mapID uint32) float64 {
+	if s == nil {
+		return 0
+	}
+	if s.Data != nil {
+		if entry, found, err := s.Data.Map(mapID); err == nil && found {
+			switch entry.InstanceType {
+			case 1, 2:
+				return s.Config.VisibilityDistanceInstances
+			case 3, 4:
+				return s.Config.VisibilityDistanceBGArenas
+			}
+		}
+	}
+	return s.Config.VisibilityDistanceContinents
+}
+
 func canSeePlayer(observer, target *session) bool {
 	if observer == nil || target == nil || observer.player == nil || target.player == nil {
 		return false
@@ -4485,11 +4508,39 @@ func canSeePlayer(observer, target *session) bool {
 	if target.player.ExtraFlags&playerExtraGMInvisible != 0 && observer.security < target.security {
 		return false
 	}
-	if target.player.PlayerFlags&playerFlagGhost == 0 {
-		return observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
+	detect := observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
+	observerGhost := observer.player.PlayerFlags&playerFlagGhost != 0
+	targetGhost := target.player.PlayerFlags&playerFlagGhost != 0
+	// Ghost leg (Object.cpp:1632-1647, spell-gate ghostLegVerdict twin):
+	// the seer's detect bits are its own ghost bits (SPELL_AURA_GHOST
+	// sets both sides to GHOST, SpellAuraEffects.cpp:1567-1568), so
+	// same-side pairs (alive/alive, ghost/ghost) overlap and pass on
+	// the detect sums alone, while exactly-one-ghost pairs fall to the
+	// team+group gate below. The old observer-ghost short-circuit let
+	// ghosts see every alive target; C++ gates a ghost seer against an
+	// alive target exactly like an alive seer against a ghost target.
+	if observerGhost == targetGhost {
+		return detect
 	}
-	if observer.player.PlayerFlags&playerFlagGhost != 0 {
-		return observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
+	srv := observer.server
+	if srv == nil {
+		srv = target.server
+	}
+	// Corpse-visibility leg (Object.cpp:1584-1601, distanceCheck
+	// block): a ghost seer with a corpse within sight range of both
+	// itself and the target bypasses the ghost leg. The triple-& guard
+	// in C++ skips the check for ghost-ghost pairs, which already pass
+	// above, so only the ghost-seer/alive-target pair reaches this arm.
+	// The sight-range skip C++ pairs with it (corpseCheck) is NOT
+	// ported: Go's caller distance gate is the grid-visitation
+	// equivalent, and dropping it would send far players.
+	if observerGhost && observer.player.hasCorpse && srv != nil {
+		sightRange := srv.visibilityRangeForMap(observer.player.Map)
+		if sightRange > 0 &&
+			math.Hypot(float64(observer.player.corpseX-observer.player.X), float64(observer.player.corpseY-observer.player.Y)) <= sightRange &&
+			math.Hypot(float64(observer.player.corpseX-target.player.X), float64(observer.player.corpseY-target.player.Y)) <= sightRange {
+			return detect
+		}
 	}
 	if teamForRace(observer.player.Race) != teamForRace(target.player.Race) {
 		return false
@@ -4499,11 +4550,7 @@ func canSeePlayer(observer, target *session) bool {
 	// equality let cross-subgroup raid members see the ghost. The
 	// sessionsInSameGroupWith twin (stealth.go) is the
 	// IsInSameGroupWith read the spell-gate ghost leg already uses.
-	srv := observer.server
-	if srv == nil {
-		srv = target.server
-	}
-	return srv.sessionsInSameGroupWith(observer, target) && observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
+	return srv.sessionsInSameGroupWith(observer, target) && detect
 }
 
 func playerFieldBytesValue(state playerState) uint32 {
@@ -4632,11 +4679,11 @@ func factionTemplateFriendly(source, target wotlk.FactionTemplate) bool {
 }
 
 func (s *Server) broadcastPlayerValuesUpdateFromSession(source *session, fields map[int]uint32) {
-	if s == nil || source == nil || source.player == nil || s.Config.VisibilityDistanceContinents <= 0 {
+	if s == nil || source == nil || source.player == nil || s.visibilityRangeForMap(source.player.Map) <= 0 {
 		return
 	}
 	state := *source.player
-	distance := float64(s.Config.VisibilityDistanceContinents)
+	distance := s.visibilityRangeForMap(state.Map)
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for target := range s.sessions {

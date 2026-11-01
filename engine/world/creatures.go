@@ -83,7 +83,7 @@ func creatureSpawnHealth(regenerate bool, current, maximum uint32) uint32 {
 }
 
 func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerState, phaseMask uint32, observer *session) (*protocol.Packet, int, error) {
-	distance := float64(s.Config.VisibilityDistanceContinents)
+	distance := s.visibilityRangeForMap(state.Map)
 	if distance <= 0 {
 		return nil, 0, nil
 	}
