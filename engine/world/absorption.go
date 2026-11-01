@@ -404,14 +404,39 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 	remainingDamage = damage
 	var exhaustedSpells []uint32
 
+	// The mana-shield leg resolves each shield caster's spell-mod owner
+	// through findCreatureMotion (motionMu) for pet casters, so those
+	// resolutions run before castMu is taken: a motionMu holder taking
+	// this session's castMu (pet spawn, pet spell damage, formation
+	// broadcast) would otherwise order against this castMu->motionMu
+	// leg. The absorb loop below only consults the snapshot.
+	var shieldList []*activeAura
+	var modOwnerGUIDs []uint64
+	var mapID, instanceID uint32
 	s.castMu.Lock()
+	if s.player != nil {
+		mapID, instanceID = s.player.Map, s.player.InstanceID
+	}
 	if s.activeAuras != nil {
-		var shieldList []*activeAura
 		for _, aura := range s.activeAuras {
 			if aura != nil && !aura.Stopped && aura.Amount > 0 {
 				shieldList = append(shieldList, aura)
+				if aura.AuraType == SpellAuraManaShield {
+					modOwnerGUIDs = append(modOwnerGUIDs, aura.CasterGUID)
+				}
 			}
 		}
+	}
+	s.castMu.Unlock()
+	modOwners := make(map[uint64]*session, len(modOwnerGUIDs))
+	for _, guid := range modOwnerGUIDs {
+		if _, ok := modOwners[guid]; !ok {
+			modOwners[guid] = s.server.spellModOwnerSession(mapID, instanceID, guid)
+		}
+	}
+
+	s.castMu.Lock()
+	if len(shieldList) > 0 {
 		sort.SliceStable(shieldList, func(i, j int) bool {
 			pI := s.server.absorbAuraPriority(shieldList[i])
 			pJ := s.server.absorbAuraPriority(shieldList[j])
@@ -424,6 +449,9 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 		for _, aura := range shieldList {
 			if remainingDamage == 0 {
 				break
+			}
+			if aura == nil || aura.Stopped || aura.Amount == 0 {
+				continue
 			}
 
 			// 1. School Absorb (SPELL_AURA_SCHOOL_ABSORB = 69)
@@ -463,7 +491,7 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 					continue
 				}
 				mult := s.calcValueMultiplierForAura(aura.SpellID, SpellAuraManaShield,
-					s.server.spellModOwnerSession(s.player.Map, s.player.InstanceID, aura.CasterGUID))
+					modOwners[aura.CasterGUID])
 				if mult == 0 {
 					mult = 1
 				}
