@@ -725,6 +725,14 @@ func (s *session) petOwnerIntellectManaBonus(entry uint32) uint32 {
 // broadcasts at the pet stat-compute points (summon, level-up, owner-stat
 // change). Like the C++ int32 cast, negative totals wrap into uint32 bits.
 func (s *session) petGuardianFieldStats(motion *creatureMotion, entry uint32, petType uint8, petNumber uint32) [5]uint32 {
+	return s.petGuardianFieldStatsWithStaminaScale(motion, entry, petType, petNumber, s.petOwnerStaminaScale(entry, petType, petNumber))
+}
+
+// petGuardianFieldStatsWithStaminaScale is petGuardianFieldStats with the
+// owner stamina scale supplied pre-resolved: the scale's aura reads
+// (ravenousDeadStatMod, auraEffectAmount) take the owner's castMu, so
+// callers holding motionMu must resolve it before the span.
+func (s *session) petGuardianFieldStatsWithStaminaScale(motion *creatureMotion, entry uint32, petType uint8, petNumber uint32, staminaScale float64) [5]uint32 {
 	var out [5]uint32
 	if s == nil || s.server == nil || motion == nil {
 		return out
@@ -734,7 +742,7 @@ func (s *session) petGuardianFieldStats(motion *creatureMotion, entry uint32, pe
 	if s.player != nil && len(s.player.Stats) > 3 {
 		ownerStamina, ownerIntellect = s.player.Stats[2], s.player.Stats[3]
 	}
-	staminaBonus := float64(ownerStamina) * s.petOwnerStaminaScale(entry, petType, petNumber)
+	staminaBonus := float64(ownerStamina) * staminaScale
 	intellectBonus := float64(ownerIntellect) * s.petOwnerIntellectScale()
 	for stat := 0; stat < 5; stat++ {
 		v := s.server.petGuardianStat(key, motion, stat)
@@ -1217,6 +1225,14 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		var apBase, apMods uint32
 		var apMult float32
 		var minDmg, maxDmg float32
+		// The owner-aura reads feeding the stat composition take the
+		// owner's castMu (loadedAuras inside totalAttackPowerValue,
+		// auraEffectAmount and the ghoul stamina scale); resolving them
+		// here keeps the motionMu span below free of the castMu take,
+		// breaking the motionMu->castMu leg the cross-mutex scan flagged
+		// for spawnPet.
+		ownerAuraSnap := s.petOwnerAuraSnapshot()
+		ownerStaminaScale := s.petOwnerStaminaScale(entry, uint8(petType), uint32(petID))
 		s.server.motionMu.Lock()
 		if pm := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); pm != nil && pm.PetID == petID {
 			pm.Armor = petArmor
@@ -1226,16 +1242,16 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 			// UpdateAllStats — the broadcast carries the fed values, not
 			// the raw DB create-stats (pet auras load right after, so the
 			// aura feed is empty here; the owner bonus is not).
-			fieldStats = s.petGuardianFieldStats(pm, entry, uint8(petType), uint32(petID))
+			fieldStats = s.petGuardianFieldStatsWithStaminaScale(pm, entry, uint8(petType), uint32(petID), ownerStaminaScale)
 			// Guardian::UpdateAttackPowerAndDamage (StatSystem.cpp:1468-1476)
 			// writes the AP unit fields at stat-update time from the same
 			// composition the melee path recomputes lazily.
-			_, base, flat, mult := s.server.petGuardianAttackPower(s, pm)
+			_, base, flat, mult := s.server.petGuardianAttackPowerWithOwnerAura(s, pm, ownerAuraSnap)
 			apBase, apMods, apMult = uint32(int32(base)), uint32(flat), float32(mult)
 			// Guardian::UpdateDamagePhysical (StatSystem.cpp:1479-1554)
 			// writes UNIT_FIELD_MINDAMAGE/MAXDAMAGE at the same stat-update
 			// time.
-			rangeMin, rangeMax := s.server.petPhysicalDamageRange(s, pm)
+			rangeMin, rangeMax := s.server.petPhysicalDamageRangeWithOwnerAura(s, pm, ownerAuraSnap)
 			minDmg, maxDmg = float32(rangeMin), float32(rangeMax)
 			// Spell::EffectSummonType (SpellEffects.cpp:2214-2215) stamps the
 			// creating spell's duration on the summon; TempSummon::InitStats

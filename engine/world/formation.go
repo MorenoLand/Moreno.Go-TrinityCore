@@ -253,8 +253,8 @@ func (s *Server) formationLeaderStartedMoving(ctx context.Context, motion *creat
 		return
 	}
 	s.motionMu.Lock()
-	defer s.motionMu.Unlock()
 	motions := s.motionMapLocked(motion.Map, motion.InstanceID)
+	var pendingMoves []*pendingFormationMove
 	for _, low := range memberLows {
 		row, ok := rows[low]
 		if !ok || row.groupAI&flagIdleInFormation == 0 {
@@ -279,7 +279,13 @@ func (s *Server) formationLeaderStartedMoving(ctx context.Context, motion *creat
 		member.FormationLeaderMoveEnds = motion.MoveEnds
 		member.FormationLeaderX, member.FormationLeaderY = motion.X, motion.Y
 		member.FormationNextCheck = now.Add(1200 * time.Millisecond)
-		s.launchFormationLeg(member, motion, now)
+		if pending := s.planFormationLeg(member, motion, now); pending != nil {
+			pendingMoves = append(pendingMoves, pending)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, pending := range pendingMoves {
+		s.broadcastMonsterMoveInInstance(pending.mapID, pending.instanceID, pending.guid, pending.fromX, pending.fromY, pending.fromZ, pending.destX, pending.destY, pending.destZ, pending.duration, false, pending.facing, true, pending.phase, pending.transportGUID)
 	}
 }
 
@@ -347,7 +353,32 @@ func (s *Server) stepFormationMember(motion *creatureMotion, now time.Time) bool
 // orientation at launch; C++ sets it at spline end (documented timing
 // delta — Go has no mid-leg update hook). Collision legs
 // (MovePositionToFirstCollision) have no Go model.
+// pendingFormationMove carries a formation leg's monster-move broadcast,
+// deferred until the caller's motionMu span ends: the broadcast filters
+// recipients through currentPlayerPhaseMask, which takes each recipient's
+// castMu, so broadcasting inside formationLeaderStartedMoving's motionMu
+// span nests motionMu->castMu.
+type pendingFormationMove struct {
+	mapID, instanceID                        uint32
+	guid                                     uint64
+	fromX, fromY, fromZ, destX, destY, destZ float32
+	duration                                 uint32
+	facing                                   float32
+	phase                                    uint32
+	transportGUID                            uint64
+}
+
 func (s *Server) launchFormationLeg(motion, leader *creatureMotion, now time.Time) {
+	if pending := s.planFormationLeg(motion, leader, now); pending != nil {
+		s.broadcastMonsterMoveInInstance(pending.mapID, pending.instanceID, pending.guid, pending.fromX, pending.fromY, pending.fromZ, pending.destX, pending.destY, pending.destZ, pending.duration, false, pending.facing, true, pending.phase, pending.transportGUID)
+	}
+}
+
+// planFormationLeg is launchFormationLeg's motion-state half: it computes
+// the formation slot destination and records the leg on the member, but
+// returns the broadcast for the caller to flush after its motionMu span
+// instead of broadcasting inside it.
+func (s *Server) planFormationLeg(motion, leader *creatureMotion, now time.Time) *pendingFormationMove {
 	leaderMoving := leader.Moving && now.Before(leader.MoveEnds)
 	var frame float32
 	vel := leader.Speed
@@ -368,7 +399,7 @@ func (s *Server) launchFormationLeg(motion, leader *creatureMotion, now time.Tim
 		motion.FormationLeaderX, motion.FormationLeaderY = leader.X, leader.Y
 		motion.FormationLeaderMoveEnds = leader.MoveEnds
 		motion.FormationPredicted = leaderMoving
-		return
+		return nil
 	}
 	velMod := slotDist / float64(vel*1.65)
 	if velMod > 1.5 {
@@ -380,7 +411,7 @@ func (s *Server) launchFormationLeg(motion, leader *creatureMotion, now time.Tim
 	}
 	duration := splineDurationMs(slotDist, memberVel)
 	heading := float32(math.Atan2(float64(destY-motion.Y), float64(destX-motion.X)))
-	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, leader.Z, duration, false, leader.Orientation, true, motion.PhaseMask, motion.TransportGUID)
+	pending := &pendingFormationMove{mapID: motion.Map, instanceID: motion.InstanceID, guid: motion.GUID, fromX: motion.X, fromY: motion.Y, fromZ: motion.Z, destX: destX, destY: destY, destZ: leader.Z, duration: duration, facing: leader.Orientation, phase: motion.PhaseMask, transportGUID: motion.TransportGUID}
 	motion.X, motion.Y = destX, destY
 	motion.Z = leader.Z
 	motion.Moving = true
@@ -392,4 +423,5 @@ func (s *Server) launchFormationLeg(motion, leader *creatureMotion, now time.Tim
 	motion.FormationLeaderMoveEnds = leader.MoveEnds
 	motion.FormationLeaderX, motion.FormationLeaderY = leader.X, leader.Y
 	motion.FormationNextCheck = now.Add(1200 * time.Millisecond)
+	return pending
 }

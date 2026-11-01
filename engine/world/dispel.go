@@ -259,6 +259,42 @@ func (s *Server) spellModOwnerSession(mapID, instanceID uint32, casterGUID uint6
 	return nil
 }
 
+// spellModOwnerSessionForMotion resolves the spell-mod owner for a caster
+// motion already in hand, without taking motionMu: spellModOwnerSession's
+// pet branch reaches the same motion through findCreatureMotion, which
+// self-deadlocks when the caller already holds motionMu (the pet spell
+// damage threat block). The player-caster branch cannot occur for a
+// creature motion; the totem branch scans activeTotems under totemMu only.
+func (s *Server) spellModOwnerSessionForMotion(m *creatureMotion) *session {
+	if s == nil || m == nil || m.GUID == 0 {
+		return nil
+	}
+	if cs := s.findSessionByGUID(m.GUID); cs != nil && cs.player != nil {
+		return cs
+	}
+	if m.PetID != 0 && m.OwnerGUID != 0 {
+		if os := s.findSessionByGUID(m.OwnerGUID); os != nil && os.player != nil {
+			return os
+		}
+		return nil
+	}
+	if s.isTotemGUID(m.GUID) {
+		s.totemMu.RLock()
+		defer s.totemMu.RUnlock()
+		for ownerGUID, slots := range s.activeTotems {
+			for _, t := range slots {
+				if t != nil && t.TotemGUID == m.GUID {
+					if os := s.findSessionByGUID(ownerGUID); os != nil && os.player != nil {
+						return os
+					}
+					return nil
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // dispelResistSpellMod mirrors the first arm of Aura::CalcDispelChance
 // (SpellAuras.cpp:1221-1226): the aura caster's spell-mod owner folds
 // SPELLMOD_RESIST_DISPEL_CHANCE mods affecting the dispelled spell,

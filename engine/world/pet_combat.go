@@ -2570,7 +2570,36 @@ func (s *session) guardianBonusSpellDamage(motion *creatureMotion) int32 {
 // and aura arms — C++ computes val unconditionally and only the bonusAP arms
 // need the owner. The water elemental (510) takes no bonusAP arm in C++
 // (spell bonus only), so it lands in the val-only default.
+// petOwnerAuraSnapshot carries the owner-aura reads feeding the pet stat
+// composition, resolved before a motionMu span: totalAttackPowerValue and
+// auraEffectAmount both take the owner's castMu via loadedAuras.
+type petOwnerAuraSnapshot struct {
+	meleeAP, rangedAP float32
+	animalHandlerAmt  int32
+	animalHandlerOK   bool
+}
+
+func (s *session) petOwnerAuraSnapshot() petOwnerAuraSnapshot {
+	if s == nil {
+		return petOwnerAuraSnapshot{}
+	}
+	amt, ok := s.auraEffectAmount(34453, 1)
+	return petOwnerAuraSnapshot{meleeAP: s.totalAttackPowerValue(false), rangedAP: s.totalAttackPowerValue(true), animalHandlerAmt: amt, animalHandlerOK: ok}
+}
+
 func (s *Server) petGuardianAttackPower(owner *session, motion *creatureMotion) (total, base float64, flat int32, mult float64) {
+	var snap petOwnerAuraSnapshot
+	if owner != nil {
+		snap = owner.petOwnerAuraSnapshot()
+	}
+	return s.petGuardianAttackPowerWithOwnerAura(owner, motion, snap)
+}
+
+// petGuardianAttackPowerWithOwnerAura is petGuardianAttackPower with the
+// owner-aura reads supplied pre-resolved, so callers holding motionMu take
+// no castMu inside the span; the remaining aura folds read creature auras
+// under auraMu, the established motionMu->auraMu order.
+func (s *Server) petGuardianAttackPowerWithOwnerAura(owner *session, motion *creatureMotion, snap petOwnerAuraSnapshot) (total, base float64, flat int32, mult float64) {
 	if motion == nil {
 		return 0, 0, 0, 0
 	}
@@ -2589,15 +2618,15 @@ func (s *Server) petGuardianAttackPower(owner *session, motion *creatureMotion) 
 			// StatSystem.cpp:1405-1424: owner ranged AP * 0.22 * Wild Hunt
 			// mod; Animal Handler (34453) EFFECT_1 pcts both bonusAP and
 			// val (AddPct on each).
-			bonusAP = float64(owner.totalAttackPowerValue(true)) * 0.22 * float64(owner.petWildHuntMod(motion))
-			if amt, ok := owner.auraEffectAmount(34453, 1); ok {
-				bonusAP *= 1 + float64(amt)/100
-				val *= 1 + float64(amt)/100
+			bonusAP = float64(snap.rangedAP) * 0.22 * float64(owner.petWildHuntMod(motion))
+			if snap.animalHandlerOK {
+				bonusAP *= 1 + float64(snap.animalHandlerAmt)/100
+				val *= 1 + float64(snap.animalHandlerAmt)/100
 			}
 		case motion.Entry == 26125 || motion.Entry == 30230:
 			// IsPetGhoul / IsRisenAlly (StatSystem.cpp:1428-1430): owner
 			// base AP * 0.22.
-			bonusAP = float64(owner.totalAttackPowerValue(false)) * 0.22
+			bonusAP = float64(snap.meleeAP) * 0.22
 		case motion.Entry == 29264:
 			// IsSpiritWolf (StatSystem.cpp:1432-1439): owner base AP * 0.31,
 			// 0.61 with the owner's Glyph of Feral Spirit (63271).
@@ -2605,7 +2634,7 @@ func (s *Server) petGuardianAttackPower(owner *session, motion *creatureMotion) 
 			if owner.hasAura(63271) {
 				m = 0.61
 			}
-			bonusAP = float64(owner.totalAttackPowerValue(false)) * m
+			bonusAP = float64(snap.meleeAP) * m
 		case motion.PetType == petTypeSummon && owner.player != nil && owner.player.Class == 9:
 			// IsPet warlock demon (StatSystem.cpp:1442-1449):
 			// max(owner fire, owner shadow) * 0.57.
@@ -2641,10 +2670,20 @@ func (s *Server) petGuardianAttackPower(owner *session, motion *creatureMotion) 
 // owner session; it may be nil (offline owner), in which case the owner
 // bonus arms read 0 — the weapon/AP/aura legs are owner-independent.
 func (s *Server) petPhysicalDamageRange(owner *session, motion *creatureMotion) (mindmg, maxdmg float64) {
+	var snap petOwnerAuraSnapshot
+	if owner != nil {
+		snap = owner.petOwnerAuraSnapshot()
+	}
+	return s.petPhysicalDamageRangeWithOwnerAura(owner, motion, snap)
+}
+
+// petPhysicalDamageRangeWithOwnerAura is petPhysicalDamageRange with the
+// owner-aura reads supplied pre-resolved, for callers holding motionMu.
+func (s *Server) petPhysicalDamageRangeWithOwnerAura(owner *session, motion *creatureMotion, snap petOwnerAuraSnapshot) (mindmg, maxdmg float64) {
 	if motion == nil {
 		return 0, 0
 	}
-	total, _, _, _ := s.petGuardianAttackPower(owner, motion)
+	total, _, _, _ := s.petGuardianAttackPowerWithOwnerAura(owner, motion, snap)
 	speed := float64(motion.AttackTime) / 1000
 	if speed <= 0 {
 		speed = 2
@@ -8613,6 +8652,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		s.server.applyPetHealthLeechHeal(caster, spellID, schoolMask, leechDealt)
 		leechPreHealed = true
 	}
+	// The threat block below runs under motionMu, so the spell-mod owner
+	// and its SPELLMOD_THREAT fold resolve here: spellModOwnerSession
+	// takes motionMu via findCreatureMotion — a self-deadlock under the
+	// span for pet casters — and the fold takes the owner's castMu.
+	threatModOwner := s.server.spellModOwnerSessionForMotion(caster)
+	threatModFlat, threatModMul, threatModOK := threatModOwner.precomputeSpellModThreatFold(ctx, spellID, float32(damage))
 	s.server.motionMu.Lock()
 	targetMotion := s.server.findCreatureMotionLocked(target.Map, target.InstanceID, target.GUID)
 	newlyTapped := false
@@ -8673,7 +8718,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// pet/totem casters resolve to an owner player, so a possessed
 			// wild creature's threat takes no charmer SPELLMOD_THREAT.
 			// True pets resolve to their owner session, unchanged.
-			threat, step1Gate := s.damageThreatAmountWithModOwner(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat, s.server.spellModOwnerSession(caster.Map, caster.InstanceID, caster.GUID), caster)
+			threat, step1Gate := s.damageThreatAmountWithPrecomputedMod(ctx, spellID, uint32(schoolMask), float32(damage), wasInCombat, caster, threatModFlat, threatModMul, threatModOK)
 			// ThreatManager::AddThreat step 1 (ThreatManager.cpp:311-317)
 			// returns before SetInCombatWith: a gated spell neither adds
 			// threat nor engages the victim. Every other arm — including

@@ -290,6 +290,43 @@ func (s *session) damageThreatAmount(ctx context.Context, spellID uint32, school
 // school multipliers come from the attacker's own SPELL_AURA_MOD_THREAT auras
 // (the creature-aura store), never the executing session's player auras.
 func (s *session) damageThreatAmountWithModOwner(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool, modOwner *session, attackerMotion *creatureMotion) (float32, bool) {
+	return s.damageThreatAmountWithModFold(ctx, spellID, schoolMask, damage, engaged, modOwner, attackerMotion, 0, 1, false)
+}
+
+// damageThreatAmountWithPrecomputedMod is damageThreatAmountWithModOwner with
+// the SPELLMOD_THREAT fold supplied pre-resolved by precomputeSpellModThreatFold,
+// for callers holding motionMu: the fold takes the mod owner's castMu, so it
+// must not run inside the span. A non-identity fold is applied exactly like
+// the live fold; the helper's false paths yield the identity fold (0, 1).
+func (s *session) damageThreatAmountWithPrecomputedMod(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool, attackerMotion *creatureMotion, modFlat int32, modMul float64, modOK bool) (float32, bool) {
+	return s.damageThreatAmountWithModFold(ctx, spellID, schoolMask, damage, engaged, nil, attackerMotion, modFlat, modMul, modOK)
+}
+
+// precomputeSpellModThreatFold evaluates the mod owner's SPELLMOD_THREAT fold
+// for spell at the post-pctMod base, mirroring applySpellModFloat's guards
+// (nil/Data checks, the NoDoneBonus early return, the >=10000 instant-cast
+// guard on the post-pctMod base). Nil-safe: a nil owner yields the identity
+// fold with ok=false.
+func (s *session) precomputeSpellModThreatFold(ctx context.Context, spellID uint32, damage float32) (int32, float64, bool) {
+	if s == nil || s.server == nil || s.server.Data == nil || spellID == 0 {
+		return 0, 1, false
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		return 0, 1, false
+	}
+	if spell.AttributesEx3&spellAttr3NoDoneBonus != 0 {
+		return 0, 1, false
+	}
+	base := float64(damage)
+	if entry, ok := s.loadSpellThreatEntry(ctx, spellID); ok && entry.pctMod != 1.0 {
+		base *= float64(entry.pctMod)
+	}
+	flat, mul := s.spellModTotals(spell, spellModThreat, base >= 10000)
+	return flat, mul, true
+}
+
+func (s *session) damageThreatAmountWithModFold(ctx context.Context, spellID uint32, schoolMask uint32, damage float32, engaged bool, modOwner *session, attackerMotion *creatureMotion, preFlat int32, preMul float64, preOK bool) (float32, bool) {
 	if s == nil || s.server == nil {
 		return 0, false
 	}
@@ -319,7 +356,9 @@ func (s *session) damageThreatAmountWithModOwner(ctx context.Context, spellID ui
 		if entry, ok := s.loadSpellThreatEntry(ctx, spellID); ok && entry.pctMod != 1.0 {
 			t *= float64(entry.pctMod)
 		}
-		if spellKnown && modOwner != nil {
+		if preOK {
+			t = (t + float64(preFlat)) * preMul
+		} else if spellKnown && modOwner != nil {
 			t = modOwner.applySpellModFloat(spell, spellModThreat, t)
 		}
 	}
