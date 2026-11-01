@@ -5257,6 +5257,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if inlineSpellKnown {
 				takeCreatureSpellPower(inlineSpell, motion, inlinePowerCost)
 				s.recordCreatureSpellCooldown(motion, inlineSpell)
+				// Spell::cast (Spell.cpp:3196-3197) + CanHaveGlobalCooldown
+				// (Spell.cpp:8215-8222), the inline twin of the
+				// castCreatureSpellInternal record: the inline cast is
+				// non-triggered, and only pets and charmed motions carry a
+				// GCD in C++ (wild creatures have no CharmInfo). Charmed
+				// wild creatures never reach this path (stepCreatureMotion
+				// returns early for them), so in practice this fires for
+				// charmed pets only.
+				if motionIsPet(motion) || motion.Charmed {
+					s.triggerPetGlobalCooldown(motion, inlineSpell, now)
+				}
 			}
 			// Spell::handle_immediate channel-state arm (Spell.cpp:3569-
 			// 3596), the inline twin of the castCreatureSpellInternal

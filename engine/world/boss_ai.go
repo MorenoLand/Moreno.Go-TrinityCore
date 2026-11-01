@@ -2879,6 +2879,19 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			// SpellHistory.cpp:165-166). Recorded after the fizzle gates:
 			// a failed CheckCast never starts a cooldown in C++.
 			s.recordCreatureSpellCooldown(m, spellInfo)
+			// Spell::cast (Spell.cpp:3196-3197) + CanHaveGlobalCooldown
+			// (Spell.cpp:8215-8222): a non-triggered cast triggers the
+			// global cooldown unless TRIGGERED_IGNORE_GCD — Go's
+			// triggered models TRIGGERED_FULL_MASK, which carries it, so
+			// this sits inside the !triggered block. Only players or
+			// controlled units have a GCD in C++; a wild creature has no
+			// CharmInfo, so the record fires only for pets and charmed
+			// motions. The GCD gate above (petGlobalCooldownActive)
+			// already reads this bank, but nothing wrote it for casters
+			// outside the pet path.
+			if motionIsPet(m) || m.Charmed {
+				s.triggerPetGlobalCooldown(m, spellInfo, now)
+			}
 		}
 		// Unit::CastSpell arms UNIT_STATE_CASTING for a non-triggered
 		// cast's cast time; the combat tick's early-out
