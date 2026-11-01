@@ -1505,7 +1505,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		phase := m.PhaseMask
 		s.motionMu.Unlock()
 		_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
-		s.broadcastCreatureTeleportMovement(mapID, instanceID, x, y, nearby, phase)
+		s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, x, y, z, nearby, phase)
 		s.syncCreatureVehiclePassengers(m)
 		return nil, nil
 	}

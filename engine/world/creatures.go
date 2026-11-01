@@ -821,7 +821,7 @@ func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, 
 	// destination is where the viewpoint now sits. Map-only, matching this
 	// form's map-wide fan-out; the form itself has no live callers (only
 	// the broadcastMonsterMove wrapper), so no seer gate is ported here.
-	s.reStreamFarsightObservers(mapID, 0, false, rawGUID, destX, destY, destZ)
+	s.reStreamFarsightObservers(mapID, 0, false, rawGUID, destX, destY, destZ, false)
 }
 
 func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool, facing float32, hasFacing bool, phase uint32, transportGUID uint64) {
@@ -879,7 +879,7 @@ func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUI
 	}
 	// Creature-target re-stream (see reStreamFarsightObservers): the spline
 	// destination is where the viewpoint now sits.
-	s.reStreamFarsightObservers(mapID, instanceID, true, rawGUID, destX, destY, destZ)
+	s.reStreamFarsightObservers(mapID, instanceID, true, rawGUID, destX, destY, destZ, false)
 }
 
 func (s *Server) buildCreatureValuesUpdate(guid uint64, fields map[int]uint32) (*protocol.Packet, error) {

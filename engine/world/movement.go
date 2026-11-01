@@ -101,28 +101,53 @@ func (s *Server) gameTimeMilliseconds() uint32 {
 	return uint32(time.Since(s.worldTimeStartedAt) / time.Millisecond)
 }
 
-func (s *Server) broadcastTeleportMovement(source *session, payload []byte) {
+func (s *Server) broadcastTeleportMovement(source *session, payload []byte, x, y, z float32) {
 	if s == nil || source == nil || source.player == nil || !source.worldReady.Load() || s.visibilityRangeForMap(source.player.Map) <= 0 {
 		return
 	}
+	mapID, instanceID := source.player.Map, source.player.InstanceID
+	sx, sy := source.player.X, source.player.Y
 	distance := s.visibilityRangeForMap(source.player.Map)
 	s.sessionsMu.RLock()
-	targets := make([]*session, 0, len(s.sessions))
+	targets := make([]seerRecipient, 0, len(s.sessions))
 	for target := range s.sessions {
-		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != source.player.Map || target.player.InstanceID != source.player.InstanceID || !canSeePlayer(target, source) {
+		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != mapID || target.player.InstanceID != instanceID || !canSeePlayer(target, source) {
 			continue
 		}
-		if math.Hypot(float64(target.player.X-source.player.X), float64(target.player.Y-source.player.Y)) > distance {
-			continue
-		}
-		targets = append(targets, target)
+		targets = append(targets, seerRecipient{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID})
 	}
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
-		if err := target.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT), payload, true); err != nil {
-			target.debug("teleport movement broadcast failed", "account", target.accountName, "guid", source.playerGUID, "error", err)
+		if target.sess.player == nil {
+			continue
+		}
+		// Seer distance leg (CanSeeOrDetect GetViewpoint leg,
+		// Object.cpp:1618, as on the monster-move helper): a bound
+		// observer receives the viewpoint's teleport packet when the
+		// viewpoint sits near the mover's old position, not only when
+		// the observer's body does — the packet center (the pre-ack
+		// source position) is unchanged. Unresolvable viewpoints fail
+		// open to the body coords, preserving the old gate exactly.
+		rx, ry := target.sess.player.X, target.sess.player.Y
+		if target.farsight != 0 {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+				rx, ry = vx, vy
+			}
+		}
+		if math.Hypot(float64(rx-sx), float64(ry-sy)) > distance {
+			continue
+		}
+		if err := target.sess.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT), payload, true); err != nil {
+			target.sess.debug("teleport movement broadcast failed", "account", target.sess.accountName, "guid", source.playerGUID, "error", err)
 		}
 	}
+	// Player-target teleport re-stream (see reStreamFarsightObservers):
+	// a teleported player is a viewpoint target like a walking one, but
+	// its teleports never pass through handleMovement, so observers bound
+	// to it never re-streamed at the destination. Forced: a teleport is a
+	// discontinuity, not a walk step, so the 30yd anchor gate does not
+	// apply. Same-map only — the far branch never calls this helper.
+	s.reStreamFarsightObservers(mapID, instanceID, true, source.playerGUID, x, y, z, true)
 }
 
 // broadcastCreatureTeleportMovement pushes a prebuilt MSG_MOVE_TELEPORT
@@ -131,34 +156,58 @@ func (s *Server) broadcastTeleportMovement(source *session, payload []byte) {
 // player shares the creature's map/instance and stands within visibility
 // distance of the destination. It is the creature twin of
 // broadcastTeleportMovement, which centers on a player session.
-func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, x, y float32, payload []byte, phase uint32) {
+func (s *Server) broadcastCreatureTeleportMovement(mapID, instanceID uint32, guid uint64, x, y, z float32, payload []byte, phase uint32) {
 	if s == nil || s.visibilityRangeForMap(mapID) <= 0 {
 		return
 	}
 	distance := s.visibilityRangeForMap(mapID)
 	s.sessionsMu.RLock()
-	targets := make([]*session, 0, len(s.sessions))
+	targets := make([]seerRecipient, 0, len(s.sessions))
 	for target := range s.sessions {
 		if !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != mapID || target.player.InstanceID != instanceID {
 			continue
 		}
-		if math.Hypot(float64(target.player.X-x), float64(target.player.Y-y)) > distance {
-			continue
-		}
-		targets = append(targets, target)
+		targets = append(targets, seerRecipient{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID})
 	}
 	s.sessionsMu.RUnlock()
 	if phase == 0 {
 		phase = 1
 	}
 	for _, target := range targets {
-		if phase&target.currentPlayerPhaseMask() == 0 {
+		if target.sess.player == nil {
 			continue
 		}
-		if err := target.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT), payload, true); err != nil {
-			target.debug("creature teleport movement broadcast failed", "account", target.accountName, "error", err)
+		if phase&target.sess.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		// Seer distance leg (CanSeeOrDetect GetViewpoint leg,
+		// Object.cpp:1618, as on the monster-move helper): a bound
+		// observer receives the viewpoint creature's teleport packet when
+		// the viewpoint sits near the destination, not only when the
+		// observer's body does — the motion already holds the new coords,
+		// so a bound observer's viewpoint distance is zero and the packet
+		// always reaches it. Unresolvable viewpoints fail open to the
+		// body coords, preserving the old gate exactly.
+		rx, ry := target.sess.player.X, target.sess.player.Y
+		if target.farsight != 0 {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+				rx, ry = vx, vy
+			}
+		}
+		if math.Hypot(float64(rx-x), float64(ry-y)) > distance {
+			continue
+		}
+		if err := target.sess.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT), payload, true); err != nil {
+			target.sess.debug("creature teleport movement broadcast failed", "account", target.sess.accountName, "error", err)
 		}
 	}
+	// Creature-target teleport re-stream (see reStreamFarsightObservers):
+	// the teleported creature is the bound observer's viewpoint, and its
+	// teleports never pass through the spline arm, so stationary objects
+	// near the destination never arrived. Forced: a teleport is a
+	// discontinuity, not a walk step, so the 30yd anchor gate does not
+	// apply.
+	s.reStreamFarsightObservers(mapID, instanceID, true, guid, x, y, z, true)
 }
 
 // broadcastCreatureSplineMove pushes a SMSG_SPLINE_MOVE_* packet carrying
@@ -248,7 +297,7 @@ func (s *session) nearTeleportMove(x, y, z, orientation float32, keepTransport b
 	selfPacket, nearbyPacket := buildTeleportMovementPackets(s.playerGUID, movement)
 	_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), selfPacket, true)
 	if s.server != nil {
-		s.server.broadcastTeleportMovement(s, nearbyPacket)
+		s.server.broadcastTeleportMovement(s, nearbyPacket, x, y, z)
 	}
 }
 
@@ -992,7 +1041,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	// movers carry another GUID, so only the plain player path re-streams
 	// here; the possessed creature's own legs are the creature-target arm.
 	if !vehicleMover && !possessedMover {
-		s.server.reStreamFarsightObservers(s.player.Map, s.player.InstanceID, true, guid, info.X, info.Y, info.Z)
+		s.server.reStreamFarsightObservers(s.player.Map, s.player.InstanceID, true, guid, info.X, info.Y, info.Z, false)
 	}
 	return true
 }
@@ -1511,10 +1560,11 @@ type seerRecipient struct {
 // mirrors the player and possessed-mover stream arms in handleMovement;
 // the shared lastStream anchor already sits at the last viewpoint-stream
 // coords for a bound observer (body movement never moves it), so the
-// anchor check needs no new per-observer state. Call only after
-// sessionsMu drops: streamNearbyObjectsAt takes session and motion locks
-// itself.
-func (s *Server) reStreamFarsightObservers(mapID, instanceID uint32, checkInstance bool, targetGUID uint64, x, y, z float32) {
+// anchor check needs no new per-observer state. force skips that check:
+// teleports are discontinuities, not walk steps (see the teleport
+// helpers). Call only after sessionsMu drops: streamNearbyObjectsAt
+// takes session and motion locks itself.
+func (s *Server) reStreamFarsightObservers(mapID, instanceID uint32, checkInstance bool, targetGUID uint64, x, y, z float32, force bool) {
 	if s == nil || targetGUID == 0 {
 		return
 	}
@@ -1540,9 +1590,12 @@ func (s *Server) reStreamFarsightObservers(mapID, instanceID uint32, checkInstan
 		if obs.player == nil {
 			continue
 		}
+		// force skips the 30yd anchor gate: teleports are discontinuities,
+		// not walk steps, so even a short hop must re-stream — the stream
+		// itself is additive, so the call cannot duplicate creates.
 		dx := float64(x - obs.lastStreamX)
 		dy := float64(y - obs.lastStreamY)
-		if dx*dx+dy*dy > 30.0*30.0 {
+		if force || dx*dx+dy*dy > 30.0*30.0 {
 			obs.streamNearbyObjectsAt(context.Background(), x, y, z)
 		}
 	}

@@ -400,7 +400,7 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 			selfPacket, nearbyPacket := buildTeleportMovementPackets(s.playerGUID, movement)
 			_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), selfPacket, true)
 			if s.server != nil {
-				s.server.broadcastTeleportMovement(s, nearbyPacket)
+				s.server.broadcastTeleportMovement(s, nearbyPacket, x, y, z)
 			}
 		}
 	} else {
