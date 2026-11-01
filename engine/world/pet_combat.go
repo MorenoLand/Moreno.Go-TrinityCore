@@ -3767,6 +3767,12 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.creatureAuraBouncedPreCast(motion, spell, targetGUID) {
 		return true
 	}
+	// Spell::CheckCast combo-point tail arm (Spell.cpp:6186-6209), same
+	// twin: pet combo points bank on the session only, so the gate fails
+	// whenever it applies; triggered pet casts skip it via the full mask.
+	if !s.server.creatureComboPointsPreCast(motion, spell, triggered) {
+		return true
+	}
 	// Spell::prepare stealth-break arm (Spell.cpp:3180-3191, gated by
 	// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS 0x100): a non-triggered pet
 	// cast of a stealth-breaking spell (SpellInfo::IsBreakingStealth,

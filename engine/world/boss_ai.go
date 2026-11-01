@@ -1999,6 +1999,14 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		if !s.creatureAuraBouncedPreCast(m, spellInfo, targetGUID) {
 			return
 		}
+		// Spell::CheckCast combo-point tail arm (Spell.cpp:6186-6209),
+		// the last CheckCast gate: a REQ_COMBO_POINTS spell fizzles
+		// when the creature caster banks no combo point (never, on this
+		// path). Placed after the aura-bounced tail, matching C++
+		// order, ahead of the prepare stealth-break arm.
+		if !s.creatureComboPointsPreCast(m, spellInfo, triggered) {
+			return
+		}
 		// Spell::prepare stealth-break arm (Spell.cpp:3180-3191, gated by
 		// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS 0x100): a non-triggered
 		// creature cast of a stealth-breaking spell (SpellInfo::IsBreakingStealth,
@@ -10681,6 +10689,36 @@ func stealableAuraRecord(s *Server, aura *activeAura, dispelMask uint32) bool {
 		}
 	}
 	return true
+}
+
+// creatureComboPointsPreCast mirrors the combo-point tail arm of
+// Spell::CheckCast (Spell.cpp:6186-6209) for a creature caster, the twin
+// of the session checkComboPointsCast: a spell carrying
+// SPELL_ATTR1_REQ_COMBO_POINTS1|2 needs at least one banked combo point,
+// against the explicit unit target when the spell needs one, banked points
+// regardless of target otherwise (Unit::GetComboPoints, Unit.h:1579-1580).
+// Creature motions carry no combo-point bank — combo gains apply through
+// the session bank only — so both branches read zero and the gate fails
+// whenever it applies. It does not apply to triggered casts: Go's
+// triggered flag models TRIGGERED_FULL_MASK (SpellDefines.h:153), which
+// carries TRIGGERED_IGNORE_COMBO_POINTS (0x40), so Spell::prepare clears
+// m_needComboPoints (Spell.cpp:3097); creature casts carry no cast item,
+// so the m_CastItem clear leg never applies either. The
+// SPELL_AURA_ABILITY_IGNORE_AURASTATE clear leg (Spell.cpp:5286) is the
+// creatureCasterIgnoresAuraState twin, matching the session gate. The
+// npcbot leg (GetCreatureComboPoints) stays vacuous: Go has no npcbot
+// model, like every other npcbot leg on this path.
+func (s *Server) creatureComboPointsPreCast(m *creatureMotion, spell wotlk.Spell, triggered bool) bool {
+	if s == nil || m == nil || !spellNeedsComboPoints(spell) {
+		return true
+	}
+	if triggered {
+		return true
+	}
+	if s.creatureCasterIgnoresAuraState(m, spell) {
+		return true
+	}
+	return false
 }
 
 // creatureSpellHistoryReady mirrors the unit-cooldown arm of

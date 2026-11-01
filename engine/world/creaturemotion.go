@@ -3972,6 +3972,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						s.rearmAISpell(motion, dueSpell, spellID, now)
 						return
 					}
+					// Spell::CheckCast combo-point tail arm (Spell.cpp:6186-6209), same
+					// twin: the inline cast is non-triggered, so the gate applies.
+					if !s.creatureComboPointsPreCast(motion, spellInfo, false) {
+						s.rearmAISpell(motion, dueSpell, spellID, now)
+						return
+					}
 					// Spell::prepare stealth-break arm (Spell.cpp:3180-3191), same twin:
 					// a non-triggered cast of a stealth-breaking spell drops the
 					// caster's AURA_INTERRUPT_FLAG_CAST auras at cast start, and any
