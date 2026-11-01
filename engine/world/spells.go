@@ -220,6 +220,7 @@ const (
 	spellFailedCantBeDisenchanted        uint8  = 14    // SPELL_FAILED_CANT_BE_DISENCHANTED (SharedDefines.h:996)
 	spellFailedCantBeMilled              uint8  = 16    // SPELL_FAILED_CANT_BE_MILLED (SharedDefines.h:998)
 	spellFailedCantBeProspected          uint8  = 17    // SPELL_FAILED_CANT_BE_PROSPECTED (SharedDefines.h:999)
+	spellFailedCantCastOnTapped          uint8  = 18    // SPELL_FAILED_CANT_CAST_ON_TAPPED (SharedDefines.h:1000)
 	spellFailedNeedMoreItems             uint8  = 55    // SPELL_FAILED_NEED_MORE_ITEMS (SharedDefines.h:1037)
 	spellFailedLowCastlevel              uint8  = 49    // SPELL_FAILED_LOW_CASTLEVEL (SharedDefines.h:1031)
 	spellFailedEquippedItem              uint8  = 28    // SPELL_FAILED_EQUIPPED_ITEM (SharedDefines.h:1010)
@@ -9802,6 +9803,35 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					return
 				}
 			}
+			// Tapped (SpellInfo.cpp:1667-1674): inside the caster !=
+			// unitTarget / player-caster block, so self targets skip it
+			// and the caster here is always the session player. A live
+			// creature motion with a loot recipient (TapPlayerGUID or
+			// TapGroupID, Creature::SetLootRecipient) that the caster did
+			// not tap fails with SPELL_FAILED_CANT_CAST_ON_TAPPED:
+			// recipient == caster, or caster group == recipient group
+			// (Creature::isTappedBy, Creature.cpp:1362). Player targets
+			// skip (the arm reads ToCreature only); DB-row creatures
+			// skip (no live motion, no tap state). The client gauntlet
+			// never checks this arm, so a cast that passed the gauntlet
+			// untapped and gained a foreign tap mid-bar fails here, and
+			// so does a cast the gauntlet passed on an already-tapped
+			// target — late, but the spell still never fires.
+			if spell.AttributesEx1&spellAttr2CantTargetTapped != 0 && target.UnitGUID != s.playerGUID {
+				s.server.motionMu.Lock()
+				motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, target.UnitGUID)
+				var tapPlayer, tapGroup uint64
+				if motion != nil {
+					tapPlayer, tapGroup = motion.TapPlayerGUID, motion.TapGroupID
+				}
+				s.server.motionMu.Unlock()
+				if motion != nil && (tapPlayer != 0 || tapGroup != 0) && tapPlayer != s.playerGUID && !(s.groupID != 0 && s.groupID == tapGroup) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCantCastOnTapped), true)
+					s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+					s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target tapped by another player")
+					return
+				}
+			}
 			// Unit targets that died during the cast bar fail with
 			// SPELL_FAILED_TARGETS_DEAD (SpellInfo::CheckTarget, SpellInfo.cpp:1715)
 			// unless the spell allows dead targets (SpellInfo::IsAllowingDeadTarget,
@@ -9848,6 +9878,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target creature type", "failReason", failReason)
 				return
 			}
+			// In-flight (SpellInfo.cpp:1745-1747): a target that boards
+			// a taxi mid-bar fails with SPELL_FAILED_BAD_TARGETS unless
+			// the spell carries SPELL_ATTR0_CU_ALLOW_INFLIGHT_TARGET.
+			// Only players fly; creatures fail open. The gauntlet twin
+			// (explicitTargetFlyingBlocked) is reused verbatim, so the
+			// self leg (caster in flight) matches C++ too — the arm
+			// sits outside the caster != unitTarget block.
+			if s.explicitTargetFlyingBlocked(spell, target.UnitGUID) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target in flight")
+				return
+			}
 			// Target aura-state (SpellInfo.cpp:1760-1766) and aura-spell
 			// (1769-1778): auras come and go mid-bar, so a required state
 			// or aura lost, or an excluded state or aura gained, fails
@@ -9879,6 +9922,37 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 				s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "excluded target aura gained")
 				return
+			}
+			// Behind/facing (Spell::CheckCast, Spell.cpp:5380-5387): the
+			// unit-target positional arms, after the CheckTarget call in
+			// C++ order and inside the target != caster wrapper, so self
+			// targets skip them. A target that turns mid-bar moves the
+			// verdict: caster in the target's frontal 180-degree arc fails
+			// SPELL_FAILED_NOT_BEHIND for REQ_CASTER_BEHIND_TARGET, and
+			// caster outside that arc fails SPELL_FAILED_NOT_INFRONT for
+			// REQ_TARGET_FACING_CASTER. The gauntlet twin reads the same
+			// live tgt orientation; Go's completion LoS already ran
+			// ahead of these arms (pre-existing order deviation — C++
+			// runs LoS after them), so a simultaneous LoS + facing
+			// failure still reports LoS first here.
+			if target.UnitGUID != s.playerGUID {
+				customAttr := s.server.getSpellCustomAttr(spellID)
+				if customAttr&SpellCustomAttrReqCasterBehindTarget != 0 {
+					if hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotBehind), true)
+						s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+						s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "not behind target")
+						return
+					}
+				}
+				if customAttr&SpellCustomAttrReqTargetFacingCaster != 0 {
+					if !hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotInFront), true)
+						s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+						s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target not facing caster")
+						return
+					}
+				}
 			}
 		}
 	}
