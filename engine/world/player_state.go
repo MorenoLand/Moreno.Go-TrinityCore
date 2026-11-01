@@ -4311,20 +4311,34 @@ func (s *Server) buildNearbyPlayerUpdatesWithCreated(observer *session) (*protoc
 	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.visibilityRangeForMap(observer.player.Map) <= 0 {
 		return nil, 0, nil
 	}
-	return s.buildNearbyPlayerUpdatesWithCreatedFrom(observer, *observer.player)
+	return s.buildNearbyPlayerUpdatesWithCreatedFromCenter(observer, *observer.player, true)
 }
 
 // buildNearbyPlayerUpdatesWithCreatedFrom is the viewpoint variant of
-// buildNearbyPlayerUpdatesWithCreated: the distance filter and the recipient
-// pointer read the viewpoint's coords, so a possessing player's stream
-// centers on the possessed creature. The recipient's faction leg reads Race
-// only, and canSeePlayer reads map/flags only, so the viewpoint copy changes
-// nothing but the center.
+// buildNearbyPlayerUpdatesWithCreated: the recipient pointer and the
+// distance filter read the viewpoint's coords, so a possessing player's
+// stream centers on the possessed creature. The recipient's faction leg
+// reads Race only, and canSeePlayer reads map/flags only, so the viewpoint
+// copy changes nothing but the center. The passed center always wins
+// here: explicit-center streams (target re-streams, possess streams) must
+// not be re-centered on the resolved seer, whose motion coords can lag
+// the stream destination.
 func (s *Server) buildNearbyPlayerUpdatesWithCreatedFrom(observer *session, viewpoint playerState) (*protocol.Packet, int, []uint64) {
+	return s.buildNearbyPlayerUpdatesWithCreatedFromCenter(observer, viewpoint, false)
+}
+
+// buildNearbyPlayerUpdatesWithCreatedFromCenter is the shared sweep body:
+// with seerCenter (the plain login/refresh variant only) the distance
+// filter re-centers on the observer's resolved seer instead of the passed
+// coords, so a viewpoint-near/body-far player is a candidate and a
+// viewpoint-far one prunes like a body-far one.
+func (s *Server) buildNearbyPlayerUpdatesWithCreatedFromCenter(observer *session, viewpoint playerState, seerCenter bool) (*protocol.Packet, int, []uint64) {
 	if s == nil || observer == nil || observer.player == nil || observer.player.GUID == 0 || s.visibilityRangeForMap(observer.player.Map) <= 0 {
 		return nil, 0, nil
 	}
 	state := viewpoint
+	observerGUID := observer.player.GUID
+	observerFarsight := observer.player.FarsightGUID
 	distance := s.visibilityRangeForMap(state.Map)
 	updates := protocol.NewUpdateData()
 	count := 0
@@ -4340,14 +4354,31 @@ func (s *Server) buildNearbyPlayerUpdatesWithCreatedFrom(observer *session, view
 		if !canSeePlayer(observer, sess) {
 			continue
 		}
-		if math.Hypot(float64(sess.player.X-state.X), float64(sess.player.Y-state.Y)) > distance {
-			continue
-		}
 		candidates[sess.player.GUID] = *sess.player
 		partyMembers[sess.player.GUID] = observer.groupID != 0 && observer.groupID == sess.groupID
 		runtimeSessions[sess.player.GUID] = sess
 	}
 	s.sessionsMu.RUnlock()
+	// Seer distance leg (CanSeeOrDetect GetViewpoint leg, Object.cpp:1618,
+	// as on the creature-create helper): with seerCenter the sweep centers
+	// on the observer's viewpoint, not its body — UpdateVisibilityForPlayer
+	// visits around m_seer (Player.cpp:22794-22799). Unresolvable
+	// viewpoints fail open to the passed coords (the observer body for
+	// the plain variant). Resolved after sessionsMu drops: the lookup
+	// takes motionMu, objectsMu, and sessionsMu itself.
+	cx, cy := state.X, state.Y
+	if seerCenter {
+		if vx, vy, _, ok := s.seerDeliveryPosition(state.Map, state.InstanceID, observerGUID, observerFarsight); ok {
+			cx, cy = vx, vy
+		}
+	}
+	for guid, targetState := range candidates {
+		if math.Hypot(float64(targetState.X-cx), float64(targetState.Y-cy)) > distance {
+			delete(candidates, guid)
+			delete(partyMembers, guid)
+			delete(runtimeSessions, guid)
+		}
+	}
 	observer.visiblePlayersMu.Lock()
 	defer observer.visiblePlayersMu.Unlock()
 	if observer.visiblePlayers == nil {
@@ -4439,13 +4470,21 @@ func (s *session) markVisiblePlayers(guids []uint64) {
 	s.visiblePlayersMu.Unlock()
 }
 
+type playerCreateTarget struct {
+	sess        *session
+	guid        uint64
+	farsight    uint64
+	partyMember bool
+	recipient   playerState
+}
+
 func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 	if s == nil || source == nil || s.visibilityRangeForMap(state.Map) <= 0 {
 		return
 	}
 	distance := s.visibilityRangeForMap(state.Map)
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	targets := make([]playerCreateTarget, 0, len(s.sessions))
 	for target := range s.sessions {
 		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != state.Map || target.player.InstanceID != state.InstanceID {
 			continue
@@ -4453,25 +4492,48 @@ func (s *Server) broadcastPlayerCreate(state playerState, source *session) {
 		if !canSeePlayer(target, source) {
 			continue
 		}
-		if math.Hypot(float64(target.player.X-state.X), float64(target.player.Y-state.Y)) > distance {
+		target.visiblePlayersMu.Lock()
+		_, visible := target.visiblePlayers[state.GUID]
+		target.visiblePlayersMu.Unlock()
+		if visible {
 			continue
 		}
-		recipientState := *target.player
-		packet, err := s.buildPlayerUpdateForRecipient(state, false, target.groupID != 0 && target.groupID == source.groupID, source, &recipientState)
+		targets = append(targets, playerCreateTarget{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID, partyMember: target.groupID != 0 && target.groupID == source.groupID, recipient: *target.player})
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if source.player == nil || target.sess.player == nil {
+			continue
+		}
+		// Seer distance leg (CanSeeOrDetect GetViewpoint leg,
+		// Object.cpp:1618, as on the creature-create helper): a bound
+		// observer receives the create when the viewpoint sits near the
+		// new player, not only when the observer's body does.
+		// Unresolvable viewpoints fail open to the body coords, preserving
+		// the old gate exactly. Resolved after sessionsMu drops: the
+		// lookup takes motionMu, objectsMu, and sessionsMu itself.
+		rx, ry := target.recipient.X, target.recipient.Y
+		if vx, vy, _, ok := s.seerDeliveryPosition(state.Map, state.InstanceID, target.guid, target.farsight); ok {
+			rx, ry = vx, vy
+		}
+		if math.Hypot(float64(rx-state.X), float64(ry-state.Y)) > distance {
+			continue
+		}
+		packet, err := s.buildPlayerUpdateForRecipient(state, false, target.partyMember, source, &target.recipient)
 		if err != nil || packet == nil {
 			continue
 		}
-		target.visiblePlayersMu.Lock()
-		if target.visiblePlayers == nil {
-			target.visiblePlayers = make(map[uint64]struct{})
+		target.sess.visiblePlayersMu.Lock()
+		if target.sess.visiblePlayers == nil {
+			target.sess.visiblePlayers = make(map[uint64]struct{})
 		}
-		if _, ok := target.visiblePlayers[state.GUID]; ok {
-			target.visiblePlayersMu.Unlock()
+		if _, ok := target.sess.visiblePlayers[state.GUID]; ok {
+			target.sess.visiblePlayersMu.Unlock()
 			continue
 		}
-		target.visiblePlayers[state.GUID] = struct{}{}
-		target.visiblePlayersMu.Unlock()
-		_ = target.write(packet.Opcode, packet.Payload.Bytes(), true)
+		target.sess.visiblePlayers[state.GUID] = struct{}{}
+		target.sess.visiblePlayersMu.Unlock()
+		_ = target.sess.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 }
 
@@ -4692,12 +4754,9 @@ func (s *Server) broadcastPlayerValuesUpdateFromSession(source *session, fields 
 	state := *source.player
 	distance := s.visibilityRangeForMap(state.Map)
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
+	targets := make([]playerCreateTarget, 0, len(s.sessions))
 	for target := range s.sessions {
 		if target == source || !target.authed || !target.worldReady.Load() || target.player == nil || target.player.Map != state.Map || target.player.InstanceID != state.InstanceID || !canSeePlayer(target, source) {
-			continue
-		}
-		if math.Hypot(float64(target.player.X-state.X), float64(target.player.Y-state.Y)) > distance {
 			continue
 		}
 		target.visiblePlayersMu.Lock()
@@ -4706,11 +4765,28 @@ func (s *Server) broadcastPlayerValuesUpdateFromSession(source *session, fields 
 		if !visible {
 			continue
 		}
-		partyMember := source.groupID != 0 && source.groupID == target.groupID
-		recipient := *target.player
-		packet, err := s.buildPlayerValuesUpdateForRecipient(state.GUID, fields, false, partyMember, &state, &recipient)
+		targets = append(targets, playerCreateTarget{sess: target, guid: target.player.GUID, farsight: target.player.FarsightGUID, partyMember: source.groupID != 0 && source.groupID == target.groupID, recipient: *target.player})
+	}
+	s.sessionsMu.RUnlock()
+	for _, target := range targets {
+		if target.sess.player == nil {
+			continue
+		}
+		// Seer distance leg, same center as the create helper above:
+		// values must follow the create's gate, or a viewpoint-created
+		// player would never receive values (body gate) and a
+		// body-created one would keep receiving them after its viewpoint
+		// walked away. Unresolvable viewpoints fail open to body coords.
+		rx, ry := target.recipient.X, target.recipient.Y
+		if vx, vy, _, ok := s.seerDeliveryPosition(state.Map, state.InstanceID, target.guid, target.farsight); ok {
+			rx, ry = vx, vy
+		}
+		if math.Hypot(float64(rx-state.X), float64(ry-state.Y)) > distance {
+			continue
+		}
+		packet, err := s.buildPlayerValuesUpdateForRecipient(state.GUID, fields, false, target.partyMember, &state, &target.recipient)
 		if err == nil && packet != nil {
-			_ = target.write(packet.Opcode, packet.Payload.Bytes(), true)
+			_ = target.sess.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}
 	}
 }
