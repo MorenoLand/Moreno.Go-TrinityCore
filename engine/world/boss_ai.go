@@ -1318,7 +1318,7 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	// canDetectInvisibilityOfPlayer, with implicit=false for a creature
 	// caster (Spell.cpp:5372), so no stealth exemption. A wild caster's
 	// seer is the creature itself (Object.cpp:1664-1666), and it now
-	// judges through wildCreatureCanDetectTarget: the motion's live
+	// judges through creatureSeerSpellGateVisibleTarget: the motion's live
 	// creature-aura detect sums against player targets (session folds)
 	// and creature targets (creature-aura sums), stalked first, then
 	// invisibility, then stealth. A controlled caster whose controller
@@ -1327,10 +1327,7 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	// is the controller motion, not the caster. Self targets pass
 	// automatically (CanSeeOrDetect returns true for this == obj,
 	// Object.cpp:1575); CAN_TARGET_INVISIBLE exempts. An unresolvable
-	// controller motion still fails open. Sight-range,
-	// ghost-team/group, vehicle-accessory and despawn legs stay out, as on
-	// the player path; the GM-visibility leg rides the GM/invisibility arm
-	// below.
+	// controller motion still fails open. Sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg stays out (no corpse-time model); the GM and ghost legs run in the wrappers.
 	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 {
 		var seer *session
 		var controllerGUID uint64
@@ -1343,20 +1340,20 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 		}
 		if seer != nil {
 			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-				if !seer.canDetectStealthOf(ts) || !seer.canDetectInvisibilityOfPlayer(ts) {
+				if !s.controlledCreatureSeerSpellGateVisibleToPlayer(m, seer, ts) {
 					return false
 				}
 			}
 		} else if controllerGUID != 0 {
 			if targetGUID != m.GUID {
 				if cm := s.findCreatureMotion(m.Map, m.InstanceID, controllerGUID); cm != nil {
-					if !s.wildCreatureCanDetectTarget(cm, targetGUID) {
+					if !s.creatureSeerSpellGateVisibleTarget(cm, targetGUID) {
 						return false
 					}
 				}
 			}
 		} else {
-			if !s.wildCreatureCanDetectTarget(m, targetGUID) {
+			if !s.creatureSeerSpellGateVisibleTarget(m, targetGUID) {
 				return false
 			}
 		}

@@ -2842,20 +2842,18 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// triggered path: canDetectStealthOf +
 	// canDetectInvisibilityOfPlayer, self targets pass, GM casters
 	// pass inside the helpers, creature targets judge through
-	// playerSeerCanDetectCreature (live motion aura sums), and the sight-range,
-	// ghost team/group, vehicle-accessory and despawn legs of
-	// CanSeeOrDetect stay out. Spells carrying
+	// playerSeerCanDetectCreature (live motion aura sums), while the GM and ghost legs run in the wrappers; sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg stays out (no corpse-time model). Spells carrying
 	// SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
 	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != 0 && targetGUID != s.playerGUID {
 		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-			if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+			if !s.playerSeerSpellGateVisibleToPlayer(ts) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not visible", "failReason", spellFailedBadTargets)
 				return true
 			}
 		} else if tm := s.findCreatureMotion(targetGUID); tm != nil && uint16(targetGUID>>48) != 0xF110 {
-			if !s.server.playerSeerCanDetectCreature(s, tm) {
+			if !s.server.playerSeerSpellGateVisibleToCreature(s, tm) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not visible", "failReason", spellFailedBadTargets)
 				return true
@@ -9970,21 +9968,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// triggered-path detect core verbatim (canDetectStealthOf +
 			// canDetectInvisibilityOfPlayer): self targets pass, GM
 			// casters pass inside the helpers, creature targets judge
-			// through playerSeerCanDetectCreature (live motion aura sums), and
-			// the sight-range, ghost team/group, vehicle-accessory and
-			// despawn legs of CanSeeOrDetect stay out, as on the
-			// triggered path. Spells carrying
+			// through playerSeerCanDetectCreature (live motion aura sums), while the GM and ghost legs run in the wrappers; sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg stays out (no corpse-time model), as on the triggered path. Spells carrying
 			// SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
 			if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && target.UnitGUID != s.playerGUID && s.server != nil {
 				if ts := s.server.findSessionByGUID(target.UnitGUID); ts != nil && ts.player != nil {
-					if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+					if !s.playerSeerSpellGateVisibleToPlayer(ts) {
 						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 						s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 						s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target not visible")
 						return
 					}
 				} else if tm := s.findCreatureMotion(target.UnitGUID); tm != nil && uint16(target.UnitGUID>>48) != 0xF110 {
-					if !s.server.playerSeerCanDetectCreature(s, tm) {
+					if !s.server.playerSeerSpellGateVisibleToCreature(s, tm) {
 						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 						s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 						s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target not visible")
@@ -23684,21 +23679,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// Visibility arm (SpellInfo.cpp:1641-1642): explicit targets carry
 		// implicit=false, so the stealth exemption never applies here.
 		// Player targets judge the C++ CanDetect core (CanSeeOrDetect,
-		// Object.cpp:1573-1664, minus the sight-range, ghost team/group,
-		// vehicle-accessory and despawn legs, which have no spell-target
-		// model): canDetectStealthOf + canDetectInvisibilityOfPlayer.
+		// Object.cpp:1573-1664, minus sight-range and vehicle-accessory (distanceCheck defaults false) and the despawn leg (no corpse-time model); the GM and ghost legs run in the wrappers): canDetectStealthOf + canDetectInvisibilityOfPlayer.
 		// Self targets pass (this == obj, Object.cpp:1575); GM casters
 		// pass via the GM arms inside both detect helpers. Creature
 		// targets judge through playerSeerCanDetectCreature (live
 		// motion aura sums, player-seer 30-yard stealth cap).
 		if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != s.playerGUID && s.player != nil && s.server != nil {
 			if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-				if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+				if !s.playerSeerSpellGateVisibleToPlayer(ts) {
 					rejectTriggeredCast("explicit target not visible to caster")
 					return
 				}
 			} else if tm := s.findCreatureMotion(targetGUID); tm != nil {
-				if !s.server.playerSeerCanDetectCreature(s, tm) {
+				if !s.server.playerSeerSpellGateVisibleToCreature(s, tm) {
 					rejectTriggeredCast("explicit target not visible to caster")
 					return
 				}

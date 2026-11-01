@@ -717,3 +717,301 @@ func (s *Server) playerSeerCanDetectStealthOfCreature(seer *session, tm *creatur
 	}
 	return true
 }
+
+// secGameMaster is SEC_GAMEMASTER on the AccountTypes scale (SEC_PLAYER 0,
+// SEC_MODERATOR 1, SEC_GAMEMASTER 2): the GM-visibility value
+// Unit::SetVisible(false) stores on a script-hidden creature (Unit.cpp:8659)
+// and the compare point of the CanSeeOrDetect GM leg.
+const secGameMaster uint8 = 2
+
+// ghostBits carries one side of the SERVERSIDE_VISIBILITY_GHOST
+// intersection test in WorldObject::CanSeeOrDetect (Object.cpp:1632): the
+// target's visibility bits against the seer's detect bits. The ghost leg
+// fires only when the intersection is empty.
+type ghostBits struct {
+	alive bool
+	ghost bool
+}
+
+// playerGhostBits returns a player's visibility/detect bits: a ghost
+// player carries GHOST only (SpellAuraEffects.cpp:1567-1568, the
+// SPELL_AURA_GHOST apply arm), an alive player ALIVE only
+// (SpellAuraEffects.cpp:1576-1577, the remove arm).
+func playerGhostBits(isGhost bool) ghostBits {
+	if isGhost {
+		return ghostBits{ghost: true}
+	}
+	return ghostBits{alive: true}
+}
+
+// creatureGhostBits returns a creature's visibility bits and detect bits
+// (Object.cpp:988-989 defaults, Creature.cpp:1142/1176): spirit healers,
+// spirit guides and CREATURE_FLAG_EXTRA_GHOST_VISIBILITY (0x400) creatures
+// carry GHOST on both sides; CREATURE_TYPE_FLAG_GHOST_VISIBLE creatures are
+// visible to both sides (ALIVE|GHOST visibility, ALIVE detect); every other
+// creature carries ALIVE on both sides.
+func creatureGhostBits(m *creatureMotion) (vis, detect ghostBits) {
+	if m == nil {
+		return ghostBits{alive: true}, ghostBits{alive: true}
+	}
+	if m.NPCFlags&(npcFlagSpiritHealer|npcFlagSpiritGuide) != 0 || m.FlagsExtra&0x400 != 0 {
+		return ghostBits{ghost: true}, ghostBits{ghost: true}
+	}
+	if m.TypeFlags&creatureTypeFlagGhostVisible != 0 {
+		return ghostBits{alive: true, ghost: true}, ghostBits{alive: true}
+	}
+	return ghostBits{alive: true}, ghostBits{alive: true}
+}
+
+// playerTargetGMValue is a player target's SERVERSIDE_VISIBILITY_GM value:
+// the account security while .gm visible off (Player::SetGMVisible(false),
+// Player.cpp:2518, stores GetSecurity()), SEC_PLAYER otherwise. The marker
+// is playerExtraGMInvisible; .gm on alone (SetGameMaster) changes only the
+// detect side.
+func playerTargetGMValue(ts *session) uint8 {
+	if ts == nil || ts.player == nil || ts.player.ExtraFlags&playerExtraGMInvisible == 0 {
+		return 0
+	}
+	return ts.security
+}
+
+// creatureTargetGMValue is a creature target's SERVERSIDE_VISIBILITY_GM
+// value: SEC_GAMEMASTER while script-hidden (Unit::SetVisible(false)),
+// SEC_PLAYER otherwise.
+func creatureTargetGMValue(tm *creatureMotion) uint8 {
+	if tm != nil && tm.ScriptHidden {
+		return secGameMaster
+	}
+	return 0
+}
+
+// gmLegVerdict runs the GM leg of WorldObject::CanSeeOrDetect
+// (Object.cpp:1622-1630) and reports whether it decides the verdict: a
+// GM-mode seer (nonzero detect) sees a normally-visible target outright,
+// skipping the ghost, despawn and detect legs; a hidden target is visible
+// only to a seer whose detect level reaches its value.
+func gmLegVerdict(seerDetectGM, targetGMValue uint8) (decided, visible bool) {
+	if targetGMValue == 0 {
+		if seerDetectGM != 0 {
+			return true, true
+		}
+		return false, false
+	}
+	return true, seerDetectGM >= targetGMValue
+}
+
+// ghostLegVerdict runs the ghost leg of WorldObject::CanSeeOrDetect
+// (Object.cpp:1632-1647): when the target's visibility bits and the seer's
+// detect bits share nothing, only a player seer against a player target of
+// the same team that is group-visible for the seer still sees the target;
+// every other seer/target pair fails.
+func ghostLegVerdict(seerDetect, targetVis ghostBits, seerIsPlayer, targetIsPlayer, sameTeamAndGroupVisible bool) (decided, visible bool) {
+	if (targetVis.alive && seerDetect.alive) || (targetVis.ghost && seerDetect.ghost) {
+		return false, false
+	}
+	if seerIsPlayer && targetIsPlayer {
+		return true, sameTeamAndGroupVisible
+	}
+	return true, false
+}
+
+// sessionsInSameGroupWith mirrors Player::IsInSameGroupWith
+// (Player.cpp:2537-2541) under the default group-visibility config: the
+// same session, or two sessions in one group in the same subgroup. A
+// missing group row reads as not group-visible.
+func (s *Server) sessionsInSameGroupWith(a, b *session) bool {
+	if s == nil || a == nil || b == nil || a.player == nil || b.player == nil {
+		return false
+	}
+	if a.playerGUID == b.playerGUID {
+		return true
+	}
+	if a.groupID == 0 || a.groupID != b.groupID {
+		return false
+	}
+	g := s.findGroupByID(a.groupID)
+	if g == nil {
+		return false
+	}
+	as, okA := g.memberSubGroup(a.playerGUID)
+	bs, okB := g.memberSubGroup(b.playerGUID)
+	return okA && okB && as == bs
+}
+
+// playerSeerSpellGateVisibleToPlayer runs the spell gate's visibility
+// check (SpellInfo::CheckTarget, SpellInfo.cpp:1641-1642) for a player
+// seer against a player target: the CanSeeOrDetect GM leg, then the ghost
+// team/group leg, then the detect sums. The despawn leg cannot fire for
+// players (Object.h:573 base, no Unit override) and the distanceCheck legs
+// (sight-range, corpse-visibility, vehicle-accessory) never run: CheckTarget
+// calls CanSeeOrDetect with the defaults (Object.h:391).
+func (s *session) playerSeerSpellGateVisibleToPlayer(ts *session) bool {
+	if s == nil || s.player == nil || ts == nil || ts.player == nil {
+		return true
+	}
+	if decided, visible := gmLegVerdict(s.gmVisibilityDetect, playerTargetGMValue(ts)); decided {
+		return visible
+	}
+	seerGhost := s.player.PlayerFlags&playerFlagGhost != 0
+	targetGhost := ts.player.PlayerFlags&playerFlagGhost != 0
+	sameTeamAndGroup := raceTeam(s.player.Race) == raceTeam(ts.player.Race) && s.server.sessionsInSameGroupWith(s, ts)
+	if decided, visible := ghostLegVerdict(playerGhostBits(seerGhost), playerGhostBits(targetGhost), true, true, sameTeamAndGroup); decided {
+		return visible
+	}
+	return s.canDetectStealthOf(ts) && s.canDetectInvisibilityOfPlayer(ts)
+}
+
+// playerSeerSpellGateVisibleToCreature is the creature-target twin: GM leg
+// (script-hidden creatures need a GM-mode seer), ghost leg (alive seers
+// cannot target ghost-only creatures, ghost seers cannot target alive-only
+// ones), then the player-seer detect core. The despawn leg stays out:
+// motions carry no corpse-remove-time model (Creature::IsInvisibleDueToDespawn,
+// Creature.cpp:1936-1948, needs the corpse delay expiry, which Go never
+// records).
+func (s *Server) playerSeerSpellGateVisibleToCreature(seer *session, tm *creatureMotion) bool {
+	if s == nil || seer == nil || seer.player == nil || tm == nil {
+		return true
+	}
+	// IsAlwaysVisibleFor (Object.cpp:1581, Unit.cpp:8615-8621) precedes
+	// the GM leg: a unit is always visible to its charmer-or-owner.
+	if creatureCharmerOrOwnerGUID(tm) == seer.playerGUID {
+		return true
+	}
+	if decided, visible := gmLegVerdict(seer.gmVisibilityDetect, creatureTargetGMValue(tm)); decided {
+		return visible
+	}
+	targetVis, _ := creatureGhostBits(tm)
+	seerGhost := seer.player.PlayerFlags&playerFlagGhost != 0
+	if decided, visible := ghostLegVerdict(playerGhostBits(seerGhost), targetVis, true, false, false); decided {
+		return visible
+	}
+	return s.playerSeerCanDetectCreature(seer, tm)
+}
+
+// creatureSeerSpellGateVisibleToPlayer is the wild/controlled-creature
+// seer twin for player targets: the creature's own GM detect is 0
+// (creatures carry no security), so GM-hidden player targets fail; the
+// ghost leg uses the creature's own detect bits, not the controller's
+// (only CanDetect, Object.cpp:1664-1680, routes through the controller);
+// then the wild detect core.
+func (s *Server) creatureSeerSpellGateVisibleToPlayer(m *creatureMotion, ts *session) bool {
+	if s == nil || m == nil || ts == nil || ts.player == nil {
+		return true
+	}
+	if decided, visible := gmLegVerdict(0, playerTargetGMValue(ts)); decided {
+		return visible
+	}
+	_, seerDetect := creatureGhostBits(m)
+	targetGhost := ts.player.PlayerFlags&playerFlagGhost != 0
+	if decided, visible := ghostLegVerdict(seerDetect, playerGhostBits(targetGhost), false, true, false); decided {
+		return visible
+	}
+	return s.wildCreatureCanDetectPlayer(m, ts)
+}
+
+// creatureSeerSpellGateVisibleToCreature is the creature-target twin,
+// with the despawn leg out for the same missing corpse-time model.
+func (s *Server) creatureSeerSpellGateVisibleToCreature(m, tm *creatureMotion) bool {
+	if s == nil || m == nil || tm == nil {
+		return true
+	}
+	if creatureCharmerOrOwnerGUID(tm) == m.GUID {
+		return true
+	}
+	if decided, visible := gmLegVerdict(0, creatureTargetGMValue(tm)); decided {
+		return visible
+	}
+	_, seerDetect := creatureGhostBits(m)
+	targetVis, _ := creatureGhostBits(tm)
+	if decided, visible := ghostLegVerdict(seerDetect, targetVis, false, false, false); decided {
+		return visible
+	}
+	return s.wildCreatureCanDetectCreature(m, tm)
+}
+
+// creatureSeerSpellGateVisibleTarget resolves the target like
+// wildCreatureCanDetectTarget and runs the matching twin; unresolvable
+// targets fail open as on the detect core.
+func (s *Server) creatureSeerSpellGateVisibleTarget(m *creatureMotion, targetGUID uint64) bool {
+	if s == nil || m == nil || targetGUID == 0 || targetGUID == m.GUID {
+		return true
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		return s.creatureSeerSpellGateVisibleToPlayer(m, ts)
+	}
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		return s.creatureSeerSpellGateVisibleToCreature(m, tm)
+	}
+	return true
+}
+
+// controlledCreatureSeerSpellGateVisibleToPlayer is the charmed/owned
+// creature-caster twin for player targets: GM and ghost legs judge through
+// the caster motion's own values (CanSeeOrDetect reads this, not the
+// controller), while the detect sums still judge through the controller
+// session (CanDetect routing).
+func (s *Server) controlledCreatureSeerSpellGateVisibleToPlayer(m *creatureMotion, seer, ts *session) bool {
+	if s == nil || m == nil || seer == nil || ts == nil || ts.player == nil {
+		return true
+	}
+	if decided, visible := gmLegVerdict(0, playerTargetGMValue(ts)); decided {
+		return visible
+	}
+	_, seerDetect := creatureGhostBits(m)
+	targetGhost := ts.player.PlayerFlags&playerFlagGhost != 0
+	if decided, visible := ghostLegVerdict(seerDetect, playerGhostBits(targetGhost), false, true, false); decided {
+		return visible
+	}
+	return seer.canDetectStealthOf(ts) && seer.canDetectInvisibilityOfPlayer(ts)
+}
+
+// petSeerSpellGateVisibleToPlayer is the pet-caster twin: the pet's own GM
+// detect is 0 and its ghost detect is its own creature bits, while the
+// detect sums judge through the driving session's core as before.
+func (s *Server) petSeerSpellGateVisibleToPlayer(motion *creatureMotion, detectSeer, ts *session) bool {
+	if s == nil || detectSeer == nil || ts == nil || ts.player == nil {
+		return true
+	}
+	if decided, visible := gmLegVerdict(0, playerTargetGMValue(ts)); decided {
+		return visible
+	}
+	_, seerDetect := creatureGhostBits(motion)
+	targetGhost := ts.player.PlayerFlags&playerFlagGhost != 0
+	if decided, visible := ghostLegVerdict(seerDetect, playerGhostBits(targetGhost), false, true, false); decided {
+		return visible
+	}
+	return detectSeer.canDetectStealthOf(ts) && detectSeer.canDetectInvisibilityOfPlayer(ts)
+}
+
+// petSeerSpellGateVisibleToCreature is the pet-caster creature-target
+// twin, with the same seer split and the despawn leg out.
+func (s *Server) petSeerSpellGateVisibleToCreature(motion *creatureMotion, detectSeer *session, tm *creatureMotion) bool {
+	if s == nil || detectSeer == nil || tm == nil {
+		return true
+	}
+	if motion != nil && creatureCharmerOrOwnerGUID(tm) == motion.GUID {
+		return true
+	}
+	if decided, visible := gmLegVerdict(0, creatureTargetGMValue(tm)); decided {
+		return visible
+	}
+	_, seerDetect := creatureGhostBits(motion)
+	targetVis, _ := creatureGhostBits(tm)
+	if decided, visible := ghostLegVerdict(seerDetect, targetVis, false, false, false); decided {
+		return visible
+	}
+	return s.playerSeerCanDetectCreature(detectSeer, tm)
+}
+
+// creatureCharmerOrOwnerGUID mirrors Unit::GetCharmerOrOwnerGUID
+// (Unit.h:1170): the charmer GUID while charmed, else the owner GUID.
+// IsAlwaysVisibleFor (Unit.cpp:8615-8621) compares it against the seer.
+func creatureCharmerOrOwnerGUID(m *creatureMotion) uint64 {
+	if m == nil {
+		return 0
+	}
+	if m.CharmerGUID != 0 {
+		return m.CharmerGUID
+	}
+	return m.OwnerGUID
+}
