@@ -2641,6 +2641,63 @@ func (s *session) controlledPetMotion(petGUID uint64) *creatureMotion {
 	return s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
 }
 
+// petActionFanOutTargets mirrors the HandlePetAction fan-out
+// (PetHandler.cpp:118-131): with a single controlled unit the helper runs
+// on the addressed pet alone; otherwise it runs once per alive controlled
+// unit sharing the addressed pet's entry, snapshotted before the run since
+// a dismiss changes the controlled set. Go's controlled set is the main pet
+// plus creatures charmed by this player on the player's map/instance — the
+// units controlledPetMotion can address; OwnerGUID minion motions are not
+// addressable controlled units in Go, so they stay out of the set. A dead
+// addressed pet that passed the castable-while-dead gate runs nothing here
+// when siblings exist (the IsAlive filter drops it), matching C++. The
+// addressed unit leads; the rest sort by GUID (C++ iterates a
+// pointer-ordered set, so its order is arbitrary too).
+func (s *session) petActionFanOutTargets(addressed *creatureMotion) []*creatureMotion {
+	if s == nil || s.server == nil || s.player == nil || addressed == nil {
+		return nil
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	seen := make(map[uint64]bool)
+	var controlled []*creatureMotion
+	if pm := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, s.player.PetGUID); pm != nil && !seen[pm.GUID] {
+		seen[pm.GUID] = true
+		controlled = append(controlled, pm)
+	}
+	for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if m != nil && m.Charmed && m.CharmerGUID == s.playerGUID && !seen[m.GUID] {
+			seen[m.GUID] = true
+			controlled = append(controlled, m)
+		}
+	}
+	if !seen[addressed.GUID] {
+		seen[addressed.GUID] = true
+		controlled = append(controlled, addressed)
+	}
+	if len(controlled) == 1 {
+		return []*creatureMotion{addressed}
+	}
+	var first *creatureMotion
+	var rest []*creatureMotion
+	for _, m := range controlled {
+		if m.Entry != addressed.Entry || m.Health == 0 {
+			continue
+		}
+		if m.GUID == addressed.GUID {
+			first = m
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	sort.Slice(rest, func(i, j int) bool { return rest[i].GUID < rest[j].GUID })
+	out := []*creatureMotion{}
+	if first != nil {
+		out = append(out, first)
+	}
+	return append(out, rest...)
+}
+
 // charmedCreatureGUID resolves Unit::GetFirstControlled (Unit.cpp:6367) for
 // the set-action gate: the charmed unit comes first, ahead of the minion pet.
 // It returns the charmed creature's GUID only when exactly one motion on the
@@ -3226,229 +3283,237 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 		}
 	}
 
-	switch actFlag {
-	case actCommand:
-		switch spellOrAction {
-		case commandAttack:
-			// PetHandler.cpp:200-207: a pet cannot be ordered to attack while
-			// its owner is pacified (SPELL_AURA_MOD_PACIFY).
-			pacified := false
-			for _, aura := range s.loadedAuras() {
-				if aura != nil && aura.AuraType == spellAuraModPacify {
-					pacified = true
+	// PetHandler.cpp:118-131: with more than one controlled unit the
+	// helper runs once per alive same-entry controlled unit (snapshotted
+	// by petActionFanOutTargets); a lone controlled unit runs once.
+	run := func(motion *creatureMotion, petGUID uint64) {
+		switch actFlag {
+		case actCommand:
+			switch spellOrAction {
+			case commandAttack:
+				// PetHandler.cpp:200-207: a pet cannot be ordered to attack while
+				// its owner is pacified (SPELL_AURA_MOD_PACIFY).
+				pacified := false
+				for _, aura := range s.loadedAuras() {
+					if aura != nil && aura.AuraType == spellAuraModPacify {
+						pacified = true
+						break
+					}
+				}
+				if pacified {
+					return
+				}
+				// PetHandler.cpp:203-207: the order drops silently unless the owner
+				// passes IsValidAttackTarget on the target (ownerAttackTargetValid
+				// mirrors Object.cpp:2930+ with the session player as attacker) —
+				// Go used to engage any target the GM gate allowed. PetHandler.cpp:210-213: no target unit -> the order
+				// drops before any engage or AI reaction.
+				if !s.ownerAttackTargetValid(ctx, targetGUID) {
+					return
+				}
+				// PetHandler.cpp:216-217: a pet already attacking that target
+				// under a command-attack ignores the re-issue — no forced target
+				// switch, no AI reaction.
+				if motion.InCombat && motion.TargetGUID == targetGUID && motion.PetCommand == PetCommandAttack {
+					return
+				}
+				// PetHandler.cpp:197-198: when the order switches victims (or
+				// the pet wasn't under a command-attack), the old attack stops
+				// first — Unit::AttackStop broadcasts SMSG_ATTACK_STOP with the
+				// old victim before the new AttackStart.
+				if oldVictim := motion.TargetGUID; oldVictim != 0 {
+					stopPkt := buildAttackStop(petGUID, oldVictim, false)
+					_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+					if s.server != nil {
+						s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
+					}
+				}
+				if s.server != nil {
+					s.server.onPetCommandAttack(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
+				}
+				// Reference: PetHandler.cpp:213-218 — a summon pet (warlock;
+				// SUMMON_PET) ordered to attack plays the special attack talk
+				// (SMSG_PET_ACTION_SOUND with PET_TALK_ATTACK) 10% of the time
+				// when it is not attacking itself; everything else — the other
+				// 90%, hunter pets, charmed creatures (motion.Charmed carries
+				// the zero-value PetType, so it must be excluded explicitly) —
+				// answers the growl. Both SendPetTalk and SendPetAIReaction are
+				// owner-only (Unit.cpp:10463-10486 SendDirectMessage to the
+				// owner); Go used to broadcast the reaction to nearby players.
+				if motion.PetType == petTypeSummon && !motion.Charmed && petGUID != targetGUID && rand.Intn(101) < 10 {
+					talkBuf := protocol.NewBuffer(12)
+					talkBuf.WriteU64(petGUID)
+					talkBuf.WriteU32(petTalkAttack)
+					_ = s.write(uint16(protocol.OpcodeSMSG_PET_ACTION_SOUND), talkBuf.Bytes(), true)
+				} else {
+					reactionBuf := protocol.NewBuffer(12)
+					reactionBuf.WriteU64(petGUID)
+					reactionBuf.WriteU32(aiReactionHostile)
+					_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
+				}
+				s.debug("pet attack command", "account", s.accountName, "pet", petGUID, "target", targetGUID)
+			case commandFollow:
+				// PetHandler.cpp:164: the follow arm runs Unit::AttackStop ahead
+				// of the follow move — Unit::AttackStop (Unit.cpp:5763-5789)
+				// emits SMSG_ATTACK_STOP (SendMeleeAttackStop broadcasts to the
+				// set) only when an attack was actually in progress, carrying
+				// the real victim; the old unconditional victim-0 owner-only
+				// packet never matched C++.
+				followVictim := motion.TargetGUID
+				if s.server != nil {
+					s.server.onPetCommandFollow(ctx, s.player.Map, s.player.InstanceID, petGUID)
+				}
+				if followVictim != 0 {
+					stopPkt := buildAttackStop(petGUID, followVictim, false)
+					_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+					if s.server != nil {
+						s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
+					}
+				}
+				s.debug("pet follow command", "account", s.accountName, "pet", petGUID)
+			case commandStay:
+				// PetHandler.cpp:151-162: the stay command sets the stay state
+				// (onPetCommandStay keeps the victim) and sends no
+				// SMSG_ATTACK_STOP — Go used to broadcast one and disengage.
+				if s.server != nil {
+					s.server.onPetCommandStay(s.player.Map, s.player.InstanceID, petGUID)
+				}
+				s.debug("pet stay command", "account", s.accountName, "pet", petGUID)
+			case commandAbandon:
+				// PetHandler.cpp:242-256: a charmed creature is un-charmed
+				// (StopCastingCharm) rather than removed; hunter pets are
+				// deleted outright while other summoned pets are merely
+				// unsummoned (kept out of the active slot).
+				if motion.CharmerGUID == s.playerGUID && s.server != nil {
+					s.server.uncharmCreature(creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: petGUID}, s.playerGUID)
+					s.debug("pet charm released via command", "account", s.accountName, "pet", petGUID)
 					break
 				}
-			}
-			if pacified {
-				return true
-			}
-			// PetHandler.cpp:203-207: the order drops silently unless the owner
-			// passes IsValidAttackTarget on the target (ownerAttackTargetValid
-			// mirrors Object.cpp:2930+ with the session player as attacker) —
-			// Go used to engage any target the GM gate allowed. PetHandler.cpp:210-213: no target unit -> the order
-			// drops before any engage or AI reaction.
-			if !s.ownerAttackTargetValid(ctx, targetGUID) {
-				return true
-			}
-			// PetHandler.cpp:216-217: a pet already attacking that target
-			// under a command-attack ignores the re-issue — no forced target
-			// switch, no AI reaction.
-			if motion.InCombat && motion.TargetGUID == targetGUID && motion.PetCommand == PetCommandAttack {
-				return true
-			}
-			// PetHandler.cpp:197-198: when the order switches victims (or
-			// the pet wasn't under a command-attack), the old attack stops
-			// first — Unit::AttackStop broadcasts SMSG_ATTACK_STOP with the
-			// old victim before the new AttackStart.
-			if oldVictim := motion.TargetGUID; oldVictim != 0 {
-				stopPkt := buildAttackStop(petGUID, oldVictim, false)
-				_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
-				if s.server != nil {
-					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
+				saveMode := uint8(petSaveAsDeleted)
+				if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+					var petType int64
+					if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, s.petNumberForGUID(petGUID)).Scan(&petType); err == nil && petType != 1 {
+						saveMode = uint8(petSaveNotInSlot)
+					}
 				}
+				s.unsummonPet(ctx, saveMode)
+				s.debug("pet abandoned via command", "account", s.accountName, "pet", petGUID)
 			}
-			if s.server != nil {
-				s.server.onPetCommandAttack(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
-			}
-			// Reference: PetHandler.cpp:213-218 — a summon pet (warlock;
-			// SUMMON_PET) ordered to attack plays the special attack talk
-			// (SMSG_PET_ACTION_SOUND with PET_TALK_ATTACK) 10% of the time
-			// when it is not attacking itself; everything else — the other
-			// 90%, hunter pets, charmed creatures (motion.Charmed carries
-			// the zero-value PetType, so it must be excluded explicitly) —
-			// answers the growl. Both SendPetTalk and SendPetAIReaction are
-			// owner-only (Unit.cpp:10463-10486 SendDirectMessage to the
-			// owner); Go used to broadcast the reaction to nearby players.
-			if motion.PetType == petTypeSummon && !motion.Charmed && petGUID != targetGUID && rand.Intn(101) < 10 {
-				talkBuf := protocol.NewBuffer(12)
-				talkBuf.WriteU64(petGUID)
-				talkBuf.WriteU32(petTalkAttack)
-				_ = s.write(uint16(protocol.OpcodeSMSG_PET_ACTION_SOUND), talkBuf.Bytes(), true)
-			} else {
-				reactionBuf := protocol.NewBuffer(12)
-				reactionBuf.WriteU64(petGUID)
-				reactionBuf.WriteU32(aiReactionHostile)
-				_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
-			}
-			s.debug("pet attack command", "account", s.accountName, "pet", petGUID, "target", targetGUID)
-		case commandFollow:
-			// PetHandler.cpp:164: the follow arm runs Unit::AttackStop ahead
-			// of the follow move — Unit::AttackStop (Unit.cpp:5763-5789)
-			// emits SMSG_ATTACK_STOP (SendMeleeAttackStop broadcasts to the
-			// set) only when an attack was actually in progress, carrying
-			// the real victim; the old unconditional victim-0 owner-only
-			// packet never matched C++.
-			followVictim := motion.TargetGUID
-			if s.server != nil {
-				s.server.onPetCommandFollow(ctx, s.player.Map, s.player.InstanceID, petGUID)
-			}
-			if followVictim != 0 {
-				stopPkt := buildAttackStop(petGUID, followVictim, false)
-				_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
-				if s.server != nil {
-					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
-				}
-			}
-			s.debug("pet follow command", "account", s.accountName, "pet", petGUID)
-		case commandStay:
-			// PetHandler.cpp:151-162: the stay command sets the stay state
-			// (onPetCommandStay keeps the victim) and sends no
-			// SMSG_ATTACK_STOP — Go used to broadcast one and disengage.
-			if s.server != nil {
-				s.server.onPetCommandStay(s.player.Map, s.player.InstanceID, petGUID)
-			}
-			s.debug("pet stay command", "account", s.accountName, "pet", petGUID)
-		case commandAbandon:
-			// PetHandler.cpp:242-256: a charmed creature is un-charmed
-			// (StopCastingCharm) rather than removed; hunter pets are
-			// deleted outright while other summoned pets are merely
-			// unsummoned (kept out of the active slot).
-			if motion.CharmerGUID == s.playerGUID && s.server != nil {
-				s.server.uncharmCreature(creatureAuraKey{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: petGUID}, s.playerGUID)
-				s.debug("pet charm released via command", "account", s.accountName, "pet", petGUID)
+		case actReaction:
+			// PetHandler.cpp:260-268: the reaction switch carries only
+			// REACT_PASSIVE / DEFENSIVE / AGGRESSIVE arms — any other value is
+			// a silent no-op (no state change, no AttackStop, no DB write).
+			if spellOrAction > reactAggressive {
 				break
 			}
-			saveMode := uint8(petSaveAsDeleted)
-			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-				var petType int64
-				if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, s.petNumberForGUID(petGUID)).Scan(&petType); err == nil && petType != 1 {
-					saveMode = uint8(petSaveNotInSlot)
+			if s.server != nil {
+				s.server.onPetSetReaction(ctx, s.player.Map, s.player.InstanceID, petGUID, uint8(spellOrAction), s)
+			}
+			// Save react state (0 = passive, 1 = defensive, 2 = aggressive),
+			// but only for the player's own pet: C++ SetReactState is
+			// per-creature in-memory, so reacting a charmed creature must not
+			// overwrite the slot-0 pet's saved Reactstate.
+			if petGUID == s.player.PetGUID && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_pet SET Reactstate = ? WHERE owner = ? AND slot = 0", spellOrAction, s.playerGUID)
+			}
+			s.debug("pet reaction state changed", "account", s.accountName, "pet", petGUID, "react", spellOrAction)
+		case actDisabled, actEnabled, actPassive:
+			// PetHandler.cpp:270-289: the spell arm drops silently ahead of the
+			// AI reaction on unknown spell ids, spells carrying an enemy-area
+			// implicit target (TARGET_UNIT_SRC_AREA_ENEMY/DEST_AREA_ENEMY/
+			// DEST_DYNOBJ_ENEMY, SharedDefines.h:1452-1464), unlearned spells,
+			// and passive spells — Go used to broadcast the reaction and a
+			// SpellGo visual for all of them. The gates run only with spell
+			// data present; without a DB the arm keeps its old visual-only
+			// behavior.
+			var spellInfo wotlk.Spell
+			haveSpellInfo := false
+			if s.server != nil && s.server.Data != nil {
+				si, found, spellErr := s.server.Data.Spell(spellOrAction)
+				if spellErr != nil || !found {
+					return
 				}
-			}
-			s.unsummonPet(ctx, saveMode)
-			s.debug("pet abandoned via command", "account", s.accountName, "pet", petGUID)
-		}
-	case actReaction:
-		// PetHandler.cpp:260-268: the reaction switch carries only
-		// REACT_PASSIVE / DEFENSIVE / AGGRESSIVE arms — any other value is
-		// a silent no-op (no state change, no AttackStop, no DB write).
-		if spellOrAction > reactAggressive {
-			break
-		}
-		if s.server != nil {
-			s.server.onPetSetReaction(ctx, s.player.Map, s.player.InstanceID, petGUID, uint8(spellOrAction), s)
-		}
-		// Save react state (0 = passive, 1 = defensive, 2 = aggressive),
-		// but only for the player's own pet: C++ SetReactState is
-		// per-creature in-memory, so reacting a charmed creature must not
-		// overwrite the slot-0 pet's saved Reactstate.
-		if petGUID == s.player.PetGUID && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_pet SET Reactstate = ? WHERE owner = ? AND slot = 0", spellOrAction, s.playerGUID)
-		}
-		s.debug("pet reaction state changed", "account", s.accountName, "pet", petGUID, "react", spellOrAction)
-	case actDisabled, actEnabled, actPassive:
-		// PetHandler.cpp:270-289: the spell arm drops silently ahead of the
-		// AI reaction on unknown spell ids, spells carrying an enemy-area
-		// implicit target (TARGET_UNIT_SRC_AREA_ENEMY/DEST_AREA_ENEMY/
-		// DEST_DYNOBJ_ENEMY, SharedDefines.h:1452-1464), unlearned spells,
-		// and passive spells — Go used to broadcast the reaction and a
-		// SpellGo visual for all of them. The gates run only with spell
-		// data present; without a DB the arm keeps its old visual-only
-		// behavior.
-		var spellInfo wotlk.Spell
-		haveSpellInfo := false
-		if s.server != nil && s.server.Data != nil {
-			si, found, spellErr := s.server.Data.Spell(spellOrAction)
-			if spellErr != nil || !found {
-				return true
-			}
-			for i := range si.Effects {
-				switch si.Effects[i].ImplicitTargetA {
-				case 15, 16, 28:
-					return true
+				for i := range si.Effects {
+					switch si.Effects[i].ImplicitTargetA {
+					case 15, 16, 28:
+						return
+					}
 				}
+				if si.Attributes&spellAttributePassive != 0 || !s.petKnowsSpell(ctx, motion, spellOrAction) {
+					return
+				}
+				spellInfo, haveSpellInfo = si, true
 			}
-			if si.Attributes&spellAttributePassive != 0 || !s.petKnowsSpell(ctx, motion, spellOrAction) {
-				return true
+			if !haveSpellInfo {
+				s.sendPetActionBarTalkGrowl(petGUID, motion, targetGUID)
+				if targetGUID != 0 && spellOrAction != 0 {
+					castTimeStamp := uint32(time.Now().UnixMilli())
+					spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+					goPkt := protocol.BuildSpellGo(petGUID, petGUID, 0, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
+					_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+					if s.server != nil {
+						s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
+					}
+				}
+				s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)
+				break
 			}
-			spellInfo, haveSpellInfo = si, true
-		}
-		if !haveSpellInfo {
-			s.sendPetActionBarTalkGrowl(petGUID, motion, targetGUID)
-			if targetGUID != 0 && spellOrAction != 0 {
-				castTimeStamp := uint32(time.Now().UnixMilli())
-				spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
-				goPkt := protocol.BuildSpellGo(petGUID, petGUID, 0, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
-				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+			// PetHandler.cpp:311-382: after the gates the arm casts for real
+			// (new Spell(pet, spellInfo, TRIGGERED_NONE) + CheckPetCast +
+			// prepare), not just the visual. CMSG_PET_ACTION carries no cast
+			// count, so the failure packets use 0 (Spell::SendPetCastResult
+			// writes the fresh Spell's m_cast_count).
+			castTarget := protocol.SpellTargetData{UnitGUID: targetGUID}
+			if targetGUID != 0 {
+				castTarget.Flags = protocol.SpellTargetFlagUnitWireMask
+			}
+			// PetHandler.cpp:304-310: ahead of the cast the pet leaves its
+			// stay/follow/return states and enters command-attack — the AI
+			// resets the rest after AttackStart.
+			var prevCommand uint8
+			if s.server != nil {
+				prevCommand = s.server.petCommandOnSpellCast(s.player.Map, s.player.InstanceID, petGUID)
+			}
+			if !s.checkPetCastGauntlet(ctx, motion, spellInfo, spellOrAction, castTarget, 0, false, true) {
+				// PetHandler.cpp:380-382: the cast failure resets the
+				// command-attack flag.
 				if s.server != nil {
-					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, s)
+					s.server.restorePetCommand(s.player.Map, s.player.InstanceID, petGUID, prevCommand)
+				}
+				return
+			}
+			// PetHandler.cpp:337-349: the talk/growl fires on SPELL_CAST_OK,
+			// ahead of prepare.
+			s.sendPetActionBarTalkGrowl(petGUID, motion, targetGUID)
+			// The UNIT_NOT_INFRONT auto-turn (PetHandler.cpp:320-336) has no Go
+			// twin — Go's motion model carries no facing. The failure-path
+			// ResetCooldown (PetHandler.cpp:376-377, same arm at :837-838) needs
+			// no twin: it runs only when !HasCooldown(spellid), and
+			// SpellHistory::ResetCooldown(spellId, update) returns immediately
+			// with no packet when the per-spell entry is absent
+			// (SpellHistory.cpp:432-439) — the arm is dead code in C++, so
+			// Go's omission is behaviorally exact.
+			if !s.executePetSpellWithOptions(ctx, motion, spellInfo, 0, castTarget, false) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(0, spellOrAction, spellFailedBadTargets), true)
+				// PetHandler.cpp:380-382: the cast failure resets the
+				// command-attack flag.
+				if s.server != nil {
+					s.server.restorePetCommand(s.player.Map, s.player.InstanceID, petGUID, prevCommand)
+				}
+			} else if targetGUID != 0 && motion.TargetGUID != targetGUID && s.server != nil {
+				// PetHandler.cpp:351-365: after SPELL_CAST_OK the pet
+				// force-switches victim to the spell's unit target when it is
+				// not friendly to the owner (possessed/vehicle pets excluded in
+				// C++; Go's motion model has no such distinction).
+				if !s.isFriendlyToTarget(targetGUID, s.server.findSessionByGUID(targetGUID)) {
+					s.server.switchPetVictim(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
 				}
 			}
 			s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)
-			break
 		}
-		// PetHandler.cpp:311-382: after the gates the arm casts for real
-		// (new Spell(pet, spellInfo, TRIGGERED_NONE) + CheckPetCast +
-		// prepare), not just the visual. CMSG_PET_ACTION carries no cast
-		// count, so the failure packets use 0 (Spell::SendPetCastResult
-		// writes the fresh Spell's m_cast_count).
-		castTarget := protocol.SpellTargetData{UnitGUID: targetGUID}
-		if targetGUID != 0 {
-			castTarget.Flags = protocol.SpellTargetFlagUnitWireMask
-		}
-		// PetHandler.cpp:304-310: ahead of the cast the pet leaves its
-		// stay/follow/return states and enters command-attack — the AI
-		// resets the rest after AttackStart.
-		var prevCommand uint8
-		if s.server != nil {
-			prevCommand = s.server.petCommandOnSpellCast(s.player.Map, s.player.InstanceID, petGUID)
-		}
-		if !s.checkPetCastGauntlet(ctx, motion, spellInfo, spellOrAction, castTarget, 0, false, true) {
-			// PetHandler.cpp:380-382: the cast failure resets the
-			// command-attack flag.
-			if s.server != nil {
-				s.server.restorePetCommand(s.player.Map, s.player.InstanceID, petGUID, prevCommand)
-			}
-			return true
-		}
-		// PetHandler.cpp:337-349: the talk/growl fires on SPELL_CAST_OK,
-		// ahead of prepare.
-		s.sendPetActionBarTalkGrowl(petGUID, motion, targetGUID)
-		// The UNIT_NOT_INFRONT auto-turn (PetHandler.cpp:320-336) has no Go
-		// twin — Go's motion model carries no facing. The failure-path
-		// ResetCooldown (PetHandler.cpp:376-377, same arm at :837-838) needs
-		// no twin: it runs only when !HasCooldown(spellid), and
-		// SpellHistory::ResetCooldown(spellId, update) returns immediately
-		// with no packet when the per-spell entry is absent
-		// (SpellHistory.cpp:432-439) — the arm is dead code in C++, so
-		// Go's omission is behaviorally exact.
-		if !s.executePetSpellWithOptions(ctx, motion, spellInfo, 0, castTarget, false) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_PET_CAST_FAILED), buildCastFailed(0, spellOrAction, spellFailedBadTargets), true)
-			// PetHandler.cpp:380-382: the cast failure resets the
-			// command-attack flag.
-			if s.server != nil {
-				s.server.restorePetCommand(s.player.Map, s.player.InstanceID, petGUID, prevCommand)
-			}
-		} else if targetGUID != 0 && motion.TargetGUID != targetGUID && s.server != nil {
-			// PetHandler.cpp:351-365: after SPELL_CAST_OK the pet
-			// force-switches victim to the spell's unit target when it is
-			// not friendly to the owner (possessed/vehicle pets excluded in
-			// C++; Go's motion model has no such distinction).
-			if !s.isFriendlyToTarget(targetGUID, s.server.findSessionByGUID(targetGUID)) {
-				s.server.switchPetVictim(ctx, s.player.Map, s.player.InstanceID, petGUID, targetGUID)
-			}
-		}
-		s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)
+	}
+	for _, target := range s.petActionFanOutTargets(motion) {
+		run(target, target.GUID)
 	}
 	return true
 }
