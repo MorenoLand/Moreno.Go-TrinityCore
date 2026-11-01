@@ -772,16 +772,18 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 // jump pick, which builds candidates outside friendlyScanCandidates and
 // never calls friendlyAssistOK: a player-controlled candidate with a
 // resolving owner takes the PvP case (owner reaction + assist PvP block),
-// a wild candidate (flag unset) takes the PvC case (TREAT_AS_RAID_UNIT /
-// CAN_ASSIST unless the spell carries ASSIST_IGNORE_IMMUNE_FLAG) followed
-// by the non-friendly both-directions gate (sessionChainWildAssist3149),
-// and a player-controlled candidate with no resolving owner keeps the
-// faction gate — the flag, not resolvability, selects the case. The
-// target-IsPvP exemption has no creature-side Go model, like the friendly
-// twin.
+// an undecided or unresolvable owned candidate takes the both-directions
+// 3149 gate (sessionChainOwnedAssist3149), a wild candidate (flag unset)
+// takes the PvC case (TREAT_AS_RAID_UNIT / CAN_ASSIST unless the spell
+// carries ASSIST_IGNORE_IMMUNE_FLAG) followed by the non-friendly
+// both-directions gate (sessionChainWildAssist3149), and a
+// player-controlled candidate with no owner GUID keeps the faction gate.
+// The flag, not resolvability, selects the case. The target-IsPvP
+// exemption has no creature-side Go model, like the friendly twin.
 func (s *session) chainCreatureAssistAlly(spell wotlk.Spell, unitFlags, typeFlags uint32, ownerGUID uint64, candFaction uint32, factionAlly bool) (bool, bool) {
 	if unitFlags&unitFlagPlayerControlled != 0 && ownerGUID != 0 {
-		if ownerSess := s.server.findSessionByGUID(ownerGUID); ownerSess != nil {
+		ownerSess := s.server.findSessionByGUID(ownerGUID)
+		if ownerSess != nil {
 			if playerOwnedCreatureAssistPvPBlocked(s, ownerSess) {
 				return false, true
 			}
@@ -789,7 +791,7 @@ func (s *session) chainCreatureAssistAlly(spell wotlk.Spell, unitFlags, typeFlag
 				return reactionAlly, false
 			}
 		}
-		return factionAlly, false
+		return s.sessionChainOwnedAssist3149(candFaction, ownerSess, factionAlly), false
 	}
 	if unitFlags&unitFlagPlayerControlled == 0 &&
 		spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
@@ -842,6 +844,90 @@ func (s *session) sessionChainWildAssist3149(candFaction uint32, factionAlly boo
 				rank = 3
 			}
 			reverseHostile = rank < 3
+		}
+	}
+	return !(forwardHostile && reverseHostile)
+}
+
+// sessionChainOwnedAssist3149 mirrors the non-friendly gate of
+// WorldObject::IsValidAssistTarget (Object.cpp:3149) for a player caster's
+// chain jump pick against a player-owned creature candidate whose decided
+// reaction arms (same owner/duel/group/FFA) did not fire, or whose owner
+// does not resolve: it refuses only when BOTH reactions are below neutral,
+// replacing the single-direction isHostileFaction proxy. The candidate
+// carries UNIT_FLAG_PLAYER_CONTROLLED, so the player-controlled branch of
+// GetReactionTo (Object.cpp:2744-2785) fires on both directions even when
+// the owner session is nil (the candidate creature itself is the
+// player-controlled target unit). Forward (caster -> candidate): when the
+// candidate faction can have reputation the binary at-war arm decides —
+// hostile on contested-guard plus caster contested-PvP, or caster at war
+// with the candidate faction, friendly otherwise (standing alone never
+// refuses); when it cannot, a resolving owner's saved rank against the
+// caster faction, clamped down to neutral at war (GetFactionReactionTo,
+// Object.cpp:2817-2823), decides, and an unresolvable owner falls through
+// to the template rank. Reverse (candidate -> caster): a resolving owner
+// takes the same binary arm against the caster faction (contested-guard
+// plus owner contested-PvP, or owner at war); otherwise the caster's saved
+// rank against the candidate faction, clamped down to neutral at war,
+// decides, as in the wild twin. A reputation faction with no saved row
+// keeps the template rank, mirroring the wild twin (Initialize normally
+// guarantees rep-faction rows). Forced ranks, the caster's and target's
+// IGNORE_REPUTATION flags, and the PvP-case block terms for an
+// unresolvable owner have no Go model here; data gaps fall back to the
+// passed-in faction gate.
+func (s *session) sessionChainOwnedAssist3149(candFaction uint32, ownerSess *session, factionAlly bool) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return factionAlly
+	}
+	casterTplID := s.effectiveFactionTemplate(s.player.Race)
+	casterTpl, casterFound, err := s.server.Data.FactionTemplate(casterTplID)
+	if err != nil || !casterFound {
+		return factionAlly
+	}
+	candTpl, candFound, err := s.server.Data.FactionTemplate(candFaction)
+	if err != nil || !candFound {
+		return factionAlly
+	}
+	forwardHostile := commonFactionRankHostile(casterTpl, candTpl)
+	reverseHostile := commonFactionRankHostile(candTpl, casterTpl)
+	casterAtWar := func(factionID uint32) bool {
+		saved, ok := playerReputationMap(s.player.Reputations)[factionID]
+		return ok && saved.Flags&factionFlagAtWar != 0
+	}
+	ownerAtWar := func(factionID uint32) bool {
+		if ownerSess == nil || ownerSess.player == nil {
+			return false
+		}
+		saved, ok := playerReputationMap(ownerSess.player.Reputations)[factionID]
+		return ok && saved.Flags&factionFlagAtWar != 0
+	}
+	clampedRankHostile := func(reps map[uint32]playerReputation, factionID uint32) (bool, bool) {
+		saved, ok := reps[factionID]
+		if !ok {
+			return false, false
+		}
+		rank := reputationRank(int64(totalReputationStanding(saved)))
+		if saved.Flags&factionFlagAtWar != 0 && rank > 3 {
+			rank = 3
+		}
+		return rank < 3, true
+	}
+	if s.server.factionCanHaveReputation(candTpl.Faction) {
+		forwardHostile = s.server.creatureContestedHostile(candFaction, s) || casterAtWar(candTpl.Faction)
+	} else if ownerSess != nil && ownerSess.player != nil && s.server.factionCanHaveReputation(casterTpl.Faction) {
+		if s.server.creatureContestedHostile(casterTplID, ownerSess) {
+			forwardHostile = true
+		} else if hostile, ok := clampedRankHostile(playerReputationMap(ownerSess.player.Reputations), casterTpl.Faction); ok {
+			forwardHostile = hostile
+		}
+	}
+	if ownerSess != nil && ownerSess.player != nil && s.server.factionCanHaveReputation(casterTpl.Faction) {
+		reverseHostile = s.server.creatureContestedHostile(casterTplID, ownerSess) || ownerAtWar(casterTpl.Faction)
+	} else if s.server.factionCanHaveReputation(candTpl.Faction) {
+		if s.server.creatureContestedHostile(candFaction, s) {
+			reverseHostile = true
+		} else if hostile, ok := clampedRankHostile(playerReputationMap(s.player.Reputations), candTpl.Faction); ok {
+			reverseHostile = hostile
 		}
 	}
 	return !(forwardHostile && reverseHostile)
