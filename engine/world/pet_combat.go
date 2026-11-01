@@ -2259,10 +2259,11 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1641-1642): the CanSeeOrDetect
 	// visibility gate. C++ CanDetect (Object.cpp:1664-1680) routes pets
 	// through their master's detection ("Pets don't have detection, they
-	// use the detection of their masters"), so the owner session's
+	// use the detection of their masters"), so the controller session's
 	// detect core is the exact twin: canDetectStealthOf +
-	// canDetectInvisibilityOfPlayer, with the owner position, level and
-	// arcs as the seer read, matching C++'s seer = controller.
+	// canDetectInvisibilityOfPlayer, with the seer position, level and
+	// arcs as the seer read, matching C++'s seer = controller
+	// (GetCharmerOrOwner, charmer first).
 	// Implicit is false for a creature caster (Spell.cpp:5372), so no
 	// stealth exemption. Self targets pass automatically (a creature
 	// GUID never resolves to a session); creature targets pass (motions
@@ -2271,9 +2272,24 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	// despawn legs stay out, as on the player path; the GM-visibility
 	// leg rides the GM/invisibility arm below.
 	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && s.server != nil {
-		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-			if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
-				return false
+		// Seer is the single charmer-first controller unit (Object.cpp:
+		// 1664-1680, GetCharmerOrOwner), mirroring the wild twin: a
+		// charmed pet judges through its charmer session, not the owner
+		// session driving the cast; a creature charmer resolves to no
+		// session, so the gate fails open (no creature detect model).
+		seer := s
+		if motion.CharmerGUID != 0 {
+			if cs := s.server.findSessionByGUID(motion.CharmerGUID); cs != nil {
+				seer = cs
+			} else {
+				seer = nil
+			}
+		}
+		if seer != nil {
+			if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				if !seer.canDetectStealthOf(ts) || !seer.canDetectInvisibilityOfPlayer(ts) {
+					return false
+				}
 			}
 		}
 	}
@@ -2361,11 +2377,18 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	}
 	// SpellInfo::CheckTarget (SpellInfo.cpp:1757-1766): target aura-state
 	// requirements. C++ skips both arms for vehicle casters and when the
-	// target is the caster's charmer/owner — the pet's owner (or charmer)
-	// is exempt here. Documented delta: targetHasAuraState filters
-	// per-caster attributed auras on the owner's GUID, while pet-applied
-	// auras record the pet's motion GUID as caster.
-	charmerExempt := targetGUID == motion.OwnerGUID || (motion.CharmOwnerGUID != 0 && targetGUID == motion.CharmOwnerGUID)
+	// target is the caster's charmer/owner. The exemption is a single
+	// unit, charmer-first (Unit.h:1175, IsCharmed() ? GetCharmer() :
+	// GetOwner()) — not owner-or-banked-owner: CharmOwnerGUID is the
+	// banked pre-charm owner, so a charmed pet exempts its charmer and
+	// no longer its original owner. Documented delta: targetHasAuraState
+	// filters per-caster attributed auras on the owner's GUID, while
+	// pet-applied auras record the pet's motion GUID as caster.
+	charmerOrOwner := motion.OwnerGUID
+	if motion.CharmerGUID != 0 {
+		charmerOrOwner = motion.CharmerGUID
+	}
+	charmerExempt := targetGUID == charmerOrOwner
 	if !charmerExempt {
 		if spell.TargetAuraState != 0 && !s.targetHasAuraState(ctx, targetGUID, spell.TargetAuraState, spell) {
 			return false
