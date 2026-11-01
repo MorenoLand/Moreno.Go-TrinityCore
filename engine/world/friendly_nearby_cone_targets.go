@@ -306,6 +306,7 @@ type friendlyCandidate struct {
 	flagsExtra    uint32
 	health        uint32
 	faction       uint32 // creatures: template faction
+	typeFlags     uint32 // creatures: template type_flags (PvC TREAT_AS_RAID_UNIT/CAN_ASSIST gate)
 	reactionAlly  bool   // players: GetReactionTo player-player reaction (duel/group/FFA arms, not raw faction alliance)
 	assistBlocked bool   // players: IsValidAssistTarget PvP tail (dueling, FFA-from-outside, sanctuary-PvP); self exempt
 	class         uint8  // players only; 0 = unknown (creatures)
@@ -349,7 +350,7 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 		}
 		visit(friendlyCandidate{guid: motion.GUID, mapID: motion.Map, instanceID: motion.InstanceID,
 			x: motion.X, y: motion.Y, z: motion.Z, unitFlags: motion.UnitFlags, flagsExtra: motion.FlagsExtra,
-			health: motion.Health, faction: motion.Faction, ownerGUID: owner, entry: motion.Entry,
+			health: motion.Health, faction: motion.Faction, typeFlags: motion.TypeFlags, ownerGUID: owner, entry: motion.Entry,
 			reach: motion.CombatReach})
 	}
 	s.server.sessionsMu.RLock()
@@ -369,18 +370,18 @@ func (s *session) friendlyScanCandidates(ctx context.Context, cx, cy, radius flo
 		return
 	}
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth, COALESCE(cmi.CombatReach, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id LEFT JOIN creature_model_info cmi ON t.modelid1 = cmi.DisplayID WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, mapID, float64(cx-radius), float64(cx+radius), float64(cy-radius), float64(cy+radius))
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth, COALESCE(cmi.CombatReach, 0), COALESCE(t.type_flags, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id LEFT JOIN creature_model_info cmi ON t.modelid1 = cmi.DisplayID WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, mapID, float64(cx-radius), float64(cx+radius), float64(cy-radius), float64(cy+radius))
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
-				var low, entry, rowMap, faction, unitFlags, flagsExtra, health int64
+				var low, entry, rowMap, faction, unitFlags, flagsExtra, health, typeFlags int64
 				var x, y, z, reach float64
-				if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health, &reach) == nil {
+				if rows.Scan(&low, &entry, &rowMap, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health, &reach, &typeFlags) == nil {
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						visit(friendlyCandidate{guid: guid, mapID: uint32(rowMap), instanceID: instanceID,
 							x: float32(x), y: float32(y), z: float32(z), unitFlags: uint32(unitFlags),
-							flagsExtra: uint32(flagsExtra), health: uint32(health), faction: uint32(faction), entry: uint32(entry),
+							flagsExtra: uint32(flagsExtra), health: uint32(health), faction: uint32(faction), typeFlags: uint32(typeFlags), entry: uint32(entry),
 							reach: float32(reach)})
 					}
 				}
@@ -424,8 +425,7 @@ func (s *session) friendlyAssistOK(spell wotlk.Spell, c friendlyCandidate, caste
 	// mate's pet whose owner is dueling someone else is still refused.
 	// An owner session that cannot resolve keeps the faction gate: the
 	// flag itself, not resolvability, selects the PvP case. Wild
-	// candidates (flag unset, or no owner) keep the faction gate here;
-	// the PvC type-flags gate is not yet ported for this helper.
+	// candidates (flag unset) take the PvC gate below instead.
 	if s.server != nil && c.unitFlags&unitFlagPlayerControlled != 0 && c.ownerGUID != 0 {
 		if ownerSess := s.server.findSessionByGUID(c.ownerGUID); ownerSess != nil {
 			if playerOwnedCreatureAssistPvPBlocked(s, ownerSess) {
@@ -435,6 +435,19 @@ func (s *session) friendlyAssistOK(spell wotlk.Spell, c friendlyCandidate, caste
 				return reactionAlly
 			}
 		}
+	}
+	// IsValidAssistTarget PvC arm (Object.cpp:3178-3183): the session
+	// caster is a player, so a creature candidate without
+	// UNIT_FLAG_PLAYER_CONTROLLED is wild and passes only with
+	// TREAT_AS_RAID_UNIT/CAN_ASSIST, unless the spell carries
+	// ASSIST_IGNORE_IMMUNE_FLAG. Player-controlled candidates take
+	// the PvP case above, not this gate. The target-IsPvP exemption
+	// has no creature-side Go model, like the explicit-target twin
+	// and the friendly-area arm.
+	if c.unitFlags&unitFlagPlayerControlled == 0 &&
+		spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+		c.typeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
+		return false
 	}
 	return allyOf(c.faction)
 }
