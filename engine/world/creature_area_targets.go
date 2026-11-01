@@ -806,7 +806,9 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 		// aggro pick (creaturemotion.go canCreatureStartAttack), with
 		// the player-owned reaction arms of the chain twin: a duel
 		// opponent is swept even same-faction, a cross-faction
-		// groupmate is excluded, both-FFA is swept.
+		// groupmate is excluded, both-FFA is swept unless either side
+		// is in sanctuary, and an undecided cross-faction target
+		// sweeps only when PvP-flagged (chainPlayerAttackHostile tail).
 		if !chainPlayerAttackHostile(casterOwner, targetSession, s.isAttackableFaction(motion.Faction, candidate)) {
 			continue
 		}

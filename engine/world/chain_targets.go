@@ -959,7 +959,7 @@ func (s *session) sessionChainOwnedAssist3149(candFaction uint32, ownerSess *ses
 // IGNORE_REPUTATION flags have no Go model here, as in the creature
 // twins; data gaps fall back to the passed-in faction gate. The ENEMY
 // arm does not use this helper: IsValidAttackTarget is not the 3149
-// gate, and its PvP-flag tail (Object.cpp:3073-3078) stays unmodeled.
+// gate; the ENEMY arm's PvP-flag tail (Object.cpp:3073-3078) rides chainPlayerAttackHostile instead.
 func (s *session) sessionChainPlayerAssist3149(targetSess *session, factionAlly bool) bool {
 	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil || targetSess == nil || targetSess.player == nil {
 		return factionAlly
@@ -1136,6 +1136,27 @@ func chainCreatureAttackHostile(casterSess *session, candOwnerGUID uint64, unitF
 	return factionHostile
 }
 
+// chainPlayerAttackPvPTail mirrors the player-vs-player tail of
+// WorldObject::IsValidAttackTarget (Object.cpp:3073-3078), the twin of
+// explicitTargetAttackPvPBlocked for chain/area picks: sanctuary on
+// either side blocks (Object.cpp:3065, ahead of the tail), otherwise the
+// target must be PvP-flagged or both sides FFA-flagged. The
+// UNIT_BYTE2_FLAG_UNK1 fallback term is dead in C++ (read only at
+// Object.cpp:3079-3080, never set), so it is not modeled, as in the
+// explicit twin.
+func chainPlayerAttackPvPTail(casterSess, targetSess *session) bool {
+	if casterSess == nil || casterSess.player == nil || targetSess == nil || targetSess.player == nil {
+		return false
+	}
+	if casterSess.player.PVPFlags&pvpFlagSanctuary != 0 || targetSess.player.PVPFlags&pvpFlagSanctuary != 0 {
+		return false
+	}
+	if targetSess.player.PVPFlags&pvpFlagPvP != 0 {
+		return true
+	}
+	return casterSess.player.PVPFlags&pvpFlagFFA != 0 && targetSess.player.PVPFlags&pvpFlagFFA != 0
+}
+
 // chainPlayerAttackHostile is the player-candidate twin of
 // chainCreatureAttackHostile: WorldObject::IsValidAttackTarget
 // (Spell.cpp:8336) for a chain jump pick refuses friendly targets
@@ -1143,21 +1164,31 @@ func chainCreatureAttackHostile(casterSess *session, candOwnerGUID uint64, unitF
 // (Object.cpp:2744-2762) make a duel opponent hostile even same-faction,
 // a same-group member friendly even cross-faction, and a both-FFA pair
 // hostile, all ahead of the faction-template gate; the duel arm
-// (Object.cpp:3062) then admits the opponent outright. A player-owned
-// caster with no decided arm keeps the faction attack gate
-// (isAttackableFaction: template hostility plus the PvC at-war term,
-// which is the wild-caster verdict since the at-war arm at
+// (Object.cpp:3062) then admits the opponent outright, ahead of the
+// sanctuary arm (Object.cpp:3065). A decided both-FFA pair and an
+// undecided candidate take the PvP-flag tail behind the faction gate
+// (chainPlayerAttackPvPTail): sanctuary blocks, a PvP-flagged target
+// admits, both-FFA admits, and a non-PvP cross-faction target no longer
+// jumps. A player-owned caster with no decided arm keeps the faction
+// attack gate (isAttackableFaction: template hostility plus the PvC
+// at-war term, which is the wild-caster verdict since the at-war arm at
 // Object.cpp:3036-3053 fires only when exactly one side has an affecting
-// player). The sanctuary arm (Object.cpp:3065) and the PvP-flag tail
-// (Object.cpp:3073-3078) stay unmodeled residuals, like the creature twin.
+// player). The creature twin keeps the tail unmodeled (no creature
+// sanctuary byte in the sweep model).
 func chainPlayerAttackHostile(casterSess, targetSess *session, factionHostile bool) bool {
-	if casterSess == nil {
+	if casterSess == nil || casterSess.player == nil || targetSess == nil || targetSess.player == nil {
 		return factionHostile
 	}
 	if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterSess, targetSess); decided {
-		return !reactionAlly
+		if reactionAlly {
+			return false
+		}
+		if casterSess.duelPartner != 0 && casterSess.duelPartner == targetSess.playerGUID && casterSess.player.DuelTeam != 0 && targetSess.player.DuelTeam != 0 {
+			return true
+		}
+		return chainPlayerAttackPvPTail(casterSess, targetSess)
 	}
-	return factionHostile
+	return factionHostile && chainPlayerAttackPvPTail(casterSess, targetSess)
 }
 
 // chainCandidates collects units around the primary target within radius that
@@ -1328,8 +1359,10 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		// group arm precedes the FFA arm, so a same-group FFA pair
 		// stays friendly). An undecided ALLY/PARTY/RAID candidate
 		// takes the both-directions 3149 gate
-		// (sessionChainPlayerAssist3149); the ENEMY arm keeps the
-		// decided/team verdict as its attackable proxy, as before.
+		// (sessionChainPlayerAssist3149); the ENEMY arm takes
+		// chainPlayerAttackHostile over the decided/team verdict,
+		// so the sanctuary/PvP-flag tail (Object.cpp:3065/3073-3078)
+		// refuses non-PvP cross-faction picks the proxy admitted.
 		sameGroup := s.groupID != 0 && s.groupID == targetSession.groupID
 		duelOpponent := s.duelPartner != 0 && s.duelPartner == targetSession.playerGUID && s.player.DuelTeam != 0 && targetSession.player.DuelTeam != 0
 		bothFFA := s.player.PVPFlags&pvpFlagFFA != 0 && targetSession.player.PVPFlags&pvpFlagFFA != 0
@@ -1349,6 +1382,9 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		}
 		if !decided && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
 			playerAlly = s.sessionChainPlayerAssist3149(targetSession, playerAlly)
+		}
+		if checkType == targetCheckEnemy {
+			playerAlly = !chainPlayerAttackHostile(s, targetSession, !playerAlly)
 		}
 		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, playerAlly, s.explicitTargetAssistPvPBlocked(targetSession), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
