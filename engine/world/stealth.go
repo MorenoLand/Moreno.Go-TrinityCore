@@ -1025,6 +1025,26 @@ func (s *session) playerSeerSpellGateVisibleToPlayer(ts *session) bool {
 	return s.canDetectStealthOf(ts) && s.canDetectInvisibilityOfPlayer(ts)
 }
 
+// playerSeerMovedUnitGUID mirrors Unit::GetUnitBeingMoved for a player
+// seer (Player::CanAlwaysSee, Player.cpp:22571-22575): the possessed
+// creature while possessing (SetClientControl -> SetMovedUnit,
+// Player.cpp:24239-24272), else the driven vehicle while driving a
+// control seat (moverGUID's vehicle arm), else 0 — the self case is
+// already true at Object.cpp:1575 and never needs the leg, and 0
+// keeps a self-moving seer from matching a motion GUID numerically.
+func (s *session) playerSeerMovedUnitGUID() uint64 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if g := s.possessedCreatureGUID(); g != 0 {
+		return g
+	}
+	if s.controlsVehicle() {
+		return s.player.VehicleGUID
+	}
+	return 0
+}
+
 // playerSeerSpellGateVisibleToCreature is the creature-target twin: GM leg
 // (script-hidden creatures need a GM-mode seer), ghost leg (alive seers
 // cannot target ghost-only creatures, ghost seers cannot target alive-only
@@ -1039,11 +1059,18 @@ func (s *Server) playerSeerSpellGateVisibleToCreature(seer *session, tm *creatur
 	if s.spellGatePlayerNeverSeesCreature(seer, tm) {
 		return false
 	}
-	// CanAlwaysSee farsight leg (Player.cpp:22571-22580), as on the
-	// player-target twin; the being-moved vehicle leg has no Go model
-	// (sessions carry no vehicle GUID), while a possessed target is
-	// already covered by the charmer leg below.
+	// CanAlwaysSee legs (Player.cpp:22571-22580): the farsight
+	// viewpoint, as on the player-target twin, and the unit being
+	// moved (GetUnitBeingMoved, Unit.h:1203) via
+	// playerSeerMovedUnitGUID — a driven vehicle or a possessed
+	// creature. A possessed target is also covered by the charmer leg
+	// below; the moved-unit leg is what carries the driven-vehicle
+	// case. The stale "sessions carry no vehicle GUID" note is
+	// corrected: player.VehicleGUID plus moverGUID carry it.
 	if seer.player.FarsightGUID == tm.GUID {
+		return true
+	}
+	if seer.playerSeerMovedUnitGUID() == tm.GUID {
 		return true
 	}
 	if s.creatureOwnerGroupVisibleFor(seer, tm) {

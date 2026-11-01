@@ -4494,7 +4494,16 @@ func canSeePlayer(observer, target *session) bool {
 	if teamForRace(observer.player.Race) != teamForRace(target.player.Race) {
 		return false
 	}
-	return observer.groupID != 0 && observer.groupID == target.groupID && observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
+	// Ghost-branch group arm (Player.cpp:2525-2532, IsGroupVisibleFor
+	// default): same subgroup, not just the same group — group-ID
+	// equality let cross-subgroup raid members see the ghost. The
+	// sessionsInSameGroupWith twin (stealth.go) is the
+	// IsInSameGroupWith read the spell-gate ghost leg already uses.
+	srv := observer.server
+	if srv == nil {
+		srv = target.server
+	}
+	return srv.sessionsInSameGroupWith(observer, target) && observer.canDetectInvisibilityOfPlayer(target) && observer.canDetectStealthOf(target)
 }
 
 func playerFieldBytesValue(state playerState) uint32 {
