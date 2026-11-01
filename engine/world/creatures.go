@@ -73,6 +73,8 @@ type creatureSpawn struct {
 	TransportY       float32
 	TransportZ       float32
 	TransportO       float32
+	FlagsExtra       uint32
+	TypeFlags        uint32
 }
 
 func creatureSpawnHealth(regenerate bool, current, maximum uint32) uint32 {
@@ -134,7 +136,8 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		COALESCE(ca.emote, cta.emote, 0),
 		COALESCE(eq.ItemID1, 0),
 		COALESCE(eq.ItemID2, 0),
-		COALESCE(eq.ItemID3, 0)
+		COALESCE(eq.ItemID3, 0),
+		COALESCE(t.flags_extra, 0), COALESCE(t.type_flags, 0)
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		LEFT JOIN creature_addon AS ca ON ca.guid = c.guid
@@ -157,7 +160,8 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		fallbackQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
 			COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), 1),
 			t.faction, t.npcflag, t.unit_flags, t.dynamicflags,
-			t.maxlevel, c.curhealth, t.RegenHealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime
+			t.maxlevel, c.curhealth, t.RegenHealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime,
+			COALESCE(t.flags_extra, 0), COALESCE(t.type_flags, 0)
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
 			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
@@ -177,9 +181,9 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		spawns := make([]creatureSpawn, 0)
 		count := 0
 		for rows.Next() {
-			var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack int64
+			var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, flagsExtra, typeFlags int64
 			var x, y, z, orientation, scale, walkSpeed, runSpeed float64
-			if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &walkSpeed, &runSpeed, &attackTime, &rangedAttack); err != nil {
+			if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &flagsExtra, &typeFlags); err != nil {
 				return nil, count, err
 			}
 			visRange := distance
@@ -189,7 +193,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			if math.Hypot(x-float64(state.X), y-float64(state.Y)) > visRange || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 				continue
 			}
-			spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: 1, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack)}
+			spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: 1, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), FlagsExtra: uint32(flagsExtra), TypeFlags: uint32(typeFlags)}
 			spawns = append(spawns, spawn)
 			count++
 		}
@@ -217,6 +221,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 				count--
 				continue
 			}
+			if isGhost && !seesHidden && !s.creatureVisibleToGhostSeer(state, &spawns[index]) {
+				count--
+				continue
+			}
 			updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawns[index], observer))
 		}
 		packet, err := updates.BuildPacket(0)
@@ -225,9 +233,9 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	spawns := make([]creatureSpawn, 0)
 	count := 0
 	for rows.Next() {
-		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3 int64
+		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3, flagsExtra, typeFlags int64
 		var x, y, z, orientation, scale, hoverHeight, walkSpeed, runSpeed float64
-		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3); err != nil {
+		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3, &flagsExtra, &typeFlags); err != nil {
 			return nil, count, err
 		}
 		visRange := distance
@@ -237,7 +245,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		if math.Hypot(x-float64(state.X), y-float64(state.Y)) > visRange || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 			continue
 		}
-		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3)}
+		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3), FlagsExtra: uint32(flagsExtra), TypeFlags: uint32(typeFlags)}
 		spawns = append(spawns, spawn)
 		count++
 	}
@@ -265,10 +273,46 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			count--
 			continue
 		}
+		if isGhost && !seesHidden && !s.creatureVisibleToGhostSeer(state, &spawns[index]) {
+			count--
+			continue
+		}
 		updates.AddUpdateBlock(buildCreatureUpdate(ctx, spawns[index], observer))
 	}
 	packet, err := updates.BuildPacket(0)
 	return packet, count, err
+}
+
+// creatureVisibleToGhostSeer judges one nearby-creature row for a ghost
+// seer (Object.cpp:1584-1601 corpse leg, 1632-1647 ghost leg). Ghost-visible
+// classes pass outright (Creature.cpp:1142, 1174-1177): spirit healers/guides
+// (live npcflag 0xC000), flags_extra CREATURE_FLAG_EXTRA_GHOST_VISIBILITY
+// (0x400), and type_flags CREATURE_TYPE_FLAG_GHOST_VISIBLE (0x2, the
+// ALIVE|GHOST class). An ALIVE-only row reaches the ghost only through the
+// corpse leg: the seer's corpse within sight range of both the seer and the
+// creature (2D, IsWithinDist with is3D=false). The sight-range skip C++ pairs
+// with the leg (corpseCheck bypassing the viewpoint distance check) is NOT
+// ported, as on the player path: the row already passed the seer-target
+// distance gate, and dropping it would send creatures up to twice the range.
+func (s *Server) creatureVisibleToGhostSeer(state playerState, spawn *creatureSpawn) bool {
+	if spawn == nil {
+		return false
+	}
+	if spawn.FlagsExtra&0x400 != 0 || spawn.NPCFlags&0xC000 != 0 || spawn.TypeFlags&0x2 != 0 {
+		return true
+	}
+	if !state.hasCorpse {
+		return false
+	}
+	sightRange := s.visibilityRangeForMap(state.Map)
+	if s.creatureScriptFarVisible(state.Map, state.InstanceID, spawn.GUID, spawn.Entry) {
+		sightRange = maxVisibilityDistance
+	}
+	if sightRange <= 0 {
+		return false
+	}
+	return math.Hypot(float64(state.corpseX-state.X), float64(state.corpseY-state.Y)) <= sightRange &&
+		math.Hypot(float64(state.corpseX-spawn.X), float64(state.corpseY-spawn.Y)) <= sightRange
 }
 
 // creatureScriptHidden reports the Unit::SetVisible script override

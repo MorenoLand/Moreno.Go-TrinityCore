@@ -202,7 +202,8 @@ func (s *Server) loadTransportPassengers(ctx context.Context, transport *contine
 		COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), 1), t.faction, t.npcflag, t.unit_flags, t.dynamicflags,
 		t.maxlevel, c.curhealth, t.RegenHealth, c.curmana, t.scale, t.HoverHeight, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime,
 		COALESCE(ca.mount, cta.mount, 0), COALESCE(ca.bytes1, cta.bytes1, 0), COALESCE(ca.bytes2, cta.bytes2, 0), COALESCE(ca.emote, cta.emote, 0),
-		COALESCE(eq.ItemID1, 0), COALESCE(eq.ItemID2, 0), COALESCE(eq.ItemID3, 0)
+		COALESCE(eq.ItemID1, 0), COALESCE(eq.ItemID2, 0), COALESCE(eq.ItemID3, 0),
+		COALESCE(t.flags_extra, 0), COALESCE(t.type_flags, 0)
 		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
 		LEFT JOIN creature_addon AS ca ON ca.guid = c.guid
 		LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id
@@ -212,15 +213,15 @@ func (s *Server) loadTransportPassengers(ctx context.Context, transport *contine
 	if err == nil {
 		for creatures.Next() {
 			var spawn creatureSpawn
-			var guid, entry, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3 int64
+			var guid, entry, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3, flagsExtra, typeFlags int64
 			var x, y, z, orientation, scale, hoverHeight, walkSpeed, runSpeed float64
-			if creatures.Scan(&guid, &entry, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3) != nil {
+			if creatures.Scan(&guid, &entry, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3, &flagsExtra, &typeFlags) != nil {
 				continue
 			}
 			if _, waitingRespawn := respawning[uint32(guid)]; waitingRespawn {
 				continue
 			}
-			spawn = creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: transport.TransportMapID, X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3)}
+			spawn = creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: transport.TransportMapID, X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3), FlagsExtra: uint32(flagsExtra), TypeFlags: uint32(typeFlags)}
 			spawn.TransportGUID = transportGUID(transport.Spawn.GUID)
 			spawn.TransportX, spawn.TransportY, spawn.TransportZ, spawn.TransportO = spawn.X, spawn.Y, spawn.Z, spawn.Orientation
 			transport.StaticCreatures = append(transport.StaticCreatures, spawn)
