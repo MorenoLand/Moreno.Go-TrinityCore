@@ -159,6 +159,10 @@ func (s *Server) creatureAIAreaLegGroups(motion *creatureMotion, spell wotlk.Spe
 // (spellTargetUnitBlocked, Spell.cpp:8316/2980), hostile by the
 // creature-vs-creature template verdict (factionTemplatesHostile —
 // reputation terms are player-only in C++, Object.cpp:2708-2840),
+// except a player-owned candidate under a player-owned caster, which
+// takes the GetReactionTo arms via chainCreatureAttackHostile (chain twin:
+// the CvC arm, Object.cpp:3022-3024, needs BOTH sides non-player-controlled,
+// so it never fires for a player-owned candidate),
 // cylinder area (Spell.cpp:8409), cone arc + line of sight
 // (Spell.cpp:7479-7492). The merged player+creature MaxAffectedTargets
 // cap lives in creatureAIAreaEnemyTargets: C++ caps the merged area
@@ -251,6 +255,7 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 		}
 	}
 	s.motionMu.Unlock()
+	casterOwner := s.creatureAffectingPlayerSession(motion)
 	seen := map[uint64]struct{}{victim.GUID: {}, motion.GUID: {}}
 	var hits []uint64
 	for _, cand := range candidates {
@@ -263,7 +268,15 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 		if s.isTotemGUID(cand.GUID) || spellTargetUnitBlocked(spell, cand.UnitFlags, cand.FlagsExtra, false) {
 			continue
 		}
-		if !s.factionTemplatesHostile(motion.Faction, cand.Faction) {
+		hostile := s.factionTemplatesHostile(motion.Faction, cand.Faction)
+		if casterOwner != nil {
+			candOwner := cand.OwnerGUID
+			if candOwner == 0 {
+				candOwner = cand.CharmOwnerGUID
+			}
+			hostile = chainCreatureAttackHostile(casterOwner, candOwner, cand.UnitFlags, hostile)
+		}
+		if !hostile {
 			continue
 		}
 		// Per-leg geometry: cylinder + arc + LOS of any leg family.

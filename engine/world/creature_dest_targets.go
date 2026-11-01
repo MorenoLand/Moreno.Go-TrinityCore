@@ -1009,7 +1009,9 @@ func (s *Server) creatureEntryNearbyGOTarget(ctx context.Context, m *creatureMot
 // totem rejection + IsValidAttackTarget). The caster itself never selects
 // (IsValidAttackTarget fails for self). Players gate on isAttackableFaction
 // (the area-enemy twin's gate) and creatures on factionTemplatesHostile
-// (the creature-vs-creature verdict); static DB spawns without motions join
+// (the creature-vs-creature verdict, except player-owned candidates under a
+// player-owned caster, which take the GetReactionTo arms via
+// chainCreatureAttackHostile, the chain twin); static DB spawns without motions join
 // via the template-faction query (the area-enemy twin's leg). Distance is
 // GetDistance (Object.cpp:1175): 3D distance minus the candidate's combat
 // reach, floored at 0, strict less-than shrinking to the nearest match
@@ -1105,7 +1107,15 @@ func (s *Server) creatureHostileNearbyTarget(ctx context.Context, m *creatureMot
 			if !implicitEntryConditionsMet(condRows, false, cand.Entry, uint32(cand.GUID&0xFFFFFF)) {
 				continue
 			}
-			if !s.factionTemplatesHostile(m.Faction, cand.Faction) {
+			hostile := s.factionTemplatesHostile(m.Faction, cand.Faction)
+			if casterOwner != nil {
+				candOwner := cand.OwnerGUID
+				if candOwner == 0 {
+					candOwner = cand.CharmOwnerGUID
+				}
+				hostile = chainCreatureAttackHostile(casterOwner, candOwner, cand.UnitFlags, hostile)
+			}
+			if !hostile {
 				continue
 			}
 			consider(cand.GUID, cand.X, cand.Y, cand.Z, cand.CombatReach)
