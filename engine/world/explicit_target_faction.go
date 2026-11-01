@@ -565,6 +565,23 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 		return false
 	}
 	targetSess := s.server.findSessionByGUID(explicitUnitGUID)
+	// A player-owned creature target resolves to its owner's session:
+	// IsValidAttackTarget/IsValidAssistTarget run the both-affecting
+	// arms (Object.cpp:3028-3080, 3145-3171) on the two affecting
+	// players, not the single-direction faction verdict below, so
+	// duel-opponent pets, same-group pets, and non-PvP cross-faction
+	// pets no longer take the faction gate. An unresolvable owner
+	// keeps the faction verdict, as in the creature-caster twin.
+	var targetOwner *session
+	var ownedFaction uint32
+	ownedCreature := false
+	if targetSess == nil || targetSess.player == nil {
+		if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, explicitUnitGUID); tm != nil && tm.UnitFlags&unitFlagPlayerControlled != 0 && tm.OwnerGUID != 0 {
+			if owner := s.server.findSessionByGUID(tm.OwnerGUID); owner != nil && owner.player != nil {
+				targetOwner, ownedFaction, ownedCreature = owner, tm.Faction, true
+			}
+		}
+	}
 	friendly, hostile := false, false
 	duelHostile := false
 	if targetSess != nil && targetSess.player != nil {
@@ -588,17 +605,41 @@ func (s *session) explicitTargetFactionBlocked(mask uint32, explicitUnitGUID uin
 		friendly = s.server.isFriendlyFaction(tgt.Faction, caster)
 		hostile = !friendly && s.server.isHostileFaction(tgt.Faction, caster)
 	}
-	if mask&targetFlagUnitEnemy != 0 && !friendly && !s.explicitTargetAttackPvPBlocked(targetSess, duelHostile) {
-		return false
+	if mask&targetFlagUnitEnemy != 0 {
+		if ownedCreature {
+			if s.explicitOwnedCreatureAttackPasses(targetOwner, ownedFaction) {
+				return false
+			}
+		} else if !friendly && !s.explicitTargetAttackPvPBlocked(targetSess, duelHostile) {
+			return false
+		}
 	}
-	if mask&targetFlagUnitAlly != 0 && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) {
-		return false
+	if mask&targetFlagUnitAlly != 0 {
+		if ownedCreature {
+			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) {
+				return false
+			}
+		} else if !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) {
+			return false
+		}
 	}
-	if mask&targetFlagUnitParty != 0 && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, false) {
-		return false
+	if mask&targetFlagUnitParty != 0 {
+		if ownedCreature {
+			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) && (targetOwner == s || s.sameGroupAs(targetOwner, false)) {
+				return false
+			}
+		} else if !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, false) {
+			return false
+		}
 	}
-	if mask&targetFlagUnitRaid != 0 && !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, true) {
-		return false
+	if mask&targetFlagUnitRaid != 0 {
+		if ownedCreature {
+			if s.explicitOwnedCreatureAssistPasses(targetOwner, ownedFaction, !hostile) && (targetOwner == s || s.sameGroupAs(targetOwner, true)) {
+				return false
+			}
+		} else if !hostile && !s.explicitTargetAssistPvPBlocked(targetSess) && s.sameGroupAs(targetSess, true) {
+			return false
+		}
 	}
 	if mask&targetFlagUnitMinipet != 0 && s.player.CritterGUID != 0 && explicitUnitGUID == s.player.CritterGUID {
 		return false
@@ -632,6 +673,68 @@ func (s *session) explicitTargetPassengerBlocked(explicitUnitGUID uint64) bool {
 	}
 	seatID, _, _ := kit.GetSeatForPassenger(explicitUnitGUID)
 	return seatID < 0
+}
+
+// explicitOwnedCreatureAttackPasses mirrors the hostility terms of
+// WorldObject::IsValidAttackTarget (Object.cpp:3028-3080) for a player
+// caster against a player-owned creature target, behind the explicit
+// TARGET_FLAG_UNIT_ENEMY check. Both sides have an affecting player, so
+// the exactly-one arm (3036-3053) never fires: a decided reaction arm
+// (same owner, duel, same group, both FFA) decides first, an undecided
+// pair takes the both-directions friendly refusal
+// (creatureAffectingReactionFriendly on the caster's and the target's
+// effective templates), the duel arm admits outright ahead of sanctuary
+// (3062 before 3065), and the rest takes the owner-flag PvP tail
+// (target owner PvP-flagged, or both FFA). Sanctuary reads the caster
+// player's own byte here - the caster is a player session, unlike the
+// creature-caster twin - while the target creature's own sanctuary byte
+// has no Go model and fails open. Returns true when the cast may proceed.
+func (s *session) explicitOwnedCreatureAttackPasses(targetOwner *session, targetFaction uint32) bool {
+	if s == nil || s.player == nil || targetOwner == nil || targetOwner.player == nil {
+		return false
+	}
+	if reactionAlly, decided := playerOwnedCreatureReactionAlly(s, targetOwner); decided {
+		if reactionAlly {
+			return false
+		}
+		if s.duelPartner != 0 && s.duelPartner == targetOwner.playerGUID && s.player.DuelTeam != 0 && targetOwner.player.DuelTeam != 0 {
+			return true
+		}
+	} else {
+		casterFaction := s.effectiveFactionTemplate(s.player.Race)
+		if s.server.creatureAffectingReactionFriendly(s, targetOwner, casterFaction, targetFaction) || s.server.creatureAffectingReactionFriendly(targetOwner, s, targetFaction, casterFaction) {
+			return false
+		}
+	}
+	if s.player.PVPFlags&pvpFlagSanctuary != 0 {
+		return false
+	}
+	return chainCreatureAttackPvPTail(s, targetOwner)
+}
+
+// explicitOwnedCreatureAssistPasses mirrors the hostility terms of
+// WorldObject::IsValidAssistTarget (Object.cpp:3145-3171) for a player
+// caster against a player-owned creature target, behind the explicit
+// TARGET_FLAG_UNIT_ALLY/PARTY/RAID checks: the PvP case (a target owner
+// dueling someone else, or FFA-flagged while the caster is not - the
+// sanctuary term reads the target creature's own byte and stays
+// unmodeled, as in the creature-caster twin) refuses first, then a
+// decided reaction arm decides, and an undecided pair takes the
+// both-directions 3149 gate (sessionChainOwnedAssist3149) with the
+// single-direction faction verdict as its data-gap fallback. Returns
+// true when the cast may proceed; PARTY/RAID membership is the caller's
+// additional term (IsInPartyWith/IsInRaidWith on the owner, Unit.cpp:12126).
+func (s *session) explicitOwnedCreatureAssistPasses(targetOwner *session, targetFaction uint32, factionAlly bool) bool {
+	if s == nil || s.player == nil || targetOwner == nil || targetOwner.player == nil {
+		return false
+	}
+	if playerOwnedCreatureAssistPvPBlocked(s, targetOwner) {
+		return false
+	}
+	if reactionAlly, decided := playerOwnedCreatureReactionAlly(s, targetOwner); decided {
+		return reactionAlly
+	}
+	return s.sessionChainOwnedAssist3149(targetFaction, targetOwner, factionAlly)
 }
 
 // explicitTargetAttackPvPBlocked mirrors the player-vs-player tail of

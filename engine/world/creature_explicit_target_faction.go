@@ -417,6 +417,24 @@ func (s *Server) creatureAffectingReactionFriendly(fromOwner, toOwner *session, 
 		}
 		return !s.playerAtWarWith(fromOwner, toFaction)
 	}
+	return s.creatureFactionReactionFriendly(toOwner, fromFaction, toFaction)
+}
+
+// creatureFactionReactionFriendly mirrors the GetFactionReactionTo tail
+// (Object.cpp:2806-2840) of one reaction direction: a contested-guard
+// reacting faction is hostile to a contested-PvP other owner, a
+// reputation reacting faction reads the other owner's rank clamped to
+// neutral at war (only a friendly-or-better unclamped rank is friendly;
+// a missing saved row keeps the template leg), and any other pair reads
+// friendly when either template is friendly to the other. The
+// player-controlled branch's binary at-war arm is the caller's: a wild
+// reacting unit has no affecting player, so its forward reaction is
+// this tail alone, while creatureAffectingReactionFriendly runs the
+// binary arm first for a player-controlled reacting unit.
+func (s *Server) creatureFactionReactionFriendly(toOwner *session, fromFaction, toFaction uint32) bool {
+	if s == nil || s.Data == nil {
+		return false
+	}
 	if s.creatureContestedHostile(fromFaction, toOwner) {
 		return false
 	}
@@ -434,8 +452,10 @@ func (s *Server) creatureAffectingReactionFriendly(fromOwner, toOwner *session, 
 // creatureAttackCreaturePasses mirrors IsValidAttackTarget against a
 // creature target. Wild casters run the CvC arm (Object.cpp:3022-3024)
 // against a wild target: hostile in either direction; against a
-// player-owned target the exactly-one arm (Object.cpp:3036-3053) and its
-// friendly refusal apply instead (named residual, not yet ported). A
+// player-owned target the friendly refusal (GetFactionReactionTo legs
+// forward, template legs reverse) plus the exactly-one arm and the
+// TREAT_AS_RAID_UNIT caster arm apply instead
+// (wildCasterAttackOwnedPasses). A
 // player-controlled caster (pet/charmed) against a wild target runs the
 // PvC arm: the friendly refusal first, then the contested-guard carve-out
 // and the at-war term against the target's faction — with a reputation row
@@ -454,6 +474,11 @@ func (s *Server) creatureAttackCreaturePasses(m *creatureMotion, attacker *sessi
 	}
 	hostile := s.factionTemplatesHostile(m.Faction, tm.Faction) || s.factionTemplatesHostile(tm.Faction, m.Faction)
 	if attacker == nil || attacker.player == nil {
+		if tm.UnitFlags&unitFlagPlayerControlled != 0 && tm.OwnerGUID != 0 {
+			if targetOwner := s.findSessionByGUID(tm.OwnerGUID); targetOwner != nil && targetOwner.player != nil {
+				return s.wildCasterAttackOwnedPasses(m, tm, targetOwner)
+			}
+		}
 		return hostile
 	}
 	// Both-affecting arm (Object.cpp:3036-3053 fires only with exactly
@@ -493,6 +518,39 @@ func (s *Server) creatureAttackCreaturePasses(m *creatureMotion, attacker *sessi
 		return saved.Flags&factionFlagAtWar != 0
 	}
 	return hostile
+}
+
+// wildCasterAttackOwnedPasses mirrors IsValidAttackTarget
+// (Object.cpp:3028-3055) for a wild creature caster against a
+// player-owned creature target. The friendly refusal runs first: the
+// forward reaction is the GetFactionReactionTo tail only (the caster
+// has no affecting player, so the player-controlled branch never fires
+// and the owner's rank against the caster faction, clamped at war,
+// decides a reputation caster faction), while the reverse reaction is
+// the pure template leg (the wild caster has no affecting player for
+// the contested/reputation legs). Then the exactly-one arm: a
+// contested-guard caster against a contested-PvP owner admits outright,
+// and a saved owner row against the caster faction decides on the
+// at-war flag alone (not at war refuses, at war falls through); with no
+// saved row the arm falls through too, unlike the area-sweep twin's
+// template-gate fallback. Finally the TREAT_AS_RAID_UNIT caster arm
+// (3055) refuses, and anything left admits.
+func (s *Server) wildCasterAttackOwnedPasses(m, tm *creatureMotion, targetOwner *session) bool {
+	if s.creatureFactionReactionFriendly(targetOwner, m.Faction, tm.Faction) || s.factionTemplatesFriendly(tm.Faction, m.Faction) || s.factionTemplatesFriendly(m.Faction, tm.Faction) {
+		return false
+	}
+	if s.creatureContestedHostile(m.Faction, targetOwner) {
+		return true
+	}
+	if tpl, found, err := s.Data.FactionTemplate(m.Faction); err == nil && found && s.factionCanHaveReputation(tpl.Faction) {
+		if saved, ok := playerReputationMap(targetOwner.player.Reputations)[tpl.Faction]; ok && saved.Flags&factionFlagAtWar == 0 {
+			return false
+		}
+	}
+	if m.TypeFlags&creatureTypeFlagTreatAsRaidUnit != 0 {
+		return false
+	}
+	return true
 }
 
 // creatureHostileToTarget mirrors the caster→target direction of the
