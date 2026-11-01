@@ -1265,16 +1265,24 @@ func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *ac
 			// via playerAuraModifier(197) (combat.go), the session
 			// twin of the creature record's creatureAuraModifierSum.
 			if s.server != nil {
+				// Snapshot the enemy sessions under RLock first:
+				// applyAuraFromCaster resolves the totem caster via
+				// findSessionByGUID, which takes sessionsMu.RLock, so
+				// applying under this lock nests the read lock.
+				var debuffTargets []*session
 				s.server.sessionsMu.RLock()
 				for other := range s.server.sessions {
 					if other != nil && other.player != nil && other.player.Map == totem.Map && other.player.InstanceID == totem.InstanceID &&
 						totemWithinAreaRange(other.player.X, other.player.Y, other.player.Z, totem.X, totem.Y, totem.Z, float64(def.Radius)) &&
 						ownerPhase&other.currentPlayerPhaseMask() != 0 &&
 						s.totemEnemySessionHostile(other) {
-						other.applyAuraFromCaster(def.DebuffSpell, totem.DurationMs, totem.TotemGUID, ownerLevel)
+						debuffTargets = append(debuffTargets, other)
 					}
 				}
 				s.server.sessionsMu.RUnlock()
+				for _, other := range debuffTargets {
+					other.applyAuraFromCaster(def.DebuffSpell, totem.DurationMs, totem.TotemGUID, ownerLevel)
+				}
 			}
 		}
 		// UpdateTargetMap drop (SpellAuras.cpp:643): each pulse rebuilds

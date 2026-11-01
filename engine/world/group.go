@@ -886,14 +886,22 @@ func (s *Server) removeSessionFromGroup(member *session) {
 }
 
 func (s *Server) broadcastGroupList(g *groupState) {
+	// Snapshot the member sessions under RLock first: buildGroupList
+	// resolves each other member via findSessionByGUID, which takes
+	// sessionsMu.RLock, so building under this lock nests the read lock
+	// and deadlocks whenever a writer is queued behind it.
+	var targets []*session
 	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
 	for sess := range s.sessions {
 		if sess.groupID == g.ID && sess.worldReady.Load() {
-			counter := atomic.AddUint32(&g.counter, 1) - 1
-			pkt := buildGroupList(s, g, sess.playerGUID, counter)
-			_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), pkt, true)
+			targets = append(targets, sess)
 		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		counter := atomic.AddUint32(&g.counter, 1) - 1
+		pkt := buildGroupList(s, g, sess.playerGUID, counter)
+		_ = sess.write(uint16(protocol.OpcodeSMSG_GROUP_LIST), pkt, true)
 	}
 }
 
