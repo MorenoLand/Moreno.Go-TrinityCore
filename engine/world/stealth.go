@@ -838,15 +838,131 @@ func (s *Server) sessionsInSameGroupWith(a, b *session) bool {
 	return okA && okB && as == bs
 }
 
+// spellGatePlayerNeverSeesPlayer runs the CanNeverSee leg
+// (Object.cpp:1659-1662: different map or disjoint phase) plus the
+// IsNeverVisible player legs (Player.cpp:22560-22568: logout or loading)
+// for a player seer against a player target. A different instance is a
+// different Map object in C++, so the instance id rides the map leg.
+// The seer's phase mask is currentPlayerPhaseMask (GM players carry
+// PHASEMASK_ANYWHERE, Player.cpp:2456, SetGameMaster). The
+// findSessionByGUID worldReady gate makes the loading half unreachable
+// through the spell gates; it is kept so the leg reads complete
+// against the C++.
+func spellGatePlayerNeverSeesPlayer(seer, ts *session) bool {
+	if seer == nil || seer.player == nil || ts == nil || ts.player == nil {
+		return false
+	}
+	if ts.loggingOut || ts.playerLoading {
+		return true
+	}
+	if seer.player.Map != ts.player.Map || seer.player.InstanceID != ts.player.InstanceID {
+		return true
+	}
+	return seer.currentPlayerPhaseMask()&ts.currentPlayerPhaseMask() == 0
+}
+
+// creatureEffectivePhaseMask is a creature motion's live phase mask for
+// the CanNeverSee phase arm: the runtime 261-phase override while one is
+// active (the totem helper's read), else motion.PhaseMask, else
+// PHASEMASK_NORMAL (1) for motions whose spawn row was never read.
+func (s *Server) creatureEffectivePhaseMask(m *creatureMotion) uint32 {
+	if m == nil {
+		return 1
+	}
+	if s != nil {
+		s.auraMu.Lock()
+		mask, ok := s.creaturePhaseOverride[creatureAuraKeyForMotion(m)]
+		s.auraMu.Unlock()
+		if ok && mask != 0 {
+			return mask
+		}
+	}
+	if m.PhaseMask != 0 {
+		return m.PhaseMask
+	}
+	return 1
+}
+
+// spellGatePlayerNeverSeesCreature runs CanNeverSee for a player seer
+// against a creature target: map/instance (vacuous through the
+// seer-scoped motion lookup, kept for callers passing a foreign
+// motion) and the phase intersection.
+func (s *Server) spellGatePlayerNeverSeesCreature(seer *session, tm *creatureMotion) bool {
+	if seer == nil || seer.player == nil || tm == nil {
+		return false
+	}
+	if seer.player.Map != tm.Map || seer.player.InstanceID != tm.InstanceID {
+		return true
+	}
+	return seer.currentPlayerPhaseMask()&s.creatureEffectivePhaseMask(tm) == 0
+}
+
+// spellGateCreatureNeverSeesPlayer runs CanNeverSee for a creature seer
+// (wild, controlled, or pet motion) against a player target: the
+// caster motion's map/instance/phase, never the controller session's
+// (CanNeverSee reads this; only CanDetect routes through the
+// controller, Object.cpp:1664-1680).
+func (s *Server) spellGateCreatureNeverSeesPlayer(m *creatureMotion, ts *session) bool {
+	if m == nil || ts == nil || ts.player == nil {
+		return false
+	}
+	if m.Map != ts.player.Map || m.InstanceID != ts.player.InstanceID {
+		return true
+	}
+	return s.creatureEffectivePhaseMask(m)&ts.currentPlayerPhaseMask() == 0
+}
+
+// spellGateCreatureNeverSeesCreature runs CanNeverSee for a creature
+// seer against a creature target.
+func (s *Server) spellGateCreatureNeverSeesCreature(m, tm *creatureMotion) bool {
+	if m == nil || tm == nil {
+		return false
+	}
+	if m.Map != tm.Map || m.InstanceID != tm.InstanceID {
+		return true
+	}
+	return s.creatureEffectivePhaseMask(m)&s.creatureEffectivePhaseMask(tm) == 0
+}
+
+// creatureOwnerGroupVisibleFor runs the second IsAlwaysVisibleFor leg
+// (Unit.cpp:8624-8628): a unit whose owner is a player is always
+// visible to a player the owner is group-visible for. GetOwner is the
+// owner, not the charmer, so the motion's OwnerGUID is the read, and
+// the group read is the default-config IsInSameGroupWith twin
+// (sessionsInSameGroupWith). An offline owner resolves to no session
+// and the leg stays out.
+func (s *Server) creatureOwnerGroupVisibleFor(seer *session, tm *creatureMotion) bool {
+	if s == nil || seer == nil || seer.player == nil || tm == nil || tm.OwnerGUID == 0 {
+		return false
+	}
+	os := s.findSessionByGUID(tm.OwnerGUID)
+	if os == nil || os.player == nil {
+		return false
+	}
+	return s.sessionsInSameGroupWith(seer, os)
+}
+
 // playerSeerSpellGateVisibleToPlayer runs the spell gate's visibility
 // check (SpellInfo::CheckTarget, SpellInfo.cpp:1641-1642) for a player
-// seer against a player target: the CanSeeOrDetect GM leg, then the ghost
-// team/group leg, then the detect sums. The despawn leg cannot fire for
-// players (Object.h:573 base, no Unit override) and the distanceCheck legs
-// (sight-range, corpse-visibility, vehicle-accessory) never run: CheckTarget
-// calls CanSeeOrDetect with the defaults (Object.h:391).
+// seer against a player target: the CanNeverSee map/phase and
+// IsNeverVisible legs, the CanAlwaysSee farsight leg, the GM leg, then
+// the ghost team/group leg, then the detect sums. The despawn leg cannot
+// fire for players (Object.h:573 base, no Unit override) and the
+// distanceCheck legs (sight-range, corpse-visibility,
+// vehicle-accessory) never run: CheckTarget calls CanSeeOrDetect with
+// the defaults (Object.h:391).
 func (s *session) playerSeerSpellGateVisibleToPlayer(ts *session) bool {
 	if s == nil || s.player == nil || ts == nil || ts.player == nil {
+		return true
+	}
+	if spellGatePlayerNeverSeesPlayer(s, ts) {
+		return false
+	}
+	// CanAlwaysSee (Player.cpp:22571-22580): the seer's farsight
+	// viewpoint is always visible; the being-moved leg is vacuous for
+	// player targets (the mover is the seer, a possessed creature, or
+	// a vehicle, never another player).
+	if s.player.FarsightGUID == ts.playerGUID {
 		return true
 	}
 	if decided, visible := gmLegVerdict(s.gmVisibilityDetect, playerTargetGMValue(ts)); decided {
@@ -870,6 +986,19 @@ func (s *session) playerSeerSpellGateVisibleToPlayer(ts *session) bool {
 // records).
 func (s *Server) playerSeerSpellGateVisibleToCreature(seer *session, tm *creatureMotion) bool {
 	if s == nil || seer == nil || seer.player == nil || tm == nil {
+		return true
+	}
+	if s.spellGatePlayerNeverSeesCreature(seer, tm) {
+		return false
+	}
+	// CanAlwaysSee farsight leg (Player.cpp:22571-22580), as on the
+	// player-target twin; the being-moved vehicle leg has no Go model
+	// (sessions carry no vehicle GUID), while a possessed target is
+	// already covered by the charmer leg below.
+	if seer.player.FarsightGUID == tm.GUID {
+		return true
+	}
+	if s.creatureOwnerGroupVisibleFor(seer, tm) {
 		return true
 	}
 	// IsAlwaysVisibleFor (Object.cpp:1581, Unit.cpp:8615-8621) precedes
@@ -898,6 +1027,12 @@ func (s *Server) creatureSeerSpellGateVisibleToPlayer(m *creatureMotion, ts *ses
 	if s == nil || m == nil || ts == nil || ts.player == nil {
 		return true
 	}
+	if s.spellGateCreatureNeverSeesPlayer(m, ts) {
+		return false
+	}
+	// No always leg: CanAlwaysSee is base-false for creatures, and
+	// the target player's charmer-or-owner leg has no Go model
+	// (sessions carry no charmer GUID for mind-controlled players).
 	if decided, visible := gmLegVerdict(0, playerTargetGMValue(ts)); decided {
 		return visible
 	}
@@ -914,6 +1049,9 @@ func (s *Server) creatureSeerSpellGateVisibleToPlayer(m *creatureMotion, ts *ses
 func (s *Server) creatureSeerSpellGateVisibleToCreature(m, tm *creatureMotion) bool {
 	if s == nil || m == nil || tm == nil {
 		return true
+	}
+	if s.spellGateCreatureNeverSeesCreature(m, tm) {
+		return false
 	}
 	if creatureCharmerOrOwnerGUID(tm) == m.GUID {
 		return true
@@ -954,6 +1092,9 @@ func (s *Server) controlledCreatureSeerSpellGateVisibleToPlayer(m *creatureMotio
 	if s == nil || m == nil || seer == nil || ts == nil || ts.player == nil {
 		return true
 	}
+	if s.spellGateCreatureNeverSeesPlayer(m, ts) {
+		return false
+	}
 	if decided, visible := gmLegVerdict(0, playerTargetGMValue(ts)); decided {
 		return visible
 	}
@@ -965,12 +1106,43 @@ func (s *Server) controlledCreatureSeerSpellGateVisibleToPlayer(m *creatureMotio
 	return seer.canDetectStealthOf(ts) && seer.canDetectInvisibilityOfPlayer(ts)
 }
 
+// controlledCreatureSeerSpellGateVisibleToCreature is the
+// creature-target twin of controlledCreatureSeerSpellGateVisibleToPlayer:
+// the head legs and the GM/ghost legs read the caster motion (this),
+// while the detect sums judge through the controller session's
+// player-seer detect core (CanDetect routing, Object.cpp:1664-1680).
+// Callers exclude self targets (this == obj, Object.cpp:1575).
+func (s *Server) controlledCreatureSeerSpellGateVisibleToCreature(m *creatureMotion, seer *session, tm *creatureMotion) bool {
+	if s == nil || m == nil || seer == nil || seer.player == nil || tm == nil {
+		return true
+	}
+	if s.spellGateCreatureNeverSeesCreature(m, tm) {
+		return false
+	}
+	if creatureCharmerOrOwnerGUID(tm) == m.GUID {
+		return true
+	}
+	if decided, visible := gmLegVerdict(0, creatureTargetGMValue(tm)); decided {
+		return visible
+	}
+	_, seerDetect := creatureGhostBits(m)
+	targetVis, _ := creatureGhostBits(tm)
+	if decided, visible := ghostLegVerdict(seerDetect, targetVis, false, false, false); decided {
+		return visible
+	}
+	return s.playerSeerCanDetectCreature(seer, tm)
+}
+
 // petSeerSpellGateVisibleToPlayer is the pet-caster twin: the pet's own GM
 // detect is 0 and its ghost detect is its own creature bits, while the
 // detect sums judge through the driving session's core as before.
 func (s *Server) petSeerSpellGateVisibleToPlayer(motion *creatureMotion, detectSeer, ts *session) bool {
 	if s == nil || detectSeer == nil || ts == nil || ts.player == nil {
 		return true
+	}
+	// CanNeverSee reads the pet motion, not the driving session.
+	if s.spellGateCreatureNeverSeesPlayer(motion, ts) {
+		return false
 	}
 	if decided, visible := gmLegVerdict(0, playerTargetGMValue(ts)); decided {
 		return visible
@@ -988,6 +1160,9 @@ func (s *Server) petSeerSpellGateVisibleToPlayer(motion *creatureMotion, detectS
 func (s *Server) petSeerSpellGateVisibleToCreature(motion *creatureMotion, detectSeer *session, tm *creatureMotion) bool {
 	if s == nil || detectSeer == nil || tm == nil {
 		return true
+	}
+	if s.spellGateCreatureNeverSeesCreature(motion, tm) {
+		return false
 	}
 	if motion != nil && creatureCharmerOrOwnerGUID(tm) == motion.GUID {
 		return true

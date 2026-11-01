@@ -1316,7 +1316,10 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	// first), so a charmed/owned caster judges through the controller
 	// session's detect core: canDetectStealthOf +
 	// canDetectInvisibilityOfPlayer, with implicit=false for a creature
-	// caster (Spell.cpp:5372), so no stealth exemption. A wild caster's
+	// caster (Spell.cpp:5372), so no stealth exemption. The session-seer
+	// branch judges creature targets through the session-seer twin as
+	// well (motion head/GM/ghost legs, controller detect sums); only
+	// self targets skip it. A wild caster's
 	// seer is the creature itself (Object.cpp:1664-1666), and it now
 	// judges through creatureSeerSpellGateVisibleTarget: the motion's live
 	// creature-aura detect sums against player targets (session folds)
@@ -1342,6 +1345,16 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 				if !s.controlledCreatureSeerSpellGateVisibleToPlayer(m, seer, ts) {
 					return false
+				}
+			} else if targetGUID != m.GUID {
+				// The session-seer branch previously judged player
+				// targets only; creature targets now judge through
+				// the session-seer twin (motion head/GM/ghost legs,
+				// controller detect sums), self excluded.
+				if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+					if !s.controlledCreatureSeerSpellGateVisibleToCreature(m, seer, tm) {
+						return false
+					}
 				}
 			}
 		} else if controllerGUID != 0 {
