@@ -766,6 +766,36 @@ func (s *session) spellSearchChainTargets(ctx context.Context, spell wotlk.Spell
 	return result
 }
 
+// chainCreatureAssistAlly mirrors the creature arms of friendlyAssistOK
+// (WorldObject::IsValidAssistTarget, Object.cpp:3149/3153-3183) for a chain
+// jump pick, which builds candidates outside friendlyScanCandidates and
+// never calls friendlyAssistOK: a player-controlled candidate with a
+// resolving owner takes the PvP case (owner reaction + assist PvP block),
+// a wild candidate (flag unset) takes the PvC case (TREAT_AS_RAID_UNIT /
+// CAN_ASSIST unless the spell carries ASSIST_IGNORE_IMMUNE_FLAG), and a
+// player-controlled candidate with no resolving owner keeps the faction
+// gate — the flag, not resolvability, selects the case. The target-IsPvP
+// exemption has no creature-side Go model, like the friendly twin.
+func (s *session) chainCreatureAssistAlly(spell wotlk.Spell, unitFlags, typeFlags uint32, ownerGUID uint64, factionAlly bool) (bool, bool) {
+	if unitFlags&unitFlagPlayerControlled != 0 && ownerGUID != 0 {
+		if ownerSess := s.server.findSessionByGUID(ownerGUID); ownerSess != nil {
+			if playerOwnedCreatureAssistPvPBlocked(s, ownerSess) {
+				return false, true
+			}
+			if reactionAlly, decided := playerOwnedCreatureReactionAlly(s, ownerSess); decided {
+				return reactionAlly, false
+			}
+		}
+		return factionAlly, false
+	}
+	if unitFlags&unitFlagPlayerControlled == 0 &&
+		spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+		typeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
+		return false, false
+	}
+	return factionAlly, false
+}
+
 // chainCandidates collects units around the primary target within radius that
 // pass the chain spell's target check (WorldObjectSpellAreaTargetCheck,
 // Spell.cpp:8409, via WorldObjectSpellTargetCheck::operator(), Spell.cpp:8316).
@@ -909,7 +939,11 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 		if motionOwner == 0 {
 			motionOwner = motion.CharmOwnerGUID
 		}
-		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, allyOf(motion.Faction), false, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
+		candAlly, candBlocked := allyOf(motion.Faction), false
+		if checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid {
+			candAlly, candBlocked = s.chainCreatureAssistAlly(spell, motion.UnitFlags, motion.TypeFlags, motionOwner, allyOf(motion.Faction))
+		}
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, candAlly, candBlocked, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
 	}
 	s.server.sessionsMu.RLock()
 	for targetSession := range s.server.sessions {
@@ -942,17 +976,21 @@ func (s *session) chainCandidates(ctx context.Context, spell wotlk.Spell, primar
 	s.server.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
 	if !playersOnly && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, primary.Map, float64(primary.X-radius), float64(primary.X+radius), float64(primary.Y-radius), float64(primary.Y+radius))
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth, COALESCE(t.type_flags, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, primary.Map, float64(primary.X-radius), float64(primary.X+radius), float64(primary.Y-radius), float64(primary.Y+radius))
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
-				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
+				var low, entry, mapID, faction, unitFlags, flagsExtra, health, typeFlags int64
 				var x, y, z float64
-				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) == nil {
+				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health, &typeFlags) == nil {
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						st := s.server.loadCreatureStats(ctx, uint32(entry))
-						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, allyOf(uint32(faction)), false, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
+						candAlly, candBlocked := allyOf(uint32(faction)), false
+						if checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid {
+							candAlly, candBlocked = s.chainCreatureAssistAlly(spell, uint32(unitFlags), uint32(typeFlags), 0, allyOf(uint32(faction)))
+						}
+						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, candAlly, candBlocked, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}
 				}
 			}
@@ -1233,6 +1271,15 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 					candAlly = reactionAlly
 				}
 				candBlocked = playerOwnedCreatureAssistPvPBlocked(casterOwner, candOwnerSess)
+			} else if motionOwner == 0 && motion.UnitFlags&unitFlagPlayerControlled == 0 &&
+				spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+				motion.TypeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
+				// Wild candidate under a player-owned caster: the PvC
+				// case (Object.cpp:3178-3183) refuses it without the
+				// type flags. An owner-present but unresolvable
+				// candidate keeps the faction gate — the flag, not
+				// resolvability, selects the PvP case.
+				candAlly = false
 			}
 		}
 		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, hostile, candAlly, candBlocked, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
@@ -1255,18 +1302,25 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 	s.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
 	if !playersOnly && s.WorldStore != nil && s.WorldStore.DB != nil {
-		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, primary.Map, float64(primary.X-radius), float64(primary.X+radius), float64(primary.Y-radius), float64(primary.Y+radius))
+		rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth, COALESCE(t.type_flags, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, primary.Map, float64(primary.X-radius), float64(primary.X+radius), float64(primary.Y-radius), float64(primary.Y+radius))
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
-				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
+				var low, entry, mapID, faction, unitFlags, flagsExtra, health, typeFlags int64
 				var x, y, z float64
-				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) == nil {
+				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health, &typeFlags) == nil {
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						st := s.loadCreatureStats(ctx, uint32(entry))
 						hostile := s.creatureFactionHostileTo(m.Faction, uint32(faction))
-						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, hostile, !hostile, false, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
+						staticAlly := !hostile
+						if casterOwner != nil && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) &&
+							uint32(unitFlags)&unitFlagPlayerControlled == 0 &&
+							spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+							uint32(typeFlags)&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
+							staticAlly = false
+						}
+						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, hostile, staticAlly, false, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}
 				}
 			}
