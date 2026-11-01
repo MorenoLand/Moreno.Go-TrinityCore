@@ -175,7 +175,8 @@ func (s *session) friendlyGroupSnapshot() (subGroup uint8, party, raid map[uint6
 // The PvC arm (Object.cpp:3178-3183) additionally gates wild creature
 // candidates on TREAT_AS_RAID_UNIT/CAN_ASSIST, unless the spell carries
 // ASSIST_IGNORE_IMMUNE_FLAG; player-controlled candidates take the PvP
-// case instead.
+// case instead — the resolving owner's duel/group/FFA reaction ahead of
+// the faction gate, plus the portable assist PvP block.
 // TARGET_CHECK_PARTY additionally requires Unit::IsInPartyWith
 // (Unit.cpp:12126): self, same-subgroup group members, or creatures owned by
 // them (charmer/owner resolution). TARGET_CHECK_RAID requires
@@ -377,16 +378,38 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		// TREAT_AS_RAID_UNIT/CAN_ASSIST, unless the spell carries
 		// ASSIST_IGNORE_IMMUNE_FLAG. Player-controlled candidates
 		// (pets/charmed, flag set at creation/charm) take the PvP case
-		// instead, not this gate. The target-IsPvP exemption has no
-		// creature-side Go model, like the explicit-target twin.
+		// instead, not this gate: their ally gate is the resolving
+		// owner's reaction (same owner/duel/group/FFA, GetReactionTo
+		// Object.cpp:2744-2762), exact for the both-reactions rule
+		// (Object.cpp:3149) because every arm is symmetric, plus the
+		// portable assist PvP block (Object.cpp:3160-3171, sanctuary
+		// term out: motion carries no sanctuary byte). An owner
+		// session that cannot resolve keeps the faction gate: the
+		// flag itself, not owner resolvability, selects the PvP case
+		// here. The target-IsPvP exemption has no creature-side Go
+		// model, like the explicit-target twin.
 		if (motion.UnitFlags&unitFlagPlayerControlled) == 0 &&
 			spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
 			(motion.TypeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist)) == 0 {
 			continue
 		}
+		ally := allyOf(motion.Faction)
+		if motion.UnitFlags&unitFlagPlayerControlled != 0 {
+			if candOwnerSess := s.server.creatureAffectingPlayerSession(motion); candOwnerSess != nil {
+				if reactionAlly, decided := playerOwnedCreatureReactionAlly(s, candOwnerSess); decided {
+					if !reactionAlly {
+						continue
+					}
+					ally = true
+				}
+				if playerOwnedCreatureAssistPvPBlocked(s, candOwnerSess) {
+					continue
+				}
+			}
+		}
 		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z,
 			motion.UnitFlags, motion.FlagsExtra, motion.Health,
-			allyOf(motion.Faction), inParty(owner), inRaid(owner))
+			ally, inParty(owner), inRaid(owner))
 	}
 
 	s.server.sessionsMu.RLock()
