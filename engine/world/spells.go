@@ -9805,8 +9805,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// Unit targets that died during the cast bar fail with
 			// SPELL_FAILED_TARGETS_DEAD (SpellInfo::CheckTarget, SpellInfo.cpp:1715)
 			// unless the spell allows dead targets (SpellInfo::IsAllowingDeadTarget,
-			// SpellInfo.cpp:1177) or can resurrect.
-			if tgt.Health == 0 && target.UnitGUID != s.playerGUID {
+			// SpellInfo.cpp:1177) or can resurrect. C++ reads !unitTarget->IsAlive(),
+			// which is false for a released ghost; Go ghosts carry Health=1
+			// (buildPlayerRepop), so the health read alone misses a target that
+			// releases mid-bar — the session ghost read (isDeadOrGhost, the
+			// gauntlet twin's read) closes that gap. The health term stays so a
+			// degenerate MaxHealth==0 session keeps the old verdict, and creatures
+			// (no session, no ghost flag) keep the health read. Self exempt, as before.
+			dead := tgt.Health == 0
+			if ts := s.server.findSessionByGUID(target.UnitGUID); ts != nil && ts.player != nil {
+				dead = dead || ts.isDeadOrGhost()
+			}
+			if dead && target.UnitGUID != s.playerGUID {
 				canResurrect := false
 				for _, effect := range spell.Effects {
 					if effect.Effect == spellEffectResurrectNew {
