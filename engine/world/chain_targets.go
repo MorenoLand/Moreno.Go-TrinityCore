@@ -1099,12 +1099,20 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 // creature's own aggro pick), ALLY is the assist check
 // (!isHostileFaction, the session twin's allyOf); creature candidates
 // resolve through the
-// faction-template reaction (creatureFactionHostileTo). PARTY/RAID ride the
+// faction-template reaction (creatureFactionHostileTo). With a
+// player-owned caster, player candidates (and player-owned creature
+// candidates on ALLY/PARTY/RAID) use the affecting-player reaction arms
+// (duel/group/FFA) ahead of the faction gate. PARTY/RAID ride the
 // motion-rooted referer scope.
 func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion, spell wotlk.Spell, primary combatTarget, radius float32, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
 	candidates := make([]chainCandidate, 0, 16)
 	seen := make(map[uint64]struct{})
-	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, hostileToCaster, allyToCaster bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
+	// The caster's affecting player (owner/charmer session) drives the
+	// player-owned reaction arms below; wild casters resolve nil and keep
+	// the faction-template gates. Resolved before the session scan:
+	// findSessionByGUID takes sessionsMu.RLock.
+	casterOwner := s.creatureAffectingPlayerSession(m)
+	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, hostileToCaster, allyToCaster, assistPvPBlocked bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
 		if guid == 0 || guid == excludeGUID {
 			return
 		}
@@ -1152,19 +1160,19 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			}
 		case targetCheckAlly:
 			// TARGET_CHECK_ALLY: Unit::IsValidAssistTarget (Spell.cpp:8347).
-			if !allyToCaster {
+			if !allyToCaster || assistPvPBlocked {
 				return
 			}
 		case targetCheckParty:
 			// TARGET_CHECK_PARTY: assist target in the caster's party
 			// (Spell.cpp:8351-8359; Unit::IsInPartyWith, Unit.cpp:12126).
-			if !allyToCaster || !scope.inParty(cand) {
+			if !allyToCaster || assistPvPBlocked || !scope.inParty(cand) {
 				return
 			}
 		case targetCheckRaid:
 			// TARGET_CHECK_RAID: assist target in the caster's raid
 			// (Spell.cpp:8361-8374; Unit::IsInRaidWith, Unit.cpp:12155).
-			if !allyToCaster || !scope.inRaid(cand) {
+			if !allyToCaster || assistPvPBlocked || !scope.inRaid(cand) {
 				return
 			}
 		case targetCheckEntry:
@@ -1218,7 +1226,16 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			motionOwner = motion.CharmOwnerGUID
 		}
 		hostile := s.creatureFactionHostileTo(m.Faction, motion.Faction)
-		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, hostile, !hostile, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
+		candAlly, candBlocked := !hostile, false
+		if casterOwner != nil && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
+			if candOwnerSess := s.findSessionByGUID(motionOwner); candOwnerSess != nil {
+				if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterOwner, candOwnerSess); decided {
+					candAlly = reactionAlly
+				}
+				candBlocked = playerOwnedCreatureAssistPvPBlocked(casterOwner, candOwnerSess)
+			}
+		}
+		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, hostile, candAlly, candBlocked, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
 	}
 	s.sessionsMu.RLock()
 	for targetSession := range s.sessions {
@@ -1226,7 +1243,14 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 			continue
 		}
 		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
-		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, s.isAttackableFaction(m.Faction, candidate), !s.isHostileFaction(m.Faction, candidate), true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
+		playerAlly, playerBlocked := !s.isHostileFaction(m.Faction, candidate), false
+		if casterOwner != nil {
+			if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterOwner, targetSession); decided {
+				playerAlly = reactionAlly
+			}
+			playerBlocked = playerOwnedCreatureAssistPvPBlocked(casterOwner, targetSession)
+		}
+		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, s.isAttackableFaction(m.Faction, candidate), playerAlly, playerBlocked, true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
 	}
 	s.sessionsMu.RUnlock()
 	// The CREATURE container is dropped by the GetSearcherTypeMask attribute arm above.
@@ -1242,7 +1266,7 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
 						st := s.loadCreatureStats(ctx, uint32(entry))
 						hostile := s.creatureFactionHostileTo(m.Faction, uint32(faction))
-						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, hostile, !hostile, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
+						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, hostile, !hostile, false, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}
 				}
 			}

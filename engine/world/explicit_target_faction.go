@@ -719,6 +719,56 @@ func (s *session) explicitTargetAssistPvPBlocked(targetSess *session) bool {
 	return false
 }
 
+// playerOwnedCreatureReactionAlly mirrors the player-controlled arms of
+// WorldObject::GetReactionTo (Object.cpp:2744-2762) for a player-owned
+// creature caster against a player target: the caster's affecting player
+// (owner/charmer session) is the reaction subject, so a duel opponent in
+// progress is hostile even same-faction, a same-group member is friendly
+// even cross-faction (IsInRaidWith, Player.cpp:2543), and two FFA-flagged
+// players are hostile even same-faction (the group arm precedes the FFA
+// arm; the caster's FFA byte rides the owner's fan-out, Player.cpp:22162).
+// The second result reports whether an arm decided: false falls back to
+// the faction-template gate (the tail past the reputation arms, which
+// need a reputation faction and stay out here, as does forced-rank).
+func playerOwnedCreatureReactionAlly(ownerSess, targetSess *session) (bool, bool) {
+	if ownerSess == nil || ownerSess.player == nil || targetSess == nil || targetSess.player == nil {
+		return false, false
+	}
+	if targetSess.playerGUID == ownerSess.playerGUID {
+		return true, true
+	}
+	if ownerSess.duelPartner != 0 && ownerSess.duelPartner == targetSess.playerGUID && ownerSess.player.DuelTeam != 0 && targetSess.player.DuelTeam != 0 {
+		return false, true
+	}
+	if ownerSess.groupID != 0 && ownerSess.groupID == targetSess.groupID {
+		return true, true
+	}
+	if ownerSess.player.PVPFlags&pvpFlagFFA != 0 && targetSess.player.PVPFlags&pvpFlagFFA != 0 {
+		return false, true
+	}
+	return false, false
+}
+
+// playerOwnedCreatureAssistPvPBlocked mirrors the portable PvP terms of
+// WorldObject::IsValidAssistTarget (Object.cpp:3160-3171) for a
+// player-owned creature caster: a player mid-duel with someone else
+// cannot be assisted, and a player in an FFA zone cannot be assisted
+// from outside one (the caster's FFA state rides the owner's byte).
+// The sanctuary term stays out: a motion caster carries no sanctuary
+// byte (its IsInSanctuary is area-based and unmodeled).
+func playerOwnedCreatureAssistPvPBlocked(ownerSess, targetSess *session) bool {
+	if ownerSess == nil || ownerSess.player == nil || targetSess == nil || targetSess.player == nil || targetSess.playerGUID == ownerSess.playerGUID {
+		return false
+	}
+	if targetSess.duelPartner != 0 {
+		return true
+	}
+	if targetSess.player.PVPFlags&pvpFlagFFA != 0 && ownerSess.player.PVPFlags&pvpFlagFFA == 0 {
+		return true
+	}
+	return false
+}
+
 // sameGroupAs is the player-player half of Unit::IsInPartyWith/
 // Unit::IsInRaidWith (Unit.cpp:12126): same group, raid flag matched.
 // Creature/pet/charm terms have no Go model.

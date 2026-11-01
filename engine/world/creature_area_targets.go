@@ -1005,6 +1005,29 @@ func petAreaAllyGroupScope(server *Server, owner *session) (ownerGUID uint64, in
 	return ownerGUID, inParty, inRaid
 }
 
+// creatureAffectingPlayerSession mirrors Unit::GetAffectingPlayer for a
+// creature caster: the charming player first (charm overwrites OwnerGUID,
+// so a charmed pet still resolves to its charmer), else the owning
+// player. Wild creatures and creature-owned minions resolve nil, and the
+// caller falls back to the faction-template gate. Resolved before any
+// sessionsMu read: findSessionByGUID takes sessionsMu.RLock.
+func (s *Server) creatureAffectingPlayerSession(m *creatureMotion) *session {
+	if s == nil || m == nil {
+		return nil
+	}
+	if m.CharmerGUID != 0 {
+		if sess := s.findSessionByGUID(m.CharmerGUID); sess != nil {
+			return sess
+		}
+	}
+	if m.OwnerGUID != 0 {
+		if sess := s.findSessionByGUID(m.OwnerGUID); sess != nil {
+			return sess
+		}
+	}
+	return nil
+}
+
 // creatureAIAreaAllyPlayers is the player half of the pet-caster area-ally
 // twin of creatureAIAreaEnemyPlayers: Spell::SelectImplicitAreaTargets
 // (Spell.cpp:1227) with TARGET_CHECK_ALLY/PARTY/RAID selects every friendly
@@ -1015,7 +1038,9 @@ func petAreaAllyGroupScope(server *Server, owner *session) (ownerGUID uint64, in
 // only when both reactions are below neutral, and the CvP reaction clamps
 // to neutral at war (Object.cpp:2819-2822), so an at-war player with
 // non-hostile standing stays eligible; the attack gate's at-war term
-// wrongly excluded them. Neutrals pass on both sides, as before, plus
+// wrongly excluded them. With a player-owned caster, player candidates
+// use the affecting-player reaction arms (duel/group/FFA) ahead of that
+// gate, plus the portable assist PvP terms. Neutrals pass on both sides, as before, plus
 // the assist flag arm
 // (spellTargetUnitBlocked, assist=true, like the session friendly twin),
 // the GM exclusion (IsValidAssistTarget, Object.cpp:3104),
@@ -1032,7 +1057,16 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 	if len(groups) == 0 {
 		return nil, nil
 	}
-	_, inParty, inRaid := petAreaAllyGroupScope(s, owner)
+	// A player-owned caster's player gate is the affecting player's
+	// reaction, not the motion faction alone (GetReactionTo,
+	// Object.cpp:2744-2762): boss-ai/inline pass a spell-mod owner that
+	// resolves pets only, so a charmed caster arrives with a nil owner
+	// and resolves here; the pet path already passes its owner session.
+	casterOwner := owner
+	if casterOwner == nil {
+		casterOwner = s.creatureAffectingPlayerSession(motion)
+	}
+	_, inParty, inRaid := petAreaAllyGroupScope(s, casterOwner)
 	seen := map[uint64]struct{}{victim.GUID: {}}
 	checks := make(map[uint64]uint8)
 	var hits []*playerPos
@@ -1054,7 +1088,16 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 			continue
 		}
 		candidate := playerPos{Map: targetSession.player.Map, InstanceID: targetSession.player.InstanceID, X: targetSession.player.X, Y: targetSession.player.Y, Z: targetSession.player.Z, GUID: targetSession.playerGUID, Race: targetSession.player.Race, Class: targetSession.player.Class, Level: targetSession.player.Level, FactionTemplate: targetSession.effectiveFactionTemplate(targetSession.player.Race), Reputations: playerReputationMap(targetSession.player.Reputations), Sess: targetSession}
-		if s.isHostileFaction(motion.Faction, candidate) {
+		ally := !s.isHostileFaction(motion.Faction, candidate)
+		if casterOwner != nil {
+			if reactionAlly, decided := playerOwnedCreatureReactionAlly(casterOwner, targetSession); decided {
+				ally = reactionAlly
+			}
+			if playerOwnedCreatureAssistPvPBlocked(casterOwner, targetSession) {
+				continue
+			}
+		}
+		if !ally {
 			continue
 		}
 		if spellTargetUnitBlocked(spell, targetSession.player.UnitFlags, 0, true) {
@@ -1065,7 +1108,7 @@ func (s *Server) creatureAIAreaAllyPlayers(ctx context.Context, motion *creature
 		// so a party-only spell no longer reaches non-party allies.
 		// The bits below stay membership-based (the pre-existing pet-leg
 		// approximation), not geometry-based.
-		if !creatureAllyGroupPasses(groups, candidate.X, candidate.Y, candidate.Z, !s.isHostileFaction(motion.Faction, candidate), inParty(targetSession.playerGUID), inRaid(targetSession.playerGUID), func(cx, cy, cz float32) bool {
+		if !creatureAllyGroupPasses(groups, candidate.X, candidate.Y, candidate.Z, ally, inParty(targetSession.playerGUID), inRaid(targetSession.playerGUID), func(cx, cy, cz float32) bool {
 			return spell.AttributesEx1&spellAttr2CanTargetNotInLOS != 0 || s.hasLineOfSightSpellCheck(motion.Map, cx, cy, cz, candidate.X, candidate.Y, candidate.Z)
 		}) {
 			continue
