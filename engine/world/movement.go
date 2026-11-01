@@ -1831,6 +1831,17 @@ func (s *Server) broadcastCreatureCreateToVisibleSet(opcode uint16, payload []by
 	if spawn != nil && spawn.PhaseMask != 0 {
 		targetPhase = spawn.PhaseMask
 	}
+	// The create block's own GUID (RawGUID, else the DB-guid/entry
+	// world GUID buildCreatureUpdate carries): a filter spawn with
+	// neither (pet creates) has no creature identity, so pairing is
+	// skipped rather than sent against a computed bogus GUID.
+	creatureGUID := uint64(0)
+	if spawn != nil {
+		creatureGUID = spawn.RawGUID
+		if creatureGUID == 0 && spawn.GUID != 0 {
+			creatureGUID = creatureWorldGUID(spawn.GUID, spawn.Entry)
+		}
+	}
 	for _, r := range targets {
 		rx, ry, rz := r.x, r.y, r.z
 		if vx, vy, vz, ok := s.seerDeliveryPosition(mapID, instanceID, r.guid, r.farsight); ok {
@@ -1846,6 +1857,7 @@ func (s *Server) broadcastCreatureCreateToVisibleSet(opcode uint16, payload []by
 			continue
 		}
 		_ = r.sess.write(opcode, payload, true)
+		r.sess.sendCreatureAurasForTarget(mapID, instanceID, creatureGUID)
 	}
 }
 

@@ -835,6 +835,24 @@ func (s *Server) updateTransportPassengerVisibility(ctx context.Context, observe
 		}
 		return
 	}
+	// Create-time aura pairing for the newly marked passengers only
+	// (Player::UpdateVisibilityOf -> SendInitialVisiblePackets,
+	// Player.cpp: the unit's pre-existing auras ride the visibility
+	// change, not a later sweep): the merged packet above carried the
+	// creates, so the aura packets follow it, after the write proved
+	// good — a failed write rolled the marks back, and pairing then
+	// would leave auras without a create. Removed GUIDs ride
+	// out-of-range destroys and need no pairing; creature GUIDs are
+	// the world GUIDs the create blocks carried, player GUIDs resolve
+	// through the passenger sessions as sendVisiblePlayerAuras does.
+	for _, guid := range creatureGUIDs {
+		observer.sendCreatureAurasForTarget(observer.player.Map, observer.player.InstanceID, guid)
+	}
+	for _, guid := range playerGUIDs {
+		if target := s.findSessionByGUID(guid); target != nil {
+			observer.sendAurasForTarget(guid, target)
+		}
+	}
 	observer.debug("transport passengers streamed", "player_guid", observer.playerGUID, "player_map", observer.player.Map, "player_x", observer.player.X, "player_y", observer.player.Y, "player_z", observer.player.Z, "transport_guid", transportGUID, "transport_map", transport.Spawn.Map, "transport_x", transport.Spawn.X, "transport_y", transport.Spawn.Y, "transport_z", transport.Spawn.Z, "transport_orientation", transport.Spawn.Orientation, "path_progress", transport.PathProgress, "creature_guids", creatureGUIDs, "creature_positions", creaturePositions, "object_guids", objectGUIDs, "removed_guids", removedGUIDs, "player_guids", playerGUIDs, "player_removed_guids", playerRemovedGUIDs, "write_bytes", len(packet.Payload.Bytes()))
 }
 

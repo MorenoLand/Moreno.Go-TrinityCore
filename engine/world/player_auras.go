@@ -570,6 +570,35 @@ func (s *session) sendVisibleCreatureAuras(state playerState) {
 	}
 }
 
+// sendCreatureAurasForTarget is the single-creature twin of
+// sendVisibleCreatureAuras, for a create the observer just received:
+// Player::UpdateVisibilityOf sends SendInitialVisiblePackets (Player.cpp:
+// SendAurasForTarget, SMSG_AURA_UPDATE_ALL) for every unit that becomes
+// visible, creature or player, so a broadcast create must pair the
+// creature's pre-existing auras — apply-time SMSG_AURA_UPDATE broadcasts
+// reach only observers who already had the creature, and the observer's
+// own login/worldport sweep never re-runs when the creature arrives.
+// A creature with no active auras sends nothing; the lookup key is the
+// world GUID the create block itself carries.
+func (s *session) sendCreatureAurasForTarget(mapID, instanceID uint32, creatureGUID uint64) {
+	if s == nil || s.server == nil || creatureGUID == 0 {
+		return
+	}
+	s.server.auraMu.Lock()
+	auraMap := s.server.activeCreatureAuras[creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: creatureGUID}]
+	auras := make([]*activeAura, 0, len(auraMap))
+	for _, aura := range auraMap {
+		if aura != nil && !aura.Stopped {
+			auras = append(auras, aura)
+		}
+	}
+	s.server.auraMu.Unlock()
+	records := auraUpdateRecords(auras)
+	if len(records) > 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(creatureGUID, records), true)
+	}
+}
+
 // removeAurasWithAttribute mirrors Unit::RemoveAurasWithAttribute (Unit.cpp):
 // drop every applied aura whose spell Attributes carry any of flags, using
 // default removal mode. C++ iterates m_appliedAuras; Go's session aura map is
