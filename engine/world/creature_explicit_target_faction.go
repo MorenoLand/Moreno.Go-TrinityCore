@@ -181,6 +181,43 @@ func (s *Server) playerAtWarWith(ts *session, factionTemplateID uint32) bool {
 	return ok && saved.Flags&factionFlagAtWar != 0
 }
 
+// wildCasterAttackHostile mirrors the exactly-one-affecting-player arm of
+// WorldObject::IsValidAttackTarget (Object.cpp:3036-3053) for a wild
+// creature caster against a player-owned creature candidate, as reached
+// through the area-enemy (Spell.cpp:8341) and nearby-enemy
+// (Spell.cpp:8394-8400 via WorldObjectSpellTargetCheck) selections: the
+// CvC arm (Object.cpp:3022-3024) never fires for a player-controlled
+// candidate, so the verdict is the owner's reputation against the caster's
+// faction, not the template gate. A contested-guard caster admits a
+// contested-PvP owner's candidate outright (Object.cpp:3041-3043); for a
+// reputation faction with a saved owner row the at-war flag alone decides
+// (template-hostile + not-at-war refused, template-neutral + at-war
+// admitted — GetState returns nil for factions without a reputation row,
+// ReputationMgr.h:86-88, so those keep the template gate, as do
+// unresolvable owners and candidates without the player-controlled flag).
+// Forced ranks (GetForcedRankIfAny) have no Go model.
+func (s *Server) wildCasterAttackHostile(casterFaction uint32, candOwnerGUID uint64, candUnitFlags uint32, factionHostile bool) bool {
+	if s == nil || s.Data == nil || candOwnerGUID == 0 || candUnitFlags&unitFlagPlayerControlled == 0 {
+		return factionHostile
+	}
+	candOwner := s.findSessionByGUID(candOwnerGUID)
+	if candOwner == nil || candOwner.player == nil {
+		return factionHostile
+	}
+	if s.creatureContestedHostile(casterFaction, candOwner) {
+		return true
+	}
+	tpl, found, err := s.Data.FactionTemplate(casterFaction)
+	if err != nil || !found || !s.factionCanHaveReputation(tpl.Faction) {
+		return factionHostile
+	}
+	saved, ok := playerReputationMap(candOwner.player.Reputations)[tpl.Faction]
+	if !ok {
+		return factionHostile
+	}
+	return saved.Flags&factionFlagAtWar != 0
+}
+
 // creatureContestedHostile mirrors the contested-guard hostile term
 // (Object.cpp:2806-2809, 3041-3043): a contested-guard faction is hostile
 // to a player carrying the contested-PvP flag.

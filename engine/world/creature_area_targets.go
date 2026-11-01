@@ -162,7 +162,9 @@ func (s *Server) creatureAIAreaLegGroups(motion *creatureMotion, spell wotlk.Spe
 // except a player-owned candidate under a player-owned caster, which
 // takes the GetReactionTo arms via chainCreatureAttackHostile (chain twin:
 // the CvC arm, Object.cpp:3022-3024, needs BOTH sides non-player-controlled,
-// so it never fires for a player-owned candidate),
+// so it never fires for a player-owned candidate), and a player-owned
+// candidate under a wild caster, which takes the owner's at-war verdict
+// via wildCasterAttackHostile (Object.cpp:3036-3053),
 // cylinder area (Spell.cpp:8409), cone arc + line of sight
 // (Spell.cpp:7479-7492). The merged player+creature MaxAffectedTargets
 // cap lives in creatureAIAreaEnemyTargets: C++ caps the merged area
@@ -269,12 +271,14 @@ func (s *Server) creatureAIAreaEnemyCreatures(ctx context.Context, motion *creat
 			continue
 		}
 		hostile := s.factionTemplatesHostile(motion.Faction, cand.Faction)
+		candOwner := cand.OwnerGUID
+		if candOwner == 0 {
+			candOwner = cand.CharmOwnerGUID
+		}
 		if casterOwner != nil {
-			candOwner := cand.OwnerGUID
-			if candOwner == 0 {
-				candOwner = cand.CharmOwnerGUID
-			}
 			hostile = chainCreatureAttackHostile(casterOwner, candOwner, cand.UnitFlags, hostile)
+		} else {
+			hostile = s.wildCasterAttackHostile(motion.Faction, candOwner, cand.UnitFlags, hostile)
 		}
 		if !hostile {
 			continue
