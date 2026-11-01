@@ -2841,8 +2841,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// applies — same read as the completion recheck and the
 	// triggered path: canDetectStealthOf +
 	// canDetectInvisibilityOfPlayer, self targets pass, GM casters
-	// pass inside the helpers, creature targets pass (motions carry
-	// no stealth/invisibility aura state), and the sight-range,
+	// pass inside the helpers, creature targets judge through
+	// playerSeerCanDetectCreature (live motion aura sums), and the sight-range,
 	// ghost team/group, vehicle-accessory and despawn legs of
 	// CanSeeOrDetect stay out. Spells carrying
 	// SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
@@ -2850,6 +2850,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != 0 && targetGUID != s.playerGUID {
 		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 			if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not visible", "failReason", spellFailedBadTargets)
+				return true
+			}
+		} else if tm := s.findCreatureMotion(targetGUID); tm != nil && uint16(targetGUID>>48) != 0xF110 {
+			if !s.server.playerSeerCanDetectCreature(s, tm) {
 				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not visible", "failReason", spellFailedBadTargets)
 				return true
@@ -9963,8 +9969,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// is the mid-bar net. Reuses the
 			// triggered-path detect core verbatim (canDetectStealthOf +
 			// canDetectInvisibilityOfPlayer): self targets pass, GM
-			// casters pass inside the helpers, creature targets pass
-			// (motions carry no stealth/invisibility aura state), and
+			// casters pass inside the helpers, creature targets judge
+			// through playerSeerCanDetectCreature (live motion aura sums), and
 			// the sight-range, ghost team/group, vehicle-accessory and
 			// despawn legs of CanSeeOrDetect stay out, as on the
 			// triggered path. Spells carrying
@@ -9972,6 +9978,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && target.UnitGUID != s.playerGUID && s.server != nil {
 				if ts := s.server.findSessionByGUID(target.UnitGUID); ts != nil && ts.player != nil {
 					if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+						s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
+						s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target not visible")
+						return
+					}
+				} else if tm := s.findCreatureMotion(target.UnitGUID); tm != nil && uint16(target.UnitGUID>>48) != 0xF110 {
+					if !s.server.playerSeerCanDetectCreature(s, tm) {
 						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 						s.sendInterrupted(castID, spellID, 0) // _cast cleanupSpell (Spell.cpp:3330-3334)
 						s.debug("spell cast failed at completion", "account", s.accountName, "spell", spellID, "reason", "target not visible")
@@ -23651,7 +23664,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// Spell.cpp:1500-1556, so no CheckTarget ever judges the caster).
 	// The arms ported here now cover CheckTarget end to end except the
 	// documented stay-outs (SpellInfo.cpp:1637-1777): CANT_TARGET_SELF,
-	// visibility (player-target detect core only), CANT_TARGET_IN_COMBAT
+	// visibility (player-target detect core + player-seer creature-target core), CANT_TARGET_IN_COMBAT
 	// (IsInCombat half), ONLY_TARGET_GHOSTS mismatch (ghost = the player
 	// ghost flag, the SPELL_AURA_GHOST leg — a corpse without the flag is
 	// not a ghost), tapped (live-motion tap state), pickpocket, disarm
@@ -23661,7 +23674,6 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// and prevent-resurrection. Stay-outs: corpse checks (no
 	// corpse-target model on this path), the implicit crowd-control arm
 	// (implicit=false for explicit wire targets, so it never fires),
-	// creature-target visibility (no motion stealth/invisibility state),
 	// the creature disarm leg (no virtual-item model), and the
 	// CANT_TARGET_IN_COMBAT pet-in-combat half (no model).
 	if targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && !(spell.Attributes&spellAttr0Passive != 0 && targetGUID == s.playerGUID) && !isSelfCastOnly(spell) {
@@ -23677,11 +23689,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// model): canDetectStealthOf + canDetectInvisibilityOfPlayer.
 		// Self targets pass (this == obj, Object.cpp:1575); GM casters
 		// pass via the GM arms inside both detect helpers. Creature
-		// targets stay out: motions carry no stealth/invisibility aura
-		// state to detect against.
+		// targets judge through playerSeerCanDetectCreature (live
+		// motion aura sums, player-seer 30-yard stealth cap).
 		if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != s.playerGUID && s.player != nil && s.server != nil {
 			if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 				if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+					rejectTriggeredCast("explicit target not visible to caster")
+					return
+				}
+			} else if tm := s.findCreatureMotion(targetGUID); tm != nil {
+				if !s.server.playerSeerCanDetectCreature(s, tm) {
 					rejectTriggeredCast("explicit target not visible to caster")
 					return
 				}

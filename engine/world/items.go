@@ -4063,12 +4063,18 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// never applies — same read as the client-path twin and the
 			// triggered path: canDetectStealthOf +
 			// canDetectInvisibilityOfPlayer, self targets pass, GM
-			// casters pass inside the helpers, creature targets pass
-			// (motions carry no stealth/invisibility aura state).
+			// casters pass inside the helpers, creature targets judge
+			// through playerSeerCanDetectCreature (live motion aura sums).
 			// Spells carrying SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
 			if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != s.playerGUID {
 				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 					if !s.canDetectStealthOf(ts) || !s.canDetectInvisibilityOfPlayer(ts) {
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
+						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not visible")
+						return true
+					}
+				} else if tm := s.findCreatureMotion(targetGUID); tm != nil && uint16(targetGUID>>48) != 0xF110 {
+					if !s.server.playerSeerCanDetectCreature(s, tm) {
 						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedBadTargets), true)
 						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not visible")
 						return true

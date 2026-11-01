@@ -2266,8 +2266,8 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	// (GetCharmerOrOwner, charmer first).
 	// Implicit is false for a creature caster (Spell.cpp:5372), so no
 	// stealth exemption. Self targets pass automatically (a creature
-	// GUID never resolves to a session); creature targets pass on the
-	// session-seer leg and judge through the charmer motion's live aura
+	// GUID never resolves to a session); creature targets judge through playerSeerCanDetectCreature
+	// on the session-seer leg and through the charmer motion's live aura
 	// sums on the creature-charmer leg; CAN_TARGET_INVISIBLE
 	// exempts. Sight-range, ghost-team/group, vehicle-accessory and
 	// despawn legs stay out, as on the player path; the GM-visibility
@@ -2297,6 +2297,12 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 			if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 				if !seer.canDetectStealthOf(ts) || !seer.canDetectInvisibilityOfPlayer(ts) {
 					return false
+				}
+			} else if targetGUID != motion.GUID {
+				if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil && uint16(targetGUID>>48) != 0xF110 {
+					if !s.server.playerSeerCanDetectCreature(seer, tm) {
+						return false
+					}
 				}
 			}
 		} else if charmerMotion != nil {

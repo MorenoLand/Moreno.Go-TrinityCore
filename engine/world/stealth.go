@@ -585,3 +585,135 @@ func (s *Server) wildCreatureCanDetectStealthOfCreature(m, tm *creatureMotion) b
 	}
 	return true
 }
+
+// playerSeerCanDetectCreature is the player-seer twin of
+// wildCreatureCanDetectCreature: WorldObject::CanDetect (Object.cpp:1664-1686)
+// is generic over units, so a player caster judges a creature target through
+// the target motion's live creature-aura sums, not unconditionally. Order is
+// the C++ order: stalked by the seer (Unit.cpp:8640) first, then
+// invisibility (Object.cpp:1688-1717), then stealth (Object.cpp:1719-1790,
+// checkAlert=false as on the spell gate). The seer's side rides the session
+// aura folds (position, level, combat reach, orientation, 17/19/228 sums);
+// the target's side rides the motion's creature-aura sums, so Lua AddAura
+// presence-only markers stay invisible here as on the wild twin. GM seers
+// pass inside, mirroring canDetectStealthOf/canDetectInvisibilityOfPlayer.
+// Unresolvable seer/target and a target carrying no stealth or invisibility
+// aura state pass; the reciprocal invisibility arm still judges a seer
+// carrying invisibility against a target that cannot detect it.
+func (s *Server) playerSeerCanDetectCreature(seer *session, tm *creatureMotion) bool {
+	if s == nil || seer == nil || seer.player == nil || tm == nil {
+		return true
+	}
+	if (seer.player.ExtraFlags&playerExtraGMOn != 0) || (seer.player.PlayerFlags&playerFlagGM != 0) || seer.security > 0 {
+		return true
+	}
+	if s.creatureHasStalkedAuraFrom(tm, seer.playerGUID) {
+		return true
+	}
+	if !s.playerSeerCanDetectInvisibilityOfCreature(seer, tm) {
+		return false
+	}
+	return s.playerSeerCanDetectStealthOfCreature(seer, tm)
+}
+
+// playerSeerCanDetectInvisibilityOfCreature mirrors
+// WorldObject::CanDetectInvisibilityOf (Object.cpp:1688-1717) with a player
+// seer and a creature target: every invisibility type the target carries
+// must be covered by the seer's MOD_INVISIBILITY_DETECT (19) sum for that
+// type (presence gate plus value compare), and the reciprocal flags arm
+// (Object.cpp:1704-1706) requires every invisibility type the seer carries
+// to sit in the target's detect set.
+func (s *Server) playerSeerCanDetectInvisibilityOfCreature(seer *session, tm *creatureMotion) bool {
+	if s == nil || seer == nil || seer.player == nil || tm == nil {
+		return true
+	}
+	targetInvis := s.totemCreatureAuraMiscSums(tm, spellAuraModInvisibility)
+	targetDetect := s.totemCreatureAuraMiscSums(tm, spellAuraInvisibilityDetect)
+	seerDetect := map[int32]int32{}
+	seerInvis := map[int32]bool{}
+	for _, aura := range seer.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.AuraType == spellAuraInvisibilityDetect {
+			seerDetect[aura.MiscValue] += int32(aura.Amount)
+		}
+		if aura.AuraType == spellAuraModInvisibility {
+			seerInvis[aura.MiscValue] = true
+		}
+	}
+	for misc, value := range targetInvis {
+		detect, ok := seerDetect[misc]
+		if !ok || detect < value {
+			return false
+		}
+	}
+	for misc := range seerInvis {
+		if _, ok := targetDetect[misc]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// playerSeerCanDetectStealthOfCreature mirrors
+// WorldObject::CanDetectStealthOf (Object.cpp:1719-1790) with a player seer
+// and a creature target, checkAlert=false: contact distance and the
+// front-arc gate first, then per stealth type in ascending order the
+// DETECT_STEALTH (228) misc-matched auto-detect arm and the level/detect-sum
+// range arm. The 30-yard cap applies because the seer is a player
+// (Object.cpp:1776), unlike the creature-seer twin. The target's stealth
+// value follows the wild twin's convention (global 16+154 sum); the seer's
+// MOD_STEALTH_DETECT (17) sum is per type (Object.cpp:1764).
+func (s *Server) playerSeerCanDetectStealthOfCreature(seer *session, tm *creatureMotion) bool {
+	if s == nil || seer == nil || seer.player == nil || tm == nil {
+		return true
+	}
+	targetStealth := s.totemCreatureAuraMiscSums(tm, spellAuraModStealth)
+	if len(targetStealth) == 0 {
+		return true
+	}
+	combatReach := float32(1.5)
+	if seer.player.CombatReach > 0 {
+		combatReach = seer.player.CombatReach
+	}
+	dist := float32(distance3D(seer.player.X, seer.player.Y, seer.player.Z, tm.X, tm.Y, tm.Z))
+	if dist < combatReach {
+		return true
+	}
+	if !hasInArc(seer.player.Orientation, seer.player.X, seer.player.Y, tm.X, tm.Y, math.Pi) {
+		return false
+	}
+	seerDetect := map[int32]int32{}
+	for _, aura := range seer.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraStealthDetect {
+			continue
+		}
+		seerDetect[aura.MiscValue] += int32(aura.Amount)
+	}
+	seerLevel := uint32(1)
+	if seer.player.Level > 0 {
+		seerLevel = uint32(seer.player.Level)
+	}
+	targetKey := creatureAuraKeyForMotion(tm)
+	targetValue := s.creatureAuraTypeSum(targetKey, spellAuraModStealth) + s.creatureAuraTypeSum(targetKey, spellAuraStealthLevel)
+	miscs := make([]int32, 0, len(targetStealth))
+	for mv := range targetStealth {
+		miscs = append(miscs, mv)
+	}
+	sort.Slice(miscs, func(i, j int) bool { return miscs[i] < miscs[j] })
+	for _, mv := range miscs {
+		if seer.hasAuraTypeWithMiscValue(spellAuraDetectStealth, mv) {
+			return true
+		}
+		detectionValue := int32(30) + int32(seerLevel-1)*5 + seerDetect[mv] - targetValue
+		visibilityRange := float32(detectionValue)*0.3 + combatReach
+		if visibilityRange > 30.0 {
+			visibilityRange = 30.0
+		}
+		if visibilityRange <= 0 || dist > visibilityRange {
+			return false
+		}
+	}
+	return true
+}
