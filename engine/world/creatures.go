@@ -462,9 +462,26 @@ func filterNewTransportCreaturePassengers(observer *session, spawns []creatureSp
 		if guid == 0 {
 			guid = creatureWorldGUID(spawn.GUID, spawn.Entry)
 		}
-		if observer.markTransportPassengerVisible(guid, spawn.TransportGUID) {
-			visible = append(visible, spawn)
+		if !observer.markTransportPassengerVisible(guid, spawn.TransportGUID) {
+			continue
 		}
+		// Grid-stream phase leg (Object.cpp:1659-1662): DB rows are
+		// SQL-gated by the phase predicate, but transport passengers
+		// are appended unchecked. A passenger whose stamped phase
+		// (loadTransportPassengers c.phaseMask, 0 read as
+		// PHASEMASK_NORMAL) misses the observer's phase is dropped
+		// after marking, like the ghost filter in
+		// buildNearbyCreatureUpdates below; the transport update tick
+		// reconciles the mark (clear + out-of-range, then re-mark and
+		// create when the gate passes).
+		passengerPhase := spawn.PhaseMask
+		if passengerPhase == 0 {
+			passengerPhase = 1
+		}
+		if passengerPhase&observer.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		visible = append(visible, spawn)
 	}
 	return visible
 }

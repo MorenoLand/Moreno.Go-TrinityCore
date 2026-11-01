@@ -235,6 +235,22 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		if observer != nil && !observer.markTransportPassengerVisible(gameObjectGUID(passenger.GUID, passenger.Entry), passenger.TransportGUID) {
 			continue
 		}
+		// Grid-stream phase leg (Object.cpp:1659-1662), the GO twin
+		// of the creature filter above: DB GO rows are SQL-gated, but
+		// transport GO passengers are appended unchecked. A passenger
+		// whose stamped phase (loadTransportPassengers g.phaseMask, 0
+		// read as PHASEMASK_NORMAL) misses the observer's phase is
+		// dropped after marking; a nil observer fails open, as on the
+		// attach path. The transport update tick reconciles the mark.
+		if observer != nil {
+			passengerPhase := passenger.PhaseMask
+			if passengerPhase == 0 {
+				passengerPhase = 1
+			}
+			if passengerPhase&observer.currentPlayerPhaseMask() == 0 {
+				continue
+			}
+		}
 		updates.AddUpdateBlock(buildGameObjectUpdate(passenger))
 		count++
 	}
