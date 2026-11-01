@@ -1197,7 +1197,9 @@ func (s *Server) spellSearchChainTargetsForMotion(ctx context.Context, m *creatu
 // candidates on ALLY/PARTY/RAID and on ENEMY) use the affecting-player
 // reaction arms (duel/group/FFA) ahead of the faction gate, and a wild
 // caster's ENEMY creature candidates take the owner's at-war verdict
-// (wildCasterAttackHostile) instead of the template gate. PARTY/RAID
+// (wildCasterAttackHostile) instead of the template gate, and a wild
+// caster's ALLY/PARTY/RAID candidates take the both-directions assist
+// gate (wildCasterAssistAlly). PARTY/RAID
 // ride the motion-rooted referer scope.
 func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion, spell wotlk.Spell, primary combatTarget, radius float32, excludeGUID uint64, checkType uint32, condRows []conditionRow, scope friendlyRefererScope) []chainCandidate {
 	candidates := make([]chainCandidate, 0, 16)
@@ -1205,7 +1207,9 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 	// The caster's affecting player (owner/charmer session) drives the
 	// player-owned reaction arms below; wild casters resolve nil and keep
 	// the faction-template gates except on ENEMY, where player-owned
-	// creature candidates take the at-war verdict below. Resolved before the session scan:
+	// creature candidates take the at-war verdict below, and on
+	// ALLY/PARTY/RAID, where wild candidates take the both-directions
+	// assist gate below. Resolved before the session scan:
 	// findSessionByGUID takes sessionsMu.RLock.
 	casterOwner := s.creatureAffectingPlayerSession(m)
 	accept := func(guid uint64, mapID, instanceID uint32, x, y, z float32, unitFlags, flagsExtra, health, maxHealth uint32, hostileToCaster, allyToCaster, assistPvPBlocked bool, isPlayer bool, isGM bool, entry, spawnLow, faction uint32, ownerGUID uint64, reach float32) {
@@ -1349,6 +1353,23 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 				candAlly = false
 			}
 		}
+		if casterOwner == nil && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
+			// Wild caster: the assist gate is the both-directions
+			// non-friendly arm (Object.cpp:3149), not the single-
+			// direction template gate. Only a flag-set candidate with
+			// a resolving owner takes the reputation forward arm; a
+			// wild candidate takes the template both-directions arm.
+			var candOwnerSess *session
+			var ownerReps map[uint32]playerReputation
+			if motion.UnitFlags&unitFlagPlayerControlled != 0 {
+				if candOwnerSess = s.findSessionByGUID(motionOwner); candOwnerSess != nil && candOwnerSess.player != nil {
+					ownerReps = playerReputationMap(candOwnerSess.player.Reputations)
+				} else {
+					candOwnerSess = nil
+				}
+			}
+			candAlly = s.wildCasterAssistAlly(m.Faction, motion.Faction, candOwnerSess, ownerReps, m.TypeFlags, candAlly)
+		}
 		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.UnitFlags, motion.FlagsExtra, motion.Health, motion.MaxHealth, hostile, candAlly, candBlocked, false, false, motion.Entry, 0, motion.Faction, motionOwner, motion.CombatReach)
 	}
 	s.sessionsMu.RLock()
@@ -1363,6 +1384,11 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 				playerAlly = reactionAlly
 			}
 			playerBlocked = playerOwnedCreatureAssistPvPBlocked(casterOwner, targetSession)
+		}
+		if casterOwner == nil && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
+			// Wild caster vs a player candidate: same both-directions
+			// assist gate, with the player as the reputation subject.
+			playerAlly = s.wildCasterAssistAlly(m.Faction, candidate.FactionTemplate, targetSession, candidate.Reputations, m.TypeFlags, playerAlly)
 		}
 		playerHostile := chainPlayerAttackHostile(casterOwner, targetSession, s.isAttackableFaction(m.Faction, candidate))
 		accept(targetSession.playerGUID, targetSession.player.Map, targetSession.player.InstanceID, targetSession.player.X, targetSession.player.Y, targetSession.player.Z, targetSession.player.UnitFlags, 0, targetSession.player.Health, targetSession.player.MaxHealth, playerHostile, playerAlly, playerBlocked, true, sessionIsGameMaster(targetSession), 0, 0, 0, 0, targetSession.player.CombatReach)
@@ -1387,6 +1413,13 @@ func (s *Server) chainCandidatesForMotion(ctx context.Context, m *creatureMotion
 							spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
 							uint32(typeFlags)&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist) == 0 {
 							staticAlly = false
+						}
+						if casterOwner == nil && (checkType == targetCheckAlly || checkType == targetCheckParty || checkType == targetCheckRaid) {
+							// Wild caster vs a wild static candidate: the
+							// template both-directions arm plus the
+							// caster raid-unit exemption; statics carry
+							// no owner, so no reputation arm can fire.
+							staticAlly = s.wildCasterAssistAlly(m.Faction, uint32(faction), nil, nil, m.TypeFlags, staticAlly)
 						}
 						accept(guid, uint32(mapID), primary.InstanceID, float32(x), float32(y), float32(z), uint32(unitFlags), uint32(flagsExtra), uint32(health), st.MaxHealth, hostile, staticAlly, false, false, false, uint32(entry), uint32(low), uint32(faction), 0, st.CombatReach)
 					}

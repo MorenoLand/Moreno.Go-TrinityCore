@@ -218,6 +218,78 @@ func (s *Server) wildCasterAttackHostile(casterFaction uint32, candOwnerGUID uin
 	return saved.Flags&factionFlagAtWar != 0
 }
 
+// commonFactionRankHostile ports the common faction based check tail of
+// WorldObject::GetFactionReactionTo (Object.cpp:2826-2842) as a below-
+// neutral test: hostile when the first template is hostile to the second,
+// friendly when either direction is friendly, hostile-by-default when the
+// first template carries the flag, neutral otherwise.
+func commonFactionRankHostile(a, b wotlk.FactionTemplate) bool {
+	if factionTemplateHostileTo(a, b) {
+		return true
+	}
+	if factionTemplateFriendlyTo(a, b) || factionTemplateFriendlyTo(b, a) {
+		return false
+	}
+	return a.Flags&0x00002000 != 0
+}
+
+// wildCasterAssistAlly mirrors the non-friendly gate of
+// WorldObject::IsValidAssistTarget (Object.cpp:3149) for a wild creature
+// caster (casterOwner nil, so neither the PvP case nor the PvC case can
+// fire) on ALLY/PARTY/RAID chain jumps: the gate refuses only when BOTH
+// reactions are below neutral, and a TREAT_AS_RAID_UNIT caster is exempt
+// outright. candOwner is the candidate owner's session, or nil for a wild
+// candidate; ownerReps is that owner's reputation map (the player
+// candidate's own map on the player arm). The forward reaction is the
+// owner's reputation against the caster's faction when that faction has a
+// reputation row — contested-guard hostile outright, the saved rank
+// clamped down to neutral at war (GetFactionReactionTo, Object.cpp:2817-
+// 2823) — and the common template rank otherwise; the reverse reaction is
+// always the common template rank, since the caster has no affecting
+// player. A reputation faction with no saved owner row keeps the template
+// gate, mirroring the wild-caster attack twin (Initialize normally
+// guarantees rep-faction rows). Forced ranks and the target's
+// IGNORE_REPUTATION flag have no Go model here.
+func (s *Server) wildCasterAssistAlly(casterFaction, candFaction uint32, candOwner *session, ownerReps map[uint32]playerReputation, casterTypeFlags uint32, factionAlly bool) bool {
+	if casterTypeFlags&creatureTypeFlagTreatAsRaidUnit != 0 {
+		return true
+	}
+	if s == nil || s.Data == nil {
+		return factionAlly
+	}
+	casterTpl, casterFound, err := s.Data.FactionTemplate(casterFaction)
+	if err != nil || !casterFound {
+		return factionAlly
+	}
+	candTpl, candFound, err := s.Data.FactionTemplate(candFaction)
+	if err != nil || !candFound {
+		forwardHostile := s.creatureFactionHostileTo(casterFaction, candFaction)
+		reverseHostile := s.creatureFactionHostileTo(candFaction, casterFaction)
+		return !(forwardHostile && reverseHostile)
+	}
+	reverseHostile := commonFactionRankHostile(candTpl, casterTpl)
+	if candOwner == nil || candOwner.player == nil {
+		forwardHostile := commonFactionRankHostile(casterTpl, candTpl)
+		return !(forwardHostile && reverseHostile)
+	}
+	if s.creatureContestedHostile(casterFaction, candOwner) {
+		return !reverseHostile
+	}
+	if s.factionCanHaveReputation(casterTpl.Faction) {
+		saved, ok := ownerReps[casterTpl.Faction]
+		if !ok {
+			return factionAlly
+		}
+		rank := reputationRank(int64(totalReputationStanding(saved)))
+		if saved.Flags&factionFlagAtWar != 0 && rank > 3 {
+			rank = 3
+		}
+		return !(rank < 3 && reverseHostile)
+	}
+	forwardHostile := commonFactionRankHostile(casterTpl, candTpl)
+	return !(forwardHostile && reverseHostile)
+}
+
 // creatureContestedHostile mirrors the contested-guard hostile term
 // (Object.cpp:2806-2809, 3041-3043): a contested-guard faction is hostile
 // to a player carrying the contested-PvP flag.
