@@ -1016,6 +1016,29 @@ func (s *Server) broadcastPendingHighestThreatUpdates(pending ...pendingHighestT
 	}
 }
 
+// pendingThreatClear is a SMSG_THREAT_CLEAR captured under motionMu: like
+// pendingHighestThreatUpdate, the visible-set broadcast reads motionMu
+// through its seer lookup, so it must run after the lock drops. Zero
+// creature entries are skipped.
+type pendingThreatClear struct {
+	creature          uint64
+	mapID, instanceID uint32
+	x, y, z           float32
+	phase             uint32
+}
+
+func (s *Server) broadcastPendingThreatClears(pending ...pendingThreatClear) {
+	if s == nil {
+		return
+	}
+	for _, p := range pending {
+		if p.creature == 0 {
+			continue
+		}
+		s.broadcastThreatClearInInstance(p.mapID, p.instanceID, p.x, p.y, p.z, p.creature, p.phase)
+	}
+}
+
 // sumThreatTempModifier sums the SPELL_AURA_MOD_TOTAL_THREAT (aura 103)
 // effect amounts over a unit's active auras — the mod computed by
 // ThreatManager::UpdateMyTempModifiers (ThreatManager.cpp:699-704). The

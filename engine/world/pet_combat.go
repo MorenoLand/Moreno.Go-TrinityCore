@@ -8605,6 +8605,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 	var rageNext uint32
 	var switchStart pendingAttackStart
 	var switchHighest pendingHighestThreatUpdate
+	var clearThreat pendingThreatClear
 	if targetMotion != nil {
 		if targetMotion.BossAI == nil {
 			targetMotion.BossAI = getBossAIForCreature(targetMotion, targetMotion.ScriptName)
@@ -8634,7 +8635,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 			// (ThreatManager.cpp:483-490) — every other death path pairs the
 			// ClearThreat with the SMSG_THREAT_CLEAR broadcast; the pet-spell
 			// kill path omitted it, leaving client threat UIs stale.
-			s.server.broadcastThreatClearInInstance(targetMotion.Map, targetMotion.InstanceID, targetMotion.X, targetMotion.Y, targetMotion.Z, targetMotion.GUID, targetMotion.PhaseMask)
+			clearThreat = pendingThreatClear{creature: targetMotion.GUID, mapID: targetMotion.Map, instanceID: targetMotion.InstanceID, x: targetMotion.X, y: targetMotion.Y, z: targetMotion.Z, phase: targetMotion.PhaseMask}
 		} else {
 			targetMotion.Health -= damage
 			// Unit::DealDamage's threat add runs on the victim's pre-damage
@@ -8709,6 +8710,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 		}
 	}
 	s.server.motionMu.Unlock()
+	s.server.broadcastPendingThreatClears(clearThreat)
 	s.server.broadcastPendingHighestThreatUpdates(switchHighest)
 	s.server.broadcastPendingAttackStarts(switchStart)
 	if targetMotion == nil {
