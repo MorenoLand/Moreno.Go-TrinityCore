@@ -568,6 +568,30 @@ func (s *session) sendVisibleCreatureAuras(state playerState) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(target.key.GUID, records), true)
 		}
 	}
+	// SendInitialVisiblePackets attack-start leg (Player.cpp) for the
+	// sweep path: the aura scan above covers only aura-bearing
+	// creatures, but an attacking creature with no auras needs
+	// SMSG_ATTACK_START just the same, and engage-time broadcasts reach
+	// only the visible set at engage time. Same distance gate as the
+	// aura leg; collected under motionMu, written after it drops.
+	type attackingMotion struct {
+		guid, victim uint64
+	}
+	var attackers []attackingMotion
+	s.server.motionMu.Lock()
+	for _, motion := range s.server.motionMapLocked(state.Map, state.InstanceID) {
+		if motion == nil || motion.Health == 0 || motion.TargetGUID == 0 {
+			continue
+		}
+		if math.Hypot(float64(motion.X-state.X), float64(motion.Y-state.Y)) > distance {
+			continue
+		}
+		attackers = append(attackers, attackingMotion{guid: motion.GUID, victim: motion.TargetGUID})
+	}
+	s.server.motionMu.Unlock()
+	for _, attacker := range attackers {
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(attacker.guid, attacker.victim), true)
+	}
 }
 
 // sendCreatureAurasForTarget is the single-creature twin of
@@ -579,7 +603,17 @@ func (s *session) sendVisibleCreatureAuras(state playerState) {
 // reach only observers who already had the creature, and the observer's
 // own login/worldport sweep never re-runs when the creature arrives.
 // A creature with no active auras sends nothing; the lookup key is the
-// world GUID the create block itself carries.
+// world GUID the create block itself carries. The SendInitialVisiblePackets
+// attack-start leg (Player.cpp: SendAurasForTarget, then SMSG_ATTACK_START
+// when the unit is alive, melee-attacking, and has a victim) rides here
+// too, sent regardless of aura records as on the player twin
+// sendAurasForTarget: engage-time broadcasts reach only the visible set
+// at engage time, so a late observer would otherwise see the attacker
+// idle. The Go melee-attacking source is motion.TargetGUID (the
+// conditions.go unit-state leg); the victim gate is the GUID itself, as
+// C++ requires GetVictim() non-null but does not require the victim
+// alive. A filter spawn with no creature GUID (pet creates) skips both
+// legs, as before.
 func (s *session) sendCreatureAurasForTarget(mapID, instanceID uint32, creatureGUID uint64) {
 	if s == nil || s.server == nil || creatureGUID == 0 {
 		return
@@ -596,6 +630,9 @@ func (s *session) sendCreatureAurasForTarget(mapID, instanceID uint32, creatureG
 	records := auraUpdateRecords(auras)
 	if len(records) > 0 {
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(creatureGUID, records), true)
+	}
+	if motion := s.server.findCreatureMotion(mapID, instanceID, creatureGUID); motion != nil && motion.Health > 0 && motion.TargetGUID != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(creatureGUID, motion.TargetGUID), true)
 	}
 }
 
