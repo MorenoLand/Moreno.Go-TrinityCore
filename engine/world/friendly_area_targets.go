@@ -172,6 +172,10 @@ func (s *session) friendlyGroupSnapshot() (subGroup uint8, party, raid map[uint6
 // Ally test (TARGET_CHECK_ALLY): WorldObject::IsValidAssistTarget
 // (Object.cpp:3087) — approximated as alive, not combat-disabled, and
 // non-hostile: same alliance for players, !isHostileFaction for creatures.
+// The PvC arm (Object.cpp:3178-3183) additionally gates wild creature
+// candidates on TREAT_AS_RAID_UNIT/CAN_ASSIST, unless the spell carries
+// ASSIST_IGNORE_IMMUNE_FLAG; player-controlled candidates take the PvP
+// case instead.
 // TARGET_CHECK_PARTY additionally requires Unit::IsInPartyWith
 // (Unit.cpp:12126): self, same-subgroup group members, or creatures owned by
 // them (charmer/owner resolution). TARGET_CHECK_RAID requires
@@ -367,6 +371,19 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		if owner == 0 {
 			owner = motion.CharmOwnerGUID
 		}
+		// IsValidAssistTarget PvC arm (Object.cpp:3178-3183): the caster
+		// is a player, so a creature candidate without
+		// UNIT_FLAG_PLAYER_CONTROLLED is wild and passes only with
+		// TREAT_AS_RAID_UNIT/CAN_ASSIST, unless the spell carries
+		// ASSIST_IGNORE_IMMUNE_FLAG. Player-controlled candidates
+		// (pets/charmed, flag set at creation/charm) take the PvP case
+		// instead, not this gate. The target-IsPvP exemption has no
+		// creature-side Go model, like the explicit-target twin.
+		if (motion.UnitFlags&unitFlagPlayerControlled) == 0 &&
+			spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+			(motion.TypeFlags&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist)) == 0 {
+			continue
+		}
 		accept(motion.GUID, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z,
 			motion.UnitFlags, motion.FlagsExtra, motion.Health,
 			allyOf(motion.Faction), inParty(owner), inRaid(owner))
@@ -411,15 +428,23 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 			minY = math.Min(minY, float64(g.centerY-g.radius))
 			maxY = math.Max(maxY, float64(g.centerY+g.radius))
 		}
-		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, caster.Map, minX, maxX, minY, maxY)
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), c.curhealth, COALESCE(t.type_flags, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, caster.Map, minX, maxX, minY, maxY)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
-				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
+				var low, entry, mapID, faction, unitFlags, flagsExtra, health, typeFlags int64
 				var x, y, z float64
-				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) == nil {
+				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health, &typeFlags) == nil {
 					guid := creatureWorldGUID(uint32(low), uint32(entry))
 					if _, hasMotion := motionGUIDs[guid]; !hasMotion {
+						// Static spawns have no owner tracking, so they
+						// are wild for the PvC arm (Object.cpp:3178-3183)
+						// and pass only with TREAT_AS_RAID_UNIT/CAN_ASSIST,
+						// unless the spell ignores the immune flag.
+						if spell.AttributesEx6&spellAttr6AssistIgnoreImmuneFlag == 0 &&
+							(uint32(typeFlags)&(creatureTypeFlagTreatAsRaidUnit|creatureTypeFlagCanAssist)) == 0 {
+							continue
+						}
 						// Static spawns have no owner tracking; party/raid
 						// membership for them resolves through faction only.
 						ally := allyOf(uint32(faction))
