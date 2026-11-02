@@ -949,18 +949,86 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsMounted"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
 	methods["GetMountId"] = luaNoArgs(func() any { return state.MountDisplayID })
 	methods["GetPetGUID"] = luaNoArgs(func() any { return state.PetGUID })
+	// HasSpellCooldown is PlayerMethods.h:217 (TRINITY arm): the
+	// SpellHistory::HasCooldown twin in death.go — the per-spell entry,
+	// then the DBC-category arm. The previous body compared the
+	// seconds-based End against UnixMilli and so read false for every
+	// live cooldown.
 	methods["HasSpellCooldown"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		now := time.Now().UnixMilli()
-		for _, cooldown := range state.Cooldowns {
-			if cooldown.Spell == spell && cooldown.End > now {
-				return []any{true}, nil
+		return []any{s.spellHasCooldown(spell)}, nil
+	}
+	// cooldownUpdate mirrors Eluna CHECKVAL<bool>(L, 3, true): an omitted
+	// update argument means true, a non-boolean argument is an error.
+	cooldownUpdate := func(method string, args []any) (bool, error) {
+		if len(args) < 2 {
+			return true, nil
+		}
+		update, ok := args[1].(bool)
+		if !ok {
+			return false, fmt.Errorf("%s requires a boolean update flag", method)
+		}
+		return update, nil
+	}
+	// GetSpellCooldownDelay is PlayerMethods.h:842 (TRINITY arm):
+	// SpellHistory::GetRemainingCooldown in milliseconds, 0 for an
+	// unknown spell (GetSpellInfo nil). The DBC-miss category is 0, so
+	// the category arm stays silent without a DBC; a live spell entry
+	// still answers, and entries only exist for DBC-known spells (the
+	// DB load drops unknown rows), so the arms agree.
+	methods["GetSpellCooldownDelay"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		var category uint32
+		if s.server != nil && s.server.Data != nil {
+			if spellInfo, found, spellErr := s.server.Data.Spell(spell); spellErr == nil && found {
+				category = spellInfo.Category
 			}
 		}
-		return []any{false}, nil
+		return []any{s.playerCooldownRemainingMs(spell, category)}, nil
+	}
+	// ResetSpellCooldown is PlayerMethods.h:3501 (TRINITY arm):
+	// SpellHistory::ResetCooldown, silent when the spell holds no entry.
+	methods["ResetSpellCooldown"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		update, err := cooldownUpdate("ResetSpellCooldown", args)
+		if err != nil {
+			return nil, err
+		}
+		s.resetPlayerCooldown(spell, update)
+		return []any{}, nil
+	}
+	// ResetTypeCooldowns is PlayerMethods.h:3519 (TRINITY arm):
+	// SpellHistory::ResetCooldowns over the predicate "spell's DBC
+	// category == category", silent when nothing matches.
+	methods["ResetTypeCooldowns"] = func(_ context.Context, args []any) ([]any, error) {
+		category, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		update, err := cooldownUpdate("ResetTypeCooldowns", args)
+		if err != nil {
+			return nil, err
+		}
+		s.resetPlayerCooldownsByCategory(category, update)
+		return []any{}, nil
+	}
+	// ResetAllCooldowns is PlayerMethods.h:3544 (TRINITY arm):
+	// SpellHistory::ResetAllCooldowns — clears spell and category
+	// cooldowns, touches neither school lockouts nor global cooldowns.
+	// The Go list carries category ends on its entries, so clearing the
+	// list clears both, matching clearPlayerCooldowns.
+	methods["ResetAllCooldowns"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.clearPlayerCooldowns()
+		return []any{}, nil
 	}
 	// IsInWater is Unit::IsInWater (Unit.cpp:3276-3279): the liquid
 	// status IN_WATER|UNDER_WATER over all liquid types, not the client

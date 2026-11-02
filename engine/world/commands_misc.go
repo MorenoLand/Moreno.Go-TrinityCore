@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -723,16 +724,72 @@ func (s *session) clearPlayerCooldowns() {
 	}
 }
 
+// playerCooldownRemainingMs mirrors SpellHistory::GetRemainingCooldown
+// (SpellHistory.cpp:494-515) in milliseconds: the spell entry's End
+// first — an expired entry reads 0 and never falls through to the
+// category arm — else the last same-category entry's CategoryEnd. The
+// C++ _categoryCooldowns map holds one pointer per category, the entry
+// last AddCooldown'd for it, so the last matching Go entry decides,
+// matching the interrupt.go lockout arm. Ends are Unix seconds.
+func (s *session) playerCooldownRemainingMs(spellID uint32, category uint32) uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	now := time.Now().Unix()
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell == spellID {
+			if cd.End > now {
+				return clampCooldownMs((cd.End - now) * 1000)
+			}
+			return 0
+		}
+	}
+	if category == 0 {
+		return 0
+	}
+	var lastCatEnd int64
+	found := false
+	for _, cd := range s.player.Cooldowns {
+		if cd.Category == category {
+			lastCatEnd = cd.CategoryEnd
+			found = true
+		}
+	}
+	if found && lastCatEnd > now {
+		return clampCooldownMs((lastCatEnd - now) * 1000)
+	}
+	return 0
+}
+
+func clampCooldownMs(ms int64) uint32 {
+	if ms > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(ms)
+}
+
 // clearPlayerCooldown mirrors SpellHistory::ResetCooldown(spellId, true)
 // (SpellHistory.cpp:432-454): the erase is silent when the spell holds no
 // cooldown, otherwise SMSG_CLEAR_COOLDOWN fires for that spell before the
 // erase. The cs_misc `.cooldown <spell>` path (cs_misc.cpp:756) passes
 // update=true; the silent default arm is unneeded on this path.
 func (s *session) clearPlayerCooldown(spellID uint32) {
+	s.resetPlayerCooldown(spellID, true)
+}
+
+// resetPlayerCooldown mirrors SpellHistory::ResetCooldown(spellId, update)
+// (SpellHistory.cpp:432-454) plus EraseCooldown (SpellHistory.h:140-144):
+// erasing the entry also erases _categoryCooldowns[CategoryId], so
+// remaining entries of the category lose their category arm — mirrored
+// here by zeroing their CategoryEnd. With update=false the erase is
+// silent; with update=true SMSG_CLEAR_COOLDOWN fires for the spell, but
+// only when it held a cooldown.
+func (s *session) resetPlayerCooldown(spellID uint32, update bool) {
 	if s == nil {
 		return
 	}
 	hadCooldown := false
+	var erasedCategory uint32
 	if s.player != nil {
 		s.playerStateMu.Lock()
 		kept := s.player.Cooldowns[:0]
@@ -741,13 +798,76 @@ func (s *session) clearPlayerCooldown(spellID uint32) {
 				kept = append(kept, cd)
 			} else {
 				hadCooldown = true
+				erasedCategory = cd.Category
 			}
 		}
 		s.player.Cooldowns = kept
+		if hadCooldown && erasedCategory != 0 {
+			for i := range s.player.Cooldowns {
+				if s.player.Cooldowns[i].Category == erasedCategory {
+					s.player.Cooldowns[i].CategoryEnd = 0
+				}
+			}
+		}
 		s.playerStateMu.Unlock()
 	}
-	if hadCooldown {
+	if hadCooldown && update {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(s.playerGUID, spellID), true)
+	}
+}
+
+// resetPlayerCooldownsByCategory mirrors SpellHistory::ResetCooldowns
+// (SpellHistory.h:98-115) over the PlayerMethods.h:3526 predicate —
+// every entry whose spell's DBC category equals the given category is
+// erased, and with update=true SMSG_CLEAR_COOLDOWN fires once per erased
+// spell after the erases, but only when something matched. The predicate
+// reads the DBC category when the store is available and falls back to
+// the entry's stored Category without one; EraseCooldown's category-map
+// erase is mirrored by zeroing CategoryEnd on remaining entries carrying
+// an erased entry's stored category.
+func (s *session) resetPlayerCooldownsByCategory(category uint32, update bool) {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.playerStateMu.Lock()
+	snapshot := append([]spellCooldown(nil), s.player.Cooldowns...)
+	s.playerStateMu.Unlock()
+	matched := make(map[uint32]struct{})
+	for _, cd := range snapshot {
+		cat := cd.Category
+		if s.server != nil && s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(cd.Spell); err == nil && found {
+				cat = spell.Category
+			}
+		}
+		if cat == category {
+			matched[cd.Spell] = struct{}{}
+		}
+	}
+	if len(matched) == 0 {
+		return
+	}
+	erasedCategories := make(map[uint32]struct{})
+	s.playerStateMu.Lock()
+	kept := s.player.Cooldowns[:0]
+	for _, cd := range s.player.Cooldowns {
+		if _, drop := matched[cd.Spell]; !drop {
+			kept = append(kept, cd)
+		} else if cd.Category != 0 {
+			erasedCategories[cd.Category] = struct{}{}
+		}
+	}
+	s.player.Cooldowns = kept
+	for i := range s.player.Cooldowns {
+		if _, erased := erasedCategories[s.player.Cooldowns[i].Category]; erased {
+			s.player.Cooldowns[i].CategoryEnd = 0
+		}
+	}
+	s.playerStateMu.Unlock()
+	if update {
+		for spellID := range matched {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(s.playerGUID, spellID), true)
+		}
 	}
 }
 
