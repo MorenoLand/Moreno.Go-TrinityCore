@@ -648,10 +648,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		return []any{motion.X + r*float32(math.Cos(float64(a))), motion.Y + r*float32(math.Sin(float64(a))), motion.Z}, nil
 	}
 	// GetMap is WorldObjectMethods::GetMap: the DBC-backed Map object for
-	// the creature's map/instance (NewMapObject + mapLiveFromStore, the
+	// the creature's map/instance (NewMapObject + mapLive, the
 	// same builder behind the instance hooks' map argument).
 	methods["GetMap"] = func(_ context.Context, _ []any) ([]any, error) {
-		return []any{scripting.NewMapObject(state.Map, state.InstanceID, mapLiveFromStore(s.server.Data, state.Map))}, nil
+		return []any{scripting.NewMapObject(state.Map, state.InstanceID, s.server.mapLive(state.Map, state.InstanceID))}, nil
 	}
 	// IsElite is CreatureMethods::IsElite: Creature::isElite
 	// (Creature.cpp:2344-2350) — rank neither NORMAL (0) nor RARE (4),
@@ -1285,14 +1285,14 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	// a set would have no live object to write; it stays out.
 	methods["GetPhaseMask"] = luaNoArgs(func() any { return state.PhaseMask })
 	// GetMap is WorldObject::GetMap: the DBC-backed Map object for the
-	// gameobject's map/instance (NewMapObject + mapLiveFromStore, the same
+	// gameobject's map/instance (NewMapObject + mapLive, the same
 	// builder behind the creature surface and the instance hooks' map
 	// argument). Nil when the server store is unavailable.
 	methods["GetMap"] = func(_ context.Context, _ []any) ([]any, error) {
 		if srv.Data == nil {
 			return []any{nil}, nil
 		}
-		return []any{scripting.NewMapObject(state.Map, state.InstanceID, mapLiveFromStore(srv.Data, state.Map))}, nil
+		return []any{scripting.NewMapObject(state.Map, state.InstanceID, srv.mapLive(state.Map, state.InstanceID))}, nil
 	}
 	// IsHolidayActive is GameEventMgr::IsHolidayActive
 	// (GameEventMgr.cpp:1847): true when any currently active game event

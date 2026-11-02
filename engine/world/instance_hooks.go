@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
 
@@ -20,17 +19,20 @@ func luaInstanceData() *scripting.Object {
 	return &scripting.Object{Type: "InstanceData", Fields: map[string]any{}}
 }
 
-// mapLiveFromStore builds the DBC-backed MapLive behind Lua Map objects
-// from the wotlk store (MapEntry::IsDungeon/IsRaid/IsBattleArena/
-// IsBattleground, MapMethods.h). The world side supplies the store so the
+// mapLive builds the live MapLive behind Lua Map objects (MapMethods.h):
+// the DBC-backed snapshot from the wotlk store, the per-instance spawn
+// mode from the instance table (the creature IsHeroic read, same row),
+// the map-instance player roster (the luaPlayers pattern: worldReady
+// sessions enumerated under sessionsMu, player objects built under it),
+// and the zone weather writer. The world side supplies all four so the
 // scripting package keeps its data-source decoupling (GuildLive/GroupLive
-// pattern).
-func mapLiveFromStore(data *wotlk.Store, mapID uint32) scripting.MapLive {
-	return scripting.MapLive{Load: func() (scripting.MapSnapshot, bool) {
-		if data == nil {
+// pattern). A nil server yields a snapshot-only live object.
+func (s *Server) mapLive(mapID, instanceID uint32) scripting.MapLive {
+	live := scripting.MapLive{Load: func() (scripting.MapSnapshot, bool) {
+		if s == nil || s.Data == nil {
 			return scripting.MapSnapshot{}, false
 		}
-		entry, found, err := data.Map(mapID)
+		entry, found, err := s.Data.Map(mapID)
 		if err != nil || !found {
 			return scripting.MapSnapshot{}, false
 		}
@@ -42,14 +44,58 @@ func mapLiveFromStore(data *wotlk.Store, mapID uint32) scripting.MapLive {
 			IsBattleground: entry.IsBattleground(),
 		}, true
 	}}
+	if s == nil {
+		return live
+	}
+	live.Difficulty = func(ctx context.Context) (int64, bool) {
+		if instanceID == 0 || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+			return 0, false
+		}
+		var difficulty int64
+		if err := s.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT difficulty FROM instance WHERE id = ?", instanceID).Scan(&difficulty); err != nil {
+			return 0, false
+		}
+		return difficulty, true
+	}
+	live.Players = func() []scripting.MapPlayerLive {
+		s.sessionsMu.RLock()
+		defer s.sessionsMu.RUnlock()
+		var out []scripting.MapPlayerLive
+		for sess := range s.sessions {
+			if sess == nil || !sess.worldReady.Load() || sess.player == nil {
+				continue
+			}
+			if sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+				continue
+			}
+			player := sess.luaPlayer()
+			if player == nil {
+				continue
+			}
+			out = append(out, scripting.MapPlayerLive{
+				Player: player,
+				IsGM:   sess.player.ExtraFlags&playerExtraGMOn != 0,
+				Team:   teamForRace(sess.player.Race),
+			})
+		}
+		return out
+	}
+	live.SetWeather = func(ctx context.Context, zone, wtype uint32, grade float32) {
+		s.setZoneWeather(ctx, zone, weatherType(wtype), grade)
+	}
+	return live
 }
 
 // instanceMapObject builds the map argument for the Eluna
 // INSTANCE_EVENT_* hooks, the Go model of Eluna::InstanceHooks'
 // Push(instance): the Map object carrying the map and instance IDs plus
-// the DBC-backed read surface (scripting.NewMapObject).
-func instanceMapObject(mapID, instanceID uint32, data *wotlk.Store) *scripting.Object {
-	return scripting.NewMapObject(mapID, instanceID, mapLiveFromStore(data, mapID))
+// the live Map surface (scripting.NewMapObject).
+func instanceMapObject(srv *Server, mapID, instanceID uint32) *scripting.Object {
+	if srv == nil {
+		return scripting.NewMapObject(mapID, instanceID, scripting.MapLive{})
+	}
+	return scripting.NewMapObject(mapID, instanceID, srv.mapLive(mapID, instanceID))
 }
 
 // isInstanceScriptMap reports whether the map can carry Eluna instance
@@ -75,7 +121,7 @@ func (s *session) fireInstancePlayerEnter(ctx context.Context) {
 	if s.player.InstanceID == 0 || !s.server.isInstanceScriptMap(s.player.Map) {
 		return
 	}
-	if _, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, s.player.Map, s.player.InstanceID, scripting.InstanceEventOnPlayerEnter, luaInstanceData(), instanceMapObject(s.player.Map, s.player.InstanceID, s.server.Data), s.luaPlayer()); err != nil {
+	if _, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, s.player.Map, s.player.InstanceID, scripting.InstanceEventOnPlayerEnter, luaInstanceData(), instanceMapObject(s.server, s.player.Map, s.player.InstanceID), s.luaPlayer()); err != nil {
 		s.debug("lua instance player-enter event failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
 	}
 }
@@ -96,7 +142,7 @@ func (s *Server) triggerInstanceGameObjectCreate(dyn *dynamicGameObjectState) {
 	if goObj == nil {
 		return
 	}
-	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), dyn.Map, dyn.InstanceID, scripting.InstanceEventOnGameObjectCreate, luaInstanceData(), instanceMapObject(dyn.Map, dyn.InstanceID, s.Data), goObj); err != nil {
+	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), dyn.Map, dyn.InstanceID, scripting.InstanceEventOnGameObjectCreate, luaInstanceData(), instanceMapObject(s, dyn.Map, dyn.InstanceID), goObj); err != nil {
 		s.debug("lua instance gameobject-create event failed", "map", dyn.Map, "instance", dyn.InstanceID, "error", err)
 	}
 }
@@ -118,7 +164,7 @@ func (s *Server) triggerInstanceCreatureCreate(motion *creatureMotion) {
 	if creature == nil {
 		return
 	}
-	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), motion.Map, motion.InstanceID, scripting.InstanceEventOnCreatureCreate, luaInstanceData(), instanceMapObject(motion.Map, motion.InstanceID, s.Data), creature); err != nil {
+	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), motion.Map, motion.InstanceID, scripting.InstanceEventOnCreatureCreate, luaInstanceData(), instanceMapObject(s, motion.Map, motion.InstanceID), creature); err != nil {
 		s.debug("lua instance creature-create event failed", "map", motion.Map, "instance", motion.InstanceID, "error", err)
 	}
 }
@@ -138,7 +184,7 @@ func (s *session) instanceEncounterHooked(ctx context.Context, mapID, instanceID
 	if s == nil || s.server == nil || instanceID == 0 || !s.server.isInstanceScriptMap(mapID) || s.server.Features == nil || s.server.Features.Scripts == nil {
 		return false
 	}
-	values, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, mapID, instanceID, scripting.InstanceEventOnCheckEncounterProgress, luaInstanceData(), instanceMapObject(mapID, instanceID, s.server.Data))
+	values, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, mapID, instanceID, scripting.InstanceEventOnCheckEncounterProgress, luaInstanceData(), instanceMapObject(s.server, mapID, instanceID))
 	if err != nil {
 		s.debug("lua instance encounter check failed", "map", mapID, "instance", instanceID, "error", err)
 	}
@@ -188,7 +234,7 @@ func (s *Server) updateInstanceScriptTicks(ctx context.Context, diff time.Durati
 		if !scripts.HasHook(mapKind, scripting.InstanceEventOnUpdate) && !scripts.HasHook(instKind, scripting.InstanceEventOnUpdate) {
 			continue
 		}
-		if _, err := scripts.TriggerInstanceEvent(ctx, k.mapID, k.instanceID, scripting.InstanceEventOnUpdate, luaInstanceData(), instanceMapObject(k.mapID, k.instanceID, s.Data), uint32(diff.Milliseconds())); err != nil {
+		if _, err := scripts.TriggerInstanceEvent(ctx, k.mapID, k.instanceID, scripting.InstanceEventOnUpdate, luaInstanceData(), instanceMapObject(s, k.mapID, k.instanceID), uint32(diff.Milliseconds())); err != nil {
 			s.debug("lua instance update event failed", "map", k.mapID, "instance", k.instanceID, "error", err)
 		}
 	}

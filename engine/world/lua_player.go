@@ -93,14 +93,14 @@ func (s *session) luaPlayer() *scripting.Object {
 	// would be overwritten; it stays out.
 	methods["GetPhaseMask"] = luaNoArgs(func() any { return s.currentPlayerPhaseMask() })
 	// GetMap is WorldObject::GetMap: the DBC-backed Map object for the
-	// player's map/instance (NewMapObject + mapLiveFromStore, the same
+	// player's map/instance (NewMapObject + mapLive, the same
 	// builder behind the creature surface and the instance hooks' map
 	// argument). Nil when the server store is unavailable.
 	methods["GetMap"] = func(_ context.Context, _ []any) ([]any, error) {
 		if s.server == nil || s.server.Data == nil {
 			return []any{nil}, nil
 		}
-		return []any{scripting.NewMapObject(state.Map, state.InstanceID, mapLiveFromStore(s.server.Data, state.Map))}, nil
+		return []any{scripting.NewMapObject(state.Map, state.InstanceID, s.server.mapLive(state.Map, state.InstanceID))}, nil
 	}
 	methods["GetObjectType"] = luaNoArgs(func() any { return "Player" })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
@@ -1658,7 +1658,7 @@ func (s *session) triggerMapEntryEvent(ctx context.Context) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
 		return
 	}
-	mapObject := scripting.NewMapObject(s.player.Map, s.player.InstanceID, mapLiveFromStore(s.server.Data, s.player.Map))
+	mapObject := scripting.NewMapObject(s.player.Map, s.player.InstanceID, s.server.mapLive(s.player.Map, s.player.InstanceID))
 	if _, err := s.server.Features.Scripts.TriggerMapEvent(ctx, s.player.Map, scripting.MapEventOnPlayerEnter, mapObject, s.luaPlayer()); err != nil {
 		s.debug("lua map entry event failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
 	}
@@ -1673,7 +1673,7 @@ func (s *session) triggerMapLeaveEvent(ctx context.Context, mapID, instanceID ui
 	if s == nil || s.player == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
 		return
 	}
-	mapObject := scripting.NewMapObject(mapID, instanceID, mapLiveFromStore(s.server.Data, mapID))
+	mapObject := scripting.NewMapObject(mapID, instanceID, s.server.mapLive(mapID, instanceID))
 	if _, err := s.server.Features.Scripts.TriggerMapEvent(ctx, mapID, scripting.MapEventOnPlayerLeave, mapObject, s.luaPlayer()); err != nil {
 		s.debug("lua map leave event failed", "map", mapID, "instance", instanceID, "error", err)
 	}

@@ -593,22 +593,38 @@ type MapSnapshot struct {
 	IsDungeon, IsRaid, IsArena, IsBattleground bool
 }
 
-// MapLive carries the map-data callback behind a Lua Map object. Load
+// MapPlayerLive is one live player behind a Lua Map object: the player
+// object plus the fields MapMethods.h's GetPlayers/GetPlayerCount filters
+// read (a session behind the player; GetPlayersCountExceptGMs skips GMs).
+type MapPlayerLive struct {
+	Player *Object
+	IsGM   bool
+	Team   uint32
+}
+
+// MapLive carries the live-data callbacks behind a Lua Map object. Load
 // re-reads the DBC entry; a nil Load or a false return means the entry is
-// missing, and the DBC-backed methods push nil/false.
+// missing, and the DBC-backed methods push nil/false. Difficulty re-reads
+// the per-instance spawn mode (Map::GetDifficulty is GetSpawnMode); a nil
+// callback or a false return means normal mode. Players enumerates the
+// worldReady players on this map instance; a nil callback means none.
+// SetWeather applies a zone weather change; a nil callback drops it.
 type MapLive struct {
-	Load func() (MapSnapshot, bool)
+	Load       func() (MapSnapshot, bool)
+	Difficulty func(context.Context) (int64, bool)
+	Players    func() []MapPlayerLive
+	SetWeather func(context.Context, uint32, uint32, float32)
 }
 
 // NewMapObject builds the Lua Map object surface for the MAP_EVENT_* and
 // INSTANCE_EVENT_* hooks: GetMapId/GetInstanceId ride the generic object
 // methods (object.go) and the DBC-backed GetName/IsDungeon/IsRaid/IsArena/
-// IsBattleground come from the live MapLive (MapMethods.h). The remaining
-// Map surface (GetHeight/GetDifficulty/GetPlayerCount/GetAreaId(x,y,z)/
-// GetWorldObject/SetWeather/GetInstanceData/SaveInstanceData/GetPlayers,
-// plus IsEmpty (Map::isEmpty reads the live loaded-grid list, not player
-// count) and IsHeroic (Map::IsHeroic reads the live i_spawnMode difficulty))
-// needs a live Map* with grid/difficulty/ref state and stays unbridged.
+// IsBattleground come from the live MapLive (MapMethods.h). The live legs
+// (IsEmpty/IsHeroic/GetDifficulty/GetPlayerCount/GetPlayers/SetWeather/
+// GetInstanceData/SaveInstanceData) read the MapLive callbacks. The
+// remaining Map surface stays unbridged: GetHeight and GetAreaId(x,y,z)
+// need a terrain model Go does not have, and GetWorldObject needs a
+// GUID-high-part dispatch across the player/creature/GO resolvers.
 func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 	load := live.Load
 	if load == nil {
@@ -617,6 +633,24 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 	flag := func(extract func(MapSnapshot) bool) []any {
 		snap, _ := load()
 		return []any{extract(snap)}
+	}
+	// difficulty is the per-instance spawn mode (Map.h:450 GetDifficulty
+	// is GetSpawnMode); non-instance maps and missing rows read normal.
+	difficulty := func(ctx context.Context) int64 {
+		if live.Difficulty == nil {
+			return 0
+		}
+		diff, ok := live.Difficulty(ctx)
+		if !ok {
+			return 0
+		}
+		return diff
+	}
+	players := func() []MapPlayerLive {
+		if live.Players == nil {
+			return nil
+		}
+		return live.Players()
 	}
 	methods := map[string]ObjectMethod{
 		"GetName": func(context.Context, []any) ([]any, error) {
@@ -637,6 +671,97 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 		},
 		"IsBattleground": func(context.Context, []any) ([]any, error) {
 			return flag(func(s MapSnapshot) bool { return s.IsBattleground }), nil
+		},
+		// IsEmpty is the MapMethods.h doc rule (no Players on the map);
+		// this fork's Map.h exposes only the negation, HavePlayers
+		// (Map.h:474, !m_mapRefManager.isEmpty()).
+		"IsEmpty": func(context.Context, []any) ([]any, error) {
+			return []any{len(players()) == 0}, nil
+		},
+		// IsHeroic is Map::IsHeroic (Map.cpp:4249-4252): raids heroic
+		// at difficulty >= 2 (10-man heroic), dungeons at >= 1.
+		"IsHeroic": func(ctx context.Context, _ []any) ([]any, error) {
+			snap, _ := load()
+			diff := difficulty(ctx)
+			if snap.IsRaid {
+				return []any{diff >= 2}, nil
+			}
+			return []any{diff >= 1}, nil
+		},
+		"GetDifficulty": func(ctx context.Context, _ []any) ([]any, error) {
+			return []any{difficulty(ctx)}, nil
+		},
+		// GetPlayerCount is Map::GetPlayersCountExceptGMs
+		// (Map.cpp:3649): GMs skipped, npcbots have no Go twin.
+		"GetPlayerCount": func(context.Context, []any) ([]any, error) {
+			count := uint32(0)
+			for _, p := range players() {
+				if !p.IsGM {
+					count++
+				}
+			}
+			return []any{count}, nil
+		},
+		// GetPlayers is MapMethods.h: team defaults to TEAM_NEUTRAL
+		// (2, all teams); a session behind the player is the C++
+		// GetSession gate, already applied by the live callback.
+		"GetPlayers": func(_ context.Context, args []any) ([]any, error) {
+			team := uint32(2)
+			if len(args) > 0 {
+				var err error
+				team, err = objectArgumentUint32(args, 0)
+				if err != nil {
+					return nil, err
+				}
+			}
+			list := []any{}
+			for _, p := range players() {
+				if p.Player == nil {
+					continue
+				}
+				if team < 2 && p.Team != team {
+					continue
+				}
+				list = append(list, p.Player)
+			}
+			return []any{list}, nil
+		},
+		// SetWeather is MapMethods.h (zone, type, grade, all required).
+		// The C++ Trinity arm no-ops when the zone has no weather
+		// record (GetOrGenerateZoneDefaultWeather returns nil); the
+		// Go setZoneWeather twin no-ops the same way.
+		"SetWeather": func(ctx context.Context, args []any) ([]any, error) {
+			zone, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			wtype, err := objectArgumentUint32(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if len(args) < 3 {
+				return nil, fmt.Errorf("argument 3 is required")
+			}
+			grade, ok := numericValue(args[2])
+			if !ok {
+				return nil, fmt.Errorf("argument 3 must be a number")
+			}
+			if live.SetWeather != nil {
+				live.SetWeather(ctx, zone, wtype, float32(grade))
+			}
+			return nil, nil
+		},
+		// GetInstanceData is nil without an ElunaInstanceAI shim
+		// (MapMethods.h: GetInstanceData pushes nil when the cast
+		// fails); Go has no shim, so it always reads nil. The
+		// INSTANCE_EVENT_* data argument is a separate empty table.
+		"GetInstanceData": func(context.Context, []any) ([]any, error) {
+			return []any{nil}, nil
+		},
+		// SaveInstanceData no-ops without an ElunaInstanceAI shim,
+		// the same C++ arm that guards the SaveToDB call.
+		"SaveInstanceData": func(context.Context, []any) ([]any, error) {
+			return nil, nil
 		},
 	}
 	return &Object{Type: "Map", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID, "InWorld": true}, Methods: methods}
