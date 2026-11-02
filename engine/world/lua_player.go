@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -3271,6 +3273,266 @@ func (s *session) luaPlayer() *scripting.Object {
 			}
 		}
 		return []any{out}, nil
+	}
+	// luaGroupInviteTarget resolves a Player object argument to its live
+	// session, the CHECKOBJ<Player> twin shared by GroupInvite and
+	// GroupCreate: only a live session can hold a group or a pending
+	// invite, so an unresolvable argument errors like the sibling
+	// player-argument methods instead of reading a nil group.
+	luaGroupInviteTarget := func(args []any) (*session, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		guid, ok := objectUint64Field(obj, "GUID")
+		if !ok || guid == 0 || s.server == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		invited := s.server.findSessionByGUID(guid)
+		if invited == nil || invited.player == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		return invited, nil
+	}
+	// luaInviteGroup resolves the group an invite goes into (the
+	// GroupInvite arm of PlayerMethods.h:3968-3972): the caller's group,
+	// with a BG group substituted by the original group stashed by
+	// SetBattlegroundOrBattlefieldRaid, or nil when the caller is
+	// groupless or rides a BG raid with no original.
+	luaInviteGroup := func() *groupState {
+		if s.groupID == 0 || s.server == nil {
+			return nil
+		}
+		g := s.server.findGroupByID(s.groupID)
+		if g != nil && g.isBGGroup() {
+			if s.originalGroupID == 0 {
+				return nil
+			}
+			return s.server.findGroupByID(s.originalGroupID)
+		}
+		return g
+	}
+	// GetNextRandomRaidMember is Player::GetNextRandomRaidMember
+	// (PlayerMethods.h:909-916; Player.cpp:24394-24417): a random group
+	// member other than the caller, within radius by IsWithinDistInMap
+	// (Object.cpp:1238-1240: same map, phase overlap, 3D distance plus
+	// both combat reaches), skipping invisibility-aura holders and
+	// hostiles (the C++ comment's duel arm included: a duel opponent
+	// with both DuelTeam values set reads hostile; controlled-by-enemy
+	// has no Go member model, members are players only). Nil when
+	// ungrouped or when no member passes. Go's roster is online-only,
+	// so offline slots never resolve, matching the C++ map iteration.
+	methods["GetNextRandomRaidMember"] = func(_ context.Context, args []any) ([]any, error) {
+		radius, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.groupID == 0 || s.server == nil || s.player == nil {
+			return []any{nil}, nil
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil {
+			return []any{nil}, nil
+		}
+		s.server.groupsMu.RLock()
+		memberGUIDs := make([]uint64, 0, len(group.Members))
+		for _, m := range group.Members {
+			memberGUIDs = append(memberGUIDs, m.GUID)
+		}
+		s.server.groupsMu.RUnlock()
+		ownReach := float64(s.player.CombatReach)
+		if ownReach <= 0 {
+			ownReach = 1.5
+		}
+		ownPhase := luaRangePhase(s.currentPlayerPhaseMask())
+		var near []*session
+		for _, guid := range memberGUIDs {
+			if guid == s.playerGUID {
+				continue
+			}
+			cand := s.server.findSessionByGUID(guid)
+			if cand == nil || cand.player == nil {
+				continue
+			}
+			if cand.player.Map != s.player.Map || cand.player.InstanceID != s.player.InstanceID {
+				continue
+			}
+			if luaRangePhase(cand.currentPlayerPhaseMask())&ownPhase == 0 {
+				continue
+			}
+			candReach := float64(cand.player.CombatReach)
+			if candReach <= 0 {
+				candReach = 1.5
+			}
+			dx := float64(cand.player.X - s.player.X)
+			dy := float64(cand.player.Y - s.player.Y)
+			dz := float64(cand.player.Z - s.player.Z)
+			if math.Sqrt(dx*dx+dy*dy+dz*dz) > float64(radius)+ownReach+candReach {
+				continue
+			}
+			if cand.hasAuraType(spellAuraInvisibility) {
+				continue
+			}
+			if s.server.playerHostileToUnit(s, cand.effectiveFactionTemplate(cand.player.Race)) {
+				continue
+			}
+			if s.duelPartner == guid && s.player.DuelTeam != 0 && cand.player.DuelTeam != 0 {
+				continue
+			}
+			near = append(near, cand)
+		}
+		if len(near) == 0 {
+			return []any{nil}, nil
+		}
+		return []any{luaPlayerOrNil(near[rand.Intn(len(near))])}, nil
+	}
+	// GroupInvite is Player::GroupInvite (PlayerMethods.h:3948-4010):
+	// false when the invited player already holds a group or a pending
+	// invite (the Lua pre-check, stricter than Group::AddInvite's BG
+	// arm); otherwise an invite into the caller's group when one
+	// resolves (full groups refuse, like Group::IsFull), or a leader
+	// invite for a new group when none does (which fails while the
+	// caller holds a pending invite, the AddLeaderInvite arm). Success
+	// sends SMSG_GROUP_INVITE to the invited player and fires
+	// GROUP_EVENT_ON_MEMBER_INVITE: once for the invitee with an
+	// existing group, twice for a groupless inviter (leader, then
+	// invitee, over the packet path's ephemeral group object, whose
+	// leader the C++ AddLeaderInvite arm supplies). The ephemeral
+	// object is event-only: GetGroupInvite still reads nil for a
+	// groupless inviter, since no group is stored until accept.
+	methods["GroupInvite"] = func(ctx context.Context, args []any) ([]any, error) {
+		invited, err := luaGroupInviteTarget(args)
+		if err != nil {
+			return nil, err
+		}
+		if invited.groupID != 0 || invited.pendingGroupLeader != 0 {
+			return []any{false}, nil
+		}
+		group := luaInviteGroup()
+		if group != nil {
+			if s.server.groupSlotFull(ctx, group) {
+				return []any{false}, nil
+			}
+			s.server.groupsMu.Lock()
+			invited.pendingGroupLeader = s.playerGUID
+			groupObj := groupLuaObject(s.server, group)
+			s.server.groupsMu.Unlock()
+			_ = invited.write(uint16(protocol.OpcodeSMSG_GROUP_INVITE), buildGroupInvite(1, s.player.Name), true)
+			s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, groupObj, invited.playerGUID)
+			return []any{true}, nil
+		}
+		if s.pendingGroupLeader != 0 {
+			return []any{false}, nil
+		}
+		invited.pendingGroupLeader = s.playerGUID
+		ephemeral := scripting.NewGroupObject(groupGUID(0), scripting.GroupLive{
+			Load: func() (scripting.GroupSnapshot, bool) {
+				return scripting.GroupSnapshot{
+					LeaderGUID: s.playerGUID,
+					Members:    []scripting.GroupMemberLive{{GUID: s.playerGUID}},
+				}, true
+			},
+			Players: s.server.luaPlayers,
+		})
+		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, s.playerGUID)
+		s.server.triggerGroupEvent(scripting.GroupEventOnMemberInvite, ephemeral, invited.playerGUID)
+		if s.server.Features != nil && s.server.Features.LFG != nil &&
+			s.server.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) != 0 {
+			if s.server.Features.LFG.Leave(s.playerGUID) {
+				_ = s.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: s.playerGUID, State: LFGStateNone})
+			} else if prop := s.server.Features.LFG.DeclineProposalForPlayer(s.playerGUID); prop != nil {
+				s.server.sendLFGProposalDeclined(prop)
+			}
+		}
+		_ = invited.write(uint16(protocol.OpcodeSMSG_GROUP_INVITE), buildGroupInvite(1, s.player.Name), true)
+		return []any{true}, nil
+	}
+	// GroupCreate is Player::GroupCreate (PlayerMethods.h:4012-4063):
+	// nil when the caller or the invited player already holds a group;
+	// each side's pending invite is withdrawn first (UninviteFromGroup,
+	// whose created-group disband arm has no Go target: a pending
+	// invite into a created group leaves that group's member count
+	// untouched). The group is created at once, the accept path's
+	// creation shape (leader difficulties, group-loot defaults, DB rows
+	// when a store is present, leader flag), then the invited player
+	// joins as a party member with a list broadcast, the LFG-leave and
+	// member-add event of the accept path's AddMember arm.
+	methods["GroupCreate"] = func(ctx context.Context, args []any) ([]any, error) {
+		invited, err := luaGroupInviteTarget(args)
+		if err != nil {
+			return nil, err
+		}
+		if s.groupID != 0 || invited.groupID != 0 {
+			return []any{nil}, nil
+		}
+		srv := s.server
+		srv.groupsMu.Lock()
+		s.pendingGroupLeader = 0
+		invited.pendingGroupLeader = 0
+		g := &groupState{
+			ID:            newGroupID(),
+			LeaderGUID:    s.playerGUID,
+			LootMethod:    3,
+			LootThreshold: 2,
+			LooterGUID:    s.playerGUID,
+			DungeonDiff:   s.player.DungeonDifficulty,
+			RaidDiff:      s.player.RaidDifficulty,
+		}
+		g.Members = append(g.Members, groupMember{GUID: s.playerGUID, Name: s.player.Name})
+		refreshGroupMaxEnchantingLevel(srv, g)
+		srv.groups[g.ID] = g
+		s.groupID = g.ID
+		if srv.CharactersStore != nil && srv.CharactersStore.DB != nil {
+			var nextID int64
+			if err := srv.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM `groups`").Scan(&nextID); err == nil && nextID > 0 {
+				if _, err := srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_INS_GROUP"), uint32(nextID), s.playerGUID, g.LootMethod, g.LooterGUID, g.LootThreshold, 0, 0, 0, 0, 0, 0, 0, 0, g.GroupType, g.DungeonDiff, g.RaidDiff, g.MasterLooter); err == nil {
+					g.DBID = uint32(nextID)
+					_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_INS_GROUP_MEMBER"), g.DBID, s.playerGUID, 0, 0, 0)
+				}
+			}
+		}
+		g.Members = append(g.Members, groupMember{GUID: invited.playerGUID, Name: invited.player.Name})
+		refreshGroupMaxEnchantingLevel(srv, g)
+		invited.groupID = g.ID
+		groupObj := groupLuaObject(srv, g)
+		srv.groupsMu.Unlock()
+		if g.DBID != 0 && srv.CharactersStore != nil && srv.CharactersStore.DB != nil {
+			_, _ = srv.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_INS_GROUP_MEMBER"), g.DBID, invited.playerGUID, 0, 0, 0)
+		}
+		s.player.PlayerFlags = UpdatePlayerGroupLeaderFlag(s.player.PlayerFlags, true)
+		s.sendPlayerUpdate()
+		invited.instanceValid = invited.checkInstanceValidity(ctx, g)
+		if srv.Features != nil && srv.Features.LFG != nil && srv.Features.LFG.GetOptions()&(LFGOptionEnableDungeonFinder|LFGOptionEnableRaidBrowser) != 0 && srv.Features.LFG.Leave(invited.playerGUID) {
+			_ = invited.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: invited.playerGUID, State: LFGStateNone})
+		}
+		srv.broadcastGroupList(g)
+		now := time.Now()
+		invited.groupStatsSnapshot = invited.currentGroupStatsChanged(ctx)
+		invited.groupStatsInit = true
+		invited.groupStatsDue = now.Add(5 * time.Second)
+		full := invited.groupStatsSnapshot
+		full.UpdateFlags = protocol.GroupUpdateFullMask
+		srv.sendGroupStatsToOutOfRange(invited, protocol.BuildPartyMemberStatsChanged(full))
+		srv.triggerGroupEvent(scripting.GroupEventOnMemberAdd, groupObj, invited.playerGUID)
+		return []any{groupObj}, nil
+	}
+	// RemoveFromGroup is Player::RemoveFromGroup (PlayerMethods.h:2639-2647;
+	// Player.h:1555): the no-group arm is a silent no-op, otherwise the
+	// default-method removal shared with the GM .group remove command,
+	// including its disband tail and member-remove event.
+	methods["RemoveFromGroup"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s.groupID == 0 || s.server == nil {
+			return []any{}, nil
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil {
+			return []any{}, nil
+		}
+		s.removeFromGroup(ctx, group, s, groupRemoveMethodDefault)
+		return []any{}, nil
 	}
 	// GetSubGroup is Player::GetSubGroup (PlayerMethods.h:922-926;
 	// Player.h:2089): the member's subgroup in the session group,
