@@ -401,6 +401,10 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 	target := currentTotal + amount
 	target = s.fireReputationChangeHook(ctx, factionID, target, true)
 	amount = target - currentTotal
+	// ReputationMgr::SetReputation (ReputationMgr.cpp:302-358): spillover
+	// runs before the main-faction write, on the hook-rewritten delta, even
+	// when that delta is zero (the DB-template arm still writes its slots).
+	s.applyReputationSpillover(ctx, factionID, amount, true)
 	if amount == 0 {
 		return
 	}
@@ -512,20 +516,21 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 // Player:SetReputation (PlayerMethods.h:1778-1785): the Eluna hook fires
 // first with incremental=false and a rewritten standing becomes the new
 // absolute target (no RATE_REPUTATION_GAIN scaling — that fold lives only
-// in the incremental SetOneFactionReputation arm). The main-faction write
-// then mirrors SetOneFactionReputation's non-incremental arm: clamp the
-// total to [-42000, 42999], store net of the base, SetVisible fold,
-// hostile auto-war arm, immediate SendState, criteria, and the
-// ReputationChanged quest scan. DELTAS: spillover is skipped — Go has no
-// spillover model (see the ModifyReputation limit arm), so a faction with
-// sub-factions or a DB spillover template updates only itself here; a
-// faction with no recorded row and no DBC row is a no-op, the
+// in the incremental SetOneFactionReputation arm). Spillover runs first
+// via applyReputationSpillover, then the main-faction write mirrors
+// SetOneFactionReputation's non-incremental arm: clamp the total to
+// [-42000, 42999], store net of the base, SetVisible fold, hostile auto-war
+// arm, immediate SendState, criteria, and the ReputationChanged quest
+// scan. A faction with no recorded row and no DBC row is a no-op, the
 // SetOneFactionReputation false arm (C++ would deref a nil FactionEntry).
 func (s *session) setReputationStanding(ctx context.Context, factionID uint32, target int32) {
 	if s == nil || s.player == nil || factionID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
 	target = s.fireReputationChangeHook(ctx, factionID, target, false)
+	// ReputationMgr::SetReputation (ReputationMgr.cpp:302-358): spillover
+	// runs before the main-faction write, on the hook-rewritten target.
+	s.applyReputationSpillover(ctx, factionID, target, false)
 	cdb := s.server.CharactersStore.DB
 	for i := range s.player.Reputations {
 		if s.player.Reputations[i].FactionID == factionID {
@@ -590,6 +595,226 @@ func (s *session) setReputationStanding(ctx context.Context, factionID uint32, t
 	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{rep}, reputationRank(int64(newTotal)) > reputationRank(int64(dbcRep.BaseStanding))), true)
 	s.fireReputationCriteria(factionID, newTotal)
 	s.questReputationChanged(ctx, factionID)
+}
+
+// repSpilloverTemplate is one row of the world `reputation_spillover_template`
+// table (ObjectMgr::LoadReputationSpilloverTemplate, ObjectMgr.cpp:8053):
+// up to 4 spillover factions, each with a rate and a rank cap.
+type repSpilloverTemplate struct {
+	faction [4]uint32
+	rate    [4]float32
+	rank    [4]uint32
+}
+
+// loadRepSpilloverTemplate mirrors the C++ loader's validation
+// (ObjectMgr.cpp:8074-8136): the main faction must exist in Faction.dbc
+// with a parent faction, and every non-zero spillover faction must exist
+// with a reputation list and a rank below 8; any invalid slot drops the
+// whole template, and a missing row means no template at all. The table is
+// read per call, so `.reload reputation_spillover_template` takes effect
+// on the next reputation change without a cache to invalidate.
+func (s *session) loadRepSpilloverTemplate(ctx context.Context, factionID uint32) (*repSpilloverTemplate, bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil, false
+	}
+	parent, found, err := s.server.Data.FactionParent(factionID)
+	if err != nil || !found || parent.ParentID == 0 {
+		return nil, false
+	}
+	var faction, rank [4]int64
+	var rate [4]float64
+	err = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT faction1, rate_1, rank_1, faction2, rate_2, rank_2, faction3, rate_3, rank_3, faction4, rate_4, rank_4 FROM reputation_spillover_template WHERE faction = ?`, factionID).Scan(
+		&faction[0], &rate[0], &rank[0], &faction[1], &rate[1], &rank[1], &faction[2], &rate[2], &rank[2], &faction[3], &rate[3], &rank[3])
+	if err != nil {
+		return nil, false
+	}
+	template := &repSpilloverTemplate{}
+	for i := 0; i < 4; i++ {
+		if faction[i] == 0 {
+			continue
+		}
+		rep, found, repErr := s.server.Data.Reputation(uint32(faction[i]), s.player.Race, s.player.Class)
+		if repErr != nil || !found || rep.ReputationList < 0 || rank[i] >= 8 {
+			return nil, false
+		}
+		template.faction[i] = uint32(faction[i])
+		template.rate[i] = float32(rate[i])
+		template.rank[i] = uint32(rank[i])
+	}
+	return template, true
+}
+
+// applySpilloverReputation mirrors ReputationMgr::SetOneFactionReputation
+// (ReputationMgr.cpp:374) as called from SetReputation's spillover arms:
+// no Eluna hook (the hook fires once for the main faction at SetReputation
+// entry), no aura-percent fold, no RATE_REPUTATION_GAIN fold (Go has no
+// rate model; the C++ default rate 1.0 makes the incremental fold
+// identity), and no chained spillover. The existing-row arm mirrors the
+// main sinks (clamp to [-42000, 42999], store net of the base, SetVisible
+// fold, hostile auto-war, immediate SendState, criteria, quest scan); the
+// no-row arm creates only a DBC-backed row, and a DBC miss is the SetOne
+// false arm (no-op), not the incremental sink's phantom row.
+func (s *session) applySpilloverReputation(ctx context.Context, factionID uint32, amount int32, incremental bool) {
+	if s == nil || s.player == nil || factionID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	for i := range s.player.Reputations {
+		if s.player.Reputations[i].FactionID != factionID {
+			continue
+		}
+		oldRank := reputationRank(int64(totalReputationStanding(s.player.Reputations[i])))
+		newTotal := amount
+		if incremental {
+			newTotal = totalReputationStanding(s.player.Reputations[i]) + amount
+		}
+		if newTotal > 42999 {
+			newTotal = 42999
+		} else if newTotal < -42000 {
+			newTotal = -42000
+		}
+		s.player.Reputations[i].Standing = newTotal - s.player.Reputations[i].Base
+		becameVisible := false
+		if !factionVisibleGated(s.player.Reputations[i].Flags) && s.player.Reputations[i].Flags&factionFlagVisible == 0 {
+			s.player.Reputations[i].Flags |= factionFlagVisible
+			becameVisible = true
+		}
+		if reputationAutoWar(s.player.Reputations[i].Flags, newTotal, s.player.Reputations[i].Standing) {
+			s.player.Reputations[i].Flags |= factionFlagAtWar
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ?, flags = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.player.Reputations[i].Flags, s.playerGUID, factionID)
+		if becameVisible {
+			s.sendFactionVisiblePacket(s.player.Reputations[i].ListID)
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{s.player.Reputations[i]}, reputationRank(int64(newTotal)) > oldRank), true)
+		s.fireReputationCriteria(factionID, newTotal)
+		s.questReputationChanged(ctx, factionID)
+		return
+	}
+	if s.server.Data == nil {
+		return
+	}
+	dbcRep, found, dbcErr := s.server.Data.Reputation(factionID, s.player.Race, s.player.Class)
+	if dbcErr != nil || !found || dbcRep.ReputationList < 0 {
+		return
+	}
+	newTotal := amount
+	if incremental {
+		newTotal = dbcRep.BaseStanding + amount
+	}
+	if newTotal > 42999 {
+		newTotal = 42999
+	} else if newTotal < -42000 {
+		newTotal = -42000
+	}
+	rep := playerReputation{
+		FactionID: factionID,
+		ListID:    uint32(dbcRep.ReputationList),
+		Base:      dbcRep.BaseStanding,
+		Standing:  newTotal - dbcRep.BaseStanding,
+		Flags:     dbcRep.DefaultFlags,
+	}
+	if rep.Flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 || rep.Flags&factionFlagSpecial != 0 {
+		rep.Flags |= factionFlagVisible
+	}
+	if reputationAutoWar(rep.Flags, newTotal, rep.Standing) {
+		rep.Flags |= factionFlagAtWar
+	}
+	becameVisible := dbcRep.DefaultFlags&factionFlagVisible == 0 && !factionVisibleGated(dbcRep.DefaultFlags)
+	s.player.Reputations = append(s.player.Reputations, rep)
+	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, rep.Standing, rep.Flags)
+	if becameVisible {
+		s.sendFactionVisiblePacket(rep.ListID)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{rep}, reputationRank(int64(newTotal)) > reputationRank(int64(dbcRep.BaseStanding))), true)
+	s.fireReputationCriteria(factionID, newTotal)
+	s.questReputationChanged(ctx, factionID)
+}
+
+// applyReputationSpillover mirrors ReputationMgr::SetReputation's spillover
+// legs (ReputationMgr.cpp:302-358), run before the main-faction write.
+// standing is the hook-rewritten value: a delta when incremental, an
+// absolute target otherwise. A DB template overrides the DBC parent model
+// entirely: each slot spills int32(standing * rate) while the target's
+// current rank is at or below the slot's rank cap. Otherwise the DBC arm
+// spills to the faction's sub-factions (factions whose parent is this
+// faction); with no sub-factions, a faction with a parent and a non-zero
+// outgoing mod spills to the parent only when the parent's own row is
+// flagged SPECIAL, and otherwise to the parent's other sub-factions
+// ("sisters"). Each sister is skipped when its current rank exceeds its
+// incoming cap, and a zero spill is skipped on the incremental path but
+// still writes on the absolute path. Rank gates read pre-spillover totals,
+// matching C++ GetRank on the untouched states.
+func (s *session) applyReputationSpillover(ctx context.Context, factionID uint32, standing int32, incremental bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if template, ok := s.loadRepSpilloverTemplate(ctx, factionID); ok {
+		for i := 0; i < 4; i++ {
+			if template.faction[i] == 0 {
+				continue
+			}
+			if reputationRank(int64(s.reputationStanding(template.faction[i]))) <= template.rank[i] {
+				s.applySpilloverReputation(ctx, template.faction[i], int32(float32(standing)*template.rate[i]), incremental)
+			}
+		}
+		return
+	}
+	parent, found, err := s.server.Data.FactionParent(factionID)
+	if err != nil || !found {
+		return
+	}
+	spillOut := float32(standing)
+	members, err := s.server.Data.FactionTeamMembers(factionID)
+	if err != nil {
+		return
+	}
+	if len(members) == 0 && parent.ParentID != 0 && parent.ModOut != 0 {
+		spillOut *= parent.ModOut
+		specialParent := false
+		for i := range s.player.Reputations {
+			if s.player.Reputations[i].FactionID == parent.ParentID && s.player.Reputations[i].Flags&factionFlagSpecial != 0 {
+				specialParent = true
+				break
+			}
+		}
+		if specialParent {
+			s.applySpilloverReputation(ctx, parent.ParentID, int32(spillOut), incremental)
+			return
+		}
+		members, err = s.server.Data.FactionTeamMembers(parent.ParentID)
+		if err != nil {
+			return
+		}
+	}
+	for _, member := range members {
+		if member == factionID {
+			continue
+		}
+		memberParent, found, err := s.server.Data.FactionParent(member)
+		if err != nil || !found {
+			continue
+		}
+		if reputationRank(int64(s.reputationStanding(member))) > memberParent.CapIn {
+			continue
+		}
+		spill := int32(spillOut * memberParent.ModIn)
+		if spill != 0 || !incremental {
+			s.applySpilloverReputation(ctx, member, spill, incremental)
+		}
+	}
+}
+
+// spilloverOnlyReputation mirrors ModifyReputation's spillOverOnly arm
+// (ReputationMgr.h:123, Player.cpp:6765): the hook fires once with the
+// delta, then only the spillover legs run and the faction itself is never
+// updated.
+func (s *session) spilloverOnlyReputation(ctx context.Context, factionID uint32, gain int32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	gain = s.fireReputationChangeHook(ctx, factionID, gain, true)
+	s.applyReputationSpillover(ctx, factionID, gain, true)
 }
 
 // questReputationChanged mirrors Player::ReputationChanged and
@@ -917,9 +1142,9 @@ func (s *session) calculateKillReputationGain(factionID uint32, rep int32) int32
 // TeamDependent, scaled by CalculateReputationGain and the group rate
 // (int32 truncation like C++'s int32(donerep * rate)), and skipped when the
 // faction DBC row is missing. A rank past ReputationMaxCap flips
-// ModifyReputation's limit arm, which updates only spillover and never the
-// faction itself — Go has no spillover model, so the grant is skipped. The
-// sink is addReputationAmount, whose Eluna hook and persistence mirror
+// ModifyReputation's spillOverOnly arm (Player.cpp:6765), which updates
+// only spillover and never the faction itself. The uncapped sink is
+// addReputationAmount, whose Eluna hook and persistence mirror
 // ReputationMgr::SetReputation's main-faction arm.
 func (s *session) rewardKillReputation(ctx context.Context, rep *onkillReputation, mobLevel uint32, rate float32, targetMapID uint32) {
 	if s == nil || s.player == nil || s.server == nil || rep == nil {
@@ -941,6 +1166,7 @@ func (s *session) rewardKillReputation(ctx context.Context, rep *onkillReputatio
 			return
 		}
 		if reputationRank(int64(s.reputationStanding(faction))) > uint32(maxCap) {
+			s.spilloverOnlyReputation(ctx, faction, gain)
 			return
 		}
 		s.addReputationAmount(ctx, faction, gain)

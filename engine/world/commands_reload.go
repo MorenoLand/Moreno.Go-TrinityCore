@@ -133,7 +133,7 @@ var reloadArms = []reloadArm{
 	{"reference_loot_template", permissionCommandReloadReferenceLootTemplate, "DB table `reference_loot_template` reloaded.", reloadStoreWorld, "reference_loot_template"},
 	{"reserved_name", permissionCommandReloadReservedName, "DB table `reserved_name` (player reserved names) reloaded.", reloadStoreWorld, "reserved_name"},
 	{"reputation_reward_rate", permissionCommandReloadReputationRewardRate, "DB table `reputation_reward_rate` reloaded.", reloadStoreWorld, "reputation_reward_rate"},
-	{"reputation_spillover_template", permissionCommandReloadSpilloverTemplate, "DB table `reputation_reward_rate` reloaded.", reloadStoreWorld, "reputation_spillover_template"},
+	{"reputation_spillover_template", permissionCommandReloadSpilloverTemplate, "DB table `reputation_spillover_template` reloaded.", reloadStoreWorld, "reputation_spillover_template"},
 	{"skill_discovery_template", permissionCommandReloadSkillDiscoveryTemplate, "DB table `skill_discovery_template` (recipes discovered at crafting) reloaded.", reloadStoreWorld, "skill_discovery_template"},
 	{"skill_extra_item_template", permissionCommandReloadSkillExtraItemTemplate, "DB table `skill_extra_item_template` (extra item creation when crafting) reloaded.", reloadStoreWorld, "skill_extra_item_template"},
 	{"skill_fishing_base_level", permissionCommandReloadSkillFishingBaseLevel, "DB table `skill_fishing_base_level` (fishing base level for zone/subzone) reloaded.", reloadStoreWorld, "skill_fishing_base_level"},

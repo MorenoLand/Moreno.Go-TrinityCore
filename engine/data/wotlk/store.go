@@ -788,6 +788,74 @@ func (s *Store) Reputation(id uint32, race, class uint8) (Reputation, bool, erro
 	return rep, true, nil
 }
 
+// FactionParent carries the Faction.dbc parent-spillover columns
+// (DBCStructure.h:658): field 18 ParentFactionID, 19-20 ParentFactionMod
+// ([0] incoming rate, [1] outgoing rate), 21-22 ParentFactionCap ([0] the
+// highest rank profiting from incoming spillover).
+type FactionParent struct {
+	ID       uint32
+	ParentID uint32
+	ModIn    float32
+	ModOut   float32
+	CapIn    uint32
+	CapOut   uint32
+}
+
+func (s *Store) FactionParent(id uint32) (FactionParent, bool, error) {
+	file, err := s.File("Faction")
+	if err != nil {
+		return FactionParent{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return FactionParent{}, false, nil
+	}
+	parent := FactionParent{ID: id}
+	if parent.ParentID, err = record.Uint32(18); err != nil {
+		return FactionParent{}, false, err
+	}
+	if parent.ModIn, err = record.Float32(19); err != nil {
+		return FactionParent{}, false, err
+	}
+	if parent.ModOut, err = record.Float32(20); err != nil {
+		return FactionParent{}, false, err
+	}
+	if parent.CapIn, err = record.Uint32(21); err != nil {
+		return FactionParent{}, false, err
+	}
+	if parent.CapOut, err = record.Uint32(22); err != nil {
+		return FactionParent{}, false, err
+	}
+	return parent, true, nil
+}
+
+// FactionTeamMembers mirrors the sFactionTeamMap build
+// (DBCStores.cpp:424-430): every faction whose ParentFactionID names
+// parentID, in DBC record order.
+func (s *Store) FactionTeamMembers(parentID uint32) ([]uint32, error) {
+	file, err := s.File("Faction")
+	if err != nil {
+		return nil, err
+	}
+	var members []uint32
+	for index := 0; index < file.Records(); index++ {
+		record, recordErr := file.Record(index)
+		if recordErr != nil {
+			continue
+		}
+		id, idErr := record.Uint32(0)
+		if idErr != nil {
+			continue
+		}
+		parent, parentErr := record.Uint32(18)
+		if parentErr != nil || parent != parentID {
+			continue
+		}
+		members = append(members, id)
+	}
+	return members, nil
+}
+
 func (s *Store) Reputations(race, class uint8) ([]Reputation, error) {
 	file, err := s.File("Faction")
 	if err != nil {
