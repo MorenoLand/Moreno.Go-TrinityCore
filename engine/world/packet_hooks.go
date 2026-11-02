@@ -129,11 +129,14 @@ func firePacketReceiveHooks(scripts *scripting.Runtime, ctx context.Context, opc
 // re-read, so in-place Lua edits cannot alter the wire packet.
 func firePacketSendHooks(scripts *scripting.Runtime, ctx context.Context, opcode uint32, payload []byte, player *scripting.Object) (blocked bool, hookErr error) {
 	probe := &scripting.Packet{Opcode: opcode, Data: append([]byte(nil), payload...)}
+	// PacketHooks.cpp:42-80 calls Any then One unconditionally: a false
+	// from the any stage drops the packet but does NOT skip the per-opcode
+	// stage, so the block is accumulated, never an early return.
 	anyVals, err := scripts.TriggerServerEventGuarded(ctx, scripting.ServerEventPacketSend, copyPacketForLua(probe), player)
 	if err != nil {
 		hookErr = err
 	} else if packetHookBlocked(anyVals) {
-		return true, nil
+		blocked = true
 	}
 	oneVals, err := scripts.TriggerPacketEvent(ctx, int(opcode), scripting.ServerEventPacketSend, copyPacketForLua(probe), player)
 	if err != nil {
@@ -141,7 +144,7 @@ func firePacketSendHooks(scripts *scripting.Runtime, ctx context.Context, opcode
 			hookErr = err
 		}
 	} else if packetHookBlocked(oneVals) {
-		return true, hookErr
+		blocked = true
 	}
-	return false, hookErr
+	return blocked, hookErr
 }

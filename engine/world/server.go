@@ -3285,11 +3285,21 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			hookBlocked := false
 			if state.authed && state.server.Features != nil && state.server.Features.Scripts != nil &&
 				!socketHandledOpcode(header.Opcode) && !isNullClientOpcode(header.Opcode) {
-				blocked, _, hookErr := firePacketReceiveHooks(state.server.Features.Scripts, ctx, header.Opcode, payload, state.luaPlayer())
+				blocked, hooked, hookErr := firePacketReceiveHooks(state.server.Features.Scripts, ctx, header.Opcode, payload, state.luaPlayer())
 				if hookErr != nil {
 					state.debug("lua packet hook failed", "account", state.accountName, "opcode", header.Opcode, "error", hookErr)
 				}
 				hookBlocked = blocked
+				// PacketHooks.cpp:93-115 replaces the packet by content
+				// (packet = *data) before the handler runs, and the
+				// normal dispatch below substitutes hooked.Data the
+				// same way; the expiry legs previously passed the
+				// original payload, so a hook replacement (e.g. a
+				// rewritten cast or movement packet) was silently
+				// discarded here while it landed on the normal path.
+				if hooked != nil {
+					payload = hooked.Data
+				}
 			}
 			if header.Opcode == uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL) && state.authed && !hookBlocked {
 				if !state.handleLogoutCancel() {
