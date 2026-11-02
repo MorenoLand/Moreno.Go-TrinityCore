@@ -23,6 +23,7 @@ const (
 	PlayerEventCharacterDelete   = 2
 	PlayerEventLogin             = 3
 	PlayerEventLogout            = 4
+	PlayerEventSpellCast         = 5 // OnSpellCast fires from finishSpellCast (client/item casts) and castSpellDirectWithOverrides (triggered casts); the spell object is luaSpellObject (lua_spell.go)
 	PlayerEventDuelRequest       = 9
 	PlayerEventDuelStart         = 10
 	PlayerEventDuelEnd           = 11

@@ -9845,10 +9845,27 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	//     object target, so the m_targets.GetObjectTarget() leg cannot fire;
 	//     a target removed mid-cast fails the range/LoS revalidation below
 	//     instead of cancelling silently.
-	//   - OnPlayerSpellCast script hook (3302): Go has no ScriptMgr model,
-	//     so the script callback has nowhere to land.
+	//   - OnPlayerSpellCast script hook (3302): fired below, ahead of the
+	//     pet-assist leg, in C++ order.
 	// (Spell::cast's own window, 3264-3279, is bridged by the spellmod
 	// taking stack — nested casts push their own context, spellmod.go.)
+
+	// Spell::_cast (Spell.cpp:3302): OnPlayerSpellCast fires here, ahead
+	// of the pet-assist leg below, with the explicit unit target still
+	// pre-selection. skipCheck mirrors Spell::cast's argument: prepare
+	// calls cast(true) for instant/channeled spells while the update
+	// timer calls cast(!m_casttime), so only a cast that ran a bar
+	// carries false. The hook's returns are discarded (Eluna's
+	// CallAllFunctions for this hook), so firing cannot cancel the cast.
+	skipCheck := true
+	castTimeMs := s.spellCastTimeMs(spell)
+	if completedCast != nil {
+		castTimeMs = int32(completedCast.CastTimeMs)
+		if completedCast.CastTimeMs > 0 {
+			skipCheck = false
+		}
+	}
+	s.firePlayerSpellCast(ctx, spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0}, skipCheck)
 
 	// Spell::_cast (Spell.cpp:3303-3312): as of 3.0.2 the caster's pets begin
 	// attacking the owner's target immediately when the owner casts a harmful
@@ -24398,6 +24415,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 	}
+	// Spell::_cast (Spell.cpp:3302): OnPlayerSpellCast fires here, after
+	// the CheckCast gauntlet above and ahead of the pet-assist leg
+	// below, with the explicit unit target still pre-redirect: the
+	// redirect arms run inside SelectSpellTargets, after the hook in
+	// C++ order. Triggered casts always carry skipCheck=true (prepare
+	// calls cast(true) for instant/channeled casts, and triggered casts
+	// never wait out a bar). The hook's returns are discarded.
+	s.firePlayerSpellCast(ctx, spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID}, true)
+
 	// Spell::_cast (Spell.cpp:3303-3312): as of 3.0.2 the caster's pets begin
 	// attacking the owner's target immediately when the owner casts a harmful
 	// spell -- no triggered-flags guard, so triggered casts signal too. C++
