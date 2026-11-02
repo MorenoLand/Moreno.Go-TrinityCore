@@ -2559,6 +2559,24 @@ func (s *session) stopPvPCombatForSanctuary() {
 	}
 }
 
+// applySheathState is the Player::SetSheath body (Player.cpp:9655-9682)
+// shared by the sheath opcode and the Lua bridge: the sheath state sets
+// the three UNIT_VIRTUAL_ITEM_SLOT_ID values (weapon entries shown on
+// the model) before the sheath byte itself; UNARMED clears all three.
+func (s *session) applySheathState(ctx context.Context, state uint32) {
+	var slots [3]uint32
+	switch state {
+	case sheathStateMelee:
+		_, slots[0] = s.equippedWeaponInstance(ctx, 15) // EQUIPMENT_SLOT_MAINHAND
+		_, slots[1] = s.equippedWeaponInstance(ctx, 16) // EQUIPMENT_SLOT_OFFHAND
+	case sheathStateRanged:
+		_, slots[2] = s.equippedWeaponInstance(ctx, 17) // EQUIPMENT_SLOT_RANGED
+	}
+	s.player.SheathState = uint8(state)
+	s.player.VirtualItemSlots = slots
+	s.sendPlayerUpdate()
+}
+
 func (s *session) handleSetSheathed(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -2574,20 +2592,7 @@ func (s *session) handleSetSheathed(ctx context.Context, payload []byte) bool {
 		s.debug("unknown sheath state rejected", "account", s.accountName, "state", state)
 		return true
 	}
-	// Player::SetSheath (Player.cpp:9655-9682): the sheath state sets the
-	// three UNIT_VIRTUAL_ITEM_SLOT_ID values (weapon entries shown on the
-	// model) before the sheath byte itself; UNARMED clears all three.
-	var slots [3]uint32
-	switch state {
-	case sheathStateMelee:
-		_, slots[0] = s.equippedWeaponInstance(ctx, 15) // EQUIPMENT_SLOT_MAINHAND
-		_, slots[1] = s.equippedWeaponInstance(ctx, 16) // EQUIPMENT_SLOT_OFFHAND
-	case sheathStateRanged:
-		_, slots[2] = s.equippedWeaponInstance(ctx, 17) // EQUIPMENT_SLOT_RANGED
-	}
-	s.player.SheathState = uint8(state)
-	s.player.VirtualItemSlots = slots
-	s.sendPlayerUpdate()
+	s.applySheathState(ctx, state)
 	s.debug("sheath state changed", "account", s.accountName, "state", state)
 	return true
 }

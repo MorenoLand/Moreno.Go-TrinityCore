@@ -156,6 +156,79 @@ func (s *session) luaPlayer() *scripting.Object {
 		return []any{s.luaCorpseObject(corpse)}, nil
 	}
 	methods["GetTeam"] = luaNoArgs(func() any { return teamForRace(state.Race) })
+	// IsAlliance/IsHorde are Player::GetTeamId (Player.h:1759) via
+	// teamForRace, the Go form of Player::TeamForRace (Player.cpp:6619):
+	// ChrRaces BaseLanguage 7 = Alliance, 1 = Horde.
+	methods["IsAlliance"] = luaNoArgs(func() any { return teamForRace(state.Race) == 0 })
+	methods["IsHorde"] = luaNoArgs(func() any { return teamForRace(state.Race) == 1 })
+	// IsInGuild is Player::GetGuildId() != 0 (PlayerMethods.h:400-404).
+	methods["IsInGuild"] = luaNoArgs(func() any { return state.GuildID != 0 })
+	// GetGuildRank is Player::GetRank (PlayerMethods.h:1152-1156), the
+	// guild member rank the guild code maintains on the player state.
+	methods["GetGuildRank"] = luaNoArgs(func() any { return state.GuildRank })
+	// GetTotalPlayedTime is Player::GetTotalPlayedTime
+	// (PlayerMethods.h:1524-1528), seconds, advanced on save.
+	methods["GetTotalPlayedTime"] = luaNoArgs(func() any { return state.TotalPlayedTime })
+	// IsAFK/IsDND are Player::isAFK/isDND (PlayerMethods.h:501-516), the
+	// PLAYER_FLAGS bits (AFK 0x2, DND 0x4).
+	methods["IsAFK"] = luaNoArgs(func() any { return state.PlayerFlags&playerFlagAFK != 0 })
+	methods["IsDND"] = luaNoArgs(func() any { return state.PlayerFlags&playerFlagDND != 0 })
+	// ToggleAFK/ToggleDND are Player::ToggleAFK/ToggleDND
+	// (Player.cpp:1628-1640): the flag flip plus client update via the
+	// chat helpers. The battleground-leave half of ToggleAFK is not in
+	// the Lua path (same split as setPlayerAFK in chat.go).
+	methods["ToggleAFK"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.setPlayerAFK(state.PlayerFlags&playerFlagAFK == 0)
+		return []any{}, nil
+	}
+	methods["ToggleDND"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.setPlayerDND(state.PlayerFlags&playerFlagDND == 0)
+		return []any{}, nil
+	}
+	// IsInGroup is Player::GetGroup() != nullptr; the session group id
+	// is the Go group membership (0 = ungrouped).
+	methods["IsInGroup"] = luaNoArgs(func() any { return s.groupID != 0 })
+	// GetRestBonus/SetRestBonus are Player::GetRestBonus/SetRestBonus
+	// (PlayerMethods.h:1317-1321, 1810-1816); the setter runs through
+	// setRestBonus, the same clamp + rest-state update as the XP path.
+	methods["GetRestBonus"] = luaNoArgs(func() any { return state.RestBonus })
+	methods["SetRestBonus"] = func(ctx context.Context, args []any) ([]any, error) {
+		bonus, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.setRestBonus(state, bonus, nextLevelXPFor(s.server, ctx, state.Level))
+		return []any{}, nil
+	}
+	// GetXPRestBonus is Player::GetXPRestBonus (Player.cpp:9584-9595):
+	// the rested bonus for xp, capped at xp, consumed from the bonus.
+	methods["GetXPRestBonus"] = func(ctx context.Context, args []any) ([]any, error) {
+		xp, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		rested := uint32(state.RestBonus)
+		if rested > xp {
+			rested = xp
+		}
+		s.setRestBonus(state, state.RestBonus-float32(rested), nextLevelXPFor(s.server, ctx, state.Level))
+		return []any{rested}, nil
+	}
+	// SetSheath is Player::SetSheath (Player.cpp:9655-9682) via the
+	// shared opcode helper: virtual-item slots from the equipped weapons,
+	// then the sheath byte; states at or past MAX_SHEATH_STATE are
+	// dropped silently, matching the Eluna guard (PlayerMethods.h:1680).
+	methods["SetSheath"] = func(ctx context.Context, args []any) ([]any, error) {
+		sheathed, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if sheathed >= maxSheathState {
+			return []any{}, nil
+		}
+		s.applySheathState(ctx, sheathed)
+		return []any{}, nil
+	}
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
 	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })
 	// GetArmor is Unit::GetArmor (Unit.h:860: GetResistance(SPELL_SCHOOL_NORMAL)):

@@ -3168,9 +3168,9 @@ const (
 
 func teamForRace(race uint8) uint32 {
 	switch race {
-	case 1, 3, 4, 7, 11: // Alliance: Human, Dwarf, Night Elf, Gnome, Draenei
+	case 1, 3, 4, 7, 11, 22: // Alliance: Human, Dwarf, Night Elf, Gnome, Draenei, Worgen
 		return 0
-	case 2, 5, 6, 8, 10: // Horde: Orc, Undead, Tauren, Troll, Blood Elf
+	case 2, 5, 6, 8, 9, 10: // Horde: Orc, Undead, Tauren, Troll, Goblin, Blood Elf
 		return 1
 	default:
 		return 0
