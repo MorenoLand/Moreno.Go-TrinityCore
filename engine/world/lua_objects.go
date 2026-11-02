@@ -1211,7 +1211,18 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	methods["GetEntry"] = luaNoArgs(func() any { return state.Entry })
 	methods["GetDisplayId"] = luaNoArgs(func() any { return state.DisplayID })
 	methods["GetDBTableGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
-	methods["GetGoState"] = luaNoArgs(func() any { return state.GoState })
+	// GetGoState is LuaGameObject::GetGoState (GameObjectMethods.h):
+	// GameObject::GetGoState. The snapshot state is only the spawn-time
+	// value (loadLuaGameObject stamps GO_STATE_READY); a live dynamic
+	// state wins, so a SetGoState/UseDoorOrButton on the same object
+	// reads back the new state instead of the stale spawn snapshot.
+	// Static DB spawns have no live state, so they keep the snapshot.
+	methods["GetGoState"] = func(_ context.Context, _ []any) ([]any, error) {
+		if dyn := srv.gameObjectState(state.Map, state.InstanceID, state.GUID); dyn != nil {
+			return []any{uint32(dyn.State)}, nil
+		}
+		return []any{state.GoState}, nil
+	}
 	methods["GetLootState"] = luaNoArgs(func() any { return state.LootState })
 	// GetGoType is GameObject::GetGoType (GameObject.h:160): the
 	// template type (GAMEOBJECT_BYTES_1 byte 1), 0-50 per the
@@ -1523,11 +1534,30 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{srv.luaMotionCreature(summoned)}, nil
 	}
-	methods["RemoveFromWorld"] = func(_ context.Context, _ []any) ([]any, error) {
+	methods["RemoveFromWorld"] = func(ctx context.Context, args []any) ([]any, error) {
 		// C++ GameObject::Delete removes the object outright; for a
 		// runtime GO that means despawning it (destroy broadcast +
 		// GO_EVENT_ON_REMOVE), while a static DB spawn has no live
 		// state and is removed by hiding it in the instance.
+		// LuaGameObject::RemoveFromWorld (GameObjectMethods.h) adds two
+		// arms the old bridge ignored: an owner gate (a missing or
+		// non-player owner returns without deleting, GameObject.cpp
+		// RemoveFromWorld twin) and deleteFromDB (GameObject::DeleteFromDB
+		// on the spawn id; synthetic runtime lows match no DB row, so
+		// the DELETE is harmless for them). No-arg callers — all 7 live
+		// Lua sites — take the unchanged path.
+		if state.OwnerGUID != 0 && srv.findSessionByGUID(state.OwnerGUID) == nil {
+			return nil, nil
+		}
+		deldb := false
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				deldb = b
+			}
+		}
+		if deldb && srv.WorldStore != nil && srv.WorldStore.DB != nil {
+			_, _ = srv.WorldStore.DB.ExecContext(ctx, "DELETE FROM gameobject WHERE guid = ?", state.LowGUID)
+		}
 		if srv.gameObjectState(state.Map, state.InstanceID, state.GUID) != nil {
 			srv.despawnDynamicGameObjectInInstance(state.Map, state.InstanceID, state.GUID)
 		} else {
@@ -1651,6 +1681,21 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		t := srv.gameObjectTemplateType(state.Entry)
 		return t == GameObjectTypeTransport || t == GameObjectTypeMOTransport
 	})
+	// HasQuest is LuaGameObject::HasQuest (GameObjectMethods.h):
+	// GameObject::hasQuest (GameObject.cpp:1197-1200) = the
+	// gameobject-quest starter relation (ObjectMgr GetGOQuestRelations),
+	// the GO twin of the creature HasQuest bridge (starter table only,
+	// not starter-or-ender). No world DB reads false.
+	methods["HasQuest"] = func(ctx context.Context, args []any) ([]any, error) {
+		questID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if srv.WorldStore == nil || srv.WorldStore.DB == nil {
+			return []any{false}, nil
+		}
+		return []any{questRelationExists(ctx, srv.WorldStore.DB, "gameobject_queststarter", state.Entry, questID)}, nil
+	}
 	methods["Despawn"] = func(_ context.Context, _ []any) ([]any, error) {
 		srv.objectsMuLockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil
