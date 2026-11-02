@@ -1747,6 +1747,13 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 			}
 			rows.Close()
 		}
+		// Player::DestroyItem (Player.cpp:12638-12642): contained items
+		// are destroyed before the bag itself, each firing OnItemRemove,
+		// then the bag fires its own (Player.cpp:12662).
+		for _, cg := range contained {
+			s.fireItemRemoveHook(ctx, uint64(cg))
+		}
+		s.fireItemRemoveHook(ctx, uint64(itemGUID))
 		for _, cg := range contained {
 			_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", cg)
 		}

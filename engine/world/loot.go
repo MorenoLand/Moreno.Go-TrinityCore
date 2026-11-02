@@ -3839,6 +3839,10 @@ func (s *session) destroyItemInstanceCount(ctx context.Context, instanceGUID uin
 		return
 	}
 	if cur <= count {
+		// Player::DestroyItemCount(Item*, ...) (Player.cpp:13007) funnels
+		// whole-stack removals through DestroyItem, so OnItemRemove fires;
+		// the partial arm below never reaches DestroyItem and fires nothing.
+		s.fireItemRemoveHook(ctx, instanceGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", instanceGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", instanceGUID)
 		// A fully-destroyed item drops its persisted container loot

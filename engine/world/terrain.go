@@ -157,6 +157,9 @@ func (s *session) destroyZoneLimitedItems(ctx context.Context, zoneID uint32) bo
 		return false
 	}
 	for _, item := range items {
+		// Player::DestroyZoneLimitedItem (Player.cpp:12920) destroys each
+		// out-of-zone item via DestroyItem, so OnItemRemove fires per item.
+		s.fireItemRemoveHook(ctx, item.guid)
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, item.guid)
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item.guid)
 		s.adjustQuestItemCount(ctx, uint32(item.entry), uint32(item.count), false)

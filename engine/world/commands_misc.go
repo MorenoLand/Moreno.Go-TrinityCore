@@ -284,6 +284,15 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 			take = count - destroyed
 		}
 		if take >= it.count {
+			// Player::DestroyItemCount (Player.cpp:12727) funnels whole-stack
+			// removals through DestroyItem, so OnItemRemove fires; partial
+			// decrements never reach DestroyItem and fire nothing. The
+			// GM-command caller may target another player, and the hook's
+			// player arg must be the item's owner, so cross-player
+			// destroys stay unfired rather than pushing the wrong player.
+			if targetGUID == s.playerGUID {
+				s.fireItemRemoveHook(ctx, it.guid)
+			}
 			_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", it.guid)
 			_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", it.guid)
 			// A fully-destroyed item drops its persisted container loot

@@ -203,6 +203,22 @@ func (s *session) fireItemQuestHook(ctx context.Context, giverGUID uint64, quest
 	s.fireItemEvent(ctx, objectUint32OrZero(item, "Entry"), scripting.ItemEventOnQuestAccept, s.luaPlayer(), item, s.luaQuest(ctx, questID))
 }
 
+// fireItemRemoveHook dispatches ITEM_EVENT_ON_REMOVE (5) as
+// (event, player, item), mirroring Eluna::OnRemove (ItemHooks.cpp) via
+// ScriptMgr::OnItemRemove (Player.cpp:12662, DestroyItem). C++ fires it
+// inside DestroyItem before the item leaves the inventory, so every
+// caller fires while the item_instance row still resolves and discards
+// the return (DestroyItem ignores it, as Item::UpdateDuration does for
+// expire). Partial-count decrements never reach DestroyItem, so they
+// never fire.
+func (s *session) fireItemRemoveHook(ctx context.Context, rawItemGUID uint64) {
+	item := s.sessionLuaItem(ctx, rawItemGUID)
+	if item == nil {
+		return
+	}
+	s.fireItemEvent(ctx, objectUint32OrZero(item, "Entry"), scripting.ItemEventOnRemove, s.luaPlayer(), item)
+}
+
 // Documented no-bridge arms of the Eluna item event family (ItemHooks.cpp):
 //
 // (1) DUMMY_EFFECT — ScriptMgr/Eluna::OnDummyEffect fires from
@@ -229,14 +245,21 @@ func (s *session) fireItemQuestHook(ctx context.Context, giverGUID uint64, quest
 // login normalization (C++ Item::LoadFromDB parity) repairs legacy rows
 // whose duration disagrees with the template.
 //
-// (5) REMOVE — ScriptMgr::OnItemRemove fires from Player::DestroyItem
-// (Player.cpp:12662), the single funnel for every item removal in C++.
-// Go has no central DestroyItem: removals are scattered SQL across
-// handleDestroyItem, destroyPlayerItemCount, stack merges, ammo
-// consumption, quest turn-in consumption, item refunds, trade, auction,
-// mail, guild bank and character cleanup — some server-side with no
-// session. Bridging them one by one is a dedicated removal-funnel leg,
-// not this unit.
+// (5) REMOVE — BRIDGED 2026-11-02: ScriptMgr::OnItemRemove fires from
+// Player::DestroyItem (Player.cpp:12662). The session-owned DestroyItem
+// and DestroyItemCount twins now fire it via fireItemRemoveHook (below):
+// handleDestroyItem (whole-stack arm + contained-bag recursion order),
+// destroyPlayerItemCount (whole stacks only, self-target gate — the GM
+// command's cross-player arm stays unfired rather than pushing the wrong
+// player), destroyItemInstanceCount (whole-stack arm, covering quest
+// consumption, loot-release destroy and quest-start destroy, which all
+// funnel through it), destroyZoneLimitedItems (DestroyZoneLimitedItem
+// twin), and the expire leg in tickItemDurations (C++ UpdateDuration
+// fires OnExpire then DestroyItem, so ev4 is followed by ev5). Still
+// open: the transaction-bound quest turn-in and vendor-cost removals,
+// stack merges, ammo consumption, and the server-side trade / auction /
+// mail / guild-bank / character-cleanup paths, whose C++ owners are not
+// yet verified as DestroyItem funnels.
 
 // updateItemDurations mirrors Player::UpdateItemDuration as driven by
 // Player::Update (Player.cpp:1078, 13752-13766): while online, every carried
@@ -320,6 +343,9 @@ func (s *session) tickItemDurations(ctx context.Context, elapsed int64) {
 		}
 		entry := uint32(itemEntry)
 		s.fireItemEvent(ctx, entry, scripting.ItemEventOnExpire, s.luaPlayer(), entry)
+		// Item::UpdateDuration (Item.cpp:314-316) fires OnExpire and then
+		// destroys the item via DestroyItem, so OnRemove follows OnExpire.
+		s.fireItemRemoveHook(ctx, uint64(itemGUID))
 		s.adjustQuestItemCount(ctx, entry, uint32(count), false)
 		if bag == 0 && uint8(slot) < equipSlotEnd {
 			s.removeItemSetItem(ctx, entry)
