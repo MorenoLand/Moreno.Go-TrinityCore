@@ -1901,6 +1901,137 @@ func (s *session) areaExploredOrEventHappens(ctx context.Context, questID uint32
 	}
 }
 
+// groupEventHappens mirrors Player::GroupEventHappens
+// (Player.cpp:16527-16542): groupless, the caller takes the
+// AreaExploredOrEventHappens arm directly; grouped, every member at
+// Player::IsAtGroupRewardDistance (Player.cpp:24160-24173) of the event
+// object takes it — same map and instance, corpse-anchored, dungeon
+// always, else within MaxGroupXPDistance / CONFIG_GROUP_XP_DISTANCE —
+// skipping dead members whose corpse is unreleased (the kill-credit
+// twin's gate, Player.cpp:24152; a live member never carries a corpse,
+// so it coincides with GroupEventHappens' !GetCorpse() test). Unlike
+// the kill-credit fan-out there is no caller fallback: a grouped caller
+// out of range earns nothing. Snapshot objects without an InstanceId
+// field are treated as same-instance when the maps match.
+func (s *session) groupEventHappens(ctx context.Context, questID uint32, obj *scripting.Object) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if s.groupID == 0 {
+		s.areaExploredOrEventHappens(ctx, questID)
+		return
+	}
+	mapID, instanceID, hasInstance, x, y, z, ok := luaWorldObjectPosition(obj)
+	if !ok {
+		return
+	}
+	dungeon := s.isDungeonMap(mapID)
+	for _, m := range s.server.getGroupSessions(s.groupID) {
+		if m == nil || m.player == nil {
+			continue
+		}
+		if m.player.Map != mapID || (hasInstance && m.player.InstanceID != instanceID) {
+			continue
+		}
+		mx, my, mz := groupRewardAnchorPos(m)
+		if !dungeon && distance3D(mx, my, mz, x, y, z) > s.server.Config.MaxGroupXPDistance {
+			continue
+		}
+		if m.isDeadOrGhost() && m.player.hasCorpse {
+			continue
+		}
+		m.areaExploredOrEventHappens(ctx, questID)
+	}
+}
+
+// luaWorldObjectPosition reads a script object's map, instance and
+// coordinates from its Fields (player, motion-creature and gameobject
+// builders all carry MapId/X/Y/Z; only the player and motion-creature
+// builders carry InstanceId).
+func luaWorldObjectPosition(obj *scripting.Object) (mapID, instanceID uint32, hasInstance bool, x, y, z float32, ok bool) {
+	if obj == nil {
+		return 0, 0, false, 0, 0, 0, false
+	}
+	mapID, ok = objectUint32Field(obj, "MapId")
+	if !ok {
+		mapID, ok = objectUint32Field(obj, "Map")
+		if !ok {
+			return 0, 0, false, 0, 0, 0, false
+		}
+	}
+	instanceID, hasInstance = objectUint32Field(obj, "InstanceId")
+	if x, ok = objectFloat32Field(obj, "X"); !ok {
+		return 0, 0, false, 0, 0, 0, false
+	}
+	if y, ok = objectFloat32Field(obj, "Y"); !ok {
+		return 0, 0, false, 0, 0, 0, false
+	}
+	if z, ok = objectFloat32Field(obj, "Z"); !ok {
+		return 0, 0, false, 0, 0, 0, false
+	}
+	return mapID, instanceID, hasInstance, x, y, z, true
+}
+
+// talkedToCreature mirrors Player::TalkedToCreature
+// (Player.cpp:16802-16850): for every INCOMPLETE quest in the log whose
+// template carries a positive RequiredNpcOrGo slot equal to the entry,
+// the counter increments by one (the KILL|CAST|SPEAKTO special-flag gate
+// is load-computed from the same nonzero RequiredNpcOrGo columns,
+// ObjectMgr.cpp:5004, so it is vacuous here, as in the kill-credit
+// twin), SMSG_QUESTUPDATE_ADD_KILL goes out with the raw entry, and a
+// CanCompleteQuest pass completes the quest — the Eluna stored-count
+// twin, since the counters just written are the stored ones. Negative
+// (gameobject) objectives are skipped, as in C++, and no achievement
+// criteria or raid-group gate applies on this arm, unlike kill credit.
+func (s *session) talkedToCreature(ctx context.Context, entry uint32, guid uint64) {
+	if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		logEntry := s.player.QuestLog[slot]
+		questID := logEntry.QuestID
+		if questID == 0 {
+			continue
+		}
+		if row := s.luaQuestStatusRow(ctx, questID); row.status != questStatusIncomplete {
+			continue
+		}
+		var reqIDs, reqCounts [4]int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(RequiredNpcOrGo1, 0), COALESCE(RequiredNpcOrGo2, 0), COALESCE(RequiredNpcOrGo3, 0), COALESCE(RequiredNpcOrGo4, 0), COALESCE(RequiredNpcOrGoCount1, 0), COALESCE(RequiredNpcOrGoCount2, 0), COALESCE(RequiredNpcOrGoCount3, 0), COALESCE(RequiredNpcOrGoCount4, 0) FROM quest_template WHERE ID = ?", questID).Scan(&reqIDs[0], &reqIDs[1], &reqIDs[2], &reqIDs[3], &reqCounts[0], &reqCounts[1], &reqCounts[2], &reqCounts[3]); err != nil {
+			continue
+		}
+		progressed := false
+		for objective := 0; objective < 4; objective++ {
+			if reqIDs[objective] <= 0 || uint32(reqIDs[objective]) != entry {
+				continue
+			}
+			required := uint32(reqCounts[objective])
+			if uint32(logEntry.Counters[objective]) >= required {
+				continue
+			}
+			logEntry.Counters[objective]++
+			progressed = true
+			update := protocol.NewBuffer(24)
+			update.WriteU32(questID)
+			update.WriteU32(entry)
+			update.WriteU32(uint32(logEntry.Counters[objective]))
+			update.WriteU32(required)
+			update.WriteU64(guid)
+			_ = s.write(uint16(protocol.OpcodeSMSG_QUESTUPDATE_ADD_KILL), update.Bytes(), true)
+			countColumn := "mobcount" + string(rune('1'+objective))
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET "+countColumn+" = ? WHERE guid = ? AND quest = ?", int64(logEntry.Counters[objective]), s.playerGUID, questID)
+		}
+		if !progressed {
+			continue
+		}
+		s.player.QuestLog[slot] = logEntry
+		s.sendPlayerQuestLogUpdate(slot)
+		if s.elunaCanCompleteQuest(ctx, questID) {
+			s.completeQuest(ctx, questID)
+		}
+	}
+}
+
 // completeQuestFromSpell mirrors Spell::EffectQuestComplete
 // (SpellEffects.cpp:4371-4389): the quest template must exist
 // (SpellEffects.cpp:4380-4382); with the quest in the target's log the

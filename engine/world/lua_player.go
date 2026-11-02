@@ -2879,6 +2879,85 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, nil
 	}
+	// TalkedToCreature is Player::TalkedToCreature
+	// (PlayerMethods.h:2742-2750, Player.cpp:16802) via the session
+	// talkedToCreature twin (quests.go): the creature argument is
+	// required like Eluna's CHECKOBJ, and its GUID rides the quest
+	// update packet; a non-creature object still credits by entry, since
+	// C++ only reads the creature's GUID, never its entry.
+	methods["TalkedToCreature"] = func(lctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 2 {
+			return nil, fmt.Errorf("TalkedToCreature requires a creature")
+		}
+		obj, ok := args[1].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("TalkedToCreature requires a creature")
+		}
+		guid, _ := objectUint64Field(obj, "GUID")
+		if s != nil {
+			s.talkedToCreature(lctx, entry, guid)
+		}
+		return nil, nil
+	}
+	// GroupEventHappens is Player::GroupEventHappens
+	// (PlayerMethods.h:2770-2778, Player.cpp:16527) via the session
+	// groupEventHappens twin (quests.go): the world-object argument is
+	// required like Eluna's CHECKOBJ and anchors the group reward
+	// distance test.
+	methods["GroupEventHappens"] = func(lctx context.Context, args []any) ([]any, error) {
+		quest, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 2 {
+			return nil, fmt.Errorf("GroupEventHappens requires a worldobject")
+		}
+		obj, ok := args[1].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("GroupEventHappens requires a worldobject")
+		}
+		if s != nil {
+			s.groupEventHappens(lctx, quest, obj)
+		}
+		return nil, nil
+	}
+	// RewardQuest is LuaPlayer::RewardQuest (PlayerMethods.h:2247-2261):
+	// a missing template or a quest whose status is not COMPLETE is a
+	// silent no-op; otherwise the full Player::RewardQuest grant path
+	// runs with no choice item and announce=true — the .quest reward
+	// command twin (commands_quest.go), giver 0 so no chain quest or
+	// giver-status packet rides along, matching the GM path. The
+	// command's quest-disabled gate is not applied: the Eluna arm has
+	// none. The commit's claimed-window gate can still refuse a
+	// daily/weekly already claimed in its window, silently like the
+	// template/status gates.
+	methods["RewardQuest"] = func(lctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return nil, nil
+		}
+		st, err := s.characterQuestStatus(lctx, entry)
+		if err != nil || st != questStatusComplete {
+			return nil, nil
+		}
+		view, err := s.loadQuestRewardView(lctx, entry)
+		if err != nil {
+			return nil, nil
+		}
+		grants, destroyedGUIDs, err := s.commitQuestReward(lctx, view, 0)
+		if err != nil {
+			return nil, nil
+		}
+		s.applyQuestRewardGrants(lctx, view, entry, 0, 0, grants, destroyedGUIDs, true)
+		return nil, nil
+	}
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
 	methods["SendAreaTriggerMessage"] = s.luaMessageMethod()
 	methods["SendNotification"] = s.luaMessageMethod()
@@ -3931,6 +4010,78 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		otherSub, ok := group.memberSubGroup(otherGUID)
 		return []any{ok && sub == otherSub}, nil
+	}
+	// IsVisibleForPlayer is Player::IsVisibleGloballyFor
+	// (PlayerMethods.h:582-588, Player.cpp:22599): note the direction —
+	// C++ asks whether the CALLER is visible to the argument player, not
+	// whether the caller sees the argument, so the Go twin runs with
+	// the argument as viewer and the caller as target (social.go). A
+	// missing or non-object argument errors like Eluna's CHECKOBJ; a
+	// GUID with no live session reads false, and the caller's own GUID
+	// reads true without a lookup, matching the twin's self arm.
+	methods["IsVisibleForPlayer"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		otherGUID, ok := objectUint64Field(obj, "GUID")
+		if !ok || otherGUID == 0 {
+			return []any{false}, nil
+		}
+		if otherGUID == state.GUID {
+			return []any{true}, nil
+		}
+		other := s.server.findSessionByGUID(otherGUID)
+		if other == nil {
+			return []any{false}, nil
+		}
+		return []any{isVisibleGloballyFor(other, s)}, nil
+	}
+	// IsHonorOrXPTarget is Player::isHonorOrXPTarget
+	// (PlayerMethods.h:568-574, Player.cpp:24064-24083): the victim
+	// level must clear the caller's gray level — the scaled-XP-ratio
+	// escape has no Go twin (MinDiscoveredScaledXPRatio is a different
+	// config), so the gate applies unconditionally, the same reading
+	// the death path uses. Creature victims additionally fail as live
+	// totems (isTotemGUID) or critters (creature_template.type 8, the
+	// live-motion CreatureType twin); player victims take the gray
+	// gate only, and the NPCBot arm has no Go counterpart. A missing
+	// or non-unit argument errors like Eluna's CHECKOBJ<Unit>.
+	methods["IsHonorOrXPTarget"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("unit is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("unit is required")
+		}
+		if obj.Type != "Player" && obj.Type != "Creature" {
+			return nil, fmt.Errorf("unit is required")
+		}
+		victimLevel, ok := objectUint32Field(obj, "Level")
+		if !ok {
+			return []any{false}, nil
+		}
+		if victimLevel <= grayLevel(uint32(state.Level)) {
+			return []any{false}, nil
+		}
+		if obj.Type == "Creature" {
+			guid, _ := objectUint64Field(obj, "GUID")
+			if s.server != nil && s.server.isTotemGUID(guid) {
+				return []any{false}, nil
+			}
+			entry, hasEntry := objectUint32Field(obj, "Entry")
+			if hasEntry && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				var creatureType int64
+				if err := s.server.WorldStore.DB.QueryRow("SELECT COALESCE(type, 0) FROM creature_template WHERE entry = ?", entry).Scan(&creatureType); err == nil && uint32(creatureType) == creatureTypeCritter {
+					return []any{false}, nil
+				}
+			}
+		}
+		return []any{true}, nil
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242) —
 	// replaces the old no-op PlayDirectSound stub.
