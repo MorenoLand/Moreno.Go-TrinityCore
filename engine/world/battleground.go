@@ -2921,6 +2921,40 @@ func (s *session) activeBattlegroundMap() uint32 {
 	return 0
 }
 
+// luaBattlegroundID mirrors Player::GetBattlegroundId/GetBattlegroundTypeId
+// (Player.h:1908-1909): the m_bgData pair SetBattlegroundId sets when the
+// player is added to a battleground (Battleground.cpp:918 clears it on
+// leave; Player.cpp:17603 restores it on login). Go has no live
+// Battleground pointer on the session, so the pair is read back from the
+// two live-BG models in the same priority order as inLiveBGForAFK: a live
+// arena roster first (InstanceID/TypeID under the arena lock), then the
+// entered (Active, InProgress) non-arena sim slot — the enteredNonArenaBGInstance
+// twin, extended with the type. A random-BG slot reports its resolved type
+// (the created Battleground's type in C++), not the RB queue type. Queued,
+// invited-but-not-entered, or absent players read (0, 0) = BATTLEGROUND_TYPE_NONE.
+func (s *session) luaBattlegroundID() (uint32, uint32) {
+	if s == nil {
+		return 0, 0
+	}
+	if arena := s.server.findArenaStateForPlayer(s.playerGUID); arena != nil {
+		arena.mu.RLock()
+		instanceID, typeID := arena.InstanceID, arena.TypeID
+		arena.mu.RUnlock()
+		return instanceID, typeID
+	}
+	for i := range s.bgQueues {
+		e := &s.bgQueues[i]
+		if e.Active && !e.IsArena && e.Status == BGStatusInProgress && e.InstanceID != 0 {
+			typeID := e.BgTypeID
+			if e.ResolvedBgTypeID != 0 {
+				typeID = e.ResolvedBgTypeID
+			}
+			return e.InstanceID, typeID
+		}
+	}
+	return 0, 0
+}
+
 func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte, fromLogout bool, skipEntryTeleport bool) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true

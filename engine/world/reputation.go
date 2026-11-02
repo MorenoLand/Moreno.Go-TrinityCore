@@ -507,6 +507,91 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 	s.questReputationChanged(ctx, factionID)
 }
 
+// setReputationStanding mirrors the non-incremental leg of
+// ReputationMgr::SetReputation (ReputationMgr.cpp:300-372) as reached from
+// Player:SetReputation (PlayerMethods.h:1778-1785): the Eluna hook fires
+// first with incremental=false and a rewritten standing becomes the new
+// absolute target (no RATE_REPUTATION_GAIN scaling — that fold lives only
+// in the incremental SetOneFactionReputation arm). The main-faction write
+// then mirrors SetOneFactionReputation's non-incremental arm: clamp the
+// total to [-42000, 42999], store net of the base, SetVisible fold,
+// hostile auto-war arm, immediate SendState, criteria, and the
+// ReputationChanged quest scan. DELTAS: spillover is skipped — Go has no
+// spillover model (see the ModifyReputation limit arm), so a faction with
+// sub-factions or a DB spillover template updates only itself here; a
+// faction with no recorded row and no DBC row is a no-op, the
+// SetOneFactionReputation false arm (C++ would deref a nil FactionEntry).
+func (s *session) setReputationStanding(ctx context.Context, factionID uint32, target int32) {
+	if s == nil || s.player == nil || factionID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	target = s.fireReputationChangeHook(ctx, factionID, target, false)
+	cdb := s.server.CharactersStore.DB
+	for i := range s.player.Reputations {
+		if s.player.Reputations[i].FactionID == factionID {
+			oldRank := reputationRank(int64(totalReputationStanding(s.player.Reputations[i])))
+			newTotal := target
+			if newTotal > 42999 {
+				newTotal = 42999
+			} else if newTotal < -42000 {
+				newTotal = -42000
+			}
+			s.player.Reputations[i].Standing = newTotal - s.player.Reputations[i].Base
+			becameVisible := false
+			if !factionVisibleGated(s.player.Reputations[i].Flags) && s.player.Reputations[i].Flags&factionFlagVisible == 0 {
+				s.player.Reputations[i].Flags |= factionFlagVisible
+				becameVisible = true
+			}
+			if reputationAutoWar(s.player.Reputations[i].Flags, newTotal, s.player.Reputations[i].Standing) {
+				s.player.Reputations[i].Flags |= factionFlagAtWar
+			}
+			_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ?, flags = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.player.Reputations[i].Flags, s.playerGUID, factionID)
+			if becameVisible {
+				s.sendFactionVisiblePacket(s.player.Reputations[i].ListID)
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{s.player.Reputations[i]}, reputationRank(int64(newTotal)) > oldRank), true)
+			s.fireReputationCriteria(factionID, newTotal)
+			s.questReputationChanged(ctx, factionID)
+			return
+		}
+	}
+	if s.server.Data == nil {
+		return
+	}
+	dbcRep, found, dbcErr := s.server.Data.Reputation(factionID, s.player.Race, s.player.Class)
+	if dbcErr != nil || !found || dbcRep.ReputationList < 0 {
+		return
+	}
+	newTotal := target
+	if newTotal > 42999 {
+		newTotal = 42999
+	} else if newTotal < -42000 {
+		newTotal = -42000
+	}
+	rep := playerReputation{
+		FactionID: factionID,
+		ListID:    uint32(dbcRep.ReputationList),
+		Base:      dbcRep.BaseStanding,
+		Standing:  newTotal - dbcRep.BaseStanding,
+		Flags:     dbcRep.DefaultFlags,
+	}
+	if rep.Flags&(factionFlagInvisibleForced|factionFlagHidden) == 0 || rep.Flags&factionFlagSpecial != 0 {
+		rep.Flags |= factionFlagVisible
+	}
+	if reputationAutoWar(rep.Flags, newTotal, rep.Standing) {
+		rep.Flags |= factionFlagAtWar
+	}
+	becameVisible := dbcRep.DefaultFlags&factionFlagVisible == 0 && !factionVisibleGated(dbcRep.DefaultFlags)
+	s.player.Reputations = append(s.player.Reputations, rep)
+	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, rep.Standing, rep.Flags)
+	if becameVisible {
+		s.sendFactionVisiblePacket(rep.ListID)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_FACTION_STANDING), buildFactionStandingState([]playerReputation{rep}, reputationRank(int64(newTotal)) > reputationRank(int64(dbcRep.BaseStanding))), true)
+	s.fireReputationCriteria(factionID, newTotal)
+	s.questReputationChanged(ctx, factionID)
+}
+
 // questReputationChanged mirrors Player::ReputationChanged and
 // Player::ReputationChanged2 (Player.cpp:16893-16941): a standing change
 // re-scans the quest log for quests with a matching rep objective

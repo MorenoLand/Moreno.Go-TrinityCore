@@ -996,6 +996,50 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{reputationRank(int64(s.reputationStanding(faction)))}, nil
 	}
+	// Player:SetReputation (PlayerMethods.h:1778-1785): the absolute
+	// standing write — see setReputationStanding for the clamp, hook,
+	// visibility, and spillover-parked semantics.
+	methods["SetReputation"] = func(ctx context.Context, args []any) ([]any, error) {
+		faction, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		value, err := luaInt64Arg(args, 1)
+		if err != nil || value > math.MaxInt32 || value < math.MinInt32 {
+			if err == nil {
+				err = fmt.Errorf("argument 2 must be int32")
+			}
+			return nil, err
+		}
+		s.setReputationStanding(ctx, faction, int32(value))
+		return []any{}, nil
+	}
+	// Player:GetBattlegroundId/GetBattlegroundTypeId (PlayerMethods.h:
+	// 958-977; Player.h:1908-1909) read the m_bgData pair via
+	// luaBattlegroundID; outside a battleground both read 0.
+	methods["GetBattlegroundId"] = luaNoArgs(func() any {
+		id, _ := s.luaBattlegroundID()
+		return id
+	})
+	methods["GetBattlegroundTypeId"] = luaNoArgs(func() any {
+		_, typeID := s.luaBattlegroundID()
+		return typeID
+	})
+	// Player:IsInArenaTeam (PlayerMethods.h:430-436; Player.h:1571;
+	// ArenaTeam.h:114): the argument is a SLOT index, not a team type —
+	// type >= MAX_ARENA_SLOT (3) reads false, and the slot's team id
+	// (ArenaTeamInfo base + 0, the values-builder twin kept current by
+	// loadArenaTeamInfo and the live set/clear slot helpers) decides.
+	methods["IsInArenaTeam"] = func(_ context.Context, args []any) ([]any, error) {
+		slot, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if slot >= 3 {
+			return []any{false}, nil
+		}
+		return []any{state.ArenaTeamInfo[slot*7] != 0}, nil
+	}
 	methods["SetGender"] = func(_ context.Context, args []any) ([]any, error) {
 		gender, err := luaUint32Arg(args, 0)
 		if err != nil || gender > 1 {
