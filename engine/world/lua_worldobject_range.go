@@ -614,6 +614,9 @@ func luaRangeMethods(srv *Server, origin func() luaRangeOrigin) map[string]scrip
 	// Zero Lua callers — engine-correctness, like the range family.
 	methods["IsWithinLoS"] = func(_ context.Context, args []any) ([]any, error) {
 		o := origin()
+		if o.srv == nil {
+			return []any{false}, nil
+		}
 		if len(args) > 0 {
 			if target, ok := args[0].(*scripting.Object); ok && target != nil {
 				targetMap, _ := objectUint32Field(target, "MapId")

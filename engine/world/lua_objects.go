@@ -1381,6 +1381,20 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return []any{targets}, nil
 	}
+	// Eluna nearest/in-range family (WorldObjectMethods.h) over the
+	// live motion, re-resolved at call time like the session SendUnit
+	// arms: a motion that no longer resolves reads a srv-nil origin,
+	// so nearest reads nil, lists read empty, and IsWithinLoS reads
+	// false (the nil-player-origin convention in luaRangeOriginForPlayer).
+	for name, fn := range luaRangeMethods(s.server, func() luaRangeOrigin {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return luaRangeOrigin{}
+		}
+		return s.server.luaRangeOriginForMotion(motion)
+	}) {
+		methods[name] = fn
+	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(s.server, nil, state.GUID, methods)
 	// Indexed values (ObjectMethods.h) delegate to the motion backend
