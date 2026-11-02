@@ -175,6 +175,128 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.setPlayerDND(state.PlayerFlags&playerFlagDND == 0)
 		return []any{}, nil
 	}
+	// IsAcceptingWhispers/IsGMChat/IsGMVisible/IsTaxiCheater are the
+	// Player::isAcceptWhispers/isGMChat/isGMVisible/isTaxiCheater
+	// ExtraFlags tests (Player.h:957-967): ACCEPT_WHISPERS 0x4,
+	// TAXICHEAT 0x8, GM_CHAT 0x20, GM_INVISIBLE 0x10 (inverted).
+	methods["IsAcceptingWhispers"] = luaNoArgs(func() any { return state.ExtraFlags&playerExtraAcceptWhispers != 0 })
+	methods["IsGMChat"] = luaNoArgs(func() any { return state.ExtraFlags&playerExtraGMChat != 0 })
+	methods["IsGMVisible"] = luaNoArgs(func() any { return state.ExtraFlags&playerExtraGMInvisible == 0 })
+	methods["IsTaxiCheater"] = luaNoArgs(func() any { return state.ExtraFlags&playerExtraTaxiCheat != 0 })
+	// extraBool mirrors Eluna CHECKVAL<bool>(L, 2, true): an omitted
+	// argument means true, a non-boolean argument is an error.
+	extraBool := func(method string, args []any) (bool, error) {
+		if len(args) == 0 {
+			return true, nil
+		}
+		on, ok := args[0].(bool)
+		if !ok {
+			return false, fmt.Errorf("%s requires a boolean", method)
+		}
+		return on, nil
+	}
+	// SetAcceptWhispers/SetGMChat/SetTaxiCheat are the Player:: bit
+	// flips (Player.h:958/964/966); the GM-chat setter also keeps the
+	// session gmChat flag in step, the .gm chat command twin
+	// (commands.go). Persistence follows persistExtraFlags.
+	methods["SetAcceptWhispers"] = func(_ context.Context, args []any) ([]any, error) {
+		on, err := extraBool("SetAcceptWhispers", args)
+		if err != nil {
+			return nil, err
+		}
+		if on {
+			state.ExtraFlags |= playerExtraAcceptWhispers
+		} else {
+			state.ExtraFlags &^= playerExtraAcceptWhispers
+		}
+		s.persistExtraFlags()
+		return []any{}, nil
+	}
+	methods["SetGMChat"] = func(_ context.Context, args []any) ([]any, error) {
+		on, err := extraBool("SetGMChat", args)
+		if err != nil {
+			return nil, err
+		}
+		s.gmChat = on
+		if on {
+			state.ExtraFlags |= playerExtraGMChat
+		} else {
+			state.ExtraFlags &^= playerExtraGMChat
+		}
+		s.persistExtraFlags()
+		return []any{}, nil
+	}
+	methods["SetTaxiCheat"] = func(_ context.Context, args []any) ([]any, error) {
+		on, err := extraBool("SetTaxiCheat", args)
+		if err != nil {
+			return nil, err
+		}
+		if on {
+			state.ExtraFlags |= playerExtraTaxiCheat
+		} else {
+			state.ExtraFlags &^= playerExtraTaxiCheat
+		}
+		s.persistExtraFlags()
+		return []any{}, nil
+	}
+	// SetGameMaster is Player::SetGameMaster (Player.cpp:2439-2498)
+	// via the .gm command twin (commands.go): the GM_ON bit plus the
+	// PLAYER_FLAGS GM bit, the visibility-detect flip, persist, and
+	// the client/visibility refresh. The faction, phase-anywhere,
+	// FFA-byte, pet-faction, and combat-stop legs are the documented
+	// gm-on gap shared with the command twin.
+	methods["SetGameMaster"] = func(ctx context.Context, args []any) ([]any, error) {
+		on, err := extraBool("SetGameMaster", args)
+		if err != nil {
+			return nil, err
+		}
+		if on {
+			state.ExtraFlags |= playerExtraGMOn
+			state.PlayerFlags |= playerFlagGM
+			s.gmVisibilityDetect = s.security
+		} else {
+			state.ExtraFlags &^= playerExtraGMOn
+			state.PlayerFlags &^= playerFlagGM
+			s.gmVisibilityDetect = 0
+		}
+		s.updateWorldReadyGM()
+		s.persistExtraFlags()
+		s.sendPlayerUpdate()
+		s.refreshNearbyObjects(ctx)
+		return []any{}, nil
+	}
+	// SetGMVisible is Player::SetGMVisible (Player.cpp:2504-2523) via
+	// the .gm visible command twin (commands.go): the invisible-bit
+	// flip plus the GM visual aura, with the off arm also clearing
+	// accept-whispers and turning GM mode on per C++. Channel
+	// invisibility needs no per-channel action: the channel code
+	// reads the invisible bit live. The SetGameMaster engine legs
+	// above are the same documented gap.
+	methods["SetGMVisible"] = func(ctx context.Context, args []any) ([]any, error) {
+		on, err := extraBool("SetGMVisible", args)
+		if err != nil {
+			return nil, err
+		}
+		if on {
+			state.ExtraFlags &^= playerExtraGMInvisible
+			if s.hasAura(gmVisualAura) {
+				s.removeAura(gmVisualAura)
+			}
+			s.gmVisibilityDetect = 0
+		} else {
+			state.ExtraFlags |= playerExtraGMInvisible
+			state.ExtraFlags &^= playerExtraAcceptWhispers
+			state.ExtraFlags |= playerExtraGMOn
+			state.PlayerFlags |= playerFlagGM
+			s.applyAuraWithDuration(gmVisualAura, 0)
+			s.gmVisibilityDetect = s.security
+		}
+		s.updateWorldReadyGM()
+		s.persistExtraFlags()
+		s.sendPlayerUpdate()
+		s.refreshNearbyObjects(ctx)
+		return []any{}, nil
+	}
 	// HasFlag/SetFlag/RemoveFlag are Object::HasFlag/SetFlag/RemoveFlag
 	// (ObjectMethods.h:34/243/390; LuaFunctions.cpp:1354 registers
 	// ObjectMethods on the Player metatable) for the flag-backed fields

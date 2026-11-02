@@ -24,6 +24,7 @@ const (
 // TrinityCore Player.h extra flags and transient PLAYER_FLAGS bits.
 const (
 	playerExtraGMOn            uint32 = 0x00000001
+	playerExtraAcceptWhispers  uint32 = 0x00000004
 	playerExtraGMInvisible     uint32 = 0x00000010
 	playerExtraGMChat          uint32 = 0x00000020
 	playerFlagAFK              uint32 = 0x00000002
