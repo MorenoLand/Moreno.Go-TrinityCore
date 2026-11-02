@@ -1495,7 +1495,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		resetArgs := []any{scripting.CreatureEventOnReset, creature}
 		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnReset, resetArgs...)
 		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnReset, resetArgs...)
-		diedArgs := []any{scripting.CreatureEventOnDied, creature, creature}
+		killerObj := s.luaMotionCreature(killer)
+		if killerObj == nil {
+			killerObj = creature
+		}
+		diedArgs := []any{scripting.CreatureEventOnDied, creature, killerObj}
 		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDied, diedArgs...)
 		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDied, diedArgs...)
 		return nil, nil
