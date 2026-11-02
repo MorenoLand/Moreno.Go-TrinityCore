@@ -838,22 +838,25 @@ func (s *session) handlePlayerGossipSelect(ctx context.Context, menuID uint32, i
 	// MiscHandler.cpp:162-164 (HandleGossipSelectOptionOpcode) — the
 	// feign-death strip runs after the player-arm validation, before dispatch.
 	s.removeFakeDeath()
-	s.gossip = nil
 	codeArg := any(nil)
 	if code != "" {
 		codeArg = code
 	}
+	// Eluna's HandleGossipSelectOption (GossipHooks.cpp:64-78) sends no
+	// close packet on this arm: it only clears the server-side menu
+	// (ClearMenus, behind START_HOOK's bindings gate) and fires the hooks.
+	// A handler-sent follow-up menu must therefore survive, and a
+	// handler-less select leaves the menu intact — so the menu is cleared
+	// only when a handler is registered, and no SMSG_GOSSIP_COMPLETE is
+	// written here (handlers that want a close call GossipComplete).
 	if s.server != nil && s.server.Features != nil && s.server.Features.Scripts != nil {
 		kind := scripting.PlayerGossipKind(menuID)
 		if s.server.Features.Scripts.HasHook(kind, scripting.GossipEventOnSelect) {
+			s.gossip = nil
 			if _, err := s.server.Features.Scripts.TriggerPlayerGossipEvent(ctx, menuID, scripting.GossipEventOnSelect, s.luaPlayer(), s.luaPlayer(), item.Sender, item.Action, codeArg); err != nil {
 				s.debug("lua player gossip select failed", "account", s.accountName, "menu", menuID, "error", err)
 			}
 		}
-	}
-	s.gossipClosed = true
-	if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
-		return true
 	}
 	return true
 }
