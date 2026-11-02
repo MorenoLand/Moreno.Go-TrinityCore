@@ -7205,11 +7205,20 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			}
 			ts.castSpellDirect(ctx, 46394, guid)
 		case 52173, 60243:
+			// Coyote Spirit / Blood Parrot Despawn
+			// (SpellEffects.cpp:3704-3708): a TYPEID_UNIT summon target
+			// runs TempSummon::UnSummon (TemporarySummon.cpp:274-298) —
+			// the summoner-despawn leg, then the delete queue. The
+			// Go guard is IsTempSummon (pets take the Remove path in
+			// UnSummon and never reach AddObjectToRemoveList, so
+			// they fire neither leg here). MotionMu is released
+			// above, as fireCreatureSummoned requires.
 			tm := s.findCreatureMotion(m.Map, m.InstanceID, guid)
 			if tm == nil || !tm.IsTempSummon || guid == m.GUID {
 				continue
 			}
 			tx, ty, tz := tm.X, tm.Y, tm.Z
+			ownerGUID := tm.OwnerGUID
 			s.motionMu.Lock()
 			delete(s.motionMapLocked(m.Map, m.InstanceID), guid)
 			s.motionMu.Unlock()
@@ -7220,6 +7229,16 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			destroyBuf.WriteU64(guid)
 			destroyBuf.WriteU8(0)
 			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), m.Map, m.InstanceID, tx, ty, tz, tm.PhaseMask)
+			// TempSummon::UnSummon (TemporarySummon.cpp:274-284) fires
+			// Eluna::SummonedCreatureDespawn on the summoner creature;
+			// player owners have no creature hook, so the motion
+			// lookup skips them (the expireTempSummonGuardian twin).
+			if ownerMotion := s.findCreatureMotion(m.Map, m.InstanceID, ownerGUID); ownerMotion != nil {
+				s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, tm)
+			}
+			// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): UnSummon
+			// ends at AddObjectToRemoveList (TemporarySummon.cpp:298).
+			s.fireServerDeleteCreature(ctx, tm)
 		}
 	}
 }
