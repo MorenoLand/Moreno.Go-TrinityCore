@@ -363,7 +363,7 @@ func (s *Server) getOrCreateArenaState(mapID, instanceID uint32, arenaType uint8
 	var created *arenaBattlegroundState
 	defer func() {
 		if created != nil {
-			s.triggerArenaBGEvent(created.TypeID, created.InstanceID, scripting.BGEventOnCreate)
+			s.triggerArenaBGEvent(created.MapID, created.TypeID, created.InstanceID, scripting.BGEventOnCreate)
 		}
 	}()
 	defer s.arenaMu.Unlock()
@@ -1032,7 +1032,7 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 
 	// TypeID/InstanceID are fixed at creation, so no lock is needed here:
 	// the WaitJoin gate above makes this the single start transition.
-	s.triggerArenaBGEvent(arena.TypeID, arena.InstanceID, scripting.BGEventOnStart)
+	s.triggerArenaBGEvent(arena.MapID, arena.TypeID, arena.InstanceID, scripting.BGEventOnStart)
 }
 
 // endArena handles match conclusion, rating settlement, achievements, and PVP log data dispatch.
@@ -1183,7 +1183,7 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 	} else if winner == int8(ArenaTeamGreen) {
 		winnerTeamID = 1
 	}
-	s.triggerArenaBGEvent(arena.TypeID, arena.InstanceID, scripting.BGEventOnEnd, winnerTeamID)
+	s.triggerArenaBGEvent(arena.MapID, arena.TypeID, arena.InstanceID, scripting.BGEventOnEnd, winnerTeamID)
 }
 
 // processArenaLeave ports Battleground::_ProcessLeave (Battleground.cpp:506-528):
@@ -1311,7 +1311,7 @@ func (s *Server) deleteArenaState(arena *arenaBattlegroundState) {
 	var destroyed *arenaBattlegroundState
 	defer func() {
 		if destroyed != nil {
-			s.triggerArenaBGEvent(destroyed.TypeID, destroyed.InstanceID, scripting.BGEventOnPreDestroy)
+			s.triggerArenaBGEvent(destroyed.MapID, destroyed.TypeID, destroyed.InstanceID, scripting.BGEventOnPreDestroy)
 		}
 	}()
 	defer s.arenaMu.Unlock()

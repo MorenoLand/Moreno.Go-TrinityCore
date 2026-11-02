@@ -931,6 +931,129 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 	return &Object{Type: "Map", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID, "InWorld": true}, Methods: methods}
 }
 
+// BGSnapshot is the battleground state behind a Lua BattleGround object: the
+// fields BattleGroundMethods.h reads from the live BattleGround*. The snapshot
+// is taken at hook-fire time (the world engine builds it before Trigger, so no
+// method re-reads battleground state while a hook runs under a per-map state
+// lock). Winner is the C++ PvPTeamId (SharedDefines.h:3499-3501: Horde 0,
+// Alliance 1, Neutral 2); the world engine translates the hook's Team
+// argument (Alliance 0, Horde 1) into it, and non-END fires read Neutral,
+// the C++ _winnerTeamId default. MinPlayers/MaxPlayers are the per-team
+// counts doubled (BattlegroundMgr.cpp:505-508).
+type BGSnapshot struct {
+	Name              string
+	MinLevel          uint32
+	MaxLevel          uint32
+	MinPlayers        uint32
+	MaxPlayers        uint32
+	MinPlayersPerTeam uint32
+	MaxPlayersPerTeam uint32
+	Winner            uint32
+	Map               *Object
+}
+
+// BGLive carries the snapshot behind a Lua BattleGround object. A nil Load
+// or a false return means the battleground is unknown, and the methods read
+// zero values.
+type BGLive struct {
+	Load func() (BGSnapshot, bool)
+}
+
+// NewBattleGroundObject builds the Lua BattleGround object surface for the
+// BG_EVENT_* hooks: GetName/GetTypeId/GetMapId/GetInstanceId/GetMap/
+// GetMinLevel/GetMaxLevel/GetMinPlayers/GetMaxPlayers/GetMinPlayersPerTeam/
+// GetMaxPlayersPerTeam/GetWinner/GetBonusHonorFromKillCount
+// (BattleGroundMethods.h). GetBonusHonorFromKillCount is the pure C++
+// formula (Battleground.cpp:806-811): hk_honor_at_level(min(maxLevel, 80),
+// kills) = ceil(level * 1.55 * kills), without the OnHonorCalculation script
+// hook, which has no Go twin. The remaining surface stays unbridged:
+// GetBracketId needs the PvPDifficulty.dbc bracket model Go does not have,
+// GetStatus needs the STATUS_* machine (only SA/arena carry a status field,
+// on different enums), GetEndTime needs the per-map EndedAt under its state
+// lock (unsafe to re-read from a hook running under that lock),
+// GetAlivePlayersCountByTeam/GetFreeSlotsForTeam need a per-map roster Go
+// does not model.
+func NewBattleGroundObject(bgTypeID, mapID, instanceID uint32, live BGLive) *Object {
+	load := live.Load
+	if load == nil {
+		load = func() (BGSnapshot, bool) { return BGSnapshot{}, false }
+	}
+	methods := map[string]ObjectMethod{
+		"GetName": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.Name}, nil
+			}
+			return []any{nil}, nil
+		},
+		"GetTypeId": func(context.Context, []any) ([]any, error) { return []any{bgTypeID}, nil },
+		"GetMapId":  func(context.Context, []any) ([]any, error) { return []any{mapID}, nil },
+		"GetInstanceId": func(context.Context, []any) ([]any, error) {
+			return []any{instanceID}, nil
+		},
+		"GetMap": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok && snap.Map != nil {
+				return []any{snap.Map}, nil
+			}
+			return []any{nil}, nil
+		},
+		"GetMinLevel": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.MinLevel}, nil
+			}
+			return []any{uint32(0)}, nil
+		},
+		"GetMaxLevel": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.MaxLevel}, nil
+			}
+			return []any{uint32(0)}, nil
+		},
+		"GetMinPlayers": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.MinPlayers}, nil
+			}
+			return []any{uint32(0)}, nil
+		},
+		"GetMaxPlayers": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.MaxPlayers}, nil
+			}
+			return []any{uint32(0)}, nil
+		},
+		"GetMinPlayersPerTeam": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.MinPlayersPerTeam}, nil
+			}
+			return []any{uint32(0)}, nil
+		},
+		"GetMaxPlayersPerTeam": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.MaxPlayersPerTeam}, nil
+			}
+			return []any{uint32(0)}, nil
+		},
+		"GetWinner": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.Winner}, nil
+			}
+			return []any{uint32(2)}, nil
+		},
+		"GetBonusHonorFromKillCount": func(_ context.Context, args []any) ([]any, error) {
+			kills, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			snap, _ := load()
+			level := snap.MaxLevel
+			if level > 80 {
+				level = 80
+			}
+			return []any{uint32(math.Ceil(float64(level) * 1.55 * float64(kills)))}, nil
+		},
+	}
+	return &Object{Type: "BattleGround", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID, "InWorld": true}, Methods: methods}
+}
+
 // GroupMemberLive is one live group roster entry behind a Lua Group object.
 type GroupMemberLive struct {
 	GUID      uint64
