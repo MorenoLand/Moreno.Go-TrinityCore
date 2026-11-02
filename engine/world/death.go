@@ -3029,8 +3029,16 @@ func (s *session) handleCorpseQuery(ctx context.Context, payload []byte) bool {
 			if _, entranceFound, entranceErr := s.server.Data.Map(uint32(mapEntry.CorpseMapID)); entranceErr == nil && entranceFound {
 				mapID = uint32(mapEntry.CorpseMapID)
 				x, y = mapEntry.CorpseX, mapEntry.CorpseY
-				// Entrance Z comes from Map::GetHeight in C++; no terrain bridge
-				// in Go, so the corpse's own Z is kept (documented delta).
+				// QueryHandler.cpp:175: the entrance Z is
+				// entranceMap->GetHeight(phaseMask, x, y, MAX_HEIGHT). From
+				// MAX_HEIGHT the vmap ray (50 down) and the dynamic GO-floor
+				// ray provably never hit, so mapHeight reduces exactly to the
+				// grid height; only a missing grid still differs (C++ sends
+				// INVALID_HEIGHT, Go keeps the corpse's Z so the marker stays
+				// drawable).
+				if height, ok := s.server.mapHeight(mapID, x, y, terrainMaxHeight, true, terrainDefaultHeightSearch); ok {
+					z = height
+				}
 			}
 		}
 	}

@@ -26,6 +26,12 @@ const (
 	terrainAreaNoArea    uint16 = 0x0001
 	terrainModelM2              = uint32(0x00000001)
 	terrainModelHasBound        = uint32(0x00000004)
+	// terrainGroundTolerance is GROUND_HEIGHT_TOLERANCE (SharedDefines.h:26).
+	terrainGroundTolerance = float32(0.05)
+	// terrainDefaultHeightSearch is DEFAULT_HEIGHT_SEARCH (Map.h:287).
+	terrainDefaultHeightSearch = float32(50)
+	// terrainMaxHeight is MAX_HEIGHT (Map.h:284).
+	terrainMaxHeight = float32(100000)
 )
 
 type terrainVector struct{ X, Y, Z float32 }
@@ -862,6 +868,57 @@ func terrainModelHit(spawn terrainSpawn, model *terrainModel, point terrainVecto
 	return best, found
 }
 
+// terrainBoundedModelHit mirrors StaticMapTree::getHeight (MapTree.cpp:225-236)
+// for one spawn: the downward ray from point, bounded by maxSearchDist, with
+// the nearest hit (highest world Z) winning. It differs from terrainModelHit
+// in three C++-dictated ways: the ray starts exactly at point (no +0.1 lift,
+// so a surface above point never hits), groups are tested by segment-bounds
+// overlap rather than point containment (a floor below point is a hit), and
+// M2 doodad spawns count (getHeight passes ModelIgnoreFlags::Nothing, unlike
+// the WMO-interior area query). The local (0,0,-1) ray follows the
+// terrainModelHit precedent: exact for yaw-only spawns, approximate for
+// pitched ones, with the world-Z gate below enforcing the C++ bounded ray
+// in world units either way.
+func terrainBoundedModelHit(spawn terrainSpawn, model *terrainModel, point terrainVector, maxSearchDist float32) (float32, bool) {
+	if model == nil || spawn.Flags&terrainModelHasBound == 0 {
+		return 0, false
+	}
+	end := terrainVector{point.X, point.Y, point.Z - maxSearchDist}
+	if !terrainSegmentIntersectsBounds(point, end, spawn.BoundsLow, spawn.BoundsHigh) {
+		return 0, false
+	}
+	scale := spawn.Scale
+	if scale == 0 {
+		scale = 1
+	}
+	local := terrainModelPoint(spawn, point)
+	localLimit := float64(maxSearchDist) / float64(scale)
+	localEnd := terrainVector{local.X, local.Y, local.Z - float32(localLimit)}
+	best, found := float32(0), false
+	for _, group := range model.Groups {
+		if !terrainSegmentIntersectsBounds(local, localEnd, group.Low, group.High) {
+			continue
+		}
+		bestDistance, hit := localLimit, false
+		for _, triangle := range group.Triangles {
+			if distance, ok := terrainTriangleDistance(local, terrainVector{0, 0, -1}, triangle, group.Vertices, bestDistance); ok {
+				bestDistance, hit = distance, true
+			}
+		}
+		if !hit {
+			continue
+		}
+		world := terrainWorldPoint(spawn, terrainVector{local.X, local.Y, local.Z - float32(bestDistance)})
+		if !found || world.Z > best {
+			best, found = world.Z, true
+		}
+	}
+	if !found || best > point.Z || best < point.Z-maxSearchDist {
+		return 0, false
+	}
+	return best, true
+}
+
 func terrainSegmentIntersectsBounds(start, end, low, high terrainVector) bool {
 	origin := [3]float64{float64(start.X), float64(start.Y), float64(start.Z)}
 	direction := [3]float64{float64(end.X - start.X), float64(end.Y - start.Y), float64(end.Z - start.Z)}
@@ -975,6 +1032,55 @@ func (s *Server) mapWMOAreaID(mapID uint32, x, y, z float32) (uint32, bool) {
 	}
 	areaID, ok, err := s.Data.WMOArea(int32(best.Root), int32(best.ADT), int32(best.Group))
 	return areaID, ok && err == nil
+}
+
+// mapVMapHeight mirrors VMapManager2::getHeight (VMapManager2.cpp:217-237) over
+// the single tile's static tree: the bounded from-z ray across every spawn
+// (WMO and M2 alike), nearest hit winning. No height-calc toggle exists in
+// Go; an absent tile file reads no hit, the same as a disabled manager.
+// The phasemask overload's dynamic-tree leg (GetGameObjectFloor, Map.h:576)
+// is not modeled: Go has no dynamic GO collision tree.
+func (s *Server) mapVMapHeight(mapID uint32, x, y, z, maxSearchDist float32) (float32, bool) {
+	tileX := int(float64(x)/terrainGridSize + terrainCenterGrid)
+	tileY := int(float64(y)/terrainGridSize + terrainCenterGrid)
+	if tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64 {
+		return 0, false
+	}
+	point := terrainVector{terrainMapHalfSize - x, terrainMapHalfSize - y, z}
+	best, found := float32(0), false
+	for _, spawn := range s.terrainTile(mapID, 63-tileX, 63-tileY) {
+		if height, ok := terrainBoundedModelHit(spawn, s.terrainModel(spawn.Name), point, maxSearchDist); ok && (!found || height > best) {
+			best, found = height, true
+		}
+	}
+	return best, found
+}
+
+// mapHeight mirrors Map::GetHeight (Map.cpp:2489-2527), the engine-internal
+// form: the .map grid height counts only when z sits no more than the ground
+// tolerance below it, the vmap ray counts only within maxSearchDist below z,
+// and the selection prefers the vmap height when it is above the grid height
+// or nearer to z. The G3D fuzzy epsilon on the tolerance gate is ignored
+// (sub-millimeter against the 0.05 tolerance). The second return is false
+// for the INVALID_HEIGHT sentinel, which callers must not use as a Z.
+func (s *Server) mapHeight(mapID uint32, x, y, z float32, checkVMap bool, maxSearchDist float32) (float32, bool) {
+	gridHeight, gridOK := s.mapGridHeight(mapID, x, y)
+	mapHeight, mapOK := float32(0), false
+	if gridOK && z >= gridHeight-terrainGroundTolerance {
+		mapHeight, mapOK = gridHeight, true
+	}
+	if checkVMap {
+		if vmapHeight, ok := s.mapVMapHeight(mapID, x, y, z, maxSearchDist); ok {
+			if mapOK {
+				if vmapHeight > mapHeight || math.Abs(float64(mapHeight-z)) > math.Abs(float64(vmapHeight-z)) {
+					return vmapHeight, true
+				}
+				return mapHeight, true
+			}
+			return vmapHeight, true
+		}
+	}
+	return mapHeight, mapOK
 }
 
 func (s *Server) mapAreaID(mapID uint32, x, y float32) (uint32, bool) {
