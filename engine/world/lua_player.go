@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -1011,24 +1012,305 @@ func (s *session) luaPlayer() *scripting.Object {
 		return []any{false}, nil
 	}
 	// GetSkillValue is Player::GetSkillValue (Player.cpp:6240): the stored
-	// skill value, 0 when the skill is absent (or 0-valued). The C++
-	// temp/perm bonus fold (SKILL_TEMP_BONUS + SKILL_PERM_BONUS) is
-	// unmodeled: Go returns the stored character_skills value, so a gate
-	// at the exact threshold with an active bonus reads low.
+	// value plus the temp and permanent bonuses, clamped at 0, and 0 when
+	// the skill is absent. playerSkillTotalValue carries the fold: the
+	// stored Bonus plus the live talent (98) aura bonus is the permanent
+	// term, the live temp (30) aura bonus the temporary term.
 	methods["GetSkillValue"] = func(_ context.Context, args []any) ([]any, error) {
 		skill, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
+		return []any{uint32(s.playerSkillTotalValue(skill))}, nil
+	}
+	findPlayerSkill := func(skill uint32) int {
 		if skill == 0 {
-			return []any{uint32(0)}, nil
+			return -1
 		}
-		for _, known := range state.Skills {
+		for index, known := range state.Skills {
 			if uint32(known.Skill) == skill {
-				return []any{uint32(known.Value)}, nil
+				return index
+			}
+		}
+		return -1
+	}
+	skillPermBonus := func(skill uint32) int32 {
+		perm := int32(0)
+		if index := findPlayerSkill(skill); index >= 0 {
+			perm = int32(int16(state.Skills[index].Bonus))
+		}
+		_, talent := s.skillAuraBonus(skill)
+		return perm + talent
+	}
+	skillTempBonus := func(skill uint32) int32 {
+		temp, _ := s.skillAuraBonus(skill)
+		return temp
+	}
+	persistPlayerSkill := func(ctx context.Context, sk playerSkill) {
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return
+		}
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, sk.Skill, sk.Value, sk.Max)
+	}
+	removePlayerSkillRow := func(ctx context.Context, skill uint32) {
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return
+		}
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", state.GUID, skill)
+	}
+	advancePlayerSkill := func(ctx context.Context, index int, step uint32) {
+		known := &state.Skills[index]
+		if known.Max == 0 || known.Value == 0 || known.Value >= known.Max {
+			return
+		}
+		if newVal := uint32(known.Value) + step; newVal > uint32(known.Max) {
+			known.Value = known.Max
+		} else {
+			known.Value = uint16(newVal)
+		}
+		persistPlayerSkill(ctx, *known)
+		s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(known.Skill), uint32(known.Value))
+	}
+	// GetPureSkillValue is Player::GetPureSkillValue (Player.cpp:6300):
+	// the stored value with no bonus fold, 0 for skill 0 or an absent skill.
+	methods["GetPureSkillValue"] = func(_ context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if index := findPlayerSkill(skill); index >= 0 {
+			return []any{uint32(state.Skills[index].Value)}, nil
+		}
+		return []any{uint32(0)}, nil
+	}
+	// GetBaseSkillValue is Player::GetBaseSkillValue (Player.cpp:6286): the
+	// stored value plus the permanent bonus only, clamped at 0.
+	methods["GetBaseSkillValue"] = func(_ context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if index := findPlayerSkill(skill); index >= 0 {
+			if total := int32(state.Skills[index].Value) + skillPermBonus(skill); total > 0 {
+				return []any{uint32(total)}, nil
 			}
 		}
 		return []any{uint32(0)}, nil
+	}
+	// GetMaxSkillValue is Player::GetMaxSkillValue (Player.cpp:6257): the
+	// stored max plus both bonuses, clamped at 0.
+	methods["GetMaxSkillValue"] = func(_ context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if index := findPlayerSkill(skill); index >= 0 {
+			if total := int32(state.Skills[index].Max) + skillTempBonus(skill) + skillPermBonus(skill); total > 0 {
+				return []any{uint32(total)}, nil
+			}
+		}
+		return []any{uint32(0)}, nil
+	}
+	// GetPureMaxSkillValue is Player::GetPureMaxSkillValue (Player.cpp:6274):
+	// the stored max with no bonus fold.
+	methods["GetPureMaxSkillValue"] = func(_ context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if index := findPlayerSkill(skill); index >= 0 {
+			return []any{uint32(state.Skills[index].Max)}, nil
+		}
+		return []any{uint32(0)}, nil
+	}
+	// GetSkillTempBonusValue is Player::GetSkillTempBonusValue
+	// (Player.cpp:6324): the live temp (30) aura bonus, 0 when absent.
+	methods["GetSkillTempBonusValue"] = func(_ context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if findPlayerSkill(skill) < 0 {
+			return []any{int32(0)}, nil
+		}
+		return []any{skillTempBonus(skill)}, nil
+	}
+	// GetSkillPermBonusValue is Player::GetSkillPermBonusValue
+	// (Player.cpp:6312): the stored permanent bonus plus the live talent
+	// (98) aura bonus, 0 when absent.
+	methods["GetSkillPermBonusValue"] = func(_ context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if findPlayerSkill(skill) < 0 {
+			return []any{int32(0)}, nil
+		}
+		return []any{skillPermBonus(skill)}, nil
+	}
+	// SetSkill is Player::SetSkill (Player.cpp:6114) under the TRINITY arg
+	// order (id, step, currVal, maxVal) of PlayerMethods.h:1718. A zero id
+	// is a no-op; a zero currVal on a known skill removes it (row deleted,
+	// live bonus maps cleared, first-rank spells unlearned via the
+	// SkillLineAbility cascade); a nonzero currVal on an unknown skill
+	// adds it when a SkillLine row exists and a slot is free, re-applying
+	// live skill bonuses the way the C++ add arm does. The
+	// UpdateSkillEnchantments leg has no Go model.
+	methods["SetSkill"] = func(ctx context.Context, args []any) ([]any, error) {
+		skillArg := func(index int) (uint16, error) {
+			value, err := luaUint32Arg(args, index)
+			if err != nil {
+				return 0, err
+			}
+			if value > math.MaxUint16 {
+				return 0, fmt.Errorf("argument %d must be uint16", index+1)
+			}
+			return uint16(value), nil
+		}
+		id, err := skillArg(0)
+		if err != nil {
+			return nil, err
+		}
+		step, err := skillArg(1)
+		if err != nil {
+			return nil, err
+		}
+		currVal, err := skillArg(2)
+		if err != nil {
+			return nil, err
+		}
+		maxVal, err := skillArg(3)
+		if err != nil {
+			return nil, err
+		}
+		if id == 0 {
+			return []any{}, nil
+		}
+		if index := findPlayerSkill(uint32(id)); index >= 0 {
+			if currVal == 0 {
+				state.Skills = append(state.Skills[:index], state.Skills[index+1:]...)
+				delete(s.skillTempBonus, uint32(id))
+				delete(s.skillTalentBonus, uint32(id))
+				removePlayerSkillRow(ctx, uint32(id))
+				if s.server != nil && s.server.Data != nil {
+					if abilities, ok, aerr := s.server.Data.SkillLineAbilitiesForSkill(uint32(id)); aerr == nil && ok {
+						visited := make(map[uint32]bool)
+						for _, ab := range abilities {
+							s.removeSpell(ctx, s.server.getFirstSpellInChain(ab.Spell), true, visited)
+						}
+					}
+				}
+				return []any{}, nil
+			}
+			state.Skills[index].Step = step
+			state.Skills[index].Value = currVal
+			state.Skills[index].Max = maxVal
+			persistPlayerSkill(ctx, state.Skills[index])
+			s.learnSkillRewardedSpells(ctx, uint32(id), uint32(currVal))
+			s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(id), uint32(currVal))
+			s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(id), uint32(maxVal))
+			return []any{}, nil
+		}
+		if currVal == 0 {
+			return []any{}, nil
+		}
+		if s.server != nil && s.server.Data != nil {
+			if _, found, err := s.server.Data.SkillLineCategory(uint32(id)); err == nil && !found {
+				return []any{}, nil
+			}
+		}
+		if len(state.Skills) >= playerMaxSkills {
+			return []any{}, nil
+		}
+		state.Skills = append(state.Skills, playerSkill{Skill: id, Step: step, Value: currVal, Max: maxVal})
+		persistPlayerSkill(ctx, state.Skills[len(state.Skills)-1])
+		s.reapplySkillBonusAuras(uint32(id))
+		s.learnSkillRewardedSpells(ctx, uint32(id), uint32(currVal))
+		s.setAchievementCriteria(criteriaTypeReachSkillLevel, uint32(id), uint32(currVal))
+		s.setAchievementCriteria(criteriaTypeLearnSkillLevel, uint32(id), uint32(maxVal))
+		return []any{}, nil
+	}
+	// AdvanceSkill is PlayerMethods.h:3354: a zero id or step is a no-op,
+	// and an unknown skill is a no-op, matching Player::HasSkill's
+	// presence gate (not the Go HasSkill Max>0 quirk). The advance itself
+	// is Player::UpdateSkill (Player.cpp:5743), capped at the max; the
+	// enchantment leg is unmodeled.
+	methods["AdvanceSkill"] = func(ctx context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		step, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if skill == 0 || step == 0 {
+			return []any{}, nil
+		}
+		if index := findPlayerSkill(skill); index >= 0 {
+			advancePlayerSkill(ctx, index, step)
+		}
+		return []any{}, nil
+	}
+	// AdvanceAllSkills is PlayerMethods.h:3319: a zero step is a no-op;
+	// every known skill advances by UpdateSkill except language (10) and
+	// generic (12) SkillLine categories (SharedDefines.h:3084/3086).
+	// Without a DBC the language range type is the fallback skip.
+	methods["AdvanceAllSkills"] = func(ctx context.Context, args []any) ([]any, error) {
+		step, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if step == 0 {
+			return []any{}, nil
+		}
+		for index := range state.Skills {
+			skill := state.Skills[index].Skill
+			if s.server != nil && s.server.Data != nil {
+				if cat, found, err := s.server.Data.SkillLineCategory(uint32(skill)); err == nil && found && (cat == 10 || cat == 12) {
+					continue
+				}
+			} else if s.skillRangeType(state.Race, state.Class, skill) == wotlk.SkillRangeLanguage {
+				continue
+			}
+			advancePlayerSkill(ctx, index, step)
+		}
+		return []any{}, nil
+	}
+	// AdvanceSkillsToMax is PlayerMethods.h:3306 under TRINITY:
+	// Player::UpdateWeaponsSkillsToMaxSkillsForLevel (Player.cpp:6087)
+	// sets every non-profession, non-riding skill with max > 1 to its max.
+	// Profession is the SkillLine category 11 plus fishing, cooking and
+	// first aid (SpellMgr.h:562-570); without a DBC the primary-profession
+	// ids are the fallback. The defense UpdateDefenseBonusesMod leg has
+	// no Go defense-bonus model.
+	methods["AdvanceSkillsToMax"] = func(ctx context.Context, args []any) ([]any, error) {
+		isProfessionOrRiding := func(skill uint32) bool {
+			if skill == 762 || skill == 356 || skill == 185 || skill == 129 {
+				return true
+			}
+			if s.server != nil && s.server.Data != nil {
+				if cat, found, err := s.server.Data.SkillLineCategory(skill); err == nil && found {
+					return cat == skillLineCategoryProfession
+				}
+			}
+			switch skill {
+			case 171, 164, 333, 202, 182, 773, 755, 165, 186, 393, 197:
+				return true
+			}
+			return false
+		}
+		for index := range state.Skills {
+			known := &state.Skills[index]
+			if isProfessionOrRiding(uint32(known.Skill)) {
+				continue
+			}
+			if known.Max > 1 {
+				known.Value = known.Max
+				persistPlayerSkill(ctx, *known)
+			}
+		}
+		return []any{}, nil
 	}
 	itemCount := func(args []any) ([]any, error) {
 		item, err := luaUint32Arg(args, 0)
