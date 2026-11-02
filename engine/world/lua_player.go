@@ -1126,6 +1126,19 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// GetScale is Object::GetScale (ObjectMethods.h:134; Object.h:87):
+	// GetFloatValue(OBJECT_FIELD_SCALE_X), which the player
+	// indexed-value backend reads as s.scale while set, else the
+	// aura-folded native scale (lua_values.go). It mirrors that read
+	// exactly, so GetScale and GetFloatValue(OBJECT_FIELD_SCALE_X)
+	// never disagree. SetScale below still broadcasts nothing; the
+	// indexed-value SetFloatValue path is the broadcasting writer.
+	methods["GetScale"] = luaNoArgs(func() any {
+		if s.scale != 0 {
+			return float64(s.scale)
+		}
+		return float64(s.auraObjectScale())
+	})
 	methods["SetScale"] = func(_ context.Context, args []any) ([]any, error) {
 		value, err := luaFloat32Arg(args, 0)
 		if err != nil {

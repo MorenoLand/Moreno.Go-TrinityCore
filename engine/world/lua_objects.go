@@ -381,6 +381,62 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, liveGUID, map[int]uint32{unitFieldHealth: health})
 		return nil, nil
 	}
+	// GetScale/SetScale are the session-creature twins of the
+	// motion-creature arms (ObjectMethods.h:134/362): GetScale reads
+	// the live scale twin (script override while known, else the
+	// template base, else 1.0; a despawned motion reads 1.0) and
+	// SetScale writes it through the same motion lock, clearing the
+	// override on non-positive values and broadcasting the
+	// aura-folded effective value exactly like the handler arm.
+	methods["GetScale"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return float64(1)
+		}
+		if motion.ScriptScaleKnown {
+			return float64(motion.ScriptScale)
+		}
+		if motion.BaseScale > 0 {
+			return float64(motion.BaseScale)
+		}
+		return float64(1)
+	})
+	methods["SetScale"] = func(_ context.Context, args []any) ([]any, error) {
+		scale, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		if scale <= 0 {
+			motion.ScriptScale = 0
+			motion.ScriptScaleKnown = false
+		} else {
+			motion.ScriptScale = scale
+			motion.ScriptScaleKnown = true
+		}
+		base := motion.BaseScale
+		if motion.ScriptScaleKnown {
+			base = motion.ScriptScale
+		}
+		if base <= 0 {
+			base = 1
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		key := creatureAuraKeyForMotion(motion)
+		s.server.motionMu.Unlock()
+		effective := float64(base) + float64(s.server.creatureAuraScaleSum(key))/100
+		if effective < 0.01 {
+			effective = 0.01
+		}
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{objectFieldScale: math.Float32bits(float32(effective))})
+		return nil, nil
+	}
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
 	// Whisper(message) mirrors the botgiver's WhisperTo helper
 	// (botgiver.cpp): me->Whisper(message, LANG_UNIVERSAL, player).
@@ -1253,6 +1309,13 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	// Backs the goober gates in go_scripts.cpp:61-474 (gilded_brazier,
 	// resonite_cask, blood_filled_orb, tablet_of_the_seven).
 	methods["GetGoType"] = luaNoArgs(func() any { return state.Type })
+	// GetScale is Object::GetScale (ObjectMethods.h:134; Object.h:87):
+	// GameObject::Create stamps OBJECT_FIELD_SCALE_X from the
+	// template size (GameObject.cpp:331), which loadLuaGameObject
+	// already carries as state.Size. SetScale stays out: the GO
+	// object is a DB snapshot with no live scale store to write
+	// (the GetPhaseMask precedent in this builder).
+	methods["GetScale"] = luaNoArgs(func() any { return float64(state.Size) })
 	// GetOwner is GameObject::GetOwner (Object.h:429, Unit::GetOwner
 	// via UNIT_FIELD_SUMMONEDBY): the owning player object, or nil
 	// when the GO has no owner or the owner session is gone. DB
