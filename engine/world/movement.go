@@ -939,8 +939,26 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.isSwimming = isSwimming
 		if isSwimming && !wasSwimming {
 			s.handleEnterSwimming()
+			s.darkWaterCell = -1
 		} else if !isSwimming && wasSwimming {
 			s.handleExitSwimming()
+			s.setInDarkWater(false)
+			s.darkWaterCell = -1
+		}
+	}
+
+	// Dark-water (fatigue) state from the server liquid model (TC
+	// Player::ProcessTerrainStatusUpdate, Player.cpp:24521-24545): the
+	// grid liquid type flags carry the dark-water bit. Re-evaluate when
+	// a swimming player enters a new liquid cell-group, so swimming out
+	// into dark water starts fatigue without a swim-flag transition;
+	// the swim-exit arm above already cleared it. Transport riders are
+	// skipped, matching the !GetTransport() gate in C++.
+	if !vehicleMover && !possessedMover && s.isSwimming && s.player != nil && s.player.TransportGUID == 0 {
+		if key := terrainLiquidCellKey(s.player.X, s.player.Y); key != s.darkWaterCell {
+			s.darkWaterCell = key
+			status, data := s.server.mapGridLiquidStatus(s.player.Map, s.player.X, s.player.Y, s.player.Z, liquidTypeAll, terrainDefaultCollisionHeight)
+			s.setInDarkWater(status != liquidStatusNoWater && data.typeFlags&liquidTypeDarkWater != 0)
 		}
 	}
 

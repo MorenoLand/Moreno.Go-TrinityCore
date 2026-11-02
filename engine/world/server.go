@@ -577,6 +577,7 @@ type session struct {
 	breathTimer               int32
 	lastBreathTick            time.Time
 	inDarkWater               bool
+	darkWaterCell             int64
 	fatigueTimer              int32
 	lastFatigueTick           time.Time
 	lastRegenTick             time.Time

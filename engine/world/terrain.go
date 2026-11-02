@@ -1139,6 +1139,28 @@ const (
 	terrainLiquidNoHeight = 0x0002
 )
 
+// ZLiquidStatus values (Map.h:145-149) and MAP_LIQUID_TYPE_* bits
+// (Map.h:155-163) for GridMap::GetLiquidStatus.
+const (
+	liquidStatusNoWater    uint32 = 0x00000000
+	liquidStatusAboveWater uint32 = 0x00000001
+	liquidStatusWaterWalk  uint32 = 0x00000002
+	liquidStatusInWater    uint32 = 0x00000004
+	liquidStatusUnderWater uint32 = 0x00000008
+
+	liquidTypeWater     uint8 = 0x01
+	liquidTypeOcean     uint8 = 0x02
+	liquidTypeMagma     uint8 = 0x04
+	liquidTypeSlime     uint8 = 0x08
+	liquidTypeAll       uint8 = 0x0F
+	liquidTypeDarkWater uint8 = 0x10
+)
+
+// terrainDefaultCollisionHeight is DEFAULT_COLLISION_HEIGHT (Object.h:69),
+// the collision height Map::GetLiquidStatus callers pass when they have no
+// unit-specific value.
+const terrainDefaultCollisionHeight = float32(2.03128)
+
 var terrainHoleTabH = [4]uint16{0x1111, 0x2222, 0x4444, 0x8888}
 var terrainHoleTabV = [4]uint16{0x000F, 0x00F0, 0x0F00, 0xF000}
 
@@ -1320,6 +1342,211 @@ func (s *Server) mapWaterLevel(mapID uint32, x, y float32) (float32, bool) {
 	}
 	cell := pos + (int(cxInt)*int(width)+int(cyInt))*4
 	return math.Float32frombits(binary.LittleEndian.Uint32(data[cell : cell+4])), true
+}
+
+// liquidData mirrors LiquidData (Map.h): the entry id, the computed
+// type_flags, the liquid surface level, and the ground level under it.
+type liquidData struct {
+	entry      uint32
+	typeFlags  uint8
+	level      float32
+	depthLevel float32
+}
+
+// mapGridLiquidStatus is the grid leg of Map::GetLiquidStatus
+// (Map.cpp:2649-2740 via GridMap::GetLiquidStatus, Map.cpp:2360-2446) over
+// the .map v1.9 MLIQ chunk: the per-cell entry (uint16) and flags (uint8)
+// arrays, or the header liquidType/liquidFlags globals when
+// MAP_LIQUID_NO_TYPE is set; the SoundBank-derived type bit plus the
+// area LiquidTypeID override (entry < 21, parent-area fallback) when the
+// DBC store resolves the entry; the requested-type mask; the level map
+// or the header liquidLevel when MAP_LIQUID_NO_HEIGHT is set; and the
+// ground gate against the grid height, with the delta thresholds
+// (UNDER above collisionHeight, IN above 0, WATER_WALK above -0.1,
+// otherwise ABOVE_WATER). A missing tile file, a missing liquid chunk,
+// or a corrupt height chunk reads NO_WATER: in C++ any of those leaves
+// the grid default-constructed, so the no-liquid-flags arm fires first.
+// Deliberately NOT the Map-level function: the vmap leg (VMO liquid,
+// checked first in C++, and skipping grid liquid inside WMO interiors)
+// has no Go reader, so callers get the grid leg only; indoor pools and
+// WMO water read NO_WATER here where C++ reads the vmap level. A
+// missing DBC store or an unresolvable entry keeps the raw per-cell
+// flags byte, the C++ unresolved-entry arm; the area override is
+// skipped when the area map cannot be read, where C++ would still
+// apply the tile's grid-area override.
+func (s *Server) mapGridLiquidStatus(mapID uint32, x, y, z float32, reqLiquidType uint8, collisionHeight float32) (uint32, liquidData) {
+	if s == nil {
+		return liquidStatusNoWater, liquidData{}
+	}
+	gridX := int(float64(x)/terrainGridSize + terrainCenterGrid)
+	gridY := int(float64(y)/terrainGridSize + terrainCenterGrid)
+	if gridX < 0 || gridX >= 64 || gridY < 0 || gridY >= 64 {
+		return liquidStatusNoWater, liquidData{}
+	}
+	path := filepath.Join(s.Config.GameDataDir, "maps", fmt.Sprintf("%03d%02d%02d.map", mapID, 63-gridX, 63-gridY))
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) < 44 || string(data[:4]) != "MAPS" || string(data[4:8]) != "v1.9" {
+		return liquidStatusNoWater, liquidData{}
+	}
+	heightOffset := binary.LittleEndian.Uint32(data[20:24])
+	if heightOffset != 0 && (int(heightOffset)+16 > len(data) || string(data[heightOffset:heightOffset+4]) != "MHGT") {
+		return liquidStatusNoWater, liquidData{}
+	}
+	liquidOffset := binary.LittleEndian.Uint32(data[28:32])
+	if liquidOffset == 0 || int(liquidOffset)+16 > len(data) || string(data[liquidOffset:liquidOffset+4]) != "MLIQ" {
+		return liquidStatusNoWater, liquidData{}
+	}
+	flags := data[liquidOffset+4]
+	globalFlags := data[liquidOffset+5]
+	globalEntry := uint32(binary.LittleEndian.Uint16(data[liquidOffset+6 : liquidOffset+8]))
+	offX := data[liquidOffset+8]
+	offY := data[liquidOffset+9]
+	width := data[liquidOffset+10]
+	height := data[liquidOffset+11]
+	globalLevel := math.Float32frombits(binary.LittleEndian.Uint32(data[liquidOffset+12 : liquidOffset+16]))
+	pos := int(liquidOffset) + 16
+	var entryArr []uint16
+	var flagsArr []uint8
+	if flags&terrainLiquidNoType == 0 {
+		if pos+256*2+256 > len(data) {
+			return liquidStatusNoWater, liquidData{}
+		}
+		entryArr = make([]uint16, 256)
+		for i := range entryArr {
+			entryArr[i] = binary.LittleEndian.Uint16(data[pos+i*2:])
+		}
+		flagsArr = make([]uint8, 256)
+		copy(flagsArr, data[pos+512:pos+512+256])
+		pos += 256*2 + 256
+	}
+	if globalFlags == 0 && flagsArr == nil {
+		return liquidStatusNoWater, liquidData{}
+	}
+	fx := float32(128) * (32 - x/533.3333)
+	fy := float32(128) * (32 - y/533.3333)
+	xInt := int32(fx) & 127
+	yInt := int32(fy) & 127
+	idx := (xInt>>3)*16 + (yInt >> 3)
+	rawType := globalFlags
+	entry := globalEntry
+	if flagsArr != nil {
+		rawType = flagsArr[idx]
+		entry = uint32(entryArr[idx])
+	}
+	liquidType := rawType
+	if s.Data != nil {
+		if soundBank, ok := s.Data.LiquidTypeSoundBank(entry); ok {
+			liquidType = rawType & liquidTypeDarkWater
+			if entry < 21 && soundBank < 4 {
+				if areaID, ok := s.mapAreaID(mapID, x, y); ok {
+					if override := liquidTypeOverride(s, areaID, soundBank); override != 0 {
+						if overrideBank, ok := s.Data.LiquidTypeSoundBank(override); ok {
+							entry = override
+							soundBank = overrideBank
+						}
+					}
+				}
+			}
+			liquidType |= uint8(uint32(1) << soundBank)
+		}
+	}
+	if liquidType == 0 {
+		return liquidStatusNoWater, liquidData{}
+	}
+	if reqLiquidType != 0 && reqLiquidType&liquidType == 0 {
+		return liquidStatusNoWater, liquidData{}
+	}
+	lxInt := xInt - int32(offY)
+	lyInt := yInt - int32(offX)
+	if lxInt < 0 || lxInt >= int32(height) || lyInt < 0 || lyInt >= int32(width) {
+		return liquidStatusNoWater, liquidData{}
+	}
+	var liquidLevel float32
+	if flags&terrainLiquidNoHeight != 0 {
+		liquidLevel = globalLevel
+	} else {
+		if pos+int(width)*int(height)*4 > len(data) {
+			return liquidStatusNoWater, liquidData{}
+		}
+		cell := pos + (int(lxInt)*int(width)+int(lyInt))*4
+		liquidLevel = math.Float32frombits(binary.LittleEndian.Uint32(data[cell : cell+4]))
+	}
+	var ground float32
+	if heightOffset == 0 {
+		ground = 0
+	} else {
+		var ok bool
+		ground, ok = s.mapGridHeight(mapID, x, y)
+		if !ok {
+			return liquidStatusNoWater, liquidData{}
+		}
+	}
+	if liquidLevel < ground || z < ground {
+		return liquidStatusNoWater, liquidData{}
+	}
+	out := liquidData{entry: entry, typeFlags: liquidType, level: liquidLevel, depthLevel: ground}
+	delta := liquidLevel - z
+	switch {
+	case delta > collisionHeight:
+		return liquidStatusUnderWater, out
+	case delta > 0:
+		return liquidStatusInWater, out
+	case delta > -0.1:
+		return liquidStatusWaterWalk, out
+	default:
+		return liquidStatusAboveWater, out
+	}
+}
+
+// liquidTypeOverride is the AreaTable LiquidTypeID leg of
+// GridMap::GetLiquidStatus (Map.cpp:2386-2400): the area's override for
+// the entry's SoundBank slot, falling back to the parent area when the
+// area override is zero. Zero means no override.
+func liquidTypeOverride(s *Server, areaID uint32, soundBank uint32) uint32 {
+	if s == nil || s.Data == nil {
+		return 0
+	}
+	area, found, err := s.Data.Area(areaID)
+	if err != nil || !found {
+		return 0
+	}
+	if override := area.LiquidTypeID[soundBank]; override != 0 {
+		return override
+	}
+	if area.ParentAreaID == 0 {
+		return 0
+	}
+	parent, found, err := s.Data.Area(area.ParentAreaID)
+	if err != nil || !found {
+		return 0
+	}
+	return parent.LiquidTypeID[soundBank]
+}
+
+// mapIsInWater mirrors Map::IsInWater (Map.cpp:2916-2921): the grid-leg
+// liquid status over all liquid types, in or under water.
+func (s *Server) mapIsInWater(mapID uint32, x, y, z float32) bool {
+	status, _ := s.mapGridLiquidStatus(mapID, x, y, z, liquidTypeAll, terrainDefaultCollisionHeight)
+	return status&(liquidStatusInWater|liquidStatusUnderWater) != 0
+}
+
+// mapIsUnderWater mirrors Map::IsUnderWater (Map.cpp:2923-2926): the
+// grid-leg liquid status over water and ocean only, under water.
+func (s *Server) mapIsUnderWater(mapID uint32, x, y, z float32) bool {
+	status, _ := s.mapGridLiquidStatus(mapID, x, y, z, liquidTypeWater|liquidTypeOcean, terrainDefaultCollisionHeight)
+	return status&liquidStatusUnderWater != 0
+}
+
+// terrainLiquidCellKey packs the tile and the 8x8-cell liquid group a
+// position falls in (the (x>>3)*16+(y>>3) index of
+// GridMap::GetLiquidStatus) into one change-detection value for the
+// dark-water re-evaluation in movement handling.
+func terrainLiquidCellKey(x, y float32) int64 {
+	fx := float32(128) * (32 - x/533.3333)
+	fy := float32(128) * (32 - y/533.3333)
+	gridX := int64(float64(x)/terrainGridSize + terrainCenterGrid)
+	gridY := int64(float64(y)/terrainGridSize + terrainCenterGrid)
+	return gridX | gridY<<6 | int64(int32(fx)&127>>3)<<12 | int64(int32(fy)&127>>3)<<16
 }
 
 // terrainInterpolateGridHeight is GridMap::getHeightFromFloat (and the

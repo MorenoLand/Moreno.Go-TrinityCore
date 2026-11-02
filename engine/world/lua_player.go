@@ -502,6 +502,18 @@ func (s *session) luaPlayer() *scripting.Object {
 		return []any{false}, nil
 	}
 	methods["IsInWater"] = luaNoArgs(func() any { return s.isSwimming })
+	// IsUnderWater is LuaUnit::IsUnderWater (LuaFunctions.cpp:352) via
+	// Map::IsUnderWater (Map.cpp:2923-2926): the grid-leg liquid status
+	// over water and ocean, under water at the default collision height.
+	// The client swimming flag alone cannot answer it — swimming covers
+	// wading — so this reads the server liquid model; a missing tile or
+	// a vmap-only water volume reads false, the grid-leg limitation.
+	methods["IsUnderWater"] = luaNoArgs(func() any {
+		if s == nil || s.player == nil || s.server == nil {
+			return false
+		}
+		return s.server.mapIsUnderWater(s.player.Map, s.player.X, s.player.Y, s.player.Z)
+	})
 	methods["IsMoving"] = luaNoArgs(func() any { return s.isMoving })
 	methods["CanFly"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
 	methods["HasSpell"] = func(_ context.Context, args []any) ([]any, error) {

@@ -306,6 +306,10 @@ type AreaTableEntry struct {
 	Flags            uint32
 	FactionGroupMask uint32
 	Name             string
+	// LiquidTypeID mirrors AreaTableEntry::LiquidTypeID[4]
+	// (DBCStructure.h:192): the liquid-type override per SoundBank slot,
+	// consulted by GridMap::GetLiquidStatus for entries below 21.
+	LiquidTypeID [4]uint32
 }
 
 // TalentEntry mirrors TrinityCore's TalentEntry (DBCStructure.h:1663).
@@ -1817,6 +1821,10 @@ func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
 	}
 	factionGroupMask, _ := record.Uint32(28)
 	name, _ := record.String(11)
+	var liquidTypeID [4]uint32
+	for i := range liquidTypeID {
+		liquidTypeID[i], _ = record.Uint32(29 + i)
+	}
 	return AreaTableEntry{
 		ID:               id,
 		ContinentID:      continentID,
@@ -1825,7 +1833,32 @@ func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
 		Flags:            flags,
 		FactionGroupMask: factionGroupMask,
 		Name:             name,
+		LiquidTypeID:     liquidTypeID,
 	}, true, nil
+}
+
+// LiquidTypeSoundBank mirrors LiquidTypeEntry::SoundBank
+// (DBCStructure.h:1034): field 3 of LiquidType.dbc. The second return is
+// false when the store, the file, or the entry is missing, in which case
+// GridMap::GetLiquidStatus keeps the raw per-cell flags byte, the C++
+// unresolved-entry arm.
+func (s *Store) LiquidTypeSoundBank(id uint32) (uint32, bool) {
+	if s == nil {
+		return 0, false
+	}
+	file, err := s.File("LiquidType")
+	if err != nil {
+		return 0, false
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false
+	}
+	bank, err := record.Uint32(3)
+	if err != nil {
+		return 0, false
+	}
+	return bank, true
 }
 
 // ChatChannelEntry mirrors ChatChannelsEntry
