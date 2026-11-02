@@ -1847,6 +1847,56 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GossipClearMenu"] = s.luaGossipClearMenu
 	methods["GossipMenuAddItem"] = s.luaGossipMenuAddItem
 	methods["GossipSendMenu"] = s.luaGossipSendMenu
+	// GetGossipTextId is Player::GetGossipTextId (PlayerMethods.h:1405-1410;
+	// Player.cpp:14703-14727): the gossip_menu TextID for the source's
+	// default menu, DEFAULT_GOSSIP_MESSAGE (0x00FFFFFF) when the source
+	// has no menu or no row's conditions pass. The menu scan is the
+	// shared loadGossipMenuTitleID arm (gossip.go); the default menu
+	// comes from the creature object's GossipMenuID field (or a
+	// creature_template lookup for event-surface objects, which carry
+	// no such field) and, for gameobjects, from the questgiver/goober
+	// template arm (Player.cpp:14729-14739). A non-creature/non-GO
+	// source reads the default, matching the C++ default arm (menu 0);
+	// a missing or non-object arg errors like Eluna's CHECKOBJ.
+	methods["GetGossipTextId"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("worldobject is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("worldobject is required")
+		}
+		entry, ok := objectUint32Field(obj, "Entry")
+		if !ok {
+			return nil, fmt.Errorf("worldobject is required")
+		}
+		guid, _ := objectUint64Field(obj, "GUID")
+		var menuID uint32
+		switch obj.Type {
+		case "Creature":
+			if id, ok := objectUint32Field(obj, "GossipMenuID"); ok {
+				menuID = id
+			} else if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				var gossipMenuID int64
+				if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT gossip_menu_id FROM creature_template WHERE entry = ?", entry).Scan(&gossipMenuID); err == nil {
+					menuID = uint32(gossipMenuID)
+				}
+			}
+		case "GameObject":
+			var goType int64
+			if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT type FROM gameobject_template WHERE entry = ?", entry).Scan(&goType)
+			}
+			menuID = s.gameObjectDefaultGossipMenuID(ctx, entry, uint8(goType))
+		default:
+			return []any{uint32(0x00FFFFFF)}, nil
+		}
+		textID, err := s.loadGossipMenuTitleID(ctx, menuID, entry, guid)
+		if err != nil {
+			return nil, err
+		}
+		return []any{textID}, nil
+	}
 	// NpcBot hire-state queries for the botgiver Lua port
 	// (lua_scripts/world/botgiver.lua, port of script_bot_giver in
 	// src/server/game/AI/NpcBots/botgiver.cpp). The gossip-hire flow is the
@@ -2219,6 +2269,38 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{out}, nil
 	}
+	// GetGroupInvite is Player::GetGroupInvite (PlayerMethods.h:933-937;
+	// Player.h:2083): the Group the player is invited to, nil when no
+	// invite is pending. Go stores the pending invite as the inviter's
+	// GUID (pendingGroupLeader), not a Group object, so the group is
+	// resolved the way the accept path does (group.go): the inviter's
+	// live group, else a group the inviter leads (a zoning/offline
+	// leader's created group), else nil. An invite from a groupless
+	// inviter has no Go group yet — C++ materializes an uncreated
+	// Group there, Go creates it only on accept — so it reads nil.
+	methods["GetGroupInvite"] = func(_ context.Context, _ []any) ([]any, error) {
+		var out any
+		if s.pendingGroupLeader != 0 && s.server != nil {
+			var g *groupState
+			if leader := s.server.findSessionByGUID(s.pendingGroupLeader); leader != nil && leader.groupID != 0 {
+				g = s.server.findGroupByID(leader.groupID)
+			}
+			if g == nil {
+				s.server.groupsMu.RLock()
+				for _, grp := range s.server.groups {
+					if grp.LeaderGUID == s.pendingGroupLeader {
+						g = grp
+						break
+					}
+				}
+				s.server.groupsMu.RUnlock()
+			}
+			if group := groupLuaObject(s.server, g); group != nil {
+				out = group
+			}
+		}
+		return []any{out}, nil
+	}
 	// GetSubGroup is Player::GetSubGroup (PlayerMethods.h:922-926;
 	// Player.h:2089): the member's subgroup in the session group,
 	// 0 when ungrouped or not a member (the Group::GetMemberGroup
@@ -2237,6 +2319,22 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return sub
 	})
+	// GetOriginalGroup/GetOriginalSubGroup are Player::GetOriginalGroup/
+	// GetOriginalSubGroup (PlayerMethods.h:886-900; Player.h:2100-2102):
+	// the group stashed by SetBattlegroundOrBattlefieldRaid while the
+	// player rides a BG raid, and its subgroup. Go keeps them as
+	// originalGroupID/originalSubGroup (battleground_group.go); both
+	// read nil/0 outside a BG raid, and the restore path clears them.
+	methods["GetOriginalGroup"] = func(_ context.Context, _ []any) ([]any, error) {
+		var out any
+		if s.originalGroupID != 0 && s.server != nil {
+			if group := groupLuaObject(s.server, s.server.findGroupByID(s.originalGroupID)); group != nil {
+				out = group
+			}
+		}
+		return []any{out}, nil
+	}
+	methods["GetOriginalSubGroup"] = luaNoArgs(func() any { return s.originalSubGroup })
 	// IsInSameRaidWith is Player::IsInSameRaidWith (Player.cpp:2543):
 	// the same player, or two players in the same non-nil group. The
 	// Go twin is sameRaidGroup (gameobjects.go): Go has no raid/party
@@ -2259,6 +2357,41 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		other := s.server.findSessionByGUID(otherGUID)
 		return []any{sameRaidGroup(s, other)}, nil
+	}
+	// IsInSameGroupWith is Player::IsInSameGroupWith (PlayerMethods.h:555-559;
+	// Player.cpp:2536-2540): the same player, or two players in the same
+	// group in the same subgroup (Group::SameSubGroup). Go has no raid/
+	// party distinction, so the subgroup equality is the whole delta
+	// from IsInSameRaidWith above.
+	methods["IsInSameGroupWith"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		otherGUID, ok := objectUint64Field(obj, "GUID")
+		if !ok || otherGUID == 0 {
+			return []any{false}, nil
+		}
+		if otherGUID == state.GUID {
+			return []any{true}, nil
+		}
+		other := s.server.findSessionByGUID(otherGUID)
+		if other == nil || s.groupID == 0 || s.groupID != other.groupID {
+			return []any{false}, nil
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil {
+			return []any{false}, nil
+		}
+		sub, ok := group.memberSubGroup(s.playerGUID)
+		if !ok {
+			return []any{false}, nil
+		}
+		otherSub, ok := group.memberSubGroup(otherGUID)
+		return []any{ok && sub == otherSub}, nil
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242) —
 	// replaces the old no-op PlayDirectSound stub.
