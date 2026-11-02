@@ -873,6 +873,8 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	server.Features.Scripts.SetMapProvider(server.luaMapByID)
 	server.Features.Scripts.SetWorldMessageProvider(server.luaWorldMessage)
 	server.Features.Scripts.SetAreaNameProvider(server.luaAreaName)
+	server.Features.Scripts.SetSpawnProvider(server.luaPerformIngameSpawn)
+	server.Features.Scripts.SetSendMailProvider(server.luaSendMail)
 	server.worldTimeStartedAt = time.Now()
 	return server
 }

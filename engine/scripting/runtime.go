@@ -331,6 +331,43 @@ type Object struct {
 	Fields  map[string]any
 }
 
+// SpawnArgs is the GlobalMethods::PerformIngameSpawn argument shape:
+// spawnType 1 = creature, 2 = gameobject; DurOrRespawnTime is the raw
+// C++ durorresptime (milliseconds on the creature arm, seconds on the
+// gameobject arm — the asymmetry is in the C++ itself, not a Go choice).
+type SpawnArgs struct {
+	SpawnType        uint32
+	Entry            uint32
+	MapID            uint32
+	InstanceID       uint32
+	X, Y, Z, O       float32
+	Save             bool
+	DurOrRespawnTime uint32
+	Phase            uint32
+}
+
+// MailItemPair is one (entry, amount) attachment pair of SendMail.
+type MailItemPair struct {
+	Entry  uint32
+	Amount uint32
+}
+
+// SendMailArgs is the GlobalMethods::SendMail argument shape. Stationery
+// defaults to MAIL_STATIONERY_DEFAULT (41); Delay is added to the game
+// time in seconds by MailDraft::SendMailTo, despite the Eluna doc calling
+// it milliseconds.
+type SendMailArgs struct {
+	Subject     string
+	Text        string
+	ReceiverLow uint32
+	SenderLow   uint32
+	Stationery  uint32
+	Delay       uint32
+	Money       uint32
+	COD         uint32
+	Items       []MailItemPair
+}
+
 type Config struct {
 	Enabled              bool
 	ScriptPath           string
@@ -343,6 +380,8 @@ type Config struct {
 	MapProvider          func(mapID, instanceID uint32) *Object
 	WorldMessageProvider func(string)
 	AreaNameProvider     func(id uint32) (string, bool)
+	SpawnProvider        func(SpawnArgs) *Object
+	SendMailProvider     func(SendMailArgs) error
 	AuthDatabase         *sql.DB
 	CharacterDB          *sql.DB
 	WorldDatabase        *sql.DB
@@ -992,6 +1031,8 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("IsGameEventActive", r.isGameEventActive)
 	r.state.Register("GetActiveGameEvents", r.getActiveGameEvents)
 	r.state.Register("GetMapById", r.getMapById)
+	r.state.Register("PerformIngameSpawn", r.performIngameSpawn)
+	r.state.Register("SendMail", r.sendMail)
 	r.state.Register("SendWorldMessage", r.sendWorldMessage)
 	r.state.Register("GetAreaName", r.getAreaName)
 	r.state.Register("CreateInt64", r.createInt64)
@@ -1174,6 +1215,93 @@ func (r *Runtime) getMapById(state *lua.State) int {
 	return 1
 }
 
+// performIngameSpawn is GlobalMethods::PerformIngameSpawn
+// (GlobalMethods.h, Trinity branch): (spawnType, entry, mapId,
+// instanceId, x, y, z, o, save = false, durorresptime = 0,
+// phase = PHASEMASK_NORMAL). A phase of 0 reads nil like the C++
+// prologue arm; an unknown spawnType falls through to nil, and without
+// a provider the call reads nil like the C++ FindMap nullptr arm.
+func (r *Runtime) performIngameSpawn(state *lua.State) int {
+	args := SpawnArgs{
+		SpawnType:  uint32(lua.CheckUnsigned(state, 1)),
+		Entry:      uint32(lua.CheckUnsigned(state, 2)),
+		MapID:      uint32(lua.CheckUnsigned(state, 3)),
+		InstanceID: uint32(lua.CheckUnsigned(state, 4)),
+		X:          float32(lua.CheckNumber(state, 5)),
+		Y:          float32(lua.CheckNumber(state, 6)),
+		Z:          float32(lua.CheckNumber(state, 7)),
+		O:          float32(lua.CheckNumber(state, 8)),
+		Phase:      1,
+	}
+	if state.Top() >= 9 && !state.IsNil(9) {
+		args.Save = state.ToBoolean(9)
+	}
+	if state.Top() >= 10 && !state.IsNil(10) {
+		args.DurOrRespawnTime = uint32(lua.CheckUnsigned(state, 10))
+	}
+	if state.Top() >= 11 && !state.IsNil(11) {
+		args.Phase = uint32(lua.CheckUnsigned(state, 11))
+	}
+	if args.Phase == 0 {
+		state.PushNil()
+		return 1
+	}
+	if r.config.SpawnProvider == nil {
+		state.PushNil()
+		return 1
+	}
+	if object := r.config.SpawnProvider(args); object != nil {
+		PushObject(state, object)
+		return 1
+	}
+	state.PushNil()
+	return 1
+}
+
+// sendMail is GlobalMethods::SendMail (GlobalMethods.h): (subject, text,
+// receiverGUIDLow, senderGUIDLow = 0, stationary = MAIL_STATIONERY_DEFAULT,
+// delay = 0, money = 0, cod = 0, entry, amount, ...). The attachment
+// pairs follow the C++ loop shape exactly: while added <= MAX_MAIL_ITEMS
+// (12) and a full pair remains, so up to 13 pairs are accepted. A bad
+// pair raises like the C++ luaL_error arms; without a provider it is a
+// no-op.
+func (r *Runtime) sendMail(state *lua.State) int {
+	args := SendMailArgs{
+		Subject:     lua.CheckString(state, 1),
+		Text:        lua.CheckString(state, 2),
+		ReceiverLow: uint32(lua.CheckUnsigned(state, 3)),
+		Stationery:  41,
+	}
+	if state.Top() >= 4 && !state.IsNil(4) {
+		args.SenderLow = uint32(lua.CheckUnsigned(state, 4))
+	}
+	if state.Top() >= 5 && !state.IsNil(5) {
+		args.Stationery = uint32(lua.CheckUnsigned(state, 5))
+	}
+	if state.Top() >= 6 && !state.IsNil(6) {
+		args.Delay = uint32(lua.CheckUnsigned(state, 6))
+	}
+	if state.Top() >= 7 && !state.IsNil(7) {
+		args.Money = uint32(lua.CheckUnsigned(state, 7))
+	}
+	if state.Top() >= 8 && !state.IsNil(8) {
+		args.COD = uint32(lua.CheckUnsigned(state, 8))
+	}
+	for index, added := 9, 0; added <= 12 && index+1 <= state.Top(); index, added = index+2, added+1 {
+		args.Items = append(args.Items, MailItemPair{
+			Entry:  uint32(lua.CheckUnsigned(state, index)),
+			Amount: uint32(lua.CheckUnsigned(state, index+1)),
+		})
+	}
+	if r.config.SendMailProvider != nil {
+		if err := r.config.SendMailProvider(args); err != nil {
+			lua.Errorf(state, "%s", err.Error())
+			return 0
+		}
+	}
+	return 0
+}
+
 // sendWorldMessage is World::SendServerMessage(SERVER_MSG_STRING) behind
 // the Eluna SendWorldMessage global; without a provider it is a no-op.
 func (r *Runtime) sendWorldMessage(state *lua.State) int {
@@ -1238,6 +1366,18 @@ func (r *Runtime) SetWorldMessageProvider(provider func(string)) {
 func (r *Runtime) SetAreaNameProvider(provider func(id uint32) (string, bool)) {
 	r.mu.Lock()
 	r.config.AreaNameProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetSpawnProvider(provider func(SpawnArgs) *Object) {
+	r.mu.Lock()
+	r.config.SpawnProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetSendMailProvider(provider func(SendMailArgs) error) {
+	r.mu.Lock()
+	r.config.SendMailProvider = provider
 	r.mu.Unlock()
 }
 

@@ -77,6 +77,11 @@ type tempSummonOrigin struct {
 	X, Y, Z, O      float32
 	Reach           float64
 	SummonerMotion  *creatureMotion
+	// Phase, when HasPhase, overrides the summoner/session phase below:
+	// PerformIngameSpawn carries an explicit phase argument, while
+	// origin-based spawns keep the summoner phase.
+	Phase    uint32
+	HasPhase bool
 }
 
 // summonOriginFromMotion snapshots a creature summoner under motionMu.
@@ -165,6 +170,9 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 		summoned.PhaseMask = origin.SummonerMotion.PhaseMask
 	} else if summoner := s.findSessionByGUID(origin.GUID); summoner != nil {
 		summoned.PhaseMask = summoner.currentPlayerPhaseMask()
+	}
+	if origin.HasPhase {
+		summoned.PhaseMask = origin.Phase
 	}
 	spawn.PhaseMask = summoned.PhaseMask
 	// Re-create the object client-side: the create block goes to the
