@@ -782,6 +782,7 @@ type MapLive struct {
 	Players     func() []MapPlayerLive
 	SetWeather  func(context.Context, uint32, uint32, float32)
 	WorldObject func(context.Context, uint64) *Object
+	AreaID      func(x, y, z float32) uint32
 }
 
 // NewMapObject builds the Lua Map object surface for the MAP_EVENT_* and
@@ -789,9 +790,10 @@ type MapLive struct {
 // methods (object.go) and the DBC-backed GetName/IsDungeon/IsRaid/IsArena/
 // IsBattleground come from the live MapLive (MapMethods.h). The live legs
 // (IsEmpty/IsHeroic/GetDifficulty/GetPlayerCount/GetPlayers/SetWeather/
-// GetInstanceData/SaveInstanceData) read the MapLive callbacks. The
-// remaining Map surface stays unbridged: GetHeight and GetAreaId(x,y,z)
-// need a terrain model Go does not have. GetWorldObject dispatches on
+// GetInstanceData/SaveInstanceData/GetAreaId) read the MapLive callbacks.
+// The remaining Map surface stays unbridged: GetHeight needs an ADT
+// heightmap model Go does not have (the .map height chunk is unread).
+// GetWorldObject dispatches on
 // the GUID high part through the live WorldObject callback (nil callback
 // or nil return reads nil, matching Eluna's Push(nullptr) arm).
 func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
@@ -934,6 +936,33 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 				return []any{nil}, nil
 			}
 			return []any{live.WorldObject(ctx, guid)}, nil
+		},
+		// GetAreaId is MapMethods.h (x, y, z, phasemask = 1):
+		// Map::GetAreaId (Map.cpp:2595) — the WMO area when the point
+		// sits on WMO ground, else the grid area, else the map
+		// entry's AreaTableID. The world-side AreaID callback runs
+		// that same ladder (Server.zoneAndAreaID); a nil callback
+		// reads 0. The phasemask argument is accepted and ignored:
+		// Go's WMO/grid area model has no phase dimension, and the
+		// WMO-vs-grid-height comparison needs the height model
+		// GetHeight is still missing, so the WMO leg uses the
+		// z >= ground - 2 tolerance only.
+		"GetAreaId": func(_ context.Context, args []any) ([]any, error) {
+			if len(args) < 3 {
+				return nil, fmt.Errorf("argument %d is required", len(args)+1)
+			}
+			coords := make([]float32, 3)
+			for i := 0; i < 3; i++ {
+				value, ok := numericValue(args[i])
+				if !ok {
+					return nil, fmt.Errorf("argument %d must be a number", i+1)
+				}
+				coords[i] = float32(value)
+			}
+			if live.AreaID == nil {
+				return []any{uint32(0)}, nil
+			}
+			return []any{live.AreaID(coords[0], coords[1], coords[2])}, nil
 		},
 		// GetInstanceData is nil without an ElunaInstanceAI shim
 		// (MapMethods.h: GetInstanceData pushes nil when the cast

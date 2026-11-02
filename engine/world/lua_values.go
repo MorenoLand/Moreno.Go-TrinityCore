@@ -20,6 +20,16 @@ import (
 // dirty unconditionally). Out-of-range byte/uint16 offsets error: C++
 // asserts on them in debug, and the release read would be adjacent-slot
 // garbage, so failing fast beats returning it.
+// Gameobject indexed-value field indices (UpdateFields.h, OBJECT_END
+// = 6): the slots lua_values.go's GO backend reads/writes that have
+// no existing Go constant. DISPLAYID/FLAGS/BYTES_1 already have
+// gameObject* constants in gameobjects.go.
+const (
+	gameObjectFieldCreatedBy      = 6
+	gameObjectFieldParentRotation = 10
+	gameObjectFieldFaction        = 15
+)
+
 type indexedValueBackend struct {
 	read      func(index int) (uint32, bool)
 	write     func(index int, update func(old uint32) uint32) (map[int]uint32, bool, bool)
@@ -811,6 +821,232 @@ func motionIndexedValueBackend(s *Server, motion *creatureMotion) indexedValueBa
 		write: write,
 		broadcast: func(fields map[int]uint32) {
 			s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, motion.GUID, fields)
+		},
+	}
+}
+
+// Session-creature indexed values: the session builder (lua_objects.go)
+// is a second view of the same live creature the motion builder owns,
+// so reads and writes delegate to the motion backend whenever the
+// motion still resolves — the two views then agree, including the
+// NPCFlags live-override twin. When the motion is gone (despawned
+// between build and call), the snapshot slots read their build-time
+// values and writes are ignored: the snapshot has no write-back, and
+// a write to a despawned creature is a C++ no-op anyway (the object
+// would be gone). Slots the snapshot does not carry read 0.
+func sessionCreatureIndexedValueBackend(s *session, state luaCreatureState) indexedValueBackend {
+	motionBackend := func() (indexedValueBackend, bool) {
+		if s == nil || s.server == nil {
+			return indexedValueBackend{}, false
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return indexedValueBackend{}, false
+		}
+		return motionIndexedValueBackend(s.server, motion), true
+	}
+	read := func(index int) (uint32, bool) {
+		if backend, ok := motionBackend(); ok {
+			return backend.read(index)
+		}
+		switch index {
+		case 0:
+			return uint32(state.GUID), true
+		case 1:
+			return uint32(state.GUID >> 32), true
+		case objectFieldType:
+			return 3, true
+		case objectFieldEntry:
+			return state.Entry, true
+		case unitFieldHealth:
+			return state.Health, true
+		case unitFieldMaxHealth:
+			return state.MaxHealth, true
+		case unitFieldLevel:
+			return state.Level, true
+		case unitFieldFlags:
+			return state.UnitFlags, true
+		case unitFieldDisplayID:
+			return state.DisplayID, true
+		case unitFieldNPCFlags:
+			return state.NPCFlags, true
+		}
+		return 0, false
+	}
+	write := func(index int, update func(old uint32) uint32) (map[int]uint32, bool, bool) {
+		if backend, ok := motionBackend(); ok {
+			return backend.write(index, update)
+		}
+		return nil, false, false
+	}
+	return indexedValueBackend{
+		read:  read,
+		write: write,
+		broadcast: func(fields map[int]uint32) {
+			if backend, ok := motionBackend(); ok {
+				backend.broadcast(fields)
+			}
+		},
+	}
+}
+
+// Gameobject indexed values (UpdateFields.h: OBJECT_END = 6, then
+// CREATED_BY 6-7, DISPLAYID 8, FLAGS 9, PARENTROTATION 10-13, DYNAMIC
+// 14, FACTION 15, LEVEL 16, BYTES_1 17). Reads never materialize: a
+// live dynamic record wins, else the spawn snapshot (plus the
+// template_addon / destructible-override reads the HasFlag leg
+// already uses); a pure probe leaves no live state behind. Writes
+// materialize a static spawn first, following the SetGoState/flag
+// precedent, and broadcast the written field. DYNAMIC is a computed
+// per-viewer field (GameObject.cpp:2564: questgiver-activate /
+// chest-lootable flags) with no stored slot, so it reads 0 and
+// ignores writes; LEVEL is set only for transports
+// (GameObject.cpp:365), which have no Go scripting object, so it
+// reads 0 too. CREATED_BY writes are ignored: the owner link is
+// fixed at summon, not by the raw value. A raw BYTES_1 state write
+// does not fire event 10 — only SetGoState does (GameObject.cpp:
+// 2407). Coupling, same class as the SetGoState tick: the grid
+// stream sources flags/display from the DB row and overrides only
+// State from dyn, so a scripted FLAGS/DISPLAYID write is
+// client-visible via the values-update broadcast until the next
+// grid re-stream.
+func goIndexedValueBackend(srv *Server, state luaGameObjectState) indexedValueBackend {
+	dyn := func() *dynamicGameObjectState {
+		return srv.gameObjectState(state.Map, state.InstanceID, state.GUID)
+	}
+	read := func(index int) (uint32, bool) {
+		record := dyn()
+		switch index {
+		case 0:
+			return uint32(state.GUID), true
+		case 1:
+			return uint32(state.GUID >> 32), true
+		case objectFieldType:
+			return 5, true
+		case objectFieldEntry:
+			return state.Entry, true
+		case objectFieldScale:
+			if record != nil && record.Size > 0 {
+				return math.Float32bits(record.Size), true
+			}
+			if state.Size > 0 {
+				return math.Float32bits(state.Size), true
+			}
+			return math.Float32bits(1), true
+		case gameObjectFieldCreatedBy:
+			if record != nil {
+				return uint32(record.OwnerGUID), true
+			}
+			return uint32(state.OwnerGUID), true
+		case gameObjectFieldCreatedBy + 1:
+			if record != nil {
+				return uint32(record.OwnerGUID >> 32), true
+			}
+			return uint32(state.OwnerGUID >> 32), true
+		case gameObjectDisplayID:
+			if record != nil {
+				return record.DisplayID, true
+			}
+			return state.DisplayID, true
+		case gameObjectFlags:
+			if record != nil {
+				return record.Flags, true
+			}
+			if srv != nil {
+				if over := srv.destructibleSpawnOverride(state.Map, state.InstanceID, state.LowGUID); over != nil {
+					return over.Flags, true
+				}
+				return srv.gameObjectTemplateAddonFlags(state.Entry), true
+			}
+			return 0, true
+		case gameObjectFieldFaction:
+			if record != nil {
+				return record.Faction, true
+			}
+			if srv != nil {
+				return srv.gameObjectTemplateAddonFaction(state.Entry), true
+			}
+			return 0, true
+		case gameObjectBytes1:
+			if record != nil {
+				return uint32(record.State) | uint32(record.Type)<<8 | uint32(record.ArtKit)<<16 | uint32(record.AnimProgress)<<24, true
+			}
+			return state.GoState | state.Type<<8, true
+		}
+		if record != nil && index >= gameObjectFieldParentRotation && index < gameObjectFieldParentRotation+4 {
+			return math.Float32bits(record.ParentRotation[index-gameObjectFieldParentRotation]), true
+		}
+		if index >= gameObjectFieldParentRotation && index < gameObjectFieldParentRotation+4 {
+			if index == gameObjectFieldParentRotation+3 {
+				return math.Float32bits(1), true
+			}
+			return 0, true
+		}
+		return 0, false
+	}
+	write := func(index int, update func(old uint32) uint32) (map[int]uint32, bool, bool) {
+		old, ok := read(index)
+		if !ok || srv == nil {
+			return nil, false, false
+		}
+		value := update(old)
+		srv.objectsMu.Lock()
+		record := srv.gameObjectStateLocked(state.Map, state.InstanceID, state.GUID)
+		if record == nil {
+			srv.objectsMu.Unlock()
+			if srv.materializeStaticGameObjectState(state.Map, state.InstanceID, state.GUID) == nil {
+				return nil, false, false
+			}
+			srv.objectsMu.Lock()
+			record = srv.gameObjectStateLocked(state.Map, state.InstanceID, state.GUID)
+			if record == nil {
+				srv.objectsMu.Unlock()
+				return nil, false, false
+			}
+		}
+		switch index {
+		case objectFieldScale:
+			record.Size = math.Float32frombits(value)
+		case gameObjectDisplayID:
+			record.DisplayID = value
+		case gameObjectFlags:
+			record.Flags = value
+		case gameObjectFieldFaction:
+			record.Faction = value
+		case gameObjectBytes1:
+			record.State = uint8(value)
+			record.Type = uint8(value >> 8)
+			record.ArtKit = uint8(value >> 16)
+			record.AnimProgress = uint8(value >> 24)
+		default:
+			if index >= gameObjectFieldParentRotation && index < gameObjectFieldParentRotation+4 {
+				record.ParentRotation[index-gameObjectFieldParentRotation] = math.Float32frombits(value)
+			} else {
+				srv.objectsMu.Unlock()
+				return nil, false, false
+			}
+		}
+		var stored uint32
+		switch index {
+		case objectFieldScale:
+			stored = math.Float32bits(record.Size)
+		case gameObjectBytes1:
+			stored = uint32(record.State) | uint32(record.Type)<<8 | uint32(record.ArtKit)<<16 | uint32(record.AnimProgress)<<24
+		default:
+			if index >= gameObjectFieldParentRotation && index < gameObjectFieldParentRotation+4 {
+				stored = math.Float32bits(record.ParentRotation[index-gameObjectFieldParentRotation])
+			} else {
+				stored = value
+			}
+		}
+		srv.objectsMu.Unlock()
+		return map[int]uint32{index: stored}, stored != old, true
+	}
+	return indexedValueBackend{
+		read:  read,
+		write: write,
+		broadcast: func(fields map[int]uint32) {
+			srv.broadcastGameObjectValuesUpdateInInstance(state.Map, state.InstanceID, state.GUID, fields)
 		},
 	}
 }

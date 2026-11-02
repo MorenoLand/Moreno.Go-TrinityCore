@@ -87,6 +87,13 @@ func (s *Server) mapLive(mapID, instanceID uint32) scripting.MapLive {
 	live.WorldObject = func(ctx context.Context, guid uint64) *scripting.Object {
 		return s.mapWorldObject(ctx, mapID, instanceID, guid)
 	}
+	// AreaID is Map::GetAreaId (Map.cpp:2595) via the same
+	// zoneAndAreaID ladder the creature/GO GetAreaId legs use:
+	// WMO area, else grid area, else the map entry's AreaTableID.
+	live.AreaID = func(x, y, z float32) uint32 {
+		_, areaID := s.zoneAndAreaID(mapID, x, y, z, 0)
+		return areaID
+	}
 	return live
 }
 

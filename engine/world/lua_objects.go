@@ -45,6 +45,7 @@ type luaGameObjectState struct {
 	LowGUID     uint32
 	Entry       uint32
 	DisplayID   uint32
+	Size        float32
 	Name        string
 	Map         uint32
 	InstanceID  uint32
@@ -1183,6 +1184,10 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(s.server, nil, state.GUID, methods)
+	// Indexed values (ObjectMethods.h) delegate to the motion backend
+	// when the motion resolves, else read the snapshot; see
+	// sessionCreatureIndexedValueBackend in lua_values.go.
+	registerIndexedValueMethods(methods, sessionCreatureIndexedValueBackend(s, state))
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level, "InWorld": true}, Methods: methods}
 }
 
@@ -1210,9 +1215,11 @@ func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Obj
 func (srv *Server) loadLuaGameObject(ctx context.Context, low, entry uint32) (luaGameObjectState, bool) {
 	var state luaGameObjectState
 	var mapID int64
-	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z, g.orientation, t.type, COALESCE(g.phaseMask, 0) FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &state.Type, &state.PhaseMask); err != nil {
+	var size float64
+	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z, g.orientation, t.type, t.size, COALESCE(g.phaseMask, 0) FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &state.Type, &size, &state.PhaseMask); err != nil {
 		return state, false
 	}
+	state.Size = float32(size)
 	state.Map, state.GUID = uint32(mapID), gameObjectGUID(state.LowGUID, state.Entry)
 	state.GoState, state.LootState = 1, 1
 	return state, true
@@ -1723,6 +1730,9 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(srv, nil, state.GUID, methods)
+	// Indexed values (ObjectMethods.h); see goIndexedValueBackend in
+	// lua_values.go for the dyn/static read model and write rules.
+	registerIndexedValueMethods(methods, goIndexedValueBackend(srv, state))
 	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
 }
 

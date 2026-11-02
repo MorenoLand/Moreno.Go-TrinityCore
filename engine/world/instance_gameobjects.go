@@ -375,6 +375,22 @@ func (s *Server) gameObjectTemplateAddonFlags(entry uint32) uint32 {
 	return uint32(flags)
 }
 
+// gameObjectTemplateAddonFaction mirrors the spawn-faction read behind
+// GameObject::Create (GameObject.cpp:336): the gameobject_template_addon
+// faction for the entry, 0 when the row is absent. The
+// gameObjectTemplateAddonFlags twin, one column over.
+func (s *Server) gameObjectTemplateAddonFaction(entry uint32) uint32 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0
+	}
+	var faction int64
+	if err := s.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT COALESCE(faction, 0) FROM gameobject_template_addon WHERE entry = ? LIMIT 1", entry).Scan(&faction); err != nil || faction < 0 {
+		return 0
+	}
+	return uint32(faction)
+}
+
 // gameObjectAutoCloseDelay mirrors GameObjectTemplate::GetAutoCloseTime
 // (GameObjectData.h:535) for the door/button arms: data2, consumed as
 // milliseconds. Zero (or an unavailable DB/template) means no auto-close.
