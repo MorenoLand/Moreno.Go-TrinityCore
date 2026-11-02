@@ -875,6 +875,12 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	server.Features.Scripts.SetAreaNameProvider(server.luaAreaName)
 	server.Features.Scripts.SetSpawnProvider(server.luaPerformIngameSpawn)
 	server.Features.Scripts.SetSendMailProvider(server.luaSendMail)
+	server.Features.Scripts.SetVendorAddProvider(server.luaAddVendorItem)
+	server.Features.Scripts.SetVendorRemoveProvider(server.luaVendorRemoveItem)
+	server.Features.Scripts.SetVendorRemoveAllProvider(server.luaVendorRemoveAllItems)
+	server.Features.Scripts.SetKickProvider(server.luaKickPlayer)
+	server.Features.Scripts.SetBanProvider(server.luaBan)
+	server.Features.Scripts.SetSaveAllPlayersProvider(server.luaSaveAllPlayers)
 	server.worldTimeStartedAt = time.Now()
 	return server
 }

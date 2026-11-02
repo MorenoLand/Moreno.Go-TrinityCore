@@ -352,6 +352,20 @@ type MailItemPair struct {
 	Amount uint32
 }
 
+// BanArgs is the GlobalMethods::Ban argument shape: mode 0 = account,
+// 1 = character, 2 = IP; Duration is seconds, like the C++ uint32
+// BanAccount overload Eluna calls. The provider returns the Eluna result
+// int (0 success, 1 syntax, 2 not found, 3 longer/existing ban) and a
+// non-empty luaL_argerror message for the name/IP argument when the
+// C++ validation arm rejects it.
+type BanArgs struct {
+	Mode      int
+	NameOrIP  string
+	Duration  uint32
+	Reason    string
+	WhoBanned string
+}
+
 // SendMailArgs is the GlobalMethods::SendMail argument shape. Stationery
 // defaults to MAIL_STATIONERY_DEFAULT (41); Delay is added to the game
 // time in seconds by MailDraft::SendMailTo, despite the Eluna doc calling
@@ -369,23 +383,29 @@ type SendMailArgs struct {
 }
 
 type Config struct {
-	Enabled              bool
-	ScriptPath           string
-	CoreName             string
-	CoreVersion          string
-	RealmID              uint32
-	CoreExpansion        uint32
-	PlayerProvider       func() []*Object
-	GameEventProvider    func() []uint32
-	MapProvider          func(mapID, instanceID uint32) *Object
-	WorldMessageProvider func(string)
-	AreaNameProvider     func(id uint32) (string, bool)
-	SpawnProvider        func(SpawnArgs) *Object
-	SendMailProvider     func(SendMailArgs) error
-	AuthDatabase         *sql.DB
-	CharacterDB          *sql.DB
-	WorldDatabase        *sql.DB
-	Logger               *slog.Logger
+	Enabled                 bool
+	ScriptPath              string
+	CoreName                string
+	CoreVersion             string
+	RealmID                 uint32
+	CoreExpansion           uint32
+	PlayerProvider          func() []*Object
+	GameEventProvider       func() []uint32
+	MapProvider             func(mapID, instanceID uint32) *Object
+	WorldMessageProvider    func(string)
+	AreaNameProvider        func(id uint32) (string, bool)
+	SpawnProvider           func(SpawnArgs) *Object
+	SendMailProvider        func(SendMailArgs) error
+	VendorAddProvider       func(entry, item uint32, maxCount int32, incrTime, extCost uint32)
+	VendorRemoveProvider    func(entry, item uint32) error
+	VendorRemoveAllProvider func(entry uint32)
+	KickProvider            func(playerGUID uint64)
+	BanProvider             func(args BanArgs) (int, string)
+	SaveAllPlayersProvider  func()
+	AuthDatabase            *sql.DB
+	CharacterDB             *sql.DB
+	WorldDatabase           *sql.DB
+	Logger                  *slog.Logger
 }
 
 type Runtime struct {
@@ -1033,6 +1053,12 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetMapById", r.getMapById)
 	r.state.Register("PerformIngameSpawn", r.performIngameSpawn)
 	r.state.Register("SendMail", r.sendMail)
+	r.state.Register("AddVendorItem", r.addVendorItem)
+	r.state.Register("VendorRemoveItem", r.vendorRemoveItem)
+	r.state.Register("VendorRemoveAllItems", r.vendorRemoveAllItems)
+	r.state.Register("Kick", r.kickPlayer)
+	r.state.Register("Ban", r.banPlayer)
+	r.state.Register("SaveAllPlayers", r.saveAllPlayers)
 	r.state.Register("SendWorldMessage", r.sendWorldMessage)
 	r.state.Register("GetAreaName", r.getAreaName)
 	r.state.Register("CreateInt64", r.createInt64)
@@ -1302,6 +1328,105 @@ func (r *Runtime) sendMail(state *lua.State) int {
 	return 0
 }
 
+// addVendorItem is GlobalMethods::AddVendorItem (GlobalMethods.h, Trinity
+// branch): (entry, item, maxcount, incrtime, extendedcost). Validation
+// failure reads a silent no-op like the C++ IsVendorItemValid arm; without
+// a provider it is a no-op.
+func (r *Runtime) addVendorItem(state *lua.State) int {
+	entry := uint32(lua.CheckUnsigned(state, 1))
+	item := uint32(lua.CheckUnsigned(state, 2))
+	maxCount := int32(lua.CheckInteger(state, 3))
+	incrTime := uint32(lua.CheckUnsigned(state, 4))
+	extCost := uint32(lua.CheckUnsigned(state, 5))
+	if r.config.VendorAddProvider != nil {
+		r.config.VendorAddProvider(entry, item, maxCount, incrTime, extCost)
+	}
+	return 0
+}
+
+// vendorRemoveItem is GlobalMethods::VendorRemoveItem: (entry, item). The
+// C++ template-missing arm is a luaL_argerror; without a provider the
+// call reads a no-op.
+func (r *Runtime) vendorRemoveItem(state *lua.State) int {
+	entry := uint32(lua.CheckUnsigned(state, 1))
+	item := uint32(lua.CheckUnsigned(state, 2))
+	if r.config.VendorRemoveProvider != nil {
+		if err := r.config.VendorRemoveProvider(entry, item); err != nil {
+			lua.ArgumentError(state, 1, "valid CreatureEntry expected")
+			return 0
+		}
+	}
+	return 0
+}
+
+// vendorRemoveAllItems is GlobalMethods::VendorRemoveAllItems: (entry).
+// Without a provider it is a no-op.
+func (r *Runtime) vendorRemoveAllItems(state *lua.State) int {
+	entry := uint32(lua.CheckUnsigned(state, 1))
+	if r.config.VendorRemoveAllProvider != nil {
+		r.config.VendorRemoveAllProvider(entry)
+	}
+	return 0
+}
+
+// kickPlayer is GlobalMethods::Kick: (player). The argument is the player
+// object; its GUID field resolves the session, like the C++ session kick.
+// A non-player object resolves to no session and no-ops. Without a
+// provider it is a no-op.
+func (r *Runtime) kickPlayer(state *lua.State) int {
+	object := lua.CheckUserData(state, 1, objectMetaTable).(*Object)
+	guid, _ := objectUint64(object, "GUID")
+	if r.config.KickProvider != nil {
+		r.config.KickProvider(guid)
+	}
+	return 0
+}
+
+// banPlayer is GlobalMethods::Ban: (banMode, nameOrIP, duration, reason,
+// whoBanned). The mode switch and its luaL_argerror arms mirror the C++
+// function; name/IP validation runs in the provider, which reports the
+// argument-2 message. Without a provider the result reads nil (no ban
+// performed, so no success value is claimed); an unknown mode still
+// argerrors.
+func (r *Runtime) banPlayer(state *lua.State) int {
+	mode := int(lua.CheckInteger(state, 1))
+	if mode < 0 || mode > 2 {
+		lua.ArgumentError(state, 1, "unknown banmode")
+		return 0
+	}
+	args := BanArgs{
+		Mode:     mode,
+		NameOrIP: lua.CheckString(state, 2),
+		Duration: uint32(lua.CheckUnsigned(state, 3)),
+	}
+	if state.Top() >= 4 && !state.IsNil(4) {
+		args.Reason = lua.CheckString(state, 4)
+	}
+	if state.Top() >= 5 && !state.IsNil(5) {
+		args.WhoBanned = lua.CheckString(state, 5)
+	}
+	if r.config.BanProvider != nil {
+		result, argErr := r.config.BanProvider(args)
+		if argErr != "" {
+			lua.ArgumentError(state, 2, argErr)
+			return 0
+		}
+		state.PushInteger(result)
+		return 1
+	}
+	state.PushNil()
+	return 1
+}
+
+// saveAllPlayers is GlobalMethods::SaveAllPlayers: no arguments, no
+// return. Without a provider it is a no-op.
+func (r *Runtime) saveAllPlayers(state *lua.State) int {
+	if r.config.SaveAllPlayersProvider != nil {
+		r.config.SaveAllPlayersProvider()
+	}
+	return 0
+}
+
 // sendWorldMessage is World::SendServerMessage(SERVER_MSG_STRING) behind
 // the Eluna SendWorldMessage global; without a provider it is a no-op.
 func (r *Runtime) sendWorldMessage(state *lua.State) int {
@@ -1372,6 +1497,42 @@ func (r *Runtime) SetAreaNameProvider(provider func(id uint32) (string, bool)) {
 func (r *Runtime) SetSpawnProvider(provider func(SpawnArgs) *Object) {
 	r.mu.Lock()
 	r.config.SpawnProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetVendorAddProvider(provider func(entry, item uint32, maxCount int32, incrTime, extCost uint32)) {
+	r.mu.Lock()
+	r.config.VendorAddProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetVendorRemoveProvider(provider func(entry, item uint32) error) {
+	r.mu.Lock()
+	r.config.VendorRemoveProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetVendorRemoveAllProvider(provider func(entry uint32)) {
+	r.mu.Lock()
+	r.config.VendorRemoveAllProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetKickProvider(provider func(playerGUID uint64)) {
+	r.mu.Lock()
+	r.config.KickProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetBanProvider(provider func(args BanArgs) (int, string)) {
+	r.mu.Lock()
+	r.config.BanProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetSaveAllPlayersProvider(provider func()) {
+	r.mu.Lock()
+	r.config.SaveAllPlayersProvider = provider
 	r.mu.Unlock()
 }
 

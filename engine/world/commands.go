@@ -5718,12 +5718,22 @@ func (s *session) sessionForPlayerName(name string) *session {
 // kickSession disconnects one session (WorldSession::KickPlayer equivalent
 // used by the account-delete path).
 func (s *session) kickSession(target *session) {
-	if s.server == nil || target == nil {
+	if s == nil || s.server == nil {
 		return
 	}
-	s.server.sessionsMu.Lock()
-	delete(s.server.sessions, target)
-	s.server.sessionsMu.Unlock()
+	s.server.kickSession(target)
+}
+
+// kickSession disconnects one session (WorldSession::KickPlayer equivalent
+// used by the account-delete path). The Server form is shared by the
+// Eluna Kick global, which has no calling session.
+func (s *Server) kickSession(target *session) {
+	if s == nil || target == nil {
+		return
+	}
+	s.sessionsMu.Lock()
+	delete(s.sessions, target)
+	s.sessionsMu.Unlock()
 	if target.conn != nil {
 		_ = target.conn.Close()
 	}
@@ -5736,12 +5746,21 @@ func (s *session) kickSession(target *session) {
 // kick once the login duplicate-kick invariant (one live session per
 // account) holds — and the sweep also cleans up any race leftover.
 func (s *session) kickAccountSessions(accountID uint32, author string) {
-	if s.server == nil {
+	if s == nil || s.server == nil {
+		return
+	}
+	s.server.kickAccountSessions(accountID, author)
+}
+
+// kickAccountSessions is the Server form of the session helper above,
+// shared by the Eluna Ban global.
+func (s *Server) kickAccountSessions(accountID uint32, author string) {
+	if s == nil {
 		return
 	}
 	var victims []*session
-	s.server.sessionsMu.RLock()
-	for sess := range s.server.sessions {
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
 		if sess == nil || sess.accountID != accountID {
 			continue
 		}
@@ -5754,7 +5773,7 @@ func (s *session) kickAccountSessions(accountID uint32, author string) {
 		}
 		victims = append(victims, sess)
 	}
-	s.server.sessionsMu.RUnlock()
+	s.sessionsMu.RUnlock()
 	for _, v := range victims {
 		s.kickSession(v)
 	}
@@ -5765,11 +5784,20 @@ func (s *session) kickAccountSessions(accountID uint32, author string) {
 // (for IP, every session on that IP). An IP ban succeeds even when nobody is
 // affected yet.
 func (s *session) worldBanAccount(ctx context.Context, mode int, nameOrIP, durationStr, reason, author string) banResult {
-	if s.server == nil || s.server.AuthStore == nil || s.server.CharactersStore == nil {
+	if s == nil || s.server == nil {
 		return banSyntaxError
 	}
-	auth := s.server.AuthStore
-	durationSecs := timeStringToSecs(durationStr)
+	return s.server.banAccount(ctx, mode, nameOrIP, timeStringToSecs(durationStr), reason, author)
+}
+
+// banAccount is the Server form of the session helper above, shared by
+// the Eluna Ban global, which takes seconds directly like the C++
+// uint32 BanAccount overload Eluna calls.
+func (s *Server) banAccount(ctx context.Context, mode int, nameOrIP string, durationSecs uint32, reason, author string) banResult {
+	if s == nil || s.AuthStore == nil || s.CharactersStore == nil {
+		return banSyntaxError
+	}
+	auth := s.AuthStore
 	// AccountMgr::IsBannedAccount (AccountMgr.cpp): prevent banning an
 	// already banned account.
 	if mode == banModeAccount {
@@ -5816,7 +5844,7 @@ func (s *session) worldBanAccount(ctx context.Context, mode int, nameOrIP, durat
 			}
 		} else {
 			// CHAR_SEL_ACCOUNT_BY_NAME.
-			row, qerr := s.server.CharactersStore.QueryRowStatement(ctx, "CHAR_SEL_ACCOUNT_BY_NAME", nameOrIP)
+			row, qerr := s.CharactersStore.QueryRowStatement(ctx, "CHAR_SEL_ACCOUNT_BY_NAME", nameOrIP)
 			if qerr == nil {
 				err = row.Scan(&id)
 			} else {

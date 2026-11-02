@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -312,4 +313,149 @@ func (s *Server) luaSendMail(args scripting.SendMailArgs) error {
 	}
 	s.notifyMailAvailable(uint64(args.ReceiverLow))
 	return nil
+}
+
+// luaAddVendorItem is the VendorAddProvider behind the Eluna
+// AddVendorItem global (GlobalMethods.h, Trinity branch): the
+// ObjectMgr::IsVendorItemValid gates in C++ order (creature template,
+// vendor flag, item template, ExtendedCost DBC row, maxcount/incrtime
+// coherence, duplicate (item, ExtendedCost) pair), then the
+// WORLD_INS_NPC_VENDOR insert (entry, item, maxcount, incrtime,
+// extendedcost, no slot — the C++ statement likewise omits it). A failed
+// gate reads a silent no-op like the C++ return-0 arm. Go loads vendor
+// rows from the DB on every list/buy call, so the insert is immediately
+// visible with no cache to refresh.
+func (s *Server) luaAddVendorItem(entry, item uint32, maxCount int32, incrTime, extCost uint32) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || s.Data == nil {
+		return
+	}
+	ctx := context.Background()
+	var npcFlag uint32
+	if err := s.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(npcflag, 0) FROM creature_template WHERE entry = ?", entry).Scan(&npcFlag); err != nil || npcFlag&unitNPCFlagVendor == 0 {
+		return
+	}
+	var exists int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM item_template WHERE entry = ?", item).Scan(&exists); err != nil || exists == 0 {
+		return
+	}
+	if extCost != 0 {
+		if _, found, err := s.Data.ItemExtendedCost(extCost); err != nil || !found {
+			return
+		}
+	}
+	if (maxCount > 0 && incrTime == 0) || (maxCount == 0 && incrTime > 0) {
+		return
+	}
+	if err := s.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM npc_vendor WHERE entry = ? AND item = ? AND ExtendedCost = ?", entry, item, extCost).Scan(&exists); err != nil || exists != 0 {
+		return
+	}
+	_, _ = s.WorldStore.DB.ExecContext(ctx,
+		"INSERT INTO npc_vendor (entry, item, maxcount, incrtime, extendedcost) VALUES (?, ?, ?, ?, ?)",
+		entry, item, maxCount, incrTime, extCost)
+}
+
+// luaVendorRemoveItem is the VendorRemoveProvider behind the Eluna
+// VendorRemoveItem global: the C++ template-missing arm is an error the
+// runtime turns into the "valid CreatureEntry expected" argerror, and the
+// WORLD_DEL_NPC_VENDOR delete removes every row for (entry, item),
+// matching the C++ statement (not just one ExtendedCost variant).
+func (s *Server) luaVendorRemoveItem(entry, item uint32) error {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return nil
+	}
+	ctx := context.Background()
+	var exists int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM creature_template WHERE entry = ?", entry).Scan(&exists); err != nil || exists == 0 {
+		return fmt.Errorf("valid CreatureEntry expected")
+	}
+	_, _ = s.WorldStore.DB.ExecContext(ctx,
+		"DELETE FROM npc_vendor WHERE entry = ? AND item = ?", entry, item)
+	return nil
+}
+
+// luaVendorRemoveAllItems is the VendorRemoveAllProvider behind the Eluna
+// VendorRemoveAllItems global: the C++ loop removes each listed item by
+// (entry, item), which is exactly one delete of every row for the entry.
+// No template check exists on this arm in C++.
+func (s *Server) luaVendorRemoveAllItems(entry uint32) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	_, _ = s.WorldStore.DB.ExecContext(context.Background(),
+		"DELETE FROM npc_vendor WHERE entry = ?", entry)
+}
+
+// luaKickPlayer is the KickProvider behind the Eluna Kick global:
+// WorldSession::KickPlayer on the session for the player's GUID, the
+// socket close + session-map removal of the command kick path. An
+// unknown GUID no-ops.
+func (s *Server) luaKickPlayer(playerGUID uint64) {
+	if s == nil {
+		return
+	}
+	if sess := s.findSessionByGUID(playerGUID); sess != nil {
+		s.kickSession(sess)
+	}
+}
+
+// luaBan is the BanProvider behind the Eluna Ban global: the C++
+// validation arms (account upper-latin, character normalize, IP shape)
+// run first, then World::BanAccount via the shared server ban core. The
+// result maps BanReturn to the Eluna ints (0 success, 1 syntax, 2 not
+// found, 3 longer/existing ban).
+func (s *Server) luaBan(args scripting.BanArgs) (int, string) {
+	if s == nil {
+		return 0, ""
+	}
+	nameOrIP := args.NameOrIP
+	switch args.Mode {
+	case banModeAccount:
+		if !utf8.ValidString(nameOrIP) {
+			return 0, "invalid account name"
+		}
+		nameOrIP = upperOnlyLatin(nameOrIP)
+	case banModeCharacter:
+		if nameOrIP == "" || !utf8.ValidString(nameOrIP) {
+			return 0, "invalid character name"
+		}
+		nameOrIP = normalizePlayerName(nameOrIP)
+	case banModeIP:
+		if !isBanIPAddress(nameOrIP) {
+			return 0, "invalid ip"
+		}
+	}
+	switch s.banAccount(context.Background(), args.Mode, nameOrIP, args.Duration, args.Reason, args.WhoBanned) {
+	case banSuccess:
+		return 0, ""
+	case banNotFound:
+		return 2, ""
+	case banExists:
+		return 3, ""
+	default:
+		return 1, ""
+	}
+}
+
+// luaSaveAllPlayers is the SaveAllPlayersProvider behind the Eluna
+// SaveAllPlayers global: ObjectAccessor::SaveAllPlayers, the same
+// snapshot-and-save loop as the .saveall command minus its permission
+// gate and message.
+func (s *Server) luaSaveAllPlayers() {
+	if s == nil {
+		return
+	}
+	ctx := context.Background()
+	s.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		_ = sess.savePlayerState(ctx, 1, false)
+	}
 }
