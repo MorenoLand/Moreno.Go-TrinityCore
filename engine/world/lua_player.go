@@ -712,6 +712,17 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.server.broadcastPlayerValuesUpdateFromSession(s, map[int]uint32{unitFieldBytes1: merged})
 		return nil, nil
 	}
+	// GetStandState is Unit::GetStandState (Unit.h:921): the
+	// UNIT_FIELD_BYTES_1 stand-state byte SetStandState writes.
+	methods["GetStandState"] = luaNoArgs(func() any { return state.StandState })
+	// IsStandState is Unit::IsStandState (Unit.cpp:10551-10555),
+	// shared predicate unitIsStandState (lua_creature_events.go).
+	methods["IsStandState"] = luaNoArgs(func() any { return unitIsStandState(state.StandState) })
+	// IsRooted is Unit::IsRooted (UnitMethods.h, Trinity arm):
+	// UNIT_STATE_ROOT or MOVEMENTFLAG_ROOT. Go's twin is the
+	// session rooted flag (setRooted + login root-aura scan,
+	// characters.go); a bare movement-flag root has no Go model.
+	methods["IsRooted"] = luaNoArgs(func() any { return s.rooted })
 	methods["LearnSpell"] = func(ctx context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

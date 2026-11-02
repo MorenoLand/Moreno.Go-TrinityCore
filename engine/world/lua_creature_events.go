@@ -240,6 +240,18 @@ func (s *Server) spawnCreatureFromOrigin(ctx context.Context, origin tempSummonO
 	return s.summonTempCreature(ctx, origin, entry, x, y, z, o, uint8(spawnType-1), despawnMs), nil
 }
 
+// unitIsStandState is Unit::IsStandState (Unit.cpp:10551-10555) over
+// Unit::IsSitState (Unit.cpp:10542-10549): true unless the stand
+// state is a sit state (1, 2, 4, 5, 6), SLEEP (3), or KNEEL (8).
+func unitIsStandState(st uint8) bool {
+	switch st {
+	case 1, 2, 3, 4, 5, 6, 8:
+		return false
+	default:
+		return true
+	}
+}
+
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	if s == nil || motion == nil {
 		return nil
@@ -455,6 +467,42 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		evading := motion.Evading
 		s.motionMu.Unlock()
 		return []any{evading}, nil
+	}
+	// GetStandState is Unit::GetStandState (Unit.h:921): the
+	// UNIT_FIELD_BYTES_1 stand-state byte, which SetStandState writes
+	// via motion.StandState (default 0 STAND when never set).
+	// unitIsStandState is the shared Unit::IsStandState /
+	// Unit::IsSitState predicate (Unit.cpp:10542-10555), used by
+	// both the creature and player builders.
+	methods["GetStandState"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		st := motion.StandState
+		s.motionMu.Unlock()
+		return []any{st}, nil
+	}
+	// IsStandState is Unit::IsStandState (Unit.cpp:10551-10555):
+	// not a sit state (SIT/SIT_CHAIR/SIT_LOW_CHAIR/SIT_MEDIUM_CHAIR/
+	// SIT_HIGH_CHAIR = 1/2/4/5/6) and neither SLEEP (3) nor KNEEL (8).
+	methods["IsStandState"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		st := motion.StandState
+		s.motionMu.Unlock()
+		return []any{unitIsStandState(st)}, nil
+	}
+	// IsRooted is Unit::IsRooted (UnitMethods.h, Trinity arm):
+	// UNIT_STATE_ROOT or MOVEMENTFLAG_ROOT. Go's twins are
+	// motion.ScriptRooted (SetRooted) and the SPELL_AURA_MOD_ROOT
+	// caster-aura effects; a bare movement-flag root has no Go
+	// model, but SetControlled sets both in C++, so the script and
+	// aura legs cover the reachable states.
+	methods["IsRooted"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		rooted := motion.ScriptRooted
+		s.motionMu.Unlock()
+		if !rooted {
+			rooted = len(s.creatureCasterAuraEffectsByType(motion, spellAuraModRoot)) > 0
+		}
+		return []any{rooted}, nil
 	}
 	// GetCorpseDelay is Creature::GetCorpseDelay (CreatureMethods.h:615,
 	// Creature.h:94): the rank-mapped corpse-decay delay in seconds, the

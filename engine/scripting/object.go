@@ -113,6 +113,38 @@ func genericObjectMethod(object *Object, name string) (ObjectMethod, bool) {
 			}
 			return []any{float32(health) * 100 / float32(maxHealth)}, nil
 		}, true
+	case "HealthBelowPct", "HealthAbovePct", "CountPctFromCurHealth", "CountPctFromMaxHealth":
+		// Unit::HealthBelowPct/HealthAbovePct/CountPctFromCurHealth/
+		// CountPctFromMaxHealth (UnitMethods.h, Unit.h:872-878):
+		// Below is health < CountPctFromMaxHealth(pct), Above is
+		// health > CountPctFromMaxHealth(pct), and CountPct is
+		// CalculatePct (Util.h:66-70), base * float(pct) / 100
+		// truncated to uint32. Builder methods take precedence, so
+		// this fallback serves the player and creature surfaces.
+		return func(_ context.Context, args []any) ([]any, error) {
+			if len(args) < 1 {
+				return nil, fmt.Errorf("%s requires a percent", name)
+			}
+			pct, ok := numericValue(args[0])
+			if !ok {
+				return nil, fmt.Errorf("%s requires a numeric percent", name)
+			}
+			health, _ := objectUint32(object, "Health")
+			maxHealth, _ := objectUint32(object, "MaxHealth")
+			countPct := func(base uint32) uint32 {
+				return uint32(float32(base) * float32(int32(pct)) / 100)
+			}
+			switch name {
+			case "HealthBelowPct":
+				return []any{health < countPct(maxHealth)}, nil
+			case "HealthAbovePct":
+				return []any{health > countPct(maxHealth)}, nil
+			case "CountPctFromCurHealth":
+				return []any{countPct(health)}, nil
+			default:
+				return []any{countPct(maxHealth)}, nil
+			}
+		}, true
 	case "GetPowerPct":
 		return func(context.Context, []any) ([]any, error) {
 			power, _ := objectUint32(object, "Power")
