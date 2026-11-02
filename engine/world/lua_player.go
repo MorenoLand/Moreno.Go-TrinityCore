@@ -4805,6 +4805,141 @@ func (s *session) luaPlayer() *scripting.Object {
 		_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_POI), packet.Bytes(), true)
 		return []any{}, nil
 	}
+	// SendPacket is Player::SendPacket (PlayerMethods.h:3599-3615): the
+	// CreatePacket-built WorldPacket goes to the player's session when
+	// selfOnly (default true); otherwise it fans out via SendMessageToSet
+	// (broadcastToNearby excludes the source, so the self write plus the
+	// fan-out matches the C++ self=true leg). A non-packet arg errors
+	// like Eluna's CHECKOBJ; an opcode above uint16 errors instead of
+	// silently truncating to another opcode.
+	methods["SendPacket"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("packet is required")
+		}
+		pkt, ok := args[0].(*scripting.Packet)
+		if !ok || pkt == nil {
+			return nil, fmt.Errorf("packet must be a WorldPacket")
+		}
+		if pkt.Opcode > math.MaxUint16 {
+			return nil, fmt.Errorf("packet opcode must fit uint16")
+		}
+		selfOnly := true
+		if len(args) > 1 && args[1] != nil {
+			value, ok := args[1].(bool)
+			if !ok {
+				return nil, fmt.Errorf("argument 2 must be boolean")
+			}
+			selfOnly = value
+		}
+		opcode := uint16(pkt.Opcode)
+		if !selfOnly && s.server != nil {
+			s.server.broadcastToNearby(opcode, pkt.Data, s)
+		}
+		_ = s.write(opcode, pkt.Data, true)
+		return []any{}, nil
+	}
+	// GossipAddQuests is Player::GossipAddQuests (PlayerMethods.h:3885-3900):
+	// a questgiver-flagged creature or QUESTGIVER-type gameobject stages
+	// its quest menu into the pending gossip menu (PrepareQuestMenu,
+	// Player.cpp:14748-14803), which clears the previous quest list
+	// first and rebuilds it from the starter/ender relations via the
+	// shared loadCreatureQuestMenu / loadGameObjectQuestMenu arms. A
+	// non-questgiver source, or one that does not resolve, stages
+	// nothing and leaves the pending menu untouched, matching the C++
+	// early return before ClearMenu. The creature flag reads the
+	// object's NPCFlags field, falling back to creature_template.npcflag
+	// for event-surface objects, which carry no such field (the
+	// GetGossipTextId fallback pattern). Missing player or stores
+	// silently stage nothing, like RewardQuest's nil guard.
+	methods["GossipAddQuests"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("worldobject is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("worldobject is required")
+		}
+		entry, ok := objectUint32Field(obj, "Entry")
+		if !ok {
+			return nil, fmt.Errorf("worldobject is required")
+		}
+		if s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return []any{}, nil
+		}
+		var quests []gossipQuestItem
+		var err error
+		switch obj.Type {
+		case "Creature":
+			flags, hasFlags := objectUint32Field(obj, "NPCFlags")
+			if !hasFlags {
+				var npcflag int64
+				if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT npcflag FROM creature_template WHERE entry = ?", entry).Scan(&npcflag); err == nil {
+					flags = uint32(npcflag)
+				}
+			}
+			if flags&npcFlagQuestgiver == 0 {
+				return []any{}, nil
+			}
+			quests, err = s.loadCreatureQuestMenu(ctx, entry, s.player.Level)
+		case "GameObject":
+			var goType int64
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT type FROM gameobject_template WHERE entry = ?", entry).Scan(&goType)
+			if goType != 2 {
+				return []any{}, nil
+			}
+			quests, err = s.loadGameObjectQuestMenu(ctx, entry, s.player.Level)
+		default:
+			return []any{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if s.gossip == nil {
+			s.gossip = &gossipMenuState{Items: make(map[uint32]gossipMenuItem)}
+		}
+		s.gossip.Quests = quests
+		return []any{}, nil
+	}
+	// UnbindInstance is Player::UnbindInstance (PlayerMethods.h:2427-2440;
+	// Player.cpp:19099-19115): the named map's bind at the given
+	// difficulty (default 0, silent no-op at or above MAX_DIFFICULTY 4,
+	// DBCEnums.h:296) is dropped via the shared unbind arm. Unlike
+	// UnbindAllInstances it does NOT skip the player's current map:
+	// the Eluna arm unbinds exactly the named map.
+	methods["UnbindInstance"] = func(ctx context.Context, args []any) ([]any, error) {
+		mapID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		difficulty := uint32(0)
+		if len(args) > 1 && args[1] != nil {
+			difficulty, err = luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if difficulty >= 4 {
+			return []any{}, nil
+		}
+		s.unbindInstanceBinds(ctx, func(b instanceBindRow) bool {
+			return b.mapID == mapID && uint32(b.difficulty) == difficulty
+		})
+		return []any{}, nil
+	}
+	// UnbindAllInstances is Player::UnbindAllInstances
+	// (PlayerMethods.h:2446-2485): every bind except the one for the
+	// map the player currently is in is dropped via the shared unbind
+	// arm, difficulties 0..3 like the C++ MAX_DIFFICULTY loop.
+	methods["UnbindAllInstances"] = func(ctx context.Context, args []any) ([]any, error) {
+		if s == nil || s.player == nil {
+			return []any{}, nil
+		}
+		current := s.player.Map
+		s.unbindInstanceBinds(ctx, func(b instanceBindRow) bool {
+			return b.mapID != current
+		})
+		return []any{}, nil
+	}
 	// GiveXP is Player::GiveXP (Player.cpp:2642-2656) via the shared
 	// grant arm: the dead, NO_XP_GAIN and loot-recipient gates, rested
 	// and recruit-a-friend bonuses, SMSG_LOG_XPGAIN and level-ups. The

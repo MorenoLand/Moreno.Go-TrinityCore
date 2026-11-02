@@ -399,6 +399,35 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("instances unbound: %d", counter))
 }
 
+// unbindInstanceBinds is the Player::UnbindInstance arm
+// (Player.cpp:19099-19115) shared by the Eluna unbind methods: for each
+// matching bind row it deletes the character_instance row and, for
+// permanent binds, sends the calendar raid-lockout removal with
+// seconds-remaining like the bind-creation arm (instance_binds.go).
+// The Go tree keeps no in-memory InstanceSave objects, so the row
+// delete plus the lockout packet is the full observable state (the
+// same convention as the .instance unbind twin).
+func (s *session) unbindInstanceBinds(ctx context.Context, match func(instanceBindRow) bool) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.player == nil {
+		return
+	}
+	for _, b := range s.instanceBindsForCharacter(ctx, s.playerGUID) {
+		if !match(b) {
+			continue
+		}
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ?", s.playerGUID, b.instanceID); err != nil {
+			continue
+		}
+		if b.permanent {
+			var remaining uint32
+			if rt := b.resetTime - time.Now().Unix(); rt > 0 {
+				remaining = uint32(rt)
+			}
+			s.sendCalendarRaidLockout(b.mapID, uint32(b.difficulty), remaining, uint64(b.instanceID), false)
+		}
+	}
+}
+
 // handleInstanceStats mirrors HandleInstanceStatsCommand
 // (cs_instance.cpp:169-179): "Loaded instances" (sMapMgr->GetNumInstances,
 // 5050) has no Go bridge - the Go tree keeps no loaded-map registry - and is
