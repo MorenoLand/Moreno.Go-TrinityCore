@@ -309,6 +309,18 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.applySheathState(ctx, sheathed)
 		return []any{}, nil
 	}
+	// StartTaxi is PlayerMethods::StartTaxi (PlayerMethods.h): the path-id
+	// overload of Player::ActivateTaxiPathTo, flying a DBC or
+	// AddTaxiPath-registered path without the flightmaster interact or
+	// taximask gates of the packet handler.
+	methods["StartTaxi"] = func(ctx context.Context, args []any) ([]any, error) {
+		pathID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.startTaxiByPathID(ctx, pathID)
+		return []any{}, nil
+	}
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
 	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })
 	// GetArmor is Unit::GetArmor (Unit.h:860: GetResistance(SPELL_SCHOOL_NORMAL)):

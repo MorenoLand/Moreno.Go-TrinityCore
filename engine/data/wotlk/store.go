@@ -23,6 +23,9 @@ type Store struct {
 	taxi     *taxiNetwork
 	taxiErr  error
 
+	taxiOverlayMu sync.RWMutex
+	taxiOverlay   *taxiOverlay
+
 	slaOnce          sync.Once
 	slaMap           map[uint32][]SkillLineAbilityEntry
 	slaBySkill       map[uint32][]SkillLineAbilityEntry

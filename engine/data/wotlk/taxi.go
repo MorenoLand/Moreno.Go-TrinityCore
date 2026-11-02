@@ -242,7 +242,12 @@ func (s *Store) NearestTaxiNode(x, y, z float32, mapID uint32, teamAlliance bool
 // taxi nodes and the path price. Used by Spell::EffectSendTaxi
 // (SpellEffects.cpp:4656), which takes the path id from the effect's
 // MiscValue (Player::ActivateTaxiPathTo(taxi_path_id), Player.cpp:21689).
+// A script-registered path (GlobalMethods::AddTaxiPath) wins over the DBC
+// row, matching sTaxiPathStore.SetEntry overwriting the loaded entry.
 func (s *Store) TaxiPathEntry(pathID uint32) (from, to, price uint32, found bool, err error) {
+	if path, ok := s.taxiOverlayPath(pathID); ok {
+		return path.from, path.to, path.price, true, nil
+	}
 	pathsFile, err := s.File("TaxiPath")
 	if err != nil {
 		return 0, 0, 0, false, err
@@ -275,8 +280,12 @@ func (s *Store) TaxiPathEntry(pathID uint32) (from, to, price uint32, found bool
 
 // TaxiNodeExists reports whether a taxi node id has a TaxiNodes.dbc row.
 // Used by Spell::EffectDiscoverTaxi (SpellEffects.cpp:5390), which only
-// discovers nodes the DBC knows (sTaxiNodesStore.LookupEntry).
+// discovers nodes the DBC knows (sTaxiNodesStore.LookupEntry). LookupEntry
+// also finds runtime-added nodes, so script-registered nodes count too.
 func (s *Store) TaxiNodeExists(node uint32) bool {
+	if _, ok := s.taxiOverlayNode(node); ok {
+		return true
+	}
 	network, err := s.taxiNetwork()
 	if err != nil {
 		return false
@@ -286,8 +295,12 @@ func (s *Store) TaxiNodeExists(node uint32) bool {
 }
 
 // TaxiPathLinks returns the TaxiPath.dbc row id and price for a direct
-// hop between two nodes (0 when no such path exists).
+// hop between two nodes (0 when no such path exists). A script-registered
+// link wins, matching sTaxiPathSetBySource overwritten by AddTaxiPath.
 func (s *Store) TaxiPathLinks(from, to uint32) (uint32, uint32, bool, error) {
+	if link, ok := s.taxiOverlayLink(from, to); ok {
+		return link.pathID, link.price, true, nil
+	}
 	pathsFile, err := s.File("TaxiPath")
 	if err != nil {
 		return 0, 0, false, err
@@ -330,7 +343,12 @@ type TaxiSplinePoint struct {
 }
 
 // TaxiPathPoints loads the ordered spline vertices for a TaxiPath id.
+// A script-registered path returns its waypoints in registration order,
+// matching sTaxiPathNodesByPath[pathId] filled by AddTaxiPath.
 func (s *Store) TaxiPathPoints(pathID uint32) ([]TaxiSplinePoint, error) {
+	if path, ok := s.taxiOverlayPath(pathID); ok {
+		return append([]TaxiSplinePoint(nil), path.points...), nil
+	}
 	nodesFile, err := s.File("TaxiPathNode")
 	if err != nil {
 		return nil, err
@@ -383,7 +401,11 @@ func (s *Store) TaxiPathPoints(pathID uint32) ([]TaxiSplinePoint, error) {
 
 // TaxiNode returns the TaxiNodes.dbc record for a node id, mirroring
 // sTaxiNodesStore.LookupEntry (cs_go.cpp HandleGoTaxinodeCommand).
+// LookupEntry also finds runtime-added nodes, so the overlay is checked.
 func (s *Store) TaxiNode(id uint32) (TaxiNode, bool, error) {
+	if node, ok := s.taxiOverlayNode(id); ok {
+		return node, true, nil
+	}
 	network, err := s.taxiNetwork()
 	if err != nil {
 		return TaxiNode{}, false, err
@@ -401,23 +423,34 @@ func (s *Store) TaxiNode(id uint32) (TaxiNode, bool, error) {
 // (the Acherus spell/DK hack). The entry is resolved to a display id by the
 // world layer, which owns the creature_template table.
 func (s *Store) TaxiNodeMountEntry(node uint32, teamAlliance, allowedAltTeam bool) (uint32, error) {
+	if overlayNode, ok := s.taxiOverlayNode(node); ok {
+		return taxiNodeMountEntry(overlayNode, teamAlliance, allowedAltTeam), nil
+	}
 	network, err := s.taxiNetwork()
 	if err != nil {
 		return 0, err
 	}
+	if index, ok := network.byID[node]; ok {
+		return taxiNodeMountEntry(network.nodes[index], teamAlliance, allowedAltTeam), nil
+	}
+	return 0, nil
+}
+
+// taxiNodeMountEntry is the mount-entry selection shared by the DBC and
+// overlay node records: MountCreatureID[1] for Alliance, [0] otherwise,
+// falling back to the other team's entry only when allowedAltTeam is set.
+func taxiNodeMountEntry(node TaxiNode, teamAlliance, allowedAltTeam bool) uint32 {
 	teamIndex := 0
 	if teamAlliance {
 		teamIndex = 1
 	}
-	if index, ok := network.byID[node]; ok {
-		if entry := network.nodes[index].MountCreatureID[teamIndex]; entry != 0 {
-			return entry, nil
-		}
-		if allowedAltTeam {
-			return network.nodes[index].MountCreatureID[1-teamIndex], nil
-		}
+	if entry := node.MountCreatureID[teamIndex]; entry != 0 {
+		return entry
 	}
-	return 0, nil
+	if allowedAltTeam {
+		return node.MountCreatureID[1-teamIndex]
+	}
+	return 0
 }
 
 func (s *Store) OldContinentsTaxiNodes() ([]uint32, error) {
@@ -441,4 +474,143 @@ func (s *Store) TaxiMask() ([14]uint32, error) {
 		return [14]uint32{}, err
 	}
 	return network.mask, nil
+}
+
+// taxiOverlay is the runtime-mutable half of the C++ taxi DBC stores:
+// GlobalMethods::AddTaxiPath writes sTaxiNodesStore, sTaxiPathNodesByPath,
+// sTaxiPathSetBySource and sTaxiPathStore directly, and every lookup above
+// consults the overlay first, so a registered path shadows the DBC row of
+// the same id exactly like SetEntry does. Entries are only ever added:
+// re-registering a path id allocates fresh node ids and leaves the old
+// nodes and links in place, matching the C++ store behavior. The overlay
+// deliberately never touches the taxi mask: C++ builds sTaxiNodesMask once
+// at load, so script-added nodes are not mask-known either.
+type taxiOverlayPath struct {
+	from, to uint32
+	price    uint32
+	points   []TaxiSplinePoint
+}
+
+type taxiOverlayLink struct {
+	pathID uint32
+	price  uint32
+}
+
+type taxiOverlay struct {
+	nodes     map[uint32]TaxiNode
+	paths     map[uint32]taxiOverlayPath
+	links     map[[2]uint32]taxiOverlayLink
+	nextNode  uint32
+	pathCount uint32
+	sized     bool
+}
+
+// TaxiPathWaypoint is one GlobalMethods::AddTaxiPath waypoint: the map id
+// and position are mandatory, Flags and Delay optional (both default 0).
+type TaxiPathWaypoint struct {
+	MapID   uint32
+	X, Y, Z float32
+	Flags   uint32
+	Delay   uint32
+}
+
+// RegisterTaxiPath is GlobalMethods::AddTaxiPath (GlobalMethods.h, Trinity
+// branch): it registers waypoints as a new taxi path and returns the used
+// path id. Fewer than two waypoints registers nothing and returns the
+// requested id (0 for the default arm), matching the C++ nodes.size() < 2
+// early return, which returns the pathId argument untouched. A zero pathId
+// allocates sTaxiPathNodesByPath.size() — the TaxiPath.dbc row count,
+// grown by prior registrations — and node ids start at the C++ static
+// 500, advancing once per waypoint across all registrations. MountCreatureID
+// follows the C++ assignment: [0] is the Horde mount, [1] the Alliance one.
+func (s *Store) RegisterTaxiPath(pathID uint32, waypoints []TaxiPathWaypoint, mountA, mountH, price uint32) uint32 {
+	if len(waypoints) < 2 {
+		return pathID
+	}
+	s.taxiOverlayMu.Lock()
+	defer s.taxiOverlayMu.Unlock()
+	if s.taxiOverlay == nil {
+		s.taxiOverlay = &taxiOverlay{
+			nodes:    make(map[uint32]TaxiNode),
+			paths:    make(map[uint32]taxiOverlayPath),
+			links:    make(map[[2]uint32]taxiOverlayLink),
+			nextNode: 500,
+		}
+	}
+	overlay := s.taxiOverlay
+	if !overlay.sized {
+		overlay.pathCount = s.taxiPathRowCount()
+		overlay.sized = true
+	}
+	if pathID == 0 {
+		pathID = overlay.pathCount
+	}
+	if pathID+1 > overlay.pathCount {
+		overlay.pathCount = pathID + 1
+	}
+	startNode := overlay.nextNode
+	points := make([]TaxiSplinePoint, len(waypoints))
+	for i, waypoint := range waypoints {
+		nodeID := overlay.nextNode
+		overlay.nextNode++
+		overlay.nodes[nodeID] = TaxiNode{
+			ID:              nodeID,
+			ContinentID:     int32(waypoint.MapID),
+			X:               waypoint.X,
+			Y:               waypoint.Y,
+			Z:               waypoint.Z,
+			MountCreatureID: [4]uint32{mountH, mountA},
+		}
+		points[i] = TaxiSplinePoint{
+			MapID: int32(waypoint.MapID),
+			X:     waypoint.X,
+			Y:     waypoint.Y,
+			Z:     waypoint.Z,
+			Flags: waypoint.Flags,
+			Delay: waypoint.Delay,
+		}
+	}
+	endNode := overlay.nextNode - 1
+	overlay.paths[pathID] = taxiOverlayPath{from: startNode, to: endNode, price: price, points: points}
+	overlay.links[[2]uint32{startNode, endNode}] = taxiOverlayLink{pathID: pathID, price: price}
+	return pathID
+}
+
+// taxiPathRowCount is sTaxiPathStore.GetNumRows for the default pathId arm.
+func (s *Store) taxiPathRowCount() uint32 {
+	pathsFile, err := s.File("TaxiPath")
+	if err != nil {
+		return 0
+	}
+	return uint32(pathsFile.Records())
+}
+
+func (s *Store) taxiOverlayNode(id uint32) (TaxiNode, bool) {
+	s.taxiOverlayMu.RLock()
+	defer s.taxiOverlayMu.RUnlock()
+	if s.taxiOverlay == nil {
+		return TaxiNode{}, false
+	}
+	node, ok := s.taxiOverlay.nodes[id]
+	return node, ok
+}
+
+func (s *Store) taxiOverlayPath(id uint32) (taxiOverlayPath, bool) {
+	s.taxiOverlayMu.RLock()
+	defer s.taxiOverlayMu.RUnlock()
+	if s.taxiOverlay == nil {
+		return taxiOverlayPath{}, false
+	}
+	path, ok := s.taxiOverlay.paths[id]
+	return path, ok
+}
+
+func (s *Store) taxiOverlayLink(from, to uint32) (taxiOverlayLink, bool) {
+	s.taxiOverlayMu.RLock()
+	defer s.taxiOverlayMu.RUnlock()
+	if s.taxiOverlay == nil {
+		return taxiOverlayLink{}, false
+	}
+	link, ok := s.taxiOverlay.links[[2]uint32{from, to}]
+	return link, ok
 }

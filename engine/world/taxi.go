@@ -1367,6 +1367,98 @@ func (s *session) handleEffectSendTaxi(ctx context.Context, eff wotlk.SpellEffec
 	reply(taxiErrOK)
 }
 
+// taxiReply sends one SMSG_ACTIVATETAXIREPLY, the Go twin of
+// WorldSession::SendActivateTaxiReply used by ActivateTaxiPathTo's gated arms.
+func (s *session) taxiReply(code uint32) {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(code)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ACTIVATETAXIREPLY), packet.Bytes(), true)
+}
+
+// startTaxiByPathID is Player::ActivateTaxiPathTo(taxi_path_id)
+// (Player.cpp:21689-21701) behind Player:StartTaxi: the TaxiPath row's
+// endpoints fly through the vector arm with npc == nullptr, so there is no
+// flightmaster interact gate and no taximask gate — only the vector arm's
+// own gates. An unknown path id returns silently (the LookupEntry arm);
+// a missing hop clears the destinations and returns silently (the !path
+// arm); the remaining gated arms answer with their reply codes.
+func (s *session) startTaxiByPathID(ctx context.Context, pathID uint32) {
+	if s == nil || !s.playerLoaded || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	from, to, _, found, err := s.server.Data.TaxiPathEntry(pathID)
+	if err != nil || !found {
+		return
+	}
+	// Player.cpp:21517-21521: the busy gate runs before the npc check.
+	if !s.logoutAt.IsZero() || s.isInCombat() || s.player.UnitFlags&unitFlagStunned != 0 || s.rooted {
+		s.taxiReply(taxiErrPlayerBusy)
+		return
+	}
+	if s.player.UnitFlags&unitFlagRemoveClientControl != 0 {
+		return
+	}
+	// Player.cpp:21547-21558 (npc == nullptr arm): mounted auras come off
+	// instead of answering ERR_TAXIPLAYERALREADYMOUNTED, a disallowed form
+	// loses its shapeshift auras instead of answering
+	// ERR_TAXIPLAYERSHAPESHIFTED, and the generic, channeled and
+	// autorepeat casts are interrupted (spellid == 0, so no cast matches
+	// the skip arms). Go tracks only the raw form id, so any active form
+	// takes the shapeshift-removal arm, the same approximation the packet
+	// handler's form gate uses.
+	s.removeAurasByType(spellAuraMounted)
+	if s.player.ShapeshiftForm != 0 {
+		s.removeAurasByType(spellAuraModShapeshift)
+	}
+	s.interruptCurrentCast()
+	s.interruptCurrentChannel()
+	s.cancelAutoRepeatOnInterrupt()
+	// Player.cpp:21562-21567: the source node must exist.
+	if !s.server.Data.TaxiNodeExists(from) {
+		s.taxiReply(taxiErrNoSuchPath)
+		return
+	}
+	// Player.cpp:21576-21589: the pre-flight teardown — CombatStop is
+	// vacuous here (the busy gate already rejected combat) and
+	// StopCastingCharm/StopCastingBindSight have no Go cast state to stop,
+	// matching the packet handler's reading of the same lines.
+	s.exitVehicle(ctx)
+	s.cancelTrade(true)
+	s.player.TaxiPath = ""
+	// Player.cpp:21596-21608: the single hop resolves through GetTaxiPath;
+	// a missing hop clears the destinations and returns silently.
+	resolvedPath, hopPrice, hopFound, hopErr := s.server.Data.TaxiPathLinks(from, to)
+	if hopErr != nil || !hopFound || resolvedPath == 0 {
+		return
+	}
+	// Player.cpp:21610-21616: the wide mount lookup (npc == nullptr)
+	// answers ERR_TAXIUNSPECIFIEDSERVERERROR on no model — the spellid == 0
+	// call has no spell-case 0-model allowance.
+	mount := s.taxiMountDisplayID(ctx, from, true)
+	if mount == 0 {
+		s.taxiReply(taxiErrUnspecified)
+		return
+	}
+	// Player.cpp:21644-21651: the npc == nullptr arm records no
+	// flight-master faction and applies no reputation discount; the money
+	// gate runs against the single hop's price.
+	if uint64(s.player.Money) < uint64(hopPrice) {
+		s.taxiReply(taxiErrNotEnoughMoney)
+		return
+	}
+	// Player.cpp:21683: SendDoFlight merges the hop into one flight and
+	// the first (only) leg is charged at departure. Go has no
+	// CONFIG_INSTANT_TAXI twin, so the instant-teleport arm is not modeled.
+	previousTaxiPath := s.player.TaxiPath
+	s.player.TaxiPath = formatTaxiPath(0, []uint32{from, to})
+	if !s.beginTaxiFlight(ctx, []uint32{from, to}, []uint32{resolvedPath}, []uint64{uint64(hopPrice)}, 1.0, 0, mount, 0, true) {
+		s.player.TaxiPath = previousTaxiPath
+		return
+	}
+	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
+	s.taxiReply(taxiErrOK)
+}
+
 // handleEffectDiscoverTaxi processes SPELL_EFFECT_DISCOVER_TAXI (154).
 // Mirrors TrinityCore Spell::EffectDiscoverTaxi (SpellEffects.cpp:5390-5398):
 // when the node id from the effect's MiscValue names a known

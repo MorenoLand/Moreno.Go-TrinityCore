@@ -382,6 +382,26 @@ type SendMailArgs struct {
 	Items       []MailItemPair
 }
 
+// TaxiWaypoint is one GlobalMethods::AddTaxiPath waypoint: MapID, X, Y, Z
+// mandatory, Flags and Delay optional (both default 0).
+type TaxiWaypoint struct {
+	MapID   uint32
+	X, Y, Z float32
+	Flags   uint32
+	Delay   uint32
+}
+
+// TaxiPathArgs is the GlobalMethods::AddTaxiPath argument shape:
+// (waypoints, mountA, mountH, price = 0, pathId = 0). The provider
+// returns the used path id.
+type TaxiPathArgs struct {
+	Waypoints []TaxiWaypoint
+	MountA    uint32
+	MountH    uint32
+	Price     uint32
+	PathID    uint32
+}
+
 type Config struct {
 	Enabled                 bool
 	ScriptPath              string
@@ -395,6 +415,7 @@ type Config struct {
 	WorldMessageProvider    func(string)
 	AreaNameProvider        func(id uint32) (string, bool)
 	SpawnProvider           func(SpawnArgs) *Object
+	TaxiPathProvider        func(TaxiPathArgs) uint32
 	SendMailProvider        func(SendMailArgs) error
 	VendorAddProvider       func(entry, item uint32, maxCount int32, incrTime, extCost uint32)
 	VendorRemoveProvider    func(entry, item uint32) error
@@ -1052,6 +1073,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetActiveGameEvents", r.getActiveGameEvents)
 	r.state.Register("GetMapById", r.getMapById)
 	r.state.Register("PerformIngameSpawn", r.performIngameSpawn)
+	r.state.Register("AddTaxiPath", r.addTaxiPath)
 	r.state.Register("SendMail", r.sendMail)
 	r.state.Register("AddVendorItem", r.addVendorItem)
 	r.state.Register("VendorRemoveItem", r.vendorRemoveItem)
@@ -1284,6 +1306,83 @@ func (r *Runtime) performIngameSpawn(state *lua.State) int {
 	return 1
 }
 
+// addTaxiPath is GlobalMethods::AddTaxiPath (GlobalMethods.h, Trinity
+// branch): (waypoints, mountA, mountH, price = 0, pathId = 0). Each
+// waypoint is {map, x, y, z[, actionFlag, delay]} in array form, which is
+// the order the C++ lua_next collection reads them in. A waypoint with
+// no values is skipped like the C++ start == end arm; one with one to
+// three values raises like the C++ luaL_argerror arm; without a provider
+// the call reads nil like the PerformIngameSpawn no-provider arm.
+func (r *Runtime) addTaxiPath(state *lua.State) int {
+	if !state.IsTable(1) {
+		lua.ArgumentError(state, 1, "table expected")
+	}
+	args := TaxiPathArgs{
+		MountA: uint32(lua.CheckUnsigned(state, 2)),
+		MountH: uint32(lua.CheckUnsigned(state, 3)),
+	}
+	if state.Top() >= 4 && !state.IsNil(4) {
+		args.Price = uint32(lua.CheckUnsigned(state, 4))
+	}
+	if state.Top() >= 5 && !state.IsNil(5) {
+		args.PathID = uint32(lua.CheckUnsigned(state, 5))
+	}
+	count := state.RawLength(1)
+	for i := 1; i <= count; i++ {
+		state.RawGetInt(1, i)
+		if state.IsNil(-1) {
+			state.Pop(1)
+			continue
+		}
+		if !state.IsTable(-1) {
+			lua.ArgumentError(state, 1, "table expected")
+		}
+		waypointLen := state.RawLength(-1)
+		if waypointLen < 6 {
+			waypointLen = 6
+		}
+		var waypoint TaxiWaypoint
+		values := 0
+		for field := 1; field <= waypointLen; field++ {
+			state.RawGetInt(-1, field)
+			if state.IsNil(-1) {
+				state.Pop(1)
+				continue
+			}
+			values++
+			switch field {
+			case 1:
+				waypoint.MapID = uint32(lua.CheckUnsigned(state, -1))
+			case 2:
+				waypoint.X = float32(lua.CheckNumber(state, -1))
+			case 3:
+				waypoint.Y = float32(lua.CheckNumber(state, -1))
+			case 4:
+				waypoint.Z = float32(lua.CheckNumber(state, -1))
+			case 5:
+				waypoint.Flags = uint32(lua.CheckUnsigned(state, -1))
+			case 6:
+				waypoint.Delay = uint32(lua.CheckUnsigned(state, -1))
+			}
+			state.Pop(1)
+		}
+		state.Pop(1)
+		if values == 0 {
+			continue
+		}
+		if values < 4 {
+			lua.ArgumentError(state, 1, "all waypoints do not have mandatory arguments")
+		}
+		args.Waypoints = append(args.Waypoints, waypoint)
+	}
+	if r.config.TaxiPathProvider == nil {
+		state.PushNil()
+		return 1
+	}
+	state.PushUnsigned(uint(r.config.TaxiPathProvider(args)))
+	return 1
+}
+
 // sendMail is GlobalMethods::SendMail (GlobalMethods.h): (subject, text,
 // receiverGUIDLow, senderGUIDLow = 0, stationary = MAIL_STATIONERY_DEFAULT,
 // delay = 0, money = 0, cod = 0, entry, amount, ...). The attachment
@@ -1491,6 +1590,12 @@ func (r *Runtime) SetWorldMessageProvider(provider func(string)) {
 func (r *Runtime) SetAreaNameProvider(provider func(id uint32) (string, bool)) {
 	r.mu.Lock()
 	r.config.AreaNameProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetTaxiPathProvider(provider func(TaxiPathArgs) uint32) {
+	r.mu.Lock()
+	r.config.TaxiPathProvider = provider
 	r.mu.Unlock()
 }
 

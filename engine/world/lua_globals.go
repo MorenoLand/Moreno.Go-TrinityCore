@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -66,6 +67,28 @@ func (s *Server) luaAreaName(id uint32) (string, bool) {
 		return "", false
 	}
 	return area.Name, true
+}
+
+// luaAddTaxiPath is the TaxiPathProvider behind the Eluna AddTaxiPath
+// global: it registers the waypoints in the DBC store's taxi overlay and
+// returns the used path id. Without a data store there is nowhere to
+// register, so the call reads 0.
+func (s *Server) luaAddTaxiPath(args scripting.TaxiPathArgs) uint32 {
+	if s == nil || s.Data == nil {
+		return 0
+	}
+	waypoints := make([]wotlk.TaxiPathWaypoint, len(args.Waypoints))
+	for i, waypoint := range args.Waypoints {
+		waypoints[i] = wotlk.TaxiPathWaypoint{
+			MapID: waypoint.MapID,
+			X:     waypoint.X,
+			Y:     waypoint.Y,
+			Z:     waypoint.Z,
+			Flags: waypoint.Flags,
+			Delay: waypoint.Delay,
+		}
+	}
+	return s.Data.RegisterTaxiPath(args.PathID, waypoints, args.MountA, args.MountH, args.Price)
 }
 
 // luaSpawnMask is the SaveToDB spawnMask for a PerformIngameSpawn saved
