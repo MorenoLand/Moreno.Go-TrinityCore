@@ -4044,6 +4044,14 @@ func (s *session) despawnFullyLootedChestOrGoober(goState *dynamicGameObjectStat
 	if wdb := srv.WorldStore.DB; wdb != nil {
 		_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(spawntimesecs, 0) FROM gameobject WHERE guid = ? AND id = ? LIMIT 1", lowGUID, goState.Entry).Scan(&respawnDelay)
 	}
+	// A script-set respawn delay (GameObject:SetRespawnTime,
+	// GameObject.cpp:1330-1336) overrides the DB spawntimesecs: in C++
+	// the fully-looted respawn reads m_respawnDelayTime, which
+	// SetRespawnTime rewrote. An explicit 0 suppresses the timer, the
+	// same <= 0 arm below.
+	if goState.RespawnDelaySet {
+		respawnDelay = int64(goState.RespawnDelaySec)
+	}
 	if respawnDelay <= 0 {
 		return
 	}

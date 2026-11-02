@@ -1439,6 +1439,7 @@ func (srv *Server) loadLuaGameObject(ctx context.Context, low, entry uint32) (lu
 }
 
 func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Object {
+	var goObj *scripting.Object
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetEntry"] = luaNoArgs(func() any { return state.Entry })
@@ -1458,7 +1459,18 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{state.GoState}, nil
 	}
-	methods["GetLootState"] = luaNoArgs(func() any { return state.LootState })
+	// GetLootState is LuaGameObject::GetLootState (GameObjectMethods.h):
+	// GameObject::getLootState. A live record with a script-set loot
+	// state wins (SetLootState below); otherwise the spawn snapshot
+	// stands (GO_READY, the in-world value — C++ Create stamps
+	// GO_NOT_READY but the Update arm flips it to READY on spawn,
+	// GameObject.cpp:473/532-545).
+	methods["GetLootState"] = func(_ context.Context, _ []any) ([]any, error) {
+		if dyn := srv.gameObjectState(state.Map, state.InstanceID, state.GUID); dyn != nil && dyn.LootStateSet {
+			return []any{uint32(dyn.LootState)}, nil
+		}
+		return []any{state.LootState}, nil
+	}
 	// GetGoType is GameObject::GetGoType (GameObject.h:160): the
 	// template type (GAMEOBJECT_BYTES_1 byte 1), 0-50 per the
 	// GameObjectType constants (gameobjects.go). DB-loaded GOs read
@@ -1494,7 +1506,30 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	methods["AddUse"] = luaNoArgs(func() any { srv.addGameObjectUse(state.GUID); return nil })
 	methods["GetUseCount"] = luaNoArgs(func() any { return srv.gameObjectUseCount(state.GUID) })
 	methods["IsSpawned"] = luaNoArgs(func() any { return !srv.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) })
-	methods["IsActive"] = luaNoArgs(func() any { return state.GoState == 0 })
+	// IsActive is LuaGameObject::IsActive (GameObjectMethods.h):
+	// WorldObject::isActiveObject (Object.h:501) reads m_isActive,
+	// NOT the GO state — the old GoState==0 read mistook
+	// GO_STATE_ACTIVE (an open door) for active-object status. C++
+	// sets m_isActive true for GOs only in Battlefield::AddGameObject
+	// (Battlefield.cpp:827); Go has no battlefield GO activation, so
+	// the banked flag (default false) is the whole model.
+	methods["IsActive"] = luaNoArgs(func() any {
+		if dyn := srv.gameObjectState(state.Map, state.InstanceID, state.GUID); dyn != nil {
+			return dyn.Active
+		}
+		return false
+	})
+	// GetLootRecipient/GetLootRecipientGroup are LuaGameObject's pair
+	// (GameObjectMethods.h): GameObject::GetLootRecipient reads
+	// m_lootRecipient via FindConnectedPlayer, the group twin reads
+	// m_lootRecipientGroup. Both fields are written only by
+	// GameObject::SetLootRecipient (GameObject.cpp:2489), which has
+	// zero call sites in this fork (every SetLootRecipient caller
+	// targets a creature), so both read nil exactly — no Go store is
+	// missing, and the active-loot Viewers map is not a recipient
+	// (group-loot viewers are not the C++ recipient).
+	methods["GetLootRecipient"] = luaNoArgs(func() any { return nil })
+	methods["GetLootRecipientGroup"] = luaNoArgs(func() any { return nil })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
 	methods["GetObjectType"] = luaNoArgs(func() any { return "GameObject" })
@@ -1821,6 +1856,15 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		srv.setGameObjectStateInInstance(state.Map, state.InstanceID, state.GUID, uint8(value))
 		return nil, nil
 	}
+	// SetLootState is LuaGameObject::SetLootState (GameObjectMethods.h):
+	// GameObject::SetLootState(state) — the single-arg Eluna arm (the
+	// (state, unit) overload is internal; m_lootStateUnitGUID has no
+	// Eluna reader). The write lands on the live record, materializing
+	// a static spawn exactly like SetGoState, so a later object for the
+	// same GO reads it back; the closure copy keeps the pre-materialize
+	// read-back for objects without a live record. DELTA: the Eluna
+	// OnLootStateChanged fire inside C++ SetLootState has no Go binding
+	// (no event-11 hook exists in scripting/), so handlers never run.
 	methods["SetLootState"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("loot state is required")
@@ -1833,6 +1877,117 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 			return nil, err
 		}
 		state.LootState = value
+		srv.setGameObjectLootState(state.Map, state.InstanceID, state.GUID, uint8(value))
+		return nil, nil
+	}
+	// SetRespawnTime is LuaGameObject::SetRespawnTime
+	// (GameObjectMethods.h): GameObject::SetRespawnTime(int32)
+	// (GameObject.cpp:1330-1336) — respawn > 0 stores now+respawn as
+	// m_respawnTime and respawn as m_respawnDelayTime, respawn <= 0
+	// zeroes both. Go stores only the delay leg: the static-GO map
+	// respawn tick that consumes m_respawnTime has no Go equivalent
+	// (hidden GOs come back only via script/BG unhides and the
+	// loot-release timer below), so the portal re-spawn arm
+	// (obsidian_sanctum.cpp:309-312) stays parked. CONSUMERS of the
+	// stored delay: the loot-release respawn timer (loot.go) and
+	// SaveToDB's spawntimesecs, both of which read m_respawnDelayTime
+	// in C++. The !spawnedByDefault visibility arm is a no-op for a
+	// visible runtime GO, so it is not mirrored.
+	methods["SetRespawnTime"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("respawn is required")
+		}
+		raw, err := luaInt64Arg(args, 0)
+		if err != nil || raw > math.MaxInt32 || raw < math.MinInt32 {
+			if err == nil {
+				err = fmt.Errorf("respawn must be int32")
+			}
+			return nil, err
+		}
+		delay := int32(0)
+		if raw > 0 {
+			delay = int32(raw)
+		}
+		srv.setGameObjectRespawnDelay(state.Map, state.InstanceID, state.GUID, delay)
+		return nil, nil
+	}
+	// SaveToDB is LuaGameObject::SaveToDB (GameObjectMethods.h):
+	// GameObject::SaveToDB (GameObject.cpp:983-1070) — DELETE + INSERT
+	// of the gameobject row for the spawn id (generated when 0), with
+	// position, state, anim progress, phase, spawn mask and
+	// spawntimesecs = spawnedByDefault ? respawnDelay : -respawnDelay.
+	// The Go twin: a row for this guid+entry is replaced in place
+	// (same guid, current dyn-or-snapshot position/state/phase,
+	// rotations from the live record else the row, spawntimesecs from
+	// the SetRespawnTime delay when set else the row); a runtime GO
+	// with no row takes the .gobject-add auto-increment path and the
+	// live record re-keys to the new spawn id (plus the closure and
+	// Fields GUIDs, so the same object keeps resolving). No world DB
+	// means no-op, the Item SaveToDB precedent.
+	methods["SaveToDB"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if srv.WorldStore == nil || srv.WorldStore.DB == nil {
+			return nil, nil
+		}
+		db := srv.WorldStore.DB
+		dyn := srv.gameObjectState(state.Map, state.InstanceID, state.GUID)
+		x, y, z, o := state.X, state.Y, state.Z, state.Orientation
+		goState := state.GoState
+		phase := state.PhaseMask
+		rot := [4]float32{0, 0, 0, 1}
+		anim := 255
+		spawnMask := 1
+		spawnSecs := int64(0)
+		rowExists := false
+		if dyn != nil {
+			x, y, z, o = dyn.X, dyn.Y, dyn.Z, dyn.Orientation
+			goState = uint32(dyn.State)
+			phase = dyn.PhaseMask
+			rot = dyn.ParentRotation
+			anim = int(dyn.AnimProgress)
+		}
+		var rowMask, rowSecs, rowAnim int64
+		var rowRot0, rowRot1, rowRot2, rowRot3 float64
+		if err := db.QueryRowContext(ctx, `SELECT spawnMask, spawntimesecs, animprogress, rotation0, rotation1, rotation2, rotation3 FROM gameobject WHERE guid = ? AND id = ? LIMIT 1`, state.LowGUID, state.Entry).Scan(&rowMask, &rowSecs, &rowAnim, &rowRot0, &rowRot1, &rowRot2, &rowRot3); err == nil {
+			rowExists = true
+			spawnMask, spawnSecs = int(rowMask), rowSecs
+			if dyn == nil {
+				anim = int(rowAnim)
+				rot = [4]float32{float32(rowRot0), float32(rowRot1), float32(rowRot2), float32(rowRot3)}
+			}
+		}
+		if dyn != nil && dyn.RespawnDelaySet {
+			if dyn.IsRuntimeSpawn {
+				spawnSecs = -int64(dyn.RespawnDelaySec)
+			} else {
+				spawnSecs = int64(dyn.RespawnDelaySec)
+			}
+		}
+		if rowExists {
+			if _, err := db.ExecContext(ctx, `DELETE FROM gameobject WHERE guid = ?`, state.LowGUID); err != nil {
+				return nil, err
+			}
+			if _, err := db.ExecContext(ctx, `INSERT INTO gameobject (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, rotation0, rotation1, rotation2, rotation3, spawntimesecs, animprogress, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				state.LowGUID, state.Entry, state.Map, spawnMask, phase, x, y, z, o, rot[0], rot[1], rot[2], rot[3], spawnSecs, anim, goState); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}
+		res, err := db.ExecContext(ctx, `INSERT INTO gameobject (id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, rotation0, rotation1, rotation2, rotation3, spawntimesecs, animprogress, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			state.Entry, state.Map, spawnMask, phase, x, y, z, o, rot[0], rot[1], rot[2], rot[3], spawnSecs, anim, goState)
+		if err != nil {
+			return nil, err
+		}
+		if newLow, err := res.LastInsertId(); err == nil && newLow > 0 {
+			newGUID := gameObjectGUID(uint32(newLow), state.Entry)
+			if dyn != nil {
+				srv.rekeyDynamicGameObject(state.Map, state.InstanceID, state.GUID, newGUID)
+			}
+			state.GUID = newGUID
+			state.LowGUID = uint32(newLow)
+			if goObj != nil {
+				goObj.Fields["GUID"] = newGUID
+			}
+		}
 		return nil, nil
 	}
 	// UseDoorOrButton is LuaGameObject::UseDoorOrButton
@@ -1953,7 +2108,8 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	// Indexed values (ObjectMethods.h); see goIndexedValueBackend in
 	// lua_values.go for the dyn/static read model and write rules.
 	registerIndexedValueMethods(methods, goIndexedValueBackend(srv, state))
-	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
+	goObj = &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
+	return goObj
 }
 
 func (srv *Server) objectsMuLockGameObject(mapID, instanceID uint32, guid uint64) {

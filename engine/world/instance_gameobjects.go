@@ -120,6 +120,85 @@ func (s *Server) setGameObjectStateInInstance(mapID, instanceID uint32, guid uin
 	s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(state))
 }
 
+// setGameObjectLootState is the SetLootState write half (lua_objects.go):
+// the live record wins, materializing a static spawn exactly like
+// setGameObjectStateInInstance; without a live record the caller's
+// closure copy is the only store and this is a no-op.
+func (s *Server) setGameObjectLootState(mapID, instanceID uint32, guid uint64, value uint8) {
+	if s == nil {
+		return
+	}
+	if s.gameObjectState(mapID, instanceID, guid) == nil && s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	if object := s.gameObjectStateLocked(mapID, instanceID, guid); object != nil {
+		object.LootState = value
+		object.LootStateSet = true
+	}
+	s.objectsMu.Unlock()
+}
+
+// setGameObjectRespawnDelay is the SetRespawnTime write half
+// (lua_objects.go): same materialization rule as setGameObjectLootState.
+func (s *Server) setGameObjectRespawnDelay(mapID, instanceID uint32, guid uint64, delay int32) {
+	if s == nil {
+		return
+	}
+	if s.gameObjectState(mapID, instanceID, guid) == nil && s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	if object := s.gameObjectStateLocked(mapID, instanceID, guid); object != nil {
+		object.RespawnDelaySec = delay
+		object.RespawnDelaySet = true
+	}
+	s.objectsMu.Unlock()
+}
+
+// rekeyDynamicGameObject moves a live record to a new GUID (SaveToDB's
+// spawn-id adoption for a runtime GO, GameObject.cpp:1004-1007): the
+// caller holds no lock; the record's own GUID fields move with it.
+func (s *Server) rekeyDynamicGameObject(mapID, instanceID uint32, oldGUID, newGUID uint64) {
+	if s == nil || oldGUID == 0 || newGUID == 0 || oldGUID == newGUID {
+		return
+	}
+	s.objectsMu.Lock()
+	defer s.objectsMu.Unlock()
+	var state *dynamicGameObjectState
+	if instanceID == 0 {
+		state = s.dynamicGameObjects[oldGUID]
+		delete(s.dynamicGameObjects, oldGUID)
+	} else {
+		key := instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}
+		state = s.instanceGameObjects[key][oldGUID]
+		delete(s.instanceGameObjects[key], oldGUID)
+		if len(s.instanceGameObjects[key]) == 0 {
+			delete(s.instanceGameObjects, key)
+		}
+	}
+	if state == nil {
+		return
+	}
+	state.GUID = newGUID
+	state.LowGUID = uint32(newGUID & 0x00FFFFFF)
+	if instanceID == 0 {
+		if s.dynamicGameObjects == nil {
+			s.dynamicGameObjects = make(map[uint64]*dynamicGameObjectState)
+		}
+		s.dynamicGameObjects[newGUID] = state
+	} else {
+		key := instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}
+		if s.instanceGameObjects == nil {
+			s.instanceGameObjects = make(map[instanceAdmissionKey]map[uint64]*dynamicGameObjectState)
+		}
+		if s.instanceGameObjects[key] == nil {
+			s.instanceGameObjects[key] = make(map[uint64]*dynamicGameObjectState)
+		}
+		s.instanceGameObjects[key][newGUID] = state
+	}
+}
+
 // materializeStaticGameObjectState builds a live dynamic record for a
 // static DB spawn, mirroring the grid-stream spawn-row query
 // (gameobjects.go: the gameobject + template + template_addon +
