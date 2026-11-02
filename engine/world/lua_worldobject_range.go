@@ -323,8 +323,18 @@ func (srv *Server) luaRangeGameObjects(ctx context.Context, origin luaRangeOrigi
 	}
 	srv.objectsMu.RLock()
 	var dyn []luaRangeCandidate
+	// The DB leg above already emitted every static spawn in range;
+	// a materialized static GO (live record from a SetGoState or a
+	// getOrLoad path) must not appear a second time via the dyn leg.
+	seen := make(map[uint64]struct{}, len(out))
+	for _, cand := range out {
+		seen[cand.guid] = struct{}{}
+	}
 	collectDyn := func(d *dynamicGameObjectState) {
 		if d == nil || d.Map != origin.mapID || d.InstanceID != origin.instance {
+			return
+		}
+		if _, dup := seen[d.GUID]; dup {
 			return
 		}
 		if d.X < origin.x-rangeVal || d.X > origin.x+rangeVal || d.Y < origin.y-rangeVal || d.Y > origin.y+rangeVal {

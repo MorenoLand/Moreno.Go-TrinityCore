@@ -79,19 +79,110 @@ func (s *Server) setGameObjectStateInInstance(mapID, instanceID uint32, guid uin
 		return
 	}
 	found := false
+	var bytes1 uint32
 	s.objectsMu.Lock()
 	if object := s.gameObjectStateLocked(mapID, instanceID, guid); object != nil {
 		object.State = state
+		bytes1 = uint32(object.State) | uint32(object.Type)<<8 | uint32(object.ArtKit)<<16 | uint32(object.AnimProgress)<<24
 		found = true
 	}
 	s.objectsMu.Unlock()
+	if !found {
+		// A static DB GO has no live state until something materializes
+		// one (getOrLoadGameObjectState does it for use/gossip/quest/
+		// spell paths); a bare SetGoState used to be a silent no-op
+		// for exactly those GOs, so scripted doors never moved and
+		// GetGoState kept reading the spawn snapshot. Materialize
+		// from the spawn row, then apply the state to the stored
+		// record (re-resolved under the lock, so a racing
+		// materialization wins over this call's snapshot).
+		if s.materializeStaticGameObjectState(mapID, instanceID, guid) != nil {
+			s.objectsMu.Lock()
+			if object := s.gameObjectStateLocked(mapID, instanceID, guid); object != nil {
+				object.State = state
+				bytes1 = uint32(object.State) | uint32(object.Type)<<8 | uint32(object.ArtKit)<<16 | uint32(object.AnimProgress)<<24
+				found = true
+			}
+			s.objectsMu.Unlock()
+		}
+	}
+	if !found {
+		return
+	}
+	// GameObject::SetGoState (GameObject.cpp:2407) marks
+	// GAMEOBJECT_BYTES_1 dirty; Go has no update tick, so the values
+	// update is the client-visible half of the state change.
+	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectBytes1: bytes1})
 	// Eluna GAMEOBJECT_EVENT_ON_GO_STATE_CHANGED (event 10), fired from
 	// GameObject::SetGoState (GameObject.cpp:2407): (event, go, state).
 	// The hook runs after objectsMu is released — Lua handlers must never
 	// run under the object lock.
-	if found {
-		s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(state))
+	s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnGOStateChange, uint32(state))
+}
+
+// materializeStaticGameObjectState builds a live dynamic record for a
+// static DB spawn, mirroring the grid-stream spawn-row query
+// (gameobjects.go: the gameobject + template + template_addon +
+// gameobject_addon join) so the record is a faithful copy of the spawn:
+// position, spawn state (m_prevGoState), anim progress, type, display,
+// size, addon flags/faction/artkit and parent rotation, phase. The
+// record carries no owner/spell link and IsRuntimeSpawn stays false, so
+// the summoned-GO legs (despawn-on-loot-release, goober auto-close
+// delete, RemoveFromWorld owner gate) all treat it as a static GO, and
+// the grid stream keeps sourcing flags/display from the DB row with
+// only State overridden. Unknown GUIDs and map mismatches return nil
+// and preserve the old silent no-op. No lock is held across the DB
+// query; a racing materialization is benign (identical snapshot) and
+// the caller re-resolves under the lock.
+func (s *Server) materializeStaticGameObjectState(mapID, instanceID uint32, guid uint64) *dynamicGameObjectState {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || guid == 0 {
+		return nil
 	}
+	low := uint32(guid & 0xFFFFFF)
+	entry := uint32(guid>>24) & 0xFFFFFF
+	var goX, goY, goZ, goO, size, pr0, pr1, pr2, pr3 float64
+	var goState, animProgress, goType, displayID, flags, faction, artKit, data1, phaseMask int64
+	var iconName string
+	err := s.WorldStore.DB.QueryRowContext(context.Background(), `SELECT g.position_x, g.position_y, g.position_z, g.orientation, g.state, g.animprogress,
+		t.type, t.displayId, t.size, COALESCE(t.data1, 0), COALESCE(t.IconName, ''), COALESCE(g.phaseMask, 0),
+		COALESCE(ta.flags, 0), COALESCE(ta.faction, 0), COALESCE(ta.artkit0, 0),
+		COALESCE(ga.parent_rotation0, 0), COALESCE(ga.parent_rotation1, 0), COALESCE(ga.parent_rotation2, 0), COALESCE(ga.parent_rotation3, 1)
+		FROM gameobject AS g
+		JOIN gameobject_template AS t ON t.entry = g.id
+		LEFT JOIN gameobject_template_addon AS ta ON ta.entry = g.id
+		LEFT JOIN gameobject_addon AS ga ON ga.guid = g.guid
+		WHERE g.guid = ? AND g.id = ? AND g.map = ? LIMIT 1`, low, entry, mapID).Scan(
+		&goX, &goY, &goZ, &goO, &goState, &animProgress, &goType, &displayID, &size, &data1, &iconName, &phaseMask,
+		&flags, &faction, &artKit, &pr0, &pr1, &pr2, &pr3)
+	if err != nil {
+		return nil
+	}
+	dyn := &dynamicGameObjectState{
+		GUID:           guid,
+		LowGUID:        low,
+		Entry:          entry,
+		Map:            mapID,
+		InstanceID:     instanceID,
+		X:              float32(goX),
+		Y:              float32(goY),
+		Z:              float32(goZ),
+		Orientation:    float32(goO),
+		State:          uint8(goState),
+		SpawnState:     uint8(goState),
+		AnimProgress:   uint8(animProgress),
+		ArtKit:         uint8(artKit),
+		Type:           uint8(goType),
+		DisplayID:      uint32(displayID),
+		Size:           float32(size),
+		IconName:       iconName,
+		Flags:          uint32(flags),
+		Faction:        uint32(faction),
+		PhaseMask:      uint32(phaseMask),
+		Data1:          uint32(data1),
+		ParentRotation: [4]float32{float32(pr0), float32(pr1), float32(pr2), float32(pr3)},
+	}
+	s.storeGameObjectState(dyn)
+	return dyn
 }
 
 // goFlagInUse is GO_FLAG_IN_USE (SharedDefines.h:1637): disables interaction
@@ -122,8 +213,21 @@ func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternat
 	s.objectsMu.Lock()
 	st := s.gameObjectStateLocked(mapID, instanceID, guid)
 	if st == nil {
+		// Same materialization as setGameObjectStateInInstance: a
+		// static door/button has no live state until something
+		// creates one, and C++ UseDoorOrButton works on every door,
+		// not just summoned ones. The auto-close below then runs
+		// off the materialized record like any dynamic GO.
 		s.objectsMu.Unlock()
-		return
+		if s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
+			return
+		}
+		s.objectsMu.Lock()
+		st = s.gameObjectStateLocked(mapID, instanceID, guid)
+		if st == nil {
+			s.objectsMu.Unlock()
+			return
+		}
 	}
 	if st.Flags&goFlagInUse != 0 {
 		s.objectsMu.Unlock()

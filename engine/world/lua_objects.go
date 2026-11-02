@@ -1216,7 +1216,9 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	// value (loadLuaGameObject stamps GO_STATE_READY); a live dynamic
 	// state wins, so a SetGoState/UseDoorOrButton on the same object
 	// reads back the new state instead of the stale spawn snapshot.
-	// Static DB spawns have no live state, so they keep the snapshot.
+	// A static DB spawn gains its live state on its first SetGoState
+	// (materializeStaticGameObjectState); until then it keeps the
+	// snapshot.
 	methods["GetGoState"] = func(_ context.Context, _ []any) ([]any, error) {
 		if dyn := srv.gameObjectState(state.Map, state.InstanceID, state.GUID); dyn != nil {
 			return []any{uint32(dyn.State)}, nil
