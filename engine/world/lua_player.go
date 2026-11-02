@@ -1435,16 +1435,15 @@ func (s *session) luaPlayer() *scripting.Object {
 		return []any{true}, nil
 	}
 	methods["GetItemByPos"] = func(_ context.Context, _ []any) ([]any, error) { return []any{nil}, nil }
-	methods["GetNearestGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
-		if len(args) == 0 {
-			return []any{nil}, nil
-		}
-		rangeValue, err := luaFloat32Arg(args, 0)
-		if err != nil || rangeValue < 0 {
-			return []any{nil}, err
-		}
-		object := s.nearestGameObject(ctx, state.Map, state.X, state.Y, rangeValue)
-		return []any{object}, nil
+	// Eluna nearest/in-range family (WorldObjectMethods.h, see
+	// lua_worldobject_range.go): replaces the old range-only
+	// GetNearestGameObject bridge (2D metric, no entry/hostile args,
+	// zero Lua callers) with the Eluna (range, entry, hostile) form
+	// plus GetNearestPlayer/GetNearestCreature/GetPlayersInRange/
+	// GetCreaturesInRange/GetGameObjectsInRange/GetNearObject/
+	// GetNearObjects, registered from the player surface.
+	for name, fn := range luaRangeMethods(s.server, s.luaRangeOriginForPlayer) {
+		methods[name] = fn
 	}
 	// FindNearestCreature(entry, dist) is the player-surface twin of the
 	// creature bridge (lua_creature_events.go:2435): the nearest live

@@ -1448,6 +1448,12 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{srv.nearestGameObjectByEntry(ctx, state.Map, state.InstanceID, state.X, state.Y, state.Z, entry, dist32)}, nil
 	}
+	// Eluna nearest/in-range family (WorldObjectMethods.h, see
+	// lua_worldobject_range.go): registered from the gameobject
+	// surface with the GO state as origin.
+	for name, fn := range luaRangeMethods(srv, func() luaRangeOrigin { return srv.luaRangeOriginForGameObject(state) }) {
+		methods[name] = fn
+	}
 	// SummonCreature is the gameobject-surface twin of the player bridge
 	// (WorldObject::SummonCreature, Object.cpp:2059-2062 fallbacks via
 	// the shared summonTempCreature funnel): same (entry, x, y, z, o,
@@ -1670,37 +1676,6 @@ func (s *session) objectsMuLockGameObject(mapID, instanceID uint32, guid uint64)
 }
 func (s *session) objectsMuUnlockGameObject(mapID, instanceID uint32, guid uint64) {
 	s.server.objectsMuUnlockGameObject(mapID, instanceID, guid)
-}
-
-func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y float32, distance float32) *scripting.Object {
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation, COALESCE(g.phaseMask, 0) FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var nearest luaGameObjectState
-	nearestDistance := float32(math.MaxFloat32)
-	for rows.Next() {
-		var candidate luaGameObjectState
-		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation, &candidate.PhaseMask); err != nil {
-			continue
-		}
-		candidate.Map = mapID
-		candidate.InstanceID = s.player.InstanceID
-		candidate.GoState, candidate.LootState = 1, 1
-		candidate.GUID = gameObjectGUID(candidate.LowGUID, candidate.Entry)
-		if s.server.isGameObjectHiddenInInstance(candidate.Map, candidate.InstanceID, candidate.GUID) {
-			continue
-		}
-		currentDistance := float32(math.Hypot(float64(candidate.X-x), float64(candidate.Y-y)))
-		if currentDistance <= distance && currentDistance < nearestDistance {
-			nearest, nearestDistance = candidate, currentDistance
-		}
-	}
-	if nearest.GUID == 0 {
-		return nil
-	}
-	return s.server.luaGameObjectObject(nearest)
 }
 
 // nearestGameObjectByEntry is the entry-filtered, 3D twin of

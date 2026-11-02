@@ -5,6 +5,9 @@
 -- registered via RegisterServerEvent(24, fn) receive (event, player, triggerID)
 -- per runtime.go:640-642. WalkDir auto-loads this file; no loader edit needed.
 -- PORTED (2026-10-24): at_area_52_entrance, at_brewfest (handler below).
+-- PORTED (2026-11-02): at_coilfang_waterfall (handler below; the
+-- entry-filtered player gameobject search that blocked it is now bridged
+-- as player:GetNearestGameObject(range, entry, hostile)).
 -- Remaining classes documented-only; bridges verified against the current
 -- runtime this run (player method table at
 -- engine/world/lua_player.go, creature table at
@@ -38,20 +41,13 @@
 --    at_frostgrips_hollow (:449-512; quest 12877 + SummonCreature(29862/29861)
 --    + MovePath(NPC*100)); quest-status gate bridged 2026-10-24, and its
 --    trigger ID is DB-side only (not in the C++ file).
--- 4. no entry-filtered gameobject bridge on the player surface
---    (player:GetNearestGameObject(range) at lua_player.go:968 takes no
---    entry; creature:FindNearestGameObject can't reach the AT hook's
---    player-only context; go:GetLootState + go:UseDoorOrButton ARE bridged
---    — lua_objects.go:1093 — but the arm stays out behind the search
---    gate): at_coilfang_waterfall (:72-94; GO_COILFANG_WATERFALL
---    184212 within 35.0f, GO_READY check, UseDoorOrButton).
--- 5. at_brewfest PORTED below (:331-376): FindNearestCreature(24711/24710)
+-- 4. at_brewfest PORTED below (:331-376): FindNearestCreature(24711/24710)
 --    bridged 2026-10-24 (lua_player.go), Talk(SAY_WELCOME 4, player) via the
 --    creature Talk whisper-target arm; 5s per-trigger cooldown on
 --    AT_BREWFEST_DUROTAR 4829 / AT_BREWFEST_DUN_MOROGH 4820.
 -- NOTE: RegisterServerEvent(24, areaTriggerHandler) below dispatches on the
 -- triggerID argument (hooks are per-event, not per-trigger ID). Trigger IDs:
--- 4591 coilfang, 4560 legion, 5046/5047 sholazar, 4829/4820 brewfest
+-- 4591 coilfang (PORTED), 4560 legion, 5046/5047 sholazar, 4829/4820 brewfest
 -- (PORTED), 4472/4466/4471/4422 area52 (PORTED); scent/sentry/nats/
 -- frostgrips/stormwright IDs live only in the DB areatrigger_scripts rows
 -- (ObjectMgr.cpp:6653), not in the C++ file — no guessed dispatch.
@@ -76,6 +72,19 @@ local BREWFEST_TAPPER = {
 local lastTrigger = {}
 
 local function areaTriggerHandler(_, player, triggerID)
+    if triggerID == 4591 then
+        -- at_coilfang_waterfall (:72-94): nearest GO_COILFANG_WATERFALL
+        -- 184212 within 35.0f, GO_READY (loot state 1) check, then
+        -- UseDoorOrButton. C++ returns false; the Go handler returns
+        -- nothing, the existing PORTED-arm convention. The GO_READY
+        -- read is the snapshot LootState (1 for DB/runtime states),
+        -- so the check passes and the button use is the real effect.
+        local go = player:GetNearestGameObject(35.0, 184212)
+        if go and go:GetLootState() == 1 then
+            go:UseDoorOrButton()
+        end
+        return
+    end
     local area52 = AREA52_POS[triggerID]
     if area52 then
         -- at_area_52_entrance (:381-442): IsAlive + 5s per-trigger cooldown,

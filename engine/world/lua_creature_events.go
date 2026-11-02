@@ -3244,6 +3244,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{s.nearestGameObjectByEntry(ctx, mapID, instanceID, x, y, z, entry, dist32)}, nil
 	}
+	// Eluna nearest/in-range family (WorldObjectMethods.h):
+	// GetNearestPlayer/GetNearestCreature/GetNearestGameObject/
+	// GetPlayersInRange/GetCreaturesInRange/GetGameObjectsInRange/
+	// GetNearObject/GetNearObjects over the WorldObjectInRangeCheck
+	// (see lua_worldobject_range.go). Registered from the creature
+	// surface with the live motion as origin.
+	for name, fn := range luaRangeMethods(s, func() luaRangeOrigin { return s.luaRangeOriginForMotion(motion) }) {
+		methods[name] = fn
+	}
 	// GetGameObjectsInGrid(entry, dist) is
 	// WorldObject::GetGameObjectListWithEntryInGrid (Object.cpp:3220):
 	// every gameobject of entry within dist yards (2D metric, no
