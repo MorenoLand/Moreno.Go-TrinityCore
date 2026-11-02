@@ -379,6 +379,7 @@ type ItemTemplateLive struct {
 type ItemInstanceLive struct {
 	OwnerGUID         uint64
 	Flags             uint32
+	Count             uint32
 	Durability        uint32
 	Enchantments      string
 	Slot              uint8
@@ -401,10 +402,30 @@ type ItemInstanceLive struct {
 // LoadInstance means the object is template-only (loot/quest items) and
 // the instance methods push nil. Players enumerates the online player
 // objects for GetOwner's FindPlayer-style lookup.
+// ItemInstanceUpdate is one persisted item_instance column write behind
+// a Lua Item mutation: only non-nil fields are written, so a caller that
+// computed a new value from a fresh LoadInstance read cannot clobber
+// unrelated columns. The world loader owns the SQL; the scripting layer
+// owns the C++ argument order and flag/enchantment-string arithmetic.
+type ItemInstanceUpdate struct {
+	OwnerGUID    *uint64
+	Flags        *uint32
+	Count        *uint32
+	Enchantments *string
+}
+
 type ItemLive struct {
 	LoadTemplate func() (ItemTemplateLive, bool)
 	LoadInstance func() (ItemInstanceLive, bool)
-	Players      func() []*Object
+	// UpdateInstance persists one ItemInstanceUpdate against the
+	// item_instance row; nil on template-only objects, where mutations
+	// have no row and are silent no-ops. Writes land immediately, so
+	// SaveToDB is a no-op flush on top of them.
+	UpdateInstance func(ItemInstanceUpdate) bool
+	// EnchantmentExists is the SpellItemEnchantment DBC lookup behind
+	// SetEnchantment's C++ store check; nil reads as not found.
+	EnchantmentExists func(uint32) bool
+	Players           func() []*Object
 }
 
 // itemMaxStackCount mirrors ItemTemplate::GetMaxStackSize
@@ -474,6 +495,24 @@ func itemEnchantmentID(raw string, slot uint32) uint32 {
 	return uint32(value)
 }
 
+// itemSetEnchantmentString rewrites one enchantment triple (id, duration,
+// charges) in an item_instance enchantments string, padding short strings
+// with zero triples first. Setting id 0 is the ClearEnchantment shape:
+// Item::ClearEnchantment zeroes the whole triple (Item.cpp:876-884), and
+// Item::SetEnchantment writes duration/charges 0 through Eluna
+// (ItemMethods.h:716), so both arms share this helper.
+func itemSetEnchantmentString(raw string, slot, id uint32) string {
+	fields := strings.Fields(raw)
+	need := int(slot)*3 + 3
+	for len(fields) < need {
+		fields = append(fields, "0")
+	}
+	fields[int(slot)*3] = strconv.FormatUint(uint64(id), 10)
+	fields[int(slot)*3+1] = "0"
+	fields[int(slot)*3+2] = "0"
+	return strings.Join(fields, " ")
+}
+
 // NewItemObject builds the Lua Item object surface for hooks that hand
 // scripts a live item (Eluna's Push(Item*) via ElunaTemplate): the GUID,
 // Entry and Count fields plus the template-read methods GetName,
@@ -489,11 +528,13 @@ func itemEnchantmentID(raw string, slot uint32) uint32 {
 // IsNotEmptyBag, IsInBag, IsNotBoundToPlayer, CanBeTraded and GetItemLink
 // when the object carries a LoadInstance.
 // The generic object methods supply GetEntry/GetGUID/GetGUIDLow/GetTypeId
-// (object.go). Still unbridged: IsInTrade (the session trade flag is not
-// safely readable from the scripting goroutine) and the mutating surface
-// (SetOwner, SetBinding, SetCount, SetEnchantment, ClearEnchantment,
-// SaveToDB), which needs a live item model with an update broadcast, not
-// just row reads.
+// (object.go). The mutating surface (SetOwner, SetBinding, SetCount,
+// SetEnchantment, ClearEnchantment, SaveToDB) writes through the world's
+// UpdateInstance callback straight to the item_instance row, so a later
+// LoadInstance read sees the write; there is no client values-update
+// broadcast for items in Go, so a live client only sees the change on
+// its next inventory refresh. Still unbridged: IsInTrade (the session
+// trade flag is not safely readable from the scripting goroutine).
 func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 	load := live.LoadTemplate
 	if load == nil {
@@ -536,7 +577,17 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 		return []any{pick(tmpl, index)}, nil
 	}
 	methods := map[string]ObjectMethod{
-		"GetCount": func(context.Context, []any) ([]any, error) { return []any{count}, nil },
+		// Item::SetCount writes ITEM_FIELD_STACK_COUNT (Item.cpp:1202),
+		// so GetCount re-reads the instance row when one exists and
+		// the construction-time count stays the template-only arm.
+		"GetCount": func(context.Context, []any) ([]any, error) {
+			if live.LoadInstance != nil {
+				if inst, ok := live.LoadInstance(); ok {
+					return []any{inst.Count}, nil
+				}
+			}
+			return []any{count}, nil
+		},
 		"GetName": func(context.Context, []any) ([]any, error) {
 			return templateValue(func(t ItemTemplateLive) any { return t.Name }), nil
 		},
@@ -885,6 +936,134 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 				itemEnchantmentID(inst.Enchantments, 5),
 				inst.RandomPropertyId, 0, inst.OwnerLevel, tmpl.Name)
 			return []any{link}, nil
+		},
+		// Item::SetOwnerGUID via Eluna SetOwner (ItemMethods.h:650):
+		// the player object's GUID column becomes the row's owner.
+		// A template-only object has no row, so the write is a
+		// silent no-op, like the template-only nil reads.
+		"SetOwner": func(_ context.Context, args []any) ([]any, error) {
+			if len(args) < 1 {
+				return nil, fmt.Errorf("argument 1 is required")
+			}
+			player, ok := args[0].(*Object)
+			if !ok || player == nil || player.Type != "Player" {
+				return nil, fmt.Errorf("argument 1 must be a player object")
+			}
+			playerGUID, ok := objectUint64(player, "GUID")
+			if !ok {
+				return nil, fmt.Errorf("argument 1 must be a player object")
+			}
+			if live.UpdateInstance != nil {
+				live.UpdateInstance(ItemInstanceUpdate{OwnerGUID: &playerGUID})
+			}
+			return []any{}, nil
+		},
+		// Item::SetBinding (Item.h:80): ApplyModFlag on the soulbound
+		// bit of ITEM_FIELD_FLAGS, plus SetState(ITEM_CHANGED) — the
+		// state flag is the persistence mark, and Go writes land
+		// immediately, so there is no separate dirty bit to set.
+		"SetBinding": func(_ context.Context, args []any) ([]any, error) {
+			if len(args) < 1 {
+				return nil, fmt.Errorf("argument 1 is required")
+			}
+			soulbound, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("argument 1 must be boolean")
+			}
+			if live.LoadInstance != nil && live.UpdateInstance != nil {
+				if inst, ok := live.LoadInstance(); ok {
+					flags := inst.Flags
+					if soulbound {
+						flags |= itemFlagSoulbound
+					} else {
+						flags &^= itemFlagSoulbound
+					}
+					live.UpdateInstance(ItemInstanceUpdate{Flags: &flags})
+				}
+			}
+			return []any{}, nil
+		},
+		// Item::SetCount (Item.cpp:1202): the stack-count column;
+		// the C++ trade-data refresh leg has no Go trade model.
+		"SetCount": func(_ context.Context, args []any) ([]any, error) {
+			value, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if live.UpdateInstance != nil {
+				live.UpdateInstance(ItemInstanceUpdate{Count: &value})
+			}
+			return []any{}, nil
+		},
+		// Eluna SetEnchantment (ItemMethods.h:695): owner first (no
+		// online owner reads false), then the enchant DBC check
+		// (unknown id reads false), then the slot argerror — the
+		// C++ order, including its argerror naming argument 2
+		// even though the slot is the third Lua argument, which Go
+		// reports as the slot message itself. ApplyEnchantment's
+		// stat legs have no Go model, so only the id triple lands.
+		"SetEnchantment": func(_ context.Context, args []any) ([]any, error) {
+			if live.LoadInstance == nil || live.UpdateInstance == nil {
+				return []any{false}, nil
+			}
+			inst, ok := live.LoadInstance()
+			if !ok {
+				return []any{false}, nil
+			}
+			if playerObjectByGUID(live.Players, inst.OwnerGUID) == nil {
+				return []any{false}, nil
+			}
+			enchant, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if live.EnchantmentExists == nil || !live.EnchantmentExists(enchant) {
+				return []any{false}, nil
+			}
+			slot, err := objectArgumentUint32(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if slot >= itemMaxInspectedEnchantmentSlot {
+				return nil, fmt.Errorf("valid EnchantmentSlot expected")
+			}
+			enchants := itemSetEnchantmentString(inst.Enchantments, slot, enchant)
+			live.UpdateInstance(ItemInstanceUpdate{Enchantments: &enchants})
+			return []any{true}, nil
+		},
+		// Eluna ClearEnchantment (ItemMethods.h:729): same owner and
+		// slot gates as SetEnchantment; an empty slot reads false
+		// instead of writing.
+		"ClearEnchantment": func(_ context.Context, args []any) ([]any, error) {
+			if live.LoadInstance == nil || live.UpdateInstance == nil {
+				return []any{false}, nil
+			}
+			inst, ok := live.LoadInstance()
+			if !ok {
+				return []any{false}, nil
+			}
+			if playerObjectByGUID(live.Players, inst.OwnerGUID) == nil {
+				return []any{false}, nil
+			}
+			slot, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if slot >= itemMaxInspectedEnchantmentSlot {
+				return nil, fmt.Errorf("valid EnchantmentSlot expected")
+			}
+			if itemEnchantmentID(inst.Enchantments, slot) == 0 {
+				return []any{false}, nil
+			}
+			enchants := itemSetEnchantmentString(inst.Enchantments, slot, 0)
+			live.UpdateInstance(ItemInstanceUpdate{Enchantments: &enchants})
+			return []any{true}, nil
+		},
+		// Eluna SaveToDB (ItemMethods.h:757): Item::SaveToDB writes
+		// the item_instance row, but every Go mutation above writes
+		// that row immediately, so there is nothing left to flush.
+		"SaveToDB": func(context.Context, []any) ([]any, error) {
+			return []any{}, nil
 		},
 	}
 	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}

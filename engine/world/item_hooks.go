@@ -104,16 +104,17 @@ func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting
 	live.Players = s.server.luaPlayers
 	live.LoadInstance = func() (scripting.ItemInstanceLive, bool) {
 		var ownerGUID int64
-		var flags, durability uint32
+		var flags, countRow, durability uint32
 		var enchantments string
 		var randomPropertyId int32
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
-			"SELECT owner_guid, flags, durability, COALESCE(enchantments, ''), COALESCE(randomPropertyId, 0) FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1",
-			rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&ownerGUID, &flags, &durability, &enchantments, &randomPropertyId); err != nil {
+			"SELECT owner_guid, flags, `count`, durability, COALESCE(enchantments, ''), COALESCE(randomPropertyId, 0) FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1",
+			rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&ownerGUID, &flags, &countRow, &durability, &enchantments, &randomPropertyId); err != nil {
 			return scripting.ItemInstanceLive{}, false
 		}
 		inst := scripting.ItemInstanceLive{
 			Flags:            flags,
+			Count:            countRow,
 			Durability:       durability,
 			Enchantments:     enchantments,
 			BagSlot:          invSlotBag0,
@@ -177,6 +178,52 @@ func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting
 			}
 		}
 		return inst, true
+	}
+	// UpdateInstance is the scripting mutation write path: one UPDATE
+	// per call over the columns the scripting layer changed, matching
+	// either GUID form the reads probe. It reports false when no row
+	// was touched, so a despawned item's writes silently land nowhere
+	// instead of creating a row.
+	live.UpdateInstance = func(update scripting.ItemInstanceUpdate) bool {
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return false
+		}
+		var sets []string
+		var args []any
+		if update.OwnerGUID != nil {
+			sets = append(sets, "owner_guid = ?")
+			args = append(args, *update.OwnerGUID)
+		}
+		if update.Flags != nil {
+			sets = append(sets, "flags = ?")
+			args = append(args, *update.Flags)
+		}
+		if update.Count != nil {
+			sets = append(sets, "`count` = ?")
+			args = append(args, *update.Count)
+		}
+		if update.Enchantments != nil {
+			sets = append(sets, "enchantments = ?")
+			args = append(args, *update.Enchantments)
+		}
+		if len(sets) == 0 {
+			return true
+		}
+		args = append(args, rawGUID, rawGUID|(uint64(0x4000)<<48))
+		res, err := s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE item_instance SET "+strings.Join(sets, ", ")+" WHERE guid = ? OR guid = ? LIMIT 1", args...)
+		if err != nil {
+			return false
+		}
+		affected, err := res.RowsAffected()
+		return err == nil && affected > 0
+	}
+	live.EnchantmentExists = func(id uint32) bool {
+		if s.server == nil || s.server.Data == nil {
+			return false
+		}
+		_, found, _ := s.server.Data.SpellItemEnchantment(id)
+		return found
 	}
 	return scripting.NewItemObject(rawGUID|(uint64(0x4000)<<48), entry, count, live)
 }
