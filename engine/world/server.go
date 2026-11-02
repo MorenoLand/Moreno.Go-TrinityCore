@@ -869,6 +869,10 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 		return err == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID)
 	})
 	server.Features.Scripts.SetPlayerProvider(server.luaPlayers)
+	server.Features.Scripts.SetGameEventProvider(server.luaGameEventIDs)
+	server.Features.Scripts.SetMapProvider(server.luaMapByID)
+	server.Features.Scripts.SetWorldMessageProvider(server.luaWorldMessage)
+	server.Features.Scripts.SetAreaNameProvider(server.luaAreaName)
 	server.worldTimeStartedAt = time.Now()
 	return server
 }

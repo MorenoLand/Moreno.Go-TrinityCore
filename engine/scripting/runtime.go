@@ -332,17 +332,21 @@ type Object struct {
 }
 
 type Config struct {
-	Enabled        bool
-	ScriptPath     string
-	CoreName       string
-	CoreVersion    string
-	RealmID        uint32
-	CoreExpansion  uint32
-	PlayerProvider func() []*Object
-	AuthDatabase   *sql.DB
-	CharacterDB    *sql.DB
-	WorldDatabase  *sql.DB
-	Logger         *slog.Logger
+	Enabled              bool
+	ScriptPath           string
+	CoreName             string
+	CoreVersion          string
+	RealmID              uint32
+	CoreExpansion        uint32
+	PlayerProvider       func() []*Object
+	GameEventProvider    func() []uint32
+	MapProvider          func(mapID, instanceID uint32) *Object
+	WorldMessageProvider func(string)
+	AreaNameProvider     func(id uint32) (string, bool)
+	AuthDatabase         *sql.DB
+	CharacterDB          *sql.DB
+	WorldDatabase        *sql.DB
+	Logger               *slog.Logger
 }
 
 type Runtime struct {
@@ -981,6 +985,15 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetGUIDEntry", r.getGUIDEntry)
 	r.state.Register("GetCurrTime", r.getCurrTime)
 	r.state.Register("GetTimeDiff", r.getTimeDiff)
+	r.state.Register("IsInventoryPos", r.isInventoryPos)
+	r.state.Register("IsEquipmentPos", r.isEquipmentPos)
+	r.state.Register("IsBankPos", r.isBankPos)
+	r.state.Register("IsBagPos", r.isBagPos)
+	r.state.Register("IsGameEventActive", r.isGameEventActive)
+	r.state.Register("GetActiveGameEvents", r.getActiveGameEvents)
+	r.state.Register("GetMapById", r.getMapById)
+	r.state.Register("SendWorldMessage", r.sendWorldMessage)
+	r.state.Register("GetAreaName", r.getAreaName)
 	r.state.Register("CreateInt64", r.createInt64)
 	r.state.Register("CreateUint64", r.createUint64)
 	r.state.Register("CreatePacket", r.createPacket)
@@ -1071,9 +1084,160 @@ func (r *Runtime) getPlayerByName(state *lua.State) int {
 	return 1
 }
 
+// isInventoryPos is Player::IsInventoryPos (Player.cpp:10141): bag 255
+// with slot 255, bag 255 with an inventory-pack slot, a bag-container bag,
+// or bag 255 with a keyring/currency slot.
+func (r *Runtime) isInventoryPos(state *lua.State) int {
+	bag := uint8(lua.CheckUnsigned(state, 1))
+	slot := uint8(lua.CheckUnsigned(state, 2))
+	state.PushBoolean(bag == 255 && slot == 255 || bag == 255 && slot >= 23 && slot < 39 || bag >= 19 && bag < 23 || bag == 255 && slot >= 86 && slot < 150)
+	return 1
+}
+
+// isEquipmentPos is Player::IsEquipmentPos (Player.cpp:10157): bag 255
+// with an equipment or bag-container slot.
+func (r *Runtime) isEquipmentPos(state *lua.State) int {
+	bag := uint8(lua.CheckUnsigned(state, 1))
+	slot := uint8(lua.CheckUnsigned(state, 2))
+	state.PushBoolean(bag == 255 && slot < 19 || bag == 255 && slot >= 19 && slot < 23)
+	return 1
+}
+
+// isBankPos is Player::IsBankPos (Player.cpp:10166): bag 255 with a bank
+// item or bank bag slot, or a bank-bag container bag.
+func (r *Runtime) isBankPos(state *lua.State) int {
+	bag := uint8(lua.CheckUnsigned(state, 1))
+	slot := uint8(lua.CheckUnsigned(state, 2))
+	state.PushBoolean(bag == 255 && slot >= 39 && slot < 67 || bag == 255 && slot >= 67 && slot < 74 || bag >= 67 && bag < 74)
+	return 1
+}
+
+// isBagPos is Player::IsBagPos (Player.cpp:10178) via the Eluna
+// (bag<<8)+slot fold: bag 255 with a bag-container or bank-bag slot.
+func (r *Runtime) isBagPos(state *lua.State) int {
+	bag := uint8(lua.CheckUnsigned(state, 1))
+	slot := uint8(lua.CheckUnsigned(state, 2))
+	state.PushBoolean(bag == 255 && slot >= 19 && slot < 23 || bag == 255 && slot >= 67 && slot < 74)
+	return 1
+}
+
+// isGameEventActive is GameEventMgr::IsActiveEvent behind the Eluna
+// IsGameEventActive global; without a provider no event reads active.
+func (r *Runtime) isGameEventActive(state *lua.State) int {
+	id := uint32(lua.CheckUnsigned(state, 1))
+	active := false
+	if r.config.GameEventProvider != nil {
+		for _, eventID := range r.config.GameEventProvider() {
+			if eventID == id {
+				active = true
+				break
+			}
+		}
+	}
+	state.PushBoolean(active)
+	return 1
+}
+
+// getActiveGameEvents is GameEventMgr::GetActiveEventList behind the Eluna
+// GetActiveGameEvents global: the active ids, 1-indexed, ascending like
+// the C++ std::set iteration order.
+func (r *Runtime) getActiveGameEvents(state *lua.State) int {
+	state.NewTable()
+	if r.config.GameEventProvider == nil {
+		return 1
+	}
+	for index, eventID := range r.config.GameEventProvider() {
+		state.PushUnsigned(uint(eventID))
+		state.RawSetInt(-2, index+1)
+	}
+	return 1
+}
+
+// getMapById is MapMgr::FindMap behind the Eluna GetMapById global
+// (mapId, instanceId = 0); without a provider, or for an unknown map,
+// it reads nil like the C++ nullptr arm.
+func (r *Runtime) getMapById(state *lua.State) int {
+	mapID := uint32(lua.CheckUnsigned(state, 1))
+	instanceID := uint32(0)
+	if state.Top() >= 2 && !state.IsNil(2) {
+		instanceID = uint32(lua.CheckUnsigned(state, 2))
+	}
+	if r.config.MapProvider == nil {
+		state.PushNil()
+		return 1
+	}
+	if object := r.config.MapProvider(mapID, instanceID); object != nil {
+		PushObject(state, object)
+		return 1
+	}
+	state.PushNil()
+	return 1
+}
+
+// sendWorldMessage is World::SendServerMessage(SERVER_MSG_STRING) behind
+// the Eluna SendWorldMessage global; without a provider it is a no-op.
+func (r *Runtime) sendWorldMessage(state *lua.State) int {
+	if r.config.WorldMessageProvider != nil {
+		r.config.WorldMessageProvider(lua.CheckString(state, 1))
+	}
+	return 0
+}
+
+// getAreaName is GlobalMethods::GetAreaName (GlobalMethods.h:483): the
+// AreaTable name for the id, with the C++ luaL_argerror arms for an
+// unknown id and a locale >= TOTAL_LOCALES (7, the getItemLink twin).
+// The locale argument is accepted and range-checked but Go DBC names are
+// enUS-only, so it has no effect.
+func (r *Runtime) getAreaName(state *lua.State) int {
+	id := uint32(lua.CheckUnsigned(state, 1))
+	var locale uint64
+	if state.Top() >= 2 && !state.IsNil(2) {
+		locale = checkLuaUint64(state, 2)
+	}
+	if locale >= 7 {
+		lua.ArgumentError(state, 2, "valid LocaleConstant expected")
+		return 0
+	}
+	if r.config.AreaNameProvider == nil {
+		lua.ArgumentError(state, 1, "valid Area or Zone ID expected")
+		return 0
+	}
+	name, found := r.config.AreaNameProvider(id)
+	if !found {
+		lua.ArgumentError(state, 1, "valid Area or Zone ID expected")
+		return 0
+	}
+	state.PushString(name)
+	return 1
+}
+
 func (r *Runtime) SetPlayerProvider(provider func() []*Object) {
 	r.mu.Lock()
 	r.config.PlayerProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetGameEventProvider(provider func() []uint32) {
+	r.mu.Lock()
+	r.config.GameEventProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetMapProvider(provider func(mapID, instanceID uint32) *Object) {
+	r.mu.Lock()
+	r.config.MapProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetWorldMessageProvider(provider func(string)) {
+	r.mu.Lock()
+	r.config.WorldMessageProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetAreaNameProvider(provider func(id uint32) (string, bool)) {
+	r.mu.Lock()
+	r.config.AreaNameProvider = provider
 	r.mu.Unlock()
 }
 
