@@ -297,6 +297,125 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.refreshNearbyObjects(ctx)
 		return []any{}, nil
 	}
+	// HasAtLoginFlag/SetAtLoginFlag are Player::HasAtLoginFlag/
+	// SetAtLoginFlag (Player.h:2025-2026): a plain bit test / OR on
+	// m_atLoginFlags. The setter persists immediately (UPDATE
+	// characters at_login, the characters.go:1376 shape) like the
+	// other Lua setters; C++ itself only saves at the next SaveToDB.
+	methods["HasAtLoginFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		flag, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{state.AtLogin&flag != 0}, nil
+	}
+	methods["SetAtLoginFlag"] = func(ctx context.Context, args []any) ([]any, error) {
+		flag, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state.AtLogin |= flag
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = ? WHERE guid = ?", state.AtLogin, s.playerGUID)
+		}
+		return []any{}, nil
+	}
+	// HasTitle/SetKnownTitle/UnsetKnownTitle are Player::HasTitle/
+	// SetTitle (Player.cpp:24799-24841) behind the CharTitles DBC
+	// lookup (PlayerMethods.h:144-149/2052/3295). An unknown title
+	// id pushes nil (the C++ lookup miss pushes nothing) and the
+	// setters no-op; id 0 counts as unknown even though the Go
+	// store reports it found with an empty row. MAX_TITLE_INDEX
+	// is 3*64 = 192 (Player.h:410-411): a known title above it
+	// reads false, and MaskID 192 (word offset 6, past the six
+	// KnownTitles words) reads false rather than the out-of-range
+	// field C++ would touch. The already-known add / unknown
+	// remove arms return before any broadcast, exactly like C++;
+	// persistTitles broadcasts the KnownTitles fields, standing
+	// in for SMSG_TITLE_EARNED, which has no Go sender.
+	// ChosenTitle is untouched on both arms: C++ SetTitle never
+	// moves it (load-time validation resets a stale chosen title).
+	titleMask := func(id uint32) (uint32, bool) {
+		if id == 0 || s.server == nil || s.server.Data == nil {
+			return 0, false
+		}
+		title, found, err := s.server.Data.CharTitle(id)
+		if err != nil || !found {
+			return 0, false
+		}
+		return title.MaskID, true
+	}
+	methods["HasTitle"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		maskID, ok := titleMask(id)
+		if !ok {
+			return []any{nil}, nil
+		}
+		if maskID > 192 {
+			return []any{false}, nil
+		}
+		idx := maskID / 32
+		if int(idx) >= len(state.KnownTitles) {
+			return []any{false}, nil
+		}
+		return []any{state.KnownTitles[idx]&(uint32(1)<<(maskID%32)) != 0}, nil
+	}
+	methods["SetKnownTitle"] = func(ctx context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		maskID, ok := titleMask(id)
+		if !ok || maskID > 192 {
+			return []any{}, nil
+		}
+		idx := maskID / 32
+		if int(idx) >= len(state.KnownTitles) {
+			return []any{}, nil
+		}
+		bit := uint32(1) << (maskID % 32)
+		if state.KnownTitles[idx]&bit != 0 {
+			return []any{}, nil
+		}
+		state.KnownTitles[idx] |= bit
+		if s.server != nil && s.server.CharactersStore != nil {
+			s.persistTitles(ctx, s)
+		}
+		return []any{}, nil
+	}
+	methods["UnsetKnownTitle"] = func(ctx context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		maskID, ok := titleMask(id)
+		if !ok || maskID > 192 {
+			return []any{}, nil
+		}
+		idx := maskID / 32
+		if int(idx) >= len(state.KnownTitles) {
+			return []any{}, nil
+		}
+		bit := uint32(1) << (maskID % 32)
+		if state.KnownTitles[idx]&bit == 0 {
+			return []any{}, nil
+		}
+		state.KnownTitles[idx] &^= bit
+		if s.server != nil && s.server.CharactersStore != nil {
+			s.persistTitles(ctx, s)
+		}
+		return []any{}, nil
+	}
+	// GetSpecsCount/GetActiveSpec are Player::GetSpecsCount/
+	// GetActiveSpec (Player.h:1459-1461): m_specsCount and
+	// m_activeSpec, the dual-spec index pair (0/1), not talent
+	// tab ids. Go reads TalentGroupsCount/ActiveTalentGroup, the
+	// same fields the characters save/load round-trips.
+	methods["GetSpecsCount"] = luaNoArgs(func() any { return state.TalentGroupsCount })
+	methods["GetActiveSpec"] = luaNoArgs(func() any { return state.ActiveTalentGroup })
 	// HasFlag/SetFlag/RemoveFlag are Object::HasFlag/SetFlag/RemoveFlag
 	// (ObjectMethods.h:34/243/390; LuaFunctions.cpp:1354 registers
 	// ObjectMethods on the Player metatable) for the flag-backed fields
