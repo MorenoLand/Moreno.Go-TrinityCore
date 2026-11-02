@@ -1016,3 +1016,168 @@ func (s *Server) mapAreaID(mapID uint32, x, y float32) (uint32, bool) {
 	areaID := uint32(binary.LittleEndian.Uint16(areas[index : index+2]))
 	return areaID, areaID != 0
 }
+
+// terrainInvalidHeight is INVALID_HEIGHT (Map.h:285), the sentinel
+// GridMap::getHeight returns for a missing tile, a hole, or a flat tile
+// whose extractor wrote no height; Eluna Map:GetHeight pushes nil for it.
+const terrainInvalidHeight = float32(-100000)
+
+const (
+	terrainHeightNoHeight = 0x0001
+	terrainHeightAsInt16  = 0x0002
+	terrainHeightAsInt8   = 0x0004
+)
+
+var terrainHoleTabH = [4]uint16{0x1111, 0x2222, 0x4444, 0x8888}
+var terrainHoleTabV = [4]uint16{0x000F, 0x00F0, 0x0F00, 0xF000}
+
+// mapGridHeight is GridMap::getHeight (Map.cpp:2070-2295) over the .map
+// v1.9 MHGT chunk: the 44-byte file header carries the height chunk at
+// [20:24] (map_fileheader, Map.h:90), the chunk header is fourcc MHGT +
+// flags + gridHeight + gridMaxHeight (map_heightHeader, Map.h:119), and
+// the V9 (129x129) / V8 (128x128) arrays follow in float, uint16, or
+// uint8 form selected by the flags (checked in the C++ order: int16,
+// then int8, then float). A zero height offset means no height data
+// and reads invalid, the same as a missing tile file; any short or
+// mis-magic read also reads invalid, matching loadData failing the
+// whole grid back to the flat-INVALID default. The holes chunk (256
+// uint16 at the header holes offset, read only when holesSize is set,
+// exactly as loadData gates it) makes its cells read invalid.
+func (s *Server) mapGridHeight(mapID uint32, x, y float32) (float32, bool) {
+	if s == nil {
+		return 0, false
+	}
+	gridX := int(float64(x)/terrainGridSize + terrainCenterGrid)
+	gridY := int(float64(y)/terrainGridSize + terrainCenterGrid)
+	if gridX < 0 || gridX >= 64 || gridY < 0 || gridY >= 64 {
+		return 0, false
+	}
+	path := filepath.Join(s.Config.GameDataDir, "maps", fmt.Sprintf("%03d%02d%02d.map", mapID, 63-gridX, 63-gridY))
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) < 44 || string(data[:4]) != "MAPS" || string(data[4:8]) != "v1.9" {
+		return 0, false
+	}
+	heightOffset := binary.LittleEndian.Uint32(data[20:24])
+	if heightOffset == 0 || int(heightOffset)+16 > len(data) || string(data[heightOffset:heightOffset+4]) != "MHGT" {
+		return 0, false
+	}
+	flags := binary.LittleEndian.Uint32(data[heightOffset+4 : heightOffset+8])
+	gridHeight := math.Float32frombits(binary.LittleEndian.Uint32(data[heightOffset+8 : heightOffset+12]))
+	gridMaxHeight := math.Float32frombits(binary.LittleEndian.Uint32(data[heightOffset+12 : heightOffset+16]))
+	if flags&terrainHeightNoHeight != 0 {
+		return gridHeight, true
+	}
+	pos := int(heightOffset) + 16
+	var v9, v8 func(int) float32
+	scale, offset := float32(1), float32(0)
+	switch {
+	case flags&terrainHeightAsInt16 != 0:
+		if pos+129*129*2+128*128*2 > len(data) {
+			return 0, false
+		}
+		raw9 := make([]uint16, 129*129)
+		for i := range raw9 {
+			raw9[i] = binary.LittleEndian.Uint16(data[pos+i*2:])
+		}
+		pos += 129 * 129 * 2
+		raw8 := make([]uint16, 128*128)
+		for i := range raw8 {
+			raw8[i] = binary.LittleEndian.Uint16(data[pos+i*2:])
+		}
+		v9 = func(i int) float32 { return float32(raw9[i]) }
+		v8 = func(i int) float32 { return float32(raw8[i]) }
+		scale, offset = (gridMaxHeight-gridHeight)/65535, gridHeight
+	case flags&terrainHeightAsInt8 != 0:
+		if pos+129*129+128*128 > len(data) {
+			return 0, false
+		}
+		raw9 := make([]uint8, 129*129)
+		copy(raw9, data[pos:pos+129*129])
+		pos += 129 * 129
+		raw8 := make([]uint8, 128*128)
+		copy(raw8, data[pos:pos+128*128])
+		v9 = func(i int) float32 { return float32(raw9[i]) }
+		v8 = func(i int) float32 { return float32(raw8[i]) }
+		scale, offset = (gridMaxHeight-gridHeight)/255, gridHeight
+	default:
+		if pos+129*129*4+128*128*4 > len(data) {
+			return 0, false
+		}
+		raw9 := make([]float32, 129*129)
+		for i := range raw9 {
+			raw9[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[pos+i*4:]))
+		}
+		pos += 129 * 129 * 4
+		raw8 := make([]float32, 128*128)
+		for i := range raw8 {
+			raw8[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[pos+i*4:]))
+		}
+		v9 = func(i int) float32 { return raw9[i] }
+		v8 = func(i int) float32 { return raw8[i] }
+	}
+	var holes []uint16
+	if binary.LittleEndian.Uint32(data[40:44]) != 0 {
+		holesOffset := binary.LittleEndian.Uint32(data[36:40])
+		if int(holesOffset)+512 > len(data) {
+			return 0, false
+		}
+		holes = make([]uint16, 256)
+		for i := range holes {
+			holes[i] = binary.LittleEndian.Uint16(data[int(holesOffset)+i*2:])
+		}
+	}
+	return terrainInterpolateGridHeight(v9, v8, holes, x, y)*scale + offset, true
+}
+
+// terrainInterpolateGridHeight is GridMap::getHeightFromFloat (and the
+// shared triangle selection of the uint8/uint16 twins, Map.cpp:2070+):
+// the grid-local coordinates are MAP_RESOLUTION * (CENTER_GRID_ID -
+// coord / SIZE_OF_GRIDS), masked to the tile, and the height is the
+// plane through the cell's V9 corners and its doubled V8 center. The
+// int legs feed raw values here and scale the result in mapGridHeight,
+// which equals the C++ (a*x + b*y + c) * multiplier + gridHeight order
+// because the int values fit float32 exactly. A hole cell reads the
+// invalid sentinel, the same as C++ isHole returning INVALID_HEIGHT.
+func terrainInterpolateGridHeight(v9, v8 func(int) float32, holes []uint16, x, y float32) float32 {
+	fx := float32(128) * (32 - x/533.3333)
+	fy := float32(128) * (32 - y/533.3333)
+	xInt := int32(fx) & 127
+	yInt := int32(fy) & 127
+	fracX := fx - float32(int32(fx))
+	fracY := fy - float32(int32(fy))
+	if holes != nil {
+		cellRow, cellCol := xInt/8, yInt/8
+		holeRow, holeCol := (xInt%8)/2, (yInt-cellCol*8)/2
+		hole := holes[cellRow*16+cellCol]
+		if hole&terrainHoleTabH[holeCol]&terrainHoleTabV[holeRow] != 0 {
+			return terrainInvalidHeight
+		}
+	}
+	var a, b, c float32
+	if fracX+fracY < 1 {
+		if fracX > fracY {
+			h1 := v9(int(xInt)*129 + int(yInt))
+			h2 := v9(int(xInt+1)*129 + int(yInt))
+			h5 := 2 * v8(int(xInt)*128+int(yInt))
+			a, b, c = h2-h1, h5-h1-h2, h1
+		} else {
+			h1 := v9(int(xInt)*129 + int(yInt))
+			h3 := v9(int(xInt)*129 + int(yInt+1))
+			h5 := 2 * v8(int(xInt)*128+int(yInt))
+			a, b, c = h5-h1-h3, h3-h1, h1
+		}
+	} else {
+		if fracX > fracY {
+			h2 := v9(int(xInt+1)*129 + int(yInt))
+			h4 := v9(int(xInt+1)*129 + int(yInt+1))
+			h5 := 2 * v8(int(xInt)*128+int(yInt))
+			a, b, c = h2+h4-h5, h4-h2, h5-h4
+		} else {
+			h3 := v9(int(xInt)*129 + int(yInt+1))
+			h4 := v9(int(xInt+1)*129 + int(yInt+1))
+			h5 := 2 * v8(int(xInt)*128+int(yInt))
+			a, b, c = h4-h3, h3+h4-h5, h5-h4
+		}
+	}
+	return a*fracX + b*fracY + c
+}

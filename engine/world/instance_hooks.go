@@ -94,6 +94,15 @@ func (s *Server) mapLive(mapID, instanceID uint32) scripting.MapLive {
 		_, areaID := s.zoneAndAreaID(mapID, x, y, z, 0)
 		return areaID
 	}
+	// Height is Map::GetHeight for the Eluna call shape (MapMethods.h
+	// x, y, phasemask = 1; z = MAX_HEIGHT): the static-vmap and
+	// dynamic-floor rays from 100000 down 50 hit nothing, so the
+	// Eluna shape is exactly the .map grid height
+	// (Server.mapGridHeight); a missing or unreadable tile reads
+	// invalid, and the scripting method turns that into nil.
+	live.Height = func(x, y float32) (float32, bool) {
+		return s.mapGridHeight(mapID, x, y)
+	}
 	return live
 }
 

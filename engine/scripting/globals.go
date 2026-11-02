@@ -783,6 +783,10 @@ type MapLive struct {
 	SetWeather  func(context.Context, uint32, uint32, float32)
 	WorldObject func(context.Context, uint64) *Object
 	AreaID      func(x, y, z float32) uint32
+	// Height reads the .map grid height for Map::GetHeight's Eluna
+	// call shape; false means no readable height chunk, and the
+	// method turns that (and the INVALID_HEIGHT sentinel) into nil.
+	Height func(x, y float32) (float32, bool)
 }
 
 // NewMapObject builds the Lua Map object surface for the MAP_EVENT_* and
@@ -790,9 +794,8 @@ type MapLive struct {
 // methods (object.go) and the DBC-backed GetName/IsDungeon/IsRaid/IsArena/
 // IsBattleground come from the live MapLive (MapMethods.h). The live legs
 // (IsEmpty/IsHeroic/GetDifficulty/GetPlayerCount/GetPlayers/SetWeather/
-// GetInstanceData/SaveInstanceData/GetAreaId) read the MapLive callbacks.
-// The remaining Map surface stays unbridged: GetHeight needs an ADT
-// heightmap model Go does not have (the .map height chunk is unread).
+// GetInstanceData/SaveInstanceData/GetAreaId/GetHeight) read the MapLive
+// callbacks.
 // GetWorldObject dispatches on
 // the GUID high part through the live WorldObject callback (nil callback
 // or nil return reads nil, matching Eluna's Push(nullptr) arm).
@@ -943,10 +946,9 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 		// entry's AreaTableID. The world-side AreaID callback runs
 		// that same ladder (Server.zoneAndAreaID); a nil callback
 		// reads 0. The phasemask argument is accepted and ignored:
-		// Go's WMO/grid area model has no phase dimension, and the
-		// WMO-vs-grid-height comparison needs the height model
-		// GetHeight is still missing, so the WMO leg uses the
-		// z >= ground - 2 tolerance only.
+		// Go's WMO/grid area model has no phase dimension, and C++
+		// GetAreaId's WMO-vs-grid-height comparison has no Go twin,
+		// so the WMO leg uses the z >= ground - 2 tolerance only.
 		"GetAreaId": func(_ context.Context, args []any) ([]any, error) {
 			if len(args) < 3 {
 				return nil, fmt.Errorf("argument %d is required", len(args)+1)
@@ -963,6 +965,45 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 				return []any{uint32(0)}, nil
 			}
 			return []any{live.AreaID(coords[0], coords[1], coords[2])}, nil
+		},
+		// GetHeight is MapMethods.h (x, y, phasemask = 1):
+		// Map::GetHeight for the Eluna call shape (Map.cpp:2489 +
+		// Map.h:569), where z is MAX_HEIGHT (100000). The static-vmap
+		// ray from that height down 50 (StaticMapTree::getHeight)
+		// and the dynamic-floor ray from the same height
+		// (DynamicMapTree::getHeight) can only hit geometry within
+		// 50 of 100000, which no terrain or gameobject floor reaches,
+		// so the Eluna shape reduces exactly to the .map grid height
+		// the world-side Height callback reads. The phasemask
+		// argument is accepted and validated but ignored: the
+		// dynamic leg it feeds drops out for the reason above. An
+		// invalid grid height reads nil, matching Eluna's
+		// z != INVALID_HEIGHT push gate (Map.h:285).
+		"GetHeight": func(_ context.Context, args []any) ([]any, error) {
+			if len(args) < 2 {
+				return nil, fmt.Errorf("argument %d is required", len(args)+1)
+			}
+			coords := make([]float32, 2)
+			for i := 0; i < 2; i++ {
+				value, ok := numericValue(args[i])
+				if !ok {
+					return nil, fmt.Errorf("argument %d must be a number", i+1)
+				}
+				coords[i] = float32(value)
+			}
+			if len(args) > 2 {
+				if _, ok := numericValue(args[2]); !ok {
+					return nil, fmt.Errorf("argument 3 must be a number")
+				}
+			}
+			if live.Height == nil {
+				return []any{nil}, nil
+			}
+			height, ok := live.Height(coords[0], coords[1])
+			if !ok || height == -100000 {
+				return []any{nil}, nil
+			}
+			return []any{height}, nil
 		},
 		// GetInstanceData is nil without an ElunaInstanceAI shim
 		// (MapMethods.h: GetInstanceData pushes nil when the cast
