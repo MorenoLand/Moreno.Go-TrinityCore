@@ -6779,6 +6779,218 @@ func (s *session) durabilityPointsLossAll(ctx context.Context, points int32, inv
 	}
 }
 
+// durabilityPointsLoss mirrors Player::DurabilityPointsLoss (Player.cpp:4960-4991)
+// for a single item instance: the SPELL_AURA_PREVENT_DURABILITY_LOSS (289)
+// gate, then a clamp to [0, MaxDurability]. A max-0 item carries no
+// durability and is skipped, the batch-path convention. The _ApplyItemMods
+// stat strip on the 0-crossing stays unbridged, same as the batch paths.
+// A changed value refreshes this player's inventory when the item is theirs;
+// an item instance owned by another player is still mutated (C++ takes a
+// bare Item* with no ownership check) but only its owner's client refresh
+// is missing, a documented delta with no live Lua path to it.
+func (s *session) durabilityPointsLoss(ctx context.Context, itemGUID uint64, points int32) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || itemGUID == 0 {
+		return
+	}
+	if s.hasAuraType(spellAuraPreventDurabilityLoss) {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	var entry uint32
+	var curDur int64
+	if err := cdb.QueryRowContext(ctx, `SELECT itemEntry, COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`, itemGUID).Scan(&entry, &curDur); err != nil {
+		return
+	}
+	var maxDur int64
+	_ = wdb.QueryRowContext(ctx, `SELECT MaxDurability FROM item_template WHERE entry = ?`, entry).Scan(&maxDur)
+	if maxDur == 0 {
+		return
+	}
+	nd := curDur - int64(points)
+	if nd < 0 {
+		nd = 0
+	}
+	if nd > maxDur {
+		nd = maxDur
+	}
+	if nd == curDur {
+		return
+	}
+	if _, err := cdb.ExecContext(ctx, `UPDATE item_instance SET durability = ? WHERE guid = ?`, nd, itemGUID); err != nil {
+		return
+	}
+	var owned int
+	if err := cdb.QueryRowContext(ctx, `SELECT 1 FROM character_inventory WHERE guid = ? AND item = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&owned); err == nil {
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+	}
+}
+
+// durabilityLoss mirrors Player::DurabilityLoss (Player.cpp:4916-4932): a
+// max-0 or absent item loses nothing; otherwise the loss is
+// uint32(max*percent) floored at 1 point, applied via durabilityPointsLoss.
+// A negative percent would wrap to a huge uint32 loss in C++ and zero the
+// item, so it is folded to a max-int32 loss here; NaN never reaches the
+// cast (Go float-to-uint conversion of NaN is implementation-defined).
+func (s *session) durabilityLoss(ctx context.Context, itemGUID uint64, percent float64) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || itemGUID == 0 || math.IsNaN(percent) {
+		return
+	}
+	var entry uint32
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1`, itemGUID).Scan(&entry); err != nil {
+		return
+	}
+	var maxDur uint32
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT MaxDurability FROM item_template WHERE entry = ?`, entry).Scan(&maxDur)
+	if maxDur == 0 {
+		return
+	}
+	var loss uint32
+	if percent < 0 {
+		loss = math.MaxInt32
+	} else {
+		loss = uint32(float64(maxDur) * percent)
+		if loss < 1 {
+			loss = 1
+		}
+	}
+	s.durabilityPointsLoss(ctx, itemGUID, int32(loss))
+}
+
+// durabilityRepairItem mirrors one Player::DurabilityRepair call
+// (Player.cpp:5012-5101) on an already-resolved item row: it returns the
+// copper charged and whether the durability write ran. Cost=false always
+// restores to max for free; cost=true with nothing lost restores for free;
+// cost=true with lost durability charges via durabilityRepairCost, and a
+// missing DBC cost row, a guild-bank refusal (including no guild when
+// guildBank is set), or insufficient personal money all refuse the repair
+// without touching the item, exactly as C++. The _ApplyItemMods reapply
+// for a repaired equipped item that was fully broken stays unbridged.
+func (s *session) durabilityRepairItem(ctx context.Context, itemGUID uint64, entry, curDur, maxDur uint32, cost bool, discountMod float64, guildBank bool) (uint32, bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || maxDur == 0 {
+		return 0, false
+	}
+	if !cost || curDur >= maxDur {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `UPDATE item_instance SET durability = ? WHERE guid = ?`, maxDur, itemGUID)
+		return 0, true
+	}
+	lost := maxDur - curDur
+	price, ok := s.durabilityRepairCost(ctx, entry, lost, discountMod)
+	if !ok {
+		return 0, false
+	}
+	if guildBank {
+		if s.player.GuildID == 0 || !s.guildBankWithdrawMoneyForRepair(ctx, s.player.GuildID, price) {
+			return 0, false
+		}
+	} else {
+		if s.player.Money < price {
+			return 0, false
+		}
+		s.player.Money -= price
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `UPDATE characters SET money = ? WHERE guid = ?`, s.player.Money, s.playerGUID)
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `UPDATE item_instance SET durability = ? WHERE guid = ?`, maxDur, itemGUID)
+	return price, true
+}
+
+// durabilityRepairByPos mirrors Player::DurabilityRepair's GetItemByPos
+// resolution (Player.cpp:5012-5014) for the Eluna position encoding
+// (bag<<8)|slot: bag 255 is the main inventory (Go bag 0, any slot —
+// equipment, backpack, bank and keyring rows alike), bags 19-22 and 67-73
+// are carried/bank bag interiors resolved through the bag item's slot row.
+// Any other bag, a missing bag, or a missing item returns 0.
+func (s *session) durabilityRepairByPos(ctx context.Context, pos uint16, cost bool, discountMod float64, guildBank bool) (uint32, bool) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, false
+	}
+	cdb := s.server.CharactersStore.DB
+	bag := pos >> 8
+	slot := uint8(pos & 0xff)
+	var dbBag int64
+	switch {
+	case bag == 255:
+		dbBag = 0
+	case (bag >= 19 && bag < 23) || (bag >= 67 && bag < 74):
+		var bagItem int64
+		if err := cdb.QueryRowContext(ctx, `SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1`, s.playerGUID, bag).Scan(&bagItem); err != nil || bagItem == 0 {
+			return 0, false
+		}
+		dbBag = bagItem
+	default:
+		return 0, false
+	}
+	var itemGUID int64
+	if err := cdb.QueryRowContext(ctx, `SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item != 0 LIMIT 1`, s.playerGUID, dbBag, slot).Scan(&itemGUID); err != nil || itemGUID == 0 {
+		return 0, false
+	}
+	var entry uint32
+	var curDur int64
+	if err := cdb.QueryRowContext(ctx, `SELECT itemEntry, COALESCE(durability, 0) FROM item_instance WHERE guid = ? LIMIT 1`, itemGUID).Scan(&entry, &curDur); err != nil {
+		return 0, false
+	}
+	var maxDur uint32
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT MaxDurability FROM item_template WHERE entry = ?`, entry).Scan(&maxDur)
+	}
+	if maxDur == 0 {
+		return 0, false
+	}
+	return s.durabilityRepairItem(ctx, uint64(itemGUID), entry, uint32(curDur), maxDur, cost, discountMod, guildBank)
+}
+
+// durabilityRepairAll mirrors Player::DurabilityRepairAll (Player.cpp:4996-5010):
+// bag-0 slots 0..38 plus carried-bag interiors, bank/buyback/keyring
+// excluded; each item repairs independently (a refused item does not stop
+// the rest) and the charged costs accumulate.
+func (s *session) durabilityRepairAll(ctx context.Context, cost bool, discountMod float64, guildBank bool) uint32 {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return 0
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.item, ii.itemEntry, ii.durability
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ((ci.bag = 0 AND ci.slot < ?) OR ci.bag IN (SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot < ?))`,
+		s.playerGUID, invSlotItemEnd, s.playerGUID, invSlotBagStart, invSlotBagEnd)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	type repairRow struct {
+		guid   uint64
+		entry  uint32
+		curDur uint32
+	}
+	var items []repairRow
+	for rows.Next() {
+		var r repairRow
+		if err := rows.Scan(&r.guid, &r.entry, &r.curDur); err == nil {
+			items = append(items, r)
+		}
+	}
+	rows.Close()
+	var total uint32
+	changed := false
+	for _, it := range items {
+		var maxDur uint32
+		_ = wdb.QueryRowContext(ctx, `SELECT MaxDurability FROM item_template WHERE entry = ?`, it.entry).Scan(&maxDur)
+		if maxDur == 0 {
+			continue
+		}
+		price, repaired := s.durabilityRepairItem(ctx, it.guid, it.entry, it.curDur, maxDur, cost, discountMod, guildBank)
+		total += price
+		changed = changed || repaired
+	}
+	if changed {
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+	}
+	return total
+}
+
 // durabilityLossChanceOnHit folds TrinityCore's DurabilityLossChance.Damage
 // config (World.cpp:619, default 0.5): roll_chance_f(rate) is a percent roll,
 // so 0.5 means a 0.5% chance per hit. There is no Go rate config (runes.go

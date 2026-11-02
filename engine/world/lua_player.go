@@ -2843,6 +2843,151 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// DurabilityLoss/DurabilityPointsLoss/DurabilityLossAll/
+	// DurabilityPointsLossAll/DurabilityPointLossForEquipSlot/
+	// DurabilityRepair/DurabilityRepairAll are Player::Durability*
+	// (PlayerMethods.h:2514-2625; Player.cpp:4890-5101) over the
+	// items.go durability model: the batch pairs reuse
+	// durabilityLossAll/durabilityPointsLossAll, the single-item
+	// pair uses durabilityLoss/durabilityPointsLoss, the equip-slot
+	// loss is a 1-point loss on the bag-0 slot item (out-of-range
+	// slots are a silent no-op, the binding's gate), and the
+	// repairs use durabilityRepairByPos/durabilityRepairAll with
+	// the C++ (bag<<8)|slot position encoding. Zero live Lua
+	// callers — engine-correctness. Arg notes: DurabilityRepair's
+	// discountMod has no C++ default (CHECKVAL without one), so a
+	// missing value errors like other required Go args, while
+	// RepairAll's discountMod defaults to 1 per its binding;
+	// guildBank defaults false on both.
+	methods["DurabilityLoss"] = func(ctx context.Context, args []any) ([]any, error) {
+		itemGUID, err := luaItemGUIDArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		percent, err := luaGenericFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if itemGUID != 0 {
+			s.durabilityLoss(ctx, itemGUID, float64(percent))
+		}
+		return nil, nil
+	}
+	methods["DurabilityPointsLoss"] = func(ctx context.Context, args []any) ([]any, error) {
+		itemGUID, err := luaItemGUIDArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		points, err := luaInt32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if itemGUID != 0 {
+			s.durabilityPointsLoss(ctx, itemGUID, points)
+		}
+		return nil, nil
+	}
+	methods["DurabilityLossAll"] = func(ctx context.Context, args []any) ([]any, error) {
+		percent, err := luaGenericFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		inventory := true
+		if len(args) > 1 {
+			if b, ok := args[1].(bool); ok {
+				inventory = b
+			}
+		}
+		s.durabilityLossAll(ctx, float64(percent), inventory)
+		return nil, nil
+	}
+	methods["DurabilityPointsLossAll"] = func(ctx context.Context, args []any) ([]any, error) {
+		points, err := luaInt32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		inventory := true
+		if len(args) > 1 {
+			if b, ok := args[1].(bool); ok {
+				inventory = b
+			}
+		}
+		s.durabilityPointsLossAll(ctx, points, inventory)
+		return nil, nil
+	}
+	methods["DurabilityPointLossForEquipSlot"] = func(ctx context.Context, args []any) ([]any, error) {
+		slotValue, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if slotValue >= uint32(equipSlotEnd) {
+			return nil, nil
+		}
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return nil, nil
+		}
+		var itemGUID int64
+		err = s.server.CharactersStore.DB.QueryRowContext(ctx,
+			`SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1`,
+			s.playerGUID, slotValue).Scan(&itemGUID)
+		if err != nil || itemGUID == 0 {
+			return nil, nil
+		}
+		s.durabilityPointsLoss(ctx, uint64(itemGUID), 1)
+		return nil, nil
+	}
+	methods["DurabilityRepair"] = func(ctx context.Context, args []any) ([]any, error) {
+		pos, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if pos > math.MaxUint16 {
+			return nil, fmt.Errorf("argument 1 must be uint16")
+		}
+		cost := true
+		if len(args) > 1 {
+			if b, ok := args[1].(bool); ok {
+				cost = b
+			}
+		}
+		discountMod, err := luaGenericFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		guildBank := false
+		if len(args) > 3 {
+			if b, ok := args[3].(bool); ok {
+				guildBank = b
+			}
+		}
+		price, repaired := s.durabilityRepairByPos(ctx, uint16(pos), cost, float64(discountMod), guildBank)
+		if repaired {
+			_ = s.sendInventoryItems(ctx)
+			s.sendPlayerUpdate()
+		}
+		return []any{price}, nil
+	}
+	methods["DurabilityRepairAll"] = func(ctx context.Context, args []any) ([]any, error) {
+		cost := true
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				cost = b
+			}
+		}
+		discountMod := float64(1)
+		if len(args) > 1 {
+			if value, err := luaGenericFloat32Arg(args, 1); err == nil {
+				discountMod = float64(value)
+			}
+		}
+		guildBank := false
+		if len(args) > 2 {
+			if b, ok := args[2].(bool); ok {
+				guildBank = b
+			}
+		}
+		return []any{s.durabilityRepairAll(ctx, cost, discountMod, guildBank)}, nil
+	}
 	// Eluna nearest/in-range family (WorldObjectMethods.h, see
 	// lua_worldobject_range.go): replaces the old range-only
 	// GetNearestGameObject bridge (2D metric, no entry/hostile args,
@@ -3033,6 +3178,25 @@ func playerPowerIndex(args []any, class uint8) (int, error) {
 		return 0, fmt.Errorf("power type %d is invalid", power)
 	}
 	return int(power), nil
+}
+
+// luaItemGUIDArg resolves an Eluna Item object argument to its instance
+// GUID, the CHECKOBJ<Item> twin: a non-item argument errors, while an
+// item object without a GUID reads 0 so callers can take the C++ nil-item
+// no-op arm.
+func luaItemGUIDArg(args []any, index int) (uint64, error) {
+	if index >= len(args) {
+		return 0, fmt.Errorf("argument %d is required", index+1)
+	}
+	obj, ok := args[index].(*scripting.Object)
+	if !ok || obj == nil {
+		return 0, fmt.Errorf("argument %d must be an item", index+1)
+	}
+	guid, ok := objectUint64Field(obj, "GUID")
+	if !ok {
+		return 0, fmt.Errorf("argument %d must be an item", index+1)
+	}
+	return guid, nil
 }
 
 func luaUint32Arg(args []any, index int) (uint32, error) {
