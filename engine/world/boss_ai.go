@@ -15695,6 +15695,18 @@ func init() {
 	RegisterLuaBoss("npc_claw_tentacle", 15725)
 	RegisterLuaBoss("npc_giant_claw_tentacle", 15728)
 	RegisterLuaBoss("npc_giant_eye_tentacle", 15334)
+	// boss_cthun (C'Thun body, entry 15727 — cthunAI : public BossAI,
+	// BossAI ctor leg DATA_CTHUN; the creature_template ScriptName
+	// binding stays DB-side): the out-of-combat whisper pump is ported
+	// in lua_scripts/kalimdor/boss_cthun.lua (the audit paragraph above
+	// predates that port and the eye's DoZoneInCombat leg; the phase
+	// machine itself remains unported). Registered so body aggro marks
+	// the encounter in progress (beginInstanceEncounter) like every
+	// other BossAI raid boss; without it, players could zone into AQ40
+	// mid-C'Thun-fight. boss_eye_of_cthun (15589) stays unregistered:
+	// eye_of_cthunAI derives ScriptedAI and never calls SetBossState,
+	// so C++ marks no encounter state on eye aggro.
+	RegisterLuaBoss("boss_cthun", 15727)
 	// wailing_caverns.cpp audit (loader decl :99 / call :212): single
 	// script npc_disciple_of_naralex, an EscortAI — the whole Naralex
 	// awakening chain (WaypointReached 4/5/11/19/24 arms,
@@ -19058,6 +19070,26 @@ func init() {
 	RegisterLuaBoss("npc_darnavan", 38472)
 	RegisterLuaBoss("npc_darnavan", 38485)
 
+	// npc_high_overlord_saurfang_igb / npc_muradin_bronzebeard_igb
+	// (Icecrown Gunship Battle captains, entries 36939 / 36948 —
+	// icecrown_citadel.h NPC_IGB_HIGH_OVERLORD_SAURFANG /
+	// NPC_IGB_MURADIN_BRONZEBEARD; the creature_template ScriptName
+	// bindings stay DB-side): combat arms ported in
+	// lua_scripts/northrend/boss_icecrown_gunship_battle.lua (engage
+	// Battle Fury, Cleave timers, Taste of Blood at 65%, never-die
+	// damage cap). Registered so captain aggro marks the encounter in
+	// progress (beginInstanceEncounter): C++ sets
+	// DATA_ICECROWN_GUNSHIP_BATTLE IN_PROGRESS from the captains'
+	// DoAction intro chain (boss_icecrown_gunship_battle.cpp:899 /
+	// :1152), and Go has no DoAction bridge, so captain aggro is the
+	// closest available encounter-start signal. The other six gunship
+	// entries (boarding leaders 36960/36961, boarding adds 36957/36950,
+	// rocketeers 36978/36982) are ScriptedAI adds with no boss-state
+	// leg and stay unregistered. Third group of the "// Icecrown
+	// Citadel" block.
+	RegisterLuaBoss("npc_high_overlord_saurfang_igb", 36939)
+	RegisterLuaBoss("npc_muradin_bronzebeard_igb", 36948)
+
 	// Deathbringer Saurfang (Icecrown Citadel) — bridgeable Talk
 	// arms ported from boss_deathbringer_saurfang.cpp; see
 	// lua_scripts/northrend/boss_deathbringer_saurfang.lua.
@@ -19379,8 +19411,12 @@ func init() {
 	// lua_scripts/northrend/boss_valithria_dreamwalker.lua:
 	// JustEngagedWith Talk(SAY_LICH_KING_INTRO 0) (event 1, the auriaya
 	// engage-port precedent). No other bridgeable arm in the file:
-	// boss_valithria_dreamwalker (36789) exposes zero bridgeable arms
-	// (NOT registered) — Talk(SAY_VALITHRIA_SUCCESS 7 /
+	// boss_valithria_dreamwalker (36789) stays unregistered: C++
+	// derives ScriptedAI with no boss-state leg (the encounter driver
+	// is npc_green_dragon_combat_trigger 38752,
+	// BossAI(DATA_VALITHRIA_DREAMWALKER), which has no Lua handlers),
+	// so its ported heal legs ride creature events regardless of
+	// BossAI — Talk(SAY_VALITHRIA_SUCCESS 7 /
 	// SAY_VALITHRIA_75_PERCENT 2) ride HealReceived legs (event 11); Talk(SAY_VALITHRIA_25_PERCENT 3 /
 	// SAY_VALITHRIA_DEATH 4) ride DamageTaken legs (no DamageTaken
 	// bridge — she never actually dies, damage is negated); Talk
