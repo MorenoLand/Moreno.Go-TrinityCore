@@ -1843,6 +1843,63 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// CanEquipItem(item|entry, slot) is Player::CanEquipItem
+	// (PlayerMethods.h:3254-3289): slots >= EQUIPMENT_SLOT_END (19) read
+	// false before any lookup, like the Eluna early return. The entry arm
+	// runs the CanEquipNewItem feasibility core (canEquipItemEntry, shared
+	// with the vendor buy path); the item arm resolves the entry from the
+	// owned item_instance row and runs the same core with the item itself
+	// excluded from the max-count, occupied-slot and unique-equipped legs,
+	// plus the EquipItem ownership and loot-generated denials. The
+	// not_loading in-game arms and the SSD/ItemLimitCategory/socketed-gem
+	// terms stay unmodeled, shared with the deferred CanEquipItem model
+	// the EquipItem comment names; a missing store or unowned item reads
+	// false, never an error, except a non-item object argument.
+	methods["CanEquipItem"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		slotValue, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if slotValue >= uint32(equipmentSlotEnd) {
+			return []any{false}, nil
+		}
+		var entry uint32
+		var excludeGUID uint64
+		if obj, ok := args[0].(*scripting.Object); ok && obj != nil {
+			if _, hasEntry := objectUint32Field(obj, "Entry"); !hasEntry {
+				return nil, fmt.Errorf("argument 1 must be an item")
+			}
+			guid, _ := objectUint64Field(obj, "GUID")
+			if guid == 0 {
+				return []any{false}, nil
+			}
+			if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+				return []any{false}, nil
+			}
+			db := s.server.CharactersStore.DB
+			high := uint64(0x4000) << 48
+			var ownerGUID int64
+			if err := db.QueryRowContext(ctx, "SELECT itemEntry, owner_guid FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1", guid, guid|high).Scan(&entry, &ownerGUID); err != nil || entry == 0 || ownerGUID <= 0 || uint64(ownerGUID) != s.playerGUID {
+				return []any{false}, nil
+			}
+			if s.server.containerLootGenerated(guid) {
+				return []any{false}, nil
+			}
+			excludeGUID = guid
+		} else {
+			entry, err = luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return []any{false}, nil
+		}
+		return []any{s.canEquipItemEntry(ctx, entry, uint8(slotValue), excludeGUID) == equipErrOk}, nil
+	}
 	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -3497,7 +3554,10 @@ func (s *session) luaPlayer() *scripting.Object {
 	// and resends the pet frame exactly once the same way.
 	// SetFreeTalentPoints stays out: free points are derived from the
 	// talent map, so there is no stored field a set could write (the
-	// at-login/title-spec strip's parked verdict).
+	// at-login/title-spec strip's parked verdict). Wiring it needs a
+	// session override on playerState honored by both freeTalentPoints
+	// twins, decremented on learn and cleared on reset and level-up, plus
+	// a persist column — a model change, not a one-line set.
 	methods["HasTalent"] = func(_ context.Context, args []any) ([]any, error) {
 		spellID, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -3982,6 +4042,44 @@ func (s *session) luaPlayer() *scripting.Object {
 	// party distinction, so the subgroup equality is the whole delta
 	// from IsInSameRaidWith above.
 	methods["IsInSameGroupWith"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		otherGUID, ok := objectUint64Field(obj, "GUID")
+		if !ok || otherGUID == 0 {
+			return []any{false}, nil
+		}
+		if otherGUID == state.GUID {
+			return []any{true}, nil
+		}
+		other := s.server.findSessionByGUID(otherGUID)
+		if other == nil || s.groupID == 0 || s.groupID != other.groupID {
+			return []any{false}, nil
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil {
+			return []any{false}, nil
+		}
+		sub, ok := group.memberSubGroup(s.playerGUID)
+		if !ok {
+			return []any{false}, nil
+		}
+		otherSub, ok := group.memberSubGroup(otherGUID)
+		return []any{ok && sub == otherSub}, nil
+	}
+	// IsGroupVisibleFor is Player::IsGroupVisibleFor (Player.cpp:2525-2535):
+	// a CONFIG_GROUP_VISIBILITY switch whose default (0) leg is
+	// IsInSameGroupWith above, so the Go twin repeats that leg verbatim
+	// (same player, same group, same subgroup). Go has no group-visibility
+	// config surface, so modes 1 (same raid — the bound IsInSameRaidWith),
+	// 2 (same team) and 3 (never visible) stay unmodeled; a missing or
+	// non-object argument errors like Eluna's CHECKOBJ, and a GUID with
+	// no live session reads false.
+	methods["IsGroupVisibleFor"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("player is required")
 		}

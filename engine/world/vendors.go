@@ -894,6 +894,16 @@ func (s *session) canStoreVendorItem(ctx context.Context, itemEntry, amount uint
 // fresh vendor item has no enchantments); the quiver class arm and the
 // offhand-polearm arm (single-item rarities).
 func (s *session) canEquipVendorItem(ctx context.Context, itemEntry uint32, equipSlot uint8) uint8 {
+	return s.canEquipItemEntry(ctx, itemEntry, equipSlot, 0)
+}
+
+// canEquipItemEntry is the shared feasibility core behind canEquipVendorItem
+// and the Eluna CanEquipItem item arm: excludeGUID names an already-owned
+// item being tested for its own slot, which the max-count, occupied-slot
+// and unique-equipped legs must skip (C++ skips pItem in each); 0 disables
+// the exclusion for the fresh-item arms. GUIDs are compared in both stored
+// forms, raw and with the 0x4000 high bits set.
+func (s *session) canEquipItemEntry(ctx context.Context, itemEntry uint32, equipSlot uint8, excludeGUID uint64) uint8 {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return equipErrItemCantBeEquipped
 	}
@@ -914,7 +924,7 @@ func (s *session) canEquipVendorItem(ctx context.Context, itemEntry uint32, equi
 	// equipped is fresh, so no skip exclusion is needed (C++ skips pItem).
 	if maxCount > 0 && maxCount != 2147483647 {
 		var owned int64
-		if err := cdb.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, itemEntry).Scan(&owned); err == nil && owned+1 > maxCount {
+		if err := cdb.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ? AND ci.item != ? AND ci.item != ?`, s.playerGUID, itemEntry, excludeGUID, excludeGUID|(uint64(0x4000)<<48)).Scan(&owned); err == nil && owned+1 > maxCount {
 			return equipErrCantCarryMoreOfThis
 		}
 	}
@@ -930,7 +940,7 @@ func (s *session) canEquipVendorItem(ctx context.Context, itemEntry uint32, equi
 		return errCode
 	}
 	var existing int64
-	if err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, equipSlot).Scan(&existing); err == nil && existing != 0 {
+	if err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, equipSlot).Scan(&existing); err == nil && existing != 0 && existing != int64(excludeGUID) && existing != int64(excludeGUID|(uint64(0x4000)<<48)) {
 		return equipErrNoEquipmentSlotAvailable
 	}
 	// Player::CanEquipUniqueItem (Player.cpp:25331-25339): a
@@ -938,7 +948,7 @@ func (s *session) canEquipVendorItem(ctx context.Context, itemEntry uint32, equi
 	// anywhere fails with EQUIP_ERR_ITEM_UNIQUE_EQUIPABLE.
 	if uint32(flags)&itemFlagUniqueEquippable != 0 {
 		var dupe int64
-		if err := cdb.QueryRowContext(ctx, `SELECT 1 FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19 AND ii.itemEntry = ? LIMIT 1`, s.playerGUID, itemEntry).Scan(&dupe); err == nil {
+		if err := cdb.QueryRowContext(ctx, `SELECT 1 FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19 AND ii.itemEntry = ? AND ci.item != ? AND ci.item != ? LIMIT 1`, s.playerGUID, itemEntry, excludeGUID, excludeGUID|(uint64(0x4000)<<48)).Scan(&dupe); err == nil {
 			return equipErrItemUniqueEquipable
 		}
 	}
