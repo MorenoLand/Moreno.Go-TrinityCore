@@ -84,7 +84,101 @@ func (s *Server) mapLive(mapID, instanceID uint32) scripting.MapLive {
 	live.SetWeather = func(ctx context.Context, zone, wtype uint32, grade float32) {
 		s.setZoneWeather(ctx, zone, weatherType(wtype), grade)
 	}
+	live.WorldObject = func(ctx context.Context, guid uint64) *scripting.Object {
+		return s.mapWorldObject(ctx, mapID, instanceID, guid)
+	}
 	return live
+}
+
+// mapWorldObject is the MapMethods.h GetWorldObject dispatch
+// (ObjectGuid.h HighGuid values): player 0x0000 via the map-scoped
+// session roster (C++ eObjectAccessor::GetPlayer(map, guid), not the
+// global lookup), unit 0xF130 and vehicle 0xF150 via the live creature
+// motion (C++ map->GetCreature; Go creature objects are motion-backed,
+// so unspawned DB rows read nil like session luaCreature), pet 0xF140
+// via the same motion map (pet motions live there), gameobject 0xF110
+// via the map-scoped GO resolver below, corpse 0xF101 via the owner's
+// session corpse row on this map instance (bones excluded, matching
+// the loadCorpseObject model; offline owners read nil — Go has no
+// session-free corpse object). Transport 0xF120 and MO-transport
+// 0x1FC0 read nil: Go mints no 0xF120 GUIDs and transport spawns
+// carry only wire GUIDs with no scripting object surface. Dynamic
+// object 0xF100 reads nil: dynamic spells have no scripting object.
+// Any other high part reads nil, the C++ default arm.
+func (s *Server) mapWorldObject(ctx context.Context, mapID, instanceID uint32, guid uint64) *scripting.Object {
+	if s == nil || guid == 0 {
+		return nil
+	}
+	switch uint16(guid >> 48) {
+	case 0x0000:
+		if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil &&
+			sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+			return sess.luaPlayer()
+		}
+		return nil
+	case 0xF130, 0xF150, 0xF140:
+		if motion := s.findCreatureMotion(mapID, instanceID, guid); motion != nil {
+			return s.luaMotionCreature(motion)
+		}
+		return nil
+	case 0xF110:
+		return s.mapLuaGameObject(ctx, mapID, instanceID, guid)
+	case 0xF101:
+		ownerGUID := guid & 0xFFFFFFFFFFFF
+		sess := s.findSessionByGUID(ownerGUID)
+		if sess == nil {
+			return nil
+		}
+		corpse, ok := sess.loadCorpseObject(ctx)
+		if !ok || corpse.MapID != mapID || corpse.InstanceID != instanceID {
+			return nil
+		}
+		return sess.luaCorpseObject(corpse)
+	default:
+		return nil
+	}
+}
+
+// mapLuaGameObject is the map-scoped twin of serverLuaGameObject:
+// dynamic/instance spawns on this map instance resolve from the object
+// registry, static template GOs from the gameobject row; a spawn on
+// another map, or one hidden in this instance, reads nil.
+func (s *Server) mapLuaGameObject(ctx context.Context, mapID, instanceID uint32, guid uint64) *scripting.Object {
+	if s == nil || uint16(guid>>48) != 0xF110 {
+		return nil
+	}
+	low := uint32(guid & 0x00FFFFFF)
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	var state luaGameObjectState
+	var ok bool
+	s.objectsMu.RLock()
+	if dyn, found := s.dynamicGameObjects[guid]; found && dyn != nil &&
+		dyn.Map == mapID && dyn.InstanceID == instanceID {
+		state = luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, Orientation: dyn.Orientation, GoState: uint32(dyn.State), LootState: 1, Type: uint32(dyn.Type), OwnerGUID: dyn.OwnerGUID, PhaseMask: dyn.PhaseMask}
+		ok = true
+	}
+	if !ok {
+		if states, found := s.instanceGameObjects[instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}]; found {
+			if dyn := states[guid]; dyn != nil {
+				state = luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, Orientation: dyn.Orientation, GoState: uint32(dyn.State), LootState: 1, Type: uint32(dyn.Type), OwnerGUID: dyn.OwnerGUID, PhaseMask: dyn.PhaseMask}
+				ok = true
+			}
+		}
+	}
+	s.objectsMu.RUnlock()
+	if !ok {
+		var loaded bool
+		state, loaded = s.loadLuaGameObject(ctx, low, entry)
+		if !loaded || state.Map != mapID {
+			return nil
+		}
+		state.InstanceID = instanceID
+		ok = true
+	}
+	if s.isGameObjectHiddenInInstance(state.Map, state.InstanceID, state.GUID) {
+		return nil
+	}
+	return s.luaGameObjectObject(state)
 }
 
 // instanceMapObject builds the map argument for the Eluna

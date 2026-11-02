@@ -773,11 +773,15 @@ type MapPlayerLive struct {
 // callback or a false return means normal mode. Players enumerates the
 // worldReady players on this map instance; a nil callback means none.
 // SetWeather applies a zone weather change; a nil callback drops it.
+// WorldObject resolves a GUID to the Lua object Eluna pushes for
+// MapMethods.h GetWorldObject (Map.cpp GetPlayer/GetCreature/GetPet/
+// GetGameObject/GetCorpse); a nil callback means no object resolves.
 type MapLive struct {
-	Load       func() (MapSnapshot, bool)
-	Difficulty func(context.Context) (int64, bool)
-	Players    func() []MapPlayerLive
-	SetWeather func(context.Context, uint32, uint32, float32)
+	Load        func() (MapSnapshot, bool)
+	Difficulty  func(context.Context) (int64, bool)
+	Players     func() []MapPlayerLive
+	SetWeather  func(context.Context, uint32, uint32, float32)
+	WorldObject func(context.Context, uint64) *Object
 }
 
 // NewMapObject builds the Lua Map object surface for the MAP_EVENT_* and
@@ -787,8 +791,9 @@ type MapLive struct {
 // (IsEmpty/IsHeroic/GetDifficulty/GetPlayerCount/GetPlayers/SetWeather/
 // GetInstanceData/SaveInstanceData) read the MapLive callbacks. The
 // remaining Map surface stays unbridged: GetHeight and GetAreaId(x,y,z)
-// need a terrain model Go does not have, and GetWorldObject needs a
-// GUID-high-part dispatch across the player/creature/GO resolvers.
+// need a terrain model Go does not have. GetWorldObject dispatches on
+// the GUID high part through the live WorldObject callback (nil callback
+// or nil return reads nil, matching Eluna's Push(nullptr) arm).
 func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 	load := live.Load
 	if load == nil {
@@ -914,6 +919,21 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 				live.SetWeather(ctx, zone, wtype, float32(grade))
 			}
 			return nil, nil
+		},
+		// GetWorldObject is MapMethods.h (guid): the GUID-high-part
+		// dispatch lives in the world-side WorldObject callback so
+		// this package keeps its data-source decoupling; an
+		// unknown high part or an unresolvable GUID reads nil,
+		// matching Eluna's default arm (no Push value).
+		"GetWorldObject": func(ctx context.Context, args []any) ([]any, error) {
+			guid, err := objectArgumentUint64(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if live.WorldObject == nil {
+				return []any{nil}, nil
+			}
+			return []any{live.WorldObject(ctx, guid)}, nil
 		},
 		// GetInstanceData is nil without an ElunaInstanceAI shim
 		// (MapMethods.h: GetInstanceData pushes nil when the cast
