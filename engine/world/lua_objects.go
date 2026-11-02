@@ -322,6 +322,26 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.auraMu.Unlock()
 		return []any{found}, nil
 	}
+	// GetAura is Unit::GetAura (UnitMethods.h) for session creatures:
+	// the engine record for the spell, or nil when absent. The Lua
+	// AddAura presence set (creatureAuras) carries no record, so a
+	// Lua-added aura reads nil here, the motion-creature GetAura
+	// convention; see lua_aura.go.
+	methods["GetAura"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := creatureAuraKey{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID}
+		s.server.auraMu.Lock()
+		aura := s.server.activeCreatureAuras[key][spell]
+		s.server.auraMu.Unlock()
+		if aura == nil {
+			return []any{nil}, nil
+		}
+		ref := &luaAuraRef{server: s.server, spellID: spell, creatureKey: key, mapID: state.Map, instanceID: state.InstanceID}
+		return []any{ref.luaAuraObject()}, nil
+	}
 	// IsImmunedToDamage is the mask overload of Unit::IsImmunedToDamage
 	// (Unit.cpp:7800-7816) for creatures: the creatureImmuneToDamage twin
 	// (script-written IMMUNITY_SCHOOL / IMMUNITY_DAMAGE rows plus the live
