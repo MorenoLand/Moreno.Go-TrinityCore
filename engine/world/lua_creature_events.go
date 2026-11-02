@@ -4107,16 +4107,24 @@ func (s *session) luaQuest(ctx context.Context, questID uint32) *scripting.Objec
 	methods["GetPrevQuestId"] = luaNoArgs(func() any { return int32(prevID) })
 	methods["GetType"] = luaNoArgs(func() any { return uint32(questType) })
 	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
-		var flag uint32
-		if len(args) > 0 {
-			if n, ok := args[0].(uint32); ok {
-				flag = n
-			}
+		// Script numbers arrive as float64 via luaValue, so a bare
+		// uint32 assertion always misses and HasFlag used to read false.
+		flag, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
 		}
 		return []any{uint32(flags)&flag != 0}, nil
 	}
 	methods["IsDaily"] = luaNoArgs(func() any { return uint32(flags)&0x1000 != 0 })
-	methods["IsRepeatable"] = luaNoArgs(func() any { return uint32(flags)&0x9000 != 0 })
+	// IsRepeatable is Quest::IsRepeatable (QuestDef.h:284): SpecialFlags &
+	// QUEST_SPECIAL_FLAGS_REPEATABLE (0x001) from quest_template_addon, not
+	// the quest_template Flags daily/weekly bits.
+	methods["IsRepeatable"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s == nil {
+			return []any{false}, nil
+		}
+		return []any{s.questIsRepeatable(ctx, questID)}, nil
+	}
 	return &scripting.Object{Type: "Quest", Fields: map[string]any{
 		"ID": uint32(id), "Name": title, "Title": title,
 		"Level": uint32(level), "MinLevel": uint32(minLevel), "Flags": uint32(flags),

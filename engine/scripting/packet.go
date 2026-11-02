@@ -48,6 +48,9 @@ func packetMethod(state *lua.State, packet *Packet, name string) int {
 		if value > math.MaxUint32 {
 			lua.ArgumentError(state, 2, "opcode must be uint32")
 		}
+		if value >= 0x51F { // NUM_MSG_TYPES (Opcodes.h:1340)
+			lua.ArgumentError(state, 2, "valid opcode expected")
+		}
 		packet.Opcode = uint32(value)
 		return 0
 	case "ReadByte":
@@ -117,7 +120,11 @@ func packetMethod(state *lua.State, packet *Packet, name string) int {
 		start := packet.ReadPos
 		end := bytes.IndexByte(packet.Data[start:], 0)
 		if end < 0 {
-			return packetError(state, errors.New("unterminated packet string"))
+			// C++ ReadCString reads to the end of the buffer when no
+			// terminator is present; only invalid UTF-8 throws.
+			packet.ReadPos = len(packet.Data)
+			state.PushString(string(packet.Data[start:]))
+			return 1
 		}
 		packet.ReadPos += end + 1
 		state.PushString(string(packet.Data[start : start+end]))

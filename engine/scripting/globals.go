@@ -87,6 +87,10 @@ func (r *Runtime) getQuest(state *lua.State) int {
 		state.PushNil()
 		return 1
 	}
+	var specialFlags int64
+	if r.config.WorldDatabase != nil {
+		_ = r.config.WorldDatabase.QueryRow("SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", uint32(questID)).Scan(&specialFlags)
+	}
 	methods := map[string]ObjectMethod{}
 	methods["GetId"] = func(context.Context, []any) ([]any, error) { return []any{uint32(id)}, nil }
 	methods["GetLevel"] = func(context.Context, []any) ([]any, error) { return []any{uint32(level)}, nil }
@@ -109,7 +113,11 @@ func (r *Runtime) getQuest(state *lua.State) int {
 		return []any{uint32(flags)&flag != 0}, nil
 	}
 	methods["IsDaily"] = func(context.Context, []any) ([]any, error) { return []any{uint32(flags)&0x1000 != 0}, nil }
-	methods["IsRepeatable"] = func(context.Context, []any) ([]any, error) { return []any{uint32(flags)&0x9000 != 0}, nil }
+	// IsRepeatable is Quest::IsRepeatable (QuestDef.h:284): SpecialFlags &
+	// QUEST_SPECIAL_FLAGS_REPEATABLE (0x001) from quest_template_addon, not
+	// the quest_template Flags daily/weekly bits; a missing addon row
+	// means not repeatable, matching the session questIsRepeatable twin.
+	methods["IsRepeatable"] = func(context.Context, []any) ([]any, error) { return []any{specialFlags&0x001 != 0}, nil }
 	PushObject(state, &Object{Type: "Quest", Fields: map[string]any{"ID": uint32(id), "Name": title, "Title": title, "Level": uint32(level), "MinLevel": uint32(minLevel), "Flags": uint32(flags)}, Methods: methods})
 	return 1
 }
