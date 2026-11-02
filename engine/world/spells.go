@@ -9865,7 +9865,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			skipCheck = false
 		}
 	}
-	s.firePlayerSpellCast(ctx, spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0}, skipCheck)
+	spellAction := s.firePlayerSpellCast(ctx, spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0}, skipCheck)
 
 	// Spell::_cast (Spell.cpp:3303-3312): as of 3.0.2 the caster's pets begin
 	// attacking the owner's target immediately when the owner casts a harmful
@@ -9878,6 +9878,42 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// cast from putting pets in combat against a GO guid.
 	if spell.DefenseType != spellDamageClassNone && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID && uint16(target.UnitGUID>>48) != 0xF110 && s.server != nil {
 		s.server.triggerPetOwnerAttacked(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, target.UnitGUID)
+	}
+
+	// SpellMethods.h Cancel/Finish/Cast from an ev5 handler (Spell.cpp
+	// _cast order: the hook runs before pet-assist, and a handler Cancel
+	// sets SPELL_STATE_FINISHED, which _cast only notices at the
+	// SelectSpellTargets check at 3413 — after pet-assist, before any
+	// power/effect leg. Go mirrors that order: pet-assist above runs
+	// even for a cancelled cast, and this check aborts before the
+	// CheckCast revalidation below. Cancel sends the PREPARING-state
+	// cancel arm (CancelGlobalCooldown + SendInterrupted +
+	// SPELL_FAILED_INTERRUPTED, Spell.cpp:3220-3225); Finish sends only
+	// SendInterrupted, matching the FINISHED-check arm (3413-3419, no
+	// cast-result packet, no GCD cancel); Cast re-enters the cast and
+	// the outer call returns without running effects a second time,
+	// matching the outer _cast's FINISHED check. Abort wins over
+	// re-cast when handlers set both. DELTAS: Cast's skipCheck is
+	// accepted but the completion revalidation below still runs (Go's
+	// finishSpellCast has no skipCheck parameter — the gap is narrow
+	// because the revalidation is power-only, not the full CheckCast);
+	// Finish skips the finish(true) tail (attack-timer reset, potion
+	// cooldown) that C++ runs before _cast notices FINISHED.
+	if spellAction != nil {
+		if spellAction.cancelled {
+			s.cancelGlobalCooldown(spellID)
+			s.sendInterrupted(castID, spellID, 0)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
+			return
+		}
+		if spellAction.finished {
+			s.sendInterrupted(castID, spellID, 0)
+			return
+		}
+		if spellAction.castAgain {
+			s.finishSpellCast(ctx, castID, spellID, spell, target, wireObjectGUID, castItemGUID, castItemEntry, queuedSwing)
+			return
+		}
 	}
 
 	// Spell::_cast (Spell.cpp:3335) re-runs CheckCast(false) when the cast timer
@@ -24422,7 +24458,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// C++ order. Triggered casts always carry skipCheck=true (prepare
 	// calls cast(true) for instant/channeled casts, and triggered casts
 	// never wait out a bar). The hook's returns are discarded.
-	s.firePlayerSpellCast(ctx, spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID}, true)
+	spellAction := s.firePlayerSpellCast(ctx, spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID}, true)
 
 	// Spell::_cast (Spell.cpp:3303-3312): as of 3.0.2 the caster's pets begin
 	// attacking the owner's target immediately when the owner casts a harmful
@@ -24434,6 +24470,32 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// triggerPetOwnerAttacked already drops the self-target case.
 	if spell.DefenseType != spellDamageClassNone && targetGUID != 0 && uint16(targetGUID>>48) != 0xF110 && s.server != nil && s.player != nil {
 		s.server.triggerPetOwnerAttacked(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, targetGUID)
+	}
+
+	// SpellMethods.h Cancel/Finish/Cast from an ev5 handler, triggered
+	// path: same _cast order as the client path (pet-assist runs, then
+	// the abort lands before target selection/effects). Triggered casts
+	// carry TRIGGERED_DONT_REPORT_CAST_ERROR, so Cancel's cast-result
+	// packet is the dont-report rewrite (Spell.cpp:4171-4172) and no
+	// GCD is cancelled (triggered casts never start one in Go's model);
+	// Finish sends only SendInterrupted. Cast re-enters the triggered
+	// funnel — its read-only gauntlet re-runs and the outer call returns
+	// without running effects twice; Cast's skipCheck is accepted but
+	// not honored here either (same finishSpellCast-parameter gap).
+	if spellAction != nil {
+		if spellAction.cancelled {
+			s.sendInterrupted(castID, spellID, 0)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+			return
+		}
+		if spellAction.finished {
+			s.sendInterrupted(castID, spellID, 0)
+			return
+		}
+		if spellAction.castAgain {
+			s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, basePoints, castItemGUID)
+			return
+		}
 	}
 	hitTargets := []uint64{targetGUID}
 	// SpellCastTargets::SetUnitTarget (Spell.cpp:256-263) and SetGOTarget
