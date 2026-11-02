@@ -7418,7 +7418,7 @@ func (s *Server) creatureEffectGameObjectSetDestructionState(ctx context.Context
 		return
 	}
 	for _, goGUID := range spellEffectGOTargetsForEffect(spellTarget, hitTargets, eff) {
-		s.setDestructibleBuildingState(ctx, m.Map, m.InstanceID, goGUID, state, true)
+		s.setDestructibleBuildingState(ctx, m.Map, m.InstanceID, goGUID, state, true, m.GUID)
 	}
 }
 
@@ -7431,7 +7431,7 @@ func (s *Server) creatureEffectGameObjectSetDestructionStateMasked(ctx context.C
 		return
 	}
 	for _, goGUID := range goMaskedTargetsForEffect(masks, spellTarget, hitTargets, effIndex, eff) {
-		s.setDestructibleBuildingState(ctx, m.Map, m.InstanceID, goGUID, state, true)
+		s.setDestructibleBuildingState(ctx, m.Map, m.InstanceID, goGUID, state, true, m.GUID)
 	}
 }
 

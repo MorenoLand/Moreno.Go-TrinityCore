@@ -2109,6 +2109,9 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	if s == nil || guid == 0 {
 		return
 	}
+	// Resolved before deletion: the ev13 fire below runs after the map
+	// delete, when a fresh resolve would always miss.
+	goObj := s.serverLuaGameObject(context.Background(), guid)
 	s.objectsMu.Lock()
 	var mapID uint32
 	var instanceID uint32
@@ -2153,9 +2156,11 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	// GameObject::RemoveFromWorld (GameObject.cpp:244): (event, gameobject).
 	// Only dynamic despawns have a live server-side object — static template
 	// GOs are per-client update packets, so their map removal has no Go
-	// counterpart.
-	if removed {
-		s.triggerGameObjectEvent(context.Background(), guid, scripting.GameObjectEventOnRemove)
+	// counterpart. The object is the pre-delete resolve above: the lookup
+	// maps no longer contain it here, so a fresh resolve would always miss
+	// and the event would never fire.
+	if removed && goObj != nil {
+		s.triggerGameObjectEventWithObject(context.Background(), goObj, uint32((guid>>24)&0x00FFFFFF), scripting.GameObjectEventOnRemove)
 	}
 }
 

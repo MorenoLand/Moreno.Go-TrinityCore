@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -243,17 +244,18 @@ func (s *Server) modifyDestructibleHealth(ctx context.Context, mapID, instanceID
 	if newState == rec.State {
 		return
 	}
-	s.setDestructibleBuildingState(ctx, mapID, instanceID, goGUID, newState, false)
+	s.setDestructibleBuildingState(ctx, mapID, instanceID, goGUID, newState, false, attackerGUID)
 }
 
 // setDestructibleBuildingState mirrors GameObject::SetDestructibleState
 // (GameObject.cpp:2274-2362): the flag flips, the display-id swap, and the
 // optional health reset for the target state. Documented no-bridge:
 // EnableCollision (no Go collision model), EventInform + AI()->Damaged/
-// AI()->Destroyed (no Go GO-event/AI model), Battleground::DestroyGate (no
-// Go battleground model), and the DestructibleModelData State1/2/3Wmo
-// display ids (no Go DBC model — the template displayId stands in).
-func (s *Server) setDestructibleBuildingState(ctx context.Context, mapID, instanceID uint32, goGUID uint64, state uint8, setHealth bool) {
+// AI()->Destroyed (no Go GO-AI model — the Eluna ON_DAMAGED/ON_DESTROYED
+// legs fire below), Battleground::DestroyGate (no Go battleground model),
+// and the DestructibleModelData State1/2/3Wmo display ids (no Go DBC
+// model — the template displayId stands in).
+func (s *Server) setDestructibleBuildingState(ctx context.Context, mapID, instanceID uint32, goGUID uint64, state uint8, setHealth bool, attackerGUID uint64) {
 	rec, tpl, ok := s.destructibleHealthFor(ctx, mapID, instanceID, goGUID)
 	if !ok {
 		return
@@ -319,6 +321,18 @@ func (s *Server) setDestructibleBuildingState(ctx context.Context, mapID, instan
 		fields[gameObjectBytes1] = uint32(rec.GOState) | uint32(GameObjectTypeDestructibleBuilding)<<8 | uint32(rec.GOArtKit)<<16 | uint32(rec.AnimProgress)<<24
 	}
 	s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, goGUID, fields)
+	// Eluna GAMEOBJECT_EVENT_ON_DAMAGED (8) / ON_DESTROYED (7), fired from
+	// GameObject::SetDestructibleState (GameObject.cpp:2294/2322):
+	// (event, go, attacker). The intact/rebuilding arms fire no hook in
+	// C++, so they fire none here. The attacker resolves through the
+	// unit-object funnel (online player, live creature motion, else nil
+	// for Eluna's nullptr push); returns are discarded like C++.
+	switch state {
+	case goDestructibleDamaged:
+		s.triggerGameObjectEvent(ctx, goGUID, scripting.GameObjectEventOnDamaged, s.luaUnitObjectForGUID(mapID, instanceID, attackerGUID))
+	case goDestructibleDestroyed:
+		s.triggerGameObjectEvent(ctx, goGUID, scripting.GameObjectEventOnDestroyed, s.luaUnitObjectForGUID(mapID, instanceID, attackerGUID))
+	}
 }
 
 // spellGameObjectTargetGUID extracts the 0xF110 gameobject target GUID from
@@ -776,7 +790,7 @@ func (s *session) handleEffectGameObjectSetDestructionStateGO(ctx context.Contex
 		// hits no switch arm and is a no-op.
 		return
 	}
-	s.server.setDestructibleBuildingState(ctx, s.player.Map, s.player.InstanceID, goGUID, state, true)
+	s.server.setDestructibleBuildingState(ctx, s.player.Map, s.player.InstanceID, goGUID, state, true, s.playerGUID)
 }
 
 // handleEffectGameObjectSetDestructionState mirrors

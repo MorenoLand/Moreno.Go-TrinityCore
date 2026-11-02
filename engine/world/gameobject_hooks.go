@@ -65,7 +65,18 @@ func (srv *Server) triggerGameObjectEvent(ctx context.Context, guid uint64, even
 	if goObj == nil {
 		return false
 	}
-	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	return srv.triggerGameObjectEventWithObject(ctx, goObj, uint32((guid>>24)&0x00FFFFFF), event, args...)
+}
+
+// triggerGameObjectEventWithObject fires a GO event for a pre-resolved Lua
+// object. Despawn paths must use it: the GO leaves the lookup maps before
+// the despawn packet goes out, so resolving after deletion always misses
+// (dynamic GOs carry synthetic low GUIDs with no gameobject-table row) and
+// the event would never fire.
+func (srv *Server) triggerGameObjectEventWithObject(ctx context.Context, goObj *scripting.Object, entry uint32, event int, args ...any) bool {
+	if srv == nil || srv.Features == nil || srv.Features.Scripts == nil || goObj == nil {
+		return false
+	}
 	values, err := srv.Features.Scripts.TriggerGameObjectEvent(ctx, entry, event, append([]any{goObj}, args...)...)
 	if err != nil {
 		srv.debug("lua gameobject event failed", "event", event, "error", err)
