@@ -316,6 +316,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{inCombat}, nil
 	}
+	// IsInWater/IsUnderWater are Unit::IsInWater/IsUnderWater
+	// (Unit.cpp:3276-3284) via the grid-leg liquid status, the
+	// handler-creature twins of the player methods in lua_player.go:
+	// live motion coords under motionMu, same vmap-only limitation.
+	methods["IsInWater"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		mapID, x, y, z := motion.Map, motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		return []any{s.mapIsInWater(mapID, x, y, z)}, nil
+	}
+	methods["IsUnderWater"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		mapID, x, y, z := motion.Map, motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		return []any{s.mapIsUnderWater(mapID, x, y, z)}, nil
+	}
 	// SetData/GetData are the CreatureAI::SetData virtual-dispatch twin
 	// (CreatureAI.h: the per-AI override interprets its own type numbers;
 	// Go handlers are not AI objects, so there is no virtual table to

@@ -501,7 +501,17 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{false}, nil
 	}
-	methods["IsInWater"] = luaNoArgs(func() any { return s.isSwimming })
+	// IsInWater is Unit::IsInWater (Unit.cpp:3276-3279): the liquid
+	// status IN_WATER|UNDER_WATER over all liquid types, not the client
+	// swim flag — a wading player is in water without swimming, and a
+	// swimming-flagged player over vmap-only water is not by the grid
+	// leg. Same grid-leg limitation as IsUnderWater below.
+	methods["IsInWater"] = luaNoArgs(func() any {
+		if s == nil || s.player == nil || s.server == nil {
+			return false
+		}
+		return s.server.mapIsInWater(s.player.Map, s.player.X, s.player.Y, s.player.Z)
+	})
 	// IsUnderWater is LuaUnit::IsUnderWater (LuaFunctions.cpp:352) via
 	// Map::IsUnderWater (Map.cpp:2923-2926): the grid-leg liquid status
 	// over water and ocean, under water at the default collision height.

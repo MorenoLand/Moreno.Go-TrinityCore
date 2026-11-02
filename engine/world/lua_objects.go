@@ -250,6 +250,21 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	})
 	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
+	// IsInWater/IsUnderWater are Unit::IsInWater/IsUnderWater
+	// (Unit.cpp:3276-3284) via the grid-leg liquid status, over the
+	// builder's live-motion snapshot coords like its other reads.
+	methods["IsInWater"] = luaNoArgs(func() any {
+		if s == nil || s.server == nil {
+			return false
+		}
+		return s.server.mapIsInWater(state.Map, state.X, state.Y, state.Z)
+	})
+	methods["IsUnderWater"] = luaNoArgs(func() any {
+		if s == nil || s.server == nil {
+			return false
+		}
+		return s.server.mapIsUnderWater(state.Map, state.X, state.Y, state.Z)
+	})
 	// GetCorpseDelay / RemoveCorpse are the session-bound twins of the
 	// handler-creature bindings (lua_creature_events.go): the rank-mapped
 	// corpse-decay delay, and the direct Creature::RemoveCorpse port in
