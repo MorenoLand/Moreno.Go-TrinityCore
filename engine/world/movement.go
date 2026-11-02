@@ -957,7 +957,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	if !vehicleMover && !possessedMover && s.isSwimming && s.player != nil && s.player.TransportGUID == 0 {
 		if key := terrainLiquidCellKey(s.player.X, s.player.Y); key != s.darkWaterCell {
 			s.darkWaterCell = key
-			status, data := s.server.mapGridLiquidStatus(s.player.Map, s.player.X, s.player.Y, s.player.Z, liquidTypeAll, terrainDefaultCollisionHeight)
+			status, data := s.server.mapLiquidStatus(s.player.Map, s.player.X, s.player.Y, s.player.Z, liquidTypeAll, terrainDefaultCollisionHeight)
 			s.setInDarkWater(status != liquidStatusNoWater && data.typeFlags&liquidTypeDarkWater != 0)
 		}
 	}
