@@ -869,6 +869,133 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.questMoneyChanged(ctx)
 		return []any{true}, err
 	}
+	// Player:GetHonorPoints/GetArenaPoints/SetHonorPoints/SetArenaPoints/
+	// ModifyHonorPoints/ModifyArenaPoints (PlayerMethods.h:806-821,
+	// 1933-1948, 2160-2178; Player.cpp:7051-7091). The getters read the
+	// PLAYER_FIELD_HONOR_CURRENCY / PLAYER_FIELD_ARENA_CURRENCY twins
+	// (TotalHonorPoints / ArenaPoints, the same fields the values-update
+	// builder broadcasts). The setters cap at CONFIG_MAX_HONOR_POINTS /
+	// CONFIG_MAX_ARENA_POINTS and add the known currency when the capped
+	// value is nonzero; the modifiers floor at 0 and then run the setter,
+	// so the cap applies to them too. Persistence follows the SetCoinage /
+	// .modify precedent (immediate characters UPDATE + values-update
+	// broadcast); C++ persists via the player save instead, so a crash
+	// between the Lua call and the next save loses nothing here that C++
+	// would have kept.
+	setHonorPoints := func(value uint32) {
+		maxPoints := uint32(75000)
+		if s.server != nil && s.server.Config.MaxHonorPoints > 0 {
+			maxPoints = s.server.Config.MaxHonorPoints
+		}
+		if value > maxPoints {
+			value = maxPoints
+		}
+		state.TotalHonorPoints = value
+		if value > 0 {
+			s.addKnownCurrency(state, itemHonorPointsID)
+		}
+	}
+	setArenaPoints := func(value uint32) {
+		maxPoints := uint32(10000)
+		if s.server != nil && s.server.Config.MaxArenaPoints > 0 {
+			maxPoints = s.server.Config.MaxArenaPoints
+		}
+		if value > maxPoints {
+			value = maxPoints
+		}
+		state.ArenaPoints = value
+		if value > 0 {
+			s.addKnownCurrency(state, itemArenaPointsID)
+		}
+	}
+	methods["GetHonorPoints"] = luaNoArgs(func() any { return state.TotalHonorPoints })
+	methods["GetArenaPoints"] = luaNoArgs(func() any { return state.ArenaPoints })
+	methods["SetHonorPoints"] = func(ctx context.Context, args []any) ([]any, error) {
+		value, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		setHonorPoints(value)
+		s.persistHonorFields(ctx)
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	methods["SetArenaPoints"] = func(ctx context.Context, args []any) ([]any, error) {
+		value, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		setArenaPoints(value)
+		if chars := s.server.CharactersStore; chars != nil && chars.DB != nil {
+			_, _ = chars.DB.ExecContext(ctx, "UPDATE characters SET arenaPoints = ? WHERE guid = ?", state.ArenaPoints, state.GUID)
+		}
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	methods["ModifyHonorPoints"] = func(ctx context.Context, args []any) ([]any, error) {
+		delta, err := luaInt64Arg(args, 0)
+		if err != nil || delta > math.MaxInt32 || delta < math.MinInt32 {
+			if err == nil {
+				err = fmt.Errorf("argument 1 must be int32")
+			}
+			return nil, err
+		}
+		value := int64(state.TotalHonorPoints) + delta
+		if value < 0 {
+			value = 0
+		}
+		setHonorPoints(uint32(value))
+		s.persistHonorFields(ctx)
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	methods["ModifyArenaPoints"] = func(ctx context.Context, args []any) ([]any, error) {
+		delta, err := luaInt64Arg(args, 0)
+		if err != nil || delta > math.MaxInt32 || delta < math.MinInt32 {
+			if err == nil {
+				err = fmt.Errorf("argument 1 must be int32")
+			}
+			return nil, err
+		}
+		value := int64(state.ArenaPoints) + delta
+		if value < 0 {
+			value = 0
+		}
+		setArenaPoints(uint32(value))
+		if chars := s.server.CharactersStore; chars != nil && chars.DB != nil {
+			_, _ = chars.DB.ExecContext(ctx, "UPDATE characters SET arenaPoints = ? WHERE guid = ?", state.ArenaPoints, state.GUID)
+		}
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	// Player:GetLifetimeKills/AddLifetimeKills (PlayerMethods.h:1491-1496,
+	// 3409-3415): the PLAYER_FIELD_LIFETIME_HONORABLE_KILLS twin is
+	// TotalKills (player_state.go values builder). AddLifetimeKills adds
+	// with uint32 wrap, like the C++ uint32 addition; neither arm touches
+	// today/yesterday kills.
+	methods["GetLifetimeKills"] = luaNoArgs(func() any { return state.TotalKills })
+	methods["AddLifetimeKills"] = func(ctx context.Context, args []any) ([]any, error) {
+		value, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state.TotalKills += value
+		s.persistHonorFields(ctx)
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	// Player:GetReputationRank (PlayerMethods.h:989-997;
+	// Player.cpp:6644-6648, ReputationMgr.cpp:119-135): rank of the
+	// standing, where an unknown faction reads standing 0 and therefore
+	// NEUTRAL (3) in both trees — the shared reputationStanding helper
+	// already returns 0 for unlisted factions.
+	methods["GetReputationRank"] = func(_ context.Context, args []any) ([]any, error) {
+		faction, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{reputationRank(int64(s.reputationStanding(faction)))}, nil
+	}
 	methods["SetGender"] = func(_ context.Context, args []any) ([]any, error) {
 		gender, err := luaUint32Arg(args, 0)
 		if err != nil || gender > 1 {
