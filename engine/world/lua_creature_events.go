@@ -560,6 +560,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.auraMu.Unlock()
 		return []any{found}, nil
 	}
+	// GetAura is Unit::GetAura (UnitMethods.h) for handler creatures:
+	// the engine record for the spell, or nil when absent. The Lua
+	// AddAura presence set (creatureAuras) carries no record, so a
+	// Lua-added aura reads nil here, the GetDuration/GetStackAmount
+	// 0-read convention for the same set; see lua_aura.go.
+	methods["GetAura"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		aura := s.activeCreatureAuras[key][spell]
+		s.auraMu.Unlock()
+		if aura == nil {
+			return []any{nil}, nil
+		}
+		ref := &luaAuraRef{server: s, spellID: spell, creatureKey: key, mapID: motion.Map, instanceID: motion.InstanceID}
+		return []any{ref.luaAuraObject()}, nil
+	}
 	// IsPolymorphed is Unit::IsPolymorphed (Unit.cpp:10572): a live
 	// SPELL_AURA_TRANSFORM (56) aura, via the creatureIsPolymorphed twin.
 	methods["IsPolymorphed"] = func(_ context.Context, _ []any) ([]any, error) {

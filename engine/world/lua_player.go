@@ -497,6 +497,21 @@ func (s *session) luaPlayer() *scripting.Object {
 		_, ok := s.auras[spell]
 		return []any{ok}, nil
 	}
+	// GetAura is Unit::GetAura (UnitMethods.h, Unit.cpp GetAura(spellID)):
+	// the engine record for the spell, or nil when absent. Presence-only
+	// auras (s.auras without an activeAuras record) have no Aura object;
+	// see lua_aura.go for the object surface and its deltas.
+	methods["GetAura"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.activeAuras[spell] == nil {
+			return []any{nil}, nil
+		}
+		ref := &luaAuraRef{server: s.server, spellID: spell, player: s, mapID: state.Map, instanceID: state.InstanceID}
+		return []any{ref.luaAuraObject()}, nil
+	}
 	// IsImmunedToDamage is the mask overload of Unit::IsImmunedToDamage
 	// (Unit.cpp:7800-7816) for players: the session isImmuneToDamage twin
 	// (Divine Shield / Ice Block / Blessing of Protection hardcodes plus

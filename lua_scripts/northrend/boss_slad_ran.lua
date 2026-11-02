@@ -23,8 +23,9 @@
 -- "Player" — nalorakk precedent); JustDied Talk(EMOTE_ACTIVATE_ALTAR
 -- 6) + Talk(SAY_DEATH 2) (event 4).
 -- npc_slad_ran_constrictor: JustEngagedWith — Grip of Slad'ran 55093
--- on the victim (2s init, 3-6s repeat). The 5-stack -> Snake Wrap
--- 55126 machine is NOT modeled (see below).
+-- on the victim (2s init, 3-6s repeat) with the C++-exact 5-stack ->
+-- Snake Wrap 55126 leg (gripTick, below; only the boss SetGUID
+-- wrap-latch, achievement-only, stays unported).
 -- npc_slad_ran_viper: JustEngagedWith — Venomous Bite 54987 (victim,
 -- 2s init, 10s repeat).
 -- Unmodeled (no bridges — documented, not wired):
@@ -49,21 +50,18 @@
 -- netherstorm precedent). achievement_snakes_whyd_it_have_to_be_snakes
 -- (AchievementCriteriaScript, CAST_AI cross-AI OnCheck) has no
 -- achievement-criteria bridge on the Lua surface — documented-only.
--- Constrictor: the stack-count leg (GetAura(55093) stack check == 5 —
--- creature:GetStackAmount is live but is a SELF-read (the constrictor's
--- own auras) while C++ reads the TARGET player's aura stacks — no
--- player-surface stack bridge, so the old "no bridge" wording's
--- blessed_banner precedent still holds),
--- RemoveAurasDueToSpell, the victim self-cast of SNAKE_WRAP 55126
--- (a player-side self-cast with no player-cast path from creature AI,
--- corastrasza precedent — the old "no victim CastSpell bridge"
--- misnamed the blocker), the TempSummon -> summoner SetGUID
--- cross-AI hop (stale "no despawn bridge" wording: creature:Despawn()
--- IS bridged, but the despawn is one leg of the unbridged stack-5
--- aura-stack gate + cross-AI SetGUID wrap-latch machine — terestian
--- precedent — so a one-sided port would fabricate despawns; so only
--- the Grip cast rides the timer; the wrap/achievement-fail payload is
--- documented-only.
+-- Constrictor: the stack-count leg (GetAura(55093) stack check == 5)
+-- PORTED via Unit:GetAura + Aura:GetStackAmount (lua_aura.go) — the
+-- old "no player-surface stack bridge" wording is retired. Remaining
+-- deltas only: the SetGUID wrap-latch (achievement-only) and the
+-- per-caster aura filter (Go holds one record per spell, so two
+-- constrictors gripping one player merge stacks).
+-- RemoveAurasDueToSpell rides victim:RemoveAura (single-record model:
+-- the unfiltered remove is the caster-filtered remove), the victim
+-- self-cast of SNAKE_WRAP 55126 rides victim:CastSpell (the
+-- triggered pipeline, matching C++ CastSpell(target, spell, true)),
+-- and the TempSummon -> summoner SetGUID cross-AI hop is the
+-- unported latch above — the despawn itself rides creature:Despawn().
 -- Viper Reset cancels its scheduler; the boss Reset (BossAI _Reset +
 -- _wrappedPlayers.clear) lands as per-GUID timer/state drop on
 -- OnLeaveCombat(2)/OnReset(23), gargolmar precedent.
@@ -287,14 +285,32 @@ RegisterCreatureEvent(ENTRY_SLAD_RAN, 9, sladranDamageTaken)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 23, sladranReset)
 
 -- npc_slad_ran_constrictor (29713): Grip of Slad'ran 55093 on the
--- victim, 2s init, 3-6s repeat. The stack-5 -> RemoveAurasDueToSpell
--- -> victim self-cast SNAKE_WRAP 55126 -> boss SetGUID wrap-latch ->
--- DespawnOrUnsummon machine has no bridges (see header) — the cast
--- is the only wireable arm.
+-- victim, 2s init, 3-6s repeat, with the C++-exact stack-5 wrap leg
+-- (RemoveAurasDueToSpell -> victim self-cast SNAKE_WRAP 55126 ->
+-- DespawnOrUnsummon); only the boss SetGUID wrap-latch
+-- (achievement-only) stays unported, see header.
 local function gripTick(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_GRIP_OF_SLAD_RAN)
+        -- C++-exact stack-5 wrap leg (boss_slad_ran.cpp constrictor
+        -- JustEngagedWith): the victim's Grip stacks are read through
+        -- Unit:GetAura + Aura:GetStackAmount now that the aura object
+        -- is bridged. Deltas: C++ reads the caster-filtered aura
+        -- (GetAura(55093, me->GetGUID())) while Go holds one record per
+        -- spell, so two constrictors gripping one player merge stacks;
+        -- the SetGUID wrap-latch (DATA_SNAKES achievement only) has no
+        -- cross-AI bridge, so the latch is not set — the wrap itself,
+        -- the Grip strip, and the despawn all land.
+        local grip = victim:GetAura(SPELL_GRIP_OF_SLAD_RAN)
+        if grip and grip:GetStackAmount() == 5 then
+            victim:RemoveAura(SPELL_GRIP_OF_SLAD_RAN)
+            victim:CastSpell(victim, SPELL_SNAKE_WRAP)
+            creature:Despawn()
+            -- No reschedule: C++ DespawnOrUnsummon kills the
+            -- constrictor's scheduler with it.
+            return
+        end
     end
     schedule(guid, "grip", math.random(3000, 6000), function()
         gripTick(creature, guid)
