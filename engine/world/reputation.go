@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"math"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -428,6 +429,19 @@ func (s *session) giveSpellReputation(ctx context.Context, factionID uint32, amo
 	s.addReputationAmount(ctx, factionID, amount)
 }
 
+// reputationGainFold mirrors the incremental arm of
+// ReputationMgr::SetOneFactionReputation (ReputationMgr.cpp:384):
+// an incremental delta is scaled by Rate.Reputation.Gain with C++
+// float rounding (floor(x*rate + 0.5)) before it joins the old total.
+// The absolute arm never folds; at the default 1.0 the fold is identity.
+func (s *session) reputationGainFold(amount int32) int32 {
+	rate := float32(1)
+	if s != nil && s.server != nil {
+		rate = float32(s.server.Config.ReputationGainRate)
+	}
+	return int32(math.Floor(float64(float32(amount)*rate + 0.5)))
+}
+
 // addReputationAmount is the hook+persist sink shared by giveReputation and
 // the quest-reward pipeline (which scales the amount itself, mirroring
 // Player::RewardReputation + CalculateReputationGain).
@@ -452,6 +466,11 @@ func (s *session) addReputationAmount(ctx context.Context, factionID uint32, amo
 	if amount == 0 {
 		return
 	}
+	// ReputationMgr::SetOneFactionReputation (ReputationMgr.cpp:384):
+	// the incremental arm scales the delta by Rate.Reputation.Gain
+	// before it joins the old total; spillover above already ran on
+	// the unfolded delta, matching SetReputation's order.
+	amount = s.reputationGainFold(amount)
 	cdb := s.server.CharactersStore.DB
 	for i := range s.player.Reputations {
 		if s.player.Reputations[i].FactionID == factionID {
@@ -783,9 +802,9 @@ func (s *session) applyRepRewardRate(ctx context.Context, factionID uint32, sour
 // applySpilloverReputation mirrors ReputationMgr::SetOneFactionReputation
 // (ReputationMgr.cpp:374) as called from SetReputation's spillover arms:
 // no Eluna hook (the hook fires once for the main faction at SetReputation
-// entry), no aura-percent fold, no RATE_REPUTATION_GAIN fold (Go has no
-// rate model; the C++ default rate 1.0 makes the incremental fold
-// identity), and no chained spillover. The existing-row arm mirrors the
+// entry), no aura-percent fold, and no chained spillover. The
+// incremental arm folds the delta by Rate.Reputation.Gain
+// (ReputationMgr.cpp:384), identity at the 1.0 default. The existing-row arm mirrors the
 // main sinks (clamp to [-42000, 42999], store net of the base, SetVisible
 // fold, hostile auto-war, immediate SendState, criteria, quest scan); the
 // no-row arm creates only a DBC-backed row, and a DBC miss is the SetOne
@@ -802,7 +821,7 @@ func (s *session) applySpilloverReputation(ctx context.Context, factionID uint32
 		oldRank := reputationRank(int64(totalReputationStanding(s.player.Reputations[i])))
 		newTotal := amount
 		if incremental {
-			newTotal = totalReputationStanding(s.player.Reputations[i]) + amount
+			newTotal = totalReputationStanding(s.player.Reputations[i]) + s.reputationGainFold(amount)
 		}
 		if newTotal > 42999 {
 			newTotal = 42999
@@ -836,7 +855,7 @@ func (s *session) applySpilloverReputation(ctx context.Context, factionID uint32
 	}
 	newTotal := amount
 	if incremental {
-		newTotal = dbcRep.BaseStanding + amount
+		newTotal = dbcRep.BaseStanding + s.reputationGainFold(amount)
 	}
 	if newTotal > 42999 {
 		newTotal = 42999
