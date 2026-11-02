@@ -1540,7 +1540,36 @@ func (s *session) rewardQuestReputation(ctx context.Context, view questRewardVie
 		if rep == 0 {
 			continue
 		}
-		rep = s.calculateQuestReputationGain(facID, rep, noQuestBonus)
+		// Player::RewardReputation(Quest const*) (Player.cpp:6813-6823)
+		// picks the CalculateReputationGain source in Daily, Weekly,
+		// Monthly, Repeatable, plain order; GetQuestLevel (Player.h:1207)
+		// is the quest level when positive, else the player's level.
+		source := repSourceQuest
+		switch {
+		case view.Detail.Flags&questFlagsDaily != 0:
+			source = repSourceDailyQuest
+		case view.Detail.Flags&questFlagsWeekly != 0:
+			source = repSourceWeeklyQuest
+		default:
+			var specialFlags int64
+			if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+			}
+			switch {
+			case specialFlags&questSpecialMonthly != 0:
+				source = repSourceMonthlyQuest
+			case specialFlags&questSpecialRepeatable != 0:
+				source = repSourceRepeatableQuest
+			}
+		}
+		var qLevel int64
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT QuestLevel FROM quest_template WHERE ID = ?", questID).Scan(&qLevel)
+		}
+		if qLevel <= 0 {
+			qLevel = int64(s.player.Level)
+		}
+		rep = s.calculateQuestReputationGain(ctx, facID, rep, noQuestBonus, source, uint32(qLevel))
 		if rep == 0 || !s.spellFactionEntryExists(facID) {
 			continue
 		}
@@ -1561,19 +1590,16 @@ func isReputationAllowedForQuestTeam(team uint32, factionID uint32) bool {
 }
 
 // calculateQuestReputationGain mirrors Player::CalculateReputationGain
-// (Player.cpp:6651-6726) for quest sources: the 156 aura modifier folds into
-// percent (skipped under noQuestBonus), gains use 100+mod and losses
-// 100-mod, and a zero or negative percent grants nothing. The
+// (Player.cpp:6651-6726) for quest sources, in C++ order: the 156 aura
+// modifier folds into percent (skipped under noQuestBonus), gains use
+// 100+mod and losses 100-mod; the low-level quest rate
+// ("Rate.Reputation.LowLevel.Quest", default 1.0) multiplies percent only
+// when the quest level is at or below the player's gray level; a zero or
+// negative percent grants nothing; the source's reward-rate column folds
+// next (a zero rate disables the gain); the recruit-a-friend bonus folds
+// last for every source except SPELL (quest sources qualify). The
 // faction-specific 190 modifier is kill-only in C++ and is not folded here.
-// The low-level quest rate has no Go config (C++ default 1.0, so the
-// gray-level arm is a no-op here); RepRewardRate has no Go model.
-// Player.cpp:6724: the recruit-a-friend bonus folds percent for every source
-// except REPUTATION_SOURCE_SPELL (quest sources qualify).
-func (s *session) calculateQuestReputationGain(factionID uint32, rep int32, noQuestBonus bool) int32 {
-	// All quest sources (daily/weekly/monthly/repeatable/plain) share
-	// RATE_REPUTATION_LOWLEVEL_QUEST in the C++; with no Go config for it
-	// the C++ default 1.0 applies, so the source switch and the gray-level
-	// reduction arm are no-ops here.
+func (s *session) calculateQuestReputationGain(ctx context.Context, factionID uint32, rep int32, noQuestBonus bool, source repSource, questLevel uint32) int32 {
 	percent := float32(100)
 	if !noQuestBonus {
 		if mod := s.reputationGainPctMod(factionID, false); mod != 0 {
@@ -1584,11 +1610,28 @@ func (s *session) calculateQuestReputationGain(factionID uint32, rep int32, noQu
 			}
 		}
 	}
-	if s.getsRecruitAFriendBonus(false) {
-		percent *= 1 + float32(s.server.Config.ReputationRecruitAFriendBonusRate)
+	questRate := float32(1)
+	playerLevel := uint32(0)
+	if s != nil {
+		if s.player != nil {
+			playerLevel = uint32(s.player.Level)
+		}
+		if s.server != nil {
+			questRate = float32(s.server.Config.ReputationLowLevelQuestRate)
+		}
+	}
+	if questRate != 1 && questLevel <= grayLevel(playerLevel) {
+		percent *= questRate
 	}
 	if percent <= 0 {
 		return 0
+	}
+	var ok bool
+	if percent, ok = s.applyRepRewardRate(ctx, factionID, source, percent); !ok {
+		return 0
+	}
+	if s.getsRecruitAFriendBonus(false) {
+		percent *= 1 + float32(s.server.Config.ReputationRecruitAFriendBonusRate)
 	}
 	return int32(float32(rep) * percent / 100)
 }

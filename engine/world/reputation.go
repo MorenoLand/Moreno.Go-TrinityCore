@@ -60,8 +60,9 @@ const (
 // sources fold 156 only, while the battleground team-reward arm applies
 // both (Battleground.cpp:640-658, AddPct twice). C++ applies it as
 // percent = 100 + repMod for gains, 100 - repMod for losses (CalculatePct
-// at the end). The quest-bonus, low-level rate and RepRewardRate legs have
-// no Go model.
+// at the end). The low-level rate and RepRewardRate legs live in the
+// per-source calculators (kill, quest, spell), not here: this fold is the
+// aura leg only, shared by all of them plus the battleground arm.
 func (s *session) reputationGainPctMod(factionID uint32, includeFactionSpecific bool) (mod int32) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return 0
@@ -367,7 +368,11 @@ func (s *session) giveReputation(ctx context.Context, factionID uint32, amount i
 	}
 	// Player::CalculateReputationGain (Player.cpp:6657): percent += rep > 0 ?
 	// repMod : -repMod, then CalculatePct(rep, percent); a zero or negative
-	// percent grants nothing.
+	// percent grants nothing. This is the battleground arm's shape
+	// (Battleground::RewardReputationToTeam adds both aura modifiers, then
+	// ModifyReputation directly): no low-level rate, no reward-rate row,
+	// no recruit-a-friend fold. Spell-effect gains use
+	// giveSpellReputation, which adds the spell-rate leg.
 	if mod := s.reputationGainPctMod(factionID, includeFactionSpecific); mod != 0 {
 		percent := int64(100 + mod)
 		if amount < 0 {
@@ -380,6 +385,45 @@ func (s *session) giveReputation(ctx context.Context, factionID uint32, amount i
 		if amount == 0 {
 			return
 		}
+	}
+	s.addReputationAmount(ctx, factionID, amount)
+}
+
+// calculateSpellReputationGain mirrors Player::CalculateReputationGain
+// (Player.cpp:6651-6726) for REPUTATION_SOURCE_SPELL: the 156 aura modifier
+// folds into percent (the kill-only 190 modifier never does), the low-level
+// rate is 1.0 for this source, a zero or negative percent grants nothing,
+// the spell_rate column folds next (a zero rate disables the gain), and
+// the recruit-a-friend bonus never folds for spells.
+func (s *session) calculateSpellReputationGain(ctx context.Context, factionID uint32, rep int32) int32 {
+	percent := float32(100)
+	if mod := s.reputationGainPctMod(factionID, false); mod != 0 {
+		if rep > 0 {
+			percent += float32(mod)
+		} else {
+			percent -= float32(mod)
+		}
+	}
+	if percent <= 0 {
+		return 0
+	}
+	var ok bool
+	if percent, ok = s.applyRepRewardRate(ctx, factionID, repSourceSpell, percent); !ok {
+		return 0
+	}
+	return int32(float32(rep) * percent / 100)
+}
+
+// giveSpellReputation is the Spell::EffectReputation sink
+// (SpellEffects.cpp:4349-4368): CalculateReputationGain with the spell
+// source, then ModifyReputation through the shared incremental sink.
+func (s *session) giveSpellReputation(ctx context.Context, factionID uint32, amount int32) {
+	if s.player == nil || factionID == 0 || amount == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	amount = s.calculateSpellReputationGain(ctx, factionID, amount)
+	if amount == 0 {
+		return
 	}
 	s.addReputationAmount(ctx, factionID, amount)
 }
@@ -642,6 +686,98 @@ func (s *session) loadRepSpilloverTemplate(ctx context.Context, factionID uint32
 		template.rank[i] = uint32(rank[i])
 	}
 	return template, true
+}
+
+// repSource names the Player::CalculateReputationGain source arms
+// (Player.cpp:6651-6726); the reward-rate row picks its column by source.
+type repSource int
+
+const (
+	repSourceKill repSource = iota
+	repSourceQuest
+	repSourceDailyQuest
+	repSourceWeeklyQuest
+	repSourceMonthlyQuest
+	repSourceRepeatableQuest
+	repSourceSpell
+)
+
+// repRewardRate is one row of the world `reputation_reward_rate` table
+// (ObjectMgr::LoadReputationRewardRate, ObjectMgr.cpp:7893; RepRewardRate,
+// ObjectMgr.h:757).
+type repRewardRate struct {
+	quest           float32
+	questDaily      float32
+	questWeekly     float32
+	questMonthly    float32
+	questRepeatable float32
+	creature        float32
+	spell           float32
+}
+
+// rateFor returns the row's column for the source. C++ initializes the
+// picked rate to 0.0 before the switch (Player.cpp:6685), so an unknown
+// source reads 0 and the caller returns 0, matching the C++ fallthrough.
+func (r *repRewardRate) rateFor(source repSource) float32 {
+	switch source {
+	case repSourceKill:
+		return r.creature
+	case repSourceQuest:
+		return r.quest
+	case repSourceDailyQuest:
+		return r.questDaily
+	case repSourceWeeklyQuest:
+		return r.questWeekly
+	case repSourceMonthlyQuest:
+		return r.questMonthly
+	case repSourceRepeatableQuest:
+		return r.questRepeatable
+	case repSourceSpell:
+		return r.spell
+	default:
+		return 0
+	}
+}
+
+// loadRepRewardRate mirrors the C++ loader's validation
+// (ObjectMgr.cpp:7916-7971): the faction must exist in Faction.dbc and no
+// rate may be negative; any failure drops the whole row, and a missing row
+// means no reward rate at all. The table is read per call, so `.reload
+// reputation_reward_rate` takes effect on the next reputation change
+// without a cache to invalidate.
+func (s *session) loadRepRewardRate(ctx context.Context, factionID uint32) (*repRewardRate, bool) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil, false
+	}
+	if !s.spellFactionEntryExists(factionID) {
+		return nil, false
+	}
+	var rate repRewardRate
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT quest_rate, quest_daily_rate, quest_weekly_rate, quest_monthly_rate, quest_repeatable_rate, creature_rate, spell_rate FROM reputation_reward_rate WHERE faction = ?`, factionID).Scan(
+		&rate.quest, &rate.questDaily, &rate.questWeekly, &rate.questMonthly, &rate.questRepeatable, &rate.creature, &rate.spell)
+	if err != nil {
+		return nil, false
+	}
+	if rate.quest < 0 || rate.questDaily < 0 || rate.questWeekly < 0 || rate.questMonthly < 0 || rate.questRepeatable < 0 || rate.creature < 0 || rate.spell < 0 {
+		return nil, false
+	}
+	return &rate, true
+}
+
+// applyRepRewardRate folds a reward-rate row into percent in C++ order
+// (Player.cpp:6688-6721): a zero rate disables the gain outright, any
+// other rate multiplies percent. It reports false when the gain is
+// disabled, so callers return 0 without further folds.
+func (s *session) applyRepRewardRate(ctx context.Context, factionID uint32, source repSource, percent float32) (float32, bool) {
+	rate, ok := s.loadRepRewardRate(ctx, factionID)
+	if !ok {
+		return percent, true
+	}
+	picked := rate.rateFor(source)
+	if picked <= 0 {
+		return 0, false
+	}
+	return percent * picked, true
 }
 
 // applySpilloverReputation mirrors ReputationMgr::SetOneFactionReputation
@@ -1112,14 +1248,15 @@ func (s *session) championingFaction(targetMapID uint32) uint32 {
 }
 
 // calculateKillReputationGain mirrors Player::CalculateReputationGain
-// (Player.cpp:6651-6726) for REPUTATION_SOURCE_KILL: the 156 aura modifier
-// folds into percent, plus the faction-specific 190 modifier which C++ gates
-// to kills. The low-level kill rate (World.cpp:562,
-// "Rate.Reputation.LowLevel.Kill", default 1.0) has no Go config, so the
-// gray-level reduction arm is a no-op like the quest path.
-// Player.cpp:6724: the recruit-a-friend bonus folds percent for every source
-// except REPUTATION_SOURCE_SPELL (the kill path is SOURCE_KILL).
-func (s *session) calculateKillReputationGain(factionID uint32, rep int32) int32 {
+// (Player.cpp:6651-6726) for REPUTATION_SOURCE_KILL, in C++ order: the 156
+// aura modifier folds into percent, plus the faction-specific 190 modifier
+// which C++ gates to kills; the low-level kill rate (World.cpp:562,
+// "Rate.Reputation.LowLevel.Kill", default 1.0) multiplies percent only
+// when the victim's level is at or below the player's gray level; a zero
+// or negative percent grants nothing; the creature_rate column folds next
+// (a zero rate disables the gain); the recruit-a-friend bonus folds last
+// for every source except SPELL (the kill path is SOURCE_KILL).
+func (s *session) calculateKillReputationGain(ctx context.Context, factionID uint32, rep int32, mobLevel uint32) int32 {
 	percent := float32(100)
 	if mod := s.reputationGainPctMod(factionID, true); mod != 0 {
 		if rep > 0 {
@@ -1128,11 +1265,28 @@ func (s *session) calculateKillReputationGain(factionID uint32, rep int32) int32
 			percent -= float32(mod)
 		}
 	}
-	if s.getsRecruitAFriendBonus(false) {
-		percent *= 1 + float32(s.server.Config.ReputationRecruitAFriendBonusRate)
+	killRate := float32(1)
+	playerLevel := uint32(0)
+	if s != nil {
+		if s.player != nil {
+			playerLevel = uint32(s.player.Level)
+		}
+		if s.server != nil {
+			killRate = float32(s.server.Config.ReputationLowLevelKillRate)
+		}
+	}
+	if killRate != 1 && mobLevel <= grayLevel(playerLevel) {
+		percent *= killRate
 	}
 	if percent <= 0 {
 		return 0
+	}
+	var ok bool
+	if percent, ok = s.applyRepRewardRate(ctx, factionID, repSourceKill, percent); !ok {
+		return 0
+	}
+	if s.getsRecruitAFriendBonus(false) {
+		percent *= 1 + float32(s.server.Config.ReputationRecruitAFriendBonusRate)
 	}
 	return int32(float32(rep) * percent / 100)
 }
@@ -1160,7 +1314,7 @@ func (s *session) rewardKillReputation(ctx context.Context, rep *onkillReputatio
 		if championing != 0 {
 			faction = championing
 		}
-		gain := s.calculateKillReputationGain(faction, repValue)
+		gain := s.calculateKillReputationGain(ctx, faction, repValue, mobLevel)
 		gain = int32(float32(gain) * rate)
 		if gain == 0 || !s.spellFactionEntryExists(faction) {
 			return

@@ -17238,11 +17238,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// not
 				// just the caster. The Faction DBC entry must exist
 				// (sFactionStore.LookupEntry gate, SpellEffects.cpp:4359-4361);
-				// an unknown faction grants nothing. Documented no-bridge:
-				// Player::CalculateReputationGain's quest-bonus/low-level-rate
-				// and rep-reward-rate legs have no Go model; the aura fold
-				// (SPELL_AURA_MOD_REPUTATION_GAIN) rides inside giveReputation
-				// via reputationGainPctMod.
+				// an unknown faction grants nothing. The SPELL source folds
+				// no quest bonus, no low-level rate and no recruit-a-friend
+				// bonus (rate 1.0); the aura fold
+				// (SPELL_AURA_MOD_REPUTATION_GAIN) and the spell_rate
+				// column ride inside giveSpellReputation via
+				// reputationGainPctMod and applyRepRewardRate.
 				// Per-effect target list (Spell.cpp:758-779), same switch as
 				// the heal arms: a friendly-area reputation effect runs on its
 				// own ally selection, not the merged enemy list.
@@ -17286,7 +17287,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							continue
 						}
 						if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
-							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
+							ts.giveSpellReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel))
 						}
 					}
 					// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
@@ -17295,14 +17296,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// loop above.
 					for range areaEnemyTrips(eff, reflectedAoETrips) {
 						if ts := s.server.findSessionByGUID(s.playerGUID); ts != nil && ts.player != nil {
-							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
+							ts.giveSpellReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel))
 						}
 					}
 					// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
 					// is the caster, so the arm runs on the caster once per trip.
 					for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
 						if ts := s.server.findSessionByGUID(s.playerGUID); ts != nil && ts.player != nil {
-							ts.giveReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
+							ts.giveSpellReputation(effCtx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel))
 						}
 					}
 				}
@@ -27857,7 +27858,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// gate, rolled value via CalcValueForLevel).
 				if eff.MiscValue != 0 && s.server != nil && s.spellFactionEntryExists(uint32(eff.MiscValue)) {
 					if ts := s.server.findSessionByGUID(effectTarget); ts != nil && ts.player != nil {
-						ts.giveReputation(ctx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel), false)
+						ts.giveSpellReputation(ctx, uint32(eff.MiscValue), eff.CalcValueForLevel(spell, casterLevel))
 					}
 				}
 			} else if eff.Effect == spellEffectQuestComplete {
