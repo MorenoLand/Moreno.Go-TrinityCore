@@ -1507,6 +1507,21 @@ func (s *session) triggerMapEntryEvent(ctx context.Context) {
 	}
 }
 
+// triggerMapLeaveEvent dispatches Eluna MAP_EVENT_ON_PLAYER_LEAVE (22) as
+// (event, map, player), fired from Map::RemovePlayerFromMap (Maps/Map.cpp:1011)
+// via ScriptMgr::OnPlayerLeaveMap. The map argument is the map being left, so
+// far-teleport callers pass the origin pair and logout callers pass the live
+// pair; the entry twin takes the destination from the live player instead.
+func (s *session) triggerMapLeaveEvent(ctx context.Context, mapID, instanceID uint32) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return
+	}
+	mapObject := scripting.NewMapObject(mapID, instanceID, mapLiveFromStore(s.server.Data, mapID))
+	if _, err := s.server.Features.Scripts.TriggerMapEvent(ctx, mapID, scripting.MapEventOnPlayerLeave, mapObject, s.luaPlayer()); err != nil {
+		s.debug("lua map leave event failed", "map", mapID, "instance", instanceID, "error", err)
+	}
+}
+
 func (s *session) luaMessageMethod() scripting.ObjectMethod {
 	return func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {

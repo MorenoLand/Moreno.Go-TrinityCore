@@ -1801,6 +1801,15 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	}
 	s.sendVisiblePlayerAuras(nearbyPlayerGUIDs)
 	s.sendVisibleCreatureAuras(state)
+	// Map::RemovePlayerFromMap (Maps/Map.cpp:1011) fires OnPlayerLeaveMap
+	// before the destination's AddPlayerToMap enter: a far teleport leaves
+	// the origin pair, which completeWorldPort still holds in the farTeleport
+	// origin fields (cleared only in the tails below). The pair guard skips
+	// same-map/same-instance acks, and initialLoginPending guards the unset
+	// origin on a login-ack path; near teleports never reach this site.
+	if !s.initialLoginPending && (s.farTeleportOriginMap != s.player.Map || s.farTeleportOriginInstanceID != s.player.InstanceID) {
+		s.triggerMapLeaveEvent(ctx, s.farTeleportOriginMap, s.farTeleportOriginInstanceID)
+	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
 	s.triggerMapEntryEvent(ctx)
 	s.fireInstancePlayerEnter(ctx)
@@ -4564,6 +4573,10 @@ func (s *session) triggerLogout(ctx context.Context, disconnected bool) {
 		s.server.lfgOnPlayerLogout(s, disconnected)
 	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogout, s.luaPlayer())
+	// Map::RemovePlayerFromMap on logout: the player leaves its current map
+	// with no destination entry following, so the leave fires here for the
+	// live pair (logoutHook above keeps this single-fire per session).
+	s.triggerMapLeaveEvent(ctx, s.player.Map, s.player.InstanceID)
 }
 
 // saveTimeInstanceID is the instance a full save writes for this session:

@@ -59,6 +59,7 @@ const (
 	PlayerEventQuestStatusChange = 40 // OnQuestStatusChange fires from Player::AddQuest/RewardQuest/SetQuestStatus/quest-abandon/EffectQuestClear (ScriptMgr.cpp:2194); Hooks.h marks 40 UNUSED and ScriptMgr::OnQuestStatusChange is PlayerScript-only (no Eluna call), so Go event 40 is a custom extension surfacing that hook to Lua as (event, player, questId), void
 	PlayerEventCommand           = 42
 	MapEventOnPlayerEnter        = 21
+	MapEventOnPlayerLeave        = 22
 )
 
 // Eluna GuildEvents contract for RegisterGuildEvent. Numbering is the
