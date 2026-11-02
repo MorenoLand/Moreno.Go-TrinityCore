@@ -4528,6 +4528,327 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.server.luaMotionCreature(summoned)}, nil
 	}
+
+	// luaSendMenuObjectGUID resolves the WorldObject argument shared by
+	// the window-send methods below, the CHECKOBJ<WorldObject> twin:
+	// only an object carrying a GUID opens a window, anything else
+	// errors like the sibling player-argument methods.
+	luaSendMenuObjectGUID := func(args []any) (uint64, error) {
+		if len(args) == 0 {
+			return 0, fmt.Errorf("argument 1 is required")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return 0, fmt.Errorf("argument 1 must be a world object")
+		}
+		guid, _ := objectUint64Field(obj, "GUID")
+		if guid == 0 {
+			return 0, fmt.Errorf("argument 1 must be a world object")
+		}
+		return guid, nil
+	}
+	// SendShowBank is WorldSession::SendShowBank (BankHandler.cpp:183-188):
+	// latch the banker GUID (m_currentBankerGUID) and send SMSG_SHOW_BANK
+	// carrying only that GUID. Unlike the banker-activate opcode path it
+	// carries no interactability gate.
+	methods["SendShowBank"] = func(ctx context.Context, args []any) ([]any, error) {
+		guid, err := luaSendMenuObjectGUID(args)
+		if err != nil {
+			return nil, err
+		}
+		s.currentBankerGUID = guid
+		bank := protocol.NewBuffer(8)
+		bank.WriteU64(guid)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true)
+		return []any{}, nil
+	}
+	// SendTabardVendorActivate is WorldSession::SendTabardVendorActivate
+	// (NPCHandler.cpp:77-82): MSG_TABARDVENDOR_ACTIVATE carrying the
+	// object's GUID, no gate.
+	methods["SendTabardVendorActivate"] = func(ctx context.Context, args []any) ([]any, error) {
+		guid, err := luaSendMenuObjectGUID(args)
+		if err != nil {
+			return nil, err
+		}
+		tabard := protocol.NewBuffer(8)
+		tabard.WriteU64(guid)
+		_ = s.write(uint16(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE), tabard.Bytes(), true)
+		return []any{}, nil
+	}
+	// SendListInventory is WorldSession::SendListInventory
+	// (ItemHandler.cpp:611-618): the vendor-list arm, whose interact
+	// failure answers SMSG_SELL_ITEM with SELL_ERR_CANT_FIND_VENDOR.
+	methods["SendListInventory"] = func(ctx context.Context, args []any) ([]any, error) {
+		guid, err := luaSendMenuObjectGUID(args)
+		if err != nil {
+			return nil, err
+		}
+		s.sendVendorList(ctx, guid)
+		return []any{}, nil
+	}
+	// SendTrainerList is WorldSession::SendTrainerList
+	// (NPCHandler.cpp:103-115): the trainer-list arm, whose missing
+	// trainer row silently sends nothing.
+	methods["SendTrainerList"] = func(ctx context.Context, args []any) ([]any, error) {
+		guid, err := luaSendMenuObjectGUID(args)
+		if err != nil {
+			return nil, err
+		}
+		s.sendTrainerList(ctx, guid)
+		return []any{}, nil
+	}
+	// SendTaxiMenu is WorldSession::SendTaxiMenu (TaxiHandler.cpp:103-131):
+	// the flightmaster menu arm, gated on the flightmaster flag and a
+	// resolvable current node.
+	methods["SendTaxiMenu"] = func(ctx context.Context, args []any) ([]any, error) {
+		guid, err := luaSendMenuObjectGUID(args)
+		if err != nil {
+			return nil, err
+		}
+		s.sendTaxiMenu(ctx, guid)
+		return []any{}, nil
+	}
+	// SendAuctionMenu is WorldSession::SendAuctionHello
+	// (AuctionHouseHandler.cpp:59-75) via the shared arm: the level
+	// requirement gate fires first, and the house id is the neutral id
+	// (the faction->house-entry lookup has no Go model).
+	methods["SendAuctionMenu"] = func(ctx context.Context, args []any) ([]any, error) {
+		guid, err := luaSendMenuObjectGUID(args)
+		if err != nil {
+			return nil, err
+		}
+		s.sendAuctionHelloPacket(guid)
+		return []any{}, nil
+	}
+	// SendShowMailBox is WorldSession::SendShowMailBox
+	// (NPCHandler.cpp:84-89): SMSG_SHOW_MAILBOX carrying only the
+	// postmaster GUID, defaulting to the player's own GUID like the
+	// Eluna CHECKVAL default.
+	methods["SendShowMailBox"] = func(ctx context.Context, args []any) ([]any, error) {
+		guid := s.playerGUID
+		if len(args) > 0 {
+			value, err := luaUint64(args[0])
+			if err != nil {
+				return nil, fmt.Errorf("argument 1 must be uint64")
+			}
+			guid = value
+		}
+		mailbox := protocol.NewBuffer(8)
+		mailbox.WriteU64(guid)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SHOW_MAILBOX), mailbox.Bytes(), true)
+		return []any{}, nil
+	}
+	// SendCinematicStart is Player::SendCinematicStart
+	// (Player.cpp:6519-6526): SMSG_TRIGGER_CINEMATIC carrying the
+	// sequence id. DELTA: the C++ arm also activates the sequence's
+	// first camera on the cinematic manager, which has no Go model.
+	methods["SendCinematicStart"] = func(ctx context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(id)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), packet.Bytes(), true)
+		return []any{}, nil
+	}
+	// SendMovieStart is Player::SendMovieStart (Player.cpp:6529-6535):
+	// SetMovie plus SMSG_TRIGGER_MOVIE carrying the movie id.
+	methods["SendMovieStart"] = func(ctx context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.player != nil {
+			s.player.Movie = id
+		}
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(id)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_MOVIE), packet.Bytes(), true)
+		return []any{}, nil
+	}
+	// SendSpiritResurrect is WorldSession::SendSpiritResurrect
+	// (NPCHandler.cpp:219-241): resurrect at half health with sickness,
+	// lose a quarter durability, convert the corpse to bones, then
+	// teleport to the corpse's nearest graveyard when it differs from
+	// the ghost's nearest graveyard. The resurrect arm's toBones leg
+	// covers the bones conversion; the explicit call after durability
+	// keeps the C++ order and is a no-op by then.
+	methods["SendSpiritResurrect"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.resurrectPlayerWithBones(ctx, 0.5, true, true)
+		s.durabilityLossAll(ctx, 0.25, true)
+		s.spawnCorpseBones(ctx)
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && s.player != nil {
+			var corpseMap int64
+			var corpseX, corpseY, corpseZ float64
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, posX, posY, posZ FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones).Scan(&corpseMap, &corpseX, &corpseY, &corpseZ); err == nil {
+				team := teamForRace(s.player.Race)
+				corpseGrave, corpseOK := s.server.closestGraveyard(ctx, float32(corpseX), float32(corpseY), float32(corpseZ), uint32(corpseMap), s.player.Zone, team)
+				ghostGrave, ghostOK := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, team)
+				if corpseOK && ghostOK && corpseGrave.ID != ghostGrave.ID {
+					s.teleportTo(corpseGrave.MapID, corpseGrave.X, corpseGrave.Y, corpseGrave.Z, s.player.Orientation)
+				}
+			}
+		}
+		return []any{}, nil
+	}
+	// SendAddonMessage is PlayerMethods.h:3626-3650: an SMSG_MESSAGECHAT
+	// with the caller's channel, LANG_ADDON (-1), the sender and
+	// receiver GUIDs, and the prefix-tab-message body, delivered to the
+	// receiver's session only.
+	methods["SendAddonMessage"] = func(ctx context.Context, args []any) ([]any, error) {
+		prefix, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		message, err := luaStringArg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		channel, err := luaUint32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		if channel > 255 {
+			return nil, fmt.Errorf("argument 3 must be uint8")
+		}
+		receiver, err := luaGroupInviteTarget(args[3:])
+		if err != nil {
+			return nil, err
+		}
+		fullmsg := prefix + "\t" + message
+		packet := protocol.NewBuffer(len(fullmsg) + 32)
+		packet.WriteU8(uint8(channel))
+		packet.WriteI32(-1)
+		packet.WriteU64(s.playerGUID)
+		packet.WriteU32(0)
+		packet.WriteU64(receiver.playerGUID)
+		packet.WriteU32(uint32(len(fullmsg)) + 1)
+		packet.WriteCString(fullmsg)
+		packet.WriteU8(0)
+		_ = receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet.Bytes(), true)
+		return []any{}, nil
+	}
+	// SendGuildInvite is Guild::HandleInviteMember (Guild.cpp:1464-1512)
+	// via the shared opcode handler: the invitee's name drives the
+	// same guild, ignore, faction, already-guilded, already-invited
+	// and rank-right gates, then the SMSG_GUILD_INVITE packet.
+	methods["SendGuildInvite"] = func(ctx context.Context, args []any) ([]any, error) {
+		invited, err := luaGroupInviteTarget(args)
+		if err != nil {
+			return nil, err
+		}
+		if invited.player == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		payload := protocol.NewBuffer(len(invited.player.Name) + 1)
+		payload.WriteCString(invited.player.Name)
+		s.handleGuildInvite(ctx, payload.Bytes())
+		return []any{}, nil
+	}
+	// SendQuestTemplate is PlayerMethods.h:3908-3921: the quest-details
+	// window for a quest template, auto-launched by default. A missing
+	// template silently sends nothing, like the C++ early return.
+	// DELTA: the Go details builder bakes AutoLaunched=1, so
+	// activateAccept=false still sends the auto-launched shape.
+	methods["SendQuestTemplate"] = func(ctx context.Context, args []any) ([]any, error) {
+		questID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) > 1 {
+			if _, ok := args[1].(bool); !ok {
+				return nil, fmt.Errorf("argument 2 must be boolean")
+			}
+		}
+		data, err := s.loadQuestDetailData(ctx, questID)
+		if err != nil {
+			return []any{}, nil
+		}
+		s.sendQuestGiverQuestDetails(ctx, s.playerGUID, data)
+		return []any{}, nil
+	}
+	// GossipSendPOI is PlayerMethods.h:3856-3874: SMSG_GOSSIP_POI with
+	// flags, x, y, icon, data and the icon text, in the C++ field order.
+	methods["GossipSendPOI"] = func(ctx context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		icon, err := luaUint32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		flags, err := luaUint32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		data, err := luaUint32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		iconText, err := luaStringArg(args, 5)
+		if err != nil {
+			return nil, err
+		}
+		packet := protocol.NewBuffer(len(iconText) + 21)
+		packet.WriteU32(flags)
+		packet.WriteF32(x)
+		packet.WriteF32(y)
+		packet.WriteU32(icon)
+		packet.WriteU32(data)
+		packet.WriteCString(iconText)
+		_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_POI), packet.Bytes(), true)
+		return []any{}, nil
+	}
+	// GiveXP is Player::GiveXP (Player.cpp:2642-2656) via the shared
+	// grant arm: the dead, NO_XP_GAIN and loot-recipient gates, rested
+	// and recruit-a-friend bonuses, SMSG_LOG_XPGAIN and level-ups. The
+	// victim is optional; a nil victim grants non-kill XP.
+	methods["GiveXP"] = func(ctx context.Context, args []any) ([]any, error) {
+		xp, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		var victimGUID uint64
+		if len(args) > 1 {
+			if obj, ok := args[1].(*scripting.Object); ok && obj != nil {
+				victimGUID, _ = objectUint64Field(obj, "GUID")
+			}
+		}
+		s.grantXPWithVictim(ctx, xp, victimGUID)
+		return []any{}, nil
+	}
+	// LeaveBattleground is Player::LeaveBattleground
+	// (PlayerMethods.h:2493-2501): the voluntary-leave funnel, which
+	// teleports to the entry point unless teleToEntryPoint is false.
+	methods["LeaveBattleground"] = func(ctx context.Context, args []any) ([]any, error) {
+		tele := true
+		if len(args) > 0 {
+			value, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("argument 1 must be boolean")
+			}
+			tele = value
+		}
+		s.handleLeaveBattlefield(ctx, nil, false, !tele)
+		return []any{}, nil
+	}
+	// RemoveFromBattlegroundRaid is
+	// Player::RemoveFromBattlegroundOrBattlefieldRaid
+	// (Player.cpp:24486-24505): unlink the BG raid and re-link the
+	// stashed original group when one exists.
+	methods["RemoveFromBattlegroundRaid"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s.server != nil {
+			s.server.removePlayerFromBGRaid(s)
+		}
+		return []any{}, nil
+	}
+
 	return &scripting.Object{Type: "Player", Fields: fields, Methods: methods}
 }
 
