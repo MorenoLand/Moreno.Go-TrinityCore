@@ -694,10 +694,11 @@ func (s *Server) despawnVehicleMotion(ctx context.Context, motion *creatureMotio
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
 	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, m.PhaseMask)
-	s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
 	// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this function is the
 	// VehicleAI dismiss-expiry DespawnOrUnsummon bridge (see its header
-	// comment), so the vehicle creature's delete queues here too.
+	// comment), so the vehicle creature's delete queues here too. The
+	// helper fires 31 then the RemoveFromWorld leg 37, in C++ order
+	// (previously this leg fired 37 before 31).
 	s.fireServerDeleteCreature(ctx, m)
 	if maxHealth == 0 {
 		maxHealth = 1

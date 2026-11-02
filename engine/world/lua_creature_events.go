@@ -1364,16 +1364,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		destroyBuf.WriteU64(guid)
 		destroyBuf.WriteU8(0)
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, m.PhaseMask)
-		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
-		// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): DespawnOrUnsummon
-		// (Creature.cpp:2271) runs ForcedDespawn (Creature.cpp:2219;
-		// delay 0 queues the delete at :2267 in both respawn modes)
-		// or, for a TempSummon, UnSummon (TemporarySummon.cpp:298) —
-		// both end at AddObjectToRemoveList, so the delete event fires
-		// here even for DB creatures that later respawn as a new object.
-		s.fireServerDeleteCreature(ctx, m)
 		// DespawnOrUnsummon on a TempSummon runs UnSummon
-		// (TemporarySummon.cpp:274-284), which fires
+		// (TemporarySummon.cpp:274-284) FIRST, firing
 		// SummonedCreatureDespawn on the summoner creature's AI;
 		// the Eluna twin is event 20 on the summoner (the
 		// expireTempSummonGuardian precedent). Player owners have
@@ -1385,6 +1377,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, m)
 			}
 		}
+		// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): DespawnOrUnsummon
+		// (Creature.cpp:2271) runs ForcedDespawn (Creature.cpp:2219;
+		// delay 0 queues the delete at :2267 in both respawn modes)
+		// or, for a TempSummon, UnSummon (TemporarySummon.cpp:298) —
+		// both end at AddObjectToRemoveList, so the delete event fires
+		// here even for DB creatures that later respawn as a new object.
+		// The helper fires 31 then the RemoveFromWorld leg 37, in C++
+		// order (previously this leg fired 37 before 31, and 20 last).
+		s.fireServerDeleteCreature(ctx, m)
 		if maxHealth == 0 {
 			maxHealth = 1
 		}
@@ -3601,11 +3602,14 @@ func (s *Server) fireCreatureLuaEvent(ctx context.Context, motion *creatureMotio
 // fireServerDeleteCreature fires Eluna WORLD_EVENT_ON_DELETE_CREATURE (31)
 // for a permanently deleted creature: Map::AddObjectToRemoveList
 // (Map.cpp:3545-3553, args (event, creature)) queues the delete, and the
-// C++ order is delete-queue (31) ahead of the later remove-list
-// RemoveFromWorld (creature event 37). Go deletes synchronously, so this
-// fires at the deletion point alongside the existing fires. Callers are
-// the verified AddObjectToRemoveList legs only — never the prune path
-// (the RemoveFromWorld twin, ev37 only), the evade hide path, or the
+// remove-list processing that follows reaches Creature::RemoveFromWorld
+// (Map.cpp:3636 RemoveFromMap -> Creature.cpp:314, creature event 37) —
+// so a delete-queued creature fires 31 at queue time and 37 when it
+// leaves the world, in that order. Go deletes synchronously, so this
+// fires both at the deletion point, 31 then 37, from the motion snapshot
+// (valid after the map deletion). Callers are the verified
+// AddObjectToRemoveList legs only — never the prune path (the
+// RemoveFromWorld twin, ev37 only), the evade hide path, or the
 // transport-unload registry cleanup (C++ twin unverified).
 func (s *Server) fireServerDeleteCreature(ctx context.Context, motion *creatureMotion) {
 	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
@@ -3618,6 +3622,9 @@ func (s *Server) fireServerDeleteCreature(ctx context.Context, motion *creatureM
 	if _, err := s.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventDeleteCreature, creature); err != nil {
 		s.debug("lua server delete creature event failed", "event", scripting.ServerEventDeleteCreature, "error", err)
 	}
+	// RemoveFromWorld leg of the same delete: the remove-list twin above.
+	// The veto return is discarded (CallAllFunctions, CreatureHooks.cpp).
+	s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnRemove)
 }
 
 // luaHookVeto ORs handler return values the way Eluna's CallAllFunctionsBool

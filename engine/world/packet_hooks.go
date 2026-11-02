@@ -22,6 +22,15 @@ import (
 //     the opcode handler, and a Packet userdata second return REPLACES the
 //     packet (packet = *data). On send each stage captures 1 return:
 //     bool-false drops the packet, and the copy is discarded.
+//   - Within one receive stage, a replacement return is NOT visible to
+//     later handlers of that stage: PacketHooks.cpp never calls
+//     ReplaceArgument, and CallOneFunction (LuaEngine.cpp) lua_pushvalue's
+//     the same stage copy to every handler, so later handlers still read
+//     the stage copy (in-place edits of it ARE shared, being the same
+//     userdata). The replacement reaches only the live packet, hence
+//     the next stage (which pushes a fresh copy of it). Go's post-stage
+//     fold reproduces exactly that visibility — no per-handler update
+//     callback is needed, and adding one would DIVERGE from C++.
 //
 // FORK QUIRK (fidelity target, not upstream Eluna): the per-opcode RECEIVE
 // bindings are looked up with the SEND event number
