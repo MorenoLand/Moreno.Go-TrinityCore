@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -359,6 +360,12 @@ func (s *Server) getOrCreateArenaState(mapID, instanceID uint32, arenaType uint8
 		return nil
 	}
 	s.arenaMu.Lock()
+	var created *arenaBattlegroundState
+	defer func() {
+		if created != nil {
+			s.triggerArenaBGEvent(created.TypeID, created.InstanceID, scripting.BGEventOnCreate)
+		}
+	}()
 	defer s.arenaMu.Unlock()
 	if s.arenaState == nil {
 		s.arenaState = make(map[uint64]*arenaBattlegroundState)
@@ -413,6 +420,7 @@ func (s *Server) getOrCreateArenaState(mapID, instanceID uint32, arenaType uint8
 			StopTicker:     make(chan struct{}),
 		}
 		s.arenaState[key] = state
+		created = state
 	}
 	return state
 }
@@ -1021,6 +1029,10 @@ func (s *Server) startArenaMatch(arena *arenaBattlegroundState) {
 			sess.sendBattlefieldStatus(uint8(idx))
 		}
 	}
+
+	// TypeID/InstanceID are fixed at creation, so no lock is needed here:
+	// the WaitJoin gate above makes this the single start transition.
+	s.triggerArenaBGEvent(arena.TypeID, arena.InstanceID, scripting.BGEventOnStart)
 }
 
 // endArena handles match conclusion, rating settlement, achievements, and PVP log data dispatch.
@@ -1161,6 +1173,17 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 			sess.sendBattlefieldStatus(uint8(idx))
 		}
 	}
+
+	// The Winner != None gate above makes this the single end transition.
+	// Winner maps to the C++ TeamId convention (Gold = Alliance 0, Green
+	// = Horde 1, draw/other = 2), matching the non-arena END fires.
+	winnerTeamID := uint32(2)
+	if winner == int8(ArenaTeamGold) {
+		winnerTeamID = 0
+	} else if winner == int8(ArenaTeamGreen) {
+		winnerTeamID = 1
+	}
+	s.triggerArenaBGEvent(arena.TypeID, arena.InstanceID, scripting.BGEventOnEnd, winnerTeamID)
 }
 
 // processArenaLeave ports Battleground::_ProcessLeave (Battleground.cpp:506-528):
@@ -1285,10 +1308,17 @@ func (s *Server) deleteArenaState(arena *arenaBattlegroundState) {
 		return
 	}
 	s.arenaMu.Lock()
+	var destroyed *arenaBattlegroundState
+	defer func() {
+		if destroyed != nil {
+			s.triggerArenaBGEvent(destroyed.TypeID, destroyed.InstanceID, scripting.BGEventOnPreDestroy)
+		}
+	}()
 	defer s.arenaMu.Unlock()
 	for key, state := range s.arenaState {
 		if state == arena {
 			delete(s.arenaState, key)
+			destroyed = state
 			return
 		}
 	}

@@ -227,6 +227,19 @@ const (
 	// only when players in the zone received the packet (Weather.cpp),
 	// with state from GetWeatherState and grade the clamped intensity.
 	ServerEventWeatherChange = 25
+	// ServerEventAuctionAdd/Remove/Successful/Expire are the Eluna
+	// AUCTION_EVENT_ON_* hooks (LuaEngine/Hooks.h:141-144 = 26-29,
+	// args (event, auctionId, owner, item, expireTime, buyout,
+	// startBid, currentBid, bidderGUIDLow)): ServerHooks.cpp
+	// OnAdd/OnRemove/OnSuccessful/OnExpire push them from
+	// ScriptMgr::OnAuctionAdd/Remove/Successful/Expire
+	// (AuctionHouseMgr.cpp). All four share the C++ prologue gate:
+	// the owner must be online (FindPlayer) and the item must resolve
+	// in the auction item map (GetAItem), else nothing fires.
+	ServerEventAuctionAdd        = 26
+	ServerEventAuctionRemove     = 27
+	ServerEventAuctionSuccessful = 28
+	ServerEventAuctionExpire     = 29
 )
 
 // Eluna BGEvents contract for RegisterBGEvent. Numbering is the

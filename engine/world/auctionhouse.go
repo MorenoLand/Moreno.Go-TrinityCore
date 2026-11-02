@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -157,6 +158,45 @@ const (
 	// the default-1 rate is folded in.
 	auctionConsignmentPct uint32 = 15
 )
+
+// auctionEventRecord carries the Eluna AUCTION_EVENT_ON_* argument set
+// (ServerHooks.cpp: auctionId, owner, item, expireTime, buyout,
+// startBid, currentBid, bidderGUIDLow) with the owner and item as
+// database guids; fireAuctionEvent resolves them to Lua objects.
+type auctionEventRecord struct {
+	id            uint32
+	ownerGUID     uint64
+	itemGUID      uint64
+	expireTime    uint32
+	buyout        uint32
+	startBid      uint32
+	currentBid    uint32
+	bidderGUIDLow uint32
+}
+
+// fireAuctionEvent dispatches one Eluna auction server event (26-29)
+// with the C++ prologue gates from ServerHooks.cpp: the owner must be
+// online (FindPlayer) and the item must resolve (GetAItem, here the
+// item_instance row via sessionLuaItem); either miss fires nothing.
+// Handlers receive the Lua player and item objects, not raw guids.
+func (s *session) fireAuctionEvent(ctx context.Context, event int, rec auctionEventRecord) {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return
+	}
+	ownerSess := s.server.findSessionByGUID(rec.ownerGUID)
+	if ownerSess == nil {
+		return
+	}
+	owner := ownerSess.luaPlayer()
+	if owner == nil {
+		return
+	}
+	item := s.sessionLuaItem(ctx, rec.itemGUID)
+	if item == nil {
+		return
+	}
+	_, _ = s.server.Features.Scripts.TriggerServerEvent(ctx, event, rec.id, owner, item, rec.expireTime, rec.buyout, rec.startBid, rec.currentBid, rec.bidderGUIDLow)
+}
 
 type auctionRecord struct {
 	ID           uint32
@@ -721,6 +761,10 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0)`, nextID, defaultAuctionHouseID, auctionItemGUID, s.playerGUID, buyout, expire, bid, deposit); err != nil {
 		return sellFail(errAuctionDatabaseError)
 	}
+	// C++ AuctionHouseObject::AddAuction (AuctionHouseMgr.cpp:598) fires
+	// OnAuctionAdd once the row persists; no bidder and no current bid
+	// exist yet at this point.
+	s.fireAuctionEvent(ctx, scripting.ServerEventAuctionAdd, auctionEventRecord{id: uint32(nextID), ownerGUID: s.playerGUID, itemGUID: uint64(auctionItemGUID), expireTime: uint32(expire), buyout: buyout, startBid: bid})
 	// The deposit is charged only once the auction row persists: charging
 	// it up front lost the deposit whenever the clone or auction insert
 	// failed afterward, while C++ holds every sell step in one transaction.
@@ -770,11 +814,11 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 	if cdb == nil {
 		return true
 	}
-	var itemGUID, itemEntry, ownerGUID, buyout, bidderGUID, lastBid, deposit, startBid, itemCount, houseID, itemRandomProp int64
-	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit, ah.startbid, ii.count, ah.houseid, COALESCE(ii.randomPropertyId, 0)
+	var itemGUID, itemEntry, ownerGUID, buyout, bidderGUID, lastBid, deposit, startBid, itemCount, houseID, itemRandomProp, expireTime int64
+	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit, ah.startbid, ii.count, ah.houseid, COALESCE(ii.randomPropertyId, 0), ah.time
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.id = ? LIMIT 1`, auctionID).Scan(&itemGUID, &itemEntry, &ownerGUID, &buyout, &bidderGUID, &lastBid, &deposit, &startBid, &itemCount, &houseID, &itemRandomProp)
+		WHERE ah.id = ? LIMIT 1`, auctionID).Scan(&itemGUID, &itemEntry, &ownerGUID, &buyout, &bidderGUID, &lastBid, &deposit, &startBid, &itemCount, &houseID, &itemRandomProp, &expireTime)
 	if err != nil {
 		// C++ answers ERR_AUCTION_BID_OWN with a zero auction id when the
 		// auction is missing (AuctionHouseHandler.cpp:459).
@@ -932,6 +976,13 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			s.sendAuctionBidderNotification(uint32(houseID), auctionID, uint64(s.playerGUID), 0, 0, uint32(itemEntry))
 			s.updateAchievementCriteria(criteriaTypeWonAuctions, 0, 1)
 		}
+
+		// C++ HandleAuctionPlaceBid buyout ends in RemoveAuction
+		// (AuctionHouseHandler.cpp:569), which fires OnAuctionRemove
+		// only — the Successful mail above is not a script event, and
+		// OnAuctionSuccessful fires only from the Update sweep. The bid
+		// is the buyout at removal (AuctionHouseHandler.cpp:550).
+		s.fireAuctionEvent(ctx, scripting.ServerEventAuctionRemove, auctionEventRecord{id: auctionID, ownerGUID: uint64(ownerGUID), itemGUID: uint64(itemGUID), expireTime: uint32(expireTime), buyout: uint32(buyout), startBid: uint32(startBid), currentBid: uint32(buyout), bidderGUIDLow: uint32(s.playerGUID)})
 
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionPlaceBid, errAuctionOK), true)
 	} else {
@@ -1190,11 +1241,11 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	if cdb == nil {
 		return true
 	}
-	var itemGUID, itemEntry, ownerGUID, bidderGUID, lastBid, itemCount, itemRandomProp int64
-	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyguid, ah.lastbid, ii.count, COALESCE(ii.randomPropertyId, 0)
+	var itemGUID, itemEntry, ownerGUID, bidderGUID, lastBid, itemCount, itemRandomProp, buyout, startBid, expireTime int64
+	err = cdb.QueryRowContext(ctx, `SELECT ah.itemguid, ii.itemEntry, ah.itemowner, ah.buyguid, ah.lastbid, ii.count, COALESCE(ii.randomPropertyId, 0), ah.buyoutprice, ah.startbid, ah.time
 		FROM auctionhouse AS ah
 		INNER JOIN item_instance AS ii ON ii.guid = ah.itemguid
-		WHERE ah.id = ? AND ah.itemowner = ? LIMIT 1`, auctionID, s.playerGUID).Scan(&itemGUID, &itemEntry, &ownerGUID, &bidderGUID, &lastBid, &itemCount, &itemRandomProp)
+		WHERE ah.id = ? AND ah.itemowner = ? LIMIT 1`, auctionID, s.playerGUID).Scan(&itemGUID, &itemEntry, &ownerGUID, &bidderGUID, &lastBid, &itemCount, &itemRandomProp, &buyout, &startBid, &expireTime)
 	if err != nil {
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(0, auctionCancel, errAuctionDatabaseError), true)
 		return true
@@ -1250,6 +1301,10 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	// the auction's bidder rows die with it.
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionbidders WHERE id = ?", auctionID)
 
+	// C++ HandleAuctionRemoveItem ends in AuctionHouseObject::RemoveAuction
+	// (AuctionHouseMgr.cpp:605), which fires OnAuctionRemove.
+	s.fireAuctionEvent(ctx, scripting.ServerEventAuctionRemove, auctionEventRecord{id: auctionID, ownerGUID: uint64(ownerGUID), itemGUID: uint64(itemGUID), expireTime: uint32(expireTime), buyout: uint32(buyout), startBid: uint32(startBid), currentBid: uint32(lastBid), bidderGUIDLow: uint32(bidderGUID)})
+
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, auctionCancel, errAuctionOK), true)
 	return true
 }
@@ -1277,7 +1332,7 @@ func (s *session) expireAuctions(ctx context.Context) {
 	// this sweep — expire_time > curTime + 60 is the skip filter, so the
 	// sweep horizon is now + 60. Like C++ CHAR_SEL_AUCTIONS, the item
 	// entry/count resolve from the item_instance join.
-	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.houseid, ah.itemguid, ii.itemEntry, ii.count, ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit, COALESCE(ii.randomPropertyId, 0)
+	rows, err := cdb.QueryContext(ctx, `SELECT ah.id, ah.houseid, ah.itemguid, ii.itemEntry, ii.count, ah.itemowner, ah.buyoutprice, ah.buyguid, ah.lastbid, ah.deposit, COALESCE(ii.randomPropertyId, 0), ah.startbid, ah.time
 		FROM auctionhouse AS ah
 		LEFT JOIN item_instance AS ii ON ii.guid = ah.itemguid
 		WHERE ah.time <= ?`, now+60)
@@ -1285,13 +1340,13 @@ func (s *session) expireAuctions(ctx context.Context) {
 		return
 	}
 	type expiredRecord struct {
-		id, houseID, itemGUID, itemTmpl, count, owner, buyout, bidder, lastBid, deposit, randomProp int64
+		id, houseID, itemGUID, itemTmpl, count, owner, buyout, bidder, lastBid, deposit, randomProp, startBid, expireTime int64
 	}
 	var expired []expiredRecord
 	for rows.Next() {
 		var r expiredRecord
 		var itemTmpl, count sql.NullInt64
-		if err := rows.Scan(&r.id, &r.houseID, &r.itemGUID, &itemTmpl, &count, &r.owner, &r.buyout, &r.bidder, &r.lastBid, &r.deposit, &r.randomProp); err == nil {
+		if err := rows.Scan(&r.id, &r.houseID, &r.itemGUID, &itemTmpl, &count, &r.owner, &r.buyout, &r.bidder, &r.lastBid, &r.deposit, &r.randomProp, &r.startBid, &r.expireTime); err == nil {
 			// An itemless auction still reaches the loop: C++
 			// AuctionHouseObject::Update (AuctionHouseMgr.cpp:630-664)
 			// iterates every auction, and its sold branch sends
@@ -1308,6 +1363,17 @@ func (s *session) expireAuctions(ctx context.Context) {
 	rows.Close()
 
 	for _, a := range expired {
+		// C++ AuctionHouseObject::Update (AuctionHouseMgr.cpp:640-664)
+		// fires OnAuctionExpire (no bidder and no bid) or
+		// OnAuctionSuccessful, then RemoveAuction fires OnAuctionRemove;
+		// both script events precede the row deletion, while the item
+		// row still resolves for the GetAItem gate.
+		if a.bidder > 0 || a.lastBid > 0 {
+			s.fireAuctionEvent(ctx, scripting.ServerEventAuctionSuccessful, auctionEventRecord{id: uint32(a.id), ownerGUID: uint64(a.owner), itemGUID: uint64(a.itemGUID), expireTime: uint32(a.expireTime), buyout: uint32(a.buyout), startBid: uint32(a.startBid), currentBid: uint32(a.lastBid), bidderGUIDLow: uint32(a.bidder)})
+		} else {
+			s.fireAuctionEvent(ctx, scripting.ServerEventAuctionExpire, auctionEventRecord{id: uint32(a.id), ownerGUID: uint64(a.owner), itemGUID: uint64(a.itemGUID), expireTime: uint32(a.expireTime), buyout: uint32(a.buyout), startBid: uint32(a.startBid)})
+		}
+		s.fireAuctionEvent(ctx, scripting.ServerEventAuctionRemove, auctionEventRecord{id: uint32(a.id), ownerGUID: uint64(a.owner), itemGUID: uint64(a.itemGUID), expireTime: uint32(a.expireTime), buyout: uint32(a.buyout), startBid: uint32(a.startBid), currentBid: uint32(a.lastBid), bidderGUIDLow: uint32(a.bidder)})
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", a.id)
 		// C++ AuctionEntry::DeleteFromDB (AuctionHouseMgr.cpp:890-896):
 		// the auction's bidder rows die with it.
