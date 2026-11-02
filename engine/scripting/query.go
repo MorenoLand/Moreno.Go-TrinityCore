@@ -244,9 +244,26 @@ func queryGetFloat(state *lua.State, query *Query, index int) int {
 	return 1
 }
 
-func queryValue(query *Query, state *lua.State, index int) (any, bool) {
+// queryColumnCheck is ElunaQuery::CheckFields (ElunaQueryMethods.h):
+// an integer column outside [0, fieldCount) raises a Lua argument
+// error with the C++ message text, instead of silently reading zero.
+// A non-integer column keeps the old lenient path (no current value);
+// the no-current-row case below stays lenient too.
+func queryColumnCheck(state *lua.State, query *Query, index int) (int, bool) {
 	column, ok := state.ToInteger(index)
-	if !ok || column < 0 || column >= len(query.columns) || query.current < 0 || query.current >= len(query.rows) {
+	if !ok {
+		return 0, false
+	}
+	if column < 0 || column >= len(query.columns) {
+		lua.ArgumentError(state, index, fmt.Sprintf("trying to access invalid field index %d. There are %d fields available and the indexes start from 0", column, len(query.columns)))
+		return 0, false
+	}
+	return column, true
+}
+
+func queryValue(query *Query, state *lua.State, index int) (any, bool) {
+	column, ok := queryColumnCheck(state, query, index)
+	if !ok || query.current < 0 || query.current >= len(query.rows) {
 		return nil, false
 	}
 	return query.rows[query.current][column], true

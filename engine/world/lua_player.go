@@ -185,6 +185,97 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.setPlayerDND(state.PlayerFlags&playerFlagDND == 0)
 		return []any{}, nil
 	}
+	// HasFlag/SetFlag/RemoveFlag are Object::HasFlag/SetFlag/RemoveFlag
+	// (ObjectMethods.h:34/243/390; LuaFunctions.cpp:1354 registers
+	// ObjectMethods on the Player metatable) for the flag-backed fields
+	// the session twin honors: UNIT_FIELD_FLAGS (59, UpdateFields.h:117)
+	// reads state.UnitFlags, UNIT_FIELD_FLAGS_2 (60) reads
+	// state.UnitFlags2, PLAYER_FLAGS (150, UpdateFields.h:178) reads
+	// state.PlayerFlags. Other fields have no player backing: HasFlag
+	// reads false and writes are ignored (creature HasFlag precedent);
+	// the twin has no DynamicFlags/NPCFlags slot. C++ SetFlag/RemoveFlag
+	// only mark the field dirty when the value changes (Object.cpp:804),
+	// so the values-update broadcast fires on change only.
+	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		var has bool
+		switch field {
+		case unitFieldFlags:
+			has = state.UnitFlags&flag != 0
+		case unitFieldFlags2:
+			has = state.UnitFlags2&flag != 0
+		case unitFieldPlayerFlags:
+			has = state.PlayerFlags&flag != 0
+		}
+		return []any{has}, nil
+	}
+	methods["SetFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		var newVal uint32
+		var changed bool
+		switch field {
+		case unitFieldFlags:
+			newVal = state.UnitFlags | flag
+			changed = newVal != state.UnitFlags
+			state.UnitFlags = newVal
+		case unitFieldFlags2:
+			newVal = state.UnitFlags2 | flag
+			changed = newVal != state.UnitFlags2
+			state.UnitFlags2 = newVal
+		case unitFieldPlayerFlags:
+			newVal = state.PlayerFlags | flag
+			changed = newVal != state.PlayerFlags
+			state.PlayerFlags = newVal
+		}
+		if changed {
+			s.sendPlayerValuesUpdate(map[int]uint32{int(field): newVal})
+		}
+		return nil, nil
+	}
+	methods["RemoveFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		field, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		var newVal uint32
+		var changed bool
+		switch field {
+		case unitFieldFlags:
+			newVal = state.UnitFlags &^ flag
+			changed = newVal != state.UnitFlags
+			state.UnitFlags = newVal
+		case unitFieldFlags2:
+			newVal = state.UnitFlags2 &^ flag
+			changed = newVal != state.UnitFlags2
+			state.UnitFlags2 = newVal
+		case unitFieldPlayerFlags:
+			newVal = state.PlayerFlags &^ flag
+			changed = newVal != state.PlayerFlags
+			state.PlayerFlags = newVal
+		}
+		if changed {
+			s.sendPlayerValuesUpdate(map[int]uint32{int(field): newVal})
+		}
+		return nil, nil
+	}
 	// IsInGroup is Player::GetGroup() != nullptr; the session group id
 	// is the Go group membership (0 = ungrouped).
 	methods["IsInGroup"] = luaNoArgs(func() any { return s.groupID != 0 })
