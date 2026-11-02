@@ -113,21 +113,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	// (player_state.go): race male/female display by gender, overridden by
 	// the active transform display. Backs the maladaar stolen-soul and
 	// kiljaeden sinister-reflection SetDisplayId arms.
-	methods["GetDisplayId"] = luaNoArgs(func() any {
-		displayID := uint32(0)
-		if s.server != nil && s.server.Data != nil {
-			if race, found, err := s.server.Data.Race(uint32(state.Race)); err == nil && found {
-				displayID = race.MaleDisplayID
-				if state.Gender != 0 {
-					displayID = race.FemaleDisplayID
-				}
-			}
-		}
-		if state.TransformDisplayID != 0 {
-			displayID = state.TransformDisplayID
-		}
-		return displayID
-	})
+	methods["GetDisplayId"] = luaNoArgs(func() any { return playerLuaDisplayID(s, state) })
 	// GetNativeGender is Player::GetNativeGender (Player.h:993): the
 	// PLAYER_BYTES_3 gender byte. Go tracks a single gender
 	// (characters.gender, the same field GetGender reads); no
@@ -276,6 +262,9 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, nil
 	}
+	// Get/Set*Value are Object::Get/Set*Value (ObjectMethods.h) over
+	// the player slots backed by the session twin; see lua_values.go.
+	registerIndexedValueMethods(methods, playerIndexedValueBackend(s, state))
 	// IsInGroup is Player::GetGroup() != nullptr; the session group id
 	// is the Go group membership (0 = ungrouped).
 	methods["IsInGroup"] = luaNoArgs(func() any { return s.groupID != 0 })

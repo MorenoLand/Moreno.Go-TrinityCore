@@ -3158,6 +3158,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return nil, nil
 	}
+	// Get/Set*Value are Object::Get/Set*Value (ObjectMethods.h) over
+	// the motion slots; see lua_values.go.
+	registerIndexedValueMethods(methods, motionIndexedValueBackend(s, motion))
 	// SetNPCFlags is CreatureMethods::SetNPCFlags (CreatureMethods.h:909-915):
 	// SetUInt32Value(UNIT_NPC_FLAGS, flags) — whole-value assignment, the
 	// SetUInt32Value twin of the granular SetFlag/RemoveFlag(82) arms above.
