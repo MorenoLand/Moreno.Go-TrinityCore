@@ -42888,6 +42888,9 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 		// Target slain by DoT
 		if s.server != nil {
 			corpseFlags := unitDynFlagLootable
+			var encMap, encInst uint32
+			var encGUID uint64
+			hadEncounter := false
 			if motion != nil {
 				// Unit::DealDamage tap block (Unit.cpp:872-876): the
 				// killing tick taps and lowers the damage requirement
@@ -42895,7 +42898,16 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				// (the owner's when the caster is a pet), so s.playerGUID
 				// is already the charmer/owner-resolved player.
 				s.server.recordCreatureTap(motion, s.playerGUID, s.groupID, dmg, motion.Health, true)
-				s.server.clearInstanceEncounter(motion)
+				// Encounter-map removal takes instanceAdmissionMu, which the
+				// worldport admission check holds across its motionMu-taking
+				// occupant count; clearing here would deadlock against it.
+				// Capture the key and drop the motion fields under motionMu;
+				// the map removal runs after the unlock below.
+				if motion.EncounterInstanceID != 0 {
+					encMap, encInst, encGUID = motion.EncounterMapID, motion.EncounterInstanceID, motion.GUID
+					motion.EncounterMapID, motion.EncounterInstanceID = 0, 0
+					hadEncounter = true
+				}
 				motion.Health = 0
 				motion.DynamicFlags |= unitDynFlagLootable
 				// The corpse keeps TAPPED when the tap survived to death
@@ -42909,6 +42921,9 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				}
 			}
 			s.server.motionMu.Unlock()
+			if hadEncounter {
+				s.server.setInstanceEncounter(encMap, encInst, encGUID, false)
+			}
 
 			s.server.stopCreatureMotionInInstance(target.Map, target.InstanceID, target.GUID, target.X, target.Y, target.Z)
 			s.server.broadcastCreatureValuesUpdateInInstance(target.Map, target.InstanceID, target.GUID, map[int]uint32{
