@@ -305,7 +305,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["IsSpiritHealer"] = hasNPCFlag(0x00004000)
 	methods["IsSpiritGuide"] = hasNPCFlag(0x00008000)
 	methods["IsSpiritService"] = hasNPCFlag(0x0000C000)
-	methods["IsInnkeeper"] = hasNPCFlag(0x00001000)
+	methods["IsInnkeeper"] = hasNPCFlag(0x00010000) // UNIT_NPC_FLAG_INNKEEPER (UnitDefines.h:202); was 0x1000 (REPAIR)
 	methods["IsAuctioneer"] = hasNPCFlag(0x00200000)
 	methods["IsArmorer"] = hasNPCFlag(0x00001000)
 	methods["IsBanker"] = hasNPCFlag(0x00020000)
