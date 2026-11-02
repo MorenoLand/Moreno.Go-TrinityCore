@@ -2134,6 +2134,195 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.sendPlayerUpdate()
 		return []any{}, nil
 	}
+	// Player:SetLifetimeKills/RemoveLifetimeKills (PlayerMethods.h:2001-2007,
+	// 3485-3494): the TotalKills write and the clamped subtraction, both
+	// persisted via persistHonorFields like AddLifetimeKills.
+	methods["SetLifetimeKills"] = func(ctx context.Context, args []any) ([]any, error) {
+		value, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state.TotalKills = value
+		s.persistHonorFields(ctx)
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	methods["RemoveLifetimeKills"] = func(ctx context.Context, args []any) ([]any, error) {
+		value, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if value > state.TotalKills {
+			value = state.TotalKills
+		}
+		state.TotalKills -= value
+		s.persistHonorFields(ctx)
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	// Player:SetGuildRank (PlayerMethods.h:1745-1754; Player.h:1559):
+	// the plain rank-field write, no-op when guildless. C++
+	// SetRank writes only PLAYER_GUILDRANK, persisting at the next
+	// SaveToDB, so this arm sets the state field and refreshes the
+	// client without touching guild_member.
+	methods["SetGuildRank"] = func(_ context.Context, args []any) ([]any, error) {
+		rank, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if rank > math.MaxUint8 {
+			return nil, fmt.Errorf("argument 1 must be uint8")
+		}
+		if state.GuildID == 0 {
+			return []any{}, nil
+		}
+		state.GuildRank = uint8(rank)
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	// Player:SetPvPDeath (PlayerMethods.h:1836-1842): the s.pvpDeath
+	// flag Unit::Kill reads for the corpse-reclaim and durability
+	// legs, default true like CHECKVAL<bool>(L, 2, true).
+	methods["SetPvPDeath"] = func(_ context.Context, args []any) ([]any, error) {
+		on, err := extraBool("SetPvPDeath", args)
+		if err != nil {
+			return nil, err
+		}
+		s.pvpDeath = on
+		return []any{}, nil
+	}
+	// Player:SetBindPoint (PlayerMethods.h:2029-2045; Player.cpp:17342):
+	// the homebind field write plus UPDATE character_homebind, the
+	// C++ CHAR_UPD_PLAYER_HOMEBIND twin. No bind-point packet: C++
+	// SetHomebind sends none (SendBindPointUpdate belongs to the
+	// innkeeper/spell paths, already bridged there).
+	methods["SetBindPoint"] = func(ctx context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		mapID, err := luaUint32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		areaID, err := luaUint32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		state.HomebindMap = mapID
+		state.HomebindZone = areaID
+		state.HomebindX = x
+		state.HomebindY = y
+		state.HomebindZ = z
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_homebind SET mapId = ?, zoneId = ?, posX = ?, posY = ?, posZ = ? WHERE guid = ?",
+				mapID, areaID, x, y, z, s.playerGUID)
+		}
+		return []any{}, nil
+	}
+	// Player:SaveToDB (PlayerMethods.h:2185-2193): the .save command
+	// twin, savePlayerState(ctx, 1, false) — online, not a logout save.
+	methods["SaveToDB"] = func(ctx context.Context, _ []any) ([]any, error) {
+		_ = s.savePlayerState(ctx, 1, false)
+		return []any{}, nil
+	}
+	// Player:SummonPlayer (PlayerMethods.h:2200-2218; Player.cpp:23801):
+	// sendSummonRequest over the summoner's live position, with the
+	// summoner's zone when it is a live player and the target's zone
+	// otherwise. The pending-request and 23445-aura gates live in
+	// sendSummonRequest itself.
+	methods["SummonPlayer"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("summoner is required")
+		}
+		summonerGUID := luaObjectGUID(args[0])
+		if summonerGUID == 0 {
+			return nil, fmt.Errorf("summoner is required")
+		}
+		zoneID := state.Zone
+		if s.server != nil {
+			if summonerSess := s.server.findSessionByGUID(summonerGUID); summonerSess != nil && summonerSess.player != nil {
+				zoneID = summonerSess.player.Zone
+			}
+		}
+		s.sendSummonRequest(summonerGUID, zoneID)
+		return []any{}, nil
+	}
+	// Player:LogoutPlayer (PlayerMethods.h:2398-2405;
+	// WorldSession.cpp:496): the session logout. DELTA: Go's
+	// completeLogout always saves, so save=false still persists —
+	// there is no m_playerSave gate on the Go logout path.
+	methods["LogoutPlayer"] = func(_ context.Context, args []any) ([]any, error) {
+		if _, err := extraBool("LogoutPlayer", args); err != nil {
+			return nil, err
+		}
+		s.logout()
+		return []any{}, nil
+	}
+	// Player:KillPlayer (PlayerMethods.h:2630-2634; Player.cpp:4770):
+	// the death-state arm. Go's killPlayer is the Unit::Kill tail and
+	// no-ops above zero health, so health is zeroed first — the
+	// .damage command precedent — then the tail runs with no killer,
+	// no PvP-death flag, and no durability loss.
+	methods["KillPlayer"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if state.Health > 0 {
+			state.Health = 0
+			s.sendPlayerUpdate()
+		}
+		s.killPlayer(ctx, nil, false, false)
+		return []any{}, nil
+	}
+	// Player:KickPlayer (PlayerMethods.h:3657-3664;
+	// WorldSession.cpp:648): the socket-close kick via kickSession,
+	// the luaKickPlayer twin for the self session.
+	methods["KickPlayer"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server != nil {
+			s.server.kickSession(s)
+		}
+		return []any{}, nil
+	}
+	// Player:ResurrectPlayer (PlayerMethods.h:3729-3737;
+	// Player.cpp:4682) plus the Lua arm's SpawnCorpseBones call: the
+	// percent is C++ 100-scale, so it is divided by 100 for the Go
+	// fraction arm, and toBones=true converts the corpse to bones.
+	// The bones arm's triggerSave leg is the SaveToDB call after.
+	methods["ResurrectPlayer"] = func(ctx context.Context, args []any) ([]any, error) {
+		percent := float32(100)
+		if len(args) > 0 {
+			value, err := luaFloat32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			percent = value
+		}
+		sickness := false
+		if len(args) > 1 {
+			value, ok := args[1].(bool)
+			if !ok {
+				return nil, fmt.Errorf("argument 2 must be boolean")
+			}
+			sickness = value
+		}
+		s.resurrectPlayerWithBones(ctx, percent/100, true, sickness)
+		_ = s.savePlayerState(ctx, 1, false)
+		return []any{}, nil
+	}
+	// Player:SpawnBones (PlayerMethods.h:3924-3929;
+	// Player.cpp:4872): convertCorpseToBones plus the triggerSave
+	// leg, the .revive command shape.
+	methods["SpawnBones"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.spawnCorpseBones(ctx)
+		_ = s.savePlayerState(ctx, 1, false)
+		return []any{}, nil
+	}
 	// Player:GetReputationRank (PlayerMethods.h:989-997;
 	// Player.cpp:6644-6648, ReputationMgr.cpp:119-135): rank of the
 	// standing, where an unknown faction reads standing 0 and therefore
