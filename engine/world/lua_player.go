@@ -1055,6 +1055,102 @@ func (s *session) luaPlayer() *scripting.Object {
 	})
 	methods["IsMoving"] = luaNoArgs(func() any { return s.isMoving })
 	methods["CanFly"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
+	// CanParry/CanBlock are Unit::CanParry/CanBlock (Player.h:1819-1821):
+	// the m_canParry/m_canBlock flags Go tracks on playerState and
+	// already reads for the melee-outcome arms.
+	methods["CanParry"] = luaNoArgs(func() any { return state.CanParry })
+	methods["CanBlock"] = luaNoArgs(func() any { return state.CanBlock })
+	// CanTitanGrip is Player::CanTitanGrip (Player.h:1823): the
+	// m_canTitanGrip flag, set by the SPELL_EFFECT_TITAN_GRIP arm
+	// (SpellEffects.cpp:5408) and cleared on talent reset
+	// (Player.cpp:3887). Go keeps no such flag; the talent spell
+	// (46917) known-check is the in-tree proxy the equip arms use.
+	methods["CanTitanGrip"] = luaNoArgs(func() any { return playerHasSpell(state, 46917) })
+	// CanShareQuest is Player::CanShareQuest (PlayerMethods.h:235-242;
+	// Player.cpp:16145) via the quest_details.go helper: sharable flag
+	// plus an active status row. The pool-inactive arm (and its
+	// QUEST_PARTY_MSG_CANT_BE_SHARED_TODAY push) has no Go model.
+	methods["CanShareQuest"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil {
+			return []any{false}, nil
+		}
+		return []any{s.canShareQuest(ctx, entry)}, nil
+	}
+	// CanUninviteFromGroup is Player::CanUninviteFromGroup
+	// (PlayerMethods.h:263-269; Player.cpp:24420): the Eluna binding
+	// passes no member, so the leader-target arm is vacuous. Non-LFG
+	// groups need leader-or-assistant standing and no live
+	// battleground; LFG groups read false — the kick-vote/kicks-left
+	// legs have no Go model.
+	methods["CanUninviteFromGroup"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.groupID == 0 || s.server == nil {
+			return []any{false}, nil
+		}
+		g := s.server.findGroupByID(s.groupID)
+		if g == nil || g.IsLFG {
+			return []any{false}, nil
+		}
+		if !g.isLeaderOrAssistant(s.playerGUID) {
+			return []any{false}, nil
+		}
+		id, _ := s.luaBattlegroundID()
+		return []any{id == 0}, nil
+	}
+	// CanUseItem is Player::CanUseItem (PlayerMethods.h:194-210): an
+	// Item object takes the Item* arm (dead gate with the
+	// not_loading=true default, bound-to-another-owner denial, then
+	// the template arms), an entry takes the template arm (level gate
+	// plus the same template arms, no dead gate). Both delegate to
+	// canUseItemResult, the handleUseItem twin, so the AX1/AX2
+	// skill-max side effects and the OnCanUseItem hook fire as in C++.
+	methods["CanUseItem"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		var entry uint32
+		isObject := false
+		if obj, ok := args[0].(*scripting.Object); ok && obj != nil {
+			isObject = true
+			entryValue, ok := objectUint32Field(obj, "Entry")
+			if !ok {
+				return []any{false}, nil
+			}
+			entry = entryValue
+			if guid, ok := objectUint64Field(obj, "GUID"); ok && guid != 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				var ownerGUID int64
+				high := uint64(0x4000) << 48
+				if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT owner_guid FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1", guid, guid|high).Scan(&ownerGUID); err == nil && ownerGUID > 0 && uint64(ownerGUID) != s.playerGUID {
+					return []any{false}, nil
+				}
+			}
+		} else {
+			value, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			entry = value
+		}
+		if isObject && state.Health == 0 {
+			return []any{false}, nil
+		}
+		data, err := s.loadItemQueryData(ctx, entry)
+		if err != nil || data.Entry == 0 {
+			return []any{false}, nil
+		}
+		if uint32(state.Level) < data.RequiredLevel {
+			return []any{false}, nil
+		}
+		var spellIDs [5]int64
+		for i := range spellIDs {
+			spellIDs[i] = int64(data.Spells[i].ID)
+		}
+		result := s.canUseItemResult(ctx, entry, data.Class, data.SubClass, data.Flags2, int64(data.AllowableClass), int64(data.AllowableRace), data.RequiredSkill, data.RequiredSkillRank, data.RequiredSpell, data.HolidayID, data.Quality, data.RequiredReputationFaction, data.RequiredReputationRank, spellIDs)
+		return []any{result == equipErrOk}, nil
+	}
 	methods["HasSpell"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
