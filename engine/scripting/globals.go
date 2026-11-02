@@ -1367,7 +1367,12 @@ type BGSnapshot struct {
 	// re-read under a state lock (see bgScriptObject).
 	Status  uint32
 	EndTime uint32
-	Map     *Object
+	// BracketID is the BattlegroundBracketId (Battleground.h:270, the
+	// PvPDifficulty.dbc RangeIndex SetBracket banks at creation,
+	// Battleground.cpp:1791); the C++ ctor default is BG_BRACKET_ID_FIRST
+	// (0), which is also what an unbanked snapshot reads.
+	BracketID uint32
+	Map       *Object
 }
 
 // BGLive carries the snapshot behind a Lua BattleGround object. A nil Load
@@ -1381,16 +1386,15 @@ type BGLive struct {
 // BG_EVENT_* hooks: GetName/GetTypeId/GetMapId/GetInstanceId/GetMap/
 // GetMinLevel/GetMaxLevel/GetMinPlayers/GetMaxPlayers/GetMinPlayersPerTeam/
 // GetMaxPlayersPerTeam/GetWinner/GetBonusHonorFromKillCount/GetStatus/
-// GetEndTime (BattleGroundMethods.h). GetBonusHonorFromKillCount is the
+// GetEndTime/GetBracketId (BattleGroundMethods.h). GetBonusHonorFromKillCount is the
 // pure C++ formula (Battleground.cpp:806-811): hk_honor_at_level(min(maxLevel, 80),
 // kills) = ceil(level * 1.55 * kills), without the OnHonorCalculation script
-// hook, which has no Go twin. GetStatus/GetEndTime read the pre-fire
+// hook, which has no Go twin. GetStatus/GetEndTime/GetBracketId read the pre-fire
 // snapshot (see bgScriptObject), not live state. The remaining surface
-// stays unbridged: GetBracketId needs the instance bracket Go states do
-// not store (SetBracket ties it to the queue leader's level, and the
-// template level range is the overall range, not a bracket), and
-// GetAlivePlayersCountByTeam/GetFreeSlotsForTeam need a per-map roster Go
-// does not model.
+// stays unbridged: GetAlivePlayersCountByTeam/GetFreeSlotsForTeam need a
+// per-map roster Go does not model (arena states carry alive counts, but
+// the non-arena states carry no roster, and FreeSlots needs invited counts
+// plus the balance formula, neither of which Go stores).
 func NewBattleGroundObject(bgTypeID, mapID, instanceID uint32, live BGLive) *Object {
 	load := live.Load
 	if load == nil {
@@ -1465,6 +1469,12 @@ func NewBattleGroundObject(bgTypeID, mapID, instanceID uint32, live BGLive) *Obj
 		"GetEndTime": func(context.Context, []any) ([]any, error) {
 			if snap, ok := load(); ok {
 				return []any{snap.EndTime}, nil
+			}
+			return []any{uint32(0)}, nil
+		},
+		"GetBracketId": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.BracketID}, nil
 			}
 			return []any{uint32(0)}, nil
 		},

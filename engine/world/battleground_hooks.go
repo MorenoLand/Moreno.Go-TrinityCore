@@ -75,6 +75,12 @@ func bgWinnerTeamID(event int, args []any) uint32 {
 // (Battleground.cpp:715-717, no _ProcessLeave tick has run yet), and
 // PREDESTROY reads NONE — the instance is already out of the registry,
 // and STATUS_NONE is defined as "bg is not instance" (Battleground.h:178).
+// BracketID is the banked pop-time bracket (see bankBGBracket): the
+// queue-pop simulation banks it at invite time, which precedes every
+// CREATE fire, so CREATE/START/END/PREDESTROY all read the instance's
+// bracket; an unbanked fire (a state created without a pop in this
+// process lifetime, e.g. a restored WaitJoin slot) reads the C++ ctor
+// default 0.
 func (srv *Server) bgScriptObject(mapID, bgTypeID, instanceID uint32, event int, args ...any) *scripting.Object {
 	snap := scripting.BGSnapshot{Winner: bgWinnerTeamID(event, args)}
 	switch event {
@@ -87,6 +93,7 @@ func (srv *Server) bgScriptObject(mapID, bgTypeID, instanceID uint32, event int,
 		snap.EndTime = uint32(bgWaitLeaveAutoRemove.Milliseconds())
 	}
 	if srv != nil {
+		snap.BracketID = srv.bgBracketFor(mapID, instanceID)
 		if tmpl := srv.bgTemplateForType(context.Background(), bgTypeID); tmpl != nil {
 			snap.MinLevel = uint32(tmpl.minLevel)
 			snap.MaxLevel = uint32(tmpl.maxLevel)

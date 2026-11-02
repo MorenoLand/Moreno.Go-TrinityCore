@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/dbc"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -151,6 +152,119 @@ func (s *Server) mintBGInstanceID() uint32 {
 		s.bgInstanceIDSeq++
 	}
 	return s.bgInstanceIDSeq
+}
+
+// pvpDifficultyBracketID is the Go form of GetBattlegroundBracketByLevel
+// (DBCStores.cpp:832-854) over a PvPDifficulty.dbc file: fields are
+// MapID 1, RangeIndex 2, MinLevel 3, MaxLevel 4 (DBCStructure.h:1177-1187).
+// The first row for the map whose range contains the level wins; a level
+// above every row for the map falls back to that map's highest-MaxLevel
+// row; no row with MinLevel <= level means no bracket. A nil file reads
+// as no bracket.
+func pvpDifficultyBracketID(file *dbc.File, mapID, level uint32) (uint32, bool) {
+	if file == nil {
+		return 0, false
+	}
+	var maxEntry uint32
+	maxLevel := uint32(0)
+	foundMax := false
+	for i := 0; i < file.Records(); i++ {
+		rec, err := file.Record(i)
+		if err != nil {
+			continue
+		}
+		rowMap, err := rec.Uint32(1)
+		if err != nil || rowMap != mapID {
+			continue
+		}
+		minLevel, err := rec.Uint32(3)
+		if err != nil || minLevel > level {
+			continue
+		}
+		maxRow, err := rec.Uint32(4)
+		if err != nil {
+			continue
+		}
+		if maxRow >= level {
+			rangeIndex, err := rec.Uint32(2)
+			if err != nil {
+				continue
+			}
+			return rangeIndex, true
+		}
+		if !foundMax || maxRow > maxLevel {
+			rangeIndex, err := rec.Uint32(2)
+			if err != nil {
+				continue
+			}
+			maxEntry, maxLevel, foundMax = rangeIndex, maxRow, true
+		}
+	}
+	return maxEntry, foundMax
+}
+
+// bgInviteBracketID resolves the bracket the queue-pop simulation banks
+// for a battleground instance: the PvPDifficulty RangeIndex for the
+// instance map and the popping player's level when the DBC is readable,
+// else Go's bgBracketIndex for that level (the same value the client-id
+// claim already uses), else the C++ ctor default 0.
+func (s *Server) bgInviteBracketID(mapID, level uint32) uint32 {
+	if s != nil && s.Data != nil {
+		if file, err := s.Data.File("PvPDifficulty"); err == nil {
+			if bracketID, ok := pvpDifficultyBracketID(file, mapID, level); ok {
+				return bracketID
+			}
+		}
+	}
+	if idx := bgBracketIndex(level); idx >= 0 {
+		return uint32(idx)
+	}
+	return 0
+}
+
+// bankBGBracket records a popped instance's bracket: by instance id when
+// one is known (arena states are per-instance), and by map when one is
+// known (non-arena states are per-map singletons). A zero key banks
+// nothing on that axis. Nil-safe.
+func (s *Server) bankBGBracket(mapID, instanceID, bracketID uint32) {
+	if s == nil {
+		return
+	}
+	s.bgBracketMu.Lock()
+	defer s.bgBracketMu.Unlock()
+	if mapID != 0 {
+		if s.bgBracketByMap == nil {
+			s.bgBracketByMap = make(map[uint32]uint32)
+		}
+		s.bgBracketByMap[mapID] = bracketID
+	}
+	if instanceID != 0 {
+		if s.bgBracketByInstance == nil {
+			s.bgBracketByInstance = make(map[uint32]uint32)
+		}
+		s.bgBracketByInstance[instanceID] = bracketID
+	}
+}
+
+// bgBracketFor reads a banked bracket for a hook fire: the instance entry
+// first (arena fires carry a real instance id), then the map entry
+// (non-arena fires carry instance 0), else the C++ ctor default 0.
+// Nil-safe.
+func (s *Server) bgBracketFor(mapID, instanceID uint32) uint32 {
+	if s == nil {
+		return 0
+	}
+	s.bgBracketMu.Lock()
+	defer s.bgBracketMu.Unlock()
+	if instanceID != 0 {
+		if bracketID, ok := s.bgBracketByInstance[instanceID]; ok {
+			return bracketID
+		}
+	}
+	if bracketID, ok := s.bgBracketByMap[mapID]; ok {
+		return bracketID
+	}
+	return 0
 }
 
 // bgClientInstanceIDs is the Go form of the list-packet read arm of

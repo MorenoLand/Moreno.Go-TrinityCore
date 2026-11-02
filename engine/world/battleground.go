@@ -670,6 +670,12 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		} else {
 			e.MapID = battlegroundMapForType(bgTypeID)
 		}
+		// The pop is Go's CreateNewBattleground (BattlegroundMgr.cpp:351):
+		// SetBracket banks the queue leader's bracket on the instance, so
+		// the banked value backs GetBracketId on later hook fires. The
+		// group pop shares one instance id and one bracket (members are
+		// bracket-matched at join), so per-member banks agree.
+		s.server.bankBGBracket(e.MapID, instanceID, s.server.bgInviteBracketID(e.MapID, uint32(s.player.Level)))
 		e.InviteTime = time.Now()
 		e.Status = BGStatusWaitJoin
 		// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
@@ -776,6 +782,11 @@ func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanc
 		// Battleground object).
 		e.InstanceID = instanceID
 		e.MapID = battlegroundMapForType(battlegroundAA)
+		// Arena pops bank by instance only, never by map: concurrent
+		// arenas share the AA queue map, so a map-keyed bank would hand
+		// one match another's bracket. The arena state created below fires
+		// CREATE with this instance id, so the bank precedes the fire.
+		s.server.bankBGBracket(0, instanceID, s.server.bgInviteBracketID(e.MapID, uint32(s.player.Level)))
 		e.InviteTime = time.Now()
 		e.Status = BGStatusWaitJoin
 		// Same invite-time recording as simulateBGQueueInvite
