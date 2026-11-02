@@ -675,7 +675,8 @@ func (s *session) simulateBGQueueInvite(slot int, joinTime time.Time, instanceID
 		// the banked value backs GetBracketId on later hook fires. The
 		// group pop shares one instance id and one bracket (members are
 		// bracket-matched at join), so per-member banks agree.
-		s.server.bankBGBracket(e.MapID, instanceID, s.server.bgInviteBracketID(e.MapID, uint32(s.player.Level)))
+		popBracketID, popBracketMin, popBracketMax, popBracketHasRange := s.server.bgInviteBracket(e.MapID, uint32(s.player.Level))
+		s.server.bankBGBracket(e.MapID, instanceID, popBracketID, popBracketMin, popBracketMax, popBracketHasRange)
 		e.InviteTime = time.Now()
 		e.Status = BGStatusWaitJoin
 		// BattlegroundQueue::PlayerInvitedToBGUpdateAverageWaitTime
@@ -786,7 +787,8 @@ func (s *session) simulateArenaQueueInvite(slot int, joinTime time.Time, instanc
 		// arenas share the AA queue map, so a map-keyed bank would hand
 		// one match another's bracket. The arena state created below fires
 		// CREATE with this instance id, so the bank precedes the fire.
-		s.server.bankBGBracket(0, instanceID, s.server.bgInviteBracketID(e.MapID, uint32(s.player.Level)))
+		popBracketID, popBracketMin, popBracketMax, popBracketHasRange := s.server.bgInviteBracket(e.MapID, uint32(s.player.Level))
+		s.server.bankBGBracket(0, instanceID, popBracketID, popBracketMin, popBracketMax, popBracketHasRange)
 		e.InviteTime = time.Now()
 		e.Status = BGStatusWaitJoin
 		// Same invite-time recording as simulateBGQueueInvite

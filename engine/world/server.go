@@ -107,14 +107,20 @@ type Server struct {
 	// (Battleground.cpp:1791) stores the queue leader's PvPDifficulty
 	// RangeIndex on the Battleground at creation, and Go has no live
 	// instance to read it from, so the queue-pop simulation banks it.
+	// bgBracketRangeByMap/bgBracketRangeByInstance bank the same pop's
+	// PvPDifficulty Min/MaxLevel beside it: SetBracket stores those as
+	// the instance's m_LevelMin/m_LevelMax (Battleground.cpp:1792), so
+	// they back GetMinLevel/GetMaxLevel on later hook fires.
 	// Instance-keyed entries are exact (instance ids are unique per pop);
 	// map-keyed entries are last-pop-wins, matching Go's per-map
 	// singleton non-arena states, which cannot hold two matches at once.
 	// Like the client-id claim maps, entries are never released: the sim
 	// has no battleground lifecycle past the invite dialog.
-	bgBracketMu         sync.Mutex
-	bgBracketByMap      map[uint32]uint32
-	bgBracketByInstance map[uint32]uint32
+	bgBracketMu              sync.Mutex
+	bgBracketByMap           map[uint32]uint32
+	bgBracketByInstance      map[uint32]uint32
+	bgBracketRangeByMap      map[uint32]bgBracketRange
+	bgBracketRangeByInstance map[uint32]bgBracketRange
 	// bgInstanceIDSeq is the monotonic sim-internal battleground/arena
 	// instance-id source (mintBGInstanceID): wall-clock seconds collide
 	// for pops in the same second, which merged two live pops onto one

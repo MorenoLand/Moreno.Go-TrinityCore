@@ -1349,7 +1349,11 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 // Alliance 1, Neutral 2); the world engine translates the hook's Team
 // argument (Alliance 0, Horde 1) into it, and non-END fires read Neutral,
 // the C++ _winnerTeamId default. MinPlayers/MaxPlayers are the per-team
-// counts doubled (BattlegroundMgr.cpp:505-508).
+// counts doubled (BattlegroundMgr.cpp:505-508). MinLevel/MaxLevel are
+// the instance's m_LevelMin/m_LevelMax: the banked bracket range when
+// the pop banked one (SetBracket, Battleground.cpp:1792), else the
+// template row's overall range. GetBonusHonorFromKillCount therefore
+// reads the bracket max, as C++ does (Battleground.cpp:809).
 type BGSnapshot struct {
 	Name              string
 	MinLevel          uint32

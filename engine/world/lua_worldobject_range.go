@@ -601,5 +601,47 @@ func luaRangeMethods(srv *Server, origin func() luaRangeOrigin) map[string]scrip
 		}
 		return []any{srv.luaRangeList(ctx, origin(), allKinds, rangeVal, entry, hostile, dead, typeMask)}, nil
 	}
+	// IsWithinLoS is WorldObject::IsWithinLOS (WorldObjectMethods.h:932,
+	// Object.cpp:1252/1272): the object form runs IsWithinLOSInMap (a
+	// target on another map reads false, following the generic IsInMap
+	// map-equality precedent), the xyz form runs IsWithinLOS. Both
+	// raycast through Server.hasLineOfSight, the default M2-kept VMap
+	// form matching C++'s default ignoreFlags. DELTAS: no collision-
+	// height offset on either end (C++ adds GetCollisionHeight and
+	// hit-sphere points), no dynamic-tree check, no phase-mask check —
+	// the raw-position model the spell LOS arms use. A target object
+	// without position fields reads 0,0,0, the objectFloat convention.
+	// Zero Lua callers — engine-correctness, like the range family.
+	methods["IsWithinLoS"] = func(_ context.Context, args []any) ([]any, error) {
+		o := origin()
+		if len(args) > 0 {
+			if target, ok := args[0].(*scripting.Object); ok && target != nil {
+				targetMap, _ := objectUint32Field(target, "MapId")
+				if _, ok := objectUint32Field(target, "MapId"); !ok {
+					targetMap, _ = objectUint32Field(target, "Map")
+				}
+				if targetMap != o.mapID {
+					return []any{false}, nil
+				}
+				tx, _ := objectFloat32Field(target, "X")
+				ty, _ := objectFloat32Field(target, "Y")
+				tz, _ := objectFloat32Field(target, "Z")
+				return []any{o.srv.hasLineOfSight(o.mapID, o.x, o.y, o.z, tx, ty, tz)}, nil
+			}
+		}
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		return []any{o.srv.hasLineOfSight(o.mapID, o.x, o.y, o.z, x, y, z)}, nil
+	}
 	return methods
 }

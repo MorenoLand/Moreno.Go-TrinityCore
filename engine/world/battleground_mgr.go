@@ -154,19 +154,21 @@ func (s *Server) mintBGInstanceID() uint32 {
 	return s.bgInstanceIDSeq
 }
 
-// pvpDifficultyBracketID is the Go form of GetBattlegroundBracketByLevel
+// pvpDifficultyBracketRow is the Go form of GetBattlegroundBracketByLevel
 // (DBCStores.cpp:832-854) over a PvPDifficulty.dbc file: fields are
 // MapID 1, RangeIndex 2, MinLevel 3, MaxLevel 4 (DBCStructure.h:1177-1187).
 // The first row for the map whose range contains the level wins; a level
 // above every row for the map falls back to that map's highest-MaxLevel
 // row; no row with MinLevel <= level means no bracket. A nil file reads
-// as no bracket.
-func pvpDifficultyBracketID(file *dbc.File, mapID, level uint32) (uint32, bool) {
+// as no bracket. The row's own Min/MaxLevel ride along because C++
+// SetBracket (Battleground.cpp:1789-1793) stores them as the instance's
+// m_LevelMin/m_LevelMax, so the banked range backs GetMinLevel/
+// GetMaxLevel on later hook fires.
+func pvpDifficultyBracketRow(file *dbc.File, mapID, level uint32) (rangeIndex, minLevel, maxLevel uint32, ok bool) {
 	if file == nil {
-		return 0, false
+		return 0, 0, 0, false
 	}
-	var maxEntry uint32
-	maxLevel := uint32(0)
+	var maxEntry, maxMin, maxMax uint32
 	foundMax := false
 	for i := 0; i < file.Records(); i++ {
 		rec, err := file.Record(i)
@@ -177,56 +179,83 @@ func pvpDifficultyBracketID(file *dbc.File, mapID, level uint32) (uint32, bool) 
 		if err != nil || rowMap != mapID {
 			continue
 		}
-		minLevel, err := rec.Uint32(3)
-		if err != nil || minLevel > level {
+		rowMin, err := rec.Uint32(3)
+		if err != nil || rowMin > level {
 			continue
 		}
-		maxRow, err := rec.Uint32(4)
+		rowMax, err := rec.Uint32(4)
 		if err != nil {
 			continue
 		}
-		if maxRow >= level {
+		if rowMax >= level {
 			rangeIndex, err := rec.Uint32(2)
 			if err != nil {
 				continue
 			}
-			return rangeIndex, true
+			return rangeIndex, rowMin, rowMax, true
 		}
-		if !foundMax || maxRow > maxLevel {
+		if !foundMax || rowMax > maxMax {
 			rangeIndex, err := rec.Uint32(2)
 			if err != nil {
 				continue
 			}
-			maxEntry, maxLevel, foundMax = rangeIndex, maxRow, true
+			maxEntry, maxMin, maxMax, foundMax = rangeIndex, rowMin, rowMax, true
 		}
 	}
-	return maxEntry, foundMax
+	return maxEntry, maxMin, maxMax, foundMax
 }
 
-// bgInviteBracketID resolves the bracket the queue-pop simulation banks
-// for a battleground instance: the PvPDifficulty RangeIndex for the
-// instance map and the popping player's level when the DBC is readable,
-// else Go's bgBracketIndex for that level (the same value the client-id
-// claim already uses), else the C++ ctor default 0.
-func (s *Server) bgInviteBracketID(mapID, level uint32) uint32 {
+// pvpDifficultyBracketID is the RangeIndex-only projection of
+// pvpDifficultyBracketRow.
+func pvpDifficultyBracketID(file *dbc.File, mapID, level uint32) (uint32, bool) {
+	rangeIndex, _, _, ok := pvpDifficultyBracketRow(file, mapID, level)
+	return rangeIndex, ok
+}
+
+// bgInviteBracket resolves the bracket the queue-pop simulation banks
+// for a battleground instance: the PvPDifficulty row for the instance
+// map and the popping player's level when the DBC is readable, else
+// Go's bgBracketIndex for that level (the same value the client-id
+// claim already uses) with no range, else the C++ ctor default 0 with
+// no range. A fallback bracket carries no range on purpose: the
+// bgBracketIndex grouping is shifted against the DBC rows, so resolving
+// a range for it could hand the snapshot another bracket's levels.
+func (s *Server) bgInviteBracket(mapID, level uint32) (bracketID, minLevel, maxLevel uint32, hasRange bool) {
 	if s != nil && s.Data != nil {
 		if file, err := s.Data.File("PvPDifficulty"); err == nil {
-			if bracketID, ok := pvpDifficultyBracketID(file, mapID, level); ok {
-				return bracketID
+			if id, min, max, ok := pvpDifficultyBracketRow(file, mapID, level); ok {
+				return id, min, max, true
 			}
 		}
 	}
 	if idx := bgBracketIndex(level); idx >= 0 {
-		return uint32(idx)
+		return uint32(idx), 0, 0, false
 	}
-	return 0
+	return 0, 0, 0, false
+}
+
+// bgInviteBracketID is the RangeIndex-only projection of bgInviteBracket.
+func (s *Server) bgInviteBracketID(mapID, level uint32) uint32 {
+	bracketID, _, _, _ := s.bgInviteBracket(mapID, level)
+	return bracketID
+}
+
+// bgBracketRange is a PvPDifficulty row's level range, the values C++
+// SetBracket stores as the instance's m_LevelMin/m_LevelMax.
+type bgBracketRange struct {
+	min uint32
+	max uint32
 }
 
 // bankBGBracket records a popped instance's bracket: by instance id when
 // one is known (arena states are per-instance), and by map when one is
 // known (non-arena states are per-map singletons). A zero key banks
-// nothing on that axis. Nil-safe.
-func (s *Server) bankBGBracket(mapID, instanceID, bracketID uint32) {
+// nothing on that axis. When hasRange, the row's level range banks on
+// the same axes, so a later hook fire reads the instance's levels
+// instead of the template's overall range; without a range the range
+// maps keep no entry and the snapshot falls back to the template.
+// Nil-safe.
+func (s *Server) bankBGBracket(mapID, instanceID, bracketID, minLevel, maxLevel uint32, hasRange bool) {
 	if s == nil {
 		return
 	}
@@ -237,13 +266,47 @@ func (s *Server) bankBGBracket(mapID, instanceID, bracketID uint32) {
 			s.bgBracketByMap = make(map[uint32]uint32)
 		}
 		s.bgBracketByMap[mapID] = bracketID
+		if hasRange {
+			if s.bgBracketRangeByMap == nil {
+				s.bgBracketRangeByMap = make(map[uint32]bgBracketRange)
+			}
+			s.bgBracketRangeByMap[mapID] = bgBracketRange{min: minLevel, max: maxLevel}
+		}
 	}
 	if instanceID != 0 {
 		if s.bgBracketByInstance == nil {
 			s.bgBracketByInstance = make(map[uint32]uint32)
 		}
 		s.bgBracketByInstance[instanceID] = bracketID
+		if hasRange {
+			if s.bgBracketRangeByInstance == nil {
+				s.bgBracketRangeByInstance = make(map[uint32]bgBracketRange)
+			}
+			s.bgBracketRangeByInstance[instanceID] = bgBracketRange{min: minLevel, max: maxLevel}
+		}
 	}
+}
+
+// bgBracketRangeFor reads a banked level range for a hook fire with the
+// same instance-first-then-map precedence as bgBracketFor: a range
+// entry exists only when the pop banked one, so a range-less pop falls
+// through to the map entry or reports absent, and the snapshot keeps
+// the template levels. Nil-safe.
+func (s *Server) bgBracketRangeFor(mapID, instanceID uint32) (minLevel, maxLevel uint32, ok bool) {
+	if s == nil {
+		return 0, 0, false
+	}
+	s.bgBracketMu.Lock()
+	defer s.bgBracketMu.Unlock()
+	if instanceID != 0 {
+		if r, ok := s.bgBracketRangeByInstance[instanceID]; ok {
+			return r.min, r.max, true
+		}
+	}
+	if r, ok := s.bgBracketRangeByMap[mapID]; ok {
+		return r.min, r.max, true
+	}
+	return 0, 0, false
 }
 
 // bgBracketFor reads a banked bracket for a hook fire: the instance entry

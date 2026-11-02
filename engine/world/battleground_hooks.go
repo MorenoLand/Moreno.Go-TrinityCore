@@ -63,8 +63,10 @@ func bgWinnerTeamID(event int, args []any) uint32 {
 // start/end legs): only the battleground_template store lock and the
 // read-only DBC store are touched, neither held on the hook path. Name is
 // the BattlemasterList.dbc Name[0] (BattlegroundMgr.cpp:503, default DBC
-// locale); level and player counts come from the template row
-// (BattlegroundMgr.cpp:505-508: totals are the per-team counts doubled).
+// locale); player counts come from the template row
+// (BattlegroundMgr.cpp:505-508: totals are the per-team counts doubled),
+// and levels come from the template row unless the pop banked a
+// bracket range, which overwrites them (see below).
 // A missing template row or DBC entry reads zero values, the same
 // missing-row shape the template loader produces elsewhere. Status and
 // EndTime are snapshot by fire point, because the live values are
@@ -80,7 +82,10 @@ func bgWinnerTeamID(event int, args []any) uint32 {
 // CREATE fire, so CREATE/START/END/PREDESTROY all read the instance's
 // bracket; an unbanked fire (a state created without a pop in this
 // process lifetime, e.g. a restored WaitJoin slot) reads the C++ ctor
-// default 0.
+// default 0. MinLevel/MaxLevel are the banked bracket range when the
+// pop banked one (C++ SetBracket overwrites the template-copied levels
+// with the bracket row's, Battleground.cpp:1792), else the template
+// row's overall range below.
 func (srv *Server) bgScriptObject(mapID, bgTypeID, instanceID uint32, event int, args ...any) *scripting.Object {
 	snap := scripting.BGSnapshot{Winner: bgWinnerTeamID(event, args)}
 	switch event {
@@ -97,6 +102,10 @@ func (srv *Server) bgScriptObject(mapID, bgTypeID, instanceID uint32, event int,
 		if tmpl := srv.bgTemplateForType(context.Background(), bgTypeID); tmpl != nil {
 			snap.MinLevel = uint32(tmpl.minLevel)
 			snap.MaxLevel = uint32(tmpl.maxLevel)
+			if minLevel, maxLevel, ok := srv.bgBracketRangeFor(mapID, instanceID); ok {
+				snap.MinLevel = minLevel
+				snap.MaxLevel = maxLevel
+			}
 			snap.MinPlayersPerTeam = tmpl.minPlayersPerTeam
 			snap.MaxPlayersPerTeam = tmpl.maxPlayersPerTeam
 			snap.MinPlayers = tmpl.minPlayersPerTeam * 2
