@@ -923,6 +923,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 		return err
 	}
 	if s.Features != nil && s.Features.Scripts != nil {
+		_, _ = s.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventConfigLoad, false)
 		_, _ = s.Features.Scripts.TriggerServerEvent(ctx, 14)
 	}
 	if s.Config.WardenEnabled {

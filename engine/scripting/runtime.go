@@ -222,6 +222,14 @@ const (
 	// inverts the value for scripters (World.cpp:208), so "closed on"
 	// pushes open=false and "closed off" pushes open=true.
 	ServerEventOpenStateChange = 8
+	// ServerEventConfigLoad is WORLD_EVENT_ON_CONFIG_LOAD
+	// (LuaEngine/Hooks.h:114 = 9, args (event, reload)): C++ fires
+	// OnConfigLoad(false) from World.cpp:2208 after Eluna scripts run,
+	// before OnStartup (Main.cpp:336), and OnConfigLoad(true) on config
+	// reload (World.cpp:1533). The Go engine fires only the initial
+	// arm, immediately before the startup fire below; Go has no config
+	// reload, so the reload arm stays out.
+	ServerEventConfigLoad = 9
 	// ServerEventWeatherChange is WEATHER_EVENT_ON_CHANGE
 	// (LuaEngine/Hooks.h:137 = 25, args (event, zoneId, state, grade)):
 	// Weather::UpdateWeather fires it via ScriptMgr::OnWeatherChange
