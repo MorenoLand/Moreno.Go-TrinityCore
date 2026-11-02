@@ -49684,6 +49684,20 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			destroyBuf.WriteU64(targetGUID)
 			destroyBuf.WriteU8(0)
 			s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes())
+			// DespawnOrUnsummon on a TempSummon runs UnSummon
+			// (TemporarySummon.cpp:274-284) FIRST, firing
+			// SummonedCreatureDespawn on the summoner creature's AI;
+			// the Eluna twin is event 20 on the summoner (the
+			// expireTempSummonGuardian precedent). The 57347 arm has
+			// no entry gate in C++ (SpellEffects.cpp:3711-3716 takes
+			// any TYPEID_UNIT target), so a temp-summon target reaches
+			// this leg; pets report IsTempSummon false and player
+			// owners resolve to no creature motion.
+			if removedMotion != nil && removedMotion.IsTempSummon {
+				if ownerMotion := s.server.findCreatureMotion(removedMotion.Map, removedMotion.InstanceID, removedMotion.OwnerGUID); ownerMotion != nil {
+					s.server.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, removedMotion)
+				}
+			}
 			// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this case is
 			// the DespawnOrUnsummon twin (see its header comment), so
 			// the retrieved creature's delete queues here. The helper

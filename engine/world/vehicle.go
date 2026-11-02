@@ -673,6 +673,7 @@ func (s *Server) despawnVehicleMotion(ctx context.Context, motion *creatureMotio
 	delete(motions, motion.GUID)
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 	maxHealth := m.MaxHealth
+	isTempSummon, ownerGUID := m.IsTempSummon, m.OwnerGUID
 	x, y, z := m.X, m.Y, m.Z
 	s.motionMu.Unlock()
 	// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels a
@@ -694,6 +695,22 @@ func (s *Server) despawnVehicleMotion(ctx context.Context, motion *creatureMotio
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
 	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, m.PhaseMask)
+	// DespawnOrUnsummon on a TempSummon runs UnSummon
+	// (TemporarySummon.cpp:274-284) FIRST, firing
+	// SummonedCreatureDespawn on the summoner creature's AI;
+	// the Eluna twin is event 20 on the summoner (the
+	// expireTempSummonGuardian precedent). The dismiss leg has no
+	// spawn-source gate in C++ — VehicleAI::UpdateAI calls
+	// DespawnOrUnsummon on any vehicle creature, so a summoned
+	// vehicle (AIName VehicleAI or kit-held, isVehicleAI has no
+	// DB-only gate) reaches this leg; pets report IsTempSummon
+	// false and player owners resolve to no creature motion.
+	// MotionMu is released above, as fireCreatureSummoned requires.
+	if isTempSummon {
+		if ownerMotion := s.findCreatureMotion(mapID, instanceID, ownerGUID); ownerMotion != nil {
+			s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, m)
+		}
+	}
 	// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this function is the
 	// VehicleAI dismiss-expiry DespawnOrUnsummon bridge (see its header
 	// comment), so the vehicle creature's delete queues here too. The
