@@ -1955,6 +1955,289 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, err
 	}
+	// CanCompleteQuest is Player::CanCompleteQuest (Player.cpp:14970-15040)
+	// via the elunaCanCompleteQuest twin below: the rewarded gate, the
+	// auto-complete arm, then the INCOMPLETE objective checks against the
+	// stored status row (not live inventory — C++ reads q_status.ItemCount,
+	// while the accept-path canCompleteQuest twin reads live counts).
+	methods["CanCompleteQuest"] = func(lctx context.Context, args []any) ([]any, error) {
+		quest, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return []any{false}, nil
+		}
+		return []any{s.elunaCanCompleteQuest(lctx, quest)}, nil
+	}
+	// GetQuestLevel is Player::GetQuestLevel (Player.h:1207): the quest
+	// template level when positive, else the player level. The Eluna
+	// argument is a Quest object, so its ID is resolved to a signed
+	// template level first; the object's Level field is only the
+	// no-DB fallback, re-signed so a wrapped negative level still falls
+	// back to the player level instead of reading as a huge uint32.
+	methods["GetQuestLevel"] = func(lctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("GetQuestLevel requires a quest")
+		}
+		obj, ok := args[0].(*scripting.Object)
+		if !ok || obj == nil {
+			return nil, fmt.Errorf("GetQuestLevel requires a quest")
+		}
+		questID, ok := objectUint32Field(obj, "ID")
+		if !ok {
+			return nil, fmt.Errorf("GetQuestLevel requires a quest")
+		}
+		var playerLevel int64
+		if state != nil {
+			playerLevel = int64(state.Level)
+		}
+		if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var level int64
+			if err := s.server.WorldStore.DB.QueryRowContext(lctx, "SELECT COALESCE(QuestLevel, 0) FROM quest_template WHERE ID = ?", questID).Scan(&level); err == nil {
+				if level > 0 {
+					return []any{level}, nil
+				}
+				return []any{playerLevel}, nil
+			}
+		}
+		if levelField, ok := objectUint32Field(obj, "Level"); ok {
+			if level := int64(int32(levelField)); level > 0 {
+				return []any{level}, nil
+			}
+		}
+		return []any{playerLevel}, nil
+	}
+	// GetReqKillOrCastCurrentCount is Player::GetReqKillOrCastCurrentCount
+	// (Player.cpp:16397-16411): the stored CreatureOrGOCount for the first
+	// objective slot whose RequiredNpcOrGo equals the entry, else 0. No
+	// status filter: C++ returns the count for any recorded status.
+	methods["GetReqKillOrCastCurrentCount"] = func(lctx context.Context, args []any) ([]any, error) {
+		quest, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		entry, err := luaInt32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return []any{int64(0)}, nil
+		}
+		data, ok := s.luaQuestObjectives(lctx, quest)
+		if !ok {
+			return []any{int64(0)}, nil
+		}
+		row := s.luaQuestStatusRow(lctx, quest)
+		if !row.found {
+			return []any{int64(0)}, nil
+		}
+		for index := range data.RequiredNpcOrGo {
+			if data.RequiredNpcOrGo[index] == entry {
+				return []any{int64(row.counters[index])}, nil
+			}
+		}
+		return []any{int64(0)}, nil
+	}
+	// HasQuestForGO is Player::HasQuestForGO (Player.cpp:23725-23757):
+	// an INCOMPLETE quest in the log whose RequiredNpcOrGo slot is the
+	// negated GO entry with an unmet count. The raid-group hide arm
+	// (raid group + quest not allowed in raid + not in battleground) is
+	// unmodeled: the Go group model exposes no raid/difficulty gate on
+	// this path, so in non-raid play the arm is a no-op anyway.
+	methods["HasQuestForGO"] = func(lctx context.Context, args []any) ([]any, error) {
+		entry, err := luaInt32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return []any{false}, nil
+		}
+		for _, questID := range s.luaQuestLogIDs(lctx) {
+			row := s.luaQuestStatusRow(lctx, questID)
+			if !row.found || row.status != questStatusIncomplete {
+				continue
+			}
+			data, ok := s.luaQuestObjectives(lctx, questID)
+			if !ok {
+				continue
+			}
+			for index := range data.RequiredNpcOrGo {
+				if data.RequiredNpcOrGo[index] >= 0 {
+					continue
+				}
+				if -entry == data.RequiredNpcOrGo[index] && int64(row.counters[index]) < int64(data.RequiredNpcOrGoCount[index]) {
+					return []any{true}, nil
+				}
+			}
+		}
+		return []any{false}, nil
+	}
+	// HasQuestForItem is Player::HasQuestForItem (Player.cpp:16945-17000)
+	// with the Eluna defaults excludeQuestId 0 and turnIn false: an
+	// INCOMPLETE quest in the log whose required-item count is unmet, or
+	// whose source item (ItemDrop) is still droppable — unique items by
+	// MaxCount, others by ItemDropQuantity or the stack size — against
+	// the inventory-plus-bank count. The raid-group hide arm is unmodeled
+	// for the same reason as HasQuestForGO.
+	methods["HasQuestForItem"] = func(lctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return []any{false}, nil
+		}
+		for _, questID := range s.luaQuestLogIDs(lctx) {
+			row := s.luaQuestStatusRow(lctx, questID)
+			if !row.found || row.status != questStatusIncomplete {
+				continue
+			}
+			data, ok := s.luaQuestObjectives(lctx, questID)
+			if !ok {
+				continue
+			}
+			for index := range data.RequiredItemID {
+				if data.RequiredItemID[index] == entry && int64(row.itemCounts[index]) < int64(data.RequiredItemCount[index]) {
+					return []any{true}, nil
+				}
+			}
+			for index := range data.ItemDrop {
+				if data.ItemDrop[index] != entry {
+					continue
+				}
+				if s.luaQuestSourceItemDroppable(lctx, questID, index, entry) {
+					return []any{true}, nil
+				}
+			}
+		}
+		return []any{false}, nil
+	}
+	// SetQuestStatus is Player::SetQuestStatus (Player.cpp:16166-16180)
+	// with update true: a status at or above MAX_QUEST_STATUS (7) is a
+	// no-op, a missing template writes no row, otherwise the status is
+	// written preserving the objective counts, then SendQuestUpdate and
+	// the OnQuestStatusChange hook run. Unlike IncompleteQuest it does
+	// not touch the log slot's complete flag — C++ SetQuestStatus
+	// doesn't either.
+	methods["SetQuestStatus"] = func(lctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		status, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if status >= 7 || s == nil {
+			return nil, nil
+		}
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && !characterQuestTemplateExists(lctx, s.server.WorldStore.DB, entry) {
+			s.sendQuestUpdate(lctx, entry)
+			s.triggerPlayerEvent(lctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), entry)
+			return nil, nil
+		}
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			cdb := s.server.CharactersStore.DB
+			res, err := cdb.ExecContext(lctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", status, s.playerGUID, entry)
+			if err == nil {
+				if affected, affErr := res.RowsAffected(); affErr == nil && affected == 0 {
+					_, _ = cdb.ExecContext(lctx, "INSERT INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)", s.playerGUID, entry, status)
+				}
+			}
+		}
+		s.sendQuestUpdate(lctx, entry)
+		s.triggerPlayerEvent(lctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), entry)
+		return nil, nil
+	}
+	// IncompleteQuest is Player::IncompleteQuest (Player.cpp:15320-15329)
+	// via the session incompleteQuest twin (quest_details.go): the
+	// status drops back to INCOMPLETE and the log slot's complete flag
+	// clears. A zero quest id is a no-op in C++.
+	methods["IncompleteQuest"] = func(lctx context.Context, args []any) ([]any, error) {
+		quest, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if quest != 0 && s != nil {
+			s.incompleteQuest(lctx, quest)
+		}
+		return nil, nil
+	}
+	// AddQuest is LuaPlayer::AddQuest (PlayerMethods.h:2953-3011): a
+	// missing template or an item-start quest (any item_template row
+	// with StartQuest equal to the entry) is a no-op; otherwise
+	// CanAddQuest (log space + source-item storability, the session
+	// canAddQuest twin) gates AddQuestAndCheckCompletion, which the
+	// session addQuestToPlayer twin already performs end to end with a
+	// nil giver (no questgiver hooks, matching the Eluna NULL giver).
+	// The completion check after it runs the Eluna stored-count variant
+	// so a quest the accept-path twin left incomplete on live-inventory
+	// grounds still completes when the stored counts satisfy C++.
+	methods["AddQuest"] = func(lctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return nil, nil
+		}
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			if !characterQuestTemplateExists(lctx, s.server.WorldStore.DB, entry) {
+				return nil, nil
+			}
+			var itemEntry int64
+			if err := s.server.WorldStore.DB.QueryRowContext(lctx, "SELECT entry FROM item_template WHERE StartQuest = ? LIMIT 1", entry).Scan(&itemEntry); err == nil {
+				return nil, nil
+			}
+		}
+		if !s.canAddQuest(lctx, entry, true) {
+			return nil, nil
+		}
+		s.addQuestToPlayer(lctx, entry, 0)
+		if s.elunaCanCompleteQuest(lctx, entry) {
+			s.completeQuest(lctx, entry)
+		}
+		return nil, nil
+	}
+	// RemoveQuest is LuaPlayer::RemoveQuest (PlayerMethods.h:3013-3061):
+	// a missing template is a no-op; otherwise every log slot holding
+	// the entry is cleared with TakeQuestSourceItem, then
+	// RemoveActiveQuest (status row delete, no quest update) and
+	// RemoveRewardedQuest (rewarded row delete, quest update + hook)
+	// run. The PvP-flag recompute arm has no Go twin on the remove path
+	// (the accept path forces it via applyZoneState), and the seasonal
+	// runtime-set erase has no DB counterpart — the seasonal cooldown
+	// rows in character_queststatus_seasonal are cooldown records, not
+	// the active set, so they are preserved.
+	methods["RemoveQuest"] = func(lctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return nil, nil
+		}
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && !characterQuestTemplateExists(lctx, s.server.WorldStore.DB, entry) {
+			return nil, nil
+		}
+		if s.player != nil {
+			for slot := 0; slot < playerQuestLogSlots; slot++ {
+				if s.player.QuestLog[slot].QuestID == entry {
+					s.player.QuestLog[slot] = questLogEntry{}
+					s.sendPlayerQuestLogUpdate(slot)
+					s.takeQuestSourceItem(lctx, entry, false)
+				}
+			}
+		}
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(lctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, entry)
+			_, _ = s.server.CharactersStore.DB.ExecContext(lctx, "DELETE FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, entry)
+		}
+		s.sendQuestUpdate(lctx, entry)
+		s.triggerPlayerEvent(lctx, scripting.PlayerEventQuestStatusChange, s.luaPlayer(), entry)
+		return nil, nil
+	}
 	// FailQuest mirrors Player::FailQuest (Player.cpp:15529-15577) via the
 	// session failQuest twin (quest_details.go): only an INCOMPLETE quest
 	// (or a COMPLETE timed quest with COMPLETED_AT_START) transitions;
@@ -3208,6 +3491,216 @@ func luaUint32Arg(args []any, index int) (uint32, error) {
 		return 0, fmt.Errorf("argument %d must be uint32", index+1)
 	}
 	return uint32(value), nil
+}
+
+// luaQuestStatusRowData is one recorded quest status row for the Eluna
+// quest-helper methods: the DB character_queststatus row when readable,
+// else the in-memory quest log slot (whose State maps 1 to COMPLETE,
+// 2 to FAILED, anything else to INCOMPLETE).
+type luaQuestStatusRowData struct {
+	found       bool
+	status      int64
+	counters    [questObjectivesCount]uint16
+	itemCounts  [questItemObjectivesCount]uint16
+	playerCount uint16
+	explored    bool
+	timer       uint32
+}
+
+func (s *session) luaQuestStatusRow(ctx context.Context, questID uint32) luaQuestStatusRowData {
+	if s != nil && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var status, explored, timer, mob1, mob2, mob3, mob4, item1, item2, item3, item4, item5, item6, playerCount int64
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4, itemcount1, itemcount2, itemcount3, itemcount4, itemcount5, itemcount6, playercount FROM character_queststatus WHERE guid = ? AND quest = ?`, s.playerGUID, questID).Scan(&status, &explored, &timer, &mob1, &mob2, &mob3, &mob4, &item1, &item2, &item3, &item4, &item5, &item6, &playerCount)
+		if err == nil {
+			return luaQuestStatusRowData{found: true, status: status, counters: [questObjectivesCount]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)}, itemCounts: [questItemObjectivesCount]uint16{uint16(item1), uint16(item2), uint16(item3), uint16(item4), uint16(item5), uint16(item6)}, playerCount: uint16(playerCount), explored: explored != 0, timer: uint32(timer)}
+		}
+	}
+	if s != nil && s.player != nil {
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			entry := s.player.QuestLog[slot]
+			if entry.QuestID != questID {
+				continue
+			}
+			status := int64(questStatusIncomplete)
+			if entry.State == questCompleteStateFlag(questStatusComplete) {
+				status = questStatusComplete
+			} else if entry.State == questCompleteStateFlag(questStatusFailed) {
+				status = questStatusFailed
+			}
+			return luaQuestStatusRowData{found: true, status: status, counters: entry.Counters, itemCounts: entry.ItemCounts, playerCount: entry.PlayerCount, explored: entry.Explored, timer: entry.Timer}
+		}
+	}
+	return luaQuestStatusRowData{}
+}
+
+// luaQuestLogIDs lists the quest ids in the player's quest log in slot
+// order (the C++ GetQuestSlotQuestId iteration the HasQuestFor* methods
+// scan); without a player state it falls back to the recorded status
+// rows, which the callers filter by status anyway.
+func (s *session) luaQuestLogIDs(ctx context.Context) []uint32 {
+	if s != nil && s.player != nil {
+		ids := make([]uint32, 0, playerQuestLogSlots)
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			if questID := s.player.QuestLog[slot].QuestID; questID != 0 {
+				ids = append(ids, questID)
+			}
+		}
+		return ids
+	}
+	if s != nil && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest FROM character_queststatus WHERE guid = ? ORDER BY quest", s.playerGUID)
+		if err == nil {
+			defer rows.Close()
+			ids := make([]uint32, 0)
+			for rows.Next() {
+				var questID int64
+				if err := rows.Scan(&questID); err == nil && questID > 0 {
+					ids = append(ids, uint32(questID))
+				}
+			}
+			return ids
+		}
+	}
+	return nil
+}
+
+// luaQuestObjectives loads the objective columns of a quest template;
+// a load failure reads as no objectives (the callers then report no
+// match), which is the safe direction for a minimal-schema template.
+func (s *session) luaQuestObjectives(ctx context.Context, questID uint32) (questQueryData, bool) {
+	data, err := s.loadQuestQueryData(ctx, questID)
+	if err != nil {
+		return questQueryData{}, false
+	}
+	return data, true
+}
+
+// luaQuestSourceItemDroppable is the source-item (ItemDrop) arm of
+// Player::HasQuestForItem: a unique item is droppable while the
+// inventory-plus-bank count is below MaxCount, otherwise the custom
+// ItemDropQuantity, otherwise the stack size.
+func (s *session) luaQuestSourceItemDroppable(ctx context.Context, questID uint32, index int, entry uint32) bool {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var maxCount, stackable int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MaxCount, 0), COALESCE(Stackable, 1) FROM item_template WHERE entry = ?", entry).Scan(&maxCount, &stackable); err != nil {
+		return false
+	}
+	owned, err := s.questInventoryItemCount(ctx, s.playerGUID, entry, true)
+	if err != nil {
+		return false
+	}
+	if maxCount != 0 && int64(owned) < maxCount {
+		return true
+	}
+	if stackable < 1 {
+		stackable = 1
+	}
+	var quantities [questObjectivesCount]int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ItemDropQuantity1, 0), COALESCE(ItemDropQuantity2, 0), COALESCE(ItemDropQuantity3, 0), COALESCE(ItemDropQuantity4, 0) FROM quest_template WHERE ID = ?", questID).Scan(&quantities[0], &quantities[1], &quantities[2], &quantities[3]); err == nil && index >= 0 && index < len(quantities) {
+		if quantities[index] != 0 {
+			return int64(owned) < quantities[index]
+		}
+	}
+	return int64(owned) < stackable
+}
+
+// elunaCanCompleteQuest mirrors Player::CanCompleteQuest
+// (Player.cpp:14970-15040) in Eluna order: a missing template reads
+// false, the rewarded gate uses GetQuestRewardStatus (repeatable quests
+// never report rewarded, seasonal quests report their cooldown — the
+// session getQuestRewardStatus twin), the auto-complete arm fires only
+// for quests with no recorded status and a passing CanTakeQuest, and
+// the INCOMPLETE objective checks read the stored status row: deliver
+// item counts, kill/cast/speak-to counts (the computed-flag arms are
+// count-gated, so the per-slot checks subsume them), player kills, the
+// exploration flag, the timed expiry, required money, and the first
+// reputation objective. It deliberately differs from the accept-path
+// canCompleteQuest twin, which reads live inventory counts for the
+// deliver arm and blocks on any rewarded row.
+func (s *session) elunaCanCompleteQuest(ctx context.Context, questID uint32) bool {
+	if questID == 0 || s == nil || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	wdb := s.server.WorldStore.DB
+	var flags, reqNpc1, reqNpc2, reqNpc3, reqNpc4, reqNpcCount1, reqNpcCount2, reqNpcCount3, reqNpcCount4 int64
+	var reqItem1, reqItem2, reqItem3, reqItem4, reqItem5, reqItem6 int64
+	var reqItemCount1, reqItemCount2, reqItemCount3, reqItemCount4, reqItemCount5, reqItemCount6 int64
+	var reqMoney, repFaction, repValue, requiredPlayerKills int64
+	err := wdb.QueryRowContext(ctx, `SELECT Flags,
+		RequiredNpcOrGo1, RequiredNpcOrGo2, RequiredNpcOrGo3, RequiredNpcOrGo4,
+		RequiredNpcOrGoCount1, RequiredNpcOrGoCount2, RequiredNpcOrGoCount3, RequiredNpcOrGoCount4,
+		RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5, RequiredItemId6,
+		RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6,
+		COALESCE(RewOrReqMoney, 0), COALESCE(RepObjectiveFaction, 0), COALESCE(RepObjectiveValue, 0),
+		COALESCE(RequiredPlayerKills, 0)
+		FROM quest_template WHERE ID = ?`, questID).Scan(&flags,
+		&reqNpc1, &reqNpc2, &reqNpc3, &reqNpc4,
+		&reqNpcCount1, &reqNpcCount2, &reqNpcCount3, &reqNpcCount4,
+		&reqItem1, &reqItem2, &reqItem3, &reqItem4, &reqItem5, &reqItem6,
+		&reqItemCount1, &reqItemCount2, &reqItemCount3, &reqItemCount4, &reqItemCount5, &reqItemCount6,
+		&reqMoney, &repFaction, &repValue, &requiredPlayerKills)
+	if err != nil {
+		if err2 := wdb.QueryRowContext(ctx, "SELECT Flags FROM quest_template WHERE ID = ?", questID).Scan(&flags); err2 != nil {
+			return false
+		}
+	}
+	if s.getQuestRewardStatus(ctx, questID) {
+		return false
+	}
+	row := s.luaQuestStatusRow(ctx, questID)
+	inLog := row.found
+	if !inLog {
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			if s.player.QuestLog[slot].QuestID == questID {
+				inLog = true
+				break
+			}
+		}
+	}
+	if !inLog {
+		if s.questIsAutoComplete(ctx, questID, uint32(flags)) {
+			if canTake, takeErr := s.canTakeQuest(ctx, questID); takeErr == nil && canTake {
+				return true
+			}
+		}
+		return false
+	}
+	if row.status != questStatusIncomplete {
+		return false
+	}
+	reqItemCounts := [questItemObjectivesCount]int64{reqItemCount1, reqItemCount2, reqItemCount3, reqItemCount4, reqItemCount5, reqItemCount6}
+	for index := range reqItemCounts {
+		if reqItemCounts[index] != 0 && int64(row.itemCounts[index]) < reqItemCounts[index] {
+			return false
+		}
+	}
+	reqNpcs := [questObjectivesCount]int64{reqNpc1, reqNpc2, reqNpc3, reqNpc4}
+	reqNpcCounts := [questObjectivesCount]int64{reqNpcCount1, reqNpcCount2, reqNpcCount3, reqNpcCount4}
+	for index := range reqNpcs {
+		if reqNpcs[index] != 0 && reqNpcCounts[index] != 0 && int64(row.counters[index]) < reqNpcCounts[index] {
+			return false
+		}
+	}
+	if requiredPlayerKills != 0 && int64(row.playerCount) < requiredPlayerKills {
+		return false
+	}
+	var specialFlags int64
+	_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(SpecialFlags, 0) FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	if specialFlags&questSpecialExplorationOrEvent != 0 && !row.explored {
+		return false
+	}
+	if specialFlags&questSpecialFlagsTimed != 0 && row.timer <= uint32(time.Now().Unix()) {
+		return false
+	}
+	if reqMoney < 0 && int64(s.player.Money) < -reqMoney {
+		return false
+	}
+	if repFaction > 0 && int64(s.reputationStanding(uint32(repFaction))) < repValue {
+		return false
+	}
+	return true
 }
 
 func luaStringArg(args []any, index int) (string, error) {
