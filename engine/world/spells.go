@@ -49684,6 +49684,11 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			destroyBuf.WriteU64(targetGUID)
 			destroyBuf.WriteU8(0)
 			s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes())
+			// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this case is
+			// the DespawnOrUnsummon twin (see its header comment), so
+			// the retrieved creature's delete queues here. The helper
+			// nil-guards the not-found motion.
+			s.server.fireServerDeleteCreature(context.Background(), removedMotion)
 		}
 	case 57349:
 		// Drop RP-GG (Wintergrasp RP-GG at death drop, SpellEffects.cpp:3718-3725):

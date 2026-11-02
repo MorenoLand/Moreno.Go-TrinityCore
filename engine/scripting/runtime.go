@@ -240,6 +240,16 @@ const (
 	ServerEventAuctionRemove     = 27
 	ServerEventAuctionSuccessful = 28
 	ServerEventAuctionExpire     = 29
+	// ServerEventDeleteCreature / ServerEventDeleteGameObject are the
+	// Eluna WORLD_EVENT_ON_DELETE_CREATURE/GAMEOBJECT hooks
+	// (LuaEngine/Hooks.h:149-150 = 31/32, args (event, creature) /
+	// (event, gameobject)): Map::AddObjectToRemoveList (Map.cpp:3545-3553)
+	// fires them when an object is queued for deletion, before
+	// CleanupsBeforeDelete — not on RemoveFromWorld (that is creature
+	// event 37 / GO event 13 territory). Go has no deferred remove list,
+	// so the fires land at the permanent-deletion point of each leg.
+	ServerEventDeleteCreature   = 31
+	ServerEventDeleteGameObject = 32
 )
 
 // Eluna BGEvents contract for RegisterBGEvent. Numbering is the

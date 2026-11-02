@@ -2162,6 +2162,18 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	if removed && goObj != nil {
 		s.triggerGameObjectEventWithObject(context.Background(), goObj, uint32((guid>>24)&0x00FFFFFF), scripting.GameObjectEventOnRemove)
 	}
+	// Eluna WORLD_EVENT_ON_DELETE_GAMEOBJECT (32): GameObject::Delete
+	// (GameObject.cpp:924, pool else AddObjectToRemoveList at :940) and
+	// DespawnOrUnsummon (GameObject.cpp:903) both queue the delete; this
+	// dynamic-despawn path is their Go twin, fired with the same
+	// pre-delete object as ev13 above. Static template GOs have no Go
+	// object (same delta as ev13), and the respawn-hide arm of
+	// despawnFullyLootedChestOrGoober fires nothing — hiding is not
+	// deletion; its owner/spell arm routes through the instance twin
+	// below and fires there.
+	if removed && goObj != nil && s.Features != nil && s.Features.Scripts != nil {
+		_, _ = s.Features.Scripts.TriggerServerEvent(context.Background(), scripting.ServerEventDeleteGameObject, goObj)
+	}
 }
 
 func (s *Server) setGameObjectHidden(guid uint64, hidden bool) {

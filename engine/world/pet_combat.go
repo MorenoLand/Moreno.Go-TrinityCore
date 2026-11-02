@@ -836,6 +836,11 @@ func (s *Server) expireTempSummonGuardian(ctx context.Context, motion *creatureM
 	if ownerMotion := s.findCreatureMotion(mapID, instanceID, ownerGUID); ownerMotion != nil {
 		s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, motion)
 	}
+	// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this is the
+	// TempSummon::UnSummon twin (TemporarySummon.cpp:298 ends at
+	// AddObjectToRemoveList); the ev20 fire above is the summoner leg
+	// that precedes it in UnSummon.
+	s.fireServerDeleteCreature(ctx, motion)
 }
 
 // updatePetMotion is the per-tick AI driver for active player pets.

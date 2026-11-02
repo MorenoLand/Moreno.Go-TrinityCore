@@ -1365,6 +1365,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		destroyBuf.WriteU8(0)
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, m.PhaseMask)
 		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
+		// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): DespawnOrUnsummon
+		// (Creature.cpp:2271) runs ForcedDespawn (Creature.cpp:2219;
+		// delay 0 queues the delete at :2267 in both respawn modes)
+		// or, for a TempSummon, UnSummon (TemporarySummon.cpp:298) —
+		// both end at AddObjectToRemoveList, so the delete event fires
+		// here even for DB creatures that later respawn as a new object.
+		s.fireServerDeleteCreature(ctx, m)
 		// DespawnOrUnsummon on a TempSummon runs UnSummon
 		// (TemporarySummon.cpp:274-284), which fires
 		// SummonedCreatureDespawn on the summoner creature's AI;
@@ -3589,6 +3596,28 @@ func (s *Server) fireCreatureLuaEvent(ctx context.Context, motion *creatureMotio
 	args = append(args, extra...)
 	results, _ := s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, event, args...)
 	return luaHookVeto(results)
+}
+
+// fireServerDeleteCreature fires Eluna WORLD_EVENT_ON_DELETE_CREATURE (31)
+// for a permanently deleted creature: Map::AddObjectToRemoveList
+// (Map.cpp:3545-3553, args (event, creature)) queues the delete, and the
+// C++ order is delete-queue (31) ahead of the later remove-list
+// RemoveFromWorld (creature event 37). Go deletes synchronously, so this
+// fires at the deletion point alongside the existing fires. Callers are
+// the verified AddObjectToRemoveList legs only — never the prune path
+// (the RemoveFromWorld twin, ev37 only), the evade hide path, or the
+// transport-unload registry cleanup (C++ twin unverified).
+func (s *Server) fireServerDeleteCreature(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	if _, err := s.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventDeleteCreature, creature); err != nil {
+		s.debug("lua server delete creature event failed", "event", scripting.ServerEventDeleteCreature, "error", err)
+	}
 }
 
 // luaHookVeto ORs handler return values the way Eluna's CallAllFunctionsBool

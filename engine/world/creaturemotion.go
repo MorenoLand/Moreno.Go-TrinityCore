@@ -2268,6 +2268,12 @@ func (s *Server) unpossessPetTail(key creatureAuraKey, charmerGUID uint64) {
 			s.motionMu.Lock()
 			delete(s.motionMapLocked(key.Map, key.InstanceID), key.GUID)
 			s.motionMu.Unlock()
+			// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): unsummonPet
+			// above is the Player::RemovePet twin (Player.cpp:20912
+			// ends at AddObjectToRemoveList); this delete is the
+			// motion's actual removal, and unsummonPet itself deletes
+			// nothing, so this fire cannot double with it.
+			s.fireServerDeleteCreature(context.Background(), m)
 		}
 		return
 	}

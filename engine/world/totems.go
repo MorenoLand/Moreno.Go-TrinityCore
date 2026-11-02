@@ -1183,6 +1183,10 @@ func (s *Server) expireSessionNoSlotTotem(mapID, instanceID uint32, guid uint64)
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
 	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, tx, ty, tz, motion.PhaseMask)
+	// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): this is the
+	// Totem::UnSummon twin (Totem.cpp:122-162, AddObjectToRemoveList
+	// at :180), so the totem creature's delete queues on expiry.
+	s.fireServerDeleteCreature(context.Background(), motion)
 }
 
 func (s *session) executeTotemPulse(ctx context.Context, def TotemDef, totem *activeTotem) {

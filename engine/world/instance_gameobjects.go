@@ -655,4 +655,10 @@ func (s *Server) despawnDynamicGameObjectInInstance(mapID, instanceID uint32, gu
 	if goObj != nil {
 		s.triggerGameObjectEventWithObject(context.Background(), goObj, uint32((guid>>24)&0x00FFFFFF), scripting.GameObjectEventOnRemove)
 	}
+	// Eluna WORLD_EVENT_ON_DELETE_GAMEOBJECT (32): same Delete /
+	// DespawnOrUnsummon twin as the world despawn path above, fired
+	// with the same pre-delete object.
+	if goObj != nil && s.Features != nil && s.Features.Scripts != nil {
+		_, _ = s.Features.Scripts.TriggerServerEvent(context.Background(), scripting.ServerEventDeleteGameObject, goObj)
+	}
 }
