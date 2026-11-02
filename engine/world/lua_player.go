@@ -621,6 +621,26 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
 		return []any{s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID) != nil}, nil
 	}
+	// GetVehicleKit is Unit::GetVehicleKit (UnitMethods.h, registered in
+	// LuaFunctions.cpp): the Vehicle object for the unit's own kit, or
+	// nil when the unit is not a vehicle base. The GetVehicle twin is
+	// commented out in LuaFunctions.cpp, so it stays out.
+	methods["GetVehicleKit"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.server.luaVehicleObject(s.player.Map, s.player.InstanceID, s.playerGUID)}, nil
+	}
+	// IsOnVehicle is Unit::IsOnVehicle (UnitMethods.h): despite the doc
+	// claiming bool, the Trinity arm pushes GetVehicle(), the Vehicle
+	// object the unit rides (nil when not riding), so the Go arm pushes
+	// the vehicle object too and Lua truthiness matches.
+	methods["IsOnVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil || s.player.VehicleGUID == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.server.luaVehicleObject(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)}, nil
+	}
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {

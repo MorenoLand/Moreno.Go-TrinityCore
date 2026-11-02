@@ -1666,6 +1666,21 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) != nil}, nil
 	}
+	// GetVehicleKit / IsOnVehicle are the motion-creature twins of the
+	// player arms in lua_player.go (UnitMethods.h; GetVehicle stays out,
+	// commented out in LuaFunctions.cpp).
+	methods["GetVehicleKit"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.luaVehicleObject(motion.Map, motion.InstanceID, motion.GUID)}, nil
+	}
+	methods["IsOnVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil || motion.VehicleGUID == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.luaVehicleObject(motion.Map, motion.InstanceID, motion.VehicleGUID)}, nil
+	}
 	// Teleport is Unit::NearTeleportTo (Unit.cpp:13332-13346) for creatures:
 	// DisableSpline (motion.Moving cleared, the in-flight spline twin) +
 	// SendTeleportPacket (MSG_MOVE_TELEPORT carrying the creature GUID to

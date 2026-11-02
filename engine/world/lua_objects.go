@@ -262,6 +262,19 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, nil
 	}
+	// GetVehicleKit / IsOnVehicle are the session-creature twins of the
+	// motion-creature arms in lua_creature_events.go (UnitMethods.h;
+	// GetVehicle stays out, commented out in LuaFunctions.cpp).
+	methods["GetVehicleKit"] = func(_ context.Context, _ []any) ([]any, error) {
+		return []any{s.server.luaVehicleObject(state.Map, state.InstanceID, state.GUID)}, nil
+	}
+	methods["IsOnVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || motion.VehicleGUID == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.server.luaVehicleObject(state.Map, state.InstanceID, motion.VehicleGUID)}, nil
+	}
 	methods["IsFullHealth"] = luaNoArgs(func() any { return state.MaxHealth > 0 && state.Health >= state.MaxHealth })
 	hasNPCFlag := func(flag uint32) scripting.ObjectMethod {
 		return luaNoArgs(func() any { return state.NPCFlags&flag != 0 })
