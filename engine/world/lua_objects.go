@@ -248,6 +248,19 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	})
 	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
+	// GetCorpseDelay / RemoveCorpse are the session-bound twins of the
+	// handler-creature bindings (lua_creature_events.go): the rank-mapped
+	// corpse-decay delay, and the direct Creature::RemoveCorpse port in
+	// kill.go (a motion that no longer resolves is a no-op there).
+	methods["GetCorpseDelay"] = func(ctx context.Context, _ []any) ([]any, error) {
+		return []any{s.server.creatureCorpseDelaySeconds(ctx, state.Entry)}, nil
+	}
+	methods["RemoveCorpse"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.removeCreatureCorpseNow(ctx, motion)
+		}
+		return nil, nil
+	}
 	methods["IsFullHealth"] = luaNoArgs(func() any { return state.MaxHealth > 0 && state.Health >= state.MaxHealth })
 	hasNPCFlag := func(flag uint32) scripting.ObjectMethod {
 		return luaNoArgs(func() any { return state.NPCFlags&flag != 0 })

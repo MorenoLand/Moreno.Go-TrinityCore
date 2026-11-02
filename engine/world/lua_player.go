@@ -121,6 +121,23 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetPowerType"] = luaNoArgs(func() any { return playerPowerType(state) })
 	methods["GetCoinage"] = luaNoArgs(func() any { return state.Money })
 	methods["GetGuildId"] = luaNoArgs(func() any { return state.GuildID })
+	// GetCorpse is Player::GetCorpse (PlayerMethods.h:1581-1588): the
+	// player's resurrectable corpse object, or nil when the player has
+	// none (never died, corpse reclaimed, or a BG/arena death whose corpse
+	// Go never persists). The ghost/hasCorpse gate mirrors C++ m_corpse
+	// lifetime: a non-bones resurrect despawns the visual but leaves the
+	// row behind, so row-presence alone would return a corpse for a live
+	// player.
+	methods["GetCorpse"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s.player == nil || (s.player.PlayerFlags&playerFlagGhost == 0 && !s.player.hasCorpse) {
+			return []any{nil}, nil
+		}
+		corpse, ok := s.loadCorpseObject(ctx)
+		if !ok {
+			return []any{nil}, nil
+		}
+		return []any{s.luaCorpseObject(corpse)}, nil
+	}
 	methods["GetTeam"] = luaNoArgs(func() any { return teamForRace(state.Race) })
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
 	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })

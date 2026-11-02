@@ -1838,6 +1838,44 @@ func (s *session) loadCorpseObject(ctx context.Context) (corpseObjectState, bool
 	return corpse, true
 }
 
+// luaCorpseObject builds the Eluna Corpse object for the session player's
+// resurrectable corpse (Player::GetCorpse, PlayerMethods.h:1581-1588;
+// CorpseMethods.h). The row comes from loadCorpseObject, so bones are
+// excluded and BG/arena deaths, which Go never persists (the
+// Player.cpp:4867-4868 save-skip), never reach here. The corpse GUID
+// follows the spawnCorpseObject construction (playerGUID | 0xF101<<48);
+// the generic object fallback supplies GetGUID/GetMapId/GetObjectType(7)
+// and position reads, while the five Corpse methods are explicit here.
+// Only the ghost time is mutable from Lua (ResetGhostTime,
+// Corpse.cpp:146-149), so SaveToDB persists just the time column: a full
+// delete+insert (Corpse::SaveToDB :95-123) would also rewrite itemCache,
+// which loadCorpseObject does not capture, while an UPDATE preserves it.
+// A reclaimed corpse (row gone) saves nothing.
+func (s *session) luaCorpseObject(state corpseObjectState) *scripting.Object {
+	if s == nil {
+		return nil
+	}
+	ownerGUID := s.playerGUID
+	corpseGUID := ownerGUID | (uint64(0xF101) << 48)
+	ghostTime := state.GhostTime
+	methods := map[string]scripting.ObjectMethod{}
+	methods["GetOwnerGUID"] = luaNoArgs(func() any { return ownerGUID })
+	methods["GetGhostTime"] = luaNoArgs(func() any { return uint32(ghostTime) })
+	methods["GetType"] = luaNoArgs(func() any { return state.CorpseType })
+	methods["ResetGhostTime"] = func(_ context.Context, _ []any) ([]any, error) {
+		ghostTime = time.Now().Unix()
+		return nil, nil
+	}
+	methods["SaveToDB"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return nil, nil
+		}
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE corpse SET time = ? WHERE guid = ?", ghostTime, ownerGUID)
+		return nil, nil
+	}
+	return &scripting.Object{Type: "Corpse", Fields: map[string]any{"GUID": corpseGUID, "OwnerGUID": ownerGUID, "Map": state.MapID, "MapId": state.MapID, "InstanceId": state.InstanceID, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "DisplayID": state.DisplayID, "CorpseType": state.CorpseType, "InWorld": true}, Methods: methods}
+}
+
 func (s *session) sendLoadedCorpse(ctx context.Context) bool {
 	corpse, ok := s.loadCorpseObject(ctx)
 	if !ok {

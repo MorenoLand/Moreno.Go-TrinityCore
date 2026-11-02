@@ -399,6 +399,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{evading}, nil
 	}
+	// GetCorpseDelay is Creature::GetCorpseDelay (CreatureMethods.h:615,
+	// Creature.h:94): the rank-mapped corpse-decay delay in seconds, the
+	// same value creatureCorpseDelaySeconds feeds the corpse-removal
+	// sweep. SmartScript SetCorpseDelay overrides are not modeled in Go
+	// (no per-motion field); the default rank value is what the sweep
+	// uses too.
+	methods["GetCorpseDelay"] = func(ctx context.Context, _ []any) ([]any, error) {
+		return []any{s.creatureCorpseDelaySeconds(ctx, motion.Entry)}, nil
+	}
+	// RemoveCorpse is Creature::RemoveCorpse (CreatureMethods.h:1187,
+	// Creature.cpp:380-440 with default setSpawnTime=true): the direct
+	// removal port in kill.go, firing ev26 with the respawn push.
+	methods["RemoveCorpse"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.removeCreatureCorpseNow(ctx, motion)
+		return nil, nil
+	}
 	// IsTargetableForAttack is Unit::isTargetableForAttack (Unit.h:1077,
 	// Unit.cpp): alive, no NON_ATTACKABLE (0x2) / NOT_SELECTABLE (0x02000000)
 	// unit flags, and when checkFakeDeath (C++ default true) no feign-death

@@ -221,6 +221,79 @@ func (s *Server) corpseRemovalBroadcastMap(respawn creatureRespawn) (uint32, uin
 	return respawn.Map, 0
 }
 
+// removeCreatureCorpseNow ports the direct Creature::RemoveCorpse(true,
+// true) call (Creature.cpp:380-440, defaults at Creature.h:252) for a Lua
+// creature object. The gate is a pending, not-yet-removed respawn record
+// for the motion's DB guid (low 24 bits of the world GUID) with the motion
+// still dead — the getDeathState() != CORPSE early return; live,
+// already-removed, respawned, and temp-summon (no record) motions are
+// no-ops. The record is marked removed BEFORE firing ev26, so a
+// re-entrant RemoveCorpse from a handler is a no-op, and the setSpawnTime
+// respawn push max(now + finalDelay, At) is applied — unlike the sweep
+// below, which is the Update-driven setSpawnTime=false path and
+// deliberately discards delay rewrites. The destroy broadcast and loot
+// clear mirror the sweep's post-fire steps.
+func (s *Server) removeCreatureCorpseNow(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	dbGUID := uint32(motion.GUID & 0x00FFFFFF)
+	now := time.Now()
+	s.motionMu.Lock()
+	var record creatureRespawn
+	var instanceKey instanceAdmissionKey
+	var inInstance bool
+	found := false
+	if respawn, ok := s.creatureRespawns[dbGUID]; ok && !respawn.CorpseRemoved {
+		record, found = respawn, true
+	}
+	if !found {
+		for key, respawns := range s.instanceCreatureRespawns {
+			if respawn, ok := respawns[dbGUID]; ok && !respawn.CorpseRemoved && respawn.Map == motion.Map && respawn.InstanceID == motion.InstanceID {
+				record, instanceKey, inInstance, found = respawn, key, true, true
+				break
+			}
+		}
+	}
+	if !found || motion.Health != 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	record.CorpseRemoved = true
+	if inInstance {
+		s.instanceCreatureRespawns[instanceKey][dbGUID] = record
+	} else {
+		s.creatureRespawns[dbGUID] = record
+	}
+	s.motionMu.Unlock()
+	finalDelay := s.fireCreatureCorpseRemoved(ctx, motion, record.RespawnDelay)
+	pushed := now.Add(time.Duration(finalDelay) * time.Second)
+	if pushed.After(record.At) {
+		s.motionMu.Lock()
+		if inInstance {
+			if respawn, ok := s.instanceCreatureRespawns[instanceKey][dbGUID]; ok {
+				respawn.At = pushed
+				s.instanceCreatureRespawns[instanceKey][dbGUID] = respawn
+			}
+		} else if respawn, ok := s.creatureRespawns[dbGUID]; ok {
+			respawn.At = pushed
+			s.creatureRespawns[dbGUID] = respawn
+		}
+		s.motionMu.Unlock()
+		s.saveCreatureRespawnRow(ctx, dbGUID, pushed, record.Map, record.InstanceID)
+	}
+	broadcastMap, instanceID := s.corpseRemovalBroadcastMap(record)
+	rawGUID := creatureWorldGUID(record.GUID, record.Entry)
+	destroyBuf := protocol.NewBuffer(9)
+	destroyBuf.WriteU64(rawGUID)
+	destroyBuf.WriteU8(0)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), broadcastMap, instanceID, record.X, record.Y, record.Z, motion.PhaseMask)
+	s.clearLootState(broadcastMap, instanceID, rawGUID)
+	if broadcastMap != record.Map {
+		s.clearLootState(record.Map, instanceID, rawGUID)
+	}
+}
+
 // processCreatureCorpseRemovals applies the Creature::Update CORPSE branch
 // (Creature.cpp:799) to due corpses: at death + corpseDelay the corpse
 // object leaves the world (non-compat mode: AddObjectToRemoveList after
