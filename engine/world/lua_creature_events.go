@@ -1102,6 +1102,163 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// GetLootMode is CreatureMethods::GetLootMode (CreatureMethods.h:881):
+	// Creature::GetLootMode (Creature.h:224) returns the m_LootMode
+	// bitmask. Handler-surface twin of the session binding
+	// (lua_objects.go:1018); the motion is the live creature here, so
+	// no lookup is needed.
+	methods["GetLootMode"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		mode := motion.LootMode
+		s.motionMu.Unlock()
+		return []any{uint32(mode)}, nil
+	}
+	// HasLootMode is CreatureMethods::HasLootMode (CreatureMethods.h:395):
+	// Creature::HasLootMode (Creature.h:225) tests
+	// (m_LootMode & lootMode) != 0. Handler-surface twin of the session
+	// binding (lua_objects.go:1027).
+	methods["HasLootMode"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		has := motion.LootMode&uint16(mode) != 0
+		s.motionMu.Unlock()
+		return []any{has}, nil
+	}
+	// SetLootMode is CreatureMethods::SetLootMode (CreatureMethods.h:935):
+	// Creature::SetLootMode (Creature.h:226) assigns m_LootMode.
+	// Handler-surface twin of the session binding (lua_objects.go:1046).
+	methods["SetLootMode"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.LootMode = uint16(mode)
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// RemoveLootMode is CreatureMethods::RemoveLootMode
+	// (CreatureMethods.h:1305): Creature::RemoveLootMode (Creature.h:228)
+	// clears the mode bits. Handler-surface twin of the session binding
+	// (lua_objects.go:1066).
+	methods["RemoveLootMode"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.LootMode &^= uint16(mode)
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// ResetLootMode is CreatureMethods::ResetLootMode
+	// (CreatureMethods.h:1297): Creature::ResetLootMode (Creature.h:229)
+	// restores LOOT_MODE_DEFAULT. Handler-surface twin of the session
+	// binding (lua_objects.go:1076).
+	methods["ResetLootMode"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		motion.LootMode = lootModeDefault
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// IsTappedBy is CreatureMethods::IsTappedBy (CreatureMethods.h:104):
+	// Creature::isTappedBy (Creature.cpp:1362-1375) — the player GUID
+	// matches the loot recipient, or the player is in the recipient
+	// group. Handler-surface twin of the session binding
+	// (lua_objects.go:950); the tap fields live on the motion, and the
+	// group leg reads the player session exactly like the session twin.
+	methods["IsTappedBy"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		playerGUID, ok := objectUint64Field(target, "GUID")
+		if !ok || playerGUID == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		s.motionMu.Lock()
+		tapPlayer, tapGroup := motion.TapPlayerGUID, motion.TapGroupID
+		s.motionMu.Unlock()
+		if playerGUID == tapPlayer {
+			return []any{true}, nil
+		}
+		if tapGroup == 0 {
+			return []any{false}, nil
+		}
+		if sess := s.findSessionByGUID(playerGUID); sess != nil && sess.groupID != 0 && sess.groupID == tapGroup {
+			return []any{true}, nil
+		}
+		return []any{false}, nil
+	}
+	// GetLootRecipient is CreatureMethods::GetLootRecipient: the tapping
+	// player object, nil when untapped (Eluna::Push((Player*)nullptr)).
+	// Handler-surface twin of the session binding (lua_objects.go:990).
+	methods["GetLootRecipient"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		tapPlayer := motion.TapPlayerGUID
+		s.motionMu.Unlock()
+		if tapPlayer == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.findPlayer(tapPlayer); player != nil {
+			return []any{player}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetLootRecipientGroup is CreatureMethods::GetLootRecipientGroup:
+	// the tapping group object, nil when the tap carries no group.
+	// Handler-surface twin of the session binding (lua_objects.go:1002).
+	methods["GetLootRecipientGroup"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		tapGroup := motion.TapGroupID
+		s.motionMu.Unlock()
+		if tapGroup == 0 {
+			return []any{nil}, nil
+		}
+		if g := groupLuaObject(s, s.findGroupByID(tapGroup)); g != nil {
+			return []any{g}, nil
+		}
+		return []any{nil}, nil
+	}
+	// IsDamageEnoughForLootingAndReward is
+	// CreatureMethods::IsDamageEnoughForLootingAndReward:
+	// Creature::m_PlayerDamageReq at 0 (Creature.h:322-325), lowered by
+	// every player-attributed hit. Handler-surface twin of the session
+	// binding (lua_objects.go:1010).
+	methods["IsDamageEnoughForLootingAndReward"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		enough := motion.PlayerDamageReq == 0
+		s.motionMu.Unlock()
+		return []any{enough}, nil
+	}
+	// GetScriptName is CreatureMethods::GetScriptName (Creature.cpp:2867):
+	// the script name the motion was banked with at spawn (ScriptName).
+	// Handler-surface twin of the session binding (lua_objects.go:712),
+	// which reads the same motion field through a lookup.
+	methods["GetScriptName"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		name := motion.ScriptName
+		s.motionMu.Unlock()
+		return []any{name}, nil
+	}
+	// IsWorldBoss is CreatureMethods::IsWorldBoss:
+	// Creature::isWorldBoss (Creature.cpp:2353-2358) — type_flags &
+	// CREATURE_TYPE_FLAG_BOSS_MOB (0x4, SharedDefines.h:2731), not a pet.
+	// Handler-surface twin of the session binding (lua_objects.go:689);
+	// pets are motions with a nonzero OwnerGUID (the pet_combat.go
+	// isPet twin).
+	methods["IsWorldBoss"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		boss := motion.TypeFlags&0x4 != 0 && motion.OwnerGUID == 0
+		s.motionMu.Unlock()
+		return []any{boss}, nil
+	}
 	// WorldObject sound methods (PlayMusic/PlayDirectSound/PlayDistanceSound)
 	// are Eluna LuaWorldObject methods (WorldObjectMethods.h:1161-1242);
 	// creatures have no session, so they broadcast with a nil source like
