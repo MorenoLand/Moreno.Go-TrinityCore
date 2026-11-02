@@ -159,6 +159,10 @@ func (s *session) luaPlayer() *scripting.Object {
 	// PLAYER_FLAGS bits (AFK 0x2, DND 0x4).
 	methods["IsAFK"] = luaNoArgs(func() any { return state.PlayerFlags&playerFlagAFK != 0 })
 	methods["IsDND"] = luaNoArgs(func() any { return state.PlayerFlags&playerFlagDND != 0 })
+	// GetChatTag is Player::GetChatTag (PlayerMethods.h:1328-1332;
+	// Player.cpp:1642-1654): the AFK/DND/GM bits of the chat.go tag
+	// helper, DEV never set (no developer-flag model in Go).
+	methods["GetChatTag"] = luaNoArgs(func() any { return s.chatTag() })
 	// ToggleAFK/ToggleDND are Player::ToggleAFK/ToggleDND
 	// (Player.cpp:1628-1640): the flag flip plus client update via the
 	// chat helpers. The battleground-leave half of ToggleAFK is not in
@@ -272,6 +276,30 @@ func (s *session) luaPlayer() *scripting.Object {
 	// (PlayerMethods.h:1317-1321, 1810-1816); the setter runs through
 	// setRestBonus, the same clamp + rest-state update as the XP path.
 	methods["GetRestBonus"] = luaNoArgs(func() any { return state.RestBonus })
+	// IsRested is Player::IsRested (PlayerMethods.h:633-637):
+	// GetRestBonus() > 0.0f over the same stored bonus.
+	methods["IsRested"] = luaNoArgs(func() any { return state.RestBonus > 0 })
+	// GetDrunkValue/SetDrunkValue are Player::GetDrunkValue/
+	// SetDrunkValue (PlayerMethods.h:1002-1006, 1692-1699;
+	// Player.h:1809; Player.cpp:999-1037): the PLAYER_BYTES_3
+	// inebriation byte, Go's DrunkenState. The setter clamps at 100
+	// and broadcasts via sendPlayerUpdate, the .modify drunk twin;
+	// the fake-inebriate aura max, the CrossedInebriationThreshold
+	// packet, and the sobering-timer reset have no Go model.
+	methods["GetDrunkValue"] = luaNoArgs(func() any { return state.DrunkenState })
+	methods["SetDrunkValue"] = func(_ context.Context, args []any) ([]any, error) {
+		value, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		level := uint8(value)
+		if level > 100 {
+			level = 100
+		}
+		state.DrunkenState = uint16(level)
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
 	methods["SetRestBonus"] = func(ctx context.Context, args []any) ([]any, error) {
 		bonus, err := luaFloat32Arg(args, 0)
 		if err != nil {
@@ -1121,6 +1149,30 @@ func (s *session) luaPlayer() *scripting.Object {
 		_, typeID := s.luaBattlegroundID()
 		return typeID
 	})
+	// InArena/InBattleground/InBattlegroundQueue are Player::InArena/
+	// InBattleground/InBattlegroundQueue (PlayerMethods.h:660-684;
+	// Player.h:1906; Player.cpp:23647-23654, 23554-23562): InArena is
+	// a live arena roster, InBattleground is the same entered pair
+	// GetBattlegroundId reads (bgInstanceID != 0 in C++), and
+	// InBattlegroundQueue is any queue slot still waiting or invited
+	// (WaitQueue/WaitJoin; entered slots read InProgress, left slots
+	// read None, so neither counts as queued).
+	methods["InArena"] = luaNoArgs(func() any {
+		return s.server != nil && s.server.findArenaStateForPlayer(s.playerGUID) != nil
+	})
+	methods["InBattleground"] = luaNoArgs(func() any {
+		id, _ := s.luaBattlegroundID()
+		return id != 0
+	})
+	methods["InBattlegroundQueue"] = luaNoArgs(func() any {
+		for i := range s.bgQueues {
+			e := &s.bgQueues[i]
+			if e.Active && (e.Status == BGStatusWaitQueue || e.Status == BGStatusWaitJoin) {
+				return true
+			}
+		}
+		return false
+	})
 	// Player:IsInArenaTeam (PlayerMethods.h:430-436; Player.h:1571;
 	// ArenaTeam.h:114): the argument is a SLOT index, not a team type —
 	// type >= MAX_ARENA_SLOT (3) reads false, and the slot's team id
@@ -1831,6 +1883,24 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{out}, nil
 	}
+	// GetSubGroup is Player::GetSubGroup (PlayerMethods.h:922-926;
+	// Player.h:2089): the member's subgroup in the session group,
+	// 0 when ungrouped or not a member (the Group::GetMemberGroup
+	// miss arm).
+	methods["GetSubGroup"] = luaNoArgs(func() any {
+		if s.groupID == 0 || s.server == nil {
+			return uint8(0)
+		}
+		group := s.server.findGroupByID(s.groupID)
+		if group == nil {
+			return uint8(0)
+		}
+		sub, ok := group.memberSubGroup(s.playerGUID)
+		if !ok {
+			return uint8(0)
+		}
+		return sub
+	})
 	// IsInSameRaidWith is Player::IsInSameRaidWith (Player.cpp:2543):
 	// the same player, or two players in the same non-nil group. The
 	// Go twin is sameRaidGroup (gameobjects.go): Go has no raid/party
@@ -1933,6 +2003,95 @@ func (s *session) luaPlayer() *scripting.Object {
 		return []any{true}, nil
 	}
 	methods["GetItemByPos"] = func(_ context.Context, _ []any) ([]any, error) { return []any{nil}, nil }
+	// GetItemByEntry/GetItemByGUID/GetEquippedItemBySlot are
+	// Player::GetItemByEntry/GetItemByGuid/GetEquippedItemBySlot
+	// (PlayerMethods.h:1301-1305, 1376-1403; Player.cpp:9994-10016,
+	// 12979-13006). ByEntry scans inventory only — backpack, keyring,
+	// equipped-bag contents, then equipment + equipped bags — and
+	// never bank, despite the Eluna doc claiming otherwise; ByGuid
+	// scans inventory + bank and needs no order (GUIDs are unique);
+	// BySlot reads bag-0 slot < EQUIPMENT_SLOT_END (19), wider
+	// slots read nil. All three resolve through sessionLuaItem, so
+	// the returned object carries the instance/template surface;
+	// a missing store, missing row, or query error reads nil, the
+	// sessionLuaItem convention (the GetItemByPos stub stays as-is).
+	methods["GetItemByEntry"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return []any{nil}, nil
+		}
+		var item int64
+		err = s.server.CharactersStore.DB.QueryRowContext(ctx,
+			`SELECT ci.item FROM character_inventory ci
+			 JOIN item_instance ii ON ii.guid = ci.item
+			 LEFT JOIN character_inventory cb ON cb.guid = ? AND cb.bag = 0 AND cb.slot >= 19 AND cb.slot < 23 AND cb.item != 0 AND cb.item = ci.bag
+			 WHERE ci.guid = ? AND ii.itemEntry = ? AND ci.item != 0
+			 AND ((ci.bag = 0 AND (ci.slot < 39 OR (ci.slot >= 86 AND ci.slot < 150))) OR (ci.bag != 0 AND cb.item IS NOT NULL))
+			 ORDER BY CASE
+			 WHEN ci.bag = 0 AND ci.slot >= 23 AND ci.slot < 39 THEN 0
+			 WHEN ci.bag = 0 AND ci.slot >= 86 AND ci.slot < 150 THEN 1
+			 WHEN ci.bag != 0 THEN 2
+			 ELSE 3 END, COALESCE(cb.slot, 0), ci.slot LIMIT 1`,
+			state.GUID, state.GUID, entry).Scan(&item)
+		if err != nil || item == 0 {
+			return []any{nil}, nil
+		}
+		if obj := s.sessionLuaItem(ctx, uint64(item)); obj != nil {
+			return []any{obj}, nil
+		}
+		return []any{nil}, nil
+	}
+	methods["GetItemByGUID"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return []any{nil}, nil
+		}
+		high := uint64(0x4000) << 48
+		var item int64
+		err = s.server.CharactersStore.DB.QueryRowContext(ctx,
+			`SELECT item FROM character_inventory WHERE guid = ? AND item != 0 AND (item = ? OR item = ? OR item = ?) LIMIT 1`,
+			state.GUID, guid, guid|high, guid&^high).Scan(&item)
+		if err != nil || item == 0 {
+			return []any{nil}, nil
+		}
+		if obj := s.sessionLuaItem(ctx, uint64(item)); obj != nil {
+			return []any{obj}, nil
+		}
+		return []any{nil}, nil
+	}
+	methods["GetEquippedItemBySlot"] = func(ctx context.Context, args []any) ([]any, error) {
+		slotValue, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		slot := uint8(slotValue)
+		if slot >= 19 {
+			return []any{nil}, nil
+		}
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return []any{nil}, nil
+		}
+		var item int64
+		err = s.server.CharactersStore.DB.QueryRowContext(ctx,
+			`SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1`,
+			state.GUID, slot).Scan(&item)
+		if err != nil || item == 0 {
+			return []any{nil}, nil
+		}
+		if obj := s.sessionLuaItem(ctx, uint64(item)); obj != nil {
+			return []any{obj}, nil
+		}
+		return []any{nil}, nil
+	}
 	// Eluna nearest/in-range family (WorldObjectMethods.h, see
 	// lua_worldobject_range.go): replaces the old range-only
 	// GetNearestGameObject bridge (2D metric, no entry/hostile args,
