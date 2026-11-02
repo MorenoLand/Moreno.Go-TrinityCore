@@ -727,6 +727,21 @@ func (r *Runtime) TriggerServerEvent2(ctx context.Context, event int, args ...an
 	return r.triggerN(ctx, "server", event, 2, append([]any{event}, args...)...)
 }
 
+// TriggerServerEventGuarded is TriggerServerEvent with TriggerServerEvent2's
+// TryLock guard: the packet-send hook fire (world firePacketSendHooks) runs
+// on the write path, so a send-hook handler that broadcasts via Group or
+// Guild SendPacket re-enters the send-hook fire on the same goroutine while
+// triggerNUpdated still holds r.mu. The blocking TriggerServerEvent would
+// deadlock there; the guarded fire is skipped instead, like the receive
+// path, and the packet is delivered.
+func (r *Runtime) TriggerServerEventGuarded(ctx context.Context, event int, args ...any) ([]any, error) {
+	if !r.mu.TryLock() {
+		return nil, nil
+	}
+	r.mu.Unlock()
+	return r.Trigger(ctx, "server", event, append([]any{event}, args...)...)
+}
+
 // TriggerPacketEvent2 fires hooks registered with RegisterPacketEvent(opcode,
 // event, fn), capturing two return values per handler, like
 // TriggerCreatureEvent2. It exists for the fork's per-opcode RECEIVE bindings,
