@@ -3536,6 +3536,93 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.updateInstanceWorldState(mapID, instanceID, fieldID, value)
 		return nil, nil
 	}
+	// HasQuest is CreatureMethods::HasQuest (CreatureMethods.h):
+	// Creature::hasQuest (Creature.cpp:1851-1854) = the creature-quest
+	// starter relation (ObjectMgr.cpp:8439 loads creature_queststarter
+	// into _creatureQuestRelations), NOT starter-or-ender: the Go
+	// session helper creatureHasQuest unions both, so this bridge
+	// queries the starter table only. No world DB reads false.
+	methods["HasQuest"] = func(ctx context.Context, args []any) ([]any, error) {
+		questID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.WorldStore == nil || s.WorldStore.DB == nil {
+			return []any{false}, nil
+		}
+		s.motionMu.Lock()
+		entry := motion.Entry
+		s.motionMu.Unlock()
+		return []any{questRelationExists(ctx, s.WorldStore.DB, "creature_queststarter", entry, questID)}, nil
+	}
+	// CanCompleteQuest is CreatureMethods::CanCompleteQuest
+	// (CreatureMethods.h): Creature::hasInvolvedQuest
+	// (Creature.cpp:1856-1859) = the creature-quest ender relation
+	// (ObjectMgr.cpp:8453 loads creature_questender into
+	// _creatureQuestInvolvedRelations), despite the Eluna name
+	// suggesting completion in general. No world DB reads false.
+	methods["CanCompleteQuest"] = func(ctx context.Context, args []any) ([]any, error) {
+		questID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.WorldStore == nil || s.WorldStore.DB == nil {
+			return []any{false}, nil
+		}
+		s.motionMu.Lock()
+		entry := motion.Entry
+		s.motionMu.Unlock()
+		return []any{questRelationExists(ctx, s.WorldStore.DB, "creature_questender", entry, questID)}, nil
+	}
+	// CanFly is Creature::CanFly (Creature.h:106) =
+	// GetMovementTemplate().IsFlightAllowed() || IsFlying(): the
+	// spawn-seeded template flag (motion.CanFly) or the live
+	// MOVEMENTFLAG_CAN_FLY flag (motion.Flying, the SetCanFly slot).
+	methods["CanFly"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return []any{motion.CanFly || motion.Flying}, nil
+	}
+	// SetInCombatWithZone is CreatureMethods::SetInCombatWithZone
+	// (CreatureMethods.h:1043-1052): under TRINITY it is exactly
+	// AI()->DoZoneInCombat(), the DoZoneInCombat bridge above, so
+	// this is that method under its Eluna name.
+	methods["SetInCombatWithZone"] = methods["DoZoneInCombat"]
+	// AttackStart is CreatureMethods::AttackStart
+	// (CreatureMethods.h): AI()->AttackStart(target), the engage
+	// funnel the EngageWithTarget bridge above implements, so this
+	// is that method under its Eluna name, sharing its documented
+	// player-only victim resolution and evading/passive gates.
+	methods["AttackStart"] = methods["EngageWithTarget"]
+	// DespawnOrUnsummon is CreatureMethods::DespawnOrUnsummon
+	// (CreatureMethods.h): Creature::DespawnOrUnsummon
+	// (Creature.cpp) = TempSummon UnSummon, else ForcedDespawn.
+	// The motion Despawn bridge already implements that split
+	// (temp-summon event-20 leg, respawn scheduling), so ms == 0
+	// calls it directly and ms > 0 schedules it via time.AfterFunc,
+	// the ForcedDespawnDelayEvent leg (ForcedDespawn with a delay
+	// queues the same delete). Eluna takes no forceRespawnTimer
+	// argument, so the C++ default of 0 applies.
+	methods["DespawnOrUnsummon"] = func(ctx context.Context, args []any) ([]any, error) {
+		var ms uint32
+		if len(args) > 0 {
+			// Eluna defaults msTimeToDespawn to 0 only when omitted;
+			// a present but mistyped argument errors, as CHECKVAL does.
+			var err error
+			ms, err = luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+		}
+		despawn := methods["Despawn"]
+		if ms == 0 {
+			return despawn(ctx, nil)
+		}
+		time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
+			_, _ = despawn(context.Background(), nil)
+		})
+		return nil, nil
+	}
 	motionPowerType := motion.PowerType
 	if motionPowerType >= uint32(len(motion.Powers)) {
 		motionPowerType = 0
