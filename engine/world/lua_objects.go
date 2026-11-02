@@ -31,6 +31,7 @@ type luaCreatureState struct {
 	// flags_extra, type_flags, family, AIName, RacialLeader, unit_flags are
 	// static per entry, so the constructor snapshot is exact).
 	Rank         uint32
+	Class        uint32 // creature_template.unit_class, backs Lua Unit::GetClassMask
 	FlagsExtra   uint32
 	TypeFlags    uint32
 	Family       uint32
@@ -192,11 +193,11 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		npcFlagExpr = "(t.npcflag | " + flagClause + ")"
 	}
 	queryArgs := append(selectArgs, low, entry)
-	var rank, flagsExtra, typeFlags, family, unitFlags, racialLeader int64
+	var rank, flagsExtra, typeFlags, family, unitFlags, racialLeader, unitClass int64
 	var aiName string
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", t.rank, t.flags_extra, t.type_flags, t.family, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &family, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", t.rank, t.flags_extra, t.type_flags, t.unit_class, t.family, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &unitClass, &family, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
 	if err != nil && missingTable(err) {
-		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, t.rank, t.flags_extra, t.type_flags, t.family, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &family, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
+		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, t.rank, t.flags_extra, t.type_flags, t.unit_class, t.family, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &unitClass, &family, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
 	}
 	if err != nil {
 		if !errorsIsNoRows(err) {
@@ -232,6 +233,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		state.NPCFlags = liveNPCFlags
 	}
 	state.Rank, state.FlagsExtra, state.TypeFlags, state.Family, state.UnitFlags = uint32(rank), uint32(flagsExtra), uint32(typeFlags), uint32(family), uint32(unitFlags)
+	state.Class = uint32(unitClass)
 	state.AIName, state.RacialLeader = aiName, racialLeader != 0
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
@@ -305,6 +307,19 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["IsSpiritService"] = hasNPCFlag(0x0000C000)
 	methods["IsInnkeeper"] = hasNPCFlag(0x00001000)
 	methods["IsAuctioneer"] = hasNPCFlag(0x00200000)
+	methods["IsArmorer"] = hasNPCFlag(0x00001000)
+	methods["IsBanker"] = hasNPCFlag(0x00020000)
+	methods["IsBattleMaster"] = hasNPCFlag(0x00100000)
+	methods["IsGuildMaster"] = hasNPCFlag(0x00040000)
+	methods["IsTabardDesigner"] = hasNPCFlag(0x00080000)
+	// GetClassMask/GetRaceMask are Unit::GetClassMask/GetRaceMask
+	// (Unit.h:849/852): class from template unit_class, race 0 (the
+	// creature race byte Creature::InitEntry never sets). IsPvPFlagged
+	// is Unit::IsPvP (Unit.h:914); no bytes2 PvP model exists for
+	// creatures in Go, so it reads false.
+	methods["GetClassMask"] = luaNoArgs(func() any { return unitClassRaceMask(state.Class) })
+	methods["GetRaceMask"] = luaNoArgs(func() any { return uint32(0) })
+	methods["IsPvPFlagged"] = luaNoArgs(func() any { return false })
 	methods["IsServiceProvider"] = luaNoArgs(func() any { return state.NPCFlags&0x007FC0F2 != 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any {
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)

@@ -83,6 +83,7 @@ type creatureMotion struct {
 	FlagsExtra            uint32
 	TypeFlags             uint32 // creature_template.type_flags (CreatureData.h:180); the BOSS_MOB bit (0x4, SharedDefines.h:2731) feeds Creature::isWorldBoss (Creature.cpp:2353) gates
 	Rank                  uint32 // creature_template.rank (SharedDefines.h CreatureEliteType: 0 NORMAL, 4 RARE); feeds Creature::isElite (Creature.cpp:2344-2350), banked at spawn via loadCreatureStats
+	UnitClass             uint32 // creature_template.unit_class: Creature::InitEntry SetClass (Creature.cpp:494); backs Lua Unit::GetClassMask; motions built without stats (pets, totems) read 0
 	NPCFlags              uint32 // UNIT_NPC_FLAGS live value: Lua CreatureMethods::GetNPCFlags/SetNPCFlags (SetUInt32Value twin), init from template npcflag at spawn
 	NPCFlagsKnown         bool   // set by the event-surface SetNPCFlags/SetFlag(82)/RemoveFlag(82) bridges; gates the motion->spawn overlay so untouched creatures keep the DB/game-event value
 	DisableReputationGain bool   // Creature::DisableReputationGain (Creature.h:320-321, default false); Lua IsReputationGainDisabled/SetDisableReputationGain
@@ -914,6 +915,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			TypeFlags:       st.TypeFlags,
 			Rank:            st.Rank,
 			NPCFlags:        st.NPCFlags,
+			UnitClass:       st.UnitClass,
 			CanFly:          st.CanFly,
 			ReactState:      st.ReactState,
 			ReactStateKnown: st.ReactStateKnown,
@@ -1075,6 +1077,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				TypeFlags:       st.TypeFlags,
 				Rank:            st.Rank,
 				NPCFlags:        st.NPCFlags,
+				UnitClass:       st.UnitClass,
 				CanFly:          st.CanFly,
 				ReactState:      st.ReactState,
 				ReactStateKnown: st.ReactStateKnown,

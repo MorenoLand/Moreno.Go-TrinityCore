@@ -3118,6 +3118,7 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 			FlagsExtra: target.FlagsExtra,
 			TypeFlags:  st.TypeFlags,
 			Rank:       st.Rank,
+			UnitClass:  st.UnitClass,
 			Health:     target.Health,
 			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
 			PlayerDamageReq: target.Health / 2,

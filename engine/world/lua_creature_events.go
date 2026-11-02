@@ -292,6 +292,32 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// IsArmorer/IsBanker/IsBattleMaster/IsGuildMaster/IsTabardDesigner
+	// are the Unit.h:1011-1019 UNIT_NPC_FLAGS reads over the live motion
+	// flags. GetClassMask is Unit::GetClassMask (Unit.h:852) over the
+	// motion's template unit_class; GetRaceMask reads 0, the creature
+	// race byte Creature::InitEntry never sets. IsPvPFlagged is
+	// Unit::IsPvP (Unit.h:914); creatures carry no bytes2 PvP model in
+	// Go, so it reads false.
+	npcFlag := func(flag uint32) scripting.ObjectMethod {
+		return luaNoArgs(func() any {
+			s.motionMu.Lock()
+			defer s.motionMu.Unlock()
+			return motion.NPCFlags&flag != 0
+		})
+	}
+	methods["IsArmorer"] = npcFlag(0x00001000)
+	methods["IsBanker"] = npcFlag(0x00020000)
+	methods["IsBattleMaster"] = npcFlag(0x00100000)
+	methods["IsGuildMaster"] = npcFlag(0x00040000)
+	methods["IsTabardDesigner"] = npcFlag(0x00080000)
+	methods["GetClassMask"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return unitClassRaceMask(motion.UnitClass)
+	})
+	methods["GetRaceMask"] = luaNoArgs(func() any { return uint32(0) })
+	methods["IsPvPFlagged"] = luaNoArgs(func() any { return false })
 	// GetOwner returns the owning player object for a pet/guardian motion
 	// (Unit::GetOwner, Unit.h) or nil when the motion has no owner or the
 	// owner session is gone. Lets Lua port owner-targeted arms such as
