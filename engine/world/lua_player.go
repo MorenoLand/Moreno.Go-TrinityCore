@@ -1538,66 +1538,308 @@ func (s *session) luaPlayer() *scripting.Object {
 				update = b
 			}
 		}
-		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || count == 0 {
-			return []any{uint32(0)}, nil
-		}
-		db := s.server.CharactersStore.DB
-		rows, err := db.QueryContext(ctx, "SELECT ci.item, ii.count FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot", state.GUID, item)
+		destroyed, err := s.destroyItemEntryCount(ctx, item, count, update)
 		if err != nil {
-			if isMissingTableError(err) {
-				return []any{uint32(0)}, nil
-			}
 			return nil, err
 		}
-		type stack struct {
-			guid  int64
-			count int64
+		return []any{destroyed}, nil
+	}
+	// AddItem(entry[, count]) is Player::AddItem (PlayerMethods.h:3424-3458):
+	// CanStoreNewItem (NULL_BAG/NULL_SLOT, partial-count reduction) then
+	// StoreNewItem + SendNewItem, returning the stored item or nil. Go
+	// stores through storeOrStackItem (the .additem twin): an unknown
+	// template reads nil, and a full inventory reads nil — Go stores
+	// all-or-nothing where C++ stores the fitting part (the .additem
+	// command shares this delta). New stacks carry randomPropertyId 0
+	// where C++ rolls GenerateItemRandomPropertyId. The quest-item
+	// adjust fires inside storeOrStackItem; the SMSG_ITEM_PUSH_RESULT
+	// below is the SendNewItem twin, followed by the usual refresh.
+	methods["AddItem"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
 		}
-		var stacks []stack
-		for rows.Next() {
-			var st stack
-			if err := rows.Scan(&st.guid, &st.count); err == nil {
-				stacks = append(stacks, st)
-			}
-		}
-		rows.Close()
-		remaining := int64(count)
-		destroyed := uint32(0)
-		for _, st := range stacks {
-			if remaining <= 0 {
-				break
-			}
-			if st.count <= remaining {
-				// This bridge is the Player::DestroyItemCount twin, so
-				// each fully-consumed stack reaches DestroyItem and fires
-				// ITEM_EVENT_ON_REMOVE (5); the trimming stack only
-				// decrements and never fires.
-				s.fireItemRemoveHook(ctx, uint64(st.guid))
-				if _, err := db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, st.guid); err != nil {
-					return nil, err
-				}
-				if _, err := db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", st.guid); err != nil {
-					return nil, err
-				}
-				s.adjustQuestItemCount(ctx, item, uint32(st.count), false)
-				s.applyItemObtainSpells(ctx, item, 0, false)
-				s.despawnItem(uint64(st.guid))
-				destroyed += uint32(st.count)
-				remaining -= st.count
+		count := uint32(1)
+		if len(args) > 1 {
+			if c, err := luaUint32Arg(args, 1); err != nil {
+				return nil, err
 			} else {
-				if _, err := db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", remaining, st.guid); err != nil {
-					return nil, err
-				}
-				s.adjustQuestItemCount(ctx, item, uint32(remaining), false)
-				destroyed += uint32(remaining)
-				remaining = 0
+				count = c
 			}
 		}
-		if update && destroyed > 0 {
+		if count == 0 {
+			return []any{nil}, nil
+		}
+		if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return []any{nil}, nil
+		}
+		var exists uint32
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT entry FROM item_template WHERE entry = ? LIMIT 1", entry).Scan(&exists); err != nil || exists == 0 {
+			return []any{nil}, nil
+		}
+		res, err := s.storeOrStackItem(ctx, state.GUID, entry, count)
+		if err != nil || res == nil || res.ItemGUID == 0 {
+			return []any{nil}, nil
+		}
+		slotForPush := uint32(res.Slot)
+		if res.IsStack {
+			slotForPush = 0xFFFFFFFF
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, res.ClientBag, slotForPush, entry, count, res.InventoryCount, res.IsStack), true)
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+		if obj := s.sessionLuaItem(ctx, res.ItemGUID); obj != nil {
+			return []any{obj}, nil
+		}
+		return []any{nil}, nil
+	}
+	// RemoveItem(item|entry, count) is Player::RemoveItem
+	// (PlayerMethods.h:3461-3481): the entry arm is
+	// DestroyItemCount(entry, count, true), the item arm is
+	// DestroyItemCount(item, count, true) with the Eluna-object
+	// invalidation when the whole stack goes. Go has no object
+	// invalidation on the scripting surface, so a destroyed item's
+	// object re-reads its row and finds nothing. The entry arm reuses
+	// destroyItemEntryCount, the shared DestroyItemCount walk; the item
+	// arm mirrors its full/partial split for the single stack. An item
+	// owned by another player, a missing row, or a count of 0 is a
+	// silent no-op.
+	methods["RemoveItem"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		count, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if obj, ok := args[0].(*scripting.Object); ok && obj != nil {
+			if _, hasEntry := objectUint32Field(obj, "Entry"); !hasEntry {
+				return nil, fmt.Errorf("argument 1 must be an item")
+			}
+			guid, _ := objectUint64Field(obj, "GUID")
+			if guid == 0 || count == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+				return nil, nil
+			}
+			db := s.server.CharactersStore.DB
+			high := uint64(0x4000) << 48
+			var entry, instCount uint32
+			var ownerGUID int64
+			if err := db.QueryRowContext(ctx, "SELECT itemEntry, `count`, owner_guid FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1", guid, guid|high).Scan(&entry, &instCount, &ownerGUID); err != nil || entry == 0 || ownerGUID <= 0 || uint64(ownerGUID) != s.playerGUID {
+				return nil, nil
+			}
+			if instCount <= count {
+				s.fireItemRemoveHook(ctx, guid)
+				_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND (item = ? OR item = ?)", s.playerGUID, guid, guid|high)
+				_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ? OR guid = ?", guid, guid|high)
+				s.adjustQuestItemCount(ctx, entry, instCount, false)
+				s.applyItemObtainSpells(ctx, entry, 0, false)
+				s.despawnItem(guid)
+			} else {
+				_, _ = db.ExecContext(ctx, "UPDATE item_instance SET `count` = `count` - ? WHERE guid = ? OR guid = ?", count, guid, guid|high)
+				s.adjustQuestItemCount(ctx, entry, count, false)
+			}
 			_ = s.sendInventoryItems(ctx)
 			s.sendPlayerUpdate()
+			return nil, nil
 		}
-		return []any{destroyed}, nil
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		_, err = s.destroyItemEntryCount(ctx, entry, count, true)
+		return nil, err
+	}
+	// EquipItem(item|entry, slot) is Player::EquipItem (PlayerMethods.h:3204-3243):
+	// slots >= INVENTORY_SLOT_BAG_END (23) read nil; the entry arm
+	// creates a fresh item (Item::CreateItem, count 1), runs
+	// CanEquipItem(slot, dest, item, swap=false) — whose not_loading
+	// default is true (Player.h:1091), so the stunned/combat/casting
+	// block never runs on this path — then EquipItem(dest) plus
+	// AutoUnequipOffhandIfNeed, and (entry arm only)
+	// ItemAddedQuestCheck and the receive-epic criteria. The item arm
+	// removes the item from its bag first. Go models the CanEquipItem
+	// legs it has: slot fit (itemFitsEquipmentSlot, with its
+	// dual-wield/titan-grip/offhand-2H legs; bag slots via
+	// isSlotValidForItem), the CanUseItem template arms (CanEquipItem
+	// funnels through CanUseItem), bind-owner and loot-generated
+	// denials, occupied-dest denial (swap=false), the source unequip
+	// legs, and the 2H-mainhand offhand move. Unmodeled, shared with
+	// the deferred CanEquipItem model: unique-equipped,
+	// CanTakeMoreSimilarItems, quiver-only-one, scaling-stat caps,
+	// and item-set/_ApplyItemMods stat application (Go's equip funnel
+	// applies none of these either). A failed equip returns nil; the
+	// entry arm stages its fresh item in a free backpack slot first,
+	// so a full backpack fails it where C++ equips straight into the
+	// empty dest.
+	methods["EquipItem"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		slotValue, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if slotValue >= uint32(invSlotBagEnd) {
+			return []any{nil}, nil
+		}
+		slot := uint8(slotValue)
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return []any{nil}, nil
+		}
+		db := s.server.CharactersStore.DB
+		high := uint64(0x4000) << 48
+		var itemGUID uint64
+		var entry uint32
+		entryArm := false
+		var srcBagKey, srcSlot int64
+		srcHasRow := false
+		if obj, ok := args[0].(*scripting.Object); ok && obj != nil {
+			if _, hasEntry := objectUint32Field(obj, "Entry"); !hasEntry {
+				return nil, fmt.Errorf("argument 1 must be an item")
+			}
+			guid, _ := objectUint64Field(obj, "GUID")
+			if guid == 0 {
+				return []any{nil}, nil
+			}
+			itemGUID = guid
+			var instCount uint32
+			var ownerGUID int64
+			if err := db.QueryRowContext(ctx, "SELECT itemEntry, `count`, owner_guid FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1", guid, guid|high).Scan(&entry, &instCount, &ownerGUID); err != nil || entry == 0 || ownerGUID <= 0 || uint64(ownerGUID) != s.playerGUID {
+				return []any{nil}, nil
+			}
+			_ = instCount
+			if s.server.containerLootGenerated(guid) {
+				return []any{nil}, nil
+			}
+			if err := db.QueryRowContext(ctx, "SELECT bag, slot FROM character_inventory WHERE guid = ? AND (item = ? OR item = ?) LIMIT 1", s.playerGUID, guid, guid|high).Scan(&srcBagKey, &srcSlot); err != nil {
+				return []any{nil}, nil
+			}
+			srcHasRow = true
+			if srcBagKey == 0 && srcSlot == int64(slot) {
+				return []any{nil}, nil
+			}
+		} else {
+			entry, err = luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			entryArm = true
+		}
+		data, err := s.loadItemQueryData(ctx, entry)
+		if err != nil || data.Entry == 0 {
+			return []any{nil}, nil
+		}
+		fits := false
+		if slot >= uint8(invSlotBagStart) {
+			fits = s.isSlotValidForItem(uint8(data.InventoryType), slot)
+		} else {
+			var equipped map[int64]itemQueryData
+			if slot == uint8(equipSlotOffhand) {
+				var mhItem int64
+				if err := db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = 15 AND item != 0 LIMIT 1", s.playerGUID).Scan(&mhItem); err == nil && mhItem != 0 {
+					var mhEntry int64
+					if err := db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", mhItem).Scan(&mhEntry); err == nil && mhEntry != 0 {
+						if mhData, err := s.loadItemQueryData(ctx, uint32(mhEntry)); err == nil && mhData.Entry != 0 {
+							equipped = map[int64]itemQueryData{15: mhData}
+						}
+					}
+				}
+			}
+			fits = itemFitsEquipmentSlot(state, equipped, data, int64(slot))
+		}
+		if !fits {
+			return []any{nil}, nil
+		}
+		if uint32(state.Level) < data.RequiredLevel {
+			return []any{nil}, nil
+		}
+		var spellIDs [5]int64
+		for i := range spellIDs {
+			spellIDs[i] = int64(data.Spells[i].ID)
+		}
+		if result := s.canUseItemResult(ctx, entry, data.Class, data.SubClass, data.Flags2, int64(data.AllowableClass), int64(data.AllowableRace), data.RequiredSkill, data.RequiredSkillRank, data.RequiredSpell, data.HolidayID, data.Quality, data.RequiredReputationFaction, data.RequiredReputationRank, spellIDs); result != equipErrOk {
+			return []any{nil}, nil
+		}
+		var dstItemGUID int64
+		_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, slot).Scan(&dstItemGUID)
+		if dstItemGUID != 0 {
+			return []any{nil}, nil
+		}
+		if srcHasRow && srcBagKey == 0 && (srcSlot < int64(equipSlotEnd) || (srcSlot >= int64(invSlotBagStart) && srcSlot < int64(invSlotBagEnd)) || (srcSlot >= 67 && srcSlot <= 73)) {
+			if msg := s.canUnequipLegs(ctx, int64(itemGUID), int64(entry)); msg != equipErrOk {
+				return []any{nil}, nil
+			}
+			if !(slot >= uint8(invSlotBagStart) && slot < uint8(invSlotBagEnd)) && s.itemIsNonemptyBag(ctx, itemGUID) {
+				return []any{nil}, nil
+			}
+		}
+		var offhandGUID int64
+		offhandMove := false
+		if slot == uint8(equipSlotMainhand) && data.InventoryType == 17 {
+			_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, equipSlotOffhand).Scan(&offhandGUID)
+			offhandMove = offhandGUID != 0
+		}
+		if entryArm {
+			stageSlot, ok := s.findFreeBackpackSlot(ctx)
+			if !ok {
+				return []any{nil}, nil
+			}
+			var maxDurability int64 = 100
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", entry).Scan(&maxDurability); err != nil || maxDurability <= 0 {
+				maxDurability = 100
+			}
+			newDuration := s.server.itemTemplateDuration(ctx, entry)
+			var baseGUID int64
+			if reserved, ok := s.server.generateItemGUIDRange(1); ok {
+				baseGUID = int64(reserved)
+			} else {
+				_ = db.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM item_instance").Scan(&baseGUID)
+			}
+			if baseGUID < 0 {
+				baseGUID = 0
+			}
+			itemGUID = uint64(baseGUID) + 1
+			if _, err := db.ExecContext(ctx, `INSERT INTO item_instance
+				(guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
+				VALUES (?, ?, ?, 0, ?, ?, '', 0, '', 0, ?, 0, '')`,
+				itemGUID, entry, s.playerGUID, 1, newDuration, maxDurability); err != nil {
+				return []any{nil}, nil
+			}
+			if _, err := db.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, 0, stageSlot, itemGUID); err != nil {
+				_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+				return []any{nil}, nil
+			}
+			srcBagKey, srcSlot = 0, int64(stageSlot)
+		}
+		if offhandMove {
+			freeSlot, ok := s.findFreeBackpackSlot(ctx)
+			if !ok {
+				if entryArm {
+					_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
+					_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+				}
+				return []any{nil}, nil
+			}
+			_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND item = ?", freeSlot, s.playerGUID, offhandGUID)
+		}
+		if entryArm {
+			s.adjustQuestItemCount(ctx, entry, 1, true)
+			s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, entry, 1)
+		}
+		s.swapInventoryCoordinates(ctx, int64(itemGUID), srcBagKey, srcSlot, 0, 0, int64(slot))
+		s.syncEquipmentCache(ctx)
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+		s.updateAchievementCriteria(criteriaTypeEquipItem, entry, 1)
+		if data.Quality >= 5 {
+			s.updateAchievementCriteria(criteriaTypeEquipEpicItem, uint32(slot), 1)
+		}
+		s.fireEquipHook(ctx, int64(itemGUID), 255, slot)
+		s.sendEquippedItemTimeUpdate(ctx, int64(itemGUID))
+		if obj := s.sessionLuaItem(ctx, itemGUID); obj != nil {
+			return []any{obj}, nil
+		}
+		return []any{nil}, nil
 	}
 	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
@@ -3625,6 +3867,79 @@ func playerPowerIndex(args []any, class uint8) (int, error) {
 		return 0, fmt.Errorf("power type %d is invalid", power)
 	}
 	return int(power), nil
+}
+
+// destroyItemEntryCount is the shared Player::DestroyItemCount(entry, ...)
+// walk behind the DestroyItemCount bridge and the RemoveItem entry arm:
+// it walks the player's stacks of the entry in bag/slot order, deleting
+// whole stacks and trimming the stack that covers the remainder, and
+// returns the total actually destroyed. C++'s partial-stack branch
+// returns only the full-stack subtotal; this bridge returns the full
+// destroyed total instead (the rows left behind are the same). The
+// update flag mirrors C++'s send-update leg: a live inventory refresh
+// is pushed only when it is true. The C++ in-trade skip has no Go row
+// model and is not replicated.
+func (s *session) destroyItemEntryCount(ctx context.Context, item, count uint32, update bool) (uint32, error) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || count == 0 {
+		return 0, nil
+	}
+	db := s.server.CharactersStore.DB
+	rows, err := db.QueryContext(ctx, "SELECT ci.item, ii.count FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot", s.playerGUID, item)
+	if err != nil {
+		if isMissingTableError(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	type stack struct {
+		guid  int64
+		count int64
+	}
+	var stacks []stack
+	for rows.Next() {
+		var st stack
+		if err := rows.Scan(&st.guid, &st.count); err == nil {
+			stacks = append(stacks, st)
+		}
+	}
+	rows.Close()
+	remaining := int64(count)
+	destroyed := uint32(0)
+	for _, st := range stacks {
+		if remaining <= 0 {
+			break
+		}
+		if st.count <= remaining {
+			// This bridge is the Player::DestroyItemCount twin, so
+			// each fully-consumed stack reaches DestroyItem and fires
+			// ITEM_EVENT_ON_REMOVE (5); the trimming stack only
+			// decrements and never fires.
+			s.fireItemRemoveHook(ctx, uint64(st.guid))
+			if _, err := db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, st.guid); err != nil {
+				return 0, err
+			}
+			if _, err := db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", st.guid); err != nil {
+				return 0, err
+			}
+			s.adjustQuestItemCount(ctx, item, uint32(st.count), false)
+			s.applyItemObtainSpells(ctx, item, 0, false)
+			s.despawnItem(uint64(st.guid))
+			destroyed += uint32(st.count)
+			remaining -= st.count
+		} else {
+			if _, err := db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", remaining, st.guid); err != nil {
+				return 0, err
+			}
+			s.adjustQuestItemCount(ctx, item, uint32(remaining), false)
+			destroyed += uint32(remaining)
+			remaining = 0
+		}
+	}
+	if update && destroyed > 0 {
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+	}
+	return destroyed, nil
 }
 
 // luaItemGUIDArg resolves an Eluna Item object argument to its instance
