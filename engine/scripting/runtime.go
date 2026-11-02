@@ -464,19 +464,26 @@ func (r *Runtime) triggerNUpdated(ctx context.Context, kind string, event int, n
 	for _, hook := range initial {
 		initialIDs[hook.id] = struct{}{}
 	}
-	remaining := make([]registeredHook, 0, len(initial))
+	// Nested dispatch (possible now that r.mu is re-entrant) must not
+	// clobber this dispatch's bookkeeping: a nested triggerNUpdated
+	// reassigns r.hooks from its own snapshot, so rebuilding r.hooks
+	// from this dispatch's snapshot would discard the nested dispatch's
+	// shots consumption and resurrect shots==1 hooks it removed. Record
+	// only what this dispatch itself did - hooks it fired (with their
+	// pre-fire shots) and hooks it skipped as cancelled - and merge
+	// those outcomes onto the current list at the end, so nested
+	// consumption accumulates instead of being overwritten.
+	fired := make(map[int]int)
+	skipped := make(map[int]struct{})
 	for _, hook := range initial {
 		if _, cancelled := r.cancelled[hook.id]; cancelled {
+			skipped[hook.id] = struct{}{}
 			continue
 		}
 		if hook.Kind != kind || hook.Event != event {
-			remaining = append(remaining, hook)
 			continue
 		}
-		remove := hook.shots == 1
-		if hook.shots > 1 {
-			hook.shots--
-		}
+		fired[hook.id] = hook.shots
 		r.state.SetTop(0)
 		r.state.RawGetInt(lua.RegistryIndex, hook.ref)
 		for _, arg := range args {
@@ -487,11 +494,6 @@ func (r *Runtime) triggerNUpdated(ctx context.Context, kind string, event int, n
 		if err := r.state.ProtectedCall(len(args), nresults, 0); err != nil {
 			if r.config.Logger != nil {
 				r.config.Logger.Error("lua hook failed", "kind", kind, "event", event, "error", err)
-			}
-			if !remove {
-				if _, cancelled := r.cancelled[hook.id]; !cancelled {
-					remaining = append(remaining, hook)
-				}
 			}
 			continue
 		}
@@ -504,21 +506,35 @@ func (r *Runtime) triggerNUpdated(ctx context.Context, kind string, event int, n
 		if update != nil {
 			update(vals)
 		}
-		if !remove {
-			if _, cancelled := r.cancelled[hook.id]; !cancelled {
-				remaining = append(remaining, hook)
-			}
-		}
 	}
+	merged := make([]registeredHook, 0, len(r.hooks))
 	for _, hook := range r.hooks {
-		if _, existed := initialIDs[hook.id]; existed {
+		if _, skip := skipped[hook.id]; skip {
 			continue
 		}
-		if _, cancelled := r.cancelled[hook.id]; !cancelled {
-			remaining = append(remaining, hook)
+		if _, existed := initialIDs[hook.id]; !existed {
+			if _, cancelled := r.cancelled[hook.id]; cancelled {
+				continue
+			}
+			merged = append(merged, hook)
+			continue
 		}
+		if shots, wasFired := fired[hook.id]; wasFired {
+			switch {
+			case shots == 1:
+				continue
+			case shots > 1:
+				if hook.shots == 1 {
+					continue
+				}
+				if hook.shots > 1 {
+					hook.shots--
+				}
+			}
+		}
+		merged = append(merged, hook)
 	}
-	r.hooks = remaining
+	r.hooks = merged
 	_ = ctx
 	return result, nil
 }
