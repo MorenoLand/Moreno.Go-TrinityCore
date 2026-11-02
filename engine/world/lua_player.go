@@ -3294,6 +3294,38 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, nil
 	}
+	// Eluna Player achievement methods (PlayerMethods.h:55-64, 2068-2076,
+	// 2124-2131; Player.cpp:25430-25432, 25455-25458; AchievementMgr.cpp:486-508,
+	// 1629-1632). HasAchieved is a plain earned-map lookup with no DBC gate
+	// (C++ HasAchieved reads m_completedAchievements only). SetAchievement
+	// no-ops on a DBC miss (the C++ LookupEntry guard) and otherwise runs
+	// the shared complete arm, which itself no-ops on already-earned and
+	// counter achievements; the DBC gate also keeps a nil-server session
+	// from reaching completeAchievement's server dereference.
+	// ResetAchievements runs the shared reset arm; its CheckAll re-fill leg
+	// stays out (see resetAchievements).
+	methods["HasAchieved"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		_, has := s.earnedAchievements[id]
+		return []any{has}, nil
+	}
+	methods["SetAchievement"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.knownAchievement(id) {
+			s.completeAchievement(id)
+		}
+		return nil, nil
+	}
+	methods["ResetAchievements"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.resetAchievements(ctx)
+		return nil, nil
+	}
 	methods["GetReputation"] = func(_ context.Context, args []any) ([]any, error) {
 		faction, err := luaUint32Arg(args, 0)
 		if err != nil {

@@ -1544,6 +1544,38 @@ func (s *session) completeAchievement(achievementID uint32) {
 	s.sendAchievementRewardMail(achievementID)
 }
 
+// resetAchievements mirrors AchievementMgr::Reset (AchievementMgr.cpp:486-508):
+// SMSG_ACHIEVEMENT_DELETED per earned achievement and SMSG_CRITERIA_DELETED
+// per criteria progress row, then both maps cleared, both DB tables wiped,
+// and armed timed-criteria timers stopped. The C++ re-fill leg
+// (CheckAllAchievementCriteria, re-evaluating every criteria type from
+// current state) has no Go twin: Go's criteria pipeline is event-driven,
+// so re-running every type with asset/quantity 0 would mint zero-counter
+// progress rows instead of re-deriving state, and is left out. The
+// .reset achievements command shares this helper for online targets.
+func (s *session) resetAchievements(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	for id := range s.earnedAchievements {
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(id)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_DELETED), packet.Bytes(), true)
+	}
+	for id := range s.criteriaProgress {
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(id)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CRITERIA_DELETED), packet.Bytes(), true)
+	}
+	s.stopTimedAchievements()
+	s.earnedAchievements = make(map[uint32]uint32)
+	s.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_achievement WHERE guid = ?", s.playerGUID)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_achievement_progress WHERE guid = ?", s.playerGUID)
+	}
+}
+
 // grantAchievementRewardTitle mirrors the title arm of
 // AchievementMgr::CompletedAchievement and its LoadFromDB retroactive
 // leg (AchievementMgr.cpp:620-624, 1533-1540): the achievement_reward

@@ -145,9 +145,7 @@ func (s *session) handleResetAchievements(ctx context.Context, args []string) {
 	_, _ = chars.DB.ExecContext(ctx, "DELETE FROM character_achievement WHERE guid = ?", guid)
 	_, _ = chars.DB.ExecContext(ctx, "DELETE FROM character_achievement_progress WHERE guid = ?", guid)
 	if target != nil {
-		target.earnedAchievements = make(map[uint32]uint32)
-		target.criteriaProgress = make(map[uint32]*criteriaProgressState)
-		target.sendAllAchievementData()
+		target.resetAchievements(ctx)
 	}
 }
 
