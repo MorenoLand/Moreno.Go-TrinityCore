@@ -94,6 +94,19 @@ const (
 	GroupEventOnCreate       = 6
 )
 
+// Eluna VehicleEvents contract for RegisterVehicleEvent. Numbering is the
+// TrinityCore LuaEngine numbering (LuaEngine/Hooks.h VehicleEvents): 3 is
+// UNUSED in C++ and carries no Go constant. The engine fires all five live
+// events; the vehicle argument is the base creature object (Go has no
+// Vehicle userdata type — see triggerVehicleEvent in engine/world).
+const (
+	VehicleEventOnInstall          = 1
+	VehicleEventOnUninstall        = 2
+	VehicleEventOnInstallAccessory = 4
+	VehicleEventOnAddPassenger     = 5
+	VehicleEventOnRemovePassenger  = 6
+)
+
 // Eluna GameObjectEvents contract for RegisterGameObjectEvent. Numbering
 // is the TrinityCore LuaEngine numbering (LuaEngine/Hooks.h
 // GameObjectEvents): 11 is UNUSED in C++ and carries no Go constant; only
@@ -726,6 +739,13 @@ func (r *Runtime) TriggerGroupEvent(ctx context.Context, event int, args ...any)
 	return r.Trigger(ctx, "group", event, append([]any{event}, args...)...)
 }
 
+// TriggerVehicleEvent fires hooks registered with RegisterVehicleEvent(event,
+// fn). C++ Eluna vehicle hooks pass (event, vehicle, ...) (LuaEngine/
+// VehicleHooks.cpp), so the event number is prepended like TriggerGroupEvent.
+func (r *Runtime) TriggerVehicleEvent(ctx context.Context, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "vehicle", event, append([]any{event}, args...)...)
+}
+
 func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, args ...any) ([]any, error) {
 	if !r.mu.TryLockFree() {
 		return nil, nil
@@ -838,6 +858,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("RegisterPlayerEvent", r.registerPlayerEvent)
 	r.state.Register("RegisterGuildEvent", r.registerGuildEvent)
 	r.state.Register("RegisterGroupEvent", r.registerGroupEvent)
+	r.state.Register("RegisterVehicleEvent", r.registerVehicleEvent)
 	r.state.Register("RegisterCreatureEvent", r.registerCreatureEvent)
 	r.state.Register("RegisterUniqueCreatureEvent", r.registerUniqueCreatureEvent)
 	r.state.Register("RegisterCreatureGossipEvent", r.registerCreatureGossipEvent)
@@ -859,6 +880,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("ClearGameObjectEvents", r.clearGameObjectEvents)
 	r.state.Register("ClearGameObjectGossipEvents", r.clearGameObjectGossipEvents)
 	r.state.Register("ClearGroupEvents", r.clearGroupEvents)
+	r.state.Register("ClearVehicleEvents", r.clearVehicleEvents)
 	r.state.Register("ClearGuildEvents", r.clearGuildEvents)
 	r.state.Register("ClearItemEvents", r.clearItemEvents)
 	r.state.Register("ClearItemGossipEvents", r.clearItemGossipEvents)
@@ -1022,6 +1044,10 @@ func (r *Runtime) registerGroupEvent(state *lua.State) int {
 	return r.registerHook(state, "group", lua.CheckInteger(state, 1), 2, 3)
 }
 
+func (r *Runtime) registerVehicleEvent(state *lua.State) int {
+	return r.registerHook(state, "vehicle", lua.CheckInteger(state, 1), 2, 3)
+}
+
 func (r *Runtime) registerBGEvent(state *lua.State) int {
 	return r.registerHook(state, "bg", lua.CheckInteger(state, 1), 2, 3)
 }
@@ -1097,6 +1123,9 @@ func (r *Runtime) clearBattleGroundEvents(state *lua.State) int {
 	return r.clearGlobalEvents(state, "bg")
 }
 func (r *Runtime) clearGroupEvents(state *lua.State) int { return r.clearGlobalEvents(state, "group") }
+func (r *Runtime) clearVehicleEvents(state *lua.State) int {
+	return r.clearGlobalEvents(state, "vehicle")
+}
 func (r *Runtime) clearGuildEvents(state *lua.State) int { return r.clearGlobalEvents(state, "guild") }
 func (r *Runtime) clearPlayerEvents(state *lua.State) int {
 	return r.clearGlobalEvents(state, "player")

@@ -74,6 +74,7 @@ type VehicleKit struct {
 	Accessories          []VehicleAccessory
 	InstalledAccessories []uint64
 	AccessoriesInstalled bool // install latch: InstallAllAccessories attempted once per kit; re-install on evade Reset(true) is a residual (Go has no evade Reset twin)
+	InstallEventFired    bool // install latch: VEHICLE_EVENT_ON_INSTALL fired once per kit, on the first passenger sync (Creature::AddToWorld Install twin)
 	LastShootPos         [3]float32
 	X, Y, Z, Orientation float32
 }
@@ -388,6 +389,26 @@ func CalculatePassengerOffset(transX, transY, transZ, transO float32, globalX, g
 	return
 }
 
+// triggerVehicleEvent dispatches an Eluna VEHICLE_EVENT_* hook
+// (RegisterVehicleEvent) as (event, vehicle, ...args), mirroring
+// Eluna::VehicleHooks (VehicleHooks.cpp) via ScriptMgr::OnInstall /
+// OnUninstall / OnAddPassenger / OnRemovePassenger / OnInstallAccessory.
+// C++ pushes a Vehicle userdata; Go has no Vehicle object type, so the
+// vehicle argument is the base creature object. A nil vehicle object means
+// no handler can see the base, so the event does not fire — C++ always
+// has a live base. These hooks never cancel: the C++ call sites use
+// CallAllFunctions, not the Bool form. Callers fire only for creature
+// bases (Vehicle.cpp gates every fire on TYPEID_UNIT); player bases
+// never fire.
+func (srv *Server) triggerVehicleEvent(event int, vehicle *scripting.Object, args ...any) {
+	if srv == nil || vehicle == nil || srv.Features == nil || srv.Features.Scripts == nil {
+		return
+	}
+	if _, err := srv.Features.Scripts.TriggerVehicleEvent(context.Background(), event, append([]any{vehicle}, args...)...); err != nil {
+		srv.debug("lua vehicle event failed", "event", event, "error", err)
+	}
+}
+
 // createVehicleKit initializes a VehicleKit for a given GUID, caching seats and accessories.
 // Reference: Unit::CreateVehicleKit (Unit.cpp:8320-8336) & Vehicle::Vehicle (Vehicle.cpp:36-58).
 func (s *Server) createVehicleKit(mapID, instanceID uint32, vehicleGUID uint64, vehicleID uint32, creatureEntry uint32, isPlayer bool) *VehicleKit {
@@ -657,7 +678,18 @@ func (s *Server) despawnVehicleMotion(ctx context.Context, motion *creatureMotio
 	// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels a
 	// cast in flight before RemoveFromWorld, ahead of destroy.
 	s.interruptCreatureCastsOnRemove(m)
+	// Unit::RemoveVehicleKit (Unit.cpp:12060-12062) no-ops without a kit,
+	// so OnUninstall fires only when one existed.
+	hadKit := s.getVehicleKit(mapID, instanceID, guid) != nil
 	s.removeVehicleKit(mapID, instanceID, guid)
+	// Vehicle::Uninstall (Vehicle.cpp:123-124) fires OnUninstall for
+	// creature bases after RemoveAllPassengers — the ev6 fires above
+	// ride removeVehicleKit's exitCreatureVehiclePassengers, so this
+	// lands after them, in C++ order. The motion struct is still valid
+	// for the object snapshot after its map deletion above.
+	if hadKit {
+		s.triggerVehicleEvent(scripting.VehicleEventOnUninstall, s.luaMotionCreature(m))
+	}
 	destroyBuf := protocol.NewBuffer(9)
 	destroyBuf.WriteU64(guid)
 	destroyBuf.WriteU8(0)
@@ -807,6 +839,18 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 		kit.mu.Lock()
 		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
 		kit.mu.Unlock()
+		// Vehicle::AddPassenger (Vehicle.cpp:899-906) fires OnAddPassenger
+		// for creature bases, then OnInstallAccessory when the passenger
+		// carries UNIT_MASK_ACCESSORY — which InstallAccessory sets only
+		// for minions (Vehicle.cpp:404). The player-base install path
+		// shares this body, so the base-motion gate keeps it silent
+		// there, matching the C++ TYPEID_UNIT gate.
+		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
+			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
+			if acc.IsMinion {
+				s.triggerVehicleEvent(scripting.VehicleEventOnInstallAccessory, s.luaMotionCreature(base), s.luaMotionCreature(summoned))
+			}
+		}
 	}
 }
 
@@ -844,6 +888,14 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 	if s == nil || kit == nil {
 		return
 	}
+	// Vehicle::Uninstall (Vehicle.cpp:123) removes all passengers before
+	// OnUninstall fires, and each RemovePassenger fires OnRemovePassenger
+	// for creature bases (Vehicle.cpp:538-539); a player base stays silent
+	// per the C++ TYPEID_UNIT gate, so a nil base object skips the fire.
+	var vehicleObj *scripting.Object
+	if base := s.findCreatureMotion(mapID, instanceID, kit.VehicleGUID); base != nil {
+		vehicleObj = s.luaMotionCreature(base)
+	}
 	for _, guid := range kit.seatedPassengerGUIDs() {
 		if s.findSessionByGUID(guid) != nil {
 			continue
@@ -851,6 +903,9 @@ func (s *Server) exitCreatureVehiclePassengers(mapID, instanceID uint32, kit *Ve
 		motion := s.findCreatureMotion(mapID, instanceID, guid)
 		if motion == nil {
 			continue
+		}
+		if vehicleObj != nil {
+			s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, vehicleObj, s.luaMotionCreature(motion))
 		}
 		if motion.VehicleAccessoryMinion {
 			s.expireTempSummonGuardian(context.Background(), motion)
@@ -886,6 +941,20 @@ func (s *Server) syncCreatureVehiclePassengers(motion *creatureMotion) {
 	kit := s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
 	if kit == nil {
 		return
+	}
+	// Vehicle::Install (Vehicle.cpp:78-82) fires OnInstall when a creature
+	// base enters the world; Go kits materialize without an AddToWorld
+	// twin, so the first passenger sync — which every vehicle base's step
+	// path funnels through, after motionMu is released — fires it once.
+	fireInstall := false
+	kit.mu.Lock()
+	if !kit.InstallEventFired {
+		kit.InstallEventFired = true
+		fireInstall = true
+	}
+	kit.mu.Unlock()
+	if fireInstall {
+		s.triggerVehicleEvent(scripting.VehicleEventOnInstall, s.luaMotionCreature(motion))
 	}
 	s.installVehicleAccessories(context.Background(), motion, kit)
 	kit.setPosition(motion.X, motion.Y, motion.Z, motion.Orientation)
@@ -1444,6 +1513,14 @@ func (s *session) enterVehicle(ctx context.Context, vehicleGUID uint64, seatID i
 					s.player.UnitFlags |= 0x02000000 // UNIT_FLAG_NOT_SELECTABLE
 				}
 			}
+			// Vehicle::AddPassenger (Vehicle.cpp:899-902) fires
+			// OnAddPassenger for creature bases only; player bases
+			// (mount kits) stay silent per the C++ TYPEID_UNIT gate.
+			if !kit.IsPlayer {
+				if base := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, vehicleGUID); base != nil {
+					s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.luaPlayer(), assigned)
+				}
+			}
 		}
 	}
 
@@ -1537,6 +1614,14 @@ func (s *session) exitVehicle(ctx context.Context) {
 			_, si, wu, ok := loc.kit.RemovePassenger(s.playerGUID)
 			if ok && loc.kit == primary {
 				seatInfo, wasUnselectable = si, wu
+			}
+		}
+		// Vehicle::RemovePassenger (Vehicle.cpp:538-539) fires
+		// OnRemovePassenger for creature bases only; seatInfo is set
+		// exactly when the primary-kit removal succeeded.
+		if primary != nil && !primary.IsPlayer && seatInfo != nil {
+			if base := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, oldVehGUID); base != nil {
+				s.server.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.server.luaMotionCreature(base), s.luaPlayer())
 			}
 		}
 		if seatInfo != nil {
@@ -1720,8 +1805,18 @@ func (s *session) releaseVehicleStateAtLogout(ctx context.Context) {
 		// conditioned-vehicle dismiss motion lookup rides the kit's
 		// own key for the same reason.
 		kits := s.server.findVehicleKits(vehGUID)
+		vehicleFired := false
 		for _, loc := range kits {
-			loc.kit.RemovePassenger(s.playerGUID)
+			if _, _, _, ok := loc.kit.RemovePassenger(s.playerGUID); ok && !vehicleFired && !loc.kit.IsPlayer {
+				// Logout removal is still a Vehicle::RemovePassenger
+				// fire for creature bases (Vehicle.cpp:538-539); the
+				// first successful removal fires once, matching the
+				// single C++ vehicle the passenger sat in.
+				if base := s.server.findCreatureMotion(loc.key.MapID, loc.key.InstanceID, vehGUID); base != nil {
+					s.server.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.server.luaMotionCreature(base), s.luaPlayer())
+					vehicleFired = true
+				}
+			}
 		}
 		if len(kits) > 0 {
 			inUse := false
