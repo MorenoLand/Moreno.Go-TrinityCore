@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/Shopify/go-lua"
 )
@@ -275,7 +274,7 @@ type Config struct {
 
 type Runtime struct {
 	config       Config
-	mu           sync.Mutex
+	mu           reentrantMutex
 	state        *lua.State
 	nextRef      int
 	nextHook     int
@@ -703,7 +702,7 @@ func (r *Runtime) TriggerGroupEvent(ctx context.Context, event int, args ...any)
 }
 
 func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, args ...any) ([]any, error) {
-	if !r.mu.TryLock() {
+	if !r.mu.TryLockFree() {
 		return nil, nil
 	}
 	r.mu.Unlock()
@@ -720,7 +719,7 @@ func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, arg
 // already holds the runtime lock (e.g. Lua -> SendPacket -> send hooks), in
 // which case the fire is skipped instead of deadlocking.
 func (r *Runtime) TriggerServerEvent2(ctx context.Context, event int, args ...any) ([][]any, error) {
-	if !r.mu.TryLock() {
+	if !r.mu.TryLockFree() {
 		return nil, nil
 	}
 	r.mu.Unlock()
@@ -735,7 +734,7 @@ func (r *Runtime) TriggerServerEvent2(ctx context.Context, event int, args ...an
 // deadlock there; the guarded fire is skipped instead, like the receive
 // path, and the packet is delivered.
 func (r *Runtime) TriggerServerEventGuarded(ctx context.Context, event int, args ...any) ([]any, error) {
-	if !r.mu.TryLock() {
+	if !r.mu.TryLockFree() {
 		return nil, nil
 	}
 	r.mu.Unlock()
@@ -752,7 +751,7 @@ func (r *Runtime) TriggerServerEventGuarded(ctx context.Context, event int, args
 // (PACKET_EVENT_ON_PACKET_SEND = 7, LuaEngine/Hooks.h:96), so on receive the
 // engine fires event-7 per-opcode bindings, never event-5 ones.
 func (r *Runtime) TriggerPacketEvent2(ctx context.Context, opcode, event int, args ...any) ([][]any, error) {
-	if !r.mu.TryLock() {
+	if !r.mu.TryLockFree() {
 		return nil, nil
 	}
 	r.mu.Unlock()
