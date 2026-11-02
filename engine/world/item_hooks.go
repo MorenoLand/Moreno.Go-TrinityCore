@@ -2,10 +2,28 @@ package world
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
+
+// luaItemEnchantmentID is the world-side twin of scripting's
+// itemEnchantmentID (item_instance enchantments string: (id, duration,
+// charges) triples per slot, Item.cpp:354-356): slot s at fields[s*3].
+func luaItemEnchantmentID(raw string, slot uint32) uint32 {
+	fields := strings.Fields(raw)
+	index := int(slot) * 3
+	if index >= len(fields) {
+		return 0
+	}
+	value, err := strconv.ParseUint(fields[index], 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(value)
+}
 
 // itemTemplateLiveFromQuery maps the item_template row into the exported
 // scripting.ItemTemplateLive behind Lua Item objects (Eluna reads these
@@ -35,6 +53,7 @@ func itemTemplateLiveFromQuery(data itemQueryData) scripting.ItemTemplateLive {
 		BuyCount:       data.BuyCount,
 		RandomProperty: data.RandomProperty,
 		RandomSuffix:   data.RandomSuffix,
+		MaxDurability:  data.MaxDurability,
 	}
 	for index := range data.Spells {
 		if id := data.Spells[index].ID; id > 0 {
@@ -60,13 +79,17 @@ func (s *session) itemTemplateLive(ctx context.Context, entry uint32) scripting.
 // sessionLuaItem builds the Lua Item object for the Eluna ITEM_EVENT_*
 // hooks from the character's item_instance row — the Go model of Eluna's
 // Push(Item*) via ElunaTemplate. It reuses scripting.NewItemObject
-// (GUID/Entry/Count + the template-read surface in globals.go); the
-// instance-bound and mutating Item surface has no live-item model behind
-// it and stays unbridged. rawGUID is the item_instance low part: client
-// GUIDs carry the 0x4000 high bits (see handleUseItem and
-// questgiverStartsQuest), so both forms are probed. A nil return means no
-// handler can see the item, so the event does not fire — C++ always has a
-// live Item*.
+// (GUID/Entry/Count + the template-read surface in globals.go) with a
+// LoadInstance behind the instance-bound reads (GetOwner/GetOwnerGUID/
+// GetSlot/GetBagSlot/GetEnchantmentId/IsSoulBound/IsLocked/IsBroken/
+// IsInBag/IsEquipped/IsNotEmptyBag/IsBoundByEnchant): the item_instance
+// row (owner_guid, ITEM_FIELD_FLAGS, durability, enchantments triples)
+// plus the character_inventory position (bag/slot, the container's slot
+// for BagSlot, a contents count for IsNotEmptyBag). rawGUID is the
+// item_instance low part: client GUIDs carry the 0x4000 high bits (see
+// handleUseItem and questgiverStartsQuest), so both forms are probed. A
+// nil return means no handler can see the item, so the event does not
+// fire — C++ always has a live Item*.
 func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting.Object {
 	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || rawGUID == 0 {
 		return nil
@@ -77,7 +100,62 @@ func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting
 		rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&entry, &count); err != nil || entry == 0 {
 		return nil
 	}
-	return scripting.NewItemObject(rawGUID|(uint64(0x4000)<<48), entry, count, s.itemTemplateLive(ctx, entry))
+	live := s.itemTemplateLive(ctx, entry)
+	live.Players = s.server.luaPlayers
+	live.LoadInstance = func() (scripting.ItemInstanceLive, bool) {
+		var ownerGUID int64
+		var flags, durability uint32
+		var enchantments string
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT owner_guid, flags, durability, COALESCE(enchantments, '') FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1",
+			rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&ownerGUID, &flags, &durability, &enchantments); err != nil {
+			return scripting.ItemInstanceLive{}, false
+		}
+		inst := scripting.ItemInstanceLive{
+			Flags:        flags,
+			Durability:   durability,
+			Enchantments: enchantments,
+			BagSlot:      invSlotBag0,
+		}
+		if ownerGUID > 0 {
+			inst.OwnerGUID = uint64(ownerGUID)
+		}
+		highGUID := rawGUID | (uint64(0x4000) << 48)
+		lowGUID := rawGUID &^ (uint64(0x4000) << 48)
+		var bag, slot int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT bag, slot FROM character_inventory WHERE item = ? OR item = ? LIMIT 1",
+			rawGUID, highGUID).Scan(&bag, &slot); err == nil {
+			inst.Slot = uint8(slot)
+			if bag != 0 {
+				inst.InBag = true
+				var containerSlot int64
+				if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+					"SELECT slot FROM character_inventory WHERE item = ? LIMIT 1",
+					bag).Scan(&containerSlot); err == nil {
+					inst.BagSlot = uint8(containerSlot)
+				}
+			}
+		}
+		var contents int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT COUNT(1) FROM character_inventory WHERE bag = ? OR bag = ? OR bag = ?",
+			rawGUID, highGUID, lowGUID).Scan(&contents); err == nil && contents > 0 {
+			inst.NotEmptyBag = true
+		}
+		if s.server.Data != nil {
+			for slot := uint32(0); slot < 12; slot++ {
+				if id := luaItemEnchantmentID(enchantments, slot); id != 0 {
+					if ench, found, _ := s.server.Data.SpellItemEnchantment(id); found && ench.Flags&0x01 != 0 {
+						inst.BoundByEnchant = true
+						break
+					}
+				}
+			}
+		}
+		return inst, true
+	}
+	return scripting.NewItemObject(rawGUID|(uint64(0x4000)<<48), entry, count, live)
 }
 
 // fireItemEvent dispatches an Eluna ITEM_EVENT_* hook (RegisterItemEvent)

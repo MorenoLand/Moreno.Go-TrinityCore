@@ -365,17 +365,42 @@ type ItemTemplateLive struct {
 	Flags, BagFamily                  uint32
 	StartQuest, ItemSet               uint32
 	RandomProperty, RandomSuffix      int32
+	MaxDurability                     uint32
 	SpellIDs                          [5]uint32
 	SpellTriggers                     [5]uint32
+}
+
+// ItemInstanceLive is the item_instance row plus the character_inventory
+// position behind a Lua Item object: the fields Eluna's instance-bound
+// Item methods read through Item itself (Item.h/Item.cpp). BagSlot is the
+// container's slot, or INVENTORY_SLOT_BAG_0 (255) for a top-level item
+// (Item.cpp:713-715, GetBagSlot); InBag is m_container != nullptr, i.e.
+// the character_inventory bag column is non-zero.
+type ItemInstanceLive struct {
+	OwnerGUID      uint64
+	Flags          uint32
+	Durability     uint32
+	Enchantments   string
+	Slot           uint8
+	BagSlot        uint8
+	InBag          bool
+	NotEmptyBag    bool
+	BoundByEnchant bool
 }
 
 // ItemLive carries the template-data callback behind a Lua Item object.
 // Load re-reads the item_template row (Eluna's methods read the live
 // Item::GetTemplate()); a nil Load or a false return means the row is
 // missing, and the template methods push nil — C++ would dereference a
-// null template there, so Go takes the safe arm.
+// null template there, so Go takes the safe arm. LoadInstance re-reads
+// the item_instance row and inventory position the same way; a nil
+// LoadInstance means the object is template-only (loot/quest items) and
+// the instance methods push nil. Players enumerates the online player
+// objects for GetOwner's FindPlayer-style lookup.
 type ItemLive struct {
 	LoadTemplate func() (ItemTemplateLive, bool)
+	LoadInstance func() (ItemInstanceLive, bool)
+	Players      func() []*Object
 }
 
 // itemMaxStackCount mirrors ItemTemplate::GetMaxStackSize
@@ -402,8 +427,38 @@ const (
 	itemSubclassWeaponEnchantment = 15
 	itemFlagConjured              = 0x00000002
 	itemFlagBoundToAccount        = 0x08000000
+	itemFlagSoulbound             = 0x00000001
+	itemFlagUnlocked              = 0x00000004
+	enchantmentCanSoulbound       = 0x00000001
 	bagFamilyMaskCurrencyTokens   = 0x00002000
 )
+
+// itemMaxInspectedEnchantmentSlot mirrors MAX_INSPECTED_ENCHANTMENT_SLOT
+// (ItemDefines.h:153); itemEquipmentSlotEnd mirrors EQUIPMENT_SLOT_END;
+// inventorySlotBag0 mirrors INVENTORY_SLOT_BAG_0, the GetBagSlot value
+// for a top-level item (Item.cpp:713-715).
+const (
+	itemMaxInspectedEnchantmentSlot = 7
+	itemEquipmentSlotEnd            = 19
+	inventorySlotBag0               = 255
+)
+
+// itemEnchantmentID reads one enchantment ID out of the item_instance
+// enchantments string: space-separated (id, duration, charges) triples
+// per slot (Item.cpp:354-356 save, LoadFromDB field 6), so slot s lives
+// at fields[s*3]; a short string reads 0, like an empty slot.
+func itemEnchantmentID(raw string, slot uint32) uint32 {
+	fields := strings.Fields(raw)
+	index := int(slot) * 3
+	if index >= len(fields) {
+		return 0
+	}
+	value, err := strconv.ParseUint(fields[index], 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(value)
+}
 
 // NewItemObject builds the Lua Item object surface for hooks that hand
 // scripts a live item (Eluna's Push(Item*) via ElunaTemplate): the GUID,
@@ -414,16 +469,19 @@ const (
 // GetBagSize, GetStatsCount, GetItemSet, GetRandomProperty,
 // GetRandomSuffix, HasQuest, IsBag, IsPotion, IsBoundAccountWide,
 // IsWeaponVellum, IsArmorVellum, IsConjuredConsumable, IsCurrencyToken,
-// GetSpellId and GetSpellTrigger (ItemMethods.h).
+// GetSpellId and GetSpellTrigger (ItemMethods.h), plus the instance-bound
+// reads GetOwner, GetOwnerGUID, GetSlot, GetBagSlot, GetEnchantmentId,
+// IsSoulBound, IsEquipped, IsBroken, IsLocked, IsBoundByEnchant,
+// IsNotEmptyBag and IsInBag when the object carries a LoadInstance.
 // The generic object methods supply GetEntry/GetGUID/GetGUIDLow/GetTypeId
-// (object.go). The instance-bound surface (GetOwner, GetOwnerGUID,
-// GetSlot, GetBagSlot, GetEnchantmentId, IsEquipped, IsBroken, IsLocked,
-// IsBoundByEnchant, IsNotBoundToPlayer, IsNotEmptyBag,
-// IsInBag, IsInTrade, CanBeTraded, GetItemLink — the item method's
-// enchantment/random-property/owner-level legs need the live item) and
-// the mutating surface (SetOwner, SetBinding, SetCount, SetEnchantment,
-// ClearEnchantment, SaveToDB) have no Go live-item model behind them and
-// stay unbridged.
+// (object.go). Still unbridged: IsNotBoundToPlayer (needs the
+// BOP-tradeable allowed-GUID list, which Go does not model), IsInTrade
+// (the session trade flag is not safely readable from the scripting
+// goroutine), CanBeTraded (loot-generated/unequip/loot-GUID legs),
+// GetItemLink (owner-level + locale-suffix legs), and the mutating
+// surface (SetOwner, SetBinding, SetCount, SetEnchantment,
+// ClearEnchantment, SaveToDB), which needs a live item model with an
+// update broadcast, not just row reads.
 func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 	load := live.LoadTemplate
 	if load == nil {
@@ -435,6 +493,19 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 			return []any{nil}
 		}
 		return []any{extract(tmpl)}
+	}
+	// instanceValue is the LoadInstance twin of templateValue: a
+	// template-only object (loot/quest items, no item_instance row) reads
+	// nil from every instance method, like a missing template row.
+	instanceValue := func(extract func(ItemInstanceLive) any) []any {
+		if live.LoadInstance == nil {
+			return []any{nil}
+		}
+		inst, ok := live.LoadInstance()
+		if !ok {
+			return []any{nil}
+		}
+		return []any{extract(inst)}
 	}
 	templateSpell := func(args []any, pick func(ItemTemplateLive, uint32) uint32) ([]any, error) {
 		index, err := objectArgumentUint32(args, 0)
@@ -580,6 +651,99 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 			return templateValue(func(t ItemTemplateLive) any {
 				return t.Flags&itemFlagBoundToAccount != 0
 			}), nil
+		},
+		// Item::GetOwnerGUID (ItemMethods.h:336): the item_instance
+		// owner_guid column.
+		"GetOwnerGUID": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any { return inst.OwnerGUID }), nil
+		},
+		// Item::GetOwner (ItemMethods.h:351): FindPlayer(ownerGUID),
+		// nil when the owner is offline — same shape as Guild GetLeader.
+		"GetOwner": func(context.Context, []any) ([]any, error) {
+			if live.LoadInstance == nil {
+				return []any{nil}, nil
+			}
+			inst, ok := live.LoadInstance()
+			if !ok {
+				return []any{nil}, nil
+			}
+			var out any
+			if owner := playerObjectByGUID(live.Players, inst.OwnerGUID); owner != nil {
+				out = owner
+			}
+			return []any{out}, nil
+		},
+		// Item::GetSlot / GetBagSlot (ItemMethods.h:384/395): the
+		// character_inventory slot and the container's slot (255 for a
+		// top-level item, Item.cpp:713-715).
+		"GetSlot": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any { return inst.Slot }), nil
+		},
+		"GetBagSlot": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any { return inst.BagSlot }), nil
+		},
+		// Item::GetEnchantmentId (ItemMethods.h:407): the argerror on
+		// slot >= MAX_INSPECTED_ENCHANTMENT_SLOT is raised before the
+		// instance is touched, like GetSpellId's index arm.
+		"GetEnchantmentId": func(_ context.Context, args []any) ([]any, error) {
+			slot, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if slot >= itemMaxInspectedEnchantmentSlot {
+				return nil, fmt.Errorf("valid EnchantmentSlot expected")
+			}
+			return instanceValue(func(inst ItemInstanceLive) any {
+				return itemEnchantmentID(inst.Enchantments, slot)
+			}), nil
+		},
+		// Item::IsSoulBound (Item.h:81): ITEM_FIELD_FLAGS &
+		// ITEM_FIELD_FLAG_SOULBOUND; the item_instance flags column IS
+		// that word (Item.cpp:349 save, :460 load).
+		"IsSoulBound": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any {
+				return inst.Flags&itemFlagSoulbound != 0
+			}), nil
+		},
+		// Item::IsLocked (Item.h:101): NOT HasFlag(UNLOCKED).
+		"IsLocked": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any {
+				return inst.Flags&itemFlagUnlocked == 0
+			}), nil
+		},
+		// Item::IsBroken (Item.h:105): template MaxDurability > 0 and
+		// instance durability == 0.
+		"IsBroken": func(context.Context, []any) ([]any, error) {
+			tmpl, ok := load()
+			if !ok {
+				return []any{nil}, nil
+			}
+			return instanceValue(func(inst ItemInstanceLive) any {
+				return tmpl.MaxDurability > 0 && inst.Durability == 0
+			}), nil
+		},
+		// Item::IsInBag (Item.h:131): m_container != nullptr.
+		"IsInBag": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any { return inst.InBag }), nil
+		},
+		// Item::IsEquipped (Item.cpp:715-718): not in a bag and the
+		// slot is below EQUIPMENT_SLOT_END.
+		"IsEquipped": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any {
+				return !inst.InBag && inst.Slot < itemEquipmentSlotEnd
+			}), nil
+		},
+		// Item::IsNotEmptyBag (Item.cpp:298-303): ToBag() non-nil and
+		// non-empty; a non-bag reads false.
+		"IsNotEmptyBag": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any { return inst.NotEmptyBag }), nil
+		},
+		// Item::IsBoundByEnchant (Item.cpp:771-785): any of the 12
+		// enchantment slots whose SpellItemEnchantment entry carries
+		// ENCHANTMENT_CAN_SOULBOUND (DBCEnums.h:394, 0x01) — computed
+		// by the world loader, which owns the DBC store.
+		"IsBoundByEnchant": func(context.Context, []any) ([]any, error) {
+			return instanceValue(func(inst ItemInstanceLive) any { return inst.BoundByEnchant }), nil
 		},
 	}
 	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}
