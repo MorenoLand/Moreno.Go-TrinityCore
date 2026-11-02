@@ -509,6 +509,114 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildChatMessage(0x10, 0, state.GUID, s.player.GUID, message, ""), true)
 	}
+	// SendUnitSay/SendUnitYell/SendUnitWhisper/SendUnitEmote are the
+	// UnitMethods twins of the handler-surface family in
+	// lua_creature_events.go (UnitMethods.h:2320-2390, Unit.cpp:14048-14072),
+	// with the same arg shapes, chat types and listen ranges. The phase
+	// decision: a session creature is only constructed while a live motion
+	// exists, and the indexed-value precedent delegates to the motion
+	// backend while it resolves — so these re-resolve the motion at call
+	// time and fan out over its live coords and PhaseMask. A motion that
+	// has since despawned leaves the object stale (C++ would hold a dead
+	// Unit pointer); the call drops silently rather than broadcasting from
+	// snapshot coords under a guessed phase. Whisper's receiver with no
+	// live session drops silently, the Unit::Whisper null-target arm.
+	sessionChatRange := func(chatType uint8, language uint32, message string, listenRange float64) {
+		if s == nil || s.server == nil {
+			return
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return
+		}
+		s.server.motionMu.Lock()
+		mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+		s.server.motionMu.Unlock()
+		packet := protocol.BuildMonsterChatMessage(chatType, language, state.GUID, state.Name, message)
+		s.server.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, mapID, instanceID, x, y, z, listenRange, phase)
+	}
+	methods["SendUnitSay"] = func(_ context.Context, args []any) ([]any, error) {
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		language, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(message) == 0 {
+			return []any{}, nil
+		}
+		sessionChatRange(0x0C, language, message, s.server.Config.ChatListenRangeSay)
+		return []any{}, nil
+	}
+	methods["SendUnitYell"] = func(_ context.Context, args []any) ([]any, error) {
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		language, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(message) == 0 {
+			return []any{}, nil
+		}
+		sessionChatRange(0x0E, language, message, s.server.Config.ChatListenRangeYell)
+		return []any{}, nil
+	}
+	methods["SendUnitEmote"] = func(_ context.Context, args []any) ([]any, error) {
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(message) == 0 {
+			return []any{}, nil
+		}
+		chatType := uint8(0x10)
+		if len(args) > 2 {
+			if bossEmote, ok := args[2].(bool); ok && bossEmote {
+				chatType = 0x29
+			}
+		}
+		sessionChatRange(chatType, languageUniversal, message, s.server.Config.ChatListenRangeTextEmote)
+		return []any{}, nil
+	}
+	methods["SendUnitWhisper"] = func(_ context.Context, args []any) ([]any, error) {
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		language, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 3 {
+			return nil, fmt.Errorf("argument 3 is required")
+		}
+		receiverGUID := luaObjectGUID(args[2])
+		if receiverGUID == 0 {
+			return nil, fmt.Errorf("argument 3 must be a player")
+		}
+		if len(message) == 0 {
+			return []any{}, nil
+		}
+		if s == nil || s.server == nil {
+			return []any{}, nil
+		}
+		receiver := s.server.findSessionByGUID(receiverGUID)
+		if receiver == nil || receiver.player == nil {
+			return []any{}, nil
+		}
+		chatType := uint8(0x0F)
+		if len(args) > 3 {
+			if bossWhisper, ok := args[3].(bool); ok && bossWhisper {
+				chatType = 0x2A
+			}
+		}
+		packet := protocol.BuildChatMessage(chatType, language, state.GUID, receiverGUID, message, "")
+		return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
+	}
 	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554, Trinity):
 	// HasUnitState(UNIT_STATE_CASTING). Go creature casts are packet-only
 	// (castCreatureSpell) with no cast state, so this is always false;

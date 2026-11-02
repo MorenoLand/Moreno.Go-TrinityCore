@@ -66,9 +66,26 @@ func bgWinnerTeamID(event int, args []any) uint32 {
 // locale); level and player counts come from the template row
 // (BattlegroundMgr.cpp:505-508: totals are the per-team counts doubled).
 // A missing template row or DBC entry reads zero values, the same
-// missing-row shape the template loader produces elsewhere.
+// missing-row shape the template loader produces elsewhere. Status and
+// EndTime are snapshot by fire point, because the live values are
+// unreachable here (GetEndTime's EndedAt sits under the state lock the
+// end legs hold): CREATE reads WAIT_JOIN (BattlegroundMgr.cpp:413 sets it
+// at creation), START reads IN_PROGRESS (Battleground.cpp:453), END reads
+// WAIT_LEAVE with m_EndTime just set to TIME_TO_AUTOREMOVE
+// (Battleground.cpp:715-717, no _ProcessLeave tick has run yet), and
+// PREDESTROY reads NONE — the instance is already out of the registry,
+// and STATUS_NONE is defined as "bg is not instance" (Battleground.h:178).
 func (srv *Server) bgScriptObject(mapID, bgTypeID, instanceID uint32, event int, args ...any) *scripting.Object {
 	snap := scripting.BGSnapshot{Winner: bgWinnerTeamID(event, args)}
+	switch event {
+	case scripting.BGEventOnCreate:
+		snap.Status = 2
+	case scripting.BGEventOnStart:
+		snap.Status = 3
+	case scripting.BGEventOnEnd:
+		snap.Status = 4
+		snap.EndTime = uint32(bgWaitLeaveAutoRemove.Milliseconds())
+	}
 	if srv != nil {
 		if tmpl := srv.bgTemplateForType(context.Background(), bgTypeID); tmpl != nil {
 			snap.MinLevel = uint32(tmpl.minLevel)

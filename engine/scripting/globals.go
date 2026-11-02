@@ -1359,7 +1359,15 @@ type BGSnapshot struct {
 	MinPlayersPerTeam uint32
 	MaxPlayersPerTeam uint32
 	Winner            uint32
-	Map               *Object
+	// Status is the BattlegroundStatus at snapshot time (Battleground.h:
+	// NONE 0, WAIT_QUEUE 1, WAIT_JOIN 2, IN_PROGRESS 3, WAIT_LEAVE 4),
+	// and EndTime is m_EndTime in milliseconds (Battleground.cpp:512-517:
+	// 0 while running, TIME_TO_AUTOREMOVE at end, decremented by
+	// _ProcessLeave). Both are snapshot by the hook fire point, never
+	// re-read under a state lock (see bgScriptObject).
+	Status  uint32
+	EndTime uint32
+	Map     *Object
 }
 
 // BGLive carries the snapshot behind a Lua BattleGround object. A nil Load
@@ -1372,15 +1380,15 @@ type BGLive struct {
 // NewBattleGroundObject builds the Lua BattleGround object surface for the
 // BG_EVENT_* hooks: GetName/GetTypeId/GetMapId/GetInstanceId/GetMap/
 // GetMinLevel/GetMaxLevel/GetMinPlayers/GetMaxPlayers/GetMinPlayersPerTeam/
-// GetMaxPlayersPerTeam/GetWinner/GetBonusHonorFromKillCount
-// (BattleGroundMethods.h). GetBonusHonorFromKillCount is the pure C++
-// formula (Battleground.cpp:806-811): hk_honor_at_level(min(maxLevel, 80),
+// GetMaxPlayersPerTeam/GetWinner/GetBonusHonorFromKillCount/GetStatus/
+// GetEndTime (BattleGroundMethods.h). GetBonusHonorFromKillCount is the
+// pure C++ formula (Battleground.cpp:806-811): hk_honor_at_level(min(maxLevel, 80),
 // kills) = ceil(level * 1.55 * kills), without the OnHonorCalculation script
-// hook, which has no Go twin. The remaining surface stays unbridged:
-// GetBracketId needs the PvPDifficulty.dbc bracket model Go does not have,
-// GetStatus needs the STATUS_* machine (only SA/arena carry a status field,
-// on different enums), GetEndTime needs the per-map EndedAt under its state
-// lock (unsafe to re-read from a hook running under that lock),
+// hook, which has no Go twin. GetStatus/GetEndTime read the pre-fire
+// snapshot (see bgScriptObject), not live state. The remaining surface
+// stays unbridged: GetBracketId needs the instance bracket Go states do
+// not store (SetBracket ties it to the queue leader's level, and the
+// template level range is the overall range, not a bracket), and
 // GetAlivePlayersCountByTeam/GetFreeSlotsForTeam need a per-map roster Go
 // does not model.
 func NewBattleGroundObject(bgTypeID, mapID, instanceID uint32, live BGLive) *Object {
@@ -1447,6 +1455,18 @@ func NewBattleGroundObject(bgTypeID, mapID, instanceID uint32, live BGLive) *Obj
 				return []any{snap.Winner}, nil
 			}
 			return []any{uint32(2)}, nil
+		},
+		"GetStatus": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.Status}, nil
+			}
+			return []any{uint32(0)}, nil
+		},
+		"GetEndTime": func(context.Context, []any) ([]any, error) {
+			if snap, ok := load(); ok {
+				return []any{snap.EndTime}, nil
+			}
+			return []any{uint32(0)}, nil
 		},
 		"GetBonusHonorFromKillCount": func(_ context.Context, args []any) ([]any, error) {
 			kills, err := objectArgumentUint32(args, 0)
