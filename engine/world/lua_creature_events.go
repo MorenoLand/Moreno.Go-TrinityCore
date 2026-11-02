@@ -1340,6 +1340,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// sweep from recreating them early); summoned creatures have no
 	// creature row and leave no respawn record, so they are gone
 	// permanently — matching C++ DespawnOrUnsummon on a summon.
+	// A TempSummon additionally fires event 20
+	// (SummonedCreatureDespawn) on its summoner creature below,
+	// the UnSummon leg; see the inline note at the fire site.
 	methods["Despawn"] = func(ctx context.Context, _ []any) ([]any, error) {
 		s.motionMu.Lock()
 		motions := s.motionMapLocked(motion.Map, motion.InstanceID)
@@ -1351,6 +1354,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		delete(motions, motion.GUID)
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		maxHealth := m.MaxHealth
+		isTempSummon, ownerGUID := m.IsTempSummon, m.OwnerGUID
 		x, y, z := m.X, m.Y, m.Z
 		s.motionMu.Unlock()
 		// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels a
@@ -1361,6 +1365,19 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		destroyBuf.WriteU8(0)
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, m.PhaseMask)
 		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnRemove)
+		// DespawnOrUnsummon on a TempSummon runs UnSummon
+		// (TemporarySummon.cpp:274-284), which fires
+		// SummonedCreatureDespawn on the summoner creature's AI;
+		// the Eluna twin is event 20 on the summoner (the
+		// expireTempSummonGuardian precedent). Player owners have
+		// no creature hook, so the motion lookup skips them, and
+		// non-temp creatures carry no summoner leg. MotionMu is
+		// released above, as fireCreatureSummoned requires.
+		if isTempSummon {
+			if ownerMotion := s.findCreatureMotion(mapID, instanceID, ownerGUID); ownerMotion != nil {
+				s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, m)
+			}
+		}
 		if maxHealth == 0 {
 			maxHealth = 1
 		}
