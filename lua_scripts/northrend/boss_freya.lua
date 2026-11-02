@@ -245,6 +245,9 @@ local ENTRY_ANCIENT_CONSERVATOR = 33203
 local ENTRY_IRON_ROOTS = 33088 -- boss_freya.cpp:168
 
 local SPELL_DRAINED_OF_POWER = 62467
+local SPELL_STONEBARK_ESSENCE = 62483 -- boss_freya.cpp:60
+local SPELL_IRONBRANCH_ESSENCE = 62484 -- boss_freya.cpp:61
+local SPELL_BRIGHTLEAF_ESSENCE = 62485 -- boss_freya.cpp:62
 
 -- Freya
 local SPELL_ENRAGE = 47008
