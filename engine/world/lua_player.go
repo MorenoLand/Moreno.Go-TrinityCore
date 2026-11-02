@@ -416,6 +416,101 @@ func (s *session) luaPlayer() *scripting.Object {
 	// same fields the characters save/load round-trips.
 	methods["GetSpecsCount"] = luaNoArgs(func() any { return state.TalentGroupsCount })
 	methods["GetActiveSpec"] = luaNoArgs(func() any { return state.ActiveTalentGroup })
+	// GetDifficulty is Player::GetDifficulty (Player.h:1576): the
+	// raid difficulty when isRaid (omitted means true, the Eluna
+	// CHECKVAL default) else the dungeon difficulty.
+	methods["GetDifficulty"] = func(_ context.Context, args []any) ([]any, error) {
+		isRaid, err := extraBool("GetDifficulty", args)
+		if err != nil {
+			return nil, err
+		}
+		if isRaid {
+			return []any{state.RaidDifficulty}, nil
+		}
+		return []any{state.DungeonDifficulty}, nil
+	}
+	// GetShieldBlockValue is Player::GetShieldBlockValue
+	// (Player.cpp:5426-5430) via the session fold in
+	// aura_shieldblock.go: max(0, (flat + str*0.5 - 10) * pct).
+	methods["GetShieldBlockValue"] = luaNoArgs(func() any { return s.getShieldBlockValue() })
+	// GetHealthBonusFromStamina/GetManaBonusFromIntellect are
+	// Player::GetHealthBonusFromStamina/GetManaBonusFromIntellect
+	// (StatSystem.cpp:286-303): min(20, stat) + (stat-20)*10 for
+	// stamina, *15 for intellect, over the total stats (Stats[2]
+	// stamina, Stats[3] intellect, the effectiveMaxHealth precedent).
+	methods["GetHealthBonusFromStamina"] = luaNoArgs(func() any {
+		if len(state.Stats) <= 2 {
+			return float64(0)
+		}
+		return float64(staminaHealthBonus(state.Stats[2]))
+	})
+	methods["GetManaBonusFromIntellect"] = luaNoArgs(func() any {
+		if len(state.Stats) <= 3 {
+			return float64(0)
+		}
+		intellect := float64(state.Stats[3])
+		base := math.Min(20, intellect)
+		return base + (intellect-base)*15
+	})
+	// IsImmuneToDamage is Player::isTotalImmune (Player.cpp:24785):
+	// any SPELL_AURA_SCHOOL_IMMUNITY effect whose misc OR covers a
+	// school, via the session fold in immunity.go.
+	methods["IsImmuneToDamage"] = luaNoArgs(func() any { return s.isTotalImmune() })
+	// IsFalling is Unit::IsFalling (Unit.cpp:13313): the
+	// FALLING/FALLING_FAR movement flags. The movespline-falling
+	// leg has no Go model, so a spline-driven fall reads false.
+	methods["IsFalling"] = luaNoArgs(func() any { return s.isFalling || s.isFallingFar })
+	// CanSpeak is WorldSession::CanSpeak (WorldSession.cpp:723):
+	// the mute deadline has passed. Go clears an expired mute
+	// lazily in chat.go, so the comparison alone is exact.
+	methods["CanSpeak"] = luaNoArgs(func() any { return !(s.muteTime > time.Now().Unix()) })
+	// GetDbLocaleIndex is WorldSession::GetSessionDbLocaleIndex:
+	// the session locale index from account.locale (0 = enUS).
+	methods["GetDbLocaleIndex"] = luaNoArgs(func() any { return s.locale })
+	// GetChampioningFaction is Player::GetChampioningFaction
+	// (Player.h:2154): the m_ChampioningFaction field, set by a
+	// tabard championing aura apply and cleared on remove
+	// (SpellAuraEffects.cpp:4599). Go stores no field, so the
+	// read scans the live championing auras in fixed spell order
+	// (the kill-arm map/difficulty gates in reputation.go do not
+	// apply to the field read); with several tabards C++ keeps
+	// the last applied, this keeps the first in spell order.
+	methods["GetChampioningFaction"] = luaNoArgs(func() any {
+		for _, pair := range [][2]uint32{{57819, 1106}, {57820, 1098}, {57821, 1090}, {57822, 1091}} {
+			if s.hasAura(pair[0]) {
+				return pair[1]
+			}
+		}
+		return uint32(0)
+	})
+	// GetPhaseMaskForSpawn is Player::GetPhaseMaskForSpawn
+	// (Player.cpp:25279-25297): a non-GM reads the current phase
+	// mask; a GM reads the first SPELL_AURA_PHASE aura's misc
+	// value, else PHASEMASK_NORMAL; the result strips the normal
+	// bit, falling back to it. Go has no stored base phase mask,
+	// so the non-GM arm uses currentPlayerPhaseMask (phase-aura
+	// OR, else 1) and the GM test mirrors it (PLAYER_FLAGS GM or
+	// ExtraFlags GMOn).
+	methods["GetPhaseMaskForSpawn"] = luaNoArgs(func() any {
+		var phase uint32
+		if state.PlayerFlags&playerFlagGM != 0 || state.ExtraFlags&playerExtraGMOn != 0 {
+			phase = 1
+			s.castMu.Lock()
+			for _, aura := range s.activeAuras {
+				if aura != nil && !aura.Stopped && aura.AuraType == spellAuraPhase {
+					phase = uint32(aura.MiscValue)
+					break
+				}
+			}
+			s.castMu.Unlock()
+		} else {
+			phase = s.currentPlayerPhaseMask()
+		}
+		if stripped := phase &^ 1; stripped != 0 {
+			return stripped
+		}
+		return uint32(1)
+	})
 	// HasFlag/SetFlag/RemoveFlag are Object::HasFlag/SetFlag/RemoveFlag
 	// (ObjectMethods.h:34/243/390; LuaFunctions.cpp:1354 registers
 	// ObjectMethods on the Player metatable) for the flag-backed fields
