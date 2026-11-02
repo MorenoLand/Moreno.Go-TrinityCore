@@ -1259,6 +1259,42 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{boss}, nil
 	}
+	// IsElite is CreatureMethods::IsElite (CreatureMethods.h:191):
+	// Creature::isElite (Creature.cpp:2344-2350) — not a pet, and rank
+	// neither CREATURE_ELITE_NORMAL (0) nor CREATURE_ELITE_RARE (4)
+	// (SharedDefines.h:2764-2771). Handler-surface twin of the session
+	// binding (lua_objects.go:670); pets are motions with a nonzero
+	// OwnerGUID (the pet_combat.go isPet twin).
+	methods["IsElite"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		elite := motion.OwnerGUID == 0 && motion.Rank != 0 && motion.Rank != 4
+		s.motionMu.Unlock()
+		return []any{elite}, nil
+	}
+	// IsGuard / IsCivilian / IsTrigger are CreatureMethods.h:207/219/352:
+	// Creature::IsGuard / IsCivilian / IsTrigger read flags_extra bits
+	// CREATURE_FLAG_EXTRA_GUARD (0x8000) / CIVILIAN (0x2) / TRIGGER
+	// (0x80) (CreatureData.h:38-52). Handler-surface twins of the
+	// session bindings (lua_objects.go:696-702), reading the motion's
+	// live FlagsExtra (banked from the template at spawn).
+	methods["IsGuard"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		guard := motion.FlagsExtra&0x8000 != 0
+		s.motionMu.Unlock()
+		return []any{guard}, nil
+	}
+	methods["IsCivilian"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		civilian := motion.FlagsExtra&0x2 != 0
+		s.motionMu.Unlock()
+		return []any{civilian}, nil
+	}
+	methods["IsTrigger"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		trigger := motion.FlagsExtra&0x80 != 0
+		s.motionMu.Unlock()
+		return []any{trigger}, nil
+	}
 	// WorldObject sound methods (PlayMusic/PlayDirectSound/PlayDistanceSound)
 	// are Eluna LuaWorldObject methods (WorldObjectMethods.h:1161-1242);
 	// creatures have no session, so they broadcast with a nil source like

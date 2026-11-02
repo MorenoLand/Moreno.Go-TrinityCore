@@ -2760,6 +2760,7 @@ type creatureStats struct {
 	UnitFlags       uint32
 	FlagsExtra      uint32
 	TypeFlags       uint32
+	Rank            uint32 // creature_template.rank (SharedDefines.h CreatureEliteType); feeds Creature::isElite (Creature.cpp:2344-2350)
 	NPCFlags        uint32 // creature_template.npcflag; live value behind Lua CreatureMethods::GetNPCFlags/SetNPCFlags (UNIT_NPC_FLAGS)
 	CanFly          bool
 	ReactState      uint8
@@ -2836,6 +2837,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	}
 
 	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight int64
+	var rank int64
 	var creatureType int64
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
 	var healthMod, manaMod, armorMod, damageMod, baseVariance, templateScale float64
@@ -2854,6 +2856,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.unit_flags, 0),
 		COALESCE(ct.flags_extra, 0),
 		COALESCE(ct.type_flags, 0),
+		COALESCE(ct.rank, 0),
 		COALESCE(ct.npcflag, 0),
 		COALESCE(ctm.Flight, 0),
 		COALESCE(ct.type, 0),
@@ -2864,7 +2867,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.modelid1, 0),
 		COALESCE(ct.VehicleId, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2873,6 +2876,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		stats.AIName = aiName
 	}
 	stats.CreatureType = uint32(creatureType)
+	stats.Rank = uint32(rank)
 	stats.Scale = float32(templateScale)
 	stats.Model = uint32(modelid1)
 	stats.VehicleID = uint32(vehicleID)
@@ -3113,6 +3117,7 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 			UnitFlags:  target.UnitFlags,
 			FlagsExtra: target.FlagsExtra,
 			TypeFlags:  st.TypeFlags,
+			Rank:       st.Rank,
 			Health:     target.Health,
 			// Creature::ResetPlayerDamageReq (Creature.h:324): GetHealth()/2.
 			PlayerDamageReq: target.Health / 2,
