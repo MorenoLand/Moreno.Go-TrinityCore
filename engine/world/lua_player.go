@@ -41,6 +41,17 @@ func (s *session) triggerPlayerEventValues(ctx context.Context, event int, args 
 	return values, err
 }
 
+func (s *session) triggerPlayerEventValues2(ctx context.Context, event int, args ...any) ([][]any, error) {
+	if s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return nil, nil
+	}
+	values, err := s.server.Features.Scripts.TriggerPlayerEvent2(ctx, event, append([]any{event}, args...)...)
+	if err != nil {
+		s.debug("lua player event failed", "account", s.accountName, "event", event, "error", err)
+	}
+	return values, err
+}
+
 func (s *Server) findPlayer(guid uint64) *scripting.Object {
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()

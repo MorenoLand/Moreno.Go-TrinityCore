@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -367,9 +368,11 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	// generic fire is skipped for those types (LANG_ADDON still goes
 	// through the addon hook here, exactly like C++).
 	if subEvent := chatSubEvent(typeID); subEvent == 0 || language == languageAddon {
-		if s.firePlayerChatHook(ctx, typeID, language, message, targetName) {
+		cancelled, rewritten := s.firePlayerChatHook(ctx, typeID, language, message, targetName)
+		if cancelled {
 			return true
 		}
+		message = rewritten
 	}
 	var receiver *session
 	if typeID == chatWhisper {
@@ -442,8 +445,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	// receiver/group/guild/channel and runs the permission gates before the
 	// hook, which fires immediately before the message is sent. Each event
 	// carries its routing extra: receiver player (19), group (20), guild
-	// (21), channel id (22). Cancel-only, like the event-18 bridge (no
-	// message-rewrite twin exists yet).
+	// (21), channel id (22). Each event consumes the Eluna two-return
+	// contract (PlayerHooks.cpp): a false first return cancels, a string
+	// second return rewrites the broadcast message.
 	if subEvent := chatSubEvent(typeID); subEvent != 0 && language != languageAddon {
 		var extra any
 		switch subEvent {
@@ -456,14 +460,16 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		case scripting.PlayerEventChannelChat:
 			extra = s.server.channelIDFor(s, channelName)
 		}
-		values, hookErr := s.triggerPlayerEventValues(ctx, subEvent, s.luaPlayer(), message, typeID, language, extra)
+		pairs, hookErr := s.triggerPlayerEventValues2(ctx, subEvent, s.luaPlayer(), message, typeID, language, extra)
 		if hookErr != nil {
 			s.debug("lua chat sub-event hook failed", "account", s.accountName, "event", subEvent, "error", hookErr)
 		}
-		if luaCancelled(values) {
+		cancelled, rewritten := applyChatHookResults(pairs, message)
+		if cancelled {
 			s.debug("chat rejected", "account", s.accountName, "reason", "lua hook cancelled", "type", typeID)
 			return true
 		}
+		message = rewritten
 	}
 	// Reference: Guild::BroadcastToGuild (Guild.cpp:2138-2145) gates the
 	// sender's speak rights (GR_RIGHT_GCHATSPEAK/GR_RIGHT_OFFCHATSPEAK) AFTER
@@ -508,26 +514,54 @@ func chatSubEvent(typeID uint32) int {
 }
 
 // firePlayerChatHook fires the PlayerEventChat Lua hook (the sScriptMgr::OnPlayerChat
-// + Eluna OnChat analog) and reports whether a script cancelled the chat.
+// + Eluna OnChat analog) and reports whether a script cancelled the chat
+// and the message after handler rewrites. C++ Eluna::OnChat
+// (PlayerHooks.cpp:394-422) reads two returns per handler: a false first
+// return cancels, a string second return rewrites the message (each
+// handler still sees the original pushed message, since C++ never
+// ReplaceArguments it, so the last rewriting handler in fire order wins).
 // Addon-language messages never reach the chat hook: C++ Eluna::OnChat routes
-// LANG_ADDON to Eluna::OnAddonMessage instead (PlayerHooks.cpp:394-422), so
-// they fire the addon hook below.
-func (s *session) firePlayerChatHook(ctx context.Context, typeID uint32, language uint32, message string, targetName string) bool {
+// LANG_ADDON to Eluna::OnAddonMessage instead, so they fire the addon hook below.
+func (s *session) firePlayerChatHook(ctx context.Context, typeID uint32, language uint32, message string, targetName string) (bool, string) {
 	if language == languageAddon {
-		return s.fireAddonMessageHook(ctx, typeID, message, targetName)
+		return s.fireAddonMessageHook(ctx, typeID, message, targetName), message
 	}
 	if s.server.Features == nil || s.server.Features.Scripts == nil {
-		return false
+		return false, message
 	}
-	values, hookErr := s.triggerPlayerEventValues(ctx, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
+	pairs, hookErr := s.triggerPlayerEventValues2(ctx, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
 	if hookErr != nil {
 		s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
 	}
-	if luaCancelled(values) {
+	cancelled, rewritten := applyChatHookResults(pairs, message)
+	if cancelled {
 		s.debug("chat rejected", "account", s.accountName, "reason", "lua hook cancelled", "type", typeID)
-		return true
+		return true, message
 	}
-	return false
+	return false, rewritten
+}
+
+// applyChatHookResults folds Eluna OnChat two-return results: a boolean
+// false first return from any handler cancels, and a string (or numeric,
+// per C++ lua_isstring) second return rewrites the message, last writer wins.
+func applyChatHookResults(pairs [][]any, message string) (bool, string) {
+	cancelled := false
+	for _, pair := range pairs {
+		if len(pair) > 0 {
+			if b, ok := pair[0].(bool); ok && !b {
+				cancelled = true
+			}
+		}
+		if len(pair) > 1 {
+			switch v := pair[1].(type) {
+			case string:
+				message = v
+			case float64:
+				message = strconv.FormatFloat(v, 'f', -1, 64)
+			}
+		}
+	}
+	return cancelled, message
 }
 
 // fireAddonMessageHook fires the Eluna ADDON_EVENT_ON_MESSAGE server hook

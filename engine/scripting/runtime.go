@@ -56,7 +56,7 @@ const (
 	PlayerEventLootMoney         = 37
 	PlayerEventQuestAbandon      = 38
 	PlayerEventLearnTalents      = 39 // OnLearnTalents fires from Player::LearnTalent; Go has no talent system, so the engine never fires this event
-	PlayerEventQuestStatusChange = 40 // OnQuestStatusChange fires from Player::AddQuest/RewardQuest/SetQuestStatus/quest-abandon/EffectQuestClear (ScriptMgr.cpp:2194); Eluna PlayerEvents 40 = ON_QUEST_STATUS_CHANGE, (event, player, questId), void
+	PlayerEventQuestStatusChange = 40 // OnQuestStatusChange fires from Player::AddQuest/RewardQuest/SetQuestStatus/quest-abandon/EffectQuestClear (ScriptMgr.cpp:2194); Hooks.h marks 40 UNUSED and ScriptMgr::OnQuestStatusChange is PlayerScript-only (no Eluna call), so Go event 40 is a custom extension surfacing that hook to Lua as (event, player, questId), void
 	PlayerEventCommand           = 42
 	MapEventOnPlayerEnter        = 21
 )
@@ -541,6 +541,14 @@ func (r *Runtime) triggerNUpdated(ctx context.Context, kind string, event int, n
 
 func (r *Runtime) TriggerPlayerEvent(ctx context.Context, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "player", event, args...)
+}
+
+// TriggerPlayerEvent2 is TriggerPlayerEvent capturing two returns per
+// handler, mirroring TriggerCreatureEvent2: Eluna chat hooks consume a
+// second return (CallOneFunction(n, args, 2)) carrying the rewritten
+// message, so the chat path fires through this instead of Trigger.
+func (r *Runtime) TriggerPlayerEvent2(ctx context.Context, event int, args ...any) ([][]any, error) {
+	return r.triggerN(ctx, "player", event, 2, args...)
 }
 
 // TriggerPlayerEventUpdated is the chained-argument player-event trigger,

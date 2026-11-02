@@ -5,9 +5,10 @@
 -- (engine/world/chat.go): event 18 (event, player, msg, type, lang) only
 -- for types with no dedicated sub-event; events 19/20/21 append the
 -- routing extra (whisper receiver player, group object, guild object).
--- The hooks are cancel-only (no message rewrite), so the handlers return
--- nothing — a false return would block the chat. TC_LOG_DEBUG maps to
--- the PrintDebug global.
+-- The hooks follow the Eluna two-return contract: a false first return
+-- blocks the chat, and a string second return rewrites the broadcast
+-- message. The ported handlers return nothing, so they neither cancel
+-- nor rewrite. TC_LOG_DEBUG maps to the PrintDebug global.
 --
 -- Ported arms (chat_log.cpp:32-140): say/emote/yell (18), whisper (19),
 -- party/party-leader/raid/raid-leader/raid-warning/battleground/
