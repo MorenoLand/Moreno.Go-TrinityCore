@@ -441,6 +441,11 @@ func (s *session) luaPlayer() *scripting.Object {
 				break
 			}
 			if st.count <= remaining {
+				// This bridge is the Player::DestroyItemCount twin, so
+				// each fully-consumed stack reaches DestroyItem and fires
+				// ITEM_EVENT_ON_REMOVE (5); the trimming stack only
+				// decrements and never fires.
+				s.fireItemRemoveHook(ctx, uint64(st.guid))
 				if _, err := db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", state.GUID, st.guid); err != nil {
 					return nil, err
 				}

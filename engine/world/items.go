@@ -1773,7 +1773,13 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-func (s *session) consumeInventoryItemByGUID(ctx context.Context, itemGUID uint64, count uint32) bool {
+// fireRemove selects the C++ destroy kind: true when the caller destroys
+// via DestroyItem / DestroyItemCount (cast-item transform,
+// SpellEffects.cpp:2104; pet feed, SpellEffects.cpp:4193), which fires
+// ITEM_EVENT_ON_REMOVE (5) for a fully-consumed stack — false when the
+// caller removes via Player::RemoveItem (Mug Transformation,
+// SpellEffects.cpp:3646), which never reaches DestroyItem and never fires.
+func (s *session) consumeInventoryItemByGUID(ctx context.Context, itemGUID uint64, count uint32, fireRemove bool) bool {
 	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || itemGUID == 0 || count == 0 {
 		return false
 	}
@@ -1784,6 +1790,9 @@ func (s *session) consumeInventoryItemByGUID(ctx context.Context, itemGUID uint6
 	}
 	s.adjustQuestItemCount(ctx, uint32(itemEntry), count, false)
 	if currentCount == int64(count) {
+		if fireRemove {
+			s.fireItemRemoveHook(ctx, itemGUID)
+		}
 		if _, err := db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, int64(itemGUID)); err != nil {
 			return false
 		}
@@ -2180,7 +2189,9 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 	// Player::RefundItem tail (Player.cpp:26639-26686): SetNotRefundable,
 	// DestroyItem, then the extended-cost items (each with
 	// SendNewItem(it, count, received=true, created=false, broadcast=true)),
-	// money, honor and arena grants.
+	// money, honor and arena grants. The DestroyItem itself fires
+	// ITEM_EVENT_ON_REMOVE (5) (Player.cpp:26655).
+	s.fireItemRemoveHook(ctx, uint64(itemGUID))
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", itemGUID, s.playerGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", itemGUID, s.playerGUID)
@@ -6297,6 +6308,10 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		if wrapperCount > 1 {
 			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", giftGUID)
 		} else {
+			// ItemHandler.cpp:944 destroys the wrapper via
+			// DestroyItemCount, so the last wrapper fires
+			// ITEM_EVENT_ON_REMOVE (5); a partial stack only decrements.
+			s.fireItemRemoveHook(ctx, uint64(giftGUID))
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, giftBag, giftSlot)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", giftGUID)
 		}
@@ -7036,6 +7051,10 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	for index, gemGUID := range gemGUIDs {
 		if gemGUID != 0 && gemEnchants[index] != 0 {
 			rawGemGUID := gemGUID & 0x0000FFFFFFFFFFFF
+			// ItemHandler.cpp:1121 destroys each socketed gem via
+			// DestroyItem, so every consumed gem fires
+			// ITEM_EVENT_ON_REMOVE (5).
+			s.fireItemRemoveHook(ctx, rawGemGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", rawGemGUID, s.playerGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", rawGemGUID)
 			s.adjustQuestItemCount(ctx, gemEntries[index], 1, false)

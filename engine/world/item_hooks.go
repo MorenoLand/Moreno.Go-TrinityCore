@@ -213,6 +213,18 @@ func (s *session) fireItemQuestHook(ctx context.Context, giverGUID uint64, quest
 // never fire.
 func (s *session) fireItemRemoveHook(ctx context.Context, rawItemGUID uint64) {
 	item := s.sessionLuaItem(ctx, rawItemGUID)
+	s.fireItemRemoveHookWithObject(ctx, item)
+}
+
+// fireItemRemoveHookWithObject dispatches ITEM_EVENT_ON_REMOVE (5) for a
+// Lua Item object resolved BEFORE its row was deleted — the tx-bound
+// DestroyItemCount twins (quest turn-in, vendor extended cost) can only
+// resolve the item while their transaction is still uncommitted, so they
+// capture the object first and fire after the commit lands. Firing after
+// commit (rather than inside DestroyItem, as C++ does) keeps a rolled-back
+// transaction from firing for items that were never actually destroyed;
+// the object itself is the same entry/count snapshot C++ hands the hook.
+func (s *session) fireItemRemoveHookWithObject(ctx context.Context, item *scripting.Object) {
 	if item == nil {
 		return
 	}
@@ -254,12 +266,23 @@ func (s *session) fireItemRemoveHook(ctx context.Context, rawItemGUID uint64) {
 // player), destroyItemInstanceCount (whole-stack arm, covering quest
 // consumption, loot-release destroy and quest-start destroy, which all
 // funnel through it), destroyZoneLimitedItems (DestroyZoneLimitedItem
-// twin), and the expire leg in tickItemDurations (C++ UpdateDuration
-// fires OnExpire then DestroyItem, so ev4 is followed by ev5). Still
-// open: the transaction-bound quest turn-in and vendor-cost removals,
-// stack merges, ammo consumption, and the server-side trade / auction /
-// mail / guild-bank / character-cleanup paths, whose C++ owners are not
-// yet verified as DestroyItem funnels.
+// twin), the expire leg in tickItemDurations (C++ UpdateDuration
+// fires OnExpire then DestroyItem, so ev4 is followed by ev5), the
+// tx-bound quest turn-in (RewardQuest DestroyItemCount, fired after the
+// reward transaction commits via pre-resolved objects) and vendor
+// extended-cost (DestroyItemCount in _StoreOrEquipNewItem, same
+// post-commit pattern), ranged ammo/thrown last-count (Spell::TakeAmmo
+// DestroyItemCount), refund-item DestroyItem (RefundItem tail),
+// gift-wrapper DestroyItemCount, socket-gem DestroyItem, spell-reagent
+// DestroyItemCount, cast-item-transform DestroyItem and pet-feed
+// DestroyItemCount (via consumeInventoryItemByGUID's destroy arm), and
+// the Lua DestroyItemCount bridge. CLOSED as no-fire: stack merges and
+// trade/auction/mail/guild-bank moves (Player::RemoveItem /
+// MoveItemFromInventory never reach DestroyItem, the sole OnRemove fire
+// site), the Mug Transformation consume (SpellEffects.cpp:3646 uses
+// RemoveItem, not DestroyItem), mail/guild-bank/character-cleanup row
+// deletes (no player Item* ever exists), and partial-count decrements
+// everywhere (never reach DestroyItem).
 
 // updateItemDurations mirrors Player::UpdateItemDuration as driven by
 // Player::Update (Player.cpp:1078, 13752-13766): while online, every carried

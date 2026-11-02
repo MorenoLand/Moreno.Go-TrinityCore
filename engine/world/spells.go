@@ -2132,6 +2132,11 @@ func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell, cast
 				continue
 			}
 			if st.count <= want {
+				// Spell::TakeReagents destroys reagents via
+				// DestroyItemCount (Spell.cpp:5092), so each
+				// fully-consumed stack fires ITEM_EVENT_ON_REMOVE (5);
+				// the trimming stack only decrements and never fires.
+				s.fireItemRemoveHook(ctx, uint64(st.guid))
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `DELETE FROM character_inventory WHERE guid = ? AND item = ?`, s.playerGUID, st.guid)
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `DELETE FROM item_instance WHERE guid = ?`, st.guid)
 				want -= st.count
@@ -48978,7 +48983,7 @@ func (s *session) handleEffectSummonChangeItem(ctx context.Context, castItemGUID
 	// SpellEffects.cpp:2104-2112: DestroyItem on the old item. The later
 	// spendCastItemCharges (TakeCastItem) re-resolves the item and no-ops
 	// on the missing row, matching C++ nulling m_CastItem.
-	if !s.consumeInventoryItemByGUID(ctx, castItemGUID, uint32(oldCount)) {
+	if !s.consumeInventoryItemByGUID(ctx, castItemGUID, uint32(oldCount), true) {
 		return
 	}
 	res, err := s.storeOrStackItem(ctx, s.playerGUID, eff.ItemType, 1)
@@ -49600,7 +49605,7 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 				if err != nil || itemGUID == 0 || uint32(itemEntry) != 38587 {
 					continue
 				}
-				if s.consumeInventoryItemByGUID(ctx, uint64(itemGUID), 1) {
+				if s.consumeInventoryItemByGUID(ctx, uint64(itemGUID), 1, false) {
 					s.castSpellDirect(ctx, 42518, s.playerGUID)
 				}
 				return

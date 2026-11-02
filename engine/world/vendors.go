@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -1174,6 +1175,7 @@ func (s *session) destroyVendorExtendedCostItems(ctx context.Context, entry wotl
 	if err != nil {
 		return err
 	}
+	var removed []*scripting.Object
 	for i := 0; i < len(entry.ItemIDs); i++ {
 		if entry.ItemIDs[i] == 0 || entry.ItemCounts[i] == 0 {
 			continue
@@ -1183,13 +1185,23 @@ func (s *session) destroyVendorExtendedCostItems(ctx context.Context, entry wotl
 			_ = tx.Rollback()
 			return errors.New("extended item cost overflow")
 		}
-		if err := s.destroyVendorInventoryItemCountTx(ctx, tx, entry.ItemIDs[i], uint32(required)); err != nil {
+		removedStacks, err := s.destroyVendorInventoryItemCountTx(ctx, tx, entry.ItemIDs[i], uint32(required))
+		if err != nil {
 			_ = tx.Rollback()
 			return err
 		}
+		removed = append(removed, removedStacks...)
 	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	// Player::_StoreOrEquipNewItem pays extended costs via
+	// DestroyItemCount, so each fully-consumed cost stack fires
+	// ITEM_EVENT_ON_REMOVE (5). Same post-commit pattern as the quest
+	// turn-in: objects resolve before the commit, fire after it, so a
+	// rolled-back cost never fires.
+	for _, item := range removed {
+		s.fireItemRemoveHookWithObject(ctx, item)
 	}
 	for i, itemEntry := range entry.ItemIDs {
 		if itemEntry != 0 && entry.ItemCounts[i] != 0 {
@@ -1199,9 +1211,9 @@ func (s *session) destroyVendorExtendedCostItems(ctx context.Context, entry wotl
 	return nil
 }
 
-func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql.Tx, itemEntry, count uint32) error {
+func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql.Tx, itemEntry, count uint32) ([]*scripting.Object, error) {
 	if count == 0 {
-		return nil
+		return nil, nil
 	}
 	// Player::DestroyItemCount (Player.cpp:12727) destroys bag-0 slots
 	// INVENTORY_SLOT_ITEM_START..INVENTORY_SLOT_ITEM_END (23..38) then
@@ -1214,23 +1226,24 @@ func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql
 			(SELECT bag.item FROM character_inventory AS bag WHERE bag.guid = ? AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))
 		AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot`, s.playerGUID, invSlotItemStart, invSlotItemEnd-1, invSlotKeyringStart, currencyTokenSlotEnd, s.playerGUID, itemEntry)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	stacks := make([]vendorInventoryStack, 0)
 	for rows.Next() {
 		var stack vendorInventoryStack
 		if err := rows.Scan(&stack.GUID, &stack.Bag, &stack.Slot, &stack.Count); err != nil {
 			_ = rows.Close()
-			return err
+			return nil, err
 		}
 		stacks = append(stacks, stack)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return err
+		return nil, err
 	}
 	_ = rows.Close()
 	remaining := uint64(count)
+	var removed []*scripting.Object
 	for _, stack := range stacks {
 		if remaining == 0 {
 			break
@@ -1240,21 +1253,24 @@ func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql
 			used = remaining
 		}
 		if used == stack.Count {
+			if obj := s.sessionLuaItem(ctx, uint64(stack.GUID)); obj != nil {
+				removed = append(removed, obj)
+			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, stack.GUID); err != nil {
-				return err
+				return nil, err
 			}
 			if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", stack.GUID); err != nil {
-				return err
+				return nil, err
 			}
 		} else if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", used, stack.GUID); err != nil {
-			return err
+			return nil, err
 		}
 		remaining -= used
 	}
 	if remaining != 0 {
-		return errors.New("extended item cost inventory changed")
+		return nil, errors.New("extended item cost inventory changed")
 	}
-	return nil
+	return removed, nil
 }
 
 func (s *session) maxPersonalArenaRating(ctx context.Context, minSlot uint32) uint32 {

@@ -581,6 +581,21 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 // path keeps the all-or-nothing rollback (CanRewardQuest gates it first).
 // Overflow items are returned for the caller to mail; they are not grants.
 func (s *session) commitQuestRewardOptions(ctx context.Context, view questRewardView, choice uint32, skipClaimedCheck, lenientTurnIn, mailOverflow bool) ([]questItemGrant, []uint64, []questRewardItem, error) {
+	// ITEM_EVENT_ON_REMOVE (5) for the turn-in destroys fires only once
+	// the reward transaction has committed: firing inside the transaction
+	// would also fire on a later rollback, and the rows are unresolvable
+	// after commit, so destroyQuestTurnInItems captures the Lua Item
+	// objects first and this defer fires them last. Defer order matters:
+	// registered before the inventoryMu unlock defer, it runs after the
+	// unlock (LIFO), so no hook runs while inventoryMu is held — the
+	// guild retryable closure keeps the same Lua-free-under-inventoryMu
+	// rule.
+	var removedTurnInItems []*scripting.Object
+	defer func() {
+		for _, item := range removedTurnInItems {
+			s.fireItemRemoveHookWithObject(ctx, item)
+		}
+	}()
 	s.server.inventoryMu.Lock()
 	defer s.server.inventoryMu.Unlock()
 	questState, err := s.loadQuestRewardPersistenceState(ctx, view.Detail.ID)
@@ -626,7 +641,7 @@ func (s *session) commitQuestRewardOptions(ctx context.Context, view questReward
 	if err != nil {
 		return rollback(err)
 	}
-	destroyedGUIDs, err := s.destroyQuestTurnInItems(ctx, tx, inventory, view, view.Detail.ID, lenientTurnIn)
+	destroyedGUIDs, removedTurnInCandidates, err := s.destroyQuestTurnInItems(ctx, tx, inventory, view, view.Detail.ID, lenientTurnIn)
 	if err != nil {
 		return rollback(err)
 	}
@@ -678,6 +693,7 @@ func (s *session) commitQuestRewardOptions(ctx context.Context, view questReward
 	if err := tx.Commit(); err != nil {
 		return nil, nil, nil, err
 	}
+	removedTurnInItems = removedTurnInCandidates
 	for _, item := range view.RequiredItems {
 		if item.ID != 0 && item.Quantity != 0 {
 			s.adjustQuestItemCount(ctx, item.ID, item.Quantity, false)
@@ -1407,7 +1423,7 @@ func (s *session) questMoneyChanged(ctx context.Context) {
 // source items (:15352); otherwise only the required count is destroyed.
 // Items without an item_template row are skipped, like the C++ null-template
 // arm.
-func (s *session) destroyQuestTurnInItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, view questRewardView, questID uint32, lenient bool) ([]uint64, error) {
+func (s *session) destroyQuestTurnInItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, view questRewardView, questID uint32, lenient bool) ([]uint64, []*scripting.Object, error) {
 	type destroySpec struct {
 		entry      uint32
 		count      uint32
@@ -1438,6 +1454,7 @@ func (s *session) destroyQuestTurnInItems(ctx context.Context, tx *sql.Tx, inven
 	plan(view.RequiredItems, true, true)
 	plan(view.SourceItems, false, false)
 	var destroyed []uint64
+	var removed []*scripting.Object
 	for _, spec := range specs {
 		remaining := uint64(spec.count)
 		if spec.destroyAll {
@@ -1457,21 +1474,30 @@ func (s *session) destroyQuestTurnInItems(ctx context.Context, tx *sql.Tx, inven
 			if record.Count == 0 {
 				fullGUID := uint64(record.ItemGUID) | (uint64(0x4000) << 48)
 				destroyed = append(destroyed, fullGUID)
+				// Player::RewardQuest destroys via DestroyItemCount, so
+				// each fully-consumed stack fires ITEM_EVENT_ON_REMOVE
+				// (5). The object must resolve now: the transaction's
+				// deletes are invisible to the pool reader until commit,
+				// but the row is gone after commit, so capture it here
+				// and fire after commit (see commitQuestRewardOptions).
+				if obj := s.sessionLuaItem(ctx, uint64(record.ItemGUID)); obj != nil {
+					removed = append(removed, obj)
+				}
 				if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", record.ItemGUID); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", record.ItemGUID); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			} else if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", record.Count, record.ItemGUID); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		if spec.strict && !lenient && !spec.destroyAll && remaining != 0 {
-			return nil, fmt.Errorf("required quest item %d is unavailable", spec.entry)
+			return nil, nil, fmt.Errorf("required quest item %d is unavailable", spec.entry)
 		}
 	}
-	return destroyed, nil
+	return destroyed, removed, nil
 }
 
 // rewardQuestReputation mirrors Player::RewardReputation(Quest const*)

@@ -1758,6 +1758,11 @@ func (s *session) takeAmmo(ctx context.Context, spell wotlk.Spell) (consumed, ou
 			return true, false
 		}
 		if count <= 1 {
+			// Spell::TakeAmmo destroys the last thrown weapon via
+			// DestroyItemCount (Spell.cpp:4902), so its final unit fires
+			// ITEM_EVENT_ON_REMOVE (5); a partial stack only decrements
+			// and never fires.
+			s.fireItemRemoveHook(ctx, uint64(instanceGUID))
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", instanceGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", instanceGUID)
 			s.adjustQuestItemCount(ctx, uint32(itemEntry), 1, false)
@@ -1785,6 +1790,10 @@ func (s *session) takeAmmo(ctx context.Context, spell wotlk.Spell) (consumed, ou
 		return false, true
 	}
 	if count <= 1 {
+		// Spell::TakeAmmo destroys the last ammo unit via DestroyItemCount
+		// (Spell.cpp:4906), so it fires ITEM_EVENT_ON_REMOVE (5) exactly
+		// like the thrown last-count arm above.
+		s.fireItemRemoveHook(ctx, uint64(itemGUID))
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", itemGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
 		s.adjustQuestItemCount(ctx, ammoEntry, 1, false)
