@@ -273,7 +273,11 @@ func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternat
 // (GameObject.cpp ApplyModFlag path): ORs the bits into the live dynamic
 // state and broadcasts the flags field, the same values-update twin
 // useDoorOrButton uses for GO_FLAG_IN_USE. Only the flags field exists
-// on the Go GO model, so the Lua SetFlag bridge gates on it.
+// on the Go GO model, so the Lua SetFlag bridge gates on it. A static DB
+// spawn gains its live state on its first flag write, the
+// setGameObjectStateInInstance materialization: a bare SetFlag used to be
+// a silent no-op for exactly those GOs, so scripted flag arms (the
+// Zul'Gurub gong, the suppression devices) never stuck.
 func (s *Server) setGameObjectFlag(mapID, instanceID uint32, guid uint64, flag uint32) {
 	if s == nil {
 		return
@@ -282,7 +286,15 @@ func (s *Server) setGameObjectFlag(mapID, instanceID uint32, guid uint64, flag u
 	st := s.gameObjectStateLocked(mapID, instanceID, guid)
 	if st == nil {
 		s.objectsMu.Unlock()
-		return
+		if s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
+			return
+		}
+		s.objectsMu.Lock()
+		st = s.gameObjectStateLocked(mapID, instanceID, guid)
+		if st == nil {
+			s.objectsMu.Unlock()
+			return
+		}
 	}
 	st.Flags |= flag
 	flags := st.Flags
@@ -292,7 +304,11 @@ func (s *Server) setGameObjectFlag(mapID, instanceID uint32, guid uint64, flag u
 
 // clearGameObjectFlag mirrors GameObject::RemoveFlag(GAMEOBJECT_FLAGS, flag)
 // (GameObject.cpp ApplyModFlag path): AND-NOTs the bits out of the live
-// dynamic state and broadcasts the flags field, the setGameObjectFlag twin.
+// dynamic state and broadcasts the flags field, the setGameObjectFlag twin,
+// including its static materialization: a RemoveFlag on a never-touched
+// static spawn (the Karazhan urn's IN_USE clear) materializes the spawn
+// flags first, so the clear applies to the spawn value instead of
+// dropping on the floor.
 func (s *Server) clearGameObjectFlag(mapID, instanceID uint32, guid uint64, flag uint32) {
 	if s == nil {
 		return
@@ -301,7 +317,15 @@ func (s *Server) clearGameObjectFlag(mapID, instanceID uint32, guid uint64, flag
 	st := s.gameObjectStateLocked(mapID, instanceID, guid)
 	if st == nil {
 		s.objectsMu.Unlock()
-		return
+		if s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
+			return
+		}
+		s.objectsMu.Lock()
+		st = s.gameObjectStateLocked(mapID, instanceID, guid)
+		if st == nil {
+			s.objectsMu.Unlock()
+			return
+		}
 	}
 	st.Flags &^= flag
 	flags := st.Flags
@@ -310,15 +334,45 @@ func (s *Server) clearGameObjectFlag(mapID, instanceID uint32, guid uint64, flag
 }
 
 // gameObjectHasFlag mirrors GameObject::HasFlag(GAMEOBJECT_FLAGS, flag):
-// the live dynamic flags field, false when the GO has no live state.
+// the live dynamic flags field when one exists, else the spawn flags in
+// grid-stream precedence: the destructible-health override for damaged
+// buildings, then the template_addon flags (GameObject.cpp:336, the
+// GameObjectOverride value a static spawn is created with). A static GO
+// that was never touched used to read false for every flag, including
+// bits its spawn row carries; the read itself never materializes a
+// record, so a pure probe leaves no live state behind.
 func (s *Server) gameObjectHasFlag(mapID, instanceID uint32, guid uint64, flag uint32) bool {
 	if s == nil {
 		return false
 	}
 	s.objectsMu.RLock()
-	defer s.objectsMu.RUnlock()
 	st := s.gameObjectStateLocked(mapID, instanceID, guid)
-	return st != nil && st.Flags&flag != 0
+	if st != nil {
+		flags := st.Flags
+		s.objectsMu.RUnlock()
+		return flags&flag != 0
+	}
+	s.objectsMu.RUnlock()
+	if over := s.destructibleSpawnOverride(mapID, instanceID, uint32(guid&0xFFFFFF)); over != nil {
+		return over.Flags&flag != 0
+	}
+	return s.gameObjectTemplateAddonFlags(uint32(guid>>24)&0xFFFFFF)&flag != 0
+}
+
+// gameObjectTemplateAddonFlags mirrors the spawn-flags read behind
+// GameObject::Create (GameObject.cpp:336): the gameobject_template_addon
+// flags for the entry, 0 when the row is absent. The gameObjectTemplateType
+// twin, one column over.
+func (s *Server) gameObjectTemplateAddonFlags(entry uint32) uint32 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0
+	}
+	var flags int64
+	if err := s.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT COALESCE(flags, 0) FROM gameobject_template_addon WHERE entry = ? LIMIT 1", entry).Scan(&flags); err != nil || flags < 0 {
+		return 0
+	}
+	return uint32(flags)
 }
 
 // gameObjectAutoCloseDelay mirrors GameObjectTemplate::GetAutoCloseTime
@@ -664,8 +718,10 @@ func (s *Server) broadcastGameObjectBytes1InInstance(mapID, instanceID uint32, g
 
 // applyGameObjectFlag mirrors GameObject::ApplyModFlag(GAMEOBJECT_FLAGS, flag,
 // apply): it flips the bit on the live GO state and pushes the flags field to
-// clients. Static GOs with no live state object are skipped — Go has no
-// runtime record for them.
+// clients. A static DB spawn gains its live state on its first flag write,
+// the setGameObjectStateInInstance materialization: the spell
+// EffectActivateObject lock/unlock arms (spells.go, boss_ai.go) target
+// static instance doors, and used to drop on the floor for exactly them.
 func (s *Server) applyGameObjectFlag(mapID, instanceID uint32, guid uint64, flag uint32, set bool) {
 	if s == nil || guid == 0 {
 		return
@@ -673,15 +729,26 @@ func (s *Server) applyGameObjectFlag(mapID, instanceID uint32, guid uint64, flag
 	var flags uint32
 	found := false
 	s.objectsMu.Lock()
-	if st := s.gameObjectStateLocked(mapID, instanceID, guid); st != nil {
-		if set {
-			st.Flags |= flag
-		} else {
-			st.Flags &^= flag
+	st := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if st == nil {
+		s.objectsMu.Unlock()
+		if s.materializeStaticGameObjectState(mapID, instanceID, guid) == nil {
+			return
 		}
-		flags = st.Flags
-		found = true
+		s.objectsMu.Lock()
+		st = s.gameObjectStateLocked(mapID, instanceID, guid)
+		if st == nil {
+			s.objectsMu.Unlock()
+			return
+		}
 	}
+	if set {
+		st.Flags |= flag
+	} else {
+		st.Flags &^= flag
+	}
+	flags = st.Flags
+	found = true
 	s.objectsMu.Unlock()
 	if found {
 		s.broadcastGameObjectValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{gameObjectFlags: flags})

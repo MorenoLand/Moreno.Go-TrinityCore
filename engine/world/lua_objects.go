@@ -1614,9 +1614,11 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	// SetFlag/HasFlag mirror GameObject::SetFlag/HasFlag on GAMEOBJECT_FLAGS
 	// (the Go values-map flags field, gameObjectFlags): C++ ORs on set and
 	// AND-tests on read; other fields are ignored (creature HasFlag
-	// precedent: only flag-backed fields read live). Backs script flag
-	// arms such as the Zul'Gurub gong (NOT_SELECTABLE) and the Karazhan
-	// urn (IN_USE read leg).
+	// precedent: only flag-backed fields read live). A static DB spawn
+	// gains its live state on its first flag write (instance_gameobjects.go
+	// materialization), and HasFlag reads the spawn flags for a GO that was
+	// never touched. Backs script flag arms such as the Zul'Gurub gong
+	// (NOT_SELECTABLE) and the Karazhan urn (IN_USE read leg).
 	methods["SetFlag"] = func(_ context.Context, args []any) ([]any, error) {
 		field, err := luaUint32Arg(args, 0)
 		if err != nil {
