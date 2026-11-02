@@ -332,6 +332,106 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{s.mapIsUnderWater(mapID, x, y, z)}, nil
 	}
+	// SendUnitSay/SendUnitYell/SendUnitWhisper/SendUnitEmote are
+	// UnitMethods (UnitMethods.h:2320-2390, Trinity): Unit::Say/Yell/
+	// Whisper/TextEmote (Unit.cpp:14048-14072) over the live motion
+	// coords. Empty messages are dropped by the Eluna binding itself.
+	// Say/Yell/Emote fan out in the CONFIG_LISTEN_RANGE_* radius via
+	// the same set-within-phase path the Talk rows use; Whisper writes
+	// direct to the receiver session only (the Unit::Whisper
+	// null-target arm: a receiver with no live session drops
+	// silently). The Emote receiver and the Say/Yell target do not gate
+	// delivery in C++ (Talk visits the range set; the target only feeds
+	// the packet locale, and Go is enUS-only), so they are accepted
+	// and ignored here. The session-creature surface keeps its own
+	// gossip-targeted Whisper/TextEmote shorthands (lua_objects.go);
+	// this is the handler-surface Eluna family, which was missing.
+	motionChatRange := func(chatType uint8, language uint32, message string, listenRange float64) {
+		s.motionMu.Lock()
+		mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+		s.motionMu.Unlock()
+		packet := protocol.BuildMonsterChatMessage(chatType, language, state.GUID, state.Name, message)
+		s.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, mapID, instanceID, x, y, z, listenRange, phase)
+	}
+	methods["SendUnitSay"] = func(_ context.Context, args []any) ([]any, error) {
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		language, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(message) == 0 {
+			return []any{}, nil
+		}
+		motionChatRange(0x0C, language, message, s.Config.ChatListenRangeSay)
+		return []any{}, nil
+	}
+	methods["SendUnitYell"] = func(_ context.Context, args []any) ([]any, error) {
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		language, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(message) == 0 {
+			return []any{}, nil
+		}
+		motionChatRange(0x0E, language, message, s.Config.ChatListenRangeYell)
+		return []any{}, nil
+	}
+	methods["SendUnitEmote"] = func(_ context.Context, args []any) ([]any, error) {
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(message) == 0 {
+			return []any{}, nil
+		}
+		chatType := uint8(0x10)
+		if len(args) > 2 {
+			if bossEmote, ok := args[2].(bool); ok && bossEmote {
+				chatType = 0x29
+			}
+		}
+		motionChatRange(chatType, languageUniversal, message, s.Config.ChatListenRangeTextEmote)
+		return []any{}, nil
+	}
+	methods["SendUnitWhisper"] = func(_ context.Context, args []any) ([]any, error) {
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		language, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 3 {
+			return nil, fmt.Errorf("argument 3 is required")
+		}
+		receiverGUID := luaObjectGUID(args[2])
+		if receiverGUID == 0 {
+			return nil, fmt.Errorf("argument 3 must be a player")
+		}
+		if len(message) == 0 {
+			return []any{}, nil
+		}
+		receiver := s.findSessionByGUID(receiverGUID)
+		if receiver == nil || receiver.player == nil {
+			return []any{}, nil
+		}
+		chatType := uint8(0x0F)
+		if len(args) > 3 {
+			if bossWhisper, ok := args[3].(bool); ok && bossWhisper {
+				chatType = 0x2A
+			}
+		}
+		packet := protocol.BuildChatMessage(chatType, language, state.GUID, receiverGUID, message, "")
+		return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
+	}
 	// SetData/GetData are the CreatureAI::SetData virtual-dispatch twin
 	// (CreatureAI.h: the per-AI override interprets its own type numbers;
 	// Go handlers are not AI objects, so there is no virtual table to

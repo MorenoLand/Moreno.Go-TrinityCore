@@ -321,6 +321,102 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.startTaxiByPathID(ctx, pathID)
 		return []any{}, nil
 	}
+	// Say/Yell/Whisper/TextEmote are PlayerMethods (PlayerMethods.h:
+	// 3064-3128): Player::Say/Yell/Whisper/TextEmote (Player.cpp:
+	// 20975-21072) over the session's broadcastChat fan-out — the same
+	// range + emote two-side gates the client chat path uses — with the
+	// OnPlayerChat hook fired first (cancel drops, rewrite wins, per
+	// firePlayerChatHook). Whisper forces LANG_UNIVERSAL unless
+	// LANG_ADDON and announces the target's AFK/DND reply; the
+	// accept-whispers flip has no Go model (see commands.go) so it is
+	// skipped, and an offline receiver drops silently instead of
+	// tripping the C++ ASSERT. The SendUnit* twins are the UnitMethods
+	// registrations Eluna puts on the Player metatable too
+	// (LuaFunctions.cpp:1356-1357): unit->Say/Yell/Whisper/TextEmote
+	// dispatch to the Player overrides, so they bind the same arms —
+	// SendUnitWhisper's bossWhisper and SendUnitEmote's receiver and
+	// bossEmote are accepted and ignored, matching the Player
+	// overrides, which ignore them.
+	playerSay := func(chatType uint8) scripting.ObjectMethod {
+		return func(ctx context.Context, args []any) ([]any, error) {
+			if s.server == nil {
+				return []any{}, nil
+			}
+			message, err := luaStringArg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			language, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			cancelled, rewritten := s.firePlayerChatHook(ctx, uint32(chatType), language, message, "")
+			if cancelled {
+				return []any{}, nil
+			}
+			s.server.broadcastChat(s, nil, chatType, language, rewritten, "", 0)
+			return []any{}, nil
+		}
+	}
+	methods["Say"] = playerSay(chatSay)
+	methods["SendUnitSay"] = playerSay(chatSay)
+	methods["Yell"] = playerSay(chatYell)
+	methods["SendUnitYell"] = playerSay(chatYell)
+	playerEmote := func(ctx context.Context, args []any) ([]any, error) {
+		if s.server == nil {
+			return []any{}, nil
+		}
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		cancelled, rewritten := s.firePlayerChatHook(ctx, uint32(chatEmote), languageUniversal, message, "")
+		if cancelled {
+			return []any{}, nil
+		}
+		s.server.broadcastChat(s, nil, chatEmote, languageUniversal, rewritten, "", 0)
+		return []any{}, nil
+	}
+	methods["TextEmote"] = playerEmote
+	methods["SendUnitEmote"] = playerEmote
+	playerWhisper := func(ctx context.Context, args []any) ([]any, error) {
+		if s.server == nil {
+			return []any{}, nil
+		}
+		message, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		language, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 3 {
+			return nil, fmt.Errorf("argument 3 is required")
+		}
+		receiverGUID := luaObjectGUID(args[2])
+		if receiverGUID == 0 {
+			return nil, fmt.Errorf("argument 3 must be a player")
+		}
+		receiver := s.server.findSessionByGUID(receiverGUID)
+		if receiver == nil || receiver.player == nil {
+			return []any{}, nil
+		}
+		if language != languageAddon {
+			language = languageUniversal
+		}
+		cancelled, rewritten := s.firePlayerChatHook(ctx, uint32(chatWhisper), language, message, receiver.player.Name)
+		if cancelled {
+			return []any{}, nil
+		}
+		s.server.broadcastChat(s, receiver, chatWhisper, language, rewritten, "", 0)
+		if language != languageAddon {
+			s.announceChatAutoReply(receiver)
+		}
+		return []any{}, nil
+	}
+	methods["Whisper"] = playerWhisper
+	methods["SendUnitWhisper"] = playerWhisper
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
 	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })
 	// GetArmor is Unit::GetArmor (Unit.h:860: GetResistance(SPELL_SCHOOL_NORMAL)):
@@ -2038,6 +2134,17 @@ func luaUint32Arg(args []any, index int) (uint32, error) {
 		return 0, fmt.Errorf("argument %d must be uint32", index+1)
 	}
 	return uint32(value), nil
+}
+
+func luaStringArg(args []any, index int) (string, error) {
+	if index >= len(args) {
+		return "", fmt.Errorf("argument %d is required", index+1)
+	}
+	message, ok := args[index].(string)
+	if !ok {
+		return "", fmt.Errorf("argument %d must be a string", index+1)
+	}
+	return message, nil
 }
 
 func luaUint64(value any) (uint64, error) {
