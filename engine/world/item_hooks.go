@@ -106,22 +106,45 @@ func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting
 		var ownerGUID int64
 		var flags, durability uint32
 		var enchantments string
+		var randomPropertyId int32
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
-			"SELECT owner_guid, flags, durability, COALESCE(enchantments, '') FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1",
-			rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&ownerGUID, &flags, &durability, &enchantments); err != nil {
+			"SELECT owner_guid, flags, durability, COALESCE(enchantments, ''), COALESCE(randomPropertyId, 0) FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1",
+			rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&ownerGUID, &flags, &durability, &enchantments, &randomPropertyId); err != nil {
 			return scripting.ItemInstanceLive{}, false
 		}
 		inst := scripting.ItemInstanceLive{
-			Flags:        flags,
-			Durability:   durability,
-			Enchantments: enchantments,
-			BagSlot:      invSlotBag0,
+			Flags:            flags,
+			Durability:       durability,
+			Enchantments:     enchantments,
+			BagSlot:          invSlotBag0,
+			RandomPropertyId: randomPropertyId,
 		}
 		if ownerGUID > 0 {
 			inst.OwnerGUID = uint64(ownerGUID)
 		}
 		highGUID := rawGUID | (uint64(0x4000) << 48)
 		lowGUID := rawGUID &^ (uint64(0x4000) << 48)
+		if flags&uint32(itemInstanceFlagBOPTradeable) != 0 {
+			inst.BOPTradeable = true
+			var allowedPlayers string
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+				"SELECT allowedPlayers FROM item_soulbound_trade_data WHERE itemGuid = ? OR itemGuid = ? OR itemGuid = ? LIMIT 1",
+				rawGUID, highGUID, lowGUID).Scan(&allowedPlayers); err == nil {
+				for _, field := range strings.Fields(allowedPlayers) {
+					if guid, err := strconv.ParseUint(field, 10, 64); err == nil {
+						inst.AllowedTradeGUIDs = append(inst.AllowedTradeGUIDs, guid)
+					}
+				}
+			}
+		}
+		if ownerGUID > 0 {
+			var ownerLevel uint32
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+				"SELECT COALESCE(level, 0) FROM characters WHERE guid = ? LIMIT 1",
+				ownerGUID).Scan(&ownerLevel); err == nil {
+				inst.OwnerLevel = ownerLevel
+			}
+		}
 		var bag, slot int64
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
 			"SELECT bag, slot FROM character_inventory WHERE item = ? OR item = ? LIMIT 1",

@@ -377,15 +377,19 @@ type ItemTemplateLive struct {
 // (Item.cpp:713-715, GetBagSlot); InBag is m_container != nullptr, i.e.
 // the character_inventory bag column is non-zero.
 type ItemInstanceLive struct {
-	OwnerGUID      uint64
-	Flags          uint32
-	Durability     uint32
-	Enchantments   string
-	Slot           uint8
-	BagSlot        uint8
-	InBag          bool
-	NotEmptyBag    bool
-	BoundByEnchant bool
+	OwnerGUID         uint64
+	Flags             uint32
+	Durability        uint32
+	Enchantments      string
+	Slot              uint8
+	BagSlot           uint8
+	InBag             bool
+	NotEmptyBag       bool
+	BoundByEnchant    bool
+	BOPTradeable      bool
+	AllowedTradeGUIDs []uint64
+	RandomPropertyId  int32
+	OwnerLevel        uint32
 }
 
 // ItemLive carries the template-data callback behind a Lua Item object.
@@ -443,6 +447,16 @@ const (
 	inventorySlotBag0               = 255
 )
 
+// item bag-slot ranges behind Player::IsBagPos (Player.cpp:10174-10182):
+// top-level bag slots 19-22 and bank bag slots 67-73, both with the
+// INVENTORY_SLOT_BAG_0 (255) bag.
+const (
+	itemInventoryBagSlotStart = 19
+	itemInventoryBagSlotEnd   = 23
+	itemBankBagSlotStart      = 67
+	itemBankBagSlotEnd        = 74
+)
+
 // itemEnchantmentID reads one enchantment ID out of the item_instance
 // enchantments string: space-separated (id, duration, charges) triples
 // per slot (Item.cpp:354-356 save, LoadFromDB field 6), so slot s lives
@@ -472,16 +486,14 @@ func itemEnchantmentID(raw string, slot uint32) uint32 {
 // GetSpellId and GetSpellTrigger (ItemMethods.h), plus the instance-bound
 // reads GetOwner, GetOwnerGUID, GetSlot, GetBagSlot, GetEnchantmentId,
 // IsSoulBound, IsEquipped, IsBroken, IsLocked, IsBoundByEnchant,
-// IsNotEmptyBag and IsInBag when the object carries a LoadInstance.
+// IsNotEmptyBag, IsInBag, IsNotBoundToPlayer, CanBeTraded and GetItemLink
+// when the object carries a LoadInstance.
 // The generic object methods supply GetEntry/GetGUID/GetGUIDLow/GetTypeId
-// (object.go). Still unbridged: IsNotBoundToPlayer (needs the
-// BOP-tradeable allowed-GUID list, which Go does not model), IsInTrade
-// (the session trade flag is not safely readable from the scripting
-// goroutine), CanBeTraded (loot-generated/unequip/loot-GUID legs),
-// GetItemLink (owner-level + locale-suffix legs), and the mutating
-// surface (SetOwner, SetBinding, SetCount, SetEnchantment,
-// ClearEnchantment, SaveToDB), which needs a live item model with an
-// update broadcast, not just row reads.
+// (object.go). Still unbridged: IsInTrade (the session trade flag is not
+// safely readable from the scripting goroutine) and the mutating surface
+// (SetOwner, SetBinding, SetCount, SetEnchantment, ClearEnchantment,
+// SaveToDB), which needs a live item model with an update broadcast, not
+// just row reads.
 func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 	load := live.LoadTemplate
 	if load == nil {
@@ -744,6 +756,135 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 		// by the world loader, which owns the DBC store.
 		"IsBoundByEnchant": func(context.Context, []any) ([]any, error) {
 			return instanceValue(func(inst ItemInstanceLive) any { return inst.BoundByEnchant }), nil
+		},
+		// Item::IsBindedNotWith (Item.cpp:1039-1055): not soulbound
+		// reads false; the owner reads false; a BOP-tradeable item
+		// reads false for a player on its allowed list
+		// (item_soulbound_trade_data, the bindLootSoulboundTradeable
+		// twin); a bound-account-wide template reads false for
+		// anyone. The player argument is CHECKOBJ<Player>: a
+		// non-object argument errors, like objectArgument.
+		"IsNotBoundToPlayer": func(_ context.Context, args []any) ([]any, error) {
+			player, err := objectArgument(args)
+			if err != nil {
+				return nil, err
+			}
+			playerGUID, ok := objectUint64(player, "GUID")
+			if !ok {
+				return nil, fmt.Errorf("object argument expected")
+			}
+			if live.LoadInstance == nil {
+				return []any{nil}, nil
+			}
+			inst, ok := live.LoadInstance()
+			if !ok {
+				return []any{nil}, nil
+			}
+			if inst.Flags&itemFlagSoulbound == 0 {
+				return []any{false}, nil
+			}
+			if inst.OwnerGUID == playerGUID {
+				return []any{false}, nil
+			}
+			if inst.BOPTradeable {
+				for _, allowed := range inst.AllowedTradeGUIDs {
+					if allowed == playerGUID {
+						return []any{false}, nil
+					}
+				}
+			}
+			if tmpl, ok := load(); ok && tmpl.Flags&itemFlagBoundToAccount != 0 {
+				return []any{false}, nil
+			}
+			return []any{true}, nil
+		},
+		// Item::CanBeTraded (Item.cpp:720-743, Eluna mail-only arm:
+		// trade defaults false, so a soulbound item passes only via
+		// the mail + bound-account-wide arm). Template-only objects
+		// (loot-window, guild-bank) read nil, like every other
+		// instance method — their loot-generated state is unmodeled,
+		// and the owner legs (CanUnequipItem, the owner's loot GUID)
+		// have no session behind the object, so they are skipped.
+		"CanBeTraded": func(_ context.Context, args []any) ([]any, error) {
+			mail := false
+			if len(args) > 0 && args[0] != nil {
+				if b, ok := args[0].(bool); ok {
+					mail = b
+				} else if number, ok := numericValue(args[0]); ok {
+					mail = number != 0
+				} else {
+					return nil, fmt.Errorf("argument 1 must be boolean")
+				}
+			}
+			if live.LoadInstance == nil {
+				return []any{nil}, nil
+			}
+			inst, ok := live.LoadInstance()
+			if !ok {
+				return []any{nil}, nil
+			}
+			tmpl, tmplOK := load()
+			if inst.Flags&itemFlagSoulbound != 0 && !(mail && tmplOK && tmpl.Flags&itemFlagBoundToAccount != 0) {
+				return []any{false}, nil
+			}
+			if tmplOK && tmpl.InventoryType == invTypeBag {
+				bagPos := !inst.InBag && ((inst.Slot >= itemInventoryBagSlotStart && inst.Slot < itemInventoryBagSlotEnd) ||
+					(inst.Slot >= itemBankBagSlotStart && inst.Slot < itemBankBagSlotEnd))
+				if bagPos || inst.NotEmptyBag {
+					return []any{false}, nil
+				}
+			}
+			if inst.BoundByEnchant {
+				return []any{false}, nil
+			}
+			return []any{true}, nil
+		},
+		// ItemMethods.h GetItemLink (Trinity): the quality color plus
+		// "|Hitem:<entry>:<perm>:<sock>:<sock2>:<sock3>:<bonus>:
+		// <randomProperty>:<suffixFactor>:<ownerLevel>|h[<name>]|h|r".
+		// The locale argument is range-checked (TOTAL_LOCALES 7) but
+		// Go names are enUS-only, like the global GetItemLink twin;
+		// the suffix factor has no Go model (C++ PROPERTY_SEED is
+		// runtime-only, set by SetItemRandomProperties at creation),
+		// and the random-property name suffix is not appended (no
+		// ItemRandomSuffix/ItemRandomProperties DBC read in Go), so
+		// both print 0 / the bare template name.
+		"GetItemLink": func(_ context.Context, args []any) ([]any, error) {
+			var locale uint32
+			if len(args) > 0 && args[0] != nil {
+				parsed, err := objectArgumentUint32(args, 0)
+				if err != nil {
+					return nil, err
+				}
+				locale = parsed
+			}
+			if locale >= 7 {
+				return nil, fmt.Errorf("valid LocaleConstant expected")
+			}
+			tmpl, ok := load()
+			if !ok {
+				return []any{nil}, nil
+			}
+			if live.LoadInstance == nil {
+				return []any{nil}, nil
+			}
+			inst, ok := live.LoadInstance()
+			if !ok {
+				return []any{nil}, nil
+			}
+			color := uint32(0xFFFFFFFF)
+			if int(tmpl.Quality) < len(itemLinkQualityColors) {
+				color = itemLinkQualityColors[tmpl.Quality]
+			}
+			link := fmt.Sprintf("|c%08x|Hitem:%d:%d:%d:%d:%d:%d:%d:%d:%d|h[%s]|h|r",
+				color, entry,
+				itemEnchantmentID(inst.Enchantments, 0),
+				itemEnchantmentID(inst.Enchantments, 2),
+				itemEnchantmentID(inst.Enchantments, 3),
+				itemEnchantmentID(inst.Enchantments, 4),
+				itemEnchantmentID(inst.Enchantments, 5),
+				inst.RandomPropertyId, 0, inst.OwnerLevel, tmpl.Name)
+			return []any{link}, nil
 		},
 	}
 	return &Object{Type: "Item", Fields: map[string]any{"GUID": guid, "Entry": entry, "Count": count}, Methods: methods}
