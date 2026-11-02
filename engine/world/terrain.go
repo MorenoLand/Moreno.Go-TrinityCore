@@ -1134,6 +1134,11 @@ const (
 	terrainHeightAsInt8   = 0x0004
 )
 
+const (
+	terrainLiquidNoType   = 0x0001
+	terrainLiquidNoHeight = 0x0002
+)
+
 var terrainHoleTabH = [4]uint16{0x1111, 0x2222, 0x4444, 0x8888}
 var terrainHoleTabV = [4]uint16{0x000F, 0x00F0, 0x0F00, 0xF000}
 
@@ -1233,6 +1238,88 @@ func (s *Server) mapGridHeight(mapID uint32, x, y float32) (float32, bool) {
 		}
 	}
 	return terrainInterpolateGridHeight(v9, v8, holes, x, y)*scale + offset, true
+}
+
+// mapWaterLevel is Map::GetWaterLevel (Map.cpp:2879-2884) over the .map
+// v1.9 MLIQ chunk: the 44-byte file header carries the liquid chunk at
+// [28:32] (map_fileheader, Map.h:90), the chunk header is fourcc MLIQ +
+// flags + liquidFlags + liquidType + offsetX + offsetY + width + height +
+// liquidLevel (map_liquidHeader, Map.h:130), followed by the 256-entry
+// type arrays unless MAP_LIQUID_NO_TYPE and the width*height float level
+// map unless MAP_LIQUID_NO_HEIGHT (loadLiquidData, Map.cpp:2007-2040).
+// The second return is false only when the tile file itself is missing,
+// the C++ grid-not-loaded arm where GetWaterLevel returns 0; every other
+// failure reads the INVALID_HEIGHT sentinel, matching a loadData failure
+// leaving the default-constructed grid in place (Map.cpp:237-240) and a
+// missing liquid chunk leaving _liquidMap nil (getLiquidLevel,
+// Map.cpp:2340-2343 returns the global level, itself INVALID by default).
+// A present-but-corrupt height header also reads INVALID, since the
+// height load runs before the liquid load and its failure aborts the
+// whole grid; a short height array is the one unmodeled corner there.
+// The cell math is getLiquidLevel verbatim: the grid-local coordinates
+// are MAP_RESOLUTION * (CENTER_GRID_ID - coord / SIZE_OF_GRIDS), masked
+// to the tile, then shifted by the liquid offsets, and an out-of-rect
+// cell reads INVALID. Liquid type and flag arrays are not consulted:
+// getLiquidLevel reads levels only, unlike GetLiquidStatus.
+func (s *Server) mapWaterLevel(mapID uint32, x, y float32) (float32, bool) {
+	if s == nil {
+		return 0, false
+	}
+	gridX := int(float64(x)/terrainGridSize + terrainCenterGrid)
+	gridY := int(float64(y)/terrainGridSize + terrainCenterGrid)
+	if gridX < 0 || gridX >= 64 || gridY < 0 || gridY >= 64 {
+		return 0, false
+	}
+	path := filepath.Join(s.Config.GameDataDir, "maps", fmt.Sprintf("%03d%02d%02d.map", mapID, 63-gridX, 63-gridY))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	if len(data) < 44 || string(data[:4]) != "MAPS" || string(data[4:8]) != "v1.9" {
+		return terrainInvalidHeight, true
+	}
+	heightOffset := binary.LittleEndian.Uint32(data[20:24])
+	if heightOffset != 0 && (int(heightOffset)+16 > len(data) || string(data[heightOffset:heightOffset+4]) != "MHGT") {
+		return terrainInvalidHeight, true
+	}
+	liquidOffset := binary.LittleEndian.Uint32(data[28:32])
+	if liquidOffset == 0 {
+		return terrainInvalidHeight, true
+	}
+	if int(liquidOffset)+16 > len(data) || string(data[liquidOffset:liquidOffset+4]) != "MLIQ" {
+		return terrainInvalidHeight, true
+	}
+	flags := data[liquidOffset+4]
+	offX := data[liquidOffset+8]
+	offY := data[liquidOffset+9]
+	width := data[liquidOffset+10]
+	height := data[liquidOffset+11]
+	liquidLevel := math.Float32frombits(binary.LittleEndian.Uint32(data[liquidOffset+12 : liquidOffset+16]))
+	pos := int(liquidOffset) + 16
+	if flags&terrainLiquidNoType == 0 {
+		if pos+256*2+256 > len(data) {
+			return terrainInvalidHeight, true
+		}
+		pos += 256*2 + 256
+	}
+	if flags&terrainLiquidNoHeight != 0 {
+		return liquidLevel, true
+	}
+	if pos+int(width)*int(height)*4 > len(data) {
+		return terrainInvalidHeight, true
+	}
+	fx := float32(128) * (32 - x/533.3333)
+	fy := float32(128) * (32 - y/533.3333)
+	cxInt := int32(fx)&127 - int32(offY)
+	cyInt := int32(fy)&127 - int32(offX)
+	if cxInt < 0 || cxInt >= int32(height) {
+		return terrainInvalidHeight, true
+	}
+	if cyInt < 0 || cyInt >= int32(width) {
+		return terrainInvalidHeight, true
+	}
+	cell := pos + (int(cxInt)*int(width)+int(cyInt))*4
+	return math.Float32frombits(binary.LittleEndian.Uint32(data[cell : cell+4])), true
 }
 
 // terrainInterpolateGridHeight is GridMap::getHeightFromFloat (and the

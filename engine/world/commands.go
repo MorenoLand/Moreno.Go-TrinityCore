@@ -1708,9 +1708,9 @@ func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) {
 // center of the given grid cell on the player's map (or the given map).
 // cs_go.cpp:228 resolves Z as max(GetHeight(x, y, MAX_HEIGHT),
 // GetWaterLevel(x, y)); from MAX_HEIGHT the vmap leg provably never hits, so
-// mapHeight is exactly the GetHeight half. The water-level max is still
-// unmodeled (no Go water model), so a water cell reads the lakebed rather
-// than the surface; a missing grid keeps the player's Z.
+// mapHeight is exactly the GetHeight half, and mapWaterLevel is the
+// GetWaterLevel half (cs_go.cpp:228), so a water cell now reads the
+// surface; a missing grid keeps the player's Z.
 func (s *session) handleCmdGoGrid(ctx context.Context, args []string) {
 	if len(args) < 2 {
 		s.sendSysMessage("Syntax: .go grid <gridX> <gridY> [map]")
@@ -1733,6 +1733,9 @@ func (s *session) handleCmdGoGrid(ctx context.Context, args []string) {
 	z := s.player.Z
 	if height, ok := s.server.mapHeight(mapID, x, y, terrainMaxHeight, true, terrainDefaultHeightSearch); ok {
 		z = height
+	}
+	if water, ok := s.server.mapWaterLevel(mapID, x, y); ok && water > z {
+		z = water
 	}
 	s.goDoTeleport(ctx, mapID, x, y, z, s.player.Orientation)
 }
@@ -1789,9 +1792,9 @@ func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) {
 
 // handleCmdGoXYZ mirrors HandleGoXYZCommand (cs_go.cpp:309): teleport to the
 // given coordinates on the player's map (or the given map), keeping the given
-// orientation or 0. With Z omitted, the height is the GetHeight half of
-// cs_go.cpp:331 via mapHeight (the water-level max is still unmodeled; a
-// missing grid keeps the player's Z).
+// orientation or 0. With Z omitted, the height is max(GetHeight,
+// GetWaterLevel) of cs_go.cpp:331 via mapHeight + mapWaterLevel; a
+// missing grid keeps the player's Z.
 func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 	if len(args) < 2 {
 		s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
@@ -1828,11 +1831,14 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 	}
 	// cs_go.cpp:331: with Z omitted C++ uses max(GetHeight(x, y, MAX_HEIGHT),
 	// GetWaterLevel(x, y)); mapHeight is exactly the GetHeight half from
-	// MAX_HEIGHT, the water-level max is still unmodeled, and a missing grid
+	// MAX_HEIGHT and mapWaterLevel the water half, and a missing grid
 	// keeps the player's Z.
 	if !zGiven {
 		if height, ok := s.server.mapHeight(mapID, float32(x), float32(y), terrainMaxHeight, true, terrainDefaultHeightSearch); ok {
 			z = float64(height)
+		}
+		if water, ok := s.server.mapWaterLevel(mapID, float32(x), float32(y)); ok && water > float32(z) {
+			z = float64(water)
 		}
 	}
 	s.goDoTeleport(ctx, mapID, float32(x), float32(y), float32(z), float32(o))
