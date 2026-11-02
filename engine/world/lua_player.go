@@ -3209,6 +3209,91 @@ func (s *session) luaPlayer() *scripting.Object {
 	})
 	methods["GetInGameTime"] = luaNoArgs(func() any { return s.loginGameTimeMS })
 	methods["GetFreeTalentPoints"] = luaNoArgs(func() any { return freeTalentPoints(state) })
+	// Eluna Player talent methods (PlayerMethods.h:32-48, 2107-2116,
+	// 2653-2686, 3705-3719; Player.cpp:3957-4087, 4171-4175, 9612-9630,
+	// 25460-25559). HasTalent resolves the spell to its talent rank via
+	// TalentBySpell and compares against the learned rank for that spec:
+	// the C++ map is keyed by spell, so a different rank of the same
+	// talent reads false. Spec >= 2 (MAX_TALENT_SPECS) reads nil, the
+	// Eluna early return. The active spec reads the in-memory map; any
+	// other spec reads its stored rows via loadTalentsForGroup.
+	// LearnTalent runs the shared learn arm and always resends the
+	// talent frame, then fires event 39 on success (the C++ learn path
+	// fires OnLearnTalents only after a successful learn). ResetTalents
+	// defaults no_cost to true like CHECKVAL<bool>(L, 2, true); event 17
+	// fires on entry (ScriptMgr::OnPlayerTalentsReset runs before the
+	// no-talents early return), and the frame is resent exactly once:
+	// resetTalents already sends on success, so the binding sends only
+	// on its false paths. ResetTalentsCost reads the escalating ladder
+	// (resetTalentsCost). ResetPetTalents runs the shared hunter-pet arm
+	// and resends the pet frame exactly once the same way.
+	// SetFreeTalentPoints stays out: free points are derived from the
+	// talent map, so there is no stored field a set could write (the
+	// at-login/title-spec strip's parked verdict).
+	methods["HasTalent"] = func(_ context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		spec, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if spec >= 2 {
+			return []any{nil}, nil
+		}
+		if s.server == nil || s.server.Data == nil {
+			return []any{false}, nil
+		}
+		talentID, rank, ok := s.server.Data.TalentBySpell(spellID)
+		if !ok {
+			return []any{false}, nil
+		}
+		talents := state.Talents
+		if uint8(spec) != state.ActiveTalentGroup {
+			talents = s.loadTalentsForGroup(uint8(spec))
+		}
+		learned, has := talents[talentID]
+		return []any{has && learned == rank}, nil
+	}
+	methods["LearnTalent"] = func(ctx context.Context, args []any) ([]any, error) {
+		talentID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		rank, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		learned := s.learnTalent(ctx, talentID, rank)
+		_ = s.sendTalentsInfo(false)
+		if learned && s.server != nil && s.server.Data != nil {
+			if tEntry, ok, terr := s.server.Data.Talent(talentID); terr == nil && ok && rank < uint32(len(tEntry.SpellRank)) {
+				s.triggerPlayerEvent(ctx, scripting.PlayerEventLearnTalents, s.luaPlayer(), talentID, rank, tEntry.SpellRank[rank])
+			}
+		}
+		return nil, nil
+	}
+	methods["ResetTalents"] = func(ctx context.Context, args []any) ([]any, error) {
+		noCost := true
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				noCost = b
+			}
+		}
+		s.triggerPlayerEvent(ctx, scripting.PlayerEventTalentReset, s.luaPlayer(), noCost)
+		if !s.resetTalents(ctx, noCost) {
+			_ = s.sendTalentsInfo(false)
+		}
+		return nil, nil
+	}
+	methods["ResetTalentsCost"] = luaNoArgs(func() any { return s.resetTalentsCost() })
+	methods["ResetPetTalents"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if !s.resetActivePetTalents(ctx) {
+			_ = s.sendTalentsInfo(true)
+		}
+		return nil, nil
+	}
 	methods["GetReputation"] = func(_ context.Context, args []any) ([]any, error) {
 		faction, err := luaUint32Arg(args, 0)
 		if err != nil {

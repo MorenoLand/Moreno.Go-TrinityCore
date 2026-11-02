@@ -1014,20 +1014,23 @@ func (s *session) activePetSpellCount(ctx context.Context) int {
 // is no active pet, the pet isn't a hunter pet, or it has no learned talent
 // spells (the m_usedTalentCount == 0 early return, which sends no client
 // packet). The creature-family PetTalentType check has no Go bridge — hunter
-// pets always carry a talent type in practice.
-func (s *session) resetActivePetTalents(ctx context.Context) {
+// pets always carry a talent type in practice. Returns true only when a
+// pet's talents were actually reset, so callers that must resend the pet
+// frame unconditionally (the Eluna ResetPetTalents binding) can send on
+// the false paths without double-sending on success.
+func (s *session) resetActivePetTalents(ctx context.Context) bool {
 	petNumber := s.activePetNumber()
 	if petNumber == 0 || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
+		return false
 	}
 	cdb := s.server.CharactersStore.DB
 	var petType int64
 	if err := cdb.QueryRowContext(ctx, "SELECT PetType FROM character_pet WHERE id = ? AND owner = ?", petNumber, s.playerGUID).Scan(&petType); err != nil || petType != int64(petTypeHunter) {
-		return
+		return false
 	}
 	talentSpells := s.activePetLearnedTalentSpells(ctx)
 	if len(talentSpells) == 0 {
-		return
+		return false
 	}
 	// Pet::resetTalents (Pet.cpp:1629) clears AT_LOGIN_RESET_PET_TALENTS on
 	// every interactive reset (Player::ResetPetTalents -> pet->resetTalents),
@@ -1051,6 +1054,7 @@ func (s *session) resetActivePetTalents(ctx context.Context) {
 		s.sendPetSpells(ctx, petNumber, 0, 1)
 	}
 	_ = s.sendTalentsInfo(true)
+	return true
 }
 
 func ShouldTemporarilyUnsummonSavedPet(health, playerFlags, unitFlags, mountDisplay uint32, temporarySummon bool) bool {
