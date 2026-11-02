@@ -216,6 +216,17 @@ const (
 	// cannot alter the outgoing packet (LuaEngine/PacketHooks.cpp:42-80,
 	// CallOneFunction(n, 2, 1)).
 	ServerEventPacketSend = 7
+	// ServerEventOpenStateChange is WORLD_EVENT_ON_OPEN_STATE_CHANGE
+	// (LuaEngine/Hooks.h:129 = 8, args (event, open)): World::SetClosed
+	// inverts the value for scripters (World.cpp:208), so "closed on"
+	// pushes open=false and "closed off" pushes open=true.
+	ServerEventOpenStateChange = 8
+	// ServerEventWeatherChange is WEATHER_EVENT_ON_CHANGE
+	// (LuaEngine/Hooks.h:137 = 25, args (event, zoneId, state, grade)):
+	// Weather::UpdateWeather fires it via ScriptMgr::OnWeatherChange
+	// only when players in the zone received the packet (Weather.cpp),
+	// with state from GetWeatherState and grade the clamped intensity.
+	ServerEventWeatherChange = 25
 )
 
 // Eluna CreatureEvents contract for RegisterCreatureEvent /

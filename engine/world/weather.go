@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -91,6 +92,54 @@ func (w *zoneWeather) regenerate(now time.Time) bool {
 	return w.Type != oldType || w.Intensity != oldIntensity
 }
 
+// weatherState mirrors Weather::GetWeatherState (Weather.cpp): the
+// packet state for the stored type/intensity, with the same 0.27/0.40/
+// 0.70 thresholds and the same state values (sandstorm 22/41/42,
+// thunders 86, blackrain 90). packet() and the WEATHER_EVENT_ON_CHANGE
+// fire both use it, so the event state always matches the wire state.
+func (w *zoneWeather) weatherState() uint32 {
+	if w == nil {
+		return 0
+	}
+	intensity := w.Intensity
+	if intensity >= 1 {
+		intensity = 0.9999
+	} else if intensity < 0 {
+		intensity = 0.0001
+	}
+	if intensity < 0.27 {
+		return 0
+	}
+	switch w.Type {
+	case weatherRain:
+		if intensity < 0.40 {
+			return 3
+		} else if intensity < 0.70 {
+			return 4
+		}
+		return 5
+	case weatherSnow:
+		if intensity < 0.40 {
+			return 6
+		} else if intensity < 0.70 {
+			return 7
+		}
+		return 8
+	case weatherStorm:
+		if intensity < 0.40 {
+			return 22
+		} else if intensity < 0.70 {
+			return 41
+		}
+		return 42
+	case weatherThunders:
+		return 86
+	case weatherBlackRain:
+		return 90
+	}
+	return 0
+}
+
 func (w *zoneWeather) packet() []byte {
 	if w == nil {
 		return nil
@@ -102,39 +151,7 @@ func (w *zoneWeather) packet() []byte {
 	if intensity < 0 {
 		intensity = 0.0001
 	}
-	state := uint32(0)
-	if intensity >= 0.27 {
-		switch w.Type {
-		case weatherRain:
-			if intensity < 0.40 {
-				state = 3
-			} else if intensity < 0.70 {
-				state = 4
-			} else {
-				state = 5
-			}
-		case weatherSnow:
-			if intensity < 0.40 {
-				state = 6
-			} else if intensity < 0.70 {
-				state = 7
-			} else {
-				state = 8
-			}
-		case weatherStorm:
-			if intensity < 0.40 {
-				state = 22
-			} else if intensity < 0.70 {
-				state = 41
-			} else {
-				state = 42
-			}
-		case weatherThunders:
-			state = 86
-		case weatherBlackRain:
-			state = 90
-		}
-	}
+	state := w.weatherState()
 	return protocol.BuildWeather(state, intensity, false)
 }
 
@@ -212,7 +229,7 @@ func (s *Server) broadcastZoneWeather(zone uint32, packet []byte) {
 // type and intensity already match, otherwise the zone weather is replaced
 // and broadcast immediately. The stored intensity is clamped in place the
 // way UpdateWeather does it (>= 1 to 0.9999, < 0 to 0.0001).
-func (s *Server) setZoneWeather(zone uint32, wtype weatherType, intensity float32) {
+func (s *Server) setZoneWeather(ctx context.Context, zone uint32, wtype weatherType, intensity float32) {
 	if s == nil {
 		return
 	}
@@ -229,8 +246,14 @@ func (s *Server) setZoneWeather(zone uint32, wtype weatherType, intensity float3
 		w.Intensity = 0.0001
 	}
 	packet := w.packet()
+	state, grade := w.weatherState(), w.Intensity
 	s.weatherMu.Unlock()
 	s.broadcastZoneWeather(zone, packet)
+	// Weather::SetWeather fires OnWeatherChange only via UpdateWeather,
+	// which fires only when players in the zone received the packet.
+	if s.zoneHasPlayers(zone) && s.Features != nil && s.Features.Scripts != nil {
+		_, _ = s.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventWeatherChange, zone, state, grade)
+	}
 }
 
 func (s *Server) zoneHasPlayers(zone uint32) bool {
@@ -270,6 +293,8 @@ func (s *Server) updateWeather(ctx context.Context, now time.Time) {
 	type update struct {
 		zone   uint32
 		packet []byte
+		state  uint32
+		grade  float32
 	}
 	updates := make([]update, 0)
 	changedZones := make([]uint32, 0)
@@ -308,12 +333,16 @@ func (s *Server) updateWeather(ctx context.Context, now time.Time) {
 		s.weatherMu.Lock()
 		w := s.weather[zone]
 		var packet []byte
+		var state uint32
+		var grade float32
 		if w != nil {
 			packet = w.packet()
+			state = w.weatherState()
+			grade = w.Intensity
 		}
 		s.weatherMu.Unlock()
 		if packet != nil {
-			updates = append(updates, update{zone: zone, packet: packet})
+			updates = append(updates, update{zone: zone, packet: packet, state: state, grade: grade})
 		}
 	}
 	if len(updates) == 0 {
@@ -321,5 +350,12 @@ func (s *Server) updateWeather(ctx context.Context, now time.Time) {
 	}
 	for _, update := range updates {
 		s.broadcastZoneWeather(update.zone, update.packet)
+		// Weather::UpdateWeather fires OnWeatherChange only for zones
+		// whose packet reached players (SendZoneMessage true); the
+		// zoneHasPlayers gate above is that same gate, so the fire
+		// sits on the broadcast leg, not the regeneration leg.
+		if s.Features != nil && s.Features.Scripts != nil {
+			_, _ = s.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventWeatherChange, update.zone, update.state, update.grade)
+		}
 	}
 }

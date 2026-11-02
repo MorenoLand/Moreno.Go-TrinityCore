@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
 
 // server command port: server_commandscript (cs_server.cpp), the "server"
@@ -359,9 +361,17 @@ func (s *session) handleServerSetClosed(ctx context.Context, args []string) {
 	case "on":
 		s.server.closed.Store(true)
 		s.sendSysMessage("World closed.") // LANG_WORLD_CLOSED 7523
+		// World::SetClosed inverts the value for scripters
+		// (World.cpp:208): closed on pushes open=false.
+		if s.server.Features != nil && s.server.Features.Scripts != nil {
+			_, _ = s.server.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventOpenStateChange, false)
+		}
 	case "off":
 		s.server.closed.Store(false)
 		s.sendSysMessage("World opened.") // LANG_WORLD_OPENED 7524
+		if s.server.Features != nil && s.server.Features.Scripts != nil {
+			_, _ = s.server.Features.Scripts.TriggerServerEvent(ctx, scripting.ServerEventOpenStateChange, true)
+		}
 	default:
 		s.sendSysMessage("Use on/off.") // LANG_USE_BOL 259
 	}

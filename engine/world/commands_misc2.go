@@ -794,7 +794,7 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 		s.sendSysMessage("There is no weather in this zone.")
 		return
 	}
-	s.server.setZoneWeather(s.player.Zone, weatherType(typeVal), float32(intensity))
+	s.server.setZoneWeather(ctx, s.player.Zone, weatherType(typeVal), float32(intensity))
 }
 
 // handleCmdMailBox mirrors HandleMailBoxCommand (cs_misc.cpp:2566-2574, RBAC
