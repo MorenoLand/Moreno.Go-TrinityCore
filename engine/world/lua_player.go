@@ -85,6 +85,23 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return uint32(state.GUID) })
 	methods["GetMapId"] = luaNoArgs(func() any { return state.Map })
 	methods["GetInstanceId"] = luaNoArgs(func() any { return state.InstanceID })
+	// GetPhaseMask is WorldObject::GetPhaseMask (WorldObjectMethods.h):
+	// the player's derived phase mask (phase-aura union, PHASEMASK_NORMAL
+	// when none, all phases for GMs — currentPlayerPhaseMask in death.go).
+	// There is no player SetPhaseMask twin: C++ player phase is derived
+	// by the PhaseMgr from auras/conditions, not stored, so a direct set
+	// would be overwritten; it stays out.
+	methods["GetPhaseMask"] = luaNoArgs(func() any { return s.currentPlayerPhaseMask() })
+	// GetMap is WorldObject::GetMap: the DBC-backed Map object for the
+	// player's map/instance (NewMapObject + mapLiveFromStore, the same
+	// builder behind the creature surface and the instance hooks' map
+	// argument). Nil when the server store is unavailable.
+	methods["GetMap"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil || s.server.Data == nil {
+			return []any{nil}, nil
+		}
+		return []any{scripting.NewMapObject(state.Map, state.InstanceID, mapLiveFromStore(s.server.Data, state.Map))}, nil
+	}
 	methods["GetObjectType"] = luaNoArgs(func() any { return "Player" })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
 	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
@@ -1526,6 +1543,26 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		origin := tempSummonOrigin{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID, X: state.X, Y: state.Y, Z: state.Z, O: state.Orientation, Reach: float64(state.CombatReach)}
 		summoned := s.server.summonTempCreature(ctx, origin, entry, x, y, z, o, uint8(summonType), despawnMs)
+		if summoned == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.server.luaMotionCreature(summoned)}, nil
+	}
+	// SpawnCreature is WorldObject::SpawnCreature (WorldObjectMethods.h),
+	// the Eluna 1-8 spawn-type twin of SummonCreature; the shared
+	// spawnCreatureFromOrigin funnel (lua_creature_events.go) documents
+	// the type translation and the seconds-to-milliseconds despawn
+	// conversion. The player summoner carries no creature AI, so no
+	// event-19 fire runs, matching the player SummonCreature twin.
+	methods["SpawnCreature"] = func(ctx context.Context, args []any) ([]any, error) {
+		if s.server == nil {
+			return []any{nil}, nil
+		}
+		origin := tempSummonOrigin{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID, X: state.X, Y: state.Y, Z: state.Z, O: state.Orientation, Reach: float64(state.CombatReach)}
+		summoned, err := s.server.spawnCreatureFromOrigin(ctx, origin, args)
+		if err != nil {
+			return nil, err
+		}
 		if summoned == nil {
 			return []any{nil}, nil
 		}

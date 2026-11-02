@@ -183,6 +183,63 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 	return summoned
 }
 
+// spawnCreatureFromOrigin is the WorldObject::SpawnCreature
+// (WorldObjectMethods.h) twin behind the SpawnCreature bridge on the
+// creature, player, and gameobject surfaces: it shares summonTempCreature
+// with SummonCreature but takes the Eluna SpawnCreature signature
+// (entry, x, y, z, o, spawnType = 8, despawnTimer = 0). The Trinity branch
+// of SpawnCreature accepts only types 1-8 and luaL_argerrors otherwise
+// (the 9/10 OOC-or-corpse/dead types exist only in the MaNGOS branch), so
+// types outside 1-8 error here too; the Eluna type translates to the
+// bridge's 0-based scheme by subtracting 1 (8 MANUAL_DESPAWN -> 7). The
+// despawn timer is seconds in C++ (Seconds(despawnTimer) at the
+// SummonCreature call), while summonTempCreature takes milliseconds, so
+// it is scaled by 1000 and capped at the uint32 millisecond ceiling.
+func (s *Server) spawnCreatureFromOrigin(ctx context.Context, origin tempSummonOrigin, args []any) (*creatureMotion, error) {
+	entry, err := luaUint32Arg(args, 0)
+	if err != nil {
+		return nil, err
+	}
+	x, err := luaFloat32Arg(args, 1)
+	if err != nil {
+		return nil, err
+	}
+	y, err := luaFloat32Arg(args, 2)
+	if err != nil {
+		return nil, err
+	}
+	z, err := luaFloat32Arg(args, 3)
+	if err != nil {
+		return nil, err
+	}
+	o, err := luaFloat32Arg(args, 4)
+	if err != nil {
+		return nil, err
+	}
+	spawnType := uint32(8)
+	if len(args) > 5 {
+		if spawnType, err = luaUint32Arg(args, 5); err != nil {
+			return nil, err
+		}
+		if spawnType < 1 || spawnType > 8 {
+			return nil, fmt.Errorf("valid SpawnType expected")
+		}
+	}
+	var despawnMs uint32
+	if len(args) > 6 {
+		despawnSecs, err := luaUint32Arg(args, 6)
+		if err != nil {
+			return nil, err
+		}
+		if despawnSecs > 4294967 {
+			despawnMs = 4294967295
+		} else {
+			despawnMs = despawnSecs * 1000
+		}
+	}
+	return s.summonTempCreature(ctx, origin, entry, x, y, z, o, uint8(spawnType-1), despawnMs), nil
+}
+
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	if s == nil || motion == nil {
 		return nil
@@ -1666,6 +1723,32 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		_, areaID := s.zoneAndAreaID(mapID, x, y, z, 0)
 		return []any{areaID}, nil
 	}
+	// GetPhaseMask/SetPhaseMask are WorldObject::GetPhaseMask/SetPhaseMask
+	// (WorldObjectMethods.h, WotLK branch): the motion's stored phase mask.
+	// SetPhaseMask takes the mask and an optional update flag (default true
+	// in C++); Go broadcasts are phase-filtered at send time, so the stored
+	// mask governs all future broadcasts, but no immediate create/destroy
+	// fan-out runs for the update leg (C++ UpdateObjectVisibility) — Go
+	// keeps no persistent per-player visibility set to refresh.
+	methods["GetPhaseMask"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		phase := motion.PhaseMask
+		s.motionMu.Unlock()
+		return []any{phase}, nil
+	}
+	methods["SetPhaseMask"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetPhaseMask requires a phase mask")
+		}
+		mask, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.PhaseMask = mask
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// SetHover is Creature::SetHover (Creature.cpp:3105): flips
 	// MOVEMENTFLAG_HOVER with the C++ no-op-on-unchanged early-out, then
 	// broadcasts SMSG_SPLINE_MOVE_SET_HOVER/UNSET_HOVER (packed GUID only,
@@ -1846,6 +1929,20 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 		}
 		summoned := s.summonTempCreature(ctx, s.summonOriginFromMotion(motion), entry, x, y, z, o, uint8(summonType), despawnMs)
+		if summoned == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.luaMotionCreature(summoned)}, nil
+	}
+	// SpawnCreature is WorldObject::SpawnCreature (WorldObjectMethods.h),
+	// the Eluna 1-8 spawn-type twin of SummonCreature; the shared
+	// spawnCreatureFromOrigin funnel above documents the type translation
+	// and the seconds-to-milliseconds despawn conversion.
+	methods["SpawnCreature"] = func(ctx context.Context, args []any) ([]any, error) {
+		summoned, err := s.spawnCreatureFromOrigin(ctx, s.summonOriginFromMotion(motion), args)
+		if err != nil {
+			return nil, err
+		}
 		if summoned == nil {
 			return []any{nil}, nil
 		}

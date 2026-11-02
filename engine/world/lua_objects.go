@@ -55,6 +55,7 @@ type luaGameObjectState struct {
 	Type        uint32
 	GoState     uint32
 	LootState   uint32
+	PhaseMask   uint32
 }
 
 // luaSoundTargetSession resolves the optional [Player] argument (args[1]) of
@@ -1196,7 +1197,7 @@ func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Obj
 func (srv *Server) loadLuaGameObject(ctx context.Context, low, entry uint32) (luaGameObjectState, bool) {
 	var state luaGameObjectState
 	var mapID int64
-	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z, g.orientation, t.type FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &state.Type); err != nil {
+	if err := srv.WorldStore.DB.QueryRowContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.map, g.position_x, g.position_y, g.position_z, g.orientation, t.type, COALESCE(g.phaseMask, 0) FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.guid = ? AND g.id = ?", low, entry).Scan(&state.LowGUID, &state.Entry, &state.DisplayID, &state.Name, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &state.Type, &state.PhaseMask); err != nil {
 		return state, false
 	}
 	state.Map, state.GUID = uint32(mapID), gameObjectGUID(state.LowGUID, state.Entry)
@@ -1262,6 +1263,23 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	methods["GetAreaId"] = func(_ context.Context, _ []any) ([]any, error) {
 		_, areaID := srv.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, 0)
 		return []any{areaID}, nil
+	}
+	// GetPhaseMask is WorldObject::GetPhaseMask (WorldObjectMethods.h):
+	// the gameobject state's stored phase mask (DB phaseMask for static
+	// spawns, spawn phase for runtime spawns). There is no GO SetPhaseMask
+	// twin: Go carries no live phase-change path for gameobjects (static
+	// phase is spawn-time DB data, runtime phase is stamped at spawn), so
+	// a set would have no live object to write; it stays out.
+	methods["GetPhaseMask"] = luaNoArgs(func() any { return state.PhaseMask })
+	// GetMap is WorldObject::GetMap: the DBC-backed Map object for the
+	// gameobject's map/instance (NewMapObject + mapLiveFromStore, the same
+	// builder behind the creature surface and the instance hooks' map
+	// argument). Nil when the server store is unavailable.
+	methods["GetMap"] = func(_ context.Context, _ []any) ([]any, error) {
+		if srv.Data == nil {
+			return []any{nil}, nil
+		}
+		return []any{scripting.NewMapObject(state.Map, state.InstanceID, mapLiveFromStore(srv.Data, state.Map))}, nil
 	}
 	// IsHolidayActive is GameEventMgr::IsHolidayActive
 	// (GameEventMgr.cpp:1847): true when any currently active game event
@@ -1482,6 +1500,23 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{srv.luaMotionCreature(summoned)}, nil
 	}
+	// SpawnCreature is WorldObject::SpawnCreature (WorldObjectMethods.h),
+	// the Eluna 1-8 spawn-type twin of SummonCreature; the shared
+	// spawnCreatureFromOrigin funnel (lua_creature_events.go) documents
+	// the type translation and the seconds-to-milliseconds despawn
+	// conversion. Gameobjects carry no combat reach, so the close-point
+	// fallback uses reach 0, matching the GO SummonCreature twin.
+	methods["SpawnCreature"] = func(ctx context.Context, args []any) ([]any, error) {
+		origin := tempSummonOrigin{Map: state.Map, InstanceID: state.InstanceID, GUID: state.GUID, X: state.X, Y: state.Y, Z: state.Z, O: state.Orientation, Reach: 0}
+		summoned, err := srv.spawnCreatureFromOrigin(ctx, origin, args)
+		if err != nil {
+			return nil, err
+		}
+		if summoned == nil {
+			return []any{nil}, nil
+		}
+		return []any{srv.luaMotionCreature(summoned)}, nil
+	}
 	methods["RemoveFromWorld"] = func(_ context.Context, _ []any) ([]any, error) {
 		// C++ GameObject::Delete removes the object outright; for a
 		// runtime GO that means despawning it (destroy broadcast +
@@ -1638,7 +1673,7 @@ func (s *session) objectsMuUnlockGameObject(mapID, instanceID uint32, guid uint6
 }
 
 func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y float32, distance float32) *scripting.Object {
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation, COALESCE(g.phaseMask, 0) FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
 	if err != nil {
 		return nil
 	}
@@ -1647,7 +1682,7 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 	nearestDistance := float32(math.MaxFloat32)
 	for rows.Next() {
 		var candidate luaGameObjectState
-		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation); err != nil {
+		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation, &candidate.PhaseMask); err != nil {
 			continue
 		}
 		candidate.Map = mapID
@@ -1676,7 +1711,7 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 // (SummonGameObject/spell/BG summons), which C++'s grid search also finds.
 // Instance-hidden objects are skipped, matching the unfiltered twin.
 func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instanceID uint32, x, y, z float32, entry uint32, distance float32) *scripting.Object {
-	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
+	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation, COALESCE(g.phaseMask, 0) FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
 	if err != nil {
 		return nil
 	}
@@ -1685,7 +1720,7 @@ func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instance
 	nearestDistance := float32(math.MaxFloat32)
 	for rows.Next() {
 		var candidate luaGameObjectState
-		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation); err != nil {
+		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation, &candidate.PhaseMask); err != nil {
 			continue
 		}
 		candidate.Map = mapID
@@ -1720,7 +1755,7 @@ func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instance
 		if currentDistance > distance {
 			return
 		}
-		dynCandidates = append(dynCandidates, dynCandidate{state: luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, Orientation: dyn.Orientation, Type: uint32(dyn.Type), GoState: uint32(dyn.State), LootState: 1}, distance: currentDistance})
+		dynCandidates = append(dynCandidates, dynCandidate{state: luaGameObjectState{GUID: dyn.GUID, LowGUID: dyn.LowGUID, Entry: dyn.Entry, DisplayID: dyn.DisplayID, Map: dyn.Map, InstanceID: dyn.InstanceID, X: dyn.X, Y: dyn.Y, Z: dyn.Z, Orientation: dyn.Orientation, Type: uint32(dyn.Type), GoState: uint32(dyn.State), LootState: 1, PhaseMask: dyn.PhaseMask}, distance: currentDistance})
 	}
 	for _, dyn := range srv.dynamicGameObjects {
 		collectDyn(dyn)
@@ -1754,7 +1789,7 @@ func (srv *Server) nearestGameObjectByEntry(ctx context.Context, mapID, instance
 // the creature list). DB-spawn model only, instance-hidden skipped,
 // GUID-sorted for determinism (the C++ grid-visit order is unspecified).
 func (srv *Server) gameObjectsInGridByEntry(ctx context.Context, mapID, instanceID uint32, x, y float32, entry uint32, distance float32) []*scripting.Object {
-	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
+	rows, err := srv.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, t.displayId, t.name, g.position_x, g.position_y, g.position_z, g.orientation, COALESCE(g.phaseMask, 0) FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id WHERE g.map = ? AND g.id = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? ORDER BY g.guid", mapID, entry, float64(x-distance), float64(x+distance), float64(y-distance), float64(y+distance))
 	if err != nil {
 		return nil
 	}
@@ -1762,7 +1797,7 @@ func (srv *Server) gameObjectsInGridByEntry(ctx context.Context, mapID, instance
 	var matches []luaGameObjectState
 	for rows.Next() {
 		var candidate luaGameObjectState
-		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation); err != nil {
+		if err := rows.Scan(&candidate.LowGUID, &candidate.Entry, &candidate.DisplayID, &candidate.Name, &candidate.X, &candidate.Y, &candidate.Z, &candidate.Orientation, &candidate.PhaseMask); err != nil {
 			continue
 		}
 		candidate.Map = mapID

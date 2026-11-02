@@ -157,14 +157,45 @@ func genericObjectMethod(object *Object, name string) (ObjectMethod, bool) {
 		}, true
 	case "GetDistance", "GetExactDistance", "GetDistance2d", "GetExactDistance2d":
 		return func(_ context.Context, args []any) ([]any, error) {
-			other, err := objectArgument(args)
-			if err != nil {
-				return nil, err
+			twoDimensional := strings.HasSuffix(name, "2d")
+			if len(args) == 0 {
+				return nil, fmt.Errorf("%s requires an object or coordinates", name)
 			}
-			distance := objectDistance(object, other, strings.HasSuffix(name, "2d"))
-			return []any{distance}, nil
+			if other, ok := args[0].(*Object); ok && other != nil {
+				distance := objectDistance(object, other, twoDimensional)
+				return []any{distance}, nil
+			}
+			// Point form (WorldObjectMethods.h: GetDistance(x, y, z),
+			// GetDistance2d(x, y) and the Exact twins): previously the
+			// object-only path errored on a numeric first argument.
+			// Generic objects carry no combat reach in Fields, so the
+			// point form uses the same center-distance model as Go's
+			// existing object form (the C++ reach subtraction is
+			// unmodeled here, matching the object form already in tree).
+			need := 3
+			if twoDimensional {
+				need = 2
+			}
+			if len(args) < need {
+				return nil, fmt.Errorf("%s requires an object or %d coordinates", name, need)
+			}
+			point := make([]float64, need)
+			for i := 0; i < need; i++ {
+				value, ok := numericValue(args[i])
+				if !ok {
+					return nil, fmt.Errorf("coordinate must be numeric")
+				}
+				point[i] = value
+			}
+			dx := float64(objectFloat(object, "X")) - point[0]
+			dy := float64(objectFloat(object, "Y")) - point[1]
+			if twoDimensional {
+				return []any{float32(math.Hypot(dx, dy))}, nil
+			}
+			dz := float64(objectFloat(object, "Z")) - point[2]
+			return []any{float32(math.Sqrt(dx*dx + dy*dy + dz*dz))}, nil
 		}, true
-	case "IsWithinDist", "IsWithinDistInMap", "IsWithinDist3d", "IsInRange", "IsInRange3d":
+	case "IsWithinDist", "IsWithinDistInMap":
 		return func(_ context.Context, args []any) ([]any, error) {
 			if len(args) < 2 {
 				return nil, fmt.Errorf("%s requires an object and distance", name)
@@ -182,30 +213,139 @@ func genericObjectMethod(object *Object, name string) (ObjectMethod, bool) {
 			}
 			return []any{float64(objectDistance(object, other, false)) <= distance}, nil
 		}, true
-	case "IsWithinDist2d", "IsInRange2d":
+	case "IsWithinDist3d", "IsWithinDist2d":
+		// Point forms (WorldObjectMethods.h): IsWithinDist3d(x, y, z, dist)
+		// is IsInDist(x, y, z, dist + own reach) and IsWithinDist2d(x, y,
+		// dist) the 2D twin. Generic objects carry no reach in Fields,
+		// so the reach term is 0 and the check is exact distance <= dist.
+		// Previously these fell into the object+distance shape and errored
+		// on a numeric first argument.
 		return func(_ context.Context, args []any) ([]any, error) {
-			if len(args) < 2 {
-				return nil, fmt.Errorf("%s requires an object and distance", name)
+			twoDimensional := name == "IsWithinDist2d"
+			need := 4
+			if twoDimensional {
+				need = 3
+			}
+			if len(args) < need {
+				return nil, fmt.Errorf("%s requires coordinates and a distance", name)
+			}
+			point := make([]float64, need)
+			for i := 0; i < need; i++ {
+				value, ok := numericValue(args[i])
+				if !ok {
+					return nil, fmt.Errorf("coordinate or distance must be numeric")
+				}
+				point[i] = value
+			}
+			dx := float64(objectFloat(object, "X")) - point[0]
+			dy := float64(objectFloat(object, "Y")) - point[1]
+			var dist float64
+			if twoDimensional {
+				dist = math.Hypot(dx, dy)
+			} else {
+				dz := float64(objectFloat(object, "Z")) - point[2]
+				dist = math.Sqrt(dx*dx + dy*dy + dz*dz)
+			}
+			return []any{dist <= point[need-1]}, nil
+		}, true
+	case "IsInRange":
+		// Object band form (Object.cpp:1329): IsInRange(target, minRange,
+		// maxRange, is3D = true) checks the center distance against the
+		// band — below min (when min > 0) fails, at or above max fails
+		// (strict upper bound). Previously this fell into the
+		// object+single-distance shape, which is IsWithinDist semantics,
+		// not the C++ band. Reaches are uncarried on generic objects, so
+		// the sizefactor term is 0.
+		return func(_ context.Context, args []any) ([]any, error) {
+			if len(args) < 3 {
+				return nil, fmt.Errorf("IsInRange requires an object, minRange and maxRange")
 			}
 			other, err := objectArgument(args[:1])
 			if err != nil {
 				return nil, err
 			}
-			distance, ok := numericValue(args[1])
+			minRange, ok := numericValue(args[1])
 			if !ok {
-				return nil, fmt.Errorf("distance must be numeric")
+				return nil, fmt.Errorf("minRange must be numeric")
 			}
-			return []any{float64(objectDistance(object, other, true)) <= distance}, nil
+			maxRange, ok := numericValue(args[2])
+			if !ok {
+				return nil, fmt.Errorf("maxRange must be numeric")
+			}
+			twoDimensional := false
+			if len(args) > 3 {
+				if is3D, ok := args[3].(bool); ok {
+					twoDimensional = !is3D
+				}
+			}
+			dist := float64(objectDistance(object, other, twoDimensional))
+			if minRange > 0 && dist < minRange {
+				return []any{false}, nil
+			}
+			return []any{dist < maxRange}, nil
+		}, true
+	case "IsInRange2d", "IsInRange3d":
+		// Point band forms (Object.cpp:1354/1374): IsInRange2d(x, y, min,
+		// max) and IsInRange3d(x, y, z, min, max) with the same band
+		// rule as IsInRange and a zero sizefactor (see above). Previously
+		// these fell into the object+single-distance shape and errored
+		// on a numeric first argument.
+		return func(_ context.Context, args []any) ([]any, error) {
+			twoDimensional := name == "IsInRange2d"
+			need := 5
+			if twoDimensional {
+				need = 4
+			}
+			if len(args) < need {
+				return nil, fmt.Errorf("%s requires coordinates, minRange and maxRange", name)
+			}
+			point := make([]float64, need)
+			for i := 0; i < need; i++ {
+				value, ok := numericValue(args[i])
+				if !ok {
+					return nil, fmt.Errorf("coordinate or range must be numeric")
+				}
+				point[i] = value
+			}
+			dx := float64(objectFloat(object, "X")) - point[0]
+			dy := float64(objectFloat(object, "Y")) - point[1]
+			var dist float64
+			if twoDimensional {
+				dist = math.Hypot(dx, dy)
+			} else {
+				dz := float64(objectFloat(object, "Z")) - point[2]
+				dist = math.Sqrt(dx*dx + dy*dy + dz*dz)
+			}
+			minRange, maxRange := point[need-2], point[need-1]
+			if minRange > 0 && dist < minRange {
+				return []any{false}, nil
+			}
+			return []any{dist < maxRange}, nil
 		}, true
 	case "GetAngle":
 		return func(_ context.Context, args []any) ([]any, error) {
-			other, err := objectArgument(args)
-			if err != nil {
-				return nil, err
-			}
 			x1, y1 := objectFloat(object, "X"), objectFloat(object, "Y")
-			x2, y2 := objectFloat(other, "X"), objectFloat(other, "Y")
-			return []any{float32(math.Atan2(float64(y2-y1), float64(x2-x1)))}, nil
+			if len(args) == 0 {
+				return nil, fmt.Errorf("GetAngle requires an object or coordinates")
+			}
+			if other, ok := args[0].(*Object); ok && other != nil {
+				x2, y2 := objectFloat(other, "X"), objectFloat(other, "Y")
+				return []any{float32(math.Atan2(float64(y2-y1), float64(x2-x1)))}, nil
+			}
+			// Point form (WorldObjectMethods.h: GetAngle(x, y)): previously
+			// the object-only path errored on a numeric first argument.
+			if len(args) < 2 {
+				return nil, fmt.Errorf("GetAngle requires an object or x and y coordinates")
+			}
+			x2, ok := numericValue(args[0])
+			if !ok {
+				return nil, fmt.Errorf("x coordinate must be numeric")
+			}
+			y2, ok := numericValue(args[1])
+			if !ok {
+				return nil, fmt.Errorf("y coordinate must be numeric")
+			}
+			return []any{float32(math.Atan2(y2-float64(y1), x2-float64(x1)))}, nil
 		}, true
 	}
 	return nil, false
