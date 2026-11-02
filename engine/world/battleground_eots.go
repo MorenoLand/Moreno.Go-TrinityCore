@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -242,12 +243,19 @@ func (s *Server) getOrCreateEOTSState(mapID uint32) *eotsBattlegroundState {
 		return nil
 	}
 	s.eotsMu.Lock()
+	created := false
+	defer func() {
+		if created {
+			s.triggerBGEvent(mapID, scripting.BGEventOnCreate)
+		}
+	}()
 	defer s.eotsMu.Unlock()
 	if s.eotsState == nil {
 		s.eotsState = make(map[uint32]*eotsBattlegroundState)
 	}
 	state, ok := s.eotsState[mapID]
 	if !ok {
+		created = true
 		state = &eotsBattlegroundState{
 			MapID:          mapID,
 			MaxResources:   EOTSMaxResources,
@@ -366,10 +374,14 @@ func (s *Server) deleteEOTSState(mapID uint32) {
 	}
 	eots.mu.Unlock()
 	s.eotsMu.Lock()
-	if s.eotsState[mapID] == eots {
+	destroyed := s.eotsState[mapID] == eots
+	if destroyed {
 		delete(s.eotsState, mapID)
 	}
 	s.eotsMu.Unlock()
+	if destroyed {
+		s.triggerBGEvent(mapID, scripting.BGEventOnPreDestroy)
+	}
 }
 
 func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
@@ -916,6 +928,7 @@ func (s *Server) addEOTSResources(eots *eotsBattlegroundState, team uint32, poin
 				eots.FlagReturnTimer = nil
 			}
 			s.announceEOTSVictory(eots.MapID, team)
+			s.triggerBGEvent(eots.MapID, scripting.BGEventOnEnd, team)
 		}
 	}
 	s.broadcastWorldState(eots.MapID, wsID, *resources)

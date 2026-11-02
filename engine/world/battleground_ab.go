@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -280,12 +281,19 @@ func (s *Server) getOrCreateABState(mapID uint32) *abBattlegroundState {
 		return nil
 	}
 	s.abMu.Lock()
+	created := false
+	defer func() {
+		if created {
+			s.triggerBGEvent(mapID, scripting.BGEventOnCreate)
+		}
+	}()
 	defer s.abMu.Unlock()
 	if s.abState == nil {
 		s.abState = make(map[uint32]*abBattlegroundState)
 	}
 	state, ok := s.abState[mapID]
 	if !ok {
+		created = true
 		state = &abBattlegroundState{
 			MapID:           mapID,
 			MaxResources:    ABMaxResources,
@@ -383,10 +391,14 @@ func (s *Server) deleteABState(mapID uint32) {
 	s.stopABNodeCaptureTimers(ab)
 	ab.mu.Unlock()
 	s.abMu.Lock()
-	if s.abState[mapID] == ab {
+	destroyed := s.abState[mapID] == ab
+	if destroyed {
 		delete(s.abState, mapID)
 	}
 	s.abMu.Unlock()
+	if destroyed {
+		s.triggerBGEvent(mapID, scripting.BGEventOnPreDestroy)
+	}
 }
 
 // handleABBannerUse processes player interaction with an Arathi Basin banner.
@@ -846,6 +858,7 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 					s.markBGSlotsWaitLeave(ab.MapID)
 					s.stopABNodeCaptureTimers(ab)
 					s.announceABVictory(ab.MapID, 0)
+					s.triggerBGEvent(ab.MapID, scripting.BGEventOnEnd, 0)
 				}
 				s.broadcastWorldState(ab.MapID, ABWorldStateAllianceResources, ab.AllianceResources)
 				// update achievement flags (BattlegroundAB.cpp:174-177): the
@@ -875,6 +888,7 @@ func (s *Server) TickResources(ab *abBattlegroundState, elapsedMs int64) {
 					s.markBGSlotsWaitLeave(ab.MapID)
 					s.stopABNodeCaptureTimers(ab)
 					s.announceABVictory(ab.MapID, 1)
+					s.triggerBGEvent(ab.MapID, scripting.BGEventOnEnd, 1)
 				}
 				s.broadcastWorldState(ab.MapID, ABWorldStateHordeResources, ab.HordeResources)
 				// update achievement flags (BattlegroundAB.cpp:174-177): the

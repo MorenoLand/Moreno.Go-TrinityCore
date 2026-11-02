@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
 
 // Isle of Conquest (IoC) Constants mirroring TrinityCore BattlegroundIC.h / BattlegroundIC.cpp.
@@ -440,12 +441,19 @@ func (s *Server) getOrCreateICState(mapID uint32) *icBattlegroundState {
 		return nil
 	}
 	s.icMu.Lock()
+	created := false
+	defer func() {
+		if created {
+			s.triggerBGEvent(mapID, scripting.BGEventOnCreate)
+		}
+	}()
 	defer s.icMu.Unlock()
 	if s.icState == nil {
 		s.icState = make(map[uint32]*icBattlegroundState)
 	}
 	state := s.icState[mapID]
 	if state == nil {
+		created = true
 		state = &icBattlegroundState{
 			MapID:                  mapID,
 			AllianceReinforcements: ICMaxReinforcements,
@@ -540,10 +548,14 @@ func (s *Server) deleteICState(mapID uint32) {
 	}
 	ic.mu.Unlock()
 	s.icMu.Lock()
-	if s.icState[mapID] == ic {
+	destroyed := s.icState[mapID] == ic
+	if destroyed {
 		delete(s.icState, mapID)
 	}
 	s.icMu.Unlock()
+	if destroyed {
+		s.triggerBGEvent(mapID, scripting.BGEventOnPreDestroy)
+	}
 }
 
 func (ic *icBattlegroundState) initNodes() {
@@ -1164,6 +1176,7 @@ func (s *Server) endIC(ic *icBattlegroundState, winner int8) {
 	// IsRandom/Weekend-gated winner/loser honor arms, which have no reachable
 	// model in Go); AB and EotS victories already credit through this helper.
 	s.creditBattlegroundWin(ic.MapID, uint32(winner))
+	s.triggerBGEvent(ic.MapID, scripting.BGEventOnEnd, winner)
 }
 
 func (s *Server) handleICPlayerLeave(sess *session) {

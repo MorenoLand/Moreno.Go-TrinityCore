@@ -229,6 +229,30 @@ const (
 	ServerEventWeatherChange = 25
 )
 
+// Eluna BGEvents contract for RegisterBGEvent. Numbering is the
+// TrinityCore LuaEngine numbering (LuaEngine/Hooks.h:334-337). All four
+// carry the "Needs to be added to TC" comment there: no ScriptMgr call
+// site invokes OnBGStart/OnBGEnd/OnBGCreate/OnBGDestroy in C++, so the
+// events never fire upstream. The Go engine fires them at its own
+// battleground lifecycle legs (world/triggerBGEvent) so registered
+// handlers are no longer dead; only the events the engine fires carry
+// Go constants.
+const (
+	// BGEventOnStart is BG_EVENT_ON_START (args (event, bg, bgId,
+	// instanceId)): fires when a match starts.
+	BGEventOnStart = 1
+	// BGEventOnEnd is BG_EVENT_ON_END (args (event, bg, bgId,
+	// instanceId, winner)): fires when a match ends; winner is the
+	// TeamId index (0 Alliance, 1 Horde, 2 neutral/draw).
+	BGEventOnEnd = 2
+	// BGEventOnCreate is BG_EVENT_ON_CREATE (args (event, bg, bgId,
+	// instanceId)): fires when a battleground state materializes.
+	BGEventOnCreate = 3
+	// BGEventOnPreDestroy is BG_EVENT_ON_PRE_DESTROY (args (event, bg,
+	// bgId, instanceId)): fires when a battleground state is removed.
+	BGEventOnPreDestroy = 4
+)
+
 // Eluna CreatureEvents contract for RegisterCreatureEvent /
 // RegisterUniqueCreatureEvent. The world engine fires these through
 // TriggerCreatureEvent; scripts use the raw event numbers. Numbering is the
@@ -755,6 +779,15 @@ func (r *Runtime) TriggerGroupEvent(ctx context.Context, event int, args ...any)
 // VehicleHooks.cpp), so the event number is prepended like TriggerGroupEvent.
 func (r *Runtime) TriggerVehicleEvent(ctx context.Context, event int, args ...any) ([]any, error) {
 	return r.Trigger(ctx, "vehicle", event, append([]any{event}, args...)...)
+}
+
+// TriggerBGEvent fires hooks registered with RegisterBGEvent(event, fn).
+// C++ Eluna battleground hooks pass (event, bg, bgId, instanceId[, winner])
+// (LuaEngine/BattleGroundHooks.cpp), so the event number is prepended like
+// TriggerVehicleEvent. Callers pass the C++ argument order without the
+// leading event.
+func (r *Runtime) TriggerBGEvent(ctx context.Context, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "bg", event, append([]any{event}, args...)...)
 }
 
 func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, args ...any) ([]any, error) {

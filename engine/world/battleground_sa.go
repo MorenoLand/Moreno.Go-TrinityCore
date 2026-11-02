@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
 
 // Strand of the Ancients (SotA) Constants mirroring TrinityCore BattlegroundSA.h / BattlegroundSA.cpp.
@@ -216,12 +217,19 @@ func (s *Server) getOrCreateSAState(mapID uint32) *saBattlegroundState {
 		return nil
 	}
 	s.saMu.Lock()
+	created := false
+	defer func() {
+		if created {
+			s.triggerBGEvent(mapID, scripting.BGEventOnCreate)
+		}
+	}()
 	defer s.saMu.Unlock()
 	if s.saState == nil {
 		s.saState = make(map[uint32]*saBattlegroundState)
 	}
 	state := s.saState[mapID]
 	if state == nil {
+		created = true
 		// Reference: BattlegroundSA::Reset (BattlegroundSA.cpp:78): the first
 		// attackers are picked with urand(0, 1); rounds after that swap sides.
 		attackers := SATeamAlliance
@@ -304,10 +312,14 @@ func (s *Server) deleteSAState(mapID uint32) {
 		return
 	}
 	s.saMu.Lock()
-	if s.saState[mapID] == sa {
+	destroyed := s.saState[mapID] == sa
+	if destroyed {
 		delete(s.saState, mapID)
 	}
 	s.saMu.Unlock()
+	if destroyed {
+		s.triggerBGEvent(mapID, scripting.BGEventOnPreDestroy)
+	}
 }
 
 // resetObjects resets gates, graveyards, and demolishers for a new round.
@@ -824,6 +836,7 @@ func (s *Server) endSA(sa *saBattlegroundState, winner int8) {
 	}
 	s.rewardBGEndHonor(sa.MapID, 0, 2)
 	s.rewardBGEndHonor(sa.MapID, 1, 2)
+	s.triggerBGEvent(sa.MapID, scripting.BGEventOnEnd, winner)
 }
 
 // handleSACreatureKilled tracks Demolisher kills and marks AllVehiclesAlive false.

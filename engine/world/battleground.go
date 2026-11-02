@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -2460,6 +2461,7 @@ func (s *Server) rearmNonArenaBGMatchStartTimeOnFirstAccept(accepting *session, 
 		state.MatchStartTime = now
 		state.mu.Unlock()
 	}
+	s.triggerBGEvent(mapID, scripting.BGEventOnStart)
 }
 
 // peekNonArenaBGState peeks the per-map battleground state for the six
@@ -3947,9 +3949,11 @@ func (s *Server) finishABPremature(ab *abBattlegroundState, winner int8) {
 		s.broadcastBattlegroundMessage(ab.MapID, "The battle ended in a draw!")
 		s.rewardBGEndHonor(ab.MapID, 0, 1)
 		s.rewardBGEndHonor(ab.MapID, 1, 1)
+		s.triggerBGEvent(ab.MapID, scripting.BGEventOnEnd, 2)
 		return
 	}
 	s.announceABVictory(ab.MapID, uint32(winner))
+	s.triggerBGEvent(ab.MapID, scripting.BGEventOnEnd, uint32(winner))
 }
 
 // finishAVPremature ends an AV match on premature expiry via endAV, whose
@@ -3984,9 +3988,11 @@ func (s *Server) finishEOTSPremature(eots *eotsBattlegroundState, winner int8) {
 		s.broadcastBattlegroundMessage(eots.MapID, "The battle ended in a draw!")
 		s.rewardBGEndHonor(eots.MapID, 0, 1)
 		s.rewardBGEndHonor(eots.MapID, 1, 1)
+		s.triggerBGEvent(eots.MapID, scripting.BGEventOnEnd, 2)
 		return
 	}
 	s.announceEOTSVictory(eots.MapID, uint32(winner))
+	s.triggerBGEvent(eots.MapID, scripting.BGEventOnEnd, uint32(winner))
 }
 
 // finishSAPremature ends an SA match on premature expiry via endSA, which

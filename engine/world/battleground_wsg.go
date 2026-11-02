@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -185,12 +186,19 @@ func (s *Server) getOrCreateWSGState(mapID uint32) *wsgBattlegroundState {
 		return nil
 	}
 	s.wsgMu.Lock()
+	created := false
+	defer func() {
+		if created {
+			s.triggerBGEvent(mapID, scripting.BGEventOnCreate)
+		}
+	}()
 	defer s.wsgMu.Unlock()
 	if s.wsgState == nil {
 		s.wsgState = make(map[uint32]*wsgBattlegroundState)
 	}
 	state, ok := s.wsgState[mapID]
 	if !ok {
+		created = true
 		state = &wsgBattlegroundState{
 			MapID:             mapID,
 			AllianceScore:     0,
@@ -226,10 +234,14 @@ func (s *Server) deleteWSGState(mapID uint32) {
 	s.stopWSGMatchTimers(wsg)
 	wsg.mu.Unlock()
 	s.wsgMu.Lock()
-	if s.wsgState[mapID] == wsg {
+	destroyed := s.wsgState[mapID] == wsg
+	if destroyed {
 		delete(s.wsgState, mapID)
 	}
 	s.wsgMu.Unlock()
+	if destroyed {
+		s.triggerBGEvent(mapID, scripting.BGEventOnPreDestroy)
+	}
 }
 
 func (s *Server) handleWSGFlagUse(ctx context.Context, sess *session, guid uint64, entry uint32) bool {
@@ -1000,6 +1012,7 @@ func (s *Server) endWSGVictory(wsg *wsgBattlegroundState, mapID uint32, winningT
 	s.rewardBGEndHonor(WSGMapID, winningTeam, 1)
 	s.rewardBGEndHonor(WSGMapID, 0, 2)
 	s.rewardBGEndHonor(WSGMapID, 1, 2)
+	s.triggerBGEvent(mapID, scripting.BGEventOnEnd, winningTeam)
 }
 
 // stopWSGMatchTimers stops every armed WSG timer under the caller's wsg.mu.
@@ -1070,6 +1083,7 @@ func (s *Server) endWSGTie(wsg *wsgBattlegroundState, mapID uint32) {
 	s.creditBattlegroundWin(mapID, 2)
 	s.rewardBGEndHonor(WSGMapID, 0, 2)
 	s.rewardBGEndHonor(WSGMapID, 1, 2)
+	s.triggerBGEvent(mapID, scripting.BGEventOnEnd, 2)
 }
 
 // armWSGMatchTimer starts the 25-minute match clock on the first flag
@@ -1083,6 +1097,7 @@ func (s *Server) armWSGMatchTimer(wsg *wsgBattlegroundState, mapID uint32) {
 		return
 	}
 	wsg.MatchStartTime = time.Now()
+	s.triggerBGEvent(mapID, scripting.BGEventOnStart)
 	s.broadcastWorldState(mapID, WSWorldStateTimerActive, 1)
 	s.broadcastWorldState(mapID, WSWorldStateTimer, 25)
 	wsg.MatchMinuteTimer = time.AfterFunc(time.Minute, func() {

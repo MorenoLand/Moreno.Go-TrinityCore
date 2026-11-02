@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -340,12 +341,19 @@ func (s *Server) getOrCreateAVState(mapID uint32) *avBattlegroundState {
 		return nil
 	}
 	s.objectsMu.Lock()
+	created := false
+	defer func() {
+		if created {
+			s.triggerBGEvent(mapID, scripting.BGEventOnCreate)
+		}
+	}()
 	defer s.objectsMu.Unlock()
 	if s.avState == nil {
 		s.avState = make(map[uint32]*avBattlegroundState)
 	}
 	state := s.avState[mapID]
 	if state == nil {
+		created = true
 		state = &avBattlegroundState{
 			MapID:                  mapID,
 			AllianceReinforcements: AVMaxReinforcements,
@@ -482,10 +490,14 @@ func (s *Server) deleteAVState(mapID uint32) {
 	}
 	av.mu.Unlock()
 	s.objectsMu.Lock()
-	if s.avState[mapID] == av {
+	destroyed := s.avState[mapID] == av
+	if destroyed {
 		delete(s.avState, mapID)
 	}
 	s.objectsMu.Unlock()
+	if destroyed {
+		s.triggerBGEvent(mapID, scripting.BGEventOnPreDestroy)
+	}
 }
 
 // handleAVQuestComplete mirrors BattlegroundAV::HandleQuestComplete
@@ -1375,6 +1387,7 @@ func (s *Server) endAV(av *avBattlegroundState, winner int8) {
 			s.rewardBGEndHonor(av.MapID, team, kills[team])
 		}
 	}
+	s.triggerBGEvent(av.MapID, scripting.BGEventOnEnd, winner)
 }
 
 func (s *Server) sendAVInitialWorldStates(sess *session) {
