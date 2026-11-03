@@ -28375,6 +28375,32 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.stopAttackOnSpellFinish(spell)
 	}
 
+	// Spell::DoDamageAndTriggers AI legs (Spell.cpp:2629-2638, once per
+	// target): a triggered player cast never entered finishSpellCast, so
+	// its hit creatures never got the Eluna SpellHit leg
+	// (ElunaCreatureAI.h:220-226 -> CREATURE_EVENT_ON_HIT_BY_SPELL, 14)
+	// that the client path fires (spells.go:18682) and the creature-caster
+	// twin fires (boss_ai.go). goHitTargets is already the post-miss
+	// unique-target list (Spell.cpp:4486-4508), so missed, immune,
+	// evaded and reflected targets never fire, matching the _spellHitTarget
+	// gate (Spell.cpp:2347); the return-trip reflect hit lands on the
+	// player caster, not a creature, so it needs no leg here. The caster
+	// is a player on this path, so no SpellHitTarget (15) leg applies
+	// (Spell.cpp:2639 requires a creature or gameobject caster). Fired
+	// once per landed target at the finish tail, after the effect loop,
+	// like the client path; per-hit triggers already fired inside the
+	// effect loop on this path.
+	if s.server != nil {
+		for _, effectTarget := range goHitTargets {
+			high := uint16(effectTarget >> 48)
+			if high != 0xF130 && high != 0xF140 && high != 0xF150 {
+				continue
+			}
+			if motion := s.findCreatureMotion(effectTarget); motion != nil {
+				s.server.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnHitBySpell, s.luaPlayer(), spellID)
+			}
+		}
+	}
 	// Spell::_cast (Spell.cpp:3442-3450): the CAST_SPELL criterion updates for
 	// player casters with no triggered gate — a triggered cast counts as a
 	// cast, same as the client path (spells.go:8086). The cast-item USE_ITEM
