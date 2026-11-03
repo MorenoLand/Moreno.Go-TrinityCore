@@ -393,6 +393,8 @@ end
 
 local function ragnarosEnterCombat(event, creature, target)
     creature:SetCombatMovement(false) -- BossAI ctor arm, boss_ragnaros.cpp:91 (ranged AI stands and casts)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     state[guid] = { hasYelledMagmaBurst = false, hasSubmergedOnce = false }

@@ -110,6 +110,8 @@ local function onLavaBomb(creature, guid)
 end
 
 local function magmadarEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "frenzy", 30000, function()
