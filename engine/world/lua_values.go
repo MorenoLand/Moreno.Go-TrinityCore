@@ -330,6 +330,9 @@ func playerLuaDisplayID(s *session, state *playerState) uint32 {
 }
 
 func playerLuaNativeDisplayID(s *session, state *playerState) uint32 {
+	if state != nil && state.NativeDisplayIDOverrideSet {
+		return state.NativeDisplayIDOverride
+	}
 	displayID := uint32(0)
 	if s.server != nil && s.server.Data != nil {
 		if race, found, err := s.server.Data.Race(uint32(state.Race)); err == nil && found {

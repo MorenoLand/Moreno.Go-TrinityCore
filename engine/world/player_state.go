@@ -306,24 +306,30 @@ type playerState struct {
 	QuestLog           [playerQuestLogSlots]questLogEntry
 	MountDisplayID     uint32
 	TransformDisplayID uint32
-	ShapeshiftForm     uint8
-	StandState         uint8
-	TotemSlots         [4]uint64
-	PlayerFieldBytes   uint32
-	SelfResSpell       uint32
-	ExploredZones      [playerExploredZonesCount]uint32
-	DuelArbiter        uint64
-	DuelTeam           uint32
-	FarsightGUID       uint64 // PLAYER_FARSIGHT viewpoint GUID (EffectAddFarsight); runtime-only like C++
-	UnitFlags          uint32
-	UnitFlags2         uint32 // UNIT_FIELD_FLAGS_2: disarm offhand/ranged bits (UnitDefines.h:168-170)
-	HomebindMap        uint32
-	HomebindZone       uint32
-	HomebindX          float32
-	HomebindY          float32
-	HomebindZ          float32
-	Reputations        []playerReputation
-	Talents            map[uint32]uint8
+	// NativeDisplayIDOverride is the SetNativeDisplayId value
+	// (Unit.h:1476): a session-only UNIT_FIELD_NATIVEDISPLAYID
+	// override; while NativeDisplayIDOverrideSet, GetNativeDisplayId
+	// and the values builder read it instead of the race display.
+	NativeDisplayIDOverride    uint32
+	NativeDisplayIDOverrideSet bool
+	ShapeshiftForm             uint8
+	StandState                 uint8
+	TotemSlots                 [4]uint64
+	PlayerFieldBytes           uint32
+	SelfResSpell               uint32
+	ExploredZones              [playerExploredZonesCount]uint32
+	DuelArbiter                uint64
+	DuelTeam                   uint32
+	FarsightGUID               uint64 // PLAYER_FARSIGHT viewpoint GUID (EffectAddFarsight); runtime-only like C++
+	UnitFlags                  uint32
+	UnitFlags2                 uint32 // UNIT_FIELD_FLAGS_2: disarm offhand/ranged bits (UnitDefines.h:168-170)
+	HomebindMap                uint32
+	HomebindZone               uint32
+	HomebindX                  float32
+	HomebindY                  float32
+	HomebindZ                  float32
+	Reputations                []playerReputation
+	Talents                    map[uint32]uint8
 	// FreeTalentPointsOverride is the SetFreeTalentPoints value
 	// (Player.cpp:4087), read in place of the derived level-minus-spent
 	// count while FreeTalentPointsOverrideSet, for the session only
@@ -3887,6 +3893,9 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	}
 	if state.TransformDisplayID != 0 {
 		values[unitFieldDisplayID] = state.TransformDisplayID
+	}
+	if state.NativeDisplayIDOverrideSet {
+		values[unitFieldNativeDisplayID] = state.NativeDisplayIDOverride
 	}
 	if state.MountDisplayID != 0 {
 		values[unitFieldMountDisplayID] = state.MountDisplayID

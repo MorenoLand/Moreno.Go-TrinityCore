@@ -260,6 +260,52 @@ func unitIsStandState(st uint8) bool {
 	}
 }
 
+// setMotionDisplayID is the shared Unit::SetDisplayId /
+// Creature::SetDisplayId fold behind the handler SetDisplayId bridge
+// and the DeMorph arms: UNIT_FIELD_DISPLAYID plus the
+// CreatureModelInfo bounding-radius / combat-reach folds scaled by the
+// live object scale, broadcast to the instance. The gender fold
+// (Unit.cpp:10605-10606) has no server read path, so it is not
+// modeled; the pet branch stays out, as on the bridge.
+func (s *Server) setMotionDisplayID(ctx context.Context, motion *creatureMotion, id uint32) {
+	if s == nil || motion == nil {
+		return
+	}
+	fields := map[int]uint32{unitFieldDisplayID: id}
+	var boundingRadius, combatReach float64
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		var br, cr sql.NullFloat64
+		if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT BoundingRadius, CombatReach FROM creature_model_info WHERE DisplayID = ?", id).Scan(&br, &cr); err == nil {
+			if br.Valid && br.Float64 > 0 {
+				boundingRadius = br.Float64
+			}
+			if cr.Valid && cr.Float64 > 0 {
+				combatReach = cr.Float64
+			}
+		}
+	}
+	s.motionMu.Lock()
+	motion.DisplayID = id
+	motion.DisplayIDKnown = true
+	scale := motion.BaseScale
+	if motion.ScriptScaleKnown {
+		scale = motion.ScriptScale
+	}
+	if scale <= 0 {
+		scale = 1
+	}
+	if boundingRadius > 0 {
+		fields[unitFieldBoundingRadius] = math.Float32bits(float32(boundingRadius) * scale)
+	}
+	if combatReach > 0 {
+		fields[unitFieldCombatReach] = math.Float32bits(float32(combatReach) * scale)
+		motion.CombatReach = float32(combatReach) * scale
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.motionMu.Unlock()
+	s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, fields)
+}
+
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	if s == nil || motion == nil {
 		return nil
@@ -2967,6 +3013,60 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{id}, nil
 	}
+	// GetNativeDisplayId is Unit::GetNativeDisplayId (Unit.h:1474):
+	// the live UNIT_FIELD_NATIVEDISPLAYID, init from the template
+	// model at spawn and re-seated by seatCreatureEntry on entry
+	// change; a SetNativeDisplayId override replaces it without
+	// touching the live display, as C++ SetUInt32Value does.
+	methods["GetNativeDisplayId"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		id := motion.NativeDisplayID
+		s.motionMu.Unlock()
+		return []any{id}, nil
+	}
+	// SetNativeDisplayId is Unit::SetNativeDisplayId (Unit.h:1476):
+	// the native field only, broadcast to the instance. DELTA: the
+	// spawn create block still reads spawn.Model for the native
+	// field (the pre-existing DisplayIDKnown overlay conflates the
+	// two), so late joiners see the spawn model until a values
+	// update lands; live observers get the broadcast value.
+	methods["SetNativeDisplayId"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.NativeDisplayID = id
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		if s != nil {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNativeDisplayID: id})
+		}
+		return nil, nil
+	}
+	// DeMorph is Unit::DeMorph (Unit.cpp:3321-3323): SetDisplayId of
+	// the native display, through the shared fold. A zero native
+	// (totem/pet motions, which carry no template model) is a
+	// silent no-op; the handler surface does not serve pets.
+	methods["DeMorph"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		native := motion.NativeDisplayID
+		s.motionMu.Unlock()
+		if native == 0 {
+			return nil, nil
+		}
+		s.setMotionDisplayID(ctx, motion, native)
+		return nil, nil
+	}
+	// GetCreatureType is Unit::GetCreatureType (Unit.cpp:9124-9149)
+	// for creatures: the template type (the player shapeshift/race
+	// arms live on the player surface).
+	methods["GetCreatureType"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		typ := motion.CreatureType
+		s.motionMu.Unlock()
+		return []any{typ}, nil
+	}
 	// GetTemplateModelId is the Lua read path for
 	// Creature::GetCreatureTemplate()->Modelid1..4 (Creature.h): the
 	// template model-id row backing the spawn display. C++ script arms
@@ -4344,6 +4444,7 @@ func (s *Server) seatCreatureEntry(ctx context.Context, motion *creatureMotion, 
 	motion.EntryOverride = true
 	motion.DisplayID = model
 	motion.DisplayIDKnown = true
+	motion.NativeDisplayID = model
 	motion.Faction = uint32(faction)
 	// Creature.cpp:576-578: the template flags apply, but IN_COMBAT is
 	// kept while the creature is engaged.

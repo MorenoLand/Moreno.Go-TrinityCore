@@ -35,6 +35,7 @@ type luaCreatureState struct {
 	FlagsExtra   uint32
 	TypeFlags    uint32
 	Family       uint32
+	CreatureType uint32 // creature_template.type, backs Lua Unit::GetCreatureType
 	UnitFlags    uint32
 	AIName       string
 	RacialLeader bool
@@ -193,11 +194,11 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		npcFlagExpr = "(t.npcflag | " + flagClause + ")"
 	}
 	queryArgs := append(selectArgs, low, entry)
-	var rank, flagsExtra, typeFlags, family, unitFlags, racialLeader, unitClass int64
+	var rank, flagsExtra, typeFlags, family, unitFlags, racialLeader, unitClass, creatureType int64
 	var aiName string
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", t.rank, t.flags_extra, t.type_flags, t.unit_class, t.family, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &unitClass, &family, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, "+npcFlagExpr+", t.rank, t.flags_extra, t.type_flags, t.unit_class, t.family, t.type, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &unitClass, &family, &creatureType, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
 	if err != nil && missingTable(err) {
-		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, t.rank, t.flags_extra, t.type_flags, t.unit_class, t.family, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &unitClass, &family, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
+		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.gossip_menu_id, t.npcflag, t.rank, t.flags_extra, t.type_flags, t.unit_class, t.family, t.type, t.unit_flags, t.AIName, t.RacialLeader, c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &gossipMenuID, &npcFlags, &rank, &flagsExtra, &typeFlags, &unitClass, &family, &creatureType, &unitFlags, &aiName, &racialLeader, &state.Map, &state.X, &state.Y, &state.Z)
 	}
 	if err != nil {
 		if !errorsIsNoRows(err) {
@@ -233,12 +234,66 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		state.NPCFlags = liveNPCFlags
 	}
 	state.Rank, state.FlagsExtra, state.TypeFlags, state.Family, state.UnitFlags = uint32(rank), uint32(flagsExtra), uint32(typeFlags), uint32(family), uint32(unitFlags)
+	state.CreatureType = uint32(creatureType)
 	state.Class = uint32(unitClass)
 	state.AIName, state.RacialLeader = aiName, racialLeader != 0
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetEntry"] = luaNoArgs(func() any { return state.Entry })
 	methods["GetDisplayId"] = luaNoArgs(func() any { return state.DisplayID })
+	// GetNativeDisplayId is Unit::GetNativeDisplayId (Unit.h:1474):
+	// the live motion native when the motion is up (a handler
+	// SetNativeDisplayId override wins), else the spawn model this
+	// snapshot was built from. DELTA: this surface's GetDisplayId
+	// already returns the spawn model, so a live morph is invisible
+	// here until the motion overlay path serves it.
+	methods["GetNativeDisplayId"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.NativeDisplayID != 0 {
+			return motion.NativeDisplayID
+		}
+		return state.DisplayID
+	})
+	// SetNativeDisplayId is Unit::SetNativeDisplayId (Unit.h:1476)
+	// through the motion lock, mirroring SetHealth's write-through
+	// shape; a despawned motion is a silent no-op.
+	methods["SetNativeDisplayId"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.NativeDisplayID = id
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNativeDisplayID: id})
+		return nil, nil
+	}
+	// DeMorph is Unit::DeMorph (Unit.cpp:3321-3323) through the
+	// shared display fold; the spawn model stands in for a zero
+	// motion native.
+	methods["DeMorph"] = func(ctx context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		native := motion.NativeDisplayID
+		if native == 0 {
+			native = state.DisplayID
+		}
+		if native == 0 {
+			return nil, nil
+		}
+		s.server.setMotionDisplayID(ctx, motion, native)
+		return nil, nil
+	}
+	// GetCreatureType is Unit::GetCreatureType (Unit.cpp:9124-9149)
+	// for creatures: the template type snapshot.
+	methods["GetCreatureType"] = luaNoArgs(func() any { return state.CreatureType })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return uint32(state.GUID & 0x00FFFFFF) })
 	methods["GetObjectType"] = luaNoArgs(func() any { return "Creature" })

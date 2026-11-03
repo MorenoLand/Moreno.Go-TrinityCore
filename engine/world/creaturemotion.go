@@ -102,6 +102,7 @@ type creatureMotion struct {
 	PVPFlagsKnown         bool
 	DisplayID             uint32 // UNIT_FIELD_DISPLAYID live value: Lua CreatureMethods::SetDisplayId (Unit::SetDisplayId twin, Unit.cpp:10601), init from template model at spawn
 	DisplayIDKnown        bool   // set by the event-surface SetDisplayId bridge; gates the motion->spawn overlay so untouched creatures keep the DB/game-event value
+	NativeDisplayID       uint32 // UNIT_FIELD_NATIVEDISPLAYID live value: Lua UnitMethods::GetNativeDisplayId/SetNativeDisplayId (Unit.h:1474/1476), init from template model at spawn; DeMorph restores DisplayID to this value
 	Mount                 uint32 // UNIT_FIELD_MOUNTDISPLAYID live value: Lua CreatureMethods::Mount/Dismount (Unit::Mount/Unit::Dismount twin), init from template mount at spawn
 	MountKnown            bool
 	ScriptRunRate         float32 // m_speed_rate[MOVE_RUN] script override: Lua CreatureMethods::SetSpeedRate (Unit::SetSpeedRate twin, Unit.cpp:8821), replaces the aura fold while known; rate is a multiplier on base move speed
@@ -925,6 +926,7 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			AIName:          st.AIName,
 			BaseScale:       st.Scale,
 			DisplayID:       st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
+			NativeDisplayID: st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
 		}
 		if st.UnitClass == 2 || st.UnitClass == 8 {
 			motion.MaxPowers[0] = st.Mana
@@ -1087,6 +1089,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				ScriptName:      scriptName,
 				BaseScale:       st.Scale,
 				DisplayID:       st.Model, // UNIT_FIELD_DISPLAYID init: template-native display (Creature::GetNativeDisplayId); Lua SetDisplayId overrides via DisplayIDKnown
+				NativeDisplayID: st.Model, // UNIT_FIELD_NATIVEDISPLAYID init: same template model; Lua SetNativeDisplayId overrides, seatCreatureEntry re-seats on entry change
 			}
 			motions := s.motionMapLocked(motion.Map, instanceID)
 			motions[creatureGUID] = motion

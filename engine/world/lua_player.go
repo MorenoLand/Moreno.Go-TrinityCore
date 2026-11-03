@@ -211,6 +211,57 @@ func (s *session) luaPlayer() *scripting.Object {
 	// the active transform display. Backs the maladaar stolen-soul and
 	// kiljaeden sinister-reflection SetDisplayId arms.
 	methods["GetDisplayId"] = luaNoArgs(func() any { return playerLuaDisplayID(s, state) })
+	// GetNativeDisplayId is Unit::GetNativeDisplayId (Unit.h:1474):
+	// the race male/female display, or the SetNativeDisplayId
+	// override while set (playerLuaNativeDisplayID, shared with the
+	// values builder).
+	methods["GetNativeDisplayId"] = luaNoArgs(func() any { return playerLuaNativeDisplayID(s, state) })
+	// SetNativeDisplayId is Unit::SetNativeDisplayId (Unit.h:1476):
+	// the native field only, session-scoped like the faction/talent
+	// overrides; the live display is untouched until DeMorph.
+	methods["SetNativeDisplayId"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state.NativeDisplayIDOverride = id
+		state.NativeDisplayIDOverrideSet = true
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	// DeMorph is Unit::DeMorph (Unit.cpp:3321-3323): SetDisplayId
+	// of the native display. Go display reads the transform display
+	// while set, else the race display, so DeMorph clears the
+	// transform or, with a native override, points the transform at
+	// it. DELTA: a shapeshift form display is a transform too, so
+	// DeMorph drops it until the next shapeshift recalc; C++ keeps
+	// the form.
+	methods["DeMorph"] = func(_ context.Context, _ []any) ([]any, error) {
+		if state.NativeDisplayIDOverrideSet {
+			state.TransformDisplayID = state.NativeDisplayIDOverride
+		} else {
+			state.TransformDisplayID = 0
+		}
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
+	// GetCreatureType is Unit::GetCreatureType (Unit.cpp:9124-9149)
+	// for players: the shapeshift form's CreatureType while shifted
+	// (SpellShapeshiftForm.dbc field 20, >0 only), else the race
+	// CreatureType (ChrRaces.dbc field 8); a missing DBC row reads 0.
+	methods["GetCreatureType"] = func(_ context.Context, _ []any) ([]any, error) {
+		if state.ShapeshiftForm != 0 && s.server != nil && s.server.Data != nil {
+			if shape, found, err := s.server.Data.ShapeshiftForm(uint32(state.ShapeshiftForm)); err == nil && found && shape.CreatureType > 0 {
+				return []any{uint32(shape.CreatureType)}, nil
+			}
+		}
+		if s.server != nil && s.server.Data != nil {
+			if race, found, err := s.server.Data.Race(uint32(state.Race)); err == nil && found {
+				return []any{race.CreatureType}, nil
+			}
+		}
+		return []any{uint32(0)}, nil
+	}
 	// GetNativeGender is Player::GetNativeGender (Player.h:993): the
 	// PLAYER_BYTES_3 gender byte. Go tracks a single gender
 	// (characters.gender, the same field GetGender reads); no
