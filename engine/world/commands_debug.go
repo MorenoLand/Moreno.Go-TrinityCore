@@ -302,6 +302,178 @@ func (s *session) handleDebugNearGraveyard(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Nearest graveyard: %d at (%f, %f, %f)", nearest.id, nearest.x, nearest.y, nearest.z))
 }
 
+// debugSelectedUnit resolves the getSelectedUnit twin (Chat.cpp:312) for
+// the debug arms: the selected creature (scanned across instances, since
+// C++ resolves globally and the session-scoped finder is map-bound), else
+// the selected player, else the invoker. The returned tuple is the unit's
+// name, GUID, position, map and instance.
+func (s *session) debugSelectedUnit() (name string, guid uint64, x, y, z float32, mapID, instanceID uint32) {
+	if s == nil || s.player == nil {
+		return "", 0, 0, 0, 0, 0, 0
+	}
+	if s.selection != 0 && s.server != nil {
+		s.server.motionMu.Lock()
+		for scope := range s.server.instanceCreatureMotion {
+			if m := s.server.findCreatureMotionLocked(scope.MapID, scope.InstanceID, s.selection); m != nil {
+				s.server.motionMu.Unlock()
+				return m.Name, m.GUID, m.X, m.Y, m.Z, m.Map, m.InstanceID
+			}
+		}
+		s.server.motionMu.Unlock()
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			return ts.player.Name, ts.playerGUID, ts.player.X, ts.player.Y, ts.player.Z, ts.player.Map, ts.player.InstanceID
+		}
+	}
+	return s.player.Name, s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.InstanceID
+}
+
+// handleDebugLoS mirrors HandleDebugLoSCommand (cs_debug.cpp:1079):
+// ".debug los" prints the VMAP line, the gameobject line and the combined
+// verdict for the invoker -> selected unit. The VMAP leg rides
+// Server.hasLineOfSight (the terrain-model check); Go has no gameobject
+// collision LOS model, so the GObj leg always reads clear and the combined
+// verdict follows the VMAP leg. Cross-map/cross-instance pairs read
+// obstructed on every line (C++ IsInMap gate, Object.cpp:1272). Positions
+// are raw: C++ adds collision heights and hit-sphere points, which Go's
+// LOS callers (totem legs) also skip.
+func (s *session) handleDebugLoS(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.server == nil || s.player == nil {
+		return
+	}
+	name, _, ux, uy, uz, uMap, uInst := s.debugSelectedUnit()
+	sameMap := uMap == s.player.Map && uInst == s.player.InstanceID
+	vmapClear := sameMap && s.server.hasLineOfSight(s.player.Map, s.player.X, s.player.Y, s.player.Z, ux, uy, uz)
+	gobjClear := sameMap
+	clear := func(v bool) string {
+		if v {
+			return "clear"
+		}
+		return "obstructed"
+	}
+	s.sendSysMessage(fmt.Sprintf("Checking LoS %s -> %s:", s.player.Name, name))
+	s.sendSysMessage(fmt.Sprintf("    VMAP LoS: %s", clear(vmapClear)))
+	s.sendSysMessage(fmt.Sprintf("    GObj LoS: %s", clear(gobjClear)))
+	not := "not "
+	if vmapClear && gobjClear {
+		not = ""
+	}
+	s.sendSysMessage(fmt.Sprintf("%s is %sin line of sight of %s.", name, not, s.player.Name))
+}
+
+// handleDebugPlay mirrors the debugPlayCommandTable (cs_debug.cpp:73-79):
+// ".debug play cinematic|movie|sound|music <id>". Cinematic and movie ride
+// the SendCinematicStart/SendMovieStart packet twins (lua_player.go); the
+// cinematic flyby-waypoint dump and first-camera activation have no Go
+// model. Sound follows HandleDebugPlaySoundCommand (cs_debug.cpp:186):
+// a set target (s.selection, the CMSG_SET_SELECTION twin) takes the
+// distance leg (SMSG_PLAY_OBJECT_SOUND, unit GUID), otherwise the direct
+// leg (SMSG_PLAY_SOUND); both write to the invoker only, as C++ passes the
+// handler's player as the recipient. Music follows
+// HandleDebugPlayMusicCommand (cs_debug.cpp:209): SMSG_PLAY_MUSIC to the
+// invoker. DELTA (shared with .misc playall and the Lua sound methods):
+// the CinematicSequences/Movie/SoundEntries DBC existence gates have no Go
+// model, so unknown ids are sent and play nothing client-side instead of
+// reporting not-exist; the "You hear sound" wording is a prose recall of
+// the unseeded LANG text.
+func (s *session) handleDebugPlay(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .debug play cinematic|movie|sound|music <id>"
+	if len(args) < 2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	id, err := strconv.ParseUint(args[1], 10, 32)
+	if err != nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	switch strings.ToLower(args[0]) {
+	case "cinematic":
+		pkt := protocol.NewBuffer(4)
+		pkt.WriteU32(uint32(id))
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), pkt.Bytes(), true)
+	case "movie":
+		if s.player != nil {
+			s.player.Movie = uint32(id)
+		}
+		pkt := protocol.NewBuffer(4)
+		pkt.WriteU32(uint32(id))
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_MOVIE), pkt.Bytes(), true)
+	case "sound":
+		_, unitGUID, _, _, _, _, _ := s.debugSelectedUnit()
+		if s.selection != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_OBJECT_SOUND), buildPlayObjectSound(uint32(id), unitGUID), true)
+		} else {
+			_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(uint32(id)), true)
+		}
+		s.sendSysMessage(fmt.Sprintf("You hear sound %d", id))
+	case "music":
+		pkt := protocol.NewBuffer(4)
+		pkt.WriteU32(uint32(id))
+		_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_MUSIC), pkt.Bytes(), true)
+		s.sendSysMessage(fmt.Sprintf("You hear sound %d", id))
+	default:
+		s.sendSysMessage(syntax)
+	}
+}
+
+// handleDebugSendSpellFail mirrors HandleDebugSendSpellFailCommand
+// (cs_debug.cpp:221): ".debug send spellfail <result> [failArg1] [failArg2]"
+// writes SMSG_CAST_FAILED with cast id 0 and spell 133 (Fireball) through
+// the buildCastFailedParams funnel, which appends the optional extended
+// params exactly as C++ appends failArg1/failArg2. DELTA: the result arg
+// parses as a numeric SpellCastResult; C++'s enum-name form has no Go
+// command parser. Only the spellfail arm of the debugSendCommandTable is
+// wired; the remaining send arms stay unmapped.
+func (s *session) handleDebugSendSpellFail(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .debug send spellfail <result> [failArg1] [failArg2]"
+	if len(args) == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	result, err := strconv.ParseUint(args[0], 10, 8)
+	if err != nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	var params []uint32
+	for _, arg := range args[1:] {
+		v, err := strconv.ParseUint(arg, 10, 32)
+		if err != nil {
+			s.sendSysMessage(syntax)
+			return
+		}
+		params = append(params, uint32(v))
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(0, 133, uint8(result), params...), true)
+}
+
+// handleDebugSend mirrors the debugSendCommandTable (cs_debug.cpp:80-92)
+// as far as Go wires it: spellfail only. Unknown sub-arms report the
+// spellfail syntax rather than silently succeeding.
+func (s *session) handleDebugSend(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if len(args) > 0 && strings.ToLower(args[0]) == "spellfail" {
+		s.handleDebugSendSpellFail(ctx, args[1:])
+		return
+	}
+	s.sendSysMessage("Syntax: .debug send spellfail <result> [failArg1] [failArg2]")
+}
+
 // handleDebugLootRecipient mirrors HandleDebugGetLootRecipientCommand
 // (cs_debug.cpp:473): ".debug lootrecipient" reports the selected
 // creature's tap model (creatureMotion TapPlayerGUID/TapGroupID, the
