@@ -18,13 +18,14 @@ import (
 // ("misc_commandscript"); sole-source verified (hits only cs_misc.cpp +
 // cs_script_loader.cpp decl 44 / call 89). The C++ table holds 51 flat
 // top-level arms (RBAC 488-535, plus 632/777/797); this file ports the first
-// 17 of them in C++ table order (additem through freeze). Of these 17, 11 are
-// native, 1 is partially native, and 5 are documented-blocked:
+// 17 of them in C++ table order (additem through freeze). Of these 17, 14 are
+// native, 1 is partially native, and 2 are documented-blocked:
 //
-//   - `bank` has no Go bridge: WorldSession::SendShowBank (the banker
-//     interaction packet) is unmodeled.
-//   - `cometome` has no Go bridge: it drives the selected creature's motion
-//     master (MovePoint); the Go tree has no creature motion model.
+//   - `bank` is wired: SendShowBank with the player's own GUID, the exact
+//     bank.go/gossip.go SMSG_SHOW_BANK packet (no interactability gate,
+//     unlike the banker-activate opcode path).
+//   - `cometome` is wired: the selected creature rides the shared script
+//     spline (the Lua MoveTo MovePoint precedent) to the GM's position.
 //   - `dev` has no Go bridge: Player::IsDeveloper/SetDeveloper is a runtime
 //     flag with no Go model and no consumers.
 //   - `damage` `go <guid> <dmg>` form is blocked: destructible buildings
@@ -32,10 +33,10 @@ import (
 //     player targets is native; the school/armor/absorb and spell forms have
 //     no Unit::DealDamage/CalcArmorReducedDamage/CalcAbsorbResist bridge
 //     (documented fidelity gap, not a stub).
-//   - `die`'s creature targets are blocked (no Unit bridge); player targets
-//     die natively through the combat.go death sequence. The
-//     CONFIG_DIE_COMMAND_MODE kill branch and the DealDamage branch are
-//     unmodeled (documented gap).
+//   - `die` is wired for creature targets through the rage.go kill block
+//     (Health 0 + lootable flag + onCreatureKilled + event-7 hook); the
+//     CONFIG_DIE_COMMAND_MODE Kill-vs-DealDamage branch choice is unmodeled
+//     (documented gap).
 //   - `flusharenapoints` is bridged via Server.FlushWeeklyArenaPoints
 //     (arena_rating.go); the C++ SendWorldText announcements are not sent,
 //     the invoker gets a summary instead.
@@ -527,9 +528,11 @@ func miscParseSpellArg(ctx context.Context, s *session, args []string) (uint32, 
 	return id, true
 }
 
-// handleCmdBank is the documented-blocked bank arm (cs_misc.cpp:1331-1335,
-// RBAC 492): WorldSession::SendShowBank (the banker interaction packet) has
-// no Go bridge. RBAC-gated with an honest message, not a stub.
+// handleCmdBank mirrors HandleBankCommand (cs_misc.cpp:1331-1335,
+// RBAC 492): WorldSession::SendShowBank (BankHandler.cpp:183-188) with the
+// player's own GUID — latch m_currentBankerGUID, send SMSG_SHOW_BANK
+// carrying only that GUID. No interactability gate, unlike the
+// banker-activate opcode path (bank.go).
 func (s *session) handleCmdBank(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -538,7 +541,10 @@ func (s *session) handleCmdBank(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandBank) {
 		return
 	}
-	s.sendSysMessage("Bank access is unavailable: the Go tree has no banker interaction packet bridge.")
+	s.currentBankerGUID = s.playerGUID
+	bank := protocol.NewBuffer(8)
+	bank.WriteU64(s.playerGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true)
 }
 
 // handleCmdBindSight mirrors HandleBindSightCommand (cs_misc.cpp:2545-2553,
@@ -604,10 +610,11 @@ func (s *session) handleCmdCombatStop(ctx context.Context, args []string) {
 	_ = target.sendAttackStop(victim, false)
 }
 
-// handleCmdComeToMe is the documented-blocked cometome arm
-// (cs_misc.cpp:2099-2114, RBAC 495): it drives the selected creature's motion
-// master (MovePoint to the GM); the Go tree has no creature motion model.
-// RBAC-gated with an honest message, not a stub.
+// handleCmdComeToMe mirrors HandleComeToMeCommand (cs_misc.cpp:2099-2114,
+// RBAC 495): the selected creature rides the shared script spline (the Lua
+// MoveTo MovePoint precedent, launchCreatureScriptSpline) to the GM's
+// position. Straight-line spline: Go has no PathGenerator, the standing
+// MoveTo delta; a dead creature never launches, as in C++.
 func (s *session) handleCmdComeToMe(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -616,7 +623,13 @@ func (s *session) handleCmdComeToMe(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandComeToMe) {
 		return
 	}
-	s.sendSysMessage("Creature movement is unavailable: the Go tree has no creature motion model.")
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	p := s.player
+	s.server.launchCreatureScriptSpline(motion, p.X, p.Y, p.Z, false, movementGeneratorPoint)
 }
 
 // handleCmdCommands mirrors HandleCommandsCommand (cs_misc.cpp:602-606, RBAC
@@ -939,8 +952,8 @@ func (s *session) handleCmdDev(ctx context.Context, args []string) {
 }
 
 // handleCmdDie mirrors HandleDieCommand (cs_misc.cpp:608-632, RBAC 500):
-// kill the selected player through the combat.go death sequence. Creature
-// targets report the missing unit bridge honestly; the
+// kill the selected player through the combat.go death sequence, or the
+// selected creature through the rage.go kill block below. The
 // CONFIG_DIE_COMMAND_MODE kill branch and the DealDamage branch are
 // unmodeled (documented gap).
 func (s *session) handleCmdDie(ctx context.Context, args []string) {
@@ -953,6 +966,10 @@ func (s *session) handleCmdDie(ctx context.Context, args []string) {
 	}
 	target := s.miscSelectedPlayerSession()
 	if target == nil || target.player == nil {
+		if motion := s.castCommandSelectedCreature(); motion != nil {
+			s.dieSelectedCreature(ctx, motion)
+			return
+		}
 		s.sendSysMessage(miscSelectCharOrCreat)
 		return
 	}
@@ -969,6 +986,47 @@ func (s *session) handleCmdDie(ctx context.Context, args []string) {
 	// still fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6).
 	target.killPlayer(ctx, nil, false, false)
 	s.server.firePVPKillHook(ctx, s, target)
+}
+
+// dieSelectedCreature kills the selected creature through the rage.go kill
+// block (HandleDieCommand's DealDamage leg, cs_misc.cpp:608-632): Health 0,
+// lootable flag, combat/target/motion clear, threat clear, values + threat
+// broadcasts, then the onCreatureKilled funnel (respawn scheduling included)
+// and the Eluna PLAYER_EVENT_ON_KILL_CREATURE (7) hook with the GM as the
+// kill-attributed session, matching C++'s GM-attacker DealDamage. An
+// already-dead creature is a silent no-op, the C++ IsAlive gate. No tap is
+// recorded, so kill rewards ride the funnel's no-tap path (documented gap).
+func (s *session) dieSelectedCreature(ctx context.Context, motion *creatureMotion) {
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	if motion.Health == 0 {
+		s.server.motionMu.Unlock()
+		return
+	}
+	motion.Health = 0
+	motion.DynamicFlags |= unitDynFlagLootable
+	motion.InCombat = false
+	motion.TargetGUID = 0
+	motion.Moving = false
+	if motion.ThreatMgr != nil {
+		motion.ThreatMgr.ClearThreat()
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+	maxHealth, level := motion.MaxHealth, motion.Level
+	s.server.motionMu.Unlock()
+	s.server.stopCreatureMotionInInstance(mapID, instanceID, guid, x, y, z)
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{
+		unitFieldHealth:       0,
+		unitFieldDynamicFlags: unitDynFlagLootable,
+	})
+	s.server.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
+	s.onCreatureKilled(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Health: 0, MaxHealth: maxHealth, Level: uint8(level)}, nil)
+	if victim := s.server.findCreatureMotion(mapID, instanceID, guid); victim != nil {
+		s.server.fireCreatureKillHook(ctx, s, victim)
+	}
 }
 
 // handleCmdDismount mirrors HandleDismountCommand (cs_misc.cpp:656-678, RBAC
