@@ -36,19 +36,19 @@
 -- - bCheck / FindNearestCreature(NPC_LERYSSA 25251, NPC_GENERAL_ARLOS
 --   25250, 50.0f) GUID latch (:876-886): FindNearestCreature IS
 --   bridged (lua_creature_events.go:1154, alive-only built in —
---   matches the C++ `true` filter) but no ObjectAccessor bridge
---   (dark-rider precedent); the latch's consumers (JustDied :913-938:
---   arlos AI-Talk/KillSelf, leryssa RemoveAura/ClearUnitState/SetWalk/
---   MovePoint, RewardPlayerAndGroupAtEvent) have no cross-creature /
---   reward / motion bridges — the latch would be dead bookkeeping.
+--   matches the C++ `true` filter), but the latch is armed ONLY by
+--   leryssa's MovementInform (no bridge), so in the Go model the
+--   C++ JustDied early-return (empty GUIDs) is the faithful
+--   behavior — a live-lookup port would fabricate the tail when
+--   the scene never armed it.
 -- - MovementInform(POINT_MOTION_TYPE) -> ENSURE_AI(npc_thassarian)
 --   talbotInPosition cross-AI latch (:860-868): no MovementInform /
 --   cross-AI-ENSURE bridge.
--- - JustDied (:913-938): arlos->AI()->Talk / arlos->KillSelf /
---   leryssa->RemoveAura / ClearUnitState / SetWalk / MovePoint /
---   RewardPlayerAndGroupAtEvent — no ObjectAccessor, motion,
---   reward, or unit-state bridges (kalecgos / death_knight_initiate
---   precedents).
+-- - JustDied (:913-938): the Talk / RemoveAura / ClearUnitState /
+--   SetWalk / MovePoint legs are bridgeable now, but arlos
+--   KillSelf and RewardPlayerAndGroupAtEvent have no bridges, and
+--   the latch above never arms — the tail stays out on those
+--   grounds (not motion/unit-state, as previously claimed).
 -- - npc_thassarian escort-scene react arms (zone_borean_tundra.cpp
 --   :509/:566/:604/:667/:675: arthas->SetReactState(PASSIVE) on
 --   WaypointReached(3), talbot->SetReactState(PASSIVE) at scene phase

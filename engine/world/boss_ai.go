@@ -13325,9 +13325,10 @@ func init() {
 	// first found within 11.0 yards gets SetGoState(GO_STATE_ACTIVE) —
 	// ported in lua_scripts/northrend/npc_trapped_mammoth_calf.lua.
 	// Entry 25850 verifiable from the C++ item script (World/
-	// item_scripts.cpp:167, quest-11876); the UpdateAI MovePoint,
-	// DoAction(1) and MovementInform legs await the movement /
-	// DoAction / MovementInform bridges — documented only.
+	// item_scripts.cpp:167, quest-11876); MoveTo is bridged now, but
+	// the UpdateAI leg's DoAction(1) trigger (quest item script,
+	// unported) and the MovementInform arrival leg still block —
+	// documented only.
 	RegisterLuaBoss("npc_trapped_mammoth_calf", 25850)
 	// npc_blessed_banner (Icecrown zone script): the Reset() arm —
 	// non-triggered self-cast SPELL_THREAT_PULSE 58113 (vaelastrasz
@@ -20127,14 +20128,26 @@ func init() {
 	// read, neural step-4 kill credit, Talk(step, caster)). Entry 25478 verifiable from the C++
 	// ImprisionedBerylSorcerer enum.
 	RegisterLuaBoss("npc_imprisoned_beryl_sorcerer", 25478)
-	// npc_hidden_cultist (Borean Tundra, quest 11794) — ported arm in
+	// npc_hidden_cultist (Borean Tundra, quest 11794) — ported arms in
 	// lua_scripts/northrend/npc_hidden_cultist.lua: Reset()
 	// DoCast(SPELL_SHROUD_OF_THE_DEATH_CULTIST 46077) non-triggered
-	// self-cast (events 5/23). Entries 25827/25248/25828 verifiable
-	// from the C++ HiddenCultist enum; all three share the AI.
+	// self-cast (events 5/23) plus the gossip -> DoAction Talk chain
+	// (3s/5s/3s phases, faction-MONSTER ambush, vendor-trade leg).
+	// Entries 25827/25248/25828 verifiable from the C++ HiddenCultist
+	// enum; all three share the AI.
 	RegisterLuaBoss("npc_hidden_cultist", 25827)
 	RegisterLuaBoss("npc_hidden_cultist", 25248)
 	RegisterLuaBoss("npc_hidden_cultist", 25828)
+	// npc_nesingwary_trapper (Borean Tundra, quest 11865) — ported
+	// arms in lua_scripts/northrend/npc_nesingwary_trapper.lua:
+	// Initialize/Reset phase machine (2500ms hidden, visible, fur
+	// MoveTo, Talk 0, loot/none emotes, caribou-trap activation +
+	// latch, triggered self-cast 46104) and the JustDied trap-GO
+	// loot-state/state legs. Entry 25835 verifiable from the C++
+	// NesingwaryTrapper enum; the fur Delete, summoner-credit and
+	// spell-summoner legs stay out (no GO-delete / summoner /
+	// SpellScript bridges).
+	RegisterLuaBoss("npc_nesingwary_trapper", 25835)
 	// npc_counselor_talbot (Borean Tundra, Last Rites quest chain) —
 	// ported arms in lua_scripts/northrend/npc_counselor_talbot.lua:
 	// Initialize()/Reset() timer seeds -> OnEnterCombat CreateLuaEvent
