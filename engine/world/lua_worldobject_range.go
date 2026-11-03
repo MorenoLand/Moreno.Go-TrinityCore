@@ -2,10 +2,13 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // Eluna WorldObject nearest/in-range family (WorldObjectMethods.h
@@ -715,4 +718,140 @@ func luaRangeMethods(srv *Server, origin func() luaRangeOrigin) map[string]scrip
 		return []any{o.srv.hasLineOfSight(o.mapID, o.x, o.y, o.z, x, y, z)}, nil
 	}
 	return methods
+}
+
+// luaSendChatMessageToPlayer is UnitMethods::SendChatMessageToPlayer
+// (UnitMethods.h:2095-2113): ChatHandler::BuildChatPacket to the target
+// player's session, shared by the player, session-creature and
+// handler-creature surfaces. Type and language carry the C++ range gates
+// (MAX_CHAT_MSG_TYPE 0x34, SharedDefines.h:3216; LANGUAGES_COUNT 19,
+// SharedDefines.h:789); the target must be a Player object like C++
+// CHECKOBJ<Player>, and a target with no live session drops silently,
+// the Unit::Whisper null-target precedent. DELTAS: the packet uses the
+// shared BuildChatMessage builder, so monster-type senderName and the
+// GM-message opcode legs are unmodeled (same delta as SendUnitWhisper);
+// a channel type writes an empty channel name (C++ asserts non-empty).
+func (s *Server) luaSendChatMessageToPlayer(senderGUID uint64, senderChatTag uint8, args []any) ([]any, error) {
+	chatType, err := luaUint32Arg(args, 0)
+	if err != nil {
+		return nil, err
+	}
+	if chatType >= 0x34 {
+		return nil, fmt.Errorf("valid ChatMsg expected")
+	}
+	lang, err := luaUint32Arg(args, 1)
+	if err != nil {
+		return nil, err
+	}
+	if lang >= 19 {
+		return nil, fmt.Errorf("valid Language expected")
+	}
+	message, err := luaStringArg(args, 2)
+	if err != nil {
+		return nil, err
+	}
+	if len(args) < 4 {
+		return nil, fmt.Errorf("argument 4 is required")
+	}
+	obj, ok := args[3].(*scripting.Object)
+	if !ok || obj == nil || obj.Type != "Player" {
+		return nil, fmt.Errorf("argument 4 must be a player")
+	}
+	targetGUID, ok := objectUint64Field(obj, "GUID")
+	if !ok || targetGUID == 0 {
+		return nil, fmt.Errorf("argument 4 must be a player")
+	}
+	if s == nil {
+		return nil, nil
+	}
+	receiver := s.findSessionByGUID(targetGUID)
+	if receiver == nil || receiver.player == nil {
+		return nil, nil
+	}
+	packet := protocol.BuildChatMessageWithOptions(uint8(chatType), lang, senderGUID, targetGUID, message, "", false, "", senderChatTag)
+	return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
+}
+
+// attackingPlayerGraphRow is one motion-map row for the
+// IsAttackingPlayer walk: the controller links plus the Controlled-vs-
+// SummonSlot discriminator (motionIsPet).
+type attackingPlayerGraphRow struct {
+	charmer uint64
+	owner   uint64
+	charmed bool
+	isPet   bool
+}
+
+// creatureIsAttackingPlayer is Unit::isAttackingPlayer (Unit.cpp:5849-5865)
+// for a creature motion. C++'s UNIT_STATE_ATTACK_PLAYER is not a general
+// "attacking a player" flag: it is set only by Player::SetContestedPvP
+// (Player.cpp:20725-20747) on the player and its m_Controlled units, and
+// cleared by ResetContestedPvP/AtDisengage — so Go reads the contested-PvP
+// flag Go already models (threat.go SetContestedPvP twin) instead of the
+// victim. A motion is flagged when its controller is flagged: charmed
+// motions via CharmerGUID, pets (PetID != 0) via OwnerGUID; the walk
+// follows those controller edges up and the charmer/owner edges down
+// into controlled units and summons, mirroring the C++ recursion into
+// m_Controlled and m_SummonSlot. DELTAS: a summon of a flagged creature
+// reads via its summoner where C++ reads false (Go's flat OwnerGUID
+// record does not separate SummonSlot from Controlled on the downward
+// leg, and the upward leg has no summon edge, so only the downward
+// reach differs); charm chains through a creature charmer over-read
+// (C++ flags direct controlled units only); a controlled unit's flag
+// lingering after its owner's contested expiry (C++ clears the owner
+// only) reads false here, since Go reads the owner's live state; a
+// player charmed by the queried creature is unreachable (players have
+// no motion record).
+func (s *Server) creatureIsAttackingPlayer(mapID, instanceID uint32, guid uint64) bool {
+	if s == nil || guid == 0 {
+		return false
+	}
+	rows := map[uint64]attackingPlayerGraphRow{}
+	children := map[uint64][]uint64{}
+	s.motionMu.Lock()
+	for key, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion == nil {
+			continue
+		}
+		rows[key] = attackingPlayerGraphRow{charmer: motion.CharmerGUID, owner: motion.OwnerGUID, charmed: motion.Charmed, isPet: motionIsPet(motion)}
+		if motion.CharmerGUID != 0 {
+			children[motion.CharmerGUID] = append(children[motion.CharmerGUID], key)
+		}
+		if motion.OwnerGUID != 0 {
+			children[motion.OwnerGUID] = append(children[motion.OwnerGUID], key)
+		}
+	}
+	s.motionMu.Unlock()
+	visited := map[uint64]bool{guid: true}
+	queue := []uint64{guid}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if row, ok := rows[current]; ok {
+			if row.charmed && row.charmer != 0 && !visited[row.charmer] {
+				visited[row.charmer] = true
+				queue = append(queue, row.charmer)
+			}
+			if row.isPet && row.owner != 0 && !visited[row.owner] {
+				visited[row.owner] = true
+				queue = append(queue, row.owner)
+			}
+		}
+		for _, child := range children[current] {
+			if !visited[child] {
+				visited[child] = true
+				queue = append(queue, child)
+			}
+		}
+	}
+	now := time.Now()
+	for candidate := range visited {
+		if _, ok := rows[candidate]; ok {
+			continue
+		}
+		if sess := s.findSessionByGUID(candidate); sess != nil && sess.contestedPvPActiveQuery(now) {
+			return true
+		}
+	}
+	return false
 }

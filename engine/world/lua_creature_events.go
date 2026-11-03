@@ -492,6 +492,21 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		packet := protocol.BuildChatMessage(chatType, language, state.GUID, receiverGUID, message, "")
 		return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
 	}
+	// SendChatMessageToPlayer is UnitMethods::SendChatMessageToPlayer
+	// (UnitMethods.h:2095-2113), shared in lua_worldobject_range.go;
+	// creatures carry no chat tag, so the tag byte is 0.
+	methods["SendChatMessageToPlayer"] = func(_ context.Context, args []any) ([]any, error) {
+		return s.luaSendChatMessageToPlayer(state.GUID, 0, args)
+	}
+	// IsAttackingPlayer is Unit::isAttackingPlayer (Unit.cpp:5849-5865),
+	// shared in lua_worldobject_range.go; the map/instance/GUID triple
+	// is copied under motionMu like the motionChatRange arm above.
+	methods["IsAttackingPlayer"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		return []any{s.creatureIsAttackingPlayer(mapID, instanceID, guid)}, nil
+	}
 	// SetData/GetData are the CreatureAI::SetData virtual-dispatch twin
 	// (CreatureAI.h: the per-AI override interprets its own type numbers;
 	// Go handlers are not AI objects, so there is no virtual table to

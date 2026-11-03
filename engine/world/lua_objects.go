@@ -741,6 +741,23 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// state rationale as StopSpellCast — handler-surface twin lives in
 	// lua_creature_events.go (svala ritual-strike arm).
 	methods["InterruptNonMeleeSpells"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
+	// SendChatMessageToPlayer is UnitMethods::SendChatMessageToPlayer
+	// (UnitMethods.h:2095-2113), shared in lua_worldobject_range.go;
+	// creatures carry no chat tag, so the tag byte is 0.
+	methods["SendChatMessageToPlayer"] = func(_ context.Context, args []any) ([]any, error) {
+		return s.server.luaSendChatMessageToPlayer(state.GUID, 0, args)
+	}
+	// IsAttackingPlayer is Unit::isAttackingPlayer (Unit.cpp:5849-5865),
+	// shared in lua_worldobject_range.go; a motion that has since
+	// despawned reads false, the stale-motion precedent of the
+	// SendUnit* family above.
+	methods["IsAttackingPlayer"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return []any{false}, nil
+		}
+		return []any{s.server.creatureIsAttackingPlayer(motion.Map, motion.InstanceID, motion.GUID)}, nil
+	}
 	// GetHomePosition is CreatureMethods::GetHomePosition
 	// (CreatureMethods.h:630-644): x, y, z, o from the creature's HOME
 	// position (Creature::GetHomePosition, Creature.h:296-297); the 4th

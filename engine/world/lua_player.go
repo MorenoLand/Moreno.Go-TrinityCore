@@ -189,6 +189,21 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsGuildMaster"] = luaNoArgs(func() any { return false })
 	methods["IsTabardDesigner"] = luaNoArgs(func() any { return false })
 	methods["IsPvPFlagged"] = luaNoArgs(func() any { return state.PVPFlags&pvpFlagPvP != 0 })
+	// IsAttackingPlayer is Unit::isAttackingPlayer (Unit.cpp:5849-5865):
+	// the UNIT_STATE_ATTACK_PLAYER read, which Go models as the
+	// contested-PvP flag (threat.go SetContestedPvP twin). The pure
+	// query form reads the flag without running the expiry side effect;
+	// the world tick's updateContestedPvP owns expiry, like C++'s
+	// UpdateContestedPvP. The creature-surface twin lives in
+	// lua_worldobject_range.go.
+	methods["IsAttackingPlayer"] = luaNoArgs(func() any { return s.contestedPvPActiveQuery(time.Now()) })
+	// SendChatMessageToPlayer is UnitMethods::SendChatMessageToPlayer
+	// (UnitMethods.h:2095-2113), shared with the creature surfaces in
+	// lua_worldobject_range.go; the sender chat tag is the player's
+	// GetChatTag value, like C++ BuildChatPacket's player-sender arm.
+	methods["SendChatMessageToPlayer"] = func(_ context.Context, args []any) ([]any, error) {
+		return s.server.luaSendChatMessageToPlayer(state.GUID, s.chatTag(), args)
+	}
 	methods["GetGender"] = luaNoArgs(func() any { return state.Gender })
 	// GetDisplayId is Unit::GetDisplayId (Unit.h): the UNIT_FIELD_DISPLAYID
 	// read. Go computes the same value the update-values builder broadcasts
@@ -295,6 +310,37 @@ func (s *session) luaPlayer() *scripting.Object {
 			return false, fmt.Errorf("%s requires a boolean", method)
 		}
 		return on, nil
+	}
+	// SetSanctuary is UnitMethods::SetSanctuary (UnitMethods.h:1892-1908):
+	// the UNIT_BYTE2_FLAG_SANCTUARY (0x08, UnitDefines.h:106) byte flag
+	// on UNIT_FIELD_BYTES_2 byte 1 — Go's player PVPFlags byte, which
+	// the update-values builder already folds into bytes2 — plus the
+	// CombatStop() arm (includingCast=false, mutualPvP=true, Unit.h:823):
+	// attack stop + in-combat clear, the handleCmdCombatStop twin.
+	// DELTAS: the RemoveAllAttackers leg (attackers stop attacking this
+	// unit) has no Go bridge, same documented gap as the command twin;
+	// the CombatStopWithPets leg is unmodeled (no pet attack-stop
+	// primitive that does not halt motion); the creature surface stays
+	// unwired (no creature bytes2-byte1 field — motion tracks only the
+	// byte-0 sheath state).
+	methods["SetSanctuary"] = func(_ context.Context, args []any) ([]any, error) {
+		apply, err := extraBool("SetSanctuary", args)
+		if err != nil {
+			return nil, err
+		}
+		if apply {
+			state.PVPFlags |= pvpFlagSanctuary
+			if s.attackTarget != 0 {
+				victim := s.attackTarget
+				s.attackTarget = 0
+				_ = s.sendAttackStop(victim, false)
+			}
+			state.UnitFlags &^= unitFlagInCombat
+		} else {
+			state.PVPFlags &^= pvpFlagSanctuary
+		}
+		s.sendPlayerUpdate()
+		return nil, nil
 	}
 	// SetAcceptWhispers/SetGMChat/SetTaxiCheat are the Player:: bit
 	// flips (Player.h:958/964/966); the GM-chat setter also keeps the
