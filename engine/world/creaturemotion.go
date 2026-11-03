@@ -225,6 +225,24 @@ type creatureMotion struct {
 	// Reset runs after CombatStop. The evade clear respects it; a plain
 	// AttackStop still clears the per-engagement latch.
 	NoCallAssistance bool
+	// AlreadySearchedAssistance mirrors Creature::m_AlreadySearchedAssistance
+	// (Creature.h:467): Lua CreatureMethods::HasSearchedAssistance /
+	// SetNoSearchAssistance (Creature.h:247-248) writes it directly, so
+	// true means the creature never searches for assistance and false
+	// re-opens the search. Set by DoFleeToGetAssistance
+	// (Creature.cpp:1047), cleared by setDeathState (Creature.cpp:2102)
+	// and on respawn (a fresh C++ Creature starts false). Read by
+	// MoveSplineInit::Launch (MoveSplineInit.cpp:118) as the 0.66
+	// velocity multiplier, applied in creatureSplineVelocity.
+	AlreadySearchedAssistance bool
+	// RespawnDelaySec / RespawnDelayKnown mirror Creature::m_respawnDelay
+	// (Creature.h:451) as written by Lua CreatureMethods::SetRespawnDelay
+	// (Creature.h:263): the script override of the creature.spawntimesecs
+	// value, consumed by scheduleCreatureRespawn /
+	// scheduleInstanceCreatureRespawn at death. Valid only while Known;
+	// cleared on respawn, when C++ re-inits the field from the DB row.
+	RespawnDelaySec   uint32
+	RespawnDelayKnown bool
 	// AssistAt/AssistVictim/Assistants mirror the AssistDelayEvent queued by
 	// Creature::CallAssistance (Creature.h:523-536, Creature.cpp:2402-2425):
 	// after CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY the gathered assistants
@@ -518,19 +536,26 @@ const creatureTypeFlagBossMob = 0x4
 // rate to 1.0, Creature.cpp:532). Go tracks the flying analog on
 // motion.CanFly, so flyers use the flight velocity regardless of walk.
 // Documented no-bridge arms of the same Launch block: the SWIMMING leg of
-// SelectSpeedType (creatureMotion carries no swim flag), the 0.66
-// searched-assistance multiplier (no assistance model), and the client
+// SelectSpeedType (creatureMotion carries no swim flag) and the client
 // speed cap min(velocity, catmullrom||flying ? 50 : max(28, run*4)) —
 // vacuous for template speeds (velocity stays near the base rates).
 // Waypoint LAND/TAKEOFF set only AnimationTier (cosmetic), unmodeled.
+// The 0.66 searched-assistance multiplier (MoveSplineInit.cpp:118) is
+// applied below: it folds over the selected speed for every spline,
+// including flight, exactly like Launch's unconditional post-select arm.
 func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
+	var speed float32
 	if motion != nil && motion.CanFly {
-		return creatureBaseFlightSpeed
+		speed = creatureBaseFlightSpeed
+	} else if walk {
+		speed = motion.Speed
+	} else {
+		speed = motion.RunSpeed
 	}
-	if walk {
-		return motion.Speed
+	if motion != nil && motion.AlreadySearchedAssistance {
+		speed *= 0.66
 	}
-	return motion.RunSpeed
+	return speed
 }
 
 // splineDurationMs mirrors MoveSpline's duration computation
@@ -1330,6 +1355,162 @@ func canCreatureAssistTo(s *Server, assistant, caller *creatureMotion, enemy pla
 		return false
 	}
 	return true
+}
+
+// assistParty is a resolved CreatureMethods::CanAssistTo friend/enemy: a
+// creature motion snapshot or a player position. ok=false means the Lua
+// argument did not resolve to a live unit on the assistant's map/instance
+// (the Eluna CHECKOBJ failure twin); pets and gameobjects never resolve,
+// since Go pet motions live outside the motion map.
+type assistParty struct {
+	ok       bool
+	isPlayer bool
+	faction  uint32    // creature Faction, or the player's effective faction template
+	evading  bool      // creatures only; players never carry evade state
+	pos      playerPos // players only
+}
+
+// resolveAssistParty resolves a Lua unit argument to an assist party on the
+// assistant's map/instance. Sessions resolve first (player GUIDs never
+// carry the 0xF130 creature high bits, so the two namespaces are disjoint);
+// creatures resolve through the live motion map. Cross-instance creature
+// parties do not resolve: C++ grid checks run on one Map object, so a
+// creature on another instance is never in assist range. Callers must not
+// hold motionMu: findSessionByGUID takes sessionsMu, and sessionsMu is
+// never taken under motionMu.
+func (s *Server) resolveAssistParty(arg any, mapID, instanceID uint32) assistParty {
+	obj, ok := arg.(*scripting.Object)
+	if !ok || obj == nil {
+		return assistParty{}
+	}
+	guid := luaObjectGUID(obj)
+	if guid == 0 {
+		return assistParty{}
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		pos := playerPosForAssist(sess)
+		return assistParty{ok: true, isPlayer: true, faction: pos.FactionTemplate, pos: pos}
+	}
+	motion := s.findCreatureMotion(mapID, instanceID, guid)
+	if motion == nil {
+		return assistParty{}
+	}
+	s.motionMu.Lock()
+	faction, evading := motion.Faction, motion.Evading
+	s.motionMu.Unlock()
+	return assistParty{ok: true, faction: faction, evading: evading}
+}
+
+// creatureTemplateFriendlyTo is the creature-vs-creature twin of
+// Unit::IsFriendlyTo (FactionTemplateEntry::IsFriendlyTo,
+// DBCStructure.h:697-709, via factionTemplateFriendlyTo): friend lists
+// and friend groups, checked in both directions like the reaction
+// computation. It must NOT reuse isFriendlyFaction with a synthetic
+// playerPos: that helper takes the player-reputation branch, and a
+// race-0 synthetic position can match a raceMask-0 faction row's base
+// standing. A missing template on either side reads not-friendly. The
+// hostile arm reuses the in-tree creatureFactionHostileTo
+// (chain_targets.go, FactionTemplateEntry::IsHostileTo twin).
+func (s *Server) creatureTemplateFriendlyTo(a, b uint32) bool {
+	if s == nil || s.Data == nil {
+		return false
+	}
+	at, aFound, aErr := s.Data.FactionTemplate(a)
+	bt, bFound, bErr := s.Data.FactionTemplate(b)
+	if aErr != nil || bErr != nil || !aFound || !bFound {
+		return false
+	}
+	return factionTemplateFriendlyTo(at, bt) || factionTemplateFriendlyTo(bt, at)
+}
+
+// creatureCanAssistTo is the Lua CreatureMethods::CanAssistTo twin
+// (CreatureMethods.h:76-88, Creature.cpp:2458-2496) with both
+// checkfaction arms. Unlike the assist funnel's canCreatureAssistTo it
+// does NOT exclude the assistant assisting itself: C++ has no self gate,
+// so an unengaged creature assisting itself passes the same gates. The
+// caller passes a motion snapshot's fields, never a locked motion: the
+// faction helpers read DBC data, which the funnel already reads under
+// motionMu, but Lua surfaces must not nest sessionsMu under motionMu.
+func (s *Server) creatureCanAssistTo(assistantFaction uint32, assistantPassive bool, assistantHealth uint32, assistantEvading, assistantInCombat bool, assistantUnitFlags uint32, assistantOwnerGUID, assistantCharmerGUID uint64, friend, enemy assistParty, checkfaction bool) bool {
+	if !friend.ok || !enemy.ok {
+		return false
+	}
+	// REACT_AGGRESSIVE (Creature.cpp:2462); the civilian arm
+	// (Creature.cpp:2475) folds into the same gate — civilian maps to
+	// passive in creatureReactState.
+	if assistantPassive {
+		return false
+	}
+	// we don't need help from zombies (Creature.cpp:2465); evade mode
+	// (Creature.cpp:2468).
+	if assistantHealth == 0 || assistantEvading {
+		return false
+	}
+	// or if enemy is in evade mode (Creature.cpp:2468-2470); players
+	// never carry evade state, so only creature enemies check.
+	if !enemy.isPlayer && enemy.evading {
+		return false
+	}
+	// UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_SELECTABLE ||
+	// IsImmuneToNPC (Creature.cpp:2477).
+	if assistantUnitFlags&(unitFlagNonAttackable|0x02000000|unitFlagImmuneToNPC) != 0 {
+		return false
+	}
+	// skip fighting creature (Creature.cpp:2480); only free creatures
+	// (Creature.cpp:2483) — pets/charmed carry OwnerGUID, charmed
+	// victims carry CharmerGUID (GetCharmerOrOwnerGUID twin).
+	if assistantInCombat || assistantOwnerGUID != 0 || assistantCharmerGUID != 0 {
+		return false
+	}
+	// only from same creature faction (Creature.cpp:2486-2490), else
+	// friendly to the friend (Creature.cpp:2490-2492).
+	if checkfaction {
+		if assistantFaction != friend.faction {
+			return false
+		}
+	} else {
+		if friend.isPlayer {
+			if !s.isFriendlyFaction(assistantFaction, friend.pos) {
+				return false
+			}
+		} else if !s.creatureTemplateFriendlyTo(assistantFaction, friend.faction) {
+			return false
+		}
+	}
+	// skip non hostile to enemy creatures (Creature.cpp:2493-2495).
+	if enemy.isPlayer {
+		if !s.isAttackableFaction(assistantFaction, enemy.pos) {
+			return false
+		}
+	} else if !s.creatureFactionHostileTo(assistantFaction, enemy.faction) {
+		return false
+	}
+	return true
+}
+
+// creatureRespawnDelaySeconds resolves Creature::GetRespawnDelay
+// (Creature.h:262): the live SetRespawnDelay override while known, else
+// the creature.spawntimesecs DB row (the value C++ loads into
+// m_respawnDelay). A missing row or DB reads 0, the temp-summon value.
+func (s *Server) creatureRespawnDelaySeconds(ctx context.Context, mapID, instanceID uint32, guid uint64) uint32 {
+	if s != nil {
+		s.motionMu.Lock()
+		motion := s.findCreatureMotionLocked(mapID, instanceID, guid)
+		if motion != nil && motion.RespawnDelayKnown {
+			secs := motion.RespawnDelaySec
+			s.motionMu.Unlock()
+			return secs
+		}
+		s.motionMu.Unlock()
+	}
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return 0
+	}
+	var raw int64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(spawntimesecs, 0) FROM creature WHERE guid = ?", uint32(guid&0x00FFFFFF)).Scan(&raw); err != nil || raw < 0 {
+		return 0
+	}
+	return uint32(raw)
 }
 
 // fireCreatureAssistance runs the AssistDelayEvent arm

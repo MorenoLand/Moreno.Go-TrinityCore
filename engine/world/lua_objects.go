@@ -369,6 +369,106 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, nil
 	}
+	// CallAssistance is Creature::CallAssistance (Creature.cpp:2402-2425)
+	// through the engine's callCreatureAssistance funnel, the
+	// session-creature twin of the handler binding. A motion that no
+	// longer resolves is a no-op.
+	methods["CallAssistance"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.callCreatureAssistance(ctx, motion)
+		}
+		return nil, nil
+	}
+	// HasSearchedAssistance is Creature::HasSearchedAssistance
+	// (Creature.h:248), the session-creature twin of the handler
+	// binding; a motion that no longer resolves reads false.
+	methods["HasSearchedAssistance"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.AlreadySearchedAssistance
+		}
+		return false
+	})
+	// SetNoSearchAssistance is Creature::SetNoSearchAssistance
+	// (Creature.h:247) through the motion lock, mirroring
+	// SetNativeDisplayId's write-through shape; a despawned motion is
+	// a silent no-op. Omitted argument defaults true, the Eluna
+	// CHECKVAL default.
+	methods["SetNoSearchAssistance"] = func(_ context.Context, args []any) ([]any, error) {
+		val := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetNoSearchAssistance requires a bool")
+			}
+			val = b
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion != nil && motion.Entry == state.Entry {
+			motion.AlreadySearchedAssistance = val
+		}
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// GetRespawnDelay is Creature::GetRespawnDelay (Creature.h:262),
+	// the session-creature twin of the handler binding: the
+	// SetRespawnDelay override while known, else the
+	// creature.spawntimesecs DB row.
+	methods["GetRespawnDelay"] = func(ctx context.Context, _ []any) ([]any, error) {
+		return []any{s.server.creatureRespawnDelaySeconds(ctx, state.Map, state.InstanceID, state.GUID)}, nil
+	}
+	// SetRespawnDelay is Creature::SetRespawnDelay (Creature.h:263)
+	// through the motion lock, mirroring SetNativeDisplayId's
+	// write-through shape; a despawned motion is a silent no-op. It
+	// writes no DB row, matching C++.
+	methods["SetRespawnDelay"] = func(_ context.Context, args []any) ([]any, error) {
+		delay, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion != nil && motion.Entry == state.Entry {
+			motion.RespawnDelaySec = delay
+			motion.RespawnDelayKnown = true
+		}
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// CanAssistTo is Creature::CanAssistTo (CreatureMethods.h:76-88,
+	// Creature.cpp:2458-2496) via creatureCanAssistTo, the
+	// session-creature twin of the handler binding. A motion that no
+	// longer resolves reads false; unresolvable friend/enemy
+	// arguments error, the Eluna CHECKOBJ twin.
+	methods["CanAssistTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("CanAssistTo requires a friend and an enemy Unit")
+		}
+		friend := s.server.resolveAssistParty(args[0], state.Map, state.InstanceID)
+		if !friend.ok {
+			return nil, fmt.Errorf("CanAssistTo requires a friend Unit")
+		}
+		enemy := s.server.resolveAssistParty(args[1], state.Map, state.InstanceID)
+		if !enemy.ok {
+			return nil, fmt.Errorf("CanAssistTo requires an enemy Unit")
+		}
+		checkfaction := true
+		if len(args) >= 3 && args[2] != nil {
+			b, ok := args[2].(bool)
+			if !ok {
+				return nil, fmt.Errorf("CanAssistTo requires a bool checkFaction")
+			}
+			checkfaction = b
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return []any{false}, nil
+		}
+		s.server.motionMu.Lock()
+		faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID := motion.Faction, isCreaturePassive(motion), motion.Health, motion.Evading, motion.InCombat, motion.UnitFlags, motion.OwnerGUID, motion.CharmerGUID
+		s.server.motionMu.Unlock()
+		return []any{s.server.creatureCanAssistTo(faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID, friend, enemy, checkfaction)}, nil
+	}
 	// IsInWater/IsUnderWater are Unit::IsInWater/IsUnderWater
 	// (Unit.cpp:3276-3284) via the grid-leg liquid status, over the
 	// builder's live-motion snapshot coords like its other reads.

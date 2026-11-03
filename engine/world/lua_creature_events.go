@@ -1166,6 +1166,102 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// CallAssistance is Creature::CallAssistance (Creature.cpp:2402-2425)
+	// through the engine's callCreatureAssistance funnel: once per
+	// engagement, same-faction aggressive unengaged creatures within the
+	// family-assistance radius are gathered and engage after the
+	// configured delay. The funnel re-checks its own gates, so a
+	// second call in the same engagement is a no-op there, matching
+	// C++'s m_AlreadyCallAssistance early return.
+	methods["CallAssistance"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.callCreatureAssistance(ctx, motion)
+		return nil, nil
+	}
+	// HasSearchedAssistance is Creature::HasSearchedAssistance
+	// (Creature.h:248): the m_AlreadySearchedAssistance read. Only
+	// DoFleeToGetAssistance and Lua SetNoSearchAssistance set it in
+	// C++; Go's flee-to-assistance arm is unported, so Lua writes and
+	// the 0.66 spline multiplier are its live readers.
+	methods["HasSearchedAssistance"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.AlreadySearchedAssistance
+	})
+	// SetNoSearchAssistance is Creature::SetNoSearchAssistance
+	// (Creature.h:247): it writes m_AlreadySearchedAssistance directly,
+	// so true disables searching and false re-opens it. The Eluna
+	// CHECKVAL default is true when omitted; a mistyped argument
+	// errors, as CHECKVAL does.
+	methods["SetNoSearchAssistance"] = func(_ context.Context, args []any) ([]any, error) {
+		val := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetNoSearchAssistance requires a bool")
+			}
+			val = b
+		}
+		s.motionMu.Lock()
+		motion.AlreadySearchedAssistance = val
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// GetRespawnDelay is Creature::GetRespawnDelay (Creature.h:262):
+	// the live m_respawnDelay field — the SetRespawnDelay override
+	// while known, else the creature.spawntimesecs DB row. A
+	// despawned motion reads 0 through the DB-miss arm, the
+	// temp-summon value.
+	methods["GetRespawnDelay"] = func(ctx context.Context, _ []any) ([]any, error) {
+		return []any{s.creatureRespawnDelaySeconds(ctx, motion.Map, motion.InstanceID, motion.GUID)}, nil
+	}
+	// SetRespawnDelay is Creature::SetRespawnDelay (Creature.h:263):
+	// the m_respawnDelay write, consumed by the respawn schedulers at
+	// death and cleared on respawn, when C++ re-inits from the DB
+	// row. It writes no DB row, matching C++.
+	methods["SetRespawnDelay"] = func(_ context.Context, args []any) ([]any, error) {
+		delay, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.RespawnDelaySec = delay
+		motion.RespawnDelayKnown = true
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// CanAssistTo is Creature::CanAssistTo (CreatureMethods.h:76-88,
+	// Creature.cpp:2458-2496) via creatureCanAssistTo: the assistant
+	// gates (aggressive, alive, not evading, flags, unengaged, free),
+	// the same-faction-or-friendly friend arm, and the hostile-to-enemy
+	// arm. Friend/enemy resolve on the assistant's map/instance;
+	// unresolvable parties error, the Eluna CHECKOBJ twin. Sessions
+	// resolve before any motion lock: sessionsMu is never taken under
+	// motionMu.
+	methods["CanAssistTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("CanAssistTo requires a friend and an enemy Unit")
+		}
+		friend := s.resolveAssistParty(args[0], motion.Map, motion.InstanceID)
+		if !friend.ok {
+			return nil, fmt.Errorf("CanAssistTo requires a friend Unit")
+		}
+		enemy := s.resolveAssistParty(args[1], motion.Map, motion.InstanceID)
+		if !enemy.ok {
+			return nil, fmt.Errorf("CanAssistTo requires an enemy Unit")
+		}
+		checkfaction := true
+		if len(args) >= 3 && args[2] != nil {
+			b, ok := args[2].(bool)
+			if !ok {
+				return nil, fmt.Errorf("CanAssistTo requires a bool checkFaction")
+			}
+			checkfaction = b
+		}
+		s.motionMu.Lock()
+		faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID := motion.Faction, isCreaturePassive(motion), motion.Health, motion.Evading, motion.InCombat, motion.UnitFlags, motion.OwnerGUID, motion.CharmerGUID
+		s.motionMu.Unlock()
+		return []any{s.creatureCanAssistTo(faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID, friend, enemy, checkfaction)}, nil
+	}
 	// ResetPlayerDamageReq is Creature::ResetPlayerDamageReq
 	// (Creature.h:324): m_PlayerDamageReq = GetHealth() / 2. Go models
 	// the field as motion.PlayerDamageReq, consumed by the kill-path

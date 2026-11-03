@@ -1069,6 +1069,9 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			// flag re-arms at the next engage (the Unit::AttackStop reset
 			// twin, Unit.cpp:5783) and the pending delayed assist dies.
 			motion.AlreadyCallAssistance = false
+			// Creature::setDeathState (Creature.cpp:2102) clears the
+			// searched-assistance flag with the engagement.
+			motion.AlreadySearchedAssistance = false
 			motion.AssistAt = time.Time{}
 			motion.AssistVictim = 0
 			motion.Assistants = nil
@@ -1797,6 +1800,9 @@ func (s *Server) clearCreatureDeathState(dead *creatureMotion) {
 	// at :11324+).
 	s.interruptCreatureCastsOnRemove(dead)
 	dead.AlreadyCallAssistance = false
+	// Creature::setDeathState (Creature.cpp:2102) clears the
+	// searched-assistance flag with the engagement.
+	dead.AlreadySearchedAssistance = false
 	dead.AssistAt = time.Time{}
 	dead.AssistVictim = 0
 	dead.Assistants = nil
@@ -2038,6 +2044,16 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	var entry, mapID int64
 	var x, y, z float64
 	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&entry, &mapID, &x, &y, &z)
+	// SetRespawnDelay override: setDeathState reads the live m_respawnDelay
+	// field, not the DB row, so a scripted override replaces the
+	// spawntimesecs value before the dungeon-boss/zero arms below.
+	if m := s.findCreatureMotion(uint32(mapID), 0, creatureWorldGUID(guid, uint32(entry))); m != nil {
+		s.motionMu.Lock()
+		if m.RespawnDelayKnown {
+			rawSeconds = int64(m.RespawnDelaySec)
+		}
+		s.motionMu.Unlock()
+	}
 	if rawSeconds == 0 && s.autoBalanceIsDungeonBoss(ctx, uint32(entry)) {
 		// Creature::setDeathState JUST_DIED (Creature.cpp:2085-2093): a
 		// dungeon boss (Creature::IsDungeonBoss, Creature.h:112 — the
@@ -2123,6 +2139,14 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&spawnEntry, &mapID, &x, &y, &z)
 	if spawnEntry <= 0 {
 		spawnEntry = int64(entry)
+	}
+	// SetRespawnDelay override, same live-field read as the world path.
+	if m := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); m != nil {
+		s.motionMu.Lock()
+		if m.RespawnDelayKnown {
+			rawSeconds = int64(m.RespawnDelaySec)
+		}
+		s.motionMu.Unlock()
 	}
 	neverRespawn := rawSeconds == 0 && s.autoBalanceIsDungeonBoss(ctx, uint32(spawnEntry))
 	// Creature::setDeathState JUST_DIED (Creature.cpp:2077-2085): a dungeon
@@ -2492,6 +2516,12 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
 				motion.InCombat, motion.TargetGUID, motion.Moving = false, 0, false
 				motion.Looted = false
+				// Creature::Respawn re-inits from the DB row: the scripted
+				// respawn-delay override and the searched-assistance flag
+				// die with the old incarnation (fresh C++ Creature).
+				motion.RespawnDelayKnown = false
+				motion.RespawnDelaySec = 0
+				motion.AlreadySearchedAssistance = false
 				// Creature::JUST_RESPAWNED (Creature.cpp:2121-2125):
 				// SetLootRecipient(nullptr) + ResetPlayerDamageReq().
 				motion.TapPlayerGUID, motion.TapGroupID = 0, 0
@@ -2558,6 +2588,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
 			motion.InCombat, motion.Evading, motion.TargetGUID, motion.Moving = false, false, 0, false
 			motion.Looted = false
+			// Creature::Respawn re-inits from the DB row: same override /
+			// searched-flag clear as the world path above.
+			motion.RespawnDelayKnown = false
+			motion.RespawnDelaySec = 0
+			motion.AlreadySearchedAssistance = false
 			motion.Refreshed = now
 			// Creature::JUST_RESPAWNED (Creature.cpp:2121-2125):
 			// SetLootRecipient(nullptr) + ResetPlayerDamageReq().
