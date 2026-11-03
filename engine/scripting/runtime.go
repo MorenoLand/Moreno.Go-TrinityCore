@@ -242,6 +242,32 @@ const (
 	// fires it from World::ShutdownCancel (World.cpp:3069) after the
 	// cancel broadcast, only when a timer actually existed.
 	ServerEventShutdownCancel = 12
+	// ServerEventMapUpdate is MAP_EVENT_ON_UPDATE
+	// (LuaEngine/Hooks.h:132 = 23, args (event, map, diff)):
+	// ServerHooks.cpp:354-360 fires it from ScriptMgr::OnMapUpdate
+	// (ScriptMgr.cpp:1560), called from Map::Update (Map.cpp:907) on
+	// every map update. The Go engine fires it from the world tick
+	// for each map carrying at least one session; a player-less Go
+	// map has no materialized update at all, so it never fires (the
+	// same scope rule as updateInstanceScriptTicks).
+	ServerEventMapUpdate = 23
+	// ServerEventGameEventStart is GAME_EVENT_START
+	// (LuaEngine/Hooks.h:155 = 34, args (event, gameeventid)):
+	// GameEventMgr::StartEvent fires it via Eluna::OnGameEventStart
+	// (GameEventMgr.cpp:152/179, ServerHooks.cpp:90-95) once the event
+	// is active. The Go engine fires it from the world tick when a
+	// GAMEEVENT_NORMAL event enters the cached active set (see
+	// game_event_hooks.go); world-event states stay inactive, matching
+	// the idle-GameEventMgr stance in conditions.go.
+	ServerEventGameEventStart = 34
+	// ServerEventGameEventStop is GAME_EVENT_STOP
+	// (LuaEngine/Hooks.h:156 = 35, args (event, gameeventid)):
+	// GameEventMgr::StopEvent fires it via Eluna::OnGameEventStop
+	// (GameEventMgr.cpp:229, ServerHooks.cpp:97-101) once the event is
+	// no longer active. Go fires it from the same tick diff, after the
+	// starts, mirroring GameEventMgr::Update's activate-then-deactivate
+	// order (GameEventMgr.cpp:1143-1156).
+	ServerEventGameEventStop = 35
 	// ServerEventWeatherChange is WEATHER_EVENT_ON_CHANGE
 	// (LuaEngine/Hooks.h:137 = 25, args (event, zoneId, state, grade)):
 	// Weather::UpdateWeather fires it via ScriptMgr::OnWeatherChange

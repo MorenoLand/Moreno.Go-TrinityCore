@@ -143,6 +143,8 @@ type Server struct {
 	stopEvent          atomic.Bool // World::m_stopEvent (World.h:795): Stop() has run; shutdown timers ignore further arms
 	shutdownMu         sync.Mutex  // guards shutdown (World::m_ShutdownTimer/m_ShutdownMask/m_ExitCode triple, World.cpp:2983-3072; see shutdown.go)
 	shutdown           serverShutdown
+	gameEventHookMu    sync.Mutex // guards gameEventActive (see game_event_hooks.go)
+	gameEventActive    map[int64]struct{}
 	ticketsEnabled     atomic.Bool
 	ticketsLastChange  atomic.Int64 // TicketMgr::_lastChange (TicketMgr.cpp:273); see noteTicketsChanged
 	objectsMu          sync.RWMutex
@@ -1564,6 +1566,8 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.pruneBGOfflineHolders(now)
 			s.updateBattlegroundPrematureFinish(now)
 			s.updateInstanceScriptTicks(ctx, diff)
+			s.updateGameEventHooks(ctx)
+			s.updateMapServerEvents(ctx, diff)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}
 	}
