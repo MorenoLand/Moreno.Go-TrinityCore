@@ -43,7 +43,7 @@
 -- stored summon objects — the guard list stays empty because
 -- guards are never summoned, header). OnReset(23): the C++ Reset()
 -- SetSpeedRate(MOVE_RUN, 2) arm, ported via creature:SetSpeedRate
--- (the SetWalk(false) leg has no bridge; removeAdds/_Reset/
+-- (the SetWalk(false) leg is PORTED in kargathReset via creature:SetWalk; removeAdds/_Reset/
 -- Initialize have no observable remainder in this model, omrogg
 -- "no event 3" precedent). Melee is
 -- engine-driven.
@@ -263,11 +263,12 @@ local function kargathDied(event, creature, killer)
 end
 
 local function kargathReset(event, creature)
-    -- C++ Reset() :114: SetSpeedRate(MOVE_RUN, 2); the SetWalk(false) leg
-    -- has no bridge, and the rest of Reset (removeAdds/_Reset/Initialize)
+    -- C++ Reset() :114: SetSpeedRate(MOVE_RUN, 2) + SetWalk(false), both
+    -- PORTED below; the rest of Reset (removeAdds/_Reset/Initialize)
     -- has no observable remainder in this model except the assassin
     -- sweep above (documented above).
     creature:SetSpeedRate(1, 2)
+    creature:SetWalk(false)
     local guid = creature:GetGUID()
     cancelKargath(guid)
     despawnAssassins(guid)

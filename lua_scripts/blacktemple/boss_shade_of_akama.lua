@@ -59,7 +59,8 @@
 -- unmodeled; the SetImmuneToPC / UNIT_FLAG_NOT_SELECTABLE Reset
 -- arms are PORTED via the bridged unit-flags surface (see shadeReset) —
 -- the MovementInform removal pair stays out (no MovementInform bridge);
--- SetWalk still has no bridge, and the SetFaction arms live in the
+-- the Reset SetWalk(true) leg is PORTED in shadeReset via creature:SetWalk,
+-- and the SetFaction arms live in the
 -- unregistered channeler/sorcerer AIs (the EMOTE_STATE stun/none arms
 -- are PORTED 2026-10-20 via creature:EmoteState); no summon
 -- model — the channeler spawns ride SummonCreatureGroup (no bridge),
@@ -172,6 +173,9 @@ local function shadeReset(event, creature)
         creature:SetFlag(59, 0x100)
         creature:SetFlag(59, 0x2000000)
     end
+    -- C++ boss_shade_of_akama.cpp:222 (Reset): SetWalk(true) -- PORTED
+    -- via the bridged creature:SetWalk (luaMotionCreature builder).
+    creature:SetWalk(true)
 end
 
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 4, shadeDied)
