@@ -2103,6 +2103,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.syncCreatureVehiclePassengers(m)
 		return nil, nil
 	}
+	// NearTeleport aliases Teleport: the handler Teleport above is
+	// already Unit::NearTeleportTo (Unit.cpp:13332-13346) under the
+	// Go-side name. DELTA: C++ NearTeleport CHECKVALs the orientation
+	// (a missing o errors); the Teleport twin defaults it to the
+	// current facing, and the alias inherits that leniency.
+	methods["NearTeleport"] = methods["Teleport"]
+	// GetBaseSpellPower is Unit::GetBaseSpellPower (UnitMethods.h:743):
+	// the PLAYER_FIELD_MOD_DAMAGE_DONE_POS + school field, which
+	// creatures do not carry, so it reads 0. The school arg is still
+	// validated like C++'s CHECKVAL, and school >= MAX_SPELL_SCHOOL
+	// (7) reads nil like the player twin.
+	methods["GetBaseSpellPower"] = func(_ context.Context, args []any) ([]any, error) {
+		school, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if school >= 7 {
+			return []any{nil}, nil
+		}
+		return []any{uint32(0)}, nil
+	}
 	// SetDisableGravity is Creature::SetDisableGravity (Creature.cpp:3027):
 	// flips MOVEMENTFLAG_DISABLE_GRAVITY (and clears MOVEMENTFLAG_FALLING)
 	// with the C++ no-op-on-unchanged early-out, then broadcasts
@@ -3694,6 +3715,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// (see lua_worldobject_range.go). Registered from the creature
 	// surface with the live motion as origin.
 	for name, fn := range luaRangeMethods(s, func() luaRangeOrigin { return s.luaRangeOriginForMotion(motion) }) {
+		methods[name] = fn
+	}
+	// GetFriendlyUnitsInRange/GetUnfriendlyUnitsInRange are the Unit
+	// in-range pair (UnitMethods.h:1255/1296); see
+	// luaUnitFriendlyMethods in lua_worldobject_range.go.
+	for name, fn := range luaUnitFriendlyMethods(s, func() luaRangeOrigin { return s.luaRangeOriginForMotion(motion) }) {
 		methods[name] = fn
 	}
 	// GetGameObjectsInGrid(entry, dist) is

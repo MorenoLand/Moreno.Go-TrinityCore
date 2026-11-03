@@ -427,6 +427,74 @@ func (srv *Server) luaRangeList(ctx context.Context, origin luaRangeOrigin, kind
 	return out
 }
 
+// luaRangeFriendlyTo mirrors WorldObject::IsFriendlyTo
+// (Object.cpp:2847-2850, GetReactionTo >= REP_FRIENDLY) between the
+// origin unit and a candidate unit. A motion origin reuses
+// creatureFriendlyToTarget (player targets through their live session,
+// creature targets through the faction-template reaction); a player
+// origin uses the session twins (team-based player-vs-player with the
+// duel arm, faction-reaction player-vs-creature). An origin with no
+// unit reads not-friendly.
+func (srv *Server) luaRangeFriendlyTo(origin luaRangeUnit, cand luaRangeCandidate) bool {
+	if origin.motion != nil {
+		return srv.creatureFriendlyToTarget(origin.motion, cand.guid)
+	}
+	if origin.isPlayer && origin.sess != nil {
+		if cand.kind == luaRangeKindPlayer && cand.sess != nil {
+			return origin.sess.isFriendlyToPlayer(cand.sess)
+		}
+		return origin.sess.isFriendlyToCreatureTarget(cand.guid)
+	}
+	return false
+}
+
+// luaUnitFriendlyMethods builds the Eluna Unit in-range pair
+// (UnitMethods.h:1255/1296) for one unit surface — deliberately
+// separate from luaRangeMethods, which the gameobject surface also
+// shares (a gameobject is not a unit). GetFriendlyUnitsInRange is
+// AnyFriendlyUnitInObjectRangeCheck (GridNotifiers.h:966): alive
+// units in range passing IsFriendlyTo, self excluded; the unfriendly
+// twin is AnyUnfriendlyUnitInObjectRangeCheck (:916): alive units in
+// range failing IsFriendlyTo, so neutrals count as unfriendly. Both
+// default to SIZE_OF_GRIDS (533.33333) and return a Lua array of unit
+// objects, GUID-sorted like luaRangeList. DELTAS: the range gate is
+// the shared 3D + both-reaches gate — the friendly C++ arm uses a
+// double vertical cylinder instead, so a unit far above/below within
+// 3D range is included here where C++ excludes it; the player-origin
+// player-vs-player friendly read is team-based (duel arm included),
+// not the full C++ reaction fold.
+func luaUnitFriendlyMethods(srv *Server, origin func() luaRangeOrigin) map[string]scripting.ObjectMethod {
+	list := func(friendly bool) scripting.ObjectMethod {
+		return func(ctx context.Context, args []any) ([]any, error) {
+			rangeVal, err := luaOptionalFloat32Arg(args, 0, luaRangeDefaultRange)
+			if err != nil {
+				return nil, err
+			}
+			o := origin()
+			out := make([]any, 0)
+			if srv == nil || o.srv == nil || rangeVal < 0 || o.unit == nil {
+				return []any{out}, nil
+			}
+			for _, cand := range srv.luaRangeCollect(ctx, o, []luaRangeKind{luaRangeKindPlayer, luaRangeKindCreature}, rangeVal) {
+				if _, ok := o.passes(srv, cand, float64(rangeVal), 0, 0, 1, 0); !ok {
+					continue
+				}
+				if srv.luaRangeFriendlyTo(*o.unit, cand) != friendly {
+					continue
+				}
+				if obj := srv.luaRangeObject(cand); obj != nil {
+					out = append(out, obj)
+				}
+			}
+			return []any{out}, nil
+		}
+	}
+	return map[string]scripting.ObjectMethod{
+		"GetFriendlyUnitsInRange":   list(true),
+		"GetUnfriendlyUnitsInRange": list(false),
+	}
+}
+
 func luaOptionalFloat32Arg(args []any, index int, def float32) (float32, error) {
 	if index >= len(args) || args[index] == nil {
 		return def, nil

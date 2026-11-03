@@ -151,6 +151,38 @@ func (s *session) luaPlayer() *scripting.Object {
 	// and the second reads the player's own GUID.
 	methods["GetControllerGUID"] = luaNoArgs(func() any { return uint64(0) })
 	methods["GetControllerGUIDS"] = luaNoArgs(func() any { return state.GUID })
+	// GetBaseSpellPower is Unit::GetBaseSpellPower (UnitMethods.h:743):
+	// the PLAYER_FIELD_MOD_DAMAGE_DONE_POS + school field. C++ writes
+	// that field only for schools HOLY..SHADOW
+	// (Player::UpdateSpellDamageAndHealingBonus, StatSystem.cpp): POS
+	// is SpellBaseDamageBonusDone(1<<school) minus the NEG field, the
+	// sum of negative MOD_DAMAGE_DONE amounts for the school — so the
+	// Go twin folds the live aura pipeline the same way. School 0
+	// (NORMAL) is never rewritten after the creation reset, so it
+	// reads 0; school >= MAX_SPELL_SCHOOL (7) returns nothing in C++
+	// (return 1 with no push), which Go renders as one nil value.
+	// Creatures carry no player fields, so their surfaces read 0.
+	methods["GetBaseSpellPower"] = func(_ context.Context, args []any) ([]any, error) {
+		school, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if school >= 7 {
+			return []any{nil}, nil
+		}
+		if school == 0 {
+			return []any{uint32(0)}, nil
+		}
+		mask := uint32(1) << school
+		base := s.spellBaseDamageBonusDone(mask)
+		neg := int32(0)
+		for _, amt := range s.auraTypeModifiersByMiscMask(spellAuraModDamageDone, mask) {
+			if amt < 0 {
+				neg += amt
+			}
+		}
+		return []any{uint32(base - neg)}, nil
+	}
 	methods["IsArmorer"] = luaNoArgs(func() any { return false })
 	methods["IsBanker"] = luaNoArgs(func() any { return false })
 	methods["IsBattleMaster"] = luaNoArgs(func() any { return false })
@@ -3142,6 +3174,13 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.nearTeleportMove(position[0], position[1], position[2], position[3], false)
 		return nil, nil
 	}
+	// NearTeleport is Unit::NearTeleport (UnitMethods.h:2690) for
+	// players: NearTeleportTo's player arm (Unit.cpp:13332) is the
+	// same-map TeleportTo with the NOT_LEAVE flags, which is exactly
+	// what TeleportNear runs via nearTeleportMove — so it aliases it,
+	// keeping the all-four-required shape that matches NearTeleport's
+	// four CHECKVALs.
+	methods["NearTeleport"] = methods["TeleportNear"]
 	methods["Mute"] = func(_ context.Context, args []any) ([]any, error) {
 		seconds, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -4582,6 +4621,12 @@ func (s *session) luaPlayer() *scripting.Object {
 	// GetCreaturesInRange/GetGameObjectsInRange/GetNearObject/
 	// GetNearObjects, registered from the player surface.
 	for name, fn := range luaRangeMethods(s.server, s.luaRangeOriginForPlayer) {
+		methods[name] = fn
+	}
+	// GetFriendlyUnitsInRange/GetUnfriendlyUnitsInRange are the Unit
+	// in-range pair (UnitMethods.h:1255/1296); see
+	// luaUnitFriendlyMethods in lua_worldobject_range.go.
+	for name, fn := range luaUnitFriendlyMethods(s.server, s.luaRangeOriginForPlayer) {
 		methods[name] = fn
 	}
 	// FindNearestCreature(entry, dist) is the player-surface twin of the

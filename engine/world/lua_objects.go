@@ -348,6 +348,65 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return unitControllerGUID(motion.Charmed, motion.CharmerGUID, motion.OwnerGUID)
 	})
+	// GetBaseSpellPower is Unit::GetBaseSpellPower (UnitMethods.h:743):
+	// the PLAYER_FIELD_MOD_DAMAGE_DONE_POS + school field, which
+	// creatures do not carry, so it reads 0. The school arg is still
+	// validated like C++'s CHECKVAL, and school >= MAX_SPELL_SCHOOL
+	// (7) reads nil like the player twin.
+	methods["GetBaseSpellPower"] = func(_ context.Context, args []any) ([]any, error) {
+		school, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if school >= 7 {
+			return []any{nil}, nil
+		}
+		return []any{uint32(0)}, nil
+	}
+	// NearTeleport is Unit::NearTeleport (UnitMethods.h:2690) for
+	// session creatures: the NearTeleportTo creature arm
+	// (Unit.cpp:13332-13346) — DisableSpline (the in-flight spline
+	// twin) + SendTeleportPacket + UpdatePosition — mirroring the
+	// handler-creature Teleport twin, re-resolved at call time like
+	// the session SendUnit arms. All four CHECKVALs are required, as
+	// in C++; a motion that no longer resolves reads a no-op.
+	methods["NearTeleport"] = func(_ context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		o, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motions := s.server.motionMapLocked(state.Map, state.InstanceID)
+		m, ok := motions[state.GUID]
+		if !ok {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		m.X, m.Y, m.Z, m.Orientation = x, y, z, o
+		m.Moving = false
+		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+		phase := m.PhaseMask
+		s.server.motionMu.Unlock()
+		_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.server.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
+		s.server.broadcastCreatureTeleportMovement(mapID, instanceID, guid, x, y, z, nearby, phase)
+		s.server.syncCreatureVehiclePassengers(m)
+		return nil, nil
+	}
 	methods["GetControllerGUIDS"] = luaNoArgs(func() any {
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)
 		if motion == nil {
@@ -1440,6 +1499,18 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// so nearest reads nil, lists read empty, and IsWithinLoS reads
 	// false (the nil-player-origin convention in luaRangeOriginForPlayer).
 	for name, fn := range luaRangeMethods(s.server, func() luaRangeOrigin {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return luaRangeOrigin{}
+		}
+		return s.server.luaRangeOriginForMotion(motion)
+	}) {
+		methods[name] = fn
+	}
+	// GetFriendlyUnitsInRange/GetUnfriendlyUnitsInRange are the Unit
+	// in-range pair (UnitMethods.h:1255/1296); see
+	// luaUnitFriendlyMethods in lua_worldobject_range.go.
+	for name, fn := range luaUnitFriendlyMethods(s.server, func() luaRangeOrigin {
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)
 		if motion == nil {
 			return luaRangeOrigin{}
