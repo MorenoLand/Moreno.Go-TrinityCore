@@ -1005,30 +1005,52 @@ type scriptProcCast struct {
 	casterGUID uint64
 	targetGUID uint64
 	bp0        uint32
+	bp0Set     bool
 }
 
 // scriptAuraProcCast resolves the script arm for a dummy proc effect.
 // C++ owners: spell_deathwhisper_vampiric_might::HandleProc
-// (boss_lady_deathwhisper.cpp:1019-1032) and
-// spell_gen_vampiric_touch::HandleProc (spell_generic.cpp:3479-3495).
-// A zero-damage event fires nothing in both (the C++ early return); the
-// effect index gates to the registered effect (70674 EFFECT_1, 52723/60501
-// EFFECT_0) so sibling dummy effects of the same aura never double-fire.
-func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID uint64) (scriptProcCast, bool) {
-	if effAura != spellAuraDummy || damage == 0 {
+// (boss_lady_deathwhisper.cpp:1019-1032),
+// spell_gen_vampiric_touch::HandleProc (spell_generic.cpp:3479-3495), and
+// spell_uk_second_wind::HandleProc (utgarde_keep.cpp:236-263).
+// A zero-damage event fires nothing for the first two (the C++ early
+// return); the effect index gates to the registered effect (70674
+// EFFECT_1, 52723/60501 EFFECT_0, 42770 EFFECT_0) so sibling dummy
+// effects of the same aura never double-fire. Second Wind carries no
+// damage gate in C++ (its CheckProc reads only the triggering spell's
+// mechanic mask), so its case bypasses the damage gate; its trigger
+// spell rides DBC base points (the C++ aurEff overload marks the cast
+// aura-triggered only), so bp0Set stays false and no base-point
+// override is applied.
+func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID uint64, triggerSpell *wotlk.Spell) (scriptProcCast, bool) {
+	if effAura != spellAuraDummy {
 		return scriptProcCast{}, false
 	}
 	switch auraSpellID {
 	case 70674: // Vampiric Might, EFFECT_1: holder casts 70677 on self, BP0 = pct of damage.
-		if effIndex != 1 {
+		if damage == 0 || effIndex != 1 {
 			return scriptProcCast{}, false
 		}
-		return scriptProcCast{spellID: 70677, casterGUID: holderGUID, targetGUID: holderGUID, bp0: uint32(uint64(damage) * uint64(effAmount) / 100)}, true
+		return scriptProcCast{spellID: 70677, casterGUID: holderGUID, targetGUID: holderGUID, bp0: uint32(uint64(damage) * uint64(effAmount) / 100), bp0Set: true}, true
 	case 52723, 60501: // Vampiric Touch, EFFECT_0: proc actor casts 52724 on self, BP0 = damage / 2.
-		if effIndex != 0 {
+		if damage == 0 || effIndex != 0 {
 			return scriptProcCast{}, false
 		}
-		return scriptProcCast{spellID: 52724, casterGUID: actorGUID, targetGUID: actorGUID, bp0: damage / 2}, true
+		return scriptProcCast{spellID: 52724, casterGUID: actorGUID, targetGUID: actorGUID, bp0: damage / 2, bp0Set: true}, true
+	case 42770: // Second Wind, EFFECT_0: action target casts 42771 on self when the triggering spell roots or stuns.
+		if effIndex != 0 || triggerSpell == nil {
+			return scriptProcCast{}, false
+		}
+		var mechanicMask uint32
+		for _, eff := range triggerSpell.Effects {
+			if eff.Mechanic < 32 {
+				mechanicMask |= uint32(1) << eff.Mechanic
+			}
+		}
+		if mechanicMask&((uint32(1)<<7)|(uint32(1)<<12)) == 0 { // MECHANIC_ROOT, MECHANIC_STUN (SharedDefines.h:1364,1369)
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 42771, casterGUID: holderGUID, targetGUID: holderGUID}, true
 	}
 	return scriptProcCast{}, false
 }
@@ -1055,11 +1077,19 @@ func (s *Server) fireScriptProcCast(ctx context.Context, holderMap uint32, holde
 		return
 	}
 	if sess := s.findSessionByGUID(cast.casterGUID); sess != nil {
-		sess.castSpellDirectWithBasePoint(ctx, cast.spellID, cast.targetGUID, cast.bp0)
+		if cast.bp0Set {
+			sess.castSpellDirectWithBasePoint(ctx, cast.spellID, cast.targetGUID, cast.bp0)
+		} else {
+			sess.castSpellDirectWithOverrides(ctx, cast.spellID, cast.targetGUID, false, nil, 0, nil)
+		}
 		return
 	}
 	if motion := s.findCreatureMotion(holderMap, holderInstance, cast.casterGUID); motion != nil {
-		s.castCreatureSpellInternalWithBasePoints(ctx, motion, cast.spellID, cast.targetGUID, true, map[int]int32{0: int32(cast.bp0)}, nil, false)
+		var overrides map[int]int32
+		if cast.bp0Set {
+			overrides = map[int]int32{0: int32(cast.bp0)}
+		}
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, cast.spellID, cast.targetGUID, true, overrides, nil, false)
 	}
 }
 
@@ -3114,7 +3144,7 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
 			if eff.Aura == spellAuraDummy {
-				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID); ok {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)
 					continue
 				}

@@ -66,10 +66,13 @@
 -- (target, SPELL_FROST_TOMB_SUMMON 42714, true) -> creature:CastSpell
 -- (target, 42714, true) — the C++ comment says "checked from sniffs -
 -- the player casts the spell"; player:CastSpell is bridged
--- (lua_player.go:309) but the creature cast STAYS: 42714 is a
--- summon-family spell and the session path executes no
--- SPELL_EFFECT_SUMMON while the creature path does (kurinnaxx
--- precedent) — switching would lose the tomb summon; repeat
+-- (lua_player.go:309) but the creature cast STAYS: the session
+-- path does handle SPELL_EFFECT_SUMMON (spells.go finishSpellCast
+-- case 28), so the old "no session summon" reason is RETRACTED —
+-- switching alone still completes nothing, because the tomb's
+-- IsSummonedBy leg needs event 22, which fires only from the
+-- pet funnel (lua_creature_events.go fireCreaturePetSummoned),
+-- never for spell summons; repeat
 -- {14s,19s} regardless of target found,
 -- C++-exact.
 -- JustDied (:165-169) — Talk(SAY_DEATH 5) (event 4 — the sjonnir
@@ -206,9 +209,9 @@ local function frostTombTick(creature, guid)
         creature:CastSpell(target, SPELL_FROST_TOMB_STUN, true)
         -- C++ comment: "checked from sniffs - the player casts the
         -- spell" — player:CastSpell is bridged (lua_player.go:309),
-        -- but the creature cast stays: 42714 is summon-family and
-        -- the session path executes no SPELL_EFFECT_SUMMON, so
-        -- switching would lose the tomb summon (caster deviates).
+        -- but the creature cast stays: the tomb's IsSummonedBy leg
+        -- needs event 22, which fires only from the pet funnel, so
+        -- switching caster alone completes nothing (caster deviates).
         creature:CastSpell(target, SPELL_FROST_TOMB_SUMMON, true)
     end
     schedule(guid, "frosttomb", {14000, 19000}, function()
