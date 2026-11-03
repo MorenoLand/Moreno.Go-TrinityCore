@@ -285,6 +285,8 @@ local function onGossipSelect(event, player, creature, sender, action)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
     -- Entering combat drops pending speech events C++-exact (the C++
     -- combat branch consumes unmatched speech events without acting).
