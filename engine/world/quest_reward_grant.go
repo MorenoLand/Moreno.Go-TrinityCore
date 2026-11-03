@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -299,6 +300,7 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 	// normal reward and the max-level bonus (Quest::GetRewOrReqMoney,
 	// QuestDef.cpp:287-298).
 	moneyRew := s.questRewOrReqMoney(view.Detail)
+	moneyRew = s.fireMoneyChangeHook(ctx, moneyRew)
 	newMoney, _ := applyMoneyDelta(s.player.Money, moneyRew)
 	s.setPlayerMoney(ctx, newMoney)
 	rewardXP := uint32(0)
@@ -1358,6 +1360,61 @@ func applyMoneyDelta(current uint32, amount int32) (uint32, bool) {
 		return current + uint32(amount), true
 	}
 	return current, false
+}
+
+// fireMoneyChangeHook fires Eluna PLAYER_EVENT_ON_MONEY_CHANGE (14):
+// Eluna::OnMoneyChanged (PlayerHooks.cpp:203-226), (event, player, amount),
+// with the chained-argument convention (ReplaceArgument): each handler may
+// return a number that rewrites the amount the next handler sees and the
+// engine finally applies. A zero amount never fires (ModifyMoney returns
+// true before the hook, Player.cpp:22823). A hook failure is logged and
+// the current amount stands, the fireGiveXPHook convention.
+func (s *session) fireMoneyChangeHook(ctx context.Context, amount int32) int32 {
+	if s == nil || s.player == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil || amount == 0 {
+		return amount
+	}
+	args := []any{scripting.PlayerEventMoneyChange, s.luaPlayer(), amount}
+	_, err := s.server.Features.Scripts.TriggerPlayerEventUpdated(ctx, scripting.PlayerEventMoneyChange, args, func(returns []any) {
+		if len(returns) == 0 {
+			return
+		}
+		if n, ok := returns[0].(float64); ok {
+			if n > float64(math.MaxInt32) {
+				amount = math.MaxInt32
+			} else if n < float64(math.MinInt32) {
+				amount = math.MinInt32
+			} else {
+				amount = int32(n)
+			}
+			args[2] = amount
+		}
+	})
+	if err != nil {
+		s.debug("lua money-change hook failed", "account", s.accountName, "error", err)
+	}
+	return amount
+}
+
+// modifyPlayerMoney is Player::ModifyMoney (Player.cpp:22821-22841) with
+// the hook leg: the amount runs the money-change hook first, then
+// applyMoneyDelta applies it (negative clamps at zero, positive past
+// MAX_MONEY_AMOUNT is rejected with EQUIP_ERR_TOO_MUCH_GOLD and no
+// change, the sendError=true default). Callers keep their own persistence
+// and quest MoneyChanged scan, the SetMoney legs ModifyMoney runs after
+// applying. It sends no update packet: callers that sent one before keep
+// sending it.
+func (s *session) modifyPlayerMoney(ctx context.Context, amount int32) bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	amount = s.fireMoneyChangeHook(ctx, amount)
+	value, ok := applyMoneyDelta(s.player.Money, amount)
+	if !ok {
+		s.sendEquipError(equipErrTooMuchGold, 0)
+		return false
+	}
+	s.player.Money = value
+	return true
 }
 
 // setPlayerMoney persists an absolute money value, mirroring the

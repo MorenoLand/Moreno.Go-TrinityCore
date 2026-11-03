@@ -768,7 +768,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	// The deposit is charged only once the auction row persists: charging
 	// it up front lost the deposit whenever the clone or auction insert
 	// failed afterward, while C++ holds every sell step in one transaction.
-	s.player.Money -= deposit
+	s.modifyPlayerMoney(ctx, -int32(deposit))
 	s.questMoneyChanged(ctx)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	s.updateAchievementCriteria(criteriaTypeCreateAuction, 0, 1)
@@ -882,9 +882,9 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		// buyer pays the buyout, or only the buyout-minus-bid difference when
 		// topping up their own bid.
 		if bidderGUID == int64(s.playerGUID) {
-			s.player.Money -= uint32(buyout) - uint32(lastBid)
+			s.modifyPlayerMoney(ctx, -int32(uint32(buyout)-uint32(lastBid)))
 		} else {
-			s.player.Money -= uint32(buyout)
+			s.modifyPlayerMoney(ctx, -int32(uint32(buyout)))
 		}
 		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
@@ -990,9 +990,9 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		// C++ HandleAuctionPlaceBid (AuctionHouseHandler.cpp:505-511): a
 		// bidder raising their own bid pays only the difference.
 		if bidderGUID == int64(s.playerGUID) {
-			s.player.Money -= price - uint32(lastBid)
+			s.modifyPlayerMoney(ctx, -int32(price-uint32(lastBid)))
 		} else {
-			s.player.Money -= price
+			s.modifyPlayerMoney(ctx, -int32(price))
 		}
 		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
@@ -1281,7 +1281,7 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 				bidderMailID, mailAuctionType, mailStationeryAuction, defaultAuctionHouseID, bidderGUID, bidderSubj, now+30*86400, now, lastBid)
 			s.sendMailNotify(uint64(bidderGUID))
 		}
-		s.player.Money -= auctionCut
+		s.modifyPlayerMoney(ctx, -int32(auctionCut))
 		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		s.sendPlayerMoneyUpdate()

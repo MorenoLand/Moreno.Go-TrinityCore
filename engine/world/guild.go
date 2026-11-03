@@ -4345,7 +4345,7 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 		return true
 	}
 
-	s.player.Money -= cost
+	s.modifyPlayerMoney(ctx, -int32(cost))
 	s.questMoneyChanged(ctx)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
@@ -4538,7 +4538,7 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 		return true
 	}
 
-	s.player.Money -= amount
+	s.modifyPlayerMoney(ctx, -int32(amount))
 	s.questMoneyChanged(ctx)
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
@@ -4618,7 +4618,7 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 
 	s.consumeGuildBankMoneyWithdraw(ctx, uint32(guildID), amount)
 
-	s.player.Money += amount
+	s.modifyPlayerMoney(ctx, int32(amount))
 	s.questMoneyChanged(ctx)
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
@@ -5000,7 +5000,7 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	}
 
 	petitionGUID := uint64(nextItemGUID)
-	s.player.Money -= cost
+	s.modifyPlayerMoney(ctx, -int32(cost))
 	s.questMoneyChanged(ctx)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	// PetitionsHandler.cpp:192: charter->SetUInt32Value(ITEM_FIELD_ENCHANTMENT_1_1,
@@ -5140,7 +5140,7 @@ func (s *session) handlePetitionBuyArena(ctx context.Context, r *protocol.Buffer
 		nextItemGUID = 1
 	}
 	petitionGUID := uint64(nextItemGUID)
-	s.player.Money -= cost
+	s.modifyPlayerMoney(ctx, -int32(cost))
 	s.questMoneyChanged(ctx)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	// PetitionsHandler.cpp:192: the petition id (the item GUID counter)
@@ -6076,7 +6076,7 @@ func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) boo
 		return true
 	}
 
-	s.player.Money -= emblemPrice
+	s.modifyPlayerMoney(ctx, -int32(emblemPrice))
 	s.questMoneyChanged(ctx)
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)

@@ -687,7 +687,7 @@ func (s *session) chargeGossipBoxMoney(ctx context.Context, boxCost uint32) {
 	if boxCost == 0 || s.player == nil {
 		return
 	}
-	s.player.Money -= boxCost
+	s.modifyPlayerMoney(ctx, -int32(boxCost))
 	s.questMoneyChanged(ctx)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)

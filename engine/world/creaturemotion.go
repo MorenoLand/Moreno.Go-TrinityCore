@@ -8479,7 +8479,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 				target.Sess.lastCombatTime = now
 				if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
-					target.Sess.player.UnitFlags |= unitFlagInCombat
+					markPlayerInCombat(ctx, target.Sess, motion.GUID)
 				}
 			}
 			// Unit::DealMeleeDamage (Unit.cpp:1555-1579): a wild creature's
@@ -8766,7 +8766,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 2)
 			p.Sess.lastCombatTime = now
 			if p.Sess.player != nil && p.Sess.player.UnitFlags&unitFlagInCombat == 0 {
-				p.Sess.player.UnitFlags |= unitFlagInCombat
+				markPlayerInCombat(ctx, p.Sess, motion.GUID)
 				p.Sess.sendPlayerUpdate()
 			}
 			startPkt := buildAttackStart(motion.GUID, p.GUID)

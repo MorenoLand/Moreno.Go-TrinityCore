@@ -306,7 +306,7 @@ func (s *session) teleportToOptions(mapID uint32, x, y, z, orientation float32, 
 		}
 	}
 	movement := s.movementInfoForCreate(*s.player)
-	s.stopPlayerCombat()
+	s.stopPlayerCombat(context.Background())
 	// Player::TeleportTo (Player.cpp:1711-1716): a teleport leaves the
 	// transport unless TELE_TO_NOT_LEAVE_TRANSPORT — the detach arm sits
 	// ahead of the same-map/far branch, so a same-map teleport drops a

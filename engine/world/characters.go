@@ -1552,7 +1552,7 @@ func (s *session) applyZoneState(ctx context.Context, state *playerState, zoneID
 	if sanctuary {
 		state.PVPFlags |= 0x08
 		if !wasSanctuary {
-			s.stopPvPCombatForSanctuary()
+			s.stopPvPCombatForSanctuary(ctx)
 		}
 	} else {
 		state.PVPFlags &^= 0x08
@@ -4274,7 +4274,7 @@ func (s *session) completeLogoutWithPacket(ctx context.Context, sendLogoutComple
 		s.server.despawnAllCasterDynObjects(s.playerGUID)
 	}
 	s.stopTimedAchievements()
-	s.stopPlayerCombat()
+	s.stopPlayerCombat(ctx)
 	// Player::CleanupsBeforeDelete (Player.cpp:1974): the logging-out
 	// player's banked combo points are lost (ClearComboPoints), and so
 	// are any points other players banked on the logging-out player

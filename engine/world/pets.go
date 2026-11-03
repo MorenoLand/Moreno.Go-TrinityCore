@@ -2584,7 +2584,7 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 		return true
 	}
 
-	s.player.Money -= cost
+	s.modifyPlayerMoney(ctx, -int32(cost))
 	s.questMoneyChanged(ctx)
 	s.player.StableSlots++
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ?, stable_slots = ? WHERE guid = ?", s.player.Money, s.player.StableSlots, s.playerGUID)

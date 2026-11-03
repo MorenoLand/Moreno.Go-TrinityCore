@@ -840,11 +840,7 @@ func (s *session) chargeTaxiLegAmount(ctx context.Context, cost uint32) {
 	if cost == 0 || s == nil || s.player == nil {
 		return
 	}
-	if s.player.Money < cost {
-		s.player.Money = 0
-	} else {
-		s.player.Money -= cost
-	}
+	s.modifyPlayerMoney(ctx, -int32(cost))
 	s.questMoneyChanged(ctx)
 	s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, cost)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

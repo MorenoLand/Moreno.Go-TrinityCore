@@ -7001,7 +7001,7 @@ func (s *Server) creatureEffectSanctuary(ctx context.Context, m *creatureMotion,
 				}
 			}
 			if !isDungeon {
-				ts.stopPlayerCombat()
+				ts.stopPlayerCombat(ctx)
 				s.evadeCreaturesTargeting(ctx, ts.player.Map, ts.player.InstanceID, guid)
 				continue
 			}
@@ -8867,7 +8867,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 			}
 			vs.lastCombatTime = time.Now()
 			if vs.player.UnitFlags&unitFlagInCombat == 0 {
-				vs.player.UnitFlags |= unitFlagInCombat
+				markPlayerInCombat(ctx, vs, m.GUID)
 			}
 		}
 		logPkt := buildSpellNonMeleeDamageLog(guid, m.GUID, spell.ID, damage, overkill, schoolMask, absorbed, resisted, hitInfo, blocked)
@@ -10145,7 +10145,7 @@ func (s *Server) creatureProcTriggerDamageAuraProc(ctx context.Context, m *creat
 		}
 		vs.lastCombatTime = now
 		if vs.player.UnitFlags&unitFlagInCombat == 0 {
-			vs.player.UnitFlags |= unitFlagInCombat
+			markPlayerInCombat(ctx, vs, m.GUID)
 		}
 	}
 	logPkt := buildSpellNonMeleeDamageLog(victimGUID, m.GUID, auraSpell.ID, damage, overkill, uint8(schoolMask), absorbed, resisted, hitInfo, blocked)

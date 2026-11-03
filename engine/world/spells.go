@@ -8643,7 +8643,7 @@ func (s *session) engageLaunchTarget(ctx context.Context, spell wotlk.Spell, tar
 	// victim's own CombatManager business; Go has no cross-session combat
 	// manager, so only the caster side is modeled.
 	if s.player.UnitFlags&unitFlagInCombat == 0 {
-		s.player.UnitFlags |= unitFlagInCombat
+		markPlayerInCombat(ctx, s, targetGUID)
 		s.sendPlayerUpdate()
 	}
 }
@@ -9026,7 +9026,7 @@ func (s *session) revalidateDelayedHitTargets(ctx context.Context, spell wotlk.S
 			if ts := s.server.findSessionByGUID(immuneGUID); ts != nil && ts.isImmuneToSpell(spell, s) {
 				s.sendSpellMiss(armGUID, spell.ID, protocol.SpellMissImmune)
 				if !reflectedEntry && ts.player != nil && isHarmfulSpell(spell) {
-					ts.player.UnitFlags |= unitFlagInCombat
+					markPlayerInCombat(ctx, ts, s.playerGUID)
 					ts.lastCombatTime = time.Now()
 				}
 				continue
@@ -11406,7 +11406,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// taunt-vs-immune case). The harmful path implies
 			// IsValidAttackTarget; the caster is always the player here.
 			if targetSess.player != nil {
-				targetSess.player.UnitFlags |= unitFlagInCombat
+				markPlayerInCombat(ctx, targetSess, s.playerGUID)
 				targetSess.lastCombatTime = time.Now()
 			}
 			s.removeOwnBanishOnImmuneMiss(spell.ID, targetGUID, s.playerGUID)
@@ -11538,7 +11538,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				missStatus = append(missStatus, protocol.SpellMissStatus{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune2})
 				if targetSess.player != nil {
-					targetSess.player.UnitFlags |= unitFlagInCombat
+					markPlayerInCombat(ctx, targetSess, s.playerGUID)
 					targetSess.lastCombatTime = time.Now()
 				}
 			}
@@ -22924,7 +22924,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
-		s.player.UnitFlags |= unitFlagInCombat
+		markPlayerInCombat(ctx, s, targetGUID)
 		s.sendPlayerUpdate()
 	}
 
@@ -22948,7 +22948,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 			playerSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 			playerSess.lastCombatTime = time.Now()
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
-				playerSess.player.UnitFlags |= unitFlagInCombat
+				markPlayerInCombat(ctx, playerSess, s.playerGUID)
 			}
 			// The IsImmunedToDamage arm (Spell.cpp:2524-2530) sends no damage-log
 			// packet. The victim receives the caster's log through the
@@ -37726,7 +37726,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 					_ = targetSess.sendAttackStop(victim, false)
 				}
 			} else {
-				targetSess.stopPlayerCombat()
+				targetSess.stopPlayerCombat(ctx)
 				s.server.evadeCreaturesTargeting(ctx, targetSess.player.Map, targetSess.player.InstanceID, targetGUID)
 			}
 			targetSess.player.UnitFlags |= unitFlagUnk29
@@ -50996,7 +50996,7 @@ func (s *session) handleEffectSanctuary(ctx context.Context, hitTargets []uint64
 				// CombatStop(false, false) (SpellEffects.cpp:3767): the
 				// in-combat flag clear and the AtExitCombat LEAVE_COMBAT
 				// strip ride inside stopPlayerCombat now.
-				targetSess.stopPlayerCombat()
+				targetSess.stopPlayerCombat(ctx)
 				s.server.evadeCreaturesTargeting(ctx, targetSess.player.Map, targetSess.player.InstanceID, targetGUID)
 				continue
 			}

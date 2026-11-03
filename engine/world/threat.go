@@ -1182,7 +1182,7 @@ func (s *Server) removeThreatVictimFromAllLists(mapID, instanceID uint32, victim
 // in-combat flag clears and Unit::AtExitCombat (Unit.cpp:8964) strips
 // AURA_INTERRUPT_FLAG_LEAVE_COMBAT auras, both gated on the flag being set
 // (C++ runs AtExitCombat only on an actual combat-state flip).
-func (s *session) stopPlayerCombat() {
+func (s *session) stopPlayerCombat(ctx context.Context) {
 	if s == nil || s.player == nil || s.server == nil {
 		return
 	}
@@ -1200,7 +1200,7 @@ func (s *session) stopPlayerCombat() {
 	// (combatState != IsInCombat()), so a non-combat logout/teleport strips
 	// nothing. AtDisengage is a no-op virtual (Unit.h:1792).
 	if s.player.UnitFlags&unitFlagInCombat != 0 {
-		s.player.UnitFlags &^= unitFlagInCombat
+		markPlayerOutOfCombat(ctx, s)
 		s.sendPlayerUpdate()
 		s.removeAurasWithInterruptFlags(auraInterruptFlagLeaveCombat)
 		// Player::AtExitCombat (Player.cpp:24573-24577): Death Knight rune
@@ -1564,7 +1564,7 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 		healerGUID, targetGUID, totalThreat)
 
 	if healerSess.player.UnitFlags&unitFlagInCombat == 0 {
-		healerSess.player.UnitFlags |= unitFlagInCombat
+		markPlayerInCombat(ctx, healerSess, 0)
 		healerSess.sendPlayerUpdate()
 	}
 }

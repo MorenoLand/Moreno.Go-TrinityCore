@@ -289,11 +289,11 @@ func (s *Server) dealDirectDamageToPlayer(ctx context.Context, attackerGUID uint
 	ts.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 	ts.lastCombatTime = time.Now()
 	if ts.player.UnitFlags&unitFlagInCombat == 0 {
-		ts.player.UnitFlags |= unitFlagInCombat
+		markPlayerInCombat(ctx, ts, attackerGUID)
 	}
 	if attackerSess != nil && attackerSess.player != nil {
 		if attackerSess.player.UnitFlags&unitFlagInCombat == 0 {
-			attackerSess.player.UnitFlags |= unitFlagInCombat
+			markPlayerInCombat(ctx, attackerSess, ts.playerGUID)
 		}
 		attackerSess.lastCombatTime = time.Now()
 		attackerSess.updateAchievementCriteria(criteriaTypeDamageDone, 0, damage)

@@ -402,7 +402,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	// primitive that does not halt motion); the creature surface stays
 	// unwired (no creature bytes2-byte1 field — motion tracks only the
 	// byte-0 sheath state).
-	methods["SetSanctuary"] = func(_ context.Context, args []any) ([]any, error) {
+	methods["SetSanctuary"] = func(ctx context.Context, args []any) ([]any, error) {
 		apply, err := extraBool("SetSanctuary", args)
 		if err != nil {
 			return nil, err
@@ -414,7 +414,7 @@ func (s *session) luaPlayer() *scripting.Object {
 				s.attackTarget = 0
 				_ = s.sendAttackStop(victim, false)
 			}
-			state.UnitFlags &^= unitFlagInCombat
+			markPlayerOutOfCombat(ctx, s)
 		} else {
 			state.PVPFlags &^= pvpFlagSanctuary
 		}
@@ -431,9 +431,11 @@ func (s *session) luaPlayer() *scripting.Object {
 	// reading true after this call; the flag itself is cleared, and
 	// a non-attacking flagged player leaves combat. The per-ref
 	// both-sides flag update and the Eluna OnPlayerLeaveCombat hook
-	// have no twin here.
-	methods["ClearInCombat"] = func(_ context.Context, _ []any) ([]any, error) {
-		state.UnitFlags &^= unitFlagInCombat
+	// have no twin here. The Eluna OnPlayerLeaveCombat hook fires from
+	// markPlayerOutOfCombat above (the flag transition), not from the
+	// per-ref teardown.
+	methods["ClearInCombat"] = func(ctx context.Context, _ []any) ([]any, error) {
+		markPlayerOutOfCombat(ctx, s)
 		s.server.removeThreatVictimFromAllLists(state.Map, state.InstanceID, state.GUID)
 		s.sendPlayerUpdate()
 		return nil, nil
@@ -3261,17 +3263,19 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		money := int64(state.Money) + delta
-		if money < 0 {
-			money = 0
+		// Eluna Player:ModifyMoney is Player::ModifyMoney (Player.cpp:22821):
+		// the money-change hook runs first and may rewrite the delta, and
+		// a gain past MAX_MONEY_AMOUNT fails instead of clamping.
+		clamped := delta
+		if clamped > math.MaxInt32 {
+			clamped = math.MaxInt32
+		} else if clamped < math.MinInt32 {
+			clamped = math.MinInt32
 		}
-		if money > math.MaxUint32 {
-			money = math.MaxUint32
-		}
-		state.Money = uint32(money)
+		ok := s.modifyPlayerMoney(ctx, int32(clamped))
 		_, err = s.server.CharactersStore.DB.Exec("UPDATE characters SET money = ? WHERE guid = ?", state.Money, state.GUID)
 		s.questMoneyChanged(ctx)
-		return []any{true}, err
+		return []any{ok}, err
 	}
 	// Player:GetHonorPoints/GetArenaPoints/SetHonorPoints/SetArenaPoints/
 	// ModifyHonorPoints/ModifyArenaPoints (PlayerMethods.h:806-821,

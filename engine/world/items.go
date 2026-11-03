@@ -2212,7 +2212,7 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, res.ClientBag, slotForPush, g.entry, g.count, res.InventoryCount, res.IsStack), true)
 	}
 
-	s.player.Money += uint32(paidMoney)
+	s.modifyPlayerMoney(ctx, int32(uint32(paidMoney)))
 	s.questMoneyChanged(ctx)
 	s.player.TotalHonorPoints += extendedCost.HonorPoints
 	s.player.ArenaPoints += extendedCost.ArenaPoints
@@ -6489,7 +6489,7 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 					repaired = true
 				}
 			} else if s.player.Money >= cost {
-				s.player.Money -= cost
+				s.modifyPlayerMoney(ctx, -int32(cost))
 				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 				repaired = true
 			}
@@ -6577,7 +6577,7 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 					repaired := false
 					for _, item := range toRepair {
 						if s.player.Money >= item.cost {
-							s.player.Money -= item.cost
+							s.modifyPlayerMoney(ctx, -int32(item.cost))
 							_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", item.maxD, item.guid)
 							repaired = true
 						}
@@ -6888,7 +6888,7 @@ func (s *session) durabilityRepairItem(ctx context.Context, itemGUID uint64, ent
 		if s.player.Money < price {
 			return 0, false
 		}
-		s.player.Money -= price
+		s.modifyPlayerMoney(ctx, -int32(price))
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `UPDATE characters SET money = ? WHERE guid = ?`, s.player.Money, s.playerGUID)
 	}
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, `UPDATE item_instance SET durability = ? WHERE guid = ?`, maxDur, itemGUID)

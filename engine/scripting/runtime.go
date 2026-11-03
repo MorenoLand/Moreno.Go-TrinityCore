@@ -32,7 +32,7 @@ const (
 	PlayerEventKilledByCreature  = 8
 	PlayerEventGiveXP            = 12
 	PlayerEventLevelChange       = 13
-	PlayerEventMoneyChange       = 14 // OnMoneyChanged fires from Player::ModifyMoney (Player.cpp:22826); Go has no central ModifyMoney — every money write is a direct field store across ~15 files, so the engine never fires this event
+	PlayerEventMoneyChange       = 14 // OnMoneyChanged fires from Player::ModifyMoney (Player.cpp:22826); Go fires it from session modifyPlayerMoney (quest_reward_grant.go), which every ModifyMoney-equivalent money write routes through; direct SetMoney-style writes (GM set, SetCoinage, values-table write) fire nothing, like C++
 	PlayerEventReputationChange  = 15
 	PlayerEventTalentChange      = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; the binding fires it, internal learn/reset/level-up recomputes do not
 	PlayerEventTalentReset       = 17 // OnTalentsReset fires from Player::ResetTalents; Go has no talent system, so the engine never fires this event
@@ -50,8 +50,8 @@ const (
 	PlayerEventEquip             = 29
 	PlayerEventCanUseItem        = 31
 	PlayerEventLootItem          = 32
-	PlayerEventEnterCombat       = 33 // OnPlayerEnterCombat fires from CombatManager::NotifyAICombat per new combat reference; Go's combat-enter sites are scattered unitFlagInCombat sets with no reference model, so no C++-exact fire site exists yet
-	PlayerEventLeaveCombat       = 34 // OnPlayerLeaveCombat fires from CombatManager reference teardown (CombatManager.cpp:88-337); Go has no combat-reference model, so the engine never fires this event
+	PlayerEventEnterCombat       = 33 // OnPlayerEnterCombat fires from CombatManager::NotifyAICombat per new combat reference; Go fires it from markPlayerInCombat (combat.go) on the false->true UNIT_FLAG_IN_COMBAT transition at every combat-enter site, the first-ref twin (no ref model)
+	PlayerEventLeaveCombat       = 34 // OnPlayerLeaveCombat fires from CombatManager reference teardown (CombatManager.cpp:88-337); Go fires it from markPlayerOutOfCombat (combat.go) on the true->false UNIT_FLAG_IN_COMBAT transition at every combat-leave site, the last-ref twin (no ref model)
 	PlayerEventRepop             = 35
 	PlayerEventResurrect         = 36
 	PlayerEventLootMoney         = 37

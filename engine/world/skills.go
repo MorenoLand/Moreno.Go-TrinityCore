@@ -620,7 +620,7 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	}
 	if !free {
 		if cost > 0 {
-			s.player.Money -= cost
+			s.modifyPlayerMoney(ctx, -int32(cost))
 			s.questMoneyChanged(ctx)
 		}
 		s.player.ResetTalentsCost = cost

@@ -1479,11 +1479,13 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	// checks run before the persistence transaction; the old Go code's
 	// uncommitted tx writes were invisible to these pooled reads anyway).
 
-	// Money transfer
-	newMoneyS := s.player.Money - s.trade.Money + partner.trade.Money
-	newMoneyP := partner.player.Money - partner.trade.Money + s.trade.Money
-	s.player.Money = newMoneyS
-	partner.player.Money = newMoneyP
+	// Money transfer: C++ runs four ModifyMoney calls (deduct then add per
+	// side, TradeHandler.cpp:517-520), each firing the money-change hook
+	// before applying, so the hooks observe the intermediate balances.
+	s.modifyPlayerMoney(ctx, -int32(s.trade.Money))
+	s.modifyPlayerMoney(ctx, int32(partner.trade.Money))
+	partner.modifyPlayerMoney(ctx, -int32(partner.trade.Money))
+	partner.modifyPlayerMoney(ctx, int32(s.trade.Money))
 	s.questMoneyChanged(ctx)
 	partner.questMoneyChanged(ctx)
 	// Reference: Player::ModifyMoney -> SetMoney (Player.cpp:22842-22846)
@@ -1557,10 +1559,10 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 			return err
 		}
 
-		if err := execTx("UPDATE characters SET money = ? WHERE guid = ?", newMoneyS, s.playerGUID); err != nil {
+		if err := execTx("UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID); err != nil {
 			return err
 		}
-		if err := execTx("UPDATE characters SET money = ? WHERE guid = ?", newMoneyP, partner.playerGUID); err != nil {
+		if err := execTx("UPDATE characters SET money = ? WHERE guid = ?", partner.player.Money, partner.playerGUID); err != nil {
 			return err
 		}
 

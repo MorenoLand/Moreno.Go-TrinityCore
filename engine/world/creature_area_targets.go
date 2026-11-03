@@ -2131,7 +2131,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		}
 		p.Sess.lastCombatTime = now
 		if p.Sess.player.UnitFlags&unitFlagInCombat == 0 {
-			p.Sess.player.UnitFlags |= unitFlagInCombat
+			markPlayerInCombat(ctx, p.Sess, motion.GUID)
 		}
 		p.Sess.sendPlayerUpdate()
 		// Unit::DealDamage (Unit.cpp:728-733): the victim's controlled

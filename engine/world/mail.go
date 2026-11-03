@@ -869,11 +869,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	// this point short on money, and C++ zeroes them rather than keeping the
 	// balance.
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailOk, 0, 0, 0), true)
-	if s.player.Money > totalRequired {
-		s.player.Money -= totalRequired
-	} else {
-		s.player.Money = 0
-	}
+	s.modifyPlayerMoney(ctx, -int32(totalRequired))
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	// Reference: Player::ModifyMoney -> SetMoney -> MoneyChanged
 	// (Player.cpp:22847-22850, 16859-16886) — spending money can complete
@@ -986,14 +982,24 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 	// (Player.cpp:22821-22841; MAX_MONEY_AMOUNT = INT32_MAX, Player.cpp:179);
 	// HandleMailTakeMoney then answers (MAIL_MONEY_TAKEN, MAIL_ERR_EQUIP_ERROR,
 	// EQUIP_ERR_TOO_MUCH_GOLD) (MailHandler.cpp:519-523).
-	if money > 0 && s.player.Money >= maxMoneyAmount-uint32(money) {
+	// The money-change hook runs first (ModifyMoney fires before applying);
+	// a rewrite to zero or below pays nothing while the mail money is
+	// still collected.
+	paid := int32(0)
+	if money > 0 {
+		paid = s.fireMoneyChangeHook(ctx, int32(money))
+		if paid < 0 {
+			paid = 0
+		}
+	}
+	if paid > 0 && s.player.Money >= maxMoneyAmount-uint32(paid) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMoneyTaken, mailErrEquipError, uint32(equipErrTooMuchGold), 0, 0), true)
 		return true
 	}
 	// Player::ModifyMoney(0) is a no-op that returns true, so a mail carrying
 	// no money still answers MAIL_OK (Player.cpp:22823; MailHandler.cpp:524-527).
 	if money > 0 {
-		newMoney := s.player.Money + uint32(money)
+		newMoney := s.player.Money + uint32(paid)
 		// HandleMailTakeMoney (MailHandler.cpp:524-535) persists the gold
 		// and the mail in one CharacterDatabase transaction ("save money
 		// and mail to prevent cheating"); two separate statements could
@@ -1093,7 +1099,7 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	newMoney := s.player.Money
 	codPayment := cod > 0
 	if codPayment {
-		newMoney -= uint32(cod)
+		newMoney, _ = applyMoneyDelta(s.player.Money, s.fireMoneyChangeHook(ctx, -int32(cod)))
 	}
 	// C++ drafts the COD payment mail only when the original sender still exists
 	// (online session, or a characters-table row — the "check player existence"

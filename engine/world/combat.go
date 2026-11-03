@@ -292,7 +292,7 @@ func (s *session) startAttackOn(ctx context.Context, victim uint64) {
 	s.attackTarget = victim
 	s.lastCombatTime = time.Now()
 	if s.player.UnitFlags&unitFlagInCombat == 0 {
-		s.player.UnitFlags |= unitFlagInCombat
+		markPlayerInCombat(ctx, s, victim)
 		s.sendPlayerUpdate()
 	}
 	startPayload := buildAttackStart(s.playerGUID, victim)
@@ -445,7 +445,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	s.attackTarget = victim
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
-		s.player.UnitFlags |= unitFlagInCombat
+		markPlayerInCombat(ctx, s, victim)
 		s.sendPlayerUpdate()
 	}
 	s.debug("attack started", "account", s.accountName, "guid", victim)
@@ -1346,7 +1346,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 
 	// Attacker enters combat on swing
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
-		s.player.UnitFlags |= unitFlagInCombat
+		markPlayerInCombat(ctx, s, target.GUID)
 	}
 	s.lastCombatTime = time.Now()
 
@@ -1393,7 +1393,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				playerSess.interruptAbsorbedCast()
 			}
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
-				playerSess.player.UnitFlags |= unitFlagInCombat
+				markPlayerInCombat(ctx, playerSess, s.playerGUID)
 			}
 			playerSess.lastCombatTime = time.Now()
 			// Victim-side aura procs on the melee event (TrinityCore
@@ -2198,7 +2198,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	}
 
 	if s.player.UnitFlags&unitFlagInCombat == 0 {
-		s.player.UnitFlags |= unitFlagInCombat
+		markPlayerInCombat(ctx, s, target.GUID)
 		s.sendPlayerUpdate()
 	}
 	s.lastCombatTime = now
@@ -2228,7 +2228,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				vicSess.interruptAbsorbedCast()
 			}
 			if vicSess.player.UnitFlags&unitFlagInCombat == 0 {
-				vicSess.player.UnitFlags |= unitFlagInCombat
+				markPlayerInCombat(ctx, vicSess, s.playerGUID)
 			}
 			vicSess.lastCombatTime = now
 			// Victim-side aura procs on the ranged auto-attack event
@@ -2536,7 +2536,7 @@ func (s *session) handleAttackStop() bool {
 	return true
 }
 
-func (s *session) stopPvPCombatForSanctuary() {
+func (s *session) stopPvPCombatForSanctuary(ctx context.Context) {
 	if s == nil || s.player == nil || s.server == nil || s.duelPartner != 0 || s.attackTarget == 0 {
 		return
 	}
@@ -2547,13 +2547,13 @@ func (s *session) stopPvPCombatForSanctuary() {
 	victim := s.attackTarget
 	s.attackTarget = 0
 	_ = s.sendAttackStop(victim, false)
-	s.player.UnitFlags &^= unitFlagInCombat
+	markPlayerOutOfCombat(ctx, s)
 	s.sendPlayerUpdate()
 	if opponent.attackTarget == s.playerGUID {
 		opponent.attackTarget = 0
 		_ = opponent.sendAttackStop(s.playerGUID, false)
 		if opponent.player != nil {
-			opponent.player.UnitFlags &^= unitFlagInCombat
+			markPlayerOutOfCombat(ctx, opponent)
 			opponent.sendPlayerUpdate()
 		}
 	}
@@ -4362,6 +4362,56 @@ func (s *session) clearDuelState(partner *session) {
 		partner.duelMounted = false
 		partner.duelOutOfBounds = time.Time{}
 	}
+}
+
+// resolveCombatOther resolves a combat counterpart GUID to the Lua object
+// Eluna pushes as the enemy argument: an online player session first, then
+// a live creature motion, else nil (the Push((Unit*)nullptr) twin) when
+// the counterpart is offline, despawned, or a non-unit GUID.
+func (s *Server) resolveCombatOther(mapID, instanceID uint32, guid uint64) any {
+	if s == nil || guid == 0 {
+		return nil
+	}
+	if motion := s.findCreatureMotion(mapID, instanceID, guid); motion != nil {
+		return s.luaMotionCreature(motion)
+	}
+	if player := s.findPlayer(guid); player != nil {
+		return player
+	}
+	return nil
+}
+
+// markPlayerInCombat sets the player's UNIT_FLAG_IN_COMBAT bit and fires
+// Eluna PLAYER_EVENT_ON_ENTER_COMBAT (33), (event, player, enemy), on the
+// false->true transition only: CombatManager::NotifyAICombat
+// (CombatManager.cpp:363) fires when a combat reference is created, and
+// Go has no ref model, so the flag transition is the first-ref twin.
+// Callers keep their own update packet; the enemy resolves through the
+// counterpart GUID and may be nil.
+func markPlayerInCombat(ctx context.Context, sess *session, otherGUID uint64) {
+	if sess == nil || sess.player == nil || sess.player.UnitFlags&unitFlagInCombat != 0 {
+		return
+	}
+	sess.player.UnitFlags |= unitFlagInCombat
+	var other any
+	if sess.server != nil {
+		other = sess.server.resolveCombatOther(sess.player.Map, sess.player.InstanceID, otherGUID)
+	}
+	sess.triggerPlayerEvent(ctx, scripting.PlayerEventEnterCombat, sess.luaPlayer(), other)
+}
+
+// markPlayerOutOfCombat clears the player's UNIT_FLAG_IN_COMBAT bit and
+// fires Eluna PLAYER_EVENT_ON_LEAVE_COMBAT (34), (event, player), on the
+// true->false transition only: CombatManager reference teardown
+// (CombatManager.cpp:88-337) fires when the last reference ends, and Go
+// has no ref model, so the flag transition is the last-ref twin.
+// Callers keep their own update packet.
+func markPlayerOutOfCombat(ctx context.Context, sess *session) {
+	if sess == nil || sess.player == nil || sess.player.UnitFlags&unitFlagInCombat == 0 {
+		return
+	}
+	sess.player.UnitFlags &^= unitFlagInCombat
+	sess.triggerPlayerEvent(ctx, scripting.PlayerEventLeaveCombat, sess.luaPlayer())
 }
 
 // isInCombat mirrors Unit::IsInCombat.

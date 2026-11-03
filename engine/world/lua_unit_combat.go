@@ -191,7 +191,7 @@ func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, 
 		sess.attackTarget = victimGUID
 		sess.lastCombatTime = time.Now()
 		if sess.player.UnitFlags&unitFlagInCombat == 0 {
-			sess.player.UnitFlags |= unitFlagInCombat
+			markPlayerInCombat(ctx, sess, victimGUID)
 			sess.sendPlayerUpdate()
 		}
 		if meleeAttack {

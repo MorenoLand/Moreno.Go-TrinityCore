@@ -168,7 +168,7 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	s.player.Money -= cost
+	s.modifyPlayerMoney(ctx, -int32(cost))
 	s.questMoneyChanged(ctx)
 	newCount := uint8(purchasedCount + 1)
 	s.player.BankBagSlots = newCount

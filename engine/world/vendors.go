@@ -722,7 +722,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	}
 	// Player.cpp:21853-21871: payment runs BEFORE the item is created — a
 	// store failure keeps the payment; there is no rollback arm.
-	s.player.Money -= totalCost
+	s.modifyPlayerMoney(ctx, -int32(totalCost))
 	s.questMoneyChanged(ctx)
 	if extendedCost.ID != 0 {
 		s.player.TotalHonorPoints -= extendedCost.HonorPoints * count
@@ -1557,7 +1557,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	// past MAX_MONEY_AMOUNT is rejected outright with EQUIP_ERR_TOO_MUCH_GOLD
 	// and no partial add — the item stays sold into the buyback slot — while
 	// the MONEY_FROM_VENDORS criteria still fires on the rejected amount.
-	if s.addLootMoney(earned) {
+	if s.addLootMoney(ctx, earned) {
 		s.questMoneyChanged(ctx)
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	}
@@ -1688,7 +1688,7 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	if s.currentBuybackSlot < 12 && s.buyback[s.currentBuybackSlot] != nil {
 		s.currentBuybackSlot = uint8(eslot)
 	}
-	s.player.Money -= entry.Price
+	s.modifyPlayerMoney(ctx, -int32(entry.Price))
 	s.questMoneyChanged(ctx)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)

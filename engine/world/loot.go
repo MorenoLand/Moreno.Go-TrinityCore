@@ -2997,18 +2997,22 @@ func (s *Server) clearLootState(mapID, instanceID uint32, guids ...uint64) {
 // HandleLootMoneyOpcode zeroes loot->gold regardless of the cap outcome.
 // On a successful add, Player::SetMoney fires the HIGHEST_GOLD_VALUE_OWNED
 // criteria (Player.cpp:22842-22846).
-func (s *session) addLootMoney(amount uint32) bool {
+func (s *session) addLootMoney(ctx context.Context, amount uint32) bool {
 	if s == nil || s.player == nil || amount == 0 {
 		return amount == 0
 	}
-	if s.player.Money < maxMoneyAmount-amount {
-		s.player.Money += amount
-		s.updateAchievementCriteria(criteriaTypeHighestGoldValue, 0, s.player.Money)
-		return true
+	// The loot-gold gain runs through ModifyMoney: the money-change hook
+	// fires first, and a gain past MAX_MONEY_AMOUNT is rejected with
+	// EQUIP_ERR_TOO_MUCH_GOLD from the helper (the separate
+	// OnPlayerMoneyLimit script hook still has no Go bridge).
+	if amount > math.MaxInt32 {
+		amount = math.MaxInt32
 	}
-	// sScriptMgr->OnPlayerMoneyLimit has no Go script bridge.
-	s.sendEquipError(equipErrTooMuchGold, 0)
-	return false
+	if !s.modifyPlayerMoney(ctx, int32(amount)) {
+		return false
+	}
+	s.updateAchievementCriteria(criteriaTypeHighestGoldValue, 0, s.player.Money)
+	return true
 }
 
 func (s *session) handleLootMoney(ctx context.Context) bool {
@@ -3136,7 +3140,7 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 			// Player::ModifyMoney (Player.cpp:22827-22838): the add is
 			// rejected outright past the cap, but the notify + LOOT_MONEY
 			// criteria still fire (LootHandler.cpp:183-195).
-			if m.addLootMoney(copperPerPlayer) {
+			if m.addLootMoney(ctx, copperPerPlayer) {
 				m.questMoneyChanged(ctx)
 				if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", m.player.Money, m.playerGUID)
@@ -3152,7 +3156,7 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 			m.sendPlayerUpdate()
 		}
 	} else {
-		if s.addLootMoney(copper) {
+		if s.addLootMoney(ctx, copper) {
 			s.questMoneyChanged(ctx)
 			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)

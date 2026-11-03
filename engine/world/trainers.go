@@ -475,7 +475,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	}
 
 	// 6. Deduct money & update DB
-	s.player.Money -= uint32(moneyCost)
+	s.modifyPlayerMoney(ctx, -int32(uint32(moneyCost)))
 	s.questMoneyChanged(ctx)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
