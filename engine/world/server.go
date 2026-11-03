@@ -355,6 +355,7 @@ type Server struct {
 	weatherMu              sync.Mutex
 	weather                map[uint32]*zoneWeather
 	weatherOverrides       map[uint32]zoneWeatherOverride
+	zoneLightOverrides     map[uint32][]zoneLightOverride
 	stopOnce               sync.Once
 }
 

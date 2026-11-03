@@ -289,6 +289,83 @@ func (s *Server) setZoneWeatherOverride(zone uint32, state uint32, intensity flo
 	s.broadcastZoneWeather(zone, packet)
 }
 
+// zoneLightOverride is a Map::SetZoneOverrideLight (Map.cpp:4802) row:
+// one override per area light, keyed by zone. The store mirrors the
+// C++ erase-then-maybe-append exactly: clearing (override 0) removes
+// the row, so zone entry resends only live overrides.
+type zoneLightOverride struct {
+	Area       uint32
+	Override   uint32
+	Transition uint32
+}
+
+func (s *Server) broadcastZoneLight(zone uint32, packet []byte) {
+	if s == nil || packet == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Zone == zone {
+			sessions = append(sessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		_ = sess.write(uint16(protocol.OpcodeSMSG_OVERRIDE_LIGHT), packet, true)
+	}
+}
+
+// setZoneLightOverride mirrors Map::SetZoneOverrideLight
+// (Map.cpp:4802-4841): rows matching the area light are erased, a new
+// row is appended only when the override id is nonzero, and the packet
+// is broadcast to players in the zone unconditionally (including the
+// clear). Like the weather override it is per-zone, where C++
+// ZoneDynamicInfo is per-Map, and it fires no script event.
+func (s *Server) setZoneLightOverride(zone, area, override, transition uint32) {
+	if s == nil {
+		return
+	}
+	s.weatherMu.Lock()
+	if s.zoneLightOverrides == nil {
+		s.zoneLightOverrides = make(map[uint32][]zoneLightOverride)
+	}
+	rows := s.zoneLightOverrides[zone]
+	kept := rows[:0]
+	for _, row := range rows {
+		if row.Area != area {
+			kept = append(kept, row)
+		}
+	}
+	if override != 0 {
+		kept = append(kept, zoneLightOverride{Area: area, Override: override, Transition: transition})
+	}
+	if len(kept) == 0 {
+		delete(s.zoneLightOverrides, zone)
+	} else {
+		s.zoneLightOverrides[zone] = kept
+	}
+	packet := protocol.BuildOverrideLight(area, override, transition)
+	s.weatherMu.Unlock()
+	s.broadcastZoneLight(zone, packet)
+}
+
+// sendZoneLightOverrides is the Map::SendZoneDynamicInfo (Map.cpp:4699)
+// light leg: every stored override for the zone is re-sent to the
+// entering player, in stored order. It rides ensureZoneWeather, the
+// zone-entry hook, ahead of the weather leg.
+func (s *Server) sendZoneLightOverrides(zone uint32, sess *session) {
+	if s == nil || sess == nil {
+		return
+	}
+	s.weatherMu.Lock()
+	rows := append([]zoneLightOverride(nil), s.zoneLightOverrides[zone]...)
+	s.weatherMu.Unlock()
+	for _, row := range rows {
+		_ = sess.write(uint16(protocol.OpcodeSMSG_OVERRIDE_LIGHT), protocol.BuildOverrideLight(row.Area, row.Override, row.Transition), true)
+	}
+}
+
 func (s *Server) zoneWeatherOverride(zone uint32) (zoneWeatherOverride, bool) {
 	if s == nil {
 		return zoneWeatherOverride{}, false
@@ -317,6 +394,10 @@ func (s *Server) ensureZoneWeather(ctx context.Context, zone uint32, sess *sessi
 	if s == nil || zone == 0 || sess == nil {
 		return
 	}
+	// Map::SendZoneDynamicInfo (Map.cpp:4699-4723) sends the weather
+	// leg and then every stored light override; the light leg rides
+	// this zone-entry hook ahead of the weather legs below.
+	s.sendZoneLightOverrides(zone, sess)
 	// Map::SendZoneWeather (Map.cpp:4734-4743): a stored zone override
 	// wins over the default weather object. State FINE (0) is falsy in
 	// C++, so a FINE override falls through to the default object.

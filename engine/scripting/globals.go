@@ -1133,8 +1133,13 @@ type MapLive struct {
 	// boss-script ports that need raw states (LK fog/blacksnow) call
 	// the Map object's SetZoneWeather (zone, state, grade) instead.
 	SetZoneWeatherOverride func(context.Context, uint32, uint32, float32)
-	WorldObject            func(context.Context, uint64) *Object
-	AreaID                 func(x, y, z float32) uint32
+	// SetZoneLightOverride is the Go-only Map::SetZoneOverrideLight
+	// twin (Map.cpp:4802): C++ Eluna exposes no light-override
+	// method, so boss-script ports call the Map object's
+	// SetZoneOverrideLight (zone, area, override, transition).
+	SetZoneLightOverride func(context.Context, uint32, uint32, uint32, uint32)
+	WorldObject          func(context.Context, uint64) *Object
+	AreaID               func(x, y, z float32) uint32
 	// Height reads the .map grid height for Map::GetHeight's Eluna
 	// call shape; false means no readable height chunk, and the
 	// method turns that (and the INVALID_HEIGHT sentinel) into nil.
@@ -1274,6 +1279,34 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 			}
 			if live.SetWeather != nil {
 				live.SetWeather(ctx, zone, wtype, float32(grade))
+			}
+			return nil, nil
+		},
+		// SetZoneOverrideLight is the Go-only Map::SetZoneOverrideLight
+		// twin (Map.cpp:4802): (zone, area, override, transition,
+		// all required). C++ Eluna has no such method, so this
+		// exists only for boss-script ports (LK fog/soulstorm
+		// clears and sets). A nil callback drops it, like
+		// SetZoneWeather. Override 0 clears the area's row.
+		"SetZoneOverrideLight": func(ctx context.Context, args []any) ([]any, error) {
+			zone, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			area, err := objectArgumentUint32(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			override, err := objectArgumentUint32(args, 2)
+			if err != nil {
+				return nil, err
+			}
+			transition, err := objectArgumentUint32(args, 3)
+			if err != nil {
+				return nil, err
+			}
+			if live.SetZoneLightOverride != nil {
+				live.SetZoneLightOverride(ctx, zone, area, override, transition)
 			}
 			return nil, nil
 		},
