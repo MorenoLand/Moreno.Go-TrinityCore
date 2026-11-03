@@ -1264,14 +1264,18 @@ func (s *session) luaPlayer() *scripting.Object {
 	// guardian summoned before the pet sits earlier in C++'s
 	// SUMMON list, where Go's single-slot model reads the pet.
 	methods["GetMinionGUID"] = luaNoArgs(func() any { return state.PetGUID })
+	// GetOwnerGUID is Unit::GetOwnerGUID (Unit.h:1147): the
+	// UNIT_FIELD_SUMMONEDBY read. Players carry no summoned-by
+	// (the GetCharmerGUID precedent reads 0), so this reads 0.
+	methods["GetOwnerGUID"] = luaNoArgs(func() any { return uint64(0) })
 	// SetPetGUID is Unit::SetPetGUID (UnitMethods.h:1806): the
 	// m_SummonSlot[PET] write, which Go models as the player PetGUID
 	// (the values builder mirrors it into UNIT_FIELD_SUMMON).
 	// LuaFunctions.cpp:331 registers SetMinionGUID to this same
-	// C++ function, so this binding closes both names. No pet
+	// C++ function, so both keys share this closure. No pet
 	// object is created or dismissed here, matching the C++ slot
 	// write; the creature leg stays out (no summon-slot model).
-	methods["SetPetGUID"] = func(_ context.Context, args []any) ([]any, error) {
+	setPetGUID := func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("argument 1 is required")
 		}
@@ -1283,6 +1287,8 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.sendPlayerUpdate()
 		return nil, nil
 	}
+	methods["SetPetGUID"] = setPetGUID
+	methods["SetMinionGUID"] = setPetGUID
 	// HasSpellCooldown is PlayerMethods.h:217 (TRINITY arm): the
 	// SpellHistory::HasCooldown twin in death.go — the per-spell entry,
 	// then the DBC-category arm. The previous body compared the
@@ -1388,6 +1394,10 @@ func (s *session) luaPlayer() *scripting.Object {
 		return s.server.mapIsUnderWater(s.player.Map, s.player.X, s.player.Y, s.player.Z)
 	})
 	methods["IsMoving"] = luaNoArgs(func() any { return s.isMoving })
+	// IsStopped is Unit::IsStopped (Unit.h:1557): !HasUnitState(
+	// UNIT_STATE_MOVING). conditions.go maps s.isMoving to that
+	// UNIT_STATE_MOVE bit, so this is its negation.
+	methods["IsStopped"] = luaNoArgs(func() any { return !s.isMoving })
 	methods["CanFly"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
 	// CanParry/CanBlock are Unit::CanParry/CanBlock (Player.h:1819-1821):
 	// the m_canParry/m_canBlock flags Go tracks on playerState and

@@ -381,6 +381,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}) {
 		methods[name] = fn
 	}
+	// IsStopped is Unit::IsStopped (Unit.h:1557): !HasUnitState(
+	// UNIT_STATE_MOVING), here the motion's spline-active Moving
+	// flag (set at launch, cleared at arrival).
+	methods["IsStopped"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return []any{!motion.Moving}, nil
+	}
 	// GetClassAsString/GetRaceAsString/GetControllerGUID/
 	// GetControllerGUIDS mirror the session-creature twins in
 	// lua_objects.go: ChrClasses Name[locale] for the motion's
@@ -492,6 +500,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return []any{owner.luaPlayer()}, nil
 		}
 		return []any{nil}, nil
+	}
+	// GetOwnerGUID is Unit::GetOwnerGUID (Unit.h:1147): the
+	// UNIT_FIELD_SUMMONEDBY read, the live motion's OwnerGUID
+	// (the GetOwner precedent reads the same field).
+	methods["GetOwnerGUID"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return []any{motion.OwnerGUID}, nil
 	}
 	methods["IsInCombat"] = func(_ context.Context, _ []any) ([]any, error) {
 		s.motionMu.Lock()

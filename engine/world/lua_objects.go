@@ -722,6 +722,26 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["GetMinionGUID"] = luaNoArgs(func() any {
 		return s.server.unitMinionGUID(state.Map, state.InstanceID, state.GUID)
 	})
+	// GetOwnerGUID is Unit::GetOwnerGUID (Unit.h:1147): the
+	// UNIT_FIELD_SUMMONEDBY read, here the live motion's OwnerGUID
+	// (the SetOwnerGUID write target); a motion that no longer
+	// resolves reads 0, the DB-spawn default.
+	methods["GetOwnerGUID"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.OwnerGUID
+		}
+		return uint64(0)
+	})
+	// IsStopped is Unit::IsStopped (Unit.h:1557): !HasUnitState(
+	// UNIT_STATE_MOVING), here the motion's spline-active Moving
+	// flag (set at launch, cleared at arrival); a motion that no
+	// longer resolves is not moving, so it reads stopped.
+	methods["IsStopped"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return !motion.Moving
+		}
+		return true
+	})
 	// SetOwnerGUID is Unit::SetOwnerGUID (Unit.cpp:5971): the
 	// UNIT_FIELD_SUMMONEDBY write, with C++'s equal-value early
 	// return; a despawned motion is a silent no-op. DELTA: C++'s
