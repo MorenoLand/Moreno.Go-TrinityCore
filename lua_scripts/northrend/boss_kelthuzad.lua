@@ -31,11 +31,16 @@
 -- "achievement_just_cant_get_enough", "KelThuzadCharmedPlayerAI" hits
 -- boss_kelthuzad.cpp only (loader carries only the decl/call lines);
 -- zero sql/ hits. No kelthuzad lua existed.
--- Eluna creature events: 3 OnTargetDied, 4 OnDied. Melee is
+-- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied. Melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- C++ has no JustEngagedWith override for Kel'Thuzad (SAY_AGGRO 7
 -- fires on the EVENT_DESPAWN_MINIONS timer leg, not on combat start),
--- so no event 1 handler. No timers are modeled, so no cancel bookkeeping.
+-- so the inherited BossAI::JustEngagedWith runs at first AtEngage
+-- (ScriptedCreature.h:329): SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- PORTED 2026-11-03 (ScriptedCreature.cpp:540/542; anubrekhan/gothik/
+-- sapphiron precedent); SAY_AGGRO still rides EVENT_DESPAWN_MINIONS, not
+-- combat start; instance legs + setActive unbridged. No timers are modeled,
+-- so no cancel bookkeeping.
 -- Victim gating: C++ KilledUnit checks TYPEID_PLAYER (nalorakk
 -- precedent); Lua expresses it via victim:GetObjectType().
 -- Ported arms (C++-exact for all modeled arms):
@@ -176,6 +181,14 @@ local ENTRY_KEL_THUZAD = 15990
 local SAY_SLAY = 8
 local SAY_DEATH = 9
 
+-- C++ inherited BossAI::JustEngagedWith (no override in boss_kelthuzadAI):
+-- SetCombatPulseDelay(5) + me-form DoZoneInCombat at first engage; no Talk
+-- here (SAY_AGGRO rides EVENT_DESPAWN_MINIONS).
+local function kelthuzadEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
+end
+
 -- C++ KilledUnit: Talk(SAY_SLAY) when victim->GetTypeId() ==
 -- TYPEID_PLAYER (nalorakk precedent).
 local function kelthuzadTargetDied(event, creature, victim)
@@ -188,5 +201,6 @@ local function kelthuzadDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+RegisterCreatureEvent(ENTRY_KEL_THUZAD, 1, kelthuzadEnterCombat)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 3, kelthuzadTargetDied)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 4, kelthuzadDied)

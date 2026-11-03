@@ -28,7 +28,11 @@
 -- victim:GetObjectType() (nalorakk / kelthuzad / gothik player-gate
 -- precedent). C++ has no JustEngagedWith override for Thaddius —
 -- SAY_AGGRO (1) fires from EVENT_TRANSITION_3, not from combat start —
--- so no event 1 handler here. There are no modelable timers:
+-- so the inherited BossAI::JustEngagedWith runs at first AtEngage
+-- (ScriptedCreature.h:329): SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- PORTED 2026-11-03 (ScriptedCreature.cpp:540/542; anubrekhan/gothik/
+-- sapphiron precedent); SAY_AGGRO still rides EVENT_TRANSITION_3, not
+-- combat start; instance legs + setActive unbridged. There are no modelable timers:
 -- EVENT_SHIFT is DoCastAOE (bridged as self-cast per the boss_ai.go
 -- DoCastAOE lowering — selin_fireheart / mr_smite precedent), and
 -- EVENT_CHAIN /
@@ -37,6 +41,9 @@
 -- trigger-blocked precedent — porting them from combat start would
 -- deviate from C++: pre-transition Thaddius casts nothing).
 -- Ported arms (C++-exact for all modeled arms):
+-- boss_thaddius: inherited BossAI::JustEngagedWith base arms (event 1:
+-- SetCombatPulseDelay(5) + me-form DoZoneInCombat) PORTED 2026-11-03 —
+-- SAY_AGGRO still rides EVENT_TRANSITION_3; instance legs unbridged.
 -- boss_thaddius: KilledUnit Talk(SAY_SLAY 2) (event 3 — C++-GATED:
 -- victim->GetTypeId() == TYPEID_PLAYER — nalorakk/kelthuzad/gothik
 -- player-gate variant; fifth ported variant of this gate); JustDied
@@ -115,6 +122,15 @@ local ENTRY_THADDIUS = 15928
 local SAY_SLAY = 2
 local SAY_DEATH = 4
 
+-- C++ inherited BossAI::JustEngagedWith (no override in boss_thaddius):
+-- SetCombatPulseDelay(5) + me-form DoZoneInCombat at first engage; no Talk
+-- here (SAY_AGGRO rides EVENT_TRANSITION_3) and no timers (all ride the
+-- unported phase machine).
+local function thaddiusEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
+end
+
 -- C++ KilledUnit: Talk(SAY_SLAY 2) only when victim->GetTypeId() ==
 -- TYPEID_PLAYER (nalorakk / kelthuzad / gothik player-gate variant).
 local function thaddiusTargetDied(event, creature, victim)
@@ -134,5 +150,6 @@ local function thaddiusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+RegisterCreatureEvent(ENTRY_THADDIUS, 1, thaddiusEnterCombat)
 RegisterCreatureEvent(ENTRY_THADDIUS, 3, thaddiusTargetDied)
 RegisterCreatureEvent(ENTRY_THADDIUS, 4, thaddiusDied)

@@ -38,8 +38,11 @@
 -- JustEngagedWith — CastSpell(me, SPELL_FROST_AURA 28531, triggered)
 -- self-cast on combat start; the events.SetPhase(PHASE_GROUND) leg
 -- has no phase bridge — documented, not wired
--- (BossAI::JustEngagedWith instance-bookkeeping leg has no bridge —
--- tharon_ja precedent).
+-- BossAI::JustEngagedWith base arms PORTED 2026-11-03: SetCombatPulseDelay(5)
+-- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542; anubrekhan/gothik
+-- precedent) — the old note read only the instance-bookkeeping leg and missed
+-- the base call at boss_sapphiron.cpp:180; instance legs + setActive unbridged
+-- (tharon_ja precedent).
 -- EVENT_CHECK_RESISTS — DoCastSelf(Check Resists 60539), 0s init
 -- (fired on combat start), 30s repeat; the SpellHitTarget resist
 -- check and GetData(DATA_THE_HUNDRED_CLUB) legs have no bridges —
@@ -431,6 +434,8 @@ end
 -- EVENT_FLIGHT (48.5s), EVENT_BERSERK (15min, unmasked). No aggro
 -- Talk in C++.
 local function sapphironEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; anubrekhan/gothik precedent)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_FROST_AURA, true)
