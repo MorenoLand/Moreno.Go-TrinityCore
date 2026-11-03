@@ -267,6 +267,11 @@ type Server struct {
 	spawnGroupMemberGroup    map[spawnGroupMemberKey]uint32
 	spawnGroupLoaded         bool
 	spawnGroupToggled        map[spawnGroupInstanceKey]bool
+	instanceBossStateMu      sync.RWMutex
+	instanceBossStates       map[instanceAdmissionKey]map[uint32]uint8
+	instanceSpawnGroupMu     sync.RWMutex
+	instanceSpawnGroups      map[uint32][]instanceSpawnGroupInfo
+	instanceSpawnGroupLoaded bool
 	respawnTimesLoaded       bool // set once runWorldTick loads the saved respawn rows (loadCreatureRespawnTimes)
 	instanceResetMu          sync.Mutex
 	instanceResets           map[instanceResetKey]*instanceResetSchedule

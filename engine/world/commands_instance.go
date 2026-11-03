@@ -487,13 +487,16 @@ func (s *session) handleInstanceSaveData() {
 // boss-state arms (cs_instance.cpp:199-231, 245-277): the optional name
 // resolves to an online player (ObjectAccessor::FindPlayerByName); without
 // it the handler's own player is used. Null -> LANG_PLAYER_NOT_FOUND (499).
-func (s *session) instanceBossStateTarget(args []string) (*session, bool) {
+// The name sits at a different index per arm (get: [enc, player], set:
+// [enc, state, player]), so the caller passes its index; reading args[1]
+// for set would resolve the state token as a player name.
+func (s *session) instanceBossStateTarget(args []string, playerIdx int) (*session, bool) {
 	if len(args) == 0 {
 		return nil, false
 	}
 	target := s
-	if len(args) > 1 {
-		name := normalizePlayerName(args[1])
+	if len(args) > playerIdx {
+		name := normalizePlayerName(args[playerIdx])
 		ts := s.server.findSessionByName(name)
 		if ts == nil || ts.player == nil {
 			s.sendSysMessage("Player not found.")
@@ -509,46 +512,60 @@ func (s *session) instanceBossStateTarget(args []string) (*session, bool) {
 }
 
 // handleInstanceSetBossState mirrors HandleInstanceSetBossStateCommand
-// (cs_instance.cpp:199-240): the syntax gates (encounter + state required),
-// the player resolution, the LANG_NOT_DUNGEON (5055) gate, and the
-// LANG_NO_INSTANCE_DATA (5056) gate are all ported in C++ order. Setting the
-// state needs the live InstanceScript (encounter count, SetBossState,
-// GetBossStateName), which has no Go bridge, so the arm RBAC-gates and
-// reports the gap honestly instead of stubbing.
+// (cs_instance.cpp:199-266): the syntax gates (encounter + state required),
+// the player resolution, the LANG_NOT_DUNGEON (5055) gate, the
+// LANG_NO_INSTANCE_DATA (5056) gate, and the state > TO_BE_DECIDED
+// LANG_BAD_VALUE gate are all ported in C++ order, then the live
+// boss-state store takes the set and the LANG_COMMAND_INST_SET_BOSS_STATE
+// line prints unconditionally, as in C++ (the SetBossState return is
+// ignored there too). DELTAS: no encounter-count gate (Go has no per-script
+// boss count), negative states are rejected as Bad value (C++ would pass
+// one through to a wrapped enum), and the NO_INSTANCE_DATA gate is vacuous
+// (Go instances always carry the store; the dungeon gate above is the live
+// check). The message wording is a plain-English recall (LANG text is TDB).
 func (s *session) handleInstanceSetBossState(ctx context.Context, args []string) {
 	const syntax = "Syntax: .instance setbossstate <encounter> <state> [player]"
 	if len(args) < 2 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	target, ok := s.instanceBossStateTarget(args)
+	target, ok := s.instanceBossStateTarget(args, 2)
 	if !ok {
 		return
 	}
 	if !s.instancePlayerInDungeon(target) {
 		return
 	}
-	s.sendSysMessage("Instance scripts are not modeled in the Go tree, so boss states cannot be changed.")
+	encounterID := uint32(cAtoi(args[0]))
+	state := cAtoi(args[1])
+	if state < 0 || state > int(encounterStateToBeDecided) {
+		s.sendSysMessage("Bad value.")
+		return
+	}
+	s.server.setInstanceBossState(ctx, target.player.Map, target.player.InstanceID, encounterID, uint8(state), effectiveTeamFor(target.player), true)
+	s.sendSysMessage(fmt.Sprintf("Boss state for encounter %d set to %s (%d).", encounterID, encounterStateName(uint8(state)), state))
 }
 
 // handleInstanceGetBossState mirrors HandleInstanceGetBossStateCommand
-// (cs_instance.cpp:242-287): same gates as setbossstate in C++ order; the
-// read needs the live InstanceScript (encounter count, GetBossState), which
-// has no Go bridge, so the arm RBAC-gates and reports the gap honestly.
+// (cs_instance.cpp:268-320): same gates as setbossstate in C++ order, then
+// the live store read and the LANG_COMMAND_INST_GET_BOSS_STATE line. Same
+// deltas as set: no encounter-count gate, wording is a recall.
 func (s *session) handleInstanceGetBossState(ctx context.Context, args []string) {
 	const syntax = "Syntax: .instance getbossstate <encounter> [player]"
 	if len(args) < 1 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	target, ok := s.instanceBossStateTarget(args)
+	target, ok := s.instanceBossStateTarget(args, 1)
 	if !ok {
 		return
 	}
 	if !s.instancePlayerInDungeon(target) {
 		return
 	}
-	s.sendSysMessage("Instance scripts are not modeled in the Go tree, so boss states cannot be read.")
+	encounterID := uint32(cAtoi(args[0]))
+	state := s.server.instanceBossState(target.player.Map, target.player.InstanceID, encounterID)
+	s.sendSysMessage(fmt.Sprintf("Boss state for encounter %d is %s (%d).", encounterID, encounterStateName(state), state))
 }
 
 // parseInstanceMapID parses the <map|all> token's numeric form, mirroring
