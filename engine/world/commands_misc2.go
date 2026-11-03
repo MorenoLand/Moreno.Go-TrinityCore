@@ -13,8 +13,8 @@ import (
 
 // misc command ports, chunk 2: misc_commandscript (cs_misc.cpp) rows 92-125
 // in C++ table order (gps through mailbox; the unaura/unbindsight rows were
-// ported in chunk 1, commands_misc.go). Of these 32 arms, 25 are native or
-// partially native and 7 are documented-blocked:
+// ported in chunk 1, commands_misc.go). Of these 32 arms, 28 are native or
+// partially native and 4 are documented-blocked:
 //
 //   - `gps` is wired: cell/grid math, DBC map/zone/area names, VMap
 //     tile presence, terrain height, and liquid status (cs_misc.cpp:183-302).
@@ -34,11 +34,17 @@ import (
 //     (rooted, as repopAtGraveyard does) rather than the C++ map-position
 //     zone lookup, and far-graveyard order follows the DB row order rather
 //     than C++ multimap insertion order.
-//   - `maxskill` / `setskill` have no Go bridge: the skill model
-//     (UpdateWeaponsSkillsToMaxSkillsForLevel / SetSkill / SkillLine.dbc) is
-//     unbuilt.
-//   - `movegens` has no Go bridge: MovementGenerator introspection
-//     (cs_misc.cpp:2016-2298) has no Go model.
+//   - `maxskill` / `setskill` are wired: the live playerSkill slice
+//     (UpdateWeaponsSkillsToMaxSkillsForLevel / SetSkill, Player.cpp:
+//     6087-6228) with SkillLine.dbc profession/riding gates and the Lua
+//     SetSkill apply legs (persist, rewarded spells, achievement criteria,
+//     bonus-aura reapply on add). Deltas: the UpdateSkillEnchantments
+//     legs and the defense UpdateDefenseBonusesMod leg have no Go model.
+//   - `movegens` is wired: the selected unit's live generator from Go's
+//     single-active-generator model (creatureMovementType for creatures,
+//     the taxi path for players) instead of C++'s MotionMaster stack
+//     (cs_misc.cpp:2016-2298). Deltas: one active line, not the full
+//     stack; point destinations read the snapped spline position.
 //   - `mute` / `unmute` are wired: the session muteTime gate (chat.go),
 //     the login-DB mutetime/mutereason/muteby columns (LOGIN_UPD_MUTE_TIME)
 //     and the account_muted history insert (LOGIN_INS_ACCOUNT_MUTE) all
@@ -784,24 +790,203 @@ func (s *session) handleCmdListFreeze(ctx context.Context) {
 	}
 }
 
+// misc2PersistSkill is the character_skills REPLACE twin of the Lua
+// SetSkill bridge's persist closure (lua_player.go): best-effort, like
+// the other command DB writes in this file.
+func misc2PersistSkill(ctx context.Context, target *session, sk playerSkill) {
+	if target == nil || target.player == nil || target.server == nil || target.server.CharactersStore == nil || target.server.CharactersStore.DB == nil {
+		return
+	}
+	_, _ = target.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", target.player.GUID, sk.Skill, sk.Value, sk.Max)
+}
+
+// misc2IsProfessionOrRidingSkill is the IsProfessionOrRidingSkill twin
+// (SpellMgr.h:567) over the SkillLine DBC; without a DBC store only the
+// four fixed ids (129 first aid, 185 cooking, 356 fishing, 762 riding)
+// are recognized, since primary professions need the category column.
+func misc2IsProfessionOrRidingSkill(s *session, skillID uint32) bool {
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if prof, err := s.server.Data.IsProfessionOrRidingSkill(skillID); err == nil {
+			return prof
+		}
+	}
+	switch skillID {
+	case 129, 185, 356, 762:
+		return true
+	}
+	return false
+}
+
+// misc2SkillIndex is the SkillStatusMap lookup twin: the slice index of
+// the skill, or -1 when the player does not know it.
+func misc2SkillIndex(skills []playerSkill, skillID uint32) int {
+	for i := range skills {
+		if uint32(skills[i].Skill) == skillID {
+			return i
+		}
+	}
+	return -1
+}
+
+// misc2SkillLineName reads SkillLine.dbc field 3 (DisplayName enUS,
+// DBCStructure.h:1316), or "" when the store or record is unavailable.
+func (s *session) misc2SkillLineName(skillID uint32) string {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return ""
+	}
+	file, err := s.server.Data.File("SkillLine")
+	if err != nil || file == nil {
+		return ""
+	}
+	rec, found := file.Find(skillID)
+	if !found {
+		return ""
+	}
+	name, _ := rec.String(3)
+	return name
+}
+
+// misc2ParseSkillArg parses the .setskill skill token: a numeric id or a
+// |Hskill:id| hyperlink (the Variant<Hyperlink<skill>, uint32> arg).
+func misc2ParseSkillArg(arg string) (uint32, bool) {
+	if tag, data := gpsLinkTagData(arg); tag == "skill" {
+		id, err := strconv.ParseUint(data, 10, 32)
+		if err != nil {
+			return 0, false
+		}
+		return uint32(id), true
+	}
+	id, err := strconv.ParseUint(arg, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(id), true
+}
+
 // handleCmdMaxSkill mirrors HandleMaxSkillCommand (cs_misc.cpp:1363-1377,
-// RBAC 513). Documented-blocked: the skill model
-// (UpdateWeaponsSkillsToMaxSkillsForLevel) is unbuilt.
+// RBAC 513): every known non-profession, non-riding skill whose max
+// exceeds 1 takes its max as its value (Player.cpp:6087-6112), over the
+// selected player or self. Documented fidelity gap (not a stub): the
+// SKILL_DEFENSE (95) UpdateDefenseBonusesMod leg has no Go defense-bonus
+// model (aura_skill.go delta), and no values-update broadcast is sent —
+// the Lua SetSkill bridge persists the same way.
 func (s *session) handleCmdMaxSkill(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMaxSkill) {
 		return
 	}
-	s.sendSysMessage("The .maxskill command is not available: the skill model is unbuilt.")
+	target := s.guildSelectionOrSelf()
+	if target == nil || target.player == nil {
+		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED
+		return
+	}
+	for i := range target.player.Skills {
+		sk := &target.player.Skills[i]
+		if misc2IsProfessionOrRidingSkill(s, uint32(sk.Skill)) {
+			continue
+		}
+		if sk.Max > 1 {
+			sk.Value = sk.Max
+			misc2PersistSkill(ctx, target, *sk)
+		}
+	}
+}
+
+// misc2MovegenChaseTarget resolves the chase generator's target the way
+// creatureMovementType derives it: the script chase slot first, else the
+// combat victim while in combat.
+func misc2MovegenChaseTarget(motion *creatureMotion) uint64 {
+	if motion == nil {
+		return 0
+	}
+	if motion.ScriptChaseTargetGUID != 0 {
+		return motion.ScriptChaseTargetGUID
+	}
+	if motion.InCombat && motion.TargetGUID != 0 {
+		return motion.TargetGUID
+	}
+	return 0
+}
+
+// misc2MovegenTargetLine renders a chase/follow target line in the C++
+// shape (LANG_MOVEGENS_CHASE_PLAYER / CHASE_CREATURE and the follow
+// twins): the target's name and GUID counter, or the null-target line
+// when the generator carries no target.
+func misc2MovegenTargetLine(ctx context.Context, s *session, verb string, targetGUID uint64) string {
+	if targetGUID == 0 {
+		return verb + ": no target"
+	}
+	counter := uint32(targetGUID & 0x00FFFFFF)
+	if s != nil && s.server != nil {
+		if target := s.server.playerSessionForGUID(targetGUID); target != nil && target.player != nil {
+			return fmt.Sprintf("%s player %s (GUID: %d)", verb, target.player.Name, counter)
+		}
+	}
+	if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		return fmt.Sprintf("%s creature %s (GUID: %d)", verb, s.npcbotTemplateName(ctx, motion.Entry), counter)
+	}
+	return fmt.Sprintf("%s unknown target (GUID: %d)", verb, counter)
 }
 
 // handleCmdMovegens mirrors HandleMovegensCommand (cs_misc.cpp:2016-2298,
-// RBAC 514). Documented-blocked: MovementGenerator introspection has no Go
-// model.
+// RBAC 514): the selected unit's live movement generator. Go keeps a
+// single active generator per creature (creatureMovementType), so the
+// report lists that one line instead of C++'s MotionMaster stack; the
+// header and the chase/follow target lines keep the C++ shape.
+// Documented fidelity gaps (not stubs): the point destination reads the
+// snapped spline position (Go snaps at launch, so it equals the spline
+// destination), and a player reports only Idle or Flight (taxi path) —
+// Go has no player chase/follow generator model.
 func (s *session) handleCmdMovegens(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMovegens) {
 		return
 	}
-	s.sendSysMessage("The .movegens command is not available: movement generators have no Go model.")
+	if s.selection == 0 {
+		s.sendSysMessage("Select a character or creature.") // LANG_SELECT_CHAR_OR_CREATURE
+		return
+	}
+	if s.server != nil {
+		if target := s.server.playerSessionForGUID(s.selection); target != nil && target.player != nil {
+			s.sendSysMessage(fmt.Sprintf("Movement generators for Player %d:", uint32(target.player.GUID&0x00FFFFFF)))
+			if target.player.TaxiPath != "" {
+				s.sendSysMessage("Flight")
+			} else {
+				s.sendSysMessage("Idle")
+			}
+			return
+		}
+	}
+	motion := s.findCreatureMotion(s.selection)
+	if motion == nil {
+		s.sendSysMessage("Select a character or creature.") // LANG_SELECT_CHAR_OR_CREATURE
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Movement generators for Creature %d:", uint32(motion.GUID&0x00FFFFFF)))
+	switch genType := s.server.creatureMovementType(motion); genType {
+	case movementGeneratorIdle:
+		s.sendSysMessage("Idle")
+	case movementGeneratorRandom:
+		s.sendSysMessage("Random")
+	case movementGeneratorWaypoint:
+		s.sendSysMessage("Waypoint")
+	case movementGeneratorConfused:
+		s.sendSysMessage("Confused")
+	case movementGeneratorChase:
+		s.sendSysMessage(misc2MovegenTargetLine(ctx, s, "Chase", misc2MovegenChaseTarget(motion)))
+	case movementGeneratorFollow:
+		s.sendSysMessage(misc2MovegenTargetLine(ctx, s, "Follow", motion.ScriptFollowTargetGUID))
+	case movementGeneratorHome:
+		s.sendSysMessage(fmt.Sprintf("Home: %.2f, %.2f, %.2f", motion.HomeX, motion.HomeY, motion.HomeZ))
+	case movementGeneratorFlight:
+		s.sendSysMessage("Flight")
+	case movementGeneratorPoint:
+		s.sendSysMessage(fmt.Sprintf("Point: %.2f, %.2f, %.2f", motion.X, motion.Y, motion.Z))
+	case movementGeneratorFleeing, movementGeneratorTimedFleeing:
+		s.sendSysMessage("Fleeing")
+	case movementGeneratorDistract:
+		s.sendSysMessage("Distracted")
+	default:
+		s.sendSysMessage(fmt.Sprintf("Unknown movement generator type: %d", genType))
+	}
 }
 
 // handleCmdMute mirrors HandleMuteCommand (cs_misc.cpp:1841-1915, RBAC 515):
@@ -1461,13 +1646,96 @@ func (s *session) handleCmdSave2(ctx context.Context) {
 }
 
 // handleCmdSetSkill mirrors HandleSetSkillCommand (cs_misc.cpp:1378-1429,
-// RBAC 526). Documented-blocked: the skill model (SkillLine.dbc,
-// Player::SetSkill) is unbuilt.
+// RBAC 526): the skill id takes a numeric id or a |Hskill:id| hyperlink
+// (the Variant<Hyperlink<skill>, uint32> arg), the target is the selected
+// player or self, and an unknown SkillLine id is refused. A known skill
+// keeps its step and takes the new value/max; a new skill enters at step 1
+// with max defaulting to the level, and a known skill's max defaults to its
+// pure max. Level 0 or level above max is a silent no-op, as in C++.
+// The apply leg follows the Lua SetSkill bridge (lua_player.go): persist,
+// learn rewarded spells, reach/learn achievement criteria, and the
+// bonus-aura reapply on the add arm only. Documented fidelity gaps (not
+// stubs): the UpdateSkillEnchantments legs have no Go model, and the
+// LANG_SET_SKILL wording is a plain-English recall.
 func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandSetSkill) {
 		return
 	}
-	s.sendSysMessage("The .setskill command is not available: the skill model is unbuilt.")
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
+		return
+	}
+	skillID, ok := misc2ParseSkillArg(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
+		return
+	}
+	level, err := strconv.ParseUint(args[1], 10, 32)
+	if err != nil {
+		s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
+		return
+	}
+	var maxArg uint32
+	hasMaxArg := false
+	if len(args) > 2 {
+		parsedMax, parseErr := strconv.ParseUint(args[2], 10, 32)
+		if parseErr != nil {
+			s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
+			return
+		}
+		maxArg = uint32(parsedMax)
+		hasMaxArg = true
+	}
+	target := s.guildSelectionOrSelf()
+	if target == nil || target.player == nil {
+		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED
+		return
+	}
+	if s.server != nil && s.server.Data != nil {
+		if _, found, err := s.server.Data.SkillLineCategory(skillID); err == nil && !found {
+			s.sendSysMessage(fmt.Sprintf("Invalid skill ID %d.", skillID))
+			return
+		}
+	}
+	index := misc2SkillIndex(target.player.Skills, skillID)
+	targetHasSkill := target.playerSkillTotalValue(skillID) != 0
+	var max uint16
+	switch {
+	case hasMaxArg:
+		max = uint16(maxArg)
+	case targetHasSkill && index >= 0:
+		max = target.player.Skills[index].Max
+	default:
+		max = uint16(level)
+	}
+	if level == 0 || level > uint64(max) {
+		return
+	}
+	if index >= 0 {
+		step := uint16(1)
+		if targetHasSkill {
+			step = target.player.Skills[index].Step
+		}
+		target.player.Skills[index].Step = step
+		target.player.Skills[index].Value = uint16(level)
+		target.player.Skills[index].Max = max
+		misc2PersistSkill(ctx, target, target.player.Skills[index])
+	} else {
+		if len(target.player.Skills) >= playerMaxSkills {
+			return
+		}
+		target.player.Skills = append(target.player.Skills, playerSkill{Skill: uint16(skillID), Step: 1, Value: uint16(level), Max: max})
+		misc2PersistSkill(ctx, target, target.player.Skills[len(target.player.Skills)-1])
+		target.reapplySkillBonusAuras(skillID)
+	}
+	target.learnSkillRewardedSpells(ctx, skillID, uint32(level))
+	target.setAchievementCriteria(criteriaTypeReachSkillLevel, skillID, uint32(level))
+	target.setAchievementCriteria(criteriaTypeLearnSkillLevel, skillID, uint32(max))
+	if name := s.misc2SkillLineName(skillID); name != "" {
+		s.sendSysMessage(fmt.Sprintf("Skill %d (%s) set to %d (max %d) for %s.", skillID, name, level, max, target.player.Name))
+	} else {
+		s.sendSysMessage(fmt.Sprintf("Skill %d set to %d (max %d) for %s.", skillID, level, max, target.player.Name))
+	}
 }
 
 // handleCmdSummon mirrors HandleSummonCommand (cs_misc.cpp:486-599, RBAC
