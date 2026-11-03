@@ -90,6 +90,9 @@ type creatureMotion struct {
 	NPCFlagsKnown         bool   // set by the event-surface SetNPCFlags/SetFlag(82)/RemoveFlag(82) bridges; gates the motion->spawn overlay so untouched creatures keep the DB/game-event value
 	DisableReputationGain bool   // Creature::DisableReputationGain (Creature.h:320-321, default false); Lua IsReputationGainDisabled/SetDisableReputationGain
 	CanFly                bool
+	MoveGround            uint32 // creature_template_movement.Ground via loadCreatureStats; 0=None, 1=Run, 2=Hover (CreatureData.h)
+	MoveSwim              bool   // creature_template_movement.Swim via loadCreatureStats
+	MoveKnown             bool   // set at the stats-backed creation sites; pets/totems built without stats read the C++ defaults instead
 	ReactState            uint8
 	ReactStateKnown       bool
 	EmoteState            uint32 // UNIT_NPC_EMOTESTATE live value: Lua CreatureMethods::EmoteState (SetUInt32Value twin), init from template emote at spawn
@@ -250,9 +253,10 @@ type creatureMotion struct {
 	// after CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY the gathered assistants
 	// re-check Creature::CanAssistTo and engage the victim. Fired from
 	// stepCreatureMotion; cleared on evade and death.
-	AssistAt     time.Time
-	AssistVictim uint64
-	Assistants   []uint64
+	AssistAt          time.Time
+	AssistVictim      uint64
+	Assistants        []uint64
+	SeekAssistPending bool // AssistanceMovementGenerator leg armed by creatureFleeToGetAssistance: the step tick fires the arrival arm when the seek spline lands
 	// LastDamaged mirrors Creature::m_lastDamagedTime as stamped by the
 	// evade arm of Unit::DealDamage (Unit.cpp:900-907): direct (melee,
 	// ranged, spell-direct) hits with damage > 0 reset it to now +
@@ -796,6 +800,36 @@ func isCreaturePassive(motion *creatureMotion) bool {
 	return motion != nil && motion.ReactStateKnown && motion.ReactState == creatureReactPassive
 }
 
+// creatureCanWalkMotion is Creature::CanWalk (Creature.h:104):
+// GetMovementTemplate().IsGroundAllowed(), i.e. Ground != None
+// (CreatureData.h:126). Motions built without stats (pets, totems)
+// carry no movement row, so they read the C++ default-ctor value
+// (Ground=Run, allowed); the spawn-override table has no Go load, so
+// override creatures read their template row (see the bindings).
+func creatureCanWalkMotion(motion *creatureMotion) bool {
+	if motion == nil || !motion.MoveKnown {
+		return true
+	}
+	return motion.MoveGround != 0
+}
+
+// creatureCanSwimMotion is Creature::CanSwim (Creature.h:105):
+// GetMovementTemplate().IsSwimAllowed() || IsPet(). Go pets are
+// motions with a nonzero OwnerGUID (the pet_combat.go IsPet twin);
+// stat-less motions read the C++ default (Swim=true).
+func creatureCanSwimMotion(motion *creatureMotion) bool {
+	if motion == nil {
+		return true
+	}
+	if motion.OwnerGUID != 0 {
+		return true
+	}
+	if !motion.MoveKnown {
+		return true
+	}
+	return motion.MoveSwim
+}
+
 func creatureWalkVelocity(multiplier float64) float32 {
 	if multiplier <= 0 {
 		return creatureBaseWalkSpeed
@@ -957,6 +991,9 @@ func (s *Server) motionForLocked(ctx context.Context, guid, entry, mapID, instan
 			NPCFlags:        st.NPCFlags,
 			UnitClass:       st.UnitClass,
 			CanFly:          st.CanFly,
+			MoveGround:      st.MoveGround,
+			MoveSwim:        st.MoveSwim,
+			MoveKnown:       true,
 			ReactState:      st.ReactState,
 			ReactStateKnown: st.ReactStateKnown,
 			CreatureType:    st.CreatureType,
@@ -1120,6 +1157,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				NPCFlags:        st.NPCFlags,
 				UnitClass:       st.UnitClass,
 				CanFly:          st.CanFly,
+				MoveGround:      st.MoveGround,
+				MoveSwim:        st.MoveSwim,
+				MoveKnown:       true,
 				ReactState:      st.ReactState,
 				ReactStateKnown: st.ReactStateKnown,
 				Name:            name,
@@ -1491,6 +1531,311 @@ func (s *Server) creatureCanAssistTo(assistantFaction uint32, assistantPassive b
 		return false
 	}
 	return true
+}
+
+// creatureAttackTarget is one resolved CreatureMethods::CanStartAttack
+// target: a live player session or creature motion on the caller's
+// map/instance. ok=false is the Eluna CHECKOBJ failure twin; the
+// bindings error on it like GetAttackDistance does. Sessions resolve
+// first (player GUIDs never carry the 0xF130 creature high bits), so
+// callers must not hold motionMu: findSessionByGUID takes sessionsMu,
+// and sessionsMu is never taken under motionMu.
+type creatureAttackTarget struct {
+	ok               bool
+	isPlayer         bool
+	guid             uint64
+	level            uint32
+	detected         int32
+	x, y, z          float32
+	unitFlags        uint32
+	faction          uint32
+	creatureType     uint32
+	playerControlled bool
+	health           uint32
+	evading          bool
+	dead             bool
+	isGM             bool
+	feignDeath       bool
+	combatReach      float32
+	pos              playerPos // players only, for the faction helpers
+	sess             *session  // players only, for stealth detection
+}
+
+// creatureAttackTargetResolve resolves a Lua Unit argument for
+// CanStartAttack on the caller's map/instance.
+func (s *Server) creatureAttackTargetResolve(arg any, mapID, instanceID uint32) creatureAttackTarget {
+	if s == nil {
+		return creatureAttackTarget{}
+	}
+	obj, ok := arg.(*scripting.Object)
+	if !ok || obj == nil {
+		return creatureAttackTarget{}
+	}
+	guid := luaObjectGUID(obj)
+	if guid == 0 {
+		return creatureAttackTarget{}
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+		pl := sess.player
+		pos := playerPos{Map: pl.Map, InstanceID: pl.InstanceID, X: pl.X, Y: pl.Y, Z: pl.Z, GUID: sess.playerGUID, Race: pl.Race, Class: pl.Class, Level: pl.Level, IsGM: (pl.ExtraFlags&playerExtraGMOn != 0) || (pl.PlayerFlags&playerFlagGM != 0), IsDead: (pl.Health == 0 && pl.MaxHealth > 0) || pl.PlayerFlags&playerFlagGhost != 0, FactionTemplate: sess.effectiveFactionTemplate(pl.Race), Reputations: playerReputationMap(pl.Reputations), Sess: sess}
+		return creatureAttackTarget{ok: true, isPlayer: true, guid: guid, level: uint32(pl.Level), detected: sess.totalAuraModifier(spellAuraModDetectedRange), x: pl.X, y: pl.Y, z: pl.Z, unitFlags: unitFlagPlayerControlled, playerControlled: true, dead: pos.IsDead, isGM: pos.IsGM, feignDeath: sess.hasAuraType(spellAuraFeignDeath), combatReach: pl.CombatReach, pos: pos, sess: sess}
+	}
+	target := s.findCreatureMotion(mapID, instanceID, guid)
+	if target == nil {
+		return creatureAttackTarget{}
+	}
+	s.motionMu.Lock()
+	tgt := creatureAttackTarget{ok: true, guid: guid, level: target.Level, detected: s.creatureAuraTypeSum(creatureAuraKeyForMotion(target), spellAuraModDetectedRange), x: target.X, y: target.Y, z: target.Z, unitFlags: target.UnitFlags, faction: target.Faction, creatureType: target.CreatureType, playerControlled: target.UnitFlags&unitFlagPlayerControlled != 0, health: target.Health, evading: target.Evading, combatReach: target.CombatReach}
+	s.motionMu.Unlock()
+	return tgt
+}
+
+// creatureNeutralToAll is WorldObject::IsNeutralToAll (Object.cpp:2865)
+// plus FactionTemplateEntry::IsNeutralToAll (DBCStructure.h:724): the
+// template's faction is 0, or it has no enemy entries and neither an
+// enemy group nor a friend group. DELTA: the raw-Faction
+// ReputationIndex>=0 arm (a reputation faction is never neutral to
+// all) has no Go twin — the DBC store exposes no Faction row lookup,
+// only FactionTemplate — so reputation factions with otherwise-empty
+// templates read neutral here.
+func (s *Server) creatureNeutralToAll(faction uint32) bool {
+	if s == nil || s.Data == nil {
+		return false
+	}
+	tpl, found, err := s.Data.FactionTemplate(faction)
+	if err != nil || !found {
+		return false
+	}
+	if tpl.Faction == 0 {
+		return true
+	}
+	for _, enemy := range tpl.Enemies {
+		if enemy != 0 {
+			return false
+		}
+	}
+	return tpl.EnemyGroup == 0 && tpl.FriendGroup == 0
+}
+
+// creatureCanStartAttack is Creature::CanStartAttack
+// (Creature.cpp:1960-2004) as a pure query. The caller motion is read
+// the way GetAttackDistance reads it (no motionMu held, the tick-path
+// precedent); the target is resolved before this call, so no session
+// or motion lock is taken inside. C++ order is preserved: civilian,
+// immunity pairing, non-combat-pet, non-flyer Z, then (force=false)
+// _IsTargetAcceptable + neutral/dist, then CanCreatureAttack, gray
+// aggro, LOS. The arms are conjunctive, so the two immunity pairings
+// (CanStartAttack's caller-immune arms and IsValidAttackTarget's
+// target-immune arms, Object.cpp:2990-3003) are both evaluated.
+// DELTAS, all documented at the arm: the vehicle arms of
+// _IsTargetAcceptable (no vehicle-target model on this path); the
+// UNIT_STATE_UNATTACKABLE arm of IsValidAttackTarget (no such state
+// in Go); the CanSeeOrDetect invisibility legs (stealth only, via
+// canCreatureDetectStealthOfPlayer, for player targets); the
+// isInAccessiblePlaceFor victim-in-water leg rides the grid-liquid
+// twin (mapIsInWater, the IsInWater binding's helper), not per-unit
+// liquid status; CanAIAttack is the TurretAI band only
+// (turretCanAIAttack returns true for every other AI, and creature
+// victims carry no spell-band model); the home gate's charmer/owner
+// arm measures from a resolvable owner motion, else the caller home;
+// the NPC-bot GM-controlled faction-35 arm is vacuous (no bots in
+// the motion map); GetLevelForTarget is the identity (Unit.h:845).
+func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMotion, target creatureAttackTarget, force bool) bool {
+	if s == nil || caller == nil || !target.ok {
+		return false
+	}
+	// Creature::IsCivilian (CreatureData.h:52): flags_extra CIVILIAN.
+	if caller.FlagsExtra&0x2 != 0 {
+		return false
+	}
+	// Immunity pairing, caller side (Creature.cpp:1964-1970).
+	callerPC := caller.UnitFlags&unitFlagPlayerControlled != 0
+	if caller.UnitFlags&unitFlagImmuneToNPC != 0 && !target.playerControlled {
+		return false
+	}
+	if caller.UnitFlags&unitFlagImmuneToPC != 0 && target.playerControlled {
+		return false
+	}
+	// Non-combat pets are never attacked (Creature.cpp:1971-1973;
+	// CREATURE_TYPE_NON_COMBAT_PET = 10).
+	if !target.isPlayer && target.creatureType == 10 {
+		return false
+	}
+	// m_CombatDistance is 0 except for TurretAI/ArcherAI, whose ctors
+	// store spell[0]'s hostile max range (CombatAI.cpp:185-197,
+	// 239-242); spellMaxRangeHostile is that raw value, distinct
+	// from combatDistanceSpellRange's contactDist-relative term.
+	combatDist := float32(0)
+	if caller.AIName == "TurretAI" || caller.AIName == "ArcherAI" {
+		combatDist = spellMaxRangeHostile(s, caller)
+	}
+	// Non-flyer Z arm (Creature.cpp:1974, CREATURE_Z_ATTACK_RANGE = 3,
+	// Creature.h:57). C++ CanFly is template flight OR live flying;
+	// Go splits those into CanFly and the Flying movement flag.
+	if !caller.CanFly && !caller.Flying {
+		dz := target.z - caller.Z
+		if dz < 0 {
+			dz = -dz
+		}
+		if dz > 3+combatDist {
+			return false
+		}
+	}
+	dist3D := float32(distance3D(caller.X, caller.Y, caller.Z, target.x, target.y, target.z))
+	if !force {
+		// Creature::_IsTargetAcceptable (Creature.cpp:2505-2531).
+		if target.isPlayer {
+			if s.isFriendlyFaction(caller.Faction, target.pos) {
+				return false
+			}
+		} else if s.creatureTemplateFriendlyTo(caller.Faction, target.faction) {
+			return false
+		}
+		// isTargetableForAttack(false) (Unit.cpp:8504-8516): alive,
+		// no NON_ATTACKABLE/NOT_SELECTABLE, no GM; the DIED arm
+		// below handles feign death (guards detect it, Creature
+		// flags_extra GUARD = 0x8000).
+		if target.dead || target.isGM || target.unitFlags&(unitFlagNonAttackable|unitFlagNotSelectable) != 0 {
+			return false
+		}
+		if target.isPlayer && target.feignDeath && caller.FlagsExtra&0x8000 == 0 {
+			return false
+		}
+		// Already fighting the target, or hostile to it.
+		engaged := caller.TargetGUID == target.guid
+		if !engaged && caller.ThreatMgr != nil {
+			if caller.ThreatMgr.GetCurrentVictim() == target.guid {
+				engaged = true
+			} else {
+				for _, entry := range caller.ThreatMgr.SortedEntries() {
+					if entry.VictimGUID == target.guid {
+						engaged = true
+						break
+					}
+				}
+			}
+		}
+		hostile := false
+		if target.isPlayer {
+			hostile = s.isAttackableFaction(caller.Faction, target.pos)
+		} else {
+			hostile = s.creatureFactionHostileTo(caller.Faction, target.faction)
+		}
+		if !engaged && !hostile {
+			return false
+		}
+		// IsNeutralToAll / IsWithinDistInMap (Creature.cpp:1985-1986).
+		if s.creatureNeutralToAll(caller.Faction) {
+			return false
+		}
+		if dist3D > s.creatureAttackDistance(ctx, caller, target.level, target.detected)+combatDist {
+			return false
+		}
+	}
+	// Creature::CanCreatureAttack (Creature.cpp:2560-2608). In-map is
+	// by construction (the resolver only returns same-map targets);
+	// a cross-map target errors at the binding instead.
+	if target.guid == caller.GUID {
+		return false
+	}
+	// WorldObject::IsValidAttackTarget (Object.cpp:2930-3010), no-spell
+	// form: GM, dead, NOT_SELECTABLE, the NON_ATTACKABLE/TAXI/
+	// NOT_ATTACKABLE_1/2 flag set, and the target-immune pairing.
+	if target.isGM || target.dead || target.unitFlags&unitFlagNotSelectable != 0 {
+		return false
+	}
+	if target.unitFlags&(unitFlagNonAttackable|unitFlagTaxiFlight|unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
+		return false
+	}
+	if !callerPC && target.unitFlags&unitFlagImmuneToNPC != 0 {
+		return false
+	}
+	if !target.playerControlled && caller.UnitFlags&unitFlagImmuneToNPC != 0 {
+		return false
+	}
+	if callerPC && target.unitFlags&unitFlagImmuneToPC != 0 {
+		return false
+	}
+	if target.playerControlled && caller.UnitFlags&unitFlagImmuneToPC != 0 {
+		return false
+	}
+	// Unit::isInAccessiblePlaceFor (Unit.cpp:3268): a victim in water
+	// needs caller CanSwim, else CanWalk or CanFly.
+	if s.mapIsInWater(caller.Map, target.x, target.y, target.z) {
+		if !creatureCanSwimMotion(caller) {
+			return false
+		}
+	} else if !creatureCanWalkMotion(caller) && !caller.CanFly && !caller.Flying {
+		return false
+	}
+	// AI::CanAIAttack: the TurretAI spell band (CombatAI.cpp:245-251
+	// via turretCanAIAttack); every other AI passes, and creature
+	// victims carry no band model.
+	if target.isPlayer && !s.turretCanAIAttack(caller, target.pos, dist3D) {
+		return false
+	}
+	// Evade arms (Creature.cpp:2577-2582).
+	if caller.Evading || (!target.isPlayer && target.evading) {
+		return false
+	}
+	// Home-distance gate (Creature.cpp:2582-2608), skipped for
+	// player-charmed/owned callers, dungeon maps, world bosses
+	// (rank 3), recently damaged callers (LastDamaged is stamped
+	// now + MAX_AGGRO_RESET_TIME), and taunted callers.
+	ownerGUID := caller.CharmerGUID
+	if ownerGUID == 0 {
+		ownerGUID = caller.OwnerGUID
+	}
+	ownerIsPlayer := false
+	if ownerGUID != 0 {
+		if sess := s.findSessionByGUID(ownerGUID); sess != nil && sess.player != nil {
+			ownerIsPlayer = true
+		}
+	}
+	dungeon := false
+	if s.Data != nil {
+		if entry, found, err := s.Data.Map(caller.Map); err == nil && found && entry.IsDungeon() {
+			dungeon = true
+		}
+	}
+	if !ownerIsPlayer && !dungeon && caller.Rank != 3 && !time.Now().Before(caller.LastDamaged) && !s.creatureHasAuraType(creatureAuraKeyForMotion(caller), spellAuraModTaunt) {
+		vis := float32(s.Config.VisibilityDistanceContinents)
+		if dungeon {
+			vis = float32(s.Config.VisibilityDistanceInstances)
+		}
+		limit := vis
+		if limit > 133.3333 {
+			limit = 133.3333
+		}
+		limit += caller.CombatReach + target.combatReach
+		homeX, homeY, homeZ := caller.HomeX, caller.HomeY, caller.HomeZ
+		if ownerGUID != 0 {
+			if owner := s.findCreatureMotion(caller.Map, caller.InstanceID, ownerGUID); owner != nil {
+				s.motionMu.Lock()
+				homeX, homeY, homeZ = owner.X, owner.Y, owner.Z
+				s.motionMu.Unlock()
+			}
+		}
+		var homeDist float32
+		if caller.CanFly || caller.Flying {
+			homeDist = float32(math.Hypot(float64(target.x-homeX), float64(target.y-homeY)))
+		} else {
+			homeDist = float32(distance3D(target.x, target.y, target.z, homeX, homeY, homeZ))
+		}
+		if homeDist > limit {
+			return false
+		}
+	}
+	// No aggro from gray creatures (Creature.cpp:2000-2013 via
+	// noGrayAggroBlocked); GetLevelForTarget is the identity.
+	if noGrayAggroBlocked(target.level, caller.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) {
+		return false
+	}
+	// CanSeeOrDetect, stealth half only for player targets.
+	if target.isPlayer && !canCreatureDetectStealthOfPlayer(caller, target.sess, dist3D) {
+		return false
+	}
+	return s.hasLineOfSight(caller.Map, caller.X, caller.Y, caller.Z, target.x, target.y, target.z)
 }
 
 // creatureExpansionMaxLevel mirrors the expansion-max-level cache arm of
@@ -3121,6 +3466,170 @@ func (s *Server) setCreatureFeared(motion *creatureMotion, apply bool) {
 	}
 }
 
+// creatureFleeToGetAssistance is Creature::DoFleeToGetAssistance
+// (Creature.cpp:1031-1052): no victim or a SPELL_AURA_PREVENTS_FLEEING
+// aura returns; otherwise, when CONFIG_CREATURE_FAMILY_FLEE_ASSISTANCE_RADIUS
+// (default 30.0, World.cpp:1116) is positive, the nearest creature
+// passing NearestAssistCreatureInCreatureRangeCheck (GridNotifiers.h:
+// not self, CanAssistTo(caller, victim) with checkfaction=true,
+// absolute 3D range with the shrinking-range nearest rule, caller-to-
+// candidate LOS) is sought, SetNoSearchAssistance(true) is set whether
+// or not one is found, and the creature either flees untimed
+// (SetControlled FLEEING, the startCreatureFlee duration-0 leg) or
+// seeks the ally (MoveSeekAssistance, the startCreatureSeekAssistance
+// leg). The victim resolves before any motion lock (sessionsMu is
+// never taken under motionMu); the search itself holds motionMu like
+// callCreatureAssistance does. DELTAS: the grid visit becomes a motion
+// map sweep (same-map/instance only, as in C++); the delayed
+// CallAssistance funnel is player-victim-only in Go (the
+// EngageWithTarget bridge's limit, see callCreatureForHelp), so a
+// creature victim's seek arrival still clears the no-call latch and
+// distracts but engages no assistants.
+func (s *Server) creatureFleeToGetAssistance(ctx context.Context, caller *creatureMotion) {
+	if s == nil || caller == nil {
+		return
+	}
+	var victimGUID uint64
+	if caller.ThreatMgr != nil {
+		victimGUID = caller.ThreatMgr.GetCurrentVictim()
+	}
+	if victimGUID == 0 {
+		victimGUID = caller.TargetGUID
+	}
+	if victimGUID == 0 {
+		return
+	}
+	if s.creatureHasAuraType(creatureAuraKeyForMotion(caller), spellAuraPreventsFleeing) {
+		return
+	}
+	radius := s.Config.CreatureFamilyFleeAssistanceRadius
+	if radius <= 0 {
+		return
+	}
+	// Victim party + position, resolved before motionMu.
+	var victimX, victimY float32
+	var enemy assistParty
+	if sess := s.findSessionByGUID(victimGUID); sess != nil && sess.player != nil && sess.player.Map == caller.Map && sess.player.InstanceID == caller.InstanceID {
+		victimX, victimY = sess.player.X, sess.player.Y
+		enemy = assistParty{ok: true, isPlayer: true, pos: playerPosForAssist(sess)}
+	} else if victim := s.findCreatureMotion(caller.Map, caller.InstanceID, victimGUID); victim != nil {
+		s.motionMu.Lock()
+		victimX, victimY, enemy = victim.X, victim.Y, assistParty{ok: true, faction: victim.Faction, evading: victim.Evading}
+		s.motionMu.Unlock()
+	} else {
+		return
+	}
+	s.motionMu.Lock()
+	live := s.findCreatureMotionLocked(caller.Map, caller.InstanceID, caller.GUID)
+	if live == nil {
+		s.motionMu.Unlock()
+		return
+	}
+	live.AlreadySearchedAssistance = true
+	friend := assistParty{ok: true, faction: live.Faction, evading: live.Evading}
+	bestDist := float32(radius)
+	var allyX, allyY, allyZ float32
+	found := false
+	for guid, a := range s.motionMapLocked(live.Map, live.InstanceID) {
+		if guid == live.GUID || a == nil {
+			continue
+		}
+		if !s.creatureCanAssistTo(a.Faction, isCreaturePassive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, enemy, true) {
+			continue
+		}
+		d := float32(distance3D(live.X, live.Y, live.Z, a.X, a.Y, a.Z))
+		if d > bestDist {
+			continue
+		}
+		if !s.hasLineOfSight(live.Map, live.X, live.Y, live.Z, a.X, a.Y, a.Z) {
+			continue
+		}
+		bestDist, allyX, allyY, allyZ, found = d, a.X, a.Y, a.Z, true
+	}
+	s.motionMu.Unlock()
+	if !found {
+		s.startCreatureFlee(live, victimX, victimY, 0)
+		return
+	}
+	s.startCreatureSeekAssistance(ctx, live, allyX, allyY, allyZ)
+}
+
+// startCreatureSeekAssistance is MotionMaster::MoveSeekAssistance
+// (MotionMaster.cpp:957-970): AttackStop, CastStop, and the
+// AssistanceMovementGenerator spline to the ally's position. The
+// CastStop twin is cancelPendingCreatureCast; the AttackStop twin is
+// the step tick's Moving-block early return (no pursuit or melee
+// while the spline is in flight). C++'s SetReactState(REACT_PASSIVE)
+// is deliberately NOT mirrored: Go's passive tick arm zeroes
+// TargetGUID and Moving, which would kill the spline and break the
+// arrival CallAssistance (Go's funnel resolves the victim from live
+// TargetGUID at fire time, so TargetGUID is kept, unlike the passive
+// arm's AttackStop twin). The arrival arm runs from the step tick's
+// Moving blocks via finishCreatureSeekAssistance. A sub-0.001 speed
+// fails spline validation (MoveSpline.cpp:210), so C++ finalizes
+// immediately — Go runs the arrival arm at once instead.
+func (s *Server) startCreatureSeekAssistance(ctx context.Context, motion *creatureMotion, x, y, z float32) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.cancelPendingCreatureCast(motion)
+	now := time.Now()
+	s.motionMu.Lock()
+	if motion.Health == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	speed := creatureSplineVelocity(motion, false)
+	if speed < 0.001 {
+		s.motionMu.Unlock()
+		s.finishCreatureSeekAssistance(ctx, motion, now)
+		return
+	}
+	dist := float32(distance3D(motion.X, motion.Y, motion.Z, x, y, z))
+	duration := splineDurationMs(float64(dist), speed)
+	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
+	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+	motion.X, motion.Y, motion.Z = x, y, z
+	motion.Moving = true
+	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	motion.SeekAssistPending = true
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, x, y, z, duration, false, 0, false, phase, transportGUID)
+}
+
+// finishCreatureSeekAssistance is AssistanceMovementGenerator::Finalize
+// (PointMovementGenerator.cpp:183-197): SetNoCallAssistance(false),
+// CallAssistance(), and, while alive, the
+// MoveSeekAssistanceDistract hold (CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY,
+// the DistractedUntil twin). Idempotent: it clears the pending flag
+// first, so a second Moving block in the same tick is a no-op. The
+// caller holds no motionMu (the step tick path never does).
+func (s *Server) finishCreatureSeekAssistance(ctx context.Context, motion *creatureMotion, at time.Time) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	if !motion.SeekAssistPending {
+		s.motionMu.Unlock()
+		return
+	}
+	motion.SeekAssistPending = false
+	motion.AlreadyCallAssistance = false
+	motion.NoCallAssistance = false
+	alive := motion.Health > 0
+	delayMs := s.Config.CreatureFamilyAssistanceDelay
+	if delayMs == 0 {
+		delayMs = 1500
+	}
+	if alive {
+		motion.DistractedUntil = at.Add(time.Duration(delayMs) * time.Millisecond)
+	}
+	s.motionMu.Unlock()
+	s.callCreatureAssistance(ctx, motion)
+}
+
 // clearCreatureVisualTarget is the engine half of Creature::SetTarget
 // (Creature.cpp:3221-3226): Unit::CombatStop (Unit.cpp:5774) and the
 // setDeathState death arm (Creature.cpp:2094) clear the visual target
@@ -4036,6 +4545,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 		motion.Moving = false
+		if motion.SeekAssistPending {
+			s.finishCreatureSeekAssistance(ctx, motion, now)
+		}
 	}
 
 	// CritterAI flee (PassiveAI.cpp:76-93): while the flee timer runs the
@@ -7546,6 +8058,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		motion.Moving = false
 		motion.WaitUntil = motion.MoveEnds
+		if motion.SeekAssistPending {
+			s.finishCreatureSeekAssistance(ctx, motion, now)
+		}
 		// WaypointMovementGenerator::OnArrived (WaypointMovementGenerator.cpp:238-262):
 		// the arrival event, node facing, and the post-arrival node delay.
 		s.waypointNodeArrival(ctx, motion, motion.MoveEnds)

@@ -2763,6 +2763,8 @@ type creatureStats struct {
 	Rank            uint32 // creature_template.rank (SharedDefines.h CreatureEliteType); feeds Creature::isElite (Creature.cpp:2344-2350)
 	NPCFlags        uint32 // creature_template.npcflag; live value behind Lua CreatureMethods::GetNPCFlags/SetNPCFlags (UNIT_NPC_FLAGS)
 	CanFly          bool
+	MoveGround      uint32 // creature_template_movement.Ground (ObjectMgr.cpp field 44); missing row keeps the C++ default Run=1, so the query COALESCEs to 1
+	MoveSwim        bool   // creature_template_movement.Swim (field 45); missing row keeps the C++ default true, so the query COALESCEs to 1
 	ReactState      uint8
 	ReactStateKnown bool
 	// CreatureType mirrors creature_template.type (SharedDefines.h creature
@@ -2808,6 +2810,8 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 			CombatReach:    1.5,
 			ReactState:     creatureReactAggressive,
 			Scale:          1,
+			MoveGround:     1,
+			MoveSwim:       true,
 		}
 	}
 	s.statsMu.RLock()
@@ -2831,12 +2835,14 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		CombatReach:    1.5,
 		ReactState:     creatureReactAggressive,
 		Scale:          1,
+		MoveGround:     1,
+		MoveSwim:       true,
 	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return stats
 	}
 
-	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight int64
+	var maxlevel, unitClass, exp, baseAttackTime, unitFlags, flagsExtra, typeFlags, npcFlags, flight, moveGround, moveSwim int64
 	var rank int64
 	var creatureType int64
 	var mechanicImmuneMask, spellSchoolImmuneMask int64
@@ -2859,6 +2865,8 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.rank, 0),
 		COALESCE(ct.npcflag, 0),
 		COALESCE(ctm.Flight, 0),
+		COALESCE(ctm.Ground, 1),
+		COALESCE(ctm.Swim, 1),
 		COALESCE(ct.type, 0),
 		COALESCE(ct.MechanicImmuneMask, 0),
 		COALESCE(ct.SpellSchoolImmuneMask, 0),
@@ -2867,7 +2875,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		COALESCE(ct.modelid1, 0),
 		COALESCE(ct.VehicleId, 0)
 		FROM creature_template ct LEFT JOIN creature_template_movement ctm ON ctm.CreatureId = ct.entry WHERE ct.entry = ?`, entry)
-	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID); err != nil {
+	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &manaMod, &armorMod, &damageMod, &unitFlags, &flagsExtra, &typeFlags, &rank, &npcFlags, &flight, &moveGround, &moveSwim, &creatureType, &mechanicImmuneMask, &spellSchoolImmuneMask, &baseVariance, &templateScale, &modelid1, &vehicleID); err != nil {
 		return stats
 	}
 	if reactState, known, aiName := s.loadCreatureReaction(ctx, entry); known {
@@ -2908,6 +2916,8 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	stats.TypeFlags = uint32(typeFlags)
 	stats.NPCFlags = uint32(npcFlags)
 	stats.CanFly = flight != 0
+	stats.MoveGround = uint32(moveGround)
+	stats.MoveSwim = moveSwim != 0
 	stats.MechanicImmuneMask = uint32(mechanicImmuneMask)
 	stats.SpellSchoolImmuneMask = uint32(spellSchoolImmuneMask)
 

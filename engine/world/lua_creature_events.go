@@ -1275,6 +1275,66 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{s.creatureCanAssistTo(faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID, friend, enemy, checkfaction)}, nil
 	}
+	// CanSwim is Creature::CanSwim (Creature.h:105):
+	// GetMovementTemplate().IsSwimAllowed() || IsPet(). The template
+	// row rides loadCreatureStats (creature_template_movement, with
+	// the C++ missing-row defaults); pets are motions with a nonzero
+	// OwnerGUID; the spawn-override table has no Go load, so override
+	// creatures read their template row.
+	methods["CanSwim"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		swim := creatureCanSwimMotion(motion)
+		s.motionMu.Unlock()
+		return []any{swim}, nil
+	}
+	// CanWalk is Creature::CanWalk (Creature.h:104):
+	// GetMovementTemplate().IsGroundAllowed(), i.e. Ground != None
+	// (CreatureData.h:126). Same template-row / spawn-override deltas
+	// as CanSwim; stat-less motions (pets, totems) read the C++
+	// default (Ground=Run, allowed).
+	methods["CanWalk"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		walk := creatureCanWalkMotion(motion)
+		s.motionMu.Unlock()
+		return []any{walk}, nil
+	}
+	// CanStartAttack is Creature::CanStartAttack (Creature.cpp:1960-2004)
+	// via creatureCanStartAttack: civilian, immunity pairing,
+	// non-combat-pet, non-flyer Z, then (force=false) _IsTargetAcceptable
+	// + neutral/dist, then CanCreatureAttack, gray aggro, LOS. The
+	// Eluna force argument defaults true (CreatureMethods.h:377-386);
+	// the target resolves as a player session or a live creature motion
+	// on the caller's map/instance, and an unresolvable target errors,
+	// the Eluna CHECKOBJ twin. See creatureCanStartAttack for the arms
+	// Go cannot mirror.
+	methods["CanStartAttack"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("CanStartAttack requires a Unit target")
+		}
+		target := s.creatureAttackTargetResolve(args[0], motion.Map, motion.InstanceID)
+		if !target.ok {
+			return nil, fmt.Errorf("CanStartAttack requires a Unit target")
+		}
+		force := true
+		if len(args) >= 2 && args[1] != nil {
+			b, ok := args[1].(bool)
+			if !ok {
+				return nil, fmt.Errorf("CanStartAttack requires a bool force")
+			}
+			force = b
+		}
+		return []any{s.creatureCanStartAttack(ctx, motion, target, force)}, nil
+	}
+	// FleeToGetAssistance is Creature::DoFleeToGetAssistance
+	// (Creature.cpp:1031-1052) via creatureFleeToGetAssistance: the
+	// victim + prevents-fleeing gates, the nearest-assist search with
+	// SetNoSearchAssistance(true), the untimed flee leg when no ally is
+	// found, and a real move-toward-ally leg (with the arrival
+	// CallAssistance + distract arms) when one is.
+	methods["FleeToGetAssistance"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.creatureFleeToGetAssistance(ctx, motion)
+		return nil, nil
+	}
 	// ResetPlayerDamageReq is Creature::ResetPlayerDamageReq
 	// (Creature.h:324): m_PlayerDamageReq = GetHealth() / 2. Go models
 	// the field as motion.PlayerDamageReq, consumed by the kill-path
@@ -4850,6 +4910,9 @@ func (s *Server) seatCreatureEntry(ctx context.Context, motion *creatureMotion, 
 	motion.DynamicFlags = uint32(dynamicFlags)
 	motion.NPCFlags = uint32(npcFlag)
 	motion.NPCFlagsKnown = true
+	motion.MoveGround = stats.MoveGround
+	motion.MoveSwim = stats.MoveSwim
+	motion.MoveKnown = true
 	attackTime := uint32(baseAttackTime)
 	if attackTime == 0 {
 		attackTime = 2000

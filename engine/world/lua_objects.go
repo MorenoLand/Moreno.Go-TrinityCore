@@ -483,6 +483,55 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.motionMu.Unlock()
 		return []any{s.server.creatureCanAssistTo(faction, passive, health, evading, inCombat, unitFlags, ownerGUID, charmerGUID, friend, enemy, checkfaction)}, nil
 	}
+	// CanSwim is Creature::CanSwim (Creature.h:105), the
+	// session-creature twin of the handler binding: template Swim or
+	// pet (nonzero OwnerGUID). A motion that no longer resolves reads
+	// the C++ missing-row default (true), like the stat-less motions.
+	methods["CanSwim"] = luaNoArgs(func() any {
+		return creatureCanSwimMotion(s.luaCreatureMotion(state.GUID, state.Entry))
+	})
+	// CanWalk is Creature::CanWalk (Creature.h:104), the
+	// session-creature twin of the handler binding: template Ground
+	// != None. A motion that no longer resolves reads the C++
+	// missing-row default (true).
+	methods["CanWalk"] = luaNoArgs(func() any {
+		return creatureCanWalkMotion(s.luaCreatureMotion(state.GUID, state.Entry))
+	})
+	// CanStartAttack is Creature::CanStartAttack (Creature.cpp:1960-2004),
+	// the session-creature twin of the handler binding. A motion that
+	// no longer resolves reads false; an unresolvable target errors,
+	// the Eluna CHECKOBJ twin.
+	methods["CanStartAttack"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("CanStartAttack requires a Unit target")
+		}
+		target := s.server.creatureAttackTargetResolve(args[0], state.Map, state.InstanceID)
+		if !target.ok {
+			return nil, fmt.Errorf("CanStartAttack requires a Unit target")
+		}
+		force := true
+		if len(args) >= 2 && args[1] != nil {
+			b, ok := args[1].(bool)
+			if !ok {
+				return nil, fmt.Errorf("CanStartAttack requires a bool force")
+			}
+			force = b
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return []any{false}, nil
+		}
+		return []any{s.server.creatureCanStartAttack(ctx, motion, target, force)}, nil
+	}
+	// FleeToGetAssistance is Creature::DoFleeToGetAssistance
+	// (Creature.cpp:1031-1052), the session-creature twin of the
+	// handler binding; a motion that no longer resolves is a no-op.
+	methods["FleeToGetAssistance"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.creatureFleeToGetAssistance(ctx, motion)
+		}
+		return nil, nil
+	}
 	// IsInWater/IsUnderWater are Unit::IsInWater/IsUnderWater
 	// (Unit.cpp:3276-3284) via the grid-leg liquid status, over the
 	// builder's live-motion snapshot coords like its other reads.
