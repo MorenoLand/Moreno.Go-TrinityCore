@@ -43,9 +43,9 @@
 -- Talk(SAY_SLAY), TYPEID_PLAYER gate (terestian convention).
 -- OnDied(4): Talk(SAY_DEATH); the DoCast(SPELL_SHADOW_OF_DEATH_
 -- REMOVE 41999) arm ports as a non-triggered self-cast (plain DoCast
--- default triggered=false — vaelastrasz convention); its aura-removal
--- arms live in the unmodeled SpellScript (no SpellScript bridge —
--- shazzrah precedent: the cast fires, the script effect never happens). OnLeaveCombat(2)/OnReset(23): cancel
+-- default triggered=false — vaelastrasz convention) plus the Lua-side
+-- OnHit removal follow-up (40282/40268/40251, hit = self).
+-- OnLeaveCombat(2)/OnReset(23): cancel
 -- timers. The C++ intro arms (Reset's DATA_TERON_GOREFIEND_INTRO
 -- gate, DoAction(ACTION_START_INTRO) + Talk(SAY_INTRO) + 20s
 -- EVENT_FINISH_INTRO, the NON_ATTACKABLE/NOT_SELECTABLE/REACT_
@@ -105,6 +105,7 @@ local SPELL_DOOM_BLOSSOM_SHADOWBOLT = 40185
 local SPELL_SUMMON_BLOSSOM_MOVE_TARGET = 40186
 local ENTRY_DOOM_BLOSSOM = 23123
 local SPELL_SPIRITUAL_VENGEANCE = 40268
+local SPELL_POSSESS_SPIRIT_IMMUNE = 40282
 local SPELL_SHADOW_OF_DEATH_REMOVE = 41999
 
 local timers = {}
@@ -273,6 +274,12 @@ local function teronLeaveCombat(event, creature)
     -- -> DespawnOrUnsummon(0s, 30s) (ScriptedCreature.cpp:596-614;
     -- najentus/supremus precedent).
     creature:CastSpell(creature, SPELL_SHADOW_OF_DEATH_REMOVE, false)
+    -- 41999 OnHit follow-up (boss_teron_gorefiend.cpp:414-421): the
+    -- hit unit is self here, so the removals port Lua-side in C++
+    -- order: 40282 immune, 40268 vengeance, 40251 shadow of death.
+    creature:RemoveAura(SPELL_POSSESS_SPIRIT_IMMUNE)
+    creature:RemoveAura(SPELL_SPIRITUAL_VENGEANCE)
+    creature:RemoveAura(SPELL_SHADOW_OF_DEATH)
     creature:Despawn()
 end
 
@@ -286,12 +293,15 @@ end
 -- C++ JustDied: Talk(SAY_DEATH) + the plain DoCast(SPELL_SHADOW_
 -- OF_DEATH_REMOVE 41999) arm (boss_teron_gorefiend.cpp:163; DoCast
 -- self-casts since 41999 carries no enemy-area effect target —
--- UnitAI::FillAISpellInfo leaves AITARGET_SELF). The 41999 aura-
--- removal arms live in the unmodeled SpellScript (no SpellScript
--- bridge — shazzrah precedent: cast fires, script effect unmodeled).
+-- UnitAI::FillAISpellInfo leaves AITARGET_SELF). The 41999 OnHit
+-- removal arms port Lua-side below (hit = self, C++ order).
 local function teronDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:CastSpell(creature, SPELL_SHADOW_OF_DEATH_REMOVE, false)
+    -- Same 41999 OnHit follow-up as teronLeaveCombat (hit = self).
+    creature:RemoveAura(SPELL_POSSESS_SPIRIT_IMMUNE)
+    creature:RemoveAura(SPELL_SPIRITUAL_VENGEANCE)
+    creature:RemoveAura(SPELL_SHADOW_OF_DEATH)
     teronResetState(creature:GetGUID())
 end
 
