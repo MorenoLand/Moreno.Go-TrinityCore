@@ -1177,6 +1177,19 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.callCreatureAssistance(ctx, motion)
 		return nil, nil
 	}
+
+	// CallForHelp is Creature::CallForHelp (Creature.cpp:2432-2456) via
+	// the callCreatureForHelp funnel: immediate (undelayed) engage of
+	// in-radius CanAssistTo creatures, unlike CallAssistance's delayed
+	// family funnel. CHECKVAL requires the radius; radius <= 0 no-ops.
+	methods["CallForHelp"] = func(ctx context.Context, args []any) ([]any, error) {
+		radius, err := luaGenericFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.callCreatureForHelp(ctx, motion, radius)
+		return nil, nil
+	}
 	// HasSearchedAssistance is Creature::HasSearchedAssistance
 	// (Creature.h:248): the m_AlreadySearchedAssistance read. Only
 	// DoFleeToGetAssistance and Lua SetNoSearchAssistance set it in
@@ -2489,6 +2502,39 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
 		return nil, nil
 	}
+
+	// SetWalk is Creature::SetWalk (Creature.cpp:3012-3021): Unit::SetWalk
+	// flips the persistent MOVEMENTFLAG_WALKING (no-op when unchanged)
+	// and broadcasts SMSG_SPLINE_MOVE_SET_WALK_MODE / SET_RUN_MODE
+	// (packed GUID only). Go stores the flag on the motion and folds it
+	// into creatureSplineVelocity, so later splines run at walk speed
+	// until cleared — the persistent state C++ keeps, distinct from the
+	// per-spline walk velocity of waypoint/wander legs.
+	methods["SetWalk"] = func(_ context.Context, args []any) ([]any, error) {
+		enable := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetWalk requires a bool")
+			}
+			enable = b
+		}
+		s.motionMu.Lock()
+		if motion.Walking == enable {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.Walking = enable
+		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		phase := motion.PhaseMask
+		s.motionMu.Unlock()
+		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
+		if enable {
+			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
+		}
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		return nil, nil
+	}
 	// SetSwim is Unit::SetSwim (Unit.cpp:13728): flips
 	// MOVEMENTFLAG_SWIMMING with the C++ no-op-on-unchanged early-out.
 	// Unlike Creature::SetHover, C++ SetSwim itself sends no packet (a
@@ -2841,6 +2887,140 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 		}
 		return []any{targets}, nil
+	}
+
+	// GetAttackDistance is Creature::GetAttackDistance (Creature.cpp:2015-2058)
+	// via creatureAttackDistance: the level/reach/aura formula, without the
+	// TurretAI/ArcherAI +m_CombatDistance arm C++ adds only in CanStartAttack.
+	// The target resolves as a player session or a live creature motion on
+	// the caller's map/instance; an unresolvable target errors, the Eluna
+	// CHECKOBJ twin.
+	methods["GetAttackDistance"] = func(ctx context.Context, args []any) ([]any, error) {
+		targetLevel, targetDetected, ok := s.creatureDistanceTarget(args, motion.Map, motion.InstanceID)
+		if !ok {
+			return nil, fmt.Errorf("GetAttackDistance requires a Unit target")
+		}
+		return []any{s.creatureAttackDistance(ctx, motion, targetLevel, targetDetected)}, nil
+	}
+	// GetAggroRange is Creature::GetAggroRange (Creature.cpp:3130-3174),
+	// the pet-only variant via creatureAggroRange; non-pets read 0, the
+	// C++ Default arm. Go approximates IsPet with a nonzero OwnerGUID.
+	methods["GetAggroRange"] = func(ctx context.Context, args []any) ([]any, error) {
+		targetLevel, targetDetected, ok := s.creatureDistanceTarget(args, motion.Map, motion.InstanceID)
+		if !ok {
+			return nil, fmt.Errorf("GetAggroRange requires a Unit target")
+		}
+		s.motionMu.Lock()
+		isPet := motion.OwnerGUID != 0
+		s.motionMu.Unlock()
+		if !isPet {
+			return []any{float32(0)}, nil
+		}
+		ownDetect := s.creatureAuraTypeSum(creatureAuraKeyForMotion(motion), spellAuraModDetectRange)
+		return []any{creatureAggroRange(motion, targetLevel, ownDetect, targetDetected)}, nil
+	}
+	// SelectVictim is Creature::SelectVictim (Creature.cpp:1194-1258): the
+	// threat-list current victim when the creature can have a threat list,
+	// else nil (the pet getAttackerForHelper leg has no Go twin). The
+	// _IsTargetAcceptable/CanCreatureAttack re-checks are NOT replicated:
+	// the victim must resolve on the caller's map/instance and be alive
+	// (the DIED arm); the vehicle, permanent-invisibility evade, and
+	// SetInFront arms stay out, and a failed gate reads nil without
+	// entering evade mode, since a Lua read must not evade the creature.
+	methods["SelectVictim"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil || motion.ThreatMgr == nil || !motionCanHaveThreatList(motion) {
+			return []any{nil}, nil
+		}
+		victimGUID := motion.ThreatMgr.GetCurrentVictim()
+		if victimGUID == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.findPlayer(victimGUID); player != nil {
+			if sess := s.findSessionByGUID(victimGUID); sess != nil && sess.player != nil && sess.player.Map == motion.Map && sess.player.InstanceID == motion.InstanceID && sess.player.Health > 0 {
+				return []any{player}, nil
+			}
+			return []any{nil}, nil
+		}
+		if target := s.findCreatureMotion(motion.Map, motion.InstanceID, victimGUID); target != nil && target.Health > 0 {
+			return []any{s.luaMotionCreature(target)}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetAITarget is CreatureMethods::GetAITarget (CreatureMethods.h:706-799,
+	// Trinity): the threat-list selection over the filtered victim list —
+	// RANDOM=0, TOPAGGRO=1, BOTTOMAGGRO=2, NEAREST=3, FARTHEST=4 — with the
+	// playerOnly, position, distance (positive = within, negative =
+	// beyond), and aura (positive = has, negative = lacks) filters. An
+	// empty list or out-of-range position reads nil; an unknown target
+	// type errors, the luaL_argerror twin.
+	methods["GetAITarget"] = func(_ context.Context, args []any) ([]any, error) {
+		targetType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		playerOnly := false
+		if len(args) >= 2 && args[1] != nil {
+			b, ok := args[1].(bool)
+			if !ok {
+				return nil, fmt.Errorf("GetAITarget requires a bool playerOnly")
+			}
+			playerOnly = b
+		}
+		var position uint32
+		if len(args) >= 3 && args[2] != nil {
+			position, err = luaUint32Arg(args, 2)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var dist float32
+		if len(args) >= 4 && args[3] != nil {
+			dist, err = luaGenericFloat32Arg(args, 3)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var aura int32
+		if len(args) >= 5 && args[4] != nil {
+			aura, err = luaInt32Arg(args, 4)
+			if err != nil {
+				return nil, err
+			}
+		}
+		guid, err := s.selectAIThreatTarget(motion, targetType, playerOnly, position, dist, aura)
+		if err != nil {
+			return nil, err
+		}
+		if guid == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.findPlayer(guid); player != nil {
+			return []any{player}, nil
+		}
+		if target := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); target != nil {
+			return []any{s.luaMotionCreature(target)}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetCurrentWaypointId is CreatureMethods::GetCurrentWaypointId
+	// (CreatureMethods.h:452-458, Trinity): the first of
+	// GetCurrentWaypointInfo, the node id the waypoint generator last
+	// reported on arrival (WaypointMovementGenerator.cpp:264); 0 before
+	// the first arrival or for pathless creatures, the C++ (0,0) default.
+	// The path-end (0,0) reset (WaypointMovementGenerator.cpp:313) stays
+	// out: Go paths loop, so the last arrival stands.
+	methods["GetCurrentWaypointId"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.LastWaypointID
+	})
+	// MoveWaypoint is CreatureMethods::MoveWaypoint (CreatureMethods.h:1196-1203):
+	// MovePath(GetWaypointPath(), true) via startCreatureWaypoint — the
+	// assigned path re-arms from its first node after the DoInitialize 1s
+	// hold; pathless or empty paths no-op.
+	methods["MoveWaypoint"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.startCreatureWaypoint(ctx, motion)
+		return nil, nil
 	}
 	// SetReactState is CreatureMethods::SetReactState: Creature::SetReactState
 	// (UnitDefines.h: REACT_PASSIVE=0, REACT_DEFENSIVE=1, REACT_AGGRESSIVE=2 —

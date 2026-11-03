@@ -2,8 +2,10 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"strconv"
 	"time"
 
@@ -450,9 +452,11 @@ type creatureMotion struct {
 	PetReact        uint8 // 0: passive, 1: defensive, 2: aggressive
 	AutocastSpells  []uint32
 
-	PathID  uint32
-	Points  []waypointPoint
-	NextIdx int
+	PathID         uint32
+	Points         []waypointPoint
+	NextIdx        int
+	LastWaypointID uint32 // node id of the last waypoint arrival (Creature::_currentWaypointNodeInfo.first, WaypointMovementGenerator.cpp:264); 0 before the first arrival, the C++ (0,0) default
+	Walking        bool   // persistent MOVEMENTFLAG_WALKING (Creature::SetWalk, Creature.cpp:3012); folded into creatureSplineVelocity, distinct from per-spline walk velocity
 
 	Moving   bool
 	Evading  bool
@@ -500,6 +504,7 @@ type creatureMotion struct {
 }
 
 type waypointPoint struct {
+	Point       uint32
 	X           float32
 	Y           float32
 	Z           float32
@@ -547,7 +552,7 @@ func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 	var speed float32
 	if motion != nil && motion.CanFly {
 		speed = creatureBaseFlightSpeed
-	} else if walk {
+	} else if walk || (motion != nil && motion.Walking) {
 		speed = motion.Speed
 	} else {
 		speed = motion.RunSpeed
@@ -1485,6 +1490,315 @@ func (s *Server) creatureCanAssistTo(assistantFaction uint32, assistantPassive b
 	} else if !s.creatureFactionHostileTo(assistantFaction, enemy.faction) {
 		return false
 	}
+	return true
+}
+
+// creatureExpansionMaxLevel mirrors the expansion-max-level cache arm of
+// the aggro scan (Creature::GetAttackDistance, Creature.cpp:2024-2028):
+// the template expansion's max level, cached on the motion like the scan
+// does, so repeated distance reads cost no query.
+func (s *Server) creatureExpansionMaxLevel(ctx context.Context, motion *creatureMotion) int32 {
+	if motion == nil {
+		return 80
+	}
+	if motion.ExpansionMaxLevelEntry == motion.Entry && motion.ExpansionMaxLevel != 0 {
+		return motion.ExpansionMaxLevel
+	}
+	maxLevel := int32(80)
+	if s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+		var expansion int64
+		if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT expansion FROM creature_template WHERE entry = ?", motion.Entry).Scan(&expansion); err == nil {
+			switch expansion {
+			case 0:
+				maxLevel = 60
+			case 1:
+				maxLevel = 70
+			}
+		}
+	}
+	motion.ExpansionMaxLevel = maxLevel
+	motion.ExpansionMaxLevelEntry = motion.Entry
+	return maxLevel
+}
+
+// creatureAttackDistance mirrors Creature::GetAttackDistance
+// (Creature.cpp:2015-2058) for one target: 20 yards at equal level minus
+// combat reach, +/-1 yard per creature-minus-target level difference, the
+// detect-range aura terms while creature level+5 stays under the max
+// player level, the expansion-max-level overwrite, then the
+// RATE_CREATURE_AGGRO-scaled [5, 45] clamp and multiplier. The
+// TurretAI/ArcherAI +m_CombatDistance arm is NOT folded in: C++ adds it
+// in CanStartAttack, not in GetAttackDistance. targetDetected is the
+// target's SPELL_AURA_MOD_DETECTED_RANGE total.
+func (s *Server) creatureAttackDistance(ctx context.Context, motion *creatureMotion, targetLevel uint32, targetDetected int32) float32 {
+	if motion == nil {
+		return 0
+	}
+	aggroRate := float64(1)
+	if s != nil {
+		aggroRate = s.Config.RateCreatureAggro
+	}
+	if aggroRate == 0 {
+		return 0
+	}
+	aggroDist := float32(20.0) - motion.CombatReach + float32(int32(motion.Level)-int32(targetLevel))
+	maxPlayerLevel := uint32(80)
+	if s != nil && s.Config.MaxPlayerLevel != 0 {
+		maxPlayerLevel = s.Config.MaxPlayerLevel
+	}
+	if motion.Level+5 <= maxPlayerLevel {
+		if s != nil {
+			aggroDist += float32(s.creatureAuraTypeSum(creatureAuraKeyForMotion(motion), spellAuraModDetectRange))
+		}
+		aggroDist += float32(targetDetected)
+	}
+	if expansionMax := s.creatureExpansionMaxLevel(ctx, motion); int32(motion.Level) > expansionMax {
+		aggroDist = float32(20.0) - motion.CombatReach + float32(int32(expansionMax)-int32(targetLevel))
+	}
+	if aggroDist > float32(45.0*aggroRate) {
+		aggroDist = float32(45.0 * aggroRate)
+	} else if aggroDist < float32(5.0*aggroRate) {
+		aggroDist = float32(5.0 * aggroRate)
+	}
+	return aggroDist * float32(aggroRate)
+}
+
+// creatureAggroRange mirrors Creature::GetAggroRange (Creature.cpp:3130-3174),
+// the pet-only variant: 20 yards minus the target-minus-pet level
+// difference (floored at -25), plus both detect-range aura terms, clamped
+// to [10, 45] (MAX_AGGRO_RADIUS). No rate multiplier, no combat-reach
+// term, no expansion overwrite — unlike GetAttackDistance. Callers gate
+// on the pet leg; non-pets read 0 in C++'s Default arm.
+func creatureAggroRange(motion *creatureMotion, targetLevel uint32, ownDetect, targetDetected int32) float32 {
+	if motion == nil {
+		return 0
+	}
+	levelDiff := int32(targetLevel) - int32(motion.Level)
+	if levelDiff < -25 {
+		levelDiff = -25
+	}
+	aggroRadius := float32(20) - float32(levelDiff)
+	aggroRadius += float32(ownDetect) + float32(targetDetected)
+	if aggroRadius > 45 {
+		aggroRadius = 45
+	}
+	if aggroRadius < 10 {
+		aggroRadius = 10
+	}
+	return aggroRadius
+}
+
+// creatureDistanceTarget resolves a Lua Unit argument for the distance
+// reads: the target's level and SPELL_AURA_MOD_DETECTED_RANGE total, on
+// the caller's map/instance. ok=false is the Eluna CHECKOBJ failure twin.
+func (s *Server) creatureDistanceTarget(args []any, mapID, instanceID uint32) (uint32, int32, bool) {
+	if s == nil || len(args) < 1 {
+		return 0, 0, false
+	}
+	targetGUID := luaObjectGUID(args[0])
+	if targetGUID == 0 {
+		return 0, 0, false
+	}
+	if sess := s.findSessionByGUID(targetGUID); sess != nil && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+		return uint32(sess.player.Level), sess.totalAuraModifier(spellAuraModDetectedRange), true
+	}
+	if target := s.findCreatureMotion(mapID, instanceID, targetGUID); target != nil {
+		return target.Level, s.creatureAuraTypeSum(creatureAuraKeyForMotion(target), spellAuraModDetectedRange), true
+	}
+	return 0, 0, false
+}
+
+// aiThreatCandidate is one filtered victim for selectAIThreatTarget.
+type aiThreatCandidate struct {
+	guid uint64
+	dist float32
+}
+
+// selectAIThreatTarget mirrors the selection half of
+// CreatureMethods::GetAITarget (CreatureMethods.h:706-799, Trinity) over
+// the threat-desc SortedEntries: the playerOnly, distance (positive =
+// within, negative = beyond), and aura (positive = has, negative = lacks)
+// filters, then RANDOM=0, TOPAGGRO=1, BOTTOMAGGRO=2, NEAREST=3,
+// FARTHEST=4. An empty list or out-of-range position reads 0; an unknown
+// target type errors, the luaL_argerror twin. Player aura presence reads
+// under the session castMu, the hasAuraType guard.
+func (s *Server) selectAIThreatTarget(motion *creatureMotion, targetType uint32, playerOnly bool, position uint32, dist float32, aura int32) (uint64, error) {
+	if s == nil || motion == nil || motion.ThreatMgr == nil {
+		return 0, nil
+	}
+	var candidates []aiThreatCandidate
+	for _, entry := range motion.ThreatMgr.SortedEntries() {
+		var vx, vy, vz float32
+		var isPlayer bool
+		if sess := s.findSessionByGUID(entry.VictimGUID); sess != nil && sess.player != nil && sess.player.Map == motion.Map && sess.player.InstanceID == motion.InstanceID {
+			isPlayer = true
+			vx, vy, vz = sess.player.X, sess.player.Y, sess.player.Z
+			if aura != 0 {
+				spellID := aura
+				if spellID < 0 {
+					spellID = -spellID
+				}
+				sess.castMu.Lock()
+				_, found := sess.auras[uint32(spellID)]
+				sess.castMu.Unlock()
+				if (aura > 0) != found {
+					continue
+				}
+			}
+		} else if target := s.findCreatureMotion(motion.Map, motion.InstanceID, entry.VictimGUID); target != nil {
+			vx, vy, vz = target.X, target.Y, target.Z
+			if aura != 0 {
+				spellID := aura
+				if spellID < 0 {
+					spellID = -spellID
+				}
+				key := creatureAuraKeyForMotion(target)
+				s.auraMu.Lock()
+				_, found := s.creatureAuras[key][uint32(spellID)]
+				if !found {
+					_, found = s.activeCreatureAuras[key][uint32(spellID)]
+				}
+				s.auraMu.Unlock()
+				if (aura > 0) != found {
+					continue
+				}
+			}
+		} else {
+			continue
+		}
+		if playerOnly && !isPlayer {
+			continue
+		}
+		d := float32(distance3D(motion.X, motion.Y, motion.Z, vx, vy, vz))
+		if dist > 0 && d > dist {
+			continue
+		}
+		if dist < 0 && d <= -dist {
+			continue
+		}
+		candidates = append(candidates, aiThreatCandidate{guid: entry.VictimGUID, dist: d})
+	}
+	if len(candidates) == 0 || position >= uint32(len(candidates)) {
+		return 0, nil
+	}
+	switch targetType {
+	case 0:
+		if position > 0 {
+			return candidates[rand.Intn(int(position)+1)].guid, nil
+		}
+		return candidates[rand.Intn(len(candidates))].guid, nil
+	case 1:
+		return candidates[position].guid, nil
+	case 2:
+		return candidates[len(candidates)-1-int(position)].guid, nil
+	case 3:
+		sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].dist < candidates[j].dist })
+		return candidates[position].guid, nil
+	case 4:
+		sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].dist < candidates[j].dist })
+		return candidates[len(candidates)-1-int(position)].guid, nil
+	default:
+		return 0, fmt.Errorf("SelectAggroTarget expected")
+	}
+}
+
+// callCreatureForHelp mirrors Creature::CallForHelp (Creature.cpp:2432-2456)
+// with the CallOfHelpCreatureInRangeDo worker (GridNotifiers.h:1129-1158):
+// radius-gated, engaged/alive/uncharmed/unpet caller, victim = current
+// victim else any threat entry else combat target, then every
+// CanAssistTo(..., checkfaction=false) creature within absolute 3D range
+// that sees the enemy engages it immediately — no delay, no
+// AlreadyCallAssistance flag, unlike CallAssistance's delayed funnel.
+// The victim must resolve to a player session, the EngageWithTarget
+// bridge's player-only limit; creature victims stay out.
+func (s *Server) callCreatureForHelp(ctx context.Context, caller *creatureMotion, radius float32) {
+	if s == nil || caller == nil || radius <= 0 {
+		return
+	}
+	var victimGUID uint64
+	if caller.ThreatMgr != nil {
+		victimGUID = caller.ThreatMgr.GetCurrentVictim()
+		if victimGUID == 0 {
+			if entries := caller.ThreatMgr.SortedEntries(); len(entries) > 0 {
+				victimGUID = entries[0].VictimGUID
+			}
+		}
+	}
+	if victimGUID == 0 {
+		victimGUID = caller.TargetGUID
+	}
+	if victimGUID == 0 {
+		return
+	}
+	enemySess := s.findSessionByGUID(victimGUID)
+	if enemySess == nil || enemySess.player == nil {
+		return
+	}
+	enemyPos := playerPosForAssist(enemySess)
+	enemyX, enemyY, enemyZ := enemySess.player.X, enemySess.player.Y, enemySess.player.Z
+	mapID, instanceID, callerGUID := caller.Map, caller.InstanceID, caller.GUID
+	s.motionMu.Lock()
+	live := s.findCreatureMotionLocked(mapID, instanceID, callerGUID)
+	if live == nil || live.Health == 0 || !live.InCombat || live.OwnerGUID != 0 || live.CharmerGUID != 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	friend := assistParty{ok: true, faction: live.Faction, evading: live.Evading}
+	enemy := assistParty{ok: true, isPlayer: true, pos: enemyPos}
+	var helpers []uint64
+	for guid, a := range s.motionMapLocked(mapID, instanceID) {
+		if guid == live.GUID || a == nil {
+			continue
+		}
+		if !s.creatureCanAssistTo(a.Faction, isCreaturePassive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, enemy, false) {
+			continue
+		}
+		if float32(distance3D(live.X, live.Y, live.Z, a.X, a.Y, a.Z)) > radius {
+			continue
+		}
+		if !s.hasLineOfSight(mapID, a.X, a.Y, a.Z, enemyX, enemyY, enemyZ) {
+			continue
+		}
+		helpers = append(helpers, guid)
+	}
+	s.motionMu.Unlock()
+	for _, guid := range helpers {
+		s.triggerCreatureAggro(ctx, guid, victimGUID)
+	}
+}
+
+// startCreatureWaypoint mirrors the MovePath arm of
+// CreatureMethods::MoveWaypoint (CreatureMethods.h:1196-1203):
+// MovePath(GetWaypointPath(), true) installs the waypoint generator on
+// the creature's assigned path. Go re-arms the motion's waypoint leg from
+// its stored path id (loaded on demand when the spawn never patrolled),
+// restarting at the first node with the DoInitialize 1s hold; a pathless
+// or empty path is a no-op, matching C++'s failed path load. A spline
+// already in flight finishes first (C++ StopMoving has no Go twin here).
+func (s *Server) startCreatureWaypoint(ctx context.Context, motion *creatureMotion) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	pathID := motion.PathID
+	points := motion.Points
+	if len(points) == 0 {
+		if pathID == 0 && s.WorldStore != nil && s.WorldStore.DB != nil {
+			pathID = s.loadCreaturePathID(ctx, uint32(motion.GUID&0x00FFFFFF), motion.Entry)
+		}
+		if pathID != 0 {
+			points = s.loadWaypoints(ctx, pathID)
+		}
+	}
+	if len(points) == 0 {
+		return false
+	}
+	motion.PathID = pathID
+	motion.Points = points
+	motion.NextIdx = 0
+	motion.MoveType = 2
+	motion.WaitUntil = time.Now().Add(time.Second)
 	return true
 }
 
@@ -2987,7 +3301,7 @@ func (s *Server) loadCreaturePathID(ctx context.Context, guid, entry uint32) uin
 }
 
 func (s *Server) loadWaypoints(ctx context.Context, pathID uint32) []waypointPoint {
-	query := "SELECT position_x, position_y, position_z, orientation, move_type, delay FROM waypoint_data WHERE id = ? ORDER BY point"
+	query := "SELECT point, position_x, position_y, position_z, orientation, move_type, delay FROM waypoint_data WHERE id = ? ORDER BY point"
 	rows, err := s.WorldStore.DB.QueryContext(ctx, query, pathID)
 	if err != nil {
 		return nil
@@ -2997,11 +3311,11 @@ func (s *Server) loadWaypoints(ctx context.Context, pathID uint32) []waypointPoi
 	for rows.Next() {
 		var p waypointPoint
 		var x, y, z, orientation float64
-		var moveType, delay int64
-		if err := rows.Scan(&x, &y, &z, &orientation, &moveType, &delay); err != nil {
+		var point, moveType, delay int64
+		if err := rows.Scan(&point, &x, &y, &z, &orientation, &moveType, &delay); err != nil {
 			continue
 		}
-		p.X, p.Y, p.Z, p.Orientation, p.MoveType, p.Delay = float32(x), float32(y), float32(z), float32(orientation), uint32(moveType), uint32(delay)
+		p.Point, p.X, p.Y, p.Z, p.Orientation, p.MoveType, p.Delay = uint32(point), float32(x), float32(y), float32(z), float32(orientation), uint32(moveType), uint32(delay)
 		points = append(points, p)
 	}
 	return points
@@ -3387,6 +3701,7 @@ func (s *Server) waypointNodeArrival(ctx context.Context, motion *creatureMotion
 	arrived := (motion.NextIdx - 1 + len(motion.Points)) % len(motion.Points)
 	s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachWP, uint32(waypointMotionType), uint32(arrived))
 	point := motion.Points[arrived]
+	motion.LastWaypointID = point.Point
 	if point.Orientation != 0 && point.Delay > 0 {
 		motion.Orientation = point.Orientation
 	}

@@ -379,6 +379,20 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, nil
 	}
+
+	// CallForHelp is Creature::CallForHelp (Creature.cpp:2432-2456) via
+	// the callCreatureForHelp funnel, the session-creature twin of the
+	// handler binding; a motion that no longer resolves is a no-op.
+	methods["CallForHelp"] = func(ctx context.Context, args []any) ([]any, error) {
+		radius, err := luaGenericFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.callCreatureForHelp(ctx, motion, radius)
+		}
+		return nil, nil
+	}
 	// HasSearchedAssistance is Creature::HasSearchedAssistance
 	// (Creature.h:248), the session-creature twin of the handler
 	// binding; a motion that no longer resolves reads false.
@@ -1801,6 +1815,166 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			}
 		}
 		return []any{targets}, nil
+	}
+
+	// GetAttackDistance is Creature::GetAttackDistance (Creature.cpp:2015-2058),
+	// the session-creature twin of the handler binding; a motion that no
+	// longer resolves reads 0.
+	methods["GetAttackDistance"] = func(ctx context.Context, args []any) ([]any, error) {
+		motion := luaTapMotion()
+		if motion == nil {
+			return []any{float32(0)}, nil
+		}
+		targetLevel, targetDetected, ok := s.server.creatureDistanceTarget(args, motion.Map, motion.InstanceID)
+		if !ok {
+			return nil, fmt.Errorf("GetAttackDistance requires a Unit target")
+		}
+		return []any{s.server.creatureAttackDistance(ctx, motion, targetLevel, targetDetected)}, nil
+	}
+	// GetAggroRange is Creature::GetAggroRange (Creature.cpp:3130-3174),
+	// the session-creature twin of the handler binding; non-pets read 0.
+	methods["GetAggroRange"] = func(ctx context.Context, args []any) ([]any, error) {
+		motion := luaTapMotion()
+		if motion == nil {
+			return []any{float32(0)}, nil
+		}
+		targetLevel, targetDetected, ok := s.server.creatureDistanceTarget(args, motion.Map, motion.InstanceID)
+		if !ok {
+			return nil, fmt.Errorf("GetAggroRange requires a Unit target")
+		}
+		if motion.OwnerGUID == 0 {
+			return []any{float32(0)}, nil
+		}
+		ownDetect := s.server.creatureAuraTypeSum(creatureAuraKeyForMotion(motion), spellAuraModDetectRange)
+		return []any{creatureAggroRange(motion, targetLevel, ownDetect, targetDetected)}, nil
+	}
+	// SelectVictim is Creature::SelectVictim (Creature.cpp:1194-1258),
+	// the session-creature twin of the handler binding.
+	methods["SelectVictim"] = func(ctx context.Context, _ []any) ([]any, error) {
+		motion := luaTapMotion()
+		if motion == nil || motion.ThreatMgr == nil || !motionCanHaveThreatList(motion) {
+			return []any{nil}, nil
+		}
+		victimGUID := motion.ThreatMgr.GetCurrentVictim()
+		if victimGUID == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.server.findPlayer(victimGUID); player != nil {
+			if sess := s.server.findSessionByGUID(victimGUID); sess != nil && sess.player != nil && sess.player.Map == motion.Map && sess.player.InstanceID == motion.InstanceID && sess.player.Health > 0 {
+				return []any{player}, nil
+			}
+			return []any{nil}, nil
+		}
+		if creature := s.luaCreature(ctx, victimGUID); creature != nil {
+			if target := s.server.findCreatureMotion(motion.Map, motion.InstanceID, victimGUID); target != nil && target.Health > 0 {
+				return []any{creature}, nil
+			}
+		}
+		return []any{nil}, nil
+	}
+	// GetAITarget is CreatureMethods::GetAITarget (CreatureMethods.h:706-799,
+	// Trinity), the session-creature twin of the handler binding.
+	methods["GetAITarget"] = func(ctx context.Context, args []any) ([]any, error) {
+		motion := luaTapMotion()
+		if motion == nil {
+			return []any{nil}, nil
+		}
+		targetType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		playerOnly := false
+		if len(args) >= 2 && args[1] != nil {
+			b, ok := args[1].(bool)
+			if !ok {
+				return nil, fmt.Errorf("GetAITarget requires a bool playerOnly")
+			}
+			playerOnly = b
+		}
+		var position uint32
+		if len(args) >= 3 && args[2] != nil {
+			position, err = luaUint32Arg(args, 2)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var dist float32
+		if len(args) >= 4 && args[3] != nil {
+			dist, err = luaGenericFloat32Arg(args, 3)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var aura int32
+		if len(args) >= 5 && args[4] != nil {
+			aura, err = luaInt32Arg(args, 4)
+			if err != nil {
+				return nil, err
+			}
+		}
+		guid, err := s.server.selectAIThreatTarget(motion, targetType, playerOnly, position, dist, aura)
+		if err != nil {
+			return nil, err
+		}
+		if guid == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.server.findPlayer(guid); player != nil {
+			return []any{player}, nil
+		}
+		if creature := s.luaCreature(ctx, guid); creature != nil {
+			return []any{creature}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetCurrentWaypointId is CreatureMethods::GetCurrentWaypointId
+	// (CreatureMethods.h:452-458, Trinity), the session-creature twin of
+	// the handler binding; a motion that no longer resolves reads 0.
+	methods["GetCurrentWaypointId"] = luaNoArgs(func() any {
+		motion := luaTapMotion()
+		if motion == nil {
+			return uint32(0)
+		}
+		return motion.LastWaypointID
+	})
+	// MoveWaypoint is CreatureMethods::MoveWaypoint (CreatureMethods.h:1196-1203),
+	// the session-creature twin of the handler binding.
+	methods["MoveWaypoint"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if motion := luaTapMotion(); motion != nil {
+			s.server.startCreatureWaypoint(ctx, motion)
+		}
+		return nil, nil
+	}
+	// SetWalk is Creature::SetWalk (Creature.cpp:3012-3021), the
+	// session-creature twin of the handler binding.
+	methods["SetWalk"] = func(_ context.Context, args []any) ([]any, error) {
+		enable := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetWalk requires a bool")
+			}
+			enable = b
+		}
+		motion := luaTapMotion()
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if motion.Walking == enable {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.Walking = enable
+		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		phase := motion.PhaseMask
+		s.server.motionMu.Unlock()
+		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
+		if enable {
+			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
+		}
+		s.server.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		return nil, nil
 	}
 	// Eluna nearest/in-range family (WorldObjectMethods.h) over the
 	// live motion, re-resolved at call time like the session SendUnit
