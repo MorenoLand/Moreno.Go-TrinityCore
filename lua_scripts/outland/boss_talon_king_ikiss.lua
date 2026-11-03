@@ -20,7 +20,11 @@
 -- 100.0f: Intro latch + Talk(SAY_INTRO 0) (event 27; the handler
 -- must NOT return true — that vetoes the aggro engage —
 -- lua_creature_events.go:509-524).
--- boss_talon_king_ikissAI::JustEngagedWith — Talk(SAY_AGGRO 1) +
+-- boss_talon_king_ikissAI::JustEngagedWith — BossAI::JustEngagedWith
+-- base arms PORTED 2026-11-03 (sapphiron precedent):
+-- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- (ScriptedCreature.cpp:540/542), base-first; instance legs +
+-- setActive unbridged — documented-only. Talk(SAY_AGGRO 1) +
 -- schedules EVENT_ARCANE_VOLLEY (5s), EVENT_POLYMORPH (8s),
 -- EVENT_BLINK (35s), heroic-only EVENT_SLOW (15-30s rand) (event 1;
 -- auriaya precedent for the Talk).
@@ -230,6 +234,8 @@ end
 -- EVENT_POLYMORPH 8s, EVENT_BLINK 35s, heroic-only EVENT_SLOW
 -- 15-30s rand.
 local function ikissEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)

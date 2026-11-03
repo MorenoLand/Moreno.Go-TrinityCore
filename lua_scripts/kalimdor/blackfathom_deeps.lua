@@ -49,8 +49,10 @@
 --   spell-summoned creatures — it fires only from the pet funnel
 --   (pet_cooldowns.go:73) — so the arm has no fire site.
 -- - DamageTaken's 15%-hp flee arm (entries 4977 Murkshallow Softshell /
---   4823 Barbed Crustacean, not registered): DoFleeToGetAssistance has no
---   movement bridge (av_marshal precedent); their only other C++ arm is
+--   4823 Barbed Crustacean): PORTED below — _flee latch reset on engage,
+--   HealthBelowPctDamaged(15) floor form + postDamage > 0 guard
+--   (spellbinder precedent), creature:FleeToGetAssistance
+--   (lua_creature_events.go:1706); their only other C++ arm is
 --   engine-driven melee.
 -- - GetBlackfathomDeepsAI -> GetInstanceAI leg: instance-script model
 --   blocked (standing).
@@ -71,6 +73,8 @@
 
 local ENTRY_AKU_MAI_SNAPJAW = 4825
 local ENTRY_AKU_MAI_SERVANT = 4978
+local ENTRY_MURKSHALLOW_SOFTSHELL = 4977
+local ENTRY_BARBED_CRUSTACEAN = 4823
 local ENTRY_ALTAR_OF_THE_DEEPS = 103016
 
 local SPELL_RAVAGE = 8391
@@ -179,6 +183,39 @@ RegisterCreatureEvent(ENTRY_AKU_MAI_SERVANT, 1, onEventEnterCombat)
 RegisterCreatureEvent(ENTRY_AKU_MAI_SERVANT, 2, onEventCombatEnd)
 RegisterCreatureEvent(ENTRY_AKU_MAI_SERVANT, 4, onEventCombatEnd)
 RegisterCreatureEvent(ENTRY_AKU_MAI_SERVANT, 23, onEventCombatEnd)
+
+-- npc_blackfathom_deeps_event: 4977 Murkshallow Softshell / 4823 Barbed
+-- Crustacean — C++ DamageTaken (:134-144): entry-gated, _flee latch reset
+-- in JustEngagedWith, HealthBelowPctDamaged(15, damage) =
+-- int64(health)-damage < floor(maxHealth*15/100) (Unit.h:873,
+-- CalculatePct floor), then DoFleeToGetAssistance. Go event 9 fires
+-- before damage is applied, so GetHealth() is the pre-damage value and
+-- the spellbinder-form postDamage > 0 guard applies.
+local fled = {}
+
+local function onFleeEngage(_, creature)
+    fled[creature:GetGUIDLow()] = false
+end
+
+local function onFleeDamageTaken(_, creature, _, damage)
+    local guid = creature:GetGUIDLow()
+    if fled[guid] then
+        return
+    end
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if health > damage and health - damage < math.floor(maxHealth * 15 / 100) then
+        fled[guid] = true
+        creature:FleeToGetAssistance()
+    end
+end
+
+for _, entry in ipairs({ENTRY_MURKSHALLOW_SOFTSHELL, ENTRY_BARBED_CRUSTACEAN}) do
+    RegisterCreatureEvent(entry, 1, onFleeEngage)
+    RegisterCreatureEvent(entry, 9, onFleeDamageTaken)
+end
 
 -- go_blackfathom_altar (GO 103016): GossipHello grants Blessing of
 -- Blackfathom 8733 to players lacking the aura (C++-exact gate).

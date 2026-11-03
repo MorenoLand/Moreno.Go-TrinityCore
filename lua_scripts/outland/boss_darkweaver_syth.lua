@@ -13,7 +13,11 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
 -- 3 OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
--- boss_darkweaver_sythAI::JustEngagedWith — schedules
+-- boss_darkweaver_sythAI::JustEngagedWith — BossAI::JustEngagedWith
+-- base arms PORTED 2026-11-03 (sapphiron precedent):
+-- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- (ScriptedCreature.cpp:540/542), base-first; instance legs +
+-- setActive unbridged — documented-only. Schedules
 -- EVENT_FLAME_SHOCK (2s), EVENT_ARCANE_SHOCK (4s),
 -- EVENT_FROST_SHOCK (6s), EVENT_SHADOW_SHOCK (8s),
 -- EVENT_CHAIN_LIGHTNING (15s); Talk(SAY_AGGRO 1) (event 1).
@@ -173,6 +177,8 @@ end
 -- 6s, EVENT_SHADOW_SHOCK 8s, EVENT_CHAIN_LIGHTNING 15s;
 -- Talk(SAY_AGGRO) — the auriaya precedent (event 1).
 local function sythEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ JustEngagedWith does NOT touch the summon latches (they

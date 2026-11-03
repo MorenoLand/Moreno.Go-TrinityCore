@@ -14,10 +14,12 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset (event 3 unused — no KilledUnit arm).
 -- Ported arms (C++-exact for all modeled arms):
--- boss_anzuAI::JustEngagedWith — schedules EVENT_PARALYZING_SCREECH
--- (14s) + EVENT_CYCLONE_OF_FEATHERS (5s) (event 1); the
--- BossAI::JustEngagedWith instance leg (SetBossState IN_PROGRESS)
--- rides the no-instance bridge — documented-only.
+-- boss_anzuAI::JustEngagedWith — BossAI::JustEngagedWith base arms
+-- PORTED 2026-11-03 (sapphiron precedent): SetCombatPulseDelay(5) +
+-- me-form DoZoneInCombat (ScriptedCreature.cpp:540/542), base-first;
+-- instance legs + setActive unbridged — documented-only. Schedules
+-- EVENT_PARALYZING_SCREECH (14s) + EVENT_CYCLONE_OF_FEATHERS (5s)
+-- (event 1).
 -- EVENT_PARALYZING_SCREECH — DoCastVictim(SPELL_PARALYZING_SCREECH
 -- 40184) 2-arg (non-triggered) → creature:CastSpell(nil, 40184)
 -- (nil = victim fallback, the CastSpell bridge); 14s init, 25s flat
@@ -243,6 +245,8 @@ end
 -- BossAI::JustEngagedWith instance leg rides the no-instance bridge;
 -- the two timer arms are ported (event 1, auriaya precedent).
 local function anzuEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "paralyzing_screech", 14000, function()

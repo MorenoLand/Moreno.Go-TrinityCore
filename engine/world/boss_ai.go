@@ -15186,9 +15186,11 @@ func init() {
 	// self-cast per the illidan/vaelastrasz convention, 9-12s init /
 	// 25-30s repeat) plus Frostbolt Volley (8398, random alive
 	// player target, 2-4s init / 5-8s repeat), all non-triggered
-	// (C++-exact). The JustDied DATA_EVENT increment, the
-	// IsSummonedBy DoZoneInCombat leg, and the 15%-hp flee arms
-	// (4977/4823, unregistered) have no bridges; the
+	// (C++-exact). The 15%-hp flee arms (4977 Murkshallow Softshell /
+	// 4823 Barbed Crustacean) are ported via the bridged
+	// creature:FleeToGetAssistance (spellbinder precedent). The
+	// JustDied DATA_EVENT increment and the IsSummonedBy
+	// DoZoneInCombat leg have no fire site; the
 	// go_blackfathom_fire gossip and npc_morridune escort scripts
 	// are documented-only. Entries C++-verified via
 	// blackfathom_deeps.h BFDCreatureIds plus instance_
@@ -15197,6 +15199,8 @@ func init() {
 	// blackfathom_deeps.lua.
 	RegisterLuaBoss("npc_blackfathom_deeps_event", 4825)
 	RegisterLuaBoss("npc_blackfathom_deeps_event", 4978)
+	RegisterLuaBoss("npc_blackfathom_deeps_event", 4977)
+	RegisterLuaBoss("npc_blackfathom_deeps_event", 4823)
 
 	// boss_gelihast (Gelihast, entry 6243 — BFDCreatureIds names no
 	// Gelihast entry; registered on the DB ScriptName tie plus wowhead
