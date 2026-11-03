@@ -930,14 +930,15 @@ func cheatOnOff(enabled bool) string {
 
 // handleCmdDebug mirrors the debug_commandscript table (cs_debug.cpp:99):
 // the "debug" root with the areatriggers, anim, worldstate, objectcount,
-// dummy, neargraveyard, lootrecipient, instancespawn, los, play and send
-// arms, gated on RBAC_PERM_COMMAND_DEBUG (RBAC.h:214, Console::No).
+// dummy, neargraveyard, lootrecipient, instancespawn, los, play, send,
+// threat, threatinfo, combat, guidlimits, wpgps and transport arms, gated
+// on RBAC_PERM_COMMAND_DEBUG (RBAC.h:214, Console::No).
 func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 	if s.player == nil {
 		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send")
+		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport")
 		return true
 	}
 	switch strings.ToLower(args[0]) {
@@ -963,8 +964,20 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		s.handleDebugPlay(ctx, args[1:])
 	case "send":
 		s.handleDebugSend(ctx, args[1:])
+	case "threat":
+		s.handleDebugThreat(ctx)
+	case "threatinfo":
+		s.handleDebugThreatInfo(ctx)
+	case "combat":
+		s.handleDebugCombat(ctx)
+	case "guidlimits":
+		s.handleDebugGuidLimits(ctx, args[1:])
+	case "wpgps":
+		s.handleDebugWPGPS(ctx)
+	case "transport":
+		s.handleDebugTransport(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send")
+		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport")
 	}
 	return true
 }
@@ -6914,7 +6927,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
 	root.add("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(ctx, args); return true }, []string{"chat", "fly", "ingame", "list", "visible", "on", "off"}, map[string]string{"vis": "visible"})
 	root.add("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, []string{"god", "casttime", "cooldown", "power", "waterwalk", "status", "taxi", "explore"}, nil)
-	root.add("debug", func(ctx context.Context, args []string) bool { return s.handleCmdDebug(ctx, args) }, []string{"areatriggers", "anim", "worldstate", "objectcount", "dummy", "neargraveyard", "lootrecipient", "instancespawn", "los", "play", "send"}, nil)
+	root.add("debug", func(ctx context.Context, args []string) bool { return s.handleCmdDebug(ctx, args) }, []string{"areatriggers", "anim", "worldstate", "objectcount", "dummy", "neargraveyard", "lootrecipient", "instancespawn", "los", "play", "send", "threat", "threatinfo", "combat", "guidlimits", "wpgps", "transport"}, nil)
 	root.add("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, []string{"add", "del", "name", "group"}, nil)
 	root.add("ticket", func(ctx context.Context, args []string) bool { s.handleCmdTicket(ctx, args); return true }, []string{"assign", "close", "closedlist", "comment", "complete", "delete", "escalate", "escalatedlist", "list", "onlinelist", "reset", "response", "togglesystem", "unassign", "viewid", "viewname"}, nil)
 	root.add("titles", func(ctx context.Context, args []string) bool { s.handleCmdTitles(ctx, args); return true }, []string{"add", "current", "remove", "set"}, nil)

@@ -20,6 +20,11 @@ type continentTransport struct {
 	StaticCreatures []creatureSpawn
 	StaticObjects   []gameObjectSpawn
 	LastUpdate      time.Time
+	// MovementPaused is the Transport::EnableMovement(false) latch of
+	// HandleDebugTransportCommand (cs_debug.cpp:1317): while set, advance
+	// holds the path position instead of stepping it, and resumes from the
+	// held position when cleared (LastUpdate refreshes so no jump accrues).
+	MovementPaused bool
 }
 
 type continentTransportMovement struct {
@@ -354,6 +359,10 @@ func (t *continentTransport) advance(now time.Time) bool {
 	if t.LastUpdate.IsZero() {
 		t.LastUpdate = now
 		t.updatePosition()
+		return false
+	}
+	if t.MovementPaused {
+		t.LastUpdate = now
 		return false
 	}
 	delta := now.Sub(t.LastUpdate).Milliseconds()

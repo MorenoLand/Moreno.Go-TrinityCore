@@ -949,6 +949,42 @@ func (tm *ThreatManager) SortedEntries() []protocol.ThreatEntry {
 	return list
 }
 
+// threatDebugEntry is one sorted threat-list row for the ".debug threat"
+// report (cs_debug.cpp:769): the effective threat plus the live taunt and
+// suppressed markers of the C++ row text.
+type threatDebugEntry struct {
+	victimGUID uint64
+	threat     float32
+	taunted    bool
+	suppressed bool
+}
+
+// DebugEntries returns the threat list sorted descending by effective
+// threat, the GetSortedThreatList order of HandleDebugThreatListCommand.
+// Detaunt and offline markers have no Go model (no per-reference detaunt
+// state, no online/offline tracking), so only the taunt and suppressed
+// markers are reported.
+func (tm *ThreatManager) DebugEntries() []threatDebugEntry {
+	if tm == nil {
+		return nil
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	list := make([]threatDebugEntry, 0, len(tm.entries))
+	for guid := range tm.entries {
+		list = append(list, threatDebugEntry{
+			victimGUID: guid,
+			threat:     tm.effectiveThreatLocked(guid),
+			taunted:    tm.isTauntedLocked(guid),
+			suppressed: tm.isSuppressedLocked(guid),
+		})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].threat > list[j].threat
+	})
+	return list
+}
+
 // Threat broadcast helpers
 // broadcastThreatUpdateInInstance fans SMSG_THREAT_UPDATE out to the
 // visibility set around the threat owner (ThreatManager::SendThreatListToClients,

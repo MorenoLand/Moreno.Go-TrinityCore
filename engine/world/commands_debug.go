@@ -933,3 +933,397 @@ func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) 
 		}
 	}
 }
+
+// debugThreatTarget resolves the HandleDebugThreatListCommand target
+// (cs_debug.cpp:769): the selected unit, else the invoker. A selected
+// creature rides its motion; a selected player (or no selection) rides the
+// player session. The engaged flag is the motion InCombat bit for
+// creatures and the UNIT_FLAG_IN_COMBAT bit for players.
+func (s *session) debugThreatTarget() (name string, guid uint64, alive, engaged bool, motion *creatureMotion) {
+	if s == nil || s.player == nil {
+		return "", 0, false, false, nil
+	}
+	if m := s.castCommandSelectedCreature(); m != nil {
+		return m.Name, m.GUID, m.Health != 0, m.InCombat, m
+	}
+	if s.selection != 0 {
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			return ts.player.Name, ts.playerGUID, ts.player.Health != 0, ts.player.UnitFlags&unitFlagInCombat != 0, nil
+		}
+	}
+	return s.player.Name, s.playerGUID, s.player.Health != 0, s.player.UnitFlags&unitFlagInCombat != 0, nil
+}
+
+// debugUnitName resolves a threat victim's display name: live creature
+// motions first, then online players, else the bare GUID text of the C++
+// fallback (ThreatReference rows print the victim name; an offline victim
+// has no resolvable name in the Go session model).
+func (s *session) debugUnitName(guid uint64) string {
+	if s == nil || s.server == nil {
+		return fmt.Sprintf("%d", guid)
+	}
+	s.server.motionMu.Lock()
+	for _, motions := range s.server.instanceCreatureMotion {
+		if m := motions[guid]; m != nil {
+			name := m.Name
+			s.server.motionMu.Unlock()
+			return name
+		}
+	}
+	s.server.motionMu.Unlock()
+	if ts := s.server.playerSessionForGUID(guid); ts != nil && ts.player != nil {
+		return ts.player.Name
+	}
+	return fmt.Sprintf("%d", guid)
+}
+
+// debugThreatenedByMe scans every live creature threat list for entries on
+// the target: the ThreatManager::_threatenedByMe reverse list of
+// HandleDebugThreatListCommand has no Go index, so the debug report rebuilds
+// it from the forward lists. Owner name, counter and threat come from the
+// owning motion's snapshot.
+func (s *session) debugThreatenedByMe(targetGUID uint64) []debugThreatenedRow {
+	type owner struct {
+		name    string
+		counter uint32
+		threat  float32
+	}
+	if s == nil || s.server == nil {
+		return nil
+	}
+	var owners []owner
+	s.server.motionMu.Lock()
+	for _, motions := range s.server.instanceCreatureMotion {
+		for _, m := range motions {
+			if m == nil || m.ThreatMgr == nil {
+				continue
+			}
+			for _, e := range m.ThreatMgr.DebugEntries() {
+				if e.victimGUID == targetGUID {
+					owners = append(owners, owner{m.Name, uint32(m.GUID & 0x00FFFFFF), e.threat})
+					break
+				}
+			}
+		}
+	}
+	s.server.motionMu.Unlock()
+	rows := make([]debugThreatenedRow, 0, len(owners))
+	for _, o := range owners {
+		rows = append(rows, debugThreatenedRow{name: o.name, counter: o.counter, threat: o.threat})
+	}
+	return rows
+}
+
+type debugThreatenedRow struct {
+	name    string
+	counter uint32
+	threat  float32
+}
+
+// handleDebugThreat mirrors HandleDebugThreatListCommand (cs_debug.cpp:769):
+// ".debug threat" prints the target's threatened-by-me list, then its
+// threat list (sorted descending, [FIXATE]/[TAUNT]/[SUPPRESSED] markers) or
+// the cannot-have-list / not-engaged legs. Deltas: no threatened-by-me
+// index (rebuilt by scan, so only live creature lists contribute); no
+// detaunt/offline markers (no per-reference detaunt state, no online
+// tracking); the offline leg of a victim row is unmodeled.
+func (s *session) handleDebugThreat(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	name, guid, alive, engaged, motion := s.debugThreatTarget()
+	counter := uint32(guid & 0x00FFFFFF)
+	if !alive {
+		engagedNote := ""
+		if engaged {
+			engagedNote = " (It is, however, engaged. Huh?)"
+		}
+		s.sendSysMessage(fmt.Sprintf("%s (GUID %d) is not alive.%s", name, counter, engagedNote))
+		return
+	}
+	threatened := s.debugThreatenedByMe(guid)
+	if len(threatened) == 0 {
+		s.sendSysMessage(fmt.Sprintf("%s (GUID %d) does not threaten any units.", name, counter))
+	} else {
+		s.sendSysMessage(fmt.Sprintf("List of units threatened by %s (GUID %d)", name, counter))
+		for i, row := range threatened {
+			s.sendSysMessage(fmt.Sprintf("   %d.   %s   (GUID %d, SpawnID %d)  - threat %f", i+1, row.name, row.counter, row.counter, row.threat))
+		}
+		s.sendSysMessage("End of threatened-by-me list.")
+	}
+	if motion == nil || !motionCanHaveThreatList(motion) {
+		if engaged {
+			s.sendSysMessage(fmt.Sprintf("%s (GUID %d) is currently engaged. (This unit cannot have a threat list.)", name, counter))
+		} else {
+			s.sendSysMessage(fmt.Sprintf("%s (GUID %d) is not currently engaged. (This unit cannot have a threat list.)", name, counter))
+		}
+		return
+	}
+	entries := motion.ThreatMgr.DebugEntries()
+	if len(entries) == 0 {
+		if !engaged {
+			s.sendSysMessage(fmt.Sprintf("%s (GUID %d, SpawnID %d) is not currently engaged.", name, counter, counter))
+		} else {
+			s.sendSysMessage(fmt.Sprintf("%s (GUID %d, SpawnID %d) seems to be engaged, but does not have a threat list??", name, counter, counter))
+		}
+		return
+	}
+	fixate := motion.ThreatMgr.GetFixateTarget()
+	if engaged {
+		s.sendSysMessage(fmt.Sprintf("Threat list of %s (GUID %d, SpawnID %d):", name, counter, counter))
+	} else {
+		s.sendSysMessage(fmt.Sprintf("%s (GUID %d, SpawnID %d) is not engaged, but still has a threat list? Well, here it is:", name, counter, counter))
+	}
+	for i, e := range entries {
+		marker := ""
+		if e.victimGUID == fixate {
+			marker = " [FIXATE]"
+		} else if e.taunted {
+			marker = " [TAUNT]"
+		}
+		if e.suppressed {
+			marker += " [SUPPRESSED]"
+		}
+		s.sendSysMessage(fmt.Sprintf("   %d.   %s   (GUID %d)  - threat %f%s", i+1, s.debugUnitName(e.victimGUID), uint32(e.victimGUID&0x00FFFFFF), e.threat, marker))
+	}
+	s.sendSysMessage("End of threat list.")
+}
+
+// handleDebugThreatInfo mirrors HandleDebugThreatInfoCommand
+// (cs_debug.cpp:854): ".debug threatinfo" requires a selected unit and
+// prints the modeled threat-manager state. Deltas: the single-school and
+// multi-school modifier tables and the redirect info/registry have no Go
+// model (ThreatManager tracks only the temp modifier per victim), so the
+// report prints the modeled rows — fixate target, live taunts,
+// suppressions and per-victim temp modifiers — and says so for the rest.
+func (s *session) handleDebugThreatInfo(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	var name string
+	var guid uint64
+	var mgr *ThreatManager
+	if motion != nil {
+		name, guid, mgr = motion.Name, motion.GUID, motion.ThreatMgr
+	} else if s.selection != 0 {
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			name, guid = ts.player.Name, ts.playerGUID
+		}
+	}
+	if motion == nil && guid == 0 {
+		s.sendSysMessage("Select a character or creature.")
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Threat info for %s (%d):", name, guid))
+	s.sendSysMessage(" - Single-school threat modifiers: not modeled")
+	s.sendSysMessage("- Multi-school threat modifiers (0 entries): not modeled")
+	s.sendSysMessage(" - No redirects being applied (redirects not modeled)")
+	s.sendSysMessage(" - No redirects are registered (redirects not modeled)")
+	if mgr == nil {
+		return
+	}
+	fixate := mgr.GetFixateTarget()
+	if fixate != 0 {
+		s.sendSysMessage(fmt.Sprintf(" - Fixate target: %s", s.debugUnitName(fixate)))
+	}
+	for _, e := range mgr.DebugEntries() {
+		if e.taunted {
+			s.sendSysMessage(fmt.Sprintf(" - Taunted victim: %s", s.debugUnitName(e.victimGUID)))
+		}
+		if e.suppressed {
+			s.sendSysMessage(fmt.Sprintf(" - Suppressed victim: %s", s.debugUnitName(e.victimGUID)))
+		}
+	}
+}
+
+// handleDebugCombat mirrors HandleDebugCombatListCommand (cs_debug.cpp:929):
+// ".debug combat" prints the target's combat state line. Delta: Go has no
+// combat-reference list (only the InCombat/UnitFlags bits), so no [PvP] /
+// [PvE] ref rows follow the header.
+func (s *session) handleDebugCombat(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	_, _, _, engaged, _ := s.debugThreatTarget()
+	combatState := 0
+	if engaged {
+		combatState = 1
+	}
+	s.sendSysMessage(fmt.Sprintf("Combat refs: (Combat state: %d | Manager state: %d)", combatState, combatState))
+}
+
+// handleDebugGuidLimits mirrors HandleDebugGuidLimitsCommand plus
+// HandleDebugGuidLimitsMap (cs_debug.cpp:1683, 1698): ".debug guidlimits
+// [mapId]" prints, per (map, instance), the highest live creature and
+// gameobject GUID counters, reusing the objectcount map iteration. Delta:
+// the GUID warn/alert config levels have no Go config, so those two lines
+// are omitted; counters cover live motions and runtime gameobjects only,
+// not the DB spawn tables.
+func (s *session) handleDebugGuidLimits(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	var mapFilter *uint32
+	if len(args) > 0 {
+		id, err := strconv.ParseUint(args[0], 10, 32)
+		if err != nil {
+			s.sendSysMessage("Syntax: .debug guidlimits [mapId]")
+			return
+		}
+		v := uint32(id)
+		mapFilter = &v
+	}
+	if s.server == nil || s.player == nil {
+		return
+	}
+	type guidMax struct {
+		mapID      uint32
+		instanceID uint32
+		creature   uint64
+		gameobject uint64
+	}
+	maxima := map[instanceAdmissionKey]*guidMax{}
+	get := func(mapID, instanceID uint32) *guidMax {
+		key := instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}
+		if maxima[key] == nil {
+			maxima[key] = &guidMax{mapID: mapID, instanceID: instanceID}
+		}
+		return maxima[key]
+	}
+	s.server.motionMu.Lock()
+	for key, motions := range s.server.instanceCreatureMotion {
+		if mapFilter != nil && key.MapID != *mapFilter {
+			continue
+		}
+		m := get(key.MapID, key.InstanceID)
+		for guid := range motions {
+			if c := uint64(uint32(guid & 0x00FFFFFF)); c > m.creature {
+				m.creature = c
+			}
+		}
+	}
+	s.server.motionMu.Unlock()
+	s.server.objectsMu.RLock()
+	collectGO := func(state *dynamicGameObjectState) {
+		if state == nil {
+			return
+		}
+		if mapFilter != nil && state.Map != *mapFilter {
+			return
+		}
+		m := get(state.Map, state.InstanceID)
+		if c := uint64(uint32(state.GUID & 0x00FFFFFF)); c > m.gameobject {
+			m.gameobject = c
+		}
+	}
+	for _, state := range s.server.dynamicGameObjects {
+		collectGO(state)
+	}
+	for _, byGUID := range s.server.instanceGameObjects {
+		for _, state := range byGUID {
+			collectGO(state)
+		}
+	}
+	s.server.objectsMu.RUnlock()
+	if mapFilter == nil || *mapFilter == s.player.Map {
+		get(s.player.Map, s.player.InstanceID)
+	}
+	keys := make([]instanceAdmissionKey, 0, len(maxima))
+	for key := range maxima {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].MapID != keys[j].MapID {
+			return keys[i].MapID < keys[j].MapID
+		}
+		return keys[i].InstanceID < keys[j].InstanceID
+	})
+	for _, key := range keys {
+		m := maxima[key]
+		mapName := ""
+		if s.server.Data != nil {
+			if entry, found, err := s.server.Data.Map(m.mapID); err == nil && found {
+				mapName = entry.MapName
+			}
+		}
+		s.sendSysMessage(fmt.Sprintf("Map Id: %d Name: '%s' Instance Id: %d Highest Guid Creature: %d GameObject: %d",
+			m.mapID, mapName, m.instanceID, m.creature, m.gameobject))
+	}
+}
+
+// handleDebugWPGPS mirrors HandleWPGPSCommand (cs_debug.cpp:1311):
+// ".debug wpgps" logs the invoker's position as a waypoint SQL row and
+// reports that the row was written. Go has no sql.dev log file, so the row
+// goes to the session debug log instead.
+func (s *session) handleDebugWPGPS(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.player == nil {
+		return
+	}
+	s.debug("waypoint sql", "row", fmt.Sprintf("(@PATH, XX, %.3f, %.3f, %.5f, %.5f, 0, 0, 0, 100, 0),", s.player.X, s.player.Y, s.player.Z, s.player.Orientation))
+	s.sendSysMessage("Waypoint SQL written to SQL Developer log")
+}
+
+// handleDebugTransport mirrors HandleDebugTransportCommand
+// (cs_debug.cpp:1317): ".debug transport [stop|start]" on the invoker's
+// continent transport. The stop/start legs ride the MovementPaused latch
+// (EnableMovement twin); any other argument prints the transport's name,
+// state and position. No transport reads a plain notice, the C++ false
+// return's Go equivalent.
+func (s *session) handleDebugTransport(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.server == nil || s.player == nil || s.player.TransportGUID == 0 {
+		s.sendSysMessage("You are not on a transport.")
+		return
+	}
+	var transport *continentTransport
+	s.server.transportMu.Lock()
+	for _, t := range s.server.transports {
+		if t == nil {
+			continue
+		}
+		if s.player.TransportGUID == uint64(t.Spawn.GUID) || s.player.TransportGUID == transportGUID(t.Spawn.GUID) || s.player.TransportGUID == gameObjectGUID(t.Spawn.GUID, t.Spawn.Entry) {
+			transport = t
+			break
+		}
+	}
+	if transport != nil {
+		transportName, paused, x, y, z, o := transport.Name, transport.MovementPaused, transport.Spawn.X, transport.Spawn.Y, transport.Spawn.Z, transport.Spawn.Orientation
+		op := ""
+		if len(args) > 0 {
+			op = strings.ToLower(args[0])
+		}
+		if op == "stop" || op == "start" {
+			transport.MovementPaused = op == "stop"
+			paused = transport.MovementPaused
+			s.server.transportMu.Unlock()
+			if op == "stop" {
+				s.sendSysMessage(fmt.Sprintf("Transport %s stopped", transportName))
+			} else {
+				s.sendSysMessage(fmt.Sprintf("Transport %s started", transportName))
+			}
+			return
+		}
+		s.server.transportMu.Unlock()
+		state := "moving"
+		if paused {
+			state = "stopped"
+		}
+		s.sendSysMessage(fmt.Sprintf("Transport %s is %s", transportName, state))
+		s.sendSysMessage(fmt.Sprintf("Transport position: X: %f Y: %f Z: %f O: %f", x, y, z, o))
+		return
+	}
+	s.server.transportMu.Unlock()
+	s.sendSysMessage("You are not on a transport.")
+}
