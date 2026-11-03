@@ -49760,7 +49760,11 @@ func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, h
 // radius without the Burn aura (46394) ignites via triggered 46394.
 // Wintergrasp RP-GG pickup (57347): a creature hit target is despawned.
 // Wintergrasp RP-GG drop (57349): count 5 of the item whose entry is the
-// rolled effect value is destroyed. The remaining arms (Scarlet ghoul
+// rolled effect value is destroyed. SpellScript script-effect arms with a
+// creature-cast twin in creatureEffectScriptEffect (boss_ai.go) also fire
+// on player casts: clear debuffs (34098), Gal'darah clear puncture
+// (60022), throw shield (69222), glittering sparks self-cast (71806),
+// remove empowered blood (70939). The remaining arms (Scarlet ghoul
 // summons, Grab Crate vehicle, Coyote Spirit/Blood Parrot despawns) need
 // temp-summon / position-cast / vehicle models Go lacks, and the sSpellScripts
 // tail has no Go SpellScript bridge (documented).
@@ -49950,6 +49954,131 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			if glyphBP := int32(int64(absorb) * int64(glyphAmount)); glyphBP > 0 {
 				s.castSpellDirectWithBasePoint(ctx, sentryStoneclawSpellID, targetGUID, uint32(glyphBP))
 			}
+		}
+	case 34098:
+		// spell_gen_clear_debuffs (spell_generic.cpp:4053-4073): EFFECT_0
+		// removes the hit unit's owned auras whose spell is neither
+		// positive nor passive (Unit::RemoveOwnedAuras predicate,
+		// SpellInfo::IsPositive / IsPassive). The creature-cast twin
+		// lives in creatureEffectScriptEffect (boss_ai.go); this is
+		// the player-cast leg, per hit target like C++. Spells with
+		// no Go data stay (the dispel.go convention: an unevaluated
+		// predicate removes nothing).
+		if s.server.Data == nil {
+			return
+		}
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			var ids []uint32
+			ts.castMu.Lock()
+			for id, aura := range ts.activeAuras {
+				if aura == nil || aura.Stopped {
+					continue
+				}
+				ids = append(ids, id)
+			}
+			ts.castMu.Unlock()
+			for _, id := range ids {
+				if sp, found, err := s.server.Data.Spell(id); err != nil || !found || spellIsPositive(sp) || sp.Attributes&spellAttributePassive != 0 {
+					continue
+				}
+				ts.removeAura(id)
+			}
+			return
+		}
+		if tm := s.findCreatureMotion(targetGUID); tm != nil {
+			key := creatureAuraKey{Map: tm.Map, InstanceID: tm.InstanceID, GUID: targetGUID}
+			seen := map[uint32]bool{}
+			var ids []uint32
+			s.server.auraMu.Lock()
+			for spellID := range s.server.creatureAuras[key] {
+				if !seen[spellID] {
+					seen[spellID] = true
+					ids = append(ids, spellID)
+				}
+			}
+			for spellID := range s.server.activeCreatureAuras[key] {
+				if !seen[spellID] {
+					seen[spellID] = true
+					ids = append(ids, spellID)
+				}
+			}
+			s.server.auraMu.Unlock()
+			for _, id := range ids {
+				if sp, found, err := s.server.Data.Spell(id); err != nil || !found || spellIsPositive(sp) || sp.Attributes&spellAttributePassive != 0 {
+					continue
+				}
+				s.server.removeCreatureAura(key, id)
+			}
+		}
+	case 60022:
+		// spell_gal_darah_clear_puncture (boss_gal_darah.cpp:320-339):
+		// EFFECT_0 removes Puncture from the hit unit, heroic (59826)
+		// when the target's map is heroic, else normal (55276). The
+		// creature-cast twin lives in creatureEffectScriptEffect;
+		// this is the player-cast leg. Heroic is Map::IsHeroic via
+		// the instance-row read (the IsHeroic Lua precedent): raids
+		// heroic at difficulty >= 2, dungeons at >= 1, non-instance
+		// maps and missing rows default to normal.
+		var mapID, instanceID uint32
+		var isPlayerTarget bool
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			mapID, instanceID, isPlayerTarget = ts.player.Map, ts.player.InstanceID, true
+		} else if tm := s.findCreatureMotion(targetGUID); tm != nil {
+			mapID, instanceID = tm.Map, tm.InstanceID
+		} else {
+			return
+		}
+		puncture := uint32(55276)
+		if instanceID != 0 {
+			var difficulty int64
+			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_ = s.server.CharactersStore.DB.QueryRowContext(ctx,
+					"SELECT difficulty FROM instance WHERE id = ?", instanceID).Scan(&difficulty)
+			}
+			isRaid := false
+			if s.server.Data != nil {
+				if entry, found, err := s.server.Data.Map(mapID); err == nil && found {
+					isRaid = entry.IsRaid()
+				}
+			}
+			if (isRaid && difficulty >= 2) || (!isRaid && difficulty >= 1) {
+				puncture = 59826
+			}
+		}
+		if isPlayerTarget {
+			if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+				ts.removeAura(puncture)
+			}
+		} else {
+			s.server.removeCreatureAura(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: targetGUID}, puncture)
+		}
+	case 69222:
+		// spell_gen_throw_shield (spell_generic.cpp:3228-3242): EFFECT_1
+		// script effect — the caster casts the effect value on the hit
+		// unit, triggered, once per hit target. The creature-cast twin
+		// lives in creatureEffectScriptEffect; this is the player-cast
+		// leg (castSpellDirect is the triggered funnel).
+		if value := eff.CalcValue(); value > 0 {
+			s.castSpellDirect(ctx, uint32(value), targetGUID)
+		}
+	case 71806:
+		// spell_taldaram_glittering_sparks (boss_blood_prince_council.cpp:1095-1109):
+		// EFFECT_0 script effect — the caster casts the effect value on
+		// itself, triggered, once per hit target (PreventHitDefaultEffect
+		// has no generic-arm counterpart here). The creature-cast twin
+		// lives in creatureEffectScriptEffect; this is the player-cast leg.
+		if value := eff.CalcValue(); value > 0 {
+			s.castSpellDirect(ctx, uint32(value), s.playerGUID)
+		}
+	case 70939:
+		// spell_generic_remove_empowered_blood (icecrown_citadel.cpp:1286-1304):
+		// EFFECT_0 script effect — the hit unit removes Empowered Blood
+		// (70227). The creature-cast twin lives in
+		// creatureEffectScriptEffect; this is the player-cast leg.
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			ts.removeAura(70227)
+		} else if tm := s.findCreatureMotion(targetGUID); tm != nil {
+			s.server.removeCreatureAura(creatureAuraKey{Map: tm.Map, InstanceID: tm.InstanceID, GUID: targetGUID}, 70227)
 		}
 	}
 }
