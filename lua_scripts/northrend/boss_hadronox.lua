@@ -106,13 +106,16 @@
 -- same-pack SetReactState(AGGRESSIVE) + AttackStart — pack-ID bridge
 -- absent; grid + EngageWithTarget are bridged), EnterEvadeMode ->
 -- hadronox AI EnterEvadeMode
--- (cross-AI absent). Port-pattern-ready _JustEngagedWith arms — Talk(
--- CRUSHER_SAY_AGGRO 1) (bridgeable in isolation) + EVENT_SMASH DoCastVictim
--- (SMASH 53318) 8-12s init, 13-21s repeat + pack-1-only instance DoAction(
--- ACTION_CRUSHER_ENGAGED) (DoAction bridge absent) — stay unported:
--- wiring the engage arms without the passive pack model leaves the
--- creature engine-engaging players where C++ holds it REACT_PASSIVE
--- (amanitar mushrooms precedent — the C++-exact port bar fails).
+-- (cross-AI absent). EVENT_SMASH — PORTED (2026-11-03):
+-- _JustEngagedWith schedules it unconditionally (all packs);
+-- DoCastVictim(SMASH 53318) 8-12s init, 13-21s repeat. Timers do not
+-- drive engagement (the engine does), so the port cannot make the
+-- crusher engage where C++ holds it passive; it only gives an
+-- already-in-combat crusher its C++ rotation — the same standing as
+-- the DamageTaken port on this entry. The pack-1-only legs stay out:
+-- Talk(CRUSHER_SAY_AGGRO 1) + instance DoAction(ACTION_CRUSHER_ENGAGED)
+-- need the absent instance GetData(DATA_HADRONOX_ENTERED_COMBAT) model
+-- + cross-AI DoAction bridge.
 -- DamageTaken frenzy (HealthBelowPctDamaged(25) -> _hadFrenzy latch +
 -- Talk(CRUSHER_EMOTE_FRENZY 2) + DoCastSelf(FRENZY 53801)) — the old
 -- "no DamageTaken hook + no health-pct bridge" claim was stale
@@ -172,6 +175,7 @@ local SPELL_LEECH_POISON = 53030
 local SPELL_WEB_GRAB = 57731
 local SPELL_ACID_CLOUD = 53400
 local SPELL_CRUSHER_FRENZY = 53801
+local SPELL_CRUSHER_SMASH = 53318
 local CRUSHER_EMOTE_FRENZY = 2
 
 local timers = {}
@@ -325,7 +329,34 @@ local function crusherDamageTaken(event, creature, attacker, damage)
     return false, damage
 end
 
+-- C++ npc_anub_ar_crusher::_JustEngagedWith: EVENT_SMASH
+-- DoCastVictim(SMASH 53318), 8-12s init, 13-21s repeat, scheduled
+-- unconditionally (all packs).
+local function crusherSmashTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CRUSHER_SMASH)
+    schedule(guid, "smash", math.random(13000, 21000), function()
+        crusherSmashTick(creature, guid)
+    end)
+end
+
+local function crusherEnterCombat(event, creature, target)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "smash", math.random(8000, 12000), function()
+        crusherSmashTick(creature, guid)
+    end)
+end
+
+local function crusherLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function crusherReset(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
 local function crusherDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     crusherFrenzy[creature:GetGUID()] = nil
 end
 
@@ -334,5 +365,8 @@ RegisterCreatureEvent(ENTRY_HADRONOX, 1, hadronoxEnterCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 2, hadronoxLeaveCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 4, hadronoxDied)
 RegisterCreatureEvent(ENTRY_HADRONOX, 23, hadronoxReset)
+RegisterCreatureEvent(ENTRY_CRUSHER, 1, crusherEnterCombat)
+RegisterCreatureEvent(ENTRY_CRUSHER, 2, crusherLeaveCombat)
 RegisterCreatureEvent(ENTRY_CRUSHER, 4, crusherDied)
 RegisterCreatureEvent(ENTRY_CRUSHER, 9, crusherDamageTaken)
+RegisterCreatureEvent(ENTRY_CRUSHER, 23, crusherReset)
