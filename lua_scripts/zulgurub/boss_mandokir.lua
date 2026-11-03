@@ -234,6 +234,7 @@ local POS_CHAINED_SPIRITS = {
 }
 
 local function mandokirEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; me-form DoZone already ported at handler tail)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())

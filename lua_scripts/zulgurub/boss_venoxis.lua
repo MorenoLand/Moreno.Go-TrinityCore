@@ -337,11 +337,12 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 1, function(event, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; me-form DoZone already ported at handler tail, C++ :141)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ boss_venoxisAI::JustEngagedWith (boss_venoxis.cpp:125-141):
-    -- SetReactState(REACT_AGGRESSIVE); BossAI::JustEngagedWith
-    -- bookkeeping still skipped; DoZoneInCombat (:141, tail) PORTED
+    -- SetReactState(REACT_AGGRESSIVE); BossAI::JustEngagedWith base
+    -- pulse PORTED at handler top; DoZoneInCombat (:141, tail) PORTED
     -- below (live bridge engine/world/lua_creature_events.go,
     -- 2026-10-23).
     creature:SetReactState(REACT_AGGRESSIVE)

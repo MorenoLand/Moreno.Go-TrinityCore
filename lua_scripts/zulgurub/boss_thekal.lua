@@ -457,6 +457,8 @@ local function thekalResetEncounter(e, creature)
 end
 
 local function thekalEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
     local e = encounterState(creature)
     cancelTimers(guid)

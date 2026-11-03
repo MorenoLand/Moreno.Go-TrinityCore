@@ -183,6 +183,8 @@ local function resetState(guid)
 end
 
 RegisterCreatureEvent(ENTRY_RENATAKI, 1, function(event, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
     resetState(guid)
     schedule(guid, "invisible", math.random(8000, 18000), function()
