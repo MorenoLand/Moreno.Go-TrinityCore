@@ -17,10 +17,12 @@ import (
 //     Go equivalent of the SetGender/SetNativeGender/InitDisplayIds triple.
 //   - bit has no Go bridge: update fields are built from playerState and
 //     there is no generic SetFlag/RemoveFlag unit-value store.
-//   - faction needs a selected creature; command selections resolve only to
-//     online player sessions.
-//   - phase needs a stored phase-mask model; the Go phase mask is
-//     aura-derived (currentPlayerPhaseMask).
+//   - faction is wired on the selected creature (motion Faction/UnitFlags/
+//     NPCFlags/DynamicFlags slots + values-update broadcast); the no-arg
+//     form reports the current values.
+//   - phase is wired on the selected unit: creatures take the motion
+//     PhaseMask write, players take the session PhaseMaskOverride slot
+//     (currentPlayerPhaseMask precedence), falling back to the invoker.
 //   - the speed sub-table needs a per-type speed-rate store; Go movement
 //     speeds are aura-derived (movementSpeeds).
 //   - talentpoints sets the session free-talent-points override
@@ -86,24 +88,89 @@ func (s *session) handleModifyBit(ctx context.Context) {
 	s.sendSysMessage("modify bit is not supported: generic unit-field flag toggles have no Go bridge.")
 }
 
-// handleModifyFaction is documented-blocked (cs_modify.cpp:209): the arm
-// operates on the selected creature; command selections resolve only to
-// online player sessions, so no creature target can be named.
-func (s *session) handleModifyFaction(ctx context.Context) {
+// handleModifyFaction mirrors HandleModifyFactionCommand (cs_modify.cpp:209):
+// the selected creature only (getSelectedCreature; players are never a
+// target here). With no argument it reports the current faction/flags/
+// npcflags/dyflags; otherwise it writes factionid plus the optional flag,
+// npcflag and dyflag values, each defaulting to the current value, after
+// the FactionTemplate.dbc lookup (LANG_WRONG_FACTION on a miss). The
+// writes ride the motion slots plus a creature values-update broadcast,
+// the SetFaction bridge pattern.
+func (s *session) handleModifyFaction(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandModifyFaction) {
 		return
 	}
-	s.sendSysMessage("modify faction is not supported: selected-unit creature targets have no Go bridge.")
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	srv := s.server
+	srv.motionMu.Lock()
+	faction, flags, npcflags, dyflags := motion.Faction, motion.UnitFlags, motion.NPCFlags, motion.DynamicFlags
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	srv.motionMu.Unlock()
+	low := uint32(guid & 0x00FFFFFF)
+	if len(args) == 0 {
+		s.sendSysMessage(fmt.Sprintf("Current faction for creature %d is %d, flags %d, npcflags %d, dyflags %d.", low, faction, flags, npcflags, dyflags))
+		return
+	}
+	faction = uint32(cAtoi(args[0]))
+	if len(args) > 1 {
+		flags = uint32(cAtoi(args[1]))
+	}
+	if len(args) > 2 {
+		npcflags = uint32(cAtoi(args[2]))
+	}
+	if len(args) > 3 {
+		dyflags = uint32(cAtoi(args[3]))
+	}
+	if srv == nil || srv.Data == nil {
+		s.sendSysMessage("Faction data is unavailable.")
+		return
+	}
+	if _, found := s.factionTemplateEntry(faction); !found {
+		s.sendSysMessage(fmt.Sprintf("Wrong faction %d.", faction))
+		return
+	}
+	srv.motionMu.Lock()
+	motion.Faction, motion.UnitFlags, motion.NPCFlags, motion.DynamicFlags = faction, flags, npcflags, dyflags
+	srv.motionMu.Unlock()
+	srv.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldFaction: faction, unitFieldFlags: flags, unitFieldNPCFlags: npcflags, unitFieldDynamicFlags: dyflags})
+	s.sendSysMessage(fmt.Sprintf("You changed faction for creature %d to %d, flags %d, npcflags %d, dyflags %d.", low, faction, flags, npcflags, dyflags))
 }
 
-// handleModifyPhase is documented-blocked (cs_modify.cpp:836): the arm sets
-// a temporary phase mask on the unit, but the Go phase mask is aura-derived
-// (currentPlayerPhaseMask) with no stored phase-mask model.
-func (s *session) handleModifyPhase(ctx context.Context) {
+// handleModifyPhase mirrors HandleModifyPhaseCommand (cs_modify.cpp:836):
+// the selected unit, falling back to the invoker when nothing resolves
+// (getSelectedUnit nil arm). A selected creature takes the motion
+// PhaseMask write (the Lua SetPhaseMask twin, no visibility fan-out);
+// a selected player takes the session PhaseMaskOverride slot, which
+// currentPlayerPhaseMask reads before the GM/aura legs, matching C++'s
+// stored-mask semantics (Player::SetGameMaster itself writes
+// PHASEMASK_ANYWHERE into that slot). The player-target security guard
+// mirrors the other modify arms; creature targets carry none in C++.
+func (s *session) handleModifyPhase(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandModifyPhase) {
 		return
 	}
-	s.sendSysMessage("modify phase is not supported: stored phase masks have no Go bridge.")
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .modify phase <phasemask>")
+		return
+	}
+	mask := uint32(cAtoi(args[0]))
+	if motion := s.castCommandSelectedCreature(); motion != nil {
+		srv := s.server
+		srv.motionMu.Lock()
+		motion.PhaseMask = mask
+		srv.motionMu.Unlock()
+		return
+	}
+	target := s.modifyTargetPlayer(ctx)
+	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
+		return
+	}
+	target.player.PhaseMaskOverride = mask
+	target.player.PhaseMaskOverrideSet = true
 }
 
 // handleModifySpeed implements the "speed" sub-table (cs_modify.cpp:47-56):
@@ -251,9 +318,9 @@ func (s *session) handleModifyChunk2b(ctx context.Context, sub string, rest []st
 	case strings.HasPrefix("bit", sub):
 		s.handleModifyBit(ctx)
 	case strings.HasPrefix("faction", sub):
-		s.handleModifyFaction(ctx)
+		s.handleModifyFaction(ctx, rest)
 	case strings.HasPrefix("phase", sub):
-		s.handleModifyPhase(ctx)
+		s.handleModifyPhase(ctx, rest)
 	case strings.HasPrefix("speed", sub):
 		s.handleModifySpeed(ctx, rest)
 	case strings.HasPrefix("talentpoints", sub):

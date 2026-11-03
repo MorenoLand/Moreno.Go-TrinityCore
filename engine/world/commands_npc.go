@@ -137,7 +137,7 @@ func (s *session) handleNPCAddTable(ctx context.Context, args []string) {
 	case strings.HasPrefix("move", sub):
 		s.handleNPCAddMove(ctx, rest)
 	case strings.HasPrefix("temp", sub):
-		s.handleNPCAddTemp(ctx)
+		s.handleNPCAddTemp(ctx, rest)
 	default:
 		// The "" table entry: ".npc add <entry>".
 		s.handleNPCAdd(ctx, args)
@@ -206,13 +206,46 @@ func (s *session) handleNPCAddItem(ctx context.Context) {
 	s.sendSysMessage("npc add item is not supported: selected-unit creature targets have no Go bridge.")
 }
 
-// handleNPCAddTemp is documented-blocked (cs_npc.cpp:1025): temp summons need
-// the live creature summon bridge.
-func (s *session) handleNPCAddTemp(ctx context.Context) {
+// handleNPCAddTemp mirrors HandleNpcAddTempSpawnCommand (cs_npc.cpp:1025):
+// ".npc add temp [loot|noloot] <entry>" summons the entry at the invoker's
+// position through the summonTempCreature funnel (the player SummonCreature
+// bridge): loot selects TEMPSUMMON_CORPSE_TIMED_DESPAWN (5), noloot and
+// the bare form select TEMPSUMMON_CORPSE_DESPAWN (4), both with C++'s 30s
+// duration (carried for the corpse timer on type 5, no live timer on
+// type 4). An unknown template fails silently, the handleNPCAdd
+// precedent; success is silent as in C++. No DB row is written, so the
+// summon is temporary by construction, and no npcbot gate runs: C++'s
+// temp arm carries none (unlike the permanent add arm).
+func (s *session) handleNPCAddTemp(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCAddTemp) {
 		return
 	}
-	s.sendSysMessage("npc add temp is not supported: live creature summons have no Go bridge.")
+	const syntax = "Syntax: .npc add temp [loot|noloot] <entry>"
+	summonType := uint8(4)
+	rest := args
+	if len(rest) > 0 {
+		switch strings.ToLower(rest[0]) {
+		case "loot":
+			summonType = 5
+			rest = rest[1:]
+		case "noloot":
+			rest = rest[1:]
+		}
+	}
+	if len(rest) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	entry := uint32(cAtoi(rest[0]))
+	if _, ok := s.npcTemplateGate(ctx, entry); !ok {
+		return
+	}
+	if s.server == nil || s.player == nil {
+		return
+	}
+	p := s.player
+	origin := tempSummonOrigin{Map: p.Map, InstanceID: p.InstanceID, GUID: p.GUID, X: p.X, Y: p.Y, Z: p.Z, O: p.Orientation, Reach: float64(p.CombatReach)}
+	s.server.summonTempCreature(ctx, origin, entry, p.X, p.Y, p.Z, p.Orientation, summonType, 30000)
 }
 
 // handleNPCAddMove mirrors HandleNpcAddMoveCommand (cs_npc.cpp:213): the

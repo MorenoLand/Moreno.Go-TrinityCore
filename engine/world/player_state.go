@@ -229,6 +229,8 @@ type playerState struct {
 	FactionRaceOverrideSet bool
 	FactionOverride        uint32 // direct SetFaction value (UnitMethods.h:1553), session-only
 	FactionOverrideSet     bool   // true while a direct SetFaction override stands
+	PhaseMaskOverride      uint32 // direct .modify phase value (cs_modify.cpp:833), session-only
+	PhaseMaskOverrideSet   bool   // true while a .modify phase override stands
 	PowerTypeOverride      uint8  // direct SetPowerType value (UnitMethods.h:1721), session-only
 	PowerTypeOverrideSet   bool   // true while a direct SetPowerType override stands
 	Class                  uint8

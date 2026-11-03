@@ -291,6 +291,15 @@ func (s *session) currentPlayerPhaseMask() uint32 {
 	if s == nil || s.player == nil {
 		return 1
 	}
+	// An explicit .modify phase override wins over the GM and aura legs:
+	// C++ stores the mask in one slot, and SetGameMaster itself writes
+	// PHASEMASK_ANYWHERE into it (Player.cpp:2456). Delta: Go's GM leg
+	// is computed, so toggling GM on/off does not overwrite or restore
+	// the override the way C++'s GM-off aura restore does; only another
+	// .modify phase call replaces it.
+	if s.player.PhaseMaskOverrideSet {
+		return s.player.PhaseMaskOverride
+	}
 	if s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0 {
 		return ^uint32(0)
 	}
