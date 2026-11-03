@@ -412,6 +412,9 @@ type ItemInstanceUpdate struct {
 	Flags        *uint32
 	Count        *uint32
 	Enchantments *string
+	// EnchantSlot marks a SetEnchantment write (never ClearEnchantment):
+	// the world layer sends Item::SetEnchantment's log pair for this slot.
+	EnchantSlot *uint32
 }
 
 type ItemLive struct {
@@ -535,9 +538,10 @@ func itemSetEnchantmentString(raw string, slot, id uint32) string {
 // (object.go). The mutating surface (SetOwner, SetBinding, SetCount,
 // SetEnchantment, ClearEnchantment, SaveToDB) writes through the world's
 // UpdateInstance callback straight to the item_instance row, so a later
-// LoadInstance read sees the write; there is no client values-update
-// broadcast for items in Go, so a live client only sees the change on
-// its next inventory refresh. IsInTrade reads the world's
+// LoadInstance read sees the write; the world layer also sends the owner
+// session the values block for the changed fields (plus the
+// SetEnchantment log pair), so a live client sees the change at once.
+// IsInTrade reads the world's
 // server-guarded mb_in_trade mirror (see trade.go), never the
 // session trade state, so it is safe from any Lua goroutine.
 func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
@@ -1020,7 +1024,9 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 		// C++ order, including its argerror naming argument 2
 		// even though the slot is the third Lua argument, which Go
 		// reports as the slot message itself. ApplyEnchantment's
-		// stat legs have no Go model, so only the id triple lands.
+		// stat legs have no Go model, so only the id triple lands;
+		// the world layer sends the values block plus the
+		// SetEnchantment log pair for the slot.
 		"SetEnchantment": func(_ context.Context, args []any) ([]any, error) {
 			if live.LoadInstance == nil || live.UpdateInstance == nil {
 				return []any{false}, nil
@@ -1047,7 +1053,7 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 				return nil, fmt.Errorf("valid EnchantmentSlot expected")
 			}
 			enchants := itemSetEnchantmentString(inst.Enchantments, slot, enchant)
-			live.UpdateInstance(ItemInstanceUpdate{Enchantments: &enchants})
+			live.UpdateInstance(ItemInstanceUpdate{Enchantments: &enchants, EnchantSlot: &slot})
 			return []any{true}, nil
 		},
 		// Eluna ClearEnchantment (ItemMethods.h:729): same owner and

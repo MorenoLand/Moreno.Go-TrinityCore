@@ -76,6 +76,81 @@ func (s *session) itemTemplateLive(ctx context.Context, entry uint32) scripting.
 	}}
 }
 
+// itemInstanceUpdateFields maps one scripting ItemInstanceUpdate onto the
+// ITEM_FIELD indices the values block carries (UpdateFields.h: OWNER 6-7,
+// STACK_COUNT 14, FLAGS 21, ENCHANTMENT_1_1 22 + slot*3). The enchantment
+// arm carries the whole 12-slot block: UpdateInstance receives the full
+// string, not the changed slot, so unchanged slots re-send identical values
+// where C++'s _changesMask would send only the changed triple.
+func itemInstanceUpdateFields(update scripting.ItemInstanceUpdate) map[int]uint32 {
+	fields := make(map[int]uint32)
+	if update.OwnerGUID != nil {
+		fields[itemFieldOwnerLow] = uint32(*update.OwnerGUID)
+		fields[itemFieldOwnerHigh] = uint32(*update.OwnerGUID >> 32)
+	}
+	if update.Count != nil {
+		fields[itemFieldStackCount] = *update.Count
+	}
+	if update.Flags != nil {
+		fields[itemFieldFlags] = *update.Flags
+	}
+	if update.Enchantments != nil {
+		parts := strings.Fields(*update.Enchantments)
+		for slot := 0; slot < 12; slot++ {
+			for off := 0; off < 3; off++ {
+				index := slot*3 + off
+				var value uint64
+				if index < len(parts) {
+					value, _ = strconv.ParseUint(parts[index], 10, 32)
+				}
+				fields[itemFieldEnchantment+index] = uint32(value)
+			}
+		}
+	}
+	return fields
+}
+
+// sendItemValuesUpdateToOwner delivers one item values block to the owner's
+// session, the C++ SendUpdateToPlayer recipient (the owner player, not the
+// acting session). The sessions scan follows bgScriptObject's lock order;
+// session writes are writeMu-guarded, so a trigger goroutine may send here.
+func (srv *Server) sendItemValuesUpdateToOwner(ownerGUID, itemGUID uint64, fields map[int]uint32) {
+	if srv == nil || len(fields) == 0 || ownerGUID == 0 {
+		return
+	}
+	srv.sessionsMu.RLock()
+	defer srv.sessionsMu.RUnlock()
+	for sess := range srv.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.playerGUID != ownerGUID {
+			continue
+		}
+		sess.sendItemValuesUpdate(itemGUID, fields)
+	}
+}
+
+// sendEnchantmentLogToOwner sends Item::SetEnchantment's log pair to the
+// owner session: the removed id with an empty caster, then the new id with
+// the Eluna call's empty caster (Item.cpp:835-855, caster defaults Empty;
+// Eluna passes none). Either arm is skipped when its id is zero.
+func (srv *Server) sendEnchantmentLogToOwner(ownerGUID uint64, itemEntry, oldEnchant, newEnchant uint32) {
+	if srv == nil || ownerGUID == 0 || (oldEnchant == 0 && newEnchant == 0) {
+		return
+	}
+	srv.sessionsMu.RLock()
+	defer srv.sessionsMu.RUnlock()
+	for sess := range srv.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil || sess.playerGUID != ownerGUID {
+			continue
+		}
+		if oldEnchant != 0 {
+			sess.sendEnchantmentLog(ownerGUID, 0, itemEntry, oldEnchant)
+		}
+		if newEnchant != 0 {
+			sess.sendEnchantmentLog(ownerGUID, 0, itemEntry, newEnchant)
+		}
+	}
+}
+
 // sessionLuaItem builds the Lua Item object for the Eluna ITEM_EVENT_*
 // hooks from the character's item_instance row — the Go model of Eluna's
 // Push(Item*) via ElunaTemplate. It reuses scripting.NewItemObject
@@ -180,14 +255,21 @@ func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting
 		}
 		return inst, true
 	}
-	// UpdateInstance is the scripting mutation write path: one UPDATE
-	// per call over the columns the scripting layer changed, matching
-	// either GUID form the reads probe. It reports false when no row
-	// was touched, so a despawned item's writes silently land nowhere
-	// instead of creating a row.
 	live.UpdateInstance = func(update scripting.ItemInstanceUpdate) bool {
 		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 			return false
+		}
+		// The enchantment-log pair (Item::SetEnchantment, Item.cpp:835-855)
+		// reports the pre-write id, so it is read before the UPDATE lands.
+		// Only SetEnchantment arms it (EnchantSlot set); ClearEnchantment
+		// sends no log in C++.
+		var oldEnchant uint32
+		if update.EnchantSlot != nil {
+			var oldEnchants string
+			_ = s.server.CharactersStore.DB.QueryRowContext(ctx,
+				"SELECT COALESCE(enchantments, '') FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1",
+				rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&oldEnchants)
+			oldEnchant = luaItemEnchantmentID(oldEnchants, *update.EnchantSlot)
 		}
 		var sets []string
 		var args []any
@@ -217,7 +299,32 @@ func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting
 			return false
 		}
 		affected, err := res.RowsAffected()
-		return err == nil && affected > 0
+		if err != nil || affected <= 0 {
+			return false
+		}
+		// Values broadcast (Object::SendUpdateToPlayer's VALUES arm,
+		// Object.cpp:219-241, the packet C++ engine mutation sites emit
+		// after a change): the owner session learns the new field values
+		// immediately instead of on its next inventory refresh.
+		ownerGUID := uint64(0)
+		if update.OwnerGUID != nil {
+			ownerGUID = *update.OwnerGUID
+		} else {
+			var ownerRow int64
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+				"SELECT owner_guid FROM item_instance WHERE guid = ? OR guid = ? LIMIT 1",
+				rawGUID, rawGUID|(uint64(0x4000)<<48)).Scan(&ownerRow); err == nil && ownerRow > 0 {
+				ownerGUID = uint64(ownerRow)
+			}
+		}
+		if ownerGUID != 0 {
+			s.server.sendItemValuesUpdateToOwner(ownerGUID, rawGUID, itemInstanceUpdateFields(update))
+			if update.EnchantSlot != nil && update.Enchantments != nil {
+				newEnchant := luaItemEnchantmentID(*update.Enchantments, *update.EnchantSlot)
+				s.server.sendEnchantmentLogToOwner(ownerGUID, entry, oldEnchant, newEnchant)
+			}
+		}
+		return true
 	}
 	live.EnchantmentExists = func(id uint32) bool {
 		if s.server == nil || s.server.Data == nil {

@@ -5141,6 +5141,67 @@ func buildContainerValuesUpdate(bagGUID uint64, containerSlots uint32, contents 
 	return block.Bytes()
 }
 
+// Item field indices behind the values block (UpdateFields.h: ITEM_END =
+// OBJECT_END + 0x003A = 64; the create block in
+// buildItemCreateBlockForLocationWithState writes the same layout).
+const (
+	itemFieldOwnerLow    = 6  // ITEM_FIELD_OWNER, low GUID word
+	itemFieldOwnerHigh   = 7  // ITEM_FIELD_OWNER, high GUID word
+	itemFieldStackCount  = 14 // ITEM_FIELD_STACK_COUNT
+	itemFieldFlags       = 21 // ITEM_FIELD_FLAGS
+	itemFieldEnchantment = 22 // ITEM_FIELD_ENCHANTMENT_1_1, 12 slots x 3
+	itemFieldCount       = 64 // ITEM_END
+)
+
+// buildItemValuesBlock assembles an UPDATETYPE_VALUES block (packed GUID,
+// update mask, changed values) the way
+// Object::BuildValuesUpdateBlockForPlayer does for an item the owner
+// already has at client (Object.cpp:219-241): every given field is masked,
+// even a zero value, so a cleared field is really cleared.
+func buildItemValuesBlock(fullGUID uint64, fields map[int]uint32) []byte {
+	values := make([]uint32, itemFieldCount)
+	mask := protocol.NewUpdateMask(itemFieldCount)
+	for index, value := range fields {
+		if index < 0 || index >= itemFieldCount {
+			continue
+		}
+		values[index] = value
+		if err := mask.Set(index); err != nil {
+			continue
+		}
+	}
+	block := protocol.NewBuffer(64 + len(fields)*4)
+	block.WriteU8(protocol.UpdateValues)
+	block.WritePackedGUID(fullGUID)
+	block.WriteU8(uint8(mask.BlockCount()))
+	mask.AppendTo(block)
+	for index := 0; index < itemFieldCount; index++ {
+		if mask.Has(index) {
+			block.WriteU32(values[index])
+		}
+	}
+	return block.Bytes()
+}
+
+// sendItemValuesUpdate sends one UPDATETYPE_VALUES block for the item to
+// this session, the Go twin of Object::SendUpdateToPlayer's VALUES arm
+// (the CREATE arm is sendItemCreate). An empty field map sends nothing.
+func (s *session) sendItemValuesUpdate(itemGUID uint64, fields map[int]uint32) {
+	if s == nil || len(fields) == 0 {
+		return
+	}
+	fullGUID := itemGUID
+	if fullGUID <= 0xFFFFFFFF {
+		fullGUID = itemGUID | (uint64(0x4000) << 48)
+	}
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(buildItemValuesBlock(fullGUID, fields))
+	packet, err := updates.BuildPacket(0)
+	if err == nil && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	}
+}
+
 func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, slot uint8) error {
 	fullGUID := uint64(itemGUID) | (uint64(0x4000) << 48)
 	block := buildItemCreateBlock(fullGUID, itemEntry, count, s.playerGUID)
