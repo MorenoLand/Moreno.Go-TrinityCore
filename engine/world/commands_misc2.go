@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // misc command ports, chunk 2: misc_commandscript (cs_misc.cpp) rows 92-125
 // in C++ table order (gps through mailbox; the unaura/unbindsight rows were
-// ported in chunk 1, commands_misc.go). Of these 32 arms, 14 are native or
-// partially native and 18 are documented-blocked:
+// ported in chunk 1, commands_misc.go). Of these 32 arms, 19 are native or
+// partially native and 13 are documented-blocked:
 //
 //   - `gps` has no Go bridge: the handler is map-geometry math (cell/grid
 //     coords, VMap outdoors/indoors, MMap navmesh presence, liquid status,
@@ -25,10 +28,12 @@ import (
 //     unbuilt.
 //   - `movegens` has no Go bridge: MovementGenerator introspection
 //     (cs_misc.cpp:2016-2298) has no Go model.
-//   - `mute` / `unmute` have no Go bridge: the account mute model
-//     (WorldSession::m_muteTime, login DB account_muted) is unbuilt.
-//   - `mutehistory` has no Go bridge: LOGIN_SEL_ACCOUNT_MUTE_INFO
-//     (login DB account_muted) is unbuilt.
+//   - `mute` / `unmute` are wired: the session muteTime gate (chat.go),
+//     the login-DB mutetime/mutereason/muteby columns (LOGIN_UPD_MUTE_TIME)
+//     and the account_muted history insert (LOGIN_INS_ACCOUNT_MUTE) all
+//     live, as does the Lua Mute precedent (lua_player.go).
+//   - `mutehistory` is wired: LOGIN_SEL_ACCOUNT_MUTE_INFO over the
+//     account_muted table, via the accountIDByName lookup.
 //   - `possess` has no Go bridge: casting spell 530 (charm) has no
 //     charm/possess model.
 //   - `unpossess` has no Go bridge: Unit::RemoveCharmAuras has no charm
@@ -46,11 +51,12 @@ import (
 //     Weather.cpp); the SmartScript overrideWeather zone override
 //     (Map::SetZoneWeather) has no Go bridge.
 //     (weather.go exposes only regenerate/packet).
-//   - `mailbox` has no Go bridge: WorldSession::SendShowMailBox (the
-//     mailbox open packet) is unmodeled.
-//   - `playall` has no Go bridge: SoundEntries.dbc validation and the
-//     SMSG_PLAY_SOUND global broadcast are unbuilt (buildPlaySound exists in
-//     trainers.go but is never wired to a send path).
+//   - `mailbox` is wired: SendShowMailBox with the player's own GUID,
+//     the exact lua_player.go SMSG_SHOW_MAILBOX packet, no gate (as in C++).
+//   - `playall` is wired: buildPlaySound (trainers.go) broadcast to every
+//     in-world session (the broadcastMessageChatAll filter); the
+//     SoundEntries.dbc existence gate stays unmodeled (same documented gap
+//     as the spell play-sound effect), so unknown ids are sent, not rejected.
 //
 // Console-vs-chat LANG branches are moot (Go commands are always sessioned);
 // GetNameLink/playerLink have no Go bridge, so plain names are used. LANG
@@ -88,6 +94,63 @@ func (s *session) misc2LowerSecurity(ctx context.Context, online *session, guid 
 		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", guid).Scan(&accountID)
 	}
 	return s.security < s.accountSecurityLevel(ctx, accountID)
+}
+
+// misc2SessionForAccount finds an online session holding the given account
+// (the C++ HandleMuteCommand "find only player from same account" leg:
+// FindSession(accountId) when the named character itself is offline).
+func (s *session) misc2SessionForAccount(accountID uint32) *session {
+	if s.server == nil || accountID == 0 {
+		return nil
+	}
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	for sess := range s.server.sessions {
+		if sess != nil && sess.player != nil && sess.accountID == accountID {
+			return sess
+		}
+	}
+	return nil
+}
+
+// misc2AccountForGUID resolves a character GUID to its account id, or 0.
+func (s *session) misc2AccountForGUID(ctx context.Context, guid uint64) uint32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var id uint32
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", guid).Scan(&id)
+	return id
+}
+
+// misc2ParseMuteArgs parses .mute arguments: [.mute <player>] <minutes>
+// [reason...]. A numeric first token means the target comes from the
+// selection (miscResolvePlayerTarget's no-name path); otherwise the first
+// token is the player name and the second is the minutes. Status is 0 on
+// success, 1 for a syntax error, 2 for an unparseable minutes value.
+func misc2ParseMuteArgs(args []string) (nameArgs []string, minutes uint32, reason string, status int) {
+	reason = "No reason."
+	if len(args) == 0 {
+		return nil, 0, reason, 1
+	}
+	if mins, err := strconv.ParseUint(args[0], 10, 32); err == nil {
+		if len(args) > 1 {
+			reason = strings.Join(args[1:], " ")
+		}
+		return nil, uint32(mins), reason, 0
+	}
+	if len(args) < 2 {
+		return nil, 0, reason, 1
+	}
+	nameArgs = args[:1]
+	mins, err := strconv.ParseUint(args[1], 10, 32)
+	if err != nil {
+		return nil, 0, reason, 2
+	}
+	if len(args) > 2 {
+		reason = strings.Join(args[2:], " ")
+	}
+	return nameArgs, uint32(mins), reason, 0
 }
 
 // handleCmdGPS mirrors HandleGPSCommand (cs_misc.cpp:183-302, RBAC 505).
@@ -316,24 +379,121 @@ func (s *session) handleCmdMovegens(ctx context.Context) {
 	s.sendSysMessage("The .movegens command is not available: movement generators have no Go model.")
 }
 
-// handleCmdMute mirrors HandleMuteCommand (cs_misc.cpp:1841-1915, RBAC 515).
-// Documented-blocked: the account mute model (WorldSession::m_muteTime,
-// login DB account_muted) is unbuilt.
+// handleCmdMute mirrors HandleMuteCommand (cs_misc.cpp:1841-1915, RBAC 515):
+// the online target's session muteTime takes effect at once (now +
+// minutes, in seconds, matching the chat.go CanSpeak gate); an offline
+// target stores the negative minutes value, which normalizeLoginMuteTime
+// converts to now + minutes at next login. The login DB gets
+// LOGIN_UPD_MUTE_TIME (mutetime/mutereason/muteby) plus the
+// LOGIN_INS_ACCOUNT_MUTE history row. Documented fidelity gap (not a
+// stub): the CONFIG_SHOW_MUTE_IN_WORLD world broadcast has no Go config
+// field, so it is skipped (same convention as the kick broadcast gap).
 func (s *session) handleCmdMute(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandMute) {
 		return
 	}
-	s.sendSysMessage("The .mute command is not available: the account mute model is unbuilt.")
+	nameArgs, minutes, reason, status := misc2ParseMuteArgs(args)
+	if status == 1 {
+		s.sendSysMessage("Syntax: .mute [<player>] <minutes> [reason]")
+		return
+	}
+	if status == 2 {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, nameArgs)
+	if !ok {
+		return
+	}
+	if target == nil {
+		if accountID := s.misc2AccountForGUID(ctx, guid); accountID != 0 {
+			target = s.misc2SessionForAccount(accountID)
+		}
+	}
+	if s.misc2LowerSecurity(ctx, target, guid) {
+		return
+	}
+	var accountID uint32
+	if target != nil {
+		accountID = target.accountID
+	} else {
+		accountID = s.misc2AccountForGUID(ctx, guid)
+	}
+	muteBy := "Console"
+	if s.player != nil && s.player.Name != "" {
+		muteBy = s.player.Name
+	}
+	now := time.Now().Unix()
+	var dbMuteTime int64
+	if target != nil {
+		dbMuteTime = now + int64(minutes)*60
+		target.muteTime = dbMuteTime
+	} else {
+		dbMuteTime = -int64(minutes) * 60
+	}
+	if db := s.authDB(); db != nil && accountID != 0 {
+		_, _ = db.ExecContext(ctx, "UPDATE account SET mutetime = ?, mutereason = ?, muteby = ? WHERE id = ?", dbMuteTime, reason, muteBy, accountID)
+		_, _ = db.ExecContext(ctx, "INSERT INTO account_muted VALUES (?, unixepoch(), ?, ?, ?)", accountID, minutes, muteBy, reason)
+	}
+	if target != nil {
+		target.sendSysMessage(fmt.Sprintf("Your chat is disabled for %d minutes by %s. Reason: %s.", minutes, muteBy, reason))
+		s.sendSysMessage(fmt.Sprintf("You disabled chat for %s for %d minutes. Reason: %s.", miscPlayerLink(name), minutes, reason))
+	} else {
+		s.sendSysMessage(fmt.Sprintf("Chat for %s will be disabled for %d minutes on next login. Reason: %s.", miscPlayerLink(name), minutes, reason))
+	}
 }
 
 // handleCmdMuteHistory mirrors HandleMuteHistoryCommand (cs_misc.cpp:1965-2015,
-// RBAC 632). Documented-blocked: LOGIN_SEL_ACCOUNT_MUTE_INFO (login DB
-// account_muted) is unbuilt.
+// RBAC 632) plus HandleMuteHistoryHelper: resolve the account name (the
+// C++ Utf8ToUpperOnlyLatin leg rides accountIDByName's UPPER() match),
+// then print LOGIN_SEL_ACCOUNT_MUTE_INFO rows oldest first, dates in the
+// C++ "%Y-%m-%d %I:%M%p" shape. A missing table or empty history both
+// report no history (the table is best-effort in the Go auth DB).
 func (s *session) handleCmdMuteHistory(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandMuteHistory) {
 		return
 	}
-	s.sendSysMessage("The .mutehistory command is not available: the account mute history table is unbuilt.")
+	if len(args) == 0 || args[0] == "" {
+		s.sendSysMessage("Syntax: .mutehistory <account>")
+		return
+	}
+	accountID := s.accountIDByName(ctx, args[0])
+	if accountID == 0 {
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
+		return
+	}
+	db := s.authDB()
+	if db == nil {
+		s.sendSysMessage(fmt.Sprintf("No mute history for account %s.", args[0]))
+		return
+	}
+	rows, err := db.QueryContext(ctx, "SELECT mutedate, mutetime, COALESCE(mutereason, ''), COALESCE(mutedby, '') FROM account_muted WHERE guid = ? ORDER BY mutedate ASC", accountID)
+	if err != nil {
+		s.sendSysMessage(fmt.Sprintf("No mute history for account %s.", args[0]))
+		return
+	}
+	defer rows.Close()
+	type muteRow struct {
+		date    int64
+		minutes uint32
+		reason  string
+		mutedBy string
+	}
+	var history []muteRow
+	for rows.Next() {
+		var r muteRow
+		if err := rows.Scan(&r.date, &r.minutes, &r.reason, &r.mutedBy); err == nil {
+			history = append(history, r)
+		}
+	}
+	if len(history) == 0 {
+		s.sendSysMessage(fmt.Sprintf("No mute history for account %s.", args[0]))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Mute history for account %s:", args[0]))
+	for _, r := range history {
+		s.sendSysMessage(fmt.Sprintf("%s - %d minutes - %s - %s", time.Unix(r.date, 0).Format("2006-01-02 03:04PM"), r.minutes, r.reason, r.mutedBy))
+	}
 }
 
 // handleCmdNearGrave mirrors HandleNearGraveCommand (cs_misc.cpp:1019-1078,
@@ -398,13 +558,39 @@ func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
 }
 
 // handleCmdPlayAll mirrors HandlePlayAllCommand (cs_misc.cpp:2509-2523, RBAC
-// 518). Documented-blocked: SoundEntries.dbc validation and the SMSG_PLAY_SOUND
-// global broadcast are unbuilt.
+// 518): buildPlaySound (trainers.go) broadcast to every in-world session
+// (the broadcastMessageChatAll filter, matching World::SendGlobalMessage's
+// player-in-world filter). Documented fidelity gap (not a stub): the
+// sSoundEntriesStore existence gate has no Go bridge, so unknown sound ids
+// are sent rather than rejected with LANG_SOUND_NOT_EXIST.
 func (s *session) handleCmdPlayAll(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandPlayAll) {
 		return
 	}
-	s.sendSysMessage("The .playall command is not available: sound broadcast has no Go bridge yet.")
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .playall <soundId>")
+		return
+	}
+	soundID, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	payload := buildPlaySound(uint32(soundID))
+	if s.server != nil {
+		s.server.sessionsMu.RLock()
+		targets := make([]*session, 0, len(s.server.sessions))
+		for sess := range s.server.sessions {
+			if sess != nil && sess.worldReady.Load() && sess.player != nil {
+				targets = append(targets, sess)
+			}
+		}
+		s.server.sessionsMu.RUnlock()
+		for _, target := range targets {
+			_ = target.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), payload, true)
+		}
+	}
+	s.sendSysMessage(fmt.Sprintf("Played sound %d to all players.", soundID))
 }
 
 // handleCmdPossess mirrors HandlePossessCommand (cs_misc.cpp:2524-2533, RBAC
@@ -694,13 +880,46 @@ func (s *session) handleCmdUnFreeze(ctx context.Context, args []string) {
 }
 
 // handleCmdUnmute mirrors HandleUnmuteCommand (cs_misc.cpp:1916-1964, RBAC
-// 532). Documented-blocked: the account mute model (WorldSession::m_muteTime,
-// login DB account_muted) is unbuilt.
+// 532): an online target that CanSpeak already is refused with the
+// already-enabled message; otherwise the session muteTime clears and the
+// login DB row resets (mutetime 0, reason/by blank). History rows are left
+// in place, as in C++ (unmute never deletes account_muted rows).
 func (s *session) handleCmdUnmute(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandUnMute) {
 		return
 	}
-	s.sendSysMessage("The .unmute command is not available: the account mute model is unbuilt.")
+	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
+	if !ok {
+		return
+	}
+	if target == nil {
+		if accountID := s.misc2AccountForGUID(ctx, guid); accountID != 0 {
+			target = s.misc2SessionForAccount(accountID)
+		}
+	}
+	if s.misc2LowerSecurity(ctx, target, guid) {
+		return
+	}
+	var accountID uint32
+	if target != nil {
+		accountID = target.accountID
+	} else {
+		accountID = s.misc2AccountForGUID(ctx, guid)
+	}
+	if target != nil {
+		if !(target.muteTime > time.Now().Unix()) {
+			s.sendSysMessage("Chat is already enabled.")
+			return
+		}
+		target.muteTime = 0
+	}
+	if db := s.authDB(); db != nil && accountID != 0 {
+		_, _ = db.ExecContext(ctx, "UPDATE account SET mutetime = ?, mutereason = ?, muteby = ? WHERE id = ?", 0, "", "", accountID)
+	}
+	if target != nil {
+		target.sendSysMessage("Your chat is enabled.")
+	}
+	s.sendSysMessage(fmt.Sprintf("You enabled chat for %s.", miscPlayerLink(name)))
 }
 
 // handleCmdUnPossess mirrors HandleUnPossessCommand (cs_misc.cpp:2534-2545,
@@ -798,11 +1017,18 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 }
 
 // handleCmdMailBox mirrors HandleMailBoxCommand (cs_misc.cpp:2566-2574, RBAC
-// 777). Documented-blocked: WorldSession::SendShowMailBox (the mailbox open
-// packet) is unmodeled.
+// 777): SendShowMailBox with the player's own GUID — the exact
+// lua_player.go SMSG_SHOW_MAILBOX packet, with no interactability gate
+// (unlike the mailbox opcode path, which checks canOpenMailBox).
 func (s *session) handleCmdMailBox(ctx context.Context) {
+	if s.player == nil {
+		s.sendSysMessage("You must be in game to use that command.")
+		return
+	}
 	if s.miscDeny(ctx, permissionCommandMailBox) {
 		return
 	}
-	s.sendSysMessage("The .mailbox command is not available: the mailbox open packet is unmodeled.")
+	mailbox := protocol.NewBuffer(8)
+	mailbox.WriteU64(s.playerGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SHOW_MAILBOX), mailbox.Bytes(), true)
 }
