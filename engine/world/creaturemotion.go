@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -174,8 +175,16 @@ type creatureMotion struct {
 	MinDamage   float32
 	MaxDamage   float32
 
-	Health         uint32
-	MaxHealth      uint32
+	Health    uint32
+	MaxHealth uint32
+	// DeathState is Unit::m_deathState (Unit.h:200-207): 0 ALIVE,
+	// 1 JUST_DIED, 2 CORPSE, 3 DEAD, 4 JUST_RESPAWNED. Zero value is
+	// ALIVE, the C++ spawn default; Lua CreatureMethods::SetDeathState
+	// writes it through applyCreatureDeathState, which also runs the
+	// JUST_DIED -> CORPSE and JUST_RESPAWNED -> ALIVE promotions
+	// Creature::setDeathState performs (Creature.cpp:2057-2153), so a
+	// stored JUST_DIED is never observable, matching C++.
+	DeathState     uint8
 	Mana           uint32
 	MaxMana        uint32
 	PowerType      uint32
@@ -828,6 +837,188 @@ func creatureCanSwimMotion(motion *creatureMotion) bool {
 		return true
 	}
 	return motion.MoveSwim
+}
+
+// DeathState values for creatureMotion.DeathState, mirroring the
+// DeathState enum (Unit.h:200-207).
+const (
+	creatureDeathAlive uint8 = iota
+	creatureDeathJustDied
+	creatureDeathCorpse
+	creatureDeathDead
+	creatureDeathJustRespawned
+)
+
+// scriptNameIDs is the Go twin of ObjectMgr::_scriptNamesStore
+// (ObjectMgr.cpp:9695-9776): C++ loads the DISTINCT ScriptName union
+// over 17 tables at startup, sorts it ("" first, index 0), and
+// GetScriptId returns the sorted index, 0 for unknown names. Go loads
+// templates lazily and cannot reproduce those indices, so this registry
+// assigns stable first-seen IDs instead, starting at 1. The contract
+// scripts can rely on is preserved: 0 iff unscripted, and equal IDs
+// iff the same script name. A name's Go ID never matches its C++ index
+// in general, and unlike C++ a previously unseen name mints an ID
+// instead of reading 0 — DB template names are all in the C++ store,
+// so the two agree on every name a creature can actually carry.
+var scriptNameIDsMu sync.Mutex
+var scriptNameIDs = map[string]uint32{}
+var nextScriptNameID uint32 = 1
+
+func scriptIDForName(name string) uint32 {
+	if name == "" {
+		return 0
+	}
+	scriptNameIDsMu.Lock()
+	defer scriptNameIDsMu.Unlock()
+	if id, ok := scriptNameIDs[name]; ok {
+		return id
+	}
+	id := nextScriptNameID
+	nextScriptNameID++
+	scriptNameIDs[name] = id
+	return id
+}
+
+// applyCreatureDeathState is Creature::setDeathState
+// (Creature.cpp:2057-2153 over Unit::setDeathState, Unit.cpp:8901-8960)
+// for a live motion. The Unit non-alive arm runs for JUST_DIED, CORPSE
+// and DEAD: CombatStop (victim drop, threat clear, attackers removed,
+// visual target cleared) plus InterruptNonMeleeSpells and ExitVehicle.
+// JUST_DIED adds the Unit JUST_DIED arm (health 0, power 0, emote 0)
+// and the Creature JUST_DIED arm (NPC flags none, mount 0, search
+// assistance reset, hover/gravity off, motion stop), then promotes to
+// CORPSE and arms the kill-funnel respawn schedulers. JUST_RESPAWNED
+// adds the Unit skinnable clear and the Creature respawn arm (full
+// health, loot-recipient clear, damage-req reset, controlled-state
+// clear, NPC-flags overlay latch cleared so the spawn value re-affirms,
+// motion stop), then promotes to ALIVE. ALIVE sets the field only.
+// NOT carried: RemoveAllControlled / UnsummonAllTotems /
+// RemoveAllAurasOnDeath (no creature-side primitives), zoneScript
+// OnUnitDeath (no Go twin), the formation-leader reset, MoveFall,
+// ChooseCreatureFlags unit/dynamic-flags re-init (no template bank on
+// the motion; only the NPC-flags latch exists), LoadCreaturesAddon,
+// and any JustDied hook — C++ setDeathState fires none either, so a
+// scripted JUST_DIED deliberately bypasses the kill funnel's JustDied
+// event. Go alive/dead reads stay health-based (session IsDead reads
+// Health == 0), so a scripted CORPSE/DEAD on a healthy creature stores
+// the state without flipping IsDead, the C++ IsAlive() divergence
+// noted here rather than papered over.
+func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMotion, state uint8) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+	powerType, maxHealth, level := motion.PowerType, motion.MaxHealth, motion.Level
+	victim := motion.TargetGUID
+	var interrupted []interruptedCreatureCast
+	values := map[int]uint32{}
+	stopMotion := false
+	armRespawn := false
+	clearVisualTarget := false
+	combatStop := false
+	switch state {
+	case creatureDeathAlive:
+		motion.DeathState = creatureDeathAlive
+	case creatureDeathJustDied, creatureDeathCorpse, creatureDeathDead:
+		combatStop = true
+		clearVisualTarget = true
+		interrupted = s.interruptCreatureNonMeleeCasts(motion)
+		if len(interrupted) == 0 {
+			motion.CastingUntil = time.Time{}
+			s.cancelPendingCreatureCast(motion)
+		}
+		motion.TargetGUID = 0
+		motion.AlreadyCallAssistance = false
+		motion.AssistAt = time.Time{}
+		motion.AssistVictim = 0
+		motion.Assistants = nil
+		motion.InCombat = false
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		motion.VehicleGUID = 0
+		motion.VehicleSeat = 0
+		motion.Moving = false
+		if state == creatureDeathJustDied {
+			motion.Health = 0
+			if powerType < uint32(len(motion.Powers)) {
+				motion.Powers[powerType] = 0
+				values[unitFieldPower1+int(powerType)] = 0
+			}
+			motion.EmoteState = 0
+			motion.EmoteStateKnown = true
+			motion.NPCFlags = 0
+			motion.NPCFlagsKnown = true
+			motion.Mount = 0
+			motion.MountKnown = true
+			motion.AlreadySearchedAssistance = false
+			motion.Hovering = false
+			motion.GravityDisabled = false
+			motion.Evading = false
+			values[unitFieldHealth] = 0
+			stopMotion = true
+			armRespawn = true
+			motion.DeathState = creatureDeathCorpse
+		} else {
+			motion.DeathState = state
+		}
+	case creatureDeathJustRespawned:
+		motion.UnitFlags &^= unitFlagSkinnable
+		motion.Health = maxHealth
+		motion.TapPlayerGUID = 0
+		motion.TapGroupID = 0
+		motion.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
+		motion.PlayerDamageReq = motion.Health / 2
+		motion.ScriptRooted = false
+		motion.Fleeing = false
+		motion.FleeingUntil = time.Time{}
+		motion.NPCFlagsKnown = false
+		motion.Moving = false
+		motion.Evading = false
+		values[unitFieldHealth] = motion.Health
+		values[unitFieldDynamicFlags] = motion.DynamicFlags
+		stopMotion = true
+		motion.DeathState = creatureDeathAlive
+	}
+	s.motionMu.Unlock()
+	for _, arm := range interrupted {
+		s.sendCreatureInterruptPackets(motion, arm)
+	}
+	if combatStop {
+		if victim != 0 {
+			stopPkt := buildAttackStop(guid, victim, false)
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, x, y, z, phase)
+		}
+		if clearVisualTarget {
+			s.clearCreatureVisualTarget(motion)
+		}
+		s.removeCreatureAttackers(mapID, instanceID, guid)
+		s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+		s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
+	}
+	if len(values) != 0 {
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, values)
+	}
+	if stopMotion {
+		if instanceID != 0 {
+			s.stopCreatureMotionInInstance(mapID, instanceID, guid, x, y, z)
+		} else {
+			s.stopCreatureMotion(mapID, guid, x, y, z)
+		}
+	}
+	if armRespawn {
+		respawnHealth := maxHealth
+		if respawnHealth == 0 {
+			respawnHealth = 1
+		}
+		if instanceID == 0 {
+			s.scheduleCreatureRespawn(ctx, uint32(guid&0x00FFFFFF), respawnHealth, time.Now())
+		} else {
+			s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Health: 0, MaxHealth: maxHealth, Level: uint8(level)}, respawnHealth, time.Now())
+		}
+	}
 }
 
 func creatureWalkVelocity(multiplier float64) float32 {

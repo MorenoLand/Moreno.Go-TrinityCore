@@ -1335,6 +1335,36 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.creatureFleeToGetAssistance(ctx, motion)
 		return nil, nil
 	}
+	// GetScriptId is Creature::GetScriptId (Creature.cpp:2872-2879):
+	// the spawn row's scriptId when nonzero, else the template ScriptID.
+	// Both resolve through the script-name registry (scriptIDForName):
+	// Go motions carry the template ScriptName only, so the spawn
+	// override arm collapses into the template arm — a spawn-level
+	// ScriptName row has no Go load. See the registry comment for the
+	// numbering delta vs C++'s sorted-store indices.
+	methods["GetScriptId"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		id := scriptIDForName(motion.ScriptName)
+		s.motionMu.Unlock()
+		return []any{id}, nil
+	}
+	// SetDeathState is Creature::setDeathState (Creature.cpp:2057-2153
+	// over Unit::setDeathState, Unit.cpp:8901-8960) via
+	// applyCreatureDeathState: the state range follows the DeathState
+	// enum (Unit.h:200-207), and the JUST_DIED -> CORPSE and
+	// JUST_RESPAWNED -> ALIVE promotions run inside the call, so
+	// IsDying still reads false afterwards, exactly as in C++.
+	methods["SetDeathState"] = func(ctx context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if st > 4 {
+			return nil, fmt.Errorf("SetDeathState requires a DeathState 0-4, got %d", st)
+		}
+		s.applyCreatureDeathState(ctx, motion, uint8(st))
+		return nil, nil
+	}
 	// ResetPlayerDamageReq is Creature::ResetPlayerDamageReq
 	// (Creature.h:324): m_PlayerDamageReq = GetHealth() / 2. Go models
 	// the field as motion.PlayerDamageReq, consumed by the kill-path

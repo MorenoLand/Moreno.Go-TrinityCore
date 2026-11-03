@@ -532,6 +532,34 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, nil
 	}
+	// GetScriptId is Creature::GetScriptId (Creature.cpp:2872-2879),
+	// the session-creature twin of the handler binding. The session
+	// builder only returns live motions, so the template ScriptName
+	// always resolves; see the registry comment for the numbering
+	// delta vs C++'s sorted-store indices.
+	methods["GetScriptId"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return scriptIDForName(motion.ScriptName)
+		}
+		return uint32(0)
+	})
+	// SetDeathState is Creature::setDeathState (Creature.cpp:2057-2153
+	// over Unit::setDeathState, Unit.cpp:8901-8960) via
+	// applyCreatureDeathState, the session-creature twin of the handler
+	// binding; a motion that no longer resolves is a no-op.
+	methods["SetDeathState"] = func(ctx context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if st > 4 {
+			return nil, fmt.Errorf("SetDeathState requires a DeathState 0-4, got %d", st)
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.applyCreatureDeathState(ctx, motion, uint8(st))
+		}
+		return nil, nil
+	}
 	// IsInWater/IsUnderWater are Unit::IsInWater/IsUnderWater
 	// (Unit.cpp:3276-3284) via the grid-leg liquid status, over the
 	// builder's live-motion snapshot coords like its other reads.
