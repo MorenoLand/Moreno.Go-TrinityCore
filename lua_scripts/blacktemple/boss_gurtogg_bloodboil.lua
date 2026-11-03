@@ -465,6 +465,8 @@ local function gurtoggEnterCombat(event, creature, target)
     cancelTimers(guid)
     state[guid] = { phase = PHASE_1 }
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(guid, "berserk", 600000, function()
         onBerserk(creature, guid)
     end)

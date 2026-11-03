@@ -332,6 +332,7 @@ local function supremusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     state[guid] = { phase = PHASE_INITIAL }
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base me-form DoZone already fires on engage via the ported ChangePhase tail (mandokir convention)
     changePhase(creature, guid)
     schedule(guid, "flame", 20000, function()
         onFlame(creature, guid)

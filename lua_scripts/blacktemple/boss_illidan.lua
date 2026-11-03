@@ -892,6 +892,8 @@ local function illidanEnterCombat(event, creature)
     local guid = creature:GetGUID()
     illidanState[guid] = { phase = PHASE_1, dead = false,
                            isDemon = false, pillarIndex = 0 }
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     -- C++ JustEngagedWith (:495-496): musicController->PlayDirectMusic
     -- (SUMMIT_WALK_3 11725) — ported as creature:PlayMusic (same
     -- opcode; no GO fetch needed).

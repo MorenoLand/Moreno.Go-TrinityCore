@@ -210,6 +210,10 @@ end
 -- pull (ragnaros-intro convention). The STAND stand-state arm has
 -- no bridge.
 local function reliquaryEnterCombat(event, creature, target)
+    -- boss_reliquary_of_souls has NO JustEngagedWith override: inherited
+    -- BossAI base runs at engage (razorgore precedent).
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:SetMeleeAttack(false) -- boss_reliquary_of_souls.cpp:140: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     cancelTimers(guid)

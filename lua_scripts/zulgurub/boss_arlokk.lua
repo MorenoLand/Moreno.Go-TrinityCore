@@ -373,6 +373,8 @@ end
 local function arlokkEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     arlokkResetState(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
     schedule(timers, guid, "swp", math.random(7000, 9000), function()
         onShadowWordPain(creature, guid)

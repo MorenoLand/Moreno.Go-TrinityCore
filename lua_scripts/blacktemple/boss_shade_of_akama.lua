@@ -178,6 +178,16 @@ local function shadeReset(event, creature)
     creature:SetWalk(true)
 end
 
+-- boss_shade_of_akama has NO JustEngagedWith override: inherited
+-- BossAI base runs at engage (renataki precedent -- fresh ev1 handler
+-- carrying only the base arms). Companion AIs stay out: ScriptedAI
+-- with their own engages, no base call (and unregistered in Lua).
+local function shadeEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+end
+
+RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 1, shadeEnterCombat)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 4, shadeDied)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 14, shadeSpellHit)
 RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 23, shadeReset)
