@@ -767,6 +767,38 @@ func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, dest
 	return packet.Bytes()
 }
 
+// buildMonsterMoveParabolic is the MoveJump wire twin of buildMonsterMove
+// (MovementPacketBuilder.cpp WriteCommonMonsterMovePart + WriteMonsterMove):
+// MoveJump never sets a facing arm (hasOrientation=false), the flags field
+// carries Parabolic (0x00000800, MoveSplineFlag.h:37 — it is NOT inside
+// Mask_No_Monster_Move, so it survives onto the wire), and the parabolic
+// leg writes vertical_acceleration + effect_start_time (0, SetParabolic
+// (amplitude, 0)) between Duration and the point count. Everything else
+// matches the linear layout exactly.
+func buildMonsterMoveParabolic(rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, verticalAccel float32, transportGUID uint64) []byte {
+	packet := protocol.NewBuffer(64)
+	packet.WritePackedGUID(rawGUID)
+	if transportGUID != 0 {
+		packet.WritePackedGUID(transportGUID)
+		packet.WriteI8(-1)
+	}
+	packet.WriteU8(0) // MOVEMENTFLAG2_UNK7
+	packet.WriteF32(startX)
+	packet.WriteF32(startY)
+	packet.WriteF32(startZ)
+	packet.WriteU32(uint32(time.Now().UnixMilli())) // SplineID
+	packet.WriteU8(0)                               // MonsterMoveNormal
+	packet.WriteU32(0x00000800)                     // SplineFlags (Parabolic)
+	packet.WriteU32(duration)                       // Duration in ms
+	packet.WriteF32(verticalAccel)                  // vertical_acceleration
+	packet.WriteU32(0)                              // effect_start_time
+	packet.WriteU32(1)                              // Points count
+	packet.WriteF32(destX)
+	packet.WriteF32(destY)
+	packet.WriteF32(destZ)
+	return packet.Bytes()
+}
+
 func creatureWorldGUID(guid, entry uint32) uint64 {
 	return uint64(guid) | uint64(entry)<<24 | uint64(0xF130)<<48
 }
@@ -889,6 +921,56 @@ func (s *Server) broadcastMonsterMoveInInstance(mapID, instanceID uint32, rawGUI
 	}
 	// Creature-target re-stream (see reStreamFarsightObservers): the spline
 	// destination is where the viewpoint now sits.
+	s.reStreamFarsightObservers(mapID, instanceID, true, rawGUID, destX, destY, destZ, false)
+}
+
+// broadcastMonsterMoveJumpInInstance is the MoveJump fan-out twin of
+// broadcastMonsterMoveInInstance with the parabolic packet: a run-mode
+// packet plus the parabolic move packet to the same in-instance,
+// in-range, phase-visible set. The jump carries no walk-mode leg.
+func (s *Server) broadcastMonsterMoveJumpInInstance(mapID, instanceID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, verticalAccel float32, phase uint32, transportGUID uint64) {
+	packet := buildMonsterMoveParabolic(rawGUID, startX, startY, startZ, destX, destY, destZ, duration, verticalAccel, transportGUID)
+	moveOpcode := protocol.OpcodeSMSG_MONSTER_MOVE
+	if transportGUID != 0 {
+		moveOpcode = protocol.OpcodeSMSG_MONSTER_MOVE_TRANSPORT
+	}
+	modePacket := protocol.NewBuffer(16)
+	modePacket.WritePackedGUID(rawGUID)
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 150.0
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if !sess.worldReady.Load() || sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+			continue
+		}
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	if phase == 0 {
+		phase = 1
+	}
+	for _, sess := range targets {
+		if sess.player == nil {
+			continue
+		}
+		cx, cy := sess.player.X, sess.player.Y
+		if sess.player.FarsightGUID != 0 {
+			if vx, vy, _, ok := s.seerDeliveryPosition(mapID, instanceID, sess.player.GUID, sess.player.FarsightGUID); ok {
+				cx, cy = vx, vy
+			}
+		}
+		if math.Hypot(float64(startX-cx), float64(startY-cy)) > distance {
+			continue
+		}
+		if phase&sess.currentPlayerPhaseMask() == 0 {
+			continue
+		}
+		_ = sess.write(uint16(protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE), modePacket.Bytes(), true)
+		_ = sess.write(uint16(moveOpcode), packet, true)
+	}
 	s.reStreamFarsightObservers(mapID, instanceID, true, rawGUID, destX, destY, destZ, false)
 }
 

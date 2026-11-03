@@ -171,10 +171,30 @@ type creatureMotion struct {
 	Fleeing bool
 	// ScriptMoveType is the MovementGeneratorType (MovementDefines.h)
 	// stamped by a script Move* launch: POINT 8, RANDOM 1, HOME 6,
-	// CONFUSED 4. GetMovementType reads it only while the spline is in
+	// CONFUSED 4, FOLLOW 14, EFFECT 16. GetMovementType reads it only while the spline is in
 	// flight (Moving and now before MoveEnds), so no clear site is
 	// needed — a stamp past MoveEnds is never read.
 	ScriptMoveType uint32
+	// ScriptChaseTargetGUID/Dist/Angle are the MotionMaster::MoveChase
+	// (MotionMaster.cpp:594-602) ACTIVE-slot ChaseMovementGenerator:
+	// ChaseRange(dist) stop distance and ChaseAngle(angle, pi/4
+	// tolerance). The slot is state, not a launch: ChaseMovementGenerator
+	// pauses while HasLostTarget (owner victim != target), so the tick's
+	// combat pursuit only honors it when the chase target IS the victim;
+	// a chase to any other unit (or out of combat) moves nothing, but
+	// GetMovementType still reports CHASE — the generator type survives
+	// the pause in C++. MoveFollow clears it (same ACTIVE slot).
+	ScriptChaseTargetGUID uint64
+	ScriptChaseDist       float32
+	ScriptChaseAngle      float32
+	// ScriptFollowTargetGUID/Dist/Angle are the MotionMaster::MoveFollow
+	// (MotionMaster.cpp:584-592) ACTIVE-slot FollowMovementGenerator:
+	// the step tick repaths to the target's near point (range + both
+	// combat reaches, ChaseAngle pi/4 tolerance) while the owner sits
+	// outside range + FOLLOW_RANGE_TOLERANCE (1.0). MoveChase clears it.
+	ScriptFollowTargetGUID uint64
+	ScriptFollowDist       float32
+	ScriptFollowAngle      float32
 	// Confused is the ConfusedMovementGenerator leg
 	// (MotionMaster::MoveConfused, Unit::SetConfused): while set, the
 	// step tick launches short walk hops until SetConfused(false)
@@ -3745,6 +3765,7 @@ const (
 	movementGeneratorDistract     = 10
 	movementGeneratorTimedFleeing = 13
 	movementGeneratorFollow       = 14
+	movementGeneratorEffect       = 16
 	movementGeneratorFormation    = 18
 )
 
@@ -3901,12 +3922,217 @@ func (s *Server) setCreatureConfused(motion *creatureMotion, apply bool) {
 	}
 }
 
+// clearScriptChaseFollow clears the MoveChase/MoveFollow ACTIVE slots
+// (MotionMaster::Clear, the MoveTargetedHome/evade twin): no lock is
+// held on any call path (Lua handlers, evade, death gate), so the
+// helper takes motionMu itself. A script spline in flight is untouched
+// — Clear removes generators, not the spline in motion.
+func (s *Server) clearScriptChaseFollow(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	motion.ScriptChaseTargetGUID = 0
+	motion.ScriptChaseDist = 0
+	motion.ScriptChaseAngle = 0
+	motion.ScriptFollowTargetGUID = 0
+	motion.ScriptFollowDist = 0
+	motion.ScriptFollowAngle = 0
+	s.motionMu.Unlock()
+}
+
+// normalizeScriptAngle folds an angle to [0, 2pi),
+// Position::NormalizeOrientation.
+func normalizeScriptAngle(angle float32) float32 {
+	for angle < 0 {
+		angle += 2 * math.Pi
+	}
+	for angle >= 2*math.Pi {
+		angle -= 2 * math.Pi
+	}
+	return angle
+}
+
+// scriptFollowAngle is FollowMovementGenerator::DoUpdate's angle pick
+// (FollowMovementGenerator.cpp:125-140): the current relative angle
+// when it sits inside the ChaseAngle tolerance band (pi/4 around the
+// wanted angle), else the nearer bound — diffUpper < diffLower takes
+// the upper bound, exactly as C++ compares the normalized diffs.
+func scriptFollowAngle(curRel, wantRel float32) float32 {
+	const tolerance = math.Pi / 4
+	upper := normalizeScriptAngle(wantRel + tolerance)
+	lower := normalizeScriptAngle(wantRel - tolerance)
+	diff := normalizeScriptAngle(curRel - wantRel)
+	if diff <= tolerance || diff >= 2*math.Pi-tolerance {
+		return curRel
+	}
+	diffUpper := normalizeScriptAngle(curRel - upper)
+	diffLower := normalizeScriptAngle(lower - curRel)
+	if diffUpper < diffLower {
+		return upper
+	}
+	return lower
+}
+
+// jumpParabolicParams is MotionMaster::MoveJump's vertical profile
+// (MotionMaster.cpp:785-824 + MoveSpline.cpp:181-184): the Eluna 5th
+// arg arrives as speedZ (see launchCreatureJumpSpline), the apex is
+// speedZ^2 / (2 * gravity) (gravity 19.29110527, MovementUtil.cpp:23),
+// and the wire vertical acceleration is amplitude * 8 / duration^2
+// with effect_start_time 0 (SetParabolic(amplitude, 0)). A non-positive
+// speedZ degenerates to a flat (linear) arc.
+func jumpParabolicParams(speedZ float32, durationMs uint32) (amplitude, verticalAccel float32) {
+	if speedZ <= 0 || durationMs == 0 {
+		return 0, 0
+	}
+	amplitude = speedZ * speedZ / (2 * 19.29110527)
+	durationSec := float32(durationMs) / 1000
+	verticalAccel = amplitude * 8 / (durationSec * durationSec)
+	return amplitude, verticalAccel
+}
+
+// launchCreatureJumpSpline is MotionMaster::MoveJump
+// (MotionMaster.cpp:785-824) via a GenericMovementGenerator
+// (EFFECT_MOTION_TYPE 16): a parabolic spline to xyz at horizontal
+// speed speedXY (the Eluna 4th arg, zSpeed, lands in MotionMaster's
+// speedXY slot — the Eluna doc names are swapped against the C++
+// params, and the code, not the comment, is the contract), vertical
+// profile from speedZ (the Eluna 5th arg, maxHeight). speedXY below
+// 0.01 launches nothing (MotionMaster.cpp:790). The jump takes the
+// ACTIVE slot, so it clears any chase/follow slot; its id is accepted
+// but unrecorded — the arrival arm is MovementInform EFFECT, event 28,
+// which Go never registered. No facing arm: Eluna never passes an
+// orientation (hasOrientation=false). The server snaps to the
+// destination at launch on the atomic-spline precedent; clients arc
+// through the parabolic wire flags.
+func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, destZ, speedXY, speedZ float32, id uint32) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	if motion.Health == 0 || speedXY < 0.01 {
+		s.motionMu.Unlock()
+		return false
+	}
+	dist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)
+	duration := splineDurationMs(float64(dist), speedXY)
+	_, verticalAccel := jumpParabolicParams(speedZ, duration)
+	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
+	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+	motion.X, motion.Y, motion.Z = destX, destY, destZ
+	motion.Moving = true
+	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
+	motion.ScriptMoveType = movementGeneratorEffect
+	motion.ScriptChaseTargetGUID = 0
+	motion.ScriptChaseDist = 0
+	motion.ScriptChaseAngle = 0
+	motion.ScriptFollowTargetGUID = 0
+	motion.ScriptFollowDist = 0
+	motion.ScriptFollowAngle = 0
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveJumpInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, verticalAccel, phase, transportGUID)
+	_ = id
+	return true
+}
+
+// scriptFollowTarget resolves a MoveFollow target to a live position:
+// the sweep's player list first (with session orientation/reach),
+// then any live session, then a creature motion — the
+// aiThreatUnitPos resolution order, plus orientation for the near-point
+// angle and the facing arm. ok=false means the target left the world
+// (FollowMovementGenerator::Update returns false and the generator
+// finalizes), so the caller clears the slot.
+func (s *Server) scriptFollowTarget(motion *creatureMotion, players []playerPos, guid uint64) (x, y, z, orientation, reach float32, ok bool) {
+	for i := range players {
+		if players[i].GUID == guid && players[i].Sess != nil && players[i].Sess.player != nil {
+			reach = players[i].Sess.player.CombatReach
+			if reach <= 0 {
+				reach = 1.5
+			}
+			return players[i].X, players[i].Y, players[i].Z, players[i].Sess.player.Orientation, reach, true
+		}
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		reach = sess.player.CombatReach
+		if reach <= 0 {
+			reach = 1.5
+		}
+		return sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, reach, true
+	}
+	if cm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); cm != nil {
+		reach = cm.CombatReach
+		if reach <= 0 {
+			reach = 1.5
+		}
+		return cm.X, cm.Y, cm.Z, cm.Orientation, reach, true
+	}
+	return 0, 0, 0, 0, 0, false
+}
+
+// stepScriptFollow is the FollowMovementGenerator::DoUpdate leg
+// (FollowMovementGenerator.cpp:47-177) for the wander section: while
+// the slot is armed the creature stands inside range + both reaches,
+// repaths past range + FOLLOW_RANGE_TOLERANCE (1.0) to the near point
+// (range + both reaches along the picked angle, facing the target's
+// orientation), and clears the slot when the target leaves the world.
+// It returns true when the leg owns the tick (launched, standing in
+// range/tolerance, or failed launch) and false only when the slot was
+// cleared, letting the tick fall through to wander/formation. DELTAS:
+// no PathGenerator (straight-line like every script spline, LOS and
+// collision re-checks unmodeled); walk follows the target's walk state
+// in C++ (SetWalk(target.IsWalking())) but Go has no target-walk
+// signal, so follow runs at run speed; the in-range MovementInform
+// (FOLLOW_MOTION_TYPE) has no hook (event 28 unregistered).
+func (s *Server) stepScriptFollow(motion *creatureMotion, players []playerPos, now time.Time) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	targetGUID := motion.ScriptFollowTargetGUID
+	tx, ty, tz, tOrient, tReach, ok := s.scriptFollowTarget(motion, players, targetGUID)
+	if !ok {
+		motion.ScriptFollowTargetGUID = 0
+		motion.ScriptFollowDist = 0
+		motion.ScriptFollowAngle = 0
+		return false
+	}
+	ownerReach := motion.CombatReach
+	if ownerReach <= 0 {
+		ownerReach = 1.5
+	}
+	reachSum := ownerReach + tReach
+	dist := float32(distance3D(motion.X, motion.Y, motion.Z, tx, ty, tz))
+	if dist <= reachSum+motion.ScriptFollowDist+1.0 {
+		return true
+	}
+	curRel := normalizeScriptAngle(float32(math.Atan2(float64(motion.Y-ty), float64(motion.X-tx))) - tOrient)
+	tAngle := scriptFollowAngle(curRel, motion.ScriptFollowAngle)
+	absAngle := normalizeScriptAngle(tOrient + tAngle)
+	radius := reachSum + motion.ScriptFollowDist
+	destX := tx + radius*float32(math.Cos(float64(absAngle)))
+	destY := ty + radius*float32(math.Sin(float64(absAngle)))
+	speed := creatureSplineVelocity(motion, false)
+	if speed < 0.001 {
+		return true
+	}
+	moveDist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, tz)
+	duration := splineDurationMs(float64(moveDist), speed)
+	s.broadcastMonsterMoveInInstance(motion.Map, motion.InstanceID, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, tz, duration, false, tOrient, true, motion.PhaseMask, motion.TransportGUID)
+	motion.X, motion.Y, motion.Z = destX, destY, tz
+	motion.Moving = true
+	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	motion.ScriptMoveType = movementGeneratorFollow
+	motion.Orientation = tOrient
+	return true
+}
+
 // creatureMovementType is Unit::GetMotionMaster()->
 // GetCurrentMovementGeneratorType (UnitMethods.h:1438-1444) for
 // creatures. Go has no generator stack, so the type is derived: a
 // script spline in flight reports its stamped type, then the live
 // engine legs in C++ precedence order (evade home, fleeing, confused,
-// combat pursuit, formation, distract hold, waypoint patrol, random
+// script chase/follow slots, combat pursuit, formation, distract hold, waypoint patrol, random
 // wander), else IDLE. The derivation reads the same flags the tick
 // itself consults, so it cannot disagree with what the creature is
 // visibly doing; the one gap is a script spline overwritten mid-flight
@@ -3930,8 +4156,12 @@ func (s *Server) creatureMovementType(motion *creatureMotion) uint32 {
 		return movementGeneratorTimedFleeing
 	case motion.Confused:
 		return movementGeneratorConfused
+	case motion.ScriptChaseTargetGUID != 0:
+		return movementGeneratorChase
 	case motion.InCombat && motion.TargetGUID != 0:
 		return movementGeneratorChase
+	case motion.ScriptFollowTargetGUID != 0:
+		return movementGeneratorFollow
 	case motion.FormationActive:
 		return movementGeneratorFormation
 	case !motion.DistractedUntil.IsZero() && now.Before(motion.DistractedUntil):
@@ -4183,6 +4413,14 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	}
 	motion.InCombat = false
 	motion.TargetGUID = 0
+	// MotionMaster::Clear (the MoveTargetedHome twin, MotionMaster.cpp:551):
+	// evade drops the ACTIVE chase/follow slots with the engagement.
+	motion.ScriptChaseTargetGUID = 0
+	motion.ScriptChaseDist = 0
+	motion.ScriptChaseAngle = 0
+	motion.ScriptFollowTargetGUID = 0
+	motion.ScriptFollowDist = 0
+	motion.ScriptFollowAngle = 0
 	// Unit::AttackStop (Unit.cpp:5783): combat stop resets the assistance
 	// flag, and the pending AssistDelayEvent dies with the engagement.
 	// A Lua Reset arm that set the no-call latch survives: C++ AI Reset
@@ -4857,6 +5095,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.InCombat = false
 		motion.TargetGUID = 0
 		motion.Moving = false
+		motion.ScriptChaseTargetGUID = 0
+		motion.ScriptChaseDist = 0
+		motion.ScriptChaseAngle = 0
+		motion.ScriptFollowTargetGUID = 0
+		motion.ScriptFollowDist = 0
+		motion.ScriptFollowAngle = 0
 		return
 	}
 	// TempSummon::Update timed arms (TemporarySummon.cpp:66-170): the
@@ -7748,10 +7992,33 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						if casterChaseStop > 0 {
 							shorten = casterChaseStop
 						}
+						// A script MoveChase slot on the current victim overrides
+						// the stops above (ChaseMovementGenerator::Update,
+						// ChaseMovementGenerator.cpp:117-120, 180-189):
+						// ChaseRange(dist) stops at dist + hitboxSum (MaxTolerance
+						// + hitboxSum), and a fixed ChaseAngle repaths to the
+						// near point on the target's absolute angle (target
+						// orientation + relative angle) instead of the current
+						// bearing. A slot on any other unit stays paused
+						// (HasLostTarget) and never reaches this leg.
+						scriptChase := motion.ScriptChaseTargetGUID != 0 && motion.ScriptChaseTargetGUID == motion.TargetGUID
+						if scriptChase {
+							shorten = motion.ScriptChaseDist + cReach + victimReach
+						}
 						destX, destY := target.X, target.Y
 						if dist > shorten {
-							destX = target.X + (motion.X-target.X)/dist*shorten
-							destY = target.Y + (motion.Y-target.Y)/dist*shorten
+							if scriptChase {
+								tOrient := float32(0)
+								if target.Sess != nil && target.Sess.player != nil {
+									tOrient = target.Sess.player.Orientation
+								}
+								absAngle := normalizeScriptAngle(tOrient + motion.ScriptChaseAngle)
+								destX = target.X + shorten*float32(math.Cos(float64(absAngle)))
+								destY = target.Y + shorten*float32(math.Sin(float64(absAngle)))
+							} else {
+								destX = target.X + (motion.X-target.X)/dist*shorten
+								destY = target.Y + (motion.Y-target.Y)/dist*shorten
+							}
 						}
 						// init.SetFacing(target) (ChaseMovementGenerator.cpp:217):
 						// face the victim for the whole spline.
@@ -8590,6 +8857,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.Confused && !motion.InCombat {
 		s.launchCreatureConfusedSpline(motion)
 		return
+	}
+	// Script MoveFollow leg (FollowMovementGenerator::DoUpdate,
+	// FollowMovementGenerator.cpp:47-177): an armed ACTIVE-slot follow
+	// owns the tick ahead of formation/wander — the same slot priority
+	// C++ gives it over the DEFAULT wander/waypoint generators — while
+	// in combat the chase leg above runs instead. stepScriptFollow
+	// returns false only when the target left the world and the slot
+	// cleared, letting the tick fall through to formation/wander.
+	if motion.ScriptFollowTargetGUID != 0 && !motion.InCombat {
+		if s.stepScriptFollow(motion, players, now) {
+			return
+		}
 	}
 	// FormationMovementGenerator::DoUpdate (FormationMovementGenerator.cpp):
 	// a member pulled into formation moves on the leader's spline rhythm

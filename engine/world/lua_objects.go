@@ -467,6 +467,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			homeX, homeY, homeZ := motion.HomeX, motion.HomeY, motion.HomeZ
 			s.server.motionMu.Unlock()
 			if !owned {
+				s.server.clearScriptChaseFollow(motion)
 				s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome)
 			}
 		}
@@ -496,6 +497,113 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
 			s.server.setCreatureConfused(motion, apply)
+		}
+		return nil, nil
+	}
+	// MoveChase is UnitMethods::MoveChase (UnitMethods.h:2230-2238), the
+	// session-creature twin of the handler binding; a motion that no
+	// longer resolves is a no-op.
+	methods["MoveChase"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("MoveChase requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			if targetGUID == 0 || targetGUID == motion.GUID {
+				return nil, nil
+			}
+			var dist, angle float32
+			if len(args) >= 2 {
+				var err error
+				if dist, err = luaGenericFloat32Arg(args, 1); err != nil {
+					return nil, err
+				}
+			}
+			if len(args) >= 3 {
+				var err error
+				if angle, err = luaGenericFloat32Arg(args, 2); err != nil {
+					return nil, err
+				}
+			}
+			s.server.motionMu.Lock()
+			motion.ScriptFollowTargetGUID = 0
+			motion.ScriptFollowDist = 0
+			motion.ScriptFollowAngle = 0
+			motion.ScriptChaseTargetGUID = targetGUID
+			motion.ScriptChaseDist = dist
+			motion.ScriptChaseAngle = angle
+			s.server.motionMu.Unlock()
+		}
+		return nil, nil
+	}
+	// MoveFollow is UnitMethods::MoveFollow (UnitMethods.h:2214-2221), the
+	// session-creature twin of the handler binding; a motion that no
+	// longer resolves is a no-op.
+	methods["MoveFollow"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("MoveFollow requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			if targetGUID == 0 || targetGUID == motion.GUID {
+				return nil, nil
+			}
+			var dist, angle float32
+			if len(args) >= 2 {
+				var err error
+				if dist, err = luaGenericFloat32Arg(args, 1); err != nil {
+					return nil, err
+				}
+			}
+			if len(args) >= 3 {
+				var err error
+				if angle, err = luaGenericFloat32Arg(args, 2); err != nil {
+					return nil, err
+				}
+			}
+			s.server.motionMu.Lock()
+			motion.ScriptChaseTargetGUID = 0
+			motion.ScriptChaseDist = 0
+			motion.ScriptChaseAngle = 0
+			motion.ScriptFollowTargetGUID = targetGUID
+			motion.ScriptFollowDist = dist
+			motion.ScriptFollowAngle = angle
+			s.server.motionMu.Unlock()
+		}
+		return nil, nil
+	}
+	// MoveJump is UnitMethods::MoveJump (UnitMethods.h:2293-2310), the
+	// session-creature twin of the handler binding; a motion that no
+	// longer resolves is a no-op.
+	methods["MoveJump"] = func(_ context.Context, args []any) ([]any, error) {
+		x, err := luaGenericFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaGenericFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaGenericFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		zSpeed, err := luaGenericFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		maxHeight, err := luaGenericFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		var id uint32
+		if len(args) >= 6 {
+			if id, err = luaUint32Arg(args, 5); err != nil {
+				return nil, err
+			}
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.launchCreatureJumpSpline(motion, x, y, z, zSpeed, maxHeight, id)
 		}
 		return nil, nil
 	}

@@ -2586,10 +2586,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// to the StopMoving twin: halt at the current position, no-op
 	// when not moving. Threat, TargetGUID and InCombat are untouched
 	// by every leg (the StopMoving comment above). MoveChase,
-	// MoveFollow and MoveJump stay out: they need chase/follow
-	// generators and a parabolic packet arm Go does not execute;
-	// MoveTo, MoveRandom, MoveConfused and MoveHome ride the
-	// script-spline launch below.
+	// MoveFollow and MoveJump ride the chase/follow slots and the
+	// parabolic launch below; the four halt legs never clear those
+	// slots — C++ MoveStop (Unit::StopMoving) likewise leaves generators
+	// armed, while MoveClear/MoveIdle would remove them, the standing
+	// collapse delta. MoveTo, MoveRandom, MoveConfused and MoveHome
+	// ride the script-spline launch below.
 	methods["MoveStop"] = methods["StopMoving"]
 	methods["MoveClear"] = methods["StopMoving"]
 	methods["MoveExpire"] = methods["StopMoving"]
@@ -4225,9 +4227,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// then a HomeMovementGenerator, whose finalize fires
 	// CREATURE_EVENT_ON_REACH_HOME (24) — the early-gate arm in
 	// stepCreatureMotion fires it when the script home spline lands.
-	// A charmed or owned creature takes C++'s follow arm instead, and
-	// MoveFollow is still unwired, so those creatures no-op here
-	// (their pet-follow leg already keeps them near the owner).
+	// A charmed or owned creature takes C++'s follow arm instead, so
+	// those creatures no-op here (their pet-follow leg already keeps
+	// them near the owner).
 	// The player surface stays out.
 	methods["MoveHome"] = func(_ context.Context, args []any) ([]any, error) {
 		s.motionMu.Lock()
@@ -4237,6 +4239,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if owned {
 			return nil, nil
 		}
+		// MotionMaster::MoveTargetedHome (MotionMaster.cpp:551-573) opens
+		// with Clear(): the ACTIVE chase/follow slots drop with the
+		// engagement.
+		s.clearScriptChaseFollow(motion)
 		s.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome)
 		return nil, nil
 	}
@@ -4268,6 +4274,123 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			apply = b
 		}
 		s.setCreatureConfused(motion, apply)
+		return nil, nil
+	}
+	// MoveChase is UnitMethods::MoveChase (UnitMethods.h:2230-2238) =
+	// MotionMaster::MoveChase(target, dist, angle) (MotionMaster.cpp:594-602):
+	// an ACTIVE-slot ChaseMovementGenerator (MotionMaster early-returns
+	// on a missing target or self, so those no-op here too). The call
+	// only arms the slot — ChaseMovementGenerator pauses while
+	// HasLostTarget (owner victim != target, ChaseMovementGenerator.cpp:105-113),
+	// so a chase to a non-victim, or out of combat, moves nothing; when
+	// the chase target IS the combat victim, the tick's pursuit leg
+	// honors the ChaseRange(dist) stop and ChaseAngle(angle) near point.
+	// MoveFollow clears the slot (same ACTIVE slot). The player surface
+	// stays out (client-driven movement).
+	methods["MoveChase"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("MoveChase requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 || targetGUID == motion.GUID {
+			return nil, nil
+		}
+		var dist, angle float32
+		if len(args) >= 2 {
+			var err error
+			if dist, err = luaFloat32Arg(args, 1); err != nil {
+				return nil, err
+			}
+		}
+		if len(args) >= 3 {
+			var err error
+			if angle, err = luaFloat32Arg(args, 2); err != nil {
+				return nil, err
+			}
+		}
+		s.motionMu.Lock()
+		motion.ScriptFollowTargetGUID = 0
+		motion.ScriptFollowDist = 0
+		motion.ScriptFollowAngle = 0
+		motion.ScriptChaseTargetGUID = targetGUID
+		motion.ScriptChaseDist = dist
+		motion.ScriptChaseAngle = angle
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// MoveFollow is UnitMethods::MoveFollow (UnitMethods.h:2214-2221) =
+	// MotionMaster::MoveFollow(target, dist, angle) (MotionMaster.cpp:584-592):
+	// an ACTIVE-slot FollowMovementGenerator (same missing-target/self
+	// no-op as MoveChase). The slot arms the wander section's follow leg,
+	// which repaths to the target's near point while the owner sits
+	// outside range + tolerance; in combat the chase leg runs instead.
+	// MoveChase clears the slot (same ACTIVE slot). The player surface
+	// stays out.
+	methods["MoveFollow"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("MoveFollow requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 || targetGUID == motion.GUID {
+			return nil, nil
+		}
+		var dist, angle float32
+		if len(args) >= 2 {
+			var err error
+			if dist, err = luaFloat32Arg(args, 1); err != nil {
+				return nil, err
+			}
+		}
+		if len(args) >= 3 {
+			var err error
+			if angle, err = luaFloat32Arg(args, 2); err != nil {
+				return nil, err
+			}
+		}
+		s.motionMu.Lock()
+		motion.ScriptChaseTargetGUID = 0
+		motion.ScriptChaseDist = 0
+		motion.ScriptChaseAngle = 0
+		motion.ScriptFollowTargetGUID = targetGUID
+		motion.ScriptFollowDist = dist
+		motion.ScriptFollowAngle = angle
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// MoveJump is UnitMethods::MoveJump (UnitMethods.h:2293-2310) =
+	// MotionMaster::MoveJump(pos, speedXY, speedZ, id) (MotionMaster.cpp:780-824):
+	// Eluna passes (pos, zSpeed, maxHeight, id) straight through, so the
+	// 4th Lua arg drives horizontal speed and the 5th drives the vertical
+	// profile — see launchCreatureJumpSpline. The jump takes the ACTIVE
+	// slot, clearing any chase/follow slot. The player surface stays out.
+	methods["MoveJump"] = func(_ context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		zSpeed, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		maxHeight, err := luaFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		var id uint32
+		if len(args) >= 6 {
+			if id, err = luaUint32Arg(args, 5); err != nil {
+				return nil, err
+			}
+		}
+		s.launchCreatureJumpSpline(motion, x, y, z, zSpeed, maxHeight, id)
 		return nil, nil
 	}
 	// GetMovementType is UnitMethods::GetMovementType
