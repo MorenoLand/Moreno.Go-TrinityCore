@@ -238,7 +238,42 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	state.Class = uint32(unitClass)
 	state.AIName, state.RacialLeader = aiName, racialLeader != 0
 	methods := map[string]scripting.ObjectMethod{}
-	methods["GetName"] = luaNoArgs(func() any { return state.Name })
+	// GetName is Unit::GetName (Object.h:338), the session-creature
+	// twin of the handler binding: the live motion name wins when the
+	// motion resolves (a handler SetName override reads back), else
+	// the spawn name this snapshot was built from, mirroring the
+	// GetNativeDisplayId overlay below.
+	methods["GetName"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.motionMu.Lock()
+			defer s.server.motionMu.Unlock()
+			return motion.Name
+		}
+		return state.Name
+	})
+	// SetName is Unit::SetName (UnitMethods.h:1501, Object.h:338),
+	// the session-creature twin of the handler binding: the Eluna
+	// empty-name gate, a memory-only write to the live motion's Name
+	// under motionMu, and a silent no-op when the motion no longer
+	// resolves (no stored name is fabricated).
+	methods["SetName"] = func(_ context.Context, args []any) ([]any, error) {
+		name, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(name) == 0 {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.Name = name
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
 	methods["GetEntry"] = luaNoArgs(func() any { return state.Entry })
 	methods["GetDisplayId"] = luaNoArgs(func() any { return state.DisplayID })
 	// GetNativeDisplayId is Unit::GetNativeDisplayId (Unit.h:1474):
@@ -504,6 +539,77 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["CanWalk"] = luaNoArgs(func() any {
 		return creatureCanWalkMotion(s.luaCreatureMotion(state.GUID, state.Entry))
 	})
+	// IsInAccessiblePlaceFor is Unit::IsInAccessiblePlaceFor
+	// (UnitMethods.h:104, Unit.cpp:3268), the session-creature twin
+	// of the handler binding: receiver in water ? target CanSwim :
+	// (target CanWalk || target CanFly), over the builder's snapshot
+	// coords like the session IsInWater below. The target resolves
+	// through accessiblePlaceTarget (CHECKOBJ<Creature> twin); when no
+	// live motion resolves on the receiver's map/instance, the
+	// s.luaCreatureMotion fallback runs (same map/instance lookup —
+	// it ignores the arg entry — so it resolves nothing the primary
+	// lookup missed) and an unresolvable target still errors.
+	methods["IsInAccessiblePlaceFor"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("IsInAccessiblePlaceFor requires a Creature target")
+		}
+		swim, walk, fly, err := s.server.accessiblePlaceTarget(args[0], state.Map, state.InstanceID)
+		if err != nil {
+			if obj, ok := args[0].(*scripting.Object); ok && obj != nil && obj.Type == "Creature" {
+				if guid := luaObjectGUID(obj); guid != 0 && s.server.findSessionByGUID(guid) == nil {
+					entry, _ := objectUint32Field(obj, "Entry")
+					if motion := s.luaCreatureMotion(guid, entry); motion != nil {
+						s.server.motionMu.Lock()
+						swim, walk, fly = creatureCanSwimMotion(motion), creatureCanWalkMotion(motion), motion.CanFly || motion.Flying
+						s.server.motionMu.Unlock()
+						err = nil
+					}
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		if s.server.mapIsInWater(state.Map, state.X, state.Y, state.Z) {
+			return []any{swim}, nil
+		}
+		return []any{walk || fly}, nil
+	}
+	// SetWaterWalk is Unit::SetWaterWalk (UnitMethods.h:1822,
+	// Unit.cpp:13755), the session-creature twin of the handler
+	// binding: the C++ no-op-on-unchanged early-out, the motion
+	// WaterWalking latch, and the SMSG_SPLINE_MOVE_WATER_WALK /
+	// LAND_WALK broadcast. A motion that no longer resolves is a
+	// silent no-op (SetNativeDisplayId precedent).
+	methods["SetWaterWalk"] = func(_ context.Context, args []any) ([]any, error) {
+		enable := true
+		if len(args) >= 1 && args[0] != nil {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetWaterWalk requires a bool")
+			}
+			enable = b
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if motion.WaterWalking == enable {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.WaterWalking = enable
+		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		phase := motion.PhaseMask
+		s.server.motionMu.Unlock()
+		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_LAND_WALK
+		if enable {
+			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_WATER_WALK
+		}
+		s.server.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		return nil, nil
+	}
 	// CanStartAttack is Creature::CanStartAttack (Creature.cpp:1960-2004),
 	// the session-creature twin of the handler binding. A motion that
 	// no longer resolves reads false; an unresolvable target errors,

@@ -376,6 +376,35 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// GetName is Unit::GetName (Object.h:338) over the live motion:
+	// the generic fallback reads the construction-time Fields snapshot,
+	// so a SetName below would be invisible to a later GetName on the
+	// same object without this builder-owned read under motionMu.
+	// DELTA: chat packets built from the snapshot state.Name (the
+	// motionChatRange closure) and already-sent query responses keep
+	// the old name; only GetName reads live.
+	methods["GetName"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return []any{motion.Name}, nil
+	}
+	// SetName is Unit::SetName (UnitMethods.h:1501, Object.h:338): the
+	// Eluna binding gates empty names (length > 0 only) and the C++
+	// write is memory-only, no DB write, so this writes motion.Name
+	// under motionMu and nothing else.
+	methods["SetName"] = func(_ context.Context, args []any) ([]any, error) {
+		name, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(name) == 0 {
+			return nil, nil
+		}
+		s.motionMu.Lock()
+		motion.Name = name
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// IsArmorer/IsBanker/IsBattleMaster/IsGuildMaster/IsTabardDesigner
 	// are the Unit.h:1011-1019 UNIT_NPC_FLAGS reads over the live motion
 	// flags. GetClassMask is Unit::GetClassMask (Unit.h:852) over the
@@ -2896,6 +2925,40 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
 		return nil, nil
 	}
+	// SetWaterWalk is Unit::SetWaterWalk (UnitMethods.h:1822,
+	// Unit.cpp:13755): flips MOVEMENTFLAG_WATERWALKING with the C++
+	// no-op-on-unchanged early-out. Like SetSwim, C++ itself sends no
+	// packet for the flip, so the Go twin broadcasts
+	// SMSG_SPLINE_MOVE_WATER_WALK / LAND_WALK (packed GUID only, via
+	// broadcastCreatureSplineMove) so clients observe the change; the
+	// latch follows the SetCanFly/SetSwim motion-bool pattern and no
+	// creature movement-flag emission folds it (the sibling slots are
+	// broadcast-leg only too).
+	methods["SetWaterWalk"] = func(_ context.Context, args []any) ([]any, error) {
+		enable := true
+		if len(args) >= 1 && args[0] != nil {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetWaterWalk requires a bool")
+			}
+			enable = b
+		}
+		s.motionMu.Lock()
+		if motion.WaterWalking == enable {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.WaterWalking = enable
+		mapID, instanceID, x, y, guid := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.GUID
+		phase := motion.PhaseMask
+		s.motionMu.Unlock()
+		opcode := protocol.OpcodeSMSG_SPLINE_MOVE_LAND_WALK
+		if enable {
+			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_WATER_WALK
+		}
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		return nil, nil
+	}
 	// SetCombatPulseDelay is Creature::SetCombatPulseDelay (Creature.h:270):
 	// the interval in SECONDS at which the creature pulses its whole zone
 	// into combat (only fires on dungeon maps). The C++ setter stores the
@@ -5120,6 +5183,30 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Lock()
 		defer s.motionMu.Unlock()
 		return []any{motion.CanFly || motion.Flying}, nil
+	}
+	// IsInAccessiblePlaceFor is Unit::IsInAccessiblePlaceFor
+	// (UnitMethods.h:104, Unit.cpp:3268): receiver in water ? target
+	// CanSwim : (target CanWalk || target CanFly), over the live
+	// motion coords under motionMu like the IsInWater twin. The
+	// target resolves through accessiblePlaceTarget (CHECKOBJ<Creature>
+	// twin: a player, bare-number, or unresolvable target errors, and
+	// a missing arg errors); the receiver's own swim/walk flags are
+	// never consulted for the target.
+	methods["IsInAccessiblePlaceFor"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("IsInAccessiblePlaceFor requires a Creature target")
+		}
+		s.motionMu.Lock()
+		mapID, instanceID, x, y, z := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		swim, walk, fly, err := s.accessiblePlaceTarget(args[0], mapID, instanceID)
+		if err != nil {
+			return nil, err
+		}
+		if s.mapIsInWater(mapID, x, y, z) {
+			return []any{swim}, nil
+		}
+		return []any{walk || fly}, nil
 	}
 	// SetInCombatWithZone is CreatureMethods::SetInCombatWithZone
 	// (CreatureMethods.h:1043-1052): under TRINITY it is exactly

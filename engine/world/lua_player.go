@@ -84,6 +84,23 @@ func (s *session) luaPlayer() *scripting.Object {
 	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "InstanceId": state.InstanceID, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0, "InWorld": true, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "Zone": state.Zone, "Health": state.Health, "MaxHealth": state.MaxHealth, "Power": state.Powers[powerType], "MaxPower": state.MaxPowers[powerType], "PowerType": powerType, "InCombat": s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0}
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
+	// SetName is Unit::SetName (UnitMethods.h:1501, Object.h:338):
+	// the Eluna empty-name gate and a memory-only write to the live
+	// player state (no DB write, matching C++). GetName above already
+	// reads state.Name live, so the new name reads back; DELTA:
+	// the object's Fields["Name"] snapshot and already-sent query
+	// responses keep the old name.
+	methods["SetName"] = func(_ context.Context, args []any) ([]any, error) {
+		name, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(name) == 0 {
+			return nil, nil
+		}
+		state.Name = name
+		return nil, nil
+	}
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return uint32(state.GUID) })
 	methods["GetMapId"] = luaNoArgs(func() any { return state.Map })
@@ -1381,6 +1398,31 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return s.server.mapIsInWater(s.player.Map, s.player.X, s.player.Y, s.player.Z)
 	})
+	// IsInAccessiblePlaceFor is Unit::IsInAccessiblePlaceFor
+	// (UnitMethods.h:104, Unit.cpp:3268), the player-receiver twin
+	// of the handler binding: receiver in water ? target CanSwim :
+	// (target CanWalk || target CanFly), over the player coords like
+	// IsInWater above. The target resolves through
+	// accessiblePlaceTarget (CHECKOBJ<Creature> twin: a player,
+	// bare-number, or unresolvable target errors, and a missing arg
+	// errors). No player SetWaterWalk twin rides along: see the
+	// detail file — the player leg is parked, not stubbed.
+	methods["IsInAccessiblePlaceFor"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("IsInAccessiblePlaceFor requires a Creature target")
+		}
+		if s == nil || s.player == nil || s.server == nil {
+			return []any{false}, nil
+		}
+		swim, walk, fly, err := s.server.accessiblePlaceTarget(args[0], s.player.Map, s.player.InstanceID)
+		if err != nil {
+			return nil, err
+		}
+		if s.server.mapIsInWater(s.player.Map, s.player.X, s.player.Y, s.player.Z) {
+			return []any{swim}, nil
+		}
+		return []any{walk || fly}, nil
+	}
 	// IsUnderWater is LuaUnit::IsUnderWater (LuaFunctions.cpp:352) via
 	// Map::IsUnderWater (Map.cpp:2923-2926): the grid-leg liquid status
 	// over water and ocean, under water at the default collision height.

@@ -126,6 +126,7 @@ type creatureMotion struct {
 	Hovering              bool                // MOVEMENTFLAG_HOVER live value: Lua CreatureMethods::SetHover (Creature::SetHover twin, Creature.cpp:3105); zero value = not hovering (the C++ default), broadcast leg only
 	Flying                bool                // MOVEMENTFLAG_CAN_FLY live value: Lua CreatureMethods::SetCanFly (Creature::SetCanFly twin, Creature.cpp:3060); zero value = cannot fly (the C++ default), broadcast leg only
 	Swimming              bool                // MOVEMENTFLAG_SWIMMING live value: Lua CreatureMethods::SetSwim (Unit::SetSwim twin, Unit.cpp:13728); zero value = not swimming (the C++ default), broadcast leg only
+	WaterWalking          bool                // MOVEMENTFLAG_WATERWALKING live value: Lua UnitMethods::SetWaterWalk (Unit::SetWaterWalking twin, Unit.cpp:13755); zero value = not water-walking (the C++ default), broadcast leg only
 	CombatPulseDelaySecs  uint32              // Creature::m_combatPulseDelay (Creature.h:270): Lua CreatureMethods::SetCombatPulseDelay; zero = pulse disabled (the C++ default), delay in seconds
 	CombatPulseTimer      time.Duration       // Creature::m_combatPulseTime remaining (ms); the C++ setter writes the raw secs value into this ms timer, so the first pulse fires on the next tick
 	ScriptSpellImmune     map[uint64][]uint32 // m_spellImmune script rows: Lua CreatureMethods::ApplySpellImmune (Unit::ApplySpellImmune twin, Unit.cpp:8268); key (op<<32|type), value = granting spell ids (removal keys only, never consulted by the immunity evals); no client broadcast — immunity is server-side logic
@@ -1808,6 +1809,35 @@ func (s *Server) creatureAttackTargetResolve(arg any, mapID, instanceID uint32) 
 	tgt := creatureAttackTarget{ok: true, guid: guid, level: target.Level, detected: s.creatureAuraTypeSum(creatureAuraKeyForMotion(target), spellAuraModDetectedRange), x: target.X, y: target.Y, z: target.Z, unitFlags: target.UnitFlags, faction: target.Faction, creatureType: target.CreatureType, playerControlled: target.UnitFlags&unitFlagPlayerControlled != 0, health: target.Health, evading: target.Evading, combatReach: target.CombatReach}
 	s.motionMu.Unlock()
 	return tgt
+}
+
+// accessiblePlaceTarget resolves the Eluna CHECKOBJ<Creature> target of
+// Unit::IsInAccessiblePlaceFor (UnitMethods.h:104, Unit.cpp:3268): a
+// creature object on the caller's map/instance contributes its
+// CanSwim/CanWalk/CanFly triple (CanFly = template flag or the live
+// SetCanFly slot, the handler CanFly twin). A player object, a bare
+// number, or an unresolvable GUID errors, the CHECKOBJ failure twin
+// (CanStartAttack precedent); the receiver's own swim/walk flags are
+// never consulted for the target.
+func (s *Server) accessiblePlaceTarget(arg any, mapID, instanceID uint32) (swim, walk, fly bool, err error) {
+	obj, ok := arg.(*scripting.Object)
+	if !ok || obj == nil || obj.Type != "Creature" {
+		return false, false, false, fmt.Errorf("IsInAccessiblePlaceFor requires a Creature target")
+	}
+	guid := luaObjectGUID(obj)
+	if guid == 0 {
+		return false, false, false, fmt.Errorf("IsInAccessiblePlaceFor requires a Creature target")
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil {
+		return false, false, false, fmt.Errorf("IsInAccessiblePlaceFor requires a Creature target")
+	}
+	target := s.findCreatureMotion(mapID, instanceID, guid)
+	if target == nil {
+		return false, false, false, fmt.Errorf("IsInAccessiblePlaceFor requires a Creature target")
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	return creatureCanSwimMotion(target), creatureCanWalkMotion(target), target.CanFly || target.Flying, nil
 }
 
 // creatureNeutralToAll is WorldObject::IsNeutralToAll (Object.cpp:2865)
