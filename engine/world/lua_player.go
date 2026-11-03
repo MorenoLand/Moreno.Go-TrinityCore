@@ -132,7 +132,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	// IsTabardDesigner are the Unit.h:1011-1019 UNIT_NPC_FLAGS reads
 	// (REPAIR 0x1000, BANKER 0x20000, BATTLEMASTER 0x100000, PETITIONER
 	// 0x40000, TABARDDESIGNER 0x80000); players carry no NPC flags, so
-	// all five read false. IsPvPFlagged is Unit::IsPvP (Unit.h:914), the
+	// all read false. IsPvPFlagged is Unit::IsPvP (Unit.h:914), the
 	// UNIT_FIELD_BYTES_2 PvP byte flag, the player PVPFlags bit in Go.
 	methods["GetClassMask"] = luaNoArgs(func() any { return unitClassRaceMask(uint32(state.Class)) })
 	methods["GetRaceMask"] = luaNoArgs(func() any { return unitClassRaceMask(uint32(state.Race)) })
@@ -205,6 +205,17 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsBattleMaster"] = luaNoArgs(func() any { return false })
 	methods["IsGuildMaster"] = luaNoArgs(func() any { return false })
 	methods["IsTabardDesigner"] = luaNoArgs(func() any { return false })
+	methods["IsGossip"] = luaNoArgs(func() any { return false })
+	methods["IsQuestGiver"] = luaNoArgs(func() any { return false })
+	methods["IsVendor"] = luaNoArgs(func() any { return false })
+	methods["IsTrainer"] = luaNoArgs(func() any { return false })
+	methods["IsTaxi"] = luaNoArgs(func() any { return false })
+	methods["IsSpiritHealer"] = luaNoArgs(func() any { return false })
+	methods["IsSpiritGuide"] = luaNoArgs(func() any { return false })
+	methods["IsSpiritService"] = luaNoArgs(func() any { return false })
+	methods["IsInnkeeper"] = luaNoArgs(func() any { return false })
+	methods["IsAuctioneer"] = luaNoArgs(func() any { return false })
+	methods["IsServiceProvider"] = luaNoArgs(func() any { return false })
 	methods["IsPvPFlagged"] = luaNoArgs(func() any { return state.PVPFlags&pvpFlagPvP != 0 })
 	// IsAttackingPlayer is Unit::isAttackingPlayer (Unit.cpp:5849-5865):
 	// the UNIT_STATE_ATTACK_PLAYER read, which Go models as the

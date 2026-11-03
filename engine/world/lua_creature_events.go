@@ -406,8 +406,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return nil, nil
 	}
 	// IsArmorer/IsBanker/IsBattleMaster/IsGuildMaster/IsTabardDesigner
-	// are the Unit.h:1011-1019 UNIT_NPC_FLAGS reads over the live motion
-	// flags. GetClassMask is Unit::GetClassMask (Unit.h:852) over the
+	// plus the gossip/quest/vendor/trainer/taxi/spirit/innkeeper/
+	// auctioneer/service-provider set are the Unit.h:1006-1021
+	// UNIT_NPC_FLAGS reads over the live motion flags, mirroring the
+	// session surface's masks (IsTrainer 0x70 and IsServiceProvider
+	// 0x007FC0F2 are supersets of the C++-exact 0x10 / 0x003FE090;
+	// see the recensus detail note). GetClassMask is Unit::GetClassMask (Unit.h:852) over the
 	// motion's template unit_class; GetRaceMask reads 0, the creature
 	// race byte Creature::InitEntry never sets. IsPvPFlagged is
 	// Unit::IsPvP (Unit.h:914) over the motion bytes2 byte 1, whose
@@ -424,6 +428,17 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	methods["IsBattleMaster"] = npcFlag(0x00100000)
 	methods["IsGuildMaster"] = npcFlag(0x00040000)
 	methods["IsTabardDesigner"] = npcFlag(0x00080000)
+	methods["IsGossip"] = npcFlag(0x00000001)
+	methods["IsQuestGiver"] = npcFlag(0x00000002)
+	methods["IsVendor"] = npcFlag(0x00000080)
+	methods["IsTrainer"] = npcFlag(0x00000070)
+	methods["IsTaxi"] = npcFlag(0x00002000)
+	methods["IsSpiritHealer"] = npcFlag(0x00004000)
+	methods["IsSpiritGuide"] = npcFlag(0x00008000)
+	methods["IsSpiritService"] = npcFlag(0x0000C000)
+	methods["IsInnkeeper"] = npcFlag(0x00010000)
+	methods["IsAuctioneer"] = npcFlag(0x00200000)
+	methods["IsServiceProvider"] = npcFlag(0x007FC0F2)
 	methods["GetClassMask"] = luaNoArgs(func() any {
 		s.motionMu.Lock()
 		defer s.motionMu.Unlock()
@@ -4872,6 +4887,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// GetMountId is Unit::GetMountID (Unit.h:933): the
+	// UNIT_FIELD_MOUNTDISPLAYID read over the live motion Mount slot
+	// (Mount/Dismount write it); unmounted creatures read 0.
+	methods["GetMountId"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.Mount
+	})
 	// Mount is Unit::Mount (Unit.cpp:8310): SetUInt32Value(
 	// UNIT_FIELD_MOUNTDISPLAYID, mount) when the id is nonzero, then
 	// SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_MOUNT 0x08000000,
