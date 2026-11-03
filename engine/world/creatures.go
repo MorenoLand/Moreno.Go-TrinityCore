@@ -63,6 +63,7 @@ type creatureSpawn struct {
 	standStateKnown  bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes1 byte 0 via the motion record (forces the field into the update mask even when standing back up to 0)
 	mountKnown       bool // set by applyCreatureMotionToSpawn when Lua overrode Mount via the motion record (forces the field into the update mask even when dismounting to 0)
 	sheathStateKnown bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes2 byte 0 via the motion record (forces the field into the update mask even when unarming to 0)
+	pvpFlagsKnown    bool // set by applyCreatureMotionToSpawn when Lua overrode Bytes2 byte 1 via the motion record (forces the field into the update mask even when clearing sanctuary to 0)
 	ScriptTargetGUID uint64
 	targetKnown      bool // set by applyCreatureMotionToSpawn when Lua overrode the visual target via the motion record (forces the field into the update mask even when clearing to 0)
 	Item1            uint32
@@ -423,6 +424,10 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 			spawn.Bytes2 = (spawn.Bytes2 & 0xFFFFFF00) | uint32(motion.SheathState)
 			spawn.sheathStateKnown = true
 		}
+		if motion.PVPFlagsKnown {
+			spawn.Bytes2 = (spawn.Bytes2 & 0xFFFF00FF) | uint32(motion.PVPFlags)<<8
+			spawn.pvpFlagsKnown = true
+		}
 		if motion.ScriptTargetKnown {
 			// A Lua arm overrode the visual target (SetTarget): the spawn
 			// must carry the live value, not the default empty field, or
@@ -627,7 +632,7 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 	if spawn.Emote != 0 || spawn.emoteStateKnown {
 		values[unitNPCEmoteState] = spawn.Emote
 	}
-	if spawn.Bytes2 != 0 || spawn.sheathStateKnown {
+	if spawn.Bytes2 != 0 || spawn.sheathStateKnown || spawn.pvpFlagsKnown {
 		values[unitFieldBytes2] = spawn.Bytes2
 	}
 	if spawn.ScriptTargetGUID != 0 || spawn.targetKnown {

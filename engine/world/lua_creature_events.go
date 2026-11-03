@@ -297,8 +297,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// flags. GetClassMask is Unit::GetClassMask (Unit.h:852) over the
 	// motion's template unit_class; GetRaceMask reads 0, the creature
 	// race byte Creature::InitEntry never sets. IsPvPFlagged is
-	// Unit::IsPvP (Unit.h:914); creatures carry no bytes2 PvP model in
-	// Go, so it reads false.
+	// Unit::IsPvP (Unit.h:914); the creature byte-1 model holds only
+	// the sanctuary bit (SetSanctuary), the PvP bit is never set,
+	// so it reads false.
 	npcFlag := func(flag uint32) scripting.ObjectMethod {
 		return luaNoArgs(func() any {
 			s.motionMu.Lock()
@@ -3059,6 +3060,187 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		x, y, z := motion.X, motion.Y, motion.Z
 		s.motionMu.Unlock()
 		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase, transportGUID)
+		return nil, nil
+	}
+	// SetFacing is UnitMethods::SetFacing (UnitMethods.h:1766-1771):
+	// SetFacingTo(o) verbatim, so it is the SetFacingTo bridge below
+	// with the same in-place turn packet and the same mid-spline
+	// race delta (C++ skips the turn when the unit is moving; Go
+	// sets the logical orientation and the client packet races).
+	methods["SetFacing"] = func(_ context.Context, args []any) ([]any, error) {
+		ori, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.Orientation = ori
+		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
+		phase := motion.PhaseMask
+		transportGUID := motion.TransportGUID
+		x, y, z := motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase, transportGUID)
+		return nil, nil
+	}
+	// SetFacingToObject is UnitMethods::SetFacingToObject
+	// (UnitMethods.h:1778-1783): Unit::SetFacingToObject computes the
+	// absolute angle to the target (Unit.cpp:13677, the GetAbsoluteAngle
+	// twin: atan2 normalized to [0, 2pi)) and turns in place, so this
+	// bridge resolves the target's X/Y through the object fields
+	// (creature/player/GO objects all carry them) and rides the same
+	// SetFacingTo turn packet. An argument without X/Y fields errors
+	// (the Eluna CHECKOBJ leg); the C++ IsStopped gate is not gated,
+	// same delta as SetFacingTo.
+	methods["SetFacingToObject"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target")
+		}
+		tx, ok := objectFloat32Field(target, "X")
+		if !ok {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target with a position")
+		}
+		ty, ok := objectFloat32Field(target, "Y")
+		if !ok {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target with a position")
+		}
+		s.motionMu.Lock()
+		angle := float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X)))
+		if angle < 0 {
+			angle += 2 * math.Pi
+		}
+		motion.Orientation = angle
+		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
+		phase := motion.PhaseMask
+		transportGUID := motion.TransportGUID
+		x, y, z := motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		s.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, angle, true, phase, transportGUID)
+		return nil, nil
+	}
+	// SetSanctuary is UnitMethods::SetSanctuary (UnitMethods.h:1892-1908)
+	// for creatures: the UNIT_BYTE2_FLAG_SANCTUARY (0x08, UnitDefines.h:106)
+	// byte flag on UNIT_FIELD_BYTES_2 byte 1 rides the motion PVPFlags
+	// slot (the SetSheath precedent: folded into spawn.Bytes2 by
+	// applyCreatureMotionToSpawn, no immediate update packet) plus the
+	// CombatStop() arm (Unit.cpp:5809, includingCast=false default):
+	// own victim dropped with SMSG_ATTACK_STOP, visual target cleared,
+	// attackers removed, threat cleared, InCombat false. DELTAS: the
+	// CombatStopWithPets leg is unmodeled (no pet attack-stop primitive
+	// that does not halt motion), same delta as the player twin; the
+	// false leg only clears the flag, no CombatStop, per C++.
+	methods["SetSanctuary"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetSanctuary requires a boolean")
+			}
+			apply = b
+		}
+		s.motionMu.Lock()
+		if apply {
+			motion.PVPFlags |= pvpFlagSanctuary
+		} else {
+			motion.PVPFlags &^= pvpFlagSanctuary
+		}
+		motion.PVPFlagsKnown = true
+		var victim uint64
+		var mapID, instanceID uint32
+		var guid uint64
+		var x, y, z float32
+		var phase uint32
+		if apply {
+			victim = motion.TargetGUID
+			motion.TargetGUID = 0
+			motion.AlreadyCallAssistance = false
+			motion.AssistAt = time.Time{}
+			motion.AssistVictim = 0
+			motion.Assistants = nil
+			motion.InCombat = false
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.ClearThreat()
+			}
+			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
+			x, y, z = motion.X, motion.Y, motion.Z
+			phase = motion.PhaseMask
+		}
+		s.motionMu.Unlock()
+		if apply {
+			if victim != 0 {
+				stopPkt := buildAttackStop(guid, victim, false)
+				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, x, y, z, phase)
+			}
+			s.clearCreatureVisualTarget(motion)
+			s.removeCreatureAttackers(mapID, instanceID, guid)
+			s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+			s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
+		}
+		return nil, nil
+	}
+	// GetSpeed is UnitMethods::GetSpeed (UnitMethods.h:1392-1404):
+	// Unit::GetSpeed (Unit.cpp:8811-8814) = rate * baseMoveSpeed[type].
+	// MOVE_WALK=0 reads the motion walk speed (template walk speed,
+	// 2.5 fallback), MOVE_RUN=1 the engine run speed (base 7.0 times
+	// the creatureRunSpeedRate fold, 7.0 fallback), MOVE_FLIGHT=6 the
+	// Creature::Initialize flight speed (1.0 * 7.0, creaturemotion.go:507).
+	// Other move types have no Go creature model and error, mirroring
+	// the SetSpeedRate rejection.
+	methods["GetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		walk, run := motion.Speed, motion.RunSpeed
+		s.motionMu.Unlock()
+		switch mt {
+		case 0:
+			if walk <= 0 {
+				walk = creatureBaseWalkSpeed
+			}
+			return []any{walk}, nil
+		case 1:
+			if run <= 0 {
+				run = creatureBaseRunSpeed
+			}
+			return []any{run}, nil
+		case 6:
+			return []any{float32(creatureBaseFlightSpeed)}, nil
+		default:
+			return nil, fmt.Errorf("GetSpeed supports MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6 only, got %d", mt)
+		}
+	}
+	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1532-1546) for
+	// creatures: the Trinity arm calls SetSpeedRate(type, rate) with
+	// the rate form (the forced flag is voided in C++), so this is the
+	// SetSpeedRate bridge below with the third argument ignored:
+	// MOVE_RUN=1 only, rate <= 0 clears the script override.
+	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if mt != 1 {
+			return nil, fmt.Errorf("SetSpeed supports MOVE_RUN=1 only, got %d", mt)
+		}
+		rate, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		if rate <= 0 {
+			motion.ScriptRunRate = 0
+			motion.ScriptRunRateKnown = false
+		} else {
+			motion.ScriptRunRate = rate
+			motion.ScriptRunRateKnown = true
+		}
+		s.motionMu.Unlock()
+		s.refreshCreatureRunSpeed(creatureAuraKeyForMotion(motion), motion.GUID)
 		return nil, nil
 	}
 	// SetSpeedRate is Unit::SetSpeedRate (Unit.cpp:8821) for MOVE_RUN=1

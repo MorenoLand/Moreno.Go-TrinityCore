@@ -98,6 +98,8 @@ type creatureMotion struct {
 	bytes1CacheKnown      bool
 	SheathState           uint8 // UNIT_FIELD_BYTES_2 byte 0 live value: Lua CreatureMethods::SetSheath (Unit::SetSheath twin, Unit.h:903), init from template bytes2 at spawn
 	SheathStateKnown      bool
+	PVPFlags              uint8 // UNIT_FIELD_BYTES_2 byte 1 script override: Lua UnitMethods::SetSanctuary (SetByteFlag twin, UnitMethods.h:1898); folded over the template byte only while PVPFlagsKnown, so untouched creatures keep the DB value; only the sanctuary bit (0x08) is script-writable, the PvP/FFA bits are never set
+	PVPFlagsKnown         bool
 	DisplayID             uint32 // UNIT_FIELD_DISPLAYID live value: Lua CreatureMethods::SetDisplayId (Unit::SetDisplayId twin, Unit.cpp:10601), init from template model at spawn
 	DisplayIDKnown        bool   // set by the event-surface SetDisplayId bridge; gates the motion->spawn overlay so untouched creatures keep the DB/game-event value
 	Mount                 uint32 // UNIT_FIELD_MOUNTDISPLAYID live value: Lua CreatureMethods::Mount/Dismount (Unit::Mount/Unit::Dismount twin), init from template mount at spawn
