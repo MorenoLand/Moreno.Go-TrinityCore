@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // Spell::EffectDummy (SpellEffects.cpp:792-824) runs at HIT_TARGET per
@@ -12,12 +13,15 @@ import (
 // the spell/effect), so no hook fires for pet-aura spells. C++ fires
 // exactly three arms: gameobject target, TYPEID_UNIT target, item target.
 // Player targets take no arm (the unit arm gates on TYPEID_UNIT) and
-// corpse targets take none either. Both Go sites that apply dummy
-// effects are session (player-cast) paths — finishSpellCast and
-// castSpellDirectWithOverrides — so the caster object is the session
-// player; the creature-cast path applies no dummy legs at all (separate
-// gap), and creature-cast dummy spells therefore fire nothing here.
-// Returns are discarded on all three arms (CallAllFunctions, no retval).
+// corpse targets take none either. The session (player-cast) sites —
+// finishSpellCast and castSpellDirectWithOverrides — fire with the
+// session player as caster; the creature-cast site
+// (castCreatureSpellInternalWithBasePoints) fires with the casting
+// creature as caster through fireCreatureSpellDummyEffectForTargets
+// below. The pet-aura early return is player-caster-only in C++, so no
+// pet-aura gate runs on the creature site; the item arm is vacuous there
+// (creature casts carry no item target). Returns are discarded on all
+// three arms (CallAllFunctions, no retval).
 
 // fireSpellDummyEffect fires one target's dummy-effect hooks for a
 // dummy effect the session spell engine just applied. The pet-aura gate
@@ -95,6 +99,79 @@ func (s *session) fireSpellDummyEffectForTargets(ctx context.Context, spellID ui
 		}
 		seen[guid] = struct{}{}
 		s.fireSpellDummyEffect(ctx, spellID, effectIndex, guid)
+	}
+}
+
+// fireCreatureSpellDummyEffect fires one target's dummy-effect hooks
+// for a dummy effect the creature-cast engine just applied, mirroring
+// the session dispatcher above with the casting creature as caster.
+// C++'s pet-aura early return is player-caster-only, so no gate runs
+// here; player and corpse targets take no arm, and the item arm is
+// vacuous on this path (castCreatureSpellInternal carries no item
+// target), so only the creature and gameobject arms fire.
+func (s *Server) fireCreatureSpellDummyEffect(ctx context.Context, m *creatureMotion, spellID uint32, effectIndex uint8, targetGUID uint64) {
+	if s == nil || m == nil || s.Features == nil || s.Features.Scripts == nil || targetGUID == 0 {
+		return
+	}
+	caster := s.luaMotionCreature(m)
+	if caster == nil {
+		return
+	}
+	switch uint16(targetGUID >> 48) {
+	case 0xF130:
+		motion := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID)
+		if motion == nil {
+			return
+		}
+		creature := s.luaMotionCreature(motion)
+		if creature == nil {
+			return
+		}
+		args := []any{scripting.CreatureEventOnDummyEffect, caster, spellID, int(effectIndex), creature}
+		if _, err := s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDummyEffect, args...); err != nil {
+			s.debug("lua creature dummy effect failed", "error", err)
+		}
+		if _, err := s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDummyEffect, args...); err != nil {
+			s.debug("lua creature dummy effect failed", "error", err)
+		}
+	case 0xF110:
+		goObj := s.serverLuaGameObject(ctx, targetGUID)
+		if goObj == nil {
+			return
+		}
+		// C++ dummy pushes the target LAST (caster, spellId, effIndex,
+		// go), unlike every other GO hook, which pushes it first — so
+		// this calls TriggerGameObjectEvent directly, matching the
+		// session dispatcher's bypass of fireGameObjectEvent.
+		entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+		if _, err := s.Features.Scripts.TriggerGameObjectEvent(ctx, entry, scripting.GameObjectEventOnDummyEffect, caster, spellID, int(effectIndex), goObj); err != nil {
+			s.debug("lua gameobject dummy effect failed", "error", err)
+		}
+	}
+}
+
+// fireCreatureSpellDummyEffectForTargets fires the dummy-effect hooks
+// once per target per effect over a hit list, applying the creature
+// legs' verdict gates: evaded, immune, and missed targets take no arm,
+// and a landed reflect retargets onto the caster, following the threat
+// leg's convention (a reflect recorded with a miss status skips).
+func (s *Server) fireCreatureSpellDummyEffectForTargets(ctx context.Context, m *creatureMotion, spellID uint32, effectIndex uint8, targetGUIDs []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	seen := make(map[uint64]struct{}, len(targetGUIDs))
+	for _, guid := range targetGUIDs {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if _, dup := seen[guid]; dup {
+			continue
+		}
+		seen[guid] = struct{}{}
+		s.fireCreatureSpellDummyEffect(ctx, m, spellID, effectIndex, guid)
 	}
 }
 

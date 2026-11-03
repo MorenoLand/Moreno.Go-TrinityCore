@@ -3361,6 +3361,23 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
+	// Spell::EffectDummy (SpellEffects.cpp:792) for a creature caster:
+	// the HIT_TARGET arm, once per hit target per dummy effect, grouped
+	// with the other effect-grouped arms above (C++ runs effects in
+	// index order; documented approximation). The pet-aura early return
+	// is player-caster-only in C++, so no gate runs here; player and
+	// corpse targets take no arm, and the item arm is vacuous on this
+	// path (creature casts carry no item target). A landed reflect
+	// retargets onto the caster, following the threat leg's convention.
+	// Gated on spellKnown like the tail.
+	if spellKnown {
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect != spellEffectDummy {
+				continue
+			}
+			s.fireCreatureSpellDummyEffectForTargets(ctx, m, spellID, uint8(i), bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		}
+	}
 	// Spell::EffectTeleportUnits (SpellEffects.cpp:1199) for a creature
 	// caster: the HIT_TARGET arm, grouped with the other effect-grouped
 	// arms above (C++ runs effects in index order; documented
