@@ -307,6 +307,68 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	})
 	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
+	// IsDying is UnitMethods::IsDying (UnitMethods.h:316-324): Unit::isDying
+	// (Unit.h:1141) reads m_deathState == JUST_DIED. For creatures that state
+	// is unobservable from Lua: Creature::setDeathState (Creature.cpp:
+	// 2057-2115) promotes JUST_DIED to CORPSE synchronously inside the same
+	// call, before KilledUnit/JustDied hooks fire, so this always reads false.
+	// The player leg (lua_player.go) reads the death-to-release window instead.
+	methods["IsDying"] = luaNoArgs(func() any { return false })
+	// MoveFleeing is UnitMethods::MoveFleeing (UnitMethods.h:2254-2260):
+	// MotionMaster::MoveFleeing(target, time) (MotionMaster.cpp:618-633).
+	// A nil/positionless target errors (the Eluna CHECKOBJ leg); a time of 0
+	// arms the untimed generator leg, which flees until SetFeared(false)
+	// clears it. A motion that no longer resolves is a no-op. The C++
+	// generator's continuous repathing is a single 24yd spline here, the
+	// critter-flee delta. The player surface stays out: player movement is
+	// client-driven and Go has no player flee spline.
+	methods["MoveFleeing"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("MoveFleeing requires a WorldObject target")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("MoveFleeing requires a WorldObject target")
+		}
+		tx, ok := objectFloat32Field(target, "X")
+		if !ok {
+			return nil, fmt.Errorf("MoveFleeing requires a WorldObject target with a position")
+		}
+		ty, ok := objectFloat32Field(target, "Y")
+		if !ok {
+			return nil, fmt.Errorf("MoveFleeing requires a WorldObject target with a position")
+		}
+		var durationMs uint32
+		if len(args) >= 2 && args[1] != nil {
+			d, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			durationMs = d
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.startCreatureFlee(motion, tx, ty, durationMs)
+		}
+		return nil, nil
+	}
+	// SetFeared is UnitMethods::SetFeared (UnitMethods.h:1964-1973) for
+	// creatures: Unit::SetControlled(apply, UNIT_STATE_FLEEING) (Unit.cpp:
+	// 11513-11560) via the setCreatureFeared engine leg. The player
+	// surface stays out (client control + no player flee spline).
+	methods["SetFeared"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetFeared requires a boolean")
+			}
+			apply = b
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.setCreatureFeared(motion, apply)
+		}
+		return nil, nil
+	}
 	// IsInWater/IsUnderWater are Unit::IsInWater/IsUnderWater
 	// (Unit.cpp:3276-3284) via the grid-leg liquid status, over the
 	// builder's live-motion snapshot coords like its other reads.

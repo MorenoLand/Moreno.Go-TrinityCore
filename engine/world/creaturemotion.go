@@ -155,8 +155,14 @@ type creatureMotion struct {
 	// on expiry it evades home (CritterAI::OnMovementGeneratorFinalized,
 	// PassiveAI.cpp:81-86). Zero when not fleeing.
 	FleeingUntil time.Time
-	AttackTime   uint32
-	CombatReach  float32
+	// Fleeing is the untimed FleeingMovementGenerator leg
+	// (MotionMaster::MoveFleeing with time 0, MotionMaster.cpp:628-629):
+	// the creature flees until the generator is removed (SetFeared(false))
+	// instead of a timer expiry. The step tick skips combat/wander while
+	// it is set, like a running FleeingUntil.
+	Fleeing     bool
+	AttackTime  uint32
+	CombatReach float32
 
 	Armor       uint32
 	Resistances [7]uint32
@@ -2435,6 +2441,191 @@ func (s *Server) triggerCritterFlee(ctx context.Context, target combatTarget, at
 	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false, phase, transportGUID)
 }
 
+// startCreatureFlee is the MotionMaster::MoveFleeing (MotionMaster.cpp:618-633)
+// engine leg for creatures: the caller already resolved the flee target's
+// position (a nil enemy returns early in C++, so bindings resolve first and
+// no-op on failure). A duration of 0 arms the untimed
+// FleeingMovementGenerator leg (MotionMaster.cpp:628-629); a positive
+// duration arms the TimedFleeingMovementGenerator leg (:626-627). The
+// launch reuses triggerCritterFlee's 24yd straight-line spline (the C++
+// generator repaths continuously; the single spline is the documented
+// critter-flee delta) and arms the step tick's combat/wander skip. Dead
+// creatures never flee: C++ generators never run on a corpse.
+func (s *Server) startCreatureFlee(motion *creatureMotion, casterX, casterY float32, durationMs uint32) {
+	if s == nil || motion == nil {
+		return
+	}
+	now := time.Now()
+	s.motionMu.Lock()
+	if motion.Health == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	dx := float64(motion.X - casterX)
+	dy := float64(motion.Y - casterY)
+	dist := math.Hypot(dx, dy)
+	if dist < 0.2 {
+		dx, dy, dist = 1, 0, 1
+	}
+	const fleeDist = 24.0
+	destX := motion.X + float32(dx/dist*fleeDist)
+	destY := motion.Y + float32(dy/dist*fleeDist)
+	if durationMs == 0 {
+		motion.Fleeing = true
+		motion.FleeingUntil = time.Time{}
+	} else {
+		motion.Fleeing = false
+		motion.FleeingUntil = now.Add(time.Duration(durationMs) * time.Millisecond)
+	}
+	speed := creatureSplineVelocity(motion, false)
+	if speed < 0.001 {
+		// MoveSplineInit::Launch validation failure (MoveSpline.cpp:210):
+		// no spline, no packet — the flee state still arms, so the creature
+		// stands still fleeing like the critter-flee slow-speed leg.
+		s.motionMu.Unlock()
+		return
+	}
+	duration := splineDurationMs(fleeDist, speed)
+	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
+	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+	motion.X, motion.Y = destX, destY
+	motion.Moving = true
+	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, fromZ, duration, false, 0, false, phase, transportGUID)
+}
+
+// creatureFearAuraCaster returns the caster of a live SPELL_AURA_MOD_FEAR
+// aura on the motion, if one exists (Unit::SetFeared, Unit.cpp:11707-11709,
+// reads the first fear aura's caster). The presence map carries no caster,
+// but activeCreatureAuras rows do.
+func (s *Server) creatureFearAuraCaster(motion *creatureMotion) (uint64, bool) {
+	if s == nil || motion == nil {
+		return 0, false
+	}
+	key := creatureAuraKeyForMotion(motion)
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if aura.AuraType == spellAuraModFear {
+			return aura.CasterGUID, true
+		}
+	}
+	return 0, false
+}
+
+// unitPositionByGUID resolves a creature motion or a live player session to
+// its X/Y, accepting either GUID shape a motion target can carry (creature
+// world GUIDs, session playerGUIDs, loaded player GUIDs).
+func (s *Server) unitPositionByGUID(mapID, instanceID uint32, guid uint64) (float32, float32, bool) {
+	if s == nil || guid == 0 {
+		return 0, 0, false
+	}
+	if motion := s.findCreatureMotion(mapID, instanceID, guid); motion != nil {
+		s.motionMu.Lock()
+		x, y := motion.X, motion.Y
+		s.motionMu.Unlock()
+		return x, y, true
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil {
+			continue
+		}
+		if sess.playerGUID == guid || sess.player.GUID == guid {
+			return sess.player.X, sess.player.Y, true
+		}
+	}
+	return 0, 0, false
+}
+
+// setCreatureFeared is the Unit::SetControlled(apply, UNIT_STATE_FLEEING)
+// leg Eluna calls for SetFeared on TRINITY (UnitMethods.h:1964-1973,
+// Unit.cpp:11513-11560). Apply runs Unit::SetFeared(true) (Unit.cpp:11700-
+// 11712): the visual target drops, then MoveFleeing runs from the fear
+// aura's caster (untimed leg) or, with no fear aura, from the attacker
+// (getAttackerForHelper, Unit.cpp:5627: the engaged victim) for the
+// CONFIG_CREATURE_FAMILY_FLEE_DELAY 7000ms; no caster means MoveFleeing
+// returns early in C++, so this no-ops too. An already-fleeing creature
+// is a no-op (SetControlled's HasUnitState early return). Clear runs
+// Unit::SetFeared(false) (:11725-11733): the flee legs drop and a live
+// creature re-stares at its threat victim; a fear aura present makes the
+// clear a no-op (SetControlled's HasAuraType early return) since the aura
+// owns the generator. DELTAS: the melee-attack-stop packet of SetControlled
+// is skipped (the flee tick stops swings on its next step anyway), and the
+// out-of-combat MoveTargetedHome leg is skipped (the tick resumes
+// idle/wander instead of walking home immediately).
+func (s *Server) setCreatureFeared(motion *creatureMotion, apply bool) {
+	if s == nil || motion == nil {
+		return
+	}
+	if apply {
+		s.motionMu.Lock()
+		fleeing := motion.Fleeing || (!motion.FleeingUntil.IsZero() && time.Now().Before(motion.FleeingUntil))
+		dead := motion.Health == 0
+		s.motionMu.Unlock()
+		if fleeing || dead {
+			return
+		}
+		var casterX, casterY float32
+		var ok bool
+		var durationMs uint32 = 7000
+		if casterGUID, hasFear := s.creatureFearAuraCaster(motion); hasFear {
+			durationMs = 0
+			casterX, casterY, ok = s.unitPositionByGUID(motion.Map, motion.InstanceID, casterGUID)
+		} else {
+			s.motionMu.Lock()
+			victim := motion.TargetGUID
+			if victim == 0 && motion.ThreatMgr != nil {
+				victim = motion.ThreatMgr.GetCurrentVictim()
+			}
+			s.motionMu.Unlock()
+			if victim == 0 {
+				return
+			}
+			casterX, casterY, ok = s.unitPositionByGUID(motion.Map, motion.InstanceID, victim)
+		}
+		if !ok {
+			return
+		}
+		s.clearCreatureVisualTarget(motion)
+		s.startCreatureFlee(motion, casterX, casterY, durationMs)
+		return
+	}
+	if s.creatureHasAuraType(creatureAuraKeyForMotion(motion), spellAuraModFear) {
+		return
+	}
+	s.motionMu.Lock()
+	alive := motion.Health > 0
+	victim := uint64(0)
+	if alive {
+		if motion.ThreatMgr != nil {
+			victim = motion.ThreatMgr.GetCurrentVictim()
+		}
+		if victim == 0 {
+			victim = motion.TargetGUID
+		}
+	}
+	motion.Fleeing = false
+	motion.FleeingUntil = time.Time{}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	s.motionMu.Unlock()
+	if victim != 0 {
+		s.motionMu.Lock()
+		motion.ScriptTargetGUID = victim
+		motion.ScriptTargetKnown = true
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldTarget: uint32(victim), unitFieldTarget + 1: uint32(victim >> 32)})
+	}
+}
+
 // clearCreatureVisualTarget is the engine half of Creature::SetTarget
 // (Creature.cpp:3221-3226): Unit::CombatStop (Unit.cpp:5774) and the
 // setDeathState death arm (Creature.cpp:2094) clear the visual target
@@ -3358,13 +3549,20 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// engaged in Go's model, so the full evade funnel's threat/aura/combat
 	// resets are vacuous; the home walk below mirrors triggerCreatureEvade's
 	// tail exactly). Killed mid-flee is handled by the Health==0 gate above.
+	// The untimed flee leg never expires on its own: while Fleeing is set
+	// the tick skips combat/wander until SetFeared(false) clears it.
+	if motion.Fleeing {
+		return
+	}
 	if !motion.FleeingUntil.IsZero() {
 		if now.Before(motion.FleeingUntil) {
 			return
 		}
 		motion.FleeingUntil = time.Time{}
+		// A timed flee on a non-critter expires into the normal tick below
+		// (combat/wander resume); only critters take the evade-home arm.
 		homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
-		if homeDist > 0.5 {
+		if motion.CreatureType == 8 && homeDist > 0.5 {
 			speed := creatureSplineVelocity(motion, false)
 			if speed < 0.001 {
 				// MoveSplineInit::Launch -> MoveSplineInitArgs::Validate (MoveSpline.cpp:210):

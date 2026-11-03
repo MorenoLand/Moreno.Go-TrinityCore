@@ -1021,6 +1021,15 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
+	// IsDying is UnitMethods::IsDying (UnitMethods.h:316-324): Unit::isDying
+	// (Unit.h:1141) reads m_deathState == JUST_DIED. For players that state
+	// spans death until spirit release (Player::setDeathState, Player.cpp:
+	// 1385-1423, promotes only at :4779 on release): Go's just-died window
+	// is Health == 0 with the ghost flag clear — buildPlayerRepop (death.go)
+	// sets the ghost flag and Health 1 on release, and killPlayer zeroes
+	// Health at death (the Spirit of Redemption completion zeroes it when the
+	// deferred JUST_DIED cascade lands, matching its C++ timing).
+	methods["IsDying"] = luaNoArgs(func() any { return state.Health == 0 && state.PlayerFlags&playerFlagGhost == 0 })
 	// IsInBack(target[, arc]) is WorldObject::isInBack(target, arc) =
 	// !HasInArc(2*pi - arc, target) (Object.cpp:1417-1420) on the player
 	// surface, twin of the creature bridge (lua_creature_events.go). Eluna's
