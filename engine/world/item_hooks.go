@@ -102,6 +102,7 @@ func (s *session) sessionLuaItem(ctx context.Context, rawGUID uint64) *scripting
 	}
 	live := s.itemTemplateLive(ctx, entry)
 	live.Players = s.server.luaPlayers
+	live.InTrade = s.server.itemInTrade
 	live.LoadInstance = func() (scripting.ItemInstanceLive, bool) {
 		var ownerGUID int64
 		var flags, countRow, durability uint32

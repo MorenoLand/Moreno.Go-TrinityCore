@@ -145,6 +145,8 @@ type Server struct {
 	shutdown           serverShutdown
 	gameEventHookMu    sync.Mutex // guards gameEventActive (see game_event_hooks.go)
 	gameEventActive    map[int64]struct{}
+	tradeInTradeMu     sync.Mutex // guards tradeInTrade (see trade.go)
+	tradeInTrade       map[uint64]bool
 	ticketsEnabled     atomic.Bool
 	ticketsLastChange  atomic.Int64 // TicketMgr::_lastChange (TicketMgr.cpp:273); see noteTicketsChanged
 	objectsMu          sync.RWMutex

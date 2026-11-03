@@ -425,7 +425,11 @@ type ItemLive struct {
 	// EnchantmentExists is the SpellItemEnchantment DBC lookup behind
 	// SetEnchantment's C++ store check; nil reads as not found.
 	EnchantmentExists func(uint32) bool
-	Players           func() []*Object
+	// InTrade is the goroutine-safe Item::IsInTrade read (Item.h:108):
+	// the world's server-guarded mirror of mb_in_trade; nil reads as
+	// not in trade.
+	InTrade func(uint64) bool
+	Players func() []*Object
 }
 
 // itemMaxStackCount mirrors ItemTemplate::GetMaxStackSize
@@ -533,8 +537,9 @@ func itemSetEnchantmentString(raw string, slot, id uint32) string {
 // UpdateInstance callback straight to the item_instance row, so a later
 // LoadInstance read sees the write; there is no client values-update
 // broadcast for items in Go, so a live client only sees the change on
-// its next inventory refresh. Still unbridged: IsInTrade (the session
-// trade flag is not safely readable from the scripting goroutine).
+// its next inventory refresh. IsInTrade reads the world's
+// server-guarded mb_in_trade mirror (see trade.go), never the
+// session trade state, so it is safe from any Lua goroutine.
 func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 	load := live.LoadTemplate
 	if load == nil {
@@ -795,6 +800,20 @@ func NewItemObject(guid uint64, entry, count uint32, live ItemLive) *Object {
 			return instanceValue(func(inst ItemInstanceLive) any {
 				return !inst.InBag && inst.Slot < itemEquipmentSlotEnd
 			}), nil
+		},
+		// Item::IsInTrade (Item.h:107-108, 215): mb_in_trade is set
+		// only by setAcceptTradeMode and cleared by
+		// clearAcceptTradeMode (TradeHandler.cpp:209-248), so the
+		// flag lives only inside the accept-process window; the
+		// world mirror behind live.InTrade tracks exactly that
+		// window. A template-only object reads false: a fresh Item
+		// constructs with mb_in_trade false, and loot items never
+		// enter a trade window.
+		"IsInTrade": func(context.Context, []any) ([]any, error) {
+			if live.InTrade == nil {
+				return []any{false}, nil
+			}
+			return []any{live.InTrade(guid)}, nil
 		},
 		// Item::IsNotEmptyBag (Item.cpp:298-303): ToBag() non-nil and
 		// non-empty; a non-bag reads false.

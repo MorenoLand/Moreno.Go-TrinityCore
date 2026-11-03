@@ -116,6 +116,49 @@ func (s *session) setTradeSpell(spellID uint32, castItemGUID uint64) {
 	}
 }
 
+// itemInTrade reports whether guid carries Item::mb_in_trade
+// (Item.h:107-108, 215) according to the server-guarded mirror.
+// The mirror exists because playerTradeState is session-goroutine
+// owned while Lua item methods can run on any goroutine:
+// setAcceptTradeMode, clearAcceptTradeMode and cancelTrade maintain
+// it alongside InTradeItems, so a Lua read never touches the session
+// map. GUIDs are probed in raw, high and low forms, the same three
+// forms sessionLuaItem probes item_instance with, because trade-slot
+// GUIDs and Lua GUID arguments may differ in the 0x4000 high bits.
+func (srv *Server) itemInTrade(guid uint64) bool {
+	if srv == nil {
+		return false
+	}
+	srv.tradeInTradeMu.Lock()
+	defer srv.tradeInTradeMu.Unlock()
+	high := uint64(0x4000) << 48
+	return srv.tradeInTrade[guid] || srv.tradeInTrade[guid|high] || srv.tradeInTrade[guid&^high]
+}
+
+func (srv *Server) addTradeInTrade(guid uint64) {
+	if srv == nil {
+		return
+	}
+	srv.tradeInTradeMu.Lock()
+	if srv.tradeInTrade == nil {
+		srv.tradeInTrade = make(map[uint64]bool)
+	}
+	srv.tradeInTrade[guid] = true
+	srv.tradeInTradeMu.Unlock()
+}
+
+func (srv *Server) removeTradeInTrade(guid uint64) {
+	if srv == nil {
+		return
+	}
+	srv.tradeInTradeMu.Lock()
+	high := uint64(0x4000) << 48
+	delete(srv.tradeInTrade, guid)
+	delete(srv.tradeInTrade, guid|high)
+	delete(srv.tradeInTrade, guid&^high)
+	srv.tradeInTradeMu.Unlock()
+}
+
 // setAcceptTradeMode mirrors the static setAcceptTradeMode
 // (TradeHandler.cpp:209-233): both trades enter the accept process
 // (TradeData::SetInAcceptProcess(true)) and the six traded items of each
@@ -130,6 +173,9 @@ func setAcceptTradeMode(my, partner *session) {
 		for slot := uint8(0); slot < tradeSlotTradedCount; slot++ {
 			if it, ok := st.trade.Items[slot]; ok && it.ItemGUID != 0 {
 				st.trade.InTradeItems[it.ItemGUID] = true
+				if st.server != nil {
+					st.server.addTradeInTrade(it.ItemGUID)
+				}
 			}
 		}
 	}
@@ -145,6 +191,11 @@ func clearAcceptTradeMode(my, partner *session) {
 			continue
 		}
 		st.trade.InAcceptProcess = false
+		if st.server != nil {
+			for guid := range st.trade.InTradeItems {
+				st.server.removeTradeInTrade(guid)
+			}
+		}
 		st.trade.InTradeItems = nil
 	}
 }
@@ -1735,6 +1786,16 @@ func (s *session) cancelTrade(sendback bool) {
 		return
 	}
 	partner := s.trade.Partner
+	if s.server != nil {
+		for guid := range s.trade.InTradeItems {
+			s.server.removeTradeInTrade(guid)
+		}
+		if partner != nil && partner.trade != nil {
+			for guid := range partner.trade.InTradeItems {
+				s.server.removeTradeInTrade(guid)
+			}
+		}
+	}
 	if sendback {
 		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0, 0)
 	}
