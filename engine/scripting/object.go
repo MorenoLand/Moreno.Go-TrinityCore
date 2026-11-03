@@ -119,8 +119,9 @@ func genericObjectMethod(object *Object, name string) (ObjectMethod, bool) {
 		// Below is health < CountPctFromMaxHealth(pct), Above is
 		// health > CountPctFromMaxHealth(pct), and CountPct is
 		// CalculatePct (Util.h:66-70), base * float(pct) / 100
-		// truncated to uint32. Builder methods take precedence, so
-		// this fallback serves the player and creature surfaces.
+		// truncated to uint32. The unit builders define these over
+		// live/snapshot health; this fallback serves objects without
+		// their own builder.
 		return func(_ context.Context, args []any) ([]any, error) {
 			if len(args) < 1 {
 				return nil, fmt.Errorf("%s requires a percent", name)

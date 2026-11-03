@@ -305,6 +305,13 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return float32(state.Health) * 100 / float32(state.MaxHealth)
 	})
+	// HealthBelowPct/HealthAbovePct/CountPctFromCurHealth/
+	// CountPctFromMaxHealth over the same construction snapshot
+	// GetHealth/GetHealthPct read on this surface, replacing the
+	// generic fallback's Fields read with builder-owned methods.
+	for name, fn := range unitHealthPctMethods(func() (uint32, uint32) { return state.Health, state.MaxHealth }) {
+		methods[name] = fn
+	}
 	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
 	// IsDying is UnitMethods::IsDying (UnitMethods.h:316-324): Unit::isDying

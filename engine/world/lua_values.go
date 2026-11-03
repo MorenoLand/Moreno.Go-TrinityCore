@@ -84,6 +84,45 @@ func luaInt32Arg(args []any, index int) (int32, error) {
 	return int32(value), nil
 }
 
+// unitHealthPctMethods builds HealthBelowPct/HealthAbovePct/
+// CountPctFromCurHealth/CountPctFromMaxHealth (UnitMethods.h,
+// Unit.h:872-878) over a health reader. CalculatePct (Util.h:66-70)
+// is base * float(pct) / 100 truncated to uint32; the float32
+// conversion here reproduces it, including the modulo wrap for
+// negative percents. The percent truncates like C++
+// luaL_checkinteger, unlike luaInt32Arg's integral-only gate.
+func unitHealthPctMethods(read func() (health, maxHealth uint32)) map[string]scripting.ObjectMethod {
+	countPct := func(base uint32, pct int32) uint32 {
+		return uint32(float32(base) * float32(pct) / 100)
+	}
+	method := func(kind string) scripting.ObjectMethod {
+		return func(_ context.Context, args []any) ([]any, error) {
+			pctValue, err := luaGenericFloat32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			pct := int32(pctValue)
+			health, maxHealth := read()
+			switch kind {
+			case "HealthBelowPct":
+				return []any{health < countPct(maxHealth, pct)}, nil
+			case "HealthAbovePct":
+				return []any{health > countPct(maxHealth, pct)}, nil
+			case "CountPctFromCurHealth":
+				return []any{countPct(health, pct)}, nil
+			default:
+				return []any{countPct(maxHealth, pct)}, nil
+			}
+		}
+	}
+	return map[string]scripting.ObjectMethod{
+		"HealthBelowPct":        method("HealthBelowPct"),
+		"HealthAbovePct":        method("HealthAbovePct"),
+		"CountPctFromCurHealth": method("CountPctFromCurHealth"),
+		"CountPctFromMaxHealth": method("CountPctFromMaxHealth"),
+	}
+}
+
 func registerIndexedValueMethods(methods map[string]scripting.ObjectMethod, backend indexedValueBackend) {
 	setSlot := func(index int, value uint32, always bool) error {
 		fields, changed, ok := backend.write(index, func(uint32) uint32 { return value })

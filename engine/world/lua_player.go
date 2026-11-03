@@ -1061,6 +1061,13 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return float32(state.Health) * 100 / float32(state.MaxHealth)
 	})
+	// HealthBelowPct/HealthAbovePct/CountPctFromCurHealth/
+	// CountPctFromMaxHealth read the live player state, not the
+	// construction-time Fields snapshot the generic fallback reads,
+	// so a stored player object stays correct after damage/heals.
+	for name, fn := range unitHealthPctMethods(func() (uint32, uint32) { return state.Health, state.MaxHealth }) {
+		methods[name] = fn
+	}
 	methods["GetPower"] = func(_ context.Context, args []any) ([]any, error) {
 		power, err := playerPowerIndex(args, state.Class)
 		if err != nil {

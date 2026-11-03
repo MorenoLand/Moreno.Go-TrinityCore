@@ -369,6 +369,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		defer s.motionMu.Unlock()
 		return motion.PVPFlags&pvpFlagPvP != 0
 	})
+	// HealthBelowPct/HealthAbovePct/CountPctFromCurHealth/
+	// CountPctFromMaxHealth over the live motion under motionMu.
+	// This surface previously had no health methods of its own and
+	// relied on the generic fallback's construction-time Fields
+	// snapshot, so a stored handler creature went stale.
+	for name, fn := range unitHealthPctMethods(func() (uint32, uint32) {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.Health, motion.MaxHealth
+	}) {
+		methods[name] = fn
+	}
 	// GetClassAsString/GetRaceAsString/GetControllerGUID/
 	// GetControllerGUIDS mirror the session-creature twins in
 	// lua_objects.go: ChrClasses Name[locale] for the motion's
