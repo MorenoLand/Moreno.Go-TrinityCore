@@ -1146,6 +1146,58 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsMounted"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
 	methods["GetMountId"] = luaNoArgs(func() any { return state.MountDisplayID })
 	methods["GetPetGUID"] = luaNoArgs(func() any { return state.PetGUID })
+	// GetCharmerGUID is Unit::GetCharmerGUID (Unit.h:1158):
+	// UNIT_FIELD_CHARMEDBY. Go stores no charmer for players (the
+	// GetControllerGUID precedent), so this reads 0.
+	methods["GetCharmerGUID"] = luaNoArgs(func() any { return uint64(0) })
+	// GetCharmGUID is Unit::GetCharmedGUID (Unit.h:1161) via the
+	// shared instance scan for a motion charmed by this player.
+	methods["GetCharmGUID"] = luaNoArgs(func() any {
+		return s.server.unitCharmedGUID(state.Map, state.InstanceID, state.GUID)
+	})
+	// GetCritterGUID is Unit::GetCritterGUID (Unit.h:1156):
+	// UNIT_FIELD_CRITTER, the vanity-pet mirror on the player state.
+	methods["GetCritterGUID"] = luaNoArgs(func() any { return state.CritterGUID })
+	// SetCritterGUID is Unit::SetCritterGUID (UnitMethods.h:1908):
+	// the UNIT_FIELD_CRITTER write; the values builder mirrors the
+	// state field, so a player update propagates it.
+	methods["SetCritterGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		state.CritterGUID = guid
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// GetMinionGUID is Unit::GetMinionGUID (Unit.h:1151):
+	// UNIT_FIELD_SUMMON. Go's player values builder writes the pet
+	// GUID into that field, so this reads the pet slot. DELTA: a
+	// guardian summoned before the pet sits earlier in C++'s
+	// SUMMON list, where Go's single-slot model reads the pet.
+	methods["GetMinionGUID"] = luaNoArgs(func() any { return state.PetGUID })
+	// SetPetGUID is Unit::SetPetGUID (UnitMethods.h:1806): the
+	// m_SummonSlot[PET] write, which Go models as the player PetGUID
+	// (the values builder mirrors it into UNIT_FIELD_SUMMON).
+	// LuaFunctions.cpp:331 registers SetMinionGUID to this same
+	// C++ function, so this binding closes both names. No pet
+	// object is created or dismissed here, matching the C++ slot
+	// write; the creature leg stays out (no summon-slot model).
+	methods["SetPetGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		state.PetGUID = guid
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
 	// HasSpellCooldown is PlayerMethods.h:217 (TRINITY arm): the
 	// SpellHistory::HasCooldown twin in death.go — the per-spell entry,
 	// then the DBC-category arm. The previous body compared the

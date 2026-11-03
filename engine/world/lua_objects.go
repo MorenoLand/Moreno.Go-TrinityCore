@@ -403,6 +403,81 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return unitControllerGUID(motion.Charmed, motion.CharmerGUID, motion.OwnerGUID)
 	})
+	// GetCharmerGUID is Unit::GetCharmerGUID (Unit.h:1158):
+	// UNIT_FIELD_CHARMEDBY, the motion's charmer slot; a despawned
+	// motion reads 0 like the controller twin.
+	methods["GetCharmerGUID"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return uint64(0)
+		}
+		return motion.CharmerGUID
+	})
+	// GetCharmGUID is Unit::GetCharmedGUID (Unit.h:1161) via the
+	// shared instance scan for a motion charmed by this creature.
+	methods["GetCharmGUID"] = luaNoArgs(func() any {
+		return s.server.unitCharmedGUID(state.Map, state.InstanceID, state.GUID)
+	})
+	// GetCritterGUID is Unit::GetCritterGUID (Unit.h:1156): the
+	// motion's critter slot, 0 unless a script set one.
+	methods["GetCritterGUID"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return uint64(0)
+		}
+		return motion.CritterGUID
+	})
+	// SetCritterGUID is Unit::SetCritterGUID (UnitMethods.h:1908):
+	// the motion critter-slot write, mirroring SetNativeDisplayId's
+	// write-through shape; a despawned motion is a silent no-op.
+	// No values broadcast: Go carries no creature UNIT_FIELD_CRITTER
+	// leg, unlike the native-display field.
+	methods["SetCritterGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.CritterGUID = guid
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// GetMinionGUID is Unit::GetMinionGUID (Unit.h:1151) via the
+	// shared instance scan for an uncharmed motion owned by this
+	// creature (pets and guardians included, charmed victims not).
+	methods["GetMinionGUID"] = luaNoArgs(func() any {
+		return s.server.unitMinionGUID(state.Map, state.InstanceID, state.GUID)
+	})
+	// SetOwnerGUID is Unit::SetOwnerGUID (Unit.cpp:5971): the
+	// UNIT_FIELD_SUMMONEDBY write, with C++'s equal-value early
+	// return; a despawned motion is a silent no-op. DELTA: C++'s
+	// owner-player values-update notify has no Go twin.
+	methods["SetOwnerGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry || motion.OwnerGUID == guid {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.OwnerGUID = guid
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
 	// GetBaseSpellPower is Unit::GetBaseSpellPower (UnitMethods.h:743):
 	// the PLAYER_FIELD_MOD_DAMAGE_DONE_POS + school field, which
 	// creatures do not carry, so it reads 0. The school arg is still

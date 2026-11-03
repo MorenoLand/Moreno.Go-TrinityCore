@@ -336,6 +336,7 @@ type creatureMotion struct {
 	OwnerGUID      uint64
 	ObjectSlots    [4]uint64 // Unit::m_ObjectSlot[4] (Unit.h): the GUIDs of the game objects summoned by SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 on this creature, mirroring the player ObjectSlots twin (player_state.go)
 	CharmerGUID    uint64
+	CritterGUID    uint64 // UNIT_FIELD_CRITTER mirror (Unit.h:1156): the vanity-critter GUID, script-settable via SetCritterGUID; creatures carry none unless a script sets one.
 	Charmed        bool
 	Possessed      bool // CHARM_TYPE_POSSESS marker: drives the uncharm POSSESSED-flag and charmer REMOVE_CLIENT_CONTROL arms (HandleModPossess, SpellAuraEffects.cpp:2866)
 	CharmUnitFlags uint32

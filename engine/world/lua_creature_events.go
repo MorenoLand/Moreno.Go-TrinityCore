@@ -399,6 +399,66 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return motion.GUID
 	})
+	// GetCharmerGUID is Unit::GetCharmerGUID (Unit.h:1158):
+	// UNIT_FIELD_CHARMEDBY, the motion's charmer slot.
+	methods["GetCharmerGUID"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.CharmerGUID
+	})
+	// GetCharmGUID is Unit::GetCharmedGUID (Unit.h:1161) via the
+	// shared instance scan for a motion charmed by this creature.
+	methods["GetCharmGUID"] = luaNoArgs(func() any {
+		return s.unitCharmedGUID(motion.Map, motion.InstanceID, motion.GUID)
+	})
+	// GetCritterGUID is Unit::GetCritterGUID (Unit.h:1156): the
+	// motion's critter slot, 0 unless a script set one.
+	methods["GetCritterGUID"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.CritterGUID
+	})
+	// SetCritterGUID is Unit::SetCritterGUID (UnitMethods.h:1908):
+	// the motion critter-slot write. No values broadcast: Go
+	// carries no creature UNIT_FIELD_CRITTER leg.
+	methods["SetCritterGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		s.motionMu.Lock()
+		motion.CritterGUID = guid
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// GetMinionGUID is Unit::GetMinionGUID (Unit.h:1151) via the
+	// shared instance scan for an uncharmed motion owned by this
+	// creature (pets and guardians included, charmed victims not).
+	methods["GetMinionGUID"] = luaNoArgs(func() any {
+		return s.unitMinionGUID(motion.Map, motion.InstanceID, motion.GUID)
+	})
+	// SetOwnerGUID is Unit::SetOwnerGUID (Unit.cpp:5971): the
+	// UNIT_FIELD_SUMMONEDBY write, with C++'s equal-value early
+	// return. DELTA: C++'s owner-player values-update notify has
+	// no Go twin.
+	methods["SetOwnerGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		s.motionMu.Lock()
+		if motion.OwnerGUID != guid {
+			motion.OwnerGUID = guid
+		}
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// GetOwner returns the owning player object for a pet/guardian motion
 	// (Unit::GetOwner, Unit.h) or nil when the motion has no owner or the
 	// owner session is gone. Lets Lua port owner-targeted arms such as
