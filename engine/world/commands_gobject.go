@@ -214,6 +214,28 @@ func parseGObjectEntry(arg string) (uint32, bool) {
 	return uint32(v), true
 }
 
+// parseGObjectSpawnID mirrors the GameObjectSpawnId variant
+// (cs_gobject.cpp:50): a hyperlink |Hgameobject:guid| or a bare spawn id.
+// The guid arms previously parsed numerics only, so a shift-clicked GO link
+// fell through to OBJNOTFOUND where C++ resolves it to the spawn.
+func parseGObjectSpawnID(arg string) (uint32, bool) {
+	if strings.HasPrefix(arg, "|Hgameobject:") {
+		rest := strings.TrimPrefix(arg, "|Hgameobject:")
+		if i := strings.Index(rest, "|"); i >= 0 {
+			rest = rest[:i]
+		}
+		if v, err := strconv.ParseUint(rest, 10, 32); err == nil {
+			return uint32(v), true
+		}
+		return 0, false
+	}
+	v, err := strconv.ParseUint(arg, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(v), true
+}
+
 // gobjectQuatFromEulerZYX mirrors QuaternionData::fromEulerAnglesZYX
 // (cs_gobject.cpp:139, 165).
 func gobjectQuatFromEulerZYX(yaw, pitch, roll float64) (x, y, z, w float32) {
@@ -303,8 +325,8 @@ func (s *session) handleGObjectActivate(ctx context.Context, args []string) {
 		s.sendSysMessage("Database not available.")
 		return
 	}
-	spawnID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || spawnID == 0 {
+	spawnID, parseOK := parseGObjectSpawnID(args[0])
+	if !parseOK || spawnID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
 		return
 	}
@@ -333,8 +355,8 @@ func (s *session) handleGObjectDelete(ctx context.Context, args []string) {
 		s.sendSysMessage("Database not available.")
 		return
 	}
-	spawnID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || spawnID == 0 {
+	spawnID, parseOK := parseGObjectSpawnID(args[0])
+	if !parseOK || spawnID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
 		return
 	}
@@ -376,7 +398,19 @@ func (s *session) handleGObjectInfo(ctx context.Context, args []string) {
 	var entry uint32
 	var spawn *gobjectSpawnRow
 	rest := args
-	if strings.HasPrefix("guid", strings.ToLower(args[0])) {
+	if strings.HasPrefix(args[0], "|Hgameobject:") {
+		spawnID, ok := parseGObjectSpawnID(args[0])
+		if !ok {
+			s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
+			return
+		}
+		var spawnOK bool
+		spawn, spawnOK = s.gobjectSpawnByGUID(ctx, db, spawnID)
+		if !spawnOK {
+			return
+		}
+		entry = spawn.entry
+	} else if strings.HasPrefix("guid", strings.ToLower(args[0])) {
 		if len(args) < 2 {
 			s.sendSysMessage("Syntax: .gobject info [guid] <entry|guid>")
 			return
@@ -448,8 +482,8 @@ func (s *session) handleGObjectMove(ctx context.Context, args []string) {
 		s.sendSysMessage("Database not available.")
 		return
 	}
-	spawnID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || spawnID == 0 {
+	spawnID, parseOK := parseGObjectSpawnID(args[0])
+	if !parseOK || spawnID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
 		return
 	}
@@ -628,8 +662,8 @@ func (s *session) handleGObjectTurn(ctx context.Context, args []string) {
 		s.sendSysMessage("Database not available.")
 		return
 	}
-	spawnID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || spawnID == 0 {
+	spawnID, parseOK := parseGObjectSpawnID(args[0])
+	if !parseOK || spawnID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
 		return
 	}
@@ -740,6 +774,7 @@ func (s *session) handleGObjectAddTemp(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
 		return
 	}
+	rotX, rotY, rotZ, rotW := gobjectQuatFromEulerZYX(float64(s.player.Orientation), 0, 0)
 	spawnSecs := int64(300)
 	if len(args) > 1 {
 		v, err := strconv.ParseInt(args[1], 10, 64)
@@ -751,20 +786,21 @@ func (s *session) handleGObjectAddTemp(ctx context.Context, args []string) {
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
 	dyn := &dynamicGameObjectState{
-		GUID:         gameObjectGUID(lowGUID, entry),
-		LowGUID:      lowGUID,
-		Entry:        entry,
-		Map:          s.player.Map,
-		InstanceID:   s.player.InstanceID,
-		X:            s.player.X,
-		Y:            s.player.Y,
-		Z:            s.player.Z,
-		Orientation:  s.player.Orientation,
-		State:        GameObjectStateReady,
-		Type:         tmpl.goType,
-		DisplayID:    tmpl.displayID,
-		Size:         tmpl.size,
+		GUID:           gameObjectGUID(lowGUID, entry),
+		LowGUID:        lowGUID,
+		Entry:          entry,
+		Map:            s.player.Map,
+		InstanceID:     s.player.InstanceID,
+		X:              s.player.X,
+		Y:              s.player.Y,
+		Z:              s.player.Z,
+		Orientation:    s.player.Orientation,
+		State:          GameObjectStateReady,
+		Type:           tmpl.goType,
+		DisplayID:      tmpl.displayID,
+		Size:           tmpl.size,
 		ParentRotation: [4]float32{0, 0, 0, 1},
+		LocalRotation:  [4]float32{rotX, rotY, rotZ, rotW},
 		IsRuntimeSpawn: true,
 	}
 	dyn.DespawnTimer = time.AfterFunc(time.Duration(spawnSecs)*time.Second, func() {
@@ -787,8 +823,8 @@ func (s *session) handleGObjectSetPhase(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .gobject set phase <guid> <phaseMask>")
 		return
 	}
-	spawnID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || spawnID == 0 {
+	spawnID, parseOK := parseGObjectSpawnID(args[0])
+	if !parseOK || spawnID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
 		return
 	}
@@ -810,11 +846,10 @@ func (s *session) handleGObjectSetPhase(ctx context.Context, args []string) {
 
 // handleGObjectSetState mirrors HandleGameObjectSetStateCommand
 // (cs_gobject.cpp:589): -1 despawns with the despawn animation, -2 fails
-// silently (C++ returns false with no message), 0-3 set the state byte,
-// 4 broadcasts SMSG_GAMEOBJECT_CUSTOM_ANIM.
-// Fidelity gap: GAMEOBJECT_BYTES_1 byte offsets other than the state byte
-// have no Go update-fields bridge; the live state flip is pushed through the
-// dynamic-state registry.
+// silently (C++ returns false with no message), 0-3 set GAMEOBJECT_BYTES_1
+// byte <type> (0 state, 1 type, 2 artkit, 3 animprogress), 4 broadcasts
+// SMSG_GAMEOBJECT_CUSTOM_ANIM. Non-state bytes ride the bytes1 values
+// update; the state byte keeps the reset-state broadcast + hook path.
 func (s *session) handleGObjectSetState(ctx context.Context, args []string) {
 	db := s.goWorldDB()
 	if db == nil {
@@ -825,8 +860,8 @@ func (s *session) handleGObjectSetState(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .gobject set state <guid> <type> [state]")
 		return
 	}
-	spawnID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || spawnID == 0 {
+	spawnID, parseOK := parseGObjectSpawnID(args[0])
+	if !parseOK || spawnID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
 		return
 	}
@@ -859,8 +894,13 @@ func (s *session) handleGObjectSetState(ctx context.Context, args []string) {
 	} else if objectType < 4 {
 		dyn, err := s.server.getOrLoadGameObjectState(ctx, packed, row.guid, row.entry, row.mapID, s.player.InstanceID)
 		if err == nil && dyn != nil {
-			s.server.setGameObjectState(packed, uint8(objectState))
-			s.server.broadcastGameObjectResetState(row.mapID, packed)
+			if objectType == 0 {
+				s.server.setGameObjectState(packed, uint8(objectState))
+				s.server.broadcastGameObjectResetState(row.mapID, packed)
+			} else {
+				s.server.setGameObjectByte1(row.mapID, s.player.InstanceID, packed, int(objectType), uint8(objectState))
+				s.server.broadcastGameObjectBytes1InInstance(row.mapID, s.player.InstanceID, packed)
+			}
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Set gobject type %d state %d", objectType, objectState))

@@ -99,6 +99,7 @@ type dynamicGameObjectState struct {
 	PhaseMask       uint32 // gameobject.phaseMask (InSamePhase gate, GameObject.cpp:2760)
 	Data1           uint32
 	ParentRotation  [4]float32
+	LocalRotation   [4]float32 // m_localRotation twin (GameObject.cpp:321, SetLocalRotation in Create); zero value = unset, readers fall back to identity
 	AutoCloseTimer  *time.Timer
 	DespawnTimer    *time.Timer
 	// SpawnState is the state the GO was created with: the m_prevGoState twin
@@ -286,7 +287,10 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 			Y:              dyn.Y,
 			Z:              dyn.Z,
 			Orientation:    dyn.Orientation,
-			RotationW:      1.0,
+			RotationX:      dynLocalRotation(&dyn)[0],
+			RotationY:      dynLocalRotation(&dyn)[1],
+			RotationZ:      dynLocalRotation(&dyn)[2],
+			RotationW:      dynLocalRotation(&dyn)[3],
 			State:          dyn.State,
 			AnimProgress:   dyn.AnimProgress,
 			ArtKit:         dyn.ArtKit,
@@ -1627,6 +1631,43 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 	return dyn, nil
 }
 
+// dynLocalRotation returns the runtime GO's local rotation for a create
+// block, falling back to identity when no summon recorded one (all pre-existing
+// runtime spawns carry the zero value, so their blocks are unchanged).
+func dynLocalRotation(dyn *dynamicGameObjectState) [4]float32 {
+	if dyn == nil || dyn.LocalRotation == [4]float32{} {
+		return [4]float32{0, 0, 0, 1}
+	}
+	return dyn.LocalRotation
+}
+
+// setGameObjectByte1 mirrors GameObject::SetByteValue(GAMEOBJECT_BYTES_1,
+// byteIndex, value) (GameObject.cpp:2407 packing: byte 0 state, 1 type,
+// 2 artkit, 3 animprogress) on the live state record. Byte 0 callers must
+// keep using setGameObjectState, which additionally fires the GO-state-changed
+// hook; this helper fires no hook, matching C++ SetByteValue.
+func (s *Server) setGameObjectByte1(mapID, instanceID uint32, guid uint64, byteIndex int, value uint8) {
+	if s == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	defer s.objectsMu.Unlock()
+	dyn := s.gameObjectStateLocked(mapID, instanceID, guid)
+	if dyn == nil {
+		return
+	}
+	switch byteIndex {
+	case 0:
+		dyn.State = value
+	case 1:
+		dyn.Type = value
+	case 2:
+		dyn.ArtKit = value
+	case 3:
+		dyn.AnimProgress = value
+	}
+}
+
 func (s *Server) setGameObjectState(guid uint64, state uint8) {
 	if s == nil {
 		return
@@ -1757,7 +1798,10 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 		Y:              dyn.Y,
 		Z:              dyn.Z,
 		Orientation:    dyn.Orientation,
-		RotationW:      1.0,
+		RotationX:      dynLocalRotation(dyn)[0],
+		RotationY:      dynLocalRotation(dyn)[1],
+		RotationZ:      dynLocalRotation(dyn)[2],
+		RotationW:      dynLocalRotation(dyn)[3],
 		State:          dyn.State,
 		Type:           dyn.Type,
 		DisplayID:      dyn.DisplayID,
