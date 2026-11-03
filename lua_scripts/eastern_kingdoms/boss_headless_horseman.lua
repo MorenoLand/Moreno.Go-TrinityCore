@@ -108,14 +108,26 @@
 --   legs (ACTION_HEAD_START_HEAD_PHASE/HP_67/HP_34), the triggered
 --   DoCastSelf(42428) head-is-dead SpellScript cast, and
 --   _instance->GetCreature(DATA_HEADLESS_HORSEMAN).
--- - npc_pulsing_pumpkin (23694): Reset self-casts + the sprout arm fires
---   only via DoAction(ACTION_PUMPKIN_SPROUTING_FINISHED) from the
---   unmodeled 42281 SpellScript; its UpdateEntry + DoZoneInCombat
---   legs are bridged now (2026-10-22 / 2026-10-23) but cannot run
---   without the DoAction trigger. Documented-only.
--- - npc_flame_bunny (23686): Reset's cosmetic self-cast growth schedule
---   (43184 -> 43148 x3) — stranded-half Reset self-casts (rageclaw/
---   phoenix_tk precedent); no Talk, no combat. Documented-only.
+-- - npc_pulsing_pumpkin (23694): PORTED below. Reset's own 42281
+--   self-cast IS the DoAction trigger in C++ (the 42281 SpellScript
+--   hits self -> ACTION_PUMPKIN_SPROUTING_FINISHED), so the sprout
+--   chain runs as timers from Reset: 1s -> RemoveAura 42280 +
+--   gravity/hover off + triggered 42285 + UpdateEntry(23545) +
+--   SetImmuneToNPC + REACT_AGGRESSIVE + DoZoneInCombat; 11s ->
+--   DoCastVictim 42514 + Repeat 10s. Deltas: timers are keyed (a
+--   second Reset re-arms rather than duplicating TaskScheduler
+--   tasks); Lua timers are not victim-gated (C++ ticks only in
+--   combat — the squash cast is victim-guarded, so an unengaged
+--   pumpkin casts nothing); timers cancel on death only (C++
+--   tasks pend across evade, same effect). Bearer is latent:
+--   pumpkins spawn only via the unported 52236 aura summon.
+-- - npc_flame_bunny (23686): PORTED below. Ctor display Modelid2 on
+--   event 5 (hodir precedent) + Reset's scheduler as Lua timers: 1s
+--   -> self-cast 43184; 3s -> self-cast 43148, re-armed 2.2s twice
+--   (3 casts total, C++ repeat-counter < 2). C++ UpdateAI ticks the
+--   scheduler ungated, so Lua timers are faithful here; timers
+--   cancel on death only. Bearer is latent (no C++ summoner in-tree
+--   outside the encounter machinery).
 -- - npc_sir_thomas (23904): Reset self-casts + a SpellHit(42818) handler
 --   — SpellHit handlers not modeled (draenei_survivor precedent).
 --   Documented-only.
@@ -332,3 +344,108 @@ end
 RegisterCreatureEvent(ENTRY_SIR_THOMAS, 23, sirThomasReset)
 RegisterCreatureEvent(ENTRY_SIR_THOMAS, 5, sirThomasReset)
 RegisterCreatureEvent(ENTRY_SIR_THOMAS, 4, sirThomasClear)
+
+-- C++ npc_pulsing_pumpkin (23694, scarlet_monastery.h:71) +
+-- npc_flame_bunny (23686, scarlet_monastery.h:73). See the header
+-- notes above for the C++ arms and the Lua deltas.
+local ENTRY_PULSING_PUMPKIN = 23694
+local ENTRY_PUMPKIN_FIEND = 23545
+local ENTRY_FLAME_BUNNY = 23686
+local SPELL_PUMPKIN_LIFE_CYCLE = 42280
+local SPELL_PUMPKIN_AURA = 42294
+local SPELL_SPROUTING = 42281
+local SPELL_SPROUT_BODY = 42285
+local SPELL_SQUASH_SOUL = 42514
+local SPELL_BURNING_COSMETIC_BASE = 43184
+local SPELL_FIRE_SIZE_BIG = 43148
+local UNIT_FLAG_IMMUNE_TO_NPC = 0x200 -- UnitDefines.h:133
+
+local function onPumpkinSquash(creature, guid)
+    local victim = creature:GetVictim()
+    if victim and not victim:IsDead() then
+        creature:CastSpell(victim, SPELL_SQUASH_SOUL)
+    end
+    schedule(guid, "squash", 10000, function() onPumpkinSquash(creature, guid) end)
+end
+
+local function onPumpkinSprout(creature, guid)
+    creature:RemoveAura(SPELL_PUMPKIN_LIFE_CYCLE)
+    creature:SetDisableGravity(false)
+    creature:SetHover(false)
+    creature:CastSpell(creature, SPELL_SPROUT_BODY, true)
+    creature:UpdateEntry(ENTRY_PUMPKIN_FIEND)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_NPC)
+    creature:SetReactState(2)
+    creature:DoZoneInCombat()
+end
+
+-- C++ npc_pulsing_pumpkin::Reset (boss_headless_horseman.cpp:640-646):
+-- REACT_PASSIVE + self-casts 42280 / 42294 / 42281, non-triggered.
+-- The 42281 self-cast triggers the DoAction sprout chain, so both
+-- chain timers start here.
+local function pumpkinResetArms(creature)
+    local guid = creature:GetGUID()
+    creature:SetReactState(0)
+    creature:CastSpell(creature, SPELL_PUMPKIN_LIFE_CYCLE)
+    creature:CastSpell(creature, SPELL_PUMPKIN_AURA)
+    creature:CastSpell(creature, SPELL_SPROUTING)
+    schedule(guid, "sprout", 1000, function() onPumpkinSprout(creature, guid) end)
+    schedule(guid, "squash", 11000, function() onPumpkinSquash(creature, guid) end)
+end
+
+-- C++ npc_pulsing_pumpkin::InitializeAI (boss_headless_horseman.cpp:634-639):
+-- SetDisableGravity(true) + SetHover(true), then Reset arms on spawn.
+local function onPumpkinSpawn(_, creature)
+    creature:SetDisableGravity(true)
+    creature:SetHover(true)
+    pumpkinResetArms(creature)
+end
+
+local function onPumpkinReset(_, creature)
+    pumpkinResetArms(creature)
+end
+
+local function onPumpkinDied(_, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_PULSING_PUMPKIN, 5, onPumpkinSpawn)
+RegisterCreatureEvent(ENTRY_PULSING_PUMPKIN, 23, onPumpkinReset)
+RegisterCreatureEvent(ENTRY_PULSING_PUMPKIN, 4, onPumpkinDied)
+
+-- C++ npc_flame_bunny::Reset (boss_headless_horseman.cpp:677-688):
+-- 1s -> self-cast 43184; 3s -> self-cast 43148, repeated while the
+-- repeat counter is < 2 (3 casts total, 2.2s apart).
+local function onBunnyGrow(creature, guid, count)
+    creature:CastSpell(creature, SPELL_FIRE_SIZE_BIG)
+    if count < 3 then
+        schedule(guid, "grow", 2200, function() onBunnyGrow(creature, guid, count + 1) end)
+    end
+end
+
+local function bunnyResetArms(creature)
+    local guid = creature:GetGUID()
+    schedule(guid, "burn", 1000, function()
+        creature:CastSpell(creature, SPELL_BURNING_COSMETIC_BASE)
+    end)
+    schedule(guid, "grow", 3000, function() onBunnyGrow(creature, guid, 1) end)
+end
+
+-- C++ npc_flame_bunny ctor (boss_headless_horseman.cpp:670-673):
+-- SetDisplayId(Modelid2), then Reset arms on spawn.
+local function onBunnySpawn(_, creature)
+    creature:SetDisplayId(creature:GetTemplateModelId(2))
+    bunnyResetArms(creature)
+end
+
+local function onBunnyReset(_, creature)
+    bunnyResetArms(creature)
+end
+
+local function onBunnyDied(_, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_FLAME_BUNNY, 5, onBunnySpawn)
+RegisterCreatureEvent(ENTRY_FLAME_BUNNY, 23, onBunnyReset)
+RegisterCreatureEvent(ENTRY_FLAME_BUNNY, 4, onBunnyDied)

@@ -47,19 +47,16 @@
 --   31472) — random threat-list target, any unit, alive;
 --   nil target -> no cast, non-triggered, init
 --   {20s,30s} -> {20s,30s}.
+-- - MoveInLineOfSight Time Keeper leg (aeonus precedent): event 7
+--   polls the nearest live Time Keeper within 20 yd; on a hit Talk
+--   SAY_BANISH (2) + keeper:Kill(creature) for the C++ full-health
+--   DealDamage.
 -- Modeled (creature:IsHeroic() bridge, per-instance difficulty,
 -- lua_creature_events.go):
 -- - EVENT_ATTRACTION (SPELL_ATTRACTION 38540, heroic-only): C++
 --   DoCast(me, 38540), non-triggered, init {25s,35s} -> {25s,35s},
 --   scheduled only under IsHeroic() (C++-exact).
 -- Unmodeled (documented-only, no bridges):
--- - MoveInLineOfSight's Time Keeper leg: who->GetTypeId() ==
---   TYPEID_UNIT (creature, not player) && who->GetEntry() ==
---   NPC_TIME_KEEPER (17918, the_black_morass.h:57) &&
---   IsWithinDistInMap(who, 20.0f) -> Talk SAY_BANISH (2) +
---   Unit::DealDamage full-health one-shot. Same as aeonus: the Lua API
---   exposes no nearby-creature enumeration, so there is no
---   MoveInLineOfSight / entry-proximity bridge.
 -- - JustDied's instance leg: instance->SetData(TYPE_RIFT = 2, SPECIAL)
 --   — instance-data bridge blocked (standing).
 -- - H_SPELL_ARCANE_BLAST 38538 and H_SPELL_ARCANE_DISCHARGE 38539 are
@@ -73,6 +70,7 @@
 --   cancel (hyjal.lua convention).
 
 local ENTRY = 17879
+local NPC_TIME_KEEPER = 17918
 
 local SAY_ENTER   = 0
 local SAY_AGGRO   = 1
@@ -206,6 +204,15 @@ local function onDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+local function onAIUpdate(event, creature)
+    local keeper = creature:FindNearestCreature(NPC_TIME_KEEPER, 20)
+    if keeper then
+        creature:Talk(SAY_BANISH)
+        keeper:Kill(creature)
+    end
+end
+
+RegisterCreatureEvent(ENTRY, 7, onAIUpdate)
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
