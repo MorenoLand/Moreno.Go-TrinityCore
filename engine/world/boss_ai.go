@@ -7329,6 +7329,48 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			} else {
 				s.removeCreatureAura(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: guid}, puncture)
 			}
+		case 40904:
+			// spell_illidan_draw_soul (boss_illidan.cpp): EFFECT_1 script effect —
+			// the hit unit casts Draw Soul Heal (40903) on the caster, triggered.
+			// Dead hit units are not AOE targets in C++ and cast nothing.
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				if ts.isDeadOrGhost() {
+					continue
+				}
+				ts.castSpellDirect(ctx, 40903, m.GUID)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				if tm.Health == 0 {
+					continue
+				}
+				s.castCreatureSpellInternal(ctx, tm, 40903, m.GUID, true)
+			}
+		case 41467:
+			// spell_illidari_council_judgement (boss_illidari_council.cpp): EFFECT_0
+			// script effect — the caster casts Judgement Primer (41473) then the
+			// seal judgement on the hit unit, both triggered: Judgement of Blood
+			// (41461) while the caster holds Seal of Blood (41459), else
+			// Judgement of Command (41470). The AfterCast Talk rides the Lua
+			// port (gathiosJudgement talks on a non-nil victim).
+			s.castCreatureSpellInternal(ctx, m, 41473, guid, true)
+			judgement := uint32(41470)
+			if s.creatureSpellTargetHasAura(m, m.GUID, 41459) {
+				judgement = 41461
+			}
+			s.castCreatureSpellInternal(ctx, m, judgement, guid, true)
+		case 41126:
+			// spell_illidan_flame_burst (boss_illidan.cpp): EFFECT_0 script effect —
+			// the hit unit casts Flame Burst Effect (41131) on itself, triggered.
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				if ts.isDeadOrGhost() {
+					continue
+				}
+				ts.castSpellDirect(ctx, 41131, guid)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				if tm.Health == 0 {
+					continue
+				}
+				s.castCreatureSpellInternal(ctx, tm, 41131, guid, true)
+			}
 		case 52173, 60243:
 			// Coyote Spirit / Blood Parrot Despawn
 			// (SpellEffects.cpp:3704-3708): a TYPEID_UNIT summon target

@@ -313,6 +313,12 @@ local function councilEnterCombat(event, creature, target)
     end
     st.inCombat = true
     creature:CastSpell(creature, SPELL_EMPYREAL_BALANCE, true)
+    -- C++ empyreal_balance HandleDummy: the hit unit (= self here)
+    -- takes 25% of the caster's current health as its new max and
+    -- current health (CountPctFromCurHealth(25)).
+    local balanceHealth = math.floor(creature:GetHealth() * 25 / 100)
+    creature:SetMaxHealth(balanceHealth)
+    creature:SetHealth(balanceHealth)
     -- C++ JustEngagedWith (boss_illidari_council.cpp:153-160): engage
     -- each council member in the zone (the SendEncounterUnit legs stay
     -- out). Members are in hand via GetCreaturesInGrid (exact entries,
@@ -340,6 +346,9 @@ local function councilEnterCombat(event, creature, target)
     end
     local function onEquivalency()
         creature:CastSpell(creature, SPELL_EMPYREAL_EQUIVALENCY, true)
+        -- C++ empyreal_equivalency HandleScript: the hit unit (= self
+        -- here) takes 25% of the caster's current health as current.
+        creature:SetHealth(math.floor(creature:GetHealth() * 25 / 100))
         schedule(guid, "council_equivalency", 2000, onEquivalency)
     end
     schedule(guid, "council_equivalency", 2000, onEquivalency)
@@ -519,12 +528,13 @@ local function gathiosHammer(creature, guid)
 end
 
 -- C++ EVENT_JUDGEMENT: non-triggered DoCastVictim(41467); the
--- seal/judgement-choice arms live in the unmodeled judgement
--- SpellScript; re-arm 15s.
+-- primer/seal-choice arms ride the Go script-effect dispatcher
+-- (boss_ai.go) and the AfterCast Talk is ported below; re-arm 15s.
 local function gathiosJudgement(creature, guid)
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_JUDGEMENT)
+        creature:Talk(SAY_COUNCIL_SPECIAL)
     end
     schedule(guid, "gathios_judgement", 15000, function()
         gathiosJudgement(creature, guid)

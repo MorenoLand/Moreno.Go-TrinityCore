@@ -526,7 +526,9 @@ onFlameCrash = function(creature, guid)
 end
 
 -- C++ EVENT_DRAW_SOUL: non-triggered DoCastAOE (caster's own
--- position — self-targeted bridge); repeat 34s.
+-- position — self-targeted bridge); repeat 34s. The EFFECT_1
+-- heal-back (each hit unit casts 40903 on Illidan, triggered)
+-- rides the Go script-effect dispatcher (boss_ai.go).
 onDrawSoul = function(creature, guid)
     creature:CastSpell(creature, SPELL_DRAW_SOUL, false)
     schedule(guid, "drawSoul", 34000, function()
@@ -601,7 +603,9 @@ local function onShadowBlast(creature, guid)
     end)
 end
 
--- C++ EVENT_FLAME_BURST: non-triggered self-cast; repeat 22s.
+-- C++ EVENT_FLAME_BURST: non-triggered self-cast; repeat 22s. The
+-- EFFECT_0 arm (hit unit casts 41131 on itself, triggered) rides
+-- the Go script-effect dispatcher (boss_ai.go).
 local function onFlameBurst(creature, guid)
     creature:CastSpell(creature, SPELL_FLAME_BURST, false)
     schedule(guid, "flameBurst", 22000, function()
