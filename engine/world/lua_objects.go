@@ -1027,12 +1027,50 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.motionMu.Unlock()
 		return nil, nil
 	}
-	// GetMinionGUID is Unit::GetMinionGUID (Unit.h:1151) via the
-	// shared instance scan for an uncharmed motion owned by this
-	// creature (pets and guardians included, charmed victims not).
+	// GetMinionGUID is LuaUnit::GetPetGUID (LuaFunctions.cpp:283
+	// registers GetMinionGUID to it, not to Unit::GetMinionGUID):
+	// the m_SummonSlot[PET] read, here the live motion's PetGUID;
+	// a motion that no longer resolves reads 0, the empty slot.
 	methods["GetMinionGUID"] = luaNoArgs(func() any {
-		return s.server.unitMinionGUID(state.Map, state.InstanceID, state.GUID)
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.PetGUID
+		}
+		return uint64(0)
 	})
+	// GetPetGUID is Unit::GetPetGUID (UnitMethods.h:680): the
+	// m_SummonSlot[PET] read, same slot as GetMinionGUID above.
+	methods["GetPetGUID"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return motion.PetGUID
+		}
+		return uint64(0)
+	})
+	// SetPetGUID is Unit::SetPetGUID (UnitMethods.h:1806): the
+	// m_SummonSlot[PET] write. LuaFunctions.cpp:331 registers
+	// SetMinionGUID to this same C++ function, so both keys share
+	// this closure. No pet object is created or dismissed here,
+	// matching the C++ slot write; a despawned motion is a
+	// silent no-op.
+	setPetGUID := func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.PetGUID = guid
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	methods["SetPetGUID"] = setPetGUID
+	methods["SetMinionGUID"] = setPetGUID
 	// GetOwnerGUID is Unit::GetOwnerGUID (Unit.h:1147): the
 	// UNIT_FIELD_SUMMONEDBY read, here the live motion's OwnerGUID
 	// (the SetOwnerGUID write target); a motion that no longer

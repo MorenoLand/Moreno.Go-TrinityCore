@@ -10489,7 +10489,7 @@ func (s *Server) creatureHasCharmedUnit(m *creatureMotion) bool {
 // itself (m_originalCaster is null for AI casts); GetCharmerGUID reads
 // motion.CharmerGUID — charmed motions divert to updatePetMotion ahead of the
 // spell block, so it fires only for charmed vehicles, which still run the
-// block; GetPetGUID has no motion field and is vacuous, the same standing as
+// block; the charm-cast leg does not consult motion.PetGUID, the same standing as
 // the resurrect-pet/summon gates; GetCharmedGUID reads the reverse scan above
 // for the non-AoE auras only. Target side (the wire victim always resolves
 // here; unresolvable GUIDs skip the target gates, mirroring the session

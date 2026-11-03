@@ -527,35 +527,6 @@ func (srv *Server) unitCharmedGUID(mapID, instanceID uint32, charmerGUID uint64)
 	return 0
 }
 
-// unitMinionGUID is Unit::GetMinionGUID (Unit.h:1151): the first
-// entry of the UNIT_FIELD_SUMMON list, which Unit::SetMinion
-// (Unit.cpp:6084/6143) adds to / removes from. Go keeps no summon
-// list, so the read scans the caller's instance for a motion owned
-// by this unit. The Charmed exclusion matters: charm writes
-// OwnerGUID = charmer (creaturemotion.go), but charmed victims
-// live on the UNIT_FIELD_CHARM list, never the SUMMON list.
-// DELTA: same map-order caveat as unitCharmedGUID.
-func (srv *Server) unitMinionGUID(mapID, instanceID uint32, ownerGUID uint64) uint64 {
-	if srv == nil || ownerGUID == 0 {
-		return 0
-	}
-	srv.motionMu.Lock()
-	motions := srv.motionMapLocked(mapID, instanceID)
-	owned := make([]*creatureMotion, 0, len(motions))
-	for _, cand := range motions {
-		if cand != nil {
-			owned = append(owned, cand)
-		}
-	}
-	srv.motionMu.Unlock()
-	for _, cand := range owned {
-		if cand.OwnerGUID == ownerGUID && !cand.Charmed {
-			return cand.GUID
-		}
-	}
-	return 0
-}
-
 func luaOptionalFloat32Arg(args []any, index int, def float32) (float32, error) {
 	if index >= len(args) || args[index] == nil {
 		return def, nil

@@ -1319,7 +1319,8 @@ func (s *session) luaPlayer() *scripting.Object {
 	// LuaFunctions.cpp:331 registers SetMinionGUID to this same
 	// C++ function, so both keys share this closure. No pet
 	// object is created or dismissed here, matching the C++ slot
-	// write; the creature leg stays out (no summon-slot model).
+	// write; the creature leg lives on the motion PetGUID slot
+	// (lua_objects.go / lua_creature_events.go).
 	setPetGUID := func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("argument 1 is required")

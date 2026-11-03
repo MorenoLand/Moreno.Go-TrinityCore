@@ -539,12 +539,41 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
-	// GetMinionGUID is Unit::GetMinionGUID (Unit.h:1151) via the
-	// shared instance scan for an uncharmed motion owned by this
-	// creature (pets and guardians included, charmed victims not).
+	// GetMinionGUID is LuaUnit::GetPetGUID (LuaFunctions.cpp:283
+	// registers GetMinionGUID to it, not to Unit::GetMinionGUID):
+	// the m_SummonSlot[PET] read, here the live motion's PetGUID.
 	methods["GetMinionGUID"] = luaNoArgs(func() any {
-		return s.unitMinionGUID(motion.Map, motion.InstanceID, motion.GUID)
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.PetGUID
 	})
+	// GetPetGUID is Unit::GetPetGUID (UnitMethods.h:680): the
+	// m_SummonSlot[PET] read, same slot as GetMinionGUID above.
+	methods["GetPetGUID"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.PetGUID
+	})
+	// SetPetGUID is Unit::SetPetGUID (UnitMethods.h:1806): the
+	// m_SummonSlot[PET] write. LuaFunctions.cpp:331 registers
+	// SetMinionGUID to this same C++ function, so both keys share
+	// this closure. No pet object is created or dismissed here,
+	// matching the C++ slot write.
+	setPetGUID := func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		s.motionMu.Lock()
+		motion.PetGUID = guid
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	methods["SetPetGUID"] = setPetGUID
+	methods["SetMinionGUID"] = setPetGUID
 	// SetOwnerGUID is Unit::SetOwnerGUID (Unit.cpp:5971): the
 	// UNIT_FIELD_SUMMONEDBY write, with C++'s equal-value early
 	// return. DELTA: C++'s owner-player values-update notify has
