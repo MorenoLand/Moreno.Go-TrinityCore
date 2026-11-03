@@ -103,7 +103,7 @@
 -- PORTED below — entry NPC_FINKLESTEIN 28205 (zone_zuldrak.cpp:
 -- 341); all three calls are bridged (creature:CastSpell(player,
 -- ...), Talk whisper arm); the 100ms timer rides the per-GUID
--- schedule table with cancel on 2/4/23.
+-- schedule table with cancel on 4 (ev23/ev2 re-seed the loop).
 -- go_finklesteins_cauldron (GameObjectAI) — OnGossipHello:
 -- player->CastSpell(player, SPELL_POT_CHECK 51046): player self-cast
 -- IS bridged now — verdict stands on REGISTRATION ONLY (no C++ GO
@@ -225,8 +225,9 @@ end
 -- EmoteState(133 USE_STANDING_NO_SHEATHE) -> TURN_BACK 11s;
 -- TURN_BACK (:523-526): SetFacingTo(4.886922) + EmoteState(30 NONE)
 -- -> TURN_TO_POT 25-41s. Ungated ambient loop; timers ride the
--- per-GUID table so 2/4 cancel kills the loop, and 23 re-seeds it
--- with the Reset. Cyclic pair uses forward declarations (tharon_ja
+-- per-GUID table so 4 cancel kills the loop, and 23 re-seeds it
+-- with the Reset; ev2 re-seeds too (evade fires 23 before 2, so a
+-- cancel-only ev2 would undo the re-seed). Cyclic pair uses forward declarations (tharon_ja
 -- idiom): a later `local function` would shadow the nil slot.
 local FACING_TO_POT = 6.230825
 local FACING_BACK = 4.886922
@@ -263,7 +264,13 @@ local function finklesteinReset(event, creature)
 end
 
 RegisterCreatureGossipEvent(NPC_FINKLESTEIN, 2, finklesteinGossipSelect)
-RegisterCreatureEvent(NPC_FINKLESTEIN, 2, finklesteinCancel)
+-- Evade order (engine triggerCreatureEvade, creaturemotion.go): ev23
+-- fires BEFORE ev2, so a cancel-only ev2 handler undoes the ev23
+-- Reset re-seed and the turn-to-pot loop dies after the first evade
+-- (the dummy's old-handler bug, fixed there by re-arming on ev2).
+-- C++ evade -> Reset re-seeds TURN_TO_POT, so ev2 re-seeds here too;
+-- ev4 keeps the cancel (a dead finklestein runs no timers).
+RegisterCreatureEvent(NPC_FINKLESTEIN, 2, finklesteinReset)
 RegisterCreatureEvent(NPC_FINKLESTEIN, 4, finklesteinCancel)
 RegisterCreatureEvent(NPC_FINKLESTEIN, 23, finklesteinReset)
 RegisterCreatureEvent(NPC_FINKLESTEIN, 5, finklesteinReset)
