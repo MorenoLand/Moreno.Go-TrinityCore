@@ -4276,9 +4276,11 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	// Eluna reader). The write lands on the live record, materializing
 	// a static spawn exactly like SetGoState, so a later object for the
 	// same GO reads it back; the closure copy keeps the pre-materialize
-	// read-back for objects without a live record. DELTA: the Eluna
-	// OnLootStateChanged fire inside C++ SetLootState has no Go binding
-	// (no event-11 hook exists in scripting/), so handlers never run.
+	// read-back for objects without a live record. C++
+	// GameObject::SetLootState fires OnLootStateChanged (GameObject.cpp:
+	// 2380) unconditionally, so this method fires
+	// GAMEOBJECT_EVENT_ON_LOOT_STATE_CHANGE (9) with (go, state) after
+	// the write; returns are discarded by every C++ call site.
 	methods["SetLootState"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("loot state is required")
@@ -4292,6 +4294,7 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		state.LootState = value
 		srv.setGameObjectLootState(state.Map, state.InstanceID, state.GUID, uint8(value))
+		srv.triggerGameObjectEvent(context.Background(), state.GUID, scripting.GameObjectEventOnLootState, value)
 		return nil, nil
 	}
 	// SetRespawnTime is LuaGameObject::SetRespawnTime

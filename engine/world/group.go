@@ -3353,6 +3353,13 @@ func (s *session) handleInstanceLockResponse(ctx context.Context, payload []byte
 				// (EXTEND_STATE_EXPIRED, which would make SendRaidInfo report the
 				// just-accepted lockout as expired).
 				_, _ = cdb.ExecContext(ctx, "INSERT INTO character_instance (guid, instance, permanent, extendState) VALUES (?, ?, 1, 1)", s.playerGUID, instanceID)
+				// Eluna PLAYER_EVENT_ON_BIND_TO_INSTANCE (26): C++
+				// Player::BindToInstance fires OnPlayerBindToInstance
+				// (PlayerHooks.cpp) with (player, difficulty, mapid,
+				// permanent) once the bind row lands; the GM arm above
+				// writes no row, so it fires nothing. Returns are
+				// discarded by every C++ call site.
+				s.triggerPlayerEvent(ctx, scripting.PlayerEventBindToInstance, s.luaPlayer(), difficulty, mapID, true)
 			}
 			s.sendCalendarRaidLockout(mapID, difficulty, resetTime, instanceID, true)
 		}

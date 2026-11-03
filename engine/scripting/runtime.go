@@ -44,7 +44,7 @@ const (
 	PlayerEventEmote             = 23
 	PlayerEventTextEmote         = 24
 	PlayerEventSave              = 25
-	PlayerEventBindToInstance    = 26 // OnBindToInstance fires from Player::SetBoundInstance (ScriptMgr.cpp:2037); Go has no instance-bind model, so the engine never fires this event
+	PlayerEventBindToInstance    = 26 // OnBindToInstance fires from Player::BindToInstance (Player.cpp:19121, ScriptMgr.cpp:2162); Go fires it from the instance-lock-response bind write (engine/world/group.go), the one bind site modeled as BindToInstance; worldport instance-save creation does not bind the player and fires nothing
 	PlayerEventUpdateZone        = 27
 	PlayerEventMapChange         = 28
 	PlayerEventEquip             = 29
