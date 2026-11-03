@@ -2482,6 +2482,36 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastThreatClearInInstance(mapID, instanceID, motion.X, motion.Y, motion.Z, guid, motion.PhaseMask)
 		return nil, nil
 	}
+	// ClearInCombat is Unit::ClearInCombat (UnitMethods.h:2521-2524,
+	// Unit.h:1052) -> CombatManager::EndAllCombat (CombatManager.h:126,
+	// CombatManager.cpp:344-353): EndAllPvECombat + EndAllPvPCombat.
+	// Unlike CombatStop above, C++ clears NO attack state here: no
+	// AttackStop, no interrupt, no target drop, no evade legs. The
+	// carried legs are the flag clear, the own threat wipe
+	// (ClearAllThreat) and the cross-list removal
+	// (RemoveMeFromThreatLists, via removeThreatVictimFromAllLists),
+	// plus the threat-clear broadcast CombatStop already uses.
+	// DELTAS: the per-ref both-sides flag update
+	// (CombatReference::EndCombat -> UpdateOwnerCombatState) has no Go
+	// ref model, so attackers keep a stale InCombat until their own
+	// teardown — the same accepted delta as CombatStop's attacker leg;
+	// the JustExitedCombat AI hook and the Eluna OnPlayerLeaveCombat
+	// hook have no twin here (CombatStop fires none either); PvP refs
+	// have no Go model outside sanctuary handling, so the PvP leg
+	// collapses into the same flag + threat teardown.
+	methods["ClearInCombat"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		motion.InCombat = false
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+		s.motionMu.Unlock()
+		s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+		s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
+		return nil, nil
+	}
 	// RemoveAllAttackers is Unit::RemoveAllAttackers (Unit.cpp:5867-5878)
 	// on its own: the CombatStop attacker leg without the self teardown
 	// — freya's own JustDied calls it without CombatStop, so the two
@@ -2513,6 +2543,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase, transportGUID)
 		return nil, nil
 	}
+	// MoveStop is UnitMethods::MoveStop (UnitMethods.h:2131-2136) =
+	// Unit::StopMoving, the twin directly above. MoveClear and
+	// MoveExpire are the TRINITY legs of UnitMethods.h:2142-2172 =
+	// MotionMaster::Clear(), and MoveIdle is UnitMethods.h:2174-2178
+	// = MotionMaster::MoveIdle(). Go has no movement-generator stack
+	// and nothing resumes motion after a halt, so all four collapse
+	// to the StopMoving twin: halt at the current position, no-op
+	// when not moving. Threat, TargetGUID and InCombat are untouched
+	// by every leg (the StopMoving comment above). MoveChase,
+	// MoveFollow, MoveTo, MoveJump, MoveRandom, MoveConfused and
+	// MoveHome stay out: they need chase/follow/point/jump/random/
+	// confused/home generators Go does not execute.
+	methods["MoveStop"] = methods["StopMoving"]
+	methods["MoveClear"] = methods["StopMoving"]
+	methods["MoveExpire"] = methods["StopMoving"]
+	methods["MoveIdle"] = methods["StopMoving"]
 	// Despawn is Lua Creature::DespawnOrUnsummon() (Creature.cpp): the
 	// creature leaves the world immediately — motion removed, a
 	// SMSG_DESTROY_OBJECT broadcast (the despawnAtEvade precedent,

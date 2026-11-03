@@ -929,6 +929,69 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.syncCreatureVehiclePassengers(m)
 		return nil, nil
 	}
+	// stopSessionCreatureMotion is the session-creature twin of the
+	// handler StopMoving (Unit::StopMoving, Unit.cpp:10499-10511):
+	// halt at the current position with the MonsterMoveStop
+	// broadcast, no-op when not moving or when the motion no longer
+	// resolves. MoveStop (UnitMethods.h:2131-2136), MoveClear and
+	// MoveExpire (TRINITY MotionMaster::Clear(), UnitMethods.h:2142-2172)
+	// and MoveIdle (UnitMethods.h:2174-2178) all collapse to it: Go
+	// has no movement-generator stack and nothing resumes motion
+	// after a halt, so the four are observationally identical here.
+	// Threat, TargetGUID and InCombat are untouched by every leg.
+	stopSessionCreatureMotion := func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry || !motion.Moving {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		phase := motion.PhaseMask
+		transportGUID := motion.TransportGUID
+		x, y, z := motion.X, motion.Y, motion.Z
+		motion.Moving = false
+		s.server.motionMu.Unlock()
+		s.server.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase, transportGUID)
+		return nil, nil
+	}
+	methods["MoveStop"] = stopSessionCreatureMotion
+	methods["MoveClear"] = stopSessionCreatureMotion
+	methods["MoveExpire"] = stopSessionCreatureMotion
+	methods["MoveIdle"] = stopSessionCreatureMotion
+	// ClearInCombat is Unit::ClearInCombat (UnitMethods.h:2521-2524,
+	// Unit.h:1052) -> CombatManager::EndAllCombat: the session-creature
+	// twin of the handler binding — flag clear, own threat wipe and
+	// cross-list removal plus the threat-clear broadcast, with no
+	// AttackStop, interrupt or target drop (C++ clears no attack
+	// state here). A despawned motion is a silent no-op. DELTAS: the
+	// per-ref both-sides flag update has no Go ref model, so
+	// attackers keep a stale InCombat until their own teardown;
+	// JustExitedCombat has no twin here.
+	methods["ClearInCombat"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID)
+		if motion == nil || motion.Entry != state.Entry {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.InCombat = false
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+		s.server.motionMu.Unlock()
+		s.server.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+		s.server.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
+		return nil, nil
+	}
 	methods["GetControllerGUIDS"] = luaNoArgs(func() any {
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)
 		if motion == nil {

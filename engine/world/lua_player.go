@@ -410,6 +410,23 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.sendPlayerUpdate()
 		return nil, nil
 	}
+	// ClearInCombat is Unit::ClearInCombat (UnitMethods.h:2521-2524,
+	// Unit.h:1052) -> CombatManager::EndAllCombat: the player twin
+	// clears the UNIT_FLAG_IN_COMBAT bit and removes the player as a
+	// victim from every creature threat list on the map/instance
+	// (RemoveMeFromThreatLists). C++ clears no attack state here, so
+	// attackTarget is untouched. DELTA: Go's player IsInCombat ORs
+	// attackTarget, so while the player is still attacking it keeps
+	// reading true after this call; the flag itself is cleared, and
+	// a non-attacking flagged player leaves combat. The per-ref
+	// both-sides flag update and the Eluna OnPlayerLeaveCombat hook
+	// have no twin here.
+	methods["ClearInCombat"] = func(_ context.Context, _ []any) ([]any, error) {
+		state.UnitFlags &^= unitFlagInCombat
+		s.server.removeThreatVictimFromAllLists(state.Map, state.InstanceID, state.GUID)
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
 	// SetFFA is UnitMethods::SetFFA (UnitMethods.h:1851-1890, TRINITY
 	// leg) for players as Units: the FFA_PVP byte flag on the player
 	// PVPFlags byte (folded into bytes2 by the update-values builder)
