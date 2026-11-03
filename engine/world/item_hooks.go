@@ -381,12 +381,13 @@ func (s *session) fireItemRemoveHookWithObject(ctx context.Context, item *script
 
 // Documented no-bridge arms of the Eluna item event family (ItemHooks.cpp):
 //
-// (1) DUMMY_EFFECT — ScriptMgr/Eluna::OnDummyEffect fires from
-// Spell::EffectDummy's item-target arm (SpellEffects.cpp:819). Go's spell
-// engine has no SPELL_EFFECT_DUMMY dispatch at all and no item-target
-// concept (spells.go carries item casts only as cast-item GUIDs through
-// handleUseItem), so there is no fire site — the same no-bridge family as
-// the gameobject leg's event 3.
+// (1) DUMMY_EFFECT — BRIDGED 2026-11-03: ScriptMgr/Eluna::OnDummyEffect
+// fires from Spell::EffectDummy's item-target arm (SpellEffects.cpp:819).
+// fireSpellDummyEffect (spell_dummy.go) dispatches the item arm
+// (0x4000-high GUIDs via sessionLuaItem) from both session spell paths
+// that apply dummy effects; the gameobject leg (event 3) rides the same
+// dispatcher. Item-targeted spells still have no Go selection path, so
+// the arm fires only when a spell hit list actually carries an item GUID.
 //
 // (4) EXPIRE — BRIDGED 2026-10-12: ScriptMgr::OnItemExpire fires from
 // Item::UpdateDuration (Item.cpp:314) when the duration countdown crosses

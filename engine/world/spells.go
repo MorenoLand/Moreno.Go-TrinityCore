@@ -15858,8 +15858,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					s.handleRaiseAllyInitial(effCtx, spell, eff, raiseTargets)
+					// Spell::EffectDummy's Eluna arm runs per hit target
+					// after the script legs (raiseTargets carries the
+					// kept-target join the dummy targets share).
+					s.fireSpellDummyEffectForTargets(effCtx, spellID, uint8(effectIndex), raiseTargets)
 				} else {
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
+					// Same Eluna arm; the pet-aura gate inside the
+					// dispatcher skips spells that took the AddPetAura
+					// early return above.
+					s.fireSpellDummyEffectForTargets(effCtx, spellID, uint8(effectIndex), hitTargets)
 				}
 			case spellEffectThreat:
 				amount := eff.CalcValueForLevel(spell, casterLevel)
@@ -27029,8 +27037,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// arm; the DB-script leg has no Go model on either path.
 				if spellID == spellRaiseAllyInitial {
 					s.handleRaiseAllyInitial(ctx, spell, eff, effectGUIDs)
+					// Spell::EffectDummy's Eluna arm runs per hit target
+					// after the script legs; effectTargets (not the
+					// unit-only effectGUIDs) carries the GO targets too.
+					dummyTargets := make([]uint64, 0, len(effectTargets))
+					for _, et := range effectTargets {
+						dummyTargets = append(dummyTargets, et.guid)
+					}
+					s.fireSpellDummyEffectForTargets(ctx, spellID, uint8(effectIndex), dummyTargets)
 				} else {
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
+					// Same Eluna arm; the pet-aura gate inside the
+					// dispatcher skips spells that took the AddPetAura
+					// early return above.
+					dummyTargets := make([]uint64, 0, len(effectTargets))
+					for _, et := range effectTargets {
+						dummyTargets = append(dummyTargets, et.guid)
+					}
+					s.fireSpellDummyEffectForTargets(ctx, spellID, uint8(effectIndex), dummyTargets)
 				}
 			} else {
 				// Spell::EffectHealthLeech (SpellEffects.cpp:1513-1553)
