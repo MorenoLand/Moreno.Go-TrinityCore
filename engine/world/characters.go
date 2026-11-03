@@ -3177,6 +3177,19 @@ func teamForRace(race uint8) uint32 {
 	}
 }
 
+// effectiveTeamFor is teamForRace for a player state, honoring a
+// SetFactionForRace override (Player.cpp:6636: m_team =
+// TeamForRace(race) for the GIVEN race, not the player's own).
+func effectiveTeamFor(state *playerState) uint32 {
+	if state != nil && state.FactionRaceOverrideSet {
+		return teamForRace(state.FactionRaceOverride)
+	}
+	if state == nil {
+		return 0
+	}
+	return teamForRace(state.Race)
+}
+
 // handleCharRaceChange processes CMSG_CHAR_RACE_CHANGE (0x4F8).
 // Reference: WorldSession::HandleCharFactionOrRaceChange (CharacterHandler.cpp:1616).
 // Wire order (:1635-1642): guid, name, gender, skin, hairColor, hairStyle,

@@ -159,12 +159,31 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.luaCorpseObject(corpse)}, nil
 	}
-	methods["GetTeam"] = luaNoArgs(func() any { return teamForRace(state.Race) })
-	// IsAlliance/IsHorde are Player::GetTeamId (Player.h:1759) via
-	// teamForRace, the Go form of Player::TeamForRace (Player.cpp:6619):
-	// ChrRaces BaseLanguage 7 = Alliance, 1 = Horde.
-	methods["IsAlliance"] = luaNoArgs(func() any { return teamForRace(state.Race) == 0 })
-	methods["IsHorde"] = luaNoArgs(func() any { return teamForRace(state.Race) == 1 })
+	// GetTeam/IsAlliance/IsHorde are Player::GetTeamId (Player.h:1759)
+	// via effectiveTeamFor, the Go form of Player::TeamForRace
+	// (Player.cpp:6619): ChrRaces BaseLanguage 7 = Alliance, 1 = Horde,
+	// with a SetFactionForRace override standing in for the race.
+	methods["GetTeam"] = luaNoArgs(func() any { return effectiveTeamFor(state) })
+	methods["IsAlliance"] = luaNoArgs(func() any { return effectiveTeamFor(state) == 0 })
+	methods["IsHorde"] = luaNoArgs(func() any { return effectiveTeamFor(state) == 1 })
+	// SetFactionForRace is Player::SetFactionForRace (Player.cpp:6636):
+	// m_team + UNIT_FIELD_FACTIONTEMPLATE from the GIVEN race's
+	// ChrRaces row (0 when the row is missing). Go stores the race
+	// as a session-lifetime override: effectiveFactionTemplate and
+	// effectiveTeamFor read it, and login recomputes from the player's
+	// own race (Player.cpp:17517), so it does not persist. Team-gated
+	// subsystems that call teamForRace(state.Race) directly (taxi,
+	// chat, reputation) keep the race model.
+	methods["SetFactionForRace"] = func(_ context.Context, args []any) ([]any, error) {
+		race, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state.FactionRaceOverride = uint8(race)
+		state.FactionRaceOverrideSet = true
+		s.sendPlayerUpdate()
+		return []any{}, nil
+	}
 	// IsInGuild is Player::GetGuildId() != 0 (PlayerMethods.h:400-404).
 	methods["IsInGuild"] = luaNoArgs(func() any { return state.GuildID != 0 })
 	// GetGuildRank is Player::GetRank (PlayerMethods.h:1152-1156), the
@@ -3567,12 +3586,26 @@ func (s *session) luaPlayer() *scripting.Object {
 	// on its false paths. ResetTalentsCost reads the escalating ladder
 	// (resetTalentsCost). ResetPetTalents runs the shared hunter-pet arm
 	// and resends the pet frame exactly once the same way.
-	// SetFreeTalentPoints stays out: free points are derived from the
-	// talent map, so there is no stored field a set could write (the
-	// at-login/title-spec strip's parked verdict). Wiring it needs a
-	// session override on playerState honored by both freeTalentPoints
-	// twins, decremented on learn and cleared on reset and level-up, plus
-	// a persist column — a model change, not a one-line set.
+	// SetFreeTalentPoints is Player::SetFreeTalentPoints
+	// (Player.cpp:4087): the PLAYER_CHARACTER_POINTS1 write plus the
+	// talents-frame resend, with the OnFreeTalentPointsChanged hook
+	// (event 16) fired from the set itself. Go stores the value as a
+	// session-lifetime override honored by both freeTalentPoints
+	// twins; learn decrements it by the gated cost, reset and
+	// level-up clear it (Player.cpp:4064, GiveLevel:2745), and login
+	// recomputes from level minus spent (InitTalentForLevel), so it
+	// does not persist.
+	methods["SetFreeTalentPoints"] = func(ctx context.Context, args []any) ([]any, error) {
+		points, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state.FreeTalentPointsOverride = points
+		state.FreeTalentPointsOverrideSet = true
+		s.triggerPlayerEvent(ctx, scripting.PlayerEventTalentChange, s.luaPlayer(), points)
+		_ = s.sendTalentsInfo(false)
+		return []any{}, nil
+	}
 	methods["HasTalent"] = func(_ context.Context, args []any) ([]any, error) {
 		spellID, err := luaUint32Arg(args, 0)
 		if err != nil {

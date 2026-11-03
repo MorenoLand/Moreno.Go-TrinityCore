@@ -901,9 +901,8 @@ func (s *session) handleLearnAllRecipes(ctx context.Context, args []string) {
 
 // handleLearnAllTalents ports HandleLearnAllTalentsCommand
 // (cs_learn.cpp:256-294): learn the highest rank of every talent whose tab
-// matches the invoker's class. SetFreeTalentPoints(0) has no Go equivalent -
-// the Go tree derives free points from level minus spent ranks, which lands
-// at 0 once every talent is spent (documented gap).
+// matches the invoker's class. The trailing SetFreeTalentPoints(0)
+// (cs_learn.cpp:225) sets the session free-talent-points override to 0.
 func (s *session) handleLearnAllTalents(ctx context.Context) {
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Talent data is unavailable.")
@@ -958,6 +957,8 @@ func (s *session) handleLearnAllTalents(ctx context.Context) {
 		}
 		s.learnTalentDirect(ctx, talentID, rank, spellID)
 	}
+	s.player.FreeTalentPointsOverride = 0
+	s.player.FreeTalentPointsOverrideSet = true
 	_ = s.sendTalentsInfo(false)
 	// LANG_COMMAND_LEARN_CLASS_TALENTS inlined from TDB enUS.
 	s.sendSysMessage("You have learned all your class talents.")

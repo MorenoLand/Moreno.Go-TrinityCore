@@ -2993,6 +2993,10 @@ func (s *session) applyLevelUp(ctx context.Context, oldHP, oldMana uint32) {
 	oldStats := s.player.Stats
 	oldLevel := s.player.Level
 	s.player.Level++
+	// Player::GiveLevel (Player.cpp:2745) recomputes free points via
+	// InitTalentForLevel, so a script-set override is dropped and the
+	// derived new-level total reads back.
+	s.player.FreeTalentPointsOverrideSet = false
 	// Player::GiveLevel (Player.cpp:2730) zeroes the level played-time
 	// counter; flush the lazy accumulator first so pre-level-up seconds
 	// stay on the old level instead of leaking into the new one.

@@ -19,6 +19,9 @@ const (
 // Level < 10 grants 0 talent points.
 // Level >= 10 grants (level - 9) talent points minus all spent points.
 func (s *session) freeTalentPoints() uint32 {
+	if s.player != nil && s.player.FreeTalentPointsOverrideSet {
+		return s.player.FreeTalentPointsOverride
+	}
 	if s.player == nil || s.player.Level < 10 {
 		return 0
 	}
@@ -132,6 +135,16 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 	}
 
 	s.player.Talents[talentID] = uint8(requestedRank)
+	// Player::LearnTalent (Player.cpp:25556) re-derives the free count
+	// after the learn: a script-set override drops by the same
+	// neededPoints the gate charged, saturating at zero.
+	if s.player.FreeTalentPointsOverrideSet {
+		if s.player.FreeTalentPointsOverride > neededPoints {
+			s.player.FreeTalentPointsOverride -= neededPoints
+		} else {
+			s.player.FreeTalentPointsOverride = 0
+		}
+	}
 
 	// Player::LearnTalent -> AddSpell (Player.cpp:3404-3418): every other
 	// rank of the talent leaves the in-memory spell set with its auras and
@@ -540,7 +553,12 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 		}
 	}
 	if len(s.player.Talents) == 0 {
-		return false // Player.cpp:4000-4004: no talents spent -> false
+		// Player.cpp:4000-4004: no talents spent -> false, but the
+		// SetFreeTalentPoints(talentPointsForLevel) on that arm still
+		// runs, so a script-set override is dropped (the derived
+		// value with zero spent is the level total either way).
+		s.player.FreeTalentPointsOverrideSet = false
+		return false
 	}
 	cost := uint32(0)
 	// Player::ResetTalents (Player.cpp:4008): the escalating cost is skipped
@@ -592,6 +610,10 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	}
 
 	s.player.Talents = make(map[uint32]uint8)
+	// Player.cpp:4064: the reset ends with
+	// SetFreeTalentPoints(talentPointsForLevel), so the override is
+	// dropped and the derived level total reads back.
+	s.player.FreeTalentPointsOverrideSet = false
 	cdb := s.server.CharactersStore.DB
 	if _, err := cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup); err != nil {
 		s.debug("talent reset persistence failed", "account", s.accountName, "error", err)

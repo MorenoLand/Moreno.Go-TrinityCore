@@ -8,7 +8,10 @@ package world
 // Object.cpp:2708-2842) see the forced faction, not the race faction. Falls
 // back to the race faction when no 243 aura is live. Player::GetTeam
 // (m_team) is intentionally untouched — team-gated systems (taxi, chat,
-// reputation) keep the race model.
+// reputation) keep the race model. A SetFactionForRace override sits
+// between the aura and the race faction; GetTeam/IsAlliance/IsHorde
+// read it via effectiveTeamFor, since C++ sets m_team from the
+// given race too.
 func (s *session) effectiveFactionTemplate(race uint8) uint32 {
 	if s != nil {
 		if forced, ok := s.forcedFactionAura(); ok {
@@ -17,6 +20,13 @@ func (s *session) effectiveFactionTemplate(race uint8) uint32 {
 	}
 	if s == nil || s.server == nil {
 		return 0
+	}
+	// A script-set SetFactionForRace override (Player.cpp:6636) beats
+	// the race faction but not a live 243 aura, which C++ restores
+	// over on remove; an unknown race reads faction 0 like
+	// SetFaction(rEntry ? rEntry->FactionID : 0).
+	if s.player != nil && s.player.FactionRaceOverrideSet {
+		return s.server.raceFaction(s.player.FactionRaceOverride)
 	}
 	return s.server.raceFaction(race)
 }

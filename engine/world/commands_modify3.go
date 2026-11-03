@@ -23,8 +23,9 @@ import (
 //     aura-derived (currentPlayerPhaseMask).
 //   - the speed sub-table needs a per-type speed-rate store; Go movement
 //     speeds are aura-derived (movementSpeeds).
-//   - talentpoints needs a stored free-talent-points model; Go derives free
-//     talent points from level minus spent (freeTalentPoints).
+//   - talentpoints sets the session free-talent-points override
+//     (handleModifyTalentPoints); the pet arm stays out (no pet
+//     points store; selections resolve to player sessions only).
 
 // handleModifyGender mirrors HandleModifyGenderCommand (cs_modify.cpp:899):
 // "male"/"female" (prefix-matched with the case-sensitive C++ strncmp) on
@@ -213,15 +214,32 @@ func (s *session) checkModifySpeedTarget(ctx context.Context, args []string, che
 	return speed, target, true
 }
 
-// handleModifyTalentPoints is documented-blocked (cs_modify.cpp:342): the
-// arm sets stored free talent points, but the Go tree derives free talent
-// points from level minus spent (freeTalentPoints) with no stored model —
-// for players and for pets.
-func (s *session) handleModifyTalentPoints(ctx context.Context) {
+// handleModifyTalentPoints mirrors HandleModifyTalentPointsCommand
+// (cs_modify.cpp:342): the player arm sets stored free talent points
+// and resends the talents frame. Go stores the value as the session
+// free-talent-points override; the pet arm stays out (Pet::
+// SetFreeTalentPoints writes the pet byte field, and Go selections
+// resolve to player sessions only).
+func (s *session) handleModifyTalentPoints(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandModifyTalentPoints) {
 		return
 	}
-	s.sendSysMessage("modify talentpoints is not supported: stored free talent points have no Go bridge.")
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .modify talentpoints <value>")
+		return
+	}
+	tp, err := strconv.Atoi(args[0])
+	if err != nil || tp < 0 {
+		s.sendSysMessage("Syntax: .modify talentpoints <value>")
+		return
+	}
+	target := s.modifyTargetPlayer(ctx)
+	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
+		return
+	}
+	target.player.FreeTalentPointsOverride = uint32(tp)
+	target.player.FreeTalentPointsOverrideSet = true
+	_ = target.sendTalentsInfo(false)
 }
 
 // handleModifyChunk2b extends the modify dispatcher with the chunk-2b arms.
@@ -239,7 +257,7 @@ func (s *session) handleModifyChunk2b(ctx context.Context, sub string, rest []st
 	case strings.HasPrefix("speed", sub):
 		s.handleModifySpeed(ctx, rest)
 	case strings.HasPrefix("talentpoints", sub):
-		s.handleModifyTalentPoints(ctx)
+		s.handleModifyTalentPoints(ctx, rest)
 	default:
 		return s.handleModifyChunk2c(ctx, sub, rest)
 	}

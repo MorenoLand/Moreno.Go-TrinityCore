@@ -198,52 +198,58 @@ type playerState struct {
 	// ObjectSlots mirrors Unit::m_ObjectSlot[4] (Unit.h): the GUIDs of the
 	// game objects summoned by SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (104-107),
 	// used to despawn the previous object when the slot is recast.
-	ObjectSlots      [4]uint64
-	CritterGUID      uint64
-	CritterPetID     uint32
-	Name             string
-	Race             uint8
-	Class            uint8
-	Gender           uint8
-	Skin             uint8
-	Face             uint8
-	HairStyle        uint8
-	HairColor        uint8
-	FacialStyle      uint8
-	BankBagSlots     uint8
-	RestState        uint8
-	Level            uint8
-	TotalPlayedTime  uint32
-	LevelPlayedTime  uint32
-	RestBonus        float32
-	LogoutTime       int64
-	LogoutResting    bool
-	StableSlots      uint8
-	TaxiPath         string
-	XP               uint32
-	Money            uint32
-	PlayerFlags      uint32
-	GuildID          uint32
-	GuildRank        uint8
-	Map              uint32
-	InstanceID       uint32
-	InstanceModeMask uint32
-	X                float32
-	Y                float32
-	Z                float32
-	Orientation      float32
-	LfgEntryPointMap uint32
-	LfgEntryPointX   float32
-	LfgEntryPointY   float32
-	LfgEntryPointZ   float32
-	LfgEntryPointO   float32
-	ExtraFlags       uint32
-	ActiveCheats     uint32
-	AtLogin          uint32
-	Zone             uint32
-	Health           uint32
-	MaxHealth        uint32
-	HealthLoaded     bool
+	ObjectSlots  [4]uint64
+	CritterGUID  uint64
+	CritterPetID uint32
+	Name         string
+	Race         uint8
+	// FactionRaceOverride is the SetFactionForRace race (Player.cpp:6636):
+	// the faction template and team read from this race instead of Race
+	// while FactionRaceOverrideSet, for the session only (login recomputes
+	// from Race, Player.cpp:17517).
+	FactionRaceOverride    uint8
+	FactionRaceOverrideSet bool
+	Class                  uint8
+	Gender                 uint8
+	Skin                   uint8
+	Face                   uint8
+	HairStyle              uint8
+	HairColor              uint8
+	FacialStyle            uint8
+	BankBagSlots           uint8
+	RestState              uint8
+	Level                  uint8
+	TotalPlayedTime        uint32
+	LevelPlayedTime        uint32
+	RestBonus              float32
+	LogoutTime             int64
+	LogoutResting          bool
+	StableSlots            uint8
+	TaxiPath               string
+	XP                     uint32
+	Money                  uint32
+	PlayerFlags            uint32
+	GuildID                uint32
+	GuildRank              uint8
+	Map                    uint32
+	InstanceID             uint32
+	InstanceModeMask       uint32
+	X                      float32
+	Y                      float32
+	Z                      float32
+	Orientation            float32
+	LfgEntryPointMap       uint32
+	LfgEntryPointX         float32
+	LfgEntryPointY         float32
+	LfgEntryPointZ         float32
+	LfgEntryPointO         float32
+	ExtraFlags             uint32
+	ActiveCheats           uint32
+	AtLogin                uint32
+	Zone                   uint32
+	Health                 uint32
+	MaxHealth              uint32
+	HealthLoaded           bool
 	// LastSanctuaryTime mirrors Unit::m_lastSanctuaryTime (Unit.h:1459),
 	// stamped by Spell::EffectSanctuary (SpellEffects.cpp:3778): in-flight
 	// (delayed) non-positive missiles launched at or before this time
@@ -291,33 +297,39 @@ type playerState struct {
 	// VirtualItemSlots carries the three UNIT_VIRTUAL_ITEM_SLOT_ID values
 	// Player::SetSheath derives from the sheath state (Player.cpp:9655-9682):
 	// the weapon entries shown on the sheathed/unsheathed model.
-	VirtualItemSlots                [3]uint32
-	PVPFlags                        uint8
-	StandFlags                      uint8
-	AuraVision                      uint8
-	NoReagentMask                   [3]uint32
-	TaxiMask                        [taxiMaskSize]uint32
-	QuestLog                        [playerQuestLogSlots]questLogEntry
-	MountDisplayID                  uint32
-	TransformDisplayID              uint32
-	ShapeshiftForm                  uint8
-	StandState                      uint8
-	TotemSlots                      [4]uint64
-	PlayerFieldBytes                uint32
-	SelfResSpell                    uint32
-	ExploredZones                   [playerExploredZonesCount]uint32
-	DuelArbiter                     uint64
-	DuelTeam                        uint32
-	FarsightGUID                    uint64 // PLAYER_FARSIGHT viewpoint GUID (EffectAddFarsight); runtime-only like C++
-	UnitFlags                       uint32
-	UnitFlags2                      uint32 // UNIT_FIELD_FLAGS_2: disarm offhand/ranged bits (UnitDefines.h:168-170)
-	HomebindMap                     uint32
-	HomebindZone                    uint32
-	HomebindX                       float32
-	HomebindY                       float32
-	HomebindZ                       float32
-	Reputations                     []playerReputation
-	Talents                         map[uint32]uint8
+	VirtualItemSlots   [3]uint32
+	PVPFlags           uint8
+	StandFlags         uint8
+	AuraVision         uint8
+	NoReagentMask      [3]uint32
+	TaxiMask           [taxiMaskSize]uint32
+	QuestLog           [playerQuestLogSlots]questLogEntry
+	MountDisplayID     uint32
+	TransformDisplayID uint32
+	ShapeshiftForm     uint8
+	StandState         uint8
+	TotemSlots         [4]uint64
+	PlayerFieldBytes   uint32
+	SelfResSpell       uint32
+	ExploredZones      [playerExploredZonesCount]uint32
+	DuelArbiter        uint64
+	DuelTeam           uint32
+	FarsightGUID       uint64 // PLAYER_FARSIGHT viewpoint GUID (EffectAddFarsight); runtime-only like C++
+	UnitFlags          uint32
+	UnitFlags2         uint32 // UNIT_FIELD_FLAGS_2: disarm offhand/ranged bits (UnitDefines.h:168-170)
+	HomebindMap        uint32
+	HomebindZone       uint32
+	HomebindX          float32
+	HomebindY          float32
+	HomebindZ          float32
+	Reputations        []playerReputation
+	Talents            map[uint32]uint8
+	// FreeTalentPointsOverride is the SetFreeTalentPoints value
+	// (Player.cpp:4087), read in place of the derived level-minus-spent
+	// count while FreeTalentPointsOverrideSet, for the session only
+	// (login, reset and level-up recompute, InitTalentForLevel).
+	FreeTalentPointsOverride        uint32
+	FreeTalentPointsOverrideSet     bool
 	ResetTalentsCost                uint32
 	ResetTalentsTime                uint32
 	TalentGroupsCount               uint8
@@ -3780,6 +3792,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 // (map 609, level 56+). Extracted from the update-mask computation so the
 // Eluna Player:GetFreeTalentPoints bridge reads the identical value.
 func freeTalentPoints(state *playerState) uint32 {
+	if state != nil && state.FreeTalentPointsOverrideSet {
+		return state.FreeTalentPointsOverride
+	}
 	if state == nil || state.Level < 10 {
 		return 0
 	}

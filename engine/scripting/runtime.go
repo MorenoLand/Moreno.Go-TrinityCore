@@ -34,7 +34,7 @@ const (
 	PlayerEventLevelChange       = 13
 	PlayerEventMoneyChange       = 14 // OnMoneyChanged fires from Player::ModifyMoney (Player.cpp:22826); Go has no central ModifyMoney — every money write is a direct field store across ~15 files, so the engine never fires this event
 	PlayerEventReputationChange  = 15
-	PlayerEventTalentChange      = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; Go has no talent system, so the engine never fires this event
+	PlayerEventTalentChange      = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; the binding fires it, internal learn/reset/level-up recomputes do not
 	PlayerEventTalentReset       = 17 // OnTalentsReset fires from Player::ResetTalents; Go has no talent system, so the engine never fires this event
 	PlayerEventChat              = 18
 	PlayerEventWhisper           = 19
