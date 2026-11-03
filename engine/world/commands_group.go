@@ -588,10 +588,12 @@ func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
 		if player != s {
 			player.sendSysMessage(fmt.Sprintf("You have been summoned by %s.", s.player.Name)) // LANG_SUMMONED_BY (109)
 		}
-		// Stop flight if needed; SaveRecallPosition has no Go bridge
-		// (same gap as goDoTeleport).
+		// Stop flight if needed, else snapshot the recall position
+		// (cs_group.cpp:150, same non-flight rule as goDoTeleport).
 		if player.isInFlight() {
 			player.finishTaxiFlight()
+		} else {
+			player.saveRecallPosition()
 		}
 		// GetClosePoint has no Go bridge: summon to the GM's position.
 		player.teleportTo(gmMapID, s.player.X+1, s.player.Y, s.player.Z, player.player.Orientation)

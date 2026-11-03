@@ -353,8 +353,17 @@ type playerState struct {
 	HomebindX                  float32
 	HomebindY                  float32
 	HomebindZ                  float32
-	Reputations                []playerReputation
-	Talents                    map[uint32]uint8
+	// RecallMap/RecallX/RecallY/RecallZ/RecallO/RecallSet are the
+	// Player::m_recall_location twin (Player.h:2429): the login position
+	// until a .go arm or the group summon overwrites it.
+	RecallMap   uint32
+	RecallX     float32
+	RecallY     float32
+	RecallZ     float32
+	RecallO     float32
+	RecallSet   bool
+	Reputations []playerReputation
+	Talents     map[uint32]uint8
 	// FreeTalentPointsOverride is the SetFreeTalentPoints value
 	// (Player.cpp:4087), read in place of the derived level-minus-spent
 	// count while FreeTalentPointsOverrideSet, for the session only
@@ -759,6 +768,10 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	// Player::CastAllObtainSpells (Player.cpp:4732, 7840-7856): inventory items
 	// present at login fire their ITEM_SPELLTRIGGER_ON_NO_DELAY_USE spells.
 	s.castAllObtainSpells(ctx)
+	// Player::LoadFromDB (Player.cpp:17844) snapshots the login position as
+	// the recall position, so .recall returns here until a .go arm (or the
+	// group summon) overwrites it.
+	state.RecallMap, state.RecallX, state.RecallY, state.RecallZ, state.RecallO, state.RecallSet = state.Map, state.X, state.Y, state.Z, state.Orientation, true
 	return state, nil
 }
 

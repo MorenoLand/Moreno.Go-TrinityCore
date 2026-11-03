@@ -12,12 +12,13 @@ import (
 
 // misc command ports, chunk 2: misc_commandscript (cs_misc.cpp) rows 92-125
 // in C++ table order (gps through mailbox; the unaura/unbindsight rows were
-// ported in chunk 1, commands_misc.go). Of these 32 arms, 19 are native or
-// partially native and 13 are documented-blocked:
+// ported in chunk 1, commands_misc.go). Of these 32 arms, 22 are native or
+// partially native and 10 are documented-blocked:
 //
-//   - `gps` has no Go bridge: the handler is map-geometry math (cell/grid
-//     coords, VMap outdoors/indoors, MMap navmesh presence, liquid status,
-//     transport offsets — cs_misc.cpp:183-302).
+//   - `gps` is wired: cell/grid math, DBC map/zone/area names, VMap
+//     tile presence, terrain height, and liquid status (cs_misc.cpp:183-302).
+//     Deltas: zone coords fall back to world coords (no WorldMapArea
+//     store), MMap reads 0 (no navmesh model), transport line omitted.
 //   - `itemmove` has no Go bridge: Player::IsValidPos/SwapItem (the
 //     inventory slot model) is unmodeled.
 //   - `linkgrave` / `neargrave` have no Go bridge: the graveyard link/lookup
@@ -41,12 +42,16 @@ import (
 //   - `pvpstats` has no Go bridge: the battleground statistics store
 //     (CHAR_SEL_PVPSTATS_FACTIONS_OVERALL + CONFIG_BATTLEGROUND_STORE_
 //     STATISTICS_ENABLE) is unbuilt.
-//   - `recall` has no Go bridge: Player::SaveRecallPosition was never
-//     modeled (documented fidelity gap, commands.go:1154), so there is no
-//     recall position to return to.
-//   - `respawn` has no Go bridge: creature respawn (the C++
-//     HandleRespawnCommand grid respawn sweep, cs_misc.cpp:1801-1841) has no
-//     Go model.
+//   - `recall` is wired: Player::SaveRecallPosition snapshots the login
+//     position and every non-flight .go teleport (cs_go.cpp DoTeleport),
+//     and Recall teleports the target there (Player.h:1989-1990).
+//     Deltas: no IsBeingTeleported gate (Go teleports are synchronous),
+//     unset recall is a silent no-op.
+//   - `respawn` is wired: the selected dead creature revives through the
+//     due-path revive block, and the no-target leg sweeps the player's grid
+//     (pending records + dead live motions, pets excluded;
+//     cs_misc.cpp:1801-1841). Delta: no grid index, so the sweep matches on
+//     computed grid coords rather than the C++ grid-object visit.
 //   - `wchange` is bridged via Server.setZoneWeather (Weather::SetWeather,
 //     Weather.cpp); the SmartScript overrideWeather zone override
 //     (Map::SetZoneWeather) has no Go bridge.
@@ -153,14 +158,230 @@ func misc2ParseMuteArgs(args []string) (nameArgs []string, minutes uint32, reaso
 	return nameArgs, uint32(mins), reason, 0
 }
 
-// handleCmdGPS mirrors HandleGPSCommand (cs_misc.cpp:183-302, RBAC 505).
-// Documented-blocked: map geometry, VMap/MMap/liquid and cell/grid math have
-// no Go bridge.
+// saveRecallPosition mirrors Player::SaveRecallPosition (Player.h:1989):
+// WorldRelocate snapshots the player's current map and position.
+func (s *session) saveRecallPosition() {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.player.RecallMap, s.player.RecallX, s.player.RecallY, s.player.RecallZ, s.player.RecallO, s.player.RecallSet = s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, true
+}
+
+// gpsGridCoord mirrors Trinity::ComputeGridCoord (GridDefines.h:186):
+// CENTER_GRID_ID 32, CENTER_GRID_OFFSET SIZE_OF_GRIDS/2, SIZE_OF_GRIDS
+// 533.3333. The respawn sweep shares it (C++ gridId = y*64+x).
+func gpsGridCoord(x, y float32) (int, int) {
+	size := float64(float32(533.3333))
+	gx := int((float64(x)-size/2)/size + 32 + 0.5)
+	gy := int((float64(y)-size/2)/size + 32 + 0.5)
+	return gx, gy
+}
+
+// gpsCellCoord mirrors Trinity::ComputeCellCoord (GridDefines.h:191) plus
+// the Cell split (CellImpl.h): 512 cells per map, cell size
+// SIZE_OF_GRIDS/8, center cell id 256. Returns grid and cell coords.
+func gpsCellCoord(x, y float32) (gridX, gridY, cellX, cellY int) {
+	cellSize := float64(float32(533.3333)) / 8
+	cx := int((float64(x)-cellSize/2)/cellSize + 256 + 0.5)
+	cy := int((float64(y)-cellSize/2)/cellSize + 256 + 0.5)
+	return cx / 8, cy / 8, cx % 8, cy % 8
+}
+
+// gpsPhaseMask reads a motion/GO phase mask the way the totem phase helper
+// does: 0 is the unset sentinel and reads as PHASEMASK_NORMAL (1).
+func gpsPhaseMask(mask uint32) uint32 {
+	if mask == 0 {
+		return 1
+	}
+	return mask
+}
+
+// gpsSelectedTarget mirrors the no-args leg of HandleGPSCommand: the
+// selected unit (a player session or a live creature motion), else the
+// select-a-character-or-creature refusal.
+func (s *session) gpsSelectedTarget() (mapID, instanceID, phase uint32, x, y, z, o float32, ok bool) {
+	if s.selection != 0 {
+		if sess := s.server.playerSessionForGUID(s.selection); sess != nil && sess.player != nil {
+			return sess.player.Map, sess.player.InstanceID, sess.currentPlayerPhaseMask(), sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, true
+		}
+		if motion := s.findCreatureMotion(s.selection); motion != nil {
+			return motion.Map, motion.InstanceID, gpsPhaseMask(motion.PhaseMask), motion.X, motion.Y, motion.Z, motion.Orientation, true
+		}
+	}
+	s.sendSysMessage("Select a character or creature.") // LANG_SELECT_CHAR_OR_CREATURE 1
+	return 0, 0, 0, 0, 0, 0, 0, false
+}
+
+// gpsLinkTagData extracts the tag and data of a chat hyperlink: the full
+// |c...|H<tag>:<data>|h...|h|r form first, then the bare |H<tag>:<data>|
+// form.
+func gpsLinkTagData(arg string) (string, string) {
+	if info := parseSingleHyperlink(arg); info.ok {
+		return info.tag, info.data
+	}
+	if strings.HasPrefix(arg, "|H") {
+		rest := strings.TrimPrefix(arg, "|H")
+		if idx := strings.IndexByte(rest, '|'); idx >= 0 {
+			rest = rest[:idx]
+		}
+		if tag, data, found := strings.Cut(rest, ":"); found {
+			return tag, data
+		}
+	}
+	return "", ""
+}
+
+// gpsLiveGameObject mirrors ChatHandler::GetObjectFromPlayerMapByDbGuid:
+// the live dynamic/instance gameobject with this spawn GUID in the GM's
+// map/instance, if any.
+func (s *session) gpsLiveGameObject(spawnGUID uint32) *dynamicGameObjectState {
+	if s == nil || s.server == nil || s.player == nil {
+		return nil
+	}
+	s.server.objectsMu.RLock()
+	defer s.server.objectsMu.RUnlock()
+	for _, dyn := range s.server.dynamicGameObjects {
+		if dyn != nil && dyn.LowGUID == spawnGUID && dyn.Map == s.player.Map && dyn.InstanceID == s.player.InstanceID {
+			return dyn
+		}
+	}
+	for _, states := range s.server.instanceGameObjects {
+		for _, dyn := range states {
+			if dyn != nil && dyn.LowGUID == spawnGUID && dyn.Map == s.player.Map && dyn.InstanceID == s.player.InstanceID {
+				return dyn
+			}
+		}
+	}
+	return nil
+}
+
+// gpsHyperlinkTarget mirrors the args leg of HandleGPSCommand
+// (extractLowGuidFromLink, Chat.cpp:598): a |Hplayer:name|,
+// |Hcreature:guid| or |Hgameobject:guid| link resolves to the online
+// player, the live creature, or the live gameobject in the GM's
+// map/instance; unknown kinds and unresolvable targets fail the way C++
+// does (not-found message for a known kind, silent for a bad link).
+func (s *session) gpsHyperlinkTarget(arg string) (mapID, instanceID, phase uint32, x, y, z, o float32, ok bool) {
+	tag, data := gpsLinkTagData(arg)
+	switch tag {
+	case "player":
+		name := normalizePlayerName(data)
+		if name == "" {
+			return 0, 0, 0, 0, 0, 0, 0, false
+		}
+		if sess := s.sessionForPlayerName(name); sess != nil && sess.player != nil {
+			return sess.player.Map, sess.player.InstanceID, sess.currentPlayerPhaseMask(), sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, true
+		}
+		s.sendSysMessage(miscPlayerNotFound) // LANG_PLAYER_NOT_FOUND 499
+		return 0, 0, 0, 0, 0, 0, 0, false
+	case "creature":
+		guid, err := strconv.ParseUint(data, 10, 32)
+		if err != nil {
+			return 0, 0, 0, 0, 0, 0, 0, false
+		}
+		if motion := s.npcLiveCreatureBySpawnGUID(uint32(guid)); motion != nil {
+			return motion.Map, motion.InstanceID, gpsPhaseMask(motion.PhaseMask), motion.X, motion.Y, motion.Z, motion.Orientation, true
+		}
+		s.sendSysMessage("No creature found.") // LANG_COMMAND_NOCREATUREFOUND 447 recall
+		return 0, 0, 0, 0, 0, 0, 0, false
+	case "gameobject":
+		guid, err := strconv.ParseUint(data, 10, 32)
+		if err != nil {
+			return 0, 0, 0, 0, 0, 0, 0, false
+		}
+		if dyn := s.gpsLiveGameObject(uint32(guid)); dyn != nil {
+			return dyn.Map, dyn.InstanceID, gpsPhaseMask(dyn.PhaseMask), dyn.X, dyn.Y, dyn.Z, dyn.Orientation, true
+		}
+		s.sendSysMessage("No gameobject found.") // LANG_COMMAND_NOGAMEOBJECTFOUND 448 recall
+		return 0, 0, 0, 0, 0, 0, 0, false
+	}
+	return 0, 0, 0, 0, 0, 0, 0, false
+}
+
+// handleCmdGPS mirrors HandleGPSCommand (cs_misc.cpp:183-302, RBAC 505):
+// map/zone/area names come from the DBC stores, grid and cell coords from
+// the GridDefines math, ground/floor Z from the terrain height model,
+// VMap presence from the loaded VMap tile, and liquid status from the
+// liquid model. Deltas: zone coords fall back to world coords (no
+// WorldMapArea store — the C++ not-listed fallback), MMap reads 0 (no
+// navmesh model), the transport line is omitted (no moTransport
+// map/entry/name leg), and outdoors rides the zone area flags (the
+// non-WMO fallback twin). LANG texts are TDB enUS recalls (no in-tree
+// trinity_string seed), per tree convention.
 func (s *session) handleCmdGPS(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandGPS) {
 		return
 	}
-	s.sendSysMessage("The .gps command is not available: position reporting needs map geometry (cell/grid, VMap, MMap, liquid status) that has no Go bridge yet.")
+	if s.player == nil || s.server == nil {
+		return
+	}
+	var mapID, instanceID, phase uint32
+	var x, y, z, o float32
+	if len(args) > 0 && args[0] != "" {
+		var ok bool
+		mapID, instanceID, phase, x, y, z, o, ok = s.gpsHyperlinkTarget(args[0])
+		if !ok {
+			return
+		}
+	} else {
+		var ok bool
+		mapID, instanceID, phase, x, y, z, o, ok = s.gpsSelectedTarget()
+		if !ok {
+			return
+		}
+	}
+	zoneID, areaID := s.server.zoneAndAreaID(mapID, x, y, z, 0)
+	mapName, zoneName, areaName := "Unknown", "Unknown", "Unknown" // LANG_UNKNOWN recall
+	if s.server.Data != nil {
+		if entry, found, err := s.server.Data.Map(mapID); err == nil && found {
+			mapName = entry.MapName
+		}
+		if area, found, err := s.server.Data.Area(zoneID); err == nil && found {
+			zoneName = area.Name
+		}
+		if area, found, err := s.server.Data.Area(areaID); err == nil && found {
+			areaName = area.Name
+		}
+	}
+	gridX, gridY := gpsGridCoord(x, y)
+	cellGridX, cellGridY, cellX, cellY := gpsCellCoord(x, y)
+	haveMap := uint32(0)
+	if _, ok := s.server.mapGridHeight(mapID, x, y); ok {
+		haveMap = 1
+	}
+	haveVMap := uint32(0)
+	if len(s.server.terrainTile(mapID, 63-gridX, 63-gridY)) > 0 {
+		haveVMap = 1
+	}
+	if haveVMap == 1 {
+		outdoors := true
+		if s.server.Data != nil {
+			if area, found, err := s.server.Data.Area(zoneID); err == nil && found {
+				outdoors = area.Flags&(areaFlagInside|areaFlagOutside) != areaFlagInside
+			}
+		}
+		if outdoors {
+			s.sendSysMessage("You are outdoors.") // LANG_GPS_POSITION_OUTDOORS 5042 recall
+		} else {
+			s.sendSysMessage("You are indoors.") // LANG_GPS_POSITION_INDOORS 5043 recall
+		}
+	} else {
+		s.sendSysMessage("No VMap data for this position.") // LANG_GPS_NO_VMAP 5044 recall
+	}
+	s.sendSysMessage(fmt.Sprintf(`Map: %d (%s) Zone: %d (%s) Area: %d (%s) Phase: %d
+Position: %f %f %f %f`, mapID, mapName, zoneID, zoneName, areaID, areaName, phase, x, y, z, o)) // LANG_MAP_POSITION 101 recall
+	groundZ, groundOK := s.server.mapHeight(mapID, x, y, terrainMaxHeight, true, terrainDefaultHeightSearch)
+	if !groundOK {
+		groundZ = terrainInvalidHeight
+	}
+	floorZ, floorOK := s.server.mapHeight(mapID, x, y, z, true, terrainDefaultHeightSearch)
+	if !floorOK {
+		floorZ = terrainInvalidHeight
+	}
+	s.sendSysMessage(fmt.Sprintf("Grid: %d %d Cell: %d %d Instance: %d Zone: %f %f Ground: %f Floor: %f Map: %d VMap: %d MMap: %d", cellGridX, cellGridY, cellX, cellY, instanceID, x, y, groundZ, floorZ, haveMap, haveVMap, 0)) // LANG_GRID_POSITION 178 recall
+	if status, data := s.server.mapLiquidStatus(mapID, x, y, z, liquidTypeAll, terrainDefaultCollisionHeight); status != liquidStatusNoWater {
+		s.sendSysMessage(fmt.Sprintf("Liquid level: %f, depth: %f, entry: %d, type: %d, status: %d", data.level, data.depthLevel, data.entry, data.typeFlags, status)) // LANG_LIQUID_STATUS 175 recall
+	}
 }
 
 // handleCmdGUID mirrors HandleGUIDCommand (cs_misc.cpp:680-694, RBAC 506):
@@ -614,13 +835,33 @@ func (s *session) handleCmdPvPstats(ctx context.Context) {
 }
 
 // handleCmdRecall mirrors HandleRecallCommand (cs_misc.cpp:825-847, RBAC
-// 520). Documented-blocked: Player::SaveRecallPosition was never modeled, so
-// there is no recall position to return to.
+// 520): finish the target's taxi flight, then TeleportTo the saved recall
+// location (Player::Recall, Player.h:1990). The IsBeingTeleported refusal
+// has no Go bridge (Go teleports are synchronous, so the window never
+// opens); an unset recall location is a silent no-op (C++ TeleportTo on
+// the default WorldLocation fails with no message).
 func (s *session) handleCmdRecall(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandRecall) {
 		return
 	}
-	s.sendSysMessage("The .recall command is not available: saved recall positions have no Go bridge yet.")
+	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
+	if !ok {
+		return
+	}
+	if target == nil || target.player == nil {
+		s.sendSysMessage(miscPlayerNotFound)
+		return
+	}
+	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
+		return
+	}
+	if target.isInFlight() {
+		target.finishTaxiFlight()
+	}
+	if !target.player.RecallSet {
+		return
+	}
+	target.teleportTo(target.player.RecallMap, target.player.RecallX, target.player.RecallY, target.player.RecallZ, target.player.RecallO)
 }
 
 // handleCmdRepairItems mirrors HandleRepairitemsCommand (cs_misc.cpp:2298-2316,
@@ -686,13 +927,168 @@ func (s *session) handleCmdRepairItems(ctx context.Context, args []string) {
 	}
 }
 
-// handleCmdRespawn mirrors HandleRespawnCommand (cs_misc.cpp:1801-1840, RBAC
-// 522). Documented-blocked: the creature respawn sweep has no Go model.
+// handleCmdRespawn mirrors HandleRespawnCommand (cs_misc.cpp:1801-1840,
+// RBAC 522). A selection that resolves to a live creature takes the
+// selected leg (pets refused, dead creatures revived, live ones left
+// alone); any other selection falls through to the grid sweep, as C++
+// does when getSelectedCreature returns null.
 func (s *session) handleCmdRespawn(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandRespawn) {
 		return
 	}
-	s.sendSysMessage("The .respawn command is not available: creature respawning has no Go bridge yet.")
+	if s.player == nil || s.server == nil {
+		return
+	}
+	if s.selection != 0 {
+		if motion := s.castCommandSelectedCreature(); motion != nil {
+			if motion.OwnerGUID != 0 {
+				s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE recall
+				return
+			}
+			if motion.Health <= 0 {
+				s.server.respawnCreatureNow(ctx, motion, uint32(motion.GUID&0x00FFFFFF), uint32(motion.GUID>>24)&0x00FFFFFF)
+			}
+			return
+		}
+	}
+	// Grid sweep (cs_misc.cpp:1826-1839): RespawnDo over grid objects in range
+	// plus the map's respawn infos in the player's grid. Go has no grid index,
+	// so both legs collapse into grid-coord matching: every pending record and
+	// every dead live motion on the player's map/instance in the player's grid
+	// revives now; pets are excluded (their respawn rides the owner, not the
+	// grid sweep).
+	gridX, gridY := gpsGridCoord(s.player.X, s.player.Y)
+	s.server.motionMu.Lock()
+	var records []creatureRespawn
+	for _, record := range s.server.creatureRespawns {
+		if record.Map == s.player.Map && record.InstanceID == s.player.InstanceID {
+			if rx, ry := gpsGridCoord(record.X, record.Y); rx == gridX && ry == gridY {
+				records = append(records, record)
+			}
+		}
+	}
+	for _, respawns := range s.server.instanceCreatureRespawns {
+		for _, record := range respawns {
+			if record.Map == s.player.Map && record.InstanceID == s.player.InstanceID {
+				if rx, ry := gpsGridCoord(record.X, record.Y); rx == gridX && ry == gridY {
+					records = append(records, record)
+				}
+			}
+		}
+	}
+	var motions []*creatureMotion
+	if live := s.server.motionMapLocked(s.player.Map, s.player.InstanceID); live != nil {
+		for _, motion := range live {
+			if motion != nil && motion.Health <= 0 && motion.OwnerGUID == 0 {
+				if mx, my := gpsGridCoord(motion.X, motion.Y); mx == gridX && my == gridY {
+					motions = append(motions, motion)
+				}
+			}
+		}
+	}
+	s.server.motionMu.Unlock()
+	for _, record := range records {
+		motion := s.server.findCreatureMotion(record.Map, record.InstanceID, creatureWorldGUID(record.GUID, record.Entry))
+		s.server.respawnCreatureNow(ctx, motion, record.GUID, record.Entry)
+	}
+	for _, motion := range motions {
+		s.server.respawnCreatureNow(ctx, motion, uint32(motion.GUID&0x00FFFFFF), uint32(motion.GUID>>24)&0x00FFFFFF)
+	}
+}
+
+// respawnCreatureNow mirrors the world-path revive block of
+// processCreatureRespawns (kill.go): a dead motion returns to its pending
+// record's health/position, or to full health at home with no record; the
+// record and its DB row die, the loot state clears, and the spawn hooks
+// fire. A live motion is a no-op (C++ respawns only the dead); a nil motion
+// still applies the record's DB half (the due path's reseat/clear/
+// broadcast with no live incarnation). A failed curhealth update keeps the
+// record pending instead of dropping it, unlike the due path's
+// collection-time delete.
+func (s *Server) respawnCreatureNow(ctx context.Context, motion *creatureMotion, spawnGUID, entry uint32) bool {
+	if s == nil || spawnGUID == 0 {
+		return false
+	}
+	if motion != nil && motion.Health > 0 {
+		return false
+	}
+	var record creatureRespawn
+	found := false
+	var instanceKey instanceAdmissionKey
+	inInstance := false
+	s.motionMu.Lock()
+	if rec, ok := s.creatureRespawns[spawnGUID]; ok {
+		record, found = rec, true
+	} else {
+		for key, respawns := range s.instanceCreatureRespawns {
+			if rec, ok := respawns[spawnGUID]; ok {
+				record, found, instanceKey, inInstance = rec, true, key, true
+				break
+			}
+		}
+	}
+	s.motionMu.Unlock()
+	var health uint32
+	var hx, hy, hz float32
+	var broadcastMap, broadcastInstance uint32
+	if found {
+		health, hx, hy, hz = record.Health, record.X, record.Y, record.Z
+		broadcastMap, broadcastInstance = record.Map, record.InstanceID
+	} else if motion != nil {
+		health, hx, hy, hz = motion.MaxHealth, motion.HomeX, motion.HomeY, motion.HomeZ
+		broadcastMap, broadcastInstance = motion.Map, motion.InstanceID
+	} else {
+		return false
+	}
+	if health == 0 {
+		health = 1
+	}
+	if found && s.WorldStore != nil && s.WorldStore.DB != nil {
+		if _, err := s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", health, spawnGUID); err != nil {
+			return false
+		}
+		s.deleteCreatureRespawnRow(ctx, spawnGUID, record.Map, record.InstanceID)
+	}
+	if found {
+		s.motionMu.Lock()
+		if inInstance {
+			if respawns := s.instanceCreatureRespawns[instanceKey]; respawns != nil {
+				delete(respawns, spawnGUID)
+				if len(respawns) == 0 {
+					delete(s.instanceCreatureRespawns, instanceKey)
+				}
+			}
+		} else {
+			delete(s.creatureRespawns, spawnGUID)
+		}
+		s.motionMu.Unlock()
+	}
+	rawGUID := creatureWorldGUID(spawnGUID, entry)
+	if motion != nil {
+		s.motionMu.Lock()
+		motion.Health = health
+		motion.MaxHealth = health
+		motion.BaseMaxHealth = health
+		motion.X, motion.Y, motion.Z = hx, hy, hz
+		motion.InCombat, motion.TargetGUID, motion.Moving = false, 0, false
+		motion.Looted = false
+		motion.RespawnDelayKnown = false
+		motion.RespawnDelaySec = 0
+		motion.AlreadySearchedAssistance = false
+		motion.TapPlayerGUID, motion.TapGroupID = 0, 0
+		motion.PlayerDamageReq = health / 2
+		s.motionMu.Unlock()
+	}
+	s.reseatRespawnedEntry(ctx, motion, entry)
+	s.clearLootState(broadcastMap, broadcastInstance, rawGUID)
+	s.broadcastCreatureValuesUpdateInInstance(broadcastMap, broadcastInstance, rawGUID, map[int]uint32{unitFieldHealth: health, unitFieldDynamicFlags: 0})
+	if motion != nil {
+		s.fireCreatureSpawned(ctx, motion)
+		if motion.BossAI != nil {
+			motion.BossAI.OnReset(ctx, s, motion)
+		}
+	}
+	return true
 }
 
 // handleCmdRevive2 mirrors HandleReviveCommand (cs_misc.cpp:634-653, RBAC

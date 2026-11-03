@@ -1468,8 +1468,8 @@ const (
 // goDoTeleport mirrors go_commandscript::DoTeleport (cs_go.cpp:73): reject
 // invalid coordinates (LANG_INVALID_TARGET_COORD = 263), stop an active taxi
 // flight, then teleport. teleportTo is the Go Player::TeleportTo bridge.
-// Fidelity gap: Player::SaveRecallPosition has no Go bridge, so the
-// non-flight recall snapshot is skipped.
+// The non-flight case snapshots the recall position (SaveRecallPosition,
+// Player.h:1989); the flight case finishes the taxi instead.
 func (s *session) goDoTeleport(ctx context.Context, mapID uint32, x, y, z, o float32) bool {
 	if s.player == nil {
 		return false
@@ -1480,6 +1480,8 @@ func (s *session) goDoTeleport(ctx context.Context, mapID uint32, x, y, z, o flo
 	}
 	if s.isInFlight() {
 		s.finishTaxiFlight()
+	} else {
+		s.saveRecallPosition()
 	}
 	return s.teleportTo(mapID, x, y, z, o)
 }
@@ -1683,7 +1685,7 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 // handleCmdGoGraveyard mirrors HandleGoGraveyardCommand (cs_go.cpp:183):
 // teleport to the WorldSafeLocs.dbc entry with the given id
 // (LANG_COMMAND_GRAVEYARDNOEXIST = 449), keeping the player's orientation.
-// Fidelity gap: Player::SaveRecallPosition has no Go bridge (goDoTeleport).
+// The recall snapshot rides goDoTeleport (see above).
 func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) {
 	if len(args) < 1 {
 		s.sendSysMessage("Syntax: .go graveyard <gyId>")
