@@ -20,7 +20,7 @@ import (
 // Of these 26 arms, one is partial (`set movetype`: the GUID form updates
 // the creature row in the world DB, the live creature store, and the
 // selection form adds the live MoveType slot, but the LoadPath /
-// MotionMaster-Initialize / respawn legs have no Go bridge), twenty-one are wired
+// MotionMaster-Initialize / respawn legs have no Go bridge), twenty-three are wired
 // (`delete item` on the npc_vendor rows, `set factionid` on the live faction
 // slot plus the template row, `set flag` on the live NPC-flags slot plus the
 // template row, `set level` on the live level/health slots plus the spawn
@@ -35,10 +35,11 @@ import (
 // trailing oneshot emote, `playemote` on the live emotestate slot plus the
 // values-update broadcast, `whisper` on the direct monster-whisper packet
 // to the named online player, `follow`/`follow stop` on the script-follow
-// ACTIVE slot, `info` on the live motion slots plus the template/spawn rows)
-// and 4 are documented-blocked: tame, spawngroup, despawngroup and showloot
-// need the creature AI/motion/loot/pet bridges or the spawn-group manager,
-// neither of which exists in the Go tree.
+// ACTIVE slot, `info` on the live motion slots plus the template/spawn rows,
+// `tame` on the createTamedPetFromEntry pet-creation path, `showloot` on
+// the creatureLoot store)
+// and 2 are documented-blocked: spawngroup and despawngroup need the
+// spawn-group manager, which has no Go bridge.
 // Selected-creature resolution itself exists (castCommandSelectedCreature,
 // the getSelectedCreature twin).
 
@@ -83,16 +84,6 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	default:
 		s.sendSysMessage(syntax)
 	}
-}
-
-// npcNeedCreature is the shared documented-blocked tail for the npc arms that
-// need the selected live creature (ChatHandler::getSelectedCreature): command
-// selections resolve only to online player sessions.
-func (s *session) npcNeedCreature(ctx context.Context, perm uint32, what string) {
-	if s.miscDeny(ctx, perm) {
-		return
-	}
-	s.sendSysMessage(fmt.Sprintf("npc %s is not supported: selected-unit creature targets have no Go bridge.", what))
 }
 
 // handleNPCSetAllowMove mirrors HandleNpcSetAllowMovementCommand
@@ -225,7 +216,7 @@ func (s *session) handleNPCChunk2(ctx context.Context, sub string, rest []string
 	case strings.HasPrefix("yell", sub):
 		s.handleNPCYell(ctx, rest)
 	case strings.HasPrefix("tame", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCTame, "tame")
+		s.handleNPCTame(ctx)
 	case strings.HasPrefix("spawngroup", sub):
 		s.handleNPCSpawnGroup(ctx)
 	case strings.HasPrefix("despawngroup", sub):
@@ -235,7 +226,7 @@ func (s *session) handleNPCChunk2(ctx context.Context, sub string, rest []string
 	case strings.HasPrefix("evade", sub):
 		s.handleNPCEvade(ctx, rest)
 	case strings.HasPrefix("showloot", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCShowLoot, "showloot")
+		s.handleNPCShowLoot(ctx, rest)
 	default:
 		return false
 	}
@@ -1345,4 +1336,161 @@ func (s *session) handleNPCDespawnGroup(ctx context.Context) {
 		return
 	}
 	s.sendSysMessage("npc despawngroup is not supported: the spawn-group manager has no Go bridge.")
+}
+
+// handleNPCTame mirrors HandleNpcTameCommand (cs_npc.cpp:1048): the selected
+// non-pet creature becomes the player's pet. Unlike the spell tame
+// (handleTameCreature), the command has no hunter-class gate — only the
+// selected-creature, no-current-pet and IsTameable gates — and unlike the
+// spell it does NOT despawn the original creature (the command has no
+// DespawnOrUnsummon leg; SpellEffects.cpp:2991 does). Creation rides
+// createTamedPetFromEntry (character_pet INSERT as current, pet_spell rows,
+// family passives, spawnPet's AddToMap + SetMinion + PetSpellInitialize
+// twins) with spell 0 and REACT_DEFENSIVE, the command's SetReactState leg;
+// the InitTamedPet stable refusal surfaces as the non-tameable message.
+// DELTAS: spawnPet places the pet at the follow offset (combatReach plus
+// follow distance at orientation + pi/2), not the command's
+// GetClosePoint(combatReach, CONTACT_DISTANCE 0.5) plus orientation pi -
+// player orientation; the level-1-then-level visual effect is not
+// reproduced (spawnPet broadcasts the final level only); InitTalentForLevel
+// rides the pet_spell rows, not a separate talent init.
+func (s *session) handleNPCTame(ctx context.Context) {
+	if s.miscDeny(ctx, permissionCommandNPCTame) {
+		return
+	}
+	if s.player == nil || s.server == nil {
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil || motionIsPet(motion) {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	s.server.motionMu.Lock()
+	entry, creatureLevel := motion.Entry, motion.Level
+	s.server.motionMu.Unlock()
+	if s.player.PetGUID != 0 {
+		s.sendSysMessage("You already have a pet.")
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	var ctype, family, typeFlags int64
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(type, 0), COALESCE(family, 0), COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?", entry).Scan(&ctype, &family, &typeFlags); err != nil || !creatureTameable(ctype, family, typeFlags, s.canTameExoticPets()) {
+		s.sendSysMessage(fmt.Sprintf("Creature %d is not tameable.", entry))
+		return
+	}
+	if s.hasStabledHunterPet(ctx) {
+		s.sendSysMessage(fmt.Sprintf("Creature %d is not tameable.", entry))
+		return
+	}
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	petLevel := creatureLevel
+	if playerLevel := uint32(s.player.Level); playerLevel >= 5 && petLevel < playerLevel-5 {
+		petLevel = playerLevel - 5
+	}
+	s.createTamedPetFromEntry(ctx, s.server.CharactersStore.DB, 0, entry, petLevel)
+}
+
+// npcShowLootEntry mirrors _ShowLootEntry (cs_npc.cpp:1138): the count,
+// quality-colored item link and name for one loot row; an unknown template
+// renders "Unknown item" in the POOR (grey) color, as in C++.
+func (s *session) npcShowLootEntry(ctx context.Context, itemID, count, quality uint32) {
+	db := s.npcWorldDB()
+	name := "Unknown item"
+	if db != nil {
+		var itemName string
+		if err := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName); err == nil && itemName != "" {
+			name = itemName
+		}
+	}
+	color := itemQualityColors[0]
+	if int(quality) < len(itemQualityColors) {
+		color = itemQualityColors[quality]
+	}
+	s.sendSysMessage(fmt.Sprintf("%d x |c%08X|Hitem:%d|h[%s]|h|r", count, color, itemID, name))
+}
+
+// handleNPCShowLoot mirrors HandleNpcShowLootCommand (cs_npc.cpp:1170): the
+// selected non-pet creature must be dead with non-empty loot from the
+// creatureLoot store (standard-GUID fallback, as in the loot sparkle leg).
+// The header, money line and standard/quest sections follow the C++ order;
+// the "all" form drops free-for-all rows from the standard section and
+// lists them in their own section instead of the per-player split. DELTAS:
+// taken rows are already deleted from the Go Items map, so the section
+// counts are unlooted counts, not C++'s items.size(); the per-player
+// quest/FFA/conditional maps have no Go twin, so the "all" quest section
+// lists the shared quest rows and the conditions filter is unmodeled; the
+// locale leg is enUS-only (item_template Name1, as in the npc vendor arms).
+func (s *session) handleNPCShowLoot(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCShowLoot) {
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil || motionIsPet(motion) {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	snap := *motion
+	s.server.motionMu.Unlock()
+	if snap.Health != 0 {
+		s.sendSysMessage(fmt.Sprintf("%s is not dead or has no loot.", snap.Name))
+		return
+	}
+	s.server.lootMu.Lock()
+	loot := s.server.creatureLoot[lootObjectKey{MapID: snap.Map, InstanceID: snap.InstanceID, GUID: snap.GUID}]
+	if loot == nil {
+		if std := creatureWorldGUID(uint32(snap.GUID&0xFFFFFF), snap.Entry); std != snap.GUID {
+			loot = s.server.creatureLoot[lootObjectKey{MapID: snap.Map, InstanceID: snap.InstanceID, GUID: std}]
+		}
+	}
+	var money uint32
+	var items, questItems []lootItem
+	if loot != nil {
+		money = loot.Money
+		items = sortedLootItems(loot.Items)
+		questItems = sortedLootItems(loot.QuestItems)
+	}
+	s.server.lootMu.Unlock()
+	if loot == nil || (money == 0 && len(items) == 0 && len(questItems) == 0) {
+		s.sendSysMessage(fmt.Sprintf("%s is not dead or has no loot.", snap.Name))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Loot for %s (Entry: %d):", snap.Name, snap.Entry))
+	s.sendSysMessage(fmt.Sprintf("Money: %dg %ds %dc", money/10000, money%10000/100, money%100))
+	all := len(args) > 0 && strings.EqualFold(args[0], "all")
+	standard := items
+	ffa := make([]lootItem, 0)
+	if all {
+		standard = make([]lootItem, 0, len(items))
+		for _, item := range items {
+			if item.FreeForAll {
+				ffa = append(ffa, item)
+			} else {
+				standard = append(standard, item)
+			}
+		}
+	}
+	s.sendSysMessage(fmt.Sprintf("Standard items (%d):", len(standard)))
+	for _, item := range standard {
+		s.npcShowLootEntry(ctx, item.ItemEntry, item.Count, item.Quality)
+	}
+	s.sendSysMessage(fmt.Sprintf("Quest items (%d):", len(questItems)))
+	for _, item := range questItems {
+		s.npcShowLootEntry(ctx, item.ItemEntry, item.Count, item.Quality)
+	}
+	if all && len(ffa) > 0 {
+		s.sendSysMessage(fmt.Sprintf("Free-for-all items (%d):", len(ffa)))
+		for _, item := range ffa {
+			s.npcShowLootEntry(ctx, item.ItemEntry, item.Count, item.Quality)
+		}
+	}
 }
