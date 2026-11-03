@@ -4304,13 +4304,57 @@ func (s *session) luaPlayer() *scripting.Object {
 	// client-driven and Go tracks no player generator stack, so the
 	// only observable generator is the taxi flight path (the
 	// IN_FLIGHT leg of the HasUnitState trio); anything else reads
-	// IDLE. The Move* / SetConfused legs stay out for the same
-	// client-driven reason.
+	// IDLE. The spline-driven Move* legs (MoveTo/MoveChase/MoveFollow/
+	// MoveJump/MoveRandom/MoveConfused/MoveHome) stay out for the same
+	// client-driven reason; the halt quartet below rides the
+	// script-mask leg instead.
 	methods["GetMovementType"] = func(_ context.Context, _ []any) ([]any, error) {
 		if s.player != nil && s.player.TaxiPath != "" {
 			return []any{uint32(movementGeneratorFlight)}, nil
 		}
 		return []any{uint32(movementGeneratorIdle)}, nil
+	}
+	// playerMoveHaltMask is the UNIT_STATE_MOVING composite (Unit.h:250):
+	// ROAMING_MOVE | CONFUSED_MOVE | FLEEING_MOVE | CHASE_MOVE |
+	// FOLLOW_MOVE | FOLLOW_FORMATION_MOVE. It is the bit set C++
+	// StopMoving clears and the MotionMaster::Clear legs drop with
+	// their generators.
+	playerMoveHaltMask := uint32(unitStateRoamingMove | unitStateConfusedMove | unitStateFleeingMove | unitStateChaseMove | unitStateFollowMove | unitStateFollowFormationMove)
+	// MoveStop is UnitMethods::MoveStop (UnitMethods.h:2131-2136) =
+	// Unit::StopMoving (Unit.cpp:10499-10511): ClearUnitState(
+	// UNIT_STATE_MOVING) plus a spline Stop when a spline is active.
+	// The spline leg is vacuous here: Go has no player spline outside
+	// the generator-driven taxi flight, and StopMoving never removes
+	// generators, so the flight is untouched. The state leg rides the
+	// HasUnitState trio's script mask (playerUnitStateClear, the
+	// ClearUnitState twin): live aura-derived _MOVE bits persist, per
+	// that trio's contract, and C++'s raw m_state clear dropping them
+	// until the generator re-arms is the documented edge delta.
+	methods["MoveStop"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.playerUnitStateClear(playerMoveHaltMask)
+		return nil, nil
+	}
+	// MoveClear and MoveExpire are UnitMethods::MoveClear/MoveExpire
+	// (UnitMethods.h:2142-2172, Trinity arm) = MotionMaster::Clear(),
+	// collapsed to the MoveStop state leg on the creature precedent
+	// (lua_creature_events.go): Go has no player generator stack to
+	// remove. DELTA: C++ Clear finalizes the taxi generator, and the
+	// flight generator's active Finalize teleports the player to the
+	// destination node (FlightPathMovementGenerator.cpp:150-176); Go
+	// has no destination-teleport leg, so the flight continues and
+	// only the mask bits clear. That leg is a separate unit.
+	methods["MoveClear"] = methods["MoveStop"]
+	methods["MoveExpire"] = methods["MoveStop"]
+	// MoveIdle is UnitMethods::MoveIdle (UnitMethods.h:2174-2178) =
+	// MotionMaster::MoveIdle(), which only fills MOTION_SLOT_DEFAULT
+	// (autofilled with IDLE when empty, MotionMaster.h:134) and never
+	// touches the active slot. The player default slot is already
+	// idle (GetMovementType above reads IDLE outside taxi) and the
+	// taxi generator sits in the active slot, so the binding is an
+	// exact no-op: no mask write, since MoveIdle clears no other
+	// slot's state.
+	methods["MoveIdle"] = func(_ context.Context, _ []any) ([]any, error) {
+		return nil, nil
 	}
 	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1532-1546) for
 	// players: the Trinity arm calls SetSpeedRate(type, rate) directly
