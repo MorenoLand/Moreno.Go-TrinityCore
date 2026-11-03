@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -19,7 +20,7 @@ import (
 // Of these 26 arms, one is partial (`set movetype`: the GUID form updates
 // the creature row in the world DB, the live creature store, and the
 // selection form adds the live MoveType slot, but the LoadPath /
-// MotionMaster-Initialize / respawn legs have no Go bridge), eighteen are wired
+// MotionMaster-Initialize / respawn legs have no Go bridge), twenty-one are wired
 // (`delete item` on the npc_vendor rows, `set factionid` on the live faction
 // slot plus the template row, `set flag` on the live NPC-flags slot plus the
 // template row, `set level` on the live level/health slots plus the spawn
@@ -33,10 +34,11 @@ import (
 // twin, `say`/`yell`/`textemote` on the monster-chat fan-out plus the
 // trailing oneshot emote, `playemote` on the live emotestate slot plus the
 // values-update broadcast, `whisper` on the direct monster-whisper packet
-// to the named online player) and 7 are documented-blocked: info, tame,
-// spawngroup, despawngroup, follow, follow stop and showloot need the
-// creature AI/motion/loot/pet bridges or the spawn-group manager, neither
-// of which exists in the Go tree.
+// to the named online player, `follow`/`follow stop` on the script-follow
+// ACTIVE slot, `info` on the live motion slots plus the template/spawn rows)
+// and 4 are documented-blocked: tame, spawngroup, despawngroup and showloot
+// need the creature AI/motion/loot/pet bridges or the spawn-group manager,
+// neither of which exists in the Go tree.
 // Selected-creature resolution itself exists (castCommandSelectedCreature,
 // the getSelectedCreature twin).
 
@@ -211,7 +213,7 @@ func (s *session) handleNPCChunk2(ctx context.Context, sub string, rest []string
 	case strings.HasPrefix("set", sub):
 		s.handleNPCSetTable(ctx, rest)
 	case strings.HasPrefix("info", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCInfo, "info")
+		s.handleNPCInfo(ctx)
 	case strings.HasPrefix("playemote", sub):
 		s.handleNPCPlayEmote(ctx, rest)
 	case strings.HasPrefix("say", sub):
@@ -1053,13 +1055,277 @@ func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 
 // handleNPCFollow handles "follow" and the two-level "follow stop" arm
 // (cs_npc.cpp:109-110, gated by RBAC_PERM_COMMAND_NPC_FOLLOW 578 and
-// RBAC_PERM_COMMAND_NPC_FOLLOW_STOP 579 respectively).
+// RBAC_PERM_COMMAND_NPC_FOLLOW_STOP 579 respectively). "follow" arms the
+// script-follow ACTIVE slot exactly as the Lua MoveFollow binding does
+// (chase slot cleared, same slot): PET_FOLLOW_DIST 1.0 (PetDefines.h:84)
+// and Unit::GetFollowAngle pi/2 (Unit.h:1655) — the temp-summon
+// m_followAngle leg has no Go slot, so summoned creatures read the same
+// default. The wander section's stepScriptFollow leg then repaths the
+// creature to the GM's near point; in combat the chase leg runs instead
+// (the step tick's standing follow/combat precedence), and a target that
+// leaves the world clears the slot. "follow stop" clears the slot only
+// when it targets the GM player (the C++ generator-target predicate);
+// otherwise it reports the creature is not following you, as in C++.
 func (s *session) handleNPCFollow(ctx context.Context, rest []string) {
 	if len(rest) > 0 && strings.HasPrefix("stop", strings.ToLower(rest[0])) {
-		s.npcNeedCreature(ctx, permissionCommandNPCFollowStop, "follow stop")
+		if s.miscDeny(ctx, permissionCommandNPCFollowStop) {
+			return
+		}
+		motion := s.castCommandSelectedCreature()
+		if motion == nil {
+			s.sendSysMessage("Select a creature first.")
+			return
+		}
+		if s.server == nil {
+			return
+		}
+		s.server.motionMu.Lock()
+		name := motion.Name
+		following := motion.ScriptFollowTargetGUID != 0 && motion.ScriptFollowTargetGUID == s.playerGUID
+		if following {
+			motion.ScriptFollowTargetGUID = 0
+			motion.ScriptFollowDist = 0
+			motion.ScriptFollowAngle = 0
+		}
+		s.server.motionMu.Unlock()
+		if !following {
+			s.sendSysMessage(fmt.Sprintf("%s is not following you.", name))
+			return
+		}
+		s.sendSysMessage(fmt.Sprintf("%s is no longer following you.", name))
 		return
 	}
-	s.npcNeedCreature(ctx, permissionCommandNPCFollow, "follow")
+	if s.miscDeny(ctx, permissionCommandNPCFollow) {
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	motion.ScriptChaseTargetGUID = 0
+	motion.ScriptChaseDist = 0
+	motion.ScriptChaseAngle = 0
+	motion.ScriptFollowTargetGUID = s.playerGUID
+	motion.ScriptFollowDist = 1.0
+	motion.ScriptFollowAngle = float32(math.Pi / 2)
+	name := motion.Name
+	s.server.motionMu.Unlock()
+	s.sendSysMessage(fmt.Sprintf("%s is now following you.", name))
+}
+
+// npcSecsToTimeString mirrors secsToTimeString with TimeFormat::ShortText
+// (Util.cpp:97-180): day/hour/minute/second segments concatenated with
+// d/h/m/s suffixes, zero rendering as "0s".
+func npcSecsToTimeString(secs uint64) string {
+	days, hours, minutes, rem := secs/86400, secs%86400/3600, secs%3600/60, secs%60
+	out := ""
+	if days != 0 {
+		out += fmt.Sprintf("%dd", days)
+	}
+	if hours != 0 {
+		out += fmt.Sprintf("%dh", hours)
+	}
+	if minutes != 0 {
+		out += fmt.Sprintf("%dm", minutes)
+	}
+	if rem != 0 || out == "" {
+		out += fmt.Sprintf("%ds", rem)
+	}
+	return out
+}
+
+// npcInfoFlagBit pairs a mask bit with the C++ enumerator suffix printed
+// for it by the info dump's flag-expansion loops.
+type npcInfoFlagBit struct {
+	bit  uint32
+	name string
+}
+
+// npcUnitFlagNames mirrors UnitFlags (UnitDefines.h:122-155) in bit order.
+var npcUnitFlagNames = []npcInfoFlagBit{
+	{0x00000001, "SERVER_CONTROLLED"}, {0x00000002, "NON_ATTACKABLE"},
+	{0x00000004, "REMOVE_CLIENT_CONTROL"}, {0x00000008, "PLAYER_CONTROLLED"},
+	{0x00000010, "RENAME"}, {0x00000020, "PREPARATION"}, {0x00000040, "UNK_6"},
+	{0x00000080, "NOT_ATTACKABLE_1"}, {0x00000100, "IMMUNE_TO_PC"},
+	{0x00000200, "IMMUNE_TO_NPC"}, {0x00000400, "LOOTING"},
+	{0x00000800, "PET_IN_COMBAT"}, {0x00001000, "PVP"}, {0x00002000, "SILENCED"},
+	{0x00004000, "CANNOT_SWIM"}, {0x00008000, "SWIMMING"},
+	{0x00010000, "NON_ATTACKABLE_2"}, {0x00020000, "PACIFIED"},
+	{0x00040000, "STUNNED"}, {0x00080000, "IN_COMBAT"}, {0x00100000, "TAXI_FLIGHT"},
+	{0x00200000, "DISARMED"}, {0x00400000, "CONFUSED"}, {0x00800000, "FLEEING"},
+	{0x01000000, "POSSESSED"}, {0x02000000, "NOT_SELECTABLE"},
+	{0x04000000, "SKINNABLE"}, {0x08000000, "MOUNT"}, {0x10000000, "UNK_28"},
+	{0x20000000, "UNK_29"}, {0x40000000, "SHEATHE"}, {0x80000000, "IMMUNE"},
+}
+
+// npcFlagsExtraNames mirrors CreatureFlagsExtra (CreatureData.h:37-68).
+var npcFlagsExtraNames = []npcInfoFlagBit{
+	{0x00000001, "INSTANCE_BIND"}, {0x00000002, "CIVILIAN"}, {0x00000004, "NO_PARRY"},
+	{0x00000008, "NO_PARRY_HASTEN"}, {0x00000010, "NO_BLOCK"}, {0x00000020, "NO_CRUSH"},
+	{0x00000040, "NO_XP_AT_KILL"}, {0x00000080, "TRIGGER"}, {0x00000100, "NO_TAUNT"},
+	{0x00000200, "NO_MOVE_FLAGS_UPDATE"}, {0x00000400, "GHOST_VISIBILITY"},
+	{0x00000800, "USE_OFFHAND_ATTACK"}, {0x00001000, "NO_SELL_VENDOR"},
+	{0x00002000, "NO_COMBAT"}, {0x00004000, "WORLDEVENT"}, {0x00008000, "GUARD"},
+	{0x00010000, "UNUSED_16"}, {0x00020000, "NO_CRIT"}, {0x00040000, "NO_SKILLGAIN"},
+	{0x00080000, "TAUNT_DIMINISH"}, {0x00100000, "ALL_DIMINISH"},
+	{0x00200000, "NO_PLAYER_DAMAGE_REQ"}, {0x00400000, "UNUSED_22"},
+	{0x00800000, "UNUSED_23"}, {0x01000000, "UNUSED_24"}, {0x02000000, "UNUSED_25"},
+	{0x04000000, "NPCBOT"}, {0x08000000, "NPCBOT_PET"}, {0x10000000, "DUNGEON_BOSS"},
+	{0x20000000, "IGNORE_PATHFINDING"}, {0x40000000, "IMMUNITY_KNOCKBACK"},
+	{0x80000000, "UNUSED_31"},
+}
+
+// npcFlagNames mirrors NPCFlags (UnitDefines.h:183-212).
+var npcFlagNames = []npcInfoFlagBit{
+	{0x00000001, "GOSSIP"}, {0x00000002, "QUESTGIVER"}, {0x00000004, "UNK1"},
+	{0x00000008, "UNK2"}, {0x00000010, "TRAINER"}, {0x00000020, "TRAINER_CLASS"},
+	{0x00000040, "TRAINER_PROFESSION"}, {0x00000080, "VENDOR"},
+	{0x00000100, "VENDOR_AMMO"}, {0x00000200, "VENDOR_FOOD"},
+	{0x00000400, "VENDOR_POISON"}, {0x00000800, "VENDOR_REAGENT"},
+	{0x00001000, "REPAIR"}, {0x00002000, "FLIGHTMASTER"}, {0x00004000, "SPIRITHEALER"},
+	{0x00008000, "SPIRITGUIDE"}, {0x00010000, "INNKEEPER"}, {0x00020000, "BANKER"},
+	{0x00040000, "PETITIONER"}, {0x00080000, "TABARDDESIGNER"},
+	{0x00100000, "BATTLEMASTER"}, {0x00200000, "AUCTIONEER"},
+	{0x00400000, "STABLEMASTER"}, {0x00800000, "GUILD_BANKER"},
+	{0x01000000, "SPELLCLICK"}, {0x02000000, "PLAYER_VEHICLE"}, {0x04000000, "MAILBOX"},
+}
+
+// npcMechanicNames mirrors Mechanics (SharedDefines.h:1355-1389) by id;
+// the info dump's immune loop tests bit (id-1) and prints the id.
+var npcMechanicNames = []string{
+	"", "CHARM", "DISORIENTED", "DISARM", "DISTRACT", "FEAR", "GRIP", "ROOT",
+	"SLOW_ATTACK", "SILENCE", "SLEEP", "SNARE", "STUN", "FREEZE", "KNOCKOUT",
+	"BLEED", "BANDAGE", "POLYMORPH", "BANISH", "SHIELD", "SHACKLE", "MOUNT",
+	"INFECTED", "TURN", "HORROR", "INVULNERABILITY", "INTERRUPT", "DAZE",
+	"DISCOVERY", "IMMUNE_SHIELD", "SAPPED", "ENRAGED",
+}
+
+// npcInfoFlagLines renders the "* NAME (0xX)" expansion lines for the
+// set bits of mask, in table order.
+func (s *session) npcInfoFlagLines(mask uint32, table []npcInfoFlagBit) {
+	for _, flag := range table {
+		if mask&flag.bit != 0 {
+			s.sendSysMessage(fmt.Sprintf("* %s (0x%X)", flag.name, flag.bit))
+		}
+	}
+}
+
+// handleNPCInfo mirrors HandleNpcInfoCommand (cs_npc.cpp:482) in C++ line
+// order: char, compatibility mode, level, equipment, health, movement
+// data, unit flags (+ expansions), flags, respawn times, loot, dungeon
+// id, phasemask, armor, position, AI info, react state, flags extra (+
+// expansions), npc flags (+ expansions), mechanic immune (+ expansions).
+// LANG wordings are plain-English recalls (no in-tree seed). DELTAS: the
+// spawn-group line has no Go model (no spawn-group manager); the AI-type
+// line has none either (no C++ AI class model — ScriptName is the Go AI
+// identity); equipment ids have no Go slot and read 0; the movement
+// Chase/Random legs read the C++ default-ctor values (Run/Walk — Go loads
+// only Ground/Swim/Flight); the template Rooted bit has no Go slot, so
+// only the script-rooted latch appends ", Rooted"; compatibility mode
+// reads false (no Go compatibility-mode model); the current respawn
+// delay reads 0 (no remaining-time model for dead creatures — selected
+// motions are live); the spawn id is the GUID counter, exact for DB
+// creatures; a missing template/spawn row leaves its fields at 0.
+func (s *session) handleNPCInfo(ctx context.Context) {
+	if s.miscDeny(ctx, permissionCommandNPCInfo) {
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	snap := *motion
+	s.server.motionMu.Unlock()
+
+	guidCounter := uint32(snap.GUID & 0x00FFFFFF)
+	var lootID, pickpocketLootID, skinLootID, mechanicImmuneMask, spawnTimeSecs uint32
+	if db := s.npcWorldDB(); db != nil {
+		_ = db.QueryRowContext(ctx, "SELECT COALESCE(lootid, 0), COALESCE(pickpocketloot, 0), COALESCE(skinloot, 0), COALESCE(MechanicImmuneMask, 0) FROM creature_template WHERE entry = ?", snap.Entry).Scan(&lootID, &pickpocketLootID, &skinLootID, &mechanicImmuneMask)
+		_ = db.QueryRowContext(ctx, "SELECT COALESCE(spawntimesecs, 0) FROM creature WHERE guid = ?", guidCounter).Scan(&spawnTimeSecs)
+	}
+	defRespawn := spawnTimeSecs
+	if snap.RespawnDelayKnown {
+		defRespawn = snap.RespawnDelaySec
+	}
+	createHealth := snap.BaseMaxHealth
+	if createHealth == 0 {
+		createHealth = snap.MaxHealth
+	}
+	phaseMask := snap.PhaseMask
+	if phaseMask == 0 {
+		phaseMask = 1
+	}
+	ground := "Run"
+	swim := true
+	flight := "None"
+	if snap.MoveKnown {
+		switch snap.MoveGround {
+		case 0:
+			ground = "None"
+		case 2:
+			ground = "Hover"
+		}
+		swim = snap.MoveSwim
+		if snap.CanFly {
+			flight = "CanFly"
+		} else if snap.GravityDisabled {
+			flight = "DisableGravity"
+		}
+	}
+	movement := fmt.Sprintf("Ground: %s, Swim: %t, Flight: %s, Chase: Run, Random: Walk", ground, swim, flight)
+	if snap.ScriptRooted {
+		movement += ", Rooted"
+	}
+	reactState := snap.ReactState
+	if !snap.ReactStateKnown {
+		reactState = creatureReactState(snap.CreatureType, snap.NPCFlags, snap.FlagsExtra, snap.AIName)
+	}
+	reactName := "<Invalid react state>"
+	switch reactState {
+	case 0:
+		reactName = "PASSIVE"
+	case 1:
+		reactName = "DEFENSIVE"
+	case 2:
+		reactName = "AGGRESSIVE"
+	}
+
+	s.sendSysMessage(fmt.Sprintf("NPC %s: spawn id %d, GUID %d, entry %d, faction %d, npc flags 0x%X, display id %d, native display id %d", snap.Name, guidCounter, guidCounter, snap.Entry, snap.Faction, snap.NPCFlags, snap.DisplayID, snap.NativeDisplayID))
+	s.sendSysMessage("Respawn compatibility mode: false")
+	s.sendSysMessage(fmt.Sprintf("Level: %d", snap.Level))
+	s.sendSysMessage("Equipment: current 0, original 0")
+	s.sendSysMessage(fmt.Sprintf("Health: create %d, max %d, current %d", createHealth, snap.MaxHealth, snap.Health))
+	s.sendSysMessage(fmt.Sprintf("Movement: %s", movement))
+	s.sendSysMessage(fmt.Sprintf("Unit flags: 0x%X", snap.UnitFlags))
+	s.npcInfoFlagLines(snap.UnitFlags, npcUnitFlagNames)
+	s.sendSysMessage(fmt.Sprintf("Flags: flags2 0x%X, dynamic flags 0x%X, faction %d", snap.UnitFlags2, snap.DynamicFlags, snap.Faction))
+	s.sendSysMessage(fmt.Sprintf("Respawn: default %s, current %s", npcSecsToTimeString(uint64(defRespawn)), npcSecsToTimeString(0)))
+	s.sendSysMessage(fmt.Sprintf("Loot: %d, pickpocket loot: %d, skin loot: %d", lootID, pickpocketLootID, skinLootID))
+	s.sendSysMessage(fmt.Sprintf("Instance id: %d", snap.InstanceID))
+	s.sendSysMessage(fmt.Sprintf("Phase mask: %d", phaseMask))
+	s.sendSysMessage(fmt.Sprintf("Armor: %d", snap.Armor))
+	s.sendSysMessage(fmt.Sprintf("Position: %.2f, %.2f, %.2f", snap.X, snap.Y, snap.Z))
+	s.sendSysMessage(fmt.Sprintf("AI: %s, script: %s", snap.AIName, snap.ScriptName))
+	s.sendSysMessage(fmt.Sprintf("React state: %s", reactName))
+	s.sendSysMessage(fmt.Sprintf("Flags extra: 0x%X", snap.FlagsExtra))
+	s.npcInfoFlagLines(snap.FlagsExtra, npcFlagsExtraNames)
+	s.npcInfoFlagLines(snap.NPCFlags, npcFlagNames)
+	s.sendSysMessage(fmt.Sprintf("Mechanic immune mask: 0x%X", mechanicImmuneMask))
+	for id := uint32(1); id < uint32(len(npcMechanicNames)); id++ {
+		if mechanicImmuneMask&(1<<(id-1)) != 0 {
+			s.sendSysMessage(fmt.Sprintf("* %s (0x%X)", npcMechanicNames[id], id))
+		}
+	}
 }
 
 // handleNPCSpawnGroup is documented-blocked (cs_npc.cpp:1331): spawn groups
