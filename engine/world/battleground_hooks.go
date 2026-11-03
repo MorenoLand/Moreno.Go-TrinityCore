@@ -86,6 +86,19 @@ func bgWinnerTeamID(event int, args []any) uint32 {
 // pop banked one (C++ SetBracket overwrites the template-copied levels
 // with the bracket row's, Battleground.cpp:1792), else the template
 // row's overall range below.
+// Roster counts (GetAlivePlayersCountByTeam/GetFreeSlotsForTeam) come from
+// the session slot scan below: the Go proxy for C++ m_Players is an
+// InProgress slot (entered players only — a WaitJoin invitee is not in
+// m_Players, markBGSlotsWaitLeave precedent), the proxy for
+// m_InvitedAlliance/m_InvitedHorde is a WaitJoin slot with InviteTime set
+// plus every InProgress slot (C++ AddPlayer never decreases the invited
+// count; only RemovePlayerAtLeave does, Battleground.cpp:901), and alive
+// is Health > 0 (Go death zeroes Health; C++ additionally excludes
+// Spirit of Redemption form, which Go does not model separately).
+// The scan takes sessionsMu.RLock like luaPlayers, the same lock order
+// the end arms already use via markBGSlotsWaitLeave; arena fires match
+// IsArena slots by instance id, non-arena fires match non-arena slots by
+// map id (non-arena triggerBGEvent always passes instance 0).
 func (srv *Server) bgScriptObject(mapID, bgTypeID, instanceID uint32, event int, args ...any) *scripting.Object {
 	snap := scripting.BGSnapshot{Winner: bgWinnerTeamID(event, args)}
 	switch event {
@@ -120,6 +133,49 @@ func (srv *Server) bgScriptObject(mapID, bgTypeID, instanceID uint32, event int,
 				}
 			}
 		}
+		srv.sessionsMu.RLock()
+		for sess := range srv.sessions {
+			if sess == nil || !sess.worldReady.Load() || sess.player == nil {
+				continue
+			}
+			for i := range sess.bgQueues {
+				e := &sess.bgQueues[i]
+				if !e.Active {
+					continue
+				}
+				if instanceID != 0 {
+					if !e.IsArena || e.InstanceID != instanceID {
+						continue
+					}
+				} else if e.IsArena || e.MapID != mapID {
+					continue
+				}
+				horde := effectiveTeamFor(sess.player) == 1
+				invited := e.Status == BGStatusInProgress ||
+					(e.Status == BGStatusWaitJoin && !e.InviteTime.IsZero())
+				if invited {
+					if horde {
+						snap.InvitedHorde++
+					} else {
+						snap.InvitedAlliance++
+					}
+				}
+				if e.Status == BGStatusInProgress {
+					if horde {
+						snap.PlayersHorde++
+						if sess.player.Health > 0 {
+							snap.AliveHorde++
+						}
+					} else {
+						snap.PlayersAlliance++
+						if sess.player.Health > 0 {
+							snap.AliveAlliance++
+						}
+					}
+				}
+			}
+		}
+		srv.sessionsMu.RUnlock()
 		snap.Map = scripting.NewMapObject(mapID, instanceID, srv.mapLive(mapID, instanceID))
 	}
 	return scripting.NewBattleGroundObject(bgTypeID, mapID, instanceID, scripting.BGLive{

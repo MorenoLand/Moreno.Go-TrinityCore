@@ -1377,6 +1377,20 @@ type BGSnapshot struct {
 	// (0), which is also what an unbanked snapshot reads.
 	BracketID uint32
 	Map       *Object
+	// AliveAlliance/AliveHorde are GetAlivePlayersCountByTeam's counts
+	// (Battleground.cpp:1737: m_Players members of the team, online and
+	// alive, excluding Spirit of Redemption form); InvitedAlliance/
+	// InvitedHorde are m_InvitedAlliance/m_InvitedHorde (Battleground.h:
+	// 323-327, invitees not yet removed, entered or not); PlayersAlliance/
+	// PlayersHorde are GetPlayersCountByTeam's m_Players counts. All six
+	// come from the world engine's slot scan at snapshot time (see
+	// bgScriptObject), never re-read under a state lock.
+	AliveAlliance   uint32
+	AliveHorde      uint32
+	InvitedAlliance uint32
+	InvitedHorde    uint32
+	PlayersAlliance uint32
+	PlayersHorde    uint32
 }
 
 // BGLive carries the snapshot behind a Lua BattleGround object. A nil Load
@@ -1390,15 +1404,24 @@ type BGLive struct {
 // BG_EVENT_* hooks: GetName/GetTypeId/GetMapId/GetInstanceId/GetMap/
 // GetMinLevel/GetMaxLevel/GetMinPlayers/GetMaxPlayers/GetMinPlayersPerTeam/
 // GetMaxPlayersPerTeam/GetWinner/GetBonusHonorFromKillCount/GetStatus/
-// GetEndTime/GetBracketId (BattleGroundMethods.h). GetBonusHonorFromKillCount is the
+// GetEndTime/GetBracketId/GetAlivePlayersCountByTeam/GetFreeSlotsForTeam
+// (BattleGroundMethods.h). GetBonusHonorFromKillCount is the
 // pure C++ formula (Battleground.cpp:806-811): hk_honor_at_level(min(maxLevel, 80),
 // kills) = ceil(level * 1.55 * kills), without the OnHonorCalculation script
 // hook, which has no Go twin. GetStatus/GetEndTime/GetBracketId read the pre-fire
-// snapshot (see bgScriptObject), not live state. The remaining surface
-// stays unbridged: GetAlivePlayersCountByTeam/GetFreeSlotsForTeam need a
-// per-map roster Go does not model (arena states carry alive counts, but
-// the non-arena states carry no roster, and FreeSlots needs invited counts
-// plus the balance formula, neither of which Go stores).
+// snapshot (see bgScriptObject), not live state. GetAlivePlayersCountByTeam
+// takes the C++ Team domain (SharedDefines.h:797-802: ALLIANCE 469, HORDE 67),
+// not TeamId 0/1: any other argument matches no member and reads 0, like the
+// C++ exact Team comparison against BattlegroundPlayer.Team. GetFreeSlotsForTeam
+// ports Battleground.cpp:1126-1196 under the default Battleground.InvitationType
+// = 0 (NO_BALANCE, World.cpp:1205): WAIT_JOIN reads the no-balance leg
+// (MaxPlayersPerTeam minus invited, clamped at 0) and IN_PROGRESS reads the
+// balanced diff/diff2/diff3 formula; every other status reads 0. Its else
+// branch treats any non-ALLIANCE argument as HORDE, like the C++.
+// DELTAS: the snapshot counts come from the Go slot roster, not m_Players:
+// offline members in C++'s 5-minute grace are absent (no session to scan),
+// and Spirit of Redemption form is not excluded separately (Go death sets
+// Health 0, so the alive gate already drops dead priests).
 func NewBattleGroundObject(bgTypeID, mapID, instanceID uint32, live BGLive) *Object {
 	load := live.Load
 	if load == nil {
@@ -1493,6 +1516,71 @@ func NewBattleGroundObject(bgTypeID, mapID, instanceID uint32, live BGLive) *Obj
 				level = 80
 			}
 			return []any{uint32(math.Ceil(float64(level) * 1.55 * float64(kills)))}, nil
+		},
+		"GetAlivePlayersCountByTeam": func(_ context.Context, args []any) ([]any, error) {
+			team, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			snap, _ := load()
+			switch team {
+			case 469:
+				return []any{snap.AliveAlliance}, nil
+			case 67:
+				return []any{snap.AliveHorde}, nil
+			default:
+				return []any{uint32(0)}, nil
+			}
+		},
+		"GetFreeSlotsForTeam": func(_ context.Context, args []any) ([]any, error) {
+			team, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			snap, _ := load()
+			var thisInvited, otherInvited, thisPlayers, otherPlayers uint32
+			if team == 469 {
+				thisInvited, otherInvited = snap.InvitedAlliance, snap.InvitedHorde
+				thisPlayers, otherPlayers = snap.PlayersAlliance, snap.PlayersHorde
+			} else {
+				thisInvited, otherInvited = snap.InvitedHorde, snap.InvitedAlliance
+				thisPlayers, otherPlayers = snap.PlayersHorde, snap.PlayersAlliance
+			}
+			switch snap.Status {
+			case 2:
+				if thisInvited < snap.MaxPlayersPerTeam {
+					return []any{snap.MaxPlayersPerTeam - thisInvited}, nil
+				}
+				return []any{uint32(0)}, nil
+			case 3:
+				var diff uint32
+				if otherInvited == thisInvited {
+					diff = 1
+				} else if otherInvited > thisInvited {
+					diff = otherInvited - thisInvited
+				}
+				diff2 := uint32(0)
+				if thisInvited < snap.MaxPlayersPerTeam {
+					diff2 = snap.MaxPlayersPerTeam - thisInvited
+				}
+				var diff3 uint32
+				if otherPlayers == thisPlayers {
+					diff3 = 1
+				} else if otherPlayers > thisPlayers {
+					diff3 = otherPlayers - thisPlayers
+				} else if thisInvited <= snap.MinPlayersPerTeam {
+					diff3 = snap.MinPlayersPerTeam - thisInvited + 1
+				}
+				if diff2 < diff {
+					diff = diff2
+				}
+				if diff3 < diff {
+					diff = diff3
+				}
+				return []any{diff}, nil
+			default:
+				return []any{uint32(0)}, nil
+			}
 		},
 	}
 	return &Object{Type: "BattleGround", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID, "InWorld": true}, Methods: methods}
