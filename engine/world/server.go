@@ -520,6 +520,12 @@ type session struct {
 	// live engine leg. Session lifetime only, like the spell-immune
 	// rows above; never persisted.
 	scriptUnitState uint32
+	// playerScriptMoveType / playerScriptMoveEnds stamp the in-flight
+	// player script spline (lua_player_spline.go): the MovementGeneratorType
+	// GetMovementType reports while the spline runs, mirroring motion's
+	// ScriptMoveType/MoveEnds pair. Session lifetime only, never persisted.
+	playerScriptMoveType uint32
+	playerScriptMoveEnds time.Time
 	// factionNativeAfterRemove mirrors Unit::RestoreFaction in the
 	// AuraEffect::HandleAuraModFaction remove leg (SpellAuraEffects.cpp:4808):
 	// removing a 243 aura restores the native faction unconditionally, even

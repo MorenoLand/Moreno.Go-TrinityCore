@@ -1555,11 +1555,11 @@ func (s *session) luaPlayer() *scripting.Object {
 		return nil, nil
 	}
 	// SetFeared is Unit::SetFeared (UnitMethods.h, Unit.cpp:11700)
-	// on a player receiver: the control/target leg above; the
-	// MoveFleeing spline leg (fear-aura caster else engaged
-	// victim, 7000ms else untimed) is unmodeled (no player
-	// spline), and the non-player MoveTargetedHome clear leg
-	// does not apply to players.
+	// on a player receiver: the control/target leg above; SetFeared
+	// itself launches no flee spline (the fear-aura caster else engaged
+	// victim, 7000ms else untimed leg) — scripts drive that leg via the
+	// MoveFleeing binding directly, and the non-player MoveTargetedHome
+	// clear leg does not apply to players.
 	methods["SetFeared"] = func(_ context.Context, args []any) ([]any, error) {
 		apply := true
 		if len(args) >= 1 && args[0] != nil {
@@ -4300,15 +4300,19 @@ func (s *session) luaPlayer() *scripting.Object {
 		return []any{s.movementSpeeds()[mt]}, nil
 	}
 	// GetMovementType is UnitMethods::GetMovementType
-	// (UnitMethods.h:1430-1444) for players: player movement is
-	// client-driven and Go tracks no player generator stack, so the
-	// only observable generator is the taxi flight path (the
-	// IN_FLIGHT leg of the HasUnitState trio); anything else reads
-	// IDLE. The spline-driven Move* legs (MoveTo/MoveChase/MoveFollow/
-	// MoveJump/MoveRandom/MoveConfused/MoveHome) stay out for the same
-	// client-driven reason; the halt quartet below rides the
-	// script-mask leg instead.
+	// (UnitMethods.h:1430-1444) for players: client-driven movement
+	// aside, the observable generators are the in-flight script spline
+	// (lua_player_spline.go stamp, POINT/FLEEING/EFFECT while it runs)
+	// and the taxi flight path (the IN_FLIGHT leg of the HasUnitState
+	// trio); anything else reads IDLE. MoveChase/MoveFollow stay out
+	// (persistent repath generators, no player movement tick) as does
+	// MoveConfused (repeated hop chain, same gap); the halt quartet
+	// below rides the script-mask leg instead and never clears the
+	// stamp, mirroring the creature stopCreatureMotion twin.
 	methods["GetMovementType"] = func(_ context.Context, _ []any) ([]any, error) {
+		if moveType, ok := s.playerScriptMoveTypeNow(); ok {
+			return []any{moveType}, nil
+		}
 		if s.player != nil && s.player.TaxiPath != "" {
 			return []any{uint32(movementGeneratorFlight)}, nil
 		}
@@ -4409,6 +4413,110 @@ func (s *session) luaPlayer() *scripting.Object {
 	// exact no-op like MoveIdle above (the C++ log line has no
 	// script-visible twin).
 	methods["MoveHome"] = func(_ context.Context, _ []any) ([]any, error) {
+		return nil, nil
+	}
+	// MoveTo is UnitMethods::MoveTo (UnitMethods.h:2267-2283) =
+	// MotionMaster::MovePoint(id, x, y, z, genPath) (MotionMaster.cpp:635),
+	// via the shared player script-spline launch (lua_player_spline.go).
+	// The id is accepted but unrecorded: its arrival arm is Eluna
+	// MovementInform (POINT_MOTION_TYPE), which Go never registered (no
+	// event 28 in scripting/runtime.go), so no hook can observe it.
+	// genPath is accepted and ignored — Go has no PathGenerator, so the
+	// spline is straight-line like every other script launch.
+	methods["MoveTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if _, err := luaUint32Arg(args, 0); err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		s.launchPlayerScriptSpline(x, y, z, false, movementGeneratorPoint)
+		return nil, nil
+	}
+	// MoveJump is UnitMethods::MoveJump (UnitMethods.h:2293-2310) =
+	// MotionMaster::MoveJump(pos, speedXY, speedZ, id) (MotionMaster.cpp:780-824),
+	// via the player parabolic launch (lua_player_spline.go). The Eluna
+	// 4th arg drives horizontal speed and the 5th drives the vertical
+	// profile — the C++ param order, not the Eluna doc names (see the
+	// creature leg). The id is accepted but unrecorded (event 28
+	// unregistered, as in MoveTo above).
+	methods["MoveJump"] = func(_ context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		zSpeed, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		maxHeight, err := luaFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) >= 6 {
+			if _, err := luaUint32Arg(args, 5); err != nil {
+				return nil, err
+			}
+		}
+		s.launchPlayerJumpSpline(x, y, z, zSpeed, maxHeight)
+		return nil, nil
+	}
+	// MoveFleeing is UnitMethods::MoveFleeing (UnitMethods.h:2254-2260) =
+	// MotionMaster::MoveFleeing(target, time) (MotionMaster.cpp:618-633),
+	// via the player script-spline launch (lua_player_spline.go). A
+	// positive time stamps TIMED_FLEEING, zero stamps FLEEING, matching
+	// the MotionMaster arms (:626-629); the single 24yd spline is the
+	// creature-flee delta (C++ repaths continuously, Go launches once).
+	methods["MoveFleeing"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("MoveFleeing requires a WorldObject target")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("MoveFleeing requires a WorldObject target")
+		}
+		tx, ok := objectFloat32Field(target, "X")
+		if !ok {
+			return nil, fmt.Errorf("MoveFleeing requires a WorldObject target with a position")
+		}
+		ty, ok := objectFloat32Field(target, "Y")
+		if !ok {
+			return nil, fmt.Errorf("MoveFleeing requires a WorldObject target with a position")
+		}
+		var durationMs uint32
+		if len(args) >= 2 && args[1] != nil {
+			d, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			durationMs = d
+		}
+		if s == nil || s.player == nil {
+			return nil, nil
+		}
+		moveType := uint32(movementGeneratorFleeing)
+		if durationMs != 0 {
+			moveType = movementGeneratorTimedFleeing
+		}
+		destX, destY, destZ := playerFleeDestination(s.player.X, s.player.Y, s.player.Z, tx, ty)
+		s.launchPlayerScriptSpline(destX, destY, destZ, false, moveType)
 		return nil, nil
 	}
 	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1532-1546) for
