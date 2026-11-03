@@ -39,12 +39,16 @@
 --   non-triggered, init 45s -> 20000 + rand32() % 10000 + Talk
 --   SAY_MORTAL (3) before the cast.
 -- Unmodeled (documented-only, no bridges):
--- - The patrol machine: C++ sets CanPatrol = true / wpId = 0 in
---   Initialize() and UpdateAI runs, marked "/// @todo make this work",
---   if (CanPatrol && wpId == 0) me->GetMotionMaster()->MovePoint(wpId,
---   DrakeWP[wpId]) then ++wpId — no movement bridge exists, so the
---   CanPatrol/wpId state and these 19 C++-verbatim waypoints are
---   documented here, not wired: (2125.84, 88.2535, 54.8830),
+-- - The patrol leg (PORTED, DrakeWP[0] only): C++ sets CanPatrol =
+--   true / wpId = 0 in Initialize() and UpdateAI runs, marked "///
+--   @todo make this work", if (CanPatrol && wpId == 0)
+--   me->GetMotionMaster()->MovePoint(wpId, DrakeWP[wpId]) then ++wpId
+--   — no MovementInform chain exists in C++, so only DrakeWP[0] ever
+--   fires (Reset re-arms it via Initialize); ev5 spawn + ev23 Reset
+--   MoveTo(0, first waypoint) via the bridged creature:MoveTo
+--   (lua_creature_events.go) is the C++-exact form. All 19
+--   C++-verbatim waypoints, of which only the first ever fires:
+--   (2125.84, 88.2535, 54.8830),
 --   (2111.01, 93.8022, 52.6356), (2106.70, 114.753, 53.1965),
 --   (2107.76, 138.746, 52.5109), (2114.83, 160.142, 52.4738),
 --   (2125.24, 178.909, 52.7283), (2151.02, 208.901, 53.1551),
@@ -84,6 +88,17 @@ local SPELL_WHIRLWIND         = 31909
 local SPELL_HAMSTRING         = 9080
 local SPELL_MORTAL_STRIKE     = 31911
 local SPELL_FRIGHTENING_SHOUT = 33789
+
+-- C++ DrakeWP[0]: the only waypoint the patrol leg ever reaches
+-- (UpdateAI fires MovePoint once, then wpId == 1 forever; no
+-- MovementInform handler advances the chain).
+local DRAKE_WP0_X = 2125.84
+local DRAKE_WP0_Y = 88.2535
+local DRAKE_WP0_Z = 54.8830
+
+local function onDrakePatrol(creature)
+    creature:MoveTo(0, DRAKE_WP0_X, DRAKE_WP0_Y, DRAKE_WP0_Z)
+end
 
 local timers = {}
 
@@ -169,6 +184,9 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset -> Initialize() re-arms wpId = 0, so the next
+    -- UpdateAI tick re-fires the patrol leg.
+    onDrakePatrol(creature)
 end
 
 local function onDied(event, creature, killer)
@@ -176,6 +194,9 @@ local function onDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+RegisterCreatureEvent(ENTRY, 5, function(event, creature)
+    onDrakePatrol(creature)
+end)
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
