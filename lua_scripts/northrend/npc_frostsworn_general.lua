@@ -52,6 +52,8 @@
 -- sjonnir JustDied-Talk precedent).
 -- npc_frostsworn_general JustEngagedWith — EVENT_SHIELD 69222 at
 --   5000ms and EVENT_SPIKE 69184 at 14000ms (C++ :1905-1913).
+-- npc_frostsworn_general JustEngagedWith - EVENT_CLONE at 22000ms,
+--   60000ms re-arm (C++ :1911, :1939-1942): SummonClones ported below.
 -- EVENT_SHIELD (:1929-1933) — random player within 45 yd (:1930),
 --   cast 69222 (:1931), re-arm {8000,12000}ms (:1932).
 -- EVENT_SPIKE (:1934-1938) — random player within 45 yd (:1935),
@@ -60,16 +62,13 @@
 -- npc_frostsworn_general Reset / JustEngagedWith / JustDied instance
 -- legs — _instance->SetData(DATA_FROSTSWORN_GENERAL, NOT_STARTED /
 -- IN_PROGRESS / DONE) — no instance bridge.
--- npc_frostsworn_general UpdateAI — EVENT_CLONE (:1939-1942)
--- SummonClones machine (:1950-1964: SelectTargetList(MaxThreat, 5) +
--- SummonCreature(NPC_REFLECTION) + player-side clone/ghost-visual
--- casts + reflection AttackStart). The summon leg itself is now
--- bridgeable (engine/world/lua_creature_events.go:956) — the old
--- no-summon claim is retracted — and the player-side casts are
--- bridged (player:CastSpell, the anetheron precedent) — but the
--- machine stays documented-only: the MaxThreat target-list leg rides
--- creature:GetAITargets() (old no-accessor claim retracted); only
--- reflection AttackStart (no bridge) still blocks it.
+-- npc_frostsworn_general UpdateAI - EVENT_CLONE (:1939-1942)
+-- SummonClones machine (:1950-1964) is PORTED below (2026-11-03):
+-- SelectTargetList(MaxThreat, 5) + SummonCreature(NPC_REFLECTION) +
+-- player-side clone/ghost-visual casts + reflection AttackStart via
+-- EngageWithTarget; the old no-summon / no-accessor / no-AttackStart
+-- claims are all retracted (bridges live at lua_creature_events.go
+-- :956 / :3470 / :1237).
 -- (CORRECTION 2026-10-23: the JustEngagedWith DoZoneInCombat leg
 -- (:1908) IS ported below — creature:DoZoneInCombat() is bridged
 -- (engine/world/lua_creature_events.go); the stale "no bridge" claim
@@ -122,6 +121,9 @@ local SAY_DEATH = 1
 
 local SPELL_SHIELD_THROWN = 69222
 local SPELL_SPIKE         = 69184
+local SPELL_CLONE         = 69828
+local SPELL_GHOST_VISUAL  = 69861
+local NPC_REFLECTION      = 37068
 
 local SOUND_LK_SLAY_1 = 17214
 local SOUND_LK_SLAY_2 = 17215
@@ -192,11 +194,45 @@ local function generalSpikeTick(creature, guid)
     schedule(guid, "spike", {15000, 20000}, function() generalSpikeTick(creature, guid) end)
 end
 
+-- C++ npc_frostsworn_generalAI::SummonClones :1950-1964:
+-- SelectTargetList(MaxThreat, 5, playerOnly): the first 5 alive
+-- threat-list players, in threat order (GetAITargets is threat-sorted).
+-- Per target, in C++ order: SummonCreature(NPC_REFLECTION) at the
+-- target's position, type 3 TIMED_DESPAWN_OUT_OF_COMBAT, 3000ms (C++
+-- 3s); SetImmuneToPC(false) = RemoveFlag(59, 0x100) (the opera
+-- precedent); player-side triggered casts of SPELL_CLONE and
+-- SPELL_GHOST_VISUAL; reflection AttackStart = EngageWithTarget,
+-- which fires the reflection's event-1 handler
+-- (npc_hor_spiritual_reflection.lua).
+local function generalCloneTick(creature, guid)
+    if timers[guid] == nil then
+        return
+    end
+    local count = 0
+    for _, target in ipairs(creature:GetAITargets()) do
+        if count >= 5 then
+            break
+        end
+        if target:GetObjectType() == "Player" and not target:IsDead() then
+            local reflection = creature:SummonCreature(NPC_REFLECTION, target:GetX(),
+                target:GetY(), target:GetZ(), target:GetO(), 3, 3000)
+            if reflection then
+                reflection:RemoveFlag(59, 0x100)
+                target:CastSpell(reflection, SPELL_CLONE, true)
+                target:CastSpell(reflection, SPELL_GHOST_VISUAL, true)
+                reflection:EngageWithTarget(target)
+            end
+            count = count + 1
+        end
+    end
+    schedule(guid, "clone", 60000, function() generalCloneTick(creature, guid) end)
+end
+
 -- C++ npc_frostsworn_generalAI::JustEngagedWith :1905-1913:
 -- Talk(SAY_AGGRO) (the auriaya engage-port precedent), DoZoneInCombat
 -- (PORTED 2026-10-23 — bridge live, engine/world/lua_creature_events.go),
 -- EVENT_SHIELD at 5000ms, EVENT_SPIKE at 14000ms
--- (EVENT_CLONE's SummonClones leg is documented-only).
+-- (EVENT_CLONE's SummonClones leg is ported below).
 local function frostswornGeneralJustEngagedWith(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- C++ halls_of_reflection.cpp:1908, in arm order after Talk (bridge live 2026-10-23)
@@ -204,6 +240,7 @@ local function frostswornGeneralJustEngagedWith(event, creature, target)
     cancelTimers(guid)
     schedule(guid, "shield", 5000, function() generalShieldTick(creature, guid) end)
     schedule(guid, "spike", 14000, function() generalSpikeTick(creature, guid) end)
+    schedule(guid, "clone", 22000, function() generalCloneTick(creature, guid) end)
 end
 
 -- C++ npc_frostsworn_generalAI::JustDied :1903-1908: Talk(SAY_DEATH)

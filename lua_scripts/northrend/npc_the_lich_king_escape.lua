@@ -45,7 +45,7 @@
 --   EVENT_ESCAPE_SUMMON_GHOULS / _WITCH_DOCTOR /
 --   _LUMBERING_ABOMINATION (:1337-1358, summon-spell casts + Talk) —
 --   rides instance SetData legs with no instance bridge, and the
---   summon legs have no summon bridge; the FURY_OF_FROSTMOURNE AoE
+--   summon legs ride the same SetData gate; the FURY_OF_FROSTMOURNE AoE
 --   (:1311-1314) rides the same machine.
 -- MovementInform (:1204-1231) — MoveChase / Harvest Soul on the
 --   instance-GUID escape leader + gunship movement: no-MovementInform
