@@ -1579,6 +1579,341 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return nil, nil
 	}
+	// IsCharmed is the session-creature twin of the handler binding
+	// (UnitMethods.h:376): the live motion Charmed flag, set by the
+	// charm/uncharm twins, not the CharmerGUID snapshot.
+	methods["IsCharmed"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return false
+		}
+		s.server.motionMu.Lock()
+		defer s.server.motionMu.Unlock()
+		return motion.Charmed
+	})
+	// GetFaction is the session-creature twin of the handler binding
+	// (UnitMethods.h:1222): the live motion faction-template slot,
+	// initialized from the template faction at spawn and rewritten
+	// by the SetFaction twin below.
+	methods["GetFaction"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return uint32(0)
+		}
+		s.server.motionMu.Lock()
+		defer s.server.motionMu.Unlock()
+		return motion.Faction
+	})
+	// SetFaction is the session-creature twin of the handler binding
+	// (UnitMethods.h:1553): the motion faction slot plus the
+	// UNIT_FIELD_FACTIONTEMPLATE broadcast, so faction-flip arms
+	// take real effect at aggro and targeting time.
+	methods["SetFaction"] = func(_ context.Context, args []any) ([]any, error) {
+		faction, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.Faction = faction
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldFaction: faction})
+		return nil, nil
+	}
+	// AttackStop is Unit::AttackStop (Unit.cpp:5763) for session
+	// creatures, following the player twin's C++-checked shape: the
+	// current victim is dropped, AlreadyCallAssistance resets, the
+	// SMSG_ATTACK_STOP packet goes to the instance, and the return
+	// reports whether an attack was running. DELTA: the effective
+	// handler binding (the later of its two definitions) keeps
+	// TargetGUID and returns nil; this twin drops it, matching C++
+	// and the player twin — the handler divergence is recorded, not
+	// silently inherited.
+	methods["AttackStop"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return []any{false}, nil
+		}
+		s.server.motionMu.Lock()
+		victim := motion.TargetGUID
+		if victim == 0 {
+			s.server.motionMu.Unlock()
+			return []any{false}, nil
+		}
+		motion.TargetGUID = 0
+		motion.AlreadyCallAssistance = false
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+		s.server.motionMu.Unlock()
+		stopPkt := buildAttackStop(guid, victim, false)
+		s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, x, y, z, phase)
+		return []any{true}, nil
+	}
+	// SetDisplayId is the session-creature twin of the handler binding
+	// (UnitMethods.h:1742, Creature.cpp:3216): the motion display slot
+	// plus the model-info bounding-radius/combat-reach fold at the
+	// live scale, broadcast as values updates.
+	methods["SetDisplayId"] = func(ctx context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		fields := map[int]uint32{unitFieldDisplayID: id}
+		var boundingRadius, combatReach float64
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var br, cr sql.NullFloat64
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT BoundingRadius, CombatReach FROM creature_model_info WHERE DisplayID = ?", id).Scan(&br, &cr); err == nil {
+				if br.Valid && br.Float64 > 0 {
+					boundingRadius = br.Float64
+				}
+				if cr.Valid && cr.Float64 > 0 {
+					combatReach = cr.Float64
+				}
+			}
+		}
+		s.server.motionMu.Lock()
+		motion.DisplayID = id
+		motion.DisplayIDKnown = true
+		scale := motion.BaseScale
+		if motion.ScriptScaleKnown {
+			scale = motion.ScriptScale
+		}
+		if scale <= 0 {
+			scale = 1
+		}
+		if boundingRadius > 0 {
+			fields[unitFieldBoundingRadius] = math.Float32bits(float32(boundingRadius) * scale)
+		}
+		if combatReach > 0 {
+			fields[unitFieldCombatReach] = math.Float32bits(float32(combatReach) * scale)
+			motion.CombatReach = float32(combatReach) * scale
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, fields)
+		return nil, nil
+	}
+	// SetLevel is the session-creature twin of the handler binding
+	// (UnitMethods.h:1569, Unit.cpp:9539): the UNIT_FIELD_LEVEL write
+	// and broadcast; no stat recompute runs, creature stats come
+	// from the template, not the level field. DELTA: C++ rejects
+	// levels below 1; this twin follows the handler's 0-255 gate.
+	methods["SetLevel"] = func(_ context.Context, args []any) ([]any, error) {
+		level, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if level > 255 {
+			return nil, fmt.Errorf("SetLevel requires a level 0-255, got %d", level)
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.Level = level
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldLevel: level})
+		return nil, nil
+	}
+	// SetMaxHealth is the session-creature twin of the handler binding
+	// (UnitMethods.h:1605): 0 clamps to 1, the current health clamps
+	// down with it, both fields broadcast.
+	methods["SetMaxHealth"] = func(_ context.Context, args []any) ([]any, error) {
+		maxHealth, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if maxHealth == 0 {
+			maxHealth = 1
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.MaxHealth = maxHealth
+		updates := map[int]uint32{unitFieldMaxHealth: maxHealth}
+		if motion.Health > maxHealth {
+			motion.Health = maxHealth
+			updates[unitFieldHealth] = maxHealth
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, updates)
+		return nil, nil
+	}
+	// SetPower is Unit::SetPower (UnitMethods.h:1632) for session
+	// creatures, following the player twin's C++-checked argument
+	// order (amount, type = -1 for the current power), not the
+	// handler twin's inverted (type, value) order: the value clamps
+	// to the type's max and broadcasts. Powers 0-6 are valid; the
+	// motion banks all seven, so runic power is real here too.
+	methods["SetPower"] = func(_ context.Context, args []any) ([]any, error) {
+		amt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		power := motion.PowerType
+		s.server.motionMu.Unlock()
+		if len(args) >= 2 && args[1] != nil {
+			value, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if value >= 7 {
+				return nil, fmt.Errorf("power type %d is invalid", value)
+			}
+			power = value
+		}
+		s.server.motionMu.Lock()
+		if amt > motion.MaxPowers[power] {
+			amt = motion.MaxPowers[power]
+		}
+		motion.Powers[power] = amt
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldPower1 + int(power): amt})
+		return nil, nil
+	}
+	// ModifyPower is Unit::ModifyPower (UnitMethods.h:1662) for
+	// session creatures: (delta, type = -1), clamped to 0..max, no
+	// return value — C++-exact, like the player twin.
+	methods["ModifyPower"] = func(_ context.Context, args []any) ([]any, error) {
+		delta, err := luaInt64Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		power := motion.PowerType
+		s.server.motionMu.Unlock()
+		if len(args) >= 2 && args[1] != nil {
+			value, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if value >= 7 {
+				return nil, fmt.Errorf("power type %d is invalid", value)
+			}
+			power = value
+		}
+		s.server.motionMu.Lock()
+		next := int64(motion.Powers[power]) + delta
+		if next < 0 {
+			next = 0
+		}
+		if next > int64(motion.MaxPowers[power]) {
+			next = int64(motion.MaxPowers[power])
+		}
+		motion.Powers[power] = uint32(next)
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldPower1 + int(power): uint32(next)})
+		return nil, nil
+	}
+	// SetMaxPower is Unit::SetMaxPower (UnitMethods.h:1692) for
+	// session creatures: (type = -1, amount), nil type reading the
+	// current power, current power untouched, max field broadcast.
+	methods["SetMaxPower"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("SetMaxPower requires a power type and amount")
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		power := motion.PowerType
+		s.server.motionMu.Unlock()
+		if args[0] != nil {
+			value, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if value >= 7 {
+				return nil, fmt.Errorf("power type %d is invalid", value)
+			}
+			power = value
+		}
+		amt, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.server.motionMu.Lock()
+		motion.MaxPowers[power] = amt
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldMaxPower1 + int(power): amt})
+		return nil, nil
+	}
+	// RemoveAllAuras is Unit::RemoveAllAuras (Unit.cpp:4282) for
+	// session creatures: the full strip via clearCreatureAuras, the
+	// handler twin's funnel, over the motion's aura key.
+	methods["RemoveAllAuras"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.clearCreatureAuras(creatureAuraKeyForMotion(motion))
+		return nil, nil
+	}
+	// Kill is Unit::Kill (UnitMethods.h:2899, Unit.cpp:11153) for
+	// session creatures: the killer is this creature, the target is
+	// the argument — C++-exact, like the player twin, not the
+	// handler twin's receiver-as-victim idiom. A player victim takes
+	// the lethal sequence with a nil creature killer (no honorable
+	// credit, no PvP hook, non-PvP death); an already-dead victim is
+	// the C++ early return. A creature victim takes the insta-kill
+	// funnel, which fires the Died chain itself — no absorb soak,
+	// unlike the player twin's DealDamage leg.
+	methods["Kill"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("Kill requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, fmt.Errorf("Kill requires a target unit")
+		}
+		durLoss := luaOptionalBoolArg(args, 1, true)
+		killer := s.luaCreatureMotion(state.GUID, state.Entry)
+		if killer == nil {
+			return nil, nil
+		}
+		if victimSess := s.server.findSessionByGUID(targetGUID); victimSess != nil && victimSess.player != nil {
+			if victimSess.player.Health == 0 {
+				return nil, nil
+			}
+			victimSess.player.Health = 0
+			victimSess.sendPlayerUpdate()
+			victimSess.killPlayer(ctx, nil, false, durLoss)
+			return nil, nil
+		}
+		s.server.creatureInstaKillVictim(ctx, killer, targetGUID)
+		return nil, nil
+	}
 	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
