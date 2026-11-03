@@ -1424,6 +1424,161 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.motionMu.Unlock()
 		return nil, nil
 	}
+	// SetFacingTo/SetFacing/SetFacingToObject are the session-creature
+	// twins of the handler bindings (UnitMethods.h:1766-1783): the
+	// orientation slot write plus the in-place broadcastMonsterMove
+	// turn packet. The broadcast arm is a pure Server method over the
+	// session list (creatures.go:869), so it reaches every session
+	// receiver from s.server exactly as from the handler surface; the
+	// mid-spline race delta of the handler twin carries over.
+	methods["SetFacingTo"] = func(_ context.Context, args []any) ([]any, error) {
+		ori, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.Orientation = ori
+		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
+		phase := motion.PhaseMask
+		transportGUID := motion.TransportGUID
+		x, y, z := motion.X, motion.Y, motion.Z
+		s.server.motionMu.Unlock()
+		s.server.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, ori, true, phase, transportGUID)
+		return nil, nil
+	}
+	methods["SetFacing"] = methods["SetFacingTo"]
+	methods["SetFacingToObject"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target")
+		}
+		tx, ok := objectFloat32Field(target, "X")
+		if !ok {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target with a position")
+		}
+		ty, ok := objectFloat32Field(target, "Y")
+		if !ok {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target with a position")
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		angle := float32(math.Atan2(float64(ty-motion.Y), float64(tx-motion.X)))
+		if angle < 0 {
+			angle += 2 * math.Pi
+		}
+		motion.Orientation = angle
+		guid, mapID, instID := motion.GUID, motion.Map, motion.InstanceID
+		phase := motion.PhaseMask
+		transportGUID := motion.TransportGUID
+		x, y, z := motion.X, motion.Y, motion.Z
+		s.server.motionMu.Unlock()
+		s.server.broadcastMonsterMoveInInstance(mapID, instID, guid, x, y, z, x, y, z, 1000, false, angle, true, phase, transportGUID)
+		return nil, nil
+	}
+	// SetSpeed/SetSpeedRate are the session-creature twins of the
+	// handler bindings (UnitMethods.h:1532-1546): MOVE_RUN=1 only, rate
+	// <= 0 clears the script override, and refreshCreatureRunSpeed
+	// recomputes the rate and broadcasts SMSG_SPLINE_SET_RUN_SPEED
+	// to the visibility set — again a Server method, reachable from
+	// s.server with no handler-only state.
+	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if mt != 1 {
+			return nil, fmt.Errorf("SetSpeed supports MOVE_RUN=1 only, got %d", mt)
+		}
+		rate, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if rate <= 0 {
+			motion.ScriptRunRate = 0
+			motion.ScriptRunRateKnown = false
+		} else {
+			motion.ScriptRunRate = rate
+			motion.ScriptRunRateKnown = true
+		}
+		s.server.motionMu.Unlock()
+		s.server.refreshCreatureRunSpeed(creatureAuraKeyForMotion(motion), motion.GUID)
+		return nil, nil
+	}
+	methods["SetSpeedRate"] = methods["SetSpeed"]
+	// SetSanctuary is the session-creature twin of the handler binding
+	// (UnitMethods.h:1892, Unit.cpp:5809): the PVPFlags sanctuary bit
+	// plus the true-leg CombatStop teardown — attack-stop broadcast,
+	// visual-target clear, attacker removal, threat sweep and threat-
+	// clear broadcast — all Server methods, reachable from s.server.
+	// The false leg only clears the flag, per C++.
+	methods["SetSanctuary"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetSanctuary requires a boolean")
+			}
+			apply = b
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if apply {
+			motion.PVPFlags |= pvpFlagSanctuary
+		} else {
+			motion.PVPFlags &^= pvpFlagSanctuary
+		}
+		motion.PVPFlagsKnown = true
+		var victim uint64
+		var mapID, instanceID uint32
+		var guid uint64
+		var x, y, z float32
+		var phase uint32
+		if apply {
+			victim = motion.TargetGUID
+			motion.TargetGUID = 0
+			motion.AlreadyCallAssistance = false
+			motion.AssistAt = time.Time{}
+			motion.AssistVictim = 0
+			motion.Assistants = nil
+			motion.InCombat = false
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.ClearThreat()
+			}
+			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
+			x, y, z = motion.X, motion.Y, motion.Z
+			phase = motion.PhaseMask
+		}
+		s.server.motionMu.Unlock()
+		if apply {
+			if victim != 0 {
+				stopPkt := buildAttackStop(guid, victim, false)
+				s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, x, y, z, phase)
+			}
+			s.server.clearCreatureVisualTarget(motion)
+			s.server.removeCreatureAttackers(mapID, instanceID, guid)
+			s.server.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+			s.server.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
+		}
+		return nil, nil
+	}
 	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
