@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"math/rand"
 	"sort"
 	"time"
 
@@ -410,6 +411,102 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			s.server.setCreatureFeared(motion, apply)
 		}
 		return nil, nil
+	}
+	// MoveTo is UnitMethods::MoveTo (UnitMethods.h:2267-2283), the
+	// session-creature twin of the handler binding; a motion that no
+	// longer resolves is a no-op.
+	methods["MoveTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if _, err := luaUint32Arg(args, 0); err != nil {
+			return nil, err
+		}
+		x, err := luaGenericFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaGenericFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaGenericFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint)
+		}
+		return nil, nil
+	}
+	// MoveRandom is UnitMethods::MoveRandom (UnitMethods.h:2178-2198),
+	// the session-creature twin of the handler binding.
+	methods["MoveRandom"] = func(_ context.Context, args []any) ([]any, error) {
+		radius, err := luaGenericFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			if radius == 0 {
+				s.server.motionMu.Lock()
+				radius = float32(motion.Wander)
+				s.server.motionMu.Unlock()
+			}
+			angle := rand.Float64() * 2 * math.Pi
+			dist := rand.Float64() * float64(radius)
+			s.server.motionMu.Lock()
+			fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+			s.server.motionMu.Unlock()
+			s.server.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom)
+		}
+		return nil, nil
+	}
+	// MoveHome is UnitMethods::MoveHome (UnitMethods.h:2199-2206), the
+	// session-creature twin of the handler binding.
+	methods["MoveHome"] = func(_ context.Context, args []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.motionMu.Lock()
+			owned := motion.CharmerGUID != 0 || motion.OwnerGUID != 0
+			homeX, homeY, homeZ := motion.HomeX, motion.HomeY, motion.HomeZ
+			s.server.motionMu.Unlock()
+			if !owned {
+				s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome)
+			}
+		}
+		return nil, nil
+	}
+	// MoveConfused is UnitMethods::MoveConfused (UnitMethods.h:2240-2248),
+	// the session-creature twin of the handler binding.
+	methods["MoveConfused"] = func(_ context.Context, args []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.motionMu.Lock()
+			motion.Confused = true
+			s.server.motionMu.Unlock()
+			s.server.launchCreatureConfusedSpline(motion)
+		}
+		return nil, nil
+	}
+	// SetConfused is UnitMethods::SetConfused (UnitMethods.h:1946-1958),
+	// the session-creature twin of the handler binding.
+	methods["SetConfused"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetConfused requires a boolean")
+			}
+			apply = b
+		}
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.setCreatureConfused(motion, apply)
+		}
+		return nil, nil
+	}
+	// GetMovementType is UnitMethods::GetMovementType
+	// (UnitMethods.h:1430-1444), the session-creature twin of the
+	// handler binding; a motion that no longer resolves reads IDLE.
+	methods["GetMovementType"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			return []any{s.server.creatureMovementType(motion)}, nil
+		}
+		return []any{uint32(movementGeneratorIdle)}, nil
 	}
 	// CallAssistance is Creature::CallAssistance (Creature.cpp:2402-2425)
 	// through the engine's callCreatureAssistance funnel, the

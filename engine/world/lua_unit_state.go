@@ -153,7 +153,8 @@ func unitStateLiveMask(f unitStateFacts) uint32 {
 // ScriptRooted or a MOD_ROOT aura; STUNNED / CONFUSED / FLEEING from
 // their MOD_* auras (the victimIsControlled 5/7/12 set) plus the
 // FleeingUntil / Fleeing legs for the timed and untimed fear
-// generators; MELEE_ATTACKING from the engaged combat pair
+// generators and the Confused latch for the script confused
+// generator; MELEE_ATTACKING from the engaged combat pair
 // (Unit::Attack, Unit.cpp:5691-5723, sets it on melee engage); CHARMED
 // from MOD_CHARM / MOD_AOE_CHARM; POSSESSED from MOD_POSSESS;
 // DISTRACTED from the EffectDistract hold; MOVE / EVADE from the
@@ -176,7 +177,7 @@ func (s *Server) creatureUnitStateHas(m *creatureMotion, requested uint32) bool 
 		Casting:         now.Before(m.CastingUntil),
 		Rooted:          m.ScriptRooted || rootedAura,
 		Stunned:         stunned,
-		Confused:        confused,
+		Confused:        confused || m.Confused,
 		Fleeing:         feared || now.Before(m.FleeingUntil) || m.Fleeing,
 		MeleeAttacking:  m.InCombat && m.TargetGUID != 0,
 		Charmed:         charmed,

@@ -2586,9 +2586,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// to the StopMoving twin: halt at the current position, no-op
 	// when not moving. Threat, TargetGUID and InCombat are untouched
 	// by every leg (the StopMoving comment above). MoveChase,
-	// MoveFollow, MoveTo, MoveJump, MoveRandom, MoveConfused and
-	// MoveHome stay out: they need chase/follow/point/jump/random/
-	// confused/home generators Go does not execute.
+	// MoveFollow and MoveJump stay out: they need chase/follow
+	// generators and a parabolic packet arm Go does not execute;
+	// MoveTo, MoveRandom, MoveConfused and MoveHome ride the
+	// script-spline launch below.
 	methods["MoveStop"] = methods["StopMoving"]
 	methods["MoveClear"] = methods["StopMoving"]
 	methods["MoveExpire"] = methods["StopMoving"]
@@ -4162,6 +4163,119 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.setCreatureFeared(motion, apply)
 		return nil, nil
+	}
+	// MoveTo is UnitMethods::MoveTo (UnitMethods.h:2267-2283) =
+	// MotionMaster::MovePoint(id, x, y, z, genPath) (MotionMaster.cpp:635),
+	// via the shared script-spline launch. The id is accepted but
+	// unrecorded: its arrival arm is Eluna MovementInform
+	// (POINT_MOTION_TYPE), which Go never registered (no event 28 in
+	// scripting/runtime.go), so no hook can observe it. genPath is
+	// accepted and ignored — Go has no PathGenerator, so the spline
+	// is straight-line like every other script launch. The player
+	// surface stays out (client-driven movement).
+	methods["MoveTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if _, err := luaUint32Arg(args, 0); err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint)
+		return nil, nil
+	}
+	// MoveRandom is UnitMethods::MoveRandom (UnitMethods.h:2178-2198) =
+	// MotionMaster::MoveRandom(radius): a RandomMovementGenerator whose
+	// reference is the creature's current position
+	// (RandomMovementGenerator.cpp:83) and whose wander distance is the
+	// radius (or the template wander distance when 0). Go launches a
+	// single walk spline at frand(0, radius) around the current
+	// position — the generator's stepping/pause cycle is not repeated,
+	// so the tick resumes wander, waypoint, or pursuit once it lands.
+	// A radius of 0 falls back to the template wander distance, the
+	// DoInitialize arm above.
+	methods["MoveRandom"] = func(_ context.Context, args []any) ([]any, error) {
+		radius, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if radius == 0 {
+			s.motionMu.Lock()
+			radius = float32(motion.Wander)
+			s.motionMu.Unlock()
+		}
+		angle := rand.Float64() * 2 * math.Pi
+		dist := rand.Float64() * float64(radius)
+		s.motionMu.Lock()
+		fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		s.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom)
+		return nil, nil
+	}
+	// MoveHome is UnitMethods::MoveHome (UnitMethods.h:2199-2206) =
+	// MotionMaster::MoveTargetedHome (MotionMaster.cpp:551-573): Clear()
+	// then a HomeMovementGenerator, whose finalize fires
+	// CREATURE_EVENT_ON_REACH_HOME (24) — the early-gate arm in
+	// stepCreatureMotion fires it when the script home spline lands.
+	// A charmed or owned creature takes C++'s follow arm instead, and
+	// MoveFollow is still unwired, so those creatures no-op here
+	// (their pet-follow leg already keeps them near the owner).
+	// The player surface stays out.
+	methods["MoveHome"] = func(_ context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		owned := motion.CharmerGUID != 0 || motion.OwnerGUID != 0
+		homeX, homeY, homeZ := motion.HomeX, motion.HomeY, motion.HomeZ
+		s.motionMu.Unlock()
+		if owned {
+			return nil, nil
+		}
+		s.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome)
+		return nil, nil
+	}
+	// MoveConfused is UnitMethods::MoveConfused (UnitMethods.h:2240-2248)
+	// = MotionMaster::MoveConfused: the ConfusedMovementGenerator
+	// starts without the SetControlled side effects (no CastStop, no
+	// attack stop, no target clear — those belong to SetConfused).
+	// Re-launching while already confused re-arms the hop, the
+	// MotionMaster::Add replace arm.
+	methods["MoveConfused"] = func(_ context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		motion.Confused = true
+		s.motionMu.Unlock()
+		s.launchCreatureConfusedSpline(motion)
+		return nil, nil
+	}
+	// SetConfused is UnitMethods::SetConfused (UnitMethods.h:1946-1958)
+	// for creatures: Unit::SetControlled(apply, UNIT_STATE_CONFUSED)
+	// (Unit.cpp:11484-11560) via the setCreatureConfused engine leg.
+	// The player surface stays out (client control + no player
+	// confused spline).
+	methods["SetConfused"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetConfused requires a boolean")
+			}
+			apply = b
+		}
+		s.setCreatureConfused(motion, apply)
+		return nil, nil
+	}
+	// GetMovementType is UnitMethods::GetMovementType
+	// (UnitMethods.h:1430-1444) = MotionMaster:->
+	// GetCurrentMovementGeneratorType, via the creatureMovementType
+	// derivation (script stamp in flight, else the live engine legs).
+	methods["GetMovementType"] = func(_ context.Context, _ []any) ([]any, error) {
+		return []any{s.creatureMovementType(motion)}, nil
 	}
 	// SetSanctuary is UnitMethods::SetSanctuary (UnitMethods.h:1892-1908)
 	// for creatures: the UNIT_BYTE2_FLAG_SANCTUARY (0x08, UnitDefines.h:106)

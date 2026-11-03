@@ -3723,6 +3723,19 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.movementSpeeds()[mt]}, nil
 	}
+	// GetMovementType is UnitMethods::GetMovementType
+	// (UnitMethods.h:1430-1444) for players: player movement is
+	// client-driven and Go tracks no player generator stack, so the
+	// only observable generator is the taxi flight path (the
+	// IN_FLIGHT leg of the HasUnitState trio); anything else reads
+	// IDLE. The Move* / SetConfused legs stay out for the same
+	// client-driven reason.
+	methods["GetMovementType"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.player != nil && s.player.TaxiPath != "" {
+			return []any{uint32(movementGeneratorFlight)}, nil
+		}
+		return []any{uint32(movementGeneratorIdle)}, nil
+	}
 	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1532-1546) for
 	// players: the Trinity arm calls SetSpeedRate(type, rate) directly
 	// (the forced flag is voided in C++), so this rides setGMSpeedRate

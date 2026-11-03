@@ -168,7 +168,19 @@ type creatureMotion struct {
 	// the creature flees until the generator is removed (SetFeared(false))
 	// instead of a timer expiry. The step tick skips combat/wander while
 	// it is set, like a running FleeingUntil.
-	Fleeing     bool
+	Fleeing bool
+	// ScriptMoveType is the MovementGeneratorType (MovementDefines.h)
+	// stamped by a script Move* launch: POINT 8, RANDOM 1, HOME 6,
+	// CONFUSED 4. GetMovementType reads it only while the spline is in
+	// flight (Moving and now before MoveEnds), so no clear site is
+	// needed — a stamp past MoveEnds is never read.
+	ScriptMoveType uint32
+	// Confused is the ConfusedMovementGenerator leg
+	// (MotionMaster::MoveConfused, Unit::SetConfused): while set, the
+	// step tick launches short walk hops until SetConfused(false)
+	// clears it; a live confuse aura blocks the clear per
+	// Unit::SetControlled (Unit.cpp:11502-11540).
+	Confused    bool
 	AttackTime  uint32
 	CombatReach float32
 
@@ -3717,6 +3729,222 @@ func (s *Server) setCreatureFeared(motion *creatureMotion, apply bool) {
 	}
 }
 
+// MovementGeneratorType values (MovementDefines.h) for the script
+// Move* legs and GetMovementType. Only the types Go can observe are
+// listed: the engine legs derive the rest from live motion state.
+const (
+	movementGeneratorIdle         = 0
+	movementGeneratorRandom       = 1
+	movementGeneratorWaypoint     = 2
+	movementGeneratorConfused     = 4
+	movementGeneratorChase        = 5
+	movementGeneratorHome         = 6
+	movementGeneratorFlight       = 7
+	movementGeneratorPoint        = 8
+	movementGeneratorFleeing      = 9
+	movementGeneratorDistract     = 10
+	movementGeneratorTimedFleeing = 13
+	movementGeneratorFollow       = 14
+	movementGeneratorFormation    = 18
+)
+
+// launchCreatureScriptSpline is the shared atomic-spline launch for
+// script Move* legs, on the flee/waypoint precedent: the server snaps
+// to the destination at launch and broadcasts SMSG_MONSTER_MOVE, so
+// clients interpolate while the tick's Moving gate pauses combat and
+// wander until MoveEnds. Dead creatures never launch (C++ generators
+// never run on a corpse) and a sub-0.001 speed fails validation with
+// no spline and no packet (MoveSpline.cpp:210), like the flee leg.
+// The genPath / pathfinding arm of MovePoint has no bridge — Go has
+// no PathGenerator, so every script spline is straight-line, the
+// standing chase-leg delta. A script spline does not clear Evading
+// and, while in flight, temporarily overrides pursuit: C++ slot
+// priority (ACTIVE chase over DEFAULT point) is unmodeled, so the
+// tick resumes pursuit only once the spline lands.
+func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	if motion.Health == 0 {
+		s.motionMu.Unlock()
+		return false
+	}
+	speed := creatureSplineVelocity(motion, walk)
+	if speed < 0.001 {
+		s.motionMu.Unlock()
+		return false
+	}
+	dist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)
+	duration := splineDurationMs(float64(dist), speed)
+	mapID, instanceID, rawGUID := motion.Map, motion.InstanceID, motion.GUID
+	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
+	fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
+	motion.X, motion.Y, motion.Z = destX, destY, destZ
+	motion.Moving = true
+	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
+	motion.ScriptMoveType = moveType
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, 0, false, phase, transportGUID)
+	return true
+}
+
+// launchCreatureConfusedSpline launches one ConfusedMovementGenerator
+// hop (ConfusedMovementGenerator.cpp DoUpdate): 4*frand(0,1)-2 yards
+// (signed, so a negative distance walks back along the angle), walk,
+// then a 800-1500ms pause stamped on WaitUntil so the tick's
+// WaitUntil gate honors it before the next hop. LOS and pathfinding
+// re-checks have no bridge (no PathGenerator), matching the
+// MoveRandom delta.
+func (s *Server) launchCreatureConfusedSpline(motion *creatureMotion) bool {
+	if s == nil || motion == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	angle := rand.Float64() * 2 * math.Pi
+	dist := 4*rand.Float64() - 2
+	destX := motion.X + float32(dist*math.Cos(angle))
+	destY := motion.Y + float32(dist*math.Sin(angle))
+	destZ := motion.Z
+	s.motionMu.Unlock()
+	if !s.launchCreatureScriptSpline(motion, destX, destY, destZ, true, movementGeneratorConfused) {
+		return false
+	}
+	s.motionMu.Lock()
+	motion.WaitUntil = motion.MoveEnds.Add(time.Duration(800+rand.Intn(701)) * time.Millisecond)
+	s.motionMu.Unlock()
+	return true
+}
+
+// setCreatureConfused is Unit::SetControlled(apply, UNIT_STATE_CONFUSED)
+// (Unit.cpp:11484-11560) for creatures, via the Unit::SetConfused arm
+// (Unit.cpp:11734-11752). Apply, unless stunned (SetControlled skips
+// CONFUSED while STUNNED) or already confused (the HasUnitState early
+// return): CastStop for CONTROLLED states, the melee-attack stop
+// packet, visual target cleared (SetTarget(Empty)), then the confused
+// generator starts. The C++ CONFUSED bit itself is the HasUnitState
+// live leg (confuse aura or the Confused latch), not a mask write.
+// Clear returns early while a confuse aura holds the state; otherwise
+// it halts the in-flight hop (StopMoving twin: combat and victim
+// untouched) and restores the visual target to the victim
+// (SetConfused(false)'s SetTarget(EnsureVictim) arm). The player
+// surface stays out: player movement is client-driven and Go has no
+// player confused spline.
+func (s *Server) setCreatureConfused(motion *creatureMotion, apply bool) {
+	if s == nil || motion == nil {
+		return
+	}
+	key := creatureAuraKeyForMotion(motion)
+	if apply {
+		if s.creatureHasAuraType(key, spellAuraModStun) {
+			return
+		}
+		s.motionMu.Lock()
+		already := motion.Confused
+		dead := motion.Health == 0
+		victim := motion.TargetGUID
+		s.motionMu.Unlock()
+		if already || dead || s.creatureHasAuraType(key, spellAuraModConfuse) {
+			return
+		}
+		s.interruptCreatureCast(motion)
+		s.motionMu.Lock()
+		motion.Confused = true
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+		s.motionMu.Unlock()
+		s.clearCreatureVisualTarget(motion)
+		if victim != 0 {
+			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(guid, victim, false), mapID, instanceID, x, y, z, phase)
+		}
+		s.launchCreatureConfusedSpline(motion)
+		return
+	}
+	if s.creatureHasAuraType(key, spellAuraModConfuse) {
+		return
+	}
+	s.motionMu.Lock()
+	was := motion.Confused
+	if !was {
+		// No confused generator installed: Remove(CONFUSED_MOTION_TYPE)
+		// is a no-op, and the in-flight spline (if any) is not ours
+		// to halt.
+		s.motionMu.Unlock()
+		return
+	}
+	motion.Confused = false
+	moving := motion.Moving
+	motion.Moving = false
+	var victim uint64
+	if motion.ThreatMgr != nil {
+		victim = motion.ThreatMgr.GetCurrentVictim()
+	}
+	if victim == 0 {
+		victim = motion.TargetGUID
+	}
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	phase := motion.PhaseMask
+	transportGUID := motion.TransportGUID
+	x, y, z := motion.X, motion.Y, motion.Z
+	s.motionMu.Unlock()
+	if moving {
+		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, guid, x, y, z, phase, transportGUID)
+	}
+	if victim != 0 {
+		s.motionMu.Lock()
+		motion.ScriptTargetGUID = victim
+		motion.ScriptTargetKnown = true
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldTarget: uint32(victim), unitFieldTarget + 1: uint32(victim >> 32)})
+	}
+}
+
+// creatureMovementType is Unit::GetMotionMaster()->
+// GetCurrentMovementGeneratorType (UnitMethods.h:1438-1444) for
+// creatures. Go has no generator stack, so the type is derived: a
+// script spline in flight reports its stamped type, then the live
+// engine legs in C++ precedence order (evade home, fleeing, confused,
+// combat pursuit, formation, distract hold, waypoint patrol, random
+// wander), else IDLE. The derivation reads the same flags the tick
+// itself consults, so it cannot disagree with what the creature is
+// visibly doing; the one gap is a script spline overwritten mid-flight
+// by a newer script launch, whose stamped type then wins.
+func (s *Server) creatureMovementType(motion *creatureMotion) uint32 {
+	if s == nil || motion == nil {
+		return movementGeneratorIdle
+	}
+	now := time.Now()
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if motion.Moving && now.Before(motion.MoveEnds) && motion.ScriptMoveType != 0 {
+		return motion.ScriptMoveType
+	}
+	switch {
+	case motion.Evading:
+		return movementGeneratorHome
+	case motion.Fleeing:
+		return movementGeneratorFleeing
+	case !motion.FleeingUntil.IsZero() && now.Before(motion.FleeingUntil):
+		return movementGeneratorTimedFleeing
+	case motion.Confused:
+		return movementGeneratorConfused
+	case motion.InCombat && motion.TargetGUID != 0:
+		return movementGeneratorChase
+	case motion.FormationActive:
+		return movementGeneratorFormation
+	case !motion.DistractedUntil.IsZero() && now.Before(motion.DistractedUntil):
+		return movementGeneratorDistract
+	case motion.MoveType == 2 && len(motion.Points) > 0:
+		return movementGeneratorWaypoint
+	case motion.MoveType == 1:
+		return movementGeneratorRandom
+	default:
+		return movementGeneratorIdle
+	}
+}
+
 // creatureFleeToGetAssistance is Creature::DoFleeToGetAssistance
 // (Creature.cpp:1031-1052): no victim or a SPELL_AURA_PREVENTS_FLEEING
 // aura returns; otherwise, when CONFIG_CREATURE_FAMILY_FLEE_ASSISTANCE_RADIUS
@@ -4798,6 +5026,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.Moving = false
 		if motion.SeekAssistPending {
 			s.finishCreatureSeekAssistance(ctx, motion, now)
+		}
+		// A script MoveHome spline landing finalizes like the
+		// HomeMovementGenerator (HomeMovementGenerator.cpp:151):
+		// AI()->JustReachedHome(), Eluna CREATURE_EVENT_ON_REACH_HOME
+		// (24). Evade-home splines never stamp ScriptMoveType, so
+		// they cannot double-fire with the evade block below.
+		if motion.ScriptMoveType == movementGeneratorHome {
+			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 		}
 	}
 
@@ -8341,6 +8577,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// stays unmodeled (no Go fear/confuse generator), matching the chase arm's
 	// documented delta.
 	if motion.ScriptRooted || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
+		return
+	}
+	// ConfusedMovementGenerator::DoUpdate
+	// (ConfusedMovementGenerator.cpp): while the confused leg runs, the
+	// creature hops to short random points (the launchCreatureConfusedSpline
+	// arm: 4*frand-2 yards, walk, 800-1500ms pause) instead of wandering.
+	// The launch gate above already enforces the generator's NOT_MOVE /
+	// casting-prevented stop, and in-combat creatures never reach this
+	// section — their pursuit leg runs instead, the standing delta for
+	// a CONTROLLED-slot confused generator that would suppress chase.
+	if motion.Confused && !motion.InCombat {
+		s.launchCreatureConfusedSpline(motion)
 		return
 	}
 	// FormationMovementGenerator::DoUpdate (FormationMovementGenerator.cpp):
