@@ -1327,6 +1327,53 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		defer s.server.motionMu.Unlock()
 		return time.Now().Before(motion.CastingUntil)
 	})
+	// HasUnitState is UnitMethods::HasUnitState (UnitMethods.h:562-573,
+	// Trinity): Unit::HasUnitState, the (m_state & f) != 0 any-bit read;
+	// the session-creature twin of the handler binding
+	// (lua_creature_events.go). Live leg plus motion script mask live
+	// in lua_unit_state.go.
+	methods["HasUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return []any{false}, nil
+		}
+		return []any{s.server.creatureUnitStateHas(motion, st)}, nil
+	}
+	// AddUnitState is UnitMethods::AddUnitState (UnitMethods.h:2651-2662):
+	// Unit::AddUnitState, the m_state |= f write; the ROOT bit also sets
+	// the ScriptRooted gate slot (lua_unit_state.go header).
+	methods["AddUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return nil, nil
+		}
+		s.server.creatureUnitStateAdd(motion, st)
+		return nil, nil
+	}
+	// ClearUnitState is UnitMethods::ClearUnitState (UnitMethods.h:2668-2681):
+	// Unit::ClearUnitState, the m_state &= ~f write; the ROOT bit also
+	// clears the ScriptRooted gate slot. A live-held leg still reads
+	// true (lua_unit_state.go).
+	methods["ClearUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return nil, nil
+		}
+		s.server.creatureUnitStateClear(motion, st)
+		return nil, nil
+	}
 	// CastSpell(target, spellId[, triggered]) is Unit::CastSpell
 	// (UnitMethods.h:2411-2432) through the server's creature cast path,
 	// the session-creature twin of the handler binding; a nil target

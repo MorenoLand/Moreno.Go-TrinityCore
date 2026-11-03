@@ -4135,6 +4135,38 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.castMu.Unlock()
 		return []any{casting}, nil
 	}
+	// HasUnitState is UnitMethods::HasUnitState (UnitMethods.h:562-573,
+	// Trinity): Unit::HasUnitState, the (m_state & f) != 0 any-bit read.
+	// The live leg plus the session script mask live in lua_unit_state.go.
+	methods["HasUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		state, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.playerUnitStateHas(state)}, nil
+	}
+	// AddUnitState is UnitMethods::AddUnitState (UnitMethods.h:2651-2662):
+	// Unit::AddUnitState, the m_state |= f write. Mask-only on the
+	// player (lua_unit_state.go header: no live slot is written).
+	methods["AddUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		state, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.playerUnitStateAdd(state)
+		return nil, nil
+	}
+	// ClearUnitState is UnitMethods::ClearUnitState (UnitMethods.h:2668-2681):
+	// Unit::ClearUnitState, the m_state &= ~f write. Mask-only on the
+	// player; a live-held leg still reads true (lua_unit_state.go).
+	methods["ClearUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		state, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.playerUnitStateClear(state)
+		return nil, nil
+	}
 	// StopSpellCast is UnitMethods::StopSpellCast (UnitMethods.h:2532-2537):
 	// Unit::CastStop (Unit.cpp:980-985) interrupts every current non-melee
 	// spell except except_spellid; the Eluna arg defaults to 0.

@@ -1908,6 +1908,40 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		defer s.motionMu.Unlock()
 		return []any{time.Now().Before(motion.CastingUntil)}, nil
 	}
+	// HasUnitState is UnitMethods::HasUnitState (UnitMethods.h:562-573):
+	// Unit::HasUnitState, the (m_state & f) != 0 any-bit read; the
+	// handler-surface twin of the session binding (lua_objects.go).
+	// Live leg plus motion script mask live in lua_unit_state.go.
+	methods["HasUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		state, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.creatureUnitStateHas(motion, state)}, nil
+	}
+	// AddUnitState is UnitMethods::AddUnitState (UnitMethods.h:2651-2662):
+	// Unit::AddUnitState, the m_state |= f write; the ROOT bit also sets
+	// the ScriptRooted gate slot (lua_unit_state.go header).
+	methods["AddUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		state, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.creatureUnitStateAdd(motion, state)
+		return nil, nil
+	}
+	// ClearUnitState is UnitMethods::ClearUnitState (UnitMethods.h:2668-2681):
+	// Unit::ClearUnitState, the m_state &= ~f write; the ROOT bit also
+	// clears the ScriptRooted gate slot. A live-held leg still reads
+	// true (lua_unit_state.go).
+	methods["ClearUnitState"] = func(_ context.Context, args []any) ([]any, error) {
+		state, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.creatureUnitStateClear(motion, state)
+		return nil, nil
+	}
 	// InterruptNonMeleeSpells is Unit::InterruptNonMeleeSpells
 	// (Unit.cpp:3212-3225): cancels the pending generic cast and the
 	// live channel, broadcasting each arm's cancel packets; with no arm

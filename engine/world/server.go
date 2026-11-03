@@ -514,6 +514,12 @@ type session struct {
 	// player-side script bridge needs more. Guarded by spellImmuneMu.
 	spellImmuneRows map[uint64][]uint32
 	spellImmuneMu   sync.Mutex
+	// scriptUnitState mirrors Unit::m_state (Unit.h:830-832) for the
+	// player half of the Eluna Has/Add/ClearUnitState trio
+	// (lua_unit_state.go): bits AddUnitState wrote for states with no
+	// live engine leg. Session lifetime only, like the spell-immune
+	// rows above; never persisted.
+	scriptUnitState uint32
 	// factionNativeAfterRemove mirrors Unit::RestoreFaction in the
 	// AuraEffect::HandleAuraModFaction remove leg (SpellAuraEffects.cpp:4808):
 	// removing a 243 aura restores the native faction unconditionally, even
