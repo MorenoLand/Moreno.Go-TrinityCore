@@ -90,6 +90,16 @@ type Server struct {
 	// SMSG_BATTLEFIELD_STATUS average-wait field (BattlegroundQueue.cpp:266).
 	bgWaitMu    sync.Mutex
 	bgWaitTimes map[bgWaitKey]*bgQueueWaitRing
+	// bgTestingMu/bgTesting/arenaTesting mirror BattlegroundMgr's
+	// m_Testing/m_ArenaTesting flags (BattlegroundMgr.cpp:819-829) behind
+	// .debug bg / .debug arena. Go's queue pop is an invite-dialog
+	// simulation with no start gate, so the BattlegroundQueue min-players
+	// consumers (BattlegroundQueue.cpp:699, 835-837) have no twin yet;
+	// the flags are stored for that consumer and the world-text broadcast
+	// is the live behavior.
+	bgTestingMu  sync.Mutex
+	bgTesting    bool
+	arenaTesting bool
 	// bgClientIDsMu/bgClientIDs/bgClientIDByInstance mirror BattlegroundMgr's
 	// m_ClientBattlegroundIds (BattlegroundMgr.cpp:325-348): claimed
 	// client-visible instance ids per battleground type and bracket, plus

@@ -3,11 +3,14 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -1326,4 +1329,415 @@ func (s *session) handleDebugTransport(ctx context.Context, args []string) {
 	}
 	s.server.transportMu.Unlock()
 	s.sendSysMessage("You are not on a transport.")
+}
+
+// handleDebugBattleground mirrors HandleDebugBattlegroundCommand
+// (cs_debug.cpp:757): BattlegroundMgr::ToggleTesting flips m_Testing and
+// broadcasts the ON/OFF world text (SendWorldText). The LANG 739/740 texts
+// are unseeded in-tree, so plain prose stands in like the other unseeded
+// LANG_* notices; the queue consumers have no Go twin yet (see the
+// bgTesting field note in server.go).
+func (s *session) handleDebugBattleground(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.server.bgTestingMu.Lock()
+	s.server.bgTesting = !s.server.bgTesting
+	on := s.server.bgTesting
+	s.server.bgTestingMu.Unlock()
+	if on {
+		s.server.broadcastMessageChatAll("Battleground debug mode enabled.")
+	} else {
+		s.server.broadcastMessageChatAll("Battleground debug mode disabled.")
+	}
+}
+
+// handleDebugArena mirrors HandleDebugArenaCommand (cs_debug.cpp:763):
+// BattlegroundMgr::ToggleArenaTesting flips m_ArenaTesting and broadcasts
+// the ON/OFF world text (SendWorldText). LANG 737/738 prose and the
+// missing queue consumer match the battleground arm above.
+func (s *session) handleDebugArena(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.server.bgTestingMu.Lock()
+	s.server.arenaTesting = !s.server.arenaTesting
+	on := s.server.arenaTesting
+	s.server.bgTestingMu.Unlock()
+	if on {
+		s.server.broadcastMessageChatAll("Arena debug mode enabled.")
+	} else {
+		s.server.broadcastMessageChatAll("Arena debug mode disabled.")
+	}
+}
+
+// Quest-reset world states (SharedDefines.h:3867-3872).
+const (
+	worldStateWeeklyQuestResetTime  uint32 = 20002
+	worldStateMonthlyQuestResetTime uint32 = 20007
+	worldStateDailyQuestResetTime   uint32 = 20008
+)
+
+// nextWeeklyQuestResetTime mirrors World::GetNextWeeklyResetTime
+// (World.cpp:3263-3273): the next daily reset, advanced to the weekly
+// reset weekday. CONFIG_WEEKLY_QUEST_RESET_TIME_WDAY defaults to 3
+// (Wednesday, World.cpp:989); Go keeps no such config field, so 3 is
+// fixed. C++ tm_wday and Go Weekday both count Sunday as 0.
+func nextWeeklyQuestResetTime(now time.Time) time.Time {
+	next := nextDailyQuestResetTime(now)
+	wday := int(next.Weekday())
+	target := 3
+	if target < wday {
+		wday -= 7
+	}
+	return next.Add(time.Duration(target-wday) * 24 * time.Hour)
+}
+
+// nextMonthlyQuestResetTime mirrors World::GetNextMonthlyResetTime
+// (World.cpp:3299-3309): the next daily reset, moved to the 1st of the
+// next month unless it already falls on the 1st. Go's time.Date
+// normalizes the December overflow exactly as C++ mktime does.
+func nextMonthlyQuestResetTime(now time.Time) time.Time {
+	next := nextDailyQuestResetTime(now)
+	if next.Day() == 1 {
+		return next
+	}
+	return time.Date(next.Year(), next.Month()+1, 1, next.Hour(), next.Minute(), next.Second(), 0, next.Location())
+}
+
+// debugQuestResetTimeText mirrors TimeToHumanReadable (Util.cpp:285-292):
+// localtime strftime "%c". Go has no %c verb, so the closest fixed layout
+// stands in.
+func debugQuestResetTimeText(t time.Time) string {
+	return t.Format("Mon Jan 2 15:04:05 2006")
+}
+
+// handleDebugQuestReset mirrors HandleDebugQuestResetCommand
+// (cs_debug.cpp:1454): the upper-cased argument selects daily, weekly,
+// monthly or all three; anything else fails. Each leg runs its
+// World::Reset*Quests twin: the character_queststatus_* table is emptied,
+// online sessions clear their in-memory quest sets, and the next reset
+// time is stored as a world state and reported. The quest-pool reselect
+// (sQuestPoolMgr->ChangeDailyQuests and kin) has no Go model, and the
+// dungeon-finder quest clear inside ResetDailyQuestStatus has none
+// either; both stay unmodeled, not fabricated.
+func (s *session) handleDebugQuestReset(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .debug questreset <all|daily|weekly|monthly>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	var daily, weekly, monthly bool
+	switch strings.ToUpper(args[0]) {
+	case "ALL":
+		daily, weekly, monthly = true, true, true
+	case "DAILY":
+		daily = true
+	case "WEEKLY":
+		weekly = true
+	case "MONTHLY":
+		monthly = true
+	default:
+		s.sendSysMessage(syntax)
+		return
+	}
+	if daily {
+		s.debugResetDailyQuests(ctx)
+	}
+	if weekly {
+		s.debugResetWeeklyQuests(ctx)
+	}
+	if monthly {
+		s.debugResetMonthlyQuests(ctx)
+	}
+}
+
+// debugResetQuestSessions collects the online sessions whose in-memory
+// quest state a reset leg clears, mirroring World::Reset*Quests' session
+// loop (World.cpp:3245-3247 and kin).
+func (s *session) debugResetQuestSessions() []*session {
+	if s.server == nil {
+		return nil
+	}
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	targets := make([]*session, 0, len(s.server.sessions))
+	for sess := range s.server.sessions {
+		if sess != nil && sess.player != nil {
+			targets = append(targets, sess)
+		}
+	}
+	return targets
+}
+
+func (s *session) debugResetDailyQuests(ctx context.Context) {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_queststatus_daily")
+	}
+	for _, sess := range s.debugResetQuestSessions() {
+		sess.player.DailyQuests = [playerDailyQuestsCount]uint32{}
+		sess.player.LastDailyQuestTime = 0
+	}
+	next := nextDailyQuestResetTime(time.Now())
+	if s.server != nil {
+		s.server.setWorldState(ctx, worldStateDailyQuestResetTime, uint64(next.Unix()))
+	}
+	s.sendSysMessage(fmt.Sprintf("Daily quests have been reset. Next scheduled reset: %s", debugQuestResetTimeText(next)))
+}
+
+func (s *session) debugResetWeeklyQuests(ctx context.Context) {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_queststatus_weekly")
+	}
+	for _, sess := range s.debugResetQuestSessions() {
+		sess.player.WeeklyQuests = make(map[uint32]struct{})
+	}
+	next := nextWeeklyQuestResetTime(time.Now())
+	if s.server != nil {
+		s.server.setWorldState(ctx, worldStateWeeklyQuestResetTime, uint64(next.Unix()))
+	}
+	s.sendSysMessage(fmt.Sprintf("Weekly quests have been reset. Next scheduled reset: %s", debugQuestResetTimeText(next)))
+}
+
+func (s *session) debugResetMonthlyQuests(ctx context.Context) {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_queststatus_monthly")
+	}
+	for _, sess := range s.debugResetQuestSessions() {
+		sess.player.MonthlyQuests = make(map[uint32]struct{})
+	}
+	next := nextMonthlyQuestResetTime(time.Now())
+	if s.server != nil {
+		s.server.setWorldState(ctx, worldStateMonthlyQuestResetTime, uint64(next.Unix()))
+	}
+	s.sendSysMessage(fmt.Sprintf("Monthly quests have been reset. Next scheduled reset: %s", debugQuestResetTimeText(next)))
+}
+
+// handleDebugRaidReset mirrors HandleDebugRaidResetCommand
+// (cs_debug.cpp:1405): the map/difficulty validation order and messages
+// are C++-exact (DBCEnums.h:294-295: MAX_DUNGEON_DIFFICULTY 3,
+// MAX_RAID_DIFFICULTY 4; DUNGEON_DIFFICULTY_NORMAL 0), and each reset leg
+// runs the scheduler's resetInstanceGlobal twin (the _ResetOrWarnAll DB
+// legs: expired-bind, group-bind and instance deletes plus the extend
+// demote, respawn wipe and player invalidation). The next-reset
+// computation and warning schedule ride the scheduler's own tick, not
+// this command, matching Go's read-only resettime stance.
+func (s *session) handleDebugRaidReset(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .debug raidreset <mapId> [difficulty]"
+	if len(args) == 0 || len(args) > 2 || s.server == nil || s.server.Data == nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	mapID := uint32(cAtoi(args[0]))
+	difficulty := -1
+	if len(args) == 2 {
+		parsed, err := strconv.Atoi(args[1])
+		if err != nil || parsed < 0 {
+			s.sendSysMessage(syntax)
+			return
+		}
+		difficulty = parsed
+	}
+	entry, found, err := s.server.Data.Map(mapID)
+	if err != nil || !found {
+		s.sendSysMessage("Invalid map specified.")
+		return
+	}
+	if !entry.IsDungeon() {
+		s.sendSysMessage(fmt.Sprintf("'%s' is not a dungeon map.", entry.MapName))
+		return
+	}
+	if difficulty >= 0 {
+		if difficulty >= 4 {
+			s.sendSysMessage(fmt.Sprintf("Invalid difficulty %d - specify in range [0,%d).", difficulty, 4))
+			return
+		}
+		if _, found, err := s.server.Data.MapDifficulty(mapID, uint32(difficulty)); err != nil || !found {
+			s.sendSysMessage(fmt.Sprintf("Difficulty %d is not valid for '%s'.", difficulty, entry.MapName))
+			return
+		}
+	}
+	if difficulty < 0 {
+		s.sendSysMessage(fmt.Sprintf("Resetting all difficulties for '%s'.", entry.MapName))
+		start, end := uint32(1), uint32(3)
+		if entry.IsRaid() {
+			start, end = 0, 4
+		}
+		for diff := start; diff < end; diff++ {
+			if _, found, err := s.server.Data.MapDifficulty(mapID, diff); err == nil && found {
+				s.sendSysMessage(fmt.Sprintf("Resetting difficulty %d for '%s'.", diff, entry.MapName))
+				s.server.resetInstanceGlobal(ctx, instanceResetKey{MapID: mapID, Difficulty: diff})
+			}
+		}
+		return
+	}
+	if entry.IsNonRaidDungeon() && difficulty == 0 {
+		s.sendSysMessage(fmt.Sprintf("'%s' does not have any permanent saves for difficulty %d.", entry.MapName, difficulty))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Resetting difficulty %d for '%s'.", difficulty, entry.MapName))
+	s.server.resetInstanceGlobal(ctx, instanceResetKey{MapID: mapID, Difficulty: uint32(difficulty)})
+}
+
+// debugClosePoint mirrors the spawnvehicle position leg
+// (cs_debug.cpp:977-978): GetClosePoint(x, y, z, combatReach) resolves
+// through GetNearPoint to a point combatReach away along the player's
+// orientation (Object.cpp:3307-3311).
+func (s *session) debugClosePoint() (x, y, z, o float32) {
+	p := s.player
+	reach := float64(p.CombatReach)
+	return p.X + float32(math.Cos(float64(p.Orientation))*reach),
+		p.Y + float32(math.Sin(float64(p.Orientation))*reach),
+		p.Z, p.Orientation
+}
+
+// handleDebugSpawnVehicle mirrors HandleDebugSpawnVehicleCommand
+// (cs_debug.cpp:975): without an id the entry is summoned at the close
+// point as a manual-despawn temp summon (the Player::SummonCreature
+// default, Object.h:412); with an id the creature template and the
+// Vehicle.dbc entry gate first, then the summon's kit is replaced with
+// the given vehicle id (C++ Create takes the id outright, overriding the
+// template's VehicleId). Unknown entries fail silently, the summon
+// funnel's precedent; the C++ id form creates a full creature while Go
+// creates a temp summon, so no DB row backs the spawn.
+func (s *session) handleDebugSpawnVehicle(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .debug spawnvehicle <entry> [vehicleId]"
+	if len(args) == 0 || len(args) > 2 || s.server == nil || s.player == nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	entry := uint32(cAtoi(args[0]))
+	vehicleID := uint32(0)
+	hasVehicleID := false
+	if len(args) == 2 {
+		vehicleID = uint32(cAtoi(args[1]))
+		hasVehicleID = true
+	}
+	if hasVehicleID {
+		if _, ok := s.npcTemplateGate(ctx, entry); !ok {
+			return
+		}
+		if s.server.Data == nil {
+			return
+		}
+		if _, ok, err := s.server.Data.Vehicle(vehicleID); err != nil || !ok {
+			return
+		}
+	}
+	x, y, z, o := s.debugClosePoint()
+	origin := tempSummonOrigin{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: s.player.GUID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, O: s.player.Orientation, Reach: float64(s.player.CombatReach)}
+	summoned := s.server.summonTempCreature(ctx, origin, entry, x, y, z, o, 7, 0)
+	if summoned == nil {
+		return
+	}
+	if hasVehicleID {
+		s.server.createVehicleKit(summoned.Map, summoned.InstanceID, summoned.GUID, vehicleID, entry, false)
+	}
+}
+
+// handleDebugEnterVehicle mirrors HandleDebugEnterVehicleCommand
+// (cs_debug.cpp:949): the selected unit must be a vehicle (a live kit on
+// the selection's map/instance). Entry 0 boards the handler's player via
+// the session enterVehicle leg; otherwise the nearest creature of the
+// entry within 20 yards of the player boards via the accessory boarding
+// pattern (kit.AddPassenger plus the motion's VehicleGUID/VehicleSeat
+// slots and the OnAddPassenger fire). C++ fails when its cell searcher
+// hits the vehicle itself first; Go skips the vehicle in the scan, so a
+// same-entry vehicle never blocks the board. A missing vehicle, a
+// missing passenger, or an unparseable seat fails silently, the C++
+// false-return legs.
+func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .debug entervehicle <entry> [seatId]"
+	if len(args) == 0 || len(args) > 2 || s.server == nil || s.player == nil || s.selection == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	entry := uint32(cAtoi(args[0]))
+	seatID := int8(-1)
+	if len(args) == 2 {
+		parsed, err := strconv.ParseInt(args[1], 10, 8)
+		if err != nil {
+			s.sendSysMessage(syntax)
+			return
+		}
+		seatID = int8(parsed)
+	}
+	vehicleGUID := s.selection
+	if s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID) == nil {
+		return
+	}
+	if entry == 0 {
+		s.enterVehicle(ctx, vehicleGUID, seatID)
+		s.sendSysMessage(fmt.Sprintf("Unit %d entered vehicle %d", entry, seatID))
+		return
+	}
+	passenger := s.debugVehiclePassenger(entry, vehicleGUID)
+	if passenger == nil {
+		return
+	}
+	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID)
+	if kit == nil {
+		return
+	}
+	assigned, _, ok := kit.AddPassenger(passenger.GUID, seatID, passenger.UnitFlags&0x02000000 != 0)
+	if ok {
+		s.server.motionMu.Lock()
+		passenger.VehicleGUID = vehicleGUID
+		passenger.VehicleSeat = assigned
+		passenger.Moving = false
+		s.server.motionMu.Unlock()
+		if base := s.findCreatureMotion(vehicleGUID); base != nil {
+			s.server.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.server.luaMotionCreature(base), s.server.luaMotionCreature(passenger), assigned)
+		}
+	}
+	s.sendSysMessage(fmt.Sprintf("Unit %d entered vehicle %d", entry, seatID))
+}
+
+// debugVehiclePassenger mirrors the entervehicle passenger search
+// (cs_debug.cpp:957-963): AllCreaturesOfEntryInRange over the player's
+// map/instance, entry match, within 20 yards (the check's range; the
+// 30-yard cell-visit radius has no Go twin since the scan is map-wide).
+func (s *session) debugVehiclePassenger(entry uint32, vehicleGUID uint64) *creatureMotion {
+	s.server.motionMu.Lock()
+	motionMap := s.server.motionMapLocked(s.player.Map, s.player.InstanceID)
+	motions := make([]*creatureMotion, 0, len(motionMap))
+	for _, motion := range motionMap {
+		if motion != nil {
+			motions = append(motions, motion)
+		}
+	}
+	s.server.motionMu.Unlock()
+	for _, motion := range motions {
+		if motion.GUID == vehicleGUID || motion.Entry != entry {
+			continue
+		}
+		if distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z) <= 20 {
+			return motion
+		}
+	}
+	return nil
 }
