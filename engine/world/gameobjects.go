@@ -239,6 +239,9 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		if !isGM && s.isGameObjectHiddenInInstance(state.Map, state.InstanceID, gameObjectGUID(spawn.GUID, spawn.Entry)) {
 			continue
 		}
+		if s.spawnGroupHiddenFromSweep(ctx, state.Map, state.InstanceID, spawnTypeGameObject, spawn.GUID) {
+			continue
+		}
 		updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 		count++
 	}

@@ -20,8 +20,8 @@ import (
 // Of these 26 arms, one is partial (`set movetype`: the GUID form updates
 // the creature row in the world DB, the live creature store, and the
 // selection form adds the live MoveType slot, but the LoadPath /
-// MotionMaster-Initialize / respawn legs have no Go bridge), twenty-three are wired
-// (`delete item` on the npc_vendor rows, `set factionid` on the live faction
+// MotionMaster-Initialize / respawn legs have no Go bridge) and twenty-five
+// are wired (`delete item` on the npc_vendor rows, `set factionid` on the live faction
 // slot plus the template row, `set flag` on the live NPC-flags slot plus the
 // template row, `set level` on the live level/health slots plus the spawn
 // row's curhealth, `set model` on the live display slots plus the spawn
@@ -37,9 +37,8 @@ import (
 // to the named online player, `follow`/`follow stop` on the script-follow
 // ACTIVE slot, `info` on the live motion slots plus the template/spawn rows,
 // `tame` on the createTamedPetFromEntry pet-creation path, `showloot` on
-// the creatureLoot store)
-// and 2 are documented-blocked: spawngroup and despawngroup need the
-// spawn-group manager, which has no Go bridge.
+// the creatureLoot store, `spawngroup`/`despawngroup` on the spawn-group
+// manager).
 // Selected-creature resolution itself exists (castCommandSelectedCreature,
 // the getSelectedCreature twin).
 
@@ -218,9 +217,9 @@ func (s *session) handleNPCChunk2(ctx context.Context, sub string, rest []string
 	case strings.HasPrefix("tame", sub):
 		s.handleNPCTame(ctx)
 	case strings.HasPrefix("spawngroup", sub):
-		s.handleNPCSpawnGroup(ctx)
+		s.handleNPCSpawnGroup(ctx, rest)
 	case strings.HasPrefix("despawngroup", sub):
-		s.handleNPCDespawnGroup(ctx)
+		s.handleNPCDespawnGroup(ctx, rest)
 	case strings.HasPrefix("follow", sub):
 		s.handleNPCFollow(ctx, rest)
 	case strings.HasPrefix("evade", sub):
@@ -1207,13 +1206,12 @@ func (s *session) npcInfoFlagLines(mask uint32, table []npcInfoFlagBit) {
 }
 
 // handleNPCInfo mirrors HandleNpcInfoCommand (cs_npc.cpp:482) in C++ line
-// order: char, compatibility mode, level, equipment, health, movement
+// order: char, spawn group (non-zero groups only), compatibility mode, level, equipment, health, movement
 // data, unit flags (+ expansions), flags, respawn times, loot, dungeon
 // id, phasemask, armor, position, AI info, react state, flags extra (+
 // expansions), npc flags (+ expansions), mechanic immune (+ expansions).
 // LANG wordings are plain-English recalls (no in-tree seed). DELTAS: the
-// spawn-group line has no Go model (no spawn-group manager); the AI-type
-// line has none either (no C++ AI class model — ScriptName is the Go AI
+// AI-type line has none either (no C++ AI class model — ScriptName is the Go AI
 // identity); equipment ids have no Go slot and read 0; the movement
 // Chase/Random legs read the C++ default-ctor values (Run/Walk — Go loads
 // only Ground/Swim/Flight); the template Rooted bit has no Go slot, so
@@ -1292,6 +1290,11 @@ func (s *session) handleNPCInfo(ctx context.Context) {
 	}
 
 	s.sendSysMessage(fmt.Sprintf("NPC %s: spawn id %d, GUID %d, entry %d, faction %d, npc flags 0x%X, display id %d, native display id %d", snap.Name, guidCounter, guidCounter, snap.Entry, snap.Faction, snap.NPCFlags, snap.DisplayID, snap.NativeDisplayID))
+	if db := s.npcWorldDB(); db != nil {
+		if groupID, tmpl, active := s.server.spawnGroupOfMember(ctx, db, spawnTypeCreature, guidCounter, snap.Map, snap.InstanceID); groupID != 0 && tmpl != nil {
+			s.sendSysMessage(fmt.Sprintf("Spawn group: %s (id %d, flags 0x%X, active %t)", tmpl.Name, groupID, tmpl.Flags, active))
+		}
+	}
 	s.sendSysMessage("Respawn compatibility mode: false")
 	s.sendSysMessage(fmt.Sprintf("Level: %d", snap.Level))
 	s.sendSysMessage("Equipment: current 0, original 0")
@@ -1319,23 +1322,61 @@ func (s *session) handleNPCInfo(ctx context.Context) {
 	}
 }
 
-// handleNPCSpawnGroup is documented-blocked (cs_npc.cpp:1331): spawn groups
-// need the Map::SpawnGroupSpawn bridge. This also closes the spawngroup/
-// despawngroup deferral left by the gobject port.
-func (s *session) handleNPCSpawnGroup(ctx context.Context) {
+// handleNPCSpawnGroup mirrors HandleNpcSpawnGroup (cs_npc.cpp:1356) on the
+// spawn-group manager: group id plus the force/ignorerespawn flags, the
+// bad-group message on an unknown, system, cross-map or memberless group,
+// and the spawn count on success. LANG wordings are plain-English recalls
+// (no in-tree seed); the despawn count line is literal C++ text.
+func (s *session) handleNPCSpawnGroup(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCSpawnGroup) {
 		return
 	}
-	s.sendSysMessage("npc spawngroup is not supported: the spawn-group manager has no Go bridge.")
+	groupID, force, ignoreRespawn, ok := parseSpawnGroupArgs(args, true)
+	if !ok {
+		s.sendSysMessage("Syntax: .npc spawngroup <groupId> [force] [ignorerespawn]")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	count, valid := s.server.spawnGroupSpawn(ctx, db, s.player.Map, s.player.InstanceID, groupID, ignoreRespawn, force)
+	if !valid {
+		s.sendSysMessage(fmt.Sprintf("Spawn group %d is not valid.", groupID))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Spawned %d objects.", count))
 }
 
-// handleNPCDespawnGroup is documented-blocked (cs_npc.cpp:1362): same bridge
-// gap as spawngroup.
-func (s *session) handleNPCDespawnGroup(ctx context.Context) {
+// handleNPCDespawnGroup mirrors HandleNpcDespawnGroup (cs_npc.cpp:1397) on
+// the spawn-group manager: group id plus the removerespawntime flag, the
+// bad-group message on an unknown, system, cross-map or memberless group,
+// and the despawn count on success.
+func (s *session) handleNPCDespawnGroup(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCDespawnGroup) {
 		return
 	}
-	s.sendSysMessage("npc despawngroup is not supported: the spawn-group manager has no Go bridge.")
+	groupID, removeRespawnTime, _, ok := parseSpawnGroupArgs(args, false)
+	if !ok {
+		s.sendSysMessage("Syntax: .npc despawngroup <groupId> [removerespawntime]")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	count, valid := s.server.spawnGroupDespawn(ctx, db, s.player.Map, s.player.InstanceID, groupID, removeRespawnTime)
+	if !valid {
+		s.sendSysMessage(fmt.Sprintf("Spawn group %d is not valid.", groupID))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Despawned a total of %d objects.", count))
 }
 
 // handleNPCTame mirrors HandleNpcTameCommand (cs_npc.cpp:1048): the selected

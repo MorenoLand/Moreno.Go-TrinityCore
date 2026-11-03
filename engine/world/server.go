@@ -257,6 +257,16 @@ type Server struct {
 	formationLoaded          bool
 	creatureRespawns         map[uint32]creatureRespawn
 	instanceCreatureRespawns map[instanceAdmissionKey]map[uint32]creatureRespawn
+	// spawnGroupMu guards the spawn-group manager cache (spawn_groups.go):
+	// templates, per-group members, the member-to-group map, the loaded
+	// flag, and the per-(map, instance) toggled set behind
+	// IsSpawnGroupActive.
+	spawnGroupMu             sync.RWMutex
+	spawnGroupTemplates      map[uint32]*spawnGroupTemplate
+	spawnGroupMembers        map[uint32][]spawnGroupMember
+	spawnGroupMemberGroup    map[spawnGroupMemberKey]uint32
+	spawnGroupLoaded         bool
+	spawnGroupToggled        map[spawnGroupInstanceKey]bool
 	respawnTimesLoaded       bool // set once runWorldTick loads the saved respawn rows (loadCreatureRespawnTimes)
 	instanceResetMu          sync.Mutex
 	instanceResets           map[instanceResetKey]*instanceResetSchedule

@@ -97,12 +97,12 @@ func (s *session) handleCmdGObject(ctx context.Context, args []string) {
 		if deny(permissionCommandGObjectSpawnGroup) || !needArgs(1) {
 			return
 		}
-		s.sendSysMessage("gobject spawngroup is not supported: the spawn-group manager has no Go bridge.")
+		s.handleGObjectSpawnGroup(ctx, args[1:])
 	case "despawngroup":
 		if deny(permissionCommandGObjectDespawnGroup) || !needArgs(1) {
 			return
 		}
-		s.sendSysMessage("gobject despawngroup is not supported: the spawn-group manager has no Go bridge.")
+		s.handleGObjectDespawnGroup(ctx, args[1:])
 	case "add":
 		if len(args) > 1 && strings.HasPrefix("temp", strings.ToLower(args[1])) {
 			if deny(permissionCommandGObjectAddTemp) {
@@ -864,4 +864,51 @@ func (s *session) handleGObjectSetState(ctx context.Context, args []string) {
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Set gobject type %d state %d", objectType, objectState))
+}
+
+// handleGObjectSpawnGroup runs HandleNpcSpawnGroup (cs_npc.cpp:1356, shared
+// by the gobject table) on the spawn-group manager; same messages as the
+// npc arm.
+func (s *session) handleGObjectSpawnGroup(ctx context.Context, args []string) {
+	groupID, force, ignoreRespawn, ok := parseSpawnGroupArgs(args, true)
+	if !ok {
+		s.sendSysMessage("Syntax: .gobject spawngroup <groupId> [force] [ignorerespawn]")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	count, valid := s.server.spawnGroupSpawn(ctx, db, s.player.Map, s.player.InstanceID, groupID, ignoreRespawn, force)
+	if !valid {
+		s.sendSysMessage(fmt.Sprintf("Spawn group %d is not valid.", groupID))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Spawned %d objects.", count))
+}
+
+// handleGObjectDespawnGroup runs HandleNpcDespawnGroup (cs_npc.cpp:1397,
+// shared by the gobject table) on the spawn-group manager.
+func (s *session) handleGObjectDespawnGroup(ctx context.Context, args []string) {
+	groupID, removeRespawnTime, _, ok := parseSpawnGroupArgs(args, false)
+	if !ok {
+		s.sendSysMessage("Syntax: .gobject despawngroup <groupId> [removerespawntime]")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	count, valid := s.server.spawnGroupDespawn(ctx, db, s.player.Map, s.player.InstanceID, groupID, removeRespawnTime)
+	if !valid {
+		s.sendSysMessage(fmt.Sprintf("Spawn group %d is not valid.", groupID))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Despawned a total of %d objects.", count))
 }
