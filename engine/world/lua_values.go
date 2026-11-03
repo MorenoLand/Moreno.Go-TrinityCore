@@ -73,6 +73,19 @@ func luaGenericFloat32Arg(args []any, index int) (float32, error) {
 	return float32(value), nil
 }
 
+// luaOptionalBoolArg reads an optional bool argument (Eluna CHECKVAL
+// with a default): a bool value wins, anything else — including a
+// missing argument — falls back to def, matching the CastSpell
+// triggered-arg convention used across the Lua surfaces.
+func luaOptionalBoolArg(args []any, index int, def bool) bool {
+	if index < len(args) {
+		if b, ok := args[index].(bool); ok {
+			return b
+		}
+	}
+	return def
+}
+
 func luaInt32Arg(args []any, index int) (int32, error) {
 	value, err := luaInt64Arg(args, index)
 	if err != nil {

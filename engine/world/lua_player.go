@@ -2468,6 +2468,88 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil, nil
 	}
+	// Attack(target[, meleeAttack]) is Unit::Attack
+	// (UnitMethods.h:22-27, Unit.cpp:5650-5760) on the player attacker:
+	// the gates (self/dead/mounted/GM/evading victim, unattackable
+	// strip), the same-victim no-op, and the new-victim engage tail
+	// live in luaUnitAttack (lua_unit_combat.go); a missing or
+	// non-unit target errors, an unresolvable one (despawned creature,
+	// offline player) reads false like a failed gate.
+	methods["Attack"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("Attack requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, fmt.Errorf("Attack requires a target unit")
+		}
+		meleeAttack := luaOptionalBoolArg(args, 1, false)
+		return []any{luaUnitAttack(ctx, luaUnitPlayerRef(s), targetGUID, meleeAttack)}, nil
+	}
+	// DealDamage(target, damage[, durabilityloss[, school[, spell]]])
+	// is Unit::DealDamage (UnitMethods.h:2724-2857) on the player
+	// attacker: flat damage for school 7, armor + absorb + resist for
+	// a set school without a spell, the spell-info gate + spell log
+	// for a set school with a spell, all through luaUnitDealDamage.
+	// school > 7 is an arg error (Eluna's "valid SpellSchool
+	// expected"); an unknown spell leg returns silently.
+	methods["DealDamage"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("DealDamage requires a target and damage")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, fmt.Errorf("DealDamage requires a target unit")
+		}
+		damage, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		durabilityLoss := luaOptionalBoolArg(args, 2, true)
+		school := uint32(7)
+		if len(args) >= 4 {
+			school, err = luaUint32Arg(args, 3)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if school > 7 {
+			return nil, fmt.Errorf("DealDamage requires a valid SpellSchool (0-7)")
+		}
+		var spellID uint32
+		if len(args) >= 5 {
+			spellID, err = luaUint32Arg(args, 4)
+			if err != nil {
+				return nil, err
+			}
+		}
+		luaUnitDealDamage(ctx, luaUnitPlayerRef(s), targetGUID, damage, durabilityLoss, school, spellID)
+		return nil, nil
+	}
+	// DealHeal(target, spell, amount[, critical]) is Unit::DealHeal
+	// (UnitMethods.h:2863-2892, Unit::HealBySpell Unit.cpp:6561) on
+	// the player healer, through luaUnitDealHeal: unknown spells
+	// return silently.
+	methods["DealHeal"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 3 {
+			return nil, fmt.Errorf("DealHeal requires a target, a spell and an amount")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, fmt.Errorf("DealHeal requires a target unit")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		amount, err := luaUint32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		critical := luaOptionalBoolArg(args, 3, false)
+		luaUnitDealHeal(ctx, luaUnitPlayerRef(s), targetGUID, spellID, amount, critical)
+		return nil, nil
+	}
 	// GetCurrentSpell(spellType) is Unit::GetCurrentSpell
 	// (UnitMethods.h:785-792): the live Spell object for the slot, nil
 	// when empty. GENERIC reads the cast-bar cast, CHANNELED the live

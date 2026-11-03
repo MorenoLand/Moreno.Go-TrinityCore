@@ -1398,6 +1398,81 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, mapID, instanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		return []any{true}, nil
 	}
+	// Attack(target[, meleeAttack]) is the handler-creature twin of
+	// the player binding (UnitMethods.h:22-27, Unit.cpp:5650-5760):
+	// the shared luaUnitAttack gates and engage tail, over the live
+	// motion (the AttackStop twin above owns the stop arm).
+	methods["Attack"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("Attack requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, fmt.Errorf("Attack requires a target unit")
+		}
+		meleeAttack := luaOptionalBoolArg(args, 1, false)
+		return []any{luaUnitAttack(ctx, luaUnitCreatureRef(s, motion), targetGUID, meleeAttack)}, nil
+	}
+	// DealDamage(target, damage[, durabilityloss[, school[, spell]]])
+	// is the handler-creature twin of the player binding
+	// (UnitMethods.h:2724-2857) through luaUnitDealDamage.
+	methods["DealDamage"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("DealDamage requires a target and damage")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, fmt.Errorf("DealDamage requires a target unit")
+		}
+		damage, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		durabilityLoss := luaOptionalBoolArg(args, 2, true)
+		school := uint32(7)
+		if len(args) >= 4 {
+			school, err = luaUint32Arg(args, 3)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if school > 7 {
+			return nil, fmt.Errorf("DealDamage requires a valid SpellSchool (0-7)")
+		}
+		var spellID uint32
+		if len(args) >= 5 {
+			spellID, err = luaUint32Arg(args, 4)
+			if err != nil {
+				return nil, err
+			}
+		}
+		luaUnitDealDamage(ctx, luaUnitCreatureRef(s, motion), targetGUID, damage, durabilityLoss, school, spellID)
+		return nil, nil
+	}
+	// DealHeal(target, spell, amount[, critical]) is the
+	// handler-creature twin of the player binding
+	// (UnitMethods.h:2863-2892, Unit::HealBySpell Unit.cpp:6561)
+	// through luaUnitDealHeal.
+	methods["DealHeal"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 3 {
+			return nil, fmt.Errorf("DealHeal requires a target, a spell and an amount")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, fmt.Errorf("DealHeal requires a target unit")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		amount, err := luaUint32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		critical := luaOptionalBoolArg(args, 3, false)
+		luaUnitDealHeal(ctx, luaUnitCreatureRef(s, motion), targetGUID, spellID, amount, critical)
+		return nil, nil
+	}
 	// SetNoCallAssistance is Creature::SetNoCallAssistance
 	// (Creature.h:246): it writes m_AlreadyCallAssistance directly, so
 	// true means the creature never calls for assistance and false
