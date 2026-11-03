@@ -49,7 +49,8 @@
 --   DealDamage.
 -- Unmodeled (documented-only, no bridges):
 -- - JustDied's instance leg: instance->SetData(TYPE_RIFT = 2, SPECIAL)
---   — instance-data bridge blocked (standing).
+--   — PORTED via the shared instanceData table (see
+--   instance_the_black_morass.lua).
 -- - H_SPELL_WING_BUFFET 38593 is declared in the C++ enum but C++
 --   UpdateAI always casts the non-heroic 31475 via DoCast(me) — no
 --   heroic variant arm exists to port (the deja H_SPELL_ARCANE_BLAST
@@ -168,6 +169,20 @@ end
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied instance leg (boss_temporus.cpp:84):
+    -- SetData(TYPE_RIFT, SPECIAL) — the instance arm schedules the
+    -- next portal in 5s when portalCount < 7 (see
+    -- instance_the_black_morass.lua); written inline to the shared
+    -- instanceData table. The rift's own boss-death leg repeats the
+    -- same 5s schedule idempotently.
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data and (data.portalCount or 0) < 7 then
+            data.nextPortalMs = 5000
+            data.portalPending = true
+        end
+    end
 end
 
 local function onAIUpdate(event, creature)

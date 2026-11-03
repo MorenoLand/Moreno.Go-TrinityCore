@@ -15553,22 +15553,18 @@ func init() {
 	// (DATA_MEDIVH); the creature_template ScriptName binding stays
 	// DB-side): death Talk SAY_DEATH (5), skipped when the killer has
 	// Medivh's own entry (C++ JustDied's entry gate, the thrall
-	// old_hillsbrad self-kill-skip convention). Everything else is
-	// instance-script machinery with no bridges — Reset's
-	// GetData(TYPE_MEDIVH)/SPELL_CHANNEL aura management, the
-	// MoveInLineOfSight player-intro leg (SAY_INTRO + SetData
-	// IN_PROGRESS + SPELL_CHANNEL cast) and infinite-mob leg
-	// (StopMoving + who->CastSpell SPELL_CORRUPT 31326 /
-	// SPELL_CORRUPT_AEONUS 37853), SpellHit (never fires in the Lua
-	// API, standing queue), and the whole UpdateAI machine
-	// (TYPE_MEDIVH SPECIAL, DATA_SHIELD Life75/50/25 Talk latches
-	// SAY_WEAK75/50/25, NOT_STARTED despawn-respawn, TYPE_RIFT DONE ->
-	// SAY_WIN + SetData DONE) — documented in
-	// lua_scripts/kalimdor/the_black_morass.lua, not wired. npc_time_rift
-	// (NPC_TIME_RIFT 17838) is DOCUMENTED-not-registered: the 15s
-	// PortalWaves wave pump needs summon + instance-data bridges that
-	// do not exist (standing).
+	// old_hillsbrad self-kill-skip convention). The medivh arms
+	// (Reset channel management, MoveInLineOfSight player-intro and
+	// infinite-mob legs via the ev7 poll, SpellHit via event 14, and
+	// the UpdateAI corrupt-timer + Check_Timer machine) are ported
+	// in lua_scripts/kalimdor/the_black_morass.lua against the shared
+	// instanceData table, and the instance portal machine lives in
+	// lua_scripts/kalimdor/instance_the_black_morass.lua. npc_time_rift
+	// (NPC_TIME_RIFT 17838): 15s PortalWaves wave pump (instance file,
+	// started at spawn) + boss-death channel-break legs (events
+	// 20/21) + OnDied cleanup, all in the_black_morass.lua.
 	RegisterLuaBoss("the_black_morass", 15608)
+	RegisterLuaBoss("the_black_morass", 17838)
 
 	// boss_kurinnaxx (Kurinnaxx, entry 15348 — C++-verified via
 	// ruins_of_ahnqiraj.h:41's NPC_KURINNAXX constant; the

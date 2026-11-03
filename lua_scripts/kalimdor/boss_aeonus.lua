@@ -46,8 +46,9 @@
 -- Unmodeled (documented-only, no bridges):
 -- - JustDied's instance legs: instance->SetData(TYPE_RIFT = 2, DONE) +
 --   instance->SetData(TYPE_MEDIVH = 1, DONE) (the "FIXME: later should be
---   removed" comment is C++-verbatim) — instance-data bridge blocked
---   (standing).
+--   removed" comment is C++-verbatim) — PORTED via the shared
+--   instanceData table (see instance_the_black_morass.lua); only the
+--   DONE quest-credit branch stays out (no bridge).
 -- - SPELL_CLEAVE 40504 is declared in the C++ enum but never cast in
 --   C++ — no cast arm exists to port (the lieutenant_drake
 --   ExplodingShout_Timer case).
@@ -160,6 +161,21 @@ end
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied instance legs (boss_aeonus.cpp:93-94):
+    -- SetData(TYPE_RIFT, DONE) + SetData(TYPE_MEDIVH, DONE) (the
+    -- "FIXME: later should be removed" comment is C++-verbatim).
+    -- Written to the shared instanceData table (see
+    -- instance_the_black_morass.lua); the DONE quest-credit branch
+    -- of SetData stays out (no quest-event-happens bridge). Medivh's
+    -- check tick picks the DONE states up as its WIN leg.
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.riftState = 3
+            data.medivhState = 3
+        end
+    end
 end
 
 local function onAIUpdate(event, creature)
