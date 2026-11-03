@@ -2869,6 +2869,48 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.sendPlayerUpdate()
 		return nil, nil
 	}
+	// SetPowerType is Unit::SetPowerType (Unit.cpp:5523-5569) via
+	// Eluna (UnitMethods.h:1721): the early return on an unchanged
+	// type, then a session-only PowerTypeOverride read back by
+	// playerPowerType (and therefore by GetPowerType, SetPower's
+	// -1 default and sendPlayerUpdate), the FactionOverride
+	// precedent. The max legs follow GetCreatePowerValue
+	// (Unit.cpp:9679-9701): ENERGY 100, RAGE 1000, FOCUS/HAPPINESS
+	// 0; MANA/RUNE/RUNIC keep their banked max (Player::
+	// UpdateMaxPower's intellect/modifier recompute is unmodeled).
+	// The current-power legs follow the C++ switch: RAGE resets to
+	// 0, FOCUS fills to its max (0), every other type keeps its own
+	// stored value. A shapeshift form change clears the override
+	// (C++ UpdateDisplayPower re-derives the type).
+	methods["SetPowerType"] = func(_ context.Context, args []any) ([]any, error) {
+		value, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if value >= 7 {
+			return nil, fmt.Errorf("power type %d is invalid", value)
+		}
+		power := int(value)
+		if int(playerPowerType(state)) == power {
+			return nil, nil
+		}
+		state.PowerTypeOverride = uint8(power)
+		state.PowerTypeOverrideSet = true
+		switch power {
+		case 3: // POWER_ENERGY
+			state.MaxPowers[power] = 100
+		case 1: // POWER_RAGE
+			state.MaxPowers[power] = 1000
+			state.Powers[power] = 0
+		case 2: // POWER_FOCUS
+			state.MaxPowers[power] = 0
+			state.Powers[power] = 0
+		case 4: // POWER_HAPPINESS
+			state.MaxPowers[power] = 0
+		}
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
 	// SetRooted is Unit::SetRooted (UnitMethods.h:1932):
 	// SetControlled(apply, UNIT_STATE_ROOT), defaulting to true
 	// like C++'s default argument. The session rooted flag (IsRooted

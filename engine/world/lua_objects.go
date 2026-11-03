@@ -1869,6 +1869,88 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			map[int]uint32{unitFieldMaxPower1 + int(power): amt})
 		return nil, nil
 	}
+	// SetPowerType is Unit::SetPowerType (Unit.cpp:5523-5569) via
+	// Eluna (UnitMethods.h:1721) for session creatures: the
+	// handler twin's leg over the re-resolved motion (silent no-op
+	// when gone), with the C++ 0-6 domain instead of the handler
+	// twin's 0-4 cap (the session power trio already serves 0-6).
+	// The early return on an unchanged type, the
+	// GetCreatePowerValue max legs (Unit.cpp:9679-9701: ENERGY
+	// 100, RAGE 1000, FOCUS/HAPPINESS 0, RUNIC 1000, RUNE 0; MANA
+	// keeps its banked spawn mana, Creature::UpdateMaxPower's
+	// modifier legs unmodeled), and the current-power legs (RAGE
+	// resets to 0, FOCUS fills to its max of 0, others keep their
+	// own stored value) all mirror the handler twin.
+	methods["SetPowerType"] = func(_ context.Context, args []any) ([]any, error) {
+		powerType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if powerType >= 7 {
+			return nil, fmt.Errorf("power type %d is invalid", powerType)
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if motion.PowerType == powerType {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.PowerType = powerType
+		updates := map[int]uint32{}
+		switch powerType {
+		case 3: // POWER_ENERGY
+			motion.MaxPowers[powerType] = 100
+			motion.BaseMaxPowers[powerType] = 100
+			updates[unitFieldMaxPower1+int(powerType)] = 100
+		case 1: // POWER_RAGE
+			motion.MaxPowers[powerType] = 1000
+			motion.BaseMaxPowers[powerType] = 1000
+			updates[unitFieldMaxPower1+int(powerType)] = 1000
+			motion.Powers[powerType] = 0
+			updates[unitFieldPower1+int(powerType)] = 0
+		case 2: // POWER_FOCUS
+			motion.MaxPowers[powerType] = 0
+			motion.BaseMaxPowers[powerType] = 0
+			updates[unitFieldMaxPower1+int(powerType)] = 0
+			motion.Powers[powerType] = 0
+			updates[unitFieldPower1+int(powerType)] = 0
+		case 4: // POWER_HAPPINESS
+			motion.MaxPowers[powerType] = 0
+			motion.BaseMaxPowers[powerType] = 0
+			updates[unitFieldMaxPower1+int(powerType)] = 0
+		case 5: // POWER_RUNE
+			motion.MaxPowers[powerType] = 0
+			motion.BaseMaxPowers[powerType] = 0
+			updates[unitFieldMaxPower1+int(powerType)] = 0
+		case 6: // POWER_RUNIC_POWER
+			motion.MaxPowers[powerType] = 1000
+			motion.BaseMaxPowers[powerType] = 1000
+			updates[unitFieldMaxPower1+int(powerType)] = 1000
+		}
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.server.motionMu.Unlock()
+		if len(updates) > 0 {
+			s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, updates)
+		}
+		return nil, nil
+	}
+	// GetPowerType is Unit::GetPowerType for session creatures: the
+	// live motion type, not the generic fallback's missing-field 0
+	// (this builder's Fields carry no PowerType, so the fallback
+	// always read 0 here); a motion that no longer resolves reads
+	// 0. This readback is what lets a script verify a SetPowerType
+	// call on the same object.
+	methods["GetPowerType"] = luaNoArgs(func() any {
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			s.server.motionMu.Lock()
+			defer s.server.motionMu.Unlock()
+			return motion.PowerType
+		}
+		return uint32(0)
+	})
 	// RemoveAllAuras is Unit::RemoveAllAuras (Unit.cpp:4282) for
 	// session creatures: the full strip via clearCreatureAuras, the
 	// handler twin's funnel, over the motion's aura key.
@@ -2706,6 +2788,62 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil && motion.ThreatMgr != nil {
 			motion.ThreatMgr.ScaleThreat(victimGUID, float32(0.01*float64(100+pct)))
 		}
+		return nil, nil
+	}
+	// AddThreat is the handler twin's arm (lua_creature_events.go,
+	// ScriptedAI::AddThreat direction: this creature's list gains
+	// the amount for the victim, UnitMethods.h:2934's Eluna shape
+	// minus its spell argument) for session creatures: the victim
+	// may be a creature/player object or a raw GUID, a nil/unknown
+	// victim no-ops, and a motion that no longer resolves is a
+	// silent no-op. The eager victim-switch sync (TargetGUID +
+	// HIGHEST_THREAT_UPDATE + ATTACK_START broadcasts, gated on
+	// wasInCombat and non-passive) mirrors the handler arm exactly;
+	// the Eluna spell argument's NO_THREAT / NO_INITIAL_AGGRO gates
+	// (ThreatManager.cpp:310-317) are not carried, same as the
+	// handler twin.
+	methods["AddThreat"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, nil
+		}
+		victimGUID := luaObjectGUID(args[0])
+		if victimGUID == 0 {
+			return nil, nil
+		}
+		amount, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		wasInCombat := motion.InCombat
+		passive := isCreaturePassive(motion)
+		var switched bool
+		var newVictim uint64
+		var entries []protocol.ThreatEntry
+		var switchStart pendingAttackStart
+		var mapID, instanceID uint32
+		var x, y, z float32
+		var phase uint32
+		if motion.ThreatMgr != nil {
+			switched, newVictim = motion.ThreatMgr.AddThreat(victimGUID, amount, false)
+			if switched && newVictim != motion.TargetGUID {
+				motion.TargetGUID = newVictim
+				entries = motion.ThreatMgr.SortedEntries()
+				mapID, instanceID, x, y, z, phase = motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+				if wasInCombat && !passive {
+					switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: mapID, instanceID: instanceID, x: x, y: y, z: z, phase: phase}
+				}
+			}
+		}
+		s.server.motionMu.Unlock()
+		if entries != nil {
+			s.server.broadcastHighestThreatUpdateInInstance(mapID, instanceID, x, y, z, motion.GUID, newVictim, entries, phase)
+		}
+		s.server.broadcastPendingAttackStarts(switchStart)
 		return nil, nil
 	}
 	// luaAngleTarget resolves the target of the WorldObject angle methods

@@ -16,6 +16,9 @@ func playerPowerType(state *playerState) uint8 {
 	if state == nil {
 		return 0
 	}
+	if state.PowerTypeOverrideSet {
+		return state.PowerTypeOverride
+	}
 	switch state.ShapeshiftForm {
 	case 1, 7:
 		return 3
@@ -29,6 +32,12 @@ func playerPowerType(state *playerState) uint8 {
 func updatePlayerShapeshiftForm(state *playerState, data *wotlk.Store, form uint8, spellID uint32) uint32 {
 	if state == nil {
 		return 0
+	}
+	if state.ShapeshiftForm != form {
+		// A form change re-derives the power type (C++
+		// UpdateDisplayPower), so a direct SetPowerType override
+		// does not survive it.
+		state.PowerTypeOverrideSet = false
 	}
 	if state.ShapeshiftForm == 0 && form != 0 {
 		state.ShapeshiftBaseAttackTime, state.ShapeshiftBaseOffhandAttackTime, state.ShapeshiftBaseRangedAttackTime = state.AttackTime, state.OffhandAttackTime, state.RangedAttackTime
