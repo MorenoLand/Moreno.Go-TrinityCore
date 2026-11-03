@@ -1164,13 +1164,33 @@ func (s *session) clearTaxiBenchmarkMode() {
 // flight (teleports, BG entry, logout, ...). Pending hop/segment timers die
 // on the flight-pointer check.
 func (s *session) finishTaxiFlight() {
+	s.endTaxiFlight()
+}
+
+// endTaxiFlight is finishTaxiFlight plus the FlightPathMovementGenerator::
+// DoFinalize destination capture (FlightPathMovementGenerator.cpp:150-176):
+// the destination id is read BEFORE the flight is dropped, because
+// DoFinalize captures GetTaxiDestination first and clears the destinations
+// second (PlayerTaxi.h:66: m_TaxiDestinations[1] while size >= 2, i.e. the
+// current leg's destination — Go's taxiFlight.nodes[1] on the same
+// pop-on-hop-arrival layout). Capturing under the same lock that nils the
+// flight keeps a hop-arrival timer from advancing the nodes between the
+// capture and the drop. No flight, or fewer than 2 nodes left, reports
+// ok=false, matching C++'s 0 id whose node lookup fails; the flight is
+// still ended in both cases.
+func (s *session) endTaxiFlight() (uint32, bool) {
 	s.taxiMu.Lock()
+	var dest uint32
+	ok := false
+	if s.inFlight && s.taxiFlight != nil && len(s.taxiFlight.nodes) >= 2 {
+		dest, ok = s.taxiFlight.nodes[1], true
+	}
 	wasInFlight := s.inFlight
 	s.taxiFlight = nil
 	s.inFlight = false
 	s.taxiMu.Unlock()
 	if !wasInFlight || s.player == nil {
-		return
+		return 0, false
 	}
 	s.player.TaxiPath = ""
 	if s.currentPlayer() != nil && s.player.MountDisplayID != 0 {
@@ -1178,6 +1198,7 @@ func (s *session) finishTaxiFlight() {
 		s.sendPlayerMountUpdate()
 	}
 	s.clearTaxiBenchmarkMode()
+	return dest, ok
 }
 
 // initTaxiNodesForLevel mirrors PlayerTaxi::InitTaxiNodesForLevel for the

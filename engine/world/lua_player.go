@@ -4335,16 +4335,51 @@ func (s *session) luaPlayer() *scripting.Object {
 		return nil, nil
 	}
 	// MoveClear and MoveExpire are UnitMethods::MoveClear/MoveExpire
-	// (UnitMethods.h:2142-2172, Trinity arm) = MotionMaster::Clear(),
-	// collapsed to the MoveStop state leg on the creature precedent
-	// (lua_creature_events.go): Go has no player generator stack to
-	// remove. DELTA: C++ Clear finalizes the taxi generator, and the
-	// flight generator's active Finalize teleports the player to the
-	// destination node (FlightPathMovementGenerator.cpp:150-176); Go
-	// has no destination-teleport leg, so the flight continues and
-	// only the mask bits clear. That leg is a separate unit.
-	methods["MoveClear"] = methods["MoveStop"]
-	methods["MoveExpire"] = methods["MoveStop"]
+	// (UnitMethods.h:2142-2172, Trinity arm) = MotionMaster::Clear() =
+	// DirectClear -> Pop(true) -> Delete(active=true) -> the active
+	// generator's Finalize(owner, active=true) (MotionMaster.cpp:1097,
+	// 1218). Outside a flight there is no Go generator stack to drop,
+	// so the binding is the MoveStop mask leg. Inside a flight the
+	// active generator is the taxi flight, and its Finalize is
+	// FlightPathMovementGenerator::DoFinalize
+	// (FlightPathMovementGenerator.cpp:150-176): the destination id is
+	// captured before the destinations clear (endTaxiFlight, the
+	// GetTaxiDestination twin), the flight ends (TaxiPath clear,
+	// dismount, benchmark clear, pending timers die on the
+	// flight-pointer check), then StopMoving (the mask leg above) and
+	// TeleportTo(node continent, node pos, owner orientation) with
+	// SetFallInformation(0, node Z). The teleport half rides
+	// teleportTo (the TeleportTo twin) with an explicit fall-info tail;
+	// a missing node or invalid location ends the flight with no
+	// teleport, matching C++'s conditional on the node lookup — the
+	// destinations clear runs before that lookup in both. DELTA:
+	// DoFinalize also clears UNIT_FLAG_REMOVE_CLIENT_CONTROL, which
+	// Go flights never set (only charm does, and charm owns its
+	// clear), so that flag leg is not carried: a charm-during-flight
+	// edge case, not a flight leg.
+	methods["MoveClear"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.playerUnitStateClear(playerMoveHaltMask)
+		if s.player == nil {
+			return nil, nil
+		}
+		dest, ok := s.endTaxiFlight()
+		if !ok || s.server == nil || s.server.Data == nil {
+			return nil, nil
+		}
+		node, found, err := s.server.Data.TaxiNode(dest)
+		if err != nil || !found {
+			return nil, nil
+		}
+		ori := s.player.Orientation
+		if !s.validTrinityMapLocation(uint32(node.ContinentID), node.X, node.Y, node.Z, ori) {
+			return nil, nil
+		}
+		if s.teleportTo(uint32(node.ContinentID), node.X, node.Y, node.Z, ori) {
+			s.lastFallZ, s.lastFallTime = node.Z, 0
+		}
+		return nil, nil
+	}
+	methods["MoveExpire"] = methods["MoveClear"]
 	// MoveIdle is UnitMethods::MoveIdle (UnitMethods.h:2174-2178) =
 	// MotionMaster::MoveIdle(), which only fills MOTION_SLOT_DEFAULT
 	// (autofilled with IDLE when empty, MotionMaster.h:134) and never
@@ -4354,6 +4389,26 @@ func (s *session) luaPlayer() *scripting.Object {
 	// exact no-op: no mask write, since MoveIdle clears no other
 	// slot's state.
 	methods["MoveIdle"] = func(_ context.Context, _ []any) ([]any, error) {
+		return nil, nil
+	}
+	// MoveRandom is UnitMethods::MoveRandom (UnitMethods.h:2185-2199) =
+	// MotionMaster::MoveRandom, which adds the wander generator only
+	// for TYPEID_UNIT (MotionMaster.cpp:575-582) — for players the
+	// call is a silent no-op. The radius arg is still validated, the
+	// Eluna CHECKVAL leg (creature MoveRandom precedent).
+	methods["MoveRandom"] = func(_ context.Context, args []any) ([]any, error) {
+		if _, err := luaFloat32Arg(args, 0); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	// MoveHome is UnitMethods::MoveHome (UnitMethods.h:2201-2205) =
+	// MotionMaster::MoveTargetedHome, which returns after an error log
+	// for non-creatures (MotionMaster.cpp:551-557: ToCreature nil) —
+	// for players the observable effect is nil, so the binding is an
+	// exact no-op like MoveIdle above (the C++ log line has no
+	// script-visible twin).
+	methods["MoveHome"] = func(_ context.Context, _ []any) ([]any, error) {
 		return nil, nil
 	}
 	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1532-1546) for
