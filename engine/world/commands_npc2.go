@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // npc command port, chunk 2: the "set" sub-table (12 arms) and the remaining
@@ -25,9 +26,12 @@ import (
 // phaseMask, `set entry` on the seatCreatureEntry re-seat, `set allowmove`
 // on the world movement toggle, `set wanderdistance` on the live Wander /
 // MoveType slots plus the spawn row, `set spawntime` on the live respawn-delay
-// slot plus the spawn row) and 15 are documented-blocked: every other arm
-// needs the creature AI/motion/loot/pet bridges, the linked-respawn manager,
-// or the spawn-group manager, none of which exist in the Go tree.
+// slot plus the spawn row, `set link` on the linked_respawn row, `set data`
+// on the AI/script-name message tail, `evade` on the triggerCreatureEvade
+// twin) and 12 are documented-blocked: info, playemote, say, textemote,
+// whisper, yell, tame, spawngroup, despawngroup, follow, follow stop and
+// showloot need the creature AI/motion/loot/pet bridges or the spawn-group
+// manager, neither of which exists in the Go tree.
 // Selected-creature resolution itself exists (castCommandSelectedCreature,
 // the getSelectedCreature twin).
 
@@ -56,7 +60,7 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	case strings.HasPrefix("level", sub):
 		s.handleNPCSetLevel(ctx, rest)
 	case strings.HasPrefix("link", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetLink, "set link")
+		s.handleNPCSetLink(ctx, rest)
 	case strings.HasPrefix("model", sub):
 		s.handleNPCSetModel(ctx, rest)
 	case strings.HasPrefix("movetype", sub):
@@ -68,7 +72,7 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	case strings.HasPrefix("spawntime", sub):
 		s.handleNPCSetSpawnTime(ctx, rest)
 	case strings.HasPrefix("data", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetData, "set data")
+		s.handleNPCSetData(ctx, rest)
 	default:
 		s.sendSysMessage(syntax)
 	}
@@ -222,7 +226,7 @@ func (s *session) handleNPCChunk2(ctx context.Context, sub string, rest []string
 	case strings.HasPrefix("follow", sub):
 		s.handleNPCFollow(ctx, rest)
 	case strings.HasPrefix("evade", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCEvade, "evade")
+		s.handleNPCEvade(ctx, rest)
 	case strings.HasPrefix("showloot", sub):
 		s.npcNeedCreature(ctx, permissionCommandNPCShowLoot, "showloot")
 	default:
@@ -674,6 +678,178 @@ func (s *session) handleNPCSetSpawnTime(ctx context.Context, args []string) {
 	s.server.motionMu.Unlock()
 	_, _ = db.ExecContext(ctx, "UPDATE creature SET spawntimesecs = ? WHERE guid = ?", secs, uint32(guid&0x00FFFFFF))
 	s.sendSysMessage(fmt.Sprintf("Spawn time set to %d seconds.", secs))
+}
+
+// npcLinkBlocked mirrors the ObjectMgr::SetCreatureLinkedRespawn
+// (ObjectMgr.cpp:1939) failure legs: the maps must match, the master's map
+// must be instanceable, and the spawn masks must overlap. Every failure
+// collapses to the command's "can't link" message in C++, so the caller
+// needs only the boolean.
+func npcLinkBlocked(masterMap, slaveMap, masterMask, slaveMask uint32, masterInstanceable bool) bool {
+	return masterMap != slaveMap || !masterInstanceable || masterMask&slaveMask == 0
+}
+
+// handleNPCSetLink mirrors HandleNpcSetLinkCommand (cs_npc.cpp:1275): the
+// selected creature must have a spawn row (a temp summon reports "isn't in
+// creature table"), a zero linkguid unlinks (the DELETE leg of
+// SetCreatureLinkedRespawn), and a live link is the REPLACE leg over
+// (guid, linkedGuid, linkType 0). No in-memory store update is needed: the
+// respawn tick's linked-deferral leg reads the linked_respawn row directly,
+// so the row takes live effect at the next respawn check.
+func (s *session) handleNPCSetLink(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetLink) {
+		return
+	}
+	const syntax = "Syntax: .npc set link <linkguid>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	link, ok := npcVendorUintArg(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	guid := uint32(motion.GUID & 0x00FFFFFF)
+	var masterMap, masterMask uint32
+	if err := db.QueryRowContext(ctx, "SELECT map, spawnMask FROM creature WHERE guid = ?", guid).Scan(&masterMap, &masterMask); err != nil {
+		s.sendSysMessage(fmt.Sprintf("Selected creature %d isn't in creature table", guid))
+		return
+	}
+	if link == 0 {
+		_, _ = db.ExecContext(ctx, "DELETE FROM linked_respawn WHERE guid = ? AND linkType = 0", guid)
+		s.sendSysMessage(fmt.Sprintf("LinkGUID '%d' added to creature with DBTableGUID: '%d'", link, guid))
+		return
+	}
+	var slaveMap, slaveMask uint32
+	if err := db.QueryRowContext(ctx, "SELECT map, spawnMask FROM creature WHERE guid = ?", link).Scan(&slaveMap, &slaveMask); err != nil {
+		s.sendSysMessage(fmt.Sprintf("Selected creature can't link with guid '%d'", link))
+		return
+	}
+	instanceable := false
+	if s.server != nil && s.server.Data != nil {
+		if mapInfo, found, err := s.server.Data.Map(masterMap); err == nil && found {
+			instanceable = mapInfo.InstanceType != 0
+		}
+	}
+	if npcLinkBlocked(masterMap, slaveMap, masterMask, slaveMask, instanceable) {
+		s.sendSysMessage(fmt.Sprintf("Selected creature can't link with guid '%d'", link))
+		return
+	}
+	_, _ = db.ExecContext(ctx, "REPLACE INTO linked_respawn (guid, linkedGuid, linkType) VALUES (?, ?, 0)", guid, link)
+	s.sendSysMessage(fmt.Sprintf("LinkGUID '%d' added to creature with DBTableGUID: '%d'", link, guid))
+}
+
+// npcSetDataAIOrScript mirrors the HandleNpcSetDataCommand message tail
+// (cs_npc.cpp:445): the AI name wins, else the script name, else the
+// no-AI-or-script text.
+func npcSetDataAIOrScript(aiName, scriptName string) string {
+	if aiName != "" {
+		return "AI type: " + aiName
+	}
+	if scriptName != "" {
+		return "Script Name: " + scriptName
+	}
+	return "No AI or Script Name Set"
+}
+
+// handleNPCSetData mirrors HandleNpcSetDataCommand (cs_npc.cpp:445). The
+// SetData call itself has no Go dispatch: no creature event carries it
+// (scripting runtime events 1-37 have no SetData hook), and the C++ base
+// ScriptedAI::SetData is a no-op unless the script overrides it, which a Go
+// Lua script cannot. The wired leg is the command's own effect: the message
+// with the creature's GUID, entry, name, data pair and AI/script-name tail.
+// The LANG_NPC_SETDATA wording is a plain-English recall (no in-tree seed).
+func (s *session) handleNPCSetData(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetData) {
+		return
+	}
+	const syntax = "Syntax: .npc set data <data1> <data2>"
+	if len(args) != 2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	data1, ok1 := npcVendorUintArg(args[0])
+	data2, ok2 := npcVendorUintArg(args[1])
+	if !ok1 || !ok2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	guid, entry, name, aiName, scriptName := uint32(motion.GUID&0x00FFFFFF), motion.Entry, motion.Name, motion.AIName, motion.ScriptName
+	s.server.motionMu.Unlock()
+	s.sendSysMessage(fmt.Sprintf("Set data %d %d for creature %s (GUID %d, entry %d): %s", data1, data2, name, guid, entry, npcSetDataAIOrScript(aiName, scriptName)))
+}
+
+// npcEvadeParse parses the optional ".npc evade [why] [force]" tail: a
+// numeric why is accepted and ignored (CreatureAI::_EnterEvadeMode ignores
+// its why argument), "force" arms the clear-then-evade leg, anything else
+// is a parser error.
+func npcEvadeParse(args []string) (force bool, ok bool) {
+	for _, arg := range args {
+		if strings.EqualFold(arg, "force") {
+			force = true
+			continue
+		}
+		if _, good := npcVendorUintArg(arg); !good {
+			return false, false
+		}
+	}
+	return force, true
+}
+
+// handleNPCEvade mirrors HandleNpcEvadeCommand (cs_npc.cpp:1114) on the
+// triggerCreatureEvade twin: a selected non-pet creature, silent when dead
+// (C++ _EnterEvadeMode refuses dead creatures) or already evading without
+// force (C++ IsInEvadeMode refuses the re-entry), and the force leg clears
+// the evade state first so the evade re-runs. The IsAIEnabled gate is
+// vacuous in Go (no AI-disable model; every motion is AI-enabled), and the
+// charmed-creature owner-follow leg of C++ EnterEvadeMode is unmodeled (the
+// generic reset runs instead).
+func (s *session) handleNPCEvade(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCEvade) {
+		return
+	}
+	force, ok := npcEvadeParse(args)
+	if !ok {
+		s.sendSysMessage("Syntax: .npc evade [why] [force]")
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil || motionIsPet(motion) {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	evading, dead := motion.Evading, motion.Health == 0
+	if force {
+		motion.Evading = false
+	}
+	s.server.motionMu.Unlock()
+	if dead || (evading && !force) {
+		return
+	}
+	s.server.triggerCreatureEvade(ctx, motion, time.Now())
 }
 
 // handleNPCFollow handles "follow" and the two-level "follow stop" arm
