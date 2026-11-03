@@ -3227,6 +3227,130 @@ func (s *session) luaPlayer() *scripting.Object {
 	// keeping the all-four-required shape that matches NearTeleport's
 	// four CHECKVALs.
 	methods["NearTeleport"] = methods["TeleportNear"]
+	// GetSpeed is UnitMethods::GetSpeed (UnitMethods.h:1392-1404) for
+	// players: Unit::GetSpeed (Unit.cpp:8811-8814) = rate *
+	// playerBaseMoveSpeed[type]. Go's movementSpeeds() (movement_speed.go)
+	// is that product already folded: the aura-derived absolute speeds,
+	// shadowed by any live GM/script rate override (gmSpeedOverride).
+	// All 9 UnitMoveType indices resolve here, unlike the creature
+	// surface's WALK/RUN/FLIGHT-only model — players carry no
+	// template-speed gap. A type >= MAX_MOVE_TYPE (9) errors, mirroring
+	// C++'s luaL_argerror "valid UnitMoveType expected".
+	methods["GetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if mt >= 9 {
+			return nil, fmt.Errorf("GetSpeed requires a valid UnitMoveType, got %d", mt)
+		}
+		return []any{s.movementSpeeds()[mt]}, nil
+	}
+	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1532-1546) for
+	// players: the Trinity arm calls SetSpeedRate(type, rate) directly
+	// (the forced flag is voided in C++), so this rides setGMSpeedRate
+	// (movement_speed.go), the Unit::SetSpeedRate twin: the no-op-on-
+	// unchanged gate, the forced-speed-change ACK registration, and the
+	// SMSG_FORCE_*_SPEED_CHANGE to self plus MSG_MOVE_SET_*_SPEED to
+	// nearby. A rate <= 0 follows the creature SetSpeedRate precedent
+	// instead of C++'s clamp-to-0 store: it clears the script override
+	// and re-sends the aura-derived speed, so GetSpeed and the client
+	// agree (C++ would hold speed 0 until the next UpdateSpeed).
+	// DELTAS: PropagateSpeedChange is MotionMaster-only (no Go bridge);
+	// the pet propagation (Unit.cpp:8855, out-of-combat only) needs no
+	// bridge since Go pets have no speed model; an aura-driven recompute
+	// for the type clears the override, exactly like C++ UpdateSpeed
+	// overwriting m_speed_rate.
+	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if mt >= 9 {
+			return nil, fmt.Errorf("SetSpeed requires a valid UnitMoveType, got %d", mt)
+		}
+		rate, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if rate <= 0 {
+			if s.gmSpeedRates[int(mt)] != 0 {
+				s.clearGMSpeedRate(int(mt))
+				opcodes := speedForceOpcodes[mt]
+				s.sendRuntimeMovementSpeed(opcodes[0], opcodes[1], s.movementSpeeds()[mt], mt == moveTypeRun)
+			}
+			return nil, nil
+		}
+		s.setGMSpeedRate(int(mt), rate)
+		return nil, nil
+	}
+	// SetSpeedRate is the same rate-form bridge the creature surface
+	// exposes; Eluna binds only SetSpeed, but scripts calling the C++
+	// name directly get the identical arm.
+	methods["SetSpeedRate"] = methods["SetSpeed"]
+	// applyPlayerFacing is the shared SetFacing/SetFacingToObject tail:
+	// C++ Unit::SetFacingTo (Unit.cpp:13669) launches an in-place
+	// MoveTo+SetFacing spline, but Go has no player spline, so the twin
+	// writes state.Orientation and replays the current position with the
+	// new facing as a MSG_MOVE_HEARTBEAT to self and the visible set —
+	// the sendTransportMovement precedent (transports.go) for
+	// server-driven player movement. DELTA: the C++ IsStopped gate is
+	// ungated, same delta as the creature twin; the spline turn is a
+	// snap, not an interpolated turn.
+	applyPlayerFacing := func(ori float32) {
+		s.player.Orientation = ori
+		info := s.movementInfoForCreate(*s.player)
+		packet := protocol.NewBuffer(96)
+		writeMovementInfo(packet, info)
+		_ = s.write(uint16(protocol.OpcodeMSG_MOVE_HEARTBEAT), packet.Bytes(), true)
+		if s.server != nil {
+			s.server.broadcastMovement(uint16(protocol.OpcodeMSG_MOVE_HEARTBEAT), packet.Bytes(), info, s)
+		}
+	}
+	// SetFacing is UnitMethods::SetFacing (UnitMethods.h:1766-1771) for
+	// players: SetFacingTo(o) verbatim, via applyPlayerFacing above.
+	methods["SetFacing"] = func(_ context.Context, args []any) ([]any, error) {
+		ori, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		applyPlayerFacing(ori)
+		return nil, nil
+	}
+	// SetFacingTo is the C++ Unit::SetFacingTo name, aliased to SetFacing
+	// like the creature surface does.
+	methods["SetFacingTo"] = methods["SetFacing"]
+	// SetFacingToObject is UnitMethods::SetFacingToObject
+	// (UnitMethods.h:1778-1783) for players: Unit::SetFacingToObject
+	// computes the absolute angle to the target (Unit.cpp:13677, the
+	// GetAbsoluteAngle twin: atan2 normalized to [0, 2pi)) and turns in
+	// place, so this resolves the target's X/Y through the object fields
+	// (creature/player/GO objects all carry them) and rides the same
+	// heartbeat tail. An argument without X/Y fields errors (the Eluna
+	// CHECKOBJ leg).
+	methods["SetFacingToObject"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target")
+		}
+		tx, ok := objectFloat32Field(target, "X")
+		if !ok {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target with a position")
+		}
+		ty, ok := objectFloat32Field(target, "Y")
+		if !ok {
+			return nil, fmt.Errorf("SetFacingToObject requires a WorldObject target with a position")
+		}
+		angle := float32(math.Atan2(float64(ty-s.player.Y), float64(tx-s.player.X)))
+		if angle < 0 {
+			angle += 2 * math.Pi
+		}
+		applyPlayerFacing(angle)
+		return nil, nil
+	}
 	methods["Mute"] = func(_ context.Context, args []any) ([]any, error) {
 		seconds, err := luaUint32Arg(args, 0)
 		if err != nil {
