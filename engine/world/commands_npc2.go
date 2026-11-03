@@ -17,11 +17,10 @@ import (
 // (cs_npc.cpp). Chunk 1 (commands_npc.go) covered the "add" sub-table and
 // move/delete/near.
 //
-// Of these 26 arms, one is partial (`set movetype`: the GUID form updates
-// the creature row in the world DB, the live creature store, and the
-// selection form adds the live MoveType slot, but the LoadPath /
-// MotionMaster-Initialize / respawn legs have no Go bridge) and twenty-five
-// are wired (`delete item` on the npc_vendor rows, `set factionid` on the live faction
+// All 26 arms are wired (`set movetype` on the live MoveType slot plus the
+// LoadPath(0) / MotionMaster-Initialize / JUST_DIED-respawn legs, the GUID
+// form running the same live legs for a loaded creature and messaging only
+// for an offline spawn row, `delete item` on the npc_vendor rows, `set factionid` on the live faction
 // slot plus the template row, `set flag` on the live NPC-flags slot plus the
 // template row, `set level` on the live level/health slots plus the spawn
 // row's curhealth, `set model` on the live display slots plus the spawn
@@ -108,13 +107,19 @@ func (s *session) handleNPCSetAllowMove(ctx context.Context) {
 }
 
 // handleNPCSetMoveType mirrors HandleNpcSetMoveTypeCommand (cs_npc.cpp:716):
-// ".npc set movetype [guid] <stay|random|way> [nodel]". The GUID form updates
-// the creature row's MovementType in the world DB (the live creature store);
-// the selection form resolves the selected creature (non-pet, the C++ gate)
-// and additionally writes the live MoveType slot. The LoadPath(0) /
-// MotionMaster-Initialize / JUST_DIED-respawn legs have no Go bridge in
-// either form, and nodel only changes the message, as in C++ (the waypoint
-// deletion itself is commented out there too).
+// ".npc set movetype [guid] <stay|random|way> [nodel]". The selection form
+// resolves the selected creature (non-pet, the C++ gate), writes the live
+// MoveType slot, then runs npcMovementReset: LoadPath(0) (the waypoint path
+// id reset to 0, re-reading waypoint_data id 0), MotionMaster-Initialize
+// (the in-flight default-generator state cleared; the step tick re-derives
+// the generator from the MoveType slot), and the JUST_DIED-respawn leg for
+// an alive creature (home snap at full health), before the SaveToDB twin
+// (MovementType plus the post-respawn position). The GUID form runs the
+// same live legs for a creature loaded in the GM's map/instance
+// (GetCreatureFromPlayerMapByDbGuid, no pet gate on this form); with no
+// live creature C++ performs no SaveToDB, so an existing spawn row is only
+// validated and messaged, never updated. Nodel only changes the message,
+// as in C++ (the waypoint deletion itself is commented out there too).
 func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 	const syntax = "Syntax: .npc set movetype [guid] <stay|random|way> [nodel]"
 	if s.miscDeny(ctx, permissionCommandNPCSetMoveType) {
@@ -142,7 +147,11 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 		guid := motion.GUID
 		motion.MoveType = uint32(moveType)
 		s.server.motionMu.Unlock()
-		_, _ = db.ExecContext(ctx, "UPDATE creature SET MovementType = ? WHERE guid = ?", moveType, uint32(guid&0x00FFFFFF))
+		s.npcMovementReset(ctx, motion, true)
+		s.server.motionMu.Lock()
+		homeX, homeY, homeZ, homeO := motion.X, motion.Y, motion.Z, motion.Orientation
+		s.server.motionMu.Unlock()
+		_, _ = db.ExecContext(ctx, "UPDATE creature SET MovementType = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?", moveType, homeX, homeY, homeZ, homeO, uint32(guid&0x00FFFFFF))
 		if nodel {
 			s.sendSysMessage(fmt.Sprintf("Move type set to %s. Waypoints not deleted.", title))
 		} else {
@@ -165,14 +174,32 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 		return
 	}
 	nodel := len(args) > 2 && strings.EqualFold(args[2], "nodel")
+	// A creature loaded in the GM's map/instance runs the live legs
+	// (ChatHandler::GetCreatureFromPlayerMapByDbGuid); unlike the
+	// selection form, C++ applies no pet gate on this form.
+	if live := s.npcLiveCreatureBySpawnGUID(guid); live != nil {
+		s.server.motionMu.Lock()
+		live.MoveType = uint32(moveType)
+		s.server.motionMu.Unlock()
+		s.npcMovementReset(ctx, live, true)
+		s.server.motionMu.Lock()
+		homeX, homeY, homeZ, homeO := live.X, live.Y, live.Z, live.Orientation
+		s.server.motionMu.Unlock()
+		_, _ = db.ExecContext(ctx, "UPDATE creature SET MovementType = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?", moveType, homeX, homeY, homeZ, homeO, guid)
+		if nodel {
+			s.sendSysMessage(fmt.Sprintf("Move type set to %s. Waypoints not deleted.", title))
+		} else {
+			s.sendSysMessage(fmt.Sprintf("Move type set to %s.", title))
+		}
+		return
+	}
 	var exists uint32
 	if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE guid = ?", guid).Scan(&exists); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
 		return
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE creature SET MovementType = ? WHERE guid = ?", moveType, guid); err != nil {
-		return
-	}
+	// No live creature means no SaveToDB in C++: the type change is lost
+	// and only the message is printed, so the row is left untouched.
 	// The waypoint-deletion leg is commented out in C++ too; nodel only
 	// changes the message. LANG_MOVE_TYPE_SET 257 / _NODEL 258.
 	if nodel {
@@ -180,6 +207,85 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 	} else {
 		s.sendSysMessage(fmt.Sprintf("Move type set to %s.", title))
 	}
+}
+
+// npcMovementReset mirrors the MotionMaster-Initialize + JUST_DIED-respawn
+// tail shared by HandleNpcSetMoveTypeCommand (cs_npc.cpp:716) and
+// HandleNpcSetWanderDistanceCommand (cs_npc.cpp:840). Initialize clears the
+// in-flight default-generator state (the step tick re-derives the generator
+// from the MoveType slot each tick, so clearing the flight state is the
+// whole Initialize leg); the respawn leg relocates an alive creature to its
+// respawn position at full health (Creature::RemoveCorpse relocates to
+// GetRespawnPosition), broadcast as a home spline plus a health values
+// update on the evade-home precedent. Dead creatures keep their position
+// (C++ resets their generator at respawn instead). Script chase/follow
+// slots survive: they are Go's Lua surface, not C++ generator state, and
+// the tick re-checks them ahead of wander/waypoint. Transport passengers
+// skip the snap (C++ relocates them through the transport instead); the
+// movement clear still applies.
+func (s *session) npcMovementReset(ctx context.Context, motion *creatureMotion, resetPath bool) {
+	if s == nil || s.server == nil || motion == nil {
+		return
+	}
+	pathLoaded := false
+	var points []waypointPoint
+	if resetPath {
+		if db := s.npcWorldDB(); db != nil {
+			points = s.server.loadWaypoints(ctx, 0)
+			pathLoaded = true
+		}
+	}
+	s.server.motionMu.Lock()
+	oldX, oldY, oldZ := motion.X, motion.Y, motion.Z
+	homeX, homeY, homeZ, homeO := motion.HomeX, motion.HomeY, motion.HomeZ, motion.HomeO
+	oldHealth, maxHealth := motion.Health, motion.MaxHealth
+	alive := motion.Health > 0
+	transport := motion.TransportGUID != 0
+	mapID, instanceID, guid, phase := motion.Map, motion.InstanceID, motion.GUID, motion.PhaseMask
+	speed := creatureSplineVelocity(motion, false)
+	if pathLoaded {
+		motion.PathID = 0
+		motion.Points = points
+	}
+	motion.NextIdx = 0
+	motion.Moving = false
+	motion.MoveEnds = time.Time{}
+	motion.WaitUntil = time.Time{}
+	snapped := false
+	if alive && !transport {
+		motion.X, motion.Y, motion.Z = homeX, homeY, homeZ
+		motion.Orientation = homeO
+		motion.Health = maxHealth
+		snapped = true
+	}
+	s.server.motionMu.Unlock()
+	if !snapped {
+		return
+	}
+	if oldHealth != maxHealth {
+		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldHealth: maxHealth})
+	}
+	homeDist := float32(math.Hypot(float64(homeX-oldX), float64(homeY-oldY)))
+	if homeDist > 0.5 && speed >= 0.001 {
+		s.server.broadcastMonsterMoveInInstance(mapID, instanceID, guid, oldX, oldY, oldZ, homeX, homeY, homeZ, splineDurationMs(float64(homeDist), speed), false, 0, false, phase, 0)
+	}
+}
+
+// npcLiveCreatureBySpawnGUID mirrors
+// ChatHandler::GetCreatureFromPlayerMapByDbGuid: the live creature with
+// this spawn GUID in the GM's map/instance, if any.
+func (s *session) npcLiveCreatureBySpawnGUID(spawnGUID uint32) *creatureMotion {
+	if s == nil || s.server == nil || s.player == nil {
+		return nil
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion != nil && uint32(motion.GUID&0x00FFFFFF) == spawnGUID {
+			return motion
+		}
+	}
+	return nil
 }
 
 // parseNPCMoveType maps stay|random|way to the MovementGeneratorType values
@@ -600,8 +706,9 @@ func npcWanderMoveType(dist float64) uint32 {
 // default movement type, and persists both columns
 // (WORLD_UPD_CREATURE_WANDER_DISTANCE) before reporting
 // LANG_COMMAND_WANDER_DISTANCE. The MotionMaster-Initialize and
-// JUST_DIED-respawn legs have no Go bridge; the live legs are the motion
-// Wander slot (read by the random-movement generator) and MoveType.
+// JUST_DIED-respawn legs ride npcMovementReset (no path reload: unlike
+// movetype, C++ does not call LoadPath here); C++ performs no SaveToDB on
+// this arm, so the row update stays at the two columns.
 func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCSetSpawnDist) {
 		return
@@ -635,6 +742,7 @@ func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string)
 	motion.Wander = dist
 	motion.MoveType = moveType
 	s.server.motionMu.Unlock()
+	s.npcMovementReset(ctx, motion, false)
 	_, _ = db.ExecContext(ctx, "UPDATE creature SET wander_distance = ?, MovementType = ? WHERE guid = ?", dist, moveType, uint32(guid&0x00FFFFFF))
 	s.sendSysMessage(fmt.Sprintf("Wander distance set to %g.", dist))
 }
