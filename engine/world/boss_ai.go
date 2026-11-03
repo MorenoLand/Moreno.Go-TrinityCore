@@ -13015,12 +13015,23 @@ func init() {
 	// DespawnOrUnsummon and the LordIllidan LiveCounter() call
 	// have no despawn / cross-creature bridges — documented
 	// only; the Torloth cinematic machine, the Illidan event
-	// controller, the infernal summon pair, the mature/enslaved
-	// drake quest arms and the wilda escort all sit behind
-	// no-summon / movement / SpellHit / quest / escort bridges.
+	// controller, the mature/enslaved drake quest arms and the
+	// wilda escort all sit behind cross-AI / entry / escort
+	// bridges. The infernal attacker Reset + SpellHit arms are
+	// PORTED (lua_scripts/outland/npc_infernal_attacker.lua);
+	// the invis caster stays out (no C++ entry) with its
+	// SetData re-summon leg.
 	RegisterLuaBoss("npc_illidari_spawn", 22075)
 	RegisterLuaBoss("npc_illidari_spawn", 22074)
 	RegisterLuaBoss("npc_illidari_spawn", 19797)
+	// npc_infernal_attacker (Shadowmoon Valley zone script): Reset
+	// invisible + MoveRandom + SpellHit 37277 unflag/unimmune/
+	// display swap — entry 21419 verifiable from the C++
+	// InvisInfernalCaster enum; see lua_scripts/outland/
+	// npc_infernal_attacker.lua. The invis caster + JustDied
+	// SetData re-summon leg stay out (no caster entry, no
+	// creature-by-GUID bridge).
+	RegisterLuaBoss("npc_infernal_attacker", 21419)
 	// npc_enraged_spirit (Shadowmoon Valley zone script): one
 	// CreatureScript AI class serving four entries with a
 	// per-entry timer switch in JustEngagedWith/UpdateAI —
