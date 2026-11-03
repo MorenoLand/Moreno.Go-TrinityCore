@@ -7,23 +7,33 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // misc command ports, chunk 2: misc_commandscript (cs_misc.cpp) rows 92-125
 // in C++ table order (gps through mailbox; the unaura/unbindsight rows were
-// ported in chunk 1, commands_misc.go). Of these 32 arms, 22 are native or
-// partially native and 10 are documented-blocked:
+// ported in chunk 1, commands_misc.go). Of these 32 arms, 25 are native or
+// partially native and 7 are documented-blocked:
 //
 //   - `gps` is wired: cell/grid math, DBC map/zone/area names, VMap
 //     tile presence, terrain height, and liquid status (cs_misc.cpp:183-302).
 //     Deltas: zone coords fall back to world coords (no WorldMapArea
 //     store), MMap reads 0 (no navmesh model), transport line omitted.
-//   - `itemmove` has no Go bridge: Player::IsValidPos/SwapItem (the
-//     inventory slot model) is unmodeled.
-//   - `linkgrave` / `neargrave` have no Go bridge: the graveyard link/lookup
-//     model (sObjectMgr AddGraveyardLink / GetClosestGraveyard,
-//     WorldSafeLocs.dbc) is unbuilt.
+//   - `itemmove` is wired: IsValidPos bag-0 slot validation (Player.cpp:
+//     10185) plus the SwapItem move/swap/merge legs over Go's
+//     character_inventory (bag key 0 = INVENTORY_SLOT_BAG_0) via the
+//     packet-path coordinate helper (cs_misc.cpp:704-722). Deltas: no
+//     CanUnequipItem / CanEquipItem / CanStoreItem / CanBankItem gates, no
+//     trade/loot-generated guards, no equipped-item duration packet.
+//   - `linkgrave` / `neargrave` are wired: WorldSafeLocs.dbc existence,
+//     the AreaTable parent-area zone gate, graveyard_zone link insert /
+//     duplicate check (ObjectMgr::AddGraveyardLink), and the nearest-link
+//     pick reusing closestGraveyardCandidate (cs_misc.cpp:977-1078).
+//     Deltas: neargrave resolves the zone from the player's stored zone
+//     (rooted, as repopAtGraveyard does) rather than the C++ map-position
+//     zone lookup, and far-graveyard order follows the DB row order rather
+//     than C++ multimap insertion order.
 //   - `maxskill` / `setskill` have no Go bridge: the skill model
 //     (UpdateWeaponsSkillsToMaxSkillsForLevel / SetSkill / SkillLine.dbc) is
 //     unbuilt.
@@ -70,22 +80,35 @@ import (
 
 // Inlined enUS texts (Language.h ids; no in-tree trinity_string seed).
 const (
-	misc2NoSelection    = "No selection."                        // LANG_NO_SELECTION 200
-	misc2ObjectGUID     = "Object GUID: %s"                      // LANG_OBJECT_GUID 201
-	misc2KickSelf       = "You cannot kick yourself."            // LANG_COMMAND_KICKSELF 281
-	misc2KickMessage    = "Player %s has been kicked."           // LANG_COMMAND_KICKMESSAGE 282
-	misc2BadValue       = "Bad value."                           // LANG_BAD_VALUE 168
-	misc2ExploreArea    = "Area explored."                       // LANG_EXPLORE_AREA 5064
-	misc2HideArea       = "Area hidden."                         // LANG_HIDE_AREA (custom; no LANG id)
-	misc2PlayerSaved    = "Player saved."                        // LANG_PLAYER_SAVED 76
-	misc2PlayersSaved   = "All players saved."                   // LANG_PLAYERS_SAVED 77
-	misc2Unfreezing     = "Unfreezing %s."                       // LANG_COMMAND_UNFREEZE 5003
-	misc2NoFrozen       = "No frozen players."                   // LANG_COMMAND_NO_FROZEN_PLAYERS 5004
-	misc2ListFreeze     = "Frozen players:"                      // LANG_COMMAND_LIST_FREEZE 5005
-	misc2PermaFrozen    = "%s (permanent)"                       // LANG_COMMAND_PERMA_FROZEN_PLAYER 5006
-	misc2TempFrozen     = "%s (%d seconds left)"                 // LANG_COMMAND_TEMP_FROZEN_PLAYER 5019
-	misc2RepairedYou    = "You have repaired %s's items."        // LANG_YOU_REPAIR_ITEMS 11010
-	misc2RepairedTarget = "Your items have been repaired by %s." // LANG_YOUR_ITEMS_REPAIRED 11011
+	misc2NoSelection        = "No selection."                                  // LANG_NO_SELECTION 200
+	misc2ObjectGUID         = "Object GUID: %s"                                // LANG_OBJECT_GUID 201
+	misc2KickSelf           = "You cannot kick yourself."                      // LANG_COMMAND_KICKSELF 281
+	misc2KickMessage        = "Player %s has been kicked."                     // LANG_COMMAND_KICKMESSAGE 282
+	misc2BadValue           = "Bad value."                                     // LANG_BAD_VALUE 168
+	misc2ExploreArea        = "Area explored."                                 // LANG_EXPLORE_AREA 5064
+	misc2HideArea           = "Area hidden."                                   // LANG_HIDE_AREA (custom; no LANG id)
+	misc2PlayerSaved        = "Player saved."                                  // LANG_PLAYER_SAVED 76
+	misc2PlayersSaved       = "All players saved."                             // LANG_PLAYERS_SAVED 77
+	misc2Unfreezing         = "Unfreezing %s."                                 // LANG_COMMAND_UNFREEZE 5003
+	misc2NoFrozen           = "No frozen players."                             // LANG_COMMAND_NO_FROZEN_PLAYERS 5004
+	misc2ListFreeze         = "Frozen players:"                                // LANG_COMMAND_LIST_FREEZE 5005
+	misc2PermaFrozen        = "%s (permanent)"                                 // LANG_COMMAND_PERMA_FROZEN_PLAYER 5006
+	misc2TempFrozen         = "%s (%d seconds left)"                           // LANG_COMMAND_TEMP_FROZEN_PLAYER 5019
+	misc2RepairedYou        = "You have repaired %s's items."                  // LANG_YOU_REPAIR_ITEMS 11010
+	misc2RepairedTarget     = "Your items have been repaired by %s."           // LANG_YOUR_ITEMS_REPAIRED 11011
+	misc2GraveNoExist       = "Graveyard %d does not exist."                   // LANG_COMMAND_GRAVEYARDNOEXIST 449
+	misc2GraveAlreadyLinked = "Graveyard %d is already linked to zone %d."     // LANG_COMMAND_GRAVEYARDALRLINKED 450
+	misc2GraveLinked        = "Graveyard %d linked to zone %d."                // LANG_COMMAND_GRAVEYARDLINKED 451
+	misc2GraveWrongZone     = "Graveyard %d cannot be linked to zone %d."      // LANG_COMMAND_GRAVEYARDWRONGZONE 452
+	misc2GraveError         = "Graveyard %d has no link for this zone."        // LANG_COMMAND_GRAVEYARDERROR 454
+	misc2GraveNoTeam        = "no team"                                        // LANG_COMMAND_GRAVEYARD_NOTEAM 455
+	misc2GraveAny           = "any"                                            // LANG_COMMAND_GRAVEYARD_ANY 456
+	misc2GraveAlliance      = "Alliance"                                       // LANG_COMMAND_GRAVEYARD_ALLIANCE 457
+	misc2GraveHorde         = "Horde"                                          // LANG_COMMAND_GRAVEYARD_HORDE 458
+	misc2GraveNearest       = "Nearest graveyard is %d (team %s) for zone %d." // LANG_COMMAND_GRAVEYARDNEAREST 459
+	misc2ZoneNoGraveyards   = "Zone %d has no graveyards."                     // LANG_ZONENOGRAVEYARDS 460
+	misc2ZoneNoGraveFaction = "Zone %d has no graveyards for faction %s."      // LANG_ZONENOGRAFACTION 461
+	misc2GraveNoData        = "Graveyard data is unavailable."
 )
 
 // misc2LowerSecurity mirrors the ChatHandler::HasLowerSecurity guard used by
@@ -487,14 +510,118 @@ func (s *session) handleCmdHideArea(ctx context.Context, args []string) {
 	s.sendSysMessage(misc2HideArea)
 }
 
+// misc2ValidBag0Pos mirrors Player::IsValidPos (Player.cpp:10185) for
+// INVENTORY_SLOT_BAG_0: equipment (0-18), bag slots (19-22), backpack
+// (23-38), bank main (39-66), bank bags (67-73) and keyring (86-117) are
+// valid; buyback (74-85) and currency (118-149) are not. With explicit_pos
+// false, NULL_SLOT (255) is valid, as in C++.
+func misc2ValidBag0Pos(slot uint8, explicit bool) bool {
+	if slot == 255 && !explicit {
+		return true
+	}
+	switch {
+	case slot < 19:
+		return true
+	case slot >= 19 && slot < 23:
+		return true
+	case slot >= 23 && slot < 39:
+		return true
+	case slot >= 39 && slot < 67:
+		return true
+	case slot >= 67 && slot < 74:
+		return true
+	case slot >= 86 && slot < 118:
+		return true
+	}
+	return false
+}
+
 // handleCmdItemMove mirrors HandleItemMoveCommand (cs_misc.cpp:704-722, RBAC
-// 509). Documented-blocked: the inventory slot model (Player::IsValidPos /
-// SwapItem) is unmodeled.
+// 509): move or swap the invoker's own bag-0 item between two slots. Go's
+// character_inventory uses bag key 0 for INVENTORY_SLOT_BAG_0, so the slot
+// pair maps straight onto the packet-path coordinate helper (which also
+// runs the equip-spell transition legs); the merge leg reuses
+// tryMergeStacks, and the empty-destination bank-boundary quest leg mirrors
+// handleSwapInvItem. C++ silences apply: equal slots, invalid slots and an
+// empty source are silent no-ops, and a NULL_SLOT destination (valid only
+// via the explicit_pos=false leg) matches no position leg, so it no-ops.
+// Deltas: no CanUnequipItem / CanEquipItem / CanStoreItem / CanBankItem
+// gates, no trade or loot-generated guards, no equipped-item duration
+// packet on equip destinations.
 func (s *session) handleCmdItemMove(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandItemMove) {
 		return
 	}
-	s.sendSysMessage("The .itemmove command is not available: inventory slot validation and item swapping have no Go bridge yet.")
+	if s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .itemmove <srcSlot> <dstSlot>")
+		return
+	}
+	srcSlot, srcErr := strconv.ParseUint(args[0], 10, 8)
+	dstSlot, dstErr := strconv.ParseUint(args[1], 10, 8)
+	if srcErr != nil || dstErr != nil {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	if srcSlot == dstSlot {
+		return
+	}
+	if !misc2ValidBag0Pos(uint8(srcSlot), true) {
+		return
+	}
+	if !misc2ValidBag0Pos(uint8(dstSlot), false) {
+		return
+	}
+	if dstSlot == 255 {
+		return
+	}
+	db := s.server.CharactersStore.DB
+	var srcItem int64
+	if err := db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, srcSlot).Scan(&srcItem); err != nil || srcItem == 0 {
+		return
+	}
+	if s.player.Health == 0 {
+		s.sendEquipError(equipErrYouAreDead, uint64(srcItem))
+		return
+	}
+	var dstItem int64
+	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, dstSlot).Scan(&dstItem)
+	if dstItem != 0 {
+		if s.itemIsNonemptyBag(ctx, uint64(dstItem)) &&
+			!(srcSlot >= 19 && srcSlot < 23 || srcSlot >= 67 && srcSlot < 74) &&
+			!(s.itemIsBag(ctx, uint64(srcItem)) && s.isBagEmpty(ctx, srcItem)) {
+			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItem))
+			return
+		}
+		if !s.itemIsBag(ctx, uint64(srcItem)) && !s.itemIsBag(ctx, uint64(dstItem)) {
+			if merged, _ := s.tryMergeStacks(ctx, srcItem, 0, uint8(srcSlot), dstItem, 0, uint8(dstSlot)); merged {
+				return
+			}
+		}
+	}
+	s.swapInventoryCoordinates(ctx, srcItem, 0, int64(srcSlot), dstItem, 0, int64(dstSlot))
+	if dstItem == 0 && dstSlot >= 23 {
+		srcBank := srcSlot >= 39 && srcSlot < 74
+		dstBank := dstSlot >= 39 && dstSlot < 74
+		if srcBank || dstBank {
+			var moveEntry, moveCount int64
+			if db.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", srcItem).Scan(&moveEntry, &moveCount) == nil && moveEntry != 0 {
+				if dstBank {
+					s.adjustQuestItemCount(ctx, uint32(moveEntry), uint32(moveCount), false)
+				} else if srcBank {
+					s.adjustQuestItemCount(ctx, uint32(moveEntry), uint32(moveCount), true)
+				}
+			}
+		}
+	}
+	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+	if dstSlot < 19 {
+		s.fireEquipHook(ctx, srcItem, 255, uint8(dstSlot))
+	}
 }
 
 // handleCmdKickPlayer mirrors HandleKickPlayerCommand (cs_misc.cpp:880-915,
@@ -527,14 +654,91 @@ func (s *session) handleCmdKickPlayer(ctx context.Context, args []string) {
 	}
 }
 
+// misc2GraveTeamArg parses the optional horde/alliance team token at
+// args[idx] (cs_misc.cpp linkgrave/neargrave): absent means team 0 (any),
+// an unrecognized token fails silently as in C++ (return false, no message).
+func misc2GraveTeamArg(args []string, idx int) (uint32, bool) {
+	if len(args) <= idx {
+		return 0, true
+	}
+	switch strings.ToLower(args[idx]) {
+	case "horde":
+		return teamHorde, true
+	case "alliance":
+		return teamAlliance, true
+	}
+	return 0, false
+}
+
+// misc2GraveTeamName renders a graveyard_zone link faction the way
+// HandleNearGraveCommand does (LANG_COMMAND_GRAVEYARD_* 455-458).
+func misc2GraveTeamName(team uint32) string {
+	switch team {
+	case 0:
+		return misc2GraveAny
+	case teamAlliance:
+		return misc2GraveAlliance
+	case teamHorde:
+		return misc2GraveHorde
+	}
+	return misc2GraveNoTeam
+}
+
 // handleCmdLinkGrave mirrors HandleLinkGraveCommand (cs_misc.cpp:977-1018,
-// RBAC 511). Documented-blocked: the graveyard link model (WorldSafeLocs.dbc
-// + sObjectMgr::AddGraveyardLink) is unbuilt.
+// RBAC 511): link a WorldSafeLocs graveyard to the invoker's current zone
+// for a team. The C++ zone gate is kept exactly: the area must exist and be
+// a top-level zone (ParentAreaID == 0). The duplicate check mirrors
+// ObjectMgr::AddGraveyardLink's FindGraveyardData(id, zone) test (team is
+// not part of the key), and the insert uses WORLD_INS_GRAVEYARD_ZONE's
+// (ID, GhostZone, Faction) shape. Go's closestGraveyard reads
+// graveyard_zone from the world DB on every call, so no in-memory store
+// update is needed for the link to take effect.
 func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandLinkGrave) {
 		return
 	}
-	s.sendSysMessage("The .linkgrave command is not available: the graveyard link model (WorldSafeLocs.dbc) is unbuilt.")
+	if s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .linkgrave <graveyardId> [horde|alliance]")
+		return
+	}
+	graveyardID, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	team, ok := misc2GraveTeamArg(args, 1)
+	if !ok {
+		return
+	}
+	if _, found, err := s.server.Data.WorldSafeLoc(uint32(graveyardID)); err != nil || !found {
+		s.sendSysMessage(fmt.Sprintf(misc2GraveNoExist, graveyardID))
+		return
+	}
+	zoneID := s.player.Zone
+	area, found, err := s.server.Data.Area(zoneID)
+	if err != nil || !found || area.ParentAreaID != 0 {
+		s.sendSysMessage(fmt.Sprintf(misc2GraveWrongZone, graveyardID, zoneID))
+		return
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		s.sendSysMessage(misc2GraveNoData)
+		return
+	}
+	db := s.server.WorldStore.DB
+	var existing int
+	_ = db.QueryRowContext(ctx, "SELECT COUNT(1) FROM graveyard_zone WHERE ID = ? AND GhostZone = ?", graveyardID, zoneID).Scan(&existing)
+	if existing > 0 {
+		s.sendSysMessage(fmt.Sprintf(misc2GraveAlreadyLinked, graveyardID, zoneID))
+		return
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO graveyard_zone (ID, GhostZone, Faction) VALUES (?, ?, ?)", graveyardID, zoneID, team); err != nil {
+		s.sendSysMessage(misc2GraveNoData)
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf(misc2GraveLinked, graveyardID, zoneID))
 }
 
 // handleCmdListFreeze mirrors HandleListFreezeCommand (cs_misc.cpp:2473-2508,
@@ -718,13 +922,100 @@ func (s *session) handleCmdMuteHistory(ctx context.Context, args []string) {
 }
 
 // handleCmdNearGrave mirrors HandleNearGraveCommand (cs_misc.cpp:1019-1078,
-// RBAC 516). Documented-blocked: the graveyard lookup model
-// (sObjectMgr::GetClosestGraveyard) is unbuilt.
+// RBAC 516): report the nearest graveyard linked to the invoker's zone for
+// a team, with the link's own faction in the report (FindGraveyardData's
+// team, not the requested team). The nearest pick reuses
+// closestGraveyardCandidate, the ObjectMgr::GetClosestGraveyard twin, over
+// the zone's graveyard_zone links. C++ silences and branches are kept: an
+// empty link set on a non-battleground map falls through to the default
+// graveyard, which has no link for this zone and reports GRAVEYARDERROR
+// (team 0 has no default, so it reports ZONENOGRAVEYARDS instead); a
+// battleground map with no links, or links all filtered out by faction,
+// reports ZONENOGRAVEYARDS (team 0) or ZONENOGRAFACTION. Deltas: the link
+// set is read for the player's stored zone (rooted, as repopAtGraveyard
+// does) rather than the C++ map-position zone lookup, and the far
+// graveyard follows DB row order (ORDER BY ID) rather than C++ multimap
+// insertion order.
 func (s *session) handleCmdNearGrave(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNearGrave) {
 		return
 	}
-	s.sendSysMessage("The .neargrave command is not available: the graveyard model is unbuilt.")
+	if s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	team, ok := misc2GraveTeamArg(args, 0)
+	if !ok {
+		return
+	}
+	zoneID := s.player.Zone
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		s.sendSysMessage(misc2GraveNoData)
+		return
+	}
+	rootZone := s.server.rootAreaID(zoneID)
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ID, Faction FROM graveyard_zone WHERE GhostZone = ? ORDER BY ID", rootZone)
+	if err != nil {
+		s.sendSysMessage(misc2GraveNoData)
+		return
+	}
+	defer rows.Close()
+	type graveLink struct {
+		id      uint32
+		faction uint32
+	}
+	var links []graveLink
+	for rows.Next() {
+		var link graveLink
+		if err := rows.Scan(&link.id, &link.faction); err != nil {
+			continue
+		}
+		links = append(links, link)
+	}
+	mapEntry, hasMapEntry, _ := s.server.Data.Map(s.player.Map)
+	isBG := hasMapEntry && teleIsBattlegroundOrArena(mapEntry)
+	if len(links) == 0 {
+		if team == 0 || isBG {
+			if team == 0 {
+				s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveyards, zoneID))
+			} else {
+				s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveFaction, zoneID, misc2GraveTeamName(team)))
+			}
+			return
+		}
+		defaultID := defaultGraveyardAlliance
+		if team == teamHorde {
+			defaultID = defaultGraveyardHorde
+		}
+		s.sendSysMessage(fmt.Sprintf(misc2GraveError, defaultID))
+		return
+	}
+	var locations []wotlk.WorldSafeLoc
+	factionByID := make(map[uint32]uint32, len(links))
+	for _, link := range links {
+		if link.faction != 0 && team != 0 && link.faction != team {
+			continue
+		}
+		loc, found, err := s.server.Data.WorldSafeLoc(link.id)
+		if err != nil || !found {
+			continue
+		}
+		locations = append(locations, loc)
+		factionByID[link.id] = link.faction
+	}
+	if len(locations) == 0 {
+		if team == 0 {
+			s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveyards, zoneID))
+		} else {
+			s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveFaction, zoneID, misc2GraveTeamName(team)))
+		}
+		return
+	}
+	chosen, found := closestGraveyardCandidate(locations, s.player.Map, mapEntry, hasMapEntry, s.player.X, s.player.Y, s.player.Z)
+	if !found {
+		s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveyards, zoneID))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf(misc2GraveNearest, chosen.ID, misc2GraveTeamName(factionByID[chosen.ID]), zoneID))
 }
 
 // handleCmdPInfo mirrors HandlePInfoCommand (cs_misc.cpp:1430-1801, RBAC
