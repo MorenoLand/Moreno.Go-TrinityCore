@@ -9911,6 +9911,12 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		}
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
+			if eff.Aura == spellAuraDummy {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID); ok {
+					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)
+					continue
+				}
+			}
 			if eff.Aura == spellAuraProcTriggerDamage {
 				s.creatureProcTriggerDamageAuraProc(ctx, m, aura, auraSpell, i, triggerTargetGUID)
 				continue

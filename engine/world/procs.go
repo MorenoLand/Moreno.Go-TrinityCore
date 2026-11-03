@@ -993,6 +993,76 @@ func isProcTriggerAuraType(auraType uint32) bool {
 	return false
 }
 
+// scriptProcCast describes one AuraScript proc arm the generic trigger-spell
+// loop cannot express: a SPELL_AURA_DUMMY proc effect with no DBC trigger
+// spell, whose C++ OnEffectProc handler casts a fixed spell with a
+// damage-derived base point. The generic loop reaches such effects (dummy is
+// a proc-trigger aura type) but skips them at the TriggerSpell == 0 gate,
+// so without this dispatch the script arm never fires even when the aura
+// procs, rolls, and spends its charge.
+type scriptProcCast struct {
+	spellID    uint32
+	casterGUID uint64
+	targetGUID uint64
+	bp0        uint32
+}
+
+// scriptAuraProcCast resolves the script arm for a dummy proc effect.
+// C++ owners: spell_deathwhisper_vampiric_might::HandleProc
+// (boss_lady_deathwhisper.cpp:1019-1032) and
+// spell_gen_vampiric_touch::HandleProc (spell_generic.cpp:3479-3495).
+// A zero-damage event fires nothing in both (the C++ early return); the
+// effect index gates to the registered effect (70674 EFFECT_1, 52723/60501
+// EFFECT_0) so sibling dummy effects of the same aura never double-fire.
+func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID uint64) (scriptProcCast, bool) {
+	if effAura != spellAuraDummy || damage == 0 {
+		return scriptProcCast{}, false
+	}
+	switch auraSpellID {
+	case 70674: // Vampiric Might, EFFECT_1: holder casts 70677 on self, BP0 = pct of damage.
+		if effIndex != 1 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 70677, casterGUID: holderGUID, targetGUID: holderGUID, bp0: uint32(uint64(damage) * uint64(effAmount) / 100)}, true
+	case 52723, 60501: // Vampiric Touch, EFFECT_0: proc actor casts 52724 on self, BP0 = damage / 2.
+		if effIndex != 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 52724, casterGUID: actorGUID, targetGUID: actorGUID, bp0: damage / 2}, true
+	}
+	return scriptProcCast{}, false
+}
+
+// scriptProcEffAmount reads an aura effect's amount the way the
+// proc-trigger-with-value arm does: the per-effect amount when tracked,
+// else the aura amount.
+func scriptProcEffAmount(aura *activeAura, effIndex int) uint32 {
+	if aura == nil {
+		return 0
+	}
+	if effIndex >= 0 && effIndex < len(aura.Amounts) && aura.Amounts[effIndex] > 0 {
+		return uint32(aura.Amounts[effIndex])
+	}
+	return aura.Amount
+}
+
+// fireScriptProcCast casts a script-proc arm's spell from its C++ caster: a
+// player caster casts through its session, a creature caster through the
+// creature cast path on the holder's map/instance. An unresolvable caster
+// (zero GUID, offline player, unloaded creature) fizzles silently.
+func (s *Server) fireScriptProcCast(ctx context.Context, holderMap uint32, holderInstance uint32, cast scriptProcCast) {
+	if s == nil || cast.spellID == 0 || cast.casterGUID == 0 {
+		return
+	}
+	if sess := s.findSessionByGUID(cast.casterGUID); sess != nil {
+		sess.castSpellDirectWithBasePoint(ctx, cast.spellID, cast.targetGUID, cast.bp0)
+		return
+	}
+	if motion := s.findCreatureMotion(holderMap, holderInstance, cast.casterGUID); motion != nil {
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, cast.spellID, cast.targetGUID, true, map[int]int32{0: int32(cast.bp0)}, nil, false)
+	}
+}
+
 // spellProcEntry mirrors SpellProcEntry (SpellMgr.h:270-284) for the
 // generated-default branch of SpellMgr::LoadSpellProc (SpellMgr.cpp:1816-1869).
 // This server has no spell_proc DB table, so every aura spell carrying DBC
@@ -3043,6 +3113,12 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		}
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
+			if eff.Aura == spellAuraDummy {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID); ok {
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)
+					continue
+				}
+			}
 			if eff.Aura == spellAuraProcTriggerDamage {
 				// AuraEffect::HandleProcTriggerDamageAuraProc
 				// (SpellAuraEffects.cpp:5738-5762) deals the effect's own
