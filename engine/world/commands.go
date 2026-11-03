@@ -2242,26 +2242,25 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .cast <spellId> [triggered]")
 		return
 	}
-	// cast_commandscript (cs_cast.cpp) sub-arms. Only the bare arm has a Go
-	// cast pipeline; the rest ride unbuilt bridges and are documented, not
-	// stubbed: back/self/target need a creature/other-unit-as-caster command
-	// bridge, dist/dest need a dest-target command cast entry (Go castSpell
-	// paths are unit-target only).
+	// cast_commandscript (cs_cast.cpp) sub-arms, wired on the player and
+	// creature cast funnels: self/back/target ride castCreatureSpell (and
+	// the player funnel for a selected player), dist/dest ride the
+	// explicit-destination entries (player AoF funnel, creature AoF leg).
 	switch strings.ToLower(args[0]) {
 	case "back":
-		s.blockedCommandArm(ctx, permissionCommandCastBack, "cast back is not supported: selected-creature-as-caster has no command bridge.")
+		s.handleCmdCastBack(ctx, args)
 		return
 	case "dist":
-		s.blockedCommandArm(ctx, permissionCommandCastDist, "cast dist is not supported: destination-target casts have no command entry.")
+		s.handleCmdCastDist(ctx, args)
 		return
 	case "self":
-		s.blockedCommandArm(ctx, permissionCommandCastSelf, "cast self is not supported: selected-unit-as-caster has no command bridge.")
+		s.handleCmdCastSelf(ctx, args)
 		return
 	case "target":
-		s.blockedCommandArm(ctx, permissionCommandCastTarget, "cast target is not supported: no creature victim model and no creature-as-caster bridge.")
+		s.handleCmdCastTarget(ctx, args)
 		return
 	case "dest":
-		s.blockedCommandArm(ctx, permissionCommandCastDest, "cast dest is not supported: destination-target casts have no command entry.")
+		s.handleCmdCastDest(ctx, args)
 		return
 	}
 	// Bare arm: HandleCastCommand — player casts at the selected unit.
@@ -2299,6 +2298,257 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 		return
 	}
 	s.castSpellDirect(ctx, uint32(spellID), s.selection)
+}
+
+// castCommandSpell mirrors the bare arm's spell validation (cs_cast.cpp
+// CheckSpellExistsAndIsValid minus the IsSpellValid leg: DBC-loaded spells
+// are assumed structurally valid, as in the bare arm).
+func (s *session) castCommandSpell(spellArg string) (uint32, bool) {
+	spellID, err := strconv.ParseUint(spellArg, 10, 32)
+	if err != nil {
+		s.sendSysMessage("Invalid spell ID.")
+		return 0, false
+	}
+	if s.server == nil || s.server.Data == nil {
+		s.sendSysMessage("Spell data is unavailable.")
+		return 0, false
+	}
+	if _, found, err := s.server.Data.Spell(uint32(spellID)); err != nil || !found {
+		s.sendSysMessage("There is no such spell.")
+		return 0, false
+	}
+	return uint32(spellID), true
+}
+
+// castCommandTriggered mirrors GetTriggerFlags (cs_cast.cpp): an absent flag
+// is TRIGGERED_NONE, a prefix of "triggered" is TRIGGERED_FULL_DEBUG_MASK,
+// anything else fails the command with its syntax line.
+func (s *session) castCommandTriggered(trigArg, syntax string) (bool, bool) {
+	if trigArg == "" {
+		return false, true
+	}
+	if !strings.HasPrefix("triggered", strings.ToLower(trigArg)) {
+		s.sendSysMessage(syntax)
+		return false, false
+	}
+	return true, true
+}
+
+// castCommandTriggeredArg reads the optional triggered flag at trigIdx.
+func castCommandTriggeredArg(s *session, args []string, trigIdx int, syntax string) (bool, bool) {
+	trigArg := ""
+	if len(args) > trigIdx {
+		trigArg = args[trigIdx]
+	}
+	return s.castCommandTriggered(trigArg, syntax)
+}
+
+// castCommandSelectedCreature mirrors getSelectedCreature (Chat.cpp) for the
+// cast arms: the selection resolved through the GM's map/instance motion map.
+func (s *session) castCommandSelectedCreature() *creatureMotion {
+	if s == nil || s.selection == 0 {
+		return nil
+	}
+	return s.findCreatureMotion(s.selection)
+}
+
+// castCommandCreatureCast fires a creature cast honoring the triggered flag
+// (castCreatureSpell vs castCreatureSpellTriggered).
+func (s *session) castCommandCreatureCast(ctx context.Context, motion *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
+	if triggered {
+		s.server.castCreatureSpellTriggered(ctx, motion, spellID, targetGUID)
+	} else {
+		s.server.castCreatureSpell(ctx, motion, spellID, targetGUID)
+	}
+}
+
+// handleCmdCastSelf wires HandleCastSelfCommand (cs_cast.cpp): the selected
+// unit casts the spell on itself. A selected player rides the player funnel
+// (triggered-only, so the flag is accepted but changes nothing, as in the
+// bare arm); a selected creature rides the creature funnel with the flag
+// honored.
+func (s *session) handleCmdCastSelf(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCastSelf) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .cast self <spellId> [triggered]"
+	if len(args) < 2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if s.selection == 0 {
+		s.sendSysMessage("Select a character or creature.")
+		return
+	}
+	spellID, ok := s.castCommandSpell(args[1])
+	if !ok {
+		return
+	}
+	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
+	if !ok {
+		return
+	}
+	if ts := s.lookupSelectedPlayer(); ts != nil {
+		ts.castSpellDirect(ctx, spellID, ts.playerGUID)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a character or creature.")
+		return
+	}
+	s.castCommandCreatureCast(ctx, motion, spellID, motion.GUID, triggered)
+}
+
+// handleCmdCastBack wires HandleCastBackCommand (cs_cast.cpp): the selected
+// creature casts the spell on the invoking player.
+func (s *session) handleCmdCastBack(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCastBack) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .cast back <spellId> [triggered]"
+	if len(args) < 2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a character or creature.")
+		return
+	}
+	spellID, ok := s.castCommandSpell(args[1])
+	if !ok {
+		return
+	}
+	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
+	if !ok {
+		return
+	}
+	s.castCommandCreatureCast(ctx, motion, spellID, s.playerGUID, triggered)
+}
+
+// handleCmdCastTarget wires HandleCastTargetCommad (cs_cast.cpp): the
+// selected creature casts the spell on its victim (motion.TargetGUID, the
+// threat-manager combat victim).
+func (s *session) handleCmdCastTarget(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCastTarget) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .cast target <spellId> [triggered]"
+	if len(args) < 2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a character or creature.")
+		return
+	}
+	if motion.TargetGUID == 0 {
+		s.sendSysMessage("The selected target has no victim.")
+		return
+	}
+	spellID, ok := s.castCommandSpell(args[1])
+	if !ok {
+		return
+	}
+	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
+	if !ok {
+		return
+	}
+	s.castCommandCreatureCast(ctx, motion, spellID, motion.TargetGUID, triggered)
+}
+
+// handleCmdCastDist wires HandleCastDistCommand (cs_cast.cpp): the player
+// casts the spell at the GetClosePoint point for the given distance. The
+// dist lands in the size slot (Object.cpp:3307-3311), so the point sits
+// combatReach + dist along the player's orientation at the player's z; the
+// UpdateAllowedPositionZ ground clamp and the LoS walk have no Go model
+// (transmittedClosePoint precedent).
+func (s *session) handleCmdCastDist(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCastDist) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .cast dist <spellId> <dist> [triggered]"
+	if len(args) < 3 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	spellID, ok := s.castCommandSpell(args[1])
+	if !ok {
+		return
+	}
+	dist, err := strconv.ParseFloat(args[2], 32)
+	if err != nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if _, ok := castCommandTriggeredArg(s, args, 3, syntax); !ok {
+		return
+	}
+	if s.player == nil {
+		return
+	}
+	offset := s.player.CombatReach + float32(dist)
+	dest := protocol.SpellTargetLocation{
+		X: s.player.X + offset*float32(math.Cos(float64(s.player.Orientation))),
+		Y: s.player.Y + offset*float32(math.Sin(float64(s.player.Orientation))),
+		Z: s.player.Z,
+	}
+	s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest)
+}
+
+// handleCmdCastDest wires HandleCastDestCommand (cs_cast.cpp): the selected
+// unit casts the spell at the given coordinates. A selected player rides
+// the player AoF funnel (triggered-only, flag accepted but ignored); a
+// selected creature rides the creature AoF leg with the flag honored.
+func (s *session) handleCmdCastDest(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandCastDest) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	const syntax = "Syntax: .cast dest <spellId> <x> <y> <z> [triggered]"
+	if len(args) < 5 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if s.selection == 0 {
+		s.sendSysMessage("Select a character or creature.")
+		return
+	}
+	spellID, ok := s.castCommandSpell(args[1])
+	if !ok {
+		return
+	}
+	coords := make([]float32, 3)
+	for i := 0; i < 3; i++ {
+		v, err := strconv.ParseFloat(args[2+i], 32)
+		if err != nil {
+			s.sendSysMessage(syntax)
+			return
+		}
+		coords[i] = float32(v)
+	}
+	triggered, ok := castCommandTriggeredArg(s, args, 5, syntax)
+	if !ok {
+		return
+	}
+	if ts := s.lookupSelectedPlayer(); ts != nil {
+		dest := protocol.SpellTargetLocation{X: coords[0], Y: coords[1], Z: coords[2]}
+		ts.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a character or creature.")
+		return
+	}
+	dest := [3]float32{coords[0], coords[1], coords[2]}
+	s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false)
 }
 
 // blockedCommandArm gates a blocked command sub-arm on its RBAC permission (mirroring
