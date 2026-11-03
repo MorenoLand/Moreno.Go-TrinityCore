@@ -206,8 +206,21 @@ type playerState struct {
 	// owner GUID, which the values builder mirrors into field 14;
 	// 0 is the C++ default for a player never assigned an owner.
 	SummonedByGUID uint64
-	Name           string
-	Race           uint8
+	// WaterWalking is the Unit::SetWaterWalking script flag
+	// (Unit.cpp:13755, Player.cpp:26891): session-only, like
+	// SummonedByGUID — login recomputes the flag from auras only,
+	// so a script-set value does not survive a relog. The
+	// sanitizeMovementFlags gate honors it alongside the aura
+	// and ghost legs.
+	WaterWalking bool
+	// ThreatMgr is the player's Unit::m_threatManager (Unit.h:1827):
+	// every Unit carries one, including players. Lazily created by
+	// player AddThreat; no player system reads victim selection
+	// from it (players have no AI victim leg), so it is a
+	// write-only list for Lua callers, like C++'s for players.
+	ThreatMgr *ThreatManager
+	Name      string
+	Race      uint8
 	// FactionRaceOverride is the SetFactionForRace race (Player.cpp:6636):
 	// the faction template and team read from this race instead of Race
 	// while FactionRaceOverrideSet, for the session only (login recomputes

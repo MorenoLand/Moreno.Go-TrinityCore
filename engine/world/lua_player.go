@@ -1473,6 +1473,136 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{walk || fly}, nil
 	}
+	// SetWaterWalk is Unit::SetWaterWalk (UnitMethods.h:1822):
+	// Unit::SetWaterWalking (Unit.cpp:13755) as overridden for
+	// players by Player::SetWaterWalking (Player.cpp:26891) — the
+	// SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK packet to self
+	// plus the MSG_MOVE_WATER_WALK broadcast to the set, the exact
+	// pair the water-walk aura legs already send. The C++ flag
+	// lives on the unit's movement flags; Go keeps a session-only
+	// WaterWalking slot on playerState (login recomputes from
+	// auras only) and the sanitizeMovementFlags gate honors it,
+	// so client movement packets carrying the flag survive while
+	// the slot stands. No-op on unchanged, per the C++ early-out.
+	// DELTA: a script false does not clear the flag in the
+	// sanitize gate while a water-walk aura stands (the aura leg
+	// re-asserts on its own packets); the slot itself follows
+	// the C++ flag write.
+	methods["SetWaterWalk"] = func(_ context.Context, args []any) ([]any, error) {
+		enable := true
+		if len(args) >= 1 && args[0] != nil {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetWaterWalk requires a bool")
+			}
+			enable = b
+		}
+		if s == nil || s.player == nil {
+			return nil, nil
+		}
+		if state.WaterWalking == enable {
+			return nil, nil
+		}
+		state.WaterWalking = enable
+		if enable {
+			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
+			s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_WATER_WALK, 0x10000000)
+		} else {
+			s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_LAND_WALK))
+			s.broadcastLoginMovementState(protocol.OpcodeMSG_MOVE_WATER_WALK, 0)
+		}
+		return nil, nil
+	}
+	// setPlayerControlLeg is the shared player leg of Unit::SetConfused
+	// (Unit.cpp:11734) and Unit::SetFeared (Unit.cpp:11700): both
+	// clear the target on apply and, for a player, block/allow
+	// control to the real player via SetClientControl
+	// (Player.cpp:24256, SMSG_CLIENT_CONTROL_UPDATE) — the
+	// m_playerMovingMe arm, which runs whether or not the mover
+	// is alive. On clear the victim target is restored only
+	// while alive, per the C++ IsAlive gate. The confused/flee
+	// movement itself is NOT wired: players have no server
+	// spline model (movement.go: the SPLINE_ENABLED strip), so
+	// no wander/flee spline can be driven; only the control and
+	// target legs are faithful here.
+	setPlayerControlLeg := func(apply bool) {
+		if s == nil || s.player == nil {
+			return
+		}
+		if apply {
+			state.Selection = 0
+			s.sendClientControl(s.playerGUID, false)
+			return
+		}
+		s.sendClientControl(s.playerGUID, true)
+		if state.Health > 0 && s.attackTarget != 0 {
+			state.Selection = s.attackTarget
+		}
+	}
+	// SetConfused is Unit::SetConfused (UnitMethods.h, Unit.cpp:11734)
+	// on a player receiver: the control/target leg above; the
+	// MoveConfused spline leg is unmodeled (no player spline).
+	methods["SetConfused"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 && args[0] != nil {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetConfused requires a boolean")
+			}
+			apply = b
+		}
+		setPlayerControlLeg(apply)
+		return nil, nil
+	}
+	// SetFeared is Unit::SetFeared (UnitMethods.h, Unit.cpp:11700)
+	// on a player receiver: the control/target leg above; the
+	// MoveFleeing spline leg (fear-aura caster else engaged
+	// victim, 7000ms else untimed) is unmodeled (no player
+	// spline), and the non-player MoveTargetedHome clear leg
+	// does not apply to players.
+	methods["SetFeared"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 && args[0] != nil {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetFeared requires a boolean")
+			}
+			apply = b
+		}
+		setPlayerControlLeg(apply)
+		return nil, nil
+	}
+	// AddThreat is Unit::AddThreat (UnitMethods.h:2934, TRINITY arm):
+	// unit->GetThreatManager().AddThreat(victim, threat, spell,
+	// true, true) — the victim may be a player/creature object
+	// or a raw GUID, a nil/unknown victim no-ops, and fewer
+	// than 2 args no-op, mirroring the session-creature arm.
+	// The Eluna spell argument's NO_THREAT / NO_INITIAL_AGGRO
+	// gates are not carried, same as the handler twin. Unlike
+	// the creature arms there is no victim-switch sync: a
+	// player's threat list drives no victim selection (players
+	// have no AI victim leg), so the add only grows the list.
+	methods["AddThreat"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, nil
+		}
+		victimGUID := luaObjectGUID(args[0])
+		if victimGUID == 0 {
+			return nil, nil
+		}
+		amount, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil || s.player == nil {
+			return nil, nil
+		}
+		if state.ThreatMgr == nil {
+			state.ThreatMgr = NewThreatManager(nil)
+		}
+		state.ThreatMgr.AddThreat(victimGUID, amount, false)
+		return nil, nil
+	}
 	// IsUnderWater is LuaUnit::IsUnderWater (LuaFunctions.cpp:352) via
 	// Map::IsUnderWater (Map.cpp:2923-2926): the grid-leg liquid status
 	// over water and ocean, under water at the default collision height.

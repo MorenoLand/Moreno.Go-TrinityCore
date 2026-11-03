@@ -1428,8 +1428,9 @@ func (s *session) sanitizeMovementFlags(flags uint32) uint32 {
 		flags &^= movementHover
 	}
 	// Cannot walk on water without SPELL_AURA_WATER_WALK except for ghosts
-	// (WorldSession.cpp:989-993).
-	if flags&movementWaterWalking != 0 && !s.hasAuraType(spellAuraWaterWalk) && !s.hasAuraType(spellAuraGhost) {
+	// (WorldSession.cpp:989-993), or a script-set water-walk flag
+	// (playerState.WaterWalking, Unit::SetWaterWalking twin).
+	if flags&movementWaterWalking != 0 && !s.hasAuraType(spellAuraWaterWalk) && !s.hasAuraType(spellAuraGhost) && !(s.player != nil && s.player.WaterWalking) {
 		flags &^= movementWaterWalking
 	}
 	// Cannot feather fall without SPELL_AURA_FEATHER_FALL (WorldSession.cpp:996-998).
