@@ -209,6 +209,8 @@ type playerState struct {
 	// from Race, Player.cpp:17517).
 	FactionRaceOverride    uint8
 	FactionRaceOverrideSet bool
+	FactionOverride        uint32 // direct SetFaction value (UnitMethods.h:1553), session-only
+	FactionOverrideSet     bool   // true while a direct SetFaction override stands
 	Class                  uint8
 	Gender                 uint8
 	Skin                   uint8

@@ -25,6 +25,12 @@ func (s *session) effectiveFactionTemplate(race uint8) uint32 {
 	// the race faction but not a live 243 aura, which C++ restores
 	// over on remove; an unknown race reads faction 0 like
 	// SetFaction(rEntry ? rEntry->FactionID : 0).
+	// A direct SetFaction override beats the race override but not a
+	// live faction aura (the forced check above), the same precedence
+	// the race override already holds against the race row.
+	if s.player != nil && s.player.FactionOverrideSet {
+		return s.player.FactionOverride
+	}
 	if s.player != nil && s.player.FactionRaceOverrideSet {
 		return s.server.raceFaction(s.player.FactionRaceOverride)
 	}

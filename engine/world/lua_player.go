@@ -2578,6 +2578,367 @@ func (s *session) luaPlayer() *scripting.Object {
 		luaUnitDealHeal(ctx, luaUnitPlayerRef(s), targetGUID, spellID, amount, critical)
 		return nil, nil
 	}
+	// AttackStop is Unit::AttackStop (Unit.cpp:5763): the current
+	// attack target is dropped and SMSG_ATTACK_STOP goes to the
+	// visible set (the SetSanctuary twin's stop arm), returning
+	// whether the player was attacking. Threat is untouched — C++
+	// keeps the threat list — and the client selection is untouched:
+	// the Go Attack twin never sets it.
+	methods["AttackStop"] = func(_ context.Context, _ []any) ([]any, error) {
+		victim := s.attackTarget
+		if victim == 0 {
+			return []any{false}, nil
+		}
+		s.attackTarget = 0
+		_ = s.sendAttackStop(victim, false)
+		return []any{true}, nil
+	}
+	// GetVictim is Unit::GetVictim (UnitMethods.h:759): the player's
+	// current attack target, resolved like the session-creature
+	// twin (player session first, then the session-creature
+	// constructor), nil when not attacking or unresolvable.
+	methods["GetVictim"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s.attackTarget == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.server.findPlayer(s.attackTarget); player != nil {
+			return []any{player}, nil
+		}
+		if creature := s.luaCreature(ctx, s.attackTarget); creature != nil {
+			return []any{creature}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetOwner is Unit::GetOwner (UnitMethods.h:596): the
+	// UNIT_FIELD_SUMMONEDBY read. Players are never summoned, so
+	// this reads nil, the GetControllerGUID precedent (which reads 0
+	// for the same missing owner model).
+	methods["GetOwner"] = luaNoArgs(func() any { return nil })
+	// IsCharmed is Unit::IsCharmed (UnitMethods.h:376): the
+	// UNIT_FIELD_CHARMEDBY read. Go stores no charmer for players
+	// (GetCharmerGUID reads 0), so this reads false.
+	methods["IsCharmed"] = luaNoArgs(func() any { return false })
+	// GetFaction is Unit::GetFaction (UnitMethods.h:1222): the
+	// UNIT_FIELD_FACTIONTEMPLATE read, which sendPlayerUpdate
+	// already broadcasts from the same source — the live faction
+	// aura, else a SetFaction/SetFactionForRace override, else the
+	// race row.
+	methods["GetFaction"] = luaNoArgs(func() any { return s.effectiveFactionTemplate(state.Race) })
+	// SetFaction is Unit::SetFaction (UnitMethods.h:1553): the
+	// UNIT_FIELD_FACTIONTEMPLATE write, stored as the session-only
+	// FactionOverride (player_state.go) so GetFaction reads it back
+	// and sendPlayerUpdate broadcasts it. A direct override beats a
+	// SetFactionForRace override; a live faction aura still wins.
+	methods["SetFaction"] = func(_ context.Context, args []any) ([]any, error) {
+		faction, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state.FactionOverride = faction
+		state.FactionOverrideSet = true
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// Mount is Unit::Mount (Unit.cpp:8310): the
+	// UNIT_FIELD_MOUNTDISPLAYID write plus the MOUNT flag, through
+	// sendPlayerMountUpdate (which derives the flag from the display
+	// and any mounted aura). A 0 display leaves the field untouched,
+	// matching C++'s `if (mount)` gate; the vehicle-kit legs of the
+	// full C++ Mount are N/A (Eluna passes no vehicle id).
+	methods["Mount"] = func(_ context.Context, args []any) ([]any, error) {
+		displayID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if displayID != 0 {
+			state.MountDisplayID = displayID
+		}
+		s.sendPlayerMountUpdate()
+		return nil, nil
+	}
+	// Dismount is Unit::Dismount (Unit.cpp:8365): the IsMounted
+	// early return, then the mounted-aura strip and the display
+	// clear, in handleCmdDismount's order (the SMSG_DISMOUNT packet
+	// rides the aura-remove path when a mounted aura existed).
+	methods["Dismount"] = func(_ context.Context, _ []any) ([]any, error) {
+		if !s.isPlayerMounted() {
+			return nil, nil
+		}
+		for _, aura := range s.loadedAuras() {
+			if aura != nil && aura.AuraType == spellAuraMounted {
+				s.removeAura(aura.SpellID)
+			}
+		}
+		state.MountDisplayID = 0
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// SetDisplayId is Unit::SetDisplayId (UnitMethods.h:1742): the
+	// UNIT_FIELD_DISPLAYID write. Go reads the live display from
+	// the transform slot (playerLuaDisplayID), so the write lands
+	// there and sendPlayerUpdate broadcasts it; DeMorph clears it.
+	// DELTA: a 0 display reads back as the race display, not 0 —
+	// 0 is the transform-unset sentinel.
+	methods["SetDisplayId"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state.TransformDisplayID = id
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// SetLevel is Unit::SetLevel (UnitMethods.h:1569) for players:
+	// Player::GiveLevel (Player.cpp) as a single jump, not the
+	// stepwise XP-gain path — the level write, the stat rebuild
+	// (UpdateAllStats), the talent reset (InitTalentForLevel drops
+	// the script override, the applyLevelUp leg), the skill-max
+	// bump, one SMSG_LEVELUP_INFO (the applyLevelUp packet shape),
+	// one level-reward mail on increase, and the level-changed
+	// hook. Eluna zeroes XP after GiveLevel even on a same-level
+	// call. DELTA: levels clamp to defaultMaxPlayerLevel (the
+	// handleCharacterLevel cap — Go models no higher levels) and
+	// the glyph/taxi-init legs have no Go bridge.
+	methods["SetLevel"] = func(ctx context.Context, args []any) ([]any, error) {
+		level, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if level < 1 {
+			return nil, fmt.Errorf("SetLevel requires a level of at least 1")
+		}
+		if level > defaultMaxPlayerLevel {
+			level = defaultMaxPlayerLevel
+		}
+		oldLevel := state.Level
+		state.XP = 0
+		if level != uint32(oldLevel) {
+			oldHP, oldMana := state.MaxHealth, state.MaxPowers[0]
+			oldStats := state.Stats
+			state.Level = uint8(level)
+			state.FreeTalentPointsOverrideSet = false
+			_ = s.calculatePlayerStats(ctx, state)
+			for i := range state.Skills {
+				maxSkill := uint16(state.Level) * 5
+				if state.Skills[i].Max < maxSkill && state.Skills[i].Max > 0 {
+					state.Skills[i].Max = maxSkill
+				}
+			}
+			healthDelta := uint32(0)
+			if state.MaxHealth > oldHP {
+				healthDelta = state.MaxHealth - oldHP
+			}
+			manaDelta := uint32(0)
+			if state.MaxPowers[0] > oldMana {
+				manaDelta = state.MaxPowers[0] - oldMana
+			}
+			levelPacket := protocol.NewBuffer(56)
+			levelPacket.WriteU32(uint32(state.Level))
+			levelPacket.WriteU32(healthDelta)
+			levelPacket.WriteU32(manaDelta)
+			for i := 1; i < 7; i++ {
+				levelPacket.WriteU32(0)
+			}
+			for i := 0; i < 5; i++ {
+				statDelta := uint32(0)
+				if state.Stats[i] > oldStats[i] {
+					statDelta = state.Stats[i] - oldStats[i]
+				}
+				levelPacket.WriteU32(statDelta)
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_LEVELUP_INFO), levelPacket.Bytes(), true)
+			if level > uint32(oldLevel) {
+				s.sendLevelUpMail(ctx, state.Level)
+			}
+			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, xp = ? WHERE guid = ?", state.Level, state.XP, s.playerGUID)
+			}
+			s.fireLevelChangedHook(ctx, oldLevel)
+		}
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// SetMaxHealth is Unit::SetMaxHealth (UnitMethods.h:1605): the
+	// UNIT_FIELD_MAXHEALTH write, with the 0-to-1 clamp and the
+	// current-health clamp of the handler twin, broadcast through
+	// sendPlayerUpdate (which sends the aura-modulated max).
+	methods["SetMaxHealth"] = func(_ context.Context, args []any) ([]any, error) {
+		maxHealth, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if maxHealth == 0 {
+			maxHealth = 1
+		}
+		state.MaxHealth = maxHealth
+		if state.Health > maxHealth {
+			state.Health = maxHealth
+		}
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// SetPower is Unit::SetPower (Unit.cpp:9616) via Eluna
+	// (UnitMethods.h:1632): (amount, type = -1). The -1 leg is the
+	// PowerSelectorHelper current-power read (playerPowerType, the
+	// form-aware type — not GetPower's class default); the value
+	// clamps to the max like C++ and broadcasts via sendPlayerUpdate.
+	// DELTA: C++ also sends SMSG_POWER_UPDATE and a group update;
+	// the values broadcast reaches the same visible set.
+	methods["SetPower"] = func(_ context.Context, args []any) ([]any, error) {
+		amt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		power := int(playerPowerType(state))
+		if len(args) >= 2 && args[1] != nil {
+			value, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if value >= 7 {
+				return nil, fmt.Errorf("power type %d is invalid", value)
+			}
+			power = int(value)
+		}
+		if amt > state.MaxPowers[power] {
+			amt = state.MaxPowers[power]
+		}
+		state.Powers[power] = amt
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// ModifyPower is Unit::ModifyPower (UnitMethods.h:1662):
+	// (delta, type = -1), the same current-power default as
+	// SetPower, clamped to 0..max like the handler twin. C++ pushes
+	// no return value, so this returns none (the handler twin's
+	// returned new value is a handler-side extra).
+	methods["ModifyPower"] = func(_ context.Context, args []any) ([]any, error) {
+		delta, err := luaInt64Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		power := int(playerPowerType(state))
+		if len(args) >= 2 && args[1] != nil {
+			value, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if value >= 7 {
+				return nil, fmt.Errorf("power type %d is invalid", value)
+			}
+			power = int(value)
+		}
+		next := int64(state.Powers[power]) + delta
+		if next < 0 {
+			next = 0
+		}
+		if next > int64(state.MaxPowers[power]) {
+			next = int64(state.MaxPowers[power])
+		}
+		state.Powers[power] = uint32(next)
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// SetMaxPower is Unit::SetMaxPower (Unit.cpp:9654) via Eluna
+	// (UnitMethods.h:1692): (type = -1, amount). A nil type reads the
+	// current power; a missing amount errors, matching C++'s
+	// required third argument. The current power is left untouched
+	// (C++ does not clamp it on max change). Powers 0-6 are valid —
+	// the handler twin's 0-4 cap is creature-side; runic power (6)
+	// is a real player power.
+	methods["SetMaxPower"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("SetMaxPower requires a power type and amount")
+		}
+		power := int(playerPowerType(state))
+		if args[0] != nil {
+			value, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if value >= 7 {
+				return nil, fmt.Errorf("power type %d is invalid", value)
+			}
+			power = int(value)
+		}
+		amt, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		state.MaxPowers[power] = amt
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// SetRooted is Unit::SetRooted (UnitMethods.h:1932):
+	// SetControlled(apply, UNIT_STATE_ROOT), defaulting to true
+	// like C++'s default argument. The session rooted flag (IsRooted
+	// reads it) plus the SMSG_FORCE_MOVE_ROOT/UNROOT send, through
+	// the existing setRooted helper.
+	methods["SetRooted"] = func(_ context.Context, args []any) ([]any, error) {
+		s.setRooted(luaOptionalBoolArg(args, 0, true))
+		return nil, nil
+	}
+	// RemoveAllAuras is Unit::RemoveAllAuras (Unit.cpp:4282): every
+	// live player aura removed through the removeAura funnel
+	// (talents and racials are not Go auras, so the Eluna caution
+	// about them does not apply here). DELTA: a single pass — C++
+	// re-sweeps up to 50 times for auras re-applied by their own
+	// remove handlers.
+	methods["RemoveAllAuras"] = func(_ context.Context, _ []any) ([]any, error) {
+		var ids []uint32
+		for id := range s.activeAuras {
+			ids = append(ids, id)
+		}
+		for _, id := range ids {
+			s.removeAura(id)
+		}
+		return nil, nil
+	}
+	// Kill is Unit::Kill (UnitMethods.h:2899, Unit.cpp:11153): the
+	// killer is this player, the target is the argument — not a
+	// self-kill primitive. C++ sets JUST_DIED directly after the
+	// reward/proc legs, never through DealDamage, so the twin
+	// follows the in-tree lethal paths per victim kind. A player
+	// victim takes the combat.go lethal sequence (health zeroed,
+	// update sent, gated honorable-kill credit, killPlayer as the
+	// death-state tail with the caller's durability-loss flag, then
+	// the PvP kill hook); an already-dead victim is the C++ early
+	// return. A creature victim takes the DealDamage funnel at its
+	// full current health, which runs the lethal creature-death
+	// chain (tap, lootable flag, onCreatureKilled, kill hook).
+	// DELTA: the creature leg can be soaked by absorb shields where
+	// C++ Kill ignores them — the handler twin's insta-kill takes a
+	// creatureMotion killer, which a player cannot supply.
+	methods["Kill"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("Kill requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return nil, fmt.Errorf("Kill requires a target unit")
+		}
+		durLoss := luaOptionalBoolArg(args, 1, true)
+		if victimSess := s.server.findSessionByGUID(targetGUID); victimSess != nil && victimSess.player != nil {
+			if victimSess.player.Health == 0 {
+				return nil, nil
+			}
+			victimSess.player.Health = 0
+			victimSess.sendPlayerUpdate()
+			s.server.creditHonorableKill(s, victimSess)
+			victimSess.killPlayer(ctx, s, true, durLoss)
+			s.server.firePVPKillHook(ctx, s, victimSess)
+			return nil, nil
+		}
+		ref, ok := s.server.luaUnitRef(targetGUID, state.Map, state.InstanceID)
+		if !ok {
+			return nil, nil
+		}
+		if ref.snapshot().health == 0 {
+			return nil, nil
+		}
+		luaUnitDealDamage(ctx, luaUnitPlayerRef(s), targetGUID, ref.snapshot().health, durLoss, 7, 0)
+		return nil, nil
+	}
 	// GetCurrentSpell(spellType) is Unit::GetCurrentSpell
 	// (UnitMethods.h:785-792): the live Spell object for the slot, nil
 	// when empty. GENERIC reads the cast-bar cast, CHANNELED the live

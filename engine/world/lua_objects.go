@@ -1235,6 +1235,195 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		return []any{nil}, nil
 	}
+	// GetStandState/IsStandState are Unit::GetStandState (Unit.h:921)
+	// and Unit::IsStandState (Unit.cpp:10551) over the live motion's
+	// StandState, the handler twins' field (lua_creature_events.go);
+	// a motion that no longer resolves reads the standing default.
+	// The player surface already carries the same pair.
+	methods["GetStandState"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return uint8(0)
+		}
+		return motion.StandState
+	})
+	methods["IsStandState"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return true
+		}
+		return unitIsStandState(motion.StandState)
+	})
+	// IsMounted is Unit::IsMounted (Unit.cpp): the UNIT_FLAG_MOUNT
+	// bit over the live motion flags, the handler twin's read; a
+	// motion that no longer resolves falls back to the template
+	// flags this snapshot was built from.
+	methods["IsMounted"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return state.UnitFlags&0x08000000 != 0
+		}
+		return motion.UnitFlags&0x08000000 != 0
+	})
+	// IsRooted is Unit::IsRooted (UnitMethods.h, Trinity arm) over
+	// the live motion's ScriptRooted slot, the handler twin's read;
+	// a motion that no longer resolves reads false.
+	methods["IsRooted"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		return motion != nil && motion.ScriptRooted
+	})
+	// GetSpeed is UnitMethods::GetSpeed over the live motion's walk
+	// and run speeds with the handler twin's base fallbacks and
+	// move-type gate (MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6); a
+	// motion that no longer resolves reads the bases directly.
+	methods["GetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
+		mt, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		walk, run := float32(creatureBaseWalkSpeed), float32(creatureBaseRunSpeed)
+		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
+			walk, run = motion.Speed, motion.RunSpeed
+		}
+		switch mt {
+		case 0:
+			if walk <= 0 {
+				walk = creatureBaseWalkSpeed
+			}
+			return []any{walk}, nil
+		case 1:
+			if run <= 0 {
+				run = creatureBaseRunSpeed
+			}
+			return []any{run}, nil
+		case 6:
+			return []any{float32(creatureBaseFlightSpeed)}, nil
+		default:
+			return nil, fmt.Errorf("GetSpeed supports MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6 only, got %d", mt)
+		}
+	}
+	// SetStandState is Unit::SetStandState (Unit.cpp:10557) over the
+	// live motion's StandState + Known flag, the handler twin's
+	// write (same 0-9 validation, same spawn-record overlay effect);
+	// a motion that no longer resolves is a silent no-op, the
+	// SetName precedent.
+	methods["SetStandState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if st > 9 {
+			return nil, fmt.Errorf("SetStandState requires a UNIT_STAND_STATE 0-9, got %d", st)
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.StandState = uint8(st)
+		motion.StandStateKnown = true
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// SetSheath is Unit::SetSheath (Unit.h:903) over the live
+	// motion's SheathState + Known flag, the handler twin's write
+	// (same 0-2 validation, same spawn-record overlay effect).
+	methods["SetSheath"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if st > 2 {
+			return nil, fmt.Errorf("SetSheath requires a SHEATH_STATE 0-2, got %d", st)
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.SheathState = uint8(st)
+		motion.SheathStateKnown = true
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// EmoteState is the Lua CreatureMethods::EmoteState
+	// SetUInt32Value twin over the live motion's EmoteState + Known
+	// flag, the handler twin's write (which broadcasts nothing).
+	methods["EmoteState"] = func(_ context.Context, args []any) ([]any, error) {
+		st, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.EmoteState = st
+		motion.EmoteStateKnown = true
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// SetRooted is Unit::SetControlled(state, UNIT_STATE_ROOT) over
+	// the live motion's ScriptRooted slot, the handler twin's write
+	// (same required-bool argument shape, same chase/waypoint gate
+	// effect, no broadcast).
+	methods["SetRooted"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetRooted requires a bool, got no args")
+		}
+		rooted, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetRooted requires a bool")
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.ScriptRooted = rooted
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// Mount/Dismount are Unit::Mount/Unit::Dismount (Unit.cpp:8310/
+	// 8365) over the live motion's Mount slot, MOUNT flag, and
+	// MountKnown flag, the handler twins' writes (Mount's `if
+	// (mount)` display gate, Dismount's not-mounted early return);
+	// neither handler twin broadcasts.
+	methods["Mount"] = func(_ context.Context, args []any) ([]any, error) {
+		displayID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if displayID != 0 {
+			motion.Mount = displayID
+		}
+		motion.UnitFlags |= 0x08000000
+		motion.MountKnown = true
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	methods["Dismount"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if motion.UnitFlags&0x08000000 == 0 {
+			s.server.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.Mount = 0
+		motion.UnitFlags &^= 0x08000000
+		motion.MountKnown = true
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
 	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
