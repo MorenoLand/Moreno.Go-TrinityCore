@@ -12919,26 +12919,31 @@ func init() {
 	// hidden_files/CHECKPOINT.md.
 	// zone_blades_edge_mountains residuals (npc_nether_drake
 	// already ported at lua_scripts/outland/npc_nether_drake.lua
-	// per the earlier Outland zone-set work): go_legion_
-	// obelisk's quest-10821 spawn arm is quest-gated (no
-	// player:GetQuestStatus bridge); npc_simon_bunny's Simon game
-	// is unreachable — the GO-gossip -> bunny SetGUID/SetData
-	// dispatch and player:SummonCreature have no bridges (the
-	// summon / teleport / sound / world-search bridges it also
-	// needs all exist now — the missing legs are the GO-gossip
-	// entry-point dispatch, player:SummonCreature and
-	// SetObjectScale); go_simon_
-	// cluster / go_apexis_relic's gossip summon arms need the
-	// npc_oscillating_frequency_scanner_master_bunny's
-	// Reset summon machine is bridgeable and its
-	// GetClosestCreatureWithEntry leg is bridged now
-	// (creature:FindNearestCreature); entry 21760 sourced from
-	// Wowhead TBC Classic (no C++ entry constant — DB-side ScriptName
-	// binding) and the Reset arm is ported in lua_scripts/outland/
-	// npc_oscillating_frequency_scanner_master_bunny.lua; its
-	// IsSummonedBy player-capture has no bridge (ev22 is
-	// pet-funnel-only) and spell_oscillating_field is a SpellScript
-	// — both documented only; see hidden_files/CHECKPOINT.md.
+	// per the earlier Outland zone-set work, SpellHit rotation
+	// ported 2026-11-03 with only the NIHIL-destination leg out
+	// on the missing EnterEvadeMode bridge): go_legion_obelisk
+	// is ported at lua_scripts/outland/go_legion_obelisk.lua
+	// (quest-10821 gate via player:GetQuestStatus, shared
+	// five-obelisk flags, doomcryer summon on the fifth use);
+	// npc_simon_bunny's Simon game is unreachable — its entry
+	// point is the relic's bunny->AI()->SetGUID call, which has
+	// no cross-AI dispatch bridge (GO gossip hello/select ARE
+	// wired now, player:SummonCreature and player:HasItem exist,
+	// and the summon / teleport / sound / world-search bridges
+	// it also needs exist — the missing legs are SetGUID dispatch,
+	// the SetData store-vs-dispatch gap, and the
+	// PrepareGossipMenu / CloseGossipMenuFor menu bridges);
+	// go_simon_cluster's gossip arm needs the same SetData
+	// dispatch, and go_apexis_relic's hello/select arms need the
+	// menu bridges plus SetGUID; npc_oscillating_frequency_
+	// scanner_master_bunny's Reset summon machine is ported in
+	// lua_scripts/outland/npc_oscillating_frequency_scanner_
+	// master_bunny.lua (entry 21760 sourced from Wowhead TBC
+	// Classic, no C++ entry constant — DB-side ScriptName
+	// binding); its IsSummonedBy player-capture has no bridge
+	// (ev22 is pet-funnel-only) and spell_oscillating_field is a
+	// SpellScript — both documented only; see
+	// hidden_files/CHECKPOINT.md.
 	RegisterLuaBoss("npc_oscillating_frequency_scanner_master_bunny", 21760)
 	// boss_doomlord_kazzak (18728) and boss_doomwalker (17711):
 	// the C++ files carry no NPC_ entry constants anywhere in
@@ -12955,10 +12960,11 @@ func init() {
 	// mana burn / arcane blast timers — over the five
 	// ENTRY_* drake entries (20021 whelp, 21821 proto,
 	// 21817 adolescent, 21820 mature, 21823 nihil), all
-	// verifiable from the C++ sources; the SpellHit phase-
-	// modulator transform has no entry-update/flag/evade/
-	// movement bridges, so the IsNihil speech machine never
-	// runs — see lua_scripts/outland/npc_nether_drake.lua.
+	// verifiable from the C++ sources; the SpellHit phase-modulator rotation is ported
+	// (entry rotation, NIHIL-source Talk + flag clear,
+	// UpdateEntry + EngageWithTarget); only the NIHIL-destination
+	// leg stays out on the missing EnterEvadeMode bridge, so
+	// the IsNihil speech machine never runs — see lua_scripts/outland/npc_nether_drake.lua.
 	RegisterLuaBoss("npc_nether_drake", 20021)
 	RegisterLuaBoss("npc_nether_drake", 21821)
 	RegisterLuaBoss("npc_nether_drake", 21817)

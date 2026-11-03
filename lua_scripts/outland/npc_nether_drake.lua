@@ -18,10 +18,10 @@
 -- bunny and the spell_oscillating_field SpellScript are
 -- documented-only (see deviations).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
--- 23 OnReset (the C++ overrides no KilledUnit/JustDied/
--- DamageTaken; the SpellHit transform (event 14 IS live;
--- UpdateEntry bridged 2026-10-22) stays unmodeled on its
--- EnterEvadeMode / AttackStart legs, see deviations).
+-- 23 OnReset, 14 OnHitBySpell (the C++ overrides no
+-- KilledUnit/JustDied/DamageTaken; the SpellHit phase-
+-- modulator rotation is ported — only the NIHIL-destination
+-- leg stays out, on the missing EnterEvadeMode bridge).
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI in
 -- C++ arm order, non-Nihil branch only — the IsNihil speech
 -- machine is unreachable behind the unmodeled SpellHit
@@ -48,29 +48,30 @@
 -- arm — 7500 init then 2500+rand()%5000: non-triggered
 -- DoCastVictim(SPELL_ARCANE_BLAST 38881) (C++-exact),
 -- re-arm regardless (C++-exact).
--- No talk lines fire in this model: SAY_NIHIL_1..4 and
--- SAY_NIHIL_INTERRUPT all sit in the unmodeled SpellHit /
--- Nihil arms (millhouse SAY_ICEBLOCK precedent).
+-- No talk lines fire from the combat pump: SAY_NIHIL_1..4 sit
+-- in the unmodeled IsNihil speech machine (millhouse
+-- SAY_ICEBLOCK precedent); SAY_NIHIL_INTERRUPT fires on the
+-- NIHIL-source SpellHit leg below.
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the C++ Reset() observable remainder —
 -- the Initialize() re-latch — lands on OnEnterCombat,
 -- gargolmar precedent; Eluna's On_Reset fires ahead of
 -- OnDied and OnSpawn — millhouse note — so both hooks
 -- land the same reset).
--- Deliberate deviations (all await engine bridges): the
--- whole SpellHit phase-modulator arm (the entry rotation,
--- me->UpdateEntry — bridged 2026-10-22 — EnterEvadeMode
--- (no bridge), the Nihil UNIT_FLAG_NON_ATTACKABLE latch, the
--- RemoveFlag interrupt arm, AttackStart on the player
--- caster, Talk(SAY_NIHIL_INTERRUPT)) stays unmodeled on the
--- EnterEvadeMode / AttackStart legs alone — event 14 itself is
--- live and UpdateEntry / SetFlag / RemoveFlag / Talk are all
--- bridged, so those two legs are the sole blockers; the IsNihil speech machine (SAY_NIHIL_
--- 1..4), the UNIT_FLAG_NOT_SELECTABLE flag arm, the MoveIn
--- LineOfSight NON_ATTACKABLE gate and the MovementInform
--- MovePoint(0)->DespawnOrUnsummon arm all sit behind it or
--- behind flag/movement bridges — unmodeled (netherspite /
--- omor precedents); the oscillating-frequency scanner master
+-- SpellHit phase-modulator arm PORTED (event 14, C++-exact
+-- except the NIHIL-destination delta below): player-caster
+-- gate (GetObjectType() == "Player"), cid = rand32() % (4-1)
+-- with the bump-if-equal rule, NIHIL-source Talk(SAY_NIHIL_
+-- INTERRUPT) + RemoveFlag(NON_ATTACKABLE), then UpdateEntry
+-- (new) and EngageWithTarget(player) as the AttackStart twin.
+-- DELTA: when the rotation picks NIHIL, the transform is
+-- skipped — C++ calls EnterEvadeMode there (no bridge),
+-- flags NON_ATTACKABLE, runs the IsNihil speech machine and
+-- flies off; the speech machine (SAY_NIHIL_1..4), the
+-- NOT_SELECTABLE flag arm, the MoveInLineOfSight
+-- NON_ATTACKABLE gate and the MovementInform
+-- MovePoint(0)->DespawnOrUnsummon arm all sit behind that
+-- leg — unmodeled (netherspite / omor precedents); the oscillating-frequency scanner master
 -- bunny's SummonCreature / SummonGameObject arms stay out — the
 -- unit is unregistered (no entry constant in the C++ sources) and its
 -- IsSummonedBy player-capture has no bridge (event 19 fires on the
@@ -191,10 +192,59 @@ local function onLeaveCombat(_, creature)
     fullReset(creature:GetGUID())
 end
 
+local SPELL_T_PHASE_MODULATOR = 37573
+local ENTRY_NIHIL = 21823
+local SAY_NIHIL_INTERRUPT = 4
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+
+-- C++ entry rotation order: PROTO, ADOLE, MATUR, NIHIL.
+local PHASE_ENTRY_LIST = {
+    21821,  -- ENTRY_PROTO
+    21817,  -- ENTRY_ADOLE
+    21820,  -- ENTRY_MATUR
+    21823,  -- ENTRY_NIHIL
+}
+
+-- C++ SpellHit (zone_blades_edge_mountains.cpp:128-160) in
+-- arm order. The combat pump above is per-GUID and entry-
+-- independent, so it survives the transform exactly as the
+-- C++ AI object does (no Reset runs on UpdateEntry).
+local function onSpellHit(_, creature, caster, spellId)
+    if spellId ~= SPELL_T_PHASE_MODULATOR then
+        return
+    end
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+
+    local current = creature:GetEntry()
+    local cid = math.random(0, 2)
+    if PHASE_ENTRY_LIST[cid + 1] == current then
+        cid = cid + 1
+    end
+
+    if current == ENTRY_NIHIL then
+        creature:Talk(SAY_NIHIL_INTERRUPT)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    end
+
+    local newEntry = PHASE_ENTRY_LIST[cid + 1]
+    -- DELTA: NIHIL destination needs EnterEvadeMode (no
+    -- bridge) — skip the transform, keep the current form.
+    if newEntry == ENTRY_NIHIL then
+        return
+    end
+    if creature:UpdateEntry(newEntry) then
+        creature:EngageWithTarget(caster)
+    end
+end
+
 for _, entry in ipairs(NETHER_DRAKE_ENTRIES) do
     RegisterCreatureEvent(entry, 1, onEnterCombat)
     RegisterCreatureEvent(entry, 2, onLeaveCombat)
     -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
     -- this lands the same Reset() reset as the evade hook.
     RegisterCreatureEvent(entry, 23, onLeaveCombat)
+    RegisterCreatureEvent(entry, 14, onSpellHit)
 end
