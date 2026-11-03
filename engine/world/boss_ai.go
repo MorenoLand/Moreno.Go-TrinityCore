@@ -7371,6 +7371,34 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 				}
 				s.castCreatureSpellInternal(ctx, tm, 41131, guid, true)
 			}
+		case 71806:
+			// spell_taldaram_glittering_sparks (boss_blood_prince_council.cpp):
+			// EFFECT_0 script effect — the caster casts the effect value on
+			// itself, triggered, once per hit target (PreventHitDefaultEffect
+			// has no generic-arm counterpart here). Taldaram's victim-cast
+			// rides the Lua port; the value comes from the DBC effect via
+			// CalcValue, the Go twin of GetEffectValue.
+			if value := eff.CalcValue(); value > 0 {
+				s.castCreatureSpellInternal(ctx, m, uint32(value), m.GUID, true)
+			}
+		case 69222:
+			// spell_gen_throw_shield (spell_generic.cpp): EFFECT_1 script effect
+			// — the caster casts the effect value on the hit unit, triggered,
+			// once per hit target. The frostsworn general's target-cast rides
+			// the Lua port.
+			if value := eff.CalcValue(); value > 0 {
+				s.castCreatureSpellInternal(ctx, m, uint32(value), guid, true)
+			}
+		case 70939:
+			// spell_generic_remove_empowered_blood (icecrown_citadel.cpp):
+			// EFFECT_0 script effect — the hit unit removes Empowered Blood
+			// (70227). Lana'thel's self-cast rides the Lua port, so hit is
+			// self; the player/creature legs follow the 60022 precedent.
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				ts.removeAura(70227)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				s.removeCreatureAura(creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: guid}, 70227)
+			}
 		case 52173, 60243:
 			// Coyote Spirit / Blood Parrot Despawn
 			// (SpellEffects.cpp:3704-3708): a TYPEID_UNIT summon target
