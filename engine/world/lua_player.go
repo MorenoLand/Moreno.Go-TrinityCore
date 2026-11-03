@@ -1310,9 +1310,30 @@ func (s *session) luaPlayer() *scripting.Object {
 	// SUMMON list, where Go's single-slot model reads the pet.
 	methods["GetMinionGUID"] = luaNoArgs(func() any { return state.PetGUID })
 	// GetOwnerGUID is Unit::GetOwnerGUID (Unit.h:1147): the
-	// UNIT_FIELD_SUMMONEDBY read. Players carry no summoned-by
-	// (the GetCharmerGUID precedent reads 0), so this reads 0.
-	methods["GetOwnerGUID"] = luaNoArgs(func() any { return uint64(0) })
+	// UNIT_FIELD_SUMMONEDBY read, here the session-only
+	// SummonedByGUID (the SetOwnerGUID write target); 0 is the
+	// C++ default for a player never assigned an owner.
+	methods["GetOwnerGUID"] = luaNoArgs(func() any { return state.SummonedByGUID })
+	// SetOwnerGUID is Unit::SetOwnerGUID (UnitMethods.h:1449,
+	// Unit.cpp:5971): the UNIT_FIELD_SUMMONEDBY write, with
+	// C++'s equal-value early return; a changed value propagates
+	// via sendPlayerUpdate, the SetPetGUID precedent. DELTA:
+	// C++'s owner-player values-update notify has no Go twin.
+	methods["SetOwnerGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		if state.SummonedByGUID == guid {
+			return nil, nil
+		}
+		state.SummonedByGUID = guid
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
 	// SetPetGUID is Unit::SetPetGUID (UnitMethods.h:1806): the
 	// m_SummonSlot[PET] write, which Go models as the player PetGUID
 	// (the values builder mirrors it into UNIT_FIELD_SUMMON).
@@ -2611,10 +2632,20 @@ func (s *session) luaPlayer() *scripting.Object {
 		return []any{nil}, nil
 	}
 	// GetOwner is Unit::GetOwner (UnitMethods.h:596): the
-	// UNIT_FIELD_SUMMONEDBY read. Players are never summoned, so
-	// this reads nil, the GetControllerGUID precedent (which reads 0
-	// for the same missing owner model).
-	methods["GetOwner"] = luaNoArgs(func() any { return nil })
+	// UNIT_FIELD_SUMMONEDBY read, here the session-only
+	// SummonedByGUID (the SetOwnerGUID write target); the owning
+	// player object, or nil when no owner is set or the owner
+	// session is gone (the GO GetOwner precedent). DELTA: a
+	// creature owner resolves to nil, as on the GO surface.
+	methods["GetOwner"] = luaNoArgs(func() any {
+		if state.SummonedByGUID == 0 {
+			return nil
+		}
+		if owner := s.server.findSessionByGUID(state.SummonedByGUID); owner != nil {
+			return owner.luaPlayer()
+		}
+		return nil
+	})
 	// IsCharmed is Unit::IsCharmed (UnitMethods.h:376): the
 	// UNIT_FIELD_CHARMEDBY read. Go stores no charmer for players
 	// (GetCharmerGUID reads 0), so this reads false.

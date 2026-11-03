@@ -201,8 +201,13 @@ type playerState struct {
 	ObjectSlots  [4]uint64
 	CritterGUID  uint64
 	CritterPetID uint32
-	Name         string
-	Race         uint8
+	// SummonedByGUID is the Unit::SetOwnerGUID write target
+	// (UNIT_FIELD_SUMMONEDBY, UpdateFields.h:90): the session-only
+	// owner GUID, which the values builder mirrors into field 14;
+	// 0 is the C++ default for a player never assigned an owner.
+	SummonedByGUID uint64
+	Name           string
+	Race           uint8
 	// FactionRaceOverride is the SetFactionForRace race (Player.cpp:6636):
 	// the faction template and team read from this race instead of Race
 	// while FactionRaceOverrideSet, for the session only (login recomputes
@@ -4022,6 +4027,10 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	if state.CritterGUID != 0 {
 		values[unitFieldCritter] = uint32(state.CritterGUID)
 		values[unitFieldCritter+1] = uint32(state.CritterGUID >> 32)
+	}
+	if state.SummonedByGUID != 0 {
+		values[unitFieldSummonedBy] = uint32(state.SummonedByGUID)
+		values[unitFieldSummonedBy+1] = uint32(state.SummonedByGUID >> 32)
 	}
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		entry := state.QuestLog[slot]
