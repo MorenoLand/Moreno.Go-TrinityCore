@@ -1889,6 +1889,10 @@ func (s *session) loadExploredZones(ctx context.Context) {
 // bgRewardTargets (entered InProgress or WaitLeave slots): every end arm
 // flips slots to WaitLeave before crediting.
 func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
+	// The battleground statistics row lands first, as in C++ (the
+	// EndBattleground insert runs ahead of the player loop); WSG ties
+	// arrive here as team 2 and record a neutral row, as in C++.
+	s.recordBattlegroundStats(mapID, winningTeam)
 	var allParticipants, winners []*session
 	for _, sess := range s.bgRewardTargets(mapID) {
 		allParticipants = append(allParticipants, sess)

@@ -160,6 +160,7 @@ type Config struct {
 	ResetDuelCooldowns                      bool
 	ResetDuelHealthMana                     bool
 	BattlegroundTrackDeserters              bool
+	BattlegroundStoreStatisticsEnable       bool
 	BattlegroundCastDeserter                bool
 	BattlegroundReportAFK                   int
 	BattlegroundPrematureFinishTimer        int
@@ -610,6 +611,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_BATTLEGROUND_TRACK_DESERTERS"); ok {
 		_ = c.set("Battleground.TrackDeserters.Enable", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_BATTLEGROUND_STORE_STATISTICS_ENABLE"); ok {
+		_ = c.set("Battleground.StoreStatistics.Enable", value)
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_ARENA_QUEUE_ANNOUNCER_ENABLE"); ok {
 		_ = c.set("Arena.QueueAnnouncer.Enable", value)
@@ -1233,6 +1237,8 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.ResetDuelHealthMana, key, value)
 	case "Battleground.TrackDeserters.Enable":
 		return setBool(&c.BattlegroundTrackDeserters, key, value)
+	case "Battleground.StoreStatistics.Enable":
+		return setBool(&c.BattlegroundStoreStatisticsEnable, key, value)
 	case "Battleground.CastDeserter":
 		return setBool(&c.BattlegroundCastDeserter, key, value)
 	case "Battleground.ReportAFK":

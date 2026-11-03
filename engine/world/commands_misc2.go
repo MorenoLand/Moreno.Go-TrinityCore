@@ -51,13 +51,27 @@ import (
 //     live, as does the Lua Mute precedent (lua_player.go).
 //   - `mutehistory` is wired: LOGIN_SEL_ACCOUNT_MUTE_INFO over the
 //     account_muted table, via the accountIDByName lookup.
-//   - `possess` has no Go bridge: casting spell 530 (charm) has no
-//     charm/possess model.
-//   - `unpossess` has no Go bridge: Unit::RemoveCharmAuras has no charm
-//     model.
-//   - `pvpstats` has no Go bridge: the battleground statistics store
-//     (CHAR_SEL_PVPSTATS_FACTIONS_OVERALL + CONFIG_BATTLEGROUND_STORE_
-//     STATISTICS_ENABLE) is unbuilt.
+//   - `possess` is wired: the GM casts possess (530, triggered) on the
+//     selected unit, and the funnel's MOD_POSSESS apply arm runs
+//     charmCreatureFaction with the possess leg (POSSESSED flag, client
+//     control, possess bar). Delta: no selection reports the family
+//     message where C++ returns false silently.
+//   - `unpossess` is wired: Unit::RemoveCharmAuras on the selected unit
+//     (else the GM) removes the MOD_CHARM / MOD_POSSESS_PET / MOD_POSSESS /
+//     AOE_CHARM auras in C++ order; the creature remove funnel runs
+//     uncharmCreature plus the client-control release. Delta: a selection
+//     that resolves to neither a player session nor a same-map creature
+//     falls back to self.
+//   - `pvpstats` is wired: with Battleground.StoreStatistics.Enable on,
+//     the CHAR_SEL_PVPSTATS_FACTIONS_OVERALL query over
+//     pvpstats_battlegrounds (last 7 calendar days, winner_faction ASC),
+//     walking the rows C++-exact (first row -> Horde, second -> Alliance,
+//     fewer than two rows -> silent). Rows are recorded by
+//     recordBattlegroundStats at every BG end (creditBattlegroundWin for
+//     AB/EotS/IoC/SA/WSG, endAV for AV). Deltas: LANG wordings are
+//     plain-English recalls (no in-tree seed); per-player
+//     pvpstats_players rows have no writer; AV wins still get no WIN_BG
+//     criteria credit (pre-existing gap, untouched).
 //   - `recall` is wired: Player::SaveRecallPosition snapshots the login
 //     position and every non-flight .go teleport (cs_go.cpp DoTeleport),
 //     and Recall teleports the target there (Player.h:1989-1990).
@@ -1291,23 +1305,65 @@ func (s *session) handleCmdPlayAll(ctx context.Context, args []string) {
 }
 
 // handleCmdPossess mirrors HandlePossessCommand (cs_misc.cpp:2524-2533, RBAC
-// 519). Documented-blocked: casting spell 530 (charm) has no charm/possess
-// model.
+// 519): the GM casts possess (530, triggered) on the selected unit; the
+// funnel's MOD_POSSESS apply arm runs charmCreatureFaction with the possess
+// leg. Delta: no selection reports the family message where C++ returns
+// false silently.
 func (s *session) handleCmdPossess(ctx context.Context) {
+	if s.player == nil {
+		s.sendSysMessage("You must be in game to use that command.")
+		return
+	}
 	if s.miscDeny(ctx, permissionCommandPossess) {
 		return
 	}
-	s.sendSysMessage("The .possess command is not available: charm/possess has no Go model.")
+	if s.selection == 0 {
+		s.sendSysMessage(miscSelectCharOrCreat)
+		return
+	}
+	s.castSpellDirect(ctx, 530, s.selection)
 }
 
 // handleCmdPvPstats mirrors HandlePvPstatsCommand (cs_misc.cpp:130-157, RBAC
-// 797). Documented-blocked: the battleground statistics store
-// (CHAR_SEL_PVPSTATS_FACTIONS_OVERALL) is unbuilt.
+// 797): with Battleground.StoreStatistics.Enable on, the
+// CHAR_SEL_PVPSTATS_FACTIONS_OVERALL query over pvpstats_battlegrounds,
+// walking the rows C++-exact (first row -> Horde, second -> Alliance;
+// fewer than two rows returns false silently). DATEDIFF(NOW(), date) < 7
+// counts calendar days, so the filter is date(date) within the last 6
+// calendar days plus today (future rows included, as in C++). LANG
+// wordings are plain-English recalls (no in-tree seed).
 func (s *session) handleCmdPvPstats(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandPvPstats) {
 		return
 	}
-	s.sendSysMessage("The .pvpstats command is not available: the battleground statistics store is unbuilt.")
+	if s.server == nil || !s.server.Config.BattlegroundStoreStatisticsEnable {
+		s.sendSysMessage("Battleground statistics are disabled.")
+		return
+	}
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT winner_faction, COUNT(*) AS count FROM pvpstats_battlegrounds WHERE date(date) >= date('now', '-6 days') GROUP BY winner_faction ORDER BY winner_faction ASC")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return
+	}
+	var winnerFaction uint32
+	var hordeVictories uint32
+	if err := rows.Scan(&winnerFaction, &hordeVictories); err != nil {
+		return
+	}
+	if !rows.Next() {
+		return
+	}
+	var allianceVictories uint32
+	if err := rows.Scan(&winnerFaction, &allianceVictories); err != nil {
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("PvP statistics: %d Alliance victories, %d Horde victories in the last 7 days.", allianceVictories, hordeVictories))
 }
 
 // handleCmdRecall mirrors HandleRecallCommand (cs_misc.cpp:825-847, RBAC
@@ -1877,13 +1933,41 @@ func (s *session) handleCmdUnmute(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("You enabled chat for %s.", miscPlayerLink(name)))
 }
 
+// charmAuraTypes is Unit::RemoveCharmAuras (Unit.cpp:6525-6531) in C++
+// order: MOD_CHARM, MOD_POSSESS_PET, MOD_POSSESS, AOE_CHARM.
+var charmAuraTypes = []uint32{spellAuraCharm, spellAuraModPossessPet, spellAuraModPossess, spellAuraAoeCharm}
+
 // handleCmdUnPossess mirrors HandleUnPossessCommand (cs_misc.cpp:2534-2545,
-// RBAC 533). Documented-blocked: Unit::RemoveCharmAuras has no charm model.
+// RBAC 533): RemoveCharmAuras on the selected unit, else the GM. A
+// creature selection runs the creature remove funnel (uncharmCreature plus
+// the client-control release); a player selection runs the session remove
+// funnel. Delta: a selection resolving to neither falls back to self.
 func (s *session) handleCmdUnPossess(ctx context.Context) {
+	if s.player == nil {
+		s.sendSysMessage("You must be in game to use that command.")
+		return
+	}
 	if s.miscDeny(ctx, permissionCommandUnPossess) {
 		return
 	}
-	s.sendSysMessage("The .unpossess command is not available: charm/possess has no Go model.")
+	if s.selection != 0 {
+		if target := s.miscSelectedPlayerSession(); target != nil {
+			for _, auraType := range charmAuraTypes {
+				target.removeAurasByType(auraType)
+			}
+			return
+		}
+		if motion := s.castCommandSelectedCreature(); motion != nil && s.server != nil {
+			key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
+			for _, auraType := range charmAuraTypes {
+				s.server.removeCreatureAurasByType(key, auraType)
+			}
+			return
+		}
+	}
+	for _, auraType := range charmAuraTypes {
+		s.removeAurasByType(auraType)
+	}
 }
 
 // handleCmdUnstuck mirrors HandleUnstuckCommand (cs_misc.cpp:916-976, RBAC
