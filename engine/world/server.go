@@ -526,6 +526,26 @@ type session struct {
 	// ScriptMoveType/MoveEnds pair. Session lifetime only, never persisted.
 	playerScriptMoveType uint32
 	playerScriptMoveEnds time.Time
+	// playerChaseTargetGUID / playerChaseDist / playerChaseAngle and
+	// the playerFollow trio are the MotionMaster::MoveChase /
+	// MoveFollow ACTIVE slots for players (lua_player_spline.go):
+	// the creature motion ScriptChase/ScriptFollow slots' twin,
+	// stepped by the world tick, mutually exclusive, cleared by
+	// MoveClear/MoveExpire (MotionMaster::Clear) and by MoveTo /
+	// MoveJump / MoveFleeing (ACTIVE replacement), never by
+	// MoveStop (Unit::StopMoving removes no generator).
+	// playerConfused is the MotionMaster::MoveConfused generator arm,
+	// with playerConfusedWaitUntil the hop-pause stamp
+	// (ConfusedMovementGenerator traveltime + 800-1500ms).
+	// Session lifetime only, never persisted.
+	playerChaseTargetGUID   uint64
+	playerChaseDist         float32
+	playerChaseAngle        float32
+	playerFollowTargetGUID  uint64
+	playerFollowDist        float32
+	playerFollowAngle       float32
+	playerConfused          bool
+	playerConfusedWaitUntil time.Time
 	// factionNativeAfterRemove mirrors Unit::RestoreFaction in the
 	// AuraEffect::HandleAuraModFaction remove leg (SpellAuraEffects.cpp:4808):
 	// removing a 243 aura restores the native faction unconditionally, even
@@ -1497,6 +1517,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePetRuntime(ctx, now, diff)
 			s.updateDynamicSpellAuras(ctx, now)
 			s.updatePlayerCombat(ctx)
+			s.updatePlayerScriptMovement(now)
 			s.updateContestedPvP(now)
 			s.updatePvPFlags(now)
 			s.updatePlayerRegeneration(ctx, now)

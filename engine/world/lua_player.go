@@ -4302,19 +4302,22 @@ func (s *session) luaPlayer() *scripting.Object {
 	// GetMovementType is UnitMethods::GetMovementType
 	// (UnitMethods.h:1430-1444) for players: client-driven movement
 	// aside, the observable generators are the in-flight script spline
-	// (lua_player_spline.go stamp, POINT/FLEEING/EFFECT while it runs)
-	// and the taxi flight path (the IN_FLIGHT leg of the HasUnitState
-	// trio); anything else reads IDLE. MoveChase/MoveFollow stay out
-	// (persistent repath generators, no player movement tick) as does
-	// MoveConfused (repeated hop chain, same gap); the halt quartet
-	// below rides the script-mask leg instead and never clears the
-	// stamp, mirroring the creature stopCreatureMotion twin.
+	// (lua_player_spline.go stamp, POINT/FLEEING/EFFECT while it runs),
+	// the taxi flight path (the IN_FLIGHT leg of the HasUnitState
+	// trio), and the armed script-move slots (CONFUSED/CHASE/FOLLOW,
+	// stepped by the world tick — a paused chase still reports
+	// CHASE, the HasLostTarget arm); anything else reads IDLE. The
+	// halt quartet below rides the script-mask leg instead and never
+	// clears the stamp, mirroring the creature stopCreatureMotion twin.
 	methods["GetMovementType"] = func(_ context.Context, _ []any) ([]any, error) {
 		if moveType, ok := s.playerScriptMoveTypeNow(); ok {
 			return []any{moveType}, nil
 		}
 		if s.player != nil && s.player.TaxiPath != "" {
 			return []any{uint32(movementGeneratorFlight)}, nil
+		}
+		if moveType := s.playerScriptMovementType(); moveType != 0 {
+			return []any{moveType}, nil
 		}
 		return []any{uint32(movementGeneratorIdle)}, nil
 	}
@@ -4342,8 +4345,9 @@ func (s *session) luaPlayer() *scripting.Object {
 	// (UnitMethods.h:2142-2172, Trinity arm) = MotionMaster::Clear() =
 	// DirectClear -> Pop(true) -> Delete(active=true) -> the active
 	// generator's Finalize(owner, active=true) (MotionMaster.cpp:1097,
-	// 1218). Outside a flight there is no Go generator stack to drop,
-	// so the binding is the MoveStop mask leg. Inside a flight the
+	// 1218). Outside a flight the binding drops the armed script-move
+	// slots (MoveChase / MoveFollow / MoveConfused, the generator
+	// stack Go now models) plus the MoveStop mask leg. Inside a flight the
 	// active generator is the taxi flight, and its Finalize is
 	// FlightPathMovementGenerator::DoFinalize
 	// (FlightPathMovementGenerator.cpp:150-176): the destination id is
@@ -4363,6 +4367,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	// edge case, not a flight leg.
 	methods["MoveClear"] = func(_ context.Context, _ []any) ([]any, error) {
 		s.playerUnitStateClear(playerMoveHaltMask)
+		s.clearPlayerScriptMoveSlots()
 		if s.player == nil {
 			return nil, nil
 		}
@@ -4439,6 +4444,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
+		s.clearPlayerScriptMoveSlots()
 		s.launchPlayerScriptSpline(x, y, z, false, movementGeneratorPoint)
 		return nil, nil
 	}
@@ -4475,6 +4481,7 @@ func (s *session) luaPlayer() *scripting.Object {
 				return nil, err
 			}
 		}
+		s.clearPlayerScriptMoveSlots()
 		s.launchPlayerJumpSpline(x, y, z, zSpeed, maxHeight)
 		return nil, nil
 	}
@@ -4516,7 +4523,106 @@ func (s *session) luaPlayer() *scripting.Object {
 			moveType = movementGeneratorTimedFleeing
 		}
 		destX, destY, destZ := playerFleeDestination(s.player.X, s.player.Y, s.player.Z, tx, ty)
+		s.clearPlayerScriptMoveSlots()
 		s.launchPlayerScriptSpline(destX, destY, destZ, false, moveType)
+		return nil, nil
+	}
+	// MoveChase is UnitMethods::MoveChase (UnitMethods.h:2230-2238) =
+	// MotionMaster::MoveChase (MotionMaster.cpp:594-601): arms the
+	// player chase slot (lua_player_spline.go), stepped by the
+	// world tick. The target is a WorldObject (CHECKOBJ<Unit> in
+	// C++; a raw GUID is accepted, the creature binding's
+	// luaObjectGUID twin); a self-target, a missing target, or a
+	// target with no position is a silent no-op, matching
+	// MotionMaster's target == owner / null ignore. Dist and
+	// angle default 0 (CHECKVAL), the creature binding's arg
+	// shape. Arming chase clears follow and confused (one ACTIVE
+	// slot); the tick's HasLostTarget pause and stop-ring math
+	// live in stepPlayerChase.
+	methods["MoveChase"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("MoveChase requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 || targetGUID == s.playerGUID {
+			return nil, nil
+		}
+		var dist, angle float32
+		if len(args) >= 2 {
+			var err error
+			if dist, err = luaFloat32Arg(args, 1); err != nil {
+				return nil, err
+			}
+		}
+		if len(args) >= 3 {
+			var err error
+			if angle, err = luaFloat32Arg(args, 2); err != nil {
+				return nil, err
+			}
+		}
+		s.playerFollowTargetGUID = 0
+		s.playerFollowDist = 0
+		s.playerFollowAngle = 0
+		s.playerConfused = false
+		s.playerConfusedWaitUntil = time.Time{}
+		s.playerChaseTargetGUID = targetGUID
+		s.playerChaseDist = dist
+		s.playerChaseAngle = angle
+		return nil, nil
+	}
+	// MoveFollow is UnitMethods::MoveFollow (UnitMethods.h:2214-2221)
+	// = MotionMaster::MoveFollow (MotionMaster.cpp:584-591): arms
+	// the player follow slot (lua_player_spline.go), stepped by
+	// the world tick, with the same target / arg shape and
+	// ACTIVE-slot clearing as MoveChase above.
+	methods["MoveFollow"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("MoveFollow requires a target")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 || targetGUID == s.playerGUID {
+			return nil, nil
+		}
+		var dist, angle float32
+		if len(args) >= 2 {
+			var err error
+			if dist, err = luaFloat32Arg(args, 1); err != nil {
+				return nil, err
+			}
+		}
+		if len(args) >= 3 {
+			var err error
+			if angle, err = luaFloat32Arg(args, 2); err != nil {
+				return nil, err
+			}
+		}
+		s.playerChaseTargetGUID = 0
+		s.playerChaseDist = 0
+		s.playerChaseAngle = 0
+		s.playerConfused = false
+		s.playerConfusedWaitUntil = time.Time{}
+		s.playerFollowTargetGUID = targetGUID
+		s.playerFollowDist = dist
+		s.playerFollowAngle = angle
+		return nil, nil
+	}
+	// MoveConfused is UnitMethods::MoveConfused (UnitMethods.h:2242-2248)
+	// = MotionMaster::MoveConfused (MotionMaster.cpp:604-616, the
+	// Player arm): arms the player confused slot
+	// (lua_player_spline.go), stepped by the world tick's hop
+	// chain, clearing chase and follow (one ACTIVE slot). It is
+	// distinct from SetConfused, which stays the control/target
+	// leg only — SetConfused installs no spline here, the same
+	// split the previous tick recorded.
+	methods["MoveConfused"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.playerChaseTargetGUID = 0
+		s.playerChaseDist = 0
+		s.playerChaseAngle = 0
+		s.playerFollowTargetGUID = 0
+		s.playerFollowDist = 0
+		s.playerFollowAngle = 0
+		s.playerConfused = true
+		s.playerConfusedWaitUntil = time.Time{}
 		return nil, nil
 	}
 	// SetSpeed is UnitMethods::SetSpeed (UnitMethods.h:1532-1546) for
