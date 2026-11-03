@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // npc command port, chunk 2: the "set" sub-table (12 arms) and the remaining
@@ -17,7 +19,7 @@ import (
 // Of these 26 arms, one is partial (`set movetype`: the GUID form updates
 // the creature row in the world DB, the live creature store, and the
 // selection form adds the live MoveType slot, but the LoadPath /
-// MotionMaster-Initialize / respawn legs have no Go bridge), ten are wired
+// MotionMaster-Initialize / respawn legs have no Go bridge), eighteen are wired
 // (`delete item` on the npc_vendor rows, `set factionid` on the live faction
 // slot plus the template row, `set flag` on the live NPC-flags slot plus the
 // template row, `set level` on the live level/health slots plus the spawn
@@ -28,10 +30,13 @@ import (
 // MoveType slots plus the spawn row, `set spawntime` on the live respawn-delay
 // slot plus the spawn row, `set link` on the linked_respawn row, `set data`
 // on the AI/script-name message tail, `evade` on the triggerCreatureEvade
-// twin) and 12 are documented-blocked: info, playemote, say, textemote,
-// whisper, yell, tame, spawngroup, despawngroup, follow, follow stop and
-// showloot need the creature AI/motion/loot/pet bridges or the spawn-group
-// manager, neither of which exists in the Go tree.
+// twin, `say`/`yell`/`textemote` on the monster-chat fan-out plus the
+// trailing oneshot emote, `playemote` on the live emotestate slot plus the
+// values-update broadcast, `whisper` on the direct monster-whisper packet
+// to the named online player) and 7 are documented-blocked: info, tame,
+// spawngroup, despawngroup, follow, follow stop and showloot need the
+// creature AI/motion/loot/pet bridges or the spawn-group manager, neither
+// of which exists in the Go tree.
 // Selected-creature resolution itself exists (castCommandSelectedCreature,
 // the getSelectedCreature twin).
 
@@ -208,15 +213,15 @@ func (s *session) handleNPCChunk2(ctx context.Context, sub string, rest []string
 	case strings.HasPrefix("info", sub):
 		s.npcNeedCreature(ctx, permissionCommandNPCInfo, "info")
 	case strings.HasPrefix("playemote", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCPlayEmote, "playemote")
+		s.handleNPCPlayEmote(ctx, rest)
 	case strings.HasPrefix("say", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSay, "say")
+		s.handleNPCSay(ctx, rest)
 	case strings.HasPrefix("textemote", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCTextEmote, "textemote")
+		s.handleNPCTextEmote(ctx, rest)
 	case strings.HasPrefix("whisper", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCWhisper, "whisper")
+		s.handleNPCWhisper(ctx, rest)
 	case strings.HasPrefix("yell", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCYell, "yell")
+		s.handleNPCYell(ctx, rest)
 	case strings.HasPrefix("tame", sub):
 		s.npcNeedCreature(ctx, permissionCommandNPCTame, "tame")
 	case strings.HasPrefix("spawngroup", sub):
@@ -850,6 +855,200 @@ func (s *session) handleNPCEvade(ctx context.Context, args []string) {
 		return
 	}
 	s.server.triggerCreatureEvade(ctx, motion, time.Now())
+}
+
+// npcCreatureChat is the Unit::Talk fan-out (Unit.cpp:14040) for the npc
+// say/yell/textemote/whisper arms: a monster chat packet built from the
+// motion GUID/name, fanned out in the CONFIG_LISTEN_RANGE_* radius via the
+// set-within-phase path the creature-text rows use. Whisper callers pass
+// no range and write direct instead; see handleNPCWhisper.
+func (s *session) npcCreatureChat(motion *creatureMotion, chatType uint8, language uint32, message string, listenRange float64) {
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+	s.server.motionMu.Unlock()
+	packet := protocol.BuildMonsterChatMessage(chatType, language, motion.GUID, motion.Name, message)
+	s.server.broadcastToSetWithinFromPhase(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, mapID, instanceID, x, y, z, listenRange, phase)
+}
+
+// npcCreatureEmote is the Unit::HandleEmoteCommand fan-out (Unit.cpp):
+// SMSG_EMOTE (u32 emote + u64 guid) to the visibility set, the PerformEmote
+// twin's path.
+func (s *session) npcCreatureEmote(motion *creatureMotion, emote uint32) {
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	mapID, instanceID, x, y, z, phase := motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
+	s.server.motionMu.Unlock()
+	packet := protocol.NewBuffer(12)
+	packet.WriteU32(emote)
+	packet.WriteU64(motion.GUID)
+	s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_EMOTE), packet.Bytes(), mapID, instanceID, x, y, z, phase)
+}
+
+// npcSayOneshotEmote is the HandleNpcSayCommand trailing-emote rule
+// (cs_npc.cpp:899): '?' asks, '!' exclaims, anything else talks
+// (SharedDefines.h: EMOTE_ONESHOT_TALK=1, EXCLAMATION=5, QUESTION=6).
+func npcSayOneshotEmote(text string) uint32 {
+	switch text[len(text)-1] {
+	case '?':
+		return 6
+	case '!':
+		return 5
+	default:
+		return 1
+	}
+}
+
+// handleNPCSay mirrors HandleNpcSayCommand (cs_npc.cpp:899): ".npc say
+// <text>". Empty text returns false in C++ (the syntax arm here); the
+// creature Says with LANG_UNIVERSAL, then plays the trailing oneshot emote.
+func (s *session) handleNPCSay(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSay) {
+		return
+	}
+	const syntax = "Syntax: .npc say <text>"
+	text := strings.Join(args, " ")
+	if text == "" {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.npcCreatureChat(motion, 0x0C, languageUniversal, text, float64(s.server.Config.ChatListenRangeSay))
+	s.npcCreatureEmote(motion, npcSayOneshotEmote(text))
+}
+
+// handleNPCYell mirrors HandleNpcYellCommand (cs_npc.cpp:1003): ".npc yell
+// <text>". Same shape as say, with MONSTER_YELL and the shout oneshot
+// (EMOTE_ONESHOT_SHOUT=22).
+func (s *session) handleNPCYell(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCYell) {
+		return
+	}
+	const syntax = "Syntax: .npc yell <text>"
+	text := strings.Join(args, " ")
+	if text == "" {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.npcCreatureChat(motion, 0x0E, languageUniversal, text, float64(s.server.Config.ChatListenRangeYell))
+	s.npcCreatureEmote(motion, 22)
+}
+
+// handleNPCTextEmote mirrors HandleNpcTextEmoteCommand (cs_npc.cpp:926):
+// ".npc textemote <text>". Unit::TextEmote with isBossEmote=false, so
+// MONSTER_EMOTE (0x10) at the text-emote listen range; no trailing emote.
+func (s *session) handleNPCTextEmote(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCTextEmote) {
+		return
+	}
+	const syntax = "Syntax: .npc textemote <text>"
+	text := strings.Join(args, " ")
+	if text == "" {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.npcCreatureChat(motion, 0x10, languageUniversal, text, float64(s.server.Config.ChatListenRangeTextEmote))
+}
+
+// handleNPCPlayEmote mirrors HandleNpcPlayEmoteCommand (cs_npc.cpp:662):
+// ".npc playemote <emote>". SetUInt32Value(UNIT_NPC_EMOTESTATE) on the
+// selected creature: the live slot plus the values-update broadcast, the
+// EmoteState twin's path. C++ returns true silently; so does this arm.
+func (s *session) handleNPCPlayEmote(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCPlayEmote) {
+		return
+	}
+	const syntax = "Syntax: .npc playemote <emote>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	emote, ok := npcVendorUintArg(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	motion.EmoteState = emote
+	motion.EmoteStateKnown = true
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCEmoteState: emote})
+}
+
+// handleNPCWhisper mirrors HandleNpcWhisperCommand (cs_npc.cpp:981):
+// ".npc whisper <player> <text>". C++ checks empty text, then the selected
+// creature, then HasLowerSecurity on the FindPlayerByName receiver: an
+// offline/unknown name reports LANG_PLAYER_NOT_FOUND, and a receiver whose
+// account outranks the handler fails. Unit::Whisper writes the
+// MONSTER_WHISPER (0x0F) packet direct to the receiver session only.
+func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCWhisper) {
+		return
+	}
+	const syntax = "Syntax: .npc whisper <player> <text>"
+	if len(args) < 2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	text := strings.Join(args[1:], " ")
+	if text == "" {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	receiver := s.server.findSessionByName(args[0])
+	if receiver == nil || receiver.player == nil {
+		s.sendSysMessage("Player not found.")
+		return
+	}
+	if s.security < s.accountSecurityLevel(ctx, receiver.accountID) {
+		return
+	}
+	packet := protocol.BuildMonsterChatMessage(0x0F, languageUniversal, motion.GUID, motion.Name, text)
+	_ = receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
 }
 
 // handleNPCFollow handles "follow" and the two-level "follow stop" arm
