@@ -167,8 +167,26 @@ local function loathebLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+local GAMEOBJECT_FLAGS = 9
+local GO_FLAG_NOT_SELECTABLE = 16
+local GO_NAXX_PORTAL_PLAGUE = 181577 -- naxxramas.h:167
+
+-- C++ SetBossState(BOSS_LOATHEB, DONE) legs (instance_naxxramas.cpp):
+-- plague portal flag clear + DONE flag for the instance pump's
+-- wing taunt (create-time form cannot fire — see instance file).
 local function loathebDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    local portal = creature:FindNearestGameObject(GO_NAXX_PORTAL_PLAGUE, 1000)
+    if portal then
+        portal:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.loathebDone = true
+        end
+    end
 end
 
 local function loathebSummonedDied(event, creature, summon, killer)

@@ -463,9 +463,30 @@ end
 
 -- C++ JustDied: _JustDied() bookkeeping (no bridge) + CastSpell(
 -- me, SPELL_DIES 29357, triggered) self-cast death visual.
+local GAMEOBJECT_FLAGS = 9
+local GO_FLAG_NOT_SELECTABLE = 16
+local GO_ROOM_KELTHUZAD = 181228 -- naxxramas.h:141
+local GO_STATE_READY = 1
+
+-- C++ SetBossState(BOSS_SAPPHIRON, DONE) legs (instance_naxxramas.cpp):
+-- kelthuzad door close (HandleGameObject(false) = READY; the
+-- non-DONE transitions are unobserved in Go) + door object kept
+-- for the instance pump's chain-end open + DONE flag for the chain.
 local function sapphironDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_DIES, true)
+    local door = creature:FindNearestGameObject(GO_ROOM_KELTHUZAD, 1000)
+    if door then
+        door:SetGoState(GO_STATE_READY)
+    end
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.sapphironDone = true
+            data.kelthuzadDoor = door
+        end
+    end
 end
 
 -- C++ Reset, flight-phase leg: strip SPELL_ICEBOLT on players

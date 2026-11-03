@@ -197,8 +197,25 @@ local function kelthuzadTargetDied(event, creature, victim)
     end
 end
 
+local GAMEOBJECT_FLAGS = 9
+local GO_FLAG_NOT_SELECTABLE = 16
+local GO_KELTHUZAD_THRONE = 181640 -- naxxramas.h:124
+
+-- C++ SetBossState(BOSS_KELTHUZAD, DONE) leg (instance_naxxramas.cpp):
+-- throne flag clear + DONE flag (no pump leg reads it yet).
 local function kelthuzadDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    local throne = creature:FindNearestGameObject(GO_KELTHUZAD_THRONE, 1000)
+    if throne then
+        throne:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.kelthuzadDone = true
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 1, kelthuzadEnterCombat)

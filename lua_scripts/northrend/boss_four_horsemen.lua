@@ -323,6 +323,12 @@ local function beginFighting(creature, guid, which)
     end
 end
 
+local GAMEOBJECT_FLAGS = 9
+local GO_FLAG_NOT_SELECTABLE = 16
+local GO_NAXX_PORTAL_MILITARY = 181578 -- naxxramas.h:168
+local GO_HORSEMEN_CHEST = 181366 -- naxxramas.h:117
+local GO_HORSEMEN_CHEST_HERO = 193426 -- naxxramas.h:116
+
 local function makeHandlers(which)
     local function enterCombat(event, creature)
         local guid = creature:GetGUID()
@@ -341,6 +347,32 @@ local function makeHandlers(which)
     local function died(event, creature, killer)
         creature:Talk(SAY_DEATH)
         cancelTimers(creature:GetGUID())
+        -- C++ SetBossState(BOSS_HORSEMEN, DONE) legs
+        -- (instance_naxxramas.cpp): when the fourth horseman dies,
+        -- the chest flag clear (respawn leg stays out — no GO
+        -- GetRespawnDelay bridge) + military portal flag clear +
+        -- DONE flag for the instance pump's wing taunt.
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                data[which .. "Done"] = true
+                if data.baronDone and data.thaneDone and data.ladyDone and data.sirDone and not data.horsemenDone then
+                    data.horsemenDone = true
+                    local chest = creature:FindNearestGameObject(GO_HORSEMEN_CHEST, 1000)
+                    if not chest then
+                        chest = creature:FindNearestGameObject(GO_HORSEMEN_CHEST_HERO, 1000)
+                    end
+                    if chest then
+                        chest:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+                    end
+                    local portal = creature:FindNearestGameObject(GO_NAXX_PORTAL_MILITARY, 1000)
+                    if portal then
+                        portal:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+                    end
+                end
+            end
+        end
     end
     local function reset(event, creature)
         cancelTimers(creature:GetGUID())

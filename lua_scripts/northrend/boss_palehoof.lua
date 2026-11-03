@@ -470,6 +470,15 @@ end
 local function palehoofDied(event, creature, killer)
     creature:PlayDirectSound(SOUND_PALEHOOF_DEATH)
     cancelCombatTimers(event, creature)
+    -- C++ instance_utgarde_pinnacle OnGameObjectCreate leg (sphere
+    -- flagged NOT_SELECTABLE when GORTOK_PALEHOOF is DONE), run at
+    -- DONE time: the static sphere never fires GO-create in Go
+    -- (instance_hooks.go:306), and the Reset re-arm above already
+    -- uses this same anchored lookup (100yd, same room).
+    local sphere = creature:FindNearestGameObject(GO_GORTOK_PALEHOOF_SPHERE, 100.0)
+    if sphere then
+        sphere:SetFlag(9, 16) -- GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE
+    end
 end
 
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 1, palehoofEnterCombat)

@@ -172,8 +172,27 @@ local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+local GAMEOBJECT_FLAGS = 9
+local GO_FLAG_NOT_SELECTABLE = 16
+local GO_NAXX_PORTAL_ARACHNID = 181575 -- naxxramas.h:165
+
+-- C++ SetBossState(BOSS_MAEXXNA, DONE) legs (instance_naxxramas.cpp):
+-- arachnid portal flag clear (anchored lookup — the instance file
+-- documents why the create-time form cannot fire) + DONE flag for
+-- the instance pump's wing taunt.
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    local portal = creature:FindNearestGameObject(GO_NAXX_PORTAL_ARACHNID, 1000)
+    if portal then
+        portal:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.maexxnaDone = true
+        end
+    end
 end
 
 local function onReset(event, creature)

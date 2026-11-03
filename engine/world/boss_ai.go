@@ -17605,15 +17605,15 @@ func init() {
 	RegisterLuaBoss("boss_four_horsemen_lady", 16065)
 	RegisterLuaBoss("boss_four_horsemen_sir", 16063)
 
-	// instance_naxxramas.cpp audit (2026-10-18): pure InstanceMapScript
-	// (map 533, "instance_naxxramas") — 16-boss GUID latches, door/
-	// boundary/port GO data, achievement 7600/7601 + Immortal/Undying
-	// criteria (AreAllEncountersDone + playerDied latch), and the
-	// Kel'Thuzad dialogue chains (wing taunts, gothik->horsemen 8-line
-	// chain, sapphiron/lich-king 6-line chain). All legs need the
-	// unbridged instance machinery (SetBossState/GetBossState,
-	// GetGuidData/SetData, GO flags). No-instance-script-bridge queue,
-	// documented-only, no lua.
+	// instance_naxxramas.cpp ported 2026-11-03 (lua_scripts/northrend/
+	// instance_naxxramas.lua + boss onDied DONE flags + npc_bigglesworth.lua):
+	// wing taunts, gothik 8-line + sapphiron 6-line dialogue chains,
+	// portal/throne/chest flag legs (DONE-time anchored lookups —
+	// static GOs never fire GO-create in Go), kelthuzad door close/open.
+	// Stay out: boundaries/door-data (no models), GO_BIRTH delete (no
+	// loot-state fire site), gothik gate (wave machine), playerDied +
+	// Immortal/Undying/7600/7601 (no unit-death map hook, no
+	// achievement bridge), chest respawn leg (no GO GetRespawnDelay).
 
 	// Commander Stoutbeard (26796), Commander Kolurg (26798), The
 	// Nexus — lua_scripts/northrend/boss_nexus_commanders.lua.

@@ -330,6 +330,16 @@ end
 local function gothikDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    -- C++ SetBossState(BOSS_GOTHIK, DONE) leg (instance_naxxramas.cpp):
+    -- DONE flag for the instance pump's 8-line dialogue chain (the
+    -- gate SetData legs stay out with the unported wave machine).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.gothikDone = true
+        end
+    end
 end
 
 local function gothikReset(event, creature)

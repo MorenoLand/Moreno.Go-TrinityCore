@@ -142,12 +142,30 @@ end
 -- C++ JustDied: Talk(SAY_DEATH 4) (the _JustDied + setActive/
 -- SetFarVisible + the stalagg/feugen cross-AI legs via
 -- DATA_STALAGG/DATA_FEUGEN have no bridge — tharon_ja precedent).
+local GAMEOBJECT_FLAGS = 9
+local GO_FLAG_NOT_SELECTABLE = 16
+local GO_NAXX_PORTAL_CONSTRUCT = 181576 -- naxxramas.h:166
+
 local function thaddiusDied(event, creature, killer)
     -- C++ JustDied (boss_thaddius.cpp:212): me->SetFarVisible(false)
     -- (the setActive + stalagg/feugen cross-AI legs via
     -- DATA_STALAGG/DATA_FEUGEN have no bridge).
     creature:SetFarVisible(false)
     creature:Talk(SAY_DEATH)
+    -- C++ SetBossState(BOSS_THADDIUS, DONE) legs (instance_naxxramas.cpp):
+    -- construct portal flag clear + DONE flag for the instance pump's
+    -- wing taunt (create-time form cannot fire — see instance file).
+    local portal = creature:FindNearestGameObject(GO_NAXX_PORTAL_CONSTRUCT, 1000)
+    if portal then
+        portal:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.thaddiusDone = true
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_THADDIUS, 1, thaddiusEnterCombat)
