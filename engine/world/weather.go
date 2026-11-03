@@ -28,6 +28,14 @@ type zoneWeather struct {
 	Next      time.Time
 }
 
+// zoneWeatherOverride is a Map::SetZoneWeather (Map.cpp:4783) row: the raw
+// WeatherState + intensity stored per zone, broadcast on set and re-sent
+// on zone entry ahead of the default weather object.
+type zoneWeatherOverride struct {
+	State     uint32
+	Intensity float32
+}
+
 func (s *Server) weatherInterval() time.Duration {
 	if s == nil || s.Config.WeatherChangeInterval == 0 {
 		return 10 * time.Minute
@@ -256,6 +264,41 @@ func (s *Server) setZoneWeather(ctx context.Context, zone uint32, wtype weatherT
 	}
 }
 
+// setZoneWeatherOverride mirrors Map::SetZoneWeather (Map.cpp:4783-4800):
+// the raw state + intensity are stored in the zone override and broadcast
+// immediately to players in the zone. Unlike Weather::SetWeather it takes
+// an already-derived WeatherState (FOG, DRIZZLE, BLACKSNOW are reachable
+// only here — GetWeatherState never derives them), stores unconditionally
+// (no same-value no-op), sends the intensity verbatim (no clamp), and
+// fires no WEATHER_EVENT_ON_CHANGE. The override is per-zone, matching
+// Go's zone-global weather model (C++ ZoneDynamicInfo is per-Map);
+// periodic regeneration keeps broadcasting the default object, exactly
+// as C++ Weather::Update does, so the override wins again only on the
+// next zone entry (Map::SendZoneWeather).
+func (s *Server) setZoneWeatherOverride(zone uint32, state uint32, intensity float32) {
+	if s == nil {
+		return
+	}
+	s.weatherMu.Lock()
+	if s.weatherOverrides == nil {
+		s.weatherOverrides = make(map[uint32]zoneWeatherOverride)
+	}
+	s.weatherOverrides[zone] = zoneWeatherOverride{State: state, Intensity: intensity}
+	packet := protocol.BuildWeather(state, intensity, false)
+	s.weatherMu.Unlock()
+	s.broadcastZoneWeather(zone, packet)
+}
+
+func (s *Server) zoneWeatherOverride(zone uint32) (zoneWeatherOverride, bool) {
+	if s == nil {
+		return zoneWeatherOverride{}, false
+	}
+	s.weatherMu.Lock()
+	defer s.weatherMu.Unlock()
+	override, ok := s.weatherOverrides[zone]
+	return override, ok
+}
+
 func (s *Server) zoneHasPlayers(zone uint32) bool {
 	if s == nil {
 		return false
@@ -271,7 +314,19 @@ func (s *Server) zoneHasPlayers(zone uint32) bool {
 }
 
 func (s *Server) ensureZoneWeather(ctx context.Context, zone uint32, sess *session) {
-	if s == nil || !s.Config.WeatherEnabled || zone == 0 || s.WorldStore == nil || s.WorldStore.DB == nil {
+	if s == nil || zone == 0 || sess == nil {
+		return
+	}
+	// Map::SendZoneWeather (Map.cpp:4734-4743): a stored zone override
+	// wins over the default weather object. State FINE (0) is falsy in
+	// C++, so a FINE override falls through to the default object.
+	// This leg carries no CONFIG_WEATHER gate: Map::SetZoneWeather has
+	// none (only the .wchange handler gates on it).
+	if override, ok := s.zoneWeatherOverride(zone); ok && override.State != 0 {
+		_ = sess.write(uint16(protocol.OpcodeSMSG_WEATHER), protocol.BuildWeather(override.State, override.Intensity, false), true)
+		return
+	}
+	if !s.Config.WeatherEnabled || s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
 	}
 	weather := s.getOrGenerateZoneWeather(ctx, zone)

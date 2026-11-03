@@ -129,6 +129,9 @@ func (s *Server) mapLive(mapID, instanceID uint32) scripting.MapLive {
 	live.SetWeather = func(ctx context.Context, zone, wtype uint32, grade float32) {
 		s.setZoneWeather(ctx, zone, weatherType(wtype), grade)
 	}
+	live.SetZoneWeatherOverride = func(ctx context.Context, zone, state uint32, grade float32) {
+		s.setZoneWeatherOverride(zone, state, grade)
+	}
 	live.WorldObject = func(ctx context.Context, guid uint64) *scripting.Object {
 		return s.mapWorldObject(ctx, mapID, instanceID, guid)
 	}

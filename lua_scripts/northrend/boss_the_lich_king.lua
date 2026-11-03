@@ -83,8 +83,9 @@
 -- (OnSpellHitTarget) fires on the CASTER's bindings and was never the
 -- right hook for this boss-side arm. Corrected 2026-10-17.
 -- The second SpellHit arm (:818-820, REMORSELESS_WINTER_1/2 68981/
--- 72259 —> SetZoneOverrideLight) also stays out: no zone-light
--- bridge on the Lua surface.
+-- 72259 —> SetZoneOverrideLight + LIGHT_SNOW weather) also stays out:
+-- no MovementInform bridge; the weather leg itself is now bridged
+-- (map:SetZoneWeather) and the light leg still has no bridge.
 -- boss_the_lich_king MovementInform — Talk(SAY_LK_REMORSELESS_WINTER
 -- 4) on POINT_CENTER_1 / POINT_CENTER_2; tirion->AI()->
 -- Talk(SAY_TIRION_OUTRO_2) is cross-AI Talk on POINT_LK_OUTRO_2 (no
@@ -261,6 +262,9 @@ local ENTRY_SHADOW_TRAP = 39137 -- icecrown_citadel.h:332
 local ENTRY_DEFILE = 38757 -- icecrown_citadel.h:323
 local ENTRY_TERENAS = 36823 -- icecrown_citadel.h:316 (NPC_TERENAS_MENETHIL_FROSTMOURNE)
 local ENTRY_TERENAS_HEROIC = 39217 -- icecrown_citadel.h:318
+local AREA_ICECROWN_CITADEL = 4812 -- icecrown_citadel.h:540
+local WEATHER_STATE_FOG = 1 -- Weather.h:48
+local WEATHER_STATE_BLACKSNOW = 106 -- Weather.h:61
 
 local SAY_LK_KILL = 10
 local SAY_LK_BERSERK = 11
@@ -283,6 +287,7 @@ local SPELL_PLAY_MOVIE = 73159
 local SPELL_RISEN_WITCH_DOCTOR_SPAWN = 69639 -- boss_the_lich_king.cpp:87
 local SPELL_SHADOW_TRAP_VISUAL = 73530 -- boss_the_lich_king.cpp:96
 local SPELL_DEFILE_AURA = 72743 -- boss_the_lich_king.cpp:115
+local SPELL_BROKEN_FROSTMOURNE = 72398 -- boss_the_lich_king.cpp:174
 local SPELL_TERENAS_LOSES_INSIDE = 72572 -- boss_the_lich_king.cpp:157
 local SPELL_DESTROY_SOUL = 74086 -- boss_the_lich_king.cpp:154
 local UNIT_FIELD_FLAGS = 59
@@ -355,8 +360,9 @@ end
 -- _JustDied() (instance boss-state machine, unported) then
 -- DoCastAOE(SPELL_PLAY_MOVIE 73159, false). DoCastAOE is self-cast
 -- per UnitAI.h:322, so creature:CastSpell(creature, SPELL_PLAY_MOVIE).
--- The MoveFall, zone light/weather, and 25-man
--- quest-credit legs ride unbridged machines.
+-- The MoveFall, zone-light, and 25-man
+-- quest-credit legs ride unbridged machines; the FOG zone-weather
+-- leg is ported below (map:SetZoneWeather, Map::SetZoneWeather twin).
 local function lichKingJustDied(event, creature)
     cancelTimers(creature:GetGUID())
     creature:CastSpell(creature, SPELL_PLAY_MOVIE)
@@ -368,6 +374,9 @@ local function lichKingJustDied(event, creature)
     if frostmourne then
         frostmourne:Despawn()
     end
+    -- C++ :557-558: SetZoneOverrideLight (no bridge) + SetZoneWeather
+    -- FOG, after the frostmourne despawn as in C++ order.
+    creature:GetMap():SetZoneWeather(AREA_ICECROWN_CITADEL, WEATHER_STATE_FOG, 0.0)
 end
 
 -- C++ boss_the_lich_king::KilledUnit:
@@ -420,6 +429,13 @@ local function lichKingJustSummoned(_, creature, summoned)
     elseif summoned:GetEntry() == ENTRY_DEFILE then
         summoned:SetReactState(0)
         summoned:CastSpell(summoned, SPELL_DEFILE_AURA)
+    -- C++ :766-772: broken-frostmourne visual (triggered; the C++
+    -- nullptr target reads as a self-cast) + soulstorm light (no
+    -- bridge) + BLACKSNOW zone weather; the 5s PHASE_OUTRO
+    -- soul-barrage schedule stays out (phase machine).
+    elseif summoned:GetEntry() == NPC_FROSTMOURNE_TRIGGER then
+        summoned:CastSpell(summoned, SPELL_BROKEN_FROSTMOURNE, true)
+        creature:GetMap():SetZoneWeather(AREA_ICECROWN_CITADEL, WEATHER_STATE_BLACKSNOW, 0.5)
     elseif summoned:GetEntry() == ENTRY_ICE_SPHERE then
         local target = randomPlayerAnywhere(creature)
         if target then

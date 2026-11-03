@@ -354,6 +354,7 @@ type Server struct {
 	terrainModels          map[string]*terrainModel
 	weatherMu              sync.Mutex
 	weather                map[uint32]*zoneWeather
+	weatherOverrides       map[uint32]zoneWeatherOverride
 	stopOnce               sync.Once
 }
 

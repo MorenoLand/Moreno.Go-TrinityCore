@@ -1127,8 +1127,14 @@ type MapLive struct {
 	Difficulty   func(context.Context) (int64, bool)
 	Players      func() []MapPlayerLive
 	SetWeather   func(context.Context, uint32, uint32, float32)
-	WorldObject  func(context.Context, uint64) *Object
-	AreaID       func(x, y, z float32) uint32
+	// SetZoneWeatherOverride is the Go-only Map::SetZoneWeather twin
+	// (Map.cpp:4783): C++ Eluna exposes no zone-override method (its
+	// Map SetWeather is the Weather::SetWeather type/grade arm), so
+	// boss-script ports that need raw states (LK fog/blacksnow) call
+	// the Map object's SetZoneWeather (zone, state, grade) instead.
+	SetZoneWeatherOverride func(context.Context, uint32, uint32, float32)
+	WorldObject            func(context.Context, uint64) *Object
+	AreaID                 func(x, y, z float32) uint32
 	// Height reads the .map grid height for Map::GetHeight's Eluna
 	// call shape; false means no readable height chunk, and the
 	// method turns that (and the INVALID_HEIGHT sentinel) into nil.
@@ -1140,7 +1146,7 @@ type MapLive struct {
 // methods (object.go) and the DBC-backed GetName/IsDungeon/IsRaid/IsArena/
 // IsBattleground come from the live MapLive (MapMethods.h). The live legs
 // (IsEmpty/IsHeroic/GetDifficulty/GetPlayerCount/GetPlayers/SetWeather/
-// GetInstanceData/SaveInstanceData/GetAreaId/GetHeight) read the MapLive
+// SetZoneWeather/GetInstanceData/SaveInstanceData/GetAreaId/GetHeight) read the MapLive
 // callbacks.
 // GetWorldObject dispatches on
 // the GUID high part through the live WorldObject callback (nil callback
@@ -1268,6 +1274,33 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 			}
 			if live.SetWeather != nil {
 				live.SetWeather(ctx, zone, wtype, float32(grade))
+			}
+			return nil, nil
+		},
+		// SetZoneWeather is the Go-only Map::SetZoneWeather twin
+		// (Map.cpp:4783): (zone, state, grade, all required). C++
+		// Eluna has no such method, so this exists only for
+		// boss-script ports that need raw states FOG/DRIZZLE/
+		// BLACKSNOW, which the type/grade SetWeather arm can never
+		// derive. A nil callback drops it, like SetWeather.
+		"SetZoneWeather": func(ctx context.Context, args []any) ([]any, error) {
+			zone, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			state, err := objectArgumentUint32(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if len(args) < 3 {
+				return nil, fmt.Errorf("argument 3 is required")
+			}
+			grade, ok := numericValue(args[2])
+			if !ok {
+				return nil, fmt.Errorf("argument 3 must be a number")
+			}
+			if live.SetZoneWeatherOverride != nil {
+				live.SetZoneWeatherOverride(ctx, zone, state, float32(grade))
 			}
 			return nil, nil
 		},

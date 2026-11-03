@@ -83,9 +83,10 @@ import (
 //     cs_misc.cpp:1801-1841). Delta: no grid index, so the sweep matches on
 //     computed grid coords rather than the C++ grid-object visit.
 //   - `wchange` is bridged via Server.setZoneWeather (Weather::SetWeather,
-//     Weather.cpp); the SmartScript overrideWeather zone override
-//     (Map::SetZoneWeather) has no Go bridge.
-//     (weather.go exposes only regenerate/packet).
+//     Weather.cpp); the Map::SetZoneWeather zone override rides
+//     Server.setZoneWeatherOverride (weather.go) and the Lua Map
+//     surface (map:SetZoneWeather); the SmartScript overrideWeather
+//     action dispatch itself still has no Go engine.
 //   - `mailbox` is wired: SendShowMailBox with the player's own GUID,
 //     the exact lua_player.go SMSG_SHOW_MAILBOX packet, no gate (as in C++).
 //   - `playall` is wired: buildPlaySound (trainers.go) broadcast to every
