@@ -133,7 +133,7 @@ func (s *session) handleNPCAddTable(ctx context.Context, args []string) {
 	case strings.HasPrefix("formation", sub):
 		s.handleNPCAddFormation(ctx, rest)
 	case strings.HasPrefix("item", sub):
-		s.handleNPCAddItem(ctx)
+		s.handleNPCAddItem(ctx, rest)
 	case strings.HasPrefix("move", sub):
 		s.handleNPCAddMove(ctx, rest)
 	case strings.HasPrefix("temp", sub):
@@ -197,13 +197,129 @@ func (s *session) handleNPCAddFormation(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Creature %d added to formation with leader %d", memberLow, uint32(leaderGUID)))
 }
 
-// handleNPCAddItem is documented-blocked (cs_npc.cpp:177): vendor-list edits
-// need the selected live vendor creature.
-func (s *session) handleNPCAddItem(ctx context.Context) {
+// npcItemTokenID parses a C++ ItemTemplate command argument
+// (ChatCommandArgs.cpp:69: numeric id or |Hitem| link). It reports whether
+// the token was a link: a link resolving to no template reaches the handler
+// body as a nil item, while a numeric id with no template is a parser error,
+// so the caller needs the distinction.
+func npcItemTokenID(token string) (uint32, bool, bool) {
+	if id := miscExtractLinkID(token, "Hitem"); id != 0 {
+		return id, true, true
+	}
+	id64, err := strconv.ParseUint(token, 10, 32)
+	if err != nil || id64 == 0 {
+		return 0, false, false
+	}
+	return uint32(id64), false, true
+}
+
+// npcVendorUintArg parses one of the optional uint32 vendor arguments
+// (maxcount, incrtime, extendedcost): C++ parses Optional<uint32>, so a
+// non-numeric token is a parser error, not atoi's 0.
+func npcVendorUintArg(token string) (uint32, bool) {
+	v, err := strconv.ParseUint(token, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(v), true
+}
+
+// handleNPCAddItem mirrors HandleNpcAddVendorItemCommand (cs_npc.cpp:179):
+// ".npc add item <itemId|itemLink> [maxcount] [incrtime] [extendedcost]".
+// The vendor is the selected creature (castCommandSelectedCreature, the
+// getSelectedCreature twin); a missing selection reports
+// LANG_SELECT_CREATURE. The gates run in IsVendorItemValid order
+// (ObjectMgr.cpp:9617): template, vendor flag, item template, ExtendedCost
+// DBC row, maxcount/incrtime coherence, duplicate (item, ExtendedCost)
+// pair — then the WORLD_INS_NPC_VENDOR insert (entry, item, maxcount,
+// incrtime, extendedcost, no slot, the luaAddVendorItem statement). Go
+// loads vendor rows from the DB on every list/buy call, so the row is
+// immediately visible with no cache to refresh. Success reports
+// LANG_ITEM_ADDED_TO_LIST (id, name, maxcount, incrtime, extendedcost).
+func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCAddItem) {
 		return
 	}
-	s.sendSysMessage("npc add item is not supported: selected-unit creature targets have no Go bridge.")
+	const syntax = "Syntax: .npc add item <itemId|itemLink> [maxcount] [incrtime] [extendedcost]"
+	if len(args) == 0 || len(args) > 4 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	itemID, link, ok := npcItemTokenID(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	var maxcount, incrtime, extendedcost uint32
+	for i, token := range args[1:] {
+		v, ok := npcVendorUintArg(token)
+		if !ok {
+			s.sendSysMessage(syntax)
+			return
+		}
+		switch i {
+		case 0:
+			maxcount = v
+		case 1:
+			incrtime = v
+		case 2:
+			extendedcost = v
+		}
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	var itemName string
+	if err := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName); err != nil {
+		if link {
+			s.sendSysMessage("You need to send an item.")
+			return
+		}
+		s.sendSysMessage(fmt.Sprintf("Item %d does not exist.", itemID))
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	s.server.motionMu.Lock()
+	vendorEntry := motion.Entry
+	s.server.motionMu.Unlock()
+	var npcFlag uint32
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0) FROM creature_template WHERE entry = ?", vendorEntry).Scan(&npcFlag); err != nil || npcFlag&unitNPCFlagVendor == 0 {
+		s.sendSysMessage("You need to select a vendor.")
+		return
+	}
+	if extendedcost != 0 {
+		if s.server == nil || s.server.Data == nil {
+			s.sendSysMessage(fmt.Sprintf("Extended cost %d does not exist.", extendedcost))
+			return
+		}
+		if _, found, err := s.server.Data.ItemExtendedCost(extendedcost); err != nil || !found {
+			s.sendSysMessage(fmt.Sprintf("Extended cost %d does not exist.", extendedcost))
+			return
+		}
+	}
+	if maxcount > 0 && incrtime == 0 {
+		s.sendSysMessage(fmt.Sprintf("MaxCount != 0 (%d) but IncrTime == 0", maxcount))
+		return
+	}
+	if maxcount == 0 && incrtime > 0 {
+		s.sendSysMessage("MaxCount == 0 but IncrTime<>= 0")
+		return
+	}
+	var exists int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM npc_vendor WHERE entry = ? AND item = ? AND ExtendedCost = ?", vendorEntry, itemID, extendedcost).Scan(&exists); err != nil || exists != 0 {
+		s.sendSysMessage(fmt.Sprintf("Item %d is already in the list (extended cost %d).", itemID, extendedcost))
+		return
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO npc_vendor (entry, item, maxcount, incrtime, extendedcost) VALUES (?, ?, ?, ?, ?)", vendorEntry, itemID, maxcount, incrtime, extendedcost); err != nil {
+		s.sendSysMessage("Failed to store the vendor row.")
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Item %d (%s) added to vendor list (maxcount %d, incrtime %d, extendedcost %d).", itemID, itemName, maxcount, incrtime, extendedcost))
 }
 
 // handleNPCAddTemp mirrors HandleNpcAddTempSpawnCommand (cs_npc.cpp:1025):

@@ -14,10 +14,12 @@ import (
 //
 // Of these 26 arms, one is partial-native (`set movetype` with an explicit
 // GUID: the creature row is updated in the world DB, which is the live
-// creature store in the Go tree) and 25 are documented-blocked: every other
-// arm needs the selected live creature (getSelectedCreature), the creature
-// AI/motion/loot/pet bridges, or the spawn-group manager, none of which
-// exist in the Go tree.
+// creature store in the Go tree), two are wired (`delete item` on the
+// npc_vendor rows, `set factionid` on the live faction slot plus the
+// template row) and 23 are documented-blocked: every other arm needs the
+// creature AI/motion/loot/pet bridges or the spawn-group manager, none of
+// which exist in the Go tree. Selected-creature resolution itself exists
+// (castCommandSelectedCreature, the getSelectedCreature twin).
 
 // handleNPCSetTable dispatches the "set" sub-table (cs_npc.cpp:72-86).
 // The "set" node is a bare SubCommandEntry container (ChatCommand.h:248-251)
@@ -38,7 +40,7 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	case strings.HasPrefix("entry", sub):
 		s.npcNeedCreature(ctx, permissionCommandNPCSetEntry, "set entry")
 	case strings.HasPrefix("factionid", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetFactionID, "set factionid")
+		s.handleNPCSetFactionID(ctx, rest)
 	case strings.HasPrefix("flag", sub):
 		s.npcNeedCreature(ctx, permissionCommandNPCSetFlag, "set flag")
 	case strings.HasPrefix("level", sub):
@@ -180,10 +182,125 @@ func (s *session) handleNPCChunk2(ctx context.Context, sub string, rest []string
 // falls through to the chunk-1 guid arm.
 func (s *session) npcDeleteSub(ctx context.Context, rest []string) {
 	if len(rest) > 0 && strings.HasPrefix("item", strings.ToLower(rest[0])) {
-		s.npcNeedCreature(ctx, permissionCommandNPCDeleteItem, "delete item")
+		s.handleNPCDeleteItem(ctx, rest[1:])
 		return
 	}
 	s.handleNPCDelete(ctx, rest)
+}
+
+// handleNPCDeleteItem mirrors HandleNpcDeleteVendorItemCommand
+// (cs_npc.cpp:349): ".npc delete item <itemId|itemLink>". C++ checks the
+// vendor first (a missing selection or a non-vendor reports
+// LANG_COMMAND_VENDORSELECTION), then the nil item
+// (LANG_COMMAND_NEEDITEMSEND). The live vendor flag is the motion value
+// when a Lua arm overrode it (NPCFlagsKnown, the session-snapshot rule)
+// and the template value otherwise. Removal is the WORLD_DEL_NPC_VENDOR
+// delete over every row for (entry, item), the luaVendorRemoveItem
+// statement; zero rows removed reports LANG_ITEM_NOT_IN_LIST, success
+// reports LANG_ITEM_DELETED_FROM_LIST. The numeric-id parser error runs
+// before the body in C++, so it precedes the vendor check here too, while
+// the link-to-nothing nil-item message keeps its post-vendor position.
+func (s *session) handleNPCDeleteItem(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCDeleteItem) {
+		return
+	}
+	const syntax = "Syntax: .npc delete item <itemId|itemLink>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	itemID, link, ok := npcItemTokenID(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	var itemName string
+	itemFound := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName) == nil
+	if !link && !itemFound {
+		s.sendSysMessage(fmt.Sprintf("Item %d does not exist.", itemID))
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("You need to select a vendor.")
+		return
+	}
+	s.server.motionMu.Lock()
+	entry, npcKnown, liveFlags := motion.Entry, motion.NPCFlagsKnown, motion.NPCFlags
+	s.server.motionMu.Unlock()
+	flags := liveFlags
+	if !npcKnown {
+		if err := db.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0) FROM creature_template WHERE entry = ?", entry).Scan(&flags); err != nil {
+			s.sendSysMessage("You need to select a vendor.")
+			return
+		}
+	}
+	if flags&unitNPCFlagVendor == 0 {
+		s.sendSysMessage("You need to select a vendor.")
+		return
+	}
+	if link && !itemFound {
+		s.sendSysMessage("You need to send an item.")
+		return
+	}
+	res, err := db.ExecContext(ctx, "DELETE FROM npc_vendor WHERE entry = ? AND item = ?", entry, itemID)
+	if err != nil {
+		return
+	}
+	removed, _ := res.RowsAffected()
+	if removed == 0 {
+		s.sendSysMessage(fmt.Sprintf("Item %d is not in the list.", itemID))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Item %d (%s) deleted from vendor list.", itemID, itemName))
+}
+
+// handleNPCSetFactionID mirrors HandleNpcSetFactionIdCommand (cs_npc.cpp:381):
+// ".npc set factionid <factionId>". C++ validates the FactionTemplate.dbc
+// row BEFORE the creature check (LANG_WRONG_FACTION), then requires the
+// selected creature (LANG_SELECT_CREATURE). The live write is the creature
+// SetFaction leg (motion Faction slot + values-update broadcast, the
+// modify-faction pattern); the persistent leg is the
+// WORLD_UPD_CREATURE_FACTION update of creature_template for the entry,
+// which Go spawns read from the DB, so no in-memory template mutation is
+// needed. Silent on success, as in C++.
+func (s *session) handleNPCSetFactionID(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetFactionID) {
+		return
+	}
+	const syntax = "Syntax: .npc set factionid <factionId>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	faction, ok := npcVendorUintArg(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if _, found := s.factionTemplateEntry(faction); !found {
+		s.sendSysMessage(fmt.Sprintf("Wrong faction %d.", faction))
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	entry, mapID, instanceID, guid := motion.Entry, motion.Map, motion.InstanceID, motion.GUID
+	motion.Faction = faction
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldFaction: faction})
+	_, _ = db.ExecContext(ctx, "UPDATE creature_template SET faction = ? WHERE entry = ?", faction, entry)
 }
 
 // handleNPCFollow handles "follow" and the two-level "follow stop" arm
