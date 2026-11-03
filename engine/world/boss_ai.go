@@ -7239,6 +7239,96 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 				continue
 			}
 			ts.castSpellDirect(ctx, 46394, guid)
+		case 34098:
+			// spell_gen_clear_debuffs (spell_generic.cpp): SPELL_EFFECT_SCRIPT_EFFECT
+			// EFFECT_0 removes the hit unit's owned auras whose spell is neither
+			// positive nor passive (Unit::RemoveOwnedAuras predicate,
+			// SpellInfo::IsPositive / IsPassive). Baltharus' clone cast and Lady
+			// Deathwhisper's reanimate cast are self-casts; the arm runs per hit
+			// target like C++. Spells with no Go data stay (the dispel.go
+			// convention: an unevaluated predicate removes nothing).
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				var ids []uint32
+				ts.castMu.Lock()
+				for id, aura := range ts.activeAuras {
+					if aura == nil || aura.Stopped {
+						continue
+					}
+					ids = append(ids, id)
+				}
+				ts.castMu.Unlock()
+				for _, id := range ids {
+					if sp, found, err := s.Data.Spell(id); err != nil || !found || spellIsPositive(sp) || sp.Attributes&spellAttributePassive != 0 {
+						continue
+					}
+					ts.removeAura(id)
+				}
+				continue
+			}
+			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				key := creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: guid}
+				seen := map[uint32]bool{}
+				var ids []uint32
+				s.auraMu.Lock()
+				for spellID := range s.creatureAuras[key] {
+					if !seen[spellID] {
+						seen[spellID] = true
+						ids = append(ids, spellID)
+					}
+				}
+				for spellID := range s.activeCreatureAuras[key] {
+					if !seen[spellID] {
+						seen[spellID] = true
+						ids = append(ids, spellID)
+					}
+				}
+				s.auraMu.Unlock()
+				for _, id := range ids {
+					if sp, found, err := s.Data.Spell(id); err != nil || !found || spellIsPositive(sp) || sp.Attributes&spellAttributePassive != 0 {
+						continue
+					}
+					s.removeCreatureAura(key, id)
+				}
+			}
+		case 60022:
+			// spell_gal_darah_clear_puncture (boss_gal_darah.cpp): removes Puncture
+			// from the hit unit, heroic (59826) when the target's map is heroic,
+			// else normal (55276). Gal'darah's JustDied cast is a self-cast; the
+			// arm runs per hit target like C++. Heroic is Map::IsHeroic
+			// (Map.cpp:4249-4252) via the instance-row read (the IsHeroic Lua
+			// precedent): raids heroic at difficulty >= 2, dungeons at >= 1,
+			// non-instance maps and missing rows default to normal.
+			var mapID, instanceID uint32
+			var isPlayerTarget bool
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				mapID, instanceID, isPlayerTarget = ts.player.Map, ts.player.InstanceID, true
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				mapID, instanceID = tm.Map, tm.InstanceID
+			} else {
+				continue
+			}
+			puncture := uint32(55276)
+			if instanceID != 0 {
+				var difficulty int64
+				if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+					_ = s.CharactersStore.DB.QueryRowContext(ctx,
+						"SELECT difficulty FROM instance WHERE id = ?", instanceID).Scan(&difficulty)
+				}
+				isRaid := false
+				if entry, found, err := s.Data.Map(mapID); err == nil && found {
+					isRaid = entry.IsRaid()
+				}
+				if (isRaid && difficulty >= 2) || (!isRaid && difficulty >= 1) {
+					puncture = 59826
+				}
+			}
+			if isPlayerTarget {
+				if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+					ts.removeAura(puncture)
+				}
+			} else {
+				s.removeCreatureAura(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: guid}, puncture)
+			}
 		case 52173, 60243:
 			// Coyote Spirit / Blood Parrot Despawn
 			// (SpellEffects.cpp:3704-3708): a TYPEID_UNIT summon target

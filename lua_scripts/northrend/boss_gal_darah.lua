@@ -78,8 +78,8 @@
 -- creature:Despawn() is bridged, lua_creature_events.go:214) —
 -- documented-only.
 -- spell_gal_darah_clear_puncture (SpellScript 60022: remove Puncture
--- 55276 / heroic 59826) — no SpellScript binding bridge —
--- documented-only; the JustDied cast of 60022 itself is ported.
+-- 55276 / heroic 59826) — PORTED engine-side in creatureEffectScriptEffect
+-- (boss_ai.go); the JustDied cast of 60022 itself was already ported.
 -- achievement_share_the_love (AchievementCriteriaScript: GetData
 -- (DATA_SHARE_THE_LOVE) >= 5) — no achievement-criteria bridge on the
 -- Lua surface (snakes precedent) + cross-AI GetData bridge absent
