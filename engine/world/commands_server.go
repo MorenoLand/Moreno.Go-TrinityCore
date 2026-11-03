@@ -50,29 +50,78 @@ import (
 //     port; the C++ SSL/Boost/MySQL/CMake/VMAP/MMAP/DBC-locale legs have no
 //     Go equivalent.
 //
-// Documented-blocked arms (no bridge, honest message instead of a stub):
 //   - `shutdown` / `restart` / `idleshutdown` / `idlerestart` (and their
-//     cancel/force arms): no shutdown-timer machinery exists in the Go
-//     runtime (no delayed-shutdown broadcast, no cancel). The force arms
+//     cancel/force arms): the shutdown timer (shutdown.go, mirroring
+//     World::ShutdownServ): delay in seconds or a d/h/m/s time string,
+//     optional exit code (0-125) and reason, the 30s force-threshold
+//     override while other players are connected, countdown broadcasts
+//     on the ShutdownMsg cadence, idle timers held while sessions are
+//     live, expiry stops the server (a restart timer ends in Stop() too
+//     — Go cannot relaunch itself, see shutdown.go). The force arms
 //     gate only their own leaf perm (839/840) == Trinity's leaf-only check.
+//
+// Documented-blocked arms (no bridge, honest message instead of a stub):
 //   - `set loglevel`: the slog logger's level is fixed at handler creation.
 //
 // LANG texts are inlined from the TDB enUS recall (no in-tree
 // trinity_string seed).
 
-// serverShutdownBlockedMsg is the honest stand-in for the timed
-// shutdown/restart family: no shutdown-timer machinery exists in Go.
-func serverShutdownBlockedMsg(s *session, what string) {
-	s.sendSysMessage(fmt.Sprintf("Timed server %s is not supported by this server (no shutdown-timer machinery).", what))
+// serverShutdownTimed mirrors ShutdownServer (cs_server.cpp:457-521)
+// for one node: args are "<delay> [#exit_code] [reason]". Empty or
+// unparseable args print the syntax line (C++ returns false, which
+// ChatHandler answers with syntax). The force-threshold override
+// (World.cpp:1027, cs_server.cpp:511-516) raises a sub-30s delay to 30s
+// while other players are connected, unless the force mask is set.
+func (s *session) serverShutdownTimed(ctx context.Context, args []string, mask uint32, defaultExitCode uint8, what string) {
+	if len(args) == 0 {
+		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
+		return
+	}
+	delay, ok := parseShutdownDelay(args[0])
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
+		return
+	}
+	exitCode, reason, ok := parseShutdownArgs(args[1:], defaultExitCode)
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
+		return
+	}
+	if delay < forceShutdownThresholdSecs && mask&shutdownMaskForce == 0 && !s.serverIsOnlyUser() {
+		delay = forceShutdownThresholdSecs
+		s.sendSysMessage(fmt.Sprintf("Shutdown delayed to %d seconds.", delay))
+	}
+	s.server.initiateShutdown(ctx, delay, mask, exitCode, reason)
 }
 
-// serverShutdownBlockedCtx answers the timed shutdown/restart family,
-// gating the ""-arm leaf permission (== the invoker perm Trinity checks).
-func (s *session) serverShutdownBlockedCtx(ctx context.Context, perm uint32, what string) {
+// serverIsOnlyUser mirrors IsOnlyUser (cs_server.cpp:344-355) as far as
+// Go can: C++ compares remote addresses, which Go sessions do not carry,
+// so any other connected session counts as another user.
+func (s *session) serverIsOnlyUser() bool {
+	if s == nil || s.server == nil {
+		return true
+	}
+	s.server.sessionsMu.RLock()
+	defer s.server.sessionsMu.RUnlock()
+	return len(s.server.sessions) <= 1
+}
+
+// serverShutdownCancel mirrors HandleServerShutDownCancelCommand
+// (cs_server.cpp:341-347): the shared cancel arm for all four nodes.
+func (s *session) serverShutdownCancel(ctx context.Context, perm uint32) {
 	if s.miscDeny(ctx, perm) {
 		return
 	}
-	serverShutdownBlockedMsg(s, what)
+	remaining, wasRestart, ok := s.server.cancelShutdown(ctx)
+	if !ok {
+		s.sendSysMessage("There is no shutdown timer to cancel.")
+		return
+	}
+	verb := "shutdown"
+	if wasRestart {
+		verb = "restart"
+	}
+	s.sendSysMessage(fmt.Sprintf("Server %s cancelled with %d seconds remaining.", verb, remaining))
 }
 
 // handleCmdServer dispatches the "server" root (cs_server.cpp:99-110).
@@ -163,79 +212,74 @@ func (s *session) handleServerExit(ctx context.Context) {
 }
 
 // handleServerIdleRestart mirrors HandleServerIdleRestartCommand
-// (cs_server.cpp:373): documented-blocked.
+// (cs_server.cpp:373): cancel arm + the "" arm with
+// SHUTDOWN_MASK_RESTART | SHUTDOWN_MASK_IDLE.
 func (s *session) handleServerIdleRestart(ctx context.Context, args []string) {
 	if len(args) > 0 && strings.ToLower(args[0]) == "cancel" {
-		if s.miscDeny(ctx, permissionCommandServerIdlerestartCancel) {
-			return
-		}
-		s.sendSysMessage("There is no shutdown timer to cancel.")
+		s.serverShutdownCancel(ctx, permissionCommandServerIdlerestartCancel)
 		return
 	}
-	s.serverShutdownBlockedCtx(ctx, permissionCommandServerIdlerestart, "idle restart")
+	if s.miscDeny(ctx, permissionCommandServerIdlerestart) {
+		return
+	}
+	s.serverShutdownTimed(ctx, args, shutdownMaskRestart|shutdownMaskIdle, restartExitCode, "idlerestart")
 }
 
 // handleServerIdleShutdown mirrors HandleServerIdleShutDownCommand
-// (cs_server.cpp:368): documented-blocked.
+// (cs_server.cpp:368): cancel arm + the "" arm with SHUTDOWN_MASK_IDLE.
 func (s *session) handleServerIdleShutdown(ctx context.Context, args []string) {
 	if len(args) > 0 && strings.ToLower(args[0]) == "cancel" {
-		if s.miscDeny(ctx, permissionCommandServerIdleshutdownCancel) {
-			return
-		}
-		s.sendSysMessage("There is no shutdown timer to cancel.")
+		s.serverShutdownCancel(ctx, permissionCommandServerIdleshutdownCancel)
 		return
 	}
-	s.serverShutdownBlockedCtx(ctx, permissionCommandServerIdleshutdown, "idle shutdown")
+	if s.miscDeny(ctx, permissionCommandServerIdleshutdown) {
+		return
+	}
+	s.serverShutdownTimed(ctx, args, shutdownMaskIdle, shutdownExitCode, "idleshutdown")
 }
 
-// handleServerRestart mirrors HandleServerRestartCommand (cs_server.cpp:358):
-// documented-blocked (the force arm shares the fate: no timer to force).
+// handleServerRestart mirrors HandleServerRestartCommand (cs_server.cpp:358)
+// plus the force node (cs_server.cpp:379): cancel / force / "" arms.
 func (s *session) handleServerRestart(ctx context.Context, args []string) {
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
 		case "cancel":
-			if s.miscDeny(ctx, permissionCommandServerRestartCancel) {
-				return
-			}
-			s.sendSysMessage("There is no shutdown timer to cancel.")
+			s.serverShutdownCancel(ctx, permissionCommandServerRestartCancel)
 			return
 		case "force":
 			if s.miscDeny(ctx, permissionCommandServerRestartForce) {
 				return
 			}
-			// Leaf-only permission check (ChatCommand.cpp:487): the force
-			// arm's own perm is the only gate; the blocked message itself
-			// is ungated.
-			serverShutdownBlockedMsg(s, "restart")
+			s.serverShutdownTimed(ctx, args[1:], shutdownMaskForce|shutdownMaskRestart, restartExitCode, "restart force")
 			return
 		}
 	}
-	s.serverShutdownBlockedCtx(ctx, permissionCommandServerRestart, "restart")
+	if s.miscDeny(ctx, permissionCommandServerRestart) {
+		return
+	}
+	s.serverShutdownTimed(ctx, args, shutdownMaskRestart, restartExitCode, "restart")
 }
 
-// handleServerShutdown mirrors HandleServerShutDownCommand (cs_server.cpp:353):
-// documented-blocked (the force arm shares the fate: no timer to force).
+// handleServerShutdown mirrors HandleServerShutDownCommand (cs_server.cpp:353)
+// plus the force node (cs_server.cpp:374): cancel / force / "" arms.
 func (s *session) handleServerShutdown(ctx context.Context, args []string) {
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
 		case "cancel":
-			if s.miscDeny(ctx, permissionCommandServerShutdownCancel) {
-				return
-			}
-			s.sendSysMessage("There is no shutdown timer to cancel.")
+			s.serverShutdownCancel(ctx, permissionCommandServerShutdownCancel)
 			return
 		case "force":
 			if s.miscDeny(ctx, permissionCommandServerShutdownForce) {
 				return
 			}
-			// Leaf-only permission check (ChatCommand.cpp:487): the force
-			// arm's own perm is the only gate; the blocked message itself
-			// is ungated.
-			serverShutdownBlockedMsg(s, "shutdown")
+			s.serverShutdownTimed(ctx, args[1:], shutdownMaskForce, shutdownExitCode, "shutdown force")
 			return
 		}
 	}
-	s.serverShutdownBlockedCtx(ctx, permissionCommandServerShutdown, "shutdown")
+	if s.miscDeny(ctx, permissionCommandServerShutdown) {
+		return
+	}
+	s.serverShutdownTimed(ctx, args, 0, shutdownExitCode, "shutdown")
 }
 
 // handleServerInfo mirrors HandleServerInfoCommand (cs_server.cpp:240).

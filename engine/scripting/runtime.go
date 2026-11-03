@@ -230,6 +230,18 @@ const (
 	// arm, immediately before the startup fire below; Go has no config
 	// reload, so the reload arm stays out.
 	ServerEventConfigLoad = 9
+	// ServerEventShutdownInit is WORLD_EVENT_ON_SHUTDOWN_INIT
+	// (LuaEngine/Hooks.h:116 = 11, args (event, code, mask)):
+	// ServerHooks.cpp:282-288 fires it from World::ShutdownServ
+	// (World.cpp:3022) after the initial countdown message, with the
+	// ShutdownExitCode (0 shutdown, 2 restart) and ShutdownMask
+	// (World.h:54-58: 1 restart, 2 idle, 4 force).
+	ServerEventShutdownInit = 11
+	// ServerEventShutdownCancel is WORLD_EVENT_ON_SHUTDOWN_CANCEL
+	// (LuaEngine/Hooks.h:117 = 12, args (event)): ServerHooks.cpp:290-295
+	// fires it from World::ShutdownCancel (World.cpp:3069) after the
+	// cancel broadcast, only when a timer actually existed.
+	ServerEventShutdownCancel = 12
 	// ServerEventWeatherChange is WEATHER_EVENT_ON_CHANGE
 	// (LuaEngine/Hooks.h:137 = 25, args (event, zoneId, state, grade)):
 	// Weather::UpdateWeather fires it via ScriptMgr::OnWeatherChange

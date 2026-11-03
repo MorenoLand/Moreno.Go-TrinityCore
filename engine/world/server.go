@@ -140,6 +140,9 @@ type Server struct {
 	disconnectTimes    map[uint32]int64
 	playerLimit        uint32
 	closed             atomic.Bool
+	stopEvent          atomic.Bool // World::m_stopEvent (World.h:795): Stop() has run; shutdown timers ignore further arms
+	shutdownMu         sync.Mutex  // guards shutdown (World::m_ShutdownTimer/m_ShutdownMask/m_ExitCode triple, World.cpp:2983-3072; see shutdown.go)
+	shutdown           serverShutdown
 	ticketsEnabled     atomic.Bool
 	ticketsLastChange  atomic.Int64 // TicketMgr::_lastChange (TicketMgr.cpp:273); see noteTicketsChanged
 	objectsMu          sync.RWMutex
@@ -1297,6 +1300,7 @@ func (s *Server) Stop() {
 		return
 	}
 	s.closed.Store(true)
+	s.stopEvent.Store(true)
 	s.stopOnce.Do(func() {
 		if s.Features != nil && s.Features.Scripts != nil {
 			_, _ = s.Features.Scripts.TriggerServerEvent(context.Background(), 15)
@@ -1509,6 +1513,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 				_ = s.Features.Scripts.Tick(ctx, 100)
 				_, _ = s.Features.Scripts.TriggerServerEvent(ctx, 13, uint32(100))
 			}
+			s.updateShutdownTimer(ctx, now)
 			s.updateContinentTransports(now)
 			s.updateWeather(ctx, now)
 			s.updateTimeSync(now)
