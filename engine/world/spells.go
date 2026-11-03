@@ -39260,7 +39260,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// chance (Spell::DoEffectOnLaunchTarget, Spell.cpp:7782-7788); the
 		// taken arms still apply on top inside the funnel. Consumed at the
 		// funnel entry so nested triggered casts start plain.
-		// Eluna's OnDummyEffect (5063-5066) is likewise unbridged.
+		// Eluna's OnDummyEffect arm (SpellAuraEffects.cpp:5063-5069) fires
+		// only when the aura target is a creature; this tick's target is
+		// a player, so no arm fires here — the creature tick fires it.
 		if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
 			triggerCaster.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
 		}
@@ -41814,6 +41816,18 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
 			if triggering, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				if triggered, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
+					// SpellAuraEffects.cpp:5063-5069 — HandlePeriodicTriggerSpellAuraTick fires Eluna OnDummyEffect(triggerCaster, auraSpell, effIndex, targetCreature) before the triggered cast, gated on the aura target being a creature and the aura caster existing. The fire is independent of the session-cast gate below: a creature caster still fires even though its cast stays unbridged. The WithValue twin (5081-5106) fires no such arm.
+					if effIndex, ok := periodicTriggerEffectIndex(triggering, aura); ok {
+						if targetMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); targetMotion != nil {
+							if casterObj := s.server.periodicTriggerCasterObject(key.Map, key.InstanceID, aura.CasterGUID); casterObj != nil {
+								pushedCaster := s.server.luaMotionCreature(targetMotion)
+								if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
+									pushedCaster = casterObj
+								}
+								s.server.firePeriodicTriggerDummyEffect(ctx, pushedCaster, aura.SpellID, effIndex, targetMotion)
+							}
+						}
+					}
 					var triggerCaster *session
 					if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
 						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)

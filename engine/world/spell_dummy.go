@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -172,6 +173,64 @@ func (s *Server) fireCreatureSpellDummyEffectForTargets(ctx context.Context, m *
 		}
 		seen[guid] = struct{}{}
 		s.fireCreatureSpellDummyEffect(ctx, m, spellID, effectIndex, guid)
+	}
+}
+
+// periodicTriggerEffectIndex resolves the AuraEffect index C++ passes to
+// OnDummyEffect from HandlePeriodicTriggerSpellAuraTick: the effect of
+// the aura spell carrying the periodic-trigger aura type within this
+// aura's EffectMask. A spell with no such masked effect takes no arm.
+func periodicTriggerEffectIndex(spell wotlk.Spell, aura *activeAura) (uint8, bool) {
+	if aura == nil {
+		return 0, false
+	}
+	for i := range spell.Effects {
+		if spell.Effects[i].Aura == spellAuraPeriodicTriggerSpell && aura.EffectMask&(1<<uint(i)) != 0 {
+			return uint8(i), true
+		}
+	}
+	return 0, false
+}
+
+// periodicTriggerCasterObject resolves the aura caster C++ passes to
+// HandlePeriodicTriggerSpellAuraTick (its GetCaster) to a Lua object: a
+// player caster through its session, else a creature caster through its
+// motion. An unresolvable caster means C++'s `caster` gate fails and no
+// arm fires.
+func (s *Server) periodicTriggerCasterObject(mapID, instanceID uint32, casterGUID uint64) *scripting.Object {
+	if s == nil || casterGUID == 0 {
+		return nil
+	}
+	if casterSess := s.findSessionByGUID(casterGUID); casterSess != nil {
+		return casterSess.luaPlayer()
+	}
+	if motion := s.findCreatureMotion(mapID, instanceID, casterGUID); motion != nil {
+		return s.luaMotionCreature(motion)
+	}
+	return nil
+}
+
+// firePeriodicTriggerDummyEffect fires Eluna's creature OnDummyEffect arm
+// for one periodic-trigger tick (SpellAuraEffects.cpp:5063-5069): args
+// (triggerCaster, auraSpell, effIndex, targetCreature), entry bindings
+// then unique bindings, returns discarded like CallAllFunctions. The
+// caller owns the C++ gates: target is a creature, the aura caster
+// resolves, and pushedCaster is the C++ triggerCaster choice (caster
+// when the trigger spell NeedsToBeTriggeredByCaster, else the target).
+func (s *Server) firePeriodicTriggerDummyEffect(ctx context.Context, pushedCaster *scripting.Object, spellID uint32, effectIndex uint8, target *creatureMotion) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || pushedCaster == nil || target == nil {
+		return
+	}
+	creature := s.luaMotionCreature(target)
+	if creature == nil {
+		return
+	}
+	args := []any{scripting.CreatureEventOnDummyEffect, pushedCaster, spellID, int(effectIndex), creature}
+	if _, err := s.Features.Scripts.TriggerCreatureEvent(ctx, target.Entry, scripting.CreatureEventOnDummyEffect, args...); err != nil {
+		s.debug("lua creature periodic-trigger dummy effect failed", "error", err)
+	}
+	if _, err := s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, target.GUID, target.InstanceID, scripting.CreatureEventOnDummyEffect, args...); err != nil {
+		s.debug("lua creature periodic-trigger dummy effect failed", "error", err)
 	}
 }
 
