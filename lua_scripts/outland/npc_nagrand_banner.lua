@@ -72,8 +72,9 @@
 -- constant false, lua_creature_events.go:242); C++ arm order kept
 -- (accrual -> interrupt arm -> scheduler arms). The
 -- DamageTaken flee latch (me->DoFleeToGetAssistance at 15%
--- — HealthBelowPctDamaged(15)) has no flee bridge —
--- unmodeled, the latch lands nowhere.
+-- — HealthBelowPctDamaged(15)) PORTED via the bridged
+-- creature:FleeToGetAssistance (lua_creature_events.go:1706);
+-- the stale "no flee bridge" claim is retracted.
 -- Kil Sorrow cultist (17147): OnEnterCombat(1): per-GUID
 -- reset + 1s pump. Pump: mind-sear arm — 4.5s init then
 -- 7-11s: non-triggered DoCastVictim(SPELL_MIND_SEAR 32000)
@@ -122,8 +123,7 @@
 -- interrupt arm stay unmodeled with the documented-only AI (the victim
 -- is a player, so the cast-state check itself is bridgeable via
 -- player IsCasting — not a no-bridge case);
--- no flee bridge — the spellbinder 15% DoFleeToGetAssistance
--- latch unmodeled; SpellHit (event 14) IS bridged (stale "no
+-- SpellHit (event 14) IS bridged (stale "no
 -- SpellHit bridge" label retracted) — the base banner AI's
 -- bannered latch (SPELL_PLANT_WARMAUL_OGRE_BANNER
 -- 32307 / SPELL_PLANT_KIL_SORROW_BANNER 32314) still stays out:
@@ -291,6 +291,7 @@ RegisterCreatureEvent(ENTRY_KIL_SORROW_SPELLBINDER, 1, function(_, creature)
         missiles = 0,
         chains = 3000 + math.random(0, 3000),
         interrupt = 20000,
+        hasFled = false,
     }
     startPump(guid, creature, spellbinderTick)
 end)
@@ -325,6 +326,22 @@ end)
 -- C++ DamageTaken per entry — HealthBelowPctDamaged(pct, damage):
 -- int64(health)-damage strictly below floor(maxHealth*pct/100),
 -- skipped on killing/overkill blows (health > damage).
+RegisterCreatureEvent(ENTRY_KIL_SORROW_SPELLBINDER, 9, function(_, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local st = states[guid]
+    if not st or st.hasFled then
+        return
+    end
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if health > damage and health - damage < math.floor(maxHealth * 15 / 100) then
+        st.hasFled = true
+        creature:FleeToGetAssistance()
+    end
+end)
+
 RegisterCreatureEvent(ENTRY_KIL_SORROW_DEATHSWORN, 9, function(_, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = states[guid]
