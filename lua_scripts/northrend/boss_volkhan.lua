@@ -362,6 +362,12 @@ local function golemSpellHit(event, creature, caster, spellId)
 end
 
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 14, golemSpellHit)
+-- 2026-11-03: the kill-shot latch was registered for the brittle
+-- entry only, so a lethal hit on a molten golem killed it outright
+-- instead of morphing it (C++ DamageTaken belongs to the molten
+-- golem AI and the same AI object survives the transform — the
+-- latch must sit on BOTH entries).
+RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 9, golemDamageTaken)
 RegisterCreatureEvent(ENTRY_BRITTLE_GOLEM, 9, golemDamageTaken)
 RegisterCreatureEvent(ENTRY_BRITTLE_GOLEM, 14, golemSpellHit)
 RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 23, golemReset)

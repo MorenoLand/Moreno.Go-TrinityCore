@@ -51,14 +51,13 @@
 -- urand(20000,21000) init / re-arm (:409/:440-441), zero gating legs —
 -- ported via CreateLuaEvent on OnEnterCombat (events 2/4/23 cancel).
 -- The lieutenant's remaining arms are DOCUMENTED-ONLY (in this header):
--- Reset (Initialize timer clears — folds into combat registration);
--- JustEngagedWith (:424-432 — instance->GetGuidData(DATA_BJARNGRIM) +
--- IsAlive / GetVictim gate + AttackStart — no instance bridge);
--- UpdateAI DoCast(pBjarngrim, SPELL_RENEW_STEEL_N 52774) (:451,
--- urand(10000,11000) init / urand(10000,14000) re-arm — gated on
--- instance->GetGuidData(DATA_BJARNGRIM) + IsAlive (:446-449) — no
--- instance bridge; DOCUMENTED DEVIATION: in C++ this fires on a live
--- bjarngrim, in Lua it never fires). Lieutenant has no Talk arms
+-- Reset (Initialize timer clears — folds into combat registration).
+-- JustEngagedWith (:424-432) + RenewSteel (:451) PORTED 2026-11-03
+-- via the FindNearestCreature fight-unique idiom (entry 28586 is
+-- unique per instance; dist 1000 = the C++ range-free GUID lookup):
+-- pull-in gated on boss alive + no victim, RenewSteel gated on boss
+-- alive, cast 52774 in both modes (C++ never uses the 59160 heroic
+-- variant here). Lieutenant has no Talk arms
 -- (:380-460 confirmed — no Talk( in the class).
 -- boss_bjarngrim Reset / Initialize — PORTED 2026-10-18 (the
 -- canBuff AddAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE 52092) leg,
@@ -305,8 +304,10 @@ end
 
 -- C++ npc_stormforged_lieutenantAI::UpdateAI: DoCastVictim(SPELL_ARC_WELD
 -- 59085), non-triggered, urand(20000,21000) init / re-arm (:409/:440-441)
--- — zero gating legs. RenewSteel (:451) stays out: gated on
--- instance->GetGuidData(DATA_BJARNGRIM) + IsAlive (:446-449).
+-- — zero gating legs. RenewSteel (:451) PORTED 2026-11-03 (below):
+-- DoCast(bjarngrim, SPELL_RENEW_STEEL_N 52774) non-triggered,
+-- urand(10000,11000) init / urand(10000,14000) re-arm, cast gated on
+-- the boss being alive; the timer re-arms unconditionally like C++.
 local function arcWeldTick(creature, guid)
     creature:CastSpell(nil, SPELL_ARC_WELD)
     schedule(guid, "arcWeld", {20000, 21000}, function()
@@ -314,14 +315,42 @@ local function arcWeldTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith (:424-432) — instance-gated, no bridge; the
--- engage port arms only the ungated timer arm (the thorim-colossus
--- precedent).
+local SPELL_RENEW_STEEL_N = 52774
+
+-- C++ npc_stormforged_lieutenantAI::UpdateAI (:446-451): if the
+-- instance's Bjarngrim is alive, DoCast(bjarngrim, SPELL_RENEW_STEEL_N
+-- 52774) non-triggered; timer re-arms unconditionally. The instance
+-- GUID lookup is twinned by FindNearestCreature (fight-unique entry,
+-- dist 1000 = range-free in practice; the bridge already excludes
+-- dead creatures).
+local function renewSteelTick(creature, guid)
+    local bjarngrim = creature:FindNearestCreature(ENTRY_BJARNGRIM, 1000)
+    if bjarngrim and not bjarngrim:IsDead() then
+        creature:CastSpell(bjarngrim, SPELL_RENEW_STEEL_N)
+    end
+    schedule(guid, "renewSteel", {10000, 14000}, function()
+        renewSteelTick(creature, guid)
+    end)
+end
+
+-- C++ JustEngagedWith (:424-432): if the instance's Bjarngrim is
+-- alive and has no victim, AttackStart(who) — PORTED 2026-11-03 via
+-- FindNearestCreature + EngageWithTarget (the eredar-twins
+-- fight-unique idiom); the arc-weld timer arm is unchanged.
 local function lieutenantEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if target then
+        local bjarngrim = creature:FindNearestCreature(ENTRY_BJARNGRIM, 1000)
+        if bjarngrim and not bjarngrim:IsDead() and not bjarngrim:GetVictim() then
+            bjarngrim:EngageWithTarget(target)
+        end
+    end
     schedule(guid, "arcWeld", {20000, 21000}, function()
         arcWeldTick(creature, guid)
+    end)
+    schedule(guid, "renewSteel", {10000, 11000}, function()
+        renewSteelTick(creature, guid)
     end)
 end
 

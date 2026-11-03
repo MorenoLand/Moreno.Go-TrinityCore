@@ -44,33 +44,34 @@
 -- Initialize() flag/timer clears, RemoveFlag legs (PORTED in
 -- ionarCombatEnd — the field-59 flag surface is bridged),
 -- instance->SetBossState(DATA_IONAR, NOT_STARTED) — no summon-list /
--- instance bridges; the flag SET side stays out with the split machine. The SetControlled(false, UNIT_STATE_ROOT)
+-- instance bridges; the flag SET side is PORTED in ionarSplit. The SetControlled(false, UNIT_STATE_ROOT)
 -- leg ports via creature:SetRooted(false) (lua_creature_events.go)
 -- and the if (!IsVisible) SetVisible(true) leg via creature:SetVisible,
 -- both in ionarCombatEnd (C++-exact arms).
--- SpellHit — the SPELL_DISPERSE 52770 split machine (five
--- SPELL_SUMMON_SPARK 52746 casts, AttackStop, SetVisible(false),
--- NON_ATTACKABLE+NOT_SELECTABLE flags, UNIT_STATE_ROOT, motion
--- clear/idle) — the cast / visibility / flag surfaces are live now,
--- but the split machine itself (spark summons, motion clear/idle)
--- stays out, so the arm stays with it.
--- CallBackSparks — ObjectAccessor GUID loop, SetSpeedRate(MOVE_RUN,
--- 2.0f), MovePoint(DATA_POINT_CALLBACK 0) per alive spark,
--- DespawnOrUnsummon on dead — no ObjectAccessor / motion bridges.
--- DamageTaken — uiDamage = 0 when !me->IsVisible() — the event-9
--- bridge is live; the arm stays out on the missing visibility bridge
--- (no IsVisible in the Lua surface).
--- JustSummoned — NPC_SPARK_OF_IONAR 28926 SummonList latch +
--- SPELL_SPARK_VISUAL_TRIGGER 52667 self-cast + random-target
--- SetInCombatWith + MoveFollow — no summon-list / cast /
--- target-selection / motion bridges.
--- SummonedCreatureDespawn — lSparkList.Despawn latch — no bridge.
--- UpdateAI split machine (uiSplitTimer 25s / 2.5s; bIsSplitPhase
--- CallBackSparks leg; lSparkList.empty() restore leg with
--- SetVisible(true), flag removal, SPELL_SPARK_DESPAWN 52776
--- self-cast, MoveChase) — no timer / flag / cast / motion bridges;
--- the split machine itself is unported, so its SetVisible arms stay
--- out with it (the creature:SetVisible bridge is live).
+-- SpellHit — PORTED 2026-11-03 as the disperse health-poll
+-- trigger: the poll casts SPELL_DISPERSE 52770 and runs the split
+-- arms inline (five summons + AttackStop + invisible + flags +
+-- root + MoveIdle); no ev14 relay needed (self-cast trigger
+-- collapsed into the poll — same arm order as C++).
+-- CallBackSparks — PORTED 2026-11-03 (ionarCallbackSparks):
+-- 25s split timer, alive sparks SetSpeedRate(1, 2.0) + MoveTo(0,
+-- boss pos) with returning flag, dead sparks Despawned; tracked
+-- via SummonCreature return values, not ObjectAccessor.
+-- DamageTaken — PORTED 2026-11-03 (event 9): uiDamage = 0
+-- while the own-state split flag is set (no IsVisible bridge —
+-- Lua knows it set invisible); un-split hits pass through.
+-- JustSummoned — PORTED 2026-11-03 inline at summon:
+-- SPELL_SPARK_VISUAL_TRIGGER 52667 self-cast + random-threat
+-- MoveFollow; SetInCombatWith has no bridge (MoveFollow carries
+-- the follow leg); no ev19 registration (would double-apply).
+-- SummonedCreatureDespawn — set maintained by the spark watch
+-- (arrival despawn) + Ionar death/evade handlers; no ev20
+-- registration needed.
+-- UpdateAI split machine — PORTED 2026-11-03 (25s callback /
+-- 2.5s restore poll; restore = visible + flag clear + root clear
+-- + SPELL_SPARK_DESPAWN 52776 + MoveChase victim; ball/static
+-- timers cancel at split, re-seed fresh on restore — C++ freezes
+-- remaining time, documented delta).
 -- UpdateAI timer events (boss_ionar.cpp:260-275) — PORTED:
 -- uiBallLightningTimer DoCastVictim(SPELL_BALL_LIGHTNING 52780)
 -- non-triggered, urand(10s, 11s) init -> urand(10s, 11s) loop
@@ -86,14 +87,11 @@
 -- GetAITargets (midnight precedent) — C++ passes no playerOnly flag,
 -- so pets/totems qualify (playerOnly=false default, UnitAI.h:170);
 -- the stale player-only deviation note is retracted.
--- UpdateAI disperse health check — !bHasDispersed &&
--- HealthBelowPct(uiDisperseHealth) (45 + urand(0,10)):
--- Talk(SAY_SPLIT 1) + InterruptNonMeleeSpells +
--- DoCast(me, SPELL_DISPERSE 52770) — Talk(1) rides the unmodeled
--- machine; firing it without the split would fabricate context. NOTE:
--- creature:GetHealthPct IS bridged (object.go:107 fallback, sindragosa
--- precedent) — the arm is blocked by the split/disperse MACHINE
--- (gothik rule), not the health check.
+-- UpdateAI disperse health check — PORTED 2026-11-03 (500ms
+-- poll; HealthBelowPct = health < floor(max*pct/100) per Unit.h:872
+-- + CalculatePct truncation; roll 45+rand(0,10) at engage):
+-- Talk(SAY_SPLIT 1) + InterruptNonMeleeSpells + DoCast(me,
+-- SPELL_DISPERSE 52770) non-triggered, then the split arms.
 -- npc_spark_of_ionar (NPC_SPARK_OF_IONAR 28926, local enum in
 -- boss_ionar.cpp — the acolyte_of_shadron / stormforged_lieutenant
 -- local-enum precedent) — entry-verifiable but bridge-blocked, no
@@ -102,14 +100,13 @@
 -- the summon / movement machines stay out, same inert-until-summon
 -- standing as the registered DamageTaken arm below);
 -- MovementInform POINT_MOTION_TYPE / DATA_POINT_CALLBACK
--- DespawnOrUnsummon — no motion bridge; DamageTaken uiDamage = 0 —
--- REGISTERED 2026-10-19 (event 9, return false, 0 — halazzi
--- precedent; the handler is inert until the spark summon machine is
--- ported — trigger-path grounds); UpdateAI boss-state-gated
--- DespawnOrUnsummon + uiCheckTimer distance-to-Ionar
--- (> DATA_MAX_SPARK_DISTANCE 90) MovePoint callback machine via
--- instance->GetGuidData(DATA_IONAR) — no timer / instance / motion
--- / distance bridges. No Talk arms anywhere in the script.
+-- DespawnOrUnsummon — no motion hook (no event 28); arrival
+-- despawn is the spark-watch returning-flag poll (2s, 5yd),
+-- PORTED 2026-11-03; DamageTaken uiDamage = 0 stays REGISTERED
+-- (event 9, return false, 0 — halazzi precedent); UpdateAI >90
+-- redirect PORTED in the watch, boss-state gate has no instance
+-- bridge (Ionar death/evade despawn covers encounter end).
+-- No Talk arms anywhere in the script.
 
 local ENTRY_IONAR = 28546
 local ENTRY_SPARK_OF_IONAR = 28926
@@ -121,6 +118,11 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local SAY_AGGRO = 0
 local SAY_SLAY = 2
 local SAY_DEATH = 3
+local SAY_SPLIT = 1
+
+local SPELL_DISPERSE = 52770
+local SPELL_SPARK_VISUAL_TRIGGER = 52667
+local SPELL_SPARK_DESPAWN = 52776
 
 local SPELL_BALL_LIGHTNING = 52780
 local SPELL_STATIC_OVERLOAD = 52658
@@ -189,6 +191,175 @@ local function staticOverloadTick(creature, guid)
     end)
 end
 
+-- Split machine (boss_ionar.cpp SpellHit / CallBackSparks / UpdateAI
+-- invisible branch / spark UpdateAI, PORTED 2026-11-03; the old
+-- "no summon-list / motion / visibility bridge" stay-out notes are
+-- retracted — SummonCreature returns the summoned object (so Lua
+-- tracks spark GUIDs directly), MoveFollow/MoveTo/MoveChase/
+-- SetSpeedRate/AttackStop/SetFlag/SetRooted/SetVisible/Despawn are
+-- bridged, and the invisible DamageTaken gate rides this own-state
+-- flag (no IsVisible bridge exists, but Lua knows it set
+-- invisible). Deltas: (a) SetInCombatWith has no bridge — MoveFollow
+-- carries the follow leg; (b) MovementInform has no hook (no event
+-- 28) — arrival despawn is a 2s poll on the returning flag
+-- (callback or >90 redirect) with a 5yd threshold; (c) ball/static
+-- timers freeze in C++ while invisible — Lua cancels them at split
+-- and re-seeds fresh init ranges on restore; (d) the disperse
+-- health check is a 500ms poll, not a per-tick check; (e) sparks
+-- summon as type 7 MANUAL (no timed despawn exists in C++ — every
+-- C++ despawn leg is explicit here); (f) the spark boss-state gate
+-- has no instance bridge — Ionar death/evade despawn covers the
+-- encounter-end leg.
+local ionarState = {}
+
+local function ionarDespawnSparks(state)
+    if not state then
+        return
+    end
+    for sguid, entry in pairs(state.sparks) do
+        entry.obj:Despawn()
+        state.sparks[sguid] = nil
+    end
+end
+
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
+local ionarSplit, ionarCallbackSparks, ionarRestoreCheck, ionarSparkWatch, ionarHealthPoll
+
+ionarHealthPoll = function(creature, guid)
+    local state = ionarState[guid]
+    if not state or timers[guid] == nil then
+        return
+    end
+    if state.split then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * state.disperseHealth / 100) then
+        creature:Talk(SAY_SPLIT)
+        creature:InterruptNonMeleeSpells()
+        creature:CastSpell(creature, SPELL_DISPERSE)
+        ionarSplit(creature, guid, state)
+        return
+    end
+    schedule(guid, "healthPoll", 500, function()
+        ionarHealthPoll(creature, guid)
+    end)
+end
+
+ionarSplit = function(creature, guid, state)
+    state.split = true
+    state.splitPhase = true
+    cancelKey(guid, "ballLightning")
+    cancelKey(guid, "staticOverload")
+    cancelKey(guid, "healthPoll")
+    for _ = 1, 5 do
+        local spark = creature:SummonCreature(ENTRY_SPARK_OF_IONAR, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
+        if spark then
+            spark:CastSpell(spark, SPELL_SPARK_VISUAL_TRIGGER, true)
+            local target = randomThreatTarget(creature)
+            if target then
+                spark:MoveFollow(target, 0, 0)
+            end
+            state.sparks[spark:GetGUID()] = { obj = spark, returning = false }
+        end
+    end
+    creature:AttackStop()
+    creature:SetVisible(false)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetRooted(true)
+    creature:MoveIdle()
+    schedule(guid, "splitCallback", 25000, function()
+        ionarCallbackSparks(creature, guid)
+    end)
+    schedule(guid, "sparkWatch", 2000, function()
+        ionarSparkWatch(creature, guid)
+    end)
+end
+
+ionarCallbackSparks = function(creature, guid)
+    local state = ionarState[guid]
+    if not state or timers[guid] == nil then
+        return
+    end
+    for sguid, entry in pairs(state.sparks) do
+        if entry.obj:IsDead() then
+            entry.obj:Despawn()
+            state.sparks[sguid] = nil
+        else
+            entry.obj:SetSpeedRate(1, 2.0)
+            entry.obj:MoveTo(0, creature:GetX(), creature:GetY(), creature:GetZ())
+            entry.returning = true
+        end
+    end
+    state.splitPhase = false
+    schedule(guid, "splitRestore", 2500, function()
+        ionarRestoreCheck(creature, guid)
+    end)
+end
+
+ionarRestoreCheck = function(creature, guid)
+    local state = ionarState[guid]
+    if not state or timers[guid] == nil then
+        return
+    end
+    if next(state.sparks) == nil then
+        creature:SetVisible(true)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetRooted(false)
+        creature:CastSpell(creature, SPELL_SPARK_DESPAWN)
+        local victim = creature:GetVictim()
+        if victim then
+            creature:MoveChase(victim)
+        end
+        state.split = false
+        state.splitPhase = true
+        cancelKey(guid, "sparkWatch")
+        schedule(guid, "ballLightning", {10000, 11000}, function()
+            ballLightningTick(creature, guid)
+        end)
+        schedule(guid, "staticOverload", {5000, 6000}, function()
+            staticOverloadTick(creature, guid)
+        end)
+        return
+    end
+    schedule(guid, "splitRestore", 2500, function()
+        ionarRestoreCheck(creature, guid)
+    end)
+end
+
+ionarSparkWatch = function(creature, guid)
+    local state = ionarState[guid]
+    if not state or timers[guid] == nil then
+        return
+    end
+    for sguid, entry in pairs(state.sparks) do
+        if entry.obj:IsDead() then
+            entry.obj:Despawn()
+            state.sparks[sguid] = nil
+        else
+            local dist = entry.obj:GetDistance(creature)
+            if dist > 90 then
+                entry.obj:SetSpeedRate(1, 2.0)
+                entry.obj:MoveTo(0, creature:GetX(), creature:GetY(), creature:GetZ())
+                entry.returning = true
+            elseif entry.returning and dist < 5 then
+                entry.obj:Despawn()
+                state.sparks[sguid] = nil
+            end
+        end
+    end
+    schedule(guid, "sparkWatch", 2000, function()
+        ionarSparkWatch(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: Talk(AGGRO) +
 -- instance->SetBossState(DATA_IONAR, IN_PROGRESS) — only the Talk
 -- arm is bridgeable.
@@ -196,11 +367,15 @@ local function ionarEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    ionarState[guid] = { dispersed = false, disperseHealth = 45 + math.random(0, 10), split = false, splitPhase = true, sparks = {} }
     schedule(guid, "ballLightning", {10000, 11000}, function()
         ballLightningTick(creature, guid)
     end)
     schedule(guid, "staticOverload", {5000, 6000}, function()
         staticOverloadTick(creature, guid)
+    end)
+    schedule(guid, "healthPoll", 500, function()
+        ionarHealthPoll(creature, guid)
     end)
 end
 
@@ -215,6 +390,8 @@ local function ionarCombatEnd(event, creature)
     -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656 —
     -- unconditional here is end-state-identical to the C++ gate).
     -- C++ Reset (:118): RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE).
+    ionarDespawnSparks(ionarState[creature:GetGUID()])
+    ionarState[creature:GetGUID()] = nil
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
     creature:SetVisible(true)
     creature:SetRooted(false)
@@ -234,7 +411,19 @@ end
 -- bridgeable.
 local function ionarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    ionarDespawnSparks(ionarState[creature:GetGUID()])
+    ionarState[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ boss_ionar::DamageTaken (boss_ionar.cpp:190-194):
+-- uiDamage = 0 when !me->IsVisible() — PORTED via the own-state
+-- split flag (no IsVisible bridge; Lua knows it set invisible).
+local function ionarDamageTaken(event, creature, attacker, damage)
+    local state = ionarState[creature:GetGUID()]
+    if state and state.split then
+        return false, 0
+    end
 end
 
 RegisterCreatureEvent(ENTRY_IONAR, 1, ionarEnterCombat)
@@ -242,6 +431,7 @@ RegisterCreatureEvent(ENTRY_IONAR, 2, ionarCombatEnd)
 RegisterCreatureEvent(ENTRY_IONAR, 3, ionarTargetDied)
 RegisterCreatureEvent(ENTRY_IONAR, 4, ionarDied)
 RegisterCreatureEvent(ENTRY_IONAR, 23, ionarCombatEnd)
+RegisterCreatureEvent(ENTRY_IONAR, 9, ionarDamageTaken)
 
 -- C++ npc_spark_of_ionar::DamageTaken (boss_ionar.cpp:339-342):
 -- uiDamage = 0 unconditionally. Event 9's second return rewrites
