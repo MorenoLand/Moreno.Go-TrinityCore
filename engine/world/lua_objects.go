@@ -320,6 +320,44 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["GetClassMask"] = luaNoArgs(func() any { return unitClassRaceMask(state.Class) })
 	methods["GetRaceMask"] = luaNoArgs(func() any { return uint32(0) })
 	methods["IsPvPFlagged"] = luaNoArgs(func() any { return false })
+	// GetClassAsString is Unit::GetClassAsString (UnitMethods.h:1152):
+	// ChrClasses Name[locale] for the template unit_class, nil on a
+	// missing row. GetRaceAsString reads nil: the creature race byte
+	// Creature::InitEntry never sets, so the C++ ChrRaces lookup for
+	// race 0 finds no row either. GetControllerGUID/GetControllerGUIDS
+	// are Unit::GetCharmerOrOwnerGUID (Unit.h:1170) and
+	// WorldObject::GetCharmerOrOwnerOrOwnGUID (Object.cpp:2196) over
+	// the live motion's charmer/owner; a motion that no longer
+	// resolves reads 0 / the snapshot GUID.
+	methods["GetClassAsString"] = func(_ context.Context, args []any) ([]any, error) {
+		locale, err := dbcLocaleArg(args)
+		if err != nil {
+			return nil, err
+		}
+		name, err := s.server.dbcLocaleName("ChrClasses", state.Class, 4, locale)
+		if err != nil {
+			return nil, err
+		}
+		return []any{name}, nil
+	}
+	methods["GetRaceAsString"] = luaNoArgs(func() any { return nil })
+	methods["GetControllerGUID"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return uint64(0)
+		}
+		return unitControllerGUID(motion.Charmed, motion.CharmerGUID, motion.OwnerGUID)
+	})
+	methods["GetControllerGUIDS"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return state.GUID
+		}
+		if controller := unitControllerGUID(motion.Charmed, motion.CharmerGUID, motion.OwnerGUID); controller != 0 {
+			return controller
+		}
+		return state.GUID
+	})
 	methods["IsServiceProvider"] = luaNoArgs(func() any { return state.NPCFlags&0x007FC0F2 != 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any {
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)

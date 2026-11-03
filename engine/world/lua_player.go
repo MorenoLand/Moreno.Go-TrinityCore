@@ -119,6 +119,38 @@ func (s *session) luaPlayer() *scripting.Object {
 	// UNIT_FIELD_BYTES_2 PvP byte flag, the player PVPFlags bit in Go.
 	methods["GetClassMask"] = luaNoArgs(func() any { return unitClassRaceMask(uint32(state.Class)) })
 	methods["GetRaceMask"] = luaNoArgs(func() any { return unitClassRaceMask(uint32(state.Race)) })
+	// GetClassAsString/GetRaceAsString are Unit::GetClassAsString/
+	// GetRaceAsString (UnitMethods.h:1152/1195): ChrClasses/ChrRaces
+	// Name[locale] for the player's class/race, nil on a missing row.
+	methods["GetClassAsString"] = func(_ context.Context, args []any) ([]any, error) {
+		locale, err := dbcLocaleArg(args)
+		if err != nil {
+			return nil, err
+		}
+		name, err := s.server.dbcLocaleName("ChrClasses", uint32(state.Class), 4, locale)
+		if err != nil {
+			return nil, err
+		}
+		return []any{name}, nil
+	}
+	methods["GetRaceAsString"] = func(_ context.Context, args []any) ([]any, error) {
+		locale, err := dbcLocaleArg(args)
+		if err != nil {
+			return nil, err
+		}
+		name, err := s.server.dbcLocaleName("ChrRaces", uint32(state.Race), 14, locale)
+		if err != nil {
+			return nil, err
+		}
+		return []any{name}, nil
+	}
+	// GetControllerGUID/GetControllerGUIDS are Unit::GetCharmerOrOwnerGUID
+	// (Unit.h:1170) and WorldObject::GetCharmerOrOwnerOrOwnGUID
+	// (Object.cpp:2196): charmer else owner, else the unit's own GUID.
+	// Go stores no charmer or owner for players, so the first reads 0
+	// and the second reads the player's own GUID.
+	methods["GetControllerGUID"] = luaNoArgs(func() any { return uint64(0) })
+	methods["GetControllerGUIDS"] = luaNoArgs(func() any { return state.GUID })
 	methods["IsArmorer"] = luaNoArgs(func() any { return false })
 	methods["IsBanker"] = luaNoArgs(func() any { return false })
 	methods["IsBattleMaster"] = luaNoArgs(func() any { return false })
@@ -5182,6 +5214,54 @@ func unitClassRaceMask(value uint32) uint32 {
 		return 0
 	}
 	return 1 << (value - 1)
+}
+
+// dbcLocaleArg is the optional locale argument of the Eluna name
+// getters (UnitMethods.h:1152/1195): CHECKVAL with DEFAULT_LOCALE, so a
+// missing argument reads enUS (0).
+func dbcLocaleArg(args []any) (uint32, error) {
+	if len(args) == 0 {
+		return 0, nil
+	}
+	return luaUint32Arg(args, 0)
+}
+
+// dbcLocaleName is Unit::GetClassAsString/GetRaceAsString
+// (UnitMethods.h:1152/1195): the ChrClasses/ChrRaces Name[locale] string.
+// ChrClasses Name columns are DBC fields 4-19 and ChrRaces Name columns
+// are fields 14-29 (DBCStructure.h:388/431); locales above ruRU (8)
+// error like C++'s luaL_argerror, matching the LocaleConstant enum
+// (Common.h: TOTAL_LOCALES = 9). A missing row, file, or store reads
+// nil, like C++ pushing nothing for a failed LookupEntry.
+func (srv *Server) dbcLocaleName(file string, id uint32, nameField int, locale uint32) (any, error) {
+	if locale >= 9 {
+		return nil, fmt.Errorf("argument 1 must be a valid LocaleConstant")
+	}
+	if srv == nil || srv.Data == nil {
+		return nil, nil
+	}
+	dbcFile, err := srv.Data.File(file)
+	if err != nil || dbcFile == nil {
+		return nil, nil
+	}
+	record, ok := dbcFile.Find(id)
+	if !ok {
+		return nil, nil
+	}
+	name, err := record.String(nameField + int(locale))
+	if err != nil {
+		return nil, nil
+	}
+	return name, nil
+}
+
+// unitControllerGUID is Unit::GetCharmerOrOwnerGUID (Unit.h:1170):
+// the charmer GUID when charmed, else the owner GUID.
+func unitControllerGUID(charmed bool, charmerGUID, ownerGUID uint64) uint64 {
+	if charmed {
+		return charmerGUID
+	}
+	return ownerGUID
 }
 
 func luaNoArgs(value func() any) scripting.ObjectMethod {

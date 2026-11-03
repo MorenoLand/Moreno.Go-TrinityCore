@@ -318,6 +318,40 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	})
 	methods["GetRaceMask"] = luaNoArgs(func() any { return uint32(0) })
 	methods["IsPvPFlagged"] = luaNoArgs(func() any { return false })
+	// GetClassAsString/GetRaceAsString/GetControllerGUID/
+	// GetControllerGUIDS mirror the session-creature twins in
+	// lua_objects.go: ChrClasses Name[locale] for the motion's
+	// template unit_class, nil race (the race byte is never set),
+	// and the Unit.h:1170 / Object.cpp:2196 controller GUIDs over
+	// the motion's charmer/owner, else the motion's own GUID.
+	methods["GetClassAsString"] = func(_ context.Context, args []any) ([]any, error) {
+		locale, err := dbcLocaleArg(args)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		class := motion.UnitClass
+		s.motionMu.Unlock()
+		name, err := s.dbcLocaleName("ChrClasses", class, 4, locale)
+		if err != nil {
+			return nil, err
+		}
+		return []any{name}, nil
+	}
+	methods["GetRaceAsString"] = luaNoArgs(func() any { return nil })
+	methods["GetControllerGUID"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return unitControllerGUID(motion.Charmed, motion.CharmerGUID, motion.OwnerGUID)
+	})
+	methods["GetControllerGUIDS"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		if controller := unitControllerGUID(motion.Charmed, motion.CharmerGUID, motion.OwnerGUID); controller != 0 {
+			return controller
+		}
+		return motion.GUID
+	})
 	// GetOwner returns the owning player object for a pet/guardian motion
 	// (Unit::GetOwner, Unit.h) or nil when the motion has no owner or the
 	// owner session is gone. Lets Lua port owner-targeted arms such as
