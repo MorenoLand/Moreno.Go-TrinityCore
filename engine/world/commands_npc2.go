@@ -14,9 +14,13 @@ import (
 //
 // Of these 26 arms, one is partial-native (`set movetype` with an explicit
 // GUID: the creature row is updated in the world DB, which is the live
-// creature store in the Go tree), two are wired (`delete item` on the
+// creature store in the Go tree), six are wired (`delete item` on the
 // npc_vendor rows, `set factionid` on the live faction slot plus the
-// template row) and 23 are documented-blocked: every other arm needs the
+// template row, `set flag` on the live NPC-flags slot plus the template
+// row, `set level` on the live level/health slots plus the spawn row's
+// curhealth, `set model` on the live display slots plus the spawn row's
+// modelid, `set phase` on the live phase slot plus the spawn row's
+// phaseMask) and 19 are documented-blocked: every other arm needs the
 // creature AI/motion/loot/pet bridges or the spawn-group manager, none of
 // which exist in the Go tree. Selected-creature resolution itself exists
 // (castCommandSelectedCreature, the getSelectedCreature twin).
@@ -42,17 +46,17 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	case strings.HasPrefix("factionid", sub):
 		s.handleNPCSetFactionID(ctx, rest)
 	case strings.HasPrefix("flag", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetFlag, "set flag")
+		s.handleNPCSetFlag(ctx, rest)
 	case strings.HasPrefix("level", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetLevel, "set level")
+		s.handleNPCSetLevel(ctx, rest)
 	case strings.HasPrefix("link", sub):
 		s.npcNeedCreature(ctx, permissionCommandNPCSetLink, "set link")
 	case strings.HasPrefix("model", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetModel, "set model")
+		s.handleNPCSetModel(ctx, rest)
 	case strings.HasPrefix("movetype", sub):
 		s.handleNPCSetMoveType(ctx, rest)
 	case strings.HasPrefix("phase", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetPhase, "set phase")
+		s.handleNPCSetPhase(ctx, rest)
 	case strings.HasPrefix("wanderdistance", sub):
 		s.npcNeedCreature(ctx, permissionCommandNPCSetSpawnDist, "set wanderdistance")
 	case strings.HasPrefix("spawntime", sub):
@@ -301,6 +305,198 @@ func (s *session) handleNPCSetFactionID(ctx context.Context, args []string) {
 	s.server.motionMu.Unlock()
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldFaction: faction})
 	_, _ = db.ExecContext(ctx, "UPDATE creature_template SET faction = ? WHERE entry = ?", faction, entry)
+}
+
+// handleNPCSetFlag mirrors HandleNpcSetFlagCommand (cs_npc.cpp:419):
+// ".npc set flag <npcFlags>". C++ requires the selected creature
+// (LANG_SELECT_CREATURE), then REPLACES UNIT_NPC_FLAGS with the given
+// value (SetUInt32Value, not an OR) and persists it with
+// WORLD_UPD_CREATURE_NPCFLAG (UPDATE creature_template SET npcflag
+// WHERE entry), reporting LANG_VALUE_SAVED_REJOIN on success. The live
+// write sets NPCFlagsKnown so the motion->spawn overlay keeps the live
+// value on re-stream (the SetNPCFlags twin).
+func (s *session) handleNPCSetFlag(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetFlag) {
+		return
+	}
+	const syntax = "Syntax: .npc set flag <npcFlags>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	flags, ok := npcVendorUintArg(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	entry, mapID, instanceID, guid := motion.Entry, motion.Map, motion.InstanceID, motion.GUID
+	motion.NPCFlags = flags
+	motion.NPCFlagsKnown = true
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCFlags: flags})
+	_, _ = db.ExecContext(ctx, "UPDATE creature_template SET npcflag = ? WHERE entry = ?", flags, entry)
+	s.sendSysMessage("Value saved, please rejoin.")
+}
+
+// npcSetLevelHealth is the HandleNpcSetLevelCommand health rule
+// (cs_npc.cpp:277): SetMaxHealth and SetHealth both take 100 + 30*lvl.
+func npcSetLevelHealth(lvl uint32) uint32 { return 100 + 30*lvl }
+
+// handleNPCSetLevel mirrors HandleNpcSetLevelCommand (cs_npc.cpp:277):
+// ".npc set level <lvl>". C++ gates lvl to 1..CONFIG_MAX_PLAYER_LEVEL+3
+// (LANG_BAD_VALUE), then requires a selected non-pet creature
+// (LANG_SELECT_CREATURE), sets MaxHealth and Health to 100+30*lvl and
+// Level, then SaveToDB. Level itself has no creature-row column, so the
+// persistent leg is the spawn row's curhealth; a respawn re-derives the
+// level from the template, and a temp summon gains no spawn row from the
+// targeted UPDATE (C++'s full SaveToDB would mint one).
+func (s *session) handleNPCSetLevel(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetLevel) {
+		return
+	}
+	const syntax = "Syntax: .npc set level <lvl>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	lvl, ok := npcVendorUintArg(args[0])
+	if !ok || lvl > 255 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	maxLevel := uint32(80)
+	if s.server != nil && s.server.Config.MaxPlayerLevel != 0 {
+		maxLevel = s.server.Config.MaxPlayerLevel
+	}
+	if lvl < 1 || lvl > maxLevel+3 {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil || motionIsPet(motion) {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	health := npcSetLevelHealth(lvl)
+	s.server.motionMu.Lock()
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+	motion.Level = lvl
+	motion.MaxHealth = health
+	motion.Health = health
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldLevel: lvl, unitFieldHealth: health, unitFieldMaxHealth: health})
+	_, _ = db.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", health, uint32(guid&0x00FFFFFF))
+}
+
+// npcStoredModelID is the Creature::SaveToDB displayid rule
+// (Creature.cpp:1408-1416): the spawn row stores 0 when the native
+// display equals one of the template's models, else the display id.
+func npcStoredModelID(display, m1, m2, m3, m4 uint32) uint32 {
+	if display == m1 || display == m2 || display == m3 || display == m4 {
+		return 0
+	}
+	return display
+}
+
+// handleNPCSetModel mirrors HandleNpcSetModelCommand (cs_npc.cpp:678):
+// ".npc set model <displayId>". C++ requires a selected non-pet
+// creature (LANG_SELECT_CREATURE), then gates the id on the
+// CreatureDisplayInfo.dbc row (LANG_COMMAND_INVALID_PARAM), sets
+// DisplayId and NativeDisplayId live, then SaveToDB (the spawn row's
+// modelid, 0 when the display equals a template model). The gender leg
+// of Unit::SetDisplayId has no Go creature slot and stays unmodeled.
+func (s *session) handleNPCSetModel(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetModel) {
+		return
+	}
+	const syntax = "Syntax: .npc set model <displayId>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	display, ok := npcVendorUintArg(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil || motionIsPet(motion) {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if !s.mountDisplayValid(display) {
+		s.sendSysMessage(fmt.Sprintf("Invalid parameter '%d'.", display))
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	entry, mapID, instanceID, guid := motion.Entry, motion.Map, motion.InstanceID, motion.GUID
+	motion.DisplayID = display
+	motion.DisplayIDKnown = true
+	motion.NativeDisplayID = display
+	s.server.motionMu.Unlock()
+	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldDisplayID: display, unitFieldNativeDisplayID: display})
+	var m1, m2, m3, m4 uint32
+	_ = db.QueryRowContext(ctx, "SELECT modelid1, modelid2, modelid3, modelid4 FROM creature_template WHERE entry = ?", entry).Scan(&m1, &m2, &m3, &m4)
+	_, _ = db.ExecContext(ctx, "UPDATE creature SET modelid = ? WHERE guid = ?", npcStoredModelID(display, m1, m2, m3, m4), uint32(guid&0x00FFFFFF))
+}
+
+// handleNPCSetPhase mirrors HandleNpcSetPhaseCommand (cs_npc.cpp:814):
+// ".npc set phase <phasemask>". C++ rejects a zero mask BEFORE the
+// creature check (LANG_BAD_VALUE), then requires the selected creature
+// (LANG_SELECT_CREATURE), writes the live phase mask, and runs SaveToDB
+// only for non-pets (the spawn row's phaseMask). No visibility fan-out,
+// the modify-phase delta.
+func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetPhase) {
+		return
+	}
+	const syntax = "Syntax: .npc set phase <phasemask>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	mask, ok := npcVendorUintArg(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if mask == 0 {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	motion.PhaseMask = mask
+	s.server.motionMu.Unlock()
+	if !motionIsPet(motion) {
+		_, _ = db.ExecContext(ctx, "UPDATE creature SET phaseMask = ? WHERE guid = ?", mask, uint32(motion.GUID&0x00FFFFFF))
+	}
 }
 
 // handleNPCFollow handles "follow" and the two-level "follow stop" arm
