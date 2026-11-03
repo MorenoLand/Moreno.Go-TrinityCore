@@ -58,14 +58,15 @@
 -- and unmodeled. The Reset SetStandState(DEAD) and speech_1
 -- SetStandState(STAND) + all three HandleEmoteCommand(EMOTE_ONESHOT_TALK)
 -- arms are ported via creature:SetStandState/:PerformEmote;
--- speech_4's AttackStart on the gossip player
--- has no bearer (no movement/attack bridge on a non-combat target) —
--- the faction flip makes Vael hostile and the fight starts when a
--- player pulls or proximity aggro fires;
+-- speech_4's AttackStart on the gossip player is PORTED via the
+-- handler-surface AttackStart bridge (EngageWithTarget alias,
+-- lua_creature_events.go:5665): the gossip player rides the speech
+-- closure, and the bridge no-ops when the player session is gone —
+-- the C++ ObjectAccessor::GetUnit nil leg, inside the bridge;
 -- the DB gossip menu text (gossip_menu 6101) is approximated in the
 -- hello handler — the real option text lives in the DB, not in C++;
--- PlayerGUID (ObjectGuid) has no bridge — the gossiping player is not
--- tracked across the speech; the burning
+-- PlayerGUID (ObjectGuid) has no bridge — the gossiping player is
+-- tracked across the speech via the armSpeech closure instead; the burning
 -- adrenaline caster-arm HasAura(SPELL_BURNINGADRENALINE) no-duplicate
 -- filter is bridged via player:HasAura(18173); the non-pet
 -- SelectTarget filter drops (candidates are players only, never
@@ -229,7 +230,7 @@ end
 
 -- Speech machine: runs out of combat after the gossip select.
 -- C++ EVENT_SPEECH_1..4: 1s / 12s / 12s / 16s.
-local function armSpeech(creature, guid)
+local function armSpeech(creature, guid, player)
     schedule(guid, "speech1", 1000, function()
         creature:Talk(SAY_LINE1)
         creature:SetStandState(0) -- C++ speech_1: UNIT_STAND_STATE_STAND
@@ -243,11 +244,13 @@ local function armSpeech(creature, guid)
                 schedule(guid, "speech4", 16000, function()
                     -- C++ speech_4: SetFaction(FACTION_DRAGONFLIGHT_BLACK)
                     -- (boss_vaelastrasz.cpp:156) — bridged
-                    -- (lua_creature_events.go:1208). The AttackStart leg on
-                    -- the gossip player has no bridge (no movement/attack
-                    -- bearer on a non-combat target); the fight starts when
-                    -- a player pulls or proximity aggro fires.
+                    -- (lua_creature_events.go:1208) — then AttackStart on
+                    -- the gossip player if still present
+                    -- (boss_vaelastrasz.cpp:157-158; the bridge no-ops
+                    -- when the player session is gone, the C++
+                    -- ObjectAccessor::GetUnit nil leg).
                     creature:SetFaction(FACTION_DRAGONFLIGHT_BLACK)
+                    creature:AttackStart(player)
                 end)
             end)
         end)
@@ -273,7 +276,7 @@ local function onGossipSelect(event, player, creature, sender, action)
         -- one-shot; the player GUID record (ObjectGuid) has no bridge.
         -- Then the speech machine arms.
         creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
-        armSpeech(creature, creature:GetGUID())
+        armSpeech(creature, creature:GetGUID(), player)
     end
     -- C++ OnGossipSelect returns false: the AI/native select arms
     -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
