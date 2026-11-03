@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -430,8 +431,8 @@ func (s *session) handleDebugPlay(ctx context.Context, args []string) {
 // the buildCastFailedParams funnel, which appends the optional extended
 // params exactly as C++ appends failArg1/failArg2. DELTA: the result arg
 // parses as a numeric SpellCastResult; C++'s enum-name form has no Go
-// command parser. Only the spellfail arm of the debugSendCommandTable is
-// wired; the remaining send arms stay unmapped.
+// command parser. The remaining send arms are wired in handleDebugSend,
+// including opcode.
 func (s *session) handleDebugSendSpellFail(ctx context.Context, args []string) {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
 		s.sendNotification("You do not have permission to use that command.")
@@ -459,19 +460,285 @@ func (s *session) handleDebugSendSpellFail(ctx context.Context, args []string) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(0, 133, uint8(result), params...), true)
 }
 
-// handleDebugSend mirrors the debugSendCommandTable (cs_debug.cpp:80-92)
-// as far as Go wires it: spellfail only. Unknown sub-arms report the
-// spellfail syntax rather than silently succeeding.
+// handleDebugSend mirrors the debugSendCommandTable (cs_debug.cpp:70-82):
+// spellfail, buyerror, sellerror, equiperror, channelnotify, chatmessage,
+// qpartymsg, qinvalidmsg, setphaseshift, largepacket and opcode — the
+// whole subtable. The debug arms
+// pass nil creatures/items, so the error packets carry empty GUIDs and
+// zero item/param fields exactly as C++ does; numeric args stand in for
+// C++'s enum-name forms, matching the spellfail precedent. Unknown
+// sub-arms report the syntax rather than silently succeeding.
 func (s *session) handleDebugSend(ctx context.Context, args []string) {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
 		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
-	if len(args) > 0 && strings.ToLower(args[0]) == "spellfail" {
-		s.handleDebugSendSpellFail(ctx, args[1:])
+	const syntax = "Syntax: .debug send spellfail|buyerror|sellerror|equiperror|channelnotify|chatmessage|qpartymsg|qinvalidmsg|setphaseshift|largepacket|opcode <arg>"
+	if len(args) == 0 {
+		s.sendSysMessage(syntax)
 		return
 	}
-	s.sendSysMessage("Syntax: .debug send spellfail <result> [failArg1] [failArg2]")
+	switch strings.ToLower(args[0]) {
+	case "spellfail":
+		s.handleDebugSendSpellFail(ctx, args[1:])
+	case "opcode":
+		s.handleDebugSendOpcode(ctx)
+	case "buyerror", "sellerror", "equiperror", "channelnotify", "chatmessage", "qpartymsg", "qinvalidmsg", "setphaseshift":
+		if len(args) < 2 {
+			s.sendSysMessage(syntax)
+			return
+		}
+		value, err := strconv.ParseUint(args[1], 10, 32)
+		if err != nil {
+			s.sendSysMessage(syntax)
+			return
+		}
+		s.debugSendNumeric(strings.ToLower(args[0]), uint32(value))
+	case "largepacket":
+		var sb strings.Builder
+		for sb.Len() < 128000 {
+			sb.WriteString("This is a dummy string to push the packet's size beyond 128000 bytes. ")
+		}
+		s.sendSysMessage(sb.String())
+	default:
+		s.sendSysMessage(syntax)
+	}
+}
+
+// debugSendNumeric writes one numeric-arg send arm. The packet layouts
+// are the Player::Send* twins with the debug call's nil arguments:
+// SendBuyError (Player.cpp:13635) writes creature GUID 0, item 0 and the
+// result byte (param 0 omitted); SendSellError (Player.cpp:13646) writes
+// creature GUID 0, item GUID 0 and the result byte; SendEquipError
+// (Player.cpp:13592) writes the result byte plus empty item GUIDs, the
+// bag-type byte and, for the level/limit-category arms, a zero template
+// field (no item, so no template lookup) and, for the autoequip-bind
+// confirm arm, zero guid/slot/container. This writes directly rather
+// than through sendEquipError so the debug packet is never swallowed by
+// the session's equip-error suppression, as C++ sends it unconditionally.
+func (s *session) debugSendNumeric(arm string, value uint32) {
+	switch arm {
+	case "buyerror":
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(0, 0, uint8(value)), true)
+	case "sellerror":
+		_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(0, 0, uint8(value)), true)
+	case "equiperror":
+		buf := protocol.NewBuffer(34)
+		buf.WriteU8(uint8(value))
+		if value != 0 {
+			buf.WriteU64(0)
+			buf.WriteU64(0)
+			buf.WriteU8(0)
+			switch value {
+			case 1, 87:
+				buf.WriteU32(0)
+			case 81:
+				buf.WriteU64(0)
+				buf.WriteU32(0)
+				buf.WriteU64(0)
+			case 84, 85, 89:
+				buf.WriteU32(0)
+			}
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_INVENTORY_CHANGE_FAILURE), buf.Bytes(), true)
+	case "channelnotify":
+		buf := protocol.NewBuffer(15)
+		buf.WriteU8(uint8(value))
+		buf.WriteCString("test")
+		buf.WriteU32(0)
+		buf.WriteU32(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CHANNEL_NOTIFY), buf.Bytes(), true)
+	case "chatmessage":
+		packet := protocol.BuildChatMessage(uint8(value), languageUniversal, s.playerGUID, s.playerGUID, "testtest", "chan")
+		_ = s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
+	case "qpartymsg":
+		s.sendPushToPartyResponse(s.playerGUID, uint8(value))
+	case "qinvalidmsg":
+		s.sendQuestGiverQuestInvalid(value)
+	case "setphaseshift":
+		_ = s.write(uint16(protocol.OpcodeSMSG_SET_PHASE_SHIFT), buildPhaseShift(value), true)
+	}
+}
+
+// stripOpcodeComments removes the // line and /* */ block comments that
+// HandleDebugSendOpcodeCommand strips from opcode.txt before tokenizing,
+// keeping every other byte so the token stream matches C++'s.
+func stripOpcodeComments(data []byte) []byte {
+	out := make([]byte, 0, len(data))
+	for i := 0; i < len(data); {
+		if data[i] == '/' && i+1 < len(data) {
+			if data[i+1] == '*' {
+				end := i + 2
+				for end+1 < len(data) && !(data[end] == '*' && data[end+1] == '/') {
+					end++
+				}
+				if end+1 < len(data) {
+					i = end + 2
+				} else {
+					i = len(data)
+				}
+				continue
+			}
+			if data[i+1] == '/' {
+				for i < len(data) && data[i] != '\n' {
+					i++
+				}
+				continue
+			}
+		}
+		out = append(out, data[i])
+		i++
+	}
+	return out
+}
+
+// handleDebugSendOpcode mirrors HandleDebugSendOpcodeCommand
+// (cs_debug.cpp:261): ".debug send opcode" replays the server-side
+// opcode.txt file — first token the opcode, then type/value pairs
+// (uint8/uint16/uint32/uint64/float/string) or guid/position tokens
+// (appitsguid/appmyguid/appgoguid/goguid/myguid/itsguid/itspos/mypos) —
+// to the selected player, or the invoker when the selection is not a
+// player. The selected unit falls back to the invoker when nothing is
+// selected, as getSelectedUnit does. The nearest gameobject within one
+// grid (SIZE_OF_GRIDS) supplies the goguid legs; a miss reports
+// OBJNOTFOUND and sends nothing, as C++ does. DELTAS: a missing
+// opcode.txt reports a plain message where C++ returns false to the
+// chat handler's generic failure; unknown types stop the token loop but
+// the packet still sends, as C++ logs and breaks before sending.
+func (s *session) handleDebugSendOpcode(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	raw, err := os.ReadFile("opcode.txt")
+	if err != nil {
+		s.sendSysMessage("opcode.txt not found.")
+		return
+	}
+	tokens := strings.Fields(string(stripOpcodeComments(raw)))
+	if len(tokens) == 0 {
+		return
+	}
+	opcode, err := strconv.ParseUint(tokens[0], 10, 32)
+	if err != nil {
+		return
+	}
+	unitName, unitGUID, ux, uy, uz, _, _ := s.debugSelectedUnit()
+	target := s
+	playerGUID := s.playerGUID
+	if s.server != nil {
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil {
+			target = ts
+			playerGUID = ts.playerGUID
+		}
+	}
+	var goGUID uint64
+	needGO := false
+	for _, tok := range tokens[1:] {
+		if tok == "appgoguid" || tok == "goguid" {
+			needGO = true
+		}
+	}
+	if needGO && s.player != nil {
+		best := float32(-1)
+		s.scanNearbyGameObjects(ctx, 533.3333, func(g nearbyGameObject) {
+			dx, dy, dz := g.x-s.player.X, g.y-s.player.Y, g.z-s.player.Z
+			d := dx*dx + dy*dy + dz*dz
+			if best < 0 || d < best {
+				best = d
+				goGUID = g.guid
+			}
+		})
+		if goGUID == 0 {
+			s.sendSysMessage("Gameobject (GUID: 0) could not be found.")
+			return
+		}
+	}
+	buf := protocol.NewBuffer(64)
+	i := 1
+	for i < len(tokens) {
+		typ := tokens[i]
+		i++
+		next := func() (string, bool) {
+			if i >= len(tokens) {
+				return "", false
+			}
+			v := tokens[i]
+			i++
+			return v, true
+		}
+		switch typ {
+		case "uint8", "uint16", "uint32", "uint64", "float", "string":
+			v, ok := next()
+			if !ok {
+				break
+			}
+			switch typ {
+			case "uint8":
+				n, err := strconv.ParseUint(v, 10, 16)
+				if err != nil {
+					break
+				}
+				buf.WriteU8(uint8(n))
+			case "uint16":
+				n, err := strconv.ParseUint(v, 10, 16)
+				if err != nil {
+					break
+				}
+				buf.WriteU16(uint16(n))
+			case "uint32":
+				n, err := strconv.ParseUint(v, 10, 32)
+				if err != nil {
+					break
+				}
+				buf.WriteU32(uint32(n))
+			case "uint64":
+				n, err := strconv.ParseUint(v, 10, 64)
+				if err != nil {
+					break
+				}
+				buf.WriteU64(n)
+			case "float":
+				n, err := strconv.ParseFloat(v, 32)
+				if err != nil {
+					break
+				}
+				buf.WriteF32(float32(n))
+			case "string":
+				buf.WriteCString(v)
+			}
+		case "appitsguid":
+			buf.WritePackedGUID(unitGUID)
+		case "appmyguid":
+			buf.WritePackedGUID(playerGUID)
+		case "appgoguid":
+			buf.WritePackedGUID(goGUID)
+		case "goguid":
+			buf.WriteU64(goGUID)
+		case "myguid":
+			buf.WriteU64(playerGUID)
+		case "itsguid":
+			buf.WriteU64(unitGUID)
+		case "itspos":
+			buf.WriteF32(ux)
+			buf.WriteF32(uy)
+			buf.WriteF32(uz)
+		case "mypos":
+			if s.player != nil {
+				buf.WriteF32(s.player.X)
+				buf.WriteF32(s.player.Y)
+				buf.WriteF32(s.player.Z)
+			} else {
+				buf.WriteF32(0)
+				buf.WriteF32(0)
+				buf.WriteF32(0)
+			}
+		default:
+			i = len(tokens)
+		}
+	}
+	_ = target.write(uint16(opcode), buf.Bytes(), true)
+	s.sendSysMessage(fmt.Sprintf("Opcode %d sent to %s.", opcode, unitName))
 }
 
 // handleDebugLootRecipient mirrors HandleDebugGetLootRecipientCommand
