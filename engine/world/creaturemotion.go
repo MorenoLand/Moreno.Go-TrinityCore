@@ -373,6 +373,7 @@ type creatureMotion struct {
 	EncounterInstanceID uint32
 
 	OwnerGUID      uint64
+	CreatedByGUID  uint64    // UNIT_FIELD_CREATEDBY (Unit.h:1149): the summoner/owner GUID, script-settable via SetCreatorGUID; seeded by summonTempCreature from the summoner (TempSummon::InitStats, TemporarySummon.cpp:356), 0 = Empty otherwise
 	ObjectSlots    [4]uint64 // Unit::m_ObjectSlot[4] (Unit.h): the GUIDs of the game objects summoned by SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 on this creature, mirroring the player ObjectSlots twin (player_state.go)
 	CharmerGUID    uint64
 	CritterGUID    uint64 // UNIT_FIELD_CRITTER mirror (Unit.h:1156): the vanity-critter GUID, script-settable via SetCritterGUID; creatures carry none unless a script sets one.
@@ -1044,6 +1045,34 @@ func (s *Server) motionMapLocked(mapID, instanceID uint32) map[uint64]*creatureM
 		s.instanceCreatureMotion[key] = make(map[uint64]*creatureMotion)
 	}
 	return s.instanceCreatureMotion[key]
+}
+
+// fanOutBytes2FlagToControlled mirrors the UnitMethods::SetFFA
+// controlled-unit arm (UnitMethods.h:1851-1890, TRINITY leg): the apply
+// arm overwrites each controlled unit's whole bytes2 byte 1 with the
+// flag (C++ SetByteValue, not SetByteFlag), the clear arm removes just
+// the flag bit (RemoveByteFlag). Controlled here is the motion graph Go
+// models: motions whose CharmerGUID or OwnerGUID is the unit (the
+// IsAttackingPlayer downward walk). DELTA: C++ m_Controlled membership
+// (charm + minion) vs Go's flat owner graph may differ for pure summons,
+// which Go cannot separate from minions.
+func (s *Server) fanOutBytes2FlagToControlled(mapID, instanceID uint32, guid uint64, flag uint8, apply bool) {
+	if s == nil || guid == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	for _, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion == nil || (motion.CharmerGUID != guid && motion.OwnerGUID != guid) {
+			continue
+		}
+		if apply {
+			motion.PVPFlags = flag
+		} else {
+			motion.PVPFlags &^= flag
+		}
+		motion.PVPFlagsKnown = true
+	}
 }
 
 func (s *Server) findCreatureMotionLocked(mapID, instanceID uint32, guid uint64) *creatureMotion {

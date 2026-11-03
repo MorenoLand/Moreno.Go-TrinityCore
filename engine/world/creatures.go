@@ -41,6 +41,7 @@ type creatureSpawn struct {
 	UnitFlags        uint32
 	UnitFlags2       uint32
 	DynamicFlags     uint32
+	CreatedByGUID    uint64
 	CreatedBySpell   uint32
 	Level            uint32
 	Health           uint32
@@ -381,12 +382,14 @@ func (s *Server) applyCreatureMotionToSpawn(state playerState, spawn *creatureSp
 		// the lootable flag when Health == 0.
 		if motion := s.findCreatureMotion(state.Map, state.InstanceID, creatureWorldGUID(spawn.GUID, spawn.Entry)); motion != nil {
 			spawn.Health, spawn.UnitFlags, spawn.DynamicFlags, spawn.Faction = motion.Health, motion.UnitFlags, motion.DynamicFlags, motion.Faction
+			spawn.CreatedByGUID = motion.CreatedByGUID
 		}
 		return
 	}
 	if motion := s.findCreatureMotion(state.Map, state.InstanceID, creatureWorldGUID(spawn.GUID, spawn.Entry)); motion != nil {
 		spawn.X, spawn.Y, spawn.Z, spawn.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
 		spawn.Health, spawn.UnitFlags, spawn.DynamicFlags, spawn.Faction = motion.Health, motion.UnitFlags, motion.DynamicFlags, motion.Faction
+		spawn.CreatedByGUID = motion.CreatedByGUID
 		if motion.EntryOverride && motion.Entry != spawn.Entry {
 			// A scripted UpdateEntry transform re-seated the motion on a
 			// new template (Creature::UpdateEntry, Creature.cpp:552): the
@@ -563,6 +566,8 @@ func buildCreatureUpdate(ctx context.Context, spawn creatureSpawn, observer *ses
 	values[unitFieldFlags] = spawn.UnitFlags
 	values[unitFieldFlags2] = spawn.UnitFlags2
 	values[unitFieldDynamicFlags] = spawn.DynamicFlags
+	values[unitFieldCreatedBy] = uint32(spawn.CreatedByGUID)
+	values[unitFieldCreatedBy+1] = uint32(spawn.CreatedByGUID >> 32)
 	values[unitFieldCreatedBySpell] = spawn.CreatedBySpell
 	values[unitModCastSpeed] = math.Float32bits(1)
 	if spawn.Health == 0 {

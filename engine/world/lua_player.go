@@ -393,6 +393,75 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.sendPlayerUpdate()
 		return nil, nil
 	}
+	// SetFFA is UnitMethods::SetFFA (UnitMethods.h:1851-1890, TRINITY
+	// leg) for players as Units: the FFA_PVP byte flag on the player
+	// PVPFlags byte (folded into bytes2 by the update-values builder)
+	// plus the controlled-unit fan-out. The PlayerMethods SetFFA twin
+	// is excluded in this fork (PlayerMethods.h:2086, !TRINITY guard).
+	methods["SetFFA"] = func(_ context.Context, args []any) ([]any, error) {
+		apply, err := extraBool("SetFFA", args)
+		if err != nil {
+			return nil, err
+		}
+		if apply {
+			state.PVPFlags |= pvpFlagFFA
+		} else {
+			state.PVPFlags &^= pvpFlagFFA
+		}
+		s.server.fanOutBytes2FlagToControlled(s.player.Map, s.player.InstanceID, s.player.GUID, pvpFlagFFA, apply)
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// SetPvP is UnitMethods::SetPvP (UnitMethods.h:1466-1474) for players
+	// as Units: Unit::SetPvP (Unit.cpp:12254) sets or clears only the
+	// PvP byte flag — no pvpEnd timer, no contested-flag change (those
+	// belong to Player::UpdatePvP, a separate path).
+	methods["SetPvP"] = func(_ context.Context, args []any) ([]any, error) {
+		apply, err := extraBool("SetPvP", args)
+		if err != nil {
+			return nil, err
+		}
+		if apply {
+			state.PVPFlags |= pvpFlagPvP
+		} else {
+			state.PVPFlags &^= pvpFlagPvP
+		}
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
+	// GetStat is UnitMethods::GetStat (UnitMethods.h:726-734) for players
+	// as Units: Unit::GetStat (Unit.h:858) reads UNIT_FIELD_STAT0+stat,
+	// which the update-values builder fills from state.Stats, so this
+	// reads the same source. stat >= MAX_STATS (5) reads nil.
+	methods["GetStat"] = func(_ context.Context, args []any) ([]any, error) {
+		stat, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if stat >= 5 {
+			return []any{nil}, nil
+		}
+		return []any{float64(state.Stats[stat])}, nil
+	}
+	// GetCreatorGUID is UnitMethods::GetCreatorGUID (UnitMethods.h:633-638)
+	// for players as Units: the UNIT_FIELD_CREATEDBY value, 0 = Empty
+	// (the C++ player default, Player.cpp:17901).
+	methods["GetCreatorGUID"] = luaNoArgs(func() any { return state.CreatedByGUID })
+	// SetCreatorGUID is UnitMethods::SetCreatorGUID (UnitMethods.h:1790-1797)
+	// for players as Units: writes UNIT_FIELD_CREATEDBY, emitted by the
+	// update-values builder on the next update.
+	methods["SetCreatorGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		state.CreatedByGUID = guid
+		s.sendPlayerUpdate()
+		return nil, nil
+	}
 	// SetAcceptWhispers/SetGMChat/SetTaxiCheat are the Player:: bit
 	// flips (Player.h:958/964/966); the GM-chat setter also keeps the
 	// session gmChat flag in step, the .gm chat command twin

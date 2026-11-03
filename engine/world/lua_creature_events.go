@@ -136,6 +136,7 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 	}
 	s.motionMu.Lock()
 	summoned.OwnerGUID = ownerGUID
+	summoned.CreatedByGUID = ownerGUID // TempSummon::InitStats (TemporarySummon.cpp:356): creator is the owner
 	summoned.IsTempSummon = true
 	summoned.TempSummonType = summonType
 	// InitStats (TemporarySummon.cpp:168-183) stamps m_lifetime from
@@ -343,9 +344,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// flags. GetClassMask is Unit::GetClassMask (Unit.h:852) over the
 	// motion's template unit_class; GetRaceMask reads 0, the creature
 	// race byte Creature::InitEntry never sets. IsPvPFlagged is
-	// Unit::IsPvP (Unit.h:914); the creature byte-1 model holds only
-	// the sanctuary bit (SetSanctuary), the PvP bit is never set,
-	// so it reads false.
+	// Unit::IsPvP (Unit.h:914) over the motion bytes2 byte 1, whose
+	// PvP bit SetPvP sets and FFA bit SetFFA sets.
 	npcFlag := func(flag uint32) scripting.ObjectMethod {
 		return luaNoArgs(func() any {
 			s.motionMu.Lock()
@@ -364,7 +364,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return unitClassRaceMask(motion.UnitClass)
 	})
 	methods["GetRaceMask"] = luaNoArgs(func() any { return uint32(0) })
-	methods["IsPvPFlagged"] = luaNoArgs(func() any { return false })
+	methods["IsPvPFlagged"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return motion.PVPFlags&pvpFlagPvP != 0
+	})
 	// GetClassAsString/GetRaceAsString/GetControllerGUID/
 	// GetControllerGUIDS mirror the session-creature twins in
 	// lua_objects.go: ChrClasses Name[locale] for the motion's
@@ -3763,6 +3767,101 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
 			s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
 		}
+		return nil, nil
+	}
+	// SetFFA is UnitMethods::SetFFA (UnitMethods.h:1851-1890, TRINITY
+	// leg, WotLK only): the UNIT_BYTE2_FLAG_FFA_PVP (0x04,
+	// UnitDefines.h:105) byte flag on UNIT_FIELD_BYTES_2 byte 1 rides
+	// the motion PVPFlags slot (folded into spawn.Bytes2 by
+	// applyCreatureMotionToSpawn, no immediate update packet, the
+	// SetSanctuary precedent), plus the controlled-unit fan-out in
+	// fanOutBytes2FlagToControlled. The player SetFFA twin is
+	// excluded in this fork (PlayerMethods.h:2086, !TRINITY guard);
+	// this Unit arm applies to players as Units.
+	methods["SetFFA"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetFFA requires a boolean")
+			}
+			apply = b
+		}
+		s.motionMu.Lock()
+		if apply {
+			motion.PVPFlags |= pvpFlagFFA
+		} else {
+			motion.PVPFlags &^= pvpFlagFFA
+		}
+		motion.PVPFlagsKnown = true
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.fanOutBytes2FlagToControlled(mapID, instanceID, guid, pvpFlagFFA, apply)
+		return nil, nil
+	}
+	// SetPvP is UnitMethods::SetPvP (UnitMethods.h:1466-1474): Unit::SetPvP
+	// (Unit.cpp:12254) sets or clears only the UNIT_BYTE2_FLAG_PVP
+	// (0x01) byte flag on UNIT_FIELD_BYTES_2 byte 1 — no timer, no
+	// contested-flag, no controlled-unit arm (those belong to
+	// Player::UpdatePvP, a separate path).
+	methods["SetPvP"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetPvP requires a boolean")
+			}
+			apply = b
+		}
+		s.motionMu.Lock()
+		if apply {
+			motion.PVPFlags |= pvpFlagPvP
+		} else {
+			motion.PVPFlags &^= pvpFlagPvP
+		}
+		motion.PVPFlagsKnown = true
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// GetStat is UnitMethods::GetStat (UnitMethods.h:726-734): Unit::GetStat
+	// (Unit.h:858) reads UNIT_FIELD_STAT0+stat directly, so this reads
+	// the motion stats array — the same source the update values emit.
+	// stat >= MAX_STATS (5) reads nil: Eluna returns 1 with nothing
+	// pushed, which Go cannot express, so nil is the twin.
+	methods["GetStat"] = func(_ context.Context, args []any) ([]any, error) {
+		stat, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if stat >= 5 {
+			return []any{nil}, nil
+		}
+		s.motionMu.Lock()
+		value := motion.Stats[stat]
+		s.motionMu.Unlock()
+		return []any{float64(value)}, nil
+	}
+	// GetCreatorGUID is UnitMethods::GetCreatorGUID (UnitMethods.h:633-638):
+	// Unit::GetCreatorGUID (Unit.h:1149) reads UNIT_FIELD_CREATEDBY.
+	methods["GetCreatorGUID"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		id := motion.CreatedByGUID
+		s.motionMu.Unlock()
+		return []any{id}, nil
+	}
+	// SetCreatorGUID is UnitMethods::SetCreatorGUID (UnitMethods.h:1790-1797):
+	// Unit::SetCreatorGUID (Unit.h:1150) writes UNIT_FIELD_CREATEDBY.
+	methods["SetCreatorGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		s.motionMu.Lock()
+		motion.CreatedByGUID = guid
+		s.motionMu.Unlock()
 		return nil, nil
 	}
 	// GetSpeed is UnitMethods::GetSpeed (UnitMethods.h:1392-1404):

@@ -623,11 +623,17 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// GetClassMask/GetRaceMask are Unit::GetClassMask/GetRaceMask
 	// (Unit.h:849/852): class from template unit_class, race 0 (the
 	// creature race byte Creature::InitEntry never sets). IsPvPFlagged
-	// is Unit::IsPvP (Unit.h:914); no bytes2 PvP model exists for
-	// creatures in Go, so it reads false.
+	// is Unit::IsPvP (Unit.h:914) over the live motion bytes2 byte 1;
+	// a despawned motion reads false.
 	methods["GetClassMask"] = luaNoArgs(func() any { return unitClassRaceMask(state.Class) })
 	methods["GetRaceMask"] = luaNoArgs(func() any { return uint32(0) })
-	methods["IsPvPFlagged"] = luaNoArgs(func() any { return false })
+	methods["IsPvPFlagged"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return false
+		}
+		return motion.PVPFlags&pvpFlagPvP != 0
+	})
 	// GetClassAsString is Unit::GetClassAsString (UnitMethods.h:1152):
 	// ChrClasses Name[locale] for the template unit_class, nil on a
 	// missing row. GetRaceAsString reads nil: the creature race byte
@@ -2051,6 +2057,107 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			opcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
 		}
 		s.server.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, opcode, phase)
+		return nil, nil
+	}
+	// SetFFA is UnitMethods::SetFFA (UnitMethods.h:1851-1890, TRINITY
+	// leg), the session-creature twin of the handler binding: the
+	// FFA_PVP byte flag on the motion PVPFlags slot plus the
+	// controlled-unit fan-out.
+	methods["SetFFA"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetFFA requires a bool")
+			}
+			apply = b
+		}
+		motion := luaTapMotion()
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if apply {
+			motion.PVPFlags |= pvpFlagFFA
+		} else {
+			motion.PVPFlags &^= pvpFlagFFA
+		}
+		motion.PVPFlagsKnown = true
+		s.server.motionMu.Unlock()
+		s.server.fanOutBytes2FlagToControlled(state.Map, state.InstanceID, state.GUID, pvpFlagFFA, apply)
+		return nil, nil
+	}
+	// SetPvP is UnitMethods::SetPvP (UnitMethods.h:1466-1474), the
+	// session-creature twin of the handler binding: the PvP byte flag
+	// only, no timer or contested-flag arm.
+	methods["SetPvP"] = func(_ context.Context, args []any) ([]any, error) {
+		apply := true
+		if len(args) >= 1 {
+			b, ok := args[0].(bool)
+			if !ok {
+				return nil, fmt.Errorf("SetPvP requires a bool")
+			}
+			apply = b
+		}
+		motion := luaTapMotion()
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		if apply {
+			motion.PVPFlags |= pvpFlagPvP
+		} else {
+			motion.PVPFlags &^= pvpFlagPvP
+		}
+		motion.PVPFlagsKnown = true
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// GetStat is UnitMethods::GetStat (UnitMethods.h:726-734), the
+	// session-creature twin of the handler binding: the live motion
+	// stats array, nil on a despawned motion or stat >= MAX_STATS (5).
+	methods["GetStat"] = func(_ context.Context, args []any) ([]any, error) {
+		stat, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if stat >= 5 {
+			return []any{nil}, nil
+		}
+		motion := luaTapMotion()
+		if motion == nil {
+			return []any{nil}, nil
+		}
+		return []any{float64(motion.Stats[stat])}, nil
+	}
+	// GetCreatorGUID is UnitMethods::GetCreatorGUID (UnitMethods.h:633-638),
+	// the session-creature twin of the handler binding: the live motion
+	// UNIT_FIELD_CREATEDBY, 0 on a despawned motion.
+	methods["GetCreatorGUID"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := luaTapMotion()
+		if motion == nil {
+			return []any{uint64(0)}, nil
+		}
+		return []any{motion.CreatedByGUID}, nil
+	}
+	// SetCreatorGUID is UnitMethods::SetCreatorGUID (UnitMethods.h:1790-1797),
+	// the session-creature twin of the handler binding; a despawned
+	// motion is a silent no-op.
+	methods["SetCreatorGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("argument 1 must be uint64")
+		}
+		motion := luaTapMotion()
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		motion.CreatedByGUID = guid
+		s.server.motionMu.Unlock()
 		return nil, nil
 	}
 	// Eluna nearest/in-range family (WorldObjectMethods.h) over the

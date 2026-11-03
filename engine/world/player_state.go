@@ -299,6 +299,7 @@ type playerState struct {
 	// the weapon entries shown on the sheathed/unsheathed model.
 	VirtualItemSlots   [3]uint32
 	PVPFlags           uint8
+	CreatedByGUID      uint64 // UNIT_FIELD_CREATEDBY (Unit.h:1149): script-settable via SetCreatorGUID; 0 = Empty, the C++ default for players (Player.cpp:17901)
 	StandFlags         uint8
 	AuraVision         uint8
 	NoReagentMask      [3]uint32
@@ -3904,6 +3905,8 @@ func (s *Server) buildPlayerUpdateForRecipient(state playerState, targetSelf, pa
 	values[unitFieldPlayerFlags] = state.PlayerFlags
 	values[unitFieldTarget] = uint32(state.Selection)
 	values[unitFieldTarget+1] = uint32(state.Selection >> 32)
+	values[unitFieldCreatedBy] = uint32(state.CreatedByGUID)
+	values[unitFieldCreatedBy+1] = uint32(state.CreatedByGUID >> 32)
 	values[unitFieldPlayerFieldBytes] = playerFieldBytesValue(state)
 	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
 	// Player::GetShieldBlockValue (Player.cpp:5426-5430) feeds
