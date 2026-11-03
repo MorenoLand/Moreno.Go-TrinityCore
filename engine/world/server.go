@@ -137,24 +137,25 @@ type Server struct {
 	// disconnectTimes mirrors World's m_disconnects (World.cpp:3114): account id
 	// -> unix time of last non-queued session removal, consulted by the
 	// DisconnectToleranceInterval queue-skip arm.
-	disconnectTimes     map[uint32]int64
-	playerLimit         uint32
-	closed              atomic.Bool
-	stopEvent           atomic.Bool // World::m_stopEvent (World.h:795): Stop() has run; shutdown timers ignore further arms
-	shutdownMu          sync.Mutex  // guards shutdown (World::m_ShutdownTimer/m_ShutdownMask/m_ExitCode triple, World.cpp:2983-3072; see shutdown.go)
-	shutdown            serverShutdown
-	gameEventHookMu     sync.Mutex // guards gameEventActive (see game_event_hooks.go)
-	gameEventActive     map[int64]struct{}
-	gameEventOverrideMu sync.Mutex // guards gameEventOverrides (see conditions.go)
-	gameEventOverrides  map[int64]bool
-	tradeInTradeMu      sync.Mutex // guards tradeInTrade (see trade.go)
-	tradeInTrade        map[uint64]bool
-	ticketsEnabled      atomic.Bool
-	ticketsLastChange   atomic.Int64 // TicketMgr::_lastChange (TicketMgr.cpp:273); see noteTicketsChanged
-	objectsMu           sync.RWMutex
-	characterGUIDMu     sync.Mutex
-	characterGUIDNext   uint64
-	characterGUIDReady  bool
+	disconnectTimes      map[uint32]int64
+	playerLimit          uint32
+	closed               atomic.Bool
+	creatureMoveDisabled atomic.Bool // World::m_allowMovement inverted (World.h:619-623, World.cpp:115 default true): the .npc set allowmove toggle; C++ notes its actions are still to be implemented, so no Go consumer reads it yet
+	stopEvent            atomic.Bool // World::m_stopEvent (World.h:795): Stop() has run; shutdown timers ignore further arms
+	shutdownMu           sync.Mutex  // guards shutdown (World::m_ShutdownTimer/m_ShutdownMask/m_ExitCode triple, World.cpp:2983-3072; see shutdown.go)
+	shutdown             serverShutdown
+	gameEventHookMu      sync.Mutex // guards gameEventActive (see game_event_hooks.go)
+	gameEventActive      map[int64]struct{}
+	gameEventOverrideMu  sync.Mutex // guards gameEventOverrides (see conditions.go)
+	gameEventOverrides   map[int64]bool
+	tradeInTradeMu       sync.Mutex // guards tradeInTrade (see trade.go)
+	tradeInTrade         map[uint64]bool
+	ticketsEnabled       atomic.Bool
+	ticketsLastChange    atomic.Int64 // TicketMgr::_lastChange (TicketMgr.cpp:273); see noteTicketsChanged
+	objectsMu            sync.RWMutex
+	characterGUIDMu      sync.Mutex
+	characterGUIDNext    uint64
+	characterGUIDReady   bool
 	// mailIDMu/mailIDNext mirror ObjectMgr::_mailId (ObjectMgr.cpp:232, 7319,
 	// 7366-7374): the in-memory mail-ID generator seeded once from
 	// MAX(id)+1 at startup, so concurrent sends can never race on the same

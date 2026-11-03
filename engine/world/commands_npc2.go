@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -12,18 +13,23 @@ import (
 // (cs_npc.cpp). Chunk 1 (commands_npc.go) covered the "add" sub-table and
 // move/delete/near.
 //
-// Of these 26 arms, one is partial-native (`set movetype` with an explicit
-// GUID: the creature row is updated in the world DB, which is the live
-// creature store in the Go tree), six are wired (`delete item` on the
-// npc_vendor rows, `set factionid` on the live faction slot plus the
-// template row, `set flag` on the live NPC-flags slot plus the template
-// row, `set level` on the live level/health slots plus the spawn row's
-// curhealth, `set model` on the live display slots plus the spawn row's
-// modelid, `set phase` on the live phase slot plus the spawn row's
-// phaseMask) and 19 are documented-blocked: every other arm needs the
-// creature AI/motion/loot/pet bridges or the spawn-group manager, none of
-// which exist in the Go tree. Selected-creature resolution itself exists
-// (castCommandSelectedCreature, the getSelectedCreature twin).
+// Of these 26 arms, one is partial (`set movetype`: the GUID form updates
+// the creature row in the world DB, the live creature store, and the
+// selection form adds the live MoveType slot, but the LoadPath /
+// MotionMaster-Initialize / respawn legs have no Go bridge), ten are wired
+// (`delete item` on the npc_vendor rows, `set factionid` on the live faction
+// slot plus the template row, `set flag` on the live NPC-flags slot plus the
+// template row, `set level` on the live level/health slots plus the spawn
+// row's curhealth, `set model` on the live display slots plus the spawn
+// row's modelid, `set phase` on the live phase slot plus the spawn row's
+// phaseMask, `set entry` on the seatCreatureEntry re-seat, `set allowmove`
+// on the world movement toggle, `set wanderdistance` on the live Wander /
+// MoveType slots plus the spawn row, `set spawntime` on the live respawn-delay
+// slot plus the spawn row) and 15 are documented-blocked: every other arm
+// needs the creature AI/motion/loot/pet bridges, the linked-respawn manager,
+// or the spawn-group manager, none of which exist in the Go tree.
+// Selected-creature resolution itself exists (castCommandSelectedCreature,
+// the getSelectedCreature twin).
 
 // handleNPCSetTable dispatches the "set" sub-table (cs_npc.cpp:72-86).
 // The "set" node is a bare SubCommandEntry container (ChatCommand.h:248-251)
@@ -42,7 +48,7 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	case strings.HasPrefix("allowmove", sub):
 		s.handleNPCSetAllowMove(ctx)
 	case strings.HasPrefix("entry", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetEntry, "set entry")
+		s.handleNPCSetEntry(ctx, rest)
 	case strings.HasPrefix("factionid", sub):
 		s.handleNPCSetFactionID(ctx, rest)
 	case strings.HasPrefix("flag", sub):
@@ -58,9 +64,9 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	case strings.HasPrefix("phase", sub):
 		s.handleNPCSetPhase(ctx, rest)
 	case strings.HasPrefix("wanderdistance", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetSpawnDist, "set wanderdistance")
+		s.handleNPCSetWanderDistance(ctx, rest)
 	case strings.HasPrefix("spawntime", sub):
-		s.npcNeedCreature(ctx, permissionCommandNPCSetSpawnTime, "set spawntime")
+		s.handleNPCSetSpawnTime(ctx, rest)
 	case strings.HasPrefix("data", sub):
 		s.npcNeedCreature(ctx, permissionCommandNPCSetData, "set data")
 	default:
@@ -78,28 +84,72 @@ func (s *session) npcNeedCreature(ctx context.Context, perm uint32, what string)
 	s.sendSysMessage(fmt.Sprintf("npc %s is not supported: selected-unit creature targets have no Go bridge.", what))
 }
 
-// handleNPCSetAllowMove is documented-blocked (cs_npc.cpp:231): it toggles
-// the world's creature-movement flag, but the Go tree has no creature
-// movement model or allowMovement config.
+// handleNPCSetAllowMove mirrors HandleNpcSetAllowMovementCommand
+// (cs_npc.cpp:241): it toggles the world's creature-movement flag and
+// reports the new state. The flag itself is the whole model: C++ notes at
+// World.h:619 that its actions are still to be implemented, so no Go
+// consumer reads it yet, and the default is movement allowed (World.cpp:115),
+// which the inverted creatureMoveDisabled slot preserves at zero value.
 func (s *session) handleNPCSetAllowMove(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandNPCSetAllowMove) {
 		return
 	}
-	s.sendSysMessage("npc set allowmove is not supported: creature movement has no Go bridge.")
+	if s.server == nil {
+		return
+	}
+	disabled := !s.server.creatureMoveDisabled.Load()
+	s.server.creatureMoveDisabled.Store(disabled)
+	if disabled {
+		s.sendSysMessage("Creature movement disabled.")
+	} else {
+		s.sendSysMessage("Creature movement enabled.")
+	}
 }
 
-// handleNPCSetMoveType mirrors HandleNpcSetMoveTypeCommand (cs_npc.cpp:688)
-// for the GUID form: ".npc set movetype <guid> <stay|random|way> [nodel]".
-// The creature row's MovementType is updated in the world DB (the live
-// creature store); the live motion-master/AI legs have no Go bridge. The
-// selection form is blocked like the other set arms.
+// handleNPCSetMoveType mirrors HandleNpcSetMoveTypeCommand (cs_npc.cpp:716):
+// ".npc set movetype [guid] <stay|random|way> [nodel]". The GUID form updates
+// the creature row's MovementType in the world DB (the live creature store);
+// the selection form resolves the selected creature (non-pet, the C++ gate)
+// and additionally writes the live MoveType slot. The LoadPath(0) /
+// MotionMaster-Initialize / JUST_DIED-respawn legs have no Go bridge in
+// either form, and nodel only changes the message, as in C++ (the waypoint
+// deletion itself is commented out there too).
 func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
-	const syntax = "Syntax: .npc set movetype <guid> <stay|random|way> [nodel]"
+	const syntax = "Syntax: .npc set movetype [guid] <stay|random|way> [nodel]"
 	if s.miscDeny(ctx, permissionCommandNPCSetMoveType) {
 		return
 	}
+	if len(args) == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if moveType, title, ok := parseNPCMoveType(args[0]); ok {
+		// Selection form: ".npc set movetype <stay|random|way> [nodel]".
+		motion := s.castCommandSelectedCreature()
+		if motion == nil || motionIsPet(motion) {
+			// C++ returns false silently here; the file's convention
+			// reports the missing selection instead.
+			s.sendSysMessage("Select a creature first.")
+			return
+		}
+		db := s.npcWorldDB()
+		if db == nil {
+			return
+		}
+		nodel := len(args) > 1 && strings.EqualFold(args[1], "nodel")
+		s.server.motionMu.Lock()
+		guid := motion.GUID
+		motion.MoveType = uint32(moveType)
+		s.server.motionMu.Unlock()
+		_, _ = db.ExecContext(ctx, "UPDATE creature SET MovementType = ? WHERE guid = ?", moveType, uint32(guid&0x00FFFFFF))
+		if nodel {
+			s.sendSysMessage(fmt.Sprintf("Move type set to %s. Waypoints not deleted.", title))
+		} else {
+			s.sendSysMessage(fmt.Sprintf("Move type set to %s.", title))
+		}
+		return
+	}
 	if len(args) < 2 {
-		// Without a GUID the arm needs the selected creature.
 		s.sendSysMessage("npc set movetype needs a creature GUID: selected-unit creature targets have no Go bridge.")
 		return
 	}
@@ -497,6 +547,133 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
 	if !motionIsPet(motion) {
 		_, _ = db.ExecContext(ctx, "UPDATE creature SET phaseMask = ? WHERE guid = ?", mask, uint32(motion.GUID&0x00FFFFFF))
 	}
+}
+
+// handleNPCSetEntry mirrors HandleNpcSetEntryCommand (cs_npc.cpp:256):
+// ".npc set entry <entryId>". C++ returns false on a zero entry before the
+// creature check, then requires the selected unit to be a creature
+// (LANG_SELECT_CREATURE) and reports LANG_DONE when Creature::UpdateEntry
+// succeeds, LANG_ERROR otherwise. The live leg is the seatCreatureEntry
+// re-seat (the Lua UpdateEntry twin, including its values-update broadcast);
+// like C++, no spawn row is rewritten, so a respawn re-derives the entry
+// from the DB row.
+func (s *session) handleNPCSetEntry(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetEntry) {
+		return
+	}
+	const syntax = "Syntax: .npc set entry <entryId>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	entry, ok := npcVendorUintArg(args[0])
+	if !ok || entry == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if s.server == nil || !s.server.seatCreatureEntry(ctx, motion, entry) {
+		s.sendSysMessage("Error.")
+		return
+	}
+	s.sendSysMessage("Done.")
+}
+
+// npcWanderMoveType is the HandleNpcSetWanderDistanceCommand movement-type
+// rule (cs_npc.cpp:840): IDLE at zero distance, RANDOM above it.
+func npcWanderMoveType(dist float64) uint32 {
+	if dist > 0 {
+		return 1
+	}
+	return 0
+}
+
+// handleNPCSetWanderDistance mirrors HandleNpcSetWanderDistanceCommand
+// (cs_npc.cpp:840): ".npc set wanderdistance <distance>". C++ rejects a
+// negative distance (LANG_BAD_VALUE) before the creature check, then
+// requires the selected creature, writes the live wander distance and the
+// default movement type, and persists both columns
+// (WORLD_UPD_CREATURE_WANDER_DISTANCE) before reporting
+// LANG_COMMAND_WANDER_DISTANCE. The MotionMaster-Initialize and
+// JUST_DIED-respawn legs have no Go bridge; the live legs are the motion
+// Wander slot (read by the random-movement generator) and MoveType.
+func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetSpawnDist) {
+		return
+	}
+	const syntax = "Syntax: .npc set wanderdistance <distance>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	dist, err := strconv.ParseFloat(args[0], 64)
+	if err != nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if dist < 0 {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	moveType := npcWanderMoveType(dist)
+	s.server.motionMu.Lock()
+	guid := motion.GUID
+	motion.Wander = dist
+	motion.MoveType = moveType
+	s.server.motionMu.Unlock()
+	_, _ = db.ExecContext(ctx, "UPDATE creature SET wander_distance = ?, MovementType = ? WHERE guid = ?", dist, moveType, uint32(guid&0x00FFFFFF))
+	s.sendSysMessage(fmt.Sprintf("Wander distance set to %g.", dist))
+}
+
+// handleNPCSetSpawnTime mirrors HandleNpcSetSpawnTimeCommand (cs_npc.cpp:882):
+// ".npc set spawntime <seconds>". C++ requires the selected creature, then
+// persists the spawn row (WORLD_UPD_CREATURE_SPAWN_TIME_SECS, the
+// spawntimesecs column the respawn-delay reader consults) and writes the live
+// respawn delay (the SetRespawnDelay twin's slot, consumed at death and
+// cleared on respawn) before reporting LANG_COMMAND_SPAWNTIME.
+func (s *session) handleNPCSetSpawnTime(ctx context.Context, args []string) {
+	if s.miscDeny(ctx, permissionCommandNPCSetSpawnTime) {
+		return
+	}
+	const syntax = "Syntax: .npc set spawntime <seconds>"
+	if len(args) != 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	secs, ok := npcVendorUintArg(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil {
+		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	db := s.npcWorldDB()
+	if db == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	guid := motion.GUID
+	motion.RespawnDelaySec = secs
+	motion.RespawnDelayKnown = true
+	s.server.motionMu.Unlock()
+	_, _ = db.ExecContext(ctx, "UPDATE creature SET spawntimesecs = ? WHERE guid = ?", secs, uint32(guid&0x00FFFFFF))
+	s.sendSysMessage(fmt.Sprintf("Spawn time set to %d seconds.", secs))
 }
 
 // handleNPCFollow handles "follow" and the two-level "follow stop" arm
