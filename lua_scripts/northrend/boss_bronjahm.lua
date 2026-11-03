@@ -94,8 +94,9 @@
 -- the C++ spell-target machinery, with no target at all when none qualify
 -- (Talk + cast stay inside the C++ :188 target-found leg); EVENT_FEAR's
 -- { SPELLVALUE_MAX_TARGETS, 1 } custom leg
--- (:201) has no bridge, so fear is not limited to 1 target and Lua's nil
--- falls back to the victim rather than C++'s self-centered AoE; phase-2
+-- (:201) has no bridge, so the single-target pick (randomFearTarget,
+-- threat players alive, tank included) stands in for C++'s self-centered
+-- AoE capped at 1 target; phase-2
 -- melee keeps swinging (C++ :212 gates DoMeleeAttackIfReady on phase-1;
 -- the phase-2 melee stop has no bridge); the phase-1 shadow-bolt melee
 -- gate is creature:IsWithinMeleeRange (bridge live since ed086b69);

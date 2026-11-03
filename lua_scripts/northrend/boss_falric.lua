@@ -56,7 +56,7 @@
 --   DONE legs (:103-104) have no bridge.
 -- DamageTaken (:89-96) — the hopelessness machine, floored single-flip
 --   latch: event 9 fires pre-application, so the post-damage health
---   decides ((GetHealth()-damage), at/below 66 / 33 / 10 like C++
+--   decides ((GetHealth()-damage), strictly below 66 / 33 / 10 like C++
 --   HealthBelowPctDamaged — the moroes convention); the OR chain selects
 --   exactly one level per hit (:89-91) and the body fires once, so a
 --   single massive hit flips only one level — replicated. At flip N>=1
@@ -110,7 +110,7 @@
 -- player within 45.0f (GetAITargets is the threat-list bridge; the old
 -- GetPlayersInWorld pool could pick instance players outside combat).
 -- DamageTaken hook is pre-application: post-damage health decides,
--- strictly at/below 66 / 33 / 10 like C++ HealthBelowPctDamaged (the
+-- strictly below 66 / 33 / 10 like C++ HealthBelowPctDamaged (the
 -- moroes convention).
 --
 -- UPSTREAM C++ FINDINGS: SAY_DEFILING_HORROR = 4 is declared and never
@@ -233,7 +233,7 @@ end
 
 -- C++ :89-96 DamageTaken: the hopelessness machine — floored
 -- single-flip latch (the garfrost phase-latch precedent). Event 9 fires
--- pre-application, so the post-damage health decides, at/below 66 / 33 /
+-- pre-application, so the post-damage health decides, strictly below 66 / 33 /
 -- 10 like C++ HealthBelowPctDamaged (the moroes convention); the OR
 -- chain selects one level per hit. At flip N>=1 the previous aura is
 -- removed via the RemoveAura bridge and HopelessnessHelper[N] is cast

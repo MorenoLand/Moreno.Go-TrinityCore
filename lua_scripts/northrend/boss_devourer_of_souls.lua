@@ -445,8 +445,10 @@ end
 -- BossAI::JustEngagedWith passthrough leg and the NPC_CRUCIBLE_OF_SOULS
 -- double-spawn-guard summon leg (:163-164) — C++ uses
 -- instance->instance->SummonCreature (map spawn); the Lua port uses
--- creature:SummonCreature (bridge live 2026-10-22, type 6 DEAD_DESPAWN
--- = the 2-arg C++ default) — same map/instance in practice, and no
+-- creature:SummonCreature (bridge live 2026-10-22, type 7 MANUAL_DESPAWN
+-- = the Map::SummonCreature default: TempSummon ctor banks MANUAL,
+-- TemporarySummon.cpp:34; Map::SummonCreature Object.cpp:1890) — same
+-- map/instance in practice, and no
 -- event-19 handler on the devourer consumes the JustSummoned ping.
 -- Coordinates/entry verified against CrucibleSummonPos (:121).
 local function devourerEnterCombat(event, creature, target)
@@ -456,9 +458,9 @@ local function devourerEnterCombat(event, creature, target)
     creature:Talk(SAY_FACE_AGGRO)
     -- C++ JustEngagedWith (:163-164): NPC_CRUCIBLE_OF_SOULS 60yd
     -- double-spawn-guard SummonCreature leg — summon bridge live
-    -- 2026-10-22 (2-arg map summon = TEMPSUMMON_DEAD_DESPAWN).
+    -- 2026-10-22 (2-arg map summon = TEMPSUMMON_MANUAL_DESPAWN).
     if not creature:FindNearestCreature(ENTRY_CRUCIBLE, 60) then
-        creature:SummonCreature(ENTRY_CRUCIBLE, 5672.294, 2520.686, 713.4386, 0.9599311, 6)
+        creature:SummonCreature(ENTRY_CRUCIBLE, 5672.294, 2520.686, 713.4386, 0.9599311, 7)
     end
     schedule(guid, "phantom", 5000, function()
         phantomBlastTick(creature, guid)
