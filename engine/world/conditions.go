@@ -94,7 +94,7 @@ func (s *Server) cachedActiveGameEvents(ctx context.Context) map[int64]struct{} 
 	events := eventCache.events
 	eventCache.mu.RUnlock()
 	if fresh {
-		return events
+		return s.withGameEventOverrides(events)
 	}
 	active, holidays := s.activeGameEventSets(ctx)
 	eventCache.mu.Lock()
@@ -102,7 +102,49 @@ func (s *Server) cachedActiveGameEvents(ctx context.Context) map[int64]struct{} 
 	eventCache.holidays = holidays
 	eventCache.refreshed = time.Now()
 	eventCache.mu.Unlock()
-	return active
+	return s.withGameEventOverrides(active)
+}
+
+// withGameEventOverrides copies the schedule-derived active set and applies
+// the Lua Start/StopGameEvent overrides: forced-active ids join,
+// forced-inactive ids leave. The copy keeps callers from mutating the
+// shared cache, and overrides apply on the cached path too, so a Lua call
+// is visible to the next world-tick hook diff without waiting out the
+// one-minute schedule refresh.
+func (s *Server) withGameEventOverrides(base map[int64]struct{}) map[int64]struct{} {
+	out := make(map[int64]struct{}, len(base))
+	for id := range base {
+		out[id] = struct{}{}
+	}
+	s.gameEventOverrideMu.Lock()
+	defer s.gameEventOverrideMu.Unlock()
+	for id, active := range s.gameEventOverrides {
+		if active {
+			out[id] = struct{}{}
+		} else {
+			delete(out, id)
+		}
+	}
+	return out
+}
+
+// setGameEventOverride records a Lua StartGameEvent (active) or
+// StopGameEvent (inactive) override. GameEventMgr::StartEvent/StopEvent
+// (GameEventMgr.cpp:134/185) reduce, for GAMEEVENT_NORMAL events, to
+// AddActiveEvent/RemoveActiveEvent plus the start/stop hook fire, and the
+// 34/35 hook leg already diffs this cached set on the world tick, so the
+// override reproduces the Lua-observable legs. DELTAS: no ApplyNewEvent
+// spawn application, no worldstate write, no schedule rewrite (the force
+// argument is accepted and ignored), and an override persists until the
+// opposite call — a forced-active event is not expired by its schedule
+// window and a forced-inactive one does not rejoin at its next occurrence.
+func (s *Server) setGameEventOverride(eventID int64, active bool) {
+	s.gameEventOverrideMu.Lock()
+	defer s.gameEventOverrideMu.Unlock()
+	if s.gameEventOverrides == nil {
+		s.gameEventOverrides = make(map[int64]bool)
+	}
+	s.gameEventOverrides[eventID] = active
 }
 
 func (s *Server) cachedActiveGameHolidays(ctx context.Context) map[int64]struct{} {

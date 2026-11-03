@@ -449,30 +449,31 @@ type TaxiPathArgs struct {
 }
 
 type Config struct {
-	Enabled                 bool
-	ScriptPath              string
-	CoreName                string
-	CoreVersion             string
-	RealmID                 uint32
-	CoreExpansion           uint32
-	PlayerProvider          func() []*Object
-	GameEventProvider       func() []uint32
-	MapProvider             func(mapID, instanceID uint32) *Object
-	WorldMessageProvider    func(string)
-	AreaNameProvider        func(id uint32) (string, bool)
-	SpawnProvider           func(SpawnArgs) *Object
-	TaxiPathProvider        func(TaxiPathArgs) uint32
-	SendMailProvider        func(SendMailArgs) error
-	VendorAddProvider       func(entry, item uint32, maxCount int32, incrTime, extCost uint32)
-	VendorRemoveProvider    func(entry, item uint32) error
-	VendorRemoveAllProvider func(entry uint32)
-	KickProvider            func(playerGUID uint64)
-	BanProvider             func(args BanArgs) (int, string)
-	SaveAllPlayersProvider  func()
-	AuthDatabase            *sql.DB
-	CharacterDB             *sql.DB
-	WorldDatabase           *sql.DB
-	Logger                  *slog.Logger
+	Enabled                  bool
+	ScriptPath               string
+	CoreName                 string
+	CoreVersion              string
+	RealmID                  uint32
+	CoreExpansion            uint32
+	PlayerProvider           func() []*Object
+	GameEventProvider        func() []uint32
+	GameEventControlProvider func(eventID uint32, start, force bool)
+	MapProvider              func(mapID, instanceID uint32) *Object
+	WorldMessageProvider     func(string)
+	AreaNameProvider         func(id uint32) (string, bool)
+	SpawnProvider            func(SpawnArgs) *Object
+	TaxiPathProvider         func(TaxiPathArgs) uint32
+	SendMailProvider         func(SendMailArgs) error
+	VendorAddProvider        func(entry, item uint32, maxCount int32, incrTime, extCost uint32)
+	VendorRemoveProvider     func(entry, item uint32) error
+	VendorRemoveAllProvider  func(entry uint32)
+	KickProvider             func(playerGUID uint64)
+	BanProvider              func(args BanArgs) (int, string)
+	SaveAllPlayersProvider   func()
+	AuthDatabase             *sql.DB
+	CharacterDB              *sql.DB
+	WorldDatabase            *sql.DB
+	Logger                   *slog.Logger
 }
 
 type Runtime struct {
@@ -1117,6 +1118,8 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("IsBagPos", r.isBagPos)
 	r.state.Register("IsGameEventActive", r.isGameEventActive)
 	r.state.Register("GetActiveGameEvents", r.getActiveGameEvents)
+	r.state.Register("StartGameEvent", r.startGameEvent)
+	r.state.Register("StopGameEvent", r.stopGameEvent)
 	r.state.Register("GetMapById", r.getMapById)
 	r.state.Register("PerformIngameSpawn", r.performIngameSpawn)
 	r.state.Register("AddTaxiPath", r.addTaxiPath)
@@ -1286,6 +1289,28 @@ func (r *Runtime) getActiveGameEvents(state *lua.State) int {
 		state.RawSetInt(-2, index+1)
 	}
 	return 1
+}
+
+// startGameEvent is GlobalMethods::StartGameEvent: (eventId, force = false),
+// no return. Without a provider it is a no-op.
+func (r *Runtime) startGameEvent(state *lua.State) int {
+	id := uint32(lua.CheckUnsigned(state, 1))
+	force := state.Top() >= 2 && !state.IsNil(2) && state.ToBoolean(2)
+	if r.config.GameEventControlProvider != nil {
+		r.config.GameEventControlProvider(id, true, force)
+	}
+	return 0
+}
+
+// stopGameEvent is GlobalMethods::StopGameEvent: (eventId, force = false),
+// no return. Without a provider it is a no-op.
+func (r *Runtime) stopGameEvent(state *lua.State) int {
+	id := uint32(lua.CheckUnsigned(state, 1))
+	force := state.Top() >= 2 && !state.IsNil(2) && state.ToBoolean(2)
+	if r.config.GameEventControlProvider != nil {
+		r.config.GameEventControlProvider(id, false, force)
+	}
+	return 0
 }
 
 // getMapById is MapMgr::FindMap behind the Eluna GetMapById global
@@ -1618,6 +1643,12 @@ func (r *Runtime) SetPlayerProvider(provider func() []*Object) {
 func (r *Runtime) SetGameEventProvider(provider func() []uint32) {
 	r.mu.Lock()
 	r.config.GameEventProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetGameEventControlProvider(provider func(eventID uint32, start, force bool)) {
+	r.mu.Lock()
+	r.config.GameEventControlProvider = provider
 	r.mu.Unlock()
 }
 

@@ -29,6 +29,19 @@ func (s *Server) luaGameEventIDs() []uint32 {
 	return ids
 }
 
+// luaGameEventControl is the GameEventControlProvider behind the Eluna
+// StartGameEvent / StopGameEvent globals (GlobalMethods.h:2602/2617):
+// (eventId, force = false), no return. It records a forced override on
+// the cached active set (conditions.go); the world-tick 34/35 hook diff
+// then fires the transition, and IsGameEventActive / GetActiveGameEvents
+// read the overridden set.
+func (s *Server) luaGameEventControl(eventID uint32, start, force bool) {
+	if s == nil {
+		return
+	}
+	s.setGameEventOverride(int64(eventID), start)
+}
+
 // luaMapByID is the MapProvider behind the Eluna GetMapById global: the
 // Map object for a known map row, nil when the row is missing (the C++
 // MapMgr::FindMap nullptr arm) or without a data store. The instance id is

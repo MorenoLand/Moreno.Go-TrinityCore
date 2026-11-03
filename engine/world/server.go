@@ -137,22 +137,24 @@ type Server struct {
 	// disconnectTimes mirrors World's m_disconnects (World.cpp:3114): account id
 	// -> unix time of last non-queued session removal, consulted by the
 	// DisconnectToleranceInterval queue-skip arm.
-	disconnectTimes    map[uint32]int64
-	playerLimit        uint32
-	closed             atomic.Bool
-	stopEvent          atomic.Bool // World::m_stopEvent (World.h:795): Stop() has run; shutdown timers ignore further arms
-	shutdownMu         sync.Mutex  // guards shutdown (World::m_ShutdownTimer/m_ShutdownMask/m_ExitCode triple, World.cpp:2983-3072; see shutdown.go)
-	shutdown           serverShutdown
-	gameEventHookMu    sync.Mutex // guards gameEventActive (see game_event_hooks.go)
-	gameEventActive    map[int64]struct{}
-	tradeInTradeMu     sync.Mutex // guards tradeInTrade (see trade.go)
-	tradeInTrade       map[uint64]bool
-	ticketsEnabled     atomic.Bool
-	ticketsLastChange  atomic.Int64 // TicketMgr::_lastChange (TicketMgr.cpp:273); see noteTicketsChanged
-	objectsMu          sync.RWMutex
-	characterGUIDMu    sync.Mutex
-	characterGUIDNext  uint64
-	characterGUIDReady bool
+	disconnectTimes     map[uint32]int64
+	playerLimit         uint32
+	closed              atomic.Bool
+	stopEvent           atomic.Bool // World::m_stopEvent (World.h:795): Stop() has run; shutdown timers ignore further arms
+	shutdownMu          sync.Mutex  // guards shutdown (World::m_ShutdownTimer/m_ShutdownMask/m_ExitCode triple, World.cpp:2983-3072; see shutdown.go)
+	shutdown            serverShutdown
+	gameEventHookMu     sync.Mutex // guards gameEventActive (see game_event_hooks.go)
+	gameEventActive     map[int64]struct{}
+	gameEventOverrideMu sync.Mutex // guards gameEventOverrides (see conditions.go)
+	gameEventOverrides  map[int64]bool
+	tradeInTradeMu      sync.Mutex // guards tradeInTrade (see trade.go)
+	tradeInTrade        map[uint64]bool
+	ticketsEnabled      atomic.Bool
+	ticketsLastChange   atomic.Int64 // TicketMgr::_lastChange (TicketMgr.cpp:273); see noteTicketsChanged
+	objectsMu           sync.RWMutex
+	characterGUIDMu     sync.Mutex
+	characterGUIDNext   uint64
+	characterGUIDReady  bool
 	// mailIDMu/mailIDNext mirror ObjectMgr::_mailId (ObjectMgr.cpp:232, 7319,
 	// 7366-7374): the in-memory mail-ID generator seeded once from
 	// MAX(id)+1 at startup, so concurrent sends can never race on the same
@@ -929,6 +931,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	})
 	server.Features.Scripts.SetPlayerProvider(server.luaPlayers)
 	server.Features.Scripts.SetGameEventProvider(server.luaGameEventIDs)
+	server.Features.Scripts.SetGameEventControlProvider(server.luaGameEventControl)
 	server.Features.Scripts.SetMapProvider(server.luaMapByID)
 	server.Features.Scripts.SetWorldMessageProvider(server.luaWorldMessage)
 	server.Features.Scripts.SetAreaNameProvider(server.luaAreaName)
