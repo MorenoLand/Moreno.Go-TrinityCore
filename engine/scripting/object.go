@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/Shopify/go-lua"
@@ -23,9 +24,86 @@ func objectEqual(state *lua.State) int {
 	return 1
 }
 
+// instanceDataStoreKey is the Lua registry slot holding the per-instance
+// data store: one real Lua table per (map, instance) key, so Eluna
+// instance scripts read and write the same table across hooks, exactly
+// like ElunaInstanceAI's Lua data table (LuaEngine/MapMethods.h
+// GetInstanceData, ElunaInstanceAI.cpp GetData/SetData). The table lives
+// in the registry for the Runtime's lifetime; the Go InstanceData object
+// is only its userdata handle, keyed by its MapId/InstanceId fields.
+const instanceDataStoreKey = "MorenoCore.InstanceDataStore"
+
+func instanceDataKey(object *Object) string {
+	mapID, _ := objectUint32(object, "MapId")
+	instanceID, _ := objectUint32(object, "InstanceId")
+	return strconv.Itoa(int(mapID)) + ":" + strconv.Itoa(int(instanceID))
+}
+
+// pushInstanceDataTable leaves the (map, instance) data table on top of
+// the stack and reports true, or leaves nil and reports false when no
+// table exists and create is false. With create it materializes the
+// store and the instance table first.
+func pushInstanceDataTable(state *lua.State, object *Object, create bool) bool {
+	state.Field(lua.RegistryIndex, instanceDataStoreKey)
+	if !state.IsTable(-1) {
+		state.Pop(1)
+		if !create {
+			state.PushNil()
+			return false
+		}
+		state.NewTable()
+		state.SetField(lua.RegistryIndex, instanceDataStoreKey)
+		state.Field(lua.RegistryIndex, instanceDataStoreKey)
+	}
+	state.PushString(instanceDataKey(object))
+	state.RawGet(-2)
+	if !state.IsTable(-1) {
+		state.Pop(1)
+		if !create {
+			state.PushNil()
+			return false
+		}
+		state.NewTable()
+		state.PushString(instanceDataKey(object))
+		state.PushValue(-2)
+		state.RawSet(-4)
+	}
+	return true
+}
+
+// pushInstanceDataField leaves the named field of the instance data
+// table on top of the stack, or nil when the table or field is absent.
+func pushInstanceDataField(state *lua.State, object *Object, name string) {
+	if !pushInstanceDataTable(state, object, false) {
+		return
+	}
+	state.PushString(name)
+	state.RawGet(-2)
+}
+
+func objectNewIndex(state *lua.State) int {
+	object := lua.CheckUserData(state, 1, objectMetaTable).(*Object)
+	name := lua.CheckString(state, 2)
+	if object.Type != "InstanceData" {
+		lua.Errorf(state, "attempt to index a userdata value")
+	}
+	if !pushInstanceDataTable(state, object, true) {
+		lua.Errorf(state, "instance data table unavailable")
+	}
+	state.PushValue(2)
+	state.PushValue(3)
+	state.RawSet(-3)
+	_ = name
+	return 0
+}
+
 func objectIndex(state *lua.State) int {
 	object := lua.CheckUserData(state, 1, objectMetaTable).(*Object)
 	name := lua.CheckString(state, 2)
+	if object.Type == "InstanceData" {
+		pushInstanceDataField(state, object, name)
+		return 1
+	}
 	method, ok := object.Methods[name]
 	if !ok {
 		method, ok = genericObjectMethod(object, name)

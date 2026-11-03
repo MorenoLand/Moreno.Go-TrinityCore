@@ -8,15 +8,57 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 )
 
-// luaInstanceData builds the instance_data argument for the Eluna
-// INSTANCE_EVENT_* hooks. C++ pushes the ElunaInstanceAI's Lua data table
-// (LuaEngine/LuaEngine.cpp PushInstanceData), the script's persistent
-// per-instance storage. Go keeps no per-instance Lua data store — there is
-// no ElunaInstanceAI shim and instance save data is never loaded — so the
-// bridge passes an empty table. Documented delta; the map and player/go
-// arguments are the live objects.
-func luaInstanceData() *scripting.Object {
-	return &scripting.Object{Type: "InstanceData", Fields: map[string]any{}}
+// instanceDataObject is the instance_data argument for the Eluna
+// INSTANCE_EVENT_* hooks and for Map:GetInstanceData. C++ pushes the
+// ElunaInstanceAI's Lua data table (LuaEngine/LuaEngine.cpp
+// PushInstanceData), one persistent table per instance; the Go table
+// itself lives in the scripting runtime's registry (see
+// scripting.instanceDataStoreKey), so the same script writes survive
+// across hooks. This cache additionally keeps Lua object identity
+// stable (C++ pushes the same table, so data == data holds) and lets
+// Map:GetInstanceData return the hook argument's object. A nil server
+// yields a keyed handle that still reads the registry table. Documented
+// deltas: ON_LOAD (2) has no instance-data load path and SaveInstanceData
+// does not serialize the table to instance.data (mar_encode unmodeled).
+func (s *Server) instanceDataObject(mapID, instanceID uint32) *scripting.Object {
+	key := instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}
+	if s == nil {
+		return &scripting.Object{Type: "InstanceData", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID}}
+	}
+	s.instanceDataMu.Lock()
+	defer s.instanceDataMu.Unlock()
+	if obj, ok := s.instanceDataObjects[key]; ok {
+		return obj
+	}
+	if s.instanceDataObjects == nil {
+		s.instanceDataObjects = make(map[instanceAdmissionKey]*scripting.Object)
+	}
+	obj := &scripting.Object{Type: "InstanceData", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID}}
+	s.instanceDataObjects[key] = obj
+	return obj
+}
+
+// instanceDataForMap is the MapLive.InstanceData gate behind
+// Map:GetInstanceData (MapMethods.h): C++ returns the ElunaInstanceAI
+// table only when the map carries the shim, which Eluna installs only
+// for maps with INSTANCE_EVENT bindings (LuaEngine.cpp:1238-1255), and
+// nil for non-instance maps (ToInstanceMap fails) and for C++-scripted
+// instances. Go mirrors both gates: instanceID 0 reads nil, and a map
+// with no map-level or instance-level binding for any instance event
+// (1-7) reads nil.
+func (s *Server) instanceDataForMap(mapID, instanceID uint32) *scripting.Object {
+	if s == nil || instanceID == 0 || s.Features == nil || s.Features.Scripts == nil {
+		return nil
+	}
+	scripts := s.Features.Scripts
+	mapKind := "map:" + strconv.FormatUint(uint64(mapID), 10)
+	instKind := "instance:" + strconv.FormatUint(uint64(instanceID), 10)
+	for event := scripting.InstanceEventOnInitialize; event <= scripting.InstanceEventOnCheckEncounterProgress; event++ {
+		if scripts.HasHook(mapKind, event) || scripts.HasHook(instKind, event) {
+			return s.instanceDataObject(mapID, instanceID)
+		}
+	}
+	return nil
 }
 
 // mapLive builds the live MapLive behind Lua Map objects (MapMethods.h):
@@ -46,6 +88,9 @@ func (s *Server) mapLive(mapID, instanceID uint32) scripting.MapLive {
 	}}
 	if s == nil {
 		return live
+	}
+	live.InstanceData = func() *scripting.Object {
+		return s.instanceDataForMap(mapID, instanceID)
 	}
 	live.Difficulty = func(ctx context.Context) (int64, bool) {
 		if instanceID == 0 || s.CharactersStore == nil || s.CharactersStore.DB == nil {
@@ -231,7 +276,7 @@ func (s *session) fireInstancePlayerEnter(ctx context.Context) {
 	if s.player.InstanceID == 0 || !s.server.isInstanceScriptMap(s.player.Map) {
 		return
 	}
-	if _, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, s.player.Map, s.player.InstanceID, scripting.InstanceEventOnPlayerEnter, luaInstanceData(), instanceMapObject(s.server, s.player.Map, s.player.InstanceID), s.luaPlayer()); err != nil {
+	if _, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, s.player.Map, s.player.InstanceID, scripting.InstanceEventOnPlayerEnter, s.server.instanceDataObject(s.player.Map, s.player.InstanceID), instanceMapObject(s.server, s.player.Map, s.player.InstanceID), s.luaPlayer()); err != nil {
 		s.debug("lua instance player-enter event failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
 	}
 }
@@ -252,7 +297,7 @@ func (s *Server) triggerInstanceGameObjectCreate(dyn *dynamicGameObjectState) {
 	if goObj == nil {
 		return
 	}
-	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), dyn.Map, dyn.InstanceID, scripting.InstanceEventOnGameObjectCreate, luaInstanceData(), instanceMapObject(s, dyn.Map, dyn.InstanceID), goObj); err != nil {
+	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), dyn.Map, dyn.InstanceID, scripting.InstanceEventOnGameObjectCreate, s.instanceDataObject(dyn.Map, dyn.InstanceID), instanceMapObject(s, dyn.Map, dyn.InstanceID), goObj); err != nil {
 		s.debug("lua instance gameobject-create event failed", "map", dyn.Map, "instance", dyn.InstanceID, "error", err)
 	}
 }
@@ -274,7 +319,7 @@ func (s *Server) triggerInstanceCreatureCreate(motion *creatureMotion) {
 	if creature == nil {
 		return
 	}
-	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), motion.Map, motion.InstanceID, scripting.InstanceEventOnCreatureCreate, luaInstanceData(), instanceMapObject(s, motion.Map, motion.InstanceID), creature); err != nil {
+	if _, err := s.Features.Scripts.TriggerInstanceEvent(context.Background(), motion.Map, motion.InstanceID, scripting.InstanceEventOnCreatureCreate, s.instanceDataObject(motion.Map, motion.InstanceID), instanceMapObject(s, motion.Map, motion.InstanceID), creature); err != nil {
 		s.debug("lua instance creature-create event failed", "map", motion.Map, "instance", motion.InstanceID, "error", err)
 	}
 }
@@ -294,7 +339,7 @@ func (s *session) instanceEncounterHooked(ctx context.Context, mapID, instanceID
 	if s == nil || s.server == nil || instanceID == 0 || !s.server.isInstanceScriptMap(mapID) || s.server.Features == nil || s.server.Features.Scripts == nil {
 		return false
 	}
-	values, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, mapID, instanceID, scripting.InstanceEventOnCheckEncounterProgress, luaInstanceData(), instanceMapObject(s.server, mapID, instanceID))
+	values, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, mapID, instanceID, scripting.InstanceEventOnCheckEncounterProgress, s.server.instanceDataObject(mapID, instanceID), instanceMapObject(s.server, mapID, instanceID))
 	if err != nil {
 		s.debug("lua instance encounter check failed", "map", mapID, "instance", instanceID, "error", err)
 	}
@@ -344,7 +389,7 @@ func (s *Server) updateInstanceScriptTicks(ctx context.Context, diff time.Durati
 		if !scripts.HasHook(mapKind, scripting.InstanceEventOnUpdate) && !scripts.HasHook(instKind, scripting.InstanceEventOnUpdate) {
 			continue
 		}
-		if _, err := scripts.TriggerInstanceEvent(ctx, k.mapID, k.instanceID, scripting.InstanceEventOnUpdate, luaInstanceData(), instanceMapObject(s, k.mapID, k.instanceID), uint32(diff.Milliseconds())); err != nil {
+		if _, err := scripts.TriggerInstanceEvent(ctx, k.mapID, k.instanceID, scripting.InstanceEventOnUpdate, s.instanceDataObject(k.mapID, k.instanceID), instanceMapObject(s, k.mapID, k.instanceID), uint32(diff.Milliseconds())); err != nil {
 			s.debug("lua instance update event failed", "map", k.mapID, "instance", k.instanceID, "error", err)
 		}
 	}

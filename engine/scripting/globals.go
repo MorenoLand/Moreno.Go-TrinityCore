@@ -1122,12 +1122,13 @@ type MapPlayerLive struct {
 // MapMethods.h GetWorldObject (Map.cpp GetPlayer/GetCreature/GetPet/
 // GetGameObject/GetCorpse); a nil callback means no object resolves.
 type MapLive struct {
-	Load        func() (MapSnapshot, bool)
-	Difficulty  func(context.Context) (int64, bool)
-	Players     func() []MapPlayerLive
-	SetWeather  func(context.Context, uint32, uint32, float32)
-	WorldObject func(context.Context, uint64) *Object
-	AreaID      func(x, y, z float32) uint32
+	Load         func() (MapSnapshot, bool)
+	InstanceData func() *Object
+	Difficulty   func(context.Context) (int64, bool)
+	Players      func() []MapPlayerLive
+	SetWeather   func(context.Context, uint32, uint32, float32)
+	WorldObject  func(context.Context, uint64) *Object
+	AreaID       func(x, y, z float32) uint32
 	// Height reads the .map grid height for Map::GetHeight's Eluna
 	// call shape; false means no readable height chunk, and the
 	// method turns that (and the INVALID_HEIGHT sentinel) into nil.
@@ -1350,15 +1351,24 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 			}
 			return []any{height}, nil
 		},
-		// GetInstanceData is nil without an ElunaInstanceAI shim
-		// (MapMethods.h: GetInstanceData pushes nil when the cast
-		// fails); Go has no shim, so it always reads nil. The
-		// INSTANCE_EVENT_* data argument is a separate empty table.
+		// GetInstanceData returns the instance's Lua data table when
+		// the world supplies one (MapMethods.h: the ElunaInstanceAI
+		// table, nil when the cast fails); the world gates it on
+		// instance-script bindings, and the returned object is the
+		// same handle the INSTANCE_EVENT_* hooks receive.
 		"GetInstanceData": func(context.Context, []any) ([]any, error) {
+			if live.InstanceData == nil {
+				return []any{nil}, nil
+			}
+			if data := live.InstanceData(); data != nil {
+				return []any{data}, nil
+			}
 			return []any{nil}, nil
 		},
-		// SaveInstanceData no-ops without an ElunaInstanceAI shim,
-		// the same C++ arm that guards the SaveToDB call.
+		// SaveInstanceData no-ops: C++ calls the shim's SaveToDB,
+		// which serializes the data table (mar_encode) into
+		// instance.data; Go has no such serialization, so the table
+		// persists in memory for the runtime's lifetime only.
 		"SaveInstanceData": func(context.Context, []any) ([]any, error) {
 			return nil, nil
 		},
