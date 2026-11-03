@@ -176,8 +176,8 @@ end
 -- only the latched caster's subsequent hits advance the ladder.
 -- Talk(textCounter, player) passes the latched player as Talk's
 -- whisper-target arg (C++-exact); KilledMonsterCredit(
--- NPC_TORTURER_LECRAFT 27394) at counter 5 has no lua bridge —
--- unmodeled; counter wraps 13 -> 6.
+-- NPC_TORTURER_LECRAFT 27394) at counter 5 via player:
+-- KilledMonsterCredit (lua_player.go:4130); counter wraps 13 -> 6.
 local function onSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_HIGH_EXECUTORS_BRANDING_IRON then
         return
@@ -198,6 +198,9 @@ local function onSpellHit(event, creature, caster, spellId)
         return
     end
     creature:Talk(st.textCounter, caster)
+    if st.textCounter == 5 then
+        caster:KilledMonsterCredit(TORTURER_LECRAFT_ENTRY)
+    end
     st.textCounter = st.textCounter + 1
     if st.textCounter == 13 then
         st.textCounter = 6
