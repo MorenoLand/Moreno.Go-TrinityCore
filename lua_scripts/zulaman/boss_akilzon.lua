@@ -240,7 +240,8 @@ local function akilzonResetState(guid)
 end
 
 local function akilzonEnterCombat(event, creature, target)
-    creature:DoZoneInCombat() -- boss_akilzon.cpp:411 (JustEngagedWith sole arm; bridge live 2026-10-23)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_akilzon.cpp:116-118 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; bridge live 2026-10-23)
     local guid = creature:GetGUID()
     akilzonResetState(guid)
     creature:Talk(SAY_AGGRO)

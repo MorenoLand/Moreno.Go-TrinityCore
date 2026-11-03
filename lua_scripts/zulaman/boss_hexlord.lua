@@ -394,6 +394,8 @@ onAbility = function(creature, guid)
 end
 
 local function hexlordEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_hexlord.cpp:290-292 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     state[guid] = { drainDeadline = os.time() + 60, playerClass = nil, playerGuid = nil }

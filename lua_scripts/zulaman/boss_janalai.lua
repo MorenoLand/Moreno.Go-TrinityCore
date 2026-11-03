@@ -401,6 +401,8 @@ local function janalaiResetState(guid)
 end
 
 local function janalaiEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_janalai.cpp:181-183 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     janalaiResetState(guid)
     -- C++ JustEngagedWith (boss_janalai.cpp:181-193): Talk + the Initialize

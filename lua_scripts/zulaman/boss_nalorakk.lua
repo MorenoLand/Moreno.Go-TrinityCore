@@ -285,6 +285,8 @@ local function nalorakkResetState(guid)
 end
 
 local function nalorakkEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_nalorakk.cpp:240-242 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     nalorakkResetState(guid)
     -- C++ JustEngagedWith: Talk + the Initialize timer set.

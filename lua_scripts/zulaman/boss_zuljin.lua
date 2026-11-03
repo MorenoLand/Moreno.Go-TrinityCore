@@ -533,6 +533,8 @@ end
 -- C++ CreatureScript — they stand as aura totems, like C++ (the
 -- mandokir chained-spirit precedent).
 local function zuljinEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_zuljin.cpp:205-207 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     zuljinResetState(guid)
     local st = zuljinState(guid)
