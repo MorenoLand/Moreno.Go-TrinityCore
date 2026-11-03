@@ -217,7 +217,7 @@ end
 local function ghoulSpawn(event, creature)
     creature:CastSpell(creature, SPELL_RAGING_GHOUL_SPAWN, true)
     creature:SetReactState(REACT_PASSIVE)
-    creature:HandleEmoteCommand(EMOTE_ONESHOT_EMERGE)
+    creature:PerformEmote(EMOTE_ONESHOT_EMERGE)
     spawnTail(creature, creature:GetGUID())
 end
 
@@ -264,7 +264,7 @@ end
 local function witchDoctorSpawn(event, creature)
     creature:CastSpell(creature, SPELL_RISEN_WITCH_DOCTOR_SPAWN, true)
     creature:SetReactState(REACT_PASSIVE)
-    creature:HandleEmoteCommand(EMOTE_ONESHOT_EMERGE)
+    creature:PerformEmote(EMOTE_ONESHOT_EMERGE)
     spawnTail(creature, creature:GetGUID())
 end
 
