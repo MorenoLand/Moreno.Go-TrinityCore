@@ -1134,6 +1134,8 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetAreaName", r.getAreaName)
 	r.state.Register("CreateInt64", r.createInt64)
 	r.state.Register("CreateUint64", r.createUint64)
+	r.state.Register("CreateLongLong", r.createInt64)
+	r.state.Register("CreateULongLong", r.createUint64)
 	r.state.Register("CreatePacket", r.createPacket)
 	r.state.Register("bit_and", luaBitAnd)
 	r.state.Register("bit_or", luaBitOr)
