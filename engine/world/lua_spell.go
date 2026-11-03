@@ -174,6 +174,78 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 	return &scripting.Object{Type: "Spell", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
 
+// luaCreatureSpellObject builds the Eluna Spell object for a creature's
+// current spell (Unit::GetCurrentSpell, UnitMethods.h:785-792), the
+// server-side twin of the session luaSpellObject: creatures have no
+// session, so GetCaster resolves to the creature itself and GetTarget
+// resolves the pending/channel target through luaUnitObjectForGUID.
+// GetCastTime is the DBC base cast time (the session builder's
+// no-active-cast fallback); the live cast-bar value exists only on the
+// player path. A spell with no DBC row still reports its entry —
+// GetCurrentSpell returns the live Spell* regardless of DBC presence,
+// and the DBC-backed reads fall back to 0/-1 like the session builder.
+func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targetGUID uint64) *scripting.Object {
+	if s == nil || m == nil || spellID == 0 {
+		return nil
+	}
+	var castTimeMs int32
+	durationMs := int32(0)
+	if s.Data != nil {
+		if spell, found, err := s.Data.Spell(spellID); err == nil && found {
+			castTimeMs = int32(s.aiSpellCastTimeMs(spell))
+			if dur, found, err := s.Data.SpellDurationBase(spell.DurationIndex); err == nil && found {
+				durationMs = dur
+			} else if !found && spell.Attributes&spellAttributePassive != 0 {
+				durationMs = -1
+			}
+		}
+	}
+	methods := map[string]scripting.ObjectMethod{}
+	methods["GetObjectType"] = luaNoArgs(func() any { return "Spell" })
+	methods["GetEntry"] = luaNoArgs(func() any { return spellID })
+	methods["GetCastTime"] = luaNoArgs(func() any { return castTimeMs })
+	methods["GetDuration"] = luaNoArgs(func() any { return durationMs })
+	methods["GetPowerCost"] = luaNoArgs(func() any { return uint32(0) })
+	methods["GetCaster"] = luaNoArgs(func() any { return s.luaMotionCreature(m) })
+	methods["GetTarget"] = luaNoArgs(func() any {
+		if targetGUID == 0 {
+			return nil
+		}
+		return s.luaUnitObjectForGUID(m.Map, m.InstanceID, targetGUID)
+	})
+	return &scripting.Object{Type: "Spell", Fields: map[string]any{"Entry": spellID}, Methods: methods}
+}
+
+// luaCreatureCurrentSpell resolves a creature's current spell slot for
+// GetCurrentSpell (UnitMethods.h:785-792): GENERIC is the pending
+// twin/inline cast (the twin path stores no target, so its GetTarget
+// reads nil), CHANNELED is the live channel stamp, MELEE/AUTOREPEAT
+// read nil (no Go slots). A post-GO CastingUntil stamp with no pending
+// spell ID is not a current spell — that spell already finished.
+// Takes no locks itself; callers hold motionMu on the handler surface.
+func (s *Server) luaCreatureCurrentSpell(m *creatureMotion, spellType int) any {
+	if s == nil || m == nil {
+		return nil
+	}
+	switch spellType {
+	case 1:
+		if m.PendingInlineSpellID != 0 {
+			return s.luaCreatureSpellObject(m, m.PendingInlineSpellID, m.PendingInlineTargetGUID)
+		}
+		if m.PendingCastSpellID != 0 {
+			return s.luaCreatureSpellObject(m, m.PendingCastSpellID, 0)
+		}
+		return nil
+	case 2:
+		if !s.creatureChannelLive(m) {
+			return nil
+		}
+		return s.luaCreatureSpellObject(m, m.ChannelSpellID, m.ChannelTargetGUID)
+	default:
+		return nil
+	}
+}
+
 // firePlayerSpellCast dispatches PLAYER_EVENT_ON_SPELL_CAST (5) as
 // (event, player, spell, skipCheck), mirroring Eluna::OnSpellCast
 // (PlayerHooks.cpp:324-329) via ScriptMgr::OnPlayerSpellCast

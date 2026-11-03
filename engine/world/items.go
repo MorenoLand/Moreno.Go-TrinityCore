@@ -3285,7 +3285,7 @@ func (s *session) applyItemDependentAuras(ctx context.Context) {
 		if !s.hasItemFitToSpellRequirements(ctx, spell, 0) {
 			continue
 		}
-		s.castSpellDirectWithOverrides(ctx, spellID, s.playerGUID, false, nil, 0)
+		s.castSpellDirectWithOverrides(ctx, spellID, s.playerGUID, false, nil, 0, nil)
 	}
 }
 
@@ -3455,11 +3455,11 @@ func (s *session) applyEnchantEquipSpells(ctx context.Context, dbItemGUID int64,
 				continue
 			}
 			if apply {
-				var basePoints []int32
+				var basePoints map[int]int32
 				if bp := suffixBasePoints(uint32(enchantID)); bp != 0 {
-					basePoints = []int32{bp, bp, bp}
+					basePoints = map[int]int32{0: bp, 1: bp, 2: bp}
 				}
-				s.castSpellDirectWithOverrides(ctx, spellID, s.playerGUID, false, basePoints, uint64(dbItemGUID))
+				s.castSpellDirectWithOverrides(ctx, spellID, s.playerGUID, false, basePoints, uint64(dbItemGUID), nil)
 			} else {
 				s.removeAurasDueToItemSpell(spellID, uint64(dbItemGUID))
 			}

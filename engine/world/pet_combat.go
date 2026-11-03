@@ -3523,10 +3523,10 @@ func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatu
 				return true
 			}
 			bp0 := int32(0.01 * float64(ts.player.MaxHealth) * float64(effect.BasePoints))
-			ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, []int32{bp0}, 0)
+			ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, map[int]int32{0: bp0}, 0, nil)
 		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil && tm.MaxHealth != 0 {
 			bp0 := int32(0.01 * float64(tm.MaxHealth) * float64(effect.BasePoints))
-			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, []int32{bp0}, false)
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, map[int]int32{0: bp0}, nil, false)
 		}
 		return true
 	case triggerReplenishManaSpell:
@@ -3537,9 +3537,9 @@ func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatu
 			return true
 		}
 		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-			ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, []int32{effect.BasePoints}, 0)
+			ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, map[int]int32{0: effect.BasePoints}, 0, nil)
 		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil {
-			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, []int32{effect.BasePoints}, false)
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, map[int]int32{0: effect.BasePoints}, nil, false)
 		}
 		return true
 	case triggerDemonicEmpowerSuccub:

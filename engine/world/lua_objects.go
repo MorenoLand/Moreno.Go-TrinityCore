@@ -1146,17 +1146,238 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
 	}
 	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554, Trinity):
-	// HasUnitState(UNIT_STATE_CASTING). Go creature casts are packet-only
-	// (castCreatureSpell) with no cast state, so this is always false;
-	// the player object carries the real arm (lua_player.go).
-	methods["IsCasting"] = luaNoArgs(func() any { return false })
+	// HasUnitState(UNIT_STATE_CASTING). The session creature reads the
+	// live cast window (motion.CastingUntil), the same gate the combat
+	// tick uses; the player object carries its own arm (lua_player.go).
+	methods["IsCasting"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return false
+		}
+		s.server.motionMu.Lock()
+		defer s.server.motionMu.Unlock()
+		return time.Now().Before(motion.CastingUntil)
+	})
+	// CastSpell(target, spellId[, triggered]) is Unit::CastSpell
+	// (UnitMethods.h:2411-2432) through the server's creature cast path,
+	// the session-creature twin of the handler binding; a nil target
+	// falls back to the motion's victim and is a no-op with none, and a
+	// despawned motion is a silent no-op.
+	methods["CastSpell"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("CastSpell requires a target and a spell id")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return nil, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			s.server.motionMu.Lock()
+			targetGUID = motion.TargetGUID
+			s.server.motionMu.Unlock()
+		}
+		if targetGUID == 0 {
+			return nil, nil
+		}
+		triggered := false
+		if len(args) >= 3 {
+			if b, ok := args[2].(bool); ok {
+				triggered = b
+			}
+		}
+		if triggered {
+			s.server.castCreatureSpellTriggered(ctx, motion, spellID, targetGUID)
+		} else {
+			s.server.castCreatureSpell(ctx, motion, spellID, targetGUID)
+		}
+		return nil, nil
+	}
+	// CastCustomSpell is the session-creature twin of the handler
+	// binding (UnitMethods.h:2449-2480): sparse base-point overrides
+	// via the creature funnel; castItem/originalCaster accepted and
+	// ignored, same unmodeled legs as the handler surface.
+	methods["CastCustomSpell"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("CastCustomSpell requires a target and a spell id")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		basePoints, err := luaCastCustomBasePoints(args)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return nil, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			s.server.motionMu.Lock()
+			targetGUID = motion.TargetGUID
+			s.server.motionMu.Unlock()
+		}
+		if targetGUID == 0 {
+			return nil, nil
+		}
+		triggered := false
+		if len(args) >= 3 {
+			if b, ok := args[2].(bool); ok {
+				triggered = b
+			}
+		}
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, basePoints, nil, false)
+		return nil, nil
+	}
+	// CastSpellAoF is the session-creature twin of the handler binding
+	// (UnitMethods.h:2493-2514): explicit-destination cast, triggered
+	// by default.
+	methods["CastSpellAoF"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 4 {
+			return nil, fmt.Errorf("CastSpellAoF requires x, y, z and a spell id")
+		}
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		spellID, err := luaUint32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		triggered := true
+		if len(args) >= 5 {
+			if b, ok := args[4].(bool); ok {
+				triggered = b
+			}
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return nil, nil
+		}
+		dest := [3]float32{x, y, z}
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false)
+		return nil, nil
+	}
 	// StopSpellCast is UnitMethods::StopSpellCast (UnitMethods.h:2532-2537):
-	// Unit::CastStop. No-op for creatures — no cast state to interrupt.
-	methods["StopSpellCast"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
-	// InterruptNonMeleeSpells is Unit::InterruptNonMeleeSpells: same no-cast-
-	// state rationale as StopSpellCast — handler-surface twin lives in
-	// lua_creature_events.go (svala ritual-strike arm).
-	methods["InterruptNonMeleeSpells"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
+	// Unit::CastStop (Unit.cpp:980-985) interrupts every current
+	// non-melee spell except except_spellid (default 0: all). The
+	// single-arm interrupt helpers compose the except leg; MELEE has
+	// no Go slot. The prior no-op stub predates the pending/channel
+	// cast-state model.
+	methods["StopSpellCast"] = func(_ context.Context, args []any) ([]any, error) {
+		var spellID uint32
+		if len(args) > 0 {
+			id, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			spellID = id
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		var genericID uint32
+		if motion.PendingInlineSpellID != 0 {
+			genericID = motion.PendingInlineSpellID
+		} else {
+			genericID = motion.PendingCastSpellID
+		}
+		channelID := uint32(0)
+		if s.server.creatureChannelLive(motion) {
+			channelID = motion.ChannelSpellID
+		}
+		var interrupted []interruptedCreatureCast
+		if genericID != 0 && genericID != spellID {
+			interrupted = append(interrupted, s.server.interruptCreatureGenericCast(motion)...)
+		}
+		if channelID != 0 && channelID != spellID {
+			interrupted = append(interrupted, s.server.interruptCreatureChannelCast(motion)...)
+		}
+		s.server.motionMu.Unlock()
+		for _, arm := range interrupted {
+			s.server.sendCreatureInterruptPackets(motion, arm)
+		}
+		return nil, nil
+	}
+	// InterruptSpell is the session-creature twin of the handler
+	// binding (UnitMethods.h:2547-2570): single-slot interrupt, MELEE
+	// and AUTOREPEAT no-ops, delayed arg moot (no DELAYED state).
+	methods["InterruptSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spellType, err := luaCastSpellTypeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		var interrupted []interruptedCreatureCast
+		switch spellType {
+		case 1:
+			interrupted = s.server.interruptCreatureGenericCast(motion)
+		case 2:
+			interrupted = s.server.interruptCreatureChannelCast(motion)
+		}
+		s.server.motionMu.Unlock()
+		for _, arm := range interrupted {
+			s.server.sendCreatureInterruptPackets(motion, arm)
+		}
+		return nil, nil
+	}
+	// GetCurrentSpell is the session-creature twin of the handler
+	// binding (UnitMethods.h:785-792).
+	methods["GetCurrentSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spellType, err := luaCastSpellTypeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return []any{nil}, nil
+		}
+		s.server.motionMu.Lock()
+		spell := s.server.luaCreatureCurrentSpell(motion, spellType)
+		s.server.motionMu.Unlock()
+		return []any{spell}, nil
+	}
+	// InterruptNonMeleeSpells is Unit::InterruptNonMeleeSpells
+	// (Unit.cpp:3212-3225): the session-creature twin of the handler
+	// binding — cancels the pending generic cast and the live channel,
+	// clearing the plain gate when no arm returns.
+	methods["InterruptNonMeleeSpells"] = func(_ context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || s.server == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		interrupted := s.server.interruptCreatureNonMeleeCasts(motion)
+		if len(interrupted) == 0 {
+			motion.CastingUntil = time.Time{}
+			s.server.cancelPendingCreatureCast(motion)
+		}
+		s.server.motionMu.Unlock()
+		for _, arm := range interrupted {
+			s.server.sendCreatureInterruptPackets(motion, arm)
+		}
+		return nil, nil
+	}
 	// SendChatMessageToPlayer is UnitMethods::SendChatMessageToPlayer
 	// (UnitMethods.h:2095-2113), shared in lua_worldobject_range.go;
 	// creatures carry no chat tag, so the tag byte is 0.

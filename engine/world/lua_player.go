@@ -2337,6 +2337,144 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.castSpellDirect(ctx, spellID, targetGUID)
 		return nil, nil
 	}
+	// CastCustomSpell(target, spellId[, triggered[, bp0[, bp1[,
+	// bp2[, castItem[, originalCaster]]]]]]) is Unit::CastSpell with
+	// CastSpellExtraArgs (UnitMethods.h:2449-2480) on the triggered
+	// player funnel: only the supplied base points override (sparse
+	// map), the castItem GUID rides as the item-cast attribution, and
+	// the originalCaster arg is accepted but unmodeled — Go's funnel
+	// has no original-caster slot, so the cast attributes to the player.
+	methods["CastCustomSpell"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("CastCustomSpell requires a target and a spell id")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		basePoints, err := luaCastCustomBasePoints(args)
+		if err != nil {
+			return nil, err
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			targetGUID = state.GUID
+		}
+		triggered := false
+		if len(args) >= 3 {
+			if b, ok := args[2].(bool); ok {
+				triggered = b
+			}
+		}
+		_ = triggered
+		var castItemGUID uint64
+		if len(args) >= 7 {
+			castItemGUID = luaObjectGUID(args[6])
+		}
+		s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePoints, castItemGUID, nil)
+		return nil, nil
+	}
+	// CastSpellAoF(x, y, z, spellId[, triggered]) is Unit::CastSpell at
+	// a Position (UnitMethods.h:2493-2514) on the player funnel: the
+	// coordinates seed the funnel's explicit destination (InitExplicit
+	// Targets, Spell.cpp:700-712), kept for dest-explicit spells. Like
+	// the existing player CastSpell, both triggered values ride the
+	// triggered funnel — Go has no server-initiated cast-bar path for
+	// players — so a non-triggered AoF still skips power/cast-time.
+	methods["CastSpellAoF"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 4 {
+			return nil, fmt.Errorf("CastSpellAoF requires x, y, z and a spell id")
+		}
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		spellID, err := luaUint32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		dest := protocol.SpellTargetLocation{X: x, Y: y, Z: z}
+		s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest)
+		return nil, nil
+	}
+	// InterruptSpell(spellType[, delayed]) is Unit::InterruptSpell
+	// (UnitMethods.h:2547-2570, Unit.cpp:3140-3172): MELEE is a no-op
+	// (no melee spell slot), GENERIC cancels the cast-bar cast
+	// (Executing gate inside), CHANNELED cancels the live channel,
+	// AUTOREPEAT clears the auto-repeat slot with its cancel packet.
+	// The delayed arg is moot — Go's cast has no DELAYED state.
+	methods["InterruptSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spellType, err := luaCastSpellTypeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		switch spellType {
+		case 1:
+			s.interruptCurrentCast()
+		case 2:
+			s.interruptCurrentChannel()
+		case 3:
+			s.cancelAutoRepeatOnInterrupt()
+		}
+		return nil, nil
+	}
+	// GetCurrentSpell(spellType) is Unit::GetCurrentSpell
+	// (UnitMethods.h:785-792): the live Spell object for the slot, nil
+	// when empty. GENERIC reads the cast-bar cast, CHANNELED the live
+	// channel, AUTOREPEAT the auto-repeat spell, MELEE nil.
+	methods["GetCurrentSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spellType, err := luaCastSpellTypeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.castMu.Lock()
+		active := s.activeCast
+		channel := s.activeChannel
+		autoRepeat := s.autoRepeatSpell
+		autoTarget := s.autoRepeatTarget
+		s.castMu.Unlock()
+		var spellID uint32
+		var castTimeMs int32
+		var targetGUID uint64
+		switch spellType {
+		case 1:
+			if active == nil || active.Cancelled {
+				return []any{nil}, nil
+			}
+			spellID, castTimeMs, targetGUID = active.SpellID, int32(active.CastTimeMs), active.Target.UnitGUID
+		case 2:
+			if channel == nil || channel.Stopped {
+				return []any{nil}, nil
+			}
+			spellID, targetGUID = channel.SpellID, channel.TargetGUID
+			if s.server != nil {
+				castTimeMs = int32(s.server.aiSpellCastTimeMs(channel.Spell))
+			}
+		case 3:
+			if autoRepeat == 0 {
+				return []any{nil}, nil
+			}
+			spellID, targetGUID = autoRepeat, autoTarget
+		default:
+			return []any{nil}, nil
+		}
+		if s.server == nil || s.server.Data == nil {
+			return []any{nil}, nil
+		}
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			return []any{nil}, nil
+		}
+		return []any{s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: targetGUID})}, nil
+	}
 	// SendCastResult(spellID, result) is the Spell::SendCastResult twin
 	// (Spell.cpp): SMSG_CAST_FAILED with castID 0 for this player, the
 	// spell id, and the result's extended payload. Backs the soulwell

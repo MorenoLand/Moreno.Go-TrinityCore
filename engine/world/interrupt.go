@@ -393,6 +393,67 @@ func (s *Server) interruptCreatureNonMeleeCasts(m *creatureMotion) []interrupted
 	return interrupted
 }
 
+// interruptCreatureGenericCast mirrors the generic arm of
+// Unit::InterruptSpell (Unit.cpp:3140-3172) for CURRENT_GENERIC_SPELL
+// only: the pending twin/inline cast (SPELL_STATE_PREPARING) is
+// cancelled and its cancel packets broadcast. Unlike
+// interruptCreatureCast it carries no effect-68 gates — InterruptSpell
+// checks only IsInterruptable (!m_executedCurrently, Spell.h:548),
+// which is vacuous in Go's synchronous cast model — and unlike
+// interruptCreatureNonMeleeCasts it leaves a live channel untouched.
+// A CastingUntil window with no pending spell ID is not an arm (that
+// spell already finished), so nothing is broadcast for it. Takes no
+// locks itself; callers follow the CombatStop lookup-then-operate
+// pattern (state under motionMu, packets after the lock drops).
+func (s *Server) interruptCreatureGenericCast(m *creatureMotion) []interruptedCreatureCast {
+	if s == nil || m == nil {
+		return nil
+	}
+	var genericSpellID uint32
+	if m.PendingInlineSpellID != 0 {
+		genericSpellID = m.PendingInlineSpellID
+	} else if m.PendingCastSpellID != 0 {
+		genericSpellID = m.PendingCastSpellID
+	}
+	if genericSpellID == 0 {
+		return nil
+	}
+	s.cancelPendingCreatureCast(m)
+	if !s.creatureChannelLive(m) {
+		m.CastingUntil = time.Time{}
+	}
+	return []interruptedCreatureCast{{spellID: genericSpellID}}
+}
+
+// interruptCreatureChannelCast mirrors the channeled arm of
+// Unit::InterruptSpell (Unit.cpp:3140-3172) for CURRENT_CHANNELED_SPELL
+// only: the live channel stamp (SPELL_STATE_CASTING) is stripped with
+// its auras and its cancel packets broadcast. The generic pending arm
+// is left untouched. Infinite-duration channels stamp no channel state
+// and are not an arm. Takes no locks itself; same caller pattern as
+// interruptCreatureGenericCast.
+func (s *Server) interruptCreatureChannelCast(m *creatureMotion) []interruptedCreatureCast {
+	if s == nil || m == nil || !s.creatureChannelLive(m) {
+		return nil
+	}
+	channelSpellID := m.ChannelSpellID
+	s.stripCreatureChannelAuras(m, channelSpellID)
+	m.ChannelSpellID = 0
+	m.ChannelTargetGUID = 0
+	m.ChannelHasDest = false
+	m.ChannelDestX, m.ChannelDestY, m.ChannelDestZ = 0, 0, 0
+	m.ChannelUntil = time.Time{}
+	m.ChannelHitTargets = nil
+	// The pending generic arm is a separate C++ slot (InterruptSpell
+	// touches only m_currentSpells[CHANNELED]), so it survives — and
+	// with it the CastingUntil window it owns. Only a channel-only
+	// window clears.
+	if m.PendingInlineSpellID == 0 && m.PendingCastSpellID == 0 {
+		m.CastingUntil = time.Time{}
+	}
+	return []interruptedCreatureCast{{spellID: channelSpellID, channeled: true}}
+}
+
 // interruptCreatureCastsOnRemove runs the InterruptNonMeleeSpells leg
 // of a creature leaving play: Unit::setDeathState JUST_DIED
 // (Unit.cpp:8909-8911, withDelayed=false) and

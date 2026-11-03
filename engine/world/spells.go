@@ -2434,7 +2434,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
 			wireTarget = target.UnitGUID
 		}
-		s.castSpellDirectWithOverrides(ctx, spellID, wireTarget, false, nil, 0)
+		s.castSpellDirectWithOverrides(ctx, spellID, wireTarget, false, nil, 0, nil)
 		s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "reason", "periodic trigger from client")
 		return true
 	}
@@ -23252,19 +23252,34 @@ func (s *session) castFirstLoginSpell(ctx context.Context, spellID uint32, targe
 }
 
 func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool) {
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, nil, 0)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, nil, 0, nil)
 }
 
 func (s *session) castSpellDirectWithBasePoint(ctx context.Context, spellID uint32, targetGUID uint64, basePoint uint32) {
 	value := int32(basePoint)
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, []int32{value}, 0)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, map[int]int32{0: value}, 0, nil)
+}
+
+// basePointMap converts an indexed base-point slice to the sparse
+// override map CastSpellExtraArgs semantics need: only listed effects
+// are overridden, so a wrapper passing a prefix never clobbers later
+// effects with zeroes.
+func basePointMap(points []int32) map[int]int32 {
+	if points == nil {
+		return nil
+	}
+	out := make(map[int]int32, len(points))
+	for i, bp := range points {
+		out[i] = bp
+	}
+	return out
 }
 
 // castSpellDirectWithBasePoints overrides every listed effect's base points
 // (C++ CastSpellExtraArgs sets SPELLVALUE_BASE_POINT0+i for i in
 // 0..MAX_SPELL_EFFECTS-1, SpellEffects.cpp:989-992, 1037-1040).
 func (s *session) castSpellDirectWithBasePoints(ctx context.Context, spellID uint32, targetGUID uint64, basePoints []int32) {
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePoints, 0)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePointMap(basePoints), 0, nil)
 }
 
 // castSpellDirectWithItem mirrors the CastSpellExtraArgs(Item*) arm
@@ -23273,7 +23288,7 @@ func (s *session) castSpellDirectWithBasePoints(ctx context.Context, spellID uin
 // triggered and the item rides as the cast item, so auras created by it
 // record the item GUID (Aura::m_castItemGuid).
 func (s *session) castSpellDirectWithItem(ctx context.Context, spellID uint32, targetGUID uint64, castItemGUID uint64) {
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, castItemGUID)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, castItemGUID, nil)
 }
 
 // spellEffectImplicitTargetExplicit reports whether the effect's _data row
@@ -23448,7 +23463,7 @@ func (s *session) triggeredSpellTableResult(ctx context.Context, spell wotlk.Spe
 	}
 }
 
-func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints []int32, castItemGUID uint64) {
+func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints map[int]int32, castItemGUID uint64, dest *protocol.SpellTargetLocation) {
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
@@ -24494,7 +24509,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 		if spellAction.castAgain {
-			s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, basePoints, castItemGUID)
+			s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, basePoints, castItemGUID, dest)
 			return
 		}
 	}
@@ -24509,6 +24524,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		spellTargetFlags = protocol.SpellTargetFlagGameObject
 	}
 	spellTarget := protocol.SpellTargetData{Flags: spellTargetFlags, UnitGUID: targetGUID}
+	if dest != nil {
+		// CastSpellAoF: the caller-supplied destination seeds m_targets
+		// (Spell::InitExplicitTargets, Spell.cpp:700-712); the
+		// dest-family resolver below keeps an explicit destination for
+		// dest-explicit spells and drops it for others, matching C++
+		// RemoveDst when the mask needs no DEST_LOCATION.
+		spellTarget.Flags |= protocol.SpellTargetFlagDestLocation
+		spellTarget.Destination = *dest
+	}
 	// Spell::SelectExplicitTargets (Spell.cpp:724-757) runs inside
 	// SelectSpellTargets for triggered casts too — the redirect arm carries
 	// no IsTriggered gate — so the magic redirect
@@ -27447,9 +27471,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						// fixed_bonus. The nested casts ride the triggered
 						// route, matching C++'s CastSpell(..., true).
 						if spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x40 != 0 {
-							s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0)
+							s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0, nil)
 							if s.hasAura(devastateGlyphSpell) {
-								s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0)
+								s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0, nil)
 							}
 							if stacks := s.devastateSunderStacks(ctx, effectTarget); stacks > 1 {
 								var eff2 uint32
@@ -28763,7 +28787,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 		// (unitTarget->CastSpell(unitTarget, ...)); every Go cast runs on
 		// the player session, so the heal lands with the right amount but
 		// the caster attribution differs — documented delta.
-		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, []int32{bp0}, 0)
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, map[int]int32{0: bp0}, 0, nil)
 		return true
 	case triggerReplenishManaSpell:
 		// SpellEffects.cpp:865-889: Replenish Mana (33394) — cannot target
@@ -28779,7 +28803,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 			return true
 		}
 		bp0 := eff.BasePoints
-		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, []int32{bp0}, 0)
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, map[int]int32{0: bp0}, 0, nil)
 		return true
 	case triggerDemonicEmpowerSuccub:
 		// SpellEffects.cpp:900-908: Demonic Empowerment (succubus) — strip
