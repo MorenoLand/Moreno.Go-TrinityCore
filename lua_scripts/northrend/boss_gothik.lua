@@ -33,8 +33,13 @@
 -- (nalorakk / kelthuzad player-gate precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_gothik: JustEngagedWith Talk(SAY_INTRO_1 0) (event 1;
--- BossAI::JustEngagedWith instance-bookkeeping leg has no bridge —
--- tharon_ja precedent; the EVENT_SUMMON / EVENT_DOORS_UNLOCK /
+-- BossAI::JustEngagedWith base arms PORTED 2026-11-03:
+-- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- (ScriptedCreature.cpp:540/542; heigan/loatheb/razuvious
+-- precedent) — the old "instance-bookkeeping leg has no bridge"
+-- claim missed the base call; the instance SetBossState /
+-- CheckRequiredBosses legs stay out — tharon_ja precedent;
+-- the EVENT_SUMMON / EVENT_DOORS_UNLOCK /
 -- EVENT_PHASE_TWO scheduling legs are documented below); EVENT_INTRO_2
 -- Talk(SAY_INTRO_2 1) 4s, EVENT_INTRO_3 Talk(SAY_INTRO_3 2) 9s,
 -- EVENT_INTRO_4 Talk(SAY_INTRO_4 3) 14s — one-shot timers scheduled
@@ -48,10 +53,10 @@
 -- with the phase-two latch; EMOTE_GATE_OPENED (8) rides the unported
 -- gate machine — not ported orphaned (vortex precedent).
 -- Unmodeled (no bridges — documented, not wired):
--- boss_gothik: Reset — SetReactState(REACT_PASSIVE) + instance->
--- SetData(DATA_GOTHIK_GATE, GO_STATE_ACTIVE) — instance / GO-state
--- blocked (no bridges); the react-state leg is bridgeable in isolation
--- but Reset is unported, so it stays out with the rest; JustSummoned /
+-- boss_gothik: Reset — SetReactState(REACT_PASSIVE) PORTED
+-- 2026-11-03 into the ev23 handler (boss_gothik.cpp:321; horsemen
+-- Reset precedent); instance SetData(DATA_GOTHIK_GATE) + _Reset
+-- (summons/instance legs) + Initialize counters stay out; JustSummoned /
 -- SummonedCreatureDespawn — summons.Summon/summons.Despawn + cross-AI
 -- DoAction + instance GetGuidData (summon-list/cross-AI/instance
 -- blocked, not 'no summon bridge'); EVENT_SUMMON — the waves10/waves25
@@ -288,6 +293,8 @@ end
 -- DB spawn-ID trigger lookups + summon-list iteration, no bridges);
 -- EVENT_PHASE_TWO is ported above as a timer-driven latch.
 local function gothikEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan/loatheb/razuvious precedent)
     creature:SetMeleeAttack(false) -- boss_gothik.cpp:416: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:Talk(SAY_INTRO_1)
     local guid = creature:GetGUID()
@@ -326,6 +333,7 @@ local function gothikDied(event, creature, killer)
 end
 
 local function gothikReset(event, creature)
+    creature:SetReactState(REACT_PASSIVE) -- boss_gothik.cpp:321 Reset arm (gate SetData + _Reset legs stay out)
     cancelTimers(creature:GetGUID())
 end
 

@@ -25,13 +25,17 @@
 -- apothecary_hanes precedent). C++ randtime -> math.random
 -- (amanitar / boss_black_knight precedent).
 -- Ported arms (C++-exact for all modeled arms):
--- boss_anubrekhan: JustEngagedWith Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith instance-bookkeeping leg, summons.
--- DoZoneInCombat, events.SetPhase(PHASE_NORMAL) have no bridge —
--- tharon_ja precedent; re-evaluated against the live DoZoneInCombat
--- bridge 2026-10-23 and STAYS OUT: boss_anubrekhan.cpp:164 is
--- summons.DoZoneInCombat() (engages the summoned crypt guards), not a
--- me->DoZoneInCombat() on the boss itself); KilledUnit Talk(SAY_SLAY 2)
+-- boss_anubrekhan: JustEngagedWith Talk(SAY_AGGRO 0) (event 1;
+-- BossAI::JustEngagedWith base arms PORTED 2026-11-03:
+-- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- (ScriptedCreature.cpp:540/542; heigan/loatheb/razuvious
+-- precedent) — the 2026-10-23 stay-out evaluation missed the base
+-- call and read only boss_anubrekhan.cpp:164, which is the
+-- summons.DoZoneInCombat() sibling (engages summoned crypt guards;
+-- stays out — no guards spawn in Go, summons list empty); the
+-- instance SetBossState/CheckRequiredBosses legs + SetPhase
+-- (PHASE_NORMAL) have no bridge — tharon_ja precedent);
+-- KilledUnit Talk(SAY_SLAY 2)
 -- (event 3 —
 -- C++-UNCONDITIONAL: the Talk fires for any victim; only the corpse
 -- scarab cast below is player-gated; no nalorakk gate here);
@@ -283,6 +287,8 @@ local function berserkTick(creature, guid)
 end
 
 local function anubrekhanEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan/loatheb/razuvious precedent)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
