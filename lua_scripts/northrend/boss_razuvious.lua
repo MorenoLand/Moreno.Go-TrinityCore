@@ -29,10 +29,11 @@
 -- (nalorakk precedent) plus victim:GetEntry() for creatures.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_razuvious: JustEngagedWith Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith instance-bookkeeping leg, me->StopMoving,
--- summons.DoZoneInCombat (stays out — summons-container call, not a
--- plain me->DoZoneInCombat() JustEngagedWith arm; tharon_ja precedent
--- — 2026-10-23 re-evaluated against the live bridge);
+-- BossAI::JustEngagedWith me-form DoZoneInCombat PORTED
+-- (ScriptedCreature.cpp:542; heigan precedent — the 2026-10-23
+-- header claim lumped this into "instance-bookkeeping"); the
+-- instance SetBossState/CheckRequiredBosses legs and the
+-- summons-container DoZoneInCombat call stay out; me->StopMoving;
 -- KilledUnit Talk(SAY_SLAY 1) (event 3 — C++-GATED: Talk fires only
 -- when the victim is a player or a TYPEID_UNIT with entry
 -- NPC_DK_UNDERSTUDY 16803 — the nalorakk player-gate variant, extended
@@ -205,6 +206,7 @@ local function shoutTick(creature, guid)
 end
 
 local function razyviousEnterCombat(event, creature, target)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan precedent)
     creature:SetCombatMovement(false) -- Reset arm, boss_razuvious.cpp:169 (ranged AI stands and casts)
     creature:StopMoving() -- boss_razuvious.cpp:123 (the summons.DoZoneInCombat
     -- sibling at :124 stays out — summons-container call, 2026-10-23 re-eval)

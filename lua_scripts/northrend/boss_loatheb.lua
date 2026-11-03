@@ -12,8 +12,9 @@
 -- 21 OnSummonedCreatureDies, 23 OnReset. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go, like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith (event 1; BossAI::JustEngagedWith
--- instance-bookkeeping leg has no bridge — tharon_ja precedent) +
+-- JustEngagedWith (event 1; BossAI::JustEngagedWith me-form
+-- DoZoneInCombat PORTED, ScriptedCreature.cpp:542, heigan
+-- precedent; instance SetBossState/CheckRequiredBosses legs stay out) +
 -- EVENT_NECROTIC_AURA 17s + EVENT_DEATHBLOOM 5s + EVENT_SPORE 18s +
 -- EVENT_INEVITABLE_DOOM 2min; EVENT_NECROTIC_AURA DoCastAOE
 -- (NECROTIC_AURA 55593, non-triggered) lowered to self-cast
@@ -145,6 +146,7 @@ local function sporeTick(creature, guid)
 end
 
 local function loathebEnterCombat(event, creature)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan precedent)
     local guid = creature:GetGUID()
     doomCounter[guid] = 0
     schedule(guid, "necrotic", 17000, function()
