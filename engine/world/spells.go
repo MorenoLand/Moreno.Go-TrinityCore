@@ -17048,6 +17048,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// on the caster; Burn self-gates (unitTarget != m_caster) and
 				// the RP-GG pickup is creature-only, so both no-op on trips;
 				// Stoneclaw casts on the hit unit's totems, i.e. the caster's.
+				// Draw soul / flame burst trips run on the caster (self-heal /
+				// self-cast, the per-hit-target arms with hit unit = caster);
+				// judgement trips cast primer + judgement on the caster.
 				for range areaEnemyTrips(eff, reflectedAoETrips) {
 					s.handleEffectScriptEffect(effCtx, spellID, spell, eff, s.playerGUID)
 				}
@@ -49764,7 +49767,8 @@ func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, h
 // creature-cast twin in creatureEffectScriptEffect (boss_ai.go) also fire
 // on player casts: clear debuffs (34098), Gal'darah clear puncture
 // (60022), throw shield (69222), glittering sparks self-cast (71806),
-// remove empowered blood (70939). The remaining arms (Scarlet ghoul
+// remove empowered blood (70939), draw soul (40904), flame burst
+// (41126), council judgement (41467). The remaining arms (Scarlet ghoul
 // summons, Grab Crate vehicle, Coyote Spirit/Blood Parrot despawns) need
 // temp-summon / position-cast / vehicle models Go lacks, and the sSpellScripts
 // tail has no Go SpellScript bridge (documented).
@@ -50080,6 +50084,55 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		} else if tm := s.findCreatureMotion(targetGUID); tm != nil {
 			s.server.removeCreatureAura(creatureAuraKey{Map: tm.Map, InstanceID: tm.InstanceID, GUID: targetGUID}, 70227)
 		}
+	case 40904:
+		// spell_illidan_draw_soul (boss_illidan.cpp:1893-1912): EFFECT_1
+		// script effect — the hit unit casts Draw Soul Heal (40903) on
+		// the caster, triggered. The creature-cast twin lives in
+		// creatureEffectScriptEffect; this is the player-cast leg.
+		// Dead hit units cast nothing (the creature-side precedent:
+		// dead units are not AOE targets in C++).
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			if ts.isDeadOrGhost() {
+				return
+			}
+			ts.castSpellDirect(ctx, 40903, s.playerGUID)
+		} else if tm := s.findCreatureMotion(targetGUID); tm != nil {
+			if tm.Health == 0 {
+				return
+			}
+			s.server.castCreatureSpellInternal(ctx, tm, 40903, s.playerGUID, true)
+		}
+	case 41126:
+		// spell_illidan_flame_burst (boss_illidan.cpp:2168-2186): EFFECT_0
+		// script effect — the hit unit casts Flame Burst Effect (41131)
+		// on itself, triggered. Player-cast leg of the
+		// creatureEffectScriptEffect twin; dead hit units cast nothing.
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			if ts.isDeadOrGhost() {
+				return
+			}
+			ts.castSpellDirect(ctx, 41131, targetGUID)
+		} else if tm := s.findCreatureMotion(targetGUID); tm != nil {
+			if tm.Health == 0 {
+				return
+			}
+			s.server.castCreatureSpellInternal(ctx, tm, 41131, targetGUID, true)
+		}
+	case 41467:
+		// spell_illidari_council_judgement (boss_illidari_council.cpp:716-750):
+		// EFFECT_0 script effect — the caster casts Judgement Primer
+		// (41473) then the seal judgement on the hit unit, both
+		// triggered: Judgement of Blood (41461) while the caster holds
+		// Seal of Blood (41459), else Judgement of Command (41470).
+		// Player-cast leg of the creatureEffectScriptEffect twin; the
+		// AfterCast Talk fires only for a creature caster (the C++
+		// ToCreature gate), so no talk arm rides this leg.
+		s.castSpellDirect(ctx, 41473, targetGUID)
+		judgement := uint32(41470)
+		if s.hasAura(41459) {
+			judgement = 41461
+		}
+		s.castSpellDirect(ctx, judgement, targetGUID)
 	}
 }
 
