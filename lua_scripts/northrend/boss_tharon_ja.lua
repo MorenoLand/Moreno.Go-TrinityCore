@@ -307,10 +307,13 @@ goingSkeletalTick = function(creature, guid)
     schedulePhaseOne(creature, guid)
 end
 
--- C++ JustEngagedWith: Talk(SAY_AGGRO 0) (the BossAI::JustEngagedWith
--- leg is instance bookkeeping, no bridge) + phase-1 schedule.
+-- C++ JustEngagedWith: Talk(SAY_AGGRO 0) + BossAI base
+-- (SetCombatPulseDelay(5) + me-form DoZoneInCombat, ScriptedCreature.cpp:540/542;
+-- instance/setActive/ScheduleTasks legs out) + phase-1 schedule.
 local function tharonJaEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     local guid = creature:GetGUID()
     nativeDisplay[guid] = creature:GetDisplayId()
     cancelTimers(guid)

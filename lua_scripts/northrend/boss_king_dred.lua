@@ -181,6 +181,8 @@ end
 local function kingDredEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     schedule(guid, "raptorcall", {20000, 25000}, function()
         raptorCallTick(creature, guid)
     end)

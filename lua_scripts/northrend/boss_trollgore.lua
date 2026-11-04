@@ -191,6 +191,8 @@ end
 local function trollgoreEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "crush", math.random(1000, 5000), function()
         crushTick(creature, guid)

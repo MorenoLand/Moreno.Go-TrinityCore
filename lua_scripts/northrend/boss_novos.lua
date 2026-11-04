@@ -116,6 +116,8 @@ local function novosEnterCombat(event, creature, target)
     -- AttackStart (novos never moves); modeled engage-time via the
     -- SetCombatMovement bridge (per-tick gate — flag stays false all fight).
     creature:SetCombatMovement(false)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
 end
 
