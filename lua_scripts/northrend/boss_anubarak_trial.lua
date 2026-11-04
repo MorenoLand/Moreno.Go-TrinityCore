@@ -279,6 +279,8 @@ end
 -- start, phase-independent (never rescheduled or cancelled in
 -- C++; fires once).
 local function anubarakEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- boss_anubarak_trial.cpp:275 (BossAI base arm; setActive/instance legs have no bridge)
+    creature:DoZoneInCombat() -- boss_anubarak_trial.cpp:275 (BossAI base arm; subsumes the trailing explicit DoZoneInCombat leg, same me-form call)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith (boss_anubarak_trial.cpp:273-287):
     -- RemoveFlag(UNIT_FIELD_FLAGS, NON_ATTACKABLE | NOT_SELECTABLE)

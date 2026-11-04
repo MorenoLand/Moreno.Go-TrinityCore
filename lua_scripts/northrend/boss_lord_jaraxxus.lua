@@ -377,6 +377,8 @@ local function infernalTick(creature, guid)
 end
 
 local function jaraxxusEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- boss_lord_jaraxxus.cpp:135 (BossAI base arm; setActive/instance legs have no bridge)
+    creature:DoZoneInCombat() -- boss_lord_jaraxxus.cpp:135 (BossAI base arm)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
