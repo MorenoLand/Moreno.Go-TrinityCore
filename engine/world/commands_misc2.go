@@ -1801,11 +1801,14 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 }
 
 // handleCmdSummon mirrors HandleSummonCommand (cs_misc.cpp:486-599, RBAC
-// 528): teleport the target player to the GM. Documented fidelity gaps (not
-// stubs): the battleground gate has no Go bridge (no BG model), and the
-// GetClosePoint offset math is unmodeled — the target lands on the GM's
-// exact position. The instance gate below ports cs_misc.cpp:540-560; the
-// offline leg (Player::SavePositionInDB) is native via the characters table.
+// 528): teleport the target player to the GM's close point (Object.cpp:3307)
+// keeping the target's orientation, and set the target's phase to the GM's.
+// Documented fidelity gaps (not stubs): the battleground gate has no Go
+// bridge (no BG model), and the GetNearPoint LoS sweep and ground clamp
+// have none either, so the first close point stands. The instance gate
+// below ports cs_misc.cpp:540-560; the offline leg
+// (Player::SavePositionInDB) is native via the characters table except the
+// zone column (see commands_tele.go).
 func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -1826,6 +1829,10 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 		return
 	}
 	if target != nil && target.player != nil {
+		if target.isBeingTeleported() {
+			s.sendSysMessage(fmt.Sprintf(miscIsTeleported, miscPlayerLink(name)))
+			return
+		}
 		if s.isDungeonMap(s.player.Map) {
 			gmMapID, gmInstance := s.player.Map, s.player.InstanceID
 			targetMapID, targetInstance := target.player.Map, target.player.InstanceID
@@ -1847,8 +1854,19 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 			}
 		}
 		s.sendSysMessage(fmt.Sprintf(miscSummoning, miscPlayerLink(name), ""))
-		target.teleportTo(s.player.Map, s.player.X, s.player.Y, s.player.Z, target.player.Orientation)
 		target.sendSysMessage(fmt.Sprintf(miscSummonedBy, miscPlayerLink(s.player.Name)))
+		// C++ stops the GM's flight (not the target's) or saves the GM's
+		// recall position (cs_misc.cpp:570-574, mirrored as written).
+		if s.isInFlight() {
+			s.finishTaxiFlight()
+		} else {
+			s.saveRecallPosition()
+		}
+		cx, cy := miscClosePoint(s.player.X, s.player.Y, s.player.Orientation, miscPlayerCombatReach(s.player), miscPlayerCombatReach(target.player), 0)
+		gmPhase := s.currentPlayerPhaseMask()
+		if target.teleportTo(s.player.Map, cx, cy, s.player.Z, target.player.Orientation) {
+			miscSetPhaseMask(target, gmPhase)
+		}
 		return
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

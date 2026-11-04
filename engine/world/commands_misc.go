@@ -430,11 +430,13 @@ func (s *session) miscResolvePlayerTarget(ctx context.Context, args []string) (o
 
 // handleCmdAppear mirrors HandleAppearCommand (cs_misc.cpp:351-484, RBAC
 // 490): teleport to the target player. Online targets teleport to the
-// target's live position; offline targets load their saved DB position
-// (Player::LoadPositionFromDB). Documented fidelity gaps (not stubs): the
-// battleground/dungeon group and instance-bind gates have no Go bridge (no BG
-// model, no instance-save manager), and the GetClosePoint offset math is
-// unmodeled — the GM lands on the target's exact position.
+// target's close point (Object.cpp:3307) facing the target, and take the
+// target's phase mask; offline targets load their saved DB position
+// (Player::LoadPositionFromDB) keeping the invoker's orientation.
+// Documented fidelity gaps (not stubs): the battleground/dungeon group and
+// instance-bind gates have no Go bridge (no BG model, no instance-save
+// manager), and the GetNearPoint LoS sweep and ground clamp have none
+// either, so the first close point stands.
 func (s *session) handleCmdAppear(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -455,12 +457,18 @@ func (s *session) handleCmdAppear(ctx context.Context, args []string) {
 		return // C++ HasLowerSecurity: silent fail
 	}
 	s.sendSysMessage(fmt.Sprintf(miscAppearingAt, miscPlayerLink(name)))
-	if s.isInFlight() {
-		s.finishTaxiFlight()
-	}
 	if target != nil && target.player != nil {
 		p := target.player
-		s.goDoTeleport(ctx, p.Map, p.X, p.Y, p.Z, p.Orientation)
+		// C++ evaluates the facing before TeleportTo runs, so the
+		// absolute angle (Position.h) is from the GM's pre-teleport
+		// position toward the target.
+		facing := normalizeScriptAngle(float32(math.Atan2(float64(p.Y-s.player.Y), float64(p.X-s.player.X))))
+		targetPhase := target.currentPlayerPhaseMask()
+		cx, cy := miscClosePoint(p.X, p.Y, p.Orientation, miscPlayerCombatReach(p), miscPlayerCombatReach(s.player), 1)
+		// goDoTeleport carries the C++ flight-stop-or-recall branch.
+		if s.goDoTeleport(ctx, p.Map, cx, cy, p.Z, facing) {
+			miscSetPhaseMask(s, targetPhase)
+		}
 		return
 	}
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
@@ -471,12 +479,16 @@ func (s *session) handleCmdAppear(ctx context.Context, args []string) {
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM characters WHERE guid = ?", guid).Scan(&mapID, &x, &y, &z, &o); err != nil {
 		return
 	}
-	s.goDoTeleport(ctx, mapID, float32(x), float32(y), float32(z), float32(o))
+	// C++ keeps the invoker's orientation on the offline leg; the saved
+	// orientation is read only because LoadPositionFromDB fills it.
+	_ = o
+	s.goDoTeleport(ctx, mapID, float32(x), float32(y), float32(z), s.player.Orientation)
 }
 
 // handleCmdAura mirrors HandleAuraCommand (cs_misc.cpp:304-323, RBAC 491):
-// apply the spell as an aura on the selected player. Creature selections
-// report the missing unit bridge honestly.
+// apply the spell as an aura on the selected player, or on the invoker when
+// nothing is selected (getSelectedUnit falls back to self). Creature
+// selections have no Go unit bridge and keep the select message.
 func (s *session) handleCmdAura(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandAura) {
 		return
@@ -486,7 +498,7 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .aura <spellId>")
 		return
 	}
-	target := s.miscSelectedPlayerSession()
+	target := s.miscSelectedUnitPlayer()
 	if target == nil {
 		s.sendSysMessage(miscSelectCharOrCreat)
 		return
@@ -495,13 +507,15 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) {
 }
 
 // handleCmdUnAura mirrors HandleUnAuraCommand (cs_misc.cpp:325-349, RBAC
-// 529): remove a spell's auras — or all auras — from the selected player.
-// Creature selections report the missing unit bridge honestly.
+// 529): remove a spell's auras — or all auras — from the selected player,
+// or from the invoker when nothing is selected (getSelectedUnit falls back
+// to self). Creature selections have no Go unit bridge and keep the select
+// message.
 func (s *session) handleCmdUnAura(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandUnAura) {
 		return
 	}
-	target := s.miscSelectedPlayerSession()
+	target := s.miscSelectedUnitPlayer()
 	if target == nil {
 		s.sendSysMessage(miscSelectCharOrCreat)
 		return
@@ -527,6 +541,48 @@ func (s *session) miscSelectedPlayerSession() *session {
 		}
 	}
 	return nil
+}
+
+// miscSelectedUnitPlayer mirrors ChatHandler::getSelectedUnit (Chat.cpp:312):
+// the selected player, or the invoker when nothing is selected. A creature
+// selection has no Go player twin and reports nil (documented gap).
+func (s *session) miscSelectedUnitPlayer() *session {
+	if target := s.miscSelectedPlayerSession(); target != nil {
+		return target
+	}
+	if s.selection != 0 {
+		return nil
+	}
+	return s
+}
+
+// miscPlayerCombatReach mirrors inspectCombatReach (who.go): the stored
+// reach, defaulting to 1.5 when unset.
+func miscPlayerCombatReach(p *playerState) float32 {
+	return float32(inspectCombatReach(p))
+}
+
+// miscClosePoint mirrors WorldObject::GetClosePoint (Object.cpp:3307) with
+// a nil searcher: GetNearPoint2D adds the anchor's own combat reach to the
+// size+distance argument, along the anchor's orientation, at the anchor's Z.
+// The LoS sweep and UpdateAllowedPositionZ ground clamp inside GetNearPoint
+// have no Go bridge, so the first point stands.
+func miscClosePoint(anchorX, anchorY, anchorOrientation, anchorReach, size, distance float32) (float32, float32) {
+	dist := float64(anchorReach) + float64(size) + float64(distance)
+	return anchorX + float32(dist*math.Cos(float64(anchorOrientation))), anchorY + float32(dist*math.Sin(float64(anchorOrientation)))
+}
+
+// miscSetPhaseMask mirrors Player::SetPhaseMask(mask, true) through the
+// derived phase model: the .modify phase override slot is the stored-mask
+// twin (commands_modify3.go). Like C++, a mask already in effect is left
+// untouched, so a GM's anywhere mask survives appearing to a same-phase
+// target; the visibility fan-out has no bridge, as with .modify phase.
+func miscSetPhaseMask(target *session, mask uint32) {
+	if target == nil || target.player == nil || target.currentPlayerPhaseMask() == mask {
+		return
+	}
+	target.player.PhaseMaskOverride = mask
+	target.player.PhaseMaskOverrideSet = true
 }
 
 // miscParseSpellArg parses a spell id from a bare id or a |Hspell:id|
@@ -576,9 +632,10 @@ func (s *session) handleCmdBank(ctx context.Context, args []string) {
 }
 
 // handleCmdBindSight mirrors HandleBindSightCommand (cs_misc.cpp:2545-2553,
-// RBAC 493): the GM casts bind sight (6277) on the selected player. Creature
-// selections report the missing unit bridge honestly; the view-swap effect
-// follows the engine's aura model (documented gap).
+// RBAC 493): the GM casts bind sight (6277) on the selected player, or on
+// themself when nothing is selected (getSelectedUnit falls back to self).
+// Creature selections have no Go unit bridge and keep the select message;
+// the view-swap effect follows the engine's aura model (documented gap).
 func (s *session) handleCmdBindSight(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -587,7 +644,7 @@ func (s *session) handleCmdBindSight(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandBindSight) {
 		return
 	}
-	target := s.miscSelectedPlayerSession()
+	target := s.miscSelectedUnitPlayer()
 	if target == nil {
 		s.sendSysMessage(miscSelectCharOrCreat)
 		return
@@ -716,6 +773,14 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 		return
 	}
 	targetName := miscPlayerLink(target.player.Name)
+	// C++ names the owner link for the all-clear, but "you" for the
+	// single-spell and unknown-spell messages when the owner is the invoker
+	// (cs_misc.cpp:723-760); the no-selection fallback already made the
+	// invoker the target, so target == s is exactly that case.
+	reportName := targetName
+	if target == s {
+		reportName = miscYou
+	}
 	if len(args) == 0 {
 		target.clearPlayerCooldowns()
 		s.sendSysMessage(fmt.Sprintf(miscRemoveAllCooldown, targetName))
@@ -723,11 +788,11 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 	}
 	spellID, ok := miscParseSpellArg(ctx, s, args)
 	if !ok {
-		s.sendSysMessage(fmt.Sprintf(miscUnknownSpell, miscYou))
+		s.sendSysMessage(fmt.Sprintf(miscUnknownSpell, reportName))
 		return
 	}
 	target.clearPlayerCooldown(spellID)
-	s.sendSysMessage(fmt.Sprintf(miscRemoveCooldown, spellID, targetName))
+	s.sendSysMessage(fmt.Sprintf(miscRemoveCooldown, spellID, reportName))
 }
 
 // clearPlayerCooldowns mirrors SpellHistory::ResetAllCooldowns for the
@@ -936,6 +1001,13 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 	}
 	target := s.miscSelectedPlayerSession()
 	if target == nil || target.player == nil {
+		// C++ damages the selected creature too; the flat path here is
+		// player-only (no Unit::DealDamage bridge), so a creature
+		// selection gets the honest block instead of the no-target text.
+		if s.castCommandSelectedCreature() != nil {
+			s.sendSysMessage("Damaging creatures is unavailable: the Go tree has no Unit::DealDamage bridge.")
+			return
+		}
 		s.sendSysMessage(miscSelectCharOrCreat)
 		return
 	}

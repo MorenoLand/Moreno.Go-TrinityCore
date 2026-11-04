@@ -4585,8 +4585,8 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 			return
 		}
 	}
+	// C++ sends no success message here; the completion itself notifies.
 	target.completeAchievement(uint32(achievementID))
-	s.sendSysMessage(fmt.Sprintf("Achievement %d added.", achievementID))
 }
 
 // commandAllowed mirrors WorldSession::HasPermission (RBAC.h:828):

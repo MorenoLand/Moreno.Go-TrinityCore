@@ -601,7 +601,10 @@ func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
 		} else {
 			player.saveRecallPosition()
 		}
-		// GetClosePoint has no Go bridge: summon to the GM's position.
-		player.teleportTo(gmMapID, s.player.X+1, s.player.Y, s.player.Z, player.player.Orientation)
+		// WorldObject::GetClosePoint (Object.cpp:3307): the GM's reach plus
+		// the member's reach along the GM's orientation, at the GM's Z.
+		// C++ group summon sets no phase mask, unlike .summon.
+		cx, cy := miscClosePoint(s.player.X, s.player.Y, s.player.Orientation, miscPlayerCombatReach(s.player), miscPlayerCombatReach(player.player), 0)
+		player.teleportTo(gmMapID, cx, cy, s.player.Z, player.player.Orientation)
 	}
 }
