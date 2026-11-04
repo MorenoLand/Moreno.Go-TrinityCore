@@ -17016,6 +17016,17 @@ func init() {
 	// spell_pursuing_spikes, spell_impale, spell_anubarak_leeching_swarm —
 	// no SpellScript / AuraScript binding bridge (razelikh precedent).
 	RegisterLuaBoss("boss_anubarak_trial", 34564)
+	// npc_open_portal_target_toc (Trial of the Crusader): entry
+	// 17965 (trial_of_the_crusader.h NPC_WILFRED_PORTAL), ported
+	// in lua_scripts/northrend/npc_open_portal_target_toc.lua —
+	// Reset (passive + gravity + scheduler cancel) + SpellHit
+	// 67864 -> 2s -> self-cast 68424 + 9s despawn. The other
+	// trial_of_the_crusader.cpp classes stay documented-only:
+	// barrett / lich_king / tirion / fizzlebang / garrosh /
+	// varian ride instance boss-state, GetCreature/DoAction,
+	// spline MovementInform, or menuId-gated gossip legs with no
+	// bridges (2026-11-04 unmapped scan).
+	RegisterLuaBoss("npc_open_portal_target_toc", 17965)
 	// boss_lord_jaraxxus: Trial of the Crusader dungeon boss script,
 	// entry 34780 (trial_of_the_crusader.h NPC_JARAXXUS — kalecgos
 	// pass; instance_trial_of_the_crusader.cpp binds NPC_JARAXXUS ->
