@@ -16336,6 +16336,9 @@ func init() {
 	// Fireball 9053 (1s init, 8s repeat, victim-cast) + Frost Nova
 	// 11831 (DoCastAOE resolved to self-cast, {8s,12s} init, 15s
 	// repeat) + 60% Talk(6) (targeted-player Talk broadcasts);
+	// Fireball/Frost Nova CASTING gates PORTED as drops
+	// (razorfen_downs.cpp:238-247: post-ExecuteEvent return consumes
+	// the event — not the 500ms defer used for pre-loop gates);
 	// MovementInform/idol-ritual machine (SummonCreature NPC 8611,
 	// Talk 1-5 progress, GO summons, GroupEventHappens credit) and
 	// JustDied's instance SetBossState + 5s despawn have no bridges —

@@ -47,14 +47,14 @@
 -- - Fireball (EVENT_FIREBALL): DoCastVictim(SPELL_FIREBALL 9053),
 --   non-triggered (2-arg DoCastVictim); init 1s -> repeat 8s; gated on
 --   the quest-accept latch (C++ UpdateAI !eventInProgress early
---   return): frozen lines re-schedule without casting. Nil-victim keeps
---   the schedule — jeklik convention (C++ returns WITHOUT re-arming
---   when UNIT_STATE_CASTING or no victim, mal_ganis precedent,
---   documented deviation).
+--   return): frozen lines re-schedule without casting. CASTING/
+--   victimless gate PORTED as a drop (razorfen_downs.cpp:238-241,
+--   post-ExecuteEvent return consumes the event — NOT the 500ms
+--   defer used for pre-loop gates, where the event survives).
 -- - Frost Nova (EVENT_FROST_NOVA): DoCastAOE(SPELL_FROST_NOVA 11831)
 --   resolves to self-cast (kazrogal/illidan precedent), non-triggered;
---   init {8s,12s} -> repeat 15s; same quest-latch gate and
---   victimless/casting-gate deviation as Fireball.
+--   init {8s,12s} -> repeat 15s; same quest-latch gate; CASTING/
+--   victimless gate PORTED as a drop (razorfen_downs.cpp:244-247).
 -- - LeaveCombat (event 2): cancel timers (C++ UpdateAI early-return
 --   without victim never clears scheduled events, but the hyjal.lua
 --   convention clears timers on leave-combat; no timer re-arm
@@ -138,9 +138,12 @@ local function clearState(guid)
     state[guid] = nil
 end
 
--- C++ EVENT_FIREBALL: DoCastVictim(9053); re-arm 8s unconditional
--- (jeklik convention; C++ returns without re-arming when casting or
--- victimless — mal_ganis precedent, documented deviation).
+-- C++ EVENT_FIREBALL: DoCastVictim(9053); re-arm 8s. Gate is PORTED:
+-- razorfen_downs.cpp:238-241 checks HasUnitState(UNIT_STATE_CASTING)
+-- || !UpdateVictim() AFTER ExecuteEvent pops the event, so a gated
+-- fire returns WITHOUT re-arming and the event is LOST (unlike the
+-- mal_ganis/BossAI pre-loop gate, where the queued event survives and
+-- the 500ms defer preserves it). The drop below is C++-exact.
 local function onFireball(creature, guid)
     -- C++ UpdateAI never ticks events while !eventInProgress
     -- (razorfen_downs.cpp:154-157): the 1s initial stays frozen, so the
@@ -152,17 +155,25 @@ local function onFireball(creature, guid)
         end)
         return
     end
-    local victim = creature:GetVictim()
-    if victim then
-        creature:CastSpell(victim, SPELL_FIREBALL)
+    -- Post-ExecuteEvent gate (razorfen_downs.cpp:238-241): casting or
+    -- victimless -> return with NO re-arm; the event is consumed.
+    if creature:IsCasting() then
+        return
     end
+    local victim = creature:GetVictim()
+    if not victim then
+        return
+    end
+    creature:CastSpell(victim, SPELL_FIREBALL)
     schedule(guid, "fireball", 8000, function()
         onFireball(creature, guid)
     end)
 end
 
 -- C++ EVENT_FROST_NOVA: DoCastAOE(11831) -> self-cast (kazrogal/illidan
--- precedent); re-arm 15s unconditional, same blocked-gate deviation.
+-- precedent); re-arm 15s. Same post-ExecuteEvent gate as Fireball
+-- (razorfen_downs.cpp:244-247): casting or victimless -> drop, no
+-- re-arm; the self-cast still needs a live victim to fire at all.
 local function onFrostNova(creature, guid)
     -- Frozen leg: re-arm with the rolled {8s,12s} initial (see engage),
     -- not the 15s repeat — C++ fires the frozen initial 8-12s after the
@@ -172,6 +183,11 @@ local function onFrostNova(creature, guid)
             function()
                 onFrostNova(creature, guid)
             end)
+        return
+    end
+    -- Post-ExecuteEvent gate (razorfen_downs.cpp:244-247): casting or
+    -- victimless -> return with NO re-arm; the event is consumed.
+    if creature:IsCasting() or not creature:GetVictim() then
         return
     end
     creature:CastSpell(creature, SPELL_FROST_NOVA)
