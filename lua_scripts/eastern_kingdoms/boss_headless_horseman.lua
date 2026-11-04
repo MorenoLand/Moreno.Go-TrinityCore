@@ -54,6 +54,14 @@
 -- EVENT_RANDOM_LAUGH arm is ported as the
 -- onLaugh timer via creature:PlayDirectSound (SMSG_PLAY_SOUND); its
 -- head->AI()->DoZoneInCombat() leg hangs off the instance-script model.
+-- - UpdateAI CASTING gates PORTED for the body arms above
+--   (boss_headless_horseman.cpp:547/:606): cleave + laugh defer 500ms
+--   while creature:IsCasting(), no re-arm consumed. The head's own
+--   UpdateAI gates (boss_headless_horseman.cpp:297/:329) have no
+--   observable Lua effect: its only timer is the post-death
+--   raintreats one-shot, and a dead creature has no cast in flight.
+--   Pumpkin/bunny/sir-thomas arms carry no UpdateAI override in C++
+--   (ScriptedAI::UpdateAI is the empty base), so nothing gates there.
 -- Unmodeled (documented-only — no bridges on the Lua surface):
 -- - DamageTaken's phase-transition latch (damage negation + StartPhase's
 --   immune aura / REACT_PASSIVE / AttackStop / EVENT_START_NEXT_
@@ -186,7 +194,16 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ boss_headless_horseman::UpdateAI pre-loop + in-loop CASTING
+-- gates PORTED (boss_headless_horseman.cpp:547/:606): the arm defers
+-- 500ms while creature:IsCasting(), no re-arm consumed.
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            onCleave(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_HORSEMAN_CLEAVE)
@@ -199,7 +216,16 @@ local LAUGH_SOUNDS = { 11975, 11965, 11976 }
 -- C++ EVENT_RANDOM_LAUGH: DoPlaySoundToSet(me, random laugh) =
 -- creature:PlayDirectSound (SMSG_PLAY_SOUND); initial {30s,60s},
 -- re-arm {30s,60s} (C++-exact).
+-- CASTING gate PORTED as above: the sound event stays pending
+-- while a cast is in flight (C++ pre-loop return skips the whole
+-- iteration), so it defers 500ms instead of playing over a cast.
 local function onLaugh(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "laugh", 500, function()
+            onLaugh(creature, guid)
+        end)
+        return
+    end
     creature:PlayDirectSound(LAUGH_SOUNDS[math.random(3)])
     schedule(guid, "laugh", math.random(30000, 60000), function() onLaugh(creature, guid) end)
 end

@@ -14330,7 +14330,9 @@ func init() {
 	// DoActions, MovementInform flight path) has no bridges, so porting
 	// the negation alone would make the boss unkillable; the cleave
 	// therefore runs the phase-1 cadence flat (C++ re-arms at 16s/9s in
-	// phases 2/3, unmodeled). EVENT_RANDOM_LAUGH is ported via creature:PlayDirectSound
+	// phases 2/3, unmodeled). UpdateAI CASTING gates PORTED
+	// (boss_headless_horseman.cpp:547/:606): cleave + laugh defer 500ms
+	// while IsCasting. EVENT_RANDOM_LAUGH is ported via creature:PlayDirectSound
 	// (DoPlaySoundToSet); EVENT_CONFLAGRATE has no random-target bridge;
 	// EVENT_SUMMON_PUMPKIN is phase-pinned with no summon bridge; the
 	// instance GetCreature/SetData legs (DATA_HORSEMAN_HEAD,
@@ -14357,7 +14359,9 @@ func init() {
 	// thalnos/azshir damaged class, not the golemagg 704fb8e bug class):
 	// Talk(EMOTE_ENRAGE 4) + Talk(SAY_ENRAGE 2) + non-triggered
 	// self-cast frenzy 8269, modeled on the pre-damage hook (event 9)
-	// with a per-GUID once-guard cleared on 2/4/23. JustDied's 20x
+	// with a per-GUID once-guard cleared on 2/4/23. UpdateAI CASTING
+	// gates PORTED (BossAI::UpdateAI base gates, thalnos precedent):
+	// cleave + whirlwind defer 500ms while IsCasting. JustDied's 20x
 	// SummonCreature(NPC_SCARLET_TRAINEE 6575, timed-or-dead 10min
 	// around 1939.18/-431.58/17.09) and the npc_scarlet_trainee EscortAI
 	// (urand 1-6s start -> Start(true, true)) are documented-only — no
@@ -14390,10 +14394,11 @@ func init() {
 	// under a 30s per-GUID cooldown (C++ _healTimer Reset(0s) in Reset,
 	// so the first dip heals immediately), modeled on the pre-damage
 	// hook (event 9) with the per-GUID state cleared on 2/4/23; the
-	// !IsNonMeleeSpellCast(false) heal gate has no casting-state
-	// bridge. SetStandState(DEAD/STAND) (the secret-chamber corpse
-	// visual) is documented-only — no stand-state bridge (npc_barnes
-	// precedent); BossAI::JustEngagedWith and the
+	// !IsNonMeleeSpellCast(false) heal gate PORTED as a 500ms
+	// defer-while-casting (doan precedent); UpdateAI CASTING gates
+	// PORTED for all four timer arms. SetStandState(DEAD/STAND) (the secret-chamber corpse
+	// visual) is PORTED via creature:SetStandState (bridge at
+	// lua_creature_events.go:3721); BossAI::JustEngagedWith and the
 	// DATA_HIGH_INQUISITOR_FAIRBANKS bookkeeping have no
 	// instance-script bridge (luaBossAI shim). Entry 4542 has no NPC_
 	// constant in the C++ tree — RegisterScarletMonasteryCreatureAI

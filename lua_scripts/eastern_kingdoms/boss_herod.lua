@@ -33,8 +33,12 @@
 -- npc_scarlet_trainee EscortAI (urand 1-6s start timer ->
 -- Start(true, true)) stays documented-only — no EscortAI bridge
 -- (nightbane/npc_barnes precedent) — so summoned trainees idle.
--- The UpdateAI UNIT_STATE_CASTING queue gate has no UNIT_STATE
--- bridge — timers fire unconditionally (jeklik convention); the
+-- The UpdateAI UNIT_STATE_CASTING queue gate is PORTED — herod
+-- overrides no UpdateAI, so the gate is BossAI::UpdateAI's pre-loop
+-- + in-loop CASTING returns (ScriptedCreature.cpp:571-586, thalnos
+-- precedent): cleave + whirlwind defer 500ms while
+-- creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950), no re-arm consumed; the
 -- DamageTaken latch fires on the damage hook rather than the
 -- script's UpdateAI tick (timing documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
 -- herodEnterCombat; the DATA_HEROD encounter bookkeeping still
@@ -84,7 +88,15 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_CLEAVE: non-triggered DoCastVictim(15496); Repeat(12s).
+-- CASTING gate PORTED: the arm defers 500ms while
+-- creature:IsCasting(), no re-arm consumed.
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            onCleave(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -96,7 +108,15 @@ end
 
 -- C++ EVENT_WHIRLWIND: Talk(SAY_WHIRLWIND 1) + non-triggered
 -- DoCastVictim(8989); Repeat(30s) after a 60s first timer.
+-- CASTING gate PORTED as above; the defer precedes Talk because
+-- Talk is part of the event's execution (C++ ExecuteEvent order).
 local function onWhirlwind(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind", 500, function()
+            onWhirlwind(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     creature:Talk(SAY_WHIRLWIND)
     if victim then

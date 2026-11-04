@@ -46,9 +46,12 @@
 -- Reset(0s) in Reset means the heal is available on the first
 -- sub-25% dip, then locked for 30s — modeled by clearing the
 -- cooldown via a one-shot timer; per-GUID state is cleared on
--- 2/4/23). C++ also gates the heal on !IsNonMeleeSpellCast(false);
--- the Lua has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget), so the heal fires
--- unconditionally (UpdateAI UNIT_STATE_CASTING-gate precedent).
+-- 2/4/23). C++ also gates the heal on !IsNonMeleeSpellCast(false); that
+-- gate is PORTED as a 500ms defer-while-casting (doan bubble-check
+-- precedent, live creature:IsCasting() window) — the shield leg is
+-- ungated per C++. The four UpdateAI timer arms carry the
+-- boss_high_inquisitor_fairbanks.cpp:111/:117 pre-loop + in-loop
+-- CASTING gates, likewise as 500ms defers with no re-arm consumed.
 -- The latch is modeled on the pre-damage hook (event 9) rather than
 -- the DamageTaken call inside DealDamage (documented timing
 -- deviation — the engine hook is the only DamageTaken-visible leg).
@@ -140,6 +143,12 @@ end
 -- C++ EVENT_CURSE_BLOOD: non-triggered DoCastVictim(8282);
 -- Repeat(25s).
 local function onCurseBlood(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse", 500, function()
+            onCurseBlood(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CURSEOFBLOOD)
@@ -152,6 +161,12 @@ end
 -- C++ EVENT_DIPEL_MAGIC: DoCast(pick, 15090) where the pick is the
 -- custom selector; nil pick casts nothing. Repeat(30s) regardless.
 local function onDispelMagic(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "dispel", 500, function()
+            onDispelMagic(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 30, false)
     if target then
         creature:CastSpell(target, SPELL_DISPEL_MAGIC)
@@ -166,6 +181,12 @@ end
 -- casts nothing. Repeat(40s)
 -- regardless.
 local function onFear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function()
+            onFear(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 20, true)
     if target then
         creature:CastSpell(target, SPELL_FEAR)
@@ -183,6 +204,12 @@ end
 -- within 30 yd and not the victim, via the vorpil GetDistance idiom.
 -- No such target casts nothing. Repeat(30s).
 local function onSleep(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sleep", 500, function()
+            onSleep(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     local victimGUID = victim and victim:GetGUID() or 0
     for _, t in ipairs(creature:GetAITargets()) do
@@ -244,7 +271,38 @@ end
 -- strictly below 25%, self-cast power word: shield 11647 once per
 -- combat, then self-cast heal 12039 if the 30s heal cooldown has
 -- passed (C++ _healTimer starts reset(0s), so the first dip always
--- heals). The !IsNonMeleeSpellCast(false) gate has no bridge.
+-- heals). The !IsNonMeleeSpellCast(false) heal gate is PORTED via
+-- checkFairbanksHeal below (defer 500ms while casting; the shield
+-- leg is ungated per C++).
+
+-- Deferred heal-leg evaluation (C++ DamageTaken !IsNonMeleeSpellCast
+-- gate, doan checkBubbleLatch precedent): re-checks current health
+-- (the damage has landed by now), fires only while alive and still
+-- below 25%, and re-defers 500ms while still casting. The cooldown
+-- starts only on an actual heal cast.
+local function checkFairbanksHeal(creature, guid)
+    if healOnCooldown[guid] then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "healCheck", 500, function()
+            checkFairbanksHeal(creature, guid)
+        end)
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local health = creature:GetHealth()
+    if health > 0 and health < math.floor(maxHealth * 25 / 100) then
+        healOnCooldown[guid] = true
+        schedule(guid, "healCooldown", HEAL_COOLDOWN_MS, function()
+            healOnCooldown[guid] = nil
+        end)
+        creature:CastSpell(creature, SPELL_HEAL)
+    end
+end
 local function fairbanksDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local maxHealth = creature:GetMaxHealth()
@@ -259,11 +317,17 @@ local function fairbanksDamageTaken(event, creature, attacker, damage)
         creature:CastSpell(creature, SPELL_POWERWORDSHIELD)
     end
     if not healOnCooldown[guid] then
-        healOnCooldown[guid] = true
-        schedule(guid, "healCooldown", HEAL_COOLDOWN_MS, function()
-            healOnCooldown[guid] = nil
-        end)
-        creature:CastSpell(creature, SPELL_HEAL)
+        if creature:IsCasting() then
+            schedule(guid, "healCheck", 500, function()
+                checkFairbanksHeal(creature, guid)
+            end)
+        else
+            healOnCooldown[guid] = true
+            schedule(guid, "healCooldown", HEAL_COOLDOWN_MS, function()
+                healOnCooldown[guid] = nil
+            end)
+            creature:CastSpell(creature, SPELL_HEAL)
+        end
     end
 end
 
