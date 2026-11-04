@@ -131,6 +131,8 @@ local function onThrowAxe(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_warmaster_voone.cpp:58 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_warmaster_voone.cpp:58 base call first)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "snapkick", 8000, function() onSnapKick(creature, guid) end)

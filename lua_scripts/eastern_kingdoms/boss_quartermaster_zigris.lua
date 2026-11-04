@@ -79,6 +79,8 @@ local function onStunBomb(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_quartermaster_zigris.cpp:52 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_quartermaster_zigris.cpp:52 base call first)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "shoot", 1000, function() onShoot(creature, guid) end)

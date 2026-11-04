@@ -163,6 +163,8 @@ local function onBerserkerCharge(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_the_beast.cpp:150 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_the_beast.cpp:150 base call first)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "flamebreak", 12000, function() onFlameBreak(creature, guid) end)

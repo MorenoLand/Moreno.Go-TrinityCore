@@ -93,6 +93,8 @@ local function onStrike(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_urok_doomhowl.cpp:58 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_urok_doomhowl.cpp:58 base call first)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)

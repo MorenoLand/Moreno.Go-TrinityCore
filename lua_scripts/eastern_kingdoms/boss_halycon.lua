@@ -83,6 +83,8 @@ local function onThrash(creature)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_halycon.cpp:66 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_halycon.cpp:66 base call first)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "rend", {17000, 20000}, function() onRend(creature, guid) end)

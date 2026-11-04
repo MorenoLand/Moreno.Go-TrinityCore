@@ -95,6 +95,8 @@ local function onThunderclap(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_drakkisath.cpp:54 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_drakkisath.cpp:54 base call first)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "firenova", 6000, function() onFireNova(creature, guid) end)

@@ -113,6 +113,8 @@ local function onHex(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_shadow_hunter_voshgajin.cpp:58 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_shadow_hunter_voshgajin.cpp:58 base call first)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "curseofblood", 2000, function() onCurseOfBlood(creature, guid) end)

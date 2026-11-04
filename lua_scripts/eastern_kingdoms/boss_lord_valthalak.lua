@@ -116,6 +116,8 @@ local function onShadowBoltVolley(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_lord_valthalak.cpp:69 base call first)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_lord_valthalak.cpp:69 base call first)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     frenzy40[guid] = nil
