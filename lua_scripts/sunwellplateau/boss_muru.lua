@@ -162,6 +162,25 @@
 -- 2026-10-22) while the REACT_PASSIVE half stays out (would strand the fiend); the black-hole 15s despawn is ported; the entropius
 -- evade despawn-all arms stay unmodeled.
 
+-- Cast-state gates (2026-11-04): muru + entropius are BossAI, so
+-- their ScheduleTasks arms dispatch under the BossAI ctor scheduler
+-- validator (ScriptedCreature.cpp:493-496: abort while
+-- UNIT_STATE_CASTING, task stays queued) even though both override
+-- UpdateAI and pump scheduler.Update directly (zuramat precedent) --
+-- the muru 10s blood-elves / 10min enrage / 6s summon-entropius
+-- one-shots and the entropius 2s negative-energy one-shot / 15s
+-- darkness repeat all defer 500ms under their own keys via live
+-- creature:IsCasting() (lua_creature_events.go:1950), no re-arm
+-- consumed; the defer precedes the casts (and, for the 2s arm, the
+-- DoResetPortals strip). Hooks stay ungated per C++: muru
+-- JustEngagedWith casts, the DamageTaken rewrite/transition itself
+-- (only its 6s scheduled task is gated), entropius Reset cosmetic
+-- spawn. Portal / dark fiend / void sentinel / black hole are
+-- ScriptedAI with private _scheduler members and no validator --
+-- their UpdateAI pumps run ungated (zero HasUnitState hits in
+-- boss_muru.cpp), so the portal 6s summoner task, fiend 2s/3s
+-- arms, sentinel 45s void-blast repeat and black-hole visual/
+-- despawn chain stay ungated.
 local SPELL_OPEN_PORTAL_PERIODIC = 45994
 local SPELL_DARKNESS_PERIODIC = 45998
 local SPELL_NEGATIVE_ENERGY_PERIODIC = 46009
@@ -227,6 +246,34 @@ end
 -- C++ JustEngagedWith: triggered self-casts 45994/45998/46009;
 -- 10s one-shot triggered 46050 + 46041; 10min one-shot
 -- non-triggered enrage 26662.
+-- C++ ScheduleTasks one-shots dispatch under the BossAI ctor
+-- scheduler validator (ScriptedCreature.cpp:493-496), so both
+-- defer 500ms while casting, no re-arm consumed.
+local function muruBloodElves(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bloodelves", 500, function()
+            muruBloodElves(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_BLOOD_ELVES_SCRIPT, true)
+    creature:CastSpell(creature, SPELL_SUMMON_BLOOD_ELVES_PERIODIC, true)
+end
+
+local function muruEnrage(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function()
+            muruEnrage(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_ENRAGE)
+    local st = muruState[guid]
+    if st then
+        st.hasEnraged = true
+    end
+end
+
 local function muruEnterCombat(event, creature)
     creature:SetMeleeAttack(false) -- boss_muru.cpp:320: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- BossAI ctor arm, boss_muru.cpp:237 (ranged AI stands and casts)
@@ -239,15 +286,10 @@ local function muruEnterCombat(event, creature)
     creature:CastSpell(creature, SPELL_DARKNESS_PERIODIC, true)
     creature:CastSpell(creature, SPELL_NEGATIVE_ENERGY_PERIODIC, true)
     schedule(guid, "bloodelves", 10000, function()
-        creature:CastSpell(creature, SPELL_SUMMON_BLOOD_ELVES_SCRIPT, true)
-        creature:CastSpell(creature, SPELL_SUMMON_BLOOD_ELVES_PERIODIC, true)
+        muruBloodElves(creature, guid)
     end)
     schedule(guid, "enrage", 600000, function()
-        creature:CastSpell(creature, SPELL_ENRAGE)
-        local st = muruState[guid]
-        if st then
-            st.hasEnraged = true
-        end
+        muruEnrage(creature, guid)
     end)
 end
 
@@ -261,6 +303,19 @@ end
 -- is ported (muruJustSummoned, ev19); the EffectSummonType arm exists
 -- on the Go cast path (boss_ai.go creatureEffectSummonType, spellKnown
 -- + SummonProperties gates).
+-- C++ DamageTaken 6s task dispatches under the BossAI ctor
+-- scheduler validator (ScriptedCreature.cpp:493-496): the hook
+-- itself is ungated, only this scheduled task defers 500ms.
+local function muruSummonEntropius(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summonentropius", 500, function()
+            muruSummonEntropius(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_ENTROPIUS, true)
+end
+
 local function muruDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if health > 0 and damage >= health then
@@ -271,7 +326,7 @@ local function muruDamageTaken(event, creature, attacker, damage)
             creature:RemoveAllAuras()
             creature:CastSpell(creature, SPELL_OPEN_ALL_PORTALS, true)
             schedule(guid, "summonentropius", 6000, function()
-                creature:CastSpell(creature, SPELL_SUMMON_ENTROPIUS, true)
+                muruSummonEntropius(creature, guid)
             end)
         end
         return false, health - 1
@@ -330,6 +385,12 @@ RegisterCreatureEvent(ENTRY_MURU, 23, muruReset)
 -- creature-enumeration bridge" retracted — creature:
 -- GetCreaturesInGrid(entry, dist) is bridged (auriaya precedent).
 local function entropiusNegativeEnergy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "negativeenergy", 500, function()
+            entropiusNegativeEnergy(creature, guid)
+        end)
+        return
+    end
     for _, portal in ipairs(creature:GetCreaturesInGrid(ENTRY_PORTAL, 100)) do
         portal:RemoveAllAuras()
     end
@@ -337,6 +398,12 @@ local function entropiusNegativeEnergy(creature, guid)
 end
 
 local function entropiusDarkness(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "darkness", 500, function()
+            entropiusDarkness(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DARKNESS_E, true)
     creature:CastSpell(creature, SPELL_BLACKHOLE, true)
     schedule(guid, "darkness", 15000, function()
