@@ -45,19 +45,18 @@
 --    true) and DoCast(me, SPELL_TREE_FORM 34551, true)
 --    (TRIGGERED, C++-exact; self-cast convention), re-arm
 --    75000 (C++-exact). The DoCast(me, SPELL_SUMMON_FRAYER
---    34557, true) arm has no summon bridge (steamrigger
---    precedent) — the frayers never exist in this model, so
---    the cast itself is skipped and only the talk is
---    modeled. The IsNonMeleeSpellCast/InterruptNonMeleeSpells
+--    34557, true) arm is restored (spell-summon funnel fires
+--    ev19, which latches the frayer for the dead-frayer scan
+--    and the Reset despawn below). The IsNonMeleeSpellCast/InterruptNonMeleeSpells
 --    gate has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm fires
 --    unconditionally (netherspite precedent); the
 --    RemoveAllAuras arm is bridged (creature:RemoveAllAuras —
 --    this run); the MoveIdle() arm has no movement bridge
 --    (omor precedent).
 -- 2. Tree-form exit machine (only while !MoveFree): the
---    dead-frayer scan over the summons list is unreachable
---    (no summon bridge — the summons list is always empty),
---    so the only reachable exit is the forced arm — when
+--    dead-frayer scan over the ev19-latched summons list runs
+--    every pump tick (one dead frayer per tick, C++ break);
+--    the forced arm below is the fallback exit — when
 --    TreeForm - 30000 <= 1000, exit tree form (MoveFree =
 --    true; the summons.DespawnAll() is a no-op, the
 --    InterruptNonMeleeSpells arm is bridged (no-op twin; MoveChase still blocks), the
@@ -81,23 +80,23 @@
 --    engine-driven.
 -- OnTargetDied(3): Talk(SAY_KILL) (C++ talks
 -- unconditionally — no player gate, C++-exact). OnDied(4):
--- Talk(SAY_DEATH) + cleanup (the _JustDied arm is instance-
--- blocked). OnLeaveCombat(2)/OnReset(23): cancel the pump,
--- drop per-GUID state (the C++ Reset() observable remainder
--- — summons.DespawnAll() is a no-op without summons, the
--- Initialize() re-latch lands on OnEnterCombat, gargolmar
--- precedent; the _Reset arm is instance-blocked).
+-- Talk(SAY_DEATH) + cleanup (C++ JustDied never calls
+-- _JustDied, so frayers are NOT despawned on death). OnLeaveCombat(2)/OnReset(23): cancel the pump,
+-- drop per-GUID state + despawn latched frayers (the C++
+-- Reset() observable remainder — the Initialize() re-latch
+-- lands on OnEnterCombat, gargolmar precedent; the _Reset
+-- arm is instance-blocked).
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI
 -- shim (instance_the_botanica.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_HIGH_BOTANIST_
 -- FREYWINN = 1 bookkeeping in Reset/JustEngagedWith/JustDied
--- skipped); no summon bridge — the SPELL_SUMMON_FRAYER
--- 34557 frayer summons, the JustSummoned/SummonedCreature
--- Despawn tracking arms and the DeadAddsCount dead-frayer
--- scan arm unmodeled (steamrigger precedent) — the forced
--- TreeForm_Timer - 30000 exit is the only reachable exit
--- path; the tree-form entry/exit RemoveAllAuras arms are
+-- skipped); the SPELL_SUMMON_FRAYER 34557 cast, the
+-- JustSummoned latch and the DeadAddsCount dead-frayer scan
+-- arm are PORTED (ev19 + pump scan); SummonedCreatureDespawn
+-- list removal is approximated by the dead-scan removal plus
+-- the despawn-all list clear; the forced TreeForm_Timer -
+-- 30000 exit remains as the fallback path; the tree-form entry/exit RemoveAllAuras arms are
 -- bridged (creature:RemoveAllAuras — this run); no movement
 -- bridge — the
 -- tree-form MoveIdle() arm and the exit MoveChase(victim)
@@ -113,6 +112,7 @@
 
 local SPELL_TRANQUILITY = 34550
 local SPELL_TREE_FORM = 34551
+local SPELL_SUMMON_FRAYER = 34557
 local SPELL_PLANT_WHITE = 34759
 local SPELL_PLANT_GREEN = 34761
 local SPELL_PLANT_BLUE = 34762
@@ -124,6 +124,7 @@ local SAY_TREE = 2
 local SAY_DEATH = 4
 
 local ENTRY_FREYWINN = 17975
+local ENTRY_FRAYER = 19953
 
 local combatTimers = {}
 local combatStates = {}
@@ -136,10 +137,24 @@ local function cancelCombatPump(guid)
     end
 end
 
--- C++ Reset() (called on evade): summons.DespawnAll() is a
--- no-op without a summon bridge; the observable remainder —
--- the Initialize() re-latch — lands on OnEnterCombat
--- (gargolmar precedent).
+-- C++ JustSummoned (:100-103) latches NPC_FRAYER summons only;
+-- Reset (:88-91) summons.DespawnAll(); JustDied (:127-130) is
+-- Talk-only and never touches the list, so death does NOT despawn.
+local frayers = {}
+
+local function despawnFrayers(guid)
+    local list = frayers[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        frayers[guid] = nil
+    end
+end
+
+-- C++ Reset() (called on evade): summons.DespawnAll() ports
+-- via despawnFrayers; the Initialize() re-latch lands on
+-- OnEnterCombat (gargolmar precedent).
 local function fullReset(guid)
     cancelCombatPump(guid)
     combatStates[guid] = nil
@@ -176,9 +191,10 @@ local function combatTick(creature, guid)
     -- C++ arm.
     if st.treeForm <= 1000 then
         creature:Talk(SAY_TREE)
-        -- The DoCast(me, SPELL_SUMMON_FRAYER, true) arm has
-        -- no summon bridge — skipped (steamrigger
-        -- precedent); the tranquility / tree-form casts are
+        -- The DoCast(me, SPELL_SUMMON_FRAYER, true) arm is
+        -- restored (the spell-summon funnel fires ev19, which
+        -- latches the frayer below); the tranquility /
+        -- tree-form casts are
         -- TRIGGERED in the C++ (C++-exact) — bridged with the
         -- triggered flag. The IsNonMeleeSpellCast gate /
         -- InterruptNonMeleeSpells have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget),
@@ -186,6 +202,7 @@ local function combatTick(creature, guid)
         -- RemoveAllAuras arm is bridged this run (C++ arm
         -- order: strip before the casts).
         creature:RemoveAllAuras()
+        creature:CastSpell(creature, SPELL_SUMMON_FRAYER, true)
         creature:CastSpell(creature, SPELL_TRANQUILITY, true)
         creature:CastSpell(creature, SPELL_TREE_FORM, true)
         st.moveFree = false
@@ -200,9 +217,26 @@ local function combatTick(creature, guid)
     -- C++-exact for the reachable model. Exiting returns
     -- early, skipping the seedling arm (C++-exact).
     if not st.moveFree then
-        if st.treeForm - 30000 <= 1000 then
-            -- summons.DespawnAll() is a no-op; the
-            -- InterruptNonMeleeSpells / MoveChase arms have
+        -- C++ MoveCheck 500ms dead-frayer scan (:162-180), at the
+        -- 1s pump granularity: one dead latched frayer per tick
+        -- leaves the list and raises the count (C++ break).
+        local list = frayers[guid]
+        if list then
+            for frayerGuid, frayer in pairs(list) do
+                if frayer:IsDead() then
+                    list[frayerGuid] = nil
+                    st.deadAddsCount = st.deadAddsCount + 1
+                    break
+                end
+            end
+        end
+        if st.deadAddsCount < 3 and st.treeForm - 30000 <= 1000 then
+            st.deadAddsCount = 3
+        end
+        if st.deadAddsCount >= 3 then
+            despawnFrayers(guid)
+            st.deadAddsCount = 0
+            -- The InterruptNonMeleeSpells / MoveChase arms have
             -- no bridges — the observable remainder is
             -- RemoveAllAuras + MoveFree = true (C++ arm order).
             creature:RemoveAllAuras()
@@ -229,10 +263,15 @@ end
 RegisterCreatureEvent(ENTRY_FREYWINN, 1, function(_, creature)
     local guid = creature:GetGUID()
     cancelCombatPump(guid)
+    -- Fresh-AI latch reset (C++ respawn recreates the AI with an
+    -- empty summon list); the world objects themselves persist,
+    -- matching C++ where death never despawns them.
+    frayers[guid] = nil
     combatStates[guid] = {
         summonSeedling = 6000,
         treeForm = 30000,
         moveFree = true,
+        deadAddsCount = 0,
     }
     creature:Talk(SAY_AGGRO)
     combatTimers[guid] = CreateLuaEvent(function()
@@ -241,8 +280,10 @@ RegisterCreatureEvent(ENTRY_FREYWINN, 1, function(_, creature)
 end)
 
 -- C++ Reset() (called on evade): _Reset() is instance-
--- blocked; the observable remainder is fullReset.
+-- blocked; the observable remainder is despawnFrayers +
+-- fullReset.
 RegisterCreatureEvent(ENTRY_FREYWINN, 2, function(_, creature)
+    despawnFrayers(creature:GetGUID())
     fullReset(creature:GetGUID())
 end)
 
@@ -253,6 +294,8 @@ RegisterCreatureEvent(ENTRY_FREYWINN, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_FREYWINN, 4, function(_, creature)
+    -- C++ JustDied is Talk-only: latched frayers are NOT despawned
+    -- on death (only Reset despawns them).
     creature:Talk(SAY_DEATH)
     fullReset(creature:GetGUID())
 end)
@@ -260,5 +303,20 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() re-latch as the evade hook.
 RegisterCreatureEvent(ENTRY_FREYWINN, 23, function(_, creature)
+    despawnFrayers(creature:GetGUID())
     fullReset(creature:GetGUID())
+end)
+
+-- C++ JustSummoned (:100-103): latch NPC_FRAYER summons only.
+RegisterCreatureEvent(ENTRY_FREYWINN, 19, function(_, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_FRAYER then
+        return
+    end
+    local guid = creature:GetGUID()
+    local list = frayers[guid]
+    if not list then
+        list = {}
+        frayers[guid] = list
+    end
+    list[summoned:GetGUID()] = summoned
 end)

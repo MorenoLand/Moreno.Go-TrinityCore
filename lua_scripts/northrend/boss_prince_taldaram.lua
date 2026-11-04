@@ -47,19 +47,17 @@
 -- the RemovePrison SetDisableGravity(false) (:286) ports with
 -- removePrison below; only MoveLand and the platform GO leg stay out.
 -- npc_prince_taldaram_flame_sphere (30106 / 31686 / 31687 — entries
--- verifiable from the file enums, kalecgos pass) — ENTRY-VERIFIABLE BUT
--- BRIDGE-BLOCKED, zero registration: Reset DoCastSelf triggered (Flame
--- Sphere Spawn Effect 55891 + Flame Sphere Visual 55928) is
--- port-pattern-ready (event 23 OnReset + DoCastSelf triggered — moorabi
--- precedent), but the whole functional AI is behind absent bridges —
--- SetGUID(_flameSphereTargetGUID) from the boss JustSummoned leg has no
--- cross-AI bridge, EVENT_START_MOVE's ObjectAccessor::GetUnit target
--- lookup + GetAbsoluteAngle MovePoint choreography has no motion-master
--- bridge; EVENT_DESPAWN's DespawnOrUnsummon leg is bridged
+-- verifiable from the file enums, kalecgos pass) — PORTED via the boss
+-- ev19 handler below (Reset casts + 3s move + 13s despawn, with the
+-- SetGUID target stored per sphere); the whole functional AI ports —
+-- SetGUID(_flameSphereTargetGUID) from the boss JustSummoned leg ports
+-- via the ev19-stored target (flameSphereTarget, set at conjure-cast
+-- time like C++); EVENT_START_MOVE's target lookup + GetAbsoluteAngle
+-- MovePoint choreography ports via GetAngle + MoveTo (straight-line
+-- spline, no PathGenerator — documented delta); EVENT_DESPAWN's
+-- DespawnOrUnsummon leg is bridged
 -- (creature:Despawn(), engine/world/lua_creature_events.go:236 — the old
--- "no despawn bridge (terestian precedent)" claim is stale) — registering
--- the two cosmetic casts alone would still leave the creature motionless
--- (the motion-master blocker stands), failing the faithful-port bar.
+-- "no despawn bridge (terestian precedent)" claim is stale).
 -- go_prince_taldaram_sphere (193093 / 193094 Ancient Nerubian Device)
 -- — PORTED (RegisterGameObjectGossipEvent, kirtonos-brazier
 -- precedent): boss-alive gate via go:FindNearestCreature(29308, 100)
@@ -98,6 +96,12 @@ local SPELL_VANISH               = 55964
 local SPELL_SHADOWSTEP           = 55966
 local SPELL_EMBRACE_OF_THE_VAMPYR = 55959
 local SPELL_BEAM_VISUAL = 60342 -- boss_prince_taldaram.cpp:50
+local SPELL_FLAME_SPHERE_SPAWN_EFFECT = 55891 -- boss_prince_taldaram.cpp:38
+local SPELL_FLAME_SPHERE_VISUAL = 55928 -- boss_prince_taldaram.cpp:39
+local SPELL_FLAME_SPHERE_PERIODIC = 55926 -- boss_prince_taldaram.cpp:40
+local SPELL_FLAME_SPHERE_DEATH_EFFECT = 55947 -- boss_prince_taldaram.cpp:41
+local DATA_SPHERE_DISTANCE = 25.0 -- boss_prince_taldaram.cpp:61
+local DATA_SPHERE_ANGLE_OFFSET = math.pi / 2 -- boss_prince_taldaram.cpp:62
 local SPELL_HOVER_FALL = 60425 -- boss_prince_taldaram.cpp:51
 local DATA_SPHERE_1 = 5 -- ahnkahet.h:38
 local DATA_SPHERE_2 = 6 -- ahnkahet.h:39
@@ -125,10 +129,14 @@ local timers = {}
 -- feeds per C++ (it is never reset outside Reset).
 local embraceTarget = {}
 local embraceDamage = {}
+local flameSphereTarget = {}
 
 local function clearEmbrace(guid)
     embraceTarget[guid] = nil
     embraceDamage[guid] = nil
+    -- C++ Reset clears _flameSphereTargetGUID too; leave/died
+    -- clear it here as well (the next conjure re-latches it).
+    flameSphereTarget[guid] = nil
 end
 
 -- C++ JustSummoned (:123-141) calls BossAI::JustSummoned, latching
@@ -137,10 +145,28 @@ end
 -- and JustDied (_JustDied) both summons.DespawnAll().
 local flameSpheres = {}
 
+-- C++ JustSummoned SetGUID leg (:123-141): the sphere AI stores
+-- _flameSphereTargetGUID for its 3s move; sphereTimers holds the
+-- move/death events so died/reset/leave cancel them with the list.
+local sphereTargets = {}
+local sphereTimers = {}
+
+local function cancelSphereTimers(sphereGuid)
+    local ids = sphereTimers[sphereGuid]
+    if ids then
+        for _, id in pairs(ids) do
+            RemoveEventById(id)
+        end
+        sphereTimers[sphereGuid] = nil
+    end
+end
+
 local function despawnFlameSpheres(guid)
     local list = flameSpheres[guid]
     if list then
-        for _, summon in pairs(list) do
+        for sphereGuid, summon in pairs(list) do
+            cancelSphereTimers(sphereGuid)
+            sphereTargets[sphereGuid] = nil
             summon:Despawn()
         end
         flameSpheres[guid] = nil
@@ -181,6 +207,10 @@ end
 local function conjureTick(creature, guid)
     local victim = creature:GetVictim()
     if victim then
+        -- C++ EVENT_CONJURE_FLAME_SPHERES (:182-189): the target
+        -- GUID is latched BEFORE the cast, so JustSummoned can
+        -- hand it to the spheres as they spawn.
+        flameSphereTarget[guid] = victim
         creature:CastSpell(victim, SPELL_CONJURE_FLAME_SPHERE)
     end
     schedule(guid, "conjure", 15000, function()
@@ -394,6 +424,42 @@ RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 19, function(_, creature, summoned)
         flameSpheres[guid] = list
     end
     list[summoned:GetGUID()] = summoned
+    -- C++ sphere Reset (:312-321): triggered spawn-effect +
+    -- visual casts, then EVENT_START_MOVE (3s) + EVENT_DESPAWN
+    -- (13s). The SetGUID leg lands here as the stored target.
+    summoned:CastSpell(summoned, SPELL_FLAME_SPHERE_SPAWN_EFFECT, true)
+    summoned:CastSpell(summoned, SPELL_FLAME_SPHERE_VISUAL, true)
+    local sphereGuid = summoned:GetGUID()
+    sphereTargets[sphereGuid] = flameSphereTarget[guid]
+    local offset = 0
+    if entry == NPC_FLAME_SPHERE_2 then
+        offset = DATA_SPHERE_ANGLE_OFFSET
+    elseif entry == NPC_FLAME_SPHERE_3 then
+        offset = -DATA_SPHERE_ANGLE_OFFSET
+    end
+    local ids = {}
+    ids[1] = CreateLuaEvent(function()
+        -- C++ EVENT_START_MOVE (:335-382): periodic cast first,
+        -- then the move is target-gated (no target = no move).
+        summoned:CastSpell(summoned, SPELL_FLAME_SPHERE_PERIODIC, true)
+        local target = sphereTargets[sphereGuid]
+        if target then
+            local angle = summoned:GetAngle(target) + offset
+            summoned:MoveTo(0,
+                summoned:GetX() + DATA_SPHERE_DISTANCE * math.cos(angle),
+                summoned:GetY() + DATA_SPHERE_DISTANCE * math.sin(angle),
+                summoned:GetZ())
+        end
+    end, 3000)
+    ids[2] = CreateLuaEvent(function()
+        -- C++ EVENT_DESPAWN (:383-386): death-effect cast, then
+        -- DespawnOrUnsummon(1s).
+        summoned:CastSpell(summoned, SPELL_FLAME_SPHERE_DEATH_EFFECT, true)
+        CreateLuaEvent(function()
+            summoned:Despawn()
+        end, 1000)
+    end, 13000)
+    sphereTimers[sphereGuid] = ids
 end)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 2, taldaramLeaveCombat)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 3, taldaramTargetDied)

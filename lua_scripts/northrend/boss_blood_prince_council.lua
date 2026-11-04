@@ -173,8 +173,11 @@
 -- (:835); seed {15000,20000}ms (:764) — PORTED this tick
 -- (shockVortexTick, below) with the same tank-excluding pool.
 -- keleseth/taldaram/valanar JustSummoned (:634-642, :697-710,
--- :770-789) — summon reposition / random-target summon + chase /
--- movement-and-cast machines — no bridge, out.
+-- :770-789) — PARTLY PORTED via the ev19 handlers: keleseth
+-- teleport (open-space exact), taldaram random-target pick +
+-- emote + SetGUID store (ball chase DoAction out), valanar
+-- bomb-target react/cast + vortex dummy/periodic casts (bomb
+-- MovePoint ground-Z + DoZoneInCombat(summon) out).
 -- npc_blood_queen_lana_thel — Talk(SAY_INTRO_1 0) rides
 -- ACTION_START_INTRO (:866-880, no-DoAction bridge);
 -- Talk(SAY_INTRO_2 1) rides EVENT_INTRO_1 (:896-905, intro scheduler
@@ -183,7 +186,8 @@
 -- lines; Reset one-shot aura casts (:919-924, :987-988, :1047) are
 -- aura/visual setup, not timer arms; the explode/despawn/chase legs
 -- ride movement informs and scheduler DoActions — no bridge, NOT
--- registered.
+-- registered (their JustSummoned legs port via the boss ev19
+-- handlers above, not via AI registration).
 -- UpdateAI UNIT_STATE_CASTING gates (:366/:401, :651/:675,
 -- :807/:844) — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget); timers fire unconditionally
 -- (the maiden precedent).
@@ -215,6 +219,11 @@ local ENTRY_KINETIC_BOMB = 38454 -- icecrown_citadel.h:254 (NPC_KINETIC_BOMB)
 local ENTRY_KINETIC_BOMB_TARGET = 38458 -- icecrown_citadel.h:253 (NPC_KINETIC_BOMB_TARGET)
 local ENTRY_SHOCK_VORTEX = 38422 -- icecrown_citadel.h:255 (NPC_SHOCK_VORTEX)
 local ENTRY_BALL_OF_INFERNO_FLAME = 38451 -- icecrown_citadel.h:251 (NPC_BALL_OF_INFERNO_FLAME)
+local SPELL_KINETIC_BOMB = 72080 -- boss_blood_prince_council.cpp:107
+local SPELL_SHOCK_VORTEX_DUMMY = 72633 -- boss_blood_prince_council.cpp:120
+local SPELL_SHOCK_VORTEX_PERIODIC = 71945 -- boss_blood_prince_council.cpp:119
+local EMOTE_TALDARAM_FLAME = 3 -- boss_blood_prince_council.cpp:51
+local REACT_PASSIVE = 0
 
 -- C++ BloodPrincesBossAI::JustDied (:466-469) + Reset (:443-446):
 -- summons.DespawnAll(); Valanar's JustSummoned (:770-800) latches
@@ -228,10 +237,21 @@ local ENTRY_BALL_OF_INFERNO_FLAME = 38451 -- icecrown_citadel.h:251 (NPC_BALL_OF
 -- leave handlers despawn them.
 local valanarSummons = {}
 
+local vortexTimers = {}
+
+local function cancelVortexTimer(vortexGuid)
+    local id = vortexTimers[vortexGuid]
+    if id then
+        RemoveEventById(id)
+        vortexTimers[vortexGuid] = nil
+    end
+end
+
 local function despawnValanarSummons(guid)
     local list = valanarSummons[guid]
     if list then
-        for _, summon in pairs(list) do
+        for summonGuid, summon in pairs(list) do
+            cancelVortexTimer(summonGuid)
             summon:Despawn()
         end
         valanarSummons[guid] = nil
@@ -252,12 +272,19 @@ end
 
 local taldaramSummons = {}
 
+-- C++ ICC taldaram JustSummoned SetGUID leg (:697-710): the ball AI
+-- stores the target for its DoAction chase (aura-removal leg,
+-- unbridged) — the stored target ports here; the Talk emote is the
+-- observable leg. Cleared with the despawn list.
+local ballTargets = {}
+
 local function despawnTaldaramSummons(guid)
     local list = taldaramSummons[guid]
     if list then
         for _, summon in pairs(list) do
             summon:Despawn()
         end
+        ballTargets[guid] = nil
         taldaramSummons[guid] = nil
     end
 end
@@ -653,10 +680,27 @@ end
 -- UNIT_FLAG_NOT_SELECTABLE) leg fires IMMEDIATELY after the MovePoint
 -- call in the same handler — not arrival-gated — so it ports here.
 local function valanarJustSummoned(_, creature, summoned)
+    local entry = summoned:GetEntry()
+    if entry == ENTRY_KINETIC_BOMB_TARGET then
+        -- C++ JustSummoned NPC_KINETIC_BOMB_TARGET case (:774-777):
+        -- passive react + self-cast of SPELL_KINETIC_BOMB. The C++
+        -- cast credits valanar as original caster (3rd arg is the
+        -- caster GUID); Lua CastSpell has no caster-credit arg, so
+        -- the cast credits the target itself — documented delta.
+        summoned:SetReactState(REACT_PASSIVE)
+        summoned:CastSpell(summoned, SPELL_KINETIC_BOMB)
+    elseif entry == ENTRY_SHOCK_VORTEX then
+        -- C++ JustSummoned NPC_SHOCK_VORTEX case (:786-789):
+        -- triggered dummy self-cast + VortexEvent at 5s (periodic
+        -- self-cast, :198-202).
+        summoned:CastSpell(summoned, SPELL_SHOCK_VORTEX_DUMMY, true)
+        vortexTimers[summoned:GetGUID()] = CreateLuaEvent(function()
+            summoned:CastSpell(summoned, SPELL_SHOCK_VORTEX_PERIODIC, true)
+        end, 5000)
+    end
     if summoned:GetEntry() == ENTRY_KINETIC_BOMB then
         summoned:RemoveFlag(59, 0x02000000) -- UNIT_FLAG_NOT_SELECTABLE
     end
-    local entry = summoned:GetEntry()
     if entry == ENTRY_KINETIC_BOMB_TARGET or entry == ENTRY_KINETIC_BOMB or entry == ENTRY_SHOCK_VORTEX then
         local guid = creature:GetGUID()
         local list = valanarSummons[guid]
@@ -668,6 +712,36 @@ local function valanarJustSummoned(_, creature, summoned)
     end
 end
 
+-- C++ ICC taldaram JustSummoned target pick (:699-701):
+-- SelectTarget(Random, 1, -10.0f, true), fallback Random, 0, 0.0f.
+-- UnitAI.cpp DefaultTargetSelector: a negative dist excludes
+-- targets within combat range of that distance (vanishTick idiom:
+-- GetDistance - GetCombatReach() - 1.5); position is ignored for
+-- Random. withTank defaults true, so the victim stays eligible.
+-- Alive filter follows the vanishTick precedent (GetAITargets may
+-- list dead players; C++ has no alive gate — documented delta).
+local function randomBallTarget(creature)
+    local targets = creature:GetAITargets()
+    local reach = creature:GetCombatReach()
+    local far = {}
+    local any = {}
+    for _, t in ipairs(targets) do
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            any[#any + 1] = t
+            if creature:GetDistance(t) - reach - 1.5 >= 10 then
+                far[#far + 1] = t
+            end
+        end
+    end
+    if #far > 0 then
+        return far[math.random(#far)]
+    end
+    if #any > 0 then
+        return any[math.random(#any)]
+    end
+    return nil
+end
+
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
 RegisterCreatureEvent(ENTRY_TALDARAM, 1, taldaramEnterCombat)
 RegisterCreatureEvent(ENTRY_VALANAR, 1, valanarEnterCombat)
@@ -676,6 +750,19 @@ RegisterCreatureEvent(ENTRY_KELESETH, 19, function(_, creature, summoned)
     if summoned:GetEntry() ~= ENTRY_DARK_NUCLEUS then
         return
     end
+    -- C++ ICC keleseth JustSummoned (:634-642): MovePositionToFirstCollision
+    -- from the boss position along the boss->summon angle for the
+    -- boss->summon distance, then NearTeleportTo. No collision-query
+    -- bridge, so the open-space result ports: the computed point is
+    -- the summon's own position (a wall would only shorten it).
+    -- Orientation arg omitted (defaults to the summon's facing,
+    -- C++-exact). SetTempSummonType(CORPSE_DESPAWN) stays out.
+    local dx = summoned:GetX() - creature:GetX()
+    local dy = summoned:GetY() - creature:GetY()
+    local dist = math.sqrt(dx * dx + dy * dy)
+    local angle = math.atan2(dy, dx)
+    summoned:NearTeleport(creature:GetX() + dist * math.cos(angle),
+        creature:GetY() + dist * math.sin(angle), summoned:GetZ())
     local guid = creature:GetGUID()
     local list = kelesethSummons[guid]
     if not list then
@@ -695,6 +782,20 @@ RegisterCreatureEvent(ENTRY_TALDARAM, 19, function(_, creature, summoned)
         taldaramSummons[guid] = list
     end
     list[summoned:GetGUID()] = summoned
+    -- C++ JustSummoned (:697-710): random-target pick + Talk emote
+    -- + SetGUID, in that order (latch above is the summons.Summon
+    -- leg). The ball chase itself rides the aura-removal DoAction
+    -- leg (unbridged) and stays out.
+    local target = randomBallTarget(creature)
+    if target then
+        creature:Talk(EMOTE_TALDARAM_FLAME, target)
+        local per = ballTargets[guid]
+        if not per then
+            per = {}
+            ballTargets[guid] = per
+        end
+        per[summoned:GetGUID()] = target
+    end
 end)
 
 RegisterCreatureEvent(ENTRY_KELESETH, 2, princesLeaveCombat)
