@@ -29,12 +29,13 @@
 -- 46146, DoCastSelf SPELL_AHUNES_SHIELD 45954 (C++-exact arm
 -- order) + 1s scheduler pump (a port of ExecuteEvent — 1s
 -- granularity is exact for the 3s synch timer). Pump:
--- EVENT_SYNCH_HEALTH 46430 3s re-arm 3s — timer bookkeeping
--- only: the whole fire arm is instance->GetCreature(DATA_
--- FROZEN_CORE) cross-creature gated (DoCast(frozenCore,
--- SPELL_SYNCH_HEALTH, true), else DoCastSelf(SPELL_SUICIDE)),
--- and no cross-creature bridge exists (kalithresh rage
--- precedent). OnDied(4): cleanup (the achievement
+-- EVENT_SYNCH_HEALTH 46430 3s re-arm 3s — the fire arm is
+-- ported in bossTick: FindNearestCreature(25865, 100.0)
+-- approximates the instance->GetCreature(DATA_FROZEN_CORE)
+-- lookup, and the 46430 script leg (hit health = caster
+-- health) is modeled directly via SetHealth. The suicide
+-- fallback when the core is absent has no equivalent.
+-- OnDied(4): cleanup (the achievement
 -- DoCastSpellOnPlayers 62043, the cross-creature Unit::Kill
 -- of ahuneBunny/frozenCore, the LFG FinishDungeon arm and the
 -- _JustDied arm are instance/cross-creature blocked).
@@ -100,6 +101,7 @@ local SPELL_AHUNE_SPANKY_HANDS = 46146
 local SPELL_AHUNES_SHIELD = 45954
 
 local ENTRY_AHUNE = 25740
+local ENTRY_FROZEN_CORE = 25865
 
 local timers = {}
 local states = {}
@@ -130,14 +132,22 @@ local function bossTick(creature, guid)
         return
     end
 
-    -- EVENT_SYNCH_HEALTH: 3s init, re-arm 3s — timer
-    -- bookkeeping only: the fire arm is instance->GetCreature
-    -- (DATA_FROZEN_CORE) cross-creature gated (DoCast
-    -- (frozenCore, 46430, true), else DoCastSelf(45254)), no
-    -- instance-DATA creature lookup / DoAction bridge (grid lookup by
-    -- entry exists, but the synch effect itself is SpellScript-gated).
+    -- EVENT_SYNCH_HEALTH: 3s init, re-arm 3s — the fire arm
+    -- casts 46430 on the frozen core (boss_ahune.cpp:234-236,
+    -- 628-637: script sets the hit unit's health to the
+    -- caster's health). With no SpellScript bridge the leg is
+    -- modeled directly: FindNearestCreature(25865, 100.0)
+    -- (illidan maiev precedent — the grid lookup approximates
+    -- the C++ instance-GUID lookup) + SetHealth to Ahune's
+    -- current health. The C++ suicide fallback when the core
+    -- is absent has no equivalent; the reverse core->Ahune
+    -- leg needs a pump in npc_frozen_core.lua, not this item.
     if st.synchHealth <= 1000 then
         st.synchHealth = 3000
+        local core = creature:FindNearestCreature(ENTRY_FROZEN_CORE, 100.0)
+        if core then
+            core:SetHealth(creature:GetHealth())
+        end
     else
         st.synchHealth = st.synchHealth - 1000
     end

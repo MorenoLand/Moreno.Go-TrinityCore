@@ -58,11 +58,11 @@
 -- and the post-switch cast-state re-check have no cast-state
 -- bridge — the arms fire unconditionally (zereketh /
 -- gyrokill precedent).
--- The two SpellScript classes in the file
+-- The polarity-charge SpellScript class in the file
 -- (spell_capacitus_polarity_charge 39088-39093 stack
--- machine, spell_capacitus_polarity_shift 39088/39091
--- dummy 50% roll) join the no-SpellScript-bridge queue —
--- documented only.
+-- machine) joins the no-SpellScript-bridge queue —
+-- documented only; the polarity-shift dummy (39088/39091
+-- 50% roll) is ported in the polarity timer arm below.
 -- OnDied(4): Talk(YELL_DEATH) (C++-exact); the BossAI
 -- _JustDied arm is instance-blocked, unmodeled.
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared
@@ -73,6 +73,8 @@ local SPELL_HEADCRACK = 35161
 local SPELL_REFLECTIVE_DAMAGE_SHIELD = 35159
 local SPELL_REFLECTIVE_MAGIC_SHIELD = 35158
 local SPELL_POLARITY_SHIFT = 39096
+local SPELL_POSITIVE_POLARITY = 39088
+local SPELL_NEGATIVE_POLARITY = 39091
 local SPELL_BERSERK = 26662
 
 local SUMMON_SPELLS = { 35153, 35904, 35905, 35906 }
@@ -161,10 +163,21 @@ local function bossTick(creature, guid)
     -- Polarity Shift 39096 (heroic only — the C++ IsHeroic()
     -- engage gate, bridgeable): 15s init then
     -- randtime(45-60s) — non-triggered DoCastAOE self-cast
-    -- (C++-exact).
+    -- (C++-exact). The shift SpellScript
+    -- (boss_mechano_lord_capacitus.cpp:238-264) casts positive
+    -- polarity 39088 / negative polarity 39091 50/50 on each hit
+    -- unit, self-cast with caster GUID = Capacitus; with no
+    -- SpellScript bridge the arm is modeled as a per-player loop
+    -- over the threat list (threat list approximates the DoCastAOE
+    -- area), each player receiving 39088 or 39091 non-triggered
+    -- (the C++ cast carries the caster GUID, not a triggered flag).
     if st.polarityShift then
         if st.polarityShift <= 1000 then
-            creature:CastSpell(creature, SPELL_POLARITY_SHIFT)
+            for _, unit in ipairs(creature:GetAITargets()) do
+                if unit:GetObjectType() == "Player" and not unit:IsDead() then
+                    creature:CastSpell(unit, math.random() < 0.5 and SPELL_POSITIVE_POLARITY or SPELL_NEGATIVE_POLARITY)
+                end
+            end
             st.polarityShift = math.random(45000, 60000)
         else
             st.polarityShift = st.polarityShift - 1000

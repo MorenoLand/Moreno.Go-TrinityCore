@@ -87,7 +87,10 @@
 -- the DoCastSelf(SPELL_TWILIGHT_PHASING 74808) leg at :293 is now cast
 -- as creature:CastSpell(creature, SPELL_TWILIGHT_PHASING) at the latch
 -- (non-triggered DoCastSelf lowering — the header's old "phasing-cast
--- rides absent bridges" claim was stale; CastSpell is bridged). The
+-- rides absent bridges" claim was stale; CastSpell is bridged),
+-- plus the twilight-phasing SpellScript summon legs (74809 portal
+-- cast, triggered, + 40142 map summon at HalionSpawnPos, Go type 7
+-- MANUAL_DESPAWN per TemporarySummon.cpp:34). The
 -- never-die damage cap (damage = health-1 while not PHASE_THREE) rides
 -- the unbridged phase machine and stays out; the UNIT_FLAG_NOT_
 -- SELECTABLE set leg is bridgeable (SetFlag live) but UNPAIRED —
@@ -148,7 +151,8 @@
 -- a bridge: CREATURE_EVENT_ON_SPAWN (5) fires on first grid activation
 -- since 2026-10-19 but temp summons bypass that funnel
 -- (creaturemotion.go), and the twilight phase machine is unmodeled
--- (75063's summon leg never fires), so entry 40142 never spawns;
+-- (75063's division summon never fires; 40142 now spawns via the
+-- 75% phasing latch instead);
 -- TAIL_LASH's 12s constructor-arm is documented as a spawn->engage drift
 -- on the first tick only (twilight halion spawns in combat, so the delta
 -- is near-zero).
@@ -242,6 +246,7 @@ local SPELL_FLAME_BREATH = 74525
 local SPELL_TAIL_LASH   = 74531
 local SPELL_LEAVE_TWILIGHT_REALM = 74812
 local SPELL_TWILIGHT_PHASING = 74808 -- C++ enum :111 ("Phase spell from phase 1 to phase 2")
+local SPELL_SUMMON_TWILIGHT_PORTAL = 74809 -- C++ enum :112 (summons GO 202794)
 local SPELL_SOUL_CONSUMPTION = 74792 -- C++ enum :81
 local SPELL_TWILIGHT_REALM = 74807 -- C++ enum :115 (SelectTarget aura filter)
 local SPELL_TWILIGHT_DIVISION = 75063 -- C++ enum :103 ("Phase spell from phase 2 to phase 3")
@@ -410,6 +415,19 @@ local function halionDamageTaken(event, creature, attacker, damage)
             phaseTwo[guid] = true
             creature:Talk(SAY_PHASE_TWO)
             creature:CastSpell(creature, SPELL_TWILIGHT_PHASING)
+            -- The twilight-phasing SpellScript (boss_halion.cpp:1776-1809):
+            -- on hit, caster casts Summon Twilight Portal 74809
+            -- (triggered, at its position) and map-summons Twilight
+            -- Halion 40142 at HalionSpawnPos (3156.67, 533.8108,
+            -- 72.98822, 3.159046). The map summon uses no properties,
+            -- so C++ defaults to TEMPSUMMON_MANUAL_DESPAWN
+            -- (TemporarySummon.cpp:34) = Go SummonCreature type 7,
+            -- despawn 0. No AttackStart: C++ has none for this
+            -- summon — engagement rides engine aggro. The portal
+            -- leg depends on Go executing 74809's DB summon-GO
+            -- effect on the self-cast.
+            creature:CastSpell(creature, SPELL_SUMMON_TWILIGHT_PORTAL, true)
+            creature:SummonCreature(ENTRY_TWILIGHT_HALION, 3156.67, 533.8108, 72.98822, 3.159046, 7, 0)
             cancelTimers(guid)
         end
     end

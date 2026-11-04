@@ -14,8 +14,10 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat:
 -- Talk(SAY_AGGRO), arm needle spine targeting 39992 2s then 2s,
--- triggered self-cast / tidal shield 39872 60s then {55s,60s},
--- triggered self-cast / impaling spine 39837 30s then {20s,25s},
+-- modeled as a threat-list pick dropping impaling-spine bearers
+-- casting 39835 triggered on the pick (SpellScript leg ported),
+-- tidal shield 39872 60s then {55s,60s}, triggered self-cast /
+-- impaling spine 39837 30s then {20s,25s},
 -- triggered on a random alive player in the instance within 200 yd
 -- excluding the current victim (C++ SelectTarget(Random, 1, 200.0f)
 -- skips position 0; a nil pick casts nothing but keeps the
@@ -41,9 +43,10 @@
 -- _spineTargetGUID) and the impaling-spine removal itself are
 -- unmodeled (standing instance-script gap). The needle-spine-
 -- targeting SpellScript (filters impaling-spine targets from the
--- 39992 area pick, casts 39835 needle spine via dummy effect) has
--- no SpellScript bridge — the targeting filter and the dummy cast
--- are unmodeled (standing SpellScript gap).
+-- 39992 area pick, casts 39835 needle spine via dummy effect) is
+-- ported in onNeedle as a threat-list pick dropping 39837 bearers;
+-- the targeting spell's own area radius is approximated by the
+-- threat list.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
 -- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-
@@ -65,6 +68,7 @@ local SAY_ENRAGE = 4
 local SAY_DEATH = 5
 
 local SPELL_NEEDLE_SPINE_TARGETING = 39992
+local SPELL_NEEDLE_SPINE = 39835
 local SPELL_IMPALING_SPINE = 39837
 local SPELL_TIDAL_BURST = 39878
 local SPELL_TIDAL_SHIELD = 39872
@@ -139,8 +143,22 @@ local function randomSpineTarget(creature)
 end
 
 -- C++ EVENT_NEEDLE: triggered self-cast 39992; re-arm 2s.
+-- The needle-spine SpellScript (boss_warlord_najentus.cpp:203-219)
+-- filters impaling-spine (39837) bearers from the 39992 area pick
+-- and casts 39835 on the hit unit; with no SpellScript bridge the
+-- arm is modeled as a threat-list pick (shazzrah precedent)
+-- dropping 39837 bearers, casting 39835 triggered on the pick.
 local function onNeedle(creature, guid)
-    creature:CastSpell(creature, SPELL_NEEDLE_SPINE_TARGETING, true)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and not unit:HasAura(SPELL_IMPALING_SPINE) then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates > 0 then
+        creature:CastSpell(candidates[math.random(#candidates)], SPELL_NEEDLE_SPINE, true)
+    end
     schedule(guid, "needle", 2000, function()
         onNeedle(creature, guid)
     end)

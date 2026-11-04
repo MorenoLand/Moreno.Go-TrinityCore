@@ -26,23 +26,22 @@
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention); the DamageTaken latch
 -- fires on the damage hook rather than the script's UpdateAI tick
--- (timing documented). Documented-only: JustSummoned
--- AttackStart(victim) on the adds stays out — not on a bridge gap
--- (EngageWithTarget is bridged 2026-10-24) but for lack of a bearer:
--- the adds arrive via SpellScript effects, never via a Lua summon,
--- so JustSummoned never fires; spell_kormok_summon_bone_mages 27695 script
--- effect (2x random of the 4 bone-mage summon spells
--- 27696/27697/27698/27699); spell_kormok_summon_bone_minions 27687
--- script effect (4x SummonCreature(NPC_BONE_MINION 16119,
--- scholomance.h:43, ±7yd, 2min corpse despawn)) — no SpellScript
--- bridge (nightbane precedent).
+-- (timing documented). Ported: the bone-mage script effect (2x
+-- random of 27696/27697/27698/27699, triggered, in
+-- kormokDamageTaken) and the bone-minion script effect (4x
+-- SummonCreature 16119, ±7yd, 2min corpse despawn, in
+-- onSummonBoneMinions); the ungated JustSummoned arm
+-- (boss_kormok.cpp:75-78, summoned attacks Kormok's victim) is
+-- ported on event 19 now that the minions arrive via a Lua summon.
 
 local ENTRY_KORMOK = 16118
+local NPC_BONE_MINION = 16119
 
 local SPELL_SHADOWBOLT_VOLLEY = 20741
 local SPELL_BONE_SHIELD = 27688
 local SPELL_SUMMON_BONE_MINIONS = 27687
 local SPELL_SUMMON_BONE_MAGES = 27695
+local SUMMON_BONE_MAGE_SPELLS = { 27696, 27697, 27698, 27699 }
 
 local timers = {}
 local magesLatched = {}
@@ -94,10 +93,18 @@ local function onBoneShield(creature, guid)
 end
 
 -- C++ EVENT_SUMMON_MINIONS: non-triggered DoCast(27687); re-arm 12s.
--- The SpellScript effect (summoning the bone minions) has no
--- SpellScript bridge, so the spell itself is cast on self.
+-- The minion SpellScript (boss_kormok.cpp:180-211) summons 4x bone
+-- minion 16119 at caster ±7yd, TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN,
+-- 2min — modeled directly (SummonCreature type 1, 120000ms;
+-- orientation 0 falls back to the summoner's orientation).
 local function onSummonBoneMinions(creature, guid)
     creature:CastSpell(creature, SPELL_SUMMON_BONE_MINIONS)
+    for _ = 1, 4 do
+        creature:SummonCreature(NPC_BONE_MINION,
+            creature:GetX() + math.random(-7, 7),
+            creature:GetY() + math.random(-7, 7),
+            creature:GetZ(), 0, 1, 120000)
+    end
     schedule(guid, "summon_bone_minions", 12000, function()
         onSummonBoneMinions(creature, guid)
     end)
@@ -151,6 +158,24 @@ local function kormokDamageTaken(event, creature, attacker, damage)
     if (creature:GetHealth() - damage) < math.floor(maxHealth * 25 / 100) then
         magesLatched[guid] = true
         creature:CastSpell(creature, SPELL_SUMMON_BONE_MAGES)
+        -- The bone-mage SpellScript (boss_kormok.cpp:146-177) casts
+        -- 2x a random of the 4 bone-mage summon spells, triggered,
+        -- on the caster — modeled directly (urand(0,3) twice,
+        -- duplicates allowed).
+        for _ = 1, 2 do
+            creature:CastSpell(creature, SUMMON_BONE_MAGE_SPELLS[math.random(1, 4)], true)
+        end
+    end
+end
+
+-- C++ JustSummoned (boss_kormok.cpp:75-78), ungated: the summoned
+-- creature attacks Kormok's victim. Previously documented-only for
+-- lack of a bearer (adds arrived via SpellScript effects); now
+-- that the minions arrive via a Lua summon, event 19 fires.
+local function kormokJustSummoned(event, creature, summoned)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        summoned:EngageWithTarget(victim)
     end
 end
 
@@ -158,4 +183,5 @@ RegisterCreatureEvent(ENTRY_KORMOK, 1, kormokEnterCombat)
 RegisterCreatureEvent(ENTRY_KORMOK, 2, kormokLeaveCombat)
 RegisterCreatureEvent(ENTRY_KORMOK, 4, kormokDied)
 RegisterCreatureEvent(ENTRY_KORMOK, 9, kormokDamageTaken)
+RegisterCreatureEvent(ENTRY_KORMOK, 19, kormokJustSummoned)
 RegisterCreatureEvent(ENTRY_KORMOK, 23, kormokReset)
