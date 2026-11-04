@@ -25,7 +25,9 @@
 -- per-GUID scheduler reset to the C++ Initialize() values
 -- (growth 30s / cave-in 27s, static 30s / ground slam 35s /
 -- hurtful 8s / reverberation 105s / performing=false) +
--- Talk(SAY_AGGRO) + start of the 1s scheduler pump (a port of
+-- BossAI base arms first (SetCombatPulseDelay(5) + me-form
+-- DoZoneInCombat, boss_gruul.cpp:109) + Talk(SAY_AGGRO) +
+-- start of the 1s scheduler pump (a port of
 -- boss_gruulAI::UpdateAI — the 10s ground-slam window is modeled
 -- exactly with 1s granularity; all C++ timers are whole-second
 -- values except the static-timer decay, which is exact). Pump per
@@ -69,8 +71,9 @@
 -- shatter_effect (distance-scaled 33671 damage).
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (the
--- BossAI::JustEngagedWith/JustDied/Reset DATA_GRUUL bookkeeping
--- arms skipped). The knockback arm stays out (hit-enumeration
+-- BossAI::JustEngagedWith/JustDied/Reset DATA_GRUUL SetBossState
+-- bookkeeping arms skipped; the base pulse + me-form zone arms
+-- are ported in gruulEnterCombat, above). The knockback arm stays out (hit-enumeration
 -- gap, above); the performing-flag clear now rides event 15
 -- (gruulSpellHitTarget), C++-exact; no movement bridge — the ground-slam
 -- MotionMaster Clear/MoveIdle and the shatter MoveChase-resume
@@ -247,12 +250,15 @@ local function gruulTick(creature, guid)
     end, 1000)
 end
 
--- C++ JustEngagedWith: per-GUID reset + Talk(SAY_AGGRO); the
--- BossAI::JustEngagedWith instance arm is blocked.
+-- C++ JustEngagedWith: BossAI::JustEngagedWith first (boss_gruul.cpp:109),
+-- then Talk(SAY_AGGRO); the base instance SetBossState / setActive /
+-- ScheduleTasks legs stay out (no instance-script model).
 local function gruulEnterCombat(event, creature)
     local guid = creature:GetGUID()
     resetState(guid)
     gruulState[guid] = freshState()
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
     pumpTimers[guid] = CreateLuaEvent(function()
         gruulTick(creature, guid)
