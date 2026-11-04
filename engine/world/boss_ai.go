@@ -14508,8 +14508,9 @@ func init() {
 	// IsSummonedBy Talk(0)+MoveRandom(5), spell_shadow_portal (room
 	// portal picker, 6 tries among open gates) + spell_shadow_portal_rooms
 	// (3x RISEN_GUARDIAN 11598 summons per room + gate close),
-	// UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
-	// DATA_DARKMASTERGANDLING bookkeeping (luaBossAI shim).
+	// BossAI::JustEngagedWith + DATA_DARKMASTERGANDLING bookkeeping
+	// (luaBossAI shim). Cast-state gates PORTED (creature:IsCasting -
+	// see lua_scripts/eastern_kingdoms/boss_darkmaster_gandling.lua).
 	RegisterLuaBoss("boss_darkmaster_gandling", 1853)
 	// boss_death_knight_darkreaver.cpp (EK loader decl :110 / call :288,
 	// Scholomance block continues): boss AI ported in
@@ -14533,9 +14534,10 @@ func init() {
 	// (triggered victim, 9s->10s), frenzy 8269 (triggered self +
 	// Talk(EMOTE_FRENZY_KILL 0), 1s->120s); nil-victim ticks cast nothing
 	// but keep the schedule. Documented-only (no bridges): UpdateAI
-	// UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
-	// DATA_DOCTORTHEOLENKRASTINOV=0 bookkeeping (scholomance.h:30)
-	// (luaBossAI shim).
+	// BossAI::JustEngagedWith + DATA_DOCTORTHEOLENKRASTINOV=0
+	// bookkeeping (scholomance.h:30) (luaBossAI shim). Cast-state gates
+	// PORTED (creature:IsCasting - see lua_scripts/eastern_kingdoms/
+	// boss_doctor_theolen_krastinov.lua).
 	RegisterLuaBoss("boss_doctor_theolen_krastinov", 11261)
 	// boss_illucia_barov.cpp (EK loader AddSC_boss_illuciabarov
 	// decl :112 / call :290, Scholomance block continues; script
@@ -14549,9 +14551,10 @@ func init() {
 	// fear 12542 (triggered victim, 30s->30s); nil picks keep the
 	// schedule. SPELL_DOMINATE 7645 marked UNUSED in C++ (never
 	// cast). Documented-only (no bridges): UpdateAI
-	// UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
-	// DATA_LADYILLUCIABAROV=2 bookkeeping (scholomance.h:32)
-	// (luaBossAI shim).
+	// BossAI::JustEngagedWith + DATA_LADYILLUCIABAROV=2 bookkeeping
+	// (scholomance.h:32) (luaBossAI shim). Cast-state gates PORTED
+	// (creature:IsCasting - see lua_scripts/eastern_kingdoms/
+	// boss_illucia_barov.lua).
 	RegisterLuaBoss("boss_illucia_barov", 10502)
 	// boss_instructor_malicia.cpp (EK loader AddSC_boss_instructormalicia
 	// decl :113 / call :292, Scholomance block continues; script
@@ -14565,7 +14568,8 @@ func init() {
 	// flash heal 10917 (self-cast, 38s->5s while FlashCounter<2 then
 	// 30s), healing touch 9889 (self-cast, 45s->5500ms while
 	// TouchCounter<2 then 30s); zero Talk lines. Documented-only (no
-	// bridges): UpdateAI UNIT_STATE_CASTING gates,
+	// bridges). Cast-state gates PORTED (creature:IsCasting - see
+	// lua_scripts/eastern_kingdoms/boss_instructor_malicia.lua);
 	// BossAI::JustEngagedWith + DATA_INSTRUCTORMALICIA=1 bookkeeping
 	// (scholomance.h:31) (luaBossAI shim).
 	RegisterLuaBoss("boss_instructor_malicia", 10505)
@@ -14585,7 +14589,8 @@ func init() {
 	// boss_jandice_barov.lua), SummonList
 	// tracking/DespawnAll), the NOT_SELECTABLE flag / SetDisplayId
 	// (11686 invisible, 11073 Jandice model) / ModifyThreatByPercent
-	// (victim, -99) legs, UpdateAI UNIT_STATE_CASTING gates;
+	// (victim, -99) legs; cast-state gates PORTED (creature:IsCasting
+	// - see lua_scripts/eastern_kingdoms/boss_jandice_barov.lua);
 	// EVENT_CLEAVE is declared in C++ but never scheduled.
 	RegisterLuaBoss("boss_jandice_barov", 10503)
 	// boss_kormok.cpp (EK loader AddSC_boss_kormok decl :115 / call
@@ -14600,7 +14605,8 @@ func init() {
 	// sub-25% DamageTaken once-latch (damaged class, per-GUID
 	// once-guard, cleared 2/4/23) self-casts summon bone mages
 	// 27695; zero Talk lines. Documented-only (no bridges):
-	// UpdateAI UNIT_STATE_CASTING gates, JustSummoned
+	// cast-state gates PORTED (creature:IsCasting - see
+	// lua_scripts/eastern_kingdoms/boss_kormok.lua), JustSummoned
 	// AttackStart(victim), both summon SpellScripts (nightbane
 	// precedent).
 	RegisterLuaBoss("boss_kormok", 16118)

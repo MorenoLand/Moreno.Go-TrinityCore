@@ -22,9 +22,10 @@
 -- DoCast(self, summon bone mages 27695); per-GUID Lua once-guard
 -- (C++ bool Mages, cleared on 2/4/23). Zero Talk lines in C++ (no
 -- _SAY enum).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
--- fire unconditionally (jeklik convention); the DamageTaken latch
+-- PORTED: the UpdateAI UNIT_STATE_CASTING queue gate
+-- (creature:IsCasting is live - lua_creature_events.go CastingUntil
+-- window; due arms defer 500ms, broodkeeper precedent). The stale
+-- 'constant-false' claim is corrected; the DamageTaken latch
 -- fires on the damage hook rather than the script's UpdateAI tick
 -- (timing documented). Ported: the bone-mage script effect (2x
 -- random of 27696/27697/27698/27699, triggered, in
@@ -71,6 +72,12 @@ end
 -- C++ EVENT_SHADOWBOLT_VOLLEY: non-triggered DoCastVictim(20741);
 -- re-arm 15s.
 local function onShadowboltVolley(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt_volley", 500, function()
+            onShadowboltVolley(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOWBOLT_VOLLEY)
@@ -83,6 +90,12 @@ end
 -- C++ EVENT_BONE_SHIELD: non-triggered DoCastVictim(27688); re-arm
 -- 45s.
 local function onBoneShield(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bone_shield", 500, function()
+            onBoneShield(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_BONE_SHIELD)
@@ -98,6 +111,12 @@ end
 -- 2min — modeled directly (SummonCreature type 1, 120000ms;
 -- orientation 0 falls back to the summoner's orientation).
 local function onSummonBoneMinions(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summon_bone_minions", 500, function()
+            onSummonBoneMinions(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUMMON_BONE_MINIONS)
     for _ = 1, 4 do
         creature:SummonCreature(NPC_BONE_MINION,

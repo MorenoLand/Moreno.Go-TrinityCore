@@ -18,9 +18,10 @@
 -- janalai/kelris/gandling convention), triggered cast, nil pick casts
 -- nothing, re-arm 12s.
 --
--- Documented-unmodeled (no bridges): UpdateAI UNIT_STATE_CASTING queue
--- + post-event gates + DATA_LADYILLUCIABAROV=2 bookkeeping
--- (scholomance.h:32) (luaBossAI shim; base pulse/zone arms PORTED).
+-- Documented-unmodeled (no bridges): DATA_LADYILLUCIABAROV=2
+-- bookkeeping (scholomance.h:32) (luaBossAI shim; base pulse/zone
+-- arms PORTED). UpdateAI UNIT_STATE_CASTING queue gate PORTED
+-- (creature:IsCasting - due arms defer 500ms, broodkeeper precedent).
 -- SPELL_DOMINATE 7645 is declared in C++ but marked UNUSED and
 -- never cast.
 
@@ -83,6 +84,12 @@ end
 
 -- C++ EVENT_CURSEOFAGONY: triggered DoCastVictim(18671); Repeat(30s).
 local function onCurseOfAgony(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curseOfAgony", 500, function()
+            onCurseOfAgony(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_CURSE_OF_AGONY)
     schedule(guid, "curseOfAgony", 30000, function()
         onCurseOfAgony(creature, guid)
@@ -92,6 +99,12 @@ end
 -- C++ EVENT_SHADOWSHOCK: triggered DoCast(random alive player within
 -- 100yd, 17234); Repeat(12s). Nil pick casts nothing.
 local function onShadowShock(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowShock", 500, function()
+            onShadowShock(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_SHOCK, true)
@@ -103,6 +116,12 @@ end
 
 -- C++ EVENT_SILENCE: triggered DoCastVictim(12528); Repeat(14s).
 local function onSilence(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "silence", 500, function()
+            onSilence(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_SILENCE)
     schedule(guid, "silence", 14000, function()
         onSilence(creature, guid)
@@ -111,6 +130,12 @@ end
 
 -- C++ EVENT_FEAR: triggered DoCastVictim(12542); Repeat(30s).
 local function onFear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function()
+            onFear(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_FEAR)
     schedule(guid, "fear", 30000, function()
         onFear(creature, guid)

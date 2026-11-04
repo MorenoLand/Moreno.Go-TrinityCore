@@ -27,10 +27,11 @@
 -- "3 Healing Touch will be cast" comments; counters cleared by
 -- Initialize() on Reset).
 --
--- Documented-unmodeled (no bridges): UpdateAI UNIT_STATE_CASTING
--- queue + post-event gates + DATA_INSTRUCTORMALICIA=1 bookkeeping
--- (scholomance.h:31) (base pulse/zone arms PORTED in handler)
--- (luaBossAI shim).
+-- Documented-unmodeled (no bridges): DATA_INSTRUCTORMALICIA=1
+-- bookkeeping (scholomance.h:31) (base pulse/zone arms PORTED in
+-- handler) (luaBossAI shim). UpdateAI UNIT_STATE_CASTING queue gate
+-- PORTED (creature:IsCasting - due arms defer 500ms, broodkeeper
+-- precedent).
 
 local ENTRY_MALICIA = 10505
 
@@ -94,6 +95,12 @@ end
 
 -- C++ EVENT_CALLOFGRAVES: triggered DoCastVictim(17831); Repeat(65s).
 local function onCallOfGraves(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "callOfGraves", 500, function()
+            onCallOfGraves(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_CALL_OF_GRAVES)
     schedule(guid, "callOfGraves", 65000, function()
         onCallOfGraves(creature, guid)
@@ -103,6 +110,12 @@ end
 -- C++ EVENT_CORRUPTION: triggered DoCast(random alive player within
 -- 100yd, 11672); Repeat(24s). Nil pick casts nothing.
 local function onCorruption(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "corruption", 500, function()
+            onCorruption(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_CORRUPTION, true)
@@ -114,6 +127,12 @@ end
 
 -- C++ EVENT_RENEW: non-triggered self-cast 10929; Repeat(10s).
 local function onRenew(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "renew", 500, function()
+            onRenew(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_RENEW, false)
     schedule(guid, "renew", 10000, function()
         onRenew(creature, guid)
@@ -123,6 +142,12 @@ end
 -- C++ EVENT_FLASHHEAL: non-triggered self-cast 10917. Re-arm 5s and
 -- increment while FlashCounter < 2; otherwise reset and re-arm 30s.
 local function onFlashHeal(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flashHeal", 500, function()
+            onFlashHeal(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FLASH_HEAL, false)
     local st = counters[guid] or { flash = 0, touch = 0 }
     counters[guid] = st
@@ -143,6 +168,12 @@ end
 -- 5500ms and increment while TouchCounter < 2; otherwise reset and
 -- re-arm 30s.
 local function onHealingTouch(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "healingTouch", 500, function()
+            onHealingTouch(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_HEALING_TOUCH, false)
     local st = counters[guid] or { flash = 0, touch = 0 }
     counters[guid] = st

@@ -18,10 +18,11 @@
 -- creature:CastSpell(creature, 8269, true) + Talk(EMOTE_FRENZY_KILL 0),
 -- re-arm 120s.
 --
--- Documented-unmodeled (no bridges): UpdateAI UNIT_STATE_CASTING queue
--- + post-event gates + DATA_DOCTORTHEOLENKRASTINOV=0 bookkeeping
--- (scholomance.h:30) (base pulse/zone arms PORTED in handler)
--- (luaBossAI shim).
+-- Documented-unmodeled (no bridges): DATA_DOCTORTHEOLENKRASTINOV=0
+-- bookkeeping (scholomance.h:30) (base pulse/zone arms PORTED in
+-- handler) (luaBossAI shim). UpdateAI UNIT_STATE_CASTING queue gate
+-- PORTED (creature:IsCasting - due arms defer 500ms, broodkeeper
+-- precedent).
 
 local ENTRY_KRASTINOV = 11261
 
@@ -57,6 +58,12 @@ end
 
 -- C++ EVENT_REND: triggered DoCastVictim(16509); Repeat(10s).
 local function onRend(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rend", 500, function()
+            onRend(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_REND, true)
@@ -68,6 +75,12 @@ end
 
 -- C++ EVENT_BACKHAND: triggered DoCastVictim(18103); Repeat(10s).
 local function onBackhand(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "backhand", 500, function()
+            onBackhand(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_BACKHAND, true)
@@ -80,6 +93,12 @@ end
 -- C++ EVENT_FRENZY: triggered self-cast DoCast(me, 8269, true) +
 -- Talk(EMOTE_FRENZY_KILL); Repeat(120s).
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            onFrenzy(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FRENZY, true)
     creature:Talk(EMOTE_FRENZY_KILL)
     schedule(guid, "frenzy", 120000, function()

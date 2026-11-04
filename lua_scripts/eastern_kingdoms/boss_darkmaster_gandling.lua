@@ -35,9 +35,10 @@
 -- (17863..: summons 3x NPC_RISEN_GUARDIAN 11598 at the room's SummonPos,
 -- MoveRandom, SetData phase, closes that room's gate) — no SpellScript
 -- bridge (nightbane precedent), so the shadow-portal cast is a lone
--- triggered spell with no room effect. UpdateAI UNIT_STATE_CASTING queue +
--- post-event gates + DATA_DARKMASTERGANDLING bookkeeping have no
--- bridges (luaBossAI shim; base pulse/zone arms PORTED in handler).
+-- triggered spell with no room effect. UpdateAI UNIT_STATE_CASTING queue
+-- gate PORTED (creature:IsCasting - due arms defer 500ms, broodkeeper
+-- precedent) + DATA_DARKMASTERGANDLING bookkeeping has no bridge
+-- (luaBossAI shim; base pulse/zone arms PORTED in handler).
 
 local ENTRY_GANDLING = 1853
 local GO_GATE_GANDLING = 177374 -- scholomance.h:49
@@ -102,6 +103,12 @@ end
 
 -- C++ EVENT_ARCANEMISSILES: triggered DoCastVictim(15790); Repeat(8s).
 local function onArcaneMissiles(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcaneMissiles", 500, function()
+            onArcaneMissiles(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_ARCANE_MISSILES, true)
     schedule(guid, "arcaneMissiles", 8000, function()
         onArcaneMissiles(creature, guid)
@@ -110,6 +117,12 @@ end
 
 -- C++ EVENT_SHADOWSHIELD: DoCast(me, 12040) non-triggered; Repeat(14s, 28s).
 local function onShadowShield(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowShield", 500, function()
+            onShadowShield(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHADOW_SHIELD)
     schedule(guid, "shadowShield", math.random(14000, 28000), function()
         onShadowShield(creature, guid)
@@ -118,6 +131,12 @@ end
 
 -- C++ EVENT_CURSE: triggered DoCastVictim(18702); Repeat(15s, 27s).
 local function onCurse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse", 500, function()
+            onCurse(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_CURSE, true)
     schedule(guid, "curse", math.random(15000, 27000), function()
         onCurse(creature, guid)
@@ -127,6 +146,12 @@ end
 -- C++ EVENT_SHADOW_PORTAL: only if HealthAbovePct(3); triggered DoCast on
 -- the random player target; Repeat(17s, 27s) lives inside the gate.
 local function onShadowPortal(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowPortal", 500, function()
+            onShadowPortal(creature, guid)
+        end)
+        return
+    end
     if not healthAbovePct(creature, 3) then
         return
     end

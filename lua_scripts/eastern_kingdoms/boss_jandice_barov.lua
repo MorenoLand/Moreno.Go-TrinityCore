@@ -15,9 +15,11 @@
 -- keep the schedule (jeklik convention). OnDied: triggered
 -- DoCastSelf drop journal 26096. Zero Talk lines in C++ (no _SAY
 -- enum).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
--- fire unconditionally (jeklik convention). Documented-only (no
+-- PORTED: the UpdateAI UNIT_STATE_CASTING queue gate
+-- (creature:IsCasting is live - lua_creature_events.go CastingUntil
+-- window; due arms defer 500ms, broodkeeper precedent, so they fire
+-- on the first non-casting tick like C++ ExecuteEvent). The stale
+-- 'constant-false' claim is corrected. Documented-only (no
 -- bridges): the Summons SummonList/DespawnAll tracking — PORTED below
 -- JustSummoned AttackStart on a random target PORTED 2026-10-24
 -- (see handler below). PORTED 2026-10-24: JustSummoned ApplySpellImmune(0,
@@ -78,6 +80,12 @@ end
 -- C++ EVENT_CURSE_OF_BLOOD: non-triggered DoCastVictim(24673);
 -- re-arm 30s.
 local function onCurseOfBlood(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse_of_blood", 500, function()
+            onCurseOfBlood(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CURSE_OF_BLOOD)
@@ -92,6 +100,12 @@ end
 -- SetDisplayId(11073 Jandice model) — both bridged, PORTED
 -- 2026-10-20 (handler-surface RemoveFlag(59) + SetDisplayId).
 local function onSetVisibility(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "set_visibility", 500, function()
+            onSetVisibility(creature, guid)
+        end)
+        return
+    end
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetDisplayId(11073)
 end
@@ -100,6 +114,12 @@ end
 -- 25s; schedule EVENT_SET_VISIBILITY 3s. The flag/display legs are
 -- ported below; the threat leg is PORTED below (see header).
 local function onIllusion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "illusion", 500, function()
+            onIllusion(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ILLUSION)
     -- C++ arm order: cast, SetFlag(NOT_SELECTABLE),
     -- SetDisplayId(11686 invisible), ModifyThreatByPercent(victim, -99).
