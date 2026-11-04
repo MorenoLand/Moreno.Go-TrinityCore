@@ -130,10 +130,15 @@
 -- spell_kalecgos_spectral_blast, spell_kalecgos_spectral_realm_
 -- trigger, spell_kalecgos_spectral_realm_aura and spell_kalecgos_
 -- curse_of_boundless_agony (standing SpellScript/AuraScript gaps).
--- Deliberate deviations (documented in the file): the UpdateAI
--- UNIT_STATE_CASTING queue gate and the post-event casting check
--- have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
--- convention); no instance-script model — boss admission via the
+-- CAST-STATE GATE (ported 2026-11-04): the dragon's own UpdateAI
+-- pre-loop gate (boss_kalecgos.cpp:259) + post-event check (:340),
+-- the human's own UpdateAI gates (:402/:421), and sathrovarr's
+-- BossAI::UpdateAI base gate (ScriptedCreature.cpp:578/:584) gate
+-- every UpdateAI tick on UNIT_STATE_CASTING; each Lua tick defers
+-- 500ms under its own key via the live creature:IsCasting() bridge
+-- (lua_creature_events.go:1950), consuming no re-arm. DamageTaken/
+-- TargetDied/Died/SpellHit hooks are not UpdateAI events and stay
+-- ungated. Deliberate deviations (documented in the file): no instance-script model — boss admission via the
 -- luaBossAI shim (BossAI::JustEngagedWith/JustDied/Reset and the
 -- DATA_KALECGOS/DATA_KALECGOS_DRAGON/DATA_KALECGOS_HUMAN/DATA_
 -- SATHROVARR bookkeeping arms skipped); no cross-creature bridge —
@@ -237,6 +242,12 @@ end
 -- C++ EVENT_ARCANE_BUFFET: 20% Talk(SAY_ARCANE_BUFFET) +
 -- DoCastAOE(45018); repeat 8s.
 local function kalecgosArcaneBuffet(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcanebuffet", 500, function()
+            kalecgosArcaneBuffet(creature, guid)
+        end)
+        return
+    end
     if math.random(1, 5) == 1 then
         creature:Talk(SAY_ARCANE_BUFFET)
     end
@@ -248,6 +259,12 @@ end
 
 -- C++ EVENT_FROST_BREATH: DoCastAOE(44799); repeat 15s.
 local function kalecgosFrostBreath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbreath", 500, function()
+            kalecgosFrostBreath(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROST_BREATH)
     schedule(guid, "frostbreath", 15000, function()
         kalecgosFrostBreath(creature, guid)
@@ -256,6 +273,12 @@ end
 
 -- C++ EVENT_TAIL_LASH: DoCastAOE(45122); first 25s, then 15s.
 local function kalecgosTailLash(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "taillash", 500, function()
+            kalecgosTailLash(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TAIL_LASH)
     schedule(guid, "taillash", 15000, function()
         kalecgosTailLash(creature, guid)
@@ -265,6 +288,12 @@ end
 -- C++ EVENT_WILD_MAGIC: triggered DoCastAOE(one of the six wild
 -- magic spells, urand(0, 5)); first 10s, then 20s.
 local function kalecgosWildMagic(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wildmagic", 500, function()
+            kalecgosWildMagic(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, WildMagicSpells[math.random(1, 6)], true)
     schedule(guid, "wildmagic", 20000, function()
         kalecgosWildMagic(creature, guid)
@@ -274,6 +303,12 @@ end
 -- C++ EVENT_SPECTRAL_BLAST: triggered DoCastAOE(44869); first
 -- {20s,25s}, repeat {20s,25s}.
 local function kalecgosSpectralBlast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spectralblast", 500, function()
+            kalecgosSpectralBlast(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SPECTRAL_BLAST, true)
     schedule(guid, "spectralblast", math.random(20000, 25000), function()
         kalecgosSpectralBlast(creature, guid)
@@ -285,6 +320,12 @@ end
 local function kalecgosCheckTimer(creature, guid)
     local state = kalecgosState[guid]
     if state == nil then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "checktimer", 500, function()
+            kalecgosCheckTimer(creature, guid)
+        end)
         return
     end
     if not state.enraged and belowPct(creature, 10) then
@@ -380,6 +421,12 @@ local function kalecgosOutroStart(creature, guid)
     if creature:IsDead() then
         return
     end
+    if creature:IsCasting() then
+        schedule(guid, "outro_start", 500, function()
+            kalecgosOutroStart(creature, guid)
+        end)
+        return
+    end
     cancelTimers(guid)
     creature:SetRegenerateHealth(false)
     creature:SetReactState(REACT_PASSIVE)
@@ -411,6 +458,12 @@ RegisterCreatureEvent(ENTRY_KALECGOS, 23, kalecgosReset)
 
 -- C++ EVENT_REVITALIZE: non-triggered DoCastSelf(45027); repeat 5s.
 local function humanRevitalize(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "revitalize", 500, function()
+            humanRevitalize(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_REVITALIZE)
     schedule(guid, "revitalize", 5000, function()
         humanRevitalize(creature, guid)
@@ -421,6 +474,12 @@ end
 -- 3s, repeat 2s. Nil ticks cast nothing but keep the schedule
 -- (jeklik convention).
 local function humanHeroicStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "heroicstrike", 500, function()
+            humanHeroicStrike(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_HEROIC_STRIKE)
@@ -501,6 +560,12 @@ RegisterCreatureEvent(ENTRY_KALECGOS_HUMAN, 23, humanReset)
 -- C++ EVENT_SHADOWBOLT: 20% Talk(SAY_SATH_SPELL1) +
 -- DoCastAOE(45031); first {7s,10s}, repeat {7s,10s}.
 local function sathrovarrShadowbolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function()
+            sathrovarrShadowbolt(creature, guid)
+        end)
+        return
+    end
     if math.random(1, 5) == 1 then
         creature:Talk(SAY_SATH_SPELL1)
     end
@@ -517,6 +582,12 @@ end
 -- the same victim, so the arm is a victim cast either way;
 -- repeat 20s.
 local function sathrovarrAgonyCurse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "agonycurse", 500, function()
+            sathrovarrAgonyCurse(creature, guid)
+        end)
+        return
+    end
     local target = creature:GetVictim()
     if target then
         creature:CastSpell(target, SPELL_AGONY_CURSE, true)
@@ -529,6 +600,12 @@ end
 -- C++ EVENT_CORRUPTION_STRIKE: 20% Talk(SAY_SATH_SPELL2) +
 -- non-triggered DoCastVictim(45029); repeat 13s.
 local function sathrovarrCorruptionStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "corruptionstrike", 500, function()
+            sathrovarrCorruptionStrike(creature, guid)
+        end)
+        return
+    end
     if math.random(1, 5) == 1 then
         creature:Talk(SAY_SATH_SPELL2)
     end
@@ -549,6 +626,12 @@ end
 local function sathrovarrCheckTimer(creature, guid)
     local state = sathrovarrState[guid]
     if state == nil then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "checktimer", 500, function()
+            sathrovarrCheckTimer(creature, guid)
+        end)
         return
     end
     if belowPct(creature, 10) and not state.enraged then
