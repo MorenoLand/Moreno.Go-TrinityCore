@@ -49,6 +49,12 @@
 -- The BossAI::JustEngagedWith base arms are PORTED in
 -- keristraszaEnterCombat (pulse + me-form DoZone); the
 -- instance/setActive/ScheduleTasks legs stay out.
+-- CASTING gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis
+-- idiom): own UpdateAI pre-loop :178 + in-loop :205 gates cover all
+-- 3 timer arms (breath/chains/tailsweep — defer precedes Talk/cast/
+-- target pick; the event stays queued, no re-arm consumed).
+-- DamageTaken enrage latch + JustEngagedWith intense-cold one-shot
+-- ungated per C++ (separate hooks, no CASTING check).
 -- DamageTaken (event 9) — HealthBelowPctDamaged(25, damage)
 -- one-shot latch (per-GUID, reset on 1/2/23; loken convention)
 -- -> Talk(SAY_ENRAGE 2) + Talk(SAY_FRENZY 5) + DoCast(me,
@@ -178,6 +184,12 @@ end
 -- C++ EVENT_CRYSTAL_FIRE_BREATH (cpp:185-188): DoCastVictim(48096)
 -- 1-arg (non-triggered), 14s init / 14s repeat.
 local function crystalFireBreathTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "crystalfirebreath", 500, function()
+            crystalFireBreathTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CRYSTALFIRE_BREATH)
     schedule(guid, "crystalfirebreath", 14000, function()
         crystalFireBreathTick(creature, guid)
@@ -188,6 +200,12 @@ end
 -- 50155) 2-arg (non-triggered) self-cast, DUNGEON_MODE(30s,11s) ->
 -- 30s normal init, 5s repeat.
 local function crystalChainsCrystallizeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "crystalchainscrystallize", 500, function()
+            crystalChainsCrystallizeTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TAIL_SWEEP)
     schedule(guid, "crystalchainscrystallize", 5000, function()
         crystalChainsCrystallizeTick(creature, guid)
@@ -202,6 +220,12 @@ end
 -- creature:IsHeroic() is bridged (engine/world/lua_creature_events.go
 -- :203; lavanthor precedent).
 local function tailSweepTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "tailsweep", 500, function()
+            tailSweepTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_CRYSTAL_NOVA)
     local heroic = creature:IsHeroic()
     if heroic then

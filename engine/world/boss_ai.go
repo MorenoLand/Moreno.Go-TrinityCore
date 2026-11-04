@@ -17992,8 +17992,11 @@ func init() {
 	// 15s; DamageTaken HealthBelowPct(25) CURRENT-health one-shot
 	// latch (not Damaged form — DamageTaken fires pre-application) +
 	// Talk(6) + self-cast 48017; KilledUnit Talk(5) player-gated;
-	// JustDied Talk(2). Documented-only: BossAI instance legs,
-	// casting-state gate, crystal-spike trigger AI + AuraScript
+	// JustDied Talk(2). CASTING gates PORTED: own UpdateAI pre-loop
+	// :129 + in-loop :159 gates cover all 4 timer arms (500ms
+	// IsCasting defer, mal_ganis idiom); DamageTaken frenzy latch
+	// ungated per C++ (separate hook). Documented-only: BossAI
+	// instance legs, crystal-spike trigger AI + AuraScript
 	// (IsSummonedBy / GO-Use / GetData legs, no bridges).
 	RegisterLuaBoss("boss_ormorok", 26794)
 
@@ -18013,14 +18016,18 @@ func init() {
 	// (no instance/GO-state/flag bridges — containment-sphere prison
 	// machine documented-only); DamageTaken HealthBelowPctDamaged(25)
 	// -> Talk(SAY_ENRAGE 2)+Talk(SAY_FRENZY 5)+DoCast(SPELL_ENRAGE
-	// 8599) one-shot latch (no health-pct bridge); the UpdateAI event
-	// machine — EVENT_CRYSTAL_FIRE_BREATH DoCastVictim(CRYSTALFIRE_
-	// BREATH 48096) 14s, EVENT_CRYSTAL_CHAINS_CRYSTALLIZE DoCast(me,
-	// TAIL_SWEEP 50155) 5s (DUNGEON_MODE init 30s/11s), EVENT_TAIL_
-	// SWEEP Talk(SAY_CRYSTAL_NOVA 4)+heroic DoCast(CRYSTALLIZE 48179)/
-	// normal SelectTarget(Random)->DoCast(CRYSTAL_CHAINS 50997)
-	// DUNGEON_MODE(30s,11s) repeat (no timer-event/random-target/
-	// cast bridges); SetGUID(DATA_INTENSE_COLD) _intenseColdList leg
+	// 8599) one-shot latch PORTED (postDamage form); the UpdateAI event
+	// machine arms PORTED via CreateLuaEvent timers — EVENT_CRYSTAL_
+	// FIRE_BREATH DoCastVictim(CRYSTALFIRE_BREATH 48096) 14s,
+	// EVENT_CRYSTAL_CHAINS_CRYSTALLIZE DoCast(me, TAIL_SWEEP 50155)
+	// 5s (DUNGEON_MODE init 30s/11s), EVENT_TAIL_SWEEP Talk(SAY_
+	// CRYSTAL_NOVA 4)+heroic DoCast(CRYSTALLIZE 48179)/normal
+	// SelectTarget(Random)->DoCast(CRYSTAL_CHAINS 50997) DUNGEON_
+	// MODE(30s,11s) repeat; CASTING gates PORTED: own UpdateAI
+	// pre-loop :178 + in-loop :205 gates cover all 3 timer arms
+	// (500ms IsCasting defer, mal_ganis idiom); DamageTaken/
+	// JustEngagedWith ungated per C++ (separate hooks).
+	// SetGUID(DATA_INTENSE_COLD) _intenseColdList leg
 	// (no SetGUID bridge; no GetData override exists — the achievement reads the raw list member). containment_sphere
 	// (GameObjectScript OnGossipHello — cross-AI CheckContainment
 	// Spheres + RemovePrison) joins the instance-model-blocked gossip

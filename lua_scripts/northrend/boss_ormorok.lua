@@ -52,9 +52,12 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — BossAI::Reset + Initialize() (frenzy=false) — the latch
 -- reset is ported on 2/4/23; the BossAI leg has no bridge.
--- UpdateAI HasUnitState(UNIT_STATE_CASTING) gate — no casting-state
--- bridge; Lua timers fire regardless of cast state (accepted
--- approximation, maiden_of_virtue class).
+-- CASTING gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis
+-- idiom): own UpdateAI pre-loop :129 + in-loop :159 gates cover all
+-- 4 timer arms (spikes/trample/reflection/tangler — defer precedes
+-- Talk/cast/target pick; the event stays queued, no re-arm
+-- consumed). DamageTaken frenzy latch ungated per C++ (separate
+-- hook, no CASTING check).
 -- npc_crystal_spike_trigger — IsSummonedBy entry switch (initial
 -- 27101: SetFacingToObject + aura 47941; trigger 27079: aura +
 -- GetData(DATA_COUNT)+1 from the owner) + FindNearestGameObject(GO_
@@ -108,6 +111,12 @@ end
 -- CRYSTAL_SPIKES 4) + DoCast(SPELL_CRYSTAL_SPIKES 47958) 1-arg =
 -- victim cast, 12s init / 12s repeat.
 local function crystalSpikesTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spikes", 500, function()
+            crystalSpikesTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_CRYSTAL_SPIKES)
     creature:CastSpell(nil, SPELL_CRYSTAL_SPIKES)
     schedule(guid, "spikes", 12000, function()
@@ -118,6 +127,12 @@ end
 -- C++ EVENT_TRAMPLE (:160-163): DoCast(me, SPELL_TRAMPLE 48016)
 -- self-cast, 10s init / 10s repeat.
 local function trampleTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "trample", 500, function()
+            trampleTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TRAMPLE)
     schedule(guid, "trample", 10000, function()
         trampleTick(creature, guid)
@@ -128,6 +143,12 @@ end
 -- DoCast(me, SPELL_SPELL_REFLECTION 47981) self-cast, 30s init /
 -- 30s repeat.
 local function spellReflectionTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "reflection", 500, function()
+            spellReflectionTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_REFLECT)
     creature:CastSpell(creature, SPELL_SPELL_REFLECTION)
     schedule(guid, "reflection", 30000, function()
@@ -142,6 +163,12 @@ end
 -- threat-list pool, no playerOnly filter (UnitAI.h:176); re-arm
 -- 15s unconditional.
 local function tanglerTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "tangler", 500, function()
+            tanglerTick(creature, guid)
+        end)
+        return
+    end
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         local targetReach = 1.5
