@@ -3685,7 +3685,7 @@ func (s *session) handleCmdAccountSet(ctx context.Context, args []string) {
 		return
 	}
 	switch strings.ToLower(args[0]) {
-	case "gmlevel", "sec", "seclevel":
+	case "gmlevel", "seclevel":
 		s.handleCmdAccountSetSecLevel(ctx, args[1:])
 	case "addon":
 		s.handleCmdAccountSetAddon(ctx, args[1:])
@@ -3705,40 +3705,122 @@ func (s *session) handleCmdAccountSet(ctx context.Context, args []string) {
 	}
 }
 
-// handleCmdAccountSetSecLevel extends the native ".account set gmlevel"
-// with the HasLowerSecurityAccount guard from
-// HandleAccountSetSecLevelCommand (cs_account.cpp:657).
+// accountSecurityForRealm mirrors AccountMgr::GetSecurity (AccountMgr.cpp:285):
+// LOGIN_GET_GMLEVEL_BY_REALMID returns the realm-specific row first
+// (ORDER BY RealmID DESC), falling back to the all-realms (-1) row, or
+// SEC_PLAYER when neither exists. This differs from accountSecurityLevel's
+// MAX over both rows, which overstates a realm-specific level below the
+// global one.
+func (s *session) accountSecurityForRealm(ctx context.Context, id uint32, realmID int32) uint8 {
+	db := s.authDB()
+	if db == nil {
+		return 0
+	}
+	var level uint8
+	if err := db.QueryRowContext(ctx,
+		"SELECT SecurityLevel FROM account_access WHERE AccountID = ? AND (RealmID = ? OR RealmID = -1) ORDER BY RealmID DESC LIMIT 1",
+		id, realmID).Scan(&level); err != nil {
+		return 0
+	}
+	return level
+}
+
+// handleCmdAccountSetSecLevel mirrors HandleAccountSetSecLevelCommand
+// (cs_account.cpp:657): ".account set gmlevel|seclevel [<account>] <level>
+// [<realm>]". The account form is optional in C++ (selected player's account
+// via getSelectedPlayer, which falls back to self); the realm defaults to -1
+// (all realms), not the current realm. Security compares use the
+// realm-aware GetSecurity above, the realm -1 form carries the cross-realm
+// higher-rank test (LOGIN_SEL_ACCOUNT_ACCESS_SECLEVEL_TEST), and the write
+// follows UpdateAccountAccess (delete the account's access rows for the
+// realm scope, then insert only when the level is non-zero).
 func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string) {
-	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .account set gmlevel <account> <level>")
+	var targetID uint32
+	var targetAcct string
+	var sec uint64
+	var realmID int32 = -1
+	switch len(args) {
+	case 1:
+		target := s.lookupSelectedPlayerOrSelf()
+		if target == nil {
+			return // C++ getSelectedPlayer null -> return false, silently
+		}
+		targetID = target.accountID
+		targetAcct = s.accountNameByID(ctx, targetID)
+		v, err := strconv.ParseUint(args[0], 10, 8)
+		if err != nil {
+			s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
+			return
+		}
+		sec = v
+	case 2, 3:
+		targetAcct = args[0]
+		v, err := strconv.ParseUint(args[1], 10, 8)
+		if err != nil {
+			s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
+			return
+		}
+		sec = v
+		if len(args) == 3 {
+			r, err := strconv.ParseInt(args[2], 10, 32)
+			if err != nil {
+				s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
+				return
+			}
+			realmID = int32(r)
+		}
+		targetID = s.accountIDByName(ctx, targetAcct)
+		if targetID == 0 {
+			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", targetAcct))
+			return
+		}
+	default:
+		s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
 		return
 	}
-	targetAcct := args[0]
-	val := args[1]
-	sec, err := strconv.ParseUint(val, 10, 8)
-	if err != nil || sec >= 4 { // SEC_CONSOLE = 4; HandleAccountSetSecLevelCommand rejects >= SEC_CONSOLE
+	if sec >= 4 { // SEC_CONSOLE = 4; HandleAccountSetSecLevelCommand rejects >= SEC_CONSOLE
 		s.sendSysMessage("Invalid security level (0-3).")
 		return
 	}
-	targetID := s.accountIDByName(ctx, targetAcct)
-	if targetID == 0 {
-		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", targetAcct))
+	// can set security level only for a target with less security and to a
+	// level less than we have (also restricts setting our own security).
+	// Without an auth DB the session security stands in for the invoker's
+	// realm-aware level, as the previous implementation did.
+	playerSecurity := s.security
+	var targetSecurity uint8
+	if s.authDB() != nil {
+		playerSecurity = s.accountSecurityForRealm(ctx, s.accountID, realmID)
+		targetSecurity = s.accountSecurityForRealm(ctx, targetID, realmID)
+	}
+	if targetSecurity >= playerSecurity || uint8(sec) >= playerSecurity {
+		s.sendSysMessage("Your security level is too low.")
 		return
 	}
-	// can set security level only for target with less security and to less
-	// security than we have (also restricts setting our own security).
-	if !s.canModifyAccount(ctx, targetID) || uint8(sec) >= s.security {
-		if uint8(sec) >= s.security {
-			s.sendSysMessage("Your security level is too low.")
+	// Check and abort if the target gm has a higher rank on one of the
+	// realms and the new realm is -1.
+	if realmID == -1 && playerSecurity != 4 { // IsConsoleAccount
+		if db := s.authDB(); db != nil {
+			var one int
+			if err := db.QueryRowContext(ctx,
+				"SELECT 1 FROM account_access WHERE AccountID = ? AND SecurityLevel > ?",
+				targetID, sec).Scan(&one); err == nil {
+				s.sendSysMessage("Your security level is too low.")
+				return
+			}
 		}
+	}
+	if realmID < -1 {
+		s.sendSysMessage("Invalid realm ID.")
 		return
 	}
-	if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-		_, err = s.server.AuthStore.DB.ExecContext(ctx,
-			"INSERT INTO account_access (AccountID, SecurityLevel, RealmID) VALUES ((SELECT id FROM account WHERE UPPER(username) = UPPER(?)), ?, ?) ON CONFLICT(AccountID, RealmID) DO UPDATE SET SecurityLevel = ?",
-			targetAcct, sec, s.server.RealmID, sec)
-		if err != nil {
-			_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account_access SET SecurityLevel = ? WHERE AccountID = (SELECT id FROM account WHERE UPPER(username) = UPPER(?))", sec, targetAcct)
+	if db := s.authDB(); db != nil {
+		if realmID == -1 {
+			_, _ = db.ExecContext(ctx, "DELETE FROM account_access WHERE AccountID = ?", targetID)
+		} else {
+			_, _ = db.ExecContext(ctx, "DELETE FROM account_access WHERE AccountID = ? AND (RealmID = ? OR RealmID = -1)", targetID, realmID)
+		}
+		if sec != 0 {
+			_, _ = db.ExecContext(ctx, "INSERT INTO account_access (AccountID, SecurityLevel, RealmID) VALUES (?, ?, ?)", targetID, sec, realmID)
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Security level for %s set to %d.", targetAcct, sec))
@@ -3752,7 +3834,13 @@ func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) {
 	var expansion uint8
 	switch len(args) {
 	case 1:
-		targetID = s.accountID
+		// No account form: C++ uses getSelectedPlayer (Chat.cpp:300: no
+		// selection resolves to the invoker), not unconditionally self.
+		target := s.lookupSelectedPlayerOrSelf()
+		if target == nil {
+			return // C++ getSelectedPlayer null -> return false, silently
+		}
+		targetID = target.accountID
 		targetName = s.accountNameByID(ctx, targetID)
 		v, err := strconv.ParseUint(args[0], 10, 8)
 		if err != nil {
@@ -6998,7 +7086,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"customize", "changefaction", "changerace", "changeaccount", "deleted", "erase", "level", "rename", "reputation", "titles"}, map[string]string{"char": "character"})
 	root.add("levelup", func(ctx context.Context, args []string) bool { s.handleCmdLevelup(ctx, args); return true }, nil, nil)
 	root.add("pdump", func(ctx context.Context, args []string) bool { s.handleCmdPDump(ctx, args); return true }, []string{"copy", "load", "write"}, nil)
-	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock"}, map[string]string{"acct": "account"})
+	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock", "2fa", "create", "delete", "onlinelist"}, map[string]string{"acct": "account"})
 	root.add("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, []string{"add"}, nil)
 	root.add("ahbot", func(ctx context.Context, args []string) bool { s.handleCmdAhbot(ctx, args); return true }, []string{"items", "ratio", "rebuild", "reload", "status"}, nil)
 	root.add("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, []string{"create", "disband", "rename", "captain", "info", "lookup"}, nil)
