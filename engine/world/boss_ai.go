@@ -20359,7 +20359,10 @@ func init() {
 	// xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH) leg have no
 	// bridges; npc_baltharus_the_warborn_clone (39899) has zero Talk
 	// lines — registered via RegisterCreatureEvent in the lua file (entry-based dispatch). Third group
-	// of the "// Ruby Sanctum" block.
+	// of the "// Ruby Sanctum" block. UpdateAI CASTING gates (boss
+	// :189 pre-loop PHASE_INTRO-exempt + :223 in-loop; clone :289 +
+	// :314) ported as 500ms IsCasting defer per cast tick, including
+	// the 1ms EVENT_CLONE pump.
 	RegisterLuaBoss("boss_baltharus_the_warborn", 39751)
 }
 
@@ -20387,7 +20390,9 @@ func init() {
 	// bridge); UpdateAI Talk(EMOTE_ENRAGED 2) rides EVENT_ENRAGE
 	// (no-timer-bridge); the two SpellScripts (no-SpellScript bridge);
 	// the EnterEvadeMode _DespawnAtEvade() leg — all documented in the
-	// lua header. Fourth group of the "// Ruby Sanctum" block.
+	// lua header. UpdateAI CASTING gates (:153 pre-loop + :195
+	// in-loop) ported as 500ms IsCasting defer on enrage/flame-breath.
+	// Fourth group of the "// Ruby Sanctum" block.
 	RegisterLuaBoss("boss_saviana_ragefire", 39747)
 }
 
@@ -20417,7 +20422,9 @@ func init() {
 	// summon-registry / evade-model bridges); the DoCastSelf/DoCastVictim
 	// legs (no-cast bridge); npc_onyx_flamecaller zero Talk (not
 	// registered) — all documented in the lua header. Fifth group of
-	// the "// Ruby Sanctum" block.
+	// the "// Ruby Sanctum" block. UpdateAI CASTING gates (boss :133
+	// pre-loop + :166 in-loop; flamecaller pre-loop-only :233) ported
+	// as 500ms IsCasting defer on cleave/roar/adds + blast-nova/lava-gout.
 	RegisterLuaBoss("boss_general_zarithrian", 39746)
 }
 
@@ -20458,6 +20465,11 @@ func init() {
 	// and the orb machine's Talk(EMOTE_WARN_LASER 0 / SAY_SPHERE_PULSE 1)
 	// have no cross-AI-Talk bridge; SAY_BERSERK 7 is dead text. Sixth and
 	// final group of the "// Ruby Sanctum" block — Ruby Sanctum CLOSED (6/6).
+	// UpdateAI CASTING gates (material :327 pre-loop; twilight
+	// pre-loop-only :513) ported as 500ms IsCasting defer on material
+	// cleave/tail-lash/breath + twilight cleave/breath/tail-lash/
+	// soul-consumption; firewall GO leg non-cast, ungated; controller
+	// UpdateAI :695 gateless, arms unported.
 	RegisterLuaBoss("boss_halion", 39863)
 	RegisterLuaBoss("boss_twilight_halion", 40142)
 }

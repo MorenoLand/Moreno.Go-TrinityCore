@@ -105,7 +105,12 @@
 -- (boss_halion.cpp:732-735), so event 14 can never fire with
 -- this ID (the old "SpellHit-15-never-fires" label was stale —
 -- event 14 fires from the Go spell path).
--- boss_halion UpdateAI — Talk(SAY_METEOR_STRIKE 3) rides
+-- boss_halion UpdateAI — CASTING gates (material :327 pre-loop,
+-- PHASE_TWO early-return handled by the 75% latch; twilight
+-- pre-loop-only :513) ported as 500ms IsCasting defer on material
+-- cleave/tail-lash/breath + twilight cleave/breath/tail-lash/
+-- soul-consumption; the firewall GO leg is non-cast and stays ungated.
+-- Talk(SAY_METEOR_STRIKE 3) rides
 -- EVENT_METEOR_STRIKE, phase-machine-gated (PHASE_ONE->TWO transition
 -- via 75%-health DamageTaken + controller SetData, boss_halion.cpp:
 -- 286-296); the EVENT_FIERY_COMBUSTION DoCastSelf leg rides the phase
@@ -285,6 +290,12 @@ end
 -- randtime(6s,10s) init / randtime(8s,10s) re-arm.
 local function matCleaveTick(creature, guid)
     creature:CastSpell(nil, SPELL_CLEAVE)
+    if creature:IsCasting() then
+        schedule(guid, "mat_cleave", 500, function()
+            matCleaveTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "mat_cleave", {8000, 10000}, function()
         matCleaveTick(creature, guid)
     end)
@@ -295,6 +306,12 @@ end
 -- self-cast lowering (boss_ai.go convention).
 local function matTailLashTick(creature, guid)
     creature:CastSpell(creature, SPELL_TAIL_LASH)
+    if creature:IsCasting() then
+        schedule(guid, "mat_tail_lash", 500, function()
+            matTailLashTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "mat_tail_lash", {11000, 16000}, function()
         matTailLashTick(creature, guid)
     end)
@@ -305,6 +322,12 @@ end
 -- twilight DARK_BREATH 74806 below).
 local function matBreathTick(creature, guid)
     creature:CastSpell(creature, SPELL_FLAME_BREATH)
+    if creature:IsCasting() then
+        schedule(guid, "mat_breath", 500, function()
+            matBreathTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "mat_breath", {16000, 25000}, function()
         matBreathTick(creature, guid)
     end)
@@ -474,6 +497,12 @@ RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 3, twilightHalionKilledUnit)
 -- (boss_halion.cpp:525-528) — no phase gating on the arm.
 local function cleaveTick(creature, guid)
     creature:CastSpell(nil, SPELL_CLEAVE)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            cleaveTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "cleave", {7000, 10000}, function()
         cleaveTick(creature, guid)
     end)
@@ -484,6 +513,12 @@ end
 -- (boss_halion.cpp:533-536) — no phase gating on the arm.
 local function breathTick(creature, guid)
     creature:CastSpell(creature, SPELL_DARK_BREATH)
+    if creature:IsCasting() then
+        schedule(guid, "breath", 500, function()
+            breathTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "breath", {10000, 14000}, function()
         breathTick(creature, guid)
     end)
@@ -497,6 +532,12 @@ end
 -- spawn->engage delta on the first tick is near-zero — documented.
 local function tailLashTick(creature, guid)
     creature:CastSpell(creature, SPELL_TAIL_LASH)
+    if creature:IsCasting() then
+        schedule(guid, "tail_lash", 500, function()
+            tailLashTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "tail_lash", {12000, 16000}, function()
         tailLashTick(creature, guid)
     end)
@@ -560,6 +601,12 @@ end
 
 local function soulConsumptionTick(creature, guid)
     local target = randomTwilightPlayer(creature)
+    if creature:IsCasting() then
+        schedule(guid, "soul_consumption", 500, function()
+            soulConsumptionTick(creature, guid)
+        end)
+        return
+    end
     if target then
         creature:CastSpell(target, SPELL_SOUL_CONSUMPTION, true)
     end

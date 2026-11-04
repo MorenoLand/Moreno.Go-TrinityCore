@@ -37,7 +37,9 @@
 -- motion-master bridge.
 -- boss_saviana_ragefire UpdateAI — Talk(EMOTE_ENRAGED 2) +
 -- EVENT_ENRAGE ported 2026-10-13 on the maiden CreateLuaEvent
--- convention (see below); the EVENT_FLIGHT / EVENT_AIR_MOVEMENT /
+-- convention (see below); the UpdateAI CASTING gates (:153 pre-loop +
+-- :195 in-loop) are ported as 500ms IsCasting defer on enrage and
+-- flame-breath ticks; the EVENT_FLIGHT / EVENT_AIR_MOVEMENT /
 -- EVENT_LAND_GROUND legs ride the MotionMaster (no motion-master
 -- bridge) and EVENT_CONFLAGRATION (:173 — DoCastSelf(SPELL_CONFLA-
 -- GRATION 74452, true)) stays out because it is scheduled only from
@@ -98,6 +100,12 @@ end
 -- Talk(EMOTE_ENRAGED 2), 20s init, Repeat(24s).
 local function enrageTick(creature, guid)
     creature:CastSpell(creature, SPELL_ENRAGE)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function()
+            enrageTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_ENRAGED)
     schedule(guid, "enrage", 24000, function()
         enrageTick(creature, guid)
@@ -108,6 +116,12 @@ end
 -- (non-triggered), 14s init, Repeat(20s, 30s).
 local function flameBreathTick(creature, guid)
     creature:CastSpell(nil, SPELL_FLAME_BREATH)
+    if creature:IsCasting() then
+        schedule(guid, "flamebreath", 500, function()
+            flameBreathTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "flamebreath", {20000, 30000}, function()
         flameBreathTick(creature, guid)
     end)

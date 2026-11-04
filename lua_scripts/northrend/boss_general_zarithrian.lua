@@ -44,7 +44,10 @@
 -- add-registration leg (no summon-registry bridge).
 -- boss_general_zarithrian EnterEvadeMode — summons.DespawnAll() +
 -- _DespawnAtEvade() legs (no summon-registry / evade-model bridges).
--- boss_general_zarithrian UpdateAI — 2026-10-14 retraction re-audit:
+-- boss_general_zarithrian UpdateAI — CASTING gates (boss :133
+-- pre-loop + :166 in-loop; flamecaller pre-loop-only :233) ported as
+-- 500ms IsCasting defer on cleave/roar/adds + blast-nova/lava-gout.
+-- 2026-10-14 retraction re-audit:
 -- stale "no-timer-bridge" claim RETRACTED (CreateLuaEvent is a real
 -- bridge); Talk(SAY_ADDS 2) rides EVENT_SUMMON_ADDS unconditionally
 -- (:128-129, Talk then [[fallthrough]]) and is now PORTED on
@@ -116,6 +119,12 @@ end
 -- (non-triggered), 8s init, re-ScheduleEvent(15s) (fixed, not Repeat).
 local function cleaveTick(creature, guid)
     creature:CastSpell(nil, SPELL_CLEAVE_ARMOR)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            cleaveTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "cleave", 15000, function()
         cleaveTick(creature, guid)
     end)
@@ -125,6 +134,12 @@ end
 -- (non-triggered), 14s init, Repeat(35s, 40s).
 local function intimidatingRoarTick(creature, guid)
     creature:CastSpell(creature, SPELL_INTIMIDATING_ROAR)
+    if creature:IsCasting() then
+        schedule(guid, "roar", 500, function()
+            intimidatingRoarTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "roar", {35000, 40000}, function()
         intimidatingRoarTick(creature, guid)
     end)
@@ -141,6 +156,12 @@ end
 -- claim). EVENT_SUMMON_ADDS2 (25-man, 16s) carries no Talk.
 local function addsTick(creature, guid)
     creature:Talk(SAY_ADDS)
+    if creature:IsCasting() then
+        schedule(guid, "adds", 500, function()
+            addsTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "adds", 45000, function()
         addsTick(creature, guid)
     end)
@@ -226,6 +247,12 @@ end
 -- non-triggered self-cast; Repeat(15s, 20s).
 local function flamecallerBlastNovaTick(creature, guid)
     creature:CastSpell(creature, SPELL_BLAST_NOVA)
+    if creature:IsCasting() then
+        schedule(guid, "blast_nova", 500, function()
+            flamecallerBlastNovaTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "blast_nova", {15000, 20000}, function()
         flamecallerBlastNovaTick(creature, guid)
     end)
@@ -235,6 +262,12 @@ end
 -- Repeat(8s); else DoCastVictim(SPELL_LAVA_GOUT 74394) non-triggered,
 -- count++, Repeat(1s).
 local function flamecallerLavaGoutTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lava_gout", 500, function()
+            flamecallerLavaGoutTick(creature, guid)
+        end)
+        return
+    end
     local st = flamecallerState[guid]
     if st and st.lavaGout >= 3 then
         st.lavaGout = 0

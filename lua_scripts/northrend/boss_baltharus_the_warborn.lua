@@ -163,6 +163,12 @@ end
 -- 13s init, Repeat(20s, 24s).
 local function cleaveTick(creature, guid)
     creature:CastSpell(nil, SPELL_CLEAVE)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            cleaveTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "cleave", {20000, 24000}, function()
         cleaveTick(creature, guid)
     end)
@@ -172,6 +178,12 @@ end
 -- (non-triggered), 18s init, Repeat(24s) (:204 boss AI; :301 is the clone AI).
 local function bladeTempestTick(creature, guid)
     creature:CastSpell(creature, SPELL_BLADE_TEMPEST)
+    if creature:IsCasting() then
+        schedule(guid, "bladetempest", 500, function()
+            bladeTempestTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "bladetempest", 24000, function()
         bladeTempestTick(creature, guid)
     end)
@@ -182,6 +194,12 @@ end
 -- VICTIM-cast, the deviation from the boss's DoCastSelf (:204).
 local function cloneBladeTempestTick(creature, guid)
     creature:CastSpell(nil, SPELL_BLADE_TEMPEST)
+    if creature:IsCasting() then
+        schedule(guid, "clonebladetempest", 500, function()
+            cloneBladeTempestTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "clonebladetempest", 24000, function()
         cloneBladeTempestTick(creature, guid)
     end)
@@ -198,6 +216,12 @@ end
 -- picked twice (the putricide randomPlayers precedent).
 local function enervatingBrandTick(creature, guid)
     local candidates = randomTargetsNoBrand(creature, 45)
+    if creature:IsCasting() then
+        schedule(guid, "enervatingbrand", 500, function()
+            enervatingBrandTick(creature, guid)
+        end)
+        return
+    end
     for i = 1, 2 do
         if #candidates == 0 then
             break
@@ -222,8 +246,10 @@ end
 -- EVENT_CLEAVE / EVENT_ENERVATING_BRAND (13s) / EVENT_BLADE_TEMPEST
 -- (18s) on PHASE_COMBAT (the intro phase carries only the intro Talk,
 -- so no gating is lost); timers ride the maiden CreateLuaEvent
--- convention (no UNIT_STATE_CASTING gate in Go, so timers fire
--- unconditionally — the documented maiden deviation).
+-- convention; the UpdateAI CASTING gates (boss :189/:223, clone
+-- :289/:314) are ported as 500ms IsCasting defer per cast tick,
+-- including the 1ms EVENT_CLONE pump (stale maiden deviation
+-- retracted).
 local function baltharusEnterCombat(event, creature, target)
     -- C++ JustEngagedWith base call (boss_baltharus_the_warborn.cpp:113):
     -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
@@ -279,6 +305,22 @@ end
 -- only the 66 arm. Fired as the 1ms scheduled clone leg; the C++
 -- event-9 hook is pre-damage, so GetHealth() here is the pre-damage
 -- value C++ compares against.
+-- C++ EVENT_CLONE runs in UpdateAI under the :189 pre-loop +
+-- :223 in-loop CASTING gates (DamageTaken only schedules it at 1ms),
+-- so the Lua 1ms pump defers 500ms while casting, re-arm unconsumed.
+local function baltharusCloneTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "clone", 500, function()
+            baltharusCloneTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS, true)
+    creature:CastSpell(creature, SPELL_CLONE, true)
+    creature:CastSpell(creature, SPELL_REPELLING_WAVE)
+    creature:Talk(SAY_CLONE)
+end
+
 local function baltharusDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if not cloneCount[guid] then
@@ -312,10 +354,7 @@ local function baltharusDamageTaken(event, creature, attacker, damage)
     end
     if fire then
         schedule(guid, "clone", 1, function()
-            creature:CastSpell(creature, SPELL_CLEAR_DEBUFFS, true)
-            creature:CastSpell(creature, SPELL_CLONE, true)
-            creature:CastSpell(creature, SPELL_REPELLING_WAVE)
-            creature:Talk(SAY_CLONE)
+            baltharusCloneTick(creature, guid)
         end)
     end
 end
