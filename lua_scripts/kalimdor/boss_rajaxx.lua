@@ -14,9 +14,7 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
--- The C++ while(ExecuteEvent()) + HasUnitState(UNIT_STATE_CASTING) gate
--- has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) in the Lua API (aeonus precedent —
--- unmodeled).
+-- UpdateAI CASTING gates PORTED (own UpdateAI pre-loop :92 + in-loop :111 returns, boss_rajaxx.cpp): each arm defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950), no re-arm consumed; defer precedes victim pick (disarm) and self-cast (thunder crash).
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: arm each timer at its C++ ScheduleEvent cooldown (no Talk
 --   in C++ — boss_rajaxxAI has zero Talk() calls; the Yells enum
@@ -66,6 +64,12 @@ end
 
 -- C++ EVENT_DISARM: DoCastVictim(6713), non-triggered, init 10s -> 22s.
 local function onDisarm(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "disarm", 500, function()
+            onDisarm(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_DISARM)
@@ -78,6 +82,12 @@ end
 -- C++ EVENT_THUNDERCRASH: DoCast(me, 25599), non-triggered,
 -- init 12s -> 21s.
 local function onThunderCrash(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "thundercrash", 500, function()
+            onThunderCrash(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_THUNDERCRASH)
     schedule(guid, "thundercrash", 21000, function()
         onThunderCrash(creature, guid)

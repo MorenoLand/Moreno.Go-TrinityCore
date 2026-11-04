@@ -20,9 +20,7 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent; melee
 -- is engine-driven in Go (creature combat tick), like C++
--- DoMeleeAttackIfReady. The C++ while(ExecuteEvent()) +
--- HasUnitState(UNIT_STATE_CASTING) gate has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) in
--- the Lua API (aeonus precedent — unmodeled).
+-- DoMeleeAttackIfReady. UpdateAI CASTING gates PORTED (own UpdateAI pre-loop :111 + in-loop :138 returns, boss_temporus.cpp): each arm defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950), no re-arm consumed; defer precedes each self-cast.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (1) + arm each timer
 --   at its C++ ScheduleEvent cooldown, incl. the heroic-only
@@ -103,6 +101,12 @@ end
 -- C++ EVENT_HASTE: DoCast(me, 31458), non-triggered, init {15s,23s}
 -- -> {20s,25s}.
 local function onHaste(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "haste", 500, function()
+            onHaste(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_HASTE)
     schedule(guid, "haste", math.random(20000, 25000), function()
         onHaste(creature, guid)
@@ -112,6 +116,12 @@ end
 -- C++ EVENT_MORTAL_WOUND: DoCast(me, 31464), non-triggered, init 8s
 -- -> {10s,20s}.
 local function onMortalWound(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mortalwound", 500, function()
+            onMortalWound(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MORTAL_WOUND)
     schedule(guid, "mortalwound", math.random(10000, 20000), function()
         onMortalWound(creature, guid)
@@ -121,6 +131,12 @@ end
 -- C++ EVENT_WING_BUFFET: DoCast(me, 31475), non-triggered, init
 -- {25s,35s} -> {20s,30s}.
 local function onWingBuffet(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wingbuffet", 500, function()
+            onWingBuffet(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WING_BUFFET)
     schedule(guid, "wingbuffet", math.random(20000, 30000), function()
         onWingBuffet(creature, guid)
@@ -130,6 +146,12 @@ end
 -- C++ EVENT_SPELL_REFLECTION (heroic only): DoCast(me, 38592),
 -- non-triggered, init 30s -> {25s,35s}.
 local function onSpellReflection(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spellreflection", 500, function()
+            onSpellReflection(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_REFLECT)
     schedule(guid, "spellreflection", math.random(25000, 35000), function()
         onSpellReflection(creature, guid)

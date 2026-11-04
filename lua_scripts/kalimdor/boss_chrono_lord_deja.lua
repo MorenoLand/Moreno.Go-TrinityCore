@@ -23,9 +23,7 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent; melee
 -- is engine-driven in Go (creature combat tick), like C++
--- DoMeleeAttackIfReady. The C++ while(ExecuteEvent()) +
--- HasUnitState(UNIT_STATE_CASTING) gate has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) in
--- the Lua API (aeonus precedent — unmodeled).
+-- DoMeleeAttackIfReady. UpdateAI CASTING gates PORTED (own UpdateAI pre-loop :111 + in-loop :140 returns, boss_chrono_lord_deja.cpp): each arm defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950), no re-arm consumed; defer precedes victim pick (arcane blast), Talk (time lapse), and random pick (arcane discharge, attraction).
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (1) + arm each timer
 --   at its C++ ScheduleEvent cooldown, incl. the heroic-only
@@ -130,6 +128,12 @@ end
 -- C++ EVENT_ARCANE_BLAST: DoCastVictim(31457), non-triggered, init
 -- {18s,23s} -> {15s,25s}; jeklik GetVictim + CastSpell convention.
 local function onArcaneBlast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcaneblast", 500, function()
+            onArcaneBlast(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not victim:IsDead() then
         creature:CastSpell(victim, SPELL_ARCANE_BLAST)
@@ -142,6 +146,12 @@ end
 -- C++ EVENT_TIME_LAPSE: Talk SAY_BANISH (2) + DoCast(me, 31467),
 -- non-triggered, init {10s,15s} -> {15s,25s}.
 local function onTimeLapse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "timelapse", 500, function()
+            onTimeLapse(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_BANISH)
     creature:CastSpell(creature, SPELL_TIME_LAPSE)
     schedule(guid, "timelapse", math.random(15000, 25000), function()
@@ -152,6 +162,12 @@ end
 -- C++ EVENT_ARCANE_DISCHARGE: DoCast(SelectTarget(Random, 0), 31472),
 -- non-triggered, init {20s,30s} -> {20s,30s}; nil target -> no cast.
 local function onArcaneDischarge(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcanedischarge", 500, function()
+            onArcaneDischarge(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_DISCHARGE)
@@ -164,6 +180,12 @@ end
 -- C++ EVENT_ATTRACTION (heroic only): DoCast(me, SPELL_ATTRACTION
 -- 38540), non-triggered, re-arm {25s,35s} (C++-exact).
 local function onAttraction(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "attraction", 500, function()
+            onAttraction(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ATTRACTION)
     schedule(guid, "attraction", math.random(25000, 35000), function()
         onAttraction(creature, guid)

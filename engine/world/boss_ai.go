@@ -15606,7 +15606,7 @@ func init() {
 	// 17918 within 20yd) has no nearby-creature enumeration bridge, and
 	// the JustDied instance->SetData(TYPE_RIFT/TYPE_MEDIVH, DONE) legs
 	// have no instance-data bridge (standing) — documented in
-	// lua_scripts/kalimdor/boss_aeonus.lua, not wired. SPELL_CLEAVE 40504
+	// lua_scripts/kalimdor/boss_aeonus.lua, not wired. UpdateAI CASTING gates PORTED (own pre-loop + in-loop returns, boss_aeonus.cpp:111/:135 — each arm defers 500ms while IsCasting, no re-arm consumed). SPELL_CLEAVE 40504
 	// and H_SPELL_SAND_BREATH 39049 are declared in the C++ enum but
 	// never used by UpdateAI; SAY_ENTER 0 is never Talked in C++.
 	RegisterLuaBoss("boss_aeonus", 17881)
@@ -15629,8 +15629,7 @@ func init() {
 	// within 20yd) has no nearby-creature enumeration bridge, the
 	// JustDied instance->SetData(TYPE_RIFT, SPECIAL) leg has no
 	// instance-data bridge (standing), and the heroic-only Attraction
-	// 38540 arm has no difficulty bridge — documented in
-	// lua_scripts/kalimdor/boss_chrono_lord_deja.lua, not wired.
+	// 38540 arm is PORTED under creature:IsHeroic() (stale "no difficulty bridge" claim retracted; see lua_scripts/kalimdor/boss_chrono_lord_deja.lua). UpdateAI CASTING gates PORTED (own pre-loop + in-loop returns, boss_chrono_lord_deja.cpp:111/:140 — each arm defers 500ms while IsCasting, no re-arm consumed).
 	// H_SPELL_ARCANE_BLAST 38538 / H_SPELL_ARCANE_DISCHARGE 38539 are
 	// declared but never cast by UpdateAI; SAY_ENTER 0 is never Talked
 	// in C++.
@@ -15652,8 +15651,7 @@ func init() {
 	// instance->SetData(TYPE_RIFT, SPECIAL) leg has no instance-data
 	// bridge (standing), and the heroic-only Spell Reflection 38592 arm
 	// (C++ marks it "//Not Implemented (Heroic mod)") has no difficulty
-	// bridge — documented in lua_scripts/kalimdor/boss_temporus.lua, not
-	// wired. H_SPELL_WING_BUFFET 38593 is declared but never cast by
+	// bridge — PORTED under creature:IsHeroic() (stale claim retracted; see lua_scripts/kalimdor/boss_temporus.lua). UpdateAI CASTING gates PORTED (own pre-loop + in-loop returns, boss_temporus.cpp:111/:138 — each arm defers 500ms while IsCasting, no re-arm consumed). H_SPELL_WING_BUFFET 38593 is declared but never cast by
 	// UpdateAI; SAY_ENTER 0 is never Talked in C++.
 	RegisterLuaBoss("boss_temporus", 17880)
 
@@ -15690,8 +15688,7 @@ func init() {
 	// EVENT_WIDE_SLASH at 15s instead of itself — C++-verbatim);
 	// DamageTaken enrage 26527 below 30% health, latched per GUID
 	// (moroes event-9 convention); melee engine-driven. The
-	// while(ExecuteEvent()) + UNIT_STATE_CASTING gate has no bridge
-	// (aeonus precedent). JustDied's Ossirian SAY_KURINNAXX_DEATH yell
+	// while(ExecuteEvent()) + UNIT_STATE_CASTING gate PORTED (own pre-loop + in-loop returns, boss_kurinnaxx.cpp:98/:128 — each arm defers 500ms while IsCasting, no re-arm consumed). JustDied's Ossirian SAY_KURINNAXX_DEATH yell
 	// (ObjectAccessor::GetCreature(*me,
 	// instance->GetGuidData(DATA_OSSIRIAN))) and the _JustDied() /
 	// DATA_KURINNAXX boss-state legs have no instance-data bridge
@@ -15708,7 +15705,7 @@ func init() {
 	// on the victim (jeklik GetVictim + CastSpell convention, 10s ->
 	// 22s); Thunder Crash 25599 self-cast (12s -> 21s); melee
 	// engine-driven. The while(ExecuteEvent()) + UNIT_STATE_CASTING
-	// gate has no bridge (aeonus precedent); spell_rajaxx_thundercrash
+	// gate PORTED (own pre-loop + in-loop returns, boss_rajaxx.cpp:92/:111 — each arm defers 500ms while IsCasting, no re-arm consumed); spell_rajaxx_thundercrash
 	// (SpellScript damage calc) has no SpellScript bridge (standing);
 	// EVENT_CHANGE_AGGRO and the enraged bool are dead in C++ (never
 	// used) — nothing to port. BossAI's ctor leg DATA_RAJAXX and

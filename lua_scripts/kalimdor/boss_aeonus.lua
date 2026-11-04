@@ -19,6 +19,7 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- UpdateAI CASTING gates PORTED (own UpdateAI pre-loop :111 + in-loop :135 returns, boss_aeonus.cpp): each arm defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950), no re-arm consumed; defer precedes victim pick (sandbreath/timestop) and Talk (frenzy).
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (1) + arm each timer at
 --   its C++ ScheduleEvent cooldown.
@@ -104,6 +105,12 @@ end
 -- C++ EVENT_SANDBREATH: DoCastVictim(31473), non-triggered, init
 -- {15s,30s} -> {15s,25s}; jeklik GetVictim + CastSpell convention.
 local function onSandBreath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sandbreath", 500, function()
+            onSandBreath(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not victim:IsDead() then
         creature:CastSpell(victim, SPELL_SAND_BREATH)
@@ -116,6 +123,12 @@ end
 -- C++ EVENT_TIMESTOP: DoCastVictim(31422), non-triggered, init
 -- {10s,15s} -> {20s,35s}.
 local function onTimeStop(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "timestop", 500, function()
+            onTimeStop(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not victim:IsDead() then
         creature:CastSpell(victim, SPELL_TIME_STOP)
@@ -128,6 +141,12 @@ end
 -- C++ EVENT_FRENZY: Talk EMOTE_FRENZY (5) + DoCast(me, 37605),
 -- non-triggered, init {30s,45s} -> {20s,35s}.
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            onFrenzy(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_FRENZY)
     creature:CastSpell(creature, SPELL_ENRAGE)
     schedule(guid, "frenzy", math.random(20000, 35000), function()

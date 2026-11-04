@@ -14,9 +14,7 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
--- The C++ while(ExecuteEvent()) + HasUnitState(UNIT_STATE_CASTING) gate
--- has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) in the Lua API (aeonus precedent —
--- unmodeled).
+-- UpdateAI CASTING gates PORTED (own UpdateAI pre-loop :98 + in-loop :128 returns, boss_kurinnaxx.cpp): each arm defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950), no re-arm consumed; defer precedes victim pick (mortal wound), random pick (sand trap), and each self-cast; the trash one-shot still fires once, seeding wideslash2, after any defer.
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: arm each timer at its C++ ScheduleEvent cooldown (no Talk
 --   in C++ JustEngagedWith — there is no SAY_AGGRO arm here).
@@ -97,6 +95,12 @@ end
 -- C++ EVENT_MORTAL_WOUND: DoCastVictim(25646), non-triggered, init
 -- 8s -> 8s.
 local function onMortalWound(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mortalwound", 500, function()
+            onMortalWound(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_MORTAL_WOUND)
@@ -115,6 +119,12 @@ end
 -- creatureEffectSummonType) — the switch would lose the spawn, so the
 -- creature casts on the target/victim instead (caster deviates from C++).
 local function onSandTrap(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sandtrap", 500, function()
+            onSandTrap(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_SAND_TRAP, true)
@@ -131,6 +141,12 @@ end
 
 -- C++ EVENT_WIDE_SLASH: DoCast(me, 25814), init 11s -> 11s.
 local function onWideSlash(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wideslash", 500, function()
+            onWideSlash(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WIDE_SLASH)
     schedule(guid, "wideslash", 11000, function()
         onWideSlash(creature, guid)
@@ -142,6 +158,12 @@ end
 -- the 11s init line, so it gets its own timer key (schedule() cancels the
 -- key, i.e. RescheduleEvent semantics).
 local function onWideSlash2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wideslash2", 500, function()
+            onWideSlash2(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WIDE_SLASH)
     schedule(guid, "wideslash2", 11000, function()
         onWideSlash2(creature, guid)
@@ -151,6 +173,12 @@ end
 -- C++ EVENT_TRASH: DoCast(me, 3391), fired once at 1s; it seeds the second
 -- wide-slash line at 15s (C++-verbatim, not a repeat of itself).
 local function onTrash(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "trash", 500, function()
+            onTrash(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TRASH)
     schedule(guid, "wideslash2", 15000, function()
         onWideSlash2(creature, guid)
