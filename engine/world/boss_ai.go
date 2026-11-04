@@ -13160,14 +13160,21 @@ func init() {
 	// (C++-exact); JustEngagedWith PlayDirectSound (5880); entry
 	// 4949 wowhead-verified — see
 	// lua_scripts/kalimdor/npc_thrall_warchief.lua. The quest-6566
-	// gossip menu chain awaits the gossip bridge; npc_shenthul
-	// (Shattered Salute emote machine), npc_overlord_runthak_orgrimmar
-	// (citizen scene) and npc_thrall_herald_of_war's scene machine
-	// (DoAction/MovementInform/MovePath legs) await the emote / quest /
-	// movement / DoAction bridges — documented only; the herald's
+	// gossip menu chain awaits the gossip bridge;
+	// npc_overlord_runthak_orgrimmar (citizen scene) and
+	// npc_thrall_herald_of_war's scene machine
+	// (DoAction/MovementInform/MovePath legs) await the movement /
+	// DoAction bridges — documented only; the herald's
 	// Reset once-per-lifetime Kor'kron guard summons are ported in
 	// lua_scripts/kalimdor/npc_thrall_herald_of_war.lua.
 	RegisterLuaBoss("npc_thrall_warchief", 4949)
+	// npc_shenthul (Shattered Salute emote machine, quest 2460):
+	// ported in lua_scripts/kalimdor/npc_shenthul.lua — the old
+	// documented-only note is retired: the emote (event 8) and
+	// quest-accept (event 31) bridges plus FailQuest /
+	// AreaExploredOrEventHappens now exist. Entry 3401
+	// wowhead-verified (Classic NPC page, wilda precedent).
+	RegisterLuaBoss("npc_shenthul", 3401)
 	// Thrall, Herald of War (Wrathgate cinematic) — Reset guard
 	// summons in lua_scripts/kalimdor/npc_thrall_herald_of_war.lua.
 	RegisterLuaBoss("npc_thrall_herald_of_war", 31412)
