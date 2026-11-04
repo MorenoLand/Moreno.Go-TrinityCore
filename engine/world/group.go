@@ -1885,6 +1885,13 @@ func (s *Server) setGroupLeader(g *groupState, guid uint64) bool {
 	}
 	s.groupsMu.Unlock()
 
+	// Group::ChangeLeader (Group.cpp:767-801) persists the new leader for
+	// non-BG/non-BF groups (CHAR_UPD_GROUP_LEADER); BG groups are DBID-0
+	// here and battlefield groups have no Go model, so both skip the write.
+	if g.DBID != 0 && !g.isBGGroup() && s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		_, _ = s.CharactersStore.ExecStatement(context.Background(), database.StatementID("CHAR_UPD_GROUP_LEADER"), guid, g.DBID)
+	}
+
 	// Group::ChangeLeader (Group.cpp:806-809): the old leader loses
 	// PLAYER_FLAGS_GROUP_LEADER (when connected) and the new leader gains it.
 	if oldSess != nil && oldSess.player != nil && oldLeader != guid {

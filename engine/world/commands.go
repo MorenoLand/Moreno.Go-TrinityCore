@@ -2933,7 +2933,35 @@ func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (ch
 		t.name = s.player.Name
 		return t, args, true
 	}
-	name := normalizePlayerName(args[0])
+	// C++ PlayerIdentifier::TryConsume (ChatCommandTags.cpp:88-121)
+	// accepts three forms in order: a |Hplayer link, a numeric player
+	// GUID, or a plain name. The link and GUID forms were missing here.
+	var name string
+	if strings.HasPrefix(args[0], "|") {
+		name = normalizePlayerName(extractPlayerNameFromLink(args[0]))
+	} else if isAllDigits(args[0]) {
+		if guid64, err := strconv.ParseUint(args[0], 10, 32); err == nil && guid64 != 0 {
+			if online := s.server.playerSessionForGUID(guid64); online != nil && online.player != nil {
+				t.online = online
+				t.guid = online.playerGUID
+				t.name = online.player.Name
+				return t, args[1:], true
+			}
+			chars := s.server.CharactersStore
+			if chars != nil && chars.DB != nil {
+				var dbName string
+				if err := chars.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid64).Scan(&dbName); err == nil && dbName != "" {
+					t.guid = guid64
+					t.name = dbName
+					return t, args[1:], true
+				}
+			}
+		}
+		s.sendSysMessage("Player not found.")
+		return t, args, false
+	} else {
+		name = normalizePlayerName(args[0])
+	}
 	t.name = name
 	if name == "" {
 		s.sendSysMessage("Player not found.")
@@ -5650,19 +5678,27 @@ func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
-	// C++: strtok(entry) missing or atoi == 0 -> return false.
+	// C++: strtok(entry) missing or atoi == 0 -> return false, and a
+	// missing comment token -> return false, both with no message sent.
+	// The outdoorpvp add arm alone swallows that false (cs_disable.cpp:
+	// HandleAddDisableOutdoorPvPCommand ignores HandleAddDisables'
+	// return), so those two failures stay silent for outdoorpvp only.
 	if len(args) < 3 {
-		s.sendSysMessage(syntax)
+		if info.disableType != disableTypeOutdoorPvP {
+			s.sendSysMessage(syntax)
+		}
 		return
 	}
-	entry64, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || entry64 == 0 {
-		s.sendSysMessage(syntax)
+	// C++: entry is uint32(atoi(entryStr)), flags uint8(atoi(flagsStr));
+	// cAtoi keeps the atoi leniency (leading-digit runs, sign, wrap).
+	entry := uint32(cAtoi(args[0]))
+	if entry == 0 {
+		if info.disableType != disableTypeOutdoorPvP {
+			s.sendSysMessage(syntax)
+		}
 		return
 	}
-	entry := uint32(entry64)
-	// C++: uint8(atoi(flagsStr)); empty or garbage flags parse to 0.
-	flags64, _ := strconv.ParseUint(args[1], 10, 8)
+	flags := uint8(cAtoi(args[1]))
 	comment := strings.Join(args[2:], " ")
 	switch info.disableType {
 	case disableTypeSpell:
@@ -5732,7 +5768,7 @@ func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType
 		s.sendSysMessage(fmt.Sprintf("This %s (Id: %d) is already disabled.", info.label, entry))
 		return
 	}
-	if _, err := s.server.WorldStore.ExecStatement(ctx, database.StatementID("WORLD_INS_DISABLES"), entry, info.disableType, uint16(flags64), comment); err != nil {
+	if _, err := s.server.WorldStore.ExecStatement(ctx, database.StatementID("WORLD_INS_DISABLES"), entry, info.disableType, uint16(flags), comment); err != nil {
 		return
 	}
 	s.sendSysMessage(fmt.Sprintf("Add Disabled %s (Id: %d) for reason %s", info.label, entry, comment))
@@ -5750,12 +5786,12 @@ func (s *session) handleDisableRemove(ctx context.Context, info *disableCommandT
 		s.sendSysMessage(syntax)
 		return
 	}
-	entry64, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || entry64 == 0 {
+	// C++: uint32(atoi(entryStr)) with the same !atoi -> false gate as add.
+	entry := uint32(cAtoi(args[0]))
+	if entry == 0 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	entry := uint32(entry64)
 	row, err := s.server.WorldStore.QueryRowStatement(ctx, database.StatementID("WORLD_SEL_DISABLES"), entry, info.disableType)
 	disabled := false
 	if err == nil {
@@ -5887,7 +5923,10 @@ func (s *session) handleEventInfo(ctx context.Context, args []string) {
 	now := time.Now().Unix()
 	delay := gameEventNextCheck(ev, now)
 	nextStr := "-"
-	if delay < 86400 && now+delay >= ev.Start && now+delay < ev.End {
+	// C++ (cs_event.cpp:114-115): the next-change time prints whenever
+	// gameTime + NextCheck lands in [start, end) — including a start more
+	// than a day out, which the old <86400 guard wrongly suppressed.
+	if now+delay >= ev.Start && now+delay < ev.End {
 		nextStr = timeToTimestampStr(time.Unix(now+delay, 0))
 	}
 	s.sendSysMessage(fmt.Sprintf("Event %d: %s %s", id, ev.Description, activeStr))
