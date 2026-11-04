@@ -23,7 +23,7 @@
 -- Entries: 26687 Gortok Palehoof (utgarde_pinnacle.h NPC_GORTOK_PALEHOOF,
 -- line 54); 26683 Frenzied Worgen, 26684 Ravenous Furbolg, 26685 Massive
 -- Jormungar, 26686 Ferocious Rhino (utgarde_pinnacle.h lines 62-65 —
--- registered this run for their ungated timer arms) — entry-verifiable,
+-- registered this run for their timer arms) — entry-verifiable,
 -- registration proceeds (the nexus_commanders / malygos / sartharion
 -- kalecgos precedent); the CreatureScript ScriptName binding is DB-side
 -- as usual. DATA_GORTOK_PALEHOOF = 1 (utgarde_pinnacle.h line 32).
@@ -43,7 +43,7 @@
 -- randtime range; random-target arms use GetPlayersInWorld (the baltharus
 -- / thorim colossus precedent). The 2026-10-02 "no-timer-bridge" header
 -- doctrine is RETRACTED for this file: CreateLuaEvent is a real
--- registered bridge, so the ungated timer arms below are ported rather
+-- registered bridge, so the timer arms below are ported rather
 -- than parked.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill,
 -- 4 OnDied, 23 OnReset.
@@ -53,7 +53,7 @@
 -- JustEngagedWith arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
 -- (ScriptedCreature.cpp:540/542) ported before Talk(SAY_AGGRO 0)
 -- (event 1; instance SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE) and
--- setActive legs out) — plus the three ungated timer arms,
+-- setActive legs out) — plus the three timer arms (BossAI-base-gated, see below),
 -- scheduled here on the xt002 precedent (C++ schedules on
 -- JustEngagedWith, Go on event 1, same inits):
 --   EVENT_ARCING_SMASH (arm :236-239): DoCastVictim(SPELL_ARCING_SMASH
@@ -72,10 +72,11 @@
 -- (event 3 — the razuvious player-gated variant precedent; the nil-guard
 -- is the hodir-port convention — Eluna event 3 always carries a victim,
 -- so C++-exactness is unaffected).
--- The four minibosses' timer kits are all ungated in their ExecuteEvent
--- switches (no phase groups, no DoAction-gated arms — the yogg_saron
--- adds precedent), so they are ported with per-entry event-1 scheduling
--- carrying the C++ ScheduleTasks inits:
+-- The four minibosses' timer kits run under BossAI::UpdateAI base gates
+-- (ScriptedCreature.cpp:578/:584; PalehoofMinionsBossAI overrides no
+-- UpdateAI), so all twelve arms carry the 500ms IsCasting defer (no
+-- phase groups, no DoAction-gated arms), ported with per-entry event-1
+-- scheduling carrying the C++ ScheduleTasks inits:
 --   boss_ravenous_furbolg (26684), ScheduleTasks :377-379, arms :386-398:
 --   EVENT_CRAZED DoCastSelf(SPELL_CRAZED 48139) -> CastSpell(creature,
 --   48139), init 10s, Repeat(20s,25s); EVENT_CHAIN_LIGHTNING
@@ -283,6 +284,12 @@ end
 -- C++ EVENT_ARCING_SMASH arm (:236-239): DoCastVictim(SPELL_ARCING_SMASH
 -- 48260), 1-arg = non-triggered; init 7s, Repeat(7s).
 local function arcingSmashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcingsmash", 500, function()
+            arcingSmashTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ARCING_SMASH)
     schedule(guid, "arcingsmash", 7000, function()
         arcingSmashTick(creature, guid)
@@ -293,6 +300,12 @@ end
 -- unlimited range) -> DoCast(target, SPELL_IMPALE 48261), 2-arg =
 -- non-triggered; init 11s, Repeat(10s,15s).
 local function impaleTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "impale", 500, function()
+            impaleTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_IMPALE)
@@ -306,6 +319,12 @@ end
 -- (SPELL_WITHERING_ROAR 48256), 1-arg = non-triggered; init 12s,
 -- Repeat(11s).
 local function witheringRoarTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "witheringroar", 500, function()
+            witheringRoarTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WITHERING_ROAR)
     schedule(guid, "witheringroar", 11000, function()
         witheringRoarTick(creature, guid)
@@ -347,7 +366,7 @@ local function palehoofKilledUnit(event, creature, victim)
     creature:Talk(SAY_SLAY)
 end
 
--- C++ boss_ravenous_furbolgAI::ScheduleTasks (:377-379) — ungated;
+-- C++ boss_ravenous_furbolgAI::ScheduleTasks (:377-379) — BossAI-base-gated;
 -- carried here on event 1.
 local function furbolgEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
@@ -359,14 +378,26 @@ local function furbolgEnterCombat(event, creature)
     -- 2026-10-23 against the live bridge: DoAction machine).
     creature:RemoveAura(SPELL_FREEZE)
     local function crazedTick()
+        if creature:IsCasting() then
+            schedule(guid, "crazed", 500, crazedTick)
+            return
+        end
         creature:CastSpell(creature, SPELL_CRAZED)
         schedule(guid, "crazed", {20000, 25000}, crazedTick)
     end
     local function chainLightningTick()
+        if creature:IsCasting() then
+            schedule(guid, "chainlightning", 500, chainLightningTick)
+            return
+        end
         creature:CastSpell(nil, SPELL_CHAIN_LIGHTNING)
         schedule(guid, "chainlightning", 11000, chainLightningTick)
     end
     local function terrifyingRoarTick()
+        if creature:IsCasting() then
+            schedule(guid, "terrifyingroar", 500, terrifyingRoarTick)
+            return
+        end
         creature:CastSpell(creature, SPELL_TERRIFYING_ROAR)
         schedule(guid, "terrifyingroar", 18000, terrifyingRoarTick)
     end
@@ -375,7 +406,7 @@ local function furbolgEnterCombat(event, creature)
     schedule(guid, "terrifyingroar", 22000, terrifyingRoarTick)
 end
 
--- C++ boss_frenzied_worgenAI::ScheduleTasks (:421-423) — ungated;
+-- C++ boss_frenzied_worgenAI::ScheduleTasks (:421-423) — BossAI-base-gated;
 -- carried here on event 1.
 local function worgenEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
@@ -383,21 +414,34 @@ local function worgenEnterCombat(event, creature)
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)
     local function mortalWoundTick()
+        if creature:IsCasting() then
+            schedule(guid, "mortalwound", 500, mortalWoundTick)
+            return
+        end
         creature:CastSpell(nil, SPELL_MORTAL_WOUND)
         schedule(guid, "mortalwound", 6000, mortalWoundTick)
     end
     local function enrageTick()
+        if creature:IsCasting() then
+            schedule(guid, "enrage", 500, enrageTick)
+            return
+        end
         creature:CastSpell(creature, SPELL_ENRAGE_1)
         schedule(guid, "enrage", 25000, enrageTick)
     end
     schedule(guid, "mortalwound", 6000, mortalWoundTick)
     schedule(guid, "enrage", 16000, enrageTick)
-    schedule(guid, "enrage2", 90000, function()
+    local function enrage2Tick()
+        if creature:IsCasting() then
+            schedule(guid, "enrage2", 500, enrage2Tick)
+            return
+        end
         creature:CastSpell(creature, SPELL_ENRAGE_2)
-    end)
+    end
+    schedule(guid, "enrage2", 90000, enrage2Tick)
 end
 
--- C++ boss_ferocious_rhinoAI::ScheduleTasks (:464-466) — ungated;
+-- C++ boss_ferocious_rhinoAI::ScheduleTasks (:464-466) — BossAI-base-gated;
 -- carried here on event 1.
 local function rhinoEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
@@ -405,10 +449,18 @@ local function rhinoEnterCombat(event, creature)
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)
     local function goreTick()
+        if creature:IsCasting() then
+            schedule(guid, "gore", 500, goreTick)
+            return
+        end
         creature:CastSpell(nil, SPELL_GORE)
         schedule(guid, "gore", 19000, goreTick)
     end
     local function grievousWoundTick()
+        if creature:IsCasting() then
+            schedule(guid, "grievouswound", 500, grievousWoundTick)
+            return
+        end
         local target = randomThreatTargetSkippingFirst(creature)
         if target then
             creature:CastSpell(target, SPELL_GRIEVOUS_WOUND)
@@ -416,6 +468,10 @@ local function rhinoEnterCombat(event, creature)
         schedule(guid, "grievouswound", 18000, grievousWoundTick)
     end
     local function stompTick()
+        if creature:IsCasting() then
+            schedule(guid, "stomp", 500, stompTick)
+            return
+        end
         creature:CastSpell(creature, SPELL_STOMP)
         schedule(guid, "stomp", {10000, 15000}, stompTick)
     end
@@ -424,7 +480,7 @@ local function rhinoEnterCombat(event, creature)
     schedule(guid, "stomp", 5000, stompTick)
 end
 
--- C++ boss_massive_jormungarAI::ScheduleTasks (:509-511) — ungated;
+-- C++ boss_massive_jormungarAI::ScheduleTasks (:509-511) — BossAI-base-gated;
 -- carried here on event 1.
 local function jormungarEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
@@ -432,14 +488,26 @@ local function jormungarEnterCombat(event, creature)
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)
     local function acidSpitTick()
+        if creature:IsCasting() then
+            schedule(guid, "acidspit", 500, acidSpitTick)
+            return
+        end
         creature:CastSpell(nil, SPELL_ACID_SPIT)
         schedule(guid, "acidspit", 7000, acidSpitTick)
     end
     local function acidSplatterTick()
+        if creature:IsCasting() then
+            schedule(guid, "acidsplatter", 500, acidSplatterTick)
+            return
+        end
         creature:CastSpell(creature, SPELL_ACID_SPLATTER)
         schedule(guid, "acidsplatter", 16000, acidSplatterTick)
     end
     local function poisonBreathTick()
+        if creature:IsCasting() then
+            schedule(guid, "poisonbreath", 500, poisonBreathTick)
+            return
+        end
         local target = randomPlayerTarget(creature)
         if target then
             creature:CastSpell(target, SPELL_POISON_BREATH)

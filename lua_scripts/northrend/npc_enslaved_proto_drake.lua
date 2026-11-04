@@ -40,6 +40,12 @@ end
 -- C++ EVENT_REND (:315-316): DoCast(SPELL_REND), non-triggered;
 -- re-arm {15s,20s}. CastSpell(nil, ...) = victim-cast.
 local function rendTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rend", 500, function()
+            rendTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_REND)
     schedule(guid, "rend", {15000, 20000}, function()
         rendTick(creature, guid)
@@ -49,6 +55,12 @@ end
 -- C++ EVENT_FLAME_BREATH (:319-320): DoCast(SPELL_FLAME_BREATH),
 -- non-triggered; re-arm {11s,12s}.
 local function flameBreathTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flame", 500, function()
+            flameBreathTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FLAME_BREATH)
     schedule(guid, "flame", {11000, 12000}, function()
         flameBreathTick(creature, guid)
@@ -58,6 +70,12 @@ end
 -- C++ EVENT_KNOCKAWAY (:323-324): DoCast(SPELL_KNOCK_AWAY),
 -- non-triggered; re-arm {7s,8500ms}.
 local function knockAwayTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "knockaway", 500, function()
+            knockAwayTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_KNOCK_AWAY)
     schedule(guid, "knockaway", {7000, 8500}, function()
         knockAwayTick(creature, guid)
@@ -68,8 +86,9 @@ end
 -- C++ EventMap timers do not advance without a victim (UpdateVictim
 -- gate :301), while CreateLuaEvent runs in real time, so Reset-arming
 -- would drift pre-combat. Init delays are C++-exact. The C++
--- HasUnitState(CASTING) gate (:309-311) is skipped per the caststate
--- axiom (handler IsCasting is constant-false; no in-flight cast state).
+-- HasUnitState(CASTING) pre-loop gate (:307, no in-loop return) is ported
+-- as 500ms IsCasting defer (live, lua_creature_events.go:1950) on all
+-- three timer arms — the stale caststate-axiom skip is retracted.
 local function protoDrakeEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)

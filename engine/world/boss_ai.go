@@ -19289,6 +19289,11 @@ func init() {
 	// EVENT_DEATH_RESPONSE Talk is DoAction-gated, and Dalronn's
 	// EVENT_SUMMON_SKELETONS is a heroic summon leg — all
 	// bridge-blocked, documented in the lua header.
+	// Cast-state gates (2026-11-04): BossAI::UpdateAI pre-loop :578 +
+	// in-loop :584 CASTING returns (neither boss overrides UpdateAI)
+	// ported as 500ms IsCasting defer on all timer arms incl. the delayed
+	// aggro Talk and the death-response relay; DamageTaken enrage /
+	// KilledUnit / JustDied hooks ungated per C++ (separate hooks).
 	RegisterLuaBoss("boss_skarvald_the_constructor", 24200)
 	RegisterLuaBoss("boss_dalronn_the_controller", 24201)
 	// Ingvar the Plunderer (Utgarde Keep) — boss_ingvar_the_plunderer.cpp,
@@ -19315,6 +19320,10 @@ func init() {
 	// (MovementInform / instance-GuidData / cross-creature resurrect
 	// machine) and the two spell scripts are bridge-blocked — documented
 	// in the lua header.
+	// Cast-state gates (2026-11-04): own UpdateAI pre-loop :206 +
+	// in-loop :262 CASTING returns ported as 500ms IsCasting defer on all
+	// four PHASE_HUMAN timer arms; DamageTaken feign latch ungated per C++
+	// (separate hook); stale "timers fire unconditionally" header retracted.
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23954)
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23980)
 	// npc_enslaved_proto_drake (Utgarde Keep) — ported arms in
@@ -19323,6 +19332,10 @@ func init() {
 	// MovementInform / SetData legs stay out (no AnimationTier/MovePath bridge);
 	// forge-master + 3 spell scripts stay out (instance/SpellScript bridges).
 	// Entry 24083 ultimowow-only (no C++ NPC_ constant for this trash mob).
+	// Cast-state gates (2026-11-04): own UpdateAI pre-loop CASTING return
+	// (utgarde_keep.cpp:307, no in-loop return) ported as 500ms IsCasting
+	// defer on rend/flame-breath/knockaway; stale caststate-axiom skip
+	// retracted in the lua header.
 	RegisterLuaBoss("npc_enslaved_proto_drake", 24083)
 	// Svala Sorrowgrave (Utgarde Pinnacle) — boss_svala.cpp,
 	// AddSC_boss_svala() (loader decl 132 / call 327) — the FIRST group of
@@ -19335,10 +19348,10 @@ func init() {
 	// the sjonnir JustDied-Talk precedent). Timer-driven cast ports
 	// (CreateLuaEvent): npc_scourge_hulk (26555) mightyBlow 48697 and
 	// volatileInfection 56785 — both ungated in its UpdateAI, non-
-	// triggered (the yogg_saron adds precedent). The NORMAL-phase-gated
-	// EVENT_SINISTER_STRIKE / EVENT_CALL_FLAMES arms stay out (the
-	// NORMAL/SACRIFICING phase machine has no bridges — the gothik
-	// precedent); the whole intro Talk machine (EVENT_INTRO_* timers,
+	// triggered (the yogg_saron adds precedent). EVENT_SINISTER_STRIKE /
+	// EVENT_CALL_FLAMES are ported in Lua under the sacrificed latch and
+	// stay ungated — boss_svalaAI::UpdateAI :237 has zero CASTING checks;
+	// the whole intro Talk machine (EVENT_INTRO_* timers,
 	// cross-creature Arthas talks), the EVENT_RITUAL_PREPARATION Talk
 	// (SAY_SACRIFICE_PLAYER) fused with the ritual summon machine, the
 	// spectator / spell_paralyze_pinnacle / achievement_incredible_hulk
@@ -19346,6 +19359,11 @@ func init() {
 	// npc_ritual_channeler (27281) heroic Reset AddAura (SHADOWS_IN_THE_
 	// DARK 59407, IsHeroic-gated, event 23) is ported — its paralyze timer
 	// rides unbridged instance GetGuidData legs (documented in the header).
+	// Cast-state gates (2026-11-04): checked-no-gate — boss own UpdateAI
+	// :237 zero CASTING hits; hulk UpdateAI :566 plain countdowns
+	// (victim-STUNNED check only); ritual_channeler UpdateAI :437 CASTING
+	// return covers only the unported paralyze timer (ported arm is the
+	// ev23 heroic AddAura, separate hook).
 	RegisterLuaBoss("boss_svala", 26668)
 	// AddSC_boss_palehoof: Gortok Palehoof (Utgarde Pinnacle) — ported arms
 	// (lua_scripts/northrend/boss_palehoof.lua): JustEngagedWith
@@ -19353,17 +19371,21 @@ func init() {
 	// precedent), KilledUnit player-gated Talk(SAY_SLAY 1) (event 3 — the
 	// razuvious player-gated variant precedent). Timer-driven cast ports
 	// (CreateLuaEvent): boss EVENT_ARCING_SMASH 48260, EVENT_IMPALE 48261
-	// (random player), EVENT_WITHERING_ROAR 48256 — all ungated,
+	// (random player), EVENT_WITHERING_ROAR 48256 — all BossAI-base-gated,
 	// non-triggered; the four miniboss timer kits (furbolg CRAZED /
 	// CHAIN_LIGHTNING / TERRIFYING_ROAR, worgen MORTAL_WOUND / ENRAGE /
 	// ENRAGE_2, rhino GORE / GRIEVOUS_WOUND / STOMP, jormungar ACID_SPIT
 	// / ACID_SPLATTER / POISON_BREATH) — all ungated in their
-	// ExecuteEvent switches, non-triggered (the yogg_saron adds
-	// precedent). The JustDied DoPlaySoundToSet(13467) has no Talk; the
+	// ExecuteEvent switches under BossAI::UpdateAI base gates, non-triggered
+	// (ScriptedCreature.cpp:578/:584; no UpdateAI override in the file). The JustDied DoPlaySoundToSet(13467) has no Talk; the
 	// orb / awaken-spell / sphere GameObject / ACTION_* DoAction machine
 	// (timers schedule on combat start, documented deviation) and the
 	// SpellScriptLoader hooks are bridge-blocked — documented in the lua
 	// header.
+	// Cast-state gates (2026-11-04): all 15 timer arms (boss 3 + miniboss
+	// 12) carry the 500ms IsCasting defer; KilledUnit / JustDied hooks
+	// ungated per C++ (separate hooks); stale "ungated" header claims
+	// corrected in the lua header.
 	RegisterLuaBoss("boss_palehoof", 26687)
 	// AddSC_boss_skadi: Skadi the Ruthless (Utgarde Pinnacle) — ported
 	// arms (lua_scripts/northrend/boss_skadi.lua): KilledUnit

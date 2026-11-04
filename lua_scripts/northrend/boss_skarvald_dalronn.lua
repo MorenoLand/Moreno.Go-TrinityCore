@@ -41,6 +41,12 @@
 -- doctrine from the Oct-2 header is STALE — CreateLuaEvent is a real
 -- registered bridge (engine/scripting/runtime.go:798) and the
 -- engage-schedule legs are ported below.
+-- Cast-state gates (2026-11-04): BossAI::UpdateAI pre-loop + in-loop
+-- CASTING returns (ScriptedCreature.cpp:578/:584; neither boss overrides
+-- UpdateAI) ported as 500ms IsCasting defer (live,
+-- lua_creature_events.go:1950) on all timer arms incl. the delayed
+-- aggro Talk and the death-response relay; DamageTaken / KilledUnit /
+-- JustDied hooks ungated per C++ (separate hooks).
 -- Ported arms (all C++-exact for the modeled arms):
 -- Skarvald JustEngagedWith (lines 192-201): Talk(SAY_AGGRO 0) (event
 -- 1; !IsInGhostForm gate structural — ghost entry 27390 not
@@ -221,6 +227,12 @@ end
 -- C++ EVENT_STONE_STRIKE (lines 210-213): DoCastVictim(SPELL_STONE_STRIKE),
 -- 2-arg = non-triggered; init 10s (line 198), repeat {5s,10s} (line 213).
 local function stoneStrikeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stonestrike", 500, function()
+            stoneStrikeTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_STONE_STRIKE)
     schedule(guid, "stonestrike", {5000, 10000}, function() stoneStrikeTick(creature, guid) end)
 end
@@ -233,6 +245,12 @@ end
 -- EVENT_CHARGE (1003), never the arm, so it does not re-fire in C++
 -- either.
 local function chargeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "charge", 500, function()
+            chargeTick(creature, guid)
+        end)
+        return
+    end
     local target = randomTargetInBand(creature, 5, 30)
     if target then
         creature:CastSpell(target, SPELL_CHARGE)
@@ -272,10 +290,21 @@ end
 -- resets the survivor's events on its own death). Nil survivor (dead or
 -- absent — the bridge skips Health==0 entries) means no relay, matching
 -- the C++ otherBoss->IsAlive() gate.
+-- C++ EVENT_DEATH_RESPONSE (lines 159-163): Talk(SAY_DEATH_RESPONSE)
+-- — an event-loop arm under the BossAI UpdateAI gates, so it defers
+-- while the survivor casts like the other timer arms.
+local function deathResponseTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "deathresponse", 500, function() deathResponseTick(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_DEATH_RESPONSE)
+end
+
 local function relayDeathResponse(creature, otherEntry)
     local survivor = creature:FindNearestCreature(otherEntry, 100.0)
     if survivor ~= nil then
-        schedule(survivor:GetGUID(), "deathresponse", 2000, function() survivor:Talk(SAY_DEATH_RESPONSE) end)
+        schedule(survivor:GetGUID(), "deathresponse", 2000, function() deathResponseTick(survivor, survivor:GetGUID()) end)
     end
 end
 
@@ -332,6 +361,12 @@ end
 -- 2-arg = non-triggered, random player within 45yd; init 1s (line 248),
 -- repeat 2100ms (line 265).
 local function shadowBoltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function()
+            shadowBoltTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayer(creature, 0, 45)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_BOLT)
@@ -343,6 +378,12 @@ end
 -- 2-arg = non-triggered, random player within 50yd; init 5s (line 249),
 -- repeat {5s,10s} (line 270).
 local function debilitateTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "debilitate", 500, function()
+            debilitateTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayer(creature, 0, 50)
     if target then
         creature:CastSpell(target, SPELL_DEBILITATE)
@@ -350,11 +391,28 @@ local function debilitateTick(creature, guid)
     schedule(guid, "debilitate", {5000, 10000}, function() debilitateTick(creature, guid) end)
 end
 
+-- C++ EVENT_DELAYED_AGGRO_SAY (lines 276-278): Talk(SAY_AGGRO) — an
+-- event-loop arm under the BossAI UpdateAI gates, so it defers while
+-- casting like the other timer arms.
+local function aggroSayTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "aggrosay", 500, function() aggroSayTick(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_AGGRO)
+end
+
 -- C++ boss_dalronn_the_controllerAI::JustEngagedWith (lines 244-254):
 -- BossAI passthrough (SetCombatPulseDelay(5) + me-form DoZoneInCombat
 -- ported into dalronnEnterCombat, base-first); the schedule legs become CreateLuaEvent
 -- timers. No immediate Talk — SAY_AGGRO rides EVENT_DELAYED_AGGRO_SAY.
 local function summonSkeletonsTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summonskeletons", 500, function()
+            summonSkeletonsTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUMMON_SKELETONS)
     schedule(guid, "summonskeletons", {10000, 30000}, function() summonSkeletonsTick(creature, guid) end)
 end
@@ -378,7 +436,7 @@ local function dalronnEnterCombat(event, creature, target)
     end
     -- C++ EVENT_DELAYED_AGGRO_SAY (lines 276-278): Talk(SAY_AGGRO), init 5s
     -- if !IsInGhostForm (lines 251-252; structural); one-shot.
-    schedule(guid, "aggrosay", 5000, function() creature:Talk(SAY_AGGRO) end)
+    schedule(guid, "aggrosay", 5000, function() aggroSayTick(creature, guid) end)
 end
 
 local function dalronnLeaveCombat(event, creature)

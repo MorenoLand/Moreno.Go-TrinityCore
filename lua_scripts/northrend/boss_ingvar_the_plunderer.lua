@@ -82,10 +82,12 @@
 -- phase gate in C++; the razuvious player-gated variant precedent; the
 -- lua victim nil-guard follows the hodir port convention — Eluna event
 -- 3 always carries a victim, C++-exactness unaffected).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
--- are packet-visual), so timers fire unconditionally — melee stays
--- engine-driven, like C++ DoMeleeAttackIfReady (the hodir /
--- maiden_of_virtue precedent).
+-- Cast-state gates (2026-11-04): own UpdateAI pre-loop :206 + in-loop
+-- :262 CASTING returns ported as 500ms IsCasting defer (live,
+-- lua_creature_events.go:1950) on all four PHASE_HUMAN timer arms; the
+-- stale "timers fire unconditionally" deviation above is retracted;
+-- DamageTaken feign latch ungated per C++ (separate hook); melee stays
+-- engine-driven, like C++ DoMeleeAttackIfReady.
 -- DOCUMENTED-ONLY (in this header; no registrations beyond entries 23954
 -- / 23980):
 -- All PHASE_UNDEAD arms — EVENT_DARK_SMASH (DoCastVictim
@@ -200,6 +202,12 @@ end
 -- 1-arg = non-triggered -> CastSpell(nil, 42724); init 6-12s (line
 -- 165), repeat 6-12s (line 216).
 local function cleaveTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            cleaveTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CLEAVE)
     schedule(guid, "cleave", {6000, 12000}, function() cleaveTick(creature, guid) end)
 end
@@ -208,6 +216,12 @@ end
 -- to self-cast, 1-arg = non-triggered -> CastSpell(creature, 42669);
 -- init 12-17s (line 168), repeat 12-16s (line 228).
 local function smashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "smash", 500, function()
+            smashTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SMASH)
     schedule(guid, "smash", {12000, 16000}, function() smashTick(creature, guid) end)
 end
@@ -217,6 +231,12 @@ end
 -- CastSpell(creature, 42708); init 18-21s (line 166), repeat 18-22s
 -- (line 220).
 local function roarTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "roar", 500, function()
+            roarTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_STAGGERING_ROAR)
     schedule(guid, "roar", {18000, 22000}, function() roarTick(creature, guid) end)
 end
@@ -225,6 +245,12 @@ end
 -- 2-arg = non-triggered -> CastSpell(creature, 42705); init 7-14s
 -- (line 167), repeat 7-14s (line 224).
 local function enrageTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function()
+            enrageTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ENRAGE)
     schedule(guid, "enrage", {7000, 14000}, function() enrageTick(creature, guid) end)
 end
