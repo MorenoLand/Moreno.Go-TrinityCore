@@ -88,6 +88,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Cast-state gate (2026-11-04): BossAI ctor scheduler validator
+-- (ScriptedCreature.cpp:493-496, !CASTING) — TaskScheduler::Dispatch
+-- aborts while casting with tasks still queued, so each scheduler tick
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); all four scheduler ticks carry the gate; zero Talk lines in C++.
+
 -- C++ SelectTarget draws the threat list (UnitAI.h:162-184), not
 -- instance players (corrected 2026-10-25 — the old instance-wide
 -- pool was the same bug class as moragg/erekem/xevozz/zuramat).
@@ -120,6 +127,12 @@ end
 -- C++ ScheduleTasks firebolt leg (:67-72): DoCast(target,
 -- SPELL_FIREBOLT), 2-arg = non-triggered; init 1s, re-arm 5-13s.
 local function fireboltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "firebolt", 500, function()
+            fireboltTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTargetInRange(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_FIREBOLT)
@@ -133,6 +146,12 @@ end
 -- (SPELL_FLAME_BREATH), 1-arg = non-triggered; init 5s, re-arm
 -- 10-15s.
 local function flameBreathTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamebreath", 500, function()
+            flameBreathTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FLAME_BREATH)
     schedule(guid, "flamebreath", {10000, 15000}, function()
         flameBreathTick(creature, guid)
@@ -142,6 +161,12 @@ end
 -- C++ ScheduleTasks lava-burn leg (:80-85): DoCast(target,
 -- SPELL_LAVA_BURN), 2-arg = non-triggered; init 10s, re-arm 15-23s.
 local function lavaBurnTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lavaburn", 500, function()
+            lavaBurnTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTargetInRange(creature, 50, false)
     if target then
         creature:CastSpell(target, SPELL_LAVA_BURN)
@@ -155,6 +180,12 @@ end
 -- DoCastAOE(SPELL_CAUTERIZING_FLAMES) (self-cast per the boss_ai.go
 -- DoCastAOE lowering), 1-arg = non-triggered; init 3s, re-arm 10-16s.
 local function cauterizingFlamesTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cauterizing", 500, function()
+            cauterizingFlamesTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CAUTERIZING_FLAMES)
     schedule(guid, "cauterizing", {10000, 16000}, function()
         cauterizingFlamesTick(creature, guid)

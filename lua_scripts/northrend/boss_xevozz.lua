@@ -125,6 +125,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Cast-state gate (2026-11-04): BossAI ctor scheduler validator
+-- (ScriptedCreature.cpp:493-496, !CASTING) — TaskScheduler::Dispatch
+-- aborts while casting with tasks still queued, so each scheduler tick
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); barrage/buffet/summon scheduler ticks carry the gate (defer precedes the summon Talk+cast); the heroic 2.5s sub-cast is a scheduler sub-task, gated the same way.
+
 -- C++ SelectTarget(Random, 0, 45.0f, true) draws the threat list
 -- (UnitAI.h:162-184, playerOnly=true), not instance players: random
 -- alive threat-list player within 45y (nefarian/vaelastrasz
@@ -153,6 +160,12 @@ end
 -- self-cast per the in-tree DoCastAOE convention; init {8s,10s} /
 -- Repeat {8s,10s} — re-armed unconditionally.
 local function barrageTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "barrage", 500, function()
+            barrageTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ARCANE_BARRAGE_VOLLEY)
     schedule(guid, "barrage", {8000, 10000}, function()
         barrageTick(creature, guid)
@@ -163,6 +176,12 @@ end
 -- true) -> DoCast(target, 54226), 2-arg = non-triggered; init
 -- {10s,11s} / Repeat {15s,20s} — re-armed unconditionally.
 local function buffetTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "buffet", 500, function()
+            buffetTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 45)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_BUFFET)
@@ -180,6 +199,12 @@ end
 -- as does the summoned sphere's own AI (npc_ethereal_sphere
 -- ARCANE_POWER proximity machine, unregistered).
 local function summonTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summon", 500, function()
+            summonTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_REPEAT_SUMMON)
     local pool = { SPHERE_SUMMON_SPELLS[1], SPHERE_SUMMON_SPELLS[2], SPHERE_SUMMON_SPELLS[3] }
     local i = math.random(#pool)
@@ -187,9 +212,16 @@ local function summonTick(creature, guid)
     table.remove(pool, i)
     if creature:IsHeroic() then
         local second = pool[math.random(#pool)]
-        schedule(guid, "summonHeroic", 2500, function()
+        local function summonHeroicTick()
+            if creature:IsCasting() then
+                schedule(guid, "summonHeroic", 500, function()
+                    summonHeroicTick()
+                end)
+                return
+            end
             creature:CastSpell(creature, second)
-        end)
+        end
+        schedule(guid, "summonHeroic", 2500, summonHeroicTick)
     end
     schedule(guid, "summon", {45000, 47000}, function()
         summonTick(creature, guid)

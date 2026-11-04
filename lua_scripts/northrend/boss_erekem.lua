@@ -139,6 +139,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Cast-state gate (2026-11-04): BossAI ctor scheduler validator
+-- (ScriptedCreature.cpp:493-496, !CASTING) — TaskScheduler::Dispatch
+-- aborts while casting with tasks still queued, so each scheduler tick
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); the three ported scheduler ticks carry the gate; engage earth-shield (JustEngagedWith) and stormstrike (UpdateAI lambda) ungated per C++; earth-shield/chain-heal/break-bonds tasks stay unported.
+
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 40.0f) — playerOnly=false
 -- default (UnitAI.h:170): any threat-listed unit within 40y
 -- (IsWithinCombatRange 3D check) — plain pick over GetAITargets (the
@@ -168,6 +175,12 @@ end
 -- C++ BLOODLUST (:195-198): DoCast 1-arg = non-triggered self-cast;
 -- 2s init, task.Repeat(35s, 45s).
 local function bloodlustTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bloodlust", 500, function()
+            bloodlustTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BLOODLUST)
     schedule(guid, "bloodlust", {35000, 45000}, function()
         bloodlustTick(creature, guid)
@@ -177,6 +190,12 @@ end
 -- C++ LIGHTNING_BOLT (:201-206): random threat-listed unit within 40y
 -- -> DoCast(target), non-triggered; 2s init, task.Repeat(2500ms).
 local function lightningBoltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lightningbolt", 500, function()
+            lightningBoltTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTargetInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_LIGHTNING_BOLT)
@@ -189,6 +208,12 @@ end
 -- C++ EARTH_SHOCK (:220-224): DoCastVictim, non-triggered; init
 -- Schedule(2s, 8s), task.Repeat(8s, 13s).
 local function earthShockTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "earthshock", 500, function()
+            earthShockTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_EARTH_SHOCK)
     schedule(guid, "earthshock", {8000, 13000}, function()
         earthShockTick(creature, guid)

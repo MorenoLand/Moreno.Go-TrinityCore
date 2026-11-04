@@ -19503,33 +19503,34 @@ func init() {
 	// 500ms IsCasting defer (own UpdateAI pre-loop + in-loop gates);
 	// the engage-time frozen-mallet cast stays ungated per C++.
 	RegisterLuaBoss("boss_toravon", 38433)
-	// AddSC_boss_cyanigosa: Cyanigosa (Violet Hold) — ported arms
-	// (lua_scripts/northrend/boss_cyanigosa.lua): JustEngagedWith
-	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya
-	// engage-port precedent), KilledUnit player-gated Talk(SAY_SLAY 1)
-	// (event 3 — the razuvious player-gated variant precedent),
-	// JustDied unconditional Talk(SAY_DEATH 2) (event 4 — the sjonnir
-	// JustDied-Talk precedent). The SAY_SPAWN / SAY_DISRUPTION /
-	// SAY_BREATH_ATTACK / SAY_SPECIAL_ATTACK enum entries are never
-	// Talk()ed (dead enum text); the ScheduleTasks scheduler machine,
-	// the spell_cyanigosa_arcane_vacuum SpellScript hook and the
-	// achievement_defenseless GetData check are bridge-blocked —
-	// documented in the lua header.
+	// AddSC_boss_cyanigosa: Cyanigosa (Violet Hold) — timer-driven cast
+	// ports (lua_scripts/northrend/boss_cyanigosa.lua): arcane-vacuum
+	// DoCastAOE 58694 10s/10s, blizzard random-player 58693 15s/15s,
+	// tail-sweep DoCastVictim 58690 20s/20s, uncontrollable-energy
+	// DoCastVictim 58688 25s/25s, heroic mana-destruction random-player
+	// 59374 30s/30s; Talk 0/1/2 retained. All five scheduler ticks carry
+	// the 500ms IsCasting defer (BossAI ctor scheduler validator,
+	// ScriptedCreature.cpp:493-496 — TaskScheduler::Dispatch aborts
+	// while casting with tasks still queued; the stale boss_ai block
+	// claiming only Talk arms were ported is corrected). The
+	// spell_cyanigosa_arcane_vacuum SpellScript hook and the
+	// achievement_defenseless GetData check stay out — documented in
+	// the lua header.
 	RegisterLuaBoss("boss_cyanigosa", 31134)
-	// AddSC_boss_erekem: Erekem (Violet Hold) — ported arms
-	// (lua_scripts/northrend/boss_erekem.lua): JustEngagedWith
-	// unconditional Talk(SAY_AGGRO 0) (event 1 — the auriaya
-	// engage-port precedent), KilledUnit player-gated Talk(SAY_SLAY 1)
-	// (event 3 — the razuvious player-gated variant precedent),
-	// JustDied unconditional Talk(SAY_DEATH 2) (event 4 — the sjonnir
-	// JustDied-Talk precedent). The SAY_SPAWN / SAY_ADD_KILLED /
-	// SAY_BOTH_ADDS_KILLED enum entries are never Talk()ed anywhere
-	// in the VioletHold tree (dead enum text); npc_erekem_guard
-	// (29395) carries zero Talk arms and is not registered; the
-	// ScheduleTasks scheduler machine, the _phase/CheckGuardAlive
-	// machine, the instance GetGuidData cross-creature legs, the
-	// JustReachedHome SetData leg and the guard spell-timer machine
-	// are bridge-blocked — documented in the lua header.
+	// AddSC_boss_erekem: Erekem (Violet Hold) — timer-driven cast ports
+	// (lua_scripts/northrend/boss_erekem.lua): bloodlust self-cast
+	// 2s/{35s,45s}, lightning-bolt random-threat 2s/2.5s, earth-shock
+	// DoCastVictim {2s,8s}/{8s,13s}; Talk 0/1/2 retained, engage
+	// earth-shield self-cast ported. All three scheduler ticks carry
+	// the 500ms IsCasting defer (BossAI ctor scheduler validator,
+	// ScriptedCreature.cpp:493-496; the stale block claiming the
+	// ScheduleTasks machine was bridge-blocked is corrected). The
+	// earth-shield/chain-heal/break-bonds scheduler tasks, the
+	// _phase/CheckGuardAlive machine, the instance GetGuidData
+	// cross-creature legs, the JustReachedHome SetData leg, the
+	// stormstrike UpdateAI lambda and the guard spell-timer machine
+	// stay out — documented in the lua header; npc_erekem_guard
+	// (29395) is not registered.
 	RegisterLuaBoss("boss_erekem", 29315)
 	// AddSC_boss_ichoron: Ichoron (Violet Hold) — timer-driven cast
 	// ports (lua_scripts/northrend/boss_ichoron.lua): water-bolt-volley
@@ -19539,13 +19540,19 @@ func init() {
 	// shatter/DRAINED/enrage DoAction/health legs), globule machine,
 	// four SpellScript/AuraScript hooks and achievement_dehydration
 	// stay out — documented in the lua header.
+	// The volley/blast scheduler ticks carry the 500ms IsCasting defer
+	// (BossAI ctor scheduler validator, ScriptedCreature.cpp:493-496);
+	// the frenzy 1s poll models the pre-scheduler UpdateAI health check
+	// and stays ungated per C++.
 	RegisterLuaBoss("boss_ichoron", 29313)
 	// AddSC_boss_lavanthor: Lavanthor (Violet Hold) — timer-driven cast
 	// ports (lua_scripts/northrend/boss_lavanthor.lua): firebolt
 	// random-player 54235 1s/{5s,13s}, flame-breath DoCastVictim 54282
 	// 5s/{10s,15s}, lava-burn random-target 54249 10s/{15s,23s}; zero
-	// Talk lines in C++. The heroic cauterizing-flames leg stays out
-	// (no difficulty bridge) — documented in the lua header.
+	// Talk lines in C++. The heroic cauterizing-flames leg is ported under IsHeroic
+	// (bridged) — documented in the lua header.
+	// All four scheduler ticks carry the 500ms IsCasting defer (BossAI
+	// ctor scheduler validator, ScriptedCreature.cpp:493-496).
 	RegisterLuaBoss("boss_lavanthor", 29312)
 	// AddSC_boss_moragg: Moragg (Violet Hold) — timer-driven cast ports
 	// (lua_scripts/northrend/boss_moragg.lua): engage-immediate ray of
@@ -19555,6 +19562,10 @@ func init() {
 	// spell_moragg_optic_link AuraScripts stay out (no AuraScript
 	// bridge — the optic-link stage/damage ramp and the ray periodic
 	// triggers are documented gaps) — documented in the lua header.
+	// The optic-link/saliva scheduler ticks carry the 500ms IsCasting
+	// defer (BossAI ctor scheduler validator,
+	// ScriptedCreature.cpp:493-496); the engage ray Async casts fire at
+	// combat start while the boss is not casting, ungated in effect.
 	RegisterLuaBoss("boss_moragg", 29316)
 	// AddSC_boss_xevozz: Xevozz (Violet Hold) — timer-driven cast
 	// ports (lua_scripts/northrend/boss_xevozz.lua): arcane-barrage-
@@ -19564,6 +19575,10 @@ func init() {
 	// SpellHit SAY_SUMMON_ENERGY, MoveFollow/JustReachedHome instance
 	// legs and the SpellScript hook stay out — documented in the lua
 	// header.
+	// The barrage/buffet/summon scheduler ticks carry the 500ms
+	// IsCasting defer (BossAI ctor scheduler validator,
+	// ScriptedCreature.cpp:493-496; defer precedes the summon Talk+cast,
+	// and the heroic 2.5s sub-cast is gated the same way).
 	RegisterLuaBoss("boss_xevozz", 29266)
 
 	// Zuramat the Obliterator (Violet Hold) — timer-driven cast ports

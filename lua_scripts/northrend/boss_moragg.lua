@@ -94,6 +94,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Cast-state gate (2026-11-04): BossAI ctor scheduler validator
+-- (ScriptedCreature.cpp:493-496, !CASTING) — TaskScheduler::Dispatch
+-- aborts while casting with tasks still queued, so each scheduler tick
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); optic-link/saliva scheduler ticks carry the gate; engage ray Async casts fire at combat start while the boss is not casting, ungated in effect.
+
 
 -- C++ SelectTarget(Random, 0, 50.0f, true) draws the threat list
 -- (UnitAI.h:162-184, playerOnly=true), not instance players: random
@@ -120,6 +127,12 @@ end
 -- 50.0f, true (:81) — random alive player within 50 yd; DoCast(target,
 -- SPELL_OPTIC_LINK), 2-arg = non-triggered; init 15s, re-arm 25s.
 local function opticLinkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "opticlink", 500, function()
+            opticLinkTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_OPTIC_LINK)
@@ -133,6 +146,12 @@ end
 -- (SPELL_CORROSIVE_SALIVA), 1-arg = non-triggered; init 5s, re-arm
 -- 10s.
 local function corrosiveSalivaTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "saliva", 500, function()
+            corrosiveSalivaTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CORROSIVE_SALIVA)
     schedule(guid, "saliva", 10000, function()
         corrosiveSalivaTick(creature, guid)

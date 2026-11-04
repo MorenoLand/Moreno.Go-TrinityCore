@@ -120,6 +120,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Cast-state gate (2026-11-04): BossAI ctor scheduler validator
+-- (ScriptedCreature.cpp:493-496, !CASTING) — TaskScheduler::Dispatch
+-- aborts while casting with tasks still queued, so each scheduler tick
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); all five scheduler ticks carry the gate; Talk hooks ungated per C++ (separate hooks).
+
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, dist, true) draws
 -- the threat list (UnitAI.h: "from the threat list"), not instance
 -- players — same bug class fixed 2026-10-25 in erekem/moragg/
@@ -143,6 +150,12 @@ end
 -- self-cast (in-tree DoCastAOE convention), non-triggered; 10s init,
 -- Repeat() 10s.
 local function arcaneVacuumTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcanevacuum", 500, function()
+            arcaneVacuumTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ARCANE_VACUUM)
     schedule(guid, "arcanevacuum", 10000, function()
         arcaneVacuumTick(creature, guid)
@@ -152,6 +165,12 @@ end
 -- C++ BLIZZARD (:92-97): random player within 45y -> DoCast(target),
 -- non-triggered; 15s init, Repeat() 15s.
 local function blizzardTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blizzard", 500, function()
+            blizzardTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 45)
     if target then
         creature:CastSpell(target, SPELL_BLIZZARD)
@@ -164,6 +183,12 @@ end
 -- C++ TAIL_SWEEP (:99-103): DoCastVictim, non-triggered; 20s init,
 -- Repeat() 20s.
 local function tailSweepTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "tailsweep", 500, function()
+            tailSweepTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_TAIL_SWEEP)
     schedule(guid, "tailsweep", 20000, function()
         tailSweepTick(creature, guid)
@@ -173,6 +198,12 @@ end
 -- C++ UNCONTROLLABLE_ENERGY (:105-109): DoCastVictim,
 -- non-triggered; 25s init, Repeat() 25s.
 local function uncontrollableEnergyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "uncontrollableenergy", 500, function()
+            uncontrollableEnergyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_UNCONTROLLABLE_ENERGY)
     schedule(guid, "uncontrollableenergy", 25000, function()
         uncontrollableEnergyTick(creature, guid)
@@ -188,6 +219,12 @@ end
 -- per-instance difficulty read); the old "heroic-mode branches are
 -- unbridged" header claim is stale.
 local function manaDestructionTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "manadestruction", 500, function()
+            manaDestructionTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_MANA_DESTRUCTION)

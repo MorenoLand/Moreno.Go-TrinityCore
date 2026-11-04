@@ -168,6 +168,13 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Cast-state gate (2026-11-04): BossAI ctor scheduler validator
+-- (ScriptedCreature.cpp:493-496, !CASTING) — TaskScheduler::Dispatch
+-- aborts while casting with tasks still queued, so each scheduler tick
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); volley/blast scheduler ticks carry the gate; the frenzy 1s poll models the pre-scheduler UpdateAI health check, ungated per C++; shrink/bubble Async machine stays unported.
+
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 50.0f) — no
 -- playerOnly flag, so any threat-listed unit within 50y qualifies
 -- (UnitAI.h:170, playerOnly=false default); C++ IsWithinCombatRange
@@ -197,6 +204,12 @@ end
 -- DoCastAOE(SPELL_WATER_BOLT_VOLLEY), 2-arg = non-triggered;
 -- init 10-15s / re-arm 10-15s.
 local function waterBoltVolleyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "volley", 500, function()
+            waterBoltVolleyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WATER_BOLT_VOLLEY)
     schedule(guid, "volley", {10000, 15000}, function()
         waterBoltVolleyTick(creature, guid)
@@ -206,6 +219,12 @@ end
 -- C++ ScheduleTasks water-blast leg (:219-224): DoCast(target,
 -- SPELL_WATER_BLAST), 2-arg = non-triggered; init 6-9s / re-arm 6-9s.
 local function waterBlastTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blast", 500, function()
+            waterBlastTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTargetInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_WATER_BLAST)
