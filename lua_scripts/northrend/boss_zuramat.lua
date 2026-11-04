@@ -51,6 +51,16 @@
 -- ScheduleTasks SHROUD_OF_DARKNESS — DoCast(me, SPELL_SHROUD_OF_
 -- DARKNESS 54524), 2-arg = non-triggered; init {18s,20s} / Repeat
 -- {18s,20s} — unconditional re-arm.
+-- Cast-state gate (2026-11-04): BossAI ctor scheduler validator
+-- (ScriptedCreature.cpp:493-496, !CASTING) — TaskScheduler::Dispatch
+-- aborts while casting with tasks still queued, so each scheduler tick
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom). Zuramat's own UpdateAI (:119) calls
+-- scheduler.Update directly, but the validator lives on the scheduler
+-- object itself, so it gates despite the BossAI::UpdateAI bypass
+-- (the volazj/xevozz precedent); the unported summon leg is not a
+-- scheduler tick in Lua, so nothing else gates.
 -- DOCUMENTED DEVIATIONS: none on the ported arms — both timers carry
 -- C++-exact timing and targeting. The UpdateAI
 -- DoMeleeAttackIfReady() leg has no bridge — melee is unmodeled.
@@ -140,6 +150,12 @@ end
 -- -> DoCast(target, 54361), 2-arg = non-triggered; init 9s / Repeat
 -- 15s — re-armed unconditionally.
 local function voidShiftTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "voidshift", 500, function()
+            voidShiftTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 60)
     if target then
         creature:CastSpell(target, SPELL_VOID_SHIFT)
@@ -153,6 +169,12 @@ end
 -- non-triggered; init {18s,20s} / Repeat {18s,20s} — re-armed
 -- unconditionally.
 local function shroudTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shroud", 500, function()
+            shroudTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHROUD_OF_DARKNESS)
     schedule(guid, "shroud", {18000, 20000}, function()
         shroudTick(creature, guid)

@@ -19587,7 +19587,11 @@ func init() {
 	// {18s,20s}/{18s,20s}; Talk 0/1/2 retained. The summon-void-sentry
 	// leg (unbridged sentry AI), the void_dance achievement and the
 	// JustReachedHome instance leg stay out — documented in the lua
-	// header.
+	// header. The void-shift/shroud ticks carry the 500ms IsCasting
+	// defer (BossAI ctor scheduler validator, ScriptedCreature.cpp:
+	// 493-496; Zuramat's own UpdateAI calls scheduler.Update directly
+	// but the validator lives on the scheduler object, so it gates
+	// despite the BossAI::UpdateAI bypass).
 	RegisterLuaBoss("boss_zuramat", 29314)
 
 	// Bronjahm (Forge of Souls) — full timer-arm port from
@@ -19595,7 +19599,9 @@ func init() {
 	// Timer-port doctrine: MAGIC_BANE / SHADOW_BOLT / CORRUPT_SOUL /
 	// FEAR / the EVENT_SOULSTORM one-shot and the DamageTaken 30%-hp
 	// PHASE_1->PHASE_2 latch all ride CreateLuaEvent; Talk legs are
-	// C++-exact. The JustSummoned soul-fragment machine, GetData,
+	// C++-exact. All five event-loop ticks carry the 500ms IsCasting
+	// defer (own UpdateAI pre-loop :163 + in-loop :208 gates); the
+	// DamageTaken latch itself stays ungated (separate hook). The JustSummoned soul-fragment machine, GetData,
 	// npc_corrupted_soul_fragment (36535), the SpellScript/AuraScript
 	// hooks and the achievement remain bridge-blocked — documented in
 	// the lua header.
@@ -19604,15 +19610,17 @@ func init() {
 	// Devourer of Souls (Forge of Souls) — bridgeable Talk arms ported
 	// from boss_devourer_of_souls.cpp; see
 	// lua_scripts/northrend/boss_devourer_of_souls.lua.
-	// Talk(MIRRORED_SOUL / UNLEASHED_SOULS / WAILING_SOULS emotes) rides
-	// scheduler event legs (no-timer-bridge); KilledUnit Talk is
-	// display-ID gated (no display-ID bridge); the JustDied outro
-	// summon loop and the summon->AI()->Talk(SAY_JAINA_OUTRO /
-	// SAY_SYLVANAS_OUTRO) legs are instance-driven Talk on other
-	// creatures (no bridge); the crucible SummonCreature guard, the
-	// scheduler machine (PHANTOM_BLAST / MIRRORED_SOUL / WELL_OF_SOULS
-	// / UNLEASHED_SOULS face-flip / WAILING_SOULS beam sweep), the
-	// SpellHitTarget / GetData(DATA_THREE_FACED) legs, the three
+	// The scheduler timer arms ARE ported via CreateLuaEvent (the
+	// "scheduler machine bridge-blocked" note was stale): PHANTOM_BLAST
+	// / MIRRORED_SOUL / WELL_OF_SOULS / UNLEASHED_SOULS + FACE_ANGER
+	// restore / WAILING_SOULS event + 15-tick chain, with Talk legs in
+	// C++ order; the crucible SummonCreature guard is ported too. All
+	// event-loop ticks carry the 500ms IsCasting defer (own UpdateAI
+	// pre-loop :247 + in-loop :331 gates). KilledUnit Talk is
+	// display-ID gated (ported); the JustDied outro summon loop and
+	// the summon->AI()->Talk(SAY_JAINA_OUTRO / SAY_SYLVANAS_OUTRO)
+	// legs are instance-driven Talk on other creatures (no bridge);
+	// the SpellHitTarget / GetData(DATA_THREE_FACED) legs, the three
 	// mirrored-soul SpellScript / AuraScript hooks and
 	// achievement_three_faced are bridge-blocked — documented in the
 	// lua header.
@@ -19632,6 +19640,10 @@ func init() {
 	// equipment), SpellHitTarget/GetData permafrost-stack leg, the
 	// instance-driven tyrannus Talk, the permafrost SpellScript and the
 	// achievement are bridge-blocked — documented in the lua header.
+	// All five event-loop ticks (saronite/chilling/deep-freeze/
+	// forge-jump/resume) carry the 500ms IsCasting defer (own
+	// UpdateAI pre-loop :199 + in-loop :244 gates); DamageTaken phase
+	// flips stay ungated (separate hook).
 	RegisterLuaBoss("boss_forgemaster_garfrost", 36494)
 
 	// Krick and Ick (Pit of Saron) — bridgeable Talk + timer-driven cast
@@ -19640,7 +19652,10 @@ func init() {
 	// boss_ick (36476 Ick) UpdateAI timer arms port via CreateLuaEvent:
 	// MIGHTY_KICK 69021 victim-cast 20s/25s, EVENT_SPECIAL
 	// {30s,35s}/{23s,28s} RAND selector (explosive-barrage 69263 AOE /
-	// poison-nova Talk(0)+AOE 68989 / pursuit 68987 self-cast). The Oct-2
+	// poison-nova Talk(0)+AOE 68989 / pursuit 68987 self-cast). All
+	// ick event-loop ticks (kick/special/1s picks/toxic-waste/
+	// shadow-bolt) carry the 500ms IsCasting defer (boss_ick UpdateAI
+	// pre-loop :226 + in-loop :284 gates, read on ick's state). The Oct-2
 	// "no bridgeable own arms" call is retracted (stale no-timer-bridge
 	// doctrine) — 36476 IS registered, before 36477 in loader order
 	// (AddSC_boss_ick registers boss_ick first). The krick-cast toxic-waste
@@ -19658,7 +19673,10 @@ func init() {
 	// Rimefang EVENT_ICY_BLAST 69232 (15s/15s, ungated by the waypoint
 	// patrol) ports too, so 36661 IS registered — the Oct-2
 	// non-registration rested on the stale no-timer-bridge doctrine,
-	// retracted 2026-10-13. The intro machine (DoAction ACTION_START_INTRO
+	// retracted 2026-10-13. Cast-state checked-no-gate: Tyrannus
+	// UpdateAI has no pre-loop gate, only the in-loop :280 check, so
+	// single-event Lua ticks fire ungated (first-event position);
+	// Rimefang UpdateAI has zero CASTING hits. The intro machine (DoAction ACTION_START_INTRO
 	// + area trigger), the overlord-brand / mark-of-rimefang aura chains,
 	// the rimefang waypoint patrol and hoarfrost handoff are
 	// bridge-blocked — documented in the lua header.

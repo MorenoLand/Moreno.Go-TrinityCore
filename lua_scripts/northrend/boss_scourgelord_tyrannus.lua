@@ -83,9 +83,15 @@
 -- (playerOnly=false default, UnitAI.h:170) -> random threat-listed unit
 -- (GetAITargets pick, no Player filter); DoCast(target, 69232);
 -- re-arm 15s unconditional (the SelectTarget if only wraps the cast).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
--- are packet-visual), so timers fire unconditionally and the :280-281
--- early-return gate is unmodeled (the maiden / devourer precedent).
+-- Cast-state gate, checked-no-gate (2026-11-04): boss UpdateAI (:221)
+-- carries NO pre-loop CASTING gate — the sole :280 check sits AFTER
+-- the event switch inside the loop, so it only suppresses LATER events
+-- in the same UpdateAI call once an earlier event started a cast.
+-- Lua ticks each execute as a single first-event firing, so the
+-- in-loop gate never suppresses one: brand/smash/unholy/mark stay
+-- ungated, C++-exact (not a deviation — the old "gate unmodeled"
+-- note is corrected). Rimefang UpdateAI (:350) has zero CASTING
+-- hits, so icy-blast stays ungated too.
 -- The SelectTarget position-1 offset on the two Tyrannus random-target
 -- arms (:255, :272) IS bridged — GetAITargets[2..] (eck precedent),
 -- fixed 2026-10-25 from the plain GetPlayersInWorld pick; no target at

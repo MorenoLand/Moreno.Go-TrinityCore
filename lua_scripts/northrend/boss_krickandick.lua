@@ -245,9 +245,23 @@ local function initState(guid)
     cancelTimers(guid)
 end
 
+-- Cast-state gate (2026-11-04): boss_ick UpdateAI pre-loop (:226) +
+-- in-loop (:284) UNIT_STATE_CASTING returns — each ick event-loop arm
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); the gate reads ICK's casting state (me = ick),
+-- so the defer precedes the krick-presence checks and krick Talk
+-- legs. The 1s EVENT_SPECIAL picks are events in the same EventMap
+-- and gate when they fire. Ick's JustEngagedWith seeds stay ungated
+-- (separate hook); krick's own UpdateAI (:369) is the outro machine,
+-- no ported timer ticks.
 -- C++ :249-252 EVENT_MIGHTY_KICK: DoCastVictim(SPELL_MIGHTY_KICK),
 -- non-triggered victim-cast; re-arm 25s (:251).
 local function onMightyKick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mightykick", 500, function() onMightyKick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MIGHTY_KICK)
     schedule(guid, "mightykick", 25000, function() onMightyKick(creature, guid) end)
 end
@@ -260,6 +274,10 @@ end
 -- C++ :266 events.DelayEvents(20s) pushes every other armed timer
 -- out 20s (delayTimers, thekal precedent).
 local function onExplosiveBarrage(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "specialpick", 500, function() onExplosiveBarrage(creature, guid) end)
+        return
+    end
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
     if krick ~= nil then
         krick:Talk(SAY_KRICK_BARRAGE_1)
@@ -275,6 +293,10 @@ end
 -- krick->AI()->Talk(SAY_KRICK_POISON_NOVA) leg (:269-270) is PORTED below
 -- (krick Talk first, C++ order :269-272).
 local function onPoisonNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "specialpick", 500, function() onPoisonNova(creature, guid) end)
+        return
+    end
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
     if krick ~= nil then
         krick:Talk(SAY_KRICK_POISON_NOVA)
@@ -289,6 +311,10 @@ end
 -- bridge (see header); the krick->AI()->Talk(SAY_KRICK_CHASE) leg (:276-277)
 -- is PORTED below (krick Talk first, C++ order :276-278).
 local function onPursuit(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "specialpick", 500, function() onPursuit(creature, guid) end)
+        return
+    end
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
     if krick ~= nil then
         krick:Talk(SAY_KRICK_CHASE)
@@ -300,6 +326,10 @@ end
 -- EVENT_PURSUIT) scheduled at 1s (:255; uniform pick keeping the C++ argument
 -- order); re-arm {23s,28s} (:256).
 local function onSpecial(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "special", 500, function() onSpecial(creature, guid) end)
+        return
+    end
     local roll = math.random(3)
     if roll == 1 then
         schedule(guid, "specialpick", 1000, function() onExplosiveBarrage(creature, guid) end)
@@ -367,6 +397,10 @@ end
 -- Random,0 pick; re-arm {7s,10s} unconditional (ScheduleEvent outside the
 -- krick gate, :239).
 local function onToxicWaste(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "toxicwaste", 500, function() onToxicWaste(creature, guid) end)
+        return
+    end
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
     if krick ~= nil then
         local target = randomPlayer(creature)
@@ -382,6 +416,10 @@ end
 -- skips the rest of the event loop that tick is unmodeled (independent
 -- Lua timers, header deviations note).
 local function onShadowBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function() onShadowBolt(creature, guid) end)
+        return
+    end
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
     if krick ~= nil then
         local target = randomNonVictimPlayer(creature)

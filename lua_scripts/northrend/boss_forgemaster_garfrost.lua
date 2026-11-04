@@ -256,12 +256,24 @@ local function randomPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
+-- Cast-state gate (2026-11-04): own UpdateAI pre-loop (:199) +
+-- in-loop (:244) UNIT_STATE_CASTING returns — each event-loop arm
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); the defer precedes target picks, Talk legs and
+-- the forge-jump AttackStop. Phase guards keep precedence (a
+-- phase-killed chain returns without re-arm before the defer).
+-- DamageTaken phase flips are a separate hook and stay ungated.
 -- C++ :206-213 EVENT_THROW_SARONITE (all phases): random player,
 -- Talk(SAY_THROW_SARONITE), DoCast(target, 68788) non-triggered;
 -- re-arm {12500,20000}ms unconditional (outside the target-if).
 local function onThrowSaronite(creature, guid)
     local st = garfrostState[guid]
     if not st then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "saronite", 500, function() onThrowSaronite(creature, guid) end)
         return
     end
     local target = randomPlayer(creature)
@@ -283,6 +295,10 @@ local function onChillingWave(creature, guid)
     if st.phase ~= PHASE_TWO then
         return
     end
+    if creature:IsCasting() then
+        schedule(guid, "chilling", 500, function() onChillingWave(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CHILLING_WAVE)
     schedule(guid, "chilling", 4000, function() onChillingWave(creature, guid) end)
 end
@@ -296,6 +312,10 @@ local function onDeepFreeze(creature, guid)
         return
     end
     if st.phase ~= PHASE_THREE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "deepfreeze", 500, function() onDeepFreeze(creature, guid) end)
         return
     end
     local target = randomPlayer(creature)
@@ -318,6 +338,10 @@ local onResumeAttack
 local function onForgeJump(creature, guid)
     local st = garfrostState[guid]
     if not st then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "forgejump", 500, function() onForgeJump(creature, guid) end)
         return
     end
     -- C++ boss_forgemaster_garfrost.cpp:227: me->AttackStop() on
@@ -352,6 +376,10 @@ end
 onResumeAttack = function(creature, guid)
     local st = garfrostState[guid]
     if not st then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "resume", 500, function() onResumeAttack(creature, guid) end)
         return
     end
     if st.phase == PHASE_TWO then

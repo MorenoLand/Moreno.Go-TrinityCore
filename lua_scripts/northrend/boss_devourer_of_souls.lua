@@ -35,8 +35,15 @@
 -- archavon convention). None of the ported arms is a TRIGGERED cast (all
 -- DoCast* are 1-2 arg, non-triggered). Melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady; the
--- HasUnitState(UNIT_STATE_CASTING) gates (:251) are unmodeled (no
--- unit-state bridge — creature casts are packet-visual in Go).
+-- Cast-state gate (2026-11-04): own UpdateAI pre-loop (:247) +
+-- in-loop (:331) UNIT_STATE_CASTING returns — each event-loop arm
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); the stale "no unit-state bridge" claim above is
+-- retracted (IsCasting live). The wailing-tick chain defers per tick
+-- without consuming its remaining count; the FACE_ANGER one-shot
+-- defers the same way. JustEngagedWith seeds stay ungated (separate
+-- hook, no UpdateAI gate at engage).
 -- Ported arms (C++-exact for all modeled legs):
 -- JustEngagedWith (:160-169): Talk(SAY_FACE_AGGRO 0) — unconditional;
 -- seeds PHANTOM_BLAST 5000, MIRRORED_SOUL 8000, WELL_OF_SOULS 30000,
@@ -254,6 +261,12 @@ local function phantomBlastTick(creature, guid)
     if state == nil then
         return
     end
+    if creature:IsCasting() then
+        schedule(guid, "phantom", 500, function()
+            phantomBlastTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_PHANTOM_BLAST)
     schedule(guid, "phantom", 5000, function()
         phantomBlastTick(creature, guid)
@@ -266,6 +279,12 @@ end
 local function mirroredSoulTick(creature, guid)
     local state = devourerState[guid]
     if state == nil then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "mirror", 500, function()
+            mirroredSoulTick(creature, guid)
+        end)
         return
     end
     creature:CastSpell(creature, SPELL_MIRRORED_SOUL_TARGET_SELECTOR)
@@ -281,6 +300,12 @@ end
 local function wellOfSoulsTick(creature, guid)
     local state = devourerState[guid]
     if state == nil then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "well", 500, function()
+            wellOfSoulsTick(creature, guid)
+        end)
         return
     end
     local target = randomThreatTarget(creature)
@@ -303,6 +328,12 @@ local function unleashedSoulsTick(creature, guid)
     if state == nil then
         return
     end
+    if creature:IsCasting() then
+        schedule(guid, "unleashed", 500, function()
+            unleashedSoulsTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_UNLEASHED_SOULS)
@@ -310,9 +341,14 @@ local function unleashedSoulsTick(creature, guid)
     creature:SetDisplayId(DISPLAY_SORROW)
     creature:Talk(SAY_FACE_UNLEASH_SOUL)
     creature:Talk(EMOTE_UNLEASH_SOUL)
-    schedule(guid, "faceanger", 5000, function()
+    local function faceAngerTick()
+        if creature:IsCasting() then
+            schedule(guid, "faceanger", 500, faceAngerTick)
+            return
+        end
         creature:SetDisplayId(DISPLAY_ANGER)
-    end)
+    end
+    schedule(guid, "faceanger", 5000, faceAngerTick)
     schedule(guid, "unleashed", 30000, function()
         unleashedSoulsTick(creature, guid)
     end)
@@ -338,6 +374,12 @@ local wailingSoulsEvent
 -- + unroot, :321-323) port; MoveChase (:324) has no bridge and stays out.
 wailingSoulsTick = function(creature, guid, remaining)
     local state = devourerState[guid]
+    if state ~= nil and creature:IsCasting() then
+        schedule(guid, "wailingtick", 500, function()
+            wailingSoulsTick(creature, guid, remaining)
+        end)
+        return
+    end
     -- C++ :313-314 beamAngle += beamAngleDiff; SetFacingTo(beamAngle) -- the
     -- 13:00 "no facing bridge" claim is stale (bridge live since
     -- 2026-10-20, lua_creature_events.go); the 13:00 "no GetOrientation
@@ -385,6 +427,12 @@ end
 wailingSoulsEvent = function(creature, guid)
     local state = devourerState[guid]
     if state == nil then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "wailing", 500, function()
+            wailingSoulsEvent(creature, guid)
+        end)
         return
     end
     creature:SetDisplayId(DISPLAY_DESIRE)

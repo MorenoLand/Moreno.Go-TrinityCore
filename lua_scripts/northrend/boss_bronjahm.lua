@@ -189,9 +189,19 @@ local function randomPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
+-- Cast-state gate (2026-11-04): own UpdateAI pre-loop (:163) +
+-- in-loop (:208) UNIT_STATE_CASTING returns — each event-loop arm
+-- below defers 500ms via creature:IsCasting()
+-- (lua_creature_events.go:1950) without consuming its re-arm (the
+-- mal_ganis idiom); the defer precedes target picks and Talk legs.
+-- The DamageTaken phase latch is a separate hook and stays ungated.
 -- C++ :170-173 EVENT_MAGIC_BANE: DoCastAOE(SPELL_MAGIC_S_BANE) is
 -- self-cast (the DoCastAOE convention); re-arm {8000,20000}ms, both phases.
 local function onMagicBane(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "magicbane", 500, function() onMagicBane(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MAGIC_BANE)
     schedule(guid, "magicbane", {8000, 20000}, function() onMagicBane(creature, guid) end)
 end
@@ -200,6 +210,10 @@ end
 -- with {1000,2000}ms re-arm (:175-178); phase-1 casts only outside melee
 -- range (:181-183, IsWithinMeleeRange gate) with a 2000ms re-arm (:184).
 local function onShadowBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function() onShadowBolt(creature, guid) end)
+        return
+    end
     if phase2[guid] then
         creature:CastSpell(nil, SPELL_SHADOW_BOLT)
         schedule(guid, "shadowbolt", {1000, 2000}, function() onShadowBolt(creature, guid) end)
@@ -220,6 +234,10 @@ local function onCorruptSoul(creature, guid)
     if phase2[guid] then
         return
     end
+    if creature:IsCasting() then
+        schedule(guid, "corruptsoul", 500, function() onCorruptSoul(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature)
     if target then
         creature:Talk(SAY_CORRUPT_SOUL)
@@ -231,6 +249,10 @@ end
 -- C++ :195-199 EVENT_SOULSTORM one-shot: Talk(SAY_SOUL_STORM),
 -- triggered self-cast 68870, non-triggered self-cast 68872.
 local function onSoulstorm(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "soulstorm", 500, function() onSoulstorm(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_SOUL_STORM)
     creature:CastSpell(creature, SPELL_SOULSTORM_VISUAL, true)
     creature:CastSpell(creature, SPELL_SOULSTORM)
@@ -263,6 +285,10 @@ end
 
 local function onFear(creature, guid)
     if not phase2[guid] then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function() onFear(creature, guid) end)
         return
     end
     local target = randomFearTarget(creature)
