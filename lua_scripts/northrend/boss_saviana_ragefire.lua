@@ -128,6 +128,12 @@ end
 -- itself is unported the Lua boss never leaves the ground and
 -- continuous timers match the ground-phase behavior.
 local function savianaEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base call first (boss_saviana_ragefire.cpp:91):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, base-first
+    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

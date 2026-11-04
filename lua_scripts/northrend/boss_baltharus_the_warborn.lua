@@ -210,6 +210,13 @@ end
 -- convention (no UNIT_STATE_CASTING gate in Go, so timers fire
 -- unconditionally — the documented maiden deviation).
 local function baltharusEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base call (boss_baltharus_the_warborn.cpp:113):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, base-first
+    -- (InterruptNonMeleeSpells leg out; Talk stays where the handler
+    -- already had it); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

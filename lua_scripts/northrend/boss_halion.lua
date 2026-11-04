@@ -339,6 +339,13 @@ local function halionEnterCombat(event, creature, target)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     fightPhaseThree = false
+    -- C++ JustEngagedWith base call (boss_halion.cpp:248):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, after Talk and
+    -- phase setup, before the timer schedules (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     schedule(guid, "mat_cleave", {6000, 10000}, function()
         matCleaveTick(creature, guid)
     end)
@@ -547,6 +554,13 @@ local function twilightHalionEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     fightPhaseThree = false
+    -- C++ JustEngagedWith base call (boss_halion.cpp:428):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, after the phase
+    -- set, before the timer schedules (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     schedule(guid, "cleave", 3000, function()
         cleaveTick(creature, guid)
     end)

@@ -157,6 +157,12 @@ end
 -- (instance GUID lookups, no instance bridge) stay documented-only;
 -- the Talk(SAY_ADDS 2) arm is now ported (addsTick, below).
 local function zarithrianEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base call first (boss_general_zarithrian.cpp:93):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, base-first
+    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
