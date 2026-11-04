@@ -194,9 +194,9 @@ local TEMPEST_MINION_SPAWNS = {
 -- TempestMinions[i], TEMPSUMMON_CORPSE_DESPAWN (4)) — the C++ call has
 -- no despawn-time arg, so despawnMs 0. Documented delta: the
 -- corpse-despawn leg has no bridge — minion corpses stay on the normal
--- corpse sweep. The JustSummoned AttackStart leg has no bridge
--- (AttackStart is unbridged); at Reset the C++ AttackStart is a
--- nullptr-guarded no-op (no victim), so nothing is lost.
+-- corpse sweep. The JustSummoned AttackStart leg is ported via the
+-- ev19 emalonJustSummoned handler below; at Reset the C++ AttackStart
+-- is a nullptr-guarded no-op (no victim), so nothing is lost there.
 local function emalonReset(event, creature)
     cancelTimers(creature:GetGUID())
     for _, p in ipairs(TEMPEST_MINION_SPAWNS) do
@@ -274,10 +274,25 @@ local function emalonCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_emalonAI::JustSummoned (boss_emalon.cpp:93-99):
+-- BossAI latch + summon AttackStart(me->GetVictim()), nullptr-guarded.
+-- AttackStart ported via summon:EngageWithTarget(victim) (midnight
+-- precedent); the victim-nil gate keeps the Reset summons a no-op,
+-- as in C++. Live for the minionJustDied respawn summons (combat
+-- victim present). The BossAI latch is already twinned by the
+-- overchargeTick grid lookup, not by an ev19 list.
+local function emalonJustSummoned(event, creature, summon)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        summon:EngageWithTarget(victim)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_EMALON, 1, emalonEnterCombat)
 RegisterCreatureEvent(ENTRY_EMALON, 2, emalonCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_EMALON, 4, emalonCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_EMALON, 23, emalonReset)
+RegisterCreatureEvent(ENTRY_EMALON, 19, emalonJustSummoned)
 
 -- C++ EVENT_SHOCK (:265-268): DoCastVictim(SPELL_SHOCK), 1-arg =
 -- non-triggered; re-arm 20s.

@@ -279,12 +279,21 @@ local function sladranDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ boss_slad_ran::JustSummoned (boss_slad_ran.cpp:187-191):
+-- summon MovePoint(0, boss position) + summons latch. MovePoint
+-- ported via the MoveTo twin (nesingwary precedent); the summons
+-- latch (BossAI DespawnAll) is a death-path-axis remainder.
+local function sladranJustSummoned(event, creature, summon)
+    summon:MoveTo(0, creature:GetX(), creature:GetY(), creature:GetZ())
+end
+
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 1, sladranEnterCombat)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 2, sladranLeaveCombat)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 3, sladranTargetDied)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 4, sladranDied)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 9, sladranDamageTaken)
 RegisterCreatureEvent(ENTRY_SLAD_RAN, 23, sladranReset)
+RegisterCreatureEvent(ENTRY_SLAD_RAN, 19, sladranJustSummoned)
 
 -- npc_slad_ran_constrictor (29713): Grip of Slad'ran 55093 on the
 -- victim, 2s init, 3-6s repeat, with the C++-exact stack-5 wrap leg

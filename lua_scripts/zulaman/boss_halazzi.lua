@@ -377,8 +377,8 @@ enterPhase = function(creature, guid, nextPhase)
         -- to the boss position (ScriptedCreature.cpp:286-289, janalai
         -- precedent); type 4, despawnMs 0 (corpse family starts its
         -- timer at death, unmodeled). JustSummoned AttackStart(victim)
-        -- has no bridge, so the lynx idles until the engine aggros it
-        -- (its npc_halazzi_lynx AI below is registered).
+        -- is ported via the ev19 halazziJustSummoned handler below
+        -- (the lynx's own AI below is registered).
         creature:SummonCreature(ENTRY_SPIRIT_LYNX, creature:GetX() + 5,
             creature:GetY() + 5, creature:GetZ(), creature:GetO(), 4, 0)
         -- C++ EnterPhase(PHASE_HUMAN): SetMaxHealth(400000) +
@@ -485,6 +485,20 @@ local function halazziSpellHit(event, creature, spellId)
     end
 end
 
+-- C++ boss_halazziAI::JustSummoned (boss_halazzi.cpp:124-130):
+-- summon AttackStart(me->GetVictim()) + LynxGUID latch + summons
+-- latch. AttackStart ported via summon:EngageWithTarget(victim)
+-- (midnight precedent; player-target-only funnel). The LynxGUID
+-- latch stays a lookup (merge arms already find the lynx via
+-- FindNearestCreature); the summons latch (BossAI DespawnAll) is a
+-- death-path-axis remainder, not a JustSummoned arm.
+local function halazziJustSummoned(event, creature, summon)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        summon:EngageWithTarget(victim)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_HALAZZI, 1, halazziEnterCombat)
 RegisterCreatureEvent(ENTRY_HALAZZI, 2, halazziLeaveCombat)
 RegisterCreatureEvent(ENTRY_HALAZZI, 3, halazziTargetDied)
@@ -492,6 +506,7 @@ RegisterCreatureEvent(ENTRY_HALAZZI, 4, halazziDied)
 RegisterCreatureEvent(ENTRY_HALAZZI, 9, halazziDamageTaken)
 RegisterCreatureEvent(ENTRY_HALAZZI, 14, halazziSpellHit)
 RegisterCreatureEvent(ENTRY_HALAZZI, 23, halazziReset)
+RegisterCreatureEvent(ENTRY_HALAZZI, 19, halazziJustSummoned)
 
 -- npc_halazzi_lynx: frenzy 43290 self-cast every {30s,50s}, shred armor
 -- 43243 on the victim every 4s. The C++ DamageTaken never-die arm is kept

@@ -217,7 +217,8 @@ end
 -- TEMPSUMMON_CORPSE_TIMED_DESPAWN (Eluna type 5; the bridge numbers
 -- the C++ enum 0-based), 30s.
 -- Deviations: C++ JustSummoned moves the summon to CenterPoint
--- (no MovePoint bridge); the add AIs (27982/27979/27981/27980) are
+-- (MovePoint twin: summon:MoveTo(0, CenterPoint), sjonnirJustSummoned
+-- below); the add AIs (27982/27979/27981/27980) are
 -- unported/unregistered, so summons are inert until those land; the
 -- 30s death-timer leg is unmodeled (corpse/dead family 4/5/6 starts
 -- its timer at death — documented engine delta).
@@ -297,8 +298,17 @@ local function sjonnirDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_sjonnirAI::JustSummoned (boss_sjonnir.cpp:117-122):
+-- summon MovePoint(0, CenterPoint) + summons latch. MovePoint
+-- ported via the MoveTo twin (nesingwary precedent); the summons
+-- latch (BossAI DespawnAll) is a death-path-axis remainder.
+local function sjonnirJustSummoned(event, creature, summon)
+    summon:MoveTo(0, 1295.21, 667.157, 189.691)
+end
+
 RegisterCreatureEvent(ENTRY_SJONNIR, 1, sjonnirEnterCombat)
 RegisterCreatureEvent(ENTRY_SJONNIR, 2, sjonnirCombatEnd)
 RegisterCreatureEvent(ENTRY_SJONNIR, 3, sjonnirTargetDied)
 RegisterCreatureEvent(ENTRY_SJONNIR, 4, sjonnirDied)
 RegisterCreatureEvent(ENTRY_SJONNIR, 23, sjonnirCombatEnd)
+RegisterCreatureEvent(ENTRY_SJONNIR, 19, sjonnirJustSummoned)
