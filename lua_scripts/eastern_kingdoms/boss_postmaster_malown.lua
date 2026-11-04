@@ -47,8 +47,13 @@
 -- - BossAI::Reset() (empty body in C++) + BossAI::JustEngagedWith +
 --   TYPE_MALOWN bookkeeping (luaBossAI shim).
 -- - UpdateAI's `if (!UpdateVictim()) return` gate: engine-driven.
--- - UpdateAI's UNIT_STATE_CASTING gate and post-cast break: no
---   casting-state bridge (barthilas precedent).
+-- - UpdateAI's UNIT_STATE_CASTING gates (pre-loop gate and in-loop
+--   post-event gate, boss_postmaster_malown.cpp:80-131): PORTED —
+--   each arm defers 500ms while creature:IsCasting() (live
+--   CastingUntil window, lua_creature_events.go:1950; broodkeeper /
+--   kirtonos precedent), no re-arm consumed; the wailing-dead
+--   stream defer re-queues a fresh stream entry, the spent key
+--   already cleared at fire time.
 -- - GetStratholmeAI wrapper: plain AI factory template, no logic.
 -- Verifiable numbers (file's own enums): SPELL_WAILINGDEAD = 7713 /
 -- SPELL_BACKHAND = 6253 / SPELL_CURSEOFWEAKNESS = 8552 /
@@ -139,6 +144,10 @@ end
 -- quirk preserved verbatim; concurrent-stream arm (multimap insert,
 -- does not cancel the pending 19s stream).
 local function onBackhand(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "backhand", 500, function() onBackhand(creature, guid) end)
+        return
+    end
     if math.random(0, 99) < 45 then
         doCastVictimTriggered(creature, SPELL_BACKHAND)
     end
@@ -149,6 +158,10 @@ end
 -- `events.ScheduleEvent(EVENT_WAILINGDEAD, 20s)` — quirk preserved
 -- verbatim.
 local function onCurseOfWeakness(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse_of_weakness", 500, function() onCurseOfWeakness(creature, guid) end)
+        return
+    end
     if math.random(0, 99) < 3 then
         doCastVictimTriggered(creature, SPELL_CURSEOFWEAKNESS)
     end
@@ -159,6 +172,10 @@ end
 -- `events.ScheduleEvent(EVENT_WAILINGDEAD, 22s)` — quirk preserved
 -- verbatim.
 local function onCurseOfTongues(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse_of_tongues", 500, function() onCurseOfTongues(creature, guid) end)
+        return
+    end
     if math.random(0, 99) < 3 then
         doCastVictimTriggered(creature, SPELL_CURSEOFTONGUES)
     end
@@ -169,6 +186,10 @@ end
 -- `events.ScheduleEvent(EVENT_WAILINGDEAD, 25s)` — quirk preserved
 -- verbatim.
 local function onCallOfTheGrave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "call_of_the_grave", 500, function() onCallOfTheGrave(creature, guid) end)
+        return
+    end
     if math.random(0, 99) < 5 then
         doCastVictimTriggered(creature, SPELL_CALLOFTHEGRAVE)
     end
@@ -179,6 +200,10 @@ end
 -- true); 19000ms re-arm unconditional; self-stream joins the concurrent
 -- streams (multimap semantics).
 onWailingDead = function(creature, guid)
+    if creature:IsCasting() then
+        scheduleWailingDeadStream(guid, creature, 500)
+        return
+    end
     if wailingDeadGate() then
         doCastVictimTriggered(creature, SPELL_WAILINGDEAD)
     end

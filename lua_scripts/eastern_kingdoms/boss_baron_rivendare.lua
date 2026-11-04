@@ -30,8 +30,11 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
 -- OnDied, 23 OnReset. Driven by CreateLuaEvent timers; melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMelee-
--- AttackIfReady. There is no UNIT_STATE_CASTING gate in Go, so
--- timers fire unconditionally (maiden precedent); the C++
+-- AttackIfReady. UpdateAI's UNIT_STATE_CASTING gates (pre-loop
+-- gate and in-loop post-event gate, boss_baron_rivendare.cpp:105/
+-- 144): PORTED — each arm defers 500ms while creature:IsCasting()
+-- (live CastingUntil window, lua_creature_events.go:1950;
+-- broodkeeper / kirtonos precedent), no re-arm consumed. The C++
 -- JustEngagedWith arms map onto OnEnterCombat timers with the
 -- C++-exact init delays (maiden convention).
 -- Verifiable numbers (file's own enums): SPELL_SHADOWBOLT =
@@ -129,6 +132,10 @@ local function randomThreatTarget(creature)
 end
 
 local function onShadowbolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function() onShadowbolt(creature, guid) end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOWBOLT)
@@ -137,6 +144,10 @@ local function onShadowbolt(creature, guid)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -145,6 +156,10 @@ local function onCleave(creature, guid)
 end
 
 local function onMortalStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mortalstrike", 500, function() onMortalStrike(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_MORTALSTRIKE)
@@ -153,6 +168,10 @@ local function onMortalStrike(creature, guid)
 end
 
 local function onRaiseDead(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "raisedead", 500, function() onRaiseDead(creature, guid) end)
+        return
+    end
     if not raiseDead[guid] then
         creature:CastSpell(creature, SPELL_RAISE_DEAD)
         for _, spell in ipairs(RAISE_DEAD_SPELLS) do

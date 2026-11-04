@@ -14946,12 +14946,15 @@ func init() {
 	// GetVictim + CastSpell(victim, spell, true), nil-victim keeps
 	// schedule); C++ quirk preserved verbatim: every non-wailing case
 	// reschedules EVENT_WAILINGDEAD with its own timer (8s/20s/22s/25s)
-	// instead of its own event, replacing any pending wailingdead timer;
-	// KilledUnit Talk(SAY_KILL 0) player-gated (illidan convention);
-	// timers cleared on LeaveCombat/Died/Reset. Documented-only (no
-	// bridges): empty Reset + BossAI::JustEngagedWith/TYPE_MALOWN
-	// bookkeeping (luaBossAI shim); UNIT_STATE_CASTING gates (barthilas
-	// precedent); GetStratholmeAI factory; melee engine-driven.
+	// instead of its own event; EventMap multimap semantics mean the
+	// streams run concurrently (Lua models each with a unique key);
+	// KilledUnit Talk(SAY_KILL 0) unconditional (no victim gate in C++);
+	// timers cleared on LeaveCombat/Died/Reset. UpdateAI
+	// UNIT_STATE_CASTING gates PORTED (pre-loop + in-loop post-event
+	// gates -> 500ms IsCasting defer per arm, no re-arm consumed).
+	// Documented-only (no bridges): empty Reset +
+	// BossAI::JustEngagedWith/TYPE_MALOWN bookkeeping (luaBossAI shim);
+	// GetStratholmeAI factory; melee engine-driven.
 	RegisterLuaBoss("boss_postmaster_malown", 11143)
 	// boss_baron_rivendare.cpp audit (EK loader decl :134 / call :312
 	// follows postmaster_malown): 2 scripts, BossAI(creature, TYPE_BARON=6)
@@ -14969,12 +14972,14 @@ func init() {
 	// 12s->{10s,25s} (all DoCastVictim -> GetVictim + CastSpell,
 	// nil-victim keeps schedule, moroes/maiden convention) / raise dead
 	// 15s->12s (!latch: DoCastSelf 17473 + 6x triggered DoCastSelf
-	// 17475-17480 + Talk(0); latch: Talk(1)). Timers cleared on
-	// LeaveCombat/Died/Reset. Documented-only (no bridges): Reset's
+	// 17475-17480 + Talk(0); latch: Talk(1)). UpdateAI
+	// UNIT_STATE_CASTING gates PORTED (pre-loop :105 + in-loop
+	// post-event :144 gates -> 500ms IsCasting defer per arm, no
+	// re-arm consumed). Timers cleared on LeaveCombat/Died/Reset.
+	// Documented-only (no bridges): Reset's
 	// TYPE_RAMSTEIN-DONE->TYPE_BARON-NOT_STARTED leg, JustEngagedWith's
-	// TYPE_BARON IN_PROGRESS leg, JustDied's TYPE_BARON DONE leg, the
-	// UNIT_STATE_CASTING gates, GetStratholmeAI factory; melee
-	// engine-driven. npc_summoned_skeleton's SpellHit(17471) ->
+	// TYPE_BARON IN_PROGRESS leg, JustDied's TYPE_BARON DONE leg,
+	// GetStratholmeAI factory; melee engine-driven. npc_summoned_skeleton's SpellHit(17471) ->
 	// DoCastSelf(17472, TRIGGERED) leg not registered — no C++-verifiable
 	// NPC entry (ev14 SpellHit bridge live; entry-unverifiable queue).
 	RegisterLuaBoss("boss_baron_rivendare", 10440)
