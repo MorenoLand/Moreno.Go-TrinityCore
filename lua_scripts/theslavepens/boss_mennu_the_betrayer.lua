@@ -42,8 +42,12 @@
 -- DoCast(me), re-arm {14s,25s} (C++-exact); lightning bolt
 -- 35010 {14s,19s} then {14s,25s} — triggered DoCastVictim
 -- (the C++ true arg), re-arm {14s,25s} (C++-exact). The
--- UNIT_STATE_CASTING early returns have no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
--- (thespia elemental precedent). OnTargetDied(3): Talk(SAY_
+-- UpdateAI pre-loop (:97) + in-loop (:127) UNIT_STATE_CASTING
+-- gates are ported per arm: an expired arm held while casting
+-- keeps its timer expired (else-branch countdown only) and
+-- fires on the first non-casting tick; unexpired arms keep
+-- counting down, since events.Update runs ahead of the gate
+-- (live creature:IsCasting bridge, lua_creature_events.go:1950). OnTargetDied(3): Talk(SAY_
 -- SLAY) (no TYPEID gate, C++-exact). OnDied(4): Talk(SAY_
 -- DEATH) + cleanup (the _JustDied/SetBossState DONE arm is
 -- instance-blocked). OnLeaveCombat(2)/OnReset(23): cancel the
@@ -55,8 +59,7 @@
 -- IN_PROGRESS/DONE bookkeeping in Reset/JustEngagedWith/
 -- JustDied skipped; instance_the_slave_pens.cpp is a
 -- placeholder and stays blocked on the instance-script model);
--- no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the UNIT_STATE_CASTING early returns
--- in UpdateAI unmodeled (timer bookkeeping exact); no
+-- cast-state gating PORTED (see fight shape); no
 -- SpellScript/AuraScript scripts in this file.
 
 local SPELL_TAINTED_STONESKIN_TOTEM = 31985
@@ -102,6 +105,11 @@ local function freshState()
     }
 end
 
+-- Pump CASTING gate: each expired arm carries `and not
+-- creature:IsCasting()` — while casting it fires nothing and
+-- consumes no re-arm (else-branch countdown only, timer stays
+-- expired); unexpired arms keep counting down, since C++
+-- events.Update runs ahead of the gate. (UpdateAI :97/:127).
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -111,7 +119,7 @@ local function bossTick(creature, guid)
     -- Tainted stoneskin totem 31985: 30s, fires only when
     -- HealthBelowPct(100) (C++ gate); re-arm 30000 regardless
     -- (C++-exact).
-    if st.stoneskin <= 1000 then
+    if st.stoneskin <= 1000 and not creature:IsCasting() then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 100 / 100) then
@@ -124,7 +132,7 @@ local function bossTick(creature, guid)
 
     -- Tainted earthgrab totem 31981: 20s one-shot, DoCast(me)
     -- (C++-exact, no re-arm).
-    if st.earthgrab <= 1000 then
+    if st.earthgrab <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_TAINTED_EARTHGRAB_TOTEM)
         st.earthgrab = 999999
     else
@@ -133,7 +141,7 @@ local function bossTick(creature, guid)
 
     -- Corrupted nova totem 31991: 60s one-shot, DoCast(me)
     -- (C++-exact, no re-arm).
-    if st.nova <= 1000 then
+    if st.nova <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_CORRUPTED_NOVA_TOTEM)
         st.nova = 999999
     else
@@ -142,7 +150,7 @@ local function bossTick(creature, guid)
 
     -- Mennu's healing ward 34980: {14s,25s}, DoCast(me),
     -- re-arm {14s,25s} (C++-exact).
-    if st.healingWard <= 1000 then
+    if st.healingWard <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_MENNUS_HEALING_WARD)
         st.healingWard = math.random(14000, 25000)
     else
@@ -152,7 +160,7 @@ local function bossTick(creature, guid)
     -- Lightning bolt 35010: {14s,19s} init then {14s,25s},
     -- triggered DoCastVictim (the C++ true arg), re-arm
     -- {14s,25s} (C++-exact).
-    if st.lightningBolt <= 1000 then
+    if st.lightningBolt <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_LIGHTNING_BOLT, true)
         st.lightningBolt = math.random(14000, 25000)
     else

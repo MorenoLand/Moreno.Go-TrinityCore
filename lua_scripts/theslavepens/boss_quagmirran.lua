@@ -46,8 +46,9 @@
 -- nothing, re-arm 22000 regardless (C++-exact); poison bolt
 -- volley 34780 31s then 24s — DoCast
 -- (me) non-triggered self-cast, re-arm 24000 (C++-exact). The
--- UNIT_STATE_CASTING early returns have no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
--- (mennu/thespia precedent). OnDied(4): cleanup (the _JustDied
+-- UpdateAI pre-loop (:82) + in-loop (:110) UNIT_STATE_CASTING
+-- gates are ported per arm (see pump gate note; live creature:
+-- IsCasting bridge, lua_creature_events.go:1950). OnDied(4): cleanup (the _JustDied
 -- arm is instance-blocked). OnLeaveCombat(2)/OnReset(23):
 -- cancel the pump, drop per-GUID state (the _Reset arm is
 -- instance-blocked). Melee is engine-driven.
@@ -56,9 +57,8 @@
 -- (the DATA_QUAGMIRRAN NOT_STARTED/IN_PROGRESS/DONE
 -- bookkeeping in Reset/JustEngagedWith/JustDied skipped;
 -- instance_the_slave_pens.cpp is a placeholder and stays
--- blocked on the instance-script model); no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
--- — the UNIT_STATE_CASTING early returns in UpdateAI unmodeled
--- (timer bookkeeping exact); no SpellScript/AuraScript scripts
+-- blocked on the instance-script model); cast-state gating
+-- PORTED (see fight shape); no SpellScript/AuraScript scripts
 -- in this file. SPELL_POISON_BOLT_VOLLEY carries the upstream
 -- "// 39340" comment (alternate id); unmodeled, documented
 -- (gruul unused-enum precedent).
@@ -140,6 +140,11 @@ local function freshState()
     }
 end
 
+-- Pump CASTING gate: each expired arm carries `and not
+-- creature:IsCasting()` — while casting it fires nothing and
+-- consumes no re-arm (else-branch countdown only, timer stays
+-- expired); unexpired arms keep counting down, since C++
+-- events.Update runs ahead of the gate. (UpdateAI :82/:110).
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -149,7 +154,7 @@ local function bossTick(creature, guid)
     -- Acid spray 38153: 25s init then {20s,25s} — DoCastAOE
     -- (non-triggered self-cast, supremus precedent), re-arm
     -- {20s,25s} (C++-exact).
-    if st.acidSpray <= 1000 then
+    if st.acidSpray <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_ACID_SPRAY)
         st.acidSpray = math.random(20000, 25000)
     else
@@ -159,7 +164,7 @@ local function bossTick(creature, guid)
     -- Cleave 40504: 9s init then {18s,34s} — triggered
     -- DoCastVictim (the C++ true arg, gruul precedent), re-arm
     -- {18s,34s} (C++-exact).
-    if st.cleave <= 1000 then
+    if st.cleave <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_CLEAVE, true)
         st.cleave = math.random(18000, 34000)
     else
@@ -171,7 +176,7 @@ local function bossTick(creature, guid)
     -- (C++ SelectTarget(Random, 1, 10.0f, true), salramm idiom),
     -- nil pick casts nothing, re-arm 22000 regardless
     -- (C++-exact).
-    if st.uppercut <= 1000 then
+    if st.uppercut <= 1000 and not creature:IsCasting() then
         local target = randomThreatPlayerInRange(creature, 10, true)
         if target then
             creature:CastSpell(target, SPELL_UPPERCUT)
@@ -183,7 +188,7 @@ local function bossTick(creature, guid)
 
     -- Poison bolt volley 34780: 31s init then 24s — DoCast(me)
     -- non-triggered self-cast (C++-exact), re-arm 24000.
-    if st.poisonBoltVolley <= 1000 then
+    if st.poisonBoltVolley <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_POISON_BOLT_VOLLEY)
         st.poisonBoltVolley = 24000
     else

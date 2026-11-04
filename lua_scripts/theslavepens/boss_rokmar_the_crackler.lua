@@ -42,8 +42,10 @@
 -- integer threshold — the old GetHealthPct() < 10 prose fired up to
 -- 1 HP early; maulgar/ironaya convention) -> DoCast(me)
 -- SPELL_FRENZY 34970 non-triggered self-cast (C++-exact), flag
--- set. The UNIT_STATE_CASTING early returns have no
--- unit-state bridge (mennu/thespia precedent). OnDied(4):
+-- set. The UpdateAI pre-loop (:89) + in-loop (:112)
+-- UNIT_STATE_CASTING gates are ported per arm (see pump gate
+-- note; live creature:IsCasting bridge,
+-- lua_creature_events.go:1950). OnDied(4):
 -- cleanup (the _JustDied arm is instance-blocked). OnLeave-
 -- Combat(2)/OnReset(23): cancel the pump, drop per-GUID state
 -- (the _Reset/Initialize arm is instance-blocked). Melee is
@@ -53,9 +55,8 @@
 -- shim (the DATA_MENNU_THE_BETRAYER/NOT_STARTED/IN_PROGRESS/
 -- DONE bookkeeping in the ctor/Reset/JustEngagedWith/JustDied
 -- skipped; instance_the_slave_pens.cpp is a placeholder and
--- stays blocked on the instance-script model); no unit-state
--- bridge — the UNIT_STATE_CASTING early returns in UpdateAI
--- unmodeled (timer bookkeeping exact); no SpellScript/
+-- stays blocked on the instance-script model); cast-state
+-- gating PORTED (see fight shape); no SpellScript/
 -- AuraScript scripts in this file. Note: the C++ ctor passes
 -- DATA_MENNU_THE_BETRAYER (1) as the BossAI boss-id — an
 -- upstream copy/paste quirk (DATA_ROKMAR_THE_CRACKLER = 2
@@ -98,6 +99,11 @@ local function freshState()
     }
 end
 
+-- Pump CASTING gate: each expired arm carries `and not
+-- creature:IsCasting()` — while casting it fires nothing and
+-- consumes no re-arm (else-branch countdown only, timer stays
+-- expired); unexpired arms keep counting down, since C++
+-- events.Update runs ahead of the gate. (UpdateAI :89/:112).
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -107,7 +113,7 @@ local function bossTick(creature, guid)
     -- Grievous wound 31956: 10s init then {20s,30s} —
     -- triggered DoCastVictim (the C++ true arg), re-arm
     -- {20s,30s} (C++-exact).
-    if st.grievousWound <= 1000 then
+    if st.grievousWound <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_GRIEVOUS_WOUND, true)
         st.grievousWound = math.random(20000, 30000)
     else
@@ -117,7 +123,7 @@ local function bossTick(creature, guid)
     -- Ensnaring moss 31948: 20s init then {20s,30s} —
     -- DoCastAOE (non-triggered self-cast, supremus precedent),
     -- re-arm {20s,30s} (C++-exact).
-    if st.ensnaringMoss <= 1000 then
+    if st.ensnaringMoss <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_ENSNARING_MOSS)
         st.ensnaringMoss = math.random(20000, 30000)
     else
@@ -127,7 +133,7 @@ local function bossTick(creature, guid)
     -- Water spit 35008: 14s init then {14s,18s} — DoCastAOE
     -- (non-triggered self-cast, supremus precedent), re-arm
     -- {14s,18s} (C++-exact).
-    if st.waterSpit <= 1000 then
+    if st.waterSpit <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_WATER_SPIT)
         st.waterSpit = math.random(14000, 18000)
     else
@@ -136,8 +142,10 @@ local function bossTick(creature, guid)
 
     -- Frenzy 34970: once-guarded HealthBelowPct(10) (integer strict-<,
     -- ironaya convention) — DoCast(me) non-triggered self-cast
-    -- (C++-exact).
-    if not st.frenzyUsed then
+    -- (C++-exact). Post-loop latch in C++ (after the event loop),
+    -- so a gate return skips it for the tick — hence the
+    -- IsCasting guard, latch unconsumed.
+    if not st.frenzyUsed and not creature:IsCasting() then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 10 / 100) then

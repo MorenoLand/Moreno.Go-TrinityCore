@@ -12410,7 +12410,9 @@ func init() {
 	// switch on 2.5s position poll vs (-239.439,-363.481)/18yd,
 	// escalating mark stacks (15s), water tomb 7s / vile sludge
 	// 7s->15s, enrage 10min->60s. Display/immunity/threat/summon
-	// arms are unmodeled. Fight logic in
+	// arms are unmodeled. Cast-state check: plain-countdown
+	// ScriptedAI UpdateAI, zero HasUnitState hits — no gate.
+	// Fight logic in
 	// lua_scripts/serpentshrinecavern/boss_hydross_the_unstable.lua.
 	RegisterLuaBoss("boss_hydross_the_unstable", 21216)
 
@@ -12422,7 +12424,9 @@ func init() {
 	// The DATA_CANSTARTPHASE3 poll, phase 3, the shield-barrier
 	// upkeep and the enchanted waypoint machine are unmodeled.
 	// Tainted Elemental (22009) runs poison bolt {5s,10s} + 30s
-	// despawn + the JustDied 50s-clamp relay. Fight logic in
+	// despawn + the JustDied 50s-clamp relay. Cast-state check:
+	// boss + all four sub-AIs are plain-countdown ScriptedAI
+	// UpdateAIs, zero HasUnitState hits — no gate. Fight logic in
 	// lua_scripts/serpentshrinecavern/boss_lady_vashj.lua.
 	RegisterLuaBoss("boss_lady_vashj", 21212)
 	RegisterLuaBoss("npc_tainted_elemental", 22009)
@@ -12437,6 +12441,8 @@ func init() {
 	// earthshock caster scan has no bridge. Inner Demon (21857)
 	// runs soul link 1s / demonic alignment upkeep / shadow bolt
 	// 10s — the victim binding and damage immunity are unmodeled.
+	// Cast-state check: all four AIs are plain-countdown
+	// ScriptedAI UpdateAIs, zero HasUnitState hits — no gate.
 	// Fight logic in
 	// lua_scripts/serpentshrinecavern/boss_leotheras_the_blind.lua.
 	RegisterLuaBoss("boss_leotheras_the_blind", 21215)
@@ -12453,7 +12459,9 @@ func init() {
 	// and the player-side triggered casts are unmodeled. Water
 	// Globule (21913) runs the 5-yd check -> explosion 37871 +
 	// despawn; the LOS aggro machine and flag/faction arms are
-	// unmodeled. Fight logic in
+	// unmodeled. Cast-state check: boss + globule are
+	// plain-countdown ScriptedAI UpdateAIs, zero HasUnitState
+	// hits — no gate. Fight logic in
 	// lua_scripts/serpentshrinecavern/boss_morogrim_tidewalker.lua.
 	RegisterLuaBoss("boss_morogrim_tidewalker", 21213)
 	RegisterLuaBoss("npc_water_globule", 21913)
@@ -12473,15 +12481,20 @@ func init() {
 	// the 1100 BP0 arg has no bridge), 1500ms GCD arms. Fight
 	// logic in
 	// lua_scripts/serpentshrinecavern/boss_lurker_below.lua.
+	// Cast-state check: boss + ambusher are plain-countdown
+	// ScriptedAI UpdateAIs, zero HasUnitState hits — no gate.
 	RegisterLuaBoss("boss_the_lurker_below", 21217)
 	RegisterLuaBoss("npc_coilfang_ambusher", 21865)
 	// Hydromancer Thespia + Coilfang Water Elemental (The Steamvault):
-	// lightning cloud (random player <=30yd, 15s then 15-25s; the
-	// Heroic second cast has no difficulty bridge), lung burst
+	// lightning cloud (random player <=30yd, 15s then 15-25s;
+	// Heroic second cast modeled via IsHeroic), lung burst
 	// (random player <=40yd, 7s then 7-12s), enveloping winds
 	// (random player <=35yd, 9s then 10-15s; Heroic second cast
-	// unmodeled); the elemental self-casts water bolt volley
-	// (34449), 3-6s init then 7-12s. Fight logic in
+	// modeled via IsHeroic); the elemental self-casts water bolt
+	// volley (34449), 3-6s init then 7-12s. Cast-state gating
+	// PORTED: boss under BossAI::UpdateAI gates (no boss UpdateAI
+	// override), elemental under its own in-loop gate (:153).
+	// Fight logic in
 	// lua_scripts/steamvault/boss_hydromancer_thespia.lua.
 	RegisterLuaBoss("boss_hydromancer_thespia", 17797)
 	RegisterLuaBoss("npc_coilfang_waterelemental", 17917)
@@ -12491,7 +12504,8 @@ func init() {
 	// SAY_MECHANICS at the 75/50/25 thresholds (the mechanic
 	// summons are summon-blocked); the npc_steamrigger_mechanic
 	// AI is entirely instance-gated and stays unregistered.
-	// Fight logic in
+	// Cast-state check: boss UpdateAI plain countdowns, zero
+	// HasUnitState hits — no gate. Fight logic in
 	// lua_scripts/steamvault/boss_mekgineer_steamrigger.lua.
 	RegisterLuaBoss("boss_mekgineer_steamrigger", 17796)
 	// Warlord Kalithresh (The Steamvault): spell reflection
@@ -12500,7 +12514,8 @@ func init() {
 	// is FindNearestCreature(17954)+cross-creature gated and
 	// kept as timer bookkeeping only; the npc_naga_distiller
 	// AI is entirely flag/cross-creature/instance gated and
-	// stays unregistered. Fight logic in
+	// stays unregistered. Cast-state check: boss UpdateAI plain
+	// countdowns, zero HasUnitState hits — no gate. Fight logic in
 	// lua_scripts/steamvault/boss_warlord_kalithresh.lua.
 	RegisterLuaBoss("boss_warlord_kalithresh", 17798)
 	// Mennu the Betrayer (The Slave Pens): tainted stoneskin
@@ -12509,7 +12524,9 @@ func init() {
 	// totem (self, 60s one-shot), Mennu's healing ward (self,
 	// 14-25s), lightning bolt (triggered DoCastVictim, 14-19s
 	// init then 14-25s); the _Reset/_JustDied instance arms
-	// stay blocked on the instance-script model. Fight logic
+	// stay blocked on the instance-script model. Cast-state
+	// gating PORTED: own UpdateAI pre-loop (:97) + in-loop
+	// (:127) gates, per-arm hold with timer expired. Fight logic
 	// in lua_scripts/theslavepens/boss_mennu_the_betrayer.lua.
 	RegisterLuaBoss("boss_mennu_the_betrayer", 17941)
 	// Rokmar the Crackler (The Slave Pens): grievous wound
@@ -12517,7 +12534,10 @@ func init() {
 	// moss (DoCastAOE self-cast, 20s then 20-30s), water spit
 	// (DoCastAOE self-cast, 14s then 14-18s), frenzy self-cast
 	// once-guarded on HealthBelowPct(10); no Talk lines and no
-	// KilledUnit body in C++, so no event 3; the _Reset/
+	// KilledUnit body in C++, so no event 3. Cast-state gating
+	// PORTED: own UpdateAI pre-loop (:89) + in-loop (:112)
+	// gates, per-arm hold with timer expired; frenzy post-loop
+	// latch held while casting. The _Reset/
 	// _JustDied instance arms stay blocked on the
 	// instance-script model. Fight logic in
 	// lua_scripts/theslavepens/boss_rokmar_the_crackler.lua.
@@ -12527,8 +12547,10 @@ func init() {
 	// DoCastVictim, 9s then 18-34s), uppercut (random alive
 	// player in 10 yd excluding the victim, 20s then 22s),
 	// poison bolt volley (DoCast(me), 31s then 24s); no Talk
-	// lines and no KilledUnit body in C++, so no event 3; the
-	// _Reset/_JustDied instance arms stay blocked on the
+	// lines and no KilledUnit body in C++, so no event 3.
+	// Cast-state gating PORTED: own UpdateAI pre-loop (:82) +
+	// in-loop (:110) gates, per-arm hold with timer expired.
+	// The _Reset/_JustDied instance arms stay blocked on the
 	// instance-script model. Fight logic in
 	// lua_scripts/theslavepens/boss_quagmirran.lua.
 	RegisterLuaBoss("boss_quagmirran", 17942)

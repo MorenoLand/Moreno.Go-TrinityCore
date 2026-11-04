@@ -28,7 +28,13 @@
 -- per-GUID scheduler reset (lightningCloud 15000 / lungBurst
 -- 7000 / envelopingWinds 9000) + Talk(SAY_AGGRO) + 1s
 -- scheduler pump (a port of boss_thespiaAI::ExecuteEvent — 1s
--- granularity is exact for all C++ timers here). Pump:
+-- granularity is exact for all C++ timers here). The BossAI::
+-- UpdateAI pre-loop + in-loop CASTING gates (ScriptedCreature.
+-- cpp:571-589; no boss UpdateAI override) are ported per arm:
+-- an expired arm held while casting keeps its timer expired
+-- (else-branch countdown only) and fires on the first
+-- non-casting tick; unexpired arms keep counting down, since
+-- events.Update runs ahead of the gate in C++. Pump:
 -- lightning cloud 25033 15s init then {15s,25s} — threat-list
 -- player alive within 30 yd (C++ SelectTarget(Random, 0,
 -- 30.0f, true), salramm idiom); nil pick casts nothing, timer
@@ -51,9 +57,9 @@
 -- collapses into the pump, which only runs in combat). Pump:
 -- water bolt volley 34449 — creature:CastSpell(creature, 34449)
 -- non-triggered self-cast (C++ DoCast(me)), re-arm {7s,12s}
--- (C++-exact; the UNIT_STATE_CASTING early return has no unit-
--- state bridge, so the event fires even on the pump tick a C++
--- cast would have skipped — the timer bookkeeping is C++-exact).
+-- (C++-exact; the UpdateAI in-loop UNIT_STATE_CASTING gate
+-- (:153, after _events.Update, before the ExecuteEvent loop) is
+-- ported as a 500ms IsCasting defer, no re-arm consumed).
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cleanup.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
@@ -64,10 +70,10 @@
 -- the instance-script model); difficulty is bridged —
 -- creature:IsHeroic() (per-instance difficulty, lua_creature_events.go)
 -- drives the heroic second casts of lightning cloud (25033) and
--- enveloping winds (31718); no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- the elemental's UNIT_STATE_CASTING skip arm unmodeled (timer
--- bookkeeping exact); no SpellScript/AuraScript scripts in this
--- file.
+-- enveloping winds (31718); cast-state gating PORTED (boss
+-- BossAI gates + elemental in-loop gate, live creature:
+-- IsCasting bridge, lua_creature_events.go:1950); no
+-- SpellScript/AuraScript scripts in this file.
 
 local SPELL_LIGHTNING_CLOUD = 25033
 local SPELL_LUNG_BURST = 31481
@@ -132,6 +138,11 @@ local function freshThespiaState()
     }
 end
 
+-- Pump CASTING gate: each expired arm carries `and not
+-- creature:IsCasting()` — while casting it fires nothing and
+-- consumes no re-arm (else-branch countdown only, timer stays
+-- expired); unexpired arms keep counting down, since C++
+-- events.Update runs ahead of the gate.
 local function thespiaTick(creature, guid)
     local st = thespiaState[guid]
     if not st then
@@ -142,7 +153,7 @@ local function thespiaTick(creature, guid)
     -- casts nothing, timer re-arms (C++-exact). Heroic second
     -- cast: independent random pick (C++-exact; IsHeroic is the
     -- per-instance difficulty bridge, lua_creature_events.go).
-    if st.lightningCloud <= 1000 then
+    if st.lightningCloud <= 1000 and not creature:IsCasting() then
         local target = pickRandomPlayerInRange(creature, 30)
         if target then
             creature:CastSpell(target, SPELL_LIGHTNING_CLOUD)
@@ -159,7 +170,7 @@ local function thespiaTick(creature, guid)
     end
 
     -- Lung burst 31481: 7s init then {7s,12s} (C++-exact).
-    if st.lungBurst <= 1000 then
+    if st.lungBurst <= 1000 and not creature:IsCasting() then
         local target = pickRandomPlayerInRange(creature, 40)
         if target then
             creature:CastSpell(target, SPELL_LUNG_BURST)
@@ -171,7 +182,7 @@ local function thespiaTick(creature, guid)
 
     -- Enveloping winds 31718: 9s init then {10s,15s}; the Heroic
     -- second cast uses an independent random pick (C++-exact).
-    if st.envelopingWinds <= 1000 then
+    if st.envelopingWinds <= 1000 and not creature:IsCasting() then
         local target = pickRandomPlayerInRange(creature, 35)
         if target then
             creature:CastSpell(target, SPELL_ENVELOPING_WINDS)
@@ -189,6 +200,14 @@ local function thespiaTick(creature, guid)
 end
 
 local function elementalTick(creature, guid)
+    -- UpdateAI in-loop CASTING gate (:153): while casting the
+    -- arm defers 500ms, consuming no re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        elementalTimers[guid] = CreateLuaEvent(function()
+            elementalTick(creature, guid)
+        end, 500, 1)
+        return
+    end
     -- Water bolt volley 34449: non-triggered self-cast, re-arm
     -- {7s,12s} (C++-exact; header).
     creature:CastSpell(creature, SPELL_WATER_BOLT_VOLLEY)
