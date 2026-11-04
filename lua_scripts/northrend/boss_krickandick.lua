@@ -73,8 +73,9 @@
 --   (:276-277) first, then DoCastSelf(SPELL_PURSUIT 68987,
 --   { SPELLVALUE_MAX_TARGETS, 1 }) (:278), C++ order; one-shot.
 -- boss_ick JustDied / LeaveCombat / Reset (:176-189, :147-161) — timer
---   cancellation only; the vehicle RemoveAllPassengers, ForceCombatStop(krick)
---   and krick->AI()->DoAction(ACTION_OUTRO) legs (:180-187) have no bridge.
+--   cancellation plus, on death only, the cross-AI ACTION_OUTRO relay
+--   (PORTED: ickDied — tyrannus tele-to/summon + krick MoveTo outroPos[0];
+--   vehicle RemoveAllPassengers + ForceCombatStop(krick) stay out, see there).
 -- boss_krick KilledUnit (:324-330) — Talk(SAY_KRICK_SLAY 1) player-gated
 --   (event 3 — the razuvious player-gated variant precedent).
 --
@@ -94,8 +95,9 @@
 --   creature:SetFlag(59, ...) (2026-10-21; the intro-outro machine does NOT
 --   restore them — no RemoveFlag / REACT_AGGRESSIVE anywhere in the C++).
 -- boss_krick DoAction(ACTION_OUTRO) (:342-367) — tyrannus NearTeleportTo /
---   SummonCreature choreography + MovePoint(POINT_KRICK_INTRO): no instance /
---   motion bridges.
+--   SummonCreature choreography + MovePoint(POINT_KRICK_INTRO): PORTED via
+--   ickDied (the relay host); the MovementInform landing + outro chain
+--   stay out (no arrival hook), see ickDied.
 -- boss_krick MovementInform (:369-377) — POINT_KRICK_INTRO landing ->
 --   Talk(SAY_KRICK_OUTRO_1 6) + PHASE_OUTRO flip: no-MovementInform bridge
 --   (the violet_hold saboteur precedent).
@@ -136,6 +138,16 @@
 
 local ENTRY_ICK = 36476
 local ENTRY_KRICK = 36477
+local ENTRY_TYRANNUS_EVENTS = 36794 -- pit_of_saron.h:55
+
+-- boss_krickandick.cpp:128-135 outroPos: [0] krick outro, [1] tyrannus tele-to.
+local KRICK_OUTRO_X = 828.9342
+local KRICK_OUTRO_Y = 118.6247
+local KRICK_OUTRO_Z = 509.5190
+local TYRANNUS_OUTRO_X = 841.0100
+local TYRANNUS_OUTRO_Y = 196.2450
+local TYRANNUS_OUTRO_Z = 573.9640
+local TYRANNUS_OUTRO_O = 0.2046099
 
 -- UnitDefines.h:125/:340; UNIT_FIELD_FLAGS = 59 (UpdateFields.h:117).
 local UNIT_FIELD_FLAGS = 59
@@ -406,13 +418,48 @@ local function ickEnterCombat(event, creature, target)
     schedule(guid, "special", {30000, 35000}, function() onSpecial(creature, guid) end)
 end
 
--- Shared timer wipe for events 2/23/4 (the svala / yogg_saron convention).
--- C++ JustDied (:176-189): _JustDied() passthrough, the vehicle
--- RemoveAllPassengers, ForceCombatStop(krick) and
--- krick->AI()->DoAction(ACTION_OUTRO) legs have no bridge — the outro never
--- fires in Lua (documented fidelity gap); timers still cancel on death.
+-- Shared timer wipe for events 2/23 (the svala / yogg_saron convention).
 local function ickCancelCombat(event, creature)
     initState(creature:GetGUID())
+end
+
+-- C++ boss_ick JustDied (:176-189) + boss_krick DoAction(ACTION_OUTRO)
+-- (:342-367): _JustDied() is instance bookkeeping (no bridge); the
+-- vehicle RemoveAllPassengers leg rides the unported vehicle machine;
+-- ForceCombatStop(krick) is vacuous in Lua (krick is passive, holds no
+-- victim or timers). PORTED: the cross-AI relay via the rotface /
+-- hadronox grid-sweep idiom — krick found by the file's established
+-- 40yd sweep (instance GetCreature(DATA_KRICK) twin); tyrannus found
+-- by a 500yd sweep for the unique events NPC (instance
+-- GetGuidData(DATA_TYRANNUS_EVENT) twin, kalecgos precedent) and
+-- teleported to outroPos[1], else summoned there (TEMPSUMMON_MANUAL_
+-- DESPAWN = 7) with SetCanFly + atan2 facing to krick (the
+-- SetFacingToObject twin); then krick MoveTo outroPos[0] (the
+-- MovePoint(POINT_KRICK_INTRO) twin, C++ order). STAYS OUT: the
+-- MovementInform landing (Talk SAY_KRICK_OUTRO_1 + PHASE_OUTRO flip)
+-- and the whole EVENT_OUTRO_1..13 chain — MoveTo arrivals fire no
+-- hook in Go (no event 28), so the chain has no fire site.
+local function ickDied(event, creature)
+    initState(creature:GetGUID())
+    local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
+    if krick == nil then
+        return
+    end
+    local tyrannus = creature:FindNearestCreature(ENTRY_TYRANNUS_EVENTS, 500.0)
+    if tyrannus ~= nil then
+        tyrannus:Teleport(TYRANNUS_OUTRO_X, TYRANNUS_OUTRO_Y, TYRANNUS_OUTRO_Z, TYRANNUS_OUTRO_O)
+    else
+        local summoned = krick:SummonCreature(ENTRY_TYRANNUS_EVENTS, TYRANNUS_OUTRO_X, TYRANNUS_OUTRO_Y, TYRANNUS_OUTRO_Z, TYRANNUS_OUTRO_O, 7, 0)
+        if summoned ~= nil then
+            summoned:SetCanFly(true)
+            local face = math.atan2(krick:GetY() - summoned:GetY(), krick:GetX() - summoned:GetX())
+            if face < 0 then
+                face = face + 2 * math.pi
+            end
+            summoned:SetFacingTo(face)
+        end
+    end
+    krick:MoveTo(0, KRICK_OUTRO_X, KRICK_OUTRO_Y, KRICK_OUTRO_Z)
 end
 
 -- C++ boss_krickAI::KilledUnit (:324-330): if (victim->GetTypeId() !=
@@ -426,7 +473,7 @@ end
 
 RegisterCreatureEvent(ENTRY_ICK, 1, ickEnterCombat)
 RegisterCreatureEvent(ENTRY_ICK, 2, ickCancelCombat)
-RegisterCreatureEvent(ENTRY_ICK, 4, ickCancelCombat)
+RegisterCreatureEvent(ENTRY_ICK, 4, ickDied)
 RegisterCreatureEvent(ENTRY_ICK, 23, ickCancelCombat)
 
 -- C++ boss_krickAI::Reset (boss_krickandick.cpp:315-322): unconditional
