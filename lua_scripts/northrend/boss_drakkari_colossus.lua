@@ -141,11 +141,13 @@ local function mightyBlowTick(creature, guid)
     end)
 end
 
--- C++ :129-133 JustEngagedWith: BossAI leg unmodeled, then
+-- C++ :115-119 JustEngagedWith: BossAI base arms first, then
 -- me->RemoveAura(SPELL_FREEZE_ANIM) via the RemoveAura bridge.
 local function colossusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:RemoveAura(SPELL_FREEZE_ANIM)
     schedule(guid, "mightyblow", math.random(10000, 30000), function()
         mightyBlowTick(creature, guid)

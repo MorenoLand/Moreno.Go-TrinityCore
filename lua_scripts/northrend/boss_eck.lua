@@ -185,6 +185,8 @@ end
 local function eckEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     schedule(guid, "bite", 5000, function()
         biteTick(creature, guid)
     end)

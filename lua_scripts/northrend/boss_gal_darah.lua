@@ -323,6 +323,8 @@ end
 local function galDarahEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     creature:InterruptNonMeleeSpells(false)
     phaseState[guid] = { phase = PHASE_TROLL, counter = 0 }

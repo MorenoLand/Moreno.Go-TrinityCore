@@ -161,6 +161,8 @@ end
 local function sladranEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "nova", 10000, function()
         novaTick(creature, guid)
