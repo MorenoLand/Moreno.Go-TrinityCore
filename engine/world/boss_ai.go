@@ -16309,6 +16309,18 @@ func init() {
 	// file, not wired.
 	RegisterLuaBoss("npc_weegli_blastfuse", 7607)
 
+	// npc_troll_volunteer: Durotar zone script, entries 40264/40260
+	// (zone_durotar.cpp Creatures enum — kalecgos passes). Ported arms
+	// in lua_scripts/kalimdor/npc_troll_volunteer.lua: spawn
+	// InitializeAI gate + Reset auras/passive/Talk + random display
+	// model + owner MoveFollow; SpellHit turnin (75107 from Uruzin
+	// 40253, once-only) with turnin/credit casts, mounting-check
+	// strip, Dismount, Talk + MoveTo caster pos. The MovePoint
+	// arrival despawn (no ev28) and the mount-check AuraScript
+	// (SpellScript class) stay out — documented in the lua file.
+	RegisterLuaBoss("npc_troll_volunteer", 40264)
+	RegisterLuaBoss("npc_troll_volunteer", 40260)
+
 	// zulfarrak.cpp residual audit (loader decl :98 / call :214; Bly +
 	// Weegli + Zum'rah ported above): go_troll_cage (GameObjectScript —
 	// OnGossipHello sets instance EVENT_PYRAMID/CAGES_OPEN and herds

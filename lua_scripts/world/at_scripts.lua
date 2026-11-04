@@ -8,23 +8,24 @@
 -- PORTED (2026-11-02): at_coilfang_waterfall (handler below; the
 -- entry-filtered player gameobject search that blocked it is now bridged
 -- as player:GetNearestGameObject(range, entry, hostile)).
+-- PORTED (2026-11-04): at_legion_teleporter, at_sholazar_waygate
+-- (handler below; the header's "no player:CastSpell bridge" claim was
+-- stale — player:CastSpell bridged 2026-10-24, lua_player.go:2549, and
+-- GetQuestRewardStatus is bridged, lua_player.go:3787).
 -- Remaining classes documented-only; bridges verified against the current
 -- runtime this run (player method table at
 -- engine/world/lua_player.go, creature table at
 -- engine/world/lua_creature_events.go:55-102, server-event hooks at
 -- engine/scripting/runtime.go:966).
 -- Gap classes (spell IDs exact from the C++ enum blocks):
--- 1. no player:CastSpell bridge (creatures only: lua_creature_events.go:62;
---    in-tree f839950e nil-call-class precedent): at_legion_teleporter
---    (:117-141; SPELL_TELE_A_TO 37387 / SPELL_TELE_H_TO 37389 gated on
---    IsAlive/IsInCombat/GetTeam/GetQuestRewardStatus 10589/10604 — reward
---    status also unbridged: only HasQuest exists, lua_player.go:303), and
---    at_stormwright_shelf (:159-177; SPELL_CREATE_TRUE_POWER_OF_THE_TEMPEST
---    53067 gated on GetQuestStatus(12741)==INCOMPLETE(3) — gate bridged
---    2026-10-24, player:CastSpell leg still blocks), at_sholazar_waygate
---    (:214-256; SHOLAZAR_TO_UNGORO 52056 /
---    UNGORO_TO_SHOLAZAR 52057 on AT_SHOLAZAR 5046 / AT_UNGORO 5047, gated on
---    quest statuses 12613/12559/13956).
+-- 1. at_stormwright_shelf (:159-177; SPELL_CREATE_TRUE_POWER_OF_THE_TEMPEST
+--    53067 gated on GetQuestStatus(12741)==INCOMPLETE(3)) stays out on its
+--    trigger ID only — it lives only in the DB areatrigger_scripts row
+--    (gelihast precedent); the player:CastSpell leg is bridged
+--    (lua_player.go:2549), so the old "no player:CastSpell bridge"
+--    claim for this class is retracted. at_legion_teleporter and
+--    at_sholazar_waygate PORTED below (their IDs are in-file: ContentData
+--    4560 for legion, enum AT_SHOLAZAR 5046 / AT_UNGORO 5047).
 -- 2. player:GetQuestStatus + player:FindNearestCreature bridged 2026-10-24
 --    (lua_player.go). at_scent_larkorwi (:192-212; quest 4291 gate +
 --    FindNearestCreature(9683, 15) dedup + SummonCreature(9683)) and
@@ -47,10 +48,11 @@
 --    AT_BREWFEST_DUROTAR 4829 / AT_BREWFEST_DUN_MOROGH 4820.
 -- NOTE: RegisterServerEvent(24, areaTriggerHandler) below dispatches on the
 -- triggerID argument (hooks are per-event, not per-trigger ID). Trigger IDs:
--- 4591 coilfang (PORTED), 4560 legion, 5046/5047 sholazar, 4829/4820 brewfest
--- (PORTED), 4472/4466/4471/4422 area52 (PORTED); scent/sentry/nats/
--- frostgrips/stormwright IDs live only in the DB areatrigger_scripts rows
--- (ObjectMgr.cpp:6653), not in the C++ file — no guessed dispatch.
+-- 4591 coilfang (PORTED), 4560 legion (PORTED), 5046/5047 sholazar (PORTED),
+-- 4829/4820 brewfest (PORTED), 4472/4466/4471/4422 area52 (PORTED);
+-- scent/sentry/nats/frostgrips/stormwright IDs live only in the DB
+-- areatrigger_scripts rows (ObjectMgr.cpp:6653), not in the C++ file —
+-- no guessed dispatch.
 
 -- PORTED ARMS (areatrigger_scripts.cpp; RegisterServerEvent 24 handler).
 -- Go/Eluna summonType is 0-based (lua_creature_events.go:1241): TIMED_DESPAWN
@@ -71,7 +73,41 @@ local BREWFEST_TAPPER = {
 
 local lastTrigger = {}
 
+local SHOLAZAR_TELEPORT = {
+    [5046] = 52056, -- AT_SHOLAZAR: Sholazar -> Un'goro
+    [5047] = 52057, -- AT_UNGORO: Un'goro -> Sholazar
+}
+
 local function areaTriggerHandler(_, player, triggerID)
+    if triggerID == 4560 then
+        -- at_legion_teleporter (:117-141): alive + out of combat, then
+        -- faction + quest-reward gates: Alliance + rewarded 10589 ->
+        -- non-triggered self-cast 37387; Horde + rewarded 10604 ->
+        -- non-triggered self-cast 37389. C++ returns true on cast,
+        -- false otherwise; the handler returns nothing per the
+        -- PORTED-arm convention.
+        if player:IsAlive() and not player:IsInCombat() then
+            if player:GetTeam() == 0 and player:GetQuestRewardStatus(10589) then
+                player:CastSpell(player, 37387, false)
+            elseif player:GetTeam() == 1 and player:GetQuestRewardStatus(10604) then
+                player:CastSpell(player, 37389, false)
+            end
+        end
+        return
+    end
+    local sholazarSpell = SHOLAZAR_TELEPORT[triggerID]
+    if sholazarSpell then
+        -- at_sholazar_waygate (:214-256): not dead + (quest 13956 not
+        -- NONE, or quests 12613 + 12559 both REWARDED) -> triggered
+        -- self-cast of the direction spell. Quest statuses: NONE 0,
+        -- REWARDED 6 (quests.go).
+        if not player:IsDead() and (player:GetQuestStatus(13956) ~= 0
+            or (player:GetQuestStatus(12613) == 6
+                and player:GetQuestStatus(12559) == 6)) then
+            player:CastSpell(player, sholazarSpell, true)
+        end
+        return
+    end
     if triggerID == 4591 then
         -- at_coilfang_waterfall (:72-94): nearest GO_COILFANG_WATERFALL
         -- 184212 within 35.0f, GO_READY (loot state 1) check, then
