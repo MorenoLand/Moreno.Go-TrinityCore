@@ -13550,6 +13550,13 @@ func init() {
 	// names NPC_PHALANX at 9502 (DATA_PHALANX = 11 in
 	// blackrock_depths.h) — see lua_scripts/eastern_kingdoms/npc_phalanx.lua.
 	RegisterLuaBoss("npc_phalanx", 9502)
+	// npc_lokhtos_darkbargainer (Blackrock Depths, Grim Guzzler; pure
+	// gossip script — quest menu + Friendly-gated vendor item +
+	// Sulfuron-Ingot-gated contract item + contract self-cast 23059 /
+	// vendor list; no combat AI) — see
+	// lua_scripts/eastern_kingdoms/npc_lokhtos_darkbargainer.lua. Entry
+	// 12944 is wowhead-only (no C++ constant, no TDB in this workspace).
+	RegisterLuaBoss("npc_lokhtos_darkbargainer", 12944)
 	// boss_emperor_dagran_thaurissan / boss_draganthaurissanAI (Blackrock
 	// Depths; ScriptedAI combat scheduler via GetBlackrockDepthsAI —
 	// avatarofflame 15636 victim-cast 25s->18s, aggro Talk(0), player-kill
