@@ -283,7 +283,8 @@ local SPELL_DEATHCHILL_BLAST = 70906
 local SPELL_SHROUD_OF_THE_OCCULT = 70768
 local SPELL_SUMMON_SPIRITS = 72478 -- :439-443
 local SPELL_DEATH_AND_DECAY = 71001 -- :63
-local SPELL_DOMINATE_MIND = 71289 -- :64
+local SPELL_DOMINATE_MIND = 71289
+local SPELL_DOMINATE_MIND_SCALE = 71290 -- :64
 local SPELL_SHADOW_BOLT = 71254 -- :62
 local SPELL_CURSE_OF_TORPOR = 71237 -- :102 (adherent)
 local SPELL_BLADESTORM = 65947
@@ -466,6 +467,8 @@ local function onDominateMind(creature, guid)
         end
         local target = table.remove(candidates, math.random(#candidates))
         creature:CastSpell(target, SPELL_DOMINATE_MIND)
+        -- spell_deathwhisper_dominated_mind HandleApply: target self-casts the scale aura.
+        target:CastSpell(target, SPELL_DOMINATE_MIND_SCALE, true)
     end
     schedule(guid, "dominate", {40000, 45000}, function()
         onDominateMind(creature, guid)

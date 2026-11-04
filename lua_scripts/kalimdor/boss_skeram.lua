@@ -74,6 +74,8 @@ local ENTRY = 15263
 
 local SPELL_ARCANE_EXPLOSION = 26192
 local SPELL_TRUE_FULFILLMENT = 785
+local SPELL_GENERIC_DISMOUNT = 61286
+local SPELL_TRUE_FULFILLMENT_2 = 2313
 local SPELL_EARTH_SHOCK = 26194
 local SPELL_SUMMON_IMAGES = 747
 
@@ -159,7 +161,11 @@ local function onTrueFulfillment(creature, guid)
         end
     end
     if #cands > 0 then
-        creature:CastSpell(cands[math.random(#cands)], SPELL_TRUE_FULFILLMENT)
+        local target = cands[math.random(#cands)]
+        creature:CastSpell(target, SPELL_TRUE_FULFILLMENT)
+        -- spell_skeram_true_fulfillment HandleEffect, C++ order: dismount then recast on the hit unit.
+        creature:CastSpell(target, SPELL_GENERIC_DISMOUNT, true)
+        creature:CastSpell(target, SPELL_TRUE_FULFILLMENT_2, true)
     end
     schedule(guid, "fulfillment", math.random(20000, 30000), function()
         onTrueFulfillment(creature, guid)

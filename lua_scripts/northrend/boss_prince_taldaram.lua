@@ -92,6 +92,9 @@ local SAY_VANISH = 6
 
 local SPELL_BLOODTHIRST          = 55968
 local SPELL_CONJURE_FLAME_SPHERE = 55931
+local SPELL_FLAME_SPHERE_SUMMON_1 = 55895
+local SPELL_FLAME_SPHERE_SUMMON_2 = 59511
+local SPELL_FLAME_SPHERE_SUMMON_3 = 59512
 local SPELL_VANISH               = 55964
 local SPELL_SHADOWSTEP           = 55966
 local SPELL_EMBRACE_OF_THE_VAMPYR = 55959
@@ -212,6 +215,12 @@ local function conjureTick(creature, guid)
         -- hand it to the spheres as they spawn.
         flameSphereTarget[guid] = victim
         creature:CastSpell(victim, SPELL_CONJURE_FLAME_SPHERE)
+        -- spell_prince_taldaram_conjure_flame_sphere HandleScript: caster self-casts the summon(s).
+        creature:CastSpell(creature, SPELL_FLAME_SPHERE_SUMMON_1, true)
+        if creature:IsHeroic() then
+            creature:CastSpell(creature, SPELL_FLAME_SPHERE_SUMMON_2, true)
+            creature:CastSpell(creature, SPELL_FLAME_SPHERE_SUMMON_3, true)
+        end
     end
     schedule(guid, "conjure", 15000, function()
         conjureTick(creature, guid)

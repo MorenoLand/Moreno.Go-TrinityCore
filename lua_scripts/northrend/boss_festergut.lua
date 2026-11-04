@@ -130,6 +130,7 @@ local SPELL_PUNGENT_BLIGHT = 69195
 local SPELL_GAS_SPORE = 69278
 local SPELL_VILE_GAS = 69240
 local EMOTE_WARN_PUNGENT_BLIGHT = 5
+local EMOTE_PUNGENT_BLIGHT = 6
 local SAY_PUNGENT_BLIGHT = 4
 local EMOTE_WARN_GAS_SPORE = 3
 local EMOTE_GAS_SPORE = 2
@@ -262,6 +263,8 @@ local function onInhaleBlight(creature, guid)
         creature:Talk(EMOTE_WARN_PUNGENT_BLIGHT)
         creature:Talk(SAY_PUNGENT_BLIGHT)
         creature:CastSpell(creature, SPELL_PUNGENT_BLIGHT)
+        -- spell_festergut_pungent_blight HandleScript: Talk(EMOTE_PUNGENT_BLIGHT) on hit (removal already in removeBlight above).
+        creature:Talk(EMOTE_PUNGENT_BLIGHT)
         inhale[guid] = 0
         -- C++ :193-194 — professor DoAction(ACTION_FESTERGUT_GAS):
         -- Talk(SAY_FESTERGUT_GASEOUS_BLIGHT 0) + triggered self-cast

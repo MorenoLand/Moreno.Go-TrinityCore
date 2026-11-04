@@ -135,6 +135,8 @@ local SPELL_MYSTIC_BUFFET = 70128
 local SPELL_FROST_BOMB_VISUAL = 70022 -- boss_sindragosa.cpp:74
 local SPELL_BIRTH_NO_VISUAL = 40031 -- boss_sindragosa.cpp:75
 local SPELL_ICE_TOMB_TARGET = 69712
+local SPELL_ICE_TOMB_UNTARGETABLE = 69700
+local EMOTE_WARN_FROZEN_ORB = 7
 
 local sindragosaThirdPhase = {}
 
@@ -196,7 +198,7 @@ local function randomPlayerTarget(creature)
     local candidates = {}
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
-                and not plr:IsDead() then
+                and not plr:IsDead() and not plr:HasAura(SPELL_ICE_TOMB_UNTARGETABLE) then
             candidates[#candidates + 1] = plr
         end
     end
@@ -210,6 +212,10 @@ local function onIceTomb(creature, guid)
     local target = randomPlayerTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_ICE_TOMB_TARGET, true)
+        -- spell_sindragosa_ice_tomb_target HandleSindragosaTalk: third-phase Talk to the hit unit.
+        if sindragosaThirdPhase[guid] then
+            creature:Talk(EMOTE_WARN_FROZEN_ORB, target)
+        end
     end
     schedule(guid, "ice_tomb", {16000, 23000}, function() onIceTomb(creature, guid) end)
 end

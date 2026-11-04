@@ -11976,7 +11976,7 @@ func init() {
 	// starts on pull; the doom blossom summon (23123), the shadow of death
 	// summon arms and the EnterEvadeMode summons.DespawnAll/_DespawnAtEvade
 	// arms have no summon/despawn model; the shadow of death remove
-	// (41999) cast's effect lives in the unmodeled SpellScript; the doom
+	// (41999) arm is ported in Lua (self-cast + aura removal; see boss_teron_gorefiend.lua); the doom
 	// blossom and shadowy construct AIs are not registered (ScriptName
 	// bindings are DB-side) and the construct's instance-creature lookup,
 	// ResetThreatList/AddThreat and ApplySpellImmune arms stay out — the
