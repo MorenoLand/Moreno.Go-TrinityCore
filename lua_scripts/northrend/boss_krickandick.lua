@@ -392,6 +392,10 @@ end
 local function ickEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
+    -- BossAI::JustEngagedWith (:163-175, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
     if krick ~= nil then
         krick:Talk(SAY_KRICK_AGGRO)

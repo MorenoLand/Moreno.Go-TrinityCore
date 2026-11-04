@@ -278,6 +278,10 @@ end
 local function bronjahmEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
+    -- BossAI::JustEngagedWith (:98-103, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     creature:RemoveAura(SPELL_SOULSTORM_CHANNEL)
     schedule(guid, "shadowbolt", 2000, function() onShadowBolt(creature, guid) end)

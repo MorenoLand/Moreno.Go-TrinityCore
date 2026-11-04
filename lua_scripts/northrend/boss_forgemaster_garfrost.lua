@@ -384,6 +384,10 @@ end
 local function garfrostEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
+    -- BossAI::JustEngagedWith (:107-115, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_PERMAFROST)
     schedule(guid, "saronite", 7000, function() onThrowSaronite(creature, guid) end)

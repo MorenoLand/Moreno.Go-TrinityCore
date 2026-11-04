@@ -455,6 +455,10 @@ local function devourerEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     devourerState[guid] = {}
+    -- BossAI::JustEngagedWith (:158-161, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_FACE_AGGRO)
     -- C++ JustEngagedWith (:163-164): NPC_CRUCIBLE_OF_SOULS 60yd
     -- double-spawn-guard SummonCreature leg — summon bridge live
