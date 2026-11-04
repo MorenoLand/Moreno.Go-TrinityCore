@@ -41,6 +41,10 @@
 --
 -- DOCUMENTED-BLOCKED (no registration beyond entry 36678):
 -- boss_professor_putricide UpdateAI — PORTED (2026-10-13):
+-- UpdateAI UNIT_STATE_CASTING gates (:572 pre-loop, :697 in-loop)
+-- PORTED 2026-11-04: slimePuddleTick + onBerserk defer 500ms while
+-- IsCasting (mal_ganis idiom); DamageTaken :347 CASTING return guards
+-- only the unported phase latches — checked, no gate ported there.
 -- EVENT_BERSERK single-fire 10min all phases — Talk(SAY_BERSERK
 -- 12) + DoCastSelf(SPELL_BERSERK2 47008) non-triggered
 -- (:266/:598-600); the old "no-timer-bridge" claim for this arm
@@ -207,6 +211,13 @@ local function randomPlayers(creature, count)
 end
 
 local function slimePuddleTick(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :572 (+ in-loop :697, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "slimepuddle", 500, function() slimePuddleTick(creature, guid) end)
+        return
+    end
     for _, target in ipairs(randomPlayers(creature, 2)) do
         creature:CastSpell(target, SPELL_SLIME_PUDDLE_TRIGGER)
     end
@@ -218,6 +229,13 @@ end
 -- C++ EVENT_BERSERK: 10min single-fire, all phases — Talk(SAY_BERSERK) +
 -- DoCast(me, SPELL_BERSERK2) non-triggered (:266/:598-600).
 local function onBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :572 (+ in-loop :697, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK2)
 end

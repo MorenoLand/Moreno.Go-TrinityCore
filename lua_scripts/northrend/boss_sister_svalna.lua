@@ -56,7 +56,12 @@
 -- convention, boss_ai.go DoCastAOE); {min,max} delay = randtime
 -- range; TRIGGERED casts pass true as the third CastSpell arg;
 -- Reset()-scheduled timers re-key to event 1; UNIT_STATE_CASTING
--- gates unmodeled. Phase-machine gating is still the real
+-- gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis idiom):
+-- svalna :485/:515, crok UpdateEscortAI :745 pre-loop (no in-loop
+-- return — the loop ends into DoMeleeAttackIfReady), captains
+-- arnath :959/:991, brandon :1032/:1061, grondel :1092/:1120,
+-- rupert :1149/:1175, ymirjar combat :1304/:1372 (OOC :1281/:1296
+-- covers only the unported spirit-stream event). Phase-machine gating is still the real
 -- blocker (the gothik precedent): only arms whose gating context
 -- is engage / Reset are ported, never arms gated behind the
 -- unbridged gauntlet/action machines.
@@ -464,12 +469,27 @@ end
 -- filter); the old "documented unbridged caveats" claim is retracted.
 -- C++ :499-502: SetReactState(REACT_DEFENSIVE 1) then Talk(
 -- SAY_SVALNA_AGGRO 3) — arm order kept.
-local function onSvalnaCombat(creature)
+local function onSvalnaCombat(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :485 (+ in-loop :515, single-tick
+-- no-op per the marrowgar precedent): 500ms IsCasting defer —
+-- one-shot, so the defer re-schedules a fresh 500ms entry rather
+-- than dropping the combat Talk/react arm.
+    if creature:IsCasting() then
+        schedule(guid, "combat", 500, function() onSvalnaCombat(creature, guid) end)
+        return
+    end
     creature:SetReactState(1)
     creature:Talk(SAY_SVALNA_AGGRO)
 end
 
 local function onSvalnaImpalingSpear(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :485 (+ in-loop :515, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "impaling", 500, function() onSvalnaImpalingSpear(creature, guid) end)
+        return
+    end
     local target = randomNonHeadPlayerTarget(creature, SPELL_IMPALING_SPEAR)
     if target then
         creature:CastSpell(creature, SPELL_AETHER_SHIELD)
@@ -498,7 +518,7 @@ local function svalnaEnterCombat(event, creature, target)
         crok:Talk(SAY_CROK_COMBAT_SVALNA)
     end
     creature:CastSpell(creature, SPELL_DIVINE_SURGE, true)
-    schedule(guid, "combat", 9000, function() onSvalnaCombat(creature) end)
+    schedule(guid, "combat", 9000, function() onSvalnaCombat(creature, guid) end)
     schedule(guid, "impaling", {40000, 50000},
         function() onSvalnaImpalingSpear(creature, guid) end)
 end
@@ -605,12 +625,26 @@ RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 14, svalnaSpellHit)
 -- {5000,10000}ms unconditional. Re-keyed to event 1 (the Reset
 -- re-key convention).
 local function onCrokScourgeStrike(creature, guid)
+    -- C++ UpdateEscortAI pre-loop gate :745 (no in-loop return — the
+-- loop ends into DoMeleeAttackIfReady): 500ms IsCasting defer, no
+-- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "scourge", 500, function() onCrokScourgeStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SCOURGE_STRIKE)
     schedule(guid, "scourge", {10000, 14000},
         function() onCrokScourgeStrike(creature, guid) end)
 end
 
 local function onCrokDeathStrike(creature, guid)
+    -- C++ UpdateEscortAI pre-loop gate :745 (no in-loop return — the
+-- loop ends into DoMeleeAttackIfReady): 500ms IsCasting defer, no
+-- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "death", 500, function() onCrokDeathStrike(creature, guid) end)
+        return
+    end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0
             and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
@@ -659,48 +693,104 @@ RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 23, crokReset)
 -- chill) -> self-cast; AITARGET_VICTIM (rapid shot, death
 -- embrace) -> victim-cast.
 local function onYmirjarFrozenOrb(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "frozen", 500, function() onYmirjarFrozenOrb(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROZEN_ORB_CAST)
     schedule(guid, "frozen", {10000, 20000},
         function() onYmirjarFrozenOrb(creature, guid) end)
 end
 
 local function onYmirjarBarbaricStrike(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "barbaric", 500, function() onYmirjarBarbaricStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_BARBARIC_STRIKE)
     schedule(guid, "barbaric", {2000, 4000},
         function() onYmirjarBarbaricStrike(creature, guid) end)
 end
 
 local function onYmirjarAdrenalineRush(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "adrenaline", 500, function() onYmirjarAdrenalineRush(creature, guid) end)
+        return
+    end
     creature:AddAura(SPELL_ADRENALINE_RUSH)
     schedule(guid, "adrenaline", {10000, 20000},
         function() onYmirjarAdrenalineRush(creature, guid) end)
 end
 
 local function onYmirjarWhirlwind(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind", 500, function() onYmirjarWhirlwind(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WHIRLWIND)
     schedule(guid, "whirlwind", {6000, 12000},
         function() onYmirjarWhirlwind(creature, guid) end)
 end
 
 local function onYmirjarRapidShot(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "rapid", 500, function() onYmirjarRapidShot(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_RAPID_SHOT)
     schedule(guid, "rapid", {20000, 30000},
         function() onYmirjarRapidShot(creature, guid) end)
 end
 
 local function onYmirjarShoot(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "shoot", 500, function() onYmirjarShoot(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_YMIRJAR_SHOOT)
     schedule(guid, "shoot", 2000,
         function() onYmirjarShoot(creature, guid) end)
 end
 
 local function onYmirjarShadowBolt(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function() onYmirjarShadowBolt(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_YMIRJAR_SHADOW_BOLT)
     schedule(guid, "shadowbolt", {5000, 8000},
         function() onYmirjarShadowBolt(creature, guid) end)
 end
 
 local function onYmirjarDeathEmbrace(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "embrace", 500, function() onYmirjarDeathEmbrace(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_DEATH_EMBRACE)
     schedule(guid, "embrace", {10000, 20000},
         function() onYmirjarDeathEmbrace(creature, guid) end)
@@ -711,6 +801,13 @@ end
 -- 71306), Repeat {10s,20s} unconditional (outside the target
 -- guard); seeded :1249 {10s,20s} on the frostbinder.
 local function onYmirjarTwistedWinds(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "twisted", 500, function() onYmirjarTwistedWinds(creature, guid) end)
+        return
+    end
     local target = randomPlayerTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_TWISTED_WINDS)
@@ -724,6 +821,13 @@ end
 -- {15s,20s} unconditional; seeded :1260 {5s,10s} on the
 -- huntress.
 local function onYmirjarIceTrap(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "icetrap", 500, function() onYmirjarIceTrap(creature, guid) end)
+        return
+    end
     local target = randomPlayerTarget(creature, 20, true)
     if target then
         creature:CastSpell(target, SPELL_ICE_TRAP)
@@ -737,6 +841,13 @@ end
 -- {10s,20s} unconditional; seeded :1261 {20s,30s} on the
 -- huntress.
 local function onYmirjarVolley(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "volley", 500, function() onYmirjarVolley(creature, guid) end)
+        return
+    end
     local target = randomPlayerTarget(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_VOLLEY)
@@ -750,6 +861,13 @@ end
 -- {10s,20s} unconditional; seeded :1267 {10s,20s} on the
 -- deathbringer.
 local function onYmirjarBanish(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1304 (+ in-loop :1372, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "banish", 500, function() onYmirjarBanish(creature, guid) end)
+        return
+    end
     local target = randomPlayerTarget(creature, 20, true)
     if target then
         creature:CastSpell(target, SPELL_BANISH)
@@ -850,22 +968,45 @@ end
 -- randomPlayerTarget -> 71784, re-arm {45s,60s} (undead-entry
 -- gated; the position-1 offset rides randomNonHeadPlayerTarget).
 local function onBrandonCrusaderStrike(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1032 (+ in-loop :1061, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "crusader", 500, function() onBrandonCrusaderStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CRUSADER_STRIKE)
     schedule(guid, "crusader", {6000, 12000},
         function() onBrandonCrusaderStrike(creature, guid) end)
 end
 
 local function onBrandonJudgementOfCommand(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1032 (+ in-loop :1061, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "judgement", 500, function() onBrandonJudgementOfCommand(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_JUDGEMENT_OF_COMMAND)
     schedule(guid, "judgement", {8000, 13000},
         function() onBrandonJudgementOfCommand(creature, guid) end)
 end
 
--- C++ EVENT_BRANDON_DIVINE_SHIELD :1043-1046 — 500ms poll, ungated:
+-- C++ EVENT_BRANDON_DIVINE_SHIELD :1043-1046 — 500ms poll
+-- (UpdateAI CASTING-gated :1032/:1061; the health-if is the only
+-- in-event guard):
 -- if (HealthBelowPct(20)) DoCast(me, SPELL_DIVINE_SHIELD 71550);
 -- re-arm 500ms unconditional (outside the health-if, crok
 -- death-strike pattern).
 local function onBrandonDivineShield(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1032 (+ in-loop :1061, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "divine", 500, function() onBrandonDivineShield(creature, guid) end)
+        return
+    end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0
             and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
@@ -884,6 +1025,13 @@ end
 -- playerOnly); the old "offset has no bridge — tyrannus precedent"
 -- claim is retracted.
 local function onBrandonHammerOfBetrayal(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1032 (+ in-loop :1061, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "hammer", 500, function() onBrandonHammerOfBetrayal(creature, guid) end)
+        return
+    end
     local target = randomNonHeadPlayerTarget(creature, nil)
     if target then
         creature:CastSpell(target, SPELL_HAMMER_OF_BETRAYAL)
@@ -923,18 +1071,39 @@ end
 -- randomPlayerTarget -> 71785, re-arm {10s,15s} (undead-entry
 -- gated).
 local function onGrondelCharge(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1092 (+ in-loop :1120, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "charge", 500, function() onGrondelCharge(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CHARGE)
     schedule(guid, "charge", 500,
         function() onGrondelCharge(creature, guid) end)
 end
 
 local function onGrondelMortalStrike(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1092 (+ in-loop :1120, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "mortal", 500, function() onGrondelMortalStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MORTAL_STRIKE)
     schedule(guid, "mortal", {10000, 15000},
         function() onGrondelMortalStrike(creature, guid) end)
 end
 
 local function onGrondelSunderArmor(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1092 (+ in-loop :1120, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "sunder", 500, function() onGrondelSunderArmor(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SUNDER_ARMOR)
     schedule(guid, "sunder", {5000, 17000},
         function() onGrondelSunderArmor(creature, guid) end)
@@ -946,6 +1115,13 @@ end
 -- SPELL_CONFLAGRATION 71785) non-triggered; re-arm {10s,15s}
 -- unconditional.
 local function onGrondelConflagration(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1092 (+ in-loop :1120, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "conflagration", 500, function() onGrondelConflagration(creature, guid) end)
+        return
+    end
     local target = randomPlayerTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CONFLAGRATION)
@@ -1045,6 +1221,13 @@ end
 -- DoFindFriendlyMissingBuff, no bridge); dominate mind PORTED
 -- below (Is25ManRaid() + undead-entry gates, both bridged).
 local function onArnathSmite(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :959 (+ in-loop :991, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "smite", 500, function() onArnathSmite(creature, guid) end)
+        return
+    end
     local spell = SPELL_SMITE_NORMAL
     if creature:GetEntry() == NPC_CAPTAIN_ARNATH_UNDEAD then
         spell = SPELL_SMITE_UNDEAD
@@ -1062,6 +1245,13 @@ end
 -- gate resolves via the current entry (the smite-leg precedent);
 -- the offset-1 tank-skip + playerOnly ride randomNonHeadPlayerTarget.
 local function onArnathDominateMind(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :959 (+ in-loop :991, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "dominate", 500, function() onArnathDominateMind(creature, guid) end)
+        return
+    end
     local target = randomNonHeadPlayerTarget(creature, nil)
     if target then
         creature:CastSpell(target, SPELL_DOMINATE_MIND)
@@ -1082,6 +1272,13 @@ end
 -- Deviation: C++ picks from an unguarded list (empty = UB); Lua guards
 -- the empty pool and still re-arms, matching C++'s unconditional re-arm.
 local function onArnathPWShield(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :959 (+ in-loop :991, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "pw_shield", 500, function() onArnathPWShield(creature, guid) end)
+        return
+    end
     local shield = SPELL_POWER_WORD_SHIELD_NORMAL
     if creature:GetEntry() == NPC_CAPTAIN_ARNATH_UNDEAD then
         shield = SPELL_POWER_WORD_SHIELD_UNDEAD
@@ -1181,6 +1378,13 @@ end
 -- rocket launch exclude the current victim (Random, 1, UnitAI.h —
 -- the alive-minus-victim idiom on the bridged threat list).
 local function onRupertFelIronBomb(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1149 (+ in-loop :1175, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "bomb", 500, function() onRupertFelIronBomb(creature, guid) end)
+        return
+    end
     local spell = SPELL_FEL_IRON_BOMB_NORMAL
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
         spell = SPELL_FEL_IRON_BOMB_UNDEAD
@@ -1194,6 +1398,13 @@ local function onRupertFelIronBomb(creature, guid)
 end
 
 local function onRupertMachineGun(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1149 (+ in-loop :1175, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "gun", 500, function() onRupertMachineGun(creature, guid) end)
+        return
+    end
     local spell = SPELL_MACHINE_GUN_NORMAL
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
         spell = SPELL_MACHINE_GUN_UNDEAD
@@ -1207,6 +1418,13 @@ local function onRupertMachineGun(creature, guid)
 end
 
 local function onRupertRocketLaunch(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :1149 (+ in-loop :1175, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "rocket", 500, function() onRupertRocketLaunch(creature, guid) end)
+        return
+    end
     local spell = SPELL_ROCKET_LAUNCH_NORMAL
     if creature:GetEntry() == NPC_CAPTAIN_RUPERT_UNDEAD then
         spell = SPELL_ROCKET_LAUNCH_UNDEAD

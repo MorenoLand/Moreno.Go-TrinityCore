@@ -19922,6 +19922,9 @@ func init() {
 	// join the no-SpellScript-bridge queue and the 5 aura scripts
 	// the no-AuraScript-bridge queue — documented in the lua
 	// header. Seventh group of the "// Icecrown Citadel" block.
+	// boss_professor_putricide: UpdateAI UNIT_STATE_CASTING gates
+	// (:572 pre-loop, :697 in-loop) PORTED via 500ms IsCasting defer
+	// (mal_ganis idiom) — see lua_scripts/northrend/boss_professor_putricide.lua.
 	RegisterLuaBoss("boss_professor_putricide", 36678)
 
 	// Blood Prince Council (Icecrown Citadel) — bridgeable Talk arms
@@ -19947,14 +19950,18 @@ func init() {
 	// Talk(SAY_TALDARAM_SPECIAL 2), {20000,30000}ms); valanar
 	// EVENT_BERSERK (DoCastSelf 50334 + Talk(SAY_VALANAR_BERSERK 5),
 	// 600000ms one-shot) — timers GUID-keyed via CreateLuaEvent,
-	// cancelled on events 2/4/23 (the falric idiom). Out legs:
+	// cancelled on events 2/4/23 (the falric idiom). UpdateAI
+	// UNIT_STATE_CASTING gates PORTED via 500ms IsCasting defer
+	// (keleseth :651/:675, taldaram :717/:749, valanar :807/:844;
+	// controller :366/:401 covers only the unported invocation event;
+	// nucleus UpdateAI :1082 carries no gate). Out legs:
 	// Talk(SelectInvocationSay()) rides ACTION_CAST_INVOCATION
 	// (no-DoAction bridge); the controller's EVENT_INVOCATION_OF_BLOOD
 	// Talk(textId) is cross-AI Talk on a scheduler leg (no bridge);
 	// the _isEmpowered variants (keleseth 71815, taldaram 72040,
 	// valanar 72039) ride the unbridged invocation machine; valanar
 	// EVENT_KINETIC_BOMB and the base EVENT_SHOCK_VORTEX leg are
-	// random-target SelectTarget casts (out); the heroic-gated
+	// random-target SelectTarget casts, PORTED in lua; the heroic-gated
 	// shadow-prison engage casts are PORTED in boss_blood_prince_council.lua
 	// (creature:IsHeroic() bridged; the old "no IsHeroic bridge" claim retracted).
 	// boss_blood_council_controller
@@ -19998,7 +20005,8 @@ func init() {
 	// EVENT_VAMPIRIC_BITE, Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
 	// EVENT_PACT_OF_THE_DARKFALLEN,
 	// Talk(EMOTE_SWARMING_SHADOWS 5 / SAY_SWARMING_SHADOWS 4)
-	// rides EVENT_SWARMING_SHADOWS (no-timer-bridge). The
+	// rides EVENT_SWARMING_SHADOWS (timer-ported in lua; UpdateAI
+	// CASTING gates :344/:459 PORTED via 500ms IsCasting defer). The
 	// frenzied-bloodthirst AuraScript's cross-AI
 	// bloodQueen->AI()->Talk(EMOTE_BLOODTHIRST 3) /
 	// Talk(SAY_MIND_CONTROL 2) have no bridge. The 5 spell scripts,
@@ -20038,7 +20046,8 @@ func init() {
 	// npc_impaling_spear (38248) has zero bridgeable arms (NOT
 	// registered); the 3 spell scripts join the no-SpellScript-bridge
 	// queue and at_icc_start_frostwing_gauntlet the no-AreaTrigger
-	// queue — documented in the lua header. Tenth group of the
+	// queue — documented in the lua header. UpdateAI CASTING gates
+	// PORTED (500ms IsCasting defer, see lua header). Tenth group of the
 	// "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_sister_svalna", 37126)
 

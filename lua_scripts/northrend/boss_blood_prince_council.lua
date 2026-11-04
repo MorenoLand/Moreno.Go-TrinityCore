@@ -188,9 +188,13 @@
 -- ride movement informs and scheduler DoActions — no bridge, NOT
 -- registered (their JustSummoned legs port via the boss ev19
 -- handlers above, not via AI registration).
--- UpdateAI UNIT_STATE_CASTING gates (:366/:401, :651/:675,
--- :807/:844) — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget); timers fire unconditionally
--- (the maiden precedent).
+-- UpdateAI UNIT_STATE_CASTING gates — PORTED 2026-11-04 (creature:IsCasting
+-- 500ms defer, mal_ganis idiom; the old "no live unit-state read bridge /
+-- timers fire unconditionally" claim is retracted): controller :366/:401
+-- (covers only the unported EVENT_INVOCATION_OF_BLOOD), keleseth :651/:675,
+-- taldaram :717/:749, valanar :807/:844. Controller/intro UpdateAIs
+-- (:890/:968/:1011) and the nucleus UpdateAI (:1082, TaskScheduler only)
+-- carry no CASTING gate — the nucleus aura-check tick stays ungated.
 -- Heroic-gated engage casts: keleseth :628-629
 -- DoCastSelf(SPELL_SHADOW_PRISON 72998, true) +
 -- DoCastSelf(SPELL_SHADOW_PRISON_DUMMY 73001); taldaram :693 and
@@ -402,7 +406,14 @@ end
 -- C++ :658-661 keleseth EVENT_BERSERK: DoCastSelf(SPELL_BERSERK)
 -- non-triggered + Talk(EMOTE_KELESETH_BERSERK), cast before Talk (C++
 -- order), one-shot (no repeat).
-local function onKelesethBerserk(creature)
+local function onKelesethBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :651 (+ in-loop :675, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onKelesethBerserk(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(EMOTE_KELESETH_BERSERK)
 end
@@ -411,6 +422,13 @@ end
 -- Talk(SAY_KELESETH_SPECIAL) BEFORE DoCastSelf(SPELL_SHADOW_RESONANCE)
 -- (C++ order), non-triggered; re-arm {10000,15000}ms.
 local function onKelesethResonance(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :651 (+ in-loop :675, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "resonance", 500, function() onKelesethResonance(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_KELESETH_SPECIAL)
     creature:CastSpell(creature, SPELL_SHADOW_RESONANCE)
     schedule(guid, "resonance", {10000, 15000}, function() onKelesethResonance(creature, guid) end)
@@ -422,6 +440,13 @@ end
 -- empowered variant (71815) is _isEmpowered-gated (unbridged machine)
 -- — modeled as the base variant always (documented deviation).
 local function onKelesethLance(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :651 (+ in-loop :675, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "lance", 500, function() onKelesethLance(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHADOW_LANCE)
     schedule(guid, "lance", 2000, function() onKelesethLance(creature, guid) end)
 end
@@ -429,7 +454,14 @@ end
 -- C++ :724-727 taldaram EVENT_BERSERK: DoCastSelf(SPELL_BERSERK) +
 -- Talk(EMOTE_TALDARAM_BERSERK), cast before Talk (C++ order),
 -- one-shot.
-local function onTaldaramBerserk(creature)
+local function onTaldaramBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :717 (+ in-loop :749, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onTaldaramBerserk(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(EMOTE_TALDARAM_BERSERK)
 end
@@ -438,6 +470,13 @@ end
 -- DoCastVictim(SPELL_GLITTERING_SPARKS) = victim-cast;
 -- re-arm {15000,50000}ms.
 local function onTaldaramSparks(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :717 (+ in-loop :749, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "sparks", 500, function() onTaldaramSparks(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_GLITTERING_SPARKS)
     schedule(guid, "sparks", {15000, 50000}, function() onTaldaramSparks(creature, guid) end)
 end
@@ -449,6 +488,13 @@ end
 -- {15000,25000}ms is _isEmpowered-gated (unbridged machine) — modeled
 -- as the base variant always (documented deviation).
 local function onTaldaramConjure(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :717 (+ in-loop :749, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "conjure", 500, function() onTaldaramConjure(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CONJURE_FLAME)
     creature:Talk(SAY_TALDARAM_SPECIAL)
     schedule(guid, "conjure", {20000, 30000}, function() onTaldaramConjure(creature, guid) end)
@@ -456,7 +502,14 @@ end
 
 -- C++ :814-817 valanar EVENT_BERSERK: DoCastSelf(SPELL_BERSERK) +
 -- Talk(SAY_VALANAR_BERSERK), cast before Talk (C++ order), one-shot.
-local function onValanarBerserk(creature)
+local function onValanarBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :807 (+ in-loop :844, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onValanarBerserk(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(SAY_VALANAR_BERSERK)
 end
@@ -482,7 +535,7 @@ local function kelesethEnterCombat(event, creature)
         creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
         creature:CastSpell(creature, SPELL_SHADOW_PRISON_DUMMY)
     end
-    schedule(guid, "berserk", 600000, function() onKelesethBerserk(creature) end)
+    schedule(guid, "berserk", 600000, function() onKelesethBerserk(creature, guid) end)
     schedule(guid, "resonance", {10000, 15000}, function() onKelesethResonance(creature, guid) end)
     schedule(guid, "lance", 2000, function() onKelesethLance(creature, guid) end)
 end
@@ -505,7 +558,7 @@ local function taldaramEnterCombat(event, creature)
     if creature:IsHeroic() then
         creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
     end
-    schedule(guid, "berserk", 600000, function() onTaldaramBerserk(creature) end)
+    schedule(guid, "berserk", 600000, function() onTaldaramBerserk(creature, guid) end)
     schedule(guid, "sparks", {12000, 15000}, function() onTaldaramSparks(creature, guid) end)
     schedule(guid, "conjure", 20000, function() onTaldaramConjure(creature, guid) end)
 end
@@ -517,6 +570,13 @@ end
 -- Seconds(24)) — unconditional re-arm (outside the if); seed
 -- {18000,24000}ms (:763).
 local function onValanarKineticBomb(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :807 (+ in-loop :844, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "kineticbomb", 500, function() onValanarKineticBomb(creature, guid) end)
+        return
+    end
     local target = randomNonTankPlayerAnywhere(creature)
     if target ~= nil then
         creature:CastSpell(target, SPELL_KINETIC_BOMB_TARGET)
@@ -533,6 +593,13 @@ end
 -- The empowered leg (DoCastSelf 72039 + Talk(EMOTE 3) + 30s) is
 -- _isEmpowered-gated and stays out.
 local function onValanarShockVortex(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :807 (+ in-loop :844, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "shockvortex", 500, function() onValanarShockVortex(creature, guid) end)
+        return
+    end
     local target = randomNonTankPlayerAnywhere(creature)
     if target ~= nil then
         creature:CastSpell(target, SPELL_SHOCK_VORTEX)
@@ -561,6 +628,10 @@ end
 -- C++ npc_dark_nucleus::Reset :1043-1048: SetReactState(
 -- REACT_DEFENSIVE) + triggered DoCastSelf(SPELL_SHADOW_RESONANCE_AURA
 -- 72980).
+-- No CASTING gate in C++: npc_dark_nucleus::UpdateAI (:1082) is a bare
+-- _scheduler.Update(diff) and the aura check rides a JustEngagedWith
+-- TaskScheduler lambda (:1050-1069) with no HasUnitState guard — this
+-- tick stays ungated by design (checked 2026-11-04).
 local function onNucleusAuraCheck(creature, guid)
     local victim = creature:GetVictim()
     local victimReach = 1.5
@@ -627,7 +698,7 @@ local function valanarEnterCombat(event, creature)
     if creature:IsHeroic() then
         creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
     end
-    schedule(guid, "berserk", 600000, function() onValanarBerserk(creature) end)
+    schedule(guid, "berserk", 600000, function() onValanarBerserk(creature, guid) end)
     schedule(guid, "kineticbomb", {18000, 24000}, function() onValanarKineticBomb(creature, guid) end)
     schedule(guid, "shockvortex", {15000, 20000}, function() onValanarShockVortex(creature, guid) end)
 end

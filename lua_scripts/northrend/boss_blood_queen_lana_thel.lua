@@ -220,6 +220,13 @@ end
 -- 30500ms) — unconditional re-arm. Talk(5, target) + Talk(4) +
 -- the cast port, in C++ order (targeted Talk bridged).
 local function swarmingShadowsTick(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :344 (+ in-loop :459, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "swarming", 500, function() swarmingShadowsTick(creature, guid) end)
+        return
+    end
     local pool = threatPlayersMinusVictim(creature)
     local target = nil
     if #pool > 0 then
@@ -235,8 +242,16 @@ end
 
 -- C++ EVENT_BERSERK: 330s single-fire — Talk(EMOTE_BERSERK_RAID) +
 -- Talk(SAY_BERSERK) + DoCastSelf(SPELL_BERSERK) non-triggered
--- (:160/:351-354), ungated one-shot.
+-- (:160/:351-354), UpdateAI CASTING-gated (:344/:459) one-shot —
+-- the gate re-schedules a fresh 500ms entry, never drops the cast.
 local function onBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :344 (+ in-loop :459, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_BERSERK_RAID)
     creature:Talk(SAY_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK)
@@ -278,7 +293,15 @@ local PRESENCE_OF_THE_DARKFALLEN_AURAS = { 70994, 71962, 71963, 71964 }
 -- pick of the threat pool (targets.front() after the maintank/offtank
 -- strip) + DoCast bite + DoCastAOE dummy triggered + Talk(1) +
 -- target self-casts PRESENCE + PRESENCE_2 triggered, C++ order.
-local function onVampiricBite(creature)
+local function onVampiricBite(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :344 (+ in-loop :459, single-tick
+-- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+-- re-arm consumed (the mal_ganis idiom) — one-shot, so the defer
+-- re-schedules a fresh 500ms entry rather than dropping the bite.
+    if creature:IsCasting() then
+        schedule(guid, "bite", 500, function() onVampiricBite(creature, guid) end)
+        return
+    end
     local pool = threatPlayersMinusVictim(creature)
     local target = pool[1]
     if target ~= nil then
@@ -294,6 +317,13 @@ end
 -- Is25ManRaid); Talk(6) + DoCast each only if picked > 1; the
 -- 30500ms re-arm is unconditional (outside the size check).
 local function pactTick(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :344 (+ in-loop :459, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "pact", 500, function() pactTick(creature, guid) end)
+        return
+    end
     local pool = threatPlayersMinusVictim(creature)
     local count = 2
     if creature:Is25ManRaid() then
@@ -312,6 +342,13 @@ end
 -- C++ EVENT_TWILIGHT_BLOODBOLT (:430-438): RandomResize(2/4 by
 -- Is25ManRaid) casts of 71446 + unconditional self-cast 71445.
 local function bloodboltTick(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :344 (+ in-loop :459, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "bloodbolt", 500, function() bloodboltTick(creature, guid) end)
+        return
+    end
     local pool = threatPlayersMinusVictim(creature)
     local count = 2
     if creature:Is25ManRaid() then
@@ -380,7 +417,7 @@ local function lanaThelJustEngagedWith(event, creature, target)
     creature:CastSpell(creature, SPELL_CLEAR_ALL_STATUS_AILMENTS, true)
     schedule(guid, "berserk", 330000, function() onBerserk(creature, guid) end)
     schedule(guid, "swarming", 30500, function() swarmingShadowsTick(creature, guid) end)
-    schedule(guid, "bite", 15000, function() onVampiricBite(creature) end)
+    schedule(guid, "bite", 15000, function() onVampiricBite(creature, guid) end)
     schedule(guid, "pact", 15000, function() pactTick(creature, guid) end)
     schedule(guid, "bloodbolt", {20000, 25000}, function() bloodboltTick(creature, guid) end)
 end
