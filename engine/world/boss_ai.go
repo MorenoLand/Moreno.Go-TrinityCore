@@ -11947,7 +11947,7 @@ func init() {
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_supremus.lua.
 	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
 	// encounter-state bookkeeping is blocked on the instance-script model; the
-	// ResetThreatList/AddThreat arms have no threat bridge (the hateful strike
+	// ResetThreatList/AddThreat arms are PORTED via threat bridges (ResetAllThreat + AddThreat 1e6 in onSwitchTarget, C++ order; the hateful strike
 	// target pick is approximated by the highest-health melee-range player);
 	// the ApplySpellImmune taunt arms stay out on no-bearer grounds (the
 	// immunity bridge itself exists: creature:ApplySpellImmune — see
@@ -12714,9 +12714,8 @@ func init() {
 	// The Botanica (Tempest Keep) boss roster 5/5 COMPLETE:
 	// boss_commander_sarannis (17976): arcane resonance /
 	// arcane devastation boss with a 50% HP summon-talk latch;
-	// the SPELL_SUMMON_REINFORCEMENTS summons have no summon
-	// bridge and the spell_commander_sarannis_summon_
-	// reinforcements SpellScript has no SpellScript bridge —
+	// the SPELL_SUMMON_REINFORCEMENTS effect is PORTED via the DamageTaken latch (four SummonCreature calls in C++ order +
+	// ev19 zone-in); no generic SpellScript bridge —
 	// see lua_scripts/botanica/boss_commander_sarannis.lua.
 	// instance_the_botanica.cpp stays blocked on the
 	// instance-script model.
@@ -14312,8 +14311,8 @@ func init() {
 	// else-if chain; per-guid one-shot latches). Reset's DoCastSelf(674/
 	// 12787) are stranded halves (no single faithful trigger — C++ Reset
 	// also runs at spawn Initialize), SummonBlackguards()' DoSummon(
-	// NPC_BLACKGUARD 636 x2) and EnterEvadeMode's summons.DespawnAll() are
-	// documented-only (no summon bridge — dark-rider precedent).
+	// NPC_BLACKGUARD 636 x2) is PORTED onSpawn (event 5) via SummonCreature type 5, and EnterEvadeMode's summons.DespawnAll() rides
+	// onReset (23) via creature:Despawn (boss_vancleef.lua).
 	// Entry 639 verifiable from the C++ sources: deadmines.h's own
 	// DMCreaturesIds enum names NPC_VANCLEEF = 639.
 	RegisterLuaBoss("boss_vancleef", 639)
@@ -15154,15 +15153,16 @@ func init() {
 	// convention); Talk(SAY_AGGRO 0) on engage. The UpdateAI
 	// below-50% arm (Talk(SAY_SPECIALAE 1) + non-triggered DoCastSelf
 	// arcane bubble 9438, once via _healthAbove50Pct) is modeled on
-	// the pre-damage hook (event 9) with current-health strictly
-	// below 50% semantics (C++ HealthBelowPct — golemagg 704fb8e bug
-	// class); the latch fires on the damage hook rather than the next
+	// the pre-damage hook (event 9) with post-damage strictly
+	// below 50% semantics (health minus incoming damage; C++ reads
+	// post-damage health in UpdateAI) + postDamage > 0 guard; the latch fires on the damage hook rather than the next
 	// UpdateAI tick (documented timing deviation) and the
 	// DoCastAOE(detonation 9435) rides the self-cast lowering in Lua
 	// (boss_arcanist_doan.lua:210, selin_fireheart convention) — the
-	// old "no DoCastAOE bridge" claim was stale. The UpdateAI UNIT_STATE_CASTING gates and
+	// old "no DoCastAOE bridge" claim was stale. The UpdateAI UNIT_STATE_CASTING gates are PORTED (each timer arm + the below-50%
+	// latch evaluation defer 500ms while IsCasting);
 	// BossAI::JustEngagedWith + DATA_ARCANIST_DOAN bookkeeping have
-	// no instance/UNIT_STATE bridges (luaBossAI shim). Entry 6487 is
+	// no instance bridge (luaBossAI shim). Entry 6487 is
 	// not named in the C++ tree (RegisterScarletMonasteryCreatureAI
 	// binds the creature_template ScriptName DB-side) — wowhead-cited
 	// (classic.wowhead.com/npc=6487/arcanist-doan).
@@ -15174,9 +15174,10 @@ func init() {
 	// and the DamageTaken soul siphon 7290 once when post-damage
 	// health drops strictly below 50% (HealthBelowPctDamaged —
 	// damaged class, not the golemagg 704fb8e bug class) + 20s
-	// re-arm; no Talk lines. The UpdateAI UNIT_STATE_CASTING gates
-	// and BossAI::JustEngagedWith + DATA_AZSHIR bookkeeping have no
-	// instance/UNIT_STATE bridges (luaBossAI shim). Entry 6490 is
+	// re-arm; no Talk lines. The UpdateAI UNIT_STATE_CASTING gates are PORTED (all three timer arms defer 500ms while IsCasting;
+	// the DamageTaken siphon latch stays ungated per C++);
+	// BossAI::JustEngagedWith + DATA_AZSHIR bookkeeping have no
+	// instance bridge (luaBossAI shim). Entry 6490 is
 	// not named in the C++ tree (RegisterScarletMonasteryCreatureAI
 	// binds the creature_template ScriptName DB-side) — wowhead-cited
 	// (classic.wowhead.com/npc=6490/azshir-the-sleepless).
@@ -15193,9 +15194,11 @@ func init() {
 	// strictly below 35% (HealthBelowPctDamaged — damaged class, not
 	// the golemagg 704fb8e current-health bug class): Talk(SAY_HEALTH
 	// 1), per-GUID once-guard; the C++ arm casts no spell. The
-	// UpdateAI UNIT_STATE_CASTING queue gate and
-	// BossAI::JustEngagedWith + DATA_BLOODMAGE_THALNOS encounter
-	// bookkeeping have no instance/UNIT_STATE bridges (luaBossAI shim).
+	// UpdateAI UNIT_STATE_CASTING queue gate is PORTED (BossAI::UpdateAI base gates — thalnos overrides no UpdateAI; all four
+	// timer arms defer 500ms while IsCasting; the DamageTaken talk
+	// latch stays ungated per C++); BossAI::JustEngagedWith +
+	// DATA_BLOODMAGE_THALNOS encounter bookkeeping have no instance
+	// bridge (luaBossAI shim).
 	// Entry 4543 is not named in the C++ tree
 	// (RegisterScarletMonasteryCreatureAI binds the creature_template
 	// ScriptName DB-side) — wowhead-cited
@@ -16632,8 +16635,8 @@ func init() {
 	// precedent), the phase-two movement/volunteer/sacrifice machine
 	// (summon STRAND + motion-master + flag + interrupt + cross-AI
 	// DoAction bridges absent), DoAction(ACTION_SACRIFICE) /
-	// DoCastAOE(Sacrifice Beam 56150) (no DoAction bridge —
-	// drakkari_colossus precedent; no DoCastAOE bridge), JustSummoned
+	// DoCastAOE(Sacrifice Beam 56150) (cross-AI DoAction machine —
+	// drakkari_colossus precedent; DoCastAOE would lower to self-cast once the machine lands), JustSummoned
 	// / SummonedCreatureDies / EnterEvadeMode / MovementInform /
 	// GetData(DATA_VOLUNTEER_WORK) legs, npc_twilight_volunteer (30385
 	// entry-verifiable — ahnkahet.h, zero registration: whole AI rides
@@ -17501,7 +17504,7 @@ func init() {
 	// GO-by-spawnId tile store firstEruptionDBGUID 84980 sections
 	// 15/25/23/13, ObjectAccessor GO lookup + tile CastSpell. Documented
 	// in the lua file, not wired: GetData(DATA_SAFETY_DANCE 19962139)
-	// (no GetData bridge), spell_heigan_eruption (no SpellScript binding
+	// (GetData self-read bridged; stay-out is the missing achievement consumer — creature-target criteria gate absent), spell_heigan_eruption (no SpellScript binding
 	// bridge — razelikh precedent), achievement_safety_dance (no
 	// achievement-criteria bridge — snakes precedent). The Naxxramas
 	// block stays OPEN (13/17 closed; next: gothik — lua exists,
@@ -17524,7 +17527,7 @@ func init() {
 	// is bridged), the
 	// gate machine (DoAction OPEN_GATE — no instance/summon/cross-AI
 	// bridges), EVENT_PHASE_TWO / EVENT_TELEPORT / EVENT_HARVEST
-	// (DoCastAOE 28026/28025/28679 — no DoCastAOE bridge), EVENT_BOLT
+	// (DoCastAOE 28026/28025/28679 — phase-machine-blocked; DoCastAOE lowers to self-cast once the wave machine lands), EVENT_BOLT
 	// DoCastVictim(SHADOW_BOLT 29317) 2s (moroes-ready in isolation but
 	// its scheduling legs are the unbridged phase machine —
 	// documented-only), DamageTaken phase-one zeroing (no phase bridge),
@@ -17558,7 +17561,7 @@ func init() {
 	// Unmodeled: the whole phase/cross-AI machine (InitializeAI phase
 	// legs, DoAction pet-aggro/death/revive/reset legs, Transition(),
 	// BeginResetEncounter, EVENT_REVIVE_*/EVENT_TRANSITION_*,
-	// EVENT_SHIFT DoCastAOE 28089 — no DoCastAOE bridge; EVENT_CHAIN
+	// EVENT_SHIFT DoCastAOE 28089 — phase-machine-blocked (lowers to self-cast); EVENT_CHAIN
 	// DoCastVictim 28167 + EVENT_BERSERK DoCastSelf 27680 moroes/
 	// phase_hunter-ready in isolation but trigger-blocked behind the
 	// phase machine — gothik precedent; ball-lightning UpdateAI leg
@@ -17805,8 +17808,8 @@ func init() {
 	// wraith summon timer (NPC_CRAZED_MANA_WRAITH 26746 also
 	// local-enum-only entry-unverifiable) have no instance/
 	// random-target/summon bridges. achievement_chaos_theory (OnCheck
-	// GetData(DATA_CHAOS_THEORY)) joins the no-achievement-bridge
-	// queue (kelthuzad/thaddius precedent).
+	// GetData(DATA_CHAOS_THEORY)) joins the no-achievement-consumer
+	// queue (creature-target criteria gate absent; GetData self-read bridged; kelthuzad/thaddius precedent).
 	RegisterLuaBoss("boss_anomalus", 26763)
 
 	// Ormorok the Tree-Shaper (26794), The Nexus —
@@ -17849,7 +17852,7 @@ func init() {
 	// normal SelectTarget(Random)->DoCast(CRYSTAL_CHAINS 50997)
 	// DUNGEON_MODE(30s,11s) repeat (no timer-event/random-target/
 	// cast bridges); SetGUID(DATA_INTENSE_COLD) _intenseColdList leg
-	// (no SetGUID/GetData bridge). containment_sphere
+	// (no SetGUID bridge; no GetData override exists — the achievement reads the raw list member). containment_sphere
 	// (GameObjectScript OnGossipHello — cross-AI CheckContainment
 	// Spheres + RemovePrison) joins the instance-model-blocked gossip
 	// queue; spell_intense_cold (AuraScript HandlePeriodicTick stack>=2
@@ -18002,8 +18005,8 @@ func init() {
 	// phase-three disk machines (no timer-event / cast / phase bridges);
 	// SpellHit (SPELL_POWER_SPARK_MALYGOS -> Talk SAY_BUFF_SPARK 14 +
 	// despawn the spark; SPELL_MALYGOS_BERSERK -> Talk
-	// EMOTE_HIT_BERSERKER_TIMER — no SpellHit / cast bridges, joins the
-	// SpellHit-15-never-fires queue); MoveInLineOfSight (power-spark
+	// EMOTE_HIT_BERSERKER_TIMER — ev14 live; both arms trigger-dead (56152 via the unported spark MI cast, 47008 aura tick never
+	// delivers); zero ev15 arms on the boss AI); MoveInLineOfSight (power-spark
 	// proximity cast — IsWithinLOS bridged, but ev27 is
 	// engage-only, so the sighting arm stays out); npc_portal_eoe (NPC_PORTAL_TRIGGER
 	// 30118 — SpellHit / aura-maintenance UpdateAI — no SpellHit / cast /
@@ -18549,7 +18552,7 @@ func init() {
 	// registration); spell_ignis_slag_pot (62717) — no
 	// AuraScript bridge; joins the no-AuraScript-bridge queue;
 	// achievement_ignis_shattered (GetData-based OnCheck — no
-	// GetData / achievement bridges; joins the
+	// achievement consumer (creature-target criteria gate absent; GetData read bridged); joins the
 	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_ignis", 33118)
 
@@ -18751,7 +18754,7 @@ func init() {
 	// SpellScript / AuraScript bridges; all three join the
 	// no-SpellScript / no-AuraScript-bridge queues); the two
 	// achievements (shadowdodger / smell_saronite — GetData-based
-	// OnCheck — no GetData / achievement bridges; both join the
+	// OnCheck — no achievement consumer (creature-target criteria gate absent; GetData read bridged); both join the
 	// unmodeled-achievement queue).
 	RegisterLuaBoss("boss_general_vezax", 33271)
 

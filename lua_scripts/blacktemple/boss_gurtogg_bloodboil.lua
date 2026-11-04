@@ -407,7 +407,7 @@ end
 -- group 1, re-arms change phase 30s, and arms the phase-2 set;
 -- phase 2 -> 1 cancels group 2, re-arms change phase 60s, arms
 -- the phase-1 set; the threat victim-restore arms are PORTED below
--- (AttackStart stays out) and the ApplySpellImmune
+-- and the ApplySpellImmune
 -- immunity-off arms are PORTED in onChangePhase — the GUID state is
 -- cleared (C++ Initialize).
 function onChangePhase(creature, guid)

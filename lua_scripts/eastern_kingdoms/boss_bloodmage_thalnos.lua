@@ -24,10 +24,14 @@
 -- 1); per-GUID Lua state holds the once-guard, cleared on 2/4/23. No
 -- spell cast in the latch — the C++ arm only talks. OnDied/OnLeaveCombat/
 -- OnReset: cancel timers, clear the latch.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate has no
--- UNIT_STATE bridge — timers fire unconditionally (jeklik convention);
--- the DamageTaken latch fires on the damage hook rather than the
--- script's UpdateAI tick (timing documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate is
+-- PORTED — thalnos overrides no UpdateAI, so the gate is
+-- BossAI::UpdateAI's pre-loop + in-loop CASTING returns
+-- (ScriptedCreature.cpp:571-586); all four timer arms defer 500ms
+-- while creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950; the stale "no UNIT_STATE bridge"
+-- claim is retracted); the DamageTaken latch is a genuine C++
+-- DamageTaken arm, so it stays ungated; BossAI::JustEngagedWith pulse/zone arms are PORTED in
 -- thalnosEnterCombat; the DATA_BLOODMAGE_THALNOS encounter
 -- bookkeeping still has no instance-script bridge — boss admission via the luaBossAI shim.
 -- (Wowpedia lists the health yell at 50% and the Sunwell bug tracker
@@ -71,8 +75,19 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_FLAME_SHOCK: non-triggered DoCastVictim(8053);
--- re-arm {10s,15s} (C++ Repeat inclusive).
+-- re-arm {10s,15s} (C++ Repeat inclusive). Thalnos overrides no
+-- UpdateAI, so the gate is BossAI::UpdateAI's pre-loop + in-loop
+-- CASTING returns (ScriptedCreature.cpp:571-586) — PORTED: the arm
+-- defers 500ms while creature:IsCasting() (live CastingUntil
+-- window, lua_creature_events.go:1950; broodkeeper / kirtonos
+-- precedent), no re-arm consumed.
 local function onFlameShock(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flame_shock", 500, function()
+            onFlameShock(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FLAME_SHOCK)
@@ -83,7 +98,14 @@ local function onFlameShock(creature, guid)
 end
 
 -- C++ EVENT_SHADOW_BOLT: non-triggered DoCastVictim(1106); re-arm 2s.
+-- BossAI::UpdateAI CASTING gate PORTED as above.
 local function onShadowBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadow_bolt", 500, function()
+            onShadowBolt(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_BOLT)
@@ -94,7 +116,14 @@ local function onShadowBolt(creature, guid)
 end
 
 -- C++ EVENT_FLAME_SPIKE: non-triggered DoCastVictim(8814); re-arm 30s.
+-- BossAI::UpdateAI CASTING gate PORTED as above.
 local function onFlameSpike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flame_spike", 500, function()
+            onFlameSpike(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FLAME_SPIKE)
@@ -105,7 +134,14 @@ local function onFlameSpike(creature, guid)
 end
 
 -- C++ EVENT_FIRE_NOVA: non-triggered DoCastVictim(16079); re-arm 40s.
+-- BossAI::UpdateAI CASTING gate PORTED as above.
 local function onFireNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fire_nova", 500, function()
+            onFireNova(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIRE_NOVA)

@@ -39,10 +39,12 @@
 -- guard would wrongly re-arm the bubble on dispel), cleared on 2/4/23.
 -- OnDied/OnLeaveCombat/OnReset: cancel timers, clear the latch.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); the below-50% latch fires on
--- the damage hook rather than the next UpdateAI tick (tick timing
--- deviation, documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- the post-event casting check are PORTED (each timer arm + the
+-- below-50% latch evaluation defer 500ms while creature:IsCasting(),
+-- live CastingUntil window, lua_creature_events.go:1950; the stale
+-- "IsCasting is constant-false" claim is retracted); the below-50%
+-- latch fires on the damage hook rather than the next UpdateAI tick
+-- (tick timing deviation, documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
 -- doanEnterCombat; the DATA_ARCANIST_DOAN encounter bookkeeping
 -- still has no instance-script bridge — boss admission via the luaBossAI shim; C++ DoCastSelf(9438)
 -- default is non-triggered,
@@ -120,8 +122,17 @@ local function randomThreatPlayerSkippingFirstInRange(creature, maxDist)
 end
 
 -- C++ EVENT_SILENCE: non-triggered DoCastVictim(8988); re-arm
--- {15s,20s}.
+-- {15s,20s}. UpdateAI pre-loop + in-loop CASTING gates PORTED:
+-- the arm defers 500ms while creature:IsCasting() (live
+-- CastingUntil window, lua_creature_events.go:1950; broodkeeper /
+-- kirtonos precedent), no re-arm consumed.
 local function onSilence(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "silence", 500, function()
+            onSilence(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SILENCE)
@@ -132,8 +143,14 @@ local function onSilence(creature, guid)
 end
 
 -- C++ EVENT_ARCANE_EXPLOSION: non-triggered DoCastVictim(9433);
--- re-arm 8s.
+-- re-arm 8s. CASTING gate PORTED as above.
 local function onArcaneExplosion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "explosion", 500, function()
+            onArcaneExplosion(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_ARCANE_EXPLOSION)
@@ -145,8 +162,15 @@ end
 
 -- C++ EVENT_POLYMORPH: DoCast(13323) on a random alive threat-list
 -- player within 30 yd skipping the first MaxThreat entry; re-arm
--- 20s unconditionally.
+-- 20s unconditionally. CASTING gate PORTED: defer before the
+-- target pick (malown defer-before-rand-roll precedent).
 local function onPolymorph(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "polymorph", 500, function()
+            onPolymorph(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerSkippingFirstInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_POLYMORPH)
@@ -198,25 +222,31 @@ end
 -- precedent); no-subtraction would fire up to one hit late. The
 -- DoCastAOE(detonation 9435) arm rides the latch as non-triggered
 -- self-cast (selin_fireheart DoCastAOE convention).
-local function doanDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+-- CASTING gate PORTED: the C++ arm sits after the event loop, so the
+-- pre-loop and in-loop CASTING returns both skip the latch read — it
+-- is only read on a non-casting tick. The hook therefore defers the
+-- latch evaluation 500ms while creature:IsCasting() (rivendare
+-- defer-before-latch-read precedent); the deferred re-check reads
+-- current health, exactly what C++ HealthBelowPct reads in UpdateAI,
+-- so a heal back above 50% before a non-casting tick correctly
+-- never fires it. Cancelled with the timers on 2/4/23.
+local function checkBubbleLatch(creature, guid, postDamageHealth)
     if bubbleLatched[guid] then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "bubble_check", 500, function()
+            checkBubbleLatch(creature, guid, creature:GetHealth())
+        end)
         return
     end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return
     end
-    local health = creature:GetHealth()
-    -- C++ reads HealthBelowPct(50) in UpdateAI (post-damage current
-    -- health, boss_arcanist_doan.cpp:103), so the pre-damage hook
-    -- subtracts the incoming damage (HealthBelowPctDamaged semantics,
-    -- magmus precedent). The golemagg 704fb8e no-subtraction rule does
-    -- NOT apply here: there C++ reads pre-damage health in AI::DamageTaken,
-    -- here it reads post-damage health in UpdateAI.
     -- C++ reads post-damage health in UpdateAI, so the arm never
     -- fires on the killing blow (nefarian postDamage > 0 rule).
-    if health - damage > 0 and health - damage < math.floor(maxHealth * 50 / 100) then
+    if postDamageHealth > 0 and postDamageHealth < math.floor(maxHealth * 50 / 100) then
         bubbleLatched[guid] = true
         creature:Talk(SAY_SPECIALAE)
         creature:CastSpell(creature, SPELL_ARCANE_BUBBLE)
@@ -227,6 +257,24 @@ local function doanDamageTaken(event, creature, attacker, damage)
         -- DoCastAOE convention).
         creature:CastSpell(creature, SPELL_DETONATION)
     end
+end
+
+local function doanDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if bubbleLatched[guid] then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    -- C++ reads HealthBelowPct(50) in UpdateAI (post-damage current
+    -- health, boss_arcanist_doan.cpp:103), so the pre-damage hook
+    -- subtracts the incoming damage (HealthBelowPctDamaged semantics,
+    -- magmus precedent). The golemagg 704fb8e no-subtraction rule does
+    -- NOT apply here: there C++ reads pre-damage health in AI::DamageTaken,
+    -- here it reads post-damage health in UpdateAI.
+    checkBubbleLatch(creature, guid, creature:GetHealth() - damage)
 end
 
 RegisterCreatureEvent(ENTRY_ARCANIST_DOAN, 1, doanEnterCombat)

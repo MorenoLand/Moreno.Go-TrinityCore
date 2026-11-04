@@ -24,10 +24,12 @@
 -- cleared on 2/4/23. OnDied/OnLeaveCombat/OnReset: cancel timers,
 -- clear the latch.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
--- fire unconditionally (jeklik convention); the DamageTaken latch
--- fires on the damage hook rather than the script's UpdateAI tick
--- (timing documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- the post-event casting check are PORTED (all three timer arms
+-- defer 500ms while creature:IsCasting(), live CastingUntil
+-- window, lua_creature_events.go:1950; the stale "IsCasting is
+-- constant-false" claim is retracted); the DamageTaken latch is a
+-- genuine C++ DamageTaken arm, so it stays ungated (its hook fires
+-- regardless of casting state, as in C++); BossAI::JustEngagedWith pulse/zone arms are PORTED in
 -- azshirEnterCombat; the DATA_AZSHIR encounter bookkeeping still
 -- has no instance-script bridge — boss
 -- admission via the luaBossAI shim.
@@ -64,8 +66,17 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_CALL_OF_GRAVE: non-triggered DoCastVictim(17831);
--- re-arm 30s.
+-- re-arm 30s. UpdateAI pre-loop + in-loop CASTING gates PORTED:
+-- the arm defers 500ms while creature:IsCasting() (live
+-- CastingUntil window, lua_creature_events.go:1950; broodkeeper /
+-- kirtonos precedent), no re-arm consumed.
 local function onCallOfGrave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "call_of_grave", 500, function()
+            onCallOfGrave(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CALL_OF_THE_GRAVE)
@@ -76,7 +87,14 @@ local function onCallOfGrave(creature, guid)
 end
 
 -- C++ EVENT_TERRIFY: non-triggered DoCastVictim(7399); re-arm 20s.
+-- CASTING gate PORTED as above.
 local function onTerrify(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "terrify", 500, function()
+            onTerrify(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_TERRIFY)
@@ -87,8 +105,16 @@ local function onTerrify(creature, guid)
 end
 
 -- C++ EVENT_SOUL_SIPHON: non-triggered DoCastVictim(7290); re-arm
--- 20s.
+-- 20s. CASTING gate PORTED as above (this timer arm is an UpdateAI
+-- event; the DamageTaken siphon latch below is a genuine
+-- DamageTaken arm and stays ungated per C++).
 local function onSoulSiphon(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "soul_siphon", 500, function()
+            onSoulSiphon(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SOUL_SIPHON)
