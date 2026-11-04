@@ -1974,10 +1974,12 @@ func (s *session) handleCmdUnPossess(ctx context.Context) {
 // handleCmdUnstuck mirrors HandleUnstuckCommand (cs_misc.cpp:916-976, RBAC
 // 534): teleport the target out of a stuck spot. Partial (documented fidelity
 // gaps, not stubs): the no-permission self path (cast spell 7355 "Stuck")
-// has no spell-cast bridge; the graveyard leg (RepopAtGraveyard) has no
-// graveyard bridge; the startzone leg (GetStartPosition) has no
-// race/class start-position bridge. The inn leg (homebind teleport) is
-// native.
+// has no spell-cast bridge (applyAura is not a cast and the spell's
+// unstuck effect is unmodeled); the startzone leg (GetStartPosition) has
+// no race/class start-position bridge. The inn leg (homebind teleport)
+// and the graveyard leg (RepopAtGraveyard via repopAtGraveyard) are
+// native, and the C++ flight/combat refusal is enforced (a sys message
+// stands in for the SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW cast result).
 func (s *session) handleCmdUnstuck(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -2001,6 +2003,10 @@ func (s *session) handleCmdUnstuck(ctx context.Context, args []string) {
 	if s.misc2LowerSecurity(ctx, target, 0) {
 		return
 	}
+	if target.inFlight || target.attackTarget != 0 || target.player.UnitFlags&unitFlagInCombat != 0 {
+		s.sendSysMessage(fmt.Sprintf("%s cannot be unstuck while in flight or combat.", miscPlayerLink(name)))
+		return
+	}
 	loc := "inn"
 	if len(args) > 1 {
 		loc = strings.ToLower(args[1])
@@ -2009,7 +2015,7 @@ func (s *session) handleCmdUnstuck(ctx context.Context, args []string) {
 	case "inn":
 		target.teleportTo(target.player.HomebindMap, target.player.HomebindX, target.player.HomebindY, target.player.HomebindZ, target.player.Orientation)
 	case "graveyard":
-		s.sendSysMessage(fmt.Sprintf("The graveyard leg of .unstuck for %s is not available: graveyard respawn has no Go bridge yet.", miscPlayerLink(name)))
+		target.repopAtGraveyard(ctx)
 	case "startzone":
 		s.sendSysMessage(fmt.Sprintf("The startzone leg of .unstuck for %s is not available: race/class start positions have no Go bridge yet.", miscPlayerLink(name)))
 	default:

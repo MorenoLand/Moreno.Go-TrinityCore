@@ -31,14 +31,24 @@
 -- teleport spells 67834/67838/67835/67836/67837/68081, NOT
 -- player:Teleport), and the 1% _showUnderground roll is local Lua
 -- state. BLOCKED on two gaps: the entry is not in the C++ tree, and
--- the summoner gate (me->IsSummon()/GetSummoner(), :1530-1532) has no
--- bridge — porting without it would show the menu to anyone, which is
+-- the summoner gate (me->IsSummon()/GetSummoner(), :1530-1532) is
+-- half-bridged only — creature:IsSummon IS live
+-- (lua_creature_events.go:835) but GetSummoner has no bridge, so
+-- porting without it would show the menu to anyone, which is
 -- not the C++ behavior.
 -- npc_pet_trainer (:1609-1638) — OnGossipSelect (:1624) calls
--- player->ResetPetTalents(): no bridge.
+-- player->ResetPetTalents(), which IS bridged now
+-- (lua_player.go:5323); still blocked on the missing entry (not in
+-- the C++ tree) — the select menu itself comes from DB gossip.
 -- npc_experience (:1640-1706) — OnGossipHello/OnGossipSelect
--- (:1657/:1672) toggle PLAYER_FLAGS_NO_XP_GAIN via player
--- HasFlag/SetFlag/RemoveFlag: no player flag bridges.
+-- (:1657/:1672) toggle PLAYER_FLAGS_NO_XP_GAIN (0x02000000,
+-- Player.h:358) via player HasFlag/SetFlag/RemoveFlag, which ARE
+-- bridged now for PLAYER_FLAGS (lua_player.go:828-889, field 150
+-- backed by state.PlayerFlags); still blocked on the missing entry
+-- (Behsten/Slahtz are DB-side scriptname bindings, no const in the
+-- C++ tree — web search confirmed the two NPCs but no entry IDs, and
+-- entries are never invented). Note the WotLK script charges no fee;
+-- the modern 10g lore does not apply here.
 -- npc_firework (:1760-1996) — cluster Reset (:1938) PORTED in
 -- lua_scripts/world/npc_firework.lua: launcher priority chain via
 -- creature:FindNearestGameObject (0.5) + go:SendCustomAnim(3) +
