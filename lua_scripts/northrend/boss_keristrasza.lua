@@ -46,8 +46,9 @@
 -- creature:IsHeroic() (the "no IsHeroic bridge" claim was stale —
 -- IsHeroic is bridged, engine/world/lua_creature_events.go:260;
 -- lavanthor precedent), 11s heroic repeat (DUNGEON_MODE(30s,11s)).
--- The BossAI::JustEngagedWith instance-bookkeeping leg has no
--- bridge — tharon_ja precedent.
+-- The BossAI::JustEngagedWith base arms are PORTED in
+-- keristraszaEnterCombat (pulse + me-form DoZone); the
+-- instance/setActive/ScheduleTasks legs stay out.
 -- DamageTaken (event 9) — HealthBelowPctDamaged(25, damage)
 -- one-shot latch (per-GUID, reset on 1/2/23; loken convention)
 -- -> Talk(SAY_ENRAGE 2) + Talk(SAY_FRENZY 5) + DoCast(me,
@@ -242,8 +243,9 @@ end
 
 -- C++ JustEngagedWith (:95-103): Talk(SAY_AGGRO) then DoCastAOE(SPELL_
 -- INTENSE_COLD 48094) 2-arg (non-triggered) one-shot, then
--- BossAI::JustEngagedWith (instance bookkeeping — tharon_ja
--- precedent — no bridge). DoCastAOE lowers to self-cast
+-- BossAI::JustEngagedWith base arms PORTED in the handler
+-- below (pulse + me-form DoZone; instance/setActive/
+-- ScheduleTasks legs out). DoCastAOE lowers to self-cast
 -- creature:CastSpell(creature, spell) (boss_ai.go convention —
 -- selin_fireheart / mr_smite precedent; the Oct-12 "no DoCastAOE
 -- bridge" claim was wrong, retracted in a prior run). The three
@@ -256,6 +258,13 @@ local function keristraszaEnterCombat(event, creature, target)
     keristraszaEnraged[guid] = false
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_INTENSE_COLD)
+    -- C++ JustEngagedWith base call (boss_keristrasza.cpp:99),
+    -- after Talk + Intense Cold: BossAI::JustEngagedWith arms
+    -- (ScriptedCreature.cpp:540/542) — SetCombatPulseDelay(5) +
+    -- me-form DoZoneInCombat, before the timer schedules (C++
+    -- arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     -- C++ JustEngagedWith (cpp:101-103): the three ScheduleEvent
     -- legs ride CreateLuaEvent timers (maiden precedent).
     schedule(guid, "crystalfirebreath", 14000, function()

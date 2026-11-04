@@ -35,8 +35,10 @@
 -- creature:CastSpell(creature, spell) = DoCastSelf (phase_hunter
 -- precedent).
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; BossAI::JustEngagedWith
--- instance-bookkeeping leg has no bridge — tharon_ja precedent) +
+-- JustEngagedWith — BossAI::JustEngagedWith base call first
+-- (event 1; base arms PORTED in commandersEnterCombat, pulse +
+-- me-form DoZone; instance/setActive/ScheduleTasks legs out) +
+-- Talk(SAY_AGGRO 0) +
 -- DoCast(me, SPELL_BATTLE_SHOUT 31403) as creature:CastSpell(creature,
 -- SPELL_BATTLE_SHOUT) + schedules EVENT_CHARGE_COMMANDER ({3s,4s}) +
 -- EVENT_WHIRLWIND (6s, 8s); the EVENT_FRIGHTENING_SHOUT scheduling leg
@@ -164,6 +166,13 @@ end
 -- above via creature:RemoveAura (the old "no aura-removal bridge"
 -- claim was stale).
 local function commandersEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base call first (boss_nexus_commanders.cpp:56):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
+    -- and the timer schedules (C++ arm order); instance/setActive/
+    -- ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     creature:RemoveAura(SPELL_FROZEN_PRISON) -- boss_nexus_commanders.cpp:58,
         -- C++ arm order (between Talk and Battle Shout); the old

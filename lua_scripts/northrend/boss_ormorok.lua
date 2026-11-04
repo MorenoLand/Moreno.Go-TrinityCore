@@ -21,7 +21,8 @@
 -- SPIKES (12s) + EVENT_TRAMPLE (10s) + EVENT_SPELL_REFLECTION
 -- (30s) + heroic EVENT_CRYSTALLINE_TANGLER (15s, IsHeroic
 -- bridged — lavanthor precedent); the BossAI::JustEngagedWith
--- instance leg has no bridge (tharon_ja precedent).
+-- base arms are PORTED in ormorokEnterCombat (pulse + me-form
+-- DoZone); instance/setActive/ScheduleTasks legs out.
 -- EVENT_CRYSTAL_SPIKES — Talk(SAY_CRYSTAL_SPIKES 4) + DoCastVictim
 -- (SPELL_CRYSTAL_SPIKES 47958, 1-arg DoCast = victim cast) as
 -- creature:CastSpell(nil, spell), 12s init / 12s repeat.
@@ -166,6 +167,13 @@ local function ormorokEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     ormorokFrenzy[guid] = false
+    -- C++ JustEngagedWith base call first (boss_ormorok.cpp:89):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
+    -- and the timer schedules (C++ arm order); instance/setActive/
+    -- ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "spikes", 12000, function()
         crystalSpikesTick(creature, guid)
