@@ -354,8 +354,13 @@ func (s *session) handleWpUnload(ctx context.Context) {
 	}
 	wdb := s.server.WorldStore.DB
 	var pathID uint32
-	hasPath := wdb.QueryRowContext(ctx, "SELECT path_id FROM creature_addon WHERE guid = ?", guid).Scan(&pathID) == nil && pathID != 0
-	if !hasPath {
+	if wdb.QueryRowContext(ctx, "SELECT path_id FROM creature_addon WHERE guid = ?", guid).Scan(&pathID) != nil {
+		// C++ GetCreatureAddon() is nil without a creature_addon row, and
+		// unload then returns silently (cs_wp.cpp:243-244) — only an
+		// existing addon row with path_id 0 reports "no loaded path".
+		return
+	}
+	if pathID == 0 {
 		s.sendSysMessage("Target have no loaded path.")
 		return
 	}

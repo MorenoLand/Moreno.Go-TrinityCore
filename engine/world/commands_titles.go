@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // titles command port: titles_commandscript (cs_titles.cpp), the "titles"
@@ -35,11 +37,11 @@ import (
 // in-tree trinity_string seed).
 
 // parseTitleLink mirrors extractKeyFromLink("Htitle") + atoi (Chat.cpp:362):
-// a plain title id or a |Htitle:title_id|h[name]|h|r shift-click link. A
-// non-link token always yields a key (atoi: non-numeric/<=0 becomes 0, which
-// the caller's entry gate then reports as LANG_INVALID_TITLE_ID); only an
-// empty or malformed link returns ok=false (the C++ nullptr path, silent).
-func parseTitleLink(arg string) (uint32, bool) {
+// a plain title id or a |Htitle:title_id|h[name]|h|r shift-click link. The
+// signed atoi value is preserved (C++ reports LANG_INVALID_TITLE_ID with
+// the raw id, so "-5" prints -5, not 0); only an empty or malformed link
+// returns ok=false (the C++ nullptr path, silent).
+func parseTitleLink(arg string) (int32, bool) {
 	if strings.HasPrefix(arg, "|") {
 		i := strings.Index(arg, "Htitle:")
 		if i < 0 {
@@ -53,15 +55,40 @@ func parseTitleLink(arg string) (uint32, bool) {
 		if key == "" {
 			return 0, false
 		}
-		if v := cAtoi(key); v > 0 {
-			return uint32(v), true
-		}
-		return 0, true
+		return int32(cAtoi(key)), true
 	}
-	if v := cAtoi(arg); v > 0 {
-		return uint32(v), true
+	return int32(cAtoi(arg)), true
+}
+
+// knowsTitleBit mirrors Player::HasTitle(uint32 bitIndex)
+// (Player.cpp:24799): the KnownTitles bit for a MaskID. It is NOT
+// playerHasTitle (chosen-or-known): passing the target's own ChosenTitle to
+// playerHasTitle is tautologically true, so the chosen-reset legs in
+// remove/setMask could never fire.
+func (s *session) knowsTitleBit(maskID uint32) bool {
+	if s.player == nil {
+		return false
 	}
-	return 0, true
+	idx := maskID / 32
+	if int(idx) >= len(s.player.KnownTitles) {
+		return false
+	}
+	return s.player.KnownTitles[idx]&(uint32(1)<<(maskID%32)) != 0
+}
+
+// sendTitleEarned mirrors the SMSG_TITLE_EARNED leg of Player::SetTitle
+// (Player.cpp:24814-24834): MaskID plus 1 for earned, 0 for lost, sent to
+// the target's session. SetTitle only sends it on a bit change, so callers
+// gate on the pre-change bit.
+func (s *session) sendTitleEarned(maskID uint32, earned bool) {
+	packet := protocol.NewBuffer(8)
+	packet.WriteU32(maskID)
+	if earned {
+		packet.WriteU32(1)
+	} else {
+		packet.WriteU32(0)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_TITLE_EARNED), packet.Bytes(), true)
 }
 
 // titlesTarget mirrors getSelectedPlayer (Chat.cpp:301-309): no selection
@@ -226,17 +253,26 @@ func (s *session) handleTitlesAdd(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
+	// C++ checks id <= 0 before target selection (cs_titles.cpp:131-137).
+	if id <= 0 {
+		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
+		return
+	}
 	target := s.titlesTarget()
 	if target == nil {
 		return
 	}
-	name, name1, maskID, ok := s.titlesEntry(id)
+	name, name1, maskID, ok := s.titlesEntry(uint32(id))
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
 		return
 	}
+	wasKnown := target.knowsTitleBit(maskID)
 	if int(maskID/32) < len(target.player.KnownTitles) {
 		target.player.KnownTitles[maskID/32] |= uint32(1) << (maskID % 32)
+	}
+	if !wasKnown && int(maskID/32) < len(target.player.KnownTitles) {
+		target.sendTitleEarned(maskID, true)
 	}
 	s.persistTitles(ctx, target)
 	s.sendSysMessage(fmt.Sprintf("Title %d (%s) added to %s.", id, titleName(target, name, name1), target.player.Name)) // LANG_TITLE_ADD_RES 353
@@ -254,17 +290,26 @@ func (s *session) handleTitlesCurrent(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
+	// C++ checks id <= 0 before target selection (cs_titles.cpp:92-98).
+	if id <= 0 {
+		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
+		return
+	}
 	target := s.titlesTarget()
 	if target == nil {
 		return
 	}
-	name, name1, maskID, ok := s.titlesEntry(id)
+	name, name1, maskID, ok := s.titlesEntry(uint32(id))
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
 		return
 	}
+	wasKnown := target.knowsTitleBit(maskID)
 	if int(maskID/32) < len(target.player.KnownTitles) {
 		target.player.KnownTitles[maskID/32] |= uint32(1) << (maskID % 32) // SetTitle: known for sure
+	}
+	if !wasKnown && int(maskID/32) < len(target.player.KnownTitles) {
+		target.sendTitleEarned(maskID, true)
 	}
 	target.player.ChosenTitle = maskID
 	s.persistTitles(ctx, target)
@@ -283,21 +328,30 @@ func (s *session) handleTitlesRemove(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
+	// C++ checks id <= 0 before target selection (cs_titles.cpp:172-178).
+	if id <= 0 {
+		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
+		return
+	}
 	target := s.titlesTarget()
 	if target == nil {
 		return
 	}
-	name, name1, maskID, ok := s.titlesEntry(id)
+	name, name1, maskID, ok := s.titlesEntry(uint32(id))
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
 		return
 	}
+	wasKnown := target.knowsTitleBit(maskID)
 	if int(maskID/32) < len(target.player.KnownTitles) {
 		target.player.KnownTitles[maskID/32] &^= uint32(1) << (maskID % 32)
 	}
+	if wasKnown {
+		target.sendTitleEarned(maskID, false)
+	}
 	s.persistTitles(ctx, target)
 	s.sendSysMessage(fmt.Sprintf("Title %d (%s) removed from %s.", id, titleName(target, name, name1), target.player.Name)) // LANG_TITLE_REMOVE_RES 354
-	if !target.playerHasTitle(target.player.ChosenTitle) {
+	if !target.knowsTitleBit(target.player.ChosenTitle) {
 		target.player.ChosenTitle = 0
 		s.persistTitles(ctx, target)
 		s.sendSysMessage(fmt.Sprintf("Current title reset for %s.", target.player.Name)) // LANG_CURRENT_TITLE_RESET 356
@@ -358,7 +412,7 @@ func (s *session) handleTitlesSetMask(ctx context.Context, args []string) {
 	}
 	s.persistTitles(ctx, target)
 	s.sendSysMessage("Done.") // LANG_DONE 43
-	if !target.playerHasTitle(target.player.ChosenTitle) {
+	if !target.knowsTitleBit(target.player.ChosenTitle) {
 		target.player.ChosenTitle = 0
 		s.persistTitles(ctx, target)
 		s.sendSysMessage(fmt.Sprintf("Current title reset for %s.", target.player.Name)) // LANG_CURRENT_TITLE_RESET 356
