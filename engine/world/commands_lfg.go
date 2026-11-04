@@ -166,7 +166,11 @@ func (s *session) handleLfgGroupInfoCommand(ctx context.Context, name string) {
 	if playerSess != nil && playerSess.groupID != 0 {
 		groupTarget = s.server.findGroupByID(playerSess.groupID)
 	}
-	if groupTarget == nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+	// C++ only takes the CHAR_SEL_GROUP_MEMBER branch when the named
+	// player is NOT connected (cs_lfg.cpp:96-104 else-branch); a connected
+	// player with no in-memory group reports NOT_IN_GROUP, it never falls
+	// through to a possibly stale group_member row.
+	if groupTarget == nil && playerSess == nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		// CHAR_SEL_GROUP_MEMBER: find the group through the character DB.
 		var dbid uint64
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM group_member WHERE memberGuid = ? LIMIT 1", guidTarget).Scan(&dbid); err == nil && dbid != 0 {

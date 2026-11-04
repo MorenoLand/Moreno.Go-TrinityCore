@@ -369,9 +369,12 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 		}
 		mapID = parsed
 	}
+	// C++ stores the token in int8 (cs_instance.cpp:139-141): atoi's value
+	// truncates, so "256" selects difficulty 0 and "300" selects 44 (no
+	// match), while a full-int comparison would match nothing for both.
 	diff := -1
 	if len(args) > 1 {
-		diff = cAtoi(args[1])
+		diff = int(int8(cAtoi(args[1])))
 	}
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
@@ -387,13 +390,15 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 		if diff != -1 && diff != int(b.difficulty) {
 			continue
 		}
-		s.sendSysMessage(fmt.Sprintf("unbinding map: %d inst: %d perm: %s diff: %d resettable: %s timeleft: %s",
-			b.mapID, b.instanceID, yesNo(b.permanent),
-			b.difficulty, instanceResettable(b), instanceBindTimeLeft(b.resetTime)))
+		// Delete first: the C++ erase cannot fail, so a failed row delete
+		// must not print the "unbinding" line for a bind that stays bound.
 		if _, err := s.server.CharactersStore.DB.ExecContext(ctx,
 			"DELETE FROM character_instance WHERE guid = ? AND instance = ?", target.playerGUID, b.instanceID); err != nil {
 			continue
 		}
+		s.sendSysMessage(fmt.Sprintf("unbinding map: %d inst: %d perm: %s diff: %d resettable: %s timeleft: %s",
+			b.mapID, b.instanceID, yesNo(b.permanent),
+			b.difficulty, instanceResettable(b), instanceBindTimeLeft(b.resetTime)))
 		counter++
 	}
 	s.sendSysMessage(fmt.Sprintf("instances unbound: %d", counter))

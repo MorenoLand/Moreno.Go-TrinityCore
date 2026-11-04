@@ -33,18 +33,15 @@ var learnLanguageSpellIDs = []uint32{
 const skillInternalID = 769
 
 // learnTargetOrSelf mirrors ChatHandler::getSelectedPlayerOrSelf
-// (cs_learn.cpp:95): the selected online player, else the invoker; an
-// unresolvable selection reports LANG_PLAYER_NOT_FOUND (499) per the tree
-// convention used by the honor/instance ports.
+// (Chat.cpp:344-360): the selected online player, else the invoker —
+// including when the selection is a creature or an offline player, which
+// falls back to self rather than erroring (unlike getSelectedPlayer).
 func (s *session) learnTargetOrSelf() (*session, bool) {
 	target := s
 	if s.selection != 0 && s.server != nil {
-		ts := s.server.playerSessionForGUID(s.selection)
-		if ts == nil || ts.player == nil {
-			s.sendSysMessage("Player not found.")
-			return nil, false
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			target = ts
 		}
-		target = ts
 	}
 	if target.player == nil {
 		s.sendSysMessage("Player not found.")
@@ -54,12 +51,17 @@ func (s *session) learnTargetOrSelf() (*session, bool) {
 }
 
 // learnSelectedPlayer mirrors ChatHandler::getSelectedPlayer
-// (cs_learn.cpp:363, 397): the selected player is REQUIRED; a missing
-// selection reports LANG_NO_CHAR_SELECTED / LANG_PLAYER_NOT_FOUND.
+// (Chat.cpp:300-310, cs_learn.cpp:363, 397): no selection means the
+// invoker (getSelectedPlayer returns the session player when nothing is
+// targeted); only a selection that resolves to no connected player
+// reports LANG_NO_CHAR_SELECTED / LANG_PLAYER_NOT_FOUND.
 func (s *session) learnSelectedPlayer(requireMsg string) (*session, bool) {
 	if s.selection == 0 || s.server == nil {
-		s.sendSysMessage(requireMsg)
-		return nil, false
+		if s.player == nil {
+			s.sendSysMessage(requireMsg)
+			return nil, false
+		}
+		return s, true
 	}
 	ts := s.server.playerSessionForGUID(s.selection)
 	if ts == nil || ts.player == nil {
@@ -688,6 +690,15 @@ func (s *session) handleLearnSpell(ctx context.Context, args []string) {
 			target.learnSpell(ctx, next)
 		}
 	}
+	// HandleLearnCommand (cs_learn.cpp:130-131) resends the talent panel
+	// when the FIRST rank of the learned spell carries a talent cost.
+	if s.server != nil && s.server.Data != nil {
+		if first := s.server.getFirstSpellInChain(spellID); first != 0 {
+			if cost, err := s.server.Data.TalentSpellCost(first); err == nil && cost > 0 {
+				_ = target.sendTalentsInfo(false)
+			}
+		}
+	}
 	// Player::AddSpell (Player.cpp:3499-3505): a runtime-learned spell with
 	// GetTalentSpellCost(spellId) > 0 and SPELL_EFFECT_LEARN_SPELL is cast
 	// triggered on learn — bridged in learnSpell. AddSpell carries no
@@ -823,6 +834,9 @@ func (s *session) handleLearnAllRecipes(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
+		// C++ returns false on an empty namePart (cs_learn.cpp:402-403),
+		// which the framework reports as a syntax error.
+		s.sendSysMessage("Syntax: .learn all recipes <profession>")
 		return
 	}
 	namePart := strings.ToLower(strings.Join(args, " "))
