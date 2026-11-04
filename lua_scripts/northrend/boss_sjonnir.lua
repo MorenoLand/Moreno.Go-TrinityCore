@@ -32,8 +32,10 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
 -- CheckRequiredBosses / EnterEvadeMode gate has no
--- required-bosses bridge; the BossAI::JustEngagedWith passthrough
--- has no bridge (boss_bookkeeping precedent); the six
+-- required-bosses bridge; the BossAI::JustEngagedWith base arms
+-- (SetCombatPulseDelay(5) + me-form DoZoneInCombat,
+-- ScriptedCreature.cpp:540/542) are ported into
+-- sjonnirEnterCombat; instance legs stay out; the six
 -- ScheduleEvent legs seed the timer machine — CreateLuaEvent
 -- is the timer bridge (the stale "no timer bridge for the legs"
 -- claim is retracted), and the seed moves to OnEnterCombat(1)
@@ -237,9 +239,16 @@ local function summonTick(creature, guid)
 end
 
 -- C++ JustEngagedWith: Talk(AGGRO) + required-bosses gate +
--- BossAI passthrough + ScheduleEvent legs — only the Talk arm is
--- bridgeable.
+-- BossAI base arms + ScheduleEvent legs — Talk + base arms ported,
+-- gate leg unbridged.
 local function sjonnirEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith gate-then-base (boss_sjonnir.cpp:98-107):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
+    -- (C++ arm order); CheckRequiredBosses/EnterEvadeMode gate and
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

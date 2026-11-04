@@ -29,9 +29,11 @@
 -- Melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith passthrough has no bridge — the
--- boss_bookkeeping precedent) + the EVENT_STOMP timer arm below.
+-- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1) + the
+-- BossAI::JustEngagedWith base arms (SetCombatPulseDelay(5) +
+-- me-form DoZoneInCombat, ScriptedCreature.cpp:540/542) ported
+-- into krystallusEnterCombat; instance/setActive/ScheduleTasks
+-- legs stay out (boss_bookkeeping precedent for those legs).
 -- The Oct-12 "no-timer-bridge" claim is retracted for STOMP:
 -- CreateLuaEvent is the registered timer bridge (engine/scripting/
 -- runtime.go:798; maiden / bjarngrim-lieutenant convention).
@@ -177,10 +179,16 @@ local function stompTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: Talk(AGGRO) + BossAI passthrough +
--- ScheduleEvent legs — the Talk arm and EVENT_STOMP are ported.
+-- C++ JustEngagedWith: Talk(AGGRO) + BossAI base arms +
+-- ScheduleEvent legs — the Talk, base, and EVENT_STOMP arms ported.
 local function krystallusEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith Talk-then-base (boss_krystallus.cpp:66-69):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, after Talk
+    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "stomp", {20000, 29000}, function()

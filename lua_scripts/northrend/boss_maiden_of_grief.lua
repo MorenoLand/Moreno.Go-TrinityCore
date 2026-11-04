@@ -26,11 +26,12 @@
 -- (the maiden CreateLuaEvent convention); melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith passthrough and the
+-- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1) + the
+-- BossAI::JustEngagedWith base arms (SetCombatPulseDelay(5) +
+-- me-form DoZoneInCombat, ScriptedCreature.cpp:540/542) ported
+-- into maidenEnterCombat; the
 -- DoStartTimedAchievement(ACHIEV_GOOD_GRIEF_START_EVENT 20383) leg
--- have no bridges — the boss_bookkeeping precedent for the former,
--- no timed-achievement bridge for the latter).
+-- has no bridge (no timed-achievement bridge).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER, then
 -- Talk(SAY_SLAY 1) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
@@ -136,8 +137,9 @@ local function shockTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: Talk(AGGRO) + BossAI / achievement legs —
--- only the Talk arm is bridgeable. The Reset() ScheduleEvent legs
+-- C++ JustEngagedWith: Talk(AGGRO) + BossAI base arms /
+-- achievement legs — Talk + base arms ported, achievement leg
+-- unbridged. The Reset() ScheduleEvent legs
 -- seed the timer machine here: the C++ EventMap only ticks once
 -- UpdateAI runs with a victim, so engage-seeding is
 -- behavior-identical (the krystallus precedent).
@@ -215,6 +217,12 @@ local function pillarTick(creature, guid)
 end
 
 local function maidenEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base-first (boss_maiden_of_grief.cpp:74-76):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
+    -- (C++ arm order); instance/achievement legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
