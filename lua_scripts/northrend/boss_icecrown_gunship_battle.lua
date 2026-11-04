@@ -46,8 +46,8 @@
 -- EVENT_WOUNDING_STRIKE {8s,10s} —
 -- DoCastVictim(SPELL_WOUNDING_STRIKE 69651) non-triggered, re-arm
 -- {9s,13s} (:1548-1550). The :1533 skip-while-casting /
--- already-bladestorming gate: the UNIT_STATE_CASTING leg has no bridge
--- (maiden precedent); the self-aura gate IS bridged — the callback
+-- already-bladestorming gate: PORTED 2026-11-04 — 500ms IsCasting
+-- defer (mal_ganis idiom); the self-aura gate IS bridged — the callback
 -- delays 1s instead of firing while HasAura(69652).
 -- npc_gunship_boarding_add DamageTaken (:1455-1464):
 -- SPELL_DESPERATE_RESOLVE 69647 at 25% — DoCast(me, 69647, true)
@@ -56,7 +56,9 @@
 -- survives evade — the moroes-frenzy pattern).
 -- npc_gunship_rocketeer UpdateAI (:1619-1632): SPELL_ROCKET_ARTILLERY —
 -- DoCastAOE(entry == 36978 and 70609 or 69678, true) TRIGGERED on a 9s
--- SpellHistory cooldown loop. Lua emulation: engage-immediate cast +
+-- SpellHistory cooldown loop; the :1624 while-casting gate is PORTED
+-- 2026-11-04 as a 500ms IsCasting defer (mal_ganis idiom).
+-- Lua emulation: engage-immediate cast +
 -- repeating 9s timer (C++ fires on the first UpdateAI tick once a victim
 -- exists; the SpellHistory cooldown has no bridge — documented
 -- deviation).
@@ -207,9 +209,13 @@ end
 -- C++ :1544-1546 EVENT_BLADESTORM: DoCastAOE(SPELL_BLADESTORM)
 -- non-triggered, re-arm {25s,30s}.
 local function onBladestorm(creature, guid)
-    -- C++ :1533 skips while casting or already bladestorming; the
-    -- UNIT_STATE_CASTING leg has no bridge (maiden precedent) but the
-    -- self-aura gate is bridged — delay 1s instead of firing into it.
+    -- C++ :1533 pre-loop gate (before ExecuteEvent): skip while casting
+    -- or already bladestorming — 500ms IsCasting defer, no re-arm
+    -- consumed (the mal_ganis idiom); the self-aura leg delays 1s.
+    if creature:IsCasting() then
+        schedule(guid, "bladestorm", 500, function() onBladestorm(creature, guid) end)
+        return
+    end
     if creature:HasAura(SPELL_BLADESTORM) then
         schedule(guid, "bladestorm", 1000, function() onBladestorm(creature, guid) end)
         return
@@ -223,8 +229,12 @@ end
 local function onWoundingStrike(creature, guid)
     -- C++ :1533 UpdateAI early-returns while casting or bladestorming,
     -- so the wounding arm stalls with bladestorm too (not just the
-    -- bladestorm arm); the casting leg has no bridge, the aura leg
-    -- delays 1s, mirroring onBladestorm.
+    -- bladestorm arm); the casting leg is a 500ms IsCasting defer
+    -- (mal_ganis idiom), the aura leg delays 1s, mirroring onBladestorm.
+    if creature:IsCasting() then
+        schedule(guid, "wounding", 500, function() onWoundingStrike(creature, guid) end)
+        return
+    end
     if creature:HasAura(SPELL_BLADESTORM) then
         schedule(guid, "wounding", 1000, function() onWoundingStrike(creature, guid) end)
         return
@@ -282,6 +292,12 @@ end
 -- C++ npc_gunship_rocketeer UpdateAI (:1619-1632): DoCastAOE(entry == 36978
 -- and 70609 or 69678, true) TRIGGERED on a 9s SpellHistory cooldown loop.
 local function onRocketArtillery(creature, guid)
+    -- C++ :1624 UpdateAI gate: return while casting — 500ms IsCasting
+    -- defer, no 9s re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "rockets", 500, function() onRocketArtillery(creature, guid) end)
+        return
+    end
     local spell = SPELL_ROCKET_ARTILLERY_H
     if creature:GetEntry() == ENTRY_SKYBREAKER_MORTAR then
         spell = SPELL_ROCKET_ARTILLERY_A

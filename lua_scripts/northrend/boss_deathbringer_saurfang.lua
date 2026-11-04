@@ -228,8 +228,9 @@
 --   beast wave is fully dead.
 -- EVENT_SUMMON_BLOOD_BEAST 25-man trio (72356/72357/72358) PORTED
 --   via creature:Is25ManRaid() (C++ :495-497, cast order kept).
--- The UNIT_STATE_CASTING gate in UpdateAI (:534-535) has no bridge
---   (the maiden precedent: timers fire unconditionally).
+-- The UNIT_STATE_CASTING gate in UpdateAI (pre-loop :456 + in-loop
+--   :531; the old note's line numbers drifted) is PORTED 2026-11-04:
+--   500ms IsCasting defer in all five ported ticks (mal_ganis idiom).
 -- Lua OnReset (event 23) replays the Reset aura-setup casts; C++
 --   Reset also runs at initial spawn — if the engine never fires 23
 --   pre-combat, the setup auras apply on the first evade instead.
@@ -321,6 +322,13 @@ end
 -- IsHeroic() schedule gate is bridgeable but the arm body would fire
 -- unconditional otherwise.
 local function onSummonBloodBeast(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :456 (+ in-loop :531, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "beasts", 500, function() onSummonBloodBeast(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST)
     creature:CastSpell(creature, SPELL_SUMMON_BLOOD_BEAST + 1)
     if creature:Is25ManRaid() then
@@ -338,6 +346,13 @@ end
 -- creature:IsHeroic() (engine/world/lua_creature_events.go:260, the
 -- cyanigosa mana-destruction precedent).
 local function onBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :456 (+ in-loop :531, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(SAY_BERSERK)
 end
@@ -345,6 +360,13 @@ end
 -- C++ :512-515 EVENT_BOILING_BLOOD: DoCastSelf(SPELL_BOILING_BLOOD
 -- 72385) non-triggered; re-arm {15s,20s} randtime.
 local function onBoilingBlood(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :456 (+ in-loop :531, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "boiling", 500, function() onBoilingBlood(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BOILING_BLOOD)
     schedule(guid, "boiling", {15000, 20000}, function() onBoilingBlood(creature, guid) end)
 end
@@ -352,6 +374,13 @@ end
 -- C++ :504-507 EVENT_BLOOD_NOVA: DoCastAOE(SPELL_BLOOD_NOVA_TRIGGER
 -- 72378) = non-triggered self-cast; re-arm {20s,25s} randtime.
 local function onBloodNova(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :456 (+ in-loop :531, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "nova", 500, function() onBloodNova(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BLOOD_NOVA_TRIGGER)
     schedule(guid, "nova", {20000, 25000}, function() onBloodNova(creature, guid) end)
 end
@@ -359,6 +388,13 @@ end
 -- C++ :508-511 EVENT_RUNE_OF_BLOOD: DoCastVictim(SPELL_RUNE_OF_BLOOD
 -- 72410) = non-triggered victim-cast; re-arm {20s,25s} randtime.
 local function onRuneOfBlood(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :456 (+ in-loop :531, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "rune", 500, function() onRuneOfBlood(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_RUNE_OF_BLOOD)
     schedule(guid, "rune", {20000, 25000}, function() onRuneOfBlood(creature, guid) end)
 end

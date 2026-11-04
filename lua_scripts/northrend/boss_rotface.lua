@@ -197,6 +197,13 @@ local infection = {}
 -- if). Pool via GetAITargets with the victim excluded by GUID,
 -- Player + alive filter; summonType 2 = TIMED_DESPAWN, 8000ms.
 local function onSlimeSpray(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :193 (+ in-loop :228, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "slime_spray", 500, function() onSlimeSpray(creature, guid) end)
+        return
+    end
     local pool = {}
     local victim = creature:GetVictim()
     local victimGuid = nil
@@ -233,6 +240,13 @@ end
 -- convention); 14s init, re-arm on the infectionCooldown machine
 -- (:115-116/:216-218).
 local function onMutatedInfection(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :193 (+ in-loop :228, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "mutated_infection", 500, function() onMutatedInfection(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MUTATED_INFECTION)
     local st = infection[guid]
     schedule(guid, "mutated_infection", st.cooldown, function() onMutatedInfection(creature, guid) end)
@@ -242,6 +256,13 @@ end
 -- -> infectionCooldown -= 2s (14s -> 12s -> 10s -> 8s -> 6s), re-arm 90s;
 -- 5th tick is a no-op — lua-local state (vexallus local-machine precedent).
 local function onHastenInfections(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :193 (+ in-loop :228, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "hasten", 500, function() onHastenInfections(creature, guid) end)
+        return
+    end
     local st = infection[guid]
     if st.stage < 4 then
         st.stage = st.stage + 1
@@ -257,6 +278,13 @@ end
 -- (engine/world/lua_creature_events.go:260 — the 2026-10-14 "no
 -- IsHeroic bridge" claim was stale); 22s..27s init, 30s..35s re-arm.
 local function onVileGas(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :193 (+ in-loop :228, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "vile_gas", 500, function() onVileGas(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_VILE_GAS_TRIGGER)
     schedule(guid, "vile_gas", {30000, 35000}, function() onVileGas(creature, guid) end)
 end

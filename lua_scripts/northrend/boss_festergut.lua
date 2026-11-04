@@ -213,6 +213,13 @@ end
 -- (boss_festergut.cpp:94/:243-244); maiden CreateLuaEvent timer
 -- convention; victim-cast via CastSpell(nil, ...).
 local function onGastricBloat(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :177 (+ in-loop :254, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "gastric_bloat", 500, function() onGastricBloat(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_GASTRIC_BLOAT)
     schedule(guid, "gastric_bloat", {15000, 17500}, function() onGastricBloat(creature, guid) end)
 end
@@ -221,6 +228,13 @@ end
 -- (SPELL_BERSERK2) non-triggered then Talk(SAY_BERSERK)
 -- (:93/:246-248); cast-before-talk order kept.
 local function onBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :177 (+ in-loop :254, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK2)
     creature:Talk(SAY_BERSERK)
 end
@@ -255,6 +269,13 @@ local function relayProfessor(creature, fn)
 end
 
 local function onInhaleBlight(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :177 (+ in-loop :254, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "inhale_blight", 500, function() onInhaleBlight(creature, guid) end)
+        return
+    end
     -- C++ :185-186: RemoveBlight() fires at the top of EVERY inhale
     -- tick, before the counter check.
     removeBlight(creature)
@@ -310,6 +331,13 @@ end
 -- the first gas spore. Threat-list pool via creature:GetAITargets()
 -- (the putricide slime-puddle precedent).
 local function vileGasTick(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :177 (+ in-loop :254, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "vile_gas", 500, function() vileGasTick(creature, guid) end)
+        return
+    end
     local ranged, melee = {}, {}
     -- C++ pool split is on IsWithinCombatRange(target, 5.0f) (Unit.cpp:583-595):
     -- raw 3D distance < 5.0 + bossReach + playerReach. Lua GetDistance is raw
@@ -338,6 +366,12 @@ end
 -- C++ EVENT_GAS_SPORE (:235-240): Talk(EMOTE_WARN_GAS_SPORE) +
 -- Talk(EMOTE_GAS_SPORE) + self-cast SPELL_GAS_SPORE non-triggered.
 onGasSpore = function(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :177: 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "gas_spore", 500, function() onGasSpore(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_WARN_GAS_SPORE)
     creature:Talk(EMOTE_GAS_SPORE)
     creature:CastSpell(creature, SPELL_GAS_SPORE)
