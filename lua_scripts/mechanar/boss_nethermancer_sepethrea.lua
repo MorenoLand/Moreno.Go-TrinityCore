@@ -191,6 +191,8 @@ RegisterCreatureEvent(ENTRY_SEPRETHREA, 1, function(_, creature)
     local guid = creature:GetGUID()
     resetBoss(guid)
     bossStates[guid] = freshBossState()
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     -- C++ JustEngagedWith: Talk(SAY_AGGRO), DoCast(who,
     -- SPELL_SUMMON_RAGIN_FLAMES), Talk(SAY_SUMMON) — the
     -- summon cast is non-triggered DoCastVictim (C++-exact).
