@@ -20162,7 +20162,12 @@ func init() {
 	// have zero Talk lines (NOT registered); the 9 spell scripts join
 	// the no-SpellScript-bridge queue and achievement_portal_jockey the
 	// no-achievement-criteria queue — documented in the lua header.
-	// Eleventh group of the "// Icecrown Citadel" block.
+	// UpdateAI CASTING gates PORTED (500ms IsCasting defer, see lua
+	// header): boss :420/:447 gate the ported EVENT_DREAM_SLIP one-shot;
+	// archmage :703/:728, skeleton :759/:779, abomination :890 (pre-loop
+	// only) gate all 6 ported timer ticks; controller :590/:616 gates
+	// cover unported summoner casts only. Eleventh group of the
+	// "// Icecrown Citadel" block.
 	RegisterLuaBoss("npc_the_lich_king_controller", 16980)
 
 	// boss_sindragosa: Icecrown Citadel script, entry 36853
@@ -20196,8 +20201,11 @@ func init() {
 	// the no-AreaTrigger bridge queue, achievement_all_you_can_eat the
 	// no-achievement-criteria queue, and the spell/aura scripts the
 	// no-SpellScript-bridge / no-AuraScript-bridge queues — documented
-	// in the lua header. Twelfth group of the "// Icecrown Citadel"
-	// block.
+	// in the lua header. UpdateAI CASTING gates PORTED (500ms IsCasting
+	// defer, see lua header): boss :450/:563 gate berserk / ice-tomb /
+	// third-phase-check; spinestalker :730, rimefang :862, trash :986
+	// (all pre-loop only) gate all 6 add ticks. Twelfth group of the
+	// "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_sindragosa", 36853)
 }
 
@@ -20243,7 +20251,12 @@ func init() {
 	// the with-args trigger leg join the no-SpellScript-bridge /
 	// no-AuraScript-bridge queues and the 2 achievements the
 	// no-achievement-criteria-bridge queue — documented in the lua
-	// header. Thirteenth group of the "// Icecrown Citadel" block.
+	// header. UpdateAI CASTING gates PORTED (500ms IsCasting defer, see
+	// lua header): boss :900/:1149 (phase-exempt in C++, unconditional
+	// in Lua) gate the berserk one-shot; horror :1323, raging :1412
+	// (both pre-loop only) gate shockwave / enrage / soul-shriek /
+	// set-aggressive; warden :1843 is a plain loop, soul-rip ungated.
+	// Thirteenth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_the_lich_king", 36597)
 
 	// npc_rotting_frost_giant (Icecrown Citadel instance script):

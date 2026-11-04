@@ -113,6 +113,15 @@
 -- unless killed by Valithria (event 4; the_black_morass killer-gate precedent).
 -- PORTED (2026-10-13 retraction re-audit): npc_gluttonous_abomination —
 -- GUT_SPRAY 70633 self-cast {10s,13s} init/re-arm (:871-872/:899).
+-- CAST-STATE GATES PORTED (2026-11-04): boss UpdateAI :420/:447 gates
+-- the ported EVENT_DREAM_SLIP one-shot; archmage :703/:728 gates all 3
+-- ticks, skeleton :759/:779 gates both ticks, abomination :890
+-- (pre-loop only) gates gut-spray; controller :590/:616 gates cover
+-- unported summoner casts only (ported engage Talk ungated, separate
+-- hook); suppresser :823 pre-loop gate covers the unported SUPPRESSION
+-- arm only (NOT registered); blistering/dream_portal/dream_cloud
+-- UpdateAIs have zero CASTING hits; JustDied/JustSummoned/SpellHit legs
+-- ungated per C++ (separate hooks / BasicEvents, not the scheduler).
 -- npc_dream_portal (37945) / npc_dream_cloud (entry DB-side, no header
 -- constant) — zero Talk lines; portal JustSummoned delayed-cast event
 -- legs (ValithriaDelayedCastEvent / ValithriaAuraRemoveEvent — no
@@ -244,6 +253,11 @@ end
 -- DoCastSelf(SPELL_GUT_SPRAY) non-triggered, {10s,13s}/{10s,13s}
 -- (:871-872/:899).
 local function onGutSpray(creature, guid)
+    -- C++ gluttonous UpdateAI pre-loop gate :890 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "gut_spray", 500, function() onGutSpray(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_GUT_SPRAY)
     schedule(guid, "gut_spray", {10000, 13000}, function() onGutSpray(creature, guid) end)
 end
@@ -262,6 +276,11 @@ end
 -- EVENT_MANA_VOID {20s,25s}, EVENT_COLUMN_OF_FROST {10s,20s}
 -- (:646-648).
 local function onFrostboltVolley(creature, guid)
+    -- C++ archmage UpdateAI pre-loop gate :703 (+ in-loop :728): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt_volley", 500, function() onFrostboltVolley(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROSTBOLT_VOLLEY)
     schedule(guid, "frostbolt_volley", {8000, 15000}, function() onFrostboltVolley(creature, guid) end)
 end
@@ -269,6 +288,11 @@ end
 -- C++ :715 EVENT_MANA_VOID — ValithriaManaVoidSelector: POWER_MANA
 -- threat unit, dist>15.0f (:161-170), position=1 threat-head exclusion.
 local function onManaVoid(creature, guid)
+    -- C++ archmage UpdateAI pre-loop gate :703 (+ in-loop :728); defer precedes the target pick: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "mana_void", 500, function() onManaVoid(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 15.0, true)
     if target then
         creature:CastSpell(target, SPELL_MANA_VOID)
@@ -281,6 +305,11 @@ end
 -- the pool is raw >= 10 + reaches; twinned d - ownReach >= 10 (the mana
 -- arm is the reach-subtracted GetDistance > 15 twin, :169).
 local function onColumnOfFrost(creature, guid)
+    -- C++ archmage UpdateAI pre-loop gate :703 (+ in-loop :728); defer precedes the target pick: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "column_of_frost", 500, function() onColumnOfFrost(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 10.0)
     if target then
         creature:CastSpell(target, SPELL_COLUMN_OF_FROST)
@@ -307,6 +336,11 @@ end
 -- EVENT_LEY_WASTE {15s,20s} (:745-749); fireball gated on
 -- !IsWithinMeleeRange (C++ :767), bridged (lua_creature_events.go:3144).
 local function onFireball(creature, guid)
+    -- C++ skeleton UpdateAI pre-loop gate :759 (+ in-loop :779); defer precedes the melee-range check: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function() onFireball(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(nil, SPELL_FIREBALL)
@@ -315,6 +349,11 @@ local function onFireball(creature, guid)
 end
 
 local function onLeyWaste(creature, guid)
+    -- C++ skeleton UpdateAI pre-loop gate :759 (+ in-loop :779): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "ley_waste", 500, function() onLeyWaste(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_LEY_WASTE)
     schedule(guid, "ley_waste", {15000, 20000}, function() onLeyWaste(creature, guid) end)
 end
@@ -371,6 +410,16 @@ local function valithriaDamageTaken(_, creature, _, damage)
     return false, damage
 end
 
+-- C++ boss_valithria_dreamwalker UpdateAI pre-loop gate :420 (+ in-loop
+-- :447): 500ms IsCasting defer, cast not consumed (mal_ganis idiom).
+local function onDreamSlip(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "dream_slip", 500, function() onDreamSlip(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_DREAM_SLIP)
+end
+
 -- C++ boss_valithria_dreamwalker::HealReceived (:316-341) — strict
 -- HealthAbovePctHealed (Unit.h:875: health + heal > floor(max*pct/100),
 -- pre-clamp addhealth, ahead of the health gain) chained exactly as C++:
@@ -405,9 +454,7 @@ local function valithriaHealReceived(_, creature, healer, heal)
         creature:RemoveAura(SPELL_CORRUPTION_VALITHRIA)
         creature:CastSpell(creature, SPELL_ACHIEVEMENT_CHECK)
         creature:CastSpell(creature, SPELL_DREAMWALKERS_RAGE)
-        schedule(guid, "dream_slip", 3500, function()
-            creature:CastSpell(creature, SPELL_DREAM_SLIP)
-        end)
+        schedule(guid, "dream_slip", 3500, function() onDreamSlip(creature, guid) end)
     elseif healed > math.floor(maxHealth * 75 / 100) and not st.over75Done then
         st.over75Done = true
         creature:Talk(SAY_VALITHRIA_75_PERCENT)

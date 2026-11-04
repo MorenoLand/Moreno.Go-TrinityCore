@@ -117,6 +117,13 @@
 -- timers would fabricate air-phase casts (phase-machine rule
 -- above).
 
+-- CAST-STATE GATES PORTED (2026-11-04): boss :450/:563 gates berserk /
+-- ice-tomb / third-phase-check; spinestalker :730 (pre-loop only) gates
+-- all 3 ticks; rimefang :862 (pre-loop only) gates frost-breath;
+-- trash :986 (pre-loop only) gates both handler ticks; ice-tomb :618
+-- UpdateAI has no gate (existence check only, NOT registered); engage /
+-- DamageTaken / JustDied / JustSummoned legs ungated per C++ (separate
+-- hooks / BasicEvent, not the scheduler).
 local ENTRY_SINDRAGOSA = 36853
 local ENTRY_SPINESTALKER = 37534 -- icecrown_citadel.h:305
 local ENTRY_RIMEFANG = 37533 -- icecrown_citadel.h:306
@@ -181,6 +188,11 @@ end
 -- Talk(SAY_BERSERK) + DoCastSelf(SPELL_BERSERK) non-triggered
 -- (:242/:458-460), bare timer across all phases.
 local function onBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :450 (+ in-loop :563): 500ms IsCasting defer, cast not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_BERSERK_RAID)
     creature:Talk(SAY_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK)
@@ -209,6 +221,11 @@ local function randomPlayerTarget(creature)
 end
 
 local function onIceTomb(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :450 (+ in-loop :563); defer precedes the target pick: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "ice_tomb", 500, function() onIceTomb(creature, guid) end)
+        return
+    end
     local target = randomPlayerTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_ICE_TOMB_TARGET, true)
@@ -225,6 +242,11 @@ end
 -- {7s,10s} — the _isInAirPhase leg is vacuously true (no air-phase
 -- machine in this port).
 local function onThirdPhaseCheck(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :450 (+ in-loop :563): 500ms IsCasting defer, Talk/cast/seed not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "third_phase_check", 500, function() onThirdPhaseCheck(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_PHASE_2)
     creature:CastSpell(creature, SPELL_MYSTIC_BUFFET, true)
     schedule(guid, "ice_tomb", {7000, 10000}, function() onIceTomb(creature, guid) end)
@@ -337,23 +359,39 @@ end
 -- {10s,15s} (:662/:741-743); EVENT_TAIL_SWEEP
 -- DoCastSelf(SPELL_TAIL_SWEEP) non-triggered {8s,12s} -> {22s,25s}
 -- (:663/:745-747). Pure timer arms — no phase, random-target, or
--- summon gating (the maiden CreateLuaEvent precedent); the
--- UpdateVictim/UNIT_STATE_CASTING gates have no bridge (timers fire
--- unconditionally, the maiden precedent). The intro
+-- summon gating (the maiden CreateLuaEvent precedent); the UpdateAI
+-- CASTING gates are PORTED (500ms IsCasting defer, mal_ganis idiom
+-- — IsCasting live, lua_creature_events.go:1950; the old "no bridge /
+-- timers fire unconditionally" claim is retracted). The intro
 -- ACTION_START_FROSTWYRM flight machine stays out (no-DoAction bridge;
 -- MovePoint/MovementInform unbridged — SetDefaultMovementType IS
 -- bridged (lua_objects.go:633, pure field write) but carries no motion).
 local function onSpinestalkerRoar(creature, guid)
+    -- C++ spinestalker UpdateAI pre-loop gate :730 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "roar", 500, function() onSpinestalkerRoar(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
     schedule(guid, "roar", {25000, 30000}, function() onSpinestalkerRoar(creature, guid) end)
 end
 
 local function onSpinestalkerCleave(creature, guid)
+    -- C++ spinestalker UpdateAI pre-loop gate :730 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onSpinestalkerCleave(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CLEAVE_SPINESTALKER)
     schedule(guid, "cleave", {10000, 15000}, function() onSpinestalkerCleave(creature, guid) end)
 end
 
 local function onSpinestalkerTailSweep(creature, guid)
+    -- C++ spinestalker UpdateAI pre-loop gate :730 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "tailsweep", 500, function() onSpinestalkerTailSweep(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TAIL_SWEEP)
     schedule(guid, "tailsweep", {22000, 25000}, function() onSpinestalkerTailSweep(creature, guid) end)
 end
@@ -373,6 +411,11 @@ end
 -- EVENT_ICY_BLAST flight machine stays out (no-motion bridge); the
 -- intro flight machine stays out (no-DoAction bridge).
 local function onRimefangFrostBreath(creature, guid)
+    -- C++ rimefang UpdateAI pre-loop gate :862 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "frostbreath", 500, function() onRimefangFrostBreath(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROST_BREATH_RIMEFANG)
     schedule(guid, "frostbreath", {35000, 40000}, function() onRimefangFrostBreath(creature, guid) end)
 end
@@ -394,11 +437,21 @@ end
 -- JustAppeared / SetData instance legs stay out (no instance
 -- bridge).
 local function onHandlerOrderWhelp(creature, guid)
+    -- C++ trash UpdateAI pre-loop gate :986 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "orderwhelp", 500, function() onHandlerOrderWhelp(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ORDER_WHELP)
     schedule(guid, "orderwhelp", 3000, function() onHandlerOrderWhelp(creature, guid) end)
 end
 
 local function onHandlerConcussiveShock(creature, guid)
+    -- C++ trash UpdateAI pre-loop gate :986 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "concussive", 500, function() onHandlerConcussiveShock(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CONCUSSIVE_SHOCK)
     schedule(guid, "concussive", {10000, 13000}, function() onHandlerConcussiveShock(creature, guid) end)
 end

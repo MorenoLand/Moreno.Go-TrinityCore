@@ -256,6 +256,16 @@
 -- SpellScript bridge; both add AIs unregistered (restore_soul also
 -- rides the no-DoAction-bridge ACTION_TELEPORT_BACK).
 
+-- CAST-STATE GATES PORTED (2026-11-04): boss :900/:1149
+-- (TRANSITION/OUTRO/FROSTMOURNE-exempt in C++, unconditional in Lua —
+-- no phase model) gates the berserk one-shot; horror :1323 (pre-loop
+-- only) gates shockwave/enrage; raging :1412 (pre-loop only) gates
+-- soul-shriek + the set-aggressive flip; warden :1843 UpdateAI is a
+-- plain loop (zero CASTING hits) so soul-rip stays ungated;
+-- valkyr :1544/:1576 gates cover the unported grab machine only;
+-- tirion :1240 gate covers unported intro/outro talks only;
+-- strangulate/terenas/bomb/frostmourne UpdateAIs ungated (zero hits);
+-- terenas 2s despawns are DespawnOrUnsummon, not scheduler events.
 local ENTRY_THE_LICH_KING = 36597
 local NPC_FROSTMOURNE_TRIGGER = 38584 -- boss_the_lich_king.h:331
 local ENTRY_SHAMBLING_HORROR = 37698
@@ -334,6 +344,11 @@ end
 -- DoCastSelf(SPELL_BERSERK2) non-triggered (:583/:1141-1143), bare
 -- timer across all phases (EVENT_GROUP_BERSERK carries no phase).
 local function onBerserk(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :900 (+ in-loop :1149, TRANSITION/OUTRO/FROSTMOURNE-exempt — no phase model in Lua, gate applies unconditionally): 500ms IsCasting defer, cast not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_LK_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK2)
 end
@@ -472,11 +487,21 @@ RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)
 -- C++ npc_shambling_horror_icc: Reset seeds EVENT_SHOCKWAVE {20s,25s}
 -- and EVENT_ENRAGE {11s,14s} (:1303-1304).
 local function onHorrorShockwave(creature, guid)
+    -- C++ horror UpdateAI pre-loop gate :1323 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "horror_shockwave", 500, function() onHorrorShockwave(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_HORROR_SHOCKWAVE)
     schedule(guid, "horror_shockwave", {20000, 25000}, function() onHorrorShockwave(creature, guid) end)
 end
 
 local function onHorrorEnrage(creature, guid)
+    -- C++ horror UpdateAI pre-loop gate :1323 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom; distinct from the 1s cast-fail recheck, still unmodelable).
+    if creature:IsCasting() then
+        schedule(guid, "horror_enrage", 500, function() onHorrorEnrage(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_HORROR_ENRAGE)
     schedule(guid, "horror_enrage", {20000, 25000}, function() onHorrorEnrage(creature, guid) end)
 end
@@ -528,15 +553,30 @@ end
 -- the cross-AI DoAction rides the unbridged phase machine, so the Soul
 -- Shriek timer keeps firing where C++ goes silent (gothik counterpoint).
 local function onSoulShriek(creature, guid)
+    -- C++ raging UpdateAI pre-loop gate :1412 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "soul_shriek", 500, function() onSoulShriek(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SOUL_SHRIEK)
     schedule(guid, "soul_shriek", {12000, 15000}, function() onSoulShriek(creature, guid) end)
+end
+
+-- C++ raging UpdateAI pre-loop gate :1412 (no in-loop return):
+-- 500ms IsCasting defer, flip not consumed (mal_ganis idiom).
+local function onRagingAggressive(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "raging_aggressive", 500, function() onRagingAggressive(creature, guid) end)
+        return
+    end
+    creature:SetReactState(REACT_AGGRESSIVE)
 end
 
 local function ragingSpiritJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetReactState(REACT_PASSIVE)
-    schedule(guid, "raging_aggressive", 2000, function() creature:SetReactState(REACT_AGGRESSIVE) end)
+    schedule(guid, "raging_aggressive", 2000, function() onRagingAggressive(creature, guid) end)
     creature:CastSpell(creature, SPELL_PLAGUE_AVOIDANCE, true)
     creature:CastSpell(creature, SPELL_RAGING_SPIRIT_VISUAL, true)
     creature:CastSpell(creature, SPELL_BOSS_HITTIN_YA, true)
