@@ -368,6 +368,18 @@ RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 4, baltharusDied)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 9, baltharusDamageTaken)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 23, baltharusReset)
 
+-- C++ npc_xerestrasza::Reset (ruby_sanctum.cpp:70-74): _events.Reset() +
+-- RemoveFlag(UNIT_NPC_FLAGS, GOSSIP_OPTION_QUESTGIVER). The talk-chain
+-- timers above are keyed by xerestrasza's GUID in this file's table, so
+-- Reset cancels any pending chain event and clears the questgiver flag
+-- the 69s event set (the setActive legs stay out, as in baltharusDied).
+local function xerestraszaReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_QUESTGIVER)
+end
+
+RegisterCreatureEvent(ENTRY_XERESTRASZA, 23, xerestraszaReset)
+
 -- C++ npc_baltharus_the_warborn_clone::JustEngagedWith (:255-264):
 -- DoZoneInCombat(); events.Reset();
 -- events.ScheduleEvent(EVENT_CLEAVE, 11s);
