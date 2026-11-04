@@ -21,9 +21,10 @@
 -- bug class semantics) -> non-triggered DoCastSelf(bloodlust 6742)
 -- and re-arm at 60s; otherwise re-arm at 1s (the C++
 -- events.Repeat(1s) retry leg). The UNIT_STATE_CASTING queue gate
--- in UpdateAI and BossAI::JustEngagedWith + DATA_HOUNDMASTER_
--- LOKSEY encounter bookkeeping have no UNIT_STATE/instance-script
--- bridges (luaBossAI shim).
+-- in UpdateAI has no UNIT_STATE bridge; BossAI::JustEngagedWith
+-- pulse/zone arms are PORTED in lokseyEnterCombat; DATA_HOUNDMASTER_
+-- LOKSEY encounter bookkeeping still has no instance-script bridge
+-- (luaBossAI shim).
 
 local ENTRY_HOUNDMASTER_LOKSEY = 3974
 
@@ -75,6 +76,8 @@ end
 local function lokseyEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_houndmaster_loksey.cpp:44 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_houndmaster_loksey.cpp:44 base call first)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_SUMMON_SCARLET_HOUND)
     schedule(guid, "bloodlust", 20000, function()

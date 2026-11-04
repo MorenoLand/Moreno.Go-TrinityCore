@@ -42,9 +42,9 @@
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
 -- unconditionally (jeklik convention); the below-50% latch fires on
 -- the damage hook rather than the next UpdateAI tick (tick timing
--- deviation, documented); BossAI::JustEngagedWith and the
--- DATA_ARCANIST_DOAN encounter bookkeeping have no instance-script
--- bridge — boss admission via the luaBossAI shim; C++ DoCastSelf(9438)
+-- deviation, documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- doanEnterCombat; the DATA_ARCANIST_DOAN encounter bookkeeping
+-- still has no instance-script bridge — boss admission via the luaBossAI shim; C++ DoCastSelf(9438)
 -- default is non-triggered,
 -- matching the ported cast.
 
@@ -164,6 +164,8 @@ end
 local function doanEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     doanResetState(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_arcanist_doan.cpp:60 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_arcanist_doan.cpp:60 base call first)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "silence", 15000, function()
         onSilence(creature, guid)

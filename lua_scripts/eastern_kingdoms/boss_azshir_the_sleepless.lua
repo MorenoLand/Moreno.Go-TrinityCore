@@ -27,8 +27,9 @@
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention); the DamageTaken latch
 -- fires on the damage hook rather than the script's UpdateAI tick
--- (timing documented); BossAI::JustEngagedWith and the DATA_AZSHIR
--- encounter bookkeeping have no instance-script bridge — boss
+-- (timing documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- azshirEnterCombat; the DATA_AZSHIR encounter bookkeeping still
+-- has no instance-script bridge — boss
 -- admission via the luaBossAI shim.
 
 local ENTRY_AZSHIR_THE_SLEEPLESS = 6490
@@ -105,6 +106,8 @@ end
 local function azshirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     azshirResetState(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_azshir_the_sleepless.cpp:51 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_azshir_the_sleepless.cpp:51 base call first)
     schedule(guid, "call_of_grave", 30000, function()
         onCallOfGrave(creature, guid)
     end)

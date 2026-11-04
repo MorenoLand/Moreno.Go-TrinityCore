@@ -36,9 +36,9 @@
 -- The UpdateAI UNIT_STATE_CASTING queue gate has no UNIT_STATE
 -- bridge — timers fire unconditionally (jeklik convention); the
 -- DamageTaken latch fires on the damage hook rather than the
--- script's UpdateAI tick (timing documented); BossAI::JustEngagedWith
--- and the DATA_HEROD encounter bookkeeping have no instance-script
--- bridge — boss admission via the luaBossAI shim.
+-- script's UpdateAI tick (timing documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- herodEnterCombat; the DATA_HEROD encounter bookkeeping still
+-- has no instance-script bridge — boss admission via the luaBossAI shim.
 
 local ENTRY_HEROD = 3975
 local ENTRY_SCARLET_TRAINEE = 6575 -- boss_herod.cpp:42
@@ -118,6 +118,8 @@ local function herodEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     -- C++ DoCast(me, SPELL_RUSHINGCHARGE) — non-triggered self cast.
     creature:CastSpell(creature, SPELL_RUSHINGCHARGE)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_herod.cpp:71 base call after Talk + rushing-charge cast)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_herod.cpp:71 base call after Talk + rushing-charge cast)
     schedule(guid, "cleave", 12000, function()
         onCleave(creature, guid)
     end)

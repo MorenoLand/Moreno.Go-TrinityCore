@@ -56,9 +56,9 @@
 -- and SetStandState(UNIT_STAND_STATE_STAND) in JustEngagedWith
 -- (the secret-chamber corpse visual) are PORTED via
 -- creature:SetStandState (bridge landed 2026-10-21,
--- lua_creature_events.go:568); BossAI::JustEngagedWith
--- and the DATA_HIGH_INQUISITOR_FAIRBANKS encounter bookkeeping have
--- no instance-script bridge — boss admission via the luaBossAI shim.
+-- lua_creature_events.go:568); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- fairbanksEnterCombat; the DATA_HIGH_INQUISITOR_FAIRBANKS
+-- encounter bookkeeping still has no instance-script bridge — boss admission via the luaBossAI shim.
 
 local ENTRY_HIGH_INQUISITOR_FAIRBANKS = 4542
 
@@ -206,6 +206,8 @@ end
 local function fairbanksEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     fairbanksResetState(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_high_inquisitor_fairbanks.cpp:78 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_high_inquisitor_fairbanks.cpp:78 base call first)
     schedule(guid, "curse", 10000, function()
         onCurseBlood(creature, guid)
     end)

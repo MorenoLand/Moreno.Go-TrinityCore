@@ -13,8 +13,9 @@
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat arms
 -- EVENT_LICH_SLAP at 45s, EVENT_FROSTBOLT_VOLLEY at 30s,
 -- EVENT_MIND_FLAY at 30s, EVENT_FROST_NOVA at 30s (JustEngagedWith
--- legs only — the BossAI::JustEngagedWith + DATA_SCORN encounter
--- bookkeeping has no instance-script bridge, luaBossAI shim).
+-- legs only — the BossAI::JustEngagedWith pulse/zone arms are
+-- PORTED in scornEnterCombat; DATA_SCORN encounter bookkeeping
+-- still has no instance-script bridge, luaBossAI shim).
 -- All four arms are non-triggered DoCastVictim -> creature:GetVictim()
 -- + creature:CastSpell(victim, ...) (jeklik convention); a nil victim
 -- tick keeps the schedule and re-arms. Lich Slap re-arms at 45s,
@@ -92,6 +93,8 @@ end
 local function scornEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_scorn.cpp:44 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_scorn.cpp:44 base call first)
     schedule(guid, "lichSlap", 45000, function()
         onLichSlap(creature, guid)
     end)

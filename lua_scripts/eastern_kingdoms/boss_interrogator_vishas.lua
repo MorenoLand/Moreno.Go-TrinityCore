@@ -35,9 +35,9 @@
 -- cpp:83-96), not the UpdateAI tick; JustDied's
 -- Vorrel Sengutz Talk(SAY_TRIGGER_VORREL 0) via
 -- instance->GetCreature(DATA_VORREL) has no instance-creature
--- bridge (documented-only); BossAI::JustEngagedWith/_Reset/_JustDied
--- and the DATA_INTERROGATOR_VISHAS encounter bookkeeping have no
--- instance-script bridge — boss admission via the luaBossAI shim.
+-- bridge (documented-only); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- vishasEnterCombat; _Reset/_JustDied + DATA_INTERROGATOR_VISHAS
+-- encounter bookkeeping still have no instance-script bridge — boss admission via the luaBossAI shim.
 
 local ENTRY_INTERROGATOR_VISHAS = 3983
 
@@ -87,6 +87,8 @@ local function vishasEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_interrogator_vishas.cpp:63 base call after Talk)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_interrogator_vishas.cpp:63 base call after Talk)
     schedule(guid, "pain", 5000, function()
         onShadowWordPain(creature, guid)
     end)

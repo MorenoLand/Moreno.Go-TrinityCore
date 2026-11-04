@@ -54,8 +54,10 @@
 -- unreachable trigger (whitemane's resurrection cast is unported, so
 -- ev14 never fires with 9232; ev14 itself is bridged). JustEngagedWith's
 -- CallForHelp(VISIBLE_RANGE) +
--- MoveIdle and BossAI::JustEngagedWith + DATA_MOGRAINE_AND_WHITE_EVENT
--- bookkeeping have no bridges (luaBossAI shim).
+-- MoveIdle have no bridges; Mograine's BossAI::JustEngagedWith
+-- pulse/zone arms are PORTED in mograineEnterCombat (Whitemane's
+-- override never calls the base); DATA_MOGRAINE_AND_WHITE_EVENT
+-- bookkeeping still has no bridge (luaBossAI shim).
 -- Whitemane's sub-50% DamageTaken latch (HealthBelowPctDamaged(50,
 -- damage) — damaged class): cancel combat events, InterruptNonMeleeSpells,
 -- DoCastAOE(deep sleep 9256) (the self-cast lowering exists per the
@@ -185,6 +187,8 @@ end
 local function mograineEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_mograine_and_whitemane.cpp:108 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_mograine_and_whitemane.cpp:108 base call first)
     creature:Talk(SAY_MO_AGGRO)
     schedule(guid, "crusaderStrike", math.random(10000, 15000), function()
         onCrusaderStrike(creature, guid)

@@ -27,9 +27,9 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate has no
 -- UNIT_STATE bridge — timers fire unconditionally (jeklik convention);
 -- the DamageTaken latch fires on the damage hook rather than the
--- script's UpdateAI tick (timing documented); BossAI::JustEngagedWith
--- and the DATA_BLOODMAGE_THALNOS encounter bookkeeping have no
--- instance-script bridge — boss admission via the luaBossAI shim.
+-- script's UpdateAI tick (timing documented); BossAI::JustEngagedWith pulse/zone arms are PORTED in
+-- thalnosEnterCombat; the DATA_BLOODMAGE_THALNOS encounter
+-- bookkeeping still has no instance-script bridge — boss admission via the luaBossAI shim.
 -- (Wowpedia lists the health yell at 50% and the Sunwell bug tracker
 -- reports extra spell arms, but the C++ source — authoritative here —
 -- is a 35% latch and the four timers above.)
@@ -124,6 +124,8 @@ local function thalnosEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     thalnosResetState(guid)
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_bloodmage_thalnos.cpp:61 base call after Talk)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_bloodmage_thalnos.cpp:61 base call after Talk)
     schedule(guid, "flame_shock", 10000, function()
         onFlameShock(creature, guid)
     end)
