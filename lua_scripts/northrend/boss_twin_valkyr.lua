@@ -109,19 +109,12 @@
 -- EnterEvadeMode events (no evade/home event — the door bridge itself,
 -- FindNearestGameObject + SetGoState, exists) — fjola's EnterEvadeMode
 -- adds another DoUseDoorOrButton leg.
--- EVENT_SPECIAL_ABILITY (fjola only, 45s) — the shuffled stage
--- machine: cross-AI sister->AI()->DoAction(ACTION_VORTEX /
--- ACTION_PACT) or own DoAction for light stages (no cross-AI DoAction
--- bridge); DoAction ACTION_VORTEX: Talk(EMOTE_VORTEX 3) + DoCastAOE(
--- Light Vortex 66046 / Dark Vortex 66058) (stays out: fires only via
--- the unbridged cross-AI DoAction through fjola's 45s stage
--- machine); DoAction ACTION_PACT: Talk(
--- EMOTE_TWIN_PACT 4) + Talk(SAY_TWIN_PACT 5) + cross-AI sister cast
--- Power of the Twins 65879 + DoCastSelf(Light Shield 65858 / Dark
--- Shield 65874) + DoCastSelf(Light Twin Pact 65876 / Dark Twin Pact
--- 65875) — the self-cast legs are port-pattern-ready in isolation
--- (phase_hunter precedent) but fire only via cross-AI DoAction —
--- documented-only.
+-- EVENT_SPECIAL_ABILITY (fjola only, 45s) — PORTED (specialTick
+-- below): the shuffled stage machine with cross-AI sister DoAction
+-- arms inlined (no DoAction bridge exists; the relay is inlined into
+-- the sender's timer, the cross-AI relay precedent). Dark stages run
+-- the sister's VORTEX/PACT arms via the GetCreaturesInGrid sister
+-- idiom; light stages run fjola's own.
 -- EVENT_TOUCH (heroic only) — PORTED (touchTick, below):
 -- SelectTarget(Random,0,200.0f,true,true,OtherEssenceSpellId) ->
 -- CastSpell(target, Light Touch 67297 / Dark Touch 67282,
@@ -239,6 +232,16 @@ local LIGHT_ESSENCE_AURAS = { 65686, 67222, 67223, 67224 }
 -- variant can be present per instance, so the strip pool checks all
 -- four — same convention as DARK/LIGHT_ESSENCE_AURAS above.
 local POWERING_UP_HELPER_AURAS = { 67590, 67602, 67603, 67604 }
+local EMOTE_VORTEX = 3
+local EMOTE_TWIN_PACT = 4
+local SAY_TWIN_PACT = 5
+local SPELL_LIGHT_VORTEX = 66046
+local SPELL_DARK_VORTEX = 66058
+local SPELL_LIGHT_SHIELD = 65858
+local SPELL_DARK_SHIELD = 65874
+local SPELL_LIGHT_TWIN_PACT = 65876
+local SPELL_DARK_TWIN_PACT = 65875
+local SPELL_POWER_TWINS = 65879
 
 -- C++ boss_twin_baseAI::HandleRemoveAuras (boss_twin_valkyr.cpp:228-235):
 -- the four DoRemoveAurasDueToSpellOnPlayers helper-aura strips, in C++
@@ -348,6 +351,73 @@ local UNIT_DYNFLAG_LOOTABLE = 0x0001
 -- sister:IsDead() — no shared death counter (a counter is wrong across
 -- concurrent instances and on double event-4 fires).
 
+-- C++ boss_fjolaAI::GenerateStageSequence + ExecuteEvent
+-- EVENT_SPECIAL_ABILITY (boss_twin_valkyr.cpp:411-437, 462-476):
+-- fjola-only 45s timer; the stage order is shuffled once (constructor
+-- in C++, lazily at first tick here — unobservable difference, the
+-- sequence is never consumed before the first tick) and reshuffled
+-- when exhausted; dark stages relay to the sister's DoAction arms,
+-- light stages run fjola's own. C++ DELTA: the C++ shuffle's
+-- urand(0, MAX_STAGES - i) is inclusive, so it can pick index 4 —
+-- one past Stage[4], aliasing CurrentStage in memory; Lua clamps the
+-- draw to the valid range (i..3). Stage state is keyed by fjola GUID
+-- and NOT cleared on reset/leave, matching C++ (Reset never touches
+-- Stage/CurrentStage). DoCastAOE arms are self-casts (Oct-13
+-- convention); the sister is the GetCreaturesInGrid idiom.
+local specialState = {}
+
+local function generateStageSequence(guid)
+    local stages = { 0, 1, 2, 3 }
+    for i = 1, 3 do
+        local r = i + math.random(0, 4 - i)
+        stages[i], stages[r] = stages[r], stages[i]
+    end
+    specialState[guid] = { stages = stages, current = 0 }
+end
+
+local function specialTick(creature, guid)
+    local state = specialState[guid]
+    if not state or state.current >= 4 then
+        generateStageSequence(guid)
+        state = specialState[guid]
+    end
+    local stage = state.stages[state.current + 1]
+    state.current = state.current + 1
+    local sister = nil
+    for _, other in ipairs(creature:GetCreaturesInGrid(ENTRY_EYDIS, 150)) do
+        sister = other
+        break
+    end
+    if stage == 0 then -- STAGE_DARK_VORTEX: sister DoAction VORTEX
+        if sister then
+            sister:Talk(EMOTE_VORTEX)
+            sister:CastSpell(sister, SPELL_DARK_VORTEX)
+        end
+    elseif stage == 1 then -- STAGE_DARK_PACT: sister DoAction PACT
+        if sister then
+            sister:Talk(EMOTE_TWIN_PACT)
+            sister:Talk(SAY_TWIN_PACT)
+            creature:CastSpell(creature, SPELL_POWER_TWINS)
+            sister:CastSpell(sister, SPELL_DARK_SHIELD)
+            sister:CastSpell(sister, SPELL_DARK_TWIN_PACT)
+        end
+    elseif stage == 2 then -- STAGE_LIGHT_VORTEX: own DoAction VORTEX
+        creature:Talk(EMOTE_VORTEX)
+        creature:CastSpell(creature, SPELL_LIGHT_VORTEX)
+    else -- STAGE_LIGHT_PACT: own DoAction PACT
+        creature:Talk(EMOTE_TWIN_PACT)
+        creature:Talk(SAY_TWIN_PACT)
+        if sister then
+            sister:CastSpell(sister, SPELL_POWER_TWINS)
+        end
+        creature:CastSpell(creature, SPELL_LIGHT_SHIELD)
+        creature:CastSpell(creature, SPELL_LIGHT_TWIN_PACT)
+    end
+    schedule(guid, "special", 45000, function()
+        specialTick(creature, guid)
+    end)
+end
+
 local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras, empathySpell)
     return function(event, creature, target)
         -- C++ boss_fjolaAI::JustEngagedWith (boss_twin_valkyr.cpp:442-448):
@@ -379,6 +449,13 @@ local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras,
         creature:SetCombatPulseDelay(5) -- boss_twin_valkyr.cpp:278 (JustEngagedWith arm; the setActive leg has no bridge)
         local guid = creature:GetGUID()
         cancelTimers(guid)
+        -- C++ boss_fjolaAI::JustEngagedWith :444: EVENT_SPECIAL_ABILITY
+        -- 45s (fjola only; the timed-achievement leg has no bridge).
+        if creature:GetEntry() == ENTRY_FJOLA then
+            schedule(guid, "special", 45000, function()
+                specialTick(creature, guid)
+            end)
+        end
         schedule(guid, "twinspike", 20000, function()
             twinSpikeTick(creature, guid, spikeSpell)
         end)

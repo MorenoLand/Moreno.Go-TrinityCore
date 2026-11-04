@@ -542,9 +542,10 @@ local function sathrovarrCorruptionStrike(creature, guid)
 end
 
 -- C++ EVENT_CHECK_TIMER: the _isEnraged arm (the kalecgos
--- ACTION_ENRAGE relay has no cross-creature bridge — skipped), the
--- _isBanished arm (the kalecgos SPELL_BANISH check has no
--- cross-creature bridge — skipped); re-arm 1s.
+-- ACTION_ENRAGE relay is PORTED below via the 500yd dragon sweep,
+-- the sathrovarrDied precedent), the _isBanished arm (the kalecgos
+-- SPELL_BANISH check has no cross-creature bridge — skipped);
+-- re-arm 1s.
 local function sathrovarrCheckTimer(creature, guid)
     local state = sathrovarrState[guid]
     if state == nil then
@@ -552,6 +553,23 @@ local function sathrovarrCheckTimer(creature, guid)
     end
     if belowPct(creature, 10) and not state.enraged then
         state.enraged = true
+        -- C++ boss_sathrovarrAI::ExecuteEvent EVENT_CHECK_TIMER
+        -- :543-550: kalecgos->AI()->DoAction(ACTION_ENRAGE) — the
+        -- dragon's arm (Talk EMOTE_ENRAGE + triggered self-cast
+        -- 44807 + _isEnraged latch) inlined here; C++ reaches the
+        -- dragon via instance lookup, Lua via the 500yd grid sweep
+        -- (sathrovarrDied precedent). Unconditional Talk + cast, as
+        -- in C++ (the relay does not check the dragon's latch); the
+        -- dragon's own check timer then skips via the shared latch.
+        for _, dragon in ipairs(creature:GetCreaturesInGrid(ENTRY_KALECGOS, 500)) do
+            local dstate = kalecgosState[dragon:GetGUID()]
+            if dstate then
+                dstate.enraged = true
+            end
+            dragon:Talk(EMOTE_ENRAGE)
+            dragon:CastSpell(dragon, SPELL_ENRAGE, true)
+            break
+        end
     end
     if belowPct(creature, 1) and not state.banished then
         state.banished = true
