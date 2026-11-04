@@ -12041,8 +12041,11 @@ func init() {
 	// start is modeled as pull; the three essence boss AIs are not
 	// registered (no essence entry constants in the C++ tree —
 	// ScriptName bindings are DB-side); the enslaved-soul
-	// REACT/DoZoneInCombat arms and the 500ms KillSelf arm have no
-	// bridges (no react/zone-combat/despawn model); the combat
+	// REACT/DoZoneInCombat arms are PORTED (SetReactState +
+	// DoZoneInCombat) and the 500ms KillSelf arm is PORTED
+	// (creature:Kill); the reliquary submerge tick carries the
+	// UpdateAI pre-loop CASTING gate (500ms IsCasting defer) and
+	// the soul/trigger UpdateAI loops are verified gateless; the combat
 	// trigger's sight arm has no bridge and it is unkillable
 	// (damage rewritten to 0, C++-exact); the aura_of_desire,
 	// submerge and spite AuraScripts and the frenzy SpellScript
@@ -12065,20 +12068,22 @@ func init() {
 	// 40863/40865/40866/40862 beam-trigger arms and the 40867
 	// random-beam periodic arm have no AuraScript bridge; the
 	// saber lash aura script (40816) has no bridge; the EnterEvadeMode
-	// _DespawnAtEvade arm has no despawn bridge (evade-side cleanup
-	// is engine-side).
+	// _DespawnAtEvade arm is PORTED (creature:Despawn on leave
+	// combat); all six cycle ticks carry the BossAI base CASTING
+	// gate (500ms IsCasting defer, no UpdateAI override).
 	RegisterLuaBoss("boss_mother_shahraz", 22947)
 	// Illidari Council (Black Temple) — fight logic in
 	// lua_scripts/blacktemple/boss_illidari_council.lua.
 	// The controller (23426) arms the equivalency cycle and the
 	// 15min berserk one-shot; the member casts, the Talk arms on
-	// other members and the JustDied quiet-suicide relay have no
-	// cross-creature bridge; the SetBossState(DONE) and
+	// other members and the JustDied quiet-suicide relay are PORTED
+	// via GetCreaturesInGrid; the SetBossState(DONE) and
 	// SendEncounterUnit arms are blocked on the instance-script
 	// model. Gathios (22949) runs the bless/consecration/hammer/
-	// judgement/aura cycle — the bless friendly-target scan has
-	// no friendly enumeration bridge, so the cast is skipped and
-	// only the cycle kept; the hammer picks a random alive player
+	// judgement/aura cycle — the bless friendly-target scan is
+	// PORTED (GetCreaturesInGrid pool over the 4 council entries);
+	// every controller/member cycle tick carries the UpdateAI
+	// CASTING gate (500ms IsCasting defer); the hammer picks a random alive player
 	// 10-40 yd excluding the victim (C++-exact selector).
 	// Zerevor (22950) runs flamestrike/blizzard/arcane-explosion
 	// with the 5s gate and a one-time dampen magic cast — the

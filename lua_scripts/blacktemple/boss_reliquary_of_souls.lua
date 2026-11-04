@@ -55,8 +55,11 @@
 -- OnDied: cancel
 -- timers (the instance SetBossState(DONE) arm is blocked on the
 -- instance-script model). The UpdateAI !_inCombat early return is
--- implicit — timers only exist once pulled; the UNIT_STATE_
--- CASTING gate has no bridge (jeklik convention). The ACTION_
+-- implicit — timers only exist once pulled; the reliquary boss
+-- UpdateAI pre-loop CASTING gate (:266) is PORTED on the submerge
+-- tick (500ms IsCasting defer, no re-arm consumed); the enslaved-
+-- soul (:637) and combat-trigger (:704) UpdateAI loops have no
+-- casting gate — verified gateless. The ACTION_
 -- KILL_SELF arm (KillSelf + combat-trigger DoAction) and the
 -- EnterEvadeMode summons.DespawnAll/KillAssyncEvents/
 -- _DespawnAtEvade arms have no bridges (evade-side cleanup is
@@ -126,8 +129,9 @@
 -- on the target), spell_reliquary_of_souls_frenzy (41305 —
 -- after-cast Talk(SUFF_EMOTE_ENRAGE)).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
--- convention); no instance-script model — boss admission via the
+-- is PORTED for the reliquary submerge tick (500ms IsCasting defer
+-- via the live bridge, lua_creature_events.go:1950; soul/trigger
+-- verified gateless); no instance-script model — boss admission via the
 -- luaBossAI shim (BossAI::JustEngagedWith/JustDied and the
 -- DATA_RELIQUARY_OF_SOULS / DATA_ESSENCE_OF_*/DATA_RELIQUARY_
 -- COMBAT_TRIGGER bookkeeping arms skipped).
@@ -195,6 +199,12 @@ end
 -- (C++-exact). The enslaved-souls DoAction(ACTION_KILL_SELF) arm
 -- has no cross-creature DoAction bridge.
 local function onSubmerge(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "submerge", 500, function()
+            onSubmerge(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUBMERGE_VISUAL, true)
     local state = reliquaryState[guid]
     local phase = PHASE_SUFFERING

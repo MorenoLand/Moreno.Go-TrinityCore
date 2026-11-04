@@ -137,8 +137,12 @@
 -- seal (41469/41459 remove -> the other seal), dampen_magic
 -- (41478 remove-by-expire/enemy -> ACTION_REFRESH_DAMPEN DoAction).
 -- Deliberate deviations: the UpdateAI UNIT_STATE_CASTING queue
--- gate and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
--- — timers fire unconditionally (jeklik convention); no
+-- gate and the post-event casting check are PORTED on every cycle
+-- tick (500ms IsCasting defer via the live bridge,
+-- lua_creature_events.go:1950, no re-arm consumed — controller
+-- :207/:232, zerevor :434/:440, malande :497/:503, gathios +
+-- veras via the BossAI base gate, ScriptedCreature.cpp:578/:584);
+-- no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith/JustDied/Reset, the DATA_ILLIDARI_
 -- COUNCIL and DATA_GATHIOS/ZEREVOR/MALANDE/VERAS bookkeeping
@@ -345,6 +349,10 @@ local function councilEnterCombat(event, creature, target)
         members[math.random(#members)]:Talk(SAY_COUNCIL_AGRO)
     end
     local function onEquivalency()
+        if creature:IsCasting() then
+            schedule(guid, "council_equivalency", 500, onEquivalency)
+            return
+        end
         creature:CastSpell(creature, SPELL_EMPYREAL_EQUIVALENCY, true)
         -- C++ empyreal_equivalency HandleScript: the hit unit (= self
         -- here) takes 25% of the caster's current health as current.
@@ -358,14 +366,19 @@ local function councilEnterCombat(event, creature, target)
     -- is included, unlike the slay leg). The stale "no cross-creature
     -- bridge" claim is retracted (memberTargetDied precedent in this
     -- file); members gathered via GetCreaturesInGrid.
-    schedule(guid, "council_berserk", 900000, function()
+    local function onCouncilBerserk()
+        if creature:IsCasting() then
+            schedule(guid, "council_berserk", 500, onCouncilBerserk)
+            return
+        end
         for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
             for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
                 member:CastSpell(member, SPELL_BERSERK, true)
                 member:Talk(SAY_COUNCIL_ENRAGE)
             end
         end
-    end)
+    end
+    schedule(guid, "council_berserk", 900000, onCouncilBerserk)
 end
 
 local function councilResetState(guid)
@@ -488,6 +501,12 @@ end
 -- practice (players are hostile to Gathios); Veras's vanish-effect
 -- creature is DB-side with no C++ constant — out of reach.
 local function gathiosBless(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gathios_bless", 500, function()
+            gathiosBless(creature, guid)
+        end)
+        return
+    end
     local pool = {}
     for _, entry in ipairs(COUNCIL_ENTRIES) do
         for _, member in ipairs(creature:GetCreaturesInGrid(entry, 100.0)) do
@@ -507,6 +526,12 @@ end
 -- C++ EVENT_CONSECRATION: non-triggered DoCastSelf(41541);
 -- re-arm {30s,35s}.
 local function gathiosConsecration(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gathios_consecration", 500, function()
+            gathiosConsecration(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CONSECRATION)
     schedule(guid, "gathios_consecration", math.random(30000, 35000), function()
         gathiosConsecration(creature, guid)
@@ -518,6 +543,12 @@ end
 -- 20s. Nil pick casts nothing but keeps the schedule (jeklik
 -- convention).
 local function gathiosHammer(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gathios_hammer", 500, function()
+            gathiosHammer(creature, guid)
+        end)
+        return
+    end
     local target = hammerJusticeTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_HAMMER_OF_JUSTICE)
@@ -531,6 +562,12 @@ end
 -- primer/seal-choice arms ride the Go script-effect dispatcher
 -- (boss_ai.go) and the AfterCast Talk is ported below; re-arm 15s.
 local function gathiosJudgement(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gathios_judgement", 500, function()
+            gathiosJudgement(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_JUDGEMENT)
@@ -544,6 +581,12 @@ end
 -- C++ EVENT_AURA: non-triggered DoCastSelf(RAND(41453, 41452));
 -- re-arm 30s.
 local function gathiosAura(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gathios_aura", 500, function()
+            gathiosAura(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, Auras[math.random(1, 2)])
     schedule(guid, "gathios_aura", 30000, function()
         gathiosAura(creature, guid)
@@ -603,6 +646,12 @@ RegisterCreatureEvent(ENTRY_GATHIOS, 23, memberReset)
 -- C++ EVENT_FLAMESTRIKE: SelectTarget(Random, 0) -> non-triggered
 -- DoCast(41481); Talk(SAY_COUNCIL_SPECIAL); re-arm 40s.
 local function zerevorFlamestrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "zerevor_flamestrike", 500, function()
+            zerevorFlamestrike(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_FLAMESTRIKE)
@@ -616,6 +665,12 @@ end
 -- C++ EVENT_BLIZZARD: SelectTarget(Random, 0) -> non-triggered
 -- DoCast(41482); re-arm {15s,40s}.
 local function zerevorBlizzard(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "zerevor_blizzard", 500, function()
+            zerevorBlizzard(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_BLIZZARD)
@@ -634,6 +689,12 @@ end
 -- 2026-10-18; the pick-then-gate form usually picked a far player
 -- and cast nothing).
 local function zerevorArcaneExplosion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "zerevor_ae", 500, function()
+            zerevorArcaneExplosion(creature, guid)
+        end)
+        return
+    end
     local st = bossState(guid)
     if st.canUseArcaneExplosion then
         local near = {}
@@ -723,6 +784,12 @@ RegisterCreatureEvent(ENTRY_ZEREVOR, 23, zerevorReset)
 -- C++ EVENT_CIRCLE_OF_HEALING: non-triggered DoCastSelf(41455);
 -- re-arm {20s,35s}.
 local function malandeCircle(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "malande_circle", 500, function()
+            malandeCircle(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CIRCLE_OF_HEALING)
     schedule(guid, "malande_circle", math.random(20000, 35000), function()
         malandeCircle(creature, guid)
@@ -733,6 +800,12 @@ end
 -- Talk(SAY_COUNCIL_SPECIAL); re-arm 40s. The reflect arm lives
 -- in the unmodeled AuraScript.
 local function malandeShield(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "malande_shield", 500, function()
+            malandeShield(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_REFLECTIVE_SHIELD)
     creature:Talk(SAY_COUNCIL_SPECIAL)
     schedule(guid, "malande_shield", 40000, function()
@@ -743,6 +816,12 @@ end
 -- C++ EVENT_DIVINE_WRATH: non-triggered DoCastVictim(41472);
 -- re-arm 20s.
 local function malandeWrath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "malande_wrath", 500, function()
+            malandeWrath(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_DIVINE_WRATH)
@@ -798,6 +877,12 @@ RegisterCreatureEvent(ENTRY_MALANDE, 23, memberReset)
 -- deadly strike); re-arm 60s. The vanish-teleport and deadly-
 -- strike/poison/envenom arms live in the unmodeled AuraScripts.
 local function verasVanish(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "veras_vanish", 500, function()
+            verasVanish(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_COUNCIL_SPECIAL)
     creature:CastSpell(creature, SPELL_VANISH)
     creature:CastSpell(creature, SPELL_DEADLY_STRIKE)

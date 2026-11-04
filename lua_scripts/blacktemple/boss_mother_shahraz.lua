@@ -56,6 +56,13 @@
 -- generic_periodic (40863/40865/40866/40862 random-target
 -- triggered periodics), spell_mother_shahraz_random_periodic
 -- (40867 self-cast random beam periodic).
+-- CAST-STATE GATE (ported 2026-11-04): boss_mother_shahraz has no
+-- UpdateAI override, so BossAI::UpdateAI (ScriptedCreature.cpp:578
+-- pre-loop + :584 post-event) gates all six cycle ticks on
+-- UNIT_STATE_CASTING; each Lua tick defers 500ms under its own key
+-- via the live creature:IsCasting() bridge (lua_creature_events.go:
+-- 1950), consuming no re-arm. The DamageTaken enrage arm and the
+-- TargetDied/Died hooks are not UpdateAI events and stay ungated.
 local ENTRY_MOTHER_SHAHRAZ = 22947
 
 local SAY_TAUNT = 0
@@ -103,6 +110,12 @@ end
 -- C++ EVENT_SILENCING_SHRIEK: non-triggered DoCastVictim(40823);
 -- re-arm {18s,30s}.
 local function onSilencingShriek(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shriek", 500, function()
+            onSilencingShriek(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SILENCING_SHRIEK)
@@ -115,6 +128,12 @@ end
 -- C++ EVENT_PRISMATIC_SHIELD: non-triggered DoCastSelf(one of the
 -- six prismatic auras, urand(0, 5)); re-arm 15s.
 local function onPrismaticShield(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "prismatic", 500, function()
+            onPrismaticShield(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, PrismaticAuras[math.random(1, 6)])
     schedule(guid, "prismatic", 15000, function()
         onPrismaticShield(creature, guid)
@@ -126,6 +145,12 @@ end
 -- 3-target clamp and the teleport targeting live in the unmodeled
 -- SpellScripts.
 local function onFatalAttraction(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fatalattraction", 500, function()
+            onFatalAttraction(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_SPELL)
     creature:CastSpell(creature, SPELL_FATAL_ATTRACTION_TELEPORT)
     schedule(guid, "fatalattraction", 30000, function()
@@ -137,6 +162,12 @@ end
 -- beam triggers, urand(0, 3)); re-arm 30s. The beam trigger arms
 -- live in the unmodeled AuraScripts.
 local function onRandomBeam(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "randombeam", 500, function()
+            onRandomBeam(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, BeamTriggers[math.random(1, 4)])
     schedule(guid, "randombeam", 30000, function()
         onRandomBeam(creature, guid)
@@ -145,13 +176,25 @@ end
 
 -- C++ EVENT_BERSERK: Talk(EMOTE_BERSERK, me), non-triggered
 -- DoCastSelf(45078); one-shot.
-local function onBerserk(creature)
+local function onBerserk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            onBerserk(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
 
 -- C++ EVENT_TAUNT: Talk(SAY_TAUNT); re-arm {30s,40s}. No cast.
 local function onTaunt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "taunt", 500, function()
+            onTaunt(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_TAUNT)
     schedule(guid, "taunt", math.random(30000, 40000), function()
         onTaunt(creature, guid)
@@ -179,7 +222,7 @@ local function shahrazEnterCombat(event, creature, target)
         onRandomBeam(creature, guid)
     end)
     schedule(guid, "berserk", 600000, function()
-        onBerserk(creature)
+        onBerserk(creature, guid)
     end)
     schedule(guid, "taunt", 35000, function()
         onTaunt(creature, guid)
