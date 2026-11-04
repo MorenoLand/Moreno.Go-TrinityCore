@@ -51,9 +51,12 @@
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() / BossAI _Reset() arms are instance-blocked).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
--- and the post-switch cast-state re-check have no cast-state
--- bridge — the arms fire unconditionally (zereketh
--- precedent).
+-- and the post-switch cast-state re-check are PORTED for the
+-- boss AI (creature:IsCasting, live CastingUntil window —
+-- zereketh/corrupter precedent): decrement-first, pre-loop
+-- gate, in-loop gate after each fired arm. The ragin-flames
+-- AI carries no gate in C++ (plain timers), so flameTick is
+-- ungated by design.
 --
 -- npc_ragin_flames (entry 22323) — UpdateAI bridgeable arms:
 -- inferno 35268: 10s init and re-arm — non-triggered
@@ -136,54 +139,72 @@ local function bossTick(creature, guid)
         return
     end
 
+    -- C++ events.Update(diff) advances every timer before the
+    -- gate (boss_nethermancer_sepethrea.cpp:100-105):
+    -- decrement first, then the pre-loop gate; expired arms
+    -- stay expired for the next tick (corrupter precedent).
+    st.frost = st.frost - 1000
+    st.arcaneBlast = st.arcaneBlast - 1000
+    st.dragonsBreath = st.dragonsBreath - 1000
+    st.knockback = st.knockback - 1000
+    st.solarburn = st.solarburn - 1000
+    if creature:IsCasting() then
+        return
+    end
+
     -- Frost Attack 35263: randtime 7-10s init and re-arm —
     -- TRIGGERED DoCastVictim (C++-exact).
-    if st.frost <= 1000 then
+    if st.frost <= 0 then
         creature:CastSpell(nil, SPELL_FROST_ATTACK, true)
         st.frost = math.random(7000, 10000)
-    else
-        st.frost = st.frost - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Arcane Blast 35314: randtime 12-18s init, 15s re-arm —
     -- TRIGGERED DoCastVictim (C++-exact).
-    if st.arcaneBlast <= 1000 then
+    if st.arcaneBlast <= 0 then
         creature:CastSpell(nil, SPELL_ARCANE_BLAST, true)
         st.arcaneBlast = 15000
-    else
-        st.arcaneBlast = st.arcaneBlast - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Dragon's Breath 35250: randtime 18-22s init, randtime
     -- 12-22s re-arm — TRIGGERED DoCastVictim + 50%
     -- Talk(SAY_DRAGONS_BREATH) after the cast (C++-exact
     -- order).
-    if st.dragonsBreath <= 1000 then
+    if st.dragonsBreath <= 0 then
         creature:CastSpell(nil, SPELL_DRAGONS_BREATH, true)
         st.dragonsBreath = math.random(12000, 22000)
         if math.random(2) == 1 then
             creature:Talk(SAY_DRAGONS_BREATH)
         end
-    else
-        st.dragonsBreath = st.dragonsBreath - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Knockback 37317: randtime 22-28s init, randtime 15-25s
     -- re-arm — TRIGGERED DoCastVictim (C++-exact).
-    if st.knockback <= 1000 then
+    if st.knockback <= 0 then
         creature:CastSpell(nil, SPELL_KNOCKBACK, true)
         st.knockback = math.random(15000, 25000)
-    else
-        st.knockback = st.knockback - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Solarburn 35267: 30s init and re-arm — TRIGGERED
     -- DoCastVictim (C++-exact).
-    if st.solarburn <= 1000 then
+    if st.solarburn <= 0 then
         creature:CastSpell(nil, SPELL_SOLARBURN, true)
         st.solarburn = 30000
-    else
-        st.solarburn = st.solarburn - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 end
 

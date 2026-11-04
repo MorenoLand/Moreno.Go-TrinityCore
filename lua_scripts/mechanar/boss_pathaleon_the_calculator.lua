@@ -67,9 +67,12 @@
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() / BossAI _Reset() arms are instance-blocked).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
--- and the post-switch cast-state re-check have no cast-state
--- bridge — the arms fire unconditionally (zereketh
--- precedent).
+-- and the post-switch cast-state re-check are PORTED for the
+-- boss AI (creature:IsCasting, live CastingUntil window —
+-- zereketh/corrupter precedent): decrement-first, pre-loop
+-- gate, in-loop gate after each fired arm. The nether-wraith
+-- AI carries no gate in C++ (plain timers), so wraithTick is
+-- ungated by design.
 --
 -- npc_nether_wraith (entry 21062) — UpdateAI bridgeable arms:
 -- arcane missiles 35034: urand 1-4s init, urand 5-10s
@@ -188,6 +191,19 @@ local function bossTick(creature, guid)
         return
     end
 
+    -- C++ events.Update(diff) advances every timer before the
+    -- gate (boss_pathaleon_the_calculator.cpp:114-119):
+    -- decrement first, then the pre-loop gate; expired arms
+    -- stay expired for the next tick (corrupter precedent).
+    st.summon = st.summon - 1000
+    st.manaTap = st.manaTap - 1000
+    st.arcaneTorrent = st.arcaneTorrent - 1000
+    st.domination = st.domination - 1000
+    st.arcaneExplosion = st.arcaneExplosion - 1000
+    if creature:IsCasting() then
+        return
+    end
+
     -- Summon timer: 3x SelectTarget(Random,0)-gated SummonCreature(
     -- NPC_NETHER_WRAITH 21062, boss pos, o=0,
     -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT=3, 25s) — C++ arm order
@@ -197,7 +213,7 @@ local function bossTick(creature, guid)
     -- a non-player pick no-ops in the funnel, lua_creature_events.go:498);
     -- Talk(SAY_SUMMON) fires unconditionally
     -- after the loop (C++-exact); re-arm randtime 30-45s.
-    if st.summon <= 1000 then
+    if st.summon <= 0 then
         for _ = 1, 3 do
             local target = randomThreatTarget(creature)
             if target then
@@ -210,48 +226,53 @@ local function bossTick(creature, guid)
         end
         creature:Talk(SAY_SUMMON)
         st.summon = math.random(30000, 45000)
-    else
-        st.summon = st.summon - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Mana Tap 36021: randtime 12-20s init, randtime 14-22s
     -- re-arm — TRIGGERED DoCastVictim (C++-exact).
-    if st.manaTap <= 1000 then
+    if st.manaTap <= 0 then
         creature:CastSpell(nil, SPELL_MANA_TAP, true)
         st.manaTap = math.random(14000, 22000)
-    else
-        st.manaTap = st.manaTap - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Arcane Torrent 36022: randtime 16-25s init, randtime
     -- 12-18s re-arm — TRIGGERED DoCastVictim (C++-exact).
-    if st.arcaneTorrent <= 1000 then
+    if st.arcaneTorrent <= 0 then
         creature:CastSpell(nil, SPELL_ARCANE_TORRENT, true)
         st.arcaneTorrent = math.random(12000, 18000)
-    else
-        st.arcaneTorrent = st.arcaneTorrent - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Domination 35280: randtime 25-40s init, randtime
     -- 25-30s re-arm — Talk(SAY_DOMINATION) BEFORE the cast,
     -- then TRIGGERED DoCastVictim (C++-exact order).
-    if st.domination <= 1000 then
+    if st.domination <= 0 then
         creature:Talk(SAY_DOMINATION)
         creature:CastSpell(nil, SPELL_DOMINATION, true)
         st.domination = math.random(25000, 30000)
-    else
-        st.domination = st.domination - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Arcane Explosion 15453: randtime 8-13s init, randtime
     -- 10-14s re-arm — TRIGGERED DoCastVictim (C++-exact).
     -- The "Heroic only" C++ comment has no IsHeroic gate in
     -- the code; the port fires it always (C++-exact).
-    if st.arcaneExplosion <= 1000 then
+    if st.arcaneExplosion <= 0 then
         creature:CastSpell(nil, SPELL_ARCANE_EXPLOSION, true)
         st.arcaneExplosion = math.random(10000, 14000)
-    else
-        st.arcaneExplosion = st.arcaneExplosion - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 end
 

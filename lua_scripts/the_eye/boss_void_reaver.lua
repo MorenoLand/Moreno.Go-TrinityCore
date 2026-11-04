@@ -38,8 +38,10 @@
 -- 1. Pounding 34162: 15s init then 15s — non-triggered
 --    DoCastVictim (C++-exact) + Talk(SAY_POUNDING), re-arm 15s
 --    regardless (C++-exact). The C++ UNIT_STATE_CASTING
---    early-return gates have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm
---    fires unconditionally (zereketh precedent).
+--    early-return gates are PORTED (creature:IsCasting, live
+--    CastingUntil window — zereketh/corrupter precedent):
+--    decrement-first, pre-loop gate, in-loop gate after each
+--    fired arm.
 -- 2. Arcane orb 34172: 3s init then 3s — me->CastSpell(target)
 --    (non-triggered, C++-exact), re-arm 3s regardless
 --    (C++-exact). Target: C++ builds the list from the threat
@@ -132,54 +134,70 @@ local function bossTick(creature, guid)
         return
     end
 
+    -- C++ events.Update(diff) advances every timer before the
+    -- gate (boss_void_reaver.cpp:98-103): decrement first,
+    -- then the pre-loop gate; expired arms stay expired for
+    -- the next tick (corrupter precedent).
+    st.pounding = st.pounding - 1000
+    st.arcaneOrb = st.arcaneOrb - 1000
+    st.knockAway = st.knockAway - 1000
+    st.berserk = st.berserk - 1000
+    if creature:IsCasting() then
+        return
+    end
+
     -- Pounding 34162: 15s init then 15s — non-triggered
     -- DoCastVictim + Talk(SAY_POUNDING) (C++-exact), re-arm
     -- 15s regardless (C++-exact). The C++ UNIT_STATE_CASTING
-    -- gates have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — fires unconditionally.
-    if st.pounding <= 1000 then
+    -- pre-loop + in-loop gates are PORTED (creature:IsCasting).
+    if st.pounding <= 0 then
         creature:CastSpell(nil, SPELL_POUNDING)
         creature:Talk(SAY_POUNDING)
         st.pounding = 15000
-    else
-        st.pounding = st.pounding - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Arcane orb 34172: 3s init then 3s — non-triggered
     -- me->CastSpell(target) (C++-exact), re-arm 3s regardless
     -- (C++-exact). The C++ `if (target)` nil guard is ported
     -- (C++-exact).
-    if st.arcaneOrb <= 1000 then
+    if st.arcaneOrb <= 0 then
         local target = pickArcaneOrbTarget(creature)
         if target then
             creature:CastSpell(target, SPELL_ARCANE_ORB)
         end
         st.arcaneOrb = 3000
-    else
-        st.arcaneOrb = st.arcaneOrb - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Knock away 25778: 30s init then 30s — non-triggered
     -- DoCastVictim (C++-exact), re-arm 30s regardless
     -- (C++-exact). The 25% threat drop (GetThreat /
     -- ModifyThreatByPercent) is PORTED 2026-10-24 (victim gate + cut after the cast).
-    if st.knockAway <= 1000 then
+    if st.knockAway <= 0 then
         creature:CastSpell(nil, SPELL_KNOCK_AWAY)
         local victim = creature:GetVictim()
         if victim and creature:GetThreat(victim) ~= 0 then
             creature:ModifyThreatByPercent(victim, -25)
         end
         st.knockAway = 30000
-    else
-        st.knockAway = st.knockAway - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Berserk 27680: 600000 one-shot — Enraged latch,
     -- DoCast(me) self-cast (C++-exact); one-shot, no re-arm.
-    if st.berserk <= 1000 and not st.enraged then
+    if st.berserk <= 0 and not st.enraged then
         creature:CastSpell(creature, SPELL_BERSERK)
         st.enraged = true
-    else
-        st.berserk = st.berserk - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 end
 

@@ -12705,8 +12705,8 @@ func init() {
 	// The Botanica (Tempest Keep):
 	// boss_thorngrin_the_tender (17978): sacrifice / hellfire /
 	// enrage boss with 50%/20% HP talk latches; the heroic
-	// hellfire schedule and the UNIT_STATE_CASTING gates have
-	// no difficulty / cast-state bridges — see lua_scripts/
+	// hellfire schedule and the UNIT_STATE_CASTING gates are
+	// PORTED (IsHeroic / IsCasting) — see lua_scripts/
 	// botanica/boss_thorngrin_the_tender.lua. instance_the_
 	// botanica.cpp stays blocked on the instance-script model.
 	RegisterLuaBoss("boss_thorngrin_the_tender", 17978)
@@ -12768,8 +12768,8 @@ func init() {
 	// away / 10-minute berserk boss; the arcane-orb threat-list
 	// leg picks over alive players in the instance (no threat-
 	// list bridge), the knock-away 25% threat drop has no
-	// ModifyThreatByPercent bridge, the cast-state gates have
-	// no cast-state bridge, and the BossAI DATA_VOID_REAVER =
+	// ModifyThreatByPercent bridge, the cast-state gates are PORTED (creature:IsCasting),
+	// and the BossAI DATA_VOID_REAVER =
 	// 3 ctor / reset / death arms are instance-blocked — see
 	// lua_scripts/the_eye/boss_void_reaver.lua.
 	RegisterLuaBoss("boss_void_reaver", 19516)
@@ -12779,8 +12779,8 @@ func init() {
 	// DoCastVictim 25s/23s with the C++ GetVictim() nil guard
 	// (the ResetThreat victim leg has no single-target threat
 	// bridge) + countercharge 35035 non-triggered DoCast(me)
-	// self-cast 9s/45s; no Talk lines in the C++; cast-state
-	// gates have no cast-state bridge — see lua_scripts/the_eye/
+	// self-cast 9s/45s; no Talk lines in the C++; no CASTING gate
+	// exists in the C++ (plain ScriptedAI timers) — see lua_scripts/the_eye/
 	// npc_crystalcore_devastator.lua.
 	RegisterLuaBoss("npc_crystalcore_devastator", 20040)
 
@@ -12805,8 +12805,8 @@ func init() {
 	// non-triggered DoCast(me) self-cast 25s/randtime(20s,28s)
 	// (the H_SPELL_* heroic variants are never fired by the
 	// C++ UpdateAI — not IsHeroic-gated), KilledUnit 50%
-	// SAY_SLAY, JustDied SAY_DEATH; cast-state gates have no
-	// cast-state bridge — see lua_scripts/mechanar/
+	// SAY_SLAY, JustDied SAY_DEATH; cast-state gates are PORTED
+	// (creature:IsCasting) — see lua_scripts/mechanar/
 	// boss_gatewatcher_iron_hand.lua. First unit of the
 	// Mechanar block per outland_script_loader.cpp order;
 	// instance_mechanar.cpp stays blocked on the
@@ -12825,8 +12825,8 @@ func init() {
 	// arm schedules EVENT_SAW_BLADE at randtime(25s,35s)
 	// instead of re-arming itself (modeled as a second pending
 	// saw-blade countdown); KilledUnit SAY_SLAY, JustDied
-	// SAY_DEATH; cast-state gates have no cast-state bridge —
-	// see lua_scripts/mechanar/boss_gatewatcher_gyrokill.lua.
+	// SAY_DEATH; cast-state gates are PORTED
+	// (creature:IsCasting) — see lua_scripts/mechanar/boss_gatewatcher_gyrokill.lua.
 	RegisterLuaBoss("boss_gatewatcher_gyrokill", 19218)
 	// boss_nethermancer_sepethrea (17271; DB-side ScriptName
 	// binding, no NPC_ constant — entry per standard TBC
@@ -12840,8 +12840,8 @@ func init() {
 	// 50% SAY_DRAGONS_BREATH, knockback 37317 TRIGGERED
 	// DoCastVictim randtime(22s,28s)/randtime(15s,25s),
 	// solarburn 35267 TRIGGERED DoCastVictim 30s/30s;
-	// KilledUnit SAY_SLAY, JustDied SAY_DEATH; cast-state
-	// gates have no cast-state bridge — see
+	// KilledUnit SAY_SLAY, JustDied SAY_DEATH; cast-state gates are PORTED
+	// (creature:IsCasting, boss AI only) — see
 	// lua_scripts/mechanar/boss_nethermancer_sepethrea.lua.
 	RegisterLuaBoss("boss_nethermancer_sepethrea", 17271)
 	// npc_ragin_flames (22323; DB-side ScriptName binding, no
@@ -12874,8 +12874,8 @@ func init() {
 	// in the code — C++-exact), frenzy 36992 on the
 	// HealthBelowPctDamaged(20,damage) && !HasAura latch via
 	// OnDamageTaken(9) + Talk(SAY_ENRAGE); KilledUnit
-	// SAY_SLAY, JustDied SAY_DEATH; cast-state gates have no
-	// cast-state bridge — see lua_scripts/mechanar/
+	// SAY_SLAY, JustDied SAY_DEATH; cast-state gates are PORTED
+	// (creature:IsCasting, boss AI only) — see lua_scripts/mechanar/
 	// boss_pathaleon_the_calculator.lua.
 	RegisterLuaBoss("boss_pathaleon_the_calculator", 19220)
 	// npc_nether_wraith (21062, from the C++ Creatures enum):
@@ -12905,8 +12905,8 @@ func init() {
 	// (9s,11s), randtime(2s,5s)) evaluated at fire time,
 	// berserk 26662 non-triggered DoCast(me) 3min one-shot
 	// (the C++ arm does not re-arm); KilledUnit
-	// SAY_KILL, JustDied SAY_DEATH; cast-state gates have no
-	// cast-state bridge; the two polarity SpellScripts have
+	// SAY_KILL, JustDied SAY_DEATH; cast-state gates are PORTED
+	// (creature:IsCasting); the two polarity SpellScripts have
 	// no SpellScript bridge — see lua_scripts/mechanar/
 	// boss_mechano_lord_capacitus.lua.
 	RegisterLuaBoss("boss_mechano_lord_capacitus", 19219)
@@ -16451,9 +16451,9 @@ func init() {
 	// events.SetPhase/IsInPhase (no phase bridge — moorabi precedent)
 	// and the phase flips are driven by unbridged arms, so
 	// EVENT_PUNCTURE / EVENT_WHIRLING_SLASH / EVENT_ENRAGE /
-	// EVENT_STOMP / EVENT_STAMPEDE / EVENT_IMPALING_CHARGE /
-	// EVENT_TRANSFORM are documented in the lua file, not wired
-	// (plus: no DoCastAOE bridge, no random-target SelectTarget
+	// EVENT_IMPALING_CHARGE / EVENT_TRANSFORM are documented in
+	// the lua file, not wired (STOMP/STAMPEDE ported as self-cast;
+	// plus: no random-target SelectTarget
 	// bridge, no SpellScript binding bridge for the three SpellScripts,
 	// no cross-AI SetGUID/GetData bridges, no aura-removal bridge,
 	// no despawn bridge; achievement_share_the_love has no
@@ -16533,18 +16533,16 @@ func init() {
 	// instance-shimmed, the creature_template binding DB-side).
 	// BossAI. Ported arm in lua_scripts/northrend/boss_amanitar.lua:
 	// EVENT_BASH — DoCastVictim(Bash 57094), JustEngagedWith-scheduled
-	// 10-14s init, rescheduled 7-12s (the only bridgeable arm of the
-	// slice). Documented in the lua file, not wired: EVENT_MINI
-	// (random-target SelectTarget bridge absent — cairne/kazzak
-	// precedent — plus no DoCastAOE bridge — terestian/shazzrah
-	// precedent), EVENT_ROOT / EVENT_BOLT (random-target SelectTarget
+	// 10-14s init, rescheduled 7-12s; EVENT_MINI DoCastAOE(57055)
+	// ported as self-cast; JustDied DoCastAOE(57283) ported as
+	// self-cast. Documented in the lua file, not wired: EVENT_ROOT / EVENT_BOLT (random-target SelectTarget
 	// bridge absent), EVENT_SPAWN and the EVENT_RESPAWN deque machine
 	// (summon STRAND absent — standing), JustSummoned /
 	// SummonedCreatureDies bookkeeping (summon / cross-AI bridges
 	// absent), EnterEvadeMode (no despawn bridge — terestian
 	// precedent; instance-script model absent), JustDied (instance
-	// bookkeeping + DoCastAOE(57283) + instance remove-auras legs
-	// unbridged), npc_amanitar_mushrooms (30391 / 30435 entry-verifiable
+	// bookkeeping + instance remove-auras legs unbridged
+	// (DoCastAOE(57283) ported as self-cast), npc_amanitar_mushrooms (30391 / 30435 entry-verifiable
 	// but Reset passive/display bridges + MoveInLineOfSight
 	// aura-removal / DoCastAOE / scale / despawn bridges + JustDied
 	// DoCastAOE all absent — entry-verifiable-but-bridge-blocked queue),
@@ -16630,10 +16628,11 @@ func init() {
 	// JustAppeared -> SummonAdds() with instance GetBossState gate +
 	// SummonCreatureGroup(1..3) — summon STRAND absent), the
 	// MoveInLineOfSight passive-engage leg, EVENT_SEND_GROUP
-	// DoCastAOE(52343) 70s repeat, EVENT_SWARM DoCastAOE(52440) +
-	// Talk(SAY_SWARM 3) 5s (no DoCastAOE bridge — terestian/shazzrah
-	// precedent), EVENT_FRENZY (HealthBelowPct(10) — doomwalker
-	// precedent — + DoCastSelf 28747 + DoCastAOE 52592), the whole
+	// DoCastAOE(52343) 70s repeat (DoAction machine — stays out),
+	// EVENT_SWARM DoCastAOE(52440) + Talk(SAY_SWARM 3) 5s ported as
+	// self-cast, EVENT_FRENZY (HealthBelowPct(10) — doomwalker
+	// precedent — + DoCastSelf 28747 + DoCastAOE 52592) ported as
+	// self-cast, the whole
 	// DoAction machine (no DoAction bridge — drakkari_colossus
 	// precedent: gatewatcher-greet prefight Talk, watcher-died
 	// bookkeeping, watcher/pet engaged, pet evade), EnterEvadeMode
@@ -16745,9 +16744,9 @@ func init() {
 	// events gate these two), KilledUnit Talk(SAY_KILL 1) player-gated
 	// (event 3 — nalorakk precedent), JustDied Talk(SAY_DEATH 4)
 	// (event 4; _JustDied instance bookkeeping has no bridge).
-	// Documented in the lua file, not wired: EVENT_CONSUME Talk(2) +
-	// DoCastAOE(49380) and EVENT_CORPSE_EXPLODE Talk(3) + DoCastAOE(49555)
-	// (no DoCastAOE bridge), EVENT_SPAWN invader-summoner trigger casts
+	// EVENT_CONSUME Talk(2) + DoCastAOE(49380) and EVENT_CORPSE_EXPLODE
+	// Talk(3) + DoCastAOE(49555) ported as self-cast.
+	// Documented in the lua file, not wired: EVENT_SPAWN invader-summoner trigger casts
 	// (instance model absent), the _consumptionJunction latch (aura-stack
 	// 49381/59805 — no aura-stack bridge), GetData(DATA_CONSUMPTION_
 	// JUNCTION) cross-AI (its only caller is achievement_consumption_
@@ -17298,11 +17297,11 @@ func init() {
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) +
 	// EVENT_STRIKE DoCastVictim(Unbalancing Strike 26613) 21s/6s;
 	// KilledUnit Talk(SAY_SLAY 1) gated on player or entry-16803
-	// (nalorakk precedent); JustDied Talk(SAY_DEATH 3). Unmodeled:
-	// SpellHit SAY_TAUNTED (SpellHit never fires in Lua), JustDied
-	// DoCastAOE(Hopeless 29125) (no DoCastAOE bridge), EVENT_ATTACK
-	// MoveChase (no motion bridge), EVENT_SHOUT DoCastAOE(29107) (no
-	// DoCastAOE bridge), EVENT_KNIFE SelectTarget(Random) (cairne/kazzak
+	// (nalorakk precedent); JustDied Talk(SAY_DEATH 3) + EVENT_SHOUT
+	// DoCastAOE(29107) + JustDied DoCastAOE(Hopeless 29125), both
+	// ported as self-cast. Unmodeled:
+	// SpellHit SAY_TAUNTED (SpellHit never fires in Lua), EVENT_ATTACK
+	// MoveChase (no motion bridge), EVENT_KNIFE SelectTarget(Random) (cairne/kazzak
 	// precedent), InitializeAI/JustReachedHome SummonCreatureGroup (no
 	// summon bridge), npc_dk_understudy (16803, entry-verifiable —
 	// LoadEquipment/emotestate/cross-AI DoZoneInCombat/DESPAWN/
@@ -17344,12 +17343,13 @@ func init() {
 	// 54378) 10s/10s (moroes precedent); EVENT_ENRAGE Talk(EMOTE_ENRAGE
 	// 2) + DoCastSelf(ENRAGE 28371) randtime(16s,22s)/randtime(16s,22s)
 	// (phase_hunter self-cast precedent); EVENT_BERSERK Talk(
-	// EMOTE_BERSERKER 4) + DoCastSelf(BERSERK 26662) 8min/5min. The
+	// EMOTE_BERSERKER 4) + DoCastSelf(BERSERK 26662) 8min/5min;
+	// EVENT_DECIMATE DoCastAOE(28374) ported as self-cast (20x
+	// multi-search machine stays out). The
 	// STATE_GLUTH_EATING deferral arms (3s/5s/4s repeats) have no state
 	// bridge — documented in the lua. Unmodeled: Reset react-state/
 	// speed legs (no bridges), SummonedCreatureDies despawn (no summon
-	// bridge), EVENT_DECIMATE DoCastAOE 28374 + 20x multi-search
-	// machine (no DoCastAOE bridge), EVENT_SUMMON creature groups (no
+	// bridge), EVENT_SUMMON creature groups (no
 	// summon bridge + difficulty gate), zombie single/multi search +
 	// kill legs + DoAction DECIMATE_EVENT + MovementInform (no summon/
 	// cross-AI / react-state / motion bridges), EMOTE_DECIMATE/SPOTS_ONE/
@@ -17372,14 +17372,17 @@ func init() {
 	// EVENT_BERSERK Talk(EMOTE_ENRAGE 3) + DoCastSelf(BERSERK 26662)
 	// 15min one-shot (anubarak one-shot precedent); JustDied CastSpell(
 	// self, DIES 29357, triggered) death visual (_JustDied bookkeeping
-	// has no bridge — tharon_ja precedent). EMOTE_AIR_PHASE (0),
+	// has no bridge — tharon_ja precedent); EVENT_TAIL/DRAIN/
+	// BREATH/EXPLOSION DoCastAOE legs ported as self-cast (BLIZZARD
+	// stays out: summon-only cast, no spell-effect-summon executor).
+	// EMOTE_AIR_PHASE (0),
 	// EMOTE_GROUND_PHASE (1), EMOTE_BREATH (2) ride unported legs
 	// (vortex — not ported orphaned). Unmodeled: InitializeAI/
 	// Reset/DoAction(ACTION_BIRTH)/MovementInform + BIRTH + FLIGHT/
 	// LIFTOFF/LAND hover/emote legs (no instance/flag/react/hover/
 	// motion bridges), DamageTaken air-phase death prevention (no
-	// health bridge — doomwalker precedent), EVENT_TAIL/DRAIN/
-	// BLIZZARD/BREATH/EXPLOSION DoCastAOE legs (no DoCastAOE bridge),
+	// health bridge — doomwalker precedent), EVENT_BLIZZARD
+	// DoCastAOE leg (summon-only cast, no spell-effect-summon executor),
 	// EVENT_BLIZZARD difficulty gate (kelidan), EVENT_LIFTOFF summon
 	// wing buffet 17025 + random icebolt target list, EVENT_ICEBOLT
 	// targeted casts over the stored GUID vector (no summon/
@@ -17792,8 +17795,8 @@ func init() {
 	// Keristrasza (26723), The Nexus —
 	// lua_scripts/northrend/boss_keristrasza.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) (the
-	// DoCastAOE(SPELL_INTENSE_COLD 48094) leg has no DoCastAOE bridge
-	// — nexus_commanders EVENT_FRIGHTENING_SHOUT precedent; the
+	// DoCastAOE(SPELL_INTENSE_COLD 48094) engage one-shot ported as
+	// self-cast; the
 	// BossAI::JustEngagedWith instance-bookkeeping leg has no bridge
 	// — tharon_ja precedent; the three events.ScheduleEvent legs have
 	// no timer-event bridge); KilledUnit Talk(SAY_SLAY 1) player-gated

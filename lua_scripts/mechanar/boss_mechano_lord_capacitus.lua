@@ -55,9 +55,10 @@
 -- 6. Berserk 26662: 3min init — non-triggered DoCast(me)
 --    ONE-SHOT, the C++ arm does not re-arm (C++-exact).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
--- and the post-switch cast-state re-check have no cast-state
--- bridge — the arms fire unconditionally (zereketh /
--- gyrokill precedent).
+-- and the post-switch cast-state re-check are PORTED
+-- (creature:IsCasting, live CastingUntil window —
+-- zereketh/corrupter precedent): decrement-first, pre-loop
+-- gate, in-loop gate after each fired arm.
 -- The polarity-charge SpellScript class in the file
 -- (spell_capacitus_polarity_charge 39088-39093 stack
 -- machine) joins the no-SpellScript-bridge queue —
@@ -123,40 +124,61 @@ local function bossTick(creature, guid)
         return
     end
 
+    -- C++ events.Update(diff) advances every timer before the
+    -- gate (boss_mechano_lord_capacitus.cpp:113-118):
+    -- decrement first, then the pre-loop gate; expired arms
+    -- stay expired for the next tick (corrupter precedent).
+    st.headcrack = st.headcrack - 1000
+    if st.dmgShield then
+        st.dmgShield = st.dmgShield - 1000
+    end
+    if st.magShield then
+        st.magShield = st.magShield - 1000
+    end
+    if st.polarityShift then
+        st.polarityShift = st.polarityShift - 1000
+    end
+    st.summon = st.summon - 1000
+    if st.berserk then
+        st.berserk = st.berserk - 1000
+    end
+    if creature:IsCasting() then
+        return
+    end
+
     -- Head Crack 35161: 10s init then 10s — non-triggered
     -- DoCastVictim (C++-exact).
-    if st.headcrack <= 1000 then
+    if st.headcrack <= 0 then
         creature:CastSpell(nil, SPELL_HEADCRACK)
         st.headcrack = 10000
-    else
-        st.headcrack = st.headcrack - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Reflective Damage Shield 35159: Talk(2) + non-triggered
     -- DoCast(me); the arm schedules the magic shield at 30s
     -- instead of re-arming itself (C++-exact ping-pong).
-    if st.dmgShield then
-        if st.dmgShield <= 1000 then
-            creature:Talk(YELL_REFLECTIVE_DAMAGE_SHIELD)
-            creature:CastSpell(creature, SPELL_REFLECTIVE_DAMAGE_SHIELD)
-            st.dmgShield = nil
-            st.magShield = 30000
-        else
-            st.dmgShield = st.dmgShield - 1000
+    if st.dmgShield and st.dmgShield <= 0 then
+        creature:Talk(YELL_REFLECTIVE_DAMAGE_SHIELD)
+        creature:CastSpell(creature, SPELL_REFLECTIVE_DAMAGE_SHIELD)
+        st.dmgShield = nil
+        st.magShield = 30000
+        if creature:IsCasting() then
+            return
         end
     end
 
     -- Reflective Magic Shield 35158: Talk(1) + non-triggered
     -- DoCast(me); the arm schedules the damage shield at 30s
     -- (C++-exact ping-pong).
-    if st.magShield then
-        if st.magShield <= 1000 then
-            creature:Talk(YELL_REFLECTIVE_MAGIC_SHIELD)
-            creature:CastSpell(creature, SPELL_REFLECTIVE_MAGIC_SHIELD)
-            st.magShield = nil
-            st.dmgShield = 30000
-        else
-            st.magShield = st.magShield - 1000
+    if st.magShield and st.magShield <= 0 then
+        creature:Talk(YELL_REFLECTIVE_MAGIC_SHIELD)
+        creature:CastSpell(creature, SPELL_REFLECTIVE_MAGIC_SHIELD)
+        st.magShield = nil
+        st.dmgShield = 30000
+        if creature:IsCasting() then
+            return
         end
     end
 
@@ -171,16 +193,15 @@ local function bossTick(creature, guid)
     -- over the threat list (threat list approximates the DoCastAOE
     -- area), each player receiving 39088 or 39091 non-triggered
     -- (the C++ cast carries the caster GUID, not a triggered flag).
-    if st.polarityShift then
-        if st.polarityShift <= 1000 then
-            for _, unit in ipairs(creature:GetAITargets()) do
-                if unit:GetObjectType() == "Player" and not unit:IsDead() then
-                    creature:CastSpell(unit, math.random() < 0.5 and SPELL_POSITIVE_POLARITY or SPELL_NEGATIVE_POLARITY)
-                end
+    if st.polarityShift and st.polarityShift <= 0 then
+        for _, unit in ipairs(creature:GetAITargets()) do
+            if unit:GetObjectType() == "Player" and not unit:IsDead() then
+                creature:CastSpell(unit, math.random() < 0.5 and SPELL_POSITIVE_POLARITY or SPELL_NEGATIVE_POLARITY)
             end
-            st.polarityShift = math.random(45000, 60000)
-        else
-            st.polarityShift = st.polarityShift - 1000
+        end
+        st.polarityShift = math.random(45000, 60000)
+        if creature:IsCasting() then
+            return
         end
     end
 
@@ -188,25 +209,25 @@ local function bossTick(creature, guid)
     -- summon spells, non-triggered DoCastSelf; re-arm is
     -- DUNGEON_MODE(randtime(9-11s), randtime(2-5s))
     -- evaluated at fire time (C++-exact).
-    if st.summon <= 1000 then
+    if st.summon <= 0 then
         creature:CastSpell(creature, SUMMON_SPELLS[math.random(1, 4)])
         if creature:IsHeroic() then
             st.summon = math.random(2000, 5000)
         else
             st.summon = math.random(9000, 11000)
         end
-    else
-        st.summon = st.summon - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Berserk 26662: 3min init, non-triggered DoCast(me)
     -- one-shot — the C++ arm does not re-arm (C++-exact).
-    if st.berserk then
-        if st.berserk <= 1000 then
-            creature:CastSpell(creature, SPELL_BERSERK)
-            st.berserk = nil
-        else
-            st.berserk = st.berserk - 1000
+    if st.berserk and st.berserk <= 0 then
+        creature:CastSpell(creature, SPELL_BERSERK)
+        st.berserk = nil
+        if creature:IsCasting() then
+            return
         end
     end
 end

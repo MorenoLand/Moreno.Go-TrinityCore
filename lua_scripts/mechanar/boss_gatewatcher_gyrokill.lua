@@ -49,9 +49,10 @@
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() / BossAI _Reset() arms are instance-blocked).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
--- and the post-switch cast-state re-check have no cast-state
--- bridge — the arms fire unconditionally (zereketh
--- precedent).
+-- and the post-switch cast-state re-check are PORTED
+-- (creature:IsCasting, live CastingUntil window —
+-- zereketh/corrupter precedent): decrement-first, pre-loop
+-- gate, in-loop gate after each fired arm.
 
 local SPELL_STREAM_OF_MACHINE_FLUID = 35311
 local SPELL_SAW_BLADE = 35318
@@ -103,35 +104,52 @@ local function bossTick(creature, guid)
         return
     end
 
+    -- C++ events.Update(diff) advances every timer before the
+    -- gate (boss_gatewatcher_gyrokill.cpp:87-92): decrement
+    -- first, then the pre-loop gate; expired arms stay expired
+    -- for the next tick (corrupter precedent).
+    st.stream = st.stream - 1000
+    st.sawBlade = st.sawBlade - 1000
+    if st.sawBladeExtra then
+        st.sawBladeExtra = st.sawBladeExtra - 1000
+    end
+    if st.shadowPower then
+        st.shadowPower = st.shadowPower - 1000
+    end
+    if creature:IsCasting() then
+        return
+    end
+
     -- Stream of Machine Fluid 35311: 10s init then randtime
     -- 13-17s — TRIGGERED DoCastVictim (C++-exact).
-    if st.stream <= 1000 then
+    if st.stream <= 0 then
         creature:CastSpell(nil, SPELL_STREAM_OF_MACHINE_FLUID, true)
         st.stream = math.random(13000, 17000)
-    else
-        st.stream = st.stream - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Saw Blade 35318: 20s init then randtime 20-30s —
     -- non-triggered DoCast(me) self-cast + Talk (C++-exact);
     -- the heroic 39192 variant is never fired by the C++.
-    if st.sawBlade <= 1000 then
+    if st.sawBlade <= 0 then
         fireSawBlade(creature)
         st.sawBlade = math.random(20000, 30000)
-    else
-        st.sawBlade = st.sawBlade - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- The shadow-power quirk: C++ re-schedules EVENT_SAW_BLADE
     -- (a second pending event), not EVENT_SHADOW_POWER — and
     -- EventMap inserts (multimap), so the extra event re-arms
     -- itself at 20-30s: a second, persistent saw-blade stream.
-    if st.sawBladeExtra then
-        if st.sawBladeExtra <= 1000 then
-            fireSawBlade(creature)
-            st.sawBladeExtra = math.random(20000, 30000)
-        else
-            st.sawBladeExtra = st.sawBladeExtra - 1000
+    if st.sawBladeExtra and st.sawBladeExtra <= 0 then
+        fireSawBlade(creature)
+        st.sawBladeExtra = math.random(20000, 30000)
+        if creature:IsCasting() then
+            return
         end
     end
 
@@ -139,13 +157,12 @@ local function bossTick(creature, guid)
     -- non-triggered DoCast(me) self-cast (C++-exact); the arm
     -- schedules EVENT_SAW_BLADE at randtime 25-35s instead of
     -- re-arming itself (C++-exact quirk, local-tree text).
-    if st.shadowPower then
-        if st.shadowPower <= 1000 then
-            creature:CastSpell(creature, SPELL_SHADOW_POWER)
-            st.shadowPower = nil
-            st.sawBladeExtra = math.random(25000, 35000)
-        else
-            st.shadowPower = st.shadowPower - 1000
+    if st.shadowPower and st.shadowPower <= 0 then
+        creature:CastSpell(creature, SPELL_SHADOW_POWER)
+        st.shadowPower = nil
+        st.sawBladeExtra = math.random(25000, 35000)
+        if creature:IsCasting() then
+            return
         end
     end
 end

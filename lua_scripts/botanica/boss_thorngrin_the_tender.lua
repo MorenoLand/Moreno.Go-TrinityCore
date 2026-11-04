@@ -45,8 +45,8 @@
 -- order — 1s granularity exact for all C++ timers; the
 -- !UpdateVictim early return collapses into the pump; the
 -- UNIT_STATE_CASTING early-return gates before and after
--- the event loop have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arms fire
--- unconditionally, netherspite precedent). Pump:
+-- the event loop are PORTED (creature:IsCasting, live
+-- CastingUntil window — zereketh/corrupter precedent). Pump:
 -- 1. Sacrifice arm — 5.7s init then 29.4s: target =
 --    SelectTarget(Random, 1) — random alive player excluding
 --    the current victim (skyriss / thespia precedent); if a
@@ -90,11 +90,10 @@
 -- THE_TENDER = 2 bookkeeping in Reset/JustEngagedWith/
 -- JustDied skipped); the heroic EVENT_HELLFIRE {17400,19300}
 -- init / re-arm is ported via creature:IsHeroic() (the old
--- "no difficulty bridge" claim was stale); no cast-state bridge —
--- the UpdateAI UNIT_STATE_CASTING early-return gates
--- unmodeled, the arms fire unconditionally (netherspite
--- precedent); no SpellScript/AuraScript scripts in this
--- file.
+-- "no difficulty bridge" claim was stale); the UpdateAI
+-- UNIT_STATE_CASTING early-return gates are PORTED
+-- (creature:IsCasting, see combatTick); no SpellScript/
+-- AuraScript scripts in this file.
 
 local SPELL_SACRIFICE = 34661
 local SPELL_HELLFIRE = 34659
@@ -164,12 +163,25 @@ end
 
 -- C++ UpdateAI in event arm order — 1s granularity exact
 -- for all C++ timers; the !UpdateVictim early return
--- collapses into the pump; the UNIT_STATE_CASTING gates
--- have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget), so the arms fire
--- unconditionally (netherspite precedent).
+-- collapses into the pump; the UNIT_STATE_CASTING pre-loop
+-- + in-loop gates are PORTED (creature:IsCasting, live
+-- CastingUntil window — zereketh/corrupter precedent):
+-- decrement-first, pre-loop gate, in-loop gate after each
+-- fired arm.
 local function combatTick(creature, guid)
     local st = combatStates[guid]
     if not st then
+        return
+    end
+
+    -- C++ events.Update(diff) advances every timer before the
+    -- gate (boss_thorngrin_the_tender.cpp:113-118): decrement
+    -- first, then the pre-loop gate; expired arms stay expired
+    -- for the next tick (corrupter precedent).
+    st.sacrifice = st.sacrifice - 1000
+    st.hellfire = st.hellfire - 1000
+    st.enrage = st.enrage - 1000
+    if creature:IsCasting() then
         return
     end
 
@@ -178,37 +190,40 @@ local function combatTick(creature, guid)
     -- re-arm 29400 regardless
     -- of target pick (the C++ ScheduleEvent is outside the
     -- target if).
-    if st.sacrifice <= 1000 then
+    if st.sacrifice <= 0 then
         local target = randomThreatPlayerPastHead(creature)
         if target then
             creature:Talk(SAY_CAST_SACRIFICE)
             creature:CastSpell(target, SPELL_SACRIFICE, true)
         end
         st.sacrifice = 29400
-    else
-        st.sacrifice = st.sacrifice - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- 2. Hellfire arm: Talk(SAY_CAST_HELLFIRE) +
     -- TRIGGERED DoCastVictim (C++-exact), re-arm 18s — or
     -- {17.4s,19.3s} on heroic (C++-exact via
     -- creature:IsHeroic()).
-    if st.hellfire <= 1000 then
+    if st.hellfire <= 0 then
         creature:Talk(SAY_CAST_HELLFIRE)
         creature:CastSpell(nil, SPELL_HELLFIRE, true)
         st.hellfire = creature:IsHeroic() and (17400 + math.random(0, 1900)) or 18000
-    else
-        st.hellfire = st.hellfire - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- 3. Enrage arm: Talk(EMOTE_ENRAGE) + non-triggered
     -- DoCast on self (C++-exact), re-arm 33000.
-    if st.enrage <= 1000 then
+    if st.enrage <= 0 then
         creature:Talk(EMOTE_ENRAGE)
         creature:CastSpell(creature, SPELL_ENRAGE)
         st.enrage = 33000
-    else
-        st.enrage = st.enrage - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 end
 

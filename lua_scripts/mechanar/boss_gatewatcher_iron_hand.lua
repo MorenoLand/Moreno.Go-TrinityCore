@@ -45,9 +45,10 @@
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() / BossAI _Reset() arms are instance-blocked).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
--- and the post-switch cast-state re-check have no cast-state
--- bridge — the arms fire unconditionally (zereketh
--- precedent).
+-- and the post-switch cast-state re-check are PORTED
+-- (creature:IsCasting, live CastingUntil window —
+-- zereketh/corrupter precedent): decrement-first, pre-loop
+-- gate, in-loop gate after each fired arm.
 
 local SPELL_STREAM_OF_MACHINE_FLUID = 35311
 local SPELL_JACKHAMMER = 35327
@@ -94,38 +95,52 @@ local function bossTick(creature, guid)
         return
     end
 
+    -- C++ events.Update(diff) advances every timer before the
+    -- gate (boss_gatewatcher_ironhand.cpp:90-95): decrement
+    -- first, then the pre-loop gate; expired arms stay expired
+    -- for the next tick (corrupter precedent).
+    st.stream = st.stream - 1000
+    st.jackhammer = st.jackhammer - 1000
+    st.shadowPower = st.shadowPower - 1000
+    if creature:IsCasting() then
+        return
+    end
+
     -- Stream of Machine Fluid 35311: 55s init then randtime
     -- 35-50s — TRIGGERED DoCastVictim (C++-exact).
-    if st.stream <= 1000 then
+    if st.stream <= 0 then
         creature:CastSpell(nil, SPELL_STREAM_OF_MACHINE_FLUID, true)
         st.stream = math.random(35000, 50000)
-    else
-        st.stream = st.stream - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Jackhammer 35327: 45s init then 30s — EMOTE_HAMMER Talk
     -- + TRIGGERED DoCastVictim + 50% Talk(SAY_HAMMER)
     -- (C++-exact order); re-arm 30s regardless (C++-exact).
-    if st.jackhammer <= 1000 then
+    if st.jackhammer <= 0 then
         creature:Talk(EMOTE_HAMMER)
         creature:CastSpell(nil, SPELL_JACKHAMMER, true)
         if math.random(2) == 1 then
             creature:Talk(SAY_HAMMER)
         end
         st.jackhammer = 30000
-    else
-        st.jackhammer = st.jackhammer - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 
     -- Shadow Power 35322: 25s init then randtime 20-28s —
     -- non-triggered DoCast(me) self-cast (C++-exact); the
     -- H_SPELL_* heroic variants are never fired by the C++,
     -- so the port never gates on IsHeroic.
-    if st.shadowPower <= 1000 then
+    if st.shadowPower <= 0 then
         creature:CastSpell(creature, SPELL_SHADOW_POWER)
         st.shadowPower = math.random(20000, 28000)
-    else
-        st.shadowPower = st.shadowPower - 1000
+        if creature:IsCasting() then
+            return
+        end
     end
 end
 
