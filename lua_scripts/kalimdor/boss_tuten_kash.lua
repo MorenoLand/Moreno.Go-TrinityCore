@@ -30,8 +30,8 @@
 --   12254) — each under its C++ !me->HasAura() guard (HasAura bridge
 --   exists on the unit object — hyjal_trash/kodo precedents).
 -- - Engage (C++ JustEngagedWith): arm Web Spray at init {3s,5s} and
---   Curse of Tuten'kash at init {9s,14s} (the BossAI::JustEngagedWith
---   instance leg is blocked — standing, no instance bridge).
+--   Curse of Tuten'kash at init {9s,14s} (BossAI::JustEngagedWith
+--   pulse + me-DoZone PORTED; instance legs stay blocked).
 -- - Web Spray (EVENT_WEB_SPRAY): SelectTarget(Random, 0, 100, false)
 --   -> randomThreatTargetInRange(creature, 100) — threat-list pick, no
 --   Player filter (playerOnly=FALSE explicit in C++); position 0 means
@@ -125,6 +125,8 @@ local function onCurseOfTutenkash(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_tuten_kash.cpp:54-56)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "webspray", math.random(3000, 5000), function()

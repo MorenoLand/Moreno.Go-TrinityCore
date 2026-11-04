@@ -28,7 +28,8 @@
 --   (C++ InitializeAI -> DoAction at spawn) — DoCastAOE(39140, triggered)
 --   resolves to a triggered self-cast (illidan precedent).
 -- - Engage (C++ JustEngagedWith): Talk SAY_ONAGGRO (1) + arm each
---   bridgeable timer at its C++ ScheduleEvent cooldown.
+--   bridgeable timer at its C++ ScheduleEvent cooldown;
+--   BossAI::JustEngagedWith pulse + me-DoZone PORTED (instance legs out).
 -- - Fear 31970: DoCastAOE resolves to self-cast (kazrogal/illidan
 --   precedent), non-triggered, init 42s -> 42s.
 -- - Air Burst 32014: Talk SAY_AIR_BURST (3) + cast on
@@ -414,6 +415,8 @@ local function onEnterCombat(event, creature, target)
     clearState(guid)
     bossState(guid)
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; Talk-then-base in boss_archimonde.cpp:302-305)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     schedule(guid, "fear", 42000, function()
         onFear(creature, guid)
     end)

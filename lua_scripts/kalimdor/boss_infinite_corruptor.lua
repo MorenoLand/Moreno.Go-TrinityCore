@@ -24,8 +24,8 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer at
---   its C++ ScheduleEvent cooldown (7s / 5s); the BossAI::JustEngagedWith
---   instance leg is blocked (standing).
+--   its C++ ScheduleEvent cooldown (7s / 5s); BossAI::JustEngagedWith
+--   pulse + me-DoZone PORTED, instance legs stay blocked (standing).
 -- - Corrupting Blight 60588 on SelectTarget(Random, 0, 60.0f, true) ->
 --   random alive threat-list player within 60m, offset 0 (no skip;
 --   UnitAI.h:172-174, Oct-25 CoS strip idiom), non-triggered
@@ -153,6 +153,8 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; Talk-then-base in boss_infinite_corruptor.cpp:78-81)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     schedule(guid, "corruptingblight", 7000, function()
         onCorruptingBlight(creature, guid)
     end)

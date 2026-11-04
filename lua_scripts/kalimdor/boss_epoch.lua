@@ -44,8 +44,8 @@
 -- - InitializeAI: instance->GetBossState(DATA_EPOCH) == DONE ->
 --   me->RemoveLootMode(LOOT_MODE_DEFAULT) — instance-data bridge blocked
 --   (standing).
--- - BossAI::JustEngagedWith / BossAI::_Reset / BossAI::_JustDied
---   instance legs — blocked (standing).
+-- - BossAI::_Reset / BossAI::_JustDied instance legs — blocked
+--   (standing); engage pulse + me-DoZone PORTED (see onEnterCombat).
 -- - EVENT_TIME_STEP + SpellHitTarget: SpellHitTarget(SPELL_TIME_STEP_
 --   DUMMY 52736, hostile) pushes the target's GUID into _stepTargets and
 --   reschedules EVENT_TIME_STEP at 500ms; the event then charges (DoCast
@@ -162,6 +162,8 @@ local function onTimeStop(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_chrono_lord_epoch.cpp:66-68)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     if creature:IsHeroic() then

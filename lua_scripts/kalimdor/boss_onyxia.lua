@@ -22,8 +22,8 @@
 -- instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer
 --   at its C++ ScheduleEvent cooldown ({10s,20s} / {15s,20s} /
---   {2s,5s} / {10s,20s}); the DoStartTimedAchievement and
---   BossAI::JustEngagedWith instance legs are blocked (standing).
+--   {2s,5s} / {10s,20s}); BossAI::JustEngagedWith pulse + me-DoZone
+--   PORTED; DoStartTimedAchievement + instance legs stay blocked.
 -- - Flame Breath (EVENT_FLAME_BREATH): DoCastVictim
 --   (SPELL_FLAME_BREATH 18435), non-triggered; init {10s,20s} ->
 --   repeat {10s,20s} unconditional (C++ reschedules every fire).
@@ -486,6 +486,8 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_onyxia.cpp:163-165)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- Fresh fight: phase flags and whelp count reset, but the

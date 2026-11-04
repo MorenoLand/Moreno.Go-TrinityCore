@@ -11,7 +11,8 @@
 -- OnKilledUnit, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
 -- melee engine-driven in Go (DoMeleeAttackIfReady).
 -- Ported arms:
--- - Engage (C++ JustEngagedWith): Talk(SAY_AGGRO 0) + arm the 1s
+-- - Engage (C++ JustEngagedWith): BossAI base arms PORTED (head of
+--   onEnterCombat); Talk(SAY_AGGRO 0) + arm the 1s
 --   health pump (the C++ UpdateAI polls HealthBelowPct every tick;
 --   1s pump is the honest approximation — shade_of_aran
 --   precedent).
@@ -93,6 +94,8 @@ local function healthPump(creature, guid, st)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_glutton.cpp:56-58)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)

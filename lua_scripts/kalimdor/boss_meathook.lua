@@ -22,7 +22,8 @@
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer
 --   at its C++ ScheduleEvent cooldown ({7s,11s} / 2s / {13s,17s});
---   the BossAI::JustEngagedWith instance leg is blocked (standing).
+--   BossAI::JustEngagedWith pulse + me-DoZone PORTED, instance legs
+--   stay blocked (standing).
 -- - Constricting Chains (EVENT_CHAIN): SelectTarget(Random, 0, -20.0f,
 --   true) -> random alive threat-list player at least 20yd away (C++'s
 --   negative dist is a minimum-distance filter — UnitAI.h/UnitAI.cpp
@@ -179,6 +180,8 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; Talk-then-base in boss_meathook.cpp:61-64)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     schedule(guid, "chain", math.random(7000, 11000), function()
         onChain(creature, guid)
     end)

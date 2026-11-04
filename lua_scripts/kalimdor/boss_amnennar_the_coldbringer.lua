@@ -16,7 +16,8 @@
 -- Ported arms:
 -- - Engage (C++ JustEngagedWith): arm Amnennar's Wrath at 8s,
 --   Frostbolt at 1s, Frost Nova at {10s,15s}; Talk(SAY_AGGRO 0).
---   (BossAI::JustEngagedWith instance leg blocked — standing.)
+--   (BossAI::JustEngagedWith pulse + me-DoZone PORTED; instance legs
+--   stay blocked — standing.)
 -- - Amnennar's Wrath (EVENT_AMNENNARSWRATH): DoCastVictim
 --   (SPELL_AMNENNARSWRATH 13009), non-triggered (2-arg
 --   DoCastVictim); init 8s -> repeat 12s unconditional.
@@ -146,8 +147,10 @@ local function healthPump(creature, guid, st)
     end)
 end
 
--- C++ JustEngagedWith: arm timers + Talk(SAY_AGGRO).
+-- C++ JustEngagedWith: base arms + timers + Talk(SAY_AGGRO).
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_amnennar_the_coldbringer.cpp:71-73)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "wrath", 8000, function()

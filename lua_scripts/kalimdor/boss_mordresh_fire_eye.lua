@@ -23,7 +23,8 @@
 --   Talk(SAY_OOC_3 2), 14s -> OOC_1.
 -- - Engage (C++ JustEngagedWith): events.Reset() (kills the OOC
 --   chain) + Talk(SAY_AGGRO 3) + arm Fireball at 100ms and Fire
---   Nova at {8s,12s} (BossAI::JustEngagedWith instance leg blocked).
+--   Nova at {8s,12s} (BossAI::JustEngagedWith pulse + me-DoZone
+--   PORTED; instance legs stay blocked).
 -- - Fireball (EVENT_FIREBALL): DoCastVictim(SPELL_FIREBALL 12466),
 --   non-triggered (2-arg DoCastVictim); init 100ms -> repeat
 --   {2400ms,3800ms} unconditional (nil-victim keeps schedule —
@@ -128,9 +129,11 @@ local function onFireNova(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: events.Reset() clears the OOC chain;
+-- C++ JustEngagedWith: base arms + events.Reset() clears the OOC chain;
 -- Talk(SAY_AGGRO); arm combat timers.
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_mordresh_fire_eye.cpp:61-63)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)

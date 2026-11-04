@@ -23,8 +23,8 @@
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer at
 --   its C++ ScheduleEvent cooldown ({19s,24s} / 2s / {25s,35s} /
---   40s heroic-only); the BossAI::JustEngagedWith instance leg is
---   blocked (standing).
+--   40s heroic-only); BossAI::JustEngagedWith pulse + me-DoZone
+--   PORTED, instance legs stay blocked (standing).
 -- - Curse of Twisted Flesh (EVENT_CURSE_FLESH, heroic-only):
 --   DoCastVictim(SPELL_CURSE_OF_TWISTED_FLESH 58845), non-triggered,
 --   init 40s -> repeat 37s (C++ Repeat unconditional, nil victim ->
@@ -234,6 +234,8 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; Talk-then-base in boss_salramm_the_fleshcrafter.cpp:73-76)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     schedule(guid, "summonghouls", math.random(19000, 24000), function()
         onSummonGhouls(creature, guid)
     end)
