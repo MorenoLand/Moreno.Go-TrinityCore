@@ -12188,17 +12188,21 @@ func init() {
 	// cleave/corrosion/gas-nova/encapsulate ground-phase schedule,
 	// the berserk chain (10min, then every 10s, C++-exact), the
 	// unguarded kill Talk, the death Talk and timer cleanup; the
-	// flight phase, DamageTaken invulnerability, FOG_INFORM SpellHit
+	// ground ticks defer 500ms on IsCasting (C++ IsNonMeleeSpellCast
+	// gate boss_felmyst.cpp:421, no re-arm consumed); the flight
+	// phase, DamageTaken invulnerability, FOG_INFORM SpellHit
 	// summon, vapor-trail despawn summon and JustAppeared Talk arms
 	// have no movement/summon/kill/spawn bridges, and the
 	// SetBossState arms are blocked on the instance-script model.
 	RegisterLuaBoss("boss_felmyst", 25038)
 	// Vapor trail (25267) runs its constructor triggered self-cast
 	// of trail trigger 45399; the flag/combat-reach arms have no
-	// bridges. The vapor (25265) has no bridgeable AI arms (flag/
-	// speed/target-selection only) and the Blazing Dead (25268)
-	// has no C++ AI class, so neither is registered yet — entries
-	// verified in sunwell_plateau.h for future registration.
+	// bridges; its UpdateAI is an empty override, so no gate. The
+	// vapor (25265) UpdateAI is a victim-pick AttackStart only (zero
+	// cast-state hits), so no gate, and the Blazing Dead (25268)
+	// has no C++ AI class at all, so no gate; neither is registered
+	// yet — entries verified in sunwell_plateau.h for future
+	// registration.
 	RegisterLuaBoss("npc_felmyst_trail", 25267)
 	// Eredar Twins (25165/25166) run their pull schedules (shadow
 	// blades/shadow nova/confounding blow for Sacrolash; conflagration/

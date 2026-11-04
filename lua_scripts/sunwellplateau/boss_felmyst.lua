@@ -95,10 +95,15 @@
 -- respawn via fireCreatureSpawned — the old "no spawn-fire bridge"
 -- note is retracted). The AttackStart/MoveInLineOfSight PHASE_
 -- FLIGHT gates have no bridge (melee/aggro gating is engine-
--- side). The UpdateAI UNIT_STATE_CASTING queue gate and the
--- UpdateVictim evade-side arm have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
--- fire unconditionally (jeklik convention) and evade-side cleanup
--- is engine-side.
+-- side). The UpdateAI gate is C++ IsNonMeleeSpellCast(false)
+-- (boss_felmyst.cpp:421, after events.Update, before both phase
+-- switches): while a non-melee cast is in flight the due ground
+-- event does not execute. Ported via the live creature:IsCasting()
+-- bridge (lua_creature_events.go:1950, bjarngrim precedent): each
+-- ground tick defers 500ms under its own key, consuming no re-arm;
+-- the stale "IsCasting is constant-false / timers fire
+-- unconditionally" claim is retracted. The UpdateVictim evade-side
+-- arm has no port (evade-side cleanup is engine-side).
 
 local NPC_FELMYST = 25038
 local NPC_VAPOR_TRAIL = 25267
@@ -159,6 +164,12 @@ end
 
 -- C++ EVENT_CLEAVE: DoCastVictim(19983); repeat {5s,10s}.
 local function felmystCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            felmystCleave(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CLEAVE)
     schedule(guid, "cleave", math.random(5000, 10000), function()
         felmystCleave(creature, guid)
@@ -167,6 +178,12 @@ end
 
 -- C++ EVENT_CORROSION: DoCastVictim(45866); repeat {20s,30s}.
 local function felmystCorrosion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "corrosion", 500, function()
+            felmystCorrosion(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CORROSION)
     schedule(guid, "corrosion", math.random(20000, 30000), function()
         felmystCorrosion(creature, guid)
@@ -175,6 +192,12 @@ end
 
 -- C++ EVENT_GAS_NOVA: DoCast(me, 45855); repeat {20s,25s}.
 local function felmystGasNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gasnova", 500, function()
+            felmystGasNova(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_GAS_NOVA)
     schedule(guid, "gasnova", math.random(20000, 25000), function()
         felmystGasNova(creature, guid)
@@ -184,6 +207,12 @@ end
 -- C++ EVENT_ENCAPSULATE: DoCast(threat-list player alive
 -- within 150 yd, 45661); repeat {25s,30s}.
 local function felmystEncapsulate(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "encapsulate", 500, function()
+            felmystEncapsulate(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 150)
     if target then
         creature:CastSpell(target, SPELL_ENCAPSULATE_CHANNEL)
@@ -196,6 +225,12 @@ end
 -- C++ EVENT_BERSERK: Talk(YELL_BERSERK) + triggered self-cast
 -- 45078; C++ re-arms the event at 10s after every fire.
 local function felmystBerserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            felmystBerserkTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(YELL_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK, true)
     schedule(guid, "berserk", 10000, function()
