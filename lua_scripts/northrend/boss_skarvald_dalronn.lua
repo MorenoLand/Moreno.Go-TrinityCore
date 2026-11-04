@@ -240,12 +240,18 @@ local function chargeTick(creature, guid)
 end
 
 -- C++ boss_skarvald_the_constructorAI::JustEngagedWith (lines 192-201):
--- BossAI passthrough (no bridge); if (!IsInGhostForm) Talk(SAY_AGGRO) —
+-- BossAI passthrough (SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- ported into skarvaldEnterCombat, base-first); if (!IsInGhostForm) Talk(SAY_AGGRO) —
 -- gate satisfied structurally (ghost entry 27390 not registered).
 local function skarvaldEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bossDeaths = 0
+    -- generic_boss_controllerAI::JustEngagedWith (:192, base-first;
+    -- generic base gates on !IsInGhostForm, structural: ghost entries
+    -- unregistered) — SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "charge", 5000, function() chargeTick(creature, guid) end)
     schedule(guid, "stonestrike", 10000, function() stoneStrikeTick(creature, guid) end)
@@ -345,7 +351,8 @@ local function debilitateTick(creature, guid)
 end
 
 -- C++ boss_dalronn_the_controllerAI::JustEngagedWith (lines 244-254):
--- BossAI passthrough (no bridge); the schedule legs become CreateLuaEvent
+-- BossAI passthrough (SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- ported into dalronnEnterCombat, base-first); the schedule legs become CreateLuaEvent
 -- timers. No immediate Talk — SAY_AGGRO rides EVENT_DELAYED_AGGRO_SAY.
 local function summonSkeletonsTick(creature, guid)
     creature:CastSpell(creature, SPELL_SUMMON_SKELETONS)
@@ -356,6 +363,11 @@ local function dalronnEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bossDeaths = 0
+    -- generic_boss_controllerAI::JustEngagedWith (:252, base-first;
+    -- generic base gates on !IsInGhostForm, structural: ghost entries
+    -- unregistered) — SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     schedule(guid, "shadowbolt", 1000, function() shadowBoltTick(creature, guid) end)
     schedule(guid, "debilitate", 5000, function() debilitateTick(creature, guid) end)
     -- C++ EVENT_SUMMON_SKELETONS (lines 272-275): DoCast(me,

@@ -244,6 +244,10 @@ local function ingvarEnterCombat(event, creature, target)
     state.engaged = true
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- BossAI::JustEngagedWith (:161, after the phase gate the engaged
+    -- latch mirrors) — SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "cleave", {6000, 12000}, function() cleaveTick(creature, guid) end)
     schedule(guid, "smash", {12000, 17000}, function() smashTick(creature, guid) end)

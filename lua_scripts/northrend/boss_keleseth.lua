@@ -339,6 +339,10 @@ local function skeletonDamageTaken(event, creature, attacker, damage)
 end
 
 local function kelesethEnterCombat(event, creature, target)
+    -- BossAI::JustEngagedWith (:146, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_START_COMBAT)
     -- C++ JustEngagedWith (:149-160): !who early return, then alive +
     -- LOS guards (runemage, then strategist, 60.0f) AttackStart(who).
