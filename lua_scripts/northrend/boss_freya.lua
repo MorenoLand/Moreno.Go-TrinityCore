@@ -132,9 +132,18 @@
 -- DOCUMENTED-ONLY).
 --
 -- DEVIATIONS from C++ (all bridge-limited, documented):
--- - No UNIT_STATE_CASTING model in Go (creature casts are
---   packet-visual), so timers fire unconditionally — the
---   maiden_of_virtue precedent documents the same gap.
+-- - Cast-state gates PORTED 2026-11-04: Freya's 6 timer arms
+--   (eonar-gift / sunbeam / unstable-energy / ground-tremor /
+--   iron-roots / enrage one-shot) and all 9 elder ticks defer
+--   500ms on creature:IsCasting() (live,
+--   lua_creature_events.go:1950), no repeat re-arm consumed —
+--   the mal_ganis idiom for the boss pre-loop (:414) +
+--   in-loop (:464) and elder pre-loop (:745/:863/:957) +
+--   in-loop (:776/:885/:979) CASTING gates. Elder ticks keep
+--   the drained-aura check first (C++ UpdateAI order). The
+--   stale "timers fire unconditionally" deviation is retracted
+--   for these arms. Wave / nature-bomb stay wave-machine-gated
+--   (unported), so no gate applies to them.
 -- - EVENT_SOLAR_FLARE: C++ passes SPELLVALUE_MAX_TARGETS =
 --   the FLUX_AURA stack count (1-8) via CastSpellExtraArgs;
 --   creature:GetStackAmount is live now (2026-10-23) but the chain
@@ -361,6 +370,10 @@ end
 -- SPELL_SUMMON_EONAR_GIFT), non-triggered self-cast;
 -- init 25s (:389), repeat 40s-50s.
 local function onEonarGift(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "eonar_gift", 500, function() onEonarGift(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_LIFEBINDERS_GIFT)
     creature:CastSpell(creature, SPELL_SUMMON_EONAR_GIFT)
     schedule(guid, "eonar_gift", {40000, 50000}, function() onEonarGift(creature, guid) end)
@@ -376,6 +389,10 @@ end
 -- 100y, DoCast(target, SPELL_SUNBEAM), 2-arg = non-triggered;
 -- init 5s-15s (:391), repeat 10s-15s.
 local function onSunbeam(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sunbeam", 500, function() onSunbeam(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 0, 100)
     if target then
         creature:CastSpell(target, SPELL_SUNBEAM)
@@ -388,6 +405,10 @@ end
 -- true) triggered; init 10s-20s (:364), repeat 15s-20s. Gated on
 -- Brightleaf alive at engage (see freyaEnterCombat).
 local function onUnstableEnergy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "unstable_energy", 500, function() onUnstableEnergy(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 0, 100)
     if target then
         creature:CastSpell(target, SPELL_FREYA_UNSTABLE_SUNBEAM, true)
@@ -400,6 +421,10 @@ end
 -- SPELL_FREYA_GROUND_TREMOR 62437, non-triggered; init 10s-20s
 -- (:370), repeat 25s-28s. Gated on Stonebark alive at engage.
 local function onFreyaGroundTremor(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "freya_ground_tremor", 500, function() onFreyaGroundTremor(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_GROUND_TREMOR)
     creature:CastSpell(creature, SPELL_FREYA_GROUND_TREMOR)
     schedule(guid, "freya_ground_tremor", {25000, 28000}, function() onFreyaGroundTremor(creature, guid) end)
@@ -411,12 +436,28 @@ end
 -- 10s-20s (:376), repeat 12s-20s. Gated on Ironbranch alive at
 -- engage.
 local function onStrengthenedIronRoots(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "strengthened_iron_roots", 500, function() onStrengthenedIronRoots(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_IRON_ROOTS)
     local target = randomPlayerInRange(creature, 0, 100, SPELL_ROOTS_FREYA)
     if target then
         target:CastSpell(target, SPELL_ROOTS_FREYA, true)
     end
     schedule(guid, "strengthened_iron_roots", {12000, 20000}, function() onStrengthenedIronRoots(creature, guid) end)
+end
+
+-- C++ EVENT_ENRAGE one-shot (:421-424): named tick so the 500ms
+-- IsCasting defer does not consume the cast — the auriaya berserk
+-- precedent; under the boss pre-loop (:414) + in-loop (:464) gates.
+local function onFreyaEnrage(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function() onFreyaEnrage(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_BERSERK)
+    creature:CastSpell(creature, SPELL_ENRAGE)
 end
 
 local function freyaEnterCombat(event, creature, target)
@@ -486,10 +527,7 @@ local function freyaEnterCombat(event, creature, target)
     -- C++ EVENT_ENRAGE (:421-424): one-shot 10min (:390);
     -- Talk(SAY_BERSERK) + DoCast(me, SPELL_ENRAGE),
     -- non-triggered self-cast; no re-arm in C++.
-    schedule(guid, "enrage", 600000, function()
-        creature:Talk(SAY_BERSERK)
-        creature:CastSpell(creature, SPELL_ENRAGE)
-    end)
+    schedule(guid, "enrage", 600000, function() onFreyaEnrage(creature, guid) end)
     schedule(guid, "eonar_gift", 25000, function() onEonarGift(creature, guid) end)
     schedule(guid, "sunbeam", {5000, 15000}, function() onSunbeam(creature, guid) end)
     -- C++ JustEngagedWith elder-gated arms (:362-377): the gate is
@@ -630,6 +668,10 @@ end
 -- flux-stack-count mod has no bridge (see header).
 local function onSolarFlare(creature, guid)
     if elderTimersActive(creature) then
+        if creature:IsCasting() then
+            schedule(guid, "solar_flare", 500, function() onSolarFlare(creature, guid) end)
+            return
+        end
         creature:CastSpell(creature, SPELL_SOLAR_FLARE)
     end
     schedule(guid, "solar_flare", {5000, 10000}, function() onSolarFlare(creature, guid) end)
@@ -641,6 +683,10 @@ end
 -- self-cast.
 local function onUnstableSunBeam(creature, guid)
     if elderTimersActive(creature) then
+        if creature:IsCasting() then
+            schedule(guid, "unstable_sun_beam", 500, function() onUnstableSunBeam(creature, guid) end)
+            return
+        end
         creature:CastSpell(creature, SPELL_UNSTABLE_SUN_BEAM_SUMMON, true)
     end
     schedule(guid, "unstable_sun_beam", {10000, 15000}, function() onUnstableSunBeam(creature, guid) end)
@@ -653,6 +699,10 @@ end
 -- model is presence-only), so the aura is re-applied as-is.
 local function onFlux(creature, guid)
     if elderTimersActive(creature) then
+        if creature:IsCasting() then
+            schedule(guid, "flux", 500, function() onFlux(creature, guid) end)
+            return
+        end
         creature:RemoveAura(SPELL_FLUX_AURA)
         creature:AddAura(SPELL_FLUX_AURA)
     end
@@ -676,6 +726,10 @@ end
 -- self-cast.
 local function onBark(creature, guid)
     if elderTimersActive(creature) then
+        if creature:IsCasting() then
+            schedule(guid, "bark", 500, function() onBark(creature, guid) end)
+            return
+        end
         creature:CastSpell(creature, SPELL_PETRIFIED_BARK)
     end
     schedule(guid, "bark", {30000, 50000}, function() onBark(creature, guid) end)
@@ -685,6 +739,10 @@ end
 -- DoCastVictim(SPELL_FISTS_OF_STONE), non-triggered.
 local function onFists(creature, guid)
     if elderTimersActive(creature) then
+        if creature:IsCasting() then
+            schedule(guid, "fists", 500, function() onFists(creature, guid) end)
+            return
+        end
         creature:CastSpell(nil, SPELL_FISTS_OF_STONE)
     end
     schedule(guid, "fists", {20000, 30000}, function() onFists(creature, guid) end)
@@ -695,6 +753,10 @@ end
 -- DoCastVictim(SPELL_GROUND_TREMOR), non-triggered.
 local function onTremor(creature, guid)
     if elderTimersActive(creature) and not creature:HasAura(SPELL_FISTS_OF_STONE) then
+        if creature:IsCasting() then
+            schedule(guid, "tremor", 500, function() onTremor(creature, guid) end)
+            return
+        end
         creature:CastSpell(nil, SPELL_GROUND_TREMOR)
     end
     schedule(guid, "tremor", {10000, 20000}, function() onTremor(creature, guid) end)
@@ -716,6 +778,10 @@ end
 -- 15s-25s; DoCastVictim(SPELL_IMPALE), non-triggered.
 local function onImpale(creature, guid)
     if elderTimersActive(creature) then
+        if creature:IsCasting() then
+            schedule(guid, "impale", 500, function() onImpale(creature, guid) end)
+            return
+        end
         creature:CastSpell(nil, SPELL_IMPALE)
     end
     schedule(guid, "impale", {15000, 25000}, function() onImpale(creature, guid) end)
@@ -726,6 +792,10 @@ end
 -- non-triggered.
 local function onThornSwarm(creature, guid)
     if elderTimersActive(creature) then
+        if creature:IsCasting() then
+            schedule(guid, "thorn_swarm", 500, function() onThornSwarm(creature, guid) end)
+            return
+        end
         creature:CastSpell(nil, SPELL_THORN_SWARM)
     end
     schedule(guid, "thorn_swarm", {8000, 13000}, function() onThornSwarm(creature, guid) end)
@@ -740,6 +810,10 @@ end
 -- target self-casts (player:CastSpell, vezax precedent).
 local function onIronRoots(creature, guid)
     if elderTimersActive(creature) then
+        if creature:IsCasting() then
+            schedule(guid, "iron_roots", 500, function() onIronRoots(creature, guid) end)
+            return
+        end
         local target = randomPlayerInRange(creature, 0, 100, SPELL_ROOTS_IRONBRANCH)
         if target then
             target:CastSpell(target, SPELL_ROOTS_IRONBRANCH, true)

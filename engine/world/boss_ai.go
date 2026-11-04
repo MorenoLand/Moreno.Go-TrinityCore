@@ -19111,6 +19111,13 @@ func init() {
 	// (33174) Reset/despawn + toasty-fire (33342) Reset/SpellHit
 	// add arms are ported in the same file (ev23/ev4/ev14;
 	// summoned adds need no separate registration).
+	// Cast-state gates (2026-11-04): the six boss timer arms
+	// (icicle / freeze / blows / flash-freeze / rare-cache /
+	// berserk) defer 500ms on creature:IsCasting(), no repeat
+	// re-arm — boss UpdateAI pre-loop (:437) + in-loop (:492)
+	// CASTING gates. Add gates (priest / shaman / druid /
+	// mage) cover unported arms only; icicle / snowpacked /
+	// flash-freeze / toasty UpdateAIs are ungated per C++.
 	RegisterLuaBoss("boss_hodir", 32845)
 
 	// boss_freya.lua (lua_scripts/northrend/boss_freya.lua):
@@ -19131,10 +19138,16 @@ func init() {
 	// KilledUnit player-gated Talk(SAY_ELDER_SLAY 1) (event 3);
 	// JustDied Talk(SAY_ELDER_DEATH 2) (event 4).
 	// Freya's JustEngagedWith aggro Talk choice (SAY_AGGRO 0
-	// vs SAY_AGGRO_WITH_ELDER 1), timer event machine yells,
-	// wave/summon NPC scripts, two spell scripts and the four
-	// achievement scripts are bridge-blocked — documented in
-	// the lua header.
+	// vs SAY_AGGRO_WITH_ELDER 1) is ported, as are the timer
+	// arms (eonar-gift / sunbeam / unstable-energy /
+	// ground-tremor / iron-roots / enrage) and all nine elder
+	// ticks — all defer 500ms on creature:IsCasting(), no
+	// repeat re-arm (boss pre-loop :414 + in-loop :464;
+	// elder pre-loop :745/:863/:957 + in-loop :776/:885/:979;
+	// drained-aura check first on elder ticks). Wave /
+	// nature-bomb, wave/summon NPC scripts, two spell scripts
+	// and the four achievement scripts are bridge-blocked —
+	// documented in the lua header.
 	RegisterLuaBoss("boss_freya", 32906)
 	RegisterLuaBoss("boss_freya", 32915)
 	RegisterLuaBoss("boss_freya", 32914)
@@ -19160,6 +19173,14 @@ func init() {
 	// the ten spell scripts, the condition script and the
 	// three achievements are bridge-blocked — documented in
 	// the lua header.
+	// Cast-state gates (2026-11-04): runic-colossus ticks
+	// (barrier / smash / charge) and rune-giant ticks (stomp /
+	// detonation / fortification one-shot) defer 500ms on
+	// creature:IsCasting(), no repeat re-arm — colossus
+	// pre-loop :1456 + in-loop :1488, giant pre-loop :1552 +
+	// in-loop :1576. Boss-thorim gates (:690/:814), trash
+	// gates (:1107/:1114) and sif gates (:1640/:1673) cover
+	// unported arms only; boss has zero ported timer ticks.
 	RegisterLuaBoss("boss_thorim", 32865)
 
 	// boss_yogg_saron.lua (lua_scripts/northrend/boss_yogg_saron.lua):

@@ -341,6 +341,12 @@ end
 -- DoCastAOE(SPELL_RUNIC_BARRIER 62338) (non-triggered), 12-15s init,
 -- Repeat(35s, 45s).
 local function colossusRunicBarrierTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "runicbarrier", 500, function()
+            colossusRunicBarrierTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_RUNIC_BARRIER)
     creature:CastSpell(creature, SPELL_RUNIC_BARRIER)
     schedule(guid, "runicbarrier", {35000, 45000}, function()
@@ -351,6 +357,12 @@ end
 -- C++ EVENT_SMASH: DoCastAOE(SPELL_SMASH 62339) (non-triggered),
 -- 15-18s init, Repeat(15s, 18s).
 local function colossusSmashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "smash", 500, function()
+            colossusSmashTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SMASH)
     schedule(guid, "smash", {15000, 18000}, function()
         colossusSmashTick(creature, guid)
@@ -361,6 +373,12 @@ end
 -- DoCast(target, SPELL_RUNIC_CHARGE 62613) (non-triggered), 20-24s init,
 -- Repeat(20s).
 local function colossusRunicChargeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "runiccharge", 500, function()
+            colossusRunicChargeTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 8, 40)
     if target then
         creature:CastSpell(target, SPELL_RUNIC_CHARGE)
@@ -442,6 +460,12 @@ end
 -- C++ EVENT_STOMP: DoCastAOE(SPELL_STOMP 62411) (non-triggered),
 -- 10-12s init, Repeat(10s, 12s).
 local function giantStompTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            giantStompTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_STOMP)
     schedule(guid, "stomp", {10000, 12000}, function()
         giantStompTick(creature, guid)
@@ -452,6 +476,12 @@ end
 -- DoCast(target, SPELL_RUNE_DETONATION 62526) (non-triggered), 25s init,
 -- Repeat(10s, 12s).
 local function giantRuneDetonationTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "runedetonation", 500, function()
+            giantRuneDetonationTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 0, 60)
     if target then
         creature:CastSpell(target, SPELL_RUNE_DETONATION)
@@ -465,13 +495,27 @@ end
 -- DoZoneInCombat() first (PORTED 2026-10-23 — bridge live,
 -- engine/world/lua_creature_events.go), then _events.Reset() and the
 -- three ScheduleEvent arms.
+-- C++ EVENT_RUNIC_FORTIFICATION one-shot (boss_thorim.cpp:1556-1559):
+-- named tick so the 500ms IsCasting defer does not consume the
+-- cast — the auriaya berserk precedent; under the giant
+-- pre-loop (:1552) + in-loop (:1576) CASTING gates.
+local function giantRunicFortificationTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "runicfortification", 500, function()
+            giantRunicFortificationTick(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(EMOTE_RUNIC_MIGHT)
+    creature:CastSpell(creature, SPELL_RUNIC_FORTIFICATION)
+end
+
 local function giantEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- C++ :1532, first arm (bridge live 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "runicfortification", 1, function()
-        creature:Talk(EMOTE_RUNIC_MIGHT)
-        creature:CastSpell(creature, SPELL_RUNIC_FORTIFICATION)
+        giantRunicFortificationTick(creature, guid)
     end)
     schedule(guid, "stomp", {10000, 12000}, function()
         giantStompTick(creature, guid)

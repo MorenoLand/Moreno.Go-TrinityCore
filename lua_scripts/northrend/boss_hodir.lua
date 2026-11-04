@@ -82,10 +82,19 @@
 -- 4) + damage = 0 (event 9; C++ lines 396-399; the numeric
 -- second return rewrites damage C++-exact — the moroes
 -- damage-rewrite precedent).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go
--- (creature casts are packet-visual), so timers fire
--- unconditionally — melee stays engine-driven, like C++
--- DoMeleeAttackIfReady (the maiden_of_virtue precedent).
+-- Cast-state gates PORTED 2026-11-04: the six boss timer arms
+-- (icicle / freeze / blows / flash-freeze / rare-cache /
+-- berserk) defer 500ms on creature:IsCasting() (live,
+-- lua_creature_events.go:1950), no repeat re-arm consumed —
+-- the mal_ganis idiom for the boss UpdateAI pre-loop (:437)
+-- + in-loop (:492) CASTING gates. The stale "timers fire
+-- unconditionally" deviation above is retracted for these arms.
+-- Melee stays engine-driven, like C++ DoMeleeAttackIfReady.
+-- Ungated per C++: flash-freeze add UpdateAI (:210, no gate),
+-- icicle add UpdateAI (:583, plain timer), snowpacked-icicle
+-- UpdateAI (:638, plain expiry), toasty-fire (no UpdateAI);
+-- priest/shaman/druid/mage add gates (:683/:765/:830/:908)
+-- cover unported add arms only (no registrations).
 -- DOCUMENTED-ONLY (in this header; no registration beyond
 -- entry 32845):
 -- JustEngagedWith achievement flags (gettingColdInHereTimer
@@ -291,6 +300,10 @@ end
 -- the C++ if; re-arm RAID_MODE(5500ms, 3500ms) unconditional — the
 -- ScheduleEvent sits outside the target check.
 local function onIcicle(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "icicle", 500, function() onIcicle(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_ICICLE)
@@ -306,6 +319,10 @@ end
 -- 1-arg = non-triggered; init 25s (line 380), repeat 30-45s
 -- (line 446).
 local function onFreeze(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "freeze", 500, function() onFreeze(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FREEZE)
     schedule(guid, "freeze", {30000, 45000}, function() onFreeze(creature, guid) end)
 end
@@ -315,6 +332,10 @@ end
 -- 2-arg = non-triggered; init 60-65s (line 381), repeat
 -- 60-65s (line 477).
 local function onBlows(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blows", 500, function() onBlows(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_STALACTITE)
     creature:Talk(EMOTE_BLOWS)
     creature:CastSpell(creature, SPELL_FROZEN_BLOWS)
@@ -331,9 +352,35 @@ end
 -- EVENT_FLASH_FREEZE_EFFECT leg (line 460) plus the 25-35s
 -- reschedule (line 470); init 45s (line 382).
 local function onFlashFreeze(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flashfreeze", 500, function() onFlashFreeze(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_FLASH_FREEZE)
     creature:Talk(EMOTE_FREEZE)
     schedule(guid, "flashfreeze", {25500, 35500}, function() onFlashFreeze(creature, guid) end)
+end
+
+-- C++ EVENT_RARE_CACHE one-shot (lines 479-483) and EVENT_BERSERK
+-- one-shot (lines 485-488): named ticks so the 500ms IsCasting defer
+-- below does not consume the cast — the auriaya berserk precedent.
+-- Both sit under the boss UpdateAI pre-loop (:437) + in-loop (:492)
+-- CASTING gates, like the other four boss ticks.
+local function onRareCache(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rarecache", 500, function() onRareCache(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_HARD_MODE_FAILED)
+end
+
+local function onBerserk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK, true)
 end
 
 -- C++ JustEngagedWith (lines 370-384): BossAI passthrough
@@ -356,15 +403,12 @@ local function hodirEnterCombat(event, creature, target)
     -- init 3min (line 383), fires once (CancelEvent, line
     -- 483); the flag clear + instance SetData legs have no
     -- bridges.
-    schedule(guid, "rarecache", 180000, function() creature:Talk(SAY_HARD_MODE_FAILED) end)
+    schedule(guid, "rarecache", 180000, function() onRareCache(creature, guid) end)
     -- C++ EVENT_BERSERK (lines 485-488): Talk(SAY_BERSERK) +
     -- DoCast(me, SPELL_BERSERK, true) -> CastSpell(creature,
     -- 47008, true); init 8min (line 384), fires once
     -- (CancelEvent, line 488).
-    schedule(guid, "berserk", 480000, function()
-        creature:Talk(SAY_BERSERK)
-        creature:CastSpell(creature, SPELL_BERSERK, true)
-    end)
+    schedule(guid, "berserk", 480000, function() onBerserk(creature, guid) end)
 end
 
 local function hodirLeaveCombat(event, creature)
