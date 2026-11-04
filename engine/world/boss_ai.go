@@ -19395,8 +19395,8 @@ func init() {
 	// Timer-driven cast ports (CreateLuaEvent): the ymirjar trash kits —
 	// warrior HAMSTRING 48639 / STRIKE 48640, witch doctor SHADOW_BOLT
 	// 49084 / SHRINK 49089, harpooner NET 49092 (random player, 30y) /
-	// THROW 49091 — all ungated in their ScheduleTasks, non-triggered
-	// (the yogg_saron adds precedent). Talk(SAY_AGGRO 0) rides DoAction
+	// THROW 49091 — all TaskScheduler-validator-gated, non-triggered
+	// (500ms IsCasting defer; the yogg_saron adds precedent). Talk(SAY_AGGRO 0) rides DoAction
 	// (ACTION_START_ENCOUNTER) (event 1 deliberately not registered),
 	// the SAY_DRAKE_BREATH / SAY_DRAKE_DEATH Talks, the ground-phase
 	// timer kits (ACTION_GAUNTLET_END-gated — the gothik precedent), the
@@ -19404,6 +19404,12 @@ func init() {
 	// spline-chain emotes (no MovementInform bridge), the SpellScript /
 	// AuraScript hooks, the achievement GetData check and the area
 	// trigger are bridge-blocked — documented in the lua header.
+	// Cast-state gates (2026-11-04): all 6 trash ticks + boss resetCheck
+	// + 3 ground-phase ticks carry the 500ms IsCasting defer
+	// (trash ctor validator boss_skadi.cpp:476 + boss scheduler
+	// validator :160; TaskScheduler::Dispatch aborts while casting,
+	// tasks stay queued); grauf spline legs ungated per C++ (plain
+	// scheduler, no validator).
 	RegisterLuaBoss("boss_skadi", 26693)
 	// AddSC_boss_ymiron: King Ymiron (Utgarde Pinnacle) — ported arms
 	// (lua_scripts/northrend/boss_ymiron.lua): JustEngagedWith
@@ -19413,8 +19419,8 @@ func init() {
 	// unconditional Talk(SAY_DEATH 2) (event 4 — the sjonnir
 	// JustDied-Talk precedent). Timer-driven cast ports (CreateLuaEvent):
 	// EVENT_BANE 48294, EVENT_FETID_ROT 48291, EVENT_DARK_SLASH 48292,
-	// EVENT_ANCESTORS_VENGEANCE 16939 — all ungated in ExecuteEvent,
-	// non-triggered (normal-mode DUNGEON_MODE values; the assembly_of_iron
+	// EVENT_ANCESTORS_VENGEANCE 16939 — all BossAI-base-gated
+	// (500ms IsCasting defer), non-triggered (normal-mode DUNGEON_MODE values; the assembly_of_iron
 	// deviation precedent for the unbridged boat-phase DelayEvents leg).
 	// The MovementInform POINT_BOAT summon Talks
 	// (SAY_SUMMON_BJORN/HALDOR/RANULF/TORGYN 3-6), the ancestor summon /
@@ -19422,6 +19428,9 @@ func init() {
 	// ancestor events (gothik-gated), the spell_dark_slash SpellScript
 	// OnHit hook and the achievement_kings_bane GetData check are
 	// bridge-blocked — documented in the lua header.
+	// Cast-state gates (2026-11-04): all 4 base-spell ticks carry the
+	// 500ms IsCasting defer (BossAI::UpdateAI base gates,
+	// ScriptedCreature.cpp:578/:584; no UpdateAI override in file).
 	RegisterLuaBoss("boss_ymiron", 26861)
 	// AddSC_boss_archavon: Archavon the Stone Watcher (Vault of
 	// Archavon) — ported arms (lua_scripts/northrend/boss_archavon.lua):
@@ -19431,14 +19440,17 @@ func init() {
 	// (EMOTE_LEAP 1, target) (30s/30s — the 10y min-range SelectTarget
 	// gate is unbridged), EVENT_STOMP 58663 + 3s EVENT_IMPALE 58666
 	// chain (45s re-arm; DoCastVictim), EVENT_BERSERK Talk(EMOTE_BERSERK
-	// 0) + DoCastSelf 47008 (5min one-shot) — all ungated in
-	// ExecuteEvent, non-triggered except Crushing Leap (the 2026-10-06
+	// 0) + DoCastSelf 47008 (5min one-shot) — all own-UpdateAI
+	// CASTING-gated (500ms IsCasting defer), non-triggered except
+	// Crushing Leap (the 2026-10-06
 	// "zero bridgeable arms" closure was stale "no-timer-bridge"
 	// doctrine). JustEngagedWith carries no Talk arms; no JustDied /
 	// KilledUnit / DamageTaken / DoAction arms exist. The
-	// spell_archavon_rock_shards SpellScript hook and the
-	// UNIT_STATE_CASTING gate are bridge-blocked — documented in the lua
-	// header.
+	// spell_archavon_rock_shards SpellScript hook is bridge-blocked —
+	// documented in the lua header.
+	// Cast-state gates (2026-11-04): all 5 timer arms (rock shards /
+	// choking cloud / stomp / impale chain / berserk) carry the 500ms
+	// IsCasting defer (own UpdateAI pre-loop :87 + in-loop :123).
 	RegisterLuaBoss("boss_archavon", 31125)
 	// AddSC_boss_emalon: Emalon the Storm Watcher (Vault of Archavon)
 	// — ported arms (lua_scripts/northrend/boss_emalon.lua):
@@ -19451,8 +19463,12 @@ func init() {
 	// EMOTE_OVERCHARGE), the Reset-time SummonCreature x4, the
 	// overcharge self-stack loop (no GetAura stack-count bridge), the
 	// instance->GetGuidData(DATA_EMALON) legs, SetFullHealth,
-	// DespawnOrUnsummon, DoZoneInCombat and the UNIT_STATE_CASTING
-	// gates are bridge-blocked — documented in the lua header.
+	// DespawnOrUnsummon, DoZoneInCombat are bridge-blocked; the
+	// UNIT_STATE_CASTING gates are ported as the 500ms IsCasting defer
+	// (boss pre-loop :129 + in-loop :166; minion pre-loop :239) —
+	// documented in the lua header.
+	// Cast-state gates (2026-11-04): boss chain/nova/berserk/overcharge
+	// + minion shock carry the 500ms IsCasting defer.
 	RegisterLuaBoss("boss_emalon", 33993)
 	// AddSC_boss_koralon: Koralon the Flame Watcher (Vault of Archavon)
 	// — ported arms (lua_scripts/northrend/boss_koralon.lua):
@@ -19465,8 +19481,10 @@ func init() {
 	// Zero Talk lines in the C++. The three SpellScript/AuraScript
 	// loaders (spell_koralon_meteor_fists,
 	// spell_koralon_meteor_fists_damage, spell_flame_warder_meteor_fists)
-	// and the UNIT_STATE_CASTING gates are bridge-blocked —
-	// documented in the lua header.
+	// and the UNIT_STATE_CASTING gates are ported as the 500ms
+	// IsCasting defer — documented in the lua header.
+	// Cast-state gates (2026-11-04): all 4 timer arms carry the
+	// 500ms IsCasting defer (own UpdateAI pre-loop + in-loop gates).
 	RegisterLuaBoss("boss_koralon", 35013)
 	// AddSC_boss_toravon: Toravon the Ice Watcher (Vault of Archavon)
 	// — ported arms (lua_scripts/northrend/boss_toravon.lua):
@@ -19479,8 +19497,11 @@ func init() {
 	// GUID-keyed timers, wipe on events 2/4/23). Zero Talk lines in the
 	// C++. The npc_frozen_orb_stalker Reset leg, the npc_frozen_orb
 	// IsSummonedBy instance leg, the spell_toravon_random_aggro
-	// SpellScript and the UNIT_STATE_CASTING gates are bridge-blocked
-	// — documented in the lua header.
+	// SpellScript and the UNIT_STATE_CASTING gates are ported (500ms
+	// IsCasting defer) — documented in the lua header.
+	// Cast-state gates (2026-11-04): all 3 timer arms carry the
+	// 500ms IsCasting defer (own UpdateAI pre-loop + in-loop gates);
+	// the engage-time frozen-mallet cast stays ungated per C++.
 	RegisterLuaBoss("boss_toravon", 38433)
 	// AddSC_boss_cyanigosa: Cyanigosa (Violet Hold) — ported arms
 	// (lua_scripts/northrend/boss_cyanigosa.lua): JustEngagedWith

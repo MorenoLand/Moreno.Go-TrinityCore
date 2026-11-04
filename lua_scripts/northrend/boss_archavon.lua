@@ -61,10 +61,12 @@
 -- one-shot, no re-arm (the yogg_saron / thorim / assembly_of_iron /
 -- hodir 5min+ one-shot berserk precedent).
 -- DOCUMENTED DEVIATIONS:
--- The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates (pre-check
--- :87-88 and the per-event :123-124 return) have no bridge — casts fire
--- unconditionally on their timers (the hodir UNIT_STATE_CASTING
--- precedent).
+-- Cast-state gates (2026-11-04): the UpdateAI CASTING gates
+-- (pre-check :87-88 + per-event :123-124 return) are PORTED as the
+-- 500ms IsCasting defer on all five timer arms (rock shards /
+-- choking cloud / stomp / impale chain / berserk one-shot); the
+-- stale hodir 'no bridge' claim is retracted (IsCasting live,
+-- lua_creature_events.go:1950).
 -- EVENT_CHOKING_CLOUD's SelectTarget min-range gate (-10.0f = skip
 -- targets within 10y, :100) is ported via the negated
 -- IsWithinCombatRange twin (Unit.cpp:583; the raw fallback lacks both
@@ -158,6 +160,12 @@ end
 -- 2-arg = non-triggered; re-arm unconditional (the SelectTarget if only
 -- wraps the cast, :95-96), 15s.
 local function rockShardsTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rockshards", 500, function()
+            rockShardsTick(creature, guid)
+        end)
+        return
+    end
     -- C++ EVENT_ROCK_SHARDS (:94-98): SelectTarget(Random, 0) with
     -- playerOnly=FALSE (UnitAI.h:170) — the pool is the threat list
     -- (pets/totems eligible), lowered via GetAITargets.
@@ -175,6 +183,12 @@ end
 -- target); re-arm unconditional, 30s. Pool: threat-list players alive,
 -- NOT within 10yd (UnitAI.cpp min-range gate).
 local function chokingCloudTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chokingcloud", 500, function()
+            chokingCloudTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_CRUSHING_LEAP, true)
@@ -188,12 +202,24 @@ end
 -- C++ EVENT_IMPALE (:112-114): DoCastVictim(SPELL_IMPALE), 1-arg =
 -- non-triggered; one-shot, no re-arm.
 local function impaleTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "impale", 500, function()
+            impaleTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_IMPALE)
 end
 
 -- C++ EVENT_STOMP (:107-111): DoCastVictim(SPELL_STOMP), 1-arg =
 -- non-triggered; chains EVENT_IMPALE at 3s (:109); re-arm 45s (:110).
 local function stompTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            stompTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_STOMP)
     schedule(guid, "impale", 3000, function()
         impaleTick(creature, guid)
@@ -207,6 +233,12 @@ end
 -- non-triggered; Talk(EMOTE_BERSERK); cast-before-Talk kept; 5min
 -- one-shot, no re-arm.
 local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(EMOTE_BERSERK)
 end

@@ -65,11 +65,11 @@
 -- leg is the unbridged DoAction, so the Lua pump starts at first combat
 -- instead of encounter-start: gauntlet-window checks are missed, the
 -- 6s cadence once running is C++-exact); cancelled on 2/4/23.
--- The ymirjar trash spell-timer kits are all ungated in their
--- ScheduleTasks (no phase groups, no DoAction-gated arms — the
--- yogg_saron adds precedent), so they are ported with per-entry event-1
--- scheduling carrying the C++ inits (their JustEngagedWith calls
--- CreatureAI::JustEngagedWith passthrough + ScheduleTasks):
+-- The ymirjar trash spell-timer kits run under the npc_skadi_trashAI
+-- TaskScheduler validator (!CASTING, boss_skadi.cpp ctor :476-479),
+-- so all six carry the 500ms IsCasting defer, ported with per-entry
+-- event-1 scheduling carrying the C++ inits (their JustEngagedWith
+-- calls CreatureAI::JustEngagedWith passthrough + ScheduleTasks):
 --   npc_ymirjar_warrior (26690), ScheduleTasks :545-555:
 --   DoCastVictim(SPELL_HAMSTRING 48639), 1-arg = non-triggered ->
 --   CastSpell(nil, 48639), init 2s, Repeat({11s,18s}); DoCastVictim
@@ -89,9 +89,12 @@
 --   (SPELL_THROW 49091), 1-arg = non-triggered -> CastSpell(nil,
 --   49091), init 2s, Repeat() = 2s.
 -- DOCUMENTED DEVIATION: the TaskScheduler validator (!me->
--- HasUnitState(UNIT_STATE_CASTING), npc_skadi_trashAI ctor) is
--- unmodeled — timers fire unconditionally (the maiden / hodir
--- precedent); the trash's spawn/MovementInform machine (SummonCreature
+-- HasUnitState(UNIT_STATE_CASTING), npc_skadi_trashAI ctor :476-479
+-- + boss_skadiAI scheduler validator :160-163) is PORTED 2026-11-04
+-- as the 500ms IsCasting defer on all six trash ticks, the boss
+-- resetCheck tick and the three ground-phase ticks (TaskScheduler
+-- Dispatch aborts while casting, tasks stay queued); the trash's
+-- spawn/MovementInform machine (SummonCreature
 -- legs, MovePoint POINT_0/1/2 legs, DoZoneInCombat on arrival, the
 -- skadi->AI()->JustSummoned handoff) is unbridged — timers schedule on
 -- combat start (event 1) rather than after the gauntlet walk.
@@ -322,6 +325,10 @@ local function skadiEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     local function resetCheckTick()
+    if creature:IsCasting() then
+        schedule(guid, "resetCheck", 500, resetCheckTick)
+        return
+    end
         local trigger = creature:FindNearestCreature(NPC_TRIGGER_RESET, 200.0)
         if trigger then
             trigger:CastSpell(trigger, SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_CHECK, true)
@@ -348,10 +355,18 @@ local function warriorEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     local function hamstringTick()
+    if creature:IsCasting() then
+        schedule(guid, "hamstring", 500, hamstringTick)
+        return
+    end
         creature:CastSpell(nil, SPELL_HAMSTRING)
         schedule(guid, "hamstring", {11000, 18000}, hamstringTick)
     end
     local function strikeTick()
+    if creature:IsCasting() then
+        schedule(guid, "strike", 500, strikeTick)
+        return
+    end
         creature:CastSpell(nil, SPELL_STRIKE)
         schedule(guid, "strike", {10000, 13000}, strikeTick)
     end
@@ -368,11 +383,19 @@ local function witchDoctorEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     local function shadowBoltTick()
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, shadowBoltTick)
+        return
+    end
         creature:CastSpell(nil, SPELL_SHADOW_BOLT)
         schedule(guid, "shadowbolt", 2000, shadowBoltTick)
     end
     local shrinkDelay = math.random(20000, 34000)
     local function shrinkTick()
+    if creature:IsCasting() then
+        schedule(guid, "shrink", 500, shrinkTick)
+        return
+    end
         creature:CastSpell(nil, SPELL_SHRINK)
         schedule(guid, "shrink", shrinkDelay, shrinkTick)
     end
@@ -388,6 +411,10 @@ local function harpoonerEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     local function netTick()
+    if creature:IsCasting() then
+        schedule(guid, "net", 500, netTick)
+        return
+    end
         local target = farthestPlayerTarget(creature, 30)
         if target then
             creature:CastSpell(target, SPELL_NET)
@@ -395,6 +422,10 @@ local function harpoonerEnterCombat(event, creature)
         schedule(guid, "net", 13000, netTick)
     end
     local function throwTick()
+    if creature:IsCasting() then
+        schedule(guid, "throw", 500, throwTick)
+        return
+    end
         creature:CastSpell(nil, SPELL_THROW)
         schedule(guid, "throw", 2000, throwTick)
     end
@@ -457,10 +488,18 @@ local function graufJustDied(event, creature, killer)
         skadi:SetReactState(2) -- REACT_AGGRESSIVE
         local skadiGuid = skadi:GetGUID()
         local function crushTick()
+            if skadi:IsCasting() then
+                schedule(skadiGuid, "crush", 500, crushTick)
+                return
+            end
             skadi:CastSpell(nil, SPELL_CRUSH)
             schedule(skadiGuid, "crush", 8000, crushTick)
         end
         local function spearTick()
+            if skadi:IsCasting() then
+                schedule(skadiGuid, "poisonedSpear", 500, spearTick)
+                return
+            end
             local target = randomPlayerTarget(skadi)
             if target then
                 skadi:CastSpell(target, SPELL_POISONED_SPEAR)
@@ -468,6 +507,10 @@ local function graufJustDied(event, creature, killer)
             schedule(skadiGuid, "poisonedSpear", 11000, spearTick)
         end
         local function whirlwindTick()
+            if skadi:IsCasting() then
+                schedule(skadiGuid, "whirlwind", 500, whirlwindTick)
+                return
+            end
             skadi:CastSpell(skadi, SPELL_WHIRLWIND)
             schedule(skadiGuid, "whirlwind", 23000, whirlwindTick)
         end

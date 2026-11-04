@@ -41,10 +41,12 @@
 -- (event 1; instance/setActive/ScheduleTasks legs out) — plus the four
 -- EVENT_GROUP_BASE_SPELLS timer inits
 -- carried on event 1 on the xt002 precedent (C++ schedules on
--- JustEngagedWith, Go on event 1, same inits). All four arms are
--- ungated in the ExecuteEvent switch (no phase conditions on the base
--- spells; the event-group delay legs ride the unbridged boat machine —
--- see DEVIATION):
+-- JustEngagedWith, Go on event 1, same inits). All four arms run
+-- under BossAI::UpdateAI base gates (ScriptedCreature.cpp pre-loop
+-- + in-loop CASTING returns; no UpdateAI override in the file), so
+-- all four carry the 500ms IsCasting defer (no phase conditions on
+-- the base spells; the event-group delay legs ride the unbridged
+-- boat machine — see DEVIATION):
 --   EVENT_BANE (arm :236-238): DoCast(SPELL_BANE 48294), 1-arg ->
 --   DoCastAOE/self-cast -> CastSpell(creature, 48294), non-triggered;
 --   init {18s,23s}, re-arm {20s,25s}.
@@ -160,6 +162,12 @@ end
 -- C++ EVENT_BANE arm (:236-238): DoCast(SPELL_BANE 48294), 1-arg =
 -- non-triggered -> self-cast; init {18s,23s}, re-arm {20s,25s}.
 local function baneTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bane", 500, function()
+            baneTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BANE)
     schedule(guid, "bane", {20000, 25000}, function()
         baneTick(creature, guid)
@@ -169,6 +177,12 @@ end
 -- C++ EVENT_FETID_ROT arm (:240-242): DoCastVictim(SPELL_FETID_ROT
 -- 48291), 1-arg = non-triggered; init {8s,13s}, re-arm {10s,15s}.
 local function fetidRotTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fetidrot", 500, function()
+            fetidRotTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FETID_ROT)
     schedule(guid, "fetidrot", {10000, 15000}, function()
         fetidRotTick(creature, guid)
@@ -178,6 +192,12 @@ end
 -- C++ EVENT_DARK_SLASH arm (:244-246): DoCastVictim(SPELL_DARK_SLASH
 -- 48292), 1-arg = non-triggered; init {28s,33s}, re-arm {30s,35s}.
 local function darkSlashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "darkslash", 500, function()
+            darkSlashTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_DARK_SLASH)
     schedule(guid, "darkslash", {30000, 35000}, function()
         darkSlashTick(creature, guid)
@@ -189,6 +209,12 @@ end
 -- DUNGEON_MODE(60s,45s), re-arm DUNGEON_MODE({60s,65s},{45s,50s}),
 -- branched on creature:IsHeroic().
 local function ancestorsVengeanceTick(creature, guid, heroic)
+    if creature:IsCasting() then
+        schedule(guid, "ancestorsvengeance", 500, function()
+            ancestorsVengeanceTick(creature, guid, heroic)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ANCESTORS_VENGEANCE)
     local delay = heroic and {45000, 50000} or {60000, 65000}
     schedule(guid, "ancestorsvengeance", delay, function()

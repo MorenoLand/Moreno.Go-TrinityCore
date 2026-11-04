@@ -51,10 +51,12 @@
 -- the offset now skips the threat head of the GetAITargets pool (the
 -- C++ MaxThreat-order semantic, UnitAI.h); the stale halion
 -- victim-exclusion idiom is retracted.
--- The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates (pre-check
--- :67 and the per-event :95 return) have no bridge — casts fire
--- unconditionally on their timers (the hodir UNIT_STATE_CASTING
--- precedent).
+-- Cast-state gates (2026-11-04): the UpdateAI CASTING gates
+-- (pre-check :67 + per-event :95 return) are PORTED as the 500ms
+-- IsCasting defer on all three timer arms; the stale hodir 'no
+-- bridge' claim is retracted (IsCasting live,
+-- lua_creature_events.go:1950). The engage-time frozen-mallet cast
+-- stays ungated per C++ (JustEngagedWith, separate hook).
 -- DOCUMENTED-ONLY (in this header; entry 38433 is the sole
 -- registration):
 -- npc_frozen_orb_stalker::Reset (:104-108) — DoCastSelf
@@ -144,6 +146,12 @@ end
 -- SPELL_FROZEN_ORB) — the SPELLVALUE_MAX_TARGETS RAID_MODE(1, 3)
 -- leg is unbridged (documented in the header); Repeat 32s.
 local function frozenOrbTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frozenorb", 500, function()
+            frozenOrbTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROZEN_ORB)
     schedule(guid, "frozenorb", 32000, function()
         frozenOrbTick(creature, guid)
@@ -153,6 +161,12 @@ end
 -- C++ EVENT_WHITEOUT (:83-86): DoCastSelf(SPELL_WHITEOUT), 2-arg =
 -- non-triggered; Repeat 38s.
 local function whiteoutTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whiteout", 500, function()
+            whiteoutTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WHITEOUT)
     schedule(guid, "whiteout", 38000, function()
         whiteoutTick(creature, guid)
@@ -163,6 +177,12 @@ end
 -- SPELL_FREEZING_GROUND), 2-arg = non-triggered; re-arm via Repeat
 -- 38s (:90, unconditional).
 local function freezingGroundTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "freezingground", 500, function()
+            freezingGroundTick(creature, guid)
+        end)
+        return
+    end
     local target = randomNonTankThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_FREEZING_GROUND)

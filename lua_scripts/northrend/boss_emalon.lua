@@ -59,12 +59,12 @@
 -- minion:SetHealth(minion:GetMaxHealth()); Talk(EMOTE_OVERCHARGE 0)
 -- (:153) -> creature:Talk(0); re-arm 45s only inside the IsAlive gate
 -- (:154), C++-exact.
--- DOCUMENTED DEVIATIONS: none on the ported arms — all five boss
--- timers and the minion shock timer carry C++-exact timing and
--- targeting. The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates
--- (:129, :166) and DoMeleeAttackIfReady() (:170) have no bridge —
--- casts fire unconditionally on their timers (the hodir
--- UNIT_STATE_CASTING precedent). Minion pick: C++ draws from the
+-- Cast-state gates (2026-11-04): the UpdateAI CASTING gates (boss
+-- pre-loop :129 + in-loop :166; minion pre-loop :239) are PORTED as
+-- the 500ms IsCasting defer on the boss timers + the minion shock
+-- timer; the stale hodir 'no bridge' claim is retracted (IsCasting
+-- live, lua_creature_events.go:1950). DoMeleeAttackIfReady() (:170)
+-- has no bridge. Minion pick: C++ draws from the
 -- BossAI summons list (dead minions included, then IsAlive-gated);
 -- Lua draws from the live grid list — same outcome when all four
 -- minions are alive, benign delta otherwise.
@@ -154,6 +154,12 @@ end
 -- SPELL_CHAIN_LIGHTNING), 2-arg = non-triggered; re-arm
 -- unconditional, 25s.
 local function chainLightningTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chainlightning", 500, function()
+            chainLightningTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
@@ -166,6 +172,12 @@ end
 -- C++ EVENT_LIGHTNING_NOVA (:141-143): DoCastAOE(SPELL_LIGHTNING_NOVA)
 -- = self-cast per the in-tree DoCastAOE convention; re-arm 40s.
 local function lightningNovaTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lightningnova", 500, function()
+            lightningNovaTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_LIGHTNING_NOVA)
     schedule(guid, "lightningnova", 40000, function()
         lightningNovaTick(creature, guid)
@@ -176,6 +188,12 @@ end
 -- non-triggered; Talk(EMOTE_BERSERK); cast-before-Talk kept; 6min
 -- one-shot, no re-arm.
 local function emalonBerserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            emalonBerserkTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(EMOTE_BERSERK)
 end
@@ -217,6 +235,12 @@ end
 -- (33998) + alive filter; C++ pick order is unspecified (benign).
 -- SetFullHealth() = SetHealth(GetMaxHealth()) (both bridged).
 local function overchargeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "overcharge", 500, function()
+            overchargeTick(creature, guid)
+        end)
+        return
+    end
     local minions = creature:GetCreaturesInGrid(ENTRY_TEMPEST_MINION, 100)
     if #minions > 0 then
         local minion = minions[math.random(#minions)]
@@ -297,6 +321,12 @@ RegisterCreatureEvent(ENTRY_EMALON, 19, emalonJustSummoned)
 -- C++ EVENT_SHOCK (:265-268): DoCastVictim(SPELL_SHOCK), 1-arg =
 -- non-triggered; re-arm 20s.
 local function shockTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shock", 500, function()
+            shockTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHOCK)
     schedule(guid, "shock", 20000, function()
         shockTick(creature, guid)

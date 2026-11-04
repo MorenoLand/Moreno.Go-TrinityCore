@@ -39,10 +39,11 @@
 -- 30s (:97). SPELL_FLAME_CINDER_B 66681 sits in the enum but is never
 -- cast anywhere in the file.
 -- DOCUMENTED DEVIATIONS:
--- The UpdateAI HasUnitState(UNIT_STATE_CASTING) gates (pre-check
--- :77 and the per-event :102 return) have no bridge — casts fire
--- unconditionally on their timers (the hodir UNIT_STATE_CASTING
--- precedent).
+-- Cast-state gates (2026-11-04): the UpdateAI CASTING gates
+-- (pre-check :77 + per-event :102 return) are PORTED as the 500ms
+-- IsCasting defer on all four timer arms; the stale hodir 'no
+-- bridge' claim is retracted (IsCasting live,
+-- lua_creature_events.go:1950).
 -- DOCUMENTED-ONLY (in this header; entry 35013 is the sole
 -- registration):
 -- spell_koralon_meteor_fists (AuraScript :133-159; OnEffectProc
@@ -89,6 +90,12 @@ end
 -- C++ EVENT_BURNING_FURY (:83-86): DoCast(me, SPELL_BURNING_FURY),
 -- 2-arg = non-triggered; re-arm 20s.
 local function burningFuryTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "burningfury", 500, function()
+            burningFuryTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BURNING_FURY)
     schedule(guid, "burningfury", 20000, function()
         burningFuryTick(creature, guid)
@@ -98,6 +105,12 @@ end
 -- C++ EVENT_BURNING_BREATH (:87-90): DoCast(me,
 -- SPELL_BURNING_BREATH), 2-arg = non-triggered; re-arm 45s.
 local function burningBreathTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "burningbreath", 500, function()
+            burningBreathTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BURNING_BREATH)
     schedule(guid, "burningbreath", 45000, function()
         burningBreathTick(creature, guid)
@@ -107,6 +120,12 @@ end
 -- C++ EVENT_METEOR_FISTS (:91-94): DoCast(me, SPELL_METEOR_FISTS),
 -- 2-arg = non-triggered; re-arm 45s.
 local function meteorFistsTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "meteorfists", 500, function()
+            meteorFistsTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_METEOR_FISTS)
     schedule(guid, "meteorfists", 45000, function()
         meteorFistsTick(creature, guid)
@@ -116,6 +135,12 @@ end
 -- C++ EVENT_FLAME_CINDER (:95-98): DoCast(me, SPELL_FLAME_CINDER_A),
 -- 2-arg = non-triggered; re-arm 30s.
 local function flameCinderTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamecinder", 500, function()
+            flameCinderTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FLAME_CINDER_A)
     schedule(guid, "flamecinder", 30000, function()
         flameCinderTick(creature, guid)
