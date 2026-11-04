@@ -224,6 +224,8 @@ end
 -- SHEATH_OF_LIGHTNING removal rides the unbridged phase-2 machine, so the
 -- aura persists in Lua.
 local function thorimEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_thorim.cpp:616)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO_1)
     creature:CastSpell(creature, SPELL_SHEATH_OF_LIGHTNING)
     cancelTimers(creature:GetGUID())

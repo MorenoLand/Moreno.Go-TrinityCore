@@ -242,6 +242,8 @@ end
 -- bridgeable (event 1).
 local function xt002EnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- Talk-then-base (boss_xt002.cpp:189)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "enrage", 600000, function()

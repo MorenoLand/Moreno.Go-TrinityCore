@@ -344,6 +344,8 @@ end
 local function hodirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_hodir.cpp:369)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_BITING_COLD, true)
     schedule(guid, "icicle", 2000, function() onIcicle(creature, guid) end)

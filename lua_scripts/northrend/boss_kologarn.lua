@@ -291,6 +291,9 @@ local function kologarnEnterCombat(event, creature, target)
     schedule(guid, "meleecheck", 6000, function()
         meleeCheckTick(creature, guid)
     end)
+    -- BossAI::JustEngagedWith(who) is LAST in C++ (boss_kologarn.cpp:136, after the schedules + vehicle-kit DoZone legs):
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
 
 local function kologarnLeaveCombat(event, creature)

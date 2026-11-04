@@ -244,6 +244,8 @@ end
 -- machine) + summons DoAction + HandleMusic — only the
 -- EVENT_BERSERK timer leg is bridgeable.
 local function razorscaleEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_razorscale.cpp:358)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:SetCombatMovement(false) -- Reset arm, boss_razorscale.cpp:329 (no AttackStart chase in air phase)
     local guid = creature:GetGUID()
     cancelTimers(guid)

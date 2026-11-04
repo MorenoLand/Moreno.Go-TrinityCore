@@ -256,6 +256,8 @@ end
 -- self-cast) + SetPhase + ScheduleEvent(EVENT_BERSERK, 15min)
 -- + ScheduleEvent(EVENT_FUSION_PUNCH, 15s) + Talk(SAY_AGGRO).
 local function steelbreakerEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_assembly_of_iron.cpp:164)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_STEELBREAKER_AGGRO)
     creature:CastSpell(creature, SPELL_HIGH_VOLTAGE)
     local guid = creature:GetGUID()
@@ -323,6 +325,8 @@ end
 -- 15min) + ScheduleEvent(EVENT_SHIELD_OF_RUNES, 30s) +
 -- ScheduleEvent(EVENT_RUNE_OF_POWER, 20s) + Talk(SAY_AGGRO).
 local function molgeimEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_assembly_of_iron.cpp:312)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_MOLGEIM_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -425,6 +429,8 @@ end
 -- FindNearestCreature(NPC_WORLD_TRIGGER 22515) leg +
 -- Talk(SAY_AGGRO).
 local function brundirEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_assembly_of_iron.cpp:491)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_BRUNDIR_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

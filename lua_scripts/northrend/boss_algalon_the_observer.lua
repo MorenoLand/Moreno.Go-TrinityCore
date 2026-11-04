@@ -486,6 +486,7 @@ local function algalonTimersStart(event, creature)
         -- setActive legs have no bridge).
         creature:Talk(SAY_ALGALON_AGGRO)
         creature:PlayMusic(ENGAGE_MUSIC_ID)
+        creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1, later-pull branch only (boss_algalon_the_observer.cpp:374; ScriptedCreature.cpp:540)
         creature:DoZoneInCombat()
         introDelay = INTRO_DELAY
     end

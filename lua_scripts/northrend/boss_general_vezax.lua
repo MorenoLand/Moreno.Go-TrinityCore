@@ -329,6 +329,8 @@ end
 -- ScheduleEvent legs — the four unbridgeable ScheduleEvent legs are
 -- the vapor/summon legs below (event 1).
 local function vezaxEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_general_vezax.cpp:136)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_AURA_OF_DESPAIR)
     checkShamanisticRage(creature)

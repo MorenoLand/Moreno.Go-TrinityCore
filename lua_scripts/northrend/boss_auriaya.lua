@@ -284,6 +284,8 @@ end
 -- + encounter-frame engage + the five ScheduleEvent legs — the
 -- Talk and the four bridgeable timer legs are modeled here.
 local function auriayaEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_auriaya.cpp:162)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

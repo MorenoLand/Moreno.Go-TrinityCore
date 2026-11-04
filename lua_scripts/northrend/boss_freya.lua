@@ -422,6 +422,7 @@ end
 local function freyaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:344; me-form DoZone already ported below as the :345 arm)
     -- C++ :345 — me-form DoZoneInCombat after BossAI::JustEngagedWith,
     -- before the elder scan (C++ arm order).
     creature:DoZoneInCombat()
@@ -659,6 +660,8 @@ local function onFlux(creature, guid)
 end
 
 local function brightleafEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:733)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -698,6 +701,8 @@ local function onTremor(creature, guid)
 end
 
 local function stonebarkEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:836)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -744,6 +749,8 @@ local function onIronRoots(creature, guid)
 end
 
 local function ironbranchEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:945)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
