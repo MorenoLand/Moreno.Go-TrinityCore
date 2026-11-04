@@ -11948,7 +11948,9 @@ func init() {
 	// ACTION_START_RAGNAROS_ALT to trigger the intro if he is already DONE.
 	// None of it is bridgeable without an instance-script model.
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_warlord_najentus.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// The BossAI::UpdateAI casting gates (ScriptedCreature.cpp:571-589;
+	// boss_najentus has no UpdateAI override) are PORTED in Lua via the
+	// IsCasting 500ms defer (mal_ganis idiom); the
 	// encounter-state bookkeeping is blocked on the instance-script model; the
 	// impaling-spine GO summon (185584) IS ported (creature:SummonGameObject
 	// bridged, target position via GetX/GetY/GetZ/GetO); the spine-removal
@@ -11957,7 +11959,10 @@ func init() {
 	// SpellScript bridge.
 	RegisterLuaBoss("boss_najentus", 22887)
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_supremus.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// The BossAI::UpdateAI casting gates (ScriptedCreature.cpp:571-589;
+	// boss_supremus has no UpdateAI override) are PORTED in Lua via the
+	// IsCasting 500ms defer (mal_ganis idiom); the engage-time ChangePhase
+	// call stays ungated (direct JustEngagedWith call); the
 	// encounter-state bookkeeping is blocked on the instance-script model; the
 	// ResetThreatList/AddThreat arms are PORTED via threat bridges (ResetAllThreat + AddThreat 1e6 in onSwitchTarget, C++ order; the hateful strike
 	// target pick is approximated by the highest-health melee-range player);
@@ -11968,7 +11973,10 @@ func init() {
 	// volcanic summon/volcano adds have no summon model.
 	RegisterLuaBoss("boss_supremus", 22898)
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_shade_of_akama.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// The boss shade's own UpdateAI (boss_shade_of_akama.cpp:297) has no
+	// casting gate and ports no boss events, and npc_akama_shade's UpdateAI
+	// (:452) is likewise ungated; the file's only casting gate (:756)
+	// belongs to the unregistered ashtongue sorcerer AI; the
 	// encounter-state bookkeeping is blocked on the instance-script model
 	// (DATA_SHADE_OF_AKAMA/DATA_AKAMA_SHADE lookups, SetBossState DONE);
 	// the chase-complete phase-two gate has no MovementInform bridge, so the
@@ -11979,7 +11987,10 @@ func init() {
 	// soul-channel AuraScripts have no AuraScript bridge.
 	RegisterLuaBoss("boss_shade_of_akama", 22841)
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_teron_gorefiend.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// The UpdateAI casting gates (boss_teron_gorefiend.cpp:174 pre-loop,
+	// :247 in-loop) are PORTED in Lua via the IsCasting 500ms defer
+	// (mal_ganis idiom); the doom blossom / shadowy construct gates belong
+	// to unregistered AIs; the
 	// encounter-state bookkeeping is blocked on the instance-script model
 	// (DATA_TERON_GOREFIEND/DATA_TERON_GOREFIEND_INTRO, SetBossState); the
 	// intro arms (area trigger ACTION_START_INTRO, Talk(SAY_INTRO),
@@ -11999,7 +12010,9 @@ func init() {
 	// AuraScript bridge.
 	RegisterLuaBoss("boss_teron_gorefiend", 22871)
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_gurtogg_bloodboil.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// The UpdateAI casting gates (boss_gurtogg_bloodboil.cpp:181 pre-loop,
+	// :264 in-loop) are PORTED in Lua via the IsCasting 500ms defer
+	// (mal_ganis idiom); the
 	// encounter-state bookkeeping is blocked on the instance-script model
 	// (DATA_GURTOGG_BLOODBOIL); the GetThreat/ModifyThreatByPercent/AddThreat
 	// and AttackStart(oldTarget) victim-restore arms have no threat bridge

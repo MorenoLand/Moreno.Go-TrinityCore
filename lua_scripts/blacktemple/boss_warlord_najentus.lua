@@ -47,9 +47,14 @@
 -- ported in onNeedle as a threat-list pick dropping 39837 bearers;
 -- the targeting spell's own area radius is approximated by the
 -- threat list.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- timers fire unconditionally (jeklik convention); no instance-
+-- Cast gating PORTED (mal_ganis idiom): boss_najentus has no UpdateAI
+-- override, so it runs under BossAI::UpdateAI (ScriptedCreature.cpp:571-589),
+-- whose pre-loop queue gate and post-event check are modeled on every
+-- timer tick via the live creature:IsCasting() bridge
+-- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
+-- casting tick defers 500ms under its own key, consuming no re-arm.
+-- The SpellHit handler is not an UpdateAI event and stays ungated.
+-- Deviations from C++ (remaining): no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the DATA_HIGH_WARLORD_NAJENTUS
 -- bookkeeping arms skipped); the impaling-spine GO summon (185584)
@@ -149,6 +154,12 @@ end
 -- arm is modeled as a threat-list pick (shazzrah precedent)
 -- dropping 39837 bearers, casting 39835 triggered on the pick.
 local function onNeedle(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "needle", 500, function()
+            onNeedle(creature, guid)
+        end)
+        return
+    end
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
@@ -174,6 +185,12 @@ end
 -- Talk(SAY_NEEDLE); re-arm {20s,25s} unconditional (C++-exact —
 -- the repeat runs even when no target was found).
 local function onSpine(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spine", 500, function()
+            onSpine(creature, guid)
+        end)
+        return
+    end
     local target = randomSpineTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_IMPALING_SPINE, true)
@@ -188,6 +205,12 @@ end
 -- C++ EVENT_SHIELD: triggered self-cast 39872; re-arm the spine
 -- timer at 50s; repeat {55s,60s}.
 local function onShield(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shield", 500, function()
+            onShield(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TIDAL_SHIELD, true)
     cancelTimer(guid, "spine")
     schedule(guid, "spine", 50000, function()
@@ -201,12 +224,24 @@ end
 -- C++ EVENT_BERSERK: Talk(SAY_ENRAGE) + triggered self-cast 26662;
 -- one-shot (C++-exact — no re-arm).
 local function onBerserk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            onBerserk(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_ENRAGE)
     creature:CastSpell(creature, SPELL_BERSERK, true)
 end
 
 -- C++ EVENT_YELL: Talk(SAY_SPECIAL); re-arm {25s,100s}.
 local function onYell(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "yell", 500, function()
+            onYell(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_SPECIAL)
     schedule(guid, "yell", 25000 + math.random(0, 75000), function()
         onYell(creature, guid)

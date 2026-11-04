@@ -80,9 +80,14 @@
 -- 40268) and spell_teron_gorefiend_spiritual_vengeance AuraScript
 -- (on-remove KillSelf) have no AuraScript bridge (standing
 -- AuraScript gap).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- timers fire unconditionally (jeklik convention); no instance-
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI queue gate
+-- (boss_teron_gorefiend.cpp:174) and post-event check (:247) are modeled
+-- on every timer tick via the live creature:IsCasting() bridge
+-- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
+-- casting tick defers 500ms under its own key, consuming no re-arm.
+-- The JustSummoned hook is not an UpdateAI event and stays ungated; the
+-- doom blossom / shadowy construct gates belong to unregistered AIs.
+-- Deviations from C++ (remaining): no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the DATA_TERON_GOREFIEND
 -- bookkeeping arms skipped).
@@ -189,6 +194,12 @@ end
 -- C++ EVENT_ENRAGE: non-triggered self-cast 45078; one-shot
 -- (C++-exact — no re-arm).
 local function onBerserk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            onBerserk(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK, false)
 end
 
@@ -196,6 +207,12 @@ end
 -- Talk(SAY_INCINERATE); re-arm {12s,20s} unconditional (C++-exact —
 -- the repeat runs even when no target was found).
 local function onIncinerate(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "incinerate", 500, function()
+            onIncinerate(creature, guid)
+        end)
+        return
+    end
     local target = randomAnyTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_INCINERATE, false)
@@ -211,6 +228,12 @@ end
 -- is summoned by spell 40188's cast effect in C++ (DoCastSelf, no
 -- C++ SummonCreature leg), so the cast is the whole modeled arm.
 local function onDoomBlossom(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "doomblossom", 500, function()
+            onDoomBlossom(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUMMON_DOOM_BLOSSOM, true)
     creature:Talk(SAY_BLOSSOM)
     schedule(guid, "doomblossom", 30000 + math.random(0, 10000), function()
@@ -221,6 +244,12 @@ end
 -- C++ EVENT_SHADOW_DEATH: non-triggered 40251 on the filtered
 -- random target; re-arm {30s,35s} unconditional (C++-exact).
 local function onShadowDeath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowdeath", 500, function()
+            onShadowDeath(creature, guid)
+        end)
+        return
+    end
     local target = randomShadowDeathTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_OF_DEATH, false)
@@ -234,6 +263,12 @@ end
 -- Talk(SAY_CRUSHING); re-arm {18s,30s}. The SPELLVALUE_MAX_TARGETS
 -- = 5 arm has no bridge — the cast goes out unclamped.
 local function onCrushingShadows(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "crushing", 500, function()
+            onCrushingShadows(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CRUSHING_SHADOWS, false)
     creature:Talk(SAY_CRUSHING)
     schedule(guid, "crushing", 18000 + math.random(0, 12000), function()

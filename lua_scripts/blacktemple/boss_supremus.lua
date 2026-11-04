@@ -39,12 +39,18 @@
 -- the C++ sources alone (garr firesworn convention). npc_volcano needs
 -- no standalone registration: its AI is relayed from the boss event-19
 -- handler below (NPC_SUPREMUS_VOLCANO=23085, black_temple.h:89).
--- Cast gating: boss_supremus has no UpdateAI override, so it runs
--- under BossAI::UpdateAI (ScriptedCreature.cpp:571-589), which gates
--- event execution on HasUnitState(UNIT_STATE_CASTING). That gate has
--- no Lua bridge, so timers fire unconditionally (jeklik convention) —
--- a standing deviation (the old boss_supremus.cpp:213-216 citation was
--- npc_volcano's UpdateAI, not the boss's). Deviations from C++: no instance-
+-- Cast gating PORTED (mal_ganis idiom): boss_supremus has no UpdateAI
+-- override, so it runs under BossAI::UpdateAI (ScriptedCreature.cpp:571-589),
+-- whose pre-loop queue gate and post-event check are modeled on every
+-- timer tick via the live creature:IsCasting() bridge
+-- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
+-- casting tick defers 500ms under its own key, consuming no re-arm.
+-- The engage-time ChangePhase call stays ungated (C++ JustEngagedWith
+-- calls it directly, outside UpdateAI) — only the EVENT_SWITCH_PHASE
+-- timer arm goes through the gated onSwitchPhase wrapper; the
+-- JustSummoned volcano relay is not an UpdateAI event and stays
+-- ungated. (The old boss_supremus.cpp:213-216 citation was npc_volcano's
+-- UpdateAI, not the boss's.) Deviations from C++: no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the DATA_SUPREMUS bookkeeping arms
 -- skipped); threat model partial — the ResetThreatList/AddThreat
@@ -183,6 +189,12 @@ end
 -- C++ EVENT_FLAME: non-triggered molten punch on the victim; repeat
 -- {15s,20s}. Phase-independent (C++-exact).
 local function onFlame(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flame", 500, function()
+            onFlame(creature, guid)
+        end)
+        return
+    end
     if creature:GetVictim() then
         creature:CastSpell(nil, SPELL_MOLTEN_PUNCH)
     end
@@ -194,6 +206,12 @@ end
 -- C++ EVENT_BERSERK: triggered self-cast 45078; one-shot
 -- (C++-exact — no re-arm). Phase-independent.
 local function onBerserk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            onBerserk(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK, true)
 end
 
@@ -201,6 +219,12 @@ end
 -- target; repeat 5s unconditional (C++-exact — the repeat runs even
 -- when no target was found). Strike-phase only.
 local function onHatefulStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "hateful", 500, function()
+            onHatefulStrike(creature, guid)
+        end)
+        return
+    end
     local target = hatefulStrikeTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_HATEFUL_STRIKE)
@@ -215,6 +239,12 @@ end
 -- CRACK); repeat 10s unconditional (C++-exact). The volcano add's AI is relayed via the boss event-19 handler below.
 -- Chase-phase only.
 local function onVolcano(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "volcano", 500, function()
+            onVolcano(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_VOLCANIC_SUMMON, true)
     creature:Talk(EMOTE_GROUND_CRACK)
     schedule(guid, "volcano", 10000, function()
@@ -227,6 +257,12 @@ end
 -- EMOTE_NEW_TARGET); repeat 10s unconditional (C++-exact).
 -- Chase-phase only.
 local function onSwitchTarget(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "switchtarget", 500, function()
+            onSwitchTarget(creature, guid)
+        end)
+        return
+    end
     local target = chargeTarget(creature)
     if target then
         creature:ResetAllThreat()
@@ -261,6 +297,10 @@ end
 -- tree's EventMap::ExecuteEvent (src/common/Utilities/EventMap.cpp:81)
 -- erases expired phase-mismatched events (marli precedent) — the
 -- Lua cancels model that erase exactly.
+-- Forward declaration: the EVENT_SWITCH_PHASE tail re-arm inside
+-- changePhase references onSwitchPhase, defined below (tharon_ja idiom).
+local onSwitchPhase
+
 local function changePhase(creature, guid)
     local st = supremusState(guid)
     if st.phase == PHASE_INITIAL or st.phase == PHASE_CHASE then
@@ -306,8 +346,21 @@ local function changePhase(creature, guid)
     creature:ResetAllThreat()
     creature:DoZoneInCombat()
     schedule(guid, "switchphase", 60000, function()
-        changePhase(creature, guid)
+        onSwitchPhase(creature, guid)
     end)
+end
+
+-- C++ EVENT_SWITCH_PHASE: the gated timer arm for ChangePhase — the
+-- engage-time call in supremusEnterCombat stays ungated (C++ JustEngagedWith
+-- calls ChangePhase directly, outside UpdateAI).
+onSwitchPhase = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "switchphase", 500, function()
+            onSwitchPhase(creature, guid)
+        end)
+        return
+    end
+    changePhase(creature, guid)
 end
 
 -- C++ npc_volcano::Reset (boss_supremus.cpp): 3s self-cast of

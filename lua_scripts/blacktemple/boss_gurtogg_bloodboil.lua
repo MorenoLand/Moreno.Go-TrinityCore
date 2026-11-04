@@ -81,9 +81,12 @@
 -- tree and the ScriptName binding is DB-side (garr firesworn
 -- convention); the 40569 fel-geyser summon arm has no summon model
 -- in any case.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- timers fire unconditionally (jeklik convention); no instance-
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI queue gate
+-- (boss_gurtogg_bloodboil.cpp:181) and post-event check (:264) are modeled
+-- on every timer tick via the live creature:IsCasting() bridge
+-- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
+-- casting tick defers 500ms under its own key, consuming no re-arm.
+-- Deviations from C++ (remaining): no instance-
 -- script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith/JustDied/Reset and the
 -- DATA_GURTOGG_BLOODBOIL bookkeeping arms skipped); threat model
@@ -231,6 +234,12 @@ end
 -- C++ EVENT_BLOODBOIL: non-triggered self-cast 42005; repeat 10s
 -- unconditional (C++-exact).
 local function onBloodboil(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bloodboil", 500, function()
+            onBloodboil(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BLOODBOIL, false)
     schedule(guid, "bloodboil", 10000, function()
         onBloodboil(creature, guid)
@@ -241,6 +250,12 @@ end
 -- repeat 10s. Nil victim falls back on the bridge; nil ticks cast
 -- nothing but keep the schedule (jeklik convention).
 local function onArcingSmash(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcingsmash", 500, function()
+            onArcingSmash(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ARCING_SMASH, false)
     schedule(guid, "arcingsmash", 10000, function()
         onArcingSmash(creature, guid)
@@ -251,6 +266,12 @@ end
 -- target within combat reach; repeat {25s,30s} unconditional
 -- (C++-exact).
 local function onFelAcidBreath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "felacidbreath", 500, function()
+            onFelAcidBreath(creature, guid)
+        end)
+        return
+    end
     local target = randomTargetWithinReach(creature)
     if target then
         creature:CastSpell(target, SPELL_FEL_ACID_BREATH, false)
@@ -263,6 +284,12 @@ end
 -- C++ EVENT_EJECT: Talk(SAY_SPECIAL), non-triggered DoCastVictim
 -- 40486; one-shot (no re-arm, C++-exact).
 local function onEject(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "eject", 500, function()
+            onEject(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_SPECIAL)
     creature:CastSpell(nil, SPELL_EJECT, false)
 end
@@ -270,6 +297,12 @@ end
 -- C++ EVENT_BEWILDERING_STRIKE: non-triggered DoCastVictim 40491;
 -- one-shot (no re-arm, C++-exact).
 local function onBewilderingStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bewilderingstrike", 500, function()
+            onBewilderingStrike(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_BEWILDERING_STRIKE, false)
 end
 
@@ -277,6 +310,12 @@ end
 -- per UnitAI.cpp), one-shot; 50% Talk(SAY_ENRAGE), else
 -- DoPlaySoundToSet(11437) = creature:PlayDirectSound.
 local function onBerserk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            onBerserk(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK, false)
     if math.random(2) == 1 then
         creature:Talk(SAY_ENRAGE)
@@ -307,18 +346,36 @@ end
 -- C++ EVENT_EJECT_2: non-triggered DoCastVictim 40597; one-shot
 -- (no re-arm, C++-exact).
 local function onEject2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "eject2", 500, function()
+            onEject2(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_EJECT_2, false)
 end
 
 -- C++ EVENT_FEL_ACID_BREATH_2: non-triggered DoCastVictim 40595;
 -- one-shot (no re-arm, C++-exact).
 local function onFelAcidBreath2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "felacidbreath2", 500, function()
+            onFelAcidBreath2(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FEL_ACID_BREATH_2, false)
 end
 
 -- C++ EVENT_ARCING_SMASH_2: non-triggered DoCastVictim 40599;
 -- repeat 13s.
 local function onArcingSmash2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcingsmash2", 500, function()
+            onArcingSmash2(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ARCING_SMASH_2, false)
     schedule(guid, "arcingsmash2", 13000, function()
         onArcingSmash2(creature, guid)
@@ -329,6 +386,12 @@ end
 -- rage GUID; one-shot. Nil/no-longer-present target casts nothing
 -- (jeklik convention).
 local function onChargePlayer(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chargeplayer", 500, function()
+            onChargePlayer(creature, guid)
+        end)
+        return
+    end
     local st = state[guid]
     local rageGuid = st and st.felRageTarget
     if rageGuid then
@@ -351,6 +414,12 @@ local onChangePhase
 -- fel rage series follows. On no target: drop back to phase 1 and
 -- re-arm the phase-1 schedule + change-phase at 60s (C++-exact).
 local function onStartPhase2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "startphase2", 500, function()
+            onStartPhase2(creature, guid)
+        end)
+        return
+    end
     local target = randomAnyTarget(creature)
     if not target then
         state[guid].phase = PHASE_1
@@ -411,6 +480,12 @@ end
 -- immunity-off arms are PORTED in onChangePhase — the GUID state is
 -- cleared (C++ Initialize).
 function onChangePhase(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "changephase", 500, function()
+            onChangePhase(creature, guid)
+        end)
+        return
+    end
     local st = state[guid]
     if not st then
         return
