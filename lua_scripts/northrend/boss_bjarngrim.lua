@@ -93,8 +93,9 @@
 -- (C++ switch branches :283-375), modeled by per-stance remaining
 -- times decremented only for the active stance on a 500ms pump tick;
 -- a change tick skips the stance timers, matching the C++ return
--- (:283). DELTA: the IsNonMeleeSpellCast wait (:254) has no Lua
--- bridge, so a change landing mid-cast is not deferred by a tick.
+-- (:283). The IsNonMeleeSpellCast wait (boss_bjarngrim.cpp:247-251)
+-- IS ported in bjarngrimStancePump via creature:IsCasting()
+-- (harbinger-skyriss precedent; stale "no bridge" retracted).
 
 local ENTRY_BJARNGRIM = 28586
 local ENTRY_STORMFORGED_LIEUTENANT = 29240
@@ -115,9 +116,10 @@ local SPELL_ARC_WELD = 59085
 -- stance is active (C++ switch branches :283-375), so the pump below
 -- keeps per-stance remaining times and decrements only the active
 -- stance's timers each 500ms tick; a change tick skips the stance
--- timers, matching the C++ return (:283). DELTA: the IsNonMeleeSpellCast
--- wait (:254) has no Lua bridge, so a change landing mid-cast is not
--- deferred by a tick. All casts are 2-arg / non-triggered.
+-- timers, matching the C++ return (:283). The IsNonMeleeSpellCast
+-- wait (boss_bjarngrim.cpp:247-251) IS ported in bjarngrimStancePump
+-- via creature:IsCasting() (harbinger-skyriss precedent; stale "no
+-- bridge" retracted). All casts are 2-arg / non-triggered.
 local STANCE_DEFENSIVE = 0
 local STANCE_BERSERKER = 1
 local STANCE_BATTLE = 2
@@ -181,22 +183,31 @@ local function bjarngrimStancePump(creature, guid)
     end
     st.change = st.change - 500
     if st.change <= 0 then
-        local old = st.stance
-        creature:RemoveAura(STANCE_SPELL[old])
-        local others = {}
-        for s = 0, 2 do
-            if s ~= old then
-                others[#others + 1] = s
+        -- C++ boss_bjarngrim.cpp:247-251: an expired change timer waits out
+        -- a non-melee spell in flight (return: timer stays expired, stance
+        -- timers skipped that tick). Ported via creature:IsCasting()
+        -- (live CastingUntil window, lua_creature_events.go:1950;
+        -- harbinger-skyriss precedent for IsNonMeleeSpellCast gates):
+        -- while casting, neither the change nor the stance timers run and
+        -- st.change stays <= 0, so the next 500ms pump tick retries.
+        if not creature:IsCasting() then
+            local old = st.stance
+            creature:RemoveAura(STANCE_SPELL[old])
+            local others = {}
+            for s = 0, 2 do
+                if s ~= old then
+                    others[#others + 1] = s
+                end
             end
+            local newStance = others[math.random(2)]
+            st.stance = newStance
+            creature:Talk(STANCE_SAY[newStance])
+            creature:Talk(STANCE_EMOTE[newStance])
+            creature:CastSpell(creature, STANCE_SPELL[newStance])
+            local equip = STANCE_EQUIP[newStance]
+            creature:SetEquipmentSlots(equip[1], equip[2], 0xFFFFFFFF)
+            st.change = math.random(20000, 25000)
         end
-        local newStance = others[math.random(2)]
-        st.stance = newStance
-        creature:Talk(STANCE_SAY[newStance])
-        creature:Talk(STANCE_EMOTE[newStance])
-        creature:CastSpell(creature, STANCE_SPELL[newStance])
-        local equip = STANCE_EQUIP[newStance]
-        creature:SetEquipmentSlots(equip[1], equip[2], 0xFFFFFFFF)
-        st.change = math.random(20000, 25000)
     else
         for _, spec in ipairs(STANCE_TIMERS[st.stance]) do
             local left = st.remaining[spec.key] - 500

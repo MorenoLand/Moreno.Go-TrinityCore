@@ -18190,6 +18190,10 @@ func init() {
 	// destroy-platform health gates, immune flag flips — no health /
 	// timer-event bridges); the UpdateAI arcane / vortex / power-spark /
 	// phase-three disk machines (no timer-event / cast / phase bridges);
+	// CAST-STATE 2026-11-04: boss UpdateAI pre-loop (:740) + in-loop
+	// (:970) CASTING gates (PHASE_NOT_STARTED-exempt) guard only the
+	// unported event machine — zero ported timer ticks, and the ported
+	// engage / died / reset hooks are ungated per C++; no gate ported.
 	// SpellHit (SPELL_POWER_SPARK_MALYGOS -> Talk SAY_BUFF_SPARK 14 +
 	// despawn the spark; SPELL_MALYGOS_BERSERK -> Talk
 	// EMOTE_HIT_BERSERKER_TIMER — ev14 live; both arms trigger-dead (56152 via the unported spark MI cast, 47008 aura tick never
@@ -18243,6 +18247,8 @@ func init() {
 	// Documented-only: IsSummonedBy instance->SetGUID
 	// DATA_LAST_OVERLOAD_GUID / phase-gated DespawnOrUnsummon legs — no
 	// instance / phase / despawn bridges.
+	// CAST-STATE 2026-11-04: overload UpdateAI (:1462) is empty — the
+	// ported SpellHit + spawn hooks are ungated per C++; no gate ported.
 	RegisterLuaBoss("npc_arcane_overload", 30282)
 
 	// npc_power_spark (Eye of Eternity) — fight logic in
@@ -18254,6 +18260,9 @@ func init() {
 	// MoveToMalygos MoveFollow (no spawn / motion bridges); UpdateAI
 	// phase-one/vortex despawn gates + CHASE_MOTION_TYPE MoveFollow
 	// maintenance (no per-tick UpdateAI / motion / instance bridges).
+	// CAST-STATE 2026-11-04: spark UpdateAI (:1087) has zero CASTING
+	// gates (phase / instance / vortex-aura despawn legs only) — the
+	// ported JustDied arm is ungated per C++; no gate ported.
 	RegisterLuaBoss("npc_power_spark", 30084)
 
 	// Sartharion (28860), Obsidian Sanctum —
@@ -18293,6 +18302,9 @@ func init() {
 	// SAY_SARTHARION_BERSERK 1, gated on the three drake boss states) +
 	// the 10%-health soft-enrage lava-strike cadence shift — no
 	// health / instance bridges.
+	// CAST-STATE 2026-11-04: sartharion UpdateAI (:409) has zero CASTING
+	// gates (plain while loop) — the ported cleave / breath / tailsweep /
+	// lavastrike / lavachurn ticks fire ungated, C++-exact; no gate ported.
 	RegisterLuaBoss("boss_sartharion", 28860)
 
 	// Tenebron (30452), Shadron (30451), Vesperon (30449), Obsidian
@@ -18327,7 +18339,12 @@ func init() {
 	// SPELL_SHADOW_BREATH 57570 — breathTick ported) — the
 	// target-selection / cast legs are bridged via
 	// CreateLuaEvent; the UpdateAI EVENT_FREE_MOVEMENT machine
-	// stays out (no motion bridge); npc_tenebron Reset /
+	// stays out (no motion bridge);
+	// CAST-STATE 2026-11-04: obsidian_sanctum.cpp has zero HasUnitState
+	// hits — dummy_dragonAI UpdateAI (:372) + the tenebron / shadron /
+	// vesperon overrides run ungated, so the ported fissure / breath /
+	// hatch / acolyte / tsunami ticks stay gateless, C++-exact.
+	// npc_tenebron Reset /
 	// JustEngagedWith (+EVENT_HATCH_EGGS 30s ported) / UpdateAI
 	// (instance legs unbridged); npc_shadron Reset (aura strips
 	// 57948 / 57835 ported via HasAura/RemoveAura +
@@ -18381,11 +18398,14 @@ func init() {
 	// SetBossState(DATA_BJARNGRIM, DONE) leg has no instance
 	// bridge).
 	// Documented-only: npc_stormforged_lieutenant (29240 — entry
-	// verifiable from the local enum, the acolyte precedent — but no
-	// Talk arms anywhere: JustEngagedWith is instance-gated
-	// AttackStart, UpdateAI is cast-gated (ARC_WELD 59085 /
-	// RENEW_STEEL_N 52774) — no instance / cast / timer bridges —
-	// no registration); boss_bjarngrim Reset / Initialize
+	// verifiable from the local enum, the acolyte precedent — no
+	// Talk arms anywhere; JustEngagedWith AttackStart twin +
+	// UpdateAI arcWeld / renewSteel timer arms PORTED in
+	// boss_bjarngrim.lua (CreateLuaEvent; renewSteel via
+	// FindNearestCreature, boss-alive gated) — the lieutenant
+	// UpdateAI is NOT cast-gated (plain countdowns, zero gates,
+	// boss_bjarngrim.cpp:432); no separate RegisterLuaBoss line,
+	// events registered in boss_bjarngrim.lua); boss_bjarngrim Reset / Initialize
 	// (canBuff AddAura TEMPORARY_ELECTRICAL_CHARGE 52092; the
 	// unassigned-GUID lieutenant respawn loop; stance-reset +
 	// DoCast(DEFENSIVE_STANCE 53790); SetEquipmentSlots 37871 /
@@ -18394,12 +18414,15 @@ func init() {
 	// no bridge); DoRemoveStanceAura (no aura-removal bridge);
 	// UpdateAI (the stance-change machine — Talk(SAY_DEFENSIVE_STANCE
 	// 1 / SAY_BATTLE_STANCE 2 / SAY_BERSEKER_STANCE 3) +
-	// Talk(EMOTE 6 / 7 / 8) riding a no-timer-event machine, and
-	// the stance-switched DoCastSelf / DoCastVictim timer events
-	// (SPELL_REFLECTION 36096 / KNOCK_AWAY 52029 / PUMMEL 12555 /
-	// IRONFORM 52022; INTERCEPT 58769 / WHIRLWIND 52027 /
-	// CLEAVE 15284; MORTAL_STRIKE 16856 / SLAM 52026) — no
-	// timer-event / cast bridges).
+	// Talk(EMOTE 6 / 7 / 8) + the stance-switched DoCastSelf /
+	// DoCastVictim timer events (SPELL_REFLECTION 36096 /
+	// KNOCK_AWAY 52029 / PUMMEL 12555 / IRONFORM 52022;
+	// INTERCEPT 58769 / WHIRLWIND 52027 / CLEAVE 15284;
+	// MORTAL_STRIKE 16856 / SLAM 52026) — PORTED 2026-10-25 via
+	// the 500ms bjarngrimStancePump in boss_bjarngrim.lua; the
+	// IsNonMeleeSpellCast change-wait (boss_bjarngrim.cpp:247-251)
+	// PORTED via creature:IsCasting() (harbinger-skyriss
+	// precedent; stale "no bridge" retracted)).
 	RegisterLuaBoss("boss_bjarngrim", 28586)
 
 	// Loken (28923), Halls of Lightning —
@@ -18418,7 +18441,11 @@ func init() {
 	// (no timer bridge); the UpdateAI timer machine
 	// (ARC_LIGHTNING 52921; LIGHTNING_NOVA 52960 with Talk(3) +
 	// Talk(EMOTE 9); PULSING_SHOCKWAVE 52961 + aura 59414 —
-	// no timer-event / cast / target-selection bridges);
+	// timer arms PORTED in boss_loken.lua (arc / nova / resume /
+	// intro); CAST-STATE 2026-11-04: UpdateAI (:139) has no CASTING
+	// gate (plain while loop; the sole UNIT_STATE_CASTING hit is
+	// the :165 ClearUnitState resume workaround, not a gate) —
+	// ported ticks fire ungated, C++-exact; no gate ported);
 	// DamageTaken health-pct Talk arms (5 / 6 / 7) (no
 	// DamageTaken bridge); spell_loken_pulsing_shockwave
 	// (distance-scaled CalculateDamage SpellScript — no
