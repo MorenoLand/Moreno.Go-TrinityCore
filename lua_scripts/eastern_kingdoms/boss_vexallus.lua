@@ -74,11 +74,13 @@
 -- machinery covered by the cancel/re-arm on combat events (halycon
 -- precedent); JustDied has no C++ arms.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - JustSummoned: SelectTarget(Random, 0) -> summoned->GetMotionMaster(
---   )->MoveFollow — the SelectTarget leg is bridgeable but MoveFollow
---   has no movement bridge (midnight/halazzi precedent); summons.Summon
---   is internal BossAI machinery. Old "no SelectTarget bridge" reason
---   corrected.
+-- - summons.Summon is internal BossAI machinery. PORTED:
+--   JustSummoned (boss_vexallus.cpp:98-102) —
+--   summoned:MoveFollow(random alive player, 0, 0) on event 19.
+--   Deviation: C++ SelectTarget(Random, 0) is playerOnly=false, so a
+--   non-player threat target (pet) could be picked; the port reuses
+--   the randomThreatPlayer helper (player-only). A nil pick follows
+--   C++'s null-temp skip (no follow).
 -- - npc_pure_energy (the file's second CreatureScript class): its entry
 --   is NOT C++-verifiable (no pure-energy constant in
 --   magisters_terrace.h; the class name appears only in
@@ -238,5 +240,21 @@ RegisterCreatureEvent(ENTRY_VEXALLUS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_VEXALLUS, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_VEXALLUS, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_VEXALLUS, 4, onCombatEnd)
+-- C++ JustSummoned (boss_vexallus.cpp:98-102): summoned follows a
+-- random target (MoveFollow, 0, 0). Previously documented-only for
+-- "no MoveFollow bridge" (midnight/halazzi precedent); MoveFollow is
+-- bridged (lua_creature_events.go:4373) and event 19 fires on Lua
+-- summons, so the arm ports now.
+local function onJustSummoned(_, creature, summoned)
+    if not summoned then
+        return
+    end
+    local target = randomThreatPlayer(creature)
+    if target then
+        summoned:MoveFollow(target, 0, 0)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_VEXALLUS, 19, onJustSummoned)
 RegisterCreatureEvent(ENTRY_VEXALLUS, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_VEXALLUS, 23, onCombatEnd)

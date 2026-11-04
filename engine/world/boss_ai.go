@@ -12685,8 +12685,8 @@ func init() {
 	// boss_laj (17980): teleport / allergic-reaction boss; the
 	// TRIGGERED summon lasher/flayer casts ride spell data (the
 	// summoned entry IDs live in the spell effects, unverifiable)
-	// and the JustSummoned AttackStart relay has no bridge —
-	// unmodeled; the DoTransform display/immune arms are PORTED
+	// and the JustSummoned AttackStart relay is PORTED (event 19,
+	// EngageWithTarget twin); the DoTransform display/immune arms are PORTED
 	// (2026-10-20) — see lua_scripts/botanica/boss_laj.lua.
 	// instance_the_botanica.cpp stays blocked on the
 	// instance-script model.
@@ -13928,7 +13928,8 @@ func init() {
 	// enrage (cancel timers, EVENT_OVERLOAD 1200ms -> 2s DoCastVictim
 	// 44353 loop) + KilledUnit Talk(SAY_KILL). Chain-lightning /
 	// arcane-shock event arms unmodeled (SelectTarget — no bridge);
-	// JustSummoned MoveFollow unmodeled (SelectTarget — no bridge);
+	// JustSummoned MoveFollow PORTED (event 19 + MoveFollow bridge,
+	// random-player pick);
 	// npc_pure_energy class unmodeled (entry not C++-verifiable —
 	// no .lua written, queued for TDB entry evidence; stub-free
 	// precedent). Entry 24744 verifiable from the C++ sources:
@@ -13941,8 +13942,9 @@ func init() {
 	// KilledUnit player-gated PlayerDeath[PlayersKilled] talk (ids
 	// 5..9, counter capped at 4, reset per engagement) + JustDied
 	// Talk(SAY_DEATH). SW_PAIN 14032 machine unmodeled (SelectTarget —
-	// no bridge); lackey summon/resummon + instance boss-state arms
-	// unmodeled (no summon/instance bridges); the file's eight lackey
+	// no bridge); lackey summon/resummon PORTED (event 23 +
+	// SummonCreature bridge), instance boss-state arms unmodeled
+	// (no instance bridge); the file's eight lackey
 	// CreatureScript classes (kagani_nightstrike 24557, ellris_
 	// duskhallow 24558, eramas_brightblaze 24554, yazzai 24561,
 	// warlord_salaris 24559, garaxxas 24555, apoko 24553, zelfan
@@ -16350,7 +16352,9 @@ func init() {
 	// SetHomePosition/MovePoint/SetFaction — no instance/movement/
 	// faction bridges); go_shallow_grave (GO gossip first-use random
 	// summon: 65% zombie 7286 / 10% dead hero 7276 via SummonCreature —
-	// no summon bridge, so the gossip arm would be dead content);
+	// summon + GO gossip bridges live, but the GO entry is DB-side
+	// (gameobject_template ScriptName, no in-tree evidence), so the
+	// gossip arm is ENTRY-BLOCKED, not dead content);
 	// at_zumrah (AreaTriggerScript — FindNearestCreature 7271 30y +
 	// SetFaction(FACTION_TROLL_FROSTMANE): no area-trigger bridge).
 	// All three documented-only, joining the no-bridge queues.
