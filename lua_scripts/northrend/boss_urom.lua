@@ -93,6 +93,13 @@
 -- _platform cycle trigger; DelayEvents itself is NOT the blocker (it is
 -- modelable via the thekal delayTimers due-timestamp idiom) — the machine
 -- stays out on trigger + AttackStart; unmodeled.
+-- CASTING gate CHECKED 2026-11-04, nothing to port: own UpdateAI
+-- pre-loop gate :231 (no in-loop gate) covers only the unported
+-- teleport event machine — zero ported timer ticks exist, and the
+-- ported hooks (KilledUnit/JustDied Talk, Reset + JustReachedHome
+-- Evocate) are ungated per C++ (separate hooks, no CASTING check).
+-- The _platform < 3 early return sits above the gate and likewise
+-- guards only the unported machine.
 -- DamageTaken — _isInCenter-gated NearTeleportTo(1124.0432,
 -- 1078.2109, 508.3597, 5.4623) on lethal damage — Teleport is
 -- bridged; the blocker is the _isInCenter state, which rides the

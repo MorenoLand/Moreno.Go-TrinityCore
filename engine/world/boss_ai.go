@@ -18054,7 +18054,9 @@ func init() {
 	// EVENT_BOMB_SUMMON SummonCreature(NPC_UNSTABLE_SPHERE 28166)
 	// 2s, EVENT_MAGIC_PULL DoCast(SPELL_MAGIC_PULL 51336) 15s,
 	// EVENT_STOMP Talk(SAY_STOMP 4)+DoCast(SPELL_THUNDERING_STOMP
-	// 50774) 15s (no timer-event/cast/summon bridges);
+	// 50774) 15s (ported via CreateLuaEvent; CASTING gates PORTED
+	// 2026-11-04 — own UpdateAI pre-loop :96 + in-loop :127 gates cover
+	// all 3 ticks, 500ms IsCasting defer, mal_ganis idiom);
 	// npc_unstable_sphere (28166, NPC_UNSTABLE_SPHERE in the file's
 	// local enum, boss_drakos.cpp:31; CreatureScript
 	// "npc_unstable_sphere", boss_drakos.cpp:159) — PORTED in
@@ -18087,7 +18089,10 @@ func init() {
 	// (center-gated, no evade / teleport / motion bridges);
 	// AttackStart (z-gated DoStartNoMovement); the UpdateAI
 	// teleport event machine (no timer-event / random-target /
-	// cast / teleport / react-state / gravity bridges);
+	// cast / teleport / react-state / gravity bridges); CASTING gate
+	// CHECKED 2026-11-04 — own UpdateAI pre-loop gate :231 (no in-loop
+	// gate) covers only this unported machine, zero ported timer ticks,
+	// ported hooks ungated per C++;
 	// DamageTaken _isInCenter-gated NearTeleportTo; SpellHit
 	// SPELL_SUMMON_MENAGERIE x3 (SetHomePosition + LeaveCombat +
 	// Evocate — joins the SpellHit-15-never-fires queue);
@@ -18110,7 +18115,10 @@ func init() {
 	// CORES_VISUAL / EVENT_CALL_AZURE); the UpdateAI energize-
 	// cores / azure-captain / amplify-magic event machine — the
 	// timer-event / cast / random-target legs ARE bridged and the
-	// three arms are ported via CreateLuaEvent; npc_azure_ring_
+	// three arms are ported via CreateLuaEvent; CASTING gates PORTED
+	// 2026-11-04 — own UpdateAI pre-loop :114 + in-loop :153 gates cover
+	// all 3 ported ticks, 500ms IsCasting defer, mal_ganis idiom;
+	// npc_azure_ring_
 	// captain entry-unverifiable (no C++-evidenced entry — joins
 	// the entry-unverifiable queue; SpellHitTarget leg joins the
 	// SpellHit-15-never-fires queue; DoAction / MovementInform /
@@ -18140,6 +18148,9 @@ func init() {
 	// EVENT_ARCANE_VOLLEY / EVENT_ENRAGED_ASSAULT are ported via
 	// CreateLuaEvent (timer-event / cast legs bridged);
 	// EVENT_SUMMON_LEY_WHELP stays out (no summon delivery bridge);
+	// CASTING gates PORTED 2026-11-04 — own UpdateAI pre-loop :209 +
+	// in-loop :238 gates cover all 3 ported ticks, 500ms IsCasting
+	// defer, mal_ganis idiom;
 	// DamageTaken heroic+health-gated phase-shift machine (Talk
 	// SAY_SHIELD + DoCast SPELL_PLANAR_SHIFT 51162 + 6x SPELL_PLANAR_
 	// ANOMALIES 57959 — no bridges); JustSummoned /

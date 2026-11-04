@@ -69,6 +69,13 @@
 -- timer; the DoCast(me, SPELL_CALL_AZURE_RING_CAPTAIN 51002) leg
 -- STAYS OUT: SPELL_EFFECT_SEND_EVENT driving the azure-captain
 -- summon machinery — no summon/event-send bridge.
+-- CASTING gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis
+-- idiom): own UpdateAI pre-loop :114 + in-loop :153 gates cover all
+-- 3 ported ticks (amplify/energize-visual/azure — defer precedes
+-- cast / cast / Talk legs; the event stays queued, no re-arm
+-- consumed). The stale "UNIT_STATE_CASTING gates have no bridge"
+-- claim is retracted — IsCasting is live
+-- (lua_creature_events.go:1950).
 -- EVENT_ENERGIZE_CORES DoCast(me, SPELL_ENERGIZE_CORES 50785)
 -- one-shot 4s after each VISUAL then CancelEvent — STAYS OUT:
 -- the spell’s area targeting is SpellScript-filtered (the cone
@@ -150,6 +157,12 @@ end
 -- C++ EVENT_AMPLIFY_MAGIC (:145-148): DoCastVictim(51054)
 -- non-triggered, 20s/25s init -> 17s/20s loop.
 local function amplifyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "amplify", 500, function()
+            amplifyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CALL_AMPLIFY_MAGIC)
     schedule(guid, "amplify", {17000, 20000}, function()
         amplifyTick(creature, guid)
@@ -161,6 +174,12 @@ end
 -- (SpellScript-only consumer); the 4s EVENT_ENERGIZE_CORES chain
 -- dies with the 50785 stay-out.
 local function energizeVisualTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "energizeVisual", 500, function()
+            energizeVisualTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ENERGIZE_CORES_VISUAL)
     schedule(guid, "energizeVisual", 5000, function()
         energizeVisualTick(creature, guid)
@@ -171,6 +190,12 @@ end
 -- Talk(SAY_AZURE_EMOTE), 15s/30s init -> 20s/25s loop. The 51002
 -- summon leg stays out (no summon/event-send bridge).
 local function azureTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "azure", 500, function()
+            azureTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_AZURE)
     creature:Talk(SAY_AZURE_EMOTE)
     schedule(guid, "azure", {20000, 25000}, function()

@@ -73,11 +73,13 @@
 -- no motion bridge). The old "entry-unverifiable" note is retracted:
 -- 28166 is NPC_UNSTABLE_SPHERE in this file's enum and the boss
 -- port summons it live, so the entry is the summon's template.
--- UpdateAI UNIT_STATE_CASTING suppression gate (boss_drakos.cpp:96,
--- 127): C++ defers ALL event execution while the boss is casting;
--- creature:IsCasting() is hard-coded FALSE (lua_objects.go:326-330),
--- so the 15s Lua timers fire rigidly even mid-cast — no bridge,
--- unfixable, documented here.
+-- UpdateAI UNIT_STATE_CASTING gates PORTED 2026-11-04 (500ms
+-- IsCasting defer, mal_ganis idiom): own UpdateAI pre-loop :96 +
+-- in-loop :127 gates cover all 3 timer arms (bomb/magic-pull/stomp
+-- — defer precedes summon loop / postPull latch / Talk+cast; the
+-- event stays queued, no re-arm consumed). The stale
+-- "IsCasting hard-coded FALSE, no bridge" claim is retracted —
+-- IsCasting is live (lua_creature_events.go:1950).
 
 local ENTRY_DRAKOS = 27654
 
@@ -122,6 +124,12 @@ end
 -- DoCast(SPELL_MAGIC_PULL 51336) self-cast (AISpellInfo-resolved,
 -- see header) + postPull=true, 15s init -> 15s loop.
 local function magicPullTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pull", 500, function()
+            magicPullTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MAGIC_PULL)
     postPull[guid] = true
     schedule(guid, "pull", 15000, function()
@@ -133,6 +141,12 @@ end
 -- + DoCast(SPELL_THUNDERING_STOMP 50774) self-cast, 15s init ->
 -- 15s loop.
 local function stompTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            stompTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_STOMP)
     creature:CastSpell(creature, SPELL_THUNDERING_STOMP)
     schedule(guid, "stomp", 15000, function()
@@ -151,6 +165,12 @@ end
 -- random-near is a uniform polar offset. Delta: the C++ Reset-schedules
 -- the bomb tick even out of combat — the Lua seed is engage-side.
 local function bombTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bomb", 500, function()
+            bombTick(creature, guid)
+        end)
+        return
+    end
     local count = postPull[guid] and 4 or 1
     local cx, cy, cz = creature:GetX(), creature:GetY(), creature:GetZ()
     for _ = 1, count do

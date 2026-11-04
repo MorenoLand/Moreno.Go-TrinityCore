@@ -92,8 +92,14 @@
 -- no-op — the shazzrah no-op-cast precedent. No summon bridge
 -- (summon STRAND absent); joins drakos BOMB_SUMMON in the
 -- stay-out queue.
--- The UNIT_STATE_CASTING gates have no bridge (documented
--- deviation); DoMeleeAttackIfReady is engine-driven.
+-- The UNIT_STATE_CASTING gates are PORTED 2026-11-04 (500ms
+-- IsCasting defer, mal_ganis idiom): own UpdateAI pre-loop :209 +
+-- in-loop :238 gates cover all 3 ported ticks
+-- (barrage/volley/enraged — defer precedes victim cast / self-cast /
+-- Talk+cast; the event stays queued, no re-arm consumed). The stale
+-- "gates have no bridge" claim is retracted — IsCasting is live
+-- (lua_creature_events.go:1950). DoMeleeAttackIfReady is
+-- engine-driven.
 -- DamageTaken — heroic-only phase-shift machine: health
 -- 60%..20% -> PHASE_FIRST_PLANAR (or < 20% ->
 -- PHASE_SECOND_PLANAR), events.Reset() + Talk(SAY_SHIELD 5) +
@@ -186,6 +192,12 @@ local voidAmber = {}
 -- C++ EVENT_ARCANE_BARRAGE (:215-218): DoCastVictim(50804)
 -- non-triggered, 3s/10s init -> 3s/10s loop.
 local function arcaneBarrageTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "barrage", 500, function()
+            arcaneBarrageTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ARCANE_BARRAGE)
     schedule(guid, "barrage", {3000, 10000}, function()
         arcaneBarrageTick(creature, guid)
@@ -195,6 +207,12 @@ end
 -- C++ EVENT_ARCANE_VOLLEY (:219-222): DoCastAOE(51153)
 -- non-triggered, 10s/25s init -> 10s/25s loop.
 local function arcaneVolleyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "volley", 500, function()
+            arcaneVolleyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ARCANE_VOLLEY)
     schedule(guid, "volley", {10000, 25000}, function()
         arcaneVolleyTick(creature, guid)
@@ -205,6 +223,12 @@ end
 -- DoCast(51170) self-cast, non-triggered, 35s/50s init ->
 -- 35s/50s loop.
 local function enragedAssaultTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enraged", 500, function()
+            enragedAssaultTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_ENRAGE)
     creature:CastSpell(creature, SPELL_ENRAGED_ASSAULT)
     schedule(guid, "enraged", {35000, 50000}, function()
