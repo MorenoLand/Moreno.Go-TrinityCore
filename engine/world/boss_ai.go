@@ -16997,6 +16997,9 @@ func init() {
 	RegisterLuaBoss("boss_tharon_ja", 26632)
 
 	// boss_eadric: Trial of the Champion dungeon boss script, entry
+	// CAST-STATE GATE CHECK (2026-11-04): none — ScriptedAI
+	// overrides, plain countdowns, zero HasUnitState hits in
+	// boss_argent_challenge.cpp; Lua pumps ungated, C++-exact.
 	// 35119 (trial_of_the_champion.h NPC_EADRIC — kalecgos pass; the
 	// GetTrialOfTheChampionAI ScriptName binding is instance-shimmed,
 	// the creature_template binding DB-side). ScriptedAI. Ported arms
@@ -17046,6 +17049,9 @@ func init() {
 	RegisterLuaBoss("boss_eadric", 35119)
 
 	// boss_black_knight: Trial of the Champion dungeon boss script,
+	// CAST-STATE GATE CHECK (2026-11-04): none — ScriptedAI
+	// override, plain countdowns, zero CASTING hits (only HasUnitState
+	// hit is the :264 ROOT melee gate); Lua pumps ungated, C++-exact.
 	// entry 35451 (trial_of_the_champion.h NPC_BLACK_KNIGHT — kalecgos
 	// pass; the GetTrialOfTheChampionAI ScriptName binding is
 	// instance-shimmed, the creature_template binding DB-side).
@@ -17114,6 +17120,9 @@ func init() {
 	// bookkeeping has no bridge — tharon_ja precedent); EVENT_BERSERK —
 	// DoCastSelf(Berserk 26662), 600s after combat start,
 	// phase-independent, fires once (phase_hunter self-cast precedent);
+	// own UpdateAI pre-loop (:300) + in-loop (:416) CASTING gates
+	// PORTED as a 500ms IsCasting defer (mal_ganis idiom); Talk /
+	// DamageTaken arms ungated per C++ (separate hooks);
 	// scheduler cancelled on 2/4/23 (gargolmar precedent); melee
 	// engine-driven. npc_swarm_scarab (34605): JustDied DoCast(killer,
 	// Traitor King 68186) killer-gated (event 4; maiden_of_virtue

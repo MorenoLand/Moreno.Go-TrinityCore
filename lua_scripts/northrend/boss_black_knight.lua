@@ -30,6 +30,11 @@
 -- C++-exact here (apparent C++ bug; the timers' init/repeat windows
 -- are verbatim from C++ Initialize()).
 -- Ported arms (C++-exact for all modeled arms):
+-- CAST-STATE GATE CHECK (2026-11-04): none — boss_black_knightAI
+-- is a ScriptedAI override with plain countdowns, zero CASTING
+-- hits in boss_black_knight.cpp (the only HasUnitState hit is the
+-- :264 ROOT melee gate, not a cast gate), so the Lua pumps fire
+-- ungated, C++-exact as-is.
 -- boss_black_knight: uiIcyTouchTimer — DoCastVictim(Icy Touch 67718),
 -- urand(5000,9000) init, urand(5000,7000) repeat; uiPlagueStrikeTimer —
 -- DoCastVictim(Icy Touch 67718) (see note above), urand(10000,13000)

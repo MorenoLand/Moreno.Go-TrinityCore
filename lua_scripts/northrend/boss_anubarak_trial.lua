@@ -37,7 +37,9 @@
 -- _JustDied instance bookkeeping has no bridge — tharon_ja
 -- precedent); EVENT_BERSERK — DoCastSelf(Berserk 26662), 600s,
 -- phase-independent (fires once, 10min after combat start —
--- phase_hunter self-cast precedent). The berserk scheduler is
+-- phase_hunter self-cast precedent), 500ms IsCasting defer while
+-- casting (own UpdateAI pre-loop + in-loop gates, mal_ganis
+-- idiom). The berserk scheduler is
 -- cancelled on 2/4 (gargolmar precedent; 23 is unregistered but the
 -- berserk is a one-shot 600s timer — 2/4 cover leave-combat and death).
 -- npc_swarm_scarab (34605 NPC_SCARAB — Summons enum kalecgos
@@ -277,7 +279,21 @@ end
 
 -- C++ EVENT_BERSERK: DoCastSelf(Berserk 26662), 600s after combat
 -- start, phase-independent (never rescheduled or cancelled in
--- C++; fires once).
+-- C++; fires once). Own UpdateAI pre-loop (:300) + in-loop (:416)
+-- CASTING gates: 500ms IsCasting defer, no repeat re-arm
+-- (mal_ganis idiom) — the pre-loop return precedes ExecuteEvent,
+-- so the queued event survives; the one-shot defer re-queues a
+-- fresh 500ms entry, it does not consume the cast.
+local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_BERSERK)
+end
+
 local function anubarakEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_anubarak_trial.cpp:275 (BossAI base arm; setActive/instance legs have no bridge)
     creature:DoZoneInCombat() -- boss_anubarak_trial.cpp:275 (BossAI base arm; subsumes the trailing explicit DoZoneInCombat leg, same me-form call)
@@ -312,7 +328,7 @@ local function anubarakEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "berserk", 600000, function()
-        creature:CastSpell(creature, SPELL_BERSERK)
+        berserkTick(creature, guid)
     end)
 end
 

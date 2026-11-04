@@ -26,6 +26,10 @@
 -- The C++ Yells enum is commented out entirely and no Talk call
 -- exists anywhere in the file — no Talk arms to port.
 -- Ported arms (C++-exact for all modeled arms):
+-- CAST-STATE GATE CHECK (2026-11-04): none — boss_eadricAI and
+-- boss_paletressAI are ScriptedAI overrides with plain countdown
+-- loops, zero HasUnitState hits in boss_argent_challenge.cpp, so
+-- the Lua pumps fire ungated, C++-exact as-is.
 -- boss_eadric: uiVenganceTimer — DoCastSelf(Vengeance 66865),
 -- 10s init, 10s repeat, scheduled from combat start and
 -- independent of every unbridged leg (the bDone MovePoint block
