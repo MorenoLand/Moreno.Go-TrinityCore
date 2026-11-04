@@ -42,8 +42,8 @@
 -- GetInstanceData DATA_RAGEWINTERCHILLEVENT/DATA_ANETHERONEVENT/
 -- DATA_ALLIANCE_RETREAT/DATA_KAZROGALEVENT/DATA_AZGALOREVENT — no
 -- instance-data bridge); all OnGossipSelect arms (StartEvent/Retreat/
--- Debug toggle/DeSpawnVeins); the InterruptNonMeleeSpells pre-cast arm
--- (no bridge); Summons/respawn/wave-failure bookkeeping in JustDied.
+-- Debug toggle/DeSpawnVeins); Summons/respawn/wave-failure
+-- bookkeeping in JustDied.
 -- npc_tyrande_whisperwind: NOT registered — no bridgeable hooks. Its
 -- constructor sets zero spells, and its gossip is entirely
 -- instance-gated (item offer only when DATA_AZGALOREVENT == DONE and the
@@ -141,11 +141,17 @@ local function randomThreatTarget(creature)
     return out[math.random(#out)]
 end
 
--- C++ UpdateAI spell leg: pick target per TargetType; cast if alive and
+-- C++ UpdateAI spell leg: on timer expiry, IsNonMeleeSpellCast(false)
+-- -> InterruptNonMeleeSpells(false) (hyjalAI.cpp:857) before the
+-- target pick; the interrupt is bridged (lua_creature_events.go:1995,
+-- curator/jeklik precedent) while the IsNonMeleeSpellCast read has no
+-- bridge, so the call is unconditional — a no-op twin with no cast
+-- active. Then pick target per TargetType; cast if alive and
 -- re-arm at the fixed cooldown, else leave the timer expired (retry soon).
 -- C++ DoCast(target, spell) is the 2-arg non-triggered form (DoCastAOE
 -- 1-arg resolves to self-cast, also non-triggered).
 local function onSpell(creature, guid, name, idx)
+    creature:InterruptNonMeleeSpells(false)
     local spec = SPELLS[name][idx]
     local iv = intervals[name]
     local target = nil

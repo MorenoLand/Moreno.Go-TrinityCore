@@ -30,6 +30,13 @@
 -- - Engage (C++ JustEngagedWith): Talk SAY_ONAGGRO (1) + arm each
 --   bridgeable timer at its C++ ScheduleEvent cooldown;
 --   BossAI::JustEngagedWith pulse + me-DoZone PORTED (instance legs out).
+-- - BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578 pre-loop +
+--   :584 in-loop returns, thalnos precedent): the boss AI overrides no
+--   UpdateAI, so every ported event arm defers 500ms while
+--   creature:IsCasting() (live CastingUntil window), no re-arm consumed
+--   — fear, air burst (before Talk), grip, finger (before the 5yd read),
+--   hand of death, unleash (before the :327 interrupt); DamageTaken /
+--   KilledUnit legs fire outside UpdateAI and stay ungated per C++.
 -- - Fear 31970: DoCastAOE resolves to self-cast (kazrogal/illidan
 --   precedent), non-triggered, init 42s -> 42s.
 -- - Air Burst 32014: Talk SAY_AIR_BURST (3) + cast on
@@ -272,6 +279,14 @@ end
 -- C++ EVENT_FEAR: DoCastAOE(31970), non-triggered, init 42s -> 42s
 -- (DoCastAOE resolves to self-cast — kazrogal/illidan precedent).
 local function onFear(creature, guid)
+    -- BossAI::UpdateAI CASTING gate (ScriptedCreature.cpp:578/:584,
+    -- thalnos precedent): 500ms IsCasting defer, no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function()
+            onFear(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FEAR)
     schedule(guid, "fear", 42000, function()
         onFear(creature, guid)
@@ -289,6 +304,14 @@ end
 -- with no current victim the offset pop removes the first entry
 -- instead (curator/ikiss nil-victim branch).
 local function onAirBurst(creature, guid)
+    -- BossAI::UpdateAI CASTING gate (ScriptedCreature.cpp:578/:584):
+    -- 500ms IsCasting defer before the Talk, no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "airburst", 500, function()
+            onAirBurst(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_AIR_BURST)
     local victim = creature:GetVictim()
     local victimGuid = victim and victim:GetGUID() or nil
@@ -325,6 +348,14 @@ end
 -- withTank defaults to true (UnitAI.h:170), so the tank is INCLUDED —
 -- randomThreatTarget (threat list, any unit) is C++-exact.
 local function onGrip(creature, guid)
+    -- BossAI::UpdateAI CASTING gate (ScriptedCreature.cpp:578/:584):
+    -- 500ms IsCasting defer before the target pick, no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "grip", 500, function()
+            onGrip(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target and not target:IsDead() then
         creature:CastSpell(target, SPELL_GRIP_OF_THE_LEGION)
@@ -341,6 +372,14 @@ end
 -- The second selection is independent (may be nil -> DoCast nil no-op),
 -- non-triggered, init 15s.
 local function onFingerOfDeath(creature, guid)
+    -- BossAI::UpdateAI CASTING gate (ScriptedCreature.cpp:578/:584):
+    -- 500ms IsCasting defer before the 5yd range read, no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "finger", 500, function()
+            onFingerOfDeath(creature, guid)
+        end)
+        return
+    end
     if not threatTargetInRange(creature, 5) then
         local target = randomThreatTarget(creature)
         if target and not target:IsDead() then
@@ -359,6 +398,14 @@ end
 -- C++ EVENT_HAND_OF_DEATH: DoCastAOE(35354), non-triggered,
 -- init 10min -> 2s (DoCastAOE resolves to self-cast).
 local function onHandOfDeath(creature, guid)
+    -- BossAI::UpdateAI CASTING gate (ScriptedCreature.cpp:578/:584):
+    -- 500ms IsCasting defer before the self-cast, no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "handofdeath", 500, function()
+            onHandOfDeath(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_HAND_OF_DEATH)
     schedule(guid, "handofdeath", 2000, function()
         onHandOfDeath(creature, guid)
@@ -378,6 +425,15 @@ local unleashByColor = {
 
 local function onUnleashSoulCharge(creature, guid)
     local st = bossState(guid)
+    -- BossAI::UpdateAI CASTING gate (ScriptedCreature.cpp:578/:584):
+    -- the whole event execution defers, so the 500ms IsCasting defer
+    -- precedes the :327 interrupt arm; no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "unleash", 500, function()
+            onUnleashSoulCharge(creature, guid)
+        end)
+        return
+    end
     -- C++ :327: interrupt before the urand pick (no-op twin).
     creature:InterruptNonMeleeSpells(false)
     local pick = math.random(0, 2)
