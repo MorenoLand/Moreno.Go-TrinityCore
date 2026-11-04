@@ -125,11 +125,14 @@
 -- creature:ApplySpellImmune bridge but are no-op removes — nothing
 -- ever adds those rows (the DoAction supercharge adds are unported),
 -- so they stay out.
--- DoAction (all three) — ACTION_SUPERCHARGE 1 (SetFullHealth
--- + SPELL_SUPERCHARGE 61920 + phase++ + event reschedules)
--- and ACTION_ADD_CHARGE 2 (steelbreaker, SPELL_ELECTRICAL_
--- CHARGE trigger cast — the spell_assembly_meltdown producer)
--- — no DoAction bridge (joins the no-DoAction-bridge queue).
+-- DoAction (all three) — ACTION_SUPERCHARGE 1: the JustDied
+-- relay to survivors is ported via superchargeSurvivors
+-- (SetFullHealth + SPELL_SUPERCHARGE 61920 + live-timer
+-- reschedules; phase++ and phase >= 2/3 reschedules stay out
+-- per the deviation note below). ACTION_ADD_CHARGE 2
+-- (steelbreaker, SPELL_ELECTRICAL_CHARGE trigger cast — the
+-- spell_assembly_meltdown producer) stays out: its sender is
+-- a SpellScript, no bridge (joins the no-DoAction-bridge queue).
 -- GetData(DATA_PHASE_3 1) — creature:GetData IS bridged (ScriptData
 -- store, 2026-10-24) but the sole consumer is achievement-only; consumer:
 -- achievement_assembly_i_choose_you below.
@@ -160,8 +163,9 @@
 -- fusion punch 15s / shield 27s / rune of power 25s /
 -- chain lightning {7s,12s} / overload {40s,50s}, plus
 -- phase >= 2 / 3 arm enables) has no DoAction bridge, so
--- timers keep their combat-start schedules after a
--- supercharge instead of the C++ reschedules.
+-- the relay is ported as grid-sweep effects at the Died
+-- handlers: live-timer reschedules ride superchargeSurvivors
+-- while phase++ and the phase >= 2/3 arm enables stay out.
 -- spell_shield_of_runes (62274 — AuraScript
 -- AfterEffectRemove: on non-expire removal the caster casts
 -- SPELL_SHIELD_OF_RUNES_BUFF 62277 — no AuraScript bridge;
@@ -204,8 +208,11 @@ local SPELL_FUSION_PUNCH = 61903
 local SPELL_SHIELD_OF_RUNES = 62274
 local SPELL_OVERLOAD = 61869
 local SPELL_CHAIN_LIGHTNING = 61879
+local SPELL_SUPERCHARGE = 61920
 
 local timers = {}
+
+local fusionPunchTick, shieldOfRunesTick, chainLightningTick, overloadTick
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -229,11 +236,64 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ JustDied relays (boss_assembly_of_iron.cpp:217/221,
+-- 365/369, 544/548): the dying member's AI calls
+-- ACTION_SUPERCHARGE on the two survivors via instance GUIDs.
+-- Lua has no instance-GUID lookup, so survivors are found by
+-- entry sweep in grid range (the moroes despawnAdds precedent).
+-- Ported per-survivor arm: SetFullHealth + AddAura(SPELL_
+-- SUPERCHARGE) + the reschedules of timers Lua actually runs
+-- (fusion punch 15s / shield of runes 27s / chain lightning
+-- {7s,12s} / overload {40s,50s}). The phase++ and the
+-- phase >= 2/3 reschedules (static disruption, overwhelming
+-- power, rune of power/death/summoning, lightning whirl/
+-- tendrils, stormshield, stun immunity) stay out — those
+-- events are unported phase-gated legs. The instance DONE
+-- gate is subsumed by the gates below: on the final death
+-- every same-entry creature in range is the dying member
+-- (GUID-excluded) or already dead (IsAlive-excluded), so the
+-- sweep no-ops, matching the DONE branch's lack of cascade.
+local function superchargeSurvivors(creature)
+    local rearms = {
+        [ENTRY_STEELBREAKER] = function(add, guid)
+            schedule(guid, "fusionpunch", 15000, function()
+                fusionPunchTick(add, guid)
+            end)
+        end,
+        [ENTRY_MOLGEIM] = function(add, guid)
+            schedule(guid, "shieldofrunes", 27000, function()
+                shieldOfRunesTick(add, guid)
+            end)
+        end,
+        [ENTRY_BRUNDIR] = function(add, guid)
+            schedule(guid, "chainlightning", {7000, 12000}, function()
+                chainLightningTick(add, guid)
+            end)
+            schedule(guid, "overload", {40000, 50000}, function()
+                overloadTick(add, guid)
+            end)
+        end,
+    }
+    local selfGuid = creature:GetGUID()
+    for _, entry in ipairs({ENTRY_STEELBREAKER, ENTRY_MOLGEIM, ENTRY_BRUNDIR}) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 100)) do
+            if add:GetGUID() ~= selfGuid and add:IsAlive() then
+                add:SetHealth(add:GetMaxHealth())
+                add:AddAura(SPELL_SUPERCHARGE)
+                local rearm = rearms[entry]
+                if rearm then
+                    rearm(add, add:GetGUID())
+                end
+            end
+        end
+    end
+end
+
 -- C++ EVENT_FUSION_PUNCH: if IsWithinMeleeRange(victim)
 -- DoCastVictim(SPELL_FUSION_PUNCH 61903) (non-triggered),
 -- 15s init, {13s,22s} repeat; the cast is skipped when the
 -- victim is out of melee range but the timer still re-arms.
-local function fusionPunchTick(creature, guid)
+fusionPunchTick = function(creature, guid)
     local victim = creature:GetVictim()
     if victim and creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(victim, SPELL_FUSION_PUNCH)
@@ -295,17 +355,21 @@ end
 -- C++ JustDied: _JustDied() passthrough + instance
 -- GetBossState DONE check + DONE branch (Talk
 -- SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT) +
--- SetLootRecipient + supercharge DoAction cascade — only the
--- per-boss death Talk arm is bridgeable.
+-- SetLootRecipient + supercharge DoAction cascade — the death
+-- Talk rides the handler and the cascade rides
+-- superchargeSurvivors (grid-sweep relay); the DONE branch
+-- (Talk SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT)
+-- and SetLootRecipient stay out (no instance bridge).
 local function steelbreakerDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_STEELBREAKER_DEATH)
+    superchargeSurvivors(creature)
 end
 
 -- C++ EVENT_SHIELD_OF_RUNES: DoCast(me,
 -- SPELL_SHIELD_OF_RUNES 62274) (non-triggered self-cast),
 -- 30s init, {27s,34s} repeat.
-local function shieldOfRunesTick(creature, guid)
+shieldOfRunesTick = function(creature, guid)
     creature:CastSpell(creature, SPELL_SHIELD_OF_RUNES)
     schedule(guid, "shieldofrunes", {27000, 34000}, function()
         shieldOfRunesTick(creature, guid)
@@ -362,11 +426,15 @@ end
 -- C++ JustDied: _JustDied() passthrough + instance
 -- GetBossState DONE check + DONE branch (Talk
 -- SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT) +
--- SetLootRecipient + supercharge DoAction cascade — only the
--- per-boss death Talk arm is bridgeable.
+-- SetLootRecipient + supercharge DoAction cascade — the death
+-- Talk rides the handler and the cascade rides
+-- superchargeSurvivors (grid-sweep relay); the DONE branch
+-- (Talk SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT)
+-- and SetLootRecipient stay out (no instance bridge).
 local function molgeimDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_MOLGEIM_DEATH)
+    superchargeSurvivors(creature)
 end
 
 -- C++ SelectTarget(Random, 0) leg: alive units on the threat
@@ -391,7 +459,7 @@ end
 -- SelectTarget(Random, 0)) DoCast(target, SPELL_CHAIN_LIGHTNING
 -- 61879) (non-triggered), 4s init, {7s,10s} repeat; the re-arm
 -- sits outside the target check — C++-exact.
-local function chainLightningTick(creature, guid)
+chainLightningTick = function(creature, guid)
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
@@ -404,7 +472,7 @@ end
 -- C++ EVENT_OVERLOAD: Talk(EMOTE_BRUNDIR_OVERLOAD 7) +
 -- Talk(SAY_BRUNDIR_SPECIAL 2) + DoCast(SPELL_OVERLOAD 61869)
 -- (non-triggered self-cast), {60s,120s} init and repeat.
-local function overloadTick(creature, guid)
+overloadTick = function(creature, guid)
     creature:Talk(EMOTE_BRUNDIR_OVERLOAD)
     creature:Talk(SAY_BRUNDIR_SPECIAL)
     creature:CastSpell(creature, SPELL_OVERLOAD)
@@ -471,11 +539,15 @@ end
 -- C++ JustDied: _JustDied() passthrough + instance
 -- GetBossState DONE check + DONE branch (Talk
 -- SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT) +
--- SetLootRecipient + supercharge DoAction cascade — only the
--- per-boss death Talk arm is bridgeable.
+-- SetLootRecipient + supercharge DoAction cascade — the death
+-- Talk rides the handler and the cascade rides
+-- superchargeSurvivors (grid-sweep relay); the DONE branch
+-- (Talk SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT)
+-- and SetLootRecipient stay out (no instance bridge).
 local function brundirDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_BRUNDIR_DEATH)
+    superchargeSurvivors(creature)
 end
 
 RegisterCreatureEvent(ENTRY_STEELBREAKER, 1, steelbreakerEnterCombat)
