@@ -108,6 +108,8 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:CastSpell(creature, SPELL_TOXIN)
     schedule(guid, "volley", math.random(10000, 15000), function()
         onVolley(creature, guid)

@@ -308,6 +308,8 @@ local function checkFrenzy(creature, guid, damage)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:SetCombatMovement(false) -- Reset arm, boss_ayamiss.cpp:98 (ranged AI stands and casts)
     local guid = creature:GetGUID()
     cancelTimers(guid)

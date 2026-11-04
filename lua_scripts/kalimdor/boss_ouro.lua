@@ -224,6 +224,8 @@ local function onEnterCombat(event, creature, target)
     if victim then
         creature:CastSpell(victim, SPELL_BIRTH)
     end
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "sweep", math.random(5000, 10000), function()
         onSweep(creature, guid)
     end)

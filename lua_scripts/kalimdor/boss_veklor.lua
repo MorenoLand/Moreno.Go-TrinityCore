@@ -291,6 +291,8 @@ local function onEnterCombat(event, creature, target)
     schedule(guid, "berserk", 900000, function()
         onBerserk(creature, guid)
     end)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     -- C++ boss_twinemperors.cpp:165: JustEngagedWith pulls the other
     -- twin into the fight when it is not yet in combat
     -- (!pOtherBoss->IsInCombat() gate). GetOtherBoss resolves to the

@@ -154,6 +154,8 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "mortalwound", math.random(10000, 15000), function()
         onMortalWound(creature, guid)
     end)

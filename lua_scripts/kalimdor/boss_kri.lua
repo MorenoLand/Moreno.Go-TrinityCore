@@ -65,6 +65,8 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     kriState[guid] = { deathCloud = false }
     schedule(guid, "cleave", math.random(4000, 8000), function()
         onCleave(creature, guid)

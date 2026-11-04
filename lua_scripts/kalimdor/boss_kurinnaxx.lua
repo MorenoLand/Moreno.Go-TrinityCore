@@ -160,6 +160,8 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     kurinnaxxState[guid] = { enraged = false }
     schedule(guid, "mortalwound", 8000, function()
         onMortalWound(creature, guid)

@@ -81,6 +81,11 @@ local function startWhispers(_, creature)
     end, 90000)
 end
 
+local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
+end
+
 local function onDied(event, creature)
     cancelTimers(creature:GetGUID())
 end
@@ -88,3 +93,4 @@ end
 RegisterCreatureEvent(ENTRY, 5, startWhispers)
 RegisterCreatureEvent(ENTRY, 23, startWhispers)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
