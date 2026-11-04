@@ -59,10 +59,13 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
 -- OnDied, 23 OnReset. Driven by CreateLuaEvent timers; melee is
 -- engine-driven in Go (creature combat tick), like C++
--- DoMeleeAttackIfReady. There is no UNIT_STATE_CASTING gate in
--- Go, so timers fire unconditionally (maiden precedent); the C++
--- UpdateAI timer arms map onto OnEnterCombat timers with the
--- C++-exact init delays (maiden convention).
+-- DoMeleeAttackIfReady. C++ has no UNIT_STATE_CASTING gate (zero
+-- HasUnitState hits in boss_archaedas.cpp, all three AIs), so no
+-- defer applies and timers fire unconditionally, matching C++ (the
+-- "no bridge" phrasing is stale — IsCasting is live at
+-- lua_creature_events.go:1950); the C++ UpdateAI timer arms map onto
+-- OnEnterCombat timers with the C++-exact init delays (maiden
+-- convention).
 -- Verifiable numbers (file's own enums): SPELL_GROUND_TREMOR =
 -- 6524 / SPELL_SELF_DESTRUCT = 9874 / SPELL_BOSS_OBJECT_VISUAL
 -- = 11206 / SPELL_ARCHAEDAS_AWAKEN = 10347 / SPELL_AWAKEN_

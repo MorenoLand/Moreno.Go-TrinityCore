@@ -24,8 +24,11 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
 -- OnDied, 23 OnReset. Driven by CreateLuaEvent timers; melee is
 -- engine-driven in Go (creature combat tick), like C++
--- DoMeleeAttackIfReady. There is no UNIT_STATE_CASTING gate in
--- Go, so timers fire unconditionally (maiden precedent).
+-- DoMeleeAttackIfReady. C++ has no UNIT_STATE_CASTING gate (zero
+-- HasUnitState hits in boss_ironaya.cpp), so no defer applies and
+-- timers fire unconditionally, matching C++ (the "no bridge"
+-- phrasing is stale — IsCasting is live at
+-- lua_creature_events.go:1950).
 -- Verifiable numbers (file's own enums): SPELL_ARCINGSMASH =
 -- 8374 / SPELL_KNOCKAWAY = 10101 / SPELL_WSTOMP = 11876.
 -- Ported arms:

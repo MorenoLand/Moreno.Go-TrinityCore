@@ -14501,7 +14501,10 @@ func init() {
 	// no DoCastAOE/MotionMaster/MovementInform/SpellHitTarget bridges; she
 	// stays killable below 50%, documented divergence). Dominate mind 14515
 	// is declared in the C++ spell enum but never cast. UpdateAI
-	// UNIT_STATE_CASTING gates + BossAI::JustEngagedWith +
+	// UNIT_STATE_CASTING gates are PORTED (all five timer arms defer
+	// 500ms while IsCasting; Mograine's own UpdateAI + Whitemane's own
+	// UpdateAI pre-loop + in-loop returns; KilledUnit/DamageTaken/
+	// SpellHit scheduler legs ungated per C++); BossAI::JustEngagedWith +
 	// DATA_MOGRAINE_AND_WHITE_EVENT bookkeeping have no bridges (luaBossAI
 	// shim).
 	RegisterLuaBoss("boss_mograine_and_whitemane", 3976)

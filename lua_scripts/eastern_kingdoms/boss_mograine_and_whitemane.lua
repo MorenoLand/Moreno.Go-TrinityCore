@@ -81,8 +81,14 @@
 -- negation while !_canDie unmodeled — the Lua leaves her killable below
 -- 50% (documented divergence). Dominate mind 14515 is declared in the
 -- C++ spell enum but never cast by either AI.
--- The UpdateAI UNIT_STATE_CASTING queue + post-event gates have no
--- UNIT_STATE bridge (timers fire unconditionally, jeklik convention).
+-- The UpdateAI UNIT_STATE_CASTING queue + post-event gates are PORTED
+-- (each timer arm defers 500ms while creature:IsCasting(), live
+-- CastingUntil window, lua_creature_events.go:1950, scorn/thalnos
+-- precedent; no re-arm consumed; the stale "no UNIT_STATE bridge"
+-- claim is retracted). Mograine's own UpdateAI
+-- (boss_mograine_and_whitemane.cpp:214-232) and Whitemane's own
+-- UpdateAI (:296-347) share the pre-loop + in-loop CASTING returns;
+-- KilledUnit/DamageTaken/SpellHit scheduler legs stay ungated per C++.
 
 local ENTRY_MOGRAINE = 3976
 local ENTRY_WHITEMANE = 3977
@@ -148,7 +154,14 @@ local function healthBelowPct(creature, pct)
 end
 
 -- C++ EVENT_CRUSADER_STRIKE: DoCastVictim(14518); Repeat(10s).
+-- UpdateAI CASTING gate PORTED as above (defer before victim pick).
 local function onCrusaderStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "crusaderStrike", 500, function()
+            onCrusaderStrike(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_CRUSADER_STRIKE)
     schedule(guid, "crusaderStrike", 10000, function()
         onCrusaderStrike(creature, guid)
@@ -156,7 +169,14 @@ local function onCrusaderStrike(creature, guid)
 end
 
 -- C++ EVENT_HAMMER_OF_JUSTICE: DoCastVictim(5589); Repeat(60s).
+-- UpdateAI CASTING gate PORTED as above (defer before victim pick).
 local function onHammerOfJustice(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "hammerOfJustice", 500, function()
+            onHammerOfJustice(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_HAMMER_OF_JUSTICE)
     schedule(guid, "hammerOfJustice", 60000, function()
         onHammerOfJustice(creature, guid)
@@ -282,7 +302,14 @@ RegisterCreatureEvent(ENTRY_MOGRAINE, 23, mograineReset)
 -- C++ EVENT_HEAL: self if HealthBelowPct(75), else Mograine if alive
 -- and below 75% (instance leg unmodeled — no bridge); nil target casts
 -- nothing. Repeat(13s) regardless.
+-- UpdateAI CASTING gate PORTED as above (defer before the 75% read).
 local function onHeal(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "heal", 500, function()
+            onHeal(creature, guid)
+        end)
+        return
+    end
     if healthBelowPct(creature, 75) then
         creature:CastSpell(creature, SPELL_HEAL)
     end
@@ -292,7 +319,14 @@ local function onHeal(creature, guid)
 end
 
 -- C++ EVENT_POWER_WORD_SHIELD: DoCastSelf(22187); Repeat(15s).
+-- UpdateAI CASTING gate PORTED as above (defer before self-cast).
 local function onPowerWordShield(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "powerWordShield", 500, function()
+            onPowerWordShield(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_POWER_WORD_SHIELD)
     schedule(guid, "powerWordShield", 15000, function()
         onPowerWordShield(creature, guid)
@@ -300,7 +334,14 @@ local function onPowerWordShield(creature, guid)
 end
 
 -- C++ EVENT_HOLY_SMITE: DoCastVictim(9481); Repeat(6s).
+-- UpdateAI CASTING gate PORTED as above (defer before victim pick).
 local function onHolySmite(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "holySmite", 500, function()
+            onHolySmite(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_HOLY_SMITE)
     schedule(guid, "holySmite", 6000, function()
         onHolySmite(creature, guid)
