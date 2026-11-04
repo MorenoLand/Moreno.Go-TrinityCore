@@ -17746,6 +17746,9 @@ func init() {
 	// bookkeeping + timed achievement 10286 (no achievement/
 	// instance bridges); empty-threat-list EnterEvadeMode leg
 	// (EnterEvadeMode unbridged — pump re-arms instead).
+	// CASTING gates: NONE — own UpdateAI override :107, plain
+	// while loop, zero HasUnitState hits; post-loop frenzy
+	// latch ungated; Lua pumps stay gateless, C++-exact.
 	RegisterLuaBoss("boss_patchwerk", 16028)
 
 	// Grobbulus (15931, Naxxramas, Construct Quarter) —
@@ -17826,6 +17829,10 @@ func init() {
 	// phase-gated); JustSummoned setActive; justBlinked
 	// MoveChase workaround (no motion bridge); summons
 	// tracking; 25-man via victim-group-size proxy.
+	// CASTING gates PORTED: own UpdateAI pre-loop :209 +
+	// in-loop :302 gates cover all 8 timer arms (500ms
+	// IsCasting defer, mal_ganis idiom); Talk/DamageTaken/
+	// JustSummoned ungated per C++ (separate hooks).
 	RegisterLuaBoss("boss_noth", 15954)
 
 	// The Four Horsemen (Thane 16064, Lady 16065, Baron 30549,
@@ -17864,6 +17871,12 @@ func init() {
 	// instance/achievement legs; mark AuraScript +
 	// consumption SpellScript (no SpellScript bridge);
 	// Reset ResetLootMode + summons.DespawnAll.
+	// CASTING gates, partial: each derived _UpdateAI check
+	// sits AFTER the event loop (baron :441, thane :517,
+	// lady :592, sir :662), so event arms fire ungated;
+	// only lady/sir 2s filler pumps gated (500ms IsCasting
+	// defer); baron/thane post-loop gate covers melee only
+	// (engine-driven, nothing to port).
 	RegisterLuaBoss("boss_four_horsemen_baron", 30549)
 	RegisterLuaBoss("boss_four_horsemen_thane", 16064)
 	RegisterLuaBoss("boss_four_horsemen_lady", 16065)
@@ -17897,6 +17910,11 @@ func init() {
 	// JustEngagedWith BossAI::JustEngagedWith instance leg (no
 	// instance bridge). Single C++ script serves both faction-variant
 	// commanders (twin_valkyr shared-handler precedent).
+	// CASTING gates PORTED: BossAI-derived, no UpdateAI
+	// override, so base gates (ScriptedCreature.cpp:578/
+	// :584) cover all 3 timer arms (500ms IsCasting
+	// defer, mal_ganis idiom); JustEngagedWith ungated
+	// per C++ (separate hook).
 	RegisterLuaBoss("boss_nexus_commanders", 26796)
 	RegisterLuaBoss("boss_nexus_commanders", 26798)
 

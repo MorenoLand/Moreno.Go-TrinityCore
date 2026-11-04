@@ -128,6 +128,12 @@ end
 -- 2-arg = non-triggered; init {3s,4s} (:61), unconditional re-arm
 -- {11s,15s}.
 local function chargeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "charge", 500, function()
+            chargeTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerTarget(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_CHARGE)
@@ -140,6 +146,12 @@ end
 -- C++ EVENT_WHIRLWIND: DoCast(me, SPELL_WHIRLWIND 38618), 6s/8s init,
 -- 19500ms/25s repeat.
 local function whirlwindTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind", 500, function()
+            whirlwindTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WHIRLWIND)
     schedule(guid, "whirlwind", math.random(19500, 25000), function()
         whirlwindTick(creature, guid)
@@ -153,12 +165,25 @@ end
 -- selin_fireheart / mr_smite precedent; the Oct-12 "no DoCastAOE
 -- bridge" claim was wrong, retracted this run).
 local function frighteningShoutTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frightening_shout", 500, function()
+            frighteningShoutTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FRIGHTENING_SHOUT)
     schedule(guid, "frightening_shout", math.random(45000, 55000), function()
         frighteningShoutTick(creature, guid)
     end)
 end
 
+-- CASTING gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis
+-- idiom): BossAI-derived, no UpdateAI override, so BossAI::UpdateAI
+-- base gates apply (ScriptedCreature.cpp:578/:584 pre-loop + in-loop
+-- CASTING returns) to all 3 timer arms (charge/whirlwind/
+-- frightening_shout — defer precedes target pick / self-cast; the
+-- event stays queued, no re-arm consumed). JustEngagedWith arms
+-- ungated per C++ (separate hook, not the event loop).
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) + RemoveAurasDueToSpell(
 -- SPELL_FROZEN_PRISON 47543) + DoCast(me, SPELL_BATTLE_SHOUT 31403) +
 -- schedules EVENT_CHARGE_COMMANDER ({3s,4s}) + EVENT_WHIRLWIND (6s, 8s)

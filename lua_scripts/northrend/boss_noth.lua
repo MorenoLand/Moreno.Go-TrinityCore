@@ -61,6 +61,14 @@
 -- C++ EventMap phase masks, modeled explicitly — the
 -- schedule helper overwrites same-key timers, cancelKey
 -- removes the outgoing phase's keys).
+-- CASTING gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis
+-- idiom): boss UpdateAI pre-loop :209 + in-loop :302 gates cover
+-- all 8 timer arms (curse/warrior/blink/balcony/wave/ground/
+-- groundAttackable/balconyTeleport — defer precedes Talk/cast/
+-- phase-flip; the event stays queued, no re-arm consumed).
+-- Talk/DamageTaken/JustSummoned arms ungated per C++ (separate
+-- hooks); the justBlinked MoveChase leg after the loop stays
+-- ungated (plain melee block, no CASTING check on it).
 -- JustSummoned (event 19): summoned:SetFarVisible(true) +
 -- summoned:DoZoneInCombat() (C++ order); KilledUnit
 -- Talk(SAY_SLAY 2) player-gated (event 3, commanders
@@ -186,13 +194,18 @@ local function enterPhaseGround(creature, guid)
     elseif st.balconyCount == 1 then
         timeGround = 110
     end
-    schedule(guid, "groundAttackable", 2000, function()
+    local function groundAttackable()
+        if creature:IsCasting() then
+            schedule(guid, "groundAttackable", 500, groundAttackable)
+            return
+        end
         local s = state[guid]
         if s ~= nil then
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             creature:SetReactState(2)
         end
-    end)
+    end
+    schedule(guid, "groundAttackable", 2000, groundAttackable)
     schedule(guid, "balcony", timeGround * 1000, function()
         nothBalcony(creature, guid)
     end)
@@ -210,6 +223,12 @@ local function enterPhaseGround(creature, guid)
 end
 
 nothCurse = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse", 500, function()
+            nothCurse(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CURSE)
     schedule(guid, "curse", math.random(50000, 70000), function()
         nothCurse(creature, guid)
@@ -217,6 +236,12 @@ nothCurse = function(creature, guid)
 end
 
 nothWarrior = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "warrior", 500, function()
+            nothWarrior(creature, guid)
+        end)
+        return
+    end
     local st = state[guid]
     creature:Talk(SAY_SUMMON)
     creature:Talk(EMOTE_SUMMON)
@@ -229,6 +254,12 @@ nothWarrior = function(creature, guid)
 end
 
 nothBlink = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blink", 500, function()
+            nothBlink(creature, guid)
+        end)
+        return
+    end
     local st = state[guid]
     creature:CastSpell(creature, SPELL_CRIPPLE, true)
     creature:CastSpell(creature, SPELL_BLINK[math.random(#SPELL_BLINK)])
@@ -242,6 +273,12 @@ nothBlink = function(creature, guid)
 end
 
 nothBalcony = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "balcony", 500, function()
+            nothBalcony(creature, guid)
+        end)
+        return
+    end
     local st = state[guid]
     if st == nil then
         return
@@ -256,10 +293,15 @@ nothBalcony = function(creature, guid)
     creature:AttackStop()
     creature:StopMoving()
     creature:RemoveAllAuras()
-    schedule(guid, "balconyTeleport", 3000, function()
+    local function balconyTeleport()
+        if creature:IsCasting() then
+            schedule(guid, "balconyTeleport", 500, balconyTeleport)
+            return
+        end
         creature:Talk(EMOTE_TELEPORT_1)
         creature:CastSpell(creature, SPELL_TELEPORT)
-    end)
+    end
+    schedule(guid, "balconyTeleport", 3000, balconyTeleport)
     schedule(guid, "wave", math.random(5000, 8000), function()
         nothWave(creature, guid)
     end)
@@ -275,6 +317,12 @@ nothBalcony = function(creature, guid)
 end
 
 nothWave = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wave", 500, function()
+            nothWave(creature, guid)
+        end)
+        return
+    end
     local st = state[guid]
     creature:Talk(EMOTE_SUMMON_WAVE)
     if st ~= nil then
@@ -296,6 +344,12 @@ nothWave = function(creature, guid)
 end
 
 nothGround = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "ground", 500, function()
+            nothGround(creature, guid)
+        end)
+        return
+    end
     local st = state[guid]
     if st ~= nil then
         st.balconyCount = st.balconyCount + 1

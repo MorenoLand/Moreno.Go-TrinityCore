@@ -64,6 +64,14 @@
 -- hit + _shouldSay -> Talk(SAY_SPECIAL 2), latch cleared.
 -- KilledUnit Talk(SAY_SLAY 3) player-gated (event 3,
 -- commanders precedent); JustDied Talk(SAY_DEATH 4).
+-- CASTING gates, partial, PORTED 2026-11-04: each derived
+-- _UpdateAI's HasUnitState(UNIT_STATE_CASTING) check sits AFTER
+-- the event loop (baron :441, thane :517, lady :592, sir :662),
+-- so berserk/mark/unholy/meteor/void/wrath event arms fire
+-- UNGATED and stay gateless; the check gates only the post-loop
+-- arms — baron/thane melee (engine-driven, nothing to port) and
+-- the lady/sir 2s filler pumps, which now defer 500ms while
+-- casting (mal_ganis idiom).
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
 -- Distance filters use creature:GetDistance (amanitar /
 -- bpc precedent); the 45yd/20yd bounds are C++-exact.
@@ -237,6 +245,12 @@ local function ladyVoidTick(creature, guid)
 end
 
 local function ladyBoltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bolt", 500, function()
+            ladyBoltTick(creature, guid)
+        end)
+        return
+    end
     local target = nearestInRange(creature, 45, false)
     if target ~= nil then
         creature:CastSpell(target, SPELL_SHADOW_BOLT)
@@ -261,6 +275,12 @@ local function sirWrathTick(creature, guid)
 end
 
 local function sirBoltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bolt", 500, function()
+            sirBoltTick(creature, guid)
+        end)
+        return
+    end
     local target = nearestInRange(creature, 45, false)
     if target ~= nil then
         creature:CastSpell(target, SPELL_HOLY_BOLT)

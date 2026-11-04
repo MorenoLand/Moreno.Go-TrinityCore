@@ -44,6 +44,10 @@
 -- 2s repeat. KilledUnit Talk(SAY_SLAY 1) at 1-in-5
 -- (C++ rand32() % 5 == 0). JustDied Talk(SAY_DEATH 2).
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
+-- CASTING gates: NONE, verified 2026-11-04 — own UpdateAI override
+-- (boss_patchwerk.cpp:107-185), plain while loop, zero HasUnitState
+-- hits, base gates never run; the post-loop 5% frenzy latch is
+-- ungated too. Lua pumps stay gateless, C++-exact.
 -- Unmodeled (no bridges — documented, not wired): Reset/JustDied/
 -- JustEngagedWith instance bookkeeping (_Reset/_JustDied,
 -- DoStartTimedAchievement/DoStopTimedAchievement for achievement
