@@ -482,6 +482,12 @@ end
 local function svalnaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustEngagedWith base call first (boss_sister_svalna.cpp:355):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) —
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before the crok
+    -- Talk leg (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     -- C++ JustEngagedWith (boss_sister_svalna.cpp:355-356):
     -- crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA) — cross-creature Talk
     -- bridged via FindNearestCreature (mrfloppy/emily precedent); the
