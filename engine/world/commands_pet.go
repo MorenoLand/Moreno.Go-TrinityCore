@@ -24,12 +24,10 @@ import (
 // learn/unlearn are native via the pet_spell bridge (INSERT OR REPLACE /
 // DELETE + SMSG_PET_LEARNED_SPELL / SMSG_PET_UNLEARNED_SPELL, mirroring
 // pet->learnSpell/removeSpell), and level is native via applyPetLevel
-// (pet_progression.go), mirroring Pet::GivePetLevel. create is
-// documented-blocked: it needs the selected live creature
-// (ChatHandler::getSelectedCreature; command selections resolve only to
-// online players in the Go tree) and the taming pipeline
-// (CreateTamedPetFrom / DespawnOrUnsummon / InitTalentForLevel /
-// SavePetToDB / SetMinion), none of which has a Go bridge.
+// (pet_progression.go), mirroring Pet::GivePetLevel. create is native via
+// the selected-creature twin (castCommandSelectedCreature) plus the taming
+// tail (createTamedPetFromEntry: DespawnOrUnsummon, DB save, SetMinion,
+// PetSpellInitialize); InitTalentForLevel stays unmodeled.
 
 // handleCmdPet dispatches the pet sub-table (cs_pet.cpp:61-75) with Trinity
 // per-level prefix matching. A bare ".pet" prints the syntax line with no
@@ -91,17 +89,77 @@ func (s *session) petCommandMotion(ts *session) *creatureMotion {
 	return s.server.findCreatureMotionLocked(ts.player.Map, ts.player.InstanceID, ts.player.PetGUID)
 }
 
-// handlePetCreateCommand is documented-blocked (cs_pet.cpp:78-121): taming
-// the selected creature needs getSelectedCreature (selected-unit creature
-// targeting has no Go bridge). The taming pipeline itself is bridged
-// (handleTameCreature/handleCreateTamedPet in pets.go: DespawnOrUnsummon,
-// DB save, SetMinion, PetSpellInitialize; InitTalentForLevel stays
-// unmodeled).
+// handlePetCreateCommand mirrors HandlePetCreateCommand (cs_pet.cpp:78-121):
+// the selected creature (castCommandSelectedCreature twin; a player
+// selection resolves to no motion, like getSelectedCreature returning null)
+// must not be a pet, its creature_template family must not be NONE, and the
+// invoker must not already have a live pet. The original is despawned
+// (tame precedent) and the pet is created via createTamedPetFromEntry with
+// CreatedBySpell 0. The command level is the C++ command formula — the
+// invoker's level, or invoker level - 5 when the creature is below that —
+// NOT the tame formula (tame keeps the creature's level floored at
+// invoker level - 5). C++ has no class gate here (unlike the hunter-only
+// tame spell), and InitTalentForLevel stays unmodeled; the playerLevel < 5
+// uint8 underflow wrap in the C++ formula is avoided (Go floors at the
+// invoker's level).
 func (s *session) handlePetCreateCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandPetCreate) {
 		return
 	}
-	s.sendSysMessage("pet create is not supported: selected-unit creature targets and the taming pipeline (CreateTamedPetFrom/DespawnOrUnsummon/InitTalentForLevel/SavePetToDB/SetMinion) have no Go bridge.")
+	if s.player == nil {
+		return
+	}
+	motion := s.castCommandSelectedCreature()
+	if motion == nil || motion.OwnerGUID != 0 {
+		s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE
+		return
+	}
+	entry := motion.Entry
+	if entry == 0 {
+		entry = uint32((motion.GUID >> 24) & 0x00FFFFFF)
+		if entry == 0 {
+			entry = uint32(motion.GUID & 0xFFFFFFFF)
+		}
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		s.sendSysMessage("This creature cannot be tamed.")
+		return
+	}
+	var family int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT family FROM creature_template WHERE entry = ?", entry).Scan(&family); err != nil {
+		s.sendSysMessage("This creature cannot be tamed.")
+		return
+	}
+	if family == 0 {
+		s.sendSysMessage("This creature cannot be tamed. Family id: 0 (CREATURE_FAMILY_NONE).")
+		return
+	}
+	if s.player.PetGUID != 0 {
+		s.sendSysMessage("You already have a pet")
+		return
+	}
+	playerLevel := uint32(s.player.Level)
+	petLevel := playerLevel
+	if playerLevel >= 5 && motion.Level < playerLevel-5 {
+		petLevel = playerLevel - 5
+	}
+	targetGUID := motion.GUID
+	s.sendDestroyObject(targetGUID, false)
+	s.server.motionMu.Lock()
+	delete(s.server.motionMapLocked(s.player.Map, s.player.InstanceID), targetGUID)
+	s.server.motionMu.Unlock()
+	destroyBuf := protocol.NewBuffer(9)
+	destroyBuf.WriteU64(targetGUID)
+	destroyBuf.WriteU8(0)
+	s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes())
+	if s.server.CharactersStore == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return
+	}
+	s.createTamedPetFromEntry(ctx, cdb, 0, entry, petLevel)
 }
 
 // petCommandLearnTarget resolves the target for learn/unlearn/level,
