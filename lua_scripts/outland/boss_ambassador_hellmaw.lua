@@ -115,10 +115,19 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- UpdateEscortAI CASTING gate (:147 pre-loop) ported as 500ms
+-- IsCasting defer on acid / fear / berserk (mal_ganis idiom); the
+-- banish-aura evade leg is unmodeled, hooks ungated per C++.
 -- C++ EVENT_CORROSIVE_ACID: DoCastVictim(SPELL_CORROSIVE_ACID 33551)
 -- non-triggered, 5-10s init / 15-25s re-arm (Reset schedules, the
 -- switch re-arms).
 local function corrosiveAcidTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "acid", 500, function()
+            corrosiveAcidTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CORROSIVE_ACID)
     schedule(guid, "acid", {15000, 25000}, function()
         corrosiveAcidTick(creature, guid)
@@ -128,6 +137,12 @@ end
 -- C++ EVENT_FEAR: DoCastAOE(SPELL_FEAR 33547) as self-cast,
 -- non-triggered, 25-30s init / 20-35s re-arm.
 local function fearTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function()
+            fearTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FEAR)
     schedule(guid, "fear", {20000, 35000}, function()
         fearTick(creature, guid)
@@ -138,6 +153,16 @@ end
 -- _instance->SetBossState(DATA_AMBASSADOR_HELLMAW, IN_PROGRESS);
 -- Talk(SAY_AGGRO); — the auriaya precedent (the SetBossState leg has
 -- no-instance bridge and is documented-only).
+local function hellmawBerserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            hellmawBerserkTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_ENRAGE, true)
+end
+
 local function hellmawEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -154,7 +179,7 @@ local function hellmawEnterCombat(event, creature, target)
     -- cancelTimers drops it on leave-combat/death.
     if creature:IsHeroic() then
         schedule(guid, "berserk", 180000, function()
-            creature:CastSpell(creature, SPELL_ENRAGE, true)
+            hellmawBerserkTick(creature, guid)
         end)
     end
 end

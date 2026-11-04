@@ -20513,6 +20513,10 @@ func init() {
 	RegisterLuaBoss("boss_lethon", 14888)
 	RegisterLuaBoss("boss_emeriss", 14889)
 	RegisterLuaBoss("boss_taerar", 14890)
+	// UpdateAI CASTING gates (emerald_dragonAI :147 pre-loop + :154 in-loop)
+	// ported as 500ms IsCasting defer on all 9 Lua timer ticks (incl the
+	// summon-player pump); hooks ungated per C++; dream-fog / spirit-shade
+	// unregistered, no ported tick.
 	// npc_guard_generic (World guard script): the JustEngagedWith arm —
 	// Talk(SAY_GUARD_SIL_AGGRO 0, who) gated in C++ on
 	// me->GetEntry() == NPC_CENARION_HOLD_INFANTRY (15184) — the
@@ -20532,6 +20536,10 @@ func init() {
 	// bridge). Documented-only: the Reset 10-minute SelectSpell buff
 	// machine.
 	RegisterLuaBoss("npc_guard_generic", 15184)
+	// Shattrath _scheduler CASTING validator (npc_guard.cpp:186-188) ported
+	// as 500ms IsCasting defer on the banish outer + inner chain; generic
+	// scheduler legs unported (SelectSpell machine); gossip / emote hooks
+	// ungated per C++.
 	// npc_engineering_tele_trinket (World profession gossip): ported
 	// in lua_scripts/world/npc_engineering_tele_trinket.lua — gossip
 	// hello/select learn arms (entries 14742/14743/21493/21494,
@@ -20541,6 +20549,8 @@ func init() {
 	RegisterLuaBoss("npc_engineering_tele_trinket", 14743)
 	RegisterLuaBoss("npc_engineering_tele_trinket", 21493)
 	RegisterLuaBoss("npc_engineering_tele_trinket", 21494)
+	// Checked-no-gate: npc_professions.cpp carries zero UpdateAI overrides
+	// (gossip-only file) — no timer tick exists to gate.
 	// npc_prof_blacksmith (World profession gossip): ported in
 	// lua_scripts/world/npc_prof_blacksmith.lua — gossip hello/select
 	// learn arms (entries 11145/11176/11146/11178/5164/11177/11191/
@@ -20556,6 +20566,7 @@ func init() {
 	RegisterLuaBoss("npc_prof_blacksmith", 11191)
 	RegisterLuaBoss("npc_prof_blacksmith", 11192)
 	RegisterLuaBoss("npc_prof_blacksmith", 11193)
+	// Checked-no-gate: gossip-only (same file, zero UpdateAI overrides).
 	// npc_prof_tailor (World profession gossip): ported in
 	// lua_scripts/world/npc_prof_tailor.lua — gossip hello/select
 	// learn arms (entries 22213/22208/22212); unlearn arms omitted on
@@ -20565,6 +20576,7 @@ func init() {
 	RegisterLuaBoss("npc_prof_tailor", 22213)
 	RegisterLuaBoss("npc_prof_tailor", 22208)
 	RegisterLuaBoss("npc_prof_tailor", 22212)
+	// Checked-no-gate: gossip-only (same file, zero UpdateAI overrides).
 	// boss_nexusprince_shaffar (Mana Tombs, Outland dungeon pass): the
 	// bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO 1) (event 1,
 	// the auriaya precedent), KilledUnit Talk(SAY_SLAY 2) player-gated
@@ -20585,6 +20597,10 @@ func init() {
 	RegisterLuaBoss("boss_nexusprince_shaffar", 18344)
 	RegisterLuaBoss("npc_ethereal_beacon", 18431)
 	RegisterLuaBoss("npc_ethereal_apprentice", 18430)
+	// CASTING gates ported as 500ms IsCasting defer: boss ticks via
+	// BossAI::UpdateAI (ScriptedCreature.cpp:578/:584, no boss override),
+	// beacon ticks via own pre-loop :235, apprentice ticks via own
+	// pre-loop :300; yor UpdateAI gateless (plain loop), unregistered.
 	// boss_ambassador_hellmaw (Shadow Labyrinth, Outland dungeon
 	// pass): the bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO
 	// 1) (event 1, the auriaya precedent; the SetBossState IN_PROGRESS
@@ -20606,6 +20622,9 @@ func init() {
 	// / no-cast / no-random-target / no-heroic-mode bridges —
 	// documented-only. SAY_HELP = 2 is unused in the file.
 	RegisterLuaBoss("boss_ambassador_hellmaw", 18731)
+	// UpdateEscortAI CASTING gate (:147 pre-loop) ported as 500ms
+	// IsCasting defer on acid / fear / berserk (berserk now a named tick);
+	// banish-aura evade leg unmodeled, hooks ungated per C++.
 	// boss_blackheart_the_inciter (Shadow Labyrinth, Outland dungeon
 	// pass): the bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO
 	// 1) (event 1, the auriaya precedent; the ScheduleEvent legs ride
@@ -20627,6 +20646,9 @@ func init() {
 	// documented-only. SAY_INTRO 0 / SAY_HELP 3 / SAY2_* 5-9 are
 	// never called in the file.
 	RegisterLuaBoss("boss_blackheart_the_inciter", 18667)
+	// UpdateAI CASTING gates (:127 pre-loop + :155 in-loop) ported as
+	// 500ms IsCasting defer on war-stomp / charge; incite-chaos machine
+	// stays out (SpellScript / threat legs unbridged).
 	// boss_grandmaster_vorpil.lua — ported bridgeable arms: the
 	// SayHelp one-shot riding the EVENT_SUMMON_TRAVELER timer
 	// machine, the void-portal + void-traveler SummonCreature legs,
@@ -20639,6 +20661,10 @@ func init() {
 	// no-timer / no-cast / no-random-target / no-summon /
 	// no-motion / no-instance bridges — documented-only.
 	RegisterLuaBoss("boss_grandmaster_vorpil", 18732)
+	// UpdateAI CASTING gates (:171 pre-loop + :211 in-loop) ported as
+	// 500ms IsCasting defer on volley / banish / draw-shadows / traveler
+	// (append-keyed defer for the multimap arms); void-traveler AI stays
+	// out (no motion bridge).
 	// boss_darkweaver_syth (Sethekk Halls, Outland dungeon pass) —
 	// fight logic in lua_scripts/outland/boss_darkweaver_syth.lua: the
 	// event-1 flame/arcane/frost/shadow-shock + chain-lightning
@@ -20652,6 +20678,10 @@ func init() {
 	// boss_darkweaver_syth.cpp carries spell/talk IDs only);
 	// ScriptName bindings are DB-side as usual.
 	RegisterLuaBoss("boss_darkweaver_syth", 18968)
+	// BossAI::UpdateAI gates (ScriptedCreature.cpp:578/:584, no syth
+	// override) ported as 500ms IsCasting defer on shock x4 /
+	// chain-lightning; DamageTaken summon latches ungated per C++
+	// (separate hook; interrupt leg stays out, no bridge).
 	// boss_murmur (Shadow Labyrinth, Outland dungeon pass) — fight
 	// logic in lua_scripts/outland/boss_murmur.lua: the 40%-health
 	// touch-of-murmur one-shot latch (event 23), the sonic-boom /

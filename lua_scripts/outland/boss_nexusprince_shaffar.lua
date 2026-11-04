@@ -97,7 +97,8 @@
 -- maladaar D'ore precedent) + Despawn, replacing the triggered
 -- spell-effect summon (shaffar EVENT_BEACON precedent); EVENT_ARCANE_BOLT
 -- 1s init -> 2-4.5s loop, non-triggered victim cast. The C++ UpdateAI
--- casting-state early return has no Lua model (as in all timer ports).
+-- casting-state early return (:235 pre-loop) is ported as 500ms
+-- IsCasting defer on both beacon ticks (mal_ganis idiom).
 -- The stale "no-timer / no-cast" claim is corrected — the legs bridge.
 -- npc_ethereal_apprentice (18430) — zero Talk; PORTED below (registered
 -- as npc_ethereal_apprentice in boss_ai.go): the alternating
@@ -179,11 +180,22 @@ local function randomAttackableTarget(creature)
     return candidates[math.random(#candidates)]
 end
 
+-- BossAI::UpdateAI gates (ScriptedCreature.cpp:578 pre-loop + :584
+-- in-loop; the boss has no UpdateAI override) ported as 500ms
+-- IsCasting defer on all four boss ticks (mal_ganis idiom); the
+-- beacon / apprentice ticks carry the same gate under their own
+-- pre-loop gates (beacon :235, apprentice :300).
 -- C++ EVENT_FIREBALL (:165-167): DoCastVictim(SPELL_FROSTBOLT 32364)
 -- 2-arg (non-triggered); 8s init, randtime(4500ms, 6s) repeat.
 -- (The C++ fires SPELL_FROSTBOLT under the EVENT_FIREBALL case —
 -- preserved C++-exact.)
 local function fireballTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function()
+            fireballTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FROSTBOLT)
     schedule(guid, "fireball", math.random(4500, 6000), function()
         fireballTick(creature, guid)
@@ -193,6 +205,12 @@ end
 -- C++ EVENT_FROSTBOLT (:169-171): DoCastVictim(SPELL_FROSTBOLT 32364)
 -- 2-arg (non-triggered); 4s init, randtime(4500ms, 6s) repeat.
 local function frostboltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function()
+            frostboltTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FROSTBOLT)
     schedule(guid, "frostbolt", math.random(4500, 6000), function()
         frostboltTick(creature, guid)
@@ -205,6 +223,12 @@ end
 -- clear + DoCast(SPELL_BLINK 34605)) has no motion/interrupt bridges
 -- — documented, not wired.
 local function frostNovaTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frost_nova", 500, function()
+            frostNovaTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROSTNOVA)
     schedule(guid, "frost_nova", math.random(17500, 25000), function()
         frostNovaTick(creature, guid)
@@ -218,6 +242,12 @@ end
 -- summon target is the caster, and event 19 fires the JustSummoned
 -- visual + engage arms for the new beacon.
 local function beaconTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "beacon", 500, function()
+            beaconTick(creature, guid)
+        end)
+        return
+    end
     if math.random(0, 3) == 0 then
         creature:Talk(SAY_SUMMON)
     end
@@ -329,8 +359,15 @@ end
 -- in combat, then EVENT_APPRENTICE DUNGEON_MODE(20s, 10s) +
 -- EVENT_ARCANE_BOLT 1s. DUNGEON_MODE(normal, heroic) via IsHeroic.
 -- C++ npc_ethereal_beaconAI::UpdateAI (:232-251): UpdateVictim gate +
--- casting-state early return (no Lua model, as in all timer ports).
+-- casting-state early return (:235 pre-loop, ported as 500ms IsCasting
+-- defer on both beacon ticks, mal_ganis idiom).
 local function beaconBoltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "beacon_bolt", 500, function()
+            beaconBoltTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ARCANE_BOLT)
     schedule(guid, "beacon_bolt", math.random(2000, 4500), function()
         beaconBoltTick(creature, guid)
@@ -345,6 +382,12 @@ end
 -- beacon's ev19 arm engages the apprentice to the beacon's victim
 -- (C++ beacon JustSummoned :223).
 local function beaconApprenticeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "beacon_apprentice", 500, function()
+            beaconApprenticeTick(creature, guid)
+        end)
+        return
+    end
     creature:SummonCreature(ENTRY_APPRENTICE, creature:GetX(), creature:GetY(),
         creature:GetZ(), 0, 7)
     creature:Despawn()
@@ -401,12 +444,24 @@ end
 -- pump stream would call nil (malown-class bug).
 local apprenticeFireTick, apprenticeFrostTick
 apprenticeFireTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "appr_fire", 500, function()
+            apprenticeFireTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_APPRENTICE_FIREBOLT, true)
     schedule(guid, "appr_frost", 3000, function()
         apprenticeFrostTick(creature, guid)
     end)
 end
 apprenticeFrostTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "appr_frost", 500, function()
+            apprenticeFrostTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_APPRENTICE_FROSTBOLT, true)
     schedule(guid, "appr_fire", 3000, function()
         apprenticeFireTick(creature, guid)

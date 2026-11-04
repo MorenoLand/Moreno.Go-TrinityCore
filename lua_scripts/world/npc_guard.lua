@@ -129,6 +129,11 @@ RegisterCreatureEvent(ENTRY_STORMWIND_CITY_GUARD, 8, guardGenericReceiveEmote)
 RegisterCreatureEvent(ENTRY_STORMWIND_CITY_PATROLLER, 8, guardGenericReceiveEmote)
 RegisterCreatureEvent(ENTRY_ORGRIMMAR_GRUNT, 8, guardGenericReceiveEmote)
 
+-- The shattrath _scheduler CASTING validator (npc_guard.cpp:186-188)
+-- is ported as 500ms IsCasting defer on the banish outer + inner chain
+-- (mal_ganis idiom; named fns so the defer re-queues the same leg).
+-- Generic-guard scheduler legs stay unported (SelectSpell machine);
+-- Talk / ReceiveEmote hooks ungated per C++ (separate hooks).
 -- npc_guard_shattrath_faction::ScheduleVanish (C++ npc_guard.cpp:210-231):
 -- 5s victim-gated banish mark + 9s player-GUID exile/teleport chain.
 local ENTRY_ALDOR_VINDICATOR = 18549 -- NPC_ALDOR_VINDICATOR (C++ :33)
@@ -156,7 +161,12 @@ local armBanish -- forward-declared (the 9s chain re-arms it)
 armBanish = function(creature, guid) -- C++ npc_guard.cpp:210 ScheduleVanish
     local t = banishTimers[guid] or {}
     banishTimers[guid] = t
-    t.outer = CreateLuaEvent(function()
+    local outerFn
+    outerFn = function()
+        if creature:IsCasting() then
+            t.outer = CreateLuaEvent(outerFn, 500)
+            return
+        end
         t.outer = nil
         local victim = creature:GetVictim()
         if victim and victim:GetTypeId() == TYPEID_PLAYER then -- C++ :214-215
@@ -168,7 +178,12 @@ armBanish = function(creature, guid) -- C++ npc_guard.cpp:210 ScheduleVanish
             end
             creature:CastSpell(victim, spell)
             local pGUID = victim:GetGUID()
-            t.inner = CreateLuaEvent(function() -- C++ :219-227 9s chain
+            local innerFn
+            innerFn = function() -- C++ :219-227 9s chain
+                if creature:IsCasting() then
+                    t.inner = CreateLuaEvent(innerFn, 500)
+                    return
+                end
                 t.inner = nil
                 local p = GetPlayerByGUID(pGUID)
                 if p then
@@ -184,11 +199,13 @@ armBanish = function(creature, guid) -- C++ npc_guard.cpp:210 ScheduleVanish
                     creature:CastSpell(p, SPELL_BANISH_TELEPORT, true)
                 end
                 armBanish(creature, guid) -- C++ :226 ScheduleVanish() re-arm (unconditional)
-            end, 9000)
+            end
+            t.inner = CreateLuaEvent(innerFn, 9000)
         else
             armBanish(creature, guid) -- C++ :230-231 banishContext.Repeat() (5s)
         end
-    end, 5000)
+    end
+    t.outer = CreateLuaEvent(outerFn, 5000)
 end
 
 local function shattrathEnterCombat(event, creature, target) -- C++ :197-199

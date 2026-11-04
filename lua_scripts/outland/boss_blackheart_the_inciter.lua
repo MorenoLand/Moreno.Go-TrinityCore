@@ -141,11 +141,20 @@ local function pickThreatTarget(creature)
     return found[math.random(#found)]
 end
 
+-- UpdateAI CASTING gates (:127 pre-loop + :155 in-loop) ported as
+-- 500ms IsCasting defer on war-stomp / charge (mal_ganis idiom);
+-- the incite-chaos machine stays out (SpellScript / threat legs).
 -- C++ EVENT_WAR_STOMP (:149-151): DoCast(me, SPELL_WAR_STOMP 33707)
--- 2-arg (non-triggered), ungated; 15s init, randtime(18s,24s) repeat
+-- 2-arg (non-triggered); 15s init, randtime(18s,24s) repeat
 -- (millisecond granularity — the {min,max} table form, not
 -- math.random(18,24)*1000).
 local function warStompTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "war_stomp", 500, function()
+            warStompTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WAR_STOMP)
     schedule(guid, "war_stomp", {18000, 24000}, function()
         warStompTick(creature, guid)
@@ -159,6 +168,12 @@ end
 -- id 1003) which the UpdateAI switch never handles (verified
 -- no-op). Threat-list pool via GetAITargets (see above).
 local function blackheartChargeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "charge", 500, function()
+            blackheartChargeTick(creature, guid)
+        end)
+        return
+    end
     local target = pickThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHARGE)

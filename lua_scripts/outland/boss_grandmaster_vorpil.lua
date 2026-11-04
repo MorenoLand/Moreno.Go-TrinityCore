@@ -75,8 +75,9 @@
 -- precedent). Documented deviations: the C++ SelectTarget defaults
 -- playerOnly=FALSE (EXPLICIT false here), so the pool can include
 -- pets/totems — the threat-list pick via GetAITargets carries that
--- (no Player filter); the UNIT_STATE_CASTING pre-check has no bridge —
--- casts fire unconditionally on their timers (the hodir precedent);
+-- (no Player filter); the UNIT_STATE_CASTING pre-check (:171 pre-loop
+-- + :211 in-loop) is ported as 500ms IsCasting defer on all four boss
+-- ticks (mal_ganis idiom);
 -- EVENT_DRAW_SHADOWS — PORTED as drawShadowsTick (45s init / 30s
 -- cycle; player teleports via player:TeleportNear, boss reposition via
 -- creature:Teleport, triggered draw-shadows + rain-of-fire casts, 6s
@@ -181,6 +182,12 @@ end
 -- non-triggered self-cast, randtime(7s,14s) init / randtime(15s,30s)
 -- re-arm.
 local function shadowboltVolleyTick(creature, guid)
+    if creature:IsCasting() then
+        scheduleAppend(guid, "volley", 500, function()
+            shadowboltVolleyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHADOWBOLT_VOLLEY)
     scheduleAppend(guid, "volley", {15000, 30000}, function()
         shadowboltVolleyTick(creature, guid)
@@ -217,6 +224,12 @@ end
 -- scheduler seeds only when IsHeroic() (:144-145). DoCast 1-arg
 -- form is non-triggered, so creature:CastSpell(target, spell).
 local function banishTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "banish", 500, function()
+            banishTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature, 0, 30)
     if target then
         creature:CastSpell(target, SPELL_BANISH)
@@ -242,6 +255,12 @@ end
 -- not an overwrite: the pending volley still fires); 45s init / 30s
 -- cycle.
 local function drawShadowsTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadows", 500, function()
+            drawShadowsTick(creature, guid)
+        end)
+        return
+    end
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId
@@ -270,6 +289,12 @@ end
 -- follow/sacrifice AI (npc_voidtraveler) has no bridge — the summoned
 -- travelers stand (documented-only in the header).
 local function travelerTick(creature, guid)
+    if creature:IsCasting() then
+        scheduleAppend(guid, "traveler", 500, function()
+            travelerTick(creature, guid)
+        end)
+        return
+    end
     local c = VOID_PORTAL_COORDS[math.random(5)]
     creature:SummonCreature(ENTRY_VOID_TRAVELER, c[1], c[2], c[3], 0, 5, 5000)
     if not helpYellSeen[guid] then

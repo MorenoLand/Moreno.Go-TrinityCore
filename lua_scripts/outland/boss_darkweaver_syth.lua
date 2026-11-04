@@ -40,9 +40,9 @@
 -- 33539, SHADOW 33540}, true) — 3-arg TRIGGERED self-casts
 -- (creature:CastSpell(creature, spell, true); the C++ fires front/
 -- back/left/right in ARCANE, FIRE, FROST, SHADOW order — preserved).
--- The IsNonMeleeSpellCast → InterruptNonMeleeSpells(false) leg rides
--- the no-cast-state bridge (IsCasting is a stub returning false,
--- lua_objects.go:330) — documented-only. The projection uses the
+-- The IsNonMeleeSpellCast → InterruptNonMeleeSpells(false) leg stays
+-- out on the no-InterruptNonMeleeSpells bridge — documented-only
+-- (IsCasting itself is live, lua_creature_events.go:1950). The projection uses the
 -- moroes-verified integer-floor form.
 -- boss_darkweaver_sythAI::KilledUnit — TYPEID_PLAYER gate →
 -- Talk(SAY_SLAY 2) (event 3; razuvious player-gated precedent).
@@ -135,10 +135,20 @@ local function randomThreatTarget(creature)
     return alive[math.random(#alive)]
 end
 
+-- BossAI::UpdateAI gates (ScriptedCreature.cpp:578 pre-loop + :584
+-- in-loop; syth has no UpdateAI override) ported as 500ms IsCasting
+-- defer on all four shock ticks + chain-lightning (mal_ganis idiom);
+-- the DamageTaken summon latches ride a separate hook, ungated.
 -- C++ shock arms (:212-231): SelectTarget(Random, 0) →
 -- DoCast(target, SPELL) 2-arg (non-triggered); re-arm
 -- randtime(10s,15s) ({min,max} table — millisecond granularity).
 local function shockTick(creature, guid, key, spell)
+    if creature:IsCasting() then
+        schedule(guid, key, 500, function()
+            shockTick(creature, guid, key, spell)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, spell)
@@ -152,6 +162,12 @@ end
 -- DoCast(target, SPELL_CHAIN_LIGHTNING) 2-arg (non-triggered);
 -- 25s flat repeat.
 local function chainLightningTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chain_lightning", 500, function()
+            chainLightningTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)

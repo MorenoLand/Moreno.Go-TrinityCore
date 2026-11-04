@@ -191,10 +191,23 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- UpdateAI CASTING gates (emerald_dragonAI::UpdateAI :147 pre-loop +
+-- :154 in-loop; taerar delegates to the base after its banished check)
+-- ported as 500ms IsCasting defer on all 9 timer ticks (mal_ganis
+-- idiom): the gate precedes target picks, casts and summons, and no
+-- re-arm is consumed; the post-loop summon-player leg defers the same
+-- way. DamageTaken / KilledUnit / Reset hooks ungated per C++
+-- (separate hooks); dream-fog / spirit-shade unregistered, no tick.
 -- C++ boss_ysondre::ExecuteEvent (:299-301): DoCastVictim(SPELL_
 -- LIGHTNING_WAVE 24819) 2-arg (non-triggered); 12s init,
 -- randtime(10s,20s) repeat.
 local function lightningWaveTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lightning_wave", 500, function()
+            lightningWaveTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_LIGHTNING_WAVE)
     schedule(guid, "lightning_wave", {10000, 20000}, function()
         lightningWaveTick(creature, guid)
@@ -207,6 +220,12 @@ end
 -- self-cast creature:CastSpell(creature, spell) (boss_ai.go DoCastAOE
 -- self-cast convention — selin_fireheart / mr_smite precedent).
 local function shadowBoltWhirlTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadow_bolt_whirl", 500, function()
+            shadowBoltWhirlTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHADOW_BOLT_WHIRL)
     schedule(guid, "shadow_bolt_whirl", {15000, 30000}, function()
         shadowBoltWhirlTick(creature, guid)
@@ -217,6 +236,12 @@ end
 -- VOLATILE_INFECTION 24928) 2-arg (non-triggered); 12s init, 120s
 -- repeat.
 local function volatileInfectionTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "volatile_infection", 500, function()
+            volatileInfectionTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_VOLATILE_INFECTION)
     schedule(guid, "volatile_infection", 120000, function()
         volatileInfectionTick(creature, guid)
@@ -226,6 +251,12 @@ end
 -- C++ boss_taerar::ExecuteEvent (:649-651): DoCast(SPELL_ARCANE_BLAST
 -- 24857) 1-arg (DoCastVictim); 12s init, randtime(7s,12s) repeat.
 local function arcaneBlastTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcane_blast", 500, function()
+            arcaneBlastTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ARCANE_BLAST)
     schedule(guid, "arcane_blast", {7000, 12000}, function()
         arcaneBlastTick(creature, guid)
@@ -238,6 +269,12 @@ end
 -- 0, so the target stays AITARGET_SELF — self-cast. 30s init,
 -- randtime(20s,30s) repeat.
 local function bellowingRoarTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bellowing_roar", 500, function()
+            bellowingRoarTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
     schedule(guid, "bellowing_roar", {20000, 30000}, function()
         bellowingRoarTick(creature, guid)
@@ -248,6 +285,12 @@ end
 -- SWEEP 15847) 2-arg (non-triggered); 4s init, 2s repeat. All four
 -- dragons fall through to the base ExecuteEvent for this event.
 local function tailSweepTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "tail_sweep", 500, function()
+            tailSweepTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TAIL_SWEEP)
     schedule(guid, "tail_sweep", 2000, function()
         tailSweepTick(creature, guid)
@@ -257,6 +300,12 @@ end
 -- C++ emerald_dragonAI::ExecuteEvent (:127-130): DoCast(me, SPELL_NOXIOUS_
 -- BREATH 24818) 2-arg (non-triggered); randtime(7.5s,15s) init/repeat.
 local function noxiousBreathTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "noxious_breath", 500, function()
+            noxiousBreathTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_NOXIOUS_BREATH)
     schedule(guid, "noxious_breath", {7500, 15000}, function()
         noxiousBreathTick(creature, guid)
@@ -269,6 +318,12 @@ end
 -- repeat. The fog-pair casts are self-casts; the summoned dream-fog
 -- creatures' own AI stays unported (motion machine, see below).
 local function seepingFogTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "seeping_fog", 500, function()
+            seepingFogTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SEEPING_FOG_LEFT, true)
     creature:CastSpell(creature, SPELL_SEEPING_FOG_RIGHT, true)
     schedule(guid, "seeping_fog", {120000, 150000}, function()
@@ -293,6 +348,12 @@ end
 -- GetCombatReach read. C++ fires per tick; the 1s pump is coarser
 -- but converges on the same teleport once the player stays out.
 local function summonPlayerTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summon_player", 500, function()
+            summonPlayerTick(creature, guid)
+        end)
+        return
+    end
     local targets = creature:GetAITargets()
     if targets then
         -- C++ filters FIRST (DefaultTargetSelector drops in-range
