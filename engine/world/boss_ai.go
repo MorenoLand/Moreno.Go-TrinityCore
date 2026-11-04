@@ -17159,7 +17159,9 @@ func init() {
 	// 17965 (trial_of_the_crusader.h NPC_WILFRED_PORTAL), ported
 	// in lua_scripts/northrend/npc_open_portal_target_toc.lua —
 	// Reset (passive + gravity + scheduler cancel) + SpellHit
-	// 67864 -> 2s -> self-cast 68424 + 9s despawn. The other
+	// 67864 -> 2s -> self-cast 68424 + 9s despawn. UpdateAI is a
+	// scheduler pump only (trial_of_the_crusader.cpp:658-660), zero
+	// HasUnitState hits — SpellHit task ungated, C++-exact as-is. The other
 	// trial_of_the_crusader.cpp classes stay documented-only:
 	// barrett / lich_king / tirion / fizzlebang / garrosh /
 	// varian ride instance boss-state, GetCreature/DoAction,
@@ -17185,7 +17187,10 @@ func init() {
 	// SPELLVALUE_AURA_STACK RAID_MODE(5,10) args have no bridge);
 	// EVENT_ENRAGE — Talk(SAY_BERSERK 11) + DoCastSelf(Berserk 64238),
 	// 10min, fires once (anubarak berserk precedent); timers cancelled
-	// on 2/4/23 (gargolmar precedent); melee engine-driven.
+	// on 2/4/23 (gargolmar precedent); melee engine-driven. Own
+	// UpdateAI pre-loop (:200) + in-loop (:282) CASTING gates PORTED
+	// as 500ms IsCasting defer per ported arm (mal_ganis idiom);
+	// mistress own pre-loop (:433) + in-loop (:457) gates likewise.
 	// npc_mistress_of_pain (34826 — Summons enum kalecgos pass):
 	// JustEngagedWith EVENT_SHIVAN_SLASH — DoCastVictim(Shivan Slash
 	// 66378), 4s init, urand(3s,10s) repeat (moroes precedent) — no
@@ -17200,20 +17205,17 @@ func init() {
 	// SetReactState / DoZoneInCombat, DoAction ACTION_JARAXXUS_ENGAGE,
 	// EnterEvadeMode SetBossState + DespawnOrUnsummon — instance model +
 	// motion / react / immune / zone / despawn bridges absent);
-	// EVENT_FEL_LIGHTNING (66528, 17s, random-target — no SelectTarget
-	// bridge, cairne/kazzak precedent); EVENT_INCINERATE_FLESH (66237,
-	// 14s, random-target + emote/yell); EVENT_LEGION_FLAME (66197, 20s,
-	// random-target); EVENT_SUMMON_NETHER_PORTAL (66269, 20s) and
-	// EVENT_SUMMON_INFERNAL_ERUPTION (66258, 1min20s) — summon STRAND
-	// absent; npc_legion_flame (34784) / npc_infernal_volcano (34813) /
+	// EVENT_FEL_LIGHTNING / INCINERATE_FLESH / LEGION_FLAME /
+	// SUMMON_NETHER_PORTAL / SUMMON_INFERNAL_ERUPTION — PORTED in Lua
+	// (random-target via GetAITargets; summon STRANDs stay out); npc_legion_flame (34784) / npc_infernal_volcano (34813) /
 	// npc_fel_infernal (34815) / npc_nether_portal (34825) — zero
 	// registration, entry-verifiable-but-bridge-blocked (Reset legs ride
 	// the instance gate or the unbridged summon gate — jedoga / burrower
 	// precedents; react / flag / random-target / difficulty bridges
 	// absent); npc_mistress_of_pain Reset / JustDied instance SetData
-	// legs (instance model absent), EVENT_SPINNING_SPIKE (66283,
-	// random-target), EVENT_MISTRESS_KISS (66336, heroic — no difficulty
-	// bridge, kelidan precedent); spell_mistress_kiss, spell_mistress_
+	// legs (instance model absent); EVENT_SPINNING_SPIKE (66283) +
+	// EVENT_MISTRESS_KISS (66336, heroic-gated) — PORTED in Lua
+	// (IsHeroic live; kelidan "no difficulty bridge" claim stale); spell_mistress_kiss, spell_mistress_
 	// kiss_area, spell_fel_streak_visual — no SpellScript / AuraScript
 	// binding bridge (razelikh precedent).
 	RegisterLuaBoss("boss_lord_jaraxxus", 34780)
@@ -17225,7 +17227,9 @@ func init() {
 	// entangling roots 65857 random <=30yd, faerie fire 65863 / force of
 	// nature 65861 / insect swarm 65855 / moonfire 65856 / starfire 65854
 	// victim, barkskin 65860 <30% self) + equipment staff 50966; engage
-	// triggered self-cast anti-AOE 68595. Base-class legs (instance
+	// triggered self-cast anti-AOE 68595. Derived UpdateAI pre-loop
+	// CASTING gate (:1546) PORTED as 500ms IsCasting defer per
+	// rotation arm (mal_ganis idiom); base threat/removeCC ungated. Base-class legs (instance
 	// GetData DATA_TEAM, threat/power machines, controller cross-AI
 	// DoAction, DoZoneInCombat, DoSpellAttackIfReady wrath) unbridged —
 	// documented in the lua header. Controller encounter machine still
@@ -17236,31 +17240,40 @@ func init() {
 	// entries 34469 (Alliance) / 34459 (Horde) — npc_toc_druidAI :
 	// boss_faction_championsAI : BossAI, same chain as the registered
 	// boomkin/champion siblings above; fight logic in
-	// lua_scripts/northrend/npc_toc_druid.lua.
+	// lua_scripts/northrend/npc_toc_druid.lua. Derived pre-loop CASTING
+	// gate (:785) PORTED as 500ms IsCasting defer on barkskin.
 	RegisterLuaBoss("npc_toc_druid", 34469)
 	RegisterLuaBoss("npc_toc_druid", 34459)
 	// npc_toc_shaman: Faction Champions restoration-shaman champion script,
 	// entries 34470 (Alliance) / 34444 (Horde) — npc_toc_shamanAI :
 	// boss_faction_championsAI : BossAI, same chain as the druid above;
-	// fight logic in lua_scripts/northrend/npc_toc_shaman.lua.
+	// fight logic in lua_scripts/northrend/npc_toc_shaman.lua. Derived
+	// pre-loop CASTING gate (:877) PORTED as 500ms IsCasting defer per
+	// ported arm (bloodlust/hex/earthshock).
 	RegisterLuaBoss("npc_toc_shaman", 34470)
 	RegisterLuaBoss("npc_toc_shaman", 34444)
 	// npc_toc_priest: Faction Champions discipline-priest champion script,
 	// entries 34466 (Alliance) / 34447 (Horde) — npc_toc_priestAI :
 	// boss_faction_championsAI : BossAI; fight logic in
-	// lua_scripts/northrend/npc_toc_priest.lua.
+	// lua_scripts/northrend/npc_toc_priest.lua. Derived pre-loop
+	// CASTING gate (:1074) PORTED as 500ms IsCasting defer per ported
+	// arm (scream/manaburn).
 	RegisterLuaBoss("npc_toc_priest", 34466)
 	RegisterLuaBoss("npc_toc_priest", 34447)
 	// npc_toc_warlock: Faction Champions warlock champion script,
 	// entries 34474 (Alliance) / 34450 (Horde) — npc_toc_warlockAI :
 	// boss_faction_championsAI : BossAI; fight logic in
-	// lua_scripts/northrend/npc_toc_warlock.lua.
+	// lua_scripts/northrend/npc_toc_warlock.lua. Derived pre-loop
+	// CASTING gate (:1263) PORTED as 500ms IsCasting defer per
+	// rotation arm.
 	RegisterLuaBoss("npc_toc_warlock", 34474)
 	RegisterLuaBoss("npc_toc_warlock", 34450)
 	// npc_toc_enh_shaman: Faction Champions enhancement-shaman champion script,
 	// entries 34463 (Alliance) / 34455 (Horde) — npc_toc_enh_shamanAI :
 	// boss_faction_championsAI : BossAI; fight logic in
-	// lua_scripts/northrend/npc_toc_enh_shaman.lua.
+	// lua_scripts/northrend/npc_toc_enh_shaman.lua. Derived pre-loop
+	// CASTING gate (:1987) PORTED as 500ms IsCasting defer per ported
+	// arm (earthshock/lava/storm/bloodlust/windfury).
 	RegisterLuaBoss("npc_toc_enh_shaman", 34463)
 	RegisterLuaBoss("npc_toc_enh_shaman", 34455)
 	// boss_faction_champions: Trial of the Crusader Faction Champions

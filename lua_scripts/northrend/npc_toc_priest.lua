@@ -34,6 +34,13 @@ local ENTRY_PRIEST_HORDE = 34447 -- trial_of_the_crusader.h:202
 
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42
 
+-- CASTING gate: derived UpdateAI pre-loop return
+-- (boss_faction_champions.cpp:1074) PORTED as a 500ms
+-- IsCasting defer per rotation arm (mal_ganis idiom), no repeat
+-- re-arm consumed; base EVENT_THREAT / EVENT_REMOVE_CC arms stay
+-- ungated (base UpdateAI has no gate). IsCasting is live on the
+-- handler surface (lua_creature_events.go:1950).
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -100,6 +107,10 @@ end
 -- C++ EVENT_HEAL_PSYCHIC_SCREAM (:1101-1105): EnemiesInRange(10) >= 2
 -- -> DoCastAOE = self-cast, init {10s,30s}, re-arm {10s,25s}.
 local function onPsychicScream(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "scream", 500, function() onPsychicScream(creature, guid) end)
+        return
+    end
     if enemiesInRange(creature, 10.0) >= 2 then
         creature:CastSpell(creature, SPELL_PSYCHIC_SCREAM)
     end
@@ -109,6 +120,10 @@ end
 -- C++ EVENT_MANA_BURN (:1106-1110): enemy caster, init {15s,30s},
 -- re-arm {15s,30s}.
 local function onManaBurn(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "manaburn", 500, function() onManaBurn(creature, guid) end)
+        return
+    end
     local target = firstManaPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_MANA_BURN)

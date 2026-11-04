@@ -85,9 +85,11 @@
 -- base AttackStart / AI_RANGED movement legs (no motion-master bridge);
 -- faction targeting is DB-side (the _teamInstance GetData(DATA_TEAM)
 -- leg has no bridge — the creature attacks per its template faction).
--- UNIT_STATE_CASTING gate: Go creature IsCasting() is hard-coded
--- false (lua_objects.go:326-330, ormorok precedent) — timers do not
--- gate on it, C++-suppressed overlap documented.
+-- UNIT_STATE_CASTING gate: the old "IsCasting() hard-coded false
+-- (lua_objects.go:326-330, ormorok precedent)" claim is STALE —
+-- IsCasting is live on the handler surface
+-- (lua_creature_events.go:1950); the derived pre-loop gate is PORTED
+-- above (500ms defer per rotation arm).
 
 local ENTRY_BOOMKIN_ALLIANCE = 34460
 local ENTRY_BOOMKIN_HORDE = 34451
@@ -104,6 +106,13 @@ local SPELL_BARKSKIN = 65860
 
 local EQUIP_STAFF = 50966
 local EQUIP_NO_CHANGE = 0xFFFFFFFF
+
+-- CASTING gate: derived UpdateAI pre-loop return
+-- (boss_faction_champions.cpp:1546) PORTED as a 500ms
+-- IsCasting defer per rotation arm (mal_ganis idiom), no repeat
+-- re-arm consumed; base EVENT_THREAT / EVENT_REMOVE_CC arms stay
+-- ungated (base UpdateAI has no gate). IsCasting is live on the
+-- handler surface (lua_creature_events.go:1950).
 
 local timers = {}
 
@@ -166,6 +175,10 @@ local function randomPlayerInRange(creature, maxDist)
 end
 
 local function onCyclone(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cyclone", 500, function() onCyclone(creature, guid) end)
+        return
+    end
     local target = randomNonTankPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_CYCLONE)
@@ -174,6 +187,10 @@ local function onCyclone(creature, guid)
 end
 
 local function onRoots(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "roots", 500, function() onRoots(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30.0)
     if target then
         creature:CastSpell(target, SPELL_ENTANGLING_ROOTS)
@@ -182,31 +199,55 @@ local function onRoots(creature, guid)
 end
 
 local function onFaerieFire(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "faerie", 500, function() onFaerieFire(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FAERIE_FIRE)
     schedule(guid, "faerie", {30000, 40000}, function() onFaerieFire(creature, guid) end)
 end
 
 local function onForceOfNature(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fon", 500, function() onForceOfNature(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FORCE_OF_NATURE)
     schedule(guid, "fon", 120000, function() onForceOfNature(creature, guid) end)
 end
 
 local function onInsectSwarm(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "swarm", 500, function() onInsectSwarm(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_INSECT_SWARM)
     schedule(guid, "swarm", {15000, 25000}, function() onInsectSwarm(creature, guid) end)
 end
 
 local function onMoonfire(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "moonfire", 500, function() onMoonfire(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MOONFIRE)
     schedule(guid, "moonfire", {15000, 30000}, function() onMoonfire(creature, guid) end)
 end
 
 local function onStarfire(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "starfire", 500, function() onStarfire(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_STARFIRE)
     schedule(guid, "starfire", {15000, 30000}, function() onStarfire(creature, guid) end)
 end
 
 local function onBarkskin(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "barkskin", 500, function() onBarkskin(creature, guid) end)
+        return
+    end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0
             and creature:GetHealth() < math.floor(maxHealth * 30 / 100) then

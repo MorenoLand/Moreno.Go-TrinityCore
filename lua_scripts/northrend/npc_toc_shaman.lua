@@ -33,6 +33,13 @@ local ENTRY_SHAMAN_HORDE = 34444 -- trial_of_the_crusader.h:206
 
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42
 
+-- CASTING gate: derived UpdateAI pre-loop return
+-- (boss_faction_champions.cpp:877) PORTED as a 500ms
+-- IsCasting defer per rotation arm (mal_ganis idiom), no repeat
+-- re-arm consumed; base EVENT_THREAT / EVENT_REMOVE_CC arms stay
+-- ungated (base UpdateAI has no gate). IsCasting is live on the
+-- handler surface (lua_creature_events.go:1950).
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -107,6 +114,10 @@ end
 -- entry casts Bloodlust unless Sated (57724); DoCastAOE = self-cast
 -- (phase_hunter precedent). Init 20s, re-arm 5min.
 local function onBloodlustHeroism(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bloodlust", 500, function() onBloodlustHeroism(creature, guid) end)
+        return
+    end
     if creature:GetEntry() == ENTRY_SHAMAN_ALLIANCE then
         if not creature:HasAura(AURA_EXHAUSTION) then
             creature:CastSpell(creature, SPELL_HEROISM)
@@ -122,6 +133,10 @@ end
 -- C++ EVENT_HEX (:912-916): random non-tank target, init {5s,30s},
 -- re-arm {15s,30s}.
 local function onHex(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "hex", 500, function() onHex(creature, guid) end)
+        return
+    end
     local target = randomNonTankPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_HEX)
@@ -132,6 +147,10 @@ end
 -- C++ EVENT_HEAL_EARTH_SHOCK (:922): enemy caster, init {5s,30s},
 -- re-arm {10s,20s}.
 local function onEarthShock(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "earthshock", 500, function() onEarthShock(creature, guid) end)
+        return
+    end
     local target = firstManaPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_EARTH_SHOCK)

@@ -52,6 +52,13 @@
 -- DoCastSelf(Berserk 64238), 10min, fires once (anubarak berserk
 -- precedent; never rescheduled in C++). All timers cancelled on 2/4/23
 -- (gargolmar precedent).
+-- CASTING gates: boss_jaraxxus own UpdateAI pre-loop
+-- (boss_lord_jaraxxus.cpp:200) + in-loop (:282) gates and
+-- npc_mistress_of_pain own pre-loop (:433) + in-loop (:457) gates
+-- PORTED as a 500ms IsCasting defer per ported arm (mal_ganis idiom)
+-- — defer precedes target pick / Talk / cast, no repeat re-arm
+-- consumed; the berserk one-shot defer re-queues a fresh 500ms entry.
+-- Talk / KilledUnit / JustDied arms ungated per C++ (separate hooks).
 -- npc_mistress_of_pain (34826 — Summons enum kalecgos pass):
 -- JustEngagedWith EVENT_SHIVAN_SLASH — DoCastVictim(Shivan Slash
 -- 66378), 4s init, urand(3s,10s) repeat (moroes precedent). No
@@ -287,6 +294,10 @@ end
 -- C++ EVENT_FEL_FIREBALL: DoCastVictim(Fel Fireball 66532), 6s init,
 -- urand(11s,13s) repeat.
 local function fireballTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function() fireballTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FEL_FIREBALL)
     schedule(guid, "fireball", math.random(11000, 13000), function()
         fireballTick(creature, guid)
@@ -298,6 +309,10 @@ end
 -- stack mod has no bridge; the triggered flag is bridged), 22s init,
 -- 42s repeat.
 local function netherPowerTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "netherpower", 500, function() netherPowerTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_NETHER_POWER, true)
     schedule(guid, "netherpower", 42000, function()
         netherPowerTick(creature, guid)
@@ -308,6 +323,10 @@ end
 -- DoCast(Fel Lightning 66528) non-triggered, 17s init,
 -- Repeat(10s,30s) outside the target check (re-arm unconditional).
 local function felLightningTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fellightning", 500, function() felLightningTick(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_FEL_LIGHTNING)
@@ -322,6 +341,10 @@ end
 -- DoCast(Incinerate Flesh 66237) non-triggered, 14s init,
 -- Repeat(23s) outside the target check (re-arm unconditional).
 local function incinerateFleshTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "incinerateflesh", 500, function() incinerateFleshTick(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:Talk(EMOTE_INCINERATE, target)
@@ -338,6 +361,10 @@ end
 -- non-triggered, 20s init, Repeat(30s) outside the target check
 -- (re-arm unconditional).
 local function legionFlameTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "legionflame", 500, function() legionFlameTick(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:Talk(EMOTE_LEGION_FLAME, target)
@@ -354,6 +381,10 @@ end
 -- events.Repeat(2min) (:245); the summon STRAND stays out (no
 -- Lua-surface consumer without summoning — documented-only).
 local function netherPortalTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "netherportal", 500, function() netherPortalTick(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_NETHER_PORTAL)
     creature:Talk(SAY_MISTRESS_OF_PAIN)
     creature:CastSpell(creature, SPELL_NETHER_PORTAL)
@@ -368,12 +399,30 @@ end
 -- events.Repeat(2min) (:251); the volcano/infernal summon STRANDs stay
 -- out — documented-only.
 local function infernalTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "infernal", 500, function() infernalTick(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_INFERNAL_ERUPTION)
     creature:Talk(SAY_INFERNAL_ERUPTION)
     creature:CastSpell(creature, SPELL_INFERNAL_ERUPTION)
     schedule(guid, "infernal", 120000, function()
         infernalTick(creature, guid)
     end)
+end
+
+-- C++ EVENT_ENRAGE: own UpdateAI pre-loop (:200) + in-loop (:282)
+-- CASTING gates: 500ms IsCasting defer, no repeat re-arm (mal_ganis
+-- idiom) — the one-shot defer re-queues a fresh 500ms entry.
+local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(SAY_BERSERK)
+    creature:CastSpell(creature, SPELL_BERSERK, true)
 end
 
 local function jaraxxusEnterCombat(event, creature, target)
@@ -406,8 +455,7 @@ local function jaraxxusEnterCombat(event, creature, target)
     -- C++ EVENT_ENRAGE: Talk(SAY_BERSERK) + DoCastSelf(Berserk 64238, triggered),
     -- 10min, fires once (never rescheduled).
     schedule(guid, "berserk", 600000, function()
-        creature:Talk(SAY_BERSERK)
-        creature:CastSpell(creature, SPELL_BERSERK, true)
+        berserkTick(creature, guid)
     end)
 end
 
@@ -445,6 +493,10 @@ RegisterCreatureEvent(ENTRY_JARAXXUS, 23, jaraxxusReset)
 -- C++ npc_mistress_of_pain JustEngagedWith EVENT_SHIVAN_SLASH:
 -- DoCastVictim(Shivan Slash 66378), 4s init, urand(3s,10s) repeat.
 local function shivanSlashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shivanslash", 500, function() shivanSlashTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHIVAN_SLASH)
     schedule(guid, "shivanslash", math.random(3000, 10000), function()
         shivanSlashTick(creature, guid)
@@ -455,6 +507,10 @@ end
 -- DoCast(Spinning Spike 66283) non-triggered, 9s init, Repeat(20s)
 -- outside the target check (re-arm unconditional).
 local function spinningSpikeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spinningspike", 500, function() spinningSpikeTick(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_SPINNING_SPIKE)
@@ -465,6 +521,10 @@ local function spinningSpikeTick(creature, guid)
 end
 
 local function mistressKissTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mistresskiss", 500, function() mistressKissTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MISTRESS_KISS)
     schedule(guid, "mistresskiss", 30000, function()
         mistressKissTick(creature, guid)

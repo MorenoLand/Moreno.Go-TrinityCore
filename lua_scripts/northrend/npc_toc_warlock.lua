@@ -36,6 +36,13 @@ local ENTRY_WARLOCK_HORDE = 34450 -- trial_of_the_crusader.h:207
 
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42
 
+-- CASTING gate: derived UpdateAI pre-loop return
+-- (boss_faction_champions.cpp:1263) PORTED as a 500ms
+-- IsCasting defer per rotation arm (mal_ganis idiom), no repeat
+-- re-arm consumed; base EVENT_THREAT / EVENT_REMOVE_CC arms stay
+-- ungated (base UpdateAI has no gate). IsCasting is live on the
+-- handler surface (lua_creature_events.go:1950).
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -116,6 +123,10 @@ end
 -- C++ EVENT_HELLFIRE (:1270): EnemiesInRange(10) >= 2 ->
 -- DoCastAOE = self-cast, init {10s,30s}, re-arm {10s,30s}.
 local function onHellfire(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "hellfire", 500, function() onHellfire(creature, guid) end)
+        return
+    end
     if enemiesInRange(creature, 10.0) >= 2 then
         creature:CastSpell(creature, SPELL_HELLFIRE)
     end
@@ -125,6 +136,10 @@ end
 -- C++ EVENT_CORRUPTION (:1275-1279): random target 30yd, init
 -- {2s,5s}, re-arm {15s,25s}.
 local function onCorruption(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "corruption", 500, function() onCorruption(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30.0)
     if target then
         creature:CastSpell(target, SPELL_CORRUPTION)
@@ -135,6 +150,10 @@ end
 -- C++ EVENT_CURSE_OF_AGONY (:1280-1284): random target 30yd, init
 -- {5s,10s}, re-arm {20s,35s}.
 local function onCurseOfAgony(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "agony", 500, function() onCurseOfAgony(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30.0)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_AGONY)
@@ -145,6 +164,10 @@ end
 -- C++ EVENT_CURSE_OF_EXHAUSTION (:1285-1289): random target 30yd,
 -- init {5s,10s}, re-arm {20s,35s}.
 local function onCurseOfExhaustion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "exhaustion", 500, function() onCurseOfExhaustion(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30.0)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_EXHAUSTION)
@@ -155,6 +178,10 @@ end
 -- C++ EVENT_FEAR (:1290-1294): random target 20yd playerOnly, init
 -- {5s,15s}, re-arm {5s,20s}.
 local function onFear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function() onFear(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 20.0, true)
     if target then
         creature:CastSpell(target, SPELL_FEAR)
@@ -165,6 +192,10 @@ end
 -- C++ EVENT_SEARING_PAIN (:1295-1298): DoCastVictim, init {5s,12s},
 -- re-arm {10s,25s}.
 local function onSearingPain(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "searing", 500, function() onSearingPain(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SEARING_PAIN)
     schedule(guid, "searing", {10000, 25000}, function() onSearingPain(creature, guid) end)
 end
@@ -172,6 +203,10 @@ end
 -- C++ EVENT_UNSTABLE_AFFLICTION (:1299-1303): random target 30yd
 -- playerOnly, init {7s,15s}, re-arm {10s,25s}.
 local function onUnstableAffliction(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "ua", 500, function() onUnstableAffliction(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30.0, true)
     if target then
         creature:CastSpell(target, SPELL_UNSTABLE_AFFLICTION)

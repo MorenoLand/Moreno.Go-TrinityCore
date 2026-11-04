@@ -30,6 +30,13 @@ local ENTRY_DRUID_HORDE = 34459 -- trial_of_the_crusader.h:197
 local SPELL_BARKSKIN = 65860 -- boss_faction_champions.cpp:51
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42
 
+-- CASTING gate: derived UpdateAI pre-loop return
+-- (boss_faction_champions.cpp:785) PORTED as a 500ms
+-- IsCasting defer per rotation arm (mal_ganis idiom), no repeat
+-- re-arm consumed; base EVENT_THREAT / EVENT_REMOVE_CC arms stay
+-- ungated (base UpdateAI has no gate). IsCasting is live on the
+-- handler surface (lua_creature_events.go:1950).
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -59,6 +66,10 @@ end
 -- DoCast(me, SPELL_BARKSKIN) + 60s re-arm, else 3s re-arm. Uses the
 -- integer strict-< form (ironaya convention).
 local function onBarkskin(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "barkskin", 500, function() onBarkskin(creature, guid) end)
+        return
+    end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0
             and creature:GetHealth() < math.floor(maxHealth * 30 / 100) then

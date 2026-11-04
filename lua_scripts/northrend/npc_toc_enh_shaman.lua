@@ -39,6 +39,13 @@ local ENTRY_ENH_SHAMAN_HORDE = 34455 -- trial_of_the_crusader.h:205
 
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42
 
+-- CASTING gate: derived UpdateAI pre-loop return
+-- (boss_faction_champions.cpp:1987) PORTED as a 500ms
+-- IsCasting defer per rotation arm (mal_ganis idiom), no repeat
+-- re-arm consumed; base EVENT_THREAT / EVENT_REMOVE_CC arms stay
+-- ungated (base UpdateAI has no gate). IsCasting is live on the
+-- handler surface (lua_creature_events.go:1950).
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -88,6 +95,10 @@ end
 -- C++ EVENT_DPS_EARTH_SHOCK (:1994): enemy caster, init
 -- {5s,10s}, re-arm {10s,15s}.
 local function onEarthShock(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "earthshock", 500, function() onEarthShock(creature, guid) end)
+        return
+    end
     local target = firstManaPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_EARTH_SHOCK)
@@ -98,6 +109,10 @@ end
 -- C++ EVENT_LAVA_LASH (:1999-2003): DoCastVictim, init {3s,5s},
 -- re-arm {5s,15s}.
 local function onLavaLash(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lava", 500, function() onLavaLash(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_LAVA_LASH)
     schedule(guid, "lava", {5000, 15000}, function() onLavaLash(creature, guid) end)
 end
@@ -105,6 +120,10 @@ end
 -- C++ EVENT_STORMSTRIKE (:2003): DoCastVictim, init {2s,5s},
 -- re-arm {8s,10s}.
 local function onStormstrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "storm", 500, function() onStormstrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_STORMSTRIKE)
     schedule(guid, "storm", {8000, 10000}, function() onStormstrike(creature, guid) end)
 end
@@ -114,6 +133,10 @@ end
 -- casts Heroism unless Exhaustion, Horde entry casts Bloodlust
 -- unless Sated; DoCastAOE = self-cast. Init 20s, re-arm 5min.
 local function onBloodlustHeroism(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bloodlust", 500, function() onBloodlustHeroism(creature, guid) end)
+        return
+    end
     if creature:GetEntry() == ENTRY_ENH_SHAMAN_ALLIANCE then
         if not creature:HasAura(AURA_EXHAUSTION) then
             creature:CastSpell(creature, SPELL_HEROISM)
@@ -129,6 +152,10 @@ end
 -- C++ EVENT_WINDFURY (:2025): DoCastVictim, init {20s,50s},
 -- re-arm {20s,60s}.
 local function onWindfury(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "windfury", 500, function() onWindfury(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_WINDFURY)
     schedule(guid, "windfury", {20000, 60000}, function() onWindfury(creature, guid) end)
 end
