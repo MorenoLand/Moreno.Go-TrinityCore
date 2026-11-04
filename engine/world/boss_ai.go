@@ -19848,6 +19848,17 @@ func init() {
 	// lua_scripts/northrend/npc_icc_orb_controller.lua.
 	// Sixteenth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("npc_icc_orb_controller", 38008)
+
+	// npc_icc_nerubar_broodkeeper (Icecrown Citadel instance script):
+	// spawn gravity + CUSTOM_SPELL_03 emote, engage timers CRYPT_SCARABS
+	// victim-cast, DARK_MENDING lowest-health% friendly in 40yd (own-entry
+	// sweep — no generic grid enumeration), WEB_WRAP random threat target;
+	// DoAction fall leg (WEB_BEAM / MoveLand / MovementInform clear)
+	// stays out (no DoAction bridge, instance-SetData driver).
+	// Entry verifiable from icecrown_citadel.h:152 — see
+	// lua_scripts/northrend/npc_icc_nerubar_broodkeeper.lua.
+	// Seventeenth group of the "// Icecrown Citadel" block.
+	RegisterLuaBoss("npc_icc_nerubar_broodkeeper", 36725)
 }
 
 func init() {
