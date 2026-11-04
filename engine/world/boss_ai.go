@@ -17306,6 +17306,12 @@ func init() {
 	// npc_toc_retro_paladin (retribution) 34471/34456:
 	// EVENT_DPS_DIVINE_SHIELD HealthBelowPct(30) &&
 	// !HasAura(FORBEARANCE 25771) -> Divine Shield 66010, 5min CD / 5s
+	// CASTING gates: base UpdateAI :713 ungated (no HasUnitState
+	// hit), so EVENT_THREAT/REMOVE_CC pumps stay ungated;
+	// derived pre-loop gates PORTED on the main-file
+	// defensive/victim/count/shout ticks (500ms IsCasting
+	// defer); controller struct :367-578 has no UpdateAI
+	// override (SetData-only, instance model).
 	// check, 20-30s init. Trial of the Crusader block stays OPEN.
 	RegisterLuaBoss("boss_faction_champions", 34465)
 	RegisterLuaBoss("boss_faction_champions", 34445)
@@ -17355,7 +17361,11 @@ func init() {
 	// isolation but DoAction-gated — documented-only); EVENT_TOUCH
 	// (heroic; random-target aura-filtered SelectTarget — cairne/kazzak
 	// precedent); EVENT_BERSERK 64238 + Talk(SAY_BERSERK 7) (IsHeroic() ?
-	// 6min : 8min timer — no difficulty bridge, kelidan precedent).
+	// 6min : 8min one-shot, PORTED; IsHeroic bridge live).
+	// CASTING gates PORTED (500ms IsCasting defer): base
+	// UpdateAI pre-loop :351 + in-loop :357 gates cover the
+	// twinspike/touch/special/berserk ticks; the engage surge
+	// hook is ungated per C++ (no UpdateAI gate on it).
 	// npc_essence_of_twin (34567/34568, entry-unverifiable, gossip),
 	// npc_unleashed_dark (34628) / npc_unleashed_light (34630,
 	// entry-unverifiable; SelectNearestPlayer/DoCastAOE/despawn/motion

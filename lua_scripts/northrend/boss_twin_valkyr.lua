@@ -321,6 +321,12 @@ end
 -- sjonnir precedent). The SPELLVALUE_MAX_TARGETS=1 spell-mod has no
 -- bridge (noted).
 local function touchTick(creature, guid, touchSpell, essenceAuras)
+    if creature:IsCasting() then
+        schedule(guid, "touch", 500, function()
+            touchTick(creature, guid, touchSpell, essenceAuras)
+        end)
+        return
+    end
     local target = randomPlayerWithEssence(creature, essenceAuras, 200)
     if target then
         creature:CastSpell(target, touchSpell)
@@ -331,8 +337,18 @@ local function touchTick(creature, guid, touchSpell, essenceAuras)
 end
 
 -- C++ EVENT_TWIN_SPIKE: DoCastVictim(SpikeSpellId), 20s init, 20s
--- repeat.
+-- repeat. C++ UpdateAI pre-loop (:351) + in-loop (:357) CASTING
+-- gates: 500ms IsCasting defer (mal_ganis idiom) — the queued event
+-- is not consumed while casting; same defer on touchTick,
+-- specialTick (before stage consumption, matching the pre-loop
+-- gate) and berserkTick.
 local function twinSpikeTick(creature, guid, spell)
+    if creature:IsCasting() then
+        schedule(guid, "twinspike", 500, function()
+            twinSpikeTick(creature, guid, spell)
+        end)
+        return
+    end
     creature:CastSpell(nil, spell)
     schedule(guid, "twinspike", 20000, function()
         twinSpikeTick(creature, guid, spell)
@@ -376,6 +392,12 @@ local function generateStageSequence(guid)
 end
 
 local function specialTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "special", 500, function()
+            specialTick(creature, guid)
+        end)
+        return
+    end
     local state = specialState[guid]
     if not state or state.current >= 4 then
         generateStageSequence(guid)
@@ -416,6 +438,21 @@ local function specialTick(creature, guid)
     schedule(guid, "special", 45000, function()
         specialTick(creature, guid)
     end)
+end
+
+-- C++ EVENT_BERSERK: DoCastSelf(Berserk 64238) + Talk(SAY_BERSERK 7),
+-- IsHeroic() ? 6min : 8min one-shot; the UpdateAI pre-loop (:351) +
+-- in-loop (:357) CASTING gates defer it 500ms like the other ticks
+-- (mal_ganis idiom), with no repeat re-arm once it fires.
+local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_BERSERK)
+    creature:Talk(SAY_BERSERK)
 end
 
 local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras, empathySpell)
@@ -471,8 +508,7 @@ local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras,
         -- Stale "no difficulty bridge" claim retracted: creature:IsHeroic()
         -- is bridged (engine/world/lua_creature_events.go:260).
         schedule(guid, "berserk", creature:IsHeroic() and 360000 or 480000, function()
-            creature:CastSpell(creature, SPELL_BERSERK)
-            creature:Talk(SAY_BERSERK)
+            berserkTick(creature, guid)
         end)
     end
 end

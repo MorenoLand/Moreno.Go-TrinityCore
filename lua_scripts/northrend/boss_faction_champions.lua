@@ -55,7 +55,14 @@
 --   npc_toc_enh_shaman / pets (npc_toc_pet_warlock, npc_toc_pet_hunter)
 --   have no HealthBelowPct arms — not modeled.
 -- - The ToC instance controller (DATA_FACTION_CRUSADERS / champion
---   spawning, SetData 2 arms) — instance-script model absent.
+--   spawning, SetData 2 arms) — instance-script model absent; the
+--   controller struct (:367-578) has no UpdateAI override at all
+--   (SetData-only), so there is no cast gate to port there.
+-- - CASTING gates: base UpdateAI :713 has no HasUnitState hit, so
+--   the EVENT_THREAT / EVENT_REMOVE_CC pumps (powerCheck /
+--   removeCCCheck) stay ungated, exactly as in C++; the derived
+--   pre-loop gates are PORTED above on defensiveCheck /
+--   victimCheck / countCheck / shoutTick (500ms IsCasting defer).
 
 local SPELL_DIVINE_SHIELD = 66010
 local SPELL_FORBEARANCE = 25771
@@ -165,7 +172,18 @@ end
 -- current health (integer strict-<, Unit.h); below threshold (and no
 -- forbearance where C++ gates on it) -> self-cast + long cooldown
 -- reschedule; else short check reschedule.
+-- Derived-struct UpdateAI pre-loop CASTING gate (paladin :971,
+-- shadow :1164, mage :1349, hunter :1449, warrior :1641, dk :1740,
+-- rogue :1839, retro :2082; base UpdateAI :713 runs first, ungated):
+-- while casting the derived event is not consumed, so the Lua pump
+-- defers 500ms (mal_ganis idiom) and re-checks at the deferred fire.
 local function defensiveCheck(creature, guid, championCfg)
+    if creature:IsCasting() then
+        schedule(guid, "def", 500, function()
+            defensiveCheck(creature, guid, championCfg)
+        end)
+        return
+    end
     local maxHealth = creature:GetMaxHealth()
     local fire = maxHealth > 0
         and creature:GetHealth() < math.floor(maxHealth * championCfg.pct / 100)
@@ -285,6 +303,12 @@ local VICTIM_ARMS = {
 }
 
 local function victimCheck(creature, guid, arm)
+    if creature:IsCasting() then
+        schedule(guid, "victim", 500, function()
+            victimCheck(creature, guid, arm)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     local fire = false
     if victim ~= nil then
@@ -369,6 +393,12 @@ local COUNT_ARMS = {
 -- Count twin: C++ GetDistance2d subtracts both reaches (Object.cpp:1187);
 -- unfiltered threat pool branches target reach (player 1.5).
 local function countCheck(creature, guid, arm)
+    if creature:IsCasting() then
+        schedule(guid, "count" .. arm.spell, 500, function()
+            countCheck(creature, guid, arm)
+        end)
+        return
+    end
     local count = 0
     for _, target in ipairs(creature:GetAITargets()) do
         local targetReach = 1.5
@@ -426,6 +456,12 @@ end
 -- DoCastAOE (self-cast) 20-25s init, 120s re-arm — NOT count-gated, so it
 -- rides its own tick rather than countCheck.
 local function shoutTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shout", 500, function()
+            shoutTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_INTIMIDATING_SHOUT)
     schedule(guid, "shout", 120000, function()
         shoutTick(creature, guid)
