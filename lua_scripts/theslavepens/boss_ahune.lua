@@ -52,7 +52,8 @@
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (the DATA_AHUNE NOT_STARTED/IN_PROGRESS/DONE bookkeeping in
--- BossAI::JustEngagedWith/JustDied skipped;
+-- BossAI::JustEngagedWith instance bookkeeping / JustDied skipped
+-- (base pulse + me-DoZone arms ported in ev1);
 -- instance_the_slave_pens.cpp is a placeholder and stays
 -- blocked on the instance-script model); no cross-creature
 -- bridge — the DoAction(ACTION_AHUNE_RETREAT) entry to
@@ -154,6 +155,8 @@ RegisterCreatureEvent(ENTRY_AHUNE, 1, function(_, creature)
     creature:SetRooted(true)
     local guid = creature:GetGUID()
     resetBoss(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     -- EVENT_INITIAL_EMERGE (C++-scheduled at 4ms — fires
     -- directly on engage): DoCastSelf(SPELL_STAND),
     -- DoCastSelf(SPELL_AHUNE_SPANKY_HANDS), DoCastSelf
