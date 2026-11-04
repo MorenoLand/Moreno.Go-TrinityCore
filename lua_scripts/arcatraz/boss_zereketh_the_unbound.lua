@@ -50,8 +50,10 @@
 -- nil pick casts nothing, non-triggered DoCast on the target
 -- (C++-exact), re-arm {12s,20s} regardless (C++-exact). The
 -- C++ UNIT_STATE_CASTING early-return gates (before and after
--- the event switch) have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arms fire
--- unconditionally (netherspite precedent). Melee is
+-- the event switch, boss_zereketh_the_unbound.cpp:85/:111)
+-- are PORTED: the pump decrements all timers first (C++
+-- events.Update order), then gates on creature:IsCasting()
+-- before the arms and after each fired arm. Melee is
 -- engine-driven.
 -- OnTargetDied(3): Talk(SAY_SLAY) (C++ talks unconditionally —
 -- no player gate, gargolmar precedent, C++-exact). OnDied(4):
@@ -64,9 +66,7 @@
 -- instance-script model — boss admission via the luaBossAI shim
 -- (instance_arcatraz.cpp stays blocked on the instance-script
 -- model; the BossAI ctor DATA_ZEREKETH = 0 bookkeeping in
--- Reset/JustEngagedWith/JustDied skipped); no cast-state
--- bridge — the UNIT_STATE_CASTING early-return gates unmodeled
--- (netherspite precedent); no SpellScript/AuraScript scripts
+-- Reset/JustEngagedWith/JustDied skipped); no SpellScript/AuraScript scripts
 -- in this file.
 
 local SPELL_VOID_ZONE = 36119
@@ -155,32 +155,53 @@ local function bossTick(creature, guid)
         return
     end
 
+    -- C++ events.Update(diff) advances every timer before the
+    -- casting gate (boss_zereketh_the_unbound.cpp:82-86), so all
+    -- countdowns decrement first; due arms stay due while the
+    -- gate holds and fire on the first tick after the cast ends.
+    -- Decrement-first + <= 0 fires on the same tick as the old
+    -- <= 1000-then-decrement shape.
+    st.voidZone = st.voidZone - 1000
+    st.shadowNova = st.shadowNova - 1000
+    st.seedOfCorruption = st.seedOfCorruption - 1000
+
+    -- C++ pre-loop gate (:85): while casting, no event executes.
+    -- creature:IsCasting reads the live CastingUntil window
+    -- (broodkeeper precedent).
+    if creature:IsCasting() then
+        return
+    end
+
     -- Void zone 36119: {6s,10s} — target = random threat-list
     -- player within 100 yd after the top-threat skip, nil pick
     -- casts nothing, non-triggered DoCast on the target (C++-
     -- exact), re-arm {6s,10s} regardless (C++-exact).
-    if st.voidZone <= 1000 then
+    if st.voidZone <= 0 then
         local target = randomNonVictimPlayer(creature)
         if target then
             creature:CastSpell(target, SPELL_VOID_ZONE)
         end
         st.voidZone = 6000 + math.random(0, 3999)
-    else
-        st.voidZone = st.voidZone - 1000
+    end
+
+    -- C++ in-loop gate (:111): after an event executes, a fresh
+    -- cast state stops the tick — later due arms wait for the
+    -- next tick (their timers already advanced above).
+    if creature:IsCasting() then
+        return
     end
 
     -- Shadow nova 36127: {6s,10s} — TRIGGERED DoCastVictim
     -- (C++ `DoCastVictim(SPELL_SHADOW_NOVA, true)`, C++-exact),
-    -- Talk(SAY_SHADOW_NOVA), re-arm {6s,10s} (C++-exact). The
-    -- C++ UNIT_STATE_CASTING early-return gate has no
-    -- cast-state bridge — the arm fires unconditionally
-    -- (netherspite precedent).
-    if st.shadowNova <= 1000 then
+    -- Talk(SAY_SHADOW_NOVA), re-arm {6s,10s} (C++-exact).
+    if st.shadowNova <= 0 then
         creature:CastSpell(nil, SPELL_SHADOW_NOVA, true)
         creature:Talk(SAY_SHADOW_NOVA)
         st.shadowNova = 6000 + math.random(0, 3999)
-    else
-        st.shadowNova = st.shadowNova - 1000
+    end
+
+    if creature:IsCasting() then
+        return
     end
 
     -- Seed of corruption 36123: {12s,20s} — target = same
@@ -188,14 +209,12 @@ local function bossTick(creature, guid)
     -- non-triggered DoCast on the
     -- target (C++-exact), re-arm {12s,20s} regardless (C++-
     -- exact).
-    if st.seedOfCorruption <= 1000 then
+    if st.seedOfCorruption <= 0 then
         local target = randomNonVictimPlayer(creature)
         if target then
             creature:CastSpell(target, SPELL_SEED_OF_CORRUPTION)
         end
         st.seedOfCorruption = 12000 + math.random(0, 7999)
-    else
-        st.seedOfCorruption = st.seedOfCorruption - 1000
     end
 end
 

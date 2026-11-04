@@ -15,8 +15,8 @@
 -- section in C++ arm order — 1s granularity exact for all C++
 -- timers; the !UpdateVictim early return collapses into the pump,
 -- which only runs in combat). The C++ HasUnitState(UNIT_STATE_
--- CASTING) pump-skip has no state bridge (azuregos precedent) —
--- unmodeled.
+-- CASTING) pre-loop gate is PORTED (creature:IsCasting reads the
+-- live CastingUntil window — broodkeeper precedent).
 -- C++ DoCast default is triggered=false (vaelastrasz convention):
 -- creature:CastSpell(nil, spell) = DoCastVictim; creature:
 -- CastSpell(creature, spell) = self-cast.
@@ -68,7 +68,7 @@
 -- creature-of-nightmare random-target pick degrades to the
 -- victim, the kill-yell loses its victim targeting, the level-
 -- up cast's triggered flag collapses to the standard cast
--- path, and the UNIT_STATE_CASTING pump-skip is unmodeled).
+-- path, and the UNIT_STATE_CASTING pump-skip is PORTED via the combatTick gate).
 
 local SPELL_SOUL_CORRUPTION = 25805
 local SPELL_CREATURE_OF_NIGHTMARE = 25806
@@ -130,6 +130,13 @@ local function combatTick(creature, guid)
 
     for _, key in ipairs(TIMER_KEYS) do
         st[key] = st[key] - 1000
+    end
+
+    -- C++ pre-loop gate (zone_duskwood.cpp:103): events.Update
+    -- already advanced the timers above, so a casting tick fires
+    -- nothing and the expired arms stay expired for the next tick.
+    if creature:IsCasting() then
+        return
     end
 
     -- Soul corruption arm — C++ DoCastAOE = DoCast(nullptr,

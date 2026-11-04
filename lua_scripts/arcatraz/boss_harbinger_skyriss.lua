@@ -82,12 +82,11 @@
 -- exact), non-triggered DoCast (C++-exact), re-arm 8000 (C++-
 -- exact); fear 39415 — 15s init then 25s, Talk(SAY_FEAR), same
 -- targeting (C++-exact), non-triggered, re-arm 25000 (C++-
--- exact; the IsNonMeleeSpellCast(false) early-return gate
--- has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm fires unconditionally,
--- netherspite precedent); domination 37162 — 30s init then
--- {16s,32s}, Talk(SAY_MIND), same targeting (C++-exact),
--- non-triggered, re-arm {16s,32s} (C++-exact; same cast-state
--- caveat). Melee is engine-driven.
+-- exact; the IsNonMeleeSpellCast(false) early-return gates
+-- are PORTED via creature:IsCasting()); domination 37162 —
+-- 30s init then {16s,32s}, Talk(SAY_MIND), same targeting
+-- (C++-exact), non-triggered, re-arm {16s,32s} (C++-exact;
+-- same IsCasting gate). Melee is engine-driven.
 -- OnTargetDied(3): Talk(SAY_KILL) unless the killed unit's
 -- entry is 21436 (NPC_ALPHA_POD_TARGET — the C++ won't yell
 -- for pets/other units, vazruden entry-gate precedent, C++-
@@ -387,9 +386,15 @@ local function combatTick(creature, guid)
     -- Fear 39415: 15s init then 25s — Talk(SAY_FEAR), same
     -- targeting (C++-exact), non-triggered, re-arm 25000
     -- (C++-exact). The C++ IsNonMeleeSpellCast(false)
-    -- early-return gate has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm
-    -- fires unconditionally (netherspite precedent).
+    -- early-return gate is PORTED via creature:IsCasting()
+    -- (live CastingUntil window, broodkeeper precedent).
     if st.fear <= 1000 then
+        -- C++ IsNonMeleeSpellCast(false) early return: while
+        -- casting, the tick ends here — fear stays due and the
+        -- later arms' timers do not advance this tick.
+        if creature:IsCasting() then
+            return
+        end
         creature:Talk(SAY_FEAR)
         local target = randomThreatPastHead(creature)
         creature:CastSpell(target, SPELL_FEAR)
@@ -400,8 +405,12 @@ local function combatTick(creature, guid)
 
     -- Domination 37162: 30s init then {16s,32s} — Talk(SAY_
     -- MIND), same targeting (C++-exact), non-triggered,
-    -- re-arm {16s,32s} (C++-exact; same cast-state caveat).
+    -- re-arm {16s,32s} (C++-exact; same IsCasting gate as fear).
     if st.domination <= 1000 then
+        -- C++ IsNonMeleeSpellCast(false) early return, as fear.
+        if creature:IsCasting() then
+            return
+        end
         creature:Talk(SAY_MIND)
         local target = randomThreatPastHead(creature)
         creature:CastSpell(target, SPELL_DOMINATION)
@@ -415,14 +424,17 @@ local function combatTick(creature, guid)
     -- randomThreatPastHead, C++-exact); nil pick casts NOTHING
     -- (no DoCastVictim fallback — unlike mind rend / fear /
     -- domination), non-triggered, re-arm {16s,32s} (C++-exact).
-    -- The C++ IsNonMeleeSpellCast early-return gate has no
-    -- cast-state bridge — the arm fires unconditionally
-    -- (netherspite precedent, as for fear / domination). The
+    -- The C++ IsNonMeleeSpellCast early-return gate is PORTED
+    -- via creature:IsCasting(), as for fear / domination. The
     -- old "no difficulty bridge" claim was stale —
     -- creature:IsHeroic() is bridged
     -- (lua_creature_events.go:260).
     if creature:IsHeroic() then
         if st.manaBurn <= 1000 then
+            -- C++ IsNonMeleeSpellCast(false) early return, as fear.
+            if creature:IsCasting() then
+                return
+            end
             local target = randomThreatPastHead(creature)
             if target then
                 creature:CastSpell(target, H_SPELL_MANA_BURN)
