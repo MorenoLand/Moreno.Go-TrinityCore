@@ -130,9 +130,19 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- CASTING gates PORTED (500ms IsCasting defer, mal_ganis idiom):
+-- boss_gluthAI::UpdateAI pre-loop :139 + in-loop :264 gates cover
+-- wound/enrage/decimate/berserk; the defer re-queues without
+-- consuming the repeat.
 -- C++ EVENT_WOUND: DoCastVictim(Mortal Wound 54378), 10s init, 10s
 -- repeat.
 local function woundTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wound", 500, function()
+            woundTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MORTAL_WOUND)
     schedule(guid, "wound", 10000, function()
         woundTick(creature, guid)
@@ -142,6 +152,12 @@ end
 -- C++ EVENT_ENRAGE: Talk(EMOTE_ENRAGE 2) + DoCastSelf(Enrage 28371),
 -- randtime(16s,22s) init, randtime(16s,22s) repeat.
 local function enrageTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function()
+            enrageTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_ENRAGE)
     creature:CastSpell(creature, SPELL_ENRAGE)
     schedule(guid, "enrage", {16000, 22000}, function()
@@ -157,6 +173,12 @@ end
 -- zombie machine, so the timer fires unconditionally (maiden
 -- precedent).
 local function decimateTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "decimate", 500, function()
+            decimateTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_DECIMATE)
     creature:CastSpell(creature, SPELL_DECIMATE)
     schedule(guid, "decimate", {110000, 120000}, function()
@@ -167,6 +189,12 @@ end
 -- C++ EVENT_BERSERK: Talk(EMOTE_BERSERKER 4) + DoCastSelf(Berserk
 -- 26662), 8min init, 5min repeat (hard-enrage buff refresh).
 local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_BERSERKER)
     creature:CastSpell(creature, SPELL_BERSERK)
     schedule(guid, "berserk", 300000, function()

@@ -110,7 +110,8 @@
 -- transition stay out together);
 -- UpdateAI frostbolt filler — DoCastVictim(SPELL_FROSTBOLT_SINGLE
 -- 28478) — phase-gated on !PHASE_ONE and the UNIT_STATE_CASTING check
--- — no phase / unit-state bridges; DamageTaken — damage = 0 in
+-- — the phase gate rules (IsCasting IS bridged,
+-- lua_creature_events.go:1950, but no ported timer tick exists to gate); DamageTaken — damage = 0 in
 -- PHASE_ONE — no phase bridge; Reset (boss_kelthuzad.cpp:223-235) —
 -- SetReactState(REACT_PASSIVE) + NOT_SELECTABLE + SetImmuneToPC(true) —
 -- the bridges exist (creature:SetReactState; SetFlag/RemoveFlag(59) for

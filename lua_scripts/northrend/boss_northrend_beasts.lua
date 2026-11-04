@@ -58,7 +58,10 @@
 -- phase gate is modeled); EVENT_STAGGERING_STOMP —
 -- DoCastVictim(Staggering Stomp 66330), 15s init, 22s repeat
 -- (moroes precedent). Gormok has no Talk arms on
--- JustEngagedWith/KilledUnit/JustDied. All timers cancelled on 2/23
+-- JustEngagedWith/KilledUnit/JustDied. CASTING gates PORTED (500ms
+-- IsCasting defer, mal_ganis idiom): boss_northrend_beastsAI::UpdateAI
+-- pre-loop :314 + in-loop :320 gates cover impale/stomp; the defer
+-- re-queues without consuming the repeat. All timers cancelled on 2/23
 -- (gargolmar precedent; 23 fires before 4 on the kill path, so the
 -- unregistered event 4 is benign).
 -- Unmodeled (no bridges — documented, not wired):
@@ -294,6 +297,12 @@ end
 
 -- C++ EVENT_IMPALE: DoCastVictim(Impale), 10s init, 10s repeat.
 local function impaleTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "impale", 500, function()
+            impaleTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_IMPALE)
     schedule(guid, "impale", 10000, function()
         impaleTick(creature, guid)
@@ -303,6 +312,12 @@ end
 -- C++ EVENT_STAGGERING_STOMP: DoCastVictim(Staggering Stomp),
 -- 15s init, 22s repeat.
 local function stompTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            stompTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_STAGGERING_STOMP)
     schedule(guid, "stomp", 22000, function()
         stompTick(creature, guid)

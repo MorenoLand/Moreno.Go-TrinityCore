@@ -17412,6 +17412,11 @@ func init() {
 	// (gated via spell_icehowl_trample — no SpellScript binding bridge);
 	// the twelve spell scripts — no SpellScript/AuraScript binding bridge
 	// (razelikh precedent); join the SpellScript/AuraScript queue.
+	// CASTING gates PORTED (500ms IsCasting defer): base UpdateAI
+	// pre-loop :314 + in-loop :320 gates cover gormok impale/stomp;
+	// snobold :510/:548 + jormungar :857/:863 + icehowl (base) gates
+	// cover unported arms only; combat-stalker UpdateAI :606 ungated
+	// (zero HasUnitState hits).
 	RegisterLuaBoss("boss_gormok", 34796)
 	// Anub'Rekhan (Naxxramas) — fight logic in
 	// lua_scripts/northrend/boss_anubrekhan.lua. PORTED: boss_anubrekhan
@@ -17442,6 +17447,9 @@ func init() {
 	// gate, no bridges), JustDied DoStartTimedAchievement(9891) (no
 	// achievement bridge), at_anubrekhan_entrance (no area-trigger
 	// bridge).
+	// CASTING gates: whole boss_anubrekhan.cpp zero HasUnitState hits
+	// — UpdateAI :176 ungated, ported impale/scarab/locust/berserk
+	// ticks stay gateless, C++-exact as-is.
 	RegisterLuaBoss("boss_anubrekhan", 15956)
 
 	// Razuvious (16061, Naxxramas) — lua_scripts/northrend/boss_razuvious.lua.
@@ -17458,6 +17466,9 @@ func init() {
 	// LoadEquipment/emotestate/cross-AI DoZoneInCombat/DESPAWN/
 	// blood-strike 61696 arms have no bridge: no equipment, instance,
 	// cross-AI, despawn, or charm-possession bridge).
+	// CASTING gates: whole boss_razuvious.cpp zero HasUnitState hits
+	// — boss UpdateAI :132 + understudy UpdateAI :203 ungated, ported
+	// knife/strike/shout ticks stay gateless.
 	RegisterLuaBoss("boss_razuvious", 16061)
 
 	// Kel'Thuzad (15990, Naxxramas) — lua_scripts/northrend/boss_kelthuzad.lua.
@@ -17487,6 +17498,11 @@ func init() {
 	// spell_kelthuzad_chains/detonate_mana/frost_blast (no AuraScript
 	// binding bridge), at_kelthuzad_center (no area-trigger bridge),
 	// achievement_just_cant_get_enough (no achievement bridge).
+	// CASTING gates: UpdateAI pre-loop :311 + in-loop :505 gates are
+	// !PHASE_ONE-gated and cover only the unported phase-two event
+	// machine + frostbolt filler — no ported timer ticks exist, so
+	// nothing to gate; ported engage/KilledUnit/JustDied hooks are
+	// ungated per C++ (separate hooks).
 	RegisterLuaBoss("boss_kelthuzad", 15990)
 
 	// Gluth (15932, Naxxramas) — lua_scripts/northrend/boss_gluth.lua.
@@ -17509,6 +17525,10 @@ func init() {
 	// npc_zombie_chow (entry-unverifiable from C++ evidence — no
 	// registration; ctor DoCastSelf(INFECTED_WOUND 29307) joins the
 	// bridgeable-but-entry-blocked queue).
+	// CASTING gates PORTED (500ms IsCasting defer): boss UpdateAI
+	// pre-loop :139 + in-loop :264 gates cover wound/enrage/decimate/
+	// berserk; zombie-chow UpdateAI :409 ungated (zero hits there) but
+	// chow unported.
 	RegisterLuaBoss("boss_gluth", 15932)
 
 	// Sapphiron (15989, Naxxramas) — lua_scripts/northrend/boss_sapphiron.lua.
