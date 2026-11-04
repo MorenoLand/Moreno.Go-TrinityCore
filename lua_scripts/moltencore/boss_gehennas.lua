@@ -18,11 +18,14 @@
 -- UnitAI.h offset-before-filter, not a victim-GUID exclusion).
 -- Nil-target ticks cast nothing but keep the schedule (jeklik
 -- convention). OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
--- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the BOSS_GEHENNAS bookkeeping arms skipped); the SDComment "Adds
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_gehennas.cpp:70) and post-event
+-- check (:95) are modeled on every timer tick via the live
+-- creature:IsCasting() bridge (engine/world/lua_creature_events.go:1950,
+-- CastingUntil window) — a casting tick defers 500ms under its own
+-- key, consuming no re-arm. No instance-script model — boss admission
+-- via the luaBossAI shim (BossAI::JustEngagedWith and the
+-- BOSS_GEHENNAS bookkeeping arms skipped); the SDComment "Adds
 -- MC NYI" arms are absent from the C++ AI itself (the Flamewaker adds
 -- are not scripted in this file) and are not modeled.
 
@@ -59,6 +62,12 @@ end
 -- C++ EVENT_GEHENNAS_CURSE: non-triggered DoCastVictim(19716);
 -- re-arm {22s,30s}.
 local function onGehennasCurse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse", 500, function()
+            onGehennasCurse(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_GEHENNAS_CURSE)
@@ -86,6 +95,12 @@ local function randomThreatTarget(creature)
 end
 
 local function onRainOfFire(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rainoffire", 500, function()
+            onRainOfFire(creature, guid)
+        end)
+        return
+    end
     local pick = randomThreatTarget(creature)
     if pick then
         creature:CastSpell(pick, SPELL_RAIN_OF_FIRE)
@@ -130,6 +145,12 @@ local function randomThreatTargetSkipFirst(creature)
 end
 
 local function onShadowBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function()
+            onShadowBolt(creature, guid)
+        end)
+        return
+    end
     local pick = randomThreatTargetSkipFirst(creature)
     if pick then
         creature:CastSpell(pick, SPELL_SHADOW_BOLT)

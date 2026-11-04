@@ -36,9 +36,11 @@
 -- convention). OnDied/OnLeaveCombat(2)/OnReset(23): cancel timers. Reset also
 -- clears the enrage flag and current vulnerability (C++ Initialize);
 -- the breath pair is never cleared (C++-exact).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
+-- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
+-- (boss_chromaggus.cpp pre-loop :215 + in-loop :273) are ported as a
+-- 500ms IsCasting defer on every ported timer tick (mal_ganis idiom;
+-- IsCasting live, lua_creature_events.go:1950; defer precedes picks,
+-- casts, Talks and re-arms, no re-arm consumed); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::_Reset/
 -- JustEngagedWith and the DATA_CHROMAGGUS bookkeeping arms skipped);
 -- the go_chromaggus_lever GameObjectScript (door open + boss-state
@@ -173,6 +175,12 @@ end
 -- C++ EVENT_SHIMMER: remove old vulnerability, non-triggered
 -- self-cast a new random one, Talk(EMOTE_SHIMMER); re-arm 45s.
 local function onShimmer(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shimmer", 500, function()
+            onShimmer(creature, guid)
+        end)
+        return
+    end
     local st = state(guid)
     if st.currentVuln ~= 0 then
         creature:RemoveAura(st.currentVuln)
@@ -188,6 +196,12 @@ end
 
 -- C++ EVENT_BREATH_1: non-triggered DoCastVictim; re-arm 60s.
 local function onBreath1(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "breath1", 500, function()
+            onBreath1(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, state(guid).breath1)
@@ -199,6 +213,12 @@ end
 
 -- C++ EVENT_BREATH_2: non-triggered DoCastVictim; re-arm 60s.
 local function onBreath2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "breath2", 500, function()
+            onBreath2(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, state(guid).breath2)
@@ -212,6 +232,12 @@ end
 -- alive gate) gets a triggered cast of one random affliction; a player
 -- carrying all five gets non-triggered 23174; re-arm 10s.
 local function onAffliction(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "affliction", 500, function()
+            onAffliction(creature, guid)
+        end)
+        return
+    end
     for _, p in ipairs(alivePlayersInInstance(creature)) do
         creature:CastSpell(p, AFFLICTIONS[math.random(#AFFLICTIONS)], true)
         if p:HasAura(SPELL_BROODAF_BLUE)
@@ -229,6 +255,12 @@ end
 
 -- C++ EVENT_FRENZY: non-triggered self-cast 28371; re-arm {10s,15s}.
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            onFrenzy(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FRENZY)
     schedule(guid, "frenzy", math.random(10000, 15000), function()
         onFrenzy(creature, guid)

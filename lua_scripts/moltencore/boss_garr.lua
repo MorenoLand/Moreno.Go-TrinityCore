@@ -12,11 +12,14 @@
 -- (C++ DoCast default is triggered=false — vaelastrasz convention) /
 -- magma shackles 19496 15s then {8s,12s}, non-triggered self-cast.
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
--- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the BOSS_GARR bookkeeping arms skipped); the npc_firesworn AI in the
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_garr.cpp:67) and post-event
+-- check (:86) are modeled on both timer ticks via the live
+-- creature:IsCasting() bridge (engine/world/lua_creature_events.go:1950,
+-- CastingUntil window) — a casting tick defers 500ms under its own
+-- key, consuming no re-arm. No instance-script model — boss admission
+-- via the luaBossAI shim (BossAI::JustEngagedWith and the
+-- BOSS_GARR bookkeeping arms skipped); the npc_firesworn AI in the
 -- same file (immolate schedule 4s then {5s,10s} on a random target,
 -- separation-anxiety check vs NPC_GARR 20 yd, eruption+despawn below
 -- 10% health) is not registered — no NPC_FIRESWORN constant exists in
@@ -59,6 +62,12 @@ end
 -- C++ EVENT_ANTIMAGIC_PULSE: non-triggered DoCast(me, 19492);
 -- re-arm {10s,15s}.
 local function onAntimagicPulse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "antimagicpulse", 500, function()
+            onAntimagicPulse(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ANTIMAGIC_PULSE)
     schedule(guid, "antimagicpulse", math.random(10000, 15000), function()
         onAntimagicPulse(creature, guid)
@@ -68,6 +77,12 @@ end
 -- C++ EVENT_MAGMA_SHACKLES: non-triggered DoCast(me, 19496);
 -- re-arm {8s,12s}.
 local function onMagmaShackles(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "magmashackles", 500, function()
+            onMagmaShackles(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MAGMA_SHACKLES)
     schedule(guid, "magmashackles", math.random(8000, 12000), function()
         onMagmaShackles(creature, guid)

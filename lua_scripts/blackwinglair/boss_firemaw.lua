@@ -13,9 +13,11 @@
 -- DoCastVictim. Nil-victim ticks cast nothing but keep the schedule
 -- (jeklik convention). OnDied/OnLeaveCombat(2)/OnReset(23): cancel
 -- timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
+-- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
+-- (boss_firemaw.cpp pre-loop :61 + in-loop :84) are ported as a
+-- 500ms IsCasting defer on every ported timer tick (mal_ganis idiom;
+-- IsCasting live, lua_creature_events.go:1950; defer precedes picks,
+-- casts and re-arms, no re-arm consumed); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
 -- the DATA_FIREMAW bookkeeping arms skipped); the wingbuffet-arm
 -- GetThreat + ModifyThreatByPercent(victim, -75) PORTED 2026-10-24
@@ -54,6 +56,12 @@ end
 -- C++ EVENT_SHADOWFLAME: non-triggered DoCastVictim(22539);
 -- re-arm {10s,20s}.
 local function onShadowflame(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowflame", 500, function()
+            onShadowflame(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOWFLAME)
@@ -66,6 +74,12 @@ end
 -- C++ EVENT_WINGBUFFET: non-triggered DoCastVictim(23339) + -75%
 -- threat on the victim (threat arm PORTED 2026-10-24); re-arm 30s.
 local function onWingBuffet(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wingbuffet", 500, function()
+            onWingBuffet(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WINGBUFFET)
@@ -81,6 +95,12 @@ end
 
 -- C++ EVENT_FLAMEBUFFET: non-triggered DoCastVictim(23341); re-arm 5s.
 local function onFlameBuffet(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamebuffet", 500, function()
+            onFlameBuffet(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FLAMEBUFFET)

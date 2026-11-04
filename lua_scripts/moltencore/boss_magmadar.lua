@@ -19,11 +19,15 @@
 -- Nil-target ticks cast nothing but keep
 -- the schedule (jeklik convention). OnDied/OnLeaveCombat(2)/
 -- OnReset(23): cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
--- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the BOSS_MAGMADAR bookkeeping arms skipped).
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_magmadar.cpp:82) and post-event
+-- check (:107) are modeled on every timer tick via the live
+-- creature:IsCasting() bridge (engine/world/lua_creature_events.go:1950,
+-- CastingUntil window) — a casting tick defers 500ms under its own
+-- key, consuming no re-arm. The Reset magma-spit arm is not an
+-- UpdateAI event and stays ungated. No instance-script model — boss
+-- admission via the luaBossAI shim (BossAI::JustEngagedWith and the
+-- BOSS_MAGMADAR bookkeeping arms skipped).
 
 local ENTRY_MAGMADAR = 11982
 
@@ -61,6 +65,12 @@ end
 -- C++ EVENT_FRENZY: Talk(EMOTE_FRENZY); non-triggered self-cast
 -- 19451; re-arm 15s.
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            onFrenzy(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_FRENZY)
     creature:CastSpell(creature, SPELL_FRENZY)
     schedule(guid, "frenzy", 15000, function()
@@ -70,6 +80,12 @@ end
 
 -- C++ EVENT_PANIC: non-triggered DoCastVictim(19408); re-arm 35s.
 local function onPanic(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "panic", 500, function()
+            onPanic(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_PANIC)
@@ -100,6 +116,12 @@ local function randomThreatPlayer(creature)
 end
 
 local function onLavaBomb(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lavabomb", 500, function()
+            onLavaBomb(creature, guid)
+        end)
+        return
+    end
     local pick = randomThreatPlayer(creature)
     if pick then
         creature:CastSpell(pick, SPELL_LAVA_BOMB)

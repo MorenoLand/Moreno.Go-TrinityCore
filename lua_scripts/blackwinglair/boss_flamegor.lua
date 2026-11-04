@@ -16,9 +16,11 @@
 -- The 23342 spell itself periodically triggers fire nova. Nil-victim
 -- ticks cast nothing but keep the schedule (jeklik convention).
 -- OnDied/OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
+-- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
+-- (boss_flamegor.cpp pre-loop :66 + in-loop :90) are ported as a
+-- 500ms IsCasting defer on every ported timer tick (mal_ganis idiom;
+-- IsCasting live, lua_creature_events.go:1950; defer precedes picks,
+-- Talks, casts and re-arms, no re-arm consumed); no instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
 -- the DATA_FLAMEGOR bookkeeping arms skipped); the wingbuffet-arm
 -- GetThreat + ModifyThreatByPercent(victim, -75) PORTED 2026-10-24
@@ -59,6 +61,12 @@ end
 -- C++ EVENT_SHADOWFLAME: non-triggered DoCastVictim(22539);
 -- re-arm {10s,20s}.
 local function onShadowflame(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowflame", 500, function()
+            onShadowflame(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOWFLAME)
@@ -71,6 +79,12 @@ end
 -- C++ EVENT_WINGBUFFET: non-triggered DoCastVictim(23339) + -75%
 -- threat on the victim (threat arm PORTED 2026-10-24); re-arm 30s.
 local function onWingBuffet(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wingbuffet", 500, function()
+            onWingBuffet(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WINGBUFFET)
@@ -87,6 +101,12 @@ end
 -- C++ EVENT_FRENZY: Talk(EMOTE_FRENZY=0), non-triggered self-cast
 -- 23342; re-arm {8s,10s}.
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            onFrenzy(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_FRENZY)
     creature:CastSpell(creature, SPELL_FRENZY)
     schedule(guid, "frenzy", math.random(8000, 10000), function()

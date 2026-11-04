@@ -11787,38 +11787,47 @@ func init() {
 	// in lua_scripts/blackwinglair/boss_razorgore.lua. The
 	// go_orb_of_domination GameObjectScript and the spell_egg_event
 	// SpellScript from the same C++ file have no Lua bridges and are
-	// not registered; the phase-two DoAction trigger has no bridge.
+	// not registered; the phase-two DoAction trigger has no bridge; the
+	// UpdateAI casting gates are PORTED (500ms IsCasting defer, :132/:157).
 	RegisterLuaBoss("boss_razorgore", 12435)
 	// Vaelastrasz the Corrupt (Blackwing Lair, second boss) — fight
 	// logic in lua_scripts/blackwinglair/boss_vaelastrasz.lua. The
 	// spell_vael_burning_adrenaline AuraScript from the same C++ file
 	// has no Lua bridge and is not registered; the pre-combat speech
-	// machine runs through the gossip hooks in the same file.
+	// machine runs through the gossip hooks in the same file; the
+	// combat-branch UpdateAI casting gates are PORTED (500ms IsCasting
+	// defer, :165/:211), the speech branch ungated per C++.
 	RegisterLuaBoss("boss_vaelastrasz", 13020)
 	// Broodlord Lashlayer (Blackwing Lair, third boss) — fight logic
 	// in lua_scripts/blackwinglair/boss_broodlord_lashlayer.lua. The
 	// go_suppression_device GameObjectScript from the same C++ file
 	// has no Lua bridge and is not registered; the leash-check evade
-	// arm and the threat-cut arm have no bridges.
+	// arm and the threat-cut arm have no bridges; the UpdateAI override
+	// (:88-129) has NO casting gate, so ported ticks stay ungated
+	// (C++-exact — the override replaces the BossAI base gate).
 	RegisterLuaBoss("boss_broodlord", 12017)
 	// Firemaw (Blackwing Lair, fourth boss) — fight logic in
 	// lua_scripts/blackwinglair/boss_firemaw.lua. The wingbuffet
-	// threat-cut arm has no bridge (no threat model).
+	// threat-cut arm has no bridge (no threat model); the UpdateAI casting
+	// gates are PORTED (500ms IsCasting defer, :61/:84).
 	RegisterLuaBoss("boss_firemaw", 11983)
 	// Ebonroc (Blackwing Lair, fifth boss) — fight logic in
 	// lua_scripts/blackwinglair/boss_ebonroc.lua. The wingbuffet
-	// threat-cut arm has no bridge (no threat model).
+	// threat-cut arm has no bridge (no threat model); the UpdateAI casting
+	// gates are PORTED (500ms IsCasting defer, :61/:82).
 	RegisterLuaBoss("boss_ebonroc", 14601)
 	// Flamegor (Blackwing Lair, sixth boss) — fight logic in
 	// lua_scripts/blackwinglair/boss_flamegor.lua. The wingbuffet
-	// threat-cut arm has no bridge (no threat model).
+	// threat-cut arm has no bridge (no threat model); the UpdateAI casting
+	// gates are PORTED (500ms IsCasting defer, :66/:90).
 	RegisterLuaBoss("boss_flamegor", 11981)
 	// Chromaggus (Blackwing Lair, seventh boss) — fight logic in
 	// lua_scripts/blackwinglair/boss_chromaggus.lua. The
 	// go_chromaggus_lever GameObjectScript from the same C++ file has
 	// no Lua bridge and is not registered; the fight starts on pull
-	// instead of on the lever, and the UpdateAI casting gates and the
-	// threat model have no bridges.
+	// instead of on the lever, and the UpdateAI casting gates are PORTED
+	// (500ms IsCasting defer, boss_chromaggus.cpp:215/:273); the threat model
+	// has no bridge.
 	RegisterLuaBoss("boss_chromaggus", 14020)
 	// Victor Nefarius (Blackwing Lair, eighth boss) — fight logic in
 	// lua_scripts/blackwinglair/boss_nefarian.lua. The drakonid
@@ -11829,11 +11838,11 @@ func init() {
 	// model.
 	RegisterLuaBoss("boss_victor_nefarius", 10162)
 	// Nefarian (Blackwing Lair, eighth boss) — fight logic in
-	// lua_scripts/blackwinglair/boss_nefarian.lua. The UpdateAI
-	// casting gates, the sub-20% bone-construct respawn loop and the
-	// MovementInform arm have no bridges (no UNIT_STATE, no summon
-	// model, no movement model); only the Talk arm of phase 3 is
-	// modeled.
+	// lua_scripts/blackwinglair/boss_nefarian.lua. The UpdateAI casting gates are PORTED
+	// (500ms IsCasting defer, nefarius :305/:372, nefarian :487/:566); the
+	// sub-20% bone-construct respawn loop and the MovementInform arm have
+	// no bridges (no summon model, no movement model); only the Talk arm
+	// of phase 3 is modeled.
 	RegisterLuaBoss("boss_nefarian", 11583)
 	// instance_blackwing_lair (AddSC_instance_blackwing_lair; map 469 —
 	// InstanceMapScript only, zero creature/at_ scripts): encounter gate
@@ -11845,64 +11854,66 @@ func init() {
 	// bridge, so this unit is documented-only (precedent:
 	// instance_blackrock_spire).
 	// Lucifron (Molten Core, first boss) — fight logic in
-	// lua_scripts/moltencore/boss_lucifron.lua. The UpdateAI casting
-	// gates have no bridge (no UNIT_STATE model); the encounter-state
-	// bookkeeping is blocked on the instance-script model.
+	// lua_scripts/moltencore/boss_lucifron.lua. The UpdateAI casting gates are PORTED (500ms
+	// IsCasting defer, :70/:93); the encounter-state bookkeeping is
+	// blocked on the instance-script model.
 	// Lucifron (Molten Core, first boss) — fight logic in
-	// lua_scripts/moltencore/boss_lucifron.lua. The UpdateAI casting
-	// gates have no bridge (no UNIT_STATE model); the encounter-state
-	// bookkeeping is blocked on the instance-script model.
+	// lua_scripts/moltencore/boss_lucifron.lua. The UpdateAI casting gates are PORTED (500ms
+	// IsCasting defer, :70/:93); the encounter-state bookkeeping is
+	// blocked on the instance-script model.
 	RegisterLuaBoss("boss_lucifron", 12118)
 	// Magmadar (Molten Core, second boss) — fight logic in
-	// lua_scripts/moltencore/boss_magmadar.lua. The UpdateAI casting
-	// gates have no bridge (no UNIT_STATE model); the encounter-state
-	// bookkeeping is blocked on the instance-script model.
+	// lua_scripts/moltencore/boss_magmadar.lua. The UpdateAI casting gates are PORTED (500ms
+	// IsCasting defer, :82/:107); the encounter-state bookkeeping is
+	// blocked on the instance-script model.
 	RegisterLuaBoss("boss_magmadar", 11982)
 	// Gehennas (Molten Core, third boss) — fight logic in
-	// lua_scripts/moltencore/boss_gehennas.lua. The UpdateAI casting
-	// gates have no bridge (no UNIT_STATE model); the encounter-state
-	// bookkeeping is blocked on the instance-script model.
+	// lua_scripts/moltencore/boss_gehennas.lua. The UpdateAI casting gates are PORTED (500ms
+	// IsCasting defer, :70/:95); the encounter-state bookkeeping is
+	// blocked on the instance-script model.
 	RegisterLuaBoss("boss_gehennas", 12259)
 	// Garr (Molten Core, fourth boss) — fight logic in
-	// lua_scripts/moltencore/boss_garr.lua. The UpdateAI casting
-	// gates have no bridge (no UNIT_STATE model); the encounter-state
-	// bookkeeping is blocked on the instance-script model; the
+	// lua_scripts/moltencore/boss_garr.lua. The UpdateAI casting gates are PORTED (500ms
+	// IsCasting defer, :67/:86); the encounter-state bookkeeping is
+	// blocked on the instance-script model; the
 	// npc_firesworn AI in the same C++ file is not registered (its
 	// creature entry is DB-side, unverifiable from the C++ tree).
 	RegisterLuaBoss("boss_garr", 12057)
 	// Shazzrah (Molten Core, fifth boss) — fight logic in
-	// lua_scripts/moltencore/boss_shazzrah.lua. The UpdateAI casting
-	// gates have no bridge (no UNIT_STATE model); the encounter-state
-	// bookkeeping is blocked on the instance-script model; the Gate
+	// lua_scripts/moltencore/boss_shazzrah.lua. The UpdateAI casting gates are PORTED (500ms
+	// IsCasting defer, :69/:108); the encounter-state bookkeeping is
+	// blocked on the instance-script model; the Gate
 	// threat-reset and teleport SpellScript arms have no bridges (no
 	// threat model, no SpellScript model).
 	RegisterLuaBoss("boss_shazzrah", 12264)
 	// Baron Geddon (Molten Core, sixth boss) — fight logic in
-	// lua_scripts/moltencore/boss_baron_geddon.lua. The UpdateAI casting
-	// gates have no bridge (no UNIT_STATE model); the encounter-state
-	// bookkeeping is blocked on the instance-script model; the
+	// lua_scripts/moltencore/boss_baron_geddon.lua. The UpdateAI casting gates are PORTED (500ms
+	// IsCasting defer, :88/:113); the encounter-state bookkeeping is
+	// blocked on the instance-script model; the
 	// armageddon InterruptNonMeleeSpells arm is bridged (no-op twin) and ported; the
 	// spell_baron_geddon_inferno AuraScript has no bridge (no AuraScript
 	// model).
 	RegisterLuaBoss("boss_baron_geddon", 12056)
 	// RegisterLuaBoss wires lua_scripts/moltencore/boss_sulfuron_harbinger.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
-	// encounter-state bookkeeping is blocked on the instance-script model; the
+	// The UpdateAI casting gates are PORTED (500ms IsCasting defer,
+	// :86/:124); the encounter-state bookkeeping is blocked on the
+	// instance-script model; the
 	// inspire random-friendly-missing-buff arm has no bridge (no
 	// friendly-creature lookup) — only the self-cast is kept; the
 	// npc_flamewaker_priest add AI is not registered (no entry constant in
 	// the C++ tree, DB-side ScriptName binding).
 	RegisterLuaBoss("boss_sulfuron", 12098)
 	// RegisterLuaBoss wires lua_scripts/moltencore/boss_golemagg.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
-	// encounter-state bookkeeping is blocked on the instance-script model; the
-	// HasAura(SPELL_ENRAGE) once-guard is kept as per-GUID Lua state (no
-	// HasAura bridge); the npc_core_rager add AI is not registered (no
+	// The UpdateAI casting gates are PORTED (500ms IsCasting defer,
+	// :88/:108); the encounter-state bookkeeping is blocked on the
+	// instance-script model; the HasAura(SPELL_ENRAGE) once-guard is PORTED
+	// via the creature HasAura bridge (lua_objects.go); the npc_core_rager add AI is not registered (no
 	// entry constant in the C++ tree, DB-side ScriptName binding).
 	RegisterLuaBoss("boss_golemagg", 11988)
 	// RegisterLuaBoss wires lua_scripts/moltencore/boss_majordomo_executus.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
-	// encounter-state bookkeeping is blocked on the instance-script model;
+	// The combat-branch UpdateAI casting gates are PORTED (500ms IsCasting
+	// defer, :121/:152); the encounter-state bookkeeping is blocked on the
+	// instance-script model;
 	// the defeat/outro arms (defeat trigger, faction change, teleport,
 	// Ragnaros summon, gossip flags, DoAction) have no bridges — only the
 	// combat timers, slay/aggro Talk lines, the teleport-victim exclusion,
@@ -11910,7 +11921,8 @@ func init() {
 	// arms are modeled.
 	RegisterLuaBoss("boss_majordomo", 12018)
 	// RegisterLuaBoss wires lua_scripts/moltencore/boss_ragnaros.lua.
-	// The UpdateAI casting gates have no bridge (no UNIT_STATE model); the
+	// The C++ UpdateAI (:127) has NO casting gate — events fire
+	// unconditionally, so ticks stay ungated (C++-exact); the
 	// encounter-state bookkeeping (DATA_RAGNAROS_ADDS) and the
 	// intro/majordomo-kill arms are blocked on the instance-script model;
 	// the intro, submerge and emerge react/emote/flag/faction/attack arms

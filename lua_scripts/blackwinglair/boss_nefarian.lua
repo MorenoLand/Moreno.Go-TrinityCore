@@ -54,10 +54,12 @@
 -- respawn loop has no bearer. OnLeaveCombat(2)/OnReset(23): cancel
 -- timers, clear state. Nil-target ticks cast nothing but keep the
 -- schedule (jeklik convention).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- timers fire unconditionally (jeklik convention); no
--- instance-script model — boss admission via the luaBossAI shim
+-- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
+-- (boss_nefarian.cpp Nefarius combat branch :305/:372, Nefarian
+-- :487/:566) are ported as a 500ms IsCasting defer on every ported
+-- timer tick (mal_ganis idiom; IsCasting live,
+-- lua_creature_events.go:1950; defer precedes target picks, casts,
+-- Talks and re-arms, no re-arm consumed); no instance-script model — boss admission via the luaBossAI shim
 -- (BossAI::_Reset/JustEngagedWith, _JustDied, and the
 -- DATA_NEFARIAN bookkeeping arms skipped); the gossip hello text
 -- comes from the DB (menu 6045) and is approximated — the real text
@@ -238,6 +240,12 @@ end
 -- shadowbolt on a random threat-list player within 40 yd;
 -- re-arm {3s,10s}.
 local function onNefariusShadowBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function()
+            onNefariusShadowBolt(creature, guid)
+        end)
+        return
+    end
     if math.random(0, 1) == 0 then
         local victim = creature:GetVictim()
         if victim then
@@ -261,6 +269,12 @@ end
 -- player within 40 yd;
 -- re-arm {10s,20s}.
 local function onNefariusFear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function()
+            onNefariusFear(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_FEAR_NEFARIUS)
@@ -279,6 +293,12 @@ end
 -- (unported — no Nefarian spawn leg here) and drops Nefarius out
 -- of the fight, so cancel the timers.
 local function onNefariusSpawnAdd(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spawn_add", 500, function()
+            onNefariusSpawnAdd(creature, guid)
+        end)
+        return
+    end
     local st = nefariusState[guid]
     if not st then
         return
@@ -420,6 +440,12 @@ end
 
 -- Nefarian: C++ EVENT_SHADOWFLAME — non-triggered DoCastVictim 12s.
 local function onNefarianShadowflame(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowflame", 500, function()
+            onNefarianShadowflame(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOWFLAME)
@@ -431,6 +457,12 @@ end
 
 -- C++ EVENT_FEAR — bellowing roar 22686, {25s,35s}.
 local function onNefarianFear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function()
+            onNefarianFear(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_BELLOWINGROAR)
@@ -442,6 +474,12 @@ end
 
 -- C++ EVENT_VEILOFSHADOW — 7068, {25s,35s}.
 local function onNefarianVeil(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "veil", 500, function()
+            onNefarianVeil(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_VEILOFSHADOW)
@@ -453,6 +491,12 @@ end
 
 -- C++ EVENT_CLEAVE — 20691, 7s.
 local function onNefarianCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            onNefarianCleave(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -468,6 +512,12 @@ end
 -- self-cast (C++ DoCast(me, ...) default); re-arm {30s,35s}
 -- unconditional (C++-exact).
 local function onNefarianClassCall(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "classcall", 500, function()
+            onNefarianClassCall(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         local class = target:GetClass()

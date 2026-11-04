@@ -45,11 +45,18 @@
 -- 8s Ragnaros summon, 24s Talk). DoAction(ACTION_START_RAGNAROS_ALT)
 -- stays out (instance-summon entry point, no bearer); SPELL_SUMMON_
 -- RAGNAROS 19774 is declared but unused by the AI.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
--- fire unconditionally (jeklik convention); no instance-script model
--- — boss admission via the luaBossAI shim (BossAI::JustEngagedWith
--- and the BOSS_MAJORDOMO_EXECUTUS bookkeeping arms skipped).
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_majordomo_executus.cpp:121) and
+-- post-event check (:152) are modeled on the four combat event ticks
+-- and the 1s aegis pump (its C++ arm :125-126 sits after the pre-loop
+-- gate) via the live creature:IsCasting() bridge
+-- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
+-- casting tick defers 500ms under its own key, consuming no re-arm.
+-- The defeat pump stays ungated (C++ defeat arm :108-118 precedes the
+-- gate) and the DONE-branch outro ticks stay ungated (that branch has
+-- no gate). No instance-script model — boss admission via the
+-- luaBossAI shim (BossAI::JustEngagedWith and the
+-- BOSS_MAJORDOMO_EXECUTUS bookkeeping arms skipped).
 
 local ENTRY_MAJORDOMO_EXECUTUS = 12018
 local NPC_RAGNAROS = 11502
@@ -103,6 +110,12 @@ end
 -- C++ EVENT_MAGIC_REFLECTION: non-triggered DoCast(me, 20619);
 -- re-arm 30s.
 local function onMagicReflection(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "magicreflection", 500, function()
+            onMagicReflection(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MAGIC_REFLECTION)
     schedule(guid, "magicreflection", 30000, function()
         onMagicReflection(creature, guid)
@@ -112,6 +125,12 @@ end
 -- C++ EVENT_DAMAGE_REFLECTION: non-triggered DoCast(me, 21075);
 -- re-arm 30s.
 local function onDamageReflection(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "damagereflection", 500, function()
+            onDamageReflection(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DAMAGE_REFLECTION)
     schedule(guid, "damagereflection", 30000, function()
         onDamageReflection(creature, guid)
@@ -121,6 +140,12 @@ end
 -- C++ EVENT_BLAST_WAVE: non-triggered DoCastVictim(20229);
 -- re-arm 10s.
 local function onBlastWave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blastwave", 500, function()
+            onBlastWave(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_BLAST_WAVE)
@@ -164,6 +189,12 @@ local function randomThreatTargetSkipFirst(creature)
 end
 
 local function onTeleport(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "teleport", 500, function()
+            onTeleport(creature, guid)
+        end)
+        return
+    end
     local pick = randomThreatTargetSkipFirst(creature)
     if pick then
         creature:CastSpell(pick, SPELL_TELEPORT)
@@ -248,6 +279,12 @@ end
 -- `local onAegisPump` above is a separate slot; re-declaring with
 -- `local function` would shadow it and the pump would call nil.
 onAegisPump = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "aegis", 500, function()
+            onAegisPump(creature, guid)
+        end)
+        return
+    end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth ~= 0
             and creature:GetHealth() < math.floor(maxHealth * 50 / 100) then

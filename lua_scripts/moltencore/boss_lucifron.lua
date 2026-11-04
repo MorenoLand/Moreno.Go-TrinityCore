@@ -13,11 +13,14 @@
 -- (C++ DoCast default is triggered=false — vaelastrasz convention).
 -- Nil-victim ticks cast nothing but keep the schedule (jeklik
 -- convention). OnDied/OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
--- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the BOSS_LUCIFRON bookkeeping arms skipped).
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_lucifron.cpp:70) and post-event
+-- check (:93) are modeled on every timer tick via the live
+-- creature:IsCasting() bridge (engine/world/lua_creature_events.go:1950,
+-- CastingUntil window) — a casting tick defers 500ms under its own
+-- key, consuming no re-arm. No instance-script model — boss admission
+-- via the luaBossAI shim (BossAI::JustEngagedWith and the
+-- BOSS_LUCIFRON bookkeeping arms skipped).
 
 local ENTRY_LUCIFRON = 12118
 
@@ -52,6 +55,12 @@ end
 -- C++ EVENT_IMPENDING_DOOM: non-triggered DoCastVictim(19702);
 -- re-arm 20s.
 local function onImpendingDoom(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "impendingdoom", 500, function()
+            onImpendingDoom(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_IMPENDING_DOOM)
@@ -64,6 +73,12 @@ end
 -- C++ EVENT_LUCIFRON_CURSE: non-triggered DoCastVictim(19703);
 -- re-arm 15s.
 local function onLucifronCurse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lucifroncurse", 500, function()
+            onLucifronCurse(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_LUCIFRON_CURSE)
@@ -76,6 +91,12 @@ end
 -- C++ EVENT_SHADOW_SHOCK: non-triggered DoCastVictim(20603);
 -- re-arm 6s.
 local function onShadowShock(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowshock", 500, function()
+            onShadowShock(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_SHOCK)

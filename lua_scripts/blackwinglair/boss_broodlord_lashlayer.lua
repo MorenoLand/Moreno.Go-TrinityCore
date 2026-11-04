@@ -26,9 +26,10 @@
 -- convention). OnDied: Talk is not used by C++ — JustDied only runs
 -- the suppression-device deactivation (PORTED below). OnLeave
 -- Combat(2)/OnReset(23): cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate has no
--- UNIT_STATE bridge — timers fire unconditionally (jeklik
--- convention); no instance-script model — boss admission via the
+-- Deviations from C++: boss_broodlordAI overrides UpdateAI
+-- (boss_broodlord_lashlayer.cpp:88-129) with NO casting gate, so the
+-- BossAI base gate (ScriptedCreature.cpp:578/:584) never runs for
+-- this boss — the ported timer ticks fire ungated, C++-exact; no instance-script model — boss admission via the
 -- luaBossAI shim (_Reset/BossAI::JustEngagedWith and the
 -- DATA_BROODLORD_LASHLAYER bookkeeping arms skipped); the
 -- knockback-arm ModifyThreatByPercent(victim, -50) PORTED 2026-10-24

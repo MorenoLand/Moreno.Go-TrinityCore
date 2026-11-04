@@ -24,11 +24,15 @@
 -- reschedules arcane explosion {3s,6s}. Nil-victim ticks cast nothing
 -- but keep the schedule (jeklik convention). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
--- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the BOSS_SHAZZRAH bookkeeping arms skipped); the EVENT_SHAZZRAH_GATE
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_shazzrah.cpp:69) and post-event
+-- check (:108) are modeled on every timer tick, including the one-shot
+-- gate triggered explosion, via the live creature:IsCasting() bridge
+-- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
+-- casting tick defers 500ms under its own key, consuming no re-arm.
+-- No instance-script model — boss admission via the luaBossAI shim
+-- (BossAI::JustEngagedWith and the BOSS_SHAZZRAH bookkeeping arms
+-- skipped); the EVENT_SHAZZRAH_GATE
 -- ResetThreatList arm IS ported (:154 — ResetAllThreat bridged,
 -- lua_objects.go:389); the spell_shazzrah_gate_dummy SpellScript
 -- (picks a random area target, that target casts 23139 teleporting
@@ -72,6 +76,12 @@ end
 -- C++ EVENT_ARCANE_EXPLOSION: non-triggered DoCastVictim(19712);
 -- re-arm {4s,7s}.
 local function onArcaneExplosion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcaneexplosion", 500, function()
+            onArcaneExplosion(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_ARCANE_EXPLOSION)
@@ -101,6 +111,12 @@ local function randomThreatPlayer(creature)
 end
 
 local function onShazzrahCurse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse", 500, function()
+            onShazzrahCurse(creature, guid)
+        end)
+        return
+    end
     local pick = randomThreatPlayer(creature)
     if pick then
         creature:CastSpell(pick, SPELL_SHAZZRAH_CURSE)
@@ -113,6 +129,12 @@ end
 -- C++ EVENT_MAGIC_GROUNDING: non-triggered DoCast(me, 19714);
 -- re-arm 35s.
 local function onMagicGrounding(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "magicgrounding", 500, function()
+            onMagicGrounding(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MAGIC_GROUNDING)
     schedule(guid, "magicgrounding", 35000, function()
         onMagicGrounding(creature, guid)
@@ -122,6 +144,12 @@ end
 -- C++ EVENT_COUNTERSPELL: non-triggered DoCastVictim(19715);
 -- re-arm {16s,20s}.
 local function onCounterspell(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "counterspell", 500, function()
+            onCounterspell(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_COUNTERSPELL)
@@ -141,6 +169,12 @@ end
 -- no SpellScript bridge, so the cast fires visibly but the teleport +
 -- target switch never happen (vaelastrasz convention).
 local function onGateTriggeredExplosion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gateexplosion", 500, function()
+            onGateTriggeredExplosion(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_ARCANE_EXPLOSION)
@@ -149,6 +183,12 @@ local function onGateTriggeredExplosion(creature, guid)
 end
 
 local function onShazzrahGate(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gate", 500, function()
+            onShazzrahGate(creature, guid)
+        end)
+        return
+    end
     -- C++ EVENT_SHAZZRAH_GATE: ResetThreatList() before the gate dummy
     -- cast (bridged lua_objects.go:389; the old "no bridge" header claim
     -- was stale).

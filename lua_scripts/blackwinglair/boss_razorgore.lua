@@ -29,10 +29,12 @@
 -- unreachable, and Razorgore stays unkillable doing melee only — which
 -- is exactly what C++ phase one does in combat. Reset cancels timers
 -- and clears the phase flag.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
--- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- modeled arms would fire unconditionally (jeklik convention); no
--- instance-script model — boss admission via the luaBossAI shim
+-- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
+-- (boss_razorgore.cpp pre-loop :132 + in-loop :157) are ported as a
+-- 500ms IsCasting defer on every ported phase-two timer tick
+-- (mal_ganis idiom; IsCasting live, lua_creature_events.go:1950;
+-- defer precedes target picks, casts and re-arms, no re-arm
+-- consumed); no instance-script model — boss admission via the luaBossAI shim
 -- (_Reset/_JustDied/BossAI::JustEngagedWith and the
 -- DATA_RAZORGORE_THE_UNTAMED bookkeeping arms skipped); the
 -- Reset/JustDied instance->SetData(DATA_EGG_EVENT, NOT_STARTED) arms
@@ -80,6 +82,12 @@ end
 
 -- C++ EVENT_CLEAVE: non-triggered DoCastVictim(22540); re-arm {7s,10s}.
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            onCleave(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -91,6 +99,12 @@ end
 
 -- C++ EVENT_STOMP: non-triggered DoCastVictim(24375); re-arm {15s,25s}.
 local function onWarstomp(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            onWarstomp(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WARSTOMP)
@@ -102,6 +116,12 @@ end
 
 -- C++ EVENT_FIREBALL: non-triggered DoCastVictim(22425); re-arm {12s,15s}.
 local function onFireballVolley(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function()
+            onFireballVolley(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIREBALLVOLLEY)
@@ -113,6 +133,12 @@ end
 
 -- C++ EVENT_CONFLAGRATION: non-triggered DoCastVictim(23023); re-arm 30s.
 local function onConflagration(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "conflag", 500, function()
+            onConflagration(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CONFLAGRATION)

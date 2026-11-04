@@ -28,11 +28,16 @@
 -- 3s, non-triggered DoCastVictim (C++-exact once-guard via the
 -- creature HasAura bridge, engine/world/lua_objects.go).
 -- OnDied/OnLeaveCombat/OnReset: cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
--- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the BOSS_GOLEMAGG_THE_INCINERATOR bookkeeping arms skipped); the
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_golemagg.cpp:88) and post-event
+-- check (:108) are modeled on both timer ticks via the live
+-- creature:IsCasting() bridge (engine/world/lua_creature_events.go:1950,
+-- CastingUntil window) — a casting tick defers 500ms under its own
+-- key, consuming no re-arm. The earthquake tick is armed from
+-- DamageTaken but executes in the gated UpdateAI loop, so it is
+-- gated too. No instance-script model — boss admission via the
+-- luaBossAI shim (BossAI::JustEngagedWith and the
+-- BOSS_GOLEMAGG_THE_INCINERATOR bookkeeping arms skipped); the
 -- npc_core_rager AI in the same C++ file (mangle 19820 7s then 10s
 -- DoCastVictim; below 50% health adds Golemagg's trust 20553 to
 -- itself, Talk(EMOTE_LOWHP=0) and self full-heal while Golemagg is
@@ -93,6 +98,12 @@ end
 -- C++ EVENT_PYROBLAST: non-triggered cast 20228 on a threat-list
 -- target alive; re-arm 7s.
 local function onPyroblast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pyroblast", 500, function()
+            onPyroblast(creature, guid)
+        end)
+        return
+    end
     local pick = randomThreatTarget(creature)
     if pick then
         creature:CastSpell(pick, SPELL_PYROBLAST)
@@ -104,6 +115,12 @@ end
 
 -- C++ EVENT_EARTHQUAKE: non-triggered DoCastVictim(19798); re-arm 3s.
 local function onEarthquake(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "earthquake", 500, function()
+            onEarthquake(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_EARTHQUAKE)

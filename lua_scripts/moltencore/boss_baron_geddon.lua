@@ -29,9 +29,14 @@
 -- boss_baron_geddon.cpp:80-86); engine melee has no suppression
 -- bridge (documented delta). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_baron_geddon.cpp:88) and
+-- post-event check (:113) are modeled on the inferno / ignite-mana /
+-- living-bomb ticks via the live creature:IsCasting() bridge
+-- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
+-- casting tick defers 500ms under its own key, consuming no re-arm.
+-- The 1s armageddon pump stays ungated: the C++ armageddon arm
+-- (:80-86) precedes the cast gate (:88). No instance-script model —
 -- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
 -- the BOSS_BARON_GEDDON bookkeeping arms skipped); the armageddon
 -- InterruptNonMeleeSpells arm is bridged (no-op twin) and ported in onArmageddonPump below; the armageddon arm does
@@ -86,6 +91,12 @@ end
 
 -- C++ EVENT_INFERNO: non-triggered DoCast(me, 19695); re-arm 45s.
 local function onInferno(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "inferno", 500, function()
+            onInferno(creature, guid)
+        end)
+        return
+    end
     if not armageddonSuppress[guid] then
         creature:CastSpell(creature, SPELL_INFERNO)
     end
@@ -115,6 +126,12 @@ end
 -- unmodeled — creature casts apply no auras engine-side, so the
 -- bridged player HasAura(19659) would always read false); re-arm 30s.
 local function onIgniteMana(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "ignitemana", 500, function()
+            onIgniteMana(creature, guid)
+        end)
+        return
+    end
     if not armageddonSuppress[guid] then
         local pick = randomThreatPlayer(creature)
         if pick then
@@ -129,6 +146,12 @@ end
 -- C++ EVENT_LIVING_BOMB: non-triggered cast 20475 on a threat-list
 -- player alive; re-arm 35s.
 local function onLivingBomb(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "livingbomb", 500, function()
+            onLivingBomb(creature, guid)
+        end)
+        return
+    end
     if not armageddonSuppress[guid] then
         local pick = randomThreatPlayer(creature)
         if pick then

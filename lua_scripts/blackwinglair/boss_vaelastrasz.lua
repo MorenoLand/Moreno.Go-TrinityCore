@@ -46,9 +46,13 @@
 -- approximation). OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel
 -- timers, clear combat state; the gossip-flag one-shot survives Reset
 -- C++-exact (C++ never re-adds UNIT_NPC_FLAG_GOSSIP).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire
--- unconditionally (jeklik convention); no instance-script model —
+-- Deviations from C++: the combat-branch UpdateAI UNIT_STATE_CASTING
+-- queue gates (boss_vaelastrasz.cpp pre-loop :165 + in-loop :211)
+-- are ported as a 500ms IsCasting defer on every ported combat timer
+-- tick (mal_ganis idiom; IsCasting live, lua_creature_events.go:1950;
+-- defer precedes target picks, casts and re-arms, no re-arm
+-- consumed). The out-of-combat speech machine stays ungated per C++
+-- (the !UpdateVictim speech branch :133-162 has no casting gate); no instance-script model —
 -- boss admission via the luaBossAI shim (_Reset/BossAI::
 -- JustEngagedWith and the DATA_VAELASTRAZ_THE_CORRUPT bookkeeping
 -- arms skipped); the
@@ -134,6 +138,12 @@ end
 
 -- C++ EVENT_CLEAVE: non-triggered DoCastVictim(19983); re-arm 15s.
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            onCleave(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -145,6 +155,12 @@ end
 
 -- C++ EVENT_FLAMEBREATH: non-triggered DoCastVictim(23461); re-arm {8s,14s}.
 local function onFlameBreath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamebreath", 500, function()
+            onFlameBreath(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FLAMEBREATH)
@@ -156,6 +172,12 @@ end
 
 -- C++ EVENT_FIRENOVA: non-triggered DoCastVictim(23462); re-arm 15s.
 local function onFireNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "firenova", 500, function()
+            onFireNova(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIRENOVA)
@@ -168,6 +190,12 @@ end
 -- C++ EVENT_TAILSWIPE: the cast is commented out upstream — only the
 -- 15s re-arm is modeled (inert firing).
 local function onTailSwipe(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "tailswipe", 500, function()
+            onTailSwipe(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "tailswipe", 15000, function()
         onTailSwipe(creature, guid)
     end)
@@ -185,6 +213,12 @@ end
 -- below is the pop;
 -- players are never pets, so the Player filter is the !IsPet leg.
 local function onBurningAdrenalineCaster(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "adcaster", 500, function()
+            onBurningAdrenalineCaster(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     local victimGuid = nil
     if victim ~= nil then
@@ -219,6 +253,12 @@ end
 -- C++ EVENT_BURNINGADRENALINE_TANK: Vael casts it himself on the
 -- victim, triggered; re-arm 45s unconditionally.
 local function onBurningAdrenalineTank(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "adtank", 500, function()
+            onBurningAdrenalineTank(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_BURNINGADRENALINE, true)

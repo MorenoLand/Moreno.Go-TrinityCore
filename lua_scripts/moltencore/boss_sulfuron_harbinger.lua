@@ -31,10 +31,13 @@
 -- the add entry cannot be verified from the C++ sources alone (garr
 -- firesworn convention); the lowest-HP-friendly pick and the
 -- no-aura target filters would additionally need bridges.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- timers fire unconditionally (jeklik convention); no instance-
--- script model — boss admission via the luaBossAI shim
+-- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI
+-- UNIT_STATE_CASTING queue gate (boss_sulfuron_harbinger.cpp:86) and
+-- post-event check (:124) are modeled on every boss timer tick via
+-- the live creature:IsCasting() bridge
+-- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
+-- casting tick defers 500ms under its own key, consuming no re-arm.
+-- No instance-script model — boss admission via the luaBossAI shim
 -- (BossAI::JustEngagedWith and the BOSS_SULFURON_HARBINGER
 -- bookkeeping arms skipped).
 
@@ -75,6 +78,12 @@ end
 -- C++ EVENT_DARK_STRIKE: non-triggered DoCast(me, 19777);
 -- re-arm {15s,18s}.
 local function onDarkStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "darkstrike", 500, function()
+            onDarkStrike(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DARK_STRIKE)
     schedule(guid, "darkstrike", math.random(15000, 18000), function()
         onDarkStrike(creature, guid)
@@ -84,6 +93,12 @@ end
 -- C++ EVENT_DEMORALIZING_SHOUT: non-triggered DoCastVictim(19778);
 -- re-arm {15s,20s}.
 local function onDemoralizingShout(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "demoralizingshout", 500, function()
+            onDemoralizingShout(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_DEMORALIZING_SHOUT)
@@ -105,6 +120,12 @@ end
 -- the encounter room besides the caster, and the in-combat leg
 -- excludes unpulled neighbouring packs).
 local function onInspire(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "inspire", 500, function()
+            onInspire(creature, guid)
+        end)
+        return
+    end
     local healers = {}
     for _, entry in ipairs({ ENTRY_FLAMEWAKER_HEALER, ENTRY_FLAMEWAKER_ELITE }) do
         for _, add in ipairs(creature:GetCreaturesInGrid(entry, 45.0)) do
@@ -128,6 +149,12 @@ end
 -- C++ EVENT_KNOCKDOWN: non-triggered DoCastVictim(19780);
 -- re-arm {12s,15s}.
 local function onKnockdown(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "knockdown", 500, function()
+            onKnockdown(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_KNOCKDOWN)
@@ -154,6 +181,12 @@ local function randomThreatPlayer(creature)
 end
 
 local function onFlamespear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamespear", 500, function()
+            onFlamespear(creature, guid)
+        end)
+        return
+    end
     local pick = randomThreatPlayer(creature)
     if pick then
         creature:CastSpell(pick, SPELL_FLAMESPEAR)
