@@ -22,7 +22,12 @@
 -- Frostbolt Volley and Mind Flay re-arm at 20s, Frost Nova re-arms at
 -- 15s (events.Repeat legs — no rescheduling jitter in C++).
 -- No Talk lines exist in the C++ (no SAY enum); the UpdateAI
--- UNIT_STATE_CASTING queue gate has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
+-- UNIT_STATE_CASTING queue gate is PORTED — scorn overrides no
+-- UpdateAI, so the gate is BossAI::UpdateAI's pre-loop + in-loop
+-- CASTING returns (ScriptedCreature.cpp:571-586); all four timer arms
+-- defer 500ms while creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950; thalnos precedent), no re-arm consumed,
+-- defer before the victim pick.
 
 local ENTRY_SCORN = 14693
 
@@ -62,28 +67,56 @@ local function castOnVictim(creature, spellId)
     end
 end
 
+-- BossAI::UpdateAI CASTING gate PORTED as above (defer before victim pick).
 local function onLichSlap(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lichSlap", 500, function()
+            onLichSlap(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_LICH_SLAP)
     schedule(guid, "lichSlap", 45000, function()
         onLichSlap(creature, guid)
     end)
 end
 
+-- BossAI::UpdateAI CASTING gate PORTED as above (defer before victim pick).
 local function onFrostboltVolley(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostboltVolley", 500, function()
+            onFrostboltVolley(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_FROSTBOLT_VOLLEY)
     schedule(guid, "frostboltVolley", 20000, function()
         onFrostboltVolley(creature, guid)
     end)
 end
 
+-- BossAI::UpdateAI CASTING gate PORTED as above (defer before victim pick).
 local function onMindFlay(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mindFlay", 500, function()
+            onMindFlay(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_MINDFLAY)
     schedule(guid, "mindFlay", 20000, function()
         onMindFlay(creature, guid)
     end)
 end
 
+-- BossAI::UpdateAI CASTING gate PORTED as above (defer before victim pick).
 local function onFrostNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostNova", 500, function()
+            onFrostNova(creature, guid)
+        end)
+        return
+    end
     castOnVictim(creature, SPELL_FROSTNOVA)
     schedule(guid, "frostNova", 15000, function()
         onFrostNova(creature, guid)

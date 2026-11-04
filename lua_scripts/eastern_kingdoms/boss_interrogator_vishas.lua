@@ -28,9 +28,13 @@
 -- sequentially), so the port uses a per-GUID integer counter, not
 -- booleans; modeled on the pre-damage hook (event 9), cleared on
 -- 2/4/23.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate has
--- no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
--- convention); the DamageTaken _yellCount staircase is C++-exact —
+-- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate is
+-- PORTED — vishas overrides no UpdateAI, so the gate is
+-- BossAI::UpdateAI's pre-loop + in-loop CASTING returns
+-- (ScriptedCreature.cpp:571-586); the pain arm defers 500ms while
+-- creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950; thalnos precedent), no re-arm
+-- consumed, defer before the victim pick; the DamageTaken _yellCount staircase is C++-exact —
 -- the C++ arm lives in DamageTaken itself (boss_interrogator_vishas.
 -- cpp:83-96), not the UpdateAI tick; JustDied's
 -- Vorrel Sengutz Talk(SAY_TRIGGER_VORREL 0) via
@@ -73,7 +77,20 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ EVENT_SHADOW_WORD_PAIN: non-triggered DoCastVictim(2767),
+-- re-arm {5s,15s}. Vishas overrides no UpdateAI, so the gate is
+-- BossAI::UpdateAI's pre-loop + in-loop CASTING returns
+-- (ScriptedCreature.cpp:571-586) — PORTED: the arm defers 500ms
+-- while creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950; thalnos precedent), no re-arm
+-- consumed, defer before the victim pick.
 local function onShadowWordPain(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pain", 500, function()
+            onShadowWordPain(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_WORD_PAIN)

@@ -14414,9 +14414,12 @@ func init() {
 	// cast, 1s retry until below-60%): C++ EVENT_BLOODLUST casts
 	// DoCastSelf(bloodlust 6742) only while HealthBelowPct(60) holds
 	// (current-health read, golemagg 704fb8e bug class) and otherwise
-	// re-arms at 1s. The UpdateAI UNIT_STATE_CASTING queue gate and
-	// BossAI::JustEngagedWith + DATA_HOUNDMASTER_LOKSEY bookkeeping
-	// have no UNIT_STATE/instance-script bridges (luaBossAI shim).
+	// re-arms at 1s. The UpdateAI UNIT_STATE_CASTING queue gate is
+	// PORTED (BossAI::UpdateAI pre-loop + in-loop CASTING returns,
+	// ScriptedCreature.cpp:571-586; the bloodlust arm defers 500ms
+	// while IsCasting, no re-arm consumed, defer before the health
+	// read); BossAI::JustEngagedWith + DATA_HOUNDMASTER_LOKSEY
+	// bookkeeping have no instance-script bridge (luaBossAI shim).
 	// Entry 3974 is not named in the C++ tree
 	// (RegisterScarletMonasteryCreatureAI binds the creature_template
 	// ScriptName DB-side) — db.moonwell-cited (?npc=3974
@@ -14436,6 +14439,10 @@ func init() {
 	// then below 30% with count < 2 -> Talk(SAY_HEALTH2 2); both can
 	// fire on one damage packet, so the port keeps a per-GUID integer
 	// counter on the pre-damage hook (event 9), cleared on 2/4/23.
+	// The UpdateAI UNIT_STATE_CASTING queue gate is PORTED
+	// (BossAI::UpdateAI pre-loop + in-loop CASTING returns,
+	// ScriptedCreature.cpp:571-586; the pain arm defers 500ms while
+	// IsCasting, no re-arm consumed, defer before the victim pick).
 	// JustDied's Vorrel Sengutz Talk(SAY_TRIGGER_VORREL 0) via
 	// instance->GetCreature(DATA_VORREL 3981) has no instance-creature
 	// bridge (documented-only); BossAI::JustEngagedWith/_Reset/_JustDied
@@ -14454,9 +14461,11 @@ func init() {
 	// 30s->15s (all non-triggered DoCastVictim -> GetVictim + CastSpell,
 	// jeklik convention, nil-victim ticks keep the schedule, no reschedule
 	// jitter). Zero Talk lines in the C++ (no SAY enum); the UpdateAI
-	// UNIT_STATE_CASTING queue gate and BossAI::JustEngagedWith +
-	// DATA_SCORN bookkeeping have no UNIT_STATE/instance-script bridges
-	// (luaBossAI shim). Entry 14693 is not named in the C++ tree
+	// UNIT_STATE_CASTING queue gate is PORTED (BossAI::UpdateAI
+	// pre-loop + in-loop CASTING returns, ScriptedCreature.cpp:571-586;
+	// all four arms defer 500ms while IsCasting, no re-arm consumed);
+	// BossAI::JustEngagedWith + DATA_SCORN bookkeeping have no
+	// instance-script bridge (luaBossAI shim). Entry 14693 is not named in the C++ tree
 	// (RegisterScarletMonasteryCreatureAI binds the creature_template
 	// ScriptName DB-side) — db.moonwell-cited (?npc=14693 "Scorn",
 	// level 34 elite undead, spawned via script).

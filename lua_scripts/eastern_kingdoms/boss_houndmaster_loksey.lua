@@ -20,8 +20,13 @@
 -- (C++ HealthBelowPct(60) — current-health read, golemagg 704fb8e
 -- bug class semantics) -> non-triggered DoCastSelf(bloodlust 6742)
 -- and re-arm at 60s; otherwise re-arm at 1s (the C++
--- events.Repeat(1s) retry leg). The UNIT_STATE_CASTING queue gate
--- in UpdateAI has no UNIT_STATE bridge; BossAI::JustEngagedWith
+-- events.Repeat(1s) retry leg). The UpdateAI UNIT_STATE_CASTING
+-- queue gate is PORTED — loksey overrides no UpdateAI, so the gate
+-- is BossAI::UpdateAI's pre-loop + in-loop CASTING returns
+-- (ScriptedCreature.cpp:571-586); the bloodlust arm defers 500ms
+-- while creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950; thalnos precedent), no re-arm
+-- consumed, defer before the health read. BossAI::JustEngagedWith
 -- pulse/zone arms are PORTED in lokseyEnterCombat; DATA_HOUNDMASTER_
 -- LOKSEY encounter bookkeeping still has no instance-script bridge
 -- (luaBossAI shim).
@@ -58,8 +63,19 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_BLOODLUST: HealthBelowPct(60) -> DoCastSelf(bloodlust
--- 6742), Repeat(60s); else Repeat(1s).
+-- 6742), Repeat(60s); else Repeat(1s). Loksey overrides no UpdateAI,
+-- so the gate is BossAI::UpdateAI's pre-loop + in-loop CASTING
+-- returns (ScriptedCreature.cpp:571-586) — PORTED: the arm defers
+-- 500ms while creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950; thalnos precedent), no re-arm
+-- consumed, defer before the health read.
 local function onBloodlust(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bloodlust", 500, function()
+            onBloodlust(creature, guid)
+        end)
+        return
+    end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * 60 / 100) then
         creature:CastSpell(creature, SPELL_BLOODLUST)
