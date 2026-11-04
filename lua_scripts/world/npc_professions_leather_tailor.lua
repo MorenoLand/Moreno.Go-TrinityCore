@@ -32,7 +32,7 @@
 --   SendBuyError/SendEquipError have no Lua player surface.
 --   ProfessionUnlearnSpells (:319-338) RemoveSpell lists are bridged
 --   (RemoveSpell) but dead without the guard+error legs.
--- npc_prof_tailor (C++ :977-1154; entries 22213 Gidge Spellweaver, 22208
+-- npc_prof_tailor (C++ :977-1154) -- PORTED 2026-11-04 in lua_scripts/world/npc_prof_tailor.lua (learn sides only; unlearn omitted on EquippedOk); entries 22213 Gidge Spellweaver, 22208
 -- Nasmara Moonsong, 22212 Andrion Darkspinner):
 --   Hello learn/unlearn arms (:1003-1033) need GetBaseSkillValue
 --   (SKILL_TAILORING 197) >= 350 (GetSkillValue bridged, see leather

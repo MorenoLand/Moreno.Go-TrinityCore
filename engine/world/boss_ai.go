@@ -20045,6 +20045,30 @@ func init() {
 	RegisterLuaBoss("npc_engineering_tele_trinket", 14743)
 	RegisterLuaBoss("npc_engineering_tele_trinket", 21493)
 	RegisterLuaBoss("npc_engineering_tele_trinket", 21494)
+	// npc_prof_blacksmith (World profession gossip): ported in
+	// lua_scripts/world/npc_prof_blacksmith.lua — gossip hello/select
+	// learn arms (entries 11145/11176/11146/11178/5164/11177/11191/
+	// 11192/11193); unlearn arms omitted on the unbridged EquippedOk
+	// leg. Retires the documented-only note for CLASS 1 in
+	// lua_scripts/world/npc_professions_blacksmith.lua.
+	RegisterLuaBoss("npc_prof_blacksmith", 11145)
+	RegisterLuaBoss("npc_prof_blacksmith", 11176)
+	RegisterLuaBoss("npc_prof_blacksmith", 11146)
+	RegisterLuaBoss("npc_prof_blacksmith", 11178)
+	RegisterLuaBoss("npc_prof_blacksmith", 5164)
+	RegisterLuaBoss("npc_prof_blacksmith", 11177)
+	RegisterLuaBoss("npc_prof_blacksmith", 11191)
+	RegisterLuaBoss("npc_prof_blacksmith", 11192)
+	RegisterLuaBoss("npc_prof_blacksmith", 11193)
+	// npc_prof_tailor (World profession gossip): ported in
+	// lua_scripts/world/npc_prof_tailor.lua — gossip hello/select
+	// learn arms (entries 22213/22208/22212); unlearn arms omitted on
+	// the unbridged EquippedOk leg. Retires the documented-only note
+	// for npc_prof_tailor in
+	// lua_scripts/world/npc_professions_leather_tailor.lua.
+	RegisterLuaBoss("npc_prof_tailor", 22213)
+	RegisterLuaBoss("npc_prof_tailor", 22208)
+	RegisterLuaBoss("npc_prof_tailor", 22212)
 	// boss_nexusprince_shaffar (Mana Tombs, Outland dungeon pass): the
 	// bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO 1) (event 1,
 	// the auriaya precedent), KilledUnit Talk(SAY_SLAY 2) player-gated

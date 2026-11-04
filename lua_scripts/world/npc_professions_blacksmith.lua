@@ -15,7 +15,7 @@
 -- registered below; this file exists so the next sweep does not
 -- re-triage the same arms.
 --
--- CLASS 1: npc_prof_blacksmith (CreatureScript, C++ :409-671)
+-- CLASS 1: npc_prof_blacksmith (CreatureScript, C++ :409-671) -- PORTED 2026-11-04 in lua_scripts/world/npc_prof_blacksmith.lua (learn sides only; unlearn omitted on EquippedOk); the BLOCKED notes below for this class are stale.
 -- Entries: 11145, 11176 (smith-omni), 11146, 11178 (weaponsmith),
 --   5164, 11177 (armorsmith), 11191 (hammer), 11192 (axe), 11193 (sword).
 -- :432 OnGossipHello — quest/vendor/trainer arms (:434-441): creature
