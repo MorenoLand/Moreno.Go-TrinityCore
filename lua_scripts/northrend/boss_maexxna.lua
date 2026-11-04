@@ -148,6 +148,8 @@ local function frenzyPump(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- boss_maexxna.cpp JustEngagedWith schedule.

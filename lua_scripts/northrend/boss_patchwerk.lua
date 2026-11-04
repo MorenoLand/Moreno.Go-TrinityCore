@@ -162,6 +162,8 @@ local function berserkTick(creature, guid)
 end
 
 local function patchwerkEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     enraged[guid] = false
     creature:Talk(SAY_AGGRO)

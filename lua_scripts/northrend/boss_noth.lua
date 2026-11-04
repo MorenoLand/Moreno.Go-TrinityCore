@@ -306,6 +306,8 @@ nothGround = function(creature, guid)
 end
 
 local function nothEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     state[guid] = {
         phase = "none",

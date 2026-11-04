@@ -147,6 +147,8 @@ local function berserkTick(creature, guid)
 end
 
 local function grobbulusEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     schedule(guid, "cloud", 15000, function()
         cloudTick(creature, guid)

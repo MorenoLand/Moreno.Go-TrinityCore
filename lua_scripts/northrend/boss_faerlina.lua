@@ -26,7 +26,7 @@
 -- CreateLuaEvent (the maiden convention), cancelled on 2/4/23.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_faerlina: JustEngagedWith Talk(SAY_AGGRO 1) (event 1; the
--- BossAI::JustEngagedWith instance-bookkeeping leg, summons.
+-- BossAI::JustEngagedWith base arms PORTED (pulse + me-form DoZoneInCombat, base-first); summons.
 -- DoZoneInCombat rides an unbridged leg — tharon_ja precedent; the
 -- EVENT_POISON / EVENT_FIRE / EVENT_FRENZY schedules seed the
 -- CreateLuaEvent machine below); KilledUnit Talk(SAY_SLAY 2) (event 3 —
@@ -214,6 +214,8 @@ local function frenzyTick(creature, guid)
 end
 
 local function faerlinaEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

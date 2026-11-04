@@ -206,6 +206,7 @@ local function shoutTick(creature, guid)
 end
 
 local function razyviousEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan precedent)
     creature:SetCombatMovement(false) -- Reset arm, boss_razuvious.cpp:169 (ranged AI stands and casts)
     creature:StopMoving() -- boss_razuvious.cpp:123 (the summons.DoZoneInCombat

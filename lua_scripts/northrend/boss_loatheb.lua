@@ -146,6 +146,7 @@ local function sporeTick(creature, guid)
 end
 
 local function loathebEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan precedent)
     local guid = creature:GetGUID()
     doomCounter[guid] = 0

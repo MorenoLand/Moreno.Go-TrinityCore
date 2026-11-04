@@ -178,6 +178,8 @@ end
 -- (randtime 16s,22s), EVENT_DECIMATE (randtime 110s,120s),
 -- EVENT_BERSERK (8min). No aggro Talk in C++.
 local function gluthEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "decimate", {110000, 120000}, function()

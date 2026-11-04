@@ -184,6 +184,7 @@ local function heiganEnterCombat(event, creature, target)
     -- C++ BossAI::JustEngagedWith (ScriptedCreature.cpp:542) zones
     -- the map into combat before the Talk + schedules below; the
     -- instance SetBossState / CheckRequiredBosses legs stay out.
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
