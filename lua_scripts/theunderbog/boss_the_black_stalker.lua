@@ -51,11 +51,10 @@
 -- threat-list unit with the threat head skipped or victim
 -- fallback, EngageWithTarget
 -- — skyriss ev19 precedent; Go spell-summon funnel fires ev19
--- on the caster). OnDied(4): cleanup (the
--- Striders.DespawnAll arm is summon-bridgeless, steamrigger
--- precedent). OnLeaveCombat(2)/OnReset(23): cancel the pump,
--- drop per-GUID state (the _Reset arm is instance-blocked;
--- the Reset() Striders.DespawnAll arm is summon-bridgeless).
+-- on the caster). OnDied(4)/OnLeaveCombat(2)/OnReset(23):
+-- Striders.DespawnAll PORTED via the latched-object table below
+-- (ionar spark idiom; the stale summon-bridgeless claim is
+-- retracted — ev19 passes the summoned object itself).
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (instance_the_underbog.cpp stays blocked on the
@@ -90,6 +89,7 @@ local ENTRY_SPORE_STRIDER = 22299
 
 local timers = {}
 local states = {}
+local striders = {}
 
 local function cancelPump(guid)
     local id = timers[guid]
@@ -102,6 +102,19 @@ end
 local function resetBoss(guid)
     cancelPump(guid)
     states[guid] = nil
+end
+
+-- C++ Reset (:85-89) + JustDied (:109-111) Striders.DespawnAll:
+-- the ev19 handler below latches each spore strider object (ionar
+-- spark idiom); Despawn() on an already-gone motion is a nil no-op.
+local function despawnStriders(guid)
+    local list = striders[guid]
+    if list then
+        for _, strider in pairs(list) do
+            strider:Despawn()
+        end
+        striders[guid] = nil
+    end
 end
 
 -- C++ SelectTarget(Random, 0) (UnitAI.h:170 defaults
@@ -327,14 +340,17 @@ end)
 
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 2, function(_, creature)
     resetBoss(creature:GetGUID())
+    despawnStriders(creature:GetGUID())
 end)
 
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 4, function(_, creature)
     resetBoss(creature:GetGUID())
+    despawnStriders(creature:GetGUID())
 end)
 
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 23, function(_, creature)
     resetBoss(creature:GetGUID())
+    despawnStriders(creature:GetGUID())
 end)
 
 -- C++ JustSummoned (boss_the_black_stalker.cpp:109-119):
@@ -346,11 +362,19 @@ end)
 -- spell-summon funnel fires ev19 on the caster
 -- (boss_ai.go:2083-2085, lua_creature_events.go:166), so the
 -- relay fires exactly when a strider materializes; the
--- SummonList tracking/DespawnAll arms stay out (below).
+-- SummonList tracking/DespawnAll arms are PORTED below
+-- (despawnStriders, called from the ev2/ev4/ev23 handlers).
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 19, function(_, creature, summoned)
     if not summoned or summoned:GetEntry() ~= ENTRY_SPORE_STRIDER then
         return
     end
+    local bguid = creature:GetGUID()
+    local list = striders[bguid]
+    if not list then
+        list = {}
+        striders[bguid] = list
+    end
+    list[summoned:GetGUID()] = summoned
     local target = pickThreatTargetSkipFirst(creature)
     if not target then
         target = creature:GetVictim()

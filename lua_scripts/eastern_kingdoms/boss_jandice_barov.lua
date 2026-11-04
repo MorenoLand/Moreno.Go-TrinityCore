@@ -18,7 +18,7 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention). Documented-only (no
--- bridges): the Summons SummonList/DespawnAll tracking only —
+-- bridges): the Summons SummonList/DespawnAll tracking — PORTED below
 -- JustSummoned AttackStart on a random target PORTED 2026-10-24
 -- (see handler below). PORTED 2026-10-24: JustSummoned ApplySpellImmune(0,
 -- IMMUNITY_DAMAGE, MAGIC, true) via event 19 — the 'no summoned
@@ -51,6 +51,7 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
 
 local timers = {}
+local illusions = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -118,6 +119,17 @@ end
 
 local function jandiceBarovResetState(guid)
     cancelTimers(guid)
+    -- C++ Reset (:47-50) + JustDied (:69-71) Summons.DespawnAll, in
+    -- C++ order (despawn before the died handler's journal cast);
+    -- evade reaches here too (CreatureAI::EnterEvadeMode ends in
+    -- Reset, CreatureAI.cpp:214-244). Ionar latched-object idiom.
+    local list = illusions[guid]
+    if list then
+        for _, illusion in pairs(list) do
+            illusion:Despawn()
+        end
+        illusions[guid] = nil
+    end
 end
 
 local function jandiceBarovEnterCombat(event, creature, target)
@@ -135,8 +147,9 @@ local function jandiceBarovLeaveCombat(event, creature)
     jandiceBarovResetState(creature:GetGUID())
 end
 
--- C++ JustDied: Summons.DespawnAll() (no SummonList bridge) +
--- triggered DoCastSelf(drop journal 26096).
+-- C++ JustDied: Summons.DespawnAll() PORTED via the latched-object
+-- table in jandiceBarovResetState (ionar idiom) + triggered
+-- DoCastSelf(drop journal 26096).
 local function jandiceBarovDied(event, creature, killer)
     jandiceBarovResetState(creature:GetGUID())
     creature:CastSpell(creature, SPELL_DROP_JOURNAL, true)
@@ -166,6 +179,13 @@ local function jandiceJustSummoned(event, creature, summon)
         summon:EngageWithTarget(alive[math.random(#alive)])
     end
     summon:ApplySpellImmune(0, IMMUNITY_OP_DAMAGE, SPELL_SCHOOL_MASK_MAGIC, true)
+    local guid = creature:GetGUID()
+    local list = illusions[guid]
+    if not list then
+        list = {}
+        illusions[guid] = list
+    end
+    list[summon:GetGUID()] = summon
 end
 
 RegisterCreatureEvent(ENTRY_JANDICE_BAROV, 1, jandiceBarovEnterCombat)

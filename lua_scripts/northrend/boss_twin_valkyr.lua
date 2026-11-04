@@ -186,6 +186,21 @@
 local ENTRY_FJOLA = 34497
 local ENTRY_EYDIS = 34496
 local NPC_BULLET_CONTROLLER = 34743
+local controllers = {}
+
+-- C++ JustDied (:238-262) ends with the unconditional
+-- summons.DespawnAll(): Fjola's list holds the bullet controller
+-- summoned on engage (boss_twin_baseAI latch); Eydis summons
+-- nothing, so this is a no-op for her. BossAI Reset (:499-507)
+-- and evade (CreatureAI::EnterEvadeMode ends in Reset) despawn it
+-- too, so the reset/leave handlers call this as well.
+local function despawnController(guid)
+    local controller = controllers[guid]
+    if controller then
+        controller:Despawn()
+        controllers[guid] = nil
+    end
+end
 -- NPC_BULLET_CONTROLLER (boss_twin_valkyr.cpp:60) — summoned by Fjola's
 -- JustEngagedWith (:446) at ToCCommonLoc[1] (Center: 563.673/139.571/
 -- 393.837, trial_of_the_crusader.cpp:184-190), TEMPSUMMON_MANUAL_DESPAWN.
@@ -341,7 +356,7 @@ local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras,
         -- boss_twin_baseAI engage legs (Talk + surge below) — C++-exact;
         -- Fjola-only (eydis AI has no summon).
         if creature:GetEntry() == ENTRY_FJOLA then
-            creature:SummonCreature(NPC_BULLET_CONTROLLER, 563.672974, 139.571, 393.837006, 0.0, 7, 0)
+            controllers[creature:GetGUID()] = creature:SummonCreature(NPC_BULLET_CONTROLLER, 563.672974, 139.571, 393.837006, 0.0, 7, 0)
         end
         -- C++ boss_twin_baseAI::JustEngagedWith first arm (:268, PORTED
         -- 2026-10-23 — DoZoneInCombat bridge live,
@@ -388,6 +403,7 @@ end
 local function makeLeaveCombat()
     return function(event, creature)
         cancelTimers(creature:GetGUID())
+        despawnController(creature:GetGUID())
     end
 end
 
@@ -414,8 +430,7 @@ local function died(event, creature, killer)
         creature:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
         sister:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
         -- C++ JustDied :248 — events.Reset() is the cancelTimers(guid)
-        -- at the top, summons.DespawnAll() is a no-op,
-        -- instance->SetBossState(DATA_TWIN_VALKIRIES, DONE) has no
+        -- at the top, instance->SetBossState(DATA_TWIN_VALKIRIES, DONE) has no
         -- instance bridge; HandleRemoveAuras() ports via
         -- stripHelperAuras (C++ order kept).
         stripHelperAuras(creature)
@@ -425,10 +440,14 @@ local function died(event, creature, killer)
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
     end
     -- Sister not found: C++ takes neither flag branch (Talk only).
+    -- C++ JustDied's trailing unconditional summons.DespawnAll()
+    -- (:258) runs after the sister branches, whatever they took.
+    despawnController(creature:GetGUID())
 end
 
 local function reset(event, creature)
     cancelTimers(creature:GetGUID())
+    despawnController(creature:GetGUID())
     -- boss_fjolaAI::Reset :392 / boss_eydisAI::Reset :499 — unconditional
     -- SetEquipmentSlots(false, EQUIP_MAIN_*, EQUIP_UNEQUIP, EQUIP_NO_CHANGE):
     -- creature:SetEquipmentSlots is bridged on the event surface.

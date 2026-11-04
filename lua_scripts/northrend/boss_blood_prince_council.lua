@@ -212,6 +212,27 @@ local ENTRY_KELESETH = 37972
 local ENTRY_TALDARAM = 37973
 local ENTRY_VALANAR = 37970
 local ENTRY_KINETIC_BOMB = 38454 -- icecrown_citadel.h:254 (NPC_KINETIC_BOMB)
+local ENTRY_KINETIC_BOMB_TARGET = 38458 -- icecrown_citadel.h:253 (NPC_KINETIC_BOMB_TARGET)
+local ENTRY_SHOCK_VORTEX = 38422 -- icecrown_citadel.h:255 (NPC_SHOCK_VORTEX)
+
+-- C++ BloodPrincesBossAI::JustDied (:466-469) + Reset (:443-446):
+-- summons.DespawnAll(); Valanar's JustSummoned (:770-800) latches
+-- every summon (bomb targets, bombs, shock vortices) via the
+-- trailing summons.Summon, so the ev19 handler below tracks them
+-- (ionar idiom) and the died/reset/leave handlers despawn them.
+-- Keleseth/Taldaram summons are NOT Lua-tracked (no ev19 handlers
+-- for them), so their DespawnAll legs stay out on this axis.
+local valanarSummons = {}
+
+local function despawnValanarSummons(guid)
+    local list = valanarSummons[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        valanarSummons[guid] = nil
+    end
+end
 local ENTRY_DARK_NUCLEUS = 38369 -- icecrown_citadel.h:250 (NPC_DARK_NUCLEUS)
 local ENTRY_BLOOD_ORB_CONTROLLER = 38008 -- icecrown_citadel.h:248 (NPC_BLOOD_ORB_CONTROLLER)
 
@@ -574,15 +595,18 @@ end
 -- no cross-AI SetData bridge. All three dropped, documented.
 local function princesJustDied(event, creature)
     cancelTimers(creature:GetGUID())
+    despawnValanarSummons(creature:GetGUID())
     creature:Talk(DEATH_TEXT[creature:GetEntry()])
 end
 
 local function princesLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    despawnValanarSummons(creature:GetGUID())
 end
 
 local function princesReset(event, creature)
     cancelTimers(creature:GetGUID())
+    despawnValanarSummons(creature:GetGUID())
     creature:SetCombatPulseDelay(0) -- boss_blood_prince_council.cpp:447 (base Reset arm; pulse disable)
     creature:RemoveFlag(59, 0x100) -- boss_blood_prince_council.cpp:449 (base Reset arm; SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC)
     creature:SetHealth(1) -- boss_blood_prince_council.cpp:451 (base Reset arm; SetHealth(_spawnHealth), _spawnHealth = 1 per InitializeAI :438)
@@ -597,6 +621,16 @@ end
 local function valanarJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == ENTRY_KINETIC_BOMB then
         summoned:RemoveFlag(59, 0x02000000) -- UNIT_FLAG_NOT_SELECTABLE
+    end
+    local entry = summoned:GetEntry()
+    if entry == ENTRY_KINETIC_BOMB_TARGET or entry == ENTRY_KINETIC_BOMB or entry == ENTRY_SHOCK_VORTEX then
+        local guid = creature:GetGUID()
+        local list = valanarSummons[guid]
+        if not list then
+            list = {}
+            valanarSummons[guid] = list
+        end
+        list[summoned:GetGUID()] = summoned
     end
 end
 
