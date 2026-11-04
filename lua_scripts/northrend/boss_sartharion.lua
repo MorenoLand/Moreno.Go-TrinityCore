@@ -229,8 +229,9 @@ local function lavaChurnTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith (setActive /
--- CheckRequiredBosses / SetBossState IN_PROGRESS) + Talk(AGGRO)
+-- C++ JustEngagedWith: Talk(AGGRO) + BossAI::JustEngagedWith (setActive /
+-- CheckRequiredBosses / SetBossState IN_PROGRESS + SetCombatPulseDelay(5)
+-- PORTED 2026-11-03; base me-form DoZoneInCombat subsumed by the :170 call)
 -- + DoZoneInCombat (PORTED 2026-10-23 — creature:DoZoneInCombat, the old
 -- "no bridge" claim was stale; bridge live at
 -- engine/world/lua_creature_events.go:426) + FetchDragons (drake power-aura casts, loot
@@ -242,6 +243,7 @@ end
 -- No cross-AI SetData bridge and the target AIs are unported — dropped, documented.
 local function sartharionEnterCombat(event, creature, target)
     creature:Talk(SAY_SARTHARION_AGGRO)
+    creature:SetCombatPulseDelay(5) -- boss_sartharion.cpp:169 (BossAI base arm; setActive/instance legs have no bridge)
     creature:DoZoneInCombat() -- C++ :170, in arm order after Talk (live bridge lua_creature_events.go; 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
