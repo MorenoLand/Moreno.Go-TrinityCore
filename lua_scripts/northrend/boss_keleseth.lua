@@ -156,6 +156,24 @@ local function cancelTimers(guid)
     end
 end
 
+-- C++ boss_kelesethAI has no JustSummoned override, so default
+-- BossAI::JustSummoned latches every me->SummonCreature skeleton
+-- (EVENT_SUMMON_SKELETONS, 4x NPC_SKELETON); Reset (_Reset) and
+-- JustDied (_JustDied) both summons.DespawnAll(). Frost tombs are
+-- NOT in this list (player-cast summon, not the boss's), so the
+-- ev19 latch filters to ENTRY_SKELETON only.
+local skeletons = {}
+
+local function despawnSkeletons(guid)
+    local list = skeletons[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        skeletons[guid] = nil
+    end
+end
+
 local function schedule(guid, key, delay, fn)
     local per = timers[guid]
     if not per then
@@ -371,19 +389,37 @@ local function kelesethEnterCombat(event, creature, target)
     end)
 end
 
--- C++ JustDied (:165-169): Talk(SAY_DEATH 5) — the sjonnir
--- JustDied-Talk precedent; the _JustDied() passthrough has no bridge.
+-- C++ JustDied (:165-169): _JustDied() summons.DespawnAll() then
+-- Talk(SAY_DEATH 5) — the sjonnir JustDied-Talk precedent; the
+-- despawn leg ports via the ev19 skeleton latch below.
 local function kelesethDied(event, creature, killer)
+    despawnSkeletons(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
 
--- Shared timer wipe for events 2/23.
+-- Shared timer wipe for events 2/23; C++ Reset (_Reset) also
+-- summons.DespawnAll(), so the latched skeletons go with it.
 local function cancelCombatTimers(event, creature)
+    despawnSkeletons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
 end
 
+local function kelesethJustSummoned(_, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_SKELETON then
+        return
+    end
+    local guid = creature:GetGUID()
+    local list = skeletons[guid]
+    if not list then
+        list = {}
+        skeletons[guid] = list
+    end
+    list[summoned:GetGUID()] = summoned
+end
+
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
+RegisterCreatureEvent(ENTRY_KELESETH, 19, kelesethJustSummoned)
 RegisterCreatureEvent(ENTRY_KELESETH, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_KELESETH, 4, kelesethDied)
 RegisterCreatureEvent(ENTRY_KELESETH, 23, cancelCombatTimers)

@@ -106,6 +106,9 @@ local GO_SPHERE_1 = 193093 -- ahnkahet.h:77
 local GO_SPHERE_2 = 193094 -- ahnkahet.h:78
 local GO_PRINCE_TALDARAM_PLATFORM = 193564 -- ahnkahet.h:76
 local NPC_JEDOGA_CONTROLLER = 30181 -- ahnkahet.h:59
+local NPC_FLAME_SPHERE_1 = 30106 -- boss_prince_taldaram.cpp:46
+local NPC_FLAME_SPHERE_2 = 31686 -- boss_prince_taldaram.cpp:47
+local NPC_FLAME_SPHERE_3 = 31687 -- boss_prince_taldaram.cpp:48
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
 local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
@@ -126,6 +129,22 @@ local embraceDamage = {}
 local function clearEmbrace(guid)
     embraceTarget[guid] = nil
     embraceDamage[guid] = nil
+end
+
+-- C++ JustSummoned (:123-141) calls BossAI::JustSummoned, latching
+-- every summon — in this model the conjure-cast flame spheres only
+-- (controllers ride SummonCreatureGroup, no bridge). Reset (_Reset)
+-- and JustDied (_JustDied) both summons.DespawnAll().
+local flameSpheres = {}
+
+local function despawnFlameSpheres(guid)
+    local list = flameSpheres[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        flameSpheres[guid] = nil
+    end
 end
 
 local function cancelTimers(guid)
@@ -236,6 +255,7 @@ end
 
 local function taldaramLeaveCombat(event, creature)
     local guid = creature:GetGUID()
+    despawnFlameSpheres(guid)
     cancelTimers(guid)
     clearEmbrace(guid)
 end
@@ -256,12 +276,14 @@ local function taldaramDied(event, creature, killer)
     cancelTimers(guid)
     clearEmbrace(guid)
     creature:Talk(SAY_DEATH)
+    despawnFlameSpheres(guid)
 end
 
 local checkSpheres
 
 local function taldaramReset(event, creature)
     local guid = creature:GetGUID()
+    despawnFlameSpheres(guid)
     cancelTimers(guid)
     clearEmbrace(guid)
     -- C++ Reset (:101-112): CheckSpheres() side effect (RemovePrison
@@ -359,6 +381,20 @@ local function onTaldaramSphereGossip(_, _, go)
 end
 
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 1, taldaramEnterCombat)
+RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 19, function(_, creature, summoned)
+    local entry = summoned:GetEntry()
+    if entry ~= NPC_FLAME_SPHERE_1 and entry ~= NPC_FLAME_SPHERE_2
+            and entry ~= NPC_FLAME_SPHERE_3 then
+        return
+    end
+    local guid = creature:GetGUID()
+    local list = flameSpheres[guid]
+    if not list then
+        list = {}
+        flameSpheres[guid] = list
+    end
+    list[summoned:GetGUID()] = summoned
+end)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 2, taldaramLeaveCombat)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 3, taldaramTargetDied)
 RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 4, taldaramDied)

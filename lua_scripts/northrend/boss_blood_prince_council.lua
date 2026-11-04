@@ -214,14 +214,18 @@ local ENTRY_VALANAR = 37970
 local ENTRY_KINETIC_BOMB = 38454 -- icecrown_citadel.h:254 (NPC_KINETIC_BOMB)
 local ENTRY_KINETIC_BOMB_TARGET = 38458 -- icecrown_citadel.h:253 (NPC_KINETIC_BOMB_TARGET)
 local ENTRY_SHOCK_VORTEX = 38422 -- icecrown_citadel.h:255 (NPC_SHOCK_VORTEX)
+local ENTRY_BALL_OF_INFERNO_FLAME = 38451 -- icecrown_citadel.h:251 (NPC_BALL_OF_INFERNO_FLAME)
 
 -- C++ BloodPrincesBossAI::JustDied (:466-469) + Reset (:443-446):
 -- summons.DespawnAll(); Valanar's JustSummoned (:770-800) latches
 -- every summon (bomb targets, bombs, shock vortices) via the
 -- trailing summons.Summon, so the ev19 handler below tracks them
 -- (ionar idiom) and the died/reset/leave handlers despawn them.
--- Keleseth/Taldaram summons are NOT Lua-tracked (no ev19 handlers
--- for them), so their DespawnAll legs stay out on this axis.
+-- Keleseth's JustSummoned (:634-642) latches every summon (dark
+-- nuclei from SHADOW_RESONANCE) and Taldaram's (:697-710) latches
+-- every summon (inferno balls from CONJURE_FLAME), so their ev19
+-- handlers track them the same way and the shared died/reset/
+-- leave handlers despawn them.
 local valanarSummons = {}
 
 local function despawnValanarSummons(guid)
@@ -231,6 +235,30 @@ local function despawnValanarSummons(guid)
             summon:Despawn()
         end
         valanarSummons[guid] = nil
+    end
+end
+
+local kelesethSummons = {}
+
+local function despawnKelesethSummons(guid)
+    local list = kelesethSummons[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        kelesethSummons[guid] = nil
+    end
+end
+
+local taldaramSummons = {}
+
+local function despawnTaldaramSummons(guid)
+    local list = taldaramSummons[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        taldaramSummons[guid] = nil
     end
 end
 local ENTRY_DARK_NUCLEUS = 38369 -- icecrown_citadel.h:250 (NPC_DARK_NUCLEUS)
@@ -596,17 +624,23 @@ end
 local function princesJustDied(event, creature)
     cancelTimers(creature:GetGUID())
     despawnValanarSummons(creature:GetGUID())
+    despawnKelesethSummons(creature:GetGUID())
+    despawnTaldaramSummons(creature:GetGUID())
     creature:Talk(DEATH_TEXT[creature:GetEntry()])
 end
 
 local function princesLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
     despawnValanarSummons(creature:GetGUID())
+    despawnKelesethSummons(creature:GetGUID())
+    despawnTaldaramSummons(creature:GetGUID())
 end
 
 local function princesReset(event, creature)
     cancelTimers(creature:GetGUID())
     despawnValanarSummons(creature:GetGUID())
+    despawnKelesethSummons(creature:GetGUID())
+    despawnTaldaramSummons(creature:GetGUID())
     creature:SetCombatPulseDelay(0) -- boss_blood_prince_council.cpp:447 (base Reset arm; pulse disable)
     creature:RemoveFlag(59, 0x100) -- boss_blood_prince_council.cpp:449 (base Reset arm; SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC)
     creature:SetHealth(1) -- boss_blood_prince_council.cpp:451 (base Reset arm; SetHealth(_spawnHealth), _spawnHealth = 1 per InitializeAI :438)
@@ -638,6 +672,30 @@ RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
 RegisterCreatureEvent(ENTRY_TALDARAM, 1, taldaramEnterCombat)
 RegisterCreatureEvent(ENTRY_VALANAR, 1, valanarEnterCombat)
 RegisterCreatureEvent(ENTRY_VALANAR, 19, valanarJustSummoned)
+RegisterCreatureEvent(ENTRY_KELESETH, 19, function(_, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_DARK_NUCLEUS then
+        return
+    end
+    local guid = creature:GetGUID()
+    local list = kelesethSummons[guid]
+    if not list then
+        list = {}
+        kelesethSummons[guid] = list
+    end
+    list[summoned:GetGUID()] = summoned
+end)
+RegisterCreatureEvent(ENTRY_TALDARAM, 19, function(_, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_BALL_OF_INFERNO_FLAME then
+        return
+    end
+    local guid = creature:GetGUID()
+    local list = taldaramSummons[guid]
+    if not list then
+        list = {}
+        taldaramSummons[guid] = list
+    end
+    list[summoned:GetGUID()] = summoned
+end)
 
 RegisterCreatureEvent(ENTRY_KELESETH, 2, princesLeaveCombat)
 RegisterCreatureEvent(ENTRY_TALDARAM, 2, princesLeaveCombat)
