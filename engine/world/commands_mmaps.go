@@ -3,7 +3,9 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 )
 
 // mmaps command port: mmaps_commandscript (cs_mmaps.cpp), the "mmap" root
@@ -44,9 +46,12 @@ import (
 //   - `loadedtiles` has no Go bridge: dtNavMesh is unbuilt. The C++ handler
 //     (cs_mmaps.cpp:207) reports the navmesh as missing before printing
 //     anything, so the Go arm emits exactly that line.
-//   - `testarea` has no Go bridge: the creature range search
-//     (Cell::VisitGridObjects) and PathGenerator are unbuilt, so no creatures
-//     can be located. The arm reports the C++-exact empty-search result.
+//   - `testarea` is partially native: the creature range search runs over
+//     the live motion map (same map + instance, alive only, 40yd 3D — the
+//     AnyUnitInObjectRangeCheck terms, GridNotifiers.h:1050-1055), but
+//     PathGenerator/dtNavMesh are unbuilt, so no path is actually computed:
+//     the paths count mirrors C++'s unconditional per-creature attempt
+//     count (cs_mmaps.cpp:301-305) over the measured sweep time.
 //
 // Console-vs-chat branches are moot (Go commands are always sessioned).
 
@@ -170,12 +175,38 @@ func (s *session) handleMmapStatsCommand(ctx context.Context) {
 }
 
 // handleMmapTestAreaCommand mirrors HandleMmapTestArea (cs_mmaps.cpp:280-312,
-// RBAC 541). Documented-blocked: the creature range search
-// (Cell::VisitGridObjects) and PathGenerator have no Go bridge, so no
-// creatures can be located; report the C++-exact empty-search result.
+// RBAC 541): creatures within 40 yards of the invoker (alive only, same map
+// + instance — the AnyUnitInObjectRangeCheck terms), then one path
+// generation per creature. PathGenerator has no Go bridge, so the paths
+// count is C++'s per-creature attempt count, not computed paths.
 func (s *session) handleMmapTestAreaCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMMapTestArea) {
 		return
 	}
-	s.sendSysMessage("No creatures in 40.000000 yard range.")
+	if s.player == nil {
+		s.sendSysMessage("You must be in game to use that command.")
+		return
+	}
+	const radius = 40.0
+	start := time.Now()
+	count := 0
+	if s.server != nil {
+		s.server.motionMu.Lock()
+		for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+			if m == nil || m.Health == 0 {
+				continue // C++ IsAlive(): Go's health-based alive read (lua_objects.go IsAlive)
+			}
+			dx, dy, dz := float64(m.X-s.player.X), float64(m.Y-s.player.Y), float64(m.Z-s.player.Z)
+			if math.Sqrt(dx*dx+dy*dy+dz*dz) <= radius {
+				count++
+			}
+		}
+		s.server.motionMu.Unlock()
+	}
+	if count == 0 {
+		s.sendSysMessage("No creatures in 40.000000 yard range.")
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Found %d Creatures.", count))
+	s.sendSysMessage(fmt.Sprintf("Generated %d paths in %d ms", count, time.Since(start).Milliseconds()))
 }

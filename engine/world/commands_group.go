@@ -567,8 +567,10 @@ func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
 		if s.characterTargetLowerSecurity(ctx, characterTarget{online: player, guid: player.playerGUID, name: player.player.Name}) {
 			continue // C++ HasLowerSecurity: silent fail
 		}
-		// Player::IsBeingTeleported has no Go bridge; teleportTo is the
-		// single re-entrant path (documented gap vs LANG_IS_TELEPORTED (102)).
+		if player.isBeingTeleported() {
+			s.sendSysMessage(fmt.Sprintf(miscIsTeleported, miscPlayerLink(player.player.Name))) // LANG_IS_TELEPORTED (102)
+			continue
+		}
 		if toInstance {
 			playerMapID := player.player.Map
 			instanceable := false

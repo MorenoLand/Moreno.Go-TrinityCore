@@ -183,6 +183,9 @@ const permissionSilentlyJoinChannel uint32 = 45
 // permissionChangeChannelNotModerator mirrors rbac::RBAC_PERM_CHANGE_CHANNEL_NOT_MODERATOR (RBAC.h:99).
 const permissionChangeChannelNotModerator uint32 = 46
 
+// permissionCheckForLowerSecurity mirrors rbac::RBAC_PERM_CHECK_FOR_LOWER_SECURITY (RBAC.h:100).
+const permissionCheckForLowerSecurity uint32 = 47
+
 const permissionWhoSeeAllSecurityLevels uint32 = 35
 
 // permissionAllowGMFriend mirrors rbac::RBAC_PERM_ALLOW_GM_FRIEND (RBAC.h:93).

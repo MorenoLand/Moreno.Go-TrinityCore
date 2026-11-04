@@ -173,6 +173,15 @@ func (s *session) sendPlayerValuesUpdate(fields map[int]uint32) {
 	s.server.broadcastPlayerValuesUpdateFromSession(s, fields)
 }
 
+// isBeingTeleported mirrors Player::IsBeingTeleported (Player.h:1748):
+// either semaphore set. The near semaphore is Go's nearTeleportPending
+// (set by teleportTo, cleared by the move-teleport ack); the far semaphore
+// is farTeleportPending (set by the far branch, cleared when the world
+// port completes).
+func (s *session) isBeingTeleported() bool {
+	return s.nearTeleportPending || s.farTeleportPending
+}
+
 // teleportTo runs a full near/far teleport. A far teleport detaches the
 // player from their transport (Player::TeleportTo, Player.cpp:1711-1716 —
 // RemovePassenger unless TELE_TO_NOT_LEAVE_TRANSPORT); use
@@ -697,7 +706,11 @@ func (s *session) handleCmdGMChat(ctx context.Context, args []string) {
 	}
 }
 
-// handleCmdGMFly mirrors HandleGMFlyCommand (cs_gm.cpp:107).
+// handleCmdGMFly mirrors HandleGMFlyCommand (cs_gm.cpp:96, plain bool arg).
+// The C++ dispatcher never runs the handler on a missing arg: bool rides
+// the integral ArgInfo (ChatCommandArgs.h:53-56), whose empty token returns
+// nullopt, so the dispatcher prints command help instead. A missing arg
+// therefore reports syntax rather than enabling fly (the old Go default).
 // Fidelity gap: the C++ broadcasts the SMSG_MOVE_SET/UNSET_CAN_FLY packet
 // via SendMessageToSet; the Go setFlyMode writes to the target session only.
 func (s *session) handleCmdGMFly(ctx context.Context, args []string) {
@@ -705,14 +718,14 @@ func (s *session) handleCmdGMFly(ctx context.Context, args []string) {
 		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
-	enable := true
-	if len(args) > 0 {
-		var ok bool
-		enable, ok = cheatArgBool(args[0])
-		if !ok {
-			s.sendSysMessage("Syntax: .gm fly [on|off]")
-			return
-		}
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .gm fly [on|off]")
+		return
+	}
+	enable, ok := cheatArgBool(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .gm fly [on|off]")
+		return
 	}
 	// getSelectedPlayer: own player when nothing is targeted; the C++ falls
 	// back to the handler's own player when the selection resolves null.
@@ -2978,15 +2991,31 @@ func (s *session) handleCharacterRename(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Renamed player %s to %s.", t.name, newName))
 }
 
-// characterTargetLowerSecurity mirrors ChatHandler::HasLowerSecurity for the
-// rename path: the command fails when the target's account outranks the
-// handler's security level.
+// characterTargetLowerSecurity mirrors ChatHandler::HasLowerSecurity
+// (Chat.cpp:54-102): the command fails when the target's account outranks
+// the handler's security level. Three C++ legs: the RBAC bypass (a handler
+// holding RBAC_PERM_CHECK_FOR_LOWER_SECURITY skips a non-strong check when
+// CONFIG_GM_LOWER_SECURITY is off — Go has no such config, and C++
+// defaults it off at World.cpp:1025, so the bypass applies whenever the
+// permission is held); the realm-specific account lookup (already inside
+// accountSecurityLevel: RealmID or -1); and the unresolvable-target fail
+// (no session and no account row fails the command, it does not
+// silently allow it as a security-0 target).
 func (s *session) characterTargetLowerSecurity(ctx context.Context, t characterTarget) bool {
+	if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil && s.authed {
+		if granted, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionCheckForLowerSecurity); err == nil && granted {
+			return false
+		}
+	}
 	var accountID uint32
 	if t.online != nil {
 		accountID = t.online.accountID
 	} else if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", t.guid).Scan(&accountID)
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", t.guid).Scan(&accountID); err != nil {
+			return true
+		}
+	} else {
+		return true
 	}
 	return s.security < s.accountSecurityLevel(ctx, accountID)
 }

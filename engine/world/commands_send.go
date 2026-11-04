@@ -297,6 +297,14 @@ func (s *session) handleSendMessageCmd(ctx context.Context, args []string) {
 		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
 		return
 	}
+	// WorldSession::isLogingOut (WorldSession.h:456) is _logoutTime or
+	// m_playerLogout: Go's pending-logout countdown (logoutAt) or the
+	// logout body itself (loggingOut). C++ reports the refusal as
+	// player-not-found, not as a logout notice.
+	if !target.logoutAt.IsZero() || target.loggingOut {
+		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
+		return
+	}
 	msg := strings.Join(args[1:], " ")
 	// == WorldSession::SendAreaTriggerMessage (MiscHandler.cpp:628): message
 	// first, then the administrator tag (cs_send.cpp:273-274).

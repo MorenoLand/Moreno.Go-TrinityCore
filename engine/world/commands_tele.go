@@ -40,9 +40,7 @@ import (
 // ObjectMgr.cpp:9020).
 //
 // Documented fidelity gaps (not stubs): Player::SaveRecallPosition has no Go
-// bridge (same gap as goDoTeleport, cs_go.cpp:73); Player::IsBeingTeleported
-// has no Go bridge, so teleportTo is the single re-entrant path (as in the
-// group summon port); the zone column written by Player::SavePositionInDB
+// bridge (same gap as goDoTeleport, cs_go.cpp:73); the zone column written by Player::SavePositionInDB
 // is not rewritten (sMapMgr::GetZoneId has no Go bridge); a name miss in
 // teleResolveTele reports the LANG_COMMAND_TELE_NOTFOUND (164) stand-in —
 // C++ reports LANG_CMDPARSER_GAME_TELE_NO_EXIST (1512) whose enUS text is
@@ -255,6 +253,10 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 		if s.characterTargetLowerSecurity(ctx, characterTarget{online: target, guid: guid, name: name}) {
 			return // C++ HasLowerSecurity: silent fail
 		}
+		if target.isBeingTeleported() {
+			s.sendSysMessage(fmt.Sprintf(miscIsTeleported, miscPlayerLink(name))) // LANG_IS_TELEPORTED (102)
+			return
+		}
 		s.sendSysMessage(fmt.Sprintf("Teleporting %s to %s.", miscPlayerLink(name), tele.name)) // LANG_TELEPORTING_TO (110)
 		// needReportToTarget: the C++ visibility check has no Go bridge, so
 		// every other player is told (as in the group summon port).
@@ -379,6 +381,10 @@ func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
 		if s.characterTargetLowerSecurity(ctx, characterTarget{online: player, guid: player.playerGUID, name: player.player.Name}) {
 			return // C++ HasLowerSecurity: aborts the whole command
 		}
+		if player.isBeingTeleported() {
+			s.sendSysMessage(fmt.Sprintf(miscIsTeleported, miscPlayerLink(player.player.Name))) // LANG_IS_TELEPORTED (102)
+			continue
+		}
 		s.sendSysMessage(fmt.Sprintf("Teleporting %s to %s.", miscPlayerLink(player.player.Name), tele.name)) // LANG_TELEPORTING_TO (110)
 		// The C++ reports with the selected player's link (cs_tele.cpp:248);
 		// needReportToTarget's visibility check has no Go bridge, so every
@@ -391,7 +397,6 @@ func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
 		} else {
 			player.saveRecallPosition() // C++ SaveRecallPosition: save only in non-flight case
 		}
-		// Player::IsBeingTeleported has no Go bridge (same gap as the group summon port).
 		player.teleportTo(tele.mapID, tele.x, tele.y, tele.z, tele.o)
 	}
 }
