@@ -94,8 +94,11 @@
 -- instance/grid bridges; no Talk arms.
 -- EnterEvadeMode (:214-218) — SendEncounterUnit disengage + BossAI
 -- leg — no bridge.
--- The UNIT_STATE_CASTING gates and the DoMeleeAttackIfReady tail
--- have no bridges.
+-- The UNIT_STATE_CASTING gates (boss own UpdateAI pre-loop :227 +
+-- in-loop :268; sentry pre-loop :311 + in-loop :335) are PORTED as a
+-- 500ms IsCasting defer in every timer tick (mal_ganis idiom;
+-- IsCasting bridged lua_creature_events.go:1950); the
+-- DoMeleeAttackIfReady tail has no bridge.
 -- npc_feral_defender — the whole machine is phase-gated
 -- (PHASE_NONE/PHASE_COMBAT :111-112) and its timer legs
 -- (EVENT_RUSH :389-393, EVENT_START_COMBAT :384, respawn chain
@@ -208,6 +211,12 @@ end
 -- (SPELL_SONIC_SCREECH 64422) (2-arg non-triggered), 48s init
 -- (:165), re-arm {22s,30s}.
 local function sonicScreechTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sonic", 500, function()
+            sonicScreechTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SONIC_SCREECH)
     schedule(guid, "sonic", {22000, 30000}, function()
         sonicScreechTick(creature, guid)
@@ -218,7 +227,13 @@ end
 -- lowers to self-cast creature:CastSpell(creature, spell)
 -- (non-triggered); fires 1ms after EVENT_TERRIFYING_SCREECH, no
 -- re-arm.
-local function blastTick(creature)
+local function blastTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blast", 500, function()
+            blastTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SENTINEL_BLAST)
 end
 
@@ -226,10 +241,16 @@ end
 -- DoCastSelf(SPELL_TERRIFYING_SCREECH 64386) (2-arg non-triggered)
 -- + EVENT_BLAST in 1ms (:241); 38s init (:166), re-arm {36s,45s}.
 local function terrifyingScreechTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "terrifying", 500, function()
+            terrifyingScreechTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_FEAR)
     creature:CastSpell(creature, SPELL_TERRIFYING_SCREECH)
     schedule(guid, "blast", 1, function()
-        blastTick(creature)
+        blastTick(creature, guid)
     end)
     schedule(guid, "terrifying", {36000, 45000}, function()
         terrifyingScreechTick(creature, guid)
@@ -239,7 +260,13 @@ end
 -- C++ EVENT_ACTIVATE_DEFENDER (:252-253): DoCastSelf
 -- (SPELL_ACTIVATE_DEFENDER 64449) (2-arg non-triggered); fires 2s
 -- after EVENT_SUMMON_DEFENDER, no re-arm.
-local function activateDefenderTick(creature)
+local function activateDefenderTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "activatedefender", 500, function()
+            activateDefenderTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ACTIVATE_DEFENDER)
 end
 
@@ -248,10 +275,16 @@ end
 -- + EVENT_ACTIVATE_DEFENDER in 2s (:250); 60s init (:167), no
 -- re-arm.
 local function summonDefenderTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summondefender", 500, function()
+            summonDefenderTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_DEFENDER)
     creature:CastSpell(creature, SPELL_DEFENDER_TRIGGER)
     schedule(guid, "activatedefender", 2000, function()
-        activateDefenderTick(creature)
+        activateDefenderTick(creature, guid)
     end)
 end
 
@@ -264,6 +297,12 @@ end
 -- twilight-corrupter precedent); the old "needs target search, and
 -- it is a summon leg; no bridges either way" claim was stale.
 local function swarmingGuardianTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "swarming", 500, function()
+            swarmingGuardianTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:CastSpell(target, SPELL_SUMMON_SWARMING_GUARDIAN)
@@ -275,7 +314,13 @@ end
 
 -- C++ EVENT_BERSERK (:260-262): DoCastSelf(SPELL_BERSERK 47008,
 -- TRIGGERED) + Talk(SAY_BERSERK 2); 600s init (:169), no re-arm.
-local function berserkTick(creature)
+local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK, true)
     creature:Talk(SAY_BERSERK)
 end
@@ -302,7 +347,7 @@ local function auriayaEnterCombat(event, creature, target)
         swarmingGuardianTick(creature, guid)
     end)
     schedule(guid, "berserk", 600000, function()
-        berserkTick(creature)
+        berserkTick(creature, guid)
     end)
 end
 
@@ -325,6 +370,12 @@ end
 -- DoCastVictim(SPELL_RIP_FLESH 64375) (2-arg non-triggered), 6s
 -- init (:293), re-arm {10s,12s}.
 local function ripTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rip", 500, function()
+            ripTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_RIP_FLESH)
     schedule(guid, "rip", {10000, 12000}, function()
         ripTick(creature, guid)
@@ -341,6 +392,12 @@ end
 -- Cats band twin: C++ GetDistance subtracts both reaches (Object.cpp:1169);
 -- player pool, reach 1.5, reach-exact.
 local function savagePounceTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pounce", 500, function()
+            savagePounceTick(creature, guid)
+        end)
+        return
+    end
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead() then

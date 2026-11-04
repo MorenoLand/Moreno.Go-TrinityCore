@@ -39,7 +39,10 @@
 -- The systems_shutdown AuraScript (stun/root + gathering-speed removal) and the
 -- Shutout achievement flag have no bridges — documented. The
 -- ClearUnitState(UNIT_STATE_STUNNED | UNIT_STATE_ROOT) line in EVENT_REPAIR
--- (:435) is likewise unmodeled — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
+-- (:435) is likewise unmodeled (no ClearUnitState bridge); the
+-- UpdateAI CASTING gates (own pre-loop :394 + in-loop :473) are
+-- PORTED as a 500ms IsCasting defer in every ported timer tick
+-- (mal_ganis idiom; IsCasting bridged lua_creature_events.go:1950).
 -- JustDied — Talk(SAY_DEATH 2) (event 4; :331; the _JustDied() passthrough
 -- and the flag/dynflag/npcflag cosmetics have no bridges).
 -- DOCUMENTED-ONLY (no registration beyond entry 33113):
@@ -167,6 +170,12 @@ end
 -- (single-arg DoCast resolves SELF via AISpellInfo default; the
 -- spell script re-selects the target), 1ms init, 35s re-arm.
 local function pursueTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pursue", 500, function()
+            pursueTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_TARGET)
     creature:CastSpell(creature, SPELL_PURSUED)
     schedule(guid, "pursue", 35000, function()
@@ -177,6 +186,12 @@ end
 -- C++ EVENT_MISSILE: DoCast(me, SPELL_MISSILE_BARRAGE 62400, true)
 -- (self-cast TRIGGERED), {1.5s,4s} randtime init, 2s re-arm.
 local function missileTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "missile", 500, function()
+            missileTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MISSILE_BARRAGE, true)
     schedule(guid, "missile", 2000, function()
         missileTick(creature, guid)
@@ -186,6 +201,12 @@ end
 -- C++ EVENT_VENT: DoCastAOE(SPELL_FLAME_VENTS 62396) (non-triggered),
 -- 20s init, 20s re-arm.
 local function ventTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "vent", 500, function()
+            ventTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FLAME_VENTS)
     schedule(guid, "vent", 20000, function()
         ventTick(creature, guid)
@@ -195,6 +216,12 @@ end
 -- C++ EVENT_SPEED: DoCastAOE(SPELL_GATHERING_SPEED 62375) (non-triggered),
 -- 15s init, 15s re-arm.
 local function speedTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "speed", 500, function()
+            speedTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_GATHERING_SPEED)
     schedule(guid, "speed", 15000, function()
         speedTick(creature, guid)
@@ -212,6 +239,12 @@ end
 local shutdownTick
 
 local function repairTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "repair", 500, function()
+            repairTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_REPAIR)
     schedule(guid, "shutdown", 150000, function()
         shutdownTick(creature, guid)
@@ -219,6 +252,12 @@ local function repairTick(creature, guid)
 end
 
 shutdownTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shutdown", 500, function()
+            shutdownTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_OVERLOAD)
     creature:Talk(EMOTE_OVERLOAD)
     creature:CastSpell(creature, SPELL_SYSTEMS_SHUTDOWN, true)

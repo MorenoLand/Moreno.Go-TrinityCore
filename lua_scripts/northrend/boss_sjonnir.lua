@@ -65,8 +65,10 @@
 -- non-triggered, 30s/35s init -> 30s/35s loop — PORTED as
 -- CreateLuaEvent + CastSpell(creature, 51849) (51849’s 2s
 -- periodic trigger of 50841 is spell-data-driven, no script
--- leg). The UNIT_STATE_CASTING gates have no bridge (documented
--- deviation); DoMeleeAttackIfReady is engine-driven.
+-- leg). The UNIT_STATE_CASTING gates (own UpdateAI pre-loop :158 +
+-- in-loop :204) are PORTED as a 500ms IsCasting defer in every timer
+-- tick (mal_ganis idiom; IsCasting bridged lua_creature_events.go:1950);
+-- DoMeleeAttackIfReady is engine-driven.
 -- PORTED: EVENT_SUMMON health-tier (75/50/25%) PipeLocations summon
 -- machine (FORGED_IRON_DWARF 27982 / FORGED_IRON_TROGG 27979 /
 -- MALFORMED_OOZE 27981 / EARTHEN_DWARF 27980,
@@ -182,6 +184,12 @@ end
 -- non-triggered on SelectTarget(Random, 0, 100, true); {3s,8s} init ->
 -- {10s,15s} re-arm, unconditional (outside the target-if).
 local function chainLightningTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chainLightning", 500, function()
+            chainLightningTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTING)
@@ -194,6 +202,12 @@ end
 -- C++ EVENT_STATIC_CHARGE (:173-175): DoCastVictim(50834)
 -- non-triggered, 20s/25s init -> 20s/25s loop.
 local function staticChargeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "staticCharge", 500, function()
+            staticChargeTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_STATIC_CHARGE)
     schedule(guid, "staticCharge", {20000, 25000}, function()
         staticChargeTick(creature, guid)
@@ -204,6 +218,12 @@ end
 -- non-triggered, 30s/35s init -> 30s/35s loop; the 2s periodic
 -- trigger of 50841 is spell-data-driven.
 local function lightningRingTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lightningRing", 500, function()
+            lightningRingTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_LIGHTING_RING)
     schedule(guid, "lightningRing", {30000, 35000}, function()
         lightningRingTick(creature, guid)
@@ -223,6 +243,12 @@ end
 -- 30s death-timer leg is unmodeled (corpse/dead family 4/5/6 starts
 -- its timer at death — documented engine delta).
 local function summonTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summon", 500, function()
+            summonTick(creature, guid)
+        end)
+        return
+    end
     local pipe = PIPE_LOCS[math.random(1, 2)]
     local hp = creature:GetHealthPct()
     local entry = NPC_EARTHEN_DWARF
@@ -242,6 +268,31 @@ end
 -- C++ JustEngagedWith: Talk(AGGRO) + required-bosses gate +
 -- BossAI base arms + ScheduleEvent legs — Talk + base arms ported,
 -- gate leg unbridged.
+-- C++ EVENT_LIGHTNING_SHIELD (:170-172): DoCast(me, 50831)
+-- non-triggered, one-shot 20s/25s, no re-arm; IsCasting defer
+-- (500ms, cast not consumed) per the UpdateAI gates.
+local function lightningShieldTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lightningShield", 500, function()
+            lightningShieldTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_LIGHTING_SHIELD)
+end
+
+-- C++ EVENT_FRENZY (:196-199): DoCast(me, 28747, true) triggered
+-- self-cast, single-fire; IsCasting defer likewise.
+local function frenzyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            frenzyTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_FRENZY, true)
+end
+
 local function sjonnirEnterCombat(event, creature, target)
     -- C++ JustEngagedWith gate-then-base (boss_sjonnir.cpp:98-107):
     -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
@@ -260,7 +311,7 @@ local function sjonnirEnterCombat(event, creature, target)
 -- C++ EVENT_LIGHTNING_SHIELD (:170-172): DoCast(me, 50831)
 -- non-triggered, one-shot 20s/25s, no re-arm.
     schedule(guid, "lightningShield", {20000, 25000}, function()
-        creature:CastSpell(creature, SPELL_LIGHTING_SHIELD)
+        lightningShieldTick(creature, guid)
     end)
     schedule(guid, "staticCharge", {20000, 25000}, function()
         staticChargeTick(creature, guid)
@@ -275,7 +326,7 @@ local function sjonnirEnterCombat(event, creature, target)
 -- C++ EVENT_FRENZY (:196-199): DoCast(me, 28747, true) triggered self-cast,
 -- single-fire (no reschedule in the case), seeded at 5min (:114).
     schedule(guid, "frenzy", 300000, function()
-        creature:CastSpell(creature, SPELL_FRENZY, true)
+        frenzyTick(creature, guid)
     end)
 end
 

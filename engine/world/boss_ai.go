@@ -18604,7 +18604,9 @@ func init() {
 	// SUMMON health-tier pipe summons 27982/27979/27981/27980
 	// (type 6, 30s, 20s re-arm; JustSummoned MovePoint has no
 	// bridge; add AIs unported so summons are inert); FRENZY
-	// triggered self 28747 (one-shot 5min); KilledUnit
+	// triggered self 28747 (one-shot 5min); UpdateAI CASTING gates
+	// (own pre-loop + in-loop) PORTED as 500ms IsCasting defer in all
+	// timer ticks (mal_ganis idiom); KilledUnit
 	// player-gated Talk(SAY_SLAY 1) (event 3 — razuvious
 	// player-gated variant precedent, twenty-first player-gated
 	// variant ported); JustDied Talk(SAY_DEATH 2) (event 4;
@@ -18644,7 +18646,10 @@ func init() {
 	// EVENT_ACTIVATE_DEFENDER 2s, 1min one-shot;
 	// EVENT_ACTIVATE_DEFENDER DoCastSelf 64449 one-shot;
 	// EVENT_BERSERK DoCastSelf 47008 triggered + Talk(SAY_BERSERK 2)
-	// 10min one-shot (cast-before-Talk order kept).
+	// 10min one-shot (cast-before-Talk order kept); UpdateAI CASTING
+	// gates (boss own pre-loop + in-loop; sentry pre-loop + in-loop)
+	// PORTED as 500ms IsCasting defer in all timer ticks (mal_ganis
+	// idiom).
 	// npc_sanctum_sentry (34014 local enum — newly registered):
 	// EVENT_RIP DoCastVictim 64375 6s/{10s,12s}.
 	// Documented-only: Reset / Initialize (_Reset() +
@@ -18696,7 +18701,9 @@ func init() {
 	// spell script selects target) 1ms/35s; EVENT_MISSILE
 	// DoCastSelf 62400 triggered {1.5s,4s}/2s; EVENT_VENT
 	// DoCastAOE-as-self-cast 62396 20s/20s; EVENT_SPEED
-	// DoCastAOE-as-self-cast 62375 15s/15s.
+	// DoCastAOE-as-self-cast 62375 15s/15s; UpdateAI CASTING gates
+	// (own pre-loop :394 + in-loop :473) PORTED as 500ms IsCasting
+	// defer in the ported timer ticks (mal_ganis idiom).
 	// Documented-only: Reset / Initialize / InitializeAI (no
 	// bridges); JustEngagedWith — ActiveTower() picks the aggro
 	// talk conditionally on tower state (ActiveTowers false ->
