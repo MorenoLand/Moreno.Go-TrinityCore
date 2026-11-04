@@ -37,8 +37,9 @@
 -- (20886): OnEnterCombat(1): per-GUID reset to the C++ ctor
 -- / JustEngagedWith values (felfireShock {12s,14s} / knockAway
 -- {11s,12s} / dalliahTaunt = false — the BossAI::JustEngagedWith
--- arm is instance-blocked, DATA_SOCCOTHRATES = 2 is an
--- instance-side constant, unbridgeable; the EVENT_ME_FIRST 6s
+-- instance legs stay blocked, DATA_SOCCOTHRATES = 2 is an
+-- instance-side constant, unbridgeable; the base pulse +
+-- me-zone arms are PORTED in ev1 below; the EVENT_ME_FIRST 6s
 -- one-shot arm is PORTED 2026-10-24 in bossTick) + Talk
 -- (SAY_AGGRO) + 1s scheduler pump (a port of UpdateAI in C++
 -- arm order — 1s granularity exact for all C++ timers; the
@@ -266,6 +267,8 @@ RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 1, function(_, creature)
     local guid = creature:GetGUID()
     resetBoss(guid)
     states[guid] = freshState()
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)

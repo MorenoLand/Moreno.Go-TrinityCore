@@ -33,9 +33,11 @@
 -- (SAY_AGGRO) + 1s scheduler pump (a port of UpdateAI in C++
 -- arm order — 1s granularity exact for all C++ timers; the
 -- !UpdateVictim early return collapses into the pump; the
--- BossAI::JustEngagedWith/JustDied/_Reset arms are instance-
--- blocked, DATA_ZEREKETH = 0 is an instance-side constant,
--- unbridgeable). Pump: void zone 36119 — target = a random
+-- BossAI::JustEngagedWith instance legs (SetBossState/
+-- setActive/ScheduleTasks) + JustDied/_Reset stay blocked,
+-- DATA_ZEREKETH = 0 is an instance-side constant,
+-- unbridgeable; the base pulse + me-zone arms are PORTED
+-- in ev1 below). Pump: void zone 36119 — target = a random
 -- threat-list player within 100 yd after skipping the
 -- top-threat entry (C++ SelectTarget(Random, 1, 100, true),
 -- UnitAI.h:170-197), nil pick casts nothing, non-triggered
@@ -201,6 +203,8 @@ RegisterCreatureEvent(ENTRY_ZEREKETH, 1, function(_, creature)
     local guid = creature:GetGUID()
     resetBoss(guid)
     states[guid] = freshState()
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)

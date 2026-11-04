@@ -35,9 +35,10 @@
 -- Fight shape (C++-exact for all modeled arms): Dalliah
 -- (20885): OnEnterCombat(1): per-GUID reset to the C++
 -- Initialize-equivalent schedule (gift {1s,4s} / whirlwind
--- {7s,9s}; the BossAI::JustEngagedWith arm is instance-
+-- {7s,9s}; the BossAI::JustEngagedWith instance legs stay
 -- blocked, DATA_DALLIAH = 1 is an instance-side constant,
--- unbridgeable) + Talk(SAY_AGGRO) + 1s scheduler pump (a port
+-- unbridgeable; the base pulse + me-zone arms are PORTED
+-- in ev1 below) + Talk(SAY_AGGRO) + 1s scheduler pump (a port
 -- of UpdateAI in C++ arm order — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into
 -- the pump; the soccothratesDeath out-of-combat branch is
@@ -287,6 +288,8 @@ RegisterCreatureEvent(ENTRY_DALLIAH, 1, function(_, creature)
     if creature:IsHeroic() then
         states[guid].shadowWave = 11000 + math.random(0, 4999)
     end
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
     timers[guid] = CreateLuaEvent(function()
         bossTick(creature, guid)
