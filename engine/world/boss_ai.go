@@ -16880,6 +16880,11 @@ func init() {
 	// trollgore_corpse_explode (49555/59807) (no SpellScript/AuraScript
 	// binding bridge — razelikh precedent), and
 	// achievement_consumption_junction.
+	// Cast-state PORTED: own UpdateAI pre-loop + in-loop CASTING gates
+	// — all 4 ported timer arms (crush/infected-wound/consume/
+	// corpse-explode) defer 500ms while casting, no repeat re-arm;
+	// Talk arms ungated per C++; post-loop consumptionJunction latch
+	// stays out (write-only, sole reader unbridged achievement GetData).
 	RegisterLuaBoss("boss_trollgore", 26630)
 
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
@@ -16915,8 +16920,7 @@ func init() {
 	// only after the unbridged DoAction(ACTION_CRYSTAL_HANDLER_DIED)
 	// machine (drak_tharon_keep.h:52) clears the bubble. Documented in
 	// the lua file, not wired: AttackStart DoStartNoMovement (no
-	// movement bridge), the _bubbled UpdateAI gate + the casting-skip
-	// (no unit-state bridge), the CrystalHandlerDied machine incl.
+	// movement bridge), the _bubbled UpdateAI gate, the CrystalHandlerDied machine incl.
 	// Talk(SAY_ARCANE_FIELD 4) (no DoAction bridge — drakkari_colossus
 	// precedent — + cross-AI SetData absent), the MoveInLineOfSight
 	// _ohNovos latch (no grid/MoveInLineOfSight bridge), GetData(
@@ -16927,6 +16931,12 @@ func init() {
 	// SpellScript binding bridge — razelikh precedent), and
 	// achievement_oh_novos (no achievement-criteria bridge — snakes
 	// precedent — + cross-AI GetData absent).
+	// Cast-state CHECKED-NO-GATE: own UpdateAI pre-loop (:147) +
+	// in-loop (:167) CASTING gates guard only the unported
+	// EVENT_ATTACK / EVENT_SUMMON_MINIONS arms (scheduled only after
+	// the unbridged DoAction machine clears the bubble); ported Talk
+	// arms ungated per C++; stale constant-false IsCasting claim
+	// retracted (IsCasting live, lua_creature_events.go:1950).
 	RegisterLuaBoss("boss_novos", 26631)
 
 	// boss_king_dred: Drak'Tharon Keep dungeon boss script, entry 27483
@@ -16940,15 +16950,18 @@ func init() {
 	// EVENT_PIERCING_SLASH DoCastVictim(48878) 15s init, 15s repeat
 	// (the JustEngagedWith schedules are independent — none of the
 	// unmodeled events gate them). JustDied is only _JustDied()
-	// (instance bookkeeping, no bridge) — nothing wired. Documented
-	// in the lua file, not wired: EVENT_BELLOWING_ROAR DoCastAOE(22686)
-	// 33s and EVENT_FEARSOME_ROAR DoCastAOE(48849) 10-20s (no DoCastAOE
-	// bridge — terestian/shazzrah precedent), EVENT_RAPTOR_CALL
-	// (SummonCreature RAND(NPC_DRAKKARI_GUTRIPPER 26641 /
-	// NPC_DRAKKARI_SCYTHECLAW 26628) rides the absent summon STRAND —
-	// the only bridgeable leg is the no-op dummy DoCastVictim(59416),
-	// whose payload is the unbridged summon, so the timer is not
-	// armed), the UpdateAI casting-skip (no unit-state bridge),
+	// (instance bookkeeping, no bridge) — nothing wired. Ported since
+	// (Lua file, 2026-10-24): EVENT_BELLOWING_ROAR DoCastAOE(22686)
+	// self-cast 33s, EVENT_FEARSOME_ROAR DoCastAOE(48849) self-cast
+	// 10-20s (DoCastAOE convention — boss_ai.go "no bridge" claim
+	// stale), EVENT_RAPTOR_CALL dummy + SummonCreature (summon bridge
+	// live) + gutripper/scytheclaw rotation arms. Cast-state PORTED:
+	// own UpdateAI pre-loop (:117) + in-loop (:157) CASTING gates —
+	// all 6 boss timer arms defer 500ms while casting, no repeat
+	// re-arm; raptor rotation arms ungated per C++ (plain countdowns,
+	// zero CASTING hits). Documented
+	// in the lua file, not wired: the UpdateAI casting-skip is now
+	// ported (see above),
 	// DoAction(ACTION_RAPTOR_KILLED)/GetData(DATA_RAPTORS_KILLED) (no
 	// DoAction/GetData bridges), npc_drakkari_gutripper (26641) /
 	// npc_drakkari_scytheclaw (26628) entry-verifiable — zero
@@ -16969,30 +16982,16 @@ func init() {
 	// instance bookkeeping, no bridge), KilledUnit Talk(SAY_KILL 1)
 	// player-gated (event 3 — nalorakk precedent), JustDied
 	// Talk(SAY_DEATH 4) (event 4; _JustDied instance bookkeeping has
-	// no bridge). No timers are scheduled: every C++ scheduled arm is
-	// phase-gated by the unbridged phase machine (GOING_FLESH /
-	// GOING_SKELETAL call events.Reset() — ungated emulation would
-	// over-cast vs C++, jedoga precedent; anub_arak EVENT_POUND
-	// precedent). Documented in the lua file, not wired: the whole
-	// phase machine (EVENT_DECAY_FLESH DoCastAOE(49356) 20s ->
-	// EVENT_GOING_FLESH +6s (Talk SAY_FLESH + SetDisplayId(MODEL_FLESH
-	// 27073) + DoCastAOE(GIFT 52509) + DoCast-self FLESH_VISUAL 52582 /
-	// DUMMY 49551 + events.Reset + phase-2 schedule) ->
-	// EVENT_RETURN_FLESH DoCastAOE(53463) 20s -> EVENT_GOING_SKELETAL
-	// +6s (Talk SAY_SKELETON + RestoreDisplayId + DoCastAOE(CLEAR_GIFT
-	// 53242) + events.Reset + phase-1 re-arm) — the meaningful legs
-	// are DoCastAOE (no bridge — terestian/shazzrah precedent) +
-	// SetDisplayId/RestoreDisplayId (no display bridge); genuinely-
-	// bridgeable bar (king_dred RAPTOR_CALL) not met, chain not armed;
-	// phase-1 rotation (EVENT_CURSE_OF_LIFE 49527 1s->10-15s,
-	// EVENT_RAIN_OF_FIRE 49518 14-18s, EVENT_SHADOW_VOLLEY 49528
-	// 8-10s — bridged in isolation via moroes precedent but
-	// phase-gated) and phase-2 rotation (EVENT_LIGHTNING_BREATH 49537,
-	// EVENT_EYE_BEAM 49544 — both random-target SelectTarget absent,
-	// cairne/kazzak precedent — EVENT_POISON_CLOUD DoCastAOE 49548);
-	// Reset's _Reset() + RestoreDisplayId; JustDied's DoCastAOE(
-	// CLEAR_GIFT 53242 / ACHIEVEMENT_CHECK 61863); the UpdateAI
-	// casting-skip (no unit-state bridge); spell_tharon_ja_clear_gift_
+	// no bridge). Ported since (Lua file): the whole phase machine +
+	// both rotations (decay-flesh/going-flesh/return-flesh/
+	// going-skeletal chain via forward-declared ticks, gal_darah
+	// idiom; events.Reset() emulated by cancelTimers + phase
+	// re-schedule) and JustDied's DoCastAOE legs. Cast-state PORTED:
+	// own UpdateAI pre-loop (:126) + in-loop (:197) CASTING gates —
+	// all 10 ported arms defer 500ms while casting, no repeat re-arm
+	// (gate precedes target picks and transition Talk/Reset legs;
+	// stale constant-false IsCasting claim retracted). Documented in
+	// the lua file, not wired: Reset's _Reset(); spell_tharon_ja_clear_gift_
 	// of_tharon_ja (53242 SpellScript — no SpellScript binding bridge,
 	// razelikh precedent). Drak'Tharon Keep block CLOSED.
 	RegisterLuaBoss("boss_tharon_ja", 26632)

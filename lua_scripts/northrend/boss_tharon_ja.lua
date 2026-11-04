@@ -26,11 +26,12 @@
 -- NOT the gothik case (gothik's driver is an unbridged wave
 -- machine). events.Reset() is emulated by canceling all GUID-keyed
 -- timers then re-scheduling the new phase's arms (nightbane idiom).
--- Accepted deviations (moroes/nightbane idiom): the
--- HasUnitState(UNIT_STATE_CASTING) skips (~:127, :193) have no
--- bridge; the C++ one-event-per-tick UpdateAI loop is not
--- replicated — Lua timers fire independently, like every
--- CreateLuaEvent port.
+-- Accepted deviations (moroes/nightbane idiom): the C++
+-- one-event-per-tick UpdateAI loop is not replicated — Lua timers
+-- fire independently, like every CreateLuaEvent port (each arm's own
+-- 500ms IsCasting defer covers the pre-loop gate; the in-loop gate
+-- after the break-case transition arms has no separate Lua
+-- equivalent, same as the krik_thir/hadronox ports).
 -- Ported arms (all C++-exact):
 -- JustEngagedWith Talk(SAY_AGGRO 0) + phase-1 schedule
 -- (decay_flesh 20s, curse_of_life 1s, rain_of_fire {14s,18s},
@@ -70,8 +71,11 @@
 -- rain_of_fire {14s,18s}, shadow_volley {8s,10s}).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset's _Reset() — instance bookkeeping, no bridge; UpdateAI
--- HasUnitState skips — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (moroes precedent); spell_tharon_ja_clear_gift_of_
--- tharon_ja SpellScript (53242 EFFECT_0 SCRIPT_EFFECT ->
+-- HasUnitState pre-loop (:126) + in-loop (:197) CASTING gates
+-- PORTED (all 10 ported arms defer 500ms while casting, no repeat
+-- re-arm; stale "constant-false IsCasting" claim retracted);
+-- spell_tharon_ja_clear_gift_of_tharon_ja SpellScript (53242
+-- EFFECT_0 SCRIPT_EFFECT ->
 -- RemoveAura(52509)) — no SpellScript binding bridge (razelikh
 -- precedent); achievement criteria script — no achievement bridge
 -- (kelthuzad precedent).
@@ -165,7 +169,15 @@ local decayFleshTick, goingFleshTick, returnFleshTick, goingSkeletalTick
 
 -- C++ EVENT_CURSE_OF_LIFE: random player target -> DoCast(49527),
 -- re-arm {10s,15s} sits outside the target check (C++-exact).
+-- Own UpdateAI pre-loop (:126) CASTING gate: defer precedes the
+-- target pick, 500ms, no repeat re-arm (mal_ganis idiom).
 local function curseOfLifeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curseoflife", 500, function()
+            curseOfLifeTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_LIFE)
@@ -177,7 +189,14 @@ end
 
 -- C++ EVENT_RAIN_OF_FIRE: random player target -> DoCast(49518),
 -- re-arm {14s,18s} sits outside the target check (C++-exact).
+-- Same UpdateAI CASTING gate: defer precedes the target pick.
 local function rainOfFireTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rainoffire", 500, function()
+            rainOfFireTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_RAIN_OF_FIRE)
@@ -188,8 +207,15 @@ local function rainOfFireTick(creature, guid)
 end
 
 -- C++ EVENT_SHADOW_VOLLEY: DoCastVictim(49528) (CastSpell(nil, ...)
--- = victim-cast, moroes precedent), {8s,10s} re-arm.
+-- = victim-cast, moroes precedent), {8s,10s} re-arm. Same UpdateAI
+-- CASTING gate: 500ms defer.
 local function shadowVolleyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowvolley", 500, function()
+            shadowVolleyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHADOW_VOLLEY)
     schedule(guid, "shadowvolley", {8000, 10000}, function()
         shadowVolleyTick(creature, guid)
@@ -198,7 +224,14 @@ end
 
 -- C++ EVENT_POISON_CLOUD: DoCastAOE(49548) non-triggered as
 -- self-cast (selin_fireheart/mr_smite convention), {10s,12s} re-arm.
+-- Same UpdateAI CASTING gate: 500ms defer.
 local function poisonCloudTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "poisoncloud", 500, function()
+            poisonCloudTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_POISON_CLOUD)
     schedule(guid, "poisoncloud", {10000, 12000}, function()
         poisonCloudTick(creature, guid)
@@ -207,7 +240,14 @@ end
 
 -- C++ EVENT_LIGHTNING_BREATH: random player target -> DoCast(49537),
 -- re-arm {6s,7s} sits outside the target check (C++-exact).
+-- Same UpdateAI CASTING gate: defer precedes the target pick.
 local function lightningBreathTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lightningbreath", 500, function()
+            lightningBreathTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_LIGHTNING_BREATH)
@@ -219,7 +259,14 @@ end
 
 -- C++ EVENT_EYE_BEAM: random player target -> DoCast(49544),
 -- re-arm {4s,6s} sits outside the target check (C++-exact).
+-- Same UpdateAI CASTING gate: defer precedes the target pick.
 local function eyeBeamTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "eyebeam", 500, function()
+            eyeBeamTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_EYE_BEAM)
@@ -266,7 +313,14 @@ end
 
 -- C++ EVENT_DECAY_FLESH: DoCastAOE(49356) non-triggered self-cast,
 -- schedules EVENT_GOING_FLESH +6s (no self re-arm, C++-exact).
+-- Same UpdateAI CASTING gate: 500ms defer (transition stays queued).
 decayFleshTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "decayflesh", 500, function()
+            decayFleshTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DECAY_FLESH)
     schedule(guid, "goingflesh", 6000, function()
         goingFleshTick(creature, guid)
@@ -275,7 +329,15 @@ end
 
 -- C++ EVENT_GOING_FLESH: Talk(2) + SetDisplayId(MODEL_FLESH) +
 -- triggered self-casts + events.Reset() emulation + phase-2 schedule.
+-- Same UpdateAI CASTING gate: defer precedes Talk/cast/Reset (the
+-- break-case arm also passes the in-loop gate).
 goingFleshTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "goingflesh", 500, function()
+            goingFleshTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_FLESH)
     creature:SetDisplayId(MODEL_FLESH)
     creature:CastSpell(creature, SPELL_GIFT_OF_THARON_JA, true)
@@ -287,7 +349,14 @@ end
 
 -- C++ EVENT_RETURN_FLESH: DoCastAOE(53463) non-triggered self-cast,
 -- schedules EVENT_GOING_SKELETAL +6s (no self re-arm, C++-exact).
+-- Same UpdateAI CASTING gate: 500ms defer (transition stays queued).
 returnFleshTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "returnflesh", 500, function()
+            returnFleshTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_RETURN_FLESH)
     schedule(guid, "goingskeletal", 6000, function()
         goingSkeletalTick(creature, guid)
@@ -297,7 +366,14 @@ end
 -- C++ EVENT_GOING_SKELETAL: Talk(3) + me->RestoreDisplayId() (as
 -- SetDisplayId(nativeDisplay[guid])) + DoCastAOE(53242, true)
 -- self-cast + events.Reset() emulation + phase-1 re-arm.
+-- Same UpdateAI CASTING gate: defer precedes Talk/cast/Reset.
 goingSkeletalTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "goingskeletal", 500, function()
+            goingSkeletalTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_SKELETON)
     if nativeDisplay[guid] then
         creature:SetDisplayId(nativeDisplay[guid])

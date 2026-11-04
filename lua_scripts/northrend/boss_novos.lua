@@ -51,7 +51,12 @@
 -- is emulated (jedoga precedent — an ungated bubbled model would
 -- diverge from C++ combat behavior).
 -- UpdateAI: the !_bubbled gate (see above) + HasUnitState(
--- UNIT_STATE_CASTING) skip — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
+-- UNIT_STATE_CASTING) pre-loop (:147) + in-loop (:167) gates guard
+-- only the unported EVENT_ATTACK / EVENT_SUMMON_MINIONS arms (both
+-- schedule only after the unbridged DoAction crystal-handler machine
+-- clears the bubble); ported Talk arms ungated per C++ (outside
+-- UpdateAI). Stale "constant-false IsCasting" claim retracted —
+-- IsCasting is live (lua_creature_events.go:1950).
 -- EVENT_ATTACK (3s repeat, scheduled only after the crystal-handler
 -- DoAction machine clears the bubble) — SelectTarget(Random) ->
 -- DoCast(victim, RAND(SPELL_ARCANE_BLAST 49198 / SPELL_BLIZZARD

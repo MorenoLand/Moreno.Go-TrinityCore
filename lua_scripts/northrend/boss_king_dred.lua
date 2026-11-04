@@ -48,8 +48,10 @@
 -- wrong: creature:SummonCreature is bridged, lua_creature_events.go:728;
 -- the position leg rides creature:GetRelativePoint, lua_objects.go:519).
 -- Unmodeled (no bridges — documented, not wired):
--- UpdateAI HasUnitState(UNIT_STATE_CASTING) skip — no unit-state
--- bridge.
+-- UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-loop + in-loop gates
+-- PORTED: all 6 boss timer arms defer 500ms while casting (no repeat
+-- re-arm); raptor sub-AI rotation arms ungated per C++ (plain
+-- countdowns, zero CASTING hits).
 -- DoAction(ACTION_RAPTOR_KILLED 1) ++raptorsKilled + GetData(
 -- DATA_RAPTORS_KILLED 2) — no DoAction/GetData bridges
 -- (drakkari_colossus precedent); its only caller is
@@ -106,7 +108,15 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_GRIEVOUS_BITE: DoCastVictim; 20s init, 20s repeat.
+-- Own UpdateAI pre-loop (:117) + in-loop (:157) CASTING gates:
+-- 500ms defer, no repeat re-arm (mal_ganis idiom).
 local function grievousBiteTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "grievousbite", 500, function()
+            grievousBiteTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_GRIEVOUS_BITE)
     schedule(guid, "grievousbite", 20000, function()
         grievousBiteTick(creature, guid)
@@ -114,8 +124,14 @@ local function grievousBiteTick(creature, guid)
 end
 
 -- C++ EVENT_MANGLING_SLASH: DoCastVictim; 18500ms init, 18500ms
--- repeat.
+-- repeat. Same UpdateAI CASTING gates: 500ms defer.
 local function manglingSlashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "manglingslash", 500, function()
+            manglingSlashTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MANGLING_SLASH)
     schedule(guid, "manglingslash", 18500, function()
         manglingSlashTick(creature, guid)
@@ -123,7 +139,14 @@ local function manglingSlashTick(creature, guid)
 end
 
 -- C++ EVENT_PIERCING_SLASH: DoCastVictim; 15s init, 15s repeat.
+-- Same UpdateAI CASTING gates: 500ms defer.
 local function piercingSlashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "piercingslash", 500, function()
+            piercingSlashTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_PIERCING_SLASH)
     schedule(guid, "piercingslash", 15000, function()
         piercingSlashTick(creature, guid)
@@ -134,8 +157,14 @@ end
 -- 33s repeat. Lowers to non-triggered self-cast (selin_fireheart
 -- DoCastAOE convention); 22686 carries no SpellScript and the arm is
 -- not phase-gated, so the stale "no DoCastAOE bridge" header claim was
--- wrong.
+-- wrong. Same UpdateAI CASTING gates: 500ms defer.
 local function bellowingRoarTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bellowingroar", 500, function()
+            bellowingRoarTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BELLOWING_ROAR)
     schedule(guid, "bellowingroar", 33000, function()
         bellowingRoarTick(creature, guid)
@@ -144,8 +173,15 @@ end
 
 -- C++ EVENT_FEARSOME_ROAR: non-triggered DoCastAOE(48849),
 -- randtime(10s,20s) init, randtime(10s,20s) repeat (sulfuron
--- convention for the C++ 10s,20s urand overload).
+-- convention for the C++ 10s,20s urand overload). Same UpdateAI
+-- CASTING gates: 500ms defer.
 local function fearsomeRoarTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fearsome_roar", 500, function()
+            fearsomeRoarTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FEARSOME_ROAR)
     schedule(guid, "fearsome_roar", math.random(10000, 20000), function()
         fearsomeRoarTick(creature, guid)
@@ -163,8 +199,15 @@ end
 -- size=0 (lua_creature_events.go:519), so the size leg rides the dist
 -- argument. o=0 falls back to the summoner's orientation on both sides
 -- (Object.cpp:2061-2062 twin); DEAD_DESPAWN is type 6 in the engine's
--- 0-based summon-type scheme (lua_creature_events.go:936).
+-- 0-based summon-type scheme (lua_creature_events.go:936). Same boss
+-- UpdateAI CASTING gates: 500ms defer (the summon leg rides the cast).
 local function raptorCallTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "raptorcall", 500, function()
+            raptorCallTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_RAPTOR_CALL)
     local reach = creature:GetCombatReach()
     local x, y, z = creature:GetRelativePoint(10 + reach / 3, 0)

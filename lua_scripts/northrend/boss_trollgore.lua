@@ -81,8 +81,12 @@
 -- JustSummoned — summon->GetMotionMaster()->MovePoint(POINT_LANDING,
 -- Landing) + summons.Summon — motion-master bridge absent (summon
 -- STRAND absent — standing).
--- UpdateAI HasUnitState(UNIT_STATE_CASTING) skip — no unit-state
--- bridge.
+-- UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-loop + in-loop gates
+-- PORTED: all 4 ported timer arms defer 500ms while casting (no
+-- repeat re-arm — the event stays queued in C++); KilledUnit/JustDied
+-- Talk ungated per C++ (outside UpdateAI); the post-loop
+-- _consumptionJunction latch stays out (write-only, sole reader is the
+-- unbridged achievement GetData leg).
 -- npc_drakkari_invader — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (27709 /
 -- 27753 / 27754 — drak_tharon_keep.h NPC_DRAKKARI_INVADER_A/B/C,
 -- kalecgos pass): zero registration. The whole AI is MovementInform(
@@ -148,7 +152,15 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_CRUSH: DoCastVictim; randtime(1s,5s) init, 10-15s repeat.
+-- Own UpdateAI pre-loop + in-loop CASTING gates: while casting the
+-- event stays queued — 500ms defer, no repeat re-arm (mal_ganis idiom).
 local function crushTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "crush", 500, function()
+            crushTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CRUSH)
     local delay = math.random(10000, 15000)
     schedule(guid, "crush", delay, function()
@@ -157,8 +169,14 @@ local function crushTick(creature, guid)
 end
 
 -- C++ EVENT_INFECTED_WOUND: DoCastVictim; randtime(10s,60s) init,
--- 25-35s repeat.
+-- 25-35s repeat. Same UpdateAI CASTING gates: 500ms defer.
 local function infectedWoundTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "infectedwound", 500, function()
+            infectedWoundTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_INFECTED_WOUND)
     local delay = math.random(25000, 35000)
     schedule(guid, "infectedwound", delay, function()
@@ -167,9 +185,15 @@ local function infectedWoundTick(creature, guid)
 end
 
 -- C++ EVENT_CONSUME: Talk(SAY_CONSUME) + DoCastAOE (self-cast); 15s
--- init, 15s repeat. The consume-buff stacking is SpellScript-delivered
--- (no bridge) — yell + cast cadence ported C++-exact.
+-- init, 15s repeat. Same UpdateAI CASTING gates: defer precedes
+-- Talk/cast (Talk is part of event execution in C++).
 local function consumeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "consume", 500, function()
+            consumeTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_CONSUME)
     creature:CastSpell(creature, SPELL_CONSUME)
     schedule(guid, "consume", 15000, function()
@@ -178,9 +202,15 @@ local function consumeTick(creature, guid)
 end
 
 -- C++ EVENT_CORPSE_EXPLODE: Talk(SAY_EXPLODE) + DoCastAOE (self-cast);
--- 3s init, 15-19s repeat. Damage (49618) + despawn are
--- AuraScript-delivered (no bridge) — yell + cast cadence C++-exact.
+-- 3s init, 15-19s repeat. Same UpdateAI CASTING gates: defer precedes
+-- Talk/cast.
 local function corpseExplodeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "corpseexplode", 500, function()
+            corpseExplodeTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_EXPLODE)
     creature:CastSpell(creature, SPELL_CORPSE_EXPLODE)
     schedule(guid, "corpseexplode", math.random(15000, 19000), function()
