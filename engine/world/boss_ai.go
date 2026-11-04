@@ -20269,6 +20269,9 @@ func init() {
 	// map/instance-filtered RemoveAura. Entries 38490/38494
 	// verifiable from icecrown_citadel.h:158-159 — see
 	// lua_scripts/northrend/npc_rotting_frost_giant.lua.
+	// UpdateAI pre-loop CASTING gate :474 (+ in-loop :501,
+	// subsequent queued events only) ported: all 3 Lua ticks defer
+	// 500ms while casting, no re-arm consumed.
 	// Fourteenth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("npc_rotting_frost_giant", 38490)
 	RegisterLuaBoss("npc_rotting_frost_giant", 38494)
@@ -20289,6 +20292,10 @@ func init() {
 	// self, leeching root 70671 victim one-shot, 38s self-despawn;
 	// out-of-combat emote machine (polymorph-ally 72106 + random
 	// DarkFallensEmotes) on spawn/evade.
+	// DarkFallenAI Reset scheduler validator :786-791 gates the
+	// emote machine + all 12 subclass ScheduleSpells ticks: Lua
+	// defers 500ms while casting, no re-arm consumed; vampiric
+	// fiend own _scheduler has no validator, stays ungated.
 	// Entries verifiable from icecrown_citadel.h:257-262 — see
 	// lua_scripts/northrend/npc_darkfallen_icc.lua.
 	// Fifteenth group of the "// Icecrown Citadel" block.
@@ -20306,6 +20313,8 @@ func init() {
 	// visual 72099; SetGUID ACTION_COMBAT siphon, DoAction evade re-arm,
 	// and SpellHit orb-controller-active legs stay out (no cross-creature
 	// AI SetGUID/DoAction bridge, GO orb script unported).
+	// Checked-no-gate: UpdateAI is a plain _scheduler.Update with
+	// no SetValidator; visual casts ride minions, not self.
 	// Entry verifiable from icecrown_citadel.h:248 — see
 	// lua_scripts/northrend/npc_icc_orb_controller.lua.
 	// Sixteenth group of the "// Icecrown Citadel" block.
@@ -20317,6 +20326,8 @@ func init() {
 	// sweep — no generic grid enumeration), WEB_WRAP random threat target;
 	// DoAction fall leg (WEB_BEAM / MoveLand / MovementInform clear)
 	// stays out (no DoAction bridge, instance-SetData driver).
+	// UpdateAI pre-loop CASTING gate :1072 (+ in-loop :1105)
+	// already ported in Lua: all 3 ticks defer 500ms while casting.
 	// Entry verifiable from icecrown_citadel.h:152 — see
 	// lua_scripts/northrend/npc_icc_nerubar_broodkeeper.lua.
 	// Seventeenth group of the "// Icecrown Citadel" block.

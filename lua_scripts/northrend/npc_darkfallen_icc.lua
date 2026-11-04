@@ -78,14 +78,23 @@ end
 -- (icecrown_citadel.cpp:790-812): initial {1s,10s}, then every {15s,30s}:
 -- 20% chance to cast SPELL_POLYMORPH_ALLY on a random fellow darkfallen
 -- within 10.0f (ICCOrbControllerMinionSearch: alive, no-waypoint, the 5
--- darkfallen entries — the HasUnitState(CASTING) leg is vacuous in Go,
--- fire-and-forget creature casts; the waypoint check has no bridge on
+-- darkfallen entries — the Reset scheduler validator (:786-791)
+-- gates this task (500ms defer while casting); the waypoint check
+-- has no bridge on
 -- the event-handler surface (the session surface has GetWaypointPath;
 -- DB trash never paths), then 1s later a random emote from
 -- DarkFallensEmotes. IsDoingEmotes is true unless the creature has a
 -- waypoint path (no handler-surface bridge; always true in Lua).
 local function emoteTick(creature, guid)
     if not emoteActive[guid] then
+        return
+    end
+    -- Reset scheduler validator :786-791: 500ms IsCasting defer,
+    -- no repeat consumed.
+    if creature:IsCasting() then
+        schedule(guid, "emote", 500, 0, function()
+            emoteTick(creature, guid)
+        end)
         return
     end
     if math.random(100) <= 20 then
@@ -162,11 +171,24 @@ local function darkfallenEngage(entry, creature)
         -- 500ms one-shot DoCastSelf(VAMPIRIC_AURA 71736); 8s
         -- DoCastVictim(UNHOLY_STRIKE 70437) then {8s,9s}; 6s
         -- DoCastSelf(BLOOD_MIRROR 70450) then 34s.
-        schedule(guid, "aura", 500, 0, function()
+        local function auraTick()
+            -- Reset scheduler validator :786-791: 500ms IsCasting
+            -- defer, cast not consumed.
+            if creature:IsCasting() then
+                schedule(guid, "aura", 500, 0, auraTick)
+                return
+            end
             creature:CastSpell(creature, SPELL_VAMPIRIC_AURA)
-        end)
+        end
+        schedule(guid, "aura", 500, 0, auraTick)
         schedule(guid, "unholy", 8000, 0, function()
             local function unholyTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "unholy", 500, 0, unholyTick)
+                    return
+                end
                 creature:CastSpell(nil, SPELL_UNHOLY_STRIKE)
                 schedule(guid, "unholy", {8000, 9000}, 0, unholyTick)
             end
@@ -174,6 +196,12 @@ local function darkfallenEngage(entry, creature)
         end)
         schedule(guid, "mirror", 6000, 0, function()
             local function mirrorTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "mirror", 500, 0, mirrorTick)
+                    return
+                end
                 creature:CastSpell(creature, SPELL_BLOOD_MIRROR)
                 schedule(guid, "mirror", 34000, 0, mirrorTick)
             end
@@ -186,12 +214,19 @@ local function darkfallenEngage(entry, creature)
         -- 500ms one-shot chains of shadow on a random target without the
         -- 72960 aura (the -SPELL_CHAINS_OF_SHADOW selector leg).
         creature:SetMeleeAttack(false)
-        schedule(guid, "chains", 500, 0, function()
+        local function chainsTick()
+            -- Reset scheduler validator :786-791: 500ms IsCasting
+            -- defer, cast not consumed.
+            if creature:IsCasting() then
+                schedule(guid, "chains", 500, 0, chainsTick)
+                return
+            end
             local target = randomDarkfallenTarget(creature, SPELL_CHAINS_OF_SHADOW, true)
             if target then
                 creature:CastSpell(target, SPELL_CHAINS_OF_SHADOW)
             end
-        end)
+        end
+        schedule(guid, "chains", 500, 0, chainsTick)
         -- The 11s/30s vampiric-fiend summon (icecrown_citadel.cpp:899-906)
         -- is PORTED: target = me->GetVictim(), SummonCreature(
         -- NPC_VAMPIRIC_FIEND 37901, target's position,
@@ -201,6 +236,12 @@ local function darkfallenEngage(entry, creature)
         -- AttackStart-drop precedent); the fiend AI is ported below.
         schedule(guid, "fiend", 11000, 0, function()
             local function fiendTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "fiend", 500, 0, fiendTick)
+                    return
+                end
                 local victim = creature:GetVictim()
                 if victim then
                     creature:SummonCreature(NPC_VAMPIRIC_FIEND,
@@ -220,6 +261,12 @@ local function darkfallenEngage(entry, creature)
         creature:SetMeleeAttack(false)
         schedule(guid, "amplify", 1000, 0, function()
             local function amplifyTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "amplify", 500, 0, amplifyTick)
+                    return
+                end
                 local target = randomDarkfallenTarget(creature, nil, nil, false)
                 if target then
                     creature:CastSpell(target, SPELL_AMPLIFY_MAGIC)
@@ -230,6 +277,12 @@ local function darkfallenEngage(entry, creature)
         end)
         schedule(guid, "blast", 10000, 0, function()
             local function blastTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "blast", 500, 0, blastTick)
+                    return
+                end
                 creature:CastSpell(creature, SPELL_BLAST_WAVE)
                 schedule(guid, "blast", {25000, 30000}, 0, blastTick)
             end
@@ -237,6 +290,12 @@ local function darkfallenEngage(entry, creature)
         end)
         schedule(guid, "poly", 17000, 0, function()
             local function polyTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "poly", 500, 0, polyTick)
+                    return
+                end
                 local target = randomDarkfallenTarget(creature, SPELL_POLYMORPH, true)
                 if target then
                     creature:CastSpell(target, SPELL_POLYMORPH)
@@ -256,6 +315,12 @@ local function darkfallenEngage(entry, creature)
         -- sweep since IsHostileTo has no handler bridge).
         schedule(guid, "slap", 8000, 0, function()
             local function slapTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "slap", 500, 0, slapTick)
+                    return
+                end
                 creature:CastSpell(nil, SPELL_LICH_SLAP)
                 schedule(guid, "slap", 12000, 0, slapTick)
             end
@@ -263,6 +328,12 @@ local function darkfallenEngage(entry, creature)
         end)
         schedule(guid, "shroud", 50000, 0, function()
             local function shroudTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "shroud", 500, 0, shroudTick)
+                    return
+                end
                 local best, bestMissing = nil, 1
                 for _, e in ipairs(DARKFALLEN_ENTRIES) do
                     for _, c in pairs(creature:GetCreaturesInGrid(e, 40.0)) do
@@ -287,6 +358,12 @@ local function darkfallenEngage(entry, creature)
         -- blood sap on a random target then 20s.
         schedule(guid, "unholy", 8000, 0, function()
             local function unholyTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "unholy", 500, 0, unholyTick)
+                    return
+                end
                 creature:CastSpell(nil, SPELL_UNHOLY_STRIKE)
                 schedule(guid, "unholy", {8000, 11000}, 0, unholyTick)
             end
@@ -294,6 +371,12 @@ local function darkfallenEngage(entry, creature)
         end)
         schedule(guid, "shadowstep", 10000, 0, function()
             local function stepTick()
+                -- Reset scheduler validator :786-791: 500ms IsCasting
+                -- defer, no re-arm consumed.
+                if creature:IsCasting() then
+                    schedule(guid, "shadowstep", 500, 0, stepTick)
+                    return
+                end
                 local target = randomDarkfallenTarget(creature, nil, true)
                 if target then
                     creature:CastSpell(target, SPELL_SHADOWSTEP)

@@ -79,11 +79,19 @@ local function selectDeathPlagueTarget(creature)
     return candidates[math.random(#candidates)]
 end
 
--- C++ UpdateAI EVENT_DEATH_PLAGUE (:473-480): if a target is found,
+-- C++ UpdateAI EVENT_DEATH_PLAGUE (:481-488): if a target is found,
 -- Talk(EMOTE_DEATH_PLAGUE_WARNING 0, target) + DoCast(target, 72865);
 -- unconditional 15s re-arm (the cast has no target gate beyond the
 -- selector).
 local function deathPlagueTick(creature, guid)
+    -- C++ UpdateAI pre-loop gate :474 (+ in-loop :501, subsequent
+    -- queued events only): 500ms IsCasting defer, no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "deathplague", 500, function()
+            deathPlagueTick(creature, guid)
+        end)
+        return
+    end
     local target = selectDeathPlagueTarget(creature)
     if target then
         creature:Talk(EMOTE_DEATH_PLAGUE_WARNING, target)
@@ -94,18 +102,34 @@ local function deathPlagueTick(creature, guid)
     end)
 end
 
--- C++ UpdateAI EVENT_STOMP (:481-484): DoCastVictim(SPELL_STOMP 64652),
+-- C++ UpdateAI EVENT_STOMP (:489-492): DoCastVictim(SPELL_STOMP 64652),
 -- {15s, 18s} re-arm.
 local function stompTick(creature, guid)
+    -- C++ UpdateAI pre-loop gate :474 (+ in-loop :501): 500ms
+    -- IsCasting defer, no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            stompTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_STOMP)
     schedule(guid, "stomp", {15000, 18000}, function()
         stompTick(creature, guid)
     end)
 end
 
--- C++ UpdateAI EVENT_ARCTIC_BREATH (:485-488): DoCastVictim(72848),
+-- C++ UpdateAI EVENT_ARCTIC_BREATH (:493-496): DoCastVictim(72848),
 -- {26s, 33s} re-arm.
 local function arcticBreathTick(creature, guid)
+    -- C++ UpdateAI pre-loop gate :474 (+ in-loop :501): 500ms
+    -- IsCasting defer, no re-arm consumed.
+    if creature:IsCasting() then
+        schedule(guid, "arctic", 500, function()
+            arcticBreathTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ARCTIC_BREATH)
     schedule(guid, "arctic", {26000, 33000}, function()
         arcticBreathTick(creature, guid)
