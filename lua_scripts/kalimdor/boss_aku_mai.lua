@@ -20,7 +20,12 @@
 --   cleared; the BossAI _Reset() instance bookkeeping leg has no bridge.
 -- - JustEngagedWith: Poison Cloud 3815 DoCastVictim (jeklik GetVictim +
 --   CastSpell convention, non-triggered), init {5s,9s} -> repeat {25s,50s}
---   (C++-exact).
+--   (C++-exact). Aku'mai overrides no UpdateAI, so the BossAI::UpdateAI
+--   pre-loop + in-loop UNIT_STATE_CASTING gates (ScriptedCreature.cpp:
+--   578/:584, thalnos precedent) apply: the arm defers 500ms while
+--   creature:IsCasting() (live CastingUntil window,
+--   lua_creature_events.go:1950; no re-arm consumed). DamageTaken
+--   enrage stays ungated per C++ (DamageTaken hook, not UpdateAI).
 -- - DamageTaken: HealthBelowPctDamaged(30, damage) -> non-triggered
 --   self-cast Frenzied Rage 3490 (C++ DoCast(me, spell) uses default
 --   CastSpellExtraArgs -> TRIGGERED_NONE; CastSpell(self, 3490, false)
@@ -73,6 +78,12 @@ end
 
 -- C++ EVENT_POISON_CLOUD: DoCastVictim, non-triggered (jeklik convention).
 local function onPoisonCloud(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "poisoncloud", 500, function()
+            onPoisonCloud(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_POISON_CLOUD)

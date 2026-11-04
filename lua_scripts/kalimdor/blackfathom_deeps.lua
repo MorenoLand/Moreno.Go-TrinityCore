@@ -23,9 +23,13 @@
 -- (no instance-data bridge), gundrak-altar precedent.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven in
--- Go (creature combat tick), like C++ DoMeleeAttackIfReady. There is no
--- UNIT_STATE_CASTING gate in Go, so timers fire unconditionally (maiden
--- precedent). The C++ EnterEvadeMode _events.Reset() leg collapses into
+-- Go (creature combat tick), like C++ DoMeleeAttackIfReady. The
+-- UpdateAI UNIT_STATE_CASTING pre-loop gate is PORTED (each timer arm
+-- defers 500ms while creature:IsCasting(), live CastingUntil window,
+-- lua_creature_events.go:1950, scorn/thalnos precedent; no re-arm
+-- consumed; the stale "no UNIT_STATE bridge" claim is retracted).
+-- C++ blackfathom_deeps.cpp:153 has the pre-loop gate only (no in-loop
+-- gate). The C++ EnterEvadeMode _events.Reset() leg collapses into
 -- the 2/4/23 cancels.
 -- Verifiable numbers (file's own enums): SPELL_BLESSING_OF_BLACKFATHOM =
 -- 8733 / SPELL_RAVAGE = 8391 / SPELL_FROST_NOVA = 865 / SPELL_FROST_BOLT_
@@ -123,6 +127,12 @@ end
 -- npc_blackfathom_deeps_event: 4825 Aku'mai Snapjaw — Ravage (C++-exact
 -- timers, non-triggered DoCastVictim -> GetVictim + CastSpell).
 local function onRavage(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "ravage", 500, function()
+            onRavage(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_RAVAGE)
@@ -137,6 +147,12 @@ end
 -- convention) + Frostbolt Volley on a random alive threat-list unit
 -- (C++ SelectTarget(Random, 0) defaults: any unit, no range cap).
 local function onFrostNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostnova", 500, function()
+            onFrostNova(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROST_NOVA, false)
     schedule(guid, "frostnova", math.random(25000, 30000), function()
         onFrostNova(creature, guid)
@@ -144,6 +160,12 @@ local function onFrostNova(creature, guid)
 end
 
 local function onFrostboltVolley(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostboltvolley", 500, function()
+            onFrostboltVolley(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_FROST_BOLT_VOLLEY)

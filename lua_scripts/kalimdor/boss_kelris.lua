@@ -12,9 +12,13 @@
 -- strength); the creature_template ScriptName binding stays DB-side.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
--- (creature combat tick), like C++ DoMeleeAttackIfReady. There is no
--- UNIT_STATE_CASTING gate in Go, so timers fire unconditionally (maiden
--- precedent).
+-- (creature combat tick), like C++ DoMeleeAttackIfReady. The
+-- UpdateAI UNIT_STATE_CASTING pre-loop + in-loop gates are PORTED
+-- (each timer arm defers 500ms while creature:IsCasting(), live
+-- CastingUntil window, lua_creature_events.go:1950, scorn/thalnos
+-- precedent; no re-arm consumed; the stale "no UNIT_STATE bridge"
+-- claim is retracted). C++ boss_kelris.cpp:85 pre-loop gate + :108
+-- in-loop gate (return after each event while casting).
 -- Ported arms:
 -- - Reset (23): self-cast SPELL_BLACKFATHOM_CHANNELING 8734 (non-triggered,
 --   DoCastSelf) — C++ casts it again at JustReachedHome, ported below on
@@ -96,6 +100,12 @@ end
 
 -- C++ EVENT_MIND_BLAST: DoCastVictim, non-triggered (jeklik convention).
 local function onMindBlast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mindblast", 500, function()
+            onMindBlast(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_MIND_BLAST)
@@ -109,6 +119,12 @@ end
 -- non-triggered; re-arm is unconditional (C++ schedules outside the
 -- target gate).
 local function onSleep(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sleep", 500, function()
+            onSleep(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:Talk(SAY_SLEEP)

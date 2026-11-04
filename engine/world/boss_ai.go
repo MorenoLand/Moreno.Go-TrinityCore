@@ -15262,7 +15262,10 @@ func init() {
 	// self-cast per the illidan/vaelastrasz convention, 9-12s init /
 	// 25-30s repeat) plus Frostbolt Volley (8398, random alive
 	// player target, 2-4s init / 5-8s repeat), all non-triggered
-	// (C++-exact). The 15%-hp flee arms (4977 Murkshallow Softshell /
+	// (C++-exact). The UpdateAI pre-loop CASTING gate
+	// (blackfathom_deeps.cpp:153, no in-loop gate) is ported as a
+	// 500ms IsCasting defer per timer arm; the 15%-hp flee arms
+	// (4977 Murkshallow Softshell /
 	// 4823 Barbed Crustacean) are ported via the bridged
 	// creature:FleeToGetAssistance (spellbinder precedent). The
 	// JustDied DATA_EVENT increment and the IsSummonedBy
@@ -15282,7 +15285,9 @@ func init() {
 	// Gelihast entry; registered on the DB ScriptName tie plus wowhead
 	// npc=6243 corroboration, jeklik/vishas precedent): Throw Net 6533
 	// on the victim (2-4s init / 4-7s repeat, jeklik GetVictim +
-	// CastSpell convention, non-triggered); melee engine-driven. The
+	// CastSpell convention, non-triggered); melee engine-driven.
+	// Checked-no-gate: Gelihast's UpdateAI (:47-65) is a plain loop
+	// with zero HasUnitState hits, so no CASTING defer applies. The
 	// BossAI::JustEngagedWith instance leg and the GetInstanceAI leg
 	// have no bridges; see lua_scripts/kalimdor/boss_gelihast.lua.
 	RegisterLuaBoss("boss_gelihast", 6243)
@@ -15294,7 +15299,10 @@ func init() {
 	// jeklik GetVictim + CastSpell convention, non-triggered) and Sleep
 	// 8399 on a random alive player (9-12s init / 15-20s repeat, janalai
 	// randomPlayerInRange convention, non-triggered, Talk SAY_SLEEP);
-	// aggro Talk SAY_AGGRO plus RemoveAura of the 8734 channeling aura
+	// the UpdateAI pre-loop + in-loop CASTING gates
+	// (boss_kelris.cpp:85/:108) are ported as a 500ms IsCasting
+	// defer per timer arm; aggro Talk SAY_AGGRO plus RemoveAura of
+	// the 8734 channeling aura
 	// (Reset casts it on self — C++ Reset/JustReachedHome legs), death
 	// Talk SAY_DEATH; melee engine-driven. The BossAI _Reset/
 	// _JustReachedHome/_JustDied instance legs and the GetInstanceAI
@@ -15309,6 +15317,10 @@ func init() {
 	// convention, non-triggered) and the sub-30% one-shot DamageTaken
 	// enrage — non-triggered self-cast Frenzied Rage 3490 on projected health
 	// (C++ DoCast(me, spell) defaults to TRIGGERED_NONE; jeklik pre-damage subtraction, C++-exact); melee engine-driven.
+	// Aku'mai overrides no UpdateAI, so the BossAI::UpdateAI CASTING
+	// gates (ScriptedCreature.cpp:578/:584) apply to Poison Cloud,
+	// ported as a 500ms IsCasting defer; the DamageTaken enrage
+	// stays ungated per C++.
 	// The BossAI _Reset/_JustDied instance legs and the GetInstanceAI leg
 	// have no bridges; see lua_scripts/kalimdor/boss_aku_mai.lua.
 	RegisterLuaBoss("boss_aku_mai", 4829)
