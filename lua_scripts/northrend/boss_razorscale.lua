@@ -121,18 +121,22 @@
 -- DoAction bridge, and it feeds the unbridged air/ground phase
 -- machine; a ported counter with no downstream would be an inert
 -- no-op.
--- CanAIAttack / JustSummoned / SummonedCreatureDies /
--- EnterEvadeMode / SummonMinions — no bridges (the HandleMusic
--- legs are ported; the BOUNDARY-evade early-return nuance in
--- EnterEvadeMode (:516-518) has no evade bridge).
+-- CanAIAttack / JustSummoned / EnterEvadeMode / SummonMinions —
+-- no bridges (the HandleMusic legs are ported; the BOUNDARY-evade
+-- early-return nuance in EnterEvadeMode (:516-518) has no evade
+-- bridge). SummonedCreatureDies ev21 IS bridged — the stale "no
+-- bridge" claim is retracted 2026-11-03 (amanitar/loatheb/coren
+-- precedent); the engineer-death relay is PORTED below.
 -- npc_expedition_commander (33210 ulduar.h:90 — entry-verifiable
 -- but bridge-blocked): OnGossipSelect -> DoAction
 -- (ACTION_START_FIGHT) — gossip bridged (stale 'no gossip bridge' retracted — RegisterCreatureGossipEvent, engine/scripting/runtime.go:902), no DoAction bridge;
 -- DoAction Talk(SAY_COMMANDER_AGGRO 0) / Talk
--- (SAY_COMMANDER_GROUND_PHASE 1) / Talk
--- (SAY_COMMANDER_ENGINEERS_DEAD 2) ride the DoAction machine —
--- Talk riding DoAction stays out; GO_RAZOR_HARPOON / broken-
--- harpoon summon legs — no GO bridge; no registration.
+-- (SAY_COMMANDER_GROUND_PHASE 1) ride the DoAction machine —
+-- Talk riding DoAction stays out. Talk(SAY_COMMANDER_ENGINEERS_DEAD
+-- 2) is PORTED 2026-11-03 via the ev21 engineer-death relay below
+-- (its sender is a bridged hook, not a DoAction receipt).
+-- GO_RAZOR_HARPOON / broken-harpoon summon legs — no GO bridge;
+-- no registration.
 -- npc_expedition_defender (33816 ulduar.h:92): Reset one-shot
 -- DoCastSelf(SPELL_THREAT 65146), not timer-driven; DoAction /
 -- MovementInform machine — no bridges; no registration.
@@ -199,6 +203,11 @@
 -- achievement bridges; both join the unmodeled-achievement queue).
 
 local ENTRY_RAZORSCALE = 33186
+local ENTRY_EXPEDITION_COMMANDER = 33210
+local ENTRY_EXPEDITION_ENGINEER = 33287
+local SAY_COMMANDER_ENGINEERS_DEAD = 2
+
+local engineersRemaining = {}
 
 local EMOTE_BERSERK = 2
 
@@ -263,6 +272,9 @@ end
 -- calls HandleMusic, so it wipes timers only.
 local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset -> Initialize (boss_razorscale.cpp:307/317-319):
+    -- _engineersCount = 3.
+    engineersRemaining[creature:GetGUID()] = 3
 end
 
 local function leaveCombatOrDied(event, creature)
@@ -271,10 +283,40 @@ local function leaveCombatOrDied(event, creature)
     creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 0)
 end
 
+-- C++ boss_razorscale::SummonedCreatureDies (:486-494): an engineer
+-- death decrements _engineersCount (Initialize :307 = 3); at 0 the
+-- commander gets DoAction(ACTION_ENGINEER_DEAD) = Talk(2) +
+-- _events.Reset + _building=false (internal commander-machine legs,
+-- no-ops here — the commander AI is unported). The stale "no
+-- SummonedCreatureDies bridge" header claim is retracted 2026-11-03:
+-- ev21 IS bridged (amanitar/loatheb/coren precedent; args are
+-- event, creature, summon, killer). The fire-once guard mirrors
+-- C++: past 0 the counter wraps to 255 and never refires.
+local function razorscaleSummonedCreatureDies(event, creature, summon, killer)
+    if summon:GetEntry() ~= ENTRY_EXPEDITION_ENGINEER then
+        return
+    end
+    local guid = creature:GetGUID()
+    local remaining = engineersRemaining[guid] or 3
+    if remaining > 0 then
+        remaining = remaining - 1
+        engineersRemaining[guid] = remaining
+        if remaining == 0 then
+            for _, commander in ipairs(creature:GetCreaturesInGrid(ENTRY_EXPEDITION_COMMANDER, 100)) do
+                if commander:IsAlive() then
+                    commander:Talk(SAY_COMMANDER_ENGINEERS_DEAD)
+                    break
+                end
+            end
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 1, razorscaleEnterCombat)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 2, leaveCombatOrDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 4, leaveCombatOrDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 21, razorscaleSummonedCreatureDies)
 
 -- C++ go_razorscale_mole_machine::Reset (boss_razorscale.cpp:1559-1566):
 -- SetFlag(GO_FLAG_NOT_SELECTABLE), 1s UseDoorOrButton, 10s Delete.

@@ -89,14 +89,20 @@
 -- achievement_im_on_a_boat precedent).
 -- boss_festergut JustEngagedWith legs —
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
--- FindNearestCreature(NPC_GAS_DUMMY) /
--- professor->AI()->DoAction(ACTION_FESTERGUT_COMBAT) — have no
--- instance / DoAction bridge (DoZoneInCombat :128 is PORTED
+-- FindNearestCreature(NPC_GAS_DUMMY) stay out (no instance bridge);
+-- professor DoAction(ACTION_FESTERGUT_COMBAT) stays out 2026-11-03:
+-- SetPhase + MovePoint + REACT_PASSIVE + EngagementStart + heroic
+-- goo timer is the professor's phase machine, and a movement-only
+-- port would strand him (the DEATH return rides the unported timer
+-- + EnterEvadeMode, no bridge). DoZoneInCombat :128 is PORTED
 -- 2026-10-23 via the live bridge — C++ arm order, last in the
--- handler); JustDied _JustDied + DoAction(
--- ACTION_FESTERGUT_DEATH) + RemoveBlight legs, JustReachedHome
--- instance->SetBossState(FAIL), EnterEvadeMode cross-AI professor
--- EnterEvadeMode — no instance / DoAction bridge.
+-- handler. Cross-AI relays PORTED 2026-11-03 via the grid-sweep
+-- relayProfessor: ACTION_FESTERGUT_GAS (Talk + triggered visual,
+-- in onInhaleBlight) and the ACTION_FESTERGUT_DEATH Talk leg at 4s
+-- (in festergutJustDied; its EnterEvadeMode leg stays out, no
+-- bridge). JustReachedHome instance->SetBossState(FAIL) and
+-- EnterEvadeMode cross-AI professor EnterEvadeMode stay out — no
+-- instance / DoAction bridge.
 -- SpellHitTarget (boss_festergut.cpp:160-168) — STAYS OUT, retracted
 -- 2026-10-20: the 11:55 tick's ev15 port stripped INOCULATED from the
 -- boss himself (Go's cast path carries only the explicit target, so the
@@ -129,6 +135,11 @@ local EMOTE_WARN_GAS_SPORE = 3
 local EMOTE_GAS_SPORE = 2
 
 local NPC_GAS_DUMMY = 36659
+
+local ENTRY_PROFESSOR_PUTRICIDE = 36678
+local SAY_FESTERGUT_GASEOUS_BLIGHT = 0
+local SAY_FESTERGUT_DEATH = 1
+local SPELL_RELEASE_GAS_VISUAL = 69125
 
 -- gaseousBlight[3] / gaseousBlightVisual[3] (boss_festergut.cpp:64-65):
 -- the inhale stack auras on Festergut and their gas-dummy visuals.
@@ -228,6 +239,20 @@ local onGasSpore
 -- DoCastSelf(SPELL_PUNGENT_BLIGHT) non-triggered (:189-191),
 -- counter reset, RescheduleEvent(EVENT_GAS_SPORE, 20s..25s)
 -- (:195). The :206 re-arm (33500ms..35s) applies to both branches.
+-- Cross-AI DoAction relay (2026-11-03 strip): C++ reaches Professor
+-- Putricide via instance->GetGuidData(DATA_PROFESSOR_PUTRICIDE); Lua
+-- has no instance bridge, so the relay sweeps the 100yd grid for the
+-- professor (the shade/saurfang grid-sweep precedent — exactly one
+-- Putricide exists, so the first alive match is the C++ target).
+local function relayProfessor(creature, fn)
+    for _, professor in ipairs(creature:GetCreaturesInGrid(ENTRY_PROFESSOR_PUTRICIDE, 100)) do
+        if professor:IsAlive() then
+            fn(professor)
+            return
+        end
+    end
+end
+
 local function onInhaleBlight(creature, guid)
     -- C++ :185-186: RemoveBlight() fires at the top of EVERY inhale
     -- tick, before the counter check.
@@ -238,6 +263,14 @@ local function onInhaleBlight(creature, guid)
         creature:Talk(SAY_PUNGENT_BLIGHT)
         creature:CastSpell(creature, SPELL_PUNGENT_BLIGHT)
         inhale[guid] = 0
+        -- C++ :193-194 — professor DoAction(ACTION_FESTERGUT_GAS):
+        -- Talk(SAY_FESTERGUT_GASEOUS_BLIGHT 0) + triggered self-cast
+        -- SPELL_RELEASE_GAS_VISUAL 69125, in C++ order after the
+        -- pungent cast and before the GAS_SPORE reschedule.
+        relayProfessor(creature, function(professor)
+            professor:Talk(SAY_FESTERGUT_GASEOUS_BLIGHT)
+            professor:CastSpell(professor, SPELL_RELEASE_GAS_VISUAL, true)
+        end)
         cancelTimer(guid, "gas_spore")
         schedule(guid, "gas_spore", {20000, 25000}, function() onGasSpore(creature, guid) end)
     else
@@ -367,6 +400,17 @@ local function festergutJustDied(event, creature, killer)
     cancelTimers(guid)
     inhale[guid] = nil
     creature:Talk(SAY_DEATH)
+    -- C++ :136 — professor DoAction(ACTION_FESTERGUT_DEATH) schedules
+    -- EVENT_FESTERGUT_DIES at 4s: Talk(SAY_FESTERGUT_DEATH 1) +
+    -- EnterEvadeMode (no bridge — stays out). The Talk leg rides a
+    -- 4s timer on the festergut GUID (cancelled on reset like the
+    -- other festergut timers); C++ order between SAY_DEATH and
+    -- RemoveBlight.
+    schedule(guid, "professor_death_talk", 4000, function()
+        relayProfessor(creature, function(professor)
+            professor:Talk(SAY_FESTERGUT_DEATH)
+        end)
+    end)
     -- C++ order (:130-136): Talk(SAY_DEATH), then RemoveBlight().
     removeBlight(creature)
 end
