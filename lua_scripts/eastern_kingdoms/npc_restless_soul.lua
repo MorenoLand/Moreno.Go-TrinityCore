@@ -37,11 +37,9 @@
 -- - JustSummoned (stratholme.cpp:162-168): the freed soul self-casts
 --   SPELL_SOUL_FREED 17370 non-triggered (ev19 fires on the
 --   summoner via the Lua SummonCreature funnel, hydross
---   precedent).
+--   precedent) and follows the resolved tagger (MoveFollow, 0, 0).
 --
 -- Documented-unmodeled (no bridges):
--- - JustSummoned MoveFollow(player, 0, 0) leg (no MoveFollow bridge,
---   vorpil-traveler precedent); the self-cast leg above is ported.
 -- - Reset() latch clear: C++ Reset calls Initialize() (Tagged =
 --   false), but the Go kill funnel fires event 23 (Reset) BEFORE
 --   event 4 (Died) — clearing the latch on Reset would make onDied
@@ -95,15 +93,21 @@ end
 -- KillSelf; unresolved tagger re-checks every AI tick (1s re-arm
 -- here). The tagger is the only player in range with the stored
 -- GUID; GetPlayersInGrid is the only player-lookup bridge.
-local function onDieTimer(creature, guid)
+local function findTagger(creature, guid)
     local taggerGuid = tagger[guid]
-    local taggerPlayer = nil
+    if taggerGuid == nil then
+        return nil
+    end
     for _, player in ipairs(creature:GetPlayersInGrid(100)) do
         if player:GetGUID() == taggerGuid then
-            taggerPlayer = player
-            break
+            return player
         end
     end
+    return nil
+end
+
+local function onDieTimer(creature, guid)
+    local taggerPlayer = findTagger(creature, guid)
     if taggerPlayer then
         taggerPlayer:KilledMonsterCredit(ENTRY_RESTLESS_SOUL)
         creature:Kill()
@@ -134,11 +138,17 @@ local function onSpellHit(event, creature, caster, spellId)
     end)
 end
 
--- C++ JustSummoned: freed soul self-casts SOUL_FREED; the
--- MoveFollow leg stays out (no bridge).
+-- C++ JustSummoned: freed soul self-casts SOUL_FREED and follows the
+-- tagger (MoveFollow bridged, lua_creature_events.go; ionar/lich-king
+-- precedent — the old "no MoveFollow bridge" note is retracted).
+-- Unresolved tagger skips the follow, matching C++'s nil check.
 local function onJustSummoned(event, creature, summoned)
     if summoned and summoned:GetEntry() == ENTRY_FREED_SOUL then
         summoned:CastSpell(summoned, SPELL_SOUL_FREED)
+        local taggerPlayer = findTagger(creature, creature:GetGUID())
+        if taggerPlayer then
+            summoned:MoveFollow(taggerPlayer, 0, 0)
+        end
     end
 end
 

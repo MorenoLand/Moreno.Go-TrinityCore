@@ -15,9 +15,10 @@
 -- is a template concern, not scripted here. The rizzle
 -- escort/blackjack machine (MoveInLineOfSight quest-status gate,
 -- SPELL_RIZZLE_BLACKJACK 39865, SPELL_RIZZLE_ESCAPE teleport timer,
--- zone_azshara.cpp:150-163) stays documented-only: no quest-status /
--- MotionMaster bridges. Rizzle's OnGossipHello/OnGossipSelect are
--- PORTED below — entry NPC_RIZZLE 23002 is C++-verifiable
+-- zone_azshara.cpp:150-163) stays documented-only: no MovementInform
+-- hook (no event 28) and no AttackStart-override hook; the quest-status
+-- bridge itself exists (lua_player.go) and now gates the gossip hello.
+-- Rizzle's gossip arms are PORTED below — entry NPC_RIZZLE 23002 is C++-verifiable
 -- (go_scripts.cpp:268, Southfury enum).
 local ENTRY = 23025
 local SPELL_DEPTH_CHARGE_TRAP = 38576
@@ -66,6 +67,8 @@ RegisterCreatureEvent(ENTRY, 23, onReset)
 -- 23002 (go_scripts.cpp:268).
 local ENTRY_RIZZLE = 23002
 local SPELL_GIVE_SOUTHFURY_MOONSTONE = 39886
+local QUEST_CHASING_THE_MOONSTONE = 10994
+local QUEST_STATUS_INCOMPLETE = 3
 
 local GOSSIP_ICON_CHAT = 0
 local GOSSIP_SENDER_MAIN = 1
@@ -76,13 +79,17 @@ local RIZZLE_DESPAWN_DELAY_MS = 3000
 
 -- C++ OnGossipHello (zone_azshara.cpp:166-173): offers the moonstone
 -- item + menu 10811 only when QUEST_CHASING_THE_MOONSTONE 10994 is
--- INCOMPLETE (else returns true with no items). The quest-status
--- gate has no bridge — kalecgos precedent — so the item is offered
--- unconditionally and the gate is documented.
+-- INCOMPLETE; otherwise returns true with no items, so the player sees
+-- nothing (the Go hello veto on a registered hook with no false return
+-- reproduces that: gossip.go hello arm). player:GetQuestStatus is
+-- bridged (lua_player.go; cairne precedent) — the old "no bridge"
+-- note is retracted.
 local function rizzleGossipHello(event, player, creature)
-    player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_GET_MOONSTONE,
-        GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-    player:GossipSendMenu(GOSSIP_MENU_MOONSTONE, creature)
+    if player:GetQuestStatus(QUEST_CHASING_THE_MOONSTONE) == QUEST_STATUS_INCOMPLETE then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_GET_MOONSTONE,
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
+        player:GossipSendMenu(GOSSIP_MENU_MOONSTONE, creature)
+    end
 end
 
 -- C++ OnGossipSelect (zone_azshara.cpp:164-171): CloseGossipMenuFor +
