@@ -12375,9 +12375,17 @@ func init() {
 	// chain; the channeler-driven phase machine is cross-creature
 	// blocked so the fight starts on pull. Hellfire Channeler
 	// (17256) runs shadow-bolt-volley / fear / abyssal; its
-	// magtheridon DoAction relay is unmodeled. Magtheridon Room
-	// (17516) runs the debris visual/damage chain. Fight logic in
-	// lua_scripts/hellfirecitadel/boss_magtheridon.lua.
+	// magtheridon DoAction relay is unmodeled. Its UpdateAI
+	// carries the HasUnitState(UNIT_STATE_CASTING) pre-loop
+	// (:227) + in-loop (:296) gates, ported on every timer arm
+	// as a 500ms IsCasting defer, no re-arm consumed. The
+	// channeler's UpdateAI carries the same pair (:376 pre-loop,
+	// before _events.Update, + :417 in-loop), ported the same
+	// way incl the 1s check-friend pump and the dark-mending
+	// latch re-enable. Magtheridon Room (17516) runs the debris
+	// visual/damage chain; its PassiveAI scheduler-only UpdateAI
+	// carries no cast-state gate (zero HasUnitState hits).
+	// Fight logic in lua_scripts/hellfirecitadel/boss_magtheridon.lua.
 	RegisterLuaBoss("boss_magtheridon", 17257)
 	RegisterLuaBoss("npc_hellfire_channeler", 17256)
 	RegisterLuaBoss("npc_magtheridon_room", 17516)
@@ -12388,7 +12396,10 @@ func init() {
 	// (21965) windfury + frost shock / spitfire / poison
 	// cleansing / earthbind totems, Caribdis (21964) water bolt
 	// volley / tidal surge / heal. Instance/summon/cross-creature
-	// arms are unmodeled. Fight logic in
+	// arms are unmodeled. All four AIs are plain-countdown
+	// ScriptedAI UpdateAIs (boss_fathomlord_karathress.cpp
+	// :219/:365/:498/:619, zero HasUnitState hits) — no
+	// cast-state gate, timers fire ungated per C++. Fight logic in
 	// lua_scripts/serpentshrinecavern/boss_fathomlord_karathress.lua.
 	RegisterLuaBoss("boss_fathomlord_karathress", 21214)
 	RegisterLuaBoss("boss_fathomguard_sharkkis", 21966)

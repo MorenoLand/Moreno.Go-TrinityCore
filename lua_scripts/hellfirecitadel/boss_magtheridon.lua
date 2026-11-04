@@ -50,8 +50,10 @@
 -- 35s then 60s, non-triggered DoCastAOE self-cast (the
 -- SPELLVALUE_MAX_TARGETS=5 cast arg has no bridge — same);
 -- berserk 27680 20min one-shot, non-triggered self-cast. The
--- UNIT_STATE_CASTING queue gate has no bridge — timers fire
--- unconditionally (jeklik convention). OnDamageTaken(9, pre-
+-- UNIT_STATE_CASTING gates (boss pre-loop :227 + in-loop :296)
+-- are PORTED: every timer arm defers 500ms under its own key
+-- while creature:IsCasting() (live, lua_creature_events.go:1950),
+-- no re-arm consumed (mal_ganis idiom). OnDamageTaken(9, pre-
 -- damage hook): incoming damage would take health to <=30% of
 -- max and phase ~= "collapsed" -> phase="collapsed",
 -- Talk(SAY_COLLAPSE), non-triggered DoCastAOE self-cast camera
@@ -141,7 +143,10 @@
 -- triggered 44032 mind exhaustion) and spell_magtheridon_
 -- shadow_grasp_visual (30166-apply x5 -> triggered 30168
 -- shadow cage; -remove -> remove 30168) unmodeled (standing
--- gap); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (jeklik convention, above). go_
+-- gap); the stale "no live UNIT_STATE_CASTING read bridge
+-- (IsCasting constant-false)" claim is retracted — IsCasting is
+-- live (lua_creature_events.go:1950) and both UpdateAI gates
+-- are ported (above). go_
 -- manticron_cube (181713, magtheridons_lair.h:67) PORTED below
 -- 2026-10-24: player:FindNearestCreature landed on the player
 -- surface 2026-10-24 (lua_player.go), retiring the 2026-10-22
@@ -261,6 +266,18 @@ end
 -- ================= Magtheridon (17257) =================
 
 local function magtheridonTaunt(creature, guid)
+    -- C++ UpdateAI pre-loop gate (boss_magtheridon.cpp:227):
+    -- if (me->HasUnitState(UNIT_STATE_CASTING)) return, after
+    -- events.Update, before the event loop — due events stay
+    -- queued, nothing fires. Ported via live creature:IsCasting()
+    -- (lua_creature_events.go:1950): 500ms defer under the arm's
+    -- own key, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "taunt", 500, function()
+            magtheridonTaunt(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_TAUNT)
     schedule(guid, "taunt", math.random(240000, 300000), function()
         magtheridonTaunt(creature, guid)
@@ -289,6 +306,12 @@ local function magtheridonReset(event, creature)
 end
 
 local function magtheridonCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            magtheridonCleave(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CLEAVE)
     schedule(guid, "cleave", 10000, function()
         magtheridonCleave(creature, guid)
@@ -296,6 +319,12 @@ local function magtheridonCleave(creature, guid)
 end
 
 local function magtheridonBlastNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blastnova", 500, function()
+            magtheridonBlastNova(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_BLAST_NOVA)
     creature:CastSpell(creature, SPELL_BLAST_NOVA)
     schedule(guid, "blastnova", 55000, function()
@@ -304,6 +333,12 @@ local function magtheridonBlastNova(creature, guid)
 end
 
 local function magtheridonBlaze(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blaze", 500, function()
+            magtheridonBlaze(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BLAZE_TARGET)
     schedule(guid, "blaze", 20000, function()
         magtheridonBlaze(creature, guid)
@@ -311,6 +346,12 @@ local function magtheridonBlaze(creature, guid)
 end
 
 local function magtheridonQuake(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "quake", 500, function()
+            magtheridonQuake(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_QUAKE)
     schedule(guid, "quake", 60000, function()
         magtheridonQuake(creature, guid)
@@ -318,11 +359,23 @@ local function magtheridonQuake(creature, guid)
 end
 
 local function magtheridonDebris(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "debris", 500, function()
+            magtheridonDebris(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DEBRIS)
     schedule(guid, "debris", 20000, function()
         magtheridonDebris(creature, guid)
     end)
 end
+
+-- Forward declarations (plain-assignment form, tharon_ja/gal_darah
+-- idiom — never re-local: closures below capture these slots).
+local magtheridonBerserk
+local magtheridonCollapse
+local magtheridonDebrisKnockdown
 
 -- C++ CombatStart + EVENT_RELEASED collapsed onto the pull (see
 -- the header deviation): EMOTE_BREAKS_FREE + SAY_FREE,
@@ -367,8 +420,46 @@ local function magtheridonEnterCombat(event, creature)
         magtheridonQuake(creature, guid)
     end)
     schedule(guid, "berserk", 1200000, function()
-        creature:CastSpell(creature, SPELL_BERSERK)
+        magtheridonBerserk(creature, guid)
     end)
+end
+
+-- C++ EVENT_BERSERK (boss_magtheridon.cpp:232) sits in the same
+-- gated event map; named so the 500ms defer can re-queue it.
+magtheridonBerserk = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            magtheridonBerserk(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_BERSERK)
+end
+
+-- C++ EVENT_COLLAPSE / EVENT_DEBRIS_KNOCKDOWN (boss_magtheridon.cpp:
+-- 259/:265) sit in the same gated event map; named so the 500ms
+-- defer can re-queue them (the world-trigger 36449 cast leg stays
+-- unported; only the debris scheduling rides the chain).
+magtheridonCollapse = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "collapse", 500, function()
+            magtheridonCollapse(creature, guid)
+        end)
+        return
+    end
+    schedule(guid, "debrisknockdown", 4000, function()
+        magtheridonDebrisKnockdown(creature, guid)
+    end)
+end
+
+magtheridonDebrisKnockdown = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "debrisknockdown", 500, function()
+            magtheridonDebrisKnockdown(creature, guid)
+        end)
+        return
+    end
+    magtheridonDebris(creature, guid)
 end
 
 -- C++ DamageTaken: HealthBelowPctDamaged(30, damage) (Unit.h:873 --
@@ -392,9 +483,7 @@ local function magtheridonDamageTaken(event, creature, attacker, damage)
         creature:Talk(SAY_COLLAPSE)
         creature:CastSpell(creature, SPELL_CAMERA_SHAKE)
         schedule(guid, "collapse", 6000, function()
-            schedule(guid, "debrisknockdown", 4000, function()
-                magtheridonDebris(creature, guid)
-            end)
+            magtheridonCollapse(creature, guid)
         end)
     end
 end
@@ -437,6 +526,16 @@ RegisterCreatureEvent(ENTRY_MAGTHERIDON, 23, magtheridonReset)
 -- ================= Hellfire Channeler (17256) =================
 
 local function channelerShadowBolt(creature, guid)
+    -- C++ UpdateAI pre-loop gate (boss_magtheridon.cpp:376,
+    -- before _events.Update, so timers freeze while casting) +
+    -- in-loop gate (:417): 500ms defer under the arm's own key,
+    -- no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function()
+            channelerShadowBolt(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHADOW_BOLT_VOLLEY)
     schedule(guid, "shadowbolt", math.random(15000, 20000), function()
         channelerShadowBolt(creature, guid)
@@ -444,6 +543,12 @@ local function channelerShadowBolt(creature, guid)
 end
 
 local function channelerFear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function()
+            channelerFear(creature, guid)
+        end)
+        return
+    end
     local pick = randomThreatTargetSkippingVictim(creature)
     if pick then
         creature:CastSpell(pick, SPELL_FEAR)
@@ -454,6 +559,12 @@ local function channelerFear(creature, guid)
 end
 
 local function channelerAbyssal(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "abyssal", 500, function()
+            channelerAbyssal(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ABYSSAL)
     schedule(guid, "abyssal", 60000, function()
         channelerAbyssal(creature, guid)
@@ -488,9 +599,22 @@ end
 -- EVENT_DARK_MENDING {10s,20s} re-enables. C++ pick is grid-visit-last
 -- (unspecified order); Lua takes the first GUID-sorted grid match.
 -- Hostility gate vacuous: entry-filtered 17256 peers share faction
--- (IsHostileTo has no creature-surface bridge). UpdateAI casting gate
--- unmodeled (jeklik convention).
+-- (IsHostileTo has no creature-surface bridge). UpdateAI casting
+-- gates (boss_magtheridon.cpp:376 pre-loop + :417 in-loop) are
+-- PORTED on every channeler timer arm incl the 1s checkfriend
+-- pump and the dark-mending latch re-enable (above).
+local channelerDarkMending
+
 local function channelerCheckFriend(creature, guid)
+    -- Same C++ pre-loop + in-loop gates (boss_magtheridon.cpp:
+    -- 376/:417): the 1s pump defers 500ms under its own key,
+    -- consuming no re-arm.
+    if creature:IsCasting() then
+        schedule(guid, "checkfriend", 500, function()
+            channelerCheckFriend(creature, guid)
+        end)
+        return
+    end
     if chanCanMend[guid] then
         local target = nil
         for _, other in ipairs(creature:GetCreaturesInGrid(ENTRY_CHANNELER, 30.0)) do
@@ -505,13 +629,27 @@ local function channelerCheckFriend(creature, guid)
             creature:CastSpell(target, SPELL_DARK_MENDING)
             chanCanMend[guid] = false
             schedule(guid, "darkmending", math.random(10000, 20000), function()
-                chanCanMend[guid] = true
+                channelerDarkMending(creature, guid)
             end)
         end
     end
     schedule(guid, "checkfriend", 1000, function()
         channelerCheckFriend(creature, guid)
     end)
+end
+
+-- C++ EVENT_DARK_MENDING (boss_magtheridon.cpp:408-410) sits in
+-- the same gated event map; named so the 500ms defer can
+-- re-queue the latch re-enable (no cast rides it, but the C++
+-- pre-loop gate defers the event itself while casting).
+channelerDarkMending = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "darkmending", 500, function()
+            channelerDarkMending(creature, guid)
+        end)
+        return
+    end
+    chanCanMend[guid] = true
 end
 
 -- C++ JustEngagedWith: the magtheridon DoAction relay is
