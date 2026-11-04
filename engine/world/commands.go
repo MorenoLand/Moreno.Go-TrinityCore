@@ -1532,6 +1532,9 @@ const (
 // goDoTeleport mirrors go_commandscript::DoTeleport (cs_go.cpp:73): reject
 // invalid coordinates (LANG_INVALID_TARGET_COORD = 263), stop an active taxi
 // flight, then teleport. teleportTo is the Go Player::TeleportTo bridge.
+// DELTA: DoTeleport also rejects transport maps (IsTransportMap); that leg
+// is not enforced here because goDoTeleport is shared with appear/summon,
+// whose C++ paths do not reject them.
 // The non-flight case snapshots the recall position (SaveRecallPosition,
 // Player.h:1989); the flight case finishes the taxi instead.
 func (s *session) goDoTeleport(ctx context.Context, mapID uint32, x, y, z, o float32) bool {
@@ -1554,8 +1557,8 @@ func (s *session) goDoTeleport(ctx context.Context, mapID uint32, x, y, z, o flo
 // FIFTEENTH Commands file): creature, creature id, gameobject, gameobject id,
 // graveyard, grid, taxinode, areatrigger, zonexy, xyz, ticket, offset,
 // instance, boss — each gated on RBAC_PERM_COMMAND_GO (377) per the C++
-// ChatCommandTable. The zonexy arm is documented-blocked (no WorldMapArea
-// bridge for Zone2MapCoordinates); the other 13 arms are ported natively.
+// ChatCommandTable. All 14 arms are ported natively; zonexy rides the new
+// WorldMapArea store plus the AreaTable parent leg (see handleCmdGoZoneXY).
 func (s *session) handleCmdGo(ctx context.Context, args []string) {
 	const syntax = "Syntax: .go creature <spawnId>|creature id <entry>|gameobject <spawnId>|gameobject id <entry>|graveyard <gyId>|grid <x> <y> [map]|taxinode <nodeId>|areatrigger <id>|zonexy <x> <y> [area]|xyz <x> <y> [z] [map] [o]|ticket <id>|offset <dx> [dy] [dz] [do]|instance <label...>|boss <name...>"
 	if len(args) == 0 {
@@ -1584,7 +1587,7 @@ func (s *session) handleCmdGo(ctx context.Context, args []string) {
 	case "areatrigger":
 		s.handleCmdGoAreaTrigger(ctx, args[1:])
 	case "zonexy":
-		s.sendSysMessage("go zonexy is not supported: AreaTable.dbc and Zone2MapCoordinates have no Go bridge.")
+		s.handleCmdGoZoneXY(ctx, args[1:])
 	case "xyz":
 		s.handleCmdGoXYZ(ctx, args[1:])
 	case "ticket":
@@ -1613,6 +1616,10 @@ func (s *session) goWorldDB() *sql.DB {
 // point of the creature with the given spawn id or, via "id", the spawn of
 // the given creature entry. C++ teleports to the first spawn even when several
 // entries match (LANG_COMMAND_GOCREATMULTIPLE is a warning, not an abort).
+// DoTeleport carries the spawn point whole, orientation included, so both
+// forms select the row orientation instead of keeping the player's. The
+// args accept their Variant<Hyperlink<...>, ...> link forms
+// (|Hcreature:| spawn guid, |Hcreature_entry:| entry).
 func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .go creature <spawnId> | .go creature id <entry>")
@@ -1624,26 +1631,26 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) > 1 && strings.ToLower(args[0]) == "id" {
-		entry, err := strconv.ParseUint(args[1], 10, 32)
-		if err != nil {
+		entry, ok := goParseLinkOrUint(args[1], "creature_entry")
+		if !ok {
 			s.sendSysMessage("Invalid creature entry.")
 			return
 		}
-		rows, err := db.QueryContext(ctx, "SELECT guid, map, position_x, position_y, position_z FROM creature WHERE id = ?", uint32(entry))
+		rows, err := db.QueryContext(ctx, "SELECT guid, map, position_x, position_y, position_z, orientation FROM creature WHERE id = ?", entry)
 		if err != nil {
 			s.sendSysMessage(fmt.Sprintf("Creature lookup error: %v", err))
 			return
 		}
 		defer rows.Close()
 		type spawn struct {
-			guid    uint32
-			mapID   uint32
-			x, y, z float32
+			guid       uint32
+			mapID      uint32
+			x, y, z, o float32
 		}
 		var spawns []spawn
 		for rows.Next() {
 			var sp spawn
-			if err := rows.Scan(&sp.guid, &sp.mapID, &sp.x, &sp.y, &sp.z); err != nil {
+			if err := rows.Scan(&sp.guid, &sp.mapID, &sp.x, &sp.y, &sp.z, &sp.o); err != nil {
 				continue
 			}
 			spawns = append(spawns, sp)
@@ -1656,17 +1663,17 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 			s.sendSysMessage("More than one creature found with the given entry.") // LANG_COMMAND_GOCREATMULTIPLE (269)
 		}
 		first := spawns[0]
-		s.goDoTeleport(ctx, first.mapID, first.x, first.y, first.z, s.player.Orientation)
+		s.goDoTeleport(ctx, first.mapID, first.x, first.y, first.z, first.o)
 		return
 	}
-	spawnID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	spawnID, ok := goParseLinkOrUint(args[0], "creature")
+	if !ok {
 		s.sendSysMessage("Invalid spawn id.")
 		return
 	}
 	var mapID uint32
-	var x, y, z float32
-	err = db.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z FROM creature WHERE guid = ?", uint32(spawnID)).Scan(&mapID, &x, &y, &z)
+	var x, y, z, o float32
+	err := db.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM creature WHERE guid = ?", spawnID).Scan(&mapID, &x, &y, &z, &o)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage("Could not find creature.") // LANG_COMMAND_GOCREATNOTFOUND (268)
 		return
@@ -1675,12 +1682,14 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Creature lookup error: %v", err))
 		return
 	}
-	s.goDoTeleport(ctx, mapID, x, y, z, s.player.Orientation)
+	s.goDoTeleport(ctx, mapID, x, y, z, o)
 }
 
 // handleCmdGoGameObject mirrors HandleGoGameObjectSpawnIdCommand (cs_go.cpp:136)
 // and HandleGoGameObjectGOIdCommand (cs_go.cpp:149): same shape as the creature
 // arms, against the gameobject table (LANG_COMMAND_GOOBJNOTFOUND = 267).
+// The spawn orientation rides along, as in the creature arms; the C++ arms
+// take plain uint32 args, so no link forms here.
 func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .go gameobject <spawnId> | .go gameobject id <entry>")
@@ -1697,21 +1706,21 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 			s.sendSysMessage("Invalid gameobject entry.")
 			return
 		}
-		rows, err := db.QueryContext(ctx, "SELECT guid, map, position_x, position_y, position_z FROM gameobject WHERE id = ?", uint32(entry))
+		rows, err := db.QueryContext(ctx, "SELECT guid, map, position_x, position_y, position_z, orientation FROM gameobject WHERE id = ?", uint32(entry))
 		if err != nil {
 			s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
 			return
 		}
 		defer rows.Close()
 		type spawn struct {
-			guid    uint32
-			mapID   uint32
-			x, y, z float32
+			guid       uint32
+			mapID      uint32
+			x, y, z, o float32
 		}
 		var spawns []spawn
 		for rows.Next() {
 			var sp spawn
-			if err := rows.Scan(&sp.guid, &sp.mapID, &sp.x, &sp.y, &sp.z); err != nil {
+			if err := rows.Scan(&sp.guid, &sp.mapID, &sp.x, &sp.y, &sp.z, &sp.o); err != nil {
 				continue
 			}
 			spawns = append(spawns, sp)
@@ -1724,7 +1733,7 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 			s.sendSysMessage("More than one gameobject found with the given entry.") // LANG_COMMAND_GOCREATMULTIPLE (269)
 		}
 		first := spawns[0]
-		s.goDoTeleport(ctx, first.mapID, first.x, first.y, first.z, s.player.Orientation)
+		s.goDoTeleport(ctx, first.mapID, first.x, first.y, first.z, first.o)
 		return
 	}
 	spawnID, err := strconv.ParseUint(args[0], 10, 32)
@@ -1733,8 +1742,8 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 		return
 	}
 	var mapID uint32
-	var x, y, z float32
-	err = db.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z FROM gameobject WHERE guid = ?", uint32(spawnID)).Scan(&mapID, &x, &y, &z)
+	var x, y, z, o float32
+	err = db.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM gameobject WHERE guid = ?", uint32(spawnID)).Scan(&mapID, &x, &y, &z, &o)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage("Could not find gameobject.") // LANG_COMMAND_GOOBJNOTFOUND (267)
 		return
@@ -1743,7 +1752,7 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
 		return
 	}
-	s.goDoTeleport(ctx, mapID, x, y, z, s.player.Orientation)
+	s.goDoTeleport(ctx, mapID, x, y, z, o)
 }
 
 // handleCmdGoGraveyard mirrors HandleGoGraveyardCommand (cs_go.cpp:183):
@@ -1792,9 +1801,12 @@ func (s *session) handleCmdGoGrid(ctx context.Context, args []string) {
 	}
 	mapID := s.player.Map
 	if len(args) > 2 {
-		if m, err := strconv.ParseUint(args[2], 10, 32); err == nil {
-			mapID = uint32(m)
+		m, err := strconv.ParseUint(args[2], 10, 32)
+		if err != nil {
+			s.sendSysMessage("Syntax: .go grid <gridX> <gridY> [map]")
+			return
 		}
+		mapID = uint32(m)
 	}
 	x := float32((gridX - goGridCenterID + 0.5) * goSizeOfGrids)
 	y := float32((gridY - goGridCenterID + 0.5) * goSizeOfGrids)
@@ -1816,8 +1828,8 @@ func (s *session) handleCmdGoTaxiNode(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .go taxinode <nodeId>")
 		return
 	}
-	nodeID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	nodeID, ok := goParseLinkOrUint(args[0], "taxinode")
+	if !ok {
 		s.sendSysMessage("Invalid taxinode id.")
 		return
 	}
@@ -1825,7 +1837,7 @@ func (s *session) handleCmdGoTaxiNode(ctx context.Context, args []string) {
 		s.sendSysMessage("DBC data not available.")
 		return
 	}
-	node, found, err := s.server.Data.TaxiNode(uint32(nodeID))
+	node, found, err := s.server.Data.TaxiNode(nodeID)
 	if err != nil || !found {
 		s.sendSysMessage(fmt.Sprintf("Could not find taxinode %d.", nodeID))
 		return
@@ -1841,8 +1853,8 @@ func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .go areatrigger <id>")
 		return
 	}
-	triggerID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	triggerID, ok := goParseLinkOrUint(args[0], "areatrigger")
+	if !ok {
 		s.sendSysMessage("Invalid areatrigger id.")
 		return
 	}
@@ -1850,12 +1862,108 @@ func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) {
 		s.sendSysMessage("DBC data not available.")
 		return
 	}
-	at, found, err := s.server.Data.AreaTrigger(uint32(triggerID))
+	at, found, err := s.server.Data.AreaTrigger(triggerID)
 	if err != nil || !found {
 		s.sendSysMessage(fmt.Sprintf("Could not find areatrigger %d.", triggerID))
 		return
 	}
 	s.goDoTeleport(ctx, at.ContinentID, at.X, at.Y, at.Z, 0)
+}
+
+// goParseLinkOrUint accepts a C++ Variant<Hyperlink<T>, uint32> argument: a
+// |H<tag>:<id>| link (bare or full colored form, via gpsLinkTagData) or a
+// plain number. It reports false when neither form parses; a link of the
+// wrong type fails the same way C++ fails the typed parse.
+func goParseLinkOrUint(arg, tag string) (uint32, bool) {
+	if linkTag, data := gpsLinkTagData(arg); linkTag == tag {
+		if id, err := strconv.ParseUint(data, 10, 32); err == nil {
+			return uint32(id), true
+		}
+		return 0, false
+	}
+	if id, err := strconv.ParseUint(arg, 10, 32); err == nil {
+		return uint32(id), true
+	}
+	return 0, false
+}
+
+// handleCmdGoZoneXY mirrors HandleGoZoneXYCommand (cs_go.cpp:281): teleport
+// to zone-percentage coordinates on the zone's continent, converting them
+// with Zone2MapCoordinates (DBCStores.cpp:776) and resolving Z as
+// max(GetHeight, GetWaterLevel) like the grid arm. The area defaults to the
+// player's zone (Player::GetZoneId); the parent-area leg follows
+// AreaTableEntry::ParentAreaID (a missing parent row keeps the area itself
+// instead of the C++ ASSERT), and the instanceable leg uses
+// MapEntry::Instanceable (DBCStructure.h:1100: InstanceType != MAP_COMMON).
+// A WorldMapArea row missing for the zone leaves the coordinates unconverted
+// (the C++ not-listed fallback); a missing WorldMapArea.dbc file does the
+// same. A missing grid keeps the player's Z, as in the grid/xyz arms.
+func (s *session) handleCmdGoZoneXY(ctx context.Context, args []string) {
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .go zonexy <x> <y> [area]")
+		return
+	}
+	x, err1 := strconv.ParseFloat(args[0], 32)
+	y, err2 := strconv.ParseFloat(args[1], 32)
+	if err1 != nil || err2 != nil {
+		s.sendSysMessage("Invalid coordinates.")
+		return
+	}
+	areaID := s.player.Zone
+	if len(args) > 2 {
+		id, ok := goParseLinkOrUint(args[2], "area")
+		if !ok {
+			s.sendSysMessage("Invalid area id.")
+			return
+		}
+		areaID = id
+	}
+	if s.server == nil || s.server.Data == nil {
+		s.sendSysMessage("DBC data not available.")
+		return
+	}
+	areaEntry, found, err := s.server.Data.Area(areaID)
+	if err != nil || !found || x < 0 || x > 100 || y < 0 || y > 100 {
+		s.sendSysMessage(fmt.Sprintf("Invalid zone coordinates (%.2f, %.2f, area %d).", x, y, areaID))
+		return
+	}
+	zoneEntry := areaEntry
+	if areaEntry.ParentAreaID != 0 {
+		if parent, found, err := s.server.Data.Area(areaEntry.ParentAreaID); err == nil && found {
+			zoneEntry = parent
+		}
+	}
+	mapEntry, found, err := s.server.Data.Map(zoneEntry.ContinentID)
+	if err != nil || !found {
+		s.sendSysMessage(fmt.Sprintf("You cannot teleport to given coordinates (%.2f, %.2f, map %d).", x, y, zoneEntry.ContinentID))
+		return
+	}
+	if mapEntry.InstanceType != 0 {
+		s.sendSysMessage(fmt.Sprintf("Invalid zone map: area %d (%s) is on instance map %d (%s).", areaEntry.ID, areaEntry.Name, mapEntry.ID, mapEntry.MapName))
+		return
+	}
+	fx, fy := float32(x), float32(y)
+	if wma, found, err := s.server.Data.WorldMapArea(zoneEntry.ID); err == nil && found {
+		fx, fy = zoneToMapCoordinates(fx, fy, wma.LocLeft, wma.LocRight, wma.LocTop, wma.LocBottom)
+	}
+	z := s.player.Z
+	if height, ok := s.server.mapHeight(zoneEntry.ContinentID, fx, fy, terrainMaxHeight, true, terrainDefaultHeightSearch); ok {
+		z = height
+	}
+	if water, ok := s.server.mapWaterLevel(zoneEntry.ContinentID, fx, fy); ok && water > z {
+		z = water
+	}
+	s.goDoTeleport(ctx, zoneEntry.ContinentID, fx, fy, z, s.player.Orientation)
+}
+
+// zoneToMapCoordinates mirrors Zone2MapCoordinates (DBCStores.cpp:776):
+// client map coordinates are swapped, then scaled into the WorldMapArea
+// bounds (x from the top/bottom span, y from the left/right span).
+func zoneToMapCoordinates(x, y, locLeft, locRight, locTop, locBottom float32) (float32, float32) {
+	x, y = y, x
+	x = x*(locBottom-locTop)/100 + locTop
+	y = y*(locRight-locLeft)/100 + locLeft
+	return x, y
 }
 
 // handleCmdGoXYZ mirrors HandleGoXYZCommand (cs_go.cpp:309): teleport to the
@@ -1887,15 +1995,21 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 	}
 	mapID := s.player.Map
 	if len(args) > 3 {
-		if m, err := strconv.ParseUint(args[3], 10, 32); err == nil {
-			mapID = uint32(m)
+		m, err := strconv.ParseUint(args[3], 10, 32)
+		if err != nil {
+			s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
+			return
 		}
+		mapID = uint32(m)
 	}
 	var o float64
 	if len(args) > 4 {
-		if ov, err := strconv.ParseFloat(args[4], 32); err == nil {
-			o = ov
+		ov, err := strconv.ParseFloat(args[4], 32)
+		if err != nil {
+			s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
+			return
 		}
+		o = ov
 	}
 	// cs_go.cpp:331: with Z omitted C++ uses max(GetHeight(x, y, MAX_HEIGHT),
 	// GetWaterLevel(x, y)); mapHeight is exactly the GetHeight half from
@@ -2124,6 +2238,8 @@ func (s *session) handleCmdGoInstance(ctx context.Context, args []string) {
 	}
 	if s.isInFlight() {
 		s.finishTaxiFlight()
+	} else {
+		s.saveRecallPosition()
 	}
 	if tMap, x, y, z, o, ok := s.instanceGoBackTrigger(ctx, target.mapID); ok {
 		if s.teleportTo(tMap, x, y, z, o+float32(math.Pi)) {
@@ -2288,6 +2404,8 @@ func (s *session) handleCmdGoBoss(ctx context.Context, args []string) {
 	}
 	if s.isInFlight() {
 		s.finishTaxiFlight()
+	} else {
+		s.saveRecallPosition()
 	}
 	sp := boss.spawns[0]
 	if !s.teleportTo(sp.mapID, sp.x, sp.y, sp.z, sp.o) {

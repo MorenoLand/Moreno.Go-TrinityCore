@@ -111,7 +111,7 @@ func (s *session) handleHonorAdd(ctx context.Context, args []string) {
 		s.sendSysMessage("Player not found.")
 		return
 	}
-	if target != s && s.security < s.accountSecurityLevel(ctx, target.accountID) {
+	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target}) {
 		return // C++ HasLowerSecurity: silent fail
 	}
 	target.rewardHonorPoints(ctx, uint32(amount))
@@ -125,7 +125,10 @@ func (s *session) handleHonorAdd(ctx context.Context, args []string) {
 // non-player selection reports the gap honestly instead of stubbing.
 func (s *session) handleHonorAddKill(ctx context.Context) {
 	if s.selection == 0 {
-		return // victim == self: C++ RewardHonor returns false silently
+		// getSelectedUnit falls back to self (Chat.cpp:312); RewardHonor
+		// on self runs the gates below, then returns false silently.
+		s.honorSelfKillTail()
+		return
 	}
 	var victim *session
 	if s.server != nil {
@@ -135,10 +138,28 @@ func (s *session) handleHonorAddKill(ctx context.Context) {
 		s.sendSysMessage("honor add kill on a creature is not supported: selected-unit creature targets have no Go bridge.")
 		return
 	}
-	if s.security < s.accountSecurityLevel(ctx, victim.accountID) {
+	if s.characterTargetLowerSecurity(ctx, characterTarget{online: victim}) {
 		return // C++ HasLowerSecurity: silent fail
 	}
+	if victim == s {
+		s.honorSelfKillTail()
+		return
+	}
 	s.rewardHonorKill(ctx, victim)
+}
+
+// honorSelfKillTail mirrors the victim==this path of Player::RewardHonor
+// (Player.cpp:6865): the arena and Inactive-aura gates return false before
+// any field update, then UpdateHonorFields rolls the day, then the honor<=0
+// + victim==this leg returns false with no credit.
+func (s *session) honorSelfKillTail() {
+	if s.inArenaNow() {
+		return
+	}
+	if s.hasAura(honorAuraInactiveID) {
+		return
+	}
+	s.updateHonorFields()
 }
 
 // handleHonorUpdate mirrors HandleHonorUpdateCommand (cs_honor.cpp:98).
@@ -156,7 +177,7 @@ func (s *session) handleHonorUpdate(ctx context.Context) {
 		s.sendSysMessage("Player not found.")
 		return
 	}
-	if target != s && s.security < s.accountSecurityLevel(ctx, target.accountID) {
+	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target}) {
 		return // C++ HasLowerSecurity: silent fail
 	}
 	target.updateHonorFields()

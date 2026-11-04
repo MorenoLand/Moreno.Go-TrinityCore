@@ -289,7 +289,7 @@ func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) {
 	targetSess := s.guildSelectionOrSelf()
 	rest := toks
 	if !strings.HasPrefix(toks[0], "\"") {
-		name := normalizePlayerName(unquoteCommandToken(toks[0]))
+		name := normalizePlayerName(extractPlayerNameFromLink(unquoteCommandToken(toks[0])))
 		targetSess = s.server.findSessionByName(name)
 		if targetSess == nil || targetSess.player == nil {
 			s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
@@ -397,7 +397,7 @@ func (s *session) handleGuildInviteCommand(ctx context.Context, args []string) {
 	var targetName string
 	rest := toks
 	if !strings.HasPrefix(toks[0], "\"") {
-		name := normalizePlayerName(unquoteCommandToken(toks[0]))
+		name := normalizePlayerName(extractPlayerNameFromLink(unquoteCommandToken(toks[0])))
 		if ts := s.server.findSessionByName(name); ts != nil && ts.player != nil {
 			targetGUID, targetName = ts.playerGUID, ts.player.Name
 		} else {
@@ -444,7 +444,7 @@ func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string)
 	target := s.guildSelectionOrSelf()
 	var guid uint64
 	if len(args) > 0 {
-		name := normalizePlayerName(unquoteCommandToken(splitQuotedArgs(args)[0]))
+		name := normalizePlayerName(extractPlayerNameFromLink(unquoteCommandToken(splitQuotedArgs(args)[0])))
 		if ts := s.server.findSessionByName(name); ts != nil && ts.player != nil {
 			target, guid = ts, ts.playerGUID
 		} else {
@@ -502,7 +502,7 @@ func (s *session) handleGuildRankCommand(ctx context.Context, args []string) {
 		}
 		rankTok = toks[0]
 	} else {
-		name := normalizePlayerName(unquoteCommandToken(toks[0]))
+		name := normalizePlayerName(extractPlayerNameFromLink(unquoteCommandToken(toks[0])))
 		if ts := s.server.findSessionByName(name); ts != nil && ts.player != nil {
 			guid = ts.playerGUID
 		} else {
@@ -602,13 +602,19 @@ func (s *session) handleGuildInfoCommand(ctx context.Context, args []string) {
 	var guildID uint32
 	toks := splitQuotedArgs(args)
 	if len(toks) > 0 {
-		tok := unquoteCommandToken(toks[0])
-		if isAllDigits(tok) {
-			if id, err := strconv.ParseUint(tok, 10, 32); err == nil {
+		// The C++ arm reads the whole remainder as the name, so join the
+		// tokens back: "My Guild" looks up "My Guild", not "My".
+		var parts []string
+		for _, tok := range toks {
+			parts = append(parts, unquoteCommandToken(tok))
+		}
+		name := strings.Join(parts, " ")
+		if isAllDigits(name) {
+			if id, err := strconv.ParseUint(name, 10, 32); err == nil {
 				guildID = uint32(id)
 			}
 		} else {
-			guildID = guildIDByName(ctx, cdb, tok)
+			guildID = guildIDByName(ctx, cdb, name)
 		}
 	} else if target := s.guildSelectionOrSelf(); target.player != nil {
 		guildID = target.player.GuildID
