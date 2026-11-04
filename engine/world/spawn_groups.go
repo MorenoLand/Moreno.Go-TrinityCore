@@ -454,19 +454,14 @@ func (s *Server) spawnGroupDespawn(ctx context.Context, db *sql.DB, mapID, insta
 	return count, true
 }
 
-// parseSpawnGroupArgs mirrors the cs_npc.cpp variant decode: the first uint
-// is the group id (a later uint overwrites it, as the C++ variant loop
-// does); the remaining words are exact flags, anything else fails parsing.
+// parseSpawnGroupArgs mirrors the cs_npc.cpp variant decode: uints and
+// flags decode in any order (the C++ variant loop walks every token), a
+// later uint overwriting the group id; anything else fails parsing.
 func parseSpawnGroupArgs(args []string, spawnFlags bool) (groupID uint32, flagA, flagB, ok bool) {
 	if len(args) == 0 {
 		return 0, false, false, false
 	}
-	v, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		return 0, false, false, false
-	}
-	groupID = uint32(v)
-	for _, a := range args[1:] {
+	for _, a := range args {
 		if v, err := strconv.ParseUint(a, 10, 32); err == nil {
 			groupID = uint32(v)
 			continue

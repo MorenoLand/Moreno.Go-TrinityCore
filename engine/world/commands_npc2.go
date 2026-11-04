@@ -109,7 +109,8 @@ func (s *session) handleNPCSetAllowMove(ctx context.Context) {
 // handleNPCSetMoveType mirrors HandleNpcSetMoveTypeCommand (cs_npc.cpp:716):
 // ".npc set movetype [guid] <stay|random|way> [nodel]". The selection form
 // resolves the selected creature (non-pet, the C++ gate), writes the live
-// MoveType slot, then runs npcMovementReset: LoadPath(0) (the waypoint path
+// MoveType slot, then runs npcMovementReset: LoadPath(0) when nodel is
+// absent (the waypoint path
 // id reset to 0, re-reading waypoint_data id 0), MotionMaster-Initialize
 // (the in-flight default-generator state cleared; the step tick re-derives
 // the generator from the MoveType slot), and the JUST_DIED-respawn leg for
@@ -118,8 +119,10 @@ func (s *session) handleNPCSetAllowMove(ctx context.Context) {
 // same live legs for a creature loaded in the GM's map/instance
 // (GetCreatureFromPlayerMapByDbGuid, no pet gate on this form); with no
 // live creature C++ performs no SaveToDB, so an existing spawn row is only
-// validated and messaged, never updated. Nodel only changes the message,
-// as in C++ (the waypoint deletion itself is commented out there too).
+// validated and messaged, never updated. Nodel skips the LoadPath(0) leg
+// (cs_npc.cpp:716: LoadPath runs only when doNotDelete is false) and
+// changes the message; the waypoint deletion itself is commented out in
+// C++ too.
 func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 	const syntax = "Syntax: .npc set movetype [guid] <stay|random|way> [nodel]"
 	if s.miscDeny(ctx, permissionCommandNPCSetMoveType) {
@@ -147,7 +150,7 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 		guid := motion.GUID
 		motion.MoveType = uint32(moveType)
 		s.server.motionMu.Unlock()
-		s.npcMovementReset(ctx, motion, true)
+		s.npcMovementReset(ctx, motion, !nodel)
 		s.server.motionMu.Lock()
 		homeX, homeY, homeZ, homeO := motion.X, motion.Y, motion.Z, motion.Orientation
 		s.server.motionMu.Unlock()
@@ -167,7 +170,11 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 	if db == nil {
 		return
 	}
-	guid := uint32(cAtoi(args[0]))
+	guid, ok := goParseLinkOrUint(args[0], "creature")
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
 	moveType, title, ok := parseNPCMoveType(args[1])
 	if !ok {
 		s.sendSysMessage(syntax)
@@ -181,7 +188,7 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 		s.server.motionMu.Lock()
 		live.MoveType = uint32(moveType)
 		s.server.motionMu.Unlock()
-		s.npcMovementReset(ctx, live, true)
+		s.npcMovementReset(ctx, live, !nodel)
 		s.server.motionMu.Lock()
 		homeX, homeY, homeZ, homeO := live.X, live.Y, live.Z, live.Orientation
 		s.server.motionMu.Unlock()
@@ -657,7 +664,8 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
 }
 
 // handleNPCSetEntry mirrors HandleNpcSetEntryCommand (cs_npc.cpp:256):
-// ".npc set entry <entryId>". C++ returns false on a zero entry before the
+// ".npc set entry <entryId|entryLink>" (CreatureEntry is a hyperlink
+// variant). C++ returns false on a zero entry before the
 // creature check, then requires the selected unit to be a creature
 // (LANG_SELECT_CREATURE) and reports LANG_DONE when Creature::UpdateEntry
 // succeeds, LANG_ERROR otherwise. The live leg is the seatCreatureEntry
@@ -673,7 +681,7 @@ func (s *session) handleNPCSetEntry(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	entry, ok := npcVendorUintArg(args[0])
+	entry, ok := goParseLinkOrUint(args[0], "creature_entry")
 	if !ok || entry == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -903,21 +911,23 @@ func (s *session) handleNPCSetData(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Set data %d %d for creature %s (GUID %d, entry %d): %s", data1, data2, name, guid, entry, npcSetDataAIOrScript(aiName, scriptName)))
 }
 
-// npcEvadeParse parses the optional ".npc evade [why] [force]" tail: a
-// numeric why is accepted and ignored (CreatureAI::_EnterEvadeMode ignores
-// its why argument), "force" arms the clear-then-evade leg, anything else
-// is a parser error.
+// npcEvadeParse parses the optional ".npc evade [why] [force]" tail in
+// the C++ fixed order (cs_npc.cpp:1114: Optional why, then Optional
+// force): a numeric why is accepted and ignored
+// (CreatureAI::_EnterEvadeMode ignores its why argument), "force" arms
+// the clear-then-evade leg, anything else is a parser error.
 func npcEvadeParse(args []string) (force bool, ok bool) {
-	for _, arg := range args {
-		if strings.EqualFold(arg, "force") {
-			force = true
-			continue
-		}
-		if _, good := npcVendorUintArg(arg); !good {
-			return false, false
+	i := 0
+	if i < len(args) {
+		if _, good := npcVendorUintArg(args[i]); good {
+			i++
 		}
 	}
-	return force, true
+	if i < len(args) && strings.EqualFold(args[i], "force") {
+		force = true
+		i++
+	}
+	return force, i == len(args)
 }
 
 // handleNPCEvade mirrors HandleNpcEvadeCommand (cs_npc.cpp:1114) on the
@@ -1117,6 +1127,9 @@ func (s *session) handleNPCPlayEmote(ctx context.Context, args []string) {
 // offline/unknown name reports LANG_PLAYER_NOT_FOUND, and a receiver whose
 // account outranks the handler fails. Unit::Whisper writes the
 // MONSTER_WHISPER (0x0F) packet direct to the receiver session only.
+// handleNPCWhisper mirrors HandleNpcWhisperCommand (cs_npc.cpp:981): the
+// receiver is a Hyperlink<player> variant, so a |Hplayer| link resolves by
+// its name; a wrong-type link fails the C++ typed parse (syntax here).
 func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCWhisper) {
 		return
@@ -1139,7 +1152,12 @@ func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 	if s.server == nil {
 		return
 	}
-	receiver := s.server.findSessionByName(args[0])
+	name := extractPlayerNameFromLink(args[0])
+	if name == "" {
+		s.sendSysMessage(syntax)
+		return
+	}
+	receiver := s.server.findSessionByName(name)
 	if receiver == nil || receiver.player == nil {
 		s.sendSysMessage("Player not found.")
 		return
@@ -1538,9 +1556,13 @@ func (s *session) handleNPCTame(ctx context.Context) {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
+	// std::max<uint8>(playerLevel-5, creatureLevel) (cs_npc.cpp:1095):
+	// the uint8 subtraction wraps below level 5, so a level-1..4 player
+	// tames at level 252..254, not at the creature's level.
+	playerLevel := uint32(s.player.Level)
 	petLevel := creatureLevel
-	if playerLevel := uint32(s.player.Level); playerLevel >= 5 && petLevel < playerLevel-5 {
-		petLevel = playerLevel - 5
+	if wrapped := uint32(uint8(playerLevel - 5)); wrapped > petLevel {
+		petLevel = wrapped
 	}
 	s.createTamedPetFromEntry(ctx, s.server.CharactersStore.DB, 0, entry, petLevel)
 }

@@ -7,6 +7,9 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // npc command port: npc_commandscript (cs_npc.cpp), the "npc" root with the
@@ -24,8 +27,9 @@ import (
 //
 // Creature visibility in the Go world is DB-driven (buildNearbyCreatureUpdates
 // reads the world `creature` table live), so the DB legs of these arms are
-// the real spawn/move/delete operations; the live-Creature legs (respawn,
-// motion, grid) have no Go bridge and are noted per arm.
+// the real spawn/move/delete operations; the live-Creature legs ride the
+// motion map where a twin exists (move/delete respawn legs) and are noted
+// per arm.
 //
 // Console-vs-chat branches are moot (Go commands are always sessioned).
 // LANG texts are inlined from the TDB enUS recall (no in-tree
@@ -163,7 +167,7 @@ func (s *session) handleNPCAddFormation(ctx context.Context, args []string) {
 		return
 	}
 	leaderGUID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || leaderGUID == 0 {
+	if err != nil {
 		s.sendSysMessage("Invalid leader GUID.")
 		return
 	}
@@ -352,7 +356,11 @@ func (s *session) handleNPCAddTemp(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	entry := uint32(cAtoi(rest[0]))
+	entry, ok := goParseLinkOrUint(rest[0], "creature_entry")
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
 	if _, ok := s.npcTemplateGate(ctx, entry); !ok {
 		return
 	}
@@ -379,7 +387,11 @@ func (s *session) handleNPCAddMove(ctx context.Context, args []string) {
 	if db == nil {
 		return
 	}
-	guid := uint32(cAtoi(args[0]))
+	guid, ok := goParseLinkOrUint(args[0], "creature")
+	if !ok {
+		s.sendSysMessage("Syntax: .npc add move <guid>")
+		return
+	}
 	var exists uint32
 	if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE guid = ?", guid).Scan(&exists); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
@@ -407,7 +419,11 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 	if db == nil {
 		return
 	}
-	entry := uint32(cAtoi(args[0]))
+	entry, ok := goParseLinkOrUint(args[0], "creature_entry")
+	if !ok {
+		s.sendSysMessage("Syntax: .npc add <entry>")
+		return
+	}
 	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
 	if !ok {
 		return // C++: silent false on unknown template
@@ -430,10 +446,17 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 	// C++ reports success silently.
 }
 
-// handleNPCMove mirrors HandleNpcMoveCommand (cs_npc.cpp:601) for the guid
-// form: the row must exist on the handler's map; position becomes the
-// handler's position. The selection form and the live respawn legs have no Go
-// bridge.
+// handleNPCMove mirrors HandleNpcMoveCommand (cs_npc.cpp:601): the GUID
+// form moves the spawn row to the handler's position, and the selection
+// form (no GUID arg) moves the selected creature's row instead — C++
+// returns false silently with neither, the file's convention reports the
+// missing selection. The live legs ride the motion map: the moved
+// creature's live position/home snap to the new row at full health (the
+// DespawnOrUnsummon respawn-at-new-location outcome), and a
+// differently-selected creature respawns home via npcMovementReset (no
+// path reload: a respawn does not LoadPath). Pets, totems and temp
+// summons carry no spawn id, so C++ reads GetCreatureData(0) and reports
+// GUID-not-found for them.
 func (s *session) handleNPCMove(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCMove) {
 		return
@@ -442,11 +465,27 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) {
 	if db == nil {
 		return
 	}
+	const syntax = "Syntax: .npc move [guid]"
+	var guid uint32
+	selected := s.castCommandSelectedCreature()
 	if len(args) == 0 {
-		s.sendSysMessage("npc move needs a creature GUID: selected-unit creature targets have no Go bridge.")
-		return
+		if selected == nil {
+			s.sendSysMessage("Select a creature first.")
+			return
+		}
+		if motionIsPet(selected) || selected.IsTempSummon || (s.server != nil && s.server.isTotemGUID(selected.GUID)) {
+			guid = 0
+		} else {
+			guid = uint32(selected.GUID & 0x00FFFFFF)
+		}
+	} else {
+		var ok bool
+		guid, ok = goParseLinkOrUint(args[0], "creature")
+		if !ok {
+			s.sendSysMessage(syntax)
+			return
+		}
 	}
-	guid := uint32(cAtoi(args[0]))
 	var rowMap uint32
 	var entry uint32
 	if err := db.QueryRowContext(ctx, "SELECT map, id FROM creature WHERE guid = ?", guid).Scan(&rowMap, &entry); err != nil {
@@ -467,12 +506,32 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) {
 		p.X, p.Y, p.Z, p.Orientation, guid); err != nil {
 		return
 	}
+	if s.server != nil {
+		if moved := s.npcLiveCreatureBySpawnGUID(guid); moved != nil {
+			s.server.motionMu.Lock()
+			moved.X, moved.Y, moved.Z, moved.Orientation = p.X, p.Y, p.Z, p.Orientation
+			moved.HomeX, moved.HomeY, moved.HomeZ, moved.HomeO = p.X, p.Y, p.Z, p.Orientation
+			healthChanged := moved.Health != moved.MaxHealth
+			moved.Health = moved.MaxHealth
+			mapID, instanceID, mguid, maxHealth := moved.Map, moved.InstanceID, moved.GUID, moved.MaxHealth
+			s.server.motionMu.Unlock()
+			if healthChanged {
+				s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, mguid, map[int]uint32{unitFieldHealth: maxHealth})
+			}
+		}
+		if selected != nil && uint32(selected.GUID&0x00FFFFFF) != guid {
+			s.npcMovementReset(ctx, selected, false)
+		}
+	}
 	s.sendSysMessage("Creature moved.") // LANG_COMMAND_CREATUREMOVED 271
 }
 
-// handleNPCDelete mirrors HandleNpcDeleteCommand (cs_npc.cpp:297) for the
-// guid form: DELETE FROM creature. The selection form and the live UnSummon
-// leg have no Go bridge.
+// handleNPCDelete mirrors HandleNpcDeleteCommand (cs_npc.cpp:302): the
+// GUID form deletes the spawn row (rows>0 -> deleted, else
+// GUID-not-found), and the selection form (no GUID arg) resolves the
+// selected creature — pet/totem -> LANG_SELECT_CREATURE, npcbot -> the
+// bot message, temp summon -> UnSummon (live removal + deleted message),
+// else the creature's spawn id down the DeleteFromDB path.
 func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCDelete) {
 		return
@@ -481,11 +540,51 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 	if db == nil {
 		return
 	}
+	const syntax = "Syntax: .npc delete [guid]"
+	var guid uint32
 	if len(args) == 0 {
-		s.sendSysMessage("npc delete needs a creature GUID: selected-unit creature targets have no Go bridge.")
-		return
+		selected := s.castCommandSelectedCreature()
+		if selected == nil || motionIsPet(selected) || (s.server != nil && s.server.isTotemGUID(selected.GUID)) {
+			s.sendSysMessage("Select a creature first.")
+			return
+		}
+		var entry uint32
+		var tempSummon bool
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			entry, tempSummon = selected.Entry, selected.IsTempSummon
+			s.server.motionMu.Unlock()
+		}
+		if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok && flagsExtra&npcbotEntryMask != 0 {
+			s.sendSysMessage("Selected creature has botAI assigned, use '.npcbot delete' instead")
+			return
+		}
+		if tempSummon {
+			// TempSummon::UnSummon twin: leave the world now, firing
+			// the OnRemove event like RemoveFromWorld does.
+			if s.server != nil {
+				s.server.motionMu.Lock()
+				mapID, instanceID, x, y, z, phase := selected.Map, selected.InstanceID, selected.X, selected.Y, selected.Z, selected.PhaseMask
+				delete(s.server.motionMapLocked(selected.Map, selected.InstanceID), selected.GUID)
+				s.server.motionMu.Unlock()
+				destroyBuf := protocol.NewBuffer(9)
+				destroyBuf.WriteU64(selected.GUID)
+				destroyBuf.WriteU8(0)
+				s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, phase)
+				s.server.fireCreatureLuaEvent(ctx, selected, scripting.CreatureEventOnRemove)
+			}
+			s.sendSysMessage("Creature deleted.") // LANG_COMMAND_DELCREATMESSAGE 270
+			return
+		}
+		guid = uint32(selected.GUID & 0x00FFFFFF)
+	} else {
+		var ok bool
+		guid, ok = goParseLinkOrUint(args[0], "creature")
+		if !ok {
+			s.sendSysMessage(syntax)
+			return
+		}
 	}
-	guid := uint32(cAtoi(args[0]))
 	res, err := db.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid)
 	if err != nil {
 		return
@@ -498,7 +597,10 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 }
 
 // handleNPCNear mirrors HandleNpcNearCommand (cs_npc.cpp:568): a distance-
-// ordered creature scan on the handler's map, pure SQL, fully native.
+// ordered creature scan on the handler's map, pure SQL. C++ binds
+// distance^2 unconditionally, so a negative distance searches |distance|
+// and prints the signed value; an unparseable token fails the C++ typed
+// parse (syntax here).
 func (s *session) handleNPCNear(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCNear) {
 		return
@@ -509,9 +611,12 @@ func (s *session) handleNPCNear(ctx context.Context, args []string) {
 	}
 	distance := 10.0
 	if len(args) > 0 {
-		if d, err := parseNPCFloat(args[0]); err == nil && d > 0 {
-			distance = d
+		d, err := parseNPCFloat(args[0])
+		if err != nil {
+			s.sendSysMessage("Syntax: .npc near [distance]")
+			return
 		}
+		distance = d
 	}
 	p := s.player
 	rows, err := db.QueryContext(ctx,

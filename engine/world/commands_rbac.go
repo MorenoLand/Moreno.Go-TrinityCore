@@ -34,10 +34,9 @@ import (
 // (INSERT ... ON DUPLICATE KEY UPDATE granted for MySQL, INSERT OR REPLACE
 // for SQLite per tree convention).
 //
-// Deliberate delta: HandleRBACPermRevokeCommand dereferences
-// GetRBACPermission(id) unconditionally, so a nonexistent id is a nullptr
-// deref in C++; the Go port reports WRONG_PARAMETER_ID instead (matching the
-// grant/deny arms' own existence check).
+// The revoke arm matches the grant/deny arms: a nonexistent id reports
+// WRONG_PARAMETER_ID — the C++ ID_DOES_NOT_EXISTS arm prints only the id
+// and never dereferences the null permission (cs_rbac.cpp:245-274).
 
 // Inlined enUS texts (Language.h ids; no in-tree trinity_string seed), TDB
 // enUS recall per tree convention.

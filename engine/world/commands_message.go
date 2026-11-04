@@ -17,11 +17,12 @@ import (
 // cs_script_loader.cpp decl 43 / call 88). Of the 8 arms, 6 are native and 2
 // are documented-blocked:
 //
-//   - `channel set ownership` has no Go bridge at all: the C++ bottoms out in
-//     the ChatChannels.dbc substring lookup, ChannelMgr::GetChannel and the
-//     characters `channels` table (CHAR_UPD_CHANNEL_OWNERSHIP); the Go tree
-//     has no ChatChannels.dbc accessor, no channels persist table, and no
-//     ownership flag on worldChannel.
+//   - `channel set ownership` is ported: the ChatChannels.dbc + AreaTable.dbc
+//     substring scans, the pkt=false GetChannel lookup (builtin by
+//     (channelId, zoneId), custom by lowercased name, never creating), the
+//     live _ownershipEnabled flip, the CHAR_UPD_CHANNEL_OWNERSHIP row update
+//     and the LANG enable/disable line all land in
+//     handleChannelSetOwnershipCommand.
 //   - `whispers` is half-ported: the accept-whispers flag has a Go model
 //     (playerExtraAcceptWhispers, persisted via persistExtraFlags, Lua
 //     SetAcceptWhispers live), so the status/on/off arms are ported; the
@@ -229,7 +230,7 @@ func (s *session) handleCmdChannel(ctx context.Context, args []string) {
 			if deny(permissionCommandChannelSetOwnership) {
 				return
 			}
-			s.handleChannelSetOwnershipCommand(args[2:])
+			s.handleChannelSetOwnershipCommand(ctx, args[2:])
 		default:
 			s.sendSysMessage(syntax)
 		}
@@ -238,13 +239,113 @@ func (s *session) handleCmdChannel(ctx context.Context, args []string) {
 	}
 }
 
-// handleChannelSetOwnershipCommand is the documented-blocked channel set
-// ownership arm (cs_message.cpp:76-121, RBAC 465): it bottoms out in the
-// ChatChannels.dbc substring lookup, ChannelMgr::GetChannel and the
-// characters `channels` table (CHAR_UPD_CHANNEL_OWNERSHIP), none of which has
-// a Go model. RBAC-gated with an honest message, not a stub.
-func (s *session) handleChannelSetOwnershipCommand(args []string) {
-	s.sendSysMessage("Channel ownership control is unavailable: the Go tree has no channels persist table or ChatChannels.dbc lookup model.")
+// handleChannelSetOwnershipCommand ports HandleChannelSetOwnership
+// (cs_message.cpp:62-121, RBAC 465): the ChatChannels.dbc substring scan
+// yields the builtin channel id (0 = custom), the AreaTable.dbc substring
+// scan yields the zone, and ChannelMgr::GetChannel(..., pkt=false) returns
+// the live channel without creating one or sending a not-on packet —
+// builtin by (channelId, zoneId) with GLOBAL/CITY_ONLY forcing zone 0,
+// custom by lowercased name. The live channel's _ownershipEnabled flag
+// flips when found; the characters `channels` row update runs
+// unconditionally (CHAR_UPD_CHANNEL_OWNERSHIP: UPDATE channels SET
+// ownership = ? WHERE name LIKE ? — LIKE verbatim, no team filter), and
+// the LANG enable/disable line is always sent. The bool token follows
+// StringTo<bool> (StringConvert.h:146-166, case-insensitive), the same set
+// handleCmdWhispers accepts; anything else, or a missing arg, is syntax
+// (the C++ typed dispatcher fails the command).
+func (s *session) handleChannelSetOwnershipCommand(ctx context.Context, args []string) {
+	const syntax = "Syntax: .channel set ownership <channel> <on|off>"
+	if len(args) != 2 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	channelName := args[0]
+	var grant bool
+	switch strings.ToLower(args[1]) {
+	case "1", "y", "on", "yes", "true":
+		grant = true
+	case "0", "n", "off", "no", "false":
+		grant = false
+	default:
+		s.sendSysMessage(syntax)
+		return
+	}
+	// Reference: cs_message.cpp:64-91 — both scans take the FIRST row, in
+	// ascending id order, whose template/area name contains the channel
+	// name case-insensitively (StringContainsStringI); unmatched scans
+	// leave channelId 0 / zoneEntry null.
+	var channelID uint32
+	var dbcTemplate string
+	var dbcFlags uint32
+	var zoneName string
+	zoneFound := false
+	if s.server != nil && s.server.Data != nil {
+		if entries, err := s.server.Data.ChatChannels(); err == nil {
+			for _, e := range entries {
+				if goContainsFold(e.Name, channelName) {
+					channelID, dbcTemplate, dbcFlags = e.ID, e.Name, e.Flags
+					break
+				}
+			}
+		}
+		if areas, err := s.server.Data.AreaNames(); err == nil {
+			for _, a := range areas {
+				if goContainsFold(a.Name, channelName) {
+					zoneName, zoneFound = a.Name, true
+					break
+				}
+			}
+		}
+	}
+	// Reference: ChannelMgr::GetChannel (ChannelMgr.cpp:204-249) with
+	// pkt=false — the live channel only, never created. The Go channels
+	// map is keyed by scoped name, so the builtin lookup reconstructs
+	// the Channel::GetChannelName form (Channel.cpp:88-103: GLOBAL keeps
+	// the template, CITY_ONLY formats "City", zone-dependent channels
+	// format the zone name); a zone-dependent channel with no zone match
+	// keys (channelId, 0), which has no Go counterpart — zone channels
+	// always carry " - Zone" in name and key — so no live channel flips,
+	// exactly like C++ finding no (channelId, 0) entry.
+	if s.server != nil {
+		s.server.channelsMu.Lock()
+		var channel *worldChannel
+		if channelID != 0 {
+			var name string
+			switch {
+			case dbcFlags&channelDBCFlagGlobal != 0:
+				name = dbcTemplate
+			case dbcFlags&channelDBCFlagCityOnly != 0:
+				name = fmt.Sprintf(dbcTemplate, channelCityName)
+			case zoneFound:
+				name = fmt.Sprintf(dbcTemplate, zoneName)
+			}
+			if name != "" {
+				if ch := s.server.channels[s.scopedChannelKey(name)]; ch != nil && ch.ID == channelID {
+					channel = ch
+				}
+			}
+		} else if ch := s.server.channels[s.scopedChannelKey(channelName)]; ch != nil && ch.Flags&channelFlagCustom != 0 {
+			channel = ch
+		}
+		if channel != nil {
+			channel.OwnershipEnabled = grant
+		}
+		s.server.channelsMu.Unlock()
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		ownership := 0
+		if grant {
+			ownership = 1
+		}
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE channels SET ownership = ? WHERE name LIKE ?", ownership, channelName); err != nil && s.server.Logger != nil {
+			s.server.Logger.Warn("channel ownership update failed", "channel", channelName, "error", err)
+		}
+	}
+	if grant {
+		s.sendSysMessage(fmt.Sprintf(messageEnableOwnership, channelName))
+	} else {
+		s.sendSysMessage(fmt.Sprintf(messageDisableOwnership, channelName))
+	}
 }
 
 // messageDeny reports a per-arm RBAC denial the tree-standard way.

@@ -1905,6 +1905,40 @@ func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
 	}, true, nil
 }
 
+// AreaNameEntry is one AreaTable.dbc row's id + enUS name, for scans that
+// need the C++ row order (cs_message.cpp's zone loop iterates LookupEntry(i)
+// over ascending ids, skipping gaps).
+type AreaNameEntry struct {
+	ID   uint32
+	Name string
+}
+
+// AreaNames loads the AreaTable.dbc rows in ascending id order, mirroring
+// ChatChannels: the name is field 11, the same field Area reads.
+func (s *Store) AreaNames() ([]AreaNameEntry, error) {
+	file, err := s.File("AreaTable")
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]AreaNameEntry, 0, file.Records())
+	seen := make(map[uint32]struct{}, file.Records())
+	for i := 0; i < file.Records(); i++ {
+		rec, rerr := file.Record(i)
+		if rerr != nil {
+			continue
+		}
+		id, _ := rec.Uint32(0)
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		name, _ := rec.String(11)
+		entries = append(entries, AreaNameEntry{ID: id, Name: name})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	return entries, nil
+}
+
 // LiquidTypeSoundBank mirrors LiquidTypeEntry::SoundBank
 // (DBCStructure.h:1034): field 3 of LiquidType.dbc. The second return is
 // false when the store, the file, or the entry is missing, in which case
