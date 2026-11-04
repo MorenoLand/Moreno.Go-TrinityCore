@@ -315,9 +315,16 @@ RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
 -- GUID-keyed timers table, cancel on events 2/4/23;
 -- CastSpell(creature, spell) = DoCastAOE/DoCastSelf self-cast,
 -- CastSpell(nil, spell) = DoCastVictim victim-cast; random targets via
--- GetPlayersInWorld — the baltharus/thorim precedents). All four arms are
--- ungated: no phase args on their schedules, no DoAction/MovementInform
--- scheduling, no instance legs. The blocked arms — all of Sara's
+-- GetPlayersInWorld — the baltharus/thorim precedents). Cast-state gates
+-- PORTED 2026-11-04: all four arms defer 500ms on creature:IsCasting()
+-- (live, lua_creature_events.go:1950), no repeat re-arm consumed — the
+-- mal_ganis idiom for the own UpdateAI pre-loop CASTING returns
+-- (guardian :1208, corruptor :1277, crusher :1378 combined
+-- aura-or-casting return, immortal :1507). No phase args on their
+-- schedules, no DoAction/MovementInform scheduling, no instance legs.
+-- The shattered-illusion aura legs (sara :798, corruptor :1280 pre-Update
+-- returns, crusher :1378 aura arm) are out of family scope: Lua timers
+-- are wall-clock, the C++ pre-Update timer freeze is unmodeled. The blocked arms — all of Sara's
 -- EVENT_SARAS_* timer casts (phase-arg PHASE_ONE + spellvalue
 -- target-selector legs on no-bridge SpellScripts), every voice-of-Yogg-Saron
 -- timer arm (instance-GUID/phase legs), every Yogg-Saron body timer arm
@@ -397,6 +404,12 @@ end
 -- {10s,15s} repeat — scheduled in Reset with no phase arg (:1198,
 -- :1215-1218 verified).
 local function darkVolleyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "darkvolley", 500, function()
+            darkVolleyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DARK_VOLLEY)
     schedule(guid, "darkvolley", {10000, 15000}, function()
         darkVolleyTick(creature, guid)
@@ -420,6 +433,12 @@ end
 -- The Reset-time DoCast(me, SPELL_TENTACLE_VOID_ZONE) + DoCastAOE(SPELL_ERUPT)
 -- legs are ported on event 23 (corruptorReset).
 local function corruptorTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "randomspell", 500, function()
+            corruptorTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         local spells = { SPELL_BLACK_PLAGUE, SPELL_CURSE_OF_DOOM, SPELL_APATHY, SPELL_DRAINING_POISON }
@@ -460,6 +479,12 @@ end
 -- :1389-1392 verified). (SPELL_DIMINSH_POWER 64148 is a different enum
 -- entry — the typo'd name — cast once in Reset, see crusherReset.)
 local function diminishPowerTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "diminishpower", 500, function()
+            diminishPowerTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DIMINISH_POWER)
     schedule(guid, "diminishpower", {20000, 30000}, function()
         diminishPowerTick(creature, guid)
@@ -501,6 +526,12 @@ end
 -- {20s,30s} repeat — scheduled in Reset with no phase arg (:1491,
 -- :1514-1517 verified).
 local function drainLifeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "drainlife", 500, function()
+            drainLifeTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DRAIN_LIFE)
     schedule(guid, "drainlife", {20000, 30000}, function()
         drainLifeTick(creature, guid)

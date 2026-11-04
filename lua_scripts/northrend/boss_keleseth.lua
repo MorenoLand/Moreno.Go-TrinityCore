@@ -33,7 +33,15 @@
 -- (2-arg / 1-arg overloads = non-triggered); {minMs, maxMs} table delay
 -- = randtime range. Melee is engine-driven in Go, like C++
 -- DoMeleeAttackIfReady. No UNIT_STATE_CASTING model in Go, so timers
--- fire unconditionally (the maiden / hodir precedent). The 2026-10-02
+-- fire unconditionally (the maiden / hodir precedent) — EXCEPT the
+-- cast-state gates PORTED 2026-11-04: boss shadowbolt / frost tomb /
+-- summon-skeletons and skeleton decrepify / resurrect / full-heal /
+-- shadow-fissure defer 500ms on creature:IsCasting() (live,
+-- lua_creature_events.go:1950), no repeat re-arm consumed — the mal_ganis
+-- idiom for the boss UpdateAI pre-loop (:192) + in-loop (:223) and
+-- skeleton UpdateAI pre-loop (:292) + in-loop (:323) CASTING gates.
+-- The frost-tomb AI UpdateAI (:99) is empty, so no gate there.
+-- The 2026-10-02
 -- "no-timer-bridge" header doctrine is RETRACTED this run:
 -- CreateLuaEvent is a real registered bridge, so the ungated timer arms
 -- below are ported rather than parked.
@@ -190,6 +198,12 @@ end
 -- DoCastVictim(SPELL_SHADOWBOLT 43667), 1-arg = non-triggered;
 -- re-arm {2s,3s}.
 local function shadowboltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function()
+            shadowboltTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHADOWBOLT)
     schedule(guid, "shadowbolt", {2000, 3000}, function()
         shadowboltTick(creature, guid)
@@ -220,6 +234,12 @@ end
 -- SPELL_FROST_TOMB_SUMMON 42714, true); re-arm {14s,19s} sits outside
 -- the target check — C++-exact.
 local function frostTombTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frosttomb", 500, function()
+            frostTombTick(creature, guid)
+        end)
+        return
+    end
     local target = randomFrostTombTarget(creature)
     if target then
         creature:Talk(SAY_FROST_TOMB)
@@ -253,6 +273,12 @@ local skeletonDecrepifyTick
 
 -- The adds run npc_vrykul_skeleton (handlers below, entry 23970).
 local function skeletonTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "skeletons", 500, function()
+            skeletonTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_SUMMON_SKELETONS)
     for _ = 1, 4 do
         local skeleton = creature:SummonCreature(ENTRY_SKELETON, 156.2559, 259.2093, 42.8668, 0)
@@ -277,6 +303,12 @@ end
 -- SPELL_DECREPIFY), 2-arg = non-triggered; re-arm {1s,5s} sits outside
 -- the target check — C++-exact.
 skeletonDecrepifyTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "decrepify", 500, function()
+            skeletonDecrepifyTick(creature, guid)
+        end)
+        return
+    end
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
@@ -300,6 +332,12 @@ end
 -- (no motion bridge); MoveIdle at fake-death likewise — the add keeps
 -- its motion state through the fake-death window.
 local function skeletonShadowFissureTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowfissure", 500, function()
+            skeletonShadowFissureTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHADOW_FISSURE, true)
     creature:CastSpell(creature, SPELL_BONE_ARMOR, true)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
@@ -313,9 +351,25 @@ end
 -- C++ EVENT_RESURRECT (skeleton arm :304-306): EVENT_FULL_HEAL +
 -- EVENT_SHADOW_FISSURE, both 1s (full heal scheduled first, C++ event
 -- order).
+local function skeletonFullHealTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fullheal", 500, function()
+            skeletonFullHealTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_FULL_HEAL, true)
+end
+
 local function skeletonResurrectTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "resurrect", 500, function()
+            skeletonResurrectTick(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "fullheal", 1000, function()
-        creature:CastSpell(creature, SPELL_FULL_HEAL, true)
+        skeletonFullHealTick(creature, guid)
     end)
     schedule(guid, "shadowfissure", 1000, function()
         skeletonShadowFissureTick(creature, guid)

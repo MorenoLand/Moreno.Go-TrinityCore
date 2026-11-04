@@ -88,6 +88,16 @@
 -- — no Talk arm in this branch; a lone damage=0 return would strand the
 -- boss unkillable without the outro, so it is not modeled.
 -- Timer Talks — 2026-10-14 retraction re-audit (C++ line refs): algalon's
+-- Cast-state gates PORTED 2026-11-04: quantum strike / phase punch /
+-- cosmic smash / ascend / big bang / collapsing star defer 500ms on
+-- creature:IsCasting() (live, lua_creature_events.go:1950), no repeat
+-- re-arm consumed — the mal_ganis idiom for the boss UpdateAI pre-loop
+-- (:520) + in-loop (:702) CASTING gates, both PHASE_ROLE_PLAY-exempt.
+-- The exemption is load-bearing: EVENT_INTRO_TIMER_DONE (the
+-- introdefensive tick) and EVENT_START_COMBAT fire under PHASE_ROLE_PLAY
+-- (engage sets it, INTRO_TIMER_DONE flips to NORMAL), so both stay
+-- ungated per C++. The constellation arcane barrage stays ungated: its
+-- own UpdateAI (:783) has no CASTING gate (it clears CASTING after cast).
 -- own quantum strike / phase punch / cosmic smash / ascend arms ARE ported
 -- on combat-start timers (event 1, C++-exact inits :392-397, header
 -- corrected 2026-10-16); every other arm rides an unbridged machine
@@ -364,6 +374,12 @@ local CONSTELLATION_POSITIONS = {
 -- DoCastVictim(SPELL_QUANTUM_STRIKE 64395) (non-triggered),
 -- 3500ms+introDelay init, Repeat(3s, 5s) (:392, :586-589 verified).
 local function quantumStrikeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "quantumstrike", 500, function()
+            quantumStrikeTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_QUANTUM_STRIKE)
     schedule(guid, "quantumstrike", {3000, 5000}, function()
         quantumStrikeTick(creature, guid)
@@ -374,6 +390,12 @@ end
 -- (non-triggered), 15500ms+introDelay init, Repeat(15500ms)
 -- (:393, :590-593 verified).
 local function phasePunchTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "phasepunch", 500, function()
+            phasePunchTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_PHASE_PUNCH)
     schedule(guid, "phasepunch", 15500, function()
         phasePunchTick(creature, guid)
@@ -384,6 +406,12 @@ end
 -- DoCastAOE(SPELL_COSMIC_SMASH 62301) (non-triggered), 25s+introDelay
 -- init, Repeat(25500ms) (:397, :626-630 verified).
 local function cosmicSmashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cosmicsmash", 500, function()
+            cosmicSmashTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_ALGALON_COSMIC_SMASH)
     creature:CastSpell(creature, SPELL_COSMIC_SMASH)
     schedule(guid, "cosmicsmash", 25500, function()
@@ -395,6 +423,12 @@ end
 -- DoCastAOE(SPELL_ASCEND_TO_THE_HEAVENS 64487) (non-triggered),
 -- 360s+introDelay init, one-shot (:396, :618-622 verified).
 local function ascendTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "ascend", 500, function()
+            ascendTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_ALGALON_ASCEND)
     creature:CastSpell(creature, SPELL_ASCEND_TO_THE_HEAVENS)
 end
@@ -406,6 +440,12 @@ end
 -- DoAction ACTION_BIG_BANG, EVENT_RESUME_UPDATING 9s+500ms, and the
 -- no-target ACTION_ASCEND via spell_algalon_big_bang) stay out.
 local function bigBangTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bigbang", 500, function()
+            bigBangTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_ALGALON_BIG_BANG)
     creature:Talk(EMOTE_ALGALON_BIG_BANG)
     creature:CastSpell(creature, SPELL_BIG_BANG)
@@ -440,6 +480,12 @@ end
 RegisterCreatureEvent(ENTRY_ALGALON, 19, algalonJustSummoned)
 
 local function collapsingStarTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "collapsingstar", 500, function()
+            collapsingStarTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_ALGALON_COLLAPSING_STAR)
     creature:Talk(EMOTE_ALGALON_COLLAPSING_STAR)
     for _, pos in ipairs(COLLAPSING_STAR_POSITIONS) do

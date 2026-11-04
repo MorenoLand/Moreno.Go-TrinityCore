@@ -19201,7 +19201,16 @@ func init() {
 	// blocked — documented in the lua header. Timer-driven
 	// cast ports (CreateLuaEvent): guardian DARK_VOLLEY,
 	// corruptor random-spell, crusher DIMINISH_POWER, immortal
-	// DRAIN_LIFE — all ungated, non-triggered.
+	// DRAIN_LIFE — all non-triggered, all 500ms IsCasting-deferred
+	// (own UpdateAI pre-loop CASTING returns: guardian :1208,
+	// corruptor :1277, crusher :1378, immortal :1507; the crusher
+	// return also fires on the shattered-illusion aura, out of
+	// family scope). Sara's phase-gated timer casts, the voice
+	// event machine, the Yogg body phase-three arms and the keeper
+	// DoAction arms are unported, so their CASTING gates (sara
+	// :802, yogg body :986, keeper :1657) cover unported arms only;
+	// voice UpdateAI has no gate and keeper JustEnteredCombat
+	// one-shots are ungated (separate hook).
 	RegisterLuaBoss("boss_yogg_saron", 33134)
 	RegisterLuaBoss("boss_yogg_saron", 33288)
 	// Algalon the Observer (Ulduar) — boss_algalon_the_observer.cpp,
@@ -19224,9 +19233,15 @@ func init() {
 	// Timer-driven cast ports (CreateLuaEvent): QUANTUM_STRIKE,
 	// PHASE_PUNCH, COSMIC_SMASH (Talk 10 + cast), ASCEND_TO_THE_HEAVENS
 	// (Talk 9 + cast, one-shot — the 2.5s-later EVENT_EVADE leg has no
-	// bridge), constellation ARCANE_BARRAGE (SPELLVALUE_MAX_TARGETS=1
-	// unbridgeable) — all ungated, non-triggered; the intro timer base is
-	// the 8s re-pull path (the 26.5s first-pull intro is unbridged).
+	// bridge), BIG_BANG, COLLAPSING_STAR — all non-triggered, all
+	// 500ms IsCasting-deferred under the boss UpdateAI pre-loop
+	// (:520) + in-loop (:702) CASTING gates, both PHASE_ROLE_PLAY-
+	// exempt, so the intro-timer and start-combat ticks (which fire
+	// under ROLE_PLAY) stay ungated per C++. Constellation
+	// ARCANE_BARRAGE (SPELLVALUE_MAX_TARGETS=1 unbridgeable) stays
+	// ungated: its own UpdateAI has no CASTING gate. The intro timer
+	// base is the 8s re-pull path (the 26.5s first-pull intro is
+	// unbridged).
 	RegisterLuaBoss("boss_algalon_the_observer", 32871)
 	// Prince Keleseth (Utgarde Keep) — boss_keleseth.cpp,
 	// AddSC_boss_keleseth() (loader decl 126 / call 321) — the FIRST group
@@ -19241,7 +19256,11 @@ func init() {
 	// Talk(3)+Talk(4, target)+DoCast(target, 42672, true)+target
 	// self-cast 42714, true, {14s,19s}/{14s,19s} (re-arm outside the
 	// target check, C++-exact) — all on the CreateLuaEvent timer
-	// convention (GUID-keyed timers, cancel on events 2/4/23). The
+	// convention (GUID-keyed timers, cancel on events 2/4/23), all
+	// 500ms IsCasting-deferred (boss UpdateAI pre-loop :192 +
+	// in-loop :223; skeleton decrepify/resurrect/full-heal/
+	// shadow-fissure under skeleton UpdateAI pre-loop :292 +
+	// in-loop :323; frost-tomb AI UpdateAI is empty, no gate). The
 	// EVENT_SUMMON_SKELETONS Talk is fused with the summon (zarithrian
 	// precedent), npc_frost_tomb / npc_vrykul_skeleton ride summon /
 	// DoAction / instance legs, the spell_frost_tomb AuraScript and the
