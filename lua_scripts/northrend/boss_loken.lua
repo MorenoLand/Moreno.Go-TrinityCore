@@ -218,6 +218,12 @@ local function novaTick(creature, guid)
 end
 
 local function lokenEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base call first (boss_loken.cpp:104-106):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
+    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     lokenResetMod(creature:GetGUID())
     local guid = creature:GetGUID()

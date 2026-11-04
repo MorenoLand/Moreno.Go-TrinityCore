@@ -185,11 +185,17 @@ local function volkhanForgeStart(event, creature)
 end
 
 -- C++ JustEngagedWith: Talk(AGGRO) + SetPhase(PHASE_NORMAL) +
--- three ScheduleEvent legs + BossAI passthrough — only the Talk arm
--- is bridgeable. The phase flip cancels the PHASE_INTRO forge cast.
+-- three ScheduleEvent legs + BossAI passthrough last — the Talk arm
+-- and the base arms port (below). The phase flip cancels the PHASE_INTRO forge cast.
 local function volkhanEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     volkhanForgeCancel(creature:GetGUID())
+    -- C++ JustEngagedWith base call last (boss_volkhan.cpp:130):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, at the handler
+    -- tail (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
