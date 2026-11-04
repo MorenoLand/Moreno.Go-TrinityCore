@@ -35,7 +35,7 @@
 -- + DoCast(me, SPELL_EARTH_SHIELD 54479) (:75, 2-arg = non-triggered
 -- self-cast) -> CastSpell(creature, 54479) once at engage, cast order
 -- kept (the toravon FROZEN_MALLET engage self-cast precedent); the
--- BossAI::JustEngagedWith(who) passthrough is unmodeled; the
+-- BossAI::JustEngagedWith(who) base arms (:73) ported base-first below; the
 -- ScheduleTasks seeding is carried by the event-1 scheduling below
 -- (the EARTH_SHIELD 20s re-arm is NOT ported — documented below).
 -- BLOODLUST (:195-198) — DoCast(SPELL_BLOODLUST 54516) (:197, 1-arg
@@ -197,8 +197,13 @@ end
 
 -- C++ JustEngagedWith (:71-76): Talk(SAY_AGGRO) + DoCast(me,
 -- SPELL_EARTH_SHIELD) non-triggered self-cast at engage (the toravon
--- engage self-cast precedent); the ScheduleTasks seeding below.
+-- engage self-cast precedent); base arms (:73) ported base-first
+-- below; the ScheduleTasks seeding below.
 local function erekemEnterCombat(event, creature)
+    -- BossAI::JustEngagedWith (:73, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_EARTH_SHIELD)
     local guid = creature:GetGUID()

@@ -37,7 +37,7 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) — unconditional (the auriaya
 -- engage-port precedent); seeds the two combat timers below; the
--- BossAI::JustEngagedWith passthrough leg has no bridge.
+-- BossAI::JustEngagedWith base arms (:76) ported base-first below.
 -- KilledUnit — Talk(SAY_SLAY 1) player-gated (event 3 — the razuvious
 -- player-gated variant precedent).
 -- JustDied — Talk(SAY_DEATH 2) — unconditional (the sjonnir
@@ -162,10 +162,14 @@ end
 -- C++ boss_zuramatAI::JustEngagedWith: Talk(SAY_AGGRO) — unconditional
 -- (the auriaya engage-port precedent); the two ScheduleTasks timers
 -- seed their combat timers below; the BossAI::JustEngagedWith
--- passthrough leg has no bridge.
+-- base arms (:76) ported base-first below.
 local function zuramatEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- BossAI::JustEngagedWith (:76, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "voidshift", 9000, function()
         voidShiftTick(creature, guid)

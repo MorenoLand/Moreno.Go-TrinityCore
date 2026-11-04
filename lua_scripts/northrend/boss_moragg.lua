@@ -24,8 +24,8 @@
 -- 23 OnReset. Zero Talk lines in the C++ — none ported.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_moragg.cpp):
--- boss_moraggAI::JustEngagedWith (:57-60) — seeds the combat timers;
--- the BossAI::JustEngagedWith passthrough leg has no bridge.
+-- boss_moraggAI::JustEngagedWith (:52-55) — base arms (:54) ported
+-- base-first below; seeds the combat timers.
 -- ScheduleTasks Async leg (:74-78) — DoCast(me, SPELL_RAY_OF_PAIN
 -- 54438) + DoCast(me, SPELL_RAY_OF_SUFFERING 54442), both 2-arg =
 -- non-triggered — the two immediate self-casts fire once at combat
@@ -139,11 +139,14 @@ local function corrosiveSalivaTick(creature, guid)
     end)
 end
 
--- C++ boss_moraggAI::JustEngagedWith (:57-60): the Async ray
--- self-casts (:74-78) fire once at combat start, then the two combat
--- timers are seeded; the BossAI::JustEngagedWith passthrough leg has
--- no bridge.
+-- C++ boss_moraggAI::JustEngagedWith (:52-55): base arms (:54)
+-- ported base-first below; the Async ray self-casts (:74-78) fire
+-- once at combat start, then the two combat timers are seeded.
 local function moraggEnterCombat(event, creature)
+    -- BossAI::JustEngagedWith (:54, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:CastSpell(creature, SPELL_RAY_OF_PAIN)
     creature:CastSpell(creature, SPELL_RAY_OF_SUFFERING)
     local guid = creature:GetGUID()

@@ -23,9 +23,9 @@
 -- 23 OnReset. Zero Talk lines in the C++ — none ported.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_lavanthor.cpp):
--- boss_lavanthorAI::JustEngagedWith (:61-64) — seeds the three combat
--- timers below; the BossAI::JustEngagedWith passthrough leg has no
--- bridge.
+-- boss_lavanthorAI::JustEngagedWith (:45-49) — seeds the three combat
+-- timers below; the BossAI::JustEngagedWith base arms (:47)
+-- ported base-first below.
 -- ScheduleTasks firebolt leg (:67-72) — SelectTarget(Random, 0,
 -- 40.0f, true) (player-only) -> DoCast(target, SPELL_FIREBOLT 54235)
 -- (:70, 2-arg = non-triggered) -> CastSpell(target, 54235); init 1s,
@@ -161,10 +161,13 @@ local function cauterizingFlamesTick(creature, guid)
     end)
 end
 
--- C++ boss_lavanthorAI::JustEngagedWith (:61-64): seeds the three
--- combat timers; the BossAI::JustEngagedWith passthrough leg has no
--- bridge.
+-- C++ boss_lavanthorAI::JustEngagedWith (:45-49): base arms (:47)
+-- ported base-first below; seeds the three combat timers.
 local function lavanthorEnterCombat(event, creature)
+    -- BossAI::JustEngagedWith (:47, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "firebolt", 1000, function()

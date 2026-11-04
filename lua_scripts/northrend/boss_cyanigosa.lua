@@ -34,7 +34,7 @@
 -- boss_cyanigosa.cpp):
 -- boss_cyanigosaAI::JustEngagedWith (:55-59) — Talk(SAY_AGGRO 0) (:58)
 -- at event 1 (the auriaya precedent); the BossAI::JustEngagedWith(who)
--- passthrough is unmodeled; the ScheduleTasks seeding is carried by
+-- base arms (:57) are ported base-first below; the ScheduleTasks seeding is carried by
 -- the event-1 CreateLuaEvent scheduling below.
 -- ARCANE_VACUUM (:86-90) — DoCastAOE(SPELL_ARCANE_VACUUM 58694) (:88,
 -- 1-arg = non-triggered) = self-cast per the in-tree DoCastAOE
@@ -200,9 +200,13 @@ end
 -- C++ JustEngagedWith (:55-59): Talk(SAY_AGGRO) + the ScheduleTasks
 -- seeding (10s / 15s / 20s / 25s; 30s MANA_DESTRUCTION only when
 -- IsHeroic() — C++-exact: the timer is seeded at engage, not gated
--- per-tick); the BossAI::JustEngagedWith(who) passthrough is
--- unmodeled.
+-- per-tick); the BossAI::JustEngagedWith(who) base arms (:57)
+-- ported base-first below.
 local function cyanigosaEnterCombat(event, creature)
+    -- BossAI::JustEngagedWith (:57, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

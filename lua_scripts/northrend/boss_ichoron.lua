@@ -37,7 +37,7 @@
 -- passthrough leg has no bridge.
 -- boss_ichoronAI::JustEngagedWith (:103-107) — Talk(SAY_AGGRO 0)
 -- (:106) kept; seeds the three combat timers below (the
--- BossAI::JustEngagedWith passthrough leg has no bridge).
+-- BossAI::JustEngagedWith base arms (:105) ported base-first below).
 -- ScheduleTasks water-bolt-volley leg (:213-217) — DoCastAOE
 -- (SPELL_WATER_BOLT_VOLLEY 54241) (:215, 2-arg = non-triggered) =
 -- self-cast per the in-tree DoCastAOE convention ->
@@ -241,9 +241,13 @@ local function frenzyTick(creature, guid)
     end
 end
 
--- C++ boss_ichoronAI::JustEngagedWith (:103-107): Talk(SAY_AGGRO)
--- kept; seeds the combat timers.
+-- C++ boss_ichoronAI::JustEngagedWith (:103-107): base arms (:105)
+-- ported base-first below, then Talk(SAY_AGGRO); seeds the combat timers.
 local function ichoronEnterCombat(event, creature, target)
+    -- BossAI::JustEngagedWith (:105, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
