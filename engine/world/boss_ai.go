@@ -20036,6 +20036,15 @@ func init() {
 	// bridge). Documented-only: the Reset 10-minute SelectSpell buff
 	// machine.
 	RegisterLuaBoss("npc_guard_generic", 15184)
+	// npc_engineering_tele_trinket (World profession gossip): ported
+	// in lua_scripts/world/npc_engineering_tele_trinket.lua — gossip
+	// hello/select learn arms (entries 14742/14743/21493/21494,
+	// in-file enum; retires the documented-only note in
+	// lua_scripts/world/npc_professions_blacksmith.lua).
+	RegisterLuaBoss("npc_engineering_tele_trinket", 14742)
+	RegisterLuaBoss("npc_engineering_tele_trinket", 14743)
+	RegisterLuaBoss("npc_engineering_tele_trinket", 21493)
+	RegisterLuaBoss("npc_engineering_tele_trinket", 21494)
 	// boss_nexusprince_shaffar (Mana Tombs, Outland dungeon pass): the
 	// bridgeable Talk arms — JustEngagedWith Talk(SAY_AGGRO 1) (event 1,
 	// the auriaya precedent), KilledUnit Talk(SAY_SLAY 2) player-gated

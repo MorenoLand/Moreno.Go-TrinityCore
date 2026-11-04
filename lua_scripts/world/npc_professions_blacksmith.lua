@@ -50,7 +50,7 @@
 -- Cost formulas for a future port: DoLowUnlearnCost (:219) = 50k <66 else
 --   100k; DoMedUnlearnCost (:208) = 250k <51 / 500k <66 / 1M.
 --
--- CLASS 2: npc_engineering_tele_trinket (CreatureScript, C++ :673-789)
+-- CLASS 2: npc_engineering_tele_trinket (CreatureScript, C++ :673-789) -- PORTED 2026-11-04 in lua_scripts/world/npc_engineering_tele_trinket.lua; the BLOCKED notes below for this class are stale.
 -- Entries: 14742 (Zap), 14743 (Jhordy), 21493 (Kablam), 21494 (Smiles).
 -- :709 OnGossipHello — player:HasSkill(SKILL_ENGINEERING) IS bridged and
 --   HasSpell(req) IS bridged, but CanLearn (:692) gates on
