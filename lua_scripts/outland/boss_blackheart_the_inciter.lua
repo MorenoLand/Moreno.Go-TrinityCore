@@ -177,6 +177,8 @@ end
 -- the same unbridged machine; CHARGE_ATTACK is PORTED below as a
 -- fire-once one-shot (its C++ 15-25s re-arm is a verified no-op).
 local function blackheartEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

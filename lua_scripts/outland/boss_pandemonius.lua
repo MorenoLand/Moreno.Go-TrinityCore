@@ -158,6 +158,8 @@ local function pandemoniusEnterCombat(event, creature, target)
     clearState(guid)
     blastCounters[guid] = 0
     shellShifts[guid] = 0
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "dark_shell", 20000, function()
         darkShellTick(creature, guid)

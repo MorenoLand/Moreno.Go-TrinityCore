@@ -289,6 +289,8 @@ end
 local function murmurEnterCombat(event, creature, target)
     creature:SetCombatMovement(false) -- BossAI ctor arm, boss_murmur.cpp:64 (ranged AI stands and casts)
     scheduleReset(creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(creature:GetGUID(), "meleerange", 1000, function()
         meleeRangeTick(creature, creature:GetGUID())
     end)
