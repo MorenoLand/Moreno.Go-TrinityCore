@@ -16635,17 +16635,17 @@ func init() {
 	// in-loop (:188) CASTING gates — all 6 UpdateAI timer arms
 	// (bash, mini, root, bolt, spawn, respawn) defer 500ms while
 	// casting, no repeat re-arm; mushroom sub-AI scheduler carries
-	// the ScriptedAI EmptyValidator, ungated. Documented in the lua file, not wired: EVENT_ROOT / EVENT_BOLT (random-target SelectTarget
-	// bridge absent), EVENT_SPAWN and the EVENT_RESPAWN deque machine
-	// (summon STRAND absent — standing), JustSummoned /
+	// the ScriptedAI EmptyValidator, ungated. Ported in Lua:
+	// EVENT_ROOT / EVENT_BOLT / EVENT_SPAWN / EVENT_RESPAWN +
+	// npc_amanitar_mushrooms via the summoner ev19 vehicle.
+	// Documented in the lua file, not wired: JustSummoned /
 	// SummonedCreatureDies bookkeeping (summon / cross-AI bridges
 	// absent), EnterEvadeMode (no despawn bridge — terestian
 	// precedent; instance-script model absent), JustDied (instance
 	// bookkeeping + instance remove-auras legs unbridged
-	// (DoCastAOE(57283) ported as self-cast), npc_amanitar_mushrooms (30391 / 30435 entry-verifiable
-	// but Reset passive/display bridges + MoveInLineOfSight
-	// aura-removal / DoCastAOE / scale / despawn bridges + JustDied
-	// DoCastAOE all absent — entry-verifiable-but-bridge-blocked queue),
+	// (DoCastAOE(57283) ported as self-cast), the mushroom
+	// MoveInLineOfSight proximity-poison leg (ev27 engage-only —
+	// passive mushrooms never engage),
 	// and spell_amanitar_potent_fungus (no AuraScript binding bridge —
 	// razelikh precedent).
 	RegisterLuaBoss("boss_amanitar", 30258)
@@ -16758,7 +16758,11 @@ func init() {
 	// bridgeable-but-entry-blocked queue), the three SpellScripts (no
 	// binding bridge — razelikh precedent), and
 	// achievement_watch_him_die (no achievement-criteria bridge —
-	// snakes precedent + instance model absent).
+	// snakes precedent + instance model absent). Cast-state PORTED:
+	// own UpdateAI pre-loop (:255) + in-loop (:290) CASTING gates —
+	// mindflay, swarm (one-shot defers, never drops), frenzy defer
+	// 500ms while casting, no repeat re-arm; the event-9 _hadFrenzy
+	// latch-set stays ungated (DamageTaken-modeled leg).
 	RegisterLuaBoss("boss_krik_thir", 28684)
 
 	// boss_hadronox: Azjol-Nerub dungeon boss script, entry 28921
@@ -16767,8 +16771,15 @@ func init() {
 	// creature_template binding DB-side). BossAI. Ported arm in
 	// lua_scripts/northrend/boss_hadronox.lua: EVENT_PIERCE_ARMOR
 	// DoCastVictim(Pierce Armor 53418) randtime(4s,7s) init, 10-15s
-	// repeat (the JustEngagedWith arms are independent schedulers —
-	// none of the unmodeled events gate this one). Documented in the
+	// repeat, EVENT_LEECH_POISON DoCastAOE(53030) self-cast,
+	// EVENT_ACID_CLOUD DoCast(53400) random-target, EVENT_WEB_GRAB
+	// DoCastAOE(57731) self-cast (the JustEngagedWith arms are
+	// independent schedulers — none of the unmodeled events gate
+	// these). Cast-state PORTED: own UpdateAI pre-loop (:303) +
+	// in-loop (:353) CASTING gates — all 4 ported scheduler arms
+	// defer 500ms while casting, no repeat re-arm; crusher pack AI
+	// UpdateAI has no CASTING gate, so smash stays ungated.
+	// Documented in the lua file, not wired: the
 	// lua file, not wired: the whole pre-fight/step movement machine
 	// (InitializeAI/SetStep react-state, SetHomePosition, MotionMaster
 	// MovePoint — motion-master bridge absent), SummonCrusherPack
@@ -16776,15 +16787,13 @@ func init() {
 	// final-step MovementInform door-webbing (DoCastAOE 53177/53185 —
 	// terestian/shazzrah precedent + motion-master), GetData/SetGUID
 	// cross-AI, the CanAIAttack home-distance leash, the setActive leg,
-	// EVENT_LEECH_POISON DoCastAOE(53030), EVENT_ACID_CLOUD
-	// DoCast(53400) (random-target SelectTarget — cairne/kazzak
-	// precedent), EVENT_WEB_GRAB DoCastAOE(57731), EVENT_PLAYER_CHECK
+	// EVENT_PLAYER_CHECK
 	// + the DoAction machine (ACTION_CRUSHER_ENGAGED instance
 	// SetBossState + packs 2/3; ACTION_HADRONOX_MOVE — no DoAction
 	// bridge, drakkari_colossus precedent; instance model absent),
 	// EnterEvadeMode (trigger aura-scan, _DespawnAtEvade,
 	// summons.DespawnAll — terestian precedent, ObjectAccessor _anubar
-	// despawn), the UpdateAI casting-skip, DamageTaken NPC safeguard
+	// despawn), DamageTaken NPC safeguard
 	// (no DamageTaken hook — npc_unkor_the_ruthless precedent — +
 	// health-pct — doomwalker precedent), JustSummoned summons.Summon,
 	// npc_anub_ar_crusher (28922 entry-verifiable — zero registration:
@@ -16828,13 +16837,16 @@ func init() {
 	// DespawnAll + _DespawnAtEvade — terestian precedent), the
 	// SpellHit(SPELL_SUBMERGE 53421) payload (event 15 never fires —
 	// standing), the DamageTaken submerge gate/damage-null legs, the
-	// UpdateAI casting-skip, the darter/assassin/guardian/venomancer/
+	// darter/assassin/guardian/venomancer/
 	// impale-target NPCs (entries unverifiable from C++ — pets come
 	// from DB-side summon-spell data — bridgeable-but-entry-blocked
 	// queue; guardian sunder-armor / venomancer poison-bolt / assassin
 	// backstab rotation arms port-pattern-ready), and
 	// spell_anubarak_pound / spell_anubarak_carrion_beetles (no
 	// SpellScript/AuraScript binding bridge — razelikh precedent).
+	// Cast-state CHECKED-NO-GATE: own UpdateAI pre-loop (:178) +
+	// in-loop (:279) CASTING gates exist but guard only unported
+	// phase-machine events; ported Talk arms ungated per C++.
 	RegisterLuaBoss("boss_anub_arak", 29120)
 
 	// boss_trollgore: Drak'Tharon Keep dungeon boss script, entry 26630

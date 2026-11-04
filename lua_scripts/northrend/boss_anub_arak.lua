@@ -125,7 +125,11 @@
 -- out: the only hit source is the boss's own EVENT_SUBMERGE cast
 -- (unported — phase-machine-blocked), so the hit can never fire in Lua;
 -- SetPhase + pet-count machine unbridged — documented-only.
--- UpdateAI UNIT_STATE_CASTING skip — no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
+-- UpdateAI UNIT_STATE_CASTING skip CHECKED-NO-GATE: own UpdateAI
+-- pre-loop (:178) + in-loop (:279) gates exist (IsCasting is live,
+-- lua_creature_events.go:1950 — the old constant-false claim is
+-- retracted) but guard only unported phase-machine events
+-- (pound/swarm/beetles/door); the ported Talk arms fire ungated.
 -- npc_anubarak_anub_ar_darter / _assassin / _guardian / _venomancer
 -- / npc_anubarak_impale_target — ENTRY UNVERIFIABLE (no NPC
 -- constants in azjol_nerub.h or anywhere in the C++ sources; the

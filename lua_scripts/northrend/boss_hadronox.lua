@@ -80,8 +80,13 @@
 -- legs, summons.DespawnAll (terestian precedent), _anubar ObjectAccessor::
 -- GetCreature DespawnOrUnsummon — despawn + summon + ObjectAccessor
 -- bridges absent.
--- UpdateAI: UpdateVictim gate + HasUnitState(UNIT_STATE_CASTING) skip —
--- unit-state bridge absent.
+-- UpdateAI CASTING gates PORTED: own UpdateAI pre-loop (:303) +
+-- in-loop (:353) — pierce/leech/webgrab/acid defer 500ms while
+-- casting, no repeat re-arm (mal_ganis idiom; IsCasting live,
+-- lua_creature_events.go:1950). EVENT_PLAYER_CHECK stays out
+-- (instance/motion). Crusher pack AI UpdateAI (:473) has NO
+-- casting gate (plain while loop, zero HasUnitState hits), so
+-- crusherSmashTick stays ungated per C++.
 -- DamageTaken NPC safeguard (non-player damage, HealthBelowPct(70):
 -- HealthBelowPctDamaged(5) -> damage=0 else damage *= (GetHealthPct()-5)/
 -- 65) — Eluna event 9 (DamageTaken) IS bridged and GetHealth/
@@ -210,6 +215,14 @@ end
 
 -- C++ EVENT_PIERCE_ARMOR: DoCastVictim; randtime(4s,7s) init, 10-15s repeat.
 local function pierceArmorTick(creature, guid)
+    -- Own UpdateAI pre-loop (:303) + in-loop (:353) CASTING gates:
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "piercearmor", 500, function()
+            pierceArmorTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_PIERCE_ARMOR)
     local delay = math.random(10000, 15000)
     schedule(guid, "piercearmor", delay, function()
@@ -220,6 +233,12 @@ end
 -- C++ EVENT_LEECH_POISON: DoCastAOE; randtime(5s,7s) init,
 -- randtime(7s,9s) repeat.
 local function leechPoisonTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "leechpoison", 500, function()
+            leechPoisonTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_LEECH_POISON)
     schedule(guid, "leechpoison", math.random(7000, 9000), function()
         leechPoisonTick(creature, guid)
@@ -229,6 +248,12 @@ end
 -- C++ EVENT_WEB_GRAB: DoCastAOE; randtime(13s,19s) init,
 -- randtime(20s,25s) repeat.
 local function webGrabTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "webgrab", 500, function()
+            webGrabTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WEB_GRAB)
     schedule(guid, "webgrab", math.random(20000, 25000), function()
         webGrabTick(creature, guid)
@@ -243,6 +268,14 @@ end
 -- triggered=false (vaelastrasz convention). Init randtime(7s,13s)
 -- (:229), repeat randtime(16s,23s) (math.random).
 local function acidCloudTick(creature, guid)
+    -- Same UpdateAI CASTING gates; defer precedes the target pick,
+    -- so a deferred acid cloud picks nothing until it fires.
+    if creature:IsCasting() then
+        schedule(guid, "acidcloud", 500, function()
+            acidCloudTick(creature, guid)
+        end)
+        return
+    end
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         local targetReach = 1.5

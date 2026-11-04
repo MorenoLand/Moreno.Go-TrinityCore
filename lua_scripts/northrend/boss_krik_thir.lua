@@ -62,6 +62,11 @@
 -- HealthBelowPct(10), not DamageTaken HealthBelowPctDamaged, so the
 -- nefarian postDamage>0 guard keeps it from firing on the killing blow.
 -- DoCastAOE leg rendered as self-cast per convention.
+-- Cast-state PORTED: own UpdateAI pre-loop (:255) + in-loop (:290)
+-- CASTING gates — mindflay, swarm, frenzy defer 500ms while
+-- casting, no repeat re-arm (mal_ganis idiom). The _hadFrenzy
+-- latch-set via event 9 stays ungated (DamageTaken-modeled leg,
+-- taldaram precedent); the EVENT_FRENZY cast itself defers.
 -- The DoAction machine (no DoAction bridge — drakkari_colossus standing
 -- precedent — and the payload is instance-model anyway):
 -- -ACTION_GATEWATCHER_GREET (instance SetData(DATA_GATEWATCHER_GREET,1)
@@ -183,6 +188,15 @@ end
 
 -- C++ EVENT_MIND_FLAY: DoCastVictim; randtime(1s,3s) init, 9-11s repeat.
 local function mindFlayTick(creature, guid)
+    -- Own UpdateAI pre-loop (:255) + in-loop (:290) CASTING gates:
+    -- while casting the event stays queued — 500ms defer, no
+    -- repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "mindflay", 500, function()
+            mindFlayTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MIND_FLAY)
     local delay = math.random(9000, 11000)
     schedule(guid, "mindflay", delay, function()
@@ -192,7 +206,15 @@ end
 
 -- C++ EVENT_SWARM: DoCastAOE + Talk(SAY_SWARM 3); 5s init, no
 -- repeat (C++ does not reschedule it).
-local function swarmTick(creature)
+local function swarmTick(creature, guid)
+    -- Same UpdateAI CASTING gates; one-shot arm defers 500ms
+    -- rather than dropping (the event stays queued in C++).
+    if creature:IsCasting() then
+        schedule(guid, "swarm", 500, function()
+            swarmTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SWARM)
     creature:Talk(SAY_SWARM)
 end
@@ -201,6 +223,14 @@ end
 -- DoCastAOE(SPELL_CURSE_OF_FATIGUE 52592) rendered as self-cast, 1s
 -- init, 15s repeat.
 local function frenzyTick(creature, guid)
+    -- Same UpdateAI CASTING gates (EVENT_FRENZY executes in the
+    -- scheduler loop): 500ms defer, no repeat re-arm.
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            frenzyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FRENZY)
     creature:CastSpell(creature, SPELL_CURSE_OF_FATIGUE)
     schedule(guid, "frenzy", 15000, function()
@@ -244,7 +274,7 @@ local function krikThirEnterCombat(event, creature, target)
         mindFlayTick(creature, guid)
     end)
     schedule(guid, "swarm", 5000, function()
-        swarmTick(creature)
+        swarmTick(creature, guid)
     end)
     -- BossAI::JustEngagedWith base arms, handler tail (C++ base call
     -- is last, after the schedules); react-state/summons.DoZone legs out.
