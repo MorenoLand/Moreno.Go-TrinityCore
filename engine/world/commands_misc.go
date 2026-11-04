@@ -368,13 +368,41 @@ func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) {
 	}
 }
 
+// extractPlayerNameFromLink mirrors ChatHandler::extractPlayerNameFromLink
+// (Chat.cpp:643): a plain first token is used verbatim, a
+// |color|Hplayer:name|h[name]|h|r shift-click link yields the name key, and
+// a wrong link type yields "" (LANG_WRONG_LINK_TYPE in C++, then
+// LANG_PLAYER_NOT_FOUND from extractPlayerTarget).
+func extractPlayerNameFromLink(raw string) string {
+	raw = strings.TrimLeft(raw, " \t\b")
+	if raw == "" {
+		return ""
+	}
+	if raw[0] != '|' {
+		return strings.SplitN(raw, " ", 2)[0]
+	}
+	segments := strings.Split(raw, "|")
+	if len(segments) < 3 || segments[1] == "" {
+		return ""
+	}
+	link := segments[2]
+	if !strings.HasPrefix(link, "Hplayer:") {
+		return ""
+	}
+	return strings.SplitN(strings.TrimPrefix(link, "Hplayer:"), ":", 2)[0]
+}
+
 // miscResolvePlayerTarget mirrors ChatHandler::extractPlayerTarget
 // (Chat.cpp): an optional leading name, then the current selection, then
 // self. It also resolves offline guids through the characters table for the
 // arms that support offline targets (appear/summon).
 func (s *session) miscResolvePlayerTarget(ctx context.Context, args []string) (online *session, guid uint64, name string, ok bool) {
 	if len(args) > 0 && args[0] != "" {
-		name = normalizePlayerName(args[0])
+		name = normalizePlayerName(extractPlayerNameFromLink(args[0]))
+		if name == "" {
+			s.sendSysMessage(miscPlayerNotFound)
+			return nil, 0, "", false
+		}
 		if sess := s.sessionForPlayerName(name); sess != nil && sess.player != nil {
 			return sess, sess.playerGUID, sess.player.Name, true
 		}

@@ -21,8 +21,9 @@ import (
 // ports); permissionCommandSend stays in permissions.go as documentation.
 //
 // All four arms are native on the Go mail system (mail.go: the mail /
-// mail_items / item_instance tables, GM stationery + 90-day expiry for
-// GM-sent mail per MailDraft::SendMailTo):
+// mail_items / item_instance tables, GM stationery 61 + 30/90-day expiry by
+// invoker GM flag + checked NONE for GM-sent command mail per
+// MailDraft::SendMailTo):
 //   - `mail` inserts a GM-stationery mail row for the resolved receiver
 //     (online or offline, via miscResolvePlayerTarget; the 499 not-found text
 //     is printed once by the resolver, == C++ extractPlayerTarget).
@@ -60,8 +61,13 @@ func (s *session) sendMailTarget(ctx context.Context, args []string) (online *se
 }
 
 // sendMailInsert mirrors the MailDraft::SendMailTo INSERT for GM-sent command
-// mail (cs_send.cpp): MAIL_NORMAL, MAIL_STATIONERY_GM (41), 90-day expiry,
-// immediate delivery, checked = HAS_BODY when a body is present.
+// mail (cs_send.cpp): MAIL_NORMAL, MAIL_STATIONERY_GM (61, passed
+// explicitly by the command arms), immediate delivery, checked =
+// MAIL_CHECK_MASK_NONE (the command arms pass no checked argument, unlike
+// the player-mail path which passes COPIED/HAS_BODY), and the 30/90-day
+// expiry arm keyed on the invoker's GM flag (Mail.cpp:214: pSender is the
+// online invoker; Go commands are always sessioned, so the C++ console
+// null-sender arm is moot).
 func (s *session) sendMailInsert(ctx context.Context, receiverGUID uint64, subject, body string, money uint32, itemGUIDs []uint64) bool {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -73,13 +79,10 @@ func (s *session) sendMailInsert(ctx context.Context, receiverGUID uint64, subje
 	if len(itemGUIDs) > 0 {
 		hasItems = 1
 	}
-	checked := uint32(0x04)
-	if body != "" {
-		checked = 0x10
-	}
+	isGameMaster := s.player != nil && s.player.ExtraFlags&playerExtraGMOn != 0
 	_, err := cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-		VALUES (?, 0, 41, 0, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-		nextMailID, s.playerGUID, receiverGUID, subject, body, hasItems, now+90*24*3600, now, money, checked)
+		VALUES (?, 0, 61, 0, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+		nextMailID, s.playerGUID, receiverGUID, subject, body, hasItems, now+mailSendExpireDelay(isGameMaster, 0), now, money)
 	if err != nil {
 		return false
 	}
