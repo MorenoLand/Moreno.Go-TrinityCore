@@ -152,6 +152,8 @@ local function onDirebrewDisarm(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; inherited base, no override in boss_coren_direbrew.cpp)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; inherited base, no override)
     local guid = creature:GetGUID()
     sisterFlags[guid] = nil
     schedule(guid, "molemachine", 15000, function()

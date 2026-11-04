@@ -174,6 +174,8 @@ local function onEnterCombat(_, creature)
     schedule(guid, "cleave", 8000, function() onCleave(creature, guid) end)
     schedule(guid, "mortalstrike", 12000, function() onMortalStrike(creature, guid) end)
     schedule(guid, "raisedead", 15000, function() onRaiseDead(creature, guid) end)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_baron_rivendare.cpp:87 base call last)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_baron_rivendare.cpp:87 base call last)
 end
 
 local function onCombatEnd(_, creature)
