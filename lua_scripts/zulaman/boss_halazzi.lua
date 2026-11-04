@@ -413,6 +413,18 @@ local function onBerserk(creature, guid)
     end)
 end
 
+local halazziSummons = {}
+
+local function despawnHalazziSummons(guid)
+    local list = halazziSummons[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        halazziSummons[guid] = nil
+    end
+end
+
 local function halazziResetState(guid)
     cancelTimers(timers, guid)
     state[guid] = { phase = PHASE_NONE, transformCount = 0 }
@@ -432,6 +444,7 @@ local function halazziEnterCombat(event, creature, target)
 end
 
 local function halazziLeaveCombat(event, creature)
+    despawnHalazziSummons(creature:GetGUID())
     halazziResetState(creature:GetGUID())
 end
 
@@ -443,11 +456,13 @@ end
 
 local function halazziDied(event, creature, killer)
     halazziResetState(creature:GetGUID())
+    despawnHalazziSummons(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
 local function halazziReset(event, creature)
     local guid = creature:GetGUID()
+    despawnHalazziSummons(guid)
     halazziResetState(guid)
     -- C++ Reset: triggered dual-wield self-cast, then EnterPhase(LYNX).
     -- Event 23 also fires on death (engine reset-then-died order,
@@ -490,9 +505,17 @@ end
 -- latch. AttackStart ported via summon:EngageWithTarget(victim)
 -- (midnight precedent; player-target-only funnel). The LynxGUID
 -- latch stays a lookup (merge arms already find the lynx via
--- FindNearestCreature); the summons latch (BossAI DespawnAll) is a
--- death-path-axis remainder, not a JustSummoned arm.
+-- FindNearestCreature); the summons latch rides the ev19 table
+-- below, despawned from died/reset/leave (BossAI _JustDied/_Reset
+-- DespawnAll, keleseth precedent).
 local function halazziJustSummoned(event, creature, summon)
+    local guid = creature:GetGUID()
+    local list = halazziSummons[guid]
+    if not list then
+        list = {}
+        halazziSummons[guid] = list
+    end
+    list[summon:GetGUID()] = summon
     local victim = creature:GetVictim()
     if victim ~= nil then
         summon:EngageWithTarget(victim)

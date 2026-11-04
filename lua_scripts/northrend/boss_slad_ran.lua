@@ -43,9 +43,9 @@
 -- creature:GetHealthPct() in an event-9 handler with a per-GUID phase
 -- latch (the old "no HealthBelowPct bridge" claim was stale —
 -- sindragosa/moroes use GetHealthPct in handler context).
--- JustSummoned's MovePoint-to-boss choreography is movement-model
--- only and has no summons to move; summons.Summon bookkeeping has
--- no Go bearer. SetGUID(DATA_SNAKES_WHYD_IT_HAVE_TO_BE_SNAKES) /
+-- JustSummoned's MovePoint-to-boss arm is ported via the MoveTo
+-- twin and its summons latch via the ev19 table (despawned from
+-- died/reset/leave). SetGUID(DATA_SNAKES_WHYD_IT_HAVE_TO_BE_SNAKES) /
 -- WasWrapped have no cross-AI SetGUID bridge (zero hits —
 -- netherstorm precedent). achievement_snakes_whyd_it_have_to_be_snakes
 -- (AchievementCriteriaScript, CAST_AI cross-AI OnCheck) has no
@@ -175,8 +175,21 @@ local function sladranEnterCombat(event, creature, target)
     end)
 end
 
+local sladranSummons = {}
+
+local function despawnSladranSummons(guid)
+    local list = sladranSummons[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        sladranSummons[guid] = nil
+    end
+end
+
 local function sladranLeaveCombat(event, creature)
     local guid = creature:GetGUID()
+    despawnSladranSummons(guid)
     cancelTimers(guid)
     sladranPhase[guid] = nil
 end
@@ -188,6 +201,7 @@ local function sladranTargetDied(event, creature, victim)
 end
 
 local function sladranDied(event, creature, killer)
+    despawnSladranSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
     creature:Talk(EMOTE_ACTIVATE_ALTAR)
     creature:Talk(SAY_DEATH)
@@ -195,6 +209,7 @@ end
 
 local function sladranReset(event, creature)
     local guid = creature:GetGUID()
+    despawnSladranSummons(guid)
     cancelTimers(guid)
     sladranPhase[guid] = nil
 end
@@ -282,8 +297,16 @@ end
 -- C++ boss_slad_ran::JustSummoned (boss_slad_ran.cpp:187-191):
 -- summon MovePoint(0, boss position) + summons latch. MovePoint
 -- ported via the MoveTo twin (nesingwary precedent); the summons
--- latch (BossAI DespawnAll) is a death-path-axis remainder.
+-- latch rides the ev19 table below, despawned from died/reset/leave
+-- (BossAI _JustDied/_Reset DespawnAll, keleseth precedent).
 local function sladranJustSummoned(event, creature, summon)
+    local guid = creature:GetGUID()
+    local list = sladranSummons[guid]
+    if not list then
+        list = {}
+        sladranSummons[guid] = list
+    end
+    list[summon:GetGUID()] = summon
     summon:MoveTo(0, creature:GetX(), creature:GetY(), creature:GetZ())
 end
 

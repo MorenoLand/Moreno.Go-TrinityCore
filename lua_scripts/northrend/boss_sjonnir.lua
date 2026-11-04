@@ -279,7 +279,20 @@ local function sjonnirEnterCombat(event, creature, target)
     end)
 end
 
+local sjonnirSummons = {}
+
+local function despawnSjonnirSummons(guid)
+    local list = sjonnirSummons[guid]
+    if list then
+        for _, summon in pairs(list) do
+            summon:Despawn()
+        end
+        sjonnirSummons[guid] = nil
+    end
+end
+
 local function sjonnirCombatEnd(event, creature)
+    despawnSjonnirSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
 end
 
@@ -291,9 +304,10 @@ local function sjonnirTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(DEATH) + _JustDied() — only the Talk arm is
--- bridgeable.
+-- C++ JustDied: _JustDied() then Talk(DEATH) — the despawn leg
+-- ports via the ev19 summons latch below.
 local function sjonnirDied(event, creature, killer)
+    despawnSjonnirSummons(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
@@ -301,8 +315,16 @@ end
 -- C++ boss_sjonnirAI::JustSummoned (boss_sjonnir.cpp:117-122):
 -- summon MovePoint(0, CenterPoint) + summons latch. MovePoint
 -- ported via the MoveTo twin (nesingwary precedent); the summons
--- latch (BossAI DespawnAll) is a death-path-axis remainder.
+-- latch rides the ev19 table below, despawned from died/reset/leave
+-- (BossAI _JustDied/_Reset DespawnAll, keleseth precedent).
 local function sjonnirJustSummoned(event, creature, summon)
+    local guid = creature:GetGUID()
+    local list = sjonnirSummons[guid]
+    if not list then
+        list = {}
+        sjonnirSummons[guid] = list
+    end
+    list[summon:GetGUID()] = summon
     summon:MoveTo(0, 1295.21, 667.157, 189.691)
 end
 
