@@ -32,8 +32,8 @@
 -- DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith instance-bookkeeping leg has no bridge —
--- tharon_ja precedent).
+-- BossAI::JustEngagedWith base arms are PORTED in varosEnterCombat
+-- (pulse + me-form DoZone; instance/setActive/ScheduleTasks legs out).
 -- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied bookkeeping
 -- has no bridge — tharon_ja precedent; the DoCast(me,
 -- SPELL_DEATH_SPELL 50415, true) leg STAYS OUT — the urom verdict:
@@ -181,6 +181,12 @@ end
 -- C++ JustEngagedWith: BossAI::JustEngagedWith(who) +
 -- Talk(SAY_AGGRO) — the Talk arm is unconditional.
 local function varosEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base call first (boss_varos.cpp:95-100):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
+    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

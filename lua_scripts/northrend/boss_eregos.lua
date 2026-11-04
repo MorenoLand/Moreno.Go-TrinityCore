@@ -33,8 +33,9 @@
 -- like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 1) (event 1; the
--- BossAI::JustEngagedWith instance-bookkeeping leg has no
--- bridge — tharon_ja precedent) + the drake-vehicle
+-- BossAI::JustEngagedWith base arms are PORTED in eregosEnterCombat
+-- (pulse + me-form DoZone; instance/setActive/ScheduleTasks legs out)
+-- + the drake-vehicle
 -- FindNearestCreature achievement-void legs
 -- (boss_eregos.cpp:124-128; NPC_RUBY_DRAKE_VEHICLE 27756 /
 -- NPC_EMERALD_DRAKE_VEHICLE 27692 / NPC_AMBER_DRAKE_VEHICLE
@@ -216,6 +217,12 @@ end
 -- FindNearestCreature achievement-void legs (:124-128; bridged —
 -- lua_creature_events.go:1237), ported below.
 local function eregosEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base call first (boss_eregos.cpp:116-121):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
+    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     voidRuby[guid] = true

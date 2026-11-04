@@ -31,8 +31,9 @@
 -- C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the BossAI::
--- JustEngagedWith instance-bookkeeping leg has no instance bridge —
--- tharon_ja precedent). The two cast ScheduleEvent legs are ported
+-- JustEngagedWith base arms are PORTED in drakosEnterCombat
+-- (pulse + me-form DoZone; instance/setActive/ScheduleTasks legs out).
+-- The two cast ScheduleEvent legs are ported
 -- as CreateLuaEvent timers seeded here, cancel on 2/4/23 (the
 -- krystallus/bjarngrim convention).
 -- EVENT_MAGIC_PULL — DoCast(SPELL_MAGIC_PULL 51336) + postPull=true
@@ -164,6 +165,12 @@ local function bombTick(creature, guid)
 end
 
 local function drakosEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base call first (boss_drakos.cpp:83-86):
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
+    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

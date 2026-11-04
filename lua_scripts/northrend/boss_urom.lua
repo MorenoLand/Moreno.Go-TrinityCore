@@ -22,7 +22,8 @@
 -- "spell_urom_frostbomb" hits boss_urom.cpp only (registered from
 -- inside AddSC_boss_urom, no separate loader lines); zero sql/
 -- hits. No urom lua existed.
--- Eluna creature events: 3 OnTargetDied, 4 OnDied. No timers in the
+-- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied.
+-- No timers in the
 -- ported arms; melee is engine-driven in Go (creature combat tick),
 -- like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
@@ -49,7 +50,10 @@
 -- schedule fire (the center leg). Porting either Talk uncondi-
 -- tionally would be C++-inexact, so both are documented-only here
 -- (no _platform / random-shuffle-group state bridge, no summon
--- bridge (summon STRAND absent)).
+-- bridge (summon STRAND absent)). The BossAI::JustEngagedWith
+-- base arms (pulse + me-form DoZone) are PORTED in uromEnterCombat
+-- (base call first, boss_urom.cpp:147-150); StartAttack + the
+-- platform Talk legs stay out (see above).
 -- Reset — SetControlled(false, UNIT_STATE_ROOT) ports via
 -- creature:SetRooted(false) (uromReset); SetDisableGravity(false) is
 -- bridged AND ported in uromReset (the old "no bridge" line was
@@ -166,6 +170,17 @@ local function uromReachHome(event, creature)
     creature:CastSpell(creature, SPELL_EVOCATE)
 end
 
+-- C++ boss_uromAI::JustEngagedWith (boss_urom.cpp:147-150):
+-- BossAI::JustEngagedWith first, then StartAttack(). Only the base
+-- arms port (ScriptedCreature.cpp:540/542) -- SetCombatPulseDelay(5)
+-- + me-form DoZoneInCombat; StartAttack + the platform Talk legs
+-- stay out (documented above).
+local function uromEnterCombat(event, creature, target)
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
+end
+
+RegisterCreatureEvent(ENTRY_UROM, 1, uromEnterCombat)
 RegisterCreatureEvent(ENTRY_UROM, 3, uromTargetDied)
 RegisterCreatureEvent(ENTRY_UROM, 4, uromDied)
 RegisterCreatureEvent(ENTRY_UROM, 23, uromReset)
