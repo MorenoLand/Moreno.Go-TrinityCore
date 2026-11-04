@@ -118,8 +118,10 @@
 -- DoAction machine) — event 1 deliberately NOT registered (registering
 -- it would deviate from C++: ground-phase combat entry yells nothing
 -- there); Talk(SAY_DRAKE_BREATH 6) (ACTION_DRAKE_BREATH) rides the
--- DoAction / cross-creature / harpoon-hit-counter machine — no
--- DoAction / cross-creature bridges. Stay out; Talk(SAY_DRAKE_DEATH
+-- DoAction / cross-creature machine — no DoAction bridge. Stay out
+-- (the harpoon-hit counter itself is PORTED 2026-11-04 via the ev14
+-- graufSpellHit handler; only the Talk trigger stays out);
+-- Talk(SAY_DRAKE_DEATH
 -- 5) (ACTION_GAUNTLET_END) PORTED 2026-10-25 via the graufJustDied
 -- proxy.
 -- npc_grauf (26893, utgarde_pinnacle.h line 70) — all timer legs are
@@ -166,8 +168,10 @@ local SPELL_SKADI_TELEPORT = 61790
 local SPELL_SHRINK = 49089
 local SPELL_NET = 49092
 local SPELL_THROW = 49091
+local SPELL_LAUNCH_HARPOON = 48642 -- boss_skadi.cpp:39
 
 local timers = {}
+local harpoonState = {} -- per-Skadi-GUID { hits, love } for ACTION_HARPOON_HIT
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -248,6 +252,8 @@ local function skadiReset(event, creature)
     if creature:IsDead() then
         return
     end
+    -- C++ Initialize (:157-158) via Reset (:166-172): counters re-zeroed.
+    harpoonState[creature:GetGUID()] = nil
     -- C++ Reset (:166-172): _Reset() (DespawnAll) before re-summoning.
     despawnSkadiSummons(creature:GetGUID())
     creature:SetReactState(0) -- REACT_PASSIVE
@@ -472,6 +478,34 @@ local function graufJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_GRAUF, 4, graufJustDied)
+
+-- C++ npc_graufAI::SpellHit (boss_skadi.cpp:447-452): SPELL_LAUNCH_HARPOON
+-- hit on Grauf -> skadi DoAction(ACTION_HARPOON_HIT) (:291-295), counter
+-- only: _harpoonHit++, _loveSkadi = 1 on the first hit. Event 14 fires on
+-- the hit target (boss_ai.go:3776, args event/creature/caster/spellid);
+-- Skadi resolves via the graufJustDied FindNearestCreature precedent.
+-- Consumers (DRAKE_BREATH love 1->2, GetData achievement) stay out.
+local function graufSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_LAUNCH_HARPOON then
+        return
+    end
+    local skadi = creature:FindNearestCreature(ENTRY_SKADI_THE_RUTHLESS, 200.0)
+    if not skadi then
+        return
+    end
+    local guid = skadi:GetGUID()
+    local st = harpoonState[guid]
+    if not st then
+        st = { hits = 0, love = 0 }
+        harpoonState[guid] = st
+    end
+    st.hits = st.hits + 1
+    if st.hits == 1 then
+        st.love = 1
+    end
+end
+
+RegisterCreatureEvent(ENTRY_GRAUF, 14, graufSpellHit)
 RegisterCreatureEvent(ENTRY_GRAUF, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_skadi.cpp:454: custom UpdateAI never calls DoMeleeAttackIfReady (scheduler-only UpdateAI in C++, never melees)
 end)
