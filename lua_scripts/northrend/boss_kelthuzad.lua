@@ -47,9 +47,9 @@
 -- boss_kelthuzad: KilledUnit Talk(SAY_SLAY 8) (event 3 — C++-GATED:
 -- Talk fires only when victim->GetTypeId() == TYPEID_PLAYER —
 -- nalorakk precedent); JustDied Talk(SAY_DEATH 9) (event 4; the
--- JustDied guardian DoAction(ACTION_KELTHUZAD_DIED) cross-AI leg and
--- the _JustDied instance bookkeeping have no bridge — tharon_ja
--- precedent).
+-- JustDied guardian relay (ACTION_KELTHUZAD_DIED) is PORTED 2026-11-04
+-- via kelthuzadGuardianFlee; the _JustDied instance bookkeeping has
+-- no bridge — tharon_ja precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- SpellHit — SPELL_CHAINS_DUMMY 28408 -> Talk(SAY_CHAINS 10) +
 -- SelectTargetList(3, Random) -> DoCast(CHains 28410) — stays out:
@@ -149,12 +149,11 @@
 -- — guardians never spawn in Go, so no guardian arm can fire;
 -- UpdateAI _bloodTapTimer DoCastVictim(SPELL_BLOOD_TAP 28470) —
 -- moroes-ready in isolation but trigger/producer-blocked;
--- ACTION_KELTHUZAD_DIED Talk(EMOTE_GUARDIAN_FLEE 0) + flee/
--- DespawnOrUnsummon(30s) / MoveTargetedHome legs — Despawn,
--- CombatStop, StopMoving, RemoveAllAuras and SetReactState are
--- all bridged (SetImmuneToPC(true) = SetFlag(59, 0x100), nefarian/opera
--- twin — it drops as a blocker); the blockers are the DoAction trigger
--- (no bridge) and MoveTargetedHome (no bridge);
+-- ACTION_KELTHUZAD_DIED — PORTED 2026-11-04 in kelthuzadDied via
+-- kelthuzadGuardianFlee (sender is kelthuzad JustDied, ev4-registered,
+-- not the guardian's DoAction receipt; MoveHome is the MoveTargetedHome
+-- twin, lua_creature_events.go:4278); the old "no bridge" claims for
+-- this arm are stale.
 -- EMOTE_GUARDIAN_APPEAR 1 rides the DoAction visibility timer,
 -- not a bridge gap.
 -- JustReachedHome DespawnOrUnsummon (boss_kelthuzad.cpp:832-835):
@@ -177,6 +176,8 @@
 -- via DATA_KELTHUZAD GetData — no achievement bridge — documented-only.
 
 local ENTRY_KEL_THUZAD = 15990
+local ENTRY_GUARDIAN = 16441 -- boss_kelthuzad.cpp:139 NPC_GUARDIAN
+local EMOTE_GUARDIAN_FLEE = 0
 
 local SAY_SLAY = 8
 local SAY_DEATH = 9
@@ -203,7 +204,36 @@ local GO_KELTHUZAD_THRONE = 181640 -- naxxramas.h:124
 
 -- C++ SetBossState(BOSS_KELTHUZAD, DONE) leg (instance_naxxramas.cpp):
 -- throne flag clear + DONE flag (no pump leg reads it yet).
+-- C++ boss_kelthuzadAI::JustDied (:263-280) relay, in C++ order BEFORE
+-- Talk(SAY_DEATH): each alive guardian summon (NPC_GUARDIAN 16441) runs
+-- ACTION_KELTHUZAD_DIED (:808-819): Talk(EMOTE_GUARDIAN_FLEE 0) +
+-- REACT_PASSIVE + RemoveAllAuras + CombatStop + StopMoving +
+-- SetImmuneToPC(true) [SetFlag(59, 0x100) twin] + 30s DespawnOrUnsummon
+-- backstop + MoveTargetedHome [MoveHome]. Lua has no kelthuzad summon
+-- tracking, so the freya-elder-sweep approximation applies (guardians
+-- are chamber-local; the C++ list has no range limit); latent until
+-- the phase-1 guardian machine lands. JustReachedHome despawn is
+-- unreachable (guardians unregistered), so the 30s backstop is the
+-- despawn.
+local function kelthuzadGuardianFlee(creature)
+    for _, guardian in ipairs(creature:GetCreaturesInGrid(ENTRY_GUARDIAN, 500)) do
+        if guardian:IsAlive() then
+            guardian:Talk(EMOTE_GUARDIAN_FLEE)
+            guardian:SetReactState(0)
+            guardian:RemoveAllAuras()
+            guardian:CombatStop()
+            guardian:StopMoving()
+            guardian:SetFlag(59, 0x100)
+            CreateLuaEvent(function()
+                guardian:Despawn()
+            end, 30000)
+            guardian:MoveHome()
+        end
+    end
+end
+
 local function kelthuzadDied(event, creature, killer)
+    kelthuzadGuardianFlee(creature)
     creature:Talk(SAY_DEATH)
     local throne = creature:FindNearestGameObject(GO_KELTHUZAD_THRONE, 1000)
     if throne then

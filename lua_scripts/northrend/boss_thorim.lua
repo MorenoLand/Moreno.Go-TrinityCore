@@ -130,6 +130,7 @@
 local ENTRY_THORIM = 32865
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_RENAME = 0x00000010
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 local ENTRY_RUNIC_COLOSSUS = 32872
 local ENTRY_ANCIENT_RUNE_GIANT = 32873
 local GO_THORIM_RUNIC_DOOR = 194557 -- ulduar.h:286
@@ -229,9 +230,26 @@ local function thorimEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO_1)
     creature:CastSpell(creature, SPELL_SHEATH_OF_LIGHTNING)
     cancelTimers(creature:GetGUID())
+    -- C++ JustEngagedWith (:632-636): runicColossus->SetImmuneToPC(false)
+    -- + DoAction(ACTION_ACTIVATE_ADDS) — the miniboss base iterates the
+    -- colossus's own summons (ColossusAddLocations: 4x Iron Ring Guard +
+    -- 2x Dark Rune Acolyte) clearing the same flag. The 60yd sweep from
+    -- the colossus excludes the giant's Dark Rune Acolytes (same entry,
+    -- y≈-430, 90+yd from the colossus cluster). The GO lever leg
+    -- (:638-639) stays out.
+    local colossus = creature:FindNearestCreature(ENTRY_RUNIC_COLOSSUS, 150)
+    if colossus then
+        colossus:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        for _, guard in ipairs(colossus:GetCreaturesInGrid(ENTRY_IRON_RING_GUARD, 60)) do
+            guard:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        end
+        for _, acolyte in ipairs(colossus:GetCreaturesInGrid(ENTRY_DARK_RUNE_ACOLYTE, 60)) do
+            acolyte:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        end
+    end
     -- C++ JustEngagedWith last leg (:642): SummonCreature(NPC_SIF,
     -- SifSpawnPosition) — default TEMPSUMMON_MANUAL_DESPAWN, the bridge
-    -- default; the cross-creature colossus/lever legs above it stay out.
+    -- default.
     creature:SummonCreature(ENTRY_SIF, 2148.301, -297.8453, 438.3308, 2.687807)
 end
 
