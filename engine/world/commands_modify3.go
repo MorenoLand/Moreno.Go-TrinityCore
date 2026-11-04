@@ -45,7 +45,7 @@ func (s *session) handleModifyGender(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	genderStr := args[0] // case-sensitive, like the C++ strncmp
+	genderStr := strings.Join(args, " ") // C++ matches the whole tail string, case-sensitive strncmp
 	var gender uint8
 	switch {
 	case strings.HasPrefix("male", genderStr):
@@ -114,6 +114,25 @@ func (s *session) handleModifyFaction(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage(fmt.Sprintf("Current faction for creature %d is %d, flags %d, npcflags %d, dyflags %d.", low, faction, flags, npcflags, dyflags))
 		return
+	}
+	if strings.HasPrefix(args[0], "|") {
+		// C++ extractKeyFromLink (Chat.cpp:362): a |Hfaction:key| link
+		// yields the key and tokenizing continues after the link tail;
+		// a wrong link type yields null, i.e. the no-arg report. The
+		// synthetic first arg keeps its link tail: cAtoi stops at the
+		// first non-digit, so it reads exactly the key.
+		joined := strings.Join(args, " ")
+		fi := strings.Index(joined, "Hfaction:")
+		if fi < 0 {
+			s.sendSysMessage(fmt.Sprintf("Current faction for creature %d is %d, flags %d, npcflags %d, dyflags %d.", low, faction, flags, npcflags, dyflags))
+			return
+		}
+		rest := joined[fi+len("Hfaction:"):]
+		tail := ""
+		if hi := strings.Index(rest, "|h|r"); hi >= 0 {
+			tail = rest[hi+len("|h|r"):]
+		}
+		args = append([]string{rest}, strings.Fields(tail)...)
 	}
 	faction = uint32(cAtoi(args[0]))
 	if len(args) > 1 {
@@ -295,9 +314,16 @@ func (s *session) handleModifyTalentPoints(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .modify talentpoints <value>")
 		return
 	}
-	tp, err := strconv.Atoi(args[0])
-	if err != nil || tp < 0 {
+	tp := cAtoi(args[0]) // C++ atoi: "abc" is 0 points, not a syntax error
+	if tp < 0 {
 		s.sendSysMessage("Syntax: .modify talentpoints <value>")
+		return
+	}
+	if s.castCommandSelectedCreature() != nil {
+		// C++ getSelectedUnit arm: a non-player, non-pet unit gets
+		// LANG_NO_CHAR_SELECTED instead of the invoker's points (the
+		// pet leg itself stays out: no pet points store).
+		s.sendSysMessage("No character selected.")
 		return
 	}
 	target := s.modifyTargetPlayer(ctx)

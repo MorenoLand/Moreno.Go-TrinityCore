@@ -22,9 +22,11 @@ import (
 //     characters `channels` table (CHAR_UPD_CHANNEL_OWNERSHIP); the Go tree
 //     has no ChatChannels.dbc accessor, no channels persist table, and no
 //     ownership flag on worldChannel.
-//   - `whispers` has no Go bridge at all: AcceptWhispers and the per-player
-//     whisper white list have no Go model (the gm port already records the
-//     SetAcceptWhispers gap).
+//   - `whispers` is half-ported: the accept-whispers flag has a Go model
+//     (playerExtraAcceptWhispers, persisted via persistExtraFlags, Lua
+//     SetAcceptWhispers live), so the status/on/off arms are ported; the
+//     `remove` sub-arm stays blocked — the per-player whisper white list
+//     has no Go model, so there is nothing to remove a name from.
 //
 // Console-vs-chat LANG branches are moot (Go commands are always sessioned,
 // so the C++ "Console" name fallback is unreachable), and LANG texts are
@@ -338,9 +340,13 @@ func (s *session) handleCmdGMNotifyCommand(ctx context.Context, args []string) {
 }
 
 // handleCmdWhispers mirrors HandleWhispersCommand (cs_message.cpp:214-256,
-// RBAC 471): the documented-blocked whispers arm. AcceptWhispers and the
-// per-player whisper white list have no Go model, so the arm reports the
-// missing bridge honestly after the RBAC gate, not a stub.
+// RBAC 471). The no-arg status arm and the bool on/off arms are ported on
+// the playerExtraAcceptWhispers flag (persisted like the .gm flag flips);
+// the off arm's ClearWhisperWhiteList is vacuous — no whitelist exists in
+// the Go tree. The `remove` sub-arm stays blocked on the missing whitelist
+// model and reports honestly instead of pretending to remove a name. Bool
+// tokens follow StringTo<bool> (StringConvert.h:146-166, case-insensitive):
+// 1/y/on/yes/true and 0/n/off/no/false; anything else is LANG_USE_BOL.
 func (s *session) handleCmdWhispers(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -349,7 +355,28 @@ func (s *session) handleCmdWhispers(ctx context.Context, args []string) {
 	if s.messageDeny(ctx, permissionCommandWhispers) {
 		return
 	}
-	s.sendSysMessage("Whisper control is unavailable: the Go tree has no accept-whispers flag or whisper white list model.")
+	if len(args) == 0 {
+		onOff := "off" // LANG_OFF
+		if s.player.ExtraFlags&playerExtraAcceptWhispers != 0 {
+			onOff = "on" // LANG_ON
+		}
+		s.sendSysMessage(fmt.Sprintf("Whisper accepting: %s", onOff)) // LANG_COMMAND_WHISPERACCEPTING
+		return
+	}
+	switch strings.ToLower(args[0]) {
+	case "1", "y", "on", "yes", "true":
+		s.player.ExtraFlags |= playerExtraAcceptWhispers
+		s.persistExtraFlags()
+		s.sendSysMessage("Whisper accepting on.") // LANG_COMMAND_WHISPERON
+	case "0", "n", "off", "no", "false":
+		s.player.ExtraFlags &^= playerExtraAcceptWhispers
+		s.persistExtraFlags()
+		s.sendSysMessage("Whisper accepting off.") // LANG_COMMAND_WHISPEROFF
+	case "remove":
+		s.sendSysMessage("Whisper white list removal is unavailable: the Go tree has no whisper white list model.")
+	default:
+		s.sendSysMessage("Use on/off.") // LANG_USE_BOL 259
+	}
 }
 
 // worldChatRaceIcons maps race id to the Achievement_Character_* icon token

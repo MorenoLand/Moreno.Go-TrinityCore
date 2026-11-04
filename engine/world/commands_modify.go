@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -97,6 +98,16 @@ func (s *session) handleCmdMorph(ctx context.Context, args []string) {
 		s.sendSysMessage("You must be in game to use that command.")
 		return
 	}
+	displayID := uint32(cAtoi(args[0]))
+	if motion := s.castCommandSelectedCreature(); motion != nil {
+		// C++ morph targets the selected unit with no security gate for
+		// creatures (cs_modify.cpp:811-826); the display rides the
+		// setMotionDisplayID twin (Lua SetDisplayId).
+		if s.server != nil {
+			s.server.setMotionDisplayID(ctx, motion, displayID)
+		}
+		return
+	}
 	target := s.modifyTargetPlayer(ctx)
 	if target == nil {
 		return
@@ -104,7 +115,6 @@ func (s *session) handleCmdMorph(ctx context.Context, args []string) {
 	if s.modifyTargetLowerSecurity(ctx, target) {
 		return
 	}
-	displayID := uint32(cAtoi(args[0]))
 	target.player.TransformDisplayID = displayID
 	target.sendPlayerUpdate()
 }
@@ -118,6 +128,20 @@ func (s *session) handleCmdDeMorph(ctx context.Context) {
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
+		return
+	}
+	if motion := s.castCommandSelectedCreature(); motion != nil {
+		// C++ demorph targets the selected unit (cs_modify.cpp:941); a
+		// creature restores its native display through the DeMorph twin
+		// (Lua DeMorph: a zero native is a silent no-op).
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			native := motion.NativeDisplayID
+			s.server.motionMu.Unlock()
+			if native != 0 {
+				s.server.setMotionDisplayID(ctx, motion, native)
+			}
+		}
 		return
 	}
 	target := s.modifyTargetPlayer(ctx)
@@ -150,9 +174,31 @@ func (s *session) handleCmdModify(ctx context.Context, args []string) {
 		return
 	}
 	// The Trinity parser prefix-matches command names at every nesting
-	// level; match the arm the same way here.
+	// level; match the arm the same way here. A partial token matching two
+	// or more arms executes nothing (ChatCommand.cpp:262-288): it prints
+	// the ambiguous list instead. An exact token always wins, and the
+	// match list follows the C++ table order (cs_modify.cpp:47-80).
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
+	modifyArms := []string{"arenapoints", "bit", "drunk", "energy", "faction", "gender", "honor", "hp", "mana", "money", "mount", "phase", "rage", "reputation", "runicpower", "scale", "speed", "spell", "standstate", "talentpoints", "xp"}
+	exact := false
+	var matches []string
+	for _, name := range modifyArms {
+		if name == sub {
+			exact = true
+			break
+		}
+		if strings.HasPrefix(name, sub) {
+			matches = append(matches, name)
+		}
+	}
+	if !exact && len(matches) > 1 {
+		s.sendSysMessage(fmt.Sprintf("Subcommand '%s' of command '.modify' is ambiguous, please use one of the following:", sub))
+		for _, name := range matches {
+			s.sendSysMessage("  " + name)
+		}
+		return
+	}
 	switch {
 	case strings.HasPrefix("hp", sub):
 		s.handleModifyHP(ctx, rest)
@@ -271,59 +317,53 @@ func (s *session) handleModifyPower(ctx context.Context, args []string, powerIdx
 }
 
 // parseModifyMoney mirrors the moneyToAddO leg of HandleModifyMoneyCommand
-// (cs_modify.cpp:542-547): a value containing g/s/c is parsed by
-// MoneyStringToMoney, otherwise it is a plain copper integer.
+// (cs_modify.cpp:542-547) over the full tail string: a value containing a
+// lowercase g/s/c is parsed by MoneyStringToMoney (Util.cpp:198-238) —
+// space-separated tokens, each "<uint32><g|s|c>", lowercase units only,
+// duplicate units rejected; anything else is a strict base-10 int32, so an
+// uppercase unit, trailing junk, or an overflowing value fails silently
+// like the C++ (no give/take message, no state change).
 func parseModifyMoney(arg string) (int32, bool) {
-	if strings.ContainsAny(arg, "gGsScC") {
+	if strings.ContainsAny(arg, "gsc") {
 		var total int64
-		num := ""
-		seen := false
-		for _, r := range arg {
-			switch {
-			case r >= '0' && r <= '9':
-				num += string(r)
-			case r == 'g' || r == 'G':
-				n, err := parseMoneyDigits(num)
-				if err != nil {
+		seenG, seenS, seenC := false, false, false
+		for _, token := range strings.Fields(arg) {
+			if token == "" {
+				continue
+			}
+			var mult int64
+			switch token[len(token)-1] {
+			case 'g':
+				if seenG {
 					return 0, false
 				}
-				total += n * 10000
-				num, seen = "", true
-			case r == 's' || r == 'S':
-				n, err := parseMoneyDigits(num)
-				if err != nil {
+				seenG, mult = true, 10000
+			case 's':
+				if seenS {
 					return 0, false
 				}
-				total += n * 100
-				num, seen = "", true
-			case r == 'c' || r == 'C':
-				n, err := parseMoneyDigits(num)
-				if err != nil {
+				seenS, mult = true, 100
+			case 'c':
+				if seenC {
 					return 0, false
 				}
-				total += n
-				num, seen = "", true
+				seenC, mult = true, 1
 			default:
 				return 0, false
 			}
-		}
-		if !seen || num != "" {
-			return 0, false
+			n, err := strconv.ParseUint(token[:len(token)-1], 10, 32)
+			if err != nil {
+				return 0, false
+			}
+			total += mult * int64(n)
 		}
 		return int32(total), true
 	}
-	return int32(cAtoi(arg)), true
-}
-
-func parseMoneyDigits(num string) (int64, error) {
-	if num == "" {
-		return 0, fmt.Errorf("empty")
+	n, err := strconv.ParseInt(arg, 10, 32)
+	if err != nil {
+		return 0, false
 	}
-	var n int64
-	for _, r := range num {
-		n = n*10 + int64(r-'0')
-	}
-	return n, nil
+	return int32(n), true
 }
 
 // handleModifyMoney mirrors HandleModifyMoneyCommand (cs_modify.cpp:535-605),
@@ -340,7 +380,7 @@ func (s *session) handleModifyMoney(ctx context.Context, args []string) {
 	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
 		return
 	}
-	moneyToAdd, ok := parseModifyMoney(args[0])
+	moneyToAdd, ok := parseModifyMoney(strings.Join(args, " "))
 	if !ok {
 		return
 	}
@@ -410,6 +450,7 @@ func (s *session) handleModifyHonor(ctx context.Context, args []string) {
 }
 
 // handleModifyArena mirrors HandleModifyArenaCommand (cs_modify.cpp:878).
+// C++ checks only target-non-null here (no security gate, unlike honor).
 func (s *session) handleModifyArena(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandModifyArenaPoints) {
 		return
@@ -419,7 +460,7 @@ func (s *session) handleModifyArena(ctx context.Context, args []string) {
 		return
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
+	if target == nil {
 		return
 	}
 	amount := int32(cAtoi(args[0]))

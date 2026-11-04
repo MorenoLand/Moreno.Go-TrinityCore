@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -21,15 +22,66 @@ import (
 // display-only (no mount aura), so a later aura-driven speed recompute
 // clears the override exactly like C++ UpdateSpeed overwriting m_speed_rate.
 
+// modifyAtof mirrors C atof as used by CheckModifySpeed (cs_modify.cpp:379):
+// the longest leading numeric prefix parses and trailing junk is ignored,
+// so "2.5x" is 2.5; with no numeric prefix the value is 0.0, which then
+// fails the bounds check exactly like the C++ (pure garbage is BAD_VALUE
+// in both).
+func modifyAtof(arg string) float64 {
+	i := 0
+	for i < len(arg) && (arg[i] == ' ' || arg[i] == '\t' || arg[i] == '\n' || arg[i] == '\v' || arg[i] == '\f' || arg[i] == '\r') {
+		i++
+	}
+	j := i
+	if j < len(arg) && (arg[j] == '+' || arg[j] == '-') {
+		j++
+	}
+	digits := 0
+	for j < len(arg) && arg[j] >= '0' && arg[j] <= '9' {
+		j++
+		digits++
+	}
+	if j < len(arg) && arg[j] == '.' {
+		j++
+		for j < len(arg) && arg[j] >= '0' && arg[j] <= '9' {
+			j++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return 0
+	}
+	if j < len(arg) && (arg[j] == 'e' || arg[j] == 'E') {
+		k := j + 1
+		if k < len(arg) && (arg[k] == '+' || arg[k] == '-') {
+			k++
+		}
+		expDigits := 0
+		for k < len(arg) && arg[k] >= '0' && arg[k] <= '9' {
+			k++
+			expDigits++
+		}
+		if expDigits > 0 {
+			j = k
+		}
+	}
+	v, err := strconv.ParseFloat(arg[i:j], 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
 // checkModifySpeedBounds mirrors modify_commandscript::CheckModifySpeed
 // (cs_modify.cpp:374) minus the target/security legs, which each arm handles
-// itself: the value must parse and sit inside [minimumBound, maximumBound].
+// itself: the atof value, cast to float like the C++, must sit inside
+// [minimumBound, maximumBound].
 func checkModifySpeedBounds(arg string, minimumBound, maximumBound float64) (float32, bool) {
-	speed, err := strconv.ParseFloat(arg, 32)
-	if err != nil || speed > maximumBound || speed < minimumBound {
+	speed := float32(modifyAtof(arg))
+	if float64(speed) > maximumBound || float64(speed) < minimumBound {
 		return 0, false
 	}
-	return float32(speed), true
+	return speed, true
 }
 
 // handleModifyScale mirrors HandleModifyScaleCommand (cs_modify.cpp:474):
@@ -46,6 +98,28 @@ func (s *session) handleModifyScale(ctx context.Context, args []string) {
 	scale, ok := checkModifySpeedBounds(args[0], 0.1, 10.0)
 	if !ok {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
+		return
+	}
+	if motion := s.castCommandSelectedCreature(); motion != nil {
+		// C++ scale targets the selected unit (cs_modify.cpp:490); a
+		// creature takes the SetObjectScale twin (Lua SetScale): the
+		// script override while known, broadcast with the aura-adjusted
+		// effective scale. No message: NotifyModification only reports
+		// for player targets (cs_modify.cpp:91-96).
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			motion.ScriptScale = scale
+			motion.ScriptScaleKnown = true
+			mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+			key := creatureAuraKeyForMotion(motion)
+			s.server.motionMu.Unlock()
+			effective := float64(scale) + float64(s.server.creatureAuraScaleSum(key))/100
+			if effective < 0.01 {
+				effective = 0.01
+			}
+			s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+				map[int]uint32{objectFieldScale: math.Float32bits(float32(effective))})
+		}
 		return
 	}
 	target := s.modifyTargetPlayer(ctx)
@@ -72,16 +146,15 @@ func (s *session) handleModifySpell(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .modify spell <spellflatid> <op> <val> [mark]")
 		return
 	}
-	flatID, err1 := strconv.ParseUint(args[0], 10, 8)
-	op, err2 := strconv.ParseUint(args[1], 10, 8)
-	val, err3 := strconv.ParseUint(args[2], 10, 16)
-	mark := uint64(65535)
+	// C++ uses atoi with uint8/uint8/uint16/uint16 truncation (mark
+	// defaults to 65535), so 300 becomes 44 and "abc" becomes 0 instead
+	// of a syntax error (cs_modify.cpp:295-310).
+	flatID := uint8(cAtoi(args[0]))
+	op := uint8(cAtoi(args[1]))
+	val := uint16(cAtoi(args[2]))
+	mark := uint16(65535)
 	if len(args) > 3 {
-		mark, err3 = strconv.ParseUint(args[3], 10, 16)
-	}
-	if err1 != nil || err2 != nil || err3 != nil {
-		s.sendSysMessage("Syntax: .modify spell <spellflatid> <op> <val> [mark]")
-		return
+		mark = uint16(cAtoi(args[3]))
 	}
 	target := s.modifyTargetPlayer(ctx)
 	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
@@ -92,10 +165,10 @@ func (s *session) handleModifySpell(ctx context.Context, args []string) {
 		fmt.Sprintf("You set spell flat id %d to %d (mark %d) for %s.", flatID, val, mark, target.player.Name),
 		fmt.Sprintf("%s set your spell flat id %d to %d (mark %d).", s.player.Name, flatID, val, mark))
 	packet := protocol.NewBuffer(6)
-	packet.WriteU8(uint8(flatID))
-	packet.WriteU8(uint8(op))
-	packet.WriteU16(uint16(val))
-	packet.WriteU16(uint16(mark))
+	packet.WriteU8(flatID)
+	packet.WriteU8(op)
+	packet.WriteU16(val)
+	packet.WriteU16(mark)
 	_ = target.write(uint16(protocol.OpcodeSMSG_SET_FLAT_SPELL_MODIFIER), packet.Bytes(), true)
 }
 

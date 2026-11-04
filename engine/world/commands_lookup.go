@@ -773,7 +773,7 @@ func (s *session) lookupSpellLine(id uint32, name, rankText string, target *sess
 	passive := false
 	if s.server != nil && s.server.Data != nil {
 		if info, found, err := s.server.Data.Spell(id); err == nil && found && len(info.Effects) > 0 {
-			passive = info.AttributesEx&spellAttr0Passive != 0
+			passive = info.Attributes&spellAttr0Passive != 0
 			if info.Effects[0].Effect == spellEffectLearnSpell {
 				learn = true
 				if trigName, trigRank, trigFound, trigErr := s.server.Data.SpellName(info.Effects[0].TriggerSpell); trigErr == nil && trigFound && trigName != "" {

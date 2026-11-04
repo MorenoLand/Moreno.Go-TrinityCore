@@ -195,8 +195,8 @@ func (s *session) handleListCreatureCommand(ctx context.Context, args []string) 
 		}
 		// LANG_CREATURE_LIST_CHAT (515); live GUID/alive fields are empty:
 		// no live spawn registry in the Go tree (documented gap).
-		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hcreature_entry:%d|h[%s]|h|r - x: %f y: %f z: %f mapid: %d (GUID %s %s)",
-			guid, entry, name, x, y, z, mapID, "", ""))
+		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hcreature:%d|h[%s]|h|r - x: %f y: %f z: %f mapid: %d (GUID %s %s)",
+			guid, guid, name, x, y, z, mapID, "", ""))
 	}
 	// LANG_COMMAND_LISTCREATUREMESSAGE (441)
 	s.sendSysMessage(fmt.Sprintf("List of creatures found: %d (entry %d)", creatureCount, entry))
@@ -258,8 +258,8 @@ func (s *session) handleListObjectCommand(ctx context.Context, args []string) {
 		}
 		// LANG_GO_LIST_CHAT (517); live GUID/spawned fields are empty: no
 		// live spawn registry in the Go tree (documented gap).
-		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hgameobject_entry:%d|h[%s]|h|r - x: %f y: %f z: %f mapid: %d (GUID %s %s)",
-			guid, entry, name, x, y, z, mapID, "", ""))
+		s.sendSysMessage(fmt.Sprintf("%d - %d - |cffffffff|Hgameobject:%d|h[%s]|h|r - x: %f y: %f z: %f mapid: %d (GUID %s %s)",
+			guid, entry, guid, name, x, y, z, mapID, "", ""))
 	}
 	// LANG_COMMAND_LISTOBJMESSAGE (439)
 	s.sendSysMessage(fmt.Sprintf("List of gameobjects found: %d (entry %d)", objectCount, entry))
@@ -473,7 +473,7 @@ func (s *session) handleListAurasCommand() {
 			if n, _, found, err := s.server.Data.SpellName(id); err == nil && found {
 				name = n
 			}
-			if sp, found, err := s.server.Data.Spell(id); err == nil && found && sp.AttributesEx&0x40 != 0 {
+			if sp, found, err := s.server.Data.Spell(id); err == nil && found && sp.Attributes&spellAttr0Passive != 0 {
 				passive = "Passive" // LANG_PASSIVE (33)
 			}
 		}
@@ -542,35 +542,71 @@ var itemQualityColors = []uint32{
 // in CharacterDatabase.cpp:41-43), item rows from mail_items +
 // item_instance + item_template.
 func (s *session) handleListMailCommand(ctx context.Context, args []string) {
-	var target *session
-	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		target = s.sessionForPlayerName(normalizePlayerName(strings.Join(args, " ")))
-	} else {
-		if ts := s.lookupSelectedPlayer(); ts != nil {
-			target = ts
-		} else {
-			target = s
-		}
-	}
-	if target == nil || target.player == nil {
-		return
-	}
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Database not available.")
 		return
 	}
+	// C++ PlayerIdentifier (ChatCommandTags.cpp:88-121) accepts a |Hplayer
+	// link, a numeric player GUID, or a plain name; the old code only tried
+	// the online name form, so link/GUID targets (including offline GUID
+	// targets, whose mail is plain DB state) silently listed nothing.
+	var targetGUID uint64
+	var targetName string
+	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
+		first := strings.TrimSpace(args[0])
+		switch {
+		case strings.HasPrefix(first, "|"):
+			name := normalizePlayerName(extractPlayerNameFromLink(first))
+			if online := s.sessionForPlayerName(name); online != nil && online.player != nil {
+				targetGUID, targetName = online.playerGUID, online.player.Name
+			} else if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&targetGUID); err != nil || targetGUID == 0 {
+				return
+			} else {
+				targetName = name
+			}
+		case isAllDigits(first):
+			guid64, err := strconv.ParseUint(first, 10, 32)
+			if err != nil || guid64 == 0 {
+				return
+			}
+			if online := s.server.playerSessionForGUID(guid64); online != nil && online.player != nil {
+				targetGUID, targetName = online.playerGUID, online.player.Name
+			} else if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid64).Scan(&targetName); err != nil || targetName == "" {
+				return
+			} else {
+				targetGUID = guid64
+			}
+		default:
+			name := normalizePlayerName(strings.Join(args, " "))
+			if online := s.sessionForPlayerName(name); online != nil && online.player != nil {
+				targetGUID, targetName = online.playerGUID, online.player.Name
+			} else if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&targetGUID); err != nil || targetGUID == 0 {
+				return
+			} else {
+				targetName = name
+			}
+		}
+	} else {
+		if ts := s.lookupSelectedPlayer(); ts != nil && ts.player != nil {
+			targetGUID, targetName = ts.playerGUID, ts.player.Name
+		} else if s.player != nil {
+			targetGUID, targetName = s.playerGUID, s.player.Name
+		} else {
+			return
+		}
+	}
 	var countMail uint64
-	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(id) FROM mail WHERE receiver = ?", target.playerGUID).Scan(&countMail); err != nil {
+	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(id) FROM mail WHERE receiver = ?", targetGUID).Scan(&countMail); err != nil {
 		s.sendSysMessage(fmt.Sprintf("List mail error: %v", err))
 		return
 	}
 	// LANG_LIST_MAIL_HEADER (1151)
-	s.sendSysMessage(fmt.Sprintf("%d mail(s) for %s (guid %d)", countMail, listMailPlayerLink(target.player.Name), target.playerGUID))
+	s.sendSysMessage(fmt.Sprintf("%d mail(s) for %s (guid %d)", countMail, listMailPlayerLink(targetName), targetGUID))
 	s.sendSysMessage("================================================") // LANG_ACCOUNT_LIST_BAR (1012)
 	rows, err := cdb.QueryContext(ctx, `SELECT id, sender, (SELECT name FROM characters WHERE guid = sender) AS sendername,
 		receiver, (SELECT name FROM characters WHERE guid = receiver) AS receivername,
-		subject, deliver_time, expire_time, money, has_items FROM mail WHERE receiver = ?`, target.playerGUID)
+		subject, deliver_time, expire_time, money, has_items FROM mail WHERE receiver = ?`, targetGUID)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("List mail error: %v", err))
 		return
@@ -612,7 +648,11 @@ func (s *session) handleListMailCommand(ctx context.Context, args []string) {
 					}
 					var itemName string
 					var itemQuality uint8
-					if err := cdb.QueryRowContext(ctx, "SELECT name, quality FROM item_template WHERE entry = ?", itemEntry).Scan(&itemName, &itemQuality); err != nil {
+					wdb := s.goWorldDB()
+					if wdb == nil {
+						wdb = cdb
+					}
+					if err := wdb.QueryRowContext(ctx, "SELECT name, quality FROM item_template WHERE entry = ?", itemEntry).Scan(&itemName, &itemQuality); err != nil {
 						continue
 					}
 					color := uint32(0xFFFFFFFF)
@@ -666,7 +706,7 @@ func (s *session) handleListSpawnPointsCommand(ctx context.Context) {
 	}
 	report := func(p spawnPoint) {
 		if !showAll {
-			if dx, dy := p.x-float64(s.player.X), p.y-float64(s.player.Y); math.Hypot(dx, dy) > 5000.0 {
+			if dx, dy := p.x-float64(s.player.X), p.y-float64(s.player.Y); math.Hypot(dx, dy) >= 5000.0 {
 				return
 			}
 		}
