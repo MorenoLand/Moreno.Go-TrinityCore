@@ -2634,7 +2634,16 @@ func (s *session) blockedCommandArm(ctx context.Context, permissionID uint32, re
 // SetItemsRatio[ForHouse], Rebuild, ReloadAllConfig, PrepareStatusInfos),
 // which has no Go model, so each arm is RBAC-gated on its own C++
 // permission and reports the missing bridge honestly instead of stubbing
-// the arm (blockedCommandArm pattern).
+// the arm (blockedCommandArm pattern). The argument SHAPE is still validated
+// against the C++ typed dispatcher before the blocked message, because a
+// malformed invocation never reaches the engine in C++: the bare items
+// handler takes a 7-element array and the bare ratio handler three uint32s,
+// so a bare arm with no numbers fails the parse (the array/uint32
+// TryConsume calls return nullopt on an empty token, ChatCommandArgs.h),
+// a quality/house arm needs exactly one uint32, and rebuild/status take an
+// Optional<EXACT_SEQUENCE("all")> (case-insensitive per ChatCommandTags.h),
+// so any other trailing token fails the whole-string-consumed check
+// (ChatCommand.h ConsumeFromOffset) and the framework shows help.
 func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
@@ -2643,42 +2652,157 @@ func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
 	const blocked = "ahbot is not supported: the auction house bot engine has no Go model."
 	switch strings.ToLower(args[0]) {
 	case "items":
-		perm, ok := ahbotItemsPerm(args)
-		if !ok {
+		if !ahbotItemsShape(args) {
 			s.sendSysMessage("Syntax: .ahbot items [gray|white|green|blue|purple|orange|yellow]")
 			return
 		}
+		perm, _ := ahbotItemsPerm(args)
 		s.blockedCommandArm(ctx, perm, blocked)
 		return
 	case "ratio":
-		perm, ok := ahbotRatioPerm(args)
-		if !ok {
+		if !ahbotRatioShape(args) {
 			s.sendSysMessage("Syntax: .ahbot ratio [alliance|horde|neutral]")
 			return
 		}
+		perm, _ := ahbotRatioPerm(args)
 		s.blockedCommandArm(ctx, perm, blocked)
 		return
 	case "rebuild":
+		if len(args) > 2 || (len(args) == 2 && !strings.EqualFold(args[1], "all")) {
+			s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
+			return
+		}
 		s.blockedCommandArm(ctx, permissionCommandAhbotRebuild, blocked)
 		return
 	case "reload":
 		s.blockedCommandArm(ctx, permissionCommandAhbotReload, blocked)
 		return
 	case "status":
+		if len(args) > 2 || (len(args) == 2 && !strings.EqualFold(args[1], "all")) {
+			s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
+			return
+		}
 		s.blockedCommandArm(ctx, permissionCommandAhbotStatus, blocked)
 		return
 	}
 	s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
 }
 
+// ahbotUint32 mirrors the C++ uint32 argument parse (StringTo<uint32> with
+// base 0): plain digits, hex 0x and octal 0 prefixes accepted, no sign,
+// no underscores, and the value must fit in 32 bits.
+func ahbotUint32(s string) bool {
+	if s == "" || strings.ContainsAny(s, "_+") {
+		return false
+	}
+	_, err := strconv.ParseUint(s, 0, 32)
+	return err == nil
+}
+
+// ahbotQualityToken resolves a quality token the way the C++ subcommand
+// traversal does (ChatCommand.cpp FilteredCommandListIterator): an exact
+// name wins, otherwise a unique case-insensitive prefix matches; an
+// ambiguous prefix (e.g. "g" for gray/green) or an unknown token matches
+// nothing. The Go command tree only canonicalizes the ahbot node's own
+// children, so this second-level resolution has to happen here.
+func ahbotQualityToken(tok string) (string, bool) {
+	lower := strings.ToLower(tok)
+	qualities := []string{"gray", "white", "green", "blue", "purple", "orange", "yellow"}
+	for _, q := range qualities {
+		if q == lower {
+			return q, true
+		}
+	}
+	var match string
+	for _, q := range qualities {
+		if strings.HasPrefix(q, lower) {
+			if match != "" {
+				return "", false
+			}
+			match = q
+		}
+	}
+	if match == "" {
+		return "", false
+	}
+	return match, true
+}
+
+// ahbotHouseToken is the ahbotQualityToken equivalent for the ratio houses.
+func ahbotHouseToken(tok string) (string, bool) {
+	lower := strings.ToLower(tok)
+	houses := []string{"alliance", "horde", "neutral"}
+	for _, h := range houses {
+		if h == lower {
+			return h, true
+		}
+	}
+	var match string
+	for _, h := range houses {
+		if strings.HasPrefix(h, lower) {
+			if match != "" {
+				return "", false
+			}
+			match = h
+		}
+	}
+	if match == "" {
+		return "", false
+	}
+	return match, true
+}
+
+// ahbotItemsShape reports whether args (starting with "items") match one of
+// the C++ items arms: quality + one uint32, or exactly seven uint32s for
+// the bare array arm. A bare arm with no numbers, a quality arm with a
+// missing/non-uint32 amount, and any other token count all fail the parse.
+func ahbotItemsShape(args []string) bool {
+	switch len(args) {
+	case 3:
+		_, ok := ahbotQualityToken(args[1])
+		return ok && ahbotUint32(args[2])
+	case 8:
+		for _, tok := range args[1:] {
+			if !ahbotUint32(tok) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// ahbotRatioShape is the ahbotItemsShape equivalent for ratio: house + one
+// uint32, or exactly three uint32s for the bare arm.
+func ahbotRatioShape(args []string) bool {
+	switch len(args) {
+	case 3:
+		_, ok := ahbotHouseToken(args[1])
+		return ok && ahbotUint32(args[2])
+	case 4:
+		for _, tok := range args[1:] {
+			if !ahbotUint32(tok) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // ahbotItemsPerm mirrors the ahbotItemsAmountCommandTable permission ladder:
-// a quality sub-token picks its own permission, the bare row uses the items
-// permission; an unknown token matches no C++ table row (syntax failure).
+// a quality sub-token picks its own permission, the bare row (including the
+// 7-number array form) uses the items permission. Callers validate the
+// shape first; an unknown token matches no C++ table row (syntax failure).
 func ahbotItemsPerm(args []string) (uint32, bool) {
-	if len(args) == 1 {
+	if len(args) == 1 || len(args) == 8 {
 		return permissionCommandAhbotItems, true
 	}
-	switch strings.ToLower(args[1]) {
+	quality, ok := ahbotQualityToken(args[1])
+	if !ok {
+		return 0, false
+	}
+	switch quality {
 	case "gray":
 		return permissionCommandAhbotItemsGray, true
 	case "white":
@@ -2699,10 +2823,14 @@ func ahbotItemsPerm(args []string) (uint32, bool) {
 
 // ahbotRatioPerm mirrors the ahbotItemsRatioCommandTable permission ladder.
 func ahbotRatioPerm(args []string) (uint32, bool) {
-	if len(args) == 1 {
+	if len(args) == 1 || len(args) == 4 {
 		return permissionCommandAhbotRatio, true
 	}
-	switch strings.ToLower(args[1]) {
+	house, ok := ahbotHouseToken(args[1])
+	if !ok {
+		return 0, false
+	}
+	switch house {
 	case "alliance":
 		return permissionCommandAhbotRatioAlliance, true
 	case "horde":
@@ -4837,6 +4965,18 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 		s.sendSysMessage("Invalid arena team type. Use 2, 3 or 5.")
 		return
 	}
+	if name == "" {
+		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
+		return
+	}
+	// LANG_ARENA_ERROR_NAME_EXISTS (858). C++ checks the name before the
+	// captain fallback (cs_arena.cpp HandleArenaCreateCommand), so a taken
+	// name reports here even when no captain target resolves.
+	var clash uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE name = ?", name).Scan(&clash); err == nil {
+		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" already exists.", name))
+		return
+	}
 	if captainGUID == 0 {
 		guid, name, ok := s.arenaTargetOrSelf(ctx, cdb)
 		if !ok {
@@ -4844,16 +4984,6 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 			return
 		}
 		captainGUID, captainName = guid, name
-	}
-	if name == "" {
-		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
-		return
-	}
-	// LANG_ARENA_ERROR_NAME_EXISTS (858).
-	var clash uint32
-	if err := cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE name = ?", name).Scan(&clash); err == nil {
-		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" already exists.", name))
-		return
 	}
 	// sCharacterCache->GetCharacterArenaTeamIdByGuid(captain, type):
 	// LANG_ARENA_ERROR_SIZE (859).
@@ -6494,6 +6624,12 @@ func (s *session) handleBanHelper(ctx context.Context, mode int, args []string) 
 	}
 	switch mode {
 	case banModeAccount:
+		if !utf8.ValidString(nameOrIP) {
+			// LANG_ACCOUNT_NOT_EXIST (413): Utf8ToUpperOnlyLatin fails
+			// on invalid UTF-8 (Util.cpp) instead of passing the name on.
+			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", nameOrIP))
+			return
+		}
 		nameOrIP = upperOnlyLatin(nameOrIP)
 	case banModeCharacter:
 		if nameOrIP == "" || !utf8.ValidString(nameOrIP) {
@@ -6575,7 +6711,9 @@ func (s *session) handleCmdBanCharacter(ctx context.Context, args []string) {
 		// LANG_BAN_NOTFOUND (410).
 		s.sendSysMessage(fmt.Sprintf("character %s not found.", name))
 	default:
-		s.sendSysMessage("Syntax: .ban character <name> <duration> <reason>")
+		// The C++ switch handles only BAN_SUCCESS and BAN_NOTFOUND; any
+		// other result falls through to return true with no message
+		// (cs_ban.cpp HandleBanCharacterCommand), so no syntax line here.
 	}
 }
 
@@ -6716,7 +6854,9 @@ func (s *session) handleCmdBanInfoCharacter(ctx context.Context, args []string) 
 		s.sendSysMessage("Syntax: .baninfo character <name>")
 		return
 	}
-	name := args[0]
+	// C++ takes the whole remainder as the name (std::string name(args));
+	// a trailing token makes the lookup miss instead of being ignored.
+	name := strings.Join(args, " ")
 	if name == "" || !utf8.ValidString(name) {
 		// LANG_BANINFO_NOCHARACTER (414).
 		s.sendSysMessage("Character not found.")
@@ -6759,10 +6899,15 @@ func (s *session) handleCmdBanInfoIP(ctx context.Context, args []string) {
 	if s.server == nil || s.server.AuthStore == nil {
 		return
 	}
-	if len(args) == 0 || !isBanIPAddress(args[0]) {
+	if len(args) == 0 {
 		return // C++ returns false silently
 	}
-	ip := args[0]
+	// C++ takes the whole remainder (strtok with an empty delimiter), so a
+	// trailing token fails the IsIPAddress check instead of being ignored.
+	ip := strings.Join(args, " ")
+	if !isBanIPAddress(ip) {
+		return // C++ returns false silently
+	}
 	// C++ raw query: SELECT ip, FROM_UNIXTIME(bandate),
 	// FROM_UNIXTIME(unbandate), unbandate-UNIX_TIMESTAMP(), banreason,
 	// bannedby, unbandate-bandate FROM ip_banned WHERE ip = ?.
@@ -7022,6 +7167,12 @@ func (s *session) handleUnBanHelper(ctx context.Context, mode int, args []string
 	nameOrIP := args[0]
 	switch mode {
 	case banModeAccount:
+		if !utf8.ValidString(nameOrIP) {
+			// LANG_ACCOUNT_NOT_EXIST (413): Utf8ToUpperOnlyLatin fails
+			// on invalid UTF-8 (Util.cpp) instead of passing the name on.
+			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", nameOrIP))
+			return
+		}
 		nameOrIP = upperOnlyLatin(nameOrIP)
 	case banModeCharacter:
 		if nameOrIP == "" || !utf8.ValidString(nameOrIP) {
