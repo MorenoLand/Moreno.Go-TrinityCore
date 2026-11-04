@@ -211,9 +211,18 @@ local function randomThreatUnit(creature)
 end
 
 -- Kael'thas (19622): the phase machine is unmodeled (see
--- header); the ported bridgeable arms are the two Talk arms
--- plus the two pre-encounter SetTarget arms (MoveInLineOfSight
--- / DamageTaken PHASE_NONE legs, per-GUID latch below).
+-- header); the ported bridgeable arms are the two Talk arms,
+-- the two pre-encounter SetTarget arms (MoveInLineOfSight
+-- / DamageTaken PHASE_NONE legs, per-GUID latch below) and the
+-- inherited BossAI engage-base arms (ev1 below).
+-- C++ boss_kaelthasAI has NO JustEngagedWith override: the inherited
+-- BossAI base runs on engage (shattered-executioner precedent);
+-- instance legs (SetBossState/setActive/ScheduleTasks) stay out.
+RegisterCreatureEvent(ENTRY_KAELTHAS, 1, function(_, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+end)
+
 -- C++ KilledUnit: Talk(SAY_SLAY) unconditionally (no player
 -- gate, C++-exact).
 RegisterCreatureEvent(ENTRY_KAELTHAS, 3, function(_, creature)

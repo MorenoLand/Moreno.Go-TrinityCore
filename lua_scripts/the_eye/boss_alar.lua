@@ -527,10 +527,13 @@ RegisterCreatureEvent(ENTRY_ALAR, 1, function(_, creature)
         dying = false,
         dive = nil,
     }
-    -- C++ JustEngagedWith (boss_alar.cpp:173-178): BossAI::JustEngagedWith
-    -- -> me->SetDisableGravity(true) (:177) -> setActive(true) (no
-    -- bridge). Ports via the creature:SetDisableGravity bridge (stale
-    -- "no gravity bridge" retracted).
+    -- C++ JustEngagedWith (boss_alar.cpp:174-178): BossAI::JustEngagedWith
+    -- base arms first (:176) -> me->SetDisableGravity(true) (:177) ->
+    -- setActive(true) (:178, no bridge, instance leg). Ports via the
+    -- creature:SetDisableGravity bridge (stale "no gravity bridge"
+    -- retracted).
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:SetDisableGravity(true)
     alarPump[guid] = CreateLuaEvent(function()
         combatTick(creature, guid)
