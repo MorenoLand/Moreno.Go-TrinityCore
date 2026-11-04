@@ -12207,19 +12207,25 @@ func init() {
 	// Eredar Twins (25165/25166) run their pull schedules (shadow
 	// blades/shadow nova/confounding blow for Sacrolash; conflagration/
 	// flame sear/pyrogenics/blaze for Alythess), the 6min enrage
-	// one-shots, the 25% kill Talks and timer cleanup. The sister-death
-	// detection (cross-creature instance lookup), the SpellHitTarget
-	// touched-spell chaining, the shadow-image summons and the
-	// SetBossState arms have no cross-creature/SpellHitTarget/summon/
-	// instance-script bridges.
+	// one-shots, the 25% kill Talks and timer cleanup; the per-arm
+	// IsNonMeleeSpellCast gates are ported as 500ms IsCasting defers
+	// (no re-arm consumed) on all seven gated ticks, while the
+	// shadow-image summon and both enrages stay ungated per C++.
+	// The sister-death detection (cross-creature instance lookup),
+	// the SpellHitTarget touched-spell chaining and the
+	// SetBossState arms have no cross-creature/SpellHitTarget/
+	// instance-script bridges; the shadow-image summons themselves
+	// are ported via SummonCreature (the paired cross-creature
+	// AddThreat leg stays out).
 	RegisterLuaBoss("boss_sacrolash", 25165)
 	RegisterLuaBoss("boss_alythess", 25166)
-	// Shadow Image (25214) runs its constructor triggered self-cast of
-	// image visual 45263 plus the shadow-fury/dark-strike schedule; the
-	// NOT_SELECTABLE flag and 15s KillSelf arms have no flag/kill
-	// bridges, and its sacrolash-side DoSpawnCreature summon is
-	// summon-blocked — registered for its own verifiable AI arms
-	// (felmyst-trail convention).
+	// Shadow Image (25214) runs the shadow-fury/dark-strike schedule
+	// plus the visual maintenance check; dark strike carries its C++
+	// IsNonMeleeSpellCast gate as a skip (3s re-arm sits outside the
+	// gate) while shadow fury stays ungated per C++; the
+	// NOT_SELECTABLE flag and 15s KillSelf arms are ported, and the
+	// sacrolash-side summon is ported via SummonCreature — registered
+	// for its own verifiable AI arms (felmyst-trail convention).
 	RegisterLuaBoss("npc_shadow_image", 25214)
 	// Muru (25741) / Entropius (25840): Muru runs the engage
 	// triggered periodic self-casts (open portal 45994, darkness

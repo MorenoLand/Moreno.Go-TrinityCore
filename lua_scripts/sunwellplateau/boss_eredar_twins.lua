@@ -68,9 +68,28 @@
 -- timers; the instance sister respawn/threat relay and SetBossState
 -- (NOT_STARTED) arms are blocked on the instance-script model.
 -- OnLeaveCombat(2): cancel timers, drop per-GUID state. The
--- UpdateAI UNIT_STATE_CASTING queue gates and the InterruptSpell
--- arms have no UNIT_STATE/interrupt bridges — timers fire
--- unconditionally (jeklik convention). The SpellHitTarget
+-- UpdateAI cast-state gates (boss_eredar_twins.cpp, per-arm
+-- IsNonMeleeSpellCast(false) checks in the ScriptedAI UpdateAI
+-- overrides — no BossAI base gate applies here): PORTED via the
+-- live creature:IsCasting() bridge (lua_creature_events.go:1950,
+-- mal_ganis/felmyst idiom) — sacrolash shadow blades (:291),
+-- shadow nova (:245) and confounding blow (:264); alythess
+-- conflagration (:586), flame sear (:608), pyrogenics (:617) and
+-- blaze (:626); each defers 500ms under its own key, consuming no
+-- re-arm, with the defer preceding target picks and Talks. The
+-- InterruptSpell(CURRENT_GENERIC_SPELL) legs inside the
+-- conflagration/shadow-nova gates are vacuous there (they fire
+-- only when not casting; InterruptSpell is bridged at
+-- lua_creature_events.go:962 but adds nothing in this position).
+-- Ungated per C++: the sacrolash shadow-image summon (:272-287,
+-- no gate), both 6min enrages (:306 sacrolash / alythess enrage
+-- block, no gate), shadow-image shadow fury (no gate). Shadow-
+-- image dark strike (:731) is a SKIP gate, not a defer: its 3s
+-- re-arm sits OUTSIDE the gate, so a casting-blocked strike is
+-- skipped and retried at the next 3s tick — ported as an
+-- IsCasting condition on the cast, re-arm untouched. The old
+-- "timers fire unconditionally (jeklik convention)" claim is
+-- retracted for the gated arms above. The SpellHitTarget
 -- HandleTouchedSpells arm (45248/45329/45256/45270 -> dark touched
 -- 45347; 45342 -> flame touched 45348) is unmodeled on
 -- hit-target-enumeration grounds (see header top — the "no bridge"
@@ -242,6 +261,12 @@ end
 
 -- C++ EVENT shadow blades: DoCastSelf(45248); repeat 10s.
 local function sacrolashShadowBlades(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowblades", 500, function()
+            sacrolashShadowBlades(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHADOW_BLADES)
     schedule(guid, "shadowblades", 10000, function()
         sacrolashShadowBlades(creature, guid)
@@ -256,6 +281,12 @@ end
 -- YELL_SHADOW_NOVA even when the target pick is nil — Talk
 -- placement matches.
 local function sacrolashShadowNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadownova", 500, function()
+            sacrolashShadowNova(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_NOVA)
@@ -271,6 +302,12 @@ end
 -- C++ EVENT confounding blow: DoCast(random target, 45256);
 -- repeat {20s,25s}.
 local function sacrolashConfoundingBlow(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "confoundingblow", 500, function()
+            sacrolashConfoundingBlow(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CONFOUNDING_BLOW)
@@ -396,6 +433,12 @@ end
 -- C++ EVENT blaze: DoCastVictim(45235); repeat 3.8s. The
 -- conflagration arm re-arms this once at 4s (C++-exact).
 local function alythessBlaze(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blaze", 500, function()
+            alythessBlaze(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_BLAZE)
     schedule(guid, "blaze", 3800, function()
         alythessBlaze(creature, guid)
@@ -408,6 +451,12 @@ end
 -- blaze re-arm even when the target pick is nil — placement
 -- matches.
 local function alythessConflagration(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "conflagration", 500, function()
+            alythessConflagration(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CONFLAGRATION)
@@ -425,6 +474,12 @@ end
 
 -- C++ EVENT flame sear: DoCastSelf(46771); repeat 15s.
 local function alythessFlameSear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamesear", 500, function()
+            alythessFlameSear(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FLAME_SEAR)
     schedule(guid, "flamesear", 15000, function()
         alythessFlameSear(creature, guid)
@@ -433,6 +488,12 @@ end
 
 -- C++ EVENT pyrogenics: triggered DoCastSelf(45230); repeat 15s.
 local function alythessPyrogenics(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pyrogenics", 500, function()
+            alythessPyrogenics(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_PYROGENICS, true)
     schedule(guid, "pyrogenics", 15000, function()
         alythessPyrogenics(creature, guid)
@@ -536,11 +597,14 @@ local function shadowImageFury(creature, guid)
 end
 
 -- C++ EVENT dark strike: DoCastVictim(45271) only when within
--- melee range of the victim (creature:IsWithinMeleeRange);
--- the 3s re-arm fires regardless.
+-- melee range of the victim (creature:IsWithinMeleeRange) and
+-- not casting (boss_eredar_twins.cpp:731 IsNonMeleeSpellCast
+-- gate); the 3s re-arm sits OUTSIDE the gate, so a gated strike
+-- is skipped, not deferred — the IsCasting condition below, with
+-- the re-arm untouched, is C++-exact.
 local function shadowImageDarkStrike(creature, guid)
     local victim = creature:GetVictim()
-    if victim and creature:IsWithinMeleeRange(victim) then
+    if victim and not creature:IsCasting() and creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(nil, SPELL_DARK_STRIKE)
     end
     schedule(guid, "darkstrike", 3000, function()
