@@ -231,7 +231,13 @@ end
 -- C++ EVENT_ENRAGE (:362-365): Talk(SAY_BERSERK 5) + DoCastSelf
 -- (SPELL_ENRAGE 26662) (2-arg non-triggered); 600s init (:192),
 -- no re-arm, no phase gate — Talk-before-cast order kept.
-local function enrageTick(creature)
+local function enrageTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function()
+            enrageTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_BERSERK)
     creature:CastSpell(creature, SPELL_ENRAGE)
 end
@@ -247,7 +253,7 @@ local function xt002EnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "enrage", 600000, function()
-        enrageTick(creature)
+        enrageTick(creature, guid)
     end)
 end
 
@@ -287,9 +293,21 @@ RegisterCreatureEvent(ENTRY_XT002, 23, cancelCombatTimers)
 -- then the 12s repeating _scheduler leg casting DoCastVictim
 -- (SPELL_SHOCK 64230) (2-arg non-triggered; creature:CastSpell
 -- (nil, spell) = DoCastVictim per the file convention).
+-- Life-spark UpdateAI CASTING gate (boss_xt002.cpp:645, pre-loop
+-- over the shock scheduler) PORTED as a 500ms IsCasting defer in
+-- lifeSparkShockTick (mal_ganis idiom); the boss gates
+-- (pre-loop :325 + in-loop :381) port the same way in enrageTick;
+-- the engage static-charged one-shot is ungated per C++
+-- (JustEngagedWith, separate hook).
 local function lifeSparkShockTick(creature)
-    creature:CastSpell(nil, SPELL_SHOCK)
     local guid = creature:GetGUID()
+    if creature:IsCasting() then
+        schedule(guid, "shock", 500, function()
+            lifeSparkShockTick(creature)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_SHOCK)
     schedule(guid, "shock", 12000, function()
         lifeSparkShockTick(creature)
     end)

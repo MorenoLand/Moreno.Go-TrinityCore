@@ -18803,6 +18803,9 @@ func init() {
 	// achievement_ignis_shattered (GetData-based OnCheck — no
 	// achievement consumer (creature-target criteria gate absent; GetData read bridged); joins the
 	// unmodeled-achievement queue).
+	// Cast-state gates PORTED: boss UpdateAI pre-loop :214 +
+	// in-loop :283 CASTING gates as 500ms IsCasting defer in
+	// jet/scorch/berserk ticks (mal_ganis idiom).
 	RegisterLuaBoss("boss_ignis", 33118)
 
 	// Razorscale (33186), Ulduar —
@@ -18867,6 +18870,9 @@ func init() {
 	// SpellScript / AuraScript bridges; two achievements
 	// (iron_dwarf_medium_rare / quick_shave — GetData-based —
 	// no bridges; both join the unmodeled-achievement queue).
+	// Cast-state gate PORTED: boss UpdateAI pre-loop :565 +
+	// in-loop :654 CASTING gates as 500ms IsCasting defer in
+	// berserkTick; darkrune sub-AI gates guard unported arms.
 	RegisterLuaBoss("boss_razorscale", 33186)
 
 	// XT-002 Deconstructor (33293), Ulduar —
@@ -18939,6 +18945,9 @@ func init() {
 	// (nerf_engineering / heartbreaker / nerf_gravity_bombs —
 	// GetData-based OnCheck — no GetData / achievement bridges;
 	// all three join the unmodeled-achievement queue).
+	// Cast-state gates PORTED: boss UpdateAI pre-loop :325 +
+	// in-loop :381 CASTING gates as 500ms IsCasting defer in
+	// enrageTick; life-spark pre-loop :645 gate in shock tick.
 	RegisterLuaBoss("boss_xt002", 33293)
 
 	// General Vezax (33271), Ulduar —
@@ -19040,8 +19049,11 @@ func init() {
 	// machine (no motion/hover bridges); the DONE-branch kill
 	// credit (no instance GetBossState bridge); the three spell
 	// scripts (no AuraScript/SpellScript bridges); the
-	// UNIT_STATE_CASTING gates (IsCasting is bridged-but-false
-	// in Go — vacuous).
+	// Cast-state gates PORTED: steelbreaker pre-loop :241 +
+	// in-loop :270, molgeim :386/:438, brundir :565/:653
+	// CASTING gates as 500ms IsCasting defer in all 7 ported
+	// ticks (mal_ganis idiom; stale bridged-but-false claim
+	// retracted — IsCasting live lua_creature_events.go:1950).
 	RegisterLuaBoss("boss_steelbreaker", 32867)
 	RegisterLuaBoss("boss_runemaster_molgeim", 32927)
 	RegisterLuaBoss("boss_stormcaller_brundir", 32857)
@@ -19082,6 +19094,9 @@ func init() {
 	// spell_kologarn_summon_focused_eyebeam — no SpellScript
 	// bridges; all eight join the no-SpellScript /
 	// no-AuraScript-bridge queues).
+	// Cast-state gates PORTED: boss UpdateAI pre-loop :251 +
+	// in-loop :315 CASTING gates as 500ms IsCasting defer in
+	// focusedEyebeam/enrage/meleeCheck ticks (mal_ganis idiom).
 	RegisterLuaBoss("boss_kologarn", 32930)
 	// Hodir (Ulduar) — fight logic in
 	// lua_scripts/northrend/boss_hodir.lua. Ported arms:

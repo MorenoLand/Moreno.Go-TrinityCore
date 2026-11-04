@@ -55,8 +55,11 @@
 -- init from JustEngagedWith (cpp:129), one-shot (no re-arm).
 -- Rides the baltharus CreateLuaEvent convention (timers table
 -- keyed by GUID, cancelled on events 2/4/23); the C++
--- UNIT_STATE_CASTING gate has no bridge, so timers fire
--- unconditionally — the documented maiden deviation.
+-- Boss UpdateAI CASTING gates (boss_kologarn.cpp pre-loop :251
+-- + in-loop :315) PORTED as a 500ms IsCasting defer in
+-- focusedEyebeam/enrage/meleeCheck ticks (mal_ganis idiom;
+-- IsCasting live, lua_creature_events.go:1950) — the stale
+-- "gate has no bridge" claim is retracted.
 -- EVENT_FOCUSED_EYEBEAM — DoCast(me,
 -- SPELL_SUMMON_FOCUSED_EYEBEAM 63342, true) (cpp:305-311) =
 -- triggered self-cast (CastSpell 3rd arg); 21s init from
@@ -225,6 +228,12 @@ end
 -- self-cast — 21s init, re-arm ScheduleEvent(15s, 35s) (cpp:311),
 -- unconditional even when the SelectTarget gate skips the cast.
 local function focusedEyebeamTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "focusedeyebeam", 500, function()
+            focusedEyebeamTick(creature, guid)
+        end)
+        return
+    end
     if anyThreatPlayer(creature) then
         creature:CastSpell(creature, SPELL_SUMMON_FOCUSED_EYEBEAM, true)
     end
@@ -236,6 +245,12 @@ end
 -- C++ EVENT_ENRAGE: DoCast(SPELL_BERSERK 47008) (self-cast) +
 -- Talk(SAY_BERSERK 7) — 10min init, one-shot (no re-arm).
 local function enrageTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function()
+            enrageTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(SAY_BERSERK)
 end
@@ -243,10 +258,15 @@ end
 -- C++ EVENT_MELEE_CHECK: 6s init from JustEngagedWith (cpp:124),
 -- 1s re-arm (cpp:261); fires DoCast(SPELL_PETRIFY_BREATH) only
 -- when the victim is outside melee range, gated on
--- creature:IsWithinMeleeRange (bridged). The C++ casting-state
--- early-return has no bridge (maiden deviation, as with the other
--- timers in this file).
+-- creature:IsWithinMeleeRange (bridged); the C++ casting-state
+-- early-return ports as the 500ms IsCasting defer above.
 local function meleeCheckTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "meleecheck", 500, function()
+            meleeCheckTick(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(nil, SPELL_PETRIFY_BREATH)

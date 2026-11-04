@@ -37,9 +37,12 @@
 -- bridge absent" claim was stale — the razuvious precedent);
 -- RemoveAllAuras() added to the three event-23 Reset handlers
 -- (bridge exists at engine/world/lua_creature_events.go:166);
--- the UNIT_STATE_CASTING gates stay unmodeled — IsCasting is
--- bridged-but-false in Go (engine/world/lua_objects.go:330),
--- so the gate is vacuous; every spell enum value, yell index,
+-- the UNIT_STATE_CASTING gates PORTED as a 500ms IsCasting
+-- defer in all 7 ported ticks (steelbreaker pre-loop :241 +
+-- in-loop :270, molgeim :386/:438, brundir :565/:653;
+-- mal_ganis idiom, IsCasting live lua_creature_events.go:1950
+-- — the stale "bridged-but-false" claim is retracted); every
+-- spell enum value, yell index,
 -- init/re-arm delay and triggered flag re-verified C++-exact
 -- name-by-name this run.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
@@ -294,6 +297,12 @@ end
 -- 15s init, {13s,22s} repeat; the cast is skipped when the
 -- victim is out of melee range but the timer still re-arms.
 fusionPunchTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fusionpunch", 500, function()
+            fusionPunchTick(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(victim, SPELL_FUSION_PUNCH)
@@ -307,6 +316,12 @@ end
 -- DoCast(SPELL_BERSERK 47008) (non-triggered self-cast),
 -- 15min init; the event is cancelled after firing.
 local function steelbreakerBerserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            steelbreakerBerserkTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_STEELBREAKER_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
@@ -370,6 +385,12 @@ end
 -- SPELL_SHIELD_OF_RUNES 62274) (non-triggered self-cast),
 -- 30s init, {27s,34s} repeat.
 shieldOfRunesTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shieldofrunes", 500, function()
+            shieldOfRunesTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHIELD_OF_RUNES)
     schedule(guid, "shieldofrunes", {27000, 34000}, function()
         shieldOfRunesTick(creature, guid)
@@ -380,6 +401,12 @@ end
 -- DoCast(SPELL_BERSERK 47008) (non-triggered self-cast),
 -- 15min init; the event is cancelled after firing.
 local function molgeimBerserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            molgeimBerserkTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_MOLGEIM_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
@@ -460,6 +487,12 @@ end
 -- 61879) (non-triggered), 4s init, {7s,10s} repeat; the re-arm
 -- sits outside the target check — C++-exact.
 chainLightningTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chainlightning", 500, function()
+            chainLightningTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
@@ -473,6 +506,12 @@ end
 -- Talk(SAY_BRUNDIR_SPECIAL 2) + DoCast(SPELL_OVERLOAD 61869)
 -- (non-triggered self-cast), {60s,120s} init and repeat.
 overloadTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "overload", 500, function()
+            overloadTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_BRUNDIR_OVERLOAD)
     creature:Talk(SAY_BRUNDIR_SPECIAL)
     creature:CastSpell(creature, SPELL_OVERLOAD)
@@ -485,6 +524,12 @@ end
 -- DoCast(SPELL_BERSERK 47008) (non-triggered self-cast),
 -- 15min init; the event is cancelled after firing.
 local function brundirBerserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            brundirBerserkTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_BRUNDIR_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK)
 end

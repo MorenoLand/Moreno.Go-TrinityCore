@@ -173,10 +173,21 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Boss UpdateAI CASTING gates (boss_ignis.cpp pre-loop :214 +
+-- in-loop :283) PORTED as a 500ms IsCasting defer in jet,
+-- scorch and berserk ticks (mal_ganis idiom; IsCasting live,
+-- lua_creature_events.go:1950); Talk/DamageTaken/JustSummoned
+-- arms stay ungated per C++ (separate hooks).
 -- C++ EVENT_JET (:222-:224): Talk(EMOTE_JETS 7) + DoCast(me,
 -- SPELL_FLAME_JETS 62680) 2-arg non-triggered self-cast; 30s
 -- init, re-arm {35s,40s}.
 local function jetTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "jet", 500, function()
+            jetTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_JETS)
     creature:CastSpell(creature, SPELL_FLAME_JETS)
     schedule(guid, "jet", {35000, 40000}, function()
@@ -188,6 +199,12 @@ end
 -- true) 3-arg triggered self-cast + Talk(SAY_BERSERK 5); 480s
 -- init, one-shot.
 local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK, true)
     creature:Talk(SAY_BERSERK)
 end
@@ -202,6 +219,12 @@ end
 -- SummonCreature leg has no bridge" claim was retracted 2026-10-23 —
 -- creature:SummonCreature is bridged (lua_creature_events.go:728).
 local function scorchTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "scorch", 500, function()
+            scorchTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_SCORCH)
     local victim = creature:GetVictim()
     if victim then

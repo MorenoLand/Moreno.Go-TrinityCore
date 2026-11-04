@@ -240,10 +240,20 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Boss UpdateAI CASTING gates (boss_razorscale.cpp pre-loop
+-- :565 + in-loop :654) PORTED as a 500ms IsCasting defer in
+-- berserkTick (mal_ganis idiom); the darkrune watcher/guardian/
+-- sentinel UpdateAI gates guard unported spawner-machine arms only.
 -- C++ EVENT_BERSERK (:572-575): DoCastSelf(SPELL_BERSERK 47008,
 -- TRIGGERED) + Talk(EMOTE_BERSERK 2, me); 900s init (:362), no
 -- re-arm, no phase gate — cast-before-Talk order kept.
-local function berserkTick(creature)
+local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK, true)
     creature:Talk(EMOTE_BERSERK, creature)
 end
@@ -261,7 +271,7 @@ local function razorscaleEnterCombat(event, creature, target)
     -- C++ HandleMusic(true) (JustEngagedWith :363) — encounter music on.
     creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 1)
     schedule(guid, "berserk", 900000, function()
-        berserkTick(creature)
+        berserkTick(creature, guid)
     end)
 end
 
@@ -387,8 +397,8 @@ end
 -- if the controller is casting, return true (no cast); else controller->
 -- CastSpell(nullptr, SelectRightSpell(), true), spell by harpoon entry
 -- (boss_razorscale.cpp:73-76, ulduar.h:251-254). The casting gate ports
--- as controller:IsCasting() (lua_creature_events.go:881, constant-false
--- twin under the caststate axiom); CastSpell(nil, ...) = victim-cast,
+-- as controller:IsCasting() (lua_creature_events.go:1950, live);
+-- CastSpell(nil, ...) = victim-cast,
 -- a no-op when the trigger controller holds no victim in Go's motion
 -- state. The SetFlag write is the live anti-reclick effect.
 local HARPOON_SHOT_BY_ENTRY = {
