@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // ticket command port: ticket_commandscript (cs_ticket.cpp), the "ticket"
@@ -45,6 +44,8 @@ import (
 // gmTicketRow mirrors the gm_ticket columns the command arms touch.
 type gmTicketRow struct {
 	id               uint32
+	ticketType       int64
+	resolvedBy       uint64
 	playerGuid       uint64
 	name             string
 	description      string
@@ -66,17 +67,18 @@ func (s *session) loadGMTicket(ctx context.Context, id uint32) (*gmTicketRow, bo
 		return nil, false
 	}
 	t := &gmTicketRow{id: id}
-	var closedBy, assignedTo, completed, viewed int64
-	err := cdb.QueryRowContext(ctx, `SELECT playerGuid, name, description, createTime, lastModifiedTime,
-		closedBy, assignedTo, comment, response, completed, escalated, viewed
+	var ticketType, closedBy, assignedTo, completed, viewed, resolvedBy int64
+	err := cdb.QueryRowContext(ctx, `SELECT type, playerGuid, name, description, createTime, lastModifiedTime,
+		closedBy, assignedTo, comment, response, completed, escalated, viewed, resolvedBy
 		FROM gm_ticket WHERE id = ?`, id).Scan(
-		&t.playerGuid, &t.name, &t.description, &t.createTime, &t.lastModifiedTime,
-		&closedBy, &assignedTo, &t.comment, &t.response, &completed, &t.escalated, &viewed)
+		&ticketType, &t.playerGuid, &t.name, &t.description, &t.createTime, &t.lastModifiedTime,
+		&closedBy, &assignedTo, &t.comment, &t.response, &completed, &t.escalated, &viewed, &resolvedBy)
 	if err != nil {
 		return nil, false
 	}
 	t.closedBy, t.assignedTo = uint64(closedBy), uint64(assignedTo)
 	t.completed, t.viewed = completed != 0, viewed != 0
+	t.ticketType, t.resolvedBy = ticketType, uint64(resolvedBy)
 	return t, true
 }
 
@@ -94,9 +96,9 @@ func (s *session) saveGMTicket(ctx context.Context, t *gmTicketRow) {
 	if t.viewed {
 		viewed = 1
 	}
-	_, _ = cdb.ExecContext(ctx, `UPDATE gm_ticket SET lastModifiedTime = ?, closedBy = ?, assignedTo = ?,
-		comment = ?, response = ?, completed = ?, escalated = ?, viewed = ? WHERE id = ?`,
-		t.lastModifiedTime, t.closedBy, t.assignedTo, t.comment, t.response, completed, t.escalated, viewed, t.id)
+	_, _ = cdb.ExecContext(ctx, `UPDATE gm_ticket SET type = ?, lastModifiedTime = ?, closedBy = ?, assignedTo = ?,
+		comment = ?, response = ?, completed = ?, escalated = ?, viewed = ?, resolvedBy = ? WHERE id = ?`,
+		t.ticketType, t.lastModifiedTime, t.closedBy, t.assignedTo, t.comment, t.response, completed, t.escalated, viewed, t.resolvedBy, t.id)
 }
 
 // ticketAssignedName resolves the assignee's character name.
@@ -134,11 +136,33 @@ func (s *session) handleCmdTicket(ctx context.Context, args []string) {
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
 	// The Trinity parser prefix-matches command names at every nesting
-	// level; match the arm the same way here.
+	// level; match the arm the same way here — except an exact name wins
+	// over a longer name it prefixes (ChatCommand.cpp:265-285: the
+	// ambiguity check runs only for non-exact matches), so bare "close"
+	// must reach the close arm, not closedlist, and "escalate" must reach
+	// the escalate arm, not escalatedlist. A proper prefix matching two
+	// or more arms ("c", "cl", "r", "v", ...) is ambiguous in C++ and
+	// prints the syntax line instead of silently resolving.
+	{
+		ticketArms := []string{"assign", "close", "closedlist", "comment", "complete", "delete", "escalate", "escalatedlist", "list", "onlinelist", "reset", "response", "togglesystem", "unassign", "viewid", "viewname"}
+		exact, matches := false, 0
+		for _, name := range ticketArms {
+			if name == sub {
+				exact = true
+			}
+			if strings.HasPrefix(name, sub) {
+				matches++
+			}
+		}
+		if !exact && matches > 1 {
+			s.sendSysMessage("Syntax: .ticket assign|close|closedlist|comment|complete|delete|escalate|escalatedlist|list|onlinelist|reset|response|togglesystem|unassign|viewid|viewname")
+			return
+		}
+	}
 	switch {
 	case strings.HasPrefix("assign", sub) && sub != "unassign":
 		s.handleTicketAssign(ctx, rest)
-	case strings.HasPrefix("close", sub) && !strings.HasPrefix("closedlist", sub):
+	case strings.HasPrefix("close", sub):
 		s.handleTicketClose(ctx, rest)
 	case strings.HasPrefix("closedlist", sub):
 		s.handleTicketClosedList(ctx)
@@ -148,7 +172,7 @@ func (s *session) handleCmdTicket(ctx context.Context, args []string) {
 		s.handleTicketComplete(ctx, rest)
 	case strings.HasPrefix("delete", sub):
 		s.handleTicketDelete(ctx, rest)
-	case strings.HasPrefix("escalate", sub) && !strings.HasPrefix("escalatedlist", sub):
+	case strings.HasPrefix("escalate", sub):
 		s.handleTicketEscalate(ctx, rest)
 	case strings.HasPrefix("escalatedlist", sub):
 		s.handleTicketEscalatedList(ctx)
@@ -247,7 +271,6 @@ func (s *session) handleTicketAssign(ctx context.Context, args []string) {
 	case t.escalated == 0: // TICKET_UNASSIGNED
 		t.escalated = 1 // TICKET_ASSIGNED
 	}
-	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d assigned to %s.", t.id, targetName))
@@ -269,8 +292,13 @@ func (s *session) handleTicketClose(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("You cannot close ticket %d.", t.id)) // LANG_COMMAND_TICKETCANNOTCLOSE 2016
 		return
 	}
+	// ResolveAndCloseTicket (TicketMgr.cpp:393-404): SetClosedBy also
+	// flips type to TICKET_TYPE_CLOSED, and SetResolvedBy records the
+	// closer — without the type write the submitter-facing layer
+	// (tickets.go, type = 0 filter) still treats the ticket as open.
 	t.closedBy = s.playerGUID
-	t.lastModifiedTime = time.Now().Unix()
+	t.ticketType = 1 // TICKET_TYPE_CLOSED (TicketMgr.h:86)
+	t.resolvedBy = s.playerGUID
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d closed.", t.id))
@@ -302,7 +330,6 @@ func (s *session) handleTicketComment(ctx context.Context, args []string) {
 		return
 	}
 	t.comment = strings.Join(args[1:], " ")
-	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("%s added comment to ticket %d: %s", s.player.Name, t.id, t.comment)) // LANG_COMMAND_TICKETLISTADDCOMMENT 2024
@@ -332,7 +359,9 @@ func (s *session) handleTicketComplete(ctx context.Context, args []string) {
 		t.response += strings.Join(args[1:], " ")
 	}
 	t.completed = true
-	t.lastModifiedTime = time.Now().Unix()
+	t.resolvedBy = s.playerGUID
+	// C++ also sends SMSG_GMRESPONSE_RECEIVED to an online submitter;
+	// that packet has no Go bridge, so the submitter side stays silent.
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d completed.", t.id))
@@ -376,7 +405,6 @@ func (s *session) handleTicketEscalate(ctx context.Context, args []string) {
 		return
 	}
 	t.escalated = 2 // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
-	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	// C++ sends no message to the invoking GM here (the submitter gets the
@@ -531,7 +559,16 @@ func (s *session) handleTicketUnassign(ctx context.Context, args []string) {
 	}
 	assignedName := s.ticketAssignedName(ctx, t.assignedTo)
 	t.assignedTo = 0
-	t.lastModifiedTime = time.Now().Unix()
+	// GmTicket::SetUnassigned: ASSIGNED -> UNASSIGNED,
+	// ESCALATED_ASSIGNED -> IN_ESCALATION_QUEUE; clearing assignedTo
+	// alone strands an escalated ticket (escalated = 3 matches no list
+	// filter and no re-assign transition).
+	switch t.escalated {
+	case 1: // TICKET_ASSIGNED
+		t.escalated = 0 // TICKET_UNASSIGNED
+	case 3: // TICKET_ESCALATED_ASSIGNED
+		t.escalated = 2 // TICKET_IN_ESCALATION_QUEUE
+	}
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d unassigned from %s.", t.id, assignedName))
@@ -554,6 +591,18 @@ func (s *session) handleTicketViewID(ctx context.Context, args []string) {
 	t.viewed = true
 	s.saveGMTicket(ctx, t)
 	s.sendSysMessage(s.ticketFormat(ctx, t))
+	s.ticketShowDetail(t)
+}
+
+// ticketShowDetail prints the comment/response legs of the C++ detailed
+// view (FormatMessageString), which the one-line summary omits.
+func (s *session) ticketShowDetail(t *gmTicketRow) {
+	if t.comment != "" {
+		s.sendSysMessage(fmt.Sprintf("Comment: %s", t.comment))
+	}
+	if t.response != "" {
+		s.sendSysMessage(fmt.Sprintf("Response: %s", t.response))
+	}
 }
 
 // handleTicketViewName mirrors HandleGMTicketGetByNameCommand (cs_ticket.cpp:447).
@@ -578,7 +627,7 @@ func (s *session) handleTicketViewName(ctx context.Context, args []string) {
 	}
 	var id uint32
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil ||
-		s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1", guid).Scan(&id) != nil {
+		s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 ORDER BY id ASC LIMIT 1", guid).Scan(&id) != nil {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		return
 	}
@@ -590,6 +639,7 @@ func (s *session) handleTicketViewName(ctx context.Context, args []string) {
 	t.viewed = true
 	s.saveGMTicket(ctx, t)
 	s.sendSysMessage(s.ticketFormat(ctx, t))
+	s.ticketShowDetail(t)
 }
 
 // handleTicketResponse dispatches the "ticket response" sub-table
@@ -647,6 +697,5 @@ func (s *session) handleTicketResponse(ctx context.Context, args []string) {
 	if newLine {
 		t.response += "\n"
 	}
-	t.lastModifiedTime = time.Now().Unix()
 	s.saveGMTicket(ctx, t)
 }

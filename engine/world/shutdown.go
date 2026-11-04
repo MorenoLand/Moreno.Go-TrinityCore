@@ -69,6 +69,9 @@ func formatShutdownDuration(secs int64) string {
 	if secs < 0 {
 		secs = 0
 	}
+	if secs >= 86400 {
+		return fmt.Sprintf("%d:%02d:%02d:%02d", secs/86400, (secs%86400)/3600, (secs%3600)/60, secs%60)
+	}
 	if secs >= 3600 {
 		return fmt.Sprintf("%d:%02d:%02d", secs/3600, (secs%3600)/60, secs%60)
 	}
@@ -107,7 +110,9 @@ func shouldBroadcastShutdown(mask uint32, secs int64) bool {
 	case secs < 12*3600:
 		return secs%3600 == 0
 	default:
-		return secs%43200 == 0
+		// C++ broadcasts only when > 12h (World.cpp:3039), so exactly
+		// 12h stays silent; Go's old %43200 branch rang at 43200.
+		return secs > 12*3600 && secs%43200 == 0
 	}
 }
 
@@ -237,7 +242,9 @@ func parseShutdownDelay(token string) (int, bool) {
 	}
 	if isNumericString(token) {
 		delay := cAtoi(token)
-		if delay < 0 {
+		// C++ zero guard: a 0 result from anything but exactly "0"
+		// ("00", "000") is a syntax error, not a 0s delay.
+		if delay < 0 || (delay == 0 && token != "0") {
 			return 0, false
 		}
 		return delay, true
@@ -278,7 +285,8 @@ func parseShutdownExitCode(token string) (uint8, bool) {
 		return 0, false
 	}
 	code := cAtoi(token)
-	if code < 0 || code > 125 {
+	// Same C++ zero guard as the delay: "00" is invalid, "0" is not.
+	if code < 0 || code > 125 || (code == 0 && token != "0") {
 		return 0, false
 	}
 	return uint8(code), true

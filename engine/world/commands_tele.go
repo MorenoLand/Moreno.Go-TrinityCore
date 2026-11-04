@@ -39,9 +39,11 @@ import (
 // case-insensitive substring match (ObjectMgr::GetGameTele,
 // ObjectMgr.cpp:9020).
 //
-// Documented fidelity gaps (not stubs): Player::SaveRecallPosition has no Go
-// bridge (same gap as goDoTeleport, cs_go.cpp:73); the zone column written by Player::SavePositionInDB
-// is not rewritten (sMapMgr::GetZoneId has no Go bridge); a name miss in
+// Documented fidelity gaps (not stubs): the zone column written by
+// Player::SavePositionInDB is not rewritten on the name-offline leg
+// (sMapMgr::GetZoneId from a position has no Go bridge); the $home
+// offline leg does write it (the zoneId comes from the homebind row).
+// A name miss in
 // teleResolveTele reports the LANG_COMMAND_TELE_NOTFOUND (164) stand-in —
 // C++ reports LANG_CMDPARSER_GAME_TELE_NO_EXIST (1512) whose enUS text is
 // not in the tree, and the handler's own null checks are dead arms (the
@@ -99,9 +101,13 @@ func (s *session) teleResolveTele(ctx context.Context, token string) (teleLocati
 		s.sendSysMessage(fmt.Sprintf("Teleport lookup error: %v", err))
 		return t, false
 	}
+	// C++ iterates the id-ordered store with a literal substring find:
+	// LIKE wildcards in the token must not act as wildcards, and the
+	// first match must be the lowest-id row, so escape and ORDER BY id.
+	escaped := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(strings.ToLower(token))
 	t, err = scanTeleRow(db.QueryRowContext(ctx,
-		"SELECT id, name, map, position_x, position_y, position_z, orientation FROM game_tele WHERE LOWER(name) LIKE ? LIMIT 1",
-		"%"+strings.ToLower(token)+"%"))
+		"SELECT id, name, map, position_x, position_y, position_z, orientation FROM game_tele WHERE LOWER(name) LIKE ? ESCAPE '!' ORDER BY id ASC LIMIT 1",
+		"%"+escaped+"%"))
 	if errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage("Teleport location not found.") // LANG_COMMAND_TELE_NOTFOUND (164)
 		return t, false
@@ -258,10 +264,14 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 			return
 		}
 		s.sendSysMessage(fmt.Sprintf("Teleporting %s to %s.", miscPlayerLink(name), tele.name)) // LANG_TELEPORTING_TO (110)
-		// needReportToTarget: the C++ visibility check has no Go bridge, so
-		// every other player is told (as in the group summon port).
-		if target != s {
-			target.sendSysMessage(fmt.Sprintf("%s teleported you.", miscPlayerLink(s.player.Name))) // LANG_TELEPORTED_TO_BY (111)
+		// needReportToTarget (Chat.cpp:754): target is told only if the
+		// invoker is visible globally for the target.
+		if target != s && isVisibleGloballyFor(s, target) {
+			invokerName := ""
+			if s.player != nil {
+				invokerName = s.player.Name
+			}
+			target.sendSysMessage(fmt.Sprintf("%s teleported you.", miscPlayerLink(invokerName))) // LANG_TELEPORTED_TO_BY (111)
 		}
 		if target.isInFlight() {
 			target.finishTaxiFlight()
@@ -298,15 +308,22 @@ func (s *session) teleToHomebind(ctx context.Context, target *session, guid uint
 		return
 	}
 	var mapID uint32
+	var zoneID uint16
 	var x, y, z float64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
-		"SELECT mapId, posX, posY, posZ FROM character_homebind WHERE guid = ? LIMIT 1", guid).Scan(&mapID, &x, &y, &z); err != nil {
+		"SELECT mapId, zoneId, posX, posY, posZ FROM character_homebind WHERE guid = ? LIMIT 1", guid).Scan(&mapID, &zoneID, &x, &y, &z); err != nil {
+		// C++ with no homebind row writes nothing and returns true:
+		// a missing row is a silent success, not an error.
+		if errors.Is(err, sql.ErrNoRows) {
+			return
+		}
 		s.sendSysMessage(fmt.Sprintf("Homebind lookup error: %v", err))
 		return
 	}
+	// SavePositionInDB writes the homebind row's zoneId too (cs_tele.cpp:135-137).
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-		"UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = 0 WHERE guid = ?",
-		mapID, x, y, z, guid)
+		"UPDATE characters SET map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = 0 WHERE guid = ?",
+		mapID, zoneID, x, y, z, guid)
 }
 
 // teleIsBattlegroundOrArena mirrors MapEntry::IsBattlegroundOrArena
@@ -387,9 +404,8 @@ func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
 		}
 		s.sendSysMessage(fmt.Sprintf("Teleporting %s to %s.", miscPlayerLink(player.player.Name), tele.name)) // LANG_TELEPORTING_TO (110)
 		// The C++ reports with the selected player's link (cs_tele.cpp:248);
-		// needReportToTarget's visibility check has no Go bridge, so every
-		// other member is told (as in the group summon port).
-		if player != s {
+		// needReportToTarget (Chat.cpp:754) gates on invoker visibility.
+		if player != s && isVisibleGloballyFor(s, player) {
 			player.sendSysMessage(fmt.Sprintf("%s teleported you.", miscPlayerLink(selected.player.Name))) // LANG_TELEPORTED_TO_BY (111)
 		}
 		if player.isInFlight() {

@@ -37,10 +37,10 @@ import (
 //     honors it); the value token is compared case-sensitively == C++
 //     strncmp (ChatCommand-level name matching stays case-insensitive).
 //   - `plimit [n]`: the amount limit is native (admission already honors
-//     it); "reset" (any case-sensitive prefix == C++ strncmp order)
-//     restores Config.PlayerLimit; the security-level names and negative
-//     values have no Go bridge — admission checks a head count, not an
-//     account security level — and leave the amount limit untouched == C++.
+//     it); the security-level names and negative values set
+//     allowedSecurityLevel (admission enforces it, server.go:10283);
+//     "reset" (any case-sensitive prefix == C++ strncmp order) restores
+//     Config.PlayerLimit and reloads the level from the realmlist row.
 //   - `exit`: Server.Stop().
 //   - `corpses`: force the expired-corpse sweep (World::RemoveOldCorpses,
 //     cs_server.cpp:120-123 — the command forces the WUPDATE_CORPSES timer;
@@ -73,6 +73,12 @@ import (
 // (World.cpp:1027, cs_server.cpp:511-516) raises a sub-30s delay to 30s
 // while other players are connected, unless the force mask is set.
 func (s *session) serverShutdownTimed(ctx context.Context, args []string, mask uint32, defaultExitCode uint8, what string) {
+	// C++ rejects a remainder longer than 255 chars (cs_server.cpp:460);
+	// the tokenized args re-join approximates that remainder here.
+	if len(strings.Join(args, " ")) > 255 {
+		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
+		return
+	}
 	if len(args) == 0 {
 		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
 		return
@@ -114,7 +120,7 @@ func (s *session) serverShutdownCancel(ctx context.Context, perm uint32) {
 	}
 	remaining, wasRestart, ok := s.server.cancelShutdown(ctx)
 	if !ok {
-		s.sendSysMessage("There is no shutdown timer to cancel.")
+		// C++ ShutdownCancel returns 0 with no message when no timer runs.
 		return
 	}
 	verb := "shutdown"
@@ -176,8 +182,8 @@ func (s *session) handleServerCorpses(ctx context.Context) {
 		return
 	}
 	s.server.lastCorpseExpiry = time.Now()
-	expired := s.server.expireOldCorpses(ctx)
-	s.sendSysMessage(fmt.Sprintf("Expired %d old corpse(s).", expired))
+	// C++ returns true silently; the sweep itself is the effect.
+	s.server.expireOldCorpses(ctx)
 }
 
 // handleServerDebug mirrors HandleServerDebugCommand (cs_server.cpp:126):
@@ -215,7 +221,8 @@ func (s *session) handleServerExit(ctx context.Context) {
 // (cs_server.cpp:373): cancel arm + the "" arm with
 // SHUTDOWN_MASK_RESTART | SHUTDOWN_MASK_IDLE.
 func (s *session) handleServerIdleRestart(ctx context.Context, args []string) {
-	if len(args) > 0 && strings.ToLower(args[0]) == "cancel" {
+	// Sub-table names prefix-match like every other level (ChatCommand).
+	if len(args) > 0 && strings.HasPrefix("cancel", strings.ToLower(args[0])) {
 		s.serverShutdownCancel(ctx, permissionCommandServerIdlerestartCancel)
 		return
 	}
@@ -228,7 +235,8 @@ func (s *session) handleServerIdleRestart(ctx context.Context, args []string) {
 // handleServerIdleShutdown mirrors HandleServerIdleShutDownCommand
 // (cs_server.cpp:368): cancel arm + the "" arm with SHUTDOWN_MASK_IDLE.
 func (s *session) handleServerIdleShutdown(ctx context.Context, args []string) {
-	if len(args) > 0 && strings.ToLower(args[0]) == "cancel" {
+	// Sub-table names prefix-match like every other level (ChatCommand).
+	if len(args) > 0 && strings.HasPrefix("cancel", strings.ToLower(args[0])) {
 		s.serverShutdownCancel(ctx, permissionCommandServerIdleshutdownCancel)
 		return
 	}
@@ -242,11 +250,12 @@ func (s *session) handleServerIdleShutdown(ctx context.Context, args []string) {
 // plus the force node (cs_server.cpp:379): cancel / force / "" arms.
 func (s *session) handleServerRestart(ctx context.Context, args []string) {
 	if len(args) > 0 {
-		switch strings.ToLower(args[0]) {
-		case "cancel":
+		// Sub-table names prefix-match: "c"/"forc" route like full words.
+		switch {
+		case strings.HasPrefix("cancel", strings.ToLower(args[0])):
 			s.serverShutdownCancel(ctx, permissionCommandServerRestartCancel)
 			return
-		case "force":
+		case strings.HasPrefix("force", strings.ToLower(args[0])):
 			if s.miscDeny(ctx, permissionCommandServerRestartForce) {
 				return
 			}
@@ -264,11 +273,12 @@ func (s *session) handleServerRestart(ctx context.Context, args []string) {
 // plus the force node (cs_server.cpp:374): cancel / force / "" arms.
 func (s *session) handleServerShutdown(ctx context.Context, args []string) {
 	if len(args) > 0 {
-		switch strings.ToLower(args[0]) {
-		case "cancel":
+		// Sub-table names prefix-match: "c"/"forc" route like full words.
+		switch {
+		case strings.HasPrefix("cancel", strings.ToLower(args[0])):
 			s.serverShutdownCancel(ctx, permissionCommandServerShutdownCancel)
 			return
-		case "force":
+		case strings.HasPrefix("force", strings.ToLower(args[0])):
 			if s.miscDeny(ctx, permissionCommandServerShutdownForce) {
 				return
 			}
@@ -282,6 +292,46 @@ func (s *session) handleServerShutdown(ctx context.Context, args []string) {
 	s.serverShutdownTimed(ctx, args, 0, shutdownExitCode, "shutdown")
 }
 
+// formatSecsFullText mirrors secsToTimeString FullText (Util.cpp:97):
+// "1 Day 2 Hours 3 Minutes 4 Seconds", singulars for 1 (hours: <= 1),
+// zero seconds only when the whole value is zero.
+func formatSecsFullText(total int64) string {
+	if total < 0 {
+		total = 0
+	}
+	days, hours, minutes, secs := total/86400, total%86400/3600, total%3600/60, total%60
+	var b strings.Builder
+	if days > 0 {
+		if days == 1 {
+			b.WriteString("1 Day ")
+		} else {
+			fmt.Fprintf(&b, "%d Days ", days)
+		}
+	}
+	if hours > 0 {
+		if hours == 1 {
+			b.WriteString("1 Hour ")
+		} else {
+			fmt.Fprintf(&b, "%d Hours ", hours)
+		}
+	}
+	if minutes > 0 {
+		if minutes == 1 {
+			b.WriteString("1 Minute ")
+		} else {
+			fmt.Fprintf(&b, "%d Minutes ", minutes)
+		}
+	}
+	if secs > 0 || (days == 0 && hours == 0 && minutes == 0) {
+		if secs == 1 {
+			b.WriteString("1 Second")
+		} else {
+			fmt.Fprintf(&b, "%d Seconds", secs)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // handleServerInfo mirrors HandleServerInfoCommand (cs_server.cpp:240).
 func (s *session) handleServerInfo(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandServerInfo) {
@@ -290,10 +340,19 @@ func (s *session) handleServerInfo(ctx context.Context) {
 	s.server.sessionsMu.RLock()
 	online := len(s.server.sessions)
 	s.server.sessionsMu.RUnlock()
-	uptime := time.Since(applicationStartTime).Truncate(time.Second).String()
+	uptime := formatSecsFullText(int64(time.Since(applicationStartTime) / time.Second))
 	s.sendSysMessage("Moreno.Go-TrinityCore (WotLK 3.3.5a 12340)")
 	s.sendSysMessage(fmt.Sprintf("Connected players: %d.", online)) // LANG_CONNECTED_PLAYERS 60
 	s.sendSysMessage(fmt.Sprintf("Server uptime: %s.", uptime))     // LANG_UPTIME 13
+	// C++ prints the shutdown timeleft while a timer runs (cs_server.cpp:273).
+	if s.server != nil {
+		s.server.shutdownMu.Lock()
+		active, deadline := s.server.shutdown.active, s.server.shutdown.deadline
+		s.server.shutdownMu.Unlock()
+		if active {
+			s.sendSysMessage(fmt.Sprintf("Server shutdown in %s.", formatSecsFullText(shutdownRemainingSecs(deadline, time.Now()))))
+		}
+	}
 }
 
 // handleServerMotd mirrors HandleServerMotdCommand (cs_server.cpp:279).
@@ -301,12 +360,16 @@ func (s *session) handleServerMotd(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandServerMotd) {
 		return
 	}
-	s.sendSysMessage(fmt.Sprintf("MOTD: %s", s.server.Config.Motd)) // LANG_MOTD_CURRENT 56
+	// C++ displays FormattedMotd: the stored text split on '@' into lines.
+	motd := strings.Join(strings.Split(s.server.Config.Motd, "@"), "\n")
+	s.sendSysMessage(fmt.Sprintf("MOTD: %s", motd)) // LANG_MOTD_CURRENT 56
 }
 
 // handleServerPLimit mirrors HandleServerPLimitCommand (cs_server.cpp:285):
-// the amount limit is native; the security-level names have no Go bridge
-// (admission checks a head count, not an account security level).
+// the amount limit is native (admission honors it); the security-level
+// names and negative values set allowedSecurityLevel (admission enforces
+// it, server.go:10283); "reset" restores Config.PlayerLimit and reloads
+// the level from the realmlist row (LoadDBAllowedSecurityLevel).
 func (s *session) handleServerPLimit(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandServerPlimit) {
 		return
@@ -317,24 +380,49 @@ func (s *session) handleServerPLimit(ctx context.Context, args []string) {
 		// — a case-sensitive prefix match — before falling through to
 		// atoi (cs_server.cpp:295-315). Mirror that order here.
 		switch {
-		case isStrncmpPrefix(arg, "player"), isStrncmpPrefix(arg, "moderator"),
-			isStrncmpPrefix(arg, "gamemaster"), isStrncmpPrefix(arg, "administrator"):
-			// Security-level limits have no Go bridge (admission checks a
-			// head count, not an account security level); the amount limit
-			// is left untouched == C++.
-			s.sendSysMessage("Security-level player limits are not supported by this server (head-count limit only).")
+		case isStrncmpPrefix(arg, "player"):
+			s.server.allowedSecurityLevel = 0
+		case isStrncmpPrefix(arg, "moderator"):
+			s.server.allowedSecurityLevel = 1
+		case isStrncmpPrefix(arg, "gamemaster"):
+			s.server.allowedSecurityLevel = 2
+		case isStrncmpPrefix(arg, "administrator"):
+			s.server.allowedSecurityLevel = 3
 		case isStrncmpPrefix(arg, "reset"):
 			s.server.playerLimit = s.server.Config.PlayerLimit
+			_ = s.server.loadPlayerSecurityLimit(ctx)
 		default:
 			v := cAtoi(arg)
-			if v >= 0 {
-				s.server.playerLimit = uint32(v)
+			if v < 0 {
+				// C++ SetPlayerSecurityLimit(AccountTypes(-value)).
+				lvl := -v
+				if lvl > 255 {
+					lvl = 255
+				}
+				s.server.allowedSecurityLevel = uint8(lvl)
 			} else {
-				s.sendSysMessage("Security-level player limits are not supported by this server (head-count limit only).")
+				s.server.playerLimit = uint32(v)
 			}
 		}
 	}
-	s.sendSysMessage(fmt.Sprintf("Player limits: amount %d.", s.server.playerLimit))
+	s.sendSysMessage(fmt.Sprintf("Player limits: amount %d, min. security level %s.", s.server.playerLimit, serverSecurityLevelName(s.server.allowedSecurityLevel)))
+}
+
+// serverSecurityLevelName mirrors the plimit status switch
+// (cs_server.cpp:323-342): 0-3 named, anything else "<unknown>".
+func serverSecurityLevelName(level uint8) string {
+	switch level {
+	case 0:
+		return "Player"
+	case 1:
+		return "Moderator"
+	case 2:
+		return "Gamemaster"
+	case 3:
+		return "Administrator"
+	default:
+		return "<unknown>"
+	}
 }
 
 // isStrncmpPrefix reports whether arg would satisfy
@@ -394,13 +482,13 @@ func (s *session) handleServerSetClosed(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandServerSetClosed) {
 		return
 	}
-	if len(args) == 0 {
+	// C++ compares the whole remainder with strncmp(args, "on", 3) /
+	// strncmp(args, "off", 4): only exactly "on"/"off" match, so extra
+	// tokens ("on extra") reject with LANG_USE_BOL, like empty input.
+	if len(args) != 1 {
 		s.sendSysMessage("Use on/off.") // LANG_USE_BOL 259
 		return
 	}
-	// C++ compares with strncmp(args, "on", 3) / strncmp(args, "off", 4):
-	// case-sensitive, and the length bound means only the exact tokens
-	// "on"/"off" match (a third/fourth char already differs from '\0').
 	switch args[0] {
 	case "on":
 		s.server.closed.Store(true)
