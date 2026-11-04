@@ -153,6 +153,11 @@
 -- has no registered handler, but the arm is a gossip arm, not an
 -- AI-update arm, so no stub is registered.
 
+-- Engage-base census 2026-11-03: BossAI base arms (SetCombatPulseDelay(5)
+-- + me-form DoZoneInCombat) PORTED base-first into magtheridonEnterCombat
+-- above; channeler (ScriptedAI, :333 engage calls no BossAI base) and
+-- room (PassiveAI, no engage override) VERIFIED stay-outs.
+
 local ENTRY_MAGTHERIDON = 17257
 local ENTRY_CHANNELER = 17256
 local ENTRY_MAGTHERIDON_ROOM = 17516
@@ -330,6 +335,17 @@ local function magtheridonEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     magState[guid] = { phase = "released", channelers = 5 }
+    -- BossAI base arms first: boss_magtheridonAI : BossAI with NO
+    -- JustEngagedWith override (the file's only JustEngagedWith,
+    -- :333, is the channeler's ScriptedAI arm), so inherited
+    -- BossAI::_JustEngagedWith runs at first AtEngage
+    -- (ScriptedCreature.cpp:540/542; gruul precedent). The
+    -- instance SetBossState / setActive / ScheduleTasks legs stay
+    -- out (no instance-script model). This me-form DoZoneInCombat
+    -- also stands in for the EVENT_RELEASED self-form leg the
+    -- collapsed pull handler previously lacked.
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(EMOTE_BREAKS_FREE)
     creature:Talk(SAY_FREE)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
