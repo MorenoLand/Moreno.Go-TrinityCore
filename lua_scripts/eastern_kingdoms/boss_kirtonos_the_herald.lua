@@ -42,8 +42,11 @@
 --   state C++-exact. The old per-guid latch's evade caveat is gone:
 --   C++ EnterEvadeMode despawns the boss without touching the aura,
 --   so a fresh re-summon starts aura-clean exactly as C++ does.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
--- are packet-visual), so timers fire unconditionally (maiden precedent);
+-- Deviations from C++: UpdateAI UNIT_STATE_CASTING queue gate PORTED:
+-- each combat arm below defers 500ms while creature:IsCasting() (live
+-- CastingUntil window, lua_creature_events.go:1950; broodkeeper
+-- precedent) — no re-arm consumed; the non-victim intro machine branch
+-- is unmodeled, so only the 8 combat timer callbacks are gated;
 -- the transform arm's SetCanFly(true/false) legs are PORTED 2026-10-22
 -- (the old "no bridge" note was stale);
 -- Unmodeled (documented-only, no bridges on the Lua surface):
@@ -123,16 +126,28 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onSwoop(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "swoop", 500, function() onSwoop(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SWOOP)
     schedule(guid, "swoop", 15000, function() onSwoop(creature, guid) end)
 end
 
 local function onWingFlap(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wingflap", 500, function() onWingFlap(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WING_FLAP)
     schedule(guid, "wingflap", 13000, function() onWingFlap(creature, guid) end)
 end
 
 local function onPierceArmor(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "piercearmor", 500, function() onPierceArmor(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_PIERCE_ARMOR, true)
@@ -141,6 +156,10 @@ local function onPierceArmor(creature, guid)
 end
 
 local function onDisarm(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "disarm", 500, function() onDisarm(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_DISARM, true)
@@ -149,6 +168,10 @@ local function onDisarm(creature, guid)
 end
 
 local function onShadowBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function() onShadowBolt(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_BOLT, true)
@@ -157,6 +180,10 @@ local function onShadowBolt(creature, guid)
 end
 
 local function onCurseOfTongues(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curseoftongues", 500, function() onCurseOfTongues(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CURSE_OF_TONGUES, true)
@@ -165,6 +192,10 @@ local function onCurseOfTongues(creature, guid)
 end
 
 local function onDominateMind(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "dominatemind", 500, function() onDominateMind(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_DOMINATE_MIND, true)
@@ -182,6 +213,10 @@ end
 -- (lua_creature_events.go, PORTED 2026-10-22; the old "no bridge"
 -- note was stale).
 local function onTransform(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "transform", 500, function() onTransform(creature, guid) end)
+        return
+    end
     if creature:HasAura(SPELL_KIRTONOS_TRANSFORM) then
         creature:RemoveAura(SPELL_KIRTONOS_TRANSFORM)
         creature:SetEquipmentSlots(0, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE)

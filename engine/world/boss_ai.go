@@ -14704,7 +14704,10 @@ func init() {
 	// 42s->42s / curse of tongues 12889 53s->35s / dominate mind 14515
 	// {34s,48s}->{44s,48s} (all triggered DoCastVictim) / transform 16467
 	// 20s->{16s,18s} (HasAura toggle — the Lua port reads the real
-	// aura state, no latch).
+	// aura state, no latch). Cast-state gate PORTED 2026-11-04
+	// (tick47): the 8 combat arms defer 500ms while IsCasting()
+	// (lua_creature_events.go:1950), no re-arm consumed; the
+	// non-victim intro branch is unmodeled, so it stays ungated.
 	// Documented-only: intro choreography, gate/brazier GO arms,
 	// go_brazier_of_the_herald (no bridges).
 	RegisterLuaBoss("boss_kirtonos_the_herald", 10506)
@@ -14819,6 +14822,8 @@ func init() {
 	// MIGHTY_BLOW 10s->20s DoCastVictim 14099 (GetVictim + CastSpell,
 	// nil-victim keeps schedule). Documented-only (no bridges):
 	// SetDisplayId(10433/3637) legs in Reset/JustDied (jandice precedent).
+	// No UNIT_STATE_CASTING gate in C++ UpdateAI (checked 2026-11-04
+	// tick47: ScriptedAI diff-timer AI, zero HasUnitState hits).
 	RegisterLuaBoss("boss_magistrate_barthilas", 10435)
 	// boss_maleki_the_pallid.cpp audit (Stratholme block, EK loader decl
 	// :127 / call :305 follows barthilas): 1 script, pure timer-driven
@@ -14830,8 +14835,12 @@ func init() {
 	// gates preserved, re-arm unconditional; GetVictim + CastSpell,
 	// nil-victim keeps schedule). Documented-only (no bridges):
 	// JustDied instance->SetData(TYPE_PALLID 4, IN_PROGRESS) (no
-	// instance-script bridge), UpdateAI UNIT_STATE_CASTING gate, dead
-	// EVENT_DRAIN_MANA 17243 (declared, never scheduled).
+	// instance-script bridge), dead EVENT_DRAIN_MANA 17243 (declared,
+	// never scheduled). UpdateAI UNIT_STATE_CASTING gate PORTED
+	// 2026-11-04 (tick47): frostbolt/icetomb/drainlife defer 500ms
+	// while IsCasting() (lua_creature_events.go:1950), defer-first
+	// before the rand roll, no roll or re-arm consumed. C++ has no
+	// in-loop post-event return here (unlike the BossAI-standard shape).
 	RegisterLuaBoss("boss_maleki_the_pallid", 10438)
 	// boss_nerubenkan.cpp audit (Stratholme block, EK loader decl :128 /
 	// call :306 follows maleki): 1 script, pure timer-driven ScriptedAI —
@@ -14848,7 +14857,9 @@ func init() {
 	// CastSpell, nil-victim keeps schedule; JustEngagedWith empty in C++).
 	// Documented-only (no bridges): JustDied instance->SetData(TYPE_NERUB
 	// 3, IN_PROGRESS) (no instance-script bridge), UpdateVictim gate,
-	// melee engine-driven.
+	// melee engine-driven. No UNIT_STATE_CASTING gate in C++ UpdateAI
+	// (checked 2026-11-04 tick47: ScriptedAI diff-timer AI, zero
+	// HasUnitState hits).
 	RegisterLuaBoss("boss_nerubenkan", 10437)
 	// boss_cannon_master_willey.cpp audit (Stratholme block, EK loader decl
 	// :129 / call :307 follows nerubenkan): 1 script, pure timer-driven
@@ -14865,7 +14876,9 @@ func init() {
 	// + CastSpell, nil-victim keeps schedule; JustEngagedWith empty in
 	// C++). Ported: JustDied 7x SummonCreature(11054) at ADD 1,2,3,4,5,7,9
 	// (C++ skips 6/8). Documented-only (no bridges): UpdateVictim gate,
-	// melee engine-driven.
+	// melee engine-driven. No UNIT_STATE_CASTING gate in C++ UpdateAI
+	// (checked 2026-11-04 tick47: ScriptedAI diff-timer AI, zero
+	// HasUnitState hits).
 	RegisterLuaBoss("boss_cannon_master_willey", 10997)
 	// boss_baroness_anastari.cpp audit (Stratholme block, EK loader decl
 	// :130 / call :308 follows willey): 1 script, BossAI timer AI
@@ -14886,7 +14899,10 @@ func init() {
 	// player:RemoveAura); documented-only: JustDied
 	// instance->SetData(TYPE_BARONESS, IN_PROGRESS)
 	// (IN_PROGRESS-not-DONE C++ quirk, nerubenkan precedent),
-	// UpdateVictim/UNIT_STATE_CASTING gates, melee engine-driven.
+	// UpdateVictim gate, melee engine-driven. UNIT_STATE_CASTING
+	// gates PORTED 2026-11-04 (tick47): all five UpdateAI arms (incl.
+	// check-possessed) defer 500ms while IsCasting()
+	// (lua_creature_events.go:1950), no re-arm consumed.
 	RegisterLuaBoss("boss_baroness_anastari", 10436)
 	// boss_ramstein_the_gorger.cpp audit (EK loader decl :131 / call
 	// :309 follows baroness_anastari): 1 script, ScriptedAI diff-timer AI

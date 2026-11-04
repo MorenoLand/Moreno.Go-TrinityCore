@@ -31,8 +31,13 @@
 -- - EVENT_DRAIN_MANA / SPELL_DRAIN_MANA 17243: declared in the C++
 --   enums but NEVER scheduled in the file — dead event, nothing to arm.
 -- - UpdateAI's `if (me->HasUnitState(UNIT_STATE_CASTING)) return` gate:
---   no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget), so the Lua timers run on the Eluna event
---   pump without the casting tick-slip (barthilas precedent).
+--   PORTED: each arm below defers 500ms while creature:IsCasting()
+--   (live CastingUntil window, lua_creature_events.go:1950;
+--   broodkeeper precedent) — defer-first, before the rand roll, so a
+--   deferred arm consumes neither roll nor re-arm. C++ has no in-loop
+--   post-event return here (unlike the BossAI-standard shape), so the
+--   pre-loop gate is the whole gate; Lua timers are independent
+--   callbacks, so there is no in-loop queue to truncate.
 -- - GetStratholmeAI wrapper: plain AI factory template, no logic.
 -- Verifiable numbers (file's own enums): SPELL_FROSTBOLT = 17503,
 -- SPELL_DRAINLIFE = 20743, SPELL_DRAIN_MANA = 17243, SPELL_ICETOMB = 16869;
@@ -85,6 +90,10 @@ end
 
 -- C++ Frostbolt: DoCastVictim(SPELL_FROSTBOLT); 3500ms re-arm.
 local function onFrostbolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function() onFrostbolt(creature, guid) end)
+        return
+    end
     if roll(90) then
         doCastVictim(creature, SPELL_FROSTBOLT)
     end
@@ -93,6 +102,10 @@ end
 
 -- C++ IceTomb: DoCastVictim(SPELL_ICETOMB); 28000ms re-arm.
 local function onIcetomb(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "icetomb", 500, function() onIcetomb(creature, guid) end)
+        return
+    end
     if roll(65) then
         doCastVictim(creature, SPELL_ICETOMB)
     end
@@ -101,6 +114,10 @@ end
 
 -- C++ DrainLife: DoCastVictim(SPELL_DRAINLIFE); 31000ms re-arm.
 local function onDrainLife(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "drainlife", 500, function() onDrainLife(creature, guid) end)
+        return
+    end
     if roll(55) then
         doCastVictim(creature, SPELL_DRAINLIFE)
     end

@@ -51,9 +51,14 @@
 --   instance-script bridge (nerubenkan precedent; IN_PROGRESS-not-DONE
 --   is a C++ quirk — needed until crystals are implemented, see
 --   instance_stratholme.cpp line 305).
--- - UpdateAI's `if (!UpdateVictim()) return` gate and the
---   UNIT_STATE_CASTING gates before/after the event loop: engine-driven
---   (barthilas precedent).
+-- - UpdateAI's `if (!UpdateVictim()) return` gate: engine-driven
+--   (documented-only). The UNIT_STATE_CASTING gates before the event
+--   loop and after each event are PORTED: all five UpdateAI arms
+--   below (including the non-casting EVENT_CHECK_POSSESSED leg, which
+--   is still an UpdateAI event in C++) defer 500ms while
+--   creature:IsCasting() (live CastingUntil window,
+--   lua_creature_events.go:1950; broodkeeper precedent) — no re-arm
+--   consumed; the possess defer sits before the target pick.
 -- - BossAI ctor (boss_baroness_anastari(Creature*, TYPE_BARONESS)):
 --   ctor wiring only, no logic.
 -- Verifiable numbers (file's own enums): SPELL_BANSHEEWAIL = 16565,
@@ -146,18 +151,30 @@ end
 
 -- C++ EVENT_SPELL_BANSHEEWAIL: DoCastVictim(16565); Repeat(4s).
 local function onBansheeWail(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "banshee_wail", 500, function() onBansheeWail(creature, guid) end)
+        return
+    end
     doCastVictim(creature, SPELL_BANSHEEWAIL)
     schedule(guid, "banshee_wail", 4000, function() onBansheeWail(creature, guid) end)
 end
 
 -- C++ EVENT_SPELL_BANSHEECURSE: DoCastVictim(16867); Repeat(18s).
 local function onBansheeCurse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "banshee_curse", 500, function() onBansheeCurse(creature, guid) end)
+        return
+    end
     doCastVictim(creature, SPELL_BANSHEECURSE)
     schedule(guid, "banshee_curse", 18000, function() onBansheeCurse(creature, guid) end)
 end
 
 -- C++ EVENT_SPELL_SILENCE: DoCastVictim(18327); Repeat(13s).
 local function onSilence(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "silence", 500, function() onSilence(creature, guid) end)
+        return
+    end
     doCastVictim(creature, SPELL_SILENCE)
     schedule(guid, "silence", 13000, function() onSilence(creature, guid) end)
 end
@@ -171,6 +188,10 @@ local onCheckPossessed
 local onPossess
 
 onCheckPossessed = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "check_possessed", 500, function() onCheckPossessed(creature, guid) end)
+        return
+    end
     local st = state[guid]
     if not st or not st.possessedGuid then
         return
@@ -196,6 +217,10 @@ end
 -- scheduling (Lua uses 1ms: the next-tick equivalent); no pick ->
 -- Repeat(20s, 30s).
 onPossess = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "possess", 500, function() onPossess(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:CastSpell(target, SPELL_POSSESS, true)
