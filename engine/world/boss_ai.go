@@ -16468,7 +16468,10 @@ func init() {
 	// Powerful Bite 48287 (victim, 3s init, 10s repeat); Venom Bolt
 	// 54970 (victim, 15s init, 10s repeat); KilledUnit Talk(SAY_SLAY
 	// 1) player-gated (event 3, nalorakk precedent); JustDied
-	// Talk(EMOTE_ACTIVATE_ALTAR 6) + Talk(SAY_DEATH 2). The DamageTaken
+	// Talk(EMOTE_ACTIVATE_ALTAR 6) + Talk(SAY_DEATH 2); cast-state gates
+	// PORTED (BossAI scheduler validator — nova/bite/venom + snake/
+	// constrictor wave ticks defer 500ms while casting; constrictor/
+	// viper own schedulers ungated). The DamageTaken
 	// phase machine (HealthBelowPct 30/25 — no health-pct bridge, and
 	// the SummonCreature snake/constrictor waves sit behind the summon
 	// STRAND), JustSummoned's MovePoint choreography, the
@@ -16491,7 +16494,9 @@ func init() {
 	// reschedule, matching the C++ SpellHit(55098) cancel leg;
 	// KilledUnit Talk(SAY_SLAY 1) player-gated (event 3 — nalorakk
 	// precedent); JustDied Talk(EMOTE_ACTIVATE_ALTAR 7) +
-	// Talk(SAY_DEATH 2). The three DoCastAOE combat arms (Ground
+	// Talk(SAY_DEATH 2); cast-state gates PORTED (own UpdateAI pre-loop
+	// + in-loop gates — all five timer ticks defer 500ms while casting,
+	// incl the PHASE_INTRO phantom arm). The three DoCastAOE combat arms (Ground
 	// Tremor/Quake, Numbing Shout/Roar, Determined Stab/Gore) have no
 	// DoCastAOE bridge, the PHASE_INTRO EVENT_PHANTOM has no phase
 	// bridge, EnterEvadeMode has no despawn bridge, SpellHit/GetData
@@ -16506,7 +16511,9 @@ func init() {
 	// is instance-shimmed, the creature_template binding DB-side).
 	// BossAI. Ported arm in lua_scripts/northrend/boss_drakkari_colossus.lua:
 	// EVENT_MIGHTY_BLOW — DoCastVictim(Mighty Blow 54719), Reset-scheduled
-	// 10-30s init, rescheduled 5-15s (the only bridgeable arm of the slice).
+	// 10-30s init, rescheduled 5-15s (the only bridgeable arm of the slice);
+	// cast-state gate PORTED (own UpdateAI pre-loop + in-loop gates —
+	// mighty-blow tick defers 500ms while casting, no 5-15s re-arm).
 	// The DamageTaken phase machine (HealthBelowPct 50/5 — no health-pct
 	// bridge) sits behind the absent DoAction bridge, and the freeze/unfreeze
 	// action legs behind SetImmuneToPC / SetReactState / motion-master /

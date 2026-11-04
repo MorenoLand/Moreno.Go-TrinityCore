@@ -134,9 +134,19 @@ end
 
 -- C++ ScheduleTasks: Poison Nova 55081 10s -> 15s (+ Talk EMOTE_NOVA),
 -- Powerful Bite 48287 3s -> 10s, Venom Bolt 54970 15s -> 10s — all
--- DoCastVictim. The DamageTaken phase summon machine is unmodeled
--- (see header), so the pump arms only the three combat timers.
+-- DoCastVictim. The DamageTaken phase summon waves ride
+-- snakeWaveTick / constrictorWaveTick below (see header).
 local function novaTick(creature, guid)
+    -- C++ BossAI scheduler validator (ScriptedCreature.cpp:493-496)
+    -- + TaskScheduler::Dispatch predicate checks: while casting, due
+    -- tasks wait unexecuted (not dropped, not re-armed) — 500ms defer,
+    -- no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "nova", 500, function()
+            novaTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_POISON_NOVA)
     creature:Talk(EMOTE_NOVA)
     schedule(guid, "nova", 15000, function()
@@ -145,6 +155,16 @@ local function novaTick(creature, guid)
 end
 
 local function biteTick(creature, guid)
+    -- C++ BossAI scheduler validator (ScriptedCreature.cpp:493-496)
+    -- + TaskScheduler::Dispatch predicate checks: while casting, due
+    -- tasks wait unexecuted (not dropped, not re-armed) — 500ms defer,
+    -- no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "bite", 500, function()
+            biteTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_POWERFULL_BITE)
     schedule(guid, "bite", 10000, function()
         biteTick(creature, guid)
@@ -152,6 +172,16 @@ local function biteTick(creature, guid)
 end
 
 local function venomBoltTick(creature, guid)
+    -- C++ BossAI scheduler validator (ScriptedCreature.cpp:493-496)
+    -- + TaskScheduler::Dispatch predicate checks: while casting, due
+    -- tasks wait unexecuted (not dropped, not re-armed) — 500ms defer,
+    -- no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "venombolt", 500, function()
+            venomBoltTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_VENOM_BOLT)
     schedule(guid, "venombolt", 10000, function()
         venomBoltTick(creature, guid)
@@ -221,6 +251,16 @@ end
 -- despawnMs 20000. Documented delta: the corpse-timed despawn leg has
 -- no bridge — viper corpses stay on the normal corpse sweep.
 local function snakeWaveTick(creature, guid)
+    -- C++ BossAI scheduler validator (ScriptedCreature.cpp:493-496)
+    -- + TaskScheduler::Dispatch predicate checks: while casting, due
+    -- tasks wait unexecuted (not dropped, not re-armed) — 500ms defer,
+    -- no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "snakes", 500, function()
+            snakeWaveTick(creature, guid)
+        end)
+        return
+    end
     local count = 3
     if creature:IsHeroic() then
         count = 5
@@ -240,6 +280,16 @@ end
 -- constrictors at SpawnLoc[i], TEMPSUMMON_CORPSE_TIMED_DESPAWN (5),
 -- 20s. Same corpse-despawn documented delta as the snake wave.
 local function constrictorWaveTick(creature, guid)
+    -- C++ BossAI scheduler validator (ScriptedCreature.cpp:493-496)
+    -- + TaskScheduler::Dispatch predicate checks: while casting, due
+    -- tasks wait unexecuted (not dropped, not re-armed) — 500ms defer,
+    -- no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "constrictors", 500, function()
+            constrictorWaveTick(creature, guid)
+        end)
+        return
+    end
     local count = 3
     if creature:IsHeroic() then
         count = 5

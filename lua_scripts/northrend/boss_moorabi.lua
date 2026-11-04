@@ -117,6 +117,15 @@ end
 -- SpellHit sets _transformed, fires Talk(EMOTE_TRANSFORMED), and
 -- cancels the event (:128-136).
 local function transformTick(creature, guid)
+    -- C++ UpdateAI CASTING gates (boss_moorabi.cpp pre-loop + in-loop):
+    -- while casting the event stays queued — 500ms defer, no repeat
+    -- re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "transform", 500, function()
+            transformTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_BEGIN_TRANSFORM)
     creature:Talk(SAY_TRANSFORM)
     creature:CastSpell(creature, SPELL_TRANSFORMATION)
@@ -143,6 +152,15 @@ end
 -- Talk(SAY_QUAKE); _transformed selects Quake 55101 over
 -- Ground Tremor 55142.
 local function tremorTick(creature, guid)
+    -- C++ UpdateAI CASTING gates (boss_moorabi.cpp pre-loop + in-loop):
+    -- while casting the event stays queued — 500ms defer, no repeat
+    -- re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "tremor", 500, function()
+            tremorTick(creature, guid)
+        end)
+        return
+    end
     if math.random(2) == 1 then
         creature:Talk(SAY_QUAKE)
     end
@@ -154,6 +172,15 @@ end
 
 -- C++ EVENT_NUMBLING_SHOUT: DoCastAOE; 10s init, 10s repeat.
 local function numbingTick(creature, guid)
+    -- C++ UpdateAI CASTING gates (boss_moorabi.cpp pre-loop + in-loop):
+    -- while casting the event stays queued — 500ms defer, no repeat
+    -- re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "numbing", 500, function()
+            numbingTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, transformed[guid] and SPELL_NUMBING_ROAR or SPELL_NUMBING_SHOUT)
     schedule(guid, "numbing", 10000, function()
         numbingTick(creature, guid)
@@ -162,6 +189,15 @@ end
 
 -- C++ EVENT_DETERMINED_STAB: DoCastAOE; 20s init, 8s repeat.
 local function stabTick(creature, guid)
+    -- C++ UpdateAI CASTING gates (boss_moorabi.cpp pre-loop + in-loop):
+    -- while casting the event stays queued — 500ms defer, no repeat
+    -- re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "stab", 500, function()
+            stabTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, transformed[guid] and SPELL_DETERMINED_GORE or SPELL_DETERMINED_STAB)
     schedule(guid, "stab", 8000, function()
         stabTick(creature, guid)
@@ -217,6 +253,17 @@ end
 -- repeat {20s,25s} unconditional (C++-exact — the PHASE_INTRO phase
 -- group is owned by the reset/combat arms around it).
 local function phantomTick(creature, guid)
+    -- The PHASE_INTRO path passes the same gate: the UpdateAI victim
+    -- check lets PHASE_INTRO through to the CASTING check (:141).
+    -- C++ UpdateAI CASTING gates (boss_moorabi.cpp pre-loop + in-loop):
+    -- while casting the event stays queued — 500ms defer, no repeat
+    -- re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "phantom", 500, function()
+            phantomTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUMMON_PHANTOM, true)
     schedule(guid, "phantom", math.random(20000, 25000), function()
         phantomTick(creature, guid)

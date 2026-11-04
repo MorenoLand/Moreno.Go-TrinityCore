@@ -132,9 +132,16 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_MIGHTY_BLOW: Reset-scheduled 10-30s init, reschedule
--- 5-15s; DoCastVictim. UpdateAI returns early while casting — the
--- Go engine handles cast-gating, the timer just re-arms.
+-- 5-15s; DoCastVictim. C++ UpdateAI pre-loop + in-loop CASTING gates
+-- leave the event queued while casting — 500ms defer, no 5-15s
+-- re-arm (mal_ganis idiom).
 local function mightyBlowTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mightyblow", 500, function()
+            mightyBlowTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MIGHTY_BLOW)
     schedule(guid, "mightyblow", math.random(5000, 15000), function()
         mightyBlowTick(creature, guid)
