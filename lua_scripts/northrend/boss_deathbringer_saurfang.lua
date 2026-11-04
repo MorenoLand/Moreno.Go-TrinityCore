@@ -79,9 +79,11 @@
 --   instance->SetBossState(IN_PROGRESS) legs have no instance
 --   bridge (DoZoneInCombat :289 is PORTED 2026-10-23 via the live
 --   creature:DoZoneInCombat bridge — C++ arm order, after
---   me->setActive(true)); the !_introDone DoCastSelf(SPELL_GRIP_OF_AGONY 70572)
---   exploit leg rides the unbridged intro DoAction machine (see
---   documented-only).
+--   me->setActive(true)); the !_introDone branch (:293-298) PORTS via
+--   relayInterruptIntro below: DoCastSelf(SPELL_GRIP_OF_AGONY 70572) +
+--   the ACTION_INTERRUPT_INTRO guard-despawn relay (the event NPC's
+--   own _events.Reset leg is a Lua no-op); the latch lives outside
+--   saurfangState because C++ Reset never clears _introDone.
 -- EVENT_SUMMON_BLOOD_BEAST (:493-502) — DoCastSelf(
 --   SPELL_SUMMON_BLOOD_BEAST+i10 72172/72173) = 2x non-triggered
 --   self-cast, then Talk(SAY_BLOOD_BEASTS 9) (:498); re-arm 40s
@@ -118,9 +120,10 @@
 --   DoCastSelf(SPELL_REPUTATION_BOSS_KILL 73843, true) TRIGGERED
 --   (:373), DoCastSelf(SPELL_PERMANENT_FEIGN_DEATH 70628) (:374).
 --   C++ order kept (frenzy check before fight-won; both may fire on
---   one hit). The _EnterEvadeMode / SetFlag(NOT_SELECTABLE) /
---   RemoveAurasOnEvade legs and the cross-AI DoAction(ACTION_START_OUTRO)
---   leg have no bridge; the SetImmuneToPC(true) (:368) leg IS bridged —
+--   one hit). The _EnterEvadeMode / RemoveAurasOnEvade legs have no
+--   bridge; the cross-AI DoAction(ACTION_START_OUTRO) leg (:375-376)
+--   PORTS via relayStartOutro below; the SetImmuneToPC(true) (:368)
+--   leg IS bridged —
 --   SetFlag(59, 0x100), the nefarian/opera twin — ported flag-only in
 --   C++ order.
 -- Reset (:257-273) — C++ schedules no timers here, so event 23 only
@@ -178,24 +181,27 @@
 --   bridge) AND gated on !summons.empty() (no summon-list bridge);
 --   one-shot, never re-armed — out on both counts.
 -- npc_high_overlord_saurfang_icc / npc_muradin_bronzebeard_icc —
---   zero bridgeable arms, NOT registered (the bronjahm
---   npc_corrupted_soul_fragment precedent): gossip -> DoAction(
+--   NOT registered (the bronjahm npc_corrupted_soul_fragment
+--   precedent); the outro arms port via the deathbringer-side relay
+--   below, not via registration: gossip -> DoAction(
 --   ACTION_START_EVENT) (gossip is instance-model-blocked; no
 --   DoAction bridge); Talk(SAY_INTRO_HORDE_1 0 /
 --   SAY_INTRO_ALLIANCE_1 0) ride the DoAction legs; Talk(
 --   SAY_INTRO_HORDE_3 1 / SAY_INTRO_ALLIANCE_4 1) ride
 --   MovementInform POINT_FIRST_STEP (no-motion bridge); Talk(
---   SAY_INTRO_HORDE_5..8 2..5 / SAY_INTRO_ALLIANCE_5 2) and Talk(
---   SAY_OUTRO_HORDE_2..4 12..14) ride scheduler events (intro/outro
---   machines); Talk(SAY_OUTRO_HORDE_1 11 / SAY_OUTRO_ALLIANCE_1 3)
---   ride DoAction(ACTION_START_OUTRO); SpellHit(SPELL_GRIP_OF_AGONY)
+--   SAY_INTRO_HORDE_5..8 2..5 / SAY_INTRO_ALLIANCE_5 2) ride the
+--   intro scheduler machine; Talk(SAY_OUTRO_HORDE_2/3 12/13) PORT via
+--   relayStartOutro below, Talk(SAY_OUTRO_HORDE_4 14) rides the
+--   OUTRO_6 move-arrival chain (no ev28); Talk(SAY_OUTRO_HORDE_1 11 /
+--   SAY_OUTRO_ALLIANCE_1 3) PORT via relayStartOutro below (receiver
+--   legs of the deathbringer DamageTaken relay); SpellHit(SPELL_GRIP_OF_AGONY)
 --   movement legs — SpellHit never fires; the cross-AI
 --   deathbringer->AI()->DoAction(PHASE_INTRO_*/ACTION_CONTINUE_INTRO)
 --   legs have no bridge.
--- npc_saurfang_event (guards) — zero own Talk lines; SpellHit /
---   DoAction(ACTION_CHARGE / ACTION_DESPAWN) movement legs only —
---   NOT registered (the bronjahm npc_corrupted_soul_fragment
---   precedent).
+-- npc_saurfang_event (guards) — zero own Talk lines; NOT registered
+--   (the bronjahm npc_corrupted_soul_fragment precedent):
+--   DoAction(ACTION_DESPAWN) ports via the relay guard sweeps below;
+--   SpellHit / DoAction(ACTION_CHARGE) movement legs only stay out.
 -- spell_deathbringer_blood_link / spell_deathbringer_blood_power /
 -- spell_deathbringer_rune_of_blood / spell_deathbringer_blood_nova /
 -- spell_deathbringer_blood_nova_targeting /
@@ -208,10 +214,11 @@
 -- achievement_ive_gone_and_made_a_mess joins the no-achievement
 -- bridge queue (the gunship achievement_im_on_a_boat precedent).
 -- All 29 Talk() calls in the file accounted for (29 = ported: aggro
--- 7 + kill 10 + frenzy 11 + death 13 + blood beasts 9 + berserk 12;
+-- 7 + kill 10 + frenzy 11 + death 13 + blood beasts 9 + berserk 12 +
+-- horde outro 11/12/13 + alliance outro 3 (relayStartOutro below);
 -- documented-only: boss intro alliance 0-3 (4) + boss intro horde
--- 4-6 (3) + mark 8 (1) + emote 14 (1) + horde saurfang 0/1/2..5/
--- 11..14 (10) + muradin 0/1/2/3 (4)).
+-- 4-6 (3) + mark 8 (1) + emote 14 (1) + horde saurfang 0/1/2..5/14
+-- (7) + muradin 0/1/2 (3)).
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
 -- EVENT_SCENT_OF_BLOOD (:520-526) not ported at all: the arm body is
@@ -223,14 +230,15 @@
 --   via creature:Is25ManRaid() (C++ :495-497, cast order kept).
 -- The UNIT_STATE_CASTING gate in UpdateAI (:534-535) has no bridge
 --   (the maiden precedent: timers fire unconditionally).
--- The intro exploit-engage DoCastSelf(SPELL_GRIP_OF_AGONY) leg
---   (:293-298) rides the unbridged intro DoAction machine (_introDone
---   latch has no bridge).
 -- Lua OnReset (event 23) replays the Reset aura-setup casts; C++
 --   Reset also runs at initial spawn — if the engine never fires 23
 --   pre-combat, the setup auras apply on the first evade instead.
 
 local ENTRY_DEATHBRINGER_SAURFANG = 37813
+local ENTRY_SE_HIGH_OVERLORD_SAURFANG = 37187 -- icecrown_citadel.h:216
+local ENTRY_SE_MURADIN_BRONZEBEARD = 37200 -- icecrown_citadel.h:214
+local ENTRY_SE_KOR_KRON_REAVER = 37920 -- icecrown_citadel.h:217
+local ENTRY_SE_SKYBREAKER_MARINE = 37830 -- icecrown_citadel.h:218
 
 local SAY_AGGRO = 7
 local SAY_BLOOD_BEASTS = 9
@@ -238,6 +246,10 @@ local SAY_KILL = 10
 local SAY_FRENZY = 11
 local SAY_BERSERK = 12
 local SAY_DEATH = 13
+local SAY_OUTRO_HORDE_1 = 11
+local SAY_OUTRO_HORDE_2 = 12
+local SAY_OUTRO_HORDE_3 = 13
+local SAY_OUTRO_ALLIANCE_1 = 3
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_SUMMON_BLOOD_BEAST = 72172
@@ -250,6 +262,7 @@ local SPELL_REMOVE_MARKS_OF_THE_FALLEN_CHAMPION = 72257
 local SPELL_ACHIEVEMENT = 72928
 local SPELL_REPUTATION_BOSS_KILL = 73843 -- icecrown_citadel.h:35
 local SPELL_PERMANENT_FEIGN_DEATH = 70628
+local SPELL_GRIP_OF_AGONY = 70572 -- boss_deathbringer_saurfang.cpp:95
 local SPELL_ZERO_POWER = 72242
 local SPELL_BLOOD_LINK = 72178
 local SPELL_BLOOD_POWER = 72371
@@ -263,6 +276,7 @@ local FIGHT_WON_VALUE = 100000 -- boss_deathbringer_saurfang.cpp:614
 
 local timers = {}
 local saurfangState = {}
+local saurfangIntroDone = {} -- C++ _introDone: set on first engage, never cleared by Reset
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -364,6 +378,85 @@ end
 -- C++ npc_high_overlord_saurfang_icc/npc_muradin_bronzebeard_icc DoAction(ACTION_START_EVENT) :662/:863
 -- (*itr)->AI()->SetData(0, x): sort-index write into the unported npc_saurfang_event guard AIs (whose
 -- SetData override is :963). No cross-AI SetData bridge, targets unported — dropped, documented.
+-- Cross-AI DoAction relay arms (cross_doaction_relay census 2026-11-03):
+-- the event NPC is the faction spawn (horde 37187 / alliance 37200);
+-- only one exists per instance, so trying both entries is C++-exact
+-- for the instance-GUID lookup. The event NPC has no Lua handler, so
+-- its own _events.Reset leg is a no-op and its timer legs port only
+-- as the Talk/despawn arms below.
+local function findEventNpc(creature)
+    local npc = creature:FindNearestCreature(ENTRY_SE_HIGH_OVERLORD_SAURFANG, 100.0)
+    if npc then
+        return npc, true
+    end
+    npc = creature:FindNearestCreature(ENTRY_SE_MURADIN_BRONZEBEARD, 100.0)
+    if npc then
+        return npc, false
+    end
+    return nil, false
+end
+
+-- C++ GuardBroadcast (event-NPC-centered, 100.0f): both factions'
+-- guard entries swept — only the live faction's guards exist.
+local function despawnEventGuards(eventNpc)
+    for _, guard in ipairs(eventNpc:GetCreaturesInGrid(ENTRY_SE_KOR_KRON_REAVER, 100)) do
+        guard:Despawn()
+    end
+    for _, guard in ipairs(eventNpc:GetCreaturesInGrid(ENTRY_SE_SKYBREAKER_MARINE, 100)) do
+        guard:Despawn()
+    end
+end
+
+-- C++ JustEngagedWith :293-298: first engage only. The latch lives
+-- outside saurfangState (which resets on ev2/ev23) because C++ Reset
+-- never clears _introDone.
+local function relayInterruptIntro(creature, guid)
+    if saurfangIntroDone[guid] then
+        return
+    end
+    saurfangIntroDone[guid] = true
+    creature:CastSpell(creature, SPELL_GRIP_OF_AGONY)
+    local eventNpc = findEventNpc(creature)
+    if eventNpc then
+        despawnEventGuards(eventNpc)
+    end
+end
+
+-- C++ DamageTaken :375-376 -> event-NPC DoAction(ACTION_START_OUTRO).
+-- Horde (:673-685): RemoveAura(GRIP) + Talk(OUTRO_1 11) + Talk(OUTRO_2
+-- 12) at 10s + Talk(OUTRO_3 13) at 18s + guard despawn; the OUTRO_4
+-- corpse move (GetClosePoint-derived position) and the OUTRO_5 final
+-- move (arrival-gated despawn chain, no ev28) stay out, as do the
+-- SetDisableGravity(false) + MoveFall legs (no MoveFall bridge).
+-- Alliance (muradin :873): RemoveAura(GRIP) + Talk(OUTRO_1 3) + guard
+-- despawn + deathbringer DespawnOrUnsummon(5s); muradin schedules no
+-- outro Talks (its chain rides waypoint/movement events, no bridge).
+-- Delayed legs ride schedule() keyed on the event NPC's GUID (C++
+-- ownership: the timers live on the event NPC's EventMap).
+local function relayStartOutro(creature)
+    local eventNpc, isHorde = findEventNpc(creature)
+    if not eventNpc then
+        return
+    end
+    eventNpc:RemoveAura(SPELL_GRIP_OF_AGONY)
+    local npcGuid = eventNpc:GetGUID()
+    if isHorde then
+        eventNpc:Talk(SAY_OUTRO_HORDE_1)
+        schedule(npcGuid, "outro2", 10000, function()
+            eventNpc:Talk(SAY_OUTRO_HORDE_2)
+        end)
+        schedule(npcGuid, "outro3", 18000, function()
+            eventNpc:Talk(SAY_OUTRO_HORDE_3)
+        end)
+    else
+        eventNpc:Talk(SAY_OUTRO_ALLIANCE_1)
+        schedule(npcGuid, "outroDespawn", 5000, function()
+            creature:Despawn()
+        end)
+    end
+    despawnEventGuards(eventNpc)
+end
+
 local function saurfangJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     local st = saurfangState[guid]
@@ -375,6 +468,9 @@ local function saurfangJustEngagedWith(event, creature, target)
     -- events.Reset/SetPhase and SetImmuneToPC(false) (C++ arm order).
     creature:DoZoneInCombat()
     creature:RemoveFlag(59, 0x100) -- C++ :293 (JustEngagedWith SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC, after events.Reset/SetPhase)
+    -- C++ :293-298: first-engage branch in C++ arm order (GRIP cast,
+    -- then ACTION_INTERRUPT_INTRO relay) before Talk(SAY_AGGRO).
+    relayInterruptIntro(creature, guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "beasts", 30000, function() onSummonBloodBeast(creature, guid) end)
     -- C++ :305 seed: IsHeroic() ? 360s : 480s rides creature:IsHeroic()
@@ -525,7 +621,9 @@ local function saurfangDamageTaken(event, creature, attacker, damage)
         -- SetImmuneToPC(true) (= set UNIT_FLAG_IMMUNE_TO_PC); the NOT_SELECTABLE
         -- leg ports 2026-10-23 on the live creature:SetFlag bridge (the stale
         -- "no bridge" claim is retracted); the _EnterEvadeMode /
-        -- RemoveAurasOnEvade / cross-AI DoAction legs have no bridge.
+        -- RemoveAurasOnEvade legs have no bridge; the cross-AI
+        -- DoAction(ACTION_START_OUTRO) leg ports via relayStartOutro
+        -- below (FindNearestCreature inline, maulgar/illidan precedent).
         creature:SetFlag(59, 0x2000000)
         creature:SetFlag(59, 0x100)
         creature:CastSpell(creature, SPELL_REMOVE_MARKS_OF_THE_FALLEN_CHAMPION)
@@ -533,6 +631,9 @@ local function saurfangDamageTaken(event, creature, attacker, damage)
         creature:Talk(SAY_DEATH)
         creature:CastSpell(creature, SPELL_REPUTATION_BOSS_KILL, true)
         creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH)
+        -- C++ :375-376: ACTION_START_OUTRO relay to the faction event
+        -- NPC, last in the fight-won arm order, after feign death.
+        relayStartOutro(creature)
     end
     if newDamage ~= damage then
         return true, newDamage
