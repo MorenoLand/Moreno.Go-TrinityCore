@@ -124,13 +124,16 @@ local function shadeDied(event, creature, killer)
     -- C++ JustDied then calls akama->AI()->DoAction(ACTION_SHADE_OF_AKAMA_DEAD)
     -- (boss_shade_of_akama.cpp:274-275): _isInCombat=false + CombatStop(true)
     -- + SetFaction(FACTION_ASHTONGUE_DEATHSWORN 1820) in C++ order
-    -- (SetWalk/_events.Reset/MovePoint stay out — no motion bridge).
+    -- + SetWalk + MovePoint to AkamaWP[1] (arrival EVENT_START_SOUL_RETRIEVE
+    -- stays out — no MovementInform bridge; _events.Reset is a no-op here).
     -- The instance GetCreature lookup is approximated by the same
     -- 100yd grid sweep as the channeler arm below.
     for _, akama in ipairs(creature:GetCreaturesInGrid(
             ENTRY_AKAMA_SHADE, 100)) do
         akama:CombatStop(true)
         akama:SetFaction(1820)
+        akama:SetWalk(true)
+        akama:MoveTo(0, 468.4435, 401.1062, 118.5379)
     end
     -- C++ boss_shade_of_akama.cpp:282 JustDied summons.DespawnEntry(NPC_
     -- ASHTONGUE_CHANNELER) via the grid-sweep idiom (illidan
@@ -284,10 +287,13 @@ local function akamaShadeGossipSelect(event, player, creature, sender, action, c
         -- C++ EVENT_SHADE_START (boss_shade_of_akama.cpp:460-467):
         -- SetBossState IN_PROGRESS (no bridge) + RemoveFlag(UNIT_NPC_FLAGS,
         -- UNIT_NPC_FLAG_GOSSIP) + RemoveAurasDueToSpell(SPELL_STEALTH)
-        -- (SetWalk/MovePoint stay out — no motion bridge).
+        -- + SetWalk + MovePoint to AkamaWP[0] (arrival EVENT_SHADE_CHANNEL
+        -- stays out — no MovementInform bridge).
         creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(),
             bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
         creature:RemoveAura(SPELL_STEALTH)
+        creature:SetWalk(true)
+        creature:MoveTo(0, 517.4877, 400.7993, 112.7837)
     end)
     return false
 end

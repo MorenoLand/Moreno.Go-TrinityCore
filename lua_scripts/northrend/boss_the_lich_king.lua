@@ -249,7 +249,7 @@
 -- REACT_AGGRESSIVE (:472-484) + JustSummoned legs :750/:761/:777/1059
 -- (ice-sphere :750 PORTED in lichKingJustSummoned — SelectTarget
 -- approximated by the alive same-map/instance random-player pool,
--- MoveFollow stays out; defile :761 PORTED (lichKingJustSummoned);
+-- MoveFollow PORTED in lichKingJustSummoned; defile :761 PORTED (lichKingJustSummoned);
 -- spirit_bomb/valkyr/strangulate stay unregistered as documented.)
 -- SpellScript legs: ice_burst_target_search REACT_PASSIVE (:2212-2221)
 -- and restore_soul REACT_PASSIVE on wicked spirits (:2632-2641) — no
@@ -455,6 +455,7 @@ local function lichKingJustSummoned(_, creature, summoned)
             summoned:CastSpell(summoned, SPELL_ICE_SPHERE)
             summoned:CastSpell(summoned, SPELL_ICE_BURST_TARGET_SEARCH)
             summoned:CastSpell(target, SPELL_ICE_PULSE)
+            summoned:MoveFollow(target, 0.0, 0.0)
         else
             summoned:Despawn()
         end

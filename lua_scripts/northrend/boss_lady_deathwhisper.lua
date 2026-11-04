@@ -717,7 +717,11 @@ local function deathwhisperJustDied(event, creature, killer)
     if darnavan ~= nil and darnavan:GetHealth() > 0 then
         darnavan:SetFaction(FACTION_FRIENDLY)
         darnavan:CombatStop(true)
+        darnavan:StopMoving()
         darnavan:SetReactState(REACT_PASSIVE)
+        schedule(creature:GetGUID(), "darnavanMove", 10000, function()
+            darnavan:MoveTo(0, -524.248, 2211.92, 62.9096)
+        end)
         darnavan:Talk(SAY_DARNAVAN_RESCUED)
         if killer ~= nil and killer:GetObjectType() == "Player" then
             darnavanCredit(creature, killer)
