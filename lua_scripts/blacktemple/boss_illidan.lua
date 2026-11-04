@@ -223,7 +223,9 @@
 -- via ev5 below (FindNearestCreature + atan2 idiom). The outro
 -- chain (ACTION_START_OUTRO from illidan) IS PORTED in
 -- illidanDamageTaken (reset/react/attack-stop/facing/Talks);
--- the teleport-despawn has no despawn bridge — unmodeled;
+-- the teleport-despawn tail (farewell 11s + teleport visual +
+-- 1s despawn) IS PORTED in illidanDamageTaken below (stale "no
+-- despawn bridge" retracted — creature:Despawn() is bridged);
 -- the akama/maiev/outro emote arms stay out behind true blockers
 -- (outro/maiev/door choreography: cross-creature DoAction, summon,
 -- instance and phase machines); PerformEmote itself is bridged
@@ -336,6 +338,7 @@ local SAY_MAIEV_TRAP = 3
 local SAY_MAIEV_DOWN = 4
 local SAY_MAIEV_FINISHED = 5
 local SAY_MAIEV_OUTRO = 6
+local SAY_MAIEV_FAREWELL = 7
 
 -- Illidan spells.
 local SPELL_FLAME_CRASH = 40832
@@ -373,6 +376,7 @@ local SPELL_FLAME_CRASH_GROUND = 40836
 local SPELL_CAGE_TRAP_SUMMON = 40694
 local SPELL_SHADOW_STRIKE = 40685
 local SPELL_THROW_DAGGER = 41152
+local SPELL_MAIEV_TELEPORT_VISUAL = 41236
 local SPELL_MAIEV_DOWN = 40409
 local SPELL_HEALING_POTION = 40535
 
@@ -984,8 +988,10 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                 -- C++ maiev DoAction(ACTION_START_OUTRO) (:733,
                 -- boss_illidan.cpp:1646-1657): events reset +
                 -- react passive + AttackStop + facing + Talk
-                -- FINISHED + OUTRO_TEXT Talk 28s, in C++ arm
-                -- order; SetPhase(PHASE_OUTRO) stays out (maiev
+                -- FINISHED + OUTRO_TEXT Talk 28s + the
+                -- FAREWELL 11s / TELEPORT_DESPAWN 3s tail
+                -- (:1736-1747), in C++ arm order;
+                -- SetPhase(PHASE_OUTRO) stays out (maiev
                 -- phase machine unmodeled). Cross-creature leg
                 -- inlined via FindNearestCreature (halazzi lynx
                 -- precedent), nil-guarded like the C++ if.
@@ -1004,6 +1010,27 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                     schedule(maiev:GetGUID(), "outroText",
                         28000, function()
                             maiev:Talk(SAY_MAIEV_OUTRO)
+                            -- C++ EVENT_MAIEV_OUTRO_TEXT (:1736-1739):
+                            -- Talk + Schedule FAREWELL 11s;
+                            -- EVENT_MAIEV_FAREWELL_TEXT (:1740-1743):
+                            -- Talk + Schedule TELEPORT_DESPAWN 3s;
+                            -- EVENT_MAIEV_TELEPORT_DESPAWN
+                            -- (:1744-1747): non-triggered self-cast
+                            -- teleport visual + DespawnOrUnsummon(1s).
+                            schedule(maiev:GetGUID(), "outroFarewell",
+                                11000, function()
+                                    maiev:Talk(SAY_MAIEV_FAREWELL)
+                                    schedule(maiev:GetGUID(),
+                                        "outroTeleport", 3000, function()
+                                            maiev:CastSpell(maiev,
+                                                SPELL_MAIEV_TELEPORT_VISUAL)
+                                            schedule(maiev:GetGUID(),
+                                                "outroDespawn", 1000,
+                                                function()
+                                                    maiev:Despawn()
+                                                end)
+                                        end)
+                                end)
                         end)
                 end
             end

@@ -158,9 +158,15 @@
 -- disk machine: IsSummonedBy -> MovePoint cycle; SpellHit
 -- shock-lance legs; PassengerBoarded player machine — no
 -- vehicle / motion / passenger bridges. npc_static_field
--- (NPC_VORTEX_TRIGGER 30090) — IsSummonedBy ->
--- DespawnOrUnsummon(30s) (no periodic logic in the C++) — no
--- despawn bridge.
+-- (entry-UNVERIFIABLE from repo sources — the 30090
+-- attribution is WRONG: boss_malygos.cpp:1762 binds 30090 to
+-- the vortex trigger vehicle, and the ScriptName->entry
+-- binding is DB-side) — IsSummonedBy ->
+-- DespawnOrUnsummon(30s) (no periodic logic in the C++) —
+-- stays out: creature:Despawn() IS bridged, but temp summons
+-- fire no spawn hook on the summoned creature itself (event 5
+-- bypasses direct-constructed motions), and the summoner-side
+-- event 19 cannot be gated without the entry.
 -- The 17 spell scripts (SpellScript / AuraScript handlers:
 -- portal beam relocating, random portal target selection,
 -- arcane storm target filters, vortex dummy destination
