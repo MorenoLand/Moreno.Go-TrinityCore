@@ -12114,6 +12114,11 @@ func init() {
 	RegisterLuaBoss("npc_illidan_generic_fire", 23069)
 	RegisterLuaBoss("npc_illidan_generic_fire", 23259)
 	RegisterLuaBoss("npc_illidan_generic_fire", 23336)
+	// Cast-state gates ported as 500ms IsCasting defer on all
+	// ported events-map ticks (illidan boss / akama healing-potion /
+	// flame engage+charge+blast / maiev combat+outro); specialEvents
+	// berserk + cancel-demon, the DoAction phase-4 chain and
+	// DamageTaken hooks stay ungated per C++.
 	// Kalecgos (Sunwell Plateau) — fight logic in
 	// lua_scripts/sunwellplateau/boss_kalecgos.lua.
 	// Kalecgos (24850) runs the six-arm pull schedule (arcane buffet
@@ -20770,6 +20775,7 @@ func init() {
 	// read, neural step-4 kill credit, Talk(step, caster)). Entry 25478 verifiable from the C++
 	// ImprisionedBerylSorcerer enum.
 	RegisterLuaBoss("npc_imprisoned_beryl_sorcerer", 25478)
+	// Checked-no-gate: zone_borean_tundra.cpp has zero HasUnitState hits — rebuff timer + SpellHit arms stay ungated.
 	// npc_hidden_cultist (Borean Tundra, quest 11794) — ported arms in
 	// lua_scripts/northrend/npc_hidden_cultist.lua: Reset()
 	// DoCast(SPELL_SHROUD_OF_THE_DEATH_CULTIST 46077) non-triggered
@@ -20780,6 +20786,7 @@ func init() {
 	RegisterLuaBoss("npc_hidden_cultist", 25827)
 	RegisterLuaBoss("npc_hidden_cultist", 25248)
 	RegisterLuaBoss("npc_hidden_cultist", 25828)
+	// Checked-no-gate: zero HasUnitState hits in zone_borean_tundra.cpp — Reset self-cast + gossip chain stay ungated.
 	// npc_nesingwary_trapper (Borean Tundra, quest 11865) — ported
 	// arms in lua_scripts/northrend/npc_nesingwary_trapper.lua:
 	// Initialize/Reset phase machine (2500ms hidden, visible, fur
@@ -20790,6 +20797,7 @@ func init() {
 	// spell-summoner legs stay out (no GO-delete / summoner /
 	// SpellScript bridges).
 	RegisterLuaBoss("npc_nesingwary_trapper", 25835)
+	// Checked-no-gate: zero HasUnitState hits in zone_borean_tundra.cpp — phase-machine arms stay ungated.
 	// npc_counselor_talbot (Borean Tundra, Last Rites quest chain) —
 	// ported arms in lua_scripts/northrend/npc_counselor_talbot.lua:
 	// Initialize()/Reset() timer seeds -> OnEnterCombat CreateLuaEvent
@@ -20804,6 +20812,7 @@ func init() {
 	// documented-only (no bridges). Entry 25301 verifiable from the
 	// C++ LastRites enum (zone_borean_tundra.cpp:413).
 	RegisterLuaBoss("npc_counselor_talbot", 25301)
+	// Checked-no-gate: zero HasUnitState hits in zone_borean_tundra.cpp — combat-start ShadowBolt/Deflection/SoulBlast pumps stay ungated (UpdateVictim-gated, not cast-gated).
 	// npc_mageguard_dalaran (Dalaran, trespasser guards) — ported arm
 	// in lua_scripts/northrend/npc_mageguard_dalaran.lua: constructor
 	// SetFlag NON_ATTACKABLE + ApplySpellImmune normal/magic damage
@@ -20813,6 +20822,7 @@ func init() {
 	// IsInBack unbridged for handler creatures).
 	RegisterLuaBoss("npc_mageguard_dalaran", 29254)
 	RegisterLuaBoss("npc_mageguard_dalaran", 29255)
+	// Checked-no-gate: empty UpdateAI — spawn flag/immune arm only, no gate.
 	// npc_wg_queue (Wintergrasp battle-magi) — ported arm
 	// in lua_scripts/northrend/npc_wg_queue.lua: ungated Frost
 	// Armor self-cast (0s, 180s re-arm). Entries 32169/32170
@@ -20834,11 +20844,13 @@ func init() {
 	RegisterLuaBoss("npc_wg_queue", 35599)
 	RegisterLuaBoss("npc_wg_queue", 35603)
 	RegisterLuaBoss("npc_wg_queue", 35612)
+	// Checked-no-gate: plain FrostArmor countdown, zero HasUnitState hits — ungated.
 	// npc_wg_spirit_guide (Wintergrasp spirit guides) — ported arm
 	// in lua_scripts/northrend/npc_wg_spirit_guide.lua: UpdateAI
 	// spirit-heal self-cast (22011, non-triggered, 1s poll; the
-	// C++ HasUnitState(CASTING) gate is vacuous for handler
-	// creatures). Entries 31841 (Taunka, Horde) / 31842 (Dwarven,
+	// C++ HasUnitState(CASTING) gate is ported as a 500ms IsCasting
+	// defer (stale vacuous-false claim retracted, IsCasting live).
+	// Entries 31841 (Taunka, Horde) / 31842 (Dwarven,
 	// Alliance) wowhead-only. Gossip graveyard-teleport arms stay
 	// documented-only (no battlefield bridge).
 	RegisterLuaBoss("npc_wg_spirit_guide", 31841)
@@ -20850,18 +20862,21 @@ func init() {
 	// ROOT retarget arm stays documented-only (no HasUnitState /
 	// AttackStart bridge).
 	RegisterLuaBoss("npc_mimiron_assault_bot", 34057)
+	// Checked-no-gate: UpdateAI CASTING hits zero — magnetic-field tick stays ungated (ROOT retarget leg is a separate, unported arm).
 	// npc_mimiron_frost_bomb (Ulduar, Mimiron VX-001 phase) — ported arms
 	// in lua_scripts/northrend/npc_mimiron_frost_bomb.lua: Reset-seeded
 	// explosion chain (10s AOE 64626, +3s AOE 65354, despawn +3s).
 	// Entry 34149 wowhead-only (spell 64627 summon link; no C++ NPC_
 	// constant for this add).
 	RegisterLuaBoss("npc_mimiron_frost_bomb", 34149)
+	// Checked-no-gate: plain event loop, zero CASTING hits — explosion/clear-fires chain stays ungated.
 	// npc_mimiron_proximity_mine (Ulduar, Mimiron Leviathan phase) —
 	// ported arms in lua_scripts/northrend/npc_mimiron_proximity_mine.lua:
 	// Reset-seeded arm chain (1.5s self 65345, +33.5s HasAura-gated
 	// AOE 66351, despawn +1s). Entry 34362 wowhead-only (Ulduar page;
 	// 27679 rejected as MoP-era).
 	RegisterLuaBoss("npc_mimiron_proximity_mine", 34362)
+	// Checked-no-gate: plain event loop, zero CASTING hits — arm/detonation chain stays ungated.
 	// npc_mimiron_flames (Ulduar, Mimiron hard-mode fire) — ported arm
 	// in lua_scripts/northrend/npc_mimiron_flames.lua: Reset-seeded
 	// one-shot spread cast (4s, AOE 64562). Entries 34363
@@ -20872,10 +20887,12 @@ func init() {
 	// (no instance boss-state bridge).
 	RegisterLuaBoss("npc_mimiron_flames", 34363)
 	RegisterLuaBoss("npc_mimiron_flames", 34121)
+	// Checked-no-gate: plain event loop, zero CASTING hits — 4s spread one-shot stays ungated.
 	// boss_vx_001 (Ulduar, Mimiron VX-001 phase) — ported arms
 	// in lua_scripts/northrend/boss_vx_001.lua: JustSummoned burst-target
 	// leg + SpellHit rapid-burst leg (DoAction/timer/DamageTaken arms stay out).
 	RegisterLuaBoss("boss_vx_001", 33651)
+	// Checked-no-gate for ported arms: pre-loop + in-loop CASTING gates cover the unported event machine only (JustSummoned/SpellHit legs are separate hooks).
 	// boss_leviathan_mk_ii (Ulduar, Mimiron phase 1) — ported arm
 	// in lua_scripts/northrend/boss_leviathan_mk_ii.lua: Reset
 	// (NON_ATTACKABLE|NOT_SELECTABLE + react passive + self-cast
@@ -20884,11 +20901,13 @@ func init() {
 	// / computer / fire-bot arms stay out (DoAction phase machine,
 	// vehicle kit, MovePoint, instance boss-state bridges absent).
 	RegisterLuaBoss("boss_leviathan_mk_ii", 33432)
+	// Checked-no-gate for ported arms: pre-loop + in-loop CASTING gates cover the unported event machine only (Reset arm is not an UpdateAI event).
 	// npc_aeranas (Hellfire Peninsula, Avruu's Orb summon) — ported
 	// arms in lua_scripts/outland/npc_aeranas.lua: Reset faction/
 	// questgiver/Talk + 8s monster-faction timer, combat shock/
 	// winds pumps, 30% free arm. Entry 17085 wowhead-only.
 	RegisterLuaBoss("npc_aeranas", 17085)
+	// Checked-no-gate: zero HasUnitState hits in zone_hellfire_peninsula.cpp — shock/winds pumps stay ungated.
 	// npc_magister_aledis (Hellfire Peninsula, Arelion's Secret duel)
 	// — ported arms in lua_scripts/outland/npc_magister_aledis.lua:
 	// Reset faction/gossip/immune, gossip-select duel chain,
@@ -20896,12 +20915,14 @@ func init() {
 	// wowhead-only. EngageWithTarget + 60s evade stay out (no
 	// bridges); DoZoneInCombat is dungeon-gated.
 	RegisterLuaBoss("npc_magister_aledis", 20159)
+	// Checked-no-gate: zero HasUnitState hits in zone_hellfire_peninsula.cpp — fireball/frostnova pumps stay ungated.
 	// npc_taskmaster_fizzule (Northern Barrens, Deep Cover) —
 	// ported arms in lua_scripts/kalimdor/npc_taskmaster_fizzule.lua:
 	// flare/folly SpellHit latch, salute ReceiveEmote friend arm.
 	// Entry 7233 wowhead-only. 120s MoveIdle/EnterEvadeMode revert
 	// stays out (no bridges).
 	RegisterLuaBoss("npc_taskmaster_fizzule", 7233)
+	// Checked-no-gate: zero HasUnitState hits in zone_the_barrens.cpp — SpellHit/emote arms stay ungated.
 	// npc_tournament_training_dummy (Icecrown, Argent Tournament) —
 	// ported arms in lua_scripts/northrend/npc_tournament_training_dummy.lua:
 	// EVENT_DUMMY_RECAST_DEFEND (Reset-seeded 5s repeat, 33272 leg:
@@ -20915,4 +20936,5 @@ func init() {
 	RegisterLuaBoss("npc_tournament_training_dummy", 33272)
 	RegisterLuaBoss("npc_tournament_training_dummy", 33229)
 	RegisterLuaBoss("npc_tournament_training_dummy", 33243)
+	// Checked-no-gate: only HasUnitState hit is the STUNNED maintenance leg, zero CASTING hits — 5s defend recast stays ungated.
 }

@@ -256,9 +256,15 @@
 -- glaives, agonizing flames, demon transform x2, flame burst, find
 -- target, eye blast, cage trap, caged, maiev down, cage teleport,
 -- despawn akama).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- timers fire unconditionally (jeklik convention); no instance-
+-- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
+-- (boss pre-loop :801 + in-loop :1036, akama :1219/:1358, flame
+-- :1499/:1530, maiev :1679/:1752) are ported as a 500ms IsCasting
+-- defer on every ported events-map tick (mal_ganis idiom; IsCasting
+-- live, lua_creature_events.go:1950; defer precedes picks/casts/
+-- Talks/schedules, no re-arm consumed). Ungated per C++: the
+-- specialEvents arms (berserk, cancel-demon), the DoAction phase-4
+-- chain, the blade/shadowfiend scheduler legs, and all DamageTaken /
+-- JustEngagedWith hooks (separate hooks); no instance-
 -- script model — boss admission via the luaBossAI shim (BossAI::
 -- JustEngagedWith/JustDied/Reset, the DATA_ILLIDAN_STORMRAGE /
 -- DATA_AKAMA / DATA_MAIEV / DATA_ILLIDAN_MUSIC_CONTROLLER
@@ -474,6 +480,10 @@ local onFlameCrash
 local onDrawSoul
 local onShear
 local onParasitic
+local onMaievOutroText
+local onMaievOutroFarewell
+local onMaievOutroTeleport
+local onMaievOutroDespawn
 
 -- C++ ScheduleEvents(GROUP_PHASE_1, group): the first-fire times
 -- are 30s/34s/10s/26s.
@@ -521,6 +531,12 @@ end
 
 -- C++ EVENT_TAUNT: Talk; re-arm {30s,60s} unconditional.
 local function onTaunt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "taunt", 500, function()
+            onTaunt(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_ILLIDAN_TAUNT)
     schedule(guid, "taunt", 30000 + math.random(0, 30000), function()
         onTaunt(creature, guid)
@@ -529,6 +545,12 @@ end
 
 -- C++ EVENT_FLAME_CRASH: non-triggered DoCastVictim; repeat 30s.
 onFlameCrash = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flameCrash", 500, function()
+            onFlameCrash(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FLAME_CRASH, false)
@@ -543,6 +565,12 @@ end
 -- heal-back (each hit unit casts 40903 on Illidan, triggered)
 -- rides the Go script-effect dispatcher (boss_ai.go).
 onDrawSoul = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "drawSoul", 500, function()
+            onDrawSoul(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DRAW_SOUL, false)
     schedule(guid, "drawSoul", 34000, function()
         onDrawSoul(creature, guid)
@@ -551,6 +579,12 @@ end
 
 -- C++ EVENT_SHEAR: non-triggered DoCastVictim; repeat 12s.
 onShear = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shear", 500, function()
+            onShear(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHEAR, false)
@@ -563,6 +597,12 @@ end
 -- C++ EVENT_PARASITIC_SHADOWFIEND: non-triggered 41917 on a
 -- random target; repeat 30s.
 onParasitic = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "parasitic", 500, function()
+            onParasitic(creature, guid)
+        end)
+        return
+    end
     local target = randomAnyTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_PARASITIC_SHADOWFIEND, false)
@@ -579,6 +619,12 @@ end
 -- lookup; AddThreat is bridged but has no bearer here; 23226
 -- unregistered, CanAIAttack gate unbridged), repeat 30s.
 local function onMinionsWeave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "minionsWeave", 500, function()
+            onMinionsWeave(creature, guid)
+        end)
+        return
+    end
     local state = getIllidanState(guid)
     if state.dead then
         return
@@ -590,6 +636,12 @@ end
 
 -- C++ EVENT_AGONIZING_FLAMES: non-triggered self-cast; repeat 53s.
 local function onAgonizing(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "agonizing", 500, function()
+            onAgonizing(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_AGONIZING_FLAMES_SELECTOR, false)
     schedule(guid, "agonizing", 53000, function()
         onAgonizing(creature, guid)
@@ -598,6 +650,12 @@ end
 
 -- C++ EVENT_FRENZY: non-triggered self-cast + Talk; repeat 40s.
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            onFrenzy(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FRENZY, false)
     creature:Talk(SAY_ILLIDAN_FRENZY)
     schedule(guid, "frenzy", 40000, function()
@@ -607,6 +665,12 @@ end
 
 -- C++ EVENT_SHADOW_BLAST: non-triggered DoCastVictim; repeat 2s.
 local function onShadowBlast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowBlast", 500, function()
+            onShadowBlast(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_BLAST, false)
@@ -620,6 +684,12 @@ end
 -- EFFECT_0 arm (hit unit casts 41131 on itself, triggered) rides
 -- the Go script-effect dispatcher (boss_ai.go).
 local function onFlameBurst(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flameBurst", 500, function()
+            onFlameBurst(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FLAME_BURST, false)
     schedule(guid, "flameBurst", 22000, function()
         onFlameBurst(creature, guid)
@@ -629,11 +699,23 @@ end
 -- C++ EVENT_SHADOW_DEMON: non-triggered self-cast (the summon has
 -- no bridge — cast kept); one-shot.
 local function onShadowDemon(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowDemon", 500, function()
+            onShadowDemon(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUMMON_SHADOWDEMON, false)
 end
 
 -- C++ EVENT_SCHEDULE_DEMON_SPELLS: GROUP_PHASE_DEMON arms.
 local function onDemonSpells(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "demonSpells", 500, function()
+            onDemonSpells(creature, guid)
+        end)
+        return
+    end
     -- C++ :956 ResetThreatList() before scheduling the demon phase group.
     creature:ResetAllThreat()
     schedule(guid, "shadowBlast", 1000, function()
@@ -673,6 +755,23 @@ local function armPhaseSchedule(creature, guid, phase)
     end
 end
 
+-- C++ EVENT_RESUME_COMBAT_DEMON: ResetThreatList() before
+-- re-arming the phase schedule; events-map arm, gated
+-- (mal_ganis idiom).
+local function onResumeDemon(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "resumeDemon", 500, function()
+            onResumeDemon(creature, guid)
+        end)
+        return
+    end
+    local state = getIllidanState(guid)
+    -- C++ EVENT_RESUME_COMBAT_DEMON: ResetThreatList() before
+    -- ScheduleEvents (LoadEquipment has no bridge).
+    creature:ResetAllThreat()
+    armPhaseSchedule(creature, guid, state.phase)
+end
+
 -- C++ EVENT_CANCEL_DEMON_FORM (specialEvents, 72s one-shot):
 -- _isDemon=false, triggered self-cast 40511, resume-demon 12s
 -- re-arms the phase schedule (C++-exact; the interrupt arm has no
@@ -690,11 +789,20 @@ local function onCancelDemon(creature, guid)
     end
     creature:CastSpell(creature, SPELL_DEMON_TRANSFORM_1, true)
     schedule(guid, "resumeDemon", 12000, function()
-        -- C++ EVENT_RESUME_COMBAT_DEMON: ResetThreatList() before
-        -- ScheduleEvents (LoadEquipment has no bridge).
-        creature:ResetAllThreat()
-        armPhaseSchedule(creature, guid, state.phase)
+        onResumeDemon(creature, guid)
     end)
+end
+
+-- C++ EVENT_DEMON_TEXT: Talk; events-map arm, gated like the
+-- other demon-phase ticks (mal_ganis idiom).
+local function onDemonText(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "demonText", 500, function()
+            onDemonText(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(SAY_ILLIDAN_MORPH)
 end
 
 -- C++ EVENT_DEMON (60s one-shot): _isDemon=true, cancel the phase
@@ -702,6 +810,12 @@ end
 -- spells 15s, cancel-demon 72s (the equipment arm has no bridge;
 -- the root arm ports via creature:SetRooted, 2026-10-21).
 onDemon = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "demon", 500, function()
+            onDemon(creature, guid)
+        end)
+        return
+    end
     local state = getIllidanState(guid)
     -- C++ boss_illidan.cpp:944-947 order: SetControlled(true,
     -- UNIT_STATE_ROOT), then _isDemon=true.
@@ -710,7 +824,7 @@ onDemon = function(creature, guid)
     cancelPhaseSchedule(guid)
     creature:CastSpell(creature, SPELL_DEMON_TRANSFORM_1, true)
     schedule(guid, "demonText", 2000, function()
-        creature:Talk(SAY_ILLIDAN_MORPH)
+        onDemonText(creature, guid)
     end)
     schedule(guid, "demonSpells", 15000, function()
         onDemonSpells(creature, guid)
@@ -723,6 +837,12 @@ end
 -- C++ EVENT_FIREBALL: non-triggered 40598 on a random threat-list
 -- player alive within 150 yd; repeat {2s,4s}.
 local function onFireball(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function()
+            onFireball(creature, guid)
+        end)
+        return
+    end
     local target = randomTargetIn150(creature)
     if target then
         creature:CastSpell(target, SPELL_FIREBALL, false)
@@ -736,6 +856,12 @@ end
 -- the db-target summon and the 39908 cast on it have no summon
 -- bridge — skipped; one-shot.
 local function onEyeBlast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "eyeBlast", 500, function()
+            onEyeBlast(creature, guid)
+        end)
+        return
+    end
     cancelTimer(guid, "darkBarrage")
     creature:Talk(SAY_ILLIDAN_EYE_BLAST)
 end
@@ -750,6 +876,12 @@ local onPillar
 -- pillar timer by 30s (approximated by re-arming the pillar timer
 -- 30s from this tick — documented); one-shot.
 local function onDarkBarrage(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "darkBarrage", 500, function()
+            onDarkBarrage(creature, guid)
+        end)
+        return
+    end
     local target = randomTargetIn150(creature)
     if target then
         creature:CastSpell(target, SPELL_DARK_BARRAGE, false)
@@ -768,6 +900,12 @@ end
 -- bridge — the chain keeps the timers, the positions are
 -- unmodeled).
 onPillar = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pillar", 500, function()
+            onPillar(creature, guid)
+        end)
+        return
+    end
     local state = getIllidanState(guid)
     for _, key in ipairs({ "fireball", "eyeBlast",
             "darkBarrage" }) do
@@ -796,6 +934,12 @@ end
 -- C++ EVENT_THROW_WARGLAIVE_2: non-triggered self-cast 39635 +
 -- SetSheath(SHEATH_STATE_UNARMED) (:878), then the pillar timer 2s.
 local function onThrowGlaive2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "throwGlaive2", 500, function()
+            onThrowGlaive2(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_THROW_GLAIVE2, false)
     creature:SetSheath(0) -- SHEATH_STATE_UNARMED
     schedule(guid, "pillar", 2000, function()
@@ -806,6 +950,12 @@ end
 -- C++ EVENT_THROW_WARGLAIVE: non-triggered self-cast 39849, then
 -- throw glaive 2 in 1s.
 local function onThrowGlaive(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "throwGlaive", 500, function()
+            onThrowGlaive(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_THROW_GLAIVE, false)
     schedule(guid, "throwGlaive2", 1000, function()
         onThrowGlaive2(creature, guid)
@@ -819,6 +969,12 @@ end
 -- (the sound bridge is live — creature:PlayDirectSound — but the arm
 -- rides the movement leg, so it stays out).
 local function onWarglaivePoint(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "warglaivePoint", 500, function()
+            onWarglaivePoint(creature, guid)
+        end)
+        return
+    end
     schedule(guid, "throwGlaive", 2000, function()
         onThrowGlaive(creature, guid)
     end)
@@ -829,6 +985,12 @@ end
 -- me->SetFacingTo(_orientation) — ports via creature:SetFacingTo
 -- (lua_creature_events.go:711); then the warglaive point 6s.
 local function onFly(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fly", 500, function()
+            onFly(creature, guid)
+        end)
+        return
+    end
     creature:SetFacingTo(3.137039)
     schedule(guid, "warglaivePoint", 6000, function()
         onWarglaivePoint(creature, guid)
@@ -897,6 +1059,70 @@ local function startPhase4(creature, guid)
     end)
 end
 
+-- C++ EVENT_PHASE_4_DELAYED (12s, GROUP_PHASE_ALL): the delayed
+-- phase-4 start; events-map arm, gated (mal_ganis idiom) — the
+-- DoAction body itself (startPhase4) stays ungated when reached
+-- directly from the non-demon DamageTaken path.
+local function onPhase4Delayed(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "phase4delayed", 500, function()
+            onPhase4Delayed(creature, guid)
+        end)
+        return
+    end
+    startPhase4(creature, guid)
+end
+
+-- C++ EVENT_DEFEATED_TEXT (4s): Talk + music, then the 18s
+-- quiet-suicide event; events-map arms, gated (mal_ganis idiom).
+-- Forward declaration: onDefeatedText's timer closure references
+-- onQuietSuicide textually before its definition; the body below
+-- must use plain assignment, never re-`local function`.
+local onQuietSuicide
+
+local function onDefeatedText(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "defeatedText", 500, function()
+            onDefeatedText(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(SAY_ILLIDAN_DEFEATED)
+    -- C++ EVENT_DEFEATED_TEXT (:1015-1016): Talk +
+    -- PlayDirectMusic(ARRIVAL_WALK_HERO_1 11728).
+    creature:PlayMusic(SOUND_ARRIVAL_WALK_HERO_1)
+    schedule(guid, "quietSuicide", 18000, function()
+        onQuietSuicide(creature, guid)
+    end)
+end
+
+onQuietSuicide = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "quietSuicide", 500, function()
+            onQuietSuicide(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_QUIET_SUICIDE, true)
+    -- C++ EVENT_QUIET_SUICIDE (:1023): akama
+    -- DoAction(ACTION_START_OUTRO) — react
+    -- passive + AttackStop + events reset in
+    -- C++ arm order, via FindNearestCreature
+    -- (23089, 100.0), nil-guarded like the C++
+    -- if; the MOVE_BACK spline chain (and its
+    -- MOVE_TO_ILLIDAN/LIGHT_TEXT/FINAL_SALUTE/
+    -- DESPAWN followers, all MovementInform /
+    -- spline legs) and the summons DespawnIf
+    -- leg (no summons-list bridge) stay out.
+    local akama = creature:FindNearestCreature(
+        ENTRY_AKAMA, 100.0)
+    if akama then
+        akama:SetReactState(0)
+        akama:AttackStop()
+        cancelTimers(akama:GetGUID())
+    end
+end
+
 -- C++ JustEngagedWith: the intro/immunity/music/dual-wield arms
 -- have no bridges; the fight starts on pull (ragnaros-intro
 -- convention). Berserk 25min one-shot, phase-1 schedule, taunt
@@ -959,31 +1185,7 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                 -- boss_illidan.cpp:641 — C++ arm order after SPELL_DEATH
                 creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
                 schedule(guid, "defeatedText", 4000, function()
-                    creature:Talk(SAY_ILLIDAN_DEFEATED)
-                    -- C++ EVENT_DEFEATED_TEXT (:1015-1016): Talk +
-                    -- PlayDirectMusic(ARRIVAL_WALK_HERO_1 11728).
-                    creature:PlayMusic(SOUND_ARRIVAL_WALK_HERO_1)
-                    schedule(guid, "quietSuicide", 18000, function()
-                        creature:CastSpell(creature,
-                            SPELL_QUIET_SUICIDE, true)
-                        -- C++ EVENT_QUIET_SUICIDE (:1023): akama
-                        -- DoAction(ACTION_START_OUTRO) — react
-                        -- passive + AttackStop + events reset in
-                        -- C++ arm order, via FindNearestCreature
-                        -- (23089, 100.0), nil-guarded like the C++
-                        -- if; the MOVE_BACK spline chain (and its
-                        -- MOVE_TO_ILLIDAN/LIGHT_TEXT/FINAL_SALUTE/
-                        -- DESPAWN followers, all MovementInform /
-                        -- spline legs) and the summons DespawnIf
-                        -- leg (no summons-list bridge) stay out.
-                        local akama = creature:FindNearestCreature(
-                            ENTRY_AKAMA, 100.0)
-                        if akama then
-                            akama:SetReactState(0)
-                            akama:AttackStop()
-                            cancelTimers(akama:GetGUID())
-                        end
-                    end)
+                    onDefeatedText(creature, guid)
                 end)
                 -- C++ maiev DoAction(ACTION_START_OUTRO) (:733,
                 -- boss_illidan.cpp:1646-1657): events reset +
@@ -1009,28 +1211,7 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                     maiev:Talk(SAY_MAIEV_FINISHED)
                     schedule(maiev:GetGUID(), "outroText",
                         28000, function()
-                            maiev:Talk(SAY_MAIEV_OUTRO)
-                            -- C++ EVENT_MAIEV_OUTRO_TEXT (:1736-1739):
-                            -- Talk + Schedule FAREWELL 11s;
-                            -- EVENT_MAIEV_FAREWELL_TEXT (:1740-1743):
-                            -- Talk + Schedule TELEPORT_DESPAWN 3s;
-                            -- EVENT_MAIEV_TELEPORT_DESPAWN
-                            -- (:1744-1747): non-triggered self-cast
-                            -- teleport visual + DespawnOrUnsummon(1s).
-                            schedule(maiev:GetGUID(), "outroFarewell",
-                                11000, function()
-                                    maiev:Talk(SAY_MAIEV_FAREWELL)
-                                    schedule(maiev:GetGUID(),
-                                        "outroTeleport", 3000, function()
-                                            maiev:CastSpell(maiev,
-                                                SPELL_MAIEV_TELEPORT_VISUAL)
-                                            schedule(maiev:GetGUID(),
-                                                "outroDespawn", 1000,
-                                                function()
-                                                    maiev:Despawn()
-                                                end)
-                                        end)
-                                end)
+                            onMaievOutroText(maiev, maiev:GetGUID())
                         end)
                 end
             end
@@ -1100,7 +1281,7 @@ local function illidanDamageTaken(event, creature, attacker, damage)
             creature:CastSpell(creature, SPELL_DEMON_TRANSFORM_1,
                 true)
             schedule(guid, "phase4delayed", 12000, function()
-                startPhase4(creature, guid)
+                onPhase4Delayed(creature, guid)
             end)
         else
             startPhase4(creature, guid)
@@ -1156,6 +1337,12 @@ RegisterCreatureEvent(ENTRY_ILLIDAN, 23, illidanCleanup)
 -- re-arm 1s. Modeled on pull (the DoAction delivery has no
 -- bridge).
 local function onHealingPotion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "healingPotion", 500, function()
+            onHealingPotion(creature, guid)
+        end)
+        return
+    end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0
             and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
@@ -1219,6 +1406,12 @@ end
 -- C++ EVENT_FLAME_BLAST: non-triggered self-cast 40631 (C++
 -- DoCastAOE); repeat 12s.
 local function onFlameBlast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flameBlast", 500, function()
+            onFlameBlast(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FLAME_BLAST, false)
     schedule(guid, "flameBlast", 12000, function()
         onFlameBlast(creature, guid)
@@ -1228,6 +1421,12 @@ end
 -- C++ EVENT_FLAME_CHARGE: non-triggered 42003 on the charge
 -- target; repeat 5s with a target, 1s without (C++-exact).
 local function onFlameCharge(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flameCharge", 500, function()
+            onFlameCharge(creature, guid)
+        end)
+        return
+    end
     local target = chargeTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHARGE, false)
@@ -1245,6 +1444,12 @@ end
 -- 2026-10-20 — creature:SetReactState (the zone-combat arm has no
 -- bridge); arms the charge and keeps the blast cycle.
 local function onEngage(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "engage", 500, function()
+            onEngage(creature, guid)
+        end)
+        return
+    end
     -- C++ boss_illidan.cpp:1509: me->SetReactState(REACT_AGGRESSIVE)
     -- (flame EVENT_ENGAGE: flip is the first arm; DoZoneInCombat stays out).
     creature:SetReactState(2) -- REACT_AGGRESSIVE
@@ -1328,6 +1533,12 @@ end
 -- repeat 30s. The illidan->CastSpell(CAGED_TRAP_TELEPORT 40693)
 -- arm has no cross-creature bridge — skipped.
 local function onCageTrap(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cageTrap", 500, function()
+            onCageTrap(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CAGE_TRAP_SUMMON, false)
     creature:Talk(SAY_MAIEV_TRAP)
     schedule(guid, "cageTrap", 30000, function()
@@ -1337,6 +1548,12 @@ end
 
 -- C++ EVENT_SHADOW_STRIKE: non-triggered DoCastVictim; repeat 50s.
 local function onShadowStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowStrike", 500, function()
+            onShadowStrike(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_STRIKE, false)
@@ -1350,6 +1567,12 @@ end
 -- non-triggered DoCastVictim, repeat 5s; else repeat 1s
 -- (IsWithinMeleeRange bridged, lua_creature_events.go:3144).
 local function onThrowDagger(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "throwDagger", 500, function()
+            onThrowDagger(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(victim, SPELL_THROW_DAGGER, false)
@@ -1365,6 +1588,12 @@ end
 
 -- C++ EVENT_TAUNT (from JustAppeared): Talk; repeat {30s,60s}.
 local function onMaievTaunt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "maievTaunt", 500, function()
+            onMaievTaunt(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_MAIEV_TAUNT)
     schedule(guid, "maievTaunt", 30000 + math.random(0, 30000),
         function()
@@ -1414,6 +1643,62 @@ local function maievCleanup(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     maievState[guid] = nil
+end
+
+-- C++ EVENT_MAIEV_OUTRO_TEXT (:1736-1739): Talk + Schedule
+-- FAREWELL 11s; events-map arm, gated on maiev's casting state
+-- (mal_ganis idiom).
+onMaievOutroText = function(maiev, maievGuid)
+    if maiev:IsCasting() then
+        schedule(maievGuid, "outroText", 500, function()
+            onMaievOutroText(maiev, maievGuid)
+        end)
+        return
+    end
+    maiev:Talk(SAY_MAIEV_OUTRO)
+    schedule(maievGuid, "outroFarewell", 11000, function()
+        onMaievOutroFarewell(maiev, maievGuid)
+    end)
+end
+
+-- C++ EVENT_MAIEV_FAREWELL_TEXT (:1740-1743): Talk + Schedule
+-- TELEPORT_DESPAWN 3s; gated (mal_ganis idiom).
+onMaievOutroFarewell = function(maiev, maievGuid)
+    if maiev:IsCasting() then
+        schedule(maievGuid, "outroFarewell", 500, function()
+            onMaievOutroFarewell(maiev, maievGuid)
+        end)
+        return
+    end
+    maiev:Talk(SAY_MAIEV_FAREWELL)
+    schedule(maievGuid, "outroTeleport", 3000, function()
+        onMaievOutroTeleport(maiev, maievGuid)
+    end)
+end
+
+-- C++ EVENT_MAIEV_TELEPORT_DESPAWN (:1744-1747): non-triggered
+-- self-cast teleport visual + DespawnOrUnsummon(1s); gated.
+onMaievOutroTeleport = function(maiev, maievGuid)
+    if maiev:IsCasting() then
+        schedule(maievGuid, "outroTeleport", 500, function()
+            onMaievOutroTeleport(maiev, maievGuid)
+        end)
+        return
+    end
+    maiev:CastSpell(maiev, SPELL_MAIEV_TELEPORT_VISUAL)
+    schedule(maievGuid, "outroDespawn", 1000, function()
+        onMaievOutroDespawn(maiev, maievGuid)
+    end)
+end
+
+onMaievOutroDespawn = function(maiev, maievGuid)
+    if maiev:IsCasting() then
+        schedule(maievGuid, "outroDespawn", 500, function()
+            onMaievOutroDespawn(maiev, maievGuid)
+        end)
+        return
+    end
+    maiev:Despawn()
 end
 
 local function maievJustAppeared(event, creature)

@@ -36,13 +36,19 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ UpdateAI: DoCast(me, SPELL_CHANNEL_SPIRIT_HEAL), non-triggered,
--- whenever the guide is not already casting. Handler creatures carry
--- no live cast state (the halazzi vacuous-false IsCasting twin), so the
--- gate is vacuous here and the 1s poll re-casts unconditionally — the
--- same rendering the nagrand_banner port uses for its vacuous
--- HasUnitState(CASTING) early-return. One-shot chain, not a repeat
+-- whenever the guide is not already casting. Ported as a 500ms
+-- IsCasting defer (mal_ganis idiom; IsCasting live,
+-- lua_creature_events.go:1950 — the old vacuous-false claim is
+-- stale, deathwhisper precedent); the 1s re-arm is not consumed
+-- while casting. One-shot chain, not a repeat
 -- count (the wg_queue schedule idiom).
 local function spiritHealTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "heal", 500, function()
+            spiritHealTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CHANNEL_SPIRIT_HEAL)
     schedule(guid, "heal", 1000, function()
         spiritHealTick(creature, guid)
