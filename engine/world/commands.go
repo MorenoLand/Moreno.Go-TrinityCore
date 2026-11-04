@@ -5593,6 +5593,28 @@ func (s *Server) sendGlobalGMMessage(ctx context.Context, msg string) {
 	}
 }
 
+// sendGlobalSysMessage mirrors ChatHandler::SendGlobalSysMessage: the
+// message goes to every in-world session, with no RBAC 44 GM gate (the
+// reputation reload arms in cs_reload.cpp use it, unlike every other
+// reload arm, which uses SendGlobalGMSysMessage).
+func (s *Server) sendGlobalSysMessage(ctx context.Context, msg string) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	var targets []*session
+	for sess := range s.sessions {
+		if sess == nil || !sess.worldReady.Load() || sess.player == nil {
+			continue
+		}
+		targets = append(targets, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range targets {
+		sess.sendSysMessage(msg)
+	}
+}
+
 // ---- deserter_commandscript (cs_deserter.cpp) ----
 
 // Deserter debuff spells (cs_deserter.cpp:32-35).

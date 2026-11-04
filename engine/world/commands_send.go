@@ -46,7 +46,8 @@ import (
 // recall (no in-tree trinity_string seed).
 //
 // Documented no-bridge/deltas (not stubs): the message arm's isLogingOut
-// gate has no Go bridge (no session logout state); zero/negative item
+// gate is the Go pending-logout state (logoutAt/loggingOut, reported as
+// player-not-found like C++); zero/negative item
 // counts fail the command (C++ refuses 0 via the itemCount < 1 check;
 // negatives wrap to a huge uint32 in C++ and trip the MaxCount cap for
 // limited items, but Go refuses them outright rather than minting wrapped
@@ -58,6 +59,16 @@ import (
 // offline guid), mirroring ChatHandler::extractPlayerTarget.
 func (s *session) sendMailTarget(ctx context.Context, args []string) (online *session, guid uint64, name string, ok bool) {
 	return s.miscResolvePlayerTarget(ctx, args)
+}
+
+// sendTargetArgs trims a send arm's args to the receiver token: the
+// resolver reads only args[0], and passing the whole tail would be harmless
+// but misleading — the C++ extract consumes just the name token.
+func sendTargetArgs(args []string) []string {
+	if len(args) > 0 {
+		return args[:1]
+	}
+	return args
 }
 
 // sendMailInsert mirrors the MailDraft::SendMailTo INSERT for GM-sent command
@@ -134,19 +145,45 @@ func (s *session) handleCmdSend(ctx context.Context, args []string) {
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
 	// The Trinity parser prefix-matches command names at every nesting
-	// level; match the arm the same way here.
-	switch {
-	case strings.HasPrefix("items", sub):
-		s.handleSendItems(ctx, rest)
-	case strings.HasPrefix("mail", sub):
-		s.handleSendMailCmd(ctx, rest)
-	case strings.HasPrefix("message", sub):
-		s.handleSendMessageCmd(ctx, rest)
-	case strings.HasPrefix("money", sub):
-		s.handleSendMoney(ctx, rest)
-	default:
-		s.sendSysMessage("Syntax: .send items|mail|message|money")
+	// level (ChatCommand.cpp:262-288): an exact token wins, one prefix
+	// match executes, and several print the ambiguous list instead of
+	// executing the first match (previously "m" silently ran mail, where
+	// C++ lists mail, message, and money). Arms gate their own permission
+	// inside their handlers, as before.
+	type sendArm struct {
+		name string
+		run  func(context.Context, []string)
 	}
+	arms := []sendArm{
+		{"items", s.handleSendItems},
+		{"mail", s.handleSendMailCmd},
+		{"message", s.handleSendMessageCmd},
+		{"money", s.handleSendMoney},
+	}
+	for _, arm := range arms {
+		if arm.name == sub {
+			arm.run(ctx, rest)
+			return
+		}
+	}
+	var matches []sendArm
+	for _, arm := range arms {
+		if strings.HasPrefix(arm.name, sub) {
+			matches = append(matches, arm)
+		}
+	}
+	if len(matches) > 1 {
+		s.sendSysMessage("Subcommand '" + sub + "' of command '.send' is ambiguous, please use one of the following:")
+		for _, arm := range matches {
+			s.sendSysMessage("  " + arm.name)
+		}
+		return
+	}
+	if len(matches) == 1 {
+		matches[0].run(ctx, rest)
+		return
+	}
+	s.sendSysMessage("Syntax: .send items|mail|message|money")
 }
 
 // handleSendMailCmd mirrors HandleSendMailCommand (cs_send.cpp:57).
@@ -154,14 +191,17 @@ func (s *session) handleSendMailCmd(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandSendMail) {
 		return
 	}
-	name, subject, text, _, ok := sendMailArgs(args)
+	// C++ resolves the receiver first (extractPlayerTarget precedes the
+	// quoted-arg parses), so a bad target reports not-found even when the
+	// subject/text are also malformed (previously the syntax error won).
+	_, guid, targetName, ok := s.sendMailTarget(ctx, sendTargetArgs(args))
+	if !ok {
+		return // miscResolvePlayerTarget already reported LANG 499 == C++
+	}
+	_, subject, text, _, ok := sendMailArgs(args)
 	if !ok {
 		s.sendSysMessage(`Syntax: .send mail <name> "subject" "text"`)
 		return
-	}
-	_, guid, targetName, ok := s.sendMailTarget(ctx, []string{name})
-	if !ok {
-		return // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	if !s.sendMailInsert(ctx, guid, subject, text, 0, nil) {
 		return
@@ -178,7 +218,14 @@ func (s *session) handleSendMoney(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandSendMoney) {
 		return
 	}
-	name, subject, text, rest, ok := sendMailArgs(args)
+	// Receiver first, as in C++ (see the mail arm): a bad target reports
+	// not-found even when the amount is also invalid (previously a bad
+	// amount silently won).
+	_, guid, targetName, ok := s.sendMailTarget(ctx, sendTargetArgs(args))
+	if !ok {
+		return // miscResolvePlayerTarget already reported LANG 499 == C++
+	}
+	_, subject, text, rest, ok := sendMailArgs(args)
 	if !ok || len(rest) < 1 {
 		s.sendSysMessage(`Syntax: .send money <name> "subject" "text" <money>`)
 		return
@@ -186,10 +233,6 @@ func (s *session) handleSendMoney(ctx context.Context, args []string) {
 	money := cAtoi(rest[0])
 	if money <= 0 {
 		return
-	}
-	_, guid, targetName, ok := s.sendMailTarget(ctx, []string{name})
-	if !ok {
-		return // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	if !s.sendMailInsert(ctx, guid, subject, text, uint32(money), nil) {
 		return
@@ -207,7 +250,14 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandSendItems) {
 		return
 	}
-	name, subject, text, rest, ok := sendMailArgs(args)
+	// Receiver first, as in C++ (see the mail arm): a bad target reports
+	// not-found even when an item entry is also invalid (previously the
+	// item error won).
+	_, guid, targetName, ok := s.sendMailTarget(ctx, sendTargetArgs(args))
+	if !ok {
+		return // miscResolvePlayerTarget already reported LANG 499 == C++
+	}
+	_, subject, text, rest, ok := sendMailArgs(args)
 	if !ok {
 		s.sendSysMessage(`Syntax: .send items <name> "subject" "text" <item1[:count1]> ...`)
 		return
@@ -251,10 +301,6 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 			s.sendSysMessage("You can't send more than 12 items.") // LANG_COMMAND_MAIL_ITEMS_LIMIT 53
 			return
 		}
-	}
-	_, guid, targetName, ok := s.sendMailTarget(ctx, []string{name})
-	if !ok {
-		return // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {

@@ -62,100 +62,108 @@ const (
 // reloadArm is one flat `reload <name>` arm (cs_reload.cpp table, lines
 // 77-167). msg is the C++ SendGlobalGMSysMessage text ("" = silent, like
 // gm_tickets); table is probed on store ("" = special arm, handled in code).
+// global marks the two arms whose C++ handler uses SendGlobalSysMessage
+// (all players) instead of SendGlobalGMSysMessage (GMs only): the
+// reputation arms (cs_reload.cpp:748,756). The spillover arm's table/msg
+// are the reward-rate pair on purpose: the C++ table row (:143) wires
+// HandleReloadReputationRewardRateCommand, and the spillover handler
+// (:752) is unreferenced dead code, so ".reload reputation_spillover_template"
+// reloads reputation_reward_rate in C++ too.
 type reloadArm struct {
-	name  string
-	perm  uint32
-	msg   string
-	store reloadStore
-	table string
+	name   string
+	perm   uint32
+	msg    string
+	store  reloadStore
+	table  string
+	global bool
 }
 
 // reloadArms mirrors the C++ command table order.
 var reloadArms = []reloadArm{
-	{"auctions", permissionCommandReloadAuctions, "Auctions reloaded.", reloadStoreCharacters, "auctionhouse"},
-	{"access_requirement", permissionCommandReloadAccessRequirement, "DB table `access_requirement` reloaded.", reloadStoreWorld, "access_requirement"},
-	{"achievement_criteria_data", permissionCommandReloadAchievementCriteriaData, "DB table `achievement_criteria_data` reloaded.", reloadStoreWorld, "achievement_criteria_data"},
-	{"achievement_reward", permissionCommandReloadAchievementReward, "DB table `achievement_reward` reloaded.", reloadStoreWorld, "achievement_reward"},
-	{"areatrigger_involvedrelation", permissionCommandReloadAreatriggerInvolvedrelation, "DB table `areatrigger_involvedrelation` (quest area triggers) reloaded.", reloadStoreWorld, "areatrigger_involvedrelation"},
-	{"areatrigger_tavern", permissionCommandReloadAreatriggerTavern, "DB table `areatrigger_tavern` reloaded.", reloadStoreWorld, "areatrigger_tavern"},
-	{"areatrigger_teleport", permissionCommandReloadAreatriggerTeleport, "DB table `areatrigger_teleport` reloaded.", reloadStoreWorld, "areatrigger_teleport"},
-	{"autobroadcast", permissionCommandReloadAutobroadcast, "DB table `autobroadcast` reloaded.", reloadStoreWorld, "autobroadcast"},
-	{"battleground_template", permissionCommandReloadBattlegroundTemplate, "DB table `battleground_template` reloaded.", reloadStoreWorld, "battleground_template"},
-	{"broadcast_text", permissionCommandReloadBroadcastText, "DB table `broadcast_text` reloaded.", reloadStoreWorld, "broadcast_text"},
-	{"conditions", permissionCommandReloadConditions, "Conditions reloaded.", reloadStoreWorld, "conditions"},
-	{"creature_text", permissionCommandReloadCreatureText, "Creature Texts reloaded.", reloadStoreWorld, "creature_text"},
-	{"creature_questender", permissionCommandReloadCreatureQuestender, "DB table `creature_questender` reloaded.", reloadStoreWorld, "creature_questender"},
-	{"creature_linked_respawn", permissionCommandReloadCreatureLinkedRespawn, "DB table `creature_linked_respawn` (creature linked respawns) reloaded.", reloadStoreWorld, "creature_linked_respawn"},
-	{"creature_loot_template", permissionCommandReloadCreatureLootTemplate, "DB table `creature_loot_template` reloaded.", reloadStoreWorld, "creature_loot_template"},
-	{"creature_movement_override", permissionCommandReloadCreatureMovementOverride, "DB table `creature_movement_override` reloaded.", reloadStoreWorld, "creature_movement_override"},
-	{"creature_onkill_reputation", permissionCommandReloadCreatureOnkillReputation, "DB table `creature_onkill_reputation` reloaded.", reloadStoreWorld, "creature_onkill_reputation"},
-	{"creature_queststarter", permissionCommandReloadCreatureQueststarter, "DB table `creature_queststarter` reloaded.", reloadStoreWorld, "creature_queststarter"},
-	{"creature_summon_groups", permissionCommandReloadCreatureSummonGroups, "DB table `creature_summon_groups` reloaded.", reloadStoreWorld, "creature_summon_groups"},
-	{"disables", permissionCommandReloadDisables, "DB table `disables` reloaded.", reloadStoreWorld, "disables"},
-	{"disenchant_loot_template", permissionCommandReloadDisenchantLootTemplate, "DB table `disenchant_loot_template` reloaded.", reloadStoreWorld, "disenchant_loot_template"},
-	{"event_scripts", permissionCommandReloadEventScripts, "DB table `event_scripts` reloaded.", reloadStoreWorld, "event_scripts"},
-	{"fishing_loot_template", permissionCommandReloadFishingLootTemplate, "DB table `fishing_loot_template` reloaded.", reloadStoreWorld, "fishing_loot_template"},
-	{"graveyard_zone", permissionCommandReloadGraveyardZone, "DB table `game_graveyard_zone` reloaded.", reloadStoreWorld, "game_graveyard_zone"},
-	{"game_tele", permissionCommandReloadGameTele, "DB table `game_tele` reloaded.", reloadStoreWorld, "game_tele"},
-	{"gameobject_questender", permissionCommandReloadGameobjectQuestender, "DB table `gameobject_questender` reloaded.", reloadStoreWorld, "gameobject_questender"},
-	{"gameobject_loot_template", permissionCommandReloadGameobjectQuestLootTemplate, "DB table `gameobject_loot_template` reloaded.", reloadStoreWorld, "gameobject_loot_template"},
-	{"gameobject_queststarter", permissionCommandReloadGameobjectQueststarter, "DB table `gameobject_queststarter` reloaded.", reloadStoreWorld, "gameobject_queststarter"},
-	{"gossip_menu", permissionCommandReloadGossipMenu, "DB table `gossip_menu` reloaded.", reloadStoreWorld, "gossip_menu"},
-	{"gossip_menu_option", permissionCommandReloadGossipMenuOption, "DB table `gossip_menu_option` reloaded.", reloadStoreWorld, "gossip_menu_option"},
-	{"item_enchantment_template", permissionCommandReloadItemEnchantmentTemplate, "DB table `item_enchantment_template` reloaded.", reloadStoreWorld, "item_enchantment_template"},
-	{"item_loot_template", permissionCommandReloadItemLootTemplate, "DB table `item_loot_template` reloaded.", reloadStoreWorld, "item_loot_template"},
-	{"item_set_names", permissionCommandReloadItemSetNames, "DB table `item_set_names` reloaded.", reloadStoreWorld, "item_set_names"},
-	{"lfg_dungeon_rewards", permissionCommandReloadLfgDungeonRewards, "DB table `lfg_dungeon_rewards` reloaded.", reloadStoreWorld, "lfg_dungeon_rewards"},
-	{"achievement_reward_locale", permissionCommandReloadAchievementRewardLocale, "DB table `achievement_reward_locale` reloaded.", reloadStoreWorld, "achievement_reward_locale"},
-	{"creature_template_locale", permissionCommandReloadCretureTemplateLocale, "DB table `creature_template_locale` reloaded.", reloadStoreWorld, "creature_template_locale"},
-	{"creature_text_locale", permissionCommandReloadCretureTextLocale, "DB table `creature_text_locale` reloaded.", reloadStoreWorld, "creature_text_locale"},
-	{"gameobject_template_locale", permissionCommandReloadGameobjectTemplateLocale, "DB table `gameobject_template_locale` reloaded.", reloadStoreWorld, "gameobject_template_locale"},
-	{"gossip_menu_option_locale", permissionCommandReloadGossipMenuOptionLocale, "DB table `gossip_menu_option_locale` reloaded.", reloadStoreWorld, "gossip_menu_option_locale"},
-	{"item_template_locale", permissionCommandReloadItemTemplateLocale, "DB table `item_template_locale` reloaded.", reloadStoreWorld, "item_template_locale"},
-	{"item_set_name_locale", permissionCommandReloadItemSetNameLocale, "DB table `item_set_name_locale` reloaded.", reloadStoreWorld, "item_set_name_locale"},
-	{"npc_text_locale", permissionCommandReloadNpcTextLocale, "DB table `npc_text_locale` reloaded.", reloadStoreWorld, "npc_text_locale"},
-	{"page_text_locale", permissionCommandReloadPageTextLocale, "DB table `page_text_locale` reloaded.", reloadStoreWorld, "page_text_locale"},
-	{"points_of_interest_locale", permissionCommandReloadPointsOfInterestLocale, "DB table `points_of_interest_locale` reloaded.", reloadStoreWorld, "points_of_interest_locale"},
-	{"quest_template_locale", permissionCommandReloadQuestTemplateLocale, "DB table `quest_template_locale` reloaded.", reloadStoreWorld, "quest_template_locale"},
-	{"mail_level_reward", permissionCommandReloadMailLevelReward, "DB table `mail_level_reward` reloaded.", reloadStoreWorld, "mail_level_reward"},
-	{"mail_loot_template", permissionCommandReloadMailLootTemplate, "DB table `mail_loot_template` reloaded.", reloadStoreWorld, "mail_loot_template"},
-	{"milling_loot_template", permissionCommandReloadMillingLootTemplate, "DB table `milling_loot_template` reloaded.", reloadStoreWorld, "milling_loot_template"},
-	{"npc_spellclick_spells", permissionCommandReloadNpcSpellclickSpells, "DB table `npc_spellclick_spells` reloaded.", reloadStoreWorld, "npc_spellclick_spells"},
-	{"npc_vendor", permissionCommandReloadNpcVendor, "DB table `npc_vendor` reloaded.", reloadStoreWorld, "npc_vendor"},
-	{"page_text", permissionCommandReloadPageText, "DB table `page_text` reloaded.", reloadStoreWorld, "page_text"},
-	{"pickpocketing_loot_template", permissionCommandReloadPickpocketingLootTemplate, "DB table `pickpocketing_loot_template` reloaded.", reloadStoreWorld, "pickpocketing_loot_template"},
-	{"points_of_interest", permissionCommandReloadPointsOfInterest, "DB table `points_of_interest` reloaded.", reloadStoreWorld, "points_of_interest"},
-	{"prospecting_loot_template", permissionCommandReloadProspectingLootTemplate, "DB table `prospecting_loot_template` reloaded.", reloadStoreWorld, "prospecting_loot_template"},
-	{"quest_greeting", permissionCommandReloadQuestGreeting, "DB table `quest_greeting` reloaded.", reloadStoreWorld, "quest_greeting"},
-	{"quest_greeting_locale", permissionCommandReloadQuestGreetingLocale, "DB table `quest_greeting_locale` reloaded.", reloadStoreWorld, "quest_greeting_locale"},
-	{"quest_poi", permissionCommandReloadQuestPoi, "DB Table `quest_poi` and `quest_poi_points` reloaded.", reloadStoreWorld, "quest_poi"},
-	{"quest_template", permissionCommandReloadQuestTemplate, "DB table `quest_template` (quest definitions) reloaded.\nData GameObjects for quests reloaded.", reloadStoreWorld, "quest_template"},
-	{"reference_loot_template", permissionCommandReloadReferenceLootTemplate, "DB table `reference_loot_template` reloaded.", reloadStoreWorld, "reference_loot_template"},
-	{"reserved_name", permissionCommandReloadReservedName, "DB table `reserved_name` (player reserved names) reloaded.", reloadStoreWorld, "reserved_name"},
-	{"reputation_reward_rate", permissionCommandReloadReputationRewardRate, "DB table `reputation_reward_rate` reloaded.", reloadStoreWorld, "reputation_reward_rate"},
-	{"reputation_spillover_template", permissionCommandReloadSpilloverTemplate, "DB table `reputation_spillover_template` reloaded.", reloadStoreWorld, "reputation_spillover_template"},
-	{"skill_discovery_template", permissionCommandReloadSkillDiscoveryTemplate, "DB table `skill_discovery_template` (recipes discovered at crafting) reloaded.", reloadStoreWorld, "skill_discovery_template"},
-	{"skill_extra_item_template", permissionCommandReloadSkillExtraItemTemplate, "DB table `skill_extra_item_template` (extra item creation when crafting) reloaded.", reloadStoreWorld, "skill_extra_item_template"},
-	{"skill_fishing_base_level", permissionCommandReloadSkillFishingBaseLevel, "DB table `skill_fishing_base_level` (fishing base level for zone/subzone) reloaded.", reloadStoreWorld, "skill_fishing_base_level"},
-	{"skinning_loot_template", permissionCommandReloadSkinningLootTemplate, "DB table `skinning_loot_template` reloaded.", reloadStoreWorld, "skinning_loot_template"},
-	{"smart_scripts", permissionCommandReloadSmartScripts, "Smart Scripts reloaded.", reloadStoreWorld, "smart_scripts"},
-	{"spell_required", permissionCommandReloadSpellRequired, "DB table `spell_required` reloaded.", reloadStoreWorld, "spell_required"},
-	{"spell_area", permissionCommandReloadSpellArea, "DB table `spell_area` (spell dependences from area/quest/auras state) reloaded.", reloadStoreWorld, "spell_area"},
-	{"spell_bonus_data", permissionCommandReloadSpellBonusData, "DB table `spell_bonus_data` (spell damage/healing coefficients) reloaded.", reloadStoreWorld, "spell_bonus_data"},
-	{"spell_group", permissionCommandReloadSpellGroup, "DB table `spell_group` (spell groups) reloaded.", reloadStoreWorld, "spell_group"},
-	{"spell_learn_spell", permissionCommandReloadSpellLearnSpell, "DB table `spell_learn_spell` reloaded.", reloadStoreWorld, "spell_learn_spell"},
-	{"spell_loot_template", permissionCommandReloadSpellLootTemplate, "DB table `spell_loot_template` reloaded.", reloadStoreWorld, "spell_loot_template"},
-	{"spell_linked_spell", permissionCommandReloadSpellLinkedSpell, "DB table `spell_linked_spell` reloaded.", reloadStoreWorld, "spell_linked_spell"},
-	{"spell_pet_auras", permissionCommandReloadSpellPetAuras, "DB table `spell_pet_auras` reloaded.", reloadStoreWorld, "spell_pet_auras"},
-	{"spell_proc", permissionCommandReloadSpellProc, "DB table `spell_proc` (spell proc conditions and data) reloaded.", reloadStoreWorld, "spell_proc"},
-	{"spell_scripts", permissionCommandReloadSpellScripts, "DB table `spell_scripts` reloaded.", reloadStoreWorld, "spell_scripts"},
-	{"spell_target_position", permissionCommandReloadSpellTargetPosition, "DB table `spell_target_position` (destination coordinates for spell targets) reloaded.", reloadStoreWorld, "spell_target_position"},
-	{"spell_threats", permissionCommandReloadSpellThreats, "DB table `spell_threat` (spell aggro definitions) reloaded.", reloadStoreWorld, "spell_threat"},
-	{"spell_group_stack_rules", permissionCommandReloadSpellGroupStackRules, "DB table `spell_group_stack_rules` (spell stacking definitions) reloaded.", reloadStoreWorld, "spell_group_stack_rules"},
-	{"trainer", permissionCommandReloadTrainer, "DB table `trainer` reloaded.\nDB table `trainer_locale` reloaded.\nDB table `trainer_spell` reloaded.\nDB table `creature_default_trainer` reloaded.", reloadStoreWorld, "trainer"},
-	{"trinity_string", permissionCommandReloadTrinityString, "DB table `trinity_string` reloaded.", reloadStoreWorld, "trinity_string"},
-	{"waypoint_scripts", permissionCommandReloadWaypointScripts, "DB table `waypoint_scripts` reloaded.", reloadStoreWorld, "waypoint_scripts"},
-	{"waypoint_data", permissionCommandReloadWaypointData, "DB Table 'waypoint_data' reloaded.", reloadStoreWorld, "waypoint_data"},
+	{"auctions", permissionCommandReloadAuctions, "Auctions reloaded.", reloadStoreCharacters, "auctionhouse", false},
+	{"access_requirement", permissionCommandReloadAccessRequirement, "DB table `access_requirement` reloaded.", reloadStoreWorld, "access_requirement", false},
+	{"achievement_criteria_data", permissionCommandReloadAchievementCriteriaData, "DB table `achievement_criteria_data` reloaded.", reloadStoreWorld, "achievement_criteria_data", false},
+	{"achievement_reward", permissionCommandReloadAchievementReward, "DB table `achievement_reward` reloaded.", reloadStoreWorld, "achievement_reward", false},
+	{"areatrigger_involvedrelation", permissionCommandReloadAreatriggerInvolvedrelation, "DB table `areatrigger_involvedrelation` (quest area triggers) reloaded.", reloadStoreWorld, "areatrigger_involvedrelation", false},
+	{"areatrigger_tavern", permissionCommandReloadAreatriggerTavern, "DB table `areatrigger_tavern` reloaded.", reloadStoreWorld, "areatrigger_tavern", false},
+	{"areatrigger_teleport", permissionCommandReloadAreatriggerTeleport, "DB table `areatrigger_teleport` reloaded.", reloadStoreWorld, "areatrigger_teleport", false},
+	{"autobroadcast", permissionCommandReloadAutobroadcast, "DB table `autobroadcast` reloaded.", reloadStoreWorld, "autobroadcast", false},
+	{"battleground_template", permissionCommandReloadBattlegroundTemplate, "DB table `battleground_template` reloaded.", reloadStoreWorld, "battleground_template", false},
+	{"broadcast_text", permissionCommandReloadBroadcastText, "DB table `broadcast_text` reloaded.", reloadStoreWorld, "broadcast_text", false},
+	{"conditions", permissionCommandReloadConditions, "Conditions reloaded.", reloadStoreWorld, "conditions", false},
+	{"creature_text", permissionCommandReloadCreatureText, "Creature Texts reloaded.", reloadStoreWorld, "creature_text", false},
+	{"creature_questender", permissionCommandReloadCreatureQuestender, "DB table `creature_questender` reloaded.", reloadStoreWorld, "creature_questender", false},
+	{"creature_linked_respawn", permissionCommandReloadCreatureLinkedRespawn, "DB table `creature_linked_respawn` (creature linked respawns) reloaded.", reloadStoreWorld, "creature_linked_respawn", false},
+	{"creature_loot_template", permissionCommandReloadCreatureLootTemplate, "DB table `creature_loot_template` reloaded.", reloadStoreWorld, "creature_loot_template", false},
+	{"creature_movement_override", permissionCommandReloadCreatureMovementOverride, "DB table `creature_movement_override` reloaded.", reloadStoreWorld, "creature_movement_override", false},
+	{"creature_onkill_reputation", permissionCommandReloadCreatureOnkillReputation, "DB table `creature_onkill_reputation` reloaded.", reloadStoreWorld, "creature_onkill_reputation", false},
+	{"creature_queststarter", permissionCommandReloadCreatureQueststarter, "DB table `creature_queststarter` reloaded.", reloadStoreWorld, "creature_queststarter", false},
+	{"creature_summon_groups", permissionCommandReloadCreatureSummonGroups, "DB table `creature_summon_groups` reloaded.", reloadStoreWorld, "creature_summon_groups", false},
+	{"disables", permissionCommandReloadDisables, "DB table `disables` reloaded.", reloadStoreWorld, "disables", false},
+	{"disenchant_loot_template", permissionCommandReloadDisenchantLootTemplate, "DB table `disenchant_loot_template` reloaded.", reloadStoreWorld, "disenchant_loot_template", false},
+	{"event_scripts", permissionCommandReloadEventScripts, "DB table `event_scripts` reloaded.", reloadStoreWorld, "event_scripts", false},
+	{"fishing_loot_template", permissionCommandReloadFishingLootTemplate, "DB table `fishing_loot_template` reloaded.", reloadStoreWorld, "fishing_loot_template", false},
+	{"graveyard_zone", permissionCommandReloadGraveyardZone, "DB table `game_graveyard_zone` reloaded.", reloadStoreWorld, "game_graveyard_zone", false},
+	{"game_tele", permissionCommandReloadGameTele, "DB table `game_tele` reloaded.", reloadStoreWorld, "game_tele", false},
+	{"gameobject_questender", permissionCommandReloadGameobjectQuestender, "DB table `gameobject_questender` reloaded.", reloadStoreWorld, "gameobject_questender", false},
+	{"gameobject_loot_template", permissionCommandReloadGameobjectQuestLootTemplate, "DB table `gameobject_loot_template` reloaded.", reloadStoreWorld, "gameobject_loot_template", false},
+	{"gameobject_queststarter", permissionCommandReloadGameobjectQueststarter, "DB table `gameobject_queststarter` reloaded.", reloadStoreWorld, "gameobject_queststarter", false},
+	{"gossip_menu", permissionCommandReloadGossipMenu, "DB table `gossip_menu` reloaded.", reloadStoreWorld, "gossip_menu", false},
+	{"gossip_menu_option", permissionCommandReloadGossipMenuOption, "DB table `gossip_menu_option` reloaded.", reloadStoreWorld, "gossip_menu_option", false},
+	{"item_enchantment_template", permissionCommandReloadItemEnchantmentTemplate, "DB table `item_enchantment_template` reloaded.", reloadStoreWorld, "item_enchantment_template", false},
+	{"item_loot_template", permissionCommandReloadItemLootTemplate, "DB table `item_loot_template` reloaded.", reloadStoreWorld, "item_loot_template", false},
+	{"item_set_names", permissionCommandReloadItemSetNames, "DB table `item_set_names` reloaded.", reloadStoreWorld, "item_set_names", false},
+	{"lfg_dungeon_rewards", permissionCommandReloadLfgDungeonRewards, "DB table `lfg_dungeon_rewards` reloaded.", reloadStoreWorld, "lfg_dungeon_rewards", false},
+	{"achievement_reward_locale", permissionCommandReloadAchievementRewardLocale, "DB table `achievement_reward_locale` reloaded.", reloadStoreWorld, "achievement_reward_locale", false},
+	{"creature_template_locale", permissionCommandReloadCretureTemplateLocale, "DB table `creature_template_locale` reloaded.", reloadStoreWorld, "creature_template_locale", false},
+	{"creature_text_locale", permissionCommandReloadCretureTextLocale, "DB table `creature_text_locale` reloaded.", reloadStoreWorld, "creature_text_locale", false},
+	{"gameobject_template_locale", permissionCommandReloadGameobjectTemplateLocale, "DB table `gameobject_template_locale` reloaded.", reloadStoreWorld, "gameobject_template_locale", false},
+	{"gossip_menu_option_locale", permissionCommandReloadGossipMenuOptionLocale, "DB table `gossip_menu_option_locale` reloaded.", reloadStoreWorld, "gossip_menu_option_locale", false},
+	{"item_template_locale", permissionCommandReloadItemTemplateLocale, "DB table `item_template_locale` reloaded.", reloadStoreWorld, "item_template_locale", false},
+	{"item_set_name_locale", permissionCommandReloadItemSetNameLocale, "DB table `item_set_name_locale` reloaded.", reloadStoreWorld, "item_set_name_locale", false},
+	{"npc_text_locale", permissionCommandReloadNpcTextLocale, "DB table `npc_text_locale` reloaded.", reloadStoreWorld, "npc_text_locale", false},
+	{"page_text_locale", permissionCommandReloadPageTextLocale, "DB table `page_text_locale` reloaded.", reloadStoreWorld, "page_text_locale", false},
+	{"points_of_interest_locale", permissionCommandReloadPointsOfInterestLocale, "DB table `points_of_interest_locale` reloaded.", reloadStoreWorld, "points_of_interest_locale", false},
+	{"quest_template_locale", permissionCommandReloadQuestTemplateLocale, "DB table `quest_template_locale` reloaded.", reloadStoreWorld, "quest_template_locale", false},
+	{"mail_level_reward", permissionCommandReloadMailLevelReward, "DB table `mail_level_reward` reloaded.", reloadStoreWorld, "mail_level_reward", false},
+	{"mail_loot_template", permissionCommandReloadMailLootTemplate, "DB table `mail_loot_template` reloaded.", reloadStoreWorld, "mail_loot_template", false},
+	{"milling_loot_template", permissionCommandReloadMillingLootTemplate, "DB table `milling_loot_template` reloaded.", reloadStoreWorld, "milling_loot_template", false},
+	{"npc_spellclick_spells", permissionCommandReloadNpcSpellclickSpells, "DB table `npc_spellclick_spells` reloaded.", reloadStoreWorld, "npc_spellclick_spells", false},
+	{"npc_vendor", permissionCommandReloadNpcVendor, "DB table `npc_vendor` reloaded.", reloadStoreWorld, "npc_vendor", false},
+	{"page_text", permissionCommandReloadPageText, "DB table `page_text` reloaded.", reloadStoreWorld, "page_text", false},
+	{"pickpocketing_loot_template", permissionCommandReloadPickpocketingLootTemplate, "DB table `pickpocketing_loot_template` reloaded.", reloadStoreWorld, "pickpocketing_loot_template", false},
+	{"points_of_interest", permissionCommandReloadPointsOfInterest, "DB table `points_of_interest` reloaded.", reloadStoreWorld, "points_of_interest", false},
+	{"prospecting_loot_template", permissionCommandReloadProspectingLootTemplate, "DB table `prospecting_loot_template` reloaded.", reloadStoreWorld, "prospecting_loot_template", false},
+	{"quest_greeting", permissionCommandReloadQuestGreeting, "DB table `quest_greeting` reloaded.", reloadStoreWorld, "quest_greeting", false},
+	{"quest_greeting_locale", permissionCommandReloadQuestGreetingLocale, "DB table `quest_greeting_locale` reloaded.", reloadStoreWorld, "quest_greeting_locale", false},
+	{"quest_poi", permissionCommandReloadQuestPoi, "DB Table `quest_poi` and `quest_poi_points` reloaded.", reloadStoreWorld, "quest_poi", false},
+	{"quest_template", permissionCommandReloadQuestTemplate, "DB table `quest_template` (quest definitions) reloaded.\nData GameObjects for quests reloaded.", reloadStoreWorld, "quest_template", false},
+	{"reference_loot_template", permissionCommandReloadReferenceLootTemplate, "DB table `reference_loot_template` reloaded.", reloadStoreWorld, "reference_loot_template", false},
+	{"reserved_name", permissionCommandReloadReservedName, "DB table `reserved_name` (player reserved names) reloaded.", reloadStoreWorld, "reserved_name", false},
+	{name: "reputation_reward_rate", perm: permissionCommandReloadReputationRewardRate, msg: "DB table `reputation_reward_rate` reloaded.", store: reloadStoreWorld, table: "reputation_reward_rate", global: true},
+	{name: "reputation_spillover_template", perm: permissionCommandReloadSpilloverTemplate, msg: "DB table `reputation_reward_rate` reloaded.", store: reloadStoreWorld, table: "reputation_reward_rate", global: true},
+	{"skill_discovery_template", permissionCommandReloadSkillDiscoveryTemplate, "DB table `skill_discovery_template` (recipes discovered at crafting) reloaded.", reloadStoreWorld, "skill_discovery_template", false},
+	{"skill_extra_item_template", permissionCommandReloadSkillExtraItemTemplate, "DB table `skill_extra_item_template` (extra item creation when crafting) reloaded.", reloadStoreWorld, "skill_extra_item_template", false},
+	{"skill_fishing_base_level", permissionCommandReloadSkillFishingBaseLevel, "DB table `skill_fishing_base_level` (fishing base level for zone/subzone) reloaded.", reloadStoreWorld, "skill_fishing_base_level", false},
+	{"skinning_loot_template", permissionCommandReloadSkinningLootTemplate, "DB table `skinning_loot_template` reloaded.", reloadStoreWorld, "skinning_loot_template", false},
+	{"smart_scripts", permissionCommandReloadSmartScripts, "Smart Scripts reloaded.", reloadStoreWorld, "smart_scripts", false},
+	{"spell_required", permissionCommandReloadSpellRequired, "DB table `spell_required` reloaded.", reloadStoreWorld, "spell_required", false},
+	{"spell_area", permissionCommandReloadSpellArea, "DB table `spell_area` (spell dependences from area/quest/auras state) reloaded.", reloadStoreWorld, "spell_area", false},
+	{"spell_bonus_data", permissionCommandReloadSpellBonusData, "DB table `spell_bonus_data` (spell damage/healing coefficients) reloaded.", reloadStoreWorld, "spell_bonus_data", false},
+	{"spell_group", permissionCommandReloadSpellGroup, "DB table `spell_group` (spell groups) reloaded.", reloadStoreWorld, "spell_group", false},
+	{"spell_learn_spell", permissionCommandReloadSpellLearnSpell, "DB table `spell_learn_spell` reloaded.", reloadStoreWorld, "spell_learn_spell", false},
+	{"spell_loot_template", permissionCommandReloadSpellLootTemplate, "DB table `spell_loot_template` reloaded.", reloadStoreWorld, "spell_loot_template", false},
+	{"spell_linked_spell", permissionCommandReloadSpellLinkedSpell, "DB table `spell_linked_spell` reloaded.", reloadStoreWorld, "spell_linked_spell", false},
+	{"spell_pet_auras", permissionCommandReloadSpellPetAuras, "DB table `spell_pet_auras` reloaded.", reloadStoreWorld, "spell_pet_auras", false},
+	{"spell_proc", permissionCommandReloadSpellProc, "DB table `spell_proc` (spell proc conditions and data) reloaded.", reloadStoreWorld, "spell_proc", false},
+	{"spell_scripts", permissionCommandReloadSpellScripts, "DB table `spell_scripts` reloaded.", reloadStoreWorld, "spell_scripts", false},
+	{"spell_target_position", permissionCommandReloadSpellTargetPosition, "DB table `spell_target_position` (destination coordinates for spell targets) reloaded.", reloadStoreWorld, "spell_target_position", false},
+	{"spell_threats", permissionCommandReloadSpellThreats, "DB table `spell_threat` (spell aggro definitions) reloaded.", reloadStoreWorld, "spell_threat", false},
+	{"spell_group_stack_rules", permissionCommandReloadSpellGroupStackRules, "DB table `spell_group_stack_rules` (spell stacking definitions) reloaded.", reloadStoreWorld, "spell_group_stack_rules", false},
+	{"trainer", permissionCommandReloadTrainer, "DB table `trainer` reloaded.\nDB table `trainer_locale` reloaded.\nDB table `trainer_spell` reloaded.\nDB table `creature_default_trainer` reloaded.", reloadStoreWorld, "trainer", false},
+	{"trinity_string", permissionCommandReloadTrinityString, "DB table `trinity_string` reloaded.", reloadStoreWorld, "trinity_string", false},
+	{"waypoint_scripts", permissionCommandReloadWaypointScripts, "DB table `waypoint_scripts` reloaded.", reloadStoreWorld, "waypoint_scripts", false},
+	{"waypoint_data", permissionCommandReloadWaypointData, "DB Table 'waypoint_data' reloaded.", reloadStoreWorld, "waypoint_data", false},
 }
 
 // reloadArmByName indexes the flat arms for the all-groups.
@@ -170,8 +178,8 @@ var reloadArmByName = func() map[string]reloadArm {
 // runReloadArm executes one flat arm: probe the table (the Go equivalent of
 // the C++ Load* re-read), then broadcast the C++ message unless quiet.
 func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) bool {
+	var db *sql.DB
 	if arm.table != "" {
-		var db *sql.DB
 		switch arm.store {
 		case reloadStoreCharacters:
 			if s.server.CharactersStore != nil {
@@ -206,7 +214,27 @@ func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) b
 		s.server.invalidateBattlegroundTemplates()
 	}
 	if !quiet && arm.msg != "" {
-		s.server.sendGlobalGMMessage(ctx, arm.msg)
+		if arm.global {
+			s.server.sendGlobalSysMessage(ctx, arm.msg)
+		} else {
+			s.server.sendGlobalGMMessage(ctx, arm.msg)
+		}
+	}
+	// C++ HandleReloadSkillExtraItemTemplateCommand (:778) latches onto
+	// HandleReloadSkillPerfectItemTemplateCommand (:768), so the extra-item
+	// arm always reloads skill_perfect_item_template too and sends its
+	// message second (the perfect-item arm has no command-table row of its
+	// own). The Go perfect table is read on demand (spells.go), so the
+	// probe is the reload; quiet suppresses only the message, as for the
+	// other arms run from the all-spell group.
+	if arm.name == "skill_extra_item_template" {
+		if db != nil {
+			var one int
+			_ = db.QueryRowContext(ctx, "SELECT 1 FROM skill_perfect_item_template LIMIT 1").Scan(&one)
+		}
+		if !quiet {
+			s.server.sendGlobalGMMessage(ctx, "DB table `skill_perfect_item_template` (perfect item procs when crafting) reloaded.")
+		}
 	}
 	return true
 }
@@ -290,46 +318,78 @@ func (s *session) handleCmdReload(ctx context.Context, args []string) {
 		s.handleReloadAll(ctx, args[1:])
 		return
 	}
-	// The six special arms are exact-match rows in the C++ table, so they are
-	// dispatched before the prefix scan: "creature_template" must not fall
-	// through to the "creature_template_locale" prefix match (C++ exact match
-	// wins over prefix matches).
-	switch sub {
-	case "creature_template":
-		s.handleReloadCreatureTemplate(ctx, args[1:])
-		return
-	case "config":
-		s.handleReloadConfig(ctx)
-		return
-	case "gm_tickets":
-		s.handleReloadGMTickets(ctx)
-		return
-	case "rbac":
-		s.handleReloadRBACData(ctx)
-		return
-	case "vehicle_accessory":
-		s.handleReloadVehicleAccessory(ctx)
-		return
-	case "vehicle_template_accessory":
-		s.handleReloadVehicleTemplateAccessory(ctx)
+	// The Trinity parser prefix-matches at every level (ChatCommand.cpp:
+	// 262-288): an exact token always wins, a token matching exactly one
+	// arm executes it, and a token matching two or more executes nothing
+	// and prints the ambiguous list. The six special arms are table rows
+	// too, so a partial token matching one of them resolves here as well
+	// (previously only exact special tokens dispatched, and an ambiguous
+	// token silently executed the first flat prefix match). Candidate
+	// order is the C++ table order, specials in their table positions
+	// among themselves.
+	if s.dispatchReloadSpecial(ctx, sub, args[1:]) {
 		return
 	}
-	// Prefix-match flat arms like the Trinity parser.
-	var matched *reloadArm
+	var matches []reloadArm
 	for i := range reloadArms {
 		if strings.HasPrefix(reloadArms[i].name, sub) {
-			matched = &reloadArms[i]
-			break
+			matches = append(matches, reloadArms[i])
 		}
 	}
-	if matched != nil {
-		if s.miscDeny(ctx, matched.perm) {
+	var specialMatches []string
+	for _, name := range reloadSpecialNames {
+		if strings.HasPrefix(name, sub) {
+			specialMatches = append(specialMatches, name)
+		}
+	}
+	if len(matches)+len(specialMatches) > 1 {
+		s.sendSysMessage(fmt.Sprintf("Subcommand '%s' of command '.reload' is ambiguous, please use one of the following:", sub))
+		for _, m := range matches {
+			s.sendSysMessage("  " + m.name)
+		}
+		for _, name := range specialMatches {
+			s.sendSysMessage("  " + name)
+		}
+		return
+	}
+	if len(matches) == 1 {
+		if s.miscDeny(ctx, matches[0].perm) {
 			return
 		}
-		s.runReloadArm(ctx, *matched, false)
+		s.runReloadArm(ctx, matches[0], false)
+		return
+	}
+	if len(specialMatches) == 1 {
+		s.dispatchReloadSpecial(ctx, specialMatches[0], args[1:])
 		return
 	}
 	s.sendSysMessage("Syntax: .reload <table>|all [group]")
+}
+
+// reloadSpecialNames are the six non-table-probe arms in C++ table order.
+var reloadSpecialNames = []string{"config", "creature_template", "gm_tickets", "rbac", "vehicle_accessory", "vehicle_template_accessory"}
+
+// dispatchReloadSpecial runs a special arm by exact name and reports
+// whether the name was one. Exact tokens are checked before the prefix
+// scan so "creature_template" never falls through to a prefix match.
+func (s *session) dispatchReloadSpecial(ctx context.Context, name string, rest []string) bool {
+	switch name {
+	case "creature_template":
+		s.handleReloadCreatureTemplate(ctx, rest)
+	case "config":
+		s.handleReloadConfig(ctx)
+	case "gm_tickets":
+		s.handleReloadGMTickets(ctx)
+	case "rbac":
+		s.handleReloadRBACData(ctx)
+	case "vehicle_accessory":
+		s.handleReloadVehicleAccessory(ctx)
+	case "vehicle_template_accessory":
+		s.handleReloadVehicleTemplateAccessory(ctx)
+	default:
+		return false
+	}
+	return true
 }
 
 // handleReloadAll mirrors the `reload all` sub-table (cs_reload.cpp:62-73):
@@ -347,23 +407,43 @@ func (s *session) handleReloadAll(ctx context.Context, args []string) {
 		}
 		s.runReloadArms(ctx, "access_requirement", "mail_level_reward",
 			"reserved_name", "trinity_string", "game_tele", "creature_movement_override",
-			"creature_summon_groups", "autobroadcast", "battleground_template")
+			"creature_summon_groups")
 		s.handleReloadVehicleAccessoryQuiet(ctx)
 		s.handleReloadVehicleTemplateAccessoryQuiet(ctx)
+		s.runReloadArms(ctx, "autobroadcast", "battleground_template")
 		return
 	}
+	// Group dispatch follows the same Trinity prefix rule as the flat
+	// arms: exact wins, one prefix match executes, several print the
+	// ambiguous list. The group order is the C++ all-sub-table order
+	// (previously a Go map iteration made single-letter tokens like "s"
+	// resolve nondeterministically between scripts and spell).
 	sub := strings.ToLower(args[0])
-	for name, g := range reloadAllGroups {
+	var matches []string
+	for _, name := range reloadAllGroupOrder {
 		if strings.HasPrefix(name, sub) {
-			if s.miscDeny(ctx, g.perm) {
-				return
-			}
-			s.runReloadAllGroup(ctx, name)
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) > 1 {
+		s.sendSysMessage(fmt.Sprintf("Subcommand '%s' of command '.reload all' is ambiguous, please use one of the following:", sub))
+		for _, name := range matches {
+			s.sendSysMessage("  " + name)
+		}
+		return
+	}
+	if len(matches) == 1 {
+		if s.miscDeny(ctx, reloadAllGroups[matches[0]].perm) {
 			return
 		}
+		s.runReloadAllGroup(ctx, matches[0])
+		return
 	}
 	s.sendSysMessage("Syntax: .reload all [achievement|area|gossips|item|locales|loot|npc|quest|scripts|spell]")
 }
+
+// reloadAllGroupOrder is the C++ reloadAllCommandTable order.
+var reloadAllGroupOrder = []string{"achievement", "area", "gossips", "item", "locales", "loot", "npc", "quest", "scripts", "spell"}
 
 // runReloadAllGroup runs one all-group's member arms quietly plus its extra
 // message (the C++ handlers call the inner commands directly, bypassing

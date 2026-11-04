@@ -88,46 +88,57 @@ func (s *session) handleCmdReset(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
+	// The Trinity parser prefix-matches (ChatCommand.cpp:262-288): an
+	// exact token wins, one prefix match executes, and several print the
+	// ambiguous list instead of executing the first match (previously
+	// "a" silently ran achievements and "s" silently ran spells, where
+	// C++ lists achievements+all and spells+stats). Order is the C++
+	// table order (cs_reset.cpp:51-57).
 	sub := strings.ToLower(args[0])
-	switch {
-	case strings.HasPrefix("achievements", sub):
-		if s.miscDeny(ctx, permissionCommandResetAchievements) {
-			return
-		}
-		s.handleResetAchievements(ctx, args[1:])
-	case strings.HasPrefix("honor", sub):
-		if s.miscDeny(ctx, permissionCommandResetHonor) {
-			return
-		}
-		s.handleResetHonor(ctx, args[1:])
-	case strings.HasPrefix("level", sub):
-		if s.miscDeny(ctx, permissionCommandResetLevel) {
-			return
-		}
-		s.handleResetLevel(ctx, args[1:])
-	case strings.HasPrefix("spells", sub):
-		if s.miscDeny(ctx, permissionCommandResetSpells) {
-			return
-		}
-		s.handleResetSpells(ctx, args[1:])
-	case strings.HasPrefix("stats", sub):
-		if s.miscDeny(ctx, permissionCommandResetStats) {
-			return
-		}
-		s.handleResetStats(ctx, args[1:])
-	case strings.HasPrefix("talents", sub):
-		if s.miscDeny(ctx, permissionCommandResetTalents) {
-			return
-		}
-		s.handleResetTalents(ctx, args[1:])
-	case strings.HasPrefix("all", sub):
-		if s.miscDeny(ctx, permissionCommandResetAll) {
-			return
-		}
-		s.handleResetAll(ctx, args[1:])
-	default:
-		s.sendSysMessage(syntax)
+	type resetArm struct {
+		name string
+		perm uint32
+		run  func(context.Context, []string)
 	}
+	arms := []resetArm{
+		{"achievements", permissionCommandResetAchievements, s.handleResetAchievements},
+		{"honor", permissionCommandResetHonor, s.handleResetHonor},
+		{"level", permissionCommandResetLevel, s.handleResetLevel},
+		{"spells", permissionCommandResetSpells, s.handleResetSpells},
+		{"stats", permissionCommandResetStats, s.handleResetStats},
+		{"talents", permissionCommandResetTalents, s.handleResetTalents},
+		{"all", permissionCommandResetAll, s.handleResetAll},
+	}
+	for _, arm := range arms {
+		if arm.name == sub {
+			if s.miscDeny(ctx, arm.perm) {
+				return
+			}
+			arm.run(ctx, args[1:])
+			return
+		}
+	}
+	var matches []resetArm
+	for _, arm := range arms {
+		if strings.HasPrefix(arm.name, sub) {
+			matches = append(matches, arm)
+		}
+	}
+	if len(matches) > 1 {
+		s.sendSysMessage("Subcommand '" + sub + "' of command '.reset' is ambiguous, please use one of the following:")
+		for _, arm := range matches {
+			s.sendSysMessage("  " + arm.name)
+		}
+		return
+	}
+	if len(matches) == 1 {
+		if s.miscDeny(ctx, matches[0].perm) {
+			return
+		}
+		matches[0].run(ctx, args[1:])
+		return
+	}
+	s.sendSysMessage(syntax)
 }
 
 // handleResetAchievements mirrors HandleResetAchievementsCommand
@@ -288,17 +299,23 @@ func (s *session) handleResetAll(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .reset all spells|talents")
 		return
 	}
+	// C++ compares the whole tail string (caseName == "spells"), so a
+	// multi-token tail like "spells foo" is unknown, not a spells reset
+	// (previously the first token alone decided).
 	var atLogin uint64
 	var worldText string
-	switch args[0] {
-	case "spells":
-		atLogin = atLoginResetSpells
-		worldText = "Reset all spells." // LANG_RESETALL_SPELLS 218
-	case "talents":
-		atLogin = atLoginResetTalents | atLoginResetPetTalents
-		worldText = "Reset all talents." // LANG_RESETALL_TALENTS 219
-	default:
-		s.sendSysMessage("Unknown case " + args[0] + ". Use one of: spells, talents.") // LANG_RESETALL_UNKNOWN_CASE 217
+	if len(args) == 1 {
+		switch args[0] {
+		case "spells":
+			atLogin = atLoginResetSpells
+			worldText = "Reset all spells." // LANG_RESETALL_SPELLS 218
+		case "talents":
+			atLogin = atLoginResetTalents | atLoginResetPetTalents
+			worldText = "Reset all talents." // LANG_RESETALL_TALENTS 219
+		}
+	}
+	if worldText == "" {
+		s.sendSysMessage("Unknown case " + strings.Join(args, " ") + ". Use one of: spells, talents.") // LANG_RESETALL_UNKNOWN_CASE 217
 		return
 	}
 	// CHAR_UPD_ALL_AT_LOGIN_FLAGS: UPDATE characters SET at_login = at_login | ?.
