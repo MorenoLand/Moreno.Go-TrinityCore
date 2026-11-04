@@ -41,6 +41,13 @@
 -- victim:GetObjectType()=="Player" — nalorakk precedent);
 -- JustDied Talk(SAY_DEATH 4) (event 4; _JustDied instance
 -- bookkeeping has no bridge).
+-- Cast-state VERIFIED gate-less for ported arms: the boss's own
+-- UpdateAI pre-loop (:302) + in-loop (:385) UNIT_STATE_CASTING
+-- gates exist in C++, but they guard only the unported
+-- phase-machine events (intro/cyclone/lightning/thundershock/
+-- sacrifice sequence) — no ported arm fires through UpdateAI, so
+-- no gate is ported; Talk arms (events 1/3/4) and Reset stay
+-- ungated per C++.
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset intro machine: _Reset() (instance-script model absent —
 -- standing blocker), events.SetPhase(PHASE_INTRO) (no phase

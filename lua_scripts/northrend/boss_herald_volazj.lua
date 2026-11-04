@@ -42,7 +42,11 @@
 -- offline refs, UnitAI.h; Go SortedEntries returns dead too, so
 -- IsAlive filters). The insanity wait-state pause of the scheduler
 -- rides the unported insanity machine and never engages in the
--- ported model, so ungated timers match the mind-flay/bolt arms.
+-- ported model — but the BossAI scheduler CASTING validator DOES
+-- gate the ported arms (ScriptedCreature.cpp:493-496): mind-flay /
+-- bolt / shiver all defer 500ms while casting, no repeat re-arm
+-- (see mindFlayTick). DamageTaken / KilledUnit / JustDied stay
+-- ungated per C++.
 -- KilledUnit Talk(SAY_SLAY 1) player-gated (event 3,
 -- victim:GetObjectType()=="Player" — nalorakk precedent);
 -- JustDied Talk(SAY_DEATH 2) (event 4; _JustDied instance
@@ -190,10 +194,20 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_MIND_FLAY: JustEngagedWith-scheduled 8s init,
--- rescheduled 20s; DoCastVictim. UpdateAI returns early while
--- casting — the Go engine handles cast-gating, the timer just
--- re-arms.
+-- rescheduled 20s; DoCastVictim. BossAI scheduler validator
+-- (ScriptedCreature.cpp:493-496, set in the BossAI ctor): while
+-- casting, Dispatch returns with due tasks still queued — 500ms
+-- defer, no repeat re-arm (mal_ganis idiom). The old "Go engine
+-- handles cast-gating, the timer just re-arms" claim was wrong:
+-- the validator gates these tasks even though volazj overrides
+-- UpdateAI, because the scheduler itself is BossAI's.
 local function mindFlayTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mindflay", 500, function()
+            mindFlayTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MIND_FLAY)
     schedule(guid, "mindflay", 20000, function()
         mindFlayTick(creature, guid)
@@ -204,6 +218,12 @@ end
 -- init, task.Repeat() = same 5s duration (TaskScheduler.h line
 -- 485); DoCastVictim.
 local function shadowBoltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function()
+            shadowBoltTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHADOW_BOLT_VOLLEY)
     schedule(guid, "shadowbolt", 5000, function()
         shadowBoltTick(creature, guid)
@@ -217,6 +237,12 @@ end
 -- pool filters IsAlive (UnitAI.h; Go SortedEntries returns dead
 -- too). No cast on an empty pool; DoCast non-triggered.
 local function shiverTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shiver", 500, function()
+            shiverTick(creature, guid)
+        end)
+        return
+    end
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:IsAlive() then

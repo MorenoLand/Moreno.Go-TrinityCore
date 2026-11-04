@@ -38,6 +38,12 @@
 -- Deviations: C++ DelayEvents(500ms) on VANISH has no Lua twin
 -- (independent CreateLuaEvent timers); the UpdateAI vanish-evade check
 -- stays out (EnterEvadeMode has no Lua bridge, 2026-10-21).
+-- Cast-state: the boss's own UpdateAI pre-loop (:171) + in-loop
+-- (:222) UNIT_STATE_CASTING gates are PORTED — every UpdateAI timer
+-- arm (bloodthirst, conjure, vanish, startfeeding, donefeeding)
+-- defers 500ms while casting, no repeat re-arm (mal_ganis idiom);
+-- the pre-events.Update vanish-evade + _initialCheckTimer legs and
+-- DamageTaken stay ungated per C++.
 -- Unmodeled (documented, not wired):
 -- Reset — CheckSpheres() evaluation PORTED on event 23 (shared helper
 -- with the gossip path; true re-fires RemovePrison exactly as C++
@@ -199,7 +205,16 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_BLOODTHIRST: DoCastSelf; 10s init, 10s repeat.
+-- UpdateAI pre-loop (:171) + in-loop (:222) CASTING gates: while
+-- casting the event stays queued — 500ms defer, no repeat re-arm
+-- (mal_ganis idiom).
 local function bloodthirstTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bloodthirst", 500, function()
+            bloodthirstTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BLOODTHIRST)
     schedule(guid, "bloodthirst", 10000, function()
         bloodthirstTick(creature, guid)
@@ -207,7 +222,16 @@ local function bloodthirstTick(creature, guid)
 end
 
 -- C++ EVENT_CONJURE_FLAME_SPHERES: DoCast(victim); 5s init, 15s repeat.
+-- Same UpdateAI CASTING gates: defer precedes the victim pick and
+-- the flame-sphere-target latch, so a deferred conjure latches
+-- nothing until it actually fires.
 local function conjureTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "conjure", 500, function()
+            conjureTick(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         -- C++ EVENT_CONJURE_FLAME_SPHERES (:182-189): the target
@@ -227,11 +251,30 @@ local function conjureTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_DONE_FEEDING sits under the same UpdateAI pre-loop
+-- CASTING gate: while casting the target clear waits, re-checked
+-- every 500ms until it fires.
+local function doneFeedingTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "donefeeding", 500, function()
+            doneFeedingTick(creature, guid)
+        end)
+        return
+    end
+    embraceTarget[guid] = nil
+end
+
 -- C++ EVENT_START_FEEDING: RemoveAurasDueToSpell(VANISH) unconditionally,
 -- then, if the embrace target still resolves, Shadowstep + Embrace casts
 -- + Talk(SAY_FEED) + DONE_FEEDING in 20s. No alive check here (C++ has
 -- none — GetEmbraceTarget returns the unit regardless of liveness).
 local function startFeedingTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "startfeeding", 500, function()
+            startFeedingTick(creature, guid)
+        end)
+        return
+    end
     creature:RemoveAura(SPELL_VANISH)
     local target = embraceTarget[guid]
     if target then
@@ -239,7 +282,7 @@ local function startFeedingTick(creature, guid)
         creature:CastSpell(target, SPELL_EMBRACE_OF_THE_VAMPYR)
         creature:Talk(SAY_FEED)
         schedule(guid, "donefeeding", 20000, function()
-            embraceTarget[guid] = nil
+            doneFeedingTick(creature, guid)
         end)
     end
 end
@@ -250,6 +293,12 @@ end
 -- the GUID): Talk + Vanish cast + START_FEEDING schedule fire even
 -- when no target is picked. C++ DelayEvents(500ms) has no Lua twin.
 local function vanishTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "vanish", 500, function()
+            vanishTick(creature, guid)
+        end)
+        return
+    end
     local targets = creature:GetAITargets()
     if #targets > 1 then
         local candidates = {}

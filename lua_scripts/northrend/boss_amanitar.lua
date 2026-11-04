@@ -46,6 +46,13 @@
 -- repeat (C++ :156-160).
 -- JustDied — DoCastAOE(Remove Mushroom Power 57283), self-cast
 -- (arugal precedent).
+-- Cast-state: the boss's own UpdateAI pre-loop (:142) + in-loop
+-- (:188) UNIT_STATE_CASTING gates are PORTED — all six UpdateAI
+-- timer arms (bash, mini, root, bolt, spawn, respawn) defer 500ms
+-- while casting, no repeat re-arm (mal_ganis idiom); JustDied /
+-- SummonedCreatureDies / mushroom sub-AI legs stay ungated per
+-- C++ (the mushroom AI is ScriptedAI, whose scheduler carries the
+-- EmptyValidator, not the BossAI CASTING validator).
 -- Unmodeled (no bridges — documented, not wired):
 -- EVENT_SPAWN is PORTED (spawnTick — the stale "summon STRAND
 -- absent" claim is retracted for this one-shot summon leg).
@@ -241,6 +248,16 @@ end
 -- Repeat(30s); on miss Repeat(1s) fail-fast (the else branch, NOT
 -- the 30s cycle).
 local function miniTick(creature, guid)
+    -- UpdateAI pre-loop (:142) + in-loop (:188) CASTING gates:
+    -- while casting the event stays queued — 500ms defer, no
+    -- re-arm decision (neither the 30s cast re-arm nor the 1s
+    -- fail-fast re-arm fires until the event actually executes).
+    if creature:IsCasting() then
+        schedule(guid, "mini", 500, function()
+            miniTick(creature, guid)
+        end)
+        return
+    end
     if randomThreatTarget(creature, 0, true, SPELL_MINI) ~= nil then
         creature:CastSpell(creature, SPELL_MINI)
         schedule(guid, "mini", 30000, function()
@@ -258,6 +275,12 @@ end
 -- Repeat(10s, 15s) sits outside the target check — fires even on
 -- nil target (C++-exact).
 local function rootTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "root", 500, function()
+            rootTick(creature, guid)
+        end)
+        return
+    end
     local target = randomNonVictimTarget(creature, 100.0)
     if target then
         creature:CastSpell(target, SPELL_ENTANGLING_ROOTS, true)
@@ -273,6 +296,12 @@ end
 -- SPELL_VENOM_BOLT_VOLLEY, TRIGGERED); Repeat(18s, 22s) outside
 -- the target check (C++-exact).
 local function boltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bolt", 500, function()
+            boltTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature, 100.0, true, nil)
     if target then
         creature:CastSpell(target, SPELL_VENOM_BOLT_VOLLEY, true)
@@ -283,10 +312,16 @@ local function boltTick(creature, guid)
 end
 
 -- C++ EVENT_BASH: JustEngagedWith-scheduled 10-14s init,
--- rescheduled 7-12s; DoCastVictim. UpdateAI returns early while
--- casting — the Go engine handles cast-gating, the timer just
--- re-arms.
+-- rescheduled 7-12s; DoCastVictim. UpdateAI pre-loop (:142) +
+-- in-loop (:188) CASTING gates PORTED: while casting the event
+-- stays queued — 500ms defer, no repeat re-arm (mal_ganis idiom).
 local function bashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bash", 500, function()
+            bashTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_BASH)
     schedule(guid, "bash", math.random(7000, 12000), function()
         bashTick(creature, guid)
@@ -301,6 +336,14 @@ end
 -- summoner ev19 below (amanitarJustSummoned); only the proximity
 -- poison machine (MoveInLineOfSight) stays out.
 local function spawnTick(creature, guid)
+    -- One-shot under the same pre-loop CASTING gate: while casting
+    -- the spawn waits 500ms rather than firing into the cast.
+    if creature:IsCasting() then
+        schedule(guid, "spawn", 500, function()
+            spawnTick(creature, guid)
+        end)
+        return
+    end
     for _, pos in ipairs(MUSHROOM_POSITIONS) do
         local entry = (math.random(1, 100) <= 40)
             and NPC_HEALTHY_MUSHROOM or NPC_POISONOUS_MUSHROOM
@@ -369,6 +412,12 @@ local function amanitarSummonedDied(event, creature, summon, killer)
 end
 
 local function respawnTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "respawn", 500, function()
+            respawnTick(creature, guid)
+        end)
+        return
+    end
     local deque = mushroomDeque[guid]
     if deque then
         for _, pos in ipairs(deque) do

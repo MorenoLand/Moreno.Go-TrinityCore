@@ -16602,6 +16602,11 @@ func init() {
 	// 55968, 10s init, 10s repeat); EVENT_CONJURE_FLAME_SPHERES
 	// (DoCast(victim) 55931, 5s init, 15s repeat); KilledUnit
 	// Talk(SAY_SLAY 3) player-gated; JustDied Talk(SAY_DEATH 4).
+	// Cast-state PORTED: own UpdateAI pre-loop (:171) + in-loop
+	// (:222) CASTING gates — all 5 UpdateAI timer arms (bloodthirst,
+	// conjure, vanish, startfeeding, donefeeding) defer 500ms while
+	// casting, no repeat re-arm; DamageTaken + pre-Update vanish-evade
+	// legs stay ungated per C++.
 	// Documented in the lua file, not wired: EVENT_VANISH plus the
 	// vanish/feed machine (threat-list gate absent, random-target
 	// SelectTarget bridge absent — cairne/kazzak precedent), the
@@ -16626,7 +16631,11 @@ func init() {
 	// EVENT_BASH — DoCastVictim(Bash 57094), JustEngagedWith-scheduled
 	// 10-14s init, rescheduled 7-12s; EVENT_MINI DoCastAOE(57055)
 	// ported as self-cast; JustDied DoCastAOE(57283) ported as
-	// self-cast. Documented in the lua file, not wired: EVENT_ROOT / EVENT_BOLT (random-target SelectTarget
+	// self-cast. Cast-state PORTED: own UpdateAI pre-loop (:142) +
+	// in-loop (:188) CASTING gates — all 6 UpdateAI timer arms
+	// (bash, mini, root, bolt, spawn, respawn) defer 500ms while
+	// casting, no repeat re-arm; mushroom sub-AI scheduler carries
+	// the ScriptedAI EmptyValidator, ungated. Documented in the lua file, not wired: EVENT_ROOT / EVENT_BOLT (random-target SelectTarget
 	// bridge absent), EVENT_SPAWN and the EVENT_RESPAWN deque machine
 	// (summon STRAND absent — standing), JustSummoned /
 	// SummonedCreatureDies bookkeeping (summon / cross-AI bridges
@@ -16651,7 +16660,12 @@ func init() {
 	// EVENT_SHADOW_BOLT_VOLLEY — DoCastVictim(Shadow Bolt Volley
 	// 57942, 5s init, 5s repeat — task.Repeat() no-arg = same
 	// duration, TaskScheduler.h:485), KilledUnit Talk(SAY_SLAY 1)
-	// player-gated, JustDied Talk(SAY_DEATH 2). Documented in the
+	// player-gated, JustDied Talk(SAY_DEATH 2). Cast-state PORTED:
+	// BossAI scheduler CASTING validator (ScriptedCreature.cpp:
+	// 493-496, BossAI ctor) — mind-flay, shadow-bolt-volley and
+	// shiver all defer 500ms while casting, no repeat re-arm, even
+	// though volazj overrides UpdateAI (the scheduler is BossAI's);
+	// DamageTaken / KilledUnit / JustDied stay ungated per C++.
 	// lua file, not wired: the JustEngagedWith / Reset
 	// DoStart/StopTimedAchievement(20382) legs (instance-script
 	// model absent — standing blocker), EVENT_SHIVER (random-target
@@ -16677,7 +16691,10 @@ func init() {
 	// BossAI. Ported arms in lua_scripts/northrend/
 	// boss_jedoga_shadowseeker.lua: JustEngagedWith Talk(SAY_AGGRO 0),
 	// KilledUnit Talk(SAY_SLAY 3) player-gated, JustDied Talk(SAY_DEATH
-	// 4). Documented in the lua file, not wired: the entire
+	// 4). Cast-state VERIFIED gate-less for ported arms: own UpdateAI
+	// pre-loop (:302) + in-loop (:385) CASTING gates exist but guard
+	// only the unported phase-machine events; no ported arm fires
+	// through UpdateAI. Documented in the lua file, not wired: the entire
 	// phase-gated machinery — events.SetPhase/IsInPhase (PHASE_INTRO /
 	// PHASE_ONE / PHASE_TWO / PHASE_THREE; no phase bridge — gal_darah
 	// / moorabi precedent) — so the combat rotation is not emulated
