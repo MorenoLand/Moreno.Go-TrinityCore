@@ -20328,6 +20328,14 @@ func init() {
 	// in lua_scripts/northrend/boss_vx_001.lua: JustSummoned burst-target
 	// leg + SpellHit rapid-burst leg (DoAction/timer/DamageTaken arms stay out).
 	RegisterLuaBoss("boss_vx_001", 33651)
+	// boss_leviathan_mk_ii (Ulduar, Mimiron phase 1) — ported arm
+	// in lua_scripts/northrend/boss_leviathan_mk_ii.lua: Reset
+	// (NON_ATTACKABLE|NOT_SELECTABLE + react passive + self-cast
+	// FREEZE_ANIM 16245). Combat timers, DamageTaken lethal clamp,
+	// KilledUnit/MovementInform and the boss_mimiron / aerial-command
+	// / computer / fire-bot arms stay out (DoAction phase machine,
+	// vehicle kit, MovePoint, instance boss-state bridges absent).
+	RegisterLuaBoss("boss_leviathan_mk_ii", 33432)
 	// npc_aeranas (Hellfire Peninsula, Avruu's Orb summon) — ported
 	// arms in lua_scripts/outland/npc_aeranas.lua: Reset faction/
 	// questgiver/Talk + 8s monster-faction timer, combat shock/
