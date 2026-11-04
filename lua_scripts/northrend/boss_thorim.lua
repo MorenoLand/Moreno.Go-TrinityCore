@@ -112,8 +112,10 @@
 -- npc_runic_colossusAI / npc_ancient_rune_giantAI Reset + JustDied — GO door legs
 -- (DATA_RUNIC_DOOR / DATA_STONE_DOOR) PORTED below via boss-anchored
 -- FindNearestGameObject + SetGoState (magmus/malchezaar precedent; the
--- header's old "no GO bridge" claim was stale); the cross-creature thorim
--- Talk(SAY_SPECIAL) + giant SetImmuneToPC/DoAction legs stay out.
+-- header's old "no GO bridge" claim was stale); colossus JustDied's thorim
+-- Talk(SAY_SPECIAL 2) + giant SetImmuneToPC/DoAction(ACTIVATE_ADDS) legs
+-- PORTED in colossusDied below (500yd FindNearestCreature sweeps, 60yd
+-- grid sweep for the giant's honor-guard/acolyte summons).
 -- npc_sifAI (entry 33196) — all events gated by DoAction(ACTION_START_HARD_MODE);
 -- no DoAction bridge; not registered.
 -- npc_thorim_pre_phaseAI / npc_thorim_arena_phaseAI — per-entry trash-ability
@@ -148,6 +150,7 @@ local ENTRY_DARK_RUNE_ACOLYTE = 33110 -- ulduar.h:187
 local SPELL_LIGHTNING_DESTRUCTION = 62393 -- boss_thorim.cpp:45
 
 local SAY_AGGRO_1 = 0
+local SAY_SPECIAL = 2
 local SAY_SLAY = 4
 local SAY_DEATH = 7
 
@@ -414,6 +417,26 @@ local function colossusDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     local runicDoor = creature:FindNearestGameObject(GO_THORIM_RUNIC_DOOR, 100)
     if runicDoor then runicDoor:SetGoState(0) end
+    -- C++ npc_runic_colossusAI::JustDied (boss_thorim.cpp:1429-1441), in
+    -- order after the door leg: thorim Talk(SAY_SPECIAL 2) + giant
+    -- SetImmuneToPC(false) + giant DoAction(ACTION_ACTIVATE_ADDS)
+    -- (miniboss base :1362-1370: un-immune its summons). Instance GUID
+    -- fetches ride the FindNearestCreature sweep (500yd, kalecgos
+    -- precedent); the summon list rides the colossus-activation grid
+    -- sweep (60yd, same file): giant's honor guards + acolytes only —
+    -- the colossus-cluster acolytes sit ~90yd from the giant's adds.
+    local thorim = creature:FindNearestCreature(ENTRY_THORIM, 500)
+    if thorim then thorim:Talk(SAY_SPECIAL) end
+    local giant = creature:FindNearestCreature(ENTRY_ANCIENT_RUNE_GIANT, 500)
+    if giant then
+        giant:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        for _, guard in ipairs(giant:GetCreaturesInGrid(ENTRY_IRON_HONOR_GUARD, 60)) do
+            guard:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        end
+        for _, acolyte in ipairs(giant:GetCreaturesInGrid(ENTRY_DARK_RUNE_ACOLYTE, 60)) do
+            acolyte:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        end
+    end
 end
 
 -- C++ EVENT_STOMP: DoCastAOE(SPELL_STOMP 62411) (non-triggered),
