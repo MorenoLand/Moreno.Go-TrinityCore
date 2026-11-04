@@ -45,9 +45,11 @@ import (
 // recall (no in-tree trinity_string seed).
 //
 // Documented no-bridge/deltas (not stubs): the message arm's isLogingOut
-// gate has no Go bridge (no session logout state); negative item counts
-// clamp to 1 (C++ wraps to a huge uint32 and trips the 12-item cap, same
-// net refusal for stackables); player links render as plain names per the
+// gate has no Go bridge (no session logout state); zero/negative item
+// counts fail the command (C++ refuses 0 via the itemCount < 1 check;
+// negatives wrap to a huge uint32 in C++ and trip the MaxCount cap for
+// limited items, but Go refuses them outright rather than minting wrapped
+// stacks); player links render as plain names per the
 // tree's miscPlayerLink convention; console-vs-chat branches moot (Go
 // commands always sessioned).
 
@@ -226,7 +228,8 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 		}
 		itemCount := int64(cAtoi(countStr))
 		if itemCount < 1 {
-			itemCount = 1
+			s.sendSysMessage(fmt.Sprintf("Invalid item count %d for item %d.", itemCount, itemID)) // LANG_COMMAND_INVALID_ITEM_COUNT 52
+			return
 		}
 		if maxCount > 0 && itemCount > maxCount {
 			s.sendSysMessage(fmt.Sprintf("Invalid item count %d for item %d.", itemCount, itemID)) // LANG_COMMAND_INVALID_ITEM_COUNT 52

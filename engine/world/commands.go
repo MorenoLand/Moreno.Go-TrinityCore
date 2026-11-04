@@ -1248,7 +1248,8 @@ func (s *session) handleCheatTaxi(ctx context.Context, args []string) {
 }
 
 // handleCheatExplore mirrors HandleExploreCheatCommand (cs_cheat.cpp:238):
-// a selected online player is required (null -> LANG_NO_CHAR_SELECTED),
+// getSelectedPlayer falls back to self with nothing targeted (null ->
+// LANG_NO_CHAR_SELECTED only for an offline/non-player target),
 // the bool is a required argument (not optional), and the
 // PLAYER_EXPLORED_ZONES flags land on the handler's own player exactly like
 // the C++ loop (a known upstream quirk: the messages name the target while
@@ -1268,11 +1269,14 @@ func (s *session) handleCheatExplore(ctx context.Context, args []string) {
 		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
-	// ChatHandler::getSelectedPlayer: null when nothing is targeted or the
-	// target is offline; the C++ arm then fails with LANG_NO_CHAR_SELECTED.
+	// ChatHandler::getSelectedPlayer (Chat.cpp:300-308): the handler's own
+	// player when nothing is targeted; null only for an offline/non-player
+	// target, and the C++ arm then fails with LANG_NO_CHAR_SELECTED.
 	var target *session
 	if s.selection != 0 && s.server != nil {
 		target = s.server.playerSessionForGUID(s.selection)
+	} else if s.selection == 0 {
+		target = s
 	}
 	if target == nil || target.player == nil {
 		s.sendSysMessage("No character selected.")

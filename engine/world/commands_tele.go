@@ -263,8 +263,9 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 		}
 		if target.isInFlight() {
 			target.finishTaxiFlight()
+		} else {
+			target.saveRecallPosition() // C++ SaveRecallPosition: save only in non-flight case
 		}
-		// SaveRecallPosition has no Go bridge (same gap as goDoTeleport).
 		target.teleportTo(tele.mapID, tele.x, tele.y, tele.z, tele.o)
 		return
 	}
@@ -387,9 +388,10 @@ func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
 		}
 		if player.isInFlight() {
 			player.finishTaxiFlight()
+		} else {
+			player.saveRecallPosition() // C++ SaveRecallPosition: save only in non-flight case
 		}
-		// SaveRecallPosition and Player::IsBeingTeleported have no Go
-		// bridge (same gaps as goDoTeleport and the group summon port).
+		// Player::IsBeingTeleported has no Go bridge (same gap as the group summon port).
 		player.teleportTo(tele.mapID, tele.x, tele.y, tele.z, tele.o)
 	}
 }
@@ -423,7 +425,8 @@ func (s *session) handleTeleBareCommand(ctx context.Context, args []string) {
 	}
 	if s.isInFlight() {
 		s.finishTaxiFlight()
+	} else {
+		s.saveRecallPosition() // C++ SaveRecallPosition: save only in non-flight case
 	}
-	// SaveRecallPosition has no Go bridge (same gap as goDoTeleport).
 	s.teleportTo(tele.mapID, tele.x, tele.y, tele.z, tele.o)
 }
