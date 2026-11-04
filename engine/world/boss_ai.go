@@ -20235,6 +20235,15 @@ func init() {
 	RegisterLuaBoss("npc_wg_queue", 35599)
 	RegisterLuaBoss("npc_wg_queue", 35603)
 	RegisterLuaBoss("npc_wg_queue", 35612)
+	// npc_wg_spirit_guide (Wintergrasp spirit guides) — ported arm
+	// in lua_scripts/northrend/npc_wg_spirit_guide.lua: UpdateAI
+	// spirit-heal self-cast (22011, non-triggered, 1s poll; the
+	// C++ HasUnitState(CASTING) gate is vacuous for handler
+	// creatures). Entries 31841 (Taunka, Horde) / 31842 (Dwarven,
+	// Alliance) wowhead-only. Gossip graveyard-teleport arms stay
+	// documented-only (no battlefield bridge).
+	RegisterLuaBoss("npc_wg_spirit_guide", 31841)
+	RegisterLuaBoss("npc_wg_spirit_guide", 31842)
 	// npc_mimiron_assault_bot (Ulduar, Mimiron ACU phase) — ported arm
 	// in lua_scripts/northrend/npc_mimiron_assault_bot.lua: engage-seeded
 	// magnetic-field timer (14s, 30s re-arm, victim-cast 64668).
