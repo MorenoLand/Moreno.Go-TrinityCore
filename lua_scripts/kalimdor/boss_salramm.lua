@@ -20,6 +20,7 @@
 -- 2 OnLeaveCombat, 3 OnKilledUnit, 4 OnDied, 23 OnReset. Timers via
 -- CreateLuaEvent; melee is engine-driven in Go (creature combat tick),
 -- like C++ DoMeleeAttackIfReady.
+-- BossAI::UpdateAI CASTING gates PORTED (ScriptedCreature.cpp:578/:584, thalnos precedent): each timer arm defers 500ms while creature:IsCasting(), no re-arm consumed.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer at
 --   its C++ ScheduleEvent cooldown ({19s,24s} / 2s / {25s,35s} /
@@ -165,7 +166,13 @@ end
 -- (SPELL_EXPLODE_GHOUL, triggered) — aku_mai CastSpell(self, spell,
 -- true) convention; fired from both ghoul-event arms (ghoul2 falls
 -- through to it in C++).
-local function onExplodeGhoul(creature)
+local function onExplodeGhoul(creature, guid, key)
+    if creature:IsCasting() then
+        schedule(guid, key, 500, function()
+            onExplodeGhoul(creature, guid, key)
+        end)
+        return
+    end
     creature:Talk(SAY_EXPLODE_GHOUL)
     creature:CastSpell(creature, SPELL_EXPLODE_GHOUL, true)
 end
@@ -174,26 +181,51 @@ end
 -- (SPELL_SUMMON_GHOULS), non-triggered, self-cast (DoCastAOE precedent);
 -- then schedules the two explode arms. No self re-arm in C++ — the
 -- re-arm is the ghoul2 fallthrough's +4s schedule.
+local onExplodeGhoul2 -- forward declaration (gal_darah idiom): defined below onSummonGhouls, called from its ghoul2 closure
+
 local function onSummonGhouls(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summonghouls", 500, function()
+            onSummonGhouls(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_SUMMON_GHOULS)
     creature:CastSpell(creature, SPELL_SUMMON_GHOULS)
     schedule(guid, "explodeghoul1", math.random(20000, 24000), function()
-        onExplodeGhoul(creature)
+        onExplodeGhoul(creature, guid, "explodeghoul1")
     end)
     schedule(guid, "explodeghoul2", math.random(25000, 29000), function()
-        -- C++ EVENT_EXPLODE_GHOUL2: schedules the next summon wave +4s
-        -- then [[fallthrough]] into the ghoul1 Talk + triggered cast.
-        schedule(guid, "summonghouls", 4000, function()
-            onSummonGhouls(creature, guid)
-        end)
-        onExplodeGhoul(creature)
+        onExplodeGhoul2(creature, guid)
     end)
+end
+
+-- C++ EVENT_EXPLODE_GHOUL2: schedules the next summon wave +4s, then
+-- [[fallthrough]] into the ghoul1 Talk + triggered cast. BossAI::UpdateAI
+-- CASTING gate: the whole fallthrough defers 500ms while IsCasting.
+onExplodeGhoul2 = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "explodeghoul2", 500, function()
+            onExplodeGhoul2(creature, guid)
+        end)
+        return
+    end
+    schedule(guid, "summonghouls", 4000, function()
+        onSummonGhouls(creature, guid)
+    end)
+    onExplodeGhoul(creature, guid, "explodeghoul2")
 end
 
 -- C++ EVENT_SHADOW_BOLT: DoCast(SelectTarget(Random, 0, 40.0f, true),
 -- 57725), non-triggered, init 2s -> repeat 3s (re-arm unconditional in
 -- C++, even on empty target — kazrogal precedent).
 local function onShadowBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function()
+            onShadowBolt(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 40, false)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_BOLT)
@@ -208,6 +240,12 @@ end
 -- 1, 50.0f, true), 52708), non-triggered, init {25s,35s} ->
 -- repeat {15s,20s} unconditional (nil target -> no cast).
 local function onStealFlesh(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stealflesh", 500, function()
+            onStealFlesh(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_STEAL_FLESH)
     local target = randomThreatPlayerInRange(creature, 50, true)
     if target then
@@ -221,6 +259,12 @@ end
 -- C++ EVENT_CURSE_FLESH: DoCastVictim(SPELL_CURSE_OF_TWISTED_FLESH),
 -- non-triggered; Repeat(37s) unconditional.
 local function onCurseFlesh(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curseflesh", 500, function()
+            onCurseFlesh(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CURSE_OF_TWISTED_FLESH)

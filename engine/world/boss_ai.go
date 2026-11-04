@@ -16084,7 +16084,9 @@ func init() {
 	// combat-rotation-only precedent) — 1s engage pump for UpdateAICombat
 	// (Holy Light 52444 self-cast below 40% hp, no C++ cooldown;
 	// Exorcism 52445 on an unbounded random alive player every 7-14s
-	// (nefarian convention), nil target retries next tick); KilledUnit
+	// (nefarian convention), nil target retries next tick; while casting
+	// the cooldown resets to 0 and the pump retries next tick with no cast
+	// (npc_arthas.cpp:899 gate PORTED)); KilledUnit
 	// Talk LINE_SLAY_ZOMBIE (39) gated on the victim being NPC_RISEN_
 	// ZOMBIE 27737 (event 3, nalorakk DISCOVERY); death is cancel only
 	// (C++ JustDied is instance SetData(DATA_ARTHAS_DIED) + despawn,
@@ -16113,7 +16115,9 @@ func init() {
 	// random alive player within 60m (nefarian convention, nil target
 	// -> no cast, re-arm unconditional like C++, 7s -> 15s); Void
 	// Strike 60590 on the victim (jeklik GetVictim + CastSpell
-	// convention, 5s -> 5s); death is Talk SAY_DEATH (1) + cancel
+	// convention, 5s -> 5s); the BossAI::UpdateAI CASTING gates are
+	// PORTED (ScriptedCreature.cpp:578/:584 — both arms defer 500ms
+	// while IsCasting, no re-arm consumed); death is Talk SAY_DEATH (1) + cancel
 	// (C++ JustDied calls _JustDied() plus guardian/rift cleanup,
 	// blocked standing); melee engine-driven. The Reset
 	// DoCastAOE channel leg (60422 "implicitly targets the Guardian"),
@@ -16133,8 +16137,10 @@ func init() {
 	// summon-bound at instance_culling_of_stratholme.cpp:557) — timers/Talk
 	// engage-death arms verified present in the port; InitializeAI spawn
 	// Talk + loot-mode leg, heroic-only Curse of Twisted Flesh, BossAI
-	// instance legs, JustDied SetData(DATA_NOTIFY_DEATH), and the
-	// spell_salramm_steal_flesh AuraScript periodic have no spawn /
+	// instance legs, JustDied SetData(DATA_NOTIFY_DEATH); the
+	// BossAI::UpdateAI CASTING gates are PORTED (ScriptedCreature.cpp:578/:584
+	// — all six event arms defer 500ms while IsCasting, no re-arm consumed);
+	// and the spell_salramm_steal_flesh AuraScript periodic have no spawn /
 	// difficulty / instance-data / AuraScript bridges — documented in
 	// lua_scripts/kalimdor/boss_salramm.lua, not wired.
 	RegisterLuaBoss("boss_salramm", 26530)
@@ -16148,9 +16154,11 @@ func init() {
 	// MALGANIS_IN_PROGRESS / NullCreatureAI instance-progress gate,
 	// BossAI instance legs, the DamageTaken lethal-clamp + _defeated
 	// fake-death outro machine (PermBindAllPlayers), JustReachedHome
-	// DespawnOrUnsummon, and the casting-state gates have no
-	// instance-progress / DamageTaken / PermBind / evade / despawn /
-	// casting bridges — documented in
+	// DespawnOrUnsummon have no instance-progress / DamageTaken /
+	// PermBind / evade / despawn bridges; the UpdateAI CASTING gates are
+	// PORTED (own pre-loop + in-loop returns, boss_mal_ganis.cpp:141/:174
+	// — each arm defers 500ms while IsCasting, no re-arm consumed) —
+	// documented in
 	// lua_scripts/kalimdor/boss_mal_ganis.lua, not wired.
 	RegisterLuaBoss("boss_mal_ganis", 26533)
 	// Meathook: combat arms ported (entry 26529, NPC_MEATHOOK
@@ -16165,7 +16173,9 @@ func init() {
 	// port; InitializeAI's Talk(SAY_SPAWN) and the
 	// GetBossState(DATA_MEATHOOK) == DONE loot-mode leg plus the
 	// BossAI instance legs and JustDied SetData(DATA_NOTIFY_DEATH)
-	// have no spawn / instance-data bridges — documented in
+	// have no spawn / instance-data bridges; the BossAI::UpdateAI
+	// CASTING gates are PORTED (ScriptedCreature.cpp:578/:584 — all three
+	// arms defer 500ms while IsCasting, no re-arm consumed) — documented in
 	// lua_scripts/kalimdor/boss_meathook.lua, not wired.
 	RegisterLuaBoss("boss_meathook", 26529)
 	// boss_celebras_the_cursed: Maraudon, entry 12225 (classicdb/tauri-cited;

@@ -22,6 +22,7 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- BossAI::UpdateAI CASTING gates PORTED (ScriptedCreature.cpp:578/:584, thalnos precedent): each timer arm defers 500ms while creature:IsCasting(), no re-arm consumed.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer at
 --   its C++ ScheduleEvent cooldown (7s / 5s); BossAI::JustEngagedWith
@@ -128,6 +129,12 @@ end
 -- true), 60588), non-triggered, init 7s -> repeat 15s (re-arm
 -- unconditional in C++, even on empty target).
 local function onCorruptingBlight(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "corruptingblight", 500, function()
+            onCorruptingBlight(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayer(creature, 60)
     if target then
         creature:CastSpell(target, SPELL_CORRUPTING_BLIGHT)
@@ -140,6 +147,12 @@ end
 -- C++ EVENT_VOID_STRIKE: DoCastVictim(60590), non-triggered, init 5s ->
 -- repeat 5s; jeklik GetVictim + CastSpell convention.
 local function onVoidStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "voidstrike", 500, function()
+            onVoidStrike(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not victim:IsDead() then
         creature:CastSpell(victim, SPELL_VOID_STRIKE)

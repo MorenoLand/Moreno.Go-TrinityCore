@@ -19,6 +19,7 @@
 -- events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKilledUnit, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- BossAI::UpdateAI CASTING gates PORTED (ScriptedCreature.cpp:578/:584, thalnos precedent): each timer arm defers 500ms while creature:IsCasting(), no re-arm consumed.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer
 --   at its C++ ScheduleEvent cooldown ({7s,11s} / 2s / {13s,17s});
@@ -141,6 +142,12 @@ end
 -- before the filters; init {7s,11s} -> repeat {10s,15s} unconditional
 -- (C++ Repeat sits outside the if/else; nil target -> victim cast).
 local function onChain(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chain", 500, function()
+            onChain(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayer(creature, 20, nil, false)
     if not target then
         target = randomThreatPlayer(creature, 0, 100, true)
@@ -161,6 +168,12 @@ end
 -- C++ EVENT_DISEASE: DoCastAOE(52666), non-triggered, self-cast
 -- (kazrogal/illidan DoCastAOE precedent); init 2s -> repeat 3.5s.
 local function onDisease(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "disease", 500, function()
+            onDisease(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DISEASE_EXPULSION)
     schedule(guid, "disease", 3500, function()
         onDisease(creature, guid)
@@ -170,6 +183,12 @@ end
 -- C++ EVENT_FRENZY: DoCast(me, 58841), non-triggered self-cast;
 -- init {13s,17s} -> repeat {13s,17s}.
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            onFrenzy(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FRENZY)
     schedule(guid, "frenzy", math.random(13000, 17000), function()
         onFrenzy(creature, guid)

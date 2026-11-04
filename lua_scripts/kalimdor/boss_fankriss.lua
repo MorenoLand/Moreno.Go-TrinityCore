@@ -14,8 +14,10 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
--- The C++ diff-timer + UNIT_STATE_CASTING UpdateAI loop has no
--- casting-state bridge in the Lua API (aeonus precedent — unmodeled);
+-- The C++ UpdateAI loop is plain diff-timers (boss_fankriss.cpp:106):
+-- zero HasUnitState hits, so no CASTING gate exists to port (the old
+-- header claim of a UNIT_STATE_CASTING loop was wrong); the casting-state
+-- read itself is live now (creature:IsCasting, lua_creature_events.go:1950);
 -- GetThreat gating in the hatchling leg is instance-side and unwired.
 -- Ported arms (the self-contained in-combat legs):
 -- - Mortal Wound 28467 on the victim (C++ DoCastVictim, non-triggered),

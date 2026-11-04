@@ -61,8 +61,8 @@
 --   go:FindNearestCreature (lua_objects.go, chromaggus precedent) finds
 --   the trigger at the crystal's own coords. The DoAction leg is
 --   inlined (no DoAction bridge): trigger self-casts a random
---   weakness, gated on not IsCasting (constant-false in Go, so the
---   gate is vacuous here). The instance GetBossState(IN_PROGRESS)
+--   weakness, gated on not IsCasting (live CastingUntil window,
+--   lua_creature_events.go:1950 — the gate is live, not vacuous). The instance GetBossState(IN_PROGRESS)
 --   guard is approximated by ossirian IsInCombat (non-combat covers
 --   pre-pull, post-wipe reset, and dead states); nil ossirian also
 --   returns false. SetLootState(GO_ACTIVATED 2) stays unconditional

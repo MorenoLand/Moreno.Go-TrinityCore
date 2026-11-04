@@ -238,6 +238,12 @@ end
 -- C++ EVENT_CARRION_SWARM: DoCastAOE(52720), non-triggered, self-cast
 -- (kazrogal/illidan DoCastAOE precedent); init 5s -> repeat 6s.
 local function onCarrionSwarm(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "carrionswarm", 500, function()
+            onCarrionSwarm(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CARRION_SWARM)
     schedule(guid, "carrionswarm", 6000, function()
         onCarrionSwarm(creature, guid)
@@ -251,6 +257,12 @@ end
 -- {8s,12s} unconditional (C++ Repeat sits outside the if/else; nil
 -- target -> victim cast).
 local function onMindBlast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mindblast", 500, function()
+            onMindBlast(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayer(creature, 100, true)
     if target then
         creature:CastSpell(target, SPELL_MIND_BLAST)
@@ -268,6 +280,12 @@ end
 -- C++ EVENT_VAMPIRIC_TOUCH: DoCastSelf(52723), non-triggered;
 -- init 4s -> repeat 30s.
 local function onVampiricTouch(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "vampirictouch", 500, function()
+            onVampiricTouch(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_VAMPIRIC_TOUCH)
     schedule(guid, "vampirictouch", 30000, function()
         onVampiricTouch(creature, guid)
@@ -296,6 +314,12 @@ end
 -- skip-first (playerOnly defaults false); init {17s,21s} ->
 -- repeat {10s,15s} unconditional (nil target -> victim cast).
 local function onSleep(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sleep", 500, function()
+            onSleep(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatUnit(creature, 100, true)
     if target then
         creature:CastSpell(target, SPELL_SLEEP)

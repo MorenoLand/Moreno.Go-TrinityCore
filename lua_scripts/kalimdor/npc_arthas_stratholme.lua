@@ -38,9 +38,11 @@
 --   - Exorcism 52445: _exorcismCooldown urand(7,14)s in the ctor; on
 --     expiry SelectTarget(Random, 0) with no range cap -> DoCast, then
 --     re-arm urand(7,14)s. The C++ "still casting -> _exorcismCooldown =
---     0 (retry next tick)" leg has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (the aeonus
---     casting-gate case) — the pump retries next tick anyway, which
---     matches. The no-range-cap SelectTarget(Random, 0) draws the
+--     0 (retry next tick)" leg is PORTED (npc_arthas.cpp:899):
+--     creature:IsCasting() is live (lua_creature_events.go:1950
+--     CastingUntil window); while casting the pump sets exorcism = 0
+--     and retries next 1s tick, casting nothing, consuming no re-arm.
+--     The no-range-cap SelectTarget(Random, 0) draws the
 --     threat list (UnitAI.h:172-174), any unit, offset 0, no distance
 --     filter (Oct-25 CoS strip idiom); nil target -> no cast, retry
 --     next pump (C++ leaves the cooldown unset, retrying next tick).
@@ -125,8 +127,8 @@ end
 -- expiry -> DoCast(SelectTarget(Random, 0), 52445), then re-arm
 -- urand(7,14)s. 1s per-GUID pump (sironas convention); C++'s per-tick
 -- checks make this an approximation (like old_hillsbrad). The C++
--- "still casting -> retry next tick" leg has no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
--- (aeonus case) — the pump's next tick is the retry.
+--   "still casting -> retry next tick" leg is PORTED (npc_arthas.cpp:899):
+--   while IsCasting the pump sets exorcism = 0 and retries next 1s tick.
 local function startCombatPump(creature, guid)
     local exorcism = math.random(7, 14)
     pumps[guid] = CreateLuaEvent(function()
@@ -137,12 +139,16 @@ local function startCombatPump(creature, guid)
         end
         exorcism = exorcism - 1
         if exorcism <= 0 then
-            local target = randomThreatUnit(creature)
-            if target then
-                creature:CastSpell(target, SPELL_EXORCISM)
-                exorcism = math.random(7, 14)
+            if creature:IsCasting() then
+                exorcism = 0 -- C++ UpdateAICombat (npc_arthas.cpp:899): still casting -> _exorcismCooldown = 0, retry next tick; no cast, no re-arm
             else
-                exorcism = 0 -- C++ leaves the cooldown unset on nil target; retry next tick
+                local target = randomThreatUnit(creature)
+                if target then
+                    creature:CastSpell(target, SPELL_EXORCISM)
+                    exorcism = math.random(7, 14)
+                else
+                    exorcism = 0 -- C++ leaves the cooldown unset on nil target; retry next tick
+                end
             end
         end
     end, 1000, 0)

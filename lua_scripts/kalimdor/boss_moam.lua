@@ -13,8 +13,9 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
--- The C++ commented-out HasUnitState(UNIT_STATE_CASTING) gate has no
--- casting-state bridge in the Lua API (aeonus precedent — unmodeled).
+-- The C++ HasUnitState(UNIT_STATE_CASTING) gate is commented out
+-- (boss_moam.cpp:137), so no gate exists to port; the casting-state
+-- read itself is live now (creature:IsCasting, lua_creature_events.go:1950).
 -- Ported arms (the self-contained in-combat legs):
 -- - Engage: schedule stone phase at 90s (C++ Reset's
 --   ScheduleEvent(EVENT_STONE_PHASE, 90s)); no Talk in C++
