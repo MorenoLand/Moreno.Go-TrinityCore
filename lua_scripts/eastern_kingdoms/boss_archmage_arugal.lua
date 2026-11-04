@@ -24,7 +24,9 @@
 -- NUM_TELEPORT_SPELLS = 3; SAY_AGGRO = 1 / SAY_TRANSFORM = 2 /
 -- SAY_SLAY = 3.
 -- Ported arms (C++ JustEngagedWith + UpdateAI + KilledUnit):
--- - SAY_AGGRO: Talk(1) on OnEnterCombat.
+-- - SAY_AGGRO: Talk(1) on OnEnterCombat, preceded by the BossAI base
+--   arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
+--   (shadowfang_keep.cpp:255 base call first).
 -- - EVENT_CURSE: 7s init -> 15s re-arm; DoCast(random target, 7621)
 --   with SelectTarget(Random, 1, 30.0f, true). The C++ offset-1 leg is
 --   ported: the threat list's first (top-threat) entry is skipped
@@ -197,6 +199,8 @@ end
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; shadowfang_keep.cpp:255 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; shadowfang_keep.cpp:255 base call first)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "curse", 7000, function() onCurse(creature, guid) end)
     schedule(guid, "teleport", 15000, function() onTeleport(creature, guid) end)

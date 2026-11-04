@@ -20,8 +20,9 @@
 -- (deadmines.h), 1min TEMPSUMMON_CORPSE_TIMED_DESPAWN; health latches at
 -- 66/33/25%; guards-called latch at 50%.
 -- Ported arms:
--- - JustEngagedWith's Talk(SAY_AGGRO) -> creature:Talk(0) on
---   OnEnterCombat (1) (maiden convention); the summons.DoZoneInCombat()
+-- - JustEngagedWith (boss_vancleef.cpp:66-71): BossAI base arms
+--   PORTED — SetCombatPulseDelay(5) + me-form DoZoneInCombat before
+--   Talk(SAY_AGGRO) on OnEnterCombat (1); the summons.DoZoneInCombat()
 --   leg strands on the unbridged summon surface (dark-rider precedent).
 -- - KilledUnit's Talk(SAY_KILL) with the TYPEID_PLAYER gate ->
 --   OnTargetDied (3) with a victim:GetObjectType() == "Player" gate (illidan convention).
@@ -179,6 +180,8 @@ end
 local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     initState(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_vancleef.cpp:68 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_vancleef.cpp:68 base call first)
     creature:Talk(SAY_AGGRO)
 end
 

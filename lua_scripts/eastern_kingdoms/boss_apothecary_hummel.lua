@@ -314,6 +314,13 @@ local function onQuestReward(event, player, creature, quest)
 end
 
 local function onEnterCombat(event, creature)
+    -- Inherited BossAI::JustEngagedWith arms (no override in
+    -- boss_apothecary_hummel.cpp; kelthuzad precedent):
+    -- SetCombatPulseDelay(5) (ScriptedCreature.cpp:540) +
+    -- me-form DoZoneInCombat (ScriptedCreature.cpp:542), before the
+    -- intro machine's startEvent (C++ engage precedes UpdateAI ticks).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     startEvent(creature)
 end
 
