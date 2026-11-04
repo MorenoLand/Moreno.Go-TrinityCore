@@ -61,6 +61,13 @@
 -- DoCast(me, Transform Back 55299) non-triggered self-cast +
 -- SetPhase(PHASE_TROLL); _phaseCounter = 0 unconditional at the end.
 -- Reset — DoCastAOE(Hearth Beam Visual 54988, triggered) (event 23; :98).
+-- Cast-state gates PORTED: gal_darah has no UpdateAI override, so
+-- BossAI::UpdateAI (ScriptedCreature.cpp:571-586) pre-loop + in-loop
+-- CASTING returns apply to all 7 timer arms above (stampede /
+-- whirling / stomp / impaling / puncture / enrage / transform) — each
+-- tick defers 500ms while casting, no repeat re-arm (mal_ganis
+-- idiom); non-UpdateAI arms (JustEngaged / JustDied / SpellHit /
+-- KilledUnit / Reset) ungated per C++.
 -- Unmodeled (no bridges — documented, not wired):
 -- EVENT_STAMPEDE's rhino-spirit summon leg (JustSummoned
 -- NPC_RHINO_SPIRIT 29791 -> Stampede Spirit 55221/55219 self-casts +
@@ -176,6 +183,15 @@ end
 -- C++ EVENT_STAMPEDE (PHASE_TROLL; :202-:205): Talk(SAY_SUMMON_RHINO) +
 -- DoCastAOE(SPELL_STAMPEDE) non-triggered, 10s init / 15s re-arm.
 local function stampedeTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "stampede", 500, function()
+            stampedeTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_SUMMON_RHINO)
     creature:CastSpell(creature, SPELL_STAMPEDE)
     schedule(guid, "stampede", 15000, function()
@@ -187,6 +203,15 @@ end
 -- DoCastVictim(SPELL_WHIRLING_SLASH) non-triggered, 21s init / 21s re-arm;
 -- _phaseCounter++ unconditional; EVENT_TRANSFORM at 5s once >= 2.
 local function whirlingTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "whirling", 500, function()
+            whirlingTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_WHIRLING_SLASH)
     local st = phaseState[guid]
     if st then
@@ -205,6 +230,15 @@ end
 -- C++ EVENT_STOMP (PHASE_RHINO; :194-:196): DoCastAOE(SPELL_STOMP)
 -- non-triggered, 25s init / 20s re-arm.
 local function stompTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            stompTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_STOMP)
     schedule(guid, "stomp", 20000, function()
         stompTick(creature, guid)
@@ -216,6 +250,15 @@ end
 -- null-guarded; 21s init / 31s re-arm unconditional; _phaseCounter++
 -- unconditional; EVENT_TRANSFORM at 5s once >= 2.
 local function impalingTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "impaling", 500, function()
+            impalingTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 60)
     if target then
         creature:CastSpell(target, SPELL_IMPALING_CHARGE)
@@ -237,6 +280,15 @@ end
 -- C++ EVENT_PUNCTURE (PHASE_RHINO; :198-:200):
 -- DoCastVictim(SPELL_PUNCTURE) non-triggered, 10s init / 8s re-arm.
 local function punctureTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "puncture", 500, function()
+            punctureTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_PUNCTURE)
     schedule(guid, "puncture", 8000, function()
         punctureTick(creature, guid)
@@ -246,6 +298,15 @@ end
 -- C++ EVENT_ENRAGE (PHASE_RHINO; :213-:215): DoCastSelf(SPELL_ENRAGE)
 -- non-triggered, 15s init / 20s re-arm.
 local function enrageTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function()
+            enrageTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ENRAGE)
     schedule(guid, "enrage", 20000, function()
         enrageTick(creature, guid)
@@ -301,6 +362,15 @@ end
 transformTick = function(creature, guid)
     local st = phaseState[guid]
     if not st then
+        return
+    end
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "transform", 500, function()
+            transformTick(creature, guid)
+        end)
         return
     end
     if st.phase == PHASE_TROLL then

@@ -29,6 +29,13 @@
 -- skip rides threat-ordered GetAITargets[2..] (UnitAI.h:214-280 —
 -- skip precedes the player/dist filter), fixed 2026-10-25 from the
 -- GetPlayersInWorld pool, which could pick threat-less players).
+-- Cast-state gates PORTED: eck has no UpdateAI override, so
+-- BossAI::UpdateAI (ScriptedCreature.cpp:571-586) pre-loop + in-loop
+-- CASTING returns apply to all 4 timer arms above (bite / spit /
+-- spring / berserk) — each tick defers 500ms while casting, no
+-- repeat re-arm (mal_ganis idiom); the berserk latch is set only
+-- when the berserk tick actually fires, and DamageTaken is not an
+-- UpdateAI arm so it stays ungated per C++.
 -- Unmodeled (no bridges — documented, not wired):
 -- The BossAI ctor Talk(EMOTE_SPAWN 0) fires at AI construction
 -- (first grid spawn); the only OnSpawn hook on the Go Lua surface
@@ -85,6 +92,15 @@ end
 
 -- C++ EVENT_BITE: DoCastVictim; 5s init, rescheduled 8-12s.
 local function biteTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "bite", 500, function()
+            biteTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ECK_BITE)
     schedule(guid, "bite", math.random(8000, 12000), function()
         biteTick(creature, guid)
@@ -93,6 +109,15 @@ end
 
 -- C++ EVENT_SPIT: DoCastVictim; 10s init, rescheduled 6-14s.
 local function spitTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "spit", 500, function()
+            spitTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_ECK_SPIT)
     schedule(guid, "spit", math.random(6000, 14000), function()
         spitTick(creature, guid)
@@ -102,6 +127,15 @@ end
 -- C++ EVENT_BERSERK: DoCastSelf; 60-90s init, single fire; sets
 -- _berserk = true.
 local function berserkTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ECK_BERSERK)
     berserkLatched[guid] = true
     local per = timers[guid]
@@ -149,6 +183,15 @@ end
 -- (C++ SelectTarget returns null when the threat list is empty past
 -- the offset).
 local function springTick(creature, guid)
+    -- BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578/:584,
+    -- no UpdateAI override): while casting the event stays queued —
+    -- 500ms defer, no repeat re-arm (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "spring", 500, function()
+            springTick(creature, guid)
+        end)
+        return
+    end
     local target = randomSpringTarget(creature, 35)
     if target then
         creature:CastSpell(target, ({SPELL_ECK_SPRING_1, SPELL_ECK_SPRING_2})[math.random(1, 2)])

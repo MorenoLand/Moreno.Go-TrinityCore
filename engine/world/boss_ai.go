@@ -16531,6 +16531,8 @@ func init() {
 	// JustEngagedWith Talk(SAY_AGGRO 0); KilledUnit Talk(SAY_SLAY 1)
 	// player-gated (event 3 — nalorakk precedent); JustDied
 	// Talk(SAY_DEATH 2) + DoCastSelf(Clear Puncture 60022, triggered).
+	// Cast-state gate PORTED: no UpdateAI override, so BossAI::UpdateAI
+	// base gates apply — all 7 timer ticks defer 500ms while casting.
 	// The whole combat rotation is phase-gated through
 	// events.SetPhase/IsInPhase (no phase bridge — moorabi precedent)
 	// and the phase flips are driven by unbridged arms, so
@@ -16552,7 +16554,9 @@ func init() {
 	// JustEngagedWith-scheduled EVENT_BITE (DoCastVictim 55813, 5s
 	// init, 8-12s repeat), EVENT_SPIT (DoCastVictim 55814, 10s init,
 	// 6-14s repeat), EVENT_BERSERK (DoCastSelf 55816, 60-90s init,
-	// single fire). Documented in the lua file, not wired: the ctor
+	// single fire). Cast-state gate PORTED: no UpdateAI override, so
+	// BossAI::UpdateAI base gates apply — all 4 timer ticks defer 500ms
+	// while casting. Documented in the lua file, not wired: the ctor
 	// Talk(EMOTE_SPAWN 0) (no faithful Lua trigger — event 5 fires
 	// respawn-path only, phase_hunter precedent), the DamageTaken
 	// HealthBelowPctDamaged(20) early-berserk leg (no health-pct
@@ -16568,7 +16572,10 @@ func init() {
 	// JustEngagedWith Talk(SAY_AGGRO 0); EVENT_SUMMON_SWARMER
 	// (DoCastSelf 56119 + 33% Talk(SAY_EGG_SAC 3), 10s init, 10s
 	// repeat); KilledUnit Talk(SAY_SLAY 1) player-gated; JustDied
-	// Talk(SAY_DEATH 2). Documented in the lua file, not wired:
+	// Talk(SAY_DEATH 2). Cast-state VERIFIED gate-less: the boss
+	// UpdateAI override is a plain while loop with zero CASTING checks;
+	// the nerubian sub-AI pre-loop gate stays entry-blocked.
+	// Documented in the lua file, not wired:
 	// EVENT_PLAGUE (random-target SelectTarget bridge absent —
 	// cairne/kazzak precedent), the IsHeroic-gated EVENT_RAGE and
 	// EVENT_CHECK_ENRAGE (no difficulty bridge — kelidan breaker

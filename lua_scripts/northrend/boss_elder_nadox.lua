@@ -48,6 +48,11 @@
 -- KilledUnit Talk(SAY_SLAY 1) player-gated (event 3,
 -- victim:GetObjectType()=="Player" — nalorakk precedent); JustDied
 -- Talk(SAY_DEATH 2) (event 4).
+-- Cast-state VERIFIED gate-less: the boss's own UpdateAI override
+-- (boss_elder_nadox.cpp:122-166) is a plain while loop with zero
+-- HasUnitState hits — BossAI base gates never run — so all 4 ported
+-- timer arms (swarmer / plague / rage / enrage-check) fire ungated;
+-- the DamageTaken guardian leg is not an UpdateAI event arm either.
 -- Unmodeled (no bridges — documented, not wired):
 -- SummonedCreatureDies(NPC_AHNKAHAR_GUARDIAN 30176) -> GuardianDied latch:
 -- the event-21 dispatch IS bridged now (2026-10-24), but GuardianDied's
@@ -62,8 +67,9 @@
 -- registration. The EVENT_SPRINT arm is PORT-PATTERN-READY but
 -- entry-blocked: Reset-scheduled 13s init, DoCastSelf(Sprint 56354),
 -- 20s repeat (the exact slad_ran RegisterCreatureEvent 1/23 pattern);
--- the HasUnitState(UNIT_STATE_CASTING) guard has no bridge but the
--- tick shape is unaffected.
+-- the pre-loop CASTING guard (boss_elder_nadox.cpp:204) IS bridgeable
+-- via creature:IsCasting() (lua_creature_events.go:1950) but the arm
+-- stays entry-blocked, so no port; the tick shape is unaffected.
 -- spell_ahn_kahet_swarm (56159 — aura-stack bookkeeping around
 -- SPELL_SWARM_BUFF 56281) — no SpellScript binding bridge on the
 -- Lua surface (razelikh precedent) — documented-only.
