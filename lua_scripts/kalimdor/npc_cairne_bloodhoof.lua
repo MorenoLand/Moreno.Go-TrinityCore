@@ -27,13 +27,28 @@
 --   cancelled on leave combat / died / reset (timers tick only in
 --   combat in the C++).
 -- - DoMeleeAttackIfReady — engine-driven in Go (ouro precedent).
--- Documented-only (no bridges):
--- - OnGossipHello/OnGossipSelect (quest 925 "A Sacred Burial"
---   hoofprint menu): gossip IS bridged (RegisterCreatureGossipEvent
---   — the "no gossip bridge" claim was stale; live at
---   engine/world/gossip.go:129/369); the arm stays documented-only
---   on the quest machine (GetQuestRewardStatus) + player->CastSpell
---   23123 (no player-self-cast bridge).
+-- Ported gossip arms (quest 925 "A Sacred Burial" hoofprint menu,
+-- zone_thunder_bluff.cpp OnGossipHello/OnGossipSelect):
+-- - OnGossipHello (event 1): quest 925 INCOMPLETE (GetQuestStatus
+--   bridged) -> GossipMenuAddItem(chat icon, hoofprint text, sender
+--   MAIN 1, action INFO 3) + GossipSendMenu(7013) (taretha idiom);
+--   otherwise return false so the default menu path serves quest
+--   items (prepareCreatureGossip). PrepareQuestMenu has no Lua
+--   method, so the C++ merge of quest items + menu 7013 cannot be
+--   reproduced: 925 players get menu 7013 + the item but no quest
+--   items, non-925 players get the default menu instead of menu
+--   7013 text (documented deviation). The old documented-only
+--   rationale (GetQuestRewardStatus + no player-self-cast bridge)
+--   is retracted: hello uses only GetQuestStatus, and
+--   player:CastSpell is bridged (lua_player.go).
+-- - OnGossipSelect (event 2): ClearGossipMenu first (C++ order);
+--   action INFO 3 -> player self-cast 23123 (non-triggered, C++
+--   CastSpell(player, 23123, false)) + GossipSendMenu(7014);
+--   other actions -> nothing further (C++ returns true after the
+--   clear). Select args are (event, player, creature, sender,
+--   action, code, listID); the C++ action comes from
+--   GetGossipOptionAction(gossipListId), which Go forwards as
+--   item.Action.
 
 local SPELL_BERSERKER_CHARGE = 16636
 local SPELL_CLEAVE = 16044
@@ -134,3 +149,34 @@ RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+local QUEST_A_SACRED_BURIAL = 925
+local QUEST_STATUS_INCOMPLETE = 3
+local GOSSIP_ICON_CHAT = 0
+local GOSSIP_SENDER_MAIN = 1
+local GOSSIP_SENDER_INFO = 3
+local GOSSIP_MENU_HELLO = 7013
+local GOSSIP_MENU_SELECT = 7014
+local SPELL_HOOFPRINT = 23123
+local GOSSIP_HCB = "I know this is rather silly but a young ward who is a bit shy would like your hoofprint."
+
+local function onGossipHello(event, player, creature)
+    if player:GetQuestStatus(QUEST_A_SACRED_BURIAL) == QUEST_STATUS_INCOMPLETE then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_HCB, GOSSIP_SENDER_MAIN, GOSSIP_SENDER_INFO)
+        player:GossipSendMenu(GOSSIP_MENU_HELLO, creature)
+    else
+        return false
+    end
+end
+
+local function onGossipSelect(event, player, creature, sender, action)
+    player:GossipClearMenu()
+    if action == GOSSIP_SENDER_INFO then
+        player:CastSpell(player, SPELL_HOOFPRINT)
+        player:GossipSendMenu(GOSSIP_MENU_SELECT, creature)
+    end
+    return true
+end
+
+RegisterCreatureGossipEvent(ENTRY, 1, onGossipHello)
+RegisterCreatureGossipEvent(ENTRY, 2, onGossipSelect)

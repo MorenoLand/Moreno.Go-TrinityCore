@@ -12800,7 +12800,7 @@ func init() {
 	// mechanar.h carries no NPC_ constant; DATA_GATEWATCHER_
 	// IRON_HAND = 1 is instance-side): stream of machine fluid
 	// 35311 TRIGGERED DoCastVictim 55s/randtime(35s,50s),
-	// jackhammer 35326 TRIGGERED DoCastVictim 45s/30s with
+	// jackhammer 35327 TRIGGERED DoCastVictim 45s/30s with
 	// EMOTE_HAMMER + 50% SAY_HAMMER talks, shadow power 35322
 	// non-triggered DoCast(me) self-cast 25s/randtime(20s,28s)
 	// (the H_SPELL_* heroic variants are never fired by the
@@ -13180,8 +13180,11 @@ func init() {
 	// JustEngagedWith PlayDirectSound (5884); entry 3057
 	// wowhead-verified — see
 	// lua_scripts/kalimdor/npc_cairne_bloodhoof.lua. The quest-925
-	// hoofprint gossip menu awaits the gossip bridge — documented
-	// only.
+	// hoofprint gossip menu is ported there too: hello offers the
+	// hoofprint item + menu 7013 when quest 925 is INCOMPLETE
+	// (else false, so the default menu serves quest items —
+	// PrepareQuestMenu has no Lua method), select action INFO 3
+	// self-casts 23123 + menu 7014.
 	RegisterLuaBoss("npc_cairne_bloodhoof", 3057)
 	// boss_azuregos (Azshara world boss): combat rotation only —
 	// mark-of-frost aura 23184 triggered self-cast on engage; mana storm
