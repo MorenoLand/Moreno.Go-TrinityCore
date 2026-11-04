@@ -16264,7 +16264,8 @@ func init() {
 	// Reset self-buff refresh (Thrash 8876 / Virulent Poison 12254
 	// under HasAura guards), Web Spray 12252 (random player in 100y,
 	// recast-if-no-aura gate, {6s,8s}), Curse of Tuten'kash 12255
-	// (self-cast, {15s,25s}); UNIT_STATE_CASTING gates unmodeled.
+	// (self-cast, {15s,25s}); UpdateAI CASTING gates PORTED (500ms
+	// IsCasting defer on both timer arms, own pre-loop + in-loop gates).
 	RegisterLuaBoss("boss_tuten_kash", 7355)
 
 	// npc_tomb_creature: Razorfen Downs, entries 7349 (Tomb Fiend) and
@@ -16288,8 +16289,9 @@ func init() {
 	// 14s -> loop; cleared on engage like C++ events.Reset());
 	// JustEngagedWith Talk 3 + Fireball 12466 (victim-cast, init
 	// 100ms, {2400ms,3800ms}) + Fire Nova 12470 (self-cast,
-	// {8s,12s} -> {11s,16s}); UNIT_STATE_CASTING gates and BossAI
-	// instance legs unmodeled.
+	// {8s,12s} -> {11s,16s}); UpdateAI CASTING gates PORTED for the
+	// combat arms (500ms IsCasting defer; OOC talk loop ungated per C++),
+	// BossAI instance legs unmodeled.
 	RegisterLuaBoss("boss_mordresh_fire_eye", 7357)
 
 	// boss_glutton: Razorfen Downs, entry 8567 tauri-cited

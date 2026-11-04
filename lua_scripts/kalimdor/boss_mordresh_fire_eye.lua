@@ -34,8 +34,10 @@
 -- Unmodeled (documented-only, no bridges):
 -- - BossAI ctor / _Reset / _JustDied instance bookkeeping — no
 --   instance bridge (standing).
--- - The C++ UNIT_STATE_CASTING early-return gates in UpdateAI —
---   mal_ganis precedent, no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
+-- - The C++ UNIT_STATE_CASTING gates are PORTED for the combat arms
+--   only (onFireball / onFireNova, 500ms IsCasting defer, own pre-loop
+--   + in-loop gates); the OOC talk loop is UNGATED in C++ (the
+--   !UpdateVictim() branch has no CASTING check) and stays ungated.
 
 local ENTRY = 7357
 
@@ -114,6 +116,12 @@ end
 -- C++ EVENT_FIREBALL: DoCastVictim(12466), non-triggered; init
 -- 100ms -> repeat {2400ms,3800ms} unconditional.
 local function onFireball(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function()
+            onFireball(creature, guid)
+        end)
+        return
+    end
     castVictim(creature, SPELL_FIREBALL)
     schedule(guid, "fireball", math.random(2400, 3800), function()
         onFireball(creature, guid)
@@ -123,6 +131,12 @@ end
 -- C++ EVENT_FIRE_NOVA: DoCast(me, 12470) self-cast, non-triggered;
 -- init {8s,12s} -> repeat {11s,16s} unconditional.
 local function onFireNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "firenova", 500, function()
+            onFireNova(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FIRE_NOVA)
     schedule(guid, "firenova", math.random(11000, 16000), function()
         onFireNova(creature, guid)

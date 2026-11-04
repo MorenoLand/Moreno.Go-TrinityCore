@@ -103,8 +103,12 @@
 --   instance / achievement / BossAI-Reset bridges; the unconditional
 --   SetReactState(REACT_AGGRESSIVE) leg (:158) IS ported in onReset,
 --   and Reset re-rolls MovePoint = urand(0, 5) for the deep-breath row.
--- - The C++ HasUnitState(UNIT_STATE_CASTING) early-return gates in
---   UpdateAI — no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (mal_ganis precedent).
+-- - The C++ HasUnitState(UNIT_STATE_CASTING) gates are PORTED: every
+--   timer arm defers 500ms while creature:IsCasting() (phase START/END
+--   pre-loop + in-loop gates :346/:386, phase BREATH pre-loop +
+--   in-loop gates :412/:478; the MOVEMENT arm's own C++ 500ms CASTING
+--   re-arm :434 is the same defer). The 65% / 40% phase latches sit
+--   before events.Update in C++ and stay ungated.
 -- - The instance script itself (AddSC_instance_onyxias_lair: boss
 --   boundaries, OnCreatureCreate GUID bind, OnGameObjectCreate /
 --   OnGameObjectRemove floor-trap tracking, FloorEruption BFS,
@@ -199,6 +203,12 @@ end
 -- C++ EVENT_FLAME_BREATH: DoCastVictim(18435), non-triggered;
 -- init {10s,20s} -> repeat {10s,20s} unconditional.
 local function onFlameBreath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamebreath", 500, function()
+            onFlameBreath(creature, guid)
+        end)
+        return
+    end
     castVictim(creature, SPELL_FLAME_BREATH)
     schedule(guid, "flamebreath", math.random(10000, 20000), function()
         onFlameBreath(creature, guid)
@@ -209,6 +219,12 @@ end
 -- (kazrogal/illidan DoCastAOE precedent); init {15s,20s} ->
 -- repeat {15s,20s}.
 local function onTailSweep(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "tailsweep", 500, function()
+            onTailSweep(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TAIL_SWEEP)
     schedule(guid, "tailsweep", math.random(15000, 20000), function()
         onTailSweep(creature, guid)
@@ -218,6 +234,12 @@ end
 -- C++ EVENT_CLEAVE: DoCastVictim(68868), non-triggered;
 -- init {2s,5s} -> repeat {2s,5s} unconditional.
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function()
+            onCleave(creature, guid)
+        end)
+        return
+    end
     castVictim(creature, SPELL_CLEAVE)
     schedule(guid, "cleave", math.random(2000, 5000), function()
         onCleave(creature, guid)
@@ -228,6 +250,12 @@ end
 -- init {10s,20s} -> repeat {15s,30s} unconditional (C++ :380 re-arms
 -- (15s,30s) in both phase 1 and phase 3).
 local function onWingBuffet(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wingbuffet", 500, function()
+            onWingBuffet(creature, guid)
+        end)
+        return
+    end
     castVictim(creature, SPELL_WING_BUFFET)
     schedule(guid, "wingbuffet", math.random(15000, 30000), function()
         onWingBuffet(creature, guid)
@@ -256,6 +284,12 @@ local function randomAliveThreatUnit(creature)
     return nil
 end
 local function onWhelpSpawn(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whelpspawn", 500, function()
+            onWhelpSpawn(creature, guid)
+        end)
+        return
+    end
     local st = stateFor(guid)
     for i = 1, 2 do
         local loc = SPAWN_LOCATIONS[i]
@@ -289,6 +323,12 @@ end
 -- setActive has no bridge — Go dynamic motions are tracked by
 -- default); 15s first, 30s repeats.
 local function onLairGuard(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lairguard", 500, function()
+            onLairGuard(creature, guid)
+        end)
+        return
+    end
     local loc = SPAWN_LOCATIONS[3]
     local summoned = creature:SummonCreature(NPC_LAIRGUARD,
         loc[1], loc[2], loc[3], loc[4], 4, 0)
@@ -310,6 +350,12 @@ end
 -- repeats. A nil movePoint (the SetNextRandomPoint off-by-one,
 -- below) skips the cast but still re-arms, C++-exact.
 local function onDeepBreath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "deepbreath", 500, function()
+            onDeepBreath(creature, guid)
+        end)
+        return
+    end
     local st = stateFor(guid)
     if st.movePoint ~= nil then
         creature:Talk(EMOTE_BREATH)
@@ -326,6 +372,12 @@ end
 -- units of any type (volazj idiom); IsMoving is always false in the
 -- Lua model, so the 1s moving re-arm never applies.
 local function onFireball(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function()
+            onFireball(creature, guid)
+        end)
+        return
+    end
     local candidates = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:IsAlive() then
@@ -353,6 +405,12 @@ local function onMovement(creature, guid)
     if st.movePoint == nil then
         return
     end
+    if creature:IsCasting() then
+        schedule(guid, "movement", 500, function()
+            onMovement(creature, guid)
+        end)
+        return
+    end
     local iTemp = math.random(0, 7)
     if iTemp >= st.movePoint then
         iTemp = iTemp + 1
@@ -372,6 +430,12 @@ end
 -- re-schedules 5s, and the Lua model has no travel leg, so the
 -- landing value (5s first, 30s repeats) is the effective cadence.
 local function onBellowingRoar(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bellowingroar", 500, function()
+            onBellowingRoar(creature, guid)
+        end)
+        return
+    end
     castVictim(creature, SPELL_BELLOWING_ROAR)
     schedule(guid, "bellowingroar", 30000, function()
         onBellowingRoar(creature, guid)

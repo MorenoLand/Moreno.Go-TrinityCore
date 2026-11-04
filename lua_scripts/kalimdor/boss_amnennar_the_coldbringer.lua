@@ -39,8 +39,12 @@
 -- Unmodeled (documented-only, no bridges):
 -- - BossAI ctor / _Reset / _JustDied instance bookkeeping — no
 --   instance bridge (standing).
--- - The C++ UNIT_STATE_CASTING early-return gates in UpdateAI —
---   mal_ganis precedent, no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
+-- - The C++ UNIT_STATE_CASTING gates are PORTED (own pre-loop +
+--   in-loop gates: the 3 timer arms defer 500ms while IsCasting, and
+--   the health pump skips latch evaluation while IsCasting — the
+--   latches sit after the event loop in C++ UpdateAI, so a CASTING
+--   return skips them that tick; KilledUnit Talk is a separate
+--   callback and stays ungated per C++).
 
 local ENTRY = 7358
 
@@ -89,6 +93,12 @@ end
 -- C++ EVENT_AMNENNARSWRATH: DoCastVictim(13009), non-triggered;
 -- init 8s -> repeat 12s unconditional.
 local function onAmnennarsWrath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wrath", 500, function()
+            onAmnennarsWrath(creature, guid)
+        end)
+        return
+    end
     castVictim(creature, SPELL_AMNENNARSWRATH)
     schedule(guid, "wrath", 12000, function()
         onAmnennarsWrath(creature, guid)
@@ -98,6 +108,12 @@ end
 -- C++ EVENT_FROSTBOLT: DoCastVictim(15530), non-triggered; init
 -- 1s -> repeat 8s unconditional.
 local function onFrostbolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function()
+            onFrostbolt(creature, guid)
+        end)
+        return
+    end
     castVictim(creature, SPELL_FROSTBOLT)
     schedule(guid, "frostbolt", 8000, function()
         onFrostbolt(creature, guid)
@@ -107,6 +123,12 @@ end
 -- C++ EVENT_FROST_NOVA: DoCast(me, 15531) self-cast,
 -- non-triggered; init {10s,15s} -> repeat 15s unconditional.
 local function onFrostNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostnova", 500, function()
+            onFrostNova(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROST_NOVA)
     schedule(guid, "frostnova", 15000, function()
         onFrostNova(creature, guid)
@@ -118,6 +140,12 @@ end
 -- 12642 arms are wired via castVictim (the cast bridge falls back to
 -- the current victim, i.e. DoCastVictim).
 local function healthPump(creature, guid, st)
+    if creature:IsCasting() then
+        schedule(guid, "pump", 1000, function()
+            healthPump(creature, guid, st)
+        end)
+        return
+    end
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
         schedule(guid, "pump", 1000, function()

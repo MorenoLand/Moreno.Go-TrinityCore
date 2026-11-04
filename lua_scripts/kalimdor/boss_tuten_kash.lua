@@ -22,8 +22,10 @@
 -- OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. The C++ HasUnitState(UNIT_STATE_CASTING)
--- early-return gates have no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) (mal_ganis
--- precedent).
+-- early-return gates PORTED (own pre-loop + in-loop CASTING returns,
+-- boss_tuten_kash.cpp; each timer arm defers 500ms while
+-- creature:IsCasting(), no re-arm consumed — meathook precedent; the
+-- stale constant-false claim is retracted, IsCasting is live).
 -- Ported arms:
 -- - Reset (C++ Reset, event 23): refresh the two self-buff auras —
 --   DoCast(me, SPELL_THRASH 8876) and DoCast(me, SPELL_VIRULENT_POISON
@@ -47,8 +49,8 @@
 -- - The BossAI ctor legs (DATA_TUTEN_KASH = 0 boss-data registration,
 --   _Reset / _JustDied instance-state bookkeeping) — no instance /
 --   BossAI-Reset bridges (standing).
--- - The C++ UpdateAI me->HasUnitState(UNIT_STATE_CASTING) gates —
---   mal_ganis precedent, no live casting-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget).
+-- - The C++ UpdateAI CASTING gates are PORTED in onWebSpray /
+--   onCurseOfTutenkash below (500ms IsCasting defer).
 
 local ENTRY = 7355
 
@@ -106,6 +108,12 @@ end
 -- eligible; threat-list pick via GetAITargets (creature HasAura is
 -- bridged, lua_objects.go:228).
 local function onWebSpray(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "webspray", 500, function()
+            onWebSpray(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTargetInRange(creature, 100)
     if target and not target:HasAura(SPELL_WEB_SPRAY) then
         creature:CastSpell(target, SPELL_WEB_SPRAY)
@@ -118,6 +126,12 @@ end
 -- C++ EVENT_CURSE_OF_TUTENKASH: DoCast(me, 12255) self-cast,
 -- non-triggered; repeat {15s,25s} unconditional.
 local function onCurseOfTutenkash(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse", 500, function()
+            onCurseOfTutenkash(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CURSE_OF_TUTENKASH)
     schedule(guid, "curse", math.random(15000, 25000), function()
         onCurseOfTutenkash(creature, guid)
