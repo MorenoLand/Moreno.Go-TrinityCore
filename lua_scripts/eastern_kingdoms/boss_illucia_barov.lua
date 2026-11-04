@@ -19,9 +19,9 @@
 -- nothing, re-arm 12s.
 --
 -- Documented-unmodeled (no bridges): UpdateAI UNIT_STATE_CASTING queue
--- + post-event gates + BossAI::JustEngagedWith +
--- DATA_LADYILLUCIABAROV=2 bookkeeping (scholomance.h:32) (luaBossAI
--- shim). SPELL_DOMINATE 7645 is declared in C++ but marked UNUSED and
+-- + post-event gates + DATA_LADYILLUCIABAROV=2 bookkeeping
+-- (scholomance.h:32) (luaBossAI shim; base pulse/zone arms PORTED).
+-- SPELL_DOMINATE 7645 is declared in C++ but marked UNUSED and
 -- never cast.
 
 local ENTRY_ILLUCIA = 10502
@@ -117,10 +117,12 @@ local function onFear(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith (shim) + the four events.
+-- C++ JustEngagedWith: BossAI::JustEngagedWith pulse/zone arms PORTED + the four events.
 local function illuciaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_illucia_barov.cpp:56 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_illucia_barov.cpp:56 base call first)
     schedule(guid, "curseOfAgony", 18000, function()
         onCurseOfAgony(creature, guid)
     end)

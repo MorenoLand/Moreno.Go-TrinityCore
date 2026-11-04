@@ -36,8 +36,8 @@
 -- MoveRandom, SetData phase, closes that room's gate) — no SpellScript
 -- bridge (nightbane precedent), so the shadow-portal cast is a lone
 -- triggered spell with no room effect. UpdateAI UNIT_STATE_CASTING queue +
--- post-event gates + BossAI::JustEngagedWith + DATA_DARKMASTERGANDLING
--- bookkeeping have no bridges (luaBossAI shim).
+-- post-event gates + DATA_DARKMASTERGANDLING bookkeeping have no
+-- bridges (luaBossAI shim; base pulse/zone arms PORTED in handler).
 
 local ENTRY_GANDLING = 1853
 local GO_GATE_GANDLING = 177374 -- scholomance.h:49
@@ -139,11 +139,13 @@ local function onShadowPortal(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith (shim) + the four events +
+-- C++ JustEngagedWith: BossAI::JustEngagedWith pulse/zone arms PORTED + the four events +
 -- GO_GATE_GANDLING SetGoState(READY) PORTED below (FindNearestGameObject).
 local function gandlingEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_darkmaster_gandling.cpp:81 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_darkmaster_gandling.cpp:81 base call first)
     schedule(guid, "arcaneMissiles", 4500, function()
         onArcaneMissiles(creature, guid)
     end)

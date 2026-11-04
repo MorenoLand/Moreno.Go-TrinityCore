@@ -20,8 +20,8 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally (jeklik convention). Documented-only (no
--- bridges): BossAI::JustEngagedWith + DATA_LOREKEEPERPOLKELT=4
--- bookkeeping (scholomance.h:34) (luaBossAI shim).
+-- bridges): DATA_LOREKEEPERPOLKELT=4 bookkeeping (scholomance.h:34)
+-- (luaBossAI shim; base pulse/zone arms PORTED in handler).
 
 local ENTRY_LOREKEEPER_POLKELT = 10901
 
@@ -107,6 +107,8 @@ end
 local function lorekeeperPolkeltEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     lorekeeperPolkeltResetState(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_lorekeeper_polkelt.cpp:55 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_lorekeeper_polkelt.cpp:55 base call first)
     schedule(guid, "volatile_infection", 38000, function()
         onVolatileInfection(creature, guid)
     end)

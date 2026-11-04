@@ -205,6 +205,8 @@ local function onEnterCombat(_, creature)
     schedule(guid, "curseoftongues", 53000, function() onCurseOfTongues(creature, guid) end)
     schedule(guid, "dominatemind", math.random(34000, 48000), function() onDominateMind(creature, guid) end)
     schedule(guid, "transform", 20000, function() onTransform(creature, guid) end)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_kirtonos_the_herald.cpp:100 base call last)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_kirtonos_the_herald.cpp:100 base call last)
 end
 
 local function onCombatEnd(_, creature)

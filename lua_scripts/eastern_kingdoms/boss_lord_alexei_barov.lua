@@ -21,8 +21,8 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
 -- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
 -- fire unconditionally. Documented-only (no bridges):
--- BossAI::JustEngagedWith + DATA_LORDALEXEIBAROV=3 bookkeeping
--- (scholomance.h:33) (luaBossAI shim).
+-- DATA_LORDALEXEIBAROV=3 bookkeeping (scholomance.h:33) (luaBossAI
+-- shim; base pulse/zone arms PORTED in handler).
 
 local ENTRY_LORD_ALEXEI_BAROV = 10504
 
@@ -118,6 +118,8 @@ end
 -- C++ JustEngagedWith: schedule immolate 7s / veil of shadow 15s.
 local function lordAlexeiBarovEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_lord_alexei_barov.cpp:60 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_lord_alexei_barov.cpp:60 base call first)
     schedule(guid, "immolate", 7000, function()
         onImmolate(creature, guid)
     end)

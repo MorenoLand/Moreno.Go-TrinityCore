@@ -28,8 +28,8 @@
 -- Initialize() on Reset).
 --
 -- Documented-unmodeled (no bridges): UpdateAI UNIT_STATE_CASTING
--- queue + post-event gates + BossAI::JustEngagedWith +
--- DATA_INSTRUCTORMALICIA=1 bookkeeping (scholomance.h:31)
+-- queue + post-event gates + DATA_INSTRUCTORMALICIA=1 bookkeeping
+-- (scholomance.h:31) (base pulse/zone arms PORTED in handler)
 -- (luaBossAI shim).
 
 local ENTRY_MALICIA = 10505
@@ -159,10 +159,12 @@ local function onHealingTouch(creature, guid)
     end
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith (shim) + the five events.
+-- C++ JustEngagedWith: BossAI::JustEngagedWith pulse/zone arms PORTED + the five events.
 local function maliciaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_instructor_malicia.cpp:75 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_instructor_malicia.cpp:75 base call first)
     schedule(guid, "callOfGraves", 4000, function()
         onCallOfGraves(creature, guid)
     end)

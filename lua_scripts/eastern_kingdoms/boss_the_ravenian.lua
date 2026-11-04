@@ -18,8 +18,8 @@
 -- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention).
 -- Documented-only (no bridges): GetScholomanceAI template instance
--- validation (luaBossAI shim); BossAI::JustEngagedWith + DATA_THERAVENIAN=5
--- bookkeeping (scholomance.h:35) via luaBossAI shim.
+-- validation (luaBossAI shim); DATA_THERAVENIAN=5 bookkeeping
+-- (scholomance.h:35) via luaBossAI shim (base pulse/zone arms PORTED).
 
 local ENTRY_THE_RAVENIAN = 10507
 
@@ -92,6 +92,8 @@ end
 local function theRavenianEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     theRavenianResetState(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_the_ravenian.cpp:55 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_the_ravenian.cpp:55 base call first)
     schedule(guid, "trample", 24000, function()
         onTrample(creature, guid)
     end)

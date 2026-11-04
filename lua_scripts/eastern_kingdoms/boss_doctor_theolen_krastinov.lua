@@ -19,8 +19,8 @@
 -- re-arm 120s.
 --
 -- Documented-unmodeled (no bridges): UpdateAI UNIT_STATE_CASTING queue
--- + post-event gates + BossAI::JustEngagedWith +
--- DATA_DOCTORTHEOLENKRASTINOV=0 bookkeeping (scholomance.h:30)
+-- + post-event gates + DATA_DOCTORTHEOLENKRASTINOV=0 bookkeeping
+-- (scholomance.h:30) (base pulse/zone arms PORTED in handler)
 -- (luaBossAI shim).
 
 local ENTRY_KRASTINOV = 11261
@@ -87,10 +87,12 @@ local function onFrenzy(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith (shim) + the three events.
+-- C++ JustEngagedWith: BossAI::JustEngagedWith pulse/zone arms PORTED + the three events.
 local function krastinovEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_doctor_theolen_krastinov.cpp:58 base call first)
+    creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_doctor_theolen_krastinov.cpp:58 base call first)
     schedule(guid, "rend", 8000, function()
         onRend(creature, guid)
     end)
