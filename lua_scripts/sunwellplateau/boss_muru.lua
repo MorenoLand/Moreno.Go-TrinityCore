@@ -233,6 +233,8 @@ local function muruEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     muruState[guid] = { phase = 1, hasEnraged = false }
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:CastSpell(creature, SPELL_OPEN_PORTAL_PERIODIC, true)
     creature:CastSpell(creature, SPELL_DARKNESS_PERIODIC, true)
     creature:CastSpell(creature, SPELL_NEGATIVE_ENERGY_PERIODIC, true)
@@ -343,6 +345,8 @@ local function entropiusDarkness(creature, guid)
 end
 
 local function entropiusEnterCombat(event, creature)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "negativeenergy", 2000, function()
