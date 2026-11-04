@@ -218,6 +218,10 @@ local function taldaramEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     clearEmbrace(guid)
+    -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "bloodthirst", 10000, function()
         bloodthirstTick(creature, guid)

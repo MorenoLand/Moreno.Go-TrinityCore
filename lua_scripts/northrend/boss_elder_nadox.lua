@@ -187,6 +187,10 @@ local function nadoxEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     nadoxState[guid] = { guardianSummoned = false }
+    -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "swarmer", 10000, function()
         swarmerTick(creature, guid)

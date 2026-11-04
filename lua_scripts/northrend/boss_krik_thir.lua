@@ -246,6 +246,10 @@ local function krikThirEnterCombat(event, creature, target)
     schedule(guid, "swarm", 5000, function()
         swarmTick(creature)
     end)
+    -- BossAI::JustEngagedWith base arms, handler tail (C++ base call
+    -- is last, after the schedules); react-state/summons.DoZone legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
 end
 
 local function krikThirLeaveCombat(event, creature)

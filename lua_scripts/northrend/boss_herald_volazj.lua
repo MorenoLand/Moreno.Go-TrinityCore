@@ -234,6 +234,10 @@ end
 local function volazjEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
+    -- instance/setActive/achievement legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "mindflay", 8000, function()
         mindFlayTick(creature, guid)

@@ -182,6 +182,10 @@ local SAY_DEATH = 2
 local SPELL_SUBMERGE = 53421 -- boss_anubarak.cpp:34
 
 local function anubarakEnterCombat(event, creature, target)
+    -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
+    -- instance door/achievement/phase legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
 end
 

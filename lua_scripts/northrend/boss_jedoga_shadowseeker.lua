@@ -182,6 +182,10 @@ local function jedogaEnterCombat(event, creature, target)
     -- phase legs of the same handler stay documented-only.
     creature:RemoveAura(SPELL_SPHERE_VISUAL)
     creature:RemoveAura(SPELL_RANDOM_LIGHTNING_VISUAL)
+    -- BossAI::JustEngagedWith base arms, after the aura strips and the
+    -- (unported) SummonCreatureGroup leg, before Talk (C++ arm order).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
 end
 

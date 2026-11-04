@@ -386,6 +386,10 @@ end
 local function amanitarEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     -- C++ JustEngagedWith (boss_amanitar.cpp:96-101): EVENT_ROOT
     -- 5-9s, EVENT_BASH 10-14s, EVENT_BOLT 15-20s, EVENT_MINI
     -- 12-18s, EVENT_SPAWN 1s (PORTED — one-shot, above),
