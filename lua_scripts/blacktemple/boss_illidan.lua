@@ -82,9 +82,12 @@
 -- ACTION_START_OUTRO: triggered self-cast death 41218 +
 -- SetFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE) (ported 2026-10-20),
 -- Talk(SAY_ILLIDAN_DEFEATED) 4s, triggered self-cast quiet
--- suicide 3617 18s later;
--- the maiev DoAction(ACTION_START_OUTRO) arm has no
--- cross-creature bridge — skipped. 90% health
+-- suicide 3617 18s later + the maiev DoAction(
+-- ACTION_START_OUTRO) arm, PORTED in illidanDamageTaken via
+-- FindNearestCreature (reset/react/attack-stop/facing/Talks);
+-- the akama DoAction(ACTION_START_OUTRO) arm is PORTED in the
+-- quiet-suicide callback (react/attack-stop/reset; the spline
+-- walk-back chain stays out). 90% health
 -- & phase<PHASE_MINIONS: Talk(SAY_ILLIDAN_MINION) + the 30s
 -- minions-weave cycle; the weave fires empty — the SummonCreature
 -- bridge is live, but each illidari elite is paired with a summon-
@@ -174,11 +177,14 @@
 -- intro arc (gossip chains, spline movement, door channel 41268,
 -- door fail 41271, spirit summons 23410/23411, teleport 41077),
 -- the minions-phase arms (EVENT_AKAMA_MINIONS chain driven by
--- illidan's DoAction(ACTION_START_MINIONS)) and the outro arms
+-- illidan's DoAction(ACTION_START_MINIONS)) stay out (the Talk /
+-- emote / passive legs would strand Akama passive without the
+-- spline teleport that follows them) and the outro arms
 -- (DoAction(ACTION_START_OUTRO) from illidan's quiet-suicide)
--- have no movement/instance/summon/DoAction bridges (stale 'no gossip
--- bridge' retracted — bridged) —
--- unmodeled; the CanAIAttack illidan gate has no attack-gating
+-- are PART-PORTED in the quiet-suicide callback (react passive +
+-- AttackStop + timer reset; the MOVE_BACK spline chain stays out;
+-- stale 'no gossip bridge' retracted — bridged);
+-- the CanAIAttack illidan gate has no attack-gating
 -- bridge. OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel timers.
 -- Flame of Azzinoth (22997): OnReset: triggered self-cast flame
 -- tear 39856 (C++ DoCastSelf(..., true); the boss-state despawn
@@ -215,8 +221,9 @@
 -- (summon-driven Talk(SAY_MAIEV_SHADOWSONG_APPEAR)); the
 -- JustAppeared facing leg (SetFacingToObject illidan) IS ported
 -- via ev5 below (FindNearestCreature + atan2 idiom). The outro
--- chain (ACTION_START_OUTRO from illidan) and the teleport-
--- despawn have no DoAction/despawn bridges — unmodeled;
+-- chain (ACTION_START_OUTRO from illidan) IS PORTED in
+-- illidanDamageTaken (reset/react/attack-stop/facing/Talks);
+-- the teleport-despawn has no despawn bridge — unmodeled;
 -- the akama/maiev/outro emote arms stay out behind true blockers
 -- (outro/maiev/door choreography: cross-creature DoAction, summon,
 -- instance and phase machines); PerformEmote itself is bridged
@@ -327,6 +334,8 @@ local SOUND_ARRIVAL_WALK_HERO_1 = 11728 -- boss_illidan.cpp:88
 local SAY_MAIEV_TAUNT = 0
 local SAY_MAIEV_TRAP = 3
 local SAY_MAIEV_DOWN = 4
+local SAY_MAIEV_FINISHED = 5
+local SAY_MAIEV_OUTRO = 6
 
 -- Illidan spells.
 local SPELL_FLAME_CRASH = 40832
@@ -941,8 +950,6 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                 -- 41218 + SetFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE)
                 -- (ported 2026-10-20), defeated Talk 4s, quiet
                 -- suicide 3617 18s later.
-                -- The maiev DoAction(ACTION_START_OUTRO) arm has
-                -- no cross-creature bridge.
                 creature:AttackStop()
                 creature:CastSpell(creature, SPELL_DEATH, true)
                 -- boss_illidan.cpp:641 — C++ arm order after SPELL_DEATH
@@ -955,8 +962,50 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                     schedule(guid, "quietSuicide", 18000, function()
                         creature:CastSpell(creature,
                             SPELL_QUIET_SUICIDE, true)
+                        -- C++ EVENT_QUIET_SUICIDE (:1023): akama
+                        -- DoAction(ACTION_START_OUTRO) — react
+                        -- passive + AttackStop + events reset in
+                        -- C++ arm order, via FindNearestCreature
+                        -- (23089, 100.0), nil-guarded like the C++
+                        -- if; the MOVE_BACK spline chain (and its
+                        -- MOVE_TO_ILLIDAN/LIGHT_TEXT/FINAL_SALUTE/
+                        -- DESPAWN followers, all MovementInform /
+                        -- spline legs) and the summons DespawnIf
+                        -- leg (no summons-list bridge) stay out.
+                        local akama = creature:FindNearestCreature(
+                            ENTRY_AKAMA, 100.0)
+                        if akama then
+                            akama:SetReactState(0)
+                            akama:AttackStop()
+                            cancelTimers(akama:GetGUID())
+                        end
                     end)
                 end)
+                -- C++ maiev DoAction(ACTION_START_OUTRO) (:733,
+                -- boss_illidan.cpp:1646-1657): events reset +
+                -- react passive + AttackStop + facing + Talk
+                -- FINISHED + OUTRO_TEXT Talk 28s, in C++ arm
+                -- order; SetPhase(PHASE_OUTRO) stays out (maiev
+                -- phase machine unmodeled). Cross-creature leg
+                -- inlined via FindNearestCreature (halazzi lynx
+                -- precedent), nil-guarded like the C++ if.
+                local maiev = creature:FindNearestCreature(
+                    ENTRY_MAIEV, 100.0)
+                if maiev then
+                    cancelTimers(maiev:GetGUID())
+                    maiev:SetReactState(0)
+                    maiev:AttackStop()
+                    local face = math.atan2(creature:GetY()
+                        - maiev:GetY(), creature:GetX()
+                        - maiev:GetX())
+                    if face < 0 then face = face + 2 * math.pi end
+                    maiev:SetFacingTo(face)
+                    maiev:Talk(SAY_MAIEV_FINISHED)
+                    schedule(maiev:GetGUID(), "outroText",
+                        28000, function()
+                            maiev:Talk(SAY_MAIEV_OUTRO)
+                        end)
+                end
             end
         end
         return false, damage
