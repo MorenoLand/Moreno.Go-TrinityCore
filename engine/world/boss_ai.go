@@ -14621,8 +14621,9 @@ func init() {
 	// immolate 20294 (triggered, random alive player within 100yd
 	// incl. victim, 7s->12s) and veil of shadow 17820 (triggered
 	// DoCastVictim, 15s->20s), nil pick casts nothing but keeps the
-	// schedule; zero Talk lines. Documented-only (no bridges):
-	// UpdateAI UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
+	// schedule; zero Talk lines. UpdateAI UNIT_STATE_CASTING gates
+	// PORTED (500ms IsCasting defer per arm, broodkeeper precedent).
+	// Documented-only (no bridges): BossAI::JustEngagedWith +
 	// DATA_LORDALEXEIBAROV=3 bookkeeping (luaBossAI shim).
 	RegisterLuaBoss("boss_lord_alexei_barov", 10504)
 	// boss_lorekeeper_polkelt.cpp (EK loader AddSC_boss_lorekeeperpolkelt
@@ -14635,8 +14636,9 @@ func init() {
 	// dark plague 18270 (triggered DoCastVictim, 8s->8s) / corrosive
 	// acid 23313 (triggered DoCastVictim, 45s->25s) / noxious catalyst
 	// 18151 (triggered DoCastVictim, 35s->38s), nil-victim keeps
-	// schedule; zero Talk lines. Documented-only (no bridges):
-	// UpdateAI UNIT_STATE_CASTING gates, BossAI::JustEngagedWith +
+	// schedule; zero Talk lines. UpdateAI UNIT_STATE_CASTING gates
+	// PORTED (500ms IsCasting defer per arm, broodkeeper precedent).
+	// Documented-only (no bridges): BossAI::JustEngagedWith +
 	// DATA_LOREKEEPERPOLKELT=4 bookkeeping (luaBossAI shim).
 	RegisterLuaBoss("boss_lorekeeper_polkelt", 10901)
 	// boss_ras_frostwhisper.cpp (EK loader AddSC_boss_rasfrost decl
@@ -14652,8 +14654,9 @@ func init() {
 	// freeze 18763 18s->24s / fear 26070 45s->30s (all non-triggered
 	// DoCastVictim, nil-victim keeps schedule); EVENT_FROSTVOLLEY is
 	// never scheduled in C++ (dead code) — not modeled; zero Talk
-	// lines. Documented-only (no bridges): UpdateAI UNIT_STATE_CASTING
-	// gates, GetScholomanceAI template validation (luaBossAI shim).
+	// lines. UpdateAI UNIT_STATE_CASTING gates PORTED (500ms IsCasting
+	// defer per arm, broodkeeper precedent). Documented-only (no
+	// bridges): GetScholomanceAI template validation (luaBossAI shim).
 	RegisterLuaBoss("boss_boss_ras_frostwhisper", 10508)
 	// boss_the_ravenian.cpp (EK loader AddSC_boss_theravenian decl
 	// :119 / call :297, Scholomance block continues; script name
@@ -14664,8 +14667,9 @@ func init() {
 	// 15550 24s->10s / cleave 20691 15s->7s / sundering cleave
 	// 25174 40s->20s / knock away 10101 32s->12s (all triggered
 	// DoCastVictim -> GetVictim + CastSpell(victim, spell, true),
-	// nil-victim keeps schedule); zero Talk lines. Documented-only
-	// (no bridges): UpdateAI UNIT_STATE_CASTING gates,
+	// nil-victim keeps schedule); zero Talk lines. UpdateAI
+	// UNIT_STATE_CASTING gates PORTED (500ms IsCasting defer in the
+	// shared victim-timer helper). Documented-only (no bridges):
 	// GetScholomanceAI template validation (luaBossAI shim),
 	// BossAI::JustEngagedWith + DATA_THERAVENIAN=5 bookkeeping.
 	RegisterLuaBoss("boss_the_ravenian", 10507)
@@ -14680,8 +14684,10 @@ func init() {
 	// EVENT_FRENZY arm: non-triggered self-cast frenzy 8269 +
 	// Talk(EMOTE_FRENZY 0) + 24s re-arm; SPELL_FLAMESTRIKE 18399
 	// declared but unused in C++ (dead enum entry, not modeled).
-	// Documented-only (no bridges): UpdateAI UNIT_STATE_CASTING
-	// gates, GetScholomanceAI template validation (luaBossAI shim),
+	// UpdateAI UNIT_STATE_CASTING gates PORTED (500ms IsCasting defer
+	// in the self-timer helper + frenzy-chain links; DamageTaken latch
+	// ungated per C++). Documented-only (no bridges):
+	// GetScholomanceAI template validation (luaBossAI shim),
 	// BossAI::JustEngagedWith bookkeeping (Vectus is not one of the
 	// 8 tracked encounters — no DATA_ constant in scholomance.h).
 	RegisterLuaBoss("boss_vectus", 10432)

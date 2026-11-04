@@ -18,9 +18,7 @@
 -- nil-victim/nil-pick ticks cast nothing but keep the schedule
 -- (moroes/maiden + janalai/kelris convention). Zero Talk lines in
 -- C++ (no _SAY enum).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
--- fire unconditionally. Documented-only (no bridges):
+-- UpdateAI UNIT_STATE_CASTING queue gate PORTED: each arm defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950; broodkeeper precedent) — no re-arm consumed; due events stay queued in C++ until the first post-cast tick. Documented-only (no bridges):
 -- DATA_LORDALEXEIBAROV=3 bookkeeping (scholomance.h:33) (luaBossAI
 -- shim; base pulse/zone arms PORTED in handler).
 
@@ -74,6 +72,12 @@ end
 -- C++ EVENT_IMMOLATE: triggered DoCast(random target, 20294);
 -- re-arm 12s. Nil pick casts nothing.
 local function onImmolate(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "immolate", 500, function()
+            onImmolate(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_IMMOLATE, true)
@@ -87,6 +91,12 @@ end
 -- 20s. Nil-victim tick casts nothing but keeps the schedule
 -- (moroes/maiden triggered convention).
 local function onVeilOfShadow(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "veil_of_shadow", 500, function()
+            onVeilOfShadow(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_VEIL_OF_SHADOW, true)

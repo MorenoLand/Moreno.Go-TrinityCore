@@ -22,9 +22,7 @@
 -- nothing but keep the schedule. EVENT_FROSTVOLLEY (8398) has a
 -- switch case but is never scheduled in C++ — dead code, not
 -- modeled. Zero Talk lines in C++ (no _SAY enum).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- timers fire unconditionally (jeklik convention).
+-- UpdateAI UNIT_STATE_CASTING queue gate PORTED: each UpdateAI arm defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950; broodkeeper precedent) — no re-arm consumed; due events stay queued in C++ until the first post-cast tick. (Reset self-cast + dead EVENT_FROSTVOLLEY ungated per C++: neither is UpdateAI.)
 -- Documented-only (no bridges): GetScholomanceAI template instance
 -- validation (luaBossAI shim); no SetData bookkeeping in C++.
 
@@ -79,6 +77,12 @@ end
 
 -- C++ EVENT_ICE_ARMOR: non-triggered DoCast(me, 18100); re-arm 3min.
 local function onIceArmor(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "ice_armor", 500, function()
+            onIceArmor(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ICE_ARMOR)
     schedule(guid, "ice_armor", 180000, function()
         onIceArmor(creature, guid)
@@ -88,6 +92,12 @@ end
 -- C++ EVENT_FROSTBOLT: non-triggered DoCast(random target, 21369);
 -- re-arm 8s. Nil pick casts nothing.
 local function onFrostbolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function()
+            onFrostbolt(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_FROSTBOLT)
@@ -100,6 +110,12 @@ end
 -- C++ EVENT_CHILL_NOVA: non-triggered DoCastVictim(18099); re-arm
 -- 14s. Nil-victim tick casts nothing but keeps the schedule.
 local function onChillNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chill_nova", 500, function()
+            onChillNova(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CHILL_NOVA)
@@ -112,6 +128,12 @@ end
 -- C++ EVENT_FREEZE: non-triggered DoCastVictim(18763); re-arm 24s.
 -- Nil-victim tick casts nothing but keeps the schedule.
 local function onFreeze(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "freeze", 500, function()
+            onFreeze(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FREEZE)
@@ -124,6 +146,12 @@ end
 -- C++ EVENT_FEAR: non-triggered DoCastVictim(26070); re-arm 30s.
 -- Nil-victim tick casts nothing but keeps the schedule.
 local function onFear(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fear", 500, function()
+            onFear(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FEAR)

@@ -17,9 +17,7 @@
 -- GetVictim + CastSpell(victim, spell, true); nil-victim ticks cast
 -- nothing but keep the schedule (moroes/maiden convention). Zero
 -- Talk lines in C++ (no _SAY enum).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate and
--- the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers
--- fire unconditionally (jeklik convention). Documented-only (no
+-- UpdateAI UNIT_STATE_CASTING queue gate PORTED: each arm defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950; broodkeeper precedent) — no re-arm consumed; due events stay queued in C++ until the first post-cast tick. Documented-only (no
 -- bridges): DATA_LOREKEEPERPOLKELT=4 bookkeeping (scholomance.h:34)
 -- (luaBossAI shim; base pulse/zone arms PORTED in handler).
 
@@ -57,6 +55,12 @@ end
 -- C++ EVENT_VOLATILEINFECTION: triggered DoCastVictim(24928);
 -- re-arm 32s.
 local function onVolatileInfection(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "volatile_infection", 500, function()
+            onVolatileInfection(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_VOLATILE_INFECTION, true)
@@ -68,6 +72,12 @@ end
 
 -- C++ EVENT_DARKPLAGUE: triggered DoCastVictim(18270); re-arm 8s.
 local function onDarkPlague(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "dark_plague", 500, function()
+            onDarkPlague(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_DARK_PLAGUE, true)
@@ -79,6 +89,12 @@ end
 
 -- C++ EVENT_CORROSIVEACID: triggered DoCastVictim(23313); re-arm 25s.
 local function onCorrosiveAcid(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "corrosive_acid", 500, function()
+            onCorrosiveAcid(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CORROSIVE_ACID, true)
@@ -91,6 +107,12 @@ end
 -- C++ EVENT_NOXIOUSCATALYST: triggered DoCastVictim(18151); re-arm
 -- 38s.
 local function onNoxiousCatalyst(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "noxious_catalyst", 500, function()
+            onNoxiousCatalyst(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_NOXIOUS_CATALYST, true)

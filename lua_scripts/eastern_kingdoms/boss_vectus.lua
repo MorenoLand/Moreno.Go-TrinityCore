@@ -25,9 +25,7 @@
 -- non-triggered self-cast frenzy 8269 + Talk(EMOTE_FRENZY 0),
 -- re-arm 24s per chain link. Zero Talk lines beyond
 -- EMOTE_FRENZY.
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue
--- gate and the post-event casting check have no UNIT_STATE
--- bridge — timers fire unconditionally (jeklik convention).
+-- UpdateAI UNIT_STATE_CASTING queue gate PORTED: fire-shield/blast-wave arms defer 500ms via the self-timer helper and each frenzy-chain link defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950; broodkeeper precedent) — no re-arm or chain consumed; due events stay queued in C++ until the first post-cast tick. (DamageTaken frenzy latch ungated per C++: not UpdateAI.)
 -- Documented-only (no bridges): GetScholomanceAI template
 -- instance validation (luaBossAI shim); BossAI::JustEngagedWith
 -- bookkeeping via luaBossAI shim (Vectus is not one of the 8
@@ -71,6 +69,12 @@ end
 
 -- C++ DoCast(me, spell) non-triggered -> creature:CastSpell(creature, spell).
 local function onSelfTimer(creature, guid, spell, key, rearm, fn)
+    if creature:IsCasting() then
+        schedule(guid, key, 500, function()
+            fn(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, spell)
     schedule(guid, key, rearm, function()
         fn(creature, guid)
@@ -83,7 +87,7 @@ end
 -- (EventMap.h multimap store), so each DamageTaken chain below
 -- keeps its own 24s cadence; a keyed schedule() here would
 -- collapse all chains into one (the RescheduleEvent semantic).
-local function scheduleFrenzyChain(creature, guid)
+local function scheduleFrenzyChain(creature, guid, delay)
     local id
     id = CreateLuaEvent(function()
         local chains = frenzyChains[guid]
@@ -95,10 +99,14 @@ local function scheduleFrenzyChain(creature, guid)
                 end
             end
         end
+        if creature:IsCasting() then
+            scheduleFrenzyChain(creature, guid, 500)
+            return
+        end
         creature:CastSpell(creature, SPELL_FRENZY)
         creature:Talk(EMOTE_FRENZY)
         scheduleFrenzyChain(creature, guid)
-    end, 24000)
+    end, delay or 24000)
     local chains = frenzyChains[guid]
     if not chains then
         chains = {}

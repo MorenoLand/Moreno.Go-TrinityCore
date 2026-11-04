@@ -14,9 +14,7 @@
 -- DoCastVictim -> GetVictim + CastSpell(victim, spell, true),
 -- moroes/maiden convention; nil-victim ticks cast nothing but
 -- keep the schedule). Zero Talk lines in C++ (no _SAY enum).
--- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate
--- and the post-event casting check have no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- timers fire unconditionally (jeklik convention).
+-- UpdateAI UNIT_STATE_CASTING queue gate PORTED: the shared victim-timer helper defers 500ms while creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950; broodkeeper precedent), covering all four arms — no re-arm consumed; due events stay queued in C++ until the first post-cast tick.
 -- Documented-only (no bridges): GetScholomanceAI template instance
 -- validation (luaBossAI shim); DATA_THERAVENIAN=5 bookkeeping
 -- (scholomance.h:35) via luaBossAI shim (base pulse/zone arms PORTED).
@@ -56,6 +54,12 @@ end
 -- nil-victim tick casts nothing but keeps the schedule (moroes/maiden
 -- convention).
 local function onVictimTimer(creature, guid, spell, key, rearm, fn)
+    if creature:IsCasting() then
+        schedule(guid, key, 500, function()
+            fn(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, spell, true)
