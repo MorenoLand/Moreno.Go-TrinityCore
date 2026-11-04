@@ -17564,6 +17564,9 @@ func init() {
 	// queue), go_sapphiron_birth (no GO bridge), the three SpellScript/
 	// AuraScript loaders (no binding bridge — razelikh precedent),
 	// achievement_the_hundred_club (no achievement bridge).
+	// CASTING gates: NONE — boss UpdateAI :273 plain phase event loop,
+	// zero HasUnitState hits; blizzard scheduler-only UpdateAI :454;
+	// Lua pumps stay gateless, C++-exact.
 	RegisterLuaBoss("boss_sapphiron", 15989)
 
 	// Grand Widow Faerlina (15953, Naxxramas) —
@@ -17586,6 +17589,9 @@ func init() {
 	// (no achievement bridge), npc_faerlina_add (ScriptedAI — no
 	// RegisterLuaBoss surface; DoCastVictim ADD_FIREBALL 54095 in
 	// the bridgeable-but-entry-blocked queue).
+	// CASTING gates PORTED (500ms IsCasting defer): boss UpdateAI
+	// pre-loop :156 + in-loop :185 gates cover poison/fire/frenzy;
+	// add UpdateAI :239 gate covers unported fireball only.
 	RegisterLuaBoss("boss_faerlina", 15953)
 
 	// Maexxna (15952, Naxxramas, Arachnid Quarter) —
@@ -17608,6 +17614,9 @@ func init() {
 	// 16486) + SetGUID/MoveJump web-wrap machine + npc_webwrap
 	// (no summon / cross-AI SetGUID / MoveJump / MoveSplineInit
 	// bridges); Reset aura-removal (no instance bridge).
+	// CASTING gates: NONE — boss UpdateAI :123 plain while loop, zero
+	// HasUnitState hits; 30% frenzy latch sits pre-events, ungated;
+	// Lua pumps stay gateless, C++-exact.
 	RegisterLuaBoss("boss_maexxna", 15952)
 
 	// boss_heigan: Naxxramas boss script, entry 15936 (naxxramas.h
@@ -17644,6 +17653,8 @@ func init() {
 	// achievement-criteria bridge — snakes precedent). The Naxxramas
 	// block stays OPEN (13/17 closed; next: gothik — lua exists,
 	// audit-and-close).
+	// CASTING gates: NONE — boss UpdateAI :144 plain while loop, zero
+	// HasUnitState hits; Lua pumps stay gateless, C++-exact.
 	RegisterLuaBoss("boss_heigan", 15936)
 
 	// Gothik the Harvester (16060, Naxxramas) — lua_scripts/northrend/boss_gothik.lua.
@@ -17758,6 +17769,9 @@ func init() {
 	// both SpellScripts (mutating-injection remove, poison-cloud
 	// periodic trigger — no SpellScript bridge); BOMBARD_SLIME
 	// 28280 is enum-only in the file.
+	// CASTING gates: NONE — boss UpdateAI :72 plain while loop,
+	// per-case returns (not gates), zero HasUnitState hits; Lua pumps
+	// stay gateless, C++-exact.
 	RegisterLuaBoss("boss_grobbulus", 15931)
 
 	// Loatheb (16011, Naxxramas, Plague Quarter) —
@@ -17779,6 +17793,8 @@ func init() {
 	// instance bookkeeping; achievement_spore_loser criteria
 	// script (no achievement bridge); deathbloom AuraScript
 	// AfterRemove final-damage leg (no SpellScript bridge).
+	// CASTING gates: NONE — boss UpdateAI :95 plain while loop, zero
+	// HasUnitState hits; Lua pumps stay gateless, C++-exact.
 	RegisterLuaBoss("boss_loatheb", 16011)
 
 	// Noth the Plaguebringer (15954, Naxxramas, Plague Quarter) —

@@ -62,6 +62,14 @@
 -- the raid-size-appropriate one); else DoCastSelf(FRENZY 28798)
 -- non-triggered + Talk(EMOTE_FRENZY 5); init Minutes(1)+randtime(0s,20s)
 -- (:106), repeat same.
+-- CASTING gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis
+-- idiom): boss UpdateAI pre-loop :156 + in-loop :185 gates cover
+-- EVENT_POISON / EVENT_FIRE / EVENT_FRENZY — defer precedes the
+-- aura read (poison), target pick (fire), and aura-duration read
+-- (frenzy); the event stays queued, no re-arm consumed. Talk /
+-- SpellHit arms ungated per C++ (separate hooks). npc_faerlina_add
+-- UpdateAI :239 pre-loop gate covers its unported fireball tick
+-- only — add stays entry-blocked, no Lua bearer.
 -- SpellHit — PORTED (re-sweep 2026-10-17: the "SpellHit never
 -- fires in the Lua surface (SpellHit ruling)" claim is RETRACTED —
 -- CREATURE_EVENT_ON_HIT_BY_SPELL (event 14) IS live and fires when a
@@ -165,6 +173,12 @@ end
 -- !me->HasAura(SPELL_WIDOWS_EMBRACE_HELPER), randtime(10s,15s) init
 -- (:104) / randtime(8s,15s) repeat.
 local function poisonTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "poison", 500, function()
+            poisonTick(creature, guid)
+        end)
+        return
+    end
     if not creature:HasAura(SPELL_WIDOWS_EMBRACE_10)
         and not creature:HasAura(SPELL_WIDOWS_EMBRACE_25) then
         creature:CastSpell(creature, SPELL_POISON_BOLT_VOLLEY)
@@ -180,6 +194,12 @@ end
 -- (outside the target-null if); init randtime(6s,18s). No cast on
 -- an empty pool (C++ SelectTarget null leg).
 local function fireTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fire", 500, function()
+            fireTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_RAIN_OF_FIRE)
@@ -196,6 +216,12 @@ end
 -- Minutes(1)+randtime(0s,20s). Init Minutes(1)+randtime(0s,20s)
 -- (:106). RAID_MODE helper: both IDs checked like the poison arm.
 local function frenzyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            frenzyTick(creature, guid)
+        end)
+        return
+    end
     if creature:HasAura(SPELL_WIDOWS_EMBRACE_10) then
         schedule(guid, "frenzy", creature:GetDuration(SPELL_WIDOWS_EMBRACE_10) + 1, function()
             frenzyTick(creature, guid)
