@@ -347,6 +347,8 @@ local function onEnterCombat(_, creature)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(guid, "fireball", 1, function() onFireball(creature, guid) end)
     schedule(guid, "flame_strike", 44000, function() onFlameStrike(creature, guid) end)
     schedule(guid, "phoenix", 12000, function() onPhoenix(creature, guid) end)

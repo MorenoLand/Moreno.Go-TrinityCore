@@ -192,6 +192,8 @@ local function onEnterCombat(_, creature)
     dischargeStage[guid] = 1
     enraged[guid] = false
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(guid, "chain_lightning", 8000, function() onChainLightning(creature, guid) end)
     schedule(guid, "arcane_shock", 5000, function() onArcaneShock(creature, guid) end)
 end

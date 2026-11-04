@@ -207,6 +207,8 @@ local function onEnterCombat(_, creature)
     cancelTimers(guid)
     drainScheduled[guid] = nil
     creature:Talk(SAY_AGGRO)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(guid, "fel_explosion", 2100, function() onFelExplosion(creature, guid) end)
 end
 
