@@ -27,7 +27,7 @@
 -- boss_baltharus_the_warborn JustDied — Talk(SAY_DEATH 4) (event 4 —
 -- the sjonnir precedent; the _JustDied() instance leg has no instance
 -- bridge and the xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH)
--- cross-AI leg has no cross-AI-DoAction bridge).
+-- cross-AI leg ports in baltharusDied below (sweep + timed Talk chain).
 -- boss_baltharus_the_warborn KilledUnit — Talk(SAY_KILL 2) gated on
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
 -- player-gated variant precedent).
@@ -85,6 +85,21 @@ local SAY_AGGRO = 1
 local SAY_KILL  = 2
 local SAY_CLONE = 3
 local SAY_DEATH = 4
+
+local ENTRY_XERESTRASZA = 40429 -- ruby_sanctum.h:102 NPC_XERESTRASZA
+local SAY_XERESTRASZA_EVENT = 0 -- ruby_sanctum.cpp:29-36
+local SAY_XERESTRASZA_EVENT_1 = 1
+local SAY_XERESTRASZA_EVENT_2 = 2
+local SAY_XERESTRASZA_EVENT_3 = 3
+local SAY_XERESTRASZA_EVENT_4 = 4
+local SAY_XERESTRASZA_EVENT_5 = 5
+local SAY_XERESTRASZA_EVENT_6 = 6
+local SAY_XERESTRASZA_EVENT_7 = 7
+local XERESTRASZA_MOVE_X = 3151.236 -- ruby_sanctum.cpp:56 xerestraszaMovePos
+local XERESTRASZA_MOVE_Y = 379.8733
+local XERESTRASZA_MOVE_Z = 86.31996
+local UNIT_NPC_FLAGS = 82 -- UpdateFields.h:139 (nefarian precedent)
+local UNIT_NPC_FLAG_QUESTGIVER = 0x00000002 -- UnitDefines.h:187
 
 local SPELL_CLEAVE           = 40504
 local SPELL_BLADE_TEMPEST    = 75125
@@ -310,11 +325,40 @@ end
 -- Talk(SAY_DEATH);
 -- if (Creature* xerestrasza = instance->GetCreature(DATA_XERESTRASZA))
 --     xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH) — the sjonnir
--- precedent (the _JustDied() instance leg and the cross-AI DoAction leg
--- have no bridges).
+-- precedent (the _JustDied() instance leg has no bridge; the DoAction
+-- leg ports below via grid sweep + timed Talk chain).
 local function baltharusDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied relay (boss_baltharus_the_warborn.cpp:126-128) ->
+    -- xerestrasza DoAction(ACTION_BALTHARUS_DEATH) (ruby_sanctum.cpp:80-99):
+    -- setActive(true) (no Lua bridge, stays out), SetFarVisible(true),
+    -- Talk(EVENT 0), SetWalk(true), MovePoint(0, xerestraszaMovePos),
+    -- then Talk 1..7 at 16/25/32/42/51/61/69s, the questgiver flag at
+    -- 69s, and SetFarVisible(false) (setActive(false) stays out with
+    -- setActive(true)). Sweep is the instance-lookup twin (rotface
+    -- relayProfessor idiom: first alive match, unique entry, 100yd).
+    for _, xerestrasza in ipairs(creature:GetCreaturesInGrid(ENTRY_XERESTRASZA, 100)) do
+        if xerestrasza:IsAlive() then
+            local xguid = xerestrasza:GetGUID()
+            xerestrasza:SetFarVisible(true)
+            xerestrasza:Talk(SAY_XERESTRASZA_EVENT)
+            xerestrasza:SetWalk(true)
+            xerestrasza:MoveTo(0, XERESTRASZA_MOVE_X, XERESTRASZA_MOVE_Y, XERESTRASZA_MOVE_Z)
+            schedule(xguid, "xere_event_1", 16000, function() xerestrasza:Talk(SAY_XERESTRASZA_EVENT_1) end)
+            schedule(xguid, "xere_event_2", 25000, function() xerestrasza:Talk(SAY_XERESTRASZA_EVENT_2) end)
+            schedule(xguid, "xere_event_3", 32000, function() xerestrasza:Talk(SAY_XERESTRASZA_EVENT_3) end)
+            schedule(xguid, "xere_event_4", 42000, function() xerestrasza:Talk(SAY_XERESTRASZA_EVENT_4) end)
+            schedule(xguid, "xere_event_5", 51000, function() xerestrasza:Talk(SAY_XERESTRASZA_EVENT_5) end)
+            schedule(xguid, "xere_event_6", 61000, function() xerestrasza:Talk(SAY_XERESTRASZA_EVENT_6) end)
+            schedule(xguid, "xere_event_7", 69000, function()
+                xerestrasza:Talk(SAY_XERESTRASZA_EVENT_7)
+                xerestrasza:SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_QUESTGIVER)
+                xerestrasza:SetFarVisible(false)
+            end)
+            break
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 1, baltharusEnterCombat)

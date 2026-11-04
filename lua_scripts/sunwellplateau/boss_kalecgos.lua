@@ -59,10 +59,10 @@
 -- the check timer 1s (C++ events.Reset + Repeat, C++-exact). The
 -- ACTION_START_OUTRO arm (schedules EVENT_OUTRO_START 1s) has no
 -- bearer — it is delivered by sathrovarr's JustDied via cross-
--- creature DoAction, which has no bridge; the outro chain (OUTRO_
--- START/1/2/3, SAY_OUTRO_1/2, gravity/liftoff/MovePoint/faction/
--- RemoveAllAuras/invisible/KillSelf arms) is unmodeled beyond this
--- note. OnDamageTaken(9, pre-damage hook): lethal from anyone but
+-- creature DoAction, which now ports via grid sweep + 1s outro-start
+-- (kalecgosOutroStart below); the OUTRO_1/2/3 movement chain
+-- (SAY_OUTRO_1/2, gravity/liftoff/MovePoint/invisible/KillSelf arms)
+-- stays out. OnDamageTaken(9, pre-damage hook): lethal from anyone but
 -- self -> damage rewritten to 0 (C++ damage = 0, C++-exact).
 -- OnTargetDied(3): player victim + 50% roll -> Talk(SAY_EVIL_SLAY).
 -- OnLeaveCombat(2)/OnReset(23): the EnterEvadeMode instance arms
@@ -148,7 +148,8 @@
 -- me->SetFaction(FACTION_FRIENDLY) :319, is now bridgeable via
 -- creature:SetFaction (engine/world/lua_creature_events.go:2076),
 -- but the chain's bearer is sathrovarr's cross-creature DoAction
--- relay — no bridge — so the chain stays out); the agony
+-- relay — the OUTRO_START combat-stop legs now port via sweep
+-- (kalecgosOutroStart); the movement chain stays out); the agony
 -- NonTankTargetSelector filter collapses to the victim (ported
 -- above); the spectral-blast selector lives in the unmodeled
 -- SpellScript (remove_if polarity, not a SelectTarget pick); the
@@ -163,6 +164,8 @@ local GO_SPECTRAL_RIFT = 187055
 local SAY_EVIL_AGGRO = 0
 local SAY_EVIL_SLAY = 1
 local EMOTE_ENRAGE = 4
+local REACT_PASSIVE = 0 -- midnight/curator precedent
+local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
 local SAY_ARCANE_BUFFET = 6
 
 local SAY_SATH_AGGRO = 0
@@ -362,6 +365,29 @@ end
 
 local function kalecgosReset(event, creature)
     kalecgosResetState(creature:GetGUID())
+end
+
+-- C++ kalecgos DoAction(ACTION_START_OUTRO) (boss_kalecgos.cpp:192-194)
+-- schedules EVENT_OUTRO_START 1s; its handler (:311-322) resets events,
+-- sets PHASE_OUTRO, stops regen, goes passive, interrupts casts, drops
+-- attackers, stops attacks, goes friendly, clears auras, disengages the
+-- encounter frame, and schedules OUTRO_1 3s. The encounter-frame leg
+-- and the OUTRO_1/2/3 movement chain stay out; the combat-stop legs
+-- port here. cancelTimers subsumes the phase reset: every combat timer
+-- in this file runs through schedule(), so cancelling them is the
+-- PHASE_OUTRO gate. Arm order is C++-exact.
+local function kalecgosOutroStart(creature, guid)
+    if creature:IsDead() then
+        return
+    end
+    cancelTimers(guid)
+    creature:SetRegenerateHealth(false)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:InterruptNonMeleeSpells(true)
+    creature:RemoveAllAttackers()
+    creature:AttackStop()
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:RemoveAllAuras()
 end
 
 -- C++ DamageTaken: lethal from anyone but self -> damage = 0
@@ -593,10 +619,23 @@ local function sathrovarrDied(event, creature, killer)
     -- sathrovarrResetState below; Talk(SAY_SATH_DEATH) above;
     -- DoRemoveAurasDueToSpellOnPlayers(SPELL_SPECTRAL_REALM_AURA 46021,
     -- true, true) — the player leg is PORTED via stripSpectralRealmAuras
-    -- (C++ arm order; the kalecgos ACTION_START_OUTRO relay has no
-    -- bridge — skipped).
+    -- (C++ arm order; the kalecgos ACTION_START_OUTRO relay ports
+    -- below via grid sweep + 1s outro-start).
     stripSpectralRealmAuras(creature)
     sathrovarrResetState(creature:GetGUID())
+    -- C++ sathrovarr JustDied relay (boss_kalecgos.cpp:513-514):
+    -- kalecgos DoAction(ACTION_START_OUTRO) -> EVENT_OUTRO_START 1s.
+    -- Sweep is the instance-lookup twin (rotface relayProfessor idiom:
+    -- first alive match, unique entry; 500yd covers the platform +
+    -- spectral area — the bridge filters only map+instance + 2D
+    -- distance, no phase filter). The outro movement chain stays out.
+    for _, kalecgos in ipairs(creature:GetCreaturesInGrid(ENTRY_KALECGOS, 500)) do
+        if kalecgos:IsAlive() then
+            local kguid = kalecgos:GetGUID()
+            schedule(kguid, "outro_start", 1000, function() kalecgosOutroStart(kalecgos, kguid) end)
+            break
+        end
+    end
 end
 
 -- C++ EnterEvadeMode: the kalecgos EnterEvadeMode relay has no

@@ -48,9 +48,9 @@
 -- REACT_PASSIVE), SetHomePosition(hadronoxStep[step]),
 -- MotionMaster Clear + MovePoint — motion-master bridge absent; the
 -- DoAction(ACTION_HADRONOX_MOVE) driver behind the no-DoAction bridge
--- (drakkari_colossus precedent) — so Talk(HADRONOX_EMOTE_MOVE 1) is
--- unbridged too. A partial InitializeAI port would strand the boss
--- passive at step 0 — the machine stays out as a unit.
+-- (drakkari_colossus precedent) — so the SetStep movement machine
+-- stays out as a unit; only its Talk leg ports, as the crusherDied
+-- relay below (step-gated, no movement).
 -- SummonCrusherPack(SUMMON_GROUP_CRUSHER_1/2/3): SummonCreatureGroup +
 -- per-summon SetData(DATA_CRUSHER_PACK_ID) + DoAction(ACTION_PACK_WALK)
 -- (JustAppeared leg; DoAction(ACTION_CRUSHER_ENGAGED) re-summon legs) —
@@ -129,7 +129,8 @@
 -- GetObjectType()=="Player" approximation would wrongly reduce
 -- pet/charm damage that C++ lets through at full). JustDied ->
 -- hadronox AI
--- DoAction(ACTION_HADRONOX_MOVE) — DoAction bridge absent.
+-- DoAction(ACTION_HADRONOX_MOVE) — the Talk leg ports in crusherDied
+-- below (step-gated sweep); the SetStep movement machine stays out.
 -- npc_anub_ar_crusher_champion / npc_anub_ar_crusher_crypt_fiend /
 -- npc_anub_ar_crusher_necromancer + npc_anub_ar_champion /
 -- npc_anub_ar_crypt_fiend / npc_anub_ar_necromancer — ENTRY UNVERIFIABLE
@@ -177,6 +178,11 @@ local SPELL_ACID_CLOUD = 53400
 local SPELL_CRUSHER_FRENZY = 53801
 local SPELL_CRUSHER_SMASH = 53318
 local CRUSHER_EMOTE_FRENZY = 2
+local HADRONOX_EMOTE_MOVE = 1 -- boss_hadronox.cpp:132
+
+-- Crusher-death step counter for the HADRONOX_MOVE relay below (C++
+-- _step, reset in Reset/ctor; NUM_STEPS = 4, Talk gated on _step < 3).
+local hadronoxStep = {}
 
 local timers = {}
 
@@ -267,6 +273,7 @@ end
 -- stays out (no creature motion slot, SetCombatReach comment).
 local function hadronoxSpawn(event, creature)
     creature:SetCombatReach(9)
+    hadronoxStep[creature:GetGUID()] = nil -- C++ ctor _step(0) twin
 end
 
 local function hadronoxEnterCombat(event, creature, target)
@@ -302,6 +309,7 @@ end
 
 local function hadronoxReset(event, creature)
     cancelTimers(creature:GetGUID())
+    hadronoxStep[creature:GetGUID()] = nil -- C++ Reset SetStep(0) twin
 end
 
 -- C++ npc_anub_ar_crusher::DamageTaken (boss_hadronox.cpp:533-540):
@@ -358,6 +366,23 @@ end
 local function crusherDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     crusherFrenzy[creature:GetGUID()] = nil
+    -- C++ npc_anub_ar_crusherAI::JustDied (boss_hadronox.cpp:554-557) ->
+    -- hadronox DoAction(ACTION_HADRONOX_MOVE) (:248-254): if _step <
+    -- NUM_STEPS-1 (3), SetStep(_step + 1) + Talk(HADRONOX_EMOTE_MOVE).
+    -- The SetStep movement machine (react/home/MovePoint) stays out;
+    -- the Talk leg ports via a 250yd grid sweep for the unique
+    -- hadronox (instance-lookup twin, rotface relayProfessor idiom:
+    -- first alive match), step-gated exactly like C++.
+    for _, hadronox in ipairs(creature:GetCreaturesInGrid(ENTRY_HADRONOX, 250)) do
+        if hadronox:IsAlive() then
+            local step = hadronoxStep[hadronox:GetGUID()] or 0
+            if step < 3 then
+                hadronoxStep[hadronox:GetGUID()] = step + 1
+                hadronox:Talk(HADRONOX_EMOTE_MOVE)
+            end
+            break
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_HADRONOX, 5, hadronoxSpawn)
