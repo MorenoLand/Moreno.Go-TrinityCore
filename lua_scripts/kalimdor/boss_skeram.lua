@@ -43,17 +43,18 @@
 --   arm reads post-damage health and never fires on the killing blow,
 --   so the port projects (health - damage) clamped at 0 with a
 --   postDamage > 0 guard (nefarian rule).
---   The DoCastAOE SPELL_SUMMON_IMAGES 747 leg is no-bridge
---   (SummonCreature zero Lua usage) — documented-only; SetVisible(false)
---   PORTED via the creature:SetVisible bridge (Unit.cpp:8656).
+--   The DoCastAOE SPELL_SUMMON_IMAGES 747 leg is PORTED below as a
+--   triggered self-cast (DoCastAOE = self-cast convention).
+--   SetVisible(false) PORTED via the creature:SetVisible bridge (Unit.cpp:8656).
 -- - Talk: SAY_AGGRO 0 on engage, SAY_SLAY 1 on kill,
 --   SAY_SPLIT 2 at split thresholds, SAY_DEATH 3 on death.
 -- Unmodeled (documented-only, no bridges):
 -- - JustSummoned image-positioning leg: BlinkSpells shuffle over
 --   the summoned images, health seeding (10/20/50% by boss HP),
 --   AttackStart on random target, summons.Summon bookkeeping —
---   all inside the summon-image AI, unreachable without a
---   SummonCreature/JustSummoned bridge.
+--   all inside the summon-image AI (spell-effect spawns,
+--   unreachable from the boss script — the images are not Lua
+--   summons, so no event-19 handler can position them).
 -- - JustDied !IsSummon gate + image DespawnOrUnsummon PORTED
 --   below (creature:IsSummon bridge, engine/world/
 --   lua_creature_events.go + lua_objects.go; the BossAI::JustDied
@@ -67,13 +68,14 @@
 --   fulfillment pool now uses the threat list (GetAITargets,
 --   anastari precedent); the remaining SelectTarget arm is the
 --   JustSummoned image AttackStart pick (boss_skeram.cpp:109),
---   which stays out with the summon-image AI (no AttackStart
---   bridge).
+--   which stays out with the summon-image AI (AttackStart is
+--   bridged, but the image AI itself is unreachable).
 local ENTRY = 15263
 
 local SPELL_ARCANE_EXPLOSION = 26192
 local SPELL_TRUE_FULFILLMENT = 785
 local SPELL_EARTH_SHOCK = 26194
+local SPELL_SUMMON_IMAGES = 747
 
 local BLINK_SPELLS = { 4801, 8195, 20449 }
 
@@ -205,9 +207,10 @@ end
 -- -> DoCastAOE(SPELL_SUMMON_IMAGES, true) + Talk(SAY_SPLIT),
 -- _hpct -= 25, SetVisible(false), RescheduleEvent(EVENT_BLINK,
 -- 2s). Eluna event 9 is pre-damage, so projected-health check
--- (sartura/huhuran convention). Summon cast has no bridge;
--- SetVisible(false) PORTED via the creature:SetVisible bridge;
--- ported as the Talk + visibility + blink re-arm.
+-- (sartura/huhuran convention). The 747 cast rides the DoCastAOE =
+-- self-cast convention (triggered); SetVisible(false) PORTED via
+-- the creature:SetVisible bridge; ported as cast + Talk +
+-- visibility + blink re-arm.
 local function onDamageTaken(event, creature, attacker, damage)
     -- C++ split check is !IsSummon-gated (boss_skeram.cpp:184);
     -- images run the same AI but never split.
@@ -232,6 +235,8 @@ local function onDamageTaken(event, creature, attacker, damage)
     local postDamage = math.max(health - damage, 0)
     if postDamage > 0 and postDamage * 100 < maxHealth * s.splitHpct then
         s.splitHpct = s.splitHpct - 25
+        -- C++ order: DoCastAOE(747, triggered) first, then Talk.
+        creature:CastSpell(creature, SPELL_SUMMON_IMAGES, true)
         creature:Talk(SAY_SPLIT)
         -- C++ UpdateAI split (boss_skeram.cpp:184-190): _hpct -= 25 ->
         -- me->SetVisible(false) (creature:SetVisible bridge,

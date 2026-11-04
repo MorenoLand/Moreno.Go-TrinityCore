@@ -8,16 +8,20 @@
 -- RegisterTempleOfAhnQirajCreatureAI).
 -- Ported: Fear 19408 on victim (12-24s -> 20s) + the ResetThreatList leg
 -- (2026-10-21, creature:ResetAllThreat — fires ungated C++-exact).
+-- Ported: JustDied 10x summon (boss_bug_trio.cpp:270-279 —
+-- creature:SummonCreature + summoned:AttackStart, both bridged;
+-- the instance DATA_BUG_TRIO_DEATH + lootable-flag legs stay out).
 -- Documented-only: Heal 25807 (target selection via instance
 -- GetCreature(DATA_KRI/DATA_VEM) — no bridge; self-cast alone
 -- would misrepresent the random 1-of-3); Vem-dead Enrage (instance
--- DATA_VEMISDEAD — no bridge); JustDied 10x summon (boss_bug_trio.cpp:
--- 270-279 — the creature:SummonCreature bridge is live, stale "no
--- bridge" retracted, but the paired Summoned->AI()->AttackStart relay
--- has no bridge) + instance DATA_BUG_TRIO_DEATH.
+-- DATA_VEMISDEAD — no bridge).
 local ENTRY = 15543
 
 local SPELL_FEAR = 19408
+
+-- boss_bug_trio.cpp:274 summon target (no name constant in the C++
+-- tree — the entry comes from the summon call site itself).
+local ENTRY_DEATH_SPAWN = 15621
 
 local timers = {}
 
@@ -76,6 +80,28 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_bug_trio.cpp:270-279): 10 iterations, each
+    -- picking a random threat-list target (SelectTarget Random, no
+    -- playerOnly/dist args) and summoning one 15621 at the boss's
+    -- position (TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, 90s) with
+    -- Summoned->AI()->AttackStart(target). A nil pick skips that
+    -- iteration; an empty threat list therefore summons nothing,
+    -- exactly like C++. The Go death path clears no threat state
+    -- before event 4 fires (kill.go), so GetAITargets still reads
+    -- the fight's threat list here. The instance legs (RemoveFlag
+    -- lootable + SetData DATA_BUG_TRIO_DEATH) stay out — no
+    -- instance bridge.
+    local targets = creature:GetAITargets()
+    if #targets > 0 then
+        local x, y, z = creature:GetX(), creature:GetY(), creature:GetZ()
+        for _ = 1, 10 do
+            local target = targets[math.random(#targets)]
+            local summoned = creature:SummonCreature(ENTRY_DEATH_SPAWN, x, y, z, 0, 1, 90000)
+            if summoned ~= nil then
+                summoned:AttackStart(target)
+            end
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

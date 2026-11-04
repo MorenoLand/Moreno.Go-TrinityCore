@@ -13306,13 +13306,15 @@ func init() {
 	// (JustEngagedWith cross-creature Emily Talk only — bridged:
 	// FindNearestCreature returns the luaMotionCreature object and
 	// Talk is called on it, ported in npc_emily.lua), npc_outhouse_bunny
-	// (SpellHit 48382 emote/cast arms — no SpellHit bridge),
+	// (SpellHit 48382 emote/cast arms — ev14 bridge live, but no
+	// C++-verifiable entry, so unregistered — entry-blocked queue),
 	// npc_amberpine_woodsman (Talk-free emote-state machine —
 	// unregistered AI, no C++ entry constant), npc_wounded_skirmisher (SpellHit
-	// 48812 Talk(SAY_RANDOM) + 48813 — no SpellHit bridge),
+	// 48812 Talk(SAY_RANDOM) + 48813 — ev14 bridge live, entry
+	// unverifiable, so unregistered — entry-blocked queue),
 	// npc_venture_co_straggler (EVENT_STRAGGLER_2 timer Talk(SAY_SEO)
 	// + MovePoint chain — no-timer bridge; SpellHit 49075 —
-	// no SpellHit bridge), npc_lake_frog (EVENT_LAKEFROG_2/5
+	// ev14 bridge live, entry unverifiable), npc_lake_frog (EVENT_LAKEFROG_2/5
 	// timer Talk SAY_MAIDEN_0/1 — no-timer bridge; ReceiveEmote /
 	// gossip arms — no bridges), npc_rocket_propelled_warhead
 	// (VehicleAI PassengerBoarded/DoAction — no bridges), and the
@@ -13464,7 +13466,8 @@ func init() {
 	// GetVictim for DoCastVictim; no UNIT_STATE_CASTING gate). C++ quirk:
 	// the charge arm reschedules undefined EVENT_CHARGE (would not compile
 	// upstream) — the port re-arms the charge chain at the stated {10,25}s.
-	// EVENT_CHECK_RESET (home leash) has no HomePosition bridge —
+	// EVENT_CHECK_RESET (home leash) stays out: GetHomePosition is
+	// bridged, but the arm ends in EnterEvadeMode (no bridge) —
 	// documented-only. All eight entries are verifiable from the file's own
 	// Creatures enum — see lua_scripts/eastern_kingdoms/
 	// npc_av_marshal_or_warmaster.lua.
@@ -13484,7 +13487,7 @@ func init() {
 	// (CreateLuaEvent timers; GetVictim for DoCastVictim; no
 	// UNIT_STATE_CASTING gate). The water elemental summon arm, the
 	// JustSummoned AttackStart/faction arms, the home-leash CHECK_RESET
-	// arm (no HomePosition bridge), and the BG-driven
+	// arm (EnterEvadeMode has no bridge), and the BG-driven
 	// DoAction(ACTION_BUFF_YELL) arm have no Lua bridges — documented
 	// only. Entry 11949 verifiable from the C++ sources: BattlegroundAV.h
 	// names "Captain Balinda Stonehearth" at 11949 — see
@@ -13495,8 +13498,8 @@ func init() {
 	// victim-cast {1,20}s->{7,25}s, knockdown 19128 victim-cast
 	// 12s->{10,15}s, frenzy 8269 victim-cast 6s->{20,30}s, random-yell
 	// Talk(3) {20,30}s->{20,30}s) plus the aggro Talk(0) and the
-	// JustAppeared Talk(2) respawn yell (no JustAppeared bridge —
-	// carried on OnSpawn(5), storm_cloud convention) — maiden
+	// JustAppeared Talk(2) respawn yell (ported on OnSpawn(5),
+	// storm_cloud convention — no dedicated JustAppeared event) — maiden
 	// convention (CreateLuaEvent timers; GetVictim for DoCastVictim;
 	// no UNIT_STATE_CASTING gate). The CheckInRoom home leash arm
 	// (home-position 2D distance > 50yd -> EnterEvadeMode + Talk(1))
@@ -14605,8 +14608,8 @@ func init() {
 	// lua_scripts/eastern_kingdoms/boss_lord_alexei_barov.lua (entry
 	// 10504 — no NPC_ constant in scholomance.h, DB-side ScriptName
 	// binding, wotlk.wowhead-verified). OnReset self-casts unholy aura
-	// 17467 when absent (no HasAura bridge — per-guid latch,
-	// kirtonos convention, cleared 2/4/23); OnEnterCombat schedules
+	// 17467 when absent (creature:HasAura bridge — the Lua port
+	// reads the real aura state, no latch); OnEnterCombat schedules
 	// immolate 20294 (triggered, random alive player within 100yd
 	// incl. victim, 7s->12s) and veil of shadow 17820 (triggered
 	// DoCastVictim, 15s->20s), nil pick casts nothing but keeps the
@@ -14686,7 +14689,8 @@ func init() {
 	// armor 6016 18s->12s / disarm 8379 22s->11s / shadow bolt 17228
 	// 42s->42s / curse of tongues 12889 53s->35s / dominate mind 14515
 	// {34s,48s}->{44s,48s} (all triggered DoCastVictim) / transform 16467
-	// 20s->{16s,18s} (per-guid latch toggle, no HasAura bridge).
+	// 20s->{16s,18s} (HasAura toggle — the Lua port reads the real
+	// aura state, no latch).
 	// Documented-only: intro choreography, gate/brazier GO arms,
 	// go_brazier_of_the_herald (no bridges).
 	RegisterLuaBoss("boss_kirtonos_the_herald", 10506)
@@ -14942,7 +14946,7 @@ func init() {
 	// UNIT_STATE_CASTING gates, GetStratholmeAI factory; melee
 	// engine-driven. npc_summoned_skeleton's SpellHit(17471) ->
 	// DoCastSelf(17472, TRIGGERED) leg not registered — no C++-verifiable
-	// NPC entry and no SpellHit bridge (entry-unverifiable queue).
+	// NPC entry (ev14 SpellHit bridge live; entry-unverifiable queue).
 	RegisterLuaBoss("boss_baron_rivendare", 10440)
 	// boss_dathrohan_balnazzar.cpp audit (EK loader decl :135 / call :313
 	// follows baron_rivendare): 1 script, ScriptedAI via GetStratholmeAI
@@ -15654,9 +15658,10 @@ func init() {
 	// SUMMON_MANA_FIEND 1/2/3 (25681/25682/25683) + ENERGIZE 25685
 	// and exits after 90s via RemoveAura(ENERGIZE) (netherspite
 	// convention), rescheduling the next phase. Zero Talk() calls in
-	// C++ (the Texts enum is unused). Unwired: mana-full Arcane
-	// Eruption 25672 + SetPower(MANA, 0) — no SetPower bridge for
-	// creatures (curator precedent); EVENT_DRAIN_MANA never scheduled
+	// C++ (the Texts enum is unused). Ported in boss_moam.lua: the
+	// mana-full Arcane Eruption 25672 + SetPower(MANA, 0) leg
+	// (creature:SetPower bridge, 1s UpdateAI pump). Unwired:
+	// EVENT_DRAIN_MANA never scheduled
 	// in C++ Reset (dead); SPELL_TRAMPLE never cast (dead);
 	// EVENT_WIDE_SLASH/TRASH commented out (inactive). BossAI's ctor
 	// leg DATA_MOAM and _Reset() ride the absent instance bridge —
@@ -15811,7 +15816,9 @@ func init() {
 	// boss_yauj (Princess Yauj, entry 15543 — Bug Trio): Fear 19408
 	// on victim (12-24s -> 20s; ResetThreatList has no bridge).
 	// Unwired: Heal (instance target selection); Vem-dead Enrage;
-	// JustDied summons (no SummonCreature bridge). Full analysis in
+	// JustDied summons PORTED (boss_yauj.lua: SummonCreature +
+	// AttackStart bridges; instance DATA_BUG_TRIO_DEATH stays out).
+	// Full analysis in
 	// lua_scripts/kalimdor/boss_yauj.lua.
 	RegisterLuaBoss("boss_yauj", 15543)
 
@@ -15839,9 +15846,10 @@ func init() {
 	// (30-45s init -> 10-30s); Earth Shock 26194 victim-cast
 	// (2s repeat); Split Talk SAY_SPLIT at 75/50/25% via event 9
 	// (latched, blink re-armed to 2s); Talk SAY_AGGRO 0 /
-	// SAY_SLAY 1 / SAY_DEATH 3. Unwired: image summons
-	// (SPELL_SUMMON_IMAGES 747 — no SummonCreature bridge);
-	// JustSummoned positioning + health seeding; Blink
+	// SAY_SLAY 1 / SAY_DEATH 3. Ported: the split DoCastAOE
+	// (SPELL_SUMMON_IMAGES 747) self-cast (DoCastAOE = self-cast
+	// convention). Unwired: image-AI positioning + health seeding;
+	// Blink
 	// ResetThreatList/SetVisible; Arcane Explosion + True
 	// Fulfillment SpellScripts; JustDied !IsSummon gate (no
 	// IsSummon bridge — DEATH Talk ungated); BossAI ctor leg
@@ -17956,7 +17964,8 @@ func init() {
 	// despawn the spark; SPELL_MALYGOS_BERSERK -> Talk
 	// EMOTE_HIT_BERSERKER_TIMER — no SpellHit / cast bridges, joins the
 	// SpellHit-15-never-fires queue); MoveInLineOfSight (power-spark
-	// proximity cast — no LOS bridge); npc_portal_eoe (NPC_PORTAL_TRIGGER
+	// proximity cast — IsWithinLOS bridged, but ev27 is
+	// engage-only, so the sighting arm stays out); npc_portal_eoe (NPC_PORTAL_TRIGGER
 	// 30118 — SpellHit / aura-maintenance UpdateAI — no SpellHit / cast /
 	// aura bridges); npc_power_spark (NPC_POWER_SPARK 30084 —
 	// despawn-when-reached UpdateAI + MoveFollow legs
@@ -18667,7 +18676,8 @@ func init() {
 	// Documented-only: Reset / Initialize (shadowDodger /
 	// smellSaronite / animusDead / vaporCount init — no bridges);
 	// SpellHitTarget (SPELL_SHADOW_CRASH_HIT 62659 player leg ->
-	// shadowDodger = false — no SpellHit bridge);
+	// shadowDodger = false — ev15 bridge live, but the flag's
+	// reader machine stays unported, so the arm stays out);
 	// GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
 	// 31813188 — no GetData bridge); DoAction(ACTION_VAPORS_DIE
 	// / ACTION_ANIMUS_DIE — no DoAction bridge);
