@@ -81,9 +81,11 @@
 -- note restricts it to pre-combat calls, so neither mid-combat leg
 -- ports via that flag); the hurtful-strike MaxThreat
 -- pick is the first alive non-victim GetAITargets entry (curator convention) and the
--- IsWithinMeleeRange gate is creature:IsWithinMeleeRange; no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
--- IsNonMeleeSpellCast queue gate unmodeled, timers fire
--- unconditionally (jeklik convention); no SpellScript bridge —
+-- IsWithinMeleeRange gate is creature:IsWithinMeleeRange; the
+-- UpdateAI cast-state gate (boss_gruul.cpp:172, HasUnitState(CASTING)
+-- return) ports via creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950) at the top of gruulTick — timers
+-- freeze while casting, the 1s pump re-arms untouched; no SpellScript bridge —
 -- the shatter/shatter-effect scripts unmodeled (standing gap).
 
 local SPELL_GROWTH = 36300
@@ -151,6 +153,20 @@ end
 local function gruulTick(creature, guid)
     local st = gruulState[guid]
     if not st then
+        return
+    end
+
+    -- C++ UpdateAI pre-loop gate (boss_gruul.cpp:172):
+    -- if (me->HasUnitState(UNIT_STATE_CASTING)) return — the
+    -- return skips every timer decrement, so all timers freeze
+    -- while casting. The 1s pump re-arms untouched below, so the
+    -- next tick retries with every timer intact (mal_ganis
+    -- defer idiom, 1s pump granularity instead of 500ms).
+    -- Engine-driven melee is ungated (no melee bridge in the pump).
+    if creature:IsCasting() then
+        pumpTimers[guid] = CreateLuaEvent(function()
+            gruulTick(creature, guid)
+        end, 1000)
         return
     end
 

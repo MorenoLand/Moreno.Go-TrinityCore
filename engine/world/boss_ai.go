@@ -12338,6 +12338,7 @@ func init() {
 	// the charging AttackStart victim-switch arm has no
 	// bridge; the instance/SetBossState/DoZoneInCombat arms are
 	// blocked on the instance-script model.
+	// Its UpdateAI carries no cast-state check (plain-timer ScriptedAI UpdateAI, boss_high_king_maulgar.cpp:141, zero HasUnitState hits) — all timer arms fire ungated.
 	RegisterLuaBoss("boss_high_king_maulgar", 18831)
 	// Krosh Firehand (18832) runs the fireball 2s floor + the
 	// within-30-yd (3D) distance poller (IsWithinDist bridged),
@@ -12345,24 +12346,29 @@ func init() {
 	// player within 15 yd 2D — IsWithinDist2d bridged; only the
 	// threat-list half of the pick has no bridge; the
 	// InterruptNonMeleeSpells arms are bridged (no-op twin) and ported).
+	// Its UpdateAI carries no cast-state check (plain-timer ScriptedAI UpdateAI, boss_high_king_maulgar.cpp:533, zero HasUnitState hits; the InterruptNonMeleeSpells legs are interrupt checks, not gates).
 	RegisterLuaBoss("boss_krosh_firehand", 18832)
 	// Olm the Summoner (18834) runs dark decay / summon WFH
 	// 33131 / death coil. The AttackStart MoveChase/threat arm has
 	// no movement/threat bridges; the WFH summon effect is
 	// engine-side (no AI class in the C++ file).
+	// Its UpdateAI carries no cast-state check (plain-timer ScriptedAI UpdateAI, boss_high_king_maulgar.cpp:271, zero HasUnitState hits).
 	RegisterLuaBoss("boss_olm_the_summoner", 18834)
 	// Kiggler the Crazed (18835) runs the C++-exact
 	// DoCastVictim arms: greater polymorph / lightning bolt /
 	// arcane shock / arcane explosion.
+	// Its UpdateAI carries no cast-state check (plain-timer ScriptedAI UpdateAI, boss_high_king_maulgar.cpp:358, zero HasUnitState hits).
 	RegisterLuaBoss("boss_kiggler_the_crazed", 18835)
 	// Blindeye the Seer (18836) runs the three self-cast healing
 	// arms: greater PW shield / heal / prayer of healing.
+	// Its UpdateAI carries no cast-state check (plain-timer ScriptedAI UpdateAI, boss_high_king_maulgar.cpp:450, zero HasUnitState hits).
 	RegisterLuaBoss("boss_blindeye_the_seer", 18836)
 	// Gruul the Dragonkiller (19044) runs the growth / cave-in /
 	// ground-slam+shatter / hurtful-strike / reverberation arms;
 	// the shatter performing-clear rides bridged event 15 (caster-
 	// side bindings); the ground-slam knockback arms are unmodeled
 	// (no hit-enumeration bridge for the AoE hit players).
+	// Its UpdateAI carries the HasUnitState(UNIT_STATE_CASTING) pre-loop gate (boss_gruul.cpp:172), ported in gruulTick: timers freeze while creature:IsCasting(), the 1s pump re-arms untouched.
 	RegisterLuaBoss("boss_gruul", 19044)
 	// Magtheridon (17257) runs the break-free / cleave / blast
 	// nova / blaze / quake / berserk arms plus the 30% collapse

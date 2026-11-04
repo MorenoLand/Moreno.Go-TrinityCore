@@ -604,9 +604,11 @@ RegisterCreatureEvent(NPC_BLINDEYE_THE_SEER, 23, blindeyeReset)
 -- (3D); both arms re-arm 2000. The 2s floor drives the timer
 -- arm; a 500ms distance poller drives the early-fire arm —
 -- an early fire restarts both the floor and the poller.
--- Deviation: Go has no UNIT_STATE_CASTING model, so in-range
--- casts fire at poll cadence rather than the C++ per-tick rate
--- (bounded in C++ by the cast-time gate) — documented.
+-- Deviation: C++ checks the in-range condition every UpdateAI
+-- tick while the Lua poller runs at 500ms, so in-range casts
+-- fire at poll cadence; no cast-state gate exists in this
+-- UpdateAI (zero HasUnitState hits in boss_high_king_maulgar.cpp),
+-- so no gate ports — documented.
 local kroshFireballPoll
 local function kroshFireball(creature, guid)
     creature:CastSpell(nil, SPELL_GREATER_FIREBALL)
