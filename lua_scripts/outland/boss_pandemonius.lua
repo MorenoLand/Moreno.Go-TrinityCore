@@ -17,6 +17,10 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
 -- 3 OnTargetDied, 4 OnDied, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
+-- BossAI::UpdateAI gates (ScriptedCreature.cpp:578/:584, no
+-- pandemonius override) PORTED 2026-11-04 as 500ms IsCasting defer
+-- on void-blast + dark-shell (mal_ganis idiom; IsCasting live,
+-- lua_creature_events.go:1950).
 -- boss_pandemoniusAI::JustEngagedWith (:76-84) — Talk(SAY_AGGRO 0);
 -- the BossAI::JustEngagedWith legs have no bridge (the auriaya
 -- precedent) — then ScheduleEvent(EVENT_DARK_SHELL, 20s,
@@ -112,6 +116,12 @@ end
 
 -- C++ EVENT_VOID_BLAST (:86-104).
 local function voidBlastTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "void_blast", 500, function()
+            voidBlastTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerIn100(creature)
     if target then
         creature:CastSpell(target, SPELL_VOID_BLAST)
@@ -136,6 +146,12 @@ end
 -- (bridged no-op twin, ported below); Talk + non-triggered
 -- self-cast + 20s re-arm (+ the DelayEvents accumulator).
 local function darkShellTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "dark_shell", 500, function()
+            darkShellTick(creature, guid)
+        end)
+        return
+    end
     creature:InterruptNonMeleeSpells(true)
     creature:Talk(EMOTE_DARK_SHELL)
     creature:CastSpell(creature, SPELL_DARK_SHELL)

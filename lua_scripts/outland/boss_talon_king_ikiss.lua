@@ -42,9 +42,12 @@
 -- 2-arg (non-triggered); re-arm randtime(7s,12s).
 -- EVENT_SLOW (heroic) — DoCast(me, SPELL_SLOW 35032) 2-arg
 -- (non-triggered); re-arm randtime(15s,40s).
--- EVENT_BLINK — the IsNonMeleeSpellCast → InterruptNonMeleeSpells
--- leg rides the no-cast-state bridge (IsCasting is a stub returning
--- false, lua_objects.go:330) — documented-only; Talk(EMOTE_ARCANE_
+-- EVENT_BLINK — the IsNonMeleeSpellCast gate is unmodeled
+-- (shaffar blink precedent) but the InterruptNonMeleeSpells(false)
+-- leg is PORTED via the bridged no-op twin (pandemonius precedent);
+-- the BossAI base CASTING gate is PORTED 2026-11-04 as 500ms
+-- IsCasting defer on all 5 event ticks (mal_ganis idiom; IsCasting
+-- live, lua_creature_events.go:1950). Talk(EMOTE_ARCANE_
 -- EXPLOSION 4) + DoCastAOE(SPELL_BLINK 38194) 1-arg = non-triggered
 -- self-cast → creature:CastSpell(creature, 38194); re-arm
 -- randtime(35s,40s); schedules EVENT_ARCANE_EXPLOSION at 1s.
@@ -130,6 +133,12 @@ end
 -- excluded — netherspite/curator offset-1 precedent). Re-arm
 -- randtime(15s,17500ms) — millisecond granularity.
 local function polymorphTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "polymorph", 500, function()
+            polymorphTick(creature, guid)
+        end)
+        return
+    end
     local target
     if creature:IsHeroic() then
         target = randomThreatTarget(creature)
@@ -168,6 +177,12 @@ end
 -- SPELL_ARCANE_VOLLEY) 2-arg (non-triggered); re-arm
 -- randtime(7s,12s).
 local function arcaneVolleyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcane_volley", 500, function()
+            arcaneVolleyTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ARCANE_VOLLEY)
     schedule(guid, "arcane_volley", {7000, 12000}, function()
         arcaneVolleyTick(creature, guid)
@@ -177,6 +192,12 @@ end
 -- C++ EVENT_SLOW (:136-139, heroic): DoCast(me, SPELL_SLOW) 2-arg
 -- (non-triggered); re-arm randtime(15s,40s).
 local function slowTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "slow", 500, function()
+            slowTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SLOW)
     schedule(guid, "slow", {15000, 40000}, function()
         slowTick(creature, guid)
@@ -186,7 +207,13 @@ end
 -- C++ EVENT_ARCANE_EXPLOSION (:148-152): DoCast(me,
 -- SPELL_ARCANE_EXPLOSION) 2-arg (non-triggered) + DoCast(me,
 -- SPELL_ARCANE_BUBBLE, true) 3-arg TRIGGERED; one-shot.
-local function arcaneExplosionTick(creature)
+local function arcaneExplosionTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcane_explosion", 500, function()
+            arcaneExplosionTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ARCANE_EXPLOSION)
     creature:CastSpell(creature, SPELL_ARCANE_BUBBLE, true)
 end
@@ -197,13 +224,20 @@ end
 -- interrupt-non-melee leg rides the no-cast-state bridge
 -- (documented-only).
 local function blinkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blink", 500, function()
+            blinkTick(creature, guid)
+        end)
+        return
+    end
+    creature:InterruptNonMeleeSpells(false)
     creature:Talk(EMOTE_ARCANE_EXPLOSION)
     creature:CastSpell(creature, SPELL_BLINK)
     schedule(guid, "blink", {35000, 40000}, function()
         blinkTick(creature, guid)
     end)
     schedule(guid, "arcane_explosion", 1000, function()
-        arcaneExplosionTick(creature)
+        arcaneExplosionTick(creature, guid)
     end)
 end
 

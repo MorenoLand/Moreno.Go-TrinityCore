@@ -54,10 +54,11 @@
 -- DOCUMENTED-ONLY (in this header; only entry 18708 registered):
 -- SetCombatMovement(false) — PORTED in murmurEnterCombat (boss_murmur.cpp:64
 -- ctor arm; bridge live, lua_creature_events.go:1301).
--- The UpdateAI casting gate (HasUnitState(UNIT_STATE_CASTING)
--- early-out, and the per-event post-cast return) — creature
--- IsCasting is a stub returning false (lua_objects.go:330) — no
--- real bridge — documented-only.
+-- The UpdateAI casting gate (own pre-loop + in-loop CASTING
+-- returns, boss_murmur.cpp UpdateAI) — PORTED 2026-11-04 as
+-- 500ms IsCasting defer on all 6 timer ticks + the melee-range
+-- poll (mal_ganis idiom; IsCasting live,
+-- lua_creature_events.go:1950).
 -- The melee leg ("select nearest most aggro target if top aggro too
 -- far" + DoMeleeAttackIfReady) — engine-driven melee is a genuine
 -- gap (aran precedent) — documented-only; the ResetThreat(victim)
@@ -151,6 +152,12 @@ local resonanceTick
 -- re-arm 5s. If the victim IS in melee range the event dies with NO
 -- re-arm (C++-exact fallthrough — not a reset to 5s).
 resonanceTick = function(creature, guid)
+    if creature:IsCasting() then
+        scheduleAppend(guid, "resonance", 500, function()
+            resonanceTick(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not creature:IsWithinMeleeRange(victim) then
         creature:CastSpell(creature, SPELL_RESONANCE)
@@ -164,6 +171,12 @@ end
 -- DoCast(me, SPELL_SONIC_BOOM_CAST) 2-arg (non-triggered); re-arm
 -- 30s; unconditionally schedules EVENT_RESONANCE at 1500ms.
 local function sonicBoomTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sonic_boom", 500, function()
+            sonicBoomTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_SONIC_BOOM)
     creature:CastSpell(creature, SPELL_SONIC_BOOM_CAST)
     schedule(guid, "sonic_boom", 30000, function()
@@ -178,6 +191,12 @@ end
 -- true) → DoCast(target, SPELL_MURMURS_TOUCH) 2-arg (non-triggered);
 -- re-arm randtime(25s,35s).
 local function murmursTouchTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "murmurs_touch", 500, function()
+            murmursTouchTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature, 80.0, true)
     if target then
         creature:CastSpell(target, SPELL_MURMURS_TOUCH)
@@ -191,6 +210,12 @@ end
 -- true) → DoCast(target, SPELL_MAGNETIC_PULL) 2-arg (non-triggered),
 -- re-arm randtime(15s,30s); NO target → 500ms fail-fast retry.
 local function magneticPullTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "magnetic_pull", 500, function()
+            magneticPullTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature, 0, true)
     if target then
         creature:CastSpell(target, SPELL_MAGNETIC_PULL)
@@ -207,6 +232,12 @@ end
 -- C++ EVENT_THUNDERING_STORM (:151-154, heroic): DoCastAOE(
 -- SPELL_THUNDERING_STORM, true) — triggered self-cast; 15s cycle.
 local function thunderingStormTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "thundering_storm", 500, function()
+            thunderingStormTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_THUNDERING_STORM, true)
     schedule(guid, "thundering_storm", 15000, function()
         thunderingStormTick(creature, guid)
@@ -218,6 +249,12 @@ end
 -- (non-triggered); playerOnly=false → no player filter; re-arm
 -- randtime(10s,20s).
 local function sonicShockTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sonic_shock", 500, function()
+            sonicShockTick(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatTarget(creature, 20.0, false)
     if target then
         creature:CastSpell(target, SPELL_SONIC_SHOCK)
@@ -232,10 +269,17 @@ end
 -- ModifyThreatByPercent(victim, -100), bridged) before
 -- DoMeleeAttackIfReady. No per-tick UpdateAI Lua event exists, so
 -- the leg rides a 1s poll (ironaya 1s-check precedent); the
--- isAttackReady gate has no bridge and the casting gate is
--- unmodelable (IsCasting stub, see header) — both noted, neither
--- blocks the reset itself. DoMeleeAttackIfReady stays engine-driven.
+-- isAttackReady gate has no bridge; the post-loop leg itself is
+-- CASTING-gated in C++ (pre-loop return skips it), so the poll
+-- defers 500ms while casting (mal_ganis idiom). DoMeleeAttackIfReady
+-- stays engine-driven.
 local function meleeRangeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "meleerange", 500, function()
+            meleeRangeTick(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not creature:IsWithinMeleeRange(victim) then
         creature:ModifyThreatByPercent(victim, -100)

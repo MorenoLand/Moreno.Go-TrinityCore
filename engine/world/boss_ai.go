@@ -20690,6 +20690,11 @@ func init() {
 	// — documented-only. Entry 18708 is DB-side (no NPC_ constant in
 	// the C++ tree); ScriptName bindings are DB-side as usual.
 	RegisterLuaBoss("boss_murmur", 18708)
+	// Own UpdateAI CASTING gates (pre-loop + in-loop) ported as
+	// 500ms IsCasting defer on sonic-boom / murmurs-touch / resonance
+	// (append-keyed defer, multimap arm) / magnetic-pull /
+	// thundering-storm / sonic-shock + the melee-range poll; stale
+	// "IsCasting stub" header corrected (bridge live).
 	// boss_pandemonius (Mana-Tombs, Outland dungeon pass) — fight
 	// logic in lua_scripts/outland/boss_pandemonius.lua: the event-1
 	// void-blast / dark-shell timer arms, the KilledUnit Talk(SAY_KILL
@@ -20698,6 +20703,9 @@ func init() {
 	// and ported. Entry 18341 is DB-side (no NPC_ constant in
 	// the C++ tree); ScriptName bindings are DB-side as usual.
 	RegisterLuaBoss("boss_pandemonius", 18341)
+	// BossAI::UpdateAI gates (ScriptedCreature.cpp:578/:584, no
+	// pandemonius override) ported as 500ms IsCasting defer on
+	// void-blast (no counter/shift consumed) / dark-shell.
 	// boss_anzu (Sethekk Halls, Outland dungeon pass) — fight logic in
 	// lua_scripts/outland/boss_anzu.lua: event-1 paralyzing-screech /
 	// cyclone-of-feathers timers, the event-9 health-latch arms, the
@@ -20706,6 +20714,9 @@ func init() {
 	// documented-only. Entry 23035 is DB-side (no NPC_ constant in the
 	// C++ tree); ScriptName bindings are DB-side as usual.
 	RegisterLuaBoss("boss_anzu", 23035)
+	// Checked-no-gate: own UpdateAI override (boss_anzu.cpp:117)
+	// is a plain while loop, zero HasUnitState hits — screech /
+	// cyclone / summon / spell-bomb ticks stay ungated, C++-exact.
 	// boss_talon_king_ikiss (Sethekk Halls, Outland dungeon pass) —
 	// fight logic in lua_scripts/outland/boss_talon_king_ikiss.lua:
 	// the event-1 blink / arcane-volley / slow timer arms, the 20%-
@@ -20715,6 +20726,12 @@ func init() {
 	// 18473 is DB-side (no NPC_ constant in the C++ tree); ScriptName
 	// bindings are DB-side as usual.
 	RegisterLuaBoss("boss_talon_king_ikiss", 18473)
+	// BossAI::UpdateAI gates (ScriptedCreature.cpp:578/:584, no
+	// ikiss override) ported as 500ms IsCasting defer on polymorph
+	// / arcane-volley / slow / blink / arcane-explosion (now
+	// guid-carrying so the 1s chain defers too); blink
+	// InterruptNonMeleeSpells(false) leg ported (gate unmodeled);
+	// DamageTaken mana-shield latch ungated per C++ (separate hook).
 	// boss_exarch_maladaar + boss_shirrak_the_dead_watcher (Auchenai
 	// Crypts, Outland dungeon pass): both ScriptedAI-derived
 	// (maladaar.cpp:169, shirrak.cpp:63), registered per the outland
@@ -20723,6 +20740,11 @@ func init() {
 	// (beginInstanceEncounter IsRaid gate) and all luaBossAI hooks are no-ops.
 	RegisterLuaBoss("boss_exarch_maladaar", 18373)
 	RegisterLuaBoss("boss_shirrak_the_dead_watcher", 18371)
+	// Checked-no-gate: maladaar boss (:255) + stolen-soul (:87) +
+	// shirrak boss (:108) + focus-fire (:204) UpdateAIs are plain
+	// countdown loops, zero HasUnitState hits (maladaar's
+	// IsNonMeleeSpellCast legs are interrupt checks, ionar
+	// precedent, not gates) — all ported ticks stay ungated.
 	// boss_illidan.lua — ported bridgeable arm: boss_illidan_stormrageAI::KilledUnit
 	// Talk(SAY_ILLIDAN_KILL 1) gated on victim->GetTypeId() == TYPEID_PLAYER —
 	// the razuvious player-gated precedent (event 3). The rest — intro/combat/
