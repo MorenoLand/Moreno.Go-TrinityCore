@@ -53,6 +53,11 @@
 -- boss_skadi JustDied — Talk(SAY_DEATH 3) unconditional (event 4 — the
 -- sjonnir JustDied-Talk precedent; the _JustDied() passthrough leg has
 -- no bridge).
+-- boss_skadi inherited BossAI::JustEngagedWith (boss_skadiAI has NO
+-- override — kelthuzad precedent) — SetCombatPulseDelay(5) + me-form
+-- DoZoneInCombat (ScriptedCreature.cpp:540/542) ported into
+-- skadiEnterCombat (instance/setActive/ScheduleTasks legs out; the
+-- DoAction encounter-start legs ride the collapsed ev1 model).
 -- boss_skadi gauntlet reset-check — DoAction(ACTION_START_ENCOUNTER,
 -- :239-246) 6s scheduler: FindNearestCreature(NPC_TRIGGER_RESET 23472,
 -- 200.0f) -> trigger self-cast SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_
@@ -260,6 +265,8 @@ end
 -- (boss_skadi.cpp:239-246): 6s first tick, Repeat 6s; the trigger
 -- self-cast is the mandokir/fathomlord found-creature CastSpell
 -- precedent. Starts at first combat (DoAction unbridged — see header).
+-- Inherited BossAI::JustEngagedWith arms (no override — kelthuzad
+-- precedent) ported at the handler tail (see header).
 local function skadiEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -271,6 +278,15 @@ local function skadiEnterCombat(event, creature)
         schedule(guid, "resetCheck", 6000, resetCheckTick)
     end
     schedule(guid, "resetCheck", 6000, resetCheckTick)
+    -- Inherited BossAI::JustEngagedWith (no override in boss_skadiAI —
+    -- kelthuzad precedent): SetCombatPulseDelay(5) + me-form
+    -- DoZoneInCombat (ScriptedCreature.cpp:540/542); instance/setActive/
+    -- ScheduleTasks legs out. C++ order puts the base engage after the
+    -- DoAction encounter-start legs (the summoned combat trigger's
+    -- DoZone drives the engage), so these sit after the reset-check
+    -- seed above.
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
 end
 
 -- C++ npc_ymirjar_warriorAI::ScheduleTasks (:545-555): DoCastVictim

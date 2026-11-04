@@ -49,10 +49,11 @@
 -- 4 OnDied, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_palehoof.cpp):
--- boss_palehoof JustEngagedWith (:221-229) — Talk(SAY_AGGRO 0)
--- (event 1; BossAI::JustEngagedWith passthrough and the instance
--- SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE) leg have no bridges — the
--- auriaya engage-port precedent) — plus the three ungated timer arms,
+-- boss_palehoof JustEngagedWith (:222-230, base-first) — BossAI::
+-- JustEngagedWith arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- (ScriptedCreature.cpp:540/542) ported before Talk(SAY_AGGRO 0)
+-- (event 1; instance SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE) and
+-- setActive legs out) — plus the three ungated timer arms,
 -- scheduled here on the xt002 precedent (C++ schedules on
 -- JustEngagedWith, Go on event 1, same inits):
 --   EVENT_ARCING_SMASH (arm :236-239): DoCastVictim(SPELL_ARCING_SMASH
@@ -311,12 +312,16 @@ local function witheringRoarTick(creature, guid)
     end)
 end
 
--- C++ boss_palehoofAI::JustEngagedWith (:221-229): Talk(SAY_AGGRO) —
--- unconditional (the auriaya engage-port precedent; BossAI::JustEngagedWith
--- passthrough and the SendEncounterUnit leg have no bridges) — plus the
--- three event-schedule inits (:226-228) carried on event 1 on the xt002
--- precedent.
+-- C++ boss_palehoofAI::JustEngagedWith (:222-230): BossAI::JustEngagedWith
+-- base-first (pulse + me-DoZone ported above Talk; SendEncounterUnit/
+-- setActive legs out); Talk(SAY_AGGRO) — unconditional (the auriaya
+-- engage-port precedent) — plus the three event-schedule inits (:226-228)
+-- carried on event 1 on the xt002 precedent.
 local function palehoofEnterCombat(event, creature, target)
+    -- BossAI::JustEngagedWith (:224, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)

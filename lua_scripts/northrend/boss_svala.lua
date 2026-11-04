@@ -48,9 +48,10 @@
 -- OnReset.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_svala.cpp):
--- boss_svala JustEngagedWith (:176) — Talk(SAY_AGGRO 2) (event 1;
--- BossAI::JustEngagedWith passthrough unmodeled — the auriaya
--- engage-port precedent).
+-- boss_svala JustEngagedWith (:173-177, base-first) — BossAI::
+-- JustEngagedWith arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- (ScriptedCreature.cpp:540/542) ported before Talk(SAY_AGGRO 2)
+-- (event 1; instance/setActive/ScheduleTasks legs out).
 -- boss_svala KilledUnit (:209-212) — Talk(SAY_SLAY 3) player-gated
 -- (event 3 — the razuvious player-gated variant precedent; the
 -- nil-guard is the hodir-port convention — Eluna event 3 always
@@ -416,13 +417,18 @@ local function svalaSpellHitTarget(event, creature, target, spellId)
     enterNormalPhase(creature, guid)
 end
 
--- C++ boss_svalaAI::JustEngagedWith (:176): BossAI::JustEngagedWith(who)
--- (passthrough, no bridge); Talk(SAY_AGGRO) — unconditional (the auriaya
+-- C++ boss_svalaAI::JustEngagedWith (:173-177): BossAI::JustEngagedWith(who)
+-- base-first (pulse + me-DoZone ported above Talk; instance/setActive/
+-- ScheduleTasks legs out); Talk(SAY_AGGRO) — unconditional (the auriaya
 -- engage-port precedent).
 local function svalaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     svalaState[guid] = { sacrificed = false }
+    -- BossAI::JustEngagedWith (:175, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     -- The intro machine is unported, so the boss engages already in the
     -- post-intro NORMAL form: the C++ intro-end seeds

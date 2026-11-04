@@ -35,9 +35,11 @@
 -- 4 OnDied, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_ymiron.cpp):
--- JustEngagedWith (:143-149) — Talk(SAY_AGGRO 0) (event 1; BossAI::
--- JustEngagedWith passthrough unmodeled — the auriaya engage-port
--- precedent) — plus the four EVENT_GROUP_BASE_SPELLS timer inits
+-- JustEngagedWith (:141-149, base-first) — BossAI::JustEngagedWith
+-- arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- (ScriptedCreature.cpp:540/542) ported before Talk(SAY_AGGRO 0)
+-- (event 1; instance/setActive/ScheduleTasks legs out) — plus the four
+-- EVENT_GROUP_BASE_SPELLS timer inits
 -- carried on event 1 on the xt002 precedent (C++ schedules on
 -- JustEngagedWith, Go on event 1, same inits). All four arms are
 -- ungated in the ExecuteEvent switch (no phase conditions on the base
@@ -194,10 +196,16 @@ local function ancestorsVengeanceTick(creature, guid, heroic)
     end)
 end
 
--- C++ boss_ymironAI::JustEngagedWith (:143-149): Talk(SAY_AGGRO) —
--- unconditional (the auriaya engage-port precedent); the four base-spell
--- schedule inits are carried here on the xt002 precedent.
+-- C++ boss_ymironAI::JustEngagedWith (:141-149): BossAI::JustEngagedWith
+-- base-first (pulse + me-DoZone ported above Talk; instance/setActive
+-- legs out); Talk(SAY_AGGRO) — unconditional (the auriaya engage-port
+-- precedent); the four base-spell schedule inits are carried here on
+-- the xt002 precedent.
 local function ymironEnterCombat(event, creature, target)
+    -- BossAI::JustEngagedWith (:143, base-first) — SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     local heroic = creature:IsHeroic()
