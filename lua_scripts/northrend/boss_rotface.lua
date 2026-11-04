@@ -72,6 +72,10 @@
 -- DATA_OOZE_DANCE_ACHIEVEMENT) — no instance bridge; EnterEvadeMode
 -- cross-AI professor EnterEvadeMode — no bridge; JustSummoned
 -- cross-AI professor CastSpell leg (VILE_GAS_H) — no bridge.
+-- JustSummoned latch PORTED 2026-11-03 (rotfaceJustSummoned,
+-- event 19): summons latch, despawned from died/reset/leave; the
+-- vile-gas stalker never spawns in Lua, so only the ooze-spray
+-- stalker latch leg is live via the ported slime-spray summon site.
 -- npc_precious_icc::JustDied —
 -- rotface->AI()->Talk(SAY_PRECIOUS_DIES 0) is cross-AI Talk with no
 -- bridge (the festergut stinky precedent); Talk(
@@ -277,14 +281,49 @@ end
 
 -- C++ Reset/JustDied _Reset()/_JustDied() timer machinery —
 -- cancel/re-arm on combat events (the maiden convention).
+-- C++ JustSummoned (boss_rotface.cpp:177-184): vile-gas stalker ->
+-- professor CastSpell (instance-blocked, stays out); every summon ->
+-- summons.Summon latch. Table defined above its first caller
+-- (halazzi/skadi idiom); the latch feeds Reset _Reset (:111-113) +
+-- JustDied _JustDied (:142-145) + leave DespawnAll. Only the ooze
+-- spray stalker arrives via a direct Lua summon (slime-spray site).
+local rotfaceSummons = {}
+
+local function despawnRotfaceSummons(guid)
+    local latched = rotfaceSummons[guid]
+    if latched then
+        for _, summon in ipairs(latched) do
+            if summon then
+                summon:Despawn()
+            end
+        end
+        rotfaceSummons[guid] = nil
+    end
+end
+
+local function rotfaceJustSummoned(event, creature, summon)
+    if not summon then
+        return
+    end
+    local guid = creature:GetGUID()
+    local latched = rotfaceSummons[guid]
+    if not latched then
+        latched = {}
+        rotfaceSummons[guid] = latched
+    end
+    latched[#latched + 1] = summon
+end
+
 local function rotfaceLeaveCombat(event, creature)
     local guid = creature:GetGUID()
+    despawnRotfaceSummons(guid)
     cancelTimers(guid)
     infection[guid] = nil
 end
 
 local function rotfaceReset(event, creature)
     local guid = creature:GetGUID()
+    despawnRotfaceSummons(guid)
     cancelTimers(guid)
     infection[guid] = nil
 end
@@ -305,6 +344,7 @@ end
 -- auto-cancel — the devourer/festergut death-cancel precedent).
 local function rotfaceJustDied(event, creature, killer)
     local guid = creature:GetGUID()
+    despawnRotfaceSummons(guid)
     -- C++ JustDied (:141-148): instance->
     -- DoRemoveAurasDueToSpellOnPlayers(MUTATED_INFECTION) is the
     -- FIRST arm — via GetPlayersInWorld + mapId/instanceId filter +
@@ -338,4 +378,5 @@ RegisterCreatureEvent(ENTRY_ROTFACE, 2, rotfaceLeaveCombat)
 RegisterCreatureEvent(ENTRY_ROTFACE, 3, rotfaceKilledUnit)
 RegisterCreatureEvent(ENTRY_ROTFACE, 4, rotfaceJustDied)
 RegisterCreatureEvent(ENTRY_ROTFACE, 15, rotfaceSpellHitTarget)
+RegisterCreatureEvent(ENTRY_ROTFACE, 19, rotfaceJustSummoned)
 RegisterCreatureEvent(ENTRY_ROTFACE, 23, rotfaceReset)

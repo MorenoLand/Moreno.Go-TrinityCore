@@ -60,15 +60,14 @@
 -- is the DoAction(20) cross-AI relay (no DoAction bridge) and the
 -- sole consumer is achievement_ignis_shattered below (no achievement
 -- bridge), so a Lua-side latch would be dead code.
--- JustSummoned — NPC_IRON_CONSTRUCT faction/react-state/flag/
--- immune/root legs + AttackStart/DoZoneInCombat + summons.Summon
--- — the faction / react-state legs have bridges now (SetFaction +
--- SetReactState live, 2026-10-21) and DoZoneInCombat is bridged
--- (lua_creature_events.go:426 — the 2026-10-22 "no creature-side
--- bridges" note is half-retracted), but the summoned constructs never
--- materialize (no SPELL_EFFECT_SUMMON bridge; the DoSummon machine's
--- heart is the unbridged DoAction(20) cross-AI relay + aura-stack legs)
--- and AttackStart still has no bridge — stays out.
+-- JustSummoned — PORTED 2026-11-03 (ignisJustSummoned, event 19):
+-- construct setup (SetFaction/SetReactState/RemoveFlag x4) +
+-- EngageWithTarget(victim) (the AttackStart twin) + DoZoneInCombat +
+-- summons latch, despawned from died (before Talk)/reset/leave.
+-- Deltas: SetImmuneToPC + SetControlled(false, ROOT) have no bridges
+-- and stay out; constructs still never spawn in Lua (DoSummon leg
+-- blocked), so the construct arm fires only on a direct summon, while
+-- the scorch arm is live via the ported EVENT_SCORCH summon site.
 -- DoAction(ACTION_REMOVE_BUFF 20) — RemoveAuraFromStack(SPELL_
 -- STRENGHT 64473) + the GameTime <5s shattered window (producer:
 -- npc_iron_construct DamageTaken) — no DoAction / aura-stack
@@ -141,6 +140,14 @@ local SPELL_BERSERK = 47008
 local SPELL_SCORCH = 62546 -- boss_ignis.cpp:267
 
 local NPC_GROUND_SCORCH = 33221 -- boss_ignis.cpp:266
+local NPC_IRON_CONSTRUCT = 33121 -- boss_ignis.cpp:272
+local FACTION_MONSTER_2 = 16
+local REACT_AGGRESSIVE = 2
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local UNIT_FLAG_PACIFIED = 0x00020000
+local UNIT_FLAG_STUNNED = 0x00040000
 
 local timers = {}
 
@@ -207,6 +214,54 @@ local function scorchTick(creature, guid)
     end)
 end
 
+-- C++ JustSummoned (boss_ignis.cpp:178-192): construct setup +
+-- AttackStart(victim) + DoZoneInCombat + summons.Summon latch.
+-- Table defined above its first caller (halazzi/skadi idiom); the
+-- latch feeds Reset _Reset (:135-137) + JustDied _JustDied
+-- (:158-160) + leave (evade reaches Reset) DespawnAll.
+local ignisSummons = {}
+
+local function despawnIgnisSummons(guid)
+    local latched = ignisSummons[guid]
+    if latched then
+        for _, summon in ipairs(latched) do
+            if summon then
+                summon:Despawn()
+            end
+        end
+        ignisSummons[guid] = nil
+    end
+end
+
+local function ignisJustSummoned(event, creature, summon)
+    if not summon then
+        return
+    end
+    local guid = creature:GetGUID()
+    local latched = ignisSummons[guid]
+    if not latched then
+        latched = {}
+        ignisSummons[guid] = latched
+    end
+    latched[#latched + 1] = summon
+    if summon:GetEntry() == NPC_IRON_CONSTRUCT then
+        summon:SetFaction(FACTION_MONSTER_2)
+        summon:SetReactState(REACT_AGGRESSIVE)
+        summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED)
+        summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
+        -- SetImmuneToPC(false) + SetControlled(false, ROOT) stay out:
+        -- no bridges (the construct arm fires only on a direct summon;
+        -- constructs still never spawn in Lua, DoSummon leg blocked).
+    end
+    local victim = creature:GetVictim()
+    if victim then
+        summon:EngageWithTarget(victim) -- AttackStart twin
+    end
+    summon:DoZoneInCombat()
+end
+
 local function ignisEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_ignis.cpp:146)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
@@ -226,6 +281,7 @@ local function ignisEnterCombat(event, creature, target)
 end
 
 local function ignisLeaveCombat(event, creature)
+    despawnIgnisSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
 end
 
@@ -240,11 +296,13 @@ end
 -- C++ JustDied: _JustDied() passthrough + Talk(SAY_DEATH) —
 -- only the Talk arm is bridgeable.
 local function ignisDied(event, creature, killer)
+    despawnIgnisSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
 local function ignisReset(event, creature)
+    despawnIgnisSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
 end
 
@@ -252,4 +310,5 @@ RegisterCreatureEvent(ENTRY_IGNIS, 1, ignisEnterCombat)
 RegisterCreatureEvent(ENTRY_IGNIS, 2, ignisLeaveCombat)
 RegisterCreatureEvent(ENTRY_IGNIS, 3, ignisTargetDied)
 RegisterCreatureEvent(ENTRY_IGNIS, 4, ignisDied)
+RegisterCreatureEvent(ENTRY_IGNIS, 19, ignisJustSummoned)
 RegisterCreatureEvent(ENTRY_IGNIS, 23, ignisReset)
