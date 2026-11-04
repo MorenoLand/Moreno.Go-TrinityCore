@@ -196,6 +196,49 @@ local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_skadi::JustSummoned (:183-197): ymirjar entries MovePoint
+-- to the secondary wave point once the first wave exists, then the
+-- unconditional summons.Summon latch (covers Grauf too). Lua summons
+-- only Grauf (Reset, below); the ymirjar waves ride the unported
+-- SpawnFirstWave/DoAction machine, so their MovePoint legs are
+-- vacuous here. The latch feeds Reset _Reset DespawnAll (:166),
+-- JustDied _JustDied DespawnAll (:217) and EnterEvadeMode DespawnAll
+-- (:177-179). Table defined above its first caller (halazzi idiom).
+local skadiSummons = {}
+
+local function despawnSkadiSummons(guid)
+    local latched = skadiSummons[guid]
+    if latched then
+        for _, summon in ipairs(latched) do
+            if summon then
+                summon:Despawn()
+            end
+        end
+        skadiSummons[guid] = nil
+    end
+end
+
+-- C++ JustSummoned, above: latch every direct summon.
+local function skadiJustSummoned(event, creature, summon)
+    if not summon then
+        return
+    end
+    local guid = creature:GetGUID()
+    local latched = skadiSummons[guid]
+    if not latched then
+        latched = {}
+        skadiSummons[guid] = latched
+    end
+    latched[#latched + 1] = summon
+end
+
+-- C++ EnterEvadeMode (:177-179): summons.DespawnAll() before the
+-- evade despawn; timers wipe rides along (cancelCombatTimers idiom).
+local function skadiLeaveCombat(event, creature)
+    despawnSkadiSummons(creature:GetGUID())
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ boss_skadi::Reset (:166-172): REACT_PASSIVE + SummonCreature
 -- (NPC_GRAUF, GraufLoc) when the instance lacks Grauf. The ev23
 -- death-path pre-fire (23 then 4) is guarded: C++ Reset never runs
@@ -205,6 +248,8 @@ local function skadiReset(event, creature)
     if creature:IsDead() then
         return
     end
+    -- C++ Reset (:166-172): _Reset() (DespawnAll) before re-summoning.
+    despawnSkadiSummons(creature:GetGUID())
     creature:SetReactState(0) -- REACT_PASSIVE
     if not creature:FindNearestCreature(ENTRY_GRAUF, 500) then
         creature:SummonCreature(ENTRY_GRAUF, 341.7411, -516.9545, 104.6695, 3.124139)
@@ -254,9 +299,9 @@ local function skadiKilledUnit(event, creature, victim)
     end
 end
 
--- C++ JustDied: _JustDied() (passthrough, no bridge);
--- Talk(SAY_DEATH) — unconditional — the sjonnir JustDied-Talk precedent.
+-- C++ JustDied (:217-220): _JustDied() (DespawnAll) before Talk.
 local function skadiJustDied(event, creature)
+    despawnSkadiSummons(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
@@ -352,10 +397,11 @@ local function harpoonerEnterCombat(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 1, skadiEnterCombat)
-RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 2, skadiLeaveCombat)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 3, skadiKilledUnit)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 4, skadiJustDied)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 23, skadiReset)
+RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 19, skadiJustSummoned)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 1, warriorEnterCombat)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WARRIOR, 4, cancelCombatTimers)

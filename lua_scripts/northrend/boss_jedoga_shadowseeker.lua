@@ -116,18 +116,18 @@
 -- EVENT_SUMMON_VOLUNTEER reschedule): no DoAction bridge on the
 -- Lua surface (drakkari_colossus standing precedent) —
 -- documented-only.
--- JustSummoned (NPC_TWILIGHT_WORSHIPPER 30111 SetStandState(
--- UNIT_STAND_STATE_KNEEL) + summons.Summon — stand-state bridge exists
--- since 2026-10-21, but the arm stays out on the unported summon machine
--- / cross-AI bridges), SummonedCreatureDies (initiate _initiatesKilled == 15
+-- JustSummoned — worshipper kneel leg stays out (SummonCreatureGroup
+-- arrivals, unbridged), but the summons latch + DespawnAll legs are
+-- PORTED via ev19 (jedogaJustSummoned below; controllers are direct
+-- Lua summons), SummonedCreatureDies (initiate _initiatesKilled == 15
 -- latch -> SPELL_HOVER_FALL_1 56100 + EVENT_START_FIGHT_1 1s
 -- (RemoveAurasDueToSpell(SPELL_BEAM_VISUAL_JEDOGA 56312) then
 -- summons.DespawnEntry(controller) + SetDisableGravity(false) +
 -- MoveLand(POINT_GROUND)) and the volunteer _volunteerWork=false
 -- latch + PHASE_THREE flip; payload rides the unbridged summon /
--- movement / instance arms), EnterEvadeMode (summons.DespawnAll has
--- no bearer — the _DespawnAtEvade(15s) leg is ported in
--- jedogaLeaveCombat as immediate creature:Despawn (drakkari
+-- movement / instance arms), EnterEvadeMode (summons.DespawnAll PORTED
+-- via the ev19 latch in jedogaLeaveCombat; the _DespawnAtEvade(15s) leg
+-- is ported as immediate creature:Despawn (drakkari
 -- precedent; C++ despawns immediately, the 15s is respawn-side —
 -- ScriptedCreature.cpp:596-616; stale "no despawn bridge"
 -- retracted),
@@ -174,6 +174,41 @@ local ENTRY_JEDOGA_CONTROLLER = 30181 -- ahnkahet.h:59
 local SPELL_BEAM_VISUAL_JEDOGA = 56312 -- boss_jedoga_shadowseeker.cpp:53
 local SPELL_RANDOM_LIGHTNING_VISUAL = 56327  -- boss_jedoga_shadowseeker.cpp:43
 
+-- C++ boss_jedoga_shadowseeker::JustSummoned (:230-238): twilight
+-- worshippers kneel + latch, every other summon latches via
+-- BossAI::JustSummoned; the latch feeds EnterEvadeMode DespawnAll
+-- (:182-186), _JustDied DespawnAll and the DespawnEntry(controller)
+-- legs. Lua summons only the two controllers (Reset, below), so the
+-- ev19 latch holds controllers; worshippers arrive via the unbridged
+-- SummonCreatureGroup leg. Table defined above its first caller.
+local jedogaSummons = {}
+
+local function despawnJedogaSummons(guid)
+    local latched = jedogaSummons[guid]
+    if latched then
+        for _, summon in ipairs(latched) do
+            if summon then
+                summon:Despawn()
+            end
+        end
+        jedogaSummons[guid] = nil
+    end
+end
+
+-- C++ JustSummoned, above: latch every direct summon (halazzi idiom).
+local function jedogaJustSummoned(event, creature, summon)
+    if not summon then
+        return
+    end
+    local guid = creature:GetGUID()
+    local latched = jedogaSummons[guid]
+    if not latched then
+        latched = {}
+        jedogaSummons[guid] = latched
+    end
+    latched[#latched + 1] = summon
+end
+
 local function jedogaEnterCombat(event, creature, target)
     -- cpp:162-165 — JustEngagedWith strips the two intro visual auras before
     -- anything else (arm order C++-exact); the stale "no aura-removal
@@ -196,6 +231,8 @@ local function jedogaTargetDied(event, creature, victim)
 end
 
 local function jedogaDied(event, creature, killer)
+    -- C++ JustDied (:195-198): _JustDied() (DespawnAll) before Talk.
+    despawnJedogaSummons(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
@@ -207,6 +244,8 @@ end
 -- Reset stay documented-only above.
 local function jedogaReset(event, creature)
     if creature:IsAlive() then
+        -- C++ Reset (:148-160): _Reset() (DespawnAll) before re-summoning.
+        despawnJedogaSummons(creature:GetGUID())
         local controller = creature:SummonCreature(ENTRY_JEDOGA_CONTROLLER, 402.7893, -748.5251, 29.39399, 2.024582)
         if controller then
             controller:CastSpell(creature, SPELL_BEAM_VISUAL_JEDOGA)
@@ -223,11 +262,15 @@ local function jedogaLeaveCombat(event, creature)
     -- summons.DespawnAll is moot — nothing is modeled) — DespawnOrUnsummon
     -- is immediate at evade, the 15s is respawn-side
     -- (ScriptedCreature.cpp:596-616); drakkari precedent.
+    -- C++ EnterEvadeMode (:182-186): summons.DespawnAll() before the
+    -- evade despawn.
+    despawnJedogaSummons(creature:GetGUID())
     creature:Despawn()
 end
 
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 1, jedogaEnterCombat)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 2, jedogaLeaveCombat)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 23, jedogaReset)
+RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 19, jedogaJustSummoned)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 3, jedogaTargetDied)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 4, jedogaDied)

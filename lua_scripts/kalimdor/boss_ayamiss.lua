@@ -56,7 +56,9 @@
 --   bridge (onEnterCombat); C++ leaves gravity disabled in ground
 --   phase (no re-enable arm), so the port does too.
 -- - SummonCreature: SWARMER leg PORTED (below); the larva's paired
---   JustSummoned leg is a MovePoint to AltarPos (no motion bridge).
+--   JustSummoned leg is a MovePoint to AltarPos — vacuous: the larva
+--   is never summoned in Lua (PARALYZE ports only the cast), and the
+--   MovePoint twin (MoveTo, slad'ran precedent) has no summon to carry.
 -- - EVENT_SWARMER_ATTACK PORTED 2026-10-26 (see onSwarmerAttack);
 --   the old "no bridge" claims are retracted — EngageWithTarget is
 --   the AttackStart twin (lua_creature_events.go:498).
