@@ -73,7 +73,10 @@
 -- (lavanthor precedent; offset-0 = tank stays in the pool).
 -- EVENT_PILLAR_OF_WOE — PORTED (pillarTick — the "no random-target
 -- bridge" claim was stale, C++ :123-128); the UNIT_STATE_CASTING gate
--- and the DoMeleeAttackIfReady tail have no bridges.
+-- (UpdateAI :101 pre-loop + :134 in-loop) is PORTED 2026-11-04 as a
+-- 500ms IsCasting defer in all 4 ticks (mal_ganis idiom; IsCasting
+-- bridged lua_creature_events.go:1950); the DoMeleeAttackIfReady tail
+-- has no bridge.
 
 local ENTRY_MAIDEN_OF_GRIEF = 27975
 
@@ -118,6 +121,12 @@ end
 -- SPELL_STORM_OF_GRIEF 50752, triggered), 10s init (:67) /
 -- {15s,20s} re-arm — zero gating legs.
 local function stormTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "storm", 500, function()
+            stormTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_STORM_OF_GRIEF, true)
     schedule(guid, "storm", {15000, 20000}, function()
         stormTick(creature, guid)
@@ -129,6 +138,12 @@ end
 -- Talk(SAY_STUN 3) + DoCastAOE(SPELL_SHOCK_OF_SORROW 50760)
 -- non-triggered, {20s,25s} init (:68) / {20s,30s} re-arm.
 local function shockTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shock", 500, function()
+            shockTick(creature, guid)
+        end)
+        return
+    end
     creature:ResetAllThreat()
     creature:Talk(SAY_STUN)
     creature:CastSpell(creature, SPELL_SHOCK_OF_SORROW)
@@ -190,6 +205,12 @@ end
 -- creature:IsHeroic() bridged — the blood-prince-council precedent);
 -- no cast when no target found, unconditional {30s,40s} re-arm (:111).
 local function partingTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "parting", 500, function()
+            partingTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_PARTING_SORROW)
@@ -205,6 +226,12 @@ end
 -- non-triggered; init {5s,15s} (:69), unconditional re-arm {5s,25s}
 -- (:128).
 local function pillarTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pillar", 500, function()
+            pillarTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerTarget(creature, true)
     if target then
         creature:CastSpell(target, SPELL_PILLAR_OF_WOE)

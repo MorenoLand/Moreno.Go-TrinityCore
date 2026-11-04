@@ -18482,6 +18482,12 @@ func init() {
 	// despawn machine — no react / motion / DamageTaken / timer
 	// / instance bridges; the stormforged_lieutenant
 	// no-bridgeable-arms precedent, no registration).
+	// CAST-STATE 2026-11-04: boss UpdateAI (:220) has zero
+	// HasUnitState hits (sole cast-state hit is the :286
+	// IsNonMeleeSpellCast interrupt at the disperse health check,
+	// not a gate); spark UpdateAI (:344) likewise ungated — ported
+	// ticks (ball/static/split) fire ungated, C++-exact; no gate
+	// ported.
 	RegisterLuaBoss("boss_ionar", 28546)
 
 	// Volkhan (28587), Halls of Lightning —
@@ -18520,6 +18526,15 @@ func init() {
 	// (GetData(DATA_SHATTER_RESISTANT 2042) < 5 — no GetData
 	// / achievement bridges; joins the unmodeled-achievement
 	// queue).
+	// CAST-STATE 2026-11-04: boss UpdateAI pre-loop gate :236 +
+	// in-loop :284 PORTED as a 500ms IsCasting defer in
+	// volkhanForgeTick (EVENT_FORGE_CAST, PHASE_INTRO — the gate
+	// is unconditional after the phase-gated victim check);
+	// molten-golem UpdateAI pre-loop :460 + in-loop :479 PORTED
+	// as a 500ms defer in golemBlastTick / golemImmolationTick
+	// (immolation defer uses its own "immolation" key so the C++
+	// EVENT_BLAST-5s typo re-arm is untouched); the frozen guard
+	// still precedes the gate per C++ :455.
 	RegisterLuaBoss("boss_volkhan", 28587)
 
 	// Maiden of Grief (27975), Halls of Stone —
@@ -18540,6 +18555,13 @@ func init() {
 	// SAY_STUN + DoCastAOE 50760; PILLAR_OF_WOE random-target /
 	// victim 50761 — no timer-event / cast / target-selection /
 	// threat bridges; Talk(3) rides the SHOCK_OF_SORROW machine).
+	// CAST-STATE 2026-11-04: UpdateAI pre-loop gate :101 +
+	// in-loop :134 PORTED as a 500ms IsCasting defer in all 4
+	// ported ticks (parting/storm/shock/pillar, mal_ganis idiom);
+	// the "no timer-event/cast bridges" claim above is stale —
+	// the ticks already ride CreateLuaEvent, and the Lua header's
+	// "gate has no bridge" claim is retracted (IsCasting live,
+	// lua_creature_events.go:1950).
 	RegisterLuaBoss("boss_maiden_of_grief", 27975)
 
 	// Krystallus (27977), Halls of Stone —
@@ -18562,6 +18584,12 @@ func init() {
 	// spell_krystallus_shatter_effect (radius-scaled hit damage)
 	// — no SpellScript bridge; both join the
 	// no-SpellScript-bridge queue.
+	// CAST-STATE 2026-11-04: UpdateAI pre-loop gate :86 +
+	// in-loop :119 PORTED as a 500ms IsCasting defer in all 3
+	// ported ticks (boulder/spike/stomp, mal_ganis idiom);
+	// GROUND_SLAM/SHATTER chain stays unported, so it takes no
+	// defer; the "no timer-event/cast bridges" claim above is
+	// stale for the three ported arms.
 	RegisterLuaBoss("boss_krystallus", 27977)
 
 	// Sjonnir the Ironshaper (27978), Halls of Stone —

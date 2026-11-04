@@ -144,6 +144,12 @@ end
 -- 50843) non-triggered on a SelectTarget(Random, 0, 50.0f, true) target;
 -- re-arm unconditional {9s,15s} (C++ re-arms outside the if-target).
 local function boulderTossTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "boulder", 500, function()
+            boulderTossTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 50)
     if target then
         creature:CastSpell(target, SPELL_BOULDER_TOSS)
@@ -160,6 +166,12 @@ end
 -- SelectTarget(Random, 0, 100.0f, true) target; re-arm unconditional
 -- {12s,17s}.
 local function groundSpikeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spike", 500, function()
+            groundSpikeTick(creature, guid)
+        end)
+        return
+    end
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_GROUND_SPIKE)
@@ -173,6 +185,12 @@ end
 -- non-triggered self-cast, {20s,29s} init / {20s,29s} re-arm
 -- (boss_krystallus.cpp:73/:108-110) — zero gating legs.
 local function stompTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            stompTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_STOMP)
     schedule(guid, "stomp", {20000, 29000}, function()
         stompTick(creature, guid)

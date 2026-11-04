@@ -170,6 +170,12 @@ local function volkhanForgeCancel(guid)
 end
 
 local function volkhanForgeTick(creature, guid)
+    if creature:IsCasting() then
+        volkhanForgeTimers[guid] = CreateLuaEvent(function()
+            volkhanForgeTick(creature, guid)
+        end, 500)
+        return
+    end
     creature:CastSpell(creature, SPELL_FORGE_VISUAL)
     volkhanForgeTimers[guid] = CreateLuaEvent(function()
         volkhanForgeTick(creature, guid)
@@ -268,6 +274,12 @@ end
 -- non-triggered, unconditional 20s re-arm.
 local function golemBlastTick(creature, guid)
     if golemFrozen[guid] then return end
+    if creature:IsCasting() then
+        golemSchedule(guid, "blast", 500, function()
+            golemBlastTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BLAST_WAVE)
     golemSchedule(guid, "blast", 20000, function()
         golemBlastTick(creature, guid)
@@ -280,6 +292,12 @@ end
 -- key overwrites the blast timer, matching EventMap overwrite.
 local function golemImmolationTick(creature, guid)
     if golemFrozen[guid] then return end
+    if creature:IsCasting() then
+        golemSchedule(guid, "immolation", 500, function()
+            golemImmolationTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(nil, SPELL_IMMOLATION_STRIKE)
     golemSchedule(guid, "blast", 5000, function()
         golemBlastTick(creature, guid)
