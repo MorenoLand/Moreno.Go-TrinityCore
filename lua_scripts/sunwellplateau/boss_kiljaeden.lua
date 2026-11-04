@@ -64,8 +64,10 @@
 -- phase checks (one transition per tick, blocked while in
 -- darkness — C++-exact). Fires:
 -- * soul flay: non-triggered DoCastVictim(47106 slow + 45442)
---   (the IsNonMeleeSpellCast queue gate has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
---   — timers fire unconditionally, jeklik convention); repeat 3.5s.
+--   (per-arm IsNonMeleeSpellCast(false) queue gate, boss_kiljaeden.cpp:746:
+--   while casting the arm fires nothing and consumes no re-arm -- the
+--   timer stays expired and the 100ms pump retries it next tick);
+--   repeat 3.5s.
 -- * legion lightning: RemoveAura(45442) + non-triggered cast
 --   45664 on a random alive player in the instance within 100 yd
 --   (up to 6 picks; the first pick without 45839 vengeance wins,
@@ -197,10 +199,12 @@
 -- SetFlag, SetReactState and SetDisableGravity are all bridged, and
 -- the fiend KillSelf and armageddon DespawnOrUnsummon arms ARE ported
 -- below; what stays out is the kalecgos-kj/controller flag/gravity/
--- faction/GO-type arms (unregistered entries 25319/25608 + GO bearer,
--- not bridge) and the reflection dual-wield arms (no SetCanDualWield
--- bridge); no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the soul-flay/
--- lightning/fire-bloom/shadow-spike/darkness IsNonMeleeSpellCast
+-- bridge); the soul-flay/lightning/fire-bloom/shadow-spike/darkness
+-- IsNonMeleeSpellCast queue gates ARE ported in fireTimer (skip
+-- while IsCasting, no re-arm consumed, 100ms pump retry); the
+-- speech, shield-orb, flame-dart, orbs-empower and armageddon
+-- arms carry no C++ cast-state check and fire ungated; the
+-- SPELLVALUE/aura-filter targeting nuances have
 -- queue gates are unmodeled (timers fire unconditionally, jeklik
 -- convention); the SPELLVALUE/aura-filter targeting nuances have
 -- no bearer. boss_kalecgos_kj (25319) is not registered — every
@@ -461,6 +465,18 @@ local function pickVengeanceFreePlayer(creature)
 end
 
 local function fireTimer(creature, st, name)
+    -- C++ per-arm IsNonMeleeSpellCast(false) queue gates
+    -- (boss_kiljaeden.cpp:746/:754/:776/:796/:810): while casting,
+    -- the arm fires nothing and consumes no re-arm -- its timer
+    -- stays expired and the 100ms pump retries it next tick
+    -- (IsCasting live, lua_creature_events.go:1950). The gate
+    -- precedes every side effect of the arm (Talk, RemoveAura,
+    -- summons, ChangeTimers, re-arms).
+    if (name == "soulflay" or name == "lightning" or name == "firebloom"
+            or name == "shadowspike" or name == "darkness")
+            and creature:IsCasting() then
+        return
+    end
     local phase = st.phase
     if name == "soulflay" then
         creature:CastSpell(nil, SPELL_SOUL_FLAY_SLOW)

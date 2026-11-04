@@ -12284,10 +12284,15 @@ func init() {
 	// flame dart 45737, darkness 46605/45657 (+9s wait), with the
 	// C++-exact 85/55/25% phase transitions and the shield-orb /
 	// orbs-empower timer dynamics (summons and the kalecgos
-	// cross-creature arms skipped). The speech chain's kalecgos/
+	// cross-creature arms skipped). The soul-flay/legion-lightning/
+	// fire-bloom/shadow-spike/darkness arms carry per-arm
+	// IsNonMeleeSpellCast(false) queue gates (boss_kiljaeden.cpp:746/
+	// :754/:776/:796/:810), ported in fireTimer: skip while IsCasting,
+	// no re-arm consumed, 100ms pump retry; speech, shield-orb,
+	// flame-dart, orbs-empower and armageddon arms are ungated per
+	// C++. The speech chain's kalecgos/
 	// anveena rows, the SetBossState/DoZoneInCombat arms and the
-	// armageddon-target summons have no cross-creature/instance-
-	// script/summon bridges.
+	// armageddon-target summons are ported in fireTimer (Lua header).
 	RegisterLuaBoss("boss_kiljaeden", 25315)
 	// Hand of the Deceiver (25588) runs its shadow-bolt-volley
 	// 45770 schedule, the 20% shadow-infusion 45772 upkeep and the
@@ -12296,15 +12301,20 @@ func init() {
 	// SetBossState arms have no summon/cross-creature/instance-
 	// script bridges — registered for its own verifiable AI arms
 	// (felmyst-trail convention).
+	// Its UpdateAI carries no cast-state
+	// check: volley, 20% infusion latch and OOC channel fire ungated.
 	RegisterLuaBoss("npc_hand_of_the_deceiver", 25588)
 	// Volatile Felfire Fiend (25598) casts felfire fission 45779
 	// (triggered) on lethal damage and runs the 2s-primed 3yd
 	// proximity detonation; the KillSelf and AddThreat arms have
 	// no kill/threat bridges.
+	// Its UpdateAI detonation and DamageTaken
+	// fission arms carry no cast-state check (boss_kiljaeden.cpp:1105-1138).
 	RegisterLuaBoss("npc_volatile_felfire_fiend", 25598)
 	// Armageddon Target (25735) runs its Reset visual chain:
 	// triggered 45911, 9s -> triggered 45914, 5s -> triggered
-	// 45909. The DespawnOrUnsummon arm has no despawn bridge.
+	// 45909. The DespawnOrUnsummon arm is ported via creature:Despawn();
+	// the visual chain carries no cast-state check (boss_kiljaeden.cpp:1164-1200).
 	RegisterLuaBoss("npc_armageddon", 25735)
 	// Sinister Reflection (25708) runs the C++-exact per-victim-
 	// class spell rotations (druid/hunter/mage/warlock/warrior/
@@ -12312,6 +12322,8 @@ func init() {
 	// SetCanDualWield arms have no summon/dual-wield bridges.
 	// Note the C++ ScriptName typo "npc_sinster_reflection" is
 	// preserved 1:1.
+	// Its per-class rotation UpdateAI carries no
+	// cast-state check (boss_kiljaeden.cpp:1322-1470).
 	RegisterLuaBoss("npc_sinster_reflection", 25708)
 
 	// lua_scripts/gruulslair/boss_high_king_maulgar.lua (boss_high_
