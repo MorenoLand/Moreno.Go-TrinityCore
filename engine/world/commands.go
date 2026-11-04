@@ -2916,13 +2916,19 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 		// Player::GiveLevel (Player.cpp:2787): the C++ .character level
 		// command goes through GiveLevel, which fires OnPlayerLevelChanged.
 		t.online.fireLevelChangedHook(ctx, uint8(oldLevel))
-		switch {
-		case oldLevel == newLevel:
-			s.sendSysMessage(fmt.Sprintf("Your level progress has been reset by %s.", t.name))
-		case oldLevel < newLevel:
-			s.sendSysMessage(fmt.Sprintf("%s leveled up to %d.", t.name, newLevel))
-		default:
-			s.sendSysMessage(fmt.Sprintf("%s leveled down to %d.", t.name, newLevel))
+		if t.online != s && isVisibleGloballyFor(s, t.online) { // needReportToTarget
+			invokerName := ""
+			if s.player != nil {
+				invokerName = s.player.Name
+			}
+			switch {
+			case oldLevel == newLevel:
+				t.online.sendSysMessage(fmt.Sprintf("Your level progress has been reset by %s.", invokerName))
+			case oldLevel < newLevel:
+				t.online.sendSysMessage(fmt.Sprintf("Your level has been increased to %d by %s.", newLevel, invokerName))
+			default:
+				t.online.sendSysMessage(fmt.Sprintf("Your level has been decreased to %d by %s.", newLevel, invokerName))
+			}
 		}
 	} else {
 		chars := s.server.CharactersStore
@@ -2931,7 +2937,9 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 		}
 		_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_LEVEL"), uint8(newLevel), t.guid)
 	}
-	s.sendSysMessage(fmt.Sprintf("Changed level of %s to %d.", t.name, newLevel))
+	if t.online == nil || t.online != s { // C++: handler line suppressed when invoker == target
+		s.sendSysMessage(fmt.Sprintf("Changed level of %s to %d.", t.name, newLevel))
+	}
 }
 
 // handleCharacterRename mirrors HandleCharacterRenameCommand
@@ -3413,6 +3421,10 @@ func (s *session) deleteCharacterFromDB(ctx context.Context, guid uint64, accoun
 // (cs_character.cpp:720): the character is kicked if online, then permanently
 // wiped via the Player::DeleteFromDB path.
 func (s *session) handleCharacterErase(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .character erase $player") // C++ player arg is non-optional; never erase the invoker
+		return
+	}
 	t, rest, ok := s.resolveCharacterTarget(ctx, args)
 	if !ok {
 		return

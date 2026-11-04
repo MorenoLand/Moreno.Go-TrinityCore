@@ -1193,6 +1193,7 @@ func (s *session) handleCmdFreeze(ctx context.Context, args []string) {
 	canApply := false
 	getDurationFromConfig := false
 	if len(args) == 0 {
+		target = s.miscSelectedPlayerSession() // C++ case 1: bare .freeze freezes the selected player
 		getDurationFromConfig = true
 	} else if d, err := strconv.ParseUint(args[0], 10, 32); err == nil {
 		target = s.miscSelectedPlayerSession()

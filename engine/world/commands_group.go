@@ -299,7 +299,7 @@ func (s *session) handleGroupRemoveCommand(ctx context.Context, args []string) {
 // first player's group.
 func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 	const syntax = "Syntax: .group join <playerInGroup> <player>"
-	if len(args) < 2 {
+	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -316,7 +316,11 @@ func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", source.name)) // LANG_GROUP_NOT_IN_GROUP (1147)
 		return
 	}
-	target, _, ok := s.resolveGroupPlayer(ctx, args[1:2], true)
+	targetArgs := args[1:2]
+	if len(args) < 2 { // C++ second strtok yields NULL -> selected/self fallback
+		targetArgs = nil
+	}
+	target, _, ok := s.resolveGroupPlayer(ctx, targetArgs, true)
 	if !ok {
 		return
 	}

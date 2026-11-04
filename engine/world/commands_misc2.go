@@ -1232,6 +1232,9 @@ func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
+	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target, guid: guid, name: name}) {
+		return // C++ HasLowerSecurity: silent fail
+	}
 	s.sendSysMessage(fmt.Sprintf("Player %s (guid: %d)", miscPlayerLink(name), guid))
 	var accountID uint32
 	if target != nil && target.player != nil {
@@ -1250,9 +1253,11 @@ func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
 		var level, race, class uint8
 		var money, health, maxHealth, mapID, zone uint32
 		var totalTime uint32
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx,
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
 			"SELECT level, race, class, money, health, maxHealth, map, zone, totaltime FROM characters WHERE guid = ?",
-			guid).Scan(&level, &race, &class, &money, &health, &maxHealth, &mapID, &zone, &totalTime)
+			guid).Scan(&level, &race, &class, &money, &health, &maxHealth, &mapID, &zone, &totalTime); err != nil {
+			return // C++ returns false on no PINFO row, it does not print a level-0 row
+		}
 		alive := "no"
 		if health > 0 {
 			alive = "yes"
