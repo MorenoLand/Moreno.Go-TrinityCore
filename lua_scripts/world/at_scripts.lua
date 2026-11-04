@@ -12,6 +12,10 @@
 -- (handler below; the header's "no player:CastSpell bridge" claim was
 -- stale — player:CastSpell bridged 2026-10-24, lua_player.go:2549, and
 -- GetQuestRewardStatus is bridged, lua_player.go:3787).
+-- PORTED (2026-11-04): at_bring_your_orphan_to (childrens_week.cpp,
+-- handler below; in-file trigger IDs 3551/3549/3547/3546/3552/3548/4356,
+-- aura-caster orphan check via player:GetAura + aura:GetCaster, quest
+-- INCOMPLETE gate, AreaExploredOrEventHappens credit).
 -- Remaining classes documented-only; bridges verified against the current
 -- runtime this run (player method table at
 -- engine/world/lua_player.go, creature table at
@@ -70,6 +74,22 @@ local BREWFEST_TAPPER = {
     [4829] = 24711, -- DUROTAR: Tapper Swindlekeg
     [4820] = 24710, -- DUN MOROGH: Ipfelkofer Ironkeg
 }
+
+-- at_bring_your_orphan_to (childrens_week.cpp:935-990): trigger ID ->
+-- { quest ID, orphan entry }; Dark Portal (4356) picks the faction pair
+-- at dispatch (Alliance quest 10952 / draenei orphan 22818, Horde quest
+-- 10951 / blood elf orphan 22817). SPELL_ORPHAN_OUT = 58818.
+local ORPHAN_TRIGGER = {
+    [3551] = { 910, 14444 }, -- AT_DOWN_AT_THE_DOCKS, orcish orphan
+    [3549] = { 911, 14444 }, -- AT_GATEWAY_TO_THE_FRONTIER, orcish orphan
+    [3547] = { 1800, 14444 }, -- AT_LORDAERON_THRONE_ROOM, orcish orphan
+    [3546] = { 1479, 14305 }, -- AT_BOUGHT_OF_ETERNALS, human orphan
+    [3552] = { 1687, 14305 }, -- AT_SPOOKY_LIGHTHOUSE, human orphan
+    [3548] = { 1558, 14305 }, -- AT_STONEWROUGHT_DAM, human orphan
+}
+
+local QUEST_STATUS_INCOMPLETE = 3
+local SPELL_ORPHAN_OUT = 58818
 
 local lastTrigger = {}
 
@@ -135,6 +155,44 @@ local function areaTriggerHandler(_, player, triggerID)
         player:SummonCreature(19913, area52[1], area52[2], area52[3], 0.0, 2, 5000)
         player:AddAura(34400)
         lastTrigger[triggerID] = now
+        return
+    end
+    local orphanArm = ORPHAN_TRIGGER[triggerID]
+    if orphanArm then
+        -- at_bring_your_orphan_to (:935-990): not dead + ORPHAN_OUT aura
+        -- whose caster is this trigger's orphan + quest INCOMPLETE ->
+        -- AreaExploredOrEventHappens. getOrphanGUID (:136-143) lowers to
+        -- aura:GetCaster():GetEntry(); a presence-only 58818 record has
+        -- no Aura object (lua_player.go GetAura), so the caster check
+        -- skips and no credit lands rather than a wrong credit.
+        if not player:IsDead() and player:HasAura(SPELL_ORPHAN_OUT) then
+            local questId, orphanId = orphanArm[1], orphanArm[2]
+            local aura = player:GetAura(SPELL_ORPHAN_OUT)
+            local caster = aura and aura:GetCaster()
+            if caster and caster:GetEntry() == orphanId
+                and player:GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE then
+                player:AreaExploredOrEventHappens(questId)
+            end
+        end
+        return
+    end
+    if triggerID == 4356 then
+        -- at_bring_your_orphan_to AT_DARK_PORTAL (:977-980): faction
+        -- pair, same gates as the table arms above.
+        local questId, orphanId
+        if player:GetTeam() == 0 then
+            questId, orphanId = 10952, 22818
+        else
+            questId, orphanId = 10951, 22817
+        end
+        if not player:IsDead() and player:HasAura(SPELL_ORPHAN_OUT) then
+            local aura = player:GetAura(SPELL_ORPHAN_OUT)
+            local caster = aura and aura:GetCaster()
+            if caster and caster:GetEntry() == orphanId
+                and player:GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE then
+                player:AreaExploredOrEventHappens(questId)
+            end
+        end
         return
     end
     local tapperEntry = BREWFEST_TAPPER[triggerID]
