@@ -72,10 +72,12 @@
 --   SPELL_VAMPIRIC_MIGHT 70674 self-cast 17s/25s (:603);
 --   SPELL_SHADOW_CLEAVE 70670 victim-cast 12s/14s (:608);
 --   SPELL_NECROTIC_STRIKE 70659 victim-cast 10s/17s (:613) — all
---   non-triggered. CORRECTION (2026-10-16): the IsCasting bridge EXISTS
---   but always returns false for creatures (no cast state,
---   engine/world/lua_objects.go) — the SetValidator always passes, so
---   timers firing unconditionally is C++-net-equal, not a missing leg.
+--   non-triggered. The fanatic SetValidator :597-599 (!CASTING) is
+--   PORTED: all three ticks + both reanimate arms defer 500ms via
+--   creature:IsCasting() (live CastingUntil window,
+--   lua_creature_events.go:1950; the 2026-10-16 "always false"
+--   claim is retracted — the no-cast-state axiom went stale when
+--   the pending/channel cast-state model landed).
 --   SpellHit arm PORTED 2026-10-16 (event 14,
 --   CREATURE_EVENT_ON_HIT_BY_SPELL — the earlier "no SpellHit bridge"
 --   claim was stale; engine/world/spells.go:11709-11730, boss_ai.go:2052-2096):
@@ -105,11 +107,10 @@
 --   UpdateEntry-swaps to ENTRY_EMPOWERED_ADHERENT (Creature::UpdateEntry
 --   twin bridged 2026-10-22; registered for both entries since the twin
 --   re-dispatches hooks to the live entry), so the Blast branch is live
---   once empowered. CORRECTION (2026-10-16): the
---   IsCasting bridge EXISTS but always returns false for creatures (no
---   cast state, engine/world/lua_objects.go) — the adherent
---   SetValidator always passes, so timers firing unconditionally is
---   C++-net-equal, not a missing leg.
+--   once empowered. The adherent SetValidator :689-691 (!CASTING) is
+--   PORTED: all three ticks + both reanimate arms defer 500ms via
+--   creature:IsCasting() (lua_creature_events.go:1950; the
+--   2026-10-16 "always false" claim is retracted).
 --   SpellHit arms PORTED 2026-10-22 (event 14 dispatch bridged — the
 --   earlier "no SpellHit bridge" claim was stale): :719-723
 --   DARK_MARTYRDOM_T (SetReactState/AttackStop/CastSpell); the :724-752
@@ -200,14 +201,17 @@
 -- earlier "no SpellHit/UpdateEntry bridge" claims were stale. The
 -- SAY_ANIMATE_DEAD boss Talk is PORTED in both reanimate6 arms; the
 -- darnavan CHARGE + SHATTERING_THROW legs PORTED (shared 1s poll,
--- shatter checked first, C++ order). CORRECTION (2026-10-16): the IsCasting bridge EXISTS
--- but always returns false for creatures (no cast state,
--- engine/world/lua_objects.go) — the validators always pass, so the
--- boss scheduler and adherent SetValidator "no bridge" claims above
--- are restated as net-no-ops, not missing legs. Boss scheduler SetValidator (:216-219:
--- !UNIT_STATE_CASTING unless intro) and the adherent validator
--- (:691-692) have no bridge — timers fire unconditionally (maiden
--- precedent).
+-- shatter checked first, C++ order). CAST-STATE GATES PORTED: the
+-- boss scheduler SetValidator (:215-217, !CASTING unless PHASE_INTRO)
+-- gates all 9 ported boss ticks (ported ticks run in PHASE_ONE/TWO
+-- only, so the intro exemption never applies to them); the fanatic
+-- (:597-599) and adherent (:689-691) validators gate their ticks +
+-- reanimate arms; darnavan's pre-loop gate (:888) gates its 4 EventMap
+-- ticks + the charge/shatter poll. All defer 500ms via
+-- creature:IsCasting() (lua_creature_events.go:1950) without
+-- consuming their re-arm (the mal_ganis idiom). The 2026-10-16
+-- "always false / no bridge / timers fire unconditionally" claims
+-- are retracted.
 -- spell_deathwhisper_mana_barrier /
 -- spell_deathwhisper_dominated_mind /
 -- spell_deathwhisper_vampiric_might join the no-AuraScript-bridge
@@ -357,6 +361,11 @@ end
 -- C++ :296-300 phase-independent scheduler: DoCastSelf(SPELL_BERSERK)
 -- non-triggered + Talk(SAY_BERSERK 15) — 10min one-shot.
 local function onBerserk(creature, guid)
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     creature:Talk(SAY_BERSERK)
 end
@@ -366,6 +375,11 @@ end
 -- SPELL_DEATH_AND_DECAY 71001) non-triggered on SelectTarget(Random);
 -- init 17s, re-arm {22s,30s} unconditional (outside the target if).
 local function onDeathAndDecay(creature, guid)
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "deathanddecay", 500, function() onDeathAndDecay(creature, guid) end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_DEATH_AND_DECAY)
@@ -384,6 +398,11 @@ end
 -- adds in 80 yd (all 7 fixed summon spots are within ~75 yd of the
 -- boss), the closest live-bridge stand-in.
 local function onImproveCultist(creature, guid)
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "improve", 500, function() onImproveCultist(creature, guid) end)
+        return
+    end
     local improved = improvedCultists[guid] or {}
     local pool = {}
     for _, entry in ipairs({ ENTRY_CULT_FANATIC, ENTRY_CULT_ADHERENT }) do
@@ -418,6 +437,11 @@ end
 -- non-triggered on SelectTarget(Random); init 2s, re-arm
 -- {2450ms,3600ms} unconditional.
 local function onShadowBolt(creature, guid)
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "shadowbolt", 500, function() onShadowBolt(creature, guid) end)
+        return
+    end
     local target = randomThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_BOLT)
@@ -443,6 +467,11 @@ end
 -- last-victim exclusion; distinct picks via the putricide table.remove
 -- idiom. Non-triggered casts.
 local function onDominateMind(creature, guid)
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "dominate", 500, function() onDominateMind(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_DOMINATE_MIND)
     local count = 1
     if creature:Is25ManRaid() and creature:IsHeroic() then
@@ -495,6 +524,11 @@ end
 local function frostboltTick(creature, guid)
     -- C++ :423-427 GROUP_TWO: DoCastVictim(SPELL_FROSTBOLT), 12s init,
     -- Repeat() (12s loop).
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function() frostboltTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_FROSTBOLT)
     schedule(guid, "frostbolt", 12000, function()
         frostboltTick(creature, guid)
@@ -505,6 +539,11 @@ local function frostboltVolleyTick(creature, guid)
     -- C++ :428-432 GROUP_TWO: DoCastAOE(SPELL_FROSTBOLT_VOLLEY),
     -- self-cast (boss_ai.go:4783 convention), 20s init, Repeat()
     -- (20s loop).
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "frostboltvolley", 500, function() frostboltVolleyTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROSTBOLT_VOLLEY)
     schedule(guid, "frostboltvolley", 20000, function()
         frostboltVolleyTick(creature, guid)
@@ -517,6 +556,11 @@ local function touchTick(creature, guid)
     -- Victim-targeted AddAura is bridged: the aura lands on the object
     -- the method is called on (gurtogg fel-rage / brutallus burn
     -- precedent), not on the handler creature.
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "touch", 500, function() touchTick(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not victim:IsDead() then
         victim:AddAura(SPELL_TOUCH_OF_INSIGNIFICANCE)
@@ -532,6 +576,11 @@ local function summonSpiritsTick(creature, guid)
     -- else 1) — the MaxTargets arg has no Lua bridge (documented
     -- delta; not faked with an IsHeroic gate, since the count keys
     -- on 25-man, not heroic). Repeat().
+-- C++ scheduler validator :215-217 (!CASTING unless PHASE_INTRO; ported ticks all run in PHASE_ONE/TWO) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "summonspirits", 500, function() summonSpiritsTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SUMMON_SPIRITS)
     schedule(guid, "summonspirits", 12000, function()
         summonSpiritsTick(creature, guid)
@@ -764,18 +813,34 @@ end
 -- add's own OnEnterCombat (summoned mid-combat with immediate AttackStart,
 -- boss JustSummoned :484-488; the scheduler only runs with a victim
 -- :663-668). All three arms non-triggered; the SetValidator
--- !UNIT_STATE_CASTING gate has no bridge (maiden precedent).
+-- !UNIT_STATE_CASTING gate (:597-599) is PORTED below (500ms
+-- IsCasting defer, the mal_ganis idiom).
 local function onVampiricMight(creature, guid)
+-- C++ npc_cult_fanatic SetValidator :597-599 (!CASTING; scheduler Dispatch aborts while casting, tasks stay queued) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "vampiric", 500, function() onVampiricMight(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_VAMPIRIC_MIGHT)
     schedule(guid, "vampiric", 25000, function() onVampiricMight(creature, guid) end)
 end
 
 local function onShadowCleave(creature, guid)
+-- C++ npc_cult_fanatic SetValidator :597-599 (!CASTING; scheduler Dispatch aborts while casting, tasks stay queued) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onShadowCleave(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHADOW_CLEAVE)
     schedule(guid, "cleave", 14000, function() onShadowCleave(creature, guid) end)
 end
 
 local function onNecroticStrike(creature, guid)
+-- C++ npc_cult_fanatic SetValidator :597-599 (!CASTING; scheduler Dispatch aborts while casting, tasks stay queued) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "strike", 500, function() onNecroticStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_NECROTIC_STRIKE)
     schedule(guid, "strike", 17000, function() onNecroticStrike(creature, guid) end)
 end
@@ -821,6 +886,39 @@ end
 -- + SetFlag + DoZoneInCombat all bridged); the instance-legged
 -- ladyDeathwhisper->AI()->Talk(SAY_ANIMATE_DEAD) leg is PORTED in the
 -- reanimate6 arm (FindNearestCreature boss Talk).
+-- C++ npc_cult_fanatic :640-660 2s/6s reanimate scheduler, on the
+-- SetValidator :597-599 scheduler — 500ms IsCasting defer, no re-arm
+-- consumed (the mal_ganis idiom); extracted from SpellHit closures
+-- so the gate can re-schedule them by name.
+local function fanaticReanimate2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "reanimate2", 500, function() fanaticReanimate2(creature, guid) end)
+        return
+    end
+    creature:UpdateEntry(ENTRY_REANIMATED_FANATIC)
+    creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH)
+    creature:CastSpell(creature, SPELL_CLEAR_ALL_DEBUFFS)
+    creature:CastSpell(creature, SPELL_FULL_HEAL, true)
+    creature:SetFlag(UNIT_FIELD_FLAGS,
+        UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
+end
+
+local function fanaticReanimate6(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "reanimate6", 500, function() fanaticReanimate6(creature, guid) end)
+        return
+    end
+    creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS,
+        UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:DoZoneInCombat()
+    local boss = creature:FindNearestCreature(ENTRY_LADY_DEATHWHISPER, 100.0)
+    if boss ~= nil then
+        boss:Talk(SAY_ANIMATE_DEAD)
+    end
+end
+
 local function fanaticSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_DARK_TRANSFORMATION_T then
         -- C++ :623 InterruptNonMeleeSpells(true) before DoCastSelf;
@@ -860,25 +958,8 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         -- boss Talk via FindNearestCreature (darnavan precedent; nil-guard
         -- mirrors the C++ instance GetCreature lookup).
         local guid = creature:GetGUID()
-        schedule(guid, "reanimate2", 2000, function()
-            creature:UpdateEntry(ENTRY_REANIMATED_FANATIC)
-            creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH)
-            creature:CastSpell(creature, SPELL_CLEAR_ALL_DEBUFFS)
-            creature:CastSpell(creature, SPELL_FULL_HEAL, true)
-            creature:SetFlag(UNIT_FIELD_FLAGS,
-                UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
-        end)
-        schedule(guid, "reanimate6", 6000, function()
-            creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
-            creature:RemoveFlag(UNIT_FIELD_FLAGS,
-                UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
-            creature:SetReactState(REACT_AGGRESSIVE)
-            creature:DoZoneInCombat()
-            local boss = creature:FindNearestCreature(ENTRY_LADY_DEATHWHISPER, 100.0)
-            if boss ~= nil then
-                boss:Talk(SAY_ANIMATE_DEAD)
-            end
-        end)
+        schedule(guid, "reanimate2", 2000, function() fanaticReanimate2(creature, guid) end)
+        schedule(guid, "reanimate6", 6000, function() fanaticReanimate6(creature, guid) end)
     end
 end
 
@@ -915,6 +996,11 @@ end
 
 -- C++ npc_cult_adherent Reset() scheduler (:693-710), same re-key.
 local function onDeathchill(creature, guid)
+-- C++ npc_cult_adherent SetValidator :689-691 (!CASTING; scheduler Dispatch aborts while casting, tasks stay queued) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "deathchill", 500, function() onDeathchill(creature, guid) end)
+        return
+    end
     -- C++ :696-698 — entry-conditional: the empowered adherent casts the
     -- Blast variant, otherwise the Bolt. The entry change rides the
     -- SpellHit DARK_EMPOWERMENT_T arm (UpdateEntry twin, bridged
@@ -928,6 +1014,11 @@ local function onDeathchill(creature, guid)
 end
 
 local function onShroudOfTheOccult(creature, guid)
+-- C++ npc_cult_adherent SetValidator :689-691 (!CASTING; scheduler Dispatch aborts while casting, tasks stay queued) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "shroud", 500, function() onShroudOfTheOccult(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
     schedule(guid, "shroud", 10000, function() onShroudOfTheOccult(creature, guid) end)
 end
@@ -940,6 +1031,11 @@ end
 -- idiom on the bridged threat list); init 15s, re-arm 18s
 -- unconditional.
 local function onCurseOfTorpor(creature, guid)
+-- C++ npc_cult_adherent SetValidator :689-691 (!CASTING; scheduler Dispatch aborts while casting, tasks stay queued) — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "torpor", 500, function() onCurseOfTorpor(creature, guid) end)
+        return
+    end
     local target = randomNonVictimThreatTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_TORPOR)
@@ -978,6 +1074,13 @@ end
 -- (lua_creature_events.go:3144); the old raw > 5.0 stand-in dropped
 -- the reach band (Unit.cpp:599-618).
 local function onDarnavanChargePoll(creature, guid)
+    -- C++ UpdateAI :888: the shatter/charge poll legs sit AFTER the
+    -- pre-loop CASTING return, so a casting tick skips both checks
+    -- with the latches untouched — 500ms defer of the poll itself.
+    if creature:IsCasting() then
+        schedule(guid, "chargepoll", 500, function() onDarnavanChargePoll(creature, guid) end)
+        return
+    end
     if darnavanCanShatter[guid] then
         local victim = creature:GetVictim()
         if victim and victim:IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL) then
@@ -1004,21 +1107,41 @@ local function onDarnavanChargePoll(creature, guid)
 end
 
 local function onDarnavanBladestorm(creature, guid)
+-- C++ npc_darnavan UpdateAI pre-loop gate :888 sits BEFORE ExecuteEvent (:907), so due arms stay queued — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "bladestorm", 500, function() onDarnavanBladestorm(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BLADESTORM)
     schedule(guid, "bladestorm", {90000, 100000}, function() onDarnavanBladestorm(creature, guid) end)
 end
 
 local function onDarnavanShout(creature, guid)
+-- C++ npc_darnavan UpdateAI pre-loop gate :888 sits BEFORE ExecuteEvent (:907), so due arms stay queued — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "shout", 500, function() onDarnavanShout(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_INTIMIDATING_SHOUT)
     schedule(guid, "shout", {90000, 120000}, function() onDarnavanShout(creature, guid) end)
 end
 
 local function onDarnavanMortalStrike(creature, guid)
+-- C++ npc_darnavan UpdateAI pre-loop gate :888 sits BEFORE ExecuteEvent (:907), so due arms stay queued — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "mortal", 500, function() onDarnavanMortalStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MORTAL_STRIKE)
     schedule(guid, "mortal", {15000, 30000}, function() onDarnavanMortalStrike(creature, guid) end)
 end
 
 local function onDarnavanSunderArmor(creature, guid)
+-- C++ npc_darnavan UpdateAI pre-loop gate :888 sits BEFORE ExecuteEvent (:907), so due arms stay queued — 500ms IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "sunder", 500, function() onDarnavanSunderArmor(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SUNDER_ARMOR)
     schedule(guid, "sunder", {3000, 7000}, function() onDarnavanSunderArmor(creature, guid) end)
 end
@@ -1071,6 +1194,40 @@ RegisterCreatureEvent(ENTRY_CULT_ADHERENT, 23, adherentReset)
 -- re-dispatches hooks to the live entry (mirroring the C++ AI object
 -- surviving the transform); the onDeathchill entry-conditional Blast
 -- branch goes live with it.
+-- C++ npc_cult_adherent :724-752 2s/6s reanimate scheduler, on the
+-- SetValidator :689-691 scheduler — 500ms IsCasting defer, no re-arm
+-- consumed (the mal_ganis idiom); extracted from SpellHit closures
+-- so the gate can re-schedule them by name.
+local function adherentReanimate2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "reanimate2", 500, function() adherentReanimate2(creature, guid) end)
+        return
+    end
+    creature:UpdateEntry(ENTRY_REANIMATED_ADHERENT)
+    creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH)
+    creature:CastSpell(creature, SPELL_CLEAR_ALL_DEBUFFS)
+    creature:CastSpell(creature, SPELL_FULL_HEAL, true)
+    creature:SetFlag(UNIT_FIELD_FLAGS,
+        UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
+end
+
+local function adherentReanimate6(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "reanimate6", 500, function() adherentReanimate6(creature, guid) end)
+        return
+    end
+    creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS,
+        UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
+    creature:DoZoneInCombat()
+    local boss = creature:FindNearestCreature(ENTRY_LADY_DEATHWHISPER, 100.0)
+    if boss ~= nil then
+        boss:Talk(SAY_ANIMATE_DEAD)
+    end
+end
+
 local function adherentSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_DARK_EMPOWERMENT_T then
         -- C++ :716-718 — me->UpdateEntry(NPC_EMPOWERED_ADHERENT)
@@ -1097,26 +1254,8 @@ local function adherentSpellHit(event, creature, caster, spellId)
         -- The boss Talk(SAY_ANIMATE_DEAD) leg is PORTED in the reanimate6
         -- arm below (FindNearestCreature boss Talk, darnavan precedent).
         local guid = creature:GetGUID()
-        schedule(guid, "reanimate2", 2000, function()
-            creature:UpdateEntry(ENTRY_REANIMATED_ADHERENT)
-            creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH)
-            creature:CastSpell(creature, SPELL_CLEAR_ALL_DEBUFFS)
-            creature:CastSpell(creature, SPELL_FULL_HEAL, true)
-            creature:SetFlag(UNIT_FIELD_FLAGS,
-                UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
-        end)
-        schedule(guid, "reanimate6", 6000, function()
-            creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
-            creature:RemoveFlag(UNIT_FIELD_FLAGS,
-                UNIT_FLAG_STUNNED + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_UNK_29)
-            creature:SetReactState(REACT_AGGRESSIVE)
-            creature:CastSpell(creature, SPELL_SHROUD_OF_THE_OCCULT)
-            creature:DoZoneInCombat()
-            local boss = creature:FindNearestCreature(ENTRY_LADY_DEATHWHISPER, 100.0)
-            if boss ~= nil then
-                boss:Talk(SAY_ANIMATE_DEAD)
-            end
-        end)
+        schedule(guid, "reanimate2", 2000, function() adherentReanimate2(creature, guid) end)
+        schedule(guid, "reanimate6", 6000, function() adherentReanimate6(creature, guid) end)
     end
 end
 

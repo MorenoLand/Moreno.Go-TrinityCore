@@ -105,8 +105,10 @@
 -- MoveChase and event-reschedule legs; EVENT_BONE_SPIKE_GRAVEYARD /
 -- EVENT_COLDFLAME carry DoCast / DoCastAOE legs but both summon
 -- npc_bone_spike / npc_coldflame (vehicle/passenger/spline machines,
--- no summon bridge); EVENT_ENRAGE is PORTED (ungated one-shot, above);
--- the UNIT_STATE_CASTING gate,
+-- no summon bridge); EVENT_ENRAGE is PORTED with its pre-loop
+-- UNIT_STATE_CASTING gate (:193, 500ms IsCasting defer — the old
+-- "ungated one-shot / gate has no bridge" claims are retracted,
+-- IsCasting live at lua_creature_events.go:1950);
 -- bone-storm-aura gate, bone-slice DoCastVictim legs and
 -- DoMeleeAttackIfReady have no bridge. JustReachedHome
 -- instance-SetBossState(FAIL) and DATA_BONED_ACHIEVEMENT-reset legs
@@ -170,6 +172,15 @@ end
 -- gates (the festergut/rotface/putricide/sindragosa berserk precedent);
 -- TRIGGERED self-cast, cast-before-Talk kept.
 local function onEnrage(creature, guid)
+    -- C++ UpdateAI pre-loop gate :193 sits BEFORE ExecuteEvent (:196),
+    -- so a due enrage stays queued while casting — 500ms IsCasting
+    -- defer, no re-arm consumed (the mal_ganis idiom; the in-loop
+    -- gate :267 covers subsequent queued events in the same C++ tick,
+    -- nothing to port for this single Lua tick).
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function() onEnrage(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK, true)
     creature:Talk(SAY_BERSERK)
 end

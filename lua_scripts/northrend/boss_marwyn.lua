@@ -78,9 +78,12 @@
 -- JustEngagedWith :68 DoZoneInCombat — PORTED (creature:DoZoneInCombat, event-1 handler, C++ arm order — live bridge engine/world/lua_creature_events.go, 2026-10-23).
 -- JustEngagedWith :69 / JustDied :81 instance->SetBossState
 --   (DATA_MARWYN, IN_PROGRESS / DONE) — no instance-state bridge.
--- UpdateAI :97 me->HasUnitState(UNIT_STATE_CASTING) gate — no
---   unit-state bridge; timers fire unconditionally (the maiden
---   precedent; creature casts are packet-visual in Go).
+-- UpdateAI :97 me->HasUnitState(UNIT_STATE_CASTING) gate — PORTED: the
+--   gate sits before ExecuteEvent (:100), so all four timer ticks
+--   defer 500ms via creature:IsCasting() (lua_creature_events.go:1950)
+--   without consuming their re-arm (the mal_ganis idiom); Talk hooks
+--   stay ungated per C++ as separate hooks. The old "no unit-state
+--   bridge; timers fire unconditionally" claim is retracted.
 -- UpdateAI :125 DoMeleeAttackIfReady — engine-driven in Go, no bridge
 --   needed.
 -- spell_marwyn_shared_suffering (:141-168, SpellScriptLoader:
@@ -99,9 +102,6 @@
 -- No-qualifier corner: with zero qualifying players the C++ target-if
 --   skips Talk + cast but still re-arms (:109/:119 outside the if) —
 --   replicated: re-arm runs even when no target qualifies.
--- UNIT_STATE_CASTING gate (see documented-only): timers fire
---   unconditionally like the maiden precedent; two arms firing on the
---   same tick both cast, where C++ would serialize them.
 
 local ENTRY_MARWYN = 38113
 
@@ -181,6 +181,12 @@ end
 -- C++ :102-105 EVENT_OBLITERATE: DoCastVictim(72360) non-triggered;
 -- re-arm {8000,13000}ms.
 local function onObliterate(creature, guid)
+    -- C++ UpdateAI :95/:97: pre-ExecuteEvent CASTING return — 500ms
+    -- IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "obliterate", 500, function() onObliterate(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_OBLITERATE)
     schedule(guid, "obliterate", {8000, 13000}, function() onObliterate(creature, guid) end)
 end
@@ -189,6 +195,13 @@ end
 -- yd (:107 SelectTarget Random, 0, 100.0f, true); DoCast(target, 72362)
 -- non-triggered; re-arm 13000ms unconditional (:109, outside the target-if).
 local function onWellOfCorruption(creature, guid)
+    -- C++ UpdateAI :95/:97: pre-ExecuteEvent CASTING return — 500ms
+    -- IsCasting defer precedes the target pick, no re-arm consumed
+    -- (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "well", 500, function() onWellOfCorruption(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_WELL_OF_CORRUPTION)
@@ -200,6 +213,13 @@ end
 -- unconditional (:112); DoCastAOE(72363) is self-cast non-triggered
 -- (the DoCastAOE convention); re-arm 20000ms (:114).
 local function onCorruptedFlesh(creature, guid)
+    -- C++ UpdateAI :95/:97: pre-ExecuteEvent CASTING return — 500ms
+    -- IsCasting defer precedes Talk + cast, no re-arm consumed
+    -- (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "corruptedflesh", 500, function() onCorruptedFlesh(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_CORRUPTED_FLESH)
     creature:CastSpell(creature, SPELL_CORRUPTED_FLESH)
     schedule(guid, "corruptedflesh", 20000, function() onCorruptedFlesh(creature, guid) end)
@@ -210,6 +230,13 @@ end
 -- 72368) non-triggered; re-arm {14000,15000}ms unconditional (:119,
 -- outside the target-if).
 local function onSharedSuffering(creature, guid)
+    -- C++ UpdateAI :95/:97: pre-ExecuteEvent CASTING return — 500ms
+    -- IsCasting defer precedes the target pick, no re-arm consumed
+    -- (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "sharedsuffering", 500, function() onSharedSuffering(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_SHARED_SUFFERING)

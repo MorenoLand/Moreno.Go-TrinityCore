@@ -93,9 +93,13 @@
 -- (creature:DoZoneInCombat, in arm order after Talk; bridge live at
 -- engine/world/lua_creature_events.go; the old "no bridge" claim was
 -- stale) / :80 instance->SetBossState IN_PROGRESS — no bridge.
--- UpdateAI :120 HasUnitState(UNIT_STATE_CASTING) gate — no unit-state
---   bridge; timers fire unconditionally (the maiden precedent; creature
---   casts are packet-visual in Go).
+-- UpdateAI :120 HasUnitState(UNIT_STATE_CASTING) gate — PORTED: the
+--   gate sits before ExecuteEvent (:123), so all three timer ticks
+--   defer 500ms via creature:IsCasting() (lua_creature_events.go:1950)
+--   without consuming their re-arm (the mal_ganis idiom); the
+--   DamageTaken hopelessness latch is a separate hook and stays
+--   ungated per C++. The old "no unit-state bridge; timers fire
+--   unconditionally" claim is retracted.
 -- UpdateAI :145 DoMeleeAttackIfReady — engine-driven in Go.
 -- SAY_DEFILING_HORROR = 4 (:30) is declared but never Talked in the .cpp
 --   — upstream finding, nothing to port.
@@ -193,6 +197,13 @@ end
 -- C++ :125-127 EVENT_QUIVERING_STRIKE: DoCastVictim(72422) = victim-cast;
 -- re-arm 10000ms unconditional.
 local function onQuiveringStrike(creature, guid)
+    -- C++ UpdateAI :118/:120: events.Update, then the CASTING return
+    -- sits BEFORE ExecuteEvent, so a due strike stays queued — 500ms
+    -- IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "quivering", 500, function() onQuiveringStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_QUIVERING_STRIKE)
     schedule(guid, "quivering", 10000, function() onQuiveringStrike(creature, guid) end)
 end
@@ -201,6 +212,13 @@ end
 -- target found -> Talk(SAY_IMPENDING_DESPAIR) + DoCast(target, 72426)
 -- non-triggered; re-arm 13000ms unconditional (outside the target-if).
 local function onImpendingDespair(creature, guid)
+    -- C++ UpdateAI :118/:120: pre-ExecuteEvent CASTING return — 500ms
+    -- IsCasting defer precedes the target pick and Talk, no re-arm
+    -- consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "despair", 500, function() onImpendingDespair(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature)
     if target then
         creature:Talk(SAY_IMPENDING_DESPAIR)
@@ -212,6 +230,12 @@ end
 -- C++ :137-139 EVENT_DEFILING_HORROR: DoCastAOE(72435) = self-cast;
 -- re-arm {21000,39000}ms randtime unconditional.
 local function onDefilingHorror(creature, guid)
+    -- C++ UpdateAI :118/:120: pre-ExecuteEvent CASTING return — 500ms
+    -- IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "horror", 500, function() onDefilingHorror(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DEFILING_HORROR)
     schedule(guid, "horror", {21000, 39000}, function() onDefilingHorror(creature, guid) end)
 end

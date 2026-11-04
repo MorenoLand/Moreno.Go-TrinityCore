@@ -19701,13 +19701,13 @@ func init() {
 	// -> event 3 (the razuvious player-gated variant precedent, tenth
 	// ported variant, eighth identical); JustDied Talk(SAY_DEATH 2) ->
 	// event 4 (the sjonnir JustDied-Talk precedent). The UpdateAI
-	// EventMap machine (incl. timer-driven
-	// Talk(SAY_IMPENDING_DESPAIR 3)) has no-timer /
-	// no-random-target-SelectTarget bridges (the boss_toravon
-	// precedent), the DamageTaken hopelessness machine has no
-	// health-pct bridge (the garfrost precedent), and the
-	// DoZoneInCombat / instance SetBossState legs have no instance
-	// bridge — documented in the lua header.
+	// EventMap machine (quivering/despair/horror ticks, incl.
+	// timer-driven Talk(SAY_IMPENDING_DESPAIR 3)) is ported with
+	// its pre-loop CASTING gate (500ms IsCasting defer); the
+	// DamageTaken hopelessness machine is ported (the garfrost
+	// latch precedent); the DoZoneInCombat leg is ported, and
+	// the instance SetBossState legs have no instance bridge —
+	// documented in the lua header.
 	RegisterLuaBoss("boss_falric", 38112)
 	// Marwyn (Halls of Reflection) — bridgeable Talk arms ported from
 	// boss_marwyn.cpp; see lua_scripts/northrend/boss_marwyn.lua.
@@ -19716,14 +19716,14 @@ func init() {
 	// -> event 3 (the razuvious player-gated variant precedent,
 	// eleventh ported variant, ninth identical); JustDied
 	// Talk(SAY_DEATH 2) -> event 4 (the sjonnir JustDied-Talk
-	// precedent). The UpdateAI EventMap machine (incl. timer-driven
-	// Talk(SAY_CORRUPTED_FLESH 3)) has no-timer /
-	// no-random-target-SelectTarget bridges (the boss_toravon
-	// precedent), the scheduler-schedule legs and the DoZoneInCombat /
-	// instance SetBossState legs have no bridge, and
-	// spell_marwyn_shared_suffering has no AuraScript bridge (the
-	// boss_moragg optic-link precedent) — documented in the lua
-	// header. Fourth and last group of the "// Halls of Reflection"
+	// precedent). The UpdateAI EventMap machine (obliterate/well/
+	// corrupted-flesh/shared-suffering ticks, incl. timer-driven
+	// Talk(SAY_CORRUPTED_FLESH 3)) is ported with its pre-loop
+	// CASTING gate (500ms IsCasting defer); the DoZoneInCombat
+	// leg is ported, the instance SetBossState legs have no
+	// bridge, and spell_marwyn_shared_suffering has no
+	// AuraScript bridge (the boss_moragg optic-link precedent) —
+	// documented in the lua header. Fourth and last group of the "// Halls of Reflection"
 	// block — the block CLOSES here.
 	RegisterLuaBoss("boss_marwyn", 38113)
 	// Lord Marrowgar (Icecrown Citadel) — bridgeable Talk arms ported
@@ -19737,10 +19737,11 @@ func init() {
 	// precedent). npc_coldflame (36672) and npc_bone_spike (36619)
 	// expose zero own Talk lines — not registered (the bronjahm
 	// npc_corrupted_soul_fragment precedent). The UpdateAI EventMap
-	// machine (incl. timer-driven Talk(EMOTE_BONE_STORM 7),
-	// Talk(SAY_BONE_STORM 2) and Talk(SAY_BERSERK 6)) has no-timer /
-	// no-random-target-SelectTarget / no-cast / no-motion /
-	// no-health-pct bridges (the boss_toravon precedent); the
+	// machine: EVENT_ENRAGE (timer-driven Talk(SAY_BERSERK 6)) is
+	// ported with its pre-loop CASTING gate (500ms IsCasting
+	// defer); the bone-storm machine arms (Talk(EMOTE_BONE_STORM
+	// 7), Talk(SAY_BONE_STORM 2)) stay out on no-motion /
+	// phase-machine legs (the boss_toravon precedent); the
 	// Talk(SAY_ENTER_ZONE 0) leg rides DoAction with no bridge, its
 	// at_lord_marrowgar_entrance trigger joins the unbridged
 	// area-trigger queue, Talk(SAY_BONESPIKE 3) rides the
@@ -19765,15 +19766,21 @@ func init() {
 	// Talk(SAY_DARNAVAN_AGGRO 0) (event 1) registered for both
 	// raid-mode entries 38472 / 38485. No other bridgeable arm in
 	// the file: the intro DoAction/scheduler machine
-	// (Talk(SAY_INTRO_1 0 .. SAY_INTRO_7 6) — no-DoAction bridge /
-	// no-timer-bridge), the berserk/dominate-mind/dark-empowerment
-	// timer legs (no-timer-bridge), the phase-transition
-	// Talk(SAY_PHASE_2 8) + Talk(EMOTE_PHASE_2 9) mana-pct gate (no
-	// health-pct bridge), the cross-AI Talk(SAY_ANIMATE_DEAD 13)
+	// (Talk(SAY_INTRO_1 0 .. SAY_INTRO_7 6) — no-DoAction bridge;
+	// the intro scheduler machine stays out), the berserk/
+	// dominate-mind/improve-cultist/shadowbolt/death-and-decay/
+	// frostbolt/volley/touch/summon-spirits timer legs are ported
+	// with the scheduler CASTING validator (500ms IsCasting
+	// defer), as are the cult fanatic/adherent ticks + reanimate
+	// arms and the darnavan EventMap ticks + charge/shatter poll,
+	// the phase-transition Talk(SAY_PHASE_2 8) +
+	// Talk(EMOTE_PHASE_2 9) ride the ported DamageTaken
+	// mana-drain gate, the cross-AI Talk(SAY_ANIMATE_DEAD 13)
 	// and darnavan->AI()->Talk(SAY_DARNAVAN_RESCUED 1) legs (no
 	// bridge), the four spell scripts (no-AuraScript-bridge /
-	// no-SpellScript-bridge queues), the cult adds / vengeful
-	// shades (zero own Talk, not registered) and the
+	// no-SpellScript-bridge queues), the cult adds ARE registered
+	// (timer + SpellHit arms ported) and the vengeful shades
+	// (zero own Talk, not registered) and the
 	// at_lady_deathwhisper_entrance trigger (unbridged-area-trigger
 	// queue) are bridge-blocked — documented in the lua header.
 	// Second group of the "// Icecrown Citadel" block.

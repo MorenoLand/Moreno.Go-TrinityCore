@@ -58,6 +58,11 @@
 --   cast 69222 (:1931), re-arm {8000,12000}ms (:1932).
 -- EVENT_SPIKE (:1934-1938) — random player within 45 yd (:1935),
 --   cast 69184 (:1936), re-arm {15000,20000}ms (:1937).
+-- UpdateAI CASTING gate (:1920/:1922, pre-ExecuteEvent) — PORTED: all
+--   three ticks defer 500ms via creature:IsCasting() (lua_creature_events.go:1950)
+--   without consuming their re-arm (the mal_ganis idiom); Talk hooks
+--   (JustEngagedWith/JustDied/KilledUnit) are separate hooks and stay
+--   ungated per C++.
 -- DOCUMENTED-ONLY (in this header; only entry 36723 registered):
 -- npc_frostsworn_general Reset / JustEngagedWith / JustDied instance
 -- legs — _instance->SetData(DATA_FROSTSWORN_GENERAL, NOT_STARTED /
@@ -174,6 +179,13 @@ local function generalShieldTick(creature, guid)
     if timers[guid] == nil then
         return
     end
+    -- C++ UpdateAI :1920/:1922: events.Update, then the CASTING return
+    -- sits BEFORE ExecuteEvent (:1925), so a due shield stays queued — 500ms
+    -- IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "shield", 500, function() generalShieldTick(creature, guid) end)
+        return
+    end
     local target = randomPlayer45(creature)
     if target then
         creature:CastSpell(target, SPELL_SHIELD_THROWN)
@@ -185,6 +197,12 @@ end
 -- re-arm {15000,20000}ms.
 local function generalSpikeTick(creature, guid)
     if timers[guid] == nil then
+        return
+    end
+    -- C++ UpdateAI :1920/:1922: pre-ExecuteEvent (:1925) CASTING return — 500ms
+    -- IsCasting defer, no re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "spike", 500, function() generalSpikeTick(creature, guid) end)
         return
     end
     local target = randomPlayer45(creature)
@@ -206,6 +224,13 @@ end
 -- (npc_hor_spiritual_reflection.lua).
 local function generalCloneTick(creature, guid)
     if timers[guid] == nil then
+        return
+    end
+    -- C++ UpdateAI :1920/:1922: pre-ExecuteEvent (:1925) CASTING return — 500ms
+    -- IsCasting defer precedes the summon loop, no re-arm consumed
+    -- (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "clone", 500, function() generalCloneTick(creature, guid) end)
         return
     end
     local count = 0
