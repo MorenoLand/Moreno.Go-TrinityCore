@@ -62,8 +62,10 @@
 -- bridge; the krick ACTION_OUTRO precedent); DoZoneInCombat (:138)
 -- is PORTED 2026-10-23 via the live bridge (C++ arm order — after
 -- Talk, before the proc self-cast); JustDied leg
--- professor->AI()->DoAction(ACTION_ROTFACE_DEATH) — no DoAction
--- bridge; JustDied's DoRemoveAurasDueToSpellOnPlayers(
+-- professor->AI()->DoAction(ACTION_ROTFACE_DEATH) — Talk leg
+-- PORTED 2026-11-03 (rotfaceJustDied 4500ms professor_death_talk
+-- timer, festergut precedent; EnterEvadeMode stays out, no bridge);
+-- JustDied's DoRemoveAurasDueToSpellOnPlayers(
 -- MUTATED_INFECTION) is PORTED (2026-10-23) via GetPlayersInWorld +
 -- mapId/instanceId filter + player:RemoveAura (the moroes
 -- precedent — the stale "no instance bridge" claim is retracted);
@@ -138,11 +140,14 @@
 -- but never used in a Talk() call).
 
 local ENTRY_ROTFACE = 36627
+local ENTRY_PROFESSOR_PUTRICIDE = 36678
 
 local SAY_AGGRO = 1
 local SAY_SLIME_SPRAY = 3
 local SAY_KILL = 6
 local SAY_DEATH = 8
+-- Professor Putricide Talk id for the rotface-death relay (boss_professor_putricide.cpp:43).
+local SAY_PROFESSOR_ROTFACE_DEATH = 3
 
 local SPELL_GREEN_ABOMINATION = 70001
 local SPELL_MUTATED_INFECTION = 69674
@@ -337,6 +342,20 @@ local function rotfaceKilledUnit(event, creature, victim)
     end
 end
 
+-- Cross-AI DoAction relay (2026-11-03 strip): C++ rotface JustDied
+-- reaches Professor Putricide via instance->GetGuidData; Lua has no
+-- instance bridge, so the relay sweeps the 100yd grid for the
+-- professor (the festergut relayProfessor precedent — exactly one
+-- Putricide exists, so the first alive match is the C++ target).
+local function relayProfessor(creature, fn)
+    for _, professor in ipairs(creature:GetCreaturesInGrid(ENTRY_PROFESSOR_PUTRICIDE, 100)) do
+        if professor:IsAlive() then
+            fn(professor)
+            return
+        end
+    end
+end
+
 -- C++ boss_rotface::JustDied:
 -- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent; _JustDied()
 -- resets the EventMap, so the self-re-arming mutated/hasten/vile
@@ -350,7 +369,8 @@ local function rotfaceJustDied(event, creature, killer)
     -- FIRST arm — via GetPlayersInWorld + mapId/instanceId filter +
     -- player:RemoveAura (the moroes precedent; the stale "no
     -- instance bridge" claim is retracted); the professor
-    -- DoAction(ACTION_ROTFACE_DEATH) leg has no bridge.
+    -- DoAction(ACTION_ROTFACE_DEATH) leg is ported below (Talk leg
+    -- only; EnterEvadeMode + phase state stay out, no bridge).
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
@@ -362,6 +382,17 @@ local function rotfaceJustDied(event, creature, killer)
     cancelTimers(guid)
     infection[guid] = nil
     creature:Talk(SAY_DEATH)
+    -- C++ :148 + boss_professor_putricide.cpp:479-480,590-592 —
+    -- professor DoAction(ACTION_ROTFACE_DEATH) schedules
+    -- EVENT_ROTFACE_DIES at 4500ms: Talk(SAY_ROTFACE_DEATH 3) +
+    -- EnterEvadeMode (no bridge — stays out). The Talk leg rides a
+    -- 4500ms timer on the rotface GUID, after cancelTimers above
+    -- (the festergut death-talk precedent).
+    schedule(guid, "professor_death_talk", 4500, function()
+        relayProfessor(creature, function(professor)
+            professor:Talk(SAY_PROFESSOR_ROTFACE_DEATH)
+        end)
+    end)
 end
 
 -- C++ boss_rotface SpellHitTarget (:171-174): SPELL_SLIME_SPRAY hit
