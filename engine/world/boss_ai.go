@@ -15996,12 +15996,12 @@ func init() {
 	// JustDied calls _JustDied(), instance bookkeeping blocked,
 	// standing); melee engine-driven. The InitializeAI loot-mode leg
 	// (GetBossState(DATA_EPOCH) == DONE -> RemoveLootMode) has no
-	// instance-data bridge, the heroic-only Time Stop 58848 arm has no
-	// difficulty bridge (standing heroic-unmodeled case), and the
-	// EVENT_TIME_STEP charge machine (SpellHitTarget pushes dummy-hit
-	// GUIDs, triggered 52737 charges every 500ms) has no SpellHitTarget /
-	// ObjectAccessor bridge (SpellHit-15-never-fires standing queue) —
-	// documented in lua_scripts/kalimdor/boss_epoch.lua, not wired.
+	// instance-data bridge; the heroic-only Time Stop 58848 arm rides
+	// creature:IsHeroic() (blood_prince_council precedent), and the
+	// EVENT_TIME_STEP charge machine is ported in
+	// lua_scripts/kalimdor/boss_epoch.lua (ev15 dummy-hit leg +
+	// IsHostileTo gate + 500ms charge chain; the C++ DoCastAOE radius
+	// fan-out is lowered to the threat list there).
 	RegisterLuaBoss("boss_epoch", 26532)
 
 	// npc_arthas_stratholme (Arthas, entry 26499 — C++-verified via

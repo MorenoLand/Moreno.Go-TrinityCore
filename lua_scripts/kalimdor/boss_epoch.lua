@@ -17,21 +17,22 @@
 -- culling_of_stratholme.h:118. The creature_template ScriptName binding
 -- stays DB-side.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
--- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
+-- 4 OnDied, 15 OnSpellHitTarget, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): arm each timer at its C++ ScheduleEvent
---   cooldown; the _stepTargetIndex = 0 / _stepTargets.clear() legs
---   collapse into the cancel (nothing bridgeable populates the list).
+--   cooldown; _stepTargetIndex = 0 / _stepTargets.clear() re-init the
+--   per-GUID step state (the ev15 leg below populates it).
 -- - Wounding Strike 52771 on the victim (C++ DoCastVictim — jeklik
 --   GetVictim + CastSpell convention), non-triggered, init {4s,6s} ->
 --   repeat {12s,18s}.
 -- - Curse of Exertion 52772 on SelectTarget(Random, 0, 100.0f, true),
 --   non-triggered, init {10s,17s} -> repeat 9.3s (nil target -> no cast).
--- - Time Warp: Talk SAY_TIME_WARP (2) + DoCastAOE(52766) + DoCastAOE
---   (52736 dummy), both non-triggered (DoCastAOE resolves to self-cast —
---   kazrogal/illidan precedent), init 25s -> repeat 25s. The dummy's only
---   consumer is the unbridgeable SpellHitTarget time-step machine (below).
+-- - Time Warp: Talk SAY_TIME_WARP (2) + DoCastAOE(52766) non-triggered
+--   (DoCastAOE resolves to self-cast — kazrogal/illidan precedent) +
+--   the 52736 dummy fanned out over hostile threat targets (the C++
+--   DoCastAOE radius fan-out lowered to the threat list — no AoE-cast
+--   bridge exists; see the step machine below), init 25s -> repeat 25s.
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): C++ gates on
 --   victim->GetTypeId() == TYPEID_PLAYER before Talk SAY_SLAY (3)
 --   (terestian_illhoof victim:GetObjectType() == "Player" convention).
@@ -46,17 +47,22 @@
 --   (standing).
 -- - BossAI::_Reset / BossAI::_JustDied instance legs — blocked
 --   (standing); engage pulse + me-DoZone PORTED (see onEnterCombat).
--- - EVENT_TIME_STEP + SpellHitTarget: SpellHitTarget(SPELL_TIME_STEP_
---   DUMMY 52736, hostile) pushes the target's GUID into _stepTargets and
---   reschedules EVENT_TIME_STEP at 500ms; the event then charges (DoCast
---   triggered SPELL_TIME_STEP_CHARGE 52737) a random remaining target,
---   falling back to the victim when the list empties. Stays out: the
---   ported dummy cast is a self-cast (DoCastAOE lowered), so no hostile
---   hit targets exist in Go; the me->IsHostileTo(target) gate has no
---   bridge, and the charge consumer needs an ObjectAccessor GUID-lookup
---   bridge that does not exist. Event 15 itself is live
---   (boss_ai.go:1904) — the blockers are the gate and the consumer, not
---   the hook.
+-- - EVENT_TIME_STEP + SpellHitTarget (ported): ev15 (svala precedent;
+--   args (event, creature, target, spellId)) gated on SPELL_TIME_STEP_
+--   DUMMY 52736 + creature:IsHostileTo(target) (lua_creature_events.go
+--   IsHostileTo — the old "no bridge" claim is stale) pushes the target
+--   object into the per-GUID step list (duplicates kept, C++-exact)
+--   and reschedules the step event at 500ms (RescheduleEvent = cancel +
+--   re-arm, matching the schedule helper). The step event charges
+--   (DoCast triggered SPELL_TIME_STEP_CHARGE 52737) a random remaining
+--   target (swap-to-front + index advance, C++ order), re-arming 500ms
+--   before the cast when a list target was found; when the list
+--   empties it charges the victim once with no re-arm. Deviations:
+--   the C++ DoCastAOE radius fan-out is the threat list (non-threat
+--   hostiles in radius never become step targets); C++ GetUnit(nil on
+--   despawn) skips are unmodeled — stored target objects are used
+--   as-is (party members do not despawn mid-fight in practice); the
+--   fallback victim cast carries no dead-guard (C++ has none).
 -- - Yell enum 0/1 are undeclared in C++; SAY_TIME_WARP (2) and SAY_SLAY
 --   (3) are the only Talked lines.
 
@@ -73,6 +79,12 @@ local SPELL_TIME_STEP_DUMMY   = 52736
 local SPELL_TIME_STEP_CHARGE  = 52737
 
 local timers = {}
+
+-- Per-GUID EVENT_TIME_STEP state: C++ _stepTargets (GUID vector, order
+-- = push order, duplicates kept) + _stepTargetIndex (next unvisited
+-- slot, 1-based here). Target objects ride the ev15 args directly, so
+-- no ObjectAccessor GUID-lookup bridge is needed.
+local stepState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -140,15 +152,73 @@ end
 
 -- C++ EVENT_TIME_WARP: Talk SAY_TIME_WARP (2) + DoCastAOE(52766) +
 -- DoCastAOE(52736 dummy), non-triggered, init 25s -> repeat 25s
--- (DoCastAOE resolves to self-cast — kazrogal/illidan precedent). The
--- dummy's only consumer is the unbridgeable SpellHitTarget step machine.
+-- (DoCastAOE resolves to self-cast for 52766 — kazrogal/illidan
+-- precedent). The dummy is fanned out over hostile threat targets so
+-- the ev15 step leg fires once per hit, as the C++ AoE fan-out does;
+-- the caster is never its own hostile target, so no self-cast dummy.
 local function onTimeWarp(creature, guid)
     creature:Talk(SAY_TIME_WARP)
     creature:CastSpell(creature, SPELL_TIME_WARP)
-    creature:CastSpell(creature, SPELL_TIME_STEP_DUMMY)
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() and creature:IsHostileTo(t) then
+            creature:CastSpell(t, SPELL_TIME_STEP_DUMMY)
+        end
+    end
     schedule(guid, "timewarp", 25000, function()
         onTimeWarp(creature, guid)
     end)
+end
+
+-- Forward declaration (tharon_ja / gal_darah idiom): the ev15 leg
+-- schedules onTimeStep, assigned below with a plain assignment.
+local onTimeStep
+
+-- C++ SpellHitTarget (:131-137): dummy hit + hostile -> push + reschedule
+-- EVENT_TIME_STEP at 500ms. The ev15 target object is stored, not its
+-- GUID (no lookup bridge needed); duplicates are kept, C++-exact.
+local function onSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_TIME_STEP_DUMMY or not target then
+        return
+    end
+    if not creature:IsHostileTo(target) then
+        return
+    end
+    local guid = creature:GetGUID()
+    local st = stepState[guid]
+    if not st then
+        st = { targets = {}, index = 1 }
+        stepState[guid] = st
+    end
+    st.targets[#st.targets + 1] = target
+    schedule(guid, "timestep", 500, function()
+        onTimeStep(creature, guid)
+    end)
+end
+
+-- C++ EVENT_TIME_STEP (:104-128): charge a random remaining target
+-- (swap-to-front + index advance), re-arming 500ms BEFORE the cast
+-- when a list target was found; on exhaustion charge the victim once
+-- with no re-arm.
+onTimeStep = function(creature, guid)
+    local st = stepState[guid]
+    if not st then
+        return
+    end
+    local target = nil
+    if st.index <= #st.targets then
+        local pick = math.random(st.index, #st.targets)
+        st.targets[st.index], st.targets[pick] = st.targets[pick], st.targets[st.index]
+        target = st.targets[st.index]
+        st.index = st.index + 1
+        schedule(guid, "timestep", 500, function()
+            onTimeStep(creature, guid)
+        end)
+    else
+        target = creature:GetVictim()
+    end
+    if target then
+        creature:CastSpell(target, SPELL_TIME_STEP_CHARGE, true)
+    end
 end
 
 -- C++ EVENT_TIME_STOP: DoCastAOE(58848) non-triggered, init 15s ->
@@ -166,6 +236,7 @@ local function onEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    stepState[guid] = { targets = {}, index = 1 }
     if creature:IsHeroic() then
         schedule(guid, "timestop", 15000, function()
             onTimeStop(creature, guid)
@@ -183,15 +254,21 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    stepState[guid] = nil
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    stepState[guid] = nil
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    stepState[guid] = nil
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
@@ -201,5 +278,6 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
         creature:Talk(SAY_SLAY)
     end
 end)
+RegisterCreatureEvent(ENTRY, 15, onSpellHitTarget)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
