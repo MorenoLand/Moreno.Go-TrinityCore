@@ -263,6 +263,9 @@ local function emalonEnterCombat(event, creature, target)
     schedule(guid, "overcharge", 45000, function()
         overchargeTick(creature, guid)
     end)
+    -- BossAI::JustEngagedWith(who) is LAST in C++ (after the ScheduleEvents):
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
 
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron

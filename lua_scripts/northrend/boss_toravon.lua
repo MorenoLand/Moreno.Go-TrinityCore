@@ -174,8 +174,9 @@ end
 
 -- C++ boss_toravon::JustEngagedWith (:50-60): the immediate
 -- DoCastSelf(SPELL_FROZEN_MALLET) (:54) fires once before the timers
--- are scheduled (12s / 25s / 7s init); the BossAI passthrough is
--- unmodeled.
+-- are scheduled (12s / 25s / 7s init); the BossAI base arms
+-- (pulse + me-zone) ride the handler tail below (base call last
+-- in C++); instance legs stay out.
 local function toravonEnterCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -189,6 +190,9 @@ local function toravonEnterCombat(event, creature)
     schedule(guid, "freezingground", 7000, function()
         freezingGroundTick(creature, guid)
     end)
+    -- BossAI::JustEngagedWith(who) is LAST in C++ (after the ScheduleEvents):
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
 
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
