@@ -13408,7 +13408,11 @@ func init() {
 	// wowhead-verified (Classic NPC page, wilda precedent).
 	RegisterLuaBoss("npc_shenthul", 3401)
 	// Thrall, Herald of War (Wrathgate cinematic) — Reset guard
-	// summons in lua_scripts/kalimdor/npc_thrall_herald_of_war.lua.
+	// summons + the full DoAction scene machine (15 timed steps,
+	// cross-AI Talk, guard/Jaina/Sylvanas/portal legs) in
+	// lua_scripts/kalimdor/npc_thrall_herald_of_war.lua; only the
+	// area-trigger dispatch stays out (trigger ID is DB-side only)
+	// and the POINT_MOTION_TYPE MovementInform re-path (no ev28).
 	RegisterLuaBoss("npc_thrall_herald_of_war", 31412)
 	// npc_cairne_bloodhoof (Thunder Bluff zone script): combat
 	// rotation only — berserker charge (16636, 30s init then 25s,
