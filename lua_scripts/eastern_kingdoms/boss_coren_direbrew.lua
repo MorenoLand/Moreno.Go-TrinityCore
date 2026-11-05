@@ -81,11 +81,14 @@
 -- (hellfire_peninsula precedent).
 -- Unmodeled: JustDied LFG FinishDungeon(287) arm (sLFGMgr + group gates —
 -- no LFG bridge).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and the
--- in-loop casting-state gate is dropped (maiden precedent). The C++
--- scheduler is driven from DoAction and drained by UpdateAI; the port
--- schedules from OnEnterCombat(1) and cancels on 2/4/23 (maiden convention).
+-- Deviations from C++: the C++ UpdateAI pre-loop CASTING gate
+-- (boss_coren_direbrew.cpp:230) is ported as a 500ms IsCasting defer
+-- on the mole-machine, disarm, and sister-respawn arms (mal_ganis /
+-- balinda idiom); the in-loop gate's (:278) same-tick co-expiry
+-- suppression has no timer-arm model (independent callbacks, AV
+-- precedent) — the only unmodeled sliver. The C++ scheduler is driven
+-- from DoAction and drained by UpdateAI; the port schedules from
+-- OnEnterCombat(1) and cancels on 2/4/23 (maiden convention).
 
 local ENTRY_COREN = 23872
 
@@ -136,7 +139,17 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ EVENT_SUMMON_MOLE_MACHINE: triggered self-cast 47691; re-arm 15s.
+-- Pre-loop CASTING gate (boss_coren_direbrew.cpp:230): a firing arm
+-- that finds the creature casting re-schedules itself after 500ms
+-- and consumes no re-arm (mal_ganis / balinda idiom; IsCasting live,
+-- lua_creature_events.go:1950), so the arm stays due until the cast ends.
 local function onSummonMoleMachine(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "molemachine", 500, function()
+            onSummonMoleMachine(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MOLE_MACHINE_TARGET_PICKER, true)
     schedule(guid, "molemachine", 15000, function()
         onSummonMoleMachine(creature, guid)
@@ -144,7 +157,14 @@ local function onSummonMoleMachine(creature, guid)
 end
 
 -- C++ EVENT_DIREBREW_DISARM: DoCastSelf(47407, true); re-arm 20s.
+-- Same pre-loop gate as above.
 local function onDirebrewDisarm(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "disarm", 500, function()
+            onDirebrewDisarm(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DIREBREW_DISARM_PRE_CAST, true)
     schedule(guid, "disarm", 20000, function()
         onDirebrewDisarm(creature, guid)
@@ -273,16 +293,31 @@ end
 -- (fireCreatureDied -> summoner OwnerGUID link); C++ ScheduleEvent
 -- re-arms an already-scheduled event, matching schedule()'s
 -- replace-pending-key twin.
+-- Respawn re-arm with the same pre-loop gate: while casting the
+-- summon stays due and is retried after 500ms (re-checked each retry).
+local function respawnSister(creature, guid, key, entry)
+    if creature:IsCasting() then
+        schedule(guid, key, 500, function()
+            respawnSister(creature, guid, key, entry)
+        end)
+        return
+    end
+    summonSister(creature, entry)
+end
+
 local function onSummonedCreatureDies(event, creature, summon, killer)
     local guid = creature:GetGUID()
     local entry = summon:GetEntry()
+    -- These re-arms sit inside the same gated C++ event loop
+    -- (boss_coren_direbrew.cpp:230 pre-loop gate), so they defer
+    -- while casting like the cast arms above.
     if entry == NPC_ILSA_DIREBREW then
         schedule(guid, "respawnIlsa", 1000, function()
-            summonSister(creature, NPC_ILSA_DIREBREW)
+            respawnSister(creature, guid, "respawnIlsa", NPC_ILSA_DIREBREW)
         end)
     elseif entry == NPC_URSULA_DIREBREW then
         schedule(guid, "respawnUrsula", 1000, function()
-            summonSister(creature, NPC_URSULA_DIREBREW)
+            respawnSister(creature, guid, "respawnUrsula", NPC_URSULA_DIREBREW)
         end)
     end
 end

@@ -21,8 +21,14 @@
 -- the mug-chuck loop, Schedule(2s): SelectTarget(Random, 0, 0.0f,
 -- false, true, -SPELL_HAS_DARK_BREWMAIDENS_BREW 47331) ->
 -- DoCast(target, SPELL_CHUCK_MUG 50276), Repeat(4s). The scheduler's
--- !HasUnitState(UNIT_STATE_CASTING) validator is dropped (no bridge —
--- maiden precedent). The aura exclusion is bridged (HasAura on threat
+-- !HasUnitState(UNIT_STATE_CASTING) validator (boss_coren_direbrew.cpp:316)
+-- is ported as a 500ms IsCasting defer in onChuckMug (mal_ganis /
+-- balinda idiom; IsCasting live, lua_creature_events.go:1950): C++
+-- TaskScheduler::Dispatch aborts the dispatch while the validator fails
+-- and the due task stays queued (TaskScheduler.cpp:79), so a deferred
+-- chuck is retried, not dropped, and consumes no 4s re-arm. The engage
+-- casts above are NOT scheduler tasks, so the validator does not gate
+-- them and they stay ungated per C++. The aura exclusion is bridged (HasAura on threat
 -- entries, brutallus precedent); the 0.0f any-range target is unlimited.
 -- The pick is C++-exact (threat-list any-unit, victim included).
 -- The control-aura ticks are unported
@@ -86,8 +92,15 @@ end
 
 -- C++ JustEngagedWith mug-chuck arm: 2s init -> 4s loop,
 -- DoCast(target, 50276) non-triggered, re-arm unconditional (C++
--- Repeat outside the target check).
+-- Repeat outside the target check). TaskScheduler validator
+-- (boss_coren_direbrew.cpp:314-317): a firing chuck that finds the
+-- sister casting re-schedules itself after 500ms and consumes no
+-- 4s re-arm, so the chuck stays due until the cast ends.
 local function onChuckMug(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chuckmug", 500, function() onChuckMug(creature, guid) end)
+        return
+    end
     local target = chuckTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_CHUCK_MUG)

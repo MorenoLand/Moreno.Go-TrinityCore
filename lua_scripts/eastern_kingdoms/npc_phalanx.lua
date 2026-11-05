@@ -22,9 +22,10 @@
 --   on HealthBelowPct(51) (GetHealthPct resolves on the motion object
 --   via the generic-field path in scripting/object.go);
 -- SPELL_MIGHTYBLOW: victim-cast MIGHTYBLOW 14099, 15s init -> 10s.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally (maiden
--- precedent); the C++ FireballVolley timer only ticks while health is
+-- Deviations from C++: C++ phalanx UpdateAI has no UNIT_STATE_CASTING
+-- check at all (blackrock_depths.cpp:398-430), so there is no gate to
+-- port and the timers fire unconditionally C++-exact; the C++
+-- FireballVolley timer only ticks while health is
 -- below 51% — the port re-arms every 15s unconditionally and gates
 -- the cast, which is behaviorally equivalent for cast timing.
 

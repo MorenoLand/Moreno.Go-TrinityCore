@@ -13771,7 +13771,10 @@ func init() {
 	// boss_coren_direbrew (Coren Direbrew, entry 23872 — NPC_COREN at
 	// instance_blackrock_depths.cpp:47): BossAI combat scheduler.
 	// Ported: Summon Mole Machine 47691 (15s->15s, triggered self-cast),
-	// Direbrew's Disarm 47407 (20s->20s, triggered self-cast). Gossip
+	// Direbrew's Disarm 47407 (20s->20s, triggered self-cast), plus the
+	// UpdateAI pre-loop CASTING gate (:230) as 500ms IsCasting defers
+	// on both cast arms and the 1s sister-respawn arms (in-loop :278
+	// co-expiry suppression unmodeled, independent callbacks). Gossip
 	// fight/apologize menu (texts approximated, DB-side). Unmodeled:
 	// intro phase + 3x antagonist summons, DamageTaken 66%/33% sister
 	// summons (26764/26822), sisters/minion/antagonist scripts, mole
