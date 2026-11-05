@@ -55,7 +55,9 @@ import (
 // JustReachedHome). Go-native AIs carry no home-arrival model.
 // _JustEngagedWith (525-539) vs OnAggro (creaturemotion.go:443/1301):
 // CheckRequiredBosses SEQUENCE_BREAK documented no-bridge; instance
-// SetBossState(IN_PROGRESS) has no boss-state model — beginInstanceEncounter
+// SetBossState(IN_PROGRESS) is bridged per-boss via creature:SetBossState
+// (lua_creature_events.go, live 2026-11-05) — the shim itself does not
+// set it; Lua ports set it in OnEnterCombat. beginInstanceEncounter
 // is raid-gated (IsRaid) and a no-op for all five Go bosses (Deadmines and
 // Wailing Caverns are dungeons; only Lua-ported raid bosses use it);
 // SetCombatPulseDelay(5) is bridged (creature:SetCombatPulseDelay,

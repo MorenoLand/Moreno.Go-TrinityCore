@@ -12,10 +12,11 @@
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
 -- are packet-visual), so timers fire unconditionally; the 5s no-melee
 -- vanish window is not modeled (engine melee is continuous); no Karazhan
--- instance-script model — Reset/aggro/death do not SetBossState and the
--- guest "evade while the encounter is not IN_PROGRESS" arm is skipped
--- (encounter admission still binds through the luaBossAI shim in
--- engine/world/boss_ai.go); Reset's SpawnAdds / JustDied's DeSpawnAdds
+-- instance-script model — the guest "evade while the encounter is not
+-- IN_PROGRESS" arm is skipped (encounter admission still binds through
+-- the luaBossAI shim in engine/world/boss_ai.go); Reset/aggro/death
+-- SetBossState arms port via creature:SetBossState (bridge live
+-- 2026-11-05). Reset's SpawnAdds / JustDied's DeSpawnAdds
 -- are ported on the live SummonCreature bridge
 -- (lua_creature_events.go:877; Lua type = C++ TempSummonType - 1, the
 -- Object.cpp:2109 twin): the first Reset picks 4 random distinct guests
@@ -273,6 +274,7 @@ local function moroesEnterCombat(event, creature, target)
     -- (SetBossState IN_PROGRESS + DoZoneInCombat()) then Talk(SAY_AGGRO),
     -- AddsAttack(), DoZoneInCombat() — the boss DoZoneInCombat and Talk
     -- are ported in arm order, AddsAttack follows below.
+    creature:SetBossState(1, 1) -- DATA_MOROES, IN_PROGRESS (boss_moroes.cpp:153)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     schedule(guid, "vanish", 30000, function() onVanish(creature, guid) end)
@@ -355,6 +357,8 @@ local function moroesReset(event, creature)
         local loc = MOROES_GUEST_LOCS[i]
         creature:SummonCreature(state.addIds[i], loc[1], loc[2], loc[3], loc[4], 5, 10000)
     end
+    -- C++ Reset tail (boss_moroes.cpp:148): SetBossState(DATA_MOROES, NOT_STARTED).
+    creature:SetBossState(1, 0)
 end
 
 local function moroesTargetDied(event, creature, victim)
@@ -366,13 +370,13 @@ local function moroesDied(event, creature, killer)
     cancelTimers(guid)
     moroesInitState(guid)
     creature:Talk(SAY_DEATH)
-    -- C++-exact arm order: instance->SetBossState(DONE) rides the
-    -- no-instance bridge; DeSpawnAdds (boss_moroes.cpp:175) ports here,
-    -- then DoRemoveAurasDueToSpellOnPlayers(SPELL_GARROTE) (:181).
+    -- C++-exact arm order: instance->SetBossState(DONE)
+    -- (boss_moroes.cpp:176), then DeSpawnAdds (:178), then
+    -- DoRemoveAurasDueToSpellOnPlayers(SPELL_GARROTE) (:181).
+    creature:SetBossState(1, 3)
     despawnAdds(creature)
     -- C++-exact arm order: instance->DoRemoveAurasDueToSpellOnPlayers(
-    -- SPELL_GARROTE) (boss_moroes.cpp:181) — the SetBossState leg rides
-    -- the no-instance bridge. No death filter: C++
+    -- SPELL_GARROTE) (boss_moroes.cpp:181). No death filter: C++
     -- iterates every instance player (mapId/instanceId match, maiden
     -- precedent); player:RemoveAura is bridged (lua_player.go:219).
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()

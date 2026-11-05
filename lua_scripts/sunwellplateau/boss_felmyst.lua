@@ -35,15 +35,16 @@
 -- re-arming, and the ground-only Lua model matches that arm).
 -- OnTargetDied(3): Talk(YELL_KILL), no
 -- TYPEID gate (C++-exact — the C++ KilledUnit Talk has no victim
--- gate). OnDied(4): Talk(YELL_DEATH); the SetBossState(DONE) arm
--- is blocked on the instance-script model. OnReset(23): the
+-- gate). OnDied(4): Talk(YELL_DEATH) + SetBossState(DATA_FELMYST=2,
+-- DONE) via creature:SetBossState (bridge live 2026-11-05).
+-- OnReset(23): the
 -- Initialize/events.Reset arms (phase tracking lives only in the
 -- unmodeled flight sequence — see below); the DisableGravity arm
 -- ports via the creature:SetDisableGravity bridge (felmystResetState;
 -- stale "no bridge" retracted); the bounding-radius (no creature
 -- motion slot) and setActive(false) arms stay out, and the
--- SetBossState(NOT_STARTED) arm is blocked on the instance-script
--- model. OnLeaveCombat(2)/OnReset(23): cancel timers.
+-- SetBossState(NOT_STARTED) arm ports via creature:SetBossState
+-- (bridge live 2026-11-05). OnLeaveCombat(2)/OnReset(23): cancel timers.
 -- Trail (25267): OnSpawn(5): NOT_SELECTABLE SetFlag + triggered
 -- self-cast trail trigger 45399 + SetTarget(self) (C++ constructor
 -- arms, C++-exact — the constructor runs once at AI creation; C++
@@ -239,9 +240,10 @@ local function felmystBerserkTick(creature, guid)
 end
 
 -- C++ JustEngagedWith: triggered self-cast of the two pull auras
--- + the ground-phase schedule. The setActive arm has no bridge and
--- SetBossState(IN_PROGRESS) is blocked on the instance-script model;
--- the DoZoneInCombat arm is ported below (bridge live 2026-10-23).
+-- + the ground-phase schedule. The setActive arm has no bridge;
+-- SetBossState(IN_PROGRESS) ports via creature:SetBossState
+-- (bridge live 2026-11-05); the DoZoneInCombat arm is ported below
+-- (bridge live 2026-10-23).
 local function felmystEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -254,6 +256,7 @@ local function felmystEnterCombat(event, creature, target)
     -- ahead of the ground-phase schedule; the landing re-entry (:403) rides the
     -- unported flight machine and stays out.
     creature:SetSpeedRate(1, 2.0)
+    creature:SetBossState(2, 1) -- DATA_FELMYST, IN_PROGRESS (boss_felmyst.cpp:169)
     schedule(guid, "cleave", math.random(5000, 10000), function()
         felmystCleave(creature, guid)
     end)
@@ -276,10 +279,11 @@ local function felmystTargetDied(event, creature, victim)
     creature:Talk(YELL_KILL)
 end
 
--- C++ JustDied: Talk(YELL_DEATH); SetBossState(DONE) is blocked
--- on the instance-script model.
+-- C++ JustDied: Talk(YELL_DEATH) + SetBossState(DATA_FELMYST=2, DONE)
+-- (boss_felmyst.cpp:194-199).
 local function felmystDied(event, creature, killer)
     creature:Talk(YELL_DEATH)
+    creature:SetBossState(2, 3)
     cancelTimers(creature:GetGUID())
 end
 
@@ -289,9 +293,9 @@ local function felmystResetState(event, creature)
     -- -> events.Reset() (both internal; timer cancel above is the Lua
     -- twin) -> me->SetDisableGravity(true) (:149) ->
     -- SetFloatValue(COMBATREACH, 10) (:151) — the BOUNDINGRADIUS leg
-    -- (:150) has no creature motion slot and stays out, as do the
-    -- setActive(false) and SetBossState(NOT_STARTED) legs (documented
-    -- in the header).
+    -- (:150) has no creature motion slot and stays out, as does the
+    -- setActive(false) leg; the SetBossState(NOT_STARTED) leg ports
+    -- below (bridge live 2026-11-05).
     creature:SetDisableGravity(true)
     creature:SetCombatReach(10)
     -- C++ DespawnSummons(NPC_VAPOR_TRAIL) (:153, :488-508): every
@@ -301,6 +305,12 @@ local function felmystResetState(event, creature)
     for _, trail in ipairs(creature:GetCreaturesInGrid(NPC_VAPOR_TRAIL, 100)) do
         trail:SetVisible(false)
         trail:Despawn()
+    end
+    -- C++ Reset tail (boss_felmyst.cpp:156): SetBossState(DATA_FELMYST, NOT_STARTED).
+    -- Alive-gated: Go fires ev23 on the death path too, and C++ Reset
+    -- never runs on death (JustDied owns the DONE set).
+    if creature:IsAlive() then
+        creature:SetBossState(2, 0)
     end
 end
 

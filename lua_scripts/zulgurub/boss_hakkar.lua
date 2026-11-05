@@ -24,9 +24,11 @@
 -- Deviations from C++: EVENT_CAUSE_INSANITY is disabled upstream (the
 -- cast and its re-arm are commented out in the C++ UpdateAI) — not
 -- modeled; the aspect timers' instance GetBossState(DATA_X) != DONE
--- gates have no bridge (no instance-script model) — all five aspects
--- are armed unconditionally; the UpdateAI UNIT_STATE_CASTING gate (skip
--- the rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
+-- gates port via creature:GetBossState (bridge live 2026-11-05) —
+-- each aspect arms only while its priest is not DONE; the UpdateAI
+-- UNIT_STATE_CASTING gate (skip the rest of the event queue while
+-- casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is
+-- constant-false — Go casts are fire-and-forget)
 -- — timers fire unconditionally (jeklik convention); no instance-script
 -- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
 -- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
@@ -164,8 +166,8 @@ local function onEnrage(creature, guid)
 end
 
 -- C++ aspect timers: triggered DoCastVictim of the priest aspect whose
--- GetBossState(DATA_X) != DONE. No instance-script model — all five are
--- armed unconditionally, C++-exact re-arms otherwise.
+-- GetBossState(DATA_X) != DONE (boss_hakkar.cpp:92-100) — each aspect
+-- arms only while its priest is not DONE; re-arms C++-exact otherwise.
 local function armAspect(guid, key, creature, spell, first, minR, maxR)
     local function tick()
         local victim = creature:GetVictim()
@@ -205,11 +207,25 @@ local function hakkarEnterCombat(event, creature, target)
     schedule(guid, "enrage", 600000, function()
         onEnrage(creature, guid)
     end)
-    armAspect(guid, "aspectjeklik", creature, SPELL_ASPECT_OF_JEKLIK, 4000, 10000, 14000)
-    armAspect(guid, "aspectvenoxis", creature, SPELL_ASPECT_OF_VENOXIS, 7000, 8000)
-    armAspect(guid, "aspectmarli", creature, SPELL_ASPECT_OF_MARLI, 12000, 10000)
-    armAspect(guid, "aspectthekal", creature, SPELL_ASPECT_OF_THEKAL, 8000, 15000)
-    armAspect(guid, "aspectarlokk", creature, SPELL_ASPECT_OF_ARLOKK, 18000, 10000, 15000)
+    -- C++ JustEngagedWith (boss_hakkar.cpp:92-100): each priest-aspect
+    -- timer arms only while that priest's boss state != DONE
+    -- (DATA_JEKLIK=0, DATA_VENOXIS=1, DATA_MARLI=2, DATA_ARLOKK=3,
+    -- DATA_THEKAL=4; zulgurub.h:30-34; DONE=3).
+    if creature:GetBossState(0) ~= 3 then
+        armAspect(guid, "aspectjeklik", creature, SPELL_ASPECT_OF_JEKLIK, 4000, 10000, 14000)
+    end
+    if creature:GetBossState(1) ~= 3 then
+        armAspect(guid, "aspectvenoxis", creature, SPELL_ASPECT_OF_VENOXIS, 7000, 8000)
+    end
+    if creature:GetBossState(2) ~= 3 then
+        armAspect(guid, "aspectmarli", creature, SPELL_ASPECT_OF_MARLI, 12000, 10000)
+    end
+    if creature:GetBossState(4) ~= 3 then
+        armAspect(guid, "aspectthekal", creature, SPELL_ASPECT_OF_THEKAL, 8000, 15000)
+    end
+    if creature:GetBossState(3) ~= 3 then
+        armAspect(guid, "aspectarlokk", creature, SPELL_ASPECT_OF_ARLOKK, 18000, 10000, 15000)
+    end
 end
 
 local function hakkarLeaveCombat(event, creature)

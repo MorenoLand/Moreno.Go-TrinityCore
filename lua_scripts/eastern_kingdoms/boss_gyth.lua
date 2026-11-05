@@ -47,14 +47,14 @@
 -- not an object; the old :Cancel() method idiom errored at runtime and
 -- never cancelled)
 -- (maiden convention).
--- Unmodeled (documented-only): Reset's instance arm
--- (instance->GetBossState(DATA_GYTH) == IN_PROGRESS ->
--- SetBossState(DATA_GYTH, DONE) + me->DespawnOrUnsummon()) — no
--- instance bridge on the Lua surface (instance precedent);
--- Reset's _Reset() and JustDied's _JustDied() are internal BossAI
--- machinery covered by the cancel/re-arm on combat events (halycon
--- precedent); JustDied's instance->SetBossState(DATA_GYTH, DONE) —
--- instance precedent, unmodeled. SetData(type, 1) -> EVENT_SUMMONED_1
+-- Unmodeled (documented-only): Reset's _Reset() bookkeeping is covered
+-- by the cancel/re-arm on combat events (halycon precedent); Reset's
+-- instance arm (GetBossState(DATA_GYTH) == IN_PROGRESS ->
+-- SetBossState(DATA_GYTH, DONE) + DespawnOrUnsummon) and JustDied's
+-- SetBossState(DATA_GYTH, DONE) port via creature:GetBossState /
+-- creature:SetBossState (bridge live 2026-11-05) — see onReset/onDied.
+-- JustDied's _JustDied() is internal BossAI machinery covered by the
+-- cancel on combat events. SetData(type, 1) -> EVENT_SUMMONED_1
 -- 1s (self-cast aura SPELL_REND_MOUNTS 16167 (AddAura), FindNearestGame
 -- Object(GO_DR_PORTCULLIS 175185, 40.0f)->UseDoorOrButton,
 -- FindNearestCreature(NPC_LORD_VICTOR_NEFARIUS, 75.0f)->AI()->SetData(1,
@@ -139,6 +139,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_gyth.cpp:83 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_gyth.cpp:83 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_GYTH=11 (blackrock_spire.h:41).
+    creature:SetBossState(11, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     rendFired[guid] = nil
@@ -150,6 +153,26 @@ end
 
 local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ Reset (boss_gyth.cpp:71-80): _Reset() bookkeeping (timer cancel
+-- above) + the instance arm — GetBossState(DATA_GYTH=11) == IN_PROGRESS
+-- -> SetBossState(DONE) + DespawnOrUnsummon(). Alive-gated: Go fires
+-- ev23 on the death path too, and C++ Reset never runs on death
+-- (JustDied owns the DONE set and never despawns).
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(11) == 1 then
+        creature:SetBossState(11, 3)
+        creature:DespawnOrUnsummon()
+    end
+end
+
+-- C++ JustDied (boss_gyth.cpp:91-94): _JustDied() bookkeeping (timer
+-- cancel) + SetBossState(DATA_GYTH=11, DONE).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(11, 3)
 end
 
 local function onDamageTaken(_, creature, _, damage)
@@ -171,6 +194,6 @@ end
 
 RegisterCreatureEvent(ENTRY_GYTH, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_GYTH, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_GYTH, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_GYTH, 4, onDied)
 RegisterCreatureEvent(ENTRY_GYTH, 9, onDamageTaken)
-RegisterCreatureEvent(ENTRY_GYTH, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_GYTH, 23, onReset)

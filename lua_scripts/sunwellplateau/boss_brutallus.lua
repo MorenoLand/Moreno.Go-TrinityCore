@@ -17,10 +17,10 @@
 -- DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): OnReset(23): per-
 -- GUID state reset (Enraged=false), triggered self-cast dual wield
--- 42459 (C++ DoCast(me, SPELL_DUAL_WIELD, true), C++-exact); the
--- SetBossState(DATA_BRUTALLUS, NOT_STARTED) arm is blocked on the
--- instance-script model. OnEnterCombat(1): per-GUID reset,
--- Talk(YELL_AGGRO), arm meteor slash 45150 11s then 11s, non-
+-- 42459 (C++ DoCast(me, SPELL_DUAL_WIELD, true), C++-exact) +
+-- SetBossState(DATA_BRUTALLUS=1, NOT_STARTED) via creature:SetBossState
+-- (bridge live 2026-11-05). OnEnterCombat(1): per-GUID reset,
+-- Talk(YELL_AGGRO) + SetBossState(IN_PROGRESS), arm meteor slash 45150 11s then 11s, non-
 -- triggered DoCastVictim (nil ticks cast nothing but keep the
 -- schedule, jeklik convention) / stomp 45185 30s then 30s, Talk(
 -- YELL_LOVE) + non-triggered DoCastVictim / burn 46394 60s then
@@ -33,8 +33,8 @@
 -- (C++ DoCast default is triggered=false — vaelastrasz
 -- convention), Enraged=true. OnTargetDied(3): Talk(YELL_KILL),
 -- no TYPEID gate (C++-exact — the C++ KilledUnit Talk has no
--- victim gate). OnDied(4): Talk(YELL_DEATH); the SetBossState(
--- DONE) arm is blocked on the instance-script model; the
+-- victim gate). OnDied(4): Talk(YELL_DEATH) + SetBossState(
+-- DONE) via creature:SetBossState (bridge live 2026-11-05); the
 -- SummonCreature(NPC_FELMYST) arm is PORTED (Eluna type 7).
 -- OnLeaveCombat(2)/OnReset(23):
 -- cancel timers, drop per-GUID state (the EnterEvadeMode
@@ -153,14 +153,14 @@ local function brutallusBerserk(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
 
--- C++ JustEngagedWith: Talk(YELL_AGGRO) + the four initial arms.
--- The SetBossState(IN_PROGRESS) arm is blocked on the
--- instance-script model.
+-- C++ JustEngagedWith: Talk(YELL_AGGRO) + SetBossState(DATA_BRUTALLUS=1,
+-- IN_PROGRESS) (boss_brutallus.cpp:120-126) + the four initial arms.
 local function brutallusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     brutallusState[guid] = { enraged = false }
     creature:Talk(YELL_AGGRO)
+    creature:SetBossState(1, 1)
     schedule(guid, "meteorslash", 11000, function()
         brutallusMeteorSlash(creature, guid)
     end)
@@ -180,13 +180,14 @@ local function brutallusTargetDied(event, creature, victim)
     creature:Talk(YELL_KILL)
 end
 
--- C++ JustDied (boss_brutallus.cpp:130-139): Talk(YELL_DEATH);
--- the SetBossState(DONE) arm is blocked on the instance-script model;
--- then SummonCreature(NPC_FELMYST 25038, death pos +30z, GetOrientation(),
--- TEMPSUMMON_MANUAL_DESPAWN Eluna type 7) — the stale "no summon bridge"
--- claim is retracted (gurtogg convention superseded).
+-- C++ JustDied (boss_brutallus.cpp:130-139): Talk(YELL_DEATH) +
+-- SetBossState(DATA_BRUTALLUS=1, DONE); then SummonCreature(NPC_FELMYST
+-- 25038, death pos +30z, GetOrientation(), TEMPSUMMON_MANUAL_DESPAWN
+-- Eluna type 7) — the stale "no summon bridge" claim is retracted
+-- (gurtogg convention superseded).
 local function brutallusDied(event, creature, killer)
     creature:Talk(YELL_DEATH)
+    creature:SetBossState(1, 3)
     creature:SummonCreature(25038, creature:GetX(), creature:GetY(),
         creature:GetZ() + 30, creature:GetO(), 7, 0)
     local guid = creature:GetGUID()
@@ -204,17 +205,20 @@ local function brutallusLeaveCombat(event, creature)
 end
 
 -- C++ Reset: Initialize (Enraged=false) + triggered self-cast
--- dual wield 42459 (C++-exact); the SetBossState(NOT_STARTED) arm
--- is blocked on the instance-script model.
+-- dual wield 42459 (C++-exact) + SetBossState(DATA_BRUTALLUS=1,
+-- NOT_STARTED) (boss_brutallus.cpp:110-116).
 local function brutallusReset(event, creature)
     local guid = creature:GetGUID()
     brutallusResetState(guid)
     brutallusState[guid] = { enraged = false }
     -- C++ boss_brutallusAI::Reset(): DoCast(me, SPELL_DUAL_WIELD, true)
     -- (boss_brutallus.cpp:113). Alive-gated; the state reset rides the
-    -- death leg deliberately.
+    -- death leg deliberately. The SetBossState(NOT_STARTED) arm shares
+    -- the gate: Go fires ev23 on the death path too, and C++ Reset
+    -- never runs on death (JustDied owns the DONE set).
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_DUAL_WIELD, true)
+        creature:SetBossState(1, 0)
     end
 end
 

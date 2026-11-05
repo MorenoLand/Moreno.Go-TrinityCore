@@ -5764,6 +5764,44 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.updateInstanceWorldState(mapID, instanceID, fieldID, value)
 		return nil, nil
 	}
+	// SetBossState(bossID, state) bridges InstanceScript::SetBossState
+	// (InstanceScript.cpp:340-390) over the live instance boss-state
+	// store (instance_boss_states.go): the creature's map/instance
+	// pair keys the store, the same way UpdateWorldState above reaches
+	// instance-scoped state. Team-less caller: team-flagged spawn
+	// rows stay blocked per setInstanceBossState's documented
+	// behavior. State is the EncounterState enum (InstanceScript.h:68-76):
+	// NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3, SPECIAL 4,
+	// TO_BE_DECIDED 5. No return value, matching the C++ void.
+	methods["SetBossState"] = func(ctx context.Context, args []any) ([]any, error) {
+		bossID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		state, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		s.setInstanceBossState(ctx, mapID, instanceID, bossID, uint8(state), 0, false)
+		return nil, nil
+	}
+	// GetBossState(bossID) bridges InstanceScript::GetBossState
+	// (InstanceScript.h:236-237): the stored state, or TO_BE_DECIDED (5)
+	// for a boss never set in this instance — C++-exact, since
+	// instanceBossState returns TO_BE_DECIDED for an unset boss.
+	methods["GetBossState"] = func(_ context.Context, args []any) ([]any, error) {
+		bossID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		return []any{s.instanceBossState(mapID, instanceID, bossID)}, nil
+	}
 	// HasQuest is CreatureMethods::HasQuest (CreatureMethods.h):
 	// Creature::hasQuest (Creature.cpp:1851-1854) = the creature-quest
 	// starter relation (ObjectMgr.cpp:8439 loads creature_queststarter
