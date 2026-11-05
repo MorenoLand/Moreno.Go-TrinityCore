@@ -106,9 +106,9 @@
 --   from the home-move finalization (engine/world/creaturemotion.go).
 --   The !_defeated gate rides the DamageTaken latch (defeated[guid])
 --   ported above.
--- - The C++ while(ExecuteEvent()) + UNIT_STATE_CASTING gates — no
---   casting-state bridge in the Lua API (aeonus precedent —
---   unmodeled).
+-- - The C++ while(ExecuteEvent()) + UNIT_STATE_CASTING gates — PORTED
+--   per arm as 500ms IsCasting defers (cast-state ticks; the old
+--   "no casting-state bridge" note was stale — IsCasting is live).
 -- - SAY_KILL (3) / SAY_SLEEP (5): declared in the C++ yells enum,
 --   never Talked anywhere in the file.
 

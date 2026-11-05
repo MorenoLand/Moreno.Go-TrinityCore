@@ -39,14 +39,17 @@
 --   cleanup (below); the _JustDied() instance leg stays blocked.
 -- Unmodeled (documented-only, no bridges):
 -- - Reset's DoCastAOE(SPELL_CORRUPTION_OF_TIME_CHANNEL 60422), the
---   "implicitly targets the Guardian" channel leg — no cast-target /
---   AoE-to-guardian bridge; _Reset() is instance bookkeeping (blocked).
--- - SpellHitTarget(SPELL_CORRUPTION_OF_TIME_CHANNEL): the guardian
---   self-casts SPELL_CORRUPTION_OF_TIME_TARGET 60451, triggered. Stays
---   out on trigger-path grounds: Reset's channel cast (DoCastAOE 60422,
---   "implicitly targets the Guardian") is unported — no cast-target /
---   AoE-to-guardian bridge — so event 15 never fires for it in Go
---   (event 15 itself is live — boss_ai.go:1904).
+--   "implicitly targets the Guardian" channel leg — stays out on
+--   implicit-target grounds: C++ DoCast(nullptr) lets spell data pick
+--   the guardian (UnitAI.h:322), while Go CastSpell needs an explicit
+--   target; self-casting 60422 would put the channel on the corruptor,
+--   and a FindNearestCreature guardian cast would invent a range C++
+--   never states. _Reset() is instance bookkeeping (blocked).
+-- - SpellHitTarget (event 15, PORTED): a SPELL_CORRUPTION_OF_TIME_
+--   CHANNEL 60422 hit makes the target self-cast SPELL_CORRUPTION_OF_
+--   TIME_TARGET 60451, triggered (C++-exact; epoch ev15 precedent, args
+--   (event, creature, target, spellId)). Dormant until a 60422 cast
+--   lands — Reset's channel cast itself stays out below.
 -- - JustDied's FindNearestCreature legs, PORTED in onDied (the
 --   header's "no nearby-creature enumeration bridge" claim was stale:
 --   FindNearestCreature is live, lua_creature_events.go:2332, nearest
@@ -79,6 +82,7 @@ local SAY_DEATH = 1
 local SPELL_CORRUPTING_BLIGHT = 60588
 local SPELL_VOID_STRIKE       = 60590
 
+local SPELL_CORRUPTION_OF_TIME_CHANNEL = 60422
 local SPELL_CORRUPTION_OF_TIME_TARGET = 60451
 
 local NPC_GUARDIAN_OF_TIME = 32281
@@ -162,6 +166,18 @@ local function onVoidStrike(creature, guid)
     end)
 end
 
+-- C++ SpellHitTarget (:72-76): a SPELL_CORRUPTION_OF_TIME_CHANNEL
+-- 60422 hit makes the target self-cast SPELL_CORRUPTION_OF_TIME_TARGET
+-- 60451, triggered. Event 15 args (event, creature, target, spellId)
+-- per the epoch precedent; C++ has no hostility gate here (unlike
+-- epoch's dummy leg), so none is applied.
+local function onSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_CORRUPTION_OF_TIME_CHANNEL or not target then
+        return
+    end
+    target:CastSpell(target, SPELL_CORRUPTION_OF_TIME_TARGET, true)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -209,4 +225,5 @@ end
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 15, onSpellHitTarget)
 RegisterCreatureEvent(ENTRY, 23, onReset)

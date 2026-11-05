@@ -16320,18 +16320,20 @@ func init() {
 	// convention, 5s -> 5s); the BossAI::UpdateAI CASTING gates are
 	// PORTED (ScriptedCreature.cpp:578/:584 — both arms defer 500ms
 	// while IsCasting, no re-arm consumed); death is Talk SAY_DEATH (1) + cancel
-	// (C++ JustDied calls _JustDied() plus guardian/rift cleanup,
-	// blocked standing); melee engine-driven. The Reset
-	// DoCastAOE channel leg (60422 "implicitly targets the Guardian"),
-	// the SpellHitTarget(60422) guardian self-cast(60451) machine
-	// (SpellHit-15-never-fires standing queue), the JustDied
-	// FindNearestCreature(32281 guardian / 28409 time rift) cleanup,
+	// + the JustDied FindNearestCreature(32281 guardian / 28409 time rift)
+	// cleanup PORTED in the Lua (guardian RemoveAura(60451) + 5s Despawn,
+	// rift immediate Despawn; _JustDied() instance leg blocked); the
+	// SpellHitTarget(60422) guardian self-cast(60451) handler is PORTED
+	// (event 15, epoch precedent); melee engine-driven. The Reset
+	// DoCastAOE channel leg (60422 "implicitly targets the Guardian")
+	// stays out on implicit-target grounds (Go CastSpell needs an explicit
+	// target; C++ DoCast(nullptr) lets spell data pick the guardian),
 	// the EnterEvadeMode REACT_PASSIVE gate, the MovementInform point
 	// DespawnOrUnsummon + SetBossState FAIL, and the DoAction(-ACTION_
 	// CORRUPTOR_LEAVE) SAY_FAIL(2) + MovePoint-to-rift chain
 	// (culling_of_stratholme.h:150; instance caller
 	// instance_culling_of_stratholme.cpp:495) have no channel /
-	// SpellHit / nearby-creature / movement / DoAction / react-state /
+	// movement / DoAction / react-state /
 	// instance-data bridges — documented in
 	// lua_scripts/kalimdor/boss_infinite_corruptor.lua, not wired.
 	RegisterLuaBoss("boss_infinite_corruptor", 32273)
