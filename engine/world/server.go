@@ -279,6 +279,8 @@ type Server struct {
 	spawnGroupToggled        map[spawnGroupInstanceKey]bool
 	instanceBossStateMu      sync.RWMutex
 	instanceBossStates       map[instanceAdmissionKey]map[uint32]uint8
+	instanceGuidMu           sync.RWMutex
+	instanceGuids            map[instanceAdmissionKey]map[uint32]uint64
 	instanceDataMu           sync.Mutex
 	instanceDataObjects      map[instanceAdmissionKey]*scripting.Object
 	instanceSpawnGroupMu     sync.RWMutex

@@ -20313,6 +20313,12 @@ func init() {
 	RegisterLuaBoss("boss_prince_keleseth_icc", 37972)
 	RegisterLuaBoss("boss_prince_taldaram_icc", 37973)
 	RegisterLuaBoss("boss_prince_valanar_icc", 37970)
+	// boss_blood_council_controller: Blood Prince Council controller,
+	// entry 38008 (icecrown_citadel.h NPC_BLOOD_ORB_CONTROLLER) —
+	// fight logic in lua_scripts/northrend/boss_blood_prince_council.lua
+	// (registered tick 221 for its JustEngagedWith/EnterEvadeMode
+	// encounter-frame arms).
+	RegisterLuaBoss("boss_blood_council_controller", 38008)
 
 	// boss_blood_queen_lana_thel: Icecrown Citadel boss script,
 	// entry 37955 (icecrown_citadel.h NPC_BLOOD_QUEEN_LANA_THEL —

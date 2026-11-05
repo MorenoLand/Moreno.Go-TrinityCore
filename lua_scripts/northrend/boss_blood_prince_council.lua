@@ -107,21 +107,21 @@
 -- keleseth SAY_KELESETH_DEATH 5, taldaram EMOTE_TALDARAM_DEATH 6,
 -- valanar SAY_VALANAR_DEATH 6.
 --
--- DOCUMENTED-ONLY (no registration beyond the three prince entries):
+-- DOCUMENTED-ONLY (except the controller, registered + ported tick 221):
 -- boss_blood_council_controller — zero own Talk lines; its
--- JustEngagedWith (:254-292, CheckRequiredBosses / DoZoneInCombat
--- (re-evaluated 2026-10-23: stays out — controller unregistered, arm
--- rides the instance machine) /
--- SetBossState / DoCastSelf(SPELL_INVOCATION_OF_BLOOD_VALANAR 70952) /
--- the roll_chance_i(50) _invocationOrder build / EVENT_INVOCATION_OF_BLOOD
--- seed :289) has no instance bridge; UpdateAI EVENT_INVOCATION_OF_BLOOD
+-- JustEngagedWith frame legs (:266-302, SetCombatPulseDelay /
+-- DoZoneInCombat / SetBossState IN_PROGRESS / DoCastSelf 70952 /
+-- PrincesData ENGAGE loop) and EnterEvadeMode DISENGAGE loop (:252-260)
+-- are PORTED via the instance guid store; the CheckRequiredBosses
+-- sequence-break leg, the roll_chance_i(50) _invocationOrder build +
+-- EVENT_INVOCATION_OF_BLOOD seed, and the Reset SummonCreatureGroup /
+-- intro legs stay out (no bridges / unported rotation + intro
+-- machines). UpdateAI EVENT_INVOCATION_OF_BLOOD
 -- (:373-398) cross-AI DoAction + Talk(textId) on the rotated prince is
 -- the invocation rotation machine — no bridge; boss_blood_council_
 -- controller::JustDied (:322-336, prince kill sweep — the prince->
 -- LowerPlayerDamageReq(:331) + Unit::Kill legs, SetBossState(DONE)
--- :323) rides the same unregistered controller + no-instance bridge;
--- NOT registered (the
--- bronjahm npc_corrupted_soul_fragment precedent).
+-- :323) stays out — controller death handling unported.
 -- BloodPrincesBossAI::DoAction (:549-580) — Talk(SelectInvocationSay())
 -- + DoCastSelf(SPELL_INVOCATION_VISUAL_ACTIVE 71596, true) ride
 -- ACTION_CAST_INVOCATION, which arrives via SpellHit (:535-539) from the
@@ -312,6 +312,23 @@ local function despawnTaldaramSummons(guid)
 end
 local ENTRY_DARK_NUCLEUS = 38369 -- icecrown_citadel.h:250 (NPC_DARK_NUCLEUS)
 local ENTRY_BLOOD_ORB_CONTROLLER = 38008 -- icecrown_citadel.h:248 (NPC_BLOOD_ORB_CONTROLLER)
+local DATA_BLOOD_PRINCE_COUNCIL = 7 -- icecrown_citadel.h:81
+local DATA_PRINCE_KELESETH = 19 -- icecrown_citadel.h:95
+local DATA_PRINCE_TALDARAM = 20 -- icecrown_citadel.h:96
+local DATA_PRINCE_VALANAR = 21 -- icecrown_citadel.h:97
+local PRINCES_DATA = { DATA_PRINCE_KELESETH, DATA_PRINCE_TALDARAM, DATA_PRINCE_VALANAR } -- boss_blood_prince_council.cpp:212-217
+local SPELL_INVOCATION_OF_BLOOD_VALANAR = 70952 -- boss_blood_prince_council.cpp:105
+-- Instance guid store (engine/world/instance_guid_store.go): each prince
+-- latches its own GUID under its DATA_X on spawn (CREATURE_EVENT_ON_SPAWN
+-- 5) — the Lua mirror of instance_icecrown_citadel.cpp:255-261.
+local PRINCE_DATA = {
+    [ENTRY_KELESETH] = DATA_PRINCE_KELESETH,
+    [ENTRY_TALDARAM] = DATA_PRINCE_TALDARAM,
+    [ENTRY_VALANAR] = DATA_PRINCE_VALANAR,
+}
+local function princeSpawn(event, creature)
+    creature:SetGuidData(PRINCE_DATA[creature:GetEntry()])
+end
 
 -- Texts enum: SAY_KELESETH_SPECIAL = 2, EMOTE_KELESETH_BERSERK = 4,
 -- EMOTE_TALDARAM_BERSERK = 5, SAY_TALDARAM_SPECIAL = 2,
@@ -864,6 +881,50 @@ local function randomBallTarget(creature)
     return nil
 end
 
+-- boss_blood_council_controller (38008) — registered tick 221
+-- (boss_ai.go); its JustEngagedWith/EnterEvadeMode frame arms port
+-- below. The controller enters combat via the princes'
+-- DoZoneInCombat(controller) leg (ported in each member's event-1
+-- handler) — the C++ chain: a prince engages ->
+-- DoZoneInCombat(controller) -> controller JustEngagedWith.
+-- C++ JustEngagedWith (boss_blood_prince_council.cpp:266-302): the
+-- IN_PROGRESS once-guard (:267-268) via the instance boss-state store;
+-- CheckRequiredBosses (:270-275) has no bridge — the sequence-break
+-- evade leg stays out; SetCombatPulseDelay(5), DoZoneInCombat,
+-- SetBossState(IN_PROGRESS), DoCastSelf INVOCATION_OF_BLOOD_VALANAR
+-- 70952, then the PrincesData ENGAGE loop (C++ order). The
+-- EVENT_INVOCATION_OF_BLOOD seed (:289) and the _invocationOrder build
+-- (:291-301) stay out — the invocation rotation machine is unported,
+-- so the order would be a dead store. setActive has no bridge.
+local function controllerEnterCombat(event, creature)
+    if creature:GetBossState(DATA_BLOOD_PRINCE_COUNCIL) == 1 then -- IN_PROGRESS
+        return
+    end
+    creature:SetCombatPulseDelay(5)
+    creature:DoZoneInCombat()
+    creature:SetBossState(DATA_BLOOD_PRINCE_COUNCIL, 1) -- IN_PROGRESS
+    creature:CastSpell(creature, SPELL_INVOCATION_OF_BLOOD_VALANAR)
+    for _, bossData in ipairs(PRINCES_DATA) do
+        local prince = creature:GetInstanceCreature(bossData)
+        if prince then
+            creature:SendEncounterUnit(0, prince) -- ENCOUNTER_FRAME_ENGAGE
+            prince:DoZoneInCombat()
+        end
+    end
+end
+
+-- C++ EnterEvadeMode (boss_blood_prince_council.cpp:252-260): the
+-- PrincesData DISENGAGE loop; summons.DespawnAll + _DespawnAtEvade
+-- have no bridges — stay out.
+local function controllerLeaveCombat(event, creature)
+    for _, bossData in ipairs(PRINCES_DATA) do
+        local prince = creature:GetInstanceCreature(bossData)
+        if prince then
+            creature:SendEncounterUnit(1, prince) -- ENCOUNTER_FRAME_DISENGAGE
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
 RegisterCreatureEvent(ENTRY_TALDARAM, 1, taldaramEnterCombat)
 RegisterCreatureEvent(ENTRY_VALANAR, 1, valanarEnterCombat)
@@ -935,6 +996,11 @@ RegisterCreatureEvent(ENTRY_VALANAR, 4, princesJustDied)
 RegisterCreatureEvent(ENTRY_KELESETH, 23, princesReset)
 RegisterCreatureEvent(ENTRY_TALDARAM, 23, princesReset)
 RegisterCreatureEvent(ENTRY_VALANAR, 23, princesReset)
+RegisterCreatureEvent(ENTRY_KELESETH, 5, princeSpawn)
+RegisterCreatureEvent(ENTRY_TALDARAM, 5, princeSpawn)
+RegisterCreatureEvent(ENTRY_VALANAR, 5, princeSpawn)
+RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 1, controllerEnterCombat)
+RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 2, controllerLeaveCombat)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 1, nucleusEnterCombat)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 9, nucleusDamageTaken)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 23, nucleusReset)

@@ -5802,6 +5802,60 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{s.instanceBossState(mapID, instanceID, bossID)}, nil
 	}
+	// SetGuidData(dataID) is the population leg of the instance guid
+	// store (instance_guid_store.go): it latches the calling
+	// creature's GUID under dataID in its instance, the Lua mirror of
+	// the C++ instance script's OnCreatureCreate latching
+	// (InstanceScript::AddObject create leg, InstanceScript.cpp:294-297;
+	// e.g. instance_icecrown_citadel.cpp:255-261 latches the blood
+	// princes). Boss Lua files call it from a CREATURE_EVENT_ON_SPAWN
+	// (5) handler, which motionFor fires on first spawn and on
+	// respawn. No return value, matching the C++ void assignment.
+	methods["SetGuidData"] = func(_ context.Context, args []any) ([]any, error) {
+		dataID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.setInstanceGuidData(mapID, instanceID, dataID, guid)
+		return nil, nil
+	}
+	// GetGuidData(dataID) bridges InstanceScript::GetGuidData
+	// (InstanceScript.cpp:108-113) over the instance guid store: the
+	// stored GUID, or 0 for an unlatched type — the Go form of
+	// ObjectGuid::Empty.
+	methods["GetGuidData"] = func(_ context.Context, args []any) ([]any, error) {
+		dataID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		return []any{s.instanceGuidData(mapID, instanceID, dataID)}, nil
+	}
+	// GetInstanceCreature(dataID) bridges InstanceScript::GetCreature
+	// (InstanceScript.cpp:117-120) over the instance guid store: the
+	// creature object for the stored GUID, or nil when the type is
+	// unlatched or the creature is not on the map — the Go form of
+	// the C++ nullptr. Callers nil-guard it, matching the C++ sites
+	// (e.g. boss_illidari_council.cpp:157-160).
+	methods["GetInstanceCreature"] = func(_ context.Context, args []any) ([]any, error) {
+		dataID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		target := s.instanceCreatureByGuidData(mapID, instanceID, dataID)
+		if target == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.luaMotionCreature(target)}, nil
+	}
 	// SendEncounterUnit(frameType, unit, param1, param2) bridges
 	// InstanceScript::SendEncounterUnit (InstanceScript.cpp:703-736)
 	// over sendEncounterUnit (instance_encounter_frame.go): the

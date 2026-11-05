@@ -40,15 +40,15 @@
 -- exclusion) and are PORTED via GetCreaturesInGrid (the stale "no
 -- cross-creature bridge" claim retracted, 2026-10-21);
 -- the random-member Talk(SAY_COUNCIL_AGRO) is ported the same way.
--- The SendEncounterUnit engage/
--- disengage, SetBoundary and SummonCreatureGroup
--- arms have no instance/summon bridges. The DoZoneInCombat leg is
+-- The SendEncounterUnit engage/disengage arms are PORTED (tick 221,
+-- instance guid store); SetBoundary and SummonCreatureGroup arms have
+-- no bridges. The DoZoneInCombat leg is
 -- PORTED 2026-10-23 (member:DoZoneInCombat() in the controller's
 -- event-1 handler, live bridge engine/world/lua_creature_events.go;
--- members gathered via GetCreaturesInGrid). OnDied: the four members'
--- quiet-suicide 3617 casts are PORTED via GetCreaturesInGrid;
+-- members resolved via GetInstanceCreature since tick 221). OnDied: the four members'
+-- quiet-suicide 3617 casts are PORTED via GetInstanceCreature;
 -- LowerPlayerDamageReq has no bridge — skipped; the
--- SetBossState(DONE) arm is blocked on the instance-script model. OnLeaveCombat/OnReset:
+-- SetBossState(DONE) arm is PORTED (tick 221). OnLeaveCombat/OnReset:
 -- cancel timers, drop per-GUID state; the summons.DespawnAll and
 -- _DespawnAtEvade arms have no bridges (evade-side cleanup is
 -- engine-side).
@@ -154,9 +154,10 @@
 -- arms skipped); Talk(SAY_COUNCIL_COMNT) cross-member comments
 -- and the controller's Talk-on-random-member arms are PORTED via
 -- GetCreaturesInGrid (KilledUnit section below); the controller's
--- SendEncounterUnit arms (encounter-frame UI) and the member
--- EnterEvadeMode relay (boss_illidari_council.cpp:274) have no
--- bearer — no instance/evade bridge; no summon
+-- SendEncounterUnit arms (encounter-frame UI) are PORTED (tick 221,
+-- instance guid store) and the member
+-- EnterEvadeMode relay (boss_illidari_council.cpp:274) has no
+-- bearer — no evade bridge; no summon
 -- bridge — SummonCreatureGroup(SUMMON_COUNCIL_GROUP) unmodeled;
 -- the 41342 shared-rule Nil-target cast stays out on the no-BP-args
 -- bridge (heal hook ev11 exists but read-only);
@@ -171,6 +172,27 @@ local ENTRY_GATHIOS = 22949
 local ENTRY_ZEREVOR = 22950
 local ENTRY_MALANDE = 22951
 local ENTRY_VERAS = 22952
+local DATA_ILLIDARI_COUNCIL = 7 -- black_temple.h:38
+local DATA_GATHIOS_THE_SHATTERER = 14 -- black_temple.h:47
+local DATA_HIGH_NETHERMANCER_ZEREVOR = 15 -- black_temple.h:48
+local DATA_LADY_MALANDE = 16 -- black_temple.h:49
+local DATA_VERAS_DARKSHADOW = 17 -- black_temple.h:50
+local COUNCIL_DATA = { DATA_GATHIOS_THE_SHATTERER, DATA_HIGH_NETHERMANCER_ZEREVOR, DATA_LADY_MALANDE, DATA_VERAS_DARKSHADOW } -- boss_illidari_council.cpp:117-122
+-- Instance guid store (engine/world/instance_guid_store.go): each member
+-- latches its own GUID under its DATA_X on spawn (CREATURE_EVENT_ON_SPAWN
+-- 5, fired on first spawn + respawn) — the Lua mirror of the C++
+-- instance script's OnCreatureCreate latching (base AddObject via the
+-- LoadObjectData entry->DATA table). The controller's CouncilData loops
+-- resolve members through creature:GetInstanceCreature(dataID).
+local MEMBER_DATA = {
+    [ENTRY_GATHIOS] = DATA_GATHIOS_THE_SHATTERER,
+    [ENTRY_ZEREVOR] = DATA_HIGH_NETHERMANCER_ZEREVOR,
+    [ENTRY_MALANDE] = DATA_LADY_MALANDE,
+    [ENTRY_VERAS] = DATA_VERAS_DARKSHADOW,
+}
+local function memberSpawn(event, creature)
+    creature:SetGuidData(MEMBER_DATA[creature:GetEntry()])
+end
 
 local SAY_COUNCIL_AGRO = 0
 local SAY_COUNCIL_ENRAGE = 1
@@ -307,13 +329,13 @@ end
 
 -- C++ JustEngagedWith: _inCombat once-guard (cleared on Reset),
 -- BossAI::JustEngagedWith skipped (no instance-script model);
--- the SendEncounterUnit/SendEncounterUnit arms have no bridge; the
--- DoZoneInCombat leg is PORTED below (members gathered via
--- GetCreaturesInGrid, live bridge engine/world/lua_creature_events.go,
--- 2026-10-23). Arms: triggered self-cast 41499, the equivalency
--- cycle, the 15min berserk one-shot (its member casts have no
--- cross-creature bridge — the arm fires empty), and the random-
--- member Talk(SAY_COUNCIL_AGRO) — PORTED below (the stale "no
+-- the SendEncounterUnit ENGAGE legs are PORTED below via the instance
+-- guid store (tick 221); the DoZoneInCombat leg is PORTED below
+-- (members resolved via GetInstanceCreature, live bridge
+-- engine/world/lua_creature_events.go). Arms: triggered self-cast
+-- 41499, the equivalency cycle, the 15min berserk one-shot (its member
+-- casts have no cross-creature bridge — the arm fires empty), and the
+-- random-member Talk(SAY_COUNCIL_AGRO) — PORTED below (the stale "no
 -- cross-creature bridge" claim is retracted: the memberTargetDied
 -- arm in this file already Talks through creature objects gathered
 -- via GetCreaturesInGrid).
@@ -332,30 +354,25 @@ local function councilEnterCombat(event, creature, target)
     local balanceHealth = math.floor(creature:GetHealth() * 25 / 100)
     creature:SetMaxHealth(balanceHealth)
     creature:SetHealth(balanceHealth)
-    -- C++ JustEngagedWith (boss_illidari_council.cpp:153-160): engage
-    -- each council member in the zone (the SendEncounterUnit legs stay
-    -- out). Members are in hand via GetCreaturesInGrid (exact entries,
-    -- the Talk-block idiom below); the DoZoneInCombat bridge is live
-    -- (engine/world/lua_creature_events.go, 2026-10-23).
-    for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
-        for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
-            member:DoZoneInCombat()
+    -- C++ JustEngagedWith (boss_illidari_council.cpp:153-160): for each
+    -- CouncilData member, SendEncounterUnit ENGAGE then DoZoneInCombat
+    -- (C++ order), nil-guarded via the instance guid store
+    -- (creature:GetInstanceCreature, instance_guid_store.go).
+    for _, bossData in ipairs(COUNCIL_DATA) do
+        local council = creature:GetInstanceCreature(bossData)
+        if council then
+            creature:SendEncounterUnit(0, council) -- ENCOUNTER_FRAME_ENGAGE
+            council:DoZoneInCombat()
         end
     end
     -- C++ JustEngagedWith (boss_illidari_council.cpp:163-164): a random
     -- one of the four council members Talks SAY_COUNCIL_AGRO (the C++
     -- instance->GetCreature(CouncilData[urand(0,3)]) is nil-guarded;
-    -- Lua gathers the members via GetCreaturesInGrid — the
-    -- memberTargetDied cross-creature Talk precedent in this file;
+    -- Lua resolves it the same way, via the instance guid store;
     -- unlike the slay leg, C++ does NOT exclude the engaging member).
-    local members = {}
-    for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
-        for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
-            members[#members + 1] = member
-        end
-    end
-    if #members > 0 then
-        members[math.random(#members)]:Talk(SAY_COUNCIL_AGRO)
+    local council = creature:GetInstanceCreature(COUNCIL_DATA[math.random(1, 4)])
+    if council then
+        council:Talk(SAY_COUNCIL_AGRO)
     end
     local function onEquivalency()
         if creature:IsCasting() then
@@ -372,16 +389,16 @@ local function councilEnterCombat(event, creature, target)
     -- C++ EVENT_BERSERK (boss_illidari_council.cpp:221-226): per-member
     -- triggered SPELL_BERSERK 45078 self-casts + Talk(SAY_COUNCIL_ENRAGE)
     -- on each of the four members (no exclusion — the firing member
-    -- is included, unlike the slay leg). The stale "no cross-creature
-    -- bridge" claim is retracted (memberTargetDied precedent in this
-    -- file); members gathered via GetCreaturesInGrid.
+    -- is included, unlike the slay leg). Members resolved via the
+    -- instance guid store, matching the C++ CouncilData loop.
     local function onCouncilBerserk()
         if creature:IsCasting() then
             schedule(guid, "council_berserk", 500, onCouncilBerserk)
             return
         end
-        for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
-            for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
+        for _, bossData in ipairs(COUNCIL_DATA) do
+            local member = creature:GetInstanceCreature(bossData)
+            if member then
                 member:CastSpell(member, SPELL_BERSERK, true)
                 member:Talk(SAY_COUNCIL_ENRAGE)
             end
@@ -398,22 +415,34 @@ local function councilResetState(guid)
     end
 end
 
--- C++ JustDied (boss_illidari_council.cpp:190-196): each member gets a
--- triggered SPELL_QUIET_SUICIDE 3617 self-cast — ported via the
--- GetCreaturesInGrid idiom (the stale "no cross-creature bridge"
--- claim retracted). The LowerPlayerDamageReq leg has no bridge and
--- stays out; the SetBossState(DONE) arm is blocked on the
--- instance-script model.
+-- C++ JustDied (boss_illidari_council.cpp:182-200): SetBossState DONE,
+-- then per CouncilData member (C++ order): SendEncounterUnit DISENGAGE,
+-- LowerPlayerDamageReq (no bridge — stays out), triggered
+-- SPELL_QUIET_SUICIDE 3617 self-cast.
 local function councilDied(event, creature, killer)
-    for _, entry in ipairs({ ENTRY_GATHIOS, ENTRY_ZEREVOR, ENTRY_MALANDE, ENTRY_VERAS }) do
-        for _, member in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
-            member:CastSpell(member, SPELL_QUIET_SUICIDE, true)
+    creature:SetBossState(DATA_ILLIDARI_COUNCIL, 3) -- DONE (EncounterState, InstanceScript.h:68-76)
+    for _, bossData in ipairs(COUNCIL_DATA) do
+        local council = creature:GetInstanceCreature(bossData)
+        if council then
+            creature:SendEncounterUnit(1, council) -- ENCOUNTER_FRAME_DISENGAGE
+            council:CastSpell(council, SPELL_QUIET_SUICIDE, true)
         end
     end
     councilResetState(creature:GetGUID())
 end
 
+-- C++ EnterEvadeMode (boss_illidari_council.cpp:168-179): disengage each
+-- CouncilData member via the instance guid store; the summons.DespawnAll
+-- + _DespawnAtEvade arms have no bridges (evade-side cleanup is
+-- engine-side). The C++ !IsInEvadeMode re-entrancy guard has no Lua
+-- equivalent; event 2 fires once per leave-combat.
 local function councilLeaveCombat(event, creature)
+    for _, bossData in ipairs(COUNCIL_DATA) do
+        local council = creature:GetInstanceCreature(bossData)
+        if council then
+            creature:SendEncounterUnit(1, council) -- ENCOUNTER_FRAME_DISENGAGE
+        end
+    end
     councilResetState(creature:GetGUID())
 end
 
@@ -428,6 +457,10 @@ RegisterCreatureEvent(ENTRY_ILLIDARI_COUNCIL, 1, councilEnterCombat)
 RegisterCreatureEvent(ENTRY_ILLIDARI_COUNCIL, 2, councilLeaveCombat)
 RegisterCreatureEvent(ENTRY_ILLIDARI_COUNCIL, 4, councilDied)
 RegisterCreatureEvent(ENTRY_ILLIDARI_COUNCIL, 23, councilReset)
+RegisterCreatureEvent(ENTRY_GATHIOS, 5, memberSpawn)
+RegisterCreatureEvent(ENTRY_ZEREVOR, 5, memberSpawn)
+RegisterCreatureEvent(ENTRY_MALANDE, 5, memberSpawn)
+RegisterCreatureEvent(ENTRY_VERAS, 5, memberSpawn)
 
 ------------------------------------------------------------------
 -- Shared member arms (the IllidariCouncilBossAI base).
