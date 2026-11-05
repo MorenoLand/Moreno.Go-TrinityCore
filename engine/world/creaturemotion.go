@@ -5343,10 +5343,31 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// threat list survived the phase, so switched never fires for the
 		// resume).
 		passive := isCreaturePassive(motion)
+		// ThreatReference::ShouldBeOffline phase arm (ThreatManager.cpp:
+		// 101-110, CanNeverSee head): refresh the offline set every step
+		// tick while InCombat, ahead of the 1s reselect, so a victim that
+		// phases out stops being picked and one that phases back in is
+		// pickable again. The manager stores the set only; evaluation
+		// lives here with motion/session context (see threat.go seam).
+		motion.ThreatMgr.SetOfflineSet(s.threatPhaseOfflineSet(motion, players))
+		oldTarget := motion.TargetGUID
 		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); !passive && switched && newVictim != 0 {
 			motion.TargetGUID = newVictim
 			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, motion.ThreatMgr.SortedEntries(), motion.PhaseMask)
 			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, newVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
+		} else if !passive && switched && newVictim == 0 && motion.ThreatMgr.IsOffline(oldTarget) {
+			// Every entry is offline (ReselectVictim null): C++
+			// CreatureAI::UpdateVictim leaves GetVictim() null and the
+			// creature idles — no ATTACK_STOP packet on this path.
+			// Clearing TargetGUID keeps the combat head below from
+			// swinging at the offline victim; the TargetGUID==0 arm
+			// re-acquires on the next tick when a victim comes back
+			// online. Gated on the old target itself being offline so
+			// the all-suppressed reselect-0 case keeps today's behavior.
+			motion.TargetGUID = 0
+			if dirty {
+				s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, motion.ThreatMgr.SortedEntries(), motion.PhaseMask)
+			}
 		} else if !passive && motion.TargetGUID == 0 {
 			if victim := motion.ThreatMgr.GetCurrentVictim(); victim != 0 {
 				motion.TargetGUID = victim

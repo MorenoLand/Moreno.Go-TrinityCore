@@ -50,9 +50,17 @@ type ThreatManager struct {
 	// ThreatManager.cpp:290-304): victims marked here are skipped by
 	// victim selection until a taunt re-evaluates them (a taunted victim
 	// is never suppressed, ShouldBeSuppressed:112-115). The confuse /
-	// breakable-stun legs of ShouldBeSuppressed and the offline leg
-	// remain unmodeled.
+	// breakable-stun legs of ShouldBeSuppressed remain unmodeled; the
+	// offline leg is modeled below, fed only by callers that evaluate
+	// a ShouldBeOffline arm with motion context (see SetOfflineSet).
 	suppressed map[uint64]bool
+	// offline mirrors ThreatReference ONLINE_STATE_OFFLINE
+	// (ThreatManager.h:256): victims whose ShouldBeOffline arm
+	// currently fails. Pure data like suppressed — the manager never
+	// evaluates visibility itself; the combat tick refreshes this set
+	// from the phase arm (threatPhaseOfflineSet), and later legs add
+	// their own callers. A victim absent here is online.
+	offline map[uint64]bool
 	// needClientUpdate mirrors ThreatManager::_needClientUpdate
 	// (set at ThreatManager.cpp:49/61/141/793, consumed at 522-525):
 	// any threat value change that does not switch the victim (AddThreat,
@@ -91,6 +99,7 @@ func NewThreatManager(motion *creatureMotion) *ThreatManager {
 		entries:                make(map[uint64]float32),
 		tauntExpiry:            make(map[uint64]time.Time),
 		tempMods:               make(map[uint64]int32),
+		offline:                make(map[uint64]bool),
 	}
 }
 
@@ -301,6 +310,102 @@ func (tm *ThreatManager) SuppressVictim(victim uint64) {
 	}
 }
 
+// isOfflineLocked reports whether the victim's reference is offline.
+// Unlike suppressed, taunt does not rescue an offline victim:
+// ShouldBeOffline (ThreatManager.cpp:101-110) carries no taunt
+// exception. Callers hold tm.mu.
+func (tm *ThreatManager) isOfflineLocked(victim uint64) bool {
+	return tm.offline[victim]
+}
+
+// IsOffline reports whether the victim is currently flagged offline on
+// this list. Callers outside tm.mu (the combat tick's switch-to-0 arm)
+// use it to tell an offline-driven null reselect from a suppressed one.
+func (tm *ThreatManager) IsOffline(victim uint64) bool {
+	if tm == nil || victim == 0 {
+		return false
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.offline[victim]
+}
+
+// EntryGUIDs returns a snapshot of the entry GUIDs, for callers that
+// evaluate a ShouldBeOffline arm per victim (the combat tick's phase
+// evaluator). Callers hold no tm.mu across the evaluation.
+func (tm *ThreatManager) EntryGUIDs() []uint64 {
+	if tm == nil {
+		return nil
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	guids := make([]uint64, 0, len(tm.entries))
+	for guid := range tm.entries {
+		guids = append(guids, guid)
+	}
+	return guids
+}
+
+// SetOfflineSet replaces the offline flag set wholesale with the
+// caller's fresh evaluation. Unknown GUIDs are dropped: a victim with
+// no entry cannot be a pick, and a stale flag must not survive the
+// victim's re-phase. Like SuppressVictim this marks no client update:
+// SortedEntries still carries the raw list (client-list exclusion is
+// a separate broadcast-site change), so dirtying here would broadcast
+// an unchanged list.
+func (tm *ThreatManager) SetOfflineSet(off map[uint64]bool) {
+	if tm == nil {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	next := make(map[uint64]bool, len(off))
+	for guid := range off {
+		if _, ok := tm.entries[guid]; ok {
+			next[guid] = true
+		}
+	}
+	tm.offline = next
+}
+
+// threatPhaseOfflineSet runs the CanNeverSee phase arm of
+// ThreatReference::ShouldBeOffline (ThreatManager.cpp:101-110, via
+// Object.cpp CanNeverSee) over the owner's threat entries: a victim
+// on a disjoint phase — or a foreign map/instance, via the NeverSees
+// helpers' map arm — is offline. It reuses the scan's phase helpers
+// (effective phase incl. the runtime 261 override, GM anywhere pass),
+// so the threat leg cannot drift from the sight-scan gate. Victims
+// that resolve to neither a player row nor a live motion stay online:
+// C++ holds a live Unit for every ref, and Go drops logged-out /
+// cross-map / dead victims on the death/logout/evade paths instead
+// of flagging them here.
+func (s *Server) threatPhaseOfflineSet(motion *creatureMotion, players []playerPos) map[uint64]bool {
+	if s == nil || motion == nil || motion.ThreatMgr == nil {
+		return nil
+	}
+	byGUID := make(map[uint64]*session, len(players))
+	for i := range players {
+		if players[i].Sess != nil {
+			byGUID[players[i].GUID] = players[i].Sess
+		}
+	}
+	off := make(map[uint64]bool)
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if sess := byGUID[guid]; sess != nil && sess.player != nil {
+			if s.spellGateCreatureNeverSeesPlayer(motion, sess) {
+				off[guid] = true
+			}
+			continue
+		}
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); vm != nil {
+			if s.spellGateCreatureNeverSeesCreature(motion, vm) {
+				off[guid] = true
+			}
+		}
+	}
+	return off
+}
+
 // isTauntedLocked reports whether the victim holds a live taunt state,
 // lazily expiring elapsed auras. Callers hold tm.mu.
 func (tm *ThreatManager) isTauntedLocked(victim uint64) bool {
@@ -403,8 +508,11 @@ func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (swi
 
 // reselectVictimLocked mirrors ThreatManager::ReselectVictim
 // (ThreatManager.cpp:531-585) with the CompareReferencesLT comparator
-// (593-601). Callers hold tm.mu. The offline leg of the comparator has no
-// Go model (refs are removed explicitly on death/evade); the suppressed
+// (593-601). Callers hold tm.mu. Offline refs are skipped before the
+// comparator (ReselectVictim:537 UpdateOffline pass, 546-549 highest-
+// unavailable null); only the arms callers feed (phase, via the combat
+// tick) can flag a ref offline — death/evade removal still covers the
+// dead leg, and unfed arms stay online. The suppressed
 // leg is modeled for the school-immunity apply path (SuppressVictim) and
 // skipped here unless the victim is taunted, matching IsAvailable. DETAUNT
 // has no Go aura model, so the state precedence reduces to
@@ -415,9 +523,12 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 		return 0
 	}
 	// Fixated target is always preferred (ReselectVictim:540-541); a stale
-	// fixate whose entry is gone falls through like !IsAvailable().
+	// fixate whose entry is gone falls through like !IsAvailable(), as
+	// does an offline fixate (suppressed fixates stay preferred in C++
+	// since IsAvailable includes SUPPRESSED — Go's !suppressed gate here
+	// is pre-existing and unchanged by the offline port).
 	if tm.fixateGUID != 0 {
-		if _, ok := tm.entries[tm.fixateGUID]; ok && !tm.isSuppressedLocked(tm.fixateGUID) {
+		if _, ok := tm.entries[tm.fixateGUID]; ok && !tm.isSuppressedLocked(tm.fixateGUID) && !tm.isOfflineLocked(tm.fixateGUID) {
 			return tm.fixateGUID
 		}
 		tm.fixateGUID = 0
@@ -430,7 +541,7 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	}
 	cands := make([]candidate, 0, len(tm.entries))
 	for guid := range tm.entries {
-		if tm.isSuppressedLocked(guid) {
+		if tm.isSuppressedLocked(guid) || tm.isOfflineLocked(guid) {
 			continue
 		}
 		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid)})
@@ -440,6 +551,11 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	if len(cands) == 0 {
 		return 0
 	}
+	// Offline refs never reach the comparator: ReselectVictim:546-549
+	// returns null when the highest ref is unavailable, and the
+	// per-ref UpdateOffline pass (:537) runs before any pick. The
+	// flag set covers only the arms callers currently feed (phase);
+	// unfed arms stay online, they are not silently treated as offline.
 	// Comparator order: taunt state precedence (TAUNT > NONE), then threat
 	// descending — the heap order ReselectVictim walks.
 	sort.Slice(cands, func(i, j int) bool {
@@ -453,7 +569,7 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	if _, ok := tm.entries[old]; !ok {
 		old = 0
 	}
-	if tm.isSuppressedLocked(old) {
+	if tm.isSuppressedLocked(old) || tm.isOfflineLocked(old) {
 		old = 0
 	}
 	highest := cands[0]
@@ -714,7 +830,16 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	}
 	cands := make([]candidate, 0, len(tm.entries))
 	for guid := range tm.entries {
+		if tm.isOfflineLocked(guid) {
+			continue
+		}
 		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid)})
+	}
+	// C++ returns early when the highest ref is unavailable
+	// (ThreatManager.cpp:424-429): with every ref offline there is no
+	// highest to match to, so the taunt matches nothing.
+	if len(cands) == 0 {
+		return false, tm.currentVictim
 	}
 	sort.Slice(cands, func(i, j int) bool {
 		if cands[i].taunted != cands[j].taunted {
@@ -776,6 +901,7 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 		tm.fixateGUID = 0
 	}
 	delete(tm.tauntExpiry, victim)
+	delete(tm.offline, victim)
 	if tm.currentVictim == victim {
 		tm.currentVictim = 0
 		tm.currentVictim = tm.reselectVictimLocked(nil)
@@ -889,6 +1015,7 @@ func (tm *ThreatManager) ClearThreat() {
 	tm.entries = make(map[uint64]float32)
 	tm.tempMods = make(map[uint64]int32)
 	tm.suppressed = make(map[uint64]bool)
+	tm.offline = make(map[uint64]bool)
 	tm.currentVictim = 0
 	tm.fixateGUID = 0
 	tm.tauntExpiry = make(map[uint64]time.Time)
@@ -898,13 +1025,17 @@ func (tm *ThreatManager) ClearThreat() {
 // Reference: TrinityCore ThreatManager::GetCurrentVictim
 // (ThreatManager.cpp:210-217), which re-runs UpdateVictim when the current
 // reference went offline — Go re-selects when the current victim no longer
-// holds an entry (offline/suppressed ref states have no Go model; entries
-// are removed explicitly on death/evade).
+// holds an entry, or when it is flagged offline (phase arm fed by the
+// combat tick; unfed arms stay online). Suppressed state still has no
+// reselect here: a suppressed current victim is kept, matching C++
+// IsAvailable. Entries are removed explicitly on death/evade.
 func (tm *ThreatManager) GetCurrentVictim() uint64 {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	if tm.currentVictim != 0 {
 		if _, ok := tm.entries[tm.currentVictim]; !ok {
+			tm.currentVictim = tm.reselectVictimLocked(nil)
+		} else if tm.isOfflineLocked(tm.currentVictim) {
 			tm.currentVictim = tm.reselectVictimLocked(nil)
 		}
 	}
