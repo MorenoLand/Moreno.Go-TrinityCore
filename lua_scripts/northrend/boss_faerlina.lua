@@ -26,15 +26,17 @@
 -- CreateLuaEvent (the maiden convention), cancelled on 2/4/23.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_faerlina: JustEngagedWith Talk(SAY_AGGRO 1) (event 1; the
--- BossAI::JustEngagedWith base arms PORTED (pulse + me-form DoZoneInCombat, base-first); summons.
--- DoZoneInCombat rides an unbridged leg — tharon_ja precedent; the
+-- BossAI::JustEngagedWith base arms PORTED (SetBossState IN_PROGRESS +
+-- pulse + me-form DoZoneInCombat, base-first) and the summons.
+-- DoZoneInCombat leg PORTED 2026-11-05 (SummonAdds returns the adds
+-- into faerlinaSummons, razuvious precedent; ev1 zones them in); the
 -- EVENT_POISON / EVENT_FIRE / EVENT_FRENZY schedules seed the
 -- CreateLuaEvent machine below); KilledUnit Talk(SAY_SLAY 2) (event 3 —
 -- C++-GATED: the Talk fires only when victim->GetTypeId()==
 -- TYPEID_PLAYER — Lua expresses it via victim:GetObjectType() ==
 -- "Player" (nalorakk / kelthuzad player-gate precedent)); JustDied
--- Talk(SAY_DEATH 3) (event 4; _JustDied instance bookkeeping has no
--- bridge — tharon_ja precedent).
+-- Talk(SAY_DEATH 3) (event 4; _JustDied legs PORTED 2026-11-05 —
+-- SetBossState DONE + summons.DespawnAll, moroes/razuvious precedent).
 -- EVENT_FIRE — PORTED (re-sweep 2026-10-17: the "no random-target
 -- SelectTarget bridge (cairne/kazzak)" claim is RETRACTED —
 -- randomPlayer is the in-tree bridge, anomalus / eadric
@@ -80,34 +82,48 @@
 -- already-dead add casting from JustDied); the _frenzyDispels
 -- counter has no bridged consumer (achievement-only) — both
 -- documented with the handler.
+-- SummonAdds — PORTED 2026-11-05 (creature:SummonCreatureGroup
+-- bridged tick 238; creature:Is25ManRaid bridged): event 5
+-- (InitializeAI leg, DONE-gated via creature:GetBossState,
+-- razuvious precedent) + event 24 (JustReachedHome leg); the
+-- returned adds land in faerlinaSummons, despawned on ev2/ev4/ev23
+-- (the _Reset/_JustDied DespawnAll legs). Reset — _Reset legs
+-- PORTED 2026-11-05 (SetBossState NOT_STARTED, != DONE-gated per
+-- ScriptedCreature.cpp:509-510); _frenzyDispels=0 has no consumer
+-- (achievement-only, below).
 -- Unmodeled (no bridges — documented, not wired):
--- SummonAdds — SummonCreatureGroup(SUMMON_GROUP_WORSHIPPERS 1) +
--- 25-man SUMMON_GROUP_FOLLOWERS 2 — no summon bridge + no difficulty
--- bridge (kelidan precedent); Reset — _Reset() + _frenzyDispels=0 —
--- BossAI bookkeeping (tharon_ja precedent);
 -- GetData(DATA_FRENZY_DISPELS 1) — consumed by the achievement (no
 -- achievement bridge); at_faerlina_entrance Talk(SAY_GREET 0) via
 -- instance GetGuidData(DATA_FAERLINA), NOT_STARTED-gated — no
 -- area-trigger bridge (anubrekhan entrance precedent); achievement_
 -- momma_said_knock_you_out (GetData(DATA_FRENZY_DISPELS)==0) — no
--- achievement bridge (tharon_ja precedent); npc_faerlina_add
--- (ScriptedAI — no RegisterLuaBoss surface, razuvious precedent):
--- Reset 10-man BIND/CHARM immunities stay out — the immunity bridge
--- exists (creature:ApplySpellImmune) and the !Is25ManRaid() gate is now
--- bridged (creature:Is25ManRaid(), lua_creature_events.go; IsHeroic is
--- heroic-mode, not raid size, and was never a substitute), but the add
--- has no Lua bearer file and its entries live in DB summon groups —
--- JustEngagedWith cross-AI DoZoneInCombat via GetGuidData(
--- DATA_FAERLINA) (no instance/cross-AI bridges), JustDied 10-man
--- DoCast(WIDOWS_EMBRACE 28732) on Faerlina (same bar), UpdateAI
--- DoCastVictim(ADD_FIREBALL 54095) — moroes-ready in isolation but the
--- add entries live in DB summon groups (SUMMON_GROUP_WORSHIPPERS 1 /
--- SUMMON_GROUP_FOLLOWERS 2), unverifiable in the C++ tree — joins the
--- bridgeable-but-entry-blocked queue. FIDELITY NOTE: the C++ hard-codes
--- 54095 on both difficulties — the "// 25-man: 54096" enum comment is
--- stale vs the C++ text; a future port must NOT raid-mode it.
+-- achievement bridge (tharon_ja precedent); npc_faerlina_add — PORTED
+-- 2026-11-05 in lua_scripts/northrend/npc_faerlina_add.lua
+-- (entries NPC_NAXXRAMAS_FOLLOWER 16505 / NPC_FOLLOWER_WORSHIPPER
+-- 16506, naxxramas.h:105-106 — the old "entries live in DB summon
+-- groups, unverifiable in the C++ tree" bar is retired; the entries
+-- are the summon-group rows' targets, verified in the header):
+-- Reset 10-man BIND/CHARM immunities (ApplySpellImmune + Is25ManRaid
+-- bridges), JustEngagedWith cross-AI DoZoneInCombat via
+-- GetInstanceCreature(DATA_FAERLINA) (ev5 SetGuidData latch on the
+-- boss, razuvious/understudy precedent), JustDied 10-man
+-- DoCast(WIDOWS_EMBRACE 28732) on Faerlina (ev4 cast from a dead
+-- creature, razuvious hopeless precedent), UpdateAI DoCastVictim(
+-- ADD_FIREBALL 54095) as an ev7 pump (understudy precedent).
+-- FIDELITY NOTE: the C++ hard-codes 54095 on both difficulties — the
+-- "// 25-man: 54096" enum comment is stale vs the C++ text; a future
+-- port must NOT raid-mode it.
 
 local ENTRY_FAERLINA = 15953
+
+local BOSS_FAERLINA = 1 -- naxxramas.h NAXEncounter (ANUBREKHAN 0, FAERLINA 1)
+local DATA_FAERLINA = 1 -- naxxramas.h NAXData64 (ANUBREKHAN 0, FAERLINA 1)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+
+local SUMMON_GROUP_WORSHIPPERS = 1
+local SUMMON_GROUP_FOLLOWERS = 2
 
 local SAY_AGGRO = 1
 local SAY_SLAY = 2
@@ -145,6 +161,45 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SummonAdds (boss_faerlina.cpp:77-82): SummonCreatureGroup(
+-- SUMMON_GROUP_WORSHIPPERS 1) + 25-man SUMMON_GROUP_FOLLOWERS 2.
+-- The returned adds land in faerlinaSummons (the C++ `summons`
+-- container twin, razuvious precedent); ev2/ev4/ev23 despawn them
+-- (the _Reset/_JustDied summons.DespawnAll legs,
+-- ScriptedCreature.cpp:507/516). A group with no DB rows returns an
+-- empty table (the bridge's C++ `if (!data) return;` twin), so the
+-- port is inert until the live TDB provides creature_summon_groups
+-- rows — same caveat as the tick-238 group ports.
+local faerlinaSummons = {}
+
+local function summonAdds(creature, guid)
+    local adds = faerlinaSummons[guid]
+    if not adds then
+        adds = {}
+        faerlinaSummons[guid] = adds
+    end
+    for _, add in ipairs(creature:SummonCreatureGroup(SUMMON_GROUP_WORSHIPPERS)) do
+        adds[#adds + 1] = add
+    end
+    if creature:Is25ManRaid() then
+        for _, add in ipairs(creature:SummonCreatureGroup(SUMMON_GROUP_FOLLOWERS)) do
+            adds[#adds + 1] = add
+        end
+    end
+end
+
+local function despawnAdds(guid)
+    local adds = faerlinaSummons[guid]
+    if adds then
+        for _, add in ipairs(adds) do
+            if add ~= nil then
+                add:Despawn()
+            end
+        end
+        faerlinaSummons[guid] = nil
+    end
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0) — no distance
@@ -239,11 +294,37 @@ local function frenzyTick(creature, guid)
     end
 end
 
+-- C++ InitializeAI (boss_faerlina.cpp:84-91): if not dead and boss
+-- state != DONE, Reset() + SummonAdds(). The SetGuidData latch is the
+-- C++ instance OnCreatureCreate bind (NPC_FAERLINA -> DATA_FAERLINA,
+-- instance_naxxramas.cpp:136) in its Lua form (selin/crystal
+-- precedent); the add's JustEngagedWith/JustDied read it back via
+-- GetInstanceCreature(DATA_FAERLINA).
+local function faerlinaSpawn(event, creature)
+    creature:SetGuidData(DATA_FAERLINA)
+    if not creature:IsDead() and creature:GetBossState(BOSS_FAERLINA) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_NOT_STARTED) -- Reset leg (:109-113)
+        summonAdds(creature, creature:GetGUID())
+    end
+end
+
+-- C++ JustReachedHome (boss_faerlina.cpp:93-97): _JustReachedHome
+-- (setActive(false), no Lua model) + SummonAdds().
+local function faerlinaReachHome(event, creature)
+    summonAdds(creature, creature:GetGUID())
+end
+
 local function faerlinaEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:538)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
+    for _, add in ipairs(faerlinaSummons[guid] or {}) do -- C++ summons.DoZoneInCombat (:103)
+        if add ~= nil then
+            add:DoZoneInCombat()
+        end
+    end
     cancelTimers(guid)
     schedule(guid, "poison", {10000, 15000}, function()
         poisonTick(creature, guid)
@@ -276,6 +357,10 @@ local function faerlinaSpellHit(event, creature, caster, spellId)
 end
 
 local function faerlinaLeaveCombat(event, creature)
+    -- C++ EnterEvadeMode -> Reset -> _Reset summons.DespawnAll; the
+    -- re-summon rides event 24 below. Death never fires event 2, so
+    -- this stays evade-only, C++-exact (razuvious precedent).
+    despawnAdds(creature:GetGUID())
     cancelTimers(creature:GetGUID())
 end
 
@@ -287,6 +372,23 @@ end
 
 local function faerlinaDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (:121-125): _JustDied summons.DespawnAll +
+    -- SetBossState DONE (ScriptedCreature.cpp:513-520; moroes
+    -- precedent).
+    despawnAdds(creature:GetGUID())
+    creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_DONE)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ Reset (boss_faerlina.cpp:109-113): _Reset (summons.DespawnAll +
+-- SetBossState NOT_STARTED when state != DONE,
+-- ScriptedCreature.cpp:499-511) + _frenzyDispels = 0 (achievement-only,
+-- no consumer — documented in the header).
+local function faerlinaReset(event, creature)
+    despawnAdds(creature:GetGUID())
+    if creature:GetBossState(BOSS_FAERLINA) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_NOT_STARTED)
+    end
     cancelTimers(creature:GetGUID())
 end
 
@@ -294,5 +396,7 @@ RegisterCreatureEvent(ENTRY_FAERLINA, 1, faerlinaEnterCombat)
 RegisterCreatureEvent(ENTRY_FAERLINA, 2, faerlinaLeaveCombat)
 RegisterCreatureEvent(ENTRY_FAERLINA, 3, faerlinaTargetDied)
 RegisterCreatureEvent(ENTRY_FAERLINA, 4, faerlinaDied)
+RegisterCreatureEvent(ENTRY_FAERLINA, 5, faerlinaSpawn)
 RegisterCreatureEvent(ENTRY_FAERLINA, 14, faerlinaSpellHit)
-RegisterCreatureEvent(ENTRY_FAERLINA, 23, faerlinaLeaveCombat)
+RegisterCreatureEvent(ENTRY_FAERLINA, 23, faerlinaReset)
+RegisterCreatureEvent(ENTRY_FAERLINA, 24, faerlinaReachHome)

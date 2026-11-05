@@ -36,27 +36,29 @@
 -- BossAI::JustEngagedWith base arms PORTED 2026-11-03:
 -- SetCombatPulseDelay(5) + me-form DoZoneInCombat
 -- (ScriptedCreature.cpp:540/542; heigan/loatheb/razuvious
--- precedent) — the old "instance-bookkeeping leg has no bridge"
--- claim missed the base call; the instance SetBossState /
--- CheckRequiredBosses legs stay out — tharon_ja precedent;
--- the EVENT_SUMMON / EVENT_DOORS_UNLOCK /
--- EVENT_PHASE_TWO scheduling legs are documented below); EVENT_INTRO_2
+-- precedent) + SetBossState IN_PROGRESS PORTED 2026-11-05 (moroes
+-- precedent) — the CheckRequiredBosses leg stays out; the
+-- EVENT_SUMMON / EVENT_DOORS_UNLOCK / EVENT_PHASE_TWO scheduling
+-- legs are documented below); EVENT_INTRO_2
 -- Talk(SAY_INTRO_2 1) 4s, EVENT_INTRO_3 Talk(SAY_INTRO_3 2) 9s,
 -- EVENT_INTRO_4 Talk(SAY_INTRO_4 3) 14s — one-shot timers scheduled
 -- from JustEngagedWith with no phase mask, like C++; KilledUnit
 -- Talk(SAY_KILL 6) (event 3 — C++-GATED: victim->GetTypeId() ==
 -- TYPEID_PLAYER — nalorakk/kelthuzad player-gate variant); JustDied
--- Talk(SAY_DEATH 5) (event 4; the _JustDied bookkeeping + the
--- DATA_GOTHIK_GATE GO_STATE_ACTIVE leg have no bridge — tharon_ja
--- precedent). All timers cancelled on 2/4/23 (gargolmar precedent).
+-- Talk(SAY_DEATH 5) (event 4; _JustDied SetBossState DONE PORTED
+-- 2026-11-05, moroes precedent — the instance-data gothikDone flag
+-- for the dialogue pump is kept alongside; the DATA_GOTHIK_GATE
+-- GO_STATE_ACTIVE leg rides the unported wave machine, stays out). All timers cancelled on 2/4/23 (gargolmar precedent).
 -- SAY_PHASE_TWO (4) + EMOTE_PHASE_TWO (7) are PORTED 2026-10-25
 -- with the phase-two latch; EMOTE_GATE_OPENED (8) rides the unported
 -- gate machine — not ported orphaned (vortex precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_gothik: Reset — SetReactState(REACT_PASSIVE) PORTED
 -- 2026-11-03 into the ev23 handler (boss_gothik.cpp:321; horsemen
--- Reset precedent); instance SetData(DATA_GOTHIK_GATE) + _Reset
--- (summons/instance legs) + Initialize counters stay out; JustSummoned /
+-- Reset precedent) + _Reset SetBossState NOT_STARTED PORTED
+-- 2026-11-05 (!= DONE-gated per ScriptedCreature.cpp:509-510,
+-- moroes precedent); instance SetData(DATA_GOTHIK_GATE) +
+-- Initialize counters stay out (gate machine, below); JustSummoned /
 -- SummonedCreatureDespawn — summons.Summon/summons.Despawn + cross-AI
 -- DoAction + instance GetGuidData (summon-list/cross-AI/instance
 -- blocked, not 'no summon bridge'); EVENT_SUMMON — the waves10/waves25
@@ -148,6 +150,11 @@
 
 local ENTRY_GOTHIK = 16060
 local ENTRY_GOTHIK_TRIGGER = 16137
+
+local BOSS_GOTHIK = 11 -- naxxramas.h NAXEncounter (ANUBREKHAN 0 ... GOTHIK 11)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SAY_INTRO_1 = 0
 local SAY_INTRO_2 = 1
@@ -295,6 +302,7 @@ end
 -- DB spawn-ID trigger lookups + summon-list iteration, no bridges);
 -- EVENT_PHASE_TWO is ported above as a timer-driven latch.
 local function gothikEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_GOTHIK, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:538)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan/loatheb/razuvious precedent)
     creature:SetMeleeAttack(false) -- boss_gothik.cpp:416: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
@@ -332,9 +340,10 @@ end
 local function gothikDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
-    -- C++ SetBossState(BOSS_GOTHIK, DONE) leg (instance_naxxramas.cpp):
-    -- DONE flag for the instance pump's 8-line dialogue chain (the
-    -- gate SetData legs stay out with the unported wave machine).
+    -- C++ JustDied (:365-370): _JustDied SetBossState DONE
+    -- (ScriptedCreature.cpp:513-520; moroes precedent) alongside the
+    -- instance-data flag for the dialogue pump below.
+    creature:SetBossState(BOSS_GOTHIK, BOSS_STATE_DONE)
     local mapObj = creature:GetMap()
     if mapObj then
         local data = mapObj:GetInstanceData()
@@ -345,6 +354,13 @@ local function gothikDied(event, creature, killer)
 end
 
 local function gothikReset(event, creature)
+    -- C++ Reset (:319-325): SetReactState(REACT_PASSIVE) + _Reset
+    -- (SetBossState NOT_STARTED when state != DONE,
+    -- ScriptedCreature.cpp:499-511; the gate SetData + Initialize
+    -- legs stay out with the unported wave machine).
+    if creature:GetBossState(BOSS_GOTHIK) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_GOTHIK, BOSS_STATE_NOT_STARTED)
+    end
     creature:SetReactState(REACT_PASSIVE) -- boss_gothik.cpp:321 Reset arm (gate SetData + _Reset legs stay out)
     cancelTimers(creature:GetGUID())
 end

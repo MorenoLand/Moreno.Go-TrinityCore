@@ -26,8 +26,9 @@
 -- 2/4/23 (timers table keyed by GUID, nightbane precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_heigan: JustEngagedWith Talk(SAY_AGGRO 0) + the four event
--- seeds (event 1; BossAI::JustEngagedWith DoZoneInCombat is PORTED;
--- its instance-bookkeeping leg and the eruption-tile GO enumeration
+-- seeds (event 1; BossAI::JustEngagedWith SetBossState IN_PROGRESS
+-- PORTED 2026-11-05 + DoZoneInCombat (moroes precedent); the
+-- CheckRequiredBosses leg and the eruption-tile GO enumeration
 -- have no bridge — tharon_ja precedent; EVENT_ERUPT's 15s seed is
 -- GO-based, stays out);
 -- KilledUnit Talk(SAY_SLAY 1) (event 3 —
@@ -35,8 +36,8 @@
 -- TYPEID_PLAYER — Lua expresses it via victim:GetObjectType() ==
 -- "Player" (nalorakk / kelthuzad player-gate precedent); the
 -- _safetyDance=false latch has no GetData bridge — documented
--- below); JustDied Talk(SAY_DEATH 3) (event 4; _JustDied instance
--- bookkeeping has no bridge — tharon_ja precedent).
+-- below); JustDied Talk(SAY_DEATH 3) (event 4; _JustDied SetBossState
+-- DONE PORTED 2026-11-05, moroes precedent).
 -- EVENT_DISRUPT (init randtime(15s,20s), repeat 11s) —
 -- DoCastAOE(SPELL_SPELL_DISRUPTION 29310) 1-arg (non-triggered) is the
 -- established self-cast: creature:CastSpell(creature, 29310)
@@ -67,12 +68,11 @@
 -- Talk(EMOTE_DANCE_END 5), re-seed DISRUPT randtime(10s,25s) / FEVER
 -- randtime(15s,20s) / DANCE 90s (C++ ScheduleEvent overwrites the
 -- phase-blocked pendings — the latch-skip in the disrupt/fever
--- callbacks converges to the same next-fire times), SetReactState(
--- REACT_AGGRESSIVE) (bridged). CastStop() is vacuous here — not
--- because nothing channels (PLAGUE_CLOUD 29350 IS channeled, 45s)
--- but because DANCE_END fires at that 45s channel-expiry boundary,
--- after ChannelUntil, with disrupt/fever latch-gated off for the
--- dance; DoZoneInCombat() (:186)
+-- callbacks converges to the same next-fire times), CastStop PORTED
+-- 2026-11-05 (creature:StopSpellCast(), gothik teleport precedent —
+-- the old "vacuous at the 45s channel-expiry boundary" note assumed
+-- exact channel/timer alignment; C++ calls CastStop unconditionally,
+-- so the port does too), SetReactState(REACT_AGGRESSIVE) (bridged).
 -- is PORTED 2026-10-23 in onDanceEnd via the live bridge
 -- (engine/world/lua_creature_events.go:426) — the old "no bridge"
 -- claim is retracted (combat never left Lua-side — threat list
@@ -87,7 +87,8 @@
 -- 15/25/23/13), ObjectAccessor GO lookup + tile->CastSpell(trap
 -- spell) — no GO-spawnId-store / ObjectAccessor / GO-cast bridges —
 -- documented-only.
--- Reset's _Reset() (instance bookkeeping — tharon_ja precedent);
+-- Reset's _Reset() SetBossState NOT_STARTED leg PORTED 2026-11-05
+-- (moroes precedent, != DONE-gated per ScriptedCreature.cpp:509-510);
 -- SetReactState(REACT_AGGRESSIVE) IS ported (event 23).
 -- GetData(DATA_SAFETY_DANCE 19962139) + the _safetyDance latch — no
 -- GetData bridge (drakkari_colossus precedent).
@@ -99,6 +100,11 @@
 -- precedent) + cross-AI GetData absent.
 
 local ENTRY_HEIGAN = 15936
+
+local BOSS_HEIGAN = 4 -- naxxramas.h NAXEncounter (ANUBREKHAN 0 ... HEIGAN 4)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -165,10 +171,10 @@ local function onDanceEnd(creature, guid)
     schedule(guid, "disrupt", {10000, 25000}, function() onDisrupt(creature, guid) end)
     schedule(guid, "fever", {15000, 20000}, function() onFever(creature, guid) end)
     schedule(guid, "dance", 90000, function() onDance(creature, guid) end)
+    -- C++ :186 (EVENT_DANCE_END) — CastStop then SetReactState(
+    -- REACT_AGGRESSIVE) then me-form DoZoneInCombat (C++ arm order).
+    creature:StopSpellCast()
     creature:SetReactState(REACT_AGGRESSIVE)
-    -- C++ :186 (EVENT_DANCE_END) — me-form DoZoneInCombat after
-    -- SetReactState(REACT_AGGRESSIVE) (C++ arm order; CastStop vacuous
-    -- here: 29350's 45s channel expires at the DANCE_END boundary).
     creature:DoZoneInCombat()
 end
 
@@ -185,9 +191,10 @@ onDance = function(creature, guid)
 end
 
 local function heiganEnterCombat(event, creature, target)
-    -- C++ BossAI::JustEngagedWith (ScriptedCreature.cpp:542) zones
-    -- the map into combat before the Talk + schedules below; the
-    -- instance SetBossState / CheckRequiredBosses legs stay out.
+    -- C++ BossAI::JustEngagedWith (ScriptedCreature.cpp:527-542) sets
+    -- IN_PROGRESS before the pulse + DoZoneInCombat; the instance
+    -- CheckRequiredBosses leg stays out.
+    creature:SetBossState(BOSS_HEIGAN, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -210,10 +217,19 @@ end
 
 local function heiganDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (:110-114): _JustDied SetBossState DONE
+    -- (ScriptedCreature.cpp:513-520; moroes precedent).
+    creature:SetBossState(BOSS_HEIGAN, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
 end
 
 local function heiganReset(event, creature)
+    -- C++ Reset (:90-94): SetReactState(REACT_AGGRESSIVE) + _Reset
+    -- (SetBossState NOT_STARTED when state != DONE,
+    -- ScriptedCreature.cpp:499-511).
+    if creature:GetBossState(BOSS_HEIGAN) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_HEIGAN, BOSS_STATE_NOT_STARTED)
+    end
     cancelTimers(creature:GetGUID())
     creature:SetReactState(REACT_AGGRESSIVE)
 end

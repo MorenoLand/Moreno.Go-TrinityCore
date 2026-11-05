@@ -17923,27 +17923,37 @@ func init() {
 	// Grand Widow Faerlina (15953, Naxxramas) —
 	// lua_scripts/northrend/boss_faerlina.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 1)
-	// (event 1; BossAI bookkeeping + summons.DoZoneInCombat have no
-	// bridge — tharon_ja precedent); KilledUnit Talk(SAY_SLAY 2)
-	// player-gated (victim:GetObjectType()=="Player" — nalorakk
-	// precedent); JustDied Talk(SAY_DEATH 3) (event 4; _JustDied
-	// bookkeeping has no bridge); EVENT_POISON DoCastAOE 28796
-	// widows-embrace-gated, EVENT_FIRE DoCast 28794 on random
-	// target, EVENT_FRENZY DoCastSelf 28798 + Talk(EMOTE_FRENZY 5)
-	// with GetDuration+1ms reschedule under Widow's Embrace
-	// (GetDuration bridge, lua_creature_events.go:582); SpellHit
-	// Talk(EMOTE_WIDOW_EMBRACE 4, caster).
-	// Unmodeled: SummonAdds SummonCreatureGroup 1/2 + 25-man gate
-	// (no summon/difficulty bridges), GetData(DATA_FRENZY_DISPELS 1)
-	// (achievement bridge absent), at_faerlina_entrance (no
-	// area-trigger bridge), achievement_momma_said_knock_you_out
-	// (no achievement bridge), npc_faerlina_add (ScriptedAI — no
-	// RegisterLuaBoss surface; DoCastVictim ADD_FIREBALL 54095 in
-	// the bridgeable-but-entry-blocked queue).
+	// (event 1; BossAI SetBossState IN_PROGRESS + pulse + me-form
+	// DoZoneInCombat + summons.DoZoneInCombat, all ported 2026-11-05);
+	// SummonAdds (events 5/24: SummonCreatureGroup 1 + 25-man 2,
+	// DONE-gated spawn leg, razuvious precedent); KilledUnit
+	// Talk(SAY_SLAY 2) player-gated (victim:GetObjectType()=="Player" —
+	// nalorakk precedent); JustDied Talk(SAY_DEATH 3) (event 4;
+	// _JustDied SetBossState DONE + summons.DespawnAll, moroes
+	// precedent); Reset SetBossState NOT_STARTED (event 23, != DONE
+	// gated); EVENT_POISON DoCastAOE 28796 widows-embrace-gated,
+	// EVENT_FIRE DoCast 28794 on random target, EVENT_FRENZY
+	// DoCastSelf 28798 + Talk(EMOTE_FRENZY 5) with GetDuration+1ms
+	// reschedule under Widow's Embrace (GetDuration bridge,
+	// lua_creature_events.go:582); SpellHit Talk(EMOTE_WIDOW_EMBRACE 4,
+	// caster).
+	// Unmodeled: GetData(DATA_FRENZY_DISPELS 1) (achievement bridge
+	// absent), at_faerlina_entrance (no area-trigger bridge),
+	// achievement_momma_said_knock_you_out (no achievement bridge).
 	// CASTING gates PORTED (500ms IsCasting defer): boss UpdateAI
-	// pre-loop :156 + in-loop :185 gates cover poison/fire/frenzy;
-	// add UpdateAI :239 gate covers unported fireball only.
+	// pre-loop :156 + in-loop :185 gates cover poison/fire/frenzy.
 	RegisterLuaBoss("boss_faerlina", 15953)
+
+	// npc_faerlina_add (16505/16506, naxxramas.h:105-106) —
+	// lua_scripts/northrend/npc_faerlina_add.lua. Ported arms
+	// (C++-exact): Reset 10-man BIND/CHARM immunities (event 23),
+	// JustEngagedWith cross-AI DoZoneInCombat on Faerlina (event 1,
+	// ev5 SetGuidData latch), JustDied 10-man Widow's Embrace cast
+	// on Faerlina (event 4), UpdateAI DoCastVictim ADD_FIREBALL 54095
+	// ev7 pump (C++ hard-codes 54095 both difficulties — the
+	// "// 25-man: 54096" enum comment is stale).
+	RegisterLuaBoss("npc_faerlina_add", 16505)
+	RegisterLuaBoss("npc_faerlina_add", 16506)
 
 	// Maexxna (15952, Naxxramas, Arachnid Quarter) —
 	// lua_scripts/northrend/boss_maexxna.lua. Entry wowhead-verified
@@ -17975,13 +17985,15 @@ func init() {
 	// is instance-shimmed, the creature_template binding DB-side).
 	// BossAI. Ported arms in lua_scripts/northrend/boss_heigan.lua:
 	// JustEngagedWith Talk(SAY_AGGRO 0) + the four event seeds (event 1;
-	// BossAI instance bookkeeping + GO eruption-tile enumeration have no
-	// bridge — tharon_ja precedent; erupt's seed is GO-based, stays out),
+	// BossAI SetBossState IN_PROGRESS ported 2026-11-05 + DoZoneInCombat;
+	// CheckRequiredBosses + GO eruption-tile enumeration have no bridge
+	// — tharon_ja precedent; erupt's seed is GO-based, stays out),
 	// KilledUnit Talk(SAY_SLAY 1) player-gated (event 3 — nalorakk/kelthuzad
 	// precedent; the _safetyDance latch has no GetData bridge),
-	// JustDied Talk(SAY_DEATH 3) (event 4; _JustDied instance
-	// bookkeeping has no bridge), Reset SetReactState(REACT_AGGRESSIVE)
-	// (event 23; _Reset() instance leg unbridged), leave-combat/death
+	// JustDied Talk(SAY_DEATH 3) (event 4; _JustDied SetBossState DONE
+	// ported 2026-11-05, moroes precedent), Reset
+	// SetReactState(REACT_AGGRESSIVE) (event 23; _Reset SetBossState
+	// NOT_STARTED ported 2026-11-05, != DONE gated), leave-combat/death
 	// timer teardown (events 2/4). EVENT_DISRUPT (15-20s->11s) +
 	// EVENT_FEVER (10-20s->20-25s) ported as non-triggered self-casts
 	// (29310/29998; DoCastAOE self-cast convention). EVENT_DANCE (90s,
@@ -17993,9 +18005,10 @@ func init() {
 	// DANCE_END seed; the king_dred genuinely-bridgeable-bar objection
 	// is lifted by the SetReactState/AttackStop/StopMoving bridges.
 	// EVENT_DANCE_END ported: Talk(EMOTE_DANCE_END 5) + disrupt/fever/dance
-	// re-seeds + SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (ported
-	// 2026-10-23); CastStop vacuous at the 45s PLAGUE_CLOUD channel-expiry
-	// boundary (29350 is channeled, not instant).
+	// re-seeds + CastStop (ported 2026-11-05 via StopSpellCast — C++
+	// calls it unconditionally, so the port does too) +
+	// SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (ported
+	// 2026-10-23).
 	// EVENT_ERUPT stays out — whole arm rides GO bridges: TeleportCheaters,
 	// GO-by-spawnId tile store firstEruptionDBGUID 84980 sections
 	// 15/25/23/13, ObjectAccessor GO lookup + tile CastSpell. Documented
@@ -18011,14 +18024,20 @@ func init() {
 
 	// Gothik the Harvester (16060, Naxxramas) — lua_scripts/northrend/boss_gothik.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_INTRO_1 0)
-	// (event 1; BossAI bookkeeping has no bridge — tharon_ja precedent);
-	// EVENT_INTRO_2/3/4 Talk(SAY_INTRO_2/3/4 1/2/3) one-shot at
-	// 4s/9s/14s from combat start (no phase mask, like C++);
-	// KilledUnit Talk(SAY_KILL 6) player-gated (nalorakk/kelthuzad
-	// variant); JustDied Talk(SAY_DEATH 5) (event 4; instance/GO legs
-	// have no bridge). SAY_PHASE_TWO (4) + EMOTE_PHASE_TWO (7) +
-	// EMOTE_GATE_OPENED (8) ride unported legs (vortex — not ported
-	// orphaned). Unmodeled: EVENT_SUMMON waves10/waves25 + CGUID_TRIGGER
+	// (event 1; BossAI SetBossState IN_PROGRESS + pulse + me-form
+	// DoZoneInCombat ported, moroes precedent; CheckRequiredBosses
+	// stays out); EVENT_INTRO_2/3/4 Talk(SAY_INTRO_2/3/4 1/2/3)
+	// one-shot at 4s/9s/14s from combat start (no phase mask, like
+	// C++); KilledUnit Talk(SAY_KILL 6) player-gated
+	// (nalorakk/kelthuzad variant); JustDied Talk(SAY_DEATH 5)
+	// (event 4; _JustDied SetBossState DONE ported 2026-11-05, moroes
+	// precedent — the instance-data gothikDone flag for the dialogue
+	// pump is kept alongside; the DATA_GOTHIK_GATE GO leg rides the
+	// unported wave machine). Reset SetBossState NOT_STARTED ported
+	// 2026-11-05 (!= DONE gated). SAY_PHASE_TWO (4) + EMOTE_PHASE_TWO (7)
+	// ported 2026-10-25 with the phase-two latch; EMOTE_GATE_OPENED (8)
+	// rides the unported gate machine (vortex — not ported orphaned).
+	// Unmodeled: EVENT_SUMMON waves10/waves25 + CGUID_TRIGGER
 	// 127618 spawn layout (spawns resolve via DB spawn-GUID trigger
 	// lookups — no spawn-ID bridge, coords not in C++ — + unported
 	// wave/phase machine; difficulty gate is NOT a blocker — IsHeroic
@@ -18027,16 +18046,20 @@ func init() {
 	// bridges), EVENT_PHASE_TWO / EVENT_TELEPORT / EVENT_HARVEST /
 	// EVENT_BOLT ported 2026-10-25 (phase-two latch; teleport incl.
 	// CastStop via StopSpellCast 2026-11-05), DamageTaken phase-one
-	// zeroing (no phase bridge),
+	// zeroing ported 2026-10-25 (ev9 numeric-return, phase-two latch
+	// twin),
 	// EnterEvadeMode NearTeleportTo (no motion bridge), the living/dead-
 	// side check + FindEligibleTarget (no side/visibility/threat bridges),
-	// the seven minion scripts (entries 16124-16150 local-enum-only —
-	// entry-unverifiable, no registration; their DoCastAOE timers behind
-	// the DoCastAOE bridge; spectralrider's Unholy Frenzy priority cast
-	// + drain-life DoCastVictim 27994 moroes-ready but entry-blocked),
-	// npc_gothik_trigger's SpellHit anchor machine (SpellHit never fires
-	// in Lua), spell_gothik_shadow_bolt_volley (no SpellScript binding
-	// bridge).
+	// the seven minion scripts (entries 16124-16150 verified in
+	// boss_gothik.cpp:94-100, but no live sender — the wave/trigger
+	// machines are unported, so registration would be inert; their
+	// DoCastAOE timers ride the DoCastAOE bridge; spectralrider's
+	// Unholy Frenzy priority cast + drain-life DoCastVictim 27994
+	// moroes-ready but sender-blocked),
+	// npc_gothik_trigger's SpellHit anchor machine (ev14 fires, but the
+	// ANCHOR_2 skull-pile selection needs the spawn-ID bridge — no
+	// CGUID_TRIGGER lookup), spell_gothik_shadow_bolt_volley (no
+	// SpellScript binding bridge).
 	RegisterLuaBoss("boss_gothik", 16060)
 
 	// Thaddius (15928), Stalagg (15929), Feugen (15930), Naxxramas —
