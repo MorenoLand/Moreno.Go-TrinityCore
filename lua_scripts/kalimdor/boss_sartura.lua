@@ -22,7 +22,9 @@
 --   suppressed while WhirlWind — engine tick owns melee).
 -- - Enrage <20% health (latched): event 9 projected-health check
 --   (jeklik convention), self-cast SPELL_ENRAGE 28747. C++ also
---   gates on !me->IsNonMeleeSpellCast(false) — no bridge.
+--   gates on !me->IsNonMeleeSpellCast(false) — PORTED as a 500ms
+--   IsCasting defer (doan defer-before-latch-read precedent;
+--   IsCasting is the live casting-state twin).
 -- - Hard enrage at 10min (latched): self-cast SPELL_ENRAGEHARD
 --   28798.
 -- - Talk: SAY_AGGRO 0 on engage, SAY_SLAY 1 on kill, SAY_DEATH 2
@@ -227,11 +229,36 @@ end
 -- C++ UpdateAI per-tick: !Enraged && !HealthAbovePct(20) &&
 -- !me->IsNonMeleeSpellCast(false) -> DoCast(me, 28747) + latched.
 -- Eluna event 9 is pre-damage, so projected-health check
--- (huhuran/jeklik convention). IsNonMeleeSpellCast: no bridge.
+-- (huhuran/jeklik convention). The casting gate is PORTED as a
+-- 500ms IsCasting defer (doan defer-before-latch-read precedent):
+-- while casting, re-check every 500ms against current health, so a
+-- heal back above 20% before a non-casting tick correctly never
+-- fires it. Cancelled with the timers on 2/4/23.
 -- !HealthAbovePct(20) fires AT exactly 20%: projected health <= floor(20M/100).
 -- C++ is UpdateAI post-damage, so it never fires on the killing blow;
 -- the postDamage > 0 guard (nefarian rule) keeps the port from enraging
 -- while dying.
+local function checkEnrageLatch(creature, guid, health)
+    local s = st(guid)
+    if s.enraged then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "enrage_check", 500, function()
+            checkEnrageLatch(creature, guid, creature:GetHealth())
+        end)
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if health > 0 and health <= math.floor(20 * maxHealth / 100) then
+        s.enraged = true
+        creature:CastSpell(creature, SPELL_ENRAGE)
+    end
+end
+
 local function onDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local s = st(guid)
@@ -242,11 +269,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    local postDamage = health - damage
-    if postDamage > 0 and postDamage <= math.floor(20 * maxHealth / 100) then
-        s.enraged = true
-        creature:CastSpell(creature, SPELL_ENRAGE)
-    end
+    checkEnrageLatch(creature, guid, health - damage)
 end
 
 local function onEnterCombat(event, creature, target)

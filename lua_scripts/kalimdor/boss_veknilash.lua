@@ -19,8 +19,8 @@
 --   alive player within 5y via the bridged IsWithinDist check
 --   (the skadi MaxDistance precedent for distance-filtered picks).
 -- - Berserk 26662 (CheckEnrage): DoCast self, init 15min ->
---   repeat 60min. The IsNonMeleeSpellCast gate has no bridge —
---   fixed timer.
+--   repeat 60min. The IsNonMeleeSpellCast gate is PORTED as a
+--   500ms IsCasting defer (doan precedent).
 -- Unmodeled (documented-only, no bridges):
 -- - TwinReset / BossAI ctor leg DATA_TWIN_EMPERORS: instance
 --   bridge, standing.
@@ -168,9 +168,17 @@ local function onUppercut(creature, guid)
 end
 
 -- C++ CheckEnrage: DoCast(me, SPELL_BERSERK) at 15min, re-armed
--- to 60min. The IsNonMeleeSpellCast gate has no bridge — fixed
--- timer.
+-- to 60min. The IsNonMeleeSpellCast gate is PORTED as a 500ms
+-- IsCasting defer (doan precedent): while casting, C++ leaves
+-- EnrageTimer at 0, i.e. retries on the next tick, so the port
+-- re-checks every 500ms and only re-arms 60min after casting.
 local function onBerserk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            onBerserk(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_BERSERK)
     schedule(guid, "berserk", 3600000, function()
         onBerserk(creature, guid)
