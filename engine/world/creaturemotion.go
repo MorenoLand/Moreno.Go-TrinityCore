@@ -163,6 +163,13 @@ type creatureMotion struct {
 	// on expiry it evades home (CritterAI::OnMovementGeneratorFinalized,
 	// PassiveAI.cpp:81-86). Zero when not fleeing.
 	FleeingUntil time.Time
+	// JumpUntil is the MoveJump spline window (MotionMaster::MoveJump,
+	// MotionMaster.cpp:785-824): the GenericMovementGenerator holds
+	// UNIT_STATE_JUMPING for the spline's duration, so while in the
+	// future the creature is jumping and the sight scans treat it as
+	// SIGHTLESS (Unit.h:252/254). Zero when not jumping; set only by
+	// launchCreatureJumpSpline, never refreshed by other spline launches.
+	JumpUntil time.Time
 	// Fleeing is the untimed FleeingMovementGenerator leg
 	// (MotionMaster::MoveFleeing with time 0, MotionMaster.cpp:628-629):
 	// the creature flees until the generator is removed (SetFeared(false))
@@ -826,9 +833,9 @@ const (
 //   - dead/ghost: bridged — the aggro scan skips dead players, melee
 //     rejects dead targets, and the spell dead-target gate is in the
 //     completion path.
-//   - invisible: unmodeled beyond the GM-invisibility flag — Go has no
-//     invisibility-level/detect-level comparison (the CanSeeOrDetect legs);
-//     stealth detection is the only modeled sense.
+//   - invisible: the CanSeeOrDetect invisibility/detect comparison gates
+//     both sight scans and the spell gate via the stealth.go twins;
+//     the GM-invisibility flag is the loop-gate arm.
 //   - summoned: guardian AI selection (CritterAI::Permissible,
 //     PassiveAI.cpp:95-100) is unmodeled; creature-vs-creature acquisition
 //     rides the section-3 creature-victim scan (same MIOS path as the
@@ -1953,8 +1960,8 @@ func (s *Server) creatureNeutralToAll(faction uint32) bool {
 // DELTAS, all documented at the arm: the vehicle arms of
 // _IsTargetAcceptable (no vehicle-target model on this path); the
 // UNIT_STATE_UNATTACKABLE arm of IsValidAttackTarget (no such state
-// in Go); the CanSeeOrDetect invisibility legs (stealth only, via
-// canCreatureDetectStealthOfPlayer, for player targets); the
+// in Go); the CanSeeOrDetect creature-target legs (the resolver drops
+// the victim motion, so no creature-aura detect sums are available); the
 // isInAccessiblePlaceFor victim-in-water leg rides the grid-liquid
 // twin (mapIsInWater, the IsInWater binding's helper), not per-unit
 // liquid status; CanAIAttack is the TurretAI band only
@@ -2105,6 +2112,13 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 	// No aggro from gray creatures (Creature.cpp:2000-2013 via
 	// noGrayAggroBlocked); GetLevelForTarget is the identity.
 	if noGrayAggroBlocked(target.level, caller.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) {
+		return false
+	}
+	// CanSeeOrDetect, invisibility leg for player targets (via
+	// creatureSightInvisibilityBlocked) plus the stealth half below;
+	// creature targets still carry no detect leg here (the resolver
+	// drops the victim motion, so no creature-aura sums are available).
+	if target.isPlayer && s.creatureSightInvisibilityBlocked(caller, target.sess) {
 		return false
 	}
 	// CanSeeOrDetect, stealth half only for player targets.
@@ -4073,6 +4087,7 @@ func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, 
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
+	motion.JumpUntil = motion.MoveEnds
 	motion.ScriptMoveType = movementGeneratorEffect
 	motion.ScriptChaseTargetGUID = 0
 	motion.ScriptChaseDist = 0
@@ -8836,14 +8851,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if sightlessScanner {
 			continue
 		}
+		// WorldObject::CanDetect's invisibility leg (Object.cpp:1664-1686,
+		// 1688-1717) via creatureSightInvisibilityBlocked: an invisible
+		// player the scanner cannot detect never sight-aggros and never
+		// triggers the alert arm below (C++ checks invisibility before
+		// stealth regardless of checkAlert). Placed ahead of the
+		// victim-flag arms like the worker's CanSeeOrDetect check, which
+		// precedes MoveInLineOfSight.
+		if s.creatureSightInvisibilityBlocked(motion, p.Sess) {
+			continue
+		}
 		// WorldObject::IsValidAttackTarget's victim flag set
 		// (Object.cpp:2930-3010) via Creature::CanCreatureAttack
 		// (Creature.cpp:2565): a player carrying NOT_SELECTABLE,
 		// NON_ATTACKABLE, TAXI_FLIGHT, NOT_ATTACKABLE_1/2, or a blocking
 		// immune pairing never sight-aggros. The dead/GM arms ride the
-		// loop gate above and the CanSeeOrDetect arm rides the stealth
-		// check below (invisibility legs unmodeled); the self arm is
-		// vacuous here.
+		// loop gate above and the CanSeeOrDetect arm rides the
+		// invisibility gate above plus the stealth check below; the
+		// self arm is vacuous here.
 		if p.Sess != nil && p.Sess.player != nil && playerSightVictimBlocked(motion, p.Sess.player.UnitFlags, p.Sess.player.UnitFlags&unitFlagPlayerControlled != 0) {
 			continue
 		}
@@ -9006,8 +9031,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// Creature.cpp:1255-1266, also only distinguishes passive vs
 			// aggressive — the civilian arm is commented out there too);
 			// stealth detection rides canCreatureDetectStealthOfPlayer
-			// (stealth only — the CanSeeOrDetect invisibility legs are
-			// unmodeled); LOS rides hasLineOfSight; the civilian arm of
+			// plus the invisibility gate above (the full CanDetect
+			// pair for player victims); LOS rides hasLineOfSight; the civilian arm of
 			// CanStartAttack rides the passive mapping; CallAssistance is
 			// absent here as in C++ (sight-aggro only engages via
 			// Unit::EngageWithTarget, Unit.cpp:8429-8438 — assistance fires on
@@ -9091,8 +9116,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// only; a relocating creature victim engages an aggressive scanner the
 	// same way (C++ passes any unit to MIOS, not just players). Same block
 	// order — reached only when !InCombat — and the same guard order:
-	// pre-filters, bounding box, hostility, range/Z, turret band,
-	// accessible-place, home-distance, gray-aggro, LOS last.
+	// pre-filters, CanDetect (stalked/invisibility/stealth), bounding box,
+	// hostility, range/Z, turret band, accessible-place, home-distance,
+	// gray-aggro, LOS last.
 	// Scanner-side gates are loop invariants, checked once: vehicle
 	// (empty MIOS override), passive, combat-disabled, FlagsExtra 0x400,
 	// civilian 0x2, SIGHTLESS (creatureSightlessScanner, shared with the
@@ -9138,6 +9164,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// different-phase victims never sight-aggro; the helper folds
 			// the runtime 261-phase override over the spawn row mask.
 			if s.spellGateCreatureNeverSeesCreature(motion, victim) {
+				continue
+			}
+			// WorldObject::CanDetect (Object.cpp:1664-1686) for a wild
+			// seer via wildCreatureCanDetectCreature: stalked, then
+			// invisibility, then stealth, all from the victim's live
+			// creature auras. A stealthed or invisible creature victim
+			// the scanner cannot detect never sight-aggros. No alert
+			// band here: the worker's TriggerAlert arm is player-only
+			// (GridNotifiers.cpp:139).
+			if !s.wildCreatureCanDetectCreature(motion, victim) {
 				continue
 			}
 			// Axis-delta bounding box ahead of the 3D distance, the
@@ -9831,20 +9867,46 @@ func creatureSightVictimBlocked(scanner, victim *creatureMotion) bool {
 	return false
 }
 
+// creatureSightInvisibilityBlocked is the CanDetect invisibility leg
+// (Object.cpp:1664-1686, 1688-1717) for a sight-scan scanner against a
+// player victim, in C++ order: the GuardAI CanSeeAlways bypass
+// (Creature.cpp:1952, CanAlwaysSee rides CanSeeOrDetect at
+// Object.cpp:1581) and the stalked IsAlwaysDetectableFor arm
+// (Unit.cpp:8640-8647) both precede the per-type invisibility/detect
+// sums (wildCreatureCanDetectInvisibilityOfPlayer). A blocked victim
+// never reaches the stealth check or the alert arm: C++ evaluates
+// invisibility before stealth in CanDetect regardless of checkAlert,
+// so an undetected invisible player triggers no TriggerAlert either.
+func (s *Server) creatureSightInvisibilityBlocked(motion *creatureMotion, ts *session) bool {
+	if motion == nil || ts == nil || ts.player == nil {
+		return false
+	}
+	if motion.FlagsExtra&creatureFlagExtraGuard != 0 && motion.TargetGUID != 0 && ts.playerGUID == motion.TargetGUID {
+		return false
+	}
+	if ts.hasStalkedAuraFrom(motion.GUID) {
+		return false
+	}
+	return !s.wildCreatureCanDetectInvisibilityOfPlayer(motion, ts)
+}
+
 // creatureSightlessScanner is the UNIT_STATE_SIGHTLESS scanner gate of
 // CreatureUnitRelocationWorker (GridNotifiers.cpp:133): SIGHTLESS =
 // LOST_CONTROL | EVADE (Unit.h:254). The EVADE half rides the section-2
 // early return, so this covers the LOST_CONTROL half: Confused,
-// Fleeing/FleeingUntil, and Possessed ride live motion fields, and the
+// Fleeing/FleeingUntil, and Possessed ride live motion fields, the
 // confuse/stun/fear aura store (creatureHasControlLossAura) covers
-// stunned scanners, which have no motion field. CHARGING/JUMPING
-// generators are unmodeled, as are ScriptUnitState-only script bits
-// (never read by engine gates), so those stay a documented gap.
+// stunned scanners, which have no motion field, and JUMPING rides the
+// MoveJump spline window (JumpUntil, set only by
+// launchCreatureJumpSpline). CHARGING stays a documented gap: spell
+// charges snap to the destination (creatureEffectCharge, no
+// MoveCharge spline model) and no MoveCharge bridge exists, so a
+// creature scanner never spans a charge window in Go.
 func (s *Server) creatureSightlessScanner(motion *creatureMotion, now time.Time) bool {
 	if motion == nil {
 		return false
 	}
-	if motion.Confused || motion.Fleeing || now.Before(motion.FleeingUntil) || motion.Possessed {
+	if motion.Confused || motion.Fleeing || now.Before(motion.FleeingUntil) || motion.Possessed || now.Before(motion.JumpUntil) {
 		return true
 	}
 	return s.creatureHasControlLossAura(creatureAuraKeyForMotion(motion))
@@ -10321,6 +10383,7 @@ func (s *Server) stopCreatureMotion(mapID uint32, guid uint64, x, y, z float32) 
 		phase = motion.PhaseMask
 		transportGUID = motion.TransportGUID
 		motion.Moving = false
+		motion.JumpUntil = time.Time{}
 		motion.Evading = false
 		motion.InCombat = false
 		motion.TargetGUID = 0
@@ -10342,6 +10405,7 @@ func (s *Server) stopCreatureMotionInInstance(mapID, instanceID uint32, guid uin
 		phase = motion.PhaseMask
 		transportGUID = motion.TransportGUID
 		motion.Moving = false
+		motion.JumpUntil = time.Time{}
 		motion.Evading = false
 		motion.InCombat = false
 		motion.TargetGUID = 0
