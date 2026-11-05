@@ -32,9 +32,15 @@
 -- order (boss_halycon.cpp:71-74; najentus precedent for the talk leg).
 -- The Summoned member is write-only in C++ (Initialize sets false,
 -- JustDied sets true, never read) — no Lua state needed.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
--- are packet-visual), so timers fire unconditionally (maiden
--- precedent). The C++ scheduler is driven from JustEngagedWith and
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:86) + in-loop
+-- gate (:104) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- fires nothing and consumes no re-arm. Thrash stays a one-shot:
+-- the C++ pre-loop return leaves its event queued, so the defer
+-- re-queues it rather than consuming it. The in-loop gate's same-tick
+-- co-expiry suppression has no timer-arm model (independent
+-- callbacks, AV precedent). The C++ scheduler is driven from
+-- JustEngagedWith and
 -- drained by UpdateAI; the port schedules from OnEnterCombat(1) and
 -- cancels on 2/4/23 (maiden convention). The C++ Reset() _events.Reset()
 -- is covered by the cancel/re-arm on combat events.
@@ -71,6 +77,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onRend(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rend", 500, function() onRend(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_REND)
@@ -78,7 +88,11 @@ local function onRend(creature, guid)
     schedule(guid, "rend", {8000, 10000}, function() onRend(creature, guid) end)
 end
 
-local function onThrash(creature)
+local function onThrash(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "thrash", 500, function() onThrash(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_THRASH)
 end
 
@@ -88,7 +102,7 @@ local function onEnterCombat(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "rend", {17000, 20000}, function() onRend(creature, guid) end)
-    schedule(guid, "thrash", {10000, 12000}, function() onThrash(creature) end)
+    schedule(guid, "thrash", {10000, 12000}, function() onThrash(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

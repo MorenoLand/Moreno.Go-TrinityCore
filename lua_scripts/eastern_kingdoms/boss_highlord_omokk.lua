@@ -24,9 +24,13 @@
 -- (maiden convention — DoCastVictim path, creature:GetVictim()).
 -- EVENT_KNOCK_AWAY: victim-cast KNOCK_AWAY 10101, 18s init -> 12s
 -- loop (maiden convention).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally (maiden
--- precedent). The C++ scheduler is driven from JustEngagedWith and
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:72) + in-loop
+-- gate (:91) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- fires nothing and consumes no re-arm, staying due until the cast
+-- ends. The in-loop gate's same-tick co-expiry suppression has no
+-- timer-arm model (independent callbacks, AV precedent). The C++
+-- scheduler is driven from JustEngagedWith and
 -- drained by UpdateAI; the port schedules from OnEnterCombat(1) and
 -- cancels on 2/4/23 (maiden convention).
 
@@ -60,6 +64,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function() onFrenzy(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FRENZY)
@@ -68,6 +76,10 @@ local function onFrenzy(creature, guid)
 end
 
 local function onKnockAway(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "knockaway", 500, function() onKnockAway(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_KNOCK_AWAY)

@@ -34,9 +34,14 @@
 -- bridged but cannot see inside a spell cast — steamrigger
 -- precedent), so the port carries the cast arm only, which is what
 -- the C++ arm expresses.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally (maiden
--- precedent). The C++ scheduler is driven from JustEngagedWith and
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:79) + in-loop
+-- gate (:96) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- fires nothing and consumes no re-arm, staying due until the cast
+-- ends. The in-loop gate's same-tick co-expiry suppression has no
+-- timer-arm model (independent callbacks, AV precedent). The
+-- DamageTaken lethal cast stays ungated per C++ (no gate in that
+-- hook). The C++ scheduler is driven from JustEngagedWith and
 -- drained by UpdateAI; the port schedules from OnEnterCombat(1) and
 -- cancels on 2/4/23 (maiden convention).
 
@@ -72,11 +77,19 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onCrystalize(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "crystalize", 500, function() onCrystalize(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CRYSTALIZE)
     schedule(guid, "crystalize", 15000, function() onCrystalize(creature, guid) end)
 end
 
 local function onMothersMilk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "milk", 500, function() onMothersMilk(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MOTHERSMILK)
     schedule(guid, "milk", {5000, 12500}, function() onMothersMilk(creature, guid) end)
 end

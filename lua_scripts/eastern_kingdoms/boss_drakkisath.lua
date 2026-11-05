@@ -24,9 +24,13 @@
 -- 18s; EVENT_THUNDERCLAP: victim-cast THUNDERCLAP 15548, 17s init ->
 -- 20s. (C++ marks the thunderclap spell id "Not sure if right ID";
 -- carried through unchanged.)
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
--- are packet-visual), so timers fire unconditionally (maiden
--- precedent). The C++ scheduler is driven from JustEngagedWith and
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:73) + in-loop
+-- gate (:98) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- fires nothing and consumes no re-arm, staying due until the cast
+-- ends. The in-loop gate's same-tick co-expiry suppression has no
+-- timer-arm model (independent callbacks, AV precedent). The C++
+-- scheduler is driven from JustEngagedWith and
 -- drained by UpdateAI; the port schedules from OnEnterCombat(1) and
 -- cancels on 2/4/23 (maiden convention). The C++ Reset() _events.Reset()
 -- is covered by the cancel/re-arm on combat events.
@@ -63,6 +67,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onFireNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "firenova", 500, function() onFireNova(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIRENOVA)
@@ -71,6 +79,10 @@ local function onFireNova(creature, guid)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -79,6 +91,10 @@ local function onCleave(creature, guid)
 end
 
 local function onConfligration(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "confligration", 500, function() onConfligration(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CONFLIGURATION)
@@ -87,6 +103,10 @@ local function onConfligration(creature, guid)
 end
 
 local function onThunderclap(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "thunderclap", 500, function() onThunderclap(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_THUNDERCLAP)

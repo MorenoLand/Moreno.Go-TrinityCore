@@ -13823,7 +13823,8 @@ func init() {
 	// Blackhand; BossAI combat scheduler via GetBlackrockSpireAI —
 	// firenova 23462 victim-cast 6s->10s, cleave 20691 victim-cast
 	// 8s->8s, confligration 16805 victim-cast 15s->18s, thunderclap
-	// 15548 victim-cast 17s->20s; melee engine-driven). Entry 10363
+	// 15548 victim-cast 17s->20s; melee engine-driven; UpdateAI
+	// CASTING gates (:73/:98) ported as 500ms IsCasting defers). Entry 10363
 	// verifiable from the C++ sources: blackrock_spire.h names
 	// NPC_GENERAL_DRAKKISATH at 10363 (BRS creatures enum) — see
 	// lua_scripts/eastern_kingdoms/boss_drakkisath.lua. GetBlackrockSpireAI
@@ -13840,14 +13841,15 @@ func init() {
 	// lua_scripts/eastern_kingdoms/boss_halycon.lua. GetBlackrockSpireAI
 	// is a GetInstanceAI retrieval wrapper (blackrock_spire.h:129-132);
 	// the AI has no instance arms — Reset() _Reset() / Initialize() are
-	// covered by the cancel/re-arm on combat events. Unmodeled: JustDied
-	// SummonCreature(NPC_GIZRUL_THE_SLAVENER = 10268, timed 5min) — no
-	// SummonCreature bridge (phoenix / flamelash precedent).
+	// covered by the cancel/re-arm on combat events. JustDied gizrul
+	// summon (10268, timed 5min) + Talk ported in Lua (onDied);
+	// UpdateAI CASTING gates (:86/:104) ported as 500ms IsCasting defers.
 	RegisterLuaBoss("boss_halycon", 10220)
 	// boss_highlord_omokk / boss_highlordomokkAI (Blackrock Spire, Hall
 	// of Blackhand; BossAI combat scheduler via GetBlackrockSpireAI —
 	// frenzy 8269 victim-cast 20s->1min, knock-away 10101 victim-cast
-	// 18s->12s; melee engine-driven). Entry 9196 verifiable from the C++
+	// 18s->12s; melee engine-driven; UpdateAI CASTING gates (:72/:91)
+	// ported as 500ms IsCasting defers). Entry 9196 verifiable from the C++
 	// sources: blackrock_spire.h names NPC_HIGHLORD_OMOKK at 9196 (BRS
 	// creatures enum) — see
 	// lua_scripts/eastern_kingdoms/boss_highlord_omokk.lua.
@@ -13860,7 +13862,8 @@ func init() {
 	// Spire, Caverns of Abomination; BossAI combat scheduler via
 	// GetBlackrockSpireAI — crystalize 16104 self-cast 20s->15s,
 	// mothersmilk 16468 self-cast 10s->5s, lethal-hit self-cast
-	// summon 16103 (DoCast(me, 16103, true)); melee engine-driven).
+	// summon 16103 (DoCast(me, 16103, true)); melee engine-driven;
+	// UpdateAI CASTING gates (:79/:96) ported as 500ms IsCasting defers).
 	// Entry 10596 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_MOTHER_SMOLDERWEB at 10596 (BRS creatures enum) —
 	// see lua_scripts/eastern_kingdoms/boss_mother_smolderweb.lua.
