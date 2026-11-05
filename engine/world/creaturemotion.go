@@ -4910,8 +4910,9 @@ func (s *Server) stepSummonedNonVehicleMotions(ctx context.Context, players []pl
 // (civilian maps to passive in creatureReactState); hostility rides
 // isAttackableFaction (the _IsTargetAcceptable friendly/targetable arms ride
 // the scan guard's GM/dead/ghost-visibility skips; the vehicle arm is
-// vacuous). The UNIT_STATE_SIGHTLESS pre-check of the relocation worker has
-// no Go model. Effect: the pre-aggro AI_REACTION_ALERT sound (AiReaction 0,
+// vacuous). The UNIT_STATE_SIGHTLESS pre-check of the relocation worker rides
+// the scan loop's creatureSightlessScanner gate (this function's only caller);
+// the function itself does not re-check. Effect: the pre-aggro AI_REACTION_ALERT sound (AiReaction 0,
 // SharedDefines.h:3253) plus MoveDistract(5s, facing the player). The
 // distracted gate also rate-limits: re-alerts during the 5s hold are
 // no-ops, matching C++ re-fires on every relocation tick while distracted.
@@ -8821,8 +8822,37 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	}
 
 	// 3. Check for nearby hostile aggro
+	// CreatureUnitRelocationWorker's SIGHTLESS pre-check
+	// (GridNotifiers.cpp:133): a SIGHTLESS scanner never MIOS and never
+	// TriggerAlerts — UNIT_STATE_SIGHTLESS = LOST_CONTROL | EVADE
+	// (Unit.h:254). The EVADE half rides the section-2 return above; the
+	// LOST_CONTROL half rides creatureSightlessScanner below, computed
+	// once here (scanner-invariant) and reused by the creature loop.
+	sightlessScanner := s.creatureSightlessScanner(motion, now)
 	for _, p := range players {
 		if p.Map != motion.Map || p.InstanceID != motion.InstanceID || p.IsGM || p.IsDead || (motion.FlagsExtra&0x00000400 != 0) || motion.FlagsExtra&0x00000002 != 0 || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
+			continue
+		}
+		if sightlessScanner {
+			continue
+		}
+		// WorldObject::IsValidAttackTarget's victim flag set
+		// (Object.cpp:2930-3010) via Creature::CanCreatureAttack
+		// (Creature.cpp:2565): a player carrying NOT_SELECTABLE,
+		// NON_ATTACKABLE, TAXI_FLIGHT, NOT_ATTACKABLE_1/2, or a blocking
+		// immune pairing never sight-aggros. The dead/GM arms ride the
+		// loop gate above and the CanSeeOrDetect arm rides the stealth
+		// check below (invisibility legs unmodeled); the self arm is
+		// vacuous here.
+		if p.Sess != nil && p.Sess.player != nil && playerSightVictimBlocked(motion, p.Sess.player.UnitFlags, p.Sess.player.UnitFlags&unitFlagPlayerControlled != 0) {
+			continue
+		}
+		// CreatureUnitRelocationWorker's IsInFlight exclusion
+		// (GridNotifiers.cpp:132) + the UNIT_STATE_UNATTACKABLE arm
+		// (Object.cpp:2939-2941): a taxiing player never MIOS. Go's twin
+		// is the live TaxiPath flag (combat.go precedent), not the
+		// TAXI_FLIGHT bit, which no engine path sets on players.
+		if p.Sess != nil && p.Sess.player != nil && p.Sess.player.TaxiPath != "" {
 			continue
 		}
 		// Creature::_IsTargetAcceptable's UNIT_STATE_DIED arm
@@ -8995,8 +9025,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// the guard above via noGrayAggroBlocked — vacuous under the
 			// default NoGrayAggro.Above/Below = 0 config (World.cpp:1299);
 			// the immune-to-NPC/PC target pairing of CanStartAttack
-			// (Creature.cpp:1964-1970 — creatureCombatDisabled only models the
-			// creature-side IMMUNE_TO_PC bit, not the target-side pairing);
+			// (Creature.cpp:1964-1970) rides playerSightVictimBlocked in
+			// the loop head above (creatureCombatDisabled covers only the
+			// scanner-side IMMUNE_TO_PC term);
 			// PetAI's aggressive-pet acquisition (PetAI.cpp:352,
 			// SelectNearestHostileUnitInAggroRange — Go pets never
 			// auto-acquire). Bridged: Unit::EngageWithTarget seeds 0.0f threat
@@ -9064,11 +9095,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// accessible-place, home-distance, gray-aggro, LOS last.
 	// Scanner-side gates are loop invariants, checked once: vehicle
 	// (empty MIOS override), passive, combat-disabled, FlagsExtra 0x400,
-	// civilian 0x2. Victim-side: self-GUID (the worker
+	// civilian 0x2, SIGHTLESS (creatureSightlessScanner, shared with the
+	// player loop). Victim-side: self-GUID (the worker
 	// excludes self, same as GetClosestCreatureWithEntry), dead, and
 	// Evading (C++ CanCreatureAttack rejects evade-mode victims; players
 	// carry no evade flag, so the player loop has no equivalent).
-	// SIGHTLESS stays unmodeled here exactly as in the player scan;
+	// SIGHTLESS rides creatureSightlessScanner in the loop gate above;
 	// accessible-place + home-distance ride the guard below, as do the
 	// civilian scanner gate and the victim valid-target filter;
 	// phase rides the CanNeverSee gate
@@ -9077,7 +9109,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// players, and stepSummonedNonVehicleMotions does the same), so a
 	// player-free map/instance still never sight-aggros — a separate
 	// stepping-scope question, not a scan gap.
-	if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && !creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) && motion.FlagsExtra&0x00000400 == 0 && motion.FlagsExtra&0x00000002 == 0 {
+	if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && !creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) && motion.FlagsExtra&0x00000400 == 0 && motion.FlagsExtra&0x00000002 == 0 && !sightlessScanner {
 		s.motionMu.Lock()
 		registry := s.motionMapLocked(motion.Map, motion.InstanceID)
 		victims := make([]*creatureMotion, 0, len(registry))
@@ -9770,9 +9802,8 @@ func (s *Server) creatureSightHomeDistanceOK(caller *creatureMotion, victimX, vi
 // (CanStartAttack, Creature.cpp:1971-1973, CREATURE_TYPE_NON_COMBAT_PET
 // = 10), and IsValidAttackTarget's no-spell flag set (Object.cpp:2930-3010:
 // NOT_SELECTABLE, NON_ATTACKABLE, TAXI_FLIGHT, NOT_ATTACKABLE_1/2)
-// plus its four immune pairings reject the victim. Player victims carry
-// no modeled flag state on this path, so the player scan has no
-// equivalent arm.
+// plus its four immune pairings reject the victim. The player-victim twin
+// is playerSightVictimBlocked below.
 func creatureSightVictimBlocked(scanner, victim *creatureMotion) bool {
 	if scanner == nil || victim == nil {
 		return true
@@ -9792,6 +9823,61 @@ func creatureSightVictimBlocked(scanner, victim *creatureMotion) bool {
 		return true
 	}
 	if scannerPC && victim.UnitFlags&unitFlagImmuneToPC != 0 {
+		return true
+	}
+	if victimPC && scanner.UnitFlags&unitFlagImmuneToPC != 0 {
+		return true
+	}
+	return false
+}
+
+// creatureSightlessScanner is the UNIT_STATE_SIGHTLESS scanner gate of
+// CreatureUnitRelocationWorker (GridNotifiers.cpp:133): SIGHTLESS =
+// LOST_CONTROL | EVADE (Unit.h:254). The EVADE half rides the section-2
+// early return, so this covers the LOST_CONTROL half: Confused,
+// Fleeing/FleeingUntil, and Possessed ride live motion fields, and the
+// confuse/stun/fear aura store (creatureHasControlLossAura) covers
+// stunned scanners, which have no motion field. CHARGING/JUMPING
+// generators are unmodeled, as are ScriptUnitState-only script bits
+// (never read by engine gates), so those stay a documented gap.
+func (s *Server) creatureSightlessScanner(motion *creatureMotion, now time.Time) bool {
+	if motion == nil {
+		return false
+	}
+	if motion.Confused || motion.Fleeing || now.Before(motion.FleeingUntil) || motion.Possessed {
+		return true
+	}
+	return s.creatureHasControlLossAura(creatureAuraKeyForMotion(motion))
+}
+
+// playerSightVictimBlocked is the player-victim twin of
+// creatureSightVictimBlocked: WorldObject::IsValidAttackTarget's no-spell
+// flag set (Object.cpp:2930-3010: NOT_SELECTABLE, NON_ATTACKABLE,
+// TAXI_FLIGHT, NOT_ATTACKABLE_1/2) plus its four immune pairings,
+// reached via Creature::CanCreatureAttack (Creature.cpp:2565) from
+// CanStartAttack. Player victims carry live flag state on this path
+// (state.UnitFlags, script-writable via the player SetFlag bridge and
+// engine-written for NOT_ATTACKABLE_1/NON_ATTACKABLE_2 at spells.go),
+// and players carry UNIT_FLAG_PLAYER_CONTROLLED from load
+// (Player.cpp:2974), cleared only by a ModFaction aura. The non-combat
+// pet leg has no player equivalent; dead/GM ride the loop gate, and
+// the victimPC && scanner-IMMUNE_TO_PC pairing overlaps
+// creatureCombatDisabled's scanner-side IMMUNE_TO_PC term.
+func playerSightVictimBlocked(scanner *creatureMotion, victimFlags uint32, victimPC bool) bool {
+	if scanner == nil {
+		return true
+	}
+	if victimFlags&(unitFlagNotSelectable|unitFlagNonAttackable|unitFlagTaxiFlight|unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
+		return true
+	}
+	scannerPC := scanner.UnitFlags&unitFlagPlayerControlled != 0
+	if !scannerPC && victimFlags&unitFlagImmuneToNPC != 0 {
+		return true
+	}
+	if !victimPC && scanner.UnitFlags&unitFlagImmuneToNPC != 0 {
+		return true
+	}
+	if scannerPC && victimFlags&unitFlagImmuneToPC != 0 {
 		return true
 	}
 	if victimPC && scanner.UnitFlags&unitFlagImmuneToPC != 0 {
