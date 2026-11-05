@@ -123,9 +123,10 @@
 -- achievement_orbit_uary — GetData/vehicle-based OnCheck legs — no
 -- achievement/GetData bridges; all nine join the unmodeled-achievement queue.
 -- spell_overload_circuit (62399) / spell_tar_blaze (62292) /
--- spell_load_into_catapult / spell_systems_shutdown (62475) / spell_auto_repair /
--- spell_pursue / spell_vehicle_throw_passenger — AuraScript/SpellScript
--- bridges absent; all join the no-SpellScript-bridge queue.
+-- spell_load_into_catapult / spell_auto_repair / spell_pursue /
+-- spell_vehicle_throw_passenger — AuraScript/SpellScript bridges absent;
+-- all join the no-SpellScript-bridge queue. spell_systems_shutdown
+-- (62475) is PORTED below (RegisterAuraEvent apply/remove).
 
 local ENTRY_FLAME_LEVIATHAN = 33113
 local ENTRY_POOL_OF_TAR = 33189
@@ -330,3 +331,25 @@ local function poolOfTarDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_POOL_OF_TAR, 9, poolOfTarDamageTaken)
+
+-- C++ spell_systems_shutdown_AuraScript (boss_flame_leviathan.cpp:1667-1695):
+-- EFFECT_0 SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, AURA_EFFECT_HANDLE_REAL.
+-- OnApply the owner creature gains UNIT_STATE_STUNNED|ROOT, the
+-- UNIT_FLAG_STUNNED flag, and loses its Gathering Speed aura (62375);
+-- OnRemove the flag is cleared. The AddUnitState leg has no bridge and
+-- stays out (the flag is the client-visible half); the flag and
+-- RemoveAura legs ride the bridged SetFlag/RemoveFlag and RemoveAura.
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117 (OBJECT_END + 0x35)
+local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
+
+local function systemsShutdownApply(event, aura, target)
+    target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
+    target:RemoveAura(SPELL_GATHERING_SPEED)
+end
+
+local function systemsShutdownRemove(event, aura, target)
+    target:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
+end
+
+RegisterAuraEvent(SPELL_SYSTEMS_SHUTDOWN, 2, systemsShutdownApply)
+RegisterAuraEvent(SPELL_SYSTEMS_SHUTDOWN, 3, systemsShutdownRemove)

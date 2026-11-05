@@ -388,10 +388,19 @@ const (
 // (a snapshot: GetCaster/GetAmount/GetTickNumber still resolve); writes
 // to it land on the detached record and are inert. Re-casts that merge
 // or refresh an existing aura do not re-fire OnApply.
+// OnChangeAmount mirrors the AURA_EFFECT_HANDLE_CHANGE_AMOUNT arm of
+// AuraEffect::ChangeAmount (SpellAuraEffects.cpp:662-683), fired by
+// Aura::ModStackAmount/SetStackAmount (SpellAuras.cpp:1008-1030) when a
+// merge re-cast raises the aura's stack count. A re-cast that only
+// refreshes duration (already at max stacks, or a non-stackable aura)
+// does not fire it — C++ ChangeAmount returns early when the amount is
+// unchanged. Notification-only like OnApply; handlers read the new stack
+// count via aura:GetStackAmount().
 const (
-	AuraEventOnPeriodic = 1
-	AuraEventOnApply    = 2
-	AuraEventOnRemove   = 3
+	AuraEventOnPeriodic     = 1
+	AuraEventOnApply        = 2
+	AuraEventOnRemove       = 3
+	AuraEventOnChangeAmount = 4
 )
 
 type Hook struct {

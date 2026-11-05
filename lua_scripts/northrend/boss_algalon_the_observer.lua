@@ -159,14 +159,16 @@
 -- Algalon takes the first-pull intro in Lua where C++ takes the 8s one.
 -- go_celestial_planetarium_access (GameObjectScript) — no GO bridge;
 -- documented only.
--- The ten spell scripts (spell_algalon_phase_punch /
--- spell_algalon_phase_constellation / spell_algalon_trigger_3_adds /
--- spell_algalon_collapse / spell_algalon_big_bang /
--- spell_algalon_remove_phase / spell_algalon_cosmic_smash /
--- spell_algalon_cosmic_smash_damage / spell_algalon_supermassive_fail /
--- spell_algalon_black_hole_phase_shifts) — SpellScript / AuraScript — no
+-- The ten spell scripts (spell_algalon_phase_constellation /
+-- spell_algalon_trigger_3_adds / spell_algalon_collapse /
+-- spell_algalon_big_bang / spell_algalon_remove_phase /
+-- spell_algalon_cosmic_smash / spell_algalon_cosmic_smash_damage /
+-- spell_algalon_supermassive_fail) — SpellScript / AuraScript — no
 -- SpellScript / AuraScript bridges; all join the no-SpellScript /
--- no-AuraScript-bridge queues.
+-- no-AuraScript-bridge queues. spell_algalon_phase_punch and
+-- spell_algalon_black_hole_phase_shifts are PORTED below (RegisterAuraEvent
+-- periodic / apply / remove — the RemoveAura single-application twin
+-- covers their RemoveAurasDueToSpell legs).
 -- achievement_he_feeds_on_your_tears (OnCheck: GetData
 -- DATA_HAS_FED_ON_TEARS) — no GetData / achievement bridges; joins the
 -- unmodeled-achievement queue.
@@ -643,3 +645,34 @@ local function blackHolePhaseShiftsApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_BLACK_HOLE_PHASE_SHIFTS, 2, blackHolePhaseShiftsApply)
+
+-- C++ spell_algalon_phase_punch (boss_algalon_the_observer.cpp:1040-1062):
+-- EFFECT_0 SPELL_AURA_PERIODIC_DUMMY. Each tick PreventDefaultAction;
+-- when the stack is above 1 the previous stack's alpha aura drops, then
+-- the target casts this stack's alpha aura on itself, triggered; at 5
+-- stacks the aura removes itself. OnRemove drops this stack's alpha
+-- aura unless the stack is 5. PhasePunchAlphaId (cpp:113) is
+-- {64435, 64434, 64428, 64421, 64417} (0-indexed in C++).
+local PHASE_PUNCH_ALPHA_IDS = {64435, 64434, 64428, 64421, 64417}
+
+local function phasePunchPeriodic(event, aura, target)
+    local stacks = aura:GetStackAmount()
+    if stacks ~= 1 then
+        target:RemoveAura(PHASE_PUNCH_ALPHA_IDS[stacks - 1])
+    end
+    target:CastSpell(target, PHASE_PUNCH_ALPHA_IDS[stacks], true)
+    if stacks == 5 then
+        aura:Remove()
+    end
+    return true
+end
+
+local function phasePunchRemove(event, aura, target)
+    local stacks = aura:GetStackAmount()
+    if stacks ~= 5 then
+        target:RemoveAura(PHASE_PUNCH_ALPHA_IDS[stacks])
+    end
+end
+
+RegisterAuraEvent(SPELL_PHASE_PUNCH, 1, phasePunchPeriodic)
+RegisterAuraEvent(SPELL_PHASE_PUNCH, 3, phasePunchRemove)

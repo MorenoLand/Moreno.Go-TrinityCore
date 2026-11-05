@@ -665,3 +665,15 @@ func (s *Server) fireAuraRemove(ctx context.Context, spellID uint32, auraObj *sc
 	}
 	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnRemove, scripting.AuraEventOnRemove, auraObj, target)
 }
+
+// fireAuraChangeAmount dispatches the RegisterAuraEvent OnChangeAmount hook
+// for an aura whose stack count rose on a merge re-cast (args (event, aura,
+// target)). Notification-only like fireAuraApply: the AURA_EFFECT_HANDLE_
+// CHANGE_AMOUNT handlers run after the stack is stored, and there is no
+// PreventDefault model for amount changes.
+func (s *Server) fireAuraChangeAmount(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnChangeAmount, scripting.AuraEventOnChangeAmount, auraObj, target)
+}

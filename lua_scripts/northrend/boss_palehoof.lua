@@ -170,6 +170,7 @@ local SPELL_IMPALE = 48261
 local SPELL_WITHERING_ROAR = 48256
 
 local SPELL_CRAZED = 48139
+local SPELL_CRAZED_TAUNT = 48147 -- boss_palehoof.cpp:602 (SPELL_CRAZED_TAUNT)
 local SPELL_CHAIN_LIGHTNING = 48140
 local SPELL_TERRIFYING_ROAR = 48144
 
@@ -575,3 +576,15 @@ RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 1, jormungarEnterCombat)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 4, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 23, minibossReset)
+
+-- C++ spell_palehoof_crazed_AuraScript::OnRemove (boss_palehoof.cpp:597-605):
+-- EFFECT_1 SPELL_AURA_PERIODIC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL.
+-- On remove the target drops its Crazed Taunt aura (48147) — the
+-- RemoveAurasDueToSpell leg, covered by the target:RemoveAura
+-- single-application twin (tick-197 precedent). Retires the census
+-- BLOCKED row for 48139.
+local function crazedRemove(event, aura, target)
+    target:RemoveAura(SPELL_CRAZED_TAUNT)
+end
+
+RegisterAuraEvent(SPELL_CRAZED, 3, crazedRemove)

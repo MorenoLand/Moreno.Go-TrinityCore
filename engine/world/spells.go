@@ -37042,6 +37042,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			if cur == 0 {
 				cur = 1
 			}
+			// OnChangeAmount fires only when the merge actually raises the
+			// stack count (Aura::ModStackAmount, SpellAuras.cpp:1030).
+			oldStack := cur
 			if cur++; cur > maxStack {
 				cur = maxStack
 			}
@@ -37197,6 +37200,20 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			// linked auras (SpellAuras.cpp:1375-1381).
 			targetSess.applyAuraSpellAreaRows(ctx, spell.ID)
 			targetSess.propagateLinkedAuraStacks(ctx, spell, existing.CasterGUID, stackCount)
+			// AuraEffect::ChangeAmount (SpellAuraEffects.cpp:662-683) via
+			// Aura::ModStackAmount (SpellAuras.cpp:1030): a merge re-cast
+			// that raised the stack count fires the OnChangeAmount hook
+			// (RegisterAuraEvent event 4); a duration-only refresh does not.
+			if stackCount > uint8(oldStack) && s.server != nil {
+				var tMap, tInst uint32
+				targetSess.playerStateMu.Lock()
+				if targetSess.player != nil {
+					tMap, tInst = targetSess.player.Map, targetSess.player.InstanceID
+				}
+				targetSess.playerStateMu.Unlock()
+				auraRef := &luaAuraRef{server: s.server, spellID: spell.ID, player: targetSess, mapID: tMap, instanceID: tInst}
+				s.server.fireAuraChangeAmount(ctx, spell.ID, auraRef.luaAuraObject(), targetSess.luaPlayer())
+			}
 			return
 		}
 		if existing := previous; existing != nil {
@@ -38060,6 +38077,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if cur == 0 {
 			cur = 1
 		}
+		// OnChangeAmount fires only when the merge actually raises the
+		// stack count (Aura::ModStackAmount, SpellAuras.cpp:1030).
+		oldStack := cur
 		if cur++; cur > maxStack {
 			cur = maxStack
 		}
@@ -38169,6 +38189,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		updatePkt := protocol.BuildAuraUpdateWithStackEffect(targetGUID, wireCaster, slot, spell.ID, false, positive, wireMaxDuration, wireDuration, existing.StoredCasterLevel, wireStack, effectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
 		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt)
+		// AuraEffect::ChangeAmount (SpellAuraEffects.cpp:662-683) via
+		// Aura::ModStackAmount (SpellAuras.cpp:1030), creature-target twin
+		// of the player merge leg above.
+		if stackCount > uint8(oldStack) && s.server != nil {
+			auraRef := &luaAuraRef{server: s.server, spellID: spell.ID, creatureKey: targetKey, mapID: targetKey.Map, instanceID: targetKey.InstanceID}
+			s.server.fireAuraChangeAmount(ctx, spell.ID, auraRef.luaAuraObject(), s.server.luaUnitObjectForGUID(targetKey.Map, targetKey.InstanceID, targetGUID))
+		}
 		return
 	}
 	if existing, exists := s.server.activeCreatureAuras[targetKey][spell.ID]; exists && existing != nil {

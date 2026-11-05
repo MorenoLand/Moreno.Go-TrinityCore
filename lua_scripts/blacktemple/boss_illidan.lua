@@ -1889,3 +1889,21 @@ local function demonTransform2Tick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_DEMON_TRANSFORM_2, 1, demonTransform2Tick)
+
+-- C++ spell_maiev_down (boss_illidan.cpp:2312-2335): EFFECT_1
+-- SPELL_AURA_MOD_STUN, AURA_EFFECT_HANDLE_REAL. Load() admits unit
+-- owners only (Maiev is a creature). OnApply the target gains
+-- UNIT_FLAG_NOT_SELECTABLE; AfterEffectRemove clears the flag and
+-- calls the target AI's DoAction(ACTION_MAIEV_DOWN_FADE). The flag
+-- legs ride the bridged SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59);
+-- the DoAction leg has no bridge and stays out.
+local function maievDownApply(event, aura, target)
+    target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+end
+
+local function maievDownRemove(event, aura, target)
+    target:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+end
+
+RegisterAuraEvent(SPELL_MAIEV_DOWN, 2, maievDownApply)
+RegisterAuraEvent(SPELL_MAIEV_DOWN, 3, maievDownRemove)
