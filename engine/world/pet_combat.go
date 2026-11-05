@@ -6790,6 +6790,16 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 				targetSess.server.suppressThreatForSchoolImmuneVictim(targetSess.player.Map, targetSess.player.InstanceID, targetSess.playerGUID, targetSess.isImmuneToDamage(spellSchoolMaskNormal))
 			}
 		}
+		// AuraEffect::HandleAuraModDmgImmunity (SpellAuraEffects.cpp:3211-3212):
+		// a fresh 40 effect re-evaluates threat suppression on the
+		// target's attackers; only the 39 handler sets UNIT_FLAG_IMMUNE.
+		// The gate folds the live 40 misc mask, so a NORMAL-covering
+		// 40 effect suppresses exactly like a 39 one.
+		if effect.Aura == spellAuraDamageImmunity && targetSess.player != nil {
+			if targetSess.server != nil {
+				targetSess.server.suppressThreatForSchoolImmuneVictim(targetSess.player.Map, targetSess.player.InstanceID, targetSess.playerGUID, targetSess.isImmuneToDamage(spellSchoolMaskNormal))
+			}
+		}
 		// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812) and
 		// HandleAuraModStun (:2834): a fresh confuse or breakable-stun
 		// effect re-evaluates threat suppression on the target's
@@ -6971,6 +6981,15 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 			s.server.broadcastCreatureValuesUpdateInInstance(targetKey.Map, targetKey.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: motion.UnitFlags})
 			s.server.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s.server, targetKey, spellSchoolMaskNormal))
 		}
+	}
+	// AuraEffect::HandleAuraModDmgImmunity (SpellAuraEffects.cpp:3211-3212):
+	// a fresh 40 effect re-evaluates threat suppression on the target's
+	// attackers; only the 39 handler sets UNIT_FLAG_IMMUNE. The gate folds
+	// the live 40 misc mask, so a NORMAL-covering 40 effect suppresses
+	// exactly like a 39 one. No victim-motion lookup: the fan-out runs on
+	// the attackers' lists, not the victim's motion.
+	if effect.Aura == spellAuraDamageImmunity {
+		s.server.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s.server, targetKey, spellSchoolMaskNormal))
 	}
 	// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812) and
 	// HandleAuraModStun (:2834): a fresh confuse or breakable-stun effect

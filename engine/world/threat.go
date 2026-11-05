@@ -327,7 +327,8 @@ func (tm *ThreatManager) isSuppressedLocked(victim uint64) bool {
 // the per-list half of ThreatManager::EvaluateSuppressed
 // (ThreatManager.cpp:290-304) as called from
 // AuraEffect::HandleAuraModSchoolImmunity apply
-// (SpellAuraEffects.cpp:3192) and the HandleModConfuse /
+// (SpellAuraEffects.cpp:3192), AuraEffect::HandleAuraModDmgImmunity
+// apply (:3212), and the HandleModConfuse /
 // HandleAuraModStun applies (:2812/:2834, via
 // suppressThreatForControlledVictim). Only an existing entry is marked;
 // the current victim switches on the next Update tick, matching C++
@@ -976,18 +977,21 @@ func (s *Server) threatHeadOfflineSet(motion *creatureMotion) (map[uint64]bool, 
 // taunt lapses — C++ keeps it online until the next suppress-triggering
 // event, and the tick cannot see aura applies, so the bit clears only
 // when the condition is observed absent (its aura expired, and a later
-// fresh apply suppresses again) or when the immunity-apply hook
-// (SuppressVictim) fires. A stored suppressed flag drops the bit: the
+// fresh apply suppresses again) or when a suppress-triggering
+// apply hook (SuppressVictim) fires. A stored suppressed flag drops the bit: the
 // deferral is moot once the ref is actually suppressed. Residual
-// wholesale-refresh approximation: a fresh confuse/stun/root aura
-// applied while a condition of the same leg is already present (the
-// condition never lapses) re-suppresses in C++ — the apply runs
-// EvaluateSuppressed(false) on the victim's manager — but Go has no
-// apply hook for those legs (only the immunity leg fans out through
-// SuppressVictim), so the ref stays deferred until the condition
-// lapses. A non-taunted victim whose condition expires promotes
-// within one step tick, where C++ waits for AddThreat — the same
-// staleness shape as the offline flag.
+// wholesale-refresh approximation (closed tick 179): a fresh
+// confuse/stun/immunity aura applied while a condition of the same
+// leg is already present re-suppresses in C++ — the apply runs
+// EvaluateSuppressed(false) on the victim's manager — and Go now
+// matches: all four EvaluateSuppressed callers fan out through
+// SuppressVictim (confuse/stun tick 178, school immunity tick 171,
+// damage immunity tick 179), so a fresh triggering apply on a
+// non-taunting victim suppresses and clears the deferral. Root has
+// no EvaluateSuppressed call in C++ and no ShouldBeSuppressed leg,
+// so it fans out nothing. A non-taunted victim whose condition
+// expires promotes within one step tick, where C++ waits for
+// AddThreat — the same staleness shape as the offline flag.
 func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos, offline map[uint64]bool) (map[uint64]bool, map[uint64]bool) {
 	if s == nil || motion == nil || motion.ThreatMgr == nil {
 		return nil, nil

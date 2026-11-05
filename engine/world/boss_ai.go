@@ -8806,6 +8806,14 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			s.broadcastCreatureValuesUpdateInInstance(targetKey.Map, targetKey.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: target.UnitFlags})
 			s.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s, targetKey, spellSchoolMaskNormal))
 		}
+		// AuraEffect::HandleAuraModDmgImmunity (SpellAuraEffects.cpp:3211-3212):
+		// a fresh 40 effect re-evaluates threat suppression on the
+		// target's attackers; only the 39 handler sets UNIT_FLAG_IMMUNE.
+		// The gate folds the live 40 misc mask, so a NORMAL-covering
+		// 40 effect suppresses exactly like a 39 one.
+		if eff.Aura == spellAuraDamageImmunity {
+			s.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s, targetKey, spellSchoolMaskNormal))
+		}
 		// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812) and
 		// HandleAuraModStun (:2834): a fresh confuse or breakable-stun
 		// effect re-evaluates threat suppression on the target's

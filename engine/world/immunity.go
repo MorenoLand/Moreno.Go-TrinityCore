@@ -867,12 +867,15 @@ func (s *Server) creatureHasLiveAuraEffectType(key creatureAuraKey, auraType uin
 }
 
 // suppressThreatForSchoolImmuneVictim is the fan-out half of the
-// EvaluateSuppressed() call in AuraEffect::HandleAuraModSchoolImmunity
-// apply (SpellAuraEffects.cpp:3192): the C++ call runs on the target's
-// manager over its refs on attackers' lists
-// (ThreatManager.cpp:290-304), and ShouldBeSuppressed's first leg
+// EvaluateSuppressed() calls in AuraEffect::HandleAuraModSchoolImmunity
+// apply (SpellAuraEffects.cpp:3192) and AuraEffect::HandleAuraModDmgImmunity
+// apply (:3212): both run on apply only, and ShouldBeSuppressed's first leg
 // (ThreatManager.cpp:112-116) suppresses the ref when the victim is
-// immune to the attacker's melee damage. Go models melee damage at
+// immune to the attacker's melee damage — IsImmunedToDamage folds the
+// 39 school mask and the 40 damage mask alike (Unit.cpp:7831-7847), so
+// one fan-out serves both aura types. The C++ calls run on the target's
+// manager over its refs on attackers' lists
+// (ThreatManager.cpp:290-304). Go models melee damage at
 // NORMAL school throughout, so the caller gates on NORMAL-school damage
 // immunity; attackers are the threat-list owners in the victim's
 // map/instance. The confuse and breakable-stun legs of
