@@ -831,9 +831,9 @@ const (
 //     stealth detection is the only modeled sense.
 //   - summoned: guardian AI selection (CritterAI::Permissible,
 //     PassiveAI.cpp:95-100) is unmodeled; creature-vs-creature acquisition
-//     has no bridge — the aggro scan only iterates player targets, so C++
-//     MoveInLineOfSight engagements against non-player units (guards vs
-//     invaders, creatures vs summoned guardians) never start in Go.
+//     rides the section-3 creature-victim scan (same MIOS path as the
+//     player scan, faction-template hostility in place of the player
+//     reputation tail).
 func creatureReactState(creatureType, npcFlags, flagsExtra uint32, aiName string) uint8 {
 	if creatureType == 8 || creatureType == 11 || flagsExtra&(0x00000002|0x00000080) != 0 || npcFlags&0x0000C000 != 0 || aiName == "PassiveAI" || aiName == "NullCreatureAI" || aiName == "TriggerAI" {
 		return creatureReactPassive
@@ -9069,6 +9069,155 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// (CreatureGroups.cpp:226-255). Fresh engage by construction —
 			// the acquisition scan only runs when !InCombat.
 			s.memberEngagingTarget(ctx, motion, p.GUID)
+			return
+		}
+	}
+
+	// Creature-vs-creature sight-aggro (CreatureUnitRelocationWorker,
+	// GridNotifiers.cpp:131-141 + CreatureAI::MoveInLineOfSight,
+	// CreatureAI.cpp:117-123): the player loop above covers player victims
+	// only; a relocating creature victim engages an aggressive scanner the
+	// same way (C++ passes any unit to MIOS, not just players). Same block
+	// order — reached only when !InCombat — and the same guard order:
+	// pre-filters, bounding box, hostility, range/Z, turret band,
+	// gray-aggro, LOS last. Scanner-side gates are loop invariants,
+	// checked once: vehicle (empty MIOS override), passive,
+	// combat-disabled, FlagsExtra 0x400. Victim-side: self-GUID (the worker
+	// excludes self, same as GetClosestCreatureWithEntry), dead, and
+	// Evading (C++ CanCreatureAttack rejects evade-mode victims; players
+	// carry no evade flag, so the player loop has no equivalent).
+	// SIGHTLESS/phase/accessible-place/home-distance stay unmodeled here
+	// exactly as in the player scan. The scan inherits the stepping
+	// pipeline's player gate (updateActiveCreatures returns early with no
+	// players, and stepSummonedNonVehicleMotions does the same), so a
+	// player-free map/instance still never sight-aggros — a separate
+	// stepping-scope question, not a scan gap.
+	if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && !creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) && motion.FlagsExtra&0x00000400 == 0 {
+		s.motionMu.Lock()
+		registry := s.motionMapLocked(motion.Map, motion.InstanceID)
+		victims := make([]*creatureMotion, 0, len(registry))
+		for _, victim := range registry {
+			victims = append(victims, victim)
+		}
+		s.motionMu.Unlock()
+		for _, victim := range victims {
+			if victim == nil || victim.GUID == motion.GUID || victim.Health == 0 || victim.Evading {
+				continue
+			}
+			// Axis-delta bounding box ahead of the 3D distance, the
+			// summonedMotionsInRange idiom: 100yd is the visibility
+			// radius, above every aggro radius the scan can produce.
+			if math.Abs(float64(victim.X-motion.X)) > 100.0 || math.Abs(float64(victim.Y-motion.Y)) > 100.0 {
+				continue
+			}
+			// Creature::_IsTargetAcceptable's friendly leg is subsumed
+			// by the faction-template hostile term (no player
+			// reputation tail exists for a creature victim).
+			if !s.creatureHostileToCreature(motion, victim) {
+				continue
+			}
+			dist := float32(distance3D(victim.X, victim.Y, victim.Z, motion.X, motion.Y, motion.Z))
+			// Creature::GetAttackDistance, victim-level input swapped
+			// in: same formula as the player loop, with the victim
+			// creature's SPELL_AURA_MOD_DETECTED_RANGE (152) sum in
+			// place of the player's totalAuraModifier term.
+			levelDiff := int32(motion.Level) - int32(victim.Level)
+			if motion.ExpansionMaxLevelEntry != motion.Entry {
+				motion.ExpansionMaxLevel = 80
+				motion.ExpansionMaxLevelEntry = motion.Entry
+				if s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+					var expansion int64
+					if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT expansion FROM creature_template WHERE entry = ?", motion.Entry).Scan(&expansion); err == nil {
+						switch expansion {
+						case 0:
+							motion.ExpansionMaxLevel = 60
+						case 1:
+							motion.ExpansionMaxLevel = 70
+						default:
+							motion.ExpansionMaxLevel = 80
+						}
+					}
+				}
+			}
+			aggroDist := float32(20.0) - motion.CombatReach + float32(levelDiff)
+			maxPlayerLevel := s.Config.MaxPlayerLevel
+			if maxPlayerLevel == 0 {
+				maxPlayerLevel = 80
+			}
+			if motion.Level+5 <= maxPlayerLevel {
+				aggroDist += float32(s.creatureAuraTypeSum(creatureAuraKeyForMotion(motion), spellAuraModDetectRange))
+				aggroDist += float32(s.creatureAuraTypeSum(creatureAuraKeyForMotion(victim), spellAuraModDetectedRange))
+			}
+			if int32(motion.Level) > motion.ExpansionMaxLevel {
+				aggroDist = float32(20.0) - motion.CombatReach + float32(motion.ExpansionMaxLevel-int32(victim.Level))
+			}
+			aggroRate := s.Config.RateCreatureAggro
+			if aggroRate == 0 {
+				aggroDist = 0
+			} else {
+				if aggroDist > float32(45.0*aggroRate) {
+					aggroDist = float32(45.0 * aggroRate)
+				} else if aggroDist < float32(5.0*aggroRate) {
+					aggroDist = float32(5.0 * aggroRate)
+				}
+				aggroDist *= float32(aggroRate)
+			}
+			if motion.AIName == "TurretAI" || motion.AIName == "ArcherAI" {
+				if len(motion.Spells) == 0 && s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+					motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
+				}
+				aggroDist += combatDistanceSpellRange(s, motion)
+			}
+			zAttackRange := float32(3.0)
+			if motion.AIName == "TurretAI" || motion.AIName == "ArcherAI" {
+				zAttackRange += spellMaxRangeHostile(s, motion)
+			}
+			// canCreatureStartAttack reads only target.Z and
+			// turretCanAIAttack resolves a nil-session victim through
+			// findCreatureMotion, so the victim rides a playerPos shim
+			// with no helper change.
+			victimPos := playerPos{Map: motion.Map, InstanceID: motion.InstanceID, X: victim.X, Y: victim.Y, Z: victim.Z, GUID: victim.GUID, Level: uint8(victim.Level)}
+			if !canCreatureStartAttack(motion, victimPos, dist, aggroDist, zAttackRange) || !s.turretCanAIAttack(motion, victimPos, dist) || noGrayAggroBlocked(uint32(victim.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) || !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, victim.X, victim.Y, victim.Z) {
+				continue
+			}
+			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "victim_guid", victim.GUID, "victim_entry", victim.Entry)
+			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27), creature-victim
+			// variant: same entry+unique passes and veto semantics as
+			// the player arm, with a creature who.
+			if s.fireCreatureMoveInLOSCreature(ctx, motion, victim) {
+				continue
+			}
+			// Creature-variant engage tail: the player tail minus its
+			// session legs (no attack-start packet to a session, no
+			// markPlayerInCombat, no beginInstanceEncounter). The nil
+			// source reaches every in-range player: broadcastToSetWithin
+			// excludes only a non-nil source session and skips the phase
+			// gate for a nil one. The combat head (S2) already resolves
+			// creature victims from TargetGUID via live motion, and the
+			// swing (S3) already damages them — no combat-block change.
+			motion.InCombat = true
+			if motion.ThreatMgr == nil {
+				motion.ThreatMgr = NewThreatManager(motion)
+			}
+			if motion.BossAI == nil {
+				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+			}
+			motion.ThreatMgr.AddThreat(victim.GUID, 0.0, true)
+			motion.TargetGUID = victim.GUID
+			motion.Moving = false
+			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 2)
+			startPkt := buildAttackStart(motion.GUID, victim.GUID)
+			s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, nil)
+			if motion.BossAI != nil {
+				motion.BossAI.OnAggro(ctx, s, motion, victim.GUID)
+			}
+			s.castAggroConditionSpells(ctx, motion, victim.GUID)
+			if motion.AIName == "CasterAI" {
+				s.scheduleCasterAISpellEvents(ctx, motion, victim.GUID, now, players, true)
+			} else {
+				s.scheduleAISpellEvents(motion, now)
+			}
+			s.memberEngagingTarget(ctx, motion, victim.GUID)
 			return
 		}
 	}

@@ -6134,6 +6134,28 @@ func (s *Server) fireCreatureMoveInLOS(ctx context.Context, motion *creatureMoti
 	return luaHookVeto(results) || luaHookVeto(uniqueResults)
 }
 
+// fireCreatureMoveInLOSCreature is the creature-victim twin of
+// fireCreatureMoveInLOS: same entry+unique passes and veto semantics,
+// with who built from the victim motion (luaMotionCreature) instead of a
+// session's luaPlayer. C++ CreatureUnitRelocationWorker passes any unit to
+// Eluna MIOS, so a scanner sighting a creature victim fires the same hook
+// with a creature who. Placement stays the engage branch, mirroring the
+// player scan; passive scanners never reach it.
+func (s *Server) fireCreatureMoveInLOSCreature(ctx context.Context, motion, victim *creatureMotion) bool {
+	if s == nil || motion == nil || victim == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
+	}
+	creature := s.luaMotionCreature(motion)
+	who := s.luaMotionCreature(victim)
+	if creature == nil || who == nil {
+		return false
+	}
+	args := []any{scripting.CreatureEventOnMoveInLOS, creature, who}
+	results, _ := s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnMoveInLOS, args...)
+	uniqueResults, _ := s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnMoveInLOS, args...)
+	return luaHookVeto(results) || luaHookVeto(uniqueResults)
+}
+
 // fireCreatureDied dispatches Eluna CREATURE_EVENT_ON_DIED (4) for a
 // creature killed through the session kill funnel. C++
 // (Eluna::JustDied, CreatureHooks.cpp:143-152, reached from

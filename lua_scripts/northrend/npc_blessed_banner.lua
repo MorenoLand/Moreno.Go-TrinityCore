@@ -229,8 +229,9 @@ local intro1, intro2, intro3, startFight, waveSpawn, halofEvent, masonAction, en
 -- reproduces the C++ target selection and keeps the single-banner
 -- engage direct through the funnel (bridge + engager-derived
 -- map/instance + combat-tick creature-victim resolution + swing
--- application branch); creature-vs-creature sight-aggro is unmodeled
--- in Go, so the self fallback stands in for the C++ sight engage.
+-- application branch); creature-vs-creature sight-aggro now rides the
+-- Go section-3 creature-victim scan, so the self fallback is kept only
+-- until that scan is verified live — then its removal is decided.
 -- The MoveTo fight-pos leg stays as the staging approximation (the
 -- C++ home, banner's neighborhood — crew walk-in precedent).
 -- Latched into bannerSummons for the JustDied drain and the victory
