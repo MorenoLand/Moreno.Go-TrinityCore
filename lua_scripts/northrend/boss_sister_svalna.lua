@@ -197,8 +197,11 @@
 --   targets 1), ACTION_START_GAUNTLET (EVENT_SVALNA_START seed),
 --   ACTION_RESURRECT_CAPTAINS (EVENT_SVALNA_RESURRECT seed),
 --   ACTION_CAPTAIN_DIES (Talk(SAY_SVALNA_CAPTAIN_DEATH 5)),
---   ACTION_RESET_EVENT — no-DoAction bridge (the krick
---   ACTION_OUTRO precedent).
+--   ACTION_RESET_EVENT — ev38 dispatch bridged; senders all unported —
+-- KILL_CAPTAIN / RESURRECT_CAPTAINS ride the crok escort machine
+-- (boss_sister_svalna.cpp:606,635,661,684), START_GAUNTLET rides the unbridged
+-- gauntlet area trigger (:1490), RESET_EVENT rides crok DamageTaken wipe check
+-- (:707-708), CAPTAIN_DIES is dead (zero callers); krick relay N/A.
 -- boss_sister_svalna SpellHit (:430-437) — PORTED this run:
 --   Talk(EMOTE_SVALNA_BROKEN_SHIELD 8, caster) + RemoveAura(
 --   SPELL_AETHER_SHIELD 71463) on SPELL_HURL_SPEAR 71466 via

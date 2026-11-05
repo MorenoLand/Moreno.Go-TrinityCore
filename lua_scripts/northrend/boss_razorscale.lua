@@ -189,9 +189,13 @@
 -- retracted (2026-10-21): ev14 IS bridged (fires from the Go spell
 -- path) — but the arm stays out: the DoCastSelf(HARPOON_FIRE_STATE
 -- 62696) rides an instance-GetCreature(DATA_EXPEDITION_COMMANDER)
--- -> DoAction(ACTION_DESTROY_HARPOONS) cross-creature relay (no
--- instance-GetCreature / DoAction bridges), and 33282 itself has
--- no registration.
+-- -> DoAction(ACTION_DESTROY_HARPOONS) cross-creature relay (dispatch IS
+-- bridged, ev38 lua_creature_events.go:802; lookup IS bridged,
+-- creature:GetInstanceCreature lua_creature_events.go:5865, but unlatched —
+-- no event-5 SetGuidData for the commander in this file; the receiver arm
+-- ACTION_DESTROY_HARPOONS is the unported commander DoAction machine,
+-- boss_razorscale.cpp:806-810, _destroy latch + DestroyHarpoons()), and
+-- 33282 itself has no registration.
 -- npc_razorscale_devouring_flame: Reset one-shot DoCastSelf
 -- (DEVOURING_FLAME_GROUND 64709/64734, triggered), not
 -- timer-driven; no registration.

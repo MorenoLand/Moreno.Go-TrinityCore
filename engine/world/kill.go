@@ -2769,9 +2769,15 @@ func (s *session) creditQuestKills(ctx context.Context, creatureEntry uint32, vi
 			entries = append(entries, uint32(credit))
 		}
 	}
+	// The killed creature's motion rides the kill criteria so
+	// DATA_TYPE_SCRIPT gates can read the target's AI GetData slots
+	// (boss-file achievement OnCheck: boss_auriaya.cpp,
+	// boss_sjonnir.cpp, boss_king_dred.cpp); nil when the victim is
+	// not a live creature motion (DB-side credit callers pass 0).
+	victim := s.findCreatureMotion(victimGUID)
 	for _, entry := range entries {
 		s.startTimedAchievement(timedTypeCreature, entry)
-		s.updateAchievementCriteria(criteriaTypeKillCreature, entry, 1)
+		s.updateAchievementCriteriaWithCreatureTarget(criteriaTypeKillCreature, entry, 1, victim)
 	}
 	s.creditQuestObjectiveEntries(ctx, entries, victimGUID, false)
 }

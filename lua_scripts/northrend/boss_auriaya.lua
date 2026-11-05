@@ -77,9 +77,10 @@
 -- random-target leg rides creature:GetAITargets (baltharus
 -- ENERVATING_BRAND precedent); JustDied (:298)
 -- -> instance GetCreature(BOSS_AURIAYA) -> DoAction
--- (ACTION_CRAZY_CAT_LADY 0) — dispatch IS bridged (ev38); the sender
--- is the unregistered sentry's JustDied (boss_auriaya.cpp:301),
--- reached via the unported instance GetCreature leg.
+-- (ACTION_CRAZY_CAT_LADY 0) — PORTED 2026-11-05 in sentryDied
+-- (dispatch ev38 + lookup GetInstanceCreature bridged; boss GUID
+-- latched by the ev5 SetGuidData in this file); sole consumer the
+-- now-ported achievement_crazy_cat_lady (boss_auriaya.cpp:690).
 -- DOCUMENTED-ONLY (no bridgeable arms):
 -- Reset (:139-145) / HandleCats (:147-158) — _Reset() + flag resets
 -- + grid RESPAWN of entry 34014 within 500.0f — PORTED 2026-10-24
@@ -89,10 +90,9 @@
 -- bridged, lua_creature_events.go:1204.
 -- DoAction (:178-193, ACTION_CRAZY_CAT_LADY 0 / ACTION_DEFENDER_DIED
 -- 1) / GetData (:195-204, DATA_NINE_LIVES 30763077 /
--- DATA_CRAZY_CAT_LADY 30063007) — dispatch IS bridged (ev38) and
--- creature:GetData IS bridged (lua_creature_events.go:784); blocked
--- on the senders, the sentry/defender JustDied legs (:301/:452) on
--- unregistered adds.
+-- DATA_CRAZY_CAT_LADY 30063007) — PORTED 2026-11-05 in auriayaDoAction
+-- (ev38) + the SetData latches in auriayaReset / auriayaLeaveCombat /
+-- auriayaSpawned; both relays ported (sentry :301, defender :452).
 -- JustDied (:206-212) — DoPlaySoundToSet(15476) ported via
 -- creature:PlayDirectSound (dedicated auriayaDied); HandleCats(false)
 -- despawn leg ported there too (see above); the SendEncounterUnit
@@ -105,19 +105,19 @@
 -- 500ms IsCasting defer in every timer tick (mal_ganis idiom;
 -- IsCasting bridged lua_creature_events.go:1950); the
 -- DoMeleeAttackIfReady tail has no bridge.
--- npc_feral_defender — the whole machine is phase-gated
--- (PHASE_NONE/PHASE_COMBAT :111-112) and its timer legs
+-- npc_feral_defender — entry 34035 (no constant in C++; Wowhead-
+-- verified 2026-11-05, npc=34035, Ulduar, WotLK) — the whole machine
+-- is phase-gated (PHASE_NONE/PHASE_COMBAT :111-112) and its timer legs
 -- (EVENT_RUSH :389-393, EVENT_START_COMBAT :384, respawn chain
 -- :395-415) ride CatsTargetSelector random-target selection; the
 -- DamageTaken (:427-446) feign-death machinery — health (GetHealth/
 -- GetMaxHealth) and aura (creature:HasAura) bridges exist, but the
--- unit stays blocked on unbridged SetAuraStack + no creature entry
--- (SetReactState/AttackStop/flag/threat/gravity bridges are live —
--- the stale list above is retracted) + random-target selection — NO
--- registration; JustDied (:448-453) DoAction(ACTION_DEFENDER_DIED)
--- dispatch IS bridged (ev38) but the sender (the defender itself)
--- has no registration; no creature entry in C++ evidence —
--- NO registration.
+-- unit stays blocked on unbridged SetAuraStack + random-target
+-- selection (SetReactState/AttackStop/flag/threat/gravity bridges are
+-- live — the stale list above is retracted) — NO registration for the
+-- machine; JustDied (:448-453) PORTED 2026-11-05 in feralDefenderDied
+-- (summon-essence self-cast 64457 + DoAction(ACTION_DEFENDER_DIED)
+-- relay; entry 34035 registered in boss_ai.go).
 -- npc_swarming_guardian — the 1s scheduler self-cast
 -- SPELL_AGRO_CREATOR 63709 (:464-474) is timer-driven but has no
 -- creature entry in C++ evidence — NO registration; the 63709
@@ -132,11 +132,23 @@
 -- spell_auriaya_feral_rush (64496 / 64674) — no SpellScript
 -- bridge; spell_auriaya_random_agro_periodic (61906) — no
 -- AuraScript bridge; achievement_nine_lives / achievement_crazy_cat_lady
--- — no achievement / GetData bridges; all join the unmodeled
--- queues.
+-- — PORTED 2026-11-05: checkAchievementCriteriaScript reads the victim
+-- motion's SetData latches (engine/world/achievement_criteria_scripts.go),
+-- threaded from the kill-credit path (kill.go creditQuestKills).
 
 local ENTRY_AURIAYA = 33515
 local ENTRY_SANCTUM_SENTRY = 34014
+local ENTRY_FERAL_DEFENDER = 34035
+
+-- BOSS_AURIAYA = 6 (ulduar.h:42); DATA_NINE_LIVES 30763077 /
+-- DATA_CRAZY_CAT_LADY 30063007 (boss_auriaya.cpp:108-109);
+-- ACTION_CRAZY_CAT_LADY 0 / ACTION_DEFENDER_DIED 1
+-- (boss_auriaya.cpp:101-104).
+local BOSS_AURIAYA_DATA = 6
+local DATA_NINE_LIVES = 30763077
+local DATA_CRAZY_CAT_LADY = 30063007
+local ACTION_CRAZY_CAT_LADY = 0
+local ACTION_DEFENDER_DIED = 1
 
 local SAY_AGGRO      = 0
 local SAY_SLAY       = 1
@@ -156,6 +168,7 @@ local SOUND_AURIAYA_DEATH = 15476
 local SPELL_RIP_FLESH          = 64375
 local SPELL_SAVAGE_POUNCE        = 64666
 local SPELL_STRENGHT_OF_THE_PACK = 64369
+local SPELL_SUMMON_ESSENCE       = 64457
 
 local timers = {}
 
@@ -469,6 +482,9 @@ end
 -- Reset arm as C++ ai->Reset() does.
 local function auriayaReset(event, creature)
     cancelCombatTimers(event, creature)
+    -- C++ Reset (:139-145): _crazyCatLady = true, _nineLives = false.
+    creature:SetData(DATA_CRAZY_CAT_LADY, 1)
+    creature:SetData(DATA_NINE_LIVES, 0)
     for _, sentry in ipairs(creature:GetCreaturesInGrid(ENTRY_SANCTUM_SENTRY, 500)) do
         if sentry:IsDead() then
             sentry:Respawn()
@@ -491,14 +507,64 @@ end
 local function auriayaLeaveCombat(event, creature)
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
     cancelCombatTimers(event, creature)
+    -- C++ EnterEvadeMode ends with Reset() (CreatureAI.cpp:237).
+    creature:SetData(DATA_CRAZY_CAT_LADY, 1)
+    creature:SetData(DATA_NINE_LIVES, 0)
+end
+
+-- C++ instance OnCreatureCreate latching (InstanceScript::AddObject):
+-- the boss GUID goes in the instance store under BOSS_AURIAYA so the
+-- sentry/defender relays can resolve it via GetInstanceCreature; the
+-- latch init is the ctor twin (boss_auriaya.cpp:137).
+local function auriayaSpawned(event, creature)
+    creature:SetGuidData(BOSS_AURIAYA_DATA)
+    creature:SetData(DATA_CRAZY_CAT_LADY, 1)
+    creature:SetData(DATA_NINE_LIVES, 0)
+end
+
+-- C++ DoAction (:178-193): ACTION_CRAZY_CAT_LADY clears the lady latch,
+-- ACTION_DEFENDER_DIED sets the nine-lives latch.
+local function auriayaDoAction(event, creature, action)
+    if action == ACTION_CRAZY_CAT_LADY then
+        creature:SetData(DATA_CRAZY_CAT_LADY, 0)
+    elseif action == ACTION_DEFENDER_DIED then
+        creature:SetData(DATA_NINE_LIVES, 1)
+    end
+end
+
+-- C++ npc_sanctum_sentry::JustDied (:298-302): instance GetCreature
+-- (BOSS_AURIAYA) -> DoAction(ACTION_CRAZY_CAT_LADY); the timer cancel
+-- is the file's ev4 hygiene arm (timers keyed by GUID).
+local function sentryDied(event, creature)
+    local auriaya = creature:GetInstanceCreature(BOSS_AURIAYA_DATA)
+    if auriaya then
+        auriaya:DoAction(ACTION_CRAZY_CAT_LADY)
+    end
+    cancelCombatTimers(event, creature)
+end
+
+-- C++ npc_feral_defender::JustDied (:448-453): DoCastSelf
+-- (SPELL_SUMMON_ESSENCE 64457, triggered) then instance GetCreature
+-- (BOSS_AURIAYA) -> DoAction(ACTION_DEFENDER_DIED). The feign-death
+-- revives (DamageTaken :427-446) never reach JustDied, so this fires
+-- only on a real death.
+local function feralDefenderDied(event, creature)
+    creature:CastSpell(creature, SPELL_SUMMON_ESSENCE, true)
+    local auriaya = creature:GetInstanceCreature(BOSS_AURIAYA_DATA)
+    if auriaya then
+        auriaya:DoAction(ACTION_DEFENDER_DIED)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_AURIAYA, 1, auriayaEnterCombat)
 RegisterCreatureEvent(ENTRY_AURIAYA, 2, auriayaLeaveCombat)
 RegisterCreatureEvent(ENTRY_AURIAYA, 3, auriayaTargetDied)
 RegisterCreatureEvent(ENTRY_AURIAYA, 4, auriayaDied)
+RegisterCreatureEvent(ENTRY_AURIAYA, 5, auriayaSpawned)
 RegisterCreatureEvent(ENTRY_AURIAYA, 23, auriayaReset)
+RegisterCreatureEvent(ENTRY_AURIAYA, 38, auriayaDoAction)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 1, sentryEnterCombat)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 2, cancelCombatTimers)
-RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 4, sentryDied)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 23, sentryReset)
+RegisterCreatureEvent(ENTRY_FERAL_DEFENDER, 4, feralDefenderDied)

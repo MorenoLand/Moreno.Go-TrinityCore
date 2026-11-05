@@ -45,8 +45,11 @@
 --   GetGuidData) + DespawnOrUnsummon — no instance SetData/GetData /
 --   MovementInform-instance bridges.
 -- - DestroyDoor (door-bomb run driven by Weegli's own OnGossipSelect
---   -> DestroyDoor; Bly's DoAction(0) call is vacuous — Weegli defines
---   no DoAction override, so the C++ base no-ops):
+--   -> DestroyDoor; Bly->Weegli DoAction(0) (zulfarrak.cpp:106) is vacuous — Weegli defines no
+-- DoAction override (zulfarrak.cpp:270-387), so the C++ base no-ops; ev38
+-- dispatch bridged but there is nothing to dispatch to. (Bly's own
+-- self-DoAction(0) at :171 is a different, non-vacuous call driving Bly's
+-- postGossipStep machine.)):
 --   SetFaction(FACTION_FRIENDLY) (bridged, but the arm is instance-
 --   gated) + MovePoint(0, 1858.57, 1146.35, 14.745) (no point-movement
 --   bridge) + Talk(SAY_WEEGLI_OK_I_GO=1); the gossip driver is

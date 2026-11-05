@@ -77,8 +77,11 @@
 -- IsSummonedBy triggered self-cast SPELL_SUMMON_VOID_SENTRY_BALL
 -- (58650), REACT_PASSIVE stance, and SummonedCreatureDespawn
 -- DoAction(ACTION_DESPAWN_VOID_SENTRY_BALL) leg have no bridges;
--- casting it would spawn inert sentries. Joins the no-DoAction /
--- no-SummonList bridge queues. The boss-side SummonedCreatureDies
+-- casting it would spawn inert sentries. Joins the no-SummonList bridge queue;
+-- the sentry DoAction leg stays out —
+-- ev38 dispatch bridged, but sender zuramat SummonedCreatureDespawn
+-- (boss_zuramat.cpp:89-96) is unported in Lua (no ev21 handler) and receiver
+-- npc_void_sentry (29364) is unregistered. The boss-side SummonedCreatureDies
 -- _voidDance = false flip (boss_zuramat.cpp) is dispatch-bridgeable via
 -- event-21 (2026-10-24), but _voidDance's only C++ consumer is
 -- GetData(DATA_VOID_DANCE) for achievement_void_dance (unbridged) — the

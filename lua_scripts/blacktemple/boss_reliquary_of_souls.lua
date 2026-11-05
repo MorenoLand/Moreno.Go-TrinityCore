@@ -47,8 +47,11 @@
 -- SUFFERING: the ACTION_ESSENCE_OF_SUFFERING_DEAD /
 -- ACTION_ESSENCE_OF_DESIRE_DEAD phase advances have no
 -- DoAction/instance-creature bridge); the enslaved-souls
--- DoAction(ACTION_KILL_SELF) arm has no cross-creature DoAction
--- bridge. OnLeaveCombat/OnReset: cancel timers, drop per-GUID
+-- DoAction(ACTION_KILL_SELF) arm: ev38 dispatch is bridged and the sender
+-- (the ported submerge timer) is live, but no enslaved souls ever exist in
+-- this model — their spawn rides HandleSpirits, called only from the
+-- unported essence-dead arms — so a grid sweep would find nothing.
+-- OnLeaveCombat/OnReset: cancel timers, drop per-GUID
 -- state (C++ Reset: _Reset, REACT_PASSIVE, _inCombat=false, phase
 -- reset — the REACT_PASSIVE arm is PORTED 2026-10-20 —
 -- creature:SetReactState; the summons arms have no bridge).
@@ -75,16 +78,20 @@
 -- AttackStop + StopMoving + non-triggered self-cast soul release
 -- 41542 + 500ms-delayed KillSelf — the header's old "stays out"
 -- wording was stale vs the 2026-10-19 code). The reliquary-
--- driven DoAction(ACTION_KILL_SELF) soul-release path has no
--- bearer (no cross-creature DoAction bridge).
+-- driven DoAction(ACTION_KILL_SELF) soul-release path has no bearer —
+-- no enslaved souls ever spawn (HandleSpirits rides the unported
+-- essence-dead arms); ev38 dispatch is bridged and the receiver body is
+-- ported inline in soulDamageTaken.
 -- Reliquary combat trigger: OnDamageTaken(9) always rewrites
 -- damage to 0 (C++ damage = 0 invulnerable arm, C++-exact). Its
 -- MoveInLineOfSight -> reliquary ACTION_START_COMBAT arm is
 -- modeled on the reliquary side as the pull start (no
 -- MoveInLineOfSight bridge); the Reset DONE-state despawn arm is
 -- blocked on the instance-script model; the EnterEvadeMode
--- reliquary relay and the DoAction(ACTION_KILL_SELF) -> KillSelf
--- arms have no bridges.
+-- reliquary relay stays out (no EnterEvadeMode bridge) and the
+-- DoAction(ACTION_KILL_SELF) -> KillSelf arm stays out — ev38 dispatch
+-- bridged, but the sender is the unregistered essence of anger JustDied
+-- (boss_reliquary_of_souls.cpp:517-521).
 -- Not registered (entries unverifiable from the C++ sources):
 -- boss_essence_of_suffering — Reset triggered-AoE 41292 (aura of
 -- suffering); pull: soul drain 41303 20s then {30s,35s} self-cast
@@ -181,9 +188,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- C++ boss_reliquary_of_souls::GetSummonSpell, phase-picked.
--- Phase stays at SUFFERING: the ACTION_ESSENCE_OF_SUFFERING_DEAD
--- / ACTION_ESSENCE_OF_DESIRE_DEAD advances have no DoAction /
--- instance-creature bridge.
+-- Phase stays at SUFFERING: ev38 dispatch bridged, but the senders are the
+-- essences' MovementInform via instance GetCreature
+-- (boss_reliquary_of_souls.cpp:307 suffering, :418 desire); no MovementInform /
+-- MovePoint / instance-creature bridge.
 local function summonSpellForPhase(phase)
     if phase == PHASE_ANGER then
         return SPELL_SUMMON_ESSENCE_OF_ANGER
@@ -196,8 +204,11 @@ end
 -- C++ EVENT_SUBMERGE: triggered self-cast 28819, then the phase's
 -- summon spell, non-triggered (C++ DoCastSelf default is
 -- triggered=false — vaelastrasz convention). One-shot
--- (C++-exact). The enslaved-souls DoAction(ACTION_KILL_SELF) arm
--- has no cross-creature DoAction bridge.
+-- (C++-exact). The enslaved-souls DoAction(ACTION_KILL_SELF) arm: ev38
+-- dispatch is bridged (lua_creature_events.go:802) and the sender (this
+-- submerge timer) is ported, but no enslaved souls ever exist in this model
+-- — their spawn rides HandleSpirits, called only from the unported
+-- essence-dead arms — so a grid sweep would find nothing.
 local function onSubmerge(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "submerge", 500, function()
@@ -338,8 +349,10 @@ end
 -- reliquary ACTION_START_COMBAT arm has no bridge (modeled on the
 -- reliquary side as the pull start); the Reset DONE-despawn arm is
 -- blocked on the instance-script model; the EnterEvadeMode
--- reliquary relay and the DoAction(ACTION_KILL_SELF) -> KillSelf
--- arms have no bridges.
+-- reliquary relay stays out (no EnterEvadeMode bridge) and the
+-- DoAction(ACTION_KILL_SELF) -> KillSelf arm stays out — ev38 dispatch
+-- bridged, but the sender is the unregistered essence of anger JustDied
+-- (boss_reliquary_of_souls.cpp:517-521).
 local function triggerDamageTaken(event, creature, attacker, damage)
     return false, 0
 end

@@ -17290,16 +17290,19 @@ func init() {
 	// zero CASTING hits). Documented
 	// in the lua file, not wired: the UpdateAI casting-skip is now
 	// ported (see above),
-	// DoAction(ACTION_RAPTOR_KILLED)/GetData(DATA_RAPTORS_KILLED) (no
-	// DoAction/GetData bridges), npc_drakkari_gutripper (26641) /
-	// npc_drakkari_scytheclaw (26628) entry-verifiable — zero
-	// registration: spawned only by the unbridged summon; GutRip 49710
-	// and Rend 13738 rotation arms stay port-pattern-ready; JustDied
-	// cross-AI DoAction legs behind instance GetGuidData +
-	// ObjectAccessor + DoAction bridges, and
-	// achievement_king_dred (no achievement-criteria bridge — snakes
-	// precedent — + cross-AI GetData absent).
+	// DoAction(ACTION_RAPTOR_KILLED)/GetData(DATA_RAPTORS_KILLED) PORTED
+	// tick 235 (ev38 handler + SetData latches + ev5 SetGuidData);
+	// gutripper (26641) / scytheclaw (26628) registered, rotation arms
+	// + JustDied DoAction relays ported in the lua file; consumer
+	// achievement_king_dred PORTED (criteria-script bridge,
+	// achievement_criteria_scripts.go).
 	RegisterLuaBoss("boss_king_dred", 27483)
+	// npc_drakkari_gutripper / npc_drakkari_scytheclaw: Drak'Tharon Keep
+	// raptors, entries 26641 / 26628 (boss_king_dred.cpp local enum) —
+	// rotation arms + JustDied DoAction(ACTION_RAPTOR_KILLED) relay in
+	// lua_scripts/northrend/boss_king_dred.lua (tick 235).
+	RegisterLuaBoss("npc_drakkari_gutripper", 26641)
+	RegisterLuaBoss("npc_drakkari_scytheclaw", 26628)
 
 	// boss_tharon_ja: Drak'Tharon Keep dungeon boss script, entry 26632
 	// (drak_tharon_keep.h NPC_THARON_JA — kalecgos pass; the
@@ -18517,9 +18520,9 @@ func init() {
 	// SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE, SetBossState NOT_STARTED —
 	// no instance / phase / react-state bridges); the ~60-action DoAction
 	// machine (land-encounter start, platform-destroy intro, vortex legs,
-	// surge-of-power legs, respawn handling — gated on MotionMaster /
-	// instance GUIDs / timed events — no DoAction / motion / instance
-	// bridges); MovementInform (vortex takeoff-land / cyclic movement
+	// surge-of-power legs, respawn handling — ev38 dispatch bridged; sender instance ProcessEvent EVENT_FOCUSING_IRIS
+	// unported (instance_eye_of_eternity.cpp:173); motion / instance drivers
+	// unported); MovementInform (vortex takeoff-land / cyclic movement
 	// points — no motion bridge); DamageTaken (surge-of-power and
 	// destroy-platform health gates, immune flag flips — no health /
 	// timer-event bridges); the UpdateAI arcane / vortex / power-spark /
@@ -18945,20 +18948,22 @@ func init() {
 	// player-gated variant precedent, twenty-first player-gated
 	// variant ported); JustDied Talk(SAY_DEATH 2) (event 4;
 	// _JustDied passthrough has no bridge).
-	// Documented-only: Reset / Initialize (_Reset() +
-	// abuseTheOoze = 0); DoAction(ACTION_OOZE_DEAD 1) /
-	// GetData(DATA_ABUSE_THE_OOZE 2) (no DoAction / GetData
-	// bridges; consumer: achievement_abuse_the_ooze below); the
+	// Ported tick 235: Reset / Initialize (_Reset() +
+	// abuseTheOoze = 0, ev2/ev23); ev38 DoAction + sludge JustDied relay
+	// (boss_sjonnir.cpp:291) + ev5 SetGuidData latch; consumer
+	// achievement_abuse_the_ooze ported (criteria-script bridge); the
 	// npc_malformed_ooze (27981 local enum; no Talk arms — the
 	// 10s/3s merge machine has no proximity / summon / despawn /
 	// timer bridges; npc_spark_of_ionar no-bridgeable-arms
 	// precedent — no registration); npc_iron_sludge (28165 local
-	// enum; no Talk arms — JustDied DoAction leg has no
-	// ObjectAccessor / GetGuidData / DoAction bridges; no
-	// registration); achievement_abuse_the_ooze (GetData >= 5 —
-	// no GetData / achievement bridges; joins the
-	// unmodeled-achievement queue).
+	// enum; no Talk arms) registered, JustDied DoAction relay ported;
+	// achievement_abuse_the_ooze (GetData >= 5) PORTED tick 235
+	// (criteria-script bridge, achievement_criteria_scripts.go).
 	RegisterLuaBoss("boss_sjonnir", 27978)
+	// npc_iron_sludge: Halls of Stone ooze, entry 28165
+	// (boss_sjonnir.cpp local enum) — JustDied DoAction(ACTION_OOZE_DEAD)
+	// relay in lua_scripts/northrend/boss_sjonnir.lua (tick 235).
+	RegisterLuaBoss("npc_iron_sludge", 28165)
 
 	// Auriaya (33515), Ulduar —
 	// lua_scripts/northrend/boss_auriaya.lua.
@@ -18987,12 +18992,15 @@ func init() {
 	// idiom).
 	// npc_sanctum_sentry (34014 local enum — newly registered):
 	// EVENT_RIP DoCastVictim 64375 6s/{10s,12s}.
-	// Documented-only: Reset / Initialize (_Reset() +
-	// _crazyCatLady / _nineLives flags + HandleCats(true) —
-	// no bridges); DoAction(ACTION_CRAZY_CAT_LADY 0 /
+	// Ported tick 235: Reset / Initialize (_Reset() +
+	// _crazyCatLady / _nineLives SetData latches + HandleCats(true));
+	// DoAction(ACTION_CRAZY_CAT_LADY 0 /
 	// ACTION_DEFENDER_DIED 1) / GetData(DATA_NINE_LIVES 30763077
-	// / DATA_CRAZY_CAT_LADY 30063007) — no DoAction / GetData
-	// bridges; JustDied (DoPlaySoundToSet 15476 +
+	// / DATA_CRAZY_CAT_LADY 30063007) — ev38 handler + ev5 SetGuidData
+	// latch; CRAZY_CAT_LADY sender sentry JustDied (boss_auriaya.cpp:301)
+	// relay ported; DEFENDER_DIED sender feral defender JustDied
+	// (boss_auriaya.cpp:452) relay ported, defender registered (34035);
+	// JustDied (DoPlaySoundToSet 15476 +
 	// SendEncounterUnit disengage + HandleCats(false) grid
 	// despawn — no Talk arms; the sound, disengage and
 	// HandleCats(false) legs port, event 4 registered); the UpdateAI event machine's remaining legs
@@ -19001,11 +19009,10 @@ func init() {
 	// npc_sanctum_sentry remaining legs (Reset self-buff 64369
 	// one-shot; EVENT_SAVAGE_POUNCE random-target CatsTargetSelector
 	// leg; SetWalk legs; JustDied DoAction(ACTION_CRAZY_CAT_LADY)
-	// — no target-search / movement / ObjectAccessor / DoAction
-	// bridges);
-	// npc_feral_defender (no creature entry in C++ evidence, no
-	// Talk arms — the respawn/feign-death machinery has no
-	// bridges; no registration); npc_swarming_guardian (no entry
+	// relay PORTED tick 235); npc_feral_defender (entry 34035,
+	// Wowhead-verified 2026-11-05; no Talk arms — the
+	// respawn/feign-death machinery has no bridges; JustDied relay
+	// PORTED tick 235); npc_swarming_guardian (no entry
 	// in C++ evidence, no Talk arms; no registration);
 	// npc_seeping_essence_stalker (no entry in C++ evidence, no
 	// Talk arms; no registration);
@@ -19017,9 +19024,15 @@ func init() {
 	// spell_auriaya_random_agro_periodic (61906) — no AuraScript
 	// bridge; joins the no-AuraScript-bridge queue;
 	// achievement_nine_lives / achievement_crazy_cat_lady
-	// (GetData-based OnCheck — no GetData / achievement bridges;
-	// both join the unmodeled-achievement queue).
+	// (GetData-based OnCheck) — PORTED tick 235 (criteria-script
+	// bridge, achievement_criteria_scripts.go).
 	RegisterLuaBoss("boss_auriaya", 33515)
+	// npc_sanctum_sentry / npc_feral_defender: Ulduar cats, entries 34014
+	// (boss_auriaya.cpp local enum) / 34035 (Wowhead-verified 2026-11-05,
+	// npc=34035, Ulduar, WotLK) — sentry/defender JustDied DoAction relays
+	// in lua_scripts/northrend/boss_auriaya.lua (tick 235).
+	RegisterLuaBoss("npc_sanctum_sentry", 34014)
+	RegisterLuaBoss("npc_feral_defender", 34035)
 
 	// Flame Leviathan (33113), Ulduar —
 	// lua_scripts/northrend/boss_flame_leviathan.lua.
@@ -19163,8 +19176,12 @@ func init() {
 	// / ACTION_START_PERMA_GROUND / ACTION_RETURN_TO_BASE,
 	// MovementInform POINT_RAZORSCALE_*, SetPhase(PHASE_AIR /
 	// PHASE_GROUND / PHASE_PERMA_GROUND), MoveSplineInit /
-	// MovePoint / MoveLand / MoveTakeoff — no DoAction /
-	// MovementInform / MotionMaster / spline / phase bridges);
+	// MovePoint / MoveLand / MoveTakeoff — ev38 dispatch bridged;
+	// ACTION_START_FIGHT PORTED (commander gossip relay,
+	// boss_razorscale.lua:401-402); GROUND_PHASE / PERMA_GROUND /
+	// RETURN_TO_BASE stay out behind the unported phase/motion
+	// machine (no MovementInform / MotionMaster / spline / phase
+	// bridges);
 	// EVENT_FIREBALL (SelectTarget Random + DoCast 63815,
 	// {2s,3s}, PHASE_AIR) / EVENT_DEVOURING_FLAME
 	// (SelectTarget Random + DoCast 63236, {6s,12s}/{10s,12s}) —
@@ -20136,7 +20153,7 @@ func init() {
 	// Talk(SAY_DARNAVAN_AGGRO 0) (event 1) registered for both
 	// raid-mode entries 38472 / 38485. No other bridgeable arm in
 	// the file: the intro DoAction/scheduler machine
-	// (Talk(SAY_INTRO_1 0 .. SAY_INTRO_7 6) — no-DoAction bridge;
+	// (Talk(SAY_INTRO_1 0 .. SAY_INTRO_7 6) — ev38 dispatch bridged; sender at_lady_deathwhisper_entrance area trigger unported (boss_lady_deathwhisper.cpp:1048);
 	// the intro scheduler machine stays out), the berserk/
 	// dominate-mind/improve-cultist/shadowbolt/death-and-decay/
 	// frostbolt/volley/touch/summon-spirits timer legs are ported
@@ -20199,14 +20216,18 @@ func init() {
 	// 8) rides a SpellHitTarget switch (no-SpellHit-bridge queue),
 	// the intro Talk (SAY_INTRO_ALLIANCE_2/3/6/7,
 	// SAY_INTRO_HORDE_2/4/9) rides the scheduler machine
-	// (no-timer-bridge; DoAction legs have no-DoAction bridge), and
-	// Talk(SAY_BLOOD_BEASTS 9) / Talk(SAY_BERSERK 12) /
-	// Talk(EMOTE_SCENT_OF_BLOOD 14) ride scheduler legs
-	// (no-timer-bridge). npc_high_overlord_saurfang_icc and
+	// (DoAction legs: ev38 dispatch bridged; sender unregistered captains' gossip-started intro scheduler / MovementInform unported (boss_deathbringer_saurfang.cpp:670/:726/:870/:916)), and
+	// Talk(SAY_BLOOD_BEASTS 9) / Talk(SAY_BERSERK 12) are ALREADY-PORTED
+	// via CreateLuaEvent combat timers (boss_deathbringer_saurfang.lua:87-93,
+	// 102-105); Talk(EMOTE_SCENT_OF_BLOOD 14) stays out on the
+	// !summons.empty() gate (no summon-list bridge), not on timers.
+	// npc_high_overlord_saurfang_icc and
 	// npc_muradin_bronzebeard_icc expose Talk only on
-	// DoAction/scheduler/movement legs (no-DoAction /
-	// no-timer-bridge / no-motion bridges; gossip entry is
-	// instance-model-blocked) and npc_saurfang_event has zero Talk
+	// DoAction/scheduler/movement legs (ev38 dispatch bridged; the captains are
+	// unregistered so no ev38 handler exists on them, and their chain starts at
+	// unported gossip — OnGossipSelect boss_deathbringer_saurfang.cpp:629-635/
+	// :829-835 — plus unported MovementInform; no-motion bridge; gossip entry
+	// is instance-model-blocked) and npc_saurfang_event has zero Talk
 	// lines — not registered (the bronjahm
 	// npc_corrupted_soul_fragment precedent). The 9 spell scripts
 	// join the no-SpellScript-bridge queue, the 3 aura scripts the
@@ -20288,8 +20309,10 @@ func init() {
 	// / Talk(SAY_TRANSFORM_1 7) / Talk(SAY_TRANSFORM_2 8) ride
 	// scheduler legs (no-timer-bridge); Talk(SAY_FESTERGUT_GASEOUS_BLIGHT
 	// 0) / Talk(SAY_ROTFACE_OOZE_FLOOD 2) /
-	// Talk(SAY_PHASE_TRANSITION_HEROIC 6) ride DoAction legs
-	// (no-DoAction bridge). npc_volatile_ooze / npc_gas_cloud have
+	// Talk(SAY_PHASE_TRANSITION_HEROIC 6) ride DoAction legs (ev38 dispatch
+	// bridged; senders unported — festergut scheduler machine + own MovementInform
+	// / DamageTaken phase machine
+	// (boss_professor_putricide.cpp:378/:385/:356/:362; boss_festergut.cpp:193)). npc_volatile_ooze / npc_gas_cloud have
 	// zero Talk lines — not registered (the bronjahm
 	// npc_corrupted_soul_fragment precedent). The 20 spell scripts
 	// join the no-SpellScript-bridge queue and the 5 aura scripts
@@ -20328,8 +20351,10 @@ func init() {
 	// (keleseth :651/:675, taldaram :717/:749, valanar :807/:844;
 	// controller :366/:401 covers only the unported invocation event;
 	// nucleus UpdateAI :1082 carries no gate). Out legs:
-	// Talk(SelectInvocationSay()) rides ACTION_CAST_INVOCATION
-	// (no-DoAction bridge); the controller's EVENT_INVOCATION_OF_BLOOD
+	// Talk(SelectInvocationSay()) rides ACTION_CAST_INVOCATION (ev38 dispatch
+	// bridged; sender controller EVENT_INVOCATION_OF_BLOOD rotation unported
+	// (boss_blood_prince_council.cpp:373-398), via prince's own SpellHit
+	// (:535-539)); the controller's EVENT_INVOCATION_OF_BLOOD
 	// Talk(textId) is cross-AI Talk on a scheduler leg (no bridge);
 	// the _isEmpowered variants (keleseth 71815, taldaram 72040,
 	// valanar 72039) ride the unbridged invocation machine; valanar
@@ -20339,9 +20364,9 @@ func init() {
 	// (creature:IsHeroic() bridged; the old "no IsHeroic bridge" claim retracted).
 	// boss_blood_council_controller
 	// has zero own Talk lines — not registered (the bronjahm
-	// npc_corrupted_soul_fragment precedent); npc_blood_queen_lana_thel
-	// Talk(SAY_INTRO_1) rides the ACTION_START_INTRO DoAction leg
-	// (no-DoAction bridge) and Talk(SAY_INTRO_2) the EVENT_INTRO_1
+	// npc_corrupted_soul_fragment precedent); npc_blood_queen_lana_thel Talk(SAY_INTRO_1) rides the ACTION_START_INTRO
+	// DoAction leg (ev38 dispatch bridged; sender area-trigger → controller →
+	// Lana'thel chain unported (boss_blood_prince_council.cpp:1338/:340-344)) and Talk(SAY_INTRO_2) the EVENT_INTRO_1
 	// scheduler leg (no-timer-bridge) — not registered;
 	// npc_ball_of_flame / npc_dark_nucleus have zero Talk lines — not
 	// registered. npc_kinetic_bomb IS registered (tick 232) for its
@@ -20417,8 +20442,9 @@ func init() {
 	// (event 4, the sjonnir JustDied-Talk precedent). No other
 	// bridgeable arm in the file: the JustEngagedWith
 	// crok->AI()->Talk(SAY_CROK_COMBAT_SVALNA 5) is cross-AI Talk
-	// (no bridge); Talk(SAY_SVALNA_CAPTAIN_DEATH 5) rides the
-	// ACTION_CAPTAIN_DIES DoAction leg (no-DoAction bridge);
+	// (no bridge); Talk(SAY_SVALNA_CAPTAIN_DEATH 5) rides the ACTION_CAPTAIN_DIES DoAction leg
+	// (ev38 dispatch bridged; no sender exists in C++ — dead action, enum + case
+	// only (boss_sister_svalna.cpp:200/:417));
 	// Talk(EMOTE_SVALNA_BROKEN_SHIELD 8) rides the SPELL_HURL_SPEAR
 	// SpellHit arm (event 15 never fires); Talk(EMOTE_SVALNA_IMPALE
 	// 7) rides the SpellHitTarget leg (no bridge); JustEngagedWith
@@ -20427,8 +20453,9 @@ func init() {
 	// under the CreateLuaEvent doctrine (event 1, the auriaya
 	// engage-port precedent); the impaling-spear
 	// scheduler leg (random-target, no bridge) and the gauntlet-action
-	// scheduler legs stay out (no-DoAction bridge; the gothik
-	// phase-machine precedent) — documented in the lua header.
+	// scheduler legs stay out — ev38 dispatch bridged; senders npc_crok_scourgebane waypoint/SetGUID legs
+	// unported (boss_sister_svalna.cpp:567,606,661) behind unbridged
+	// at_icc_start_frostwing_gauntlet AreaTrigger (:1490) — documented in the lua header.
 	// npc_impaling_spear (38248) has zero bridgeable arms (NOT
 	// registered); the 3 spell scripts join the no-SpellScript-bridge
 	// queue and at_icc_start_frostwing_gauntlet the no-AreaTrigger
@@ -20535,8 +20562,9 @@ func init() {
 	// bridge — she never actually dies, damage is negated); Talk
 	// (SAY_VALITHRIA_ENTER_COMBAT 0 / SAY_VALITHRIA_BERSERK 6 /
 	// SAY_VALITHRIA_DREAM_PORTAL 1) ride scheduler legs (no-timer-bridge;
-	// the EVENT_INTRO_TALK leg is scheduled from DoAction
-	// ACTION_ENTER_COMBAT — no-DoAction bridge);
+	// ev38 dispatch bridged; sender npc_green_dragon_combat_trigger
+	// JustEnteredCombat unported (boss_valithria_dreamwalker.cpp:510); trigger +
+	// valithria unregistered);
 	// SAY_VALITHRIA_PLAYER_DEATH 5 is declared but never referenced by a
 	// Talk() call (dead text evidence); InitializeAI's _spawnHealth arm
 	// (curhealth via GetCreatureData(spawnId)) rides the unbridged
@@ -20576,8 +20604,8 @@ func init() {
 	// SAY_AIR_PHASE 5 / SAY_PHASE_2 6) have no-timer-bridge (the
 	// boss_toravon precedent); SAY_RESPITE_FOR_A_TORMENTED_SOUL 4 is
 	// declared but never referenced by a Talk() call (dead text
-	// evidence); the DoAction ACTION_START_FROSTWYRM intro machine has
-	// no-DoAction bridge; JustReachedHome SetBossState FAIL has no
+	// evidence); ev38 dispatch bridged; sender at_sindragosa_lair AreaTrigger unported
+	// (boss_sindragosa.cpp:1484-1505); JustReachedHome SetBossState FAIL has no
 	// instance bridge (no event-24 port precedent);
 	// spell_sindragosa_ice_tomb_target HandleSindragosaTalk is cross-AI
 	// Talk(EMOTE_WARN_FROZEN_ORB 7) (no cross-AI-Talk bridge);
@@ -20619,8 +20647,9 @@ func init() {
 	// victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
 	// player-gated variant precedent; the !me->IsInEvadeMode() and
 	// !events.IsInPhase(PHASE_OUTRO) legs have no bridges). No other
-	// bridgeable arm in the file: DoAction Talk(SAY_LK_INTRO_1 0 /
-	// SAY_LK_FROSTMOURNE_ESCAPE 8) has no-DoAction bridge; SpellHit
+	// bridgeable arm in the file: ev38 dispatch bridged; senders tirion MovementInform
+	// (boss_the_lich_king.cpp:1182) + terenas UpdateAI / jump SpellScript (:1809,
+	// :2629) unported; SpellHit
 	// Talk(SAY_LK_FROSTMOURNE_KILL 9) is event 15 (never fires);
 	// MovementInform Talk(SAY_LK_REMORSELESS_WINTER 4 ×2) and the
 	// cross-AI tirion->AI()->Talk(SAY_TIRION_OUTRO_2) have no
@@ -20743,7 +20772,9 @@ func init() {
 	// (event 4, the sjonnir precedent); KilledUnit Talk(SAY_KILL 2) gated
 	// on victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
 	// player-gated variant precedent). No other bridgeable arm in the
-	// file: DoAction Talk(SAY_CLONE 3) has no-DoAction bridge; the
+	// file: DoAction Talk(SAY_CLONE 3) — PORTED inline in
+	// boss_baltharus_the_warborn.lua (baltharusCloneTick, DamageTaken
+	// latch); no ev38 receipt needed; the
 	// EVENT_INTRO_TALK Talk(SAY_BALTHARUS_INTRO 0) has no-timer-bridge;
 	// the JustDied _JustDied() instance leg and the cross-AI
 	// xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH) leg have no

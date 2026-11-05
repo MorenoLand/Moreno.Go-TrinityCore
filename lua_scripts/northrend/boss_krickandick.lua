@@ -84,9 +84,10 @@
 --   (2026-10-24): krick->CastSpell(target, 69024 / 69028), non-triggered,
 --   via FindNearestCreature krick (barrage precedent) + the random-player
 --   picks below; re-arms {7s,10s} / 15s unconditional per C++ (:239, :247).
--- boss_ick DoAction (:191-217) — ACTION_STORE_OLD_TARGET /
---   ACTION_RESET_THREAT threat store/reset machine: no DoAction /
---   threat-manager bridge.
+-- boss_ick DoAction (:191-217) — ACTION_STORE_OLD_TARGET / ACTION_RESET_THREAT
+-- threat store/reset machine: ev38 dispatch bridged, but both senders ride
+-- unported SpellScript/AuraScript (boss_krickandick.cpp:608, :630) and the
+-- receiver needs unbridged ClearFixate/ResetThreat.
 -- boss_krick JustSummoned (:332-340) — _summons.Summon plus the
 --   NPC_EXPLODING_ORB triggered self-casts (SPELL_EXPLODING_ORB 69017,
 --   SPELL_AUTO_GROW 69020): no summon-list bridge.

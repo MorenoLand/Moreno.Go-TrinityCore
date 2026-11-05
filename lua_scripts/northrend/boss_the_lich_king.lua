@@ -149,7 +149,7 @@
 -- terenas not registered in this file — wrong creature.
 -- npc_tirion_fordring_tft (NPC_HIGHLORD_TIRION_FORDRING_LK 38995) —
 -- NOT registered: Talk(SAY_TIRION_INTRO_1 0) rides DoAction
--- ACTION_CONTINUE_INTRO (no-DoAction bridge); Talk(SAY_TIRION_INTRO_2
+-- ACTION_CONTINUE_INTRO (ev38 dispatch bridged; sender LK MovementInform POINT_LK_INTRO_3 (boss_the_lich_king.cpp:839-843) unported — no MovementInform bridge — and receiver tirion unregistered); Talk(SAY_TIRION_INTRO_2
 -- 1) (EVENT_INTRO_TALK_1) and Talk(SAY_TIRION_OUTRO_1 2)
 -- (EVENT_OUTRO_TALK_1) are scheduler-driven on the PHASE_INTRO /
 -- PHASE_OUTRO machines (CreateLuaEvent exists, but the unbridged
@@ -165,8 +165,14 @@
 -- Talk(SAY_TERENAS_INTRO_1..3 0..2) (EVENT_FROSTMOURNE_TALK_1..3,
 -- DoAction ACTION_FROSTMOURNE_INTRO scheduler) and
 -- Talk(SAY_TERENAS_OUTRO_1..2 0..1) (EVENT_OUTRO_TERENAS_TALK_1..2,
--- IsSummonedBy scheduler) — no-DoAction bridge; the timer bridge
--- exists but the phase/DoAction/summon-machine drivers gate every arm
+-- IsSummonedBy hook) — ev38 dispatch bridged; intro talks gated on
+-- ACTION_FROSTMOURNE_INTRO senders LK EVENT_FROSTMOURNE_HEROIC
+-- (boss_the_lich_king.cpp:1073) + instance EVENT_TELEPORT_TO_FROSTMOURNE
+-- (instance_icecrown_citadel.cpp:1463), both unported; outro talks gated on the
+-- unported outro summon chain (broken-frostmourne ACTION_SUMMON_TERENAS,
+-- :883/:1931) — ev22 IsSummonedBy dispatch is bridged but a bare ev22 port
+-- would fabricate outro Talks in the Frostmourne room (the FROSTMOURNE_INTRO
+-- cancel never fires in Lua)
 -- (gothik counterpoint).
 -- PORTED (2026-10-17 timer re-sweep; in-house spot-verified vs C++
 -- :1308-1313 + runtime before applying; delegated audit reconciled):
@@ -259,8 +265,10 @@
 -- spirit_bomb/valkyr/strangulate stay unregistered as documented.)
 -- SpellScript legs: ice_burst_target_search REACT_PASSIVE (:2212-2221)
 -- and restore_soul REACT_PASSIVE on wicked spirits (:2632-2641) — no
--- SpellScript bridge; both add AIs unregistered (restore_soul also
--- rides the no-DoAction-bridge ACTION_TELEPORT_BACK).
+-- SpellScript bridge; both add AIs unregistered (restore_soul also rides LK-side ACTION_TELEPORT_BACK — ev38 dispatch
+-- bridged, but sender restore_soul SpellScript (boss_the_lich_king.cpp:2629)
+-- unported, no SpellScript bridge, and the LK-side arm itself unported; cf.
+-- terenas-side ACTION_TELEPORT_BACK, ported tick 215 via ev38.)
 
 -- CAST-STATE GATES PORTED (2026-11-04): boss :900/:1149
 -- (TRANSITION/OUTRO/FROSTMOURNE-exempt in C++, unconditional in Lua —

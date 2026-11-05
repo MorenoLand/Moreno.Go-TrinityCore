@@ -182,9 +182,10 @@
 --   legs, EnterEvadeMode/JustReachedHome instance legs
 --   (SetBossState FAIL / DoRemoveAurasDueToSpellOnPlayers) — no
 --   instance / motion bridges.
--- EVENT_SCENT_OF_BLOOD (:520-526) — heroic-gated (no difficulty
---   bridge) AND gated on !summons.empty() (no summon-list bridge);
---   one-shot, never re-armed — out on both counts.
+-- EVENT_SCENT_OF_BLOOD (:520-526) — heroic-gated via creature:IsHeroic()
+--   (bridged — the berserk port in this file uses it) AND gated on
+--   !summons.empty() (no summon-list bridge); one-shot, never re-armed —
+--   out on the summon-list gate alone.
 -- npc_high_overlord_saurfang_icc / npc_muradin_bronzebeard_icc —
 --   NOT registered (the bronjahm npc_corrupted_soul_fragment
 --   precedent); the outro arms port via the deathbringer-side relay

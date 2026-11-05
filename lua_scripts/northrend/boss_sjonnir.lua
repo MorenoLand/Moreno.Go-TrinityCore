@@ -50,10 +50,13 @@
 -- bookkeeping passthrough has no bridge).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 27978):
--- Reset / Initialize — _Reset() + abuseTheOoze = 0 — no bridge.
+-- Reset / Initialize — _Reset() + abuseTheOoze = 0 — PORTED 2026-11-05
+-- in sjonnirCombatEnd (ev2/ev23 share the handler; EnterEvadeMode ends
+-- with Reset(), CreatureAI.cpp:237).
 -- DoAction(ACTION_OOZE_DEAD 1) / GetData(DATA_ABUSE_THE_OOZE 2)
--- — abuseTheOoze counter — no DoAction / GetData bridge
--- (consumer: achievement_abuse_the_ooze below).
+-- — abuseTheOoze counter — PORTED 2026-11-05 in sjonnirDoAction (ev38)
+-- + the iron-sludge JustDied relay below (boss_sjonnir.cpp:291);
+-- consumer achievement_abuse_the_ooze ported (see below).
 -- UpdateAI event machine (boss_sjonnir.cpp:151-208), PORTED arms:
 -- EVENT_LIGHTNING_SHIELD DoCast(me, SPELL_LIGHTING_SHIELD 50831)
 -- non-triggered, one-shot 20s/25s, no re-arm — PORTED as a
@@ -104,14 +107,17 @@
 -- no bearer to run on.
 -- npc_iron_sludge (CreatureScript via
 -- GetHallsOfStoneAI<npc_iron_sludgeAI> (ScriptedAI);
--- NPC_IRON_SLUDGE = 28165, local enum — entry-verifiable but
--- bridge-blocked, NO registration; no Talk arms anywhere —
--- JustDied -> ObjectAccessor::GetCreature(instance GetGuidData
--- DATA_SJONNIR) -> DoAction(ACTION_OOZE_DEAD) — no
--- ObjectAccessor / GetGuidData / DoAction bridges).
+-- NPC_IRON_SLUDGE = 28165, local enum — entry-verifiable; no Talk arms
+-- anywhere — JustDied -> ObjectAccessor::GetCreature(instance GetGuidData
+-- DATA_SJONNIR) -> DoAction(ACTION_OOZE_DEAD) — PORTED 2026-11-05 in
+-- ironSludgeDied (dispatch ev38 + lookup GetInstanceCreature bridged;
+-- boss GUID latched by the ev5 SetGuidData in this file; entry 28165
+-- registered in boss_ai.go).
 -- achievement_abuse_the_ooze (AchievementCriteriaScript OnCheck:
--- Sjonnir->AI()->GetData(DATA_ABUSE_THE_OOZE) >= 5 — no GetData
--- / achievement bridges; joins the unmodeled-achievement queue).
+-- Sjonnir->AI()->GetData(DATA_ABUSE_THE_OOZE) >= 5) — PORTED 2026-11-05:
+-- checkAchievementCriteriaScript reads the victim motion's SetData latch
+-- (engine/world/achievement_criteria_scripts.go), threaded from the
+-- kill-credit path (kill.go creditQuestKills).
 
 local ENTRY_SJONNIR = 27978
 
@@ -129,6 +135,13 @@ local NPC_FORGED_IRON_DWARF = 27982
 local NPC_FORGED_IRON_TROGG = 27979
 local NPC_MALFORMED_OOZE = 27981
 local NPC_EARTHEN_DWARF = 27980
+local NPC_IRON_SLUDGE = 28165
+
+-- DATA_SJONNIR = 3 (halls_of_stone.h:34); DATA_ABUSE_THE_OOZE = 2 /
+-- ACTION_OOZE_DEAD = 1 (boss_sjonnir.cpp:53-55).
+local DATA_SJONNIR = 3
+local DATA_ABUSE_THE_OOZE = 2
+local ACTION_OOZE_DEAD = 1
 
 -- C++ PipeLocations (boss_sjonnir.cpp:67-71); o=0.0f falls back to the
 -- summoner's orientation in C++ (Object.cpp:2061), same as the Go bridge.
@@ -345,6 +358,9 @@ end
 local function sjonnirCombatEnd(event, creature)
     despawnSjonnirSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (:89): abuseTheOoze = 0; EnterEvadeMode ends with
+    -- Reset() (CreatureAI.cpp:237), and ev2/ev23 share this handler.
+    creature:SetData(DATA_ABUSE_THE_OOZE, 0)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -379,9 +395,36 @@ local function sjonnirJustSummoned(event, creature, summon)
     summon:MoveTo(0, 1295.21, 667.157, 189.691)
 end
 
+-- C++ instance OnCreatureCreate latching (InstanceScript::AddObject):
+-- the boss GUID goes in the instance store under DATA_SJONNIR so the
+-- sludge relay can resolve it via GetInstanceCreature.
+local function sjonnirSpawned(event, creature)
+    creature:SetGuidData(DATA_SJONNIR)
+end
+
+-- C++ DoAction (:137-141): ACTION_OOZE_DEAD increments the counter.
+local function sjonnirDoAction(event, creature, action)
+    if action == ACTION_OOZE_DEAD then
+        creature:SetData(DATA_ABUSE_THE_OOZE, creature:GetData(DATA_ABUSE_THE_OOZE) + 1)
+    end
+end
+
+-- C++ npc_iron_sludge::JustDied (:288-292): instance GetGuidData
+-- (DATA_SJONNIR) -> DoAction(ACTION_OOZE_DEAD); the GetInstanceCreature
+-- twin resolves the same stored GUID.
+local function ironSludgeDied(event, creature)
+    local sjonnir = creature:GetInstanceCreature(DATA_SJONNIR)
+    if sjonnir then
+        sjonnir:DoAction(ACTION_OOZE_DEAD)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_SJONNIR, 1, sjonnirEnterCombat)
 RegisterCreatureEvent(ENTRY_SJONNIR, 2, sjonnirCombatEnd)
 RegisterCreatureEvent(ENTRY_SJONNIR, 3, sjonnirTargetDied)
 RegisterCreatureEvent(ENTRY_SJONNIR, 4, sjonnirDied)
+RegisterCreatureEvent(ENTRY_SJONNIR, 5, sjonnirSpawned)
 RegisterCreatureEvent(ENTRY_SJONNIR, 23, sjonnirCombatEnd)
 RegisterCreatureEvent(ENTRY_SJONNIR, 19, sjonnirJustSummoned)
+RegisterCreatureEvent(ENTRY_SJONNIR, 38, sjonnirDoAction)
+RegisterCreatureEvent(NPC_IRON_SLUDGE, 4, ironSludgeDied)

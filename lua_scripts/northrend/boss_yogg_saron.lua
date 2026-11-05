@@ -334,8 +334,9 @@ RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
 -- (live, lua_creature_events.go:1950), no repeat re-arm consumed — the
 -- mal_ganis idiom for the own UpdateAI pre-loop CASTING returns
 -- (guardian :1208, corruptor :1277, crusher :1378 combined
--- aura-or-casting return, immortal :1507). No phase args on their
--- schedules, no DoAction/MovementInform scheduling, no instance legs.
+-- aura-or-casting return, immortal :1507). No phase args on their schedules; schedules are Reset/event-1-seeded, never
+-- DoAction-driven — no DoAction arm exists on these tentacle AIs
+-- (boss_yogg_saron.cpp:1181-1536); no instance legs.
 -- The shattered-illusion aura legs (sara :798, corruptor :1280 pre-Update
 -- returns, crusher :1378 aura arm) are out of family scope: Lua timers
 -- are wall-clock, the C++ pre-Update timer freeze is unmodeled. The blocked arms — all of Sara's
@@ -346,9 +347,9 @@ RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
 -- stay documented-only in the header above (the gothik precedent);
 -- voice EVENT_LOCK_DOOR + JustEngagedWith one-shots, constrictor /
 -- influence / ominous-cloud / brain / turned-champion / observation-ring
--- and yogg-keeper Reset one-shots, and keeper JustEnteredCombat
--- entry-gated one-shots are ungated (no phase args, no DoAction /
--- phase-machine legs) and ride event 1/23 below.
+-- and yogg-keeper Reset one-shots, and keeper JustEnteredCombat entry-gated one-shots are ungated (not
+-- DoAction-driven; the keeper DoAction arms stay out on unported senders — see
+-- header) and ride event 1/23 below.
 local ENTRY_GUARDIAN_OF_YOGG_SARON = 33136
 local ENTRY_CORRUPTOR_TENTACLE = 33985
 local ENTRY_CRUSHER_TENTACLE = 33966
@@ -755,9 +756,10 @@ RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 23, immortalReset)
 
 -- ===== Slice-E ungated one-shot ports (2026-10-15) =====
--- All arms below are ungated in C++: no phase args on their
--- schedules, no DoAction/MovementInform/phase-machine legs, no
--- instance legs — the stale "no-timer bridge" / "no random-target
+-- All arms below are ungated in C++: no phase args on their schedules; the
+-- ported one-shots are not DoAction-driven (sibling DoAction arms stay out on
+-- unported senders — influence JustDied :1428, cloud voice-Reset :506, champion
+-- illusions :1799, brain DamageTaken :1082); no instance legs — the stale "no-timer bridge" / "no random-target
 -- bridge" / DoCastAOE doctrines retracted under the
 -- CreateLuaEvent / DoCastAOE≡self-cast conventions (the gothik
 -- phase-gating precedent).

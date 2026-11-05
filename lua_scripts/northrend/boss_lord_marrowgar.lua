@@ -115,8 +115,9 @@
 -- have no instance bridge; DoAction(ACTION_CLEAR_SPIKE_IMMUNITIES)
 -- and MovementInform have no bridge.
 -- Talk(SAY_ENTER_ZONE 0) rides DoAction(ACTION_TALK_ENTER_ZONE),
--- which only fires from at_lord_marrowgar_entrance — no-DoAction
--- bridge (the krick ACTION_OUTRO precedent); the area trigger joins
+-- which only fires from at_lord_marrowgar_entrance — ev38 dispatch bridged;
+-- sender area-trigger TryHandleOnce (boss_lord_marrowgar.cpp:675-681) unported,
+-- no area-trigger bridge (krick relay N/A — no ported sender hook); the area trigger joins
 -- the unbridged-area-trigger queue (the pit_of_saron cavern-triggers
 -- precedent).
 -- Talk(SAY_BONESPIKE 3) is called by marrowgarAI->Talk from inside

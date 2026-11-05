@@ -76,9 +76,10 @@
 -- so C++-exactness is unaffected).
 -- The four minibosses' timer kits run under BossAI::UpdateAI base gates
 -- (ScriptedCreature.cpp:578/:584; PalehoofMinionsBossAI overrides no
--- UpdateAI), so all twelve arms carry the 500ms IsCasting defer (no
--- phase groups, no DoAction-gated arms), ported with per-entry event-1
--- scheduling carrying the C++ ScheduleTasks inits:
+-- UpdateAI), so all twelve arms carry the 500ms IsCasting defer (the timer arms themselves
+-- carry no phase groups and no DoAction gate; their engagement rides the
+-- unported ACTION_START_FIGHT DoAction machine — see deviation below), ported
+-- with per-entry event-1 scheduling carrying the C++ ScheduleTasks inits:
 --   boss_ravenous_furbolg (26684), ScheduleTasks :377-379, arms :386-398:
 --   EVENT_CRAZED DoCastSelf(SPELL_CRAZED 48139) -> CastSpell(creature,
 --   48139), init 10s, Repeat(20s,25s); EVENT_CHAIN_LIGHTNING

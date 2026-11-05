@@ -68,9 +68,10 @@
 --   SetReactState(REACT_PASSIVE) + Talk SAY_FAIL (2) +
 --   FindNearestCreature(NPC_TIME_RIFT 28409, 300.0f) -> MovePoint to the
 --   rift (or straight to MovementInform when already within 5.0f 2d,
---   or when no rift exists) — no DoAction / movement / react-state /
---   nearby-creature bridges; instance-side caller is
---   instance_culling_of_stratholme.cpp:495.
+--   or when no rift exists) — ev38 dispatch bridged; sender is the unported
+-- instance guardian-timeout tick (instance_culling_of_stratholme.cpp:495); leg
+-- body still blocked (MovePoint / react-state / SetBossState unbridged;
+-- FindNearestCreature itself is live).
 -- - SAY_AGGRO (0) / SAY_DEATH (1) / SAY_FAIL (2) are the only Talked
 --   lines.
 

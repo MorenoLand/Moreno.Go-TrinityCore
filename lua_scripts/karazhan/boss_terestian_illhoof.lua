@@ -231,7 +231,9 @@ local function portalJustSummoned(event, creature, summon)
 end
 
 -- C++ Reset/JustDied: portals DoAction(ACTION_DESPAWN_IMPS) + BossAI
--- summon cleanup; the grid sweep is the Lua twin (no DoAction relay).
+-- summon cleanup; the grid sweep is the Lua twin (ev38 dispatch bridged; no
+-- SummonList.DoAction relay — boss Reset/JustDied broadcast at
+-- boss_terestian_illhoof.cpp:78/:111; effect already ported by the grid sweep).
 local function despawnPortalMachine(creature)
     for _, imp in ipairs(creature:GetCreaturesInGrid(ENTRY_FIENDISH_IMP, 100)) do
         imp:Despawn()

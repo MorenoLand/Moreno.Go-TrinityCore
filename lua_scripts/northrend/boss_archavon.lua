@@ -81,9 +81,10 @@
 -- NPC_ARCHAVON_WARDER 32353 — unreferenced by every arm in this file
 -- (no summon legs).
 -- DoMeleeAttackIfReady() (:127) — no bridge.
--- No JustDied, no KilledUnit, no DamageTaken, no DoAction, no
--- MovementInform, no EnterEvadeMode override exist on this AI —
--- events 3/4 on the creature carry only the timer wipe.
+-- No JustDied, no KilledUnit, no DamageTaken, no DoAction arm exists in C++ on
+-- this AI (boss_archavon.cpp; zero DoAction hits in VaultOfArchavon), no
+-- MovementInform, no EnterEvadeMode override — events 3/4 on the creature carry
+-- only the timer wipe.
 
 local ENTRY_ARCHAVON = 31125
 

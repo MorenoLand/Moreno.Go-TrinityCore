@@ -96,8 +96,15 @@
 -- boss_professor_putricide DoAction — Talk(
 -- SAY_FESTERGUT_GASEOUS_BLIGHT 0) rides ACTION_FESTERGUT_GAS,
 -- Talk(SAY_ROTFACE_OOZE_FLOOD 2) rides ACTION_ROTFACE_OOZE, and
--- Talk(SAY_PHASE_TRANSITION_HEROIC 6) rides ACTION_CHANGE_PHASE —
--- no-DoAction bridge (the krick ACTION_OUTRO precedent).
+-- Talk(SAY_PHASE_TRANSITION_HEROIC 6) rides ACTION_CHANGE_PHASE — GAS Talk
+-- already relay-ported via festergut onInhaleBlight (boss_festergut.lua:290-296,
+-- krick pattern; arrival-path sender MovementInform POINT_FESTERGUT,
+-- boss_professor_putricide.cpp:378, still unported); ROTFACE_OOZE Talk stays out —
+-- ev38 dispatch bridged, senders MovementInform POINT_ROTFACE (:385) + own
+-- EVENT_ROTFACE_OOZE_FLOOD self-DoAction (:595) inside the unported PHASE_ROTFACE
+-- machine; CHANGE_PHASE Talk stays out — ev38 dispatch bridged, sender own
+-- DamageTaken latches (:356,362) feeding the unported tear-gas/MovementInform phase
+-- machine.
 -- boss_professor_putricide JustEngagedWith instance legs —
 -- instance->DoCastSpellOnPlayers(LIGHT_S_HAMMER_TELEPORT) /
 -- instance->SetBossState(DATA_PROFESSOR_PUTRICIDE,

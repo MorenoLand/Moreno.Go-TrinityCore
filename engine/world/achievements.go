@@ -843,14 +843,16 @@ func (s *session) playerHasAura(spellID uint32) bool {
 // achievement_criteria_data database rules before awarding criteria progress,
 // mirroring AchievementMgr::ConditionsSatisfied and AchievementCriteriaDataSet::Meets.
 func (s *session) meetsCriteriaRequirements(criterion achievementCriteriaEntry, miscValue1, miscValue2 uint32) bool {
-	return s.meetsCriteriaRequirementsWithTarget(criterion, miscValue1, miscValue2, nil)
+	return s.meetsCriteriaRequirementsWithTarget(criterion, miscValue1, miscValue2, nil, nil)
 }
 
 // meetsCriteriaRequirementsWithTarget is the target-aware form of
 // meetsCriteriaRequirements: DATA_TYPE_SCRIPT gates (achievement_scripts.cpp)
 // evaluate against the kill target when the criteria fires from a kill.
 // C++: ScriptMgr::OnCriteriaCheck(scriptId, source, target).
-func (s *session) meetsCriteriaRequirementsWithTarget(criterion achievementCriteriaEntry, miscValue1, miscValue2 uint32, target *session) bool {
+// victim is the killed creature's motion for creature-kill criteria:
+// boss-file OnCheck reads the target's AI GetData slots off it.
+func (s *session) meetsCriteriaRequirementsWithTarget(criterion achievementCriteriaEntry, miscValue1, miscValue2 uint32, target *session, victim *creatureMotion) bool {
 	if s.player == nil {
 		return false
 	}
@@ -949,7 +951,7 @@ func (s *session) meetsCriteriaRequirementsWithTarget(criterion achievementCrite
 		case criteriaDataTypeScript: // 11
 			// AchievementCriteriaScript gate (scripts/World/achievement_scripts.cpp);
 			// without this, script-gated criteria were silently auto-passed.
-			if !checkAchievementCriteriaScript(rule.ScriptName, s, target) {
+			if !checkAchievementCriteriaScript(rule.ScriptName, s, target, victim) {
 				return false
 			}
 		}
@@ -968,6 +970,18 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 // updateAchievementCriteriaWithTarget threads the kill target to the
 // DATA_TYPE_SCRIPT gate (C++ OnCheck's Unit* target).
 func (s *session) updateAchievementCriteriaWithTarget(criterionType, asset uint32, quantity uint32, target *session) {
+	s.updateAchievementCriteriaWithTargets(criterionType, asset, quantity, target, nil)
+}
+
+// updateAchievementCriteriaWithCreatureTarget is the creature-kill form:
+// victim is the killed creature's motion, threaded to the DATA_TYPE_SCRIPT
+// gate so boss-file OnCheck can read the target's AI GetData slots
+// (boss_auriaya.cpp, boss_sjonnir.cpp, boss_king_dred.cpp).
+func (s *session) updateAchievementCriteriaWithCreatureTarget(criterionType, asset uint32, quantity uint32, victim *creatureMotion) {
+	s.updateAchievementCriteriaWithTargets(criterionType, asset, quantity, nil, victim)
+}
+
+func (s *session) updateAchievementCriteriaWithTargets(criterionType, asset uint32, quantity uint32, target *session, victim *creatureMotion) {
 	if s.player == nil || s.server == nil {
 		return
 	}
@@ -994,7 +1008,7 @@ func (s *session) updateAchievementCriteriaWithTarget(criterionType, asset uint3
 	}
 
 	for _, criterion := range matched {
-		s.applyCriteriaProgressWithTarget(criterion, quantity, asset, target)
+		s.applyCriteriaProgressWithTargets(criterion, quantity, asset, target, victim)
 	}
 }
 
@@ -1085,10 +1099,16 @@ func (s *session) applyCriteriaProgress(criterion achievementCriteriaEntry, quan
 // applyCriteriaProgressWithTarget threads the kill target to the
 // DATA_TYPE_SCRIPT gate (C++ OnCheck's Unit* target).
 func (s *session) applyCriteriaProgressWithTarget(criterion achievementCriteriaEntry, quantity, asset uint32, target *session) {
+	s.applyCriteriaProgressWithTargets(criterion, quantity, asset, target, nil)
+}
+
+// applyCriteriaProgressWithTargets threads both the kill target and the
+// killed creature's motion to the DATA_TYPE_SCRIPT gate.
+func (s *session) applyCriteriaProgressWithTargets(criterion achievementCriteriaEntry, quantity, asset uint32, target *session, victim *creatureMotion) {
 	if _, done := s.earnedAchievements[criterion.AchievementID]; done {
 		return
 	}
-	if !s.meetsCriteriaRequirementsWithTarget(criterion, quantity, asset, target) {
+	if !s.meetsCriteriaRequirementsWithTarget(criterion, quantity, asset, target, victim) {
 		return
 	}
 	// SetCriteriaProgress (AchievementMgr.cpp:1355-1360): a timed criterion

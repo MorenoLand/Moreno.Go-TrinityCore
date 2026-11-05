@@ -119,7 +119,7 @@
 -- bridge) and Delirious Slash (gated on Blood Mirror's _offtankGUID,
 -- never set in this port, + Fly tier).
 -- boss_blood_queen_lana_thel DoAction — ACTION_KILL_MINCHAR leg
--- (no-DoAction bridge; the krick ACTION_OUTRO precedent); the
+-- (ev38 dispatch bridged; sender instance EVENT_UPDATE_EXECUTION_TIME (instance_icecrown_citadel.cpp:1387) unported — instance event machine; krick relay N/A); the
 -- EnterEvadeMode / SetGUID vampire-bloodbolt GUID-set bookkeeping
 -- rides GUID / cross-AI bridges that do not exist; the quest-credit
 -- legs ride the absent quest bridge.

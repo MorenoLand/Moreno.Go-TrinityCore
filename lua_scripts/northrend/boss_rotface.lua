@@ -58,8 +58,12 @@
 -- Event 15 itself is live (boss_ai.go:1904, grobbulus precedent).
 -- boss_rotface JustEngagedWith instance legs —
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
--- professor->AI()->DoAction(ACTION_ROTFACE_COMBAT) (no-DoAction
--- bridge; the krick ACTION_OUTRO precedent); DoZoneInCombat (:138)
+-- professor->AI()->DoAction(ACTION_ROTFACE_COMBAT) stays out — ev38 dispatch
+-- bridged and sender rotface JustEngagedWith IS ported (boss_rotface.cpp:136),
+-- but receiver arm ACTION_ROTFACE_COMBAT (boss_professor_putricide.cpp:440-471)
+-- is the unported PHASE_ROTFACE machine
+-- (SetPhase/MovePoint/REACT_PASSIVE/dummy-GUID init); no portable leg for a
+-- krick relay; DoZoneInCombat (:138)
 -- is PORTED 2026-10-23 via the live bridge (C++ arm order — after
 -- Talk, before the proc self-cast); JustDied leg
 -- professor->AI()->DoAction(ACTION_ROTFACE_DEATH) — Talk leg

@@ -70,8 +70,12 @@
 -- MoveInLineOfSight / AttackStart _inFakeDeath /
 -- NON_ATTACKABLE guards collapse into the pump (sight leg is the Go
 -- aggro-scan flag guard, creaturemotion.go:4258; HasFlag bridged
--- 2026-10-23 but no Lua arm needs it); JustDied kael->AI()->DoAction(ACTION_ACTIVE_
--- ADVISOR) is a cross-creature/instance bridge — unmodeled.
+-- 2026-10-23 but no Lua arm needs it); JustDied kael->AI()->DoAction(
+-- ACTION_ACTIVE_ADVISOR): ev38 dispatch is bridged
+-- (lua_creature_events.go:802) and the lookup is bridged
+-- (creature:GetInstanceCreature(DATA_KAELTHAS), :5865), but the sole
+-- consumer — Kael's ACTION_ACTIVE_ADVISOR arm, boss_kaelthas.cpp:509-544 —
+-- is the unported phase machine, so the call would fire into no handler.
 -- Thaladred (20064): OnEnterCombat(1): Talk(SAY_THALADRED_
 -- AGGRO) + JustEngagedWith AddThreat(who, 5000000.0f) PORTED
 -- (anonymous EnterCombat handler below) + 1s pump (C++ arm
@@ -141,9 +145,12 @@
 -- unmodeled — DoAction chains (ACTION_START_ENCOUNTER /
 -- ACTION_PREPARE_ADVISORS / ACTION_ACTIVE_ADVISOR /
 -- ACTION_SCHEDULE_COMBAT_EVENTS) are cross-creature /
--- instance-driven (instance SetBossState(DATA_KAELTHAS),
--- GetGuidData advisor GUIDs, GO statue/window arms — no
--- instance/GUID/gameobject bridges); the 7-weapon summon
+-- instance-driven; ev38 dispatch, SetBossState, GetBossState, GetGuidData
+-- and GetInstanceCreature are all bridged (lua_creature_events.go:802,
+-- :5802, :5821, :5855, :5865), but the consumer bodies are the unported
+-- phase machine (GO statue/window arms have no instance-GetGameObject
+-- bridge; PREPARE_ADVISORS needs EnterEvadeMode, unbridged; the machine's
+-- MovePoint legs have no MovementInform hook); the 7-weapon summon
 -- machine (SPELL_SUMMON_WEAPONS 36976 + SPELL_SUMMON_
 -- WEAPONA-G 36958-36964 — driver unmodeled, summon bridge live); the EVENT_
 -- RESUME path after the phase-5 transition MovePoints (no
@@ -244,8 +251,11 @@ local kaelPreEncounter = {}
 
 -- C++ MoveInLineOfSight (boss_kaelthas.cpp:561): PHASE_NONE +
 -- IsValidAttackTarget(who) + target within 30yd -> SetTarget
--- (the DoAction / SetInCombatWith / AddThreat legs have no
--- bridge — documented).
+-- (the DoAction leg's ev38 dispatch is bridged but its sole consumer —
+-- the START_ENCOUNTER arm, boss_kaelthas.cpp:485-496 — is the unported
+-- phase machine, so it is latent; AddThreat is bridged
+-- (lua_creature_events.go:2046); only SetInCombatWith has no bridge —
+-- documented).
 RegisterCreatureEvent(ENTRY_KAELTHAS, 27, function(_, creature, unit)
     local guid = creature:GetGUID()
     if kaelPreEncounter[guid] == false then
@@ -280,8 +290,10 @@ end)
 -- C++ boss_kaelthasAI::Reset (boss_kaelthas.cpp:454-464) in C++ order:
 -- RemoveFlag NOT_SELECTABLE (:458) + EmoteState NONE (:459) +
 -- SetDisableGravity(false) (:460) + SetTarget empty (:461) +
--- SetObjectScale(1.0) (:462); the DoAction PREPARE_ADVISORS leg and
--- BossAI::Reset bookkeeping stay out (no DoAction / instance bridges).
+-- SetObjectScale(1.0) (:462); the DoAction PREPARE_ADVISORS leg and BossAI::Reset bookkeeping stay out
+-- (ev38 dispatch bridged; sender is Kael's own Reset self-call at
+-- boss_kaelthas.cpp:457, but the leg body needs instance GetGuidData (:490-493)
+-- + EnterEvadeMode, both unbridged).
 -- The scale/gravity/emote writes are native-value idempotent at spawn
 -- (ev23 fires ahead of spawn too); the SIZE_INCREASE ladder (:827-847)
 -- stays out -- it fires from MovementInform POINT_TRANSITION_CENTER_
@@ -379,8 +391,11 @@ end)
 -- C++ JustDied: SAY_THALADRED_DEATH fires only after the
 -- unmodeled resurrection (_hasRessurrected gate) — never
 -- fires in this model (solarian precedent); cleanup only
--- (the kael->AI()->DoAction(ACTION_ACTIVE_ADVISOR) arm is
--- a cross-creature/instance bridge — unmodeled).
+-- (the kael->AI()->DoAction(ACTION_ACTIVE_ADVISOR) arm: ev38 dispatch and
+-- the GetInstanceCreature lookup are bridged (lua_creature_events.go:802,
+-- :5865), but the sole consumer — Kael's ACTION_ACTIVE_ADVISOR arm,
+-- boss_kaelthas.cpp:509-544 — is the unported phase machine, so the call
+-- would fire into no handler).
 RegisterCreatureEvent(ENTRY_THALADRED, 4, function(_, creature)
     fullReset(creature:GetGUID())
 end)

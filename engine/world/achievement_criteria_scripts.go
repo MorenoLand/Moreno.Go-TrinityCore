@@ -13,11 +13,42 @@ package world
 // return false, matching C++ GET_SCRIPT_RET's default for unregistered scripts
 // (ScriptMgr.cpp:1959).
 
+// CreatureAI::GetData type numbers for the boss-file achievement latches
+// (the AI-local enum values, not instance DATA_* ids).
+const (
+	dataAuriayaCrazyCatLady   = 30063077 // boss_auriaya.cpp:109 DATA_CRAZY_CAT_LADY
+	dataAuriayaNineLives      = 30763077 // boss_auriaya.cpp:108 DATA_NINE_LIVES
+	dataSjonnirAbuseTheOoze   = 2        // boss_sjonnir.cpp:54 DATA_ABUSE_THE_OOZE
+	dataKingDredRaptorsKilled = 2        // boss_king_dred.cpp:43 DATA_RAPTORS_KILLED
+)
+
+// bossLatchData reads one CreatureAI::SetData slot off the killed
+// creature's motion — the Lua creature:SetData store
+// (lua_creature_events.go), guarded by the server motionMu the same
+// way the Lua GetData reader takes it. Absent types read 0, the C++
+// member default. A nil victim or server reads 0 (fail-closed).
+func bossLatchData(s *Server, victim *creatureMotion, dataID uint32) uint32 {
+	if s == nil || victim == nil {
+		return 0
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	return victim.ScriptData[dataID]
+}
+
 // checkAchievementCriteriaScript evaluates one DATA_TYPE_SCRIPT criteria gate.
 // source is the player earning the criteria; target is the kill target when the
 // criteria fires from a kill (nil for creature kills and non-kill criteria),
 // mirroring AchievementCriteriaScript::OnCheck(Player* source, Unit* target).
-func checkAchievementCriteriaScript(name string, source, target *session) bool {
+// victim is the killed creature's motion when the criteria fires from a
+// creature kill (nil otherwise): the C++ OnCheck receives the kill target
+// as a Unit*, and boss-file criteria read the target's AI GetData slots
+// off it (boss_auriaya.cpp, boss_sjonnir.cpp, boss_king_dred.cpp) — the
+// Lua SetData/GetData store on the motion (lua_creature_events.go).
+// The kill-credit path (kill.go creditQuestKills) resolves the victim
+// before the update, so a nil victim here is fail-closed, matching the
+// unknown-script-name default below.
+func checkAchievementCriteriaScript(name string, source, target *session, victim *creatureMotion) bool {
 	switch name {
 	case "achievement_save_the_day": // scripts/World/achievement_scripts.cpp:53-65
 		// BattlegroundWS::CheckAchievementCriteriaMeet(BG_CRITERIA_CHECK_SAVE_THE_DAY):
@@ -246,6 +277,48 @@ func checkAchievementCriteriaScript(name string, source, target *session) bool {
 		sa.mu.Lock()
 		defer sa.mu.Unlock()
 		return sa.DemolishersAlive[teamForRace(source.player.Race)]
+
+	case "achievement_crazy_cat_lady": // boss_auriaya.cpp:679-695
+		// OnCheck: target->ToCreature()->AI()->GetData(DATA_CRAZY_CAT_LADY
+		// 30063077) — true while no Sanctum Sentry died: the latch starts
+		// set (ctor/Reset, boss_auriaya.cpp:137/:142) and the sentry
+		// JustDied relay (boss_auriaya.cpp:301) clears it via DoAction(0);
+		// the Lua port keeps it in the boss motion's SetData store.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataAuriayaCrazyCatLady) != 0
+
+	case "achievement_nine_lives": // boss_auriaya.cpp:661-677
+		// OnCheck: target->ToCreature()->AI()->GetData(DATA_NINE_LIVES
+		// 30763077) — true once a Feral Defender really died: the latch
+		// starts clear and the defender JustDied relay
+		// (boss_auriaya.cpp:452) sets it via DoAction(1); the feign-death
+		// revives (DamageTaken :427-446) never reach JustDied.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataAuriayaNineLives) != 0
+
+	case "achievement_abuse_the_ooze": // boss_sjonnir.cpp:301-319
+		// OnCheck: Sjonnir->AI()->GetData(DATA_ABUSE_THE_OOZE 2) >= 5 —
+		// the counter starts at 0 (Reset :89) and each Iron Sludge
+		// JustDied (boss_sjonnir.cpp:291) increments it via DoAction(1);
+		// the Lua port keeps it in the boss motion's SetData store.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataSjonnirAbuseTheOoze) >= 5
+
+	case "achievement_king_dred": // boss_king_dred.cpp:286-303
+		// OnCheck: Dred->AI()->GetData(DATA_RAPTORS_KILLED 2) >= 6 —
+		// the counter starts at 0 (Reset :70) and each raptor JustDied
+		// (boss_king_dred.cpp:220/:276) increments it via DoAction(1);
+		// the Lua port keeps it in the boss motion's SetData store.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataKingDredRaptorsKilled) >= 6
 
 	// The remaining registrations are unportable without their Go state:
 	// - achievement_bg_ic_glaive_grave / achievement_bg_ic_mowed_down /

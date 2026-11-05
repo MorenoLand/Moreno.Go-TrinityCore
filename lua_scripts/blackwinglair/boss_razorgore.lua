@@ -20,9 +20,9 @@
 -- secondPhase is false (the C++ @todo admits this is wrong — real
 -- behavior nukes the room and respawns him — but the damage-zeroing is
 -- the shipped logic). The phase-two DoAction trigger comes from the
--- instance script once the egg event completes; with no
--- instance-script/DoAction bridge it can never fire, so secondPhase
--- stays false: phase-two timers (cleave 22540 15s then {7s,10s} /
+-- instance script once the egg event completes; ev38 dispatch is bridged
+-- (lua_creature_events.go:802) but the sender is the unported instance
+-- script, so it can never fire and secondPhase stays false: phase-two timers (cleave 22540 15s then {7s,10s} /
 -- warstomp 24375 35s then {15s,25s} / fireball volley 22425 7s then
 -- {12s,15s} / conflagration 23023 12s then 30s, all non-triggered
 -- DoCastVictim with unconditional re-arms) are modeled as code but
@@ -38,15 +38,18 @@
 -- (_Reset/_JustDied/BossAI::JustEngagedWith and the
 -- DATA_RAZORGORE_THE_UNTAMED bookkeeping arms skipped); the
 -- Reset/JustDied instance->SetData(DATA_EGG_EVENT, NOT_STARTED) arms
--- have no bearer; RemoveAllAuras/SetFullHealth in DoChangePhase have
--- no bridges; the go_orb_of_domination OnGossipHello (instance
+-- have no bearer; RemoveAllAuras/SetFullHealth in DoChangePhase are PORTED
+-- (RemoveAllAuras live, lua_creature_events.go:1523; SetFullHealth rides
+-- SetHealth(GetMaxHealth())) — see doChangePhase below; the
+-- go_orb_of_domination OnGossipHello (instance
 -- GetCreature(DATA_RAZORGORE_THE_UNTAMED) -> Attack(player, true) +
 -- CastSpell SPELL_MINDCONTROL 42013) rides instance legs with no bridge
 -- (GO gossip hello itself is live) and the spell_egg_event
 -- SpellScript (OnHit -> instance->SetData(DATA_EGG_EVENT, SPECIAL))
 -- has no bridge — the mind-control/orb/egg-destruction gameplay
--- has no bearer, so the fight can never reach phase two (DoAction has
--- no Lua bridge either).
+-- has no bearer, so the fight can never reach phase two (ev38 dispatch is
+-- bridged, lua_creature_events.go:802; the blocker is the unported
+-- instance-script sender, instance_blackwing_lair.cpp:262-265).
 
 local ENTRY_RAZORGORE = 12435
 
@@ -150,9 +153,9 @@ end
 
 -- C++ DoChangePhase: arms the four phase-two timers, sets secondPhase,
 -- RemoveAllAuras + SetFullHealth (both bridged now: RemoveAllAuras
--- is live, SetFullHealth rides SetHealth(GetMaxHealth())). Unreachable
--- today: no DoAction/instance-script bridge can trigger
--- ACTION_PHASE_TWO (1).
+-- is live, SetFullHealth rides SetHealth(GetMaxHealth())). Unreachable today: ev38 dispatch bridged, but the sender is the unported
+-- instance script — instance_blackwing_lair.cpp:265 (EVENT_RAZOR_PHASE_TWO, fed
+-- by egg-count SetData at :217-227) — so ACTION_PHASE_TWO (1) can never fire.
 local function doChangePhase(creature, guid)
     secondPhase[guid] = true
     schedule(guid, "cleave", 15000, function()
@@ -184,7 +187,9 @@ local function razorgoreEnterCombat(event, creature, target)
     secondPhase[guid] = nil
     -- C++ phase one schedules nothing: the mind-controlled orb
     -- handler drives the fight, not the AI. Combat AI starts only on
-    -- DoAction(ACTION_PHASE_TWO), which has no Lua bridge.
+    -- DoAction(ACTION_PHASE_TWO), whose ev38 dispatch is bridged
+    -- (lua_creature_events.go:802) but whose sender is the unported instance
+    -- script (instance_blackwing_lair.cpp:262-265), so it never fires.
 end
 
 -- C++ DamageTaken: pre-damage hook; zeroes all damage until phase two

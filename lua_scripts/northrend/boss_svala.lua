@@ -66,7 +66,7 @@
 -- sacrificed latch — see the phase-machine section above). The
 -- _JustDied() instance passthrough has no bridge.
 -- npc_scourge_hulk (26555) — the scourge hulk's two spell-timer arms
--- are ungated in its UpdateAI (no phase groups, no DoAction legs —
+-- are ungated in its UpdateAI (plain Reset-seeded countdowns, no phase groups —
 -- the yogg_saron adds precedent), scheduled here on event 1 with the
 -- maiden CreateLuaEvent convention; its C++ Reset re-seeds both
 -- timers, matching combat-start scheduling (the xt002 precedent):

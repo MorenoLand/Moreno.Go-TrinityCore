@@ -139,9 +139,13 @@
 -- DOCUMENTED-ONLY (registrations: 36855 / 37890 / 37949 / 38472 /
 -- 38485):
 -- boss_lady_deathwhisper DoAction(ACTION_START_INTRO) —
--- Talk(SAY_INTRO_1 0) rides a DoAction leg with no bridge (the
--- krick ACTION_OUTRO precedent); Talk(SAY_INTRO_2 1 .. SAY_INTRO_7
--- 6) ride the intro scheduler machine (intro machine — no bridge).
+-- Talk(SAY_INTRO_1 0) rides DoAction(ACTION_START_INTRO) — ev38 dispatch
+-- bridged; sole sender is the unported OnlyOnceAreaTrigger
+-- at_lady_deathwhisper_entrance (boss_lady_deathwhisper.cpp:1048).
+-- Talk(SAY_INTRO_2 1 .. SAY_INTRO_7 6) ride the intro scheduler machine
+-- (:239-269) — timers ARE bridged (CreateLuaEvent); stays out because the
+-- sole trigger is the unported AreaTrigger DoAction above and the machine is
+-- PHASE_INTRO-gated (set only in the DoAction receiver :238).
 -- boss_lady_deathwhisper JustEngagedWith scheduler legs —
 -- Talk(SAY_BERSERK 15) is PORTED (10-min berserk timer, above);
 -- Talk(SAY_DOMINATE_MIND 10) is PORTED 2026-10-25 (onDominateMind:

@@ -85,8 +85,11 @@
 -- fabricate air-phase casts) — all unbridged.
 -- SAY_RESPITE_FOR_A_TORMENTED_SOUL 4 is declared in the text enum
 -- but never referenced by a Talk() call — dead text evidence.
--- boss_sindragosa DoAction — ACTION_START_FROSTWYRM intro machine
--- (no-DoAction bridge); JustReachedHome SetBossState FAIL leg
+-- boss_sindragosa DoAction — ACTION_START_FROSTWYRM intro machine (ev38
+-- dispatch bridged; senders at_sindragosa_lair OnTrigger
+-- (boss_sindragosa.cpp:1505) + instance OnCreatureRemove
+-- (instance_icecrown_citadel.cpp:493) unported, receiver arm is the unported
+-- flight machine); JustReachedHome SetBossState FAIL leg
 -- (no instance bridge, no event-24 port precedent).
 -- spell_sindragosa_ice_tomb_target::HandleSindragosaTalk —
 -- creatureCaster->AI()->Talk(EMOTE_WARN_FROZEN_ORB 7, GetHitUnit())
@@ -97,9 +100,11 @@
 -- bridges that do not exist. npc_spinestalker (37534) /
 -- npc_rimefang_icc (37533) / npc_sindragosa_trash handler (37531)
 -- ARE registered — their pure timer arms are PORTED below (the
--- maiden CreateLuaEvent precedent); their intro DoAction flight
--- machines and the trash JustAppeared / SetData instance legs stay
--- out (no-DoAction / no-motion / no-instance bridges). The
+-- maiden CreateLuaEvent precedent); their intro DoAction flight machines and the trash JustAppeared / SetData
+-- instance legs stay out (ev38 dispatch bridged; senders at_sindragosa_lair
+-- (boss_sindragosa.cpp:1492,1496) + instance OnCreatureRemove
+-- (instance_icecrown_citadel.cpp:469,476) unported / no-motion / no-instance
+-- bridges). The
 -- frostwing whelp (37532) carries no timer arms — NOT registered.
 -- at_sindragosa_lair joins the no-AreaTrigger bridge queue (the
 -- boss_anubrekhan at_anubrekhan_entrance precedent);
@@ -367,8 +372,9 @@ end
 -- summon gating (the maiden CreateLuaEvent precedent); the UpdateAI
 -- CASTING gates are PORTED (500ms IsCasting defer, mal_ganis idiom
 -- — IsCasting live, lua_creature_events.go:1950; the old "no bridge /
--- timers fire unconditionally" claim is retracted). The intro
--- ACTION_START_FROSTWYRM flight machine stays out (no-DoAction bridge;
+-- timers fire unconditionally" claim is retracted). The intro ACTION_START_FROSTWYRM flight machine stays out (ev38 dispatch
+-- bridged; senders at_sindragosa_lair (boss_sindragosa.cpp:1492) + instance
+-- OnCreatureRemove (instance_icecrown_citadel.cpp:469) unported;
 -- MovePoint/MovementInform unbridged — SetDefaultMovementType IS
 -- bridged (lua_objects.go:633, pure field write) but carries no motion).
 local function onSpinestalkerRoar(creature, guid)
@@ -413,8 +419,9 @@ end
 -- DoCastSelf(SPELL_FROST_AURA_RIMEFANG, true) (:850-853) +
 -- EVENT_FROST_BREATH_RIMEFANG DoCastSelf(SPELL_FROST_BREATH)
 -- non-triggered {12s,15s} -> {35s,40s} (:791/:868-871). The
--- EVENT_ICY_BLAST flight machine stays out (no-motion bridge); the
--- intro flight machine stays out (no-DoAction bridge).
+-- EVENT_ICY_BLAST flight machine stays out (no-motion bridge); the intro flight machine stays out (ev38 dispatch bridged; senders
+-- at_sindragosa_lair (boss_sindragosa.cpp:1496) + instance OnCreatureRemove
+-- (instance_icecrown_citadel.cpp:476) unported).
 local function onRimefangFrostBreath(creature, guid)
     -- C++ rimefang UpdateAI pre-loop gate :862 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
     if creature:IsCasting() then

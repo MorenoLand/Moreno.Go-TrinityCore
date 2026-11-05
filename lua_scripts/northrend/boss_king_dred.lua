@@ -53,21 +53,24 @@
 -- re-arm); raptor sub-AI rotation arms ungated per C++ (plain
 -- countdowns, zero CASTING hits).
 -- DoAction(ACTION_RAPTOR_KILLED 1) ++raptorsKilled + GetData(
--- DATA_RAPTORS_KILLED 2) — no DoAction/GetData bridges
--- (drakkari_colossus precedent); its only caller is
--- achievement_king_dred — see below.
+-- DATA_RAPTORS_KILLED 2) — PORTED 2026-11-05 in kingDredDoAction (ev38)
+-- + the raptor JustDied relays below (boss_king_dred.cpp:220, :276);
+-- consumer achievement_king_dred ported (see below).
 -- npc_drakkari_gutripper (26641) / npc_drakkari_scytheclaw (26628) —
 -- PORTED 2026-10-24 (they spawn via the now-ported RAPTOR_CALL arm):
 -- ctor/Reset arms GutRipTimer/uiRendTimer = urand(10s,15s) ->
 -- DoCastVictim(SPELL_GUT_RIP 49710 / SPELL_REND 13738, non-triggered),
 -- re-arm urand(10s,15s); melee is engine-driven. JustDied cross-AI
--- DoAction(ACTION_RAPTOR_KILLED) stays out — ObjectAccessor +
--- instance-GetGuidData + DoAction have no bridges (the
--- achievement_king_dred counter with it, documented-only below).
+-- DoAction(ACTION_RAPTOR_KILLED) — PORTED 2026-11-05 in raptorDied
+-- (dispatch ev38 + lookup GetInstanceCreature bridged; boss GUID latched
+-- by the ev5 SetGuidData in this file; senders gutripper 26641 /
+-- scytheclaw 26628 registered in boss_ai.go); sole consumer the now-ported
+-- achievement_king_dred (counter ported above).
 -- achievement_king_dred — AchievementCriteriaScript (target
--- ToCreature -> AI()->GetData(DATA_RAPTORS_KILLED) >= 6) — no
--- achievement-criteria bridge (snakes precedent) + cross-AI GetData
--- bridge absent — documented-only.
+-- ToCreature -> AI()->GetData(DATA_RAPTORS_KILLED) >= 6) — PORTED
+-- 2026-11-05: checkAchievementCriteriaScript reads the victim motion's
+-- SetData latch (engine/world/achievement_criteria_scripts.go), threaded
+-- from the kill-credit path (kill.go creditQuestKills).
 
 local ENTRY_KING_DRED = 27483
 
@@ -82,6 +85,12 @@ local SPELL_REND = 13738
 
 local NPC_DRAKKARI_GUTRIPPER = 26641
 local NPC_DRAKKARI_SCYTHECLAW = 26628
+
+-- DATA_KING_DRED = 2 (drak_tharon_keep.h:33); DATA_RAPTORS_KILLED = 2 /
+-- ACTION_RAPTOR_KILLED = 1 (boss_king_dred.cpp:42-44).
+local DATA_KING_DRED = 2
+local DATA_RAPTORS_KILLED = 2
+local ACTION_RAPTOR_KILLED = 1
 
 local timers = {}
 
@@ -248,6 +257,9 @@ end
 
 local function kingDredLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode ends with Reset() (CreatureAI.cpp:237);
+    -- Reset (:70): raptorsKilled = 0.
+    creature:SetData(DATA_RAPTORS_KILLED, 0)
 end
 
 local function kingDredDied(event, creature, killer)
@@ -256,6 +268,8 @@ end
 
 local function kingDredReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (:70): raptorsKilled = 0.
+    creature:SetData(DATA_RAPTORS_KILLED, 0)
 end
 
 -- C++ npc_drakkari_gutripperAI / npc_drakkari_scytheclawAI
@@ -264,9 +278,10 @@ end
 -- DoCastVictim(SPELL_GUT_RIP 49710 / SPELL_REND 13738, non-triggered)
 -- with urand(10s,15s) re-arm; melee is engine-driven. JustSummoned
 -- (event 19) is the spawn twin (the shirrak precedent); the cross-AI
--- JustDied DoAction(ACTION_RAPTOR_KILLED) leg stays out (no
--- ObjectAccessor / instance-GetGuidData / DoAction bridges — the
--- achievement_king_dred counter with it, documented-only above).
+-- JustDied DoAction(ACTION_RAPTOR_KILLED) leg is portable-but-latent —
+-- dispatch IS bridged (ev38), lookup IS bridged (GetInstanceCreature :5865,
+-- unlatched); sole consumer is the unported achievement_king_dred
+-- (counter documented-only above).
 local function raptorRotationTick(creature, guid, key, spell)
     creature:CastSpell(nil, spell)
     schedule(guid, key, math.random(10000, 15000), function()
@@ -294,14 +309,43 @@ local function raptorGone(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ instance OnCreatureCreate latching (InstanceScript::AddObject):
+-- the boss GUID goes in the instance store under DATA_KING_DRED so the
+-- raptor relays can resolve it via GetInstanceCreature.
+local function kingDredSpawned(event, creature)
+    creature:SetGuidData(DATA_KING_DRED)
+end
+
+-- C++ DoAction (:91-95): ACTION_RAPTOR_KILLED increments the counter.
+local function kingDredDoAction(event, creature, action)
+    if action == ACTION_RAPTOR_KILLED then
+        creature:SetData(DATA_RAPTORS_KILLED, creature:GetData(DATA_RAPTORS_KILLED) + 1)
+    end
+end
+
+-- C++ npc_drakkari_gutripperAI / npc_drakkari_scytheclawAI JustDied
+-- (:217-221 / :273-277): instance GetGuidData (DATA_KING_DRED) ->
+-- DoAction(ACTION_RAPTOR_KILLED); the GetInstanceCreature twin resolves
+-- the same stored GUID. Ev2 keeps the plain timer cancel (raptorGone);
+-- the relay is JustDied-only.
+local function raptorDied(event, creature)
+    local dred = creature:GetInstanceCreature(DATA_KING_DRED)
+    if dred then
+        dred:DoAction(ACTION_RAPTOR_KILLED)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_KING_DRED, 1, kingDredEnterCombat)
 RegisterCreatureEvent(ENTRY_KING_DRED, 2, kingDredLeaveCombat)
 RegisterCreatureEvent(ENTRY_KING_DRED, 4, kingDredDied)
+RegisterCreatureEvent(ENTRY_KING_DRED, 5, kingDredSpawned)
 RegisterCreatureEvent(ENTRY_KING_DRED, 23, kingDredReset)
+RegisterCreatureEvent(ENTRY_KING_DRED, 38, kingDredDoAction)
 
 RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 19, gutripperSummoned)
 RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 2, raptorGone)
-RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 4, raptorGone)
+RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 4, raptorDied)
 RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 19, scytheclawSummoned)
 RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 2, raptorGone)
-RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 4, raptorGone)
+RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 4, raptorDied)
