@@ -15,8 +15,9 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
 -- OnDied, 23 OnReset. Driven by CreateLuaEvent timers; melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMelee-
--- AttackIfReady. The C++ UNIT_STATE_CASTING gate has no bridge
--- (maiden precedent), so timers fire unconditionally. The C++
+-- AttackIfReady. The C++ UpdateAI pre-loop UNIT_STATE_CASTING gate
+-- (boss_apothecary_hummel.cpp:373, no in-loop gate) is PORTED: both
+-- timer arms defer 500ms while creature:IsCasting(), no re-arm consumed. The C++
 -- events.Repeat arms re-arm from execution; the Lua one-shot timer
 -- chains match that cadence.
 -- Verifiable numbers (file's own enums): SPELL_CHAIN_REACTION =
@@ -80,6 +81,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onCologneSpray(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cologne", 500, function() onCologneSpray(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_COLOGNE_SPRAY)
@@ -88,6 +93,10 @@ local function onCologneSpray(creature, guid)
 end
 
 local function onChainReaction(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chain", 500, function() onChainReaction(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SUMMON_TABLE)

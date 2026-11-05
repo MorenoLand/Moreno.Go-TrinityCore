@@ -14981,6 +14981,9 @@ func init() {
 	// boss_archmage_arugal (Shadowfang Keep): BossAI-derived
 	// (shadowfang_keep.cpp:230) — the slot, not Eluna registration, gates
 	// beginInstanceEncounter (worldport_instance.go:376).
+	// UpdateAI pre-loop CASTING gate (shadowfang_keep.cpp:275, no
+	// in-loop gate) PORTED as 500ms IsCasting defers on all 4 timer
+	// arms; KilledUnit / SpellHitTarget hooks stay ungated per C++.
 	RegisterLuaBoss("boss_archmage_arugal", 4275)
 	// boss_apothecary_hummel.cpp audit (EK loader decl :125 / call :303
 	// follows instance_shadowfang_keep): 9 scripts. boss_apothecary_hummel
@@ -15006,7 +15009,11 @@ func init() {
 	// SummonedCreatureDies (no event-21 fire site — the lethal clamp
 	// persists and the QUIET_SUICIDE arm cannot fire), instance SetBossState
 	// / SetData / LFG FinishDungeon(288) legs, DoCastAOE(68821), the
-	// EVENT_CRAZED_APOTHECARY SetData-only timer, UNIT_STATE_CASTING gates.
+	// EVENT_CRAZED_APOTHECARY SetData-only timer. UpdateAI pre-loop
+	// (:198) + in-loop (:270) CASTING gates PORTED as 500ms IsCasting
+	// defers on all 9 ported event-loop arms (intro chain, START_FIGHT,
+	// call arms, perfume, chain reaction); baxter pre-loop gate (:373)
+	// PORTED on both its arms; frye has no UpdateAI / timer arms.
 	RegisterLuaBoss("boss_apothecary_hummel", 36296)
 	RegisterLuaBoss("npc_apothecary_baxter", 36565)
 	RegisterLuaBoss("npc_apothecary_frye", 36272)

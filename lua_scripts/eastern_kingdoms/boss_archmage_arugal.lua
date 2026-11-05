@@ -14,8 +14,10 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 15 OnSpellHitTarget, 23 OnReset. Driven by CreateLuaEvent
 -- timers; melee is engine-driven in Go (creature combat tick), like
--- C++ DoMeleeAttackIfReady. The C++ UNIT_STATE_CASTING gate has no
--- bridge (maiden precedent), so timers fire unconditionally. The C++
+-- C++ DoMeleeAttackIfReady. The C++ UpdateAI pre-loop
+-- UNIT_STATE_CASTING gate (shadowfang_keep.cpp:275, no in-loop gate)
+-- is PORTED: each timer arm defers 500ms while creature:IsCasting()
+-- (live bridge, lua_creature_events.go:1950), no re-arm consumed. The C++
 -- events.Repeat arms re-arm from execution; the Lua one-shot timer
 -- chains match that cadence.
 -- Verifiable numbers (file's own enums): SPELL_ARUGAL_CURSE = 7621 /
@@ -145,6 +147,10 @@ local function randomTargetInRange(creature, range)
 end
 
 local function onCurse(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curse", 500, function() onCurse(creature, guid) end)
+        return
+    end
     local target = randomTargetInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_ARUGAL_CURSE)
@@ -159,6 +165,10 @@ end
 -- same first-cast distribution; it survives evade (C++ member array,
 -- untouched by Reset) and clears only on death (new AI object).
 local function onTeleport(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "teleport", 500, function() onTeleport(creature, guid) end)
+        return
+    end
     local last = lastTeleport[guid] or SPELL_TELE_SPAWN
     local pool = {}
     for i, spell in ipairs(teleportSpells) do
@@ -173,6 +183,10 @@ local function onTeleport(creature, guid)
 end
 
 local function onVoidBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "voidbolt", 500, function() onVoidBolt(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_VOIDBOLT)
@@ -186,6 +200,10 @@ end
 -- arm is not phase-gated, so the stale "no DoCastAOE bridge" header
 -- claim was wrong.
 local function onThunderShock(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "thundershock", 500, function() onThunderShock(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_THUNDERSHOCK)
     schedule(guid, "thundershock", 30000, function() onThunderShock(creature, guid) end)
 end

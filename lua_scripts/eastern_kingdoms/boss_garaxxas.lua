@@ -54,10 +54,9 @@
 -- wing-clip / freezing-trap / melee fire within ATTACK_DISTANCE.
 -- The four DoCastVictim shot loops fire regardless of range (C++
 -- gates them to the ranged else-branch; the flat-fire deviation is
--- kept from the prior tick). Also no
--- UNIT_STATE_CASTING model in Go (casts are packet-visual), so the
--- timers fire unconditionally and the in-loop casting gates are
--- dropped (maiden precedent). The C++ scheduler is driven from
+-- kept from the prior tick). Cast-state note (verified 2026-11-04):
+-- boss_priestess_delrissa.cpp has zero CASTING checks, so no gate exists
+-- to port and the timers fire unconditionally per C++ itself. The C++ scheduler is driven from
 -- UpdateAI after UpdateVictim; the port schedules from
 -- OnEnterCombat(1) and cancels on 2/4/23 (maiden convention).
 -- Reset() Initialize() / boss_priestess_lackey_commonAI::Reset() /

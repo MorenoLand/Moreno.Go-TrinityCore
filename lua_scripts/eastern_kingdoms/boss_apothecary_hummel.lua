@@ -106,7 +106,9 @@
 --   MovementInform bridges; the emote-state and immunity surfaces are
 --   bridged, but the legs ride the unported DoAction machine (already
 --   noted in the baxter/frye files).
--- - UpdateAI UNIT_STATE_CASTING gates — no bridge (maiden precedent).
+-- - UpdateAI UNIT_STATE_CASTING gates PORTED (pre-loop :198 +
+--   in-loop :270): each ported event-loop arm defers 500ms while
+--   creature:IsCasting(), no re-arm consumed.
 -- Verifiable numbers (file's own enums): SAY_INTRO_0..2 = 0..2,
 -- SAY_CALL_BAXTER = 3, SAY_CALL_FRYE = 4, SAY_HUMMEL_DEATH = 5,
 -- SAY_SUMMON_ADDS = 6; SPELL_ALLURING_PERFUME = 68589,
@@ -195,6 +197,10 @@ end
 -- was wrong); 25s re-arm. SPELL_SUMMON_TABLE's summon leg has no
 -- summon bridge, so the table never appears (documented).
 local function onChainReaction(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chain", 500, function() onChainReaction(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SUMMON_TABLE, true)
@@ -205,6 +211,10 @@ end
 
 -- C++ EVENT_PERFUME_SPRAY: non-triggered DoCastVictim(68607); 3640ms.
 local function onPerfumeSpray(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "perfume", 500, function() onPerfumeSpray(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_PERFUME_SPRAY)
@@ -214,12 +224,20 @@ end
 
 -- C++ EVENT_CALL_CRAZED_APOTHECARY: Talk(SAY_SUMMON_ADDS) only.
 local function onCallCrazed(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "crazed", 500, function() onCallCrazed(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_SUMMON_ADDS)
 end
 
 -- C++ EVENT_CALL_FRYE: Talk(SAY_CALL_FRYE); the DoAction relay has no
 -- bridge.
 local function onCallFrye(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frye", 500, function() onCallFrye(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_CALL_FRYE)
 end
 
@@ -227,6 +245,10 @@ end
 -- summon relays stay out — summons-container call on a different
 -- creature riding the unported DoAction machine (2026-10-23 re-eval).
 local function onCallBaxter(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "baxter", 500, function() onCallBaxter(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_CALL_BAXTER)
 end
 
@@ -239,6 +261,10 @@ end
 -- NPC_CROWN_APOTHECARY grid-despawn sibling stays out (no
 -- GetCreatureListWithEntryInGrid bridge, 2026-10-23 re-eval).
 local function onStartFight(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "say", 500, function() onStartFight(creature, guid) end)
+        return
+    end
     creature:RemoveFlag(59, 0x300)
     creature:DoZoneInCombat() -- boss_apothecary_hummel.cpp:220 (EVENT_START_FIGHT arm 2, C++ order after SetImmuneToAll(false); bridge live 2026-10-23)
     schedule(guid, "baxter", 6000, function() onCallBaxter(creature, guid) end)
@@ -250,14 +276,33 @@ end
 
 -- C++ EVENT_HUMMEL_SAY_2 -> Talk(2) -> EVENT_START_FIGHT in 4s.
 local function onSay2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "say", 500, function() onSay2(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_INTRO_2)
     schedule(guid, "say", 4000, function() onStartFight(creature, guid) end)
 end
 
 -- C++ EVENT_HUMMEL_SAY_1 -> Talk(1) -> SAY_2 in 4s.
 local function onSay1(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "say", 500, function() onSay1(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_INTRO_1)
     schedule(guid, "say", 4000, function() onSay2(creature, guid) end)
+end
+
+-- C++ EVENT_HUMMEL_SAY_0 -> Talk(0) -> SAY_1 in 4s; CASTING gate
+-- PORTED as above (defer under the "say" key).
+local function onSay0(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "say", 500, function() onSay0(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_INTRO_0)
+    schedule(guid, "say", 4000, function() onSay1(creature, guid) end)
 end
 
 -- C++ DoAction(ACTION_START_EVENT): PHASE_ALL -> PHASE_INTRO, SAY_0 at 1ms.
@@ -275,10 +320,7 @@ local function startEvent(creature)
     -- relay stays out (no bridge).
     creature:SetFlag(59, 0x100)
     creature:SetFaction(FACTION_MONSTER)
-    schedule(guid, "say", 1, function()
-        creature:Talk(SAY_INTRO_0)
-        schedule(guid, "say", 4000, function() onSay1(creature, guid) end)
-    end)
+    schedule(guid, "say", 1, function() onSay0(creature, guid) end)
 end
 
 local function onGossipHello(event, player, creature)

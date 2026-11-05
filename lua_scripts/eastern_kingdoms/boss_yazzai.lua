@@ -62,9 +62,12 @@
 -- Reset — per-engagement reset is the gyth/vaelastrasz convention).
 -- Timers start on OnEnterCombat(1), cancelled on OnLeaveCombat(2)/
 -- OnDied(4)/OnReset(23) (maiden convention).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
--- packet-visual), so the timers fire unconditionally and the in-loop
--- casting gates are dropped (maiden precedent). The C++ scheduler is
+-- Cast-state note (verified 2026-11-04): boss_priestess_delrissa.cpp
+-- has zero CASTING checks — all AIs are plain-countdown ScriptedAI
+-- UpdateAIs (delrissa :251, lackey-common :450) — so no gate exists to
+-- port and the timers fire unconditionally per C++ itself, not by a
+-- dropped-gate approximation (creature:IsCasting() is a live bridge,
+-- lua_creature_events.go:1950, but has nothing to gate here). The C++ scheduler is
 -- driven from UpdateAI after UpdateVictim; the port schedules from
 -- OnEnterCombat(1) and cancels on 2/4/23 (maiden convention).
 -- Reset() Initialize() / boss_priestess_lackey_commonAI::Reset() /
