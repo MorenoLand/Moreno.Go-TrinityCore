@@ -35,9 +35,12 @@
 -- Reset (:1987-1990) — _events.Reset() only; covered by the
 --   event-2/4/23 timer cancel.
 --
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so the timer fires unconditionally (the
--- maiden precedent).
+-- Cast-state gates PORTED 2026-11-04: the baleful-strike timer arm
+-- defers 500ms on creature:IsCasting() (live,
+-- lua_creature_events.go:1950), no re-arm consumed (the mal_ganis
+-- idiom), under the reflection UpdateAI pre-loop CASTING return (:2008);
+-- the stale "no UNIT_STATE_CASTING model, timer fires unconditionally
+-- (maiden precedent)" claim is retracted.
 
 local ENTRY_SPIRITUAL_REFLECTION = 37068
 
@@ -88,6 +91,10 @@ end
 -- C++ EVENT_BALEFUL_STRIKE :2013-2019.
 local function balefulStrikeTick(creature, guid)
     if timers[guid] == nil then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "baleful", 500, function() balefulStrikeTick(creature, guid) end)
         return
     end
     local target = randomPlayer(creature)

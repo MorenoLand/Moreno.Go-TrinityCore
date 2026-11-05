@@ -123,9 +123,13 @@
 --   The non-triggered self-cast 72342 ports after the strip, so the
 --   invisibility no longer breaks early on dotted mages.
 --
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally (the maiden
--- precedent); SelectTarget's "valid attackable target" nuance is
+-- Cast-state gates PORTED 2026-11-04: all 19 timer arms defer 500ms on
+-- creature:IsCasting() (live, lua_creature_events.go:1950), no re-arm
+-- consumed (the mal_ganis idiom), under the five trash UpdateAI pre-loop
+-- CASTING returns (:1527/:1605/:1705/:1765/:1820); the stale "no
+-- UNIT_STATE_CASTING model, timers fire unconditionally (maiden
+-- precedent)" claim is retracted. Deviations from C++: SelectTarget's
+-- "valid attackable target" nuance is
 -- approximated by alive threat-list entries within the C++ distance.
 
 local ENTRY_GHOSTLY_PRIEST    = 38175
@@ -211,6 +215,10 @@ end
 -- C++ :1532-1536: random player 40 yd, cast 72318, re-arm {6000,15000}.
 local function priestShadowWordPain(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "swp", 500, function() priestShadowWordPain(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_WORD_PAIN)
@@ -221,6 +229,10 @@ end
 -- C++ :1537-1541: random player 10 yd, cast 72320, re-arm 12000.
 local function priestCircleOfDestruction(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "cod", 500, function() priestCircleOfDestruction(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 10, true)
     if target then
         creature:CastSpell(target, SPELL_CIRCLE_OF_DESTRUCTION)
@@ -231,6 +243,10 @@ end
 -- C++ :1542-1546: random player 20 yd, cast 72321, re-arm 10000.
 local function priestCowerInFear(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "cif", 500, function() priestCowerInFear(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 20, true)
     if target then
         creature:CastSpell(target, SPELL_COWER_IN_FEAR)
@@ -251,6 +267,10 @@ end
 -- C++ :1610-1614: random player 40 yd, cast 72163, re-arm 15000.
 local function mageFireball(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function() mageFireball(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_FIREBALL)
@@ -261,6 +281,10 @@ end
 -- C++ :1604-1608: random player 40 yd, cast 72169, re-arm 15000.
 local function mageFlamestrike(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "flamestrike", 500, function() mageFlamestrike(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_FLAMESTRIKE)
@@ -271,6 +295,10 @@ end
 -- C++ :1609-1613: random player 40 yd, cast 72166, re-arm 15000.
 local function mageFrostbolt(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function() mageFrostbolt(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_FROSTBOLT)
@@ -281,6 +309,10 @@ end
 -- C++ :1614-1618: random player (no distance), cast 72121, re-arm 15000.
 local function mageChainsOfIce(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "chains", 500, function() mageChainsOfIce(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, nil, false)
     if target then
         creature:CastSpell(target, SPELL_CHAINS_OF_ICE)
@@ -293,6 +325,10 @@ end
 -- non-triggered self-cast 72342 — C++ order.
 local function mageHallucination(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "hallucination", 500, function() mageHallucination(creature, guid) end)
+        return
+    end
     creature:RemoveAllAuras()
     creature:CastSpell(creature, SPELL_HALLUCINATION)
 end
@@ -329,6 +365,10 @@ end
 -- C++ :1710-1714: random player 100 yd, cast 72326, re-arm 8000.
 local function mercenaryShadowStep(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "shadowstep", 500, function() mercenaryShadowStep(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 100, true)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_STEP)
@@ -339,6 +379,10 @@ end
 -- C++ :1707-1710: victim-cast 72329, re-arm 10000.
 local function mercenaryDeadlyPoison(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "deadlypoison", 500, function() mercenaryDeadlyPoison(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_DEADLY_POISON)
     schedule(guid, "deadlypoison", 10000, function() mercenaryDeadlyPoison(creature, guid) end)
 end
@@ -346,6 +390,10 @@ end
 -- C++ :1711-1715: random player 40 yd, cast 72333, re-arm 10000.
 local function mercenaryDaggerThrow(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "daggerthrow", 500, function() mercenaryDaggerThrow(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_ENVENOMED_DAGGER_THROW)
@@ -356,6 +404,10 @@ end
 -- C++ :1716-1719: victim-cast 72335, re-arm 10000.
 local function mercenaryKidneyShot(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "kidneyshot", 500, function() mercenaryKidneyShot(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_KIDNEY_SHOT)
     schedule(guid, "kidneyshot", 10000, function() mercenaryKidneyShot(creature, guid) end)
 end
@@ -374,6 +426,10 @@ end
 -- C++ :1762-1765: victim-cast 72198, re-arm 5000.
 local function footmanSpectralStrike(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "strike", 500, function() footmanSpectralStrike(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SPECTRAL_STRIKE)
     schedule(guid, "strike", 5000, function() footmanSpectralStrike(creature, guid) end)
 end
@@ -381,6 +437,10 @@ end
 -- C++ :1766-1769: victim-cast 72194, re-arm 5000.
 local function footmanShieldBash(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "bash", 500, function() footmanShieldBash(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHIELD_BASH)
     schedule(guid, "bash", 5000, function() footmanShieldBash(creature, guid) end)
 end
@@ -388,6 +448,10 @@ end
 -- C++ :1770-1773: self-cast 72203, re-arm 15000.
 local function footmanEnrage(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function() footmanEnrage(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TORTURED_ENRAGE)
     schedule(guid, "enrage", 15000, function() footmanEnrage(creature, guid) end)
 end
@@ -405,6 +469,10 @@ end
 -- C++ :1825-1829: random player 40 yd, cast 72208, re-arm 2000.
 local function riflemanShoot(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "shoot", 500, function() riflemanShoot(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_SHOOT)
@@ -415,6 +483,10 @@ end
 -- C++ :1822-1826: random player 40 yd, cast 72222, re-arm 10000.
 local function riflemanCursedArrow(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "cursedarrow", 500, function() riflemanCursedArrow(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_CURSED_ARROW)
@@ -425,6 +497,10 @@ end
 -- C++ :1827-1830: self-cast 72215, re-arm 30000.
 local function riflemanFrostTrap(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "frosttrap", 500, function() riflemanFrostTrap(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROST_TRAP)
     schedule(guid, "frosttrap", 30000, function() riflemanFrostTrap(creature, guid) end)
 end
@@ -432,6 +508,10 @@ end
 -- C++ :1831-1835: random player 40 yd, cast 72268, re-arm 15000.
 local function riflemanIceShot(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "iceshot", 500, function() riflemanIceShot(creature, guid) end)
+        return
+    end
     local target = randomPlayer(creature, 40, true)
     if target then
         creature:CastSpell(target, SPELL_ICE_SHOT)

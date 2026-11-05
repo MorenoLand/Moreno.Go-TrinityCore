@@ -85,9 +85,13 @@
 -- npc_escape_event_trash::Reset (:2172-2174) — EventMap reset only;
 --   covered by the event-2/4/23 timer cancel.
 --
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally (the
--- maiden precedent); ev5 fires on every spawn including respawn,
+-- Cast-state gates PORTED 2026-11-04: all 6 timer arms (ghoul jump,
+-- witch-doctor bolt/volley/curse, abomination vomit/cleave) defer 500ms
+-- on creature:IsCasting() (live, lua_creature_events.go:1950), no re-arm
+-- consumed (the mal_ganis idiom), under the three escape UpdateAI
+-- pre-loop CASTING returns (:2234/:2300/:2359); the stale "no
+-- UNIT_STATE_CASTING model, timers fire unconditionally (maiden
+-- precedent)" claim is retracted. ev5 fires on every spawn including respawn,
 -- while C++ IsSummonedBy fires only on summon — for escape trash
 -- the two coincide in practice (LK-summoned during the escape
 -- event; the base UpdateAI despawns them outside it).
@@ -192,6 +196,10 @@ end
 -- C++ :2239-2249: one-shot-on-success jump pump, 500ms retry.
 local function ghoulJump(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "jump", 500, function() ghoulJump(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         local victimReach = 1.5
@@ -225,6 +233,10 @@ end
 -- C++ :2310-2314: MaxThreat 20 yd, cast 70080, re-arm {2000,3000}.
 local function witchDoctorBolt(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "bolt", 500, function() witchDoctorBolt(creature, guid) end)
+        return
+    end
     local target = maxThreatPlayerInRange(creature, 20)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_BOLT)
@@ -235,6 +247,10 @@ end
 -- C++ :2315-2319: existence-gated self-cast 70145, re-arm {15000,22000}.
 local function witchDoctorVolley(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "volley", 500, function() witchDoctorVolley(creature, guid) end)
+        return
+    end
     if randomPlayerInRange(creature, 30) then
         creature:CastSpell(creature, SPELL_SHADOW_BOLT_VOLLEY)
     end
@@ -244,6 +260,10 @@ end
 -- C++ :2305-2309: random 30 yd, cast 70144, re-arm {10000,15000}.
 local function witchDoctorCurse(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "curse", 500, function() witchDoctorCurse(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_DOOM)
@@ -272,6 +292,10 @@ end
 -- C++ :2352-2356: DoCastVictim 70176, re-arm {15000,20000}.
 local function abominationVomit(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "vomit", 500, function() abominationVomit(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_VOMIT_SPRAY)
     schedule(guid, "vomit", {15000, 20000}, function() abominationVomit(creature, guid) end)
 end
@@ -279,6 +303,10 @@ end
 -- C++ :2357-2361: DoCastVictim 40505, re-arm {7000,9000}.
 local function abominationCleave(creature, guid)
     if not alive(guid) then return end
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() abominationCleave(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CLEAVE)
     schedule(guid, "cleave", {7000, 9000}, function() abominationCleave(creature, guid) end)
 end

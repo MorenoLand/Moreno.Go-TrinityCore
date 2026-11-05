@@ -19889,14 +19889,19 @@ func init() {
 	// Frostsworn General (Halls of Reflection) — bridgeable Talk arms
 	// ported from halls_of_reflection.cpp; see
 	// lua_scripts/northrend/npc_frostsworn_general.lua.
-	// All other zone-script creatures in the file carry zero bridgeable
-	// arms (gauntlet/escape trash expose only scheduler-schedule legs;
-	// the intro/escape/uther/lich-king Talk machines ride instance
-	// SetData/DoAction/timer legs with no instance-script, timer, or
-	// sound bridges), so only 36723 is registered (the bronjahm
+	// The gauntlet/escape/reflection timer arms live in their own files
+	// (npc_hor_gauntlet_trash / npc_hor_escape_trash /
+	// npc_hor_spiritual_reflection) — the intro/escape/uther/lich-king
+	// Talk machines ride instance SetData/DoAction/timer legs with no
+	// instance-script, timer, or sound bridges, so only 36723 is
+	// RegisterLuaBoss-registered here (the bronjahm
 	// npc_corrupted_soul_fragment precedent); the five area triggers and
 	// four spell scripts are bridge-blocked — documented in the lua
-	// header.
+	// headers. Cast-state gates (2026-11-04): all 26 HoR trash timer
+	// arms carry the 500ms IsCasting defer (gauntlet 19 under pre-loop
+	// :1527/:1605/:1705/:1765/:1820, escape 6 under :2234/:2300/:2359,
+	// reflection baleful under :2008; priest dark-mending unported, spawn
+	// self-casts / wake flips are separate hooks and stay ungated).
 	RegisterLuaBoss("npc_frostsworn_general", 36723)
 	// Falric (Halls of Reflection) — bridgeable Talk arms ported from
 	// boss_falric.cpp; see lua_scripts/northrend/boss_falric.lua.
