@@ -1581,7 +1581,27 @@ func (s *Server) callCreatureAssistance(ctx context.Context, caller *creatureMot
 	}
 	s.motionMu.Lock()
 	m := s.findCreatureMotionLocked(mapID, instanceID, callerGUID)
-	if m == nil || m.AlreadyCallAssistance || m.TargetGUID == 0 || !enemyOK || m.TargetGUID != enemy.GUID {
+	if m == nil || m.AlreadyCallAssistance || m.TargetGUID == 0 {
+		s.motionMu.Unlock()
+		return
+	}
+	// AttackStart funnel S5: a creature victim has no session, so resolve
+	// it from the live motion map on the caller's map/instance (the S1
+	// engager-derived precedent; cross-instance creatures never assist,
+	// matching C++'s single-Map grid search). A missing motion is the
+	// GetVictim()==nil twin: return before setting AlreadyCallAssistance,
+	// exactly like the player path's enemyOK miss. A present motion feeds
+	// the generic CanAssistTo enemy party, which carries the creature-only
+	// enemy-evade leg (Creature.cpp:2468-2470) the playerPos-typed funnel
+	// check calls vacuous.
+	var creatureEnemy assistParty
+	if !enemyOK && targetGUID != 0 {
+		if victim := s.findCreatureMotionLocked(mapID, instanceID, targetGUID); victim != nil {
+			creatureEnemy = assistParty{ok: true, faction: victim.Faction, evading: victim.Evading}
+			enemyOK = true
+		}
+	}
+	if !enemyOK || m.TargetGUID != targetGUID {
 		s.motionMu.Unlock()
 		return
 	}
@@ -1594,7 +1614,12 @@ func (s *Server) callCreatureAssistance(ctx context.Context, caller *creatureMot
 			if guid == m.GUID || a == nil {
 				continue
 			}
-			if !canCreatureAssistTo(s, a, m, enemy) {
+			if creatureEnemy.ok {
+				friend := assistParty{ok: true, faction: m.Faction}
+				if !s.creatureCanAssistTo(a.Faction, isCreaturePassive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, creatureEnemy, true) {
+					continue
+				}
+			} else if !canCreatureAssistTo(s, a, m, enemy) {
 				continue
 			}
 			// AnyAssistCreatureInRangeCheck (GridNotifiers.h:1277-1280):
@@ -2501,17 +2526,40 @@ func (s *Server) fireCreatureAssistance(ctx context.Context, motion *creatureMot
 	motion.AssistVictim = 0
 	motion.Assistants = nil
 	var qualified []uint64
-	if enemyOK && victimGUID != 0 {
-		for _, guid := range assistants {
-			a := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, guid)
-			if a == nil {
-				continue
+	if victimGUID != 0 {
+		if enemyOK {
+			for _, guid := range assistants {
+				a := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, guid)
+				if a == nil {
+					continue
+				}
+				if !canCreatureAssistTo(s, a, motion, enemy) {
+					continue
+				}
+				a.AlreadyCallAssistance = true
+				qualified = append(qualified, guid)
 			}
-			if !canCreatureAssistTo(s, a, motion, enemy) {
-				continue
+		} else if victim := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, victimGUID); victim != nil && victim.Health > 0 {
+			// AttackStart funnel S5: the delayed arm's creature-victim
+			// twin. A missing or dead victim drains with zero engages
+			// (the player dead-victim twin; C++ drops the event only on
+			// GetUnit failure, Creature.cpp:228). An evading victim is
+			// NOT pre-dropped: C++ iterates assistants and each fails
+			// CanAssistTo via the enemy-evade leg, which the generic
+			// twin carries in enemy.evading.
+			creatureEnemy := assistParty{ok: true, faction: victim.Faction, evading: victim.Evading}
+			friend := assistParty{ok: true, faction: motion.Faction}
+			for _, guid := range assistants {
+				a := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, guid)
+				if a == nil {
+					continue
+				}
+				if !s.creatureCanAssistTo(a.Faction, isCreaturePassive(a), a.Health, a.Evading, a.InCombat, a.UnitFlags, a.OwnerGUID, a.CharmerGUID, friend, creatureEnemy, true) {
+					continue
+				}
+				a.AlreadyCallAssistance = true
+				qualified = append(qualified, guid)
 			}
-			a.AlreadyCallAssistance = true
-			qualified = append(qualified, guid)
 		}
 	}
 	s.motionMu.Unlock()
