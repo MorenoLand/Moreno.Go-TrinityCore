@@ -17979,11 +17979,10 @@ func init() {
 	// wave/phase machine; difficulty gate is NOT a blocker — IsHeroic
 	// is bridged), the
 	// gate machine (DoAction OPEN_GATE — no instance/summon/cross-AI
-	// bridges), EVENT_PHASE_TWO / EVENT_TELEPORT / EVENT_HARVEST
-	// (DoCastAOE 28026/28025/28679 — phase-machine-blocked; DoCastAOE lowers to self-cast once the wave machine lands), EVENT_BOLT
-	// DoCastVictim(SHADOW_BOLT 29317) 2s (moroes-ready in isolation but
-	// its scheduling legs are the unbridged phase machine —
-	// documented-only), DamageTaken phase-one zeroing (no phase bridge),
+	// bridges), EVENT_PHASE_TWO / EVENT_TELEPORT / EVENT_HARVEST /
+	// EVENT_BOLT ported 2026-10-25 (phase-two latch; teleport incl.
+	// CastStop via StopSpellCast 2026-11-05), DamageTaken phase-one
+	// zeroing (no phase bridge),
 	// EnterEvadeMode NearTeleportTo (no motion bridge), the living/dead-
 	// side check + FindEligibleTarget (no side/visibility/threat bridges),
 	// the seven minion scripts (entries 16124-16150 local-enum-only —

@@ -98,9 +98,9 @@
 -- SELECTABLE set leg is bridgeable (SetFlag live) but UNPAIRED —
 -- its clear rides the controller/instance phase-three action, so a
 -- set-alone port would leave the boss untargetable through phase 3;
--- the CastStop / controller SetData(PHASE_TWO) legs ride absent
--- bridges (no CastStop / cross-creature-SetData methods — verified
--- in engine/world/lua_objects.go this run).
+-- the CastStop leg is ported (creature:StopSpellCast() in the 75%
+-- latch, 2026-11-05); the controller SetData(PHASE_TWO) leg rides
+-- the no-cross-AI bridge.
 -- boss_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING 75509 — stays out: the trigger is the
 -- unported npc_halion_controller's EVENT_TWILIGHT_MENDING cast
@@ -174,7 +174,8 @@
 -- with C++ evaluation order (cap applied before the 50% check, so the
 -- crossing blow is capped; the cap drops in phase three so the boss is
 -- killable — the shared fightPhaseThree latch, gurtogg onChangePhase
--- idiom); CastStop rides the absent CastStop bridge (benign); the
+-- idiom); CastStop ported (creature:StopSpellCast() before the Division
+-- cast, 2026-11-05); the
 -- PHASE_THREE controller->AI()->SetData(DATA_TWILIGHT_DAMAGE_TAKEN)
 -- routing leg rides the no-cross-AI bridge.
 -- boss_halion EnterEvadeMode (:236) — forwards the evade to the
@@ -231,7 +232,8 @@
 -- (40681) / npc_living_ember (40683): only their JustDied
 -- DespawnOrUnsummon(1ms) legs port (event 4, below — 1ms ≈ immediate
 -- creature:Despawn); the rest stays out (SetFlag IS bridged but no
--- CastStop / cross-creature-SetData bridges).
+-- cross-creature-SetData bridge; CastStop IS bridged — StopSpellCast
+-- ported in the 75%/50% latches, 2026-11-05).
 -- SAY_BERSERK 7 — dead text, no Talk() call in the file.
 -- All 13 Talk() calls in the file accounted for (SAY_AGGRO 2 +
 -- SAY_DEATH 5 + SAY_KILL 6 ported; SAY_PHASE_TWO 4 + SAY_REGENERATE 0
@@ -438,9 +440,9 @@ end
 -- creature:CastSpell(creature, SPELL_TWILIGHT_PHASING) — the DoCastSelf
 -- lowering, same idiom as the BREATH self-casts); the flag set leg is
 -- bridgeable (SetFlag live) but UNPAIRED — its clear rides the
--- controller/instance phase-three action; the CastStop / controller
--- SetData legs ride absent bridges (no CastStop / cross-creature
--- SetData methods — verified in engine/world/lua_objects.go this run).
+-- controller/instance phase-three action; the CastStop leg is ported
+-- (creature:StopSpellCast() before the Phasing cast, 2026-11-05);
+-- the controller SetData leg rides the no-cross-AI bridge.
 local function halionDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     -- C++ :283 reads IsInPhase(PHASE_THREE) before the transition
@@ -463,6 +465,7 @@ local function halionDamageTaken(event, creature, attacker, damage)
         if postHealth < math.floor(creature:GetMaxHealth() * 75 / 100) then
             phaseTwo[guid] = true
             creature:Talk(SAY_PHASE_TWO)
+            creature:StopSpellCast()
             creature:CastSpell(creature, SPELL_TWILIGHT_PHASING)
             -- The twilight-phasing SpellScript (boss_halion.cpp:1776-1809):
             -- on hit, caster casts Summon Twilight Portal 74809
@@ -730,8 +733,9 @@ end
 -- JustEngagedWith (twilightHalionEnterCombat below), so the latch below
 -- is the faithful substitute; the transition also sets the shared
 -- fightPhaseThree latch that drops both halves' never-die caps (the
--- gurtogg onChangePhase idiom). The CastStop leg rides the absent
--- CastStop bridge (benign: Go casts are packet-only); the PHASE_THREE
+-- gurtogg onChangePhase idiom). The CastStop leg is ported
+-- (creature:StopSpellCast() before the Division cast, 2026-11-05);
+-- the PHASE_THREE
 -- damage-routing leg (controller->AI()->SetData
 -- (DATA_TWILIGHT_DAMAGE_TAKEN)) rides the no-cross-AI bridge.
 local function twilightHalionDamageTaken(event, creature, attacker, damage)
@@ -759,6 +763,7 @@ local function twilightHalionDamageTaken(event, creature, attacker, damage)
     if not wasPhaseThree and (health - capped) < math.floor(maxHealth * 50 / 100) then
         twilightPhaseThree[guid] = true
         fightPhaseThree = true
+        creature:StopSpellCast()
         creature:CastSpell(creature, SPELL_TWILIGHT_DIVISION)
         creature:Talk(SAY_PHASE_THREE)
     end

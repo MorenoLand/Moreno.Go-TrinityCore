@@ -83,7 +83,8 @@
 -- gate + AttackStop + StopMoving + SetReactState(REACT_PASSIVE) +
 -- ResetAllThreat + alternating DEAD/LIVE DoCastAOE + BOLT cancel +
 -- resume 2s + 20s repeat inside the gate (arm dies below 30%,
--- C++-exact); CastStop has no bridge (engine-wide grep) and stays out.
+-- C++-exact); CastStop ported 2026-11-05 (creature:StopSpellCast()
+-- interrupts the pending Shadow Bolt 29317 twin cast).
 -- EVENT_HARVEST — PORTED 2026-10-25: DoCastAOE(HARVEST_SOUL 28679,
 -- triggered), 15s init/repeat, gated on the phase-two latch (no
 -- phase-one casts — the old verdict's fabrication concern is met by
@@ -231,7 +232,7 @@ end
 -- C++ EVENT_TELEPORT: 20s repeat, only while NOT HealthBelowPct(30)
 -- (health < floor(max*30/100), Unit.h:872 + CalculatePct trunc; the
 -- Repeat sits inside the gate, so the arm dies below 30%): CastStop
--- has no bridge (engine-wide grep) and stays out; AttackStop +
+-- ported (StopSpellCast before AttackStop, C++ arm order); AttackStop +
 -- StopMoving + SetReactState(REACT_PASSIVE) + ResetAllThreat +
 -- DoCastAOE alternating DEAD/LIVE (first cast DEAD,
 -- _lastTeleportDead starts false) + cancel BOLT + resume at 2s.
@@ -239,6 +240,7 @@ local function teleportTick(creature, guid)
     if creature:GetHealth() < math.floor(creature:GetMaxHealth() * 30 / 100) then
         return
     end
+    creature:StopSpellCast()
     creature:AttackStop()
     creature:StopMoving()
     creature:SetReactState(REACT_PASSIVE)

@@ -33,8 +33,8 @@
 -- casts Shadowstep 55966 + Embrace 55959, Talk(SAY_FEED 5), DONE_FEEDING
 -- in 20s (target clear only — the damage counter persists across feeds
 -- per C++); DamageTaken latch (event 9): accumulate while the embrace
--- target is alive, past 20000 / heroic 40000 -> clear target (CastStop
--- vacuous in Go's packet-visual cast model, heigan precedent).
+-- target is alive, past 20000 / heroic 40000 -> clear target +
+-- StopSpellCast (interrupts the live Embrace 55959 channel).
 -- Deviations: C++ DelayEvents(500ms) on VANISH has no Lua twin
 -- (independent CreateLuaEvent timers); the UpdateAI vanish-evade check
 -- stays out (EnterEvadeMode has no Lua bridge, 2026-10-21).
@@ -382,7 +382,8 @@ end
 
 -- C++ DamageTaken embrace latch: accumulate while the embrace target
 -- resolves and is alive; past DATA_EMBRACE_DMG (20000 / heroic 40000)
--- clear the target (CastStop vacuous in Go's packet-visual cast model).
+-- clear the target + StopSpellCast (interrupts the live Embrace
+-- 55959 channel — StopSpellCast bridged, lua_creature_events.go:1006).
 -- Damage passes through unchanged (no return, garaxxas precedent).
 local function taldaramDamageTaken(_, creature, _, damage)
     local guid = creature:GetGUID()
@@ -396,6 +397,7 @@ local function taldaramDamageTaken(_, creature, _, damage)
         end
         if total > threshold then
             embraceTarget[guid] = nil
+            creature:StopSpellCast()
         end
     end
 end
