@@ -305,6 +305,16 @@ local function cancelCombatTimers(event, creature)
     -- C++ Reset -> Initialize (boss_razorscale.cpp:307/317-319):
     -- _engineersCount = 3.
     engineersRemaining[creature:GetGUID()] = 3
+    -- C++ Reset (boss_razorscale.cpp:322-325): SummonCreatureGroup(
+    -- RAZORSCALE_EXPEDITION_GROUP 1) + SummonCreatureGroup(
+    -- RAZORSCALE_FIRE_STATE_10_GROUP 2) + 25-man SummonCreatureGroup(
+    -- RAZORSCALE_FIRE_STATE_25_GROUP 3) — group coords DB-side;
+    -- creature:SummonCreatureGroup bridged 2026-11-05 (tick 238).
+    creature:SummonCreatureGroup(1)
+    creature:SummonCreatureGroup(2)
+    if creature:Is25ManRaid() then
+        creature:SummonCreatureGroup(3)
+    end
 end
 
 -- C++ EnterEvadeMode (:515-524) / JustDied (:526-531) shared

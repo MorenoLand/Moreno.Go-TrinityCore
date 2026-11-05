@@ -92,11 +92,13 @@
 -- spell_dreamwalker_summoner SpellScript + instance-GUID force-cast
 -- machine (no-SpellScript bridge; the summon-machine rule);
 -- JustReachedHome me->setActive(false) (no bridge).
--- npc_green_dragon_combat_trigger (38752) — no Talk; the DoAction
--- ACTION_ENTER_COMBAT / ACTION_SETUP_ARCHMAGES / ACTION_DEATH machine
--- (DoAction bridge live as event 38, but the trigger's engagement chain
--- — CheckRequiredBosses + instance GUID + SetBossState — is unported)
--- — NOT registered. The ValithriaDespawner grid sweep (:215-250, 5s
+-- npc_green_dragon_combat_trigger (38752) — no Talk; the Reset
+-- SummonCreatureGroup legs + ACTION_SETUP_ARCHMAGES relay are PORTED
+-- below (greenDragonCombatTriggerReset, event 23 — the trigger was
+-- registered 2026-11-05). The DoAction ACTION_ENTER_COMBAT /
+-- ACTION_DEATH machine stays out — the trigger's engagement chain
+-- (CheckRequiredBosses + instance GUID + SetBossState) is unported.
+-- The ValithriaDespawner grid sweep (:215-250, 5s
 -- BasicEvent after ACTION_DEATH, DISENGAGE to valithria + despawn of
 -- the encounter adds in 333yd) has no BasicEvent bridge — stays out
 -- (tick 222 triage).
@@ -107,9 +109,8 @@
 -- dist>15.0f kept, threat head excluded via victim GUID);
 -- COLUMN_OF_FROST 70704 random-player {10s,20s}/{15s,25s},
 -- dist>10.0f (:646-648/:705-721); the pre-combat SPELL_CORRUPTION
--- 70602 self-channel (:695) stays out — gated on _isInitialArchmage,
--- set only via the unbridged ACTION_SETUP_ARCHMAGES DoAction relay,
--- and re-cast by the out-of-combat UpdateAI poll (no re-arm twin); npc_blazing_skeleton (36791) —
+-- 70602 self-channel (:695) is PORTED below (corruptionTick, 1s poll
+-- seeded by the ACTION_SETUP_ARCHMAGES DoAction relay); npc_blazing_skeleton (36791) —
 -- FIREBALL 70754 victim-cast {2s,4s}/{2s,4s}, !IsWithinMeleeRange
 -- gated (5-yd check, the venoxis precedent); LEY_WASTE 69325
 -- self-cast {15s,20s}/{15s,20s} (:745-749/:760-773).
@@ -175,6 +176,15 @@ local SPELL_ROT_WORM_SPAWNER = 70675
 
 local ENTRY_RISEN_ARCHMAGE = 37868
 local ENTRY_BLAZING_SKELETON = 36791
+local ENTRY_GREEN_DRAGON_COMBAT_TRIGGER = 38752 -- icecrown_citadel.h:288 (NPC_GREEN_DRAGON_COMBAT_TRIGGER)
+local SUMMON_GROUP_ALL = 1 -- boss_valithria_dreamwalker.cpp:154
+local SUMMON_GROUP_10 = 2 -- boss_valithria_dreamwalker.cpp:155
+local SUMMON_GROUP_25 = 3 -- boss_valithria_dreamwalker.cpp:156
+local ACTION_ENTER_COMBAT = 1 -- boss_valithria_dreamwalker.cpp:148
+local ACTION_SETUP_ARCHMAGES = 4 -- boss_valithria_dreamwalker.cpp:151
+local SPELL_CORRUPTION_ARCHMAGE = 70602 -- boss_valithria_dreamwalker.cpp:695
+local DATA_VALITHRIA_TRIGGER = 35 -- icecrown_citadel.h:111
+local DATA_VALITHRIA_LICH_KING = 36 -- icecrown_citadel.h:112
 
 local SPELL_GUT_SPRAY = 70633
 local SPELL_FROSTBOLT_VOLLEY = 70759
@@ -330,6 +340,14 @@ local function onColumnOfFrost(creature, guid)
     schedule(guid, "column_of_frost", {15000, 25000}, function() onColumnOfFrost(creature, guid) end)
 end
 
+-- Forward declarations (tharon_ja/gal_darah idiom):
+-- risenArchmageJustEngagedWith / risenArchmageLeaveCombat reference these
+-- before their definitions below; assigned there by plain assignment,
+-- never re-`local function` (that would shadow the forward slot and leave
+-- the closures calling nil).
+local initialArchmage = {}
+local corruptionTick
+
 -- C++ npc_risen_archmage engage (:657): InterruptNonMeleeSpells(false)
 -- PORTED first below (gal_darah precedent). The old "dropped — StopSpellCast
 -- is an explicit no-op" note conflated two methods and a stale line cite:
@@ -339,13 +357,95 @@ local function risenArchmageJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:InterruptNonMeleeSpells(false)
+    -- C++ JustEnteredCombat (:659-668): if _isInitialArchmage,
+    -- DoZoneInCombat(lichKing) + DoZoneInCombat(trigger) via instance GUIDs.
+    if initialArchmage[guid] then
+        local lichKing = creature:GetInstanceCreature(DATA_VALITHRIA_LICH_KING)
+        if lichKing then
+            lichKing:DoZoneInCombat()
+        end
+        local trigger = creature:GetInstanceCreature(DATA_VALITHRIA_TRIGGER)
+        if trigger then
+            trigger:DoZoneInCombat()
+        end
+    end
     schedule(guid, "frostbolt_volley", {5000, 15000}, function() onFrostboltVolley(creature, guid) end)
     schedule(guid, "mana_void", {20000, 25000}, function() onManaVoid(creature, guid) end)
     schedule(guid, "column_of_frost", {10000, 20000}, function() onColumnOfFrost(creature, guid) end)
 end
 
 local function risenArchmageLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ UpdateAI :695 keeps polling out of combat after an evade while
+    -- _isInitialArchmage stands (the flag survives Reset — only DoAction
+    -- sets it, never clears it); re-arm the corruption poll on leave/reset.
+    if initialArchmage[guid] then
+        schedule(guid, "corruption", 1000, function() corruptionTick(creature, guid) end)
+    end
+end
+
+-- C++ npc_risen_archmage::UpdateAI out-of-combat leg (:695): alive + not
+-- in combat + _isInitialArchmage + no channeled spell -> DoCastSelf(
+-- SPELL_CORRUPTION 70602). Twinned as a 1s poll (the maiden CreateLuaEvent
+-- convention); the IsCasting guard is the
+-- GetCurrentSpell(CURRENT_CHANNELED_SPELL) twin. The poll starts on
+-- ACTION_SETUP_ARCHMAGES and stops on engage/leave/reset via cancelTimers.
+corruptionTick = function(creature, guid)
+    if creature:IsInCombat() or not creature:IsAlive() then
+        return
+    end
+    if not creature:IsCasting() then
+        creature:CastSpell(creature, SPELL_CORRUPTION_ARCHMAGE)
+    end
+    schedule(guid, "corruption", 1000, function() corruptionTick(creature, guid) end)
+end
+
+-- C++ npc_risen_archmage::DoAction (:671-677): ACTION_ENTER_COMBAT (1) ->
+-- DoZoneInCombat(); ACTION_SETUP_ARCHMAGES (4) -> _isInitialArchmage = true.
+-- The sender is the trigger's Reset/JustEnteredCombat summons.DoAction relay
+-- (ev38 dispatch bridged; the Reset relay ports below via the returned
+-- SummonCreatureGroup tables).
+local function risenArchmageDoAction(event, creature, action)
+    if action == ACTION_ENTER_COMBAT then
+        creature:DoZoneInCombat()
+    elseif action == ACTION_SETUP_ARCHMAGES then
+        local guid = creature:GetGUID()
+        initialArchmage[guid] = true
+        schedule(guid, "corruption", 1000, function() corruptionTick(creature, guid) end)
+    end
+end
+
+-- C++ npc_green_dragon_combat_trigger::Reset (boss_valithria_dreamwalker.cpp:476-489):
+-- _Reset + SetReactState(REACT_PASSIVE) + summons.DespawnAll() +
+-- SummonCreatureGroup(SUMMON_GROUP_ALL 1) + 25-man SummonCreatureGroup(
+-- SUMMON_GROUP_25 3) / 10-man SummonCreatureGroup(SUMMON_GROUP_10 2) +
+-- summons.DoAction(ACTION_SETUP_ARCHMAGES, archmage-pred). The DespawnAll
+-- has no summon-list bridge — twinned as a grid sweep (freya-elder-sweep
+-- precedent: archmages spawn only from these groups, so the room holds no
+-- pre-placed 37868). The DoAction relay rides the returned
+-- SummonCreatureGroup tables, entry-filtered (group coords DB-side;
+-- creature:SummonCreatureGroup bridged 2026-11-05, tick 238).
+local function greenDragonCombatTriggerReset(event, creature)
+    creature:SetReactState(0) -- REACT_PASSIVE
+    for _, archmage in ipairs(creature:GetCreaturesInGrid(ENTRY_RISEN_ARCHMAGE, 100)) do
+        archmage:Despawn()
+    end
+    local summoned = creature:SummonCreatureGroup(SUMMON_GROUP_ALL)
+    local extra
+    if creature:Is25ManRaid() then
+        extra = creature:SummonCreatureGroup(SUMMON_GROUP_25)
+    else
+        extra = creature:SummonCreatureGroup(SUMMON_GROUP_10)
+    end
+    for _, summon in ipairs(extra) do
+        table.insert(summoned, summon)
+    end
+    for _, summon in ipairs(summoned) do
+        if summon:GetEntry() == ENTRY_RISEN_ARCHMAGE then
+            summon:DoAction(ACTION_SETUP_ARCHMAGES)
+        end
+    end
 end
 
 -- C++ npc_blazing_skeleton::Reset — EVENT_FIREBALL {2s,4s},
@@ -606,6 +706,8 @@ RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 23, gluttonousAbominationLea
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 1, risenArchmageJustEngagedWith)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 2, risenArchmageLeaveCombat)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 23, risenArchmageLeaveCombat)
+RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 38, risenArchmageDoAction)
+RegisterCreatureEvent(ENTRY_GREEN_DRAGON_COMBAT_TRIGGER, 23, greenDragonCombatTriggerReset)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 1, blazingSkeletonJustEngagedWith)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 2, blazingSkeletonLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 23, blazingSkeletonLeaveCombat)

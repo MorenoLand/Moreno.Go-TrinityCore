@@ -913,6 +913,21 @@ local function voiceJustSummoned(event, creature, summoned)
     end
 end
 
+-- C++ boss_voice_of_yogg_saronAI::Reset (boss_yogg_saron.cpp:490-509):
+-- _Reset + SetPhase(PHASE_ONE) + instance SetData(DATA_DRIVE_ME_CRAZY) +
+-- DoStopTimedAchievement + Initialize (counters only) +
+-- SummonCreatureGroup(CREATURE_GROUP_CLOUDS 0) + distance-sort +
+-- alternating DoAction(0/1) (clockwise) on each cloud. The instance legs
+-- have no bridge; the sort + DoAction loop stays out — the cloud DoAction
+-- leg is MoveCirclePath (no bridge). The group spawn itself is the
+-- list-consuming site (creature:SummonCreatureGroup bridged 2026-11-05,
+-- tick 238); the clouds' own Reset visual cast rides ominousCloudReset
+-- (event 23) below.
+local function voiceReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SummonCreatureGroup(0) -- CREATURE_GROUP_CLOUDS
+end
+
 -- C++ npc_constrictor_tentacleAI::Reset (:1317-1320): non-triggered
 -- one-shots DoCast(me, SPELL_TENTACLE_VOID_ZONE_2 64384) +
 -- DoCastAOE(SPELL_ERUPT 64144) — self-cast form per the
@@ -1071,6 +1086,7 @@ RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 1, voiceEnterCombat)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 19, voiceJustSummoned)
+RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 23, voiceReset)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 23, constrictorReset)

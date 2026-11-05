@@ -17832,10 +17832,12 @@ func init() {
 	// filler (phase-gated), DamageTaken zeroing (no phase bridge), Reset /
 	// EnterEvadeMode / ACTION_BEGIN_ENCOUNTER (instance model),
 	// GetAIForCharmedPlayer (no charmed-player AI bridge),
-	// npc_kelthuzad_skeleton/banshee/abomination/guardian
+	// npc_kelthuzad_skeleton/banshee/abomination
 	// (entry-unverifiable from C++ evidence — no registration; abomination
-	// DoCastVictim(MORTAL_WOUND 28467) and guardian DoCastVictim(
-	// BLOOD_TAP 28470) join the bridgeable-but-entry-blocked queue),
+	// DoCastVictim(MORTAL_WOUND 28467) joins the bridgeable-but-entry-blocked
+	// queue); npc_kelthuzad_guardian (16441, C++-sourced entry) registered
+	// 2026-11-05 with the ACTION_JUST_SUMMONED ev38 receiver (latent until
+	// the EVENT_TRANSITION_SUMMON machine lands),
 	// spell_kelthuzad_chains/detonate_mana/frost_blast (no AuraScript
 	// binding bridge), at_kelthuzad_center (no area-trigger bridge),
 	// achievement_just_cant_get_enough (no achievement bridge).
@@ -17845,6 +17847,7 @@ func init() {
 	// nothing to gate; ported engage/KilledUnit/JustDied hooks are
 	// ungated per C++ (separate hooks).
 	RegisterLuaBoss("boss_kelthuzad", 15990)
+	RegisterLuaBoss("npc_kelthuzad_guardian", 16441)
 
 	// Gluth (15932, Naxxramas) — lua_scripts/northrend/boss_gluth.lua.
 	// Ported arms (C++-exact): EVENT_WOUND DoCastVictim(MORTAL_WOUND
@@ -20567,8 +20570,10 @@ func init() {
 	// (SAY_VALITHRIA_ENTER_COMBAT 0 / SAY_VALITHRIA_BERSERK 6 /
 	// SAY_VALITHRIA_DREAM_PORTAL 1) ride scheduler legs (no-timer-bridge;
 	// ev38 dispatch bridged; sender npc_green_dragon_combat_trigger
-	// JustEnteredCombat unported (boss_valithria_dreamwalker.cpp:510); trigger +
-	// valithria unregistered);
+	// JustEnteredCombat unported (boss_valithria_dreamwalker.cpp:510); trigger
+	// Reset SummonCreatureGroup legs + ACTION_SETUP_ARCHMAGES relay PORTED
+	// 2026-11-05 in the lua (event 23) + npc_risen_archmage ev38 receiver;
+	// valithria herself unregistered);
 	// SAY_VALITHRIA_PLAYER_DEATH 5 is declared but never referenced by a
 	// Talk() call (dead text evidence); InitializeAI's _spawnHealth arm
 	// (curhealth via GetCreatureData(spawnId)) rides the unbridged
@@ -20587,6 +20592,7 @@ func init() {
 	// cover unported summoner casts only. Eleventh group of the
 	// "// Icecrown Citadel" block.
 	RegisterLuaBoss("npc_the_lich_king_controller", 16980)
+	RegisterLuaBoss("npc_green_dragon_combat_trigger", 38752)
 
 	// boss_sindragosa: Icecrown Citadel script, entry 36853
 	// (icecrown_citadel.h NPC_SINDRAGOSA — the RegisterIcecrownCitadelCreatureAI

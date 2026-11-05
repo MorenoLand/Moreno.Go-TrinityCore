@@ -60,10 +60,14 @@
 -- EVENT_SEARCH_ZOMBIE_MULTI scheduling machine (DoCastAOE(
 -- ZOMBIE_CHOW_SEARCH_MULTI 28404) per zombie) — no summon/zombie-list
 -- bridge; the STATE_GLUTH_EATING 4s deferral — no state bridge;
--- EVENT_SUMMON — SummonCreatureGroup(SUMMON_GROUP_CHOW_10MAN/
--- SUMMON_GROUP_CHOW_25MAN) — no summon-group bridge (raid-size
--- selector now bridged, lua_creature_events.go, but stranded on group
--- spawn) (the old "Is25ManRaid difficulty gate" wording EVENT_SEARCH_ZOMBIE_SINGLE — summons
+-- EVENT_SUMMON — PORTED below (summonTick): Is25ManRaid() ->
+-- SummonCreatureGroup(SUMMON_GROUP_CHOW_25MAN 2) else
+-- SummonCreatureGroup(SUMMON_GROUP_CHOW_10MAN 1)
+-- (boss_gluth.cpp:185-191), 15s init, 10s repeat; no IsCasting gate
+-- in C++ (the :139/:264 gates cover wound/enrage/decimate/berserk
+-- only). Group coords DB-side; creature:SummonCreatureGroup bridged
+-- 2026-11-05 (tick 238). (The old "Is25ManRaid difficulty gate"
+-- wording EVENT_SEARCH_ZOMBIE_SINGLE — summons
 -- list iteration + cross-AI SetData(TOBE_EATEN) + REACT_PASSIVE +
 -- AttackStop + MoveCloserAndStop — no summon / cross-AI / react-state
 -- / motion bridges; EVENT_KILL_ZOMBIE_SINGLE — DoCast(ZOMBIE_CHOW_
@@ -186,6 +190,21 @@ local function decimateTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SUMMON: Is25ManRaid() -> SummonCreatureGroup(
+-- SUMMON_GROUP_CHOW_25MAN 2) else SummonCreatureGroup(
+-- SUMMON_GROUP_CHOW_10MAN 1) (boss_gluth.cpp:185-191), 15s init,
+-- 10s repeat (events.Repeat). No IsCasting gate in C++.
+local function summonTick(creature, guid)
+    if creature:Is25ManRaid() then
+        creature:SummonCreatureGroup(2)
+    else
+        creature:SummonCreatureGroup(1)
+    end
+    schedule(guid, "summon", 10000, function()
+        summonTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_BERSERK: Talk(EMOTE_BERSERKER 4) + DoCastSelf(Berserk
 -- 26662), 8min init, 5min repeat (hard-enrage buff refresh).
 local function berserkTick(creature, guid)
@@ -221,6 +240,9 @@ local function gluthEnterCombat(event, creature, target)
     end)
     schedule(guid, "berserk", 480000, function()
         berserkTick(creature, guid)
+    end)
+    schedule(guid, "summon", 15000, function()
+        summonTick(creature, guid)
     end)
 end
 

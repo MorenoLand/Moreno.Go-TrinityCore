@@ -50,15 +50,15 @@
 -- on 2/4/23 (gargolmar precedent). No JustDied Talk in C++.
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_anubrekhan intro/summon machine — InitializeAI / Reset
--- (guardCorpses.clear) / JustReachedHome (SummonGuards) — group spawn
--- with DB-side coords (no summon-group bridge; creature:SummonCreature
--- is live but takes explicit coords);
+-- (guardCorpses.clear) — the guardCorpses GUID-set bookkeeping stays
+-- out (see SummonedCreatureDies below); the group spawns are PORTED
+-- below (summonGuards / spawnGuardTick, events 5/24 + engage/locust
+-- one-shots — creature:SummonCreatureGroup bridged 2026-11-05,
+-- tick 238);
 -- SummonGuards: Is25ManRaid() (now bridged, lua_creature_events.go) -> SummonCreatureGroup(GROUP_INITIAL_25M
--- 1) — same bar (IsHeroic() is bridged, lua_creature_events.go:260,
--- so difficulty is NOT the blocker); JustEngagedWith 10-man
--- EVENT_SPAWN_GUARD leg (randtime 15s-20s) — same bar; EVENT_SPAWN_GUARD
--- -> SummonCreatureGroup(GROUP_SINGLE_SPAWN 2) — same bar (DB-side
--- group coords);
+-- 1); JustEngagedWith 10-man EVENT_SPAWN_GUARD leg (randtime 15s-20s)
+-- + EVENT_LOCUST 3s re-schedule (both modes, boss_anubrekhan.cpp:215)
+-- -> SummonCreatureGroup(GROUP_SINGLE_SPAWN 2);
 -- JustSummoned PORTED 2026-10-24 (anubrekhanJustSummoned, ev19):
 -- boss_anubrekhan.cpp:118-126 IsInCombat-gated crypt-guard
 -- Talk(EMOTE_SPAWN 1) via the summoner-side ev19 hook (midnight /
@@ -105,12 +105,17 @@
 -- Maexxna within 20 min) — no achievement bridge (instance model
 -- absent). NPC_CRYPT_GUARD 16573 (naxxramas.h — kalecgos pass; no
 -- registered script of its own — its Talk now rides the boss ev19
--- summon hook, PORTED 2026-10-24; the group spawn itself stays out).
+-- summon hook, PORTED 2026-10-24; the group spawn is PORTED below (summonGuards /
+-- spawnGuardTick, events 5/24 + engage/locust one-shots).
 -- at_anubrekhan_entrance (OnlyOnceAreaTriggerScript — Talk(SAY_GREET 1)
 -- via instance GetGuidData(DATA_ANUBREKHAN), NOT_STARTED-gated) — no
 -- area-trigger bridge — documented-only.
 
 local ENTRY_ANUBREKHAN = 15956
+local BOSS_ANUBREKHAN = 0 -- naxxramas.h:30 (NAXEncounter, first entry)
+local BOSS_STATE_DONE = 2
+local GROUP_INITIAL_25M = 1 -- boss_anubrekhan.cpp:64 (SpawnGroups)
+local GROUP_SINGLE_SPAWN = 2 -- boss_anubrekhan.cpp:65
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 2
@@ -154,6 +159,21 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ SummonGuards (boss_anubrekhan.cpp:92-95): 25-man only ->
+-- SummonCreatureGroup(GROUP_INITIAL_25M 1) (group coords DB-side;
+-- creature:SummonCreatureGroup bridged 2026-11-05, tick 238).
+local function summonGuards(creature)
+    if creature:Is25ManRaid() then
+        creature:SummonCreatureGroup(GROUP_INITIAL_25M)
+    end
+end
+
+-- C++ EVENT_SPAWN_GUARD case (boss_anubrekhan.cpp:224-226): one-shot ->
+-- SummonCreatureGroup(GROUP_SINGLE_SPAWN 2).
+local function spawnGuardTick(creature, guid)
+    creature:SummonCreatureGroup(GROUP_SINGLE_SPAWN)
 end
 
 -- C++ EVENT_IMPALE (boss_anubrekhan.cpp:184-195): SelectTarget(
@@ -266,6 +286,14 @@ local function locustTick(creature, guid)
     schedule(guid, "swarmEnd", swarmEnd, function()
         swarmEndTick(creature, guid)
     end)
+    -- C++ EVENT_LOCUST (boss_anubrekhan.cpp:213-216): EVENT_SPAWN_GUARD
+    -- re-scheduled 3s after the swarm starts (both modes — the 10-man
+    -- engage leg above is the delayed first guard; this is the swarm
+    -- guard). Same "spawn_guard" key as the engage one-shot (C++
+    -- ScheduleEvent replaces a pending same-id event).
+    schedule(guid, "spawn_guard", 3000, function()
+        spawnGuardTick(creature, guid)
+    end)
     schedule(guid, "locust", 90000, function()
         locustTick(creature, guid)
     end)
@@ -312,6 +340,14 @@ local function anubrekhanEnterCombat(event, creature, target)
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature, guid)
     end)
+    -- C++ JustEngagedWith (boss_anubrekhan.cpp:172-173): 10-man only,
+    -- EVENT_SPAWN_GUARD randtime(15s,20s) — the delayed first crypt
+    -- guard (25-man gets its guards from SummonGuards at spawn).
+    if not creature:Is25ManRaid() then
+        schedule(guid, "spawn_guard", math.random(15000, 20000), function()
+            spawnGuardTick(creature, guid)
+        end)
+    end
 end
 
 local function anubrekhanLeaveCombat(event, creature)
@@ -360,9 +396,26 @@ local function anubrekhanReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ InitializeAI (boss_anubrekhan.cpp:97-104): alive + boss state !=
+-- DONE -> Reset() + SummonGuards(). Reset itself runs via event 23;
+-- the guard spawn rides the spawn hook (event 5, jedoga precedent).
+local function anubrekhanSpawn(event, creature)
+    if creature:IsAlive() and creature:GetBossState(BOSS_ANUBREKHAN) ~= BOSS_STATE_DONE then
+        summonGuards(creature)
+    end
+end
+
+-- C++ JustReachedHome (boss_anubrekhan.cpp:107-110): _JustReachedHome +
+-- SummonGuards().
+local function anubrekhanJustReachedHome(event, creature)
+    summonGuards(creature)
+end
+
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 1, anubrekhanEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 2, anubrekhanLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 3, anubrekhanTargetDied)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 4, anubrekhanDied)
+RegisterCreatureEvent(ENTRY_ANUBREKHAN, 5, anubrekhanSpawn)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 19, anubrekhanJustSummoned)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 23, anubrekhanReset)
+RegisterCreatureEvent(ENTRY_ANUBREKHAN, 24, anubrekhanJustReachedHome)

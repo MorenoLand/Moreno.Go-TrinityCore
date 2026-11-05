@@ -100,9 +100,10 @@
 -- EVENT_TRANSITION_REPLY — lich-king cross-AI Talk(SAY_ANSWER_REQUEST
 -- 3) via DATA_LICH_KING + the four KT portal GO states — instance
 -- model / no GO-state bridge; EVENT_TRANSITION_SUMMON —
--- SummonCreatureGroup(_guardianGroups) — group-ID spawn, no bridge
--- (the creature:SummonCreature bridge is live but C++ spawns by
--- summon-group, which has no bridge);
+-- SummonCreatureGroup(_guardianGroups) — the group bridge is live
+-- (creature:SummonCreatureGroup, 2026-11-05 tick 238; the guardian
+-- ev38 receiver ports below) but the transition event machine that
+-- fires it is unported — the summon stays out with the machine;
 -- phase-three UpdateAI leg — HealthBelowPct(45) Talk(SAY_REQUEST_AID
 -- 12) + transition scheduling — the health-pct read IS bridgeable
 -- (creature:GetHealthPct(), object.go:107) but the transition arm rides
@@ -121,8 +122,9 @@
 -- DoAction(ACTION_BEGIN_ENCOUNTER) — instance->SetBossState(BOSS_KELTHUZAD,
 -- IN_PROGRESS) + DoCastAOE(SPELL_VISUAL_CHANNEL 29423) 2-arg
 -- (non-triggered) + Talk(SAY_SUMMON_MINIONS 14) + SummonCreatureGroup ×7
--- + minion pocket IDs — stays OUT: the instance/DoAction/summon machine
--- has no bridge (the Oct-12 "no DoCastAOE bridge" claim is superseded
+-- + minion pocket IDs — stays OUT: the instance/DoAction machine has
+-- no bridge (the SummonCreatureGroup bridge is live since 2026-11-05,
+-- tick 238; the Oct-12 "no DoCastAOE bridge" claim is superseded
 -- by the instance-machine verdict);
 -- DoAction(ACTION_ABOMINATION_DIED) — cross-AI (guardians' entries are
 -- DB-side, no registration) — documented-only;
@@ -140,16 +142,19 @@
 -- JustEngagedWith pocket-aggro legs — grid-blocked (no grid
 -- bridge; the react-state leg is bridgeable in isolation but rides the
 -- unported pocket machine);
--- MoveInLineOfSight — no bridge; SetData(DATA_MINION_POCKET_ID) —
--- no bridge. npc_kelthuzad_guardian (16441 — entry IS C++-sourced,
+-- MoveInLineOfSight — no bridge; SetData(DATA_MINION_POCKET_ID) is
+-- bridged (creature:SetData, per-motion latch) but rides the unported
+-- pocket machine. npc_kelthuzad_guardian (16441 — entry IS C++-sourced,
 -- boss_kelthuzad.cpp:139 NPC_GUARDIAN; the old "entry-unverifiable"
--- claim was wrong): ACTION_JUST_SUMMONED visibility/react/combat-pulse
--- legs are bridged in isolation (SetVisible/SetReactState/
--- SetCombatPulseDelay all live) but the trigger is boss DoAction
--- (no bridge) and the producer is SummonCreatureGroup (no bridge)
--- — guardians never spawn in Go, so no guardian arm can fire;
--- UpdateAI _bloodTapTimer DoCastVictim(SPELL_BLOOD_TAP 28470) —
--- moroes-ready in isolation but trigger/producer-blocked;
+-- claim was wrong): ACTION_JUST_SUMMONED receiver PORTED below
+-- (kelthuzadGuardianDoAction, event 38 — SetVisible(false) +
+-- SetHomePosition + DoZoneInCombat + SetCombatPulseDelay(5) + 2s
+-- visibility timer + 25s blood-tap timer; latent until the
+-- EVENT_TRANSITION_SUMMON machine lands — the producer bridge
+-- (creature:SummonCreatureGroup, 2026-11-05 tick 238) is live but the
+-- transition event machine is unported, krick-receiver precedent);
+-- UpdateAI _bloodTapTimer DoCastVictim(SPELL_BLOOD_TAP 28470) rides
+-- the receiver's seeded timer (urand 18s,26s re-arm);
 -- ACTION_KELTHUZAD_DIED — PORTED 2026-11-04 in kelthuzadDied via
 -- kelthuzadGuardianFlee (sender is kelthuzad JustDied, ev4-registered,
 -- not the guardian's DoAction receipt; MoveHome is the MoveTargetedHome
@@ -179,6 +184,33 @@
 local ENTRY_KEL_THUZAD = 15990
 local ENTRY_GUARDIAN = 16441 -- boss_kelthuzad.cpp:139 NPC_GUARDIAN
 local EMOTE_GUARDIAN_FLEE = 0
+local EMOTE_GUARDIAN_APPEAR = 1 -- boss_kelthuzad.cpp:848
+local ACTION_JUST_SUMMONED = 1 -- boss_kelthuzad.cpp:76 (Actions enum)
+local SPELL_BLOOD_TAP = 28470 -- boss_kelthuzad.cpp:108
+
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
 
 local SAY_SLAY = 8
 local SAY_DEATH = 9
@@ -233,6 +265,68 @@ local function kelthuzadGuardianFlee(creature)
     end
 end
 
+-- Forward declaration (tharon_ja/gal_darah idiom):
+-- kelthuzadGuardianDoAction references bloodTapTick before its definition
+-- below; assigned there by plain assignment, never re-`local function`.
+local bloodTapTick
+
+-- C++ npc_kelthuzad_guardianAI::DoAction(ACTION_JUST_SUMMONED 1)
+-- (boss_kelthuzad.cpp:801-811): SetVisible(false) + SetHomePosition +
+-- DoZoneInCombat + SetCombatPulseDelay(5) + _visibilityTimer 2s +
+-- _bloodTapTimer 25s. The trigger is the boss's EVENT_TRANSITION_SUMMON
+-- (unported phase-one machine) and the producer is SummonCreatureGroup
+-- (bridged 2026-11-05, tick 238) — the receiver ports latent (krick
+-- precedent, tick 238): it fires when the transition machine lands.
+local function kelthuzadGuardianDoAction(event, creature, action)
+    if action ~= ACTION_JUST_SUMMONED then
+        return
+    end
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:SetVisible(false)
+    creature:SetHomePosition()
+    creature:DoZoneInCombat()
+    creature:SetCombatPulseDelay(5)
+    -- C++ UpdateAI :845-853: _visibilityTimer -> SetVisible(true) +
+    -- Talk(EMOTE_GUARDIAN_APPEAR 1).
+    schedule(guid, "visibility", 2000, function()
+        creature:SetVisible(true)
+        creature:Talk(EMOTE_GUARDIAN_APPEAR)
+    end)
+    -- C++ UpdateAI :859-864: _bloodTapTimer -> DoCastVictim(SPELL_BLOOD_TAP
+    -- 28470), re-arms urand(18s,26s). Seeded here (C++ seeds it in DoAction).
+    schedule(guid, "blood_tap", 25000, function()
+        bloodTapTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI :855-864: the blood-tap arm runs only with a victim
+-- (UpdateVictim gate above it); without one the timer freezes — the
+-- 5s re-poll below is the no-victim twin (no cast, no re-arm consumed).
+bloodTapTick = function(creature, guid)
+    if not creature:GetVictim() then
+        schedule(guid, "blood_tap", 5000, function()
+            bloodTapTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_BLOOD_TAP)
+    schedule(guid, "blood_tap", math.random(18000, 26000), function()
+        bloodTapTick(creature, guid)
+    end)
+end
+
+local function kelthuzadGuardianLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_kelthuzad_guardianAI::Reset (boss_kelthuzad.cpp:836-840):
+-- SetCombatPulseDelay(0) + ScriptedAI::Reset.
+local function kelthuzadGuardianReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetCombatPulseDelay(0)
+end
+
 local function kelthuzadDied(event, creature, killer)
     kelthuzadGuardianFlee(creature)
     creature:Talk(SAY_DEATH)
@@ -252,3 +346,7 @@ end
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 1, kelthuzadEnterCombat)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 3, kelthuzadTargetDied)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 4, kelthuzadDied)
+RegisterCreatureEvent(ENTRY_GUARDIAN, 2, kelthuzadGuardianLeaveCombat)
+RegisterCreatureEvent(ENTRY_GUARDIAN, 4, kelthuzadGuardianLeaveCombat)
+RegisterCreatureEvent(ENTRY_GUARDIAN, 23, kelthuzadGuardianReset)
+RegisterCreatureEvent(ENTRY_GUARDIAN, 38, kelthuzadGuardianDoAction)

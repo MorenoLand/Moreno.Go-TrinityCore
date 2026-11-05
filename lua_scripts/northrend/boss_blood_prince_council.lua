@@ -114,9 +114,11 @@
 -- PrincesData ENGAGE loop) and EnterEvadeMode DISENGAGE loop (:252-260)
 -- are PORTED via the instance guid store; the CheckRequiredBosses
 -- sequence-break leg, the roll_chance_i(50) _invocationOrder build +
--- EVENT_INVOCATION_OF_BLOOD seed, and the Reset SummonCreatureGroup /
--- intro legs stay out (no bridges / unported rotation + intro
--- machines). UpdateAI EVENT_INVOCATION_OF_BLOOD
+-- EVENT_INVOCATION_OF_BLOOD seed, and the intro legs stay out
+-- (instance GetData(DATA_BLOOD_PRINCE_COUNCIL_INTRO 43) gate — no
+-- instance GetData bridge; creature:GetData is the per-motion latch,
+-- not instance data). The Reset SummonCreatureGroup leg is PORTED
+-- below (controllerReset, event 23). UpdateAI EVENT_INVOCATION_OF_BLOOD
 -- (:373-398) cross-AI DoAction + Talk(textId) on the rotated prince is
 -- the invocation rotation machine, driven by the unregistered council
 -- controller (:352/:382/:540 — dispatch IS bridged, ev38);
@@ -954,6 +956,18 @@ local function controllerLeaveCombat(event, creature)
     end
 end
 
+-- C++ boss_blood_council_controller::Reset (boss_blood_prince_council.cpp:233-250):
+-- _Reset + Initialize (invocation counters — the rotation machine is unported,
+-- so no Lua twin) + SummonCreatureGroup(SUMMON_PRINCES_GROUP 1) (group coords
+-- DB-side; creature:SummonCreatureGroup bridged 2026-11-05, tick 238). The
+-- intro loop (:240-249, instance GetData(DATA_BLOOD_PRINCE_COUNCIL_INTRO 43)
+-- gate + per-prince RemoveFlag(NON_ATTACKABLE) / SetImmuneToPC(false) /
+-- valanar SetHealth(max) + CastSpell(REMOVE_EMPOWERED_BLOOD)) stays out —
+-- no instance GetData bridge (creature:GetData is the per-motion latch).
+local function controllerReset(event, creature)
+    creature:SummonCreatureGroup(1) -- SUMMON_PRINCES_GROUP
+end
+
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
 RegisterCreatureEvent(ENTRY_TALDARAM, 1, taldaramEnterCombat)
 RegisterCreatureEvent(ENTRY_VALANAR, 1, valanarEnterCombat)
@@ -1032,6 +1046,7 @@ RegisterCreatureEvent(ENTRY_VALANAR, 5, princeSpawn)
 RegisterCreatureEvent(ENTRY_KINETIC_BOMB, 38, kineticBombDoAction)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 1, controllerEnterCombat)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 2, controllerLeaveCombat)
+RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 23, controllerReset)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 1, nucleusEnterCombat)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 9, nucleusDamageTaken)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 23, nucleusReset)
