@@ -91,16 +91,20 @@
 -- npc_corrupted_soul_fragment precedent). Its entry constant is
 -- DB-side/script-name bound (no NPC_PRECIOUS constant in the ICC
 -- script tree).
--- npc_little_ooze / npc_big_ooze — zero Talk lines — NOT
--- registered; bridgeable-in-principle but ENTRY-BLOCKED (the
--- pit_of_saron flamebearer precedent): no NPC_LITTLE_OOZE /
--- NPC_BIG_OOZE entry constants anywhere in-tree (this clone has
--- no TDB; RegisterCreatureEvent needs an entry ID). The blocked
--- arms: EVENT_STICKY_OOZE DoCastVictim(SPELL_STICKY_OOZE 69774)
--- non-triggered, 5s init / 15s re-arm (:268-271 / :322-324);
--- IsSummonedBy triggered self-cast aura arms (:249-251 / :287-291);
--- the combine / unstable machinery is SpellScript/DoAction
--- territory and stays out.
+-- npc_little_ooze (36897, Wowhead WotLK npc=36897 — verified
+-- 2026-11-05 via browser; abilities 69774/69750 + Merge match C++)
+-- / npc_big_ooze (36899, Wowhead WotLK npc=36899 — same verification;
+-- abilities 69774/69760/69558 + Unstable Ooze Explosion match C++) —
+-- PORTED 2026-11-05 (littleOozeSummoned / bigOozeSummoned ev22 +
+-- stickyOozeTick + littleOozeDied / bigOozeDied ev4 + bigOozeDoAction
+-- ev38): IsSummonedBy self-cast auras (triggered) + 5s sticky init /
+-- 15s re-arm + little AddThreat(summoner, 500000) + big Rotface
+-- summons latch + big DoAction sticky-cancel + JustDied despawns.
+-- LATENT: the producers are unported Spell/AuraScripts (little: the
+-- mutated-infection aura OnRemove summon; big: Ooze Merge 69889 via
+-- the combine SpellScripts), so ev22/ev38 fire only when those paths
+-- land (krick precedent); the combine / unstable machinery itself
+-- stays out in SpellScript territory.
 -- npc_precious_icc — NOT registered, same entry-block (no
 -- NPC_PRECIOUS constant in-tree): blocked arms EVENT_DECIMATE
 -- DoCastVictim(71123) non-triggered / EVENT_MORTAL_WOUND
@@ -163,6 +167,16 @@ local MUTATED_INFECTION_AURAS = { 69674, 71224, 73022, 73023 }
 local SPELL_VILE_GAS_TRIGGER = 72285 -- boss_rotface.cpp:82
 local SPELL_SLIME_SPRAY = 69508 -- boss_rotface.cpp:55
 local NPC_OOZE_SPRAY_STALKER = 37986 -- icecrown_citadel.h:228
+local ENTRY_LITTLE_OOZE = 36897 -- Wowhead WotLK npc=36897, verified 2026-11-05 (browser)
+local ENTRY_BIG_OOZE = 36899 -- Wowhead WotLK npc=36899, verified 2026-11-05 (browser)
+local SPELL_LITTLE_OOZE_COMBINE = 69537 -- boss_rotface.cpp:60
+local SPELL_LARGE_OOZE_COMBINE = 69552 -- boss_rotface.cpp:61
+local SPELL_LARGE_OOZE_BUFF_COMBINE = 69611 -- boss_rotface.cpp:62
+local SPELL_WEAK_RADIATING_OOZE = 69750 -- boss_rotface.cpp:64
+local SPELL_RADIATING_OOZE = 69760 -- boss_rotface.cpp:65
+local SPELL_UNSTABLE_OOZE = 69558 -- boss_rotface.cpp:66
+local SPELL_STICKY_OOZE = 69774 -- boss_rotface.cpp:69
+local EVENT_STICKY_OOZE = 8 -- boss_rotface.cpp:100
 local EMOTE_SLIME_SPRAY = 2
 
 local timers = {}
@@ -187,6 +201,14 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
 end
 
 local infection = {}
@@ -322,8 +344,11 @@ end
 -- professor CastSpell (instance-blocked, stays out); every summon ->
 -- summons.Summon latch. Table defined above its first caller
 -- (halazzi/skadi idiom); the latch feeds Reset _Reset (:111-113) +
--- JustDied _JustDied (:142-145) + leave DespawnAll. Only the ooze
--- spray stalker arrives via a direct Lua summon (slime-spray site).
+-- JustDied _JustDied (:142-145) + leave DespawnAll. The ooze-spray
+-- stalker arrives via a direct Lua summon (slime-spray site); the big
+-- ooze latches via its ev22 handler's Rotface grid sweep (C++
+-- IsSummonedBy JustSummoned leg); little oozes are never latched
+-- (C++ latches only big oozes — little ones are player-summoned).
 local rotfaceSummons = {}
 
 local function despawnRotfaceSummons(guid)
@@ -331,6 +356,9 @@ local function despawnRotfaceSummons(guid)
     if latched then
         for _, summon in ipairs(latched) do
             if summon then
+                -- A despawned creature's C++ EventMap dies with it;
+                -- cancel its Lua timers too (big-ooze sticky ticks).
+                cancelTimers(summon:GetGUID())
                 summon:Despawn()
             end
         end
@@ -436,6 +464,112 @@ local function rotfaceSpellHitTarget(event, creature, target, spellId)
     end
 end
 
+-- C++ sticky-ooze UpdateAI arm (little :268-271, big :322-324):
+-- DoCastVictim(SPELL_STICKY_OOZE 69774), re-arm 15s. The C++
+-- UpdateVictim gate freezes the timer without a victim — the 5s
+-- re-poll below is the no-victim twin (kelthuzad blood-tap
+-- precedent). No IsCasting gate exists in either ooze UpdateAI, so
+-- no defer. Shared by both ooze sizes (same arm, same timers).
+local function stickyOozeTick(creature, guid)
+    if not creature:GetVictim() then
+        schedule(guid, "sticky_ooze", 5000, function()
+            stickyOozeTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_STICKY_OOZE)
+    schedule(guid, "sticky_ooze", 15000, function()
+        stickyOozeTick(creature, guid)
+    end)
+end
+
+-- C++ npc_little_ooze::IsSummonedBy (boss_rotface.cpp:245-256):
+-- DoCastSelf(LITTLE_OOZE_COMBINE 69537 + WEAK_RADIATING_OOZE 69750 +
+-- GREEN_ABOMINATION_HITTIN__YA_PROC 70001, all triggered) +
+-- AddThreat(summoner, 500000) + EVENT_STICKY_OOZE 5s init. LATENT:
+-- the producer is the unported spell_rotface_mutated_infection_aura
+-- OnRemove (target casts the EFFECT_2 summon spell on aura removal;
+-- no AuraScript bridge), so ev22 fires only when that path lands
+-- (krick precedent). The summoner is the formerly infected player.
+local function littleOozeSummoned(event, creature, summoner)
+    creature:CastSpell(creature, SPELL_LITTLE_OOZE_COMBINE, true)
+    creature:CastSpell(creature, SPELL_WEAK_RADIATING_OOZE, true)
+    creature:CastSpell(creature, SPELL_GREEN_ABOMINATION, true)
+    if summoner then
+        creature:AddThreat(summoner, 500000)
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "sticky_ooze", 5000, function()
+        stickyOozeTick(creature, guid)
+    end)
+end
+
+-- C++ npc_little_ooze::JustDied (:258-261): DespawnOrUnsummon.
+local function littleOozeDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+    creature:Despawn()
+end
+
+-- C++ npc_big_ooze::IsSummonedBy (boss_rotface.cpp:286-298):
+-- DoCastSelf(LARGE_OOZE_COMBINE 69552 + LARGE_OOZE_BUFF_COMBINE 69611
+-- + RADIATING_OOZE 69760 + UNSTABLE_OOZE 69558 + GREEN_ABOMINATION
+-- 70001, all triggered) + EVENT_STICKY_OOZE 5s init + register in
+-- Rotface's summons (rotface->AI()->JustSummoned). LATENT: the
+-- producer is the unported Ooze Merge 69889 via the combine
+-- SpellScripts, so ev22 fires only when that path lands (krick
+-- precedent). The Rotface latch mirrors C++ via the relayProfessor
+-- grid sweep (same file): the big ooze joins rotfaceSummons so
+-- Reset/JustDied/leave DespawnAll covers it.
+local function bigOozeSummoned(event, creature, summoner)
+    creature:CastSpell(creature, SPELL_LARGE_OOZE_COMBINE, true)
+    creature:CastSpell(creature, SPELL_LARGE_OOZE_BUFF_COMBINE, true)
+    creature:CastSpell(creature, SPELL_RADIATING_OOZE, true)
+    creature:CastSpell(creature, SPELL_UNSTABLE_OOZE, true)
+    creature:CastSpell(creature, SPELL_GREEN_ABOMINATION, true)
+    local guid = creature:GetGUID()
+    schedule(guid, "sticky_ooze", 5000, function()
+        stickyOozeTick(creature, guid)
+    end)
+    for _, boss in ipairs(creature:GetCreaturesInGrid(ENTRY_ROTFACE, 100)) do
+        if boss:IsAlive() then
+            local bossGuid = boss:GetGUID()
+            local latched = rotfaceSummons[bossGuid]
+            if not latched then
+                latched = {}
+                rotfaceSummons[bossGuid] = latched
+            end
+            latched[#latched + 1] = creature
+            return
+        end
+    end
+end
+
+-- C++ npc_big_ooze::DoAction (boss_rotface.cpp:306-309): action ==
+-- EVENT_STICKY_OOZE (8) cancels the sticky event. LATENT: the sender
+-- is the unported large_ooze_combine SpellScript (krick precedent).
+local function bigOozeDoAction(event, creature, action)
+    if action ~= EVENT_STICKY_OOZE then
+        return
+    end
+    cancelKey(creature:GetGUID(), "sticky_ooze")
+end
+
+-- C++ npc_big_ooze::JustDied (:301-305): SummonedCreatureDespawn
+-- (remove from Rotface's summons) + DespawnOrUnsummon.
+local function bigOozeDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    for _, latched in pairs(rotfaceSummons) do
+        for i, summon in ipairs(latched) do
+            if summon and summon:GetGUID() == guid then
+                table.remove(latched, i)
+                break
+            end
+        end
+    end
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_ROTFACE, 1, rotfaceJustEngagedWith)
 RegisterCreatureEvent(ENTRY_ROTFACE, 2, rotfaceLeaveCombat)
 RegisterCreatureEvent(ENTRY_ROTFACE, 3, rotfaceKilledUnit)
@@ -443,3 +577,8 @@ RegisterCreatureEvent(ENTRY_ROTFACE, 4, rotfaceJustDied)
 RegisterCreatureEvent(ENTRY_ROTFACE, 15, rotfaceSpellHitTarget)
 RegisterCreatureEvent(ENTRY_ROTFACE, 19, rotfaceJustSummoned)
 RegisterCreatureEvent(ENTRY_ROTFACE, 23, rotfaceReset)
+RegisterCreatureEvent(ENTRY_LITTLE_OOZE, 4, littleOozeDied)
+RegisterCreatureEvent(ENTRY_LITTLE_OOZE, 22, littleOozeSummoned)
+RegisterCreatureEvent(ENTRY_BIG_OOZE, 4, bigOozeDied)
+RegisterCreatureEvent(ENTRY_BIG_OOZE, 22, bigOozeSummoned)
+RegisterCreatureEvent(ENTRY_BIG_OOZE, 38, bigOozeDoAction)

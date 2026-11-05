@@ -70,22 +70,13 @@
 -- Talk(SAY_FROST_TOMB_EMOTE 4, target) — the targeted-emote whisper
 -- target is bridgeable (the mandokir SAY_WATCH / razorscale
 -- EMOTE_BERSERK precedent); DoCast(target, SPELL_FROST_TOMB_STUN
--- 42672, true) -> CastSpell(target, 42672, true); target->CastSpell
--- (target, SPELL_FROST_TOMB_SUMMON 42714, true) -> creature:CastSpell
--- (target, 42714, true) — the C++ comment says "checked from sniffs -
--- the player casts the spell"; player:CastSpell is bridged
--- (lua_player.go:2752) but the creature cast STAYS: ev22 IS bridged
--- (runtime.go:354; fireCreaturePetSummoned,
--- lua_creature_events.go:6812) and fires for this summon, but the
--- summoner it delivers is the boss — the boss-cast summon funnels
--- through summonTempCreature with SummonerMotion = the boss
--- (lua_creature_events.go:190-198), so a direct ev22 port would cast
--- SPELL_FROST_TOMB on Keleseth, not the tombed player. The
--- player-cast route that would deliver the right summoner rides the
--- pet funnel (handleSummonPet -> character_pet row, PetCommandFollow,
--- no duration despawn, dismisses the victim's real pet), so the
--- IsSummonedBy leg (:91-97) stays unported — see the frost-tomb note
--- below; repeat {14s,19s} regardless of target found, C++-exact.
+-- 42672, true) -> CastSpell(target, 42672, true); the 42714 summon leg
+-- is PORTED 2026-11-05 as a direct SummonCreature(23965) at the target
+-- + inline tomb:CastSpell(target, 48400, true) off the returned object
+-- (the boss-cast 42714 form would summon with summoner = the boss and
+-- ev22 would frost-tomb Keleseth; the player-cast form rides the pet
+-- funnel — effect 28, spells.go:16321, no temp-summon route on the
+-- player path); repeat {14s,19s} regardless of target found, C++-exact.
 -- JustDied (:165-169) — Talk(SAY_DEATH 5) (event 4 — the sjonnir
 -- JustDied-Talk precedent); the BossAI::_JustDied() passthrough has no
 -- bridge; the combat timers are wiped with it.
@@ -99,25 +90,19 @@
 -- precedent).
 -- DOCUMENTED-ONLY (in this header; registrations are entry 23953 +
 -- skeleton entry 23970 below):
--- npc_frost_tomb (NPC_FROSTTOMB 23965, :79-115) — NOT registered (no
--- genuinely bridgeable arms, the yogg_saron adds precedent):
--- IsSummonedBy DoCast(summoner, SPELL_FROST_TOMB 48400, true) (:91-97)
--- — ev22 IS bridged (runtime.go:354; fireCreaturePetSummoned,
--- lua_creature_events.go:6812) but NOT portable C++-exact, verified
--- 2026-11-05: on the working summon path the boss creature-casts
--- 42714, so summonTempCreature fires ev22 with summoner = the boss
--- (lua_creature_events.go:190-198) and a direct port would frost-tomb
--- Keleseth. Switching the 42714 cast to the player (the C++ caster)
--- would deliver the right summoner — the triggered player path does
--- execute effect 28 (spells.go:27128-27171) — but only via the pet
--- funnel (handleSummonPet: character_pet row, PetCommandFollow, no
--- duration despawn, dismisses the victim's real pet — pets.go:2090-
--- 2125, pet_cooldowns.go:73); there is no temp-summon route on the
--- player path. JustDied cross-creature SetData
--- (DATA_ON_THE_ROCKS false) via instance GetGuidData
--- (DATA_PRINCE_KELESETH) (:101-105) — instance-GUID leg, no bridge.
--- (The spell-summoned tomb from the FROST_TOMB arm therefore spawns
--- with no Lua AI — visual only.)
+-- npc_frost_tomb (NPC_FROSTTOMB 23965, :79-115) — IsSummonedBy
+-- DoCast(summoner, SPELL_FROST_TOMB 48400, true) (:91-97) PORTED
+-- 2026-11-05 inline in frostTombTick: the arm summons the tomb
+-- directly at the target (5-arg SummonCreature = MANUAL_DESPAWN —
+-- the tomb lives until killed, its despawn riding the unported
+-- AuraScript OnRemove) and casts 48400 on the target off the returned
+-- object (zuljin-spirit precedent). No ev22 registration: the
+-- boss-cast 42714 form would deliver summoner = the boss and
+-- frost-tomb Keleseth, and the player-cast form rides the pet funnel
+-- (effect 28, spells.go:16321 — no temp-summon route on the player
+-- path). JustDied cross-creature SetData (DATA_ON_THE_ROCKS false)
+-- via instance GetGuidData (DATA_PRINCE_KELESETH) (:101-105) —
+-- instance-GUID leg, no bridge — stays out.
 -- npc_vrykul_skeleton (NPC_SKELETON 23970, :247-320) — PORTED this
 -- run (skeletonReset / skeletonDamageTaken / skeletonDecrepifyTick /
 -- skeletonResurrectTick / skeletonShadowFissureTick; the old "no
@@ -142,6 +127,7 @@
 -- joins the unmodeled-achievement queue.
 
 local ENTRY_KELESETH = 23953
+local ENTRY_FROST_TOMB = 23965 -- NPC_FROSTTOMB (boss_keleseth.cpp:46)
 local ENTRY_SKELETON = 23970 -- NPC_SKELETON (boss_keleseth.cpp:47)
 local ENTRY_RUNEMAGE = 23960 -- NPC_RUNEMAGE (boss_keleseth.cpp:49)
 local ENTRY_STRATEGIST = 23956 -- NPC_STRATEGIST (boss_keleseth.cpp:50)
@@ -245,7 +231,17 @@ end
 -- Talk(SAY_FROST_TOMB_EMOTE 4, target) + DoCast(target,
 -- SPELL_FROST_TOMB_STUN 42672, true) + target->CastSpell(target,
 -- SPELL_FROST_TOMB_SUMMON 42714, true); re-arm {14s,19s} sits outside
--- the target check — C++-exact.
+-- the target check — C++-exact. The 42714 leg is NOT cast as a spell:
+-- the boss-cast form would summon with summoner = the boss and the
+-- ev22 IsSummonedBy leg would frost-tomb Keleseth (verified
+-- 2026-11-05), and the player-cast form rides the pet funnel (effect
+-- 28, spells.go:16321 — no temp-summon route on the player path).
+-- Instead the arm summons the tomb directly at the target (5-arg
+-- SummonCreature = TEMPSUMMON_MANUAL_DESPAWN, the faithful type:
+-- the tomb lives until killed, its despawn riding the unported
+-- AuraScript OnRemove) and executes the IsSummonedBy leg inline off
+-- the returned object (zuljin-spirit precedent): tomb:CastSpell
+-- (target, SPELL_FROST_TOMB 48400, true) — same order as C++.
 local function frostTombTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "frosttomb", 500, function()
@@ -258,15 +254,10 @@ local function frostTombTick(creature, guid)
         creature:Talk(SAY_FROST_TOMB)
         creature:Talk(SAY_FROST_TOMB_EMOTE, target)
         creature:CastSpell(target, SPELL_FROST_TOMB_STUN, true)
-        -- C++ comment: "checked from sniffs - the player casts the
-        -- spell" — player:CastSpell is bridged (lua_player.go:2752),
-        -- but the creature cast stays: ev22 fires for this summon
-        -- with summoner = the boss (summonTempCreature creature
-        -- branch), so an ev22 port would frost-tomb Keleseth; the
-        -- player-cast route rides the pet funnel (no temp-summon
-        -- route on the player path), so the IsSummonedBy leg
-        -- (:91-97) stays unported — see the frost-tomb note above.
-        creature:CastSpell(target, SPELL_FROST_TOMB_SUMMON, true)
+        local tomb = creature:SummonCreature(ENTRY_FROST_TOMB, target:GetX(), target:GetY(), target:GetZ(), target:GetO())
+        if tomb then
+            tomb:CastSpell(target, SPELL_FROST_TOMB, true)
+        end
     end
     schedule(guid, "frosttomb", {14000, 19000}, function()
         frostTombTick(creature, guid)

@@ -119,13 +119,16 @@
 -- the immunity pair, 07:47 sweep) but Reset itself is unported (the
 -- whole encounter is intro/DoAction-machine-gated), so the legs stay
 -- out with it; EnterEvadeMode — portal GO-state legs — instance model;
--- DoAction(ACTION_BEGIN_ENCOUNTER) — instance->SetBossState(BOSS_KELTHUZAD,
--- IN_PROGRESS) + DoCastAOE(SPELL_VISUAL_CHANNEL 29423) 2-arg
--- (non-triggered) + Talk(SAY_SUMMON_MINIONS 14) + SummonCreatureGroup ×7
--- + minion pocket IDs — stays OUT: the instance/DoAction machine has
--- no bridge (the SummonCreatureGroup bridge is live since 2026-11-05,
--- tick 238; the Oct-12 "no DoCastAOE bridge" claim is superseded
--- by the instance-machine verdict);
+-- DoAction(ACTION_BEGIN_ENCOUNTER) — PORTED 2026-11-05 in
+-- kelthuzadDoAction (event 38; latent — the at_kelthuzad_center
+-- sender has no area-trigger bridge, krick precedent): NOT_STARTED
+-- gate (TO_BE_DECIDED 5 treated as the unset twin of NOT_STARTED) +
+-- SetImmuneToPC(false) via RemoveFlag(59, 0x100) + SetBossState
+-- IN_PROGRESS + DoZoneInCombat + DoCastAOE(SPELL_VISUAL_CHANNEL
+-- 29423) self-cast + Talk(SAY_SUMMON_MINIONS 14) + SummonCreatureGroup
+-- groups 5-11 with REACT_PASSIVE + SetData(DATA_MINION_POCKET_ID,
+-- group) per summon. The SetPhase(PHASE_ONE) leg + the five schedules
+-- stay out with the phase-one machine (no timers seeded).
 -- DoAction(ACTION_ABOMINATION_DIED) — cross-AI (guardians' entries are
 -- DB-side, no registration) — documented-only;
 -- GetAIForCharmedPlayer -> KelThuzadCharmedPlayerAI
@@ -143,8 +146,9 @@
 -- bridge; the react-state leg is bridgeable in isolation but rides the
 -- unported pocket machine);
 -- MoveInLineOfSight — no bridge; SetData(DATA_MINION_POCKET_ID) is
--- bridged (creature:SetData, per-motion latch) but rides the unported
--- pocket machine. npc_kelthuzad_guardian (16441 — entry IS C++-sourced,
+-- bridged (creature:SetData, per-motion latch) and is now written by
+-- the ACTION_BEGIN_ENCOUNTER receiver below (the pocket-aggro
+-- MoveInLOS legs still stay out — no grid bridge). npc_kelthuzad_guardian (16441 — entry IS C++-sourced,
 -- boss_kelthuzad.cpp:139 NPC_GUARDIAN; the old "entry-unverifiable"
 -- claim was wrong): ACTION_JUST_SUMMONED receiver PORTED below
 -- (kelthuzadGuardianDoAction, event 38 — SetVisible(false) +
@@ -177,7 +181,8 @@
 -- AuraScript binding bridge — joins the SpellScript/AuraScript queue.
 -- at_kelthuzad_center (AreaTriggerScript): NOT_STARTED-gated
 -- DoAction(ACTION_BEGIN_ENCOUNTER) via DATA_KELTHUZAD — no
--- area-trigger bridge (anubrekhan precedent) — documented-only.
+-- area-trigger bridge (anubrekhan precedent) — documented-only; the
+-- receiver is PORTED latent in kelthuzadDoAction (event 38).
 -- achievement_just_cant_get_enough: DATA_ABOMINATION_DEATH_COUNT >= 18
 -- via DATA_KELTHUZAD GetData — no achievement bridge — documented-only.
 
@@ -186,6 +191,13 @@ local ENTRY_GUARDIAN = 16441 -- boss_kelthuzad.cpp:139 NPC_GUARDIAN
 local EMOTE_GUARDIAN_FLEE = 0
 local EMOTE_GUARDIAN_APPEAR = 1 -- boss_kelthuzad.cpp:848
 local ACTION_JUST_SUMMONED = 1 -- boss_kelthuzad.cpp:76 (Actions enum)
+local ACTION_BEGIN_ENCOUNTER = 0 -- boss_kelthuzad.cpp:74 (Actions enum)
+local BOSS_KELTHUZAD = 14 -- naxxramas.h NAXEncounter (0-based: ANUBREKHAN 0 .. SAPPHIRON 13, KELTHUZAD 14)
+local SPELL_VISUAL_CHANNEL = 29423 -- boss_kelthuzad.cpp:89
+local SAY_SUMMON_MINIONS = 14 -- boss_kelthuzad.cpp:40
+local SUMMON_GROUP_MINION_FIRST = 5 -- boss_kelthuzad.cpp:116
+local N_MINION_GROUPS = 7 -- boss_kelthuzad.cpp:112
+local DATA_MINION_POCKET_ID = 0 -- boss_kelthuzad.cpp:82 (KTData enum, first)
 local SPELL_BLOOD_TAP = 28470 -- boss_kelthuzad.cpp:108
 
 local timers = {}
@@ -343,9 +355,53 @@ local function kelthuzadDied(event, creature, killer)
     end
 end
 
+-- C++ boss_kelthuzadAI::DoAction(ACTION_BEGIN_ENCOUNTER 0)
+-- (boss_kelthuzad.cpp:529-555), in C++ order. The sender is the
+-- unported at_kelthuzad_center area trigger (:989-1002, no AT bridge),
+-- so the receiver ports latent (krick precedent): it fires when an
+-- area-trigger bridge lands. The NOT_STARTED gate reads Go's boss
+-- state, where an unset boss is TO_BE_DECIDED (5) — the Go twin of
+-- C++'s Create-time NOT_STARTED pre-fill (InstanceScript.h:237;
+-- instance_boss_states.go), so 5 proceeds like 0; any other state
+-- (IN_PROGRESS/FAIL/DONE) returns, C++-exact. SetImmuneToPC(false)
+-- is the RemoveFlag(59, 0x100) twin (Unit.cpp:8440-8449; nefarian
+-- precedent) — the tick-241 "no bridge" claim was stale. The
+-- SetPhase(PHASE_ONE) leg has no bridge and the five schedules it
+-- feeds (EVENT_SKELETON 5s, EVENT_BANSHEE 30s, EVENT_ABOMINATION 30s,
+-- EVENT_DESPAWN_MINIONS 3m33s, EVENT_PHASE_TWO 3m48s) stay out with
+-- the phase-one machine — their handlers are unported, so no timers
+-- are seeded here; when the machine lands, seed from this receiver.
+-- The summon groups ride creature_summon_groups (TDB rows; the repo
+-- world.db has no such table, so the loop is inert until live TDB
+-- provides them — yogg-illusion caveat); each summon gets
+-- REACT_PASSIVE + its pocket id via SetData(DATA_MINION_POCKET_ID,
+-- group), the per-motion store the minion pocket legs read.
+local function kelthuzadDoAction(event, creature, action)
+    if action ~= ACTION_BEGIN_ENCOUNTER then
+        return
+    end
+    local state = creature:GetBossState(BOSS_KELTHUZAD)
+    if state ~= 0 and state ~= 5 then
+        return
+    end
+    creature:RemoveFlag(59, 0x100) -- SetImmuneToPC(false)
+    creature:SetBossState(BOSS_KELTHUZAD, 1) -- IN_PROGRESS
+    creature:DoZoneInCombat()
+    creature:CastSpell(creature, SPELL_VISUAL_CHANNEL) -- DoCastAOE self-cast
+    creature:Talk(SAY_SUMMON_MINIONS)
+    for group = SUMMON_GROUP_MINION_FIRST, SUMMON_GROUP_MINION_FIRST + N_MINION_GROUPS - 1 do
+        local summoned = creature:SummonCreatureGroup(group)
+        for _, summon in ipairs(summoned) do
+            summon:SetReactState(0) -- REACT_PASSIVE
+            summon:SetData(DATA_MINION_POCKET_ID, group)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 1, kelthuzadEnterCombat)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 3, kelthuzadTargetDied)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 4, kelthuzadDied)
+RegisterCreatureEvent(ENTRY_KEL_THUZAD, 38, kelthuzadDoAction)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 2, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 4, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 23, kelthuzadGuardianReset)
