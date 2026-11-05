@@ -318,11 +318,14 @@ local function onColumnOfFrost(creature, guid)
 end
 
 -- C++ npc_risen_archmage engage (:657): InterruptNonMeleeSpells(false)
--- is dropped — StopSpellCast is an explicit no-op for creatures
--- (lua_objects.go:332 — packet-only casts, no cast state to interrupt).
+-- PORTED first below (gal_darah precedent). The old "dropped — StopSpellCast
+-- is an explicit no-op" note conflated two methods and a stale line cite:
+-- InterruptNonMeleeSpells is a live bridge (lua_creature_events.go:1995,
+-- cancels pending/channel casts) and StopSpellCast interrupts too (:985).
 local function risenArchmageJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:InterruptNonMeleeSpells(false)
     schedule(guid, "frostbolt_volley", {5000, 15000}, function() onFrostboltVolley(creature, guid) end)
     schedule(guid, "mana_void", {20000, 25000}, function() onManaVoid(creature, guid) end)
     schedule(guid, "column_of_frost", {10000, 20000}, function() onColumnOfFrost(creature, guid) end)

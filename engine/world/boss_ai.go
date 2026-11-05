@@ -20563,7 +20563,8 @@ func init() {
 	// (line 49); ScriptName bindings are DB-side as usual.
 	// Ported arms in
 	// lua_scripts/northrend/boss_baltharus_the_warborn.lua:
-	// boss_baltharus_the_warborn JustEngagedWith Talk(SAY_AGGRO 1)
+	// boss_baltharus_the_warborn JustEngagedWith InterruptNonMeleeSpells
+	// (false) first (:112, gal_darah precedent) + Talk(SAY_AGGRO 1)
 	// (event 1, the auriaya precedent); JustDied Talk(SAY_DEATH 4)
 	// (event 4, the sjonnir precedent); KilledUnit Talk(SAY_KILL 2) gated
 	// on victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious

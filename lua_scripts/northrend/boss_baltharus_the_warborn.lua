@@ -21,9 +21,9 @@
 -- so ScriptName bindings are DB-side by construction.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
--- boss_baltharus_the_warborn JustEngagedWith — Talk(SAY_AGGRO 1)
--- (event 1 — the auriaya precedent; the InterruptNonMeleeSpells /
--- BossAI::JustEngagedWith / event-scheduling legs have no bridges).
+-- boss_baltharus_the_warborn JustEngagedWith — InterruptNonMeleeSpells
+-- (false) + Talk(SAY_AGGRO 1) (event 1 — the auriaya precedent for Talk;
+-- the instance/setActive/ScheduleTasks legs have no bridges).
 -- boss_baltharus_the_warborn JustDied — Talk(SAY_DEATH 4) (event 4 —
 -- the sjonnir precedent; the _JustDied() instance leg has no instance
 -- bridge and the xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH)
@@ -240,8 +240,11 @@ end
 -- events.ScheduleEvent(EVENT_CLEAVE, Seconds(13), 0, PHASE_COMBAT);
 -- events.ScheduleEvent(EVENT_ENERVATING_BRAND, Seconds(13), 0, PHASE_COMBAT);
 -- events.ScheduleEvent(EVENT_BLADE_TEMPEST, Seconds(18), 0, PHASE_COMBAT);
--- Talk(SAY_AGGRO) — the auriaya precedent (the non-Talk legs have no
--- bridges).
+-- Talk(SAY_AGGRO) last; the engage InterruptNonMeleeSpells(false)
+-- (:112) is PORTED first in baltharusEnterCombat below (gal_darah
+-- precedent — the old "leg out" note rested on the stale pre-pending-model
+-- no-op-stub reading of the bridge, retracted; the bridge at
+-- lua_creature_events.go:1995 cancels pending/channel casts).
 -- C++ boss_baltharus_the_warborn::JustEngagedWith also schedules
 -- EVENT_CLEAVE / EVENT_ENERVATING_BRAND (13s) / EVENT_BLADE_TEMPEST
 -- (18s) on PHASE_COMBAT (the intro phase carries only the intro Talk,
@@ -251,11 +254,13 @@ end
 -- including the 1ms EVENT_CLONE pump (stale maiden deviation
 -- retracted).
 local function baltharusEnterCombat(event, creature, target)
-    -- C++ JustEngagedWith base call (boss_baltharus_the_warborn.cpp:113):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, base-first
-    -- (InterruptNonMeleeSpells leg out; Talk stays where the handler
-    -- already had it); instance/setActive/ScheduleTasks legs out.
+    -- C++ JustEngagedWith (boss_baltharus_the_warborn.cpp:112-113):
+    -- InterruptNonMeleeSpells(false) first, then the BossAI base arms
+    -- (ScriptedCreature.cpp:540/542) — SetCombatPulseDelay(5) +
+    -- me-form DoZoneInCombat; instance/setActive/ScheduleTasks legs out.
+    -- Talk(SAY_AGGRO) fires last in C++ (after the timer seeds); the Lua
+    -- handler keeps Talk before the seeds, as before.
+    creature:InterruptNonMeleeSpells(false)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)

@@ -686,9 +686,11 @@ RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 23, crokReset)
 -- C++ npc_frostwing_ymirjar_vrykul::JustEngagedWith :1237-1273 —
 -- per-entry timer seeds, all re-keyed to event 1 (see the PORTED
 -- ARMS header note for the C++-exact arm list). The
--- InterruptNonMeleeSpells(false) (:1242) leg is dropped: StopSpellCast
--- is an explicit no-op for creatures (lua_objects.go:332 — packet-only
--- casts, no cast state to interrupt). Single-arg
+-- InterruptNonMeleeSpells(false) (:1242) leg is PORTED first in
+-- ymirjarEnterCombat below (gal_darah precedent). The old "dropped —
+-- StopSpellCast is an explicit no-op" note conflated two methods and a
+-- stale line cite: InterruptNonMeleeSpells is a live bridge
+-- (lua_creature_events.go:1995, cancels pending/channel casts). Single-arg
 -- DoCast() resolves via UnitAI::DoCast: AITARGET_SELF (arctic
 -- chill) -> self-cast; AITARGET_VICTIM (rapid shot, death
 -- embrace) -> victim-cast.
@@ -879,6 +881,7 @@ end
 local function ymirjarEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:InterruptNonMeleeSpells(false)
     local entry = creature:GetEntry()
     if entry == ENTRY_YMIRJAR_FROSTBINDER then
         creature:CastSpell(creature, SPELL_ARCTIC_CHILL)
