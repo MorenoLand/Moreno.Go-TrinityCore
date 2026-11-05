@@ -76,14 +76,18 @@
 -- AHUNE_SELF_STUN) + RemoveFlag(NOT_SELECTABLE) arms) is
 -- documented only — the Emerge NOT_SELECTABLE flip stays
 -- unmodeled (its trigger rides the unregistered bunny phase
--- machine); BossAI base CASTING gate PORTED on the synch-health tick (see pump gate note; live creature:IsCasting bridge, lua_creature_events.go:1950); no SpellScript/
--- AuraScript bridges — the nine script classes in this file
+-- machine); BossAI base CASTING gate PORTED on the synch-health tick (see pump gate note; live creature:IsCasting bridge, lua_creature_events.go:1950); no SpellScript
+-- bridge, and only one AuraScript bridge (RegisterAuraEvent,
+-- AuraEventOnPeriodic = 1) — eight of the nine script classes
+-- in this file
 -- (spell_ahune_synch_health, spell_summoning_rhyme_aura,
--- spell_summon_ice_spear_delayer, spell_ice_spear_control_
--- aura, spell_ice_spear_target_picker, spell_slippery_floor_
--- periodic, spell_ahune_spanky_hands, spell_ahune_minion_
--- despawner, spell_ice_bombardment_dest_picker) are
--- documented only; npc_earthen_ring_flamecaller (25754) is
+-- spell_summon_ice_spear_delayer, spell_ice_spear_target_picker,
+-- spell_slippery_floor_periodic, spell_ahune_spanky_hands,
+-- spell_ahune_minion_despawner, spell_ice_bombardment_dest_picker)
+-- are documented only; spell_ice_spear_control_aura is PORTED
+-- tick 189 below (RegisterAuraEvent 46371, iceSpearControlTick)
+-- — the delayer sibling stays out on GetTickNumber grounds (the
+-- Aura object has no GetTickNumber, lua_aura.go); npc_earthen_ring_flamecaller (25754) is
 -- documented only — its whole AI is cross-creature driven
 -- (SpellHit SHAMANS_LOOK_FOR_OPENING, DoAction EMOTE_
 -- RESURFACE, Reset via the bunny's ResetFlameCallers) or
@@ -197,3 +201,24 @@ end)
 RegisterCreatureEvent(ENTRY_AHUNE, 23, function(_, creature)
     resetBoss(creature:GetGUID())
 end)
+
+-- C++ spell_ice_spear_control_aura::PeriodicTick
+-- (boss_ahune.cpp:745-749): on each tick of the ice spear control
+-- aura (46371, self-cast by Ahune on engage — SPELL_ICE_SPEAR_AURA,
+-- boss_ahune.cpp:286), the caster casts the ice spear target picker
+-- (46372) on itself, non-triggered (no `true` arg in C++). The
+-- caster is reached via aura:GetCaster() (bridged, lua_aura.go).
+-- No PreventDefaultAction in C++, so the handler returns nothing.
+-- PORTED tick 189 via RegisterAuraEvent (46371, AuraEventOnPeriodic
+-- = 1).
+local SPELL_ICE_SPEAR_AURA = 46371 -- boss_ahune.cpp:76
+local SPELL_ICE_SPEAR_TARGET_PICKER = 46372 -- boss_ahune.cpp:77
+
+local function iceSpearControlTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster then
+        caster:CastSpell(caster, SPELL_ICE_SPEAR_TARGET_PICKER)
+    end
+end
+
+RegisterAuraEvent(SPELL_ICE_SPEAR_AURA, 1, iceSpearControlTick)

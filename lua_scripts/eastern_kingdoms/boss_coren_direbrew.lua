@@ -66,7 +66,9 @@
 -- 52850 + control aura 47369/50278, then a 2s->4s SelectTarget(Random, 0,
 -- 0.0f, false, true, -47331) mug chuck 50276, ported via the threat-list
 -- pick (GetAITargets any-unit + HasAura(47331) exclusion);
--- the control-aura ticks remain unported AuraScripts. The old "has no
+-- the 47369 control-aura tick is PORTED in boss_coren_direbrew.lua
+-- (tick 189, RegisterAuraEvent); the 50278 barreled tick remains
+-- unported (see below). The old "has no
 -- SelectTarget bridge, so no lua file" claim is retracted.
 -- Unmodeled: npc_direbrew_minion (faction latch + DoZoneInCombat + JustSummoned
 -- instance-GUID latch — no faction/instance bridges); npc_direbrew_antagonist
@@ -75,10 +77,24 @@
 -- + 50313 emerge + linked-trap GO activation — no GO Reset/Spawn event
 -- (gossip/use bridges exist, but the machine fires from Reset, not use);
 -- the GO surface also lacks CastSpell + GetLinkedTrap).
--- Unmodeled: the six SpellScripts/AuraScripts (47691 target picker, 47370 send
--- mug picker, 47344 request second mug, 47369 send mug control aura, 50278
--- barreled control aura, 47407 disarm) — no SpellScript/AuraScript bridges
--- (hellfire_peninsula precedent).
+-- AuraScripts (tick 189): spell_send_mug_control_aura (47369)
+-- PeriodicTick EFFECT_0 is PORTED below — triggered self-cast
+-- 47370 each tick (muru precedent; bearer: the sisters self-cast
+-- 47369 on engage, npc_coren_direbrew_sisters.lua). spell_direbrew_
+-- disarm (47407) PeriodicTick EFFECT_1 is PORTED below — GROW
+-- 47409 +1 stack, -1500ms duration per tick (target:GetAura +
+-- aura SetStackAmount/SetDuration bridges live, lua_aura.go) —
+-- but LATENT: GROW is applied only by the same AuraScript's
+-- OnApply arm (casts 47409 + 47310), which has no runtime event
+-- (AuraEvents exposes only OnPeriodic), so the tick no-ops until
+-- an aura-apply bridge lands. The 47407 OnApply arm itself stays
+-- out with the missing OnApply event.
+-- Unmodeled: the remaining SpellScripts/AuraScripts (47691 target
+-- picker, 47370 send mug picker, 47344 request second mug, 50278
+-- barreled control aura) — no SpellScript/AuraScript bridges
+-- (hellfire_peninsula precedent). The 50278 barreled tick
+-- (PreventDefaultAction + triggered self-cast 47442) is bridgeable
+-- in form but was not an assigned tick-189 binding; it stays out.
 -- Unmodeled: JustDied LFG FinishDungeon(287) arm (sLFGMgr + group gates —
 -- no LFG bridge).
 -- Deviations from C++: the C++ UpdateAI pre-loop CASTING gate
@@ -99,6 +115,9 @@ local FACTION_GOBLIN_DARK_IRON_BAR_PATRON = 736 -- SharedDefines.h:249
 
 local SPELL_MOLE_MACHINE_TARGET_PICKER = 47691
 local SPELL_DIREBREW_DISARM_PRE_CAST = 47407
+local SPELL_SEND_MUG_CONTROL_AURA = 47369 -- boss_coren_direbrew.cpp:74
+local SPELL_SEND_MUG_TARGET_PICKER = 47370 -- boss_coren_direbrew.cpp:75
+local SPELL_DIREBREW_DISARM_GROW = 47409 -- boss_coren_direbrew.cpp:72
 
 local NPC_ILSA_DIREBREW = 26764 -- boss_coren_direbrew.cpp:55
 local NPC_URSULA_DIREBREW = 26822 -- boss_coren_direbrew.cpp:56
@@ -352,6 +371,40 @@ local function onSummonedCreatureDies(event, creature, summon, killer)
         end)
     end
 end
+
+-- C++ spell_send_mug_control_aura::PeriodicTick
+-- (boss_coren_direbrew.cpp:533-536): the aura target casts
+-- SPELL_SEND_MUG_TARGET_PICKER (47370) triggered on itself each
+-- tick; the aura itself (47369) is self-cast by the sisters on
+-- engage (npc_coren_direbrew_sisters.lua), and the engine fires
+-- this hook from the periodic tick (RegisterAuraEvent,
+-- AuraEventOnPeriodic = 1; muru precedent). No PreventDefaultAction
+-- in C++, so the handler returns nothing.
+local function sendMugControlTick(event, aura, target)
+    target:CastSpell(target, SPELL_SEND_MUG_TARGET_PICKER, true)
+end
+
+RegisterAuraEvent(SPELL_SEND_MUG_CONTROL_AURA, 1, sendMugControlTick)
+
+-- C++ spell_direbrew_disarm::PeriodicTick
+-- (boss_coren_direbrew.cpp:581-588): each tick the GROW aura
+-- (47409) on the target gains one stack and loses 1500ms of
+-- duration, C++ order preserved (SetStackAmount, then SetDuration
+-- off the post-stack GetDuration). GetAura returns nil when GROW
+-- is absent (the C++ null-check), so the tick is a no-op then.
+-- LATENT: GROW is applied only by the same AuraScript's OnApply
+-- arm (casts 47409 + 47310), which has no runtime event —
+-- AuraEvents exposes only OnPeriodic (runtime.go) — so this tick
+-- no-ops until an aura-apply bridge lands.
+local function direbrewDisarmTick(event, aura, target)
+    local grow = target:GetAura(SPELL_DIREBREW_DISARM_GROW)
+    if grow then
+        grow:SetStackAmount(grow:GetStackAmount() + 1)
+        grow:SetDuration(grow:GetDuration() - 1500)
+    end
+end
+
+RegisterAuraEvent(SPELL_DIREBREW_DISARM_PRE_CAST, 1, direbrewDisarmTick)
 
 RegisterCreatureEvent(ENTRY_COREN, 21, onSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_COREN, 1, onEnterCombat)

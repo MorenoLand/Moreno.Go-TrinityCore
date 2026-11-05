@@ -112,10 +112,23 @@
 -- - npc_headless_horseman_head (23775): REGISTERED — JustDied's
 --   EVENT_RAIN_OF_TREATS 11s -> DoCastSelf(43344) ports cleanly as a
 --   single-arm registration. The rest strands: SpellScript/AuraScript
---   effects (42399 send-head, 42603 HP-check AuraScript), DoAction
+--   effects (42399 send-head; 42603 head-periodic HP-check, audited
+--   tick 189 — its whole arm is DoAction(ACTION_HEAD_HP_34/67) and
+--   there is no DoAction bridge anywhere in the engine, so it stays
+--   out; HealthBelowPct itself is bridged), DoAction
 --   legs (ACTION_HEAD_START_HEAD_PHASE/HP_67/HP_34), the triggered
 --   DoCastSelf(42428) head-is-dead SpellScript cast, and
 --   _instance->GetCreature(DATA_HEADLESS_HORSEMAN).
+-- - spell_headless_horseman_summoning_rhyme_aura (42879, tick 189
+--   audit — NOT ported): the PeriodicTick switch is keyed on
+--   aurEff->GetTickNumber() (1/3/5/8) and no GetTickNumber bridge
+--   exists anywhere in the engine (AuraEvents exposes only
+--   OnPeriodic; no OnApply/OnRemove to maintain an exact counter,
+--   and no in-tree precedent counts aura ticks in Lua). The arms
+--   themselves are otherwise bridgeable — aura:GetCaster() +
+--   caster:Talk(SAY_*, player) (mandokir whisper precedent),
+--   player:CastSpell(player, 42910/42909, true), aura:Remove() —
+--   so the port is one tick-number bridge away.
 -- - npc_pulsing_pumpkin (23694): PORTED below. Reset's own 42281
 --   self-cast IS the DoAction trigger in C++ (the 42281 SpellScript
 --   hits self -> ACTION_PUMPKIN_SPROUTING_FINISHED), so the sprout

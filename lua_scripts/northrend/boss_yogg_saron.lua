@@ -192,9 +192,19 @@
 -- Talk(EMOTE_OMINOUS_CLOUD_PLAYER_TOUCH) in
 -- spell_yogg_saron_boil_ominously (HandleDummy);
 -- Talk(WHISPER_VOICE_INSANE) in spell_yogg_saron_insane
--- (OnApply) — no SpellScript / AuraScript bridges; all
--- thirty-three spell scripts join the no-SpellScript /
--- no-AuraScript-bridge queues.
+-- (OnApply) — no SpellScript bridge; the AuraScript side is
+-- no longer blanket-blocked (tick 189): RegisterAuraEvent
+-- (AuraEventOnPeriodic = 1, runtime.go) ports
+-- spell_yogg_saron_empowered OnPeriodic (64161,
+-- empoweredTick below) and spell_yogg_saron_sanity DummyTick
+-- (63050, sanityTick below); spell_yogg_saron_brain_link
+-- DummyTick (63802) stays out — the linked player resolves
+-- only via SaraAI.GetLinkedPlayerGUID (no bridge) and the
+-- distance threshold reads aurEff->GetAmount() (the Aura
+-- object has no GetAmount, lua_aura.go). Residuals: empowered
+-- OnApply (stack-9 buff, no AuraEventOnApply) and sanity
+-- OnRemove (instance SetData + remove-mode gate, no
+-- AuraEventOnRemove).
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -588,6 +598,45 @@ end
 
 RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 9, immortalDamageTaken)
 
+-- C++ spell_yogg_saron_empowered::OnPeriodic
+-- (boss_yogg_saron.cpp:2524-2540): the immortal guardian's
+-- empowered aura (64161, self-cast in immortalReset above)
+-- re-stacks SPELL_EMPOWERED_BUFF (65294) each tick from current
+-- health: stack = ceil(healthPct / 10) - 1; the old buff is
+-- stripped, then re-cast triggered with SPELLVALUE_AURA_STACK =
+-- stack (and SPELL_WEAKENED 64162 stripped first). CastCustomSpell
+-- sets base points, not aura stacks (lua_creature_events.go:887),
+-- so the stack lands via a second step: cast, then
+-- target:GetAura(65294):SetStackAmount(stack) (aura SetStackAmount
+-- is bridged, lua_aura.go; the nil guard covers a non-instant
+-- buff cast applying off-tick). stack > 0 matches C++ `if (stack)`
+-- for every live target (stack is -1 only at 0 health, where a
+-- negative stack count has no Lua expression). No
+-- PreventDefaultAction in C++, so the handler returns nothing.
+-- PORTED tick 189 via RegisterAuraEvent (64161, AuraEventOnPeriodic
+-- = 1). The sibling OnApply (buff with stack 9, :2516-2521) stays
+-- out: there is no AuraEventOnApply (runtime.go defines only
+-- AuraEventOnPeriodic).
+local SPELL_EMPOWERED_BUFF = 65294 -- boss_yogg_saron.cpp:195
+local SPELL_WEAKENED = 64162 -- boss_yogg_saron.cpp:196
+
+local function empoweredTick(event, aura, target)
+    local stack = math.ceil((target:GetHealthPct() / 10) - 1)
+    target:RemoveAura(SPELL_EMPOWERED_BUFF)
+    if stack > 0 then
+        target:RemoveAura(SPELL_WEAKENED)
+        target:CastSpell(target, SPELL_EMPOWERED_BUFF, true)
+        local buff = target:GetAura(SPELL_EMPOWERED_BUFF)
+        if buff then
+            buff:SetStackAmount(stack)
+        end
+    elseif not target:HealthAbovePct(1) and not target:HasAura(SPELL_WEAKENED) then
+        target:CastSpell(target, SPELL_WEAKENED, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_EMPOWERED, 1, empoweredTick)
+
 local function cancelAll(event, creature)
     cancelTimers(creature:GetGUID())
 end
@@ -752,6 +801,37 @@ local SPELL_FORTITUDE_OF_FROST = 62650
 local SPELL_HODIRS_PROTECTIVE_GAZE = 64174
 local SPELL_FURY_OF_THE_STORM = 62702
 local SPELL_SPEED_OF_INVENTION = 62671
+
+-- C++ spell_yogg_saron_sanity::DummyTick
+-- (boss_yogg_saron.cpp:2863-2871): on each tick of the sanity aura
+-- (63050) on a player, standing in a sanity well (64169) restores
+-- 20 stacks, and at 40 stacks or below the low-sanity screen
+-- effect (63752) is (re-)cast triggered if absent. C++
+-- ModStackAmount(20) is aura:SetStackAmount(aura:GetStackAmount()
+-- + 20) (aura GetStackAmount/SetStackAmount bridged, lua_aura.go),
+-- clamped at 100 — the cast-time stack the sanity SpellScript sets
+-- via SPELLVALUE_AURA_STACK (C++ ModStackAmount clamps to the
+-- aura's max stack). No PreventDefaultAction in C++, so the handler
+-- returns nothing. PORTED tick 189 via RegisterAuraEvent (63050,
+-- AuraEventOnPeriodic = 1). The sibling OnRemove (:2873-2880)
+-- stays out: instance SetData(DATA_DRIVE_ME_CRAZY) + the
+-- AURA_REMOVE_BY_ENEMY_SPELL remove-mode gate have no bridge, and
+-- there is no AuraEventOnRemove (runtime.go defines only
+-- AuraEventOnPeriodic). The sibling SpellScript ModSanityStacks
+-- (BeforeCast, SPELLVALUE_AURA_STACK 100) stays out: no spell
+-- BeforeCast bridge.
+local SPELL_LOW_SANITY_SCREEN_EFFECT = 63752 -- boss_yogg_saron.cpp:277
+
+local function sanityTick(event, aura, target)
+    if target:HasAura(SPELL_SANITY_WELL) then
+        aura:SetStackAmount(math.min(aura:GetStackAmount() + 20, 100))
+    end
+    if aura:GetStackAmount() <= 40 and not target:HasAura(SPELL_LOW_SANITY_SCREEN_EFFECT) then
+        target:CastSpell(target, SPELL_LOW_SANITY_SCREEN_EFFECT, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SANITY, 1, sanityTick)
 
 -- C++ boss_voice_of_yogg_saronAI::JustEngagedWith (:518-529):
 -- DoCast(me, SPELL_SANITY_PERIODIC 63786) (2-arg self, non-triggered,

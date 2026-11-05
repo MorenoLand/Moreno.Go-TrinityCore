@@ -164,6 +164,18 @@
 -- uses the alive same-map/instance player pool excluding the victim
 -- (the netherspite precedent; only threat-listed units qualify in
 -- practice).
+-- spell_valanar_kinetic_bomb_aura HandleDummyTick (:1230-1244,
+-- EFFECT_1, aura 72080) — PORTED tick 189 (kineticBombAuraTick,
+-- RegisterAuraEvent 72080 / 1): live bomb within 1.0f -> bomb
+-- self-casts explosion 72052 triggered, drops visual 72054, tick
+-- aura removes itself. DoAction(72052) bomb-despawn leg stays OUT
+-- (no DoAction bridge; see the handler comment).
+-- spell_blood_council_shadow_prison HandleDummyTick (:1300-1304,
+-- EFFECT_0, aura 73001) — NOT PORTED tick 189: the gate is
+-- GetTarget()->isMoving() on a prince creature (the aura is
+-- DoCastSelf by the princes), and IsMoving exists only on the
+-- player surface (lua_player.go:1620). Porting the 72999 cast
+-- ungated would fabricate damage ticks while stationary.
 -- valanar EVENT_SHOCK_VORTEX (:826-838) — the EMPOWERED leg
 -- DoCastSelf(SPELL_EMPOWERED_SHOCK_VORTEX 72039) +
 -- Talk(EMOTE_VALANAR_SHOCK_VORTEX 3) + Repeat(30s) is
@@ -184,8 +196,9 @@
 -- leg, no-timer-bridge) — NOT registered.
 -- npc_ball_of_flame / npc_kinetic_bomb / npc_dark_nucleus — zero Talk
 -- lines; Reset one-shot aura casts (:919-924, :987-988, :1047) are
--- aura/visual setup, not timer arms; the explode/despawn/chase legs
--- ride movement informs and scheduler DoActions — no bridge, NOT
+-- aura/visual setup, not timer arms; the bomb's explode trigger now
+-- rides the 72080 aura tick (ported tick 189) but its despawn/chase
+-- legs ride movement informs and scheduler DoActions — no bridge, NOT
 -- registered (their JustSummoned legs port via the boss ev19
 -- handlers above, not via AI registration).
 -- UpdateAI UNIT_STATE_CASTING gates — PORTED 2026-11-04 (creature:IsCasting
@@ -203,7 +216,10 @@
 -- difficulty from the instance table row; the rotface heroic-gated
 -- precedent now has a bridge).
 -- The 6 spell scripts join the no-SpellScript-bridge queue, the 5 aura
--- scripts the no-AuraScript-bridge queue, and
+-- scripts the no-AuraScript-bridge queue (except the kinetic-bomb
+-- aura's periodic tick, ported tick 189 via RegisterAuraEvent; the
+-- shadow-prison aura stays out — creature IsMoving unbridged, see
+-- above), and
 -- at_blood_prince_council_start_intro the no-AreaTrigger bridge queue
 -- (the boss_anubrekhan at_anubrekhan_entrance precedent).
 --
@@ -224,6 +240,8 @@ local ENTRY_KINETIC_BOMB_TARGET = 38458 -- icecrown_citadel.h:253 (NPC_KINETIC_B
 local ENTRY_SHOCK_VORTEX = 38422 -- icecrown_citadel.h:255 (NPC_SHOCK_VORTEX)
 local ENTRY_BALL_OF_INFERNO_FLAME = 38451 -- icecrown_citadel.h:251 (NPC_BALL_OF_INFERNO_FLAME)
 local SPELL_KINETIC_BOMB = 72080 -- boss_blood_prince_council.cpp:107
+local SPELL_KINETIC_BOMB_EXPLOSION = 72052 -- boss_blood_prince_council.cpp:115
+local SPELL_KINETIC_BOMB_VISUAL = 72054 -- boss_blood_prince_council.cpp:114
 local SPELL_SHOCK_VORTEX_DUMMY = 72633 -- boss_blood_prince_council.cpp:120
 local SPELL_SHOCK_VORTEX_PERIODIC = 71945 -- boss_blood_prince_council.cpp:119
 local EMOTE_TALDARAM_FLAME = 3 -- boss_blood_prince_council.cpp:51
@@ -585,6 +603,39 @@ local function onValanarKineticBomb(creature, guid)
     schedule(guid, "kineticbomb", {18000, 24000}, function() onValanarKineticBomb(creature, guid) end)
 end
 
+-- C++ spell_valanar_kinetic_bomb_aura::HandleDummyTick
+-- (boss_blood_prince_council.cpp:1230-1244, EFFECT_1
+-- SPELL_AURA_PERIODIC_DUMMY; aura 72080, tick 189 port): each tick,
+-- if a live kinetic bomb (38454) is within 1.0f of the aura target
+-- (the bomb-target dummy), the bomb casts
+-- SPELL_KINETIC_BOMB_EXPLOSION (72052) triggered on itself, drops
+-- its SPELL_KINETIC_BOMB_VISUAL (72054) aura, and the tick aura
+-- removes itself. No PreventDefaultAction in C++, so the handler
+-- returns nothing. Bridges (checked against the CURRENT runtime):
+-- target:FindNearestCreature(entry, dist)
+-- (engine/world/lua_creature_events.go:5275; the C++ alive-only
+-- third arg is subsumed — the bridge skips dead creatures and
+-- returns the full motion-creature surface);
+-- bomb:CastSpell(bomb, spell, true) triggered (:846);
+-- bomb:RemoveAura(72054) is the RemoveAurasDueToSpell arm by spell
+-- id; target:RemoveAura(72080) is the RemoveAura(GetAura()) arm.
+-- The C++ TYPEID_UNIT guard is subsumed: Go aura targets are unit
+-- objects by construction (spells.go:39385/41592).
+-- RESIDUAL: bomb->AI()->DoAction(72052) stays OUT — DoAction has no
+-- bridge on the creature event surface (no DoAction method in
+-- lua_creature_events.go / lua_objects.go). In C++ it schedules the
+-- bomb's EVENT_BOMB_DESPAWN 1s later (SetVisible(false) +
+-- DespawnOrUnsummon 5s, :1018-1022); without it the bomb lingers
+-- until its 60s Reset despawn (:990).
+local function kineticBombAuraTick(event, aura, target)
+    local bomb = target:FindNearestCreature(ENTRY_KINETIC_BOMB, 1.0)
+    if bomb then
+        bomb:CastSpell(bomb, SPELL_KINETIC_BOMB_EXPLOSION, true)
+        bomb:RemoveAura(SPELL_KINETIC_BOMB_VISUAL)
+        target:RemoveAura(SPELL_KINETIC_BOMB)
+    end
+end
+
 -- C++ :826-838 valanar EVENT_SHOCK_VORTEX base leg (else branch,
 -- _isEmpowered false): if (target = SelectTarget(Random, 1, 0.0f,
 -- true)) DoCast(target, SPELL_SHOCK_VORTEX 72037) (2-arg =
@@ -887,3 +938,5 @@ RegisterCreatureEvent(ENTRY_VALANAR, 23, princesReset)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 1, nucleusEnterCombat)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 9, nucleusDamageTaken)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 23, nucleusReset)
+
+RegisterAuraEvent(SPELL_KINETIC_BOMB, 1, kineticBombAuraTick)
