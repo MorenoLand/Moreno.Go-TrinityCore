@@ -106,12 +106,11 @@
 -- random-target bridges (event 15 fires; the SpellHit legs stay out
 -- on the summon/despawn blockers above).
 -- spell_varos_centrifuge_shield — AuraScript OnApply / OnRemove
--- (EFFECT_0 SPELL_AURA_DUMMY): apply -> caster flags gate ->
--- SetReactState(REACT_PASSIVE) + SetFlag(SWIMMING|UNK_6) +
--- SetImmuneToAll(true, true); remove -> SetReactState(REACT_AGGRESSIVE)
--- + RemoveFlag(SWIMMING|UNK_6) + SetImmuneToAll(false) — no
--- AuraScript bridge (the keristrasza spell_intense_cold
--- precedent); joins the no-AuraScript-bridge queue.
+-- (EFFECT_0 SPELL_AURA_DUMMY): PORTED (tick 204, RegisterAuraEvent
+-- OnApply = 2 / OnRemove = 3, below). SetImmuneToAll twin is
+-- SetFlag/RemoveFlag IMMUNE_TO_PC|IMMUNE_TO_NPC (Unit.cpp:8440-8448;
+-- keepCombat=true, so no combat-end leg; the
+-- ValidateAttackersAndOwnTarget leg is unmodeled).
 -- spell_varos_energize_core_area_enemy / spell_varos_energize_core_
 -- area_entry — SpellScript FilterTargets (TARGET_UNIT_SRC_AREA_
 -- ENEMY / TARGET_UNIT_SRC_AREA_ENTRY): caster must be NPC_VAROS,
@@ -244,3 +243,44 @@ RegisterCreatureEvent(ENTRY_VAROS, 1, varosEnterCombat)
 RegisterCreatureEvent(ENTRY_VAROS, 2, varosCombatEnd)
 RegisterCreatureEvent(ENTRY_VAROS, 4, varosDied)
 RegisterCreatureEvent(ENTRY_VAROS, 23, varosCombatEnd)
+
+local SPELL_CENTRIFUGE_SHIELD = 50053 -- oculus.h:82
+local UNIT_FLAG_UNK_6 = 0x00000040 -- UnitDefines.h:130
+local UNIT_FLAG_IMMUNE_TO_PC = 0x00000100 -- UnitDefines.h:132
+local UNIT_FLAG_IMMUNE_TO_NPC = 0x00000200 -- UnitDefines.h:133
+local UNIT_FLAG_SWIMMING = 0x00008000 -- UnitDefines.h:139
+local REACT_PASSIVE = 0 -- UnitDefines.h
+local REACT_AGGRESSIVE = 2 -- UnitDefines.h
+
+-- C++ spell_varos_centrifuge_shield::OnApply (boss_varos.cpp:280-292):
+-- Load admits creature casters only; the caster must carry any of the
+-- sniffed flags (C++ HasFlag is an any-bit read, same as the Go twin)
+-- before going passive + SWIMMING|UNK_6 + immune to all (true, true).
+local function centrifugeShieldApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if not caster:HasFlag(59, UNIT_FLAG_SWIMMING + UNIT_FLAG_IMMUNE_TO_NPC + UNIT_FLAG_IMMUNE_TO_PC + UNIT_FLAG_UNK_6) then
+        return
+    end
+    caster:SetReactState(REACT_PASSIVE)
+    caster:SetFlag(59, UNIT_FLAG_SWIMMING + UNIT_FLAG_UNK_6)
+    caster:SetFlag(59, UNIT_FLAG_IMMUNE_TO_PC + UNIT_FLAG_IMMUNE_TO_NPC)
+end
+
+RegisterAuraEvent(SPELL_CENTRIFUGE_SHIELD, 2, centrifugeShieldApply)
+
+-- C++ spell_varos_centrifuge_shield::OnRemove (boss_varos.cpp:294-302):
+-- react aggressive, SWIMMING|UNK_6 cleared, full immunity cleared.
+local function centrifugeShieldRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    caster:SetReactState(REACT_AGGRESSIVE)
+    caster:RemoveFlag(59, UNIT_FLAG_SWIMMING + UNIT_FLAG_UNK_6)
+    caster:RemoveFlag(59, UNIT_FLAG_IMMUNE_TO_PC + UNIT_FLAG_IMMUNE_TO_NPC)
+end
+
+RegisterAuraEvent(SPELL_CENTRIFUGE_SHIELD, 3, centrifugeShieldRemove)

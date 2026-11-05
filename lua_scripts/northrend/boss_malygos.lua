@@ -179,7 +179,9 @@
 -- target selection + the surge itself, alexstrasza gift beam
 -- + gift beam visual) — no SpellScript bridge (the varos
 -- precedents) and no AuraScript bridge (the keristrasza
--- precedent); all 17 join the standing queues.
+-- precedent); all 17 join the standing queues, except the gift
+-- beam visual OnApply (PORTED tick 204, below) and the portal
+-- beam (ported, below).
 -- achievement_denyin_the_scion — OnCheck: player's vehicle
 -- base entry == NPC_HOVER_DISK_MELEE (30234) — no achievement
 -- bridge (the kelthuzad / thaddius precedent); joins the
@@ -295,3 +297,33 @@ local function portalBeamRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_MALYGOS_PORTAL_BEAM, 3, portalBeamRemove)
+
+local SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL = 61023 -- boss_malygos.cpp:157
+local GO_ALEXSTRASZA_S_GIFT_10 = 193905 -- eye_of_eternity.h:69
+local GO_ALEXSTRASZA_S_GIFT_25 = 193967 -- eye_of_eternity.h:70
+
+-- C++ spell_alexstrasza_gift_beam_visual::OnApply
+-- (boss_malygos.cpp:2380-2391): Load admits creature casters only;
+-- the creature target summons Alexstrasza's Gift at its own position,
+-- 10-man or 25-man by raid difficulty. STILL BLOCKED leg: OnRemove
+-- clears NOT_SELECTABLE on the stored gift GO and on the Heart of
+-- Magic GO via instance GetGuidData(DATA_HEART_OF_MAGIC_GUID) — no
+-- instance bridge. The outer beam aura's own spell ID is DB-side only
+-- (spell_script_names), so its apply (cast 61023) / remove (drop 61023)
+-- legs cannot be registered.
+local function alexstraszaGiftBeamVisualApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if target:GetObjectType() ~= "Creature" then
+        return
+    end
+    local gift = GO_ALEXSTRASZA_S_GIFT_10
+    if target:Is25ManRaid() then
+        gift = GO_ALEXSTRASZA_S_GIFT_25
+    end
+    target:SummonGameObject(gift, target:GetX(), target:GetY(), target:GetZ(), target:GetO(), 0)
+end
+
+RegisterAuraEvent(SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL, 2, alexstraszaGiftBeamVisualApply)

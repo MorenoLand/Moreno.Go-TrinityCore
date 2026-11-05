@@ -1098,6 +1098,51 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{}, nil
 	}
+	// WhisperText is Unit::Whisper(uint32 textId, Player* target, bool isBossWhisper)
+	// (Unit.cpp:14103-14119): resolves the broadcast_text row by ID and sends a
+	// CHAT_MSG_MONSTER_WHISPER (0x0F) or CHAT_MSG_RAID_BOSS_WHISPER (0x2A) packet
+	// from this unit to the target player's session, LANG_UNIVERSAL. A missing row
+	// or an offline receiver drops silently (the C++ log-and-return and null-target
+	// arms). DELTA: C++ localizes by the target's locale and the sender's gender
+	// (BroadcastText::GetText); Go reads the enUS Text column only (the npc_text.go
+	// broadcast_text precedent). Unlike playerWhisper above, the bossWhisper flag
+	// is honored: the C++ overload sends 0x2A when true.
+	methods["WhisperText"] = func(ctx context.Context, args []any) ([]any, error) {
+		textID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 2 {
+			return nil, fmt.Errorf("argument 2 is required")
+		}
+		receiverGUID := luaObjectGUID(args[1])
+		if receiverGUID == 0 {
+			return nil, fmt.Errorf("argument 2 must be a player")
+		}
+		bossWhisper := false
+		if len(args) > 2 {
+			if boss, ok := args[2].(bool); ok {
+				bossWhisper = boss
+			}
+		}
+		if s.server == nil || s.player == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return []any{}, nil
+		}
+		receiver := s.server.findSessionByGUID(receiverGUID)
+		if receiver == nil || receiver.player == nil {
+			return []any{}, nil
+		}
+		var text string
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text FROM broadcast_text WHERE ID = ?", textID).Scan(&text); err != nil || text == "" {
+			return []any{}, nil
+		}
+		chatType := uint8(0x0F)
+		if bossWhisper {
+			chatType = 0x2A
+		}
+		packet := protocol.BuildChatMessage(chatType, languageUniversal, s.player.GUID, receiverGUID, text, "")
+		return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
+	}
 	methods["Whisper"] = playerWhisper
 	methods["SendUnitWhisper"] = playerWhisper
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })

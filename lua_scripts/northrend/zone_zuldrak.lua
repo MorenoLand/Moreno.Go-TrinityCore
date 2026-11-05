@@ -16,8 +16,9 @@
 --   hook) and the periodic tick casts Scourge Disguise Expiring
 --   (52010) on the target, triggered.
 --   spell_scourge_disguise_expiring (52010, :1014-1030): OnApply
---   whispers TEXT_DISGUISE_WARNING (28891) to the player target
---   (no Whisper bridge).
+--   whispers TEXT_DISGUISE_WARNING (28891) to the player target —
+--   PORTED (tick 204, below) via the new player:WhisperText bridge
+--   (Unit::Whisper textId overload, lua_player.go).
 -- KNOWN LIMIT: player:CastSpell ignores the triggered flag
 -- (lua_player.go:2577 -> castSpellDirect), so the disguised
 -- player's triggered self-cast lands non-triggered; pre-existing
@@ -25,6 +26,8 @@
 
 local SPELL_SCOURGE_DISGUISE = 51966 -- zone_zuldrak.cpp:957
 local SPELL_SCOURGE_DISGUISE_INSTABILITY = 51971 -- zone_zuldrak.cpp:958
+local SPELL_SCOURGE_DISGUISE_EXPIRING = 52010 -- zone_zuldrak.cpp:959
+local TEXT_DISGUISE_WARNING = 28891 -- zone_zuldrak.cpp:961
 
 -- C++ spell_scourge_disguise::ApplyEffect (zone_zuldrak.cpp:969-972).
 local function scourgeDisguiseApply(event, aura, target)
@@ -39,3 +42,19 @@ local function scourgeDisguiseRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SCOURGE_DISGUISE, 3, scourgeDisguiseRemove)
+
+-- C++ spell_scourge_disguise_expiring::OnApply (zone_zuldrak.cpp:1018-1025):
+-- if the player target still has the disguise, whisper the warning text
+-- to them (Unit::Whisper textId overload, bossWhisper=true -> 0x2A).
+-- DELTA: C++ localizes broadcast_text by target locale + sender gender;
+-- the Go bridge reads the enUS Text column only.
+local function scourgeDisguiseExpiringApply(event, aura, target)
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    if target:HasAura(SPELL_SCOURGE_DISGUISE) then
+        target:WhisperText(TEXT_DISGUISE_WARNING, target, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SCOURGE_DISGUISE_EXPIRING, 2, scourgeDisguiseExpiringApply)
