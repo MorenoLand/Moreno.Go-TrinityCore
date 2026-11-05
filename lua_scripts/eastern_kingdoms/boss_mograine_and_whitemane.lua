@@ -53,10 +53,10 @@
 -- remove NON_ATTACKABLE, set REACT_AGGRESSIVE and _canDie=true ride an
 -- unreachable trigger (whitemane's resurrection cast is unported, so
 -- ev14 never fires with 9232; ev14 itself is bridged). JustEngagedWith's
--- CallForHelp(VISIBLE_RANGE) +
--- MoveIdle have no bridges; Mograine's BossAI::JustEngagedWith
--- pulse/zone arms are PORTED in mograineEnterCombat (Whitemane's
--- override never calls the base); DATA_MOGRAINE_AND_WHITE_EVENT
+-- CallForHelp(VISIBLE_RANGE) + MoveIdle are PORTED in
+-- mograineEnterCombat (bridged lua_creature_events.go:1704/:2794),
+-- as are Mograine's BossAI::JustEngagedWith pulse/zone arms
+-- (Whitemane's override never calls the base); DATA_MOGRAINE_AND_WHITE_EVENT
 -- bookkeeping still has no bridge (luaBossAI shim).
 -- Whitemane's sub-50% DamageTaken latch (HealthBelowPctDamaged(50,
 -- damage) — damaged class): cancel combat events, InterruptNonMeleeSpells,
@@ -202,14 +202,18 @@ end
 -- Mograine ---------------------------------------------------------------
 
 -- C++ JustEngagedWith: Talk(SAY_MO_AGGRO) + EVENT_CRUSADER_STRIKE /
--- EVENT_HAMMER_OF_JUSTICE at urand(10s, 15s). CallForHelp + MoveIdle +
--- BossAI::JustEngagedWith bookkeeping documented-only (no bridges).
+-- EVENT_HAMMER_OF_JUSTICE at urand(10s, 15s). CallForHelp (bridged
+-- lua_creature_events.go:1704) + MoveIdle (bridged :2794, StopMoving
+-- alias) ported below; BossAI::JustEngagedWith bookkeeping documented-only
+-- (no bridge).
 local function mograineEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_mograine_and_whitemane.cpp:108 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_mograine_and_whitemane.cpp:108 base call first)
     creature:Talk(SAY_MO_AGGRO)
+    creature:CallForHelp(166.0) -- VISIBLE_RANGE (ScriptMgr.h:92)
+    creature:MoveIdle()
     schedule(guid, "crusaderStrike", math.random(10000, 15000), function()
         onCrusaderStrike(creature, guid)
     end)

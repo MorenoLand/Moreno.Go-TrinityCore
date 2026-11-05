@@ -26,11 +26,11 @@
 -- is where C++ ScheduleTasks/JustEngagedWith also runs. The 25% mount arm
 -- (Midnight's DamageTaken casting SPELL_MOUNT triggered) fires from the
 -- Midnight damage hook; Attumen's SpellHit(SPELL_MOUNT) arm cancels its
--- timers and Talk(SAY_MOUNT), but the follow step stays out (no MoveFollow
--- bridge); the visibility + mounted-summon steps are ported via the
--- midnight-side 1s proximity poll below (Go self-casts hit only the caster
--- plus chain jumps, so SpellHit delivery of MOUNT to Attumen is unproven
--- and the poll is driven from midnight's 25% arm, not SpellHit). No
+-- timers, Talk(SAY_MOUNT), and the mutual MoveFollow step (bridged
+-- lua_creature_events.go:4556); the visibility + mounted-summon steps are
+-- ported via the midnight-side 1s proximity poll below (Go self-casts hit
+-- only the caster plus chain jumps, so SpellHit delivery of MOUNT to Attumen
+-- is unproven and the poll is driven from midnight's 25% arm, not SpellHit). No
 -- MECHANIC_DISARM info reaches the Lua spell-hit hook, so the
 -- SAY_DISARMED arm is skipped. Midnight's directed Talk(SAY_MIDNIGHT_KILL,
 -- attumenGUID) — Talk(textId[, target]) is bridged (lua_creature_events.go:102),
@@ -200,9 +200,16 @@ local function onMountPoll(creature, guid)
             end
             mounted:DoZoneInCombat()
             attumen:SetVisible(false)
+            attumen:MoveClear()
             creature:SetVisible(false)
         end
     else
+        -- C++ SpellHit scheduler (boss_midnight.cpp:258-263): while the two
+        -- are not within 5.0 yd, re-issue both follows and repeat in 1s.
+        if attumen ~= nil then
+            attumen:MoveFollow(creature, 2.0, 0.0)
+            creature:MoveFollow(attumen, 2.0, 0.0)
+        end
         schedule(guid, "mountpoll", 1000, function() onMountPoll(creature, guid) end)
     end
 end
@@ -397,11 +404,11 @@ end
 
 local function attumenSpellHit(event, creature, caster, spellId)
     -- C++ SpellHit(SPELL_MOUNT): cancel the scheduler, both creatures
-    -- stop + go PASSIVE, walk toward each other (MoveFollow, no bridge),
-    -- then the 1s proximity summon (ported via midnight's mountpoll).
-    -- The stop/passive legs are ported below (AttackStop /
-    -- RemoveAllAttackers / SetReactState all bridged); MoveFollow stays
-    -- out. The midnight->AI()->Talk(EMOTE_MOUNT_UP=1) arm
+    -- stop + go PASSIVE, walk toward each other (MoveFollow, bridged
+    -- lua_creature_events.go:4556), then the 1s proximity summon (ported
+    -- via midnight's mountpoll). The stop/passive legs are ported below
+    -- (AttackStop / RemoveAllAttackers / SetReactState all bridged).
+    -- The midnight->AI()->Talk(EMOTE_MOUNT_UP=1) arm
     -- (boss_midnight.cpp:241) rides the event-14 caster arg — the stale
     -- "no GUID->creature bridge" claim is retracted: the caster IS the
     -- midnight creature that cast SPELL_MOUNT.
@@ -415,11 +422,13 @@ local function attumenSpellHit(event, creature, caster, spellId)
             caster:AttackStop()
             caster:RemoveAllAttackers()
             caster:SetReactState(REACT_PASSIVE)
+            caster:MoveFollow(creature, 2.0, 0.0)
             caster:Talk(EMOTE_MOUNT_UP)
         end
         creature:AttackStop()
         creature:RemoveAllAttackers()
         creature:SetReactState(REACT_PASSIVE)
+        creature:MoveFollow(caster, 2.0, 0.0)
         creature:Talk(SAY_MOUNT)
     end
 end

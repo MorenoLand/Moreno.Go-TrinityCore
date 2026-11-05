@@ -43,9 +43,11 @@
 -- DATA_ARAN SetBossState calls are skipped (admission-only via the
 -- luaBossAI shim in engine/world/boss_ai.go). No threat model — the
 -- flame-wreath target pool is random alive players in the instance rather
--- than the threat list. No UNIT_STATE_CASTING model — timers fire
--- unconditionally (same convention as the other Karazhan ports), and
--- InterruptNonMeleeSpells gates are skipped. SetPower (lua_creature_events.go:288), SetStandState (:568), and
+-- than the threat list. No UNIT_STATE_CASTING model for the other timers —
+-- they fire unconditionally (same convention as the other Karazhan ports),
+-- and InterruptNonMeleeSpells gates are skipped; the normal-cast
+-- IsNonMeleeSpellCast gate IS ported in onNormalCast via IsCasting
+-- (lua_creature_events.go:2102). SetPower (lua_creature_events.go:288), SetStandState (:568), and
 -- GetPower/GetMaxPower (object.go:101) are all bridged — the old "no
 -- GetPower" / "No SetPower/SetStandState" claims are stale. The whole
 -- drink arm (SAY_DRINK=4, mass poly 29963, conjure 29975, drink 30024,
@@ -269,11 +271,17 @@ end
 onNormalCast = function(creature, guid)
     local st = aranState[guid]
     if st then
-        -- C++: SelectTarget Random 100 yd; random school from those not on
-        -- cooldown (all three here — the interrupt arm has no Lua input).
-        local target = randomPlayer(creature, 100)
-        if target then
-            creature:CastSpell(target, NORMAL_SPELLS[math.random(#NORMAL_SPELLS)])
+        -- C++ boss_shade_of_aran.cpp:296-297: normal casts wait for
+        -- !IsNonMeleeSpellCast(false); NormalCastTimer resets to 1s even
+        -- while casting, so the 1s re-arm below already matches the retry.
+        -- (The elemental spawn below is a separate health arm, ungated.)
+        if not creature:IsCasting() then
+            -- C++: SelectTarget Random 100 yd; random school from those not on
+            -- cooldown (all three here — the interrupt arm has no Lua input).
+            local target = randomPlayer(creature, 100)
+            if target then
+                creature:CastSpell(target, NORMAL_SPELLS[math.random(#NORMAL_SPELLS)])
+            end
         end
         if not st.elementalsSpawned and healthBelowPct(creature, 40) then
             st.elementalsSpawned = true

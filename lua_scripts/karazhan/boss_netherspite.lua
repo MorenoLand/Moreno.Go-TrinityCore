@@ -23,8 +23,9 @@
 -- (missing template) degrades to virtual coordinates instead of
 -- dropping the buffs. Red-beam AddThreat(100000) is ported (AddThreat
 -- bridge). No instance-script model, so HandleDoors (the massive door)
--- is skipped. No UNIT_STATE_CASTING model, so the phase switch fires
--- unconditionally instead of waiting for IsNonMeleeSpellCast(false).
+-- is skipped. The phase switch waits for !IsNonMeleeSpellCast(false)
+-- (ported in onPhaseSwitch via IsCasting, lua_creature_events.go:2102;
+-- 500ms retry while casting).
 -- DATA_NETHERSPITE is admission-only via the luaBossAI shim in
 -- engine/world/boss_ai.go. After the first banish phase, Netherbreath
 -- re-arms on a random 5-7s instead of the C++ leftover timer value
@@ -332,8 +333,13 @@ onPhaseSwitch = function(creature, guid)
     if state == nil then
         return
     end
-    -- C++ waits for !IsNonMeleeSpellCast(false); no cast-state model, so
-    -- the switch fires unconditionally (other Karazhan ports do the same).
+    -- C++ boss_netherspite.cpp:316-320,335-339: the switch waits for
+    -- !IsNonMeleeSpellCast(false); PhaseTimer stays expired while casting,
+    -- so the next UpdateAI tick retries — re-arm 500ms (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "phase", 500, function() onPhaseSwitch(creature, guid) end)
+        return
+    end
     if state.portalPhase then
         switchToBanish(creature, guid)
     else
