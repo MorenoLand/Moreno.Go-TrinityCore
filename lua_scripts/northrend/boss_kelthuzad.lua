@@ -39,8 +39,9 @@
 -- (ScriptedCreature.h:329): SetCombatPulseDelay(5) + me-form DoZoneInCombat
 -- PORTED 2026-11-03 (ScriptedCreature.cpp:540/542; anubrekhan/gothik/
 -- sapphiron precedent); SAY_AGGRO still rides EVENT_DESPAWN_MINIONS, not
--- combat start; instance legs + setActive unbridged. No timers are modeled,
--- so no cancel bookkeeping.
+-- combat start; instance legs + setActive unbridged. Timers are modeled
+-- from the BEGIN_ENCOUNTER receiver (2026-11-05) and cancelled on
+-- events 2/4/23.
 -- Victim gating: C++ KilledUnit checks TYPEID_PLAYER (nalorakk
 -- precedent); Lua expresses it via victim:GetObjectType().
 -- Ported arms (C++-exact for all modeled arms):
@@ -51,77 +52,58 @@
 -- via kelthuzadGuardianFlee; the _JustDied instance bookkeeping has
 -- no bridge — tharon_ja precedent).
 -- Unmodeled (no bridges — documented, not wired):
--- SpellHit — SPELL_CHAINS_DUMMY 28408 -> Talk(SAY_CHAINS 10) +
--- SelectTargetList(3, Random) -> DoCast(CHains 28410) — stays out:
--- the trigger is the unported phase-two EVENT_CHAINS arm
--- (boss_kelthuzad.cpp:446; no phase bridge, and this file models
--- no timers), so event 14 can never fire with this ID (the old
--- "SpellHit never fires in the Lua surface" ruling was stale —
--- event 14 fires from the Go spell path). EVENT_SKELETON /
--- EVENT_BANSHEE / EVENT_ABOMINATION — stay out behind the unported
--- phase-one machine (scheduled from the instance DoAction
--- BEGIN_ENCOUNTER leg, PHASE_ONE-gated; summon bridge is live and the
--- spawn coords are C++-literal, but the phase machine rules — gothik
--- precedent). NOTE for re-triage: the chains self-terminate before the
--- phase switch — skeleton last fire ~210s (count 72), banshee/abom
--- last fire 200s (count 9), vs DESPAWN_MINIONS 213s / PHASE_TWO 228s —
--- so the phase gate is vacuous in the normal flow and the chains are
--- portable as receiver-seeded CreateLuaEvent timers once a tick
--- re-verifies the arithmetic against the C++ counts above;
--- EVENT_SKELETON _skeletonCount==1 leg (boss_kelthuzad.cpp:349):
--- (*it)->SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat on the
--- pre-existing room skeleton — cross-creature, rides the unported
--- phase-one DoAction machine (same EVENT_SKELETON gate) — documented-only;
+-- SpellHit — PORTED 2026-11-05 in kelthuzadSpellHit (event 14):
+-- SPELL_CHAINS_DUMMY 28408 -> Talk(SAY_CHAINS 10) + 3 random players
+-- -> DoCast(CHAINS 28410) each; the trigger is the now-ported
+-- phase-two EVENT_CHAINS self-cast (ev14 fires on the self-hit,
+-- boss_ai.go:3828); latent until the 28408 spell data resolves in Go.
+-- EVENT_SKELETON / EVENT_BANSHEE / EVENT_ABOMINATION — PORTED
+-- 2026-11-05 as receiver-seeded CreateLuaEvent timers (skeletonTick /
+-- bansheeTick / abominationTick): the re-triage arithmetic is verified
+-- against the C++ counts — skeleton last fire 206s (count 72),
+-- banshee/abom last fire 200s (count 9), vs DESPAWN_MINIONS 213s /
+-- PHASE_TWO 228s, so the phase gate is vacuous in the normal flow;
+-- the _skeletonCount==1 leg arms a random pre-existing room skeleton
+-- (23561, 200yd) instead of summoning; the empty-list EnterEvadeMode
+-- leg has no bridge, so the chain stops with no re-arm (documented
+-- in the tick).
 -- EVENT_DESPAWN_MINIONS — PORTED 2026-11-05 in despawnMinionsTick
 -- (seeded 3m33s from the BEGIN_ENCOUNTER receiver, latent with it):
 -- temp-vector sweep of the latched summons table, DespawnOrUnsummon
 -- on each non-combat summon + Talk(SAY_AGGRO 7), C++ order
--- (boss_kelthuzad.cpp:429-441); EVENT_PHASE_TWO — CastStop +
--- SetPhase(PHASE_TWO) + NOT_SELECTABLE/immune/ReactState/ThreatList
--- legs + Talk(EMOTE_PHASE_TWO 13) + the five phase-two event schedules
--- — no phase / react-state bridges (the threat leg IS bridged —
--- ResetAllThreat, lua_creature_events.go — but the whole
--- EVENT_PHASE_TWO machine stays out, gothik precedent); EVENT_FROSTBOLT_VOLLEY —
--- DoCastAOE(SPELL_FROSTBOLT_VOLLEY 28479) single-arg (triggered=false is the default),
--- randtime(24s,28s) init, randtime(16s,18s) repeat — stays OUT:
--- scheduled only in PHASE_TWO via EVENT_PHASE_TWO (:441/:449-452);
--- the phase machine has no bridge (gothik precedent; the Oct-12 "no
--- DoCastAOE bridge" claim is superseded by the phase-gating verdict); EVENT_SHADOW_FISSURE —
--- SelectTarget(Random, 0, 0.0f, true) -> DoCast(SHADOW_FISSURE 27810), Repeat randtime(14s,17s) —
--- stays OUT: the random-target leg rides the thorim randomPlayerInRange convention, but the arm is
--- PHASE_TWO-gated (scheduled only at :442 — the phase machine has no bridge, gothik precedent;
--- the stale "no random-target SelectTarget bridge (cairne/kazzak)" claim is retracted);
--- EVENT_DETONATE_MANA — SelectTarget(Random, 0, ManaUserTargetSelector) -> DoCast(DETONATE_MANA
--- 27819), Repeat randtime(30s,40s) — stays OUT: PHASE_TWO-gated (:443); the random-target + mana-user
--- legs are bridgeable (thorim pool + plr:GetPowerType(), lua_player.go:84), the phase gate rules;
--- stale "no random-target bridge" retracted;
--- EVENT_FROST_BLAST — SelectTarget(Random, 1) -> DoCast(FROST_BLAST 27808), Repeat randtime(25s,45s)
--- — stays OUT: PHASE_TWO-gated (:444); random-target rides the thorim convention, the position-1
--- offset rides the netherspite victim-exclusion, but the phase gate rules; stale claim retracted;
--- EVENT_CHAINS —
--- DoCastAOE(SPELL_CHAINS_DUMMY 28408) single-arg (triggered=false is the default),
--- randtime(60s,80s) init, 1min+randtime(0s,20s) repeat — stays OUT:
--- scheduled only in PHASE_TWO via EVENT_PHASE_TWO + gated on
--- Is25ManRaid (:447/:475-480); the phase machine has no bridge
--- (difficulty gate now bridged, lua_creature_events.go, but stranded
--- on the phase machine);
--- EVENT_TRANSITION_REPLY — lich-king cross-AI Talk(SAY_ANSWER_REQUEST
--- 3) via DATA_LICH_KING + the four KT portal GO states — instance
--- model / no GO-state bridge; EVENT_TRANSITION_SUMMON —
--- SummonCreatureGroup(_guardianGroups) — the group bridge is live
--- (creature:SummonCreatureGroup, 2026-11-05 tick 238; the guardian
--- ev38 receiver ports below) but the transition event machine that
--- fires it is unported — the summon stays out with the machine;
--- phase-three UpdateAI leg — HealthBelowPct(45) Talk(SAY_REQUEST_AID
--- 12) + transition scheduling — the health-pct read IS bridgeable
--- (creature:GetHealthPct(), object.go:107) but the transition arm rides
--- the unported summon machine (gothik phase-gating precedent — Talk +
--- transition stay out together);
--- UpdateAI frostbolt filler — DoCastVictim(SPELL_FROSTBOLT_SINGLE
--- 28478) — phase-gated on !PHASE_ONE and the UNIT_STATE_CASTING check
--- — the phase gate rules (IsCasting IS bridged,
--- lua_creature_events.go:1950, but no ported timer tick exists to gate); DamageTaken — damage = 0 in
--- PHASE_ONE — no phase bridge; Reset (boss_kelthuzad.cpp:223-235) —
+-- (boss_kelthuzad.cpp:429-441); EVENT_PHASE_TWO — PORTED 2026-11-05 in
+-- phaseTwoTick (seeded 3m48s from the BEGIN_ENCOUNTER receiver):
+-- StopSpellCast + RemoveFlag NOT_SELECTABLE + RemoveFlag immune +
+-- ResetAllThreat + SetReactState(AGGRESSIVE) + Talk(EMOTE_PHASE_TWO
+-- 13) + the five phase-two schedules; SetPhase itself has no bridge
+-- but no arm reads phase state (gothik phase-gating verdict retired —
+-- the chains self-terminate before the switch, so the machine is fully
+-- receiver-seeded). EVENT_FROSTBOLT_VOLLEY / EVENT_SHADOW_FISSURE /
+-- EVENT_DETONATE_MANA / EVENT_FROST_BLAST / EVENT_CHAINS — PORTED
+-- 2026-11-05 (volleyTick / fissureTick / detonateTick / frostBlastTick
+-- / chainsTick): DoCastAOE self-casts, thorim random-player picks
+-- (frost blast position 1 = netherspite victim exclusion, UnitAI.h
+-- :162-163), mana-user filter via GetPowerType() == POWER_MANA
+-- (moroes precedent), chains 25-man-gated; all defer 500ms on
+-- IsCasting (firemaw idiom). The Oct-12 "no DoCastAOE bridge" and
+-- "no random-target bridge" claims are superseded/retracted.
+-- EVENT_TRANSITION_REPLY — PORTED 2026-11-05 (lich-king Talk leg
+-- only): Talk(SAY_ANSWER_REQUEST 3) via GetInstanceCreature
+-- (DATA_LICH_KING 20); the four KT portal GO states stay out (no
+-- GO-state bridge). EVENT_TRANSITION_SUMMON — PORTED 2026-11-05 in
+-- transitionSummonTick: the guardian-group permutation (urand swap)
+-- + SummonCreatureGroup + DoAction(ACTION_JUST_SUMMONED) per guardian
+-- (the guardian ev38 receiver ports below).
+-- phase-three UpdateAI leg — PORTED 2026-11-05 in phaseThreePoll (1s
+-- poll from phase two): HealthBelowPct(45) one-shot latch ->
+-- Talk(SAY_REQUEST_AID 12) + transition scheduling.
+-- UpdateAI frostbolt filler — PORTED 2026-11-05 in frostboltTick:
+-- DoCastVictim(SPELL_FROSTBOLT_SINGLE 28478), seeded 2s after phase
+-- two, 3s repeat, IsCasting-gated; the phase-one filler is a silent
+-- C++ no-op (DoCast fails while channeling) and is not seeded.
+-- DamageTaken — PORTED 2026-11-05 in kelthuzadDamageTaken (event 9):
+-- damage = 0 in PHASE_ONE via the phase-two latch (return false, 0
+-- rewrite, malchezaar precedent). Reset (boss_kelthuzad.cpp:223-235) —
 -- SetReactState(REACT_PASSIVE) + NOT_SELECTABLE + SetImmuneToPC(true) —
 -- the bridges exist (creature:SetReactState; SetFlag/RemoveFlag(59) for
 -- the immunity pair, 07:47 sweep) but Reset itself is unported (the
@@ -135,8 +117,10 @@
 -- IN_PROGRESS + DoZoneInCombat + DoCastAOE(SPELL_VISUAL_CHANNEL
 -- 29423) self-cast + Talk(SAY_SUMMON_MINIONS 14) + SummonCreatureGroup
 -- groups 5-11 with REACT_PASSIVE + SetData(DATA_MINION_POCKET_ID,
--- group) per summon. The SetPhase(PHASE_ONE) leg + the five schedules
--- stay out with the phase-one machine (no timers seeded).
+-- group) per summon. The SetPhase(PHASE_ONE) leg has no bridge, but
+-- all five schedules it feeds are seeded in the receiver 2026-11-05
+-- (skeleton 5s, banshee 30s, abomination 30s, despawn-minions 3m33s,
+-- phase-two 3m48s) — no arm reads phase state.
 -- DoAction(ACTION_ABOMINATION_DIED) — PORTED 2026-11-05: the
 -- abomination JustDied relay (ev4 on 16428) calls kt:DoAction(2) via
 -- GetInstanceCreature(DATA_KELTHUZAD 14) and the receiver increments
@@ -219,6 +203,42 @@ local SPELL_BLOOD_TAP = 28470 -- boss_kelthuzad.cpp:108
 local ENTRY_SKELETON = 16427 -- boss_kelthuzad.cpp:135 NPC_SKELETON1
 local ENTRY_ABOMINATION = 16428 -- boss_kelthuzad.cpp:137 NPC_ABOMINATION1
 local ENTRY_BANSHEE = 16429 -- boss_kelthuzad.cpp:138 NPC_BANSHEE1
+local ENTRY_SKELETON2 = 23561 -- boss_kelthuzad.cpp:134 NPC_SKELETON2 (pre-existing room skeleton)
+local SPELL_FROSTBOLT_SINGLE = 28478 -- boss_kelthuzad.cpp:92
+local SPELL_FROSTBOLT_VOLLEY = 28479 -- boss_kelthuzad.cpp:93
+local SPELL_SHADOW_FISSURE = 27810 -- boss_kelthuzad.cpp:94
+local SPELL_DETONATE_MANA = 27819 -- boss_kelthuzad.cpp:95
+local SPELL_FROST_BLAST = 27808 -- boss_kelthuzad.cpp:97
+local SPELL_CHAINS = 28410 -- boss_kelthuzad.cpp:99
+local SPELL_CHAINS_DUMMY = 28408 -- boss_kelthuzad.cpp:100
+local SAY_CHAINS = 10 -- boss_kelthuzad.cpp:37
+local SAY_REQUEST_AID = 12 -- boss_kelthuzad.cpp:38
+local EMOTE_PHASE_TWO = 13 -- boss_kelthuzad.cpp:39
+local SAY_ANSWER_REQUEST = 3 -- boss_kelthuzad.cpp:44 (Lich King)
+local DATA_LICH_KING = 20 -- naxxramas.h NAXData64 (0-based)
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- UnitDefines.h:132
+local POWER_MANA = 0 -- moroes/mar'li precedent
+local SUMMON_GROUP_GUARDIAN_FIRST = 1 -- boss_kelthuzad.cpp:115
+local N_GUARDIAN_SPAWNS = 4 -- boss_kelthuzad.cpp:111
+-- Per-motion count latches (KTData twin; C++ GetData handles only index 1,
+-- tick-235 convention — absent reads 0).
+local DATA_SKELETON_COUNT = 2
+local DATA_BANSHEE_COUNT = 3
+local DATA_ABOMINATION_COUNT = 4
+local DATA_PHASE_THREE = 5
+local DATA_GUARDIAN_COUNT = 6
+local DATA_PHASE_TWO = 7 -- set by phaseTwoTick; the DamageTaken leg reads it
+-- C++ minionSpawnPoints (boss_kelthuzad.cpp:143-151), 7 points, z 143.65.
+local MINION_SPAWN_POINTS = {
+    { 3768.40, -5072.00, 143.65 },
+    { 3729.30, -5044.10, 143.65 },
+    { 3683.00, -5054.05, 143.65 },
+    { 3654.15, -5093.48, 143.65 },
+    { 3664.55, -5140.50, 143.65 },
+    { 3704.00, -5170.00, 143.65 },
+    { 3751.95, -5158.90, 143.65 },
+}
 local ACTION_ABOMINATION_DIED = 2 -- boss_kelthuzad.cpp:77 (Actions enum)
 local DATA_KELTHUZAD = 14 -- naxxramas.h NAXData64 (0-based: ANUBREKHAN 0 .. KELTHUZAD 14)
 local DATA_ABOMINATION_DEATH_COUNT = 1 -- boss_kelthuzad.cpp:83 (KTData enum, second)
@@ -341,6 +361,14 @@ local function kelthuzadReset(event, creature)
     cancelTimers(guid)
     despawnKelthuzadSummons(guid, false)
     creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0)
+    -- C++ Reset (:223-235) zeroes the spawn-chain counts and _phaseThree;
+    -- _guardianCount is NOT reset there (only the phase-three leg zeroes
+    -- it), so latch 6 is left alone.
+    creature:SetData(DATA_SKELETON_COUNT, 0)
+    creature:SetData(DATA_BANSHEE_COUNT, 0)
+    creature:SetData(DATA_ABOMINATION_COUNT, 0)
+    creature:SetData(DATA_PHASE_THREE, 0)
+    creature:SetData(DATA_PHASE_TWO, 0)
 end
 
 -- C++ EnterEvadeMode (:237-245) -> Reset() + _DespawnAtEvade(): the
@@ -349,6 +377,14 @@ local function kelthuzadLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     despawnKelthuzadSummons(guid, false)
+    -- C++ EnterEvadeMode calls Reset (:237-245), which zeroes the same
+    -- count latches as the ev23 handler above.
+    creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0)
+    creature:SetData(DATA_SKELETON_COUNT, 0)
+    creature:SetData(DATA_BANSHEE_COUNT, 0)
+    creature:SetData(DATA_ABOMINATION_COUNT, 0)
+    creature:SetData(DATA_PHASE_THREE, 0)
+    creature:SetData(DATA_PHASE_TWO, 0)
 end
 
 -- C++ inherited BossAI::JustEngagedWith (no override in boss_kelthuzadAI):
@@ -361,6 +397,16 @@ end
 
 -- C++ KilledUnit: Talk(SAY_SLAY) when victim->GetTypeId() ==
 -- TYPEID_PLAYER (nalorakk precedent).
+-- C++ DamageTaken (boss_kelthuzad.cpp:282-286): damage = 0 in PHASE_ONE.
+-- The phase latch is set by phaseTwoTick; before that every hit rewrites
+-- to 0 (return false, 0 — the ev9 rewrite twin, malchezaar/opera
+-- precedent). Pure pre-damage zeroing, no post-damage latch semantics.
+local function kelthuzadDamageTaken(event, creature, attacker, damage)
+    if creature:GetData(DATA_PHASE_TWO) ~= 1 then
+        return false, 0
+    end
+end
+
 local function kelthuzadTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
@@ -481,6 +527,438 @@ local function kelthuzadDied(event, creature, killer)
     end
 end
 
+-- Forward declarations (tharon_ja/gal_darah idiom): the BEGIN_ENCOUNTER
+-- receiver below seeds these ticks before their definitions; assigned by
+-- plain assignment, never re-`local function`.
+local skeletonTick
+local bansheeTick
+local abominationTick
+local phaseTwoTick
+local volleyTick
+local fissureTick
+local detonateTick
+local frostBlastTick
+local chainsTick
+local frostboltTick
+local phaseThreePoll
+local transitionReplyTick
+local transitionSummonTick
+
+-- C++ guardian-group permutation (boss_kelthuzad.cpp:219-220, :492-497):
+-- _guardianGroups starts {1,2,3,4} and each TRANSITION_SUMMON swaps a
+-- random remaining group to the front; C++ Reset does NOT touch it (or
+-- _guardianCount), so the Lua table persists across wipes too — only the
+-- phase-three leg zeroes the count latch.
+local kelthuzadGuardianGroups = {}
+
+local function randomMinionSpawnPoint()
+    return MINION_SPAWN_POINTS[math.random(#MINION_SPAWN_POINTS)]
+end
+
+-- C++ EVENT_SKELETON (boss_kelthuzad.cpp:335-374): count++ then the
+-- count==1 leg arms a random pre-existing room skeleton (23561, 200yd;
+-- sniffs say the first skeleton is pre-existing, :338) or summons a
+-- fresh 16427 at a random spawn point (CORPSE_TIMED_DESPAWN, Go type 5,
+-- 2000ms corpse timer) + DoZoneInCombat. Re-arm ladder: <10 -> 5s,
+-- <19 -> 4s, <31 -> 3s, ==31 -> 4s, <72 -> 2s, then stops (count 72,
+-- last fire 206s — before DESPAWN_MINIONS 213s / PHASE_TWO 228s, so the
+-- phase gate is vacuous). Empty room-skeleton list is the C++
+-- EnterEvadeMode + return leg (no evade bridge): the chain stops with
+-- no re-arm, matching the observable timer behavior.
+skeletonTick = function(creature, guid)
+    local count = creature:GetData(DATA_SKELETON_COUNT) + 1
+    creature:SetData(DATA_SKELETON_COUNT, count)
+    if count == 1 then
+        local skeletons = creature:GetCreaturesInGrid(ENTRY_SKELETON2, 200)
+        if #skeletons == 0 then
+            return
+        end
+        local skeleton = skeletons[math.random(#skeletons)]
+        skeleton:SetReactState(REACT_AGGRESSIVE)
+        skeleton:DoZoneInCombat()
+    else
+        local pt = randomMinionSpawnPoint()
+        local summon = creature:SummonCreature(ENTRY_SKELETON, pt[1], pt[2], pt[3], 0, 5, 2000)
+        if summon then
+            summon:DoZoneInCombat()
+        end
+    end
+    local nextTime = 0
+    if count < 10 then
+        nextTime = 5
+    elseif count < 19 then
+        nextTime = 4
+    elseif count < 31 then
+        nextTime = 3
+    elseif count == 31 then
+        nextTime = 4
+    elseif count < 72 then
+        nextTime = 2
+    end
+    if nextTime > 0 then
+        schedule(guid, "skeleton", nextTime * 1000, function()
+            skeletonTick(creature, guid)
+        end)
+    end
+end
+
+-- C++ EVENT_BANSHEE (boss_kelthuzad.cpp:376-394): summon 16429 at a
+-- random spawn point (type 5, 2000ms) + DoZoneInCombat. Ladder: <3 ->
+-- 30s, <7 -> 20s, <9 -> 15s, then stops (count 9, last fire 200s).
+bansheeTick = function(creature, guid)
+    local count = creature:GetData(DATA_BANSHEE_COUNT) + 1
+    creature:SetData(DATA_BANSHEE_COUNT, count)
+    local pt = randomMinionSpawnPoint()
+    local summon = creature:SummonCreature(ENTRY_BANSHEE, pt[1], pt[2], pt[3], 0, 5, 2000)
+    if summon then
+        summon:DoZoneInCombat()
+    end
+    local nextTime = 0
+    if count < 3 then
+        nextTime = 30
+    elseif count < 7 then
+        nextTime = 20
+    elseif count < 9 then
+        nextTime = 15
+    end
+    if nextTime > 0 then
+        schedule(guid, "banshee", nextTime * 1000, function()
+            bansheeTick(creature, guid)
+        end)
+    end
+end
+
+-- C++ EVENT_ABOMINATION (boss_kelthuzad.cpp:396-414): summon 16428 at a
+-- random spawn point (type 5, 2000ms) + DoZoneInCombat. Same ladder as
+-- the banshee (count 9, last fire 200s).
+abominationTick = function(creature, guid)
+    local count = creature:GetData(DATA_ABOMINATION_COUNT) + 1
+    creature:SetData(DATA_ABOMINATION_COUNT, count)
+    local pt = randomMinionSpawnPoint()
+    local summon = creature:SummonCreature(ENTRY_ABOMINATION, pt[1], pt[2], pt[3], 0, 5, 2000)
+    if summon then
+        summon:DoZoneInCombat()
+    end
+    local nextTime = 0
+    if count < 3 then
+        nextTime = 30
+    elseif count < 7 then
+        nextTime = 20
+    elseif count < 9 then
+        nextTime = 15
+    end
+    if nextTime > 0 then
+        schedule(guid, "abomination", nextTime * 1000, function()
+            abominationTick(creature, guid)
+        end)
+    end
+end
+
+-- Random alive player (thorim convention); excludeVictim is the
+-- SelectTarget position-1 twin — UnitAI.h:162-163: a nonzero offset
+-- skips that many entries in MaxThreat order for Random, i.e. the
+-- victim (netherspite convention, nil victim falls back to skipping
+-- the first alive entry).
+local function randomPlayer(creature, excludeVictim)
+    local victimGuid = nil
+    local victim = creature:GetVictim()
+    if excludeVictim and victim then
+        victimGuid = victim:GetGUID()
+    end
+    local candidates = {}
+    local aliveSeen = 0
+    for _, t in ipairs(creature:GetAITargets()) do
+        local skip = false
+        if victimGuid ~= nil then
+            skip = t:GetGUID() == victimGuid
+        elseif excludeVictim and not t:IsDead() then
+            aliveSeen = aliveSeen + 1
+            skip = aliveSeen == 1
+        end
+        if not skip and t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ ManaUserTargetSelector (boss_kelthuzad.cpp:201-207): TYPEID_PLAYER
+-- && POWER_MANA. GetPowerType is the moroes/mar'li precedent.
+local function randomManaPlayer(creature)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead() and t:GetPowerType() == POWER_MANA then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_FROSTBOLT_VOLLEY (boss_kelthuzad.cpp:449-452): DoCastAOE
+-- self-cast, repeat randtime(16s,18s). IsCasting defers 500ms
+-- (firemaw/mal_ganis idiom — the C++ pre-loop CASTING return defers
+-- event execution, it never drops the event).
+volleyTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt_volley", 500, function()
+            volleyTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_FROSTBOLT_VOLLEY)
+    schedule(guid, "frostbolt_volley", math.random(16000, 18000), function()
+        volleyTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_SHADOW_FISSURE (boss_kelthuzad.cpp:454-458): random player
+-- (position 0, no distance limit, playerOnly) -> DoCast 27810, repeat
+-- randtime(14s,17s). Re-arms even with no target (C++ Repeat is
+-- unconditional).
+fissureTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadow_fissure", 500, function()
+            fissureTick(creature, guid)
+        end)
+        return
+    end
+    local target = randomPlayer(creature, false)
+    if target then
+        creature:CastSpell(target, SPELL_SHADOW_FISSURE)
+    end
+    schedule(guid, "shadow_fissure", math.random(14000, 17000), function()
+        fissureTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_DETONATE_MANA (boss_kelthuzad.cpp:460-467): random mana
+-- player -> DoCast 27819, repeat randtime(30s,40s).
+detonateTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "detonate_mana", 500, function()
+            detonateTick(creature, guid)
+        end)
+        return
+    end
+    local target = randomManaPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_DETONATE_MANA)
+    end
+    schedule(guid, "detonate_mana", math.random(30000, 40000), function()
+        detonateTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_FROST_BLAST (boss_kelthuzad.cpp:469-473): random player,
+-- position 1 (victim excluded) -> DoCast 27808, repeat
+-- randtime(25s,45s).
+frostBlastTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frost_blast", 500, function()
+            frostBlastTick(creature, guid)
+        end)
+        return
+    end
+    local target = randomPlayer(creature, true)
+    if target then
+        creature:CastSpell(target, SPELL_FROST_BLAST)
+    end
+    schedule(guid, "frost_blast", math.random(25000, 45000), function()
+        frostBlastTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_CHAINS (boss_kelthuzad.cpp:475-480): DoCastAOE dummy 28408
+-- self-cast, repeat 1min + randtime(0s,20s). The dummy landing on KT
+-- fires the SpellHit arm below (ev14, boss_ai.go:3828 self-hit leg).
+chainsTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chains", 500, function()
+            chainsTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_CHAINS_DUMMY)
+    schedule(guid, "chains", 60000 + math.random(0, 20000), function()
+        chainsTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI frostbolt filler (boss_kelthuzad.cpp:508-513):
+-- DoCastVictim(SPELL_FROSTBOLT_SINGLE 28478) whenever the 3s cooldown
+-- is down and KT is not casting. Seeded 2s after phase two (the
+-- _frostboltCooldown = 2s leg at :440); the phase-one filler is a
+-- silent no-op in C++ (DoCast fails while the VISUAL_CHANNEL is live,
+-- UnitAI.cpp:167-168), so it is not seeded in phase one.
+frostboltTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function()
+            frostboltTick(creature, guid)
+        end)
+        return
+    end
+    if not creature:GetVictim() then
+        schedule(guid, "frostbolt", 5000, function()
+            frostboltTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_FROSTBOLT_SINGLE)
+    schedule(guid, "frostbolt", 3000, function()
+        frostboltTick(creature, guid)
+    end)
+end
+
+-- C++ phase-three leg (boss_kelthuzad.cpp:313-327): HealthBelowPct(45)
+-- one-shot — Talk(SAY_REQUEST_AID 12) + TRANSITION_REPLY at 4s +
+-- TRANSITION_SUMMON at 7-9s and 13-15s (+19-21s, 25-27s on 25-man).
+-- Polled 1s from phase two (no UpdateAI tick in Lua); the latch makes
+-- it one-shot. GetHealthPct fires up to 1 HP early (ironaya
+-- convention) — the leg trips marginally early, never late.
+phaseThreePoll = function(creature, guid)
+    if creature:GetData(DATA_PHASE_THREE) == 1 then
+        return
+    end
+    if creature:GetHealthPct() < 45 then
+        creature:SetData(DATA_PHASE_THREE, 1)
+        creature:SetData(DATA_GUARDIAN_COUNT, 0)
+        creature:Talk(SAY_REQUEST_AID)
+        schedule(guid, "transition_reply", 4000, function()
+            transitionReplyTick(creature, guid)
+        end)
+        schedule(guid, "transition_summon_1", math.random(7000, 9000), function()
+            transitionSummonTick(creature, guid)
+        end)
+        schedule(guid, "transition_summon_2", math.random(13000, 15000), function()
+            transitionSummonTick(creature, guid)
+        end)
+        if creature:Is25ManRaid() then
+            schedule(guid, "transition_summon_3", math.random(19000, 21000), function()
+                transitionSummonTick(creature, guid)
+            end)
+            schedule(guid, "transition_summon_4", math.random(25000, 27000), function()
+                transitionSummonTick(creature, guid)
+            end)
+        end
+        return
+    end
+    schedule(guid, "phase_three", 1000, function()
+        phaseThreePoll(creature, guid)
+    end)
+end
+
+-- C++ EVENT_TRANSITION_REPLY (boss_kelthuzad.cpp:483-488): Lich King
+-- Talk(SAY_ANSWER_REQUEST 3) via DATA_LICH_KING; the four KT portal GO
+-- states stay out (no GO-state bridge).
+transitionReplyTick = function(creature, guid)
+    local lichKing = creature:GetInstanceCreature(DATA_LICH_KING)
+    if lichKing then
+        lichKing:Talk(SAY_ANSWER_REQUEST)
+    end
+end
+
+-- C++ EVENT_TRANSITION_SUMMON (boss_kelthuzad.cpp:490-501): urand
+-- (_guardianCount, 3) swap + SummonCreatureGroup of the next guardian
+-- group + DoAction(ACTION_JUST_SUMMONED) per guardian (the receiver is
+-- ported latent above). Group rows ride creature_summon_groups (TDB).
+transitionSummonTick = function(creature, guid)
+    local count = creature:GetData(DATA_GUARDIAN_COUNT)
+    if count >= N_GUARDIAN_SPAWNS then
+        return
+    end
+    local groups = kelthuzadGuardianGroups[guid]
+    if not groups then
+        groups = {}
+        for i = 1, N_GUARDIAN_SPAWNS do
+            groups[i] = SUMMON_GROUP_GUARDIAN_FIRST + i - 1
+        end
+        kelthuzadGuardianGroups[guid] = groups
+    end
+    local selected = math.random(count + 1, N_GUARDIAN_SPAWNS)
+    if selected ~= count + 1 then
+        groups[selected], groups[count + 1] = groups[count + 1], groups[selected]
+    end
+    local group = groups[count + 1]
+    creature:SetData(DATA_GUARDIAN_COUNT, count + 1)
+    local summoned = creature:SummonCreatureGroup(group)
+    for _, guardian in ipairs(summoned) do
+        guardian:DoAction(ACTION_JUST_SUMMONED)
+    end
+end
+
+-- C++ EVENT_PHASE_TWO (boss_kelthuzad.cpp:431-448): CastStop (the
+-- VISUAL_CHANNEL ends) + NOT_SELECTABLE/immune cleared + threat reset
+-- + REACT_AGGRESSIVE + Talk(EMOTE_PHASE_TWO 13) + the five phase-two
+-- schedules (SetPhase itself has no bridge, but no arm reads phase
+-- state — the phase-one chains all self-terminate by 206s, before this
+-- 228s fire, so the machine is fully receiver-seeded).
+phaseTwoTick = function(creature, guid)
+    creature:SetData(DATA_PHASE_TWO, 1) -- the DamageTaken leg reads this
+    creature:StopSpellCast() -- CastStop twin (taldaram/gothik precedent)
+    creature:RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+    creature:RemoveFlag(59, UNIT_FLAG_IMMUNE_TO_PC) -- SetImmuneToPC(false)
+    creature:ResetAllThreat() -- ResetThreatList
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:Talk(EMOTE_PHASE_TWO)
+    schedule(guid, "frostbolt_volley", math.random(24000, 28000), function()
+        volleyTick(creature, guid)
+    end)
+    schedule(guid, "shadow_fissure", math.random(6000, 10000), function()
+        fissureTick(creature, guid)
+    end)
+    schedule(guid, "detonate_mana", math.random(27000, 33000), function()
+        detonateTick(creature, guid)
+    end)
+    schedule(guid, "frost_blast", math.random(25000, 45000), function()
+        frostBlastTick(creature, guid)
+    end)
+    if creature:Is25ManRaid() then
+        schedule(guid, "chains", math.random(60000, 80000), function()
+            chainsTick(creature, guid)
+        end)
+    end
+    schedule(guid, "frostbolt", 2000, function()
+        frostboltTick(creature, guid)
+    end)
+    schedule(guid, "phase_three", 1000, function()
+        phaseThreePoll(creature, guid)
+    end)
+end
+
+-- C++ SpellHit (boss_kelthuzad.cpp:288-297): SPELL_CHAINS_DUMMY 28408
+-- -> Talk(SAY_CHAINS 10) + 3 random players -> DoCast(CHains 28410)
+-- each. The trigger is the phase-two EVENT_CHAINS self-cast; the ev14
+-- fire is the creature-caster self-hit leg (boss_ai.go:3828). Latent
+-- until the 28408 spell data resolves in Go (no Spell.dbc in workspace
+-- — freya 62207 caveat); the 3-target pick samples without replacement
+-- (C++ SelectTargetList(3, Random)).
+local function kelthuzadSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_CHAINS_DUMMY then
+        return
+    end
+    creature:Talk(SAY_CHAINS)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    for i = 1, 3 do
+        if #candidates == 0 then
+            break
+        end
+        local idx = math.random(#candidates)
+        creature:CastSpell(candidates[idx], SPELL_CHAINS)
+        table.remove(candidates, idx)
+    end
+end
+
 -- C++ boss_kelthuzadAI::DoAction(ACTION_BEGIN_ENCOUNTER 0)
 -- (boss_kelthuzad.cpp:529-555), in C++ order. The sender is the
 -- unported at_kelthuzad_center area trigger (:989-1002, no AT bridge),
@@ -492,12 +970,11 @@ end
 -- (IN_PROGRESS/FAIL/DONE) returns, C++-exact. SetImmuneToPC(false)
 -- is the RemoveFlag(59, 0x100) twin (Unit.cpp:8440-8449; nefarian
 -- precedent) — the tick-241 "no bridge" claim was stale. The
--- SetPhase(PHASE_ONE) leg has no bridge and four of the five
--- schedules it feeds stay out with the phase-one machine
--- (EVENT_SKELETON 5s, EVENT_BANSHEE 30s, EVENT_ABOMINATION 30s,
--- EVENT_PHASE_TWO 3m48s); EVENT_DESPAWN_MINIONS (3m33s) is seeded
--- here 2026-11-05 — its handler needs no phase state (the chains
--- self-terminate by ~210s, before the 213s sweep).
+-- SetPhase(PHASE_ONE) leg has no bridge, but all five schedules it
+-- feeds are seeded here 2026-11-05 (skeleton 5s, banshee 30s,
+-- abomination 30s, despawn-minions 3m33s, phase-two 3m48s) — no arm
+-- reads phase state (the chains self-terminate by 206s, before the
+-- 213s sweep and the 228s switch).
 -- The summon groups ride creature_summon_groups (TDB rows; the repo
 -- world.db has no such table, so the loop is inert until live TDB
 -- provides them — yogg-illusion caveat); each summon gets
@@ -531,9 +1008,27 @@ local function kelthuzadDoAction(event, creature, action)
             summon:SetData(DATA_MINION_POCKET_ID, group)
         end
     end
-    -- C++ :551: EVENT_DESPAWN_MINIONS at 3m33s (213000ms), seeded once.
-    schedule(creature:GetGUID(), "despawn_minions", 213000, function()
-        despawnMinionsTick(creature, creature:GetGUID())
+    local guid = creature:GetGUID()
+    -- C++ :550-554: the five phase-one schedules, all seeded once here.
+    -- EVENT_SKELETON 5s, EVENT_BANSHEE 30s, EVENT_ABOMINATION 30s,
+    -- EVENT_DESPAWN_MINIONS 3m33s (213000ms), EVENT_PHASE_TWO 3m48s
+    -- (228000ms). SetPhase(PHASE_ONE) itself has no bridge, but no arm
+    -- reads phase state — the chains self-terminate by 206s, before the
+    -- 213s sweep and the 228s phase switch.
+    schedule(guid, "skeleton", 5000, function()
+        skeletonTick(creature, guid)
+    end)
+    schedule(guid, "banshee", 30000, function()
+        bansheeTick(creature, guid)
+    end)
+    schedule(guid, "abomination", 30000, function()
+        abominationTick(creature, guid)
+    end)
+    schedule(guid, "despawn_minions", 213000, function()
+        despawnMinionsTick(creature, guid)
+    end)
+    schedule(guid, "phase_two", 228000, function()
+        phaseTwoTick(creature, guid)
     end)
 end
 
@@ -616,7 +1111,9 @@ end
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 1, kelthuzadEnterCombat)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 2, kelthuzadLeaveCombat)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 3, kelthuzadTargetDied)
+RegisterCreatureEvent(ENTRY_KEL_THUZAD, 9, kelthuzadDamageTaken)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 4, kelthuzadDied)
+RegisterCreatureEvent(ENTRY_KEL_THUZAD, 14, kelthuzadSpellHit)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 19, kelthuzadJustSummoned)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 20, kelthuzadSummonDespawned)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 23, kelthuzadReset)
