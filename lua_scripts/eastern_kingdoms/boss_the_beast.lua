@@ -52,9 +52,12 @@
 -- expose (handler receives (event, creature, caster, spellId) only);
 -- hard-coding spell IDs would be fabrication. Gates on !IsAlive
 -- anyway. Documented-only.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:166) + in-loop
+-- gate (:201) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- fires nothing and consumes no re-arm, staying due until the cast
+-- ends. The in-loop gate's same-tick co-expiry suppression has no
+-- timer-arm model (independent callbacks, AV precedent). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
@@ -93,6 +96,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onFlameBreak(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamebreak", 500, function() onFlameBreak(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FLAMEBREAK)
@@ -101,6 +108,10 @@ local function onFlameBreak(creature, guid)
 end
 
 local function onTerrifyingRoar(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "terrifyingroar", 500, function() onTerrifyingRoar(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_TERRIFYINGROAR)
@@ -109,6 +120,10 @@ local function onTerrifyingRoar(creature, guid)
 end
 
 local function onFireball(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function() onFireball(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIREBALL)
@@ -117,6 +132,10 @@ local function onFireball(creature, guid)
 end
 
 local function onFireblast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireblast", 500, function() onFireblast(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIREBLAST)
@@ -144,6 +163,10 @@ end
 -- DoCast(target, 15570) non-triggered, 3s init, Repeat(8s) outside the
 -- target check (re-arm unconditional).
 local function onImmolate(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "immolate", 500, function() onImmolate(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_IMMOLATE)
@@ -155,6 +178,10 @@ end
 -- playerOnly, DoCast(target, 16636) non-triggered, 2s init,
 -- Repeat(15s, 23s) outside the target check (re-arm unconditional).
 local function onBerserkerCharge(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserkercharge", 500, function() onBerserkerCharge(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 38)
     if target then
         creature:CastSpell(target, SPELL_BERSERKER_CHARGE)

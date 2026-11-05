@@ -32,9 +32,12 @@
 -- alive, within 100yd); 8s init -> 15s
 -- loop, re-arm unconditional (C++ ScheduleEvent sits outside the target
 -- check), non-triggered DoCast(target).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:76) + in-loop
+-- gate (:98) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- fires nothing and consumes no re-arm, staying due until the cast
+-- ends. The in-loop gate's same-tick co-expiry suppression has no
+-- timer-arm model (independent callbacks, AV precedent). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
@@ -70,6 +73,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onCurseOfBlood(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curseofblood", 500, function() onCurseOfBlood(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CURSEOFBLOOD)
@@ -78,6 +85,10 @@ local function onCurseOfBlood(creature, guid)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -105,6 +116,10 @@ end
 -- DoCast(target, 16708) non-triggered, 8s init, ScheduleEvent(15s)
 -- outside the target check (re-arm unconditional).
 local function onHex(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "hex", 500, function() onHex(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_HEX)

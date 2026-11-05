@@ -13873,7 +13873,8 @@ func init() {
 	// GetBlackrockSpireAI — blastwave 11130 20s->20s, shout 23511
 	// 2s->10s, cleave 20691 6s->7s, knockaway 20686 12s->14s, all
 	// victim-cast; melee engine-driven; 51%-HP add-summon latch
-	// unmodeled — no SelectTarget/SummonCreature bridges).
+	// ported (OnDamageTaken, summon + EngageWithTarget); UpdateAI
+	// CASTING gates ported as 500ms IsCasting defers).
 	// Entry 9568 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_OVERLORD_WYRMTHALAK at 9568 (BRS creatures enum) —
 	// see lua_scripts/eastern_kingdoms/boss_overlord_wyrmthalak.lua.
@@ -13881,8 +13882,9 @@ func init() {
 	// boss_shadow_hunter_voshgajin / boss_shadowvoshAI (Blackrock
 	// Spire, entrance encounter; BossAI combat scheduler via
 	// GetBlackrockSpireAI — curseofblood 24673 2s->45s, cleave 20691
-	// 14s->7s, both victim-cast; melee engine-driven; hex unmodeled —
-	// no SelectTarget bridge; Reset's ice-armor self-cast is commented
+	// 14s->7s, both victim-cast; hex ported (threat-list pool);
+	// melee engine-driven; UpdateAI CASTING gates ported as 500ms
+	// IsCasting defers; Reset's ice-armor self-cast is commented
 	// out in C++ and omitted by design).
 	// Entry 9236 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_SHADOW_HUNTER_VOSHGAJIN at 9236 (BRS creatures enum) —
@@ -13892,7 +13894,8 @@ func init() {
 	// BossAI combat scheduler via GetBlackrockSpireAI — flamebreak 16785
 	// 12s->10s, terrifyingroar 14100 23s->20s, fireball 16788 8s->8s..21s,
 	// fireblast 16144 5s->5s..8s, all victim-cast; melee engine-driven;
-	// immolate + berserkercharge unmodeled — no SelectTarget bridge;
+	// immolate + berserkercharge ported (threat-list pool);
+	// UpdateAI CASTING gates ported as 500ms IsCasting defers;
 	// SetData beast-room/reached arms + both area triggers + SpellHit
 	// skinning arm unmodeled — no area-trigger/instance/MotionMaster/
 	// SpellHit bridges; Reset _Reset / JustDied _JustDied covered by the
@@ -13907,8 +13910,9 @@ func init() {
 	// otherwise loops 10s (12s init), snap-kick 6s loop (8s init),
 	// cleave 12s loop (14s init), uppercut 14s loop (20s init),
 	// throw-axe 8s loop (1s init) — all DoCastVictim (maiden
-	// convention). No UNIT_STATE_CASTING model in Go; Reset
-	// _Reset / JustDied _JustDied covered by the cancel on 2/4/23.
+	// convention). UpdateAI CASTING gates ported as 500ms
+	// IsCasting defers; Reset _Reset / JustDied _JustDied covered
+	// by the cancel on 2/4/23.
 	// Entry 9237 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_WARMASTER_VOONE at 9237 (BRS creatures enum).
 	RegisterLuaBoss("boss_warmaster_voone", 9237)

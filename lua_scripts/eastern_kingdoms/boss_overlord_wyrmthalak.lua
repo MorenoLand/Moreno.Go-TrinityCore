@@ -42,12 +42,16 @@
 -- "no SummonCreature bridge" claim is retracted (SummonCreature is bridged);
 -- "no AttackStart bridge" claim is retracted 2026-10-24 (EngageWithTarget
 -- twin, player-target-only) and the add engage legs are ported below.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:111) + in-loop
+-- gate (:136) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- fires nothing and consumes no re-arm, staying due until the cast
+-- ends. The in-loop gate's same-tick co-expiry suppression has no
+-- timer-arm model (independent callbacks, AV precedent). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
--- (maiden convention).
+-- (maiden convention). The 51% summon latch sits before the pre-loop gate in C++ and stays
+-- ungated on its own OnDamageTaken hook.
 
 local SPELL_BLASTWAVE = 11130
 local SPELL_SHOUT = 23511
@@ -90,6 +94,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onBlastWave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "blastwave", 500, function() onBlastWave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_BLASTWAVE)
@@ -98,6 +106,10 @@ local function onBlastWave(creature, guid)
 end
 
 local function onShout(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shout", 500, function() onShout(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHOUT)
@@ -106,6 +118,10 @@ local function onShout(creature, guid)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -114,6 +130,10 @@ local function onCleave(creature, guid)
 end
 
 local function onKnockAway(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "knockaway", 500, function() onKnockAway(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_KNOCKAWAY)

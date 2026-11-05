@@ -38,9 +38,12 @@
 -- instead of 10s, exactly as the C++ EventMap overwrite does.
 -- EVENT_THROW_AXE: victim-cast THROWAXE 16075, 1s init -> 8s loop
 -- (maiden convention).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:79) + in-loop
+-- gate (:112) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- fires nothing and consumes no re-arm, staying due until the cast
+-- ends. The in-loop gate's same-tick co-expiry suppression has no
+-- timer-arm model (independent callbacks, AV precedent). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
@@ -79,6 +82,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onSnapKick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "snapkick", 500, function() onSnapKick(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SNAPKICK)
@@ -87,6 +94,10 @@ local function onSnapKick(creature, guid)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -95,6 +106,10 @@ local function onCleave(creature, guid)
 end
 
 local function onUppercut(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "uppercut", 500, function() onUppercut(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_UPPERCUT)
@@ -103,6 +118,10 @@ local function onUppercut(creature, guid)
 end
 
 local function onMortalStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mortalstrike", 500, function() onMortalStrike(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_MORTALSTRIKE)
@@ -111,6 +130,10 @@ local function onMortalStrike(creature, guid)
 end
 
 local function onPummel(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pummel", 500, function() onPummel(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_PUMMEL)
@@ -123,6 +146,10 @@ local function onPummel(creature, guid)
 end
 
 local function onThrowAxe(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "throwaxe", 500, function() onThrowAxe(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_THROWAXE)
