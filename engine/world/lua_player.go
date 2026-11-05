@@ -3397,6 +3397,21 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.removeAura(spell)
 		return nil, nil
 	}
+	// RemoveMovementImpairingAuras is Unit::RemoveMovementImpairingAuras
+	// (Unit.cpp:4193-4213): withRoot=true also drops root-mechanic auras,
+	// withRoot=false drops snare-mechanic auras only (Demonic Circle:
+	// Teleport 48020 passes false). The per-effect snare amount-zeroing
+	// leg has no model — same documented residual as the session helper.
+	methods["RemoveMovementImpairingAuras"] = func(ctx context.Context, args []any) ([]any, error) {
+		withRoot := false
+		if len(args) >= 1 {
+			if b, ok := args[0].(bool); ok {
+				withRoot = b
+			}
+		}
+		s.removeTargetMovementImpairingAuras(ctx, s.playerGUID, withRoot)
+		return nil, nil
+	}
 	methods["SetCoinage"] = func(ctx context.Context, args []any) ([]any, error) {
 		money, err := luaUint32Arg(args, 0)
 		if err != nil {

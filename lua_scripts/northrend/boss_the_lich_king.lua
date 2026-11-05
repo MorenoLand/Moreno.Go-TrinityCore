@@ -703,17 +703,35 @@ RegisterAuraEvent(SPELL_SOUL_REAPER, 1, soulReaperTick)
 -- fresh-only (C++ REAL_OR_REAPPLY also fires on re-apply); each jump
 -- casts 70338 on a new target, so the per-jump fresh apply is the
 -- live path — same pre-existing delta as Renew (tick 199).
--- STILL BLOCKED (same class): OnRemove (:2085-2100) needs
--- AddSpellMod(SPELLVALUE_AURA_STACK, stack + 1) on the jump re-cast
--- plus the caster self-cast of Plague Siphon (74074) — CastCustomSpell
--- takes bp0/bp1/bp2 only, no aura-stack mod; OnDispel/AfterDispel
--- (:2102-2125) need the _lastAmount state plus the same mod.
+-- PORTED (tick 203, OnRemove below): OnRemove (:2085-2100) and the
+-- OnDispel/AfterDispel pair (:2102-2125). No AddSpellMod bridge exists
+-- (CastCustomSpell takes bp0/bp1/bp2 only, no aura-stack mod), so the
+-- stack mod rides aura:SetStackAmount on the fresh aura right after
+-- the re-cast (stack + 1 on expire/death, same stack on dispel).
+-- DELTAS: (1) Go has no original-caster slot, so the jump aura's
+-- caster is the host, not the Lich King — the host re-casts on itself
+-- instead of the C++ area-entry selection of the nearest new host
+-- (jump SpellScript SelectTarget unbridged), and the LK-side
+-- DATA_PLAGUE_STACK peak / Plague Siphon legs only fire while the
+-- expiring aura's caster is still the Lich King (first jump); later
+-- jumps grow the live stack but the recorded peak freezes.
+-- (2) The C++ AfterDispel BP1 marker (AURA_REMOVE_BY_ENEMY_SPELL)
+-- is unconsumed — the jump SpellScript never reads it — so it is
+-- dropped. (3) The C++ _lastAmount reapply-vs-dispel discriminator
+-- is unneeded: Go merges never fire the remove hook, so mode
+-- ENEMY_SPELL here is a genuine dispel.
 local SPELL_NECROTIC_PLAGUE_JUMP = 70338 -- boss_the_lich_king.cpp:91
 local DATA_PLAGUE_STACK = 70337 -- boss_the_lich_king.cpp:369
 
 local function necroticPlagueJumpApply(event, aura, target)
     local caster = aura:GetCaster()
     if caster == nil then
+        return
+    end
+    -- Jump re-casts attribute the fresh aura to the host (Go has no
+    -- original-caster slot), so only a creature caster (the Lich King)
+    -- carries the ScriptData store; a player host has no GetData.
+    if caster:GetObjectType() ~= "Creature" then
         return
     end
     local stack = aura:GetStackAmount()
@@ -723,3 +741,38 @@ local function necroticPlagueJumpApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_NECROTIC_PLAGUE_JUMP, 2, necroticPlagueJumpApply)
+
+local SPELL_PLAGUE_SIPHON = 74074 -- boss_the_lich_king.cpp:92
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
+local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
+local AURA_REMOVE_BY_ENEMY_SPELL = 3 -- SpellAuraDefines.h:66
+
+-- C++ spell_the_lich_king_necrotic_plague_jump_aura::OnRemove
+-- (boss_the_lich_king.cpp:2085-2100): on expire or death the target
+-- re-casts the jump on itself with stack + 1 and the caster (Lich
+-- King) self-casts Plague Siphon, triggered. The AfterDispel leg
+-- (:2107-2125) re-casts with the same stack on a genuine dispel.
+local function necroticPlagueJumpRemove(event, aura, target)
+    local mode = aura:GetRemoveMode()
+    local stack = aura:GetStackAmount()
+    local caster = aura:GetCaster()
+    local newStack = stack
+    if mode == AURA_REMOVE_BY_EXPIRE or mode == AURA_REMOVE_BY_DEATH then
+        newStack = stack + 1
+    elseif mode ~= AURA_REMOVE_BY_ENEMY_SPELL then
+        return
+    end
+    target:CastSpell(target, SPELL_NECROTIC_PLAGUE_JUMP, true)
+    local fresh = target:GetAura(SPELL_NECROTIC_PLAGUE_JUMP)
+    if fresh ~= nil then
+        fresh:SetStackAmount(newStack)
+    end
+    if caster ~= nil and caster:GetObjectType() == "Creature" then
+        if newStack > caster:GetData(DATA_PLAGUE_STACK) then
+            caster:SetData(DATA_PLAGUE_STACK, newStack)
+        end
+        caster:CastSpell(caster, SPELL_PLAGUE_SIPHON, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_NECROTIC_PLAGUE_JUMP, 3, necroticPlagueJumpRemove)

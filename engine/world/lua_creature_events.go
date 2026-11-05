@@ -1418,6 +1418,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.removeCreatureAura(auraKey(), spell)
 		return nil, nil
 	}
+	// RemoveMovementImpairingAuras is Unit::RemoveMovementImpairingAuras
+	// (Unit.cpp:4193-4213) on the creature surface: withRoot=true drops
+	// root-mechanic auras (plus the stalked/stun extra the creature
+	// helper carries for Demonic Empowerment), withRoot=false drops
+	// snare-mechanic auras only. The per-effect snare amount-zeroing
+	// leg has no model — same documented residual as the helper.
+	methods["RemoveMovementImpairingAuras"] = func(_ context.Context, args []any) ([]any, error) {
+		withRoot := false
+		if len(args) >= 1 {
+			if b, ok := args[0].(bool); ok {
+				withRoot = b
+			}
+		}
+		s.removeCreatureMovementImpairingAuras(motion, withRoot)
+		return nil, nil
+	}
 	// GetStackAmount is Aura::GetStackAmount (SpellAuras.h) for handler
 	// creatures: the stack count of the named aura, or 0 when the aura is
 	// absent (the C++ call sites null-check the Aura* first — returning 0

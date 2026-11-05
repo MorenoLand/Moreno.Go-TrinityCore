@@ -28913,7 +28913,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 		// movement-impairing, stalked, and stun auras, then Lesser
 		// Invisibility (7870), cast by the target on itself (same caster
 		// delta as the Replenish arms).
-		s.removeTargetMovementImpairingAuras(ctx, effectTarget)
+		s.removeTargetMovementImpairingAuras(ctx, effectTarget, true)
 		s.removeTargetAurasByType(ctx, effectTarget, spellAuraModStalked)
 		s.removeTargetAurasByType(ctx, effectTarget, spellAuraModStun)
 		s.castSpellDirect(ctx, spellLesserInvisibility, effectTarget)
@@ -29049,7 +29049,7 @@ func (s *session) removeTargetAurasByType(ctx context.Context, targetGUID uint64
 }
 
 // removeTargetMovementImpairingAuras mirrors
-// Unit::RemoveMovementImpairingAuras(true) (Unit.cpp:4193-4213) for the
+// Unit::RemoveMovementImpairingAuras(withRoot) (Unit.cpp:4193-4213) for the
 // Demonic Empowerment arm of Spell::EffectTriggerSpell (SpellEffects.cpp:902):
 // auras whose spell-level or any-effect mechanic (GetAllEffectsMechanicMask,
 // SpellInfo.cpp:1893) is root (7) are removed, as are auras whose spell-level
@@ -29057,7 +29057,7 @@ func (s *session) removeTargetAurasByType(ctx context.Context, targetGUID uint64
 // (Unit.cpp:4206-4210), which zeroes the snare effect's amount instead of
 // removing the aura — Go has no per-effect amount-zeroing wire model for
 // arbitrary targets.
-func (s *session) removeTargetMovementImpairingAuras(ctx context.Context, targetGUID uint64) {
+func (s *session) removeTargetMovementImpairingAuras(ctx context.Context, targetGUID uint64, withRoot bool) {
 	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -29085,7 +29085,7 @@ func (s *session) removeTargetMovementImpairingAuras(ctx context.Context, target
 		if err != nil || !found {
 			continue
 		}
-		if spellHasAnyEffectMechanic(spellRow, mechanicRoot) || spellRow.Mechanic == mechanicSnare {
+		if (withRoot && spellHasAnyEffectMechanic(spellRow, mechanicRoot)) || spellRow.Mechanic == mechanicSnare {
 			toRemove = append(toRemove, aura.SpellID)
 		}
 	}

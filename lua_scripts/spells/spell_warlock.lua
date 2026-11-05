@@ -166,8 +166,10 @@ RegisterAuraEvent(SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON, 1, demonicCircleSummonTic
 
 -- C++ spell_warl_demonic_circle_teleport::HandleTeleport
 -- (spell_warlock.cpp:398-409): EFFECT_0 MECHANIC_IMMUNITY, REAL. The
--- player target teleports to its circle's position and orientation.
--- RemoveMovementImpairingAuras stays out (no bridge).
+-- player target teleports to its circle's position and orientation,
+-- then drops its movement-impairing auras (snares only — C++ passes
+-- withRoot=false; the per-effect snare amount-zeroing leg has no Go
+-- model, same documented residual as the bridge).
 local function demonicCircleTeleportApply(event, aura, target)
     if target:GetObjectType() ~= "Player" then
         return
@@ -175,6 +177,7 @@ local function demonicCircleTeleportApply(event, aura, target)
     local circle = target:GetGameObject(SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON)
     if circle ~= nil then
         target:TeleportNear(circle:GetX(), circle:GetY(), circle:GetZ(), circle:GetO())
+        target:RemoveMovementImpairingAuras(false)
     end
 end
 

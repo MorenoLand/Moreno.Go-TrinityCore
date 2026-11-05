@@ -3549,12 +3549,12 @@ func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatu
 		return true
 	case triggerDemonicEmpowerSuccub:
 		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-			ts.removeTargetMovementImpairingAuras(ctx, targetGUID)
+			ts.removeTargetMovementImpairingAuras(ctx, targetGUID, true)
 			ts.removeTargetAurasByType(ctx, targetGUID, spellAuraModStalked)
 			ts.removeTargetAurasByType(ctx, targetGUID, spellAuraModStun)
 			ts.castSpellDirect(ctx, spellLesserInvisibility, targetGUID)
 		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil {
-			s.server.removeCreatureMovementImpairingAuras(tm)
+			s.server.removeCreatureMovementImpairingAuras(tm, true)
 			s.server.castCreatureSpellInternal(ctx, tm, spellLesserInvisibility, tm.GUID, true)
 		}
 		return true

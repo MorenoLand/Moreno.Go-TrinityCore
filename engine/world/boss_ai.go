@@ -6507,12 +6507,12 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 			return
 		case triggerDemonicEmpowerSuccub:
 			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-				ts.removeTargetMovementImpairingAuras(ctx, targetGUID)
+				ts.removeTargetMovementImpairingAuras(ctx, targetGUID, true)
 				ts.removeTargetAurasByType(ctx, targetGUID, spellAuraModStalked)
 				ts.removeTargetAurasByType(ctx, targetGUID, spellAuraModStun)
 				ts.castSpellDirect(ctx, spellLesserInvisibility, targetGUID)
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
-				s.removeCreatureMovementImpairingAuras(tm)
+				s.removeCreatureMovementImpairingAuras(tm, true)
 				s.castCreatureSpellInternal(ctx, tm, spellLesserInvisibility, tm.GUID, true)
 			}
 			return
@@ -6528,14 +6528,14 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 }
 
 // removeCreatureMovementImpairingAuras mirrors the creature-target leg of
-// Unit::RemoveMovementImpairingAuras(true) (Unit.cpp:4193-4213) for the
+// Unit::RemoveMovementImpairingAuras(withRoot) (Unit.cpp:4193-4213) for the
 // Demonic Empowerment arm above: root-mechanic (spell-level or
 // any-effect) and snare-mechanic (spell-level) auras go, as do stalked-
 // and stun-type auras. The per-effect snare amount-zeroing leg has no
 // model here either — the same documented residual the session helper
 // carries. The aura table is released before removing, so the remove
 // funnel's own locking never nests.
-func (s *Server) removeCreatureMovementImpairingAuras(tm *creatureMotion) {
+func (s *Server) removeCreatureMovementImpairingAuras(tm *creatureMotion, withRoot bool) {
 	if s == nil || tm == nil || s.Data == nil {
 		return
 	}
@@ -6546,7 +6546,7 @@ func (s *Server) removeCreatureMovementImpairingAuras(tm *creatureMotion) {
 		if aura == nil || aura.Stopped {
 			continue
 		}
-		if aura.AuraType == spellAuraModStalked || aura.AuraType == spellAuraModStun {
+		if withRoot && (aura.AuraType == spellAuraModStalked || aura.AuraType == spellAuraModStun) {
 			toRemove = append(toRemove, aura.SpellID)
 			continue
 		}
@@ -6554,7 +6554,7 @@ func (s *Server) removeCreatureMovementImpairingAuras(tm *creatureMotion) {
 		if err != nil || !found {
 			continue
 		}
-		if spellHasAnyEffectMechanic(spellRow, mechanicRoot) || spellRow.Mechanic == mechanicSnare {
+		if (withRoot && spellHasAnyEffectMechanic(spellRow, mechanicRoot)) || spellRow.Mechanic == mechanicSnare {
 			toRemove = append(toRemove, aura.SpellID)
 		}
 	}

@@ -35,3 +35,24 @@ local function fumpingRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_FUMPING, 3, fumpingRemove)
+
+local SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3 = 43874 -- spell_quest.cpp:296
+local UNIT_FLAG_IMMUNE_TO_PC = 0x00000100 -- UnitDefines.h:132
+
+-- C++ spell_q11396_11399_force_shield_arcane_purple_x3_AuraScript::
+-- HandleEffectApply (spell_quest.cpp:308-314): EFFECT_0 DUMMY, REAL.
+-- Target immune to PC. STILL BLOCKED leg: AddUnitState(UNIT_STATE_ROOT)
+-- (no bridge).
+local function forceShieldApply(event, aura, target)
+    target:SetFlag(59, UNIT_FLAG_IMMUNE_TO_PC)
+end
+
+RegisterAuraEvent(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3, 2, forceShieldApply)
+
+-- C++ spell_q11396_11399_force_shield_arcane_purple_x3_AuraScript::
+-- HandleEffectRemove (spell_quest.cpp:316-319): clears PC immunity.
+local function forceShieldRemove(event, aura, target)
+    target:RemoveFlag(59, UNIT_FLAG_IMMUNE_TO_PC)
+end
+
+RegisterAuraEvent(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3, 3, forceShieldRemove)
