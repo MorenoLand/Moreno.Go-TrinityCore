@@ -348,7 +348,9 @@ end
 -- C++ EVENT_DEEP_BREATH (phase BREATH): Talk EMOTE_BREATH (4) +
 -- DoCast(self, PointData->SpellId), non-triggered; 75s first and
 -- repeats. A nil movePoint (the SetNextRandomPoint off-by-one,
--- below) skips the cast but still re-arms, C++-exact.
+-- below) skips only the cast: C++ Talks unconditionally inside the
+-- !IsMoving branch and guards only the DoCast on PointData, so the
+-- emote still fires; the 75s re-arm is unchanged.
 local function onDeepBreath(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "deepbreath", 500, function()
@@ -357,8 +359,8 @@ local function onDeepBreath(creature, guid)
         return
     end
     local st = stateFor(guid)
+    creature:Talk(EMOTE_BREATH)
     if st.movePoint ~= nil then
-        creature:Talk(EMOTE_BREATH)
         creature:CastSpell(creature, BREATH_SPELLS[st.movePoint])
     end
     schedule(guid, "deepbreath", 75000, function()
