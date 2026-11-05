@@ -13,9 +13,12 @@
 -- :656-664/:812-820), so this fires only if the creature ever
 -- exists (e.g. GM spawn) until the body ports.
 -- Stay-outs: the sole UpdateAI-adjacent arm, JustDied (:1283-1289)
--- -> summoner AI DoAction(ACTION_FLESH_TENTACLE_KILLED) — no
--- DoAction bridge, and the consumer (the body's weaken counter)
--- is itself unported, so relaying it would signal nothing.
+-- -> summoner AI DoAction(ACTION_FLESH_TENTACLE_KILLED) — DoAction
+-- itself IS bridged (creature:DoAction fires ev38), but the consumer
+-- (the body's weaken counter, read at boss_cthun.cpp:669 inside the
+-- unported phase machine) is itself unported, so relaying it would
+-- signal nothing. Registered 2026-11-05 (boss_ai.go) so the spawn
+-- arm above fires; previously the file was an unbound dead file.
 -- No other arms exist in the class (no UpdateAI, no timers).
 local ENTRY = 15802
 

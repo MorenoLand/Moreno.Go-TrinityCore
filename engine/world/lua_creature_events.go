@@ -4767,6 +4767,32 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{id}, nil
 	}
+	// GetSummonerUnit is TempSummon::GetSummonerUnit
+	// (TemporarySummon.cpp:48-53): GetSummoner() resolves m_summonerGUID
+	// (set from the owner in the TempSummon ctor :38) through
+	// ObjectAccessor to a live unit on the map, nil when the summoner
+	// is gone or there is none. Go reads the same GUID from
+	// UNIT_FIELD_CREATEDBY (motion.CreatedByGUID, stamped by the summon
+	// bridge at :139) and resolves it the GetVictim way — an online
+	// player first, else a live creature motion on the caller's map and
+	// instance — returning nil when neither resolves, the Go form of
+	// the C++ nullptr. Callers nil-guard it, matching the C++ sites.
+	methods["GetSummonerUnit"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		summonerGUID := motion.CreatedByGUID
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		if summonerGUID == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.findPlayer(summonerGUID); player != nil {
+			return []any{player}, nil
+		}
+		if target := s.findCreatureMotion(mapID, instanceID, summonerGUID); target != nil {
+			return []any{s.luaMotionCreature(target)}, nil
+		}
+		return []any{nil}, nil
+	}
 	// SetCreatorGUID is UnitMethods::SetCreatorGUID (UnitMethods.h:1790-1797):
 	// Unit::SetCreatorGUID (Unit.h:1150) writes UNIT_FIELD_CREATEDBY.
 	methods["SetCreatorGUID"] = func(_ context.Context, args []any) ([]any, error) {

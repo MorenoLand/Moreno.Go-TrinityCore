@@ -77,8 +77,8 @@
 -- (RIDE_VEHICLE cast + PassengerBoarded spline) belong to bone_spike's
 -- IsSummonedBy below, not to coldflame. npc_bone_spike (36619): the JustDied/KilledUnit
 -- DespawnOrUnsummon legs PORT (event 4 / event 3, below); the JustDied
--- trapped-unit aura-removal leg rides ToTempSummon()->GetSummonerUnit()
--- (no bridge, stays out); the rest (IsSummonedBy vehicle/cast/teleport
+-- trapped-unit aura-removal leg PORTS via creature:GetSummonerUnit()
+-- (bridged 2026-11-05, below); the rest (IsSummonedBy vehicle/cast/teleport
 -- legs, UpdateAI EVENT_FAIL_BONED machine, DATA_BONED_ACHIEVEMENT
 -- instance SetData leg) has no bridges.
 -- boss_lord_marrowgar Reset scheduler legs (:148-152) — only
@@ -243,9 +243,15 @@ RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 23, marrowgarReset)
 
 -- C++ npc_bone_spike::JustDied (boss_lord_marrowgar.cpp:424-431): the
 -- trapped-unit aura-removal leg rides ToTempSummon()->GetSummonerUnit()
--- (no summoner-unit bridge, stays out); me->DespawnOrUnsummon() ports
--- (creature:Despawn, bridged).
+-- (creature:GetSummonerUnit, bridged 2026-11-05 — TemporarySummon.cpp:
+-- 48-53 over the summoner's CreatedByGUID; the summoner is the trapped
+-- player); me->DespawnOrUnsummon() ports (creature:Despawn, bridged).
+-- C++ order kept: aura removal, then despawn.
 local function boneSpikeJustDied(event, creature, killer)
+    local summoner = creature:GetSummonerUnit()
+    if summoner then
+        summoner:RemoveAura(SPELL_IMPALED)
+    end
     creature:Despawn()
 end
 

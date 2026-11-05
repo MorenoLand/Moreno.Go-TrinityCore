@@ -34,7 +34,8 @@
 -- (:675-720), DamageTaken 99% reduction / death prevention
 -- (:853-876), JustDied PHASE_DONE SetData (:849-851), DoAction
 -- FLESH_TENTACLE_KILLED counter (:878-886, consumer of the flesh
--- tentacle JustDied relay — no DoAction bridge).
+-- tentacle JustDied relay — DoAction IS bridged, but the counter
+-- lives in the unported phase machine, so the relay stays out).
 local ENTRY = 15727
 local SPELL_TRANSFORM = 26232
 local SOUND_WHISPER = 8663

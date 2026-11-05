@@ -64,7 +64,9 @@
 -- DOCUMENTED-ONLY (in this header; only entry 36597 registered):
 -- boss_the_lich_king DoAction — Talk(SAY_LK_INTRO_1 0) rides
 -- ACTION_START_ENCOUNTER; Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic)
--- rides ACTION_TELEPORT_BACK (no-DoAction bridge; the krick
+-- rides ACTION_TELEPORT_BACK (DoAction IS bridged — creature:DoAction
+-- fires ev38, the terenas handler below proves it — but the sender is
+-- the unported npc_strangulate_vehicle machine; the krick
 -- ACTION_OUTRO precedent).
 -- boss_the_lich_king SpellHit — Talk(SAY_LK_FROSTMOURNE_KILL 9) on
 -- SPELL_HARVESTED_SOUL 72679 (:813-816), gated me->IsInCombat() &&
@@ -188,7 +190,9 @@
 -- self-cast convention :1367/:1420-1421) + Reset one-shots
 -- DoCastSelf(SPELL_PLAGUE_AVOIDANCE 72846, triggered) +
 -- DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL 69197, triggered) (:1368-1369)
--- + DoCastSelf(SPELL_BOSS_HITTIN_YA 73878, triggered) (:1374)
+-- + summoner (Lich King) CastSpell(me, SPELL_RAGING_SPIRIT_VISUAL_CLONE
+-- 69198, triggered) (:1371-1372, via creature:GetSummonerUnit, bridged
+-- 2026-11-05) + DoCastSelf(SPELL_BOSS_HITTIN_YA 73878, triggered) (:1374)
 -- (the curator engage-cast precedent);
 -- npc_spirit_warden (36824) — SOUL_RIP 69397 victim-cast
 -- {12s,15s}/{23s,27s} (:1833/:1855-1856) + Reset one-shot
@@ -296,6 +300,7 @@ local SPELL_HORROR_FRENZY = 28747
 local SPELL_SOUL_SHRIEK = 69242
 local SPELL_PLAGUE_AVOIDANCE = 72846
 local SPELL_RAGING_SPIRIT_VISUAL = 69197
+local SPELL_RAGING_SPIRIT_VISUAL_CLONE = 69198 -- boss_the_lich_king.cpp:109
 local SPELL_BOSS_HITTIN_YA = 73878
 local SPELL_ICE_SPHERE = 69090 -- boss_the_lich_king.cpp:103
 local SPELL_ICE_BURST_TARGET_SEARCH = 69109 -- boss_the_lich_king.cpp:104
@@ -547,7 +552,9 @@ local function shamblingHorrorDamageTaken(event, creature, attacker, damage)
 end
 
 -- C++ npc_raging_spirit: Reset — DoCastSelf(SPELL_PLAGUE_AVOIDANCE,
--- true) + DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL, true) +
+-- true) + DoCastSelf(SPELL_RAGING_SPIRIT_VISUAL, true) + summoner
+-- CastSpell(me, SPELL_RAGING_SPIRIT_VISUAL_CLONE 69198, true) (:1371-1372,
+-- via creature:GetSummonerUnit, bridged 2026-11-05) +
 -- DoCastSelf(SPELL_BOSS_HITTIN_YA 73878, true) one-shots,
 -- EVENT_SOUL_SHRIEK {12s,15s} (:1367-1374/:1420-1421); the
 -- Reset REACT_PASSIVE (:1365) -> EVENT_SET_AGRESSIVE 2s (:1424) leg is
@@ -583,6 +590,13 @@ local function ragingSpiritJustEngagedWith(event, creature, target)
     schedule(guid, "raging_aggressive", 2000, function() onRagingAggressive(creature, guid) end)
     creature:CastSpell(creature, SPELL_PLAGUE_AVOIDANCE, true)
     creature:CastSpell(creature, SPELL_RAGING_SPIRIT_VISUAL, true)
+    -- C++ Reset (:1371-1372): the summoner (the Lich King) casts the
+    -- visual clone on the spirit — creature:GetSummonerUnit, bridged
+    -- 2026-11-05; C++ order kept (between the two self-casts).
+    local summoner = creature:GetSummonerUnit()
+    if summoner then
+        summoner:CastSpell(creature, SPELL_RAGING_SPIRIT_VISUAL_CLONE, true)
+    end
     creature:CastSpell(creature, SPELL_BOSS_HITTIN_YA, true)
     schedule(guid, "soul_shriek", {12000, 15000}, function() onSoulShriek(creature, guid) end)
 end

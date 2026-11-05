@@ -30,10 +30,12 @@
 --   (DoCast(me, spell, true) -> CastSpell(creature, spell, true),
 --   emalon precedent); phase 0, chain ends.
 -- - JustDied: latched trap GO -> SetLootState(GO_JUST_DEACTIVATED
---   3), then (credit leg skipped, see below) -> SetGoState(
---   GO_STATE_READY 1). C++ re-fetches the GO for the second leg;
---   same object, same order. No latch (died before phase 7):
---   both legs skip, matching the C++ nil-GO guards.
+--   3), then the summoner-credit leg (GetSummonerUnit -> ToPlayer()
+--   -> KilledMonsterCredit(25835), on its own guard — it fires even
+--   with no latch), then SetGoState(GO_STATE_READY 1). C++ re-fetches
+--   the GO for the second leg; same object, same order. No latch
+--   (died before phase 7): both GO legs skip, matching the C++ nil-GO
+--   guards; the credit leg still runs.
 -- Unmodeled (documented-only, no bridges):
 -- - The spell_q11865_place_fake_fur summoner (SpellScript class, no
 --   spell-script bridge): the fur GO + trapper spawn never fire in
@@ -42,9 +44,12 @@
 -- - Phase 6 fur Delete(): the GO Despawn method
 --   (engine/world/lua_objects.go:4515) only locks the GO object,
 --   it does not remove it from the world — no GO-delete bridge.
--- - JustDied summoner credit: TempSummon GetSummonerUnit has no
---   bridge, so the KilledMonsterCredit(25835) leg stays out; the
---   GO legs around it are ported, not dropped with it.
+-- - JustDied summoner credit: TempSummon GetSummonerUnit PORTS via
+--   creature:GetSummonerUnit (bridged 2026-11-05), ToPlayer() gated
+--   with GetObjectType() == "Player" (algalon/amanitar precedent);
+--   the KilledMonsterCredit(25835) leg sits between the GO legs in
+--   C++ order, below. The bridge returns nil when CreatedByGUID is
+--   empty, the Go form of the C++ null-summoner guards.
 -- - JustEngagedWith / MoveInLineOfSight are empty C++ overrides.
 
 local ENTRY_NESINGWARY_TRAPPER = 25835
@@ -143,14 +148,22 @@ local function trapperSpawnOrReset(event, creature)
     timers[guid] = CreateLuaEvent(function() advancePhase(creature, guid, 1) end, 2500)
 end
 
--- C++ JustDied (:270-284): latched trap GO loot-state leg, then
--- GO-state leg (summoner-credit leg between them stays out — no
--- TempSummon-summoner bridge); timers die with the creature.
+-- C++ JustDied (:270-284): latched trap GO loot-state leg, then the
+-- summoner-credit leg (GetSummonerUnit -> ToPlayer() ->
+-- KilledMonsterCredit(entry)), then the GO-state leg; timers die with
+-- the creature. The credit leg is NOT inside the GO guard — C++ runs
+-- it on its own summoner chain, so it fires even with no latch.
 local function trapperDied(event, creature)
     local guid = creature:GetGUID()
     local trap = trapGOs[guid]
     if trap then
         trap:SetLootState(GO_LOOT_JUST_DEACTIVATED)
+    end
+    local summoner = creature:GetSummonerUnit()
+    if summoner and summoner:GetObjectType() == "Player" then
+        summoner:KilledMonsterCredit(ENTRY_NESINGWARY_TRAPPER)
+    end
+    if trap then
         trap:SetGoState(GO_STATE_READY)
     end
     cancelAll(guid)

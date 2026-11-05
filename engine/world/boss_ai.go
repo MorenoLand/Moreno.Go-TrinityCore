@@ -16294,15 +16294,20 @@ func init() {
 	// fight runs on instance DATA_CTHUN_PHASE SetData/GetData (no
 	// InstanceScript bridge), DoSpawnCreature tentacle spawns (no summon
 	// bridge), SelectTarget Random (no bridge), Dark Glare positioning
-	// math, and cross-AI DoAction coordination (no DoAction bridge at
-	// all); the single Talk (EMOTE_WEAKENED) is trivial without the phase
-	// machinery. flesh_tentacleAI's only arm (JustDied -> summoner AI
-	// DoAction(ACTION_FLESH_TENTACLE_KILLED)) has no bearer — razorgore
-	// precedent. The 4 tentacle NPCs ARE ported (npc_eye_tentacle 15726 /
-	// npc_claw_tentacle 15725 / npc_giant_claw_tentacle 15728 /
-	// npc_giant_eye_tentacle 15334, npc_*.lua convention; the four
+	// math, and cross-AI DoAction coordination (DoAction IS bridged;
+	// the coordination rides the unported phase machine); the single
+	// Talk (EMOTE_WEAKENED) is trivial without the phase machinery. flesh_tentacleAI's only arm (JustDied -> summoner AI
+	// DoAction(ACTION_FLESH_TENTACLE_KILLED)) stays out: the consumer is
+	// the body's weaken counter (FleshTentaclesKilled, read at
+	// boss_cthun.cpp:669 inside the unported phase machine), so relaying
+	// it would signal nothing — DoAction itself IS bridged
+	// (creature:DoAction fires ev38). The 5 tentacle NPCs ARE ported
+	// (npc_eye_tentacle 15726 / npc_claw_tentacle 15725 /
+	// npc_giant_claw_tentacle 15728 / npc_giant_eye_tentacle 15334 /
+	// npc_giant_flesh_tentacle 15802, npc_*.lua convention; the five
 	// luaBossAI bindings are registered below (the 2026-10-18
-	// dead-binding sweep found them unbound). 2026-10-07
+	// dead-binding sweep found the first four unbound; the flesh
+	// tentacle binding was missed then, added 2026-11-05). 2026-10-07
 	// name-by-name re-verify found 3 fidelity
 	// deviations, fixed: claw Hamstring repeat 10s -> 5s (C++ reset is
 	// 5000 — the 10s was a giant-claw copy slip), giant claw was MISSING
@@ -16315,6 +16320,7 @@ func init() {
 	RegisterLuaBoss("npc_claw_tentacle", 15725)
 	RegisterLuaBoss("npc_giant_claw_tentacle", 15728)
 	RegisterLuaBoss("npc_giant_eye_tentacle", 15334)
+	RegisterLuaBoss("npc_giant_flesh_tentacle", 15802)
 	// boss_cthun (C'Thun body, entry 15727 — cthunAI : public BossAI,
 	// BossAI ctor leg DATA_CTHUN; the creature_template ScriptName
 	// binding stays DB-side): the out-of-combat whisper pump is ported
