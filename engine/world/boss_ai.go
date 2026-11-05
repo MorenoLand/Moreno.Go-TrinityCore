@@ -17549,7 +17549,10 @@ func init() {
 	// bridges), JustReachedHome SetBossState(FAIL) + HandleRemoveAuras +
 	// DespawnOrUnsummon + DoUseDoorOrButton(DATA_MAIN_GATE) (instance
 	// model + no despawn/door bridges); EVENT_SPECIAL_ABILITY stage
-	// machine (no cross-AI DoAction bridge); DoAction ACTION_VORTEX
+	// machine PORTED via fjola specialTick (45s, gated defer;
+	// sister-relay payloads inlined as direct casts — the standalone
+	// cross-AI DoAction entry points below stay unbridged);
+	// DoAction ACTION_VORTEX
 	// (DoCastAOE — terestian/shazzrah precedent) and ACTION_PACT
 	// (cross-AI DoAction; self-cast shield/pact legs port-pattern-ready in
 	// isolation but DoAction-gated — documented-only); EVENT_TOUCH
@@ -19168,6 +19171,13 @@ func init() {
 	// the _JustDied() passthrough + DoRemoveAurasDueToSpellOn
 	// Players(62692) leg has no bridge — the sjonnir JustDied-Talk
 	// precedent; also wipes the surge/berserk timers).
+	// CAST-STATE 2026-11-04: boss UpdateAI pre-loop (:157) +
+	// in-loop (:215) CASTING gates PORTED as a 500ms IsCasting
+	// defer at the top of all 5 ported timer ticks (surge /
+	// shadow_crash / searing_flames / mark / berserk — defer
+	// precedes Talk + target pick, no re-arm consumed);
+	// saronite_animus gates (:348/:363) guard only the unported
+	// profound-of-darkness machine.
 	// Documented-only: Reset / Initialize (shadowDodger /
 	// smellSaronite / animusDead / vaporCount init — no bridges);
 	// SpellHitTarget (SPELL_SHADOW_CRASH_HIT 62659 player leg ->

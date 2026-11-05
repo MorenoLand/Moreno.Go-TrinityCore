@@ -202,6 +202,12 @@ end
 -- DoCast(me, SPELL_SURGE_OF_DARKNESS 62662) (2-arg non-triggered);
 -- 60s init (:146), re-arm {50s,70s} (:192) — Talk order kept.
 local function surgeOfDarknessTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "surge", 500, function()
+            surgeOfDarknessTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_SURGE_OF_DARKNESS)
     creature:Talk(SAY_SURGE_OF_DARKNESS)
     creature:CastSpell(creature, SPELL_SURGE_OF_DARKNESS)
@@ -213,7 +219,23 @@ end
 -- C++ EVENT_BERSERK (:209-212): Talk(SAY_BERSERK 4) + DoCast(me,
 -- SPELL_BERSERK 26662) (2-arg non-triggered); 600s init (:147),
 -- no re-arm — Talk-before-cast order kept.
-local function berserkTick(creature)
+-- CAST-STATE 2026-11-04: boss UpdateAI pre-loop (:157) + in-loop
+-- (:215) CASTING gates PORTED as a 500ms IsCasting defer at the top
+-- of all 5 ported timer ticks (surge / shadow_crash / searing_flames /
+-- mark / berserk; mal_ganis idiom, IsCasting live
+-- lua_creature_events.go:1950) — defer precedes Talk + target pick,
+-- so a deferred tick re-fires intact and consumes no re-arm. The
+-- engage / slay / died hooks are ungated per C++ (separate hooks);
+-- saronite_animus gates (:348/:363) guard only the unported
+-- profound-of-darkness machine; vapors stay out with the summon
+-- machine, so no defer rides them.
+local function berserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            berserkTick(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
@@ -266,6 +288,12 @@ end
 -- 62660) (2-arg non-triggered); init {8s,10s} (:142), unconditional
 -- re-arm {8s,12s} (:171); cast only if a target was found.
 local function shadowCrashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadow_crash", 500, function()
+            shadowCrashTick(creature, guid)
+        end)
+        return
+    end
     local target = vezaxRandomTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_SHADOW_CRASH)
@@ -281,6 +309,12 @@ end
 -- (:176). The hard-mode cancel leg (:206) stays out with the
 -- unported vapor hard-mode machine (unreachable in this model).
 local function searingFlamesTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "searing_flames", 500, function()
+            searingFlamesTick(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SEARING_FLAMES)
     schedule(guid, "searing_flames", {14000, 17500}, function()
         searingFlamesTick(creature, guid)
@@ -293,6 +327,12 @@ end
 -- {35s,40s} (:144), unconditional re-arm {35s,45s} (:185); cast
 -- only if a target was found.
 local function markOfTheFacelessTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mark", 500, function()
+            markOfTheFacelessTick(creature, guid)
+        end)
+        return
+    end
     local target = vezaxRandomTarget(creature)
     if target then
         creature:CastSpell(target, SPELL_MARK_OF_THE_FACELESS)
@@ -349,7 +389,7 @@ local function vezaxEnterCombat(event, creature, target)
         markOfTheFacelessTick(creature, guid)
     end)
     schedule(guid, "berserk", 600000, function()
-        berserkTick(creature)
+        berserkTick(creature, guid)
     end)
 end
 
