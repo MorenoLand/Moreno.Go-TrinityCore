@@ -288,6 +288,8 @@ local ENTRY_RAGING_SPIRIT = 36701
 local ENTRY_SPIRIT_WARDEN = 36824
 local ENTRY_ICE_SPHERE = 36633 -- icecrown_citadel.h:321 (NPC_ICE_SPHERE)
 local ENTRY_DRUDGE_GHOUL = 37695 -- icecrown_citadel.h:320
+local ENTRY_VALKYR_SHADOWGUARD = 36609 -- icecrown_citadel.h:324 (NPC_VALKYR_SHADOWGUARD)
+local ENTRY_VILE_SPIRIT = 37799 -- icecrown_citadel.h:325 (NPC_VILE_SPIRIT)
 local ENTRY_SHADOW_TRAP = 39137 -- icecrown_citadel.h:332
 local ENTRY_DEFILE = 38757 -- icecrown_citadel.h:323
 local ENTRY_TERENAS = 36823 -- icecrown_citadel.h:316 (NPC_TERENAS_MENETHIL_FROSTMOURNE)
@@ -501,6 +503,26 @@ RegisterCreatureEvent(ENTRY_THE_LICH_KING, 3, lichKingKilledUnit)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 4, lichKingJustDied)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 19, lichKingJustSummoned)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)
+
+-- C++ boss_the_lich_king::SummonedCreatureDies (:795-808): the six add
+-- entries flip to TEMPSUMMON_CORPSE_DESPAWN on death so the corpse
+-- despawns at once instead of lingering to the prune. The Go bridge
+-- takes the 0-based TempSummonType scheme (CORPSE_DESPAWN = 4,
+-- pet_combat.go checkDeadTempSummon case 1,4); the C++ header enum is
+-- 1-based (CORPSE_DESPAWN = 5 there) — do NOT "correct" this to 5.
+local function lichKingSummonedCreatureDies(_, _, summoned)
+    if not summoned then
+        return
+    end
+    local entry = summoned:GetEntry()
+    if entry == ENTRY_SHAMBLING_HORROR or entry == ENTRY_DRUDGE_GHOUL
+        or entry == ENTRY_ICE_SPHERE or entry == ENTRY_VALKYR_SHADOWGUARD
+        or entry == ENTRY_RAGING_SPIRIT or entry == ENTRY_VILE_SPIRIT then
+        summoned:SetTempSummonType(4)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 21, lichKingSummonedCreatureDies)
 
 -- C++ npc_shambling_horror_icc: Reset seeds EVENT_SHOCKWAVE {20s,25s}
 -- and EVENT_ENRAGE {11s,14s} (:1303-1304).

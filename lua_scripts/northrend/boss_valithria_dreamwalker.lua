@@ -113,9 +113,10 @@
 -- FIREBALL 70754 victim-cast {2s,4s}/{2s,4s}, !IsWithinMeleeRange
 -- gated (5-yd check, the venoxis precedent); LEY_WASTE 69325
 -- self-cast {15s,20s}/{15s,20s} (:745-749/:760-773).
--- npc_suppresser (37863) — zero Talk lines; SUPPRESSION 70588 is
--- MovementInform CHASE_MOTION_TYPE-driven (no bridge) — NOT
--- registered.
+-- npc_suppresser (37863) — zero Talk lines; IsSummonedBy PORTED
+-- 2026-11-05 (ev22 suppresserIsSummonedBy + ev5 valithriaSpawn latch
+-- below); SUPPRESSION 70588 is MovementInform CHASE_MOTION_TYPE-driven
+-- (no bridge) — stays out.
 -- PORTED (2026-10-13): npc_blistering_zombie (37934) JustDied —
 -- DoCastSelf(SPELL_ACID_BURST 70744, triggered); npc_gluttonous_abomination
 -- (37886) JustDied — DoCastSelf(SPELL_ROT_WORM_SPAWNER 70675, triggered)
@@ -145,6 +146,8 @@ local ENTRY_LICH_KING_VALITHRIA = 16980
 local ENTRY_VALITHRIA_DREAMWALKER = 36789
 local ENTRY_BLISTERING_ZOMBIE = 37934
 local ENTRY_GLUTTONOUS_ABOMINATION = 37886
+local ENTRY_SUPPRESSER = 37863 -- icecrown_citadel.h:291 (NPC_SUPPRESSER)
+local DATA_VALITHRIA_DREAMWALKER = 10 -- icecrown_citadel.h:84
 
 local SAY_LICH_KING_INTRO = 0
 local SAY_VALITHRIA_75_PERCENT = 2
@@ -526,6 +529,32 @@ local function valithriaReset(event, creature)
     creature:SendEncounterUnit(1, creature)
 end
 
+-- C++ instance_icecrown_citadel.cpp OnCreatureCreate (:291-292) latches
+-- ValithriaDreamwalkerGUID when NPC_VALITHRIA_DREAMWALKER spawns; the
+-- Lua mirror is the ev5 SetGuidData latch (instance_guid_store.go —
+-- the exact Lua mirror of the C++ OnCreatureCreate entry-switch
+-- latching; the illidari memberSpawn precedent). PORTED 2026-11-05:
+-- the latch is verifiable from the instance script, not invented.
+local function valithriaSpawn(event, creature)
+    creature:SetGuidData(DATA_VALITHRIA_DREAMWALKER)
+end
+
+-- C++ npc_suppresser::IsSummonedBy (boss_valithria_dreamwalker.cpp:803):
+-- resolve valithria via the instance GUID store, engage + fixate on
+-- her, else despawn. ev22 fires on the summoned creature with (event,
+-- creature, summoner) from the summonTempCreature fire site.
+-- PORTED 2026-11-05; the SUPPRESSION arm stays out (MovementInform
+-- CHASE_MOTION_TYPE-driven, no bridge).
+local function suppresserIsSummonedBy(event, creature, summoner)
+    local valithria = creature:GetInstanceCreature(DATA_VALITHRIA_DREAMWALKER)
+    if valithria then
+        creature:EngageWithTarget(valithria)
+        creature:FixateTarget(valithria)
+    else
+        creature:DespawnOrUnsummon()
+    end
+end
+
 -- C++ npc_blistering_zombie::JustDied — unconditional
 -- DoCastSelf(SPELL_ACID_BURST, true) (triggered, :851-853).
 local function blisteringZombieJustDied(event, creature, killer)
@@ -543,10 +572,12 @@ local function gluttonousAbominationJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_LICH_KING_VALITHRIA, 1, lichKingJustEngagedWith)
+RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 5, valithriaSpawn)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 9, valithriaDamageTaken)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 11, valithriaHealReceived)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 14, valithriaSpellHit)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 23, valithriaReset)
+RegisterCreatureEvent(ENTRY_SUPPRESSER, 22, suppresserIsSummonedBy)
 
 -- C++ boss_valithria::JustSummoned (boss_valithria_dreamwalker.cpp:390-403):
 -- each portal pre-effect summon gets a 15s ValithriaAuraRemoveEvent for its

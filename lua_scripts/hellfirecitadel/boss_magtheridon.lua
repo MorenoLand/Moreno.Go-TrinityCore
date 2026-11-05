@@ -34,7 +34,8 @@
 -- SummonedCreatureDies decrement relay is cross-creature
 -- blocked), phase="banish", taunt timer armed {4min,5min}
 -- repeat -> Talk(SAY_TAUNT) (C++-exact schedule; the
--- SummonCreatureGroup(1) arm is summon-blocked). OnEnterCombat
+-- SummonCreatureGroup(1) arm is PORTED 2026-11-05 in magtheridonReset
+-- below). OnEnterCombat
 -- (1): see the deviation note — the fight starts on pull in
 -- this model when the channeler relay has not already released
 -- the boss (ragnaros-intro convention): cancel the taunt
@@ -314,6 +315,10 @@ local function magtheridonReset(event, creature)
     -- leg deliberately.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_SHADOW_CAGE_C)
+        -- C++ Reset (boss_magtheridon.cpp:134): SummonCreatureGroup
+        -- (SUMMON_GROUP_CHANNELERS = 1, :116), PORTED 2026-11-05
+        -- (bridge landed) — C++ order, after the self-cast.
+        creature:SummonCreatureGroup(1)
         magState[guid] = { phase = "banish", channelers = 5 }
         schedule(guid, "taunt", math.random(240000, 300000), function()
             magtheridonTaunt(creature, guid)

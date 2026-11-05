@@ -24,15 +24,16 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_jedoga_shadowseeker: Reset controller summons (event 23,
 -- IsAlive-guarded — Go 23 also fires on death) + beam-visual casts
--- (jedogaReset; the group / phase / react legs stay below);
+-- (jedogaReset; SummonCreatureGroup(INITIATES) PORTED 2026-11-05;
+-- the phase / react legs stay below);
 -- JustEngagedWith Talk(SAY_AGGRO 0)
 -- (event 1 — the hook itself is bridged); the
 -- RemoveAurasDueToSpell(SPELL_SPHERE_VISUAL 56075) /
 -- RemoveAurasDueToSpell(SPELL_RANDOM_LIGHTNING_VISUAL 56327) legs are
 -- PORTED (stale "no aura-removal bridge" claim retracted —
 -- creature:RemoveAura bridged); SummonCreatureGroup(
--- SUMMON_GROUP_WORSHIPPERS) (summon STRAND absent — standing),
--- events.SetPhase(PHASE_ONE) (no phase bridge on the Lua surface —
+-- SUMMON_GROUP_WORSHIPPERS) PORTED 2026-11-05 in jedogaEnterCombat
+-- (bridge landed), events.SetPhase(PHASE_ONE) (no phase bridge on the
 -- moorabi precedent), and the 25 NPC_TWILIGHT_VOLUNTEER 30385
 -- summons with MovePoint(POINT_INITIAL_POSITION) choreography
 -- (summon STRAND + motion-master bridges absent) — are
@@ -54,8 +55,8 @@
 -- bridge), SetReactState(REACT_PASSIVE) (react-state bridge exists
 -- since 2026-10-20 — the arm stays unported because the intro Reset is
 -- instance/phase-gated, drakkari_colossus precedent), SummonCreatureGroup(
--- SUMMON_GROUP_INITIATES) (no SummonCreatureGroup bridge — standing),
--- and
+-- SUMMON_GROUP_INITIATES) PORTED 2026-11-05 in jedogaReset (bridge
+-- landed), and
 -- EVENT_INTRO_SAY (Talk(SAY_PREACHING 5), Minutes(2) repeat —
 -- instance->GetBossState(DATA_PRINCE_TALDARAM) == DONE gate needs
 -- the absent instance-script model).
@@ -232,10 +233,15 @@ local function jedogaEnterCombat(event, creature, target)
     -- cpp:162-165 — JustEngagedWith strips the two intro visual auras before
     -- anything else (arm order C++-exact); the stale "no aura-removal
     -- bridge" claim is retracted — creature:RemoveAura is bridged
-    -- (engine/world/lua_creature_events.go:155). The SummonCreatureGroup /
-    -- phase legs of the same handler stay documented-only.
+    -- (engine/world/lua_creature_events.go:155). The SummonCreatureGroup
+    -- leg of the same handler is PORTED below (2026-11-05); the phase leg
+    -- stays documented-only.
     creature:RemoveAura(SPELL_SPHERE_VISUAL)
     creature:RemoveAura(SPELL_RANDOM_LIGHTNING_VISUAL)
+    -- C++ JustEngagedWith :166 SummonCreatureGroup(SUMMON_GROUP_WORSHIPPERS
+    -- = 2), PORTED 2026-11-05 (bridge landed) — C++ order, after the aura
+    -- strips, before the BossAI base arms.
+    creature:SummonCreatureGroup(2)
     -- BossAI::JustEngagedWith base arms, after the aura strips and the
     -- (unported) SummonCreatureGroup leg, before Talk (C++ arm order).
     creature:SetCombatPulseDelay(5)
@@ -258,13 +264,17 @@ end
 -- C++ boss_jedoga_shadowseeker::Reset (:148-160): the two
 -- NPC_JEDOGA_CONTROLLER summons + SPELL_BEAM_VISUAL_JEDOGA casts on
 -- Jedoga are PORTED below, IsAlive-guarded (Go event 23 also fires on
--- death; C++ Reset never runs on death). The SummonCreatureGroup
--- (INITIATES), phase, react-state and EVENT_INTRO_SAY legs of the same
--- Reset stay documented-only above.
+-- death; C++ Reset never runs on death). SummonCreatureGroup(INITIATES)
+-- is PORTED 2026-11-05; the phase, react-state and EVENT_INTRO_SAY legs
+-- of the same Reset stay documented-only above.
 local function jedogaReset(event, creature)
     if creature:IsAlive() then
         -- C++ Reset (:148-160): _Reset() (DespawnAll) before re-summoning.
         despawnJedogaSummons(creature:GetGUID())
+        -- C++ :152 SummonCreatureGroup(SUMMON_GROUP_INITIATES = 1),
+        -- PORTED 2026-11-05 (bridge landed) — C++ order, before the
+        -- controller summons.
+        creature:SummonCreatureGroup(1)
         local controller = creature:SummonCreature(ENTRY_JEDOGA_CONTROLLER, 402.7893, -748.5251, 29.39399, 2.024582)
         if controller then
             controller:CastSpell(creature, SPELL_BEAM_VISUAL_JEDOGA)

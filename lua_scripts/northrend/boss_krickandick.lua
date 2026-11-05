@@ -85,9 +85,11 @@
 --   via FindNearestCreature krick (barrage precedent) + the random-player
 --   picks below; re-arms {7s,10s} / 15s unconditional per C++ (:239, :247).
 -- boss_ick DoAction (:191-217) — ACTION_STORE_OLD_TARGET / ACTION_RESET_THREAT
--- threat store/reset machine: ev38 dispatch bridged, but both senders ride
--- unported SpellScript/AuraScript (boss_krickandick.cpp:608, :630) and the
--- receiver needs unbridged ClearFixate/ResetThreat.
+-- threat store/reset machine: PORTED 2026-11-05 in ickDoAction below
+-- (ev38; FixateTarget(nil) = ClearFixate twin, GetThreat/AddThreat
+-- bridged, ModifyThreatByPercent(-100) = ResetThreat twin); both
+-- senders ride unported SpellScript/AuraScript (boss_krickandick.cpp:608,
+-- :630), so the receiver has no live sender in Go yet.
 -- boss_krick JustSummoned (:332-340) — _summons.Summon plus the
 --   NPC_EXPLODING_ORB triggered self-casts (SPELL_EXPLODING_ORB 69017,
 --   SPELL_AUTO_GROW 69020): no summon-list bridge.
@@ -163,6 +165,10 @@ local SAY_KRICK_POISON_NOVA = 4
 local SAY_KRICK_CHASE = 5
 local SAY_KRICK_AGGRO = 0 -- boss_krickandick.cpp:56
 local SAY_ICK_POISON_NOVA = 0
+
+-- boss_krickandick.cpp:117-119 (Actions enum): ACTION_OUTRO = 1.
+local ACTION_STORE_OLD_TARGET = 2
+local ACTION_RESET_THREAT = 3
 
 local SPELL_MIGHTY_KICK = 69021
 local SPELL_EXPLOSIVE_BARRAGE_ICK = 69263
@@ -516,6 +522,57 @@ RegisterCreatureEvent(ENTRY_ICK, 1, ickEnterCombat)
 RegisterCreatureEvent(ENTRY_ICK, 2, ickCancelCombat)
 RegisterCreatureEvent(ENTRY_ICK, 4, ickDied)
 RegisterCreatureEvent(ENTRY_ICK, 23, ickCancelCombat)
+
+-- C++ boss_ick::DoAction (boss_krickandick.cpp:191-217) — the threat
+-- store/reset machine: ACTION_STORE_OLD_TARGET latches the current
+-- victim's GUID + its threat (:194-199); ACTION_RESET_THREAT clears
+-- the fixate, restores the stored threat on the old target, and zeroes
+-- the current victim's threat (:201-214, C++ order). Legs: FixateTarget
+-- (nil) is the ClearFixate twin (nil/0 clears); GetThreat/AddThreat
+-- bridged; ResetThreat has no same-name bridge — the twin is
+-- ModifyThreatByPercent(victim, -100) (ironaya/murmur precedent);
+-- the stored GUID resolves over the AI target list (gurtogg
+-- findTargetByGuid precedent — no GUID->unit bridge exists). PORTED
+-- 2026-11-05 as the receiver; the senders ride the unported
+-- spell_krick_pursuit SpellScript (:608) / AuraScript (:630), so the
+-- receiver has no live sender in Go yet (the terenas DoAction
+-- precedent: receiver ported, sender unported).
+local ickThreatStore = {}
+
+local function findTargetByGuid(creature, guid)
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetGUID() == guid then
+            return t
+        end
+    end
+    return nil
+end
+
+local function ickDoAction(event, creature, action)
+    local guid = creature:GetGUID()
+    if action == ACTION_STORE_OLD_TARGET then
+        local victim = creature:GetVictim()
+        if victim then
+            ickThreatStore[guid] = { targetGUID = victim:GetGUID(), threat = creature:GetThreat(victim) }
+        end
+    elseif action == ACTION_RESET_THREAT then
+        creature:FixateTarget(nil) -- ClearFixate twin
+        local stored = ickThreatStore[guid]
+        if stored then
+            local oldTarget = findTargetByGuid(creature, stored.targetGUID)
+            if oldTarget then
+                creature:AddThreat(oldTarget, stored.threat)
+            end
+            ickThreatStore[guid] = nil
+        end
+        local current = creature:GetVictim()
+        if current then
+            creature:ModifyThreatByPercent(current, -100) -- ResetThreat twin
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ICK, 38, ickDoAction)
 
 -- C++ boss_krickAI::Reset (boss_krickandick.cpp:315-322): unconditional
 -- me->SetReactState(REACT_PASSIVE) + SetFlag(UNIT_FIELD_FLAGS,

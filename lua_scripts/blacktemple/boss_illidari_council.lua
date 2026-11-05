@@ -446,10 +446,11 @@ local function councilLeaveCombat(event, creature)
     councilResetState(creature:GetGUID())
 end
 
--- C++ Reset: _Reset + _inCombat=false + SummonCreatureGroup
--- (creature:SummonCreature IS bridged; SummonCreatureGroup group-ID
--- spawn has no bridge — stays out).
+-- C++ Reset (boss_illidari_council.cpp:141-145): _Reset +
+-- _inCombat=false + SummonCreatureGroup(SUMMON_COUNCIL_GROUP = 1)
+-- (:113, :143) — PORTED 2026-11-05, SummonCreatureGroup bridge landed.
 local function councilReset(event, creature)
+    creature:SummonCreatureGroup(1)
     councilResetState(creature:GetGUID())
 end
 

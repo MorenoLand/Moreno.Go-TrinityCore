@@ -47,8 +47,8 @@
 -- Unmodeled (documented, not wired):
 -- Reset — CheckSpheres() evaluation PORTED on event 23 (shared helper
 -- with the gossip path; true re-fires RemovePrison exactly as C++
--- does); the SummonCreatureGroup(CONTROLLERS) leg on false stays out
--- (no SummonCreatureGroup bridge).
+-- does); the SummonCreatureGroup(CONTROLLERS) leg on false is PORTED
+-- 2026-11-05 (bridge landed).
 -- The ctor's SetDisableGravity(true) ports on ev5 (taldaramSpawn);
 -- the RemovePrison SetDisableGravity(false) (:286) ports with
 -- removePrison below; only MoveLand and the platform GO leg stay out.
@@ -150,7 +150,7 @@ end
 
 -- C++ JustSummoned (:123-141) calls BossAI::JustSummoned, latching
 -- every summon — in this model the conjure-cast flame spheres only
--- (controllers ride SummonCreatureGroup, no bridge). Reset (_Reset)
+-- (controllers ride SummonCreatureGroup, PORTED 2026-11-05). Reset (_Reset)
 -- and JustDied (_JustDied) both summons.DespawnAll().
 local flameSpheres = {}
 
@@ -376,8 +376,11 @@ local function taldaramReset(event, creature)
     clearEmbrace(guid)
     -- C++ Reset (:101-112): CheckSpheres() side effect (RemovePrison
     -- when both spheres set) ports via the shared helper below; the
-    -- SummonCreatureGroup(CONTROLLERS) leg on false has no bridge.
-    checkSpheres(creature)
+    -- SummonCreatureGroup(CONTROLLERS) leg on false is PORTED 2026-11-05
+    -- (bridge landed, SUMMON_GROUP_CONTROLLERS = 1, :58, :111).
+    if not checkSpheres(creature) then
+        creature:SummonCreatureGroup(1)
+    end
 end
 
 -- C++ DamageTaken embrace latch: accumulate while the embrace target

@@ -66,8 +66,9 @@
 -- precedent: the fight starts when a player pulls).
 -- Unmodeled (documented-only, no bridges):
 -- - Reset: SummonCreatureGroup(1) only (Baxter/Frye spawn from the group;
---   no group-summon bridge; the SetFaction(FACTION_FRIENDLY) leg is PORTED
---   in onReset, and the per-GUID latch is cleared in Lua).
+--   PORTED in onReset 2026-11-05 — SummonCreatureGroup bridge landed;
+--   the SetFaction(FACTION_FRIENDLY) leg is PORTED in onReset, and the
+--   per-GUID latch is cleared in Lua).
 -- - EnterEvadeMode: summons.DespawnAll + _DespawnAtEvade(10s) — no
 --   summon/evade bridges; Lua cancels timers on 2.
 -- - DoAction: the SetImmuneToPC(true) leg is PORTED in startEvent (SetFlag
@@ -81,12 +82,13 @@
 --   RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME 68589) leg is PORTED via
 --   creature:RemoveAura (stale "no aura-remove bridge" claim retracted).
 -- - SummonedCreatureDies: the event-21 dispatch IS bridged now
---   (2026-10-24, retiring the old "no fire site" claim), but the
---   baxter/frye summon group (Reset SummonCreatureGroup(1)) is unported,
---   so the arm has no bearer — _deadCount never increments in the port,
---   the lethal clamp persists, and the DoCastSelf(SPELL_QUIET_SUICIDE
---   3617) arm that ends the feign-death in C++ cannot fire (the
---   mandokir/nefarian no-bearer precedent).
+--   (2026-10-24, retiring the old "no fire site" claim), and the
+--   baxter/frye summon group (Reset SummonCreatureGroup(1)) is PORTED
+--   2026-11-05, so the arm has a bearer — but the ev21 _deadCount arm
+--   itself is still unported (not in this strip's scope): _deadCount
+--   never increments in the port, the lethal clamp persists, and the
+--   DoCastSelf(SPELL_QUIET_SUICIDE 3617) arm that ends the feign-death
+--   in C++ cannot fire (the mandokir/nefarian no-bearer precedent).
 -- - JustDied: RemoveFlag + instance->SetBossState(DATA_APOTHECARY_HUMMEL,
 --   DONE) + sLFGMgr->FinishDungeon(288) — no instance/LFG bridges.
 -- - START_FIGHT: the SetImmuneToAll(false) leg is PORTED (2026-10-23) as
@@ -400,8 +402,9 @@ end
 local function onReset(event, creature)
     clearState(creature:GetGUID())
     -- C++ Reset (boss_apothecary_hummel.cpp:121): SetFaction(FACTION_FRIENDLY);
-    -- the SummonCreatureGroup(1) leg stays out (no group-summon bridge).
+    -- SummonCreatureGroup(1) PORTED 2026-11-05 (bridge landed, :123).
     creature:SetFaction(FACTION_FRIENDLY)
+    creature:SummonCreatureGroup(1)
 end
 
 -- C++ DamageTaken: lethal-blow class (damage >= health, pre-damage) ->

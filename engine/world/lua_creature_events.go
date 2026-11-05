@@ -188,6 +188,18 @@ func (s *Server) summonTempCreature(ctx context.Context, origin tempSummonOrigin
 	}
 	if origin.SummonerMotion != nil {
 		s.fireCreatureSummoned(ctx, origin.SummonerMotion, scripting.CreatureEventOnJustSummonedCreature, summoned)
+		// Eluna::OnSummoned (CreatureHooks.cpp:86-94): the summoned
+		// creature's own IsSummonedBy hook (event 22) fires on the summon
+		// path with the summoner as the extra argument — C++ calls
+		// IsSummonedBy on the new AI for every summon, so creature summons
+		// (group summons included) reach ev22 here, not just player pets
+		// via the pet funnel. The fireCreaturePetSummoned comment's
+		// pet-only wording is stale as of this fire site.
+		s.fireCreaturePetSummoned(ctx, summoned, s.luaMotionCreature(origin.SummonerMotion))
+	} else if summoner := s.findSessionByGUID(origin.GUID); summoner != nil {
+		if player := luaPlayerOrNil(summoner); player != nil {
+			s.fireCreaturePetSummoned(ctx, summoned, player)
+		}
 	}
 	return summoned
 }
@@ -2088,6 +2100,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastPendingAttackStarts(switchStart)
 		return nil, nil
 	}
+	// FixateTarget is ThreatManager::FixateTarget (ThreatManager.cpp:494-506):
+	// a script-fixated victim already on the threat list becomes the
+	// preferred victim; a nil target (or a target off the list) clears the
+	// fixate, which is the ClearFixate twin — the Go form is FixateTarget(0).
+	// The argument is a creature/player object or a raw GUID; luaObjectGUID
+	// yields 0 for nil, so creature:FixateTarget(nil) clears. A missing
+	// ThreatManager means no list exists, so the fixate would clear in C++
+	// too and the call is a no-op.
+	methods["FixateTarget"] = func(_ context.Context, args []any) ([]any, error) {
+		var victimGUID uint64
+		if len(args) > 0 {
+			victimGUID = luaObjectGUID(args[0])
+		}
+		s.motionMu.Lock()
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.FixateTarget(victimGUID)
+		}
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// IsCasting is UnitMethods::IsCasting (UnitMethods.h:546-554):
 	// HasUnitState(UNIT_STATE_CASTING). Go creature casts are fire-and-forget
 	// (no in-flight cast state on the creature — the 2026-10-20 caststate
@@ -3405,6 +3437,54 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return []any{nil}, nil
 		}
 		return []any{s.luaMotionCreature(summoned)}, nil
+	}
+	// SummonCreatureGroup is WorldObject::SummonCreatureGroup
+	// (Object.cpp:2132-2151): looks up (GetEntry(), SUMMONER_TYPE_CREATURE,
+	// group) in creature_summon_groups (ObjectMgr::LoadTempSummonData,
+	// ObjectMgr.cpp:1996) and summons every row via SummonCreature with the
+	// row's position, summonType and summonTime (milliseconds), collecting
+	// the TempSummon*s into the out-param list. The per-call world-DB query
+	// mirrors summonTempCreature's own per-call creature_template check —
+	// no startup loader or cache; the group rows live only in TDB, not in
+	// the C++ tree. Returns the summoned creatures as a Lua array (the
+	// &list sites — Kel'Thuzad guardians/minions, Yogg clouds, Valithria
+	// archmages — iterate it); a missing table or no rows yields an empty
+	// table, the C++ `if (!data) return;` twin (Object.cpp:2136-2140),
+	// required because the repo's world.db placeholder carries no such
+	// table. Rows whose template is unknown are skipped by the funnel
+	// (nil return), exactly C++ logging null for a missing template.
+	methods["SummonCreatureGroup"] = func(ctx context.Context, args []any) ([]any, error) {
+		groupID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		out := []any{}
+		if s.WorldStore == nil || s.WorldStore.DB == nil {
+			return []any{out}, nil
+		}
+		s.motionMu.Lock()
+		summonerEntry := motion.Entry
+		s.motionMu.Unlock()
+		rows, err := s.WorldStore.DB.QueryContext(ctx,
+			"SELECT entry, position_x, position_y, position_z, orientation, summonType, summonTime FROM creature_summon_groups WHERE summonerId = ? AND summonerType = 0 AND groupId = ?",
+			summonerEntry, groupID)
+		if err != nil {
+			return []any{out}, nil
+		}
+		defer rows.Close()
+		origin := s.summonOriginFromMotion(motion)
+		for rows.Next() {
+			var entry int64
+			var x, y, z, o float64
+			var summonType, summonTime int64
+			if err := rows.Scan(&entry, &x, &y, &z, &o, &summonType, &summonTime); err != nil {
+				continue
+			}
+			if summoned := s.summonTempCreature(ctx, origin, uint32(entry), float32(x), float32(y), float32(z), float32(o), uint8(summonType), uint32(summonTime)); summoned != nil {
+				out = append(out, s.luaMotionCreature(summoned))
+			}
+		}
+		return []any{out}, nil
 	}
 	// SpawnCreature is WorldObject::SpawnCreature (WorldObjectMethods.h),
 	// the Eluna 1-8 spawn-type twin of SummonCreature; the shared
@@ -4805,6 +4885,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		motion.CreatedByGUID = guid
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// SetTempSummonType is TempSummon::SetTempSummonType (TemporarySummon.h):
+	// rewrites the summon's despawn family on the 0-7 TempSummonType scheme
+	// (0 TIMED_OR_DEAD_DESPAWN ... 7 MANUAL_DESPAWN, lua_creature_events.go
+	// SummonCreature comment). The field is read by checkTempSummonExpiry
+	// (timed family) and checkDeadTempSummon (types 1/4 unsummon at corpse
+	// at once, type 5 runs the corpse timer); setting 4 on a live add makes
+	// its corpse vanish at once instead of lingering for the prune. Values
+	// above 7 error, mirroring the SummonCreature gate.
+	methods["SetTempSummonType"] = func(_ context.Context, args []any) ([]any, error) {
+		summonType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if summonType > 7 {
+			return nil, fmt.Errorf("SetTempSummonType type must be 0-7")
+		}
+		s.motionMu.Lock()
+		motion.TempSummonType = uint8(summonType)
 		s.motionMu.Unlock()
 		return nil, nil
 	}
@@ -6702,7 +6803,9 @@ func (s *Server) fireCreatureSummoned(ctx context.Context, owner *creatureMotion
 // is empty (CreatureAI.h) — a provable no-op like the JustDied/KilledUnit
 // rulings — so Go discards it. Fires from the direct-construction pet
 // funnel (registerPetMotion), which bypasses the AddToWorld/IsSummonedBy
-// chain C++ Eluna-driven pets take. Must be called with motionMu released:
+// chain C++ Eluna-driven pets take, and from summonTempCreature for
+// creature/player summons (the C++ summon path calls IsSummonedBy on the
+// new AI for every summon). Must be called with motionMu released:
 // Lua handler object methods lock it on demand.
 func (s *Server) fireCreaturePetSummoned(ctx context.Context, motion *creatureMotion, summoner any) {
 	if s == nil || motion == nil || summoner == nil || s.Features == nil || s.Features.Scripts == nil {
