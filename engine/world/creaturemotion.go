@@ -7162,7 +7162,27 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						immuneSet[p.GUID] = true
 						continue
 					}
-					if ok, status := s.serverInlineReflectVerdict(ctx, motion, inlineSpell, p); ok {
+					// A creature wire victim (the S2 synthesized view: nil
+					// session, live motion) rolls the generic verdict
+					// (serverCastCreatureReflectVerdict), not the player
+					// reflect arm — the player arm returns false on a nil
+					// session, so a reflecting creature victim took full
+					// damage and never produced a return trip. Mirrors the
+					// area-creature loop below; the trailing NON_ATTACKABLE
+					// recheck still runs for a clean verdict.
+					if p.Sess == nil && s.findCreatureMotion(motion.Map, motion.InstanceID, p.GUID) != nil {
+						reflected, evaded, status := s.serverCastCreatureReflectVerdict(ctx, motion, inlineSpell, p.GUID)
+						if evaded {
+							evadedSet[p.GUID] = true
+						} else if reflected {
+							reflectedSet[p.GUID] = true
+							creatureReflectTrips = append(creatureReflectTrips, inlineCreatureReflectTrip{guid: p.GUID, status: status})
+						} else if miss := s.serverCreatureSpellMissVerdict(ctx, motion, inlineSpell, p.GUID); miss != protocol.SpellMissNone {
+							missSet[p.GUID] = miss
+						} else if s.serverCreatureFullyEffectImmuneVerdict(ctx, motion, inlineSpell, p.GUID) {
+							missSet[p.GUID] = protocol.SpellMissImmune2
+						}
+					} else if ok, status := s.serverInlineReflectVerdict(ctx, motion, inlineSpell, p); ok {
 						reflectedSet[p.GUID] = true
 						reflectTrips = append(reflectTrips, inlineReflectTrip{victim: p, status: status})
 					} else if miss := s.serverCreatureSpellMissVerdict(ctx, motion, inlineSpell, p.GUID); miss != protocol.SpellMissNone {
@@ -7824,7 +7844,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				_, dmgWireInCone = dmgConeSet[target.GUID]
 			}
 			if dmgWireInCone && !nearbyReplacesWireVictim && !reflectedSet[target.GUID] && !immuneSet[target.GUID] && missSet[target.GUID] == protocol.SpellMissNone && !instaKilled[target.GUID] {
-				s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
+				// Spell-inline wire-victim routing (funnel S4): a creature
+				// wire victim (the S2 synthesized view: nil session, live
+				// motion) takes the creature-victim twin, not the player
+				// twin — the player twin's application block is gated on a
+				// non-nil session, so a caster-vs-creature inline spell
+				// previously sent only the GO packet and dealt no damage.
+				// The nil session rides as the twin's vehicle (its share
+				// leg is nil-guarded, like the area-creature call below).
+				if target.Sess == nil && s.findCreatureMotion(motion.Map, motion.InstanceID, target.GUID) != nil {
+					s.applyInlineCreatureSpellHitCreature(ctx, motion, target.GUID, spellID, damage, schoolMask, target.Sess)
+				} else {
+					s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
+				}
 			}
 			for _, areaHit := range areaHits {
 				if areaHit == nil || reflectedSet[areaHit.GUID] || immuneSet[areaHit.GUID] || missSet[areaHit.GUID] != protocol.SpellMissNone || instaKilled[areaHit.GUID] {
