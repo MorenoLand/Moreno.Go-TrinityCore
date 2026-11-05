@@ -58,12 +58,13 @@
 -- (GetFireworkGameObjectId needs sSpellMgr data, no Spell.dbc
 -- in-tree), the minion AttackStart leg, and the single-firework
 -- position-target cast leg.
--- npc_spring_rabbit (:2002-2100) — UpdateAI (:2057) timer pump is
--- CreateLuaEvent-shaped, but the MoveFollow/DoAction cross-AI legs
--- and the rabbitGUID ObjectAccessor::GetUnit resolution are unbridged
--- (FindNearestCreature is bridged on the creature surface; GetOwner
--- is player-owner-only); entry
--- 32791 IS in the C++ file (:2007) but every arm needs those legs.
+-- npc_spring_rabbit (:2002-2100) — PORTED in
+-- lua_scripts/world/npc_spring_rabbit.lua (Reset + search/inLove
+-- timer pumps + cross-creature DoAction(1) via shared-table state,
+-- the ribbon-pole relay idiom). Remaining deviations there: the
+-- partner jump target re-finds the nearest rabbit (no
+-- GUID-to-creature bridge) and pair-up timers roll fresh instead of
+-- keeping residuals; GetOwner stays player-owner-only.
 -- npc_imp_in_a_ball (:2102-2160) — IsSummonedBy (:2119) needs
 -- summonerGUID + ObjectAccessor::GetPlayer lookup (no bridge); the
 -- addon-channel monster whisper/party text (:2128-2141) is not the
