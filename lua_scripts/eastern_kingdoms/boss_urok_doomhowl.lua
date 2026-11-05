@@ -38,9 +38,10 @@
 -- Talk(SAY_AGGRO) fires once on combat entry (maiden-of-virtue
 -- convention; creature:Talk is bridged in lua_creature_events.go).
 -- Victim casts are GetVictim nil-guarded (incarcerator convention).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:76) + in-loop
+-- gate (:95) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis/rend idiom) -- a
+-- gated arm fires nothing and consumes no re-arm. The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention). BossAI::JustEngagedWith(who) is the standard
@@ -77,6 +78,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onRend(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rend", 500, function() onRend(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_REND)
@@ -85,6 +90,10 @@ local function onRend(creature, guid)
 end
 
 local function onStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "strike", 500, function() onStrike(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_STRIKE)

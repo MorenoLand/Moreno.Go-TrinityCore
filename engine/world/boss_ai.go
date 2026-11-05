@@ -13996,9 +13996,9 @@ func init() {
 	// voone pummel precedent). SPELL_FRENZY 8269 is enum-only in C++
 	// (never cast), omitted by design. IsSummonedBy's MovePath
 	// (GIZRUL_PATH 402450) is documented-only — no MotionMaster
-	// bridge (the_beast precedent). No UNIT_STATE_CASTING model in
-	// Go; Reset _Reset / JustDied _JustDied covered by the cancel on
-	// 2/4/23. Entry 10268 verifiable from the C++ sources:
+	// bridge (the_beast precedent). UpdateAI combat-branch CASTING
+	// gates ported as 500ms IsCasting defers. Reset _Reset /
+	// JustDied _JustDied covered by the cancel on 2/4/23. Entry 10268 verifiable from the C++ sources:
 	// blackrock_spire.h:66 names NPC_GIZRUL_THE_SLAVENER = 10268
 	// (halycon's summon bridge was unbridgeable, but the entry itself
 	// is C++-verifiable so the port is registered).
@@ -14011,9 +14011,10 @@ func init() {
 	// ids directly (EVENT_* constants never scheduled) — the
 	// port keys timers "rend"/"strike" with EventMap cancel-on-
 	// re-schedule semantics. SPELL_INTIMIDATING_ROAR 16508 is
-	// enum-only in C++ (never cast), omitted by design. No
-	// UNIT_STATE_CASTING model in Go; Reset _Reset / JustDied
-	// _JustDied covered by the cancel on 2/4/23. Entry 10584
+	// enum-only in C++ (never cast), omitted by design. UpdateAI
+	// combat-branch CASTING gates ported as 500ms IsCasting defers.
+	// Reset _Reset / JustDied _JustDied covered by the cancel on
+	// 2/4/23. Entry 10584
 	// verifiable from the C++ sources: blackrock_spire.h:64 names
 	// NPC_UROK_DOOMHOWL = 10584 (gizrul / rend_blackhand precedent).
 	RegisterLuaBoss("boss_urok_doomhowl", 10584)
@@ -14029,9 +14030,11 @@ func init() {
 	// enum (ScriptName binding is DB-side); verified from the 3.3.5 data
 	// source (npc=16042/lord-valthalak, "Mea Culpa" quest objective NPC
 	// #16042 slain — Lord Valthalak); AI runs under BossAI(DATA_LORD_
-	// VALTHALAK = 14, blackrock_spire.h:44). Reset _Reset / JustDied
-	// _JustDied covered by the cancel on 2/4/23; JustDied's instance
-	// SetData(DONE) has no bridge (documented-only).
+	// VALTHALAK = 14, blackrock_spire.h:44). UpdateAI combat-branch
+	// CASTING gates ported as 500ms IsCasting defers (post-loop
+	// frenzy latches stay ungated on OnDamageTaken). Reset _Reset /
+	// JustDied _JustDied covered by the cancel on 2/4/23; JustDied's
+	// instance SetData(DONE) has no bridge (documented-only).
 	RegisterLuaBoss("boss_lord_valthalak", 16042)
 	// instance_blackrock_spire (AddSC_instance_blackrock_spire; BRS
 	// encounter-state machine, map 229 — InstanceMapScript + 3

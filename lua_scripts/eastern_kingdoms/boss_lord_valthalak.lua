@@ -41,9 +41,14 @@
 -- flags reset on OnEnterCombat(1) (gyth convention); C++ checks the
 -- latches in UpdateAI even out of combat, but the only state transition
 -- into sub-40%/sub-15% is damage, so the damage-event latch is faithful.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:86) + in-loop
+-- gate (:109) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis/rend idiom) -- a
+-- gated arm fires nothing and consumes no re-arm. The post-loop
+-- frenzy latches (:112/:122) stay ungated on OnDamageTaken(9): in
+-- C++ they are skipped while casting but re-checked on later ticks,
+-- not lost, and the damage hook is the only state transition into
+-- sub-40%/sub-15%. The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (RemoveEventById convention — CreateLuaEvent returns an integer id,
@@ -95,11 +100,19 @@ local function cancelKey(guid, key)
 end
 
 local function onSummonSpectralAssassin(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summon", 500, function() onSummonSpectralAssassin(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUMMON_SPECTRAL_ASSASSIN)
     schedule(guid, "summon", {30000, 35000}, function() onSummonSpectralAssassin(creature, guid) end)
 end
 
 local function onShadowWrath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wrath", 500, function() onShadowWrath(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_WRATH)
@@ -108,6 +121,10 @@ local function onShadowWrath(creature, guid)
 end
 
 local function onShadowBoltVolley(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "volley", 500, function() onShadowBoltVolley(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHADOW_BOLT_VOLLEY)

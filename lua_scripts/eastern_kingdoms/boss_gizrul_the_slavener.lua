@@ -36,9 +36,10 @@
 -- (EventMap semantics: schedule() cancels the same-key timer first —
 -- the same modeling as voone's pummel overwriting mortal-strike).
 -- Victim casts are GetVictim nil-guarded (incarcerator convention).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:81) + in-loop
+-- gate (:100) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis/rend idiom) -- a
+-- gated arm fires nothing and consumes no re-arm. The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
@@ -76,6 +77,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onFatalBite(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fatalbite", 500, function() onFatalBite(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FATAL_BITE)
@@ -84,6 +89,10 @@ local function onFatalBite(creature, guid)
 end
 
 local function onInfectedBite(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "infectedbite", 500, function() onInfectedBite(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_INFECTED_BITE)
     schedule(guid, "fatalbite", {8000, 10000}, function() onFatalBite(creature, guid) end)
 end
