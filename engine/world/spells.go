@@ -40429,15 +40429,32 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			break
 		}
 		var leechCaster *session
+		var leechCasterMotion *creatureMotion
 		if ts.server != nil {
 			leechCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+			if leechCaster == nil {
+				// SpellAuraEffects.cpp:5441-5444 — the tick fires for any
+				// caster unit type, so a creature caster resolves through
+				// its motion instead of dropping the tick.
+				leechCasterMotion = ts.server.findCreatureMotion(ts.player.Map, ts.player.InstanceID, aura.CasterGUID)
+			}
 		}
 		// C++ gates: caster and target alive, and the target's power type
 		// matches. Go has no player PowerType model; the drain below
 		// naturally no-ops when the target's MaxPowers[powerType] is 0.
 		// The persistent-area-aura SpellHitResult gate is bridged by
 		// persistentAreaTickMissed at the top of this case.
-		if leechCaster == nil || leechCaster.player == nil || leechCaster.player.Health == 0 || leechCaster.isDeadOrGhost() || ts.player.Health == 0 || ts.isDeadOrGhost() {
+		if leechCaster == nil && leechCasterMotion == nil {
+			break
+		}
+		if leechCaster != nil {
+			if leechCaster.player == nil || leechCaster.player.Health == 0 || leechCaster.isDeadOrGhost() {
+				break
+			}
+		} else if leechCasterMotion.Health == 0 {
+			break
+		}
+		if ts.player.Health == 0 || ts.isDeadOrGhost() {
 			break
 		}
 		var tickSpell wotlk.Spell
@@ -40462,7 +40479,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// SpellAuraEffects.cpp:5471-5478 — percent-drain spells (Drain
 			// Mana): drain x% of the target's max power, capped at 2*x% of
 			// the caster's max power.
-			maxDrain := uint32(float64(leechCaster.player.MaxPowers[powerType]) * float64(drain) * 2.0 / 100.0)
+			casterMaxPower := uint32(0)
+			if leechCaster != nil {
+				casterMaxPower = leechCaster.player.MaxPowers[powerType]
+			} else if int(powerType) < len(leechCasterMotion.MaxPowers) {
+				casterMaxPower = leechCasterMotion.MaxPowers[powerType]
+			}
+			maxDrain := uint32(float64(casterMaxPower) * float64(drain) * 2.0 / 100.0)
 			drain = uint32(float64(ts.player.MaxPowers[powerType]) * float64(drain) / 100.0)
 			if drain > maxDrain {
 				drain = maxDrain
@@ -40500,7 +40523,29 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if ts.server != nil {
 			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts.player.Map, ts.player.InstanceID, ts.player.X, ts.player.Y, ts.player.Z, ts)
 		}
-		ts.applyPeriodicManaLeechGain(context.Background(), leechCaster, aura, tickSpell, tickKnown, powerType, drained)
+		if leechCaster != nil {
+			ts.applyPeriodicManaLeechGain(context.Background(), leechCaster, aura, tickSpell, tickKnown, powerType, drained)
+		} else if gained := ts.applyCreaturePeriodicManaLeechGain(context.Background(), leechCasterMotion, tickSpell, tickKnown, powerType, drained); gained > 0 {
+			// SpellAuraEffects.cpp:5489-5491 — the drain gain puts 0.5x
+			// threat on the drain victim's own list, but a player victim
+			// carries no ThreatMgr in Go (never created), so the add lands
+			// as combat state only (ThreatManager.cpp:328-339): the
+			// drainer engages and the victim is flagged in combat. Step 1
+			// (ThreatManager.cpp:308-317) still applies — NO_THREAT adds
+			// nothing, NO_INITIAL_AGGRO adds nothing while the victim is
+			// not engaged (in-combat flag proxy).
+			if ts.server != nil && !drainGainThreatBlocked(tickSpell, tickKnown, aura.SpellID, ts.server.Data, ts.player.UnitFlags&unitFlagInCombat != 0) {
+				ts.server.motionMu.Lock()
+				if cm := ts.server.findCreatureMotionLocked(ts.player.Map, ts.player.InstanceID, aura.CasterGUID); cm != nil {
+					cm.InCombat = true
+				}
+				ts.server.motionMu.Unlock()
+				if ts.player.UnitFlags&unitFlagInCombat == 0 {
+					ts.player.UnitFlags |= unitFlagInCombat
+					ts.sendPlayerUpdate()
+				}
+			}
+		}
 
 	case 21: // SPELL_AURA_OBS_MOD_POWER
 		// SpellAuraEffects.cpp:5513-5546 (HandleObsModPowerAuraTick): the
@@ -42540,8 +42585,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			return true
 		}
 		var leechCaster *session
+		var leechCasterMotion *creatureMotion
 		if s.server != nil {
 			leechCaster = s.server.findSessionByGUID(aura.CasterGUID)
+			if leechCaster == nil {
+				// SpellAuraEffects.cpp:5441-5444 — the tick fires for any
+				// caster unit type, so a creature caster resolves through
+				// its motion instead of dropping the tick.
+				leechCasterMotion = s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID)
+			}
 		}
 		// C++ gates: caster and target alive, target power type matches.
 		// Target liveness is checked at the top of this function; the power
@@ -42552,7 +42604,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// (SpellAuraEffects.cpp:5454-5456) rides persistentAreaTickMissed
 		// at the top of this case.
 		// UNIT_STATE_ISOLATED has no Go model.
-		if leechCaster == nil || leechCaster.player == nil || leechCaster.player.Health == 0 {
+		if leechCaster == nil && leechCasterMotion == nil {
+			return true
+		}
+		if leechCaster != nil {
+			if leechCaster.player == nil || leechCaster.player.Health == 0 {
+				return true
+			}
+		} else if leechCasterMotion.Health == 0 {
 			return true
 		}
 		var tickSpell wotlk.Spell
@@ -42582,7 +42641,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				targetMaxPower = motion.MaxPowers[powerType]
 			}
 			s.server.motionMu.Unlock()
-			maxDrain := uint32(float64(leechCaster.player.MaxPowers[powerType]) * float64(drain) * 2.0 / 100.0)
+			casterMaxPower := uint32(0)
+			if leechCaster != nil {
+				casterMaxPower = leechCaster.player.MaxPowers[powerType]
+			} else if int(powerType) < len(leechCasterMotion.MaxPowers) {
+				casterMaxPower = leechCasterMotion.MaxPowers[powerType]
+			}
+			maxDrain := uint32(float64(casterMaxPower) * float64(drain) * 2.0 / 100.0)
 			drain = uint32(float64(targetMaxPower) * float64(drain) / 100.0)
 			if drain > maxDrain {
 				drain = maxDrain
@@ -42617,7 +42682,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		if s.server != nil {
 			sendPeriodicLog(logPkt)
 		}
-		s.applyPeriodicManaLeechGain(ctx, leechCaster, aura, tickSpell, tickKnown, powerType, drained)
+		if leechCaster != nil {
+			s.applyPeriodicManaLeechGain(ctx, leechCaster, aura, tickSpell, tickKnown, powerType, drained)
+		} else if gained := s.applyCreaturePeriodicManaLeechGain(ctx, leechCasterMotion, tickSpell, tickKnown, powerType, drained); gained > 0 {
+			// SpellAuraEffects.cpp:5489-5491 — the drain gain puts 0.5x
+			// threat on the drain victim's own list crediting the
+			// creature caster (ignoreModifiers=true).
+			s.server.addCreatureDrainGainThreat(leechCasterMotion, aura.TargetGUID, key.Map, key.InstanceID, aura.SpellID, tickSpell, tickKnown, gained)
+		}
 		return true
 
 	case 21: // SPELL_AURA_OBS_MOD_POWER
@@ -42717,8 +42789,15 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			return true
 		}
 		var burnCaster *session
+		var burnCasterMotion *creatureMotion
 		if s.server != nil {
 			burnCaster = s.server.findSessionByGUID(aura.CasterGUID)
+			if burnCaster == nil {
+				// SpellAuraEffects.cpp:5583-5586 — the tick fires for any
+				// caster unit type, so a creature caster resolves through
+				// its motion instead of dropping the tick.
+				burnCasterMotion = s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID)
+			}
 		}
 		// C++ gates: caster and target alive, target power type matches.
 		// Target liveness is checked at the top of this function; the
@@ -42726,7 +42805,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// when MaxPowers[burnPowerType] is 0). Creature victims have no
 		// resilience model (consistent with the damage ticks), and the
 		// persistent-area-aura gate stays unbridged.
-		if burnCaster == nil || burnCaster.player == nil || burnCaster.player.Health == 0 {
+		if burnCaster == nil && burnCasterMotion == nil {
+			return true
+		}
+		if burnCaster != nil {
+			if burnCaster.player == nil || burnCaster.player.Health == 0 {
+				return true
+			}
+		} else if burnCasterMotion.Health == 0 {
 			return true
 		}
 		// SpellAuraEffects.cpp:5592-5596 — the immune gate
@@ -42781,6 +42867,10 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				burnSpell, burnSpellKnown = sp, true
 			}
 		}
+		// Unit.cpp:1693 — the armor/resist curves key on the tick's live
+		// caster level, like C++'s attacker->GetLevel(); tickAttackerLevel
+		// resolves a creature caster's motion level the same way.
+		burnCasterLevel, _ := tickAttackerLevel(s.server, key.Map, key.InstanceID, aura)
 		dmg := drained
 		// Hybrid (melee+magic) spells skip the armor arm: C++ strips the
 		// NORMAL bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor
@@ -42788,9 +42878,6 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// CalcSpellResistedDamage (Unit.cpp:1764-1770).
 		isHybridBurn := burnSpellKnown && burnSpell.SchoolMask&1 != 0 && burnSpell.SchoolMask&0x7E != 0
 		if !burnFixedDamage && aura.SchoolMask&1 != 0 && !isHybridBurn && (!burnSpellKnown || burnSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
-			// Unit.cpp:1693 — the burn tick only runs with a live caster
-			// session (nil burnCaster returns above), so the armor curve
-			// keys on its live level, like C++'s attacker->GetLevel().
 			// Pet victims fold their live armor legs (Guardian::UpdateArmor,
 			// StatSystem.cpp:1316-1330) like the other damage paths.
 			armorValue := float64(target.Armor)
@@ -42799,14 +42886,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 			if armorValue > 0 {
 				armorValue, arp := tickCasterArmorLegs(s.server, key.Map, key.InstanceID, aura, burnSpell, burnSpellKnown, armorValue, ctx)
-				dmg = calcArmorReducedDamage(armorValue, burnCaster.player.Level, target.Level, dmg, arp)
+				dmg = calcArmorReducedDamage(armorValue, burnCasterLevel, target.Level, dmg, arp)
 			}
 		}
 		burnResisted := uint32(0)
 		burnPreResistDmg := dmg
-		if aura.SchoolMask > 1 && burnCaster.player.Level > 0 {
+		if aura.SchoolMask > 1 && burnCasterLevel > 0 {
+			// Spell penetration is a player-only stat; a creature caster
+			// contributes none (like the other tick pipelines).
 			pen := uint32(0)
-			if burnCaster.player != nil {
+			if burnCaster != nil && burnCaster.player != nil {
 				pen = burnCaster.player.SpellPenetration
 			}
 			// AuraEffect::HandleAuraModResistance (SpellAuraEffects.cpp:3255):
@@ -42825,17 +42914,17 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				}
 				if armorValue > 0 {
 					armorValue, arp := tickCasterArmorLegs(s.server, key.Map, key.InstanceID, aura, burnSpell, burnSpellKnown, armorValue, ctx)
-					hybridArmorReduced = calcArmorReducedDamage(armorValue, burnCaster.player.Level, target.Level, dmg, arp)
+					hybridArmorReduced = calcArmorReducedDamage(armorValue, burnCasterLevel, target.Level, dmg, arp)
 				} else {
 					hybridArmorReduced = dmg
 				}
 			}
-			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), burnResistances, burnCaster.player.Level, target.Level, true, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), burnResistances, burnCasterLevel, target.Level, true, false, tickCasterIgnoreResistPct(s.server, burnCaster, key.Map, key.InstanceID, aura, burnSpell, burnSpellKnown), spellResistInput{
 				ignoreResistances:  burnSpellKnown && burnSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             burnSpellKnown && burnSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybridBurn,
 				hybridArmorReduced: hybridArmorReduced,
-				targetResistMod:    burnCaster.casterTargetResistMod(uint32(aura.SchoolMask)),
+				targetResistMod:    tickCasterTargetResistMod(s.server, burnCaster, key.Map, key.InstanceID, aura),
 			}, pen)
 		}
 		if dmg < 1 && burnResisted == 0 {
@@ -42875,21 +42964,33 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		logPkt162 := buildPeriodicNonMeleeDamageLog(aura.TargetGUID, aura.CasterGUID, aura.SpellID, dmg, burnOverkill, uint8(aura.SchoolMask), burnAbsorbed, burnResisted, 0)
 		// SpellAuraEffects.cpp:5291: the log rides the caster's
 		// SendMessageToSet — the caster's visibility set, not the whole
-		// instance.
-		_ = burnCaster.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
-		if s.server != nil {
-			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, burnCaster.player.Map, burnCaster.player.InstanceID, burnCaster.player.X, burnCaster.player.Y, burnCaster.player.Z, burnCaster)
+		// instance. A creature caster has no session leg, so its broadcast
+		// rides its motion position (falling back to the target's).
+		if burnCaster != nil {
+			_ = burnCaster.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
+			if s.server != nil {
+				s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, burnCaster.player.Map, burnCaster.player.InstanceID, burnCaster.player.X, burnCaster.player.Y, burnCaster.player.Z, burnCaster)
+			}
+		} else if s.server != nil {
+			bx, by, bz := target.X, target.Y, target.Z
+			if burnCasterMotion != nil {
+				bx, by, bz = burnCasterMotion.X, burnCasterMotion.Y, burnCasterMotion.Z
+			}
+			s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, key.Map, key.InstanceID, bx, by, bz, nil)
 		}
 		_, burnAlive := s.applyPeriodicTickDamageToCreature(ctx, dmg, burnTargetHealth, target, key, aura)
-		// Periodic-tick aura procs (SpellAuraEffects.cpp:5583-5623): the same
-		// tail as the player path — the done leg on the caster's session (the
-		// tick only runs with burnCaster live), the taken leg on the victim
-		// motion's own auras via the shared creature proc loop.
+		// Periodic-tick aura procs (SpellAuraEffects.cpp:5583-5623): the done
+		// leg runs on the caster's session when online, else on the caster
+		// creature's own auras (C++ runs the done leg on any caster unit
+		// type); the taken leg runs on the victim motion's own auras via the
+		// shared creature proc loop.
 		if s.server != nil && s.server.Data != nil {
 			if burnTickSpell, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
-				burnCaster.procPeriodicPowerBurnTickAuraTriggers(ctx, burnTickSpell, aura.SchoolMask, aura.TargetGUID, burnAbsorbed, burnResisted, dmg)
+				if burnCaster != nil {
+					burnCaster.procPeriodicPowerBurnTickAuraTriggers(ctx, burnTickSpell, aura.SchoolMask, aura.TargetGUID, burnAbsorbed, burnResisted, dmg)
+				}
 				if victimMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); victimMotion != nil {
-					s.server.fireCreaturePeriodicPowerBurnTickProcs(ctx, victimMotion, aura.TargetGUID, aura.CasterGUID, burnTickSpell, aura.SchoolMask, burnAbsorbed, burnResisted, dmg)
+					s.server.fireCreaturePeriodicPowerBurnTickProcs(ctx, burnCasterMotion, victimMotion, aura.TargetGUID, aura.CasterGUID, burnTickSpell, aura.SchoolMask, burnAbsorbed, burnResisted, dmg)
 				}
 			}
 		}
@@ -43105,15 +43206,15 @@ func (s *session) applyCreatureHealthFunnelSelfDamage(ctx context.Context, caste
 }
 
 // applyPeriodicManaLeechGain runs the caster-gain half of
-// HandlePeriodicManaLeechAuraTick (SpellAuraEffects.cpp:5489-5504), shared by
-// the player and creature tick paths: the caster gains drained x
-// CalcValueMultiplier power (SpellInfo.cpp:528-536: DBC ValueMultiplier =
-// EffectAmplitude plus the caster's SPELLMOD_VALUE_MULTIPLIER via
-// GetSpellModOwner — caster is the player caster session at both call sites,
-// so it folds its own mods),
-// takes 0.5x threat on the gain with threat modifiers ignored
-// (ThreatManager::AddThreat ignoreModifiers=true) — and Drain Mana refunds its
-// Mana Feed percentage to a live guardian pet.
+// HandlePeriodicManaLeechAuraTick (SpellAuraEffects.cpp:5489-5504) for a
+// player caster, shared by the player and creature tick paths: the caster
+// gains drained x CalcValueMultiplier power (SpellInfo.cpp:528-536: DBC
+// ValueMultiplier = EffectAmplitude plus the caster's
+// SPELLMOD_VALUE_MULTIPLIER via GetSpellModOwner — the caster session
+// folds its own mods), takes 0.5x threat on the gain with threat
+// modifiers ignored (ThreatManager::AddThreat ignoreModifiers=true) —
+// and Drain Mana refunds its Mana Feed percentage to a live guardian pet.
+// A creature caster rides applyCreaturePeriodicManaLeechGain instead.
 func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *session, aura *activeAura, tickSpell wotlk.Spell, tickKnown bool, powerType int32, drained uint32) {
 	if caster == nil || caster.player == nil || drained == 0 || powerType < 0 || powerType > 6 {
 		return
@@ -43177,6 +43278,57 @@ func (s *session) applyPeriodicManaLeechGain(ctx context.Context, caster *sessio
 			}
 		}
 	}
+}
+
+// applyCreaturePeriodicManaLeechGain runs the caster-gain half of
+// HandlePeriodicManaLeechAuraTick (SpellAuraEffects.cpp:5489-5491) for a
+// creature caster: the caster motion gains drained x CalcValueMultiplier
+// power — the DBC EffectAmplitude half only, a creature caster has no
+// spell-mod owner (calcValueMultiplier's null-modOwner path) — capped at
+// its max power, with a values-update broadcast. Returns the power
+// actually banked; the caller runs the threat leg (the drain victim's own
+// list for a creature victim, combat-state-only engage for a player
+// victim, which carries no ThreatMgr in Go). The Mana Feed leg
+// (SpellAuraEffects.cpp:5495-5503, GetGuardianPet) has no Go model —
+// creature motions carry no guardian pet (boss_ai.go:1907 precedent) —
+// so it is skipped.
+func (s *session) applyCreaturePeriodicManaLeechGain(ctx context.Context, caster *creatureMotion, tickSpell wotlk.Spell, tickKnown bool, powerType int32, drained uint32) uint32 {
+	if caster == nil || drained == 0 || powerType < 0 || powerType > 6 || s.server == nil {
+		return 0
+	}
+	mult := float32(1)
+	if tickKnown {
+		for i := range tickSpell.Effects {
+			if tickSpell.Effects[i].Aura == spellAuraPeriodicManaLeech {
+				mult = calcValueMultiplier(tickSpell, i, nil)
+				break
+			}
+		}
+	}
+	gain := int64(effectValueMultiplied(drained, mult))
+	if gain == 0 {
+		return 0
+	}
+	s.server.motionMu.Lock()
+	var gained, newPower uint32
+	if int(powerType) < len(caster.Powers) && int(powerType) < len(caster.MaxPowers) {
+		old := caster.Powers[powerType]
+		newPower = old + uint32(gain)
+		if newPower > caster.MaxPowers[powerType] {
+			newPower = caster.MaxPowers[powerType]
+		}
+		caster.Powers[powerType] = newPower
+		if powerType == 0 {
+			caster.Mana = newPower
+		}
+		gained = newPower - old
+	}
+	s.server.motionMu.Unlock()
+	if gained == 0 {
+		return 0
+	}
+	s.server.broadcastCreatureValuesUpdateInInstance(caster.Map, caster.InstanceID, caster.GUID, map[int]uint32{unitFieldPower1 + int(powerType): newPower})
+	return gained
 }
 
 // applyPeriodicTickDamageToCreature runs the Unit::DealDamage + kill legs for a

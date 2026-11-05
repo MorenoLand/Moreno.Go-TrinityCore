@@ -891,6 +891,26 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	return pending, pendingHighest
 }
 
+// drainGainThreatBlocked mirrors ThreatManager::AddThreat step 1
+// (ThreatManager.cpp:308-317) for the periodic-mana-leech gain arm: a
+// NO_THREAT spell adds nothing, and a NO_INITIAL_AGGRO spell adds nothing
+// while the victim is not engaged. The caller supplies the victim's
+// engagement state (motion.InCombat for a creature victim, the in-combat
+// flag for a player victim).
+func drainGainThreatBlocked(tickSpell wotlk.Spell, tickKnown bool, auraSpellID uint32, data *wotlk.Store, engaged bool) bool {
+	noThreat, noInitialAggro := false, false
+	if tickKnown {
+		noThreat = tickSpell.AttributesEx&spellAttr1NoThreat != 0
+		noInitialAggro = tickSpell.AttributesEx3&spellAttr3NoInitialAggro != 0
+	} else if data != nil {
+		if sp, found, err := data.Spell(auraSpellID); err == nil && found {
+			noThreat = sp.AttributesEx&spellAttr1NoThreat != 0
+			noInitialAggro = sp.AttributesEx3&spellAttr3NoInitialAggro != 0
+		}
+	}
+	return noThreat || (noInitialAggro && !engaged)
+}
+
 // addDrainGainThreat runs the HandlePeriodicManaLeechAuraTick gain arm
 // (SpellAuraEffects.cpp:5489-5491): target->GetThreatManager().AddThreat(
 // caster, gainedAmount * 0.5f, GetSpellInfo(), true) — a direct add on the
@@ -910,26 +930,13 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 	// ThreatManager::AddThreat step 1 (ThreatManager.cpp:308-317). tickSpell
 	// carries the DBC record when known; otherwise fall back to a store
 	// lookup on the aura's spell id.
-	noThreat, noInitialAggro := false, false
-	if tickKnown {
-		noThreat = tickSpell.AttributesEx&spellAttr1NoThreat != 0
-		noInitialAggro = tickSpell.AttributesEx3&spellAttr3NoInitialAggro != 0
-	} else if s.server.Data != nil {
-		if sp, found, err := s.server.Data.Spell(auraSpellID); err == nil && found {
-			noThreat = sp.AttributesEx&spellAttr1NoThreat != 0
-			noInitialAggro = sp.AttributesEx3&spellAttr3NoInitialAggro != 0
-		}
-	}
-	if noThreat {
-		return
-	}
 	s.server.motionMu.Lock()
 	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, targetGUID)
 	if motion == nil {
 		s.server.motionMu.Unlock()
 		return
 	}
-	if noInitialAggro && !motion.InCombat {
+	if drainGainThreatBlocked(tickSpell, tickKnown, auraSpellID, s.server.Data, motion.InCombat) {
 		s.server.motionMu.Unlock()
 		return
 	}
@@ -977,6 +984,82 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 	s.server.broadcastPendingHighestThreatUpdates(switchHighest)
 	s.server.broadcastPendingAttackStarts(switchStart)
 	s.sendPlayerUpdate()
+}
+
+// addCreatureDrainGainThreat runs the HandlePeriodicManaLeechAuraTick gain
+// arm (SpellAuraEffects.cpp:5489-5491) for a creature caster: a direct add
+// of gainedAmount * 0.5f on the drain victim's own threat list crediting
+// the creature caster, ignoreModifiers=true (no pctMod, spellmod or school
+// fold). ignoreRedirects stays false, but the redirect registry is
+// player-cast only in Go, so the nil-session split is a no-op. Step 1
+// (ThreatManager.cpp:308-317) runs through drainGainThreatBlocked; a
+// list-less victim takes combat state only (ThreatManager.cpp:328-339).
+// The engage + switch fan-out mirrors addCreatureInitialNegativeThreat's
+// creature-caster tail.
+func (s *Server) addCreatureDrainGainThreat(caster *creatureMotion, targetGUID uint64, mapID, instanceID uint32, auraSpellID uint32, tickSpell wotlk.Spell, tickKnown bool, gained uint32) {
+	if s == nil || caster == nil || caster.GUID == 0 || targetGUID == 0 || gained == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	motion := s.findCreatureMotionLocked(mapID, instanceID, targetGUID)
+	if motion == nil {
+		s.motionMu.Unlock()
+		return
+	}
+	if drainGainThreatBlocked(tickSpell, tickKnown, auraSpellID, s.Data, motion.InCombat) {
+		s.motionMu.Unlock()
+		return
+	}
+	// ThreatManager::AddThreat's !CanHaveThreatList() early leg
+	// (ThreatManager.cpp:328-339) takes combat state only, no threat refs.
+	if !motionCanHaveThreatList(motion) {
+		motion.InCombat = true
+		if cm := s.findCreatureMotionLocked(mapID, instanceID, caster.GUID); cm != nil {
+			cm.InCombat = true
+		}
+		s.motionMu.Unlock()
+		return
+	}
+	if motion.ThreatMgr == nil {
+		motion.ThreatMgr = NewThreatManager(motion)
+	}
+	var nilSess *session
+	threat := float32(gained) * 0.5
+	share, rSwitched, rVictim := nilSess.splitThreatRedirects(motion, threat)
+	dist := distance3D(caster.X, caster.Y, caster.Z, motion.X, motion.Y, motion.Z)
+	inMelee := inMeleeThreatRange(motion.CombatReach, caster.CombatReach, dist)
+	oldTarget := motion.TargetGUID
+	passive := isCreaturePassive(motion)
+	wasInCombat := motion.InCombat
+	switched, newVictim := s.creatureAddThreat(motion, caster.GUID, share, inMelee, nil, caster)
+	if rSwitched {
+		switched, newVictim = true, rVictim
+	}
+	if switched && newVictim != motion.TargetGUID {
+		motion.TargetGUID = newVictim
+	} else {
+		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
+	}
+	motion.InCombat = true
+	motion.Moving = true
+	if cm := s.findCreatureMotionLocked(mapID, instanceID, caster.GUID); cm != nil {
+		cm.InCombat = true
+	}
+	entries := motion.ThreatMgr.SortedEntriesAvailable()
+	mx, my, mz, mguid := motion.X, motion.Y, motion.Z, motion.GUID
+	mphase := motion.PhaseMask
+	s.motionMu.Unlock()
+	if switched {
+		s.broadcastHighestThreatUpdateInInstance(mapID, instanceID, mx, my, mz, mguid, newVictim, entries, mphase)
+	}
+	if wasInCombat && switched && newVictim != oldTarget && !passive {
+		s.broadcastPendingAttackStarts(pendingAttackStart{creature: mguid, victim: newVictim, mapID: mapID, instanceID: instanceID, x: mx, y: my, z: mz, phase: mphase})
+	}
+	if !wasInCombat {
+		s.broadcastAIReactionInInstance(mapID, instanceID, mguid, 2)
+		startPkt := buildAttackStart(mguid, caster.GUID)
+		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, mapID, instanceID, mx, my, mz, mphase)
+	}
 }
 
 // forwardInitialAssistThreatLocked mirrors

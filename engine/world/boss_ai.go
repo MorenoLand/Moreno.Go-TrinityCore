@@ -10144,12 +10144,13 @@ func (s *Server) fireCreaturePeriodicHealTickProcs(ctx context.Context, caster, 
 // own auras evaluate TAKEN_PERIODIC | (TAKEN_DAMAGE when damage landed) with
 // PROC_SPELL_TYPE_NO_DMG_HEAL | (PROC_SPELL_TYPE_DAMAGE when damage landed) /
 // PROC_SPELL_PHASE_HIT and the absorb/resist-derived hit mask (no crit model
-// on the burn path, matching C++). The done side needs no motion arm: the Go
-// burn tick only runs with a live caster session (burnCaster), which fires the
-// session-side done leg. The event is not marked triggered (C++ passes no
-// Spell on the tick).
-func (s *Server) fireCreaturePeriodicPowerBurnTickProcs(ctx context.Context, victim *creatureMotion, targetGUID, casterGUID uint64, burnSpell wotlk.Spell, schoolMask uint32, absorbed, resisted, damage uint32) {
-	if s == nil || victim == nil {
+// on the burn path, matching C++). A non-nil caster motion fires the done
+// leg (DONE_PERIODIC with the same masks) on the creature caster's own auras
+// — C++ runs the done leg on any caster unit type; a player caster fires the
+// session-side done leg instead and passes nil here. The event is not marked
+// triggered (C++ passes no Spell on the tick).
+func (s *Server) fireCreaturePeriodicPowerBurnTickProcs(ctx context.Context, caster, victim *creatureMotion, targetGUID, casterGUID uint64, burnSpell wotlk.Spell, schoolMask uint32, absorbed, resisted, damage uint32) {
+	if s == nil {
 		return
 	}
 	typeMask := procFlagTakenPeriodic
@@ -10158,13 +10159,31 @@ func (s *Server) fireCreaturePeriodicPowerBurnTickProcs(ctx context.Context, vic
 		typeMask |= procFlagTakenDamage
 		spellTypeMask |= procSpellTypeDamage
 	}
+	hitMask := spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, false, absorbed, false)
+	if caster != nil {
+		spellCopy := burnSpell
+		s.fireCreatureAuraProcLoop(ctx, caster, targetGUID, procEventInfo{
+			typeMask:       procFlagDonePeriodic,
+			schoolMask:     schoolMask,
+			spellTypeMask:  spellTypeMask,
+			spellPhaseMask: procSpellPhaseHit,
+			hitMask:        hitMask,
+			triggered:      false,
+			eventSpell:     &spellCopy,
+			actorGUID:      casterGUID,
+			damage:         damage,
+		})
+	}
+	if victim == nil {
+		return
+	}
 	spellCopy := burnSpell
 	s.fireCreatureAuraProcLoop(ctx, victim, casterGUID, procEventInfo{
 		typeMask:       typeMask,
 		schoolMask:     schoolMask,
 		spellTypeMask:  spellTypeMask,
 		spellPhaseMask: procSpellPhaseHit,
-		hitMask:        spellDamageProcHitMask(true, false, resisted > 0 && damage == 0, absorbed > 0 && damage == 0, false, absorbed, false),
+		hitMask:        hitMask,
 		triggered:      false,
 		eventSpell:     &spellCopy,
 		actorGUID:      casterGUID,
