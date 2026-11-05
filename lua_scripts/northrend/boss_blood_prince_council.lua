@@ -938,14 +938,15 @@ RegisterCreatureEvent(ENTRY_KELESETH, 19, function(_, creature, summoned)
     -- boss->summon distance, then NearTeleportTo. No collision-query
     -- bridge, so the open-space result ports: the computed point is
     -- the summon's own position (a wall would only shorten it).
-    -- Orientation arg omitted (defaults to the summon's facing,
-    -- C++-exact). SetTempSummonType(CORPSE_DESPAWN) stays out.
+    -- Orientation is the boss's (C++ pos = me->GetPosition(), :635-640).
+    -- SetTempSummonType(CORPSE_DESPAWN) stays out.
     local dx = summoned:GetX() - creature:GetX()
     local dy = summoned:GetY() - creature:GetY()
     local dist = math.sqrt(dx * dx + dy * dy)
     local angle = math.atan2(dy, dx)
     summoned:NearTeleport(creature:GetX() + dist * math.cos(angle),
-        creature:GetY() + dist * math.sin(angle), summoned:GetZ())
+        creature:GetY() + dist * math.sin(angle), summoned:GetZ(),
+        creature:GetO())
     local guid = creature:GetGUID()
     local list = kelesethSummons[guid]
     if not list then

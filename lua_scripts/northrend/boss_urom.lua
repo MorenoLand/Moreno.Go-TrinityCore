@@ -72,8 +72,9 @@
 -- and MoveTargetedHome have no bridge (the Teleport/StopMoving legs
 -- are bridged but never fire without the evade trigger).
 -- AttackStart — z-position-gated DoStartNoMovement vs BossAI::
--- AttackStart — AttackStart/DoStartNoMovement itself has no bridge;
--- that, not movement, is the blocker.
+-- AttackStart — creature:AttackStart IS bridged (lua_creature_events.go:5984,
+-- EngageWithTarget alias); DoStartNoMovement itself has no bridge, and
+-- that, not movement, is the blocker here.
 -- UpdateAI — the full teleport event machine: EVENT_TELEPORT (30s)
 -- DelayEvents(10s) + REACT_PASSIVE + AttackStop + StopMoving +
 -- SetDisableGravity(true) + SetCanFly(true) + SetControlled(true,
@@ -89,10 +90,10 @@
 -- (:189-219 summon x4 + DoCast(TeleportSpells) cycle); the
 -- Teleport/AttackStop/StopMoving/SetDisableGravity/SetCanFly/
 -- SetReactState/SetRooted legs ARE all bridged now — the machine
--- stays out on the TELEPORT_BACK AttackStart leg and the unported
--- _platform cycle trigger; DelayEvents itself is NOT the blocker (it is
+-- stays out on the unported _platform cycle trigger alone (AttackStart
+-- is bridged too); DelayEvents itself is NOT the blocker (it is
 -- modelable via the thekal delayTimers due-timestamp idiom) — the machine
--- stays out on trigger + AttackStart; unmodeled.
+-- stays out on trigger only; unmodeled.
 -- CASTING gate CHECKED 2026-11-04, nothing to port: own UpdateAI
 -- pre-loop gate :231 (no in-loop gate) covers only the unported
 -- teleport event machine — zero ported timer ticks exist, and the
