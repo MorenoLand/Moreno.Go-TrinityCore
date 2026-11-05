@@ -13393,13 +13393,18 @@ func init() {
 	// 4949 wowhead-verified — see
 	// lua_scripts/kalimdor/npc_thrall_warchief.lua. The quest-6566
 	// gossip menu chain awaits the gossip bridge;
-	// npc_overlord_runthak_orgrimmar (citizen scene) and
-	// npc_thrall_herald_of_war's scene machine
-	// (DoAction/MovementInform/MovePath legs) await the movement /
-	// DoAction bridges — documented only; the herald's
-	// Reset once-per-lifetime Kor'kron guard summons are ported in
-	// lua_scripts/kalimdor/npc_thrall_herald_of_war.lua.
+	// npc_overlord_runthak_orgrimmar (citizen scene, 13 Talk steps)
+	// and npc_thrall_herald_of_war's scene machine are both ported —
+	// see lua_scripts/kalimdor/npc_overlord_runthak_orgrimmar.lua and
+	// lua_scripts/kalimdor/npc_thrall_herald_of_war.lua. The herald's
+	// area-trigger dispatch stays out (trigger ID is DB-side only).
 	RegisterLuaBoss("npc_thrall_warchief", 4949)
+	// npc_overlord_runthak_orgrimmar (Orgrimmar citizen scene): the
+	// 13-step Talk chain + ev7 proximity trigger are ported in
+	// lua_scripts/kalimdor/npc_overlord_runthak_orgrimmar.lua.
+	// Entry 31431 wowhead-verified (WotLK-added, 4 quotes = the 4
+	// SAY_RUNTHAK lines; the Classic quest-giver is entry 14392).
+	RegisterLuaBoss("npc_overlord_runthak_orgrimmar", 31431)
 	// npc_shenthul (Shattered Salute emote machine, quest 2460):
 	// ported in lua_scripts/kalimdor/npc_shenthul.lua — the old
 	// documented-only note is retired: the emote (event 8) and
