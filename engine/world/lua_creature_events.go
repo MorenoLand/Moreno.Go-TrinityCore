@@ -3897,6 +3897,20 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// GetReactState is Creature::GetReactState (UnitDefines.h:
+	// REACT_PASSIVE=0, REACT_DEFENSIVE=1, REACT_AGGRESSIVE=2 — matches
+	// creatureReact* in creaturemotion.go): the read twin of
+	// SetReactState above, for AI branches that test the current state
+	// (kelthuzad minion JustEngagedWith). DB-spawned motions carry the
+	// template reaction (loadCreatureReaction, combat.go) and scripted
+	// SetReactState stamps ReactStateKnown, so the read is reliable for
+	// registered handlers; an unset motion reads 0 (Go zero value).
+	methods["GetReactState"] = luaNoArgs(func() any {
+		s.motionMu.Lock()
+		st := motion.ReactState
+		s.motionMu.Unlock()
+		return st
+	})
 	// HasLootRecipient is Creature::hasLootRecipient (Creature.h:218):
 	// a loot-recipient player or group is set. The tap fields live on
 	// the motion (creaturemotion.go:307, the Creature::SetLootRecipient

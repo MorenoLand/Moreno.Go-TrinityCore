@@ -17815,39 +17815,46 @@ func init() {
 	// Kel'Thuzad (15990, Naxxramas) — lua_scripts/northrend/boss_kelthuzad.lua.
 	// Ported arms (C++-exact): KilledUnit Talk(SAY_SLAY 8) gated on player
 	// (nalorakk precedent); JustDied Talk(SAY_DEATH 9) (tharon_ja
-	// precedent). Unmodeled: SpellHit CHAINS_DUMMY Talk (SpellHit never
-	// fires in Lua), EVENT_SKELETON/BANSHEE/ABOMINATION summons (stay out:
-	// unported phase-one machine + cross-AI DoZoneInCombat + the
-	// _skeletonCount==1 grid-search leg — summon bridge is live, coords
-	// C++-literal), EVENT_DESPAWN_MINIONS despawn + SAY_AGGRO (Talk not
-	// ported orphaned — vortex precedent), EVENT_PHASE_TWO (no phase
-	// bridge), EVENT_FROSTBOLT_VOLLEY / EVENT_CHAINS DoCastAOE (no
-	// DoCastAOE bridge), EVENT_SHADOW_FISSURE / EVENT_DETONATE_MANA /
-	// EVENT_FROST_BLAST SelectTarget(Random) (cairne/kazzak precedent),
-	// transition reply (lich-king cross-AI Talk via instance GetGuidData
-	// + portal GO states — no instance/GO-state bridges) / transition
-	// summon (SummonCreatureGroup — DB coords — + cross-AI DoAction, no
-	// summon-group/cross-AI bridges),
-	// phase-three 45%-health leg (no health-pct bridge), frostbolt
-	// filler (phase-gated), DamageTaken zeroing (no phase bridge), Reset /
-	// EnterEvadeMode / ACTION_BEGIN_ENCOUNTER (instance model),
+	// precedent); ACTION_BEGIN_ENCOUNTER receiver (latent — the
+	// at_kelthuzad_center sender has no area-trigger bridge): NOT_STARTED
+	// gate + SetImmuneToPC(false) + SetBossState IN_PROGRESS +
+	// DoZoneInCombat + DoCastAOE(VISUAL_CHANNEL 29423) + Talk(14) +
+	// SummonCreatureGroup 5-11 with REACT_PASSIVE + pocket ids, and the
+	// EVENT_DESPAWN_MINIONS seed (3m33s) sweeping the ev19-latched
+	// summons table (non-combat despawn + Talk SAY_AGGRO 7); ev19/ev20
+	// summons latch + Reset/leave/died bookkeeping; minion
+	// JustEngagedWith pocket-aggro (ev1, GetCreaturesInGrid 80yd +
+	// GetReactState bridge) on 16427/16428/16429; abomination wound
+	// timer (28467, 10-20s/14-18s) + JustDied relay to
+	// ACTION_ABOMINATION_DIED (SetData death-count latch, Reset zeroes).
+	// Unmodeled: SpellHit CHAINS_DUMMY Talk (rides the unported
+	// EVENT_CHAINS arm), EVENT_SKELETON/BANSHEE/ABOMINATION spawn chains
+	// (stay out behind the phase-one machine — NOTE the chains
+	// self-terminate ~200-210s, before the 213s despawn sweep and the
+	// 228s phase switch, so a re-triage may port them as
+	// receiver-seeded timers), EVENT_PHASE_TWO + phase-two arms
+	// (no phase bridge), transition reply/summon (lich-king cross-AI
+	// Talk + portal GO states; guardian group bridge live but the
+	// transition machine unported), phase-three 45% leg, frostbolt
+	// filler, DamageTaken zeroing (no phase bridge), Reset state legs /
+	// EnterEvadeMode portal legs (instance model),
 	// GetAIForCharmedPlayer (no charmed-player AI bridge),
-	// npc_kelthuzad_skeleton/banshee/abomination
-	// (entry-unverifiable from C++ evidence — no registration; abomination
-	// DoCastVictim(MORTAL_WOUND 28467) joins the bridgeable-but-entry-blocked
-	// queue); npc_kelthuzad_guardian (16441, C++-sourced entry) registered
-	// 2026-11-05 with the ACTION_JUST_SUMMONED ev38 receiver (latent until
-	// the EVENT_TRANSITION_SUMMON machine lands),
-	// spell_kelthuzad_chains/detonate_mana/frost_blast (no AuraScript
-	// binding bridge), at_kelthuzad_center (no area-trigger bridge),
-	// achievement_just_cant_get_enough (no achievement bridge).
+	// npc_kelthuzad pre-existing entries 23561/23562/23563 (DB-side,
+	// unregistered), spell_kelthuzad_chains/detonate_mana/frost_blast
+	// (no AuraScript binding bridge), at_kelthuzad_center (no
+	// area-trigger bridge), achievement_just_cant_get_enough (no
+	// achievement bridge for that ScriptName).
 	// CASTING gates: UpdateAI pre-loop :311 + in-loop :505 gates are
 	// !PHASE_ONE-gated and cover only the unported phase-two event
-	// machine + frostbolt filler — no ported timer ticks exist, so
-	// nothing to gate; ported engage/KilledUnit/JustDied hooks are
-	// ungated per C++ (separate hooks).
+	// machine + frostbolt filler — the gate never blocks in PHASE_ONE,
+	// so the ported despawn/wound/blood-tap ticks (phase-one / victim
+	// gated arms) need no gate; ported engage/KilledUnit/JustDied hooks
+	// are ungated per C++ (separate hooks).
 	RegisterLuaBoss("boss_kelthuzad", 15990)
 	RegisterLuaBoss("npc_kelthuzad_guardian", 16441)
+	RegisterLuaBoss("npc_kelthuzad_skeleton", 16427)
+	RegisterLuaBoss("npc_kelthuzad_banshee", 16429)
+	RegisterLuaBoss("npc_kelthuzad_abomination", 16428)
 
 	// Gluth (15932, Naxxramas) — lua_scripts/northrend/boss_gluth.lua.
 	// Ported arms (C++-exact): EVENT_WOUND DoCastVictim(MORTAL_WOUND

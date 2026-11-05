@@ -62,13 +62,21 @@
 -- phase-one machine (scheduled from the instance DoAction
 -- BEGIN_ENCOUNTER leg, PHASE_ONE-gated; summon bridge is live and the
 -- spawn coords are C++-literal, but the phase machine rules — gothik
--- precedent); EVENT_SKELETON _skeletonCount==1 leg (boss_kelthuzad.cpp:349):
+-- precedent). NOTE for re-triage: the chains self-terminate before the
+-- phase switch — skeleton last fire ~210s (count 72), banshee/abom
+-- last fire 200s (count 9), vs DESPAWN_MINIONS 213s / PHASE_TWO 228s —
+-- so the phase gate is vacuous in the normal flow and the chains are
+-- portable as receiver-seeded CreateLuaEvent timers once a tick
+-- re-verifies the arithmetic against the C++ counts above;
+-- EVENT_SKELETON _skeletonCount==1 leg (boss_kelthuzad.cpp:349):
 -- (*it)->SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat on the
 -- pre-existing room skeleton — cross-creature, rides the unported
 -- phase-one DoAction machine (same EVENT_SKELETON gate) — documented-only;
--- EVENT_DESPAWN_MINIONS — summons DespawnOrUnsummon +
--- Talk(SAY_AGGRO 7) — summon/despawn bridges absent (Talk not ported
--- orphaned — vortex precedent); EVENT_PHASE_TWO — CastStop +
+-- EVENT_DESPAWN_MINIONS — PORTED 2026-11-05 in despawnMinionsTick
+-- (seeded 3m33s from the BEGIN_ENCOUNTER receiver, latent with it):
+-- temp-vector sweep of the latched summons table, DespawnOrUnsummon
+-- on each non-combat summon + Talk(SAY_AGGRO 7), C++ order
+-- (boss_kelthuzad.cpp:429-441); EVENT_PHASE_TWO — CastStop +
 -- SetPhase(PHASE_TWO) + NOT_SELECTABLE/immune/ReactState/ThreatList
 -- legs + Talk(EMOTE_PHASE_TWO 13) + the five phase-two event schedules
 -- — no phase / react-state bridges (the threat leg IS bridged —
@@ -129,26 +137,35 @@
 -- groups 5-11 with REACT_PASSIVE + SetData(DATA_MINION_POCKET_ID,
 -- group) per summon. The SetPhase(PHASE_ONE) leg + the five schedules
 -- stay out with the phase-one machine (no timers seeded).
--- DoAction(ACTION_ABOMINATION_DIED) — cross-AI (guardians' entries are
--- DB-side, no registration) — documented-only;
+-- DoAction(ACTION_ABOMINATION_DIED) — PORTED 2026-11-05: the
+-- abomination JustDied relay (ev4 on 16428) calls kt:DoAction(2) via
+-- GetInstanceCreature(DATA_KELTHUZAD 14) and the receiver increments
+-- the SetData(DATA_ABOMINATION_DEATH_COUNT 1) latch (Reset zeroes it);
+-- the achievement_just_cant_get_enough consumer (>= 18) stays out —
+-- no bridge for that ScriptName.
 -- GetAIForCharmedPlayer -> KelThuzadCharmedPlayerAI
 -- (SimpleCharmedPlayerAI) — no charmed-player AI bridge.
 -- npc_kelthuzad_skeleton / npc_kelthuzad_banshee /
--- npc_kelthuzad_abomination (ScriptedAI; entries 16427/23561,
--- 16429/23563, 16428/23562 — entry-unverifiable from C++ evidence,
--- DB-side binding): UpdateRandomMovement hack (no motion bridge) +
--- melee; abomination _woundTimer DoCastVictim(SPELL_MORTAL_WOUND 28467)
--- — port-pattern-ready in isolation (moroes precedent) but
--- entry-blocked — joins the bridgeable-but-entry-blocked queue;
--- abomination JustDied — cross-AI DoAction(ACTION_ABOMINATION_DIED)
--- via DATA_KELTHUZAD — instance / cross-AI bridges absent; minion
--- JustEngagedWith pocket-aggro legs — grid-blocked (no grid
--- bridge; the react-state leg is bridgeable in isolation but rides the
--- unported pocket machine);
--- MoveInLineOfSight — no bridge; SetData(DATA_MINION_POCKET_ID) is
--- bridged (creature:SetData, per-motion latch) and is now written by
--- the ACTION_BEGIN_ENCOUNTER receiver below (the pocket-aggro
--- MoveInLOS legs still stay out — no grid bridge). npc_kelthuzad_guardian (16441 — entry IS C++-sourced,
+-- npc_kelthuzad_abomination (ScriptedAI; summoned entries 16427 /
+-- 16429 / 16428 — C++-sourced, boss_kelthuzad.cpp:135-138, registered
+-- in boss_ai.go 2026-11-05, guardian precedent; pre-existing 23561 /
+-- 23563 / 23562 stay DB-side, unregistered): JustEngagedWith
+-- pocket-aggro PORTED 2026-11-05 in kelthuzadMinionEnterCombat (ev1;
+-- non-passive -> DoZoneInCombat, pocket sweep via GetCreaturesInGrid
+-- 80yd + GetData pocket match + SetReactState(AGGRESSIVE) +
+-- AttackStart; react-state read is the new creature:GetReactState
+-- bridge); abomination _woundTimer DoCastVictim(SPELL_MORTAL_WOUND
+-- 28467) PORTED 2026-11-05 (ev1-seeded 10-20s, 14-18s re-arm,
+-- victim-gated with 5s re-poll); abomination JustDied relay PORTED
+-- 2026-11-05 (ev4 -> kt:DoAction(2), see DoAction below);
+-- UpdateRandomMovement hack stays out (no motion bridge — the
+-- random-circle position math has no MoveTo twin without a
+-- MovementInform re-arm, no ev28); MoveInLineOfSight 20yd aggro leg
+-- stays out (ev27 is engage-only; the ev7-poll twin used by runthak
+-- is not seeded here — the ev1 pocket arm covers the engage path);
+-- SetData(DATA_MINION_POCKET_ID) is bridged (creature:SetData,
+-- per-motion latch) and is written by the ACTION_BEGIN_ENCOUNTER
+-- receiver below. npc_kelthuzad_guardian (16441 — entry IS C++-sourced,
 -- boss_kelthuzad.cpp:139 NPC_GUARDIAN; the old "entry-unverifiable"
 -- claim was wrong): ACTION_JUST_SUMMONED receiver PORTED below
 -- (kelthuzadGuardianDoAction, event 38 — SetVisible(false) +
@@ -199,6 +216,16 @@ local SUMMON_GROUP_MINION_FIRST = 5 -- boss_kelthuzad.cpp:116
 local N_MINION_GROUPS = 7 -- boss_kelthuzad.cpp:112
 local DATA_MINION_POCKET_ID = 0 -- boss_kelthuzad.cpp:82 (KTData enum, first)
 local SPELL_BLOOD_TAP = 28470 -- boss_kelthuzad.cpp:108
+local ENTRY_SKELETON = 16427 -- boss_kelthuzad.cpp:135 NPC_SKELETON1
+local ENTRY_ABOMINATION = 16428 -- boss_kelthuzad.cpp:137 NPC_ABOMINATION1
+local ENTRY_BANSHEE = 16429 -- boss_kelthuzad.cpp:138 NPC_BANSHEE1
+local ACTION_ABOMINATION_DIED = 2 -- boss_kelthuzad.cpp:77 (Actions enum)
+local DATA_KELTHUZAD = 14 -- naxxramas.h NAXData64 (0-based: ANUBREKHAN 0 .. KELTHUZAD 14)
+local DATA_ABOMINATION_DEATH_COUNT = 1 -- boss_kelthuzad.cpp:83 (KTData enum, second)
+local SPELL_MORTAL_WOUND = 28467 -- boss_kelthuzad.cpp:105
+local SAY_AGGRO = 7 -- boss_kelthuzad.cpp:33
+local REACT_PASSIVE = 0 -- UnitDefines.h
+local REACT_AGGRESSIVE = 2 -- UnitDefines.h
 
 local timers = {}
 
@@ -226,6 +253,103 @@ end
 
 local SAY_SLAY = 8
 local SAY_DEATH = 9
+
+-- C++ BossAI SummonList twin (boss_kelthuzadAI::JustSummoned, :248-251:
+-- every summon latches; SummonedCreatureDespawn prunes on despawn).
+-- Latched via ev19 (rotface precedent) — the group summons from the
+-- BEGIN_ENCOUNTER receiver arrive through summonTempCreature, which
+-- fires ev19 on the summoner (lua_creature_events.go:190).
+local kelthuzadSummons = {}
+
+local function kelthuzadJustSummoned(event, creature, summon)
+    if not summon then
+        return
+    end
+    local guid = creature:GetGUID()
+    local latched = kelthuzadSummons[guid]
+    if not latched then
+        latched = {}
+        kelthuzadSummons[guid] = latched
+    end
+    latched[#latched + 1] = summon
+end
+
+local function kelthuzadSummonDespawned(event, creature, summon)
+    if not summon then
+        return
+    end
+    local guid = creature:GetGUID()
+    local latched = kelthuzadSummons[guid]
+    if latched then
+        local summonGuid = summon:GetGUID()
+        for i, s in ipairs(latched) do
+            if s:GetGUID() == summonGuid then
+                table.remove(latched, i)
+                break
+            end
+        end
+    end
+end
+
+-- C++ temp-vector-first despawn (boss_kelthuzad.cpp:430-438): collect,
+-- then despawn — Despawn fires ev20, which prunes this table, so the
+-- table must not be iterated while despawning. skipGuardians is the
+-- JustDied twin (:263-280): guardians flee instead of despawning.
+local function despawnKelthuzadSummons(guid, skipGuardians)
+    local latched = kelthuzadSummons[guid]
+    if not latched then
+        return
+    end
+    kelthuzadSummons[guid] = nil
+    local toDespawn = {}
+    for _, summon in ipairs(latched) do
+        if summon and (not skipGuardians or summon:GetEntry() ~= ENTRY_GUARDIAN) then
+            toDespawn[#toDespawn + 1] = summon
+        end
+    end
+    for _, summon in ipairs(toDespawn) do
+        summon:Despawn()
+    end
+end
+
+-- C++ EVENT_DESPAWN_MINIONS (boss_kelthuzad.cpp:429-441): despawn every
+-- latched summon not in combat (temp vector first, C++ order), then
+-- Talk(SAY_AGGRO 7). Seeded once from the BEGIN_ENCOUNTER receiver
+-- (3m33s, 213000ms); latent with it.
+local function despawnMinionsTick(creature, guid)
+    local latched = kelthuzadSummons[guid]
+    if latched then
+        kelthuzadSummons[guid] = nil
+        local toDespawn = {}
+        for _, summon in ipairs(latched) do
+            if summon and not summon:IsInCombat() then
+                toDespawn[#toDespawn + 1] = summon
+            end
+        end
+        for _, summon in ipairs(toDespawn) do
+            summon:Despawn()
+        end
+    end
+    creature:Talk(SAY_AGGRO)
+end
+
+-- C++ BossAI::_Reset (Reset, :223-235: events cancelled, counts zeroed,
+-- summons despawned) — timer/summons/counter twins only; the
+-- ReactState/NOT_SELECTABLE/immune legs stay out with Reset itself.
+local function kelthuzadReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    despawnKelthuzadSummons(guid, false)
+    creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0)
+end
+
+-- C++ EnterEvadeMode (:237-245) -> Reset() + _DespawnAtEvade(): the
+-- ev2 twin of the Reset bookkeeping above.
+local function kelthuzadLeaveCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    despawnKelthuzadSummons(guid, false)
+end
 
 -- C++ inherited BossAI::JustEngagedWith (no override in boss_kelthuzadAI):
 -- SetCombatPulseDelay(5) + me-form DoZoneInCombat at first engage; no Talk
@@ -340,6 +464,8 @@ local function kelthuzadGuardianReset(event, creature)
 end
 
 local function kelthuzadDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+    despawnKelthuzadSummons(creature:GetGUID(), true) -- C++ _JustDied (:280): non-guardian summons despawn; guardians flee, not despawned
     kelthuzadGuardianFlee(creature)
     creature:Talk(SAY_DEATH)
     local throne = creature:FindNearestGameObject(GO_KELTHUZAD_THRONE, 1000)
@@ -366,17 +492,26 @@ end
 -- (IN_PROGRESS/FAIL/DONE) returns, C++-exact. SetImmuneToPC(false)
 -- is the RemoveFlag(59, 0x100) twin (Unit.cpp:8440-8449; nefarian
 -- precedent) — the tick-241 "no bridge" claim was stale. The
--- SetPhase(PHASE_ONE) leg has no bridge and the five schedules it
--- feeds (EVENT_SKELETON 5s, EVENT_BANSHEE 30s, EVENT_ABOMINATION 30s,
--- EVENT_DESPAWN_MINIONS 3m33s, EVENT_PHASE_TWO 3m48s) stay out with
--- the phase-one machine — their handlers are unported, so no timers
--- are seeded here; when the machine lands, seed from this receiver.
+-- SetPhase(PHASE_ONE) leg has no bridge and four of the five
+-- schedules it feeds stay out with the phase-one machine
+-- (EVENT_SKELETON 5s, EVENT_BANSHEE 30s, EVENT_ABOMINATION 30s,
+-- EVENT_PHASE_TWO 3m48s); EVENT_DESPAWN_MINIONS (3m33s) is seeded
+-- here 2026-11-05 — its handler needs no phase state (the chains
+-- self-terminate by ~210s, before the 213s sweep).
 -- The summon groups ride creature_summon_groups (TDB rows; the repo
 -- world.db has no such table, so the loop is inert until live TDB
 -- provides them — yogg-illusion caveat); each summon gets
 -- REACT_PASSIVE + its pocket id via SetData(DATA_MINION_POCKET_ID,
 -- group), the per-motion store the minion pocket legs read.
 local function kelthuzadDoAction(event, creature, action)
+    if action == ACTION_ABOMINATION_DIED then
+        -- C++ DoAction(ACTION_ABOMINATION_DIED) (boss_kelthuzad.cpp:557-559):
+        -- ++_abominationDeathCount; the GetData twin is the per-motion
+        -- SetData latch (absent reads 0, tick-235 convention).
+        local count = creature:GetData(DATA_ABOMINATION_DEATH_COUNT)
+        creature:SetData(DATA_ABOMINATION_DEATH_COUNT, count + 1)
+        return
+    end
     if action ~= ACTION_BEGIN_ENCOUNTER then
         return
     end
@@ -396,12 +531,101 @@ local function kelthuzadDoAction(event, creature, action)
             summon:SetData(DATA_MINION_POCKET_ID, group)
         end
     end
+    -- C++ :551: EVENT_DESPAWN_MINIONS at 3m33s (213000ms), seeded once.
+    schedule(creature:GetGUID(), "despawn_minions", 213000, function()
+        despawnMinionsTick(creature, creature:GetGUID())
+    end)
+end
+
+-- Forward declaration (tharon_ja/gal_darah idiom): woundTick is
+-- referenced by kelthuzadMinionEnterCombat before its definition
+-- below; assigned there by plain assignment, never re-`local function`.
+local woundTick
+
+-- C++ npc_kelthuzad_minionAI::JustEngagedWith (boss_kelthuzad.cpp:581-601):
+-- non-passive -> DoZoneInCombat + return; passive with no pocket ->
+-- return; else the pocket sweep: same-entry creatures within 80yd
+-- sharing the pocket id go REACT_AGGRESSIVE + AttackStart(who), then
+-- self AGGRESSIVE + AttackStart(who). Abominations also seed the wound
+-- timer on first engage — the C++ timer is constructor-seeded and
+-- frozen out of combat, so the ev1 seed is its in-combat twin (fresh
+-- 10-20s each engage, bloodTapTick precedent).
+local function kelthuzadMinionEnterCombat(event, creature, target)
+    if creature:GetEntry() == ENTRY_ABOMINATION then
+        local guid = creature:GetGUID()
+        schedule(guid, "wound", math.random(10000, 20000), function()
+            woundTick(creature, guid)
+        end)
+    end
+    if creature:GetReactState() ~= REACT_PASSIVE then
+        creature:DoZoneInCombat()
+        return
+    end
+    local pocket = creature:GetData(DATA_MINION_POCKET_ID)
+    if pocket == 0 then
+        return
+    end
+    for _, other in ipairs(creature:GetCreaturesInGrid(creature:GetEntry(), 80)) do
+        if other:GetData(DATA_MINION_POCKET_ID) == pocket then
+            other:SetReactState(REACT_AGGRESSIVE)
+            if target then
+                other:AttackStart(target)
+            end
+        end
+    end
+    creature:SetReactState(REACT_AGGRESSIVE)
+    if target then
+        creature:AttackStart(target)
+    end
+end
+
+-- C++ npc_kelthuzad_abominationAI::UpdateAI :716-728: _woundTimer ->
+-- DoCastVictim(SPELL_MORTAL_WOUND 28467), re-arms urand(14s,18s).
+-- Gated on a victim (UpdateVictim above it); the 5s re-poll is the
+-- no-victim twin (no cast, no re-arm consumed).
+woundTick = function(creature, guid)
+    if not creature:GetVictim() then
+        schedule(guid, "wound", 5000, function()
+            woundTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_MORTAL_WOUND)
+    schedule(guid, "wound", math.random(14000, 18000), function()
+        woundTick(creature, guid)
+    end)
+end
+
+local function kelthuzadMinionLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_kelthuzad_abominationAI::JustDied (:732-736): relay
+-- ACTION_ABOMINATION_DIED to Kel'Thuzad via DATA_KELTHUZAD (the
+-- _abominationDeathCount latch behind achievement_just_cant_get_enough;
+-- the achievement check itself stays out — no bridge for that
+-- ScriptName).
+local function kelthuzadAbominationDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+    local kelthuzad = creature:GetInstanceCreature(DATA_KELTHUZAD)
+    if kelthuzad then
+        kelthuzad:DoAction(ACTION_ABOMINATION_DIED)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 1, kelthuzadEnterCombat)
+RegisterCreatureEvent(ENTRY_KEL_THUZAD, 2, kelthuzadLeaveCombat)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 3, kelthuzadTargetDied)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 4, kelthuzadDied)
+RegisterCreatureEvent(ENTRY_KEL_THUZAD, 19, kelthuzadJustSummoned)
+RegisterCreatureEvent(ENTRY_KEL_THUZAD, 20, kelthuzadSummonDespawned)
+RegisterCreatureEvent(ENTRY_KEL_THUZAD, 23, kelthuzadReset)
 RegisterCreatureEvent(ENTRY_KEL_THUZAD, 38, kelthuzadDoAction)
+RegisterCreatureEvent(ENTRY_SKELETON, 1, kelthuzadMinionEnterCombat)
+RegisterCreatureEvent(ENTRY_BANSHEE, 1, kelthuzadMinionEnterCombat)
+RegisterCreatureEvent(ENTRY_ABOMINATION, 1, kelthuzadMinionEnterCombat)
+RegisterCreatureEvent(ENTRY_ABOMINATION, 2, kelthuzadMinionLeaveCombat)
+RegisterCreatureEvent(ENTRY_ABOMINATION, 4, kelthuzadAbominationDied)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 2, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 4, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 23, kelthuzadGuardianReset)
