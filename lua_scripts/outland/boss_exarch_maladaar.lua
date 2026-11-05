@@ -27,10 +27,9 @@
 -- Avatar latch (:230-240) — the C++ checks
 -- !Avatar_summoned && HealthBelowPct(25) every UpdateAI tick:
 -- ported as a 1s repeating checker (the per-tick check has no
--- bridge). On latch: the InterruptNonMeleeSpells leg is correctly
--- skipped (IsNonMeleeSpellCast reads constant-false under the
--- caststate axiom; the method itself is a bridged no-op twin — the
--- old "no bridge" note was stale); Talk(SAY_SUMMON 1); DoCast(me, SPELL_SUMMON_AVATAR
+-- bridge). On latch: the IsNonMeleeSpellCast gate is unmodeled
+-- (moot for the live bridge twin); the InterruptNonMeleeSpells(true)
+-- call itself is ported in avatarCheck below; Talk(SAY_SUMMON 1); DoCast(me, SPELL_SUMMON_AVATAR
 -- 32424) 2-arg (non-triggered) self-cast — CastSpell(creature,
 -- spell); Avatar_summoned latches; StolenSoul_Timer re-armed
 -- 15000+rand(15000). HealthBelowPct via creature:GetHealthPct()

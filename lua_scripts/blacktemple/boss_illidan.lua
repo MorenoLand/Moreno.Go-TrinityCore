@@ -130,7 +130,8 @@
 -- has no bearer and the air phase loops on the pillar timer —
 -- documented. 30% & phase<PHASE_4: _isDemon -> _isDemon=false,
 -- cancel the demon-spell timers, triggered self-cast 40511, phase-4
--- delayed 12s (the interrupt arm has no bridge; the root arm ports
+-- delayed 12s (the interrupt arm is PORTED 2026-11-04 below in the
+-- 30%-health branch; the root arm ports
 -- via creature:SetRooted, 2026-10-21; the pending
 -- 72s cancel-demon timer is kept, C++-exact) / else start phase 4:
 -- cancel the phase-1/2/3 timers, triggered self-cast shadow prison
@@ -774,14 +775,15 @@ end
 
 -- C++ EVENT_CANCEL_DEMON_FORM (specialEvents, 72s one-shot):
 -- _isDemon=false, triggered self-cast 40511, resume-demon 12s
--- re-arms the phase schedule (C++-exact; the interrupt arm has no
--- bridge; the root arm ports via creature:SetRooted, 2026-10-21).
+-- re-arms the phase schedule (C++-exact; the interrupt arm is PORTED
+-- 2026-11-04 below; the root arm ports via creature:SetRooted, 2026-10-21).
 local function onCancelDemon(creature, guid)
     local state = getIllidanState(guid)
     state.isDemon = false
     -- C++ boss_illidan.cpp:774-776 order: InterruptNonMeleeSpells
-    -- (unbridged), SetControlled(false, UNIT_STATE_ROOT), then the
+    -- (false), SetControlled(false, UNIT_STATE_ROOT), then the
     -- demon-spell event-group cancel.
+    creature:InterruptNonMeleeSpells(false)
     creature:SetRooted(false)
     for _, key in ipairs({ "shadowBlast", "flameBurst",
             "shadowDemon" }) do
