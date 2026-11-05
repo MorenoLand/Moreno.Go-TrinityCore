@@ -1290,6 +1290,110 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		ref := &luaAuraRef{server: s, spellID: spell, creatureKey: key, mapID: motion.Map, instanceID: motion.InstanceID}
 		return []any{ref.luaAuraObject()}, nil
 	}
+	// GetZ is WorldObject::GetPositionZ (Object.h) over the live
+	// motion: the player and GameObject surfaces already carry it
+	// (lua_player.go, lua_objects.go) and the creature surface was
+	// the gap — the nitro boosts backfire (54621) Z-fall check
+	// reads the aura target's height on either surface.
+	methods["GetZ"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return []any{motion.Z}, nil
+	}
+	// GetDummyAuraEffect(family, iconID[, effIndex]) is
+	// Unit::GetDummyAuraEffect (Unit.cpp:4540-4543 -> 4510-4522)
+	// for handler creatures: the live amount of the first DUMMY
+	// aura matching family+icon at the effect index, or nil when
+	// the creature carries none — the C++ null AuraEffect* twin,
+	// the player-surface convention. Default effect 0.
+	methods["GetDummyAuraEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return []any{nil}, nil
+		}
+		family, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		iconID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		effIndex := 0
+		if len(args) > 2 && args[2] != nil {
+			v, err := luaInt64Arg(args, 2)
+			if err != nil {
+				return nil, err
+			}
+			effIndex = int(v)
+		}
+		if amount, ok := s.creatureDummyAuraAmountByIconEffIndex(auraKey(), family, iconID, effIndex); ok {
+			return []any{amount}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetAuraEffect(spellID[, effIndex]) is Unit::GetAuraEffect
+	// (Unit.cpp:4494-4496) for handler creatures: the live amount
+	// of the named aura's effect, or nil when the creature does
+	// not carry it. Default effect 0. Backs the Maelstrom Weapon
+	// (53817) T10 4P bonus read.
+	methods["GetAuraEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{nil}, nil
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		effIndex := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			effIndex = int(v)
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		aura := s.activeCreatureAuras[key][spell]
+		s.auraMu.Unlock()
+		if aura == nil || effIndex < 0 || effIndex >= len(aura.Amounts) || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			return []any{nil}, nil
+		}
+		return []any{aura.Amounts[effIndex]}, nil
+	}
+	// GetAuraEffectOfRankedSpell(spellID[, effIndex]) is
+	// Unit::GetAuraEffectOfRankedSpell (Unit.cpp:4498-4508) for
+	// handler creatures: the live amount of the effect on any
+	// rank of the queried spell, or nil when no rank is present.
+	// Default effect 0.
+	methods["GetAuraEffectOfRankedSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{nil}, nil
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		effIndex := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			effIndex = int(v)
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+		for _, aura := range s.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.auraMu.Unlock()
+		if amount, ok := s.rankedAuraEffectAmount(auras, spell, effIndex); ok {
+			return []any{amount}, nil
+		}
+		return []any{nil}, nil
+	}
 	// IsPolymorphed is Unit::IsPolymorphed (Unit.cpp:10572): a live
 	// SPELL_AURA_TRANSFORM (56) aura, via the creatureIsPolymorphed twin.
 	methods["IsPolymorphed"] = func(_ context.Context, _ []any) ([]any, error) {

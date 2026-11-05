@@ -555,6 +555,80 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 	return &scripting.Object{Type: "Aura", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
 
+// rankedAuraEffectAmount is Unit::GetAuraEffectOfRankedSpell
+// (Unit.cpp:4498-4508): the first aura in the chain of the queried
+// spell — GetFirstSpellInChain/GetNextSpellInChain, here the
+// spell_ranks.first_spell_id twin spellFirstRank — carrying the
+// effect index, or false when no chain member is present. Auras of
+// one chain never coexist (same-chain applications replace), so
+// scan order is immaterial; when the world DB has no spell_ranks
+// row, spellFirstRank returns the spell itself and this degrades
+// to the exact-ID lookup. The caller passes a snapshot slice:
+// the player side uses loadedAuras, the creature side a copy taken
+// under auraMu, so a concurrent map write cannot fault the scan.
+func (s *Server) rankedAuraEffectAmount(auras []*activeAura, spellID uint32, effIndex int) (int32, bool) {
+	if s == nil || effIndex < 0 {
+		return 0, false
+	}
+	first := s.spellFirstRank(spellID)
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		if s.spellFirstRank(aura.SpellID) != first {
+			continue
+		}
+		if effIndex >= len(aura.Amounts) || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			continue
+		}
+		return aura.Amounts[effIndex], true
+	}
+	return 0, false
+}
+
+// creatureDummyAuraAmountByIconEffIndex is the creature-side twin
+// of session.dummyAuraAmountByIconEffIndex (spell_stats.go:1223):
+// Unit::GetDummyAuraEffect(family, icon, effIndex)
+// (Unit.cpp:4540-4543 -> 4510-4522) over the motion's engine auras —
+// the first live DUMMY aura whose spell matches family+icon (with
+// no family flags set) at exactly the given effect index.
+func (s *Server) creatureDummyAuraAmountByIconEffIndex(key creatureAuraKey, family, iconID uint32, effIndex int) (int32, bool) {
+	if s == nil || s.Data == nil || effIndex < 0 {
+		return 0, false
+	}
+	s.auraMu.Lock()
+	auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+	for _, aura := range s.activeCreatureAuras[key] {
+		auras = append(auras, aura)
+	}
+	s.auraMu.Unlock()
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != family || auraSpell.SpellIconID != iconID {
+			continue
+		}
+		if auraSpell.SpellFamilyFlags[0] != 0 || auraSpell.SpellFamilyFlags[1] != 0 || auraSpell.SpellFamilyFlags[2] != 0 {
+			continue
+		}
+		if effIndex >= len(aura.Amounts) || effIndex >= len(auraSpell.Effects) || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			continue
+		}
+		eff := auraSpell.Effects[effIndex]
+		if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraDummy {
+			continue
+		}
+		amount := aura.Amounts[effIndex]
+		if amount == 0 {
+			amount = eff.BasePoints
+		}
+		return amount, true
+	}
+	return 0, false
+}
+
 // fireAuraPeriodicTick dispatches the RegisterAuraEvent hook for the aura's
 // spell (AuraEventOnPeriodic, args (event, aura, target)) and reports
 // whether any handler returned boolean true. That is the Go model of

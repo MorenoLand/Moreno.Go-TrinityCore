@@ -2494,6 +2494,96 @@ func (s *session) luaPlayer() *scripting.Object {
 		ref := &luaAuraRef{server: s.server, spellID: spell, player: s, mapID: state.Map, instanceID: state.InstanceID}
 		return []any{ref.luaAuraObject()}, nil
 	}
+	// GetDummyAuraEffect(family, iconID[, effIndex]) is
+	// Unit::GetDummyAuraEffect (Unit.cpp:4540-4543 -> 4510-4522):
+	// the live amount of the first DUMMY aura matching family+icon
+	// at the effect index, or nil when the player carries none —
+	// the nil return is the C++ null AuraEffect* twin, so a Lua
+	// port gates with `if amount then` exactly like the C++
+	// null-check. Default effect 0, the drain-soul glyph-leg
+	// convention. Backs the Empowered Renew (139) and Earthen
+	// Power (6474) periodic arms.
+	methods["GetDummyAuraEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return []any{nil}, nil
+		}
+		family, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		iconID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		effIndex := 0
+		if len(args) > 2 && args[2] != nil {
+			v, err := luaInt64Arg(args, 2)
+			if err != nil {
+				return nil, err
+			}
+			effIndex = int(v)
+		}
+		if amount, ok := s.dummyAuraAmountByIconEffIndex(family, iconID, effIndex); ok {
+			return []any{amount}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetAuraEffect(spellID[, effIndex]) is Unit::GetAuraEffect
+	// (Unit.cpp:4494-4496): the live amount of the named aura's
+	// effect, or nil when the player does not carry it — the C++
+	// null AuraEffect* twin. Default effect 0. Backs the
+	// Maelstrom Weapon (53817) T10 4P bonus read.
+	methods["GetAuraEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{nil}, nil
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		effIndex := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			effIndex = int(v)
+		}
+		aura := s.activeAuras[spell]
+		if aura == nil || effIndex < 0 || effIndex >= len(aura.Amounts) || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			return []any{nil}, nil
+		}
+		return []any{aura.Amounts[effIndex]}, nil
+	}
+	// GetAuraEffectOfRankedSpell(spellID[, effIndex]) is
+	// Unit::GetAuraEffectOfRankedSpell (Unit.cpp:4498-4508): the
+	// live amount of the effect on any rank of the queried spell,
+	// or nil when no rank is present. Default effect 0. Backs the
+	// Storm, Earth and Fire (6474) apply arm.
+	methods["GetAuraEffectOfRankedSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{nil}, nil
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		effIndex := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			effIndex = int(v)
+		}
+		if s.server == nil {
+			return []any{nil}, nil
+		}
+		if amount, ok := s.server.rankedAuraEffectAmount(s.loadedAuras(), spell, effIndex); ok {
+			return []any{amount}, nil
+		}
+		return []any{nil}, nil
+	}
 	// IsImmunedToDamage is the mask overload of Unit::IsImmunedToDamage
 	// (Unit.cpp:7800-7816) for players: the session isImmuneToDamage twin
 	// (Divine Shield / Ice Block / Blessing of Protection hardcodes plus
