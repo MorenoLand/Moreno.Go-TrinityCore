@@ -31,10 +31,16 @@
 -- JustAppeared Talk(SAY_RESPAWN=2) modeled on OnSpawn(5) — no
 -- JustAppeared bridge on the Lua surface (kazzak precedent);
 -- storm_cloud convention carries spawn-time Talk on OnSpawn(5).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
--- are packet-visual), so timers fire unconditionally and the in-loop
--- casting-state gate and the per-event in-loop re-check are dropped
--- (maiden precedent).
+-- Cast-state gates PORTED: the C++ UpdateAI pre-loop gate
+-- (boss_drekthar.cpp:99) + in-loop gate (:130) ride the fire-time 500ms
+-- IsCasting defer (mal_ganis idiom adapted to timer arms; IsCasting is
+-- live, lua_creature_events.go:1950): a firing arm that finds the
+-- creature casting re-schedules itself after 500ms and consumes no
+-- re-arm, so the arm stays due; the random-yell Talk arm defers the same
+-- way (it sits inside the gated C++ loop). The JustAppeared respawn Talk
+-- is a separate hook and stays ungated per C++. The in-loop gate's
+-- same-tick co-expiry suppression has no timer-arm model (independent
+-- timers fire on separate callbacks) and is the only unmodeled sliver.
 -- Unmodeled: CheckInRoom (home-position 2D distance > 50yd ->
 -- EnterEvadeMode + Talk(SAY_EVADE=1)) — documented-only, not for lack
 -- of position reads (creature:GetHomePosition() IS bridged,
@@ -83,6 +89,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onWhirlwind(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind", 500, function() onWhirlwind(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WHIRLWIND)
@@ -91,6 +101,10 @@ local function onWhirlwind(creature, guid)
 end
 
 local function onWhirlwind2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind2", 500, function() onWhirlwind2(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WHIRLWIND2)
@@ -99,6 +113,10 @@ local function onWhirlwind2(creature, guid)
 end
 
 local function onKnockdown(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "knockdown", 500, function() onKnockdown(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_KNOCKDOWN)
@@ -107,6 +125,10 @@ local function onKnockdown(creature, guid)
 end
 
 local function onFrenzy(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function() onFrenzy(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FRENZY)
@@ -115,6 +137,10 @@ local function onFrenzy(creature, guid)
 end
 
 local function onRandomYell(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "random_yell", 500, function() onRandomYell(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_RANDOM)
     schedule(guid, "random_yell", {20000, 30000}, function() onRandomYell(creature, guid) end)
 end

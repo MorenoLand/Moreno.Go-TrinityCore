@@ -16,9 +16,12 @@
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI's combat
 -- section in C++ arm order — 1s granularity exact for all C++
 -- timers; the !UpdateVictim early return collapses into the pump,
--- which only runs in combat). The C++ HasUnitState(UNIT_STATE_
--- CASTING) pump-skip has no state bridge (twilight_corrupter
--- precedent) — unmodeled.
+-- which only runs in combat). The C++ UpdateAI
+-- (zone_dragonblight.cpp:653-680) has no HasUnitState(UNIT_STATE_CASTING)
+-- gate at all — a plain EventMap loop with zero CASTING hits, so there
+-- is no gate to port; the old "pump-skip unmodeled" claim was wrong
+-- twice over (no C++ gate exists, and IsCasting IS a live bridge,
+-- lua_creature_events.go:1950, twilight_corrupter precedent).
 -- C++ DoCastVictim default is triggered=false (vaelastrasz
 -- convention): creature:CastSpell(nil, spell) = DoCastVictim
 -- (boss_twilight_corrupter.lua comment).

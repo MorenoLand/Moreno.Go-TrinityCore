@@ -27,9 +27,16 @@
 -- OnSpawn(5) + OnReset(23), storm_cloud convention):
 --   14762->45828 / 14763->45829 / 14765->45830 / 14764->45831 /
 --   14773->45822 / 14776->45823 / 14777->45824 / 14772->45826.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts are
--- packet-visual), so timers fire unconditionally (maiden precedent); the
--- C++ casting-state re-check inside the event loop is likewise dropped.
+-- Cast-state gates PORTED: the C++ UpdateAI pre-loop gate
+-- (alterac_valley.cpp:132) + in-loop gate (:171, abort after each event
+-- once a cast starts) ride the fire-time 500ms IsCasting defer (mal_ganis
+-- idiom adapted to timer arms; IsCasting is live,
+-- lua_creature_events.go:1950): a firing arm that finds the creature
+-- casting re-schedules itself after 500ms and consumes no re-arm, so the
+-- arm stays due. The in-loop gate's same-tick co-expiry suppression has
+-- no timer-arm model (independent timers fire on separate callbacks) and
+-- is the only unmodeled sliver. The Reset/JustAppeared aura one-shot
+-- fires before the C++ gate in UpdateAI order, so it stays ungated.
 -- Unmodeled: EVENT_CHECK_RESET (home-position 2D distance > 50yd ->
 -- EnterEvadeMode). GetHomePosition()/GetX()/GetY() ARE bridged
 -- (lua_objects.go:337,1074-1075 — the old "no HomePosition bridge" claim
@@ -96,6 +103,10 @@ end
 -- same way (no re-arm); the old header claim of a deliberate repeat deviation
 -- was wrong (EVENT_CHARGE is a live enum entry, not an upstream typo).
 local function onCharge(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "charge", 500, function() onCharge(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CHARGE)
@@ -103,6 +114,10 @@ local function onCharge(creature, guid)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -111,16 +126,28 @@ local function onCleave(creature, guid)
 end
 
 local function onShout(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shout", 500, function() onShout(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_DEMORALIZING_SHOUT)
     schedule(guid, "shout", {10000, 15000}, function() onShout(creature, guid) end)
 end
 
 local function onWhirlwind(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind", 500, function() onWhirlwind(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WHIRLWIND)
     schedule(guid, "whirlwind", {10000, 25000}, function() onWhirlwind(creature, guid) end)
 end
 
 local function onEnrage(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function() onEnrage(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ENRAGE)
     schedule(guid, "enrage", {10000, 30000}, function() onEnrage(creature, guid) end)
 end

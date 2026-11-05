@@ -13601,8 +13601,10 @@ func init() {
 	// self-cast) plus the per-entry one-shot aura self-cast from the C++
 	// _auraPairs table (14762->45828 / 14763->45829 / 14765->45830 /
 	// 14764->45831 / 14773->45822 / 14776->45823 / 14777->45824 /
-	// 14772->45826) — maiden-of-virtue convention (CreateLuaEvent timers;
-	// GetVictim for DoCastVictim; no UNIT_STATE_CASTING gate). C++ quirk:
+	// 14772->45826) — maiden convention (CreateLuaEvent timers;
+	// GetVictim for DoCastVictim); the C++ pre-loop (:132) + in-loop
+	// (:171) CASTING gates are PORTED as fire-time 500ms IsCasting
+	// defers, no re-arm consumed. C++ quirk:
 	// the charge arm reschedules undefined EVENT_CHARGE (would not compile
 	// upstream) — the port re-arms the charge chain at the stated {10,25}s.
 	// EVENT_CHECK_RESET (home leash) stays out: GetHomePosition is
@@ -13623,8 +13625,10 @@ func init() {
 	// 8s->{10,20}s, fireball 46988 victim-cast 1s->{5,9}s, frostbolt 46987
 	// victim-cast 4s->{4,12}s) plus the aggro Talk(0) and the DamageTaken
 	// 40% one-shot iceblock latch (46604) — maiden/moroes convention
-	// (CreateLuaEvent timers; GetVictim for DoCastVictim; no
-	// UNIT_STATE_CASTING gate). The water elemental summon arm, the
+	// (CreateLuaEvent timers; GetVictim for DoCastVictim); the C++
+	// pre-loop (:131) + in-loop (:174) CASTING gates are PORTED as
+	// fire-time 500ms IsCasting defers, no re-arm consumed. The water
+	// elemental summon arm, the
 	// JustSummoned AttackStart/faction arms, the home-leash CHECK_RESET
 	// arm (EnterEvadeMode has no bridge), and the BG-driven
 	// DoAction(ACTION_BUFF_YELL) arm have no Lua bridges — documented
@@ -13639,8 +13643,10 @@ func init() {
 	// Talk(3) {20,30}s->{20,30}s) plus the aggro Talk(0) and the
 	// JustAppeared Talk(2) respawn yell (ported on OnSpawn(5),
 	// storm_cloud convention — no dedicated JustAppeared event) — maiden
-	// convention (CreateLuaEvent timers; GetVictim for DoCastVictim;
-	// no UNIT_STATE_CASTING gate). The CheckInRoom home leash arm
+	// convention (CreateLuaEvent timers; GetVictim for DoCastVictim);
+	// the C++ pre-loop (:99) + in-loop (:130) CASTING gates are
+	// PORTED as fire-time 500ms IsCasting defers, no re-arm consumed.
+	// The CheckInRoom home leash arm
 	// (home-position 2D distance > 50yd -> EnterEvadeMode + Talk(1))
 	// stays documented-only: EnterEvadeMode has no Lua bridge and
 	// Talk(1) fires only inside the evade flow (a Talk-only port would
@@ -13658,7 +13664,9 @@ func init() {
 	// {1,13}s->{6,10}s, whirlwind2 13736 victim-cast {5,20}s->{10,25}s,
 	// mortal strike 16856 victim-cast {5,20}s->{10,30}s) plus the aggro
 	// Talk(0) — maiden convention (CreateLuaEvent timers; GetVictim
-	// for DoCastVictim; no UNIT_STATE_CASTING gate). The CheckInRoom
+	// for DoCastVictim); the C++ pre-loop (:100) + in-loop (:131)
+	// CASTING gates are PORTED as fire-time 500ms IsCasting defers,
+	// no re-arm consumed. The CheckInRoom
 	// home leash arm (home-position 2D distance > 50yd -> EnterEvadeMode
 	// + Talk(1)) and the BG-driven DoAction(ACTION_BUFF_YELL=-30001) ->
 	// Talk(2) arm have no Lua bridges — documented only; evade still

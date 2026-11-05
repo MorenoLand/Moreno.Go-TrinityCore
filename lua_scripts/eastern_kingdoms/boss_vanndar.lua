@@ -23,9 +23,11 @@
 -- SPELL_STORMBOLT: victim-cast STORMBOLT 20685, 6s init -> {10,25}s;
 -- random yell Talk(YELL_RANDOM=2), {20,30}s init -> {20,30}s;
 -- JustEngagedWith Talk(YELL_AGGRO=0).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and the
--- in-loop casting-state gate is dropped (maiden precedent). The C++
+-- Cast-state: the C++ UpdateAI (boss_vanndar.cpp:83-91) is a bare
+-- TaskScheduler drain with no validator and zero CASTING hits, so the
+-- timers fire ungated in C++ too — the Lua timers are C++-exact, not a
+-- dropped gate (the old "gate dropped" deviation was wrong: no gate
+-- exists). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) (maiden convention).

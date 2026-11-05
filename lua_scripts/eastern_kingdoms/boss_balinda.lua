@@ -29,9 +29,16 @@
 -- DamageTaken: HealthBelowPctDamaged(40, damage) one-shot latch
 -- (HasCastIceblock) -> self-cast ICEBLOCK 46604 (int64(health)-damage
 -- < floor(maxHealth*40/100)).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts
--- are packet-visual), so timers fire unconditionally and the in-loop
--- casting-state re-check is dropped (maiden precedent).
+-- Cast-state gates PORTED: the C++ UpdateAI pre-loop gate
+-- (boss_balinda.cpp:131) + in-loop gate (:174) ride the fire-time 500ms
+-- IsCasting defer (mal_ganis idiom adapted to timer arms; IsCasting is
+-- live, lua_creature_events.go:1950): a firing arm that finds the
+-- creature casting re-schedules itself after 500ms and consumes no
+-- re-arm, so the arm stays due; the check-reset arm defers the same way
+-- (it sits inside the gated C++ loop). The DamageTaken iceblock latch is
+-- a separate hook and stays ungated per C++. The in-loop gate's
+-- same-tick co-expiry suppression has no timer-arm model (independent
+-- timers fire on separate callbacks) and is the only unmodeled sliver.
 -- Unmodeled: EVENT_SUMMON_WATER_ELEMENTAL (3s init -> 50s; summons the
 -- water elemental when summons.empty()) + JustSummoned
 -- (AttackStart(SelectTarget(Random)) + SetFaction + GUID store) +
@@ -93,6 +100,10 @@ local function initState(guid)
 end
 
 local function onArcaneExplosion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcane_explosion", 500, function() onArcaneExplosion(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_ARCANE_EXPLOSION)
@@ -101,6 +112,10 @@ local function onArcaneExplosion(creature, guid)
 end
 
 local function onConeOfCold(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cone_of_cold", 500, function() onConeOfCold(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CONE_OF_COLD)
@@ -109,6 +124,10 @@ local function onConeOfCold(creature, guid)
 end
 
 local function onFireball(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function() onFireball(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIREBALL)
@@ -117,6 +136,10 @@ local function onFireball(creature, guid)
 end
 
 local function onFrostbolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function() onFrostbolt(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FROSTBOLT)
@@ -132,6 +155,10 @@ end
 -- Talk is once-latched per engagement (C++ evades at once, so the yell
 -- fires once); both EnterEvadeMode legs stay out (no bridge).
 local function onCheckReset(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "check_reset", 500, function() onCheckReset(creature, guid) end)
+        return
+    end
     local state = balindaState[guid]
     if state ~= nil and not state.evadeTalked then
         local hx, hy = creature:GetHomePosition()

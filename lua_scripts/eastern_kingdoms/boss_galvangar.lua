@@ -28,10 +28,14 @@
 -- EVENT_MORTAL_STRIKE: victim-cast MORTAL_STRIKE 16856, {5,20}s init
 --   -> {10,30}s;
 -- JustEngagedWith Talk(SAY_AGGRO=0).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and the
--- in-loop casting-state gate and the per-event in-loop re-check are
--- dropped (maiden precedent).
+-- Cast-state gates PORTED: the C++ UpdateAI pre-loop gate
+-- (boss_galvangar.cpp:100) + in-loop gate (:131) ride the fire-time
+-- 500ms IsCasting defer (mal_ganis idiom adapted to timer arms;
+-- IsCasting is live, lua_creature_events.go:1950): a firing arm that
+-- finds the creature casting re-schedules itself after 500ms and
+-- consumes no re-arm, so the arm stays due. The in-loop gate's same-tick
+-- co-expiry suppression has no timer-arm model (independent timers fire
+-- on separate callbacks) and is the only unmodeled sliver.
 -- Unmodeled: CheckInRoom (home-position 2D distance > 50yd ->
 -- EnterEvadeMode + Talk(SAY_EVADE=1)) — the leash needs EnterEvadeMode
 -- (no bridge); creature:GetHomePosition() IS bridged (dfdd8cc0), so the
@@ -76,6 +80,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -84,6 +92,10 @@ local function onCleave(creature, guid)
 end
 
 local function onFrighteningShout(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frightening_shout", 500, function() onFrighteningShout(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FRIGHTENING_SHOUT)
@@ -92,6 +104,10 @@ local function onFrighteningShout(creature, guid)
 end
 
 local function onWhirlwind1(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind1", 500, function() onWhirlwind1(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WHIRLWIND1)
@@ -100,6 +116,10 @@ local function onWhirlwind1(creature, guid)
 end
 
 local function onWhirlwind2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind2", 500, function() onWhirlwind2(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_WHIRLWIND2)
@@ -108,6 +128,10 @@ local function onWhirlwind2(creature, guid)
 end
 
 local function onMortalStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mortal_strike", 500, function() onMortalStrike(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_MORTAL_STRIKE)
