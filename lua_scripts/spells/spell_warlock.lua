@@ -92,3 +92,24 @@ local function healthFunnelRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_HEALTH_FUNNEL, 3, healthFunnelRemove)
+
+-- C++ spell_warl_haunt::HandleRemove (spell_warlock.cpp:797-806):
+-- EFFECT_1 SPELL_AURA_DUMMY, REAL_OR_REAPPLY. On removal the target
+-- casts Haunt Heal 48210 on the caster with BP0 = the effect amount
+-- (aurEff->GetAmount()). Deviation: C++ sets args.OriginalCaster to
+-- the caster GUID; CastCustomSpell takes an originalCaster arg but
+-- the Go model ignores it on both paths, so it is not passed. The
+-- loader's SpellScript side (spell_warl_haunt_SpellScript) is a
+-- separate arm and stays out of this row.
+local SPELL_WARLOCK_HAUNT = 48181 -- spell_warlock.cpp:55
+local SPELL_WARLOCK_HAUNT_HEAL = 48210 -- spell_warlock.cpp:56
+
+local function hauntRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    target:CastCustomSpell(caster, SPELL_WARLOCK_HAUNT_HEAL, false, aura:GetAmount(1))
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_HAUNT, 3, hauntRemove)

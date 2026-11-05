@@ -180,8 +180,9 @@
 -- spell_assembly_rune_of_summoning (62273 — periodic-dummy
 -- AuraScript: casts SPELL_RUNE_OF_SUMMONING_SUMMON 62020 with
 -- the summoner GUID + OnRemove despawn of the rune summon —
--- no AuraScript bridge; joins the no-AuraScript-bridge
--- queue).
+-- the OnRemove leg is ported at the tail (tick 198,
+-- RegisterAuraEvent OnRemove); the periodic leg stays out —
+-- no GetSummonerGUID bridge).
 -- achievement_assembly_i_choose_you (OnCheck: target GetAI()
 -- -> GetData(DATA_PHASE_3)) — no GetData / achievement
 -- bridges; joins the unmodeled-achievement queue.
@@ -610,3 +611,21 @@ RegisterCreatureEvent(ENTRY_BRUNDIR, 2, brundirLeaveCombat)
 RegisterCreatureEvent(ENTRY_BRUNDIR, 3, brundirTargetDied)
 RegisterCreatureEvent(ENTRY_BRUNDIR, 4, brundirDied)
 RegisterCreatureEvent(ENTRY_BRUNDIR, 23, brundirReset)
+
+-- C++ spell_assembly_rune_of_summoning::OnRemove
+-- (boss_assembly_of_iron.cpp:746-750): EFFECT_0 PERIODIC_DUMMY. On
+-- removal, a TempSummon target despawns (1ms). The periodic leg
+-- (HandlePeriodic: cast SPELL_RUNE_OF_SUMMONING_SUMMON 62020 with
+-- the summoner GUID) stays out — no GetSummonerGUID bridge.
+local SPELL_RUNE_OF_SUMMONING = 62273 -- boss_assembly_of_iron.cpp:55
+
+local function runeOfSummoningRemove(event, aura, target)
+    if target:GetObjectType() ~= "Creature" then
+        return
+    end
+    if target:IsSummon() then
+        target:DespawnOrUnsummon(1)
+    end
+end
+
+RegisterAuraEvent(SPELL_RUNE_OF_SUMMONING, 3, runeOfSummoningRemove)

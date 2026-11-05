@@ -34982,7 +34982,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			tMap, tInst = s.player.Map, s.player.InstanceID
 		}
 		s.playerStateMu.Unlock()
-		auraRef := &luaAuraRef{server: s.server, spellID: spellID, player: s, mapID: tMap, instanceID: tInst, snapshot: removedAura}
+		auraRef := &luaAuraRef{server: s.server, spellID: spellID, player: s, mapID: tMap, instanceID: tInst, snapshot: removedAura, removeMode: mode}
 		s.server.fireAuraRemove(context.Background(), spellID, auraRef.luaAuraObject(), s.luaPlayer())
 	}
 }
@@ -44219,7 +44219,7 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	// the remove arms above, only when an aura was actually removed.
 	// The handler receives the removed record's snapshot.
 	if auraWasPresent {
-		auraRef := &luaAuraRef{server: s, spellID: spellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID, snapshot: removedAura}
+		auraRef := &luaAuraRef{server: s, spellID: spellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID, snapshot: removedAura, removeMode: mode}
 		s.fireAuraRemove(context.Background(), spellID, auraRef.luaAuraObject(), s.luaUnitObjectForGUID(key.Map, key.InstanceID, key.GUID))
 	}
 }

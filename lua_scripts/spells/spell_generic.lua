@@ -122,3 +122,24 @@ local function chokingVinesTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_CHOKING_VINES, 1, chokingVinesTick)
+
+-- C++ spell_gen_decay_over_time_fungal_decay::ModDuration
+-- (spell_generic.cpp:1377-1385): EFFECT_0 MOD_DECREASE_SPEED. On
+-- apply, when the remaining duration still equals the max (a fresh
+-- apply / reapply, not a stack decay), both are rewritten to
+-- AURA_DURATION 12600 (enum FungalDecay, spell_generic.cpp:1368;
+-- "found in sniffs, there is no duration entry we can possibly use").
+-- Deviation: C++ registers REAL_OR_REAPPLY, so a reapply re-runs the
+-- check; the Go OnApply hook fires on fresh applies only, so a
+-- reapply keeps the old durations.
+local SPELL_FUNGAL_DECAY = 32065
+local AURA_DURATION_FUNGAL_DECAY = 12600 -- spell_generic.cpp:1368
+
+local function fungalDecayApply(event, aura, target)
+    if aura:GetDuration() == aura:GetMaxDuration() then
+        aura:SetMaxDuration(AURA_DURATION_FUNGAL_DECAY)
+        aura:SetDuration(AURA_DURATION_FUNGAL_DECAY)
+    end
+end
+
+RegisterAuraEvent(SPELL_FUNGAL_DECAY, 2, fungalDecayApply)

@@ -34,6 +34,12 @@ type luaAuraRef struct {
 	// tick count). Only the remove hook sets it; writes through it land
 	// on the detached record and are inert.
 	snapshot *activeAura
+	// removeMode is the AuraRemoveMode (SpellAuraDefines.h:61-69) the
+	// aura was removed with, carried so the OnRemove hook can gate on
+	// it like GetTargetApplication()->GetRemoveMode(). Only the remove
+	// hook sets it; apply/periodic refs read 0 (AURA_REMOVE_NONE), the
+	// C++ AuraApplication default outside a removal.
+	removeMode auraRemoveMode
 }
 
 func (r *luaAuraRef) resolve() *activeAura {
@@ -227,6 +233,15 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return uint32(0)
 	})
+	// GetRemoveMode is AuraApplication::GetRemoveMode
+	// (SpellAuras.h): the AuraRemoveMode the aura was removed with
+	// (SpellAuraDefines.h:61-69: NONE 0, DEFAULT 1, CANCEL 2,
+	// ENEMY_SPELL 3, EXPIRE 4, DEATH 5 — the Go auraRemoveMode iota
+	// in spells.go carries the same values in the same order, so the
+	// read is a plain int cast, not a translation table). Only the
+	// OnRemove hook's snapshot carries a real mode; apply/periodic
+	// refs read 0.
+	methods["GetRemoveMode"] = luaNoArgs(func() any { return int(r.removeMode) })
 	// GetTotalTicks is AuraEffect::GetTotalTicks
 	// (SpellAuraEffects.cpp:540-550): 0 when the aura has no amplitude
 	// or is permanent, else maxDuration/amplitude, +1 when the spell

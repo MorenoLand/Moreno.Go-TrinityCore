@@ -61,7 +61,8 @@
 -- (11380 is unique in Zul'Gurub); the mortal strike HealthBelowPct(50) check
 -- uses post-damage GetHealthPct (no pre-damage health bridge);
 -- spell_threatening_gaze (the 24314 -> 24315/24316 AuraScript OnRemove
--- chain) is an AuraScript — not modeled (standing gap); the speaker's
+-- chain) is ported at the tail (tick 198, RegisterAuraEvent OnRemove);
+-- the speaker's
 -- JustDied SetBossState(DATA_MANDOKIR, SPECIAL) arm has no bearer (no
 -- instance-script model).
 
@@ -480,3 +481,25 @@ RegisterCreatureEvent(ENTRY_SPEAKER, 4, function(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end)
 RegisterCreatureEvent(ENTRY_SPEAKER, 23, speakerReset)
+
+-- C++ spell_threatening_gaze::OnRemove (boss_mandokir.cpp:425-432):
+-- EFFECT_0 SPELL_AURA_DUMMY. On removal, unless the mode is EXPIRE
+-- or DEATH, the caster (Mandokir) casts Watch Charge 24315 on the
+-- target (non-triggered). The mode gate is Aura:GetRemoveMode (new
+-- tick 198: SpellAuraDefines.h:61-69 values).
+local SPELL_WATCH_CHARGE = 24315 -- boss_mandokir.cpp:48
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
+local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
+
+local function threateningGazeRemove(event, aura, target)
+    local mode = aura:GetRemoveMode()
+    if mode == AURA_REMOVE_BY_EXPIRE or mode == AURA_REMOVE_BY_DEATH then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster ~= nil and target ~= nil then
+        caster:CastSpell(target, SPELL_WATCH_CHARGE)
+    end
+end
+
+RegisterAuraEvent(SPELL_WATCH, 3, threateningGazeRemove)
