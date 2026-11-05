@@ -117,19 +117,23 @@
 -- SpellHit (:497-506) — stale "no SpellHit bridge" retracted
 -- (2026-10-21): ev14 IS bridged (fires from the Go spell path) —
 -- but the arm stays out: SPELL_HARPOON_TRIGGER 62505 drives a
--- counter whose sole effect is DoAction(ACTION_GROUND_PHASE) — no
--- DoAction bridge, and it feeds the unbridged air/ground phase
--- machine; a ported counter with no downstream would be an inert
--- no-op.
+-- counter whose sole effect is DoAction(ACTION_GROUND_PHASE) — the
+-- DoAction bridge is live (ev38, tick 206), but the counter feeds
+-- the unbridged air/ground phase machine; a ported counter with no
+-- downstream would be an inert no-op.
 -- CanAIAttack / JustSummoned / EnterEvadeMode / SummonMinions —
 -- no bridges (the HandleMusic legs are ported; the BOUNDARY-evade
 -- early-return nuance in EnterEvadeMode (:516-518) has no evade
 -- bridge). SummonedCreatureDies ev21 IS bridged — the stale "no
 -- bridge" claim is retracted 2026-11-03 (amanitar/loatheb/coren
 -- precedent); the engineer-death relay is PORTED below.
--- npc_expedition_commander (33210 ulduar.h:90 — entry-verifiable
--- but bridge-blocked): OnGossipSelect -> DoAction
--- (ACTION_START_FIGHT) — gossip bridged (stale 'no gossip bridge' retracted — RegisterCreatureGossipEvent, engine/scripting/runtime.go:902), no DoAction bridge;
+-- npc_expedition_commander (33210 ulduar.h:90): OnGossipSelect ->
+-- DoAction (ACTION_START_FIGHT) is PORTED below (tick 213): the
+-- gossip select hook (RegisterCreatureGossipEvent, listID == 0 is
+-- the C++ gate — no menuId check in C++) relays via
+-- GetCreaturesInGrid to razorscale:DoAction(1), and the ev38
+-- receiver arm (RemoveFlag IMMUNE_TO_PC + run speed 3.0 +
+-- StopMoving + MoveTo flight position) is PORTED below.
 -- DoAction Talk(SAY_COMMANDER_AGGRO 0) / Talk
 -- (SAY_COMMANDER_GROUND_PHASE 1) ride the DoAction machine —
 -- Talk riding DoAction stays out. Talk(SAY_COMMANDER_ENGINEERS_DEAD
@@ -205,6 +209,9 @@
 local ENTRY_RAZORSCALE = 33186
 local ENTRY_EXPEDITION_COMMANDER = 33210
 local ENTRY_EXPEDITION_ENGINEER = 33287
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100
+local POINT_RAZORSCALE_FLIGHT = 10 -- MovePoints enum: POINT_DEFENDER_ATTACK = 1, +9 to FLIGHT
 local SAY_COMMANDER_ENGINEERS_DEAD = 2
 
 local engineersRemaining = {}
@@ -322,11 +329,58 @@ local function razorscaleSummonedCreatureDies(event, creature, summon, killer)
     end
 end
 
+-- C++ npc_expedition_commander::OnGossipSelect
+-- (boss_razorscale.cpp:684-696): gossipListId ==
+-- GOSSIP_START_ENCOUNTER (0) -> CloseGossipMenuFor,
+-- _events.SetPhase(PHASE_COMBAT) (commander phase machine, stays
+-- out), RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP),
+-- instance GetCreature(BOSS_RAZORSCALE) ->
+-- DoAction(ACTION_START_FIGHT = 1). The menu has a single option,
+-- so listID == 0 is the C++ gate (no menuId check in C++; the
+-- creature select hook forwards listID as the 7th arg, gossip.go).
+-- The commander reaches razorscale via GetCreaturesInGrid (same
+-- arena; the boss Lua already reaches the commander the other way
+-- at 100 yd above). Returns true when handled (C++ returns true),
+-- false otherwise (majordomo/nefarian convention).
+local function onCommanderGossipSelect(event, player, creature, sender, action, code, listID)
+    if listID ~= 0 then
+        return false
+    end
+    player:GossipClearMenu()
+    player:GossipComplete()
+    creature:RemoveFlag(82, 1) -- UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP (majordomo precedent)
+    for _, razorscale in ipairs(creature:GetCreaturesInGrid(ENTRY_RAZORSCALE, 500)) do
+        if razorscale:IsAlive() then
+            razorscale:DoAction(1) -- ACTION_START_FIGHT
+            break
+        end
+    end
+    return true
+end
+
+-- C++ boss_razorscaleAI::DoAction ACTION_START_FIGHT
+-- (boss_razorscale.cpp:381-391): RemoveFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_IMMUNE_TO_PC), SetSpeedRate(MOVE_RUN, 3.0f),
+-- StopMoving, MovePoint(POINT_RAZORSCALE_FLIGHT,
+-- RazorFlightPosition 585.3610, -173.5592, 456.8430, 1.526665).
+-- MoveTo takes (id, x, y, z) only — no orientation arg.
+local function razorscaleDoAction(event, creature, action)
+    if action ~= 1 then -- ACTION_START_FIGHT
+        return
+    end
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+    creature:SetSpeedRate(1, 3.0) -- MOVE_RUN
+    creature:StopMoving()
+    creature:MoveTo(POINT_RAZORSCALE_FLIGHT, 585.361, -173.5592, 456.843)
+end
+
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 1, razorscaleEnterCombat)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 2, leaveCombatOrDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 4, leaveCombatOrDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 21, razorscaleSummonedCreatureDies)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 38, razorscaleDoAction)
+RegisterCreatureGossipEvent(ENTRY_EXPEDITION_COMMANDER, 2, onCommanderGossipSelect)
 
 -- C++ go_razorscale_mole_machine::Reset (boss_razorscale.cpp:1559-1566):
 -- SetFlag(GO_FLAG_NOT_SELECTABLE), 1s UseDoorOrButton, 10s Delete.

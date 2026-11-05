@@ -86,9 +86,10 @@
 -- 41341 + non-triggered self-cast dampen magic 41478, _canUse
 -- ArcaneExplosion=true in per-GUID state. OnEnterCombat: one-time
 -- non-triggered self-cast dampen magic 41478 (C++ ScheduleEvents
--- one-time arm — the recurring EVENT_DAMPEN_MAGIC only ever
--- arms from DoAction(ACTION_REFRESH_DAMPEN), which has no bearer:
--- the dampen-magic AuraScript that calls it has no bridge) /
+-- one-time arm) plus the recurring EVENT_DAMPEN_MAGIC 50s re-cast,
+-- PORTED below (tick 213): the dampen-magic OnRemove relays via
+-- RegisterAuraEvent(41478, 3) -> DoAction(ACTION_REFRESH_DAMPEN)
+-- -> ev38 handler, a self-sustaining loop /
 -- flamestrike 41481 8s then 40s, non-triggered on a random
 -- threat-list unit alive (C++ SelectTarget(Random, 0),
 -- playerOnly defaults false) + Talk(SAY_COUNCIL_SPECIAL) /
@@ -132,8 +133,9 @@
 -- Talk on finish), and aura scripts: balance_of_power (41341
 -- absorb -> 41342 shared rule), reflective_shield (41475 absorb ->
 -- 33619 reflect),
--- seal (41469/41459 remove -> the other seal), dampen_magic
--- (41478 remove-by-expire/enemy -> ACTION_REFRESH_DAMPEN DoAction).
+-- seal (41469/41459 remove -> the other seal). dampen_magic
+-- (41478 remove-by-expire/enemy -> ACTION_REFRESH_DAMPEN DoAction)
+-- is PORTED below (tick 213, RegisterAuraEvent OnRemove + ev38).
 -- deadly_strike (41480 periodic -> 41485 deadly poison) is PORTED
 -- below (tick 190, RegisterAuraEvent). deadly_poison (41485 remove
 -- -> 41487 envenom + 41509 visual) and vanish (41476 remove ->
@@ -729,9 +731,9 @@ end
 
 -- C++ JustEngagedWith + ScheduleEvents: one-time non-triggered
 -- self-cast dampen magic 41478; the three cycle arms. The
--- recurring EVENT_DAMPEN_MAGIC only arms from DoAction(ACTION_
--- REFRESH_DAMPEN), which has no bearer (the dampen-magic
--- AuraScript has no bridge).
+-- recurring EVENT_DAMPEN_MAGIC 50s re-cast is PORTED below
+-- (tick 213): the dampen-magic OnRemove relays DoAction
+-- (ACTION_REFRESH_DAMPEN) into the ev38 handler.
 local function zerevorEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
     -- C++ boss_illidari_council.cpp:260-261: DoZoneInCombat(illidari) --
@@ -777,12 +779,40 @@ local function zerevorReset(event, creature)
     end
 end
 
+-- C++ boss_high_nethermancer_zerevor::DoAction ACTION_REFRESH_DAMPEN
+-- (boss_illidari_council.cpp:387-391): ScheduleEvent(EVENT_DAMPEN_MAGIC,
+-- 50s); the event arm (:419-421) is DoCastSelf(SPELL_DAMPEN_MAGIC).
+-- The 50s re-cast re-applies the aura, whose expiry re-arms via the
+-- dampen-magic OnRemove below — a self-sustaining loop, C++-exact.
+local function zerevorDampen(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "zerevor_dampen", 500, function()
+            zerevorDampen(creature, guid)
+        end)
+        return
+    end
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_DAMPEN_MAGIC)
+    end
+end
+
+local function zerevorDoAction(event, creature, action)
+    if action ~= 2 then -- ACTION_REFRESH_DAMPEN
+        return
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "zerevor_dampen", 50000, function()
+        zerevorDampen(creature, guid)
+    end)
+end
+
 RegisterCreatureEvent(ENTRY_ZEREVOR, 1, zerevorEnterCombat)
 RegisterCreatureEvent(ENTRY_ZEREVOR, 2, memberLeaveCombat)
 RegisterCreatureEvent(ENTRY_ZEREVOR, 3, memberTargetDied)
 RegisterCreatureEvent(ENTRY_ZEREVOR, 4, memberDied)
 RegisterCreatureEvent(ENTRY_ZEREVOR, 9, memberDamageTaken)
 RegisterCreatureEvent(ENTRY_ZEREVOR, 23, zerevorReset)
+RegisterCreatureEvent(ENTRY_ZEREVOR, 38, zerevorDoAction)
 
 ------------------------------------------------------------------
 -- Lady Malande (22951).
@@ -973,3 +1003,27 @@ local function vanishRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_VANISH, 3, vanishRemove)
+
+-- C++ spell_illidari_dampen_magic::OnRemove
+-- (boss_illidari_council.cpp:789-797): OnEffectRemove — on remove,
+-- if the target is a creature and the remove mode is
+-- AURA_REMOVE_BY_ENEMY_SPELL (3) or AURA_REMOVE_BY_EXPIRE (4),
+-- the target gets DoAction(ACTION_REFRESH_DAMPEN = 2). The Go
+-- OnRemove hook fires post-erase with the real mode
+-- (aura:GetRemoveMode, lua_aura.go); the arm only schedules an
+-- event and reads no aura state, so the OnEffectRemove ordering
+-- gap is immaterial (same as the tick-196 ports in this file).
+-- Only Zerevor casts 41478 (C++ :376, :384, :420), so the target
+-- is always Zerevor; the creature gate is the C++ ToCreature leg.
+local function dampenMagicRemove(event, aura, target)
+    local mode = aura:GetRemoveMode()
+    if mode ~= 3 and mode ~= 4 then
+        return
+    end
+    if target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:DoAction(2) -- ACTION_REFRESH_DAMPEN
+end
+
+RegisterAuraEvent(SPELL_DAMPEN_MAGIC, 3, dampenMagicRemove)
