@@ -16263,7 +16263,11 @@ func init() {
 	// EVENT_TIME_STEP charge machine is ported in
 	// lua_scripts/kalimdor/boss_epoch.lua (ev15 dummy-hit leg +
 	// IsHostileTo gate + 500ms charge chain; the C++ DoCastAOE radius
-	// fan-out is lowered to the threat list there).
+	// fan-out is lowered to the threat list there). The BossAI::UpdateAI
+	// pre-loop + in-loop CASTING gates (ScriptedCreature.cpp:578/:584)
+	// are PORTED (epoch has no own UpdateAI): all five timer arms
+	// (wounding strike / curse of exertion / time warp / time stop /
+	// time step charge) defer 500ms while IsCasting, no re-arm consumed.
 	RegisterLuaBoss("boss_epoch", 26532)
 
 	// npc_arthas_stratholme (Arthas, entry 26499 — C++-verified via

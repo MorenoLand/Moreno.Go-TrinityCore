@@ -20,6 +20,10 @@
 -- 4 OnDied, 15 OnSpellHitTarget, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
+-- - BossAI::UpdateAI CASTING gates PORTED (ScriptedCreature.cpp:578/:584,
+--   thalnos precedent): each timer arm defers 500ms while
+--   creature:IsCasting(), no re-arm consumed; the Time Step charge arm
+--   defers before its target pick, so no step target is consumed.
 -- - Engage (C++ JustEngagedWith): arm each timer at its C++ ScheduleEvent
 --   cooldown; _stepTargetIndex = 0 / _stepTargets.clear() re-init the
 --   per-GUID step state (the ev15 leg below populates it).
@@ -129,6 +133,12 @@ end
 -- C++ EVENT_WOUNDING_STRIKE: DoCastVictim(52771), non-triggered, init
 -- {4s,6s} -> repeat {12s,18s}; jeklik GetVictim + CastSpell convention.
 local function onWoundingStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "woundingstrike", 500, function()
+            onWoundingStrike(creature, guid)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim and not victim:IsDead() then
         creature:CastSpell(victim, SPELL_WOUNDING_STRIKE)
@@ -141,6 +151,12 @@ end
 -- C++ EVENT_CURSE_OF_EXERTION: DoCast(SelectTarget(Random, 0, 100.0f,
 -- true), 52772), non-triggered, init {10s,17s} -> repeat 9.3s.
 local function onCurseOfExertion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "curseofexertion", 500, function()
+            onCurseOfExertion(creature, guid)
+        end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_CURSE_OF_EXERTION)
@@ -157,6 +173,12 @@ end
 -- the ev15 step leg fires once per hit, as the C++ AoE fan-out does;
 -- the caster is never its own hostile target, so no self-cast dummy.
 local function onTimeWarp(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "timewarp", 500, function()
+            onTimeWarp(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_TIME_WARP)
     creature:CastSpell(creature, SPELL_TIME_WARP)
     for _, t in ipairs(creature:GetAITargets()) do
@@ -200,6 +222,12 @@ end
 -- when a list target was found; on exhaustion charge the victim once
 -- with no re-arm.
 onTimeStep = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "timestep", 500, function()
+            onTimeStep(creature, guid)
+        end)
+        return
+    end
     local st = stepState[guid]
     if not st then
         return
@@ -225,6 +253,12 @@ end
 -- repeat 25s, scheduled only under IsHeroic() (creature:IsHeroic()
 -- bridges ScriptedAI::_isHeroic — blood_prince_council precedent).
 local function onTimeStop(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "timestop", 500, function()
+            onTimeStop(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_TIME_STOP)
     schedule(guid, "timestop", 25000, function()
         onTimeStop(creature, guid)
