@@ -48,8 +48,9 @@
 --   ported in onReset, gated on the Balnazzar entry).
 -- Unmodeled (documented-only, no bridges):
 -- - Transform's `if (IsNonMeleeSpellCast(false)) InterruptNonMeleeSpells
---   (false)` gate — no casting-state bridge (jandice/barthilas
---   display-ID precedent). The UpdateEntry(NPC_BALNAZZAR) leg is
+--   (false)` gate — PORTED in doTransform as an IsCasting-gated
+--   InterruptNonMeleeSpells(false) (kelidan/skyriss interrupt-axis
+--   idiom; live bridges lua_creature_events.go:1995). The UpdateEntry(NPC_BALNAZZAR) leg is
 --   ported in doTransform, with the Balnazzar-entry 2/4/23 handlers
 --   registered so wipe/death/reset still fire after the transform
 --   (ingvar precedent; dispatch is entry-keyed).
@@ -224,8 +225,9 @@ local function onMindControl(creature, guid)
         function() onMindControl(creature, guid) end)
 end
 
--- C++ transform leg: HealthBelowPct(40) -> InterruptNonMeleeSpells (no
--- bridge) -> DoCast(me, SPELL_BALNAZZARTRANSFORM) -> UpdateEntry
+-- C++ transform leg: HealthBelowPct(40) -> IsNonMeleeSpellCast-gated
+-- InterruptNonMeleeSpells(false) (PORTED below via IsCasting) ->
+-- DoCast(me, SPELL_BALNAZZARTRANSFORM) -> UpdateEntry
 -- (NPC_BALNAZZAR, ported; dispatch is entry-keyed so the Balnazzar
 -- entry registers the 2/4/23 handlers, ingvar precedent) ->
 -- transformed = true. The shared
@@ -240,6 +242,11 @@ local function doTransform(creature, guid)
     cancelTimer(guid, "hammer")
     cancelTimer(guid, "strike")
     cancelTimer(guid, "holy")
+    -- boss_dathrohan_balnazzar.cpp:172-174 — C++ arm order: gate the
+    -- interrupt on a live non-melee cast, then transform.
+    if creature:IsCasting() then
+        creature:InterruptNonMeleeSpells(false)
+    end
     creature:CastSpell(creature, SPELL_BALNAZZARTRANSFORM)
     creature:UpdateEntry(ENTRY_BALNAZZAR)
     schedule(guid, "shadowshock", 4000,

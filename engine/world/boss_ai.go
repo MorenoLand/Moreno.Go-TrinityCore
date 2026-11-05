@@ -15211,9 +15211,10 @@ func init() {
 	// (SelectTarget(Random, 0) -> random alive player on map+instance, no
 	// distance bound; nil pick casts nothing, re-arm unconditional) /
 	// mindcontrol 15690 10s->15s. Timers + transform latch cleared on
-	// LeaveCombat/Died/Reset. Documented-only: transform's InterruptNonMeleeSpells gate is bridged
-	// but the arm stays unported on UpdateEntry(10813)/Reset's
-	// UpdateEntry(10812) revert, JustDied's 8x zombie (10698) summons at
+	// LeaveCombat/Died/Reset. Transform's IsNonMeleeSpellCast-gated
+	// InterruptNonMeleeSpells(false) leg PORTED in doTransform (IsCasting
+	// gate, kelidan/skyriss interrupt-axis idiom). Documented-only:
+	// UpdateEntry(10813)/Reset's UpdateEntry(10812) revert, JustDied's 8x zombie (10698) summons at
 	// the file's m_aSummonPoint coords (1h timed despawn), empty
 	// JustEngagedWith, GetStratholmeAI factory; melee engine-driven.
 	RegisterLuaBoss("boss_dathrohan_balnazzar", 10812)
