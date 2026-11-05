@@ -58,8 +58,9 @@ type ThreatManager struct {
 	// (ThreatManager.h:256): victims whose ShouldBeOffline arm
 	// currently fails. Pure data like suppressed — the manager never
 	// evaluates visibility itself; the combat tick refreshes this set
-	// from the phase arm (threatPhaseOfflineSet), and later legs add
-	// their own callers. A victim absent here is online.
+	// from the phase arm (threatPhaseOfflineSet) unioned with the
+	// CanDetect detect arms (threatDetectOfflineSet), and later legs
+	// add their own arms to that union. A victim absent here is online.
 	offline map[uint64]bool
 	// needClientUpdate mirrors ThreatManager::_needClientUpdate
 	// (set at ThreatManager.cpp:49/61/141/793, consumed at 522-525):
@@ -399,6 +400,67 @@ func (s *Server) threatPhaseOfflineSet(motion *creatureMotion, players []playerP
 		}
 		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); vm != nil {
 			if s.spellGateCreatureNeverSeesCreature(motion, vm) {
+				off[guid] = true
+			}
+		}
+	}
+	return off
+}
+
+// threatDetectOfflineSet runs the CanDetect detect arms of
+// ThreatReference::ShouldBeOffline (ThreatManager.cpp:101-110, via
+// Object.cpp CanDetect :1664-1790, checkAlert=false) over the owner's
+// threat entries: stalked-by-seer (Unit.cpp:8640), then the
+// invisibility sums (:1688-1717), then stealth (:1719-1790). The seer
+// is the CanDetect seer (canDetectSeerFor): a controlled owner judges
+// through its charmer-or-owner (Object.cpp:1672-1676), and
+// CanHaveThreatList (ThreatManager.cpp:156-179) excludes pets,
+// totems and player-summoned minions but NOT charmed world creatures,
+// so a mind-controlled threat owner judges through its charming
+// player. The GuardAI CanSeeAlways arm (GuardAI.cpp:45-50, reached
+// via the CanSeeOrDetect head :1581) rides on top: IsEngagedBy is
+// IsThreatenedBy for a threat-list owner (Unit.h:1032), and every
+// evaluated victim holds an entry, so a guard owner always sees a
+// player-controlled victim — a player victim directly, a creature
+// victim whose charmer-or-owner resolves to a player session. The
+// scan helpers' TargetGUID guard proxy is NOT reused: it covers only
+// the current target, while every entry victim is engaged.
+// Unresolvable victims stay online, as in the phase evaluator.
+func (s *Server) threatDetectOfflineSet(motion *creatureMotion, players []playerPos) map[uint64]bool {
+	if s == nil || motion == nil || motion.ThreatMgr == nil {
+		return nil
+	}
+	byGUID := make(map[uint64]*session, len(players))
+	for i := range players {
+		if players[i].Sess != nil {
+			byGUID[players[i].GUID] = players[i].Sess
+		}
+	}
+	seer := s.canDetectSeerFor(motion)
+	guard := motion.FlagsExtra&creatureFlagExtraGuard != 0
+	off := make(map[uint64]bool)
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if sess := byGUID[guid]; sess != nil && sess.player != nil {
+			if guard {
+				continue
+			}
+			if seer.guid != 0 && sess.hasStalkedAuraFrom(seer.guid) {
+				continue
+			}
+			if !s.seerCanDetectInvisibilityOfPlayer(seer, sess) || !s.seerCanDetectStealthOfPlayer(seer, sess) {
+				off[guid] = true
+			}
+			continue
+		}
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); vm != nil {
+			if guard {
+				if cg := creatureCharmerOrOwnerGUID(vm); cg != 0 {
+					if cs := s.findSessionByGUID(cg); cs != nil && cs.player != nil {
+						continue
+					}
+				}
+			}
+			if !s.creatureSightCanDetectCreature(motion, vm) {
 				off[guid] = true
 			}
 		}

@@ -5343,13 +5343,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// threat list survived the phase, so switched never fires for the
 		// resume).
 		passive := isCreaturePassive(motion)
-		// ThreatReference::ShouldBeOffline phase arm (ThreatManager.cpp:
-		// 101-110, CanNeverSee head): refresh the offline set every step
-		// tick while InCombat, ahead of the 1s reselect, so a victim that
-		// phases out stops being picked and one that phases back in is
-		// pickable again. The manager stores the set only; evaluation
-		// lives here with motion/session context (see threat.go seam).
-		motion.ThreatMgr.SetOfflineSet(s.threatPhaseOfflineSet(motion, players))
+		// ThreatReference::ShouldBeOffline arms (ThreatManager.cpp:
+		// 101-110): refresh the offline set every step tick while
+		// InCombat, ahead of the 1s reselect, so a victim that phases
+		// out or stops being detectable stops being picked and one
+		// that phases back in or breaks stealth is pickable again.
+		// The phase arm (CanNeverSee head) and the CanDetect detect
+		// arms union here; the manager stores the set only and
+		// evaluation lives here with motion/session context (see
+		// threat.go seam).
+		offline := s.threatPhaseOfflineSet(motion, players)
+		for guid := range s.threatDetectOfflineSet(motion, players) {
+			if offline == nil {
+				offline = make(map[uint64]bool)
+			}
+			offline[guid] = true
+		}
+		motion.ThreatMgr.SetOfflineSet(offline)
 		oldTarget := motion.TargetGUID
 		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); !passive && switched && newVictim != 0 {
 			motion.TargetGUID = newVictim
