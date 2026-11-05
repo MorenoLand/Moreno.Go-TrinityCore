@@ -8881,6 +8881,25 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if p.Sess != nil && p.Sess.hasAuraType(spellAuraFeignDeath) && motion.FlagsExtra&0x00008000 == 0 {
 			continue
 		}
+		// Creature::_IsTargetAcceptable's vehicle leg (Creature.cpp:2512),
+		// same scanner-on-victim reading as the creature-victim scan:
+		// a seated scanner never acquires its own vehicle, or a vehicle
+		// its own vehicle is seated on. Same-vehicle passengers are not
+		// excluded by C++.
+		if motion.VehicleGUID != 0 {
+			if motion.VehicleGUID == p.GUID {
+				continue
+			}
+			if base := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.VehicleGUID); base != nil && base.VehicleGUID == p.GUID {
+				continue
+			}
+		}
+		// WorldObject::CanNeverSee's phase arm (Object.cpp:1661): a
+		// player in a disjoint phase never sight-aggros, GM
+		// PHASEMASK_ANYWHERE included via currentPlayerPhaseMask.
+		if s.spellGateCreatureNeverSeesPlayer(motion, p.Sess) {
+			continue
+		}
 		dist := float32(distance3D(p.X, p.Y, p.Z, motion.X, motion.Y, motion.Z))
 		// Creature::GetAttackDistance (Creature.cpp:2015-2058): 20 yards at equal
 		// level, minus combat reach, +/-1 yard per creature-minus-player level
@@ -9086,8 +9105,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// excludes self, same as GetClosestCreatureWithEntry), dead, and
 	// Evading (C++ CanCreatureAttack rejects evade-mode victims; players
 	// carry no evade flag, so the player loop has no equivalent).
-	// SIGHTLESS/phase/accessible-place/home-distance stay unmodeled here
-	// exactly as in the player scan. The scan inherits the stepping
+	// SIGHTLESS/accessible-place/home-distance stay unmodeled here
+	// exactly as in the player scan; phase rides the CanNeverSee gate
+	// below, as it now does in the player loop. The scan inherits the stepping
 	// pipeline's player gate (updateActiveCreatures returns early with no
 	// players, and stepSummonedNonVehicleMotions does the same), so a
 	// player-free map/instance still never sight-aggros — a separate
@@ -9102,6 +9122,25 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		s.motionMu.Unlock()
 		for _, victim := range victims {
 			if victim == nil || victim.GUID == motion.GUID || victim.Health == 0 || victim.Evading {
+				continue
+			}
+			// Creature::_IsTargetAcceptable's vehicle leg (Creature.cpp:2512):
+			// a scanner seated on a vehicle never acquires its own vehicle
+			// (m_vehicle && (IsOnVehicle(target) || base->IsOnVehicle(target))).
+			// This is scanner-on-victim, NOT same-vehicle passengers: two
+			// passengers of one vehicle are not excluded by C++.
+			if motion.VehicleGUID != 0 {
+				if motion.VehicleGUID == victim.GUID {
+					continue
+				}
+				if base := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.VehicleGUID); base != nil && base.VehicleGUID == victim.GUID {
+					continue
+				}
+			}
+			// WorldObject::CanNeverSee's phase arm (Object.cpp:1661):
+			// different-phase victims never sight-aggro; the helper folds
+			// the runtime 261-phase override over the spawn row mask.
+			if s.spellGateCreatureNeverSeesCreature(motion, victim) {
 				continue
 			}
 			// Axis-delta bounding box ahead of the 3D distance, the
