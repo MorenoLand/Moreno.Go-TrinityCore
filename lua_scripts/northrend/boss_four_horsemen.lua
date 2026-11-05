@@ -64,6 +64,10 @@
 -- hit + _shouldSay -> Talk(SAY_SPECIAL 2), latch cleared.
 -- KilledUnit Talk(SAY_SLAY 3) player-gated (event 3,
 -- commanders precedent); JustDied Talk(SAY_DEATH 4).
+-- EncounterCleared credit cast PORTED tick 246: DoCastAOE
+-- (ENCOUNTER_CREDIT 59450, triggered) self-cast when the fourth
+-- horseman dies — the all-four-done branch in the died handler is
+-- the C++-exact trigger point; the spell's effect is data-side.
 -- CASTING gates, partial, PORTED 2026-11-04: each derived
 -- _UpdateAI's HasUnitState(UNIT_STATE_CASTING) check sits AFTER
 -- the event loop (baron :441, thane :517, lady :592, sir :662),
@@ -94,15 +98,19 @@
 -- AttackStart leg in C++ (their threat-empty EnterEvadeMode
 -- legs stay unbridged);
 -- JustDied instance legs (boss-state check, death-time
--- latches, CheckIsMovementFinished, EncounterCleared
--- DoCastAOE ENCOUNTER_CREDIT 59450, timed-kill
--- achievement data); SpellHitTarget on lady voidzone
+-- latches, CheckIsMovementFinished, timed-kill achievement
+-- data — the EncounterCleared credit cast itself IS ported,
+-- see above); SpellHitTarget on lady voidzone
 -- (C++ has no SpellHitTarget arm for lady — only the
 -- direct Talk on cast, ported above); the mark
 -- AuraScript stack-damage table (SPELL_MARK_DAMAGE
 -- 28836) and consumption SpellScript (no SpellScript
 -- bridge); Reset ResetLootMode + summons.DespawnAll
--- (no bridges); C++ Talk(SAY_AGGRO) fires once for the
+-- (no bridges); ctor respawn-time leg (a dead horseman respawns
+-- in 10s while the encounter is not DONE — instance-state-gated,
+-- no bridge); EnterEvadeMode -> ResetEncounter (instance
+-- NOT_STARTED + despawn all — no bridge); C++ Talk(SAY_AGGRO)
+-- fires once for the
 -- whole encounter (instance-gated) — Lua has no instance
 -- state, so each horseman Talks on its own engage.
 
@@ -130,6 +138,7 @@ local SPELL_UNYIELDING_PAIN = 57381
 local SPELL_HOLY_WRATH = 28883
 local SPELL_HOLY_BOLT = 57376
 local SPELL_CONDEMNATION = 57377
+local SPELL_ENCOUNTER_CREDIT = 59450
 
 local timers = {}
 local shouldSay = {}
@@ -390,6 +399,9 @@ local function makeHandlers(which)
                     if portal then
                         portal:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
                     end
+                    -- C++ EncounterCleared: after SetBossState(DONE),
+                    -- DoCastAOE(ENCOUNTER_CREDIT 59450, triggered).
+                    creature:CastSpell(creature, SPELL_ENCOUNTER_CREDIT, true)
                 end
             end
         end

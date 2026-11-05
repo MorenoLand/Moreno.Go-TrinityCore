@@ -63,9 +63,10 @@
 -- EVENT_SUMMON — PORTED below (summonTick): Is25ManRaid() ->
 -- SummonCreatureGroup(SUMMON_GROUP_CHOW_25MAN 2) else
 -- SummonCreatureGroup(SUMMON_GROUP_CHOW_10MAN 1)
--- (boss_gluth.cpp:185-191), 15s init, 10s repeat; no IsCasting gate
--- in C++ (the :139/:264 gates cover wound/enrage/decimate/berserk
--- only). Group coords DB-side; creature:SummonCreatureGroup bridged
+-- (boss_gluth.cpp:185-191), 15s init, 10s repeat; the :139 pre-loop
+-- HasUnitState(CASTING) gate covers EVENT_SUMMON too (500ms IsCasting
+-- defer ported, mal_ganis idiom). Group coords DB-side;
+-- creature:SummonCreatureGroup bridged
 -- 2026-11-05 (tick 238). (The old "Is25ManRaid difficulty gate"
 -- wording EVENT_SEARCH_ZOMBIE_SINGLE — summons
 -- list iteration + cross-AI SetData(TOBE_EATEN) + REACT_PASSIVE +
@@ -74,7 +75,8 @@
 -- SEARCH_SINGLE 28239) + react-state / speed restore legs — no
 -- bridges; EVENT_SEARCH_ZOMBIE_MULTI — the per-zombie DoCastAOE(
 -- ZOMBIE_CHOW_SEARCH_MULTI 28404) fires only when the summons-list
--- scan finds an alive zombie >18.0 yards out and is skipped while
+-- scan finds an alive zombie within 18.0 yards (dist > 18.0 keeps
+-- scanning; the AoE hits zombies within 10 yards) and is skipped while
 -- STATE_GLUTH_EATING (the 20x one-shot 3s*i schedule rides the
 -- EVENT_DECIMATE arm). DoCastAOE itself bridges to self-cast
 -- (boss_ai.go convention) — the real blocker is the summon-list /
@@ -193,8 +195,15 @@ end
 -- C++ EVENT_SUMMON: Is25ManRaid() -> SummonCreatureGroup(
 -- SUMMON_GROUP_CHOW_25MAN 2) else SummonCreatureGroup(
 -- SUMMON_GROUP_CHOW_10MAN 1) (boss_gluth.cpp:185-191), 15s init,
--- 10s repeat (events.Repeat). No IsCasting gate in C++.
+-- 10s repeat (events.Repeat). The :139 pre-loop HasUnitState(CASTING)
+-- gate covers EVENT_SUMMON too — 500ms IsCasting defer (mal_ganis idiom).
 local function summonTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summon", 500, function()
+            summonTick(creature, guid)
+        end)
+        return
+    end
     if creature:Is25ManRaid() then
         creature:SummonCreatureGroup(2)
     else

@@ -87,11 +87,14 @@
 -- icebolt-aura strip via the loatheb GetPlayersInWorld idiom +
 -- SetReactState(REACT_AGGRESSIVE) + hover off, gated on the flight
 -- latch; land emote ported via creature:PerformEmote(293) in
--- landTick below (tick 224); _Reset bookkeeping stays out.
--- DamageTaken — PORTED 2026-10-25: air-phase death prevention
--- (damage = health-1) via the ev9 numeric-return bridge
--- (fireCreatureDamageTaken; tesla/halazzi precedent), gated on the
--- flight latch.
+-- landTick below (tick 224) and in Reset itself (tick 246, :162);
+-- _Reset bookkeeping stays out.
+-- DamageTaken — PORTED 2026-10-25, lethal-only guard fixed tick 246:
+-- air-phase death prevention (damage = health-1 ONLY when the hit is
+-- lethal, damage >= health, boss_sapphiron.cpp:171-176) via the ev9
+-- numeric-return bridge (fireCreatureDamageTaken; tesla/halazzi
+-- precedent), gated on the flight latch. The pre-fix port rewrote
+-- EVERY flight-phase hit to health-1.
 -- SpellHitTarget — SPELL_CHECK_RESISTS resist comparison — ev15 IS
 -- bridged (caster-side, boss_ai.go:1817/1833; sapphiron self-casts
 -- 60539) but the arm stays out on the resistance read alone:
@@ -495,16 +498,18 @@ local function sapphironDied(event, creature, killer)
     end
 end
 
--- C++ Reset, flight-phase leg: strip SPELL_ICEBOLT on players
--- (loatheb idiom) + SetReactState(REACT_AGGRESSIVE) + hover off
--- (land emote has no bridge). Gated on the flight latch — the
--- non-flight Reset is _Reset bookkeeping only.
+-- C++ Reset (:154-168), flight-phase leg: strip SPELL_ICEBOLT on
+-- players (loatheb idiom) + SetReactState(REACT_AGGRESSIVE) + hover
+-- off + land emote (PerformEmote(293), :162; flying latch implies
+-- hovering). Gated on the flight latch — the non-flight Reset is
+-- _Reset bookkeeping only.
 local function sapphironReset(event, creature)
     local guid = creature:GetGUID()
     local wasFlying = flying[guid]
     cancelTimers(guid)
     if wasFlying then
         creature:SetReactState(REACT_AGGRESSIVE)
+        creature:PerformEmote(293) -- C++ Reset :162 (EMOTE_ONESHOT_LAND)
         creature:SetHover(false)
         local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
         for _, plr in ipairs(GetPlayersInWorld()) do
@@ -515,13 +520,15 @@ local function sapphironReset(event, creature)
     end
 end
 
--- C++ DamageTaken: while in PHASE_FLIGHT, damage = health - 1 (the
--- boss cannot die mid-air). Event 9's second return rewrites
--- damage (fireCreatureDamageTaken; tesla/halazzi precedent).
+-- C++ DamageTaken (:171-176): while in PHASE_FLIGHT, a LETHAL hit only
+-- (damage >= health) is capped to health - 1 (the boss cannot die
+-- mid-air); non-lethal damage passes through. Event 9's second
+-- return rewrites damage (fireCreatureDamageTaken; tesla/halazzi
+-- precedent).
 local function sapphironDamageTaken(event, creature, attacker, damage)
     if flying[creature:GetGUID()] then
         local hp = creature:GetHealth()
-        if hp > 0 then
+        if damage >= hp and hp > 0 then
             return false, hp - 1
         end
     end
