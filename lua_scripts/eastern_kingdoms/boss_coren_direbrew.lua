@@ -115,6 +115,7 @@ local GOSSIP_APOLOGIZE_TEXT = "Sorry, I'm too busy to fight."
 
 local timers = {}
 local sisterFlags = {} -- per-guid one-shot latches for the DamageTaken sister summons
+local corenSisters = {} -- per-guid latched sister objects (boss_coren_direbrew.cpp:151/207/516 DespawnAll)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -184,14 +185,29 @@ local function onEnterCombat(event, creature, target)
     end)
 end
 
+local function despawnCorenSisters(guid)
+    local sisters = corenSisters[guid]
+    if sisters then
+        for _, sister in ipairs(sisters) do
+            if sister then
+                sister:Despawn()
+            end
+        end
+        corenSisters[guid] = nil
+    end
+end
+
 local function onLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     sisterFlags[guid] = nil
     cancelTimers(guid)
-    -- C++ EnterEvadeMode: _EnterEvadeMode() + summons.DespawnAll() (moot —
-    -- mole machines are GO AI, unmodeled) + _DespawnAtEvade(Seconds(10))
-    -- (boss_coren_direbrew.cpp:150-152); the 10s is respawn-side, the
-    -- despawn itself is immediate (ScriptedCreature.cpp:616).
+    -- C++ EnterEvadeMode (boss_coren_direbrew.cpp:148-152): _EnterEvadeMode()
+    -- + summons.DespawnAll() + _DespawnAtEvade(Seconds(10)); the sisters are
+    -- Lua-summoned (unlike the antagonists, never summoned in Lua, and the
+    -- mole machines, GO AI unmodeled), so they are latched and despawned
+    -- here, ahead of Coren's own despawn (C++ order). Despawn fires event
+    -- 20, not event 21, so no 1s sister-respawn re-arm follows.
+    despawnCorenSisters(guid)
     creature:Despawn()
 end
 
@@ -199,6 +215,10 @@ local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
     sisterFlags[guid] = nil
     cancelTimers(guid)
+    -- C++ JustDied (boss_coren_direbrew.cpp:204-206) calls _JustDied(),
+    -- whose summons.DespawnAll() (ScriptedCreature.cpp:513-516) drops the
+    -- sisters; same latch as the evade path above.
+    despawnCorenSisters(guid)
 end
 
 -- C++ SummonSister (boss_coren_direbrew.cpp:217-220): SummonCreature at
@@ -211,6 +231,13 @@ local function summonSister(creature, entry)
         TEMPSUMMON_DEAD_DESPAWN)
     if sister then
         sister:DoZoneInCombat()
+        local guid = creature:GetGUID()
+        local list = corenSisters[guid]
+        if not list then
+            list = {}
+            corenSisters[guid] = list
+        end
+        list[#list + 1] = sister
     end
 end
 
@@ -246,6 +273,10 @@ end
 local function onReset(event, creature)
     sisterFlags[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (boss_coren_direbrew.cpp:137-139) calls _Reset(), whose
+    -- summons.DespawnAll() (ScriptedCreature.cpp:499-507) drops the sisters;
+    -- Go fires 23 ahead of 2/4, so this also covers evade and death.
+    despawnCorenSisters(creature:GetGUID())
     -- C++ Reset() (boss_coren_direbrew.cpp:138-141): SetImmuneToPC(true) +
     -- SetFaction(FACTION_FRIENDLY) — both bridged (ingvar precedent).
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
