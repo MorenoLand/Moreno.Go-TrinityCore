@@ -54,8 +54,17 @@
 -- 62320), 2-arg = non-triggered self-cast. The gate is entry-resolved
 -- in C++ (entry 32877 = NPC_DARK_RUNE_WARBRINGER, ulduar.h:184), so the
 -- port registers that entry directly; the companion
--- DoAction(ACTION_ACTIVATE_RUNIC_SMASH) leg on the runic colossus has
--- no DoAction / instance bridge.
+-- DoAction(ACTION_ACTIVATE_RUNIC_SMASH) leg on the runic colossus is
+-- PORTED 2026-11-05 (tick 214): arena acolyte 33110 + iron ring guard
+-- 32874 engage -> colossus:DoAction(1) (ev38), see arenaAddEnterCombat.
+-- npc_runic_colossusAI EVENT_RUNIC_SMASH (lines 1480-1483) — DoCast(me,
+-- RAND(62058, 62057)), 7s init, Repeat(6s) — PORTED 2026-11-05 (tick 214)
+-- via colossusDoAction (ev38) + _runicActive latch.
+-- npc_thorim_pre_phaseAI JustDied (lines 1164-1168) -> thorim
+-- DoAction(ACTION_INCREASE_PREADDS_COUNT 0); boss_thorimAI DoAction
+-- (lines 835-840) ++_killedCount >= 6 -> SetImmuneToPC(false) +
+-- DoZoneInCombat — PORTED 2026-11-05 (tick 214) via preAddDied (ev4
+-- on the 4 pre-add entries) + thorimDoAction (ev38).
 --
 -- DOCUMENTED-ONLY (no bridge; not registered):
 -- boss_thorimAI EVENT_SAY_SIF_START (lines 700-702) / EVENT_START_SIF_CHANNEL
@@ -83,7 +92,8 @@
 -- plain me->DoZoneInCombat() in a ported JustEngagedWith arm.)
 -- boss_thorimAI EVENT_BERSERK (lines 750+) — phase-conditional Talk(SAY_WIPE
 -- 6 / SAY_BERSERK 5) + triggered casts; DoAction(ACTION_BERSERK)-gated
--- reschedule; no DoAction / berserk bridge.
+-- reschedule. ev38 IS bridged (tick 206); the sender is EnterEvadeMode,
+-- which has no bridge (event 25 unused) — the arm stays out on the sender.
 -- boss_thorimAI phase-2 machine (DamageTaken CanStartPhase2, lines ~925-951:
 -- Talk(SAY_JUMPDOWN 3) + EVENT_JUMPDOWN / EVENT_ACTIVATE_LIGHTNING_FIELD /
 -- EVENT_UNBALANCING_STRIKE (DoCastVictim 62130, 15s, Repeat(15s,20s)) /
@@ -107,8 +117,8 @@
 -- the Don't-Stand-in-the-Lightning achievement check (no achievement
 -- bridge) and the triggering Lightning Release cast itself rides the
 -- unported pillar machine.
--- npc_runic_colossusAI EVENT_RUNIC_SMASH (lines 1480-1483) —
--- DoAction(ACTION_ACTIVATE_RUNIC_SMASH)-gated; no DoAction bridge.
+-- npc_runic_colossusAI EVENT_RUNIC_SMASH (lines 1480-1483) — PORTED
+-- 2026-11-05 (tick 214), see PORTED ARMS.
 -- npc_runic_colossusAI / npc_ancient_rune_giantAI Reset + JustDied — GO door legs
 -- (DATA_RUNIC_DOOR / DATA_STONE_DOOR) PORTED below via boss-anchored
 -- FindNearestGameObject + SetGoState (magmus/malchezaar precedent; the
@@ -117,12 +127,14 @@
 -- PORTED in colossusDied below (500yd FindNearestCreature sweeps, 60yd
 -- grid sweep for the giant's honor-guard/acolyte summons).
 -- npc_sifAI (entry 33196) — all events gated by DoAction(ACTION_START_HARD_MODE);
--- no DoAction bridge; not registered.
+-- ev38 IS bridged (tick 206) but the sender is EVENT_JUMPDOWN, unported
+-- (MoveJump leg has no bridge); not registered.
 -- npc_thorim_pre_phaseAI / npc_thorim_arena_phaseAI — per-entry trash-ability
 -- tables (separate trash creature entries, not the boss file scope); the
 -- DARK_RUNE_WARBRINGER AURA_OF_CELERITY engage arm is ported (see PORTED
--- ARMS), the per-entry Reset ability-schedule tables and the arena-phase
--- DoAction legs stay out. The pre-phase ShouldSparWith / DamageTaken
+-- ARMS), as are the pre-phase JustDied kill-count relay and the arena-phase
+-- runic-smash relay (both PORTED 2026-11-05, tick 214). The per-entry Reset
+-- ability-schedule tables stay out. The pre-phase ShouldSparWith / DamageTaken
 -- pet-damage nullify arms (boss_thorim.cpp:1170-1178, !attacker->GetAffectingPlayer()
 -- -> damage = 0) ride the same unregistered pre-phase trash entries; the
 -- unit-side GetAffectingPlayer pet-owner resolution has no Lua bridge.
@@ -147,6 +159,8 @@ local ENTRY_DARK_RUNE_ACOLYTE_PRE = 32886 -- ulduar.h:178
 local ENTRY_IRON_RING_GUARD = 32874 -- ulduar.h:181
 local ENTRY_IRON_HONOR_GUARD = 32875 -- ulduar.h:182
 local ENTRY_DARK_RUNE_ACOLYTE = 33110 -- ulduar.h:187
+local ACTION_INCREASE_PREADDS_COUNT = 0 -- boss_thorim.cpp:268
+local ACTION_ACTIVATE_RUNIC_SMASH = 1 -- boss_thorim.cpp:269
 local SPELL_LIGHTNING_DESTRUCTION = 62393 -- boss_thorim.cpp:45
 
 local SAY_AGGRO_1 = 0
@@ -163,6 +177,8 @@ local EMOTE_RUNIC_BARRIER = 0
 local SPELL_RUNIC_BARRIER = 62338
 local SPELL_SMASH = 62339
 local SPELL_RUNIC_CHARGE = 62613
+local SPELL_RUNIC_SMASH_LEFT = 62058 -- boss_thorim.cpp:81
+local SPELL_RUNIC_SMASH_RIGHT = 62057 -- boss_thorim.cpp:80
 
 local EMOTE_RUNIC_MIGHT = 0
 local SPELL_RUNIC_FORTIFICATION = 62942
@@ -185,6 +201,8 @@ local function cancelTimers(guid)
 end
 
 local thorimFinished = {}
+local thorimKilledCount = {}
+local colossusRunicActive = {}
 
 local function schedule(guid, key, delay, fn)
     local per = timers[guid]
@@ -279,6 +297,7 @@ local function thorimReset(event, creature)
     creature:SetDisableGravity(true)
     creature:SetRooted(true)
     cancelTimers(creature:GetGUID())
+    thorimKilledCount[creature:GetGUID()] = nil
     if creature:IsAlive() then
         creature:SummonCreature(ENTRY_JORMUNGAR_BEHEMOTH, 2149.68, -263.477, 419.679, 3.120, 5, 3000)
         creature:SummonCreature(ENTRY_MERCENARY_CAPTAIN_A, 2131.31, -271.640, 419.840, 2.188, 5, 3000)
@@ -286,6 +305,36 @@ local function thorimReset(event, creature)
         creature:SummonCreature(ENTRY_MERCENARY_SOLDIER_A, 2123.32, -254.770, 419.840, 6.170, 5, 3000)
         creature:SummonCreature(ENTRY_MERCENARY_SOLDIER_A, 2120.10, -258.990, 419.840, 6.250, 5, 3000)
         creature:SummonCreature(ENTRY_DARK_RUNE_ACOLYTE_PRE, 2129.09, -277.142, 419.756, 1.222, 5, 3000)
+    end
+end
+
+-- C++ npc_thorim_pre_phaseAI::JustDied (boss_thorim.cpp:1164-1168):
+-- instance->GetCreature(BOSS_THORIM)->AI()->DoAction(
+-- ACTION_INCREASE_PREADDS_COUNT 0) — the instance fetch rides the
+-- 500yd FindNearestCreature sweep (colossusDied precedent below).
+local function preAddDied(event, creature, killer)
+    local thorim = creature:FindNearestCreature(ENTRY_THORIM, 500)
+    if thorim then
+        thorim:DoAction(ACTION_INCREASE_PREADDS_COUNT)
+    end
+end
+
+-- C++ boss_thorimAI::DoAction ACTION_INCREASE_PREADDS_COUNT
+-- (boss_thorim.cpp:835-840): ++_killedCount >= 6 -> SetImmuneToPC(false)
+-- + DoZoneInCombat(me) — the encounter start. The count is GUID-keyed
+-- and cleared in thorimReset (C++ Initialize() in Reset, :456-461).
+-- The RemoveFlag leg is currently a no-op: Lua never sets Thorim immune
+-- (header), but it is the C++ arm, kept verbatim.
+local function thorimDoAction(event, creature, action)
+    if action ~= ACTION_INCREASE_PREADDS_COUNT then
+        return
+    end
+    local guid = creature:GetGUID()
+    local count = (thorimKilledCount[guid] or 0) + 1
+    thorimKilledCount[guid] = count
+    if count >= 6 then
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        creature:DoZoneInCombat()
     end
 end
 
@@ -388,11 +437,51 @@ local function colossusRunicChargeTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_RUNIC_SMASH (boss_thorim.cpp:1480-1483): DoCast(me,
+-- RAND(SPELL_RUNIC_SMASH_LEFT 62058, SPELL_RUNIC_SMASH_RIGHT 62057)),
+-- non-triggered self-cast, 7s init via DoAction, Repeat(6s).
+local function colossusRunicSmashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "runicSmash", 500, function()
+            colossusRunicSmashTick(creature, guid)
+        end)
+        return
+    end
+    if math.random(2) == 1 then
+        creature:CastSpell(creature, SPELL_RUNIC_SMASH_LEFT)
+    else
+        creature:CastSpell(creature, SPELL_RUNIC_SMASH_RIGHT)
+    end
+    schedule(guid, "runicSmash", 6000, function()
+        colossusRunicSmashTick(creature, guid)
+    end)
+end
+
+-- C++ npc_runic_colossusAI::DoAction (boss_thorim.cpp:1414-1426):
+-- npc_thorim_minibossAI::DoAction passes through (handles only
+-- ACTION_ACTIVATE_ADDS 2); if _runicActive return; on
+-- ACTION_ACTIVATE_RUNIC_SMASH (1): latch + ScheduleEvent(
+-- EVENT_RUNIC_SMASH, 7s). The latch is GUID-keyed and cleared in
+-- colossusReset (C++ Initialize() in Reset).
+local function colossusDoAction(event, creature, action)
+    if action ~= ACTION_ACTIVATE_RUNIC_SMASH then
+        return
+    end
+    local guid = creature:GetGUID()
+    if colossusRunicActive[guid] then
+        return
+    end
+    colossusRunicActive[guid] = true
+    schedule(guid, "runicSmash", 7000, function()
+        colossusRunicSmashTick(creature, guid)
+    end)
+end
+
 -- C++ npc_runic_colossusAI::JustEngagedWith (boss_thorim.cpp:1444-1449):
 -- DoZoneInCombat() first (PORTED 2026-10-23 — bridge live,
 -- engine/world/lua_creature_events.go), then _events.Reset() and the
 -- three ScheduleEvent arms. (EVENT_RUNIC_SMASH rides
--- DoAction(ACTION_ACTIVATE_RUNIC_SMASH) — no DoAction bridge.)
+-- DoAction(ACTION_ACTIVATE_RUNIC_SMASH) — PORTED 2026-11-05, tick 214.)
 local function colossusEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- C++ :1444, first arm (bridge live 2026-10-23)
     local guid = creature:GetGUID()
@@ -419,6 +508,7 @@ end
 -- IsAlive-guarded like thorimReset. The runic-door instance leg stays out.
 local function colossusReset(event, creature)
     cancelTimers(creature:GetGUID())
+    colossusRunicActive[creature:GetGUID()] = nil
     local runicDoor = creature:FindNearestGameObject(GO_THORIM_RUNIC_DOOR, 100)
     if runicDoor then runicDoor:SetGoState(1) end
     if creature:IsAlive() then
@@ -577,11 +667,13 @@ RegisterCreatureEvent(ENTRY_THORIM, 4, thorimDied)
 RegisterCreatureEvent(ENTRY_THORIM, 9, thorimDamageTaken)
 RegisterCreatureEvent(ENTRY_THORIM, 23, thorimReset)
 RegisterCreatureEvent(ENTRY_THORIM, 19, thorimJustSummoned)
+RegisterCreatureEvent(ENTRY_THORIM, 38, thorimDoAction)
 
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 1, colossusEnterCombat)
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 2, colossusLeaveCombat)
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 4, colossusDied)
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 23, colossusReset)
+RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 38, colossusDoAction)
 
 -- C++ npc_runic_colossusAI::MoveInLineOfSight (boss_thorim.cpp:1409) is an
 -- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight
@@ -605,10 +697,33 @@ RegisterCreatureEvent(ENTRY_ANCIENT_RUNE_GIANT, 23, giantReset)
 -- SPELL_AURA_OF_CELERITY 62320), 2-arg = non-triggered self-cast.
 -- The gate is entry-resolved (entry 32877 = NPC_DARK_RUNE_WARBRINGER,
 -- ulduar.h:184), so the arm registers on that entry directly; the
--- companion DoAction(ACTION_ACTIVATE_RUNIC_SMASH) colossus leg has no
--- DoAction / instance bridge.
+-- companion DoAction(ACTION_ACTIVATE_RUNIC_SMASH) colossus leg is
+-- PORTED 2026-11-05 (tick 214), see arenaAddEnterCombat.
 local function warbringerEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_AURA_OF_CELERITY)
 end
 
+-- C++ npc_thorim_arena_phaseAI::JustEngagedWith (boss_thorim.cpp:1272-1280):
+-- the warbringer AURA_OF_CELERITY arm is ported above; the companion
+-- leg — if !_isInArena, instance->GetCreature(DATA_RUNIC_COLOSSUS)->
+-- AI()->DoAction(ACTION_ACTIVATE_RUNIC_SMASH 1) — fires for the
+-- arena-phase members with _isInArena=false: the Dark Rune Acolyte
+-- (33110; the pre-phase acolyte 32886 is entry-gated true, :1240)
+-- and the Iron Ring Guard (32874; default branch, :1245). The
+-- champion/warbringer/commoner/evoker are _isInArena=true (:1236)
+-- and never send. The instance fetch rides the 500yd
+-- FindNearestCreature sweep (colossusDied precedent).
+local function arenaAddEnterCombat(event, creature, target)
+    local colossus = creature:FindNearestCreature(ENTRY_RUNIC_COLOSSUS, 500)
+    if colossus then
+        colossus:DoAction(ACTION_ACTIVATE_RUNIC_SMASH)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_DARK_RUNE_WARBRINGER, 1, warbringerEnterCombat)
+RegisterCreatureEvent(ENTRY_DARK_RUNE_ACOLYTE, 1, arenaAddEnterCombat)
+RegisterCreatureEvent(ENTRY_IRON_RING_GUARD, 1, arenaAddEnterCombat)
+RegisterCreatureEvent(ENTRY_JORMUNGAR_BEHEMOTH, 4, preAddDied)
+RegisterCreatureEvent(ENTRY_MERCENARY_CAPTAIN_A, 4, preAddDied)
+RegisterCreatureEvent(ENTRY_MERCENARY_SOLDIER_A, 4, preAddDied)
+RegisterCreatureEvent(ENTRY_DARK_RUNE_ACOLYTE_PRE, 4, preAddDied)
