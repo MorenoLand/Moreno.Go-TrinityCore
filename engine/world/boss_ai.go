@@ -12625,9 +12625,10 @@ func init() {
 	// ChannelerDied/GetChanneled), the Reset passive/
 	// non-attackable/immune arms and the pre-combat evocation arm
 	// have no summon/cross-creature/flag/react/immune/unit-state
-	// bridges; heroic teleport, heroic spell ids and the
-	// burning-nova AddAura have no difficulty/teleport/aura
-	// bridges (timer bookkeeping exact). The add
+	// bridges; heroic teleport + burning-nova AddAura are ported
+	// (teleport/aura bridges live; burning-nova interrupt leg
+	// ported 2026-11-04, IsCasting-gated InterruptNonMeleeSpells).
+	// The add
 	// npc_shadowmoon_channeler (17653) casts mark of shadow on a
 	// random player and shadow bolt on the victim; its pre-combat
 	// GetChanneled channeling machine and its Kelidan relays are

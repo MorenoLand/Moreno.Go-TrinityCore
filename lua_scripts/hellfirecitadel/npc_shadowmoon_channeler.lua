@@ -21,7 +21,9 @@
 -- Initialize() values (shadowBolt 1000+rand32()%1000 /
 -- markOfShadow 5000+rand32()%2000 — the C++ JustEngagedWith's
 -- ChannelerEngaged relay is cross-creature blocked, the
--- InterruptNonMeleeSpells arm stays unmodeled (interrupt-axis verdict, mennu/thespia precedent; IsCasting is bridged — live CastingUntil window) and the
+-- JustEngagedWith InterruptNonMeleeSpells arm is vacuous in the Lua
+-- model (the pump starts at engage; the pre-combat channeling cast it
+-- would clear is unmodeled) and the
 -- DoStartMovement arm (= MoveChase(victim)) is subsumed by the engine combat chase) + 1s scheduler
 -- pump (a port of UpdateAI — 1s granularity exact for all C++
 -- timers; the !UpdateVictim early return collapses into the
@@ -49,9 +51,11 @@
 -- (who) relay) and the JustDied ChannelerDied(killer) relay
 -- (which drives Kelidan's all-channelers-dead activation —
 -- REACT_AGGRESSIVE + RemoveFlag(NON_ATTACKABLE) +
--- SetImmuneToAll(false) + AttackStart(killer)); IsCasting is bridged
--- (live CastingUntil window) but the Reset/JustEngagedWith InterruptNonMeleeSpells
--- arms stay unmodeled (interrupt-axis verdict, mennu/thespia precedent); H_SPELL_SHADOW_BOLT
+-- SetImmuneToAll(false) + AttackStart(killer)); the Reset/
+-- JustEngagedWith InterruptNonMeleeSpells arms are vacuous in the Lua
+-- model (no cast can be in flight at engage/reset: the pump starts at
+-- engage and is cancelled at reset; the pre-combat channeling cast is
+-- unmodeled); H_SPELL_SHADOW_BOLT
 -- 15472 is an unused C++ enum member (the cast is
 -- unconditional); no movement bridge — the JustEngagedWith
 -- DoStartMovement arm is engine-chase-subsumed (see above).

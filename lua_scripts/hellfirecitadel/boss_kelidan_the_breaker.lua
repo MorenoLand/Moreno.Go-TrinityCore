@@ -25,7 +25,9 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ Initialize() values
 -- (shadowVolley 1000 / burningNova 15000 / corruption 5000 / firenova
 -- false — the C++ JustEngagedWith does not schedule anything; the
--- InterruptNonMeleeSpells arm stays unmodeled (interrupt-axis verdict, mennu/thespia precedent; IsCasting is bridged — live CastingUntil window, lua_creature_events.go:1950) and the
+-- JustEngagedWith InterruptNonMeleeSpells arm is vacuous in the Lua
+-- model (the pump starts at engage; the pre-combat evocation cast it
+-- would clear is unmodeled) and the
 -- DoStartMovement arm (= MoveChase(victim), ScriptedCreature.cpp:159-163) is subsumed by the engine combat chase) + Talk(SAY_WAKE) + 1s
 -- scheduler pump (a port of UpdateAI — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into the
@@ -42,7 +44,7 @@
 -- (C++ {30s,50s}) — non-triggered DoCastSelf (C++-exact), re-arm
 -- {30s,50s} regardless (C++-exact); burning nova: 15s init then
 -- 20000+rand32()%8000 (C++ {20s,28s}) — the InterruptNonMeleeSpells
--- arm stays unmodeled (interrupt-axis verdict, mennu/thespia precedent; IsCasting is bridged — live CastingUntil window); Talk(SAY_NOVA); the AddAura(SPELL_
+-- arm is PORTED 2026-11-04 (bossTick: IsCasting-gated InterruptNonMeleeSpells(true) before Talk); Talk(SAY_NOVA); the AddAura(SPELL_
 -- BURNING_NOVA 30940, me) arm is ported below (stale "no aura
 -- bridge" claim retracted — creature AddAura is bridged); the
 -- IsHeroic() DoTeleportAll arm is ported below (stale "no teleport
@@ -86,9 +88,9 @@
 -- !UpdateVictim evocation (SPELL_
 -- EVOCATION 30935) check_Timer arm, which only fires in that
 -- state; IsCasting is bridged (live CastingUntil window,
--- lua_creature_events.go:1950) but the JustEngagedWith and burning-
--- nova InterruptNonMeleeSpells arms stay unmodeled (interrupt-axis verdict,
--- mennu/thespia precedent); the burning-nova AddAura(30940) arm is ported
+-- lua_creature_events.go:1950); the burning-nova InterruptNonMeleeSpells
+-- arm is PORTED 2026-11-04 (bossTick) and the JustEngagedWith leg is
+-- vacuous in the Lua model (see above); the burning-nova AddAura(30940) arm is ported
 -- (stale "no aura bridge" claim retracted); the heroic DoTeleportAll
 -- arm is ported below (stale "no teleport bridge" retracted —
 -- player:TeleportNear is bridged); the H_SPELL_ variants
@@ -187,14 +189,23 @@ local function bossTick(creature, guid)
     end
 
     -- Burning nova: 15s init then 20000+rand32()%8000 (C++
-    -- {20s,28s}) — the InterruptNonMeleeSpells arm has no
-    -- unit-state bridge; Talk(SAY_NOVA); the AddAura(30940) arm is
+    -- {20s,28s}) — the InterruptNonMeleeSpells arm is PORTED
+    -- 2026-11-04 (see bossTick); Talk(SAY_NOVA); the AddAura(30940) arm is
     -- ported below (stale "no aura bridge" claim retracted) and the
     -- heroic DoTeleportAll arm is ported below (stale "no teleport
     -- bridge" retracted — player:TeleportNear is bridged); firenova=
     -- true with a 5s firenovaTimer, re-arm {20s,28s} regardless
     -- (C++-exact).
     if st.burningNova <= 1000 then
+        -- C++ :232-233: if (IsNonMeleeSpellCast(false))
+        -- InterruptNonMeleeSpells(true), before Talk — PORTED
+        -- 2026-11-04 via creature:IsCasting() (live CastingUntil
+        -- window, lua_creature_events.go:1950) + the bridged
+        -- InterruptNonMeleeSpells(true) arm (lua_creature_events.go:1995;
+        -- freywinn precedent).
+        if creature:IsCasting() then
+            creature:InterruptNonMeleeSpells(true)
+        end
         creature:Talk(SAY_NOVA)
         -- C++ me->AddAura(SPELL_BURNING_NOVA, me) (C++-exact —
         -- the stale "no aura bridge" claim is retracted: creature
