@@ -39374,6 +39374,18 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		pMap, pInst = ts.player.Map, ts.player.InstanceID
 	}
 	ts.playerStateMu.Unlock()
+	// Aura::CallScriptEffectPeriodicHandlers (SpellAuras.cpp:2341-2361):
+	// the script hook runs first in AuraEffect::PeriodicTick
+	// (SpellAuraEffects.cpp:868-872) — before the channel re-face below
+	// and before the whole switch — and a handler returning true is
+	// PreventDefaultAction, skipping the default tick. _ticksDone already
+	// incremented above (AuraEffect::Update, SpellAuraEffects.cpp:827-830).
+	if ts.server != nil {
+		auraRef := &luaAuraRef{server: ts.server, spellID: aura.SpellID, player: ts, mapID: pMap, instanceID: pInst}
+		if ts.server.fireAuraPeriodicTick(context.Background(), aura, auraRef.luaAuraObject(), ts.luaPlayer()) {
+			return
+		}
+	}
 	ts.faceChannelTargetOnPeriodicTick(aura, tickSpell, tickKnown, pMap, pInst)
 	// UNIT_STATE_ISOLATED (SpellAuraEffects.cpp:3142-3182: banish-mechanic
 	// school immunity) — resolved once here, ahead of the playerStateMu
@@ -41565,6 +41577,21 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			return
 		}
 		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), pkt, key.Map, key.InstanceID, target.X, target.Y, target.Z, nil)
+	}
+	// Aura::CallScriptEffectPeriodicHandlers (SpellAuras.cpp:2341-2361),
+	// the script hook at the head of AuraEffect::PeriodicTick
+	// (SpellAuraEffects.cpp:868-872); a handler returning true is
+	// PreventDefaultAction, skipping the default tick. Ordering deltas:
+	// Go's dead-target gate above already ran, so a dead creature target
+	// never reaches the hook — C++ calls it and lets the handler decide —
+	// and the channel re-face above already ran, so a preventing handler
+	// on a channeled track-target aura does not skip the re-face the way
+	// C++ does. Live-target, non-channeled behavior is identical.
+	if s.server != nil {
+		auraRef := &luaAuraRef{server: s.server, spellID: aura.SpellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID}
+		if s.server.fireAuraPeriodicTick(ctx, aura, auraRef.luaAuraObject(), s.server.luaUnitObjectForGUID(key.Map, key.InstanceID, aura.TargetGUID)) {
+			return true
+		}
 	}
 
 	switch aura.AuraType {

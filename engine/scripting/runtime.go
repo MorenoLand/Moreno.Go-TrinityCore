@@ -364,6 +364,21 @@ const (
 	CreatureEventOnRemove                  = 37
 )
 
+// AuraEvents contract for RegisterAuraEvent(spellID, event, fn). There is
+// no C++ Eluna RegisterAuraEvent: this is a Go-side extension mirroring
+// Aura::CallScriptEffectPeriodicHandlers (SpellAuras.cpp:2341-2361), the
+// hook AuraEffect::PeriodicTick runs before its switch
+// (SpellAuraEffects.cpp:868-872). A handler returning boolean true is the
+// AuraScript PreventDefaultAction() arm: the default tick is skipped. The
+// hook fires for every periodic aura type, not just PERIODIC_DUMMY (226),
+// because C++ runs it ahead of the switch for all of them; handlers
+// registered for a spellID see its ticks regardless of which effect index
+// the C++ registration bound, so multi-effect auras must filter on the
+// aura object when the C++ script bound a single effect.
+const (
+	AuraEventOnPeriodic = 1
+)
+
 type Hook struct {
 	Kind  string
 	Event int
@@ -765,6 +780,13 @@ func (r *Runtime) TriggerPlayerEventUpdated(ctx context.Context, event int, args
 	return r.triggerNUpdated(ctx, "player", event, 1, args, update)
 }
 
+// TriggerAuraEvent fires hooks registered with
+// RegisterAuraEvent(spellID, event, fn) for the given spell. Callers pass
+// the Eluna-style leading event number in args, like TriggerCreatureEvent.
+func (r *Runtime) TriggerAuraEvent(ctx context.Context, spellID uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "aura:"+strconv.FormatUint(uint64(spellID), 10), event, args...)
+}
+
 // TriggerCreatureEvent fires hooks registered with
 // RegisterCreatureEvent(entry, event, fn) for the given creature entry.
 func (r *Runtime) TriggerCreatureEvent(ctx context.Context, entry uint32, event int, args ...any) ([]any, error) {
@@ -1059,6 +1081,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("RegisterGroupEvent", r.registerGroupEvent)
 	r.state.Register("RegisterVehicleEvent", r.registerVehicleEvent)
 	r.state.Register("RegisterCreatureEvent", r.registerCreatureEvent)
+	r.state.Register("RegisterAuraEvent", r.registerAuraEvent)
 	r.state.Register("RegisterUniqueCreatureEvent", r.registerUniqueCreatureEvent)
 	r.state.Register("RegisterCreatureGossipEvent", r.registerCreatureGossipEvent)
 	r.state.Register("RegisterGameObjectEvent", r.registerGameObjectEvent)
@@ -1074,6 +1097,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("RegisterGlobalEvent", r.registerServerEvent)
 	r.state.Register("ClearBattleGroundEvents", r.clearBattleGroundEvents)
 	r.state.Register("ClearCreatureEvents", r.clearCreatureEvents)
+	r.state.Register("ClearAuraEvents", r.clearAuraEvents)
 	r.state.Register("ClearUniqueCreatureEvents", r.clearUniqueCreatureEvents)
 	r.state.Register("ClearCreatureGossipEvents", r.clearCreatureGossipEvents)
 	r.state.Register("ClearGameObjectEvents", r.clearGameObjectEvents)
@@ -1769,6 +1793,14 @@ func (r *Runtime) registerVehicleEvent(state *lua.State) int {
 
 func (r *Runtime) registerBGEvent(state *lua.State) int {
 	return r.registerHook(state, "bg", lua.CheckInteger(state, 1), 2, 3)
+}
+
+func (r *Runtime) registerAuraEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "aura", 1, 2, 3, 4)
+}
+
+func (r *Runtime) clearAuraEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "aura")
 }
 
 func (r *Runtime) registerCreatureEvent(state *lua.State) int {

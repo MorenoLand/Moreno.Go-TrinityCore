@@ -308,3 +308,19 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 	}
 	return &scripting.Object{Type: "Aura", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
+
+// fireAuraPeriodicTick dispatches the RegisterAuraEvent hook for the aura's
+// spell (AuraEventOnPeriodic, args (event, aura, target)) and reports
+// whether any handler returned boolean true. That is the Go model of
+// Aura::CallScriptEffectPeriodicHandlers (SpellAuras.cpp:2341-2361): a
+// true return is AuraScript PreventDefaultAction(), and the caller skips
+// the default tick — the channel re-face and the whole PeriodicTick switch
+// (SpellAuraEffects.cpp:868-872). The hook fires for every periodic aura
+// type, like C++; Lua errors are logged by the runtime, never propagated.
+func (s *Server) fireAuraPeriodicTick(ctx context.Context, aura *activeAura, auraObj *scripting.Object, target any) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || aura == nil || auraObj == nil {
+		return false
+	}
+	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, aura.SpellID, scripting.AuraEventOnPeriodic, scripting.AuraEventOnPeriodic, auraObj, target)
+	return luaHookVeto(results)
+}

@@ -151,10 +151,12 @@
 -- summon casts 46000-46007 after cast), spell_dark_fiend_skin
 -- (dispel-remove -> passive + 45936 visual + 3s despawn),
 -- spell_transform_visual_missile_periodic (periodic 46208/46178
--- missile) and spell_summon_blood_elves_periodic (periodic 46050
--- re-cast) unmodeled (standing gaps); no aura-enumeration/kill/
--- despawn bridges (flag/visibility/react bridges exist — the arms
--- below stay out on unported-machine or soft-lock-avoidance grounds)
+-- missile) unmodeled (standing gap — its aura spell ID is DB-side,
+-- not in the C++ text); spell_summon_blood_elves_periodic is PORTED
+-- below via RegisterAuraEvent (46041 tick -> 46050 re-cast); no
+-- aura-enumeration/kill/despawn bridges (flag/visibility/react
+-- bridges exist — the arms below stay out on unported-machine or
+-- soft-lock-avoidance grounds)
 -- — the muru phase-two RemoveAllAuras arm and the entropius 2s
 -- DoResetPortals grid scan are bridged and ported; the muru
 -- NOT_SELECTABLE set stays out (summon-resolution ground, above)
@@ -242,6 +244,19 @@ local function schedule(guid, key, delay, fn)
 end
 
 -- ================= Muru (25741) =================
+
+-- C++ spell_summon_blood_elves_periodic::OnPeriodic
+-- (boss_muru.cpp:708-714): the aura target casts
+-- SPELL_SUMMON_BLOOD_ELVES_SCRIPT (46050) triggered on itself each
+-- tick; the aura itself (46041) is self-cast by muruBloodElves below,
+-- and the engine fires this hook from the periodic tick
+-- (RegisterAuraEvent, AuraEventOnPeriodic = 1). No PreventDefaultAction
+-- in C++, so the handler returns nothing.
+local function summonBloodElvesTick(event, aura, target)
+    target:CastSpell(target, SPELL_SUMMON_BLOOD_ELVES_SCRIPT, true)
+end
+
+RegisterAuraEvent(SPELL_SUMMON_BLOOD_ELVES_PERIODIC, 1, summonBloodElvesTick)
 
 -- C++ JustEngagedWith: triggered self-casts 45994/45998/46009;
 -- 10s one-shot triggered 46050 + 46041; 10min one-shot

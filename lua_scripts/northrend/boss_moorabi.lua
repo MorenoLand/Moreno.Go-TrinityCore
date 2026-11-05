@@ -58,7 +58,7 @@
 -- (snakes precedent) — documented-only.
 -- spell_moorabi_mojo_frenzy (AuraScript periodic dummy: cast-speed
 -- bonus = (100 - healthPct) * 4 via SPELL_MOJO_FRENZY_CAST_SPEED
--- 55096) — no AuraScript binding bridge (standing) — documented-only.
+-- 55096) — PORTED below via RegisterAuraEvent.
 -- OnLeaveCombat(2)/OnReset(23) cancel the scheduler (gargolmar
 -- precedent); BossAI _Reset/_JustDied instance bookkeeping has no
 -- bridge.
@@ -75,6 +75,7 @@ local EMOTE_TRANSFORMED = 6
 local EMOTE_ACTIVATE_ALTAR = 7
 
 local SPELL_MOJO_FRENZY = 55163
+local SPELL_MOJO_FRENZY_CAST_SPEED = 55096
 local SPELL_TRANSFORMATION = 55098
 local SPELL_SUMMON_PHANTOM_TRANSFORM = 55097
 local SPELL_SUMMON_PHANTOM = 55205 -- boss_moorabi.cpp:26
@@ -203,6 +204,20 @@ local function stabTick(creature, guid)
         stabTick(creature, guid)
     end)
 end
+
+-- C++ spell_moorabi_mojo_frenzy::HandlePeriodic
+-- (boss_moorabi.cpp:230-242): PreventDefaultAction, then the aura
+-- owner casts SPELL_MOJO_FRENZY_CAST_SPEED (55096) on itself with
+-- BP0 = (100 - healthPct) * 4 (0-400% cast-speed bonus). The aura
+-- itself (55163) is self-cast in moorabiEnterCombat below. Returning
+-- true is the PreventDefaultAction arm.
+local function mojoFrenzyTick(event, aura, target)
+    local bonus = math.floor((100 - target:GetHealthPct()) * 4)
+    target:CastCustomSpell(target, SPELL_MOJO_FRENZY_CAST_SPEED, true, bonus)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MOJO_FRENZY, 1, mojoFrenzyTick)
 
 local function moorabiEnterCombat(event, creature, target)
     local guid = creature:GetGUID()

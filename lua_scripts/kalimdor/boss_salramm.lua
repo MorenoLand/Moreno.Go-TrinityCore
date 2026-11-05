@@ -74,9 +74,8 @@
 --   SPELL_AURA_PERIODIC_DUMMY EFFECT_0 — GetCaster()->CastSpell
 --   (caster, SPELL_STEAL_FLESH_BUFF 52712, triggered) + GetCaster()->
 --   CastSpell(target, SPELL_STEAL_FLESH_DEBUFF 52711, triggered) —
---   AuraScript check/periodic handlers not modeled (standing queue;
---   the arthas crusader_strike SpellScript precedent); documented, not
---   registered. SPELL_STEAL_FLESH 52708's spell data drives it.
+--   PORTED below via RegisterAuraEvent. SPELL_STEAL_FLESH 52708's
+--   spell data drives it.
 -- - SAY_AGGRO (0) / SAY_SPAWN (1) / SAY_SLAY (2) / SAY_DEATH (3) /
 --   SAY_EXPLODE_GHOUL (4) / SAY_STEAL_FLESH (5) /
 --   SAY_SUMMON_GHOULS (6) are all the Talked lines; SAY_SPAWN fires
@@ -95,6 +94,8 @@ local SPELL_SUMMON_GHOULS = 52451
 local SPELL_EXPLODE_GHOUL = 52480
 local SPELL_SHADOW_BOLT   = 57725
 local SPELL_STEAL_FLESH   = 52708
+local SPELL_STEAL_FLESH_BUFF = 52712
+local SPELL_STEAL_FLESH_DEBUFF = 52711
 local SPELL_CURSE_OF_TWISTED_FLESH = 58845
 
 local timers = {}
@@ -234,6 +235,24 @@ local function onShadowBolt(creature, guid)
         onShadowBolt(creature, guid)
     end)
 end
+
+-- C++ spell_salramm_steal_flesh::HandlePeriodic
+-- (boss_salramm_the_fleshcrafter.cpp:144-151): the aura caster casts
+-- SPELL_STEAL_FLESH_BUFF (52712) triggered on itself and
+-- SPELL_STEAL_FLESH_DEBUFF (52711) triggered on the aura target each
+-- tick; the aura itself (52708) is cast on a random player in range
+-- by onStealFlesh below. The tick fires on the player-side executor
+-- (the target is a player), and aura:GetCaster() resolves Salramm.
+-- No PreventDefaultAction in C++, so the handler returns nothing.
+local function stealFleshTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster then
+        caster:CastSpell(caster, SPELL_STEAL_FLESH_BUFF, true)
+        caster:CastSpell(target, SPELL_STEAL_FLESH_DEBUFF, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_STEAL_FLESH, 1, stealFleshTick)
 
 -- C++ EVENT_STEAL_FLESH: Talk SAY_STEAL_FLESH (fires regardless of
 -- target — C++ Talks before SelectTarget) + DoCast(SelectTarget(Random,
