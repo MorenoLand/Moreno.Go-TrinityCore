@@ -65,10 +65,29 @@ type ThreatManager struct {
 	// CC expires promotes back to online within one step tick; that tick
 	// refresh is Go's form of the EvaluateSuppressed re-evaluation hook,
 	// with the same one-tick staleness shape as the offline gate for
-	// amounts landing in the window after expiry. The offline leg is
+	// amounts landing in the window after expiry. A condition observed
+	// while the victim taunts is recorded in suppressDeferred instead,
+	// so the refresh does not re-suppress on the tick after the taunt
+	// lapses (see threatSuppressedSet). The offline leg is
 	// modeled below, fed only by callers that evaluate a ShouldBeOffline
 	// arm with motion context (see SetOfflineSet).
 	suppressed map[uint64]bool
+	// suppressDeferred records, per victim, that a ShouldBeSuppressed
+	// condition (immunity, confuse, breakable stun) was observed while
+	// the victim was taunting this owner. C++ consumes such an arrival
+	// without effect — the aura-apply EvaluateSuppressed(false)
+	// (ThreatManager.cpp:290-304) reads ShouldBeSuppressed false for a
+	// taunting victim (:112-115) — and no later event re-evaluates the
+	// ref until the next suppress-triggering aura apply on the victim,
+	// so the victim stays ONLINE after the taunt lapses even though the
+	// condition persists. The combat-tick wholesale refresh would
+	// otherwise re-suppress on the tick after the taunt lapses, so a
+	// set bit holds the ref online until the condition is observed
+	// absent (its aura expired — a later fresh apply suppresses again)
+	// or the immunity-apply hook (SuppressVictim) fires. A set bit
+	// implies an online ref: it is dropped whenever the ref is
+	// suppressed, promoted, or purged.
+	suppressDeferred map[uint64]bool
 	// offline mirrors ThreatReference ONLINE_STATE_OFFLINE
 	// (ThreatManager.h:256): victims whose ShouldBeOffline arm
 	// currently fails. Pure data like suppressed — the manager never
@@ -312,7 +331,12 @@ func (tm *ThreatManager) isSuppressedLocked(victim uint64) bool {
 // current victim switches on the next Update tick, matching C++
 // UpdateVictim cadence (no eager reselect here). A victim that is not
 // damage-immune to the attacker's melee school is never marked — the
-// caller gates on ShouldBeSuppressed's immunity leg.
+// caller gates on ShouldBeSuppressed's immunity leg. A taunting
+// victim is not marked either — C++'s aura-apply EvaluateSuppressed
+// reads ShouldBeSuppressed false for a taunter — but the arrival is
+// recorded in suppressDeferred so the tick refresh holds the ref
+// online past the taunt; a fresh apply on a non-taunting victim
+// clears any deferral (see threatSuppressedSet).
 func (tm *ThreatManager) SuppressVictim(victim uint64) {
 	if tm == nil || victim == 0 {
 		return
@@ -323,8 +347,22 @@ func (tm *ThreatManager) SuppressVictim(victim uint64) {
 		return
 	}
 	if tm.isTauntedLocked(victim) {
+		// A suppress condition arriving mid-taunt is consumed without
+		// effect in C++ (ShouldBeSuppressed :112-115) — record the
+		// deferral so the tick refresh does not suppress on the tick
+		// after the taunt lapses. A stored suppressed flag needs no
+		// deferral: AddThreat :386 owns its promotion.
+		if !tm.isSuppressedLocked(victim) {
+			if tm.suppressDeferred == nil {
+				tm.suppressDeferred = make(map[uint64]bool)
+			}
+			tm.suppressDeferred[victim] = true
+		}
 		return
 	}
+	// A fresh immunity apply is a suppress-triggering event: it ends
+	// any deferral from a condition gained during an earlier taunt.
+	delete(tm.suppressDeferred, victim)
 	if tm.suppressed == nil {
 		tm.suppressed = make(map[uint64]bool)
 	}
@@ -370,6 +408,20 @@ func (tm *ThreatManager) IsSuppressed(victim uint64) bool {
 	return tm.isSuppressedLocked(victim)
 }
 
+// IsSuppressDeferred reports whether the victim's reference carries a
+// mid-taunt suppress deferral (see suppressDeferred): a condition was
+// observed while the victim taunted this owner, so the tick refresh
+// holds the ref online until the condition lapses or a
+// suppress-triggering aura apply fires.
+func (tm *ThreatManager) IsSuppressDeferred(victim uint64) bool {
+	if tm == nil || victim == 0 {
+		return false
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.suppressDeferred[victim]
+}
+
 // PromoteSuppressedVictim clears the suppressed flag on an existing entry,
 // the synchronous promotion of ThreatManager::AddThreat
 // (ThreatManager.cpp:379-393): a suppressed ref whose victim no longer
@@ -388,6 +440,7 @@ func (tm *ThreatManager) PromoteSuppressedVictim(victim uint64) {
 		return
 	}
 	delete(tm.suppressed, victim)
+	delete(tm.suppressDeferred, victim)
 }
 
 // EntryGUIDs returns a snapshot of the entry GUIDs, for callers that
@@ -429,12 +482,14 @@ func (tm *ThreatManager) SetOfflineSet(off map[uint64]bool) {
 
 // SetSuppressedSet replaces the suppressed flag set wholesale with the
 // caller's fresh evaluation (threatSuppressedSet, refreshed on the
-// combat step tick). Unknown GUIDs are dropped like SetOfflineSet.
-// A victim absent here is online: its amounts accrue again and it
-// sorts as online in victim selection. Like SetOfflineSet this marks
-// no client update: the broadcast sites read the filtered
-// SortedEntriesAvailable on the next tick.
-func (tm *ThreatManager) SetSuppressedSet(sup map[uint64]bool) {
+// combat step tick), and replaces the suppressDeferred set with the
+// caller's fresh deferral evaluation in the same lock step, so the
+// two maps can never disagree across a tick. Unknown GUIDs are
+// dropped like SetOfflineSet. A victim absent here is online: its
+// amounts accrue again and it sorts as online in victim selection.
+// Like SetOfflineSet this marks no client update: the broadcast sites
+// read the filtered SortedEntriesAvailable on the next tick.
+func (tm *ThreatManager) SetSuppressedSet(sup, deferred map[uint64]bool) {
 	if tm == nil {
 		return
 	}
@@ -447,6 +502,13 @@ func (tm *ThreatManager) SetSuppressedSet(sup map[uint64]bool) {
 		}
 	}
 	tm.suppressed = next
+	nextDef := make(map[uint64]bool, len(deferred))
+	for guid := range deferred {
+		if _, ok := tm.entries[guid]; ok {
+			nextDef[guid] = true
+		}
+	}
+	tm.suppressDeferred = nextDef
 }
 
 // SeedNewVictimState stores a caller-evaluated offline/suppressed state
@@ -905,20 +967,27 @@ func (s *Server) threatHeadOfflineSet(motion *creatureMotion) (map[uint64]bool, 
 // :459 tail runs it on the owner's manager), so a suppressed victim
 // stays suppressed through the taunt until AddThreat :386 promotes it
 // and an online victim is not suppressed by a condition gained
-// mid-taunt. Unresolvable victims stay unsuppressed, as in the
-// phase/detect evaluators: a logged-out or cross-map victim's entry
-// drops on the death/logout/evade paths, and a cross-map creature
-// victim is offline-flagged by the phase arm anyway. The AddThreat
-// promotion leg (:386) runs synchronously in evaluateThreatVictimState,
-// which has the resolved victim. Residual wholesale-refresh
-// approximation: a condition gained mid-taunt re-suppresses the victim
-// on the tick after the taunt lapses, where C++ keeps them online
-// until the next suppress-triggering event; and a non-taunted victim
-// whose condition expires promotes within one step tick, where C++
-// waits for AddThreat — the same staleness shape as the offline flag.
-func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos, offline map[uint64]bool) map[uint64]bool {
+// mid-taunt. The second map is the suppressDeferred set (see the
+// ThreatManager field): a condition present while the victim taunts
+// is recorded there, and the refresh holds that ref online after the
+// taunt lapses — C++ keeps it online until the next suppress-triggering
+// event, and the tick cannot see aura applies, so the bit clears only
+// when the condition is observed absent (its aura expired, and a later
+// fresh apply suppresses again) or when the immunity-apply hook
+// (SuppressVictim) fires. A stored suppressed flag drops the bit: the
+// deferral is moot once the ref is actually suppressed. Residual
+// wholesale-refresh approximation: a fresh confuse/stun/root aura
+// applied while a condition of the same leg is already present (the
+// condition never lapses) re-suppresses in C++ — the apply runs
+// EvaluateSuppressed(false) on the victim's manager — but Go has no
+// apply hook for those legs (only the immunity leg fans out through
+// SuppressVictim), so the ref stays deferred until the condition
+// lapses. A non-taunted victim whose condition expires promotes
+// within one step tick, where C++ waits for AddThreat — the same
+// staleness shape as the offline flag.
+func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos, offline map[uint64]bool) (map[uint64]bool, map[uint64]bool) {
 	if s == nil || motion == nil || motion.ThreatMgr == nil {
-		return nil
+		return nil, nil
 	}
 	byGUID := make(map[uint64]*session, len(players))
 	for i := range players {
@@ -926,57 +995,84 @@ func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos
 			byGUID[players[i].GUID] = players[i].Sess
 		}
 	}
-	sup := make(map[uint64]bool)
-	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
-		if offline[guid] {
-			continue
-		}
-		if motion.ThreatMgr.IsTaunted(guid) {
-			// Preserve the stored flag: a taunt neither suppresses an
-			// online victim nor promotes a suppressed one on this list
-			// (see the header comment), so re-evaluating the legs here
-			// would invent both transitions.
-			if motion.ThreatMgr.IsSuppressed(guid) {
-				sup[guid] = true
-			}
-			continue
-		}
+	// conditionPresent evaluates the ShouldBeSuppressed legs for one
+	// victim. resolved is false when neither a session nor a motion
+	// could be found, so a lapsed condition cannot be told apart from
+	// an absent victim and a deferral is carried through instead of
+	// cleared.
+	conditionPresent := func(guid uint64) (bool, bool) {
 		if sess := byGUID[guid]; sess != nil && sess.player != nil {
 			if sess.isImmuneToDamage(spellSchoolMaskNormal) {
-				sup[guid] = true
-				continue
+				return true, true
 			}
 			if sess.hasAuraType(spellAuraModConfuse) {
-				sup[guid] = true
-				continue
+				return true, true
 			}
 			sess.castMu.Lock()
 			stun := breakableStunAuraPresent(sess.activeAuras)
 			sess.castMu.Unlock()
-			if stun {
-				sup[guid] = true
-			}
-			continue
+			return stun, true
 		}
 		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); vm != nil {
 			key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: guid}
 			if creatureImmuneToDamage(s, key, spellSchoolMaskNormal) {
-				sup[guid] = true
-				continue
+				return true, true
 			}
 			if s.creatureHasLiveAuraEffectType(key, spellAuraModConfuse) {
-				sup[guid] = true
-				continue
+				return true, true
 			}
 			s.auraMu.Lock()
 			stun := breakableStunAuraPresent(s.activeCreatureAuras[key])
 			s.auraMu.Unlock()
-			if stun {
-				sup[guid] = true
+			return stun, true
+		}
+		return false, false
+	}
+	sup := make(map[uint64]bool)
+	def := make(map[uint64]bool)
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if offline[guid] {
+			// The legs cannot be evaluated while the victim is out
+			// of phase — carry any deferral through the offline
+			// window instead of clearing it on no evidence.
+			if motion.ThreatMgr.IsSuppressDeferred(guid) {
+				def[guid] = true
 			}
+			continue
+		}
+		deferred := motion.ThreatMgr.IsSuppressDeferred(guid)
+		cond, resolved := conditionPresent(guid)
+		if motion.ThreatMgr.IsTaunted(guid) {
+			// Preserve the stored flag: a taunt neither suppresses
+			// an online victim nor promotes a suppressed one on
+			// this list (see the header comment), so re-evaluating
+			// the legs here would invent both transitions. A
+			// condition present during the taunt is recorded in
+			// the deferred set instead.
+			if motion.ThreatMgr.IsSuppressed(guid) {
+				sup[guid] = true
+			} else if cond || (!resolved && deferred) {
+				def[guid] = true
+			}
+			continue
+		}
+		if deferred && !motion.ThreatMgr.IsSuppressed(guid) {
+			// The condition arrived during a taunt and was consumed
+			// without effect in C++: hold the ref online until the
+			// condition is observed absent (its aura expired) or a
+			// suppress-triggering aura apply fires (SuppressVictim
+			// clears the bit). An unresolvable victim cannot prove
+			// a lapse, so its deferral is carried through.
+			if cond || !resolved {
+				def[guid] = true
+			}
+			continue
+		}
+		if cond {
+			sup[guid] = true
 		}
 	}
-	return sup
+	return sup, def
 }
 
 // threatVictimOffline evaluates ThreatReference::ShouldBeOffline
@@ -1907,8 +2003,9 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 	delete(tm.entries, victim)
 	delete(tm.tempMods, victim)
 	// A re-added victim starts ONLINE (new ref, ThreatManager.cpp:402-404);
-	// a stale suppressed flag must not survive the purge.
+	// stale suppressed/deferred flags must not survive the purge.
 	delete(tm.suppressed, victim)
+	delete(tm.suppressDeferred, victim)
 	// ThreatManager.cpp:809-810: purging the fixated reference clears the
 	// fixate; the victim's taunt state dies with its reference.
 	if tm.fixateGUID == victim {

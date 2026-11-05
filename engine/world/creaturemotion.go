@@ -5390,6 +5390,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// threat-caused promotion; a taunted victim keeps its
 		// stored suppressed flag through the taunt (preserve leg
 		// in threatSuppressedSet) until AddThreat :386 promotes it.
+		// A condition gained mid-taunt stays deferred past the taunt
+		// (suppressDeferred in threatSuppressedSet) until its aura
+		// lapses or a fresh immunity apply fires.
 		offline := s.threatPhaseOfflineSet(motion, players)
 		if offline == nil {
 			offline = make(map[uint64]bool)
