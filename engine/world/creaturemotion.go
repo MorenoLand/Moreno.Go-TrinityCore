@@ -2116,8 +2116,20 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 	if noGrayAggroBlocked(target.level, caller.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) {
 		return false
 	}
-	// CanSeeOrDetect (Object.cpp:1664-1686, the MoveInLineOfSight gate
-	// the query mirrors): player targets via
+	// CanSeeOrDetect (Object.cpp:1573-1581, the MoveInLineOfSight gate
+	// the query mirrors): its CanNeverSee head (Object.cpp:1659-1662)
+	// fails disjoint-phase targets ahead of the detect legs, via the
+	// scan helpers (same-map/instance by resolver construction, so
+	// phase-only here; GM PHASEMASK_ANYWHERE passes). The gate follows
+	// the unconditional detect mirror, not the strict !force dist arm
+	// (IsWithinDistInMap, Creature.cpp:1987, skipped under force).
+	if target.isPlayer && s.spellGateCreatureNeverSeesPlayer(caller, target.sess) {
+		return false
+	}
+	if !target.isPlayer && target.victim != nil && s.spellGateCreatureNeverSeesCreature(caller, target.victim) {
+		return false
+	}
+	// CanSeeOrDetect (Object.cpp:1664-1686): player targets via
 	// creatureSightInvisibilityBlocked plus the stealth half below;
 	// creature targets via creatureSightCanDetectCreature (stalked,
 	// then invisibility, then stealth, all from the victim's live
