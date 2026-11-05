@@ -26,9 +26,9 @@
 -- spell) = DoCastSelf (phase_hunter / gluth precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- npc_feugen: JustEngagedWith Talk(SAY_FEUGEN_AGGRO 0) (event 1;
--- the thaddius->AI()->DoAction(ACTION_FEUGEN_AGGRO) cross-AI leg stays
--- out (no bridge); the stalagg AddThreat(who, 0.0f) leg is PORTED
--- 2026-10-24 in feugenEnterCombat); UpdateAI staticFieldTimer — DoCastSelf(SPELL_FEUGEN_
+-- the thaddius DoAction(ACTION_FEUGEN_AGGRO) cross-AI leg is PORTED
+-- 2026-11-05 in feugenEnterCombat (ev38 dispatch); the stalagg
+-- AddThreat(who, 0.0f) leg is PORTED 2026-10-24 in feugenEnterCombat); UpdateAI staticFieldTimer — DoCastSelf(SPELL_FEUGEN_
 -- STATICFIELD 28135), 6s init, 6s repeat; KilledUnit Talk(
 -- SAY_FEUGEN_SLAY 1) (event 3 — C++-GATED: victim->GetTypeId() ==
 -- TYPEID_PLAYER — nalorakk/kelthuzad player-gate variant). The
@@ -48,45 +48,52 @@
 -- exists and the creature-side find is bridged
 -- (creature:FindNearestGameObject, 2026-10-23); the ctor
 -- SetBoundary(instance->GetBossBoundary(BOSS_THADDIUS)) — no
--- boundary bridge; EnterEvadeMode — thaddius->AI()->DoAction(
--- ACTION_FEUGEN_RESET) — no cross-AI bridge; BeginResetEncounter —
--- coil GO GO_STATE_READY + DespawnOrUnsummon(0s, 7_days) — GO-state /
--- despawn legs bridged, but BeginResetEncounter rides the unbridged
--- cross-AI DoAction machine, and ev23 already models the full
--- evade->despawn->respawn cycle whose C++ end state is ACTIVE (fresh
--- AI InitializeAI), so a bare READY on ev23 would strand the coil
--- READY — the transient READY is unobservable; DoAction(ACTION_BEGIN_RESET_ENCOUNTER) —
--- routes to BeginResetEncounter — no bridge; DoAction(
+-- boundary bridge; EnterEvadeMode — thaddius DoAction(
+-- ACTION_FEUGEN_RESET) is PORTED 2026-11-05 in feugenLeaveCombat
+-- (ev38 dispatch); BeginResetEncounter — coil GO GO_STATE_READY +
+-- DespawnOrUnsummon(0s, 7_days) is PORTED 2026-11-05 in feugenDoAction
+-- (ev38 ACTION_BEGIN_RESET_ENCOUNTER; the 7-day respawn leg has no
+-- bridge — DespawnOrUnsummon takes the delay only; thaddius
+-- ResetEncounter re-spawns the pets, also unbridged). ev23 keeps
+-- modeling the full evade->despawn->respawn cycle whose C++ end state
+-- is ACTIVE (fresh AI InitializeAI), so no bare READY rides ev23 —
+-- the transient READY is unobservable; DoAction(
 -- ACTION_FEUGEN_REVIVED) — the full revive machine (SetFullHealth
 -- + STAND + REACT_AGGRESSIVE + NOT_SELECTABLE removal + root
 -- release + Talk(EMOTE_FEIGN_REVIVE 4) + refreshBeam + the stalagg
--- AddThreat victim-steal leg + timer re-init) — no cross-AI bridge
--- (stand/react/flag bridges exist since the 2026-10-20 standstate
--- strip; the revive TRIGGER is the unbridged thaddius DoAction
--- machine); DoAction(
--- ACTION_TRANSITION) — KillSelf + the coil CastStop + coil->AI()->
--- Talk(EMOTE_TESLA_OVERLOAD 1) — the thaddius sender chain is
--- unported (event-38 dispatch itself is bridged, creature:DoAction,
--- lua_creature_events.go:802); DoAction(
+-- AddThreat victim-steal leg + timer re-init) is PORTED 2026-11-05 in
+-- feugenDoAction (ev38 dispatch; SetFullHealth rides
+-- SetHealth(GetMaxHealth()); SetInCombatWith has no bridge —
+-- kalecgos precedent — the AddThreat(0) leg is ported; the
+-- staticField 6s re-seed is ported, the magneticPull 30s re-seed is
+-- moot — the cast is documented-only); DoAction(
+-- ACTION_TRANSITION) — KillSelf (creature:Kill(creature), black_morass
+-- precedent) + the coil CastStop + coil->AI()->
+-- Talk(EMOTE_TESLA_OVERLOAD 1) — PORTED 2026-11-05 in feugenDoAction
+-- (ev38 dispatch; the thaddius sender chain EVENT_TRANSITION_1 is
+-- ported in boss_thaddius.lua); DoAction(
 -- ACTION_TRANSITION_2) — coil->CastSpell(thaddius, SPELL_SHOCK_
--- VISUAL 28159) via DATA_THADDIUS — no cross-AI bridge; DoAction(
+-- VISUAL 28159) via DATA_THADDIUS — PORTED 2026-11-05 in feugenDoAction
+-- (ev38 dispatch); DoAction(
 -- ACTION_TRANSITION_3) — coil GO GO_STATE_READY +
--- DespawnOrUnsummon(0s, 7_days) — no bridges; DamageTaken — the
+-- DespawnOrUnsummon(0s, 7_days) — PORTED 2026-11-05 in feugenDoAction
+-- (ev38 dispatch; the 7-day respawn leg has no bridge); DamageTaken — the
 -- feign-death machine (EMOTE_FEIGN_DEATH 3 Talk + thaddius->
 -- AI()->DoAction(ACTION_FEUGEN_DIED) + NOT_SELECTABLE + auras
 -- wipe + REACT_PASSIVE + root + STAND_DEAD + damage = health-1,
 -- and the isFeignDeath damage = 0 arm): the Talk(3) + damage =
 -- health-1 + damage = 0 legs ARE ported (see feugenDamageTaken
 -- below — event 9 numeric-return rewrite, halazzi precedent); the
--- cross-AI DoAction leg stays out; SetControlled(root) IS ported
+-- cross-AI DoAction(ACTION_FEUGEN_DIED) leg is PORTED 2026-11-05 in
+-- feugenDamageTaken (ev38 dispatch); SetControlled(root) IS ported
 -- (creature:SetRooted, lua_creature_events.go) and the
 -- stand/react/flag/aura legs ARE ported since the 2026-10-20
 -- standstate strip); the latch clears on death (event 4) and ev23
 -- restores fresh-spawn state (Go-lifecycle analog of the C++
 -- despawn/respawn cycle — see feugenReset); the
--- C++ ACTION_FEUGEN_REVIVED revive machine is unbridged, so a
--- feigned feugen stays feigned until killed/despawned — partial
--- port, documented; SpellHit — the tesla-beam machine
+-- C++ ACTION_FEUGEN_REVIVED revive machine is PORTED 2026-11-05
+-- (see above) — a feigned feugen revives on thaddius's 5s schedule
+-- when its twin lives; SpellHit — the tesla-beam machine
 -- (npc_feugenAI::SpellHit, boss_thaddius.cpp:853-886) IS ported
 -- (see feugenSpellHit below — event 14 passes the caster as a full
 -- creature object, boss_ai.go:2074; the stale "no caster bridge"
@@ -98,8 +105,9 @@
 -- enum decl and the SpellHit check; the tesla coil's UpdateAI is
 -- empty), so the arm is faithful but currently unfired;
 -- myCoil() (boss_thaddius.cpp:924): first resolution sets the tesla
--- coil REACT_PASSIVE — cross-creature on NPC_TESLA, helper-gated behind
--- the unported DoAction coil legs — documented-only;
+-- coil REACT_PASSIVE — PORTED 2026-11-05 in feugenDoAction (the coil
+-- resolve in the TRANSITION/TRANSITION_2 legs sets it; idempotent on
+-- repeat resolves);
 -- UpdateAI's isFeignDeath early-return is modeled via the Lua latch
 -- (see staticFieldTick).
 
@@ -128,10 +136,27 @@ local SPELL_STALAGG_CHAIN_VISUAL = 28096
 local SPELL_FEUGEN_CHAIN_VISUAL = 28111
 local SPELL_TESLA_SHOCK = 28099
 local EMOTE_TESLA_LINK_BREAKS = 0
+local EMOTE_TESLA_OVERLOAD = 1
 local OVERLOAD_DISTANCE = 28
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 local GO_CONS_NOX_TESLA_FEUGEN = 181477
+
+local DATA_THADDIUS = 9 -- naxxramas.h NAXData64
+local DATA_FEUGEN = 11
+local DATA_STALAGG = 12
+local ENTRY_TESLA = 16218
+local ACTION_BEGIN_RESET_ENCOUNTER = 0
+local ACTION_FEUGEN_DIED = 1
+local ACTION_FEUGEN_RESET = 3
+local ACTION_FEUGEN_AGGRO = 5
+local ACTION_FEUGEN_REVIVING_FX = 7
+local ACTION_FEUGEN_REVIVED = 9
+local ACTION_TRANSITION = 11
+local ACTION_TRANSITION_2 = 12
+local ACTION_TRANSITION_3 = 13
+local SPELL_SHOCK_VISUAL = 28159
+local EMOTE_FEIGN_REVIVE = 4
 
 -- C++ SelectTarget(SelectTargetMethod::Random): random alive unit
 -- from the threat list (playerOnly defaults false — the old
@@ -200,6 +225,13 @@ end
 -- bridge — documented, not wired.
 local function feugenEnterCombat(event, creature, target)
     creature:Talk(SAY_FEUGEN_AGGRO)
+    -- C++ JustEngagedWith (boss_thaddius.cpp:811-821): thaddius
+    -- DoAction(ACTION_FEUGEN_AGGRO) (:815-816), then the twin
+    -- AddThreat(who, 0.0f, stalagg) (:818-820).
+    local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
+    if thaddius then
+        thaddius:DoAction(ACTION_FEUGEN_AGGRO)
+    end
     -- C++ JustEngagedWith :818-820: twin AddThreat(who, 0.0f, stalagg);
     -- the instance-GUID fetch rides the entry-search precedent
     -- (darnavan/krick); gate is C++-literal IsInCombat().
@@ -216,6 +248,12 @@ end
 
 local function feugenLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode (boss_thaddius.cpp:736-740): thaddius
+    -- DoAction(ACTION_FEUGEN_RESET).
+    local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
+    if thaddius then
+        thaddius:DoAction(ACTION_FEUGEN_RESET)
+    end
 end
 
 -- C++ KilledUnit: Talk(SAY_FEUGEN_SLAY 1) only when victim->
@@ -240,6 +278,7 @@ end
 -- Go ev5 fires once per spawn (felmyst trailSpawn precedent).
 local function feugenSpawn(event, creature)
     local guid = creature:GetGUID()
+    creature:SetGuidData(DATA_FEUGEN) -- C++ instance OnCreatureCreate latch, faerlina precedent
     feugenOverload[guid] = nil
     feugenRefreshBeam[guid] = true
     -- C++ InitializeAI (boss_thaddius.cpp:724-728): myCoilGO() =
@@ -288,14 +327,16 @@ end
 -- SetStandState(UNIT_STAND_STATE_DEAD) + SetControlled(UNIT_STATE_ROOT)
 -- (creature:SetRooted, lua_creature_events.go) + damage = health-1; once latched,
 -- all further damage = 0. The cross-AI DoAction(ACTION_FEUGEN_DIED)
--- leg stays out; refreshBeam = true
+-- leg is PORTED 2026-11-05 in feugenDamageTaken (ev38 dispatch);
+-- refreshBeam = true
 -- IS modeled via the Lua latch (see DamageTaken below). Event 9's
 -- second return rewrites damage
 -- (fireCreatureDamageTaken; halazzi precedent). The C++ latch resets
 -- in the AI ctor; the Lua mirror wipes the GUID entry on death
 -- (event 4) and restores fresh-spawn state on reset (event 23, see
--- above). The unbridged ACTION_FEUGEN_REVIVED machine means a
--- feigned feugen never revives mid-fight in this port.
+-- above). The ACTION_FEUGEN_REVIVED machine is PORTED 2026-11-05
+-- (feugenDoAction) — a feigned feugen revives on thaddius's 5s
+-- schedule when its twin lives.
 local EMOTE_FEIGN_DEATH = 3
 
 local function feugenDamageTaken(event, creature, attacker, damage)
@@ -313,6 +354,12 @@ local function feugenDamageTaken(event, creature, attacker, damage)
     feugenOverload[guid] = false
     feugenRefreshBeam[guid] = true
     creature:Talk(EMOTE_FEIGN_DEATH)
+    -- C++ DamageTaken (boss_thaddius.cpp:836-838): thaddius
+    -- DoAction(ACTION_FEUGEN_DIED).
+    local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
+    if thaddius then
+        thaddius:DoAction(ACTION_FEUGEN_DIED)
+    end
     creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
     creature:RemoveAllAuras()
     creature:SetReactState(REACT_PASSIVE)
@@ -370,6 +417,77 @@ local function feugenSpellHit(event, creature, caster, spellId)
     end
 end
 
+-- C++ npc_feugenAI::BeginResetEncounter (boss_thaddius.cpp:742-747):
+-- coil GO GO_STATE_READY + DespawnOrUnsummon(0s, 7_days). The 7-day
+-- respawn leg has no bridge (DespawnOrUnsummon takes the delay only);
+-- thaddius ResetEncounter re-spawns the pets, also unbridged. The Lua
+-- latches clear to the fresh-AI ctor state (the C++ despawn/respawn
+-- rebuilds the AI).
+local function feugenBeginResetEncounter(creature, guid)
+    local coilGO = creature:FindNearestGameObject(GO_CONS_NOX_TESLA_FEUGEN, 1000.0)
+    if coilGO then
+        coilGO:SetGoState(1) -- GO_STATE_READY
+    end
+    cancelTimers(guid)
+    feugenFeign[guid] = nil
+    feugenOverload[guid] = nil
+    feugenRefreshBeam[guid] = true
+    creature:DespawnOrUnsummon(0)
+end
+
+-- C++ npc_feugenAI::DoAction (boss_thaddius.cpp:749-809), event 38.
+local function feugenDoAction(event, creature, action)
+    local guid = creature:GetGUID()
+    if action == ACTION_BEGIN_RESET_ENCOUNTER then
+        feugenBeginResetEncounter(creature, guid)
+    elseif action == ACTION_FEUGEN_REVIVING_FX then
+        -- C++: empty case (break) — no-op.
+    elseif action == ACTION_FEUGEN_REVIVED then
+        if not feugenFeign[guid] then
+            return
+        end
+        creature:SetHealth(creature:GetMaxHealth()) -- SetFullHealth twin
+        creature:SetStandState(UNIT_STAND_STATE_STAND)
+        creature:SetReactState(REACT_AGGRESSIVE)
+        creature:RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetRooted(false)
+        creature:Talk(EMOTE_FEIGN_REVIVE)
+        feugenFeign[guid] = false
+        feugenRefreshBeam[guid] = true
+        local stalagg = creature:GetInstanceCreature(DATA_STALAGG)
+        if stalagg then
+            local victim = stalagg:GetVictim()
+            if victim then
+                creature:AddThreat(victim, 0)
+                -- me->SetInCombatWith(victim) has no bridge (kalecgos precedent).
+            end
+        end
+        -- C++ revive timer re-init (:778-779): staticFieldTimer = 6s
+        -- (magneticPullTimer = 30s is moot — the cast is documented-only).
+        -- The beat loop is replaced, not left to fire within 1s.
+        schedule(guid, "staticfield", 6000, function()
+            staticFieldTick(creature, guid)
+        end)
+    elseif action == ACTION_TRANSITION then
+        creature:Kill(creature) -- KillSelf twin (black_morass precedent)
+        local coil = creature:FindNearestCreature(ENTRY_TESLA, 1000.0)
+        if coil then
+            coil:SetReactState(REACT_PASSIVE) -- myCoil() first-resolution leg
+            coil:StopSpellCast() -- no-op in Go's channel model (the 28111 channel has no finite DBC duration), ported as-written
+            coil:Talk(EMOTE_TESLA_OVERLOAD)
+        end
+    elseif action == ACTION_TRANSITION_2 then
+        local coil = creature:FindNearestCreature(ENTRY_TESLA, 1000.0)
+        local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
+        if coil and thaddius then
+            coil:SetReactState(REACT_PASSIVE) -- myCoil() first-resolution leg
+            coil:CastSpell(thaddius, SPELL_SHOCK_VISUAL)
+        end
+    elseif action == ACTION_TRANSITION_3 then
+        feugenBeginResetEncounter(creature, guid)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_FEUGEN, 1, feugenEnterCombat)
 RegisterCreatureEvent(ENTRY_FEUGEN, 2, feugenLeaveCombat)
 RegisterCreatureEvent(ENTRY_FEUGEN, 3, feugenTargetDied)
@@ -378,3 +496,4 @@ RegisterCreatureEvent(ENTRY_FEUGEN, 5, feugenSpawn)
 RegisterCreatureEvent(ENTRY_FEUGEN, 9, feugenDamageTaken)
 RegisterCreatureEvent(ENTRY_FEUGEN, 14, feugenSpellHit)
 RegisterCreatureEvent(ENTRY_FEUGEN, 23, feugenReset)
+RegisterCreatureEvent(ENTRY_FEUGEN, 38, feugenDoAction)

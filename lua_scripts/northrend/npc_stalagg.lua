@@ -26,9 +26,9 @@
 -- spell) = DoCastSelf (phase_hunter / gluth precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- npc_stalagg: JustEngagedWith Talk(SAY_STALAGG_AGGRO 0) (event 1;
--- the thaddius->AI()->DoAction(ACTION_STALAGG_AGGRO) cross-AI leg stays
--- out (no bridge); the feugen AddThreat(who, 0.0f) leg is PORTED
--- 2026-10-24 in stalaggEnterCombat); UpdateAI powerSurgeTimer — DoCastSelf(SPELL_STALAGG_
+-- the thaddius DoAction(ACTION_STALAGG_AGGRO) cross-AI leg is PORTED
+-- 2026-11-05 in stalaggEnterCombat (ev38 dispatch); the feugen
+-- AddThreat(who, 0.0f) leg is PORTED 2026-10-24 in stalaggEnterCombat); UpdateAI powerSurgeTimer — DoCastSelf(SPELL_STALAGG_
 -- POWERSURGE 28134), 10s init, urandms(25,30) repeat (math.random
 -- 25-30 per amanitar/black_knight/gluth precedent); KilledUnit
 -- Talk(SAY_STALAGG_SLAY 1) (event 3 — C++-GATED: victim->
@@ -41,45 +41,49 @@
 -- SetGoState exists and the creature-side find is bridged
 -- (creature:FindNearestGameObject, 2026-10-23); the ctor
 -- SetBoundary(instance->GetBossBoundary(BOSS_THADDIUS)) — no
--- boundary bridge; EnterEvadeMode — thaddius->AI()->DoAction(
--- ACTION_STALAGG_RESET) — no cross-AI bridge; BeginResetEncounter —
--- coil GO GO_STATE_READY + DespawnOrUnsummon(0s, 7_days) — GO-state /
--- despawn legs bridged, but BeginResetEncounter rides the unbridged
--- cross-AI DoAction machine, and ev23 already models the full
--- evade->despawn->respawn cycle whose C++ end state is ACTIVE (fresh
--- AI InitializeAI), so a bare READY on ev23 would strand the coil
--- READY — the transient READY is unobservable; DoAction(ACTION_BEGIN_RESET_ENCOUNTER) —
--- routes to BeginResetEncounter — no bridge; DoAction(
+-- boundary bridge; EnterEvadeMode — thaddius DoAction(
+-- ACTION_STALAGG_RESET) is PORTED 2026-11-05 in stalaggLeaveCombat
+-- (ev38 dispatch); BeginResetEncounter — coil GO GO_STATE_READY +
+-- DespawnOrUnsummon(0s, 7_days) is PORTED 2026-11-05 in stalaggDoAction
+-- (ev38 ACTION_BEGIN_RESET_ENCOUNTER; the 7-day respawn leg has no
+-- bridge — DespawnOrUnsummon takes the delay only; thaddius
+-- ResetEncounter re-spawns the pets, also unbridged). ev23 keeps
+-- modeling the full evade->despawn->respawn cycle whose C++ end state
+-- is ACTIVE (fresh AI InitializeAI), so no bare READY rides ev23 —
+-- the transient READY is unobservable; DoAction(
 -- ACTION_STALAGG_REVIVED) — the full revive machine (SetFullHealth
 -- + STAND + REACT_AGGRESSIVE + NOT_SELECTABLE removal + root
 -- release + Talk(EMOTE_FEIGN_REVIVE 4) + refreshBeam + DoZoneInCombat
--- + the !IsEngaged() -> BeginResetEncounter leg) — no
--- zone-combat bridge (stand/react/flag bridges exist since the
--- 2026-10-20 standstate strip; the revive TRIGGER is the unbridged
--- thaddius DoAction machine);
--- DoAction(ACTION_TRANSITION) — KillSelf + the coil CastStop +
--- coil->AI()->Talk(EMOTE_TESLA_OVERLOAD 1) — the thaddius sender
--- chain (EVENT_TRANSITION_1) is unported; event-38 dispatch itself
--- is bridged (creature:DoAction, lua_creature_events.go:802).
+-- + the !IsEngaged() -> BeginResetEncounter leg) is PORTED 2026-11-05
+-- in stalaggDoAction (ev38 dispatch; SetFullHealth rides
+-- SetHealth(GetMaxHealth()));
+-- DoAction(ACTION_TRANSITION) — KillSelf (creature:Kill(creature),
+-- black_morass precedent) + the coil CastStop +
+-- coil->AI()->Talk(EMOTE_TESLA_OVERLOAD 1) — PORTED 2026-11-05 in
+-- stalaggDoAction (ev38 dispatch; the thaddius sender chain
+-- EVENT_TRANSITION_1 is ported in boss_thaddius.lua).
 -- DoAction(ACTION_TRANSITION_2) — coil->CastSpell(thaddius,
--- SPELL_SHOCK_VISUAL 28159) via DATA_THADDIUS — no cross-AI bridge;
+-- SPELL_SHOCK_VISUAL 28159) via DATA_THADDIUS — PORTED 2026-11-05 in
+-- stalaggDoAction (ev38 dispatch);
 -- DoAction(ACTION_TRANSITION_3) — coil GO GO_STATE_READY +
--- DespawnOrUnsummon(0s, 7_days) — no bridges; DamageTaken — the
+-- DespawnOrUnsummon(0s, 7_days) — PORTED 2026-11-05 in stalaggDoAction
+-- (ev38 dispatch; the 7-day respawn leg has no bridge); DamageTaken — the
 -- feign-death machine (EMOTE_FEIGN_DEATH 3 Talk + thaddius->
 -- AI()->DoAction(ACTION_STALAGG_DIED) + NOT_SELECTABLE + auras
 -- wipe + REACT_PASSIVE + root + STAND_DEAD + damage = health-1,
 -- and the isFeignDeath damage = 0 arm): the Talk(3) + damage =
 -- health-1 + damage = 0 legs ARE ported (see stalaggDamageTaken
 -- below — event 9 numeric-return rewrite, halazzi precedent); the
--- cross-AI DoAction leg stays out; SetControlled(root) IS ported
+-- cross-AI DoAction(ACTION_STALAGG_DIED) leg is PORTED 2026-11-05 in
+-- stalaggDamageTaken (ev38 dispatch); SetControlled(root) IS ported
 -- (creature:SetRooted, lua_creature_events.go) and the
 -- stand/react/flag/aura legs ARE ported since the 2026-10-20
 -- standstate strip); the latch clears on death (event 4) and ev23
 -- restores fresh-spawn state (Go-lifecycle analog of the C++
 -- despawn/respawn cycle — see stalaggReset); the
--- C++ ACTION_STALAGG_REVIVED revive machine is unbridged, so a
--- feigned stalagg stays feigned until killed/despawned — partial
--- port, documented; SpellHit — the tesla-beam machine
+-- C++ ACTION_STALAGG_REVIVED revive machine is PORTED 2026-11-05
+-- (see above) — a feigned stalagg revives on thaddius's 5s schedule
+-- when its twin lives; SpellHit — the tesla-beam machine
 -- (npc_stalaggAI::SpellHit, boss_thaddius.cpp:602-627) IS ported
 -- (see stalaggSpellHit below — event 14 passes the caster as a full
 -- creature object, boss_ai.go:2074; the stale "no caster bridge"
@@ -88,8 +92,9 @@
 -- only the enum decl and the SpellHit check; the tesla coil's
 -- UpdateAI is empty), so the arm is faithful but currently unfired;
 -- myCoil() (boss_thaddius.cpp:671): first resolution sets the tesla
--- coil REACT_PASSIVE — cross-creature on NPC_TESLA, helper-gated behind
--- the unported DoAction coil legs — documented-only;
+-- coil REACT_PASSIVE — PORTED 2026-11-05 in stalaggDoAction (the coil
+-- resolve in the TRANSITION/TRANSITION_2 legs sets it; idempotent on
+-- repeat resolves);
 -- UpdateAI's isFeignDeath powerSurge hold is modeled via the Lua
 -- latch (see powerSurgeTick).
 
@@ -117,10 +122,26 @@ local SPELL_STALAGG_TESLA_PERIODIC = 28098
 local SPELL_STALAGG_CHAIN_VISUAL = 28096
 local SPELL_TESLA_SHOCK = 28099
 local EMOTE_TESLA_LINK_BREAKS = 0
+local EMOTE_TESLA_OVERLOAD = 1
 local OVERLOAD_DISTANCE = 28
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 local GO_CONS_NOX_TESLA_STALAGG = 181478
+
+local DATA_THADDIUS = 9 -- naxxramas.h NAXData64
+local DATA_STALAGG = 12
+local ENTRY_TESLA = 16218
+local ACTION_BEGIN_RESET_ENCOUNTER = 0
+local ACTION_STALAGG_DIED = 2
+local ACTION_STALAGG_RESET = 4
+local ACTION_STALAGG_AGGRO = 6
+local ACTION_STALAGG_REVIVING_FX = 8
+local ACTION_STALAGG_REVIVED = 10
+local ACTION_TRANSITION = 11
+local ACTION_TRANSITION_2 = 12
+local ACTION_TRANSITION_3 = 13
+local SPELL_SHOCK_VISUAL = 28159
+local EMOTE_FEIGN_REVIVE = 4
 
 -- C++ SelectTarget(SelectTargetMethod::Random): random alive unit
 -- from the threat list (playerOnly defaults false — the old
@@ -189,6 +210,13 @@ end
 -- bridge — documented, not wired.
 local function stalaggEnterCombat(event, creature, target)
     creature:Talk(SAY_STALAGG_AGGRO)
+    -- C++ JustEngagedWith (boss_thaddius.cpp:560-570): thaddius
+    -- DoAction(ACTION_STALAGG_AGGRO) (:564-565), then the twin
+    -- AddThreat(who, 0.0f, feugen) (:567-569).
+    local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
+    if thaddius then
+        thaddius:DoAction(ACTION_STALAGG_AGGRO)
+    end
     -- C++ JustEngagedWith :567-569: twin AddThreat(who, 0.0f, feugen);
     -- the instance-GUID fetch rides the entry-search precedent
     -- (darnavan/krick); IsEngaged() == IsInCombat() (Unit.h:1031).
@@ -205,6 +233,12 @@ end
 
 local function stalaggLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ EnterEvadeMode (boss_thaddius.cpp:490-494): thaddius
+    -- DoAction(ACTION_STALAGG_RESET).
+    local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
+    if thaddius then
+        thaddius:DoAction(ACTION_STALAGG_RESET)
+    end
 end
 
 -- C++ KilledUnit: Talk(SAY_STALAGG_SLAY 1) only when victim->
@@ -229,6 +263,7 @@ end
 -- Go ev5 fires once per spawn (felmyst trailSpawn precedent).
 local function stalaggSpawn(event, creature)
     local guid = creature:GetGUID()
+    creature:SetGuidData(DATA_STALAGG) -- C++ instance OnCreatureCreate latch, faerlina precedent
     stalaggOverload[guid] = nil
     stalaggRefreshBeam[guid] = true
     -- C++ InitializeAI (boss_thaddius.cpp:479-481): myCoilGO() =
@@ -277,14 +312,16 @@ end
 -- SetStandState(UNIT_STAND_STATE_DEAD) + SetControlled(UNIT_STATE_ROOT)
 -- (creature:SetRooted, lua_creature_events.go) + damage = health-1; once latched,
 -- all further damage = 0. The cross-AI DoAction(ACTION_STALAGG_DIED)
--- leg stays out; refreshBeam = true
+-- leg is PORTED 2026-11-05 in stalaggDamageTaken (ev38 dispatch);
+-- refreshBeam = true
 -- IS modeled via the Lua latch (see DamageTaken below). Event 9's
 -- second return rewrites damage
 -- (fireCreatureDamageTaken; halazzi precedent). The C++ latch resets
 -- in the AI ctor; the Lua mirror wipes the GUID entry on death
 -- (event 4) and restores fresh-spawn state on reset (event 23, see
--- above). The unbridged ACTION_STALAGG_REVIVED machine means a
--- feigned stalagg never revives mid-fight in this port.
+-- above). The ACTION_STALAGG_REVIVED machine is PORTED 2026-11-05
+-- (stalaggDoAction) — a feigned stalagg revives on thaddius's 5s
+-- schedule when its twin lives.
 local EMOTE_FEIGN_DEATH = 3
 
 local function stalaggDamageTaken(event, creature, attacker, damage)
@@ -302,6 +339,12 @@ local function stalaggDamageTaken(event, creature, attacker, damage)
     stalaggOverload[guid] = false
     stalaggRefreshBeam[guid] = true
     creature:Talk(EMOTE_FEIGN_DEATH)
+    -- C++ DamageTaken (boss_thaddius.cpp:585-587): thaddius
+    -- DoAction(ACTION_STALAGG_DIED).
+    local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
+    if thaddius then
+        thaddius:DoAction(ACTION_STALAGG_DIED)
+    end
     creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
     creature:RemoveAllAuras()
     creature:SetReactState(REACT_PASSIVE)
@@ -362,6 +405,67 @@ local function stalaggSpellHit(event, creature, caster, spellId)
     end
 end
 
+-- C++ npc_stalaggAI::BeginResetEncounter (boss_thaddius.cpp:496-501):
+-- coil GO GO_STATE_READY + DespawnOrUnsummon(0s, 7_days). The 7-day
+-- respawn leg has no bridge (DespawnOrUnsummon takes the delay only);
+-- thaddius ResetEncounter re-spawns the pets, also unbridged. The Lua
+-- latches clear to the fresh-AI ctor state (the C++ despawn/respawn
+-- rebuilds the AI).
+local function stalaggBeginResetEncounter(creature, guid)
+    local coilGO = creature:FindNearestGameObject(GO_CONS_NOX_TESLA_STALAGG, 1000.0)
+    if coilGO then
+        coilGO:SetGoState(1) -- GO_STATE_READY
+    end
+    cancelTimers(guid)
+    stalaggFeign[guid] = nil
+    stalaggOverload[guid] = nil
+    stalaggRefreshBeam[guid] = true
+    creature:DespawnOrUnsummon(0)
+end
+
+-- C++ npc_stalaggAI::DoAction (boss_thaddius.cpp:503-558), event 38.
+local function stalaggDoAction(event, creature, action)
+    local guid = creature:GetGUID()
+    if action == ACTION_BEGIN_RESET_ENCOUNTER then
+        stalaggBeginResetEncounter(creature, guid)
+    elseif action == ACTION_STALAGG_REVIVING_FX then
+        -- C++: empty case (break) — no-op.
+    elseif action == ACTION_STALAGG_REVIVED then
+        if not stalaggFeign[guid] then
+            return
+        end
+        creature:SetHealth(creature:GetMaxHealth()) -- SetFullHealth twin
+        creature:SetStandState(UNIT_STAND_STATE_STAND)
+        creature:SetReactState(REACT_AGGRESSIVE)
+        creature:RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetRooted(false)
+        creature:Talk(EMOTE_FEIGN_REVIVE)
+        stalaggFeign[guid] = false
+        stalaggRefreshBeam[guid] = true
+        creature:DoZoneInCombat()
+        if not creature:IsInCombat() then
+            stalaggBeginResetEncounter(creature, guid)
+        end
+    elseif action == ACTION_TRANSITION then
+        creature:Kill(creature) -- KillSelf twin (black_morass precedent)
+        local coil = creature:FindNearestCreature(ENTRY_TESLA, 1000.0)
+        if coil then
+            coil:SetReactState(REACT_PASSIVE) -- myCoil() first-resolution leg
+            coil:StopSpellCast() -- no-op in Go's channel model (the 28096 channel has no finite DBC duration), ported as-written
+            coil:Talk(EMOTE_TESLA_OVERLOAD)
+        end
+    elseif action == ACTION_TRANSITION_2 then
+        local coil = creature:FindNearestCreature(ENTRY_TESLA, 1000.0)
+        local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
+        if coil and thaddius then
+            coil:SetReactState(REACT_PASSIVE) -- myCoil() first-resolution leg
+            coil:CastSpell(thaddius, SPELL_SHOCK_VISUAL)
+        end
+    elseif action == ACTION_TRANSITION_3 then
+        stalaggBeginResetEncounter(creature, guid)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_STALAGG, 1, stalaggEnterCombat)
 RegisterCreatureEvent(ENTRY_STALAGG, 2, stalaggLeaveCombat)
 RegisterCreatureEvent(ENTRY_STALAGG, 3, stalaggTargetDied)
@@ -370,3 +474,4 @@ RegisterCreatureEvent(ENTRY_STALAGG, 5, stalaggSpawn)
 RegisterCreatureEvent(ENTRY_STALAGG, 9, stalaggDamageTaken)
 RegisterCreatureEvent(ENTRY_STALAGG, 14, stalaggSpellHit)
 RegisterCreatureEvent(ENTRY_STALAGG, 23, stalaggReset)
+RegisterCreatureEvent(ENTRY_STALAGG, 38, stalaggDoAction)

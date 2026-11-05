@@ -17,19 +17,22 @@
 -- Eluna creature events: 9 OnDamageTaken. The C++ AI is otherwise
 -- inert: EnterEvadeMode/UpdateAI/JustEngagedWith are empty
 -- overrides (boss_thaddius.cpp:970-973); the coil only talks
--- (EMOTE_TESLA_OVERLOAD / EMOTE_TESLA_LINK_BREAKS via the unbridged
--- cross-AI stalagg/feugen beam machines) and channels the tesla
--- shock visuals (unbridged).
+-- (EMOTE_TESLA_OVERLOAD / EMOTE_TESLA_LINK_BREAKS via the stalagg/feugen
+-- beam machines — the coil Talk legs are ported in npc_stalagg.lua /
+-- npc_feugen.lua, ev38 DoAction) and channels the tesla
+-- shock visuals (unbridged — no spell-channel driver).
 -- Ported arms (C++-exact):
 -- - DamageTaken (boss_thaddius.cpp:974): damage = 0
 --   unconditionally ("no, you can't kill it"). Event 9 consumes the
 --   second return as the damage rewrite (fireCreatureDamageTaken;
 --   halazzi precedent), so the handler returns false, 0.
 -- Unmodeled (documented-only, no bridges): the shock-visual
--- channeling + beam talk legs (cross-AI DATA_THADDIUS / coil
--- CastStop + Talk via the stalagg/feugen AIs — no cross-AI
--- bridge); the ACTION_TRANSITION coil GO GO_STATE_READY leg (no
--- GO-state bridge).
+-- channeling itself (the coil never casts on its own — the beam is
+-- driven by the stalagg/feugen SpellHit machines). The cross-AI coil
+-- legs are PORTED 2026-11-05 in npc_stalagg.lua / npc_feugen.lua
+-- (ev38 DoAction: TRANSITION coil CastStop + Talk(EMOTE_TESLA_OVERLOAD),
+-- TRANSITION_3 coil GO GO_STATE_READY — the old "no cross-AI / GO-state
+-- bridge" claims are retracted: ev38 dispatch + SetGoState are bridged).
 
 local ENTRY_TESLA = 16218
 
