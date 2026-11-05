@@ -2129,13 +2129,19 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 	if !target.isPlayer && target.victim != nil && s.spellGateCreatureNeverSeesCreature(caller, target.victim) {
 		return false
 	}
-	// CanSeeOrDetect (Object.cpp:1664-1686): player targets via
+	// CanSeeOrDetect (Object.cpp:1649-1686): the ghost leg first
+	// (creature targets only: ghost players resolve dead, so the dead
+	// arms above already exclude them), then player targets via
 	// creatureSightInvisibilityBlocked plus the stealth half below;
 	// creature targets via creatureSightCanDetectCreature (stalked,
 	// then invisibility, then stealth, all from the victim's live
 	// creature auras, through the resolved seer for controlled
-	// scanners). No alert band: checkAlert is false on this path,
-	// as on the spell gate.
+	// scanners; the ghost leg itself judges the seer's own bits, not
+	// the controller's). No alert band: checkAlert is false on this
+	// path, as on the spell gate.
+	if !target.isPlayer && target.victim != nil && creatureSightGhostBlocked(caller, target.victim) {
+		return false
+	}
 	if target.isPlayer && s.creatureSightInvisibilityBlocked(caller, target.sess) {
 		return false
 	}
@@ -9185,6 +9191,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// different-phase victims never sight-aggro; the helper folds
 			// the runtime 261-phase override over the spawn row mask.
 			if s.spellGateCreatureNeverSeesCreature(motion, victim) {
+				continue
+			}
+			// WorldObject::CanSeeOrDetect's ghost leg (Object.cpp:1649-1661)
+			// ahead of the CanDetect legs: a ghost-only victim (spirit
+			// healer/guide, 0x400 flag) is invisible to a normal scanner,
+			// and an alive victim to a ghost-only scanner; the seer's own
+			// bits judge, not the controller's.
+			if creatureSightGhostBlocked(motion, victim) {
 				continue
 			}
 			// WorldObject::CanDetect (Object.cpp:1664-1686) via

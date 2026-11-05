@@ -1178,6 +1178,30 @@ func ghostLegVerdict(seerDetect, targetVis ghostBits, seerIsPlayer, targetIsPlay
 	return true, false
 }
 
+// creatureSightGhostBlocked is the SERVERSIDE_VISIBILITY_GHOST leg of
+// WorldObject::CanSeeOrDetect (Object.cpp:1649-1661) for a creature seer
+// against a creature victim: the victim's visibility bits against the
+// seer's OWN detect bits. The leg sits in CanSeeOrDetect itself, so it
+// does not route through the controller the way the CanDetect legs do
+// (creatureSeerSpellGateVisibleToCreature is the precedent). A normal
+// seer never sees a ghost-only victim (spirit healer/guide, 0x400 flag:
+// GHOST visibility against ALIVE detect), and a ghost-only seer never
+// sees an alive victim. Player victims need no leg here: ghost players
+// resolve dead, and the query's dead arms plus the scan's IsDead skip
+// already exclude them. Self targets pass: CanSeeOrDetect returns true
+// for this == obj (Object.cpp:1575).
+func creatureSightGhostBlocked(seer, victim *creatureMotion) bool {
+	if seer == nil || victim == nil || seer.GUID == victim.GUID {
+		return false
+	}
+	_, seerDetect := creatureGhostBits(seer)
+	targetVis, _ := creatureGhostBits(victim)
+	if decided, visible := ghostLegVerdict(seerDetect, targetVis, false, false, false); decided {
+		return !visible
+	}
+	return false
+}
+
 // playerGroupAlwaysDetectable mirrors the Player level of
 // IsAlwaysDetectableFor (Player.cpp:22584-22597) at the CanDetect level:
 // a player target is always detectable for a player seer group-visible
