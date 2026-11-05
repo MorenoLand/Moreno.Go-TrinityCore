@@ -19,9 +19,11 @@
 --   no SpellScript/AuraScript bridge exists in Go; the boss
 --   casts the base spells 32960/21063, the custom aura
 --   mechanics are unmodeled.
--- * The UNIT_STATE_CASTING gate — creature:IsCasting is a
---   stub returning false (lua_objects.go:330) — timers fire
---   unconditionally (documented only).
+-- * The UNIT_STATE_CASTING pre-loop gate (cpp:119, no
+--   in-loop gate) is PORTED via the 500ms IsCasting defer
+--   (mal_ganis idiom, live bridge lua_creature_events.go:
+--   1950): each arm defers under its own key, no re-arm
+--   consumed, gate precedes target picks and Talks.
 -- * JustAppeared's SAY_INTRO is wired to hook 5 (OnSpawn):
 --   no fire site exists for first grid activation, so the
 --   intro fires on the respawn path (documented deviation).
@@ -96,26 +98,49 @@ local function randomThreatPlayer(creature)
 end
 
 local function onShadowVolley(creature, guid)
+    -- C++ pre-loop gate (boss_doomlord_kazzak.cpp:119, no
+    -- in-loop gate): while casting the arm fires nothing and
+    -- consumes no re-arm — 500ms defer, mal_ganis idiom.
+    if creature:IsCasting() then
+        schedule(guid, "shadowvolley", 500, function() onShadowVolley(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SHADOW_VOLLEY)
     schedule(guid, "shadowvolley", {4000, 6000}, function() onShadowVolley(creature, guid) end)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CLEAVE)
     schedule(guid, "cleave", {8000, 12000}, function() onCleave(creature, guid) end)
 end
 
 local function onThunderclap(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "thunderclap", 500, function() onThunderclap(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_THUNDERCLAP)
     schedule(guid, "thunderclap", {10000, 14000}, function() onThunderclap(creature, guid) end)
 end
 
 local function onVoidBolt(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "voidbolt", 500, function() onVoidBolt(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_VOID_BOLT)
     schedule(guid, "voidbolt", {15000, 18000}, function() onVoidBolt(creature, guid) end)
 end
 
 local function onMarkOfKazzak(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "markofkazzak", 500, function() onMarkOfKazzak(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_MARK_OF_KAZZAK)
@@ -124,17 +149,33 @@ local function onMarkOfKazzak(creature, guid)
 end
 
 local function onEnrage(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function() onEnrage(creature, guid) end)
+        return
+    end
     creature:Talk(EMOTE_FRENZY)
     creature:CastSpell(creature, SPELL_ENRAGE)
     schedule(guid, "enrage", 30000, function() onEnrage(creature, guid) end)
 end
 
 local function onTwistedReflection(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "twistedreflection", 500, function() onTwistedReflection(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_TWISTED_REFLECTION)
     end
     schedule(guid, "twistedreflection", 15000, function() onTwistedReflection(creature, guid) end)
+end
+
+local function onBerserk(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_BERSERK)
 end
 
 local function onEnterCombat(event, creature)
@@ -148,7 +189,7 @@ local function onEnterCombat(event, creature)
     schedule(guid, "markofkazzak", 25000, function() onMarkOfKazzak(creature, guid) end)
     schedule(guid, "enrage", 60000, function() onEnrage(creature, guid) end)
     schedule(guid, "twistedreflection", 33000, function() onTwistedReflection(creature, guid) end)
-    schedule(guid, "berserk", 180000, function() creature:CastSpell(creature, SPELL_BERSERK) end)
+    schedule(guid, "berserk", 180000, function() onBerserk(creature, guid) end)
 end
 
 local function onLeaveCombat(event, creature)

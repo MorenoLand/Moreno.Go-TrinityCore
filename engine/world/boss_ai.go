@@ -13082,6 +13082,11 @@ func init() {
 	// the sources; both entries verified via the 2010
 	// TrinityCore changelog paste listing each entry ID
 	// (void_reaver precedent) — registered per loader order.
+	// Both UpdateAI pre-loop UNIT_STATE_CASTING gates are
+	// PORTED (500ms IsCasting defer per arm, mal_ganis idiom,
+	// no re-arm consumed; neither C++ loop has an in-loop gate)
+	// — see lua_scripts/outland/boss_doomlord_kazzak.lua and
+	// boss_doomwalker.lua.
 	RegisterLuaBoss("boss_doomlord_kazzak", 18728)
 	RegisterLuaBoss("boss_doomwalker", 17711)
 	// npc_nether_drake (Blade's Edge Mountains zone script,

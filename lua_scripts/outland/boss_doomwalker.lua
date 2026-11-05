@@ -25,9 +25,11 @@
 --   fired only in the engage branch
 --   (lua_creature_events.go:527-540), not a general
 --   MoveInLineOfSight notifier — documented only.
--- * The UNIT_STATE_CASTING gate (cpp:115-116) —
---   creature:IsCasting is a stub returning false
---   (lua_objects.go:330) — timers fire unconditionally.
+-- * The UNIT_STATE_CASTING pre-loop gate (cpp:113, no
+--   in-loop gate) is PORTED via the 500ms IsCasting defer
+--   (mal_ganis idiom, live bridge lua_creature_events.go:
+--   1950): each arm defers under its own key, no re-arm
+--   consumed.
 -- * Reset() schedules the events; Lua seeds them in
 --   OnEnterCombat (hellmaw precedent) — timing-model
 --   deviation.
@@ -122,6 +124,15 @@ local function randomThreatPlayerSkipFirst(creature)
 end
 
 local function onEnrage(creature, guid)
+    -- C++ pre-loop gate (boss_doomwalker.cpp:113, no in-loop
+    -- gate): while casting the arm fires nothing and consumes
+    -- no re-arm — 500ms defer, mal_ganis idiom. The gate
+    -- precedes the health check, the quake urand roll, and
+    -- every Talk/cast below.
+    if creature:IsCasting() then
+        schedule(guid, "enrage", 500, function() onEnrage(creature, guid) end)
+        return
+    end
     if creature:GetHealthPct() <= 20 then
         creature:CastSpell(creature, SPELL_ENRAGE)
         enraged[guid] = true
@@ -131,11 +142,19 @@ local function onEnrage(creature, guid)
 end
 
 local function onArmor(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "armor", 500, function() onArmor(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SUNDER_ARMOR)
     schedule(guid, "armor", {10000, 25000}, function() onArmor(creature, guid) end)
 end
 
 local function onChain(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chain", 500, function() onChain(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerSkipFirst(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
@@ -144,6 +163,10 @@ local function onChain(creature, guid)
 end
 
 local function onQuake(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "quake", 500, function() onQuake(creature, guid) end)
+        return
+    end
     if math.random(0, 1) == 1 then
         return -- C++: 50% skip kills the event, no re-arm (cpp:134).
     end
@@ -156,6 +179,10 @@ local function onQuake(creature, guid)
 end
 
 local function onOverrun(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "overrun", 500, function() onOverrun(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_OVERRUN)
     creature:CastSpell(nil, SPELL_OVERRUN)
     schedule(guid, "overrun", {25000, 40000}, function() onOverrun(creature, guid) end)

@@ -59,7 +59,7 @@
 --    casts SPELL_BLINDING_LIGHT on the victim instead of
 --    missiles.
 -- 2. Wrath arm — 20000+rand()%5000 init then 20000+rand()%
---    5000: InterruptNonMeleeSpells(false) ported (no-op twin);
+--    5000: InterruptNonMeleeSpells(false) PORTED (live cancel bridge lua_creature_events.go:1995);
 --    target = SelectTarget (Random, 1, 100, true) — random
 --    threat-list player within 100 yd, first MaxThreat entry
 --    skipped before filters (GetAITargets pick); TRIGGERED
@@ -77,7 +77,7 @@
 --    non-triggered DoCast(target, SPELL_ARCANE_MISSILES
 --    33031) (C++-exact), re-arm 3000 regardless (C++-exact).
 -- 4. Wrath-of-the-astromancer arm — 15000 init: InterruptNon
---    MeleeSpells unmodeled (no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)); target =
+--    MeleeSpells(false) PORTED (live cancel bridge, see :298/:343); target =
 --    SelectTarget(Random, 1) — random threat-list unit,
 --    first MaxThreat entry skipped before filters; the C++
 --    re-arms
