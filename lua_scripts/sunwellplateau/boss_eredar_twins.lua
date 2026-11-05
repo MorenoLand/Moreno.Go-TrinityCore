@@ -18,7 +18,8 @@
 -- (berserk). YELL_INTRO_SAC_*=0/1/2/3 and YELL_INTRO_ALY_*=0/1/2/3
 -- belong to the unmodeled intro chain; YELL_SISTER_ALYTHESS_DEAD=7
 -- and YELL_SISTER_SACROLASH_DEAD=7 belong to the sister-death
--- detection arms (cross-creature blocked — below). YELL_SAC_DEAD=4
+-- detection arms, PORTED 2026-11-05 via the GetInstanceCreature
+-- bridge + 1s in-combat poll (below). YELL_SAC_DEAD=4
 -- and YELL_ALY_DEAD=6 are the JustDied death yells, ported via the
 -- twinDead latch (see below).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
@@ -44,8 +45,9 @@
 -- playerOnly=false, UnitAI.h:170; nil pick casts nothing but
 -- keeps the schedule),
 -- Talk(EMOTE_SHADOW_NOVA, on target) + Talk(YELL_SHADOW_NOVA,
--- even on nil pick — C++-exact) (the
--- !SisterDeath gate is always true on this path; the emote's C++
+-- even on nil pick — C++-exact) (the arm runs only while
+-- !SisterDeath — the poll below switches it off on sister death;
+-- the emote's C++
 -- target arm is bridged — Talk(id, target) via the whisperTarget arm
 -- (engine/world/creature_text.go:62; C++-exact, non-whisper rows
 -- ignore the target) — both emote calls pass the target
@@ -56,8 +58,8 @@
 -- self-cast (C++ DoCast default triggered=false). The shadow-image
 -- summon arm (3 x DoSpawnCreature NPC_SHADOW_IMAGE) has no summon
 -- bridge — skipped (felmyst convention); the sister-death
--- conflagration arm 45342 has no cross-creature death bridge —
--- skipped (below). OnTargetDied(3): 25% Talk(YELL_SAC_KILL), no
+-- conflagration arm 45342 is PORTED below (detection poll +
+-- arm switch). OnTargetDied(3): 25% Talk(YELL_SAC_KILL), no
 -- TYPEID gate (C++-exact — the C++ KilledUnit Talk has no victim
 -- gate). OnDied(4): the SisterDeath-gated Talk(YELL_SAC_DEAD 4) is
 -- ported via the twinDead latch (both twins' ev4 handlers live in
@@ -108,8 +110,8 @@
 -- 3.8s, non-triggered DoCastVictim (nil ticks cast nothing but keep
 -- the schedule, jeklik convention) / enrage 46587 6min one-shot:
 -- Talk(YELL_BERSERK), non-triggered self-cast. The sister-death
--- shadow-nova arm 45329 and the empower/sister-dead arms have no
--- cross-creature bridge — skipped. OnTargetDied(3): 25% Talk(YELL_
+-- shadow-nova arm 45329 and the empower arm are PORTED below
+-- (detection poll + arm switch). OnTargetDied(3): 25% Talk(YELL_
 -- ALY_KILL), no TYPEID gate. OnDied(4): sister-death-gated Talk
 -- (YELL_ALY_DEAD 6) is ported via the twinDead latch; the loot-
 -- flag arm ports as RemoveFlag(79, LOOTABLE) on the sister-alive
@@ -151,10 +153,11 @@
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (BossAI::
 -- JustEngagedWith/JustDied/Reset and the DATA_EREDAR_TWINS book-
--- keeping, sister AttackStart/respawn/threat relays skipped); no cross-creature bridge — the sister-death detection
--- (instance->GetCreature(DATA_*), Talk(YELL_SISTER_*_DEAD), empower
--- 45366 self-cast, the sister-phase spell arms) and the SetBossState
--- (DONE) gates plus the alythess intro cross-Talk are unmodeled (hit-target-enumeration grounds, see header top); all touched-spell chaining
+-- keeping, sister AttackStart/respawn/threat relays skipped); the
+-- sister-death detection + empower + sister-phase spell arms are
+-- PORTED 2026-11-05 (GetInstanceCreature bridge + 1s poll, below);
+-- the SetBossState (DONE) gates plus the alythess intro cross-Talk
+-- stay unmodeled; all touched-spell chaining
 -- and the alythess blaze-summon (GO 187366) arms unmodeled; no
 -- summon bridge — the shadow-image spawns unmodeled; no flag/move/
 -- threat bridge — the AddThreat and intro-sighting arms stay
@@ -168,6 +171,7 @@ local SPELL_ENRAGE = 46587
 local SPELL_PYROGENICS = 45230
 local SPELL_FLAME_SEAR = 46771
 local SPELL_BLAZE = 45235
+local SPELL_EMPOWER = 45366
 
 -- UnitDefines.h:149; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
 -- bridged (engine/world/lua_creature_events.go:968).
@@ -187,6 +191,15 @@ local YELL_CANFLAGRATION = 8
 local YELL_ALY_KILL = 5
 local YELL_ALY_DEAD = 6
 local YELL_BERSERK = 9
+local YELL_SISTER_ALYTHESS_DEAD = 7
+local YELL_SISTER_SACROLASH_DEAD = 7
+
+-- sunwell_plateau.h SWPDataTypes: DATA_ALYTHESS = 10, DATA_SACROLASH = 11
+-- (DATA_KALECGOS 0, BRUTALLUS 1, FELMYST 2, EREDAR_TWINS 3, MURU 4,
+-- KILJAEDEN 5, then KALECGOS_DRAGON 6, HUMAN 7, SATHROVARR 8,
+-- MADRIGOSA 9, ALYTHESS 10, SACROLASH 11).
+local DATA_ALYTHESS = 10
+local DATA_SACROLASH = 11
 
 local timers = {}
 local sacrolashState = {}
@@ -199,8 +212,9 @@ local alythessState = {}
 -- own latch — so the yell fires exactly when the sister died before this
 -- twin. Both twins' ev4 handlers live in this file and fire in death
 -- order, so the latch is module state set in ev4: no cross-creature
--- lookup is needed (the UpdateAI empower / YELL_SISTER_*_DEAD detection
--- arms stay out — instance->GetCreature has no bridge). Go fires ev23
+-- lookup is needed for the JustDied yell (the UpdateAI empower /
+-- YELL_SISTER_*_DEAD detection arms are ported separately below via
+-- the GetInstanceCreature bridge + 1s poll). Go fires ev23
 -- before ev4 on the death path (fireCreatureDied), so the reset handlers
 -- below clear the latch only when the creature is alive — C++ Reset
 -- never runs on the death path (the spark_overgrind IsDead-gate
@@ -234,6 +248,14 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function cancelTimerKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
 end
 
 
@@ -273,14 +295,17 @@ local function sacrolashShadowBlades(creature, guid)
     end)
 end
 
--- C++ EVENT shadow nova: DoCast(random target, 45329) +
--- Talk(EMOTE_SHADOW_NOVA) + Talk(YELL_SHADOW_NOVA); repeat
--- {30s,35s}. The !SisterDeath Talk gate is always true on this
--- path (the UpdateAI sister-death detection poll is cross-creature
--- blocked; only the JustDied latch is ported); C++ fires
--- YELL_SHADOW_NOVA even when the target pick is nil — Talk
--- placement matches.
+-- C++ EVENT shadow nova (the !SisterDeath branch): DoCast(random
+-- target, 45329) + Talk(EMOTE_SHADOW_NOVA) + Talk(YELL_SHADOW_NOVA);
+-- repeat {30s,35s}. The arm stops when the sister-death poll latches
+-- (the pending event is cancelled and the latch guard below drops any
+-- in-flight tick); C++ fires YELL_SHADOW_NOVA even when the target
+-- pick is nil — Talk placement matches.
 local function sacrolashShadowNova(creature, guid)
+    local st = sacrolashState[guid]
+    if st and st.sisterDeath then
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "shadownova", 500, function()
             sacrolashShadowNova(creature, guid)
@@ -331,8 +356,74 @@ local function sacrolashEnrage(creature, guid)
     end
 end
 
+-- C++ EVENT conflagration (the SisterDeath branch, :224-235):
+-- InterruptSpell(CURRENT_GENERIC_SPELL) + DoCast(random target,
+-- 45342); repeat {30s,35s}; no Talk on this twin's arm. Armed at
+-- 30000 on the sister-death detection — ConflagrationTimer only
+-- decrements while SisterDeath is true, so it still holds its
+-- Initialize value then.
+local function sacrolashConflagration(creature, guid)
+    local st = sacrolashState[guid]
+    if st and st.sisterDeath then
+        if creature:IsCasting() then
+            schedule(guid, "conflagration", 500, function()
+                sacrolashConflagration(creature, guid)
+            end)
+            return
+        end
+        creature:InterruptSpell(1) -- CURRENT_GENERIC_SPELL (:234)
+        local target = randomThreatTarget(creature)
+        if target then
+            creature:CastSpell(target, SPELL_CONFLAGRATION)
+        end
+        -- C++ 30000 + rand32()%5000 is exclusive-top [30000,34999].
+        schedule(guid, "conflagration", math.random(30000, 34999), function()
+            sacrolashConflagration(creature, guid)
+        end)
+    end
+end
+
+-- C++ UpdateAI sister-death detection (:212-221): while !SisterDeath,
+-- each AI tick reads instance->GetCreature(DATA_ALYTHESS) and latches
+-- on isDead: Talk(YELL_SISTER_ALYTHESS_DEAD 7) + DoCast(me,
+-- SPELL_EMPOWER 45366) + InterruptSpell(CURRENT_GENERIC_SPELL), then
+-- the shadow-nova arm stops and the conflagration arm starts. The Go
+-- poll runs at 1s while in combat (sironas convention); C++ polls
+-- every AI tick including out of combat, but the sister can only die
+-- in combat, so the in-combat poll matches in practice.
+-- GetInstanceCreature is the tick-221 bridge; the twins self-latch
+-- their DATA ids on spawn (ev5, illidari-council idiom).
+local function sacrolashSisterDeathPoll(creature, guid)
+    local st = sacrolashState[guid]
+    if not st or st.sisterDeath then
+        return
+    end
+    local sister = creature:GetInstanceCreature(DATA_ALYTHESS)
+    if sister ~= nil and sister:IsDead() then
+        st.sisterDeath = true
+        creature:Talk(YELL_SISTER_ALYTHESS_DEAD)
+        creature:CastSpell(creature, SPELL_EMPOWER)
+        creature:InterruptSpell(1) -- CURRENT_GENERIC_SPELL (:220)
+        cancelTimerKey(guid, "shadownova")
+        schedule(guid, "conflagration", 30000, function()
+            sacrolashConflagration(creature, guid)
+        end)
+        return
+    end
+    schedule(guid, "sisterdeath", 1000, function()
+        sacrolashSisterDeathPoll(creature, guid)
+    end)
+end
+
+-- C++ instance OnCreatureCreate latching (InstanceScript::AddObject):
+-- the twin's GUID goes in the instance store under DATA_SACROLASH so
+-- the sister's poll can resolve it via GetInstanceCreature.
+local function sacrolashSpawn(event, creature)
+    creature:SetGuidData(DATA_SACROLASH)
+end
+
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
--- five bridgeable timers.
+-- five bridgeable timers + the sister-death poll.
 -- C++ ShadowimageTimer (boss_eredar_twins.cpp:272-287): 20s
 -- init/repeat — 3x fresh random threat target each (SelectTarget
 -- Random,0, playerOnly=FALSE) + DoSpawnCreature(NPC_SHADOW_IMAGE
@@ -389,6 +480,9 @@ local function sacrolashEnterCombat(event, creature, target)
     end)
     schedule(guid, "enrage", 360000, function()
         sacrolashEnrage(creature, guid)
+    end)
+    schedule(guid, "sisterdeath", 1000, function()
+        sacrolashSisterDeathPoll(creature, guid)
     end)
 end
 
@@ -447,12 +541,18 @@ local function alythessBlaze(creature, guid)
     end)
 end
 
--- C++ EVENT conflagration: DoCast(random target, 45342) +
--- Talk(EMOTE_CONFLAGRATION) + Talk(YELL_CANFLAGRATION), BlazeTimer
--- = 4000; repeat {30s,35s}. C++ fires YELL_CANFLAGRATION and the
--- blaze re-arm even when the target pick is nil — placement
--- matches.
+-- C++ EVENT conflagration (the !SisterDeath branch): DoCast(random
+-- target, 45342) + Talk(EMOTE_CONFLAGRATION) +
+-- Talk(YELL_CANFLAGRATION), BlazeTimer = 4000; repeat {30s,35s}.
+-- The arm stops when the sister-death poll latches (the pending event
+-- is cancelled and the latch guard below drops any in-flight tick);
+-- C++ fires YELL_CANFLAGRATION and the blaze re-arm even when the
+-- target pick is nil — placement matches.
 local function alythessConflagration(creature, guid)
+    local st = alythessState[guid]
+    if st and st.sisterDeath then
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "conflagration", 500, function()
             alythessConflagration(creature, guid)
@@ -515,8 +615,70 @@ local function alythessEnrage(creature, guid)
     end
 end
 
+-- C++ EVENT shadow nova (the SisterDeath branch, :570-580):
+-- DoCast(random target, 45329); repeat {30s,35s}; no Talk on this
+-- twin's arm. Armed at 40000 on the sister-death detection —
+-- ShadownovaTimer only decrements while SisterDeath is true, so it
+-- still holds its Initialize value then.
+local function alythessShadowNova(creature, guid)
+    local st = alythessState[guid]
+    if st and st.sisterDeath then
+        if creature:IsCasting() then
+            schedule(guid, "shadownova", 500, function()
+                alythessShadowNova(creature, guid)
+            end)
+            return
+        end
+        local target = randomThreatTarget(creature)
+        if target then
+            creature:CastSpell(target, SPELL_SHADOW_NOVA)
+        end
+        -- C++ 30000 + rand32()%5000 is exclusive-top [30000,34999].
+        schedule(guid, "shadownova", math.random(30000, 34999), function()
+            alythessShadowNova(creature, guid)
+        end)
+    end
+end
+
+-- C++ UpdateAI sister-death detection (:545-553): while !SisterDeath,
+-- each AI tick reads instance->GetCreature(DATA_SACROLASH) and latches
+-- on isDead: Talk(YELL_SISTER_SACROLASH_DEAD 7) + DoCast(me,
+-- SPELL_EMPOWER 45366) + InterruptSpell(CURRENT_GENERIC_SPELL), then
+-- the conflagration arm stops and the shadow-nova arm starts. The Go
+-- poll runs at 1s while in combat (sironas convention); C++ polls
+-- every AI tick including out of combat, but the sister can only die
+-- in combat, so the in-combat poll matches in practice.
+local function alythessSisterDeathPoll(creature, guid)
+    local st = alythessState[guid]
+    if not st or st.sisterDeath then
+        return
+    end
+    local sister = creature:GetInstanceCreature(DATA_SACROLASH)
+    if sister ~= nil and sister:IsDead() then
+        st.sisterDeath = true
+        creature:Talk(YELL_SISTER_SACROLASH_DEAD)
+        creature:CastSpell(creature, SPELL_EMPOWER)
+        creature:InterruptSpell(1) -- CURRENT_GENERIC_SPELL (:552)
+        cancelTimerKey(guid, "conflagration")
+        schedule(guid, "shadownova", 40000, function()
+            alythessShadowNova(creature, guid)
+        end)
+        return
+    end
+    schedule(guid, "sisterdeath", 1000, function()
+        alythessSisterDeathPoll(creature, guid)
+    end)
+end
+
+-- C++ instance OnCreatureCreate latching (InstanceScript::AddObject):
+-- the twin's GUID goes in the instance store under DATA_ALYTHESS so
+-- the sister's poll can resolve it via GetInstanceCreature.
+local function alythessSpawn(event, creature)
+    creature:SetGuidData(DATA_ALYTHESS)
+end
+
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
--- five bridgeable timers.
+-- five bridgeable timers + the sister-death poll.
 local function alythessEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- boss_eredar_twins.cpp:392 (JustEngagedWith arm 1; bridge live 2026-10-23)
     -- C++ JustEngagedWith (:396-400): sister Sacrolash (25165; instance
@@ -549,6 +711,9 @@ local function alythessEnterCombat(event, creature, target)
     end)
     schedule(guid, "enrage", 360000, function()
         alythessEnrage(creature, guid)
+    end)
+    schedule(guid, "sisterdeath", 1000, function()
+        alythessSisterDeathPoll(creature, guid)
     end)
 end
 
@@ -670,12 +835,14 @@ RegisterCreatureEvent(25165, 2, sacrolashLeaveCombat)
 RegisterCreatureEvent(25165, 3, sacrolashTargetDied)
 RegisterCreatureEvent(25165, 4, sacrolashDied)
 RegisterCreatureEvent(25165, 23, sacrolashReset)
+RegisterCreatureEvent(25165, 5, sacrolashSpawn)
 
 RegisterCreatureEvent(25166, 1, alythessEnterCombat)
 RegisterCreatureEvent(25166, 2, alythessLeaveCombat)
 RegisterCreatureEvent(25166, 3, alythessTargetDied)
 RegisterCreatureEvent(25166, 4, alythessDied)
 RegisterCreatureEvent(25166, 23, alythessReset)
+RegisterCreatureEvent(25166, 5, alythessSpawn)
 
 RegisterCreatureEvent(25214, 1, shadowImageEnterCombat)
 RegisterCreatureEvent(25214, 2, shadowImageLeaveCombat)

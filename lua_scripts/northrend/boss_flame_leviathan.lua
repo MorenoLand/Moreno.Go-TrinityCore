@@ -65,8 +65,12 @@
 -- CreatureEventOnHitBySpell is bridged; the arms stay out on their own
 -- machines: SPELL_START_THE_ENGINE 62472 vehicle-accessory install —
 -- no vehicle bridge; SPELL_ELECTROSHOCK 62522
--- InterruptSpell(CURRENT_CHANNELED_SPELL) — no InterruptSpell Lua
--- method (the InterruptNonMeleeSpells bridge does not cover it);
+-- InterruptSpell(CURRENT_CHANNELED_SPELL) — stale "no InterruptSpell
+-- Lua method" retracted 2026-11-05 (creature:InterruptSpell(2) is
+-- bridged, lua_creature_events.go:987) — but the arm is vacuous in
+-- both trees: it only cancels a live channel, and no leviathan arm
+-- in the C++ file or the Lua port ever starts one (all casts
+-- instant), so a handler would be dead code (snobold precedent);
 -- SPELL_OVERLOAD_CIRCUIT 62399 ++Shutdown — the only consumer is the
 -- early-4s shutdown (ScheduleEvent(EVENT_SHUTDOWN, 4s) +
 -- InterruptNonMeleeSpells, now bridged) — still blocked on the

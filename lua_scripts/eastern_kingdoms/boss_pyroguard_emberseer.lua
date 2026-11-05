@@ -58,7 +58,15 @@
 -- (IN_PROGRESS)); EVENT_PRE_FIGHT_1 (GetCreatureListWithEntryInGrid
 -- NPC_BLACKHAND_INCARCERATOR 10316, 35.0f -> SetImmuneToAll(false) +
 -- InterruptSpell + DoZoneInCombat, RemoveAura(15282),
--- EVENT_PRE_FIGHT_2 at 32s); EVENT_PRE_FIGHT_2 (self-cast 16245 +
+-- EVENT_PRE_FIGHT_2 at 32s) — re-triaged 2026-11-05: every leg is
+-- bridged now (GetCreaturesInGrid, InterruptSpell(2), DoZoneInCombat,
+-- RemoveAura, the SetImmuneToAll flag pair) but the arm stays out —
+-- its only scheduler is the instance ProcessEvent
+-- (EVENT_PYROGUARD_EMBERSEER) -> Emberseer->AI()->SetData(1, 1)
+-- (instance_blackrock_spire.cpp:274-281), and neither instance
+-- ProcessEvent forwarding nor cross-AI SetData dispatch is bridged
+-- (creature:SetData is a per-motion store, tick-222 precedent);
+-- EVENT_PRE_FIGHT_2 (self-cast 16245 +
 -- 16048, Talk(EMOTE_ONE_STACK)); EVENT_ENTER_COMBAT (AttackStart(
 -- SelectNearestPlayer(30.0f))); SpellHit 15281 (SPELL_ENCAGE_EMBERSEER) -> self-cast 15282 (SPELL_ENCAGED_EMBERSEER) +
 -- Reset if no aura; SpellHit 16049 stack latches (EMOTE_TEN_STACK at
