@@ -5385,11 +5385,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// the offline set is computed first because an offline
 		// victim is never suppressed (single _online field), and
 		// the refresh runs ahead of the 1s reselect below so a
-		// victim whose immunity or CC expired is pickable as
-		// online again without waiting for a taunt update or a
-		// threat-caused promotion; a taunted victim keeps its
-		// stored suppressed flag through the taunt (preserve leg
-		// in threatSuppressedSet) until AddThreat :386 promotes it.
+		// newly-conditioned victim sorts as suppressed at once. A
+		// victim whose immunity or CC expired does NOT promote on
+		// the tick — the refresh is suppress-only for refs that
+		// were online, and C++ promotes only at AddThreat :386
+		// (or on the offline-to-online return, where UpdateOffline
+		// recomputes the state); a taunted victim keeps its stored
+		// suppressed flag through the taunt (preserve leg in
+		// threatSuppressedSet) until AddThreat :386 promotes it.
 		// A condition gained mid-taunt stays deferred past the taunt
 		// (suppressDeferred in threatSuppressedSet) until its aura
 		// lapses or a fresh immunity apply fires.
@@ -5415,8 +5418,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		for guid := range s.threatFlagsOfflineSet(motion, players) {
 			offline[guid] = true
 		}
+		// Snapshot the stored offline set before the refresh: the
+		// suppressed refresh needs to know which victims are
+		// returning from offline (UpdateOffline recompute,
+		// ThreatManager.cpp:64-80) as opposed to plain online refs,
+		// for which it is suppress-only (see threatSuppressedSet).
+		wasOffline := make(map[uint64]bool)
+		for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+			if motion.ThreatMgr.IsOffline(guid) {
+				wasOffline[guid] = true
+			}
+		}
 		motion.ThreatMgr.SetOfflineSet(offline)
-		motion.ThreatMgr.SetSuppressedSet(s.threatSuppressedSet(motion, players, offline))
+		motion.ThreatMgr.SetSuppressedSet(s.threatSuppressedSet(motion, players, offline, wasOffline))
 		oldTarget := motion.TargetGUID
 		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); !passive && switched && newVictim != 0 {
 			motion.TargetGUID = newVictim

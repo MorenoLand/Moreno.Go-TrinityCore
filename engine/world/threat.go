@@ -61,14 +61,15 @@ type ThreatManager struct {
 	// (SetSuppressedSet), which re-evaluates ShouldBeSuppressed per victim
 	// — immunity to the owner's melee school, any confuse aura, any
 	// breakable stun — and preserves the stored flag for taunted victims
-	// instead of clearing it, so a non-taunted victim whose immunity or
-	// CC expires promotes back to online within one step tick; that tick
-	// refresh is Go's form of the EvaluateSuppressed re-evaluation hook,
-	// with the same one-tick staleness shape as the offline gate for
-	// amounts landing in the window after expiry. A condition observed
-	// while the victim taunts is recorded in suppressDeferred instead,
-	// so the refresh does not re-suppress on the tick after the taunt
-	// lapses (see threatSuppressedSet). The offline leg is
+	// instead of clearing it. The refresh is suppress-only for a ref that
+	// was online on the previous tick: a lapsed condition promotes only
+	// at AddThreat :386 (evaluateThreatVictimState) — C++ has no
+	// timer-based promotion — except on the offline-to-online return,
+	// where ThreatReference::UpdateOffline (ThreatManager.cpp:64-80)
+	// recomputes the state and the refresh promotes with it. A condition
+	// observed while the victim taunts is recorded in suppressDeferred
+	// instead, so the refresh does not re-suppress on the tick after the
+	// taunt lapses (see threatSuppressedSet). The offline leg is
 	// modeled below, fed only by callers that evaluate a ShouldBeOffline
 	// arm with motion context (see SetOfflineSet).
 	suppressed map[uint64]bool
@@ -989,10 +990,18 @@ func (s *Server) threatHeadOfflineSet(motion *creatureMotion) (map[uint64]bool, 
 // damage immunity tick 179), so a fresh triggering apply on a
 // non-taunting victim suppresses and clears the deferral. Root has
 // no EvaluateSuppressed call in C++ and no ShouldBeSuppressed leg,
-// so it fans out nothing. A non-taunted victim whose condition
-// expires promotes within one step tick, where C++ waits for
-// AddThreat — the same staleness shape as the offline flag.
-func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos, offline map[uint64]bool) (map[uint64]bool, map[uint64]bool) {
+// so it fans out nothing. wasOffline is the stored offline set from
+// before this tick's SetOfflineSet, so the refresh can tell an
+// offline-to-online return — where ThreatReference::UpdateOffline
+// (ThreatManager.cpp:64-80) recomputes the state and the refresh
+// promotes with it — from a plain online ref, for which the refresh
+// is suppress-only: a non-taunted victim whose condition expires
+// stays suppressed until it causes threat (AddThreat :386,
+// evaluateThreatVictimState), because C++ promotes on no timer.
+// Residual: TauntUpdate's EvaluateSuppressed(true) (:459) can also
+// promote, but it iterates _threatenedByMe — the victim's refs on
+// other lists — which Go has no reverse index for.
+func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos, offline map[uint64]bool, wasOffline map[uint64]bool) (map[uint64]bool, map[uint64]bool) {
 	if s == nil || motion == nil || motion.ThreatMgr == nil {
 		return nil, nil
 	}
@@ -1069,13 +1078,34 @@ func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos
 			// condition is observed absent (its aura expired) or a
 			// suppress-triggering aura apply fires (SuppressVictim
 			// clears the bit). An unresolvable victim cannot prove
-			// a lapse, so its deferral is carried through.
-			if cond || !resolved {
-				def[guid] = true
+			// a lapse, so its deferral is carried through. The
+			// offline-to-online return is the exception: C++
+			// UpdateOffline recomputes the state
+			// (ThreatManager.cpp:64-80) and the deferral does not
+			// survive it, so a resolved still-present condition
+			// falls through to the fresh evaluation below.
+			if cond && resolved && wasOffline[guid] {
+				// Fall through to the fresh evaluation.
+			} else {
+				if cond || !resolved {
+					def[guid] = true
+				}
+				continue
 			}
-			continue
 		}
 		if cond {
+			sup[guid] = true
+		} else if wasOffline[guid] {
+			// Returning from offline: C++ UpdateOffline recomputes
+			// the state (ThreatManager.cpp:64-80), so the lapsed
+			// condition promotes the ref to ONLINE here.
+		} else if motion.ThreatMgr.IsSuppressed(guid) {
+			// The condition lapsed while the ref was online: C++
+			// promotes only at AddThreat :386
+			// (evaluateThreatVictimState) or TauntUpdate's
+			// EvaluateSuppressed(true) (:459, unported — no
+			// reverse index), never on a timer, so the stored
+			// flag is carried through the refresh.
 			sup[guid] = true
 		}
 	}
@@ -1687,11 +1717,13 @@ func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed, oldTaunted bool, old
 // the one-tick window, with the flag landing on the next combat tick.
 // A suppressed existing ref receives no amount (C++
 // IsOnline gate :390): the stored flag refreshes on the combat step
-// tick via threatSuppressedSet, and creatureAddThreat promotes a
-// no-longer-suppressed ref synchronously ahead of this call
-// (ThreatManager.cpp:379-393), so the gate below only fires for raw
-// AddThreat callers and unresolvable victims, which keep the one-tick
-// window. A NEW victim's first amount is gated on a seeded suppressed
+// tick via threatSuppressedSet (suppress-only for refs that were
+// online — a lapsed condition promotes only at AddThreat :386), and
+// creatureAddThreat promotes a no-longer-suppressed ref synchronously
+// ahead of this call (ThreatManager.cpp:379-393), so the gate below
+// only fires for raw AddThreat callers and unresolvable victims,
+// which stay suppressed until a resolving creatureAddThreat
+// promotes them. A NEW victim's first amount is gated on a seeded suppressed
 // flag the same way, evaluated at add time by threatVictimSuppressed
 // (creatureAddThreat, C++ :402-407). Unfed
 // ShouldBeOffline arms stay online; DETAUNT
@@ -1791,12 +1823,14 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		// ThreatManager::AddThreat (ThreatManager.cpp:379-393): an
 		// existing ref that is suppressed receives no amount either
 		// — the same IsOnline gate on the stored state, refreshed on
-		// the combat step tick by threatSuppressedSet. C++ promotes
-		// a no-longer-suppressed ref synchronously here (:386) and
-		// adds the amount; creatureAddThreat does the same ahead of
-		// this call for resolved victims, so this gate only fires
-		// for raw AddThreat callers and unresolvable victims, which
-		// keep the one-tick window. A new victim's first amount IS
+		// the combat step tick by threatSuppressedSet (suppress-only
+		// for refs that were online — a lapsed condition promotes
+		// only at AddThreat :386). C++ promotes a no-longer-suppressed
+		// ref synchronously here (:386) and adds the amount;
+		// creatureAddThreat does the same ahead of this call for
+		// resolved victims, so this gate only fires for raw AddThreat
+		// callers and unresolvable victims, which stay suppressed
+		// until a resolving creatureAddThreat promotes them. A new victim's first amount IS
 		// gated: C++ creates the ref through UpdateOffline (:402-407)
 		// and adds through IsOnline, and Go seeds the suppressed flag
 		// for it in creatureAddThreat (threatVictimSuppressed).
