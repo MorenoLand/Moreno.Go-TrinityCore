@@ -83,10 +83,13 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
 -- culling_of_stratholme.cpp:852-945). InitializeAI schedules the idle
 -- Talk loop (EVENT_BARTLEBY_IDLE, {60,120}s seed, Repeat {120,240}s);
 -- seeded here on event 5 (spawn — the AddToWorld funnel fires 5 after
--- 36, creaturemotion.go). The DoAction ACTION_START_FLUFF leg stays
--- out (no DoAction bridge): it would cancel the idle loop and seed
--- BARTLEBY1 {15,30}s, so the idle loop keeps running past fluff start
--- in Go — documented deviation, not a ported behavior. The
+-- 36, creaturemotion.go). The DoAction ACTION_START_FLUFF leg is
+-- ported via the crate_helper event-14 relay at the end of this file
+-- (no DoAction bridge needed: the relay calls bartlebyStartFluff
+-- directly): the once-guard + idle-loop cancel are ported, but the
+-- BARTLEBY1 {15,30}s seed stays out — its Talk(1) leads straight into
+-- the spline chain, so bartleby goes silent after fluff start instead
+-- of talking at {15,30}s (documented deviation). The
 -- MovementInform spline-chain legs (BARTLEBY2/2_2/3, despawn) stay out
 -- (no MoveAlongSplineChain/MovementInform bridge).
 -- Ported (crate fluff event #4): npc_sergeant_morigan (entry 27877,
@@ -98,8 +101,9 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
 -- (Question truthy -> PERELLI_NO 0, else PERELLI_YES 1) and
 -- reschedules IDLE1 {15,30}s — except Question == 2, whose CHAIN1
 -- spline leg stays out, ending the loop. Started is per-GUID state
--- that only the unbridged DoAction ACTION_START_FLUFF flips, so it
--- stays false in Go (same documented deviation as bartleby).
+-- flipped by the crate_helper event-14 relay at the end of this file
+-- (nearest sergeant, 15yd): the next IDLE1 then Talks START (2) and
+-- IDLE2 answers, ending the loop as in C++ minus the spline chain.
 -- Documented-only (crate fluff events #1/#3/#5, spline-only):
 -- npc_martha_goslin (27884) JustAppeared/MovementInform arms only
 -- move along spline chains and set UNIT_NPC_EMOTESTATE (no spline /
@@ -109,12 +113,17 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
 -- InitializeAI/MovementInform spline chains (+ SummonCreature leg for
 -- scruffy, whose chain is likewise spline-gated); npc_roger_owens
 -- (27903) starts only on DoAction ACTION_START_FLUFF and runs
--- spline chains thereafter. npc_crate_helper (crate_helper_cot):
--- SpellHit event 14 IS bridged, but the 49590 arm's observable legs
--- are instance SetData (no instance bridge), GO crate swap (GO Delete
--- has no bridge; SummonGameObject alone cannot replace-and-delete)
--- and nearest-fluff DoAction (no DoAction bridge), so the
--- _crateRevealed latch alone is unobservable and stays out.
+-- spline chains thereafter. npc_crate_helper (crate_helper_cot,
+-- entry 27827): the SpellHit event-14 relay IS ported at the end of
+-- this file — on spell 49590 it picks the closest fluff creature by
+-- the C++ Find radii (jena 45yd, bartleby 5yd, morigan 15yd, roger
+-- 30yd; ReplaceIfCloser order, strict-closest wins) and delivers the
+-- in-scope legs directly (bartleby idle-cancel/Started flip, morigan
+-- Started flip); jena's Started flag is never read in C++ and roger's
+-- chain is spline-gated, so neither has an in-scope leg, and the
+-- malcolm Spawn fallback stays out (spline machine). The instance
+-- SetData (DATA_CRATE_REVEALED) and GO crate swap legs stay out (no
+-- instance bridge; GO Delete has no bridge).
 -- Documented-only: at_stratholme_inn_stairs_cot (area trigger, no
 -- RegisterAreaTrigger binding in-tree) — instance GetData gate +
 -- cross-creature SetGUID leg, both unbridged; forresten's SetGUID /
@@ -127,6 +136,7 @@ local ENTRY_PERELLI = 27876
 local timers = {}
 local moriganQuestion = {}
 local moriganStarted = {}
+local bartlebyStarted = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -138,6 +148,7 @@ local function cancelTimers(guid)
     end
     moriganQuestion[guid] = nil
     moriganStarted[guid] = nil
+    bartlebyStarted[guid] = nil
 end
 
 local function schedule(guid, key, delay, fn)
@@ -161,9 +172,28 @@ local function onBartlebyIdle(creature, guid)
     end)
 end
 
+-- C++ npc_bartleby_battsonAI::DoAction(ACTION_START_FLUFF), minus the
+-- BARTLEBY1 seed (spline chain, stays out): once-guard + idle cancel.
+-- Called directly by the crate_helper relay below — there is no
+-- DoAction bridge, and the relay already holds the bartleby object,
+-- so no GUID-to-creature lookup is needed.
+local function bartlebyStartFluff(creature)
+    local guid = creature:GetGUID()
+    if bartlebyStarted[guid] then
+        return
+    end
+    bartlebyStarted[guid] = true
+    local per = timers[guid]
+    if per and per["idle"] then
+        RemoveEventById(per["idle"])
+        per["idle"] = nil
+    end
+end
+
 local function onBartlebySpawn(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    bartlebyStarted[guid] = false
     schedule(guid, "idle", math.random(60000, 120000), function()
         onBartlebyIdle(creature, guid)
     end)
@@ -235,3 +265,63 @@ end)
 RegisterCreatureEvent(ENTRY_SERGEANT, 23, function(event, creature)
     cancelTimers(creature:GetGUID())
 end)
+
+-- C++ npc_crate_helperAI::SpellHit (culling_of_stratholme.cpp:1410-
+-- 1443): on SPELL_ARCANE_DISRUPTION 49590, once per helper (the
+-- _crateRevealed latch), the instance SetData + GO crate swap legs
+-- stay out (no instance/GO-Delete bridge), and the nearest-fluff
+-- DoAction leg is delivered directly: the C++ npc_*::Find(me) helpers
+-- are FindNearestCreature(entry, radius, true) calls — jena 27885 at
+-- 45yd, bartleby 27907 at 5yd, sergeant 27877 at 15yd, roger 27903 at
+-- 30yd — and ReplaceIfCloser keeps the strict-closest candidate in
+-- that order (first wins ties). Lua GetDistance is the 3D metric vs
+-- C++ 2D-squared, same winner on flat Stratholme ground. The
+-- no-candidate malcolm Spawn fallback stays out (spline machine).
+local ENTRY_CRATE_HELPER = 27827
+local ENTRY_JENA = 27885
+local ENTRY_ROGER = 27903
+local SPELL_ARCANE_DISRUPTION = 49590
+
+local crateRevealed = {}
+
+local function onCrateHelperSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_ARCANE_DISRUPTION then
+        return
+    end
+    local guid = creature:GetGUID()
+    if crateRevealed[guid] then
+        return
+    end
+    crateRevealed[guid] = true
+    local closest = nil
+    local closestDist = nil
+    local candidates = {
+        { ENTRY_JENA, 45 },
+        { ENTRY_BARTLEBY, 5 },
+        { ENTRY_SERGEANT, 15 },
+        { ENTRY_ROGER, 30 },
+    }
+    for _, pair in ipairs(candidates) do
+        local found = creature:FindNearestCreature(pair[1], pair[2])
+        if found then
+            local dist = creature:GetDistance(found)
+            if closestDist == nil or dist < closestDist then
+                closest = found
+                closestDist = dist
+            end
+        end
+    end
+    if closest == nil then
+        return
+    end
+    local entry = closest:GetEntry()
+    if entry == ENTRY_BARTLEBY then
+        bartlebyStartFluff(closest)
+    elseif entry == ENTRY_SERGEANT then
+        moriganStarted[closest:GetGUID()] = true
+    end
+    -- jena: Started is set but never read in C++ (no observable leg).
+    -- roger: EVENT_ROGER_START chain is spline-gated (stays out).
+end
+
+RegisterCreatureEvent(ENTRY_CRATE_HELPER, 14, onCrateHelperSpellHit)
