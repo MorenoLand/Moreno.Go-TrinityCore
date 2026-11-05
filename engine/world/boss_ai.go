@@ -14210,12 +14210,16 @@ func init() {
 	// DamageTaken is not an UpdateAI event). JustSummoned
 	// MoveFollow PORTED (event 19 + MoveFollow bridge,
 	// random-player pick);
-	// npc_pure_energy class unmodeled (entry not C++-verifiable —
-	// no .lua written, queued for TDB entry evidence; stub-free
-	// precedent). Entry 24744 verifiable from the C++ sources:
-	// magisters_terrace.h names BOSS_VEXALLUS = 24744
-	// (boss_felblood_kaelthas precedent).
+	// npc_pure_energy PORTED (lua_scripts/eastern_kingdoms/
+	// npc_pure_energy.lua): entry 24745 Wowhead-verified 2026-11-05
+	// (spell 44322 Summon Pure Energy links to npc=24745; Energy
+	// Feedback 44335 listed as used by Pure Energy) — ctor
+	// SetDisplayId(Modelid2) + JustDied killer self-cast 44335
+	// (triggered) + RemoveAura 44326. Entry 24744 verifiable from
+	// the C++ sources: magisters_terrace.h names BOSS_VEXALLUS =
+	// 24744 (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_vexallus", 24744)
+	RegisterLuaBoss("npc_pure_energy", 24745)
 	// boss_priestess_delrissa: ScriptedAI combat entry Talk(SAY_AGGRO) +
 	// self-cast flash-heal 17843 15s loop + renew 44174 10s->5s loop +
 	// shield 44291 2s->7.5s loop + dispel-magic 27609 7.5s->12s loop +

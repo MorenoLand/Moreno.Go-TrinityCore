@@ -53,8 +53,8 @@
 -- at health below 85/70/55/40/25% (100 - 15*stage): stage += 1,
 -- Talk(SAY_ENERGY), Talk(EMOTE_DISCHARGE_ENERGY), self-cast
 -- SPELL_SUMMON_PURE_ENERGY 44322 (kaelthas phoenix-summon precedent —
--- the summon spell itself is real even though the add's class has no
--- C++-verifiable entry and is unported, queued below); the heroic
+-- the summon spell itself is real; the add's class is ported in
+-- npc_pure_energy.lua, entry 24745 Wowhead-verified 2026-11-05); the heroic
 -- pair 46154/46159 (C++: if (IsHeroic()) DoCast(me, 46154) +
 -- DoCast(me, 46159) else DoCast(me, 44322), cpp:125-131) is ported
 -- above — stale "no difficulty bridge" retracted
@@ -86,17 +86,13 @@
 --   non-player threat target (pet) could be picked; the port reuses
 --   the randomThreatPlayer helper (player-only). A nil pick follows
 --   C++'s null-temp skip (no follow).
--- - npc_pure_energy (the file's second CreatureScript class): its entry
---   is NOT C++-verifiable (no pure-energy constant in
---   magisters_terrace.h; the class name appears only in
---   boss_vexallus.cpp + the loader fwd-decl/call) — no .lua written
---   (stub-free precedent, grubbis / boss_lord_valthalak queue
---   precedent); queued awaiting entry evidence from a TDB dump. Arms
---   mapped for the future port: constructor SetDisplayId(Modelid2);
---   JustDied: killer->CastSpell(killer, SPELL_ENERGY_FEEDBACK 44335,
---   true) + me->RemoveAurasDueToSpell(SPELL_PURE_ENERGY_PASSIVE 44326);
---   SPELL_ENERGY_BOLT 46156 + EVENT_ENERGY_BOLT/EVENT_ENERGY_FEEDBACK
---   are enum-only in C++ (never scheduled by the class).
+-- - npc_pure_energy (the file's second CreatureScript class): PORTED
+--   2026-11-05 in npc_pure_energy.lua — entry 24745 Wowhead-verified
+--   (spell 44322 Summon Pure Energy links to npc=24745); ctor
+--   SetDisplayId(Modelid2) on event 5 + JustDied killer self-cast
+--   44335 (triggered) + RemoveAura 44326. SPELL_ENERGY_BOLT 46156 +
+--   EVENT_ENERGY_BOLT/EVENT_ENERGY_FEEDBACK are enum-only in C++
+--   (never scheduled by the class).
 local SAY_AGGRO = 0
 local SAY_ENERGY = 1
 local SAY_KILL = 3
