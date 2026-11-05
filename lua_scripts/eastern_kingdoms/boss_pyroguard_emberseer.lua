@@ -28,9 +28,12 @@
 -- (GetAITargets: players alive within 100yd); 14s init -> 15s
 -- loop, re-arm unconditional (C++ Repeat sits outside the target
 -- check), non-triggered DoCast(target).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported (combat branch only): C++ UpdateAI pre-loop
+-- gate (:250) + in-loop gate (:278) are a 500ms IsCasting defer under
+-- each arm's own key (live, lua_creature_events.go:1950; mal_ganis
+-- idiom) -- a gated arm fires nothing and consumes no re-arm. The
+-- out-of-combat branch has no gate; its fireshield ticks stay
+-- unmodeled (port starts fireshield on combat entry). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention). C++ schedules EVENT_FIRE_SHIELD at Reset and
@@ -103,16 +106,28 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onFireShield(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireshield", 500, function() onFireShield(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FIRE_SHIELD)
     schedule(guid, "fireshield", 3000, function() onFireShield(creature, guid) end)
 end
 
 local function onFireNova(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "firenova", 500, function() onFireNova(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FIRENOVA)
     schedule(guid, "firenova", 6000, function() onFireNova(creature, guid) end)
 end
 
 local function onFlameBuffet(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flamebuffet", 500, function() onFlameBuffet(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FLAMEBUFFET)
     schedule(guid, "flamebuffet", 14000, function() onFlameBuffet(creature, guid) end)
 end
@@ -138,6 +153,10 @@ end
 -- DoCast(target, 17274) non-triggered, 14s init, Repeat(15s) outside
 -- the target check (re-arm unconditional).
 local function onPyroblast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pyroblast", 500, function() onPyroblast(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 100)
     if target then
         creature:CastSpell(target, SPELL_PYROBLAST)

@@ -33,9 +33,11 @@
 -- init -> {14s,16s} loop (C++ inclusive ranges; CreateLuaEvent
 -- {min,max}). Victim casts are GetVictim nil-guarded (incarcerator
 -- convention).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported (combat branch only): C++ UpdateAI pre-loop
+-- gate (:422) + in-loop gate (:443) are a 500ms IsCasting defer under
+-- each arm's own key (live, lua_creature_events.go:1950; mal_ganis
+-- idiom) -- a gated arm fires nothing and consumes no re-arm. The
+-- gyth-event pre-fight branch has no gate and stays unmodeled. The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
@@ -89,11 +91,19 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onWhirlwind(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind", 500, function() onWhirlwind(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WHIRLWIND)
     schedule(guid, "whirlwind", {13000, 18000}, function() onWhirlwind(creature, guid) end)
 end
 
 local function onCleave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() onCleave(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_CLEAVE)
@@ -102,6 +112,10 @@ local function onCleave(creature, guid)
 end
 
 local function onMortalStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mortalstrike", 500, function() onMortalStrike(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_MORTAL_STRIKE)

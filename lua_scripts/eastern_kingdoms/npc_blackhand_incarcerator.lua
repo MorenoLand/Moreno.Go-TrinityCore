@@ -24,9 +24,10 @@
 -- ScheduleEvent/Repeat urand semantics — halycon lower-bound
 -- precedent retired for this file by the triggered-flag+timer-re-arm
 -- sweep).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally (maiden
--- precedent). The C++ scheduler is driven from JustEngagedWith and
+-- C++ npc_blackhand_incarceratorAI::UpdateAI has zero CASTING checks
+-- (plain EventMap loop, no pre-loop or in-loop gate), so no gate
+-- exists to port; timers fire unconditionally per C++. The C++
+-- scheduler is driven from JustEngagedWith and
 -- drained by UpdateAI; the port schedules from OnEnterCombat(1) and
 -- cancels on 2/4/23 (maiden convention).
 -- EVENT_ENCAGE: random-player ENCAGE 16045 — SelectTarget(Random, 0,

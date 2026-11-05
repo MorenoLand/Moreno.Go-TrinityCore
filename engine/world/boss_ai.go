@@ -13921,9 +13921,9 @@ func init() {
 	// Shoot 16496 1s->500ms loop, stun-bomb 16497 16s->14s loop —
 	// both DoCastVictim (maiden convention). SPELL_HEALING_POTION
 	// 15504 + SPELL_HOOKEDNET 15609 are enum-only in C++ (never
-	// cast), omitted by design. No UNIT_STATE_CASTING model in Go;
-	// Reset _Reset / JustDied _JustDied covered by the cancel on
-	// 2/4/23.
+	// cast), omitted by design. UpdateAI CASTING gates ported as 500ms
+	// IsCasting defers; Reset _Reset / JustDied _JustDied covered by
+	// the cancel on 2/4/23.
 	// Entry 9736 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_QUARTERMASTER_ZIGRIS at 9736 (BRS creatures enum).
 	RegisterLuaBoss("quartermaster_zigris", 9736)
@@ -13935,9 +13935,10 @@ func init() {
 	// pre-fight event (immunes, altar player-check, incarceerator
 	// grid loop, freeze/growing stacks, SpellHit arms) is
 	// documented-only: no instance / SpellHit / SelectTarget bridges.
-	// EVENT_PYROBLAST 17274 is a random-target cast (no SelectTarget
-	// bridge) — unmodeled. No UNIT_STATE_CASTING model in Go; Reset
-	// _Reset / JustDied _JustDied covered by the cancel on 2/4/23.
+	// EVENT_PYROBLAST 17274 random-target cast ported via the
+	// threat-list pool (GetAITargets). UpdateAI combat-branch CASTING
+	// gates ported as 500ms IsCasting defers; Reset _Reset / JustDied
+	// _JustDied covered by the cancel on 2/4/23.
 	// Entry 9816 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_PYROGAURD_EMBERSEER at 9816 (BRS creatures enum).
 	RegisterLuaBoss("boss_pyroguard_emberseer", 9816)
@@ -13954,23 +13955,25 @@ func init() {
 	// Gyth (Rend Blackhand's mount): 4-event combat scheduler; see
 	// lua_scripts/eastern_kingdoms/boss_gyth.lua.
 	// Corrosive-acid 16359 / freeze 16350 / flamebreath 16390 self-cast
-	// 8s init -> 10s loop; knock-away 10101 victim-cast 12s init ->
-	// 14s loop (urand ranges use the lower bound, halycon convention).
+	// {8s,16s} init -> {10s,16s} loop; knock-away 10101 victim-cast
+	// {12s,18s} init -> {14s,20s} loop (C++ urand ranges as {min,max}).
 	// 5%-HP latch -> self-cast summon-rend 16328 via OnDamageTaken(9)
 	// (mother_smolderweb latch convention; the RemoveAura(16167)
 	// arm has no bridge). Pre-fight event (portcullis, Nefarius
 	// SetData, MovePath) is documented-only — no gameobject /
 	// creature-list / MotionMaster bridges; Reset/JustDied instance
-	// arms unmodeled. No UNIT_STATE_CASTING model in Go; Reset
-	// _Reset / JustDied _JustDied covered by the cancel on 2/4/23.
+	// arms unmodeled. UpdateAI combat-branch CASTING gates ported as
+	// 500ms IsCasting defers; Reset _Reset / JustDied _JustDied covered
+	// by the cancel on 2/4/23.
 	// Entry 10339 verifiable from the C++ sources: blackrock_spire.h
 	// names NPC_GYTH at 10339 (BRS creatures enum).
 	RegisterLuaBoss("boss_gyth", 10339)
 	// lua_scripts/eastern_kingdoms/boss_rend_blackhand.lua.
-	// Whirlwind 13736 self-cast 13s init -> 13s loop; cleave 15284
-	// victim-cast 15s init -> 10s loop; mortal-strike 16856 victim-cast
-	// 17s init -> 14s loop (urand ranges use the lower bound, halycon
-	// convention). SPELL_FRENZY 8269 / SPELL_KNOCKDOWN 13360 are
+	// Whirlwind 13736 self-cast {13s,15s} init -> {13s,18s} loop;
+	// cleave 15284 victim-cast {15s,17s} init -> {10s,14s} loop;
+	// mortal-strike 16856 victim-cast {17s,19s} init -> {14s,16s} loop
+	// (C++ urand ranges as {min,max}). UpdateAI combat-branch CASTING
+	// gates ported as 500ms IsCasting defers. SPELL_FRENZY 8269 / SPELL_KNOCKDOWN 13360 are
 	// enum-only in C++ (never cast), omitted by design. The whole
 	// pre-fight gyth event chain (Nefarius FindNearestCreature,
 	// portcullis gameobject, MovePath, NearTeleportTo, SummonCreature

@@ -35,9 +35,12 @@
 -- magmus latch convention); C++ checks the 5% latch in UpdateAI even
 -- out of combat, but the only state transition into sub-5% is damage,
 -- so the damage-event latch is faithful.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI combat-branch pre-loop gate
+-- (:146) + in-loop gate (:173) are a 500ms IsCasting defer under each
+-- arm's own key (live, lua_creature_events.go:1950; mal_ganis idiom)
+-- a gated arm fires nothing and consumes no re-arm. The 5% summon
+-- latch precedes the gate in C++ order (UpdateAI head, before
+-- UpdateVictim) and stays ungated on OnDamageTaken. The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (RemoveEventById convention — CreateLuaEvent returns an integer id,
@@ -95,21 +98,37 @@ local function cancelTimers(guid)
 end
 
 local function onCorrosiveAcid(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "acid", 500, function() onCorrosiveAcid(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CORROSIVE_ACID)
     schedule(guid, "acid", {10000, 16000}, function() onCorrosiveAcid(creature, guid) end)
 end
 
 local function onFreeze(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "freeze", 500, function() onFreeze(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FREEZE)
     schedule(guid, "freeze", {10000, 16000}, function() onFreeze(creature, guid) end)
 end
 
 local function onFlameBreath(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flame", 500, function() onFlameBreath(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FLAMEBREATH)
     schedule(guid, "flame", {10000, 16000}, function() onFlameBreath(creature, guid) end)
 end
 
 local function onKnockAway(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "knock", 500, function() onKnockAway(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_KNOCK_AWAY)

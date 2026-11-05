@@ -26,9 +26,12 @@
 -- (maiden convention — DoCastVictim path, creature:GetVictim()).
 -- EVENT_STUN_BOMB: victim-cast STUNBOMB 16497, 16s init -> 14s loop
 -- (maiden convention).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
--- casts are packet-visual), so timers fire unconditionally and both
--- in-loop casting gates are dropped (maiden precedent). The C++
+-- CASTING gates ported: C++ UpdateAI pre-loop gate (:69) + in-loop
+-- gate (:86) are a 500ms IsCasting defer under each arm's own key
+-- (live, lua_creature_events.go:1950; mal_ganis idiom) -- a gated arm
+-- fires nothing and consumes no re-arm, staying due until the cast
+-- ends. The in-loop gate's same-tick co-expiry suppression has no
+-- timer-arm model (independent callbacks, AV precedent). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
@@ -63,6 +66,10 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function onShoot(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shoot", 500, function() onShoot(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_SHOOT)
@@ -71,6 +78,10 @@ local function onShoot(creature, guid)
 end
 
 local function onStunBomb(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stunbomb", 500, function() onStunBomb(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_STUNBOMB)
