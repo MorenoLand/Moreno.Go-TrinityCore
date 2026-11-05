@@ -2377,8 +2377,11 @@ func (s *Server) selectAIThreatTarget(motion *creatureMotion, targetType uint32,
 // CanAssistTo(..., checkfaction=false) creature within absolute 3D range
 // that sees the enemy engages it immediately — no delay, no
 // AlreadyCallAssistance flag, unlike CallAssistance's delayed funnel.
-// The victim must resolve to a player session, the EngageWithTarget
-// bridge's player-only limit; creature victims stay out.
+// The victim resolves to a player session first, else to a live creature
+// motion on the caller's map/instance (AttackStart funnel closure: the
+// generic CanAssistTo twin and triggerCreatureAggro are both
+// creature-capable, so only the session gate ever blocked creature
+// victims).
 func (s *Server) callCreatureForHelp(ctx context.Context, caller *creatureMotion, radius float32) {
 	if s == nil || caller == nil || radius <= 0 {
 		return
@@ -2398,12 +2401,15 @@ func (s *Server) callCreatureForHelp(ctx context.Context, caller *creatureMotion
 	if victimGUID == 0 {
 		return
 	}
-	enemySess := s.findSessionByGUID(victimGUID)
-	if enemySess == nil || enemySess.player == nil {
-		return
+	// Resolve a player victim before taking motionMu (sessionsMu is
+	// never taken under motionMu); a creature victim resolves inside
+	// the locked section below, on the caller's map/instance.
+	var enemy assistParty
+	var enemyX, enemyY, enemyZ float32
+	if enemySess := s.findSessionByGUID(victimGUID); enemySess != nil && enemySess.player != nil {
+		enemy = assistParty{ok: true, isPlayer: true, pos: playerPosForAssist(enemySess)}
+		enemyX, enemyY, enemyZ = enemySess.player.X, enemySess.player.Y, enemySess.player.Z
 	}
-	enemyPos := playerPosForAssist(enemySess)
-	enemyX, enemyY, enemyZ := enemySess.player.X, enemySess.player.Y, enemySess.player.Z
 	mapID, instanceID, callerGUID := caller.Map, caller.InstanceID, caller.GUID
 	s.motionMu.Lock()
 	live := s.findCreatureMotionLocked(mapID, instanceID, callerGUID)
@@ -2411,8 +2417,22 @@ func (s *Server) callCreatureForHelp(ctx context.Context, caller *creatureMotion
 		s.motionMu.Unlock()
 		return
 	}
+	// AttackStart funnel closure: a creature victim has no session, so
+	// resolve it from the live motion map (the S5 gather precedent; a
+	// cross-instance creature never helps, matching C++'s single-Map
+	// grid search). A missing or dead motion is the no-live-target
+	// twin: return before any helper engages a corpse (S5 fire
+	// dead-drop symmetry).
+	if !enemy.ok {
+		victim := s.findCreatureMotionLocked(mapID, instanceID, victimGUID)
+		if victim == nil || victim.Health == 0 {
+			s.motionMu.Unlock()
+			return
+		}
+		enemy = assistParty{ok: true, faction: victim.Faction, evading: victim.Evading}
+		enemyX, enemyY, enemyZ = victim.X, victim.Y, victim.Z
+	}
 	friend := assistParty{ok: true, faction: live.Faction, evading: live.Evading}
-	enemy := assistParty{ok: true, isPlayer: true, pos: enemyPos}
 	var helpers []uint64
 	for guid, a := range s.motionMapLocked(mapID, instanceID) {
 		if guid == live.GUID || a == nil {
@@ -4266,10 +4286,9 @@ func (s *Server) creatureMovementType(motion *creatureMotion) uint32 {
 // never taken under motionMu); the search itself holds motionMu like
 // callCreatureAssistance does. DELTAS: the grid visit becomes a motion
 // map sweep (same-map/instance only, as in C++); the delayed
-// CallAssistance funnel is player-victim-only in Go (the
-// EngageWithTarget bridge's limit, see callCreatureForHelp), so a
-// creature victim's seek arrival still clears the no-call latch and
-// distracts but engages no assistants.
+// CallAssistance funnel is creature-capable since the S5 gather/fire
+// fix, so a creature victim's seek arrival clears the no-call latch,
+// distracts, and engages assistants through that funnel.
 func (s *Server) creatureFleeToGetAssistance(ctx context.Context, caller *creatureMotion) {
 	if s == nil || caller == nil {
 		return
