@@ -216,8 +216,12 @@ func (tm *ThreatManager) GetFixateTarget() uint64 {
 // (SpellAuraEffects.cpp:2772-2781, ThreatManager.cpp:439-458). C++ keys the
 // taunt state per threat reference and rebuilds it from the owner's live
 // MOD_TAUNT aura effects; Go keys it per victim GUID with the aura's expiry,
-// which the Update tick re-evaluates (the EvaluateSuppressed(true) tail of
-// TauntUpdate has no Go model — suppressed/offline ref states are unmodeled).
+// which the Update tick re-evaluates. The EvaluateSuppressed(true) tail of
+// TauntUpdate (:459) iterates _threatenedByMe — the owner as a victim on
+// OTHER lists (ThreatManager.h:219) — which Go has no reverse index for;
+// its taunt-applied direction on the owner's own list rides the live taunt
+// read in isSuppressedLocked, and the tick refresh plus the :386 promotion
+// cover the rest.
 // A non-positive duration means the aura carries no duration: the state lives
 // until the aura is removed.
 func (tm *ThreatManager) ApplyTaunt(victim uint64, durationMs uint32) {
@@ -343,6 +347,40 @@ func (tm *ThreatManager) IsOffline(victim uint64) bool {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	return tm.offline[victim]
+}
+
+// IsSuppressed reports whether the victim's reference is suppressed on
+// this list, the stored-flag read of ThreatReference::ShouldBeSuppressed
+// (ThreatManager.cpp:112-121). A taunted victim reads unsuppressed even
+// while the flag stands (:112-115), the same live exemption
+// isSuppressedLocked applies for the combat tick and AddThreat.
+func (tm *ThreatManager) IsSuppressed(victim uint64) bool {
+	if tm == nil || victim == 0 {
+		return false
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.isSuppressedLocked(victim)
+}
+
+// PromoteSuppressedVictim clears the suppressed flag on an existing entry,
+// the synchronous promotion of ThreatManager::AddThreat
+// (ThreatManager.cpp:379-393): a suppressed ref whose victim no longer
+// ShouldBeSuppressed goes ONLINE and its amount lands. Entry-gated like
+// SuppressVictim; Go sorts the threat list on read, so there is no heap
+// to notify (HeapNotifyIncreased), and the client list carries suppressed
+// refs, so no client update is marked here — the following AddThreat
+// marks it on a nonzero add.
+func (tm *ThreatManager) PromoteSuppressedVictim(victim uint64) {
+	if tm == nil || victim == 0 {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if _, ok := tm.entries[victim]; !ok {
+		return
+	}
+	delete(tm.suppressed, victim)
 }
 
 // EntryGUIDs returns a snapshot of the entry GUIDs, for callers that
@@ -858,13 +896,14 @@ func (s *Server) threatHeadOfflineSet(motion *creatureMotion) (map[uint64]bool, 
 // unsuppressed, as in the phase/detect evaluators: a logged-out or
 // cross-map victim's entry drops on the death/logout/evade paths,
 // and a cross-map creature victim is offline-flagged by the phase arm
-// anyway. This is the immunity-expiry hook the deferred item was
-// blocked on: the C++ expiry paths are the AddThreat promotion leg
-// (:386) and the TauntUpdate EvaluateSuppressed(true) tail (:459),
-// neither of which can run inside the pure-data manager; the combat
-// tick refresh re-evaluates every step tick instead, so promotion
-// lands at most one step tick after expiry — the same staleness
-// shape as the offline flag.
+// anyway. The AddThreat promotion leg (:386) now runs synchronously in
+// creatureAddThreat, which has the resolved victim; only the TauntUpdate
+// EvaluateSuppressed(true) tail (:459) stays tick-only — the
+// taunt-expiry direction (re-suppressing a victim whose taunt lapsed)
+// has no synchronous hook, while the taunt-applied direction rides the
+// live taunt read in isSuppressedLocked. The combat tick refresh
+// re-evaluates every step tick instead, so promotion lands at most one
+// step tick after expiry — the same staleness shape as the offline flag.
 func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos, offline map[uint64]bool) map[uint64]bool {
 	if s == nil || motion == nil || motion.ThreatMgr == nil {
 		return nil
@@ -1141,12 +1180,10 @@ func (s *Server) threatVictimOffline(motion *creatureMotion, victimGUID uint64, 
 // ShouldBeOffline at first contact creates the entry with zero threat
 // and never becomes the current victim. The caller supplies the
 // already-resolved victim (sess for a player, vm for a creature); the
-// evaluator runs the offline legs synchronously here, with motion
+// state legs run synchronously in evaluateThreatVictimState, with motion
 // context, never inside tm.mu and never through the motion map (see
-// threatVictimOffline). Only a victim with no entry is evaluated —
-// existing entries are already gated on the stored flag by AddThreat
-// itself. Sites that cannot resolve the victim keep raw AddThreat and
-// the one-tick window.
+// threatVictimOffline). Sites that cannot resolve the victim keep raw
+// AddThreat and the one-tick window.
 
 // threatVictimSuppressed evaluates ThreatReference::ShouldBeSuppressed
 // (ThreatManager.cpp:112-121) for a single victim the caller already
@@ -1203,17 +1240,61 @@ func (s *Server) threatVictimSuppressed(motion *creatureMotion, victimGUID uint6
 	return false
 }
 
-func (s *Server) creatureAddThreat(motion *creatureMotion, victimGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion) (switched bool, newVictim uint64) {
-	if motion == nil || motion.ThreatMgr == nil {
-		return false, 0
+// evaluateThreatVictimState runs the synchronous AddThreat state legs
+// (ThreatManager.cpp:379-407) for the resolved victim ahead of a threat
+// add: a new victim is seeded offline or suppressed (:402-407), and an
+// existing suppressed ref is promoted to ONLINE when its victim no longer
+// ShouldBeSuppressed (:379-393). The caller supplies the already-resolved
+// victim (sess for a player, vm for a creature); the evaluator runs the
+// offline/suppressed legs synchronously here, with motion context, never
+// inside tm.mu and never through the motion map (see threatVictimOffline).
+// An offline ref never promotes (C++ carries one _online field, so a
+// suppressed ref is never offline), and an unresolvable victim stays
+// tick-only: threatVictimSuppressed reads false with neither sess nor vm,
+// and seeding or promoting on that would invent a state the tick refresh
+// would not. creatureAddThreat and the threat-match wrapper share it, so
+// both AddThreat entry points gate the same way.
+func (s *Server) evaluateThreatVictimState(motion *creatureMotion, victimGUID uint64, sess *session, vm *creatureMotion) {
+	if motion == nil || motion.ThreatMgr == nil || victimGUID == 0 {
+		return
 	}
-	if victimGUID != 0 && !motion.ThreatMgr.HasThreatEntry(victimGUID) {
+	if !motion.ThreatMgr.HasThreatEntry(victimGUID) {
 		if s.threatVictimOffline(motion, victimGUID, sess, vm) {
 			motion.ThreatMgr.SeedNewVictimState(victimGUID, true, false)
 		} else if s.threatVictimSuppressed(motion, victimGUID, sess, vm) {
 			motion.ThreatMgr.SeedNewVictimState(victimGUID, false, true)
 		}
+		return
 	}
+	if motion.ThreatMgr.IsOffline(victimGUID) || !motion.ThreatMgr.IsSuppressed(victimGUID) || (sess == nil && vm == nil) {
+		return
+	}
+	if !s.threatVictimSuppressed(motion, victimGUID, sess, vm) {
+		motion.ThreatMgr.PromoteSuppressedVictim(victimGUID)
+	}
+}
+
+// matchUnitThreatToHighestThreat runs
+// ThreatManager::MatchUnitThreatToHighestThreat
+// (ThreatManager.cpp:419-437) with the AddThreat entry legs: the C++
+// delta runs through AddThreat (:379-410), so an offline or
+// still-suppressed victim's delta is dropped through the IsOnline gate,
+// and a no-longer-suppressed victim is promoted synchronously (:386)
+// ahead of it. The caller supplies the already-resolved victim (sess
+// for a player, vm for a creature).
+func (s *Server) matchUnitThreatToHighestThreat(motion *creatureMotion, victimGUID uint64, sess *session, vm *creatureMotion) (switched bool, newVictim uint64) {
+	if motion == nil || motion.ThreatMgr == nil {
+		return false, 0
+	}
+	s.evaluateThreatVictimState(motion, victimGUID, sess, vm)
+	return motion.ThreatMgr.MatchUnitThreatToHighestThreat(victimGUID)
+}
+
+func (s *Server) creatureAddThreat(motion *creatureMotion, victimGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion) (switched bool, newVictim uint64) {
+	if motion == nil || motion.ThreatMgr == nil {
+		return false, 0
+	}
+	s.evaluateThreatVictimState(motion, victimGUID, sess, vm)
 	return motion.ThreatMgr.AddThreat(victimGUID, amount, inMelee)
 }
 
@@ -1482,13 +1563,13 @@ func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed, oldTaunted bool, old
 // the one-tick window, with the flag landing on the next combat tick.
 // A suppressed existing ref receives no amount (C++
 // IsOnline gate :390): the stored flag refreshes on the combat step
-// tick via threatSuppressedSet, so an amount landing in the one-tick
-// window after immunity or CC expiry is dropped where C++ would
-// promote the ref synchronously (:386) and add it — the same
-// staleness shape as the offline gate. A NEW victim's first amount is
-// gated on a seeded suppressed flag the same way, evaluated at add
-// time by threatVictimSuppressed (creatureAddThreat, C++ :402-407);
-// callers that add threat raw keep the one-tick window. Unfed
+// tick via threatSuppressedSet, and creatureAddThreat promotes a
+// no-longer-suppressed ref synchronously ahead of this call
+// (ThreatManager.cpp:379-393), so the gate below only fires for raw
+// AddThreat callers and unresolvable victims, which keep the one-tick
+// window. A NEW victim's first amount is gated on a seeded suppressed
+// flag the same way, evaluated at add time by threatVictimSuppressed
+// (creatureAddThreat, C++ :402-407). Unfed
 // ShouldBeOffline arms stay online; DETAUNT
 // (SPELL_AURA_MOD_DETAUNT) has no Go aura model;
 // ProcessAIUpdates/JustStartedThreateningMe (boss hooks ride the new-victim
@@ -1588,15 +1669,13 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		// — the same IsOnline gate on the stored state, refreshed on
 		// the combat step tick by threatSuppressedSet. C++ promotes
 		// a no-longer-suppressed ref synchronously here (:386) and
-		// adds the amount; Go promotes on the next tick refresh, so
-		// an amount landing in the one-tick window after immunity
-		// or CC expiry is dropped where C++ would add it — the same
-		// staleness shape as the offline gate above. A new victim's
-		// first amount IS gated: C++ creates the ref through
-		// UpdateOffline (:402-407) and adds through IsOnline, and
-		// Go seeds the suppressed flag for it in creatureAddThreat
-		// (threatVictimSuppressed); only raw AddThreat callers keep
-		// the one-tick window.
+		// adds the amount; creatureAddThreat does the same ahead of
+		// this call for resolved victims, so this gate only fires
+		// for raw AddThreat callers and unresolvable victims, which
+		// keep the one-tick window. A new victim's first amount IS
+		// gated: C++ creates the ref through UpdateOffline (:402-407)
+		// and adds through IsOnline, and Go seeds the suppressed flag
+		// for it in creatureAddThreat (threatVictimSuppressed).
 		if tm.isSuppressedLocked(victim) {
 			return false, tm.currentVictim
 		}
@@ -1701,7 +1780,12 @@ func (tm *ThreatManager) SetThreat(victim uint64, amount float32) (switched bool
 // keeps the redirect registry untouched: a missing entry is created
 // (PutThreatListRef, ThreatManager.cpp:793, marks the client list dirty),
 // then ThreatReference::AddThreat (ThreatManager.cpp:38-47) applies the delta
-// — a zero delta is a no-op with no dirty mark, negatives floor at 0.
+// through the IsOnline gate — an offline or still-suppressed victim's delta
+// is dropped, and a no-longer-suppressed victim was promoted synchronously
+// ahead of this call (evaluateThreatVictimState, :386), so the gate below
+// reads the evaluated state for resolved victims and the stored flag for
+// unresolvable ones. A zero delta is a no-op with no dirty mark, negatives
+// floor at 0.
 // Victim selection is the AddThreat legs verbatim: with a current victim the
 // existing-entry leg selects nothing (the new-entry leg runs ProcessAIUpdates
 // hooks only) — the 1s Update tick reselects, where the taunt-state
@@ -1767,7 +1851,10 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	// ThreatReference::AddThreat (ThreatManager.cpp:38-47): a zero delta is
 	// a no-op with no dirty mark; a negative delta floors the base at 0;
 	// any nonzero write marks the client list dirty (ThreatManager.cpp:49).
-	if delta != 0 {
+	// The IsOnline gate (ThreatManager.cpp:379-393) drops the delta for an
+	// offline or still-suppressed victim — the entry still installs at 0
+	// for a new victim, matching C++'s create-then-gate order.
+	if delta != 0 && !tm.isOfflineLocked(victim) && !tm.isSuppressedLocked(victim) {
 		newThreat := tm.entries[victim] + delta
 		if newThreat < 0 {
 			newThreat = 0
@@ -2609,7 +2696,7 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	if motion.ThreatMgr.GetCurrentVictim() == s.playerGUID {
 		return
 	}
-	switched, newVictim := motion.ThreatMgr.MatchUnitThreatToHighestThreat(s.playerGUID)
+	switched, newVictim := s.server.matchUnitThreatToHighestThreat(motion, s.playerGUID, s, nil)
 	if switched || newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
 		entries := motion.ThreatMgr.SortedEntriesAvailable()

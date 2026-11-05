@@ -4262,7 +4262,7 @@ func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spe
 			s.motionMu.Unlock()
 			continue
 		}
-		switched, newVictim := motion.ThreatMgr.MatchUnitThreatToHighestThreat(m.GUID)
+		switched, newVictim := s.matchUnitThreatToHighestThreat(motion, m.GUID, nil, m)
 		if switched || newVictim != motion.TargetGUID {
 			motion.TargetGUID = newVictim
 			entries := motion.ThreatMgr.SortedEntriesAvailable()
