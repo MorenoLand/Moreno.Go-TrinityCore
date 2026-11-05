@@ -119,15 +119,12 @@
 --   DoCastSelf(42428) head-is-dead SpellScript cast, and
 --   _instance->GetCreature(DATA_HEADLESS_HORSEMAN).
 -- - spell_headless_horseman_summoning_rhyme_aura (42879, tick 189
---   audit — NOT ported): the PeriodicTick switch is keyed on
---   aurEff->GetTickNumber() (1/3/5/8) and no GetTickNumber bridge
---   exists anywhere in the engine (AuraEvents exposes only
---   OnPeriodic; no OnApply/OnRemove to maintain an exact counter,
---   and no in-tree precedent counts aura ticks in Lua). The arms
---   themselves are otherwise bridgeable — aura:GetCaster() +
---   caster:Talk(SAY_*, player) (mandokir whisper precedent),
---   player:CastSpell(player, 42910/42909, true), aura:Remove() —
---   so the port is one tick-number bridge away.
+--   audit): the PeriodicTick switch is keyed on
+--   aurEff->GetTickNumber() (1/3/5/8) — PORTED below (tick 191,
+--   RegisterAuraEvent, aura:GetTickNumber bridge); the arms are
+--   aura:GetCaster() + caster:Talk(SAY_*, player) (mandokir whisper
+--   precedent), player:CastSpell(player, 42910/42909, true),
+--   aura:Remove().
 -- - npc_pulsing_pumpkin (23694): PORTED below. Reset's own 42281
 --   self-cast IS the DoAction trigger in C++ (the 42281 SpellScript
 --   hits self -> ACTION_PUMPKIN_SPROUTING_FINISHED), so the sprout
@@ -177,6 +174,13 @@ local SAY_SPROUTING_PUMPKINS = 3 -- boss_headless_horseman.cpp:53
 local SOUNDID_MANIACAL_LAUGH = 11975 -- boss_headless_horseman.cpp:150
 local SPELL_MANIACAL_LAUGH_AURA = 43893 -- boss_headless_horseman.cpp:814
 local SPELL_SUMMON_PUMPKIN_BURST_DELAY = 52236 -- boss_headless_horseman.cpp:934
+local SPELL_SUMMONING_RHYME_AURA = 42879 -- boss_headless_horseman.cpp:90
+local SPELL_SUMMONING_RHYME_SHAKE_SMALL = 42910 -- boss_headless_horseman.cpp:92
+local SPELL_SUMMONING_RHYME_SHAKE_MEDIUM = 42909 -- boss_headless_horseman.cpp:91
+local SAY_PLAYER_RISE = 2 -- boss_headless_horseman.cpp:44
+local SAY_PLAYER_TIME = 3 -- boss_headless_horseman.cpp:45
+local SAY_PLAYER_DEATH = 4 -- boss_headless_horseman.cpp:46
+local SAY_PLAYER_DEMISE = 5 -- boss_headless_horseman.cpp:47
 
 local ENTRY_HEADLESS_HORSEMAN = 23682
 local ENTRY_HORSEMAN_HEAD = 23775
@@ -513,3 +517,35 @@ local function pumpkinBurstDelayTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SUMMON_PUMPKIN_BURST_DELAY, 1, pumpkinBurstDelayTick)
+
+-- C++ spell_headless_horseman_summoning_rhyme_aura::PeriodicTick
+-- (boss_headless_horseman.cpp:976-1005): the aura caster is the
+-- horseman creature and the aura target is the player; tick 1/3/5/8
+-- the caster Talks SAY_PLAYER_RISE/TIME/DEATH/DEMISE (2/3/4/5) to
+-- the player (mandokir whisper precedent), tick 5 the player
+-- self-casts SHAKE_SMALL (42910) triggered, tick 8 the player
+-- self-casts SHAKE_MEDIUM (42909) triggered and the aura is removed.
+-- No PreventDefaultAction in C++ (PERIODIC_DUMMY has no default
+-- cast), so the handler returns nothing. PORTED tick 191 on the new
+-- aura:GetTickNumber bridge.
+local function summoningRhymeTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    local tick = aura:GetTickNumber()
+    if tick == 1 then
+        caster:Talk(SAY_PLAYER_RISE, target)
+    elseif tick == 3 then
+        caster:Talk(SAY_PLAYER_TIME, target)
+    elseif tick == 5 then
+        caster:Talk(SAY_PLAYER_DEATH, target)
+        target:CastSpell(target, SPELL_SUMMONING_RHYME_SHAKE_SMALL, true)
+    elseif tick == 8 then
+        caster:Talk(SAY_PLAYER_DEMISE, target)
+        target:CastSpell(target, SPELL_SUMMONING_RHYME_SHAKE_MEDIUM, true)
+        aura:Remove()
+    end
+end
+
+RegisterAuraEvent(SPELL_SUMMONING_RHYME_AURA, 1, summoningRhymeTick)

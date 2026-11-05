@@ -167,6 +167,7 @@ local ENTRY_BLAZING_SKELETON = 36791
 local SPELL_GUT_SPRAY = 70633
 local SPELL_FROSTBOLT_VOLLEY = 70759
 local SPELL_MANA_VOID = 71179
+local SPELL_MANA_VOID_AURA = 71085
 local SPELL_COLUMN_OF_FROST = 70704
 local SPELL_FIREBALL = 70754
 local SPELL_LEY_WASTE = 69325
@@ -558,3 +559,17 @@ RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 23, risenArchmageLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 1, blazingSkeletonJustEngagedWith)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 2, blazingSkeletonLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 23, blazingSkeletonLeaveCombat)
+
+-- C++ spell_dreamwalker_mana_void::PeriodicTick
+-- (boss_valithria_dreamwalker.cpp:994-1001): the first 3 ticks have
+-- amplitude 1s and the remaining ticks 500ms; ticks 2 and 4 (even
+-- ticks at or below 5) PreventDefaultAction, the rest run the Go
+-- default trigger cast. Returns true only on the suppressed ticks.
+local function manaVoidTick(event, aura, target)
+    local tick = aura:GetTickNumber()
+    if tick <= 5 and tick % 2 == 0 then
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_MANA_VOID_AURA, 1, manaVoidTick)

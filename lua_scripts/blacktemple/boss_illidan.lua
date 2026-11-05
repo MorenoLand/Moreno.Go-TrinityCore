@@ -356,6 +356,8 @@ local SPELL_BERSERK = 45078
 local SPELL_AGONIZING_FLAMES_SELECTOR = 40834
 local SPELL_DEMON_TRANSFORM_1 = 40511
 local SPELL_DEMON_TRANSFORM_2 = 40398 -- boss_illidan.cpp:172
+local SPELL_DEMON_TRANSFORM_3 = 40510 -- boss_illidan.cpp:173
+local SPELL_DEMON_FORM = 40506 -- boss_illidan.cpp:174
 local SPELL_AZZINOTH_CHANNEL = 39857 -- boss_illidan.cpp:110
 local SPELL_UNCAGED_WRATH = 39869 -- boss_illidan.cpp:117
 local SPELL_CAGE_TRAP = 40760 -- boss_illidan.cpp:190
@@ -1857,3 +1859,33 @@ local function cagedTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_CAGE_TRAP, 1, cagedTick)
+
+-- C++ spell_illidan_demon_transform2::OnPeriodic
+-- (boss_illidan.cpp:2141-2160): PreventDefaultAction; tick 1: the
+-- aura target self-casts SPELL_DEMON_FORM (40506) triggered if its
+-- display is its native display, else removes auras of 40506
+-- (RemoveAura twin of RemoveAurasDueToSpell); tick 2: the target
+-- self-casts SPELL_DEMON_TRANSFORM_3 (40510) triggered, that aura's
+-- duration is set to 4300ms, and this aura is removed. Returns true,
+-- the PreventDefaultAction twin, so the Go default trigger cast
+-- does not also fire.
+local function demonTransform2Tick(event, aura, target)
+    local tick = aura:GetTickNumber()
+    if tick == 1 then
+        if target:GetDisplayId() == target:GetNativeDisplayId() then
+            target:CastSpell(target, SPELL_DEMON_FORM, true)
+        else
+            target:RemoveAura(SPELL_DEMON_FORM)
+        end
+    elseif tick == 2 then
+        target:CastSpell(target, SPELL_DEMON_TRANSFORM_3, true)
+        local transform3 = target:GetAura(SPELL_DEMON_TRANSFORM_3)
+        if transform3 ~= nil then
+            transform3:SetDuration(4300)
+        end
+        aura:Remove()
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_DEMON_TRANSFORM_2, 1, demonTransform2Tick)

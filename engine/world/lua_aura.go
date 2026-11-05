@@ -152,8 +152,14 @@ func (r *luaAuraRef) ownerObject() any {
 }
 
 // luaAuraObject builds the Eluna Aura object (AuraMethods.h, all 12
-// methods). SetDuration/SetMaxDuration/SetStackAmount/Remove are the
-// live mutations: SetDuration rewrites the remaining + re-arms the
+// methods) plus the AuraEffect periodic reads the RegisterAuraEvent
+// hook needs: GetTickNumber/GetTotalTicks/GetAmount are C++
+// AuraEffect methods (SpellAuraEffects.h:79-80, SpellAuraEffects.cpp:
+// 525-550), surfaced on the Aura object because the hook fires once
+// per aura tick and Go holds one TickCount/Amounts record per aura
+// (all periodic effects of one aura tick in the same Update pass, so
+// the per-effect counters agree). SetDuration/SetMaxDuration/
+// SetStackAmount/Remove are the live mutations: SetDuration rewrites the remaining + re-arms the
 // expiry timer (a field-only write would leave the old timer firing
 // at the old deadline); SetMaxDuration rewrites DurationMs only, so
 // a later refresh picks the new max up, exactly as Eluna documents;
@@ -200,6 +206,55 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		return int32(aura.DurationMs)
 	})
 	methods["GetStackAmount"] = luaNoArgs(func() any { return uint32(auraWireStackCount(r.resolve())) })
+	// GetTickNumber is AuraEffect::GetTickNumber (SpellAuraEffects.h),
+	// the _ticksDone counter: both periodic-tick executors increment
+	// TickCount before the hook fires (spells.go), so the first tick
+	// already reads 1, like C++ (SpellAuraEffects.cpp:827-830). A
+	// removed aura reads 0.
+	methods["GetTickNumber"] = luaNoArgs(func() any {
+		if aura := r.resolve(); aura != nil {
+			return aura.TickCount
+		}
+		return uint32(0)
+	})
+	// GetTotalTicks is AuraEffect::GetTotalTicks
+	// (SpellAuraEffects.cpp:540-550): 0 when the aura has no amplitude
+	// or is permanent, else maxDuration/amplitude, +1 when the spell
+	// carries SPELL_ATTR5_START_PERIODIC_AT_APPLY. An unknown spell
+	// record reads the +1 leg as 0 rather than failing the call.
+	methods["GetTotalTicks"] = luaNoArgs(func() any {
+		aura := r.resolve()
+		if aura == nil || aura.PeriodMs == 0 || aura.DurationMs == 0 {
+			return uint32(0)
+		}
+		total := aura.DurationMs / aura.PeriodMs
+		if r.server != nil && r.server.Data != nil {
+			if sp, found, err := r.server.Data.Spell(spellID); err == nil && found {
+				if sp.AttributesEx5&spellAttr5StartPeriodicAtApply != 0 {
+					total++
+				}
+			}
+		}
+		return total
+	})
+	// GetAmount([effectIndex]) is AuraEffect::GetAmount: the live
+	// effect amount (Amounts, rescaled by stack), defaulting to effect
+	// 0. An out-of-range index or a removed aura reads 0.
+	methods["GetAmount"] = func(_ context.Context, args []any) ([]any, error) {
+		index := 0
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaInt64Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		aura := r.resolve()
+		if aura == nil || index < 0 || index >= len(aura.Amounts) {
+			return []any{int32(0)}, nil
+		}
+		return []any{aura.Amounts[index]}, nil
+	}
 	methods["GetOwner"] = luaNoArgs(func() any { return r.ownerObject() })
 	methods["SetDuration"] = func(_ context.Context, args []any) ([]any, error) {
 		duration, err := luaInt64Arg(args, 0)

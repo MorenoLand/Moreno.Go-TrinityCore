@@ -40,8 +40,8 @@
 -- is unported — so the port starts directly at the landing combat state.
 -- Rain of Bones (37098) is cast on the random target only — its
 -- AuraScript periodic skeleton-summon arm (SPELL_SUMMON_SKELETON 30170,
--- every 5th tick) has no bridge; AuraScript check handlers are a standing
--- unmodeled area. The EVENT_RAIN_OF_BONES ResetThreatList arm IS
+-- every 5th tick) is PORTED below (tick 191, RegisterAuraEvent,
+-- aura:GetTickNumber bridge). The EVENT_RAIN_OF_BONES ResetThreatList arm IS
 -- ported (:205 — ResetAllThreat bridged). Tail
 -- Sweep's HasInArc(PI) behind-target gate is PORTED via the inArc twin
 -- (GetX/GetY/GetO are bridged). No UNIT_STATE_CASTING model, so timers
@@ -60,6 +60,7 @@ local SPELL_CHARRED_EARTH = 30129
 local SPELL_CLEAVE = 30131
 local SPELL_DISTRACTING_ASH = 30130
 local SPELL_RAIN_OF_BONES = 37098
+local SPELL_SUMMON_SKELETON = 30170
 local SPELL_SMOKING_BLAST = 30128
 local SPELL_SMOKING_BLAST_T = 37057
 local SPELL_SMOLDERING_BREATH = 30210
@@ -448,3 +449,16 @@ RegisterCreatureEvent(ENTRY_NIGHTBANE, 4, nightbaneDied)
 RegisterCreatureEvent(ENTRY_NIGHTBANE, 9, nightbaneDamageTaken)
 RegisterCreatureEvent(ENTRY_NIGHTBANE, 23, nightbaneReset)
 RegisterCreatureEvent(ENTRY_NIGHTBANE, 24, nightbaneReachHome)
+
+-- C++ spell_rain_of_bones_AuraScript::OnTrigger
+-- (boss_nightbane.cpp:402-406): every 5th tick the aura target
+-- self-casts SPELL_SUMMON_SKELETON (30170) triggered. C++ calls no
+-- PreventDefaultAction, so the port returns nothing and the Go
+-- default trigger cast still fires, as in C++.
+local function rainOfBonesTick(event, aura, target)
+    if aura:GetTickNumber() % 5 == 0 then
+        target:CastSpell(target, SPELL_SUMMON_SKELETON, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_RAIN_OF_BONES, 1, rainOfBonesTick)

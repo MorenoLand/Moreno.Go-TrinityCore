@@ -86,8 +86,9 @@
 -- spell_ahune_minion_despawner, spell_ice_bombardment_dest_picker)
 -- are documented only; spell_ice_spear_control_aura is PORTED
 -- tick 189 below (RegisterAuraEvent 46371, iceSpearControlTick)
--- — the delayer sibling stays out on GetTickNumber grounds (the
--- Aura object has no GetTickNumber, lua_aura.go); npc_earthen_ring_flamecaller (25754) is
+-- and its delayer sibling spell_summon_ice_spear_delayer is PORTED
+-- tick 191 below (RegisterAuraEvent 46878, iceSpearDelayerTick,
+-- aura:GetTickNumber bridge); npc_earthen_ring_flamecaller (25754) is
 -- documented only — its whole AI is cross-creature driven
 -- (SpellHit SHAMANS_LOOK_FOR_OPENING, DoAction EMOTE_
 -- RESURFACE, Reset via the bunny's ResetFlameCallers) or
@@ -213,6 +214,10 @@ end)
 -- = 1).
 local SPELL_ICE_SPEAR_AURA = 46371 -- boss_ahune.cpp:76
 local SPELL_ICE_SPEAR_TARGET_PICKER = 46372 -- boss_ahune.cpp:77
+local SPELL_SUMMON_ICE_SPEAR_DELAYER = 46878 -- boss_ahune.cpp:687
+local SPELL_SUMMON_ICE_SPEAR_GO = 46369 -- boss_ahune.cpp:75
+local SPELL_ICE_SPEAR_KNOCKBACK = 46360 -- boss_ahune.cpp:74
+local GO_ICE_SPEAR = 188077 -- the_slave_pens.h:65
 
 local function iceSpearControlTick(event, aura, target)
     local caster = aura:GetCaster()
@@ -222,3 +227,41 @@ local function iceSpearControlTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_ICE_SPEAR_AURA, 1, iceSpearControlTick)
+
+-- C++ spell_summon_ice_spear_delayer::PeriodicTick
+-- (boss_ahune.cpp:697-719): the caster is reached via
+-- aura:GetCaster(); tick 1: non-triggered self-cast
+-- SPELL_SUMMON_ICE_SPEAR_GO (46369); tick 3: the nearest ice spear
+-- GO (188077) within 3y is used (UseDoorOrButton) and the caster
+-- DoCastAOEs SPELL_ICE_SPEAR_KNOCKBACK (46360) triggered (the
+-- self-cast twin, selin/mr_smite precedent); tick 5: the nearest
+-- ice spear GO is deleted and the caster despawns. The GO Delete
+-- has no bridge, so the port uses the GO Despawn twin (hide in
+-- instance, lua_objects.go) — documented delta. No
+-- PreventDefaultAction in C++, so the handler returns nothing.
+-- PORTED tick 191 via RegisterAuraEvent (46878, AuraEventOnPeriodic
+-- = 1) on the new aura:GetTickNumber bridge.
+local function iceSpearDelayerTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    local tick = aura:GetTickNumber()
+    if tick == 1 then
+        caster:CastSpell(caster, SPELL_SUMMON_ICE_SPEAR_GO)
+    elseif tick == 3 then
+        local spike = caster:FindNearestGameObject(GO_ICE_SPEAR, 3.0)
+        if spike ~= nil then
+            spike:UseDoorOrButton()
+        end
+        caster:CastSpell(caster, SPELL_ICE_SPEAR_KNOCKBACK, true)
+    elseif tick == 5 then
+        local spike = caster:FindNearestGameObject(GO_ICE_SPEAR, 3.0)
+        if spike ~= nil then
+            spike:Despawn()
+        end
+        caster:Despawn()
+    end
+end
+
+RegisterAuraEvent(SPELL_SUMMON_ICE_SPEAR_DELAYER, 1, iceSpearDelayerTick)

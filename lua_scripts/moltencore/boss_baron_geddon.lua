@@ -44,14 +44,15 @@
 -- UpdateAI return to carry it — jeklik convention); the
 -- spell_baron_geddon_inferno AuraScript (escalating 19698 tick damage
 -- {500,500,1000,1000,2000,2000,3000,5000} via triggered
--- CastSpellExtraArgs) has no AuraScript bridge (standing AuraScript
--- gap) — the inferno aura's tick damage is never customized.
+-- CastSpellExtraArgs) is PORTED below (tick 191, RegisterAuraEvent,
+-- aura:GetTickNumber bridge).
 
 local ENTRY_BARON_GEDDON = 12056
 
 local EMOTE_SERVICE = 0
 
 local SPELL_INFERNO = 19695
+local SPELL_INFERNO_DMG = 19698
 local SPELL_IGNITE_MANA = 19659
 local SPELL_LIVING_BOMB = 20475
 local SPELL_ARMAGEDDON = 20478
@@ -232,3 +233,25 @@ RegisterCreatureEvent(ENTRY_BARON_GEDDON, 1, baronGeddonEnterCombat)
 RegisterCreatureEvent(ENTRY_BARON_GEDDON, 2, baronGeddonLeaveCombat)
 RegisterCreatureEvent(ENTRY_BARON_GEDDON, 4, baronGeddonDied)
 RegisterCreatureEvent(ENTRY_BARON_GEDDON, 23, baronGeddonReset)
+
+-- C++ spell_baron_geddon_inferno_AuraScript::OnPeriodic
+-- (boss_baron_geddon.cpp:136-145): PreventDefaultAction; the aura
+-- target casts SPELL_INFERNO_DMG (19698) triggered on nil target
+-- with BP0 = damageForTick[GetTickNumber() - 1] from
+-- {500,500,1000,1000,2000,2000,3000,5000}. Ticks past the 8-entry
+-- table have no C++-defined damage (the table read would run past
+-- its end); the port suppresses the cast there rather than indexing
+-- nil. Returns true, the PreventDefaultAction twin, so the Go
+-- default trigger cast does not also fire.
+local INFERNO_DAMAGE_FOR_TICK = { 500, 500, 1000, 1000, 2000, 2000, 3000, 5000 }
+
+local function infernoTick(event, aura, target)
+    local tick = aura:GetTickNumber()
+    local damage = INFERNO_DAMAGE_FOR_TICK[tick]
+    if damage ~= nil then
+        target:CastCustomSpell(nil, SPELL_INFERNO_DMG, true, damage)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_INFERNO, 1, infernoTick)
