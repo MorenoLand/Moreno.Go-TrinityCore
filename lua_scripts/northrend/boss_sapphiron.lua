@@ -65,8 +65,8 @@
 -- 3.5s. Approximations, all documented at the arms: MovePoint-home
 -- travel is skipped (no motion bridge — liftoff starts at once),
 -- the wing buffet is never summoned (no position getter on the
--- handler surface; visual-only, no AI arms), liftoff/land emote
--- commands have no bridge.
+-- handler surface; visual-only, no AI arms), liftoff/land emotes
+-- port via creature:PerformEmote (254/293, tick 224).
 -- EVENT_BERSERK — Talk(EMOTE_ENRAGE 3) + DoCastSelf(Berserk 26662),
 -- 15min init, fires ONCE (C++ schedules it once, never rescheduled
 -- — anubarak one-shot precedent).
@@ -86,7 +86,8 @@
 -- Reset — PORTED 2026-10-25 for the flight-phase leg (player
 -- icebolt-aura strip via the loatheb GetPlayersInWorld idiom +
 -- SetReactState(REACT_AGGRESSIVE) + hover off, gated on the flight
--- latch; land emote has no bridge); _Reset bookkeeping stays out.
+-- latch; land emote ported via creature:PerformEmote(293) in
+-- landTick below (tick 224); _Reset bookkeeping stays out.
 -- DamageTaken — PORTED 2026-10-25: air-phase death prevention
 -- (damage = health-1) via the ev9 numeric-return bridge
 -- (fireCreatureDamageTaken; tesla/halazzi precedent), gated on the
@@ -124,7 +125,8 @@
 -- with its machine, not on a phase bar.
 -- Wing-buffet summon — no position getter on the handler surface
 -- (DoSummon spawns at the boss); visual-only, no AI arms.
--- Liftoff/land emote commands — no emote bridge.
+-- Liftoff/land emote commands — PORTED tick 224 via
+-- creature:PerformEmote (254 LIFTOFF / 293 LAND).
 -- Explosion / Reset includePets/includeControlled aura-strip legs
 -- — no pet/controlled iteration bridge (player strip itself is
 -- ported via the loatheb idiom).
@@ -320,9 +322,10 @@ explosionTick = function(creature, guid)
 end
 
 -- C++ EVENT_LAND: delayed-drain CastDrain if flagged, buffet
--- despawn (never summoned — see liftoffTick), land emote (no
--- emote bridge — stays out), Talk(EMOTE_GROUND_PHASE), hover off,
--- phase GROUND, then the GROUND event at 3.5s.
+-- despawn (never summoned — see liftoffTick), land emote
+-- (PerformEmote(293), EMOTE_ONESHOT_LAND, SharedDefines.h:2007),
+-- Talk(EMOTE_GROUND_PHASE), hover off, phase GROUND, then the
+-- GROUND event at 3.5s.
 landTick = function(creature, guid)
     if delayedDrain[guid] then
         delayedDrain[guid] = nil
@@ -331,6 +334,7 @@ landTick = function(creature, guid)
             drainTick(creature, guid)
         end)
     end
+    creature:PerformEmote(293) -- C++ EVENT_LAND (boss_sapphiron.cpp:397)
     creature:Talk(EMOTE_GROUND_PHASE)
     creature:SetHover(false)
     flying[guid] = nil
@@ -356,14 +360,16 @@ groundTick = function(creature, guid)
 end
 
 -- C++ EVENT_LIFTOFF: Talk(EMOTE_AIR_PHASE) + wing-buffet summon +
--- liftoff emote + hover on + ICEBOLT at 7s + icebolt targets
+-- liftoff emote (PerformEmote(254), EMOTE_ONESHOT_LIFTOFF,
+-- SharedDefines.h:2003) + hover on + ICEBOLT at 7s + icebolt targets
 -- (RAID_MODE 2/3 random players, 200yd, playerOnly). The buffet
 -- summon stays out: DoSummon spawns at the boss's position and
 -- the handler surface has no position getter — and the buffet is
 -- visual-only (no AI arms in the file), so nothing gameplay rides
--- it. Liftoff/land emote commands have no bridge and stay out.
+-- it.
 local function liftoffTick(creature, guid)
     creature:Talk(EMOTE_AIR_PHASE)
+    creature:PerformEmote(254) -- C++ EVENT_LIFTOFF (boss_sapphiron.cpp:345)
     creature:SetHover(true)
     local candidates = {}
     -- C++ SelectTargetList dist gate is IsWithinCombatRange
