@@ -63,7 +63,8 @@ type ThreatManager struct {
 	// breakable stun — and preserves the stored flag for taunted victims
 	// instead of clearing it. The refresh is suppress-only for a ref that
 	// was online on the previous tick: a lapsed condition promotes only
-	// at AddThreat :386 (evaluateThreatVictimState) — C++ has no
+	// at AddThreat :386 (evaluateThreatVictimState) or on a taunt-aura
+	// change on the victim (tauntSuppressedTail) — C++ has no
 	// timer-based promotion — except on the offline-to-online return,
 	// where ThreatReference::UpdateOffline (ThreatManager.cpp:64-80)
 	// recomputes the state and the refresh promotes with it. A condition
@@ -242,11 +243,12 @@ func (tm *ThreatManager) GetFixateTarget() uint64 {
 // MOD_TAUNT aura effects; Go keys it per victim GUID with the aura's expiry,
 // which the Update tick re-evaluates. The EvaluateSuppressed(true) tail of
 // TauntUpdate (:459) iterates _threatenedByMe — the owner as a victim on
-// OTHER lists (ThreatManager.h:219) — which Go has no reverse index for,
-// and it never touches a ref on the owner's own list: a suppressed ref
-// stays suppressed through a taunt until AddThreat :386 promotes it
-// (evaluateThreatVictimState), and the tick refresh preserves the stored
-// flag for taunted victims (threatSuppressedSet).
+// OTHER lists (ThreatManager.h:219) — and it never touches a ref on the
+// owner's own list: a suppressed ref stays suppressed through a taunt
+// until AddThreat :386 promotes it (evaluateThreatVictimState), a taunt
+// aura is applied to or removed from the victim (tauntSuppressedTail),
+// or the ref returns from offline. The tick refresh preserves the
+// stored flag for taunted victims (threatSuppressedSet).
 // A non-positive duration means the aura carries no duration: the state lives
 // until the aura is removed.
 func (tm *ThreatManager) ApplyTaunt(victim uint64, durationMs uint32) {
@@ -287,6 +289,17 @@ func (tm *ThreatManager) ClearTaunt(victim uint64) {
 // SpellAuraEffects.cpp:2772-2781 -> ThreatManager::TauntUpdate,
 // ThreatManager.cpp:439-458). A creature with no threat manager is a no-op,
 // matching C++ (TauntUpdate over an empty threat list records nothing).
+// The TauntUpdate :459 tail runs after the state write
+// (tauntSuppressedTail). The tail — but not the state write — is
+// gated on CanHaveThreatList, mirroring HandleModTaunt's early return
+// (SpellAuraEffects.cpp:2779): pets, totems and player-summoned
+// minions/guardians have no threat list, so a taunt aura on them runs
+// no tail — without the gate the tail would promote a pet's refs on
+// other lists where C++ leaves them suppressed. The state write stays
+// ungated: tauntExpiry doubles as the creature-wide MOD_TAUNT-aura
+// signal for the leash leg (HasAnyTaunt, Creature.cpp:2589), which
+// C++ reads off the aura itself, not the threat manager. Charmed
+// creatures keep their lists and pass the gate.
 func (s *Server) applyCreatureTaunt(key creatureAuraKey, casterGUID uint64, durationMs uint32) {
 	if s == nil || key.GUID == 0 || casterGUID == 0 {
 		return
@@ -296,10 +309,15 @@ func (s *Server) applyCreatureTaunt(key creatureAuraKey, casterGUID uint64, dura
 		return
 	}
 	motion.ThreatMgr.ApplyTaunt(casterGUID, durationMs)
+	if motionCanHaveThreatList(motion) {
+		s.tauntSuppressedTail(key, motion)
+	}
 }
 
 // clearCreatureTaunt bridges a MOD_TAUNT aura removal into the threat
-// manager, the remove arm of AuraEffect::HandleModTaunt.
+// manager, the remove arm of AuraEffect::HandleModTaunt. The TauntUpdate
+// :459 tail runs after the state clear (tauntSuppressedTail): a taunt
+// aura expiring on the victim re-evaluates its refs on other lists too.
 func (s *Server) clearCreatureTaunt(key creatureAuraKey, casterGUID uint64) {
 	if s == nil || key.GUID == 0 || casterGUID == 0 {
 		return
@@ -309,6 +327,72 @@ func (s *Server) clearCreatureTaunt(key creatureAuraKey, casterGUID uint64) {
 		return
 	}
 	motion.ThreatMgr.ClearTaunt(casterGUID)
+	if motionCanHaveThreatList(motion) {
+		s.tauntSuppressedTail(key, motion)
+	}
+}
+
+// tauntSuppressedTail runs the EvaluateSuppressed(true) tail of
+// ThreatManager::TauntUpdate (ThreatManager.cpp:439-459, :290-304): when
+// a taunt aura on the victim is applied or removed, the victim's refs as
+// a victim on OTHER lists are re-evaluated — a suppressed ref whose
+// victim no longer ShouldBeSuppressed promotes to ONLINE, and an online
+// ref that now ShouldBeSuppressed suppresses. This is the promotion the
+// suppress-only tick refresh cannot do (tick 180): a lapsed condition,
+// or a taunt state gained on another list, promotes here, at AddThreat
+// :386 (evaluateThreatVictimState), or on the offline return — never on
+// the timer. No victim->owners reverse index is maintained: Go has no
+// _threatenedByMe (ThreatManager.h:219) — entries are installed and
+// purged at dozens of AddThreat/RemoveThreat/clear sites under mixed
+// lock order, so a maintained index would be a second source of truth
+// with lock-order risk for a narrow tail. The owner set is the
+// motion-map sweep the threat fan-outs already use
+// (suppressThreatForSchoolImmuneVictim /
+// suppressThreatForControlledVictim): snapshot the map/instance
+// motions under motionMu, then evaluate each owner outside it, so the
+// tail takes motionMu only for the snapshot and tm.mu/auraMu
+// sequentially per owner. Offline refs are skipped — C++ checks
+// IsOnline()/IsSuppressed(), and an offline ref is neither. The
+// detaunt half has no Go hook (no per-reference detaunt state), so only
+// the taunt-aura apply/remove paths call this.
+func (s *Server) tauntSuppressedTail(key creatureAuraKey, victim *creatureMotion) {
+	if s == nil || victim == nil || key.GUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	motions := make([]*creatureMotion, 0, len(s.motionMapLocked(key.Map, key.InstanceID)))
+	for _, m := range s.motionMapLocked(key.Map, key.InstanceID) {
+		if m != nil {
+			motions = append(motions, m)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, m := range motions {
+		if m == nil || m.GUID == key.GUID || m.ThreatMgr == nil {
+			continue
+		}
+		// _threatenedByMe refs can only exist on threat-list-capable
+		// creatures (ThreatManager.cpp:156-179); owned pet/summon
+		// motions never hold one, but charmed creatures keep theirs.
+		if !motionCanHaveThreatList(m) {
+			continue
+		}
+		if !m.ThreatMgr.HasVictim(key.GUID) {
+			continue
+		}
+		if m.ThreatMgr.IsOffline(key.GUID) {
+			continue
+		}
+		if m.ThreatMgr.IsSuppressed(key.GUID) {
+			if !s.threatVictimSuppressed(m, key.GUID, nil, victim) {
+				m.ThreatMgr.PromoteSuppressedVictim(key.GUID)
+			}
+			continue
+		}
+		if s.threatVictimSuppressed(m, key.GUID, nil, victim) {
+			m.ThreatMgr.SuppressVictim(key.GUID)
+		}
+	}
 }
 
 // isSuppressedLocked reports whether the victim's reference is suppressed
@@ -316,10 +400,12 @@ func (s *Server) clearCreatureTaunt(key creatureAuraKey, casterGUID uint64) {
 // (ThreatManager.h:263, _online == ONLINE_STATE_SUPPRESSED). The taunt
 // exemption of ShouldBeSuppressed (ThreatManager.cpp:112-115) lives in
 // the evaluators, not in this read — no EvaluateSuppressed call ever
-// touches a ref on this list for a taunt (it iterates _threatenedByMe,
-// ThreatManager.h:219; the TauntUpdate :459 tail runs it on the owner's
-// manager), so a suppressed ref stays suppressed through a taunt until
-// AddThreat :386 promotes it (evaluateThreatVictimState). Callers hold tm.mu.
+// touches a ref on this list for a taunt on the OWNER (it iterates
+// _threatenedByMe, ThreatManager.h:219; the TauntUpdate :459 tail runs it
+// on the taunted victim's manager), so a suppressed ref stays suppressed
+// through a taunt until AddThreat :386 promotes it
+// (evaluateThreatVictimState) or a taunt aura change on the victim runs
+// the tail (tauntSuppressedTail). Callers hold tm.mu.
 func (tm *ThreatManager) isSuppressedLocked(victim uint64) bool {
 	return tm.suppressed[victim]
 }
@@ -997,10 +1083,10 @@ func (s *Server) threatHeadOfflineSet(motion *creatureMotion) (map[uint64]bool, 
 // promotes with it — from a plain online ref, for which the refresh
 // is suppress-only: a non-taunted victim whose condition expires
 // stays suppressed until it causes threat (AddThreat :386,
-// evaluateThreatVictimState), because C++ promotes on no timer.
-// Residual: TauntUpdate's EvaluateSuppressed(true) (:459) can also
-// promote, but it iterates _threatenedByMe — the victim's refs on
-// other lists — which Go has no reverse index for.
+// evaluateThreatVictimState) or a taunt aura is applied to or removed
+// from the victim (TauntUpdate's EvaluateSuppressed(true) tail, :459,
+// ported as tauntSuppressedTail over the motion-map sweep), because
+// C++ promotes on no timer.
 func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos, offline map[uint64]bool, wasOffline map[uint64]bool) (map[uint64]bool, map[uint64]bool) {
 	if s == nil || motion == nil || motion.ThreatMgr == nil {
 		return nil, nil
