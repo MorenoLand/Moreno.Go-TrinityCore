@@ -58,8 +58,11 @@
 -- (GetPlayerForEscort() below 85%) is unmodeled — no
 -- escort bridge, so no escort player exists in this
 -- model (C++-exact when GetPlayerForEscort is nil);
--- no DoAction bridge — ACTION_LEGOSO_SIRONAS_KILLED
--- (the sironas-slain speech cascade) is unmodeled;
+-- the DoAction bridge (ev38) is live — ACTION_LEGOSO_
+-- SIRONAS_KILLED (the sironas-slain speech cascade) is
+-- PORTED 2026-11-05, called from sironas JustDied
+-- (npc_sironas.lua); the chain's GroupEventHappens leg stays
+-- out (no escort-player reference reaches the handler);
 -- no dual-wield bridge — Reset() SetCanDualWield(true)
 -- unmodeled; the old "no talk bridge" claim was stale —
 -- creature:Talk() is bridged (lua_creature_events.go:102):
@@ -80,10 +83,29 @@ local SPELL_STRENGTH_OF_EARTH_TOTEM = 31633
 
 local LEGOSO_ENTRY = 17982
 
+local ACTION_LEGOSO_SIRONAS_KILLED = 1
+
+local SAY_LEGOSO_20 = 19
+local SAY_LEGOSO_21 = 20
+
+local EMOTE_ONESHOT_CHEER = 4
+local EMOTE_ONESHOT_EXCLAMATION = 5
+
 local legosoState = {}
 local legosoPump = {}
+local slainTimers = {}
 
 local TIMER_KEYS = { "frostTimer", "searingTimer", "strengthTimer", "healingTimer" }
+
+local function cancelSlain(guid)
+    local ids = slainTimers[guid]
+    if ids then
+        for _, id in ipairs(ids) do
+            RemoveEventById(id)
+        end
+        slainTimers[guid] = nil
+    end
+end
 
 local function cancelPump(guid)
     local id = legosoPump[guid]
@@ -95,9 +117,12 @@ end
 
 -- C++ Reset() (called on evade): fullReset — the observable
 -- remainder (event-map reset) is re-latched on OnEnterCombat
--- (gargolmar precedent).
+-- (gargolmar precedent). The slain chain dies with the escort
+-- phase machine on Reset (C++ _phase = PHASE_NONE), so its
+-- timers cancel here too.
 local function fullReset(guid)
     cancelPump(guid)
+    cancelSlain(guid)
     legosoState[guid] = nil
 end
 
@@ -198,6 +223,40 @@ end
 local function onLeaveCombat(_, creature)
     fullReset(creature:GetGUID())
 end
+
+-- C++ DoAction(ACTION_LEGOSO_SIRONAS_KILLED)
+-- (zone_bloodmyst_isle.cpp:770-774): seeds the slain chain —
+-- 5s -> Talk(SAY_LEGOSO_20), 2s -> exclamation emote, 2s ->
+-- quest credit + cheer emote, 5s -> Talk(SAY_LEGOSO_21), 30s
+-- -> escort resume. The GroupEventHappens leg stays out (no
+-- escort-player reference reaches this handler —
+-- GetPlayerForEscort has no bridge); the resume leg is a no-op
+-- in this model. Chain timers are tracked so Reset kills them
+-- with the phase machine (C++ _phase = PHASE_NONE on Reset).
+local function onDoAction(event, creature, action)
+    if action ~= ACTION_LEGOSO_SIRONAS_KILLED then
+        return
+    end
+    local guid = creature:GetGUID()
+    cancelSlain(guid)
+    local ids = {}
+    slainTimers[guid] = ids
+    ids[#ids + 1] = CreateLuaEvent(function()
+        creature:Talk(SAY_LEGOSO_20)
+        ids[#ids + 1] = CreateLuaEvent(function()
+            creature:PerformEmote(EMOTE_ONESHOT_EXCLAMATION)
+            ids[#ids + 1] = CreateLuaEvent(function()
+                creature:PerformEmote(EMOTE_ONESHOT_CHEER)
+                ids[#ids + 1] = CreateLuaEvent(function()
+                    creature:Talk(SAY_LEGOSO_21)
+                    slainTimers[guid] = nil
+                end, 5000)
+            end, 2000)
+        end, 2000)
+    end, 5000)
+end
+
+RegisterCreatureEvent(LEGOSO_ENTRY, 38, onDoAction)
 
 RegisterCreatureEvent(LEGOSO_ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(LEGOSO_ENTRY, 2, onLeaveCombat)

@@ -45,9 +45,9 @@
 -- cascade via FindNearestCreature(NPC_LEGOSO) — the scale
 -- bridge exists but the restore is vacuous (the legoso 3.0f
 -- flip sits behind the unported escort machine — zum_rah
--- precedent), and there is no cross-creature DoAction
--- bridge, so the hook only drops per-GUID state
--- (illidari_spawn precedent).
+-- precedent); the cascade is PORTED (ev38 bridge; killer
+-- gates: legoso himself or a loot-recipient-group member —
+-- the event-starter leg stays out, no GUID-counter bridge).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the C++ Reset() observable remainder — the
 -- event-map reset — is latched on OnEnterCombat, gargolmar
@@ -55,15 +55,17 @@
 -- OnSpawn — millhouse note — so both hooks land the same
 -- reset).
 -- Deliberate deviations (all await engine bridges): no
--- cross-creature bridge — the JustDied FindNearestCreature
--- (NPC_LEGOSO 17982) DoAction cascade unmodeled; no DoAction
--- bridge — the Sironas channel arms (ACTION_SIRONAS_CHANNEL_
--- START/STOP: self-cast SPELL_SIRONAS_CHANNELING 31612 plus
--- the Tesla coil 17979 grid-cast of SPELL_BLOODMYST_TESLA
--- 31611 and its interrupt stop) are driven by legoso's escort
--- event machine and have no hook in this model (the engine
--- shim fires events 1/2/3/4/5/9/14/23/26 only — omor
--- precedent); the Modelid2-bearer bridge (GetTemplateModelId, live
+-- escort / quest-accept / movement / summon / gameobject
+-- bridges — the whole 40-phase escort event machine is
+-- unmodeled (omor / steamrigger precedents); the Sironas
+-- channel arms (ACTION_SIRONAS_CHANNEL_START/STOP: self-cast
+-- SPELL_SIRONAS_CHANNELING 31612 plus the Tesla coil 17979
+-- grid-cast of SPELL_BLOODMYST_TESLA 31611 and its interrupt
+-- stop) are bridgeable in isolation — the DoAction bridge
+-- (ev38) and the grid/interrupt bridges all exist — but have
+-- no caller in this model (both calls ride legoso's unported
+-- escort machine), so no ev38 handler is registered for them;
+-- the Modelid2-bearer bridge (GetTemplateModelId, live
 -- 2026-10-22) lands the Reset() SetDisplayId(Modelid2) arm in
 -- onLeaveCombat below (nether_drake precedent updated); the JustDied
 -- SetObjectScale(1.0f) restore is
@@ -81,6 +83,9 @@ local SPELL_IMMOLATE = 12742
 local SPELL_CURSE_OF_BLOOD = 8282
 
 local SIRONAS_ENTRY = 17678
+local LEGOSO_ENTRY = 17982
+
+local ACTION_LEGOSO_SIRONAS_KILLED = 1
 
 local sironasState = {}
 local sironasPump = {}
@@ -153,13 +158,40 @@ local function onEnterCombat(_, creature)
     end, 1000, 0)
 end
 
--- The C++ JustDied arms (scale reset, cross-creature legoso
--- DoAction cascade): the scale restore is vacuous (bridge
--- exists but the flip is unported) and there is no
--- cross-creature DoAction bridge — unmodeled; the hook drops
--- per-GUID state (illidari_spawn precedent).
-local function onDied(_, creature)
+-- C++ JustDied (zone_bloodmyst_isle.cpp:271-280): the scale
+-- reset is vacuous (the legoso 3.0f flip rides the unported
+-- escort machine — zum_rah precedent); the legoso DoAction
+-- (ACTION_LEGOSO_SIRONAS_KILLED) cascade is PORTED 2026-11-05
+-- via the ev38 DoAction bridge: killer nil-guard first, then
+-- FindNearestCreature(NPC_LEGOSO) (the C++ SIZE_OF_GRIDS grid
+-- twin), then the killer gates — killer is legoso himself, or a
+-- member of the loot-recipient group (GetLootRecipientGroup /
+-- group:IsMember, both bridged). The third leg (killer GUID
+-- counter == legoso GetData(DATA_EVENT_STARTER_GUID)) stays out:
+-- no GUID-counter bridge exists, and the starter GUID is only
+-- set by the unported OnQuestAccept, so the leg reads 0 and can
+-- never fire in this model. The hook drops per-GUID state
+-- (illidari_spawn precedent) either way.
+local function onDied(_, creature, killer)
     fullReset(creature:GetGUID())
+    if not killer then
+        return
+    end
+    local legoso = creature:FindNearestCreature(LEGOSO_ENTRY, 533.0)
+    if not legoso then
+        return
+    end
+    local killerGuid = killer:GetGUID()
+    local relay = killerGuid == legoso:GetGUID()
+    if not relay then
+        local group = creature:GetLootRecipientGroup()
+        if group then
+            relay = group:IsMember(killerGuid)
+        end
+    end
+    if relay then
+        legoso:DoAction(ACTION_LEGOSO_SIRONAS_KILLED)
+    end
 end
 
 -- C++ Reset() (called on evade): fullReset — see above.

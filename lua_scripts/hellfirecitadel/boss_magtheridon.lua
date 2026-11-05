@@ -15,10 +15,9 @@
 -- SAY_SLAY=2 (kill — player-gated in C++, C++-exact via
 -- victim:GetObjectType() == "Player"), SAY_BANISHED=3 (shadow cage), SAY_COLLAPSE
 -- =4 (30% collapse), SAY_DEATH=5 (death), EMOTE_WEAKEN=6
--- (unmodeled — the DoAction arm that fires it is cross-creature
--- blocked, below), EMOTE_NEARLY_FREE=7 (unmodeled — the
--- EVENT_NEARLY_EMOTE arm is scheduled by the same blocked
--- DoAction arm, below), EMOTE_BREAKS_FREE=8 (break free),
+-- (PORTED — the DoAction arm, ev38), EMOTE_NEARLY_FREE=7
+-- (PORTED — EVENT_NEARLY_EMOTE, 1min after the DoAction flip),
+-- EMOTE_BREAKS_FREE=8 (break free),
 -- EMOTE_BLAST_NOVA=9 (blast nova). Eluna creature events: 1
 -- OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied, 4 OnDied, 9
 -- OnDamageTaken, 14 OnSpellHit, 23 OnReset. Timers via
@@ -37,7 +36,8 @@
 -- repeat -> Talk(SAY_TAUNT) (C++-exact schedule; the
 -- SummonCreatureGroup(1) arm is summon-blocked). OnEnterCombat
 -- (1): see the deviation note — the fight starts on pull in
--- this model (ragnaros-intro convention): cancel the taunt
+-- this model when the channeler relay has not already released
+-- the boss (ragnaros-intro convention): cancel the taunt
 -- timer, Talk(EMOTE_BREAKS_FREE) + Talk(SAY_FREE),
 -- RemoveAura(30205), phase="released", then the C++ RELEASED
 -- timer set: cleave 30619 10s then 10s non-triggered
@@ -82,8 +82,8 @@
 -- arm is PORTED 2026-10-20 — creature:SetReactState).
 -- OnEnterCombat(1): the
 -- magtheridon->DoAction(ACTION_START_CHANNELERS_EVENT) relay
--- is cross-creature blocked (documented below); the self-
--- contained timers arm normally: shadow bolt volley 30510 20s
+-- is PORTED (grid twin, ev38); the self-contained timers arm
+-- normally: shadow bolt volley 30510 20s
 -- then {15s,20s}, non-triggered DoCastAOE self-cast
 -- (kalecgos convention); fear 30530 {15s,20s} then {25s,40s}
 -- on a random threat-list target excluding the current victim
@@ -94,8 +94,9 @@
 -- arm is PORTED (InterruptNonMeleeSpells(false) first in
 -- channelerEnterCombat, boss_magtheridon.cpp:335). OnDied(4):
 -- non-triggered DoCastAOE self-cast soul transfer 30531
--- (kalecgos convention) + cleanup (the "Hit Kill" DoAction
--- relay is cross-creature blocked). OnLeaveCombat(2)/
+-- (kalecgos convention) + the "Hit Kill" DoAction relay and
+-- the SummonedCreatureDies count leg (both PORTED) + cleanup.
+-- OnLeaveCombat(2)/
 -- OnReset(23): cancel timers, drop per-GUID state. Magtheridon
 -- Room (17516, PassiveAI). OnReset(23): non-triggered self-cast
 -- 30632, then 5s -> non-triggered DoCastAOE self-cast 30631
@@ -104,14 +105,17 @@
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (the SetBossState/SetData/GetCreature instance arms and the
--- _Reset/_JustDied bookkeeping skipped); no cross-creature
--- bridge — the channeler->magtheridon ACTION_START_CHANNELERS_
--- EVENT relay, the "Hit Kill" relay, the magtheridon break-free
--- phase machine (PHASE_BANISH -> PHASE_1 -> CombatStart ->
--- RELEASED, including the 2min auto-start and the 6s release
--- delay) and the world-trigger debris-knockdown cast
--- unmodeled — so the port treats magtheridon's own pull as the
--- release (EMOTE_BREAKS_FREE + SAY_FREE + the RELEASED timer
+-- _Reset/_JustDied bookkeeping skipped); the channeler->
+-- magtheridon ACTION_START_CHANNELERS_EVENT relay, the "Hit
+-- Kill" relay, the SummonedCreatureDies count leg and the
+-- break-free phase machine (PHASE_BANISH -> PHASE_1 ->
+-- CombatStart -> RELEASED, 2min auto-start, 6s release delay)
+-- are PORTED 2026-11-05 via the ev38 DoAction bridge with a
+-- FindNearestCreature grid twin for the instance GetCreature
+-- lookup (unique 17257 in the room); the summons.DoZoneInCombat
+-- (channelers) leg and the world-trigger debris-knockdown cast
+-- stay unmodeled — so a direct pull still releases the boss
+-- immediately (EMOTE_BREAKS_FREE + SAY_FREE + the RELEASED timer
 -- set, C++-exact values); no summon bridge — the channeler
 -- group summon skipped; the magtheridon passive/aggressive arms stay
 -- out on the unported collapse machine; the EVENT_RELEASED
@@ -196,8 +200,12 @@ local SAY_SLAY = 2
 local SAY_BANISHED = 3
 local SAY_COLLAPSE = 4
 local SAY_DEATH = 5
+local EMOTE_WEAKEN = 6
+local EMOTE_NEARLY_FREE = 7
 local EMOTE_BREAKS_FREE = 8
 local EMOTE_BLAST_NOVA = 9
+
+local ACTION_START_CHANNELERS_EVENT = 2
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- boss_magtheridon.cpp:253
@@ -228,6 +236,14 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
 end
 
 -- C++ SelectTarget(Random, 1) (playerOnly defaults FALSE, UnitAI.h:170;
@@ -376,6 +392,29 @@ end
 local magtheridonBerserk
 local magtheridonCollapse
 local magtheridonDebrisKnockdown
+local magtheridonCombatStart
+local magtheridonReleased
+local magtheridonNearlyEmote
+
+-- C++ EVENT_RELEASED timer set (boss_magtheridon.cpp:260-264):
+-- cleave 10s, blast nova 60s, blaze 20s, quake 35s, berserk 20min.
+local function scheduleCombatTimers(creature, guid)
+    schedule(guid, "cleave", 10000, function()
+        magtheridonCleave(creature, guid)
+    end)
+    schedule(guid, "blastnova", 60000, function()
+        magtheridonBlastNova(creature, guid)
+    end)
+    schedule(guid, "blaze", 20000, function()
+        magtheridonBlaze(creature, guid)
+    end)
+    schedule(guid, "quake", 35000, function()
+        magtheridonQuake(creature, guid)
+    end)
+    schedule(guid, "berserk", 1200000, function()
+        magtheridonBerserk(creature, guid)
+    end)
+end
 
 -- C++ CombatStart + EVENT_RELEASED collapsed onto the pull (see
 -- the header deviation): EMOTE_BREAKS_FREE + SAY_FREE,
@@ -386,6 +425,19 @@ local magtheridonDebrisKnockdown
 -- phase released, the C++ timer set.
 local function magtheridonEnterCombat(event, creature)
     local guid = creature:GetGUID()
+    -- The channeler relay may already have released the boss
+    -- (channeler pull -> 2min -> CombatStart -> RELEASED): the
+    -- engage then runs only the BossAI base arms, never a second
+    -- release. A pull while the release is still pending runs the
+    -- release now (the standing pull-collapse deviation) and the
+    -- cancelTimers below kills the pending startfight/nearly/
+    -- released timers, the CombatStart cancel twin.
+    local st = magState[guid]
+    if st and st.phase == "released" then
+        creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+        creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+        return
+    end
     cancelTimers(guid)
     magState[guid] = { phase = "released", channelers = 5 }
     -- BossAI base arms first: boss_magtheridonAI : BossAI with NO
@@ -407,21 +459,7 @@ local function magtheridonEnterCombat(event, creature)
     -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC 0x100).
     creature:RemoveFlag(59, 0x100)
     creature:RemoveAura(SPELL_SHADOW_CAGE_C)
-    schedule(guid, "cleave", 10000, function()
-        magtheridonCleave(creature, guid)
-    end)
-    schedule(guid, "blastnova", 60000, function()
-        magtheridonBlastNova(creature, guid)
-    end)
-    schedule(guid, "blaze", 20000, function()
-        magtheridonBlaze(creature, guid)
-    end)
-    schedule(guid, "quake", 35000, function()
-        magtheridonQuake(creature, guid)
-    end)
-    schedule(guid, "berserk", 1200000, function()
-        magtheridonBerserk(creature, guid)
-    end)
+    scheduleCombatTimers(creature, guid)
 end
 
 -- C++ EVENT_BERSERK (boss_magtheridon.cpp:232) sits in the same
@@ -461,6 +499,91 @@ magtheridonDebrisKnockdown = function(creature, guid)
     end
     magtheridonDebris(creature, guid)
 end
+
+-- C++ EVENT_NEARLY_EMOTE (boss_magtheridon.cpp:280-282): one-shot
+-- Talk(EMOTE_NEARLY_FREE), in the same gated event map — the 500ms
+-- IsCasting defer is the mal_ganis idiom used by every timer arm
+-- in this file.
+magtheridonNearlyEmote = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "nearly", 500, function()
+            magtheridonNearlyEmote(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(EMOTE_NEARLY_FREE)
+end
+
+-- C++ EVENT_RELEASED (boss_magtheridon.cpp:250-264): RemoveFlag
+-- NOT_SELECTABLE, SetImmuneToPC(false) (RemoveFlag(59, 0x100)),
+-- DoZoneInCombat, phase 2, the MANTICRON_CUBE instance leg stays
+-- out, then the combat timer set. Same gated map, same defer.
+magtheridonReleased = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "released", 500, function()
+            magtheridonReleased(creature, guid)
+        end)
+        return
+    end
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:RemoveFlag(59, 0x100)
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    local st = magState[guid]
+    if st then
+        st.phase = "released"
+    end
+    scheduleCombatTimers(creature, guid)
+end
+
+-- C++ CombatStart (boss_magtheridon.cpp:166-175): cancel the
+-- START_FIGHT / NEARLY_EMOTE timers, schedule RELEASED 6s,
+-- Talk(EMOTE_BREAKS_FREE) + Talk(SAY_FREE),
+-- RemoveAurasDueToSpell(SHADOW_CAGE_C). Same gated map, same defer.
+magtheridonCombatStart = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "startfight", 500, function()
+            magtheridonCombatStart(creature, guid)
+        end)
+        return
+    end
+    cancelKey(guid, "startfight")
+    cancelKey(guid, "nearly")
+    schedule(guid, "released", 6000, function()
+        magtheridonReleased(creature, guid)
+    end)
+    creature:Talk(EMOTE_BREAKS_FREE)
+    creature:Talk(SAY_FREE)
+    creature:RemoveAura(SPELL_SHADOW_CAGE_C)
+end
+
+-- C++ boss_magtheridonAI::DoAction(ACTION_START_CHANNELERS_EVENT)
+-- (boss_magtheridon.cpp:172-186): only in PHASE_BANISH — flip to
+-- PHASE_1, Talk(EMOTE_WEAKEN), summons.DoZoneInCombat(channelers)
+-- stays out (channelers engage individually in this model),
+-- START_FIGHT 2min, NEARLY_EMOTE 1min, cancel TAUNT, the
+-- SetBossState / SetData instance legs stay out.
+local function magtheridonDoAction(event, creature, action)
+    if action ~= ACTION_START_CHANNELERS_EVENT then
+        return
+    end
+    local guid = creature:GetGUID()
+    local st = magState[guid]
+    if not st or st.phase ~= "banish" then
+        return
+    end
+    st.phase = "phase1"
+    creature:Talk(EMOTE_WEAKEN)
+    cancelKey(guid, "taunt")
+    schedule(guid, "nearly", 60000, function()
+        magtheridonNearlyEmote(creature, guid)
+    end)
+    schedule(guid, "startfight", 120000, function()
+        magtheridonCombatStart(creature, guid)
+    end)
+end
+
+RegisterCreatureEvent(ENTRY_MAGTHERIDON, 38, magtheridonDoAction)
 
 -- C++ DamageTaken: HealthBelowPctDamaged(30, damage) (Unit.h:873 --
 -- int64(health) - int64(damage) < CountPctFromMaxHealth(30), so killing
@@ -653,10 +776,19 @@ channelerDarkMending = function(creature, guid)
 end
 
 -- C++ JustEngagedWith: the magtheridon DoAction relay is
--- cross-creature blocked (header); the interrupt arm is PORTED
--- (boss_magtheridon.cpp:335, first in arm order).
+-- PORTED (boss_magtheridon.cpp:336-338): the instance
+-- GetCreature(DATA_MAGTHERIDON) lookup has no bridge, but
+-- Magtheridon is the unique 17257 in the room, so the grid twin
+-- (FindNearestCreature, same map+instance) finds him; the
+-- DoAction arm gates on PHASE_BANISH inside the ev38 handler.
+-- The interrupt arm is PORTED (boss_magtheridon.cpp:335, first
+-- in arm order).
 local function channelerEnterCombat(event, creature)
     creature:InterruptNonMeleeSpells(false)
+    local magtheridon = creature:FindNearestCreature(ENTRY_MAGTHERIDON, 100.0)
+    if magtheridon then
+        magtheridon:DoAction(ACTION_START_CHANNELERS_EVENT)
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     chanState[guid] = true
@@ -676,10 +808,25 @@ local function channelerEnterCombat(event, creature)
 end
 
 -- C++ JustDied: non-triggered DoCastAOE soul transfer (kalecgos
--- convention); the "Hit Kill" DoAction relay is cross-creature
--- blocked.
+-- convention); the "Hit Kill" DoAction relay is PORTED
+-- (boss_magtheridon.cpp:351-354, same grid twin as the engage
+-- relay) and the SummonedCreatureDies count leg is PORTED
+-- (boss_magtheridon.cpp:159-166): a channeler death in PHASE_1
+-- decrements the boss-side count, at zero CombatStart fires.
 local function channelerDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_SOUL_TRANSFER)
+    local magtheridon = creature:FindNearestCreature(ENTRY_MAGTHERIDON, 100.0)
+    if magtheridon then
+        magtheridon:DoAction(ACTION_START_CHANNELERS_EVENT)
+        local magGuid = magtheridon:GetGUID()
+        local st = magState[magGuid]
+        if st and st.phase == "phase1" then
+            st.channelers = (st.channelers or 5) - 1
+            if st.channelers <= 0 then
+                magtheridonCombatStart(magtheridon, magGuid)
+            end
+        end
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     chanState[guid] = nil
