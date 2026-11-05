@@ -109,8 +109,9 @@
 --   (GetCreaturesInGrid + Kill() self-kill twin).
 -- - npc_fel_crystal (the file's second CreatureScript class): its only
 --   arm is JustDied -> instance->GetCreature(DATA_SELIN_FIREHEART)->
---   AI()->DoAction(ACTION_SWITCH_PHASE) — the instance bridge is
---   absent; no .lua file written (stub-free precedent, grubbis).
+--   AI()->DoAction(ACTION_SWITCH_PHASE) — PORTED below (GetInstanceCreature
+--   + DoAction bridges, tick 236): ev5 SetGuidData(0) latch on Selin,
+--   ev4 crystal relay, ev38 phase-switch re-arm.
 local SAY_AGGRO = 0
 local SAY_KILL = 3
 local SAY_DEATH = 4
@@ -265,3 +266,41 @@ RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 4, onDied)
 RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 23, onCombatEnd)
+
+-- C++ boss_selin_fireheartAI spawn latch (tick-235 precedent: ev5
+-- SetGuidData on the DATA key) — the crystal relay reads it back via
+-- GetInstanceCreature.
+local function onSelinSpawn(_, creature)
+    creature:SetGuidData(0) -- DATA_SELIN_FIREHEART (magisters_terrace.h:31)
+end
+
+-- C++ npc_fel_crystalAI::JustDied (boss_selin_fireheart.cpp:267-272):
+-- instance->GetCreature(DATA_SELIN_FIREHEART), if alive -> DoAction(1).
+local function onCrystalDied(_, creature)
+    local selin = creature:GetInstanceCreature(0)
+    if selin and selin:IsAlive() then
+        selin:DoAction(1) -- ACTION_SWITCH_PHASE
+    end
+end
+
+-- C++ boss_selin_fireheartAI::DoAction ACTION_SWITCH_PHASE (:91-101):
+-- SetPhase(PHASE_NORMAL), schedule EVENT_FEL_EXPLOSION in 2s,
+-- AttackStart(GetVictim()) + MoveChase(GetVictim()). The phase flip has
+-- no Lua model (drain legs already re-search the crystal); the timer
+-- re-arm rides the file's fel_explosion schedule (cancel-and-replace).
+local function onSelinDoAction(_, creature, action)
+    if action ~= 1 then
+        return
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "fel_explosion", 2000, function() onFelExplosion(creature, guid) end)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:AttackStart(victim)
+        creature:MoveChase(victim)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 5, onSelinSpawn)
+RegisterCreatureEvent(ENTRY_FEL_CRYSTAL, 4, onCrystalDied)
+RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 38, onSelinDoAction)

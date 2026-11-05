@@ -161,8 +161,14 @@
 --   itself IS ported — CreateLuaEvent 7500 in freyaDamageTaken;
 --   the stale "despawn leg has no bridge" wording is retracted).
 --
--- DOCUMENTED-ONLY (in this header; no registrations beyond
--- entries 32906 / 32915 / 32914 / 32913):
+-- npc_unstable_sun_beam (33050) — ctor casts 62209/62211 +
+-- REACT_PASSIVE, 7-12s DoCastAOE 62217 + DisappearAndDie, and
+-- the ev15 62217 strip of 62211/62243 — PORTED 2026-11-05
+-- (unstableSunBeamSpawn / unstableSunBeamSpellHitTarget below;
+-- the 62207 summon spell materializing 33050 is DBC-side and
+-- unverified in-repo).
+-- DOCUMENTED-ONLY (in this header; registrations cover entries
+-- 32906 / 32915 / 32914 / 32913 / 33203 / 33088 / 33050):
 -- Freya JustEngagedWith companion legs (:342-391) —
 -- DoZoneInCombat (:345) PORTED 2026-10-23 via the live bridge
 -- (C++ arm order — before the elder scan); the elder loop is PORTED
@@ -225,7 +231,7 @@
 -- npc_storm_lasher / npc_ancient_water_spirit /
 -- npc_detonating_lasher / npc_sun_beam / npc_nature_bomb /
 -- npc_eonars_gift / npc_healthy_spore /
--- npc_unstable_sun_beam / npc_iron_roots — wave/summon
+-- npc_iron_roots — wave/summon
 -- creatures: instance-coupled (ENSURE_AI Freya-AI callbacks,
 -- waveCount from Freya's AI, GetCreature(BOSS_FREYA)),
 -- random-target legs (tidal wave, stormbolt, nature fury),
@@ -252,6 +258,7 @@ local ENTRY_STONEBARK = 32914
 local ENTRY_IRONBRANCH = 32913
 local ENTRY_ANCIENT_CONSERVATOR = 33203
 local ENTRY_IRON_ROOTS = 33088 -- boss_freya.cpp:168
+local ENTRY_UNSTABLE_SUN_BEAM = 33050 -- boss_freya.cpp:167
 
 local SPELL_DRAINED_OF_POWER = 62467
 local SPELL_STONEBARK_ESSENCE = 62483 -- boss_freya.cpp:60
@@ -284,6 +291,12 @@ local SPELL_ROOTS_IRONBRANCH = 62438
 
 -- Ancient Conservator
 local SPELL_CONSERVATOR_GRIP = 62532
+
+-- Unstable Sun Beam (33050)
+local SPELL_PHOTOSYNTHESIS = 62209 -- boss_freya.cpp:142
+local SPELL_UNSTABLE_SUN_BEAM = 62211 -- boss_freya.cpp:140
+local SPELL_UNSTABLE_ENERGY = 62217 -- boss_freya.cpp:141
+local SPELL_UNSTABLE_SUN_BEAM_TRIGGERED = 62243 -- boss_freya.cpp:143
 
 local SAY_SLAY = 2
 local SAY_DEATH = 3
@@ -926,3 +939,46 @@ local function ironRootsJustDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_IRON_ROOTS, 4, ironRootsJustDied)
+
+-- C++ npc_unstable_sun_beamAI ctor (boss_freya.cpp:1487-1496):
+-- SetCombatMovement(false) + despawnTimer urand(7000, 12000) +
+-- DoCast(me, SPELL_PHOTOSYNTHESIS 62209) + DoCast(me,
+-- SPELL_UNSTABLE_SUN_BEAM 62211) + SetReactState(REACT_PASSIVE);
+-- UpdateAI (:1498-1507): on timer expiry DoCastAOE(
+-- SPELL_UNSTABLE_ENERGY 62217, true) + DisappearAndDie(). The
+-- DoCastAOE self-cast convention: CastSpell(creature, spell,
+-- true); Despawn() is the DisappearAndDie twin. The 7-12s timer
+-- is a one-shot CreateLuaEvent, deliberately NOT tracked in the
+-- timers table — the beam has no leave-combat/reset path and the
+-- C++ despawn rides the creature's own timer too. Caveat: the
+-- strip leg is inert until aura application exists (the Go
+-- creature-cast path applies no aura effects); the lifecycle
+-- half (the beam currently never despawns) is the observable
+-- win. The 62207 summon spell materializing 33050 is DBC-side
+-- and unverified in-repo (no Spell.dbc in the workspace).
+local function unstableSunBeamSpawn(event, creature)
+    creature:SetCombatMovement(false)
+    creature:CastSpell(creature, SPELL_PHOTOSYNTHESIS)
+    creature:CastSpell(creature, SPELL_UNSTABLE_SUN_BEAM)
+    creature:SetReactState(REACT_PASSIVE)
+    CreateLuaEvent(function()
+        creature:CastSpell(creature, SPELL_UNSTABLE_ENERGY, true)
+        creature:Despawn()
+    end, {7000, 12000})
+end
+
+-- C++ npc_unstable_sun_beamAI::SpellHitTarget
+-- (boss_freya.cpp:1509-1520): if spellId == SPELL_UNSTABLE_ENERGY
+-- (62217) the target loses SPELL_UNSTABLE_SUN_BEAM (62211) and
+-- SPELL_UNSTABLE_SUN_BEAM_TRIGGERED (62243); the ToUnit nil-guard
+-- is the target nil-check (ev15 arg order verified against
+-- boss_grobbulus.lua grobbulusSpellHitTarget).
+local function unstableSunBeamSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_UNSTABLE_ENERGY and target then
+        target:RemoveAura(SPELL_UNSTABLE_SUN_BEAM)
+        target:RemoveAura(SPELL_UNSTABLE_SUN_BEAM_TRIGGERED)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_UNSTABLE_SUN_BEAM, 5, unstableSunBeamSpawn)
+RegisterCreatureEvent(ENTRY_UNSTABLE_SUN_BEAM, 15, unstableSunBeamSpellHitTarget)

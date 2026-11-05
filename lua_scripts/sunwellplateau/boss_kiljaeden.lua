@@ -125,8 +125,8 @@
 -- 45772 aura -> triggered self-cast shadow infusion 45772 (C++-
 -- exact). OnEnterCombat(1): arm shadow bolt volley {8s,14s} then
 -- 12s, non-triggered DoCastVictim(45770). The felfire-portal arm
--- (NPC_FELFIRE_PORTAL summon + cross-creature threat relay) has
--- no summon/cross-creature bridges — unmodeled. OnDied(4): timer cleanup (the controller
+-- (NPC_FELFIRE_PORTAL summon + cross-creature threat relay) IS PORTED
+-- in deceiverFelfire below (tick 236). OnDied(4): timer cleanup (the controller
 -- deceiverDeathCount++ relay is cross-creature blocked; the
 -- SetBossState arms are instance-blocked). OnLeaveCombat(2):
 -- cancel the volley schedule (the JustEngagedWith
@@ -222,6 +222,7 @@
 local ENTRY_KILJAEDEN = 25315
 local ENTRY_DECEIVER = 25588
 local ENTRY_FELFIRE_FIEND = 25598
+local ENTRY_FELFIRE_PORTAL = 25603 -- NPC_FELFIRE_PORTAL (sunwell_plateau.h:86)
 local ENTRY_ARMAGEDDON_TARGET = 25735
 local ENTRY_SINISTER_REFLECTION = 25708
 local ENTRY_SHIELD_ORB = 25502
@@ -743,6 +744,22 @@ local function deceiverReset(event, creature)
     end)
 end
 
+-- C++ Felfire Portal arm (boss_kiljaeden.cpp:997-1000): spawn the portal
+-- at the deceiver's position (0,0,0,0 offsets), TEMPSUMMON_TIMED_DESPAWN
+-- 20s, then copy the deceiver's threat list onto it at 1.0 each;
+-- FelfirePortalTimer re-arms at 20000 (Initialize :938).
+local function deceiverFelfire(creature, guid)
+    local portal = creature:SummonCreature(ENTRY_FELFIRE_PORTAL, creature:GetX(), creature:GetY(), creature:GetZ(), 0, 3, 20000)
+    if portal then
+        for _, t in ipairs(creature:GetAITargets()) do
+            portal:AddThreat(t, 1.0)
+        end
+    end
+    schedule(guid, "felfire", 20000, function()
+        deceiverFelfire(creature, guid)
+    end)
+end
+
 local function deceiverEnterCombat(event, creature)
     local guid = creature:GetGUID()
     -- C++ JustEngagedWith (boss_kiljaeden.cpp:964): instance
@@ -752,6 +769,9 @@ local function deceiverEnterCombat(event, creature)
     schedule(guid, "volley", math.random(8000, 14000), function()
         deceiverVolley(creature, guid)
     end)
+    schedule(guid, "felfire", 20000, function()
+        deceiverFelfire(creature, guid)
+    end)
 end
 
 local function deceiverLeaveCombat(event, creature)
@@ -760,6 +780,10 @@ local function deceiverLeaveCombat(event, creature)
     if per and per.volley then
         RemoveEventById(per.volley)
         per.volley = nil
+    end
+    if per and per.felfire then
+        RemoveEventById(per.felfire)
+        per.felfire = nil
     end
 end
 

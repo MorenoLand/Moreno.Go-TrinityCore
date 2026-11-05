@@ -87,8 +87,10 @@
 --   SetFacingToObject / AttackStop / SetOrientation / StopMoving
 --   legs — the SetFacingToObject leg (C++ :199-200 me<->Madrigosa)
 --   is bridgeable via the atan2 twin (devourer_of_souls precedent),
---   retracting the old "none of these have Lua bridges" parenthetical
---   on that one leg only; the intro stays documented-only — the faced
+--   and StopMoving is bridged (MoveClear alias) while SetOrientation
+--   has the SetFacingTo twin — retracting the old "none of these have
+--   Lua bridges" parenthetical on those legs too; the intro stays
+--   documented-only — the faced
 --   target (Madrigosa via instance->GetCreature(DATA_MADRIGOSA))
 --   rides the instance-blocked machine. MoveInLineOfSight's
 --   SetBossState(SPECIAL) + StartIntro trigger, AttackStart's

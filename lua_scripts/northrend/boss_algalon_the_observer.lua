@@ -51,8 +51,11 @@
 -- (EVENT_INTRO_TIMER_DONE) that PASSIVE + NOT_SELECTABLE at combat
 -- start makes the creature immediately evade — setting it at engage
 -- would risk the same evade cancelling the intro timers before the
--- clear tick, and the compensating AttackStart leg has no bridge;
--- only the intro-timer clear is ported (see introdefensive). The
+-- clear tick, and the compensating AttackStart leg IS ported in
+-- the introdefensive tick below (AttackStart bridged,
+-- lua_creature_events.go:6010; the threat-list leg is
+-- #GetAITargets() + a GetVictim() nil-guard); only the
+-- intro-timer clear is ported (see introdefensive). The
 -- BossAI::JustEngagedWith DoZoneInCombat leg IS ported on later pulls
 -- (algalonTimersStart); first-pull DoZoneInCombat was already ported.
 -- InterruptNonMeleeSpells(:381) is called in code; the handler-surface
@@ -554,9 +557,10 @@ local function algalonTimersStart(event, creature)
     -- strand combat, unlike a set). SetImmuneToNPC(false) is ported
     -- in the introdefensive tick below (C++ order); the triggered
     -- DoCastAOE(SUPERMASSIVE_FAIL) and the 11 REACT_PASSIVE
-    -- constellation summons are ported in the same tick. The
-    -- AttackStart workaround and the random-stalker
-    -- ActivateLivingConstellation event stay out. Without
+    -- constellation summons are ported in the same tick, as is
+    -- the AttackStart workaround (:571-572, see the tick body);
+    -- only the random-stalker ActivateLivingConstellation event
+    -- stays out. Without
     -- the react flip the boss keeps the algalonReset REACT_PASSIVE
     -- while engaged and the engine's isCreaturePassive gate never
     -- lets it attack.
@@ -570,6 +574,19 @@ local function algalonTimersStart(event, creature)
             local summon = creature:SummonCreature(ENTRY_LIVING_CONSTELLATION, pos[1], pos[2], pos[3], pos[4], 6, 0)
             if summon then
                 summon:SetReactState(0) -- REACT_PASSIVE, as summoned by C++
+            end
+        end
+        -- C++ EVENT_INTRO_TIMER_DONE (:571-572): the AttackStart
+        -- workaround for creatures starting combat REACT_PASSIVE +
+        -- NOT_SELECTABLE — if (!IsThreatListEmpty())
+        -- AttackStart(GetCurrentVictim()); the threat-list leg is
+        -- #GetAITargets() and GetVictim() reads TargetGUID
+        -- (nil-guard; it may be 0). AttackStart is bridged
+        -- (lua_creature_events.go:6010).
+        if #creature:GetAITargets() > 0 then
+            local v = creature:GetVictim()
+            if v then
+                creature:AttackStart(v)
             end
         end
     end)

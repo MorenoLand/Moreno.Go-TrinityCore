@@ -169,10 +169,11 @@
 -- the vortex trigger vehicle, and the ScriptName->entry
 -- binding is DB-side) — IsSummonedBy ->
 -- DespawnOrUnsummon(30s) (no periodic logic in the C++) —
--- stays out: creature:Despawn() IS bridged, but temp summons
--- fire no spawn hook on the summoned creature itself (event 5
--- bypasses direct-constructed motions), and the summoner-side
--- event 19 cannot be gated without the entry.
+-- stays out: creature:Despawn() IS bridged, and ev5 DOES fire on
+-- summoned creatures (motionFor fires ev23+ev5 on creation) — but the
+-- entry is unverifiable from repo sources, so no registration can be
+-- written, and the summoner-side event 19 cannot be gated without
+-- the entry.
 -- The 17 spell scripts (SpellScript / AuraScript handlers:
 -- portal beam relocating, random portal target selection,
 -- arcane storm target filters, vortex dummy destination

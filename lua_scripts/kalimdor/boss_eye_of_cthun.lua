@@ -73,8 +73,9 @@
 --   sweep machine (:340-:361: per-tick SetOrientation(DarkGlareAngle
 --   +/- tick*pi/35), StopMoving, DoCast(me, SPELL_DARK_GLARE
 --   26029, false)). GetAbsoluteAngle is absent from the Lua
---   method list, and so are SetOrientation and StopMoving — the whole
---   dark-glare orientation machine is unportable (SetTarget itself was
+--   method list — the whole dark-glare orientation machine is
+--   unportable on that leg alone (SetOrientation has the SetFacingTo
+--   twin and StopMoving is bridged, MoveClear alias; SetTarget itself was
 --   bridged 2026-10-20 via creature:SetTarget). Not ported.
 --
 -- Surrounding machinery, also unbridged (for the record, not

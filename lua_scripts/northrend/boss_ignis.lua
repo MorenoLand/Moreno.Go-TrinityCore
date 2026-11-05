@@ -66,9 +66,10 @@
 -- construct setup (SetFaction/SetReactState/RemoveFlag x4) +
 -- EngageWithTarget(victim) (the AttackStart twin) + DoZoneInCombat +
 -- summons latch, despawned from died (before Talk)/reset/leave.
--- Deltas: SetImmuneToPC + SetControlled(false, ROOT) have no bridges
--- and stay out; constructs still never spawn in Lua (DoSummon leg
--- blocked), so the construct arm fires only on a direct summon, while
+-- Deltas: SetImmuneToPC has no bridge and stays out; SetControlled(false,
+-- ROOT) is PORTED below as SetRooted(false) (bridged, tick 236);
+-- constructs still never spawn in Lua (DoSummon leg blocked), so the
+-- construct arm fires only on a direct summon, while
 -- the scorch arm is live via the ported EVENT_SCORCH summon site.
 -- DoAction(ACTION_REMOVE_BUFF 20) — RemoveAuraFromStack(SPELL_
 -- STRENGHT 64473) + the GameTime <5s shattered window (producer:
@@ -117,9 +118,11 @@
 -- event 27) and HasAura/AddAura are bridged, so the old "no proximity /
 -- aura bridge" claim is stale; the stale "the real blocker is the spawn:
 -- SummonCreature has no bridge" claim was retracted 2026-10-23 (the
--- summon bridge is live) — the heat machine stays out on the
--- SetControlled(true, ROOT) / PACIFIED legs (boss_ignis.cpp:387, no
--- bridges), documented-only. Reset DoCast(me, SPELL_GROUND 62548) would
+-- summon bridge is live) — the heat machine stays out on the unported
+-- scorch-ground AI (MoveInLineOfSight heat tracking + UpdateAI AddAura
+-- machine); the SetControlled(true, ROOT) leg has the SetRooted(true)
+-- twin and PACIFIED is a plain SetFlag (boss_ignis.cpp:387) — neither
+-- blocks it. Documented-only. Reset DoCast(me, SPELL_GROUND 62548) would
 -- be bridgeable alone; no Talk arms anywhere.
 -- spell_ignis_slag_pot (62717) — periodic-dummy AuraScript
 -- (SPELL_SLAG_POT_DAMAGE 65722 on tick; OnRemove casts SPELL_
@@ -277,9 +280,10 @@ local function ignisJustSummoned(event, creature, summon)
         summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
         summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED)
         summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
-        -- SetImmuneToPC(false) + SetControlled(false, ROOT) stay out:
-        -- no bridges (the construct arm fires only on a direct summon;
-        -- constructs still never spawn in Lua, DoSummon leg blocked).
+        summon:SetRooted(false) -- boss_ignis.cpp:186 SetControlled(false, ROOT) twin (tick 236)
+        -- SetImmuneToPC(false) stays out: no bridge (the construct arm
+        -- fires only on a direct summon; constructs still never spawn
+        -- in Lua, DoSummon leg blocked).
     end
     local victim = creature:GetVictim()
     if victim then

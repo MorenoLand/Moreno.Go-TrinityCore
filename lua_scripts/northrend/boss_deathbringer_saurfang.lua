@@ -600,8 +600,9 @@ end
 
 -- C++ JustReachedHome (:334-342): the _dead guard; _JustReachedHome()
 -- (events.Reset) is the cancelTimers inside doSaurfangReset; Reset()
--- ports via doSaurfangReset in C++ arm order; the SetBossState(FAIL) leg
--- has no instance bridge; then DoRemoveAurasDueToSpellOnPlayers(
+-- ports via doSaurfangReset in C++ arm order; then SetBossState
+-- (DATA_DEATHBRINGER_SAURFANG 3, FAIL 2 — bridged, moroes precedent);
+-- then DoRemoveAurasDueToSpellOnPlayers(
 -- SPELL_MARK_OF_THE_FALLEN_CHAMPION 72293) via GetPlayersInWorld +
 -- mapId/instanceId filter + player:RemoveAura (the moroes precedent).
 local function saurfangReachHome(event, creature)
@@ -611,6 +612,7 @@ local function saurfangReachHome(event, creature)
         return
     end
     doSaurfangReset(creature)
+    creature:SetBossState(3, 2) -- DATA_DEATHBRINGER_SAURFANG, FAIL (tick 236)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then

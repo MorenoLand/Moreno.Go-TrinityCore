@@ -69,7 +69,8 @@
 -- claim of "triggered" corrected 2026-10-14) — no summon-list /
 -- cast / motion / target-selection bridges).
 -- MovementInform POINT_MOTION_TYPE / EVENT_FORGE_CAST (m_uiSummonPhase
--- 2 -> SetOrientation(2.29f) -> phase 3 — no motion bridge).
+-- 2 -> SetOrientation(2.29f) (SetFacingTo twin bridged; the leg rides
+-- MovementInform POINT_MOTION_TYPE, unbridged) -> phase 3).
 -- GetData(DATA_SHATTER_RESISTANT 2042) -> GolemsShattered (no
 -- GetData bridge; consumer is achievement_shatter_resistant below).
 -- UpdateAI event machine: EVENT_PAUSE (m_bIsStriking resume-chase +

@@ -102,8 +102,8 @@
 -- arms above; the EVENT_SHADOW_BOLT ResetThreatList arm IS
 -- ported (:223 — ResetAllThreat bridged, lua_objects.go); the
 -- canDespawn/DespawnTimer/FAIL encounter-state arm (SetBossState
--- + bone-construct grid despawn) is blocked on the instance-script
--- model; the mind-control event (30-35s) is commented out upstream
+-- + bone-construct grid despawn) IS PORTED below (tick 236); the
+-- mind-control event (30-35s) is commented out upstream
 -- and never scheduled — omitted C++-exact.
 
 local ENTRY_VICTOR_NEFARIUS = 10162
@@ -630,13 +630,64 @@ local function nefarianDied(event, creature, killer)
     nefarianClear(creature:GetGUID())
 end
 
+local nefarianDespawn = {}
+
+-- C++ boss_nefarianAI::UpdateAI (boss_nefarian.cpp:472-479): if canDespawn
+-- (JustReachedHome :423-426) and DespawnTimer (30000, Initialize :415) has
+-- elapsed, instance->SetBossState(DATA_NEFARIAN 7, FAIL 2) + grid-despawn
+-- NPC_BONE_CONSTRUCT 14605 @ 500.0f. The 30s one-shot armed in Reset is the
+-- DespawnTimer twin; ev24 is the canDespawn latch. Fires once (C++ refires
+-- every UpdateAI tick, but SetBossState FAIL + the despawn loop are
+-- idempotent once the constructs are gone).
+local function nefarianDespawnCheck(creature, guid)
+    local st = nefarianDespawn[guid]
+    if not st or st.done or not st.ready or not st.home then
+        return
+    end
+    if not creature:IsAlive() then
+        return
+    end
+    st.done = true
+    creature:SetBossState(7, 2) -- DATA_NEFARIAN (blackwing_lair.h:38), FAIL
+    for _, construct in ipairs(creature:GetCreaturesInGrid(14605, 500)) do
+        construct:DespawnOrUnsummon()
+    end
+end
+
+-- C++ boss_nefarianAI::JustReachedHome (boss_nefarian.cpp:423-426):
+-- canDespawn = true.
+local function nefarianReachedHome(_, creature)
+    local guid = creature:GetGUID()
+    local st = nefarianDespawn[guid]
+    if not st then
+        st = { gen = 0, ready = false, home = false }
+        nefarianDespawn[guid] = st
+    end
+    st.home = true
+    nefarianDespawnCheck(creature, guid)
+end
+
 -- C++ boss_nefarianAI::Reset (boss_nefarian.cpp:418-421) = Initialize():
 -- Phase3/canDespawn latch clears. The dragon's JustReachedHome
--- (boss_nefarian.cpp:423-426) is canDespawn = true, whose only consumer
--- is the instance-blocked DespawnTimer/FAIL arm (see deviations above),
--- so entry 11583 gets no ev24 registration.
+-- (boss_nefarian.cpp:423-426) is canDespawn = true, feeding the
+-- DespawnTimer/FAIL arm ported below (ev24 registration, tick 236).
 local function nefarianReset(event, creature)
     nefarianClear(creature:GetGUID())
+    local guid = creature:GetGUID()
+    local prev = nefarianDespawn[guid]
+    local gen = (prev and prev.gen or 0) + 1
+    nefarianDespawn[guid] = { gen = gen, ready = false, home = false }
+    -- C++ Initialize() (boss_nefarian.cpp:415): DespawnTimer = 30000.
+    -- Raw CreateLuaEvent (not the file's schedule helper) so
+    -- leave-combat timer cancellation cannot kill it; the generation
+    -- guard drops stale callbacks across resets.
+    CreateLuaEvent(function()
+        local st = nefarianDespawn[guid]
+        if st and st.gen == gen then
+            st.ready = true
+            nefarianDespawnCheck(creature, guid)
+        end
+    end, 30000)
 end
 
 RegisterCreatureGossipEvent(ENTRY_VICTOR_NEFARIUS, 1, onNefariusGossipHello)
@@ -657,3 +708,4 @@ RegisterCreatureEvent(ENTRY_NEFARIAN, 3, nefarianTargetDied)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 4, nefarianDied)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 9, nefarianDamageTaken)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 23, nefarianReset)
+RegisterCreatureEvent(ENTRY_NEFARIAN, 24, nefarianReachedHome)

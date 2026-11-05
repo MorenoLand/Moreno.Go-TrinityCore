@@ -170,7 +170,8 @@
 -- (boss_the_lich_king.cpp:1073) + instance EVENT_TELEPORT_TO_FROSTMOURNE
 -- (instance_icecrown_citadel.cpp:1463), both unported; outro talks gated on the
 -- unported outro summon chain (broken-frostmourne ACTION_SUMMON_TERENAS,
--- :883/:1931) — ev22 IsSummonedBy dispatch is bridged but a bare ev22 port
+-- :883/:1931) — ev22 IsSummonedBy dispatch exists but fires only for
+-- player pets (pet_cooldowns.go:73); a bare ev22 port
 -- would fabricate outro Talks in the Frostmourne room (the FROSTMOURNE_INTRO
 -- cancel never fires in Lua)
 -- (gothik counterpoint).

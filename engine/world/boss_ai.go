@@ -14205,11 +14205,15 @@ func init() {
 	// Crystal SelectNearestCrystal/MovePoint/MovementInform/
 	// EMPOWER legs unmodeled (FindNearestCreature/MotionMaster
 	// bridges absent);
-	// npc_fel_crystal class unmodeled (JustDied needs the instance
-	// bridge — no .lua written, stub-free precedent). Entry 24723
+	// npc_fel_crystal JustDied -> DoAction relay PORTED (tick 236:
+	// ev5 SetGuidData(0) latch + ev4 relay via GetInstanceCreature
+	// + ev38 phase-switch re-arm; boss_selin_fireheart.cpp:267-272,
+	// :91-101). Entry 24722 verifiable from the C++ sources:
+	// magisters_terrace.h names NPC_FEL_CRYSTAL = 24722. Entry 24723
 	// verifiable from the C++ sources: magisters_terrace.h names
 	// BOSS_SELIN_FIREHEART = 24723 (boss_felblood_kaelthas precedent).
 	RegisterLuaBoss("boss_selin_fireheart", 24723)
+	RegisterLuaBoss("boss_selin_fireheart", 24722)
 	// boss_vexallus: BossAI combat entry + 15%-interval energy-discharge
 	// latch (85/70/55/40/25%: Talk(SAY_ENERGY), Talk(EMOTE_DISCHARGE_
 	// ENERGY), self-cast SPELL_SUMMON_PURE_ENERGY 44322) + 10%-HP overload
