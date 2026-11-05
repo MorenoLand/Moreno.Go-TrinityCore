@@ -92,6 +92,7 @@ local timers = {}
 local state = {}
 
 local mandokirSpirits = {}
+local mandokirOhgan = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -248,7 +249,10 @@ local function mandokirEnterCombat(event, creature, target)
     -- summon bridge (lua_creature_events.go:877); Ohgan's AI is registered
     -- above, so the summon fights; the spirits have no C++ AI either.
     -- The spirits are latched below for the JustDied DespawnEntry arm (:137).
-    creature:SummonCreature(ENTRY_OHGAN, creature:GetX() - 3, creature:GetY(), creature:GetZ(), creature:GetO(), 3, 35000)
+    local ohgan = creature:SummonCreature(ENTRY_OHGAN, creature:GetX() - 3, creature:GetY(), creature:GetZ(), creature:GetO(), 3, 35000)
+    if ohgan then
+        mandokirOhgan[guid] = ohgan
+    end
     local spirits = {}
     for _, pos in ipairs(POS_CHAINED_SPIRITS) do
         local spirit = creature:SummonCreature(ENTRY_CHAINED_SPIRT, pos[1], pos[2], pos[3], pos[4], 4)
@@ -300,16 +304,7 @@ local function mandokirTargetDied(event, creature, victim)
     end
 end
 
-local function mandokirLeaveCombat(event, creature)
-    mandokirResetState(creature:GetGUID())
-end
-
--- C++ JustDied (boss_mandokir.cpp:135-139): summons.DespawnEntry
--- (NPC_CHAINED_SPIRT) + instance SetBossState/SaveToDB (blocked).
--- Only the chained-spirit entry despawns on death (Ohgan is not
--- entry-latched here); Reset's DespawnAll is a separate arm.
-local function mandokirDied(event, creature, killer)
-    local guid = creature:GetGUID()
+local function despawnMandokirSpirits(guid)
     local spirits = mandokirSpirits[guid]
     if spirits then
         for _, spirit in ipairs(spirits) do
@@ -319,6 +314,36 @@ local function mandokirDied(event, creature, killer)
         end
         mandokirSpirits[guid] = nil
     end
+end
+
+-- C++ Reset's summons.DespawnAll() (boss_mandokir.cpp:131) is
+-- unconditional (outside the Z>140 gate) and runs on evade via
+-- EnterEvadeMode. It lives here, not in mandokirReset: Go fires
+-- ev2 OnLeaveCombat only on evade (creaturemotion.go EnterEvadeMode),
+-- while ev23 OnReset also fires on death (fireCreatureDied) — and on
+-- death C++ JustDied despawns only the spirits (:137), Ohgan lingering
+-- on its 35s out-of-combat timer. Despawn is not death, so no
+-- Ohgan-frenzy relay fires.
+local function mandokirLeaveCombat(event, creature)
+    local guid = creature:GetGUID()
+    despawnMandokirSpirits(guid)
+    local ohgan = mandokirOhgan[guid]
+    if ohgan then
+        ohgan:Despawn()
+        mandokirOhgan[guid] = nil
+    end
+    mandokirResetState(guid)
+end
+
+-- C++ JustDied (boss_mandokir.cpp:135-139): summons.DespawnEntry
+-- (NPC_CHAINED_SPIRT) + instance SetBossState/SaveToDB (blocked).
+-- Only the chained-spirit entry despawns on death (Ohgan is not
+-- entry-latched here); Reset's unconditional DespawnAll ports in
+-- mandokirLeaveCombat above (ev2-only: ev23 also fires on death,
+-- where Ohgan must linger).
+local function mandokirDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    despawnMandokirSpirits(guid)
     mandokirResetState(guid)
 end
 
@@ -327,8 +352,11 @@ local function mandokirReset(event, creature)
     -- instance-script, or summon model) — only the timer cancel, the
     -- Z-gated SetImmuneToAll(true) (SetFlag 59, 0x300, in C++ order
     -- after Initialize) and the Reset-tail Mount(MODEL_OHGAN_MOUNT
-    -- 15271) are modeled. The EVENT_STARTED clear rides the unported
-    -- intro machine; the JustReachedHome clear is ported below.
+    -- 15271) are modeled. The unconditional summons.DespawnAll (:131)
+    -- ports in mandokirLeaveCombat, not here (ev23 also fires on death,
+    -- where C++ JustDied keeps Ohgan). The EVENT_STARTED clear rides
+    -- the unported intro machine; the JustReachedHome clear is ported
+    -- below.
     mandokirResetState(creature:GetGUID())
     if creature:GetZ() > 140.0 then
         creature:SetFlag(59, 0x300) -- IMMUNE_TO_PC|IMMUNE_TO_NPC

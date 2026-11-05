@@ -377,6 +377,9 @@ local function marliReset(event, creature)
     -- C++ Reset (boss_marli.cpp:92): the PHASE_THREE damage rollback
     -- runs before the egg scan; the alive gate restores C++
     -- Reset-never-runs-on-death (Go fires 23 before 4 on death).
+    -- summons.DespawnAll (:102) is vacuous here: no Lua arm summons
+    -- (hatch casts spawn nothing, spawn-of-marli never spawns), so
+    -- the summons list is always empty in this model.
     local wasPhaseThree = marliState(creature:GetGUID()).phase == PHASE_THREE
     marliWipe(event, creature)
     if creature:IsAlive() then
