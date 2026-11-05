@@ -2122,7 +2122,7 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 		return false
 	}
 	// CanSeeOrDetect, stealth half only for player targets.
-	if target.isPlayer && !canCreatureDetectStealthOfPlayer(caller, target.sess, dist3D) {
+	if target.isPlayer && !s.creatureSightCanDetectStealthOfPlayer(caller, target.sess, dist3D) {
 		return false
 	}
 	return s.hasLineOfSight(caller.Map, caller.X, caller.Y, caller.Z, target.x, target.y, target.z)
@@ -4935,7 +4935,7 @@ func (s *Server) triggerCreatureAlert(ctx context.Context, motion *creatureMotio
 	if s == nil || motion == nil || p.Sess == nil || p.Sess.player == nil {
 		return
 	}
-	inBand, alertRange := creatureStealthAlertBand(motion, p.Sess, dist)
+	inBand, alertRange := s.creatureSightAlertBand(motion, p.Sess, dist)
 	// WorldObject::CanDetectStealthOf (Object.cpp:1782-1784): no alert when
 	// the alert range reaches the creature's attack distance.
 	if !inBand || alertRange >= aggroDist {
@@ -8852,7 +8852,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			continue
 		}
 		// WorldObject::CanDetect's invisibility leg (Object.cpp:1664-1686,
-		// 1688-1717) via creatureSightInvisibilityBlocked: an invisible
+		// 1688-1717) via creatureSightInvisibilityBlocked (a controlled scanner
+		// judges through its controller): an invisible
 		// player the scanner cannot detect never sight-aggros and never
 		// triggers the alert arm below (C++ checks invisibility before
 		// stealth regardless of checkAlert). Placed ahead of the
@@ -8983,7 +8984,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			aggroDist += combatDistanceSpellRange(s, motion)
 		}
-		if !canCreatureDetectStealthOfPlayer(motion, p.Sess, dist) {
+		if !s.creatureSightCanDetectStealthOfPlayer(motion, p.Sess, dist) {
 			// CreatureAI::TriggerAlert (CreatureAI.cpp) via
 			// CreatureUnitRelocationWorker (GridNotifiers.cpp:139): a stealthed
 			// player inside the alert band but outside normal detect range
@@ -9166,14 +9167,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if s.spellGateCreatureNeverSeesCreature(motion, victim) {
 				continue
 			}
-			// WorldObject::CanDetect (Object.cpp:1664-1686) for a wild
-			// seer via wildCreatureCanDetectCreature: stalked, then
+			// WorldObject::CanDetect (Object.cpp:1664-1686) via
+			// creatureSightCanDetectCreature (a controlled scanner judges
+			// through its controller): stalked, then
 			// invisibility, then stealth, all from the victim's live
 			// creature auras. A stealthed or invisible creature victim
 			// the scanner cannot detect never sight-aggros. No alert
 			// band here: the worker's TriggerAlert arm is player-only
 			// (GridNotifiers.cpp:139).
-			if !s.wildCreatureCanDetectCreature(motion, victim) {
+			if !s.creatureSightCanDetectCreature(motion, victim) {
 				continue
 			}
 			// Axis-delta bounding box ahead of the 3D distance, the
@@ -9877,6 +9879,9 @@ func creatureSightVictimBlocked(scanner, victim *creatureMotion) bool {
 // never reaches the stealth check or the alert arm: C++ evaluates
 // invisibility before stealth in CanDetect regardless of checkAlert,
 // so an undetected invisible player triggers no TriggerAlert either.
+// A controlled scanner judges through its charmer-or-owner
+// (Object.cpp:1664-1686): the guard bypass stays scanner-side, but the
+// stalked arm and the detect sums ride the resolved seer (canDetectSeerFor).
 func (s *Server) creatureSightInvisibilityBlocked(motion *creatureMotion, ts *session) bool {
 	if motion == nil || ts == nil || ts.player == nil {
 		return false
@@ -9884,10 +9889,11 @@ func (s *Server) creatureSightInvisibilityBlocked(motion *creatureMotion, ts *se
 	if motion.FlagsExtra&creatureFlagExtraGuard != 0 && motion.TargetGUID != 0 && ts.playerGUID == motion.TargetGUID {
 		return false
 	}
-	if ts.hasStalkedAuraFrom(motion.GUID) {
+	seer := s.canDetectSeerFor(motion)
+	if seer.guid != 0 && ts.hasStalkedAuraFrom(seer.guid) {
 		return false
 	}
-	return !s.wildCreatureCanDetectInvisibilityOfPlayer(motion, ts)
+	return !s.seerCanDetectInvisibilityOfPlayer(seer, ts)
 }
 
 // creatureSightlessScanner is the UNIT_STATE_SIGHTLESS scanner gate of
