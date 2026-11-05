@@ -57,7 +57,9 @@
 -- no bridges.
 -- GetData(DATA_SHATTERED 29252926) — creature:GetData IS bridged
 -- (ScriptData store, 2026-10-24) but the leg stays out: the producer
--- is the DoAction(20) cross-AI relay (no DoAction bridge) and the
+-- is the DoAction(20) cross-AI relay (dispatch IS bridged — ev38 —
+-- but the sender is the unregistered iron construct's DamageTaken,
+-- boss_ignis.cpp:333) and the
 -- sole consumer is achievement_ignis_shattered below (no achievement
 -- bridge), so a Lua-side latch would be dead code.
 -- JustSummoned — PORTED 2026-11-03 (ignisJustSummoned, event 19):
@@ -70,8 +72,9 @@
 -- the scorch arm is live via the ported EVENT_SCORCH summon site.
 -- DoAction(ACTION_REMOVE_BUFF 20) — RemoveAuraFromStack(SPELL_
 -- STRENGHT 64473) + the GameTime <5s shattered window (producer:
--- npc_iron_construct DamageTaken) — no DoAction / aura-stack
--- bridges.
+-- npc_iron_construct DamageTaken, boss_ignis.cpp:333 — the construct
+-- is unregistered, so no Lua sender exists; dispatch itself IS
+-- bridged, ev38) — no aura-stack bridge.
 -- EVENT_SLAG_POT (:227-:236) — Talk(SAY_SLAG_POT 2) +
 -- SelectTarget(Random,1,100,true) + DoCast(target, SPELL_GRAB
 -- 62707) 2-arg non-triggered + DelayEvents(3s) -> EVENT_GRAB_POT

@@ -65,7 +65,9 @@
 -- strip; the revive TRIGGER is the unbridged thaddius DoAction
 -- machine); DoAction(
 -- ACTION_TRANSITION) — KillSelf + the coil CastStop + coil->AI()->
--- Talk(EMOTE_TESLA_OVERLOAD 1) — no cross-AI bridge; DoAction(
+-- Talk(EMOTE_TESLA_OVERLOAD 1) — the thaddius sender chain is
+-- unported (event-38 dispatch itself is bridged, creature:DoAction,
+-- lua_creature_events.go:802); DoAction(
 -- ACTION_TRANSITION_2) — coil->CastSpell(thaddius, SPELL_SHOCK_
 -- VISUAL 28159) via DATA_THADDIUS — no cross-AI bridge; DoAction(
 -- ACTION_TRANSITION_3) — coil GO GO_STATE_READY +
@@ -326,8 +328,15 @@ end
 -- the feugen visual — as-written). Leg mapping is the stalagg
 -- mirror: SetImmuneToPC(false/true) = RemoveFlag/SetFlag(
 -- UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC) (thekal / lurker_below
--- precedent); caster:Talk; CastStop = no-op, omitted
--- (lua_objects.go:344); home-distance via the handler-surface
+-- precedent); caster:Talk; CastStop is the bridged
+-- creature:StopSpellCast (lua_creature_events.go:1010) — the
+-- :874/:882 legs stay out because 28111 is channeled with NO finite
+-- DBC duration (Wowhead 2026-11-05: Channeled flag, duration n/a) —
+-- Go stamps a channel only when dur > 0 (boss_ai.go:2994), so no
+-- ChannelSpellID can ever be live for the coil to interrupt; the
+-- beam ends via the RemoveAura leg above, C++-exact. No-op-safe
+-- forms recorded in caststop_tick225_verdicts.md (kept out: dead
+-- code in Go's model); home-distance via the handler-surface
 -- GetHomePosition bridge (3D, OVERLOAD_DISTANCE 28).
 local function feugenSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_FEUGEN_TESLA_PERIODIC then

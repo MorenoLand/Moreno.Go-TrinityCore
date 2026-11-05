@@ -14,7 +14,9 @@
 -- Unmodeled (documented-only, no bridges):
 -- - UpdateAI MovePoint leg: MoveTo IS bridged now (drake precedent),
 --   but the leg's trigger is DoAction(1) from the unported quest-11876
---   item script (no DoAction bridge), so the leg still can't fire.
+--   item script (item_dehta_trap_smasher::OnUse, item_scripts.cpp:213-227;
+--   ev38 dispatch IS bridged, lua_creature_events.go:802), so the leg
+--   still can't fire.
 -- - MovementInform arrival leg: DisappearAndDie + trap SetLootState
 --   (GO_JUST_DEACTIVATED) — no MovementInform bridge (SetLootState
 --   itself is bridged on the GO object, but unreachable without it).

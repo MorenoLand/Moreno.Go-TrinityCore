@@ -49,8 +49,10 @@
 -- (lua_creature_events.go:1447), unreachable for a REACT_PASSIVE
 -- creature — a one-sided Reset port would freeze the boss passive.
 -- EVENT_SEND_GROUP (DoCastAOE(SUBBOSS_AGGRO_TRIGGER 52343, triggered),
--- 70s repeat) — stays out: triggered cast behind the unbridged
--- DoAction(ACTION_PET_ENGAGED) watcher machine, and the trigger's
+-- 70s repeat) — stays out: triggered cast behind the unported
+-- DoAction(ACTION_PET_ENGAGED) watcher machine (sender:
+-- npc_gatewatcher_petAI JustEngagedWith,
+-- boss_krikthir_the_gatewatcher.cpp:349), and the trigger's
 -- whole effect is the SpellScript watcher-target selection
 -- (HandleTargets — no SpellScript-binding bridge, razelikh
 -- precedent).
@@ -67,8 +69,12 @@
 -- casting, no repeat re-arm (mal_ganis idiom). The _hadFrenzy
 -- latch-set via event 9 stays ungated (DamageTaken-modeled leg,
 -- taldaram precedent); the EVENT_FRENZY cast itself defers.
--- The DoAction machine (no DoAction bridge — drakkari_colossus standing
--- precedent — and the payload is instance-model anyway):
+-- The DoAction machine (ev38 dispatch IS bridged,
+-- creature:DoAction, lua_creature_events.go:802 — the senders are
+-- the instance script (instance_azjol_nerub.cpp:88, GREET), the
+-- watcher JustDied arms (:434/:512/:590, *_DIED), and the petAI
+-- JustEngagedWith / EnterEvadeMode (:333/:349/:395), all unported;
+-- the payload is instance-model anyway):
 -- -ACTION_GATEWATCHER_GREET (instance SetData(DATA_GATEWATCHER_GREET,1)
 -- + Talk(SAY_PREFIGHT 4)) — instance-script model absent (standing).
 -- ACTION_GASHRA/NARJIL/SILTHIL_DIED (_watchersActive decrement +
@@ -80,9 +86,9 @@
 -- SpellHit(SPELL_SUBBOSS_AGGRO_TRIGGER) -> DoZoneInCombat and
 -- SpellHitTarget(SPELL_SUBBOSS_AGGRO_TRIGGER) -> Talk(SAY_SEND_GROUP 5)
 -- — stays out on trigger-path grounds: the trigger cast (EVENT_SEND_GROUP
--- DoCastAOE 52343) is unported behind the unbridged DoAction watcher
--- machine, so event 15 never fires for it in Go (event 15 itself is
--- live — boss_ai.go:1904).
+-- DoCastAOE 52343) is unported behind the unported petAI DoAction
+-- watcher sender (boss_krikthir_the_gatewatcher.cpp:349), so event 15
+-- never fires for it in Go (event 15 itself is live — boss_ai.go:1904).
 -- npc_watcher_gashra / npc_watcher_narjil / npc_watcher_silthik —
 -- ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (28730 / 28729 / 28731 from
 -- azjol_nerub.h — kalecgos pass): zero registration. Their whole
@@ -90,10 +96,15 @@
 -- REACT_PASSIVE via DATA_PET_GROUP stamping (react-state bridge absent),
 -- group aggro (SetReactState(AGGRESSIVE) + AttackStart on same-group
 -- adds), summoner DoAction(ACTION_PET_ENGAGED / ACTION_WATCHER_ENGAGED)
--- (cross-AI bridge absent), MoveInLineOfSight passive-engage leg, JustDied
+-- (ev38 dispatch IS bridged, lua_creature_events.go:802; sender is the
+-- unported petAI JustEngagedWith,
+-- boss_krikthir_the_gatewatcher.cpp:333/:349), MoveInLineOfSight
+-- passive-engage leg, JustDied
 -- -> instance->GetCreature(DATA_KRIKTHIR)->AI()->DoAction(ACTION_*_DIED)
--- (instance model absent), EnterEvadeMode -> summoner DoAction(
--- ACTION_PET_EVADE) (cross-AI absent). Port-pattern-ready rotation arms
+-- (instance model absent; sender is the watcher JustDied, :434/:512/
+-- :590), EnterEvadeMode -> summoner DoAction(ACTION_PET_EVADE)
+-- (sender is the petAI EnterEvadeMode, :395). Port-pattern-ready
+-- rotation arms
 -- — gashra: EVENT_ENRAGE DoCastSelf(ENRAGE 52470) 3-5s init, 12-20s
 -- repeat + EVENT_INFECTED_BITE DoCastVictim(52469) 7-11s init, 23-27s
 -- repeat; narjil: EVENT_BLINDING_WEBS DoCastVictim(52524) 13-18s init,

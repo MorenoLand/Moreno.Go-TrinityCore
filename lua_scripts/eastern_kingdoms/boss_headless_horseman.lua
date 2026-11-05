@@ -112,9 +112,11 @@
 --   EVENT_RAIN_OF_TREATS 11s -> DoCastSelf(43344) ports cleanly as a
 --   single-arm registration. The rest strands: SpellScript/AuraScript
 --   effects (42399 send-head; 42603 head-periodic HP-check, audited
---   tick 189 — its whole arm is DoAction(ACTION_HEAD_HP_34/67) and
---   there is no DoAction bridge anywhere in the engine, so it stays
---   out; HealthBelowPct itself is bridged), DoAction
+--   tick 189 — its whole arm is DoAction(ACTION_HEAD_HP_34/67), sent by
+--   the unported 42603 AuraScript HP-check (boss_headless_horseman.cpp:
+--   869-878), so it stays out — ev38 dispatch IS bridged, but the
+--   AuraScript sender and the head phase machine are unported;
+--   HealthBelowPct itself is bridged), DoAction
 --   legs (ACTION_HEAD_START_HEAD_PHASE/HP_67/HP_34), the triggered
 --   DoCastSelf(42428) head-is-dead SpellScript cast, and
 --   _instance->GetCreature(DATA_HEADLESS_HORSEMAN).

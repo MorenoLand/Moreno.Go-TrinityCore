@@ -5,8 +5,11 @@
 -- Only the arm below is ported: the combat arms (napalm shell,
 -- plasma blast, shock blast, proximity mine, flame suppressant)
 -- are scheduled only by DoAction(DO_START_MKII /
--- DO_ASSEMBLED_COMBAT), which has no cross-creature dispatch
--- bridge, and the DamageTaken lethal clamp is phase-gated
+-- DO_ASSEMBLED_COMBAT) from the unported boss_mimiron controller
+-- machine (event-38 dispatch itself is bridged —
+-- creature:DoAction, lua_creature_events.go:802 — so the blocker
+-- is the sender chain, not dispatch), and the DamageTaken lethal
+-- clamp is phase-gated
 -- (phase-1 turret kill + MovePoint to idle vs phase-4 stand-dead
 -- + self-repair) behind the same unbridged phase machine plus
 -- the vehicle-kit and MovePoint legs. The GetData/SetData

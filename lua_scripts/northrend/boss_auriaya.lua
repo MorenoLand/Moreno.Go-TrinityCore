@@ -77,7 +77,9 @@
 -- random-target leg rides creature:GetAITargets (baltharus
 -- ENERVATING_BRAND precedent); JustDied (:298)
 -- -> instance GetCreature(BOSS_AURIAYA) -> DoAction
--- (ACTION_CRAZY_CAT_LADY 0) — no instance / DoAction bridges.
+-- (ACTION_CRAZY_CAT_LADY 0) — dispatch IS bridged (ev38); the sender
+-- is the unregistered sentry's JustDied (boss_auriaya.cpp:301),
+-- reached via the unported instance GetCreature leg.
 -- DOCUMENTED-ONLY (no bridgeable arms):
 -- Reset (:139-145) / HandleCats (:147-158) — _Reset() + flag resets
 -- + grid RESPAWN of entry 34014 within 500.0f — PORTED 2026-10-24
@@ -87,7 +89,10 @@
 -- bridged, lua_creature_events.go:1204.
 -- DoAction (:178-193, ACTION_CRAZY_CAT_LADY 0 / ACTION_DEFENDER_DIED
 -- 1) / GetData (:195-204, DATA_NINE_LIVES 30763077 /
--- DATA_CRAZY_CAT_LADY 30063007) — no DoAction / GetData bridges.
+-- DATA_CRAZY_CAT_LADY 30063007) — dispatch IS bridged (ev38) and
+-- creature:GetData IS bridged (lua_creature_events.go:784); blocked
+-- on the senders, the sentry/defender JustDied legs (:301/:452) on
+-- unregistered adds.
 -- JustDied (:206-212) — DoPlaySoundToSet(15476) ported via
 -- creature:PlayDirectSound (dedicated auriayaDied); HandleCats(false)
 -- despawn leg ported there too (see above); the SendEncounterUnit
@@ -110,7 +115,8 @@
 -- (SetReactState/AttackStop/flag/threat/gravity bridges are live —
 -- the stale list above is retracted) + random-target selection — NO
 -- registration; JustDied (:448-453) DoAction(ACTION_DEFENDER_DIED)
--- has no DoAction bridge; no creature entry in C++ evidence —
+-- dispatch IS bridged (ev38) but the sender (the defender itself)
+-- has no registration; no creature entry in C++ evidence —
 -- NO registration.
 -- npc_swarming_guardian — the 1s scheduler self-cast
 -- SPELL_AGRO_CREATOR 63709 (:464-474) is timer-driven but has no

@@ -47,14 +47,18 @@
 -- + SetStep(0); SetStep: _lastPlayerCombatState latch, SetReactState(
 -- REACT_PASSIVE), SetHomePosition(hadronoxStep[step]),
 -- MotionMaster Clear + MovePoint — motion-master bridge absent; the
--- DoAction(ACTION_HADRONOX_MOVE) driver behind the no-DoAction bridge
--- (drakkari_colossus precedent) — so the SetStep movement machine
+-- DoAction(ACTION_HADRONOX_MOVE) driver (sender: crusher JustDied,
+-- boss_hadronox.cpp:556; ev38 dispatch IS bridged,
+-- lua_creature_events.go:802) — so the SetStep movement machine
 -- stays out as a unit; only its Talk leg ports, as the crusherDied
 -- relay below (step-gated, no movement).
 -- SummonCrusherPack(SUMMON_GROUP_CRUSHER_1/2/3): SummonCreatureGroup +
 -- per-summon SetData(DATA_CRUSHER_PACK_ID) + DoAction(ACTION_PACK_WALK)
 -- (JustAppeared leg; DoAction(ACTION_CRUSHER_ENGAGED) re-summon legs) —
--- summon STRAND + cross-AI SetData/DoAction bridges absent.
+-- summon STRAND + cross-AI SetData bridges absent; ev38 DoAction
+-- dispatch IS bridged (lua_creature_events.go:802) but the senders
+-- (SummonCrusherPack, boss_hadronox.cpp:192, and the crusher
+-- JustEngagedWith, :527) ride the unported summon machine.
 -- MovementInform: SetReactState(REACT_AGGRESSIVE) on EVERY step
 -- arrival, but DoCastAOE(WEB_FRONT_DOORS 53177) +
 -- DoCastAOE(WEB_SIDE_DOORS 53185) + _doorsWebbed latch + DoZoneInCombat
@@ -72,9 +76,14 @@
 -- Point-motion cancel + AttackStart(victim), else EnterEvadeMode(
 -- NO_HOSTILES) — instance-script model absent (standing), motion-master
 -- bridge absent.
--- The DoAction machine (no DoAction bridge): ACTION_CRUSHER_ENGAGED
--- (instance SetBossState(DATA_HADRONOX, IN_PROGRESS) + _enteredCombat
--- latch + SummonCrusherPack(2/3)) — instance model absent.
+-- The DoAction machine (ev38 dispatch IS bridged,
+-- creature:DoAction, lua_creature_events.go:802): the sender of
+-- ACTION_CRUSHER_ENGAGED is the crusher pack-1 JustEngagedWith
+-- (boss_hadronox.cpp:527) — pack-1 membership is stamped by the
+-- unported SummonCrusherPack, so no Lua crusher can know it is
+-- pack 1 — and the payload (instance SetBossState(DATA_HADRONOX,
+-- IN_PROGRESS) + _enteredCombat latch + SummonCrusherPack(2/3))
+-- needs the absent instance model.
 -- EnterEvadeMode: GetCreatureListWithEntryInGrid(NPC_WORLDTRIGGER_LARGE
 -- 23472) aura-scan (periodic-summon/web-door auras) + _DespawnAtEvade(25s)
 -- legs, summons.DespawnAll (terestian precedent), _anubar ObjectAccessor::
@@ -92,7 +101,7 @@
 -- 65) — Eluna event 9 (DamageTaken) IS bridged and GetHealth/
 -- GetMaxHealth exist, so HealthBelowPct(70)/HealthBelowPctDamaged(5)
 -- are now computable; the unit stays blocked on its unregistered
--- owner + unbridged DoAction/MovePoint engage model, not on the
+-- owner + unported DoAction-sender/MovePoint engage model, not on the
 -- health/DamageTaken surface.
 -- JustSummoned summons.Summon leg — summon STRAND absent.
 -- npc_anub_ar_crusher — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (28922 from
@@ -102,8 +111,10 @@
 -- (cross-AI SetData pack-ID bridge absent — SetReactState itself is
 -- bridged, lua_creature_events.go:1934), DoAction(
 -- ACTION_PACK_WALK) -> MotionMaster MovePoint(_positions[pack]) + the
--- _doFacing SetFacingTo choreography (motion-master + DoAction bridges
--- absent), MovementInform, MoveInLineOfSight passive-engage leg
+-- _doFacing SetFacingTo choreography (motion-master bridge absent;
+-- sender is SummonCrusherPack, boss_hadronox.cpp:192; ev38 dispatch
+-- IS bridged, lua_creature_events.go:802), MovementInform,
+-- MoveInLineOfSight passive-engage leg
 -- (CanStartAttack + IsWithinDistInMap(attackDistance + m_CombatDistance)
 -- -> JustEngagedWith — pack-ID bridge absent; the distance leg is
 -- Go's aggro-scan guard), group
@@ -120,7 +131,10 @@
 -- the DamageTaken port on this entry. The pack-1-only legs stay out:
 -- Talk(CRUSHER_SAY_AGGRO 1) + instance DoAction(ACTION_CRUSHER_ENGAGED)
 -- need the absent instance GetData(DATA_HADRONOX_ENTERED_COMBAT) model
--- + cross-AI DoAction bridge.
+-- + the unported sender (crusher JustEngagedWith,
+-- boss_hadronox.cpp:527 — pack-1 membership is stamped by the
+-- unported SummonCrusherPack); ev38 dispatch IS bridged
+-- (lua_creature_events.go:802).
 -- DamageTaken frenzy (HealthBelowPctDamaged(25) -> _hadFrenzy latch +
 -- Talk(CRUSHER_EMOTE_FRENZY 2) + DoCastSelf(FRENZY 53801)) — the old
 -- "no DamageTaken hook + no health-pct bridge" claim was stale

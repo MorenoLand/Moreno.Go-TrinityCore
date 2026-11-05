@@ -102,8 +102,12 @@
 -- GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
 -- 31813188 — no GetData bridge; consumers: the two
 -- achievements below); DoAction(ACTION_VAPORS_DIE 1 /
--- ACTION_ANIMUS_DIE 2 — no DoAction bridge; producers:
--- npc_saronite_vapors / boss_saronite_animus below).
+-- ACTION_ANIMUS_DIE 2 — ev38 dispatch IS bridged
+-- (creature:DoAction, lua_creature_events.go:802); the senders
+-- are the vapors DamageTaken (boss_general_vezax.cpp:436) and
+-- the animus JustDied (:338), both on entry-unverifiable,
+-- unregistered bearers — producers: npc_saronite_vapors /
+-- boss_saronite_animus below).
 -- CheckShamanisticRage — PORTED at engage (map-player-scan via
 -- GetPlayersInWorld + map/instance filter -> player:HasSpell
 -- (30823) -> player:CastSpell(player, 68415, false) non-triggered
@@ -127,7 +131,9 @@
 -- TRIGGERED), 3s init, 3s repeat — timer-driven but the add
 -- exists only via the unbridged summon machine (task
 -- exclusion: summon/add legs out); JustDied -> vezax DoAction
--- (ACTION_ANIMUS_DIE) — no DoAction bridge; no Talk arms.
+-- (ACTION_ANIMUS_DIE) (boss_general_vezax.cpp:338) — ev38 dispatch
+-- IS bridged (lua_creature_events.go:802); the animus bearer is
+-- entry-unverifiable and unregistered; no Talk arms.
 -- npc_saronite_vapors (no creature-entry enum in C++ —
 -- spell-summoned via 63081; entry-unverifiable — no
 -- registration): Talk(EMOTE_VAPORS 0) in the constructor — no
@@ -136,7 +142,10 @@
 -- DamageTaken (lethal -> damage = 0 + flags + root +
 -- stand-state-dead + DoCast SPELL_SARONITE_VAPORS 63323 +
 -- DespawnOrUnsummon(30s) + vezax DoAction(ACTION_VAPORS_DIE)) —
--- no damage-taken / DoAction bridges.
+-- event 9 DamageTaken IS bridged and ev38 dispatch IS bridged
+-- (lua_creature_events.go:802); the sender is the vapors
+-- DamageTaken (boss_general_vezax.cpp:436) on an
+-- entry-unverifiable, unregistered bearer.
 -- spell_general_vezax_mark_of_the_faceless (63276 — periodic
 -- dummy AuraScript: caster casts
 -- SPELL_MARK_OF_THE_FACELESS_DAMAGE 63278 with bp1 =

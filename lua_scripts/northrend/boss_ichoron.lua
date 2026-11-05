@@ -79,17 +79,19 @@
 -- Talk(SAY_SHATTER 5) + Talk(EMOTE_SHATTER 7) ride the DoAction
 -- ACTION_PROTECTIVE_BUBBLE_SHATTERED leg (:127-140: AOE splatter /
 -- burst, DRAINED cast, 30% max-health damage leg, scheduler.DelayAll)
--- — no DoAction bridge; joins the no-DoAction-bridge queue.
+-- — dispatch IS bridged (ev38); the sender is the unported
+-- spell_ichoron_protective_bubble AuraScript shatter hook (:406);
+-- joins the unported-DoAction-sender queue.
 -- Talk(SAY_BUBBLE 6) rides the DoAction ACTION_DRAINED leg (:141-149:
 -- HealthAbovePct(30) -> protective bubble recast, triggered) — same
--- queue.
+-- queue (sender: spell_ichoron_drained expire, :332).
 -- ACTION_WATER_GLOBULE_HIT (3% max-health heal, _dehydration = false)
--- — same queue.
+-- — same queue (sender: spell_ichoron_merge, :370).
 -- The ScheduleTasks Async leg (:207-211: SHRINK 54297 +
 -- PROTECTIVE_BUBBLE 54306 self-casts) seeds the bubble phase machine
 -- — per the gothik bubble-phase precedent it stays out: the
--- shatter / DRAINED / re-bubble legs are all unbridged DoAction and
--- AuraScript legs, so a ported bubble would never shatter.
+-- shatter / DRAINED / re-bubble legs are all unported-DoAction-sender
+-- and AuraScript legs, so a ported bubble would never shatter.
 -- The npc_ichor_globule SpellHit machine — stale "no SpellHit bridge" retracted (2026-10-21): ev14 IS bridged
 -- (fires from the Go spell path, boss_ai.go:2125/2134 + pet_combat.go:5222 + spells.go:11765) — but the arm stays
 -- out: the VISUAL 54260 trigger rides Ichoron's JustSummoned (:172-178) behind the unbridged spell_ichoron_splatter

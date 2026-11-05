@@ -1774,7 +1774,10 @@ RegisterCreatureEvent(ENTRY_BLADE_OF_AZZINOTH, 4, bladeClear)
 -- (instance bridge), but the 2s leg — REACT_AGGRESSIVE +
 -- DoZoneInCombat — ports: the fiend only exists when summoned
 -- mid-fight, so the leg is dormant until then. The DoAction
--- ACTION_RESUME_COMBAT re-arm stays out (no DoAction bridge).
+-- ACTION_RESUME_COMBAT re-arm stays out: ev38 dispatch IS bridged, but
+-- its sender is illidan's phase-4 machine (EVENT_RESUME_COMBAT_PHASE_4,
+-- boss_illidan.cpp:1002, summons.DoAction fan-out — no bridge); its 2s
+-- re-arm effect is already covered by the ported Reset leg above.
 local function parasiticShadowfiendReset(event, creature)
     local guid = creature:GetGUID()
     schedule(guid, "shadowfiendAggressive", 2000, function()

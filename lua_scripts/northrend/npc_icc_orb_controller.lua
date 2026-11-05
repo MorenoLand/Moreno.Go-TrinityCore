@@ -19,8 +19,12 @@
 -- handler-surface bridge (darkfallen precedent: DB trash never paths).
 -- STAYS OUT: SetGUID ACTION_COMBAT (:729-748, no cross-creature AI
 -- SetGUID bridge — CancelAll, DoZoneInCombat, SIPHON_ESSENCE 70299 on a
--- random minion); DoAction ACTION_EVADE (:750-763, no DoAction bridge —
--- UpdateValidGuids prune + 5s visual re-arm + orb NOT_SELECTABLE flag);
+-- random minion); DoAction ACTION_EVADE (:750-763, ev38 dispatch IS bridged
+-- — creature:DoAction, lua_creature_events.go:802 — but its sender,
+-- DarkFallenAI::EnterEvadeMode (:838-842), has no Lua arm carrying the
+-- controller GUID (SetGUID DATA_GUID :680 unported, no darkfallen-side
+-- receiver), so the call can't be addressed: UpdateValidGuids prune +
+-- 5s visual re-arm + orb NOT_SELECTABLE flag stay out);
 -- SpellHit ORB_CONTROLLER_ACTIVE 70293 (:720-725, ev14 hook exists but
 -- the leg's only effect is a SetGUID into the unported
 -- go_empowering_blood_orb GO script); the init-time SetGUID(DATA_GUID)

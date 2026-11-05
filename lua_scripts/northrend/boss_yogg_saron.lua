@@ -99,8 +99,9 @@
 -- and the 4700/9500/14300/14500ms Talk/heal/faction/transform/barrier
 -- legs; only the cross-creature voice->AI()->DoAction(
 -- ACTION_PHASE_TRANSFORM) (:728-729) and TRANSFORM_3's
--- DoAction(ACTION_PHASE_TWO) legs (:831/:833) stay out (no DoAction
--- bridge).
+-- DoAction(ACTION_PHASE_TWO) legs (:831/:833) stay out (dispatch IS
+-- bridged — ev38 — but the voice/mimiron receiver arms ride the
+-- unported phase/transform machine, not a missing dispatch).
 -- Yogg-Saron timer Talks — EVENT_YELL_BOW_DOWN (:993-995, Talk id 0,
 -- one-shot 3s) fires from Reset (:935) on the voice's cross-creature
 -- summon-driven Reset with SetPhase(PHASE_TWO) (:935-945; yogg is
@@ -110,11 +111,14 @@
 -- Talk 4/Emote 5, {20s,25s} repeat) — scheduled from cross-creature
 -- DoAction(ACTION_PHASE_THREE) (:1024/:1027, PHASE_THREE), deafening
 -- roar additionally gated on Is25ManRaid + instance DATA_KEEPERS_COUNT
--- (:1026) — no DoAction / instance-data bridges (difficulty leg now
--- bridged, lua_creature_events.go, stranded on DoAction + instance).
+-- (:1026) — dispatch IS bridged (ev38); stranded on the unported
+-- brain DamageTaken cascade (:1082-1090) + instance data (difficulty
+-- leg now bridged, lua_creature_events.go).
 -- Yogg-Saron DoAction(ACTION_PHASE_THREE) —
--- Talk(SAY_YOGG_SARON_PHASE_3) — no DoAction bridge; joins
--- the no-DoAction-bridge queue.
+-- Talk(SAY_YOGG_SARON_PHASE_3) — dispatch IS bridged (ev38); the arm
+-- stays out because its sender, the brain's below-30% DamageTaken
+-- cascade (:1082-1090), is unported; joins the unported-DoAction-sender
+-- queue.
 -- Yogg-Saron SpellHit — Val'anyr loot-mode leg (no Talk) —
 -- PORTED via event 14 (yoggSaronSpellHit below); the Reset
 -- ResetLootMode leg (:939) rides the unbridged scheduler

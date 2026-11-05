@@ -94,8 +94,10 @@
 -- phase-two machine — SetReactState/InterruptNonMeleeSpells/
 -- SetFlag(NOT_SELECTABLE) + the flying-sacrifice MovePoint/motion
 -- + summon + cross-AI DoAction sequence (no phase / motion /
--- summon / cross-AI bridges; flag/react-state bridges exist since
--- 2026-10-20 but the payload is the unported phase machine).
+-- summon bridges; the cross-AI DoAction sender chain is unported
+-- — ev38 dispatch IS bridged, lua_creature_events.go:802;
+-- flag/react-state bridges exist since 2026-10-20 but the payload
+-- is the unported phase machine).
 -- Phase-two machine — EVENT_START_PHASE_TWO (SetReactState(
 -- REACT_PASSIVE), AttackStop, InterruptNonMeleeSpells(true),
 -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE), MovePoint(
@@ -114,14 +116,18 @@
 -- DoCastSelf(SPELL_HOVER_FALL_2 56157) + MoveLand(POINT_GROUND)):
 -- summon STRAND + motion-master (MovePoint / MoveLand / MoveTakeoff
 -- / SetDisableGravity) + flag / interrupt / stand-state + cross-AI
--- DoAction + ObjectAccessor bridges absent — documented-only.
+-- DoAction sender chain + ObjectAccessor lookup absent (ev38
+-- dispatch IS bridged, lua_creature_events.go:802) —
+-- documented-only.
 -- DoAction(ACTION_SACRIFICE) (Talk(SAY_SACRIFICE 2) + DoCastAOE(
 -- Sacrifice Beam 56150) — the self-cast lowering is port-pattern-
 -- ready (arugal precedent), but the arm fires only through the
 -- unbridged cross-AI DoAction + phase-two sacrifice machine
 -- (gothik precedent) — + EVENT_END_PHASE_TWO re-schedule +
--- EVENT_SUMMON_VOLUNTEER reschedule): no DoAction bridge on the
--- Lua surface (drakkari_colossus standing precedent) —
+-- EVENT_SUMMON_VOLUNTEER reschedule): ev38 dispatch IS bridged
+-- (creature:DoAction, lua_creature_events.go:802); the sender is
+-- the volunteer MovementInform POINT_SACRIFICE
+-- (boss_jedoga_shadowseeker.cpp:438) on an unregistered bearer —
 -- documented-only.
 -- JustSummoned — worshipper kneel leg stays out (SummonCreatureGroup
 -- arrivals, unbridged), but the summons latch + DespawnAll legs are
@@ -143,20 +149,26 @@
 -- bridge — achievement_volunteer_work needs it too).
 -- npc_twilight_volunteer — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
 -- (30385 — ahnkahet.h NPC_TWILIGHT_VOLUNTEER, kalecgos pass): zero
--- registration. The entire AI rides absent bridges — DoAction(
--- ACTION_CHOSEN) initiation (no DoAction bridge), SPELL_PILLAR_OF_
+-- registration. The entire AI rides the unported phase-two
+-- machine — DoAction(ACTION_CHOSEN) initiation (ev38 dispatch IS
+-- bridged, lua_creature_events.go:802; the sender is the boss's
+-- own EVENT_CHOOSE_VOLUNTEER, boss_jedoga_shadowseeker.cpp:348),
+-- SPELL_PILLAR_OF_
 -- LIGHTNING 56868 self-cast (port-pattern-ready: creature:CastSpell(
 -- creature, spell)), RemoveAurasDueToSpell(SPELL_SPHERE_VISUAL_
 -- VOLUNTEER 56102) (the old "no aura-removal bridge" claim was
 -- stale — creature:RemoveAura is bridged, lua_creature_events.go:
--- 153 — but the arm fires only through the unbridged DoAction /
+-- 153 — but the arm fires only through the unported volunteer
+-- MovementInform sender (boss_jedoga_shadowseeker.cpp:438) +
 -- sacrifice machine, so it stays documented-only), Talk(SAY_CHOSEN
 -- 0) /
 -- Talk(SAY_SACRIFICED 1), stand-state machine, MovePoint(
 -- POINT_SACRIFICE) choreography (no motion bridges), the sacrifice
 -- payload (instance->GetCreature(DATA_JEDOGA_SHADOWSEEKER) +
--- cross-AI DoAction(ACTION_SACRIFICE) — instance-script model and
--- DoAction bridges absent), and DespawnOrUnsummon(5s) (stale "no
+-- cross-AI DoAction(ACTION_SACRIFICE) — instance-script model
+-- absent and the sender is the volunteer MovementInform
+-- (boss_jedoga_shadowseeker.cpp:438); ev38 dispatch IS bridged,
+-- lua_creature_events.go:802), and DespawnOrUnsummon(5s) (stale "no
 -- despawn bridge" wording: creature:Despawn() IS bridged, but the
 -- arm rides the unbridged MovementInform/sacrifice choreography
 -- machine on a zero-registration bearer — terestian precedent).

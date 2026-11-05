@@ -68,8 +68,11 @@
 -- 33186):
 -- The whole air/ground/perma-ground phase machine — DoAction
 -- (ACTION_START_FIGHT / ACTION_GROUND_PHASE /
--- ACTION_START_PERMA_GROUND / ACTION_RETURN_TO_BASE — no DoAction
--- bridge), MovementInform (POINT_RAZORSCALE_FLIGHT /
+-- ACTION_START_PERMA_GROUND / ACTION_RETURN_TO_BASE — ev38 dispatch
+-- IS bridged (creature:DoAction, lua_creature_events.go:802); the arms
+-- ride the unported phase machine — START_PERMA_GROUND fires from
+-- razorscale's own DamageTaken 50% gate (boss_razorscale.cpp:554)),
+-- MovementInform (POINT_RAZORSCALE_FLIGHT /
 -- POINT_RAZORSCALE_GROUND / POINT_RAZORSCALE_TAKEOFF /
 -- POINT_RAZORSCALE_LAND — no MovementInform bridge; the ground-phase
 -- SetCombatMovement(true) :646 stays out — in-combat no-op per the

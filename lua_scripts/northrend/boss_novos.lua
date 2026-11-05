@@ -47,14 +47,16 @@
 -- NON_ATTACKABLE flag set — field-59 HasFlag/SetFlag/RemoveFlag ARE
 -- bridged (obsidian :358 precedent; drakkari_colossus claim retracted);
 -- the _bubbled latch gates UpdateAI entirely while set
--- and clears only via the unbridged DoAction machine, so no latch
--- is emulated (jedoga precedent — an ungated bubbled model would
--- diverge from C++ combat behavior).
+-- and clears only via the unported instance-script DoAction sender
+-- (instance_drak_tharon_keep.cpp:153), so no latch is emulated
+-- (jedoga precedent — an ungated bubbled model would diverge from
+-- C++ combat behavior).
 -- UpdateAI: the !_bubbled gate (see above) + HasUnitState(
 -- UNIT_STATE_CASTING) pre-loop (:147) + in-loop (:167) gates guard
 -- only the unported EVENT_ATTACK / EVENT_SUMMON_MINIONS arms (both
--- schedule only after the unbridged DoAction crystal-handler machine
--- clears the bubble); ported Talk arms ungated per C++ (outside
+-- schedule only after the unported instance-script DoAction sender
+-- (instance_drak_tharon_keep.cpp:153) clears the bubble); ported
+-- Talk arms ungated per C++ (outside
 -- UpdateAI). Stale "constant-false IsCasting" claim retracted —
 -- IsCasting is live (lua_creature_events.go:1950).
 -- EVENT_ATTACK (3s repeat, scheduled only after the crystal-handler
@@ -74,9 +76,11 @@
 -- SetSummonerStatus(false), SetBubbled(false), the EVENT_ATTACK /
 -- EVENT_SUMMON_MINIONS schedules, and the per-handler-death
 -- AI()->SetData(SPELL_SUMMON_CRYSTAL_HANDLER, 15000) re-arm on the
--- DATA_NOVOS_SUMMONER_4 target — no DoAction bridge
--- (drakkari_colossus precedent) + cross-AI SetData absent — whole
--- machine documented-only.
+-- DATA_NOVOS_SUMMONER_4 target — ev38 dispatch IS bridged
+-- (creature:DoAction, lua_creature_events.go:802); the sender is
+-- the instance script OnUnitDeath (instance_drak_tharon_keep.cpp:
+-- 153) on NPC_CRYSTAL_HANDLER death, and cross-AI SetData is
+-- absent — whole machine documented-only.
 -- MoveInLineOfSight — the _ohNovos latch (Initialize/Reset true;
 -- flips false when a HULKING_CORPSE 27597 / RISEN_SHADOWCASTER 27600
 -- / FETID_TROLL_CORPSE 27598 crosses y > -771.95f) — no grid/

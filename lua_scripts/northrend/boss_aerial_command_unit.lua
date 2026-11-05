@@ -12,16 +12,19 @@
 --     SetDisableGravity(true), triggered self-cast VEHICLE_DAMAGED.
 --
 -- DOCUMENTED-ONLY (no behavior fabricated):
---   DoAction (:1159) whole switch -- cross-creature DoAction dispatch has
---     no bridge (leviathan/vx_001 precedent), so every arm stays out even
+--   DoAction (:1159) whole switch -- the sender chains are unported
+--     (event-38 dispatch itself is bridged, creature:DoAction,
+--     lua_creature_events.go:802), so every arm stays out even
 --     where its legs alone would be bridgeable (DO_ENABLE_AERIAL is just
 --     SetReactState aggressive; it can never be delivered in Lua):
 --     DO_HARDMODE_AERIAL (firefighter latch + self-cast EMERGENCY_MODE +
 --       EVENT_SUMMON_FIRE_BOTS 1s), DO_START_AERIAL (gravity off, hover on,
 --       flag removal, SetImmuneToPC(false) -- no binding -- react
 --       aggressive, phase set, JUNK 5s / ASSAULT 9s / BOMB 9s timers),
---     DO_DISABLE_AERIAL (CastStop -- no binding -- passive, AttackStop,
---       MoveFall -- no binding -- DelayEvents 23s), DO_ASSEMBLED_COMBAT
+--     DO_DISABLE_AERIAL (CastStop -- bridged as StopSpellCast,
+--       lua_creature_events.go:1010, vacuous here: no Lua cast state --
+--       passive, AttackStop, MoveFall -- no binding -- DelayEvents 23s),
+--     DO_ASSEMBLED_COMBAT
 --       (flag removal, react aggressive, stand STAND, phase VOL7RON).
 --   UpdateAI summon timers (:1233): EVENT_SUMMON_FIRE_BOTS (AOE trigger
 --     64620, TRIGGERED_FULL_MASK, max targets 3, 45s re-arm),
@@ -65,7 +68,8 @@
 --   not a method problem. Unbound, verified by grep of
 --   lua_creature_events.go / lua_objects.go / scripting/object.go:
 --   SetImmuneToPC, SetAnimationTier, MoveFall, MovePoint, GetMotionMaster,
---   DespawnAll, CastStop, GetVehicleBase, RemoveAurasDueToSpell.
+--   DespawnAll, GetVehicleBase, RemoveAurasDueToSpell. (CastStop's twin
+--   creature:StopSpellCast IS bridged, lua_creature_events.go:1010.)
 
 local NPC_AERIAL_COMMAND_UNIT = 33670
 

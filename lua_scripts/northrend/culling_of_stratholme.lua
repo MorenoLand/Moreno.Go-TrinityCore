@@ -85,8 +85,9 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
 -- seeded here on event 5 (spawn — the AddToWorld funnel fires 5 after
 -- 36, creaturemotion.go). The DoAction ACTION_START_FLUFF leg is
 -- ported via the crate_helper event-14 relay at the end of this file
--- (no DoAction bridge needed: the relay calls bartlebyStartFluff
--- directly): the once-guard + idle-loop cancel are ported, and the
+-- (ev38 DoAction dispatch exists but is bypassed: the relay calls
+-- bartlebyStartFluff directly): the once-guard + idle-loop cancel are
+-- ported, and the
 -- BARTLEBY1 {15,30}s Talk(1) is ported as a one-shot timer in
 -- bartlebyStartFluff: the Talk is separable from the
 -- MoveAlongSplineChain leg in the same C++ case, which stays out, so
@@ -181,9 +182,9 @@ end
 
 -- C++ npc_bartleby_battsonAI::DoAction(ACTION_START_FLUFF): once-guard
 -- + idle cancel + BARTLEBY1 Talk(1) one-shot; only the spline leg stays out.
--- Called directly by the crate_helper relay below — there is no
--- DoAction bridge, and the relay already holds the bartleby object,
--- so no GUID-to-creature lookup is needed.
+-- Called directly by the crate_helper relay below — ev38 DoAction
+-- dispatch exists but is bypassed: the relay already holds the
+-- bartleby object, so no GUID-to-creature lookup is needed.
 local function bartlebyStartFluff(creature)
     local guid = creature:GetGUID()
     if bartlebyStarted[guid] then

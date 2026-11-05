@@ -62,7 +62,8 @@
 -- :239-246) 6s scheduler: FindNearestCreature(NPC_TRIGGER_RESET 23472,
 -- 200.0f) -> trigger self-cast SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_
 -- CHECK 49308, triggered, Repeat 6s. PORTED on event 1 (the C++ start
--- leg is the unbridged DoAction, so the Lua pump starts at first combat
+-- leg is the area trigger's DoAction call (:968, unported sender —
+-- dispatch IS bridged, ev38), so the Lua pump starts at first combat
 -- instead of encounter-start: gauntlet-window checks are missed, the
 -- 6s cadence once running is C++-exact); cancelled on 2/4/23.
 -- The ymirjar trash spell-timer kits run under the npc_skadi_trashAI
@@ -106,7 +107,8 @@
 -- DoCast(target, SPELL_POISONED_SPEAR 50255), DoCast(SPELL_WHIRLWIND
 -- 50228) — fire ONLY inside the ACTION_GAUNTLET_END leg, which rides
 -- the vehicle dismount (PassengerBoarded !apply on npc_grauf) — an
--- unbridged vehicle/DoAction machine (the gothik precedent). PORTED
+-- unbridged vehicle machine (the gothik precedent; DoAction dispatch
+-- itself IS bridged, ev38). PORTED
 -- 2026-10-24 as a proxy from graufJustDied: Grauf death ->
 -- skadi->ExitVehicle() -> PassengerBoarded(!apply) -> GAUNTLET_END
 -- (:350-356, :362), so the timer kit starts there (plus, since
@@ -121,7 +123,8 @@
 -- DoAction machine) — event 1 deliberately NOT registered (registering
 -- it would deviate from C++: ground-phase combat entry yells nothing
 -- there); Talk(SAY_DRAKE_BREATH 6) (ACTION_DRAKE_BREATH) rides the
--- DoAction / cross-creature machine — no DoAction bridge. Stay out
+-- grauf spline-chain machine (:416/:435, unported vehicle/motion —
+-- dispatch IS bridged, ev38). Stay out
 -- (the harpoon-hit counter itself is PORTED 2026-11-04 via the ev14
 -- graufSpellHit handler; only the Talk trigger stays out);
 -- Talk(SAY_DRAKE_DEATH
@@ -318,7 +321,8 @@ end
 -- C++ DoAction(ACTION_START_ENCOUNTER) reset-check scheduler
 -- (boss_skadi.cpp:239-246): 6s first tick, Repeat 6s; the trigger
 -- self-cast is the mandokir/fathomlord found-creature CastSpell
--- precedent. Starts at first combat (DoAction unbridged — see header).
+-- precedent. Starts at first combat (area-trigger sender unported —
+-- see header).
 -- Inherited BossAI::JustEngagedWith arms (no override — kelthuzad
 -- precedent) ported at the handler tail (see header).
 local function skadiEnterCombat(event, creature)

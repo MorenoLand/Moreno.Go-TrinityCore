@@ -24,8 +24,11 @@
 -- defers itself 500ms while creature:IsCasting() instead of firing.
 -- Melee rides the engine combat tick (anub'arak precedent).
 -- Documented-only: DoAction ACTION_NERUBAR_FALL (:1041-1056) —
--- no DoAction bridge, and its driver is instance SetData
--- (DATA_NERUBAR_BROODKEEPER_EVENT, at_icc_nerubar_broodkeeper),
+-- ev38 dispatch IS bridged (creature:DoAction,
+-- lua_creature_events.go:802); the arm stays out because its driver
+-- is the unported area-trigger -> instance SetData chain
+-- (at_icc_nerubar_broodkeeper :1576-1591 ->
+-- instance_icecrown_citadel.cpp:1127-1133, no instance bridge),
 -- so WEB_BEAM 69887, SetHomePosition, MoveLand and the
 -- MovementInform EFFECT_MOTION_TYPE leg (gravity/immune/emote
 -- clear) all stay out; the spawn gravity/emote legs therefore

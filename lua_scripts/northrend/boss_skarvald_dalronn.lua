@@ -113,8 +113,10 @@
 -- ghost summon (summon leg), the summons-despawn leg, and _JustDied().
 -- DoAction(ACTION_OTHER_JUST_DIED) (lines 144-157) — schedules
 -- EVENT_DEATH_RESPONSE (2s) -> Talk(SAY_DEATH_RESPONSE 4) (lines
--- 159-163); ports via relayDeathResponse (no DoAction bridge needed —
--- bare-Talk receiver + bridged FindNearestCreature lookup).
+-- 159-163); ports via relayDeathResponse (ev38 dispatch IS bridged,
+-- lua_creature_events.go:802, but no dispatch is needed — the sender
+-- is the ported JustDied hook and the receiver is a bare Talk +
+-- bridged FindNearestCreature lookup).
 -- ACTION_DESPAWN_SUMMONS (summons.DespawnAll()) — no bridge.
 -- Dalronn EVENT_SUMMON_SKELETONS (lines 272-275): DoCast(me,
 -- SPELL_SUMMON_SKELETONS 52611) self-cast summon, heroic-gated init
@@ -282,9 +284,12 @@ end
 -- C++ generic_boss_controllerAI::JustDied (lines 119-137) + DoAction
 -- (ACTION_OTHER_JUST_DIED) (lines 144-157): the first death of the pull
 -- schedules EVENT_DEATH_RESPONSE (2s) on the surviving boss, which then
--- Talks SAY_DEATH_RESPONSE. No DoAction bridge exists, but the receiver
--- lookup is the bridged FindNearestCreature (maulgar precedent) and the
--- receiver leg is a bare Talk, so the relay ports: the 2s timer is keyed
+-- Talks SAY_DEATH_RESPONSE. Ev38 DoAction dispatch IS bridged
+-- (creature:DoAction, lua_creature_events.go:802), but the relay does
+-- not use it: the sender is the ported JustDied hook (ev4) and the
+-- receiver lookup is the bridged FindNearestCreature (maulgar
+-- precedent) and the receiver leg is a bare Talk, so the relay ports
+-- directly: the 2s timer is keyed
 -- by the survivor's GUID, so the survivor's own ev2/ev4/ev23 cancelTimers
 -- drops it if the survivor dies or leaves combat first (C++ _JustDied
 -- resets the survivor's events on its own death). Nil survivor (dead or

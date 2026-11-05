@@ -68,8 +68,11 @@
 -- randtime(15s,20s) / DANCE 90s (C++ ScheduleEvent overwrites the
 -- phase-blocked pendings — the latch-skip in the disrupt/fever
 -- callbacks converges to the same next-fire times), SetReactState(
--- REACT_AGGRESSIVE) (bridged). CastStop() is vacuous — every cast in
--- this file is instant, nothing channels; DoZoneInCombat() (:186)
+-- REACT_AGGRESSIVE) (bridged). CastStop() is vacuous here — not
+-- because nothing channels (PLAGUE_CLOUD 29350 IS channeled, 45s)
+-- but because DANCE_END fires at that 45s channel-expiry boundary,
+-- after ChannelUntil, with disrupt/fever latch-gated off for the
+-- dance; DoZoneInCombat() (:186)
 -- is PORTED 2026-10-23 in onDanceEnd via the live bridge
 -- (engine/world/lua_creature_events.go:426) — the old "no bridge"
 -- claim is retracted (combat never left Lua-side — threat list
@@ -164,7 +167,8 @@ local function onDanceEnd(creature, guid)
     schedule(guid, "dance", 90000, function() onDance(creature, guid) end)
     creature:SetReactState(REACT_AGGRESSIVE)
     -- C++ :186 (EVENT_DANCE_END) — me-form DoZoneInCombat after
-    -- SetReactState(REACT_AGGRESSIVE) (C++ arm order; CastStop vacuous here).
+    -- SetReactState(REACT_AGGRESSIVE) (C++ arm order; CastStop vacuous
+    -- here: 29350's 45s channel expires at the DANCE_END boundary).
     creature:DoZoneInCombat()
 end
 

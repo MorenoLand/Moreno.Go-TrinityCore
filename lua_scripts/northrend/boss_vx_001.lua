@@ -2,8 +2,12 @@
 -- boss_vx_001AI in src/server/scripts/Northrend/Ulduar/Ulduar/boss_mimiron.cpp.
 -- Entry (ulduar.h): NPC_VX_001 = 33651, NPC_BURST_TARGET = 34211.
 -- Only the arms below are ported: every timer, DamageTaken, and DoAction
--- arm of this class is STAY-OUT (no DoAction / vehicle-kit / MovePoint /
--- GetStandState bridge; see audit). These two arms are dormant until the
+-- arm of this class is STAY-OUT (the DoAction sender chains are
+-- unported — event-38 dispatch itself is bridged, creature:DoAction,
+-- lua_creature_events.go:802; vehicle-kit / MovePoint have no bridge;
+-- GetStandState IS bridged, lua_creature_events.go:1105, so the
+-- stay-outs rest on the sender chains + phase machine, not on it;
+-- see audit). These two arms are dormant until the
 -- EVENT_RAPID_BURST timer lands, since burst targets are created only by it.
 --
 -- PORTED (tick 195, RegisterAuraEvent):

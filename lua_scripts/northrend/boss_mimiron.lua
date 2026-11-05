@@ -30,8 +30,10 @@
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   DoAction (:397) whole switch: DO_ACTIVATE_VX001 / DO_ACTIVATE_AERIAL /
 --     DO_ACTIVATE_V0L7R0N_1 / DO_ACTIVATE_V0L7R0N_2 / DO_ACTIVATE_HARD_MODE --
---     cross-creature DoAction dispatch has no bridge (leviathan/vx_001
---     precedent); the VX001/AERIAL/VOL7RON activation chains they schedule
+--     the callers are the unported component AIs in this same file
+--     (:807/:817/:960/:1229/:1453); event-38 dispatch itself is
+--     bridged (creature:DoAction, lua_creature_events.go:802); the
+--     VX001/AERIAL/VOL7RON activation chains they schedule
 --     (EVENT_VX001_ACTIVATION_1-9, EVENT_AERIAL_ACTIVATION_1-6,
 --     EVENT_VOL7RON_ACTIVATION_1-7) stay out with them, as do their
 --     vehicle-kit legs (GetVehicleBase/GetVehicleCreatureBase have no

@@ -30,7 +30,10 @@
 -- via creature:GetHealthPct() — the sindragosa.lua:231 generic-fallback
 -- precedent, so the old "no health-pct bridge" claim is stale; the
 -- machine stays out because the payload is ACTION_FREEZE_COLOSSUS +
--- ACTION_SUMMON_ELEMENTAL (no DoAction bridge), SetImmuneToPC(true) /
+-- ACTION_SUMMON_ELEMENTAL (ev38 dispatch IS bridged,
+-- lua_creature_events.go:802; the sender is the boss's own
+-- DamageTaken, boss_drakkari_colossus.cpp:168-169, in the unported
+-- phase machine), SetImmuneToPC(true) /
 -- REACT_PASSIVE / MoveIdle legs (the SetFlag(59)/SetReactState bridges
 -- exist since 2026-10-20, but the legs ride the unported DoAction phase
 -- machine, so they stay out), and
@@ -41,12 +44,15 @@
 -- cannot ride an event; the passive-until-unfreeze story is the same
 -- unported DoAction freeze machine documented below.
 -- DoAction legs: ACTION_SUMMON_ELEMENTAL — DoCastSelf(Emerge
--- 54850) is bridged but has no Lua fire site (no DoAction bridge,
--- standing); ACTION_FREEZE_COLOSSUS — Clear/MoveIdle motion,
+-- 54850) is bridged but has no Lua fire site (ev38 dispatch IS
+-- bridged, lua_creature_events.go:802; the sender is the unported
+-- DamageTaken phase machine, boss_drakkari_colossus.cpp:168-169);
+-- ACTION_FREEZE_COLOSSUS — Clear/MoveIdle motion,
 -- REACT_PASSIVE, SetImmuneToPC(true), DoCastSelf(Freeze Anim
 -- 16245), the flag/react flips now bridgeable but still gated behind
--- the absent DoAction dispatch; ACTION_UNFREEZE_COLOSSUS — immune/react
--- flips + DoZoneInCombat behind the same absent bridges.
+-- the unported DamageTaken sender (boss_drakkari_colossus.cpp:168);
+-- ACTION_UNFREEZE_COLOSSUS — immune/react flips + DoZoneInCombat
+-- behind the unported elemental/mojo sender chain (see below).
 -- JustDied — _JustDied() instance bookkeeping only, no bridge.
 -- Reset INTRO_DONE leg — cross-AI GetData/SetData bridge absent
 -- (the Reset RemoveAura(SPELL_FREEZE_ANIM) rides the INTRO_DONE
@@ -71,14 +77,20 @@
 -- bridgeable; the Unit::Kill(colossus) payload needs cross-instance
 -- creature lookup, no bridge); DamageTaken HealthBelowPct(50) ->
 -- cross-AI GetData(DATA_COLOSSUS_PHASE) + DoAction
--- (ACTION_RETURN_TO_COLOSSUS) (GetData/DoAction bridges absent);
+-- (ACTION_RETURN_TO_COLOSSUS) (ev38 dispatch IS bridged,
+-- lua_creature_events.go:802; the sender is the elemental's own
+-- DamageTaken, boss_drakkari_colossus.cpp:322, and the cross-AI
+-- instance lookup to reach the colossus is absent);
 -- EnterEvadeMode DespawnOrUnsummon — now bridgeable via
 -- creature:Despawn (lua_creature_events.go — bridged this tick for
 -- the vashj/morogrim/depth-charge nil-call time-bombs; the old
 -- "no despawn bridge" claim is stale).
 -- (boss_ai.go:1904), but the payload is cross-AI DoAction
--- (ACTION_UNFREEZE_COLOSSUS) + self-despawn (DoAction bridge
--- absent); Reset's AddAura(Mojo Volley 54849, self) — creature:
+-- (ACTION_UNFREEZE_COLOSSUS) + self-despawn (ev38 dispatch IS
+-- bridged, lua_creature_events.go:802; the sender is the
+-- elemental's own SpellHitTarget, boss_drakkari_colossus.cpp:339,
+-- on an entry-unverifiable, unregistered bearer); Reset's
+-- AddAura(Mojo Volley 54849, self) — creature:
 -- AddAura IS bridged (lua_creature_events.go:161), so the old "no
 -- AddAura bridge" claim is stale. Joins the bridgeable-but-entry-
 -- blocked queue.
@@ -96,8 +108,11 @@
 -- no-registration ground like the rest), MovementInform id-1 ->
 -- cross-AI DoAction(UNFREEZE) + SetData(DATA_INTRO_DONE) +
 -- DoZoneInCombat + DespawnOrUnsummon (the DoZoneInCombat bridge is live
--- 2026-10-23 and creature:Despawn IS bridged, but the whole chain rides
--- the unbridged DoAction/instance/MovementInform machine — stays out).
+-- 2026-10-23 and creature:Despawn IS bridged, and ev38 DoAction
+-- dispatch IS bridged (lua_creature_events.go:802) — but the whole
+-- chain rides the unported mojo MovementInform sender
+-- (boss_drakkari_colossus.cpp:399) + instance-lookup machine —
+-- stays out).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler
 -- (gargolmar precedent); BossAI _Reset/_JustDied instance
 -- bookkeeping has no bridge.

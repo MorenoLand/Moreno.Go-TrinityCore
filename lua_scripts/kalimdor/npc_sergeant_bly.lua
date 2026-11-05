@@ -35,7 +35,8 @@
 --   the template's own faction.
 -- - postGossipStep 1..3 event machine in UpdateAI: case 1 drives
 --   weegli->AI()->DoAction(0) via instance->GetGuidData(ENTRY_WEEGLI)
---   (no instance GUID-lookup / cross-creature DoAction bridges);
+--   (ev38 dispatch IS bridged, but no ZF latch populates the instance
+--   GUID store, so GetInstanceCreature(ENTRY_WEEGLI) reads nil);
 --   Talk(SAY_1=0) / Talk(SAY_2=1) bridgeable but the whole machine's
 --   driver is the blocked gossip path; case 3 SetFaction(FACTION_MONSTER)
 --   + AttackStart(target) + switchFactionIfAlive(ENTRY_RAVEN/ORO/MURTA)
@@ -43,7 +44,9 @@
 --   gossip driver / cross-creature DoAction / AttackStart legs are not).
 -- - OnGossipHello/OnGossipSelect: instance->GetData(EVENT_PYRAMID)
 --   pyramid-phase gating — instance-model gossip blocked (standing).
--- - DoAction(0) (sets postGossipStep=1): no DoAction bridge.
+-- - DoAction(0) (sets postGossipStep=1): ev38 dispatch IS bridged, but its
+--   only caller is Bly's own gossip select (zulfarrak.cpp:171), gated on the
+--   instance pyramid phase — instance-model gossip blocked (standing).
 -- - go_troll_cage OnGossipHello crew-arouse machine (zulfarrak.cpp:218-232):
 --   initBlyCrewMember per crew member — instance GUID-lookup +
 --   SetReactState(REACT_AGGRESSIVE) + SetWalk + SetHomePosition +

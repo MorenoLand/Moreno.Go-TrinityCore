@@ -60,7 +60,8 @@
 --   (lua_player.go) is C++-exact for the ossirian lookup, and
 --   go:FindNearestCreature (lua_objects.go, chromaggus precedent) finds
 --   the trigger at the crystal's own coords. The DoAction leg is
---   inlined (no DoAction bridge): trigger self-casts a random
+--   inlined (ev38 dispatch IS bridged — the leg is inlined as a trigger
+--   self-cast instead): trigger self-casts a random
 --   weakness, gated on not IsCasting (live CastingUntil window,
 --   lua_creature_events.go:1950 — the gate is live, not vacuous). The instance GetBossState(IN_PROGRESS)
 --   guard is approximated by ossirian IsInCombat (non-combat covers
@@ -76,7 +77,8 @@
 --   Go fire site is the aggro-engage branch, a subset of C++'s
 --   any-unit LOS trigger — acceptable for a one-shot intro line.
 -- - DoAction(ACTION_TRIGGER_WEAKNESS): inlined into onCrystalGossip
---   (trigger self-cast); no standalone DoAction bridge exists.
+--   (trigger self-cast); ev38 dispatch IS bridged (creature:DoAction) —
+--   the inlined form just needs no dispatch.
 -- - Cleanup()/EnterEvadeMode()/JustDied() instance legs: no bridge.
 -- - BossAI ctor leg DATA_OSSIRIAN and _Reset() — instance bridge,
 --   standing.
@@ -267,8 +269,9 @@ local function onEnterCombat(event, creature, target)
         end
     end
     -- C++ JustEngagedWith ends with SpawnNextCrystal (after the vortex
-    -- summons); the weakness-cast chain that consumes the crystal
-    -- stays out (crystal gossip -> boss DoAction, no bridge).
+    -- summons); the weakness-cast chain that consumes the crystal is PORTED
+    -- in onCrystalGossip below (crystal gossip -> inlined trigger self-cast;
+    -- ev38 dispatch IS bridged but unused here).
     spawnNextCrystal(creature, guid)
     schedule(guid, "silence", 30000, function()
         onSilence(creature, guid)

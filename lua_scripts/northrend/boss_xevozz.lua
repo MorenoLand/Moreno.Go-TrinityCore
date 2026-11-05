@@ -77,8 +77,9 @@
 -- creature casts and the Go cast path implements SPELL_EFFECT_SUMMON
 -- (boss_ai.go creatureEffectSummonType), so the old "whole event out"
 -- (emalon EVENT_OVERCHARGE precedent) over-blocked. Still out: the
--- 33-35s delayed summons.DoAction(ACTION_SUMMON) leg (no DoAction
--- bridge) and the summoned sphere's own AI (npc_ethereal_sphere
+-- 33-35s delayed summons.DoAction(ACTION_SUMMON) leg (dispatch IS
+-- bridged — ev38 — but the receivers, the summoned spheres, carry no
+-- registered AI) and the summoned sphere's own AI (npc_ethereal_sphere
 -- ARCANE_POWER proximity machine / SAY_ETHEREAL_SPHERE_SUMMON DoAction
 -- Talk leg, unregistered). The JustSummoned MoveFollow leg
 -- joins the no-MovementInform bridge queue; the JustReachedHome
@@ -195,7 +196,8 @@ end
 -- random pick from {54102, 54137, 54138} -> DoCast(me, spell)
 -- (non-triggered); heroic: second pick from the remaining two after
 -- 2500ms. 5s init / Repeat {45s,47s}. The 33-35s delayed
--- summons.DoAction(ACTION_SUMMON) leg stays out (no DoAction bridge),
+-- summons.DoAction(ACTION_SUMMON) leg stays out (dispatch IS bridged
+-- — ev38 — but the summoned spheres carry no registered AI),
 -- as does the summoned sphere's own AI (npc_ethereal_sphere
 -- ARCANE_POWER proximity machine, unregistered).
 local function summonTick(creature, guid)

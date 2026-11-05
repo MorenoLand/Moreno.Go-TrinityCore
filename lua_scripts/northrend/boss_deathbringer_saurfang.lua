@@ -149,8 +149,10 @@
 --   switch; the 72255/72444/72445/72446 triggered-mark cases cast
 --   SPELL_BLOOD_LINK_DUMMY — stays out on trigger-path grounds: the
 --   72293 mark cast rides the unported ACTION_MARK_OF_THE_FALLEN_CHAMPION
---   DoAction machine (no DoAction / random-target bridges; its trigger
---   is an unbridged AuraScript), so event 15 never fires for it in Go
+--   DoAction machine (dispatch IS bridged — creature:DoAction fires ev38,
+--   lua_creature_events.go:802 — but its trigger is the unported
+--   spell_deathbringer_blood_link_aura periodic tick, :1028), so event 15
+--   never fires for it in Go
 --   (event 15 itself is live — boss_ai.go:1904).
 -- boss_deathbringer_saurfang intro machine — Talk(
 --   SAY_INTRO_ALLIANCE_2 0 / SAY_INTRO_ALLIANCE_3 1 /
@@ -159,11 +161,14 @@
 --   SAY_INTRO_HORDE_9 6) ride the EVENT_INTRO_* scheduler machine
 --   (:463-492, intro phase machine — the gothik precedent); the
 --   DoAction(PHASE_INTRO_A/H / ACTION_CONTINUE_INTRO) legs (:548-590)
---   have no DoAction bridge (the krick ACTION_OUTRO precedent); the
+--   stay out on the sender, not dispatch (DoAction IS bridged —
+--   creature:DoAction fires ev38, lua_creature_events.go:802): the
+--   callers are the unregistered event NPCs' gossip-started intro
+--   scheduler / MovementInform (:670/:726/:870/:916); the
 --   ACTION_MARK_OF_THE_FALLEN_CHAMPION leg (:580-592) is a
 --   random-target SelectTarget with an aura-exclusion filter +
---   DoCast — out on no DoAction bridge and its unbridged trigger
---   (the blood-link aura periodic tick is an AuraScript, no bridge);
+--   DoCast — out on its unported trigger (the blood-link aura
+--   periodic tick, :1028, is an AuraScript, no bridge);
 --   random-target itself IS bridgeable (randomPlayer) and the aura
 --   exclusion IS bridgeable (creature HasAura, lua_objects.go:228),
 --   but the machine stays out. The _fallenChampionCastCount /
@@ -184,8 +189,9 @@
 --   NOT registered (the bronjahm npc_corrupted_soul_fragment
 --   precedent); the outro arms port via the deathbringer-side relay
 --   below, not via registration: gossip -> DoAction(
---   ACTION_START_EVENT) (gossip is instance-model-blocked; no
---   DoAction bridge); Talk(SAY_INTRO_HORDE_1 0 /
+--   ACTION_START_EVENT) (gossip is instance-model-blocked and the
+--   NPCs are unregistered — dispatch itself IS bridged, ev38);
+--   Talk(SAY_INTRO_HORDE_1 0 /
 --   SAY_INTRO_ALLIANCE_1 0) ride the DoAction legs; Talk(
 --   SAY_INTRO_HORDE_3 1 / SAY_INTRO_ALLIANCE_4 1) ride
 --   MovementInform POINT_FIRST_STEP (no-motion bridge); Talk(
@@ -197,7 +203,8 @@
 --   legs of the deathbringer DamageTaken relay); SpellHit(SPELL_GRIP_OF_AGONY)
 --   movement legs — SpellHit never fires; the cross-AI
 --   deathbringer->AI()->DoAction(PHASE_INTRO_*/ACTION_CONTINUE_INTRO)
---   legs have no bridge.
+--   legs ride the unregistered event NPCs' intro scheduler
+--   (dispatch IS bridged — creature:DoAction fires ev38).
 -- npc_saurfang_event (guards) — zero own Talk lines; NOT registered
 --   (the bronjahm npc_corrupted_soul_fragment precedent):
 --   DoAction(ACTION_DESPAWN) ports via the relay guard sweeps below;
@@ -627,7 +634,8 @@ end
 -- SPELL_PERMANENT_FEIGN_DEATH 70628). C++ order kept (frenzy check
 -- before fight-won; both may fire on one hit). The _EnterEvadeMode /
 -- SetFlag(NOT_SELECTABLE) / RemoveAurasOnEvade legs and the cross-AI
--- DoAction(ACTION_START_OUTRO) leg have no bridge; the SetImmuneToPC(true)
+-- DoAction(ACTION_START_OUTRO) leg ports via relayStartOutro below
+-- (dispatch IS bridged — creature:DoAction fires ev38); the SetImmuneToPC(true)
 -- (:368) leg is ported flag-only above via the SetFlag(59, 0x100) twin.
 local function saurfangDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()

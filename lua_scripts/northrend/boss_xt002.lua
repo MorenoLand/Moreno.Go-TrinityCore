@@ -80,7 +80,9 @@
 -- (scrapbot/pummeller/boombot/life-spark/void-zone), no Lua summon
 -- tracking exists to drain, and their entries are not verifiable
 -- from boss_xt002.cpp; the arm also rides _DespawnAtEvade.
--- DoAction(ACTION_ENTER_HARD_MODE — no DoAction bridge).
+-- DoAction(ACTION_ENTER_HARD_MODE — ev38 dispatch IS bridged
+-- (creature:DoAction, lua_creature_events.go:802); the sender is
+-- the unported heart JustDied, boss_xt002.cpp:430).
 -- GetData(DATA_HARD_MODE 1 / DATA_HEALTH_RECOVERED 2 /
 -- DATA_GRAVITY_BOMB_CASUALTY 3 — creature:GetData IS bridged
 -- (ScriptData store, 2026-10-24). The gravity-bomb aura OnPeriodic
@@ -97,8 +99,10 @@
 -- The heart-exposure phase machine — ExposeHeart
 -- (events.SetPhase(PHASE_HEART) + react-state / AttackStop +
 -- Talk(SAY_HEART_OPENED 1) + EVENT_SUBMERGE scheduling + heart
--- DoAction(ACTION_START_PHASE_HEART) via instance GUID — no
--- phase / DoAction / instance bridges); DisposeHeart
+-- DoAction(ACTION_START_PHASE_HEART) via instance GUID — ev38
+-- dispatch IS bridged (lua_creature_events.go:802); the sender is
+-- the unported phase machine (EVENT_SUBMERGE, boss_xt002.cpp:356)
+-- and the phase / instance bridges are still absent); DisposeHeart
 -- (Talk(SAY_HEART_CLOSED 2) + Talk(EMOTE_HEART_CLOSED 9) +
 -- hard-mode react-state + RescheduleEvents + SPELL_STAND /
 -- SPELL_COOLDOWN_CREATURE_SPECIAL_2 + heart DoAction
@@ -135,8 +139,9 @@
 -- npc_xt002_heart (NullCreatureAI — no Talk arms anywhere;
 -- DoAction(ACTION_START_PHASE_HEART / ACTION_DISPOSE_HEART)
 -- vehicle / cast legs; JustDied -> xt002 DoAction
--- (ACTION_ENTER_HARD_MODE) — no DoAction bridge — no
--- registration).
+-- (ACTION_ENTER_HARD_MODE) (boss_xt002.cpp:430) — ev38 dispatch
+-- IS bridged (lua_creature_events.go:802); the heart itself is
+-- unregistered, so no sender exists in Go — no registration).
 -- npc_scrapbot (no Talk arms; TaskScheduler MoveFollow /
 -- SPELL_SCRAPBOT_RIDE_VEHICLE / SPELL_SCRAP_REPAIR machinery —
 -- no scheduler / movement / vehicle bridges — no registration);

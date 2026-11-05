@@ -58,7 +58,9 @@
 -- 2026-10-20 standstate strip; the revive TRIGGER is the unbridged
 -- thaddius DoAction machine);
 -- DoAction(ACTION_TRANSITION) — KillSelf + the coil CastStop +
--- coil->AI()->Talk(EMOTE_TESLA_OVERLOAD 1) — no cross-AI bridge;
+-- coil->AI()->Talk(EMOTE_TESLA_OVERLOAD 1) — the thaddius sender
+-- chain (EVENT_TRANSITION_1) is unported; event-38 dispatch itself
+-- is bridged (creature:DoAction, lua_creature_events.go:802).
 -- DoAction(ACTION_TRANSITION_2) — coil->CastSpell(thaddius,
 -- SPELL_SHOCK_VISUAL 28159) via DATA_THADDIUS — no cross-AI bridge;
 -- DoAction(ACTION_TRANSITION_3) — coil GO GO_STATE_READY +
@@ -317,8 +319,15 @@ end
 -- UNIT_FLAG_IMMUNE_TO_PC) (thekal / lurker_below precedent — the Go
 -- engine honors the 0x100 bit in melee/spell targeting,
 -- creaturemotion.go:3952); creatureCaster->AI()->Talk =
--- caster:Talk (handler-surface bridge); creatureCaster->CastStop =
--- no-op, omitted (no cast state in Go, lua_objects.go:344);
+-- caster:Talk (handler-surface bridge); creatureCaster->CastStop is
+-- the bridged creature:StopSpellCast (lua_creature_events.go:1010);
+-- the :622/:630 legs stay out because 28096 is channeled with NO
+-- finite DBC duration (Wowhead 2026-11-05: Channeled flag, duration
+-- n/a) — Go stamps a channel only when dur > 0 (boss_ai.go:2994),
+-- so no ChannelSpellID can ever be live for the coil to interrupt;
+-- the beam ends via the RemoveAura leg above, C++-exact. No-op-safe
+-- forms recorded in caststop_tick225_verdicts.md (kept out: dead
+-- code in Go's model).
 -- home-distance via the handler-surface GetHomePosition bridge (3D,
 -- OVERLOAD_DISTANCE 28).
 local function stalaggSpellHit(event, creature, caster, spellId)

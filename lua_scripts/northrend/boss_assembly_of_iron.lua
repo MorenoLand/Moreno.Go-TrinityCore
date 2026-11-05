@@ -135,7 +135,7 @@
 -- per the deviation note below). ACTION_ADD_CHARGE 2
 -- (steelbreaker, SPELL_ELECTRICAL_CHARGE trigger cast — the
 -- spell_assembly_meltdown producer) stays out: its sender is
--- a SpellScript, no bridge (joins the no-DoAction-bridge queue).
+-- a SpellScript, no bridge (joins the unported-DoAction-sender queue).
 -- GetData(DATA_PHASE_3 1) — creature:GetData IS bridged (ScriptData
 -- store, 2026-10-24) but the sole consumer is achievement-only; consumer:
 -- achievement_assembly_i_choose_you below.
@@ -165,10 +165,13 @@
 -- SetFullHealth, SPELL_SUPERCHARGE 61920, event reschedules:
 -- fusion punch 15s / shield 27s / rune of power 25s /
 -- chain lightning {7s,12s} / overload {40s,50s}, plus
--- phase >= 2 / 3 arm enables) has no DoAction bridge, so
+-- phase >= 2 / 3 arm enables) — dispatch IS bridged (ev38) and the
+-- JustDied sender is already ported as superchargeSurvivors, so
 -- the relay is ported as grid-sweep effects at the Died
 -- handlers: live-timer reschedules ride superchargeSurvivors
--- while phase++ and the phase >= 2/3 arm enables stay out.
+-- while phase++ and the phase >= 2/3 arm enables stay out (the
+-- phase-gated arms they would enable are themselves unported,
+-- gothik precedent).
 -- spell_shield_of_runes (62274 — AuraScript
 -- AfterEffectRemove: on non-expire removal the caster casts
 -- SPELL_SHIELD_OF_RUNES_BUFF 62277 — no AuraScript bridge;

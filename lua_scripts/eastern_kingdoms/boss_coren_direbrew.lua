@@ -45,7 +45,10 @@
 -- arms (Talk(SAY_INSULT 3), SetImmuneToPC(false),
 -- SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON 736)) are PORTED below
 -- (ingvar precedent: faction/flag bridges live); the antagonist
--- ACTION_ANTAGONIST_HOSTILE relay stays out (no DoAction bridge).
+-- ACTION_ANTAGONIST_HOSTILE relay stays out (ev38 DoAction dispatch IS
+-- bridged — the blocker is the summons.DoAction fan-out from Coren's
+-- START_FIGHT arm (boss_coren_direbrew.cpp:175) to the unregistered
+-- antagonist AI; no SummonList fan-out bridge).
 -- Coren's own DoAction DoZoneInCombat arm (:172) is ported in
 -- onGossipSelect below (bridge live 2026-10-23), so the fight still
 -- starts when a player pulls. APOLOGIZE closes the menu C++-exact. The option/menu
@@ -54,8 +57,9 @@
 -- Unmodeled: intro phase (MoveInLineOfSight -> PHASE_INTRO event
 -- machine, 3x NPC_ANTAGONIST 23795 summons at fixed positions,
 -- SAY_INTRO/1/2 Talk arms, ACTION_ANTAGONIST_SAY_1/2/ HOSTILE relayed
--- via EntryCheckPredicate + DoAction) — no summon/DoAction bridges
--- (doomrel precedent for the Talk arms). The MIOS Talk(SAY_INTRO)
+-- via EntryCheckPredicate + DoAction) — the intro event machine + SummonList
+-- fan-out have no bridge (SummonCreature itself is bridged; ev38 dispatch
+-- is bridged — doomrel precedent for the Talk arms). The MIOS Talk(SAY_INTRO)
 -- arm itself is additionally unreachable: Go's event-27 fire site is
 -- the aggro-engage branch (hostile/attackable faction only,
 -- creaturemotion.go:3522-3525), but the C++ intro fires pre-fight
@@ -72,7 +76,8 @@
 -- SelectTarget bridge, so no lua file" claim is retracted.
 -- Unmodeled: npc_direbrew_minion (faction latch + DoZoneInCombat + JustSummoned
 -- instance-GUID latch — no faction/instance bridges); npc_direbrew_antagonist
--- (DoAction Talk/faction arms — no bridges).
+-- (DoAction Talk/faction arms — the antagonist AI is unregistered, so its
+-- ev38 receiver has no bearer; Talk/faction themselves are bridged).
 -- Unmodeled: go_direbrew_mole_machine (GameObjectAI Reset -> UseDoorOrButton
 -- + 50313 emerge + linked-trap GO activation — no GO Reset/Spawn event
 -- (gossip/use bridges exist, but the machine fires from Reset, not use);
@@ -321,7 +326,8 @@ local function onGossipSelect(event, player, creature, sender, action)
         -- SetImmuneToPC(false) + SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON)
         -- — all bridged (ingvar precedent); DoZoneInCombat ported below in
         -- C++ arm order (bridge live 2026-10-23); the antagonist
-        -- ACTION_ANTAGONIST_HOSTILE relay stays out (no DoAction bridge).
+        -- ACTION_ANTAGONIST_HOSTILE relay stays out (ev38 dispatch IS bridged;
+        -- the summons.DoAction fan-out to the unregistered antagonists has no bridge).
         creature:Talk(3)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
         creature:SetFaction(FACTION_GOBLIN_DARK_IRON_BAR_PATRON)

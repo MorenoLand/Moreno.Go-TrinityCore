@@ -37,9 +37,10 @@
 -- no bridge, so the victim arm stays engine-side. Phase 2 roar:
 -- non-triggered self-cast 16508, repeat {40s,50s} (initial 0s).
 -- The DoAction(ACTION_ADD_DEATH) -> Talk(SAY_OGRE_DEATH) relay
--- ports via relayOgreDeath below: no DoAction bridge exists, but
--- the receiver lookup is the bridged FindNearestCreature (svalna
--- precedent) and the receiver leg is a bare Talk, so the relay is
+-- ports via relayOgreDeath below: ev38 DoAction dispatch IS bridged
+-- (creature:DoAction, lua_creature_events.go:802), but the relay inlines
+-- the Talk — the receiver lookup is the bridged FindNearestCreature
+-- (svalna precedent) and the receiver leg is a bare Talk, so the relay is
 -- C++-exact for a live maulgar; only the instance SetBossState
 -- (DONE) leg stays blocked.
 -- Olm the Summoner (18834): OnReset(23) arms dark decay 33129 10s
@@ -204,8 +205,9 @@ end
 
 -- C++ ogre JustDied (boss_high_king_maulgar.cpp:263/350/442/524):
 -- instance->GetGuidData(DATA_MAULGAR) -> maulgar->AI()->DoAction(
--- ACTION_ADD_DEATH) -> Talk(SAY_OGRE_DEATH 2). No DoAction bridge
--- exists, but the receiver lookup is bridged: FindNearestCreature
+-- ACTION_ADD_DEATH) -> Talk(SAY_OGRE_DEATH 2). Ev38 DoAction dispatch IS
+-- bridged (creature:DoAction), but the relay inlines the Talk — the
+-- receiver lookup is bridged: FindNearestCreature
 -- (svalna precedent) returns the live maulgar in the same
 -- map+instance, nil when maulgar is dead or absent (the bridge
 -- skips Health==0 entries).

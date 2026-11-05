@@ -13348,7 +13348,11 @@ func init() {
 	// summon / movement / gameobject bridges — documented
 	// only; the Reset SetCanDualWield arm has no dual-wield
 	// bridge; no SAY_LEGOSO_* line fires (no talk bridge);
-	// ACTION_LEGOSO_SIRONAS_KILLED has no DoAction bridge.
+	// ACTION_LEGOSO_SIRONAS_KILLED: ev38 DoAction dispatch IS bridged
+	// (creature:DoAction, lua_creature_events.go:802); the arm stays out
+	// because the sender is unported — npc_sironas JustDied
+	// (zone_bloodmyst_isle.cpp:278) cross-creature cascade, gated on
+	// killer/group/event-starter GUID, into legoso's unported escort machine.
 	RegisterLuaBoss("npc_demolitionist_legoso", 17982)
 	// npc_aged_dying_ancient_kodo (Desolace zone script):
 	// SpellHit arm only — hit by SPELL_KODO_KOMBO_ITEM 18153
@@ -17057,9 +17061,11 @@ func init() {
 	// self-cast, EVENT_FRENZY (HealthBelowPct(10) — doomwalker
 	// precedent — + DoCastSelf 28747 + DoCastAOE 52592) ported as
 	// self-cast, the whole
-	// DoAction machine (no DoAction bridge — drakkari_colossus
-	// precedent: gatewatcher-greet prefight Talk, watcher-died
-	// bookkeeping, watcher/pet engaged, pet evade), EnterEvadeMode
+	// DoAction machine (ev38 dispatch IS bridged, creature:DoAction —
+	// lua_creature_events.go:802; senders unported: instance greet
+	// (instance_azjol_nerub.cpp:88), watcher-died bookkeeping
+	// (boss_krikthir_the_gatewatcher.cpp:434/512/590), watcher/pet
+	// engaged (:333/:349), pet evade (:395)), EnterEvadeMode
 	// (summons.DespawnAll — terestian precedent), SpellHit/SpellHitTarget
 	// (event 15 never fires — standing), npc_watcher_gashra/narjil/
 	// silthik (28730/28729/28731 entry-verifiable — azjol_nerub.h —
@@ -17105,8 +17111,10 @@ func init() {
 	// cross-AI, the CanAIAttack home-distance leash, the setActive leg,
 	// EVENT_PLAYER_CHECK
 	// + the DoAction machine (ACTION_CRUSHER_ENGAGED instance
-	// SetBossState + packs 2/3; ACTION_HADRONOX_MOVE — no DoAction
-	// bridge, drakkari_colossus precedent; instance model absent),
+	// SetBossState + packs 2/3; ACTION_HADRONOX_MOVE — ev38 dispatch
+	// IS bridged (creature:DoAction, lua_creature_events.go:802); sender
+	// is the unported crusher JustDied (boss_hadronox.cpp:556);
+	// instance model absent),
 	// EnterEvadeMode (trigger aura-scan, _DespawnAtEvade,
 	// summons.DespawnAll — terestian precedent, ObjectAccessor _anubar
 	// despawn), DamageTaken NPC safeguard
@@ -17148,8 +17156,10 @@ func init() {
 	// + no DamageTaken hook, npc_unkor_the_ruthless precedent),
 	// EVENT_DARTER/ASSASSIN/GUARDIAN/VENOMANCER pet waves
 	// (world-trigger grid-scan + cross-AI + summon bridges absent),
-	// the SetGUID/DoAction machine (no DoAction bridge —
-	// drakkari_colossus precedent), EnterEvadeMode (summons.
+	// the SetGUID/DoAction machine (ev38 dispatch IS bridged,
+	// creature:DoAction — lua_creature_events.go:802; senders
+	// unported: pet JustDied / EnterEvadeMode, boss_anubarak.cpp
+	// :425/:431, + cross-AI SetGUID absent), EnterEvadeMode (summons.
 	// DespawnAll + _DespawnAtEvade — terestian precedent), the
 	// SpellHit(SPELL_SUBMERGE 53421) payload (event 15 never fires —
 	// standing), the DamageTaken submerge gate/damage-null legs, the
@@ -17237,8 +17247,10 @@ func init() {
 	// machine (drak_tharon_keep.h:52) clears the bubble. Documented in
 	// the lua file, not wired: AttackStart DoStartNoMovement (no
 	// movement bridge), the _bubbled UpdateAI gate, the CrystalHandlerDied machine incl.
-	// Talk(SAY_ARCANE_FIELD 4) (no DoAction bridge — drakkari_colossus
-	// precedent — + cross-AI SetData absent), the MoveInLineOfSight
+	// Talk(SAY_ARCANE_FIELD 4) (ev38 dispatch IS bridged,
+	// creature:DoAction — lua_creature_events.go:802; sender is the
+	// unported instance OnUnitDeath, instance_drak_tharon_keep.cpp
+	// :153, + cross-AI SetData absent), the MoveInLineOfSight
 	// _ohNovos latch (no grid/MoveInLineOfSight bridge), GetData(
 	// DATA_NOVOS_ACHIEV), JustSummoned (summon STRAND absent),
 	// npc_crystal_channel_target (26712 entry-verifiable — zero
@@ -17964,8 +17976,9 @@ func init() {
 	// DANCE_END seed; the king_dred genuinely-bridgeable-bar objection
 	// is lifted by the SetReactState/AttackStop/StopMoving bridges.
 	// EVENT_DANCE_END ported: Talk(EMOTE_DANCE_END 5) + disrupt/fever/dance
-	// re-seeds + SetReactState(REACT_AGGRESSIVE) (CastStop vacuous —
-	// instant casts only; DoZoneInCombat unbridged, documented).
+	// re-seeds + SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (ported
+	// 2026-10-23); CastStop vacuous at the 45s PLAGUE_CLOUD channel-expiry
+	// boundary (29350 is channeled, not instant).
 	// EVENT_ERUPT stays out — whole arm rides GO bridges: TeleportCheaters,
 	// GO-by-spawnId tile store firstEruptionDBGUID 84980 sections
 	// 15/25/23/13, ObjectAccessor GO lookup + tile CastSpell. Documented
@@ -19218,7 +19231,9 @@ func init() {
 	// JustDied-Talk precedent; also wipes the enrage timer).
 	// Documented-only: Reset / Initialize / EnterEvadeMode
 	// (DoStopTimedAchievement 21027 — no bridges);
-	// DoAction(ACTION_ENTER_HARD_MODE — no DoAction bridge);
+	// DoAction(ACTION_ENTER_HARD_MODE — ev38 dispatch IS bridged,
+	// creature:DoAction, lua_creature_events.go:802; sender is the
+	// unported npc_xt002_heart JustDied, boss_xt002.cpp:430);
 	// GetData(DATA_HARD_MODE / DATA_HEALTH_RECOVERED /
 	// DATA_GRAVITY_BOMB_CASUALTY — creature GetData is bridged
 	// as a Lua-side ScriptData store, but producers/consumers are
@@ -19312,7 +19327,10 @@ func init() {
 	// reader machine stays unported, so the arm stays out);
 	// GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
 	// 31813188 — no GetData bridge); DoAction(ACTION_VAPORS_DIE
-	// / ACTION_ANIMUS_DIE — no DoAction bridge);
+	// / ACTION_ANIMUS_DIE — ev38 dispatch IS bridged, creature:
+	// DoAction, lua_creature_events.go:802; senders unported:
+	// vapors DamageTaken :436 / animus JustDied :338,
+	// boss_general_vezax.cpp);
 	// CheckShamanisticRage map-player scan — no bridge;
 	// EVENT_SHADOW_CRASH (CheckPlayersInRange / SelectTarget
 	// Random + DoCast 62660, init {8s,10s}, re-arm {8s,12s}) /
@@ -19333,7 +19351,9 @@ func init() {
 	// + EVENT_PROFOUND_OF_DARKNESS DoCastAOE(63420, TRIGGERED)
 	// 3s/3s timer leg rides the unbridged summon machine —
 	// task exclusion: summon/add legs out; JustDied -> vezax
-	// DoAction — no DoAction bridge); npc_saronite_vapors (no
+	// DoAction (ev38 dispatch IS bridged, creature:DoAction —
+	// lua_creature_events.go:802; sender is the unported animus
+	// JustDied, boss_general_vezax.cpp:338); npc_saronite_vapors (no
 	// entry enum — spell-summoned via 63081; entry-unverifiable
 	// — no registration; constructor Talk(EMOTE_VAPORS 0) —
 	// no spawn bridge; MoveRandom / DamageTaken machine — no
@@ -20149,7 +20169,10 @@ func init() {
 	// progress (beginInstanceEncounter): C++ sets
 	// DATA_ICECROWN_GUNSHIP_BATTLE IN_PROGRESS from the captains'
 	// DoAction intro chain (boss_icecrown_gunship_battle.cpp:899 /
-	// :1152), and Go has no DoAction bridge, so captain aggro is the
+	// :1152), and ev38 dispatch IS bridged (creature:DoAction,
+	// lua_creature_events.go:802) but the sender — instance ProcessEvent
+	// EVENT_ENEMY_GUNSHIP_COMBAT (instance_icecrown_citadel.cpp:1433)
+	// + transport machine — is unported, so captain aggro is the
 	// closest available encounter-start signal. The other six gunship
 	// entries (boarding leaders 36960/36961, boarding adds 36957/36950,
 	// rocketeers 36978/36982) are ScriptedAI adds with no boss-state
@@ -20320,8 +20343,10 @@ func init() {
 	// Talk(SAY_INTRO_1) rides the ACTION_START_INTRO DoAction leg
 	// (no-DoAction bridge) and Talk(SAY_INTRO_2) the EVENT_INTRO_1
 	// scheduler leg (no-timer-bridge) — not registered;
-	// npc_ball_of_flame / npc_kinetic_bomb / npc_dark_nucleus have
-	// zero Talk lines — not registered. The 6 spell scripts join the
+	// npc_ball_of_flame / npc_dark_nucleus have zero Talk lines — not
+	// registered. npc_kinetic_bomb IS registered (tick 232) for its
+	// DoAction(72052) bomb-despawn arm only — no Talk lines, no Reset
+	// arms. The 6 spell scripts join the
 	// no-SpellScript-bridge queue, the 5 aura scripts the
 	// no-AuraScript-bridge queue, and
 	// at_blood_prince_council_start_intro the no-AreaTrigger bridge
@@ -20337,6 +20362,11 @@ func init() {
 	// (registered tick 221 for its JustEngagedWith/EnterEvadeMode
 	// encounter-frame arms).
 	RegisterLuaBoss("boss_blood_council_controller", 38008)
+	// npc_kinetic_bomb: Icecrown Citadel kinetic bomb, entry 38454
+	// (icecrown_citadel.h NPC_KINETIC_BOMB) — DoAction(72052)
+	// bomb-despawn arm in lua_scripts/northrend/boss_blood_prince_council.lua
+	// (tick 232; ev38 handler, sender is the ported 72080 aura tick).
+	RegisterLuaBoss("npc_kinetic_bomb", 38454)
 
 	// boss_blood_queen_lana_thel: Icecrown Citadel boss script,
 	// entry 37955 (icecrown_citadel.h NPC_BLOOD_QUEEN_LANA_THEL —
@@ -20681,7 +20711,10 @@ func init() {
 	// victim-cast, DARK_MENDING lowest-health% friendly in 40yd (own-entry
 	// sweep — no generic grid enumeration), WEB_WRAP random threat target;
 	// DoAction fall leg (WEB_BEAM / MoveLand / MovementInform clear)
-	// stays out (no DoAction bridge, instance-SetData driver).
+	// stays out (ev38 dispatch IS bridged, creature:DoAction —
+	// lua_creature_events.go:802; sender is the unported instance
+	// SetData DATA_NERUBAR_BROODKEEPER_EVENT, instance_icecrown_
+	// citadel.cpp:1127-1132, driven by the area trigger).
 	// UpdateAI pre-loop CASTING gate :1072 (+ in-loop :1105)
 	// already ported in Lua: all 3 ticks defer 500ms while casting.
 	// Entry verifiable from icecrown_citadel.h:152 — see

@@ -135,7 +135,9 @@
 -- 230) — Talk(SAY_BRANN_ALGALON_INTRO_1 0) (EVENT_BRANN_SAY_INTRO_1),
 -- Talk(SAY_BRANN_ALGALON_INTRO_2 1) (DoAction ACTION_INTRO_2),
 -- Talk(SAY_BRANN_ALGALON_OUTRO 2) (EVENT_BRANN_OUTRO_1) — DoAction /
--- MovementInform / timer-gated; no bridges; no registration.
+-- MovementInform / timer-gated; the senders are algalon's unported
+-- intro/outro scheduler (:553/:660) and brann is unregistered
+-- (dispatch IS bridged — ev38); no registration.
 -- npc_collapsing_starAI DamageTaken — the _dying latch damage=0 rewrite +
 -- SPELL_BLACK_HOLE_SPAWN_VISUAL / SPELL_SUMMON_BLACK_HOLE self-casts —
 -- no Talk arm; the casts themselves are bridgeable (triggered
@@ -150,12 +152,14 @@
 -- npc_living_constellation DoAction(ACTION_ACTIVATE_STAR) (:745-750):
 -- SetReactState(REACT_AGGRESSIVE) + RemoveFlag(NOT_SELECTABLE) +
 -- AttackStart + DoZoneInCombat — fired by the
--- spell_algalon_trigger_3_adds SpellScript (:1106-1112); no DoAction /
--- SpellScript bridges, so the constellation's react flip stays out
+-- spell_algalon_trigger_3_adds SpellScript (:1106-1112); dispatch IS
+-- bridged (ev38) but the SpellScript sender is unported, so the
+-- constellation's react flip stays out
 -- (its Arcane Barrage enter-combat timer above is the only modeled arm).
 -- boss DoAction(ACTION_INIT_ALGALON 6, ulduar.h:501 — instance
 -- OnPlayerEnter timed-summon path, instance_ulduar.cpp:245, sets
--- _firstPull=false) — no DoAction bridge; stays out, so a timed-summon
+-- _firstPull=false) — dispatch IS bridged (ev38) but the sender is
+-- the unported instance script path; stays out, so a timed-summon
 -- Algalon takes the first-pull intro in Lua where C++ takes the 8s one.
 -- go_celestial_planetarium_access (GameObjectScript) — no GO bridge;
 -- documented only.

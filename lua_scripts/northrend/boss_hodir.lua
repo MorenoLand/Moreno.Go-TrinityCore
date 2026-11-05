@@ -148,8 +148,10 @@
 -- EVENT_MELT_ICE FindNearestCreature(NPC_FLASH_FREEZE)
 -- + DoCast(SPELL_MELT_ICE 64528, true) (lines 921-923);
 -- all four JustDied -> hodir DoAction
--- (ACTION_I_HAVE_THE_COOLEST_FRIENDS) — no DoAction
--- bridge; their DoSpellAttackIfReady combat legs
+-- (ACTION_I_HAVE_THE_COOLEST_FRIENDS) — ev38 dispatch IS bridged
+-- (creature:DoAction, lua_creature_events.go:802); sender is the
+-- unported add JustDied legs (boss_hodir.cpp:726/791/855/938);
+-- their DoSpellAttackIfReady combat legs
 -- (SPELL_SMITE 61923 / SPELL_LAVA_BURST 61924 /
 -- SPELL_WRATH 62793 / SPELL_FIREBALL 61909) have no cast
 -- bridges — no registrations.

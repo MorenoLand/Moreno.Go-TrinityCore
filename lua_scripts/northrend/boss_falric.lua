@@ -82,7 +82,8 @@
 --   (creature:SetFlag(59, 0x300)) IS bridged, but :30 is the apply half
 --   of an instance-sequencer-driven toggle: the clear
 --   (DoAction(ACTION_ENTER_COMBAT), boss_horAI.cpp:41, driven by the
---   unported instance wave machine) has no DoAction bridge, so porting
+--   unported instance wave machine, instance_halls_of_reflection.cpp:605)
+--   — dispatch IS bridged (creature:DoAction fires ev38); porting
 --   the apply alone fabricates a permanently-immune boss the C++ never
 --   exhibits — both halves stay out (the 2026-10-23 SetImmuneToAll
 --   sweep; same bar as the svalna gauntlet toggle). The old "no bridge

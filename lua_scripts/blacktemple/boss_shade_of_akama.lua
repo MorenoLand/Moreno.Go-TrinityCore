@@ -51,10 +51,12 @@
 -- npc_ashtongue_sorcerer's, which is not registered; the old "no
 -- UNIT_STATE bridge" claim was stale). Deviations from C++: no
 -- instance-script model — the DATA_SHADE_OF_AKAMA /
--- DATA_AKAMA_SHADE creature lookups, the SetBossState DONE arm, the
--- akama DoAction(ACTION_SHADE_OF_AKAMA_DEAD) arm and the spawner
--- DoAction(ACTION_START/STOP/DESPAWN_ALL_SPAWNS) arms have no
--- bridge; no MovementInform bridge — the chase-complete phase-two
+-- DATA_AKAMA_SHADE creature lookups and the SetBossState DONE arm stay
+-- out; the akama DoAction(ACTION_SHADE_OF_AKAMA_DEAD) arm is PORTED below
+-- via the grid sweep, while the spawner DoAction(ACTION_START/STOP/
+-- DESPAWN_ALL_SPAWNS) arms stay out (ev38 dispatch IS bridged, but the
+-- spawner AI is unregistered — no ev38 bearer); no MovementInform bridge
+-- — the chase-complete phase-two
 -- gate and the EVENT_ADD_THREAT arm (threat 41602 every 3.5s) are
 -- unmodeled; the SetImmuneToPC / UNIT_FLAG_NOT_SELECTABLE Reset
 -- arms are PORTED via the bridged unit-flags surface (see shadeReset) —
@@ -67,7 +69,9 @@
 -- but the JustDied DespawnEntry arm is PORTED in shadeDied via the
 -- grid sweep; the EVENT_INITIALIZE_SPAWNERS list fetch rides
 -- GetCreaturesInGrid but the arm only stores GUIDs for later DoAction
--- dispatches (no DoAction bridge), so nothing observable ports; the
+-- dispatches to the unregistered spawner AI (ev38 dispatch IS bridged,
+-- but the spawner AI has no ev38 bearer and the shade spawn machine is
+-- unported), so nothing observable ports; the
 -- EVENT_EVADE_CHECK arm
 -- (EnterEvadeModeIfNeeded / IsInBoundary) has no evade or boundary
 -- bridge; the soul-channel SpellHit(40447) event-scheduling and

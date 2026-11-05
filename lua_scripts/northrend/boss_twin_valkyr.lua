@@ -111,7 +111,8 @@
 -- adds another DoUseDoorOrButton leg.
 -- EVENT_SPECIAL_ABILITY (fjola only, 45s) — PORTED (specialTick
 -- below): the shuffled stage machine with cross-AI sister DoAction
--- arms inlined (no DoAction bridge exists; the relay is inlined into
+-- arms inlined (dispatch IS bridged — creature:DoAction fires ev38,
+-- lua_creature_events.go:802 — and the relay is already inlined into
 -- the sender's timer, the cross-AI relay precedent). Dark stages run
 -- the sister's VORTEX/PACT arms via the GetCreaturesInGrid sister
 -- idiom; light stages run fjola's own.

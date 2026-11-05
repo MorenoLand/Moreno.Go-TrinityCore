@@ -89,7 +89,9 @@
 -- machine: ACTION_LAND_ENCOUNTER_START, platform-destroy
 -- intro, vortex legs, surge-of-power legs, respawn handling —
 -- all gated on MotionMaster / instance GUIDs / timed events) —
--- no DoAction / motion / instance bridges. MovementInform
+-- dispatch IS bridged (creature:DoAction fires ev38,
+-- lua_creature_events.go:802); the machine stays out on its unported
+-- drivers (motion / instance), not dispatch. MovementInform
 -- (POINT_LAND_P_ONE / vortex takeoff-land / cyclic movement
 -- points) — no motion bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
 -- SetControlled(true, UNIT_STATE_ROOT) rides that same unbridged
@@ -136,9 +138,13 @@
 -- npc_nexus_lord (NPC_HOVER disk adds' lord) — DoAction ->
 -- EVENT_NUKE_DUMMY / EVENT_ARCANE_SHOCK / EVENT_HASTE_BUFF
 -- event machine (DoCast SPELL_ARCANE_SHOCK / haste, nuke the
--- disk the player rides) — DoAction-gated, no DoAction bridge
--- (stale "no timer-event bridge" re-keyed: the timer bridge is live
--- but the machine never starts) — documented-only.
+-- disk the player rides) — DoAction-gated, but dispatch IS bridged
+-- (creature:DoAction fires ev38, lua_creature_events.go:802): the
+-- sender is the melee hover disk's MovementInform waypoint arrival
+-- (boss_malygos.cpp:1222), an unported vehicle/motion machine, so
+-- the machine never starts (stale "no timer-event bridge" re-keyed:
+-- the timer bridge is live but the machine never starts) —
+-- documented-only.
 -- npc_scion_of_eternity (entry-UNVERIFIABLE from repo sources:
 -- NPC_SURGE_OF_POWER 30334 is defined at eye_of_eternity.h :60 but
 -- never referenced anywhere in the C++ tree; the ScriptName->entry

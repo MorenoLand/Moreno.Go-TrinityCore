@@ -76,9 +76,11 @@
 -- Rimefang DoAction(ACTION_START_RIMEFANG) (:328-336) — the EVENT_ICY_BLAST
 --   seed (15s, :335) lands on Rimefang's own Eluna event 1 (engine aggro —
 --   the faithful anchor for the unported DoAction relay): the :332 phase
---   flip and :333 DoZoneInCombat stay out behind the unbridged DoAction
---   relay + intro machine (DoZoneInCombat bridge live 2026-10-23, but the
---   relay has no bearer — rimefang->AI()->DoAction has no bridge).
+--   flip and :333 DoZoneInCombat stay out behind the unported intro
+--   machine — rimefang->AI()->DoAction is called from tyrannus's
+--   EVENT_COMBAT_START (:244), itself driven by the area-trigger intro
+--   machine (dispatch IS bridged, ev38; DoZoneInCombat bridge live
+--   2026-10-23, but the relay has no bearer).
 -- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0)
 -- (playerOnly=false default, UnitAI.h:170) -> random threat-listed unit
 -- (GetAITargets pick, no Player filter); DoCast(target, 69232);
@@ -104,8 +106,9 @@
 -- DOCUMENTED-ONLY (in this header; registrations: 36658 + 36661):
 -- Tyrannus intro machine — DoAction(ACTION_START_INTRO) (:207-217:
 --   Talk(SAY_TYRANNUS_INTRO_1 6) + EVENT_INTRO_1..3 / EVENT_COMBAT_START
---   scheduling) rides the unbridged at_tyrannus_event_starter area trigger
---   (:541-560, trigger :555) — no DoAction bridge (the krick ACTION_OUTRO
+--   scheduling) rides the unported at_tyrannus_event_starter area trigger
+--   (:541-560, trigger :555) — dispatch IS bridged (ev38); the
+--   area-trigger sender has no bridge (the krick ACTION_OUTRO
 --   precedent); the EVENT_INTRO_1 dead case (:232-234, commented-out
 --   Talk(SAY_GORKUN_INTRO_2)), the EVENT_INTRO_2 Talk(SAY_TYRANNUS_INTRO_3
 --   7) (:235-236), the EVENT_INTRO_3 ExitVehicle + MovePoint(miscPos)
@@ -124,7 +127,8 @@
 --   DespawnOrUnsummon) — no bridges.
 -- Tyrannus JustDied instance legs (:193-206) — SetBossState(DONE) +
 --   TEMPSUMMON_DEAD_DESPAWN + rimefang->AI()->DoAction(ACTION_END_COMBAT)
---   — no instance / DoAction bridges.
+--   — no instance bridge; the DoAction leg rides the unported JustDied
+--   instance block (dispatch IS bridged, ev38).
 -- The Overlord Brand aura chain — spell_tyrannus_overlord_brand
 --   AuraScript OnApply pushes player_overlord_brandAI (:398-428) onto the
 --   victim (DamageDealt -> SPELL_OVERLORD_BRAND_DAMAGE 69189, HealDone ->

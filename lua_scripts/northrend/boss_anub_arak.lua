@@ -57,8 +57,9 @@
 -- bridges exist (event 9 + GetHealthPct) but SetPhase/flag/summon
 -- legs are unbridged; SpellHit(SPELL_SUBMERGE 53421) submerge
 -- payload — event 14 (OnHitBySpell, target-side) fires, but the
--- trigger cast is phase-machine-blocked; DoAction(ACTION_PET_DIED) re-emerge — no DoAction
--- bridge (drakkari_colossus precedent) + cross-AI SetGUID/GUID_TYPE_
+-- trigger cast is phase-machine-blocked; DoAction(ACTION_PET_DIED) re-emerge — ev38 dispatch
+-- IS bridged (creature:DoAction, lua_creature_events.go:802); sender is the unported pet
+-- JustDied (boss_anubarak.cpp:425) + cross-AI SetGUID/GUID_TYPE_
 -- PET bridge absent) — no phase bridge (gal_darah / moorabi
 -- precedent), so ungated timers would over-cast versus C++ (Pound
 -- firing during the unbridged submerge phase — jedoga precedent):

@@ -118,7 +118,9 @@
 -- intro legs stay out (no bridges / unported rotation + intro
 -- machines). UpdateAI EVENT_INVOCATION_OF_BLOOD
 -- (:373-398) cross-AI DoAction + Talk(textId) on the rotated prince is
--- the invocation rotation machine — no bridge; boss_blood_council_
+-- the invocation rotation machine, driven by the unregistered council
+-- controller (:352/:382/:540 — dispatch IS bridged, ev38);
+-- boss_blood_council_
 -- controller::JustDied (:322-336, prince kill sweep — the prince->
 -- LowerPlayerDamageReq(:331) + Unit::Kill legs, SetBossState(DONE)
 -- :323) stays out — controller death handling unported.
@@ -127,8 +129,9 @@
 -- ACTION_CAST_INVOCATION, which arrives via SpellHit (:535-539) from the
 -- controller's unbridged invocation cast (no bridge); the
 -- ACTION_REMOVE_INVOCATION health/aura reset rides the controller's
--- cross-AI DoAction (no bridge). ACTION_STAND_UP (:552-563) rides the
--- same no-DoAction bridge: its 1s StandUpEvent (HandleEmoteCommand +
+-- cross-AI DoAction (dispatch IS bridged, ev38 — the controller
+-- itself is unregistered). ACTION_STAND_UP (:552-563) rides the
+-- same unregistered-controller machine: its 1s StandUpEvent (HandleEmoteCommand +
 -- SetReactState(REACT_AGGRESSIVE), :177-189) is the un-gating of the
 -- unported feign-death intro machine (JustAppeared :488), so the
 -- AGGRESSIVE arm is vacuous in the Lua model too — nothing ever sets
@@ -168,8 +171,10 @@
 -- EFFECT_1, aura 72080) — PORTED tick 189 (kineticBombAuraTick,
 -- RegisterAuraEvent 72080 / 1): live bomb within 1.0f -> bomb
 -- self-casts explosion 72052 triggered, drops visual 72054, tick
--- aura removes itself. DoAction(72052) bomb-despawn leg stays OUT
--- (no DoAction bridge; see the handler comment).
+-- aura removes itself. DoAction(72052) bomb-despawn leg PORTED tick
+-- 232 (kineticBombDoAction, ev38; bomb registered in boss_ai.go) —
+-- the 1s EVENT_BOMB_DESPAWN leg (:1018-1022) fires from the ported
+-- aura tick; see the handler comment.
 -- spell_blood_council_shadow_prison HandleDummyTick (:1300-1304,
 -- EFFECT_0, aura 73001) — NOT PORTED tick 189: the gate is
 -- GetTarget()->isMoving() on a prince creature (the aura is
@@ -191,16 +196,19 @@
 -- bomb-target react/cast + vortex dummy/periodic casts (bomb
 -- MovePoint ground-Z + DoZoneInCombat(summon) out).
 -- npc_blood_queen_lana_thel — Talk(SAY_INTRO_1 0) rides
--- ACTION_START_INTRO (:866-880, no-DoAction bridge);
+-- ACTION_START_INTRO (:866-880, sender is the unported controller /
+-- blood-queen intro machine — dispatch IS bridged, ev38);
 -- Talk(SAY_INTRO_2 1) rides EVENT_INTRO_1 (:896-905, intro scheduler
 -- leg, no-timer-bridge) — NOT registered.
 -- npc_ball_of_flame / npc_kinetic_bomb / npc_dark_nucleus — zero Talk
 -- lines; Reset one-shot aura casts (:919-924, :987-988, :1047) are
 -- aura/visual setup, not timer arms; the bomb's explode trigger now
--- rides the 72080 aura tick (ported tick 189) but its despawn/chase
--- legs ride movement informs and scheduler DoActions — no bridge, NOT
--- registered (their JustSummoned legs port via the boss ev19
--- handlers above, not via AI registration).
+-- rides the 72080 aura tick (ported tick 189) and its despawn leg
+-- rides the same tick's DoAction(72052) -> ev38 handler (PORTED tick
+-- 232; bomb registered in boss_ai.go). The chase leg
+-- (ACTION_KINETIC_BOMB_JUMP, MoveCharge — no bridge) stays OUT.
+-- (Their JustSummoned legs port via the boss ev19 handlers above,
+-- not via AI registration.)
 -- UpdateAI UNIT_STATE_CASTING gates — PORTED 2026-11-04 (creature:IsCasting
 -- 500ms defer, mal_ganis idiom; the old "no live unit-state read bridge /
 -- timers fire unconditionally" claim is retracted): controller :366/:401
@@ -638,19 +646,40 @@ end
 -- id; target:RemoveAura(72080) is the RemoveAura(GetAura()) arm.
 -- The C++ TYPEID_UNIT guard is subsumed: Go aura targets are unit
 -- objects by construction (spells.go:39385/41592).
--- RESIDUAL: bomb->AI()->DoAction(72052) stays OUT — DoAction has no
--- bridge on the creature event surface (no DoAction method in
--- lua_creature_events.go / lua_objects.go). In C++ it schedules the
--- bomb's EVENT_BOMB_DESPAWN 1s later (SetVisible(false) +
--- DespawnOrUnsummon 5s, :1018-1022); without it the bomb lingers
--- until its 60s Reset despawn (:990).
+-- PORTED tick 232: bomb->AI()->DoAction(72052) (C++ order — after the
+-- visual-strip and aura-remove legs, :1240-1244) fires the bomb's ev38
+-- handler below (dispatch bridged, creature:DoAction,
+-- lua_creature_events.go:802); the 1s EVENT_BOMB_DESPAWN leg
+-- (:1018-1022, SetVisible(false) + DespawnOrUnsummon(5s)) runs on the
+-- file's GUID-keyed schedule. ACTION_KINETIC_BOMB_JUMP stays OUT
+-- (MoveCharge — no bridge; caller is the unported knockback
+-- SpellScript, :1262). Without the despawn leg the bomb lingers
+-- until its 60s Reset despawn (:990, Reset arms not ported).
 local function kineticBombAuraTick(event, aura, target)
     local bomb = target:FindNearestCreature(ENTRY_KINETIC_BOMB, 1.0)
     if bomb then
         bomb:CastSpell(bomb, SPELL_KINETIC_BOMB_EXPLOSION, true)
         bomb:RemoveAura(SPELL_KINETIC_BOMB_VISUAL)
         target:RemoveAura(SPELL_KINETIC_BOMB)
+        bomb:DoAction(SPELL_KINETIC_BOMB_EXPLOSION)
     end
+end
+
+-- C++ npc_kinetic_bomb::DoAction (boss_blood_prince_council.cpp:995-998)
+-- + UpdateAI EVENT_BOMB_DESPAWN (:1019-1022): action 72052 schedules
+-- the despawn 1s out; on fire the bomb goes invisible and despawns
+-- 5s later. Bridges: SetVisible (lua_creature_events.go:4977),
+-- DespawnOrUnsummon (:6011); 1s delay via the file's GUID-keyed
+-- schedule (CreateLuaEvent, the princes' timer idiom).
+local function kineticBombDoAction(event, creature, action)
+    if action ~= SPELL_KINETIC_BOMB_EXPLOSION then
+        return
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "bombdespawn", 1000, function()
+        creature:SetVisible(false)
+        creature:DespawnOrUnsummon(5000)
+    end)
 end
 
 -- C++ :826-838 valanar EVENT_SHOCK_VORTEX base leg (else branch,
@@ -1000,6 +1029,7 @@ RegisterCreatureEvent(ENTRY_VALANAR, 23, princesReset)
 RegisterCreatureEvent(ENTRY_KELESETH, 5, princeSpawn)
 RegisterCreatureEvent(ENTRY_TALDARAM, 5, princeSpawn)
 RegisterCreatureEvent(ENTRY_VALANAR, 5, princeSpawn)
+RegisterCreatureEvent(ENTRY_KINETIC_BOMB, 38, kineticBombDoAction)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 1, controllerEnterCombat)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 2, controllerLeaveCombat)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 1, nucleusEnterCombat)
