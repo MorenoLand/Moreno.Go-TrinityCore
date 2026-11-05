@@ -64,9 +64,14 @@
 -- EVENT_OVERLOAD 1200ms -> 2s loop: DoCastVictim(SPELL_OVERLOAD 44353)
 -- via GetVictim nil-guarded (incarcerator convention). One-shot per
 -- engagement; Reset on OnEnterCombat(1) mirrors the C++ Reset().
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
--- packet-visual), so the overload timer fires unconditionally and the
--- in-loop casting gate is dropped (maiden precedent). The C++
+-- Deviations from C++: the UpdateAI pre-loop (:142) + in-loop
+-- (:167) CASTING gates are ported as 500ms IsCasting defers under
+-- each timer arm's own key (mal_ganis/rend idiom,
+-- lua_creature_events.go:1950; no re-arm consumed). In-loop
+-- same-tick co-expiry suppression is unmodeled (independent
+-- callbacks, AV precedent). The DamageTaken discharge latch stays
+-- ungated (C++-exact: DamageTaken is not an UpdateAI event).
+-- The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1)/OnDamageTaken(9) and
 -- cancels on 2/4/23 (maiden convention).
@@ -165,6 +170,10 @@ local function randomThreatPlayerInRange(creature, range)
 end
 
 local function onChainLightning(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chain_lightning", 500, function() onChainLightning(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayer(creature)
     if target then
         creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
@@ -173,6 +182,10 @@ local function onChainLightning(creature, guid)
 end
 
 local function onArcaneShock(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcane_shock", 500, function() onArcaneShock(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 20)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_SHOCK)
@@ -181,6 +194,10 @@ local function onArcaneShock(creature, guid)
 end
 
 local function onOverload(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "overload", 500, function() onOverload(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_OVERLOAD)

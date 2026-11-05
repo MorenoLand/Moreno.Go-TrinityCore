@@ -14057,18 +14057,26 @@ func init() {
 	// lua_scripts/eastern_kingdoms/boss_felblood_kaelthas.lua.
 	// Phase-one machine: fireball 44189 victim-cast 1ms init ->
 	// 2s500ms loop; phoenix Talk(SAY_SUMMON_PHOENIX=5) + self-cast
-	// 44194 12s init -> 45s loop. 50%-HP latch via OnDamageTaken(9)
+	// 44194 12s init -> 45s loop; flame-strike 46162 random-player
+	// 44s loop + shock-barrier 46165 heroic-only 61s init -> 1min
+	// loop + pyroblast 36819 one-shot (SelectTarget/IsHeroic
+	// bridges live). 50%-HP latch via OnDamageTaken(9)
 	// (gyth convention): Talk(SAY_GRAVITY_LAPSE_1=2) + phase-one
 	// timers cancelled (C++ phase gating stops their execution in
-	// PHASE_TWO). Lethal-damage latch: Talk(SAY_DEATH=8) + outro
-	// self-cast chain 48348/48349/48350/48350/3617. Flame-strike and
-	// shock-barrier/pyroblast arms unmodeled (SelectTarget / heroic
-	// gates — no bridges); phase-two gravity-lapse machinery
-	// unmodeled (teleport/SpellHitTarget/summon bridges absent);
-	// npc_felblood_kaelthas_phoenix class unmodeled (summon/instance/
-	// zone-in-combat bridges absent); flame-strike AuraScript not
-	// modeled. Script name is the stringified AI type (ScriptMgr.h:
-	// 1234, RegisterCreatureAIWithFactory). Entry 24664 verifiable
+	// PHASE_TWO); phase-two gravity-lapse chain ported (prepare /
+	// center-teleport / lapse / spheres / beam / power-feedback /
+	// prepare-repeat). Lethal-damage latch: Talk(SAY_DEATH=8) +
+	// outro self-cast chain 48348/48349/48350/48350/3617.
+	// UpdateAI pre-loop CASTING gate (:277) ported as 500ms
+	// IsCasting defers under each timer arm's own key (mal_ganis
+	// idiom); 50% latch path stays ungated on OnDamageTaken
+	// (DamageTaken-latch precedent). npc_felblood_kaelthas_phoenix
+	// class unmodeled (summon/instance/zone-in-combat bridges
+	// absent); flame-strike AuraScript not modeled; SpellHitTarget
+	// directional-teleport leg + sphere MoveFollow unmodeled
+	// (effect-dispatch/MotionMaster bridges absent). Script name
+	// is the stringified AI type (ScriptMgr.h:1234,
+	// RegisterCreatureAIWithFactory). Entry 24664 verifiable
 	// from the C++ sources: magisters_terrace.h:50 names
 	// BOSS_KAELTHAS_SUNSTRIDER = 24664 (boss_vaelastrasz precedent).
 	RegisterLuaBoss("boss_felblood_kaelthas", 24664)
@@ -14078,8 +14086,14 @@ func init() {
 	// Talk(SAY_KILL=3) on OnTargetDied(3) with the C++ TYPEID_PLAYER
 	// gate bridged by victim:GetObjectType() == "Player"; JustDied
 	// Talk(SAY_DEATH=4) on OnDied(4). Sub-10%-mana drain machine
-	// unmodeled (no creature GetPower bridge, no SelectTarget/
-	// FindNearestCreature/MotionMaster/MovementInform bridges);
+	// ported (GetPowerPct bridge; drain-life 44294 20.0f +
+	// heroic drain-mana 46153 45.0f random-player loops, crystal
+	// leg as flag-reset timing only). UpdateAI pre-loop (:178) +
+	// in-loop (:221) CASTING gates ported as 500ms IsCasting
+	// defers under each timer arm's own key (mal_ganis idiom).
+	// Crystal SelectNearestCrystal/MovePoint/MovementInform/
+	// EMPOWER legs unmodeled (FindNearestCreature/MotionMaster
+	// bridges absent);
 	// npc_fel_crystal class unmodeled (JustDied needs the instance
 	// bridge — no .lua written, stub-free precedent). Entry 24723
 	// verifiable from the C++ sources: magisters_terrace.h names
@@ -14089,9 +14103,14 @@ func init() {
 	// latch (85/70/55/40/25%: Talk(SAY_ENERGY), Talk(EMOTE_DISCHARGE_
 	// ENERGY), self-cast SPELL_SUMMON_PURE_ENERGY 44322) + 10%-HP overload
 	// enrage (cancel timers, EVENT_OVERLOAD 1200ms -> 2s DoCastVictim
-	// 44353 loop) + KilledUnit Talk(SAY_KILL). Chain-lightning /
-	// arcane-shock event arms unmodeled (SelectTarget — no bridge);
-	// JustSummoned MoveFollow PORTED (event 19 + MoveFollow bridge,
+	// 44353 loop) + KilledUnit Talk(SAY_KILL). Chain-lightning
+	// 44318 (any-range) + arcane-shock 44319 (20.0f) random-player
+	// arms PORTED (SelectTarget bridge live); UpdateAI pre-loop
+	// (:142) + in-loop (:167) CASTING gates ported as 500ms
+	// IsCasting defers under each timer arm's own key (mal_ganis
+	// idiom); DamageTaken discharge latch stays ungated (C++-exact:
+	// DamageTaken is not an UpdateAI event). JustSummoned
+	// MoveFollow PORTED (event 19 + MoveFollow bridge,
 	// random-player pick);
 	// npc_pure_energy class unmodeled (entry not C++-verifiable —
 	// no .lua written, queued for TDB entry evidence; stub-free

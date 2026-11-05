@@ -93,9 +93,16 @@
 -- EVENT_QUITE_SUICIDE, PHASE_OUTRO-gated). DamageTaken tail: non-self
 -- lethal damage is rewritten to health-1 (curator precedent) so he
 -- survives for the 11s chain — self-damage may still kill him.
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
--- packet-visual), so timers fire unconditionally and the in-loop
--- casting gate is dropped (maiden precedent). The C++ scheduler is
+-- Deviations from C++: the UpdateAI pre-loop CASTING gate
+-- (boss_felblood_kaelthas.cpp:277) is ported as a 500ms IsCasting
+-- defer under each timer arm's own key (mal_ganis/rend idiom,
+-- lua_creature_events.go:1950; the defer re-queues the arm and
+-- its repeat schedules only after the gate passes, so no re-arm
+-- is consumed). In-loop same-tick co-expiry suppression is
+-- unmodeled (independent callbacks, AV precedent). The 50% latch's
+-- direct prepareArms call stays ungated (C++-exact: DamageTaken
+-- is not an UpdateAI event; the repeat PREPARE timer arm is
+-- gated). The C++ scheduler is
 -- driven from JustEngagedWith and drained by UpdateAI; the port
 -- schedules from OnEnterCombat(1) and cancels on 2/4/23 (maiden
 -- convention). The outro's damage cap (lethal non-self damage is
@@ -250,6 +257,10 @@ end
 -- C++ EVENT_GRAVITY_LAPSE_CENTER_TELEPORT (:335-337): self-cast 44218,
 -- GRAVITY_LAPSE 1s.
 onCenterTeleport = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gravity_center", 500, function() onCenterTeleport(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_GRAVITY_LAPSE_CENTER_TELEPORT)
     schedule(guid, "gravity_lapse", 1000, function() onGravityLapse(creature, guid) end)
 end
@@ -259,6 +270,10 @@ end
 -- The _gravityLapseTargetCount counter is write-only here — its only
 -- consumer is the unported SpellHitTarget arm (see header).
 onGravityLapse = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gravity_lapse", 500, function() onGravityLapse(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_GRAVITY_LAPSE_INITIAL)
     schedule(guid, "gravity_spheres", 4000, function() onSummonArcaneSphere(creature, guid) end)
     schedule(guid, "gravity_beam", 5000, function() onBeamVisual(creature, guid) end)
@@ -269,6 +284,10 @@ end
 -- 44265. The spheres never spawn in Go (no SPELL_EFFECT_SUMMON
 -- dispatch) — the casts are the packet-visual remainder.
 onSummonArcaneSphere = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gravity_spheres", 500, function() onSummonArcaneSphere(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_SUMMON_ARCANE_SPHERE, true)
     creature:CastSpell(creature, SPELL_SUMMON_ARCANE_SPHERE, true)
     creature:CastSpell(creature, SPELL_SUMMON_ARCANE_SPHERE, true)
@@ -277,6 +296,10 @@ end
 -- C++ EVENT_GRAVITY_LAPSE_BEAM_VISUAL_PERIODIC (:346-348): DoCastAOE
 -- 44251 as self-cast, single-shot (C++ never re-arms it).
 onBeamVisual = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gravity_beam", 500, function() onBeamVisual(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_GRAVITY_LAPSE_BEAM_VISUAL)
 end
 
@@ -284,6 +307,10 @@ end
 -- self-cast + self-cast 44233 + PREPARE again 11s. The
 -- summons.DespawnEntry(24708) leg is vacuous (spheres never spawn).
 onPowerFeedback = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gravity_feedback", 500, function() onPowerFeedback(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_POWER_FEEDBACK)
     creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
     creature:CastSpell(creature, SPELL_POWER_FEEDBACK)
@@ -291,10 +318,18 @@ onPowerFeedback = function(creature, guid)
 end
 
 onPrepareGravityLapse = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "gravity_prepare", 500, function() onPrepareGravityLapse(creature, guid) end)
+        return
+    end
     prepareArms(creature, guid, SAY_GRAVITY_LAPSE_2)
 end
 
 local function onFireball(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function() onFireball(creature, guid) end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, SPELL_FIREBALL)
@@ -303,12 +338,20 @@ local function onFireball(creature, guid)
 end
 
 local function onPhoenix(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "phoenix", 500, function() onPhoenix(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_SUMMON_PHOENIX)
     creature:CastSpell(creature, SPELL_PHOENIX)
     schedule(guid, "phoenix", 45000, function() onPhoenix(creature, guid) end)
 end
 
 local function onFlameStrike(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "flame_strike", 500, function() onFlameStrike(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_FLAME_STRIKE)
     local target = randomTargetInRange(creature, 40)
     if target then
@@ -322,6 +365,10 @@ end
 -- players alive <=40; cast 36819, one-shot: C++ schedules it
 -- once from the shock-barrier arm, no repeat.
 local function onPyroblast(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pyroblast", 500, function() onPyroblast(creature, guid) end)
+        return
+    end
     local target = randomTargetInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_PYROBLAST)
@@ -334,11 +381,26 @@ end
 -- 2s500ms) — schedule() re-arm = EventMap cancel-on-reschedule —
 -- + ScheduleEvent(EVENT_PYROBLAST, 2s), repeat 1min.
 local function onShockBarrier(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shock_barrier", 500, function() onShockBarrier(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_ANNOUNCE_PYROBLAST)
     creature:CastSpell(creature, SPELL_SHOCK_BARRIER)
     schedule(guid, "fireball", 2500, function() onFireball(creature, guid) end)
     schedule(guid, "pyroblast", 2000, function() onPyroblast(creature, guid) end)
     schedule(guid, "shock_barrier", 60000, function() onShockBarrier(creature, guid) end)
+end
+
+-- C++ outro events execute in the same gated UpdateAI loop
+-- (:277), so each outro step defers under its own key while
+-- the boss is casting (mal_ganis idiom).
+local function onOutroStep(creature, guid, key, spell)
+    if creature:IsCasting() then
+        schedule(guid, key, 500, function() onOutroStep(creature, guid, key, spell) end)
+        return
+    end
+    creature:CastSpell(creature, spell)
 end
 
 local function onEnterCombat(_, creature)
@@ -397,21 +459,11 @@ local function onDamageTaken(_, creature, attacker, damage)
         creature:RemoveAura(SPELL_POWER_FEEDBACK)
         creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
         creature:Talk(SAY_DEATH)
-        schedule(guid, "outro_1", 1000, function()
-            creature:CastSpell(creature, SPELL_EMOTE_TALK_EXCLAMATION)
-        end)
-        schedule(guid, "outro_2", 3800, function()
-            creature:CastSpell(creature, SPELL_EMOTE_POINT)
-        end)
-        schedule(guid, "outro_3", 7400, function()
-            creature:CastSpell(creature, SPELL_EMOTE_ROAR)
-        end)
-        schedule(guid, "outro_4", 10000, function()
-            creature:CastSpell(creature, SPELL_EMOTE_ROAR)
-        end)
-        schedule(guid, "outro_5", 11000, function()
-            creature:CastSpell(creature, SPELL_QUITE_SUICIDE)
-        end)
+        schedule(guid, "outro_1", 1000, function() onOutroStep(creature, guid, "outro_1", SPELL_EMOTE_TALK_EXCLAMATION) end)
+        schedule(guid, "outro_2", 3800, function() onOutroStep(creature, guid, "outro_2", SPELL_EMOTE_POINT) end)
+        schedule(guid, "outro_3", 7400, function() onOutroStep(creature, guid, "outro_3", SPELL_EMOTE_ROAR) end)
+        schedule(guid, "outro_4", 10000, function() onOutroStep(creature, guid, "outro_4", SPELL_EMOTE_ROAR) end)
+        schedule(guid, "outro_5", 11000, function() onOutroStep(creature, guid, "outro_5", SPELL_QUITE_SUICIDE) end)
     elseif not outroFired[guid] and not phaseTwo[guid]
         and health - damage < math.floor(creature:GetMaxHealth() * 50 / 100) then
         phaseTwo[guid] = true

@@ -55,9 +55,14 @@
 -- player within 45.0f cast 46153 non-triggered (stale "no difficulty /
 -- SelectTarget bridge" claims retracted — IsHeroic bridged,
 -- engine/world/lua_creature_events.go:260).
--- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
--- packet-visual), so the fel-explosion timer fires unconditionally and
--- the in-loop casting gate is dropped (maiden precedent). The C++
+-- Deviations from C++: the UpdateAI pre-loop (:178) + in-loop
+-- (:221) CASTING gates are ported as 500ms IsCasting defers under
+-- each timer arm's own key (mal_ganis/rend idiom,
+-- lua_creature_events.go:1950; no re-arm consumed). In-loop
+-- same-tick co-expiry suppression is unmodeled (independent
+-- callbacks, AV precedent). The fel-explosion arm's mana-latch
+-- check defers with it (C++ skips the post-loop mana check on
+-- a gated tick). The C++
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention). C++ gates the fel-explosion events on
@@ -159,6 +164,10 @@ local function randomThreatPlayerInRange(creature, range)
 end
 
 local function onDrainLife(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "drain_life", 500, function() onDrainLife(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 20)
     if target then
         creature:CastSpell(target, SPELL_DRAIN_LIFE)
@@ -169,6 +178,10 @@ end
 -- C++ EVENT_DRAIN_MANA (heroic-only): SelectTarget(Random, 0, 45.0f, true)
 -- -> DoCast(46153), non-triggered; re-arm ScheduleEvent(10s).
 local function onDrainMana(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "drain_mana", 500, function() onDrainMana(creature, guid) end)
+        return
+    end
     local target = randomThreatPlayerInRange(creature, 45)
     if target then
         creature:CastSpell(target, SPELL_DRAIN_MANA)
@@ -176,7 +189,11 @@ local function onDrainMana(creature, guid)
     schedule(guid, "drain_mana", 10000, function() onDrainMana(creature, guid) end)
 end
 
-local function onDrainCrystalReset(_, guid)
+local function onDrainCrystalReset(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "drain_crystal", 500, function() onDrainCrystalReset(creature, guid) end)
+        return
+    end
     drainScheduled[guid] = false
 end
 
@@ -197,6 +214,10 @@ local function checkManaLatch(creature, guid)
 end
 
 local function onFelExplosion(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "fel_explosion", 500, function() onFelExplosion(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FEL_EXPLOSION)
     checkManaLatch(creature, guid)
     schedule(guid, "fel_explosion", 2000, function() onFelExplosion(creature, guid) end)
