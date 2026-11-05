@@ -31,7 +31,7 @@
 -- 40871 damage-link arms live in the unmodeled SpellScripts) /
 -- random beam {40863 sinister, 40865 vile, 40866 wicked, 40862
 -- sinful} 6s then 30s, non-triggered self-cast (the periodic
--- trigger arms live in the unmodeled AuraScripts) / berserk 45078
+-- trigger arms are PORTED below, tick 192) / berserk 45078
 -- 10min, non-triggered self-cast + Talk(EMOTE_BERSERK), one-shot /
 -- taunt Talk(SAY_TAUNT) 35s then {30s,40s}, no cast (C++-exact).
 -- OnDamageTaken(9, pre-damage hook): !_enraged and post-damage
@@ -47,16 +47,16 @@
 -- the EnterEvadeMode _DespawnAtEvade() -> DespawnOrUnsummon() arm is
 -- ported in shahrazLeaveCombat via creature:Despawn, supremus
 -- precedent).
--- The five spell/aura scripts registered by the C++ file have no
--- script bridges (standing gaps): spell_mother_shahraz_fatal_
--- attraction (40869 target filter to 3 enemies + TARGET_DEST_
--- CASTER_RANDOM teleport), spell_mother_shahraz_fatal_attraction_
--- link (40871 damage dummy), spell_mother_shahraz_saber_lash
--- (40816 random-target triggered periodic), spell_mother_shahraz_
--- generic_periodic (40863/40865/40866/40862 random-target
--- triggered periodics) — except spell_mother_shahraz_random_periodic
--- (40867 self-cast random beam periodic), PORTED below (tick 190,
--- RegisterAuraEvent).
+-- The five spell/aura scripts registered by the C++ file: three
+-- PORTED below via RegisterAuraEvent — spell_mother_shahraz_saber_
+-- lash (40816 random-target triggered periodic) and spell_mother_
+-- shahraz_generic_periodic (40863/40865/40866/40862 random-target
+-- triggered periodics), tick 192, plus spell_mother_shahraz_random_
+-- periodic (40867 self-cast random beam periodic), tick 190.
+-- Standing gaps: spell_mother_shahraz_fatal_attraction (40869
+-- target filter to 3 enemies + TARGET_DEST_CASTER_RANDOM teleport)
+-- and spell_mother_shahraz_fatal_attraction_link (40871 damage
+-- dummy) have no script bridges.
 -- CAST-STATE GATE (ported 2026-11-04): boss_mother_shahraz has no
 -- UpdateAI override, so BossAI::UpdateAI (ScriptedCreature.cpp:578
 -- pre-loop + :584 post-event) gates all six cycle ticks on
@@ -309,3 +309,48 @@ local function randomPeriodicTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_RANDOM_PERIODIC, 1, randomPeriodicTick)
+
+-- C++ spell_mother_shahraz_saber_lash::OnTrigger
+-- (boss_mother_shahraz.cpp:255-261): PreventDefaultAction; the aura
+-- owner casts the DBC trigger of EFFECT_1 (aura:GetTriggerSpell(1))
+-- triggered on a random threat-listed unit (SelectTarget Random, 0 —
+-- GetAITarget(0, false, 0, 0, 0), the council deadly-strike twin).
+-- Returns true, the PreventDefaultAction twin, so the Go default
+-- trigger cast does not also fire.
+local SPELL_SABER_LASH = 40816
+
+local function saberLashTick(event, aura, target)
+    local trigger = aura:GetTriggerSpell(1)
+    if trigger ~= 0 then
+        local victim = target:GetAITarget(0, false, 0, 0, 0)
+        if victim then
+            target:CastSpell(victim, trigger, true)
+        end
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_SABER_LASH, 1, saberLashTick)
+
+-- C++ spell_mother_shahraz_generic_periodic::OnTrigger
+-- (boss_mother_shahraz.cpp:285-300): PreventDefaultAction; the aura
+-- owner casts the DBC trigger of EFFECT_0 (aura:GetTriggerSpell(0))
+-- triggered on a random threat-listed unit (SelectTarget Random, 0).
+-- One handler for all four periodic auras (40863 sinister, 40865
+-- vile, 40866 wicked, 40862 sinful). Returns true, the
+-- PreventDefaultAction twin, so the Go default trigger cast does
+-- not also fire.
+local function genericPeriodicTick(event, aura, target)
+    local trigger = aura:GetTriggerSpell(0)
+    if trigger ~= 0 then
+        local victim = target:GetAITarget(0, false, 0, 0, 0)
+        if victim then
+            target:CastSpell(victim, trigger, true)
+        end
+    end
+    return true
+end
+
+for _, spellId in ipairs(BeamTriggers) do
+    RegisterAuraEvent(spellId, 1, genericPeriodicTick)
+end

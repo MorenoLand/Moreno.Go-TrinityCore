@@ -255,6 +255,47 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{aura.Amounts[index]}, nil
 	}
+	// GetTriggerSpell([effectIndex]) is SpellInfo::Effects[eff].
+	// TriggerSpell (SpellInfo.h, the DBC trigger of a
+	// PERIODIC_TRIGGER_SPELL effect): the spell id the Go default
+	// case 23/227 cast would fire. Reads the loaded Spell.dbc record
+	// for this aura's spell; an unknown spell, an out-of-range
+	// index, or a removed aura reads 0, so a Lua port that casts
+	// only when the id is nonzero never fires a bogus 0-id cast.
+	// Default effect 0, the C++ GetEffIndex() twin for the
+	// single-effect auras this bridge serves.
+	methods["GetTriggerSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		index := 0
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaInt64Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		if r.server == nil || r.server.Data == nil || index < 0 {
+			return []any{uint32(0)}, nil
+		}
+		sp, found, err := r.server.Data.Spell(spellID)
+		if err != nil || !found || index >= len(sp.Effects) {
+			return []any{uint32(0)}, nil
+		}
+		return []any{sp.Effects[index].TriggerSpell}, nil
+	}
+	// GetProcChance is SpellInfo::ProcChance (Spell.dbc field 35,
+	// DBCStructure.h:1425): the roll_chance_i percent a C++
+	// periodic handler gates on. An unknown spell or a removed aura
+	// reads 0, so the gate never fires without DBC data.
+	methods["GetProcChance"] = luaNoArgs(func() any {
+		if r.server == nil || r.server.Data == nil {
+			return uint32(0)
+		}
+		sp, found, err := r.server.Data.Spell(spellID)
+		if err != nil || !found {
+			return uint32(0)
+		}
+		return sp.ProcChance
+	})
 	methods["GetOwner"] = luaNoArgs(func() any { return r.ownerObject() })
 	methods["SetDuration"] = func(_ context.Context, args []any) ([]any, error) {
 		duration, err := luaInt64Arg(args, 0)
