@@ -132,11 +132,13 @@
 -- Talk(4, target)): no AuraScript bridge — documented-only.
 -- spell_scourge_disguise / spell_scourge_disguise_instability /
 -- spell_scourge_disguise_expiring / spell_drop_disguise —
--- AuraScript/SpellScript (51966 transform apply/remove ->
--- 51971 instability periodic with irand(30,240)s calc + 52010
--- expiring -> whisper TEXT_DISGUISE_WARNING 28891; 54089 hit-
--- unit -> 52010): no AuraScript / SpellScript bridges —
--- documented-only. 51966/51971/52010/54089/28891 verifiable.
+-- AuraScript/SpellScript (51966 transform apply/remove -> 51971
+-- instability periodic with irand(30,240)s calc + 52010 expiring
+-- -> whisper TEXT_DISGUISE_WARNING 28891; 54089 hit-unit ->
+-- 52010): the 51966 apply/remove arms are PORTED in zone_zuldrak.lua
+-- (tick 197, RegisterAuraEvent hook); the 51971 periodic tick stays
+-- out (no calc-periodic hook) and the 52010 whisper stays out (no
+-- Whisper bridge). 51966/51971/52010/54089/28891 verifiable.
 -- npc_storm_cloud — SpellHit(55516) vehicle arm (see Unmodeled
 -- above) behind the SpellHit / vehicle bridges; entries
 -- 55549/55516/43671 + 55708 + 29939 verifiable.

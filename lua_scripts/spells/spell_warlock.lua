@@ -20,9 +20,19 @@
 --   EFFECT_0 PERIODIC_HEAL. If the caster is missing, nothing
 --   happens; if the caster has Improved Health Funnel R2 (18704)
 --   the target casts buff 60956 on itself, else if R1 (18703) buff
---   60955, both triggered. The RemoveEffect arm (:848-853,
---   RemoveAurasDueToSpell on both buffs) stays out: no
---   RemoveAurasDueToSpell bridge.
+--   60955, both triggered.
+-- PORTED (tick 197, RegisterAuraEvent OnRemove):
+--   spell_warl_health_funnel RemoveEffect (spell_warlock.cpp:848-853):
+--   EFFECT_0 PERIODIC_HEAL. OnRemove the target drops both
+--   Improved Health Funnel buffs (60955/60956). C++ uses
+--   RemoveAurasDueToSpell; the Go twin is target:RemoveAura(id):
+--   each buff is self-cast once by the apply leg, so a single
+--   application exists and removing the spell's aura is the same
+--   removal (removeCreatureAura / removeAura drop the active aura
+--   of that spell ID). This retires tick 196's "no
+--   RemoveAurasDueToSpell bridge" note. Ordering is immaterial:
+--   the arm never queries the funnel aura itself, and C++ registers
+--   plain OnEffectRemove with no mode gate.
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   The same loader's CheckProc / HandleProc arms (:509-544,
 --   EFFECT_2 improved Drain Soul mana proc) are proc arms, not
@@ -74,3 +84,11 @@ local function healthFunnelApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_HEALTH_FUNNEL, 2, healthFunnelApply)
+
+-- C++ spell_warl_health_funnel::RemoveEffect (spell_warlock.cpp:848-853).
+local function healthFunnelRemove(event, aura, target)
+    target:RemoveAura(SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R1)
+    target:RemoveAura(SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R2)
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_HEALTH_FUNNEL, 3, healthFunnelRemove)
