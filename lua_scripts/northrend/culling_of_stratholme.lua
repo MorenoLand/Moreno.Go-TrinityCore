@@ -86,10 +86,13 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
 -- 36, creaturemotion.go). The DoAction ACTION_START_FLUFF leg is
 -- ported via the crate_helper event-14 relay at the end of this file
 -- (no DoAction bridge needed: the relay calls bartlebyStartFluff
--- directly): the once-guard + idle-loop cancel are ported, but the
--- BARTLEBY1 {15,30}s seed stays out — its Talk(1) leads straight into
--- the spline chain, so bartleby goes silent after fluff start instead
--- of talking at {15,30}s (documented deviation). The
+-- directly): the once-guard + idle-loop cancel are ported, and the
+-- BARTLEBY1 {15,30}s Talk(1) is ported as a one-shot timer in
+-- bartlebyStartFluff: the Talk is separable from the
+-- MoveAlongSplineChain leg in the same C++ case, which stays out, so
+-- bartleby says line 1 at {15,30}s and then stays put instead of
+-- walking/kneeling/talking lines 2-3/despawning (documented
+-- deviation). The
 -- MovementInform spline-chain legs (BARTLEBY2/2_2/3, despawn) stay out
 -- (no MoveAlongSplineChain/MovementInform bridge).
 -- Ported (crate fluff event #4): npc_sergeant_morigan (entry 27877,
@@ -112,16 +115,19 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
 -- them; npc_malcolm_moore (27891) + scruffy (27892) are
 -- InitializeAI/MovementInform spline chains (+ SummonCreature leg for
 -- scruffy, whose chain is likewise spline-gated); npc_roger_owens
--- (27903) starts only on DoAction ACTION_START_FLUFF and runs
--- spline chains thereafter. npc_crate_helper (crate_helper_cot,
+-- (27903) starts only on DoAction ACTION_START_FLUFF: the
+-- EVENT_ROGER_START stand/facing/Talk(0) case is ported via the relay
+-- below, and the MOVE1+ spline-chain legs stay out.
+-- npc_crate_helper (crate_helper_cot,
 -- entry 27827): the SpellHit event-14 relay IS ported at the end of
 -- this file — on spell 49590 it picks the closest fluff creature by
 -- the C++ Find radii (jena 45yd, bartleby 5yd, morigan 15yd, roger
 -- 30yd; ReplaceIfCloser order, strict-closest wins) and delivers the
--- in-scope legs directly (bartleby idle-cancel/Started flip, morigan
--- Started flip); jena's Started flag is never read in C++ and roger's
--- chain is spline-gated, so neither has an in-scope leg, and the
--- malcolm Spawn fallback stays out (spline machine). The instance
+-- in-scope legs directly (bartleby idle-cancel/Started flip + BARTLEBY1
+-- Talk(1) timer, morigan Started flip, roger START stand/facing/
+-- Talk(0) timer); jena's Started flag is never read in C++ (no
+-- observable leg), roger's MOVE1+ chain legs stay out (spline-gated),
+-- and the malcolm Spawn fallback stays out (spline machine). The instance
 -- SetData (DATA_CRATE_REVEALED) and GO crate swap legs stay out (no
 -- instance bridge; GO Delete has no bridge).
 -- Documented-only: at_stratholme_inn_stairs_cot (area trigger, no
@@ -132,6 +138,7 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
 local ENTRY_BARTLEBY = 27907
 local ENTRY_SERGEANT = 27877
 local ENTRY_PERELLI = 27876
+local UNIT_STAND_STATE_STAND = 0
 
 local timers = {}
 local moriganQuestion = {}
@@ -172,8 +179,8 @@ local function onBartlebyIdle(creature, guid)
     end)
 end
 
--- C++ npc_bartleby_battsonAI::DoAction(ACTION_START_FLUFF), minus the
--- BARTLEBY1 seed (spline chain, stays out): once-guard + idle cancel.
+-- C++ npc_bartleby_battsonAI::DoAction(ACTION_START_FLUFF): once-guard
+-- + idle cancel + BARTLEBY1 Talk(1) one-shot; only the spline leg stays out.
 -- Called directly by the crate_helper relay below — there is no
 -- DoAction bridge, and the relay already holds the bartleby object,
 -- so no GUID-to-creature lookup is needed.
@@ -188,6 +195,30 @@ local function bartlebyStartFluff(creature)
         RemoveEventById(per["idle"])
         per["idle"] = nil
     end
+    -- C++ EVENT_BARTLEBY1: Talk(LINE_BARTLEBY1 1) at {15,30}s; the
+    -- MoveAlongSplineChain leg in the same case stays out (no bridge).
+    schedule(guid, "fluff1", math.random(15000, 30000), function()
+        creature:Talk(1)
+    end)
+end
+
+-- C++ npc_roger_owensAI::DoAction(ACTION_START_FLUFF) + EVENT_ROGER_START
+-- (culling_of_stratholme.cpp:1296-1297, 1336-1342): the START case's
+-- stand/facing/Talk(0) legs are ported as a one-shot {5,12}s timer --
+-- the Talk is separable from the EVENT_ROGER_MOVE1 spline leg it
+-- schedules, which stays out (no MoveAlongSplineChain/MovementInform
+-- bridge), so roger says line 0 at {5,12}s and then stays put instead
+-- of walking the chain/talking lines 1-4/despawning. No Started latch
+-- in C++; schedule() replaces a pending fluff timer if a second
+-- helper reveals roger (C++ would stack a second START event).
+-- Called directly by the crate_helper relay below.
+local function rogerStartFluff(creature)
+    local guid = creature:GetGUID()
+    schedule(guid, "fluff", math.random(5000, 12000), function()
+        creature:SetStandState(UNIT_STAND_STATE_STAND)
+        creature:SetFacingTo(1.53589)
+        creature:Talk(0)
+    end)
 end
 
 local function onBartlebySpawn(event, creature)
@@ -319,9 +350,21 @@ local function onCrateHelperSpellHit(event, creature, caster, spellId)
         bartlebyStartFluff(closest)
     elseif entry == ENTRY_SERGEANT then
         moriganStarted[closest:GetGUID()] = true
+    elseif entry == ENTRY_ROGER then
+        rogerStartFluff(closest)
     end
     -- jena: Started is set but never read in C++ (no observable leg).
-    -- roger: EVENT_ROGER_START chain is spline-gated (stays out).
+    -- roger: only the EVENT_ROGER_START case is ported (stand/facing/
+    -- Talk 0); the MOVE1+ spline-chain legs stay out.
 end
 
 RegisterCreatureEvent(ENTRY_CRATE_HELPER, 14, onCrateHelperSpellHit)
+
+-- Roger has no spawn behavior in C++ (no InitializeAI); these only
+-- cancel a pending fluff timer if roger despawns/leaves combat.
+RegisterCreatureEvent(ENTRY_ROGER, 4, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_ROGER, 23, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
