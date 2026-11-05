@@ -757,6 +757,15 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		// connection for one was a Go-only client kill.
 		return true
 	}
+	// GameObject::IsInvisibleDueToDespawn (GameObject.cpp:1293) via the
+	// hidden registry: a despawned static GO is out of the world, so
+	// Player::GetGameObjectIfCanInteractWith (Player.cpp:2366-2379)
+	// returns null for it — the sweep already hides it, but a forged
+	// opcode still reaches it through the DB reload above. No GM
+	// exemption: C++ has none on this path (contrast SendLoot's).
+	if s.server.isGameObjectHiddenInInstance(s.player.Map, s.player.InstanceID, guid) {
+		return true
+	}
 
 	// GameObject::IsWithinDistInMap (GameObject.cpp:2760-2763): IsInMap &&
 	// InSamePhase && AtInteractDistance — the range gate below is the
@@ -1058,6 +1067,14 @@ func (s *session) activateGameObjectUse(ctx context.Context, guid uint64) {
 	mapID, instanceID := s.player.Map, s.player.InstanceID
 	goState, err := s.server.getOrLoadGameObjectState(ctx, guid, lowGUID, entry, mapID, instanceID)
 	if err != nil || goState == nil {
+		return
+	}
+	// GameObject::IsInvisibleDueToDespawn (GameObject.cpp:1293) via the
+	// hidden registry: the spell-effect target resolves from the map in
+	// C++ (SpellEffects.cpp:3956-3960), so a despawned GO never reaches
+	// Use — the DB reload above would resurrect it. Same no-GM-exemption
+	// rule as the packet path.
+	if s.server.isGameObjectHiddenInInstance(mapID, instanceID, guid) {
 		return
 	}
 	// GameObject::Use head arms (GameObject.cpp:1491-1518): the

@@ -5438,8 +5438,10 @@ func (s *session) handleEffectPickpocket(ctx context.Context, targetGUID uint64,
 // and handleOpenItem consults it, so an unlocked item opens despite its LockID.
 // The spell-1842 owned-trap deactivation arm
 // (SpellEffects.cpp:1994-1998) is unreachable: Go spawns no player-owned trap
-// GOs. The despawned-GO cheat gate (SpellEffects.cpp:1883-1889) is moot: Go
-// never despawns static GOs. The GOOBER Use arm, QUESTGIVER gossip arm, and
+// GOs. The despawned-GO cheat gate (SpellEffects.cpp:1883-1889) is ported
+// below via the hidden registry, which is how static GOs despawn in Go
+// (fully-looted chest, deactivated trap/ritual, Lua Despawn). The GOOBER
+// Use arm, QUESTGIVER gossip arm, and
 // SPELL_FOCUS linked-trap arm have no Go trigger on this path.
 func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.SpellTargetData, spell wotlk.Spell, eff wotlk.SpellEffect, castItem bool) {
 	if s == nil || s.player == nil || s.server == nil {
@@ -5473,6 +5475,19 @@ func (s *session) handleEffectOpenLock(ctx context.Context, target protocol.Spel
 	// arms, the lock check, SendLoot and the skill-up leg. Immunity reads
 	// the maintained flag bit (playerGOImmunityBlocked), like the CMSG path (gameobjects.go).
 	if haveType && goCannotBeUsedUnderImmunity(goType, goTpl) && s.playerGOImmunityBlocked() {
+		return
+	}
+	// Spell::SendLoot despawned-GO cheat gate (SpellEffects.cpp:1883-1889):
+	// a non-GM player may not loot a GO that is currently despawned —
+	// the Go analog of !isSpawned() (GameObject.cpp:1293) is the hidden
+	// registry (fully-looted chest on its respawn timer, deactivated
+	// trap/ritual, Lua-despawned GO). GMs pass, as in C++. This sits
+	// ahead of the goober/questgiver/door/button/loot arms below, like
+	// the C++ head gate. It also precedes the skill-up leg: C++ runs
+	// SendLoot (SpellEffects.cpp:2031) before skill-up (2038), so a
+	// despawned GO grants no skill. The open-lock log below is skipped
+	// on this return, a cosmetic delta (C++ logs after SendLoot).
+	if goGUID != 0 && !sessionIsGameMaster(s) && s.server.isGameObjectHiddenInInstance(s.player.Map, s.player.InstanceID, goGUID) {
 		return
 	}
 	// Spell::EffectOpenLock skill-up leg (SpellEffects.cpp:2038-2056): a

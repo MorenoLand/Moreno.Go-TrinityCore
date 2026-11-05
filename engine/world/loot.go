@@ -1754,8 +1754,8 @@ func (s *session) openGameObjectLoot(ctx context.Context, targetGUID uint64, loo
 	// A despawned (hidden) gameobject is gone for the client — e.g. a
 	// fully-looted consumable chest awaiting its respawn. C++ removes it with
 	// DestroyForNearbyPlayers (GameObject.cpp:850-858); the Go analog is the
-	// hidden registry, which the direct-use path already consults
-	// (gameobjects.go:223) but the lock path bypasses.
+	// hidden registry, which the direct-use path now consults
+	// (handleGameObjectUse's despawn gate) but the lock path bypasses.
 	if s.server.isGameObjectHiddenInInstance(goMap, s.player.InstanceID, targetGUID) {
 		return s.sendLootReleaseResponse(targetGUID) == nil
 	}
