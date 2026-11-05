@@ -4192,7 +4192,7 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 		oldTarget := motion.TargetGUID
 		passive := isCreaturePassive(motion)
 		var switchStart pendingAttackStart
-		switched, victim := motion.ThreatMgr.AddThreat(m.GUID, float32(amount), inMelee)
+		switched, victim := s.creatureAddThreat(motion, m.GUID, float32(amount), inMelee, nil, m)
 		motion.TargetGUID = victim
 		motion.InCombat = true
 		motion.Moving = false

@@ -404,6 +404,35 @@ func (tm *ThreatManager) SetSuppressedSet(sup map[uint64]bool) {
 	tm.suppressed = next
 }
 
+// SeedNewVictimState stores a caller-evaluated offline/suppressed state
+// for a victim with no entry yet, so the next AddThreat gates the first
+// amount the way C++'s synchronous UpdateOffline does
+// (ThreatManager.cpp:402-407). Pure data: the caller evaluated the state
+// (see creatureAddThreat); the manager never evaluates visibility itself.
+// A seed for a victim that already has an entry is a no-op — the combat
+// tick refresh owns those flags — and a seed for a victim that never gets
+// an entry is dropped by the next entry-gated SetOfflineSet /
+// SetSuppressedSet refresh.
+func (tm *ThreatManager) SeedNewVictimState(victim uint64, offline, suppressed bool) {
+	if tm == nil || victim == 0 || (!offline && !suppressed) {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if _, ok := tm.entries[victim]; ok {
+		return
+	}
+	if offline {
+		tm.offline[victim] = true
+	}
+	if suppressed {
+		if tm.suppressed == nil {
+			tm.suppressed = make(map[uint64]bool)
+		}
+		tm.suppressed[victim] = true
+	}
+}
+
 // threatPhaseOfflineSet runs the CanNeverSee phase arm of
 // ThreatReference::ShouldBeOffline (ThreatManager.cpp:101-110, via
 // Object.cpp CanNeverSee) over the owner's threat entries: a victim
@@ -876,6 +905,226 @@ func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos
 	return sup
 }
 
+// threatVictimOffline evaluates ThreatReference::ShouldBeOffline
+// (ThreatManager.cpp:101-110) for a single victim the caller already
+// resolved: sess for a player victim, vm for a creature victim (exactly
+// one non-nil). It runs the same legs the combat-tick union runs
+// (threatPhaseOfflineSet, threatDetectOfflineSet, threatHeadOfflineSet,
+// threatAcceptableOfflineSet, threatAttackOfflineSet,
+// threatFlagsOfflineSet), in C++ order, so a first amount added through
+// creatureAddThreat gates exactly like the C++ AddThreat synchronous
+// UpdateOffline leg (:402-407).
+// It never resolves the victim itself: AddThreat runs under motionMu on
+// the damage paths (combat.go:1518, spell_threat.go:129), so no
+// findCreatureMotion call may happen here, and creatureFriendlyToTarget
+// is not reused for the same reason — the friendly leg reads the
+// resolved victim's faction row directly. The only map lookups are
+// findSessionByGUID (sessionsMu, the same lookup the spell paths already
+// perform) for the owner's charmer/owner session in the seer, phase and
+// detect arms; the seer's creature-charmer leg and the nested-vehicle
+// arm stay tick-only. Unresolvable victims stay online, as in the set
+// builders. The suppressed state is NOT evaluated here: its legs read
+// aura stores the combat tick refreshes instead, so a suppressed new
+// victim's first amount still lands and gates from the next tick — the
+// same one-tick staleness the existing-ref promotion leg carries
+// (ThreatManager.cpp:386).
+func (s *Server) threatVictimOffline(motion *creatureMotion, victimGUID uint64, sess *session, vm *creatureMotion) bool {
+	if s == nil || motion == nil || victimGUID == 0 {
+		return false
+	}
+	guard := motion.FlagsExtra&creatureFlagExtraGuard != 0
+	if sess != nil && sess.player != nil {
+		// Phase arm (CanNeverSee head).
+		if s.spellGateCreatureNeverSeesPlayer(motion, sess) {
+			return true
+		}
+		// Detect arms (CanDetect, checkAlert=false): the seer is the
+		// CanDetect seer with the session leg only — a creature charmer
+		// falls back to the owner motion, and the tick refresh judges
+		// through it. A guard owner always sees a player victim.
+		if !guard {
+			seer := canDetectSeer{guid: motion.GUID, motion: motion}
+			if cg := creatureCharmerOrOwnerGUID(motion); cg != 0 && cg != motion.GUID {
+				if cs := s.findSessionByGUID(cg); cs != nil && cs.player != nil {
+					seer = canDetectSeer{guid: cg, sess: cs}
+				}
+			}
+			if seer.guid == 0 || !sess.hasStalkedAuraFrom(seer.guid) {
+				if !s.seerCanDetectInvisibilityOfPlayer(seer, sess) || !s.seerCanDetectStealthOfPlayer(seer, sess) {
+					return true
+				}
+			}
+		}
+		// Head arms: player victims need no ghost leg (ghost players
+		// resolve dead, and the died leg below offlines them); the GM
+		// leg is covered by the acceptable arm.
+		// Acceptable arm (Creature.cpp:2508-2536): friendly, targetable,
+		// vehicle, died.
+		if s.isFriendlyFaction(motion.Faction, playerPos{FactionTemplate: sess.effectiveFactionTemplate(sess.player.Race), Race: sess.player.Race, Class: sess.player.Class, Sess: sess, Reputations: playerReputationMap(sess.player.Reputations)}) {
+			return true
+		}
+		isGM := sess.player.ExtraFlags&playerExtraGMOn != 0 || sess.player.PlayerFlags&playerFlagGM != 0
+		if sess.player.UnitFlags&(unitFlagNonAttackable|unitFlagNotSelectable) != 0 || isGM {
+			return true
+		}
+		if motion.VehicleGUID != 0 && motion.VehicleGUID == victimGUID {
+			return true
+		}
+		isDead := sess.player.Health == 0 && sess.player.MaxHealth > 0 || sess.player.PlayerFlags&playerFlagGhost != 0
+		if isDead || (sess.hasAuraType(spellAuraFeignDeath) && !guard) {
+			return true
+		}
+		// Attack arm (Creature.cpp:2560-2608): valid target, accessible
+		// place, turret band, evade, home distance (mirror; the charmer
+		// arm stays tick-only).
+		if playerSightVictimBlocked(motion, sess.player.UnitFlags, sess.player.UnitFlags&unitFlagPlayerControlled != 0) {
+			return true
+		}
+		if !s.creatureSightAccessiblePlaceOK(motion, sess.player.X, sess.player.Y, sess.player.Z) {
+			return true
+		}
+		victimReach := sess.player.CombatReach
+		if victimReach <= 0 {
+			victimReach = 1.5
+		}
+		row := playerPos{Map: motion.Map, InstanceID: motion.InstanceID, GUID: victimGUID, X: sess.player.X, Y: sess.player.Y, Z: sess.player.Z, Sess: sess}
+		if !s.turretCanAIAttack(motion, row, float32(distance3D(motion.X, motion.Y, motion.Z, sess.player.X, sess.player.Y, sess.player.Z))) {
+			return true
+		}
+		if motion.Evading {
+			return true
+		}
+		if !s.creatureSightHomeDistanceOK(motion, sess.player.X, sess.player.Y, sess.player.Z, victimReach) {
+			return true
+		}
+		// Flags arms (ThreatManager.cpp:84-99), both directions.
+		victimFlags := sess.player.UnitFlags
+		victimPC := victimFlags&unitFlagPlayerControlled != 0
+		ownerPC := motion.UnitFlags&unitFlagPlayerControlled != 0
+		if motion.FlagsExtra&creatureFlagExtraTrigger != 0 {
+			return true
+		}
+		if victimPC && motion.UnitFlags&unitFlagImmuneToPC != 0 {
+			return true
+		}
+		if !victimPC && motion.UnitFlags&unitFlagImmuneToNPC != 0 {
+			return true
+		}
+		if ownerPC && victimFlags&unitFlagImmuneToPC != 0 {
+			return true
+		}
+		if !ownerPC && victimFlags&unitFlagImmuneToNPC != 0 {
+			return true
+		}
+		return false
+	}
+	if vm == nil {
+		return false
+	}
+	// Phase arm (CanNeverSee head).
+	if s.spellGateCreatureNeverSeesCreature(motion, vm) {
+		return true
+	}
+	// Detect arms (CanDetect, checkAlert=false). A guard owner sees a
+	// creature victim whose charmer-or-owner resolves to a player session.
+	detectExempt := false
+	if guard {
+		if cg := creatureCharmerOrOwnerGUID(vm); cg != 0 {
+			if cs := s.findSessionByGUID(cg); cs != nil && cs.player != nil {
+				detectExempt = true
+			}
+		}
+	}
+	if !detectExempt && !s.creatureSightCanDetectCreature(motion, vm) {
+		return true
+	}
+	// Head arms: the owner's own charmed/owned victims are always
+	// visible (detect only — phase already ran above); ghost-only
+	// victims are blocked by the owner's own bits.
+	if victimGUID != motion.GUID && creatureCharmerOrOwnerGUID(vm) != motion.GUID {
+		if creatureSightGhostBlocked(motion, vm) {
+			return true
+		}
+	}
+	// Acceptable arm (Creature.cpp:2508-2536): friendly, targetable,
+	// vehicle, died.
+	if s.isFriendlyFaction(motion.Faction, playerPos{FactionTemplate: vm.Faction}) {
+		return true
+	}
+	if vm.UnitFlags&(unitFlagNonAttackable|unitFlagNotSelectable) != 0 {
+		return true
+	}
+	if motion.VehicleGUID != 0 && motion.VehicleGUID == victimGUID {
+		return true
+	}
+	if vm.Health == 0 || (s.creatureHasAuraType(creatureAuraKeyForMotion(vm), spellAuraFeignDeath) && !guard) {
+		return true
+	}
+	// Attack arm (Creature.cpp:2560-2608): valid target, accessible
+	// place, evade, home distance (mirror). The turret band stays
+	// tick-only for creature victims: turretCanAIAttack resolves the
+	// victim's CombatReach through the motion map.
+	if creatureSightVictimBlocked(motion, vm) {
+		return true
+	}
+	if !s.creatureSightAccessiblePlaceOK(motion, vm.X, vm.Y, vm.Z) {
+		return true
+	}
+	if motion.Evading || vm.Evading {
+		return true
+	}
+	if !s.creatureSightHomeDistanceOK(motion, vm.X, vm.Y, vm.Z, vm.CombatReach) {
+		return true
+	}
+	// Flags arms (ThreatManager.cpp:84-99), both directions.
+	victimFlags := vm.UnitFlags
+	victimPC := victimFlags&unitFlagPlayerControlled != 0
+	victimTrigger := vm.FlagsExtra&creatureFlagExtraTrigger != 0
+	ownerPC := motion.UnitFlags&unitFlagPlayerControlled != 0
+	if motion.FlagsExtra&creatureFlagExtraTrigger != 0 {
+		return true
+	}
+	if victimTrigger {
+		return true
+	}
+	if victimPC && motion.UnitFlags&unitFlagImmuneToPC != 0 {
+		return true
+	}
+	if !victimPC && motion.UnitFlags&unitFlagImmuneToNPC != 0 {
+		return true
+	}
+	if ownerPC && victimFlags&unitFlagImmuneToPC != 0 {
+		return true
+	}
+	if !ownerPC && victimFlags&unitFlagImmuneToNPC != 0 {
+		return true
+	}
+	return false
+}
+
+// creatureAddThreat adds threat to a creature owner's list with the C++
+// AddThreat new-victim leg (ThreatManager.cpp:402-407): a victim that
+// ShouldBeOffline at first contact creates the entry with zero threat
+// and never becomes the current victim. The caller supplies the
+// already-resolved victim (sess for a player, vm for a creature); the
+// evaluator runs the offline legs synchronously here, with motion
+// context, never inside tm.mu and never through the motion map (see
+// threatVictimOffline). Only a victim with no entry is evaluated —
+// existing entries are already gated on the stored flag by AddThreat
+// itself. Sites that cannot resolve the victim keep raw AddThreat and
+// the one-tick window.
+func (s *Server) creatureAddThreat(motion *creatureMotion, victimGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion) (switched bool, newVictim uint64) {
+	if motion == nil || motion.ThreatMgr == nil {
+		return false, 0
+	}
+	if victimGUID != 0 && !motion.ThreatMgr.HasThreatEntry(victimGUID) {
+		if s.threatVictimOffline(motion, victimGUID, sess, vm) {
+			motion.ThreatMgr.SeedNewVictimState(victimGUID, true, false)
+		}
+	}
+	return motion.ThreatMgr.AddThreat(victimGUID, amount, inMelee)
+}
+
 // isTauntedLocked reports whether the victim holds a live taunt state,
 // lazily expiring elapsed auras. Callers hold tm.mu.
 func (tm *ThreatManager) isTauntedLocked(victim uint64) bool {
@@ -1135,17 +1384,20 @@ func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed, oldTaunted bool, old
 // arriving between ticks gates on state up to one tick stale — the
 // same shape as C++, whose existing-ref leg gates on the state last
 // refreshed by ReselectVictim's UpdateOffline pass (ThreatManager.cpp:
-// 537). A NEW victim's first amount has no synchronous UpdateOffline
-// (ThreatManager.cpp:402): the manager never evaluates visibility
-// itself, so the flag lands on the next combat tick at most one step
-// tick later. A suppressed existing ref receives no amount (C++
+// 537). A NEW victim's first amount is gated synchronously only at
+// call sites that evaluate it ahead of the call (creatureAddThreat /
+// SeedNewVictimState, ThreatManager.cpp:402-407); unseeded callers keep
+// the one-tick window, with the flag landing on the next combat tick.
+// A suppressed existing ref receives no amount (C++
 // IsOnline gate :390): the stored flag refreshes on the combat step
 // tick via threatSuppressedSet, so an amount landing in the one-tick
 // window after immunity or CC expiry is dropped where C++ would
 // promote the ref synchronously (:386) and add it — the same
 // staleness shape as the offline gate. A NEW victim's first amount is
-// never gated: C++ creates the ref ONLINE and adds through IsOnline
-// (:402-407). Unfed ShouldBeOffline arms stay online; DETAUNT
+// gated on a seeded suppressed flag the same way, but no ShouldBe-
+// Suppressed evaluator runs at add time, so a suppressed new victim
+// still lands its first amount at unseeded sites. Unfed ShouldBeOffline
+// arms stay online; DETAUNT
 // (SPELL_AURA_MOD_DETAUNT) has no Go aura model;
 // ProcessAIUpdates/JustStartedThreateningMe (boss hooks ride the new-victim
 // broadcast instead). FixateTarget and the taunt-state model are bridged:
@@ -1190,6 +1442,18 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 			amount = 0
 		}
 		newThreat = amount
+		// ThreatManager::AddThreat (ThreatManager.cpp:402-407): the
+		// new ref runs UpdateOffline synchronously and the amount lands
+		// only through the IsOnline gate. A victim the caller evaluated
+		// offline or suppressed ahead of this call carries a seeded flag
+		// (SeedNewVictimState), so its entry is created with zero threat;
+		// unseeded callers never have a flag here — SetOfflineSet /
+		// SetSuppressedSet drop unknown GUIDs — so the gates below are
+		// vacuous for them and the first amount lands on the next
+		// combat-tick refresh at most one step tick later.
+		if tm.isOfflineLocked(victim) || tm.isSuppressedLocked(victim) {
+			newThreat = 0
+		}
 		tm.entries[victim] = newThreat
 		// ThreatManager::PutThreatListRef (ThreatManager.cpp:793) marks
 		// the client list dirty on every new ref.
@@ -1197,9 +1461,20 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		// With no current victim the new ref becomes the victim outright
 		// (C++ UpdateVictim); otherwise C++ runs ProcessAIUpdates (no
 		// re-selection) — Go keeps its documented eager gate as delta (1).
+		// An offline new victim never installs: C++ UpdateVictim
+		// reselects null over an unavailable ref, so the tail below runs
+		// instead and its install arm returns without installing. A
+		// suppressed new victim is available and installs like an online
+		// one (IsAvailable includes SUPPRESSED, ThreatManager.h:263).
 		if tm.currentVictim == 0 {
-			tm.currentVictim = victim
-			return false, victim
+			if tm.isOfflineLocked(victim) {
+				// Fall through to the tail: the fixate arm may install
+				// an available fixate, and the install arm returns
+				// without installing this victim.
+			} else {
+				tm.currentVictim = victim
+				return false, victim
+			}
 		}
 	} else {
 		// ThreatReference::AddThreat: zero is a no-op on an existing entry;

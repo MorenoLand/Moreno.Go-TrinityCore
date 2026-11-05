@@ -1645,7 +1645,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
 				wasInCombat := motion.InCombat
 				passive := isCreaturePassive(motion)
-				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+				switched, newVictim := s.server.creatureAddThreat(motion, s.playerGUID, threat, inMelee, s, nil)
 				if rSwitched {
 					switched, newVictim = true, rVictim
 				}
@@ -2475,7 +2475,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 				wasInCombat := motion.InCombat
 				passive := isCreaturePassive(motion)
-				switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+				switched, newVictim := s.server.creatureAddThreat(motion, s.playerGUID, threat, inMelee, s, nil)
 				if rSwitched {
 					switched, newVictim = true, rVictim
 				}
