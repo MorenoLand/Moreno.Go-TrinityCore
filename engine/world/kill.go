@@ -20,8 +20,13 @@ const (
 )
 
 // creatureFlagExtraGuard mirrors CREATURE_FLAG_EXTRA_GUARD
-// (CreatureData.h): the GuardAI::Permissible gate (GuardAI.cpp:29-35).
-const creatureFlagExtraGuard uint32 = 0x00000080
+// (CreatureData.h:52). The GuardAI::Permissible gate (GuardAI.cpp:29-35).
+const creatureFlagExtraGuard uint32 = 0x00008000
+
+// creatureFlagExtraTrigger mirrors CREATURE_FLAG_EXTRA_TRIGGER
+// (CreatureData.h:44): trigger creatures never fight (ThreatReference::
+// FlagsAllowFighting, ThreatManager.cpp:84-86).
+const creatureFlagExtraTrigger uint32 = 0x00000080
 
 // creatureFlagExtraTauntDiminish mirrors CREATURE_FLAG_EXTRA_TAUNT_DIMINISH
 // (CreatureData.h:56): only creatures carrying this flag take the
@@ -1117,7 +1122,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			// Creature::SendZoneUnderAttackMessage (Creature.cpp:2706-2712):
 			// a guard slain by a player broadcasts SMSG_ZONE_UNDER_ATTACK
 			// with the guard's area id to the killer's opposite team.
-			// Guards ride CREATURE_FLAG_EXTRA_GUARD (0x80); s is the
+			// Guards ride CREATURE_FLAG_EXTRA_GUARD (0x8000); s is the
 			// kill-attributed session (the C++ charmer/owner-player arm).
 			if motion.FlagsExtra&creatureFlagExtraGuard != 0 && s.player != nil {
 				if _, areaID := s.server.zoneAndAreaID(motion.Map, motion.X, motion.Y, motion.Z, 0); areaID != 0 {

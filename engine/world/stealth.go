@@ -253,7 +253,7 @@ func canCreatureDetectStealthOfPlayer(motion *creatureMotion, targetSess *sessio
 
 	// GuardAI::CanSeeAlways (GuardAI.cpp:45-51): a guard always sees a
 	// player-controlled unit it is engaged by. Guards ride
-	// CREATURE_FLAG_EXTRA_GUARD (0x80); engagement is the current combat
+	// CREATURE_FLAG_EXTRA_GUARD (0x8000); engagement is the current combat
 	// victim (motion.TargetGUID). Dormant while guards map to passive in
 	// creatureReactState (they never acquire a TargetGUID via the scan).
 	if motion != nil && motion.FlagsExtra&creatureFlagExtraGuard != 0 && motion.TargetGUID != 0 && targetSess.playerGUID == motion.TargetGUID {

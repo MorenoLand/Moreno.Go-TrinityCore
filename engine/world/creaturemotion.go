@@ -5348,15 +5348,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// InCombat, ahead of the 1s reselect, so a victim that phases
 		// out or stops being detectable stops being picked and one
 		// that phases back in or breaks stealth is pickable again.
-		// The phase arm (CanNeverSee head) and the CanDetect detect
-		// arms union here; the manager stores the set only and
-		// evaluation lives here with motion/session context (see
-		// threat.go seam).
+		// The phase arm (CanNeverSee head), the CanDetect detect
+		// arms, the P3 arms (_IsTargetAcceptable, CanCreatureAttack,
+		// FlagsAllowFighting) and the CanSeeOrDetect head arms
+		// (ghost, always-visible exemption) union here; the manager
+		// stores the set only and evaluation lives here with
+		// motion/session context (see threat.go seam). The
+		// always-visible exemption lifts detect flags only: phase
+		// precedes always-visible in CanSeeOrDetect, and the P3
+		// arms are separate ShouldBeOffline ORs.
 		offline := s.threatPhaseOfflineSet(motion, players)
+		if offline == nil {
+			offline = make(map[uint64]bool)
+		}
+		headAdd, headExempt := s.threatHeadOfflineSet(motion)
 		for guid := range s.threatDetectOfflineSet(motion, players) {
-			if offline == nil {
-				offline = make(map[uint64]bool)
+			if !headExempt[guid] {
+				offline[guid] = true
 			}
+		}
+		for guid := range headAdd {
+			offline[guid] = true
+		}
+		for guid := range s.threatAcceptableOfflineSet(motion, players) {
+			offline[guid] = true
+		}
+		for guid := range s.threatAttackOfflineSet(motion, players) {
+			offline[guid] = true
+		}
+		for guid := range s.threatFlagsOfflineSet(motion, players) {
 			offline[guid] = true
 		}
 		motion.ThreatMgr.SetOfflineSet(offline)

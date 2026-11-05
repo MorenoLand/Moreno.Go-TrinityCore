@@ -59,8 +59,11 @@ type ThreatManager struct {
 	// currently fails. Pure data like suppressed — the manager never
 	// evaluates visibility itself; the combat tick refreshes this set
 	// from the phase arm (threatPhaseOfflineSet) unioned with the
-	// CanDetect detect arms (threatDetectOfflineSet), and later legs
-	// add their own arms to that union. A victim absent here is online.
+	// CanDetect detect arms (threatDetectOfflineSet), the P3 arms
+	// (threatAcceptableOfflineSet, threatAttackOfflineSet,
+	// threatFlagsOfflineSet) and the CanSeeOrDetect head arms
+	// (threatHeadOfflineSet), and later legs add their own arms to
+	// that union. A victim absent here is online.
 	offline map[uint64]bool
 	// needClientUpdate mirrors ThreatManager::_needClientUpdate
 	// (set at ThreatManager.cpp:49/61/141/793, consumed at 522-525):
@@ -466,6 +469,299 @@ func (s *Server) threatDetectOfflineSet(motion *creatureMotion, players []player
 		}
 	}
 	return off
+}
+
+// threatVehicleBlocked is the vehicle leg of Creature::_IsTargetAcceptable
+// (Creature.cpp:2512) in the sight scan's form: an owner seated on a
+// vehicle never accepts its own vehicle, nor a vehicle its own vehicle
+// is seated on (nested vehicles), as a threat victim.
+func (s *Server) threatVehicleBlocked(motion *creatureMotion, victimGUID uint64) bool {
+	if motion == nil || motion.VehicleGUID == 0 {
+		return false
+	}
+	if motion.VehicleGUID == victimGUID {
+		return true
+	}
+	if base := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.VehicleGUID); base != nil && base.VehicleGUID == victimGUID {
+		return true
+	}
+	return false
+}
+
+// threatAcceptableOfflineSet runs the _IsTargetAcceptable arm of
+// ThreatReference::ShouldBeOffline (ThreatManager.cpp:101-110, via
+// Creature.cpp:2508-2536) over the owner's threat entries, in C++
+// order: friendly, targetable, vehicle, died. The engaged/hostile tail
+// passes for live entries (IsEngagedBy is IsThreatenedBy for a list
+// owner), so it takes no code; only a turn — a faction or friendly
+// flip, a targetability flag, a vehicle seat, a death — offlines.
+// Targetable is isTargetableForAttack(false) (Unit.cpp:8504): the
+// NON_ATTACKABLE/NOT_SELECTABLE flags plus the player GM arm; the
+// UNIT_STATE_UNATTACKABLE arm has no Go model and is vacuous here.
+// The died leg covers real deaths (whose entries the death paths
+// should already have dropped) and feign death: feign zeroes threat
+// but keeps the entry (ScaleThreat 0), so a feigning victim offlines
+// for every owner except a guard (IsGuard + FEIGN_DEATH arm, guard bit
+// 0x8000 per CreatureData.h:52). Creature victims carry no feign
+// model beyond the generic aura store, which the same check reads.
+func (s *Server) threatAcceptableOfflineSet(motion *creatureMotion, players []playerPos) map[uint64]bool {
+	if s == nil || motion == nil || motion.ThreatMgr == nil {
+		return nil
+	}
+	byGUID := make(map[uint64]playerPos, len(players))
+	for i := range players {
+		byGUID[players[i].GUID] = players[i]
+	}
+	guard := motion.FlagsExtra&creatureFlagExtraGuard != 0
+	off := make(map[uint64]bool)
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if s.creatureFriendlyToTarget(motion, guid) {
+			off[guid] = true
+			continue
+		}
+		if row, ok := byGUID[guid]; ok && row.Sess != nil && row.Sess.player != nil {
+			if row.Sess.player.UnitFlags&(unitFlagNonAttackable|unitFlagNotSelectable) != 0 || row.IsGM {
+				off[guid] = true
+				continue
+			}
+			if s.threatVehicleBlocked(motion, guid) {
+				off[guid] = true
+				continue
+			}
+			if row.IsDead || (row.Sess.hasAuraType(spellAuraFeignDeath) && !guard) {
+				off[guid] = true
+			}
+			continue
+		}
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); vm != nil {
+			if vm.UnitFlags&(unitFlagNonAttackable|unitFlagNotSelectable) != 0 {
+				off[guid] = true
+				continue
+			}
+			if s.threatVehicleBlocked(motion, guid) {
+				off[guid] = true
+				continue
+			}
+			if vm.Health == 0 || (s.creatureHasAuraType(creatureAuraKeyForMotion(vm), spellAuraFeignDeath) && !guard) {
+				off[guid] = true
+			}
+		}
+	}
+	return off
+}
+
+// threatHomeDistanceOK is the home-distance gate of CanCreatureAttack
+// for a threat victim: the scan mirror (creatureSightHomeDistanceOK)
+// skips player-charmed/owned callers outright, but C++ then measures
+// from the charming/owning player (Creature.cpp:2601-2603), so that
+// arm is computed here when the charmer-or-owner resolves to a player
+// on this map's tick list; every other caller rides the mirror
+// (dungeon, world-boss, recent-damage and taunt skips, creature-owner
+// position, home fallback). An owner player missing from the tick
+// list fails open, as for unresolvable victims everywhere in this
+// evaluator family.
+func (s *Server) threatHomeDistanceOK(motion *creatureMotion, players []playerPos, victimX, victimY, victimZ, victimReach float32) bool {
+	if motion == nil {
+		return false
+	}
+	if ownerGUID := creatureCharmerOrOwnerGUID(motion); ownerGUID != 0 {
+		if sess := s.findSessionByGUID(ownerGUID); sess != nil && sess.player != nil {
+			for i := range players {
+				if players[i].GUID == ownerGUID && players[i].Sess != nil {
+					limit := float32(s.Config.VisibilityDistanceContinents)
+					if limit > 133.3333 {
+						limit = 133.3333
+					}
+					ownerReach := sess.player.CombatReach
+					if ownerReach <= 0 {
+						ownerReach = 1.5
+					}
+					limit += ownerReach + victimReach
+					return float32(distance3D(players[i].X, players[i].Y, players[i].Z, victimX, victimY, victimZ)) <= limit
+				}
+			}
+			return true
+		}
+	}
+	return s.creatureSightHomeDistanceOK(motion, victimX, victimY, victimZ, victimReach)
+}
+
+// threatAttackOfflineSet runs the CanCreatureAttack arm of
+// ThreatReference::ShouldBeOffline (ThreatManager.cpp:101-110, via
+// Creature.cpp:2560-2608) over the owner's threat entries, in C++
+// order: valid target, accessible place, AI attack, evade, home
+// distance. IsInMap is resolver-guaranteed (player rows and creature
+// motions come from this map/instance), so it takes no code. The
+// valid-target leg reuses the sight-scan twins (IsValidAttackTarget's
+// flag set and immune pairings); the turret band reuses
+// turretCanAIAttack, with a playerPos shim for creature victims the
+// way the creature-victim scan builds one. Owner evade rides the
+// motion Evading flag and victim evade the victim motion's, the same
+// flags the assist-party evade leg already reads.
+func (s *Server) threatAttackOfflineSet(motion *creatureMotion, players []playerPos) map[uint64]bool {
+	if s == nil || motion == nil || motion.ThreatMgr == nil {
+		return nil
+	}
+	byGUID := make(map[uint64]playerPos, len(players))
+	for i := range players {
+		byGUID[players[i].GUID] = players[i]
+	}
+	off := make(map[uint64]bool)
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if row, ok := byGUID[guid]; ok && row.Sess != nil && row.Sess.player != nil {
+			victimReach := row.Sess.player.CombatReach
+			if victimReach <= 0 {
+				victimReach = 1.5
+			}
+			if playerSightVictimBlocked(motion, row.Sess.player.UnitFlags, row.Sess.player.UnitFlags&unitFlagPlayerControlled != 0) {
+				off[guid] = true
+				continue
+			}
+			if !s.creatureSightAccessiblePlaceOK(motion, row.X, row.Y, row.Z) {
+				off[guid] = true
+				continue
+			}
+			if !s.turretCanAIAttack(motion, row, float32(distance3D(motion.X, motion.Y, motion.Z, row.X, row.Y, row.Z))) {
+				off[guid] = true
+				continue
+			}
+			if motion.Evading {
+				off[guid] = true
+				continue
+			}
+			if !s.threatHomeDistanceOK(motion, players, row.X, row.Y, row.Z, victimReach) {
+				off[guid] = true
+			}
+			continue
+		}
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); vm != nil {
+			if creatureSightVictimBlocked(motion, vm) {
+				off[guid] = true
+				continue
+			}
+			if !s.creatureSightAccessiblePlaceOK(motion, vm.X, vm.Y, vm.Z) {
+				off[guid] = true
+				continue
+			}
+			shim := playerPos{Map: vm.Map, InstanceID: vm.InstanceID, GUID: vm.GUID, X: vm.X, Y: vm.Y, Z: vm.Z}
+			if !s.turretCanAIAttack(motion, shim, float32(distance3D(motion.X, motion.Y, motion.Z, vm.X, vm.Y, vm.Z))) {
+				off[guid] = true
+				continue
+			}
+			if motion.Evading || vm.Evading {
+				off[guid] = true
+				continue
+			}
+			if !s.threatHomeDistanceOK(motion, players, vm.X, vm.Y, vm.Z, vm.CombatReach) {
+				off[guid] = true
+			}
+		}
+	}
+	return off
+}
+
+// threatFlagsOfflineSet runs the FlagsAllowFighting arms of
+// ThreatReference::ShouldBeOffline (ThreatManager.cpp:101-110, via
+// :84-99) over the owner's threat entries, both directions. The four
+// immune pairings duplicate the IsValidAttackTarget leg of the attack
+// evaluator; the trigger arms are the new content: a trigger owner
+// fights nothing, and a trigger victim is fought by nothing.
+func (s *Server) threatFlagsOfflineSet(motion *creatureMotion, players []playerPos) map[uint64]bool {
+	if s == nil || motion == nil || motion.ThreatMgr == nil {
+		return nil
+	}
+	byGUID := make(map[uint64]playerPos, len(players))
+	for i := range players {
+		byGUID[players[i].GUID] = players[i]
+	}
+	ownerPC := motion.UnitFlags&unitFlagPlayerControlled != 0
+	off := make(map[uint64]bool)
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if motion.FlagsExtra&creatureFlagExtraTrigger != 0 {
+			off[guid] = true
+			continue
+		}
+		var victimFlags uint32
+		var victimPC, victimTrigger bool
+		if row, ok := byGUID[guid]; ok && row.Sess != nil && row.Sess.player != nil {
+			victimFlags = row.Sess.player.UnitFlags
+			victimPC = victimFlags&unitFlagPlayerControlled != 0
+		} else if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); vm != nil {
+			victimFlags = vm.UnitFlags
+			victimPC = victimFlags&unitFlagPlayerControlled != 0
+			victimTrigger = vm.FlagsExtra&creatureFlagExtraTrigger != 0
+		} else {
+			continue
+		}
+		if victimTrigger {
+			off[guid] = true
+			continue
+		}
+		if victimPC && motion.UnitFlags&unitFlagImmuneToPC != 0 {
+			off[guid] = true
+			continue
+		}
+		if !victimPC && motion.UnitFlags&unitFlagImmuneToNPC != 0 {
+			off[guid] = true
+			continue
+		}
+		if ownerPC && victimFlags&unitFlagImmuneToPC != 0 {
+			off[guid] = true
+			continue
+		}
+		if !ownerPC && victimFlags&unitFlagImmuneToNPC != 0 {
+			off[guid] = true
+		}
+	}
+	return off
+}
+
+// threatHeadOfflineSet runs the CanSeeOrDetect head arms of
+// ThreatReference::ShouldBeOffline that the phase and detect
+// evaluators do not cover, and reports the always-visible exemptions
+// to them. It returns ghost-adds and detect-exemptions:
+//   - ghost: creature victims via creatureSightGhostBlocked, judged
+//     by the owner's own bits (the leg sits in CanSeeOrDetect, not
+//     CanDetect, so no controller routing). Player victims need no
+//     leg: ghost players resolve dead, and the died leg offlines
+//     them already.
+//   - always-visible (IsAlwaysVisibleFor, Unit.cpp:8615-8621): a
+//     victim the owner charms-or-owns is visible to the owner ahead
+//     of the GM, ghost and CanDetect arms, so its detect flag is
+//     exempt — but NOT its phase flag (CanNeverSee precedes
+//     always-visible) and NOT any P3 flag (separate ShouldBeOffline
+//     OR arms). Player victims have no Go charmer model, so only
+//     creature victims are exempted here.
+//   - GM: covered by the acceptable leg's isTargetableForAttack GM
+//     arm (Unit.cpp:8504), which offlines GM victims regardless of
+//     the CanSeeOrDetect GM leg's detect-side outcome.
+//   - despawn: vacuous — creatureInvisibleDueToDespawn requires
+//     Health 0, which the died leg already offlines, and temp
+//     summons/pets/vehicles never carry a corpse-removal record.
+//   - IsNeverVisible: player logout/loading legs only; a logged-out
+//     victim's entry drops on the logout path, not here.
+func (s *Server) threatHeadOfflineSet(motion *creatureMotion) (map[uint64]bool, map[uint64]bool) {
+	if s == nil || motion == nil || motion.ThreatMgr == nil {
+		return nil, nil
+	}
+	add := make(map[uint64]bool)
+	exempt := make(map[uint64]bool)
+	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+		if guid == motion.GUID {
+			exempt[guid] = true
+			continue
+		}
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, guid); vm != nil {
+			if creatureCharmerOrOwnerGUID(vm) == motion.GUID {
+				exempt[guid] = true
+				continue
+			}
+			if creatureSightGhostBlocked(motion, vm) {
+				add[guid] = true
+			}
+		}
+	}
+	return add, exempt
 }
 
 // isTauntedLocked reports whether the victim holds a live taunt state,
