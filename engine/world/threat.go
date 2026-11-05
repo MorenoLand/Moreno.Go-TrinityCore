@@ -580,6 +580,15 @@ func (s *Server) threatAcceptableOfflineSet(motion *creatureMotion, players []pl
 			off[guid] = true
 			continue
 		}
+		// The owner's own vehicle is never an acceptable victim
+		// (_IsTargetAcceptable, Creature.cpp:2512) — the direct arm
+		// needs no victim state, so it is fed here for unresolvable
+		// victims too; the nested-vehicle arm stays inside
+		// threatVehicleBlocked's resolved branches.
+		if motion.VehicleGUID != 0 && motion.VehicleGUID == guid {
+			off[guid] = true
+			continue
+		}
 		if row, ok := byGUID[guid]; ok && row.Sess != nil && row.Sess.player != nil {
 			if row.Sess.player.UnitFlags&(unitFlagNonAttackable|unitFlagNotSelectable) != 0 || row.IsGM {
 				off[guid] = true
@@ -668,6 +677,17 @@ func (s *Server) threatAttackOfflineSet(motion *creatureMotion, players []player
 		byGUID[players[i].GUID] = players[i]
 	}
 	off := make(map[uint64]bool)
+	// Owner evade offlines every victim, including unresolvable ones:
+	// CanCreatureAttack fails for the owner itself in evade mode
+	// (Creature.cpp:2589-2591, "we cannot attack in evade mode"), so
+	// the arm needs no victim state and is hoisted ahead of the loop
+	// instead of living inside the resolved-victim branches.
+	if motion.Evading {
+		for _, guid := range motion.ThreatMgr.EntryGUIDs() {
+			off[guid] = true
+		}
+		return off
+	}
 	for _, guid := range motion.ThreatMgr.EntryGUIDs() {
 		if row, ok := byGUID[guid]; ok && row.Sess != nil && row.Sess.player != nil {
 			victimReach := row.Sess.player.CombatReach
@@ -683,10 +703,6 @@ func (s *Server) threatAttackOfflineSet(motion *creatureMotion, players []player
 				continue
 			}
 			if !s.turretCanAIAttack(motion, row, float32(distance3D(motion.X, motion.Y, motion.Z, row.X, row.Y, row.Z))) {
-				off[guid] = true
-				continue
-			}
-			if motion.Evading {
 				off[guid] = true
 				continue
 			}
@@ -709,7 +725,7 @@ func (s *Server) threatAttackOfflineSet(motion *creatureMotion, players []player
 				off[guid] = true
 				continue
 			}
-			if motion.Evading || vm.Evading {
+			if vm.Evading {
 				off[guid] = true
 				continue
 			}
@@ -922,12 +938,12 @@ func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos
 // findSessionByGUID (sessionsMu, the same lookup the spell paths already
 // perform) for the owner's charmer/owner session in the seer, phase and
 // detect arms; the seer's creature-charmer leg and the nested-vehicle
-// arm stay tick-only. Unresolvable victims stay online, as in the set
-// builders. The suppressed state is NOT evaluated here: its legs read
-// aura stores the combat tick refreshes instead, so a suppressed new
-// victim's first amount still lands and gates from the next tick — the
-// same one-tick staleness the existing-ref promotion leg carries
-// (ThreatManager.cpp:386).
+// arm stay tick-only. The suppressed state is NOT evaluated here —
+// the sibling threatVictimSuppressed runs it, so the two states seed
+// independently and offline wins (C++ UpdateOffline sets one _online
+// field). Unresolvable victims stay online for the victim-dependent
+// arms, as in the set builders; the owner-state arms (own vehicle,
+// owner evade, owner trigger) still apply to them below.
 func (s *Server) threatVictimOffline(motion *creatureMotion, victimGUID uint64, sess *session, vm *creatureMotion) bool {
 	if s == nil || motion == nil || victimGUID == 0 {
 		return false
@@ -1019,6 +1035,24 @@ func (s *Server) threatVictimOffline(motion *creatureMotion, victimGUID uint64, 
 		return false
 	}
 	if vm == nil {
+		// Unresolvable victim: no victim state to judge, so the
+		// victim-dependent arms stay online — but the owner-state
+		// arms of ShouldBeOffline still apply (C++ evaluates them
+		// against the real victim object; Go feeds them from the
+		// owner alone): the owner's own vehicle
+		// (_IsTargetAcceptable, Creature.cpp:2512), owner evade
+		// (CanCreatureAttack, Creature.cpp:2589-2591) and the
+		// owner-trigger leg (FlagsAllowFighting,
+		// ThreatManager.cpp:84-86).
+		if motion.VehicleGUID != 0 && motion.VehicleGUID == victimGUID {
+			return true
+		}
+		if motion.Evading {
+			return true
+		}
+		if motion.FlagsExtra&creatureFlagExtraTrigger != 0 {
+			return true
+		}
 		return false
 	}
 	// Phase arm (CanNeverSee head).
@@ -1113,6 +1147,62 @@ func (s *Server) threatVictimOffline(motion *creatureMotion, victimGUID uint64, 
 // existing entries are already gated on the stored flag by AddThreat
 // itself. Sites that cannot resolve the victim keep raw AddThreat and
 // the one-tick window.
+
+// threatVictimSuppressed evaluates ThreatReference::ShouldBeSuppressed
+// (ThreatManager.cpp:112-121) for a single victim the caller already
+// resolved: sess for a player, vm for a creature (exactly one non-nil).
+// It runs the same legs the combat-tick refresh runs
+// (threatSuppressedSet) — immunity to the owner's melee damage school,
+// any confuse aura, any breakable-by-damage stun — so creatureAddThreat
+// can seed a suppressed new victim the way C++'s synchronous
+// UpdateOffline does (ThreatManager.cpp:64-80, :402-407): a suppressed
+// new victim's first amount is dropped through the IsOnline gate, and
+// the entry still installs (IsAvailable includes SUPPRESSED,
+// ThreatManager.h:263). A taunted victim is never suppressed
+// (:112-115), and an offline victim is never suppressed either — the
+// caller checks offline first and seeds only one state, since the two
+// share C++'s single _online field. It never resolves the victim
+// itself: the creature immunity leg reads the resolved motion's script
+// rows and template entry directly
+// (creatureImmuneToDamageResolved), because AddThreat runs under
+// motionMu on the damage paths and the map-resolving
+// creatureImmuneToDamage would deadlock. Unresolvable victims stay
+// unsuppressed, as in the set builders.
+func (s *Server) threatVictimSuppressed(motion *creatureMotion, victimGUID uint64, sess *session, vm *creatureMotion) bool {
+	if s == nil || motion == nil || motion.ThreatMgr == nil || victimGUID == 0 {
+		return false
+	}
+	if motion.ThreatMgr.IsTaunted(victimGUID) {
+		return false
+	}
+	if sess != nil && sess.player != nil {
+		if sess.isImmuneToDamage(spellSchoolMaskNormal) {
+			return true
+		}
+		if sess.hasAuraType(spellAuraModConfuse) {
+			return true
+		}
+		sess.castMu.Lock()
+		stun := breakableStunAuraPresent(sess.activeAuras)
+		sess.castMu.Unlock()
+		return stun
+	}
+	if vm != nil {
+		key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: victimGUID}
+		if creatureImmuneToDamageResolved(s, key, vm, spellSchoolMaskNormal) {
+			return true
+		}
+		if s.creatureHasLiveAuraEffectType(key, spellAuraModConfuse) {
+			return true
+		}
+		s.auraMu.Lock()
+		stun := breakableStunAuraPresent(s.activeCreatureAuras[key])
+		s.auraMu.Unlock()
+		return stun
+	}
+	return false
+}
+
 func (s *Server) creatureAddThreat(motion *creatureMotion, victimGUID uint64, amount float32, inMelee bool, sess *session, vm *creatureMotion) (switched bool, newVictim uint64) {
 	if motion == nil || motion.ThreatMgr == nil {
 		return false, 0
@@ -1120,6 +1210,8 @@ func (s *Server) creatureAddThreat(motion *creatureMotion, victimGUID uint64, am
 	if victimGUID != 0 && !motion.ThreatMgr.HasThreatEntry(victimGUID) {
 		if s.threatVictimOffline(motion, victimGUID, sess, vm) {
 			motion.ThreatMgr.SeedNewVictimState(victimGUID, true, false)
+		} else if s.threatVictimSuppressed(motion, victimGUID, sess, vm) {
+			motion.ThreatMgr.SeedNewVictimState(victimGUID, false, true)
 		}
 	}
 	return motion.ThreatMgr.AddThreat(victimGUID, amount, inMelee)
@@ -1394,10 +1486,10 @@ func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed, oldTaunted bool, old
 // window after immunity or CC expiry is dropped where C++ would
 // promote the ref synchronously (:386) and add it — the same
 // staleness shape as the offline gate. A NEW victim's first amount is
-// gated on a seeded suppressed flag the same way, but no ShouldBe-
-// Suppressed evaluator runs at add time, so a suppressed new victim
-// still lands its first amount at unseeded sites. Unfed ShouldBeOffline
-// arms stay online; DETAUNT
+// gated on a seeded suppressed flag the same way, evaluated at add
+// time by threatVictimSuppressed (creatureAddThreat, C++ :402-407);
+// callers that add threat raw keep the one-tick window. Unfed
+// ShouldBeOffline arms stay online; DETAUNT
 // (SPELL_AURA_MOD_DETAUNT) has no Go aura model;
 // ProcessAIUpdates/JustStartedThreateningMe (boss hooks ride the new-victim
 // broadcast instead). FixateTarget and the taunt-state model are bridged:
@@ -1500,8 +1592,11 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		// an amount landing in the one-tick window after immunity
 		// or CC expiry is dropped where C++ would add it — the same
 		// staleness shape as the offline gate above. A new victim's
-		// first amount is never gated: C++ creates the ref ONLINE
-		// and adds through IsOnline (:402-407).
+		// first amount IS gated: C++ creates the ref through
+		// UpdateOffline (:402-407) and adds through IsOnline, and
+		// Go seeds the suppressed flag for it in creatureAddThreat
+		// (threatVictimSuppressed); only raw AddThreat callers keep
+		// the one-tick window.
 		if tm.isSuppressedLocked(victim) {
 			return false, tm.currentVictim
 		}

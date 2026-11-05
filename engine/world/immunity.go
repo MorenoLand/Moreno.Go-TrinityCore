@@ -1907,9 +1907,21 @@ func (srv *Server) cachedTemplateSchoolImmuneMask(key creatureAuraKey) uint32 {
 	if motion == nil || (motion.OwnerGUID != 0 && motion.PetType == petTypeHunter) {
 		return 0
 	}
+	return srv.templateSchoolImmuneMaskByEntry(motion.Entry)
+}
+
+// templateSchoolImmuneMaskByEntry is the cache leg of
+// cachedTemplateSchoolImmuneMask for a caller that already resolved the
+// motion: the template SpellSchoolImmuneMask row for the entry, 0 on a
+// miss. Hunter pets inherit no template immunities (Creature.cpp:2293),
+// so callers apply the same owner/pet test the resolving twin applies.
+func (srv *Server) templateSchoolImmuneMaskByEntry(entry uint32) uint32 {
+	if srv == nil {
+		return 0
+	}
 	srv.statsMu.RLock()
 	defer srv.statsMu.RUnlock()
-	if st, ok := srv.creatureStatsCache[motion.Entry]; ok {
+	if st, ok := srv.creatureStatsCache[entry]; ok {
 		return st.SpellSchoolImmuneMask
 	}
 	return 0
@@ -1976,6 +1988,21 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 	// unconditionally once the attribute gates above have passed.
 	schoolImmunityMask |= srv.cachedTemplateSchoolImmuneMask(key)
 
+	schoolImmunityMask, damageImmunityMask = creatureAuraDamageImmunityMasks(srv, key, spell, schoolMask, schoolImmunityMask, damageImmunityMask)
+	if schoolImmunityMask&schoolMask == schoolMask {
+		return true
+	}
+	return damageImmunityMask&schoolMask == schoolMask
+}
+
+// creatureAuraDamageImmunityMasks folds the live-aura IMMUNITY_SCHOOL /
+// IMMUNITY_DAMAGE rows of Unit::IsImmunedToDamage (Unit.cpp:7829-7847)
+// into the caller's masks: the school fold is per-row with the pierce
+// filter, the damage mask needs full coverage with no pierce filter.
+// The caller runs the full-coverage tests. Shared by the
+// map-resolving creatureImmuneToDamageSpell and the resolved-motion
+// creatureImmuneToDamageResolved so the two can never drift apart.
+func creatureAuraDamageImmunityMasks(srv *Server, key creatureAuraKey, spell wotlk.Spell, schoolMask, schoolImmunityMask, damageImmunityMask uint32) (uint32, uint32) {
 	srv.auraMu.Lock()
 	defer srv.auraMu.Unlock()
 	for _, aura := range srv.activeCreatureAuras[key] {
@@ -1997,9 +2024,6 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 			schoolImmunityMask |= misc
 		}
 	}
-	if schoolImmunityMask&schoolMask == schoolMask {
-		return true
-	}
 	for _, aura := range srv.activeCreatureAuras[key] {
 		if aura == nil {
 			continue
@@ -2011,6 +2035,61 @@ func creatureImmuneToDamageSpell(srv *Server, key creatureAuraKey, spell wotlk.S
 			}
 		}
 		damageImmunityMask |= auraEffectMiscMask(aura, spell, found, spellAuraDamageImmunity)
+	}
+	return schoolImmunityMask, damageImmunityMask
+}
+
+// creatureImmuneToDamageResolved is the motionMu-free twin of
+// creatureImmuneToDamage for callers that already resolved the victim
+// motion and run under motionMu (threatVictimSuppressed, called from
+// creatureAddThreat on the damage paths): the map-resolving twin would
+// deadlock there — scriptSpellImmuneRows and
+// cachedTemplateSchoolImmuneMask both take motionMu through
+// findCreatureMotion — so the script rows read the resolved motion
+// directly and the template mask reads by its entry. The fold is
+// otherwise identical: the zero-spell attribute gates pass vacuously,
+// the live-aura fold is the shared creatureAuraDamageImmunityMasks,
+// and the full-coverage tests match. vm must be the motion for
+// key.GUID on the caller's map/instance.
+func creatureImmuneToDamageResolved(srv *Server, key creatureAuraKey, vm *creatureMotion, schoolMask uint32) bool {
+	if srv == nil || vm == nil || schoolMask == 0 {
+		return false
+	}
+	var schoolImmunityMask uint32
+	var damageImmunityMask uint32
+	if len(vm.ScriptSpellImmune) > 0 {
+		for k, ids := range vm.ScriptSpellImmune {
+			if uint32(k>>32) != immunityOpSchool {
+				continue
+			}
+			bit := uint32(k)
+			if bit&schoolMask == 0 {
+				continue
+			}
+			for _, id := range ids {
+				var immuneSpell wotlk.Spell
+				if id != 0 && srv.Data != nil {
+					if sp, found, err := srv.Data.Spell(id); err == nil && found {
+						immuneSpell = sp
+					}
+				}
+				if !canSpellPierceImmuneAura(wotlk.Spell{}, immuneSpell) {
+					schoolImmunityMask |= bit
+				}
+			}
+		}
+		for k := range vm.ScriptSpellImmune {
+			if uint32(k>>32) == immunityOpDamage {
+				damageImmunityMask |= uint32(k)
+			}
+		}
+	}
+	if vm.OwnerGUID == 0 || vm.PetType != petTypeHunter {
+		schoolImmunityMask |= srv.templateSchoolImmuneMaskByEntry(vm.Entry)
+	}
+	schoolImmunityMask, damageImmunityMask = creatureAuraDamageImmunityMasks(srv, key, wotlk.Spell{}, schoolMask, schoolImmunityMask, damageImmunityMask)
+	if schoolImmunityMask&schoolMask == schoolMask {
+		return true
 	}
 	return damageImmunityMask&schoolMask == schoolMask
 }
