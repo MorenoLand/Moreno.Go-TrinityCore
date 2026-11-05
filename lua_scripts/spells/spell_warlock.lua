@@ -15,12 +15,25 @@
 --   Registered for rank 1 (1120), the only Drain Soul rank ID in the
 --   C++ tree; ranks 2-6 are DB-bound via spell_script_names and
 --   unestablished (C++ tree + web search exhausted this tick).
+-- PORTED (tick 196, RegisterAuraEvent OnApply):
+--   spell_warl_health_funnel ApplyEffect (spell_warlock.cpp:838-846):
+--   EFFECT_0 PERIODIC_HEAL. If the caster is missing, nothing
+--   happens; if the caster has Improved Health Funnel R2 (18704)
+--   the target casts buff 60956 on itself, else if R1 (18703) buff
+--   60955, both triggered. The RemoveEffect arm (:848-853,
+--   RemoveAurasDueToSpell on both buffs) stays out: no
+--   RemoveAurasDueToSpell bridge.
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   The same loader's CheckProc / HandleProc arms (:509-544,
 --   EFFECT_2 improved Drain Soul mana proc) are proc arms, not
 --   periodic ticks: no proc hook exists on the RegisterAuraEvent
 --   surface, so they stay out with the aura-script registration.
 
+local SPELL_WARLOCK_HEALTH_FUNNEL = 755
+local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_R1 = 18703
+local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_R2 = 18704
+local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R1 = 60955
+local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R2 = 60956
 local SPELL_WARLOCK_DRAIN_SOUL_R1 = 1120
 local SPELL_WARLOCK_CREATE_SOULSHARD = 43836
 local SPELL_WARLOCK_GLYPH_OF_DRAIN_SOUL_AURA = 58070
@@ -46,3 +59,18 @@ local function drainSoulTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_DRAIN_SOUL_R1, 1, drainSoulTick)
+
+-- C++ spell_warl_health_funnel::ApplyEffect (spell_warlock.cpp:838-846).
+local function healthFunnelApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    if caster:HasAura(SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_R2) then
+        target:CastSpell(target, SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R2, true)
+    elseif caster:HasAura(SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_R1) then
+        target:CastSpell(target, SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_BUFF_R1, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_HEALTH_FUNNEL, 2, healthFunnelApply)

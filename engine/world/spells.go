@@ -34193,6 +34193,10 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	removedEffectMask := uint8(0)
 	removedCasterGUID := uint64(0)
 	removedHealthAura := (*activeAura)(nil)
+	// removedAura is the OnRemove hook's snapshot: the record the hook
+	// hands out after the erase below, so the handler still reads the
+	// removed aura's last values (caster, amounts, tick count).
+	removedAura := (*activeAura)(nil)
 	removedStatAura := (*activeAura)(nil)
 	removedResistanceAura := (*activeAura)(nil)
 	removedPowerAura := (*activeAura)(nil)
@@ -34203,6 +34207,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	if s.activeAuras != nil {
 		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
 			auraWasPresent = true
+			removedAura = aura
 			removedEffectMask = aura.EffectMask
 			removedCasterGUID = aura.CasterGUID
 			removedAuraType = aura.AuraType
@@ -34964,6 +34969,21 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	if auraWasPresent {
 		s.applyAuraLinkedRemoveArms(spellID, mode)
 		s.applyAuraSpellAreaRows(context.Background(), spellID)
+	}
+	// RegisterAuraEvent OnRemove (AuraEffect::HandleEffect's
+	// CallScriptEffectRemoveHandlers arm): fires after the erase and the
+	// remove arms above, only when an aura was actually removed. The
+	// handler receives the removed record's snapshot, so GetCaster /
+	// GetAmount / GetTickNumber still resolve.
+	if auraWasPresent && s.server != nil {
+		var tMap, tInst uint32
+		s.playerStateMu.Lock()
+		if s.player != nil {
+			tMap, tInst = s.player.Map, s.player.InstanceID
+		}
+		s.playerStateMu.Unlock()
+		auraRef := &luaAuraRef{server: s.server, spellID: spellID, player: s, mapID: tMap, instanceID: tInst, snapshot: removedAura}
+		s.server.fireAuraRemove(context.Background(), spellID, auraRef.luaAuraObject(), s.luaPlayer())
 	}
 }
 
@@ -37384,6 +37404,24 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// the effect arms (C++ Unit::_AddAura, Unit.cpp:3514).
 		targetSess.applyAuraSpellAreaRows(ctx, spell.ID)
 		targetSess.applyAuraLinkedAurasAtApply(ctx, spell.ID, casterGUID)
+		// RegisterAuraEvent OnApply (AuraEffect::HandleEffect's
+		// CallScriptEffectApplyHandlers arm): fires once per fresh
+		// application, after registration and the linked/area arms and
+		// before the per-effect default arms below — the C++ script
+		// handlers run ahead of the default effect handling. The
+		// previous-record gate is the exactly-once guard: later effects
+		// of the same cast see the just-stored record (not stopped) and
+		// skip, and a merge/refresh re-cast never re-fires.
+		if s.server != nil && (previous == nil || previous.Stopped) {
+			var tMap, tInst uint32
+			targetSess.playerStateMu.Lock()
+			if targetSess.player != nil {
+				tMap, tInst = targetSess.player.Map, targetSess.player.InstanceID
+			}
+			targetSess.playerStateMu.Unlock()
+			auraRef := &luaAuraRef{server: s.server, spellID: spell.ID, player: targetSess, mapID: tMap, instanceID: tInst}
+			s.server.fireAuraApply(ctx, spell.ID, auraRef.luaAuraObject(), targetSess.luaPlayer())
+		}
 		// SpellInfo::ApplyAllSpellImmunitiesTo dispel arms
 		// (SpellInfo.cpp:2860-2920): an immunity-granting aura effect whose
 		// spell carries ATTR1_DISPEL_AURAS_ON_IMMUNITY dispels the target's
@@ -38663,6 +38701,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			s.expireCreatureAura(targetKey, spell.ID, slot)
 		})
 		s.server.auraMu.Unlock()
+	}
+	// RegisterAuraEvent OnApply, creature-target twin of the player
+	// branch above (AuraEffect::HandleEffect's
+	// CallScriptEffectApplyHandlers arm). Only fresh applications reach
+	// this tail — the merge-first, later-effect and suppressed paths all
+	// return early — so no fresh gate is needed here.
+	if s.server != nil {
+		auraRef := &luaAuraRef{server: s.server, spellID: spell.ID, creatureKey: targetKey, mapID: targetKey.Map, instanceID: targetKey.InstanceID}
+		s.server.fireAuraApply(ctx, spell.ID, auraRef.luaAuraObject(), s.server.luaUnitObjectForGUID(targetKey.Map, targetKey.InstanceID, targetGUID))
 	}
 }
 
@@ -43954,12 +44001,17 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	// 34/132 remove halves read them like C++ reads the erased AuraEffect's
 	// GetAmount() (SpellAuraEffects.cpp:3658), not DBC base points.
 	var removedHealthPowerAura *activeAura
+	// removedAura is the OnRemove hook's snapshot, the same record the
+	// player-side funnel captures: the handler still reads the removed
+	// aura's last values after the erase below.
+	var removedAura *activeAura
 	s.auraMu.Lock()
 	var slot uint8
 	if s.activeCreatureAuras != nil {
 		if auras, ok := s.activeCreatureAuras[key]; ok {
 			if aura, exists := auras[spellID]; exists && aura != nil {
 				auraWasPresent = true
+				removedAura = aura
 				wasCharm = aura.AuraType == spellAuraCharm || aura.AuraType == spellAuraAoeCharm || aura.AuraType == spellAuraModPossess
 				wasPossessPet = aura.AuraType == spellAuraModPossessPet
 				charmerGUID = aura.CasterGUID
@@ -44160,6 +44212,15 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		// (StatSystem.cpp:1317-1330, 1018-1022): dropping a direct armor
 		// aura rewrites UNIT_FIELD_RESISTANCES (armor).
 		s.recomputeCreatureArmorOnAuraChange(key, spellID)
+	}
+	// RegisterAuraEvent OnRemove, creature-target twin of the player
+	// funnel (AuraEffect::HandleEffect's
+	// CallScriptEffectRemoveHandlers arm): fires after the erase and
+	// the remove arms above, only when an aura was actually removed.
+	// The handler receives the removed record's snapshot.
+	if auraWasPresent {
+		auraRef := &luaAuraRef{server: s, spellID: spellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID, snapshot: removedAura}
+		s.fireAuraRemove(context.Background(), spellID, auraRef.luaAuraObject(), s.luaUnitObjectForGUID(key.Map, key.InstanceID, key.GUID))
 	}
 }
 

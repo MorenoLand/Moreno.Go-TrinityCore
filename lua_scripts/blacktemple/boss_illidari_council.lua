@@ -130,13 +130,15 @@
 -- convention); spell scripts: empyreal_balance (41499), empyreal
 -- _equivalency (41333), judgement (41467 target primer/choice +
 -- Talk on finish), and aura scripts: balance_of_power (41341
--- absorb -> 41342 shared rule), deadly_poison (41485 remove -> 41487
--- envenom + 41509 visual), vanish (41476 remove -> 41479
--- teleport), reflective_shield (41475 absorb -> 33619 reflect),
+-- absorb -> 41342 shared rule), reflective_shield (41475 absorb ->
+-- 33619 reflect),
 -- seal (41469/41459 remove -> the other seal), dampen_magic
 -- (41478 remove-by-expire/enemy -> ACTION_REFRESH_DAMPEN DoAction).
 -- deadly_strike (41480 periodic -> 41485 deadly poison) is PORTED
--- below (tick 190, RegisterAuraEvent).
+-- below (tick 190, RegisterAuraEvent). deadly_poison (41485 remove
+-- -> 41487 envenom + 41509 visual) and vanish (41476 remove ->
+-- 41479 teleport) are PORTED below too (tick 196, RegisterAuraEvent
+-- OnRemove).
 -- Deliberate deviations: the UpdateAI UNIT_STATE_CASTING queue
 -- gate and the post-event casting check are PORTED on every cycle
 -- tick (500ms IsCasting defer via the live bridge,
@@ -202,6 +204,9 @@ local SPELL_JUDGEMENT = 41467
 local SPELL_VANISH = 41476
 local SPELL_DEADLY_STRIKE = 41480
 local SPELL_DEADLY_POISON = 41485 -- boss_illidari_council.cpp:80
+local SPELL_ENVENOM = 41487 -- boss_illidari_council.cpp:81
+local SPELL_ENVENOM_VISUAL = 41509 -- boss_illidari_council.cpp:82
+local SPELL_VANISH_TELEPORT = 41479 -- boss_illidari_council.cpp:84
 
 local Blesses = { SPELL_BLESS_PROTECTION, SPELL_BLESS_SPELL_WARDING }
 local Auras = { SPELL_CHROMATIC_AURA, SPELL_DEVOTION_AURA }
@@ -938,3 +943,33 @@ local function deadlyStrikeTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_DEADLY_STRIKE, 1, deadlyStrikeTick)
+
+-- C++ spell_illidari_council_deadly_poison::OnRemove
+-- (boss_illidari_council.cpp:654-662): on remove, if the aura has a
+-- caster, the caster casts SPELL_ENVENOM (41487) triggered on the
+-- target and the target casts SPELL_ENVENOM_VISUAL (41509) triggered
+-- on nil (self). The engine fires this hook from the aura-remove
+-- path (RegisterAuraEvent, AuraEventOnRemove = 3; tick-196 hook);
+-- the aura object reads the removed record's snapshot, so
+-- aura:GetCaster() still resolves. No PreventDefaultAction in C++.
+local function deadlyPoisonRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, SPELL_ENVENOM, true)
+    target:CastSpell(nil, SPELL_ENVENOM_VISUAL, true)
+end
+
+RegisterAuraEvent(SPELL_DEADLY_POISON, 3, deadlyPoisonRemove)
+
+-- C++ spell_illidari_council_vanish::OnRemove
+-- (boss_illidari_council.cpp:679-684): AfterEffectRemove — on
+-- remove the target casts SPELL_VANISH_TELEPORT (41479) triggered
+-- on itself. The hook fires at the end of the remove funnel, after
+-- the remove arms, which is the AfterEffectRemove ordering.
+local function vanishRemove(event, aura, target)
+    target:CastSpell(target, SPELL_VANISH_TELEPORT, true)
+end
+
+RegisterAuraEvent(SPELL_VANISH, 3, vanishRemove)

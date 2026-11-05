@@ -196,6 +196,8 @@ local SAY_DEATH = 17
 -- (UnitAI.cpp default target self); the periodic aura itself carries the
 -- 10-minute berserk timer, so the faithful port casts it once at engage.
 local SPELL_BERSERK = 60670
+local SPELL_MALYGOS_PORTAL_BEAM = 56046 -- boss_malygos.cpp:102
+local SPELL_PORTAL_OPENED = 61236 -- eye_of_eternity.h:84
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
@@ -255,3 +257,41 @@ end
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
 RegisterCreatureEvent(ENTRY_MALYGOS, 4, malygosDied)
 RegisterCreatureEvent(ENTRY_MALYGOS, 23, malygosReset)
+
+-- C++ spell_malygos_portal_beam::OnApply
+-- (boss_malygos.cpp:1607-1611): the Load() gate (:1597-1600)
+-- admits creature casters only, and the target must be a creature
+-- (ToCreature); the portal target then casts SPELL_PORTAL_OPENED
+-- (61236) on itself, non-triggered. The engine fires this hook
+-- from the aura-apply path (RegisterAuraEvent, AuraEventOnApply =
+-- 2; tick-196 hook). No PreventDefaultAction in C++.
+local function portalBeamApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:CastSpell(target, SPELL_PORTAL_OPENED, false)
+end
+
+RegisterAuraEvent(SPELL_MALYGOS_PORTAL_BEAM, 2, portalBeamApply)
+
+-- C++ spell_malygos_portal_beam::OnRemove
+-- (boss_malygos.cpp:1613-1617): AfterEffectRemove — same Load /
+-- ToCreature gates; the portal target removes SPELL_PORTAL_OPENED
+-- from itself. The hook fires at the end of the remove funnel,
+-- which is the AfterEffectRemove ordering.
+local function portalBeamRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:RemoveAura(SPELL_PORTAL_OPENED)
+end
+
+RegisterAuraEvent(SPELL_MALYGOS_PORTAL_BEAM, 3, portalBeamRemove)

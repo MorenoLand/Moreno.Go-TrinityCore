@@ -27,11 +27,21 @@ type luaAuraRef struct {
 	creatureKey creatureAuraKey
 	mapID       uint32
 	instanceID  uint32
+	// snapshot is the removed record the OnRemove hook hands out: the
+	// aura is already erased from the live maps when the hook fires, so
+	// resolve() returns this instead of a nil lookup and the handler
+	// still reads the removed aura's last values (caster, amounts,
+	// tick count). Only the remove hook sets it; writes through it land
+	// on the detached record and are inert.
+	snapshot *activeAura
 }
 
 func (r *luaAuraRef) resolve() *activeAura {
 	if r == nil {
 		return nil
+	}
+	if r.snapshot != nil {
+		return r.snapshot
 	}
 	if r.player != nil {
 		return r.player.activeAuras[r.spellID]
@@ -544,4 +554,25 @@ func (s *Server) fireAuraPeriodicTick(ctx context.Context, aura *activeAura, aur
 	}
 	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, aura.SpellID, scripting.AuraEventOnPeriodic, scripting.AuraEventOnPeriodic, auraObj, target)
 	return luaHookVeto(results)
+}
+
+// fireAuraApply dispatches the RegisterAuraEvent OnApply hook for a
+// freshly applied aura (args (event, aura, target)). Notification-only:
+// returns are ignored, there is no PreventDefault model for apply (see
+// the AuraEvents contract in runtime.go).
+func (s *Server) fireAuraApply(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnApply, scripting.AuraEventOnApply, auraObj, target)
+}
+
+// fireAuraRemove dispatches the RegisterAuraEvent OnRemove hook for a
+// removed aura (args (event, aura, target)). Notification-only like
+// fireAuraApply; the aura object reads the removed record's snapshot.
+func (s *Server) fireAuraRemove(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnRemove, scripting.AuraEventOnRemove, auraObj, target)
 }

@@ -375,8 +375,23 @@ const (
 // registered for a spellID see its ticks regardless of which effect index
 // the C++ registration bound, so multi-effect auras must filter on the
 // aura object when the C++ script bound a single effect.
+// OnApply/OnRemove mirror AuraEffect::HandleEffect's
+// CallScriptEffectApplyHandlers arms (SpellAuras.cpp:2341-2361 twin):
+// they fire once per fresh application / actual removal, on both the
+// player and creature apply/remove funnels, with args (event, aura,
+// target) like the periodic hook. They are notification-only: a handler
+// returning true does NOT prevent the apply/remove — the aura record is
+// already registered (apply) or erased (remove) when the hook fires,
+// and Go performs the default effect handling inline at several points
+// rather than in one skippable step, so there is no veto to model.
+// The remove hook's aura object reads the removed record's last values
+// (a snapshot: GetCaster/GetAmount/GetTickNumber still resolve); writes
+// to it land on the detached record and are inert. Re-casts that merge
+// or refresh an existing aura do not re-fire OnApply.
 const (
 	AuraEventOnPeriodic = 1
+	AuraEventOnApply    = 2
+	AuraEventOnRemove   = 3
 )
 
 type Hook struct {

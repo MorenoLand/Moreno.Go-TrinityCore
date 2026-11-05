@@ -8860,6 +8860,14 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			s.applyCreatureDetaunt(targetKey.Map, targetKey.InstanceID, m.GUID, targetKey.GUID, durationMs)
 		}
 		armExpiry(aura)
+		// RegisterAuraEvent OnApply, creature-caster twin of the
+		// session apply paths (AuraEffect::HandleEffect's
+		// CallScriptEffectApplyHandlers arm). This is the fresh-record
+		// leg only — the refresh leg above ends in armExpiry(existing)
+		// + continue and never reaches here, so a multi-effect cast
+		// fires once, on its first effect.
+		auraRef := &luaAuraRef{server: s, spellID: spell.ID, creatureKey: targetKey, mapID: targetKey.Map, instanceID: targetKey.InstanceID}
+		s.fireAuraApply(ctx, spell.ID, auraRef.luaAuraObject(), s.luaUnitObjectForGUID(targetKey.Map, targetKey.InstanceID, targetGUID))
 	}
 }
 

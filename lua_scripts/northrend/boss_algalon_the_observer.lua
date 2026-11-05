@@ -330,6 +330,8 @@ local SPELL_ARCANE_BARRAGE = 64599
 local SPELL_COLLAPSE = 62018 -- boss_algalon_the_observer.cpp:94
 local SPELL_SUPERMASSIVE_FAIL = 65311 -- boss_algalon_the_observer.cpp:79
 local SPELL_BIG_BANG = 64443 -- boss_algalon_the_observer.cpp:82
+local SPELL_BLACK_HOLE_PHASE_SHIFTS = 62168
+local SPELL_BLACK_HOLE_DOT = 62169 -- boss_algalon_the_observer.cpp:106
 
 local ENTRY_LIVING_CONSTELLATION = 33052
 
@@ -626,3 +628,18 @@ RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 1, constellationEnterCombat)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 2, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 4, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 23, algalonTimersStop)
+
+-- C++ spell_algalon_black_hole_phase_shifts::HandleEffectApply
+-- (boss_algalon_the_observer.cpp:1258-1262): EFFECT_0 PHASE. The
+-- Load() gate (:1249-1252) admits player owners only; the owner
+-- casts SPELL_BLACK_HOLE_DOT (62169) triggered on itself. The
+-- engine fires this hook from the aura-apply path (RegisterAuraEvent,
+-- AuraEventOnApply = 2; tick-196 hook). No PreventDefaultAction.
+local function blackHolePhaseShiftsApply(event, aura, target)
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    target:CastSpell(target, SPELL_BLACK_HOLE_DOT, true)
+end
+
+RegisterAuraEvent(SPELL_BLACK_HOLE_PHASE_SHIFTS, 2, blackHolePhaseShiftsApply)

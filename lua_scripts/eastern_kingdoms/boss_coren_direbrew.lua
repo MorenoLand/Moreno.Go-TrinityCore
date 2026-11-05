@@ -83,12 +83,10 @@
 -- 47369 on engage, npc_coren_direbrew_sisters.lua). spell_direbrew_
 -- disarm (47407) PeriodicTick EFFECT_1 is PORTED below — GROW
 -- 47409 +1 stack, -1500ms duration per tick (target:GetAura +
--- aura SetStackAmount/SetDuration bridges live, lua_aura.go) —
--- but LATENT: GROW is applied only by the same AuraScript's
--- OnApply arm (casts 47409 + 47310), which has no runtime event
--- (AuraEvents exposes only OnPeriodic), so the tick no-ops until
--- an aura-apply bridge lands. The 47407 OnApply arm itself stays
--- out with the missing OnApply event.
+-- aura SetStackAmount/SetDuration bridges live, lua_aura.go).
+-- The same AuraScript's OnApply arm (casts 47409 + 47310) is
+-- PORTED below too (tick 196, RegisterAuraEvent OnApply) — the
+-- GROW latent is resolved.
 -- Unmodeled: the remaining SpellScripts (47691 target picker,
 -- 47370 send mug picker, 47344 request second mug) — no
 -- SpellScript bridges (hellfire_peninsula precedent).
@@ -120,6 +118,7 @@ local SPELL_SEND_MUG_TARGET_PICKER = 47370 -- boss_coren_direbrew.cpp:75
 local SPELL_BARRELED_CONTROL_AURA = 50278 -- boss_coren_direbrew.cpp:539
 local SPELL_BARRELED = 47442 -- boss_coren_direbrew.cpp:77
 local SPELL_DIREBREW_DISARM_GROW = 47409 -- boss_coren_direbrew.cpp:72
+local SPELL_DIREBREW_DISARM = 47310 -- boss_coren_direbrew.cpp:67
 
 local NPC_ILSA_DIREBREW = 26764 -- boss_coren_direbrew.cpp:55
 local NPC_URSULA_DIREBREW = 26822 -- boss_coren_direbrew.cpp:56
@@ -394,10 +393,8 @@ RegisterAuraEvent(SPELL_SEND_MUG_CONTROL_AURA, 1, sendMugControlTick)
 -- duration, C++ order preserved (SetStackAmount, then SetDuration
 -- off the post-stack GetDuration). GetAura returns nil when GROW
 -- is absent (the C++ null-check), so the tick is a no-op then.
--- LATENT: GROW is applied only by the same AuraScript's OnApply
--- arm (casts 47409 + 47310), which has no runtime event —
--- AuraEvents exposes only OnPeriodic (runtime.go) — so this tick
--- no-ops until an aura-apply bridge lands.
+-- GROW is applied by the same AuraScript's OnApply arm, PORTED
+-- below (tick 196, RegisterAuraEvent OnApply).
 local function direbrewDisarmTick(event, aura, target)
     local grow = target:GetAura(SPELL_DIREBREW_DISARM_GROW)
     if grow then
@@ -407,6 +404,24 @@ local function direbrewDisarmTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_DIREBREW_DISARM_PRE_CAST, 1, direbrewDisarmTick)
+
+-- C++ spell_direbrew_disarm::OnApply
+-- (boss_coren_direbrew.cpp:573-577): on apply the target casts
+-- SPELL_DIREBREW_DISARM_GROW (47409) triggered on itself, then
+-- re-casts SPELL_DIREBREW_DISARM (47310) on itself, non-triggered.
+-- The engine fires this hook from the aura-apply path
+-- (RegisterAuraEvent, AuraEventOnApply = 2; tick-196 hook). No
+-- PreventDefaultAction in C++, so the handler returns nothing.
+-- The 47310 re-cast refreshes rather than re-firing: the hook
+-- fires once per fresh application only (runtime.go contract), so
+-- the re-cast cannot recurse. (C++ registers this arm with the
+-- AuraEffectRemoveFn type — a TrinityCore quirk, no behavior.)
+local function direbrewDisarmApply(event, aura, target)
+    target:CastSpell(target, SPELL_DIREBREW_DISARM_GROW, true)
+    target:CastSpell(target, SPELL_DIREBREW_DISARM, false)
+end
+
+RegisterAuraEvent(SPELL_DIREBREW_DISARM_PRE_CAST, 2, direbrewDisarmApply)
 
 -- C++ spell_barreled_control_aura::PeriodicTick
 -- (boss_coren_direbrew.cpp:544-547): PreventDefaultAction, then the
