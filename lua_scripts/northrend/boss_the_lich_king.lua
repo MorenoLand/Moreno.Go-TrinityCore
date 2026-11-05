@@ -650,3 +650,41 @@ end
 
 RegisterCreatureEvent(ENTRY_TERENAS, 9, terenasDamageTaken)
 RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 9, terenasDamageTaken)
+
+-- C++ spell_the_lich_king_infest::OnPeriodic
+-- (boss_the_lich_king.cpp:2003-2009): EFFECT_0 SPELL_AURA_
+-- PERIODIC_DAMAGE. When the owner is above 90% health the handler
+-- PreventDefaultActions the tick and removes the aura (return true
+-- is the PreventDefaultAction twin; aura:Remove() is the Remove
+-- twin). The OnUpdate leg (amount * 1.15 from the 2nd tick) stays
+-- out — no OnEffectUpdatePeriodic bridge. The boss-side Infest
+-- cast (70541, PHASE_ONE timer) stays out — phase machine.
+local SPELL_INFEST = 70541
+
+local function infestTick(event, aura, target)
+    if target:HealthAbovePct(90) then
+        aura:Remove()
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_INFEST, 1, infestTick)
+
+-- C++ spell_the_lich_king_soul_reaper::OnPeriodic
+-- (boss_the_lich_king.cpp:2321-2326): EFFECT_1 SPELL_AURA_
+-- PERIODIC_DAMAGE. No PreventDefaultAction, so the Go default
+-- damage tick still fires. The aura target casts SPELL_SOUL_
+-- REAPER_BUFF 69410 on the caster (the Lich King), triggered.
+-- The boss-side Soul Reaper cast (69409, PHASE_TWO_THREE timer)
+-- stays out — phase machine.
+local SPELL_SOUL_REAPER = 69409
+local SPELL_SOUL_REAPER_BUFF = 69410
+
+local function soulReaperTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster then
+        target:CastSpell(caster, SPELL_SOUL_REAPER_BUFF, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SOUL_REAPER, 1, soulReaperTick)

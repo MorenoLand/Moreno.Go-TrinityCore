@@ -13,12 +13,14 @@
 -- melee is engine-driven in Go (creature combat tick), like
 -- C++ DoMeleeAttackIfReady.
 -- Deviations from C++ (documented-only legs):
--- * spell_mark_of_kazzak / spell_twisted_reflection are
---   SpellScriptLoader AuraScripts (mana-scaled Mark amount,
---   32961 explode-at-zero-mana, proc-redirected 21064 heal) —
---   no SpellScript/AuraScript bridge exists in Go; the boss
---   casts the base spells 32960/21063, the custom aura
---   mechanics are unmodeled.
+-- * spell_twisted_reflection is a SpellScriptLoader AuraScript
+--   (proc-redirected 21064 heal) — no SpellScript/AuraScript
+--   proc bridge exists in Go; the boss casts the base spell
+--   21063, the custom aura mechanics are unmodeled.
+-- * spell_mark_of_kazzak's AuraScript OnPeriodic (mana == 0 ->
+--   32961 self-cast + SetDuration(0)) is PORTED below via
+--   RegisterAuraEvent (tick 194); the CalculateAmount leg (5% of
+--   max mana) stays out — no DoEffectCalcAmount bridge.
 -- * The UNIT_STATE_CASTING pre-loop gate (cpp:119, no
 --   in-loop gate) is PORTED via the 500ms IsCasting defer
 --   (mal_ganis idiom, live bridge lua_creature_events.go:
@@ -224,3 +226,25 @@ RegisterCreatureEvent(ENTRY, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ spell_mark_of_kazzak::OnPeriodic
+-- (boss_doomlord_kazzak.cpp:196-206): EFFECT_0 SPELL_AURA_
+-- PERIODIC_MANA_LEECH. No PreventDefaultAction, so the Go default
+-- leech tick still fires (it drains 0 at zero mana anyway). When
+-- the target's mana hits 0 the target casts SPELL_MARK_OF_KAZZAK_
+-- DAMAGE 32961 on itself, triggered by the aura (the aurEff
+-- overload = triggered cast), and SetDuration(0) removes the
+-- aura (aura:SetDuration(0) twin). POWER_MANA is 0. The
+-- CalculateAmount leg (5% of max mana per tick) stays out — no
+-- DoEffectCalcAmount bridge.
+local SPELL_MARK_OF_KAZZAK_DAMAGE = 32961
+local POWER_MANA = 0
+
+local function markOfKazzakTick(event, aura, target)
+    if target:GetPower(POWER_MANA) == 0 then
+        target:CastSpell(target, SPELL_MARK_OF_KAZZAK_DAMAGE, true)
+        aura:SetDuration(0)
+    end
+end
+
+RegisterAuraEvent(SPELL_MARK_OF_KAZZAK, 1, markOfKazzakTick)

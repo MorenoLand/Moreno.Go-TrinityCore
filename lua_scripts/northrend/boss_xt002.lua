@@ -83,15 +83,17 @@
 -- DoAction(ACTION_ENTER_HARD_MODE — no DoAction bridge).
 -- GetData(DATA_HARD_MODE 1 / DATA_HEALTH_RECOVERED 2 /
 -- DATA_GRAVITY_BOMB_CASUALTY 3 — creature:GetData IS bridged
--- (ScriptData store, 2026-10-24) but both ends stay out: the
--- producers are SpellScript/AuraScript (gravity-bomb aura OnPeriodic
--- :739, gravity-bomb damage OnEffectHitTarget :760) and the consumers
--- are achievement_heartbreaker / achievement_nerf_engineering /
--- achievement_nerf_gravity_bombs below (no achievement bridge), so a
--- Lua-side latch would be dead code (the 2026-10-24 outhouse
--- precedent); SetData (DATA_TRANSFERED_HEALTH health-transfer +
--- ModifyHealth leg; DATA_GRAVITY_BOMB_CASUALTY) is bridged on the
--- same store but unwritable from any Lua-reachable producer.
+-- (ScriptData store, 2026-10-24). The gravity-bomb aura OnPeriodic
+-- producer (:739) is PORTED below via RegisterAuraEvent (tick 194)
+-- — the 2026-10-24 "dead code" claim is superseded by the
+-- violet-hold latent-write precedent (tick 193): the write sits in
+-- ScriptData for the unmodeled achievement consumer. The other
+-- producers (gravity-bomb damage OnEffectHitTarget :760) and the
+-- consumers (achievement_heartbreaker / achievement_nerf_engineering
+-- / achievement_nerf_gravity_bombs below, no achievement bridge)
+-- stay out; SetData (DATA_TRANSFERED_HEALTH health-transfer +
+-- ModifyHealth leg) is bridged on the same store but unwritable
+-- from any Lua-reachable producer.
 -- The heart-exposure phase machine — ExposeHeart
 -- (events.SetPhase(PHASE_HEART) + react-state / AttackStop +
 -- Talk(SAY_HEART_OPENED 1) + EVENT_SUBMERGE scheduling + heart
@@ -154,9 +156,10 @@
 -- periodic-trigger AuraScript OnRemove — no AuraScript
 -- bridge; joins the no-AuraScript-bridge queue);
 -- spell_xt002_gravity_bomb_aura (63024/64234 — OnPeriodic
--- SetData(DATA_GRAVITY_BOMB_CASUALTY) leg + OnRemove hard-mode
--- void-zone summon — no AuraScript bridge; joins the
--- no-AuraScript-bridge queue);
+-- SetData(DATA_GRAVITY_BOMB_CASUALTY) leg PORTED below via
+-- RegisterAuraEvent (tick 194); the "no AuraScript bridge" block
+-- is stale (tick 188); OnRemove hard-mode void-zone summon stays
+-- out — no remove hook);
 -- spell_xt002_gravity_bomb_damage (63025/64233 — lethal-hit
 -- SetData(DATA_GRAVITY_BOMB_CASUALTY) leg — no SpellScript
 -- bridge; joins the no-SpellScript-bridge queue);
@@ -334,3 +337,32 @@ RegisterCreatureEvent(ENTRY_LIFE_SPARK, 1, lifeSparkEnterCombat)
 RegisterCreatureEvent(ENTRY_LIFE_SPARK, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_LIFE_SPARK, 4, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_LIFE_SPARK, 23, lifeSparkReset)
+
+-- C++ spell_xt002_gravity_bomb_aura::OnPeriodic
+-- (boss_xt002.cpp:734-742): EFFECT_2 SPELL_AURA_PERIODIC_DAMAGE.
+-- No PreventDefaultAction, so the Go default damage tick still
+-- fires. When the EFFECT_2 amount reaches the owner's health, the
+-- caster (XT-002) records the casualty: SetData(DATA_GRAVITY_BOMB_
+-- CASUALTY 3, 1) on the caster's ScriptData store (creature:SetData
+-- twin, shared with creature:GetData). LATENT consumer: the
+-- achievement checks (achievement_nerf_gravity_bombs OnCheck reads
+-- GetData(DATA_GRAVITY_BOMB_CASUALTY)) are unmodeled — no
+-- achievement bridge — so the write sits in ScriptData until then
+-- (the violet-hold portal precedent, tick 193). The OnRemove leg
+-- (hard-mode void-zone summon) stays out — no remove hook.
+local SPELL_GRAVITY_BOMB = 63024
+local SPELL_GRAVITY_BOMB_HEROIC = 64234
+local DATA_GRAVITY_BOMB_CASUALTY = 3
+
+local function gravityBombTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if not caster then
+        return
+    end
+    if aura:GetAmount(2) >= target:GetHealth() then
+        caster:SetData(DATA_GRAVITY_BOMB_CASUALTY, 1)
+    end
+end
+
+RegisterAuraEvent(SPELL_GRAVITY_BOMB, 1, gravityBombTick)
+RegisterAuraEvent(SPELL_GRAVITY_BOMB_HEROIC, 1, gravityBombTick)

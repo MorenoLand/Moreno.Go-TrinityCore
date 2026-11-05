@@ -318,6 +318,62 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{sp.Effects[index].CalcValue()}, nil
 	}
+	// GetSpellStackAmount(spellID) is SpellInfo::StackAmount
+	// (Spell.dbc field 49 = CumulativeAura, DBCStructure.h:1440):
+	// the max stack count of the given spell. Reads the loaded
+	// Spell.dbc record for the given spell, not this aura's spell.
+	// An unknown spell reads 0, the GetTriggerSpell convention —
+	// the choking-vines handler (spell_generic.cpp:968-974) gates
+	// its wound cast on GetStackAmount() == StackAmount, so a 0
+	// read never fires the cast. Default this aura's spell.
+	methods["GetSpellStackAmount"] = func(_ context.Context, args []any) ([]any, error) {
+		targetSpell := spellID
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			targetSpell = v
+		}
+		if r.server == nil || r.server.Data == nil {
+			return []any{uint32(0)}, nil
+		}
+		sp, found, err := r.server.Data.Spell(targetSpell)
+		if err != nil || !found {
+			return []any{uint32(0)}, nil
+		}
+		return []any{sp.StackAmount}, nil
+	}
+	// GetSpellEffectIsEffect(spellID, effectIndex) is
+	// SpellInfo::Effects[eff].IsEffect() (SpellInfo.h: the effect
+	// slot carries a real effect when Effect != SPELL_EFFECT_NONE):
+	// whether the given spell's effect slot is populated. Reads the
+	// loaded Spell.dbc record for the given spell. An unknown spell
+	// or an out-of-range index reads false — the
+	// remove-on-full-health handler (spell_generic.cpp:2955-2969)
+	// treats a missing slot as no effect, matching the C++
+	// onlyEffect gate.
+	methods["GetSpellEffectIsEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return []any{false}, nil
+		}
+		targetSpell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		index, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if r.server == nil || r.server.Data == nil || index < 0 {
+			return []any{false}, nil
+		}
+		sp, found, err := r.server.Data.Spell(targetSpell)
+		if err != nil || !found || int(index) >= len(sp.Effects) {
+			return []any{false}, nil
+		}
+		return []any{sp.Effects[index].Effect != 0}, nil
+	}
 	// GetProcChance is SpellInfo::ProcChance (Spell.dbc field 35,
 	// DBCStructure.h:1425): the roll_chance_i percent a C++
 	// periodic handler gates on. An unknown spell or a removed aura

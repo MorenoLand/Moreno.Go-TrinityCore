@@ -128,8 +128,12 @@
 -- Not registered: go_kalecgos_spectral_rift (GO 187055 — no
 -- GameObjectAI bridge); spell_kalecgos_tap_check,
 -- spell_kalecgos_spectral_blast, spell_kalecgos_spectral_realm_
--- trigger, spell_kalecgos_spectral_realm_aura and spell_kalecgos_
--- curse_of_boundless_agony (standing SpellScript/AuraScript gaps).
+-- trigger, spell_kalecgos_spectral_realm_aura (standing
+-- SpellScript/AuraScript gaps). spell_kalecgos_curse_of_boundless_
+-- agony's OnPeriodic leg is PORTED below via RegisterAuraEvent
+-- (tick 194); its OnApply (instance boss-state gate), OnEffect-
+-- UpdatePeriodic (amount doubling) and OnRemove (ally cast) legs
+-- stay out — no instance / update-periodic / remove hooks.
 -- CAST-STATE GATE (ported 2026-11-04): the dragon's own UpdateAI
 -- pre-loop gate (boss_kalecgos.cpp:259) + post-event check (:340),
 -- the human's own UpdateAI gates (:402/:421), and sathrovarr's
@@ -775,3 +779,27 @@ RegisterCreatureEvent(ENTRY_SATHROVARR, 4, sathrovarrDied)
 RegisterCreatureEvent(ENTRY_SATHROVARR, 9, sathrovarrDamageTaken)
 RegisterCreatureEvent(ENTRY_SATHROVARR, 14, sathrovarrSpellHit)
 RegisterCreatureEvent(ENTRY_SATHROVARR, 23, sathrovarrReset)
+
+-- C++ spell_kalecgos_curse_of_boundless_agony::OnPeriodic
+-- (boss_kalecgos.cpp:808-816): EFFECT_0 SPELL_AURA_PERIODIC_
+-- DAMAGE. No PreventDefaultAction, so the Go default damage tick
+-- still fires. The aura target casts the stage visual on itself,
+-- triggered, by tick number: ticks 1-5 visual 1 (45083), ticks
+-- 6-10 visual 2 (45084), tick 11+ visual 3 (45085). GetTickNumber
+-- is the tick-191 bridge (first tick reads 1).
+local SPELL_AGONY_CURSE_VISUAL_1 = 45083
+local SPELL_AGONY_CURSE_VISUAL_2 = 45084
+local SPELL_AGONY_CURSE_VISUAL_3 = 45085
+
+local function agonyCurseTick(event, aura, target)
+    local tick = aura:GetTickNumber()
+    local visual = SPELL_AGONY_CURSE_VISUAL_3
+    if tick <= 5 then
+        visual = SPELL_AGONY_CURSE_VISUAL_1
+    elseif tick <= 10 then
+        visual = SPELL_AGONY_CURSE_VISUAL_2
+    end
+    target:CastSpell(target, visual, true)
+end
+
+RegisterAuraEvent(SPELL_AGONY_CURSE, 1, agonyCurseTick)

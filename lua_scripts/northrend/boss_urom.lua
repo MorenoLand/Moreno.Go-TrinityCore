@@ -120,9 +120,9 @@
 -- be dead code. No aura-application bridge on the Lua creature object.
 -- spell_urom_frostbomb — AuraScript OnPeriodic (EFFECT_1 SPELL_AURA_
 -- PERIODIC_DAMAGE): heroic + IsInCombat gate -> caster CastSpell(
--- target, SPELL_FROST_BUFFET 58025) — no AuraScript bridge (the
--- keristrasza spell_intense_cold precedent); joins the
--- no-AuraScript-bridge queue.
+-- target, SPELL_FROST_BUFFET 58025) — PORTED below via
+-- RegisterAuraEvent (tick 194); the "no AuraScript bridge" block is
+-- stale (tick 188).
 
 local ENTRY_UROM = 27655
 
@@ -192,3 +192,21 @@ RegisterCreatureEvent(ENTRY_UROM, 3, uromTargetDied)
 RegisterCreatureEvent(ENTRY_UROM, 4, uromDied)
 RegisterCreatureEvent(ENTRY_UROM, 23, uromReset)
 RegisterCreatureEvent(ENTRY_UROM, 24, uromReachHome)
+
+-- C++ spell_urom_frostbomb::OnPeriodic (boss_urom.cpp:358-364):
+-- EFFECT_1 SPELL_AURA_PERIODIC_DAMAGE. No PreventDefaultAction, so
+-- the Go default damage tick still fires. On each tick, when the
+-- caster is in heroic mode and in combat, the caster casts SPELL_
+-- FROST_BUFFET 58025 on the aura target, triggered. Aura spell is
+-- SPELL_FROSTBOMB 51103 (boss_urom.cpp:34).
+local SPELL_FROSTBOMB = 51103
+local SPELL_FROST_BUFFET = 58025
+
+local function uromFrostbombTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster and caster:IsHeroic() and caster:IsInCombat() then
+        caster:CastSpell(target, SPELL_FROST_BUFFET, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_FROSTBOMB, 1, uromFrostbombTick)

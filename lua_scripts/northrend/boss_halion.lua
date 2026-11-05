@@ -206,7 +206,11 @@
 -- SpellScriptLoaders — zero Talk (npc_orb_carrier /
 -- npc_meteor_strike* / npc_combustion_consumption) or spell-model arms
 -- (no-SpellScript / no-AuraScript bridge, the sindragosa
--- ice_tomb_target precedent) — NOT registered. npc_living_inferno
+-- ice_tomb_target precedent) — NOT registered. EXCEPTION (tick 194):
+-- spell_halion_combustion_consumption's OnPeriodic leg (re-cast the
+-- mark on the target each tick) is PORTED below via RegisterAuraEvent;
+-- its OnApply / OnRemove legs stay out (no apply/remove hooks).
+-- npc_living_inferno
 -- (40681) / npc_living_ember (40683): only their JustDied
 -- DespawnOrUnsummon(1ms) legs port (event 4, below — 1ms ≈ immediate
 -- creature:Despawn); the rest stays out (SetFlag IS bridged but no
@@ -775,3 +779,31 @@ end
 RegisterGameObjectGossipEvent(GO_HALION_PORTAL_1, 1, onTwilightPortalGossip)
 RegisterGameObjectGossipEvent(GO_HALION_PORTAL_2, 1, onTwilightPortalGossip)
 RegisterGameObjectGossipEvent(GO_HALION_PORTAL_EXIT, 1, onTwilightPortalGossip)
+
+-- C++ spell_halion_combustion_consumption::AddMarkStack
+-- (boss_halion.cpp:1460-1463): EFFECT_0 SPELL_AURA_PERIODIC_DAMAGE.
+-- No PreventDefaultAction, so the Go default damage tick still
+-- fires. Each tick the aura target re-casts its mark spell on
+-- itself, triggered. The loader is instantiated twice
+-- (boss_halion.cpp:1923-1924): "spell_halion_soul_consumption"
+-- with SPELL_MARK_OF_CONSUMPTION 74795 on the consumption damage
+-- aura 74803, and "spell_halion_fiery_combustion" with SPELL_MARK_
+-- OF_COMBUSTION 74567 on the combustion damage aura 74629. The
+-- OnApply leg (same self-cast once) and the OnRemove leg (strip
+-- the mark unless removed by death) stay out — no apply/remove
+-- hooks.
+local SPELL_COMBUSTION_DAMAGE_AURA = 74629
+local SPELL_MARK_OF_COMBUSTION = 74567
+local SPELL_CONSUMPTION_DAMAGE_AURA = 74803
+local SPELL_MARK_OF_CONSUMPTION = 74795
+
+local function combustionTick(event, aura, target)
+    target:CastSpell(target, SPELL_MARK_OF_COMBUSTION, true)
+end
+
+local function consumptionTick(event, aura, target)
+    target:CastSpell(target, SPELL_MARK_OF_CONSUMPTION, true)
+end
+
+RegisterAuraEvent(SPELL_COMBUSTION_DAMAGE_AURA, 1, combustionTick)
+RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 1, consumptionTick)

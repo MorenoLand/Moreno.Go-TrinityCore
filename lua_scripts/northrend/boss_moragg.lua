@@ -55,11 +55,13 @@
 -- triggerSpell, aurEff)) — no AuraScript bridge. Fidelity gap: the
 -- ported RAY_OF_PAIN / RAY_OF_SUFFERING auras apply but their
 -- scripted periodic triggers will not fire.
--- spell_moragg_optic_link (AuraScript: tick >= 4 -> OPTIC_LINK_LEVEL_2
--- 54394, tick >= 8 -> OPTIC_LINK_LEVEL_3 54395, always
--- OPTIC_LINK_LEVEL_1 54393; damage ramp 750 -> 1500 -> 3000 at ticks
--- 1/4/8) — no AuraScript bridge; the optic-link visual stages and
--- damage ramp stay out.
+-- spell_moragg_optic_link (AuraScript OnPeriodic: tick >= 4 ->
+-- OPTIC_LINK_LEVEL_2 54394, tick >= 8 -> OPTIC_LINK_LEVEL_3
+-- 54395, always OPTIC_LINK_LEVEL_1 54393) — PORTED below via
+-- RegisterAuraEvent (tick 194); the "no AuraScript bridge" block
+-- is stale (tick 188). The OnUpdate damage ramp (750 -> 1500 ->
+-- 3000 at ticks 1/4/8) stays out — no OnEffectUpdatePeriodic
+-- bridge.
 -- The JustReachedHome instance->SetData(DATA_HANDLE_CELLS,
 -- DATA_MORAGG) leg — no instance-script bridge.
 
@@ -188,3 +190,32 @@ RegisterCreatureEvent(ENTRY_MORAGG, 1, moraggEnterCombat)
 RegisterCreatureEvent(ENTRY_MORAGG, 2, moraggCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MORAGG, 4, moraggCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MORAGG, 23, moraggCancelCombatTimers)
+
+-- C++ spell_moragg_optic_link::OnPeriodic
+-- (boss_moragg.cpp:199-210): EFFECT_0 SPELL_AURA_PERIODIC_DAMAGE.
+-- No PreventDefaultAction, so the Go default damage tick still
+-- fires (the ramp lives in the unported OnUpdate leg). The caster
+-- casts the level spells on the aura target, triggered by the aura
+-- (the aurEff overload = triggered cast): level 1 (54393) every
+-- tick, level 2 (54394) from tick 4, level 3 (54395) from tick 8.
+-- GetTickNumber is the tick-191 bridge (first tick reads 1).
+local SPELL_OPTIC_LINK_LEVEL_1 = 54393
+local SPELL_OPTIC_LINK_LEVEL_2 = 54394
+local SPELL_OPTIC_LINK_LEVEL_3 = 54395
+
+local function opticLinkTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if not caster then
+        return
+    end
+    local tick = aura:GetTickNumber()
+    if tick >= 8 then
+        caster:CastSpell(target, SPELL_OPTIC_LINK_LEVEL_3, true)
+    end
+    if tick >= 4 then
+        caster:CastSpell(target, SPELL_OPTIC_LINK_LEVEL_2, true)
+    end
+    caster:CastSpell(target, SPELL_OPTIC_LINK_LEVEL_1, true)
+end
+
+RegisterAuraEvent(SPELL_OPTIC_LINK, 1, opticLinkTick)

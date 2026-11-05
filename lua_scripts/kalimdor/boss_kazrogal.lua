@@ -56,12 +56,11 @@
 --   plus the MINRAIDDAMAGE lootable-flag gate — blocked (standing).
 -- - spell_mark_of_kazrogal SpellScriptLoader: the SpellScript
 --   OnObjectAreaTargetSelect filter (targets.remove_if — keeps only mana
---   users, MarkTargetFilter) needs a SpellScript target-filter bridge,
---   and the AuraScript OnEffectPeriodic handler (if target mana == 0,
---   target->CastSpell(target, SPELL_MARK_DAMAGE = 31463, aurEff) and
---   SetDuration(0)) needs an AuraScript periodic-effect bridge — both
---   blocked (standing; the vampiric-aura OnEffectProc was documented the
---   same way, see boss_anetheron.lua).
+--   users, MarkTargetFilter) needs a SpellScript target-filter bridge
+--   and stays out; the AuraScript OnEffectPeriodic handler (if target
+--   mana == 0, target->CastSpell(target, SPELL_MARK_DAMAGE = 31463,
+--   aurEff) and SetDuration(0)) is PORTED below via RegisterAuraEvent
+--   (tick 194) — the no-AuraScript-bridge block is stale (tick 188).
 
 local ENTRY = 17888
 
@@ -173,3 +172,24 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ spell_mark_of_kazrogal::OnPeriodic
+-- (boss_kazrogal.cpp:213-222): EFFECT_0 SPELL_AURA_PERIODIC_MANA_
+-- LEECH. No PreventDefaultAction, so the Go default leech tick
+-- still fires (it drains 0 at zero mana anyway). When the target's
+-- mana hits 0 the target casts SPELL_MARK_DAMAGE 31463 on itself,
+-- triggered by the aura (the aurEff overload = triggered cast),
+-- and SetDuration(0) removes the aura (aura:SetDuration(0)
+-- twin). POWER_MANA is 0. The SpellScript target filter (mana
+-- users only) stays out — no SpellScript target-filter bridge.
+local SPELL_MARK_DAMAGE = 31463
+local POWER_MANA = 0
+
+local function markOfKazrogalTick(event, aura, target)
+    if target:GetPower(POWER_MANA) == 0 then
+        target:CastSpell(target, SPELL_MARK_DAMAGE, true)
+        aura:SetDuration(0)
+    end
+end
+
+RegisterAuraEvent(SPELL_MARK, 1, markOfKazrogalTick)
