@@ -49,8 +49,9 @@
 -- Stay-out: EVENT_MASON_ACTION SetData(1,1) SAI torch actions
 -- (SetData stores type 1 = 1 on the mason, but no SAI dispatch
 -- reads it in the model); wave/Halof AttackStart on the banner
--- is engine-no-op today (player-session victim resolution only)
--- so the waves stand at their spawn until engaged by players.
+-- is engine-no-op today (player-session victim resolution only);
+-- the chase leg is approximated by MoveTo to the fight pos, so
+-- waves converge on the fight and stand there until engaged.
 -- 58084 + 58113 + 58121 + 30891 + 31003/30919/30900/30986/
 -- 30984/30987/30989/31013 verifiable.
 -- npc_argent_valiant — no NPC_ entry constant anywhere in the
@@ -219,13 +220,18 @@ local intro1, intro2, intro3, startFight, waveSpawn, halofEvent, masonAction, en
 -- to the Dalfors fight pos + AttackStart on the banner. AttackStart is
 -- the exact twin call, but the Go funnel resolves player sessions only
 -- (lua_creature_events.go EngageWithTarget), so a creature victim no-ops
--- today and the wave stands until players engage it — documented gap,
--- not a port omission. Latched into bannerSummons for the JustDied
+-- today; the chase leg is approximated by MoveTo to the fight pos (the
+-- C++ home, banner's neighborhood — crew walk-in precedent), so waves
+-- converge on the fight and stand there until players engage them.
+-- Full creature-victim combat stays engine-blocked (bridge gate +
+-- funnel map/instance + combat-tick player-only target resolution;
+-- tick-147 triage). Latched into bannerSummons for the JustDied
 -- drain and the victory DespawnEntry sweep.
 local function summonWaveCreature(creature, guid, entry, pos)
     local summon = creature:SummonCreature(entry, pos[1], pos[2], pos[3], pos[4], 5, 30000)
     if summon then
         summon:SetHomePosition(DALFORS_FIGHT_POS[1], DALFORS_FIGHT_POS[2], DALFORS_FIGHT_POS[3], DALFORS_FIGHT_POS[4])
+        summon:MoveTo(0, DALFORS_FIGHT_POS[1], DALFORS_FIGHT_POS[2], DALFORS_FIGHT_POS[3])
         summon:AttackStart(creature)
         local list = bannerSummons[guid]
         if list then
