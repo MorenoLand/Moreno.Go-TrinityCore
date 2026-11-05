@@ -19405,7 +19405,8 @@ func init() {
 	// JustDied-Talk precedent). Sara's player-gated
 	// Talk(SAY_SARA_KILL 5) carries an additional
 	// !IsInEvadeMode() gate with no Lua bridge — event 3
-	// deliberately not registered. Voice/brain arms, the
+	// deliberately not registered. Voice engage arms are ported (see below);
+	// brain arms, the
 	// keeper/illusion/gossip legs, Sara's phase-gated timer
 	// arms and all thirty-three spell scripts are bridge-
 	// blocked — documented in the lua header. Timer-driven
@@ -19423,6 +19424,9 @@ func init() {
 	// one-shots are ungated (separate hook).
 	RegisterLuaBoss("boss_yogg_saron", 33134)
 	RegisterLuaBoss("boss_yogg_saron", 33288)
+	// Voice of Yogg-Saron (33280, ulduar.h:203; boss_voice_of_yogg_saronAI : BossAI):
+	// engage sanity/insane casts ported in boss_yogg_saron.lua (events 1/19).
+	RegisterLuaBoss("boss_voice_of_yogg_saron", 33280)
 	// Algalon the Observer (Ulduar) — boss_algalon_the_observer.cpp,
 	// AddSC_boss_algalon_the_observer() (loader decl 123 / call 318) — the
 	// FOURTEENTH group of the "// Ulduar" block, the last Ulduar boss group
@@ -20574,12 +20578,16 @@ func init() {
 	// the JustDied _JustDied() instance leg and the cross-AI
 	// xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH) leg have no
 	// bridges; npc_baltharus_the_warborn_clone (39899) has zero Talk
-	// lines — registered via RegisterCreatureEvent in the lua file (entry-based dispatch). Third group
+	// lines — now RegisterLuaBoss'd below (entry-based event dispatch alone
+	// left its BossAI slot empty). Third group
 	// of the "// Ruby Sanctum" block. UpdateAI CASTING gates (boss
 	// :189 pre-loop PHASE_INTRO-exempt + :223 in-loop; clone :289 +
 	// :314) ported as 500ms IsCasting defer per cast tick, including
 	// the 1ms EVENT_CLONE pump.
 	RegisterLuaBoss("boss_baltharus_the_warborn", 39751)
+	// Baltharus clone (39899, npc_baltharus_the_warborn_cloneAI : BossAI):
+	// CLEAVE/BLADE_TEMPEST/ENERVATING_BRAND scheduler ported in boss_baltharus_the_warborn.lua.
+	RegisterLuaBoss("npc_baltharus_the_warborn_clone", 39899)
 }
 
 func init() {
