@@ -38500,7 +38500,28 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 					if casterSess == nil {
 						casterMotion = s.server.findCreatureMotionLocked(targetKey.Map, targetKey.InstanceID, casterGUID)
 					}
-					switched, newVictim := s.server.creatureAddThreat(m, casterGUID, 10.0, true, casterSess, casterMotion)
+					// SpellAuraEffects.cpp:4357-4361 (Tame Beast) calls
+					// AddThreat(caster, 10.0f) with the default args: the
+					// null spell folds the caster's NORMAL-school threat
+					// multiplier (CalculateModifiedThreat,
+					// ThreatManager.cpp:606-659, spell-null leg) and the
+					// caster's redirect registry applies on top
+					// (:344-373) — the raw 10.0 skipped both.
+					threat := float32(10.0)
+					var rSwitched bool
+					var rVictim uint64
+					if casterSess != nil {
+						threat *= casterSess.getThreatMultiplier(spellSchoolMaskNormal)
+						if threat > 0 {
+							threat, rSwitched, rVictim = casterSess.splitThreatRedirects(m, threat)
+						}
+					} else if casterMotion != nil {
+						threat *= s.server.creatureThreatMultiplier(targetKey.Map, targetKey.InstanceID, casterGUID, spellSchoolMaskNormal)
+					}
+					switched, newVictim := s.server.creatureAddThreat(m, casterGUID, threat, true, casterSess, casterMotion)
+					if rSwitched {
+						switched, newVictim = true, rVictim
+					}
 					var entries []protocol.ThreatEntry
 					var switchStart pendingAttackStart
 					var mapID, instanceID uint32

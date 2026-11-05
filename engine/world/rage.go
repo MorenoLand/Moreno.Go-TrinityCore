@@ -143,6 +143,7 @@ type shareDamageEntry struct {
 	casterGUID uint64
 	amount     uint32
 	schoolMask uint32
+	spellID    uint32
 }
 
 // collectShareDamageAuras snapshots the victim's live aura-300 effects whose
@@ -169,7 +170,7 @@ func (s *session) collectShareDamageAuras(victimGUID uint64, victimIsPlayer bool
 		if aura.CasterGUID == 0 {
 			return
 		}
-		out = append(out, shareDamageEntry{casterGUID: aura.CasterGUID, amount: aura.Amount, schoolMask: aura.SchoolMask})
+		out = append(out, shareDamageEntry{casterGUID: aura.CasterGUID, amount: aura.Amount, schoolMask: aura.SchoolMask, spellID: aura.SpellID})
 	}
 	if victimIsPlayer {
 		ts := s.server.findSessionByGUID(victimGUID)
@@ -214,7 +215,7 @@ func (s *session) splitShareDamagePct(ctx context.Context, victimGUID uint64, vi
 		if victimIsPlayer && s.player != nil {
 			ckey = creatureAuraKeyForPlayer(*s.player, e.casterGUID)
 		}
-		s.applySharedDamageToCreature(ctx, ckey, attackerGUID, share)
+		s.applySharedDamageToCreature(ctx, ckey, attackerGUID, share, e.spellID, e.schoolMask)
 	}
 }
 
@@ -280,7 +281,7 @@ func (s *session) applySharedDamageToPlayer(ctx context.Context, victimGUID, att
 // (e.g. boss Soul Link 38007 shared onto the inner demon): tap, threat, and
 // the kill/health legs run; aura interrupts, procs, and the split do not.
 // SetLastDamagedTime has no Go bridge (kill.go), matching the main paths.
-func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureAuraKey, attackerGUID uint64, share uint32) {
+func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureAuraKey, attackerGUID uint64, share uint32, spellID uint32, schoolMask uint32) {
 	if s == nil || s.server == nil || share == 0 {
 		return
 	}
@@ -297,12 +298,33 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 	// requirement standing; a pet/player-controlled attacker taps for its
 	// controlling player.
 	attackerMotion := s.server.findCreatureMotionLocked(key.Map, key.InstanceID, attackerGUID)
-	tapPlayer, tapGroup, counts := s.server.tapAttackerAttribution(attackerGUID, s.server.findSessionByGUID(attackerGUID), attackerMotion)
+	attackerSess := s.server.findSessionByGUID(attackerGUID)
+	tapPlayer, tapGroup, counts := s.server.tapAttackerAttribution(attackerGUID, attackerSess, attackerMotion)
 	s.server.recordCreatureTap(motion, tapPlayer, tapGroup, share, motion.Health, counts)
 	if motion.ThreatMgr == nil {
 		motion.ThreatMgr = NewThreatManager(motion)
 	}
-	s.server.creatureAddThreat(motion, attackerGUID, float32(share), false, s.server.findSessionByGUID(attackerGUID), attackerMotion)
+	// Unit::DealDamage (Unit.cpp:906) calls AddThreat with the default
+	// args (ignoreModifiers=false, ignoreRedirects=false): the shared
+	// amount folds the aura spell's spell_threat-row pctMod, the
+	// attacker's SPELLMOD_THREAT mods and school multipliers
+	// (CalculateModifiedThreat, ThreatManager.cpp:606-659) and the
+	// attacker's redirect registry applies on top — the raw share
+	// skipped both. The step-1 gate runs on the aura spell
+	// (ThreatManager.cpp:311-317); a gated split neither adds threat
+	// nor engages ("threat implies combat", :366-368).
+	foldSess := s
+	if attackerSess != nil {
+		foldSess = attackerSess
+	}
+	threat, step1Gate := foldSess.damageThreatAmountWithModOwner(ctx, spellID, schoolMask, float32(share), motion.InCombat, attackerSess, attackerMotion)
+	if !step1Gate {
+		motion.InCombat = true
+		if threat > 0 && attackerSess != nil {
+			threat, _, _ = attackerSess.splitThreatRedirects(motion, threat)
+		}
+		s.server.creatureAddThreat(motion, attackerGUID, threat, false, attackerSess, attackerMotion)
+	}
 	killed := share >= motion.Health
 	if killed {
 		motion.Health = 0
