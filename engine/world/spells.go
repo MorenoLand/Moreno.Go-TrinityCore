@@ -23223,12 +23223,12 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 					var rSwitched bool
 					var rVictim uint64
 					threat, rSwitched, rVictim = s.splitThreatRedirects(motion, threat)
-					switched, newVictim = motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+					switched, newVictim = s.server.creatureAddThreat(motion, s.playerGUID, threat, inMelee, s, nil)
 					if rSwitched {
 						switched, newVictim = true, rVictim
 					}
 				} else {
-					switched, newVictim = motion.ThreatMgr.AddThreat(s.playerGUID, 0, inMelee)
+					switched, newVictim = s.server.creatureAddThreat(motion, s.playerGUID, 0, inMelee, s, nil)
 				}
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
@@ -29507,7 +29507,7 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 		if amount > 0 {
 			threat, rSwitched, rVictim = s.splitThreatRedirects(motion, threat)
 		}
-		switched, victim = motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+		switched, victim = s.server.creatureAddThreat(motion, s.playerGUID, threat, inMelee, s, nil)
 		if rSwitched {
 			switched, victim = true, rVictim
 		}
@@ -38387,7 +38387,12 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 					s.server.motionMu.Lock()
 					wasInCombat := m.InCombat
 					passive := isCreaturePassive(m)
-					switched, newVictim := m.ThreatMgr.AddThreat(casterGUID, 10.0, true)
+					casterSess := s.server.findSessionByGUID(casterGUID)
+					var casterMotion *creatureMotion
+					if casterSess == nil {
+						casterMotion = s.server.findCreatureMotionLocked(targetKey.Map, targetKey.InstanceID, casterGUID)
+					}
+					switched, newVictim := s.server.creatureAddThreat(m, casterGUID, 10.0, true, casterSess, casterMotion)
 					var entries []protocol.ThreatEntry
 					var switchStart pendingAttackStart
 					var mapID, instanceID uint32
@@ -43221,7 +43226,7 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 				if dmgThreat > 0 {
 					dmgThreat, _, _ = s.splitThreatRedirects(motion, dmgThreat)
 				}
-				motion.ThreatMgr.AddThreat(s.playerGUID, dmgThreat, inMelee)
+				s.server.creatureAddThreat(motion, s.playerGUID, dmgThreat, inMelee, s, nil)
 			}
 			motion.Moving = true
 		}

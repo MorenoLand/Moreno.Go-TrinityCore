@@ -147,22 +147,23 @@ func (s *session) splitThreatRedirects(motion *creatureMotion, amount float32) (
 		}
 		var victimReach float32
 		var vx, vy, vz float32
-		resolved := false
+		var victimSess *session
+		var victimMotion *creatureMotion
 		if ts := s.server.findSessionByGUID(r.victim); ts != nil && ts.player != nil {
+			victimSess = ts
 			victimReach = ts.player.CombatReach
 			vx, vy, vz = ts.player.X, ts.player.Y, ts.player.Z
-			resolved = true
 		} else if vm := s.server.findCreatureMotionLocked(motion.Map, motion.InstanceID, r.victim); vm != nil {
+			victimMotion = vm
 			victimReach = vm.CombatReach
 			vx, vy, vz = vm.X, vm.Y, vm.Z
-			resolved = true
 		}
-		if !resolved {
+		if victimSess == nil && victimMotion == nil {
 			continue
 		}
 		dist := distance3D(motion.X, motion.Y, motion.Z, vx, vy, vz)
 		inMelee := inMeleeThreatRange(motion.CombatReach, victimReach, dist)
-		if sw, nv := motion.ThreatMgr.AddThreat(r.victim, share, inMelee); sw {
+		if sw, nv := s.server.creatureAddThreat(motion, r.victim, share, inMelee, victimSess, victimMotion); sw {
 			switched, newVictim = true, nv
 		}
 		remaining -= share
@@ -791,7 +792,7 @@ func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, target
 	inMelee := inMeleeThreatRange(motion.CombatReach, caster.CombatReach, dist)
 	oldTarget := motion.TargetGUID
 	passive := isCreaturePassive(motion)
-	switched, newVictim := motion.ThreatMgr.AddThreat(caster.GUID, share, inMelee)
+	switched, newVictim := s.creatureAddThreat(motion, caster.GUID, share, inMelee, nil, caster)
 	if rSwitched {
 		switched, newVictim = true, rVictim
 	}
@@ -863,7 +864,7 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	var pending []pendingAttackStart
 	var pendingHighest []pendingHighestThreatUpdate
 	amount, rSwitched, rVictim := s.splitThreatRedirects(motion, amount)
-	switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, amount, inMelee)
+	switched, newVictim := s.server.creatureAddThreat(motion, s.playerGUID, amount, inMelee, s, nil)
 	if rSwitched {
 		switched, newVictim = true, rVictim
 	}
@@ -953,7 +954,7 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 	var switchStart pendingAttackStart
 	var switchHighest pendingHighestThreatUpdate
 	threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
-	switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
+	switched, newVictim := s.server.creatureAddThreat(motion, s.playerGUID, threat, inMelee, s, nil)
 	if rSwitched {
 		switched, newVictim = true, rVictim
 	}
@@ -1047,7 +1048,7 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 		// assistant's registry (ThreatManager.cpp:344-373, ignoreRedirects
 		// stays false on the ForwardThreatForAssistingMe adds).
 		share, rSwitched, rVictim := s.splitThreatRedirects(m, amount)
-		switched, newVictim := m.ThreatMgr.AddThreat(s.playerGUID, share, inMelee)
+		switched, newVictim := s.server.creatureAddThreat(m, s.playerGUID, share, inMelee, s, nil)
 		if rSwitched {
 			switched, newVictim = true, rVictim
 		}

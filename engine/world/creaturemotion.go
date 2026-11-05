@@ -1477,7 +1477,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		// Unit::EngageWithTarget (Unit.cpp:8429-8438) seeds 0.0f threat with
 		// ignoreModifiers/ignoreRedirects; the add still registers the entry
 		// and runs the victim leg (ThreatManager::AddThreat new-target arm).
-		motion.ThreatMgr.AddThreat(playerGUID, 0.0, true)
+		s.creatureAddThreat(motion, playerGUID, 0.0, true, playerSess, nil)
 		if !motion.InCombat {
 			enteredCombat = true
 			s.broadcastAIReactionAt(motion.Map, motion.InstanceID, creatureGUID, 2, motion.X, motion.Y, motion.Z, motion.PhaseMask)
@@ -3436,7 +3436,12 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 			if m.ThreatMgr == nil {
 				m.ThreatMgr = NewThreatManager(m)
 			}
-			m.ThreatMgr.AddThreat(lastCharmer, 0, true)
+			charmerSess := s.findSessionByGUID(lastCharmer)
+			var charmerMotion *creatureMotion
+			if charmerSess == nil {
+				charmerMotion = s.findCreatureMotionLocked(mapID, instanceID, lastCharmer)
+			}
+			s.creatureAddThreat(m, lastCharmer, 0, true, charmerSess, charmerMotion)
 			m.TargetGUID = lastCharmer
 			m.InCombat = true
 			engaged = true
@@ -9178,7 +9183,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// Unit::EngageWithTarget seeds 0.0f threat (Unit.cpp:8429-8438) — the
 			// add still registers the entry and runs the victim leg
 			// (ThreatManager::AddThreat new-target arm, ThreatManager.cpp:308-410).
-			motion.ThreatMgr.AddThreat(p.GUID, 0.0, true)
+			s.creatureAddThreat(motion, p.GUID, 0.0, true, p.Sess, nil)
 			motion.TargetGUID = p.GUID
 			motion.Moving = false
 			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 2)
@@ -9393,7 +9398,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if motion.BossAI == nil {
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 			}
-			motion.ThreatMgr.AddThreat(victim.GUID, 0.0, true)
+			s.creatureAddThreat(motion, victim.GUID, 0.0, true, nil, victim)
 			motion.TargetGUID = victim.GUID
 			motion.Moving = false
 			s.broadcastAIReactionInInstance(motion.Map, motion.InstanceID, motion.GUID, 2)

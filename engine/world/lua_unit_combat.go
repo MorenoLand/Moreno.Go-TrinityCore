@@ -217,7 +217,7 @@ func luaUnitAttack(ctx context.Context, attacker luaUnitRef, victimGUID uint64, 
 		// Attack's explicit victim wins over the threat list's
 		// current victim (the engage path's GetCurrentVictim arm is
 		// aggro-driven, this one is script-driven).
-		motion.ThreatMgr.AddThreat(victimGUID, 0.0, true)
+		srv.creatureAddThreat(motion, victimGUID, 0.0, true, srv.findSessionByGUID(victimGUID), srv.findCreatureMotionLocked(motion.Map, motion.InstanceID, victimGUID))
 		motion.EmoteState = 0
 	}
 	motion.TargetGUID = victimGUID

@@ -1782,7 +1782,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			if cMotion.ThreatMgr == nil {
 				cMotion.ThreatMgr = NewThreatManager(cMotion)
 			}
-			cMotion.ThreatMgr.AddThreat(motion.GUID, float32(damage), true)
+			s.creatureAddThreat(cMotion, motion.GUID, float32(damage), true, nil, motion)
 			consumeKillCommandStack(motion)
 			if damage >= cMotion.Health {
 				// Snapshot the pre-kill target for the death chain, like the
@@ -8755,12 +8755,12 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 					var rSwitched bool
 					var rVictim uint64
 					threat, rSwitched, rVictim = s.splitThreatRedirects(targetMotion, threat)
-					switched, newVictim = targetMotion.ThreatMgr.AddThreat(caster.GUID, threat, inMelee)
+					switched, newVictim = s.server.creatureAddThreat(targetMotion, caster.GUID, threat, inMelee, nil, caster)
 					if rSwitched {
 						switched, newVictim = true, rVictim
 					}
 				} else {
-					switched, newVictim = targetMotion.ThreatMgr.AddThreat(caster.GUID, 0, inMelee)
+					switched, newVictim = s.server.creatureAddThreat(targetMotion, caster.GUID, 0, inMelee, nil, caster)
 				}
 				if switched && newVictim != targetMotion.TargetGUID {
 					targetMotion.TargetGUID = newVictim

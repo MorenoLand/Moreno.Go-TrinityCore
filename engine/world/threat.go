@@ -2945,6 +2945,10 @@ func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, insta
 		return
 	}
 
+	var healerMotion *creatureMotion
+	if healerSess == nil {
+		healerMotion = s.findCreatureMotionLocked(mapID, instanceID, healerGUID)
+	}
 	addAssistThreat := func(m *creatureMotion, amount float32) {
 		if m.ThreatMgr == nil {
 			m.ThreatMgr = NewThreatManager(m)
@@ -2957,7 +2961,7 @@ func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, insta
 		// session guard inside splitThreatRedirects covers creature healers,
 		// which never register redirects.
 		share, rSwitched, rVictim := healerSess.splitThreatRedirects(m, amount)
-		switched, newVictim := m.ThreatMgr.AddThreat(healerGUID, share, inMelee)
+		switched, newVictim := s.creatureAddThreat(m, healerGUID, share, inMelee, healerSess, healerMotion)
 		if rSwitched {
 			switched, newVictim = true, rVictim
 		}

@@ -1802,10 +1802,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				m.ThreatMgr = NewThreatManager(m)
 			}
 			for _, pg := range players {
-				m.ThreatMgr.AddThreat(pg, 0.0, true)
+				s.creatureAddThreat(m, pg, 0.0, true, s.findSessionByGUID(pg), nil)
 				for _, pm := range s.motionMapLocked(mapID, instanceID) {
 					if pm != nil && pm.OwnerGUID == pg && pm.Health > 0 {
-						m.ThreatMgr.AddThreat(pm.GUID, 0.0, true)
+						s.creatureAddThreat(m, pm.GUID, 0.0, true, nil, pm)
 					}
 				}
 			}
@@ -1921,7 +1921,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		var x, y, z float32
 		var phase uint32
 		if motion.ThreatMgr != nil {
-			switched, newVictim = motion.ThreatMgr.AddThreat(victimGUID, amount, false)
+			victimSess := s.findSessionByGUID(victimGUID)
+			var victimMotion *creatureMotion
+			if victimSess == nil {
+				victimMotion = s.findCreatureMotionLocked(motion.Map, motion.InstanceID, victimGUID)
+			}
+			switched, newVictim = s.creatureAddThreat(motion, victimGUID, amount, false, victimSess, victimMotion)
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries = motion.ThreatMgr.SortedEntriesAvailable()

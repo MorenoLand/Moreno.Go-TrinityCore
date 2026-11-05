@@ -166,7 +166,7 @@ func (s *Server) memberEngagingTarget(ctx context.Context, motion *creatureMotio
 		if member.ThreatMgr == nil {
 			member.ThreatMgr = NewThreatManager(member)
 		}
-		member.ThreatMgr.AddThreat(targetGUID, 0.0, true)
+		s.creatureAddThreat(member, targetGUID, 0.0, true, targetSess, nil)
 		member.TargetGUID = targetGUID
 		member.InCombat = true
 		member.Moving = false

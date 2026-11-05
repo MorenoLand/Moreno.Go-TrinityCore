@@ -302,7 +302,7 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 	if motion.ThreatMgr == nil {
 		motion.ThreatMgr = NewThreatManager(motion)
 	}
-	motion.ThreatMgr.AddThreat(attackerGUID, float32(share), false)
+	s.server.creatureAddThreat(motion, attackerGUID, float32(share), false, s.server.findSessionByGUID(attackerGUID), attackerMotion)
 	killed := share >= motion.Health
 	if killed {
 		motion.Health = 0

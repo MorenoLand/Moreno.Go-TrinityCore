@@ -2867,7 +2867,12 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		var x, y, z float32
 		var phase uint32
 		if motion.ThreatMgr != nil {
-			switched, newVictim = motion.ThreatMgr.AddThreat(victimGUID, amount, false)
+			victimSess := s.server.findSessionByGUID(victimGUID)
+			var victimMotion *creatureMotion
+			if victimSess == nil {
+				victimMotion = s.server.findCreatureMotionLocked(motion.Map, motion.InstanceID, victimGUID)
+			}
+			switched, newVictim = s.server.creatureAddThreat(motion, victimGUID, amount, false, victimSess, victimMotion)
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries = motion.ThreatMgr.SortedEntriesAvailable()

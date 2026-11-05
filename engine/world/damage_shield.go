@@ -622,7 +622,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		passive := isCreaturePassive(m)
 		if !step1Gate {
 			m.InCombat = true
-			switched, newVictim := m.ThreatMgr.AddThreat(attackerGUID, threat, true)
+			switched, newVictim := s.creatureAddThreat(m, attackerGUID, threat, true, attackerSess, attackerMotion)
 			if switched && newVictim != m.TargetGUID {
 				m.TargetGUID = newVictim
 				entries := m.ThreatMgr.SortedEntriesAvailable()
