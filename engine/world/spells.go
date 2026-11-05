@@ -640,6 +640,7 @@ const (
 	spellAuraCharm                                    = 6
 	spellAuraBindSight                                = 1   // SPELL_AURA_BIND_SIGHT (SpellAuraDefines.h:81)
 	spellAuraModTaunt                                 = 11  // SPELL_AURA_MOD_TAUNT (SpellAuraDefines.h)
+	spellAuraModDetaunt                               = 221 // SPELL_AURA_MOD_DETAUNT (SpellAuraDefines.h:301)
 	spellAuraControlVehicle                           = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
 	spellAuraSetVehicle                               = 296 // SPELL_AURA_SET_VEHICLE_ID (SpellAuraDefines.h:376)
 	spellAuraFear                                     = 7
@@ -34918,6 +34919,13 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 			s.server.refreshThreatTempModifier(s.player.Map, s.player.InstanceID, caster)
 		}
 	}
+	// AuraEffect::HandleModDetaunt on removal (SpellAuraEffects.cpp:2785-
+	// 2797): dropping the MOD_DETAUNT aura re-runs the AURA CASTER's
+	// TauntUpdate — the player's ref returns to NONE (or TAUNT) on the
+	// caster's list.
+	if removedAuraType == spellAuraModDetaunt && removedCasterGUID != 0 && s.server != nil && s.player != nil {
+		s.server.clearCreatureDetaunt(s.player.Map, s.player.InstanceID, removedCasterGUID, s.playerGUID)
+	}
 	// AuraEffect::HandleAuraPhase remove leg (SpellAuraEffects.cpp:1581-1632):
 	// the aura record is already erased above (Unit::_UnapplyAura erases
 	// before the handlers, Unit.cpp:3548), so the shift carries the
@@ -37910,6 +37918,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 			s.server.refreshThreatTempModifier(targetSess.player.Map, targetSess.player.InstanceID, caster)
 		}
+		// AuraEffect::HandleModDetaunt (SpellAuraEffects.cpp:2785-2797):
+		// a 221-effect aura applied to a player runs the AURA CASTER's
+		// TauntUpdate over its threat list — the player's ref demotes to
+		// DETAUNT when the caster is a creature; a player caster has no
+		// threat list and no-ops inside the helper.
+		if spellHasAura(spell, spellAuraModDetaunt) && s.server != nil {
+			caster := casterGUID
+			if caster == 0 {
+				caster = s.playerGUID
+			}
+			s.server.applyCreatureDetaunt(targetSess.player.Map, targetSess.player.InstanceID, caster, targetGUID, durationMs)
+		}
 		// AuraEffect::HandleAuraModSkill apply leg
 		// (SpellAuraEffects.cpp:2559-2574): 30/98 effects adjust the
 		// target's temporary/permanent skill bonus (aura_skill.go).
@@ -38064,6 +38084,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				tauntCaster = s.playerGUID
 			}
 			s.server.applyCreatureTaunt(targetKey, tauntCaster, durationMs)
+		}
+		// AuraEffect::HandleModDetaunt (SpellAuraEffects.cpp:2785-2797):
+		// a re-applied MOD_DETAUNT aura re-runs the caster's TauntUpdate
+		// (the target's ref demotes to DETAUNT on the caster's list).
+		if eff.Aura == spellAuraModDetaunt {
+			detauntCaster := existing.CasterGUID
+			if detauntCaster == 0 {
+				detauntCaster = s.playerGUID
+			}
+			s.server.applyCreatureDetaunt(targetKey.Map, targetKey.InstanceID, detauntCaster, targetKey.GUID, durationMs)
 		}
 		// AuraEffect::HandleAuraLinked REAPPLY arm
 		// (SpellAuraEffects.cpp:4905-4911): a re-cast merge syncs the linked
@@ -38305,6 +38335,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
 	if eff.Aura == spellAuraModTaunt {
 		s.server.applyCreatureTaunt(targetKey, aura.CasterGUID, durationMs)
+	}
+	// AuraEffect::HandleModDetaunt (SpellAuraEffects.cpp:2785-2797): a
+	// fresh MOD_DETAUNT aura on a creature runs the AURA CASTER's
+	// TauntUpdate — the target's ref demotes to DETAUNT on the caster's
+	// list (a player caster has no threat list and no-ops inside).
+	if eff.Aura == spellAuraModDetaunt {
+		s.server.applyCreatureDetaunt(targetKey.Map, targetKey.InstanceID, aura.CasterGUID, targetKey.GUID, durationMs)
 	}
 	// AuraEffect::HandleAuraLinked apply leg (SpellAuraEffects.cpp:4880-4897,
 	// REAL mode) for creature targets: the linked trigger spell is cast on
@@ -43341,6 +43378,8 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 	charmerGUID := uint64(0)
 	wasTaunt := false
 	taunterGUID := uint64(0)
+	wasDetaunt := false
+	detaunterGUID := uint64(0)
 	wasControlVehicle := false
 	controlVehicleCaster := uint64(0)
 	wasPhase := false
@@ -43368,6 +43407,11 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 				// (ThreatManager::TauntUpdate, ThreatManager.cpp:439-458).
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
+				// The remove arm of AuraEffect::HandleModDetaunt
+				// (SpellAuraEffects.cpp:2785-2797): dropping the MOD_DETAUNT
+				// aura re-runs the caster's TauntUpdate.
+				wasDetaunt = aura.AuraType == spellAuraModDetaunt
+				detaunterGUID = aura.CasterGUID
 				// The remove arm of the speed auras (Unit::UpdateSpeed,
 				// Unit.cpp:8666): dropping a speed aura recomputes the
 				// creature's run rate once the aura is erased below.
@@ -43457,6 +43501,9 @@ func (s *session) removeCreatureAuraTimed(key creatureAuraKey, spellID uint32, s
 	}
 	if wasTaunt {
 		s.server.clearCreatureTaunt(key, taunterGUID)
+	}
+	if wasDetaunt {
+		s.server.clearCreatureDetaunt(key.Map, key.InstanceID, detaunterGUID, key.GUID)
 	}
 	if wasCharm {
 		s.server.uncharmCreature(key, charmerGUID)
@@ -43588,6 +43635,8 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	charmerGUID := uint64(0)
 	wasTaunt := false
 	taunterGUID := uint64(0)
+	wasDetaunt := false
+	detaunterGUID := uint64(0)
 	wasControlVehicle := false
 	controlVehicleCaster := uint64(0)
 	wasPhase := false
@@ -43613,6 +43662,8 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
+				wasDetaunt = aura.AuraType == spellAuraModDetaunt
+				detaunterGUID = aura.CasterGUID
 				// The remove arm of the speed auras (Unit::UpdateSpeed,
 				// Unit.cpp:8666): dropping a speed aura recomputes the
 				// creature's run rate once the aura is erased below.
@@ -43682,6 +43733,9 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	}
 	if wasTaunt {
 		s.clearCreatureTaunt(key, taunterGUID)
+	}
+	if wasDetaunt {
+		s.clearCreatureDetaunt(key.Map, key.InstanceID, detaunterGUID, key.GUID)
 	}
 	if wasCharm {
 		s.uncharmCreature(key, charmerGUID)

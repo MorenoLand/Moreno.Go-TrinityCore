@@ -1779,10 +1779,15 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 			// manager adds threat for the attacker — the pet, not its
 			// owner. The add runs even on the killing blow (C++ order);
 			// the death branch below clears the table right after.
+			// AddThreat takes the attacker's own school multipliers (no
+			// spell, so the NORMAL mask), mirroring the player melee
+			// twin (combat.go) — a pet carrying a MOD_THREAT aura
+			// multiplies its melee threat the same way.
 			if cMotion.ThreatMgr == nil {
 				cMotion.ThreatMgr = NewThreatManager(cMotion)
 			}
-			s.creatureAddThreat(cMotion, motion.GUID, float32(damage), true, nil, motion)
+			threat := float32(damage) * s.creatureThreatMultiplier(cMotion.Map, cMotion.InstanceID, motion.GUID, 1)
+			s.creatureAddThreat(cMotion, motion.GUID, threat, true, nil, motion)
 			consumeKillCommandStack(motion)
 			if damage >= cMotion.Health {
 				// Snapshot the pre-kill target for the death chain, like the

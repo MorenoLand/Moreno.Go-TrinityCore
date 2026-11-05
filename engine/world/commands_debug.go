@@ -1025,10 +1025,10 @@ type debugThreatenedRow struct {
 
 // handleDebugThreat mirrors HandleDebugThreatListCommand (cs_debug.cpp:769):
 // ".debug threat" prints the target's threatened-by-me list, then its
-// threat list (sorted descending, [FIXATE]/[TAUNT]/[SUPPRESSED]/[OFFLINE]
-// markers) or the cannot-have-list / not-engaged legs. Deltas: no
-// threatened-by-me index (rebuilt by scan, so only live creature lists
-// contribute); no detaunt marker (no per-reference detaunt state).
+// threat list (sorted descending, [FIXATE]/[TAUNT]/[DETAUNT]/
+// [SUPPRESSED]/[OFFLINE] markers) or the cannot-have-list / not-engaged
+// legs. Deltas: no threatened-by-me index (rebuilt by scan, so only live
+// creature lists contribute).
 func (s *session) handleDebugThreat(ctx context.Context) {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
 		s.sendNotification("You do not have permission to use that command.")
@@ -1083,6 +1083,8 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 			marker = " [FIXATE]"
 		} else if e.taunted {
 			marker = " [TAUNT]"
+		} else if e.detaunted {
+			marker = " [DETAUNT]"
 		}
 		if e.suppressed {
 			marker += " [SUPPRESSED]"
@@ -1138,6 +1140,9 @@ func (s *session) handleDebugThreatInfo(ctx context.Context) {
 	for _, e := range mgr.DebugEntries() {
 		if e.taunted {
 			s.sendSysMessage(fmt.Sprintf(" - Taunted victim: %s", s.debugUnitName(e.victimGUID)))
+		}
+		if e.detaunted {
+			s.sendSysMessage(fmt.Sprintf(" - Detaunted victim: %s", s.debugUnitName(e.victimGUID)))
 		}
 		if e.suppressed {
 			s.sendSysMessage(fmt.Sprintf(" - Suppressed victim: %s", s.debugUnitName(e.victimGUID)))

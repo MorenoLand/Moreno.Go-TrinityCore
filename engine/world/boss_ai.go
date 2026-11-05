@@ -8697,6 +8697,12 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			if eff.Aura == spellAuraModTaunt {
 				s.applyCreatureTaunt(targetKey, m.GUID, durationMs)
 			}
+			// AuraEffect::HandleModDetaunt (SpellAuraEffects.cpp:2785-2797):
+			// a re-applied MOD_DETAUNT aura re-runs the caster's
+			// TauntUpdate (the target's ref demotes to DETAUNT).
+			if eff.Aura == spellAuraModDetaunt {
+				s.applyCreatureDetaunt(targetKey.Map, targetKey.InstanceID, m.GUID, targetKey.GUID, durationMs)
+			}
 			s.syncCreatureLinkedAuraStacks(spell, targetKey, m.GUID, stackCount)
 			s.applyCreatureSpellAreaRows(targetKey, spell.ID)
 			s.propagateCreatureLinkedAuraStacks(ctx, spell, targetKey, m.GUID, stackCount)
@@ -8836,6 +8842,12 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 		s.recomputeCreatureArmorOnAuraChange(targetKey, spell.ID)
 		if eff.Aura == spellAuraModTaunt {
 			s.applyCreatureTaunt(targetKey, m.GUID, durationMs)
+		}
+		// AuraEffect::HandleModDetaunt (SpellAuraEffects.cpp:2785-2797):
+		// a fresh MOD_DETAUNT aura on a creature runs the AURA CASTER's
+		// TauntUpdate — the target's ref demotes to DETAUNT.
+		if eff.Aura == spellAuraModDetaunt {
+			s.applyCreatureDetaunt(targetKey.Map, targetKey.InstanceID, m.GUID, targetKey.GUID, durationMs)
 		}
 		armExpiry(aura)
 	}

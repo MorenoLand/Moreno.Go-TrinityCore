@@ -415,8 +415,8 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 		return
 	}
 	var removed bool
-	var wasCharm, wasTaunt, wasPossessPet bool
-	var charmerGUID, taunterGUID uint64
+	var wasCharm, wasTaunt, wasDetaunt, wasPossessPet bool
+	var charmerGUID, taunterGUID, detaunterGUID uint64
 	var slot uint8
 	s.auraMu.Lock()
 	if s.activeCreatureAuras != nil {
@@ -428,6 +428,8 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 				charmerGUID = aura.CasterGUID
 				wasTaunt = aura.AuraType == spellAuraModTaunt
 				taunterGUID = aura.CasterGUID
+				wasDetaunt = aura.AuraType == spellAuraModDetaunt
+				detaunterGUID = aura.CasterGUID
 				aura.Stopped = true
 				slot = aura.Slot
 				if aura.Timer != nil {
@@ -453,6 +455,9 @@ func (s *Server) stripDynobjCreatureAura(key creatureAuraKey, spellID uint32, ca
 	}
 	if wasTaunt {
 		s.clearCreatureTaunt(key, taunterGUID)
+	}
+	if wasDetaunt {
+		s.clearCreatureDetaunt(key.Map, key.InstanceID, detaunterGUID, key.GUID)
 	}
 	if wasCharm {
 		s.uncharmCreature(key, charmerGUID)

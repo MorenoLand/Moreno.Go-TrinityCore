@@ -36,6 +36,15 @@ type ThreatManager struct {
 	// -> taunt-aura expiry. A zero expiry means the aura carries no
 	// duration and the state lives until the aura is removed.
 	tauntExpiry map[uint64]time.Time
+	// detauntExpiry mirrors the per-reference detaunt state maintained by
+	// ThreatManager::TauntUpdate (ThreatManager.cpp:439-458) via
+	// ThreatReference::UpdateTauntState (ThreatManager.cpp:125-129):
+	// victim GUID -> detaunt-aura expiry. A zero expiry means the aura
+	// carries no duration and the state lives until the aura is removed.
+	// Read through tauntStateLocked, which lets a live taunt win over a
+	// live detaunt exactly like C++ (the demotion only fires for a
+	// state below TAUNT).
+	detauntExpiry map[uint64]time.Time
 	// tempMods mirrors ThreatReference::_tempModifier (ThreatManager.h:299):
 	// the additive-constant from SPELL_AURA_MOD_TOTAL_THREAT (aura 103)
 	// effects on the victim, summed by ThreatManager::UpdateMyTempModifiers
@@ -284,6 +293,98 @@ func (tm *ThreatManager) ClearTaunt(victim uint64) {
 	tm.needClientUpdate = true
 }
 
+// Taunt-state levels for ThreatReference::_taunted
+// (ThreatManager.h:255): TAUNT > NONE > DETAUNT in CompareReferencesLT
+// (ThreatManager.cpp:601-602).
+const (
+	tauntStateDetaunt = 0
+	tauntStateNone    = 1
+	tauntStateTaunt   = 2
+)
+
+// ApplyDetaunt records a MOD_DETAUNT aura apply on the owner's list, the
+// detaunt half of AuraEffect::HandleModDetaunt ->
+// ThreatManager::TauntUpdate (SpellAuraEffects.cpp:2785-2797,
+// ThreatManager.cpp:439-458): ThreatReference::UpdateTauntState
+// (ThreatManager.cpp:125-129) demotes a ref to DETAUNT when the victim
+// carries a MOD_DETAUNT aura cast by the owner. A taunted victim stays
+// TAUNT: the demotion only fires for a state below TAUNT, resolved at
+// read time by tauntStateLocked. Like ApplyTaunt the state is keyed per
+// victim GUID with the aura's expiry and lives until the aura is
+// removed; a ref created after the aura applied reads the stored state,
+// where C++ starts a new ref at NONE until the next TauntUpdate — the
+// same accepted divergence as the taunt model.
+func (tm *ThreatManager) ApplyDetaunt(victim uint64, durationMs uint32) {
+	if tm == nil || victim == 0 {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if tm.detauntExpiry == nil {
+		tm.detauntExpiry = make(map[uint64]time.Time)
+	}
+	if durationMs > 0 {
+		tm.detauntExpiry[victim] = time.Now().Add(time.Duration(durationMs) * time.Millisecond)
+	} else {
+		tm.detauntExpiry[victim] = time.Time{}
+	}
+	// The taunt-state swap marks the client list dirty
+	// (ThreatReference::UpdateTauntState, ThreatManager.cpp:141).
+	tm.needClientUpdate = true
+}
+
+// ClearDetaunt drops one victim's detaunt state, the remove arm of
+// AuraEffect::HandleModDetaunt -> ThreatManager::TauntUpdate.
+func (tm *ThreatManager) ClearDetaunt(victim uint64) {
+	if tm == nil || victim == 0 {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	delete(tm.detauntExpiry, victim)
+	// The taunt-state clear marks the client list dirty
+	// (ThreatReference::UpdateTauntState, ThreatManager.cpp:141).
+	tm.needClientUpdate = true
+}
+
+// isDetauntedLocked reports whether the victim holds a live detaunt
+// state, lazily expiring elapsed auras. Callers hold tm.mu.
+func (tm *ThreatManager) isDetauntedLocked(victim uint64) bool {
+	exp, ok := tm.detauntExpiry[victim]
+	if !ok {
+		return false
+	}
+	if !exp.IsZero() && time.Now().After(exp) {
+		delete(tm.detauntExpiry, victim)
+		return false
+	}
+	return true
+}
+
+// IsDetaunted reports whether the victim holds a live detaunt state.
+func (tm *ThreatManager) IsDetaunted(victim uint64) bool {
+	if tm == nil || victim == 0 {
+		return false
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.isDetauntedLocked(victim)
+}
+
+// tauntStateLocked returns the victim's CompareReferencesLT taunt-state
+// level: TAUNT (2) when a live MOD_TAUNT aura names it, DETAUNT (0)
+// when a live MOD_DETAUNT aura from the owner names it and no taunt
+// does, NONE (1) otherwise. Callers hold tm.mu.
+func (tm *ThreatManager) tauntStateLocked(victim uint64) int {
+	if tm.isTauntedLocked(victim) {
+		return tauntStateTaunt
+	}
+	if tm.isDetauntedLocked(victim) {
+		return tauntStateDetaunt
+	}
+	return tauntStateNone
+}
+
 // applyCreatureTaunt bridges a MOD_TAUNT aura apply on a creature into its
 // threat manager's taunt state (AuraEffect::HandleModTaunt,
 // SpellAuraEffects.cpp:2772-2781 -> ThreatManager::TauntUpdate,
@@ -332,6 +433,58 @@ func (s *Server) clearCreatureTaunt(key creatureAuraKey, casterGUID uint64) {
 	}
 }
 
+// applyCreatureDetaunt bridges a MOD_DETAUNT aura apply into the AURA
+// CASTER's threat manager, the Go half of AuraEffect::HandleModDetaunt
+// (SpellAuraEffects.cpp:2785-2797 -> ThreatManager::TauntUpdate,
+// ThreatManager.cpp:439-458). The owner is the caster, the victim the
+// aura target: each ref whose victim carries a MOD_DETAUNT aura cast by
+// the owner demotes to DETAUNT (ThreatReference::UpdateTauntState,
+// ThreatManager.cpp:125-129). C++ early-returns when the caster cannot
+// have a threat list (:2794), so the whole update — state write and
+// :459 tail — is gated on motionCanHaveThreatList; unlike the taunt
+// write there is no leash consumer of detaunt state, so no ungated leg.
+// A player caster resolves to no motion and no-ops: it has no threat
+// list, and the :459 tail is a provable no-op for it — a MOD_DETAUNT
+// aura is not a ShouldBeSuppressed leg (ThreatManager.cpp:112-121), so
+// no ref on any other list changes state on this trigger;
+// lapsed-condition promotion for player casters rides AddThreat :386,
+// the offline return, or a taunt-aura change, as for every other
+// non-taunt trigger. The tail runs for a creature caster keyed on the
+// caster as a victim on other lists, mirroring applyCreatureTaunt.
+func (s *Server) applyCreatureDetaunt(mapID, instanceID uint32, casterGUID, victimGUID uint64, durationMs uint32) {
+	if s == nil || casterGUID == 0 || victimGUID == 0 {
+		return
+	}
+	motion := s.findCreatureMotion(mapID, instanceID, casterGUID)
+	if motion == nil || motion.ThreatMgr == nil {
+		return
+	}
+	if !motionCanHaveThreatList(motion) {
+		return
+	}
+	motion.ThreatMgr.ApplyDetaunt(victimGUID, durationMs)
+	s.tauntSuppressedTail(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: casterGUID}, motion)
+}
+
+// clearCreatureDetaunt bridges a MOD_DETAUNT aura removal, the remove
+// arm of AuraEffect::HandleModDetaunt: the victim's ref returns to NONE
+// (or TAUNT, when a live MOD_TAUNT aura still names it — resolved at
+// read time by tauntStateLocked).
+func (s *Server) clearCreatureDetaunt(mapID, instanceID uint32, casterGUID, victimGUID uint64) {
+	if s == nil || casterGUID == 0 || victimGUID == 0 {
+		return
+	}
+	motion := s.findCreatureMotion(mapID, instanceID, casterGUID)
+	if motion == nil || motion.ThreatMgr == nil {
+		return
+	}
+	if !motionCanHaveThreatList(motion) {
+		return
+	}
+	motion.ThreatMgr.ClearDetaunt(victimGUID)
+	s.tauntSuppressedTail(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: casterGUID}, motion)
+}
+
 // tauntSuppressedTail runs the EvaluateSuppressed(true) tail of
 // ThreatManager::TauntUpdate (ThreatManager.cpp:439-459, :290-304): when
 // a taunt aura on the victim is applied or removed, the victim's refs as
@@ -353,8 +506,9 @@ func (s *Server) clearCreatureTaunt(key creatureAuraKey, casterGUID uint64) {
 // tail takes motionMu only for the snapshot and tm.mu/auraMu
 // sequentially per owner. Offline refs are skipped — C++ checks
 // IsOnline()/IsSuppressed(), and an offline ref is neither. The
-// detaunt half has no Go hook (no per-reference detaunt state), so only
-// the taunt-aura apply/remove paths call this.
+// detaunt half calls this too, keyed on the aura caster
+// (applyCreatureDetaunt/clearCreatureDetaunt): a MOD_DETAUNT apply or
+// remove runs the caster's TauntUpdate, whose :459 tail is this sweep.
 func (s *Server) tauntSuppressedTail(key creatureAuraKey, victim *creatureMotion) {
 	if s == nil || victim == nil || key.GUID == 0 {
 		return
@@ -1649,8 +1803,8 @@ func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (swi
 // preferred, a suppressed highest is picked when no online ref
 // remains, and the comparator's online-state precedence decides the
 // dance — an online candidate beats a suppressed old victim at any
-// threat. DETAUNT has no Go aura model, so the taunt precedence
-// reduces to TAUNT > NONE; among equal states the 110%/130% + melee
+// threat. The taunt precedence is TAUNT > NONE > DETAUNT
+// (tauntStateLocked); among equal states the 110%/130% + melee
 // dance is exact, including the sorted-walk early-outs.
 func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 {
 	if len(tm.entries) == 0 {
@@ -1670,7 +1824,7 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	type candidate struct {
 		guid       uint64
 		threat     float32
-		taunted    bool
+		tauntState int
 		suppressed bool
 	}
 	cands := make([]candidate, 0, len(tm.entries))
@@ -1678,7 +1832,7 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 		if tm.isOfflineLocked(guid) {
 			continue
 		}
-		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid), suppressed: tm.isSuppressedLocked(guid)})
+		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), tauntState: tm.tauntStateLocked(guid), suppressed: tm.isSuppressedLocked(guid)})
 	}
 	// C++ returns null when the highest reference is unavailable
 	// (ReselectVictim:553-554) — with every entry offline there is no
@@ -1694,14 +1848,14 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	// unfed arms stay online, they are not silently treated as offline.
 	// Comparator order is CompareReferencesLT (ThreatManager.cpp:593-601):
 	// online-state precedence (ONLINE > SUPPRESSED), then taunt-state
-	// precedence (TAUNT > NONE), then threat descending — the heap
-	// order ReselectVictim walks.
+	// precedence (TAUNT > NONE > DETAUNT), then threat descending — the
+	// heap order ReselectVictim walks.
 	sort.Slice(cands, func(i, j int) bool {
 		if cands[i].suppressed != cands[j].suppressed {
 			return !cands[i].suppressed
 		}
-		if cands[i].taunted != cands[j].taunted {
-			return cands[i].taunted
+		if cands[i].tauntState != cands[j].tauntState {
+			return cands[i].tauntState > cands[j].tauntState
 		}
 		return cands[i].threat > cands[j].threat
 	})
@@ -1721,15 +1875,15 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 		return highest.guid
 	}
 	oldSuppressed := tm.isSuppressedLocked(old)
-	oldTaunted := tm.isTauntedLocked(old)
+	oldTauntState := tm.tauntStateLocked(old)
 	oldThreat := tm.effectiveThreatLocked(old)
 	// The 110%/130% + melee dance runs through CompareReferencesLT:
 	// state precedence first (an online candidate beats a suppressed
 	// old victim at any threat), then taunt, then threat*weight.
-	if !tm.compareRefsLTLocked(oldSuppressed, oldTaunted, oldThreat, highest.suppressed, highest.taunted, highest.threat, 1.1) {
+	if !tm.compareRefsLTLocked(oldSuppressed, oldTauntState, oldThreat, highest.suppressed, highest.tauntState, highest.threat, 1.1) {
 		return old
 	}
-	if tm.compareRefsLTLocked(oldSuppressed, oldTaunted, oldThreat, highest.suppressed, highest.taunted, highest.threat, 1.3) {
+	if tm.compareRefsLTLocked(oldSuppressed, oldTauntState, oldThreat, highest.suppressed, highest.tauntState, highest.threat, 1.3) {
 		return highest.guid
 	}
 	// Between 110% and 130% it needs melee range.
@@ -1742,7 +1896,7 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 		if c.guid == old {
 			return old
 		}
-		if !tm.compareRefsLTLocked(oldSuppressed, oldTaunted, oldThreat, c.suppressed, c.taunted, c.threat, 1.1) {
+		if !tm.compareRefsLTLocked(oldSuppressed, oldTauntState, oldThreat, c.suppressed, c.tauntState, c.threat, 1.1) {
 			return old
 		}
 		if inMelee != nil && inMelee(c.guid) {
@@ -1756,14 +1910,14 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 // compareRefsLTLocked mirrors ThreatManager::CompareReferencesLT
 // (ThreatManager.cpp:593-601): true when the old victim is LOWER than
 // the candidate — online-state precedence (ONLINE > SUPPRESSED), then
-// taunt-state precedence (TAUNT > NONE; DETAUNT has no Go model),
-// then oldThreat*weight < candidate threat. Callers hold tm.mu.
-func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed, oldTaunted bool, oldThreat float32, candSuppressed, candTaunted bool, candThreat, weight float32) bool {
+// taunt-state precedence (TAUNT > NONE > DETAUNT, tauntStateLocked
+// levels), then oldThreat*weight < candidate threat. Callers hold tm.mu.
+func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed bool, oldTauntState int, oldThreat float32, candSuppressed bool, candTauntState int, candThreat, weight float32) bool {
 	if oldSuppressed != candSuppressed {
 		return oldSuppressed
 	}
-	if oldTaunted != candTaunted {
-		return !oldTaunted
+	if oldTauntState != candTauntState {
+		return oldTauntState < candTauntState
 	}
 	return oldThreat*weight < candThreat
 }
@@ -1813,7 +1967,8 @@ func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed, oldTaunted bool, old
 // flag the same way, evaluated at add time by threatVictimSuppressed
 // (creatureAddThreat, C++ :402-407). Unfed
 // ShouldBeOffline arms stay online; DETAUNT
-// (SPELL_AURA_MOD_DETAUNT) has no Go aura model;
+// (SPELL_AURA_MOD_DETAUNT) is modeled per reference (detauntExpiry,
+// tauntStateLocked) and sorts below NONE in CompareReferencesLT;
 // ProcessAIUpdates/JustStartedThreateningMe (boss hooks ride the new-victim
 // broadcast instead). FixateTarget and the taunt-state model are bridged:
 // the eager gate above honors fixate preference and taunt precedence, and
@@ -1963,15 +2118,15 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 	}
 
 	// Taunt-state precedence (CompareReferencesLT, ThreatManager.cpp:593-601
-	// — TAUNT > NONE; DETAUNT has no Go aura model): a taunted adding victim
-	// outranks a non-taunted current victim regardless of the 110%/130%
-	// gate, and a taunted current victim keeps aggro against non-taunted
-	// adds — the aura-stickiness TauntUpdate maintains for the MOD_TAUNT
-	// duration. The Update tick re-affirms this every second.
-	addTaunted := tm.isTauntedLocked(victim)
-	currTaunted := tm.isTauntedLocked(tm.currentVictim)
-	if addTaunted != currTaunted {
-		if addTaunted {
+	// — TAUNT > NONE > DETAUNT): a higher-state adding victim outranks
+	// the current victim regardless of the 110%/130% gate, and a
+	// higher-state current victim keeps aggro against lower-state adds —
+	// the aura-stickiness TauntUpdate maintains for the MOD_TAUNT /
+	// MOD_DETAUNT duration. The Update tick re-affirms this every second.
+	addTauntState := tm.tauntStateLocked(victim)
+	currTauntState := tm.tauntStateLocked(tm.currentVictim)
+	if addTauntState != currTauntState {
+		if addTauntState > currTauntState {
 			tm.currentVictim = victim
 			return true, victim
 		}
@@ -2053,7 +2208,7 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	type candidate struct {
 		guid       uint64
 		threat     float32
-		taunted    bool
+		tauntState int
 		suppressed bool
 	}
 	cands := make([]candidate, 0, len(tm.entries))
@@ -2061,7 +2216,7 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 		if tm.isOfflineLocked(guid) {
 			continue
 		}
-		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid), suppressed: tm.isSuppressedLocked(guid)})
+		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), tauntState: tm.tauntStateLocked(guid), suppressed: tm.isSuppressedLocked(guid)})
 	}
 	// C++ returns early when the highest ref is unavailable
 	// (ThreatManager.cpp:424-429): with every ref offline there is no
@@ -2073,15 +2228,15 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 		if cands[i].suppressed != cands[j].suppressed {
 			return !cands[i].suppressed
 		}
-		if cands[i].taunted != cands[j].taunted {
-			return cands[i].taunted
+		if cands[i].tauntState != cands[j].tauntState {
+			return cands[i].tauntState > cands[j].tauntState
 		}
 		return cands[i].threat > cands[j].threat
 	})
 	highest := cands[0]
 	// The taunt-skip leg (ThreatManager.cpp:424-429): a taunting highest
 	// yields to the next available ref with strictly more threat.
-	if highest.taunted && len(cands) > 1 && cands[1].threat > highest.threat {
+	if highest.tauntState == tauntStateTaunt && len(cands) > 1 && cands[1].threat > highest.threat {
 		highest = cands[1]
 	}
 
@@ -2348,14 +2503,15 @@ type threatDebugEntry struct {
 	victimGUID uint64
 	threat     float32
 	taunted    bool
+	detaunted  bool
 	suppressed bool
 	offline    bool
 }
 
 // DebugEntries returns the threat list sorted descending by effective
 // threat, the GetSortedThreatList order of HandleDebugThreatListCommand.
-// The detaunt marker has no Go model (no per-reference detaunt state);
-// the offline marker reads the stored flag set.
+// The detaunt marker reads the stored detaunt state; the offline marker
+// reads the stored flag set.
 func (tm *ThreatManager) DebugEntries() []threatDebugEntry {
 	if tm == nil {
 		return nil
@@ -2368,6 +2524,7 @@ func (tm *ThreatManager) DebugEntries() []threatDebugEntry {
 			victimGUID: guid,
 			threat:     tm.effectiveThreatLocked(guid),
 			taunted:    tm.isTauntedLocked(guid),
+			detaunted:  tm.isDetauntedLocked(guid),
 			suppressed: tm.isSuppressedLocked(guid),
 			offline:    tm.isOfflineLocked(guid),
 		})
