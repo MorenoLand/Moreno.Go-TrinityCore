@@ -1,6 +1,6 @@
 -- Blessed Banner (Icecrown) --
 -- Lua port of src/server/scripts/Northrend/zone_icecrown.cpp
--- (npc_blessed_bannerAI — Reset() arm only). Zone-script unit
+-- (npc_blessed_bannerAI — Reset() + EVENT_SPAWN + JustDied-drain arms). Zone-script unit
 -- per northrend_script_loader.cpp order (howling_fjord done;
 -- icecrown: npc_argent_valiant, npc_guardian_pavilion,
 -- npc_tournament_training_dummy, npc_frostbrood_skytalon
@@ -17,17 +17,19 @@
 -- C++-exact for the line played — lecraft aggro-Talk
 -- precedent). The banner never engages combat, so OnReset(23)
 -- re-arms the same Reset fragment (C++ Reset semantics —
--- mushroom precedent); OnDied(4) carries the JustDied self-despawn
--- leg (zone_icecrown.cpp:455-459; the Summons.DespawnAll() half stays
--- out — no summon-list bridge).
+-- mushroom precedent); OnDied(4) carries the JustDied legs in C++ order
+-- (zone_icecrown.cpp:455-459): Summons.DespawnAll() via the EVENT_SPAWN
+-- latch, then the self-despawn.
 -- Modeled in onSpawnOrReset: SetRegenerateHealth(false) (bridged —
 -- lua_creature_events.go, honored by the Go regen tick). The ctor
 -- SetCombatMovement(false) (zone_icecrown.cpp:421) is ported at
 -- JustEngagedWith — the bridge's ctor-equivalent point (eredar_twins
 -- convention).
--- Unmodeled: EVENT_SPAWN 3s (DoSummon 31003 + 3x 30919 + 3x 30900 with
--- MovePoint machines — summon / movement bridges);
--- EVENT_INTRO_1..3 Talk/facing chain (cross-creature-Talk /
+-- Ported: EVENT_SPAWN 3s (DoSummon 31003 + 3x 30919 + 3x 30900,
+-- CORPSE_TIMED_DESPAWN 30s = Lua type 5 + 30000ms, slad'ran precedent;
+-- MovePoint walk-ins via the MoveTo twin; summons latched for the
+-- JustDied drain; EVENT_INTRO_1's 15s schedule stays out below);
+-- Unmodeled: EVENT_INTRO_1..3 Talk/facing chain (cross-creature-Talk /
 -- facing bridges); EVENT_MASON_ACTION SetData(1,1) triggers
 -- (no SetData dispatch path in the model); EVENT_START_FIGHT
 -- LK(31013)-gated Talk 0 (world-search / cross-creature-Talk
@@ -106,14 +108,88 @@ local BANNER_SAY = 0
 
 local BLESSED_BANNER_ENTRY = 30891
 
+local NPC_CRUSADER_LORD_DALFORS = 31003
+local NPC_ARGENT_BATTLE_PRIEST = 30919
+local NPC_ARGENT_MASON = 30900
+
+-- C++ EVENT_SPAWN crew (zone_icecrown.cpp:465-514): {entry, spawnX,
+-- spawnY, spawnZ, spawnO, walkX, walkY, walkZ} — [0] spawn + [1] walk-in
+-- positions; [2] fight/action positions belong to the unported INTRO_3
+-- leg and stay out.
+local spawnTable = {
+    {NPC_CRUSADER_LORD_DALFORS, 6458.703, 403.858, 490.498, 3.1205, 6422.950, 423.335, 510.451},
+    {NPC_ARGENT_BATTLE_PRIEST, 6462.025, 403.681, 489.721, 3.1007, 6421.480, 423.576, 510.781},
+    {NPC_ARGENT_BATTLE_PRIEST, 6463.969, 407.198, 489.240, 2.2689, 6419.778, 421.404, 510.972},
+    {NPC_ARGENT_BATTLE_PRIEST, 6464.371, 400.944, 489.186, 6.1610, 6423.516, 425.782, 510.774},
+    {NPC_ARGENT_MASON, 6462.929, 409.826, 489.392, 3.0968, 6428.163, 421.960, 508.297},
+    {NPC_ARGENT_MASON, 6462.650, 405.670, 489.576, 2.9414, 6426.250, 419.194, 508.219},
+    {NPC_ARGENT_MASON, 6462.646, 401.218, 489.601, 2.7864, 6423.855, 416.598, 508.305},
+}
+
+local timers = {}
+local bannerSummons = {} -- per-guid latched EVENT_SPAWN summons (C++ JustSummoned :450-452 latch; drained by JustDied :457)
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function despawnBannerSummons(guid)
+    local list = bannerSummons[guid]
+    if list then
+        for _, summon in ipairs(list) do
+            if summon then
+                summon:Despawn()
+            end
+        end
+        bannerSummons[guid] = nil
+    end
+end
+
+-- C++ EVENT_SPAWN (zone_icecrown.cpp:465-514): 7 DoSummon (default
+-- 30s CORPSE_TIMED_DESPAWN = Lua type 5 + 30000ms, slad'ran precedent)
+-- + MovePoint(0, walk-in) each; no DoZoneInCombat/AttackStart in C++.
+local function spawnBannerCrew(creature, guid)
+    if not creature:IsAlive() then
+        return
+    end
+    local list = {}
+    bannerSummons[guid] = list
+    for _, s in ipairs(spawnTable) do
+        local summon = creature:SummonCreature(s[1], s[2], s[3], s[4], s[5], 5, 30000)
+        if summon then
+            summon:MoveTo(0, s[6], s[7], s[8])
+            list[#list + 1] = summon
+        end
+    end
+end
+
 -- C++ Reset() arm in arm order: SetRegenerateHealth(false) (bridged —
 -- lua_creature_events.go, honored by the Go regen tick) -> non-triggered
--- self-cast SPELL_THREAT_PULSE + Talk(BANNER_SAY). The banner never
--- engages, so the fragment is one-shot per spawn / reset;
--- no timers, no per-GUID state.
--- Died (event 4): the JustDied self-despawn leg ports
--- (me->DespawnOrUnsummon(), creature:Despawn, bridged); the paired
--- Summons.DespawnAll() leg has no summon-list bridge (stays out).
+-- self-cast SPELL_THREAT_PULSE + Talk(BANNER_SAY) -> ScheduleEvent
+-- (EVENT_SPAWN, 3s). The banner never engages, so the fragment is
+-- one-shot per spawn / reset; the 3s EVENT_SPAWN crew (7 DoSummon +
+-- MovePoint walk-ins, zone_icecrown.cpp:465-514) ports via the MoveTo
+-- twin with return-value latching (coren precedent); per-NPC GUID vars
+-- (guidDalfors/guidPriest/guidMason) stay out — write-only until the
+-- intro/wave legs port (zuramat _voidDance precedent).
 local function onSpawnOrReset(_, creature)
     -- C++ npc_blessed_bannerAI::Reset(): SetRegenerateHealth(false) first,
     -- unconditionally (zone_icecrown.cpp:437-443), then the alive-gated
@@ -122,15 +198,16 @@ local function onSpawnOrReset(_, creature)
     -- C++ npc_blessed_bannerAI::Reset(): DoCast(SPELL_THREAT_PULSE) +
     -- Talk(BANNER_SAY) (zone_icecrown.cpp). Alive-gated so the death-leg
     -- ev23 fire (banner self-despawns in JustDied) is not phantom; the
-    -- 3s EVENT_SPAWN summon leg is unported — each of the 7 DoSummon
-    -- calls pairs with summon->GetMotionMaster()->MovePoint(0,
-    -- XPos[1]) (scripted walk-in, no movement bridge — NPCs would
-    -- strand at spawn points) and the GUID-latch tracking
-    -- (guidDalfors/guidPriest/guidMason) is unmodeled — the blocker
-    -- is movement, not the summon bridge.
+    -- 3s EVENT_SPAWN crew ported above (MoveTo twin, coren latch).
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_THREAT_PULSE)
         creature:Talk(BANNER_SAY)
+        -- C++ Reset: events.ScheduleEvent(EVENT_SPAWN, 3s) (:442).
+        local guid = creature:GetGUID()
+        cancelTimers(guid)
+        schedule(guid, "spawn", 3000, function()
+            spawnBannerCrew(creature, guid)
+        end)
     end
 end
 
@@ -138,13 +215,27 @@ RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 5, onSpawnOrReset)
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 23, onSpawnOrReset)
 
 -- C++ npc_blessed_bannerAI::JustDied (zone_icecrown.cpp:455-459):
--- Summons.DespawnAll() has no summon-list bridge (stays out);
--- me->DespawnOrUnsummon() ports (creature:Despawn, bridged).
+-- Summons.DespawnAll() ports via the EVENT_SPAWN latch (despawn before
+-- self-Despawn, C++ order); me->DespawnOrUnsummon() ports
+-- (creature:Despawn, bridged).
 local function onDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ JustDied order (:455-459): Summons.DespawnAll() first, then
+    -- me->DespawnOrUnsummon().
+    despawnBannerSummons(guid)
     creature:Despawn()
 end
 
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 4, onDied)
+
+-- Leave combat (event 2): no C++ evade drain for the banner (Reset
+-- re-schedules EVENT_SPAWN on ev23); cancel the pending crew only.
+local function onLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 2, onLeaveCombat)
 
 -- C++ npc_blessed_bannerAI::MoveInLineOfSight (zone_icecrown.cpp:447) is an
 -- EMPTY override — it suppresses the default ScriptedAI::MoveInLineOfSight
