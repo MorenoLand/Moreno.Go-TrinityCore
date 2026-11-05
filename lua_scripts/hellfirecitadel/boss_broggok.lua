@@ -27,7 +27,7 @@
 -- / poisonBolt 7000 / poisonCloud 5000) + Talk(SAY_AGGRO)
 -- + 1s scheduler pump (a port of ExecuteEvent — 1s
 -- granularity exact for all C++ timers; the !UpdateVictim
--- early return collapses into the pump). Pump: slime spray
+-- early return collapses into the pump). BossAI base UpdateAI pre-loop (ScriptedCreature.cpp:578) + in-loop (:584) CASTING gates ported per arm below (no boss UpdateAI override; prisoner adds' plain scheduler UpdateAI has no gate). Pump: slime spray
 -- 30913: 10s init then 4000+rand32()%8000 (C++ {4s,12s}) —
 -- non-triggered DoCastVictim (felmyst convention), re-arm
 -- {4s,12s} regardless (C++-exact); poison bolt 30917: 7s
@@ -133,6 +133,12 @@ local function freshState()
     }
 end
 
+-- Pump CASTING gate: each expired arm carries `and not
+-- creature:IsCasting()` — while casting it fires nothing and
+-- consumes no re-arm (else-branch countdown only, timer stays
+-- expired); unexpired arms keep counting down, since C++
+-- events.Update runs ahead of the gate (BossAI::UpdateAI
+-- ScriptedCreature.cpp:571-589, no boss override).
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -142,7 +148,7 @@ local function bossTick(creature, guid)
     -- Slime spray 30913: 10s init then 4000+rand32()%8000
     -- (C++ {4s,12s}) — non-triggered DoCastVictim (felmyst
     -- convention), re-arm {4s,12s} regardless (C++-exact).
-    if st.slimeSpray <= 1000 then
+    if st.slimeSpray <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_SLIME_SPRAY)
         st.slimeSpray = math.random(4000, 12000)
     else
@@ -151,7 +157,7 @@ local function bossTick(creature, guid)
 
     -- Poison bolt 30917: 7s init then {4s,12s} — non-triggered
     -- DoCastVictim, re-arm {4s,12s} regardless (C++-exact).
-    if st.poisonBolt <= 1000 then
+    if st.poisonBolt <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_POISON_BOLT)
         st.poisonBolt = math.random(4000, 12000)
     else
@@ -164,7 +170,7 @@ local function bossTick(creature, guid)
     -- spawns NPC_BROGGOK_POISON_CLOUD (17662) through the creature
     -- cast path's EffectSummonType twin, which fires event 19 —
     -- the cloud's JustSummoned arm is ported in onJustSummoned below.
-    if st.poisonCloud <= 1000 then
+    if st.poisonCloud <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_POISON_CLOUD)
         st.poisonCloud = 20000
     else

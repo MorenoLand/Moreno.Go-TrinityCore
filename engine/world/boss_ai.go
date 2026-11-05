@@ -12567,6 +12567,7 @@ func init() {
 	// stay unregistered. Fight logic in
 	// lua_scripts/theslavepens/boss_ahune.lua and
 	// lua_scripts/theslavepens/npc_frozen_core.lua.
+	// Cast-state gating PORTED on ahune: boss inherits BossAI::UpdateAI (no override), pre-loop (:578) + in-loop (:584) gates on the ported synch-health tick (ScriptedCreature.cpp:571-589); frozen core's plain ScriptedAI EventMap UpdateAI (boss_ahune.cpp:316) has no gate and no ported tick.
 	RegisterLuaBoss("boss_ahune", 25740)
 	RegisterLuaBoss("npc_frozen_core", 25865)
 	// Hungarfen (The Underbog): foul-spores once-guard at <=20%
@@ -12579,6 +12580,7 @@ func init() {
 	// aura-removal bridge). Fight logic in
 	// lua_scripts/theunderbog/boss_hungarfen.lua and
 	// lua_scripts/theunderbog/npc_underbog_mushroom.lua.
+	// Cast-state gating: none — both ScriptedAI UpdateAIs are plain countdown loops (boss_hungarfen.cpp:76/:156), zero CASTING hits; ticks stay ungated.
 	RegisterLuaBoss("boss_hungarfen", 17770)
 	RegisterLuaBoss("npc_underbog_mushroom", 17990)
 
@@ -12590,6 +12592,7 @@ func init() {
 	// have no difficulty/home-position bridges (bookkeeping only).
 	// Fight logic in lua_scripts/theunderbog/boss_the_black_
 	// stalker.lua.
+	// Cast-state gating: none — plain ScriptedAI countdown UpdateAI (boss_the_black_stalker.cpp:111), zero CASTING hits; ticks stay ungated.
 	RegisterLuaBoss("boss_the_black_stalker", 17882)
 
 	// boss_broggok (17380): slime spray and poison bolt victim
@@ -12608,6 +12611,7 @@ func init() {
 	// Fight logic in lua_scripts/hellfirecitadel/boss_broggok.
 	// lua, lua_scripts/hellfirecitadel/npc_nascent_fel_orc.lua,
 	// and lua_scripts/hellfirecitadel/npc_fel_orc_neophyte.lua.
+	// Cast-state gating PORTED on the boss: BossAI base gates (ScriptedCreature.cpp:571-589, no boss UpdateAI override) on slime-spray/poison-bolt/poison-cloud ticks; prisoner adds' BroggokPrisionersAI UpdateAI (boss_broggok.cpp:193) is a plain scheduler loop, zero CASTING hits — their ticks stay ungated.
 	RegisterLuaBoss("boss_broggok", 17380)
 	RegisterLuaBoss("npc_nascent_fel_orc", 17398)
 	RegisterLuaBoss("npc_fel_orc_neophyte", 17429)

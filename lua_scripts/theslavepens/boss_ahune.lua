@@ -28,7 +28,7 @@
 -- SPELL_STAND 37752, DoCastSelf SPELL_AHUNE_SPANKY_HANDS
 -- 46146, DoCastSelf SPELL_AHUNES_SHIELD 45954 (C++-exact arm
 -- order) + 1s scheduler pump (a port of ExecuteEvent — 1s
--- granularity is exact for the 3s synch timer). Pump:
+-- granularity is exact for the 3s synch timer). BossAI base UpdateAI pre-loop (ScriptedCreature.cpp:578) + in-loop (:584) CASTING gates ported on the synch-health tick below (no boss UpdateAI override). Pump:
 -- EVENT_SYNCH_HEALTH 46430 3s re-arm 3s — the fire arm is
 -- ported in bossTick: FindNearestCreature(25865, 100.0)
 -- approximates the instance->GetCreature(DATA_FROZEN_CORE)
@@ -76,7 +76,7 @@
 -- AHUNE_SELF_STUN) + RemoveFlag(NOT_SELECTABLE) arms) is
 -- documented only — the Emerge NOT_SELECTABLE flip stays
 -- unmodeled (its trigger rides the unregistered bunny phase
--- machine); no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget); no SpellScript/
+-- machine); BossAI base CASTING gate PORTED on the synch-health tick (see pump gate note; live creature:IsCasting bridge, lua_creature_events.go:1950); no SpellScript/
 -- AuraScript bridges — the nine script classes in this file
 -- (spell_ahune_synch_health, spell_summoning_rhyme_aura,
 -- spell_summon_ice_spear_delayer, spell_ice_spear_control_
@@ -126,6 +126,12 @@ local function freshState()
     }
 end
 
+-- Pump CASTING gate: the expired arm carries `and not
+-- creature:IsCasting()` — while casting it fires nothing and
+-- consumes no re-arm (else-branch countdown only, timer stays
+-- expired); unexpired arms keep counting down, since C++
+-- events.Update runs ahead of the gate (BossAI::UpdateAI
+-- ScriptedCreature.cpp:571-589, no boss override).
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -142,7 +148,7 @@ local function bossTick(creature, guid)
     -- current health. The C++ suicide fallback when the core
     -- is absent has no equivalent; the reverse core->Ahune
     -- leg needs a pump in npc_frozen_core.lua, not this item.
-    if st.synchHealth <= 1000 then
+    if st.synchHealth <= 1000 and not creature:IsCasting() then
         st.synchHealth = 3000
         local core = creature:FindNearestCreature(ENTRY_FROZEN_CORE, 100.0)
         if core then
