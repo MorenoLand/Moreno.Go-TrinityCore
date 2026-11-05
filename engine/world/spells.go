@@ -39392,6 +39392,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// unknown triggered spell is a no-op in the cast path, like the
 		// creature tick.
 		triggerCaster := ts
+		var triggerCreatureMotion *creatureMotion
 		if ts.server != nil && ts.server.Data != nil && aura.CasterGUID != ts.playerGUID {
 			if triggering, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
 				if triggered, found, err := ts.server.Data.Spell(aura.TriggerSpell); err == nil && found {
@@ -39404,8 +39405,15 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 							// gone the if (Unit* triggerCaster) arm fails and no cast
 							// happens. HIGHGUID_PLAYER is 0, so a clear high word with
 							// no live session is an offline player caster — skip the
-							// cast. A creature caster has no Go cast path and keeps the
-							// target-cast delta noted on the replenish trigger lines.
+							// cast.
+							return
+						} else if casterMotion := ts.server.findCreatureMotion(pMap, pInst, aura.CasterGUID); casterMotion != nil {
+							// A creature caster rides the creature full-cast path
+							// below, after the dead-target gate — the old arm cast
+							// from the holder instead, misattributing the trigger.
+							triggerCreatureMotion = casterMotion
+						} else {
+							// A gone creature caster is the same null arm.
 							return
 						}
 					}
@@ -39441,6 +39449,23 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		// Eluna's OnDummyEffect arm (SpellAuraEffects.cpp:5063-5069) fires
 		// only when the aura target is a creature; this tick's target is
 		// a player, so no arm fires here — the creature tick fires it.
+		if triggerCreatureMotion != nil {
+			// SpellAuraEffects.cpp:5056/:5089 — the trigger casts from the
+			// aura caster through the creature full-cast path
+			// (castCreatureSpellInternalWithBasePoints, triggered=true, so
+			// CastSpellExtraArgs(AuraEffect) carries TRIGGERED_FULL_MASK).
+			// Residuals, as on the creature tick: no SPELLVALUE_CRIT_CHANCE
+			// seed and no m_triggeredByAuraSpell attribution on the creature
+			// path. The dead-target gate above already ran, like the session
+			// cast below.
+			if aura.AuraType == spellAuraPeriodicTriggerSpellWithValue {
+				withValue := int32(aura.Amount)
+				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, map[int]int32{0: withValue, 1: withValue, 2: withValue}, nil, false)
+			} else {
+				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, nil, nil, false)
+			}
+			return
+		}
 		if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
 			triggerCaster.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
 		}
@@ -41423,6 +41448,62 @@ func (s *session) sendCreaturePeriodicTickImmune(key creatureAuraKey, aura *acti
 	}
 }
 
+// castPeriodicTriggerFromCreature mirrors the triggerCaster resolution of
+// HandlePeriodicTriggerSpellAuraTick / HandlePeriodicTriggerSpellWithValueAuraTick
+// (SpellAuraEffects.cpp:5056/:5089) for a creature tick: when the trigger spell
+// NeedsToBeTriggeredByCaster the aura caster casts, else the aura target (the
+// creature) casts. A player caster rides its session with the crit seed and
+// the triggeredByAura attribution; a creature caster rides
+// castCreatureSpellInternalWithBasePoints with triggered=true (CastSpellExtraArgs
+// (AuraEffect) carries TRIGGERED_FULL_MASK). An offline player caster or a gone
+// creature caster is C++'s null triggerCaster arm — no cast. basePointOverrides
+// carries the with-value SPELLVALUE_BASE_POINT0+i overrides, or nil for a plain
+// trigger. Residuals: the creature cast carries no SPELLVALUE_CRIT_CHANCE seed
+// (no per-cast crit override on the creature path — crit folds from caster
+// stats) and no m_triggeredByAuraSpell attribution (no per-cast parameter on
+// castCreatureSpellInternal, so the IsTriggeredByAura recursion terminator
+// does not fire for creature casts — the same standing delta as the other
+// creature triggered casts).
+func (s *session) castPeriodicTriggerFromCreature(ctx context.Context, key creatureAuraKey, aura *activeAura, triggered, triggering wotlk.Spell, tickKnown bool, tickSpell wotlk.Spell, basePointOverrides map[int]int32) {
+	if s.server == nil {
+		return
+	}
+	castFromSession := func(casterSess *session) {
+		// SpellAuraEffects.cpp:5059-5061 / :5098-5100 — the
+		// INHERIT_CRIT_FROM_AURA SPELLVALUE_CRIT_CHANCE seed rides the cast
+		// entry (consumed there like the player tick).
+		if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
+			casterSess.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
+		}
+		// Spell.cpp:3068 — the m_triggeredByAuraSpell attribution rides the
+		// pending pair into the cast; the IsTriggeredByAura recursion
+		// terminator (SpellAuras.cpp:2054-2056) reads it.
+		casterSess.triggeredByAuraCast = true
+		casterSess.triggeredByAuraSpell = aura.SpellID
+		if basePointOverrides != nil {
+			casterSess.castSpellDirectWithBasePoints(ctx, aura.TriggerSpell, aura.TargetGUID, []int32{basePointOverrides[0], basePointOverrides[1], basePointOverrides[2]})
+		} else {
+			casterSess.castSpellDirect(ctx, aura.TriggerSpell, aura.TargetGUID)
+		}
+		casterSess.triggeredByAuraCast = false
+		casterSess.triggeredByAuraSpell = 0
+	}
+	if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
+		if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+			castFromSession(casterSess)
+			return
+		}
+		if casterMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); casterMotion != nil {
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, casterMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false)
+			return
+		}
+		return
+	}
+	if targetMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); targetMotion != nil {
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, targetMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false)
+	}
+}
+
 func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	// Aura::UpdateOwner (SpellAuras.cpp:790-810): the channeled mod-spell
 	// arm — same window as the player tick above. The caster resolves
@@ -42086,11 +42167,11 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// silently dropped.
 		// SpellAuraEffects.cpp:5056 — triggerCaster is the aura caster when
 		// the trigger spell NeedsToBeTriggeredByCaster, else the aura target
-		// (the creature). The target-cast arm has no bridge: the creature
-		// tick has no full-cast path, so it rides the caster's player
-		// session as well — the tree's documented cast-attribution delta
-		// for creature targets (same as case 227). A creature caster or an
-		// offline player caster stays unbridged.
+		// (the creature). Both arms ride castPeriodicTriggerFromCreature:
+		// a player caster casts through its session, a creature caster
+		// (or the target, on the target-cast arm) through the creature
+		// full-cast path. An offline player caster or a gone creature
+		// caster is C++'s null triggerCaster arm — no cast.
 		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
 			if triggering, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				if triggered, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
@@ -42106,33 +42187,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 							}
 						}
 					}
-					var triggerCaster *session
-					if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
-						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
-					} else {
-						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
-					}
-					if triggerCaster != nil {
-						// SpellAuraEffects.cpp:5059-5061 — the
-						// INHERIT_CRIT_FROM_AURA SPELLVALUE_CRIT_CHANCE seed
-						// rides the cast entry (consumed there like the
-						// player tick and case 227).
-						if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
-							triggerCaster.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
-						}
-						// Spell.cpp:3068 — the m_triggeredByAuraSpell
-						// attribution rides the pending pair into the cast;
-						// the IsTriggeredByAura recursion terminator
-						// (SpellAuras.cpp:2054-2056) reads it. The cast
-						// entry maps TRIGGERED_FULL_MASK to
-						// triggeredNoProcEvents itself, so no manual bump
-						// here (unlike the previous direct-damage arm).
-						triggerCaster.triggeredByAuraCast = true
-						triggerCaster.triggeredByAuraSpell = aura.SpellID
-						triggerCaster.castSpellDirect(ctx, aura.TriggerSpell, aura.TargetGUID)
-						triggerCaster.triggeredByAuraCast = false
-						triggerCaster.triggeredByAuraSpell = 0
-					}
+					s.castPeriodicTriggerFromCreature(ctx, key, aura, triggered, triggering, tickKnown, tickSpell, nil)
 				}
 			}
 		}
@@ -42145,32 +42200,14 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// aura amount (SPELLVALUE_BASE_POINT0+i, i in 0..MAX_SPELL_EFFECTS-1).
 		// SpellAuraEffects.cpp:5089 — triggerCaster is the aura caster
 		// when the trigger spell NeedsToBeTriggeredByCaster, else the
-		// aura target (the creature). The target-cast arm has no bridge:
-		// the creature tick has no full-cast path, so it rides the
-		// caster's player session as well — the tree's documented
-		// cast-attribution delta for creature targets (see the replenish
-		// trigger lines). A creature caster or an offline player caster
-		// stays unbridged.
+		// aura target (the creature). Both arms ride
+		// castPeriodicTriggerFromCreature with every effect's base points
+		// overridden to the aura amount, like the player tick.
 		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
 			if triggering, found, err := s.server.Data.Spell(aura.SpellID); err == nil && found {
 				if triggered, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
-					var triggerCaster *session
-					if spellNeedsToBeTriggeredByCaster(triggered, triggering) {
-						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
-					} else {
-						triggerCaster = s.server.findSessionByGUID(aura.CasterGUID)
-					}
-					if triggerCaster != nil {
-						// SpellAuraEffects.cpp:5098-5100 — the with-value tick's
-						// SPELLVALUE_CRIT_CHANCE seed rides the same funnel
-						// plumbing as the player path (consumed at the funnel
-						// entry).
-						if tickKnown && tickSpell.AttributesEx4&spellAttr4InheritCritFromAura != 0 {
-							triggerCaster.pendingLaunchCritChance = float64(aura.CritChance) / 100.0
-						}
-						withValue := int32(aura.Amount)
-						triggerCaster.castSpellDirectWithBasePoints(ctx, aura.TriggerSpell, aura.TargetGUID, []int32{withValue, withValue, withValue})
-					}
+					withValue := int32(aura.Amount)
+					s.castPeriodicTriggerFromCreature(ctx, key, aura, triggered, triggering, tickKnown, tickSpell, map[int]int32{0: withValue, 1: withValue, 2: withValue})
 				}
 			}
 		}
