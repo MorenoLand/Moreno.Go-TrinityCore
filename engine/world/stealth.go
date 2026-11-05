@@ -1420,10 +1420,9 @@ func (s *session) playerSeerMovedUnitGUID() uint64 {
 // playerSeerSpellGateVisibleToCreature is the creature-target twin: GM leg
 // (script-hidden creatures need a GM-mode seer), ghost leg (alive seers
 // cannot target ghost-only creatures, ghost seers cannot target alive-only
-// ones), then the player-seer detect core. The despawn leg stays out:
-// motions carry no corpse-remove-time model (Creature::IsInvisibleDueToDespawn,
-// Creature.cpp:1936-1948, needs the corpse delay expiry, which Go never
-// records).
+// ones), then the despawn leg (creatureInvisibleDueToDespawn,
+// Creature::IsInvisibleDueToDespawn, Creature.cpp:1936-1948), then the
+// player-seer detect core.
 func (s *Server) playerSeerSpellGateVisibleToCreature(seer *session, tm *creatureMotion) bool {
 	if s == nil || seer == nil || seer.player == nil || tm == nil {
 		return true
@@ -1461,6 +1460,12 @@ func (s *Server) playerSeerSpellGateVisibleToCreature(seer *session, tm *creatur
 	if decided, visible := ghostLegVerdict(playerGhostBits(seerGhost), targetVis, true, false, false); decided {
 		return visible
 	}
+	// CanSeeOrDetect's despawn leg (Object.cpp:1650), after the ghost
+	// leg and before CanDetect: a dead target whose corpse-removal
+	// phase has applied is invisible even to dead-target spells.
+	if s.creatureInvisibleDueToDespawn(tm) {
+		return false
+	}
 	return s.playerSeerCanDetectCreature(seer, tm)
 }
 
@@ -1492,7 +1497,8 @@ func (s *Server) creatureSeerSpellGateVisibleToPlayer(m *creatureMotion, ts *ses
 }
 
 // creatureSeerSpellGateVisibleToCreature is the creature-target twin,
-// with the despawn leg out for the same missing corpse-time model.
+// with the despawn leg (creatureInvisibleDueToDespawn) between the
+// ghost leg and the detect core, in C++ order.
 func (s *Server) creatureSeerSpellGateVisibleToCreature(m, tm *creatureMotion) bool {
 	if s == nil || m == nil || tm == nil {
 		return true
@@ -1510,6 +1516,12 @@ func (s *Server) creatureSeerSpellGateVisibleToCreature(m, tm *creatureMotion) b
 	targetVis, _ := creatureGhostBits(tm)
 	if decided, visible := ghostLegVerdict(seerDetect, targetVis, false, false, false); decided {
 		return visible
+	}
+	// CanSeeOrDetect's despawn leg (Object.cpp:1650), after the ghost
+	// leg and before CanDetect: a dead target whose corpse-removal
+	// phase has applied is invisible even to dead-target spells.
+	if s.creatureInvisibleDueToDespawn(tm) {
+		return false
 	}
 	return s.wildCreatureCanDetectCreature(m, tm)
 }
@@ -1558,6 +1570,8 @@ func (s *Server) controlledCreatureSeerSpellGateVisibleToPlayer(m *creatureMotio
 // the head legs and the GM/ghost legs read the caster motion (this),
 // while the detect sums judge through the controller session's
 // player-seer detect core (CanDetect routing, Object.cpp:1664-1680).
+// The despawn leg rides creatureInvisibleDueToDespawn between the
+// ghost leg and the detect core, in C++ order.
 // Callers exclude self targets (this == obj, Object.cpp:1575).
 func (s *Server) controlledCreatureSeerSpellGateVisibleToCreature(m *creatureMotion, seer *session, tm *creatureMotion) bool {
 	if s == nil || m == nil || seer == nil || seer.player == nil || tm == nil {
@@ -1576,6 +1590,12 @@ func (s *Server) controlledCreatureSeerSpellGateVisibleToCreature(m *creatureMot
 	targetVis, _ := creatureGhostBits(tm)
 	if decided, visible := ghostLegVerdict(seerDetect, targetVis, false, false, false); decided {
 		return visible
+	}
+	// CanSeeOrDetect's despawn leg (Object.cpp:1650), after the ghost
+	// leg and before CanDetect: a dead target whose corpse-removal
+	// phase has applied is invisible even to dead-target spells.
+	if s.creatureInvisibleDueToDespawn(tm) {
+		return false
 	}
 	return s.playerSeerCanDetectCreature(seer, tm)
 }
@@ -1603,7 +1623,8 @@ func (s *Server) petSeerSpellGateVisibleToPlayer(motion *creatureMotion, detectS
 }
 
 // petSeerSpellGateVisibleToCreature is the pet-caster creature-target
-// twin, with the same seer split and the despawn leg out.
+// twin, with the same seer split and the despawn leg riding
+// creatureInvisibleDueToDespawn between the ghost leg and the detect core.
 func (s *Server) petSeerSpellGateVisibleToCreature(motion *creatureMotion, detectSeer *session, tm *creatureMotion) bool {
 	if s == nil || detectSeer == nil || tm == nil {
 		return true
@@ -1621,6 +1642,12 @@ func (s *Server) petSeerSpellGateVisibleToCreature(motion *creatureMotion, detec
 	targetVis, _ := creatureGhostBits(tm)
 	if decided, visible := ghostLegVerdict(seerDetect, targetVis, false, false, false); decided {
 		return visible
+	}
+	// CanSeeOrDetect's despawn leg (Object.cpp:1650), after the ghost
+	// leg and before CanDetect: a dead target whose corpse-removal
+	// phase has applied is invisible even to dead-target spells.
+	if s.creatureInvisibleDueToDespawn(tm) {
+		return false
 	}
 	return s.playerSeerCanDetectCreature(detectSeer, tm)
 }

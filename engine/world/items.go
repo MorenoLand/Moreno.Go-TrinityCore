@@ -4078,7 +4078,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			// CheckTarget arm after self, ahead of in-combat in C++
 			// order. At cast start CheckCast passes implicit=false for
 			// a player caster (Spell.cpp:5372), so the stealth exemption
-			// never applies — same read as the client-path twin and the triggered path: the GM and ghost legs, then the detect sums; self targets pass, creature targets judge through playerSeerSpellGateVisibleToCreature.
+			// never applies — same read as the client-path twin and the triggered path: the GM and ghost legs, the despawn leg, then the detect sums; self targets pass, creature targets judge through playerSeerSpellGateVisibleToCreature.
 			// Spells carrying SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
 			if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != s.playerGUID {
 				if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {

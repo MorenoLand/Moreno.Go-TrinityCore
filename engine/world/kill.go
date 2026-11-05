@@ -202,6 +202,25 @@ func (s *Server) creatureCorpseRemoved(dbGUID, mapID, instanceID uint32) bool {
 	return false
 }
 
+// creatureInvisibleDueToDespawn runs Creature::IsInvisibleDueToDespawn
+// (Creature.cpp:1936-1948) for a spell-gate creature target: not alive,
+// not dying, and the corpse-remove time reached. Go has no isDying
+// window (death sets Health 0 at once), and the corpse-remove time is
+// the respawn record's applied removal phase (processCreatureCorpseRemovals
+// flags it at CorpseRemoveAt; persisted rows load already removed).
+// Corpse-present dead targets stay visible, as in C++. Temp summons
+// never carry a respawn record (their corpses ride expiry/unsummon),
+// and pets/vehicles never carry the 0xF130 creature high bits, so both
+// stay out. The low-24 decode is the in-tree world-GUID twin
+// (chain_targets.go, combat.go). Callers must not hold motionMu:
+// creatureCorpseRemoved takes it.
+func (s *Server) creatureInvisibleDueToDespawn(tm *creatureMotion) bool {
+	if s == nil || tm == nil || tm.Health != 0 || tm.IsTempSummon || uint16(tm.GUID>>48) != 0xF130 {
+		return false
+	}
+	return s.creatureCorpseRemoved(uint32(tm.GUID&0xFFFFFF), tm.Map, tm.InstanceID)
+}
+
 // corpseRemovalBroadcastMap resolves the map clients actually see a corpse
 // on. A transport passenger's respawn record stores the DB map (the
 // template transport-map id), but the motion lives on the transport's

@@ -2847,7 +2847,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// triggered path: canDetectStealthOf +
 	// canDetectInvisibilityOfPlayer, self targets pass, GM casters
 	// pass inside the helpers, creature targets judge through
-	// playerSeerCanDetectCreature (live motion aura sums), while the GM and ghost legs run in the wrappers; sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg stays out (no corpse-time model). Spells carrying
+	// playerSeerCanDetectCreature (live motion aura sums), while the GM and ghost legs run in the wrappers; sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg runs in the wrappers (creatureInvisibleDueToDespawn). Spells carrying
 	// SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
 	// Client-initiated casts only — triggered casts go through castSpellDirect, not this path.
 	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && targetGUID != 0 && targetGUID != s.playerGUID {
@@ -10027,7 +10027,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// triggered-path detect core verbatim (canDetectStealthOf +
 			// canDetectInvisibilityOfPlayer): self targets pass, GM
 			// casters pass inside the helpers, creature targets judge
-			// through playerSeerCanDetectCreature (live motion aura sums), while the GM and ghost legs run in the wrappers; sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg stays out (no corpse-time model), as on the triggered path. Spells carrying
+			// through playerSeerCanDetectCreature (live motion aura sums), while the GM and ghost legs run in the wrappers; sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg runs in the wrappers (creatureInvisibleDueToDespawn), as on the triggered path. Spells carrying
 			// SPELL_ATTR6_CAN_TARGET_INVISIBLE skip it.
 			if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && target.UnitGUID != s.playerGUID && s.server != nil {
 				if ts := s.server.findSessionByGUID(target.UnitGUID); ts != nil && ts.player != nil {
@@ -23780,7 +23780,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		// Visibility arm (SpellInfo.cpp:1641-1642): explicit targets carry
 		// implicit=false, so the stealth exemption never applies here.
 		// Player targets judge the C++ CanDetect core (CanSeeOrDetect,
-		// Object.cpp:1573-1664, minus sight-range and vehicle-accessory (distanceCheck defaults false) and the despawn leg (no corpse-time model); the GM and ghost legs run in the wrappers): canDetectStealthOf + canDetectInvisibilityOfPlayer.
+		// Object.cpp:1573-1664, minus sight-range and vehicle-accessory (distanceCheck defaults false) and the despawn leg runs in the wrappers (creatureInvisibleDueToDespawn); the GM and ghost legs run in the wrappers): canDetectStealthOf + canDetectInvisibilityOfPlayer.
 		// Self targets pass (this == obj, Object.cpp:1575); GM casters
 		// pass via the GM arms inside both detect helpers. Creature
 		// targets judge through playerSeerCanDetectCreature (live

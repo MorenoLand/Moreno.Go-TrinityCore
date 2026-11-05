@@ -1332,7 +1332,7 @@ func (s *Server) checkCreatureSpellCheckTarget(ctx context.Context, m *creatureM
 	// is the controller motion, not the caster. Self targets pass
 	// automatically (CanSeeOrDetect returns true for this == obj,
 	// Object.cpp:1575); CAN_TARGET_INVISIBLE exempts. An unresolvable
-	// controller motion still fails open. Sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg stays out (no corpse-time model); the GM and ghost legs run in the wrappers.
+	// controller motion still fails open. Sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg runs in the wrappers (creatureInvisibleDueToDespawn); the GM and ghost legs run in the wrappers.
 	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 {
 		var seer *session
 		var controllerGUID uint64

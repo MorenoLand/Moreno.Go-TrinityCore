@@ -2291,7 +2291,7 @@ func (s *session) checkPetSpellCheckTarget(ctx context.Context, motion *creature
 	// GUID never resolves to a session); creature targets judge through petSeerSpellGateVisibleToCreature
 	// on the session-seer leg and through the charmer motion's live aura
 	// sums on the creature-charmer leg; CAN_TARGET_INVISIBLE
-	// exempts. Sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg stays out (no corpse-time model); the GM and ghost legs run in the wrappers.
+	// exempts. Sight-range and vehicle-accessory never run (distanceCheck defaults false) and the despawn leg runs in the wrappers (creatureInvisibleDueToDespawn); the GM and ghost legs run in the wrappers.
 	if spell.AttributesEx6&spellAttr6CanTargetInvisible == 0 && s.server != nil {
 		// Seer is the single charmer-first controller unit (Object.cpp:
 		// 1664-1680, GetCharmerOrOwner), mirroring the wild twin: a
