@@ -31,9 +31,9 @@
 -- C++-exact); EVENT_FROSTBOLT — DoCastVictim(SPELL_FROSTBOLT 32364),
 -- 4s init, randtime(4500ms, 6s) repeat; EVENT_FROST_NOVA —
 -- DoCastSelf(SPELL_FROSTNOVA 32365) 2-arg (non-triggered), 15s init,
--- randtime(17500ms, 25s) repeat (the chained EVENT_BLINK 1500ms leg
--- has no motion/interrupt bridges — documented, not wired). All
--- timers cancelled on 2/4/23 (gargolmar precedent).
+-- randtime(17500ms, 25s) repeat; the chained EVENT_BLINK 1500ms leg
+-- is PORTED as blinkTick below (interrupt + MoveClear + blink
+-- self-cast). All timers cancelled on 2/4/23 (gargolmar precedent).
 -- boss_nexusprince_shaffarAI::KilledUnit — Talk(SAY_SLAY 2) (line
 -- 161) gated on victim->GetTypeId() == TYPEID_PLAYER — the
 -- razuvious player-gated precedent (event 3).
@@ -83,9 +83,13 @@
 -- AI itself is PORTED below (18431 arcane-bolt / apprentice +
 -- 18430 ping-pong registrations); yor entry still DB-side
 -- unverified, not guessed;
--- EVENT_BLINK — interrupt + Clear(MOTION_PRIORITY_NORMAL) +
--- DoCast(SPELL_BLINK 34605) — stays OUT: the interrupt/motion legs
--- have no bridge (the blink teleport effect has no lua-bridge model);
+-- EVENT_BLINK — PORTED below as blinkTick, chained 1500ms from
+-- frostNovaTick (C++ :176 schedules it): IsCasting-gated
+-- InterruptNonMeleeSpells(true) + MoveClear (the StopMoving twin,
+-- lua_creature_events.go:2640) + non-triggered DoCast(me,
+-- SPELL_BLINK 34605) self-cast; the stale "no motion/interrupt
+-- bridge" claim is retracted (interrupt live :1995, MoveClear live
+-- :2640, blink self-cast per the ikiss/yazzai precedents).
 -- EVENT_FIREBALL / EVENT_FROSTBOLT / EVENT_FROST_NOVA ported above.
 -- npc_ethereal_beacon (18431) — zero Talk; PORTED below (registered
 -- as npc_ethereal_beacon in boss_ai.go): JustEngagedWith cross-creature
@@ -132,6 +136,7 @@ local SAY_DEAD  = 4
 
 local SPELL_FROSTBOLT = 32364 -- boss_nexusprince_shaffar.cpp:42
 local SPELL_FROSTNOVA = 32365 -- boss_nexusprince_shaffar.cpp:44
+local SPELL_BLINK = 34605 -- boss_nexusprince_shaffar.cpp:41
 local SPELL_ETHEREAL_BEACON_VISUAL = 32368 -- boss_nexusprince_shaffar.cpp:47
 local SPELL_ARCANE_BOLT = 15254 -- boss_nexusprince_shaffar.cpp:50
 local SPELL_ETHEREAL_APPRENTICE = 32372 -- boss_nexusprince_shaffar.cpp:51 (summon spell; ported as a direct summon, see beaconApprenticeTick)
@@ -217,11 +222,29 @@ local function frostboltTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_BLINK (:147-154): IsNonMeleeSpellCast(false)-gated
+-- InterruptNonMeleeSpells(true) + GetMotionMaster()->Clear(
+-- MOTION_PRIORITY_NORMAL) + DoCast(me, SPELL_BLINK 34605) 2-arg
+-- (non-triggered) self-cast, one-shot (C++ never re-arms it).
+-- No 500ms IsCasting defer by design: the arm IS the interrupt
+-- (dathrohan/skyriss/kelidan idiom) — deferring would make the
+-- interrupt leg vacuous, as in the ikiss blinkTick. MoveClear is
+-- the StopMoving twin (lua_creature_events.go:2640); the blink
+-- spell's teleport effect rides the cast itself (ikiss/yazzai
+-- blink-cast precedent). Defined BEFORE frostNovaTick so the
+-- 1500ms closure binds this local, not a nil global (malown
+-- forward-reference class — never a later local function).
+local function blinkTick(creature, guid)
+    if creature:IsCasting() then
+        creature:InterruptNonMeleeSpells(true)
+    end
+    creature:MoveClear()
+    creature:CastSpell(creature, SPELL_BLINK)
+end
+
 -- C++ EVENT_FROST_NOVA (:173-176): DoCast(me, SPELL_FROSTNOVA 32365)
 -- 2-arg (non-triggered) self-cast; 15s init, randtime(17500ms, 25s)
--- repeat. The chained EVENT_BLINK 1500ms leg (interrupt + motion
--- clear + DoCast(SPELL_BLINK 34605)) has no motion/interrupt bridges
--- — documented, not wired.
+-- repeat; schedules EVENT_BLINK 1500ms (ported as blinkTick above).
 local function frostNovaTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "frost_nova", 500, function()
@@ -230,6 +253,9 @@ local function frostNovaTick(creature, guid)
         return
     end
     creature:CastSpell(creature, SPELL_FROSTNOVA)
+    schedule(guid, "blink", 1500, function()
+        blinkTick(creature, guid)
+    end)
     schedule(guid, "frost_nova", math.random(17500, 25000), function()
         frostNovaTick(creature, guid)
     end)

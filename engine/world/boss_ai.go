@@ -20808,8 +20808,10 @@ func init() {
 	// one-shot 100-unit MoveInLineOfSight SAY_INTRO Talk, the Reset
 	// three-beacon summon legs, the JustSummoned beacon-visual /
 	// random-target AttackStart legs, and the ExecuteEvent machine
-	// (urand-gated SAY_SUMMON, frostbolt/frostnova casts; blink stays
-	// out on no motion/interrupt bridge) are ported there. The beacon
+	// (urand-gated SAY_SUMMON, frostbolt/frostnova casts, and the
+	// frost-nova-chained blink: IsCasting-gated
+	// InterruptNonMeleeSpells(true) + MoveClear + SPELL_BLINK
+	// self-cast) are ported there. The beacon
 	// AI (18431 arcane-bolt 1s/2-4.5s + apprentice timer, beacon
 	// JustSummoned victim engage) and the apprentice AI (18430 3s
 	// fire/frost ping-pong) are ported in the same file. npc_yor is
@@ -20902,7 +20904,7 @@ func init() {
 	// BossAI::UpdateAI gates (ScriptedCreature.cpp:578/:584, no syth
 	// override) ported as 500ms IsCasting defer on shock x4 /
 	// chain-lightning; DamageTaken summon latches ungated per C++
-	// (separate hook; interrupt leg stays out, no bridge).
+	// (separate hook; SythSummoning interrupt leg ported).
 	// boss_murmur (Shadow Labyrinth, Outland dungeon pass) — fight
 	// logic in lua_scripts/outland/boss_murmur.lua: the 40%-health
 	// touch-of-murmur one-shot latch (event 23), the sonic-boom /

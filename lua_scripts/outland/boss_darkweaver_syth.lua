@@ -40,9 +40,9 @@
 -- 33539, SHADOW 33540}, true) — 3-arg TRIGGERED self-casts
 -- (creature:CastSpell(creature, spell, true); the C++ fires front/
 -- back/left/right in ARCANE, FIRE, FROST, SHADOW order — preserved).
--- The IsNonMeleeSpellCast → InterruptNonMeleeSpells(false) leg stays
--- out on the no-InterruptNonMeleeSpells bridge — documented-only
--- (IsCasting itself is live, lua_creature_events.go:1950). The projection uses the
+-- The IsNonMeleeSpellCast → InterruptNonMeleeSpells(false) leg is
+-- PORTED in sythSummoning below (interrupt live,
+-- lua_creature_events.go:1995; IsCasting live :1950). The projection uses the
 -- moroes-verified integer-floor form.
 -- boss_darkweaver_sythAI::KilledUnit — TYPEID_PLAYER gate →
 -- Talk(SAY_SLAY 2) (event 3; razuvious player-gated precedent).
@@ -177,11 +177,15 @@ local function chainLightningTick(creature, guid)
     end)
 end
 
--- C++ SythSummoning (:198-208): Talk(SAY_SUMMON) + 4x DoCast(me,
--- SPELL_SUMMON_SYTH_*, true) — 3-arg TRIGGERED self-casts, in the
--- C++ order ARCANE, FIRE, FROST, SHADOW.
+-- C++ SythSummoning (:198-208): Talk(SAY_SUMMON) +
+-- IsNonMeleeSpellCast(false)-gated InterruptNonMeleeSpells(false)
+-- + 4x DoCast(me, SPELL_SUMMON_SYTH_*, true) — 3-arg TRIGGERED
+-- self-casts, in the C++ order ARCANE, FIRE, FROST, SHADOW.
 local function sythSummoning(creature)
     creature:Talk(SAY_SUMMON)
+    if creature:IsCasting() then
+        creature:InterruptNonMeleeSpells(false)
+    end
     creature:CastSpell(creature, SPELL_SUMMON_SYTH_ARCANE, true)
     creature:CastSpell(creature, SPELL_SUMMON_SYTH_FIRE, true)
     creature:CastSpell(creature, SPELL_SUMMON_SYTH_FROST, true)

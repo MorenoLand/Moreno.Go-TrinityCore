@@ -221,8 +221,9 @@ end
 -- C++ EVENT_BLINK (:140-147): Talk(EMOTE_ARCANE_EXPLOSION) +
 -- DoCastAOE(SPELL_BLINK) 1-arg = non-triggered self-cast; re-arm
 -- randtime(35s,40s); schedules EVENT_ARCANE_EXPLOSION at 1s. The
--- interrupt-non-melee leg rides the no-cast-state bridge
--- (documented-only).
+-- InterruptNonMeleeSpells(false) leg is PORTED below (bridged twin,
+-- pandemonius precedent); the IsNonMeleeSpellCast gate itself is
+-- subsumed by the IsCasting defer above.
 local function blinkTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "blink", 500, function()
