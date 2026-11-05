@@ -374,6 +374,39 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{sp.Effects[index].Effect != 0}, nil
 	}
+	// GetSpellEffectMiscValue(spellID, effectIndex) is
+	// SpellInfo::Effects[eff].MiscValue (Spell.dbc, the
+	// AuraEffect::GetMiscValue twin): the per-effect misc value a
+	// C++ handler reads off another aura's effect — the drain-soul
+	// glyph leg (spell_warlock.cpp:557-559) rolls against the
+	// MiscValue of the glyph aura's EFFECT_0. Reads the loaded
+	// Spell.dbc record for the given spell; an unknown spell or an
+	// out-of-range index reads 0, the GetTriggerSpell convention.
+	methods["GetSpellEffectMiscValue"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{int32(0)}, nil
+		}
+		targetSpell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		index := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		if r.server == nil || r.server.Data == nil || index < 0 {
+			return []any{int32(0)}, nil
+		}
+		sp, found, err := r.server.Data.Spell(targetSpell)
+		if err != nil || !found || index >= len(sp.Effects) {
+			return []any{int32(0)}, nil
+		}
+		return []any{sp.Effects[index].MiscValue}, nil
+	}
 	// GetProcChance is SpellInfo::ProcChance (Spell.dbc field 35,
 	// DBCStructure.h:1425): the roll_chance_i percent a C++
 	// periodic handler gates on. An unknown spell or a removed aura
