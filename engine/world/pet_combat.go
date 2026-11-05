@@ -6790,6 +6790,21 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 				targetSess.server.suppressThreatForSchoolImmuneVictim(targetSess.player.Map, targetSess.player.InstanceID, targetSess.playerGUID, targetSess.isImmuneToDamage(spellSchoolMaskNormal))
 			}
 		}
+		// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812) and
+		// HandleAuraModStun (:2834): a fresh confuse or breakable-stun
+		// effect re-evaluates threat suppression on the target's
+		// attackers (see suppressThreatForControlledVictim).
+		if (effect.Aura == spellAuraModConfuse || effect.Aura == spellAuraModStun) && targetSess.player != nil {
+			controlled := targetSess.hasAuraType(spellAuraModConfuse)
+			if !controlled {
+				targetSess.castMu.Lock()
+				controlled = breakableStunAuraPresent(targetSess.activeAuras)
+				targetSess.castMu.Unlock()
+			}
+			if targetSess.server != nil {
+				targetSess.server.suppressThreatForControlledVictim(targetSess.player.Map, targetSess.player.InstanceID, targetSess.playerGUID, controlled)
+			}
+		}
 		wireMax, wireDuration := auraWireDurations(spell, durationMs, durationMs)
 		packet := protocol.BuildAuraUpdateWithStackEffect(targetGUID, caster.GUID, slot, spell.ID, false, positive, wireMax, wireDuration, aura.StoredCasterLevel, 1, aura.EffectMask)
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
@@ -6956,6 +6971,19 @@ func (s *session) applyPetAuraWithSource(ctx context.Context, caster *creatureMo
 			s.server.broadcastCreatureValuesUpdateInInstance(targetKey.Map, targetKey.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: motion.UnitFlags})
 			s.server.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s.server, targetKey, spellSchoolMaskNormal))
 		}
+	}
+	// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812) and
+	// HandleAuraModStun (:2834): a fresh confuse or breakable-stun effect
+	// re-evaluates threat suppression on the target's attackers (see
+	// suppressThreatForControlledVictim).
+	if effect.Aura == spellAuraModConfuse || effect.Aura == spellAuraModStun {
+		controlled := s.server.creatureHasLiveAuraEffectType(targetKey, spellAuraModConfuse)
+		if !controlled {
+			s.server.auraMu.Lock()
+			controlled = breakableStunAuraPresent(s.server.activeCreatureAuras[targetKey])
+			s.server.auraMu.Unlock()
+		}
+		s.server.suppressThreatForControlledVictim(targetKey.Map, targetKey.InstanceID, targetGUID, controlled)
 	}
 	// Guardian::UpdateStats on pet aura apply (StatSystem.cpp:1266-1282 via
 	// Unit::UpdateUnitMod -> UpdateStats, Unit.cpp:9304-9310): the pet-cast

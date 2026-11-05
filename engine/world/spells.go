@@ -34001,6 +34001,21 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 					s.sendPlayerUnitFlagsUpdate()
 					s.server.suppressThreatForSchoolImmuneVictim(s.player.Map, s.player.InstanceID, s.playerGUID, s.isImmuneToDamage(spellSchoolMaskNormal))
 				}
+				// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812)
+				// and HandleAuraModStun (:2834): a fresh confuse or
+				// breakable-stun effect re-evaluates threat suppression
+				// on the target's attackers (see
+				// suppressThreatForControlledVictim). The aura is stored
+				// above, so the legs read the live stores.
+				if eff.Aura == spellAuraModConfuse || eff.Aura == spellAuraModStun {
+					controlled := s.hasAuraType(spellAuraModConfuse)
+					if !controlled {
+						s.castMu.Lock()
+						controlled = breakableStunAuraPresent(s.activeAuras)
+						s.castMu.Unlock()
+					}
+					s.server.suppressThreatForControlledVictim(s.player.Map, s.player.InstanceID, s.playerGUID, controlled)
+				}
 			}
 		}
 	}
@@ -37382,6 +37397,21 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 				targetSess.server.suppressThreatForSchoolImmuneVictim(targetSess.player.Map, targetSess.player.InstanceID, targetSess.playerGUID, targetSess.isImmuneToDamage(spellSchoolMaskNormal))
 			}
 		}
+		// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812) and
+		// HandleAuraModStun (:2834): a fresh confuse or breakable-stun
+		// effect re-evaluates threat suppression on the target's
+		// attackers (see suppressThreatForControlledVictim).
+		if (eff.Aura == spellAuraModConfuse || eff.Aura == spellAuraModStun) && targetSess.player != nil {
+			controlled := targetSess.hasAuraType(spellAuraModConfuse)
+			if !controlled {
+				targetSess.castMu.Lock()
+				controlled = breakableStunAuraPresent(targetSess.activeAuras)
+				targetSess.castMu.Unlock()
+			}
+			if targetSess.server != nil {
+				targetSess.server.suppressThreatForControlledVictim(targetSess.player.Map, targetSess.player.InstanceID, targetSess.playerGUID, controlled)
+			}
+		}
 		if eff.Aura == spellAuraModParryPercent {
 			targetSess.updatePlayerParryPercentage(targetSess.player, targetSess.player.Level)
 		}
@@ -38199,6 +38229,20 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			s.server.broadcastCreatureValuesUpdateInInstance(targetKey.Map, targetKey.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: m.UnitFlags})
 		}
 		s.server.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s.server, targetKey, spellSchoolMaskNormal))
+	}
+	// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812) and
+	// HandleAuraModStun (:2834): a fresh confuse or breakable-stun effect
+	// re-evaluates threat suppression on the target's attackers (see
+	// suppressThreatForControlledVictim). The aura is stored above, so
+	// the legs read the live stores.
+	if (eff.Aura == spellAuraModConfuse || eff.Aura == spellAuraModStun) && s.server != nil {
+		controlled := s.server.creatureHasLiveAuraEffectType(targetKey, spellAuraModConfuse)
+		if !controlled {
+			s.server.auraMu.Lock()
+			controlled = breakableStunAuraPresent(s.server.activeCreatureAuras[targetKey])
+			s.server.auraMu.Unlock()
+		}
+		s.server.suppressThreatForControlledVictim(targetKey.Map, targetKey.InstanceID, targetGUID, controlled)
 	}
 	// Unit::UpdateSpeed (Unit.cpp:8666): a fresh speed aura recomputes the
 	// creature's run rate — previously snares never slowed creatures.

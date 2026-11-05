@@ -896,6 +896,39 @@ func (s *Server) suppressThreatForSchoolImmuneVictim(mapID, instanceID uint32, v
 	}
 }
 
+// suppressThreatForControlledVictim is the fan-out half of the
+// EvaluateSuppressed() calls in AuraEffect::HandleModConfuse
+// (SpellAuraEffects.cpp:2812) and AuraEffect::HandleAuraModStun (:2834):
+// the C++ calls run on the target's manager over its refs on attackers'
+// lists (ThreatManager.cpp:290-304), and ShouldBeSuppressed's confuse
+// leg (:116-117, any SPELL_AURA_MOD_CONFUSE aura) and breakable-stun
+// leg (:118-119, HasBreakableByDamageAuraType(SPELL_AURA_MOD_STUN))
+// suppress the ref. Root carries neither an EvaluateSuppressed call
+// (HandleAuraModRoot only sets UNIT_STATE_ROOT) nor a
+// ShouldBeSuppressed leg, so it fans out nothing here. The caller gates
+// on the legs; SuppressVictim records a mid-taunt arrival in
+// suppressDeferred and clears a prior deferral on a non-taunting
+// victim, so a fresh CC apply re-suppresses a deferred victim (the
+// tick-177 residual).
+func (s *Server) suppressThreatForControlledVictim(mapID, instanceID uint32, victimGUID uint64, controlled bool) {
+	if s == nil || victimGUID == 0 || !controlled {
+		return
+	}
+	s.motionMu.Lock()
+	motions := make([]*creatureMotion, 0, len(s.motionMapLocked(mapID, instanceID)))
+	for _, m := range s.motionMapLocked(mapID, instanceID) {
+		if m != nil {
+			motions = append(motions, m)
+		}
+	}
+	s.motionMu.Unlock()
+	for _, m := range motions {
+		if m.ThreatMgr != nil {
+			m.ThreatMgr.SuppressVictim(victimGUID)
+		}
+	}
+}
+
 // hasAuraInLock checks if the session has an aura while castMu is already held.
 func (s *session) hasAuraInLock(spellID uint32) bool {
 	if s.auras != nil {

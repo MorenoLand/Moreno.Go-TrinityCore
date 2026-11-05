@@ -8806,6 +8806,19 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			s.broadcastCreatureValuesUpdateInInstance(targetKey.Map, targetKey.InstanceID, targetGUID, map[int]uint32{unitFieldFlags: target.UnitFlags})
 			s.suppressThreatForSchoolImmuneVictim(targetKey.Map, targetKey.InstanceID, targetGUID, creatureImmuneToDamage(s, targetKey, spellSchoolMaskNormal))
 		}
+		// AuraEffect::HandleModConfuse (SpellAuraEffects.cpp:2812) and
+		// HandleAuraModStun (:2834): a fresh confuse or breakable-stun
+		// effect re-evaluates threat suppression on the target's
+		// attackers (see suppressThreatForControlledVictim).
+		if eff.Aura == spellAuraModConfuse || eff.Aura == spellAuraModStun {
+			controlled := s.creatureHasLiveAuraEffectType(targetKey, spellAuraModConfuse)
+			if !controlled {
+				s.auraMu.Lock()
+				controlled = breakableStunAuraPresent(s.activeCreatureAuras[targetKey])
+				s.auraMu.Unlock()
+			}
+			s.suppressThreatForControlledVictim(targetKey.Map, targetKey.InstanceID, targetGUID, controlled)
+		}
 		if spellHasSpeedAura(spell) {
 			s.refreshCreatureRunSpeed(targetKey, targetGUID)
 		}

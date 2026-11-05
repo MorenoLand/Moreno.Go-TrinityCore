@@ -327,11 +327,13 @@ func (tm *ThreatManager) isSuppressedLocked(victim uint64) bool {
 // the per-list half of ThreatManager::EvaluateSuppressed
 // (ThreatManager.cpp:290-304) as called from
 // AuraEffect::HandleAuraModSchoolImmunity apply
-// (SpellAuraEffects.cpp:3192). Only an existing entry is marked; the
-// current victim switches on the next Update tick, matching C++
-// UpdateVictim cadence (no eager reselect here). A victim that is not
-// damage-immune to the attacker's melee school is never marked — the
-// caller gates on ShouldBeSuppressed's immunity leg. A taunting
+// (SpellAuraEffects.cpp:3192) and the HandleModConfuse /
+// HandleAuraModStun applies (:2812/:2834, via
+// suppressThreatForControlledVictim). Only an existing entry is marked;
+// the current victim switches on the next Update tick, matching C++
+// UpdateVictim cadence (no eager reselect here). A victim that meets no
+// ShouldBeSuppressed leg on the attacker's list is never marked — the
+// caller gates on the immunity, confuse or breakable-stun leg. A taunting
 // victim is not marked either — C++'s aura-apply EvaluateSuppressed
 // reads ShouldBeSuppressed false for a taunter — but the arrival is
 // recorded in suppressDeferred so the tick refresh holds the ref
@@ -360,8 +362,9 @@ func (tm *ThreatManager) SuppressVictim(victim uint64) {
 		}
 		return
 	}
-	// A fresh immunity apply is a suppress-triggering event: it ends
-	// any deferral from a condition gained during an earlier taunt.
+	// A fresh apply on a non-taunting victim is a suppress-triggering
+	// event: it ends any deferral from a condition gained during an
+	// earlier taunt.
 	delete(tm.suppressDeferred, victim)
 	if tm.suppressed == nil {
 		tm.suppressed = make(map[uint64]bool)
