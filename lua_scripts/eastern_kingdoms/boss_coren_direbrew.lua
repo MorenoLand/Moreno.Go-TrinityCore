@@ -67,8 +67,8 @@
 -- 0.0f, false, true, -47331) mug chuck 50276, ported via the threat-list
 -- pick (GetAITargets any-unit + HasAura(47331) exclusion);
 -- the 47369 control-aura tick is PORTED in boss_coren_direbrew.lua
--- (tick 189, RegisterAuraEvent); the 50278 barreled tick remains
--- unported (see below). The old "has no
+-- (tick 189, RegisterAuraEvent); the 50278 barreled tick is PORTED
+-- below (tick 190, RegisterAuraEvent). The old "has no
 -- SelectTarget bridge, so no lua file" claim is retracted.
 -- Unmodeled: npc_direbrew_minion (faction latch + DoZoneInCombat + JustSummoned
 -- instance-GUID latch — no faction/instance bridges); npc_direbrew_antagonist
@@ -89,12 +89,12 @@
 -- (AuraEvents exposes only OnPeriodic), so the tick no-ops until
 -- an aura-apply bridge lands. The 47407 OnApply arm itself stays
 -- out with the missing OnApply event.
--- Unmodeled: the remaining SpellScripts/AuraScripts (47691 target
--- picker, 47370 send mug picker, 47344 request second mug, 50278
--- barreled control aura) — no SpellScript/AuraScript bridges
--- (hellfire_peninsula precedent). The 50278 barreled tick
--- (PreventDefaultAction + triggered self-cast 47442) is bridgeable
--- in form but was not an assigned tick-189 binding; it stays out.
+-- Unmodeled: the remaining SpellScripts (47691 target picker,
+-- 47370 send mug picker, 47344 request second mug) — no
+-- SpellScript bridges (hellfire_peninsula precedent).
+-- spell_barreled_control_aura (50278) PeriodicTick EFFECT_0 is
+-- PORTED below (tick 190) — PreventDefaultAction + triggered
+-- cast 47442 on nil target.
 -- Unmodeled: JustDied LFG FinishDungeon(287) arm (sLFGMgr + group gates —
 -- no LFG bridge).
 -- Deviations from C++: the C++ UpdateAI pre-loop CASTING gate
@@ -117,6 +117,8 @@ local SPELL_MOLE_MACHINE_TARGET_PICKER = 47691
 local SPELL_DIREBREW_DISARM_PRE_CAST = 47407
 local SPELL_SEND_MUG_CONTROL_AURA = 47369 -- boss_coren_direbrew.cpp:74
 local SPELL_SEND_MUG_TARGET_PICKER = 47370 -- boss_coren_direbrew.cpp:75
+local SPELL_BARRELED_CONTROL_AURA = 50278 -- boss_coren_direbrew.cpp:539
+local SPELL_BARRELED = 47442 -- boss_coren_direbrew.cpp:77
 local SPELL_DIREBREW_DISARM_GROW = 47409 -- boss_coren_direbrew.cpp:72
 
 local NPC_ILSA_DIREBREW = 26764 -- boss_coren_direbrew.cpp:55
@@ -405,6 +407,20 @@ local function direbrewDisarmTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_DIREBREW_DISARM_PRE_CAST, 1, direbrewDisarmTick)
+
+-- C++ spell_barreled_control_aura::PeriodicTick
+-- (boss_coren_direbrew.cpp:544-547): PreventDefaultAction, then the
+-- aura target casts SPELL_BARRELED (47442) triggered on nil target
+-- each tick; the engine fires this hook from the periodic tick
+-- (RegisterAuraEvent, AuraEventOnPeriodic = 1). The handler returns
+-- true, the PreventDefaultAction twin, so the Go default trigger
+-- cast does not also fire.
+local function barreledControlTick(event, aura, target)
+    target:CastSpell(nil, SPELL_BARRELED, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_BARRELED_CONTROL_AURA, 1, barreledControlTick)
 
 RegisterCreatureEvent(ENTRY_COREN, 21, onSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_COREN, 1, onEnterCombat)

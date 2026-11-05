@@ -56,6 +56,9 @@
 -- FROST_INFUSION_CREDIT leg PORTED (Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)
 -- (:262-264); creature:Is25ManRaid() bridged lua_creature_events.go,
 -- the old "no 25-man difficulty bridge" claim retracted).
+-- PORTED (tick 190, RegisterAuraEvent): spell_sindragosa_frost_beacon
+-- PeriodicTick — PreventDefaultAction + caster casts SPELL_ICE_TOMB_DAMAGE
+-- 70157 triggered on the aura target (:1223-1232).
 -- DOCUMENTED-ONLY (in this header; only entry 36853 registered):
 -- PORTED (2026-10-13): JustEngagedWith — DoCastSelf(
 -- SPELL_FROST_AURA 70084) + DoCastSelf(SPELL_PERMAEATING_CHILL 70109)
@@ -143,6 +146,8 @@ local SPELL_FROST_BOMB_VISUAL = 70022 -- boss_sindragosa.cpp:74
 local SPELL_BIRTH_NO_VISUAL = 40031 -- boss_sindragosa.cpp:75
 local SPELL_ICE_TOMB_TARGET = 69712
 local SPELL_ICE_TOMB_UNTARGETABLE = 69700
+local SPELL_FROST_BEACON = 70126 -- boss_sindragosa.cpp:67
+local SPELL_ICE_TOMB_DAMAGE = 70157 -- boss_sindragosa.cpp:71
 local EMOTE_WARN_FROZEN_ORB = 7
 
 local sindragosaThirdPhase = {}
@@ -510,3 +515,18 @@ RegisterCreatureEvent(ENTRY_RIMEFANG, 23, addReset)
 RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 1, handlerEnterCombat)
 RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 2, addLeaveCombat)
 RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 23, addReset)
+
+-- C++ spell_sindragosa_frost_beacon::PeriodicTick
+-- (boss_sindragosa.cpp:1228-1232): PreventDefaultAction; the aura
+-- caster casts SPELL_ICE_TOMB_DAMAGE (70157) triggered on the aura
+-- target each tick. Returns true, the PreventDefaultAction twin, so
+-- the Go default trigger cast does not also fire.
+local function frostBeaconTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster then
+        caster:CastSpell(target, SPELL_ICE_TOMB_DAMAGE, true)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_FROST_BEACON, 1, frostBeaconTick)

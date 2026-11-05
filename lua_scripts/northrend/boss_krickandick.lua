@@ -116,7 +116,8 @@
 --   spell_ick_explosive_barrage, spell_exploding_orb_hasty_grow,
 --   spell_krick_pursuit + spell_krick_pursuit_AuraScript,
 --   spell_krick_pursuit_confusion) join the no-SpellScript / no-AuraScript
---   bridge queues; ick->AI()->Talk(SAY_ICK_CHASE_1 1, target) inside
+--   bridge queues, except spell_krick_explosive_barrage, PORTED below
+--   (tick 190, RegisterAuraEvent); ick->AI()->Talk(SAY_ICK_CHASE_1 1, target) inside
 --   spell_krick_pursuit is spell-driven Talk with no bridge by construction.
 --
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts are
@@ -167,6 +168,7 @@ local SPELL_EXPLOSIVE_BARRAGE_ICK = 69263
 local SPELL_POISON_NOVA = 68989
 local SPELL_PURSUIT = 68987
 local SPELL_EXPLOSIVE_BARRAGE_KRICK = 69012
+local SPELL_EXPLOSIVE_BARRAGE_SUMMON = 69015 -- boss_krickandick.cpp:41
 local SPELL_TOXIC_WASTE = 69024
 local SPELL_SHADOW_BOLT = 69028
 
@@ -526,3 +528,22 @@ end
 
 RegisterCreatureEvent(ENTRY_KRICK, 3, krickKilledUnit)
 RegisterCreatureEvent(ENTRY_KRICK, 23, krickReset)
+
+-- C++ spell_krick_explosive_barrage::HandlePeriodicTick
+-- (boss_krickandick.cpp:522-535): PreventDefaultAction; the caster
+-- (nil or non-creature -> return) casts SPELL_EXPLOSIVE_BARRAGE_SUMMON
+-- (69015) triggered on every player within 60y. GetPlayersInGrid is
+-- the bridged twin (3D + reach slack vs the C++ IsWithinDist 2D
+-- check — minor metric delta). Returns true, the PreventDefaultAction
+-- twin, so the Go default trigger cast does not also fire.
+local function krickExplosiveBarrageTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster and caster:GetTypeId() == 3 then
+        for _, player in ipairs(caster:GetPlayersInGrid(60)) do
+            caster:CastSpell(player, SPELL_EXPLOSIVE_BARRAGE_SUMMON, true)
+        end
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_EXPLOSIVE_BARRAGE_KRICK, 1, krickExplosiveBarrageTick)

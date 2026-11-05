@@ -4,9 +4,9 @@
 -- AddSC_boss_alar registers; npc_ember_of_alar (19551) and
 -- npc_flame_patch_alar (20602) documented only — their AIs sit
 -- behind summon / cross-creature bridges, see below; the
--- spell_alar_flame_quills AuraScript has no AuraScript bridge
--- — AuraScript check handlers are not modeled, standing
--- blocker, documented only).
+-- spell_alar_flame_quills AuraScript is PORTED below (tick 190,
+-- RegisterAuraEvent) — the old "no AuraScript bridge" claim is
+-- retracted for periodic ticks.
 -- First boss in The Eye set per outland_script_loader.cpp
 -- order (boss_alar, boss_kaelthas, boss_void_reaver, boss_
 -- high_astromancer_solarian).
@@ -156,11 +156,10 @@
 -- cross-creature/instance bridges (skyriss-illusion /
 -- warp_splinter-treant precedent); npc_flame_patch_alar
 -- (20602) documented only, not registered — its C++ AI is a
--- no-op (skyriss-illusion precedent); no SpellScript/
--- AuraScript bridge — spell_alar_flame_quills (the 24 flame-
--- quill sub-spells 34269-34289 / 34314-34316 PeriodicTick)
--- documented only, not bridged (standing blocker); the
--- SetDisplayId/ApplySpellImmune/SetFlag/RemoveFlag/SetStandState
+-- no-op (skyriss-illusion precedent); spell_alar_flame_quills
+-- (the 24 flame-quill sub-spells 34269-34289 / 34314-34316
+-- PeriodicTick) is PORTED below (tick 190, RegisterAuraEvent);
+-- the SetDisplayId/ApplySpellImmune/SetFlag/RemoveFlag/SetStandState
 -- bridges exist and the Reset/rebirth/dive-bomb-machine arms touching
 -- them are PORTED below; UNIT_FLAG_NOT_SELECTABLE
 -- and IsNonMeleeSpellCast stay unmodeled (netherspite precedent);
@@ -172,6 +171,11 @@
 -- (boss_alar.cpp:165).
 
 local SPELL_FLAME_QUILLS = 34229
+local FLAME_QUILLS_SPELLS = { -- boss_alar.cpp:81-106
+    34269, 34270, 34271, 34272, 34273, 34274, 34275, 34276,
+    34277, 34278, 34279, 34280, 34281, 34282, 34283, 34284,
+    34285, 34286, 34287, 34288, 34289, 34314, 34315, 34316,
+}
 local SPELL_REBIRTH = 34342
 local SPELL_REBIRTH_2 = 35369
 local SPELL_MELT_ARMOR = 35410
@@ -645,3 +649,20 @@ RegisterCreatureEvent(ENTRY_ALAR, 23, function(_, creature)
     -- boss_alar.cpp:170 — C++ Reset arm order after ApplySpellImmune
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
 end)
+
+-- C++ spell_alar_flame_quills::PeriodicTick
+-- (boss_alar.cpp:605-616): PreventDefaultAction; the aura target
+-- casts all 24 flame-quills spells (34269-34289, 34314-34316)
+-- triggered on nil target each tick. The C++ Load() instance-gate
+-- (InstanceHasScript, TheEye) has no aura-handler twin, but the
+-- aura is only ever applied by Alar. Returns true, the
+-- PreventDefaultAction twin, so the Go default trigger cast does
+-- not also fire.
+local function flameQuillsTick(event, aura, target)
+    for _, spellId in ipairs(FLAME_QUILLS_SPELLS) do
+        target:CastSpell(nil, spellId, true)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_FLAME_QUILLS, 1, flameQuillsTick)

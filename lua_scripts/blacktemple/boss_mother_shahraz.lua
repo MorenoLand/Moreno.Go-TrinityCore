@@ -54,8 +54,9 @@
 -- link (40871 damage dummy), spell_mother_shahraz_saber_lash
 -- (40816 random-target triggered periodic), spell_mother_shahraz_
 -- generic_periodic (40863/40865/40866/40862 random-target
--- triggered periodics), spell_mother_shahraz_random_periodic
--- (40867 self-cast random beam periodic).
+-- triggered periodics) — except spell_mother_shahraz_random_periodic
+-- (40867 self-cast random beam periodic), PORTED below (tick 190,
+-- RegisterAuraEvent).
 -- CAST-STATE GATE (ported 2026-11-04): boss_mother_shahraz has no
 -- UpdateAI override, so BossAI::UpdateAI (ScriptedCreature.cpp:578
 -- pre-loop + :584 post-event) gates all six cycle ticks on
@@ -78,6 +79,10 @@ local SPELL_BERSERK = 45078
 local SPELL_FATAL_ATTRACTION_TELEPORT = 40869
 local SPELL_SILENCING_SHRIEK = 40823
 local SPELL_RANDOM_PERIODIC = 40867
+local SPELL_BEAM_SINISTER = 40859 -- boss_mother_shahraz.cpp:57
+local SPELL_BEAM_VILE = 40860 -- boss_mother_shahraz.cpp:58
+local SPELL_BEAM_WICKED = 40861 -- boss_mother_shahraz.cpp:59
+local SPELL_BEAM_SINFUL = 40827 -- boss_mother_shahraz.cpp:60
 
 local BeamTriggers = { 40863, 40865, 40866, 40862 }
 local PrismaticAuras = { 40880, 40882, 40883, 40891, 40896, 40897 }
@@ -285,3 +290,22 @@ RegisterCreatureEvent(ENTRY_MOTHER_SHAHRAZ, 3, shahrazTargetDied)
 RegisterCreatureEvent(ENTRY_MOTHER_SHAHRAZ, 4, shahrazDied)
 RegisterCreatureEvent(ENTRY_MOTHER_SHAHRAZ, 9, shahrazDamageTaken)
 RegisterCreatureEvent(ENTRY_MOTHER_SHAHRAZ, 23, shahrazReset)
+
+-- C++ spell_mother_shahraz_random_periodic::OnPeriodic
+-- (boss_mother_shahraz.cpp:308-316): PreventDefaultAction; the aura
+-- owner self-casts one of the four random beams triggered
+-- (RandomBeam[urand(0, 3)]). Returns true, the PreventDefaultAction
+-- twin, so the Go default trigger cast does not also fire.
+local RANDOM_BEAMS = {
+    SPELL_BEAM_SINISTER,
+    SPELL_BEAM_VILE,
+    SPELL_BEAM_WICKED,
+    SPELL_BEAM_SINFUL,
+}
+
+local function randomPeriodicTick(event, aura, target)
+    target:CastSpell(target, RANDOM_BEAMS[math.random(1, 4)], true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_RANDOM_PERIODIC, 1, randomPeriodicTick)

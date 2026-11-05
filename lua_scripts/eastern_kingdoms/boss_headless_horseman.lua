@@ -87,9 +87,8 @@
 --   exists (gothik counterpoint).
 -- - EVENT_SUMMON_PUMPKIN (phase 3): phase-pinned; the C++ AI arm is
 --   only DoCastSelf(52236) + Repeat(30s) — the Talk(SAY_SPROUTING_
---   PUMPKINS) leg lives in the unbridged 52236 AuraScript and the
---   pumpkin-spawn machinery is the aura's DBC effect (no summon
---   bridge).
+--   PUMPKINS) leg is PORTED below (tick 190, RegisterAuraEvent);
+--   the pumpkin-spawn machinery is the aura's DBC effect.
 -- - Reset/JustReachedHome/InitializeAI legs: the SetDisableGravity/
 --   SetHover legs port on event 5 (InitializeAI twin, both bridged —
 --   stale "no bridge" retracted); the POINT_HORSEMAN_FINISH_PATH
@@ -174,6 +173,10 @@ local SPELL_ONKILL_PROC = 43877
 
 local SAY_DEATH = 4
 local SAY_KILL_PLAYER = 5
+local SAY_SPROUTING_PUMPKINS = 3 -- boss_headless_horseman.cpp:53
+local SOUNDID_MANIACAL_LAUGH = 11975 -- boss_headless_horseman.cpp:150
+local SPELL_MANIACAL_LAUGH_AURA = 43893 -- boss_headless_horseman.cpp:814
+local SPELL_SUMMON_PUMPKIN_BURST_DELAY = 52236 -- boss_headless_horseman.cpp:934
 
 local ENTRY_HEADLESS_HORSEMAN = 23682
 local ENTRY_HORSEMAN_HEAD = 23775
@@ -488,3 +491,25 @@ end
 RegisterCreatureEvent(ENTRY_FLAME_BUNNY, 5, onBunnySpawn)
 RegisterCreatureEvent(ENTRY_FLAME_BUNNY, 23, onBunnyReset)
 RegisterCreatureEvent(ENTRY_FLAME_BUNNY, 4, onBunnyDied)
+
+-- C++ spell_headless_horseman_maniacal_laugh::HandleSound
+-- (boss_headless_horseman.cpp:819-822): each tick the aura target
+-- plays SOUNDID_MANIACAL_LAUGH (11975) directly. No
+-- PreventDefaultAction in C++, so the handler returns nothing and
+-- the Go default trigger cast still fires.
+local function maniacalLaughTick(event, aura, target)
+    target:PlayDirectSound(SOUNDID_MANIACAL_LAUGH)
+end
+
+RegisterAuraEvent(SPELL_MANIACAL_LAUGH_AURA, 1, maniacalLaughTick)
+
+-- C++ spell_summon_pumpkin_burst_delay::HandleText
+-- (boss_headless_horseman.cpp:940-944): each tick the horseman
+-- says SAY_SPROUTING_PUMPKINS (3). No PreventDefaultAction in C++,
+-- so the handler returns nothing and the Go default trigger cast
+-- still fires.
+local function pumpkinBurstDelayTick(event, aura, target)
+    target:Talk(SAY_SPROUTING_PUMPKINS)
+end
+
+RegisterAuraEvent(SPELL_SUMMON_PUMPKIN_BURST_DELAY, 1, pumpkinBurstDelayTick)

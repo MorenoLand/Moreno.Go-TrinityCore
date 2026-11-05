@@ -14,6 +14,12 @@
 --     faction friendly), +3s OUTTRO_2 (Talk V07TRON_DEATH), +11s OUTTRO_3
 --     (TELEPORT_VISUAL, NOT_SELECTABLE flag, DespawnOrUnsummon 1s).
 --
+-- PORTED (tick 190, RegisterAuraEvent):
+--   spell_mimiron_summon_flames_spread (64562) HandleTick — PreventDefaultAction;
+--   if the caster has SPELL_FLAMES_PERIODIC_TRIGGER (64561) it casts
+--   SPELL_SUMMON_FLAMES_SPREAD (64564) triggered on the aura target
+--   (boss_mimiron.cpp:2615-2627). The EVENT_SUMMON_FLAMES boss-AI arm
+--   stays out (see below).
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   DoAction (:397) whole switch: DO_ACTIVATE_VX001 / DO_ACTIVATE_AERIAL /
 --     DO_ACTIVATE_V0L7R0N_1 / DO_ACTIVATE_V0L7R0N_2 / DO_ACTIVATE_HARD_MODE --
@@ -62,6 +68,9 @@
 local NPC_MIMIRON = 33350
 
 local SPELL_WELD = 63339
+local SPELL_FLAMES_PERIODIC_TRIGGER = 64561 -- boss_mimiron.cpp:131
+local SPELL_SUMMON_FLAMES_SPREAD_TRIGGER = 64562 -- boss_mimiron.cpp:132
+local SPELL_SUMMON_FLAMES_SPREAD = 64564 -- boss_mimiron.cpp:134
 local SPELL_SLEEP_VISUAL_1 = 64393
 local SPELL_SLEEP_VISUAL_2 = 64394
 local SPELL_DESPAWN_ASSAULT_BOTS = 64463
@@ -176,3 +185,19 @@ RegisterCreatureEvent(NPC_MIMIRON, 5, mimironSpawn)
 RegisterCreatureEvent(NPC_MIMIRON, 23, mimironReset)
 RegisterCreatureEvent(NPC_MIMIRON, 1, mimironEnterCombat)
 RegisterCreatureEvent(NPC_MIMIRON, 4, mimironDied)
+
+-- C++ spell_mimiron_summon_flames_spread_AuraScript::HandleTick
+-- (boss_mimiron.cpp:2615-2627): PreventDefaultAction; if the aura
+-- caster has SPELL_FLAMES_PERIODIC_TRIGGER (64561) it casts
+-- SPELL_SUMMON_FLAMES_SPREAD (64564) triggered on the aura target.
+-- Returns true, the PreventDefaultAction twin, so the Go default
+-- trigger cast does not also fire.
+local function summonFlamesSpreadTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster and caster:HasAura(SPELL_FLAMES_PERIODIC_TRIGGER) then
+        caster:CastSpell(target, SPELL_SUMMON_FLAMES_SPREAD, true)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_SUMMON_FLAMES_SPREAD_TRIGGER, 1, summonFlamesSpreadTick)

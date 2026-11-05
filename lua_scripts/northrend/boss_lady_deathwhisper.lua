@@ -212,8 +212,8 @@
 -- consuming their re-arm (the mal_ganis idiom). The 2026-10-16
 -- "always false / no bridge / timers fire unconditionally" claims
 -- are retracted.
--- spell_deathwhisper_mana_barrier /
--- spell_deathwhisper_dominated_mind /
+-- spell_deathwhisper_mana_barrier is PORTED below (tick 190,
+-- RegisterAuraEvent); spell_deathwhisper_dominated_mind /
 -- spell_deathwhisper_vampiric_might join the no-AuraScript-bridge
 -- queue (the boss_moragg optic-link precedent);
 -- spell_deathwhisper_summon_spirits joins the
@@ -1269,3 +1269,22 @@ RegisterCreatureEvent(ENTRY_DARNAVAN_25, 2, darnavanLeaveCombat)
 RegisterCreatureEvent(ENTRY_DARNAVAN_25, 23, darnavanReset)
 RegisterCreatureEvent(ENTRY_DARNAVAN_10, 4, darnavanJustDied)
 RegisterCreatureEvent(ENTRY_DARNAVAN_25, 4, darnavanJustDied)
+
+-- C++ spell_deathwhisper_mana_barrier::HandlePeriodicTick
+-- (boss_lady_deathwhisper.cpp:967-977): PreventDefaultAction; the
+-- caster heals its missing health and loses the same amount of mana
+-- (ModifyHealth(missing) + ModifyPower(POWER_MANA, -missing)).
+-- SetHealth(max) is the exact ModifyHealth(missing) twin
+-- (missing = max - health). Returns true, the PreventDefaultAction
+-- twin, so the Go default trigger cast does not also fire.
+local function manaBarrierTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster then
+        local missing = caster:GetMaxHealth() - caster:GetHealth()
+        caster:SetHealth(caster:GetMaxHealth())
+        caster:ModifyPower(0, -missing)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_MANA_BARRIER, 1, manaBarrierTick)

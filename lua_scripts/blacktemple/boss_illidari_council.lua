@@ -130,12 +130,13 @@
 -- convention); spell scripts: empyreal_balance (41499), empyreal
 -- _equivalency (41333), judgement (41467 target primer/choice +
 -- Talk on finish), and aura scripts: balance_of_power (41341
--- absorb -> 41342 shared rule), deadly_strike (41480 periodic ->
--- 41485 deadly poison), deadly_poison (41485 remove -> 41487
+-- absorb -> 41342 shared rule), deadly_poison (41485 remove -> 41487
 -- envenom + 41509 visual), vanish (41476 remove -> 41479
 -- teleport), reflective_shield (41475 absorb -> 33619 reflect),
 -- seal (41469/41459 remove -> the other seal), dampen_magic
 -- (41478 remove-by-expire/enemy -> ACTION_REFRESH_DAMPEN DoAction).
+-- deadly_strike (41480 periodic -> 41485 deadly poison) is PORTED
+-- below (tick 190, RegisterAuraEvent).
 -- Deliberate deviations: the UpdateAI UNIT_STATE_CASTING queue
 -- gate and the post-event casting check are PORTED on every cycle
 -- tick (500ms IsCasting defer via the live bridge,
@@ -200,6 +201,7 @@ local SPELL_JUDGEMENT = 41467
 
 local SPELL_VANISH = 41476
 local SPELL_DEADLY_STRIKE = 41480
+local SPELL_DEADLY_POISON = 41485 -- boss_illidari_council.cpp:80
 
 local Blesses = { SPELL_BLESS_PROTECTION, SPELL_BLESS_SPELL_WARDING }
 local Auras = { SPELL_CHROMATIC_AURA, SPELL_DEVOTION_AURA }
@@ -918,3 +920,21 @@ RegisterCreatureEvent(ENTRY_VERAS, 3, memberTargetDied)
 RegisterCreatureEvent(ENTRY_VERAS, 4, memberDied)
 RegisterCreatureEvent(ENTRY_VERAS, 9, memberDamageTaken)
 RegisterCreatureEvent(ENTRY_VERAS, 23, memberReset)
+
+-- C++ spell_illidari_council_deadly_strike::OnTrigger
+-- (boss_illidari_council.cpp:628-636): PreventDefaultAction; the
+-- aura target picks a random player from its threat list
+-- (SelectTarget Random, 0, 0.0f, playerOnly, withTank — the
+-- GetAITarget(0, playerOnly=true) threat-list twin) and casts
+-- SPELL_DEADLY_POISON (41485) triggered on it. Returns true, the
+-- PreventDefaultAction twin, so the Go default trigger cast does
+-- not also fire.
+local function deadlyStrikeTick(event, aura, target)
+    local victim = target:GetAITarget(0, true, 0, 0, 0)
+    if victim then
+        target:CastSpell(victim, SPELL_DEADLY_POISON, true)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_DEADLY_STRIKE, 1, deadlyStrikeTick)

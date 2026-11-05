@@ -355,6 +355,11 @@ local SPELL_PARASITIC_SHADOWFIEND = 41917
 local SPELL_BERSERK = 45078
 local SPELL_AGONIZING_FLAMES_SELECTOR = 40834
 local SPELL_DEMON_TRANSFORM_1 = 40511
+local SPELL_DEMON_TRANSFORM_2 = 40398 -- boss_illidan.cpp:172
+local SPELL_AZZINOTH_CHANNEL = 39857 -- boss_illidan.cpp:110
+local SPELL_UNCAGED_WRATH = 39869 -- boss_illidan.cpp:117
+local SPELL_CAGE_TRAP = 40760 -- boss_illidan.cpp:190
+local SPELL_CAGED_DEBUFF = 40695 -- boss_illidan.cpp:191
 local SPELL_THROW_GLAIVE = 39849
 local SPELL_THROW_GLAIVE2 = 39635
 local SPELL_FIREBALL = 40598
@@ -1811,3 +1816,44 @@ end
 RegisterCreatureEvent(ENTRY_DEMON_FIRE, 23, genericFireReset)
 RegisterCreatureEvent(ENTRY_BLAZE, 23, genericFireReset)
 RegisterCreatureEvent(ENTRY_FLAME_CRASH, 23, genericFireReset)
+
+-- C++ spell_illidan_tear_of_azzinoth_channel::OnPeriodic
+-- (boss_illidan.cpp:2014-2026): PreventDefaultAction always; if the
+-- aura caster is more than 25y (2D) from the aura target, the target
+-- self-casts SPELL_UNCAGED_WRATH (39869) triggered and the aura is
+-- removed. Returns true, the PreventDefaultAction twin, so the Go
+-- default trigger cast does not also fire.
+local function tearOfAzzinothChannelTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster and caster:GetDistance2d(target) > 25 then
+        target:CastSpell(target, SPELL_UNCAGED_WRATH, true)
+        aura:Remove()
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_AZZINOTH_CHANNEL, 1, tearOfAzzinothChannelTick)
+
+-- C++ spell_illidan_demon_transform1::OnPeriodic
+-- (boss_illidan.cpp:2119-2130): PreventDefaultAction; the aura target
+-- self-casts SPELL_DEMON_TRANSFORM_2 (40398) triggered and the aura
+-- is removed. Returns true, the PreventDefaultAction twin.
+local function demonTransform1Tick(event, aura, target)
+    target:CastSpell(target, SPELL_DEMON_TRANSFORM_2, true)
+    aura:Remove()
+    return true
+end
+
+RegisterAuraEvent(SPELL_DEMON_TRANSFORM_1, 1, demonTransform1Tick)
+
+-- C++ spell_illidan_caged::OnPeriodic
+-- (boss_illidan.cpp:2303-2312): PreventDefaultAction; the aura target
+-- self-casts SPELL_CAGED_DEBUFF (40695) triggered and the aura is
+-- removed. Returns true, the PreventDefaultAction twin.
+local function cagedTick(event, aura, target)
+    target:CastSpell(target, SPELL_CAGED_DEBUFF, true)
+    aura:Remove()
+    return true
+end
+
+RegisterAuraEvent(SPELL_CAGE_TRAP, 1, cagedTick)
