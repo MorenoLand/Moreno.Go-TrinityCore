@@ -44,7 +44,9 @@
 --   SetHomePosition; destroyingDoor -> DoUseDoorOrButton(GO_END_DOOR via
 --   GetGuidData) + DespawnOrUnsummon — no instance SetData/GetData /
 --   MovementInform-instance bridges.
--- - DestroyDoor (door-bomb run driven by Bly's DoAction(0) via gossip):
+-- - DestroyDoor (door-bomb run driven by Weegli's own OnGossipSelect
+--   -> DestroyDoor; Bly's DoAction(0) call is vacuous — Weegli defines
+--   no DoAction override, so the C++ base no-ops):
 --   SetFaction(FACTION_FRIENDLY) (bridged, but the arm is instance-
 --   gated) + MovePoint(0, 1858.57, 1146.35, 14.745) (no point-movement
 --   bridge) + Talk(SAY_WEEGLI_OK_I_GO=1); the gossip driver is

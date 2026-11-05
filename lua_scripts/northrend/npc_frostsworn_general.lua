@@ -92,16 +92,18 @@
 -- ported in npc_the_lich_king_escape.lua; the SetData(DATA_
 -- ICEWALL) summon/Talk machine and MovementInform legs have no
 -- bridges.
--- npc_uther_quel_delar UpdateAI EVENT_UTHER_1..9 Talk machine
--- (SAY_UTHER_QUEL_DELAR_1..6) rides Reset/DoAction/MovementInform
+-- npc_uther_quel_delar UpdateAI EVENT_UTHER_1..5 Talk machine
+-- (SAY_UTHER_QUEL_DELAR_1..2) rides Reset/DoAction/MovementInform
 -- sequence legs with no bridges; the DamageTaken clamp is now ported
--- in npc_uther_quel_delar.lua, and the ACTION_UTHER_START_SCREAM /
--- ACTION_UTHER_OUTRO DoAction legs have no bridges.
+-- in npc_uther_quel_delar.lua, the ACTION_UTHER_OUTRO DoAction leg
+-- is now ported there too (ev38, 2026-11-05), and only
+-- ACTION_UTHER_START_SCREAM (area-trigger sender) stays out.
 -- npc_quel_delar_sword — the flight machine
--- (EVENT_QUEL_DELAR_INIT/FLIGHT_INIT/FLIGHT/LAND/FIGHT), the
--- SetImmuneToAll pre-fight leg, and the JustDied uther-DoAction leg
--- have no bridges; the three JustEngagedWith combat-cast arms are now
--- ported in npc_quel_delar_sword.lua.
+-- (EVENT_QUEL_DELAR_INIT/FLIGHT_INIT/FLIGHT/LAND/FIGHT) and the
+-- SetImmuneToAll pre-fight leg have no bridges; the JustDied
+-- uther-DoAction leg is now ported in npc_quel_delar_sword.lua
+-- (ev38 relay, 2026-11-05) and the three JustEngagedWith
+-- combat-cast arms are ported there too.
 -- The gauntlet-trash scripts (ghostly_priest, phantom_mage,
 -- shadowy_mercenary, spectral_footman, tortured_rifleman) are now
 -- ported in npc_hor_gauntlet_trash.lua (phantom_hallucination stays

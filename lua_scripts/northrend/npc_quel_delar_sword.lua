@@ -25,6 +25,17 @@
 -- JustEngagedWith (:2622-2627) — EVENT_QUEL_DELAR_HEROIC_STRIKE at
 --   4000ms (:2623), EVENT_QUEL_DELAR_BLADESTORM at 6000ms (:2624),
 --   EVENT_QUEL_DELAR_WHIRLWIND at 6000ms (:2625).
+-- JustDied (:2629-2633) — uther->AI()->DoAction(ACTION_UTHER_OUTRO
+--   = 2) via FindNearestCreature(37225, 100) (the tick-207 grid twin
+--   for instance GetGuidData; the sword is summoned at
+--   QuelDelarSummonPos {5298.473, 1994.852} and Uther stands at
+--   Movement[0] {5336.830, 1981.700} when the sword dies, ~40 yd
+--   away, well inside 100 yd; entry 37225 is unique in the instance
+--   at sword-death time — the intro Uther is banished at intro end
+--   and the sword exists only as the Quel'Delar Uther's summon).
+--   PORTED 2026-11-05 via the ev38 DoAction bridge (tick 206); the
+--   receiver chain (EVENT_UTHER_6..11) is ported in
+--   npc_uther_quel_delar.lua. Nil = C++ null-check skip.
 -- EVENT_QUEL_DELAR_BLADESTORM (:2700-2703) — self-cast
 --   SPELL_BLADESTORM 67541 (:2701), re-arm 10000ms (:2702).
 -- EVENT_QUEL_DELAR_HEROIC_STRIKE (:2704-2707) — victim-cast
@@ -54,9 +65,7 @@
 --   the C++ spawn path; Go fires events 23/5 only on the respawn path
 --   (engine/world/lua_creature_events.go:368-395), so the leg is
 --   unmodeled rather than fabricated on a wrong hook.
--- JustDied (:2629-2633) — uther->AI()->DoAction(ACTION_UTHER_OUTRO)
---   via instance GetGuidData: no-DoAction / no-instance-GetGuidData
---   bridges. MovementInform (:2635-2645): no-MovementInform bridge.
+-- MovementInform (:2635-2645): no-MovementInform bridge.
 -- The ctor's SetDisplayId(Modelid2) (:2610) is display-bridgeable
 --   (creature:SetDisplayId) but has no construction/first-spawn hook
 --   (event 5 fires respawn-only); Reset()'s SetSpeedRate(MOVE_FLIGHT,
@@ -67,6 +76,8 @@
 -- precedent).
 
 local ENTRY_QUEL_DELAR = 37158
+local ENTRY_UTHER = 37225
+local ACTION_UTHER_OUTRO = 2
 
 local SPELL_BLADESTORM  = 67541
 local SPELL_HEROIC_STRIKE = 29426
@@ -136,7 +147,23 @@ local function swordReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied :2629-2633 — uther->AI()->DoAction(ACTION_UTHER_OUTRO).
+-- C++ fetches Uther by instance GetGuidData(DATA_UTHER_QUEL_DELAR);
+-- FindNearestCreature(37225, 100) is the grid twin (magtheridon /
+-- legoso precedent): the sword is summoned at QuelDelarSummonPos
+-- {5298.473, 1994.852} and Uther stands at Movement[0] {5336.830,
+-- 1981.700} when the sword dies, ~40 yd away, well inside 100 yd;
+-- entry 37225 is unique in the instance at that time. Nil = C++
+-- null-check skip (the C++ GetCreature may return null).
+local function swordDied(event, creature)
+    local uther = creature:FindNearestCreature(ENTRY_UTHER, 100)
+    if uther then
+        uther:DoAction(ACTION_UTHER_OUTRO)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_QUEL_DELAR, 1, swordEngaged)
 RegisterCreatureEvent(ENTRY_QUEL_DELAR, 2, swordReset)
 RegisterCreatureEvent(ENTRY_QUEL_DELAR, 4, swordReset)
+RegisterCreatureEvent(ENTRY_QUEL_DELAR, 4, swordDied)
 RegisterCreatureEvent(ENTRY_QUEL_DELAR, 23, swordReset)
