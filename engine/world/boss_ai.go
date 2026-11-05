@@ -16290,13 +16290,15 @@ func init() {
 	// the cooldown resets to 0 and the pump retries next tick with no cast
 	// (npc_arthas.cpp:899 gate PORTED)); KilledUnit
 	// Talk LINE_SLAY_ZOMBIE (39) gated on the victim being NPC_RISEN_
-	// ZOMBIE 27737 (event 3, nalorakk DISCOVERY); death is cancel only
-	// (C++ JustDied is instance SetData(DATA_ARTHAS_DIED) + despawn,
-	// blocked standing); melee engine-driven. The whole 5-RP
-	// spline-chain / MovementInform / event-map escort machine, the
-	// AdvanceToState snapback/react-state/gossip-flag legs, the gossip
-	// AdvanceDungeon legs, the CanAIAttack 30yd leash, the JustAppeared
-	// Devotion Aura self-buff, npc_stratholme_rp_dummy (MovementInform
+	// ZOMBIE 27737 (event 3, nalorakk DISCOVERY); death is cancel +
+	// DespawnOrUnsummon(5000) (C++ JustDied npc_arthas.cpp:1578-1582;
+	// instance SetData(DATA_ARTHAS_DIED) stays blocked); JustAppeared +
+	// JustReachedHome Devotion Aura (52442) self-casts ported (ev5/ev24,
+	// HasAura-gated on reach-home); melee engine-driven. The whole 5-RP
+	// spline-chain / MovementInform /
+	// event-map escort machine, the AdvanceToState
+	// snapback/react-state/gossip-flag legs, the gossip AdvanceDungeon
+	// legs, the CanAIAttack 30yd leash, npc_stratholme_rp_dummy (MovementInform
 	// forwarding, zero bridgeable arms), and spell_stratholme_crusader_
 	// strike (SpellScript check handler, standing blocked queue) have no
 	// movement / summon / gossip / instance-data / SpellHit bridges —

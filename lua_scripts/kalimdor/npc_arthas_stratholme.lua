@@ -49,9 +49,12 @@
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): C++ gates on
 --   who->GetEntry() == NPC_RISEN_ZOMBIE (27737) before Talk
 --   LINE_SLAY_ZOMBIE (39), with who as the talk target.
--- - Death (C++ JustDied): instance->SetData(DATA_ARTHAS_DIED, 1) +
---   DespawnOrUnsummon(5s) — instance bookkeeping blocked (standing); the
---   Go leg is cancel only.
+-- - Death (C++ JustDied, npc_arthas.cpp:1578-1582):
+--   instance->SetData(DATA_ARTHAS_DIED, 1) stays out (no instance-data
+--   bridge, standing); DespawnOrUnsummon(5s) is PORTED in onDied
+--   below (bridge live, lua_creature_events.go:5675, ms arg per
+--   boss_mimiron.lua:136 precedent) — the despawn leg needs no
+--   instance data, so it separates from the SetData leg.
 -- Unmodeled (documented-only, no bridges):
 -- - The entire RP escort machine: AdvanceToState (snapback positions +
 --   SetReactState / SetImmuneToAll / gossip-flag legs for the 17
@@ -181,6 +184,7 @@ end
 
 local function onDied(event, creature, killer)
     cancelPump(creature:GetGUID())
+    creature:DespawnOrUnsummon(5000)
 end
 
 -- C++ npc_arthas_stratholmeAI::JustAppeared (npc_arthas.cpp:1585):
