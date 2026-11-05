@@ -2082,13 +2082,9 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 	if target.playerControlled && caller.UnitFlags&unitFlagImmuneToPC != 0 {
 		return false
 	}
-	// Unit::isInAccessiblePlaceFor (Unit.cpp:3268): a victim in water
-	// needs caller CanSwim, else CanWalk or CanFly.
-	if s.mapIsInWater(caller.Map, target.x, target.y, target.z) {
-		if !creatureCanSwimMotion(caller) {
-			return false
-		}
-	} else if !creatureCanWalkMotion(caller) && !caller.CanFly && !caller.Flying {
+	// Unit::isInAccessiblePlaceFor (Unit.cpp:3268), via
+	// creatureSightAccessiblePlaceOK.
+	if !s.creatureSightAccessiblePlaceOK(caller, target.x, target.y, target.z) {
 		return false
 	}
 	// AI::CanAIAttack: the TurretAI spell band (CombatAI.cpp:245-251
@@ -2101,53 +2097,10 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 	if caller.Evading || (!target.isPlayer && target.evading) {
 		return false
 	}
-	// Home-distance gate (Creature.cpp:2582-2608), skipped for
-	// player-charmed/owned callers, dungeon maps, world bosses
-	// (rank 3), recently damaged callers (LastDamaged is stamped
-	// now + MAX_AGGRO_RESET_TIME), and taunted callers.
-	ownerGUID := caller.CharmerGUID
-	if ownerGUID == 0 {
-		ownerGUID = caller.OwnerGUID
-	}
-	ownerIsPlayer := false
-	if ownerGUID != 0 {
-		if sess := s.findSessionByGUID(ownerGUID); sess != nil && sess.player != nil {
-			ownerIsPlayer = true
-		}
-	}
-	dungeon := false
-	if s.Data != nil {
-		if entry, found, err := s.Data.Map(caller.Map); err == nil && found && entry.IsDungeon() {
-			dungeon = true
-		}
-	}
-	if !ownerIsPlayer && !dungeon && caller.Rank != 3 && !time.Now().Before(caller.LastDamaged) && !s.creatureHasAuraType(creatureAuraKeyForMotion(caller), spellAuraModTaunt) {
-		vis := float32(s.Config.VisibilityDistanceContinents)
-		if dungeon {
-			vis = float32(s.Config.VisibilityDistanceInstances)
-		}
-		limit := vis
-		if limit > 133.3333 {
-			limit = 133.3333
-		}
-		limit += caller.CombatReach + target.combatReach
-		homeX, homeY, homeZ := caller.HomeX, caller.HomeY, caller.HomeZ
-		if ownerGUID != 0 {
-			if owner := s.findCreatureMotion(caller.Map, caller.InstanceID, ownerGUID); owner != nil {
-				s.motionMu.Lock()
-				homeX, homeY, homeZ = owner.X, owner.Y, owner.Z
-				s.motionMu.Unlock()
-			}
-		}
-		var homeDist float32
-		if caller.CanFly || caller.Flying {
-			homeDist = float32(math.Hypot(float64(target.x-homeX), float64(target.y-homeY)))
-		} else {
-			homeDist = float32(distance3D(target.x, target.y, target.z, homeX, homeY, homeZ))
-		}
-		if homeDist > limit {
-			return false
-		}
+	// Home-distance gate (Creature.cpp:2582-2608), via
+	// creatureSightHomeDistanceOK.
+	if !s.creatureSightHomeDistanceOK(caller, target.x, target.y, target.z, target.combatReach) {
+		return false
 	}
 	// No aggro from gray creatures (Creature.cpp:2000-2013 via
 	// noGrayAggroBlocked); GetLevelForTarget is the identity.
@@ -8869,7 +8822,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 
 	// 3. Check for nearby hostile aggro
 	for _, p := range players {
-		if p.Map != motion.Map || p.InstanceID != motion.InstanceID || p.IsGM || p.IsDead || (motion.FlagsExtra&0x00000400 != 0) || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
+		if p.Map != motion.Map || p.InstanceID != motion.InstanceID || p.IsGM || p.IsDead || (motion.FlagsExtra&0x00000400 != 0) || motion.FlagsExtra&0x00000002 != 0 || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
 			continue
 		}
 		// Creature::_IsTargetAcceptable's UNIT_STATE_DIED arm
@@ -9002,7 +8955,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// so a vehicle never sight-engages; the stealth-alert arm above is
 		// untouched because TriggerAlert rides the AI-agnostic relocation
 		// worker (GridNotifiers.cpp:139), not MoveInLineOfSight.
-		if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+		victimReach := float32(1.5)
+		if p.Sess != nil && p.Sess.player != nil && p.Sess.player.CombatReach > 0 {
+			victimReach = p.Sess.player.CombatReach
+		}
+		if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && s.isAttackableFaction(motion.Faction, p) && canCreatureStartAttack(motion, p, dist, aggroDist, zAttackRange) && s.turretCanAIAttack(motion, p, dist) && s.creatureSightAccessiblePlaceOK(motion, p.X, p.Y, p.Z) && s.creatureSightHomeDistanceOK(motion, p.X, p.Y, p.Z, victimReach) && !noGrayAggroBlocked(uint32(p.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) && s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			// Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27): a boolean true vetoes
 			// the default aggro engage, mirroring ElunaCreatureAI::
@@ -9024,11 +8981,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// CanStartAttack rides the passive mapping; CallAssistance is
 			// absent here as in C++ (sight-aggro only engages via
 			// Unit::EngageWithTarget, Unit.cpp:8429-8438 — assistance fires on
-			// AttackStart, not on acquisition). Documented no-bridge arms: the
-			// home-distance gate of CanCreatureAttack (Creature.cpp:2582-2599 —
-			// non-dungeon victim must sit within visibility-range/2-cell of
-			// home unless recently damaged or taunted; Go puts no
-			// home-proximity limit on acquisition); the gray-aggro config
+			// AttackStart, not on acquisition). Former no-bridge arms now
+			// bridged: the home-distance gate of CanCreatureAttack
+			// (Creature.cpp:2582-2608) rides creatureSightHomeDistanceOK in
+			// the guard above, as does the accessible-place arm (Unit.cpp:3268)
+			// via creatureSightAccessiblePlaceOK, and the civilian arm of
+			// CanStartAttack (Creature.cpp:1962) rides the FlagsExtra 0x2 term
+			// in the loop gate above (the old "rides the passive mapping" note
+			// was wrong: InitializeReactState's civilian arm is commented out,
+			// so a civilian keeps REACT_AGGRESSIVE and only the 0x2 gate
+			// blocks it); the gray-aggro config
 			// (CheckNoGrayAggroConfig, Creature.cpp:2000-2013) is bridged in
 			// the guard above via noGrayAggroBlocked — vacuous under the
 			// default NoGrayAggro.Above/Below = 0 config (World.cpp:1299);
@@ -9099,20 +9061,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// same way (C++ passes any unit to MIOS, not just players). Same block
 	// order — reached only when !InCombat — and the same guard order:
 	// pre-filters, bounding box, hostility, range/Z, turret band,
-	// gray-aggro, LOS last. Scanner-side gates are loop invariants,
-	// checked once: vehicle (empty MIOS override), passive,
-	// combat-disabled, FlagsExtra 0x400. Victim-side: self-GUID (the worker
+	// accessible-place, home-distance, gray-aggro, LOS last.
+	// Scanner-side gates are loop invariants, checked once: vehicle
+	// (empty MIOS override), passive, combat-disabled, FlagsExtra 0x400,
+	// civilian 0x2. Victim-side: self-GUID (the worker
 	// excludes self, same as GetClosestCreatureWithEntry), dead, and
 	// Evading (C++ CanCreatureAttack rejects evade-mode victims; players
 	// carry no evade flag, so the player loop has no equivalent).
-	// SIGHTLESS/accessible-place/home-distance stay unmodeled here
-	// exactly as in the player scan; phase rides the CanNeverSee gate
+	// SIGHTLESS stays unmodeled here exactly as in the player scan;
+	// accessible-place + home-distance ride the guard below, as do the
+	// civilian scanner gate and the victim valid-target filter;
+	// phase rides the CanNeverSee gate
 	// below, as it now does in the player loop. The scan inherits the stepping
 	// pipeline's player gate (updateActiveCreatures returns early with no
 	// players, and stepSummonedNonVehicleMotions does the same), so a
 	// player-free map/instance still never sight-aggros — a separate
 	// stepping-scope question, not a scan gap.
-	if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && !creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) && motion.FlagsExtra&0x00000400 == 0 {
+	if !s.isVehicleAI(motion) && !isCreaturePassive(motion) && !creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) && motion.FlagsExtra&0x00000400 == 0 && motion.FlagsExtra&0x00000002 == 0 {
 		s.motionMu.Lock()
 		registry := s.motionMapLocked(motion.Map, motion.InstanceID)
 		victims := make([]*creatureMotion, 0, len(registry))
@@ -9121,7 +9086,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		s.motionMu.Unlock()
 		for _, victim := range victims {
-			if victim == nil || victim.GUID == motion.GUID || victim.Health == 0 || victim.Evading {
+			if victim == nil || victim.GUID == motion.GUID || victim.Health == 0 || victim.Evading || creatureSightVictimBlocked(motion, victim) {
 				continue
 			}
 			// Creature::_IsTargetAcceptable's vehicle leg (Creature.cpp:2512):
@@ -9216,7 +9181,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// findCreatureMotion, so the victim rides a playerPos shim
 			// with no helper change.
 			victimPos := playerPos{Map: motion.Map, InstanceID: motion.InstanceID, X: victim.X, Y: victim.Y, Z: victim.Z, GUID: victim.GUID, Level: uint8(victim.Level)}
-			if !canCreatureStartAttack(motion, victimPos, dist, aggroDist, zAttackRange) || !s.turretCanAIAttack(motion, victimPos, dist) || noGrayAggroBlocked(uint32(victim.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) || !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, victim.X, victim.Y, victim.Z) {
+			victimReach := float32(1.5)
+			if victim.CombatReach > 0 {
+				victimReach = victim.CombatReach
+			}
+			if !canCreatureStartAttack(motion, victimPos, dist, aggroDist, zAttackRange) || !s.turretCanAIAttack(motion, victimPos, dist) || !s.creatureSightAccessiblePlaceOK(motion, victim.X, victim.Y, victim.Z) || !s.creatureSightHomeDistanceOK(motion, victim.X, victim.Y, victim.Z, victimReach) || noGrayAggroBlocked(uint32(victim.Level), motion.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) || !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, victim.X, victim.Y, victim.Z) {
 				continue
 			}
 			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "victim_guid", victim.GUID, "victim_entry", victim.Entry)
@@ -9725,6 +9694,110 @@ func (s *Server) stepVehicleAI(ctx context.Context, motion *creatureMotion, now 
 
 func canCreatureStartAttack(motion *creatureMotion, target playerPos, distance, attackDistance, zAttackRange float32) bool {
 	return motion != nil && (motion.CanFly || math.Abs(float64(target.Z-motion.Z)) <= float64(zAttackRange)) && distance <= attackDistance
+}
+
+// creatureSightAccessiblePlaceOK is Unit::isInAccessiblePlaceFor
+// (Unit.cpp:3268) for a sight-aggro scanner: a victim in water (the
+// grid-liquid twin, mapIsInWater) needs scanner CanSwim, else CanWalk
+// or CanFly. Shared by both sight scans and the CanStartAttack query.
+func (s *Server) creatureSightAccessiblePlaceOK(caller *creatureMotion, victimX, victimY, victimZ float32) bool {
+	if caller == nil {
+		return false
+	}
+	if s.mapIsInWater(caller.Map, victimX, victimY, victimZ) {
+		return creatureCanSwimMotion(caller)
+	}
+	return creatureCanWalkMotion(caller) || caller.CanFly || caller.Flying
+}
+
+// creatureSightHomeDistanceOK is the home-distance gate of
+// Creature::CanCreatureAttack (Creature.cpp:2582-2608): skipped for
+// player-charmed/owned callers, dungeon maps, world bosses (rank 3),
+// recently damaged callers (LastDamaged is stamped now +
+// MAX_AGGRO_RESET_TIME), and taunted callers; otherwise the victim
+// must sit within min(map visibility, 2*cell = 133.3333yd) plus both
+// combat reaches of the charmer/owner motion when resolvable, else
+// the caller home - 2D when the caller can fly (the query's
+// CanFly||Flying reading of the template IsFlightAllowed arm), else
+// 3D. Shared by both sight scans and the CanStartAttack query.
+func (s *Server) creatureSightHomeDistanceOK(caller *creatureMotion, victimX, victimY, victimZ, victimReach float32) bool {
+	if caller == nil {
+		return false
+	}
+	ownerGUID := caller.CharmerGUID
+	if ownerGUID == 0 {
+		ownerGUID = caller.OwnerGUID
+	}
+	ownerIsPlayer := false
+	if ownerGUID != 0 {
+		if sess := s.findSessionByGUID(ownerGUID); sess != nil && sess.player != nil {
+			ownerIsPlayer = true
+		}
+	}
+	dungeon := false
+	if s.Data != nil {
+		if entry, found, err := s.Data.Map(caller.Map); err == nil && found && entry.IsDungeon() {
+			dungeon = true
+		}
+	}
+	if ownerIsPlayer || dungeon || caller.Rank == 3 || time.Now().Before(caller.LastDamaged) || s.creatureHasAuraType(creatureAuraKeyForMotion(caller), spellAuraModTaunt) {
+		return true
+	}
+	limit := float32(s.Config.VisibilityDistanceContinents)
+	if limit > 133.3333 {
+		limit = 133.3333
+	}
+	limit += caller.CombatReach + victimReach
+	homeX, homeY, homeZ := caller.HomeX, caller.HomeY, caller.HomeZ
+	if ownerGUID != 0 {
+		if owner := s.findCreatureMotion(caller.Map, caller.InstanceID, ownerGUID); owner != nil {
+			s.motionMu.Lock()
+			homeX, homeY, homeZ = owner.X, owner.Y, owner.Z
+			s.motionMu.Unlock()
+		}
+	}
+	var homeDist float32
+	if caller.CanFly || caller.Flying {
+		homeDist = float32(math.Hypot(float64(victimX-homeX), float64(victimY-homeY)))
+	} else {
+		homeDist = float32(distance3D(victimX, victimY, victimZ, homeX, homeY, homeZ))
+	}
+	return homeDist <= limit
+}
+
+// creatureSightVictimBlocked is the victim-side valid-target filter of
+// the creature-victim sight scan: non-combat pets are never attacked
+// (CanStartAttack, Creature.cpp:1971-1973, CREATURE_TYPE_NON_COMBAT_PET
+// = 10), and IsValidAttackTarget's no-spell flag set (Object.cpp:2930-3010:
+// NOT_SELECTABLE, NON_ATTACKABLE, TAXI_FLIGHT, NOT_ATTACKABLE_1/2)
+// plus its four immune pairings reject the victim. Player victims carry
+// no modeled flag state on this path, so the player scan has no
+// equivalent arm.
+func creatureSightVictimBlocked(scanner, victim *creatureMotion) bool {
+	if scanner == nil || victim == nil {
+		return true
+	}
+	if victim.CreatureType == 10 {
+		return true
+	}
+	if victim.UnitFlags&(unitFlagNotSelectable|unitFlagNonAttackable|unitFlagTaxiFlight|unitFlagNotAttackable1|unitFlagNonAttackable2) != 0 {
+		return true
+	}
+	scannerPC := scanner.UnitFlags&unitFlagPlayerControlled != 0
+	victimPC := victim.UnitFlags&unitFlagPlayerControlled != 0
+	if !scannerPC && victim.UnitFlags&unitFlagImmuneToNPC != 0 {
+		return true
+	}
+	if !victimPC && scanner.UnitFlags&unitFlagImmuneToNPC != 0 {
+		return true
+	}
+	if scannerPC && victim.UnitFlags&unitFlagImmuneToPC != 0 {
+		return true
+	}
+	if victimPC && scanner.UnitFlags&unitFlagImmuneToPC != 0 {
+		return true
+	}
+	return false
 }
 
 // npcEffectCanScale mirrors the canEffectScale switches in
