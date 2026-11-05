@@ -3135,12 +3135,31 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 
 	// ThreatManager::AddThreat / ForwardThreatForAssistingMe take an
 	// ignoreModifiers flag: energize gains (mana leech, innervate-style
-	// obs-mod-power ticks) pass true, heal paths pass false.
-	mult := float32(1.0)
+	// obs-mod-power ticks) pass true, heal paths pass false. A heal
+	// forward folds CalculateModifiedThreat (ThreatManager.cpp:606-659)
+	// once — spell_threat-row pctMod, the assistant's SPELLMOD_THREAT
+	// spell mods, then the assistant's school multiplier for the SPELL's
+	// school mask — the same order as damageThreatAmountWithModFold and
+	// the Spell.cpp:5139 forward-assist arm; the per-recipient adds in
+	// distributeHealingThreatLocked fold nothing further. The old
+	// hardcoded Holy mask mis-folded Nature heals (druid/shaman) against
+	// school-gated MOD_THREAT auras, and the pctMod/spellmod legs were
+	// missing entirely.
+	totalThreat := float32(effectiveHeal) * 0.5
 	if !ignoreModifiers {
-		mult = healerSess.getThreatMultiplier(2) // Holy/Healing school mask = 2
+		t := float64(totalThreat)
+		schoolMask := uint32(2) // Holy/Healing school mask = 2, the fallback for an unknown spell record
+		if s.Data != nil && spellID != 0 {
+			if sp, found, err := s.Data.Spell(spellID); err == nil && found {
+				if entry, ok := s.loadSpellThreatEntry(ctx, spellID); ok && entry.pctMod != 1.0 {
+					t *= float64(entry.pctMod)
+				}
+				t = healerSess.applySpellModFloat(sp, spellModThreat, t)
+				schoolMask = uint32(sp.SchoolMask)
+			}
+		}
+		totalThreat = float32(t) * healerSess.getThreatMultiplier(schoolMask)
 	}
-	totalThreat := float32(effectiveHeal) * 0.5 * mult
 	if totalThreat <= 0 {
 		return
 	}
@@ -3157,9 +3176,14 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 
 // distributeCreatureHealingThreat runs the same ForwardThreatForAssistingMe
 // distribution for a creature healer (SpellAuraEffects.cpp:5411-5412 fires for
-// creature casters too). Creature healers carry no healing-threat-multiplier
-// model, so the factor is 1.0 and there is no in-combat flag leg.
-func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, instanceID uint32, healerGUID, targetGUID uint64, effectiveHeal uint32, spellID uint32) {
+// creature casters too). With ignoreModifiers=false the forward folds
+// CalculateModifiedThreat (ThreatManager.cpp:606-659) once — spell_threat-row
+// pctMod, the mod owner's SPELLMOD_THREAT spell mods (pet/totem caster ->
+// owner player; wild caster -> nil, the C++ null path), then the caster
+// creature's school multiplier for the spell's school — the same order as
+// the player twin; energize/obs-mod-power forwards pass true and fold
+// nothing. There is no in-combat flag leg for creature healers.
+func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, instanceID uint32, healerGUID, targetGUID uint64, effectiveHeal uint32, spellID uint32, ignoreModifiers bool) {
 	if s == nil || healerGUID == 0 || effectiveHeal == 0 {
 		return
 	}
@@ -3181,7 +3205,22 @@ func (s *Server) distributeCreatureHealingThreat(ctx context.Context, mapID, ins
 	}
 	hx, hy, hz, hReach := healer.X, healer.Y, healer.Z, healer.CombatReach
 	s.motionMu.Unlock()
-	s.distributeHealingThreatLocked(nil, mapID, instanceID, hx, hy, hz, hReach, healerGUID, targetGUID, float32(effectiveHeal)*0.5)
+	totalThreat := float32(effectiveHeal) * 0.5
+	if !ignoreModifiers {
+		t := float64(totalThreat)
+		if s.Data != nil && spellID != 0 {
+			if sp, found, err := s.Data.Spell(spellID); err == nil && found {
+				if entry, ok := s.loadSpellThreatEntry(ctx, spellID); ok && entry.pctMod != 1.0 {
+					t *= float64(entry.pctMod)
+				}
+				if modOwner := s.spellModOwnerSession(mapID, instanceID, healerGUID); modOwner != nil {
+					t = modOwner.applySpellModFloat(sp, spellModThreat, t)
+				}
+				totalThreat = float32(t) * s.creatureThreatMultiplier(mapID, instanceID, healerGUID, uint32(sp.SchoolMask))
+			}
+		}
+	}
+	s.distributeHealingThreatLocked(nil, mapID, instanceID, hx, hy, hz, hReach, healerGUID, targetGUID, totalThreat)
 }
 
 // forwardPetAssistThreat runs the Spell::PreprocessSpellHit friendly-assist

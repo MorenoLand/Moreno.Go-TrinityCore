@@ -5837,7 +5837,8 @@ func (s *Server) creatureEffectEnergizePct(ctx context.Context, m *creatureMotio
 // unless the spell is potion-family or carries
 // ATTR7_CAN_RESTORE_SECONDARY_POWER; creature targets skip that
 // gate. The log and the assist-threat tail ride
-// distributeHealingThreat, like the session twin's energizeBySpellTail.
+// distributeCreatureHealingThreat, like the session twin's
+// energizeBySpellTail rides distributeHealingThreat.
 func (s *Server) creatureEffectEnergizeCommon(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, pctMode bool) {
 	if s == nil || m == nil {
 		return
@@ -5973,7 +5974,11 @@ func (s *Server) creatureEffectEnergizeCommon(ctx context.Context, m *creatureMo
 		}
 		s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, vs)
 		if amount > 0 {
-			s.distributeHealingThreat(ctx, m.GUID, guid, uint32(amount), true, spell.ID)
+			// Unit::EnergizeBySpell (Unit.cpp:6595) forwards from the
+			// energized target's list crediting the caster; the caster
+			// here is a creature, so the player-only helper would no-op
+			// on the nil session — the creature threat path carries it.
+			s.distributeCreatureHealingThreat(ctx, m.Map, m.InstanceID, m.GUID, guid, uint32(amount), spell.ID, true)
 		}
 	}
 }
@@ -6153,7 +6158,12 @@ func (s *Server) creatureEffectPowerTake(ctx context.Context, m *creatureMotion,
 						s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, m.GUID, map[int]uint32{unitFieldPower1 + int(powerType): next})
 						logPkt := buildSpellEnergizeLog(m.GUID, m.GUID, spell.ID, powerType, gain)
 						s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLENERGIZELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
-						s.distributeHealingThreat(ctx, m.GUID, m.GUID, uint32(gain), true, spell.ID)
+						// Unit::EnergizeBySpell (Unit.cpp:6595) forwards from the
+						// energized target's list crediting the caster; the
+						// caster here is the draining creature itself, so the
+						// player-only helper would no-op on the nil session —
+						// the creature threat path carries it.
+						s.distributeCreatureHealingThreat(ctx, m.Map, m.InstanceID, m.GUID, m.GUID, uint32(gain), spell.ID, true)
 					}
 				}
 			}

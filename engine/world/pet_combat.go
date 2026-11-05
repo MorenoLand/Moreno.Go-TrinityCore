@@ -7213,7 +7213,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 		// Spell.cpp:2514: ForwardThreatForAssistingMe(caster,
 		// effectiveHeal * 0.5) runs after HealBySpell, before the proc
 		// pass; the 0.5 fold lives inside the helper.
-		s.server.distributeCreatureHealingThreat(ctx, caster.Map, caster.InstanceID, caster.GUID, targetGUID, effectiveHeal, spellID)
+		s.server.distributeCreatureHealingThreat(ctx, caster.Map, caster.InstanceID, caster.GUID, targetGUID, effectiveHeal, spellID, false)
 		s.firePetSpellHealProcs(ctx, caster, targetGUID, spellID, triggered, isCrit, rawHeal, taking)
 		return
 	}
@@ -7232,7 +7232,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	}
 	// Spell.cpp:2514: same forward as the player branch, on the
 	// effective heal, ahead of the proc pass.
-	s.server.distributeCreatureHealingThreat(ctx, caster.Map, caster.InstanceID, caster.GUID, targetGUID, effectiveHeal, spellID)
+	s.server.distributeCreatureHealingThreat(ctx, caster.Map, caster.InstanceID, caster.GUID, targetGUID, effectiveHeal, spellID, false)
 	s.firePetSpellHealProcs(ctx, caster, targetGUID, spellID, triggered, isCrit, rawHeal, taking)
 }
 

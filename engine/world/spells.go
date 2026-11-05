@@ -39983,7 +39983,16 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		ts.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
 
 		if ts.server != nil && heal > overheal {
-			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, heal-overheal, false, aura.SpellID)
+			// SpellAuraEffects.cpp:5406 fires for any caster unit type,
+			// so a caster with no player session (a totem, e.g. Healing
+			// Stream, or a wild creature) rides the creature threat
+			// path — the same nil-session convention the periodic
+			// energize tick uses.
+			if healCaster != nil && healCaster.player != nil {
+				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, heal-overheal, false, aura.SpellID)
+			} else {
+				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, heal-overheal, aura.SpellID, false)
+			}
 		}
 
 		// SpellAuraEffects.cpp:5411-5433 — Health Funnel caster cost, after
@@ -40090,7 +40099,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if energizeCaster := ts.server.findSessionByGUID(aura.CasterGUID); energizeCaster != nil {
 				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, energizeGain, true, aura.SpellID)
 			} else {
-				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, energizeGain, aura.SpellID)
+				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, energizeGain, aura.SpellID, true)
 			}
 		}
 
@@ -40547,9 +40556,18 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt21, ts.player.Map, ts.player.InstanceID, ts.player.X, ts.player.Y, ts.player.Z, ts)
 		}
 		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
-		// distributeHealingThreat already folds the 0.5 in.
+		// distributeHealingThreat already folds the 0.5 in. The obs-mod-power
+		// call passes ignoreModifiers=true (SpellAuraEffects.cpp:5545).
+		// SpellAuraEffects.cpp:5545 fires for any caster unit type, so a
+		// caster with no player session (a totem, e.g. Mana Tide, or a
+		// wild creature) rides the creature threat path — the same
+		// nil-session convention the periodic energize tick uses.
 		if ts.server != nil && gained > 0 {
-			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, gained, true, aura.SpellID)
+			if obsCaster := ts.server.findSessionByGUID(aura.CasterGUID); obsCaster != nil && obsCaster.player != nil {
+				ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, gained, true, aura.SpellID)
+			} else {
+				ts.server.distributeCreatureHealingThreat(context.Background(), ts.player.Map, ts.player.InstanceID, aura.CasterGUID, aura.TargetGUID, gained, aura.SpellID, true)
+			}
 		}
 
 	case 162: // SPELL_AURA_POWER_BURN
@@ -41077,7 +41095,7 @@ func (s *Server) applyCreaturePeriodicLeechHeal(ctx context.Context, mapID, inst
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, casterGUID, map[int]uint32{unitFieldHealth: newHP})
 		// ThreatManager::ForwardThreatForAssistingMe(caster, effectiveHeal *
 		// 0.5) — the 0.5 is inside distributeCreatureHealingThreat.
-		s.distributeCreatureHealingThreat(ctx, mapID, instanceID, casterGUID, casterGUID, effectiveHeal, aura.SpellID)
+		s.distributeCreatureHealingThreat(ctx, mapID, instanceID, casterGUID, casterGUID, effectiveHeal, aura.SpellID, false)
 	}
 	// Leech self-heal proc tail (SpellAuraEffects.cpp:5320): the unknown-spell
 	// gate matches the player path's.
@@ -41913,7 +41931,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				if tickCaster != nil {
 					s.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, effectiveHeal, false, aura.SpellID)
 				} else {
-					s.server.distributeCreatureHealingThreat(context.Background(), key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal, aura.SpellID)
+					s.server.distributeCreatureHealingThreat(context.Background(), key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, effectiveHeal, aura.SpellID, false)
 				}
 			}
 			// Unit::DealHeal (Unit.cpp:6311-6320): the caster-side achievement
@@ -42152,14 +42170,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			sendPeriodicLog(cEnergizeLog)
 		}
 		// SpellAuraEffects.cpp:5576-5577 — half the actual gain as threat,
-		// ignoring modifiers. Creature healers carry no
-		// healing-threat-multiplier model, so the ignoreModifiers leg is
-		// vacuous on the creature-caster branch.
+		// ignoring modifiers (the final bool), so the fold is vacuous on
+		// both branches here.
 		if s.server != nil && cEnergizeGained > 0 {
 			if tickCaster := s.server.findSessionByGUID(aura.CasterGUID); tickCaster != nil {
 				s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, cEnergizeGained, true, aura.SpellID)
 			} else {
-				s.server.distributeCreatureHealingThreat(ctx, key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, cEnergizeGained, aura.SpellID)
+				s.server.distributeCreatureHealingThreat(ctx, key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, cEnergizeGained, aura.SpellID, true)
 			}
 		}
 		return true
@@ -42675,8 +42692,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// ThreatManager::ForwardThreatForAssistingMe(caster, gain * 0.5f) —
 		// distributeHealingThreat already folds the 0.5 in. The obs-mod-power
 		// call passes ignoreModifiers=true (SpellAuraEffects.cpp:5545).
+		// SpellAuraEffects.cpp:5545 fires for any caster unit type, so a
+		// caster with no player session (a totem, e.g. Mana Tide, or a
+		// wild creature) rides the creature threat path — the same
+		// nil-session convention the periodic energize tick uses.
 		if s.server != nil && gained > 0 {
-			s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, gained, true, aura.SpellID)
+			if obsCaster := s.server.findSessionByGUID(aura.CasterGUID); obsCaster != nil && obsCaster.player != nil {
+				s.server.distributeHealingThreat(ctx, aura.CasterGUID, aura.TargetGUID, gained, true, aura.SpellID)
+			} else {
+				s.server.distributeCreatureHealingThreat(ctx, key.Map, key.InstanceID, aura.CasterGUID, aura.TargetGUID, gained, aura.SpellID, true)
+			}
 		}
 		return true
 
