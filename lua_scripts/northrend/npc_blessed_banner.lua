@@ -42,16 +42,17 @@
 -- DespawnAll + self-despawn). MASON_ACTION facings ported;
 -- its SetData(1,1) SAI triggers stay out (SetData is a
 -- store-only transport, no SAI dispatch reads it);
--- AttackStart calls are present but no-op for the creature
--- victim today (EngageWithTarget resolves player sessions only);
+-- AttackStart calls now funnel creature victims through the
+-- combat tick (bridge + engager-derived map/instance + head
+-- creature-victim resolution + swing application branch);
 -- victory fires once per banner (C++ would re-fire per UpdateAI
 -- tick until ENDED — Talk spam avoided deliberately);
 -- Stay-out: EVENT_MASON_ACTION SetData(1,1) SAI torch actions
 -- (SetData stores type 1 = 1 on the mason, but no SAI dispatch
 -- reads it in the model); wave/Halof AttackStart on the banner
--- is engine-no-op today (player-session victim resolution only);
--- the chase leg is approximated by MoveTo to the fight pos, so
--- waves converge on the fight and stand there until engaged.
+-- now engages the banner through the creature-victim funnel, so
+-- waves pursue and swing at it; the MoveTo fight-pos leg stays
+-- as the staging approximation.
 -- 58084 + 58113 + 58121 + 30891 + 31003/30919/30900/30986/
 -- 30984/30987/30989/31013 verifiable.
 -- npc_argent_valiant — no NPC_ entry constant anywhere in the
@@ -218,15 +219,15 @@ local intro1, intro2, intro3, startFight, waveSpawn, halofEvent, masonAction, en
 -- Wave/Halof summon leg (zone_icecrown.cpp:600-660, 665-688):
 -- DoSummon default (type 5 + 30000ms, crew precedent) + SetHomePosition
 -- to the Dalfors fight pos + AttackStart on the banner. AttackStart is
--- the exact twin call, but the Go funnel resolves player sessions only
--- (lua_creature_events.go EngageWithTarget), so a creature victim no-ops
--- today; the chase leg is approximated by MoveTo to the fight pos (the
--- C++ home, banner's neighborhood — crew walk-in precedent), so waves
--- converge on the fight and stand there until players engage them.
--- Full creature-victim combat stays engine-blocked (bridge gate +
--- funnel map/instance + combat-tick player-only target resolution;
--- tick-147 triage). Latched into bannerSummons for the JustDied
--- drain and the victory DespawnEntry sweep.
+-- the exact twin call, and the Go funnel now resolves creature victims
+-- (bridge + engager-derived map/instance + combat-tick creature-victim
+-- resolution + swing application branch), so waves pursue the banner
+-- to the melee ring and swing at it; the MoveTo fight-pos leg stays
+-- as the staging approximation (the C++ home, banner's neighborhood —
+-- crew walk-in precedent). Latched into bannerSummons for the JustDied
+-- drain and the victory DespawnEntry sweep. Spell-vs-creature inline
+-- damage stays out (S4 follow-up): caster waves cast at the banner
+-- packet-only, without a damage leg, until the wire-victim routing lands.
 local function summonWaveCreature(creature, guid, entry, pos)
     local summon = creature:SummonCreature(entry, pos[1], pos[2], pos[3], pos[4], 5, 30000)
     if summon then

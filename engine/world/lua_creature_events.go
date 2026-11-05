@@ -1231,9 +1231,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// via the engine aggro funnel: a 0.0f threat seed, victim set, combat
 	// entered and ATTACK_START broadcast (triggerCreatureAggro also fires
 	// the engager's event-1 hook, which is a no-op for handlers the
-	// engager does not register). Go's funnel resolves the victim as a
-	// player session only, so non-player targets no-op. An evading or
-	// passive engager is skipped by the funnel; C++ has no such gate.
+	// engager does not register). Creature victims funnel through the
+	// same path since the AttackStart creature-victim port: the victim
+	// motion seeds the engager's map/instance and the combat tick
+	// resolves creature victims to a session-less target view. An evading
+	// or passive engager is skipped by the funnel; C++ has no such gate.
 	methods["EngageWithTarget"] = func(ctx context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, nil
@@ -1242,7 +1244,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if targetGUID == 0 {
 			return nil, nil
 		}
-		if s.findSessionByGUID(targetGUID) == nil {
+		if s.findSessionByGUID(targetGUID) == nil && s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID) == nil {
 			return nil, nil
 		}
 		s.triggerCreatureAggro(ctx, motion.GUID, targetGUID)
@@ -5660,8 +5662,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// AttackStart is CreatureMethods::AttackStart
 	// (CreatureMethods.h): AI()->AttackStart(target), the engage
 	// funnel the EngageWithTarget bridge above implements, so this
-	// is that method under its Eluna name, sharing its documented
-	// player-only victim resolution and evading/passive gates.
+	// is that method under its Eluna name, sharing its creature-victim
+	// resolution and evading/passive gates.
 	methods["AttackStart"] = methods["EngageWithTarget"]
 	// DespawnOrUnsummon is CreatureMethods::DespawnOrUnsummon
 	// (CreatureMethods.h): Creature::DespawnOrUnsummon

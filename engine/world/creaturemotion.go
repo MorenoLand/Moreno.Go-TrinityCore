@@ -1357,6 +1357,20 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		mapID, instanceID = playerSess.player.Map, playerSess.player.InstanceID
 	}
 	s.motionMu.Lock()
+	if playerSess == nil {
+		// Creature-victim engage (AttackStart funnel S1): the victim has no
+		// session, so its map/instance cannot seed the engager lookup — a
+		// 0,0 lookup would miss the engager and the DB fallback would
+		// materialize a wrong-instance duplicate. Derive both from the
+		// engager motion itself, which the bridge closure already knows
+		// lives on its own map/instance.
+		for key := range s.instanceCreatureMotion {
+			if m := s.findCreatureMotionLocked(key.MapID, key.InstanceID, creatureGUID); m != nil {
+				mapID, instanceID = m.Map, m.InstanceID
+				break
+			}
+		}
+	}
 	enteredCombat := false
 	guid := uint32(creatureGUID & 0x00FFFFFF)
 	entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
@@ -2948,6 +2962,19 @@ func (s *Server) aiVictimHasBreakableCC(m *creatureMotion, sess *session) bool {
 		return false
 	}
 	return breakableCCAuraPresent(sess.activeAuras)
+}
+
+// aiCreatureVictimHasBreakableCC is the creature-victim twin of
+// aiVictimHasBreakableCC: the victim's breakable CC lives in the creature
+// aura store, scanned under auraMu like petVictimHasBreakableCC.
+func (s *Server) aiCreatureVictimHasBreakableCC(m *creatureMotion, victimGUID uint64) bool {
+	if s == nil || m == nil || victimGUID == 0 {
+		return false
+	}
+	key := creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: victimGUID}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	return breakableCCAuraPresent(s.activeCreatureAuras[key])
 }
 
 // scheduleAISpellEvents bridges the pre-arm of CombatAI::JustEngagedWith
@@ -5238,6 +5265,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				dist := distance3D(motion.X, motion.Y, motion.Z, players[i].X, players[i].Y, players[i].Z)
 				return inMeleeThreatRange(motion.CombatReach, players[i].Sess.player.CombatReach, dist)
 			}
+			// Creature-victim fallback (funnel S2): the victim is a motion, not
+			// a player row, so its combat reach comes from the motion map.
+			if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, victimGUID); vm != nil && vm.Health > 0 {
+				dist := distance3D(motion.X, motion.Y, motion.Z, vm.X, vm.Y, vm.Z)
+				return inMeleeThreatRange(motion.CombatReach, vm.CombatReach, dist)
+			}
 			return false
 		}
 		// CreatureAI::UpdateVictim (CreatureAI.cpp:251-257): the
@@ -5343,8 +5376,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				break
 			}
 		}
-		// If target left map, logged out, dead, or turned on GM mode: drop threat
-		if target == nil || target.IsDead || target.IsGM || target.Sess == nil || target.Sess.player == nil || target.Sess.isDeadOrGhost() || (motion.FlagsExtra&0x00000400 != 0 && !target.IsDead) {
+		// Creature-victim resolution (funnel S2): a target no player row
+		// matches may still be a live motion on this map/instance. The
+		// synthesized view carries a nil session, so every Sess-guarded
+		// leg below treats it as a creature victim; position-only legs
+		// (dist, leash, chase dest, facing) read the snapshot fields.
+		var victimMotion *creatureMotion
+		if target == nil {
+			victimMotion = s.findCreatureMotion(motion.Map, motion.InstanceID, motion.TargetGUID)
+			if victimMotion != nil {
+				synth := playerPos{Map: victimMotion.Map, InstanceID: victimMotion.InstanceID, X: victimMotion.X, Y: victimMotion.Y, Z: victimMotion.Z, GUID: victimMotion.GUID, Level: uint8(victimMotion.Level), IsDead: victimMotion.Health == 0, FactionTemplate: victimMotion.Faction}
+				target = &synth
+			}
+		}
+		// If target left map, logged out, dead, or turned on GM mode: drop threat.
+		// Creature victims drop only on a missing/cross-map/dead motion — the
+		// GM/logged-out/session legs are player-only.
+		if target == nil || target.IsDead || (victimMotion == nil && (target.IsGM || target.Sess == nil || target.Sess.player == nil || target.Sess.isDeadOrGhost())) || (victimMotion != nil && victimMotion.Map != motion.Map) || (motion.FlagsExtra&0x00000400 != 0 && !target.IsDead) {
 			if motion.ThreatMgr != nil {
 				motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
 			}
@@ -5419,6 +5467,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		leashVictimReach := float32(1.5)
 		if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
 			leashVictimReach = target.Sess.player.CombatReach
+		} else if victimMotion != nil && victimMotion.CombatReach > 0 {
+			leashVictimReach = victimMotion.CombatReach
 		}
 		leashCReach := motion.CombatReach
 		if leashCReach <= 0 {
@@ -5463,6 +5513,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		victimReach := float32(1.5)
 		if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
 			victimReach = target.Sess.player.CombatReach
+		} else if victimMotion != nil && victimMotion.CombatReach > 0 {
+			victimReach = victimMotion.CombatReach
 		}
 		cReach := motion.CombatReach
 		if cReach <= 0 {
@@ -5482,7 +5534,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// (InterruptNonMeleeSpells(false)) and suppresses the whole
 		// spell/melee tick, so the creature never breaks its own crowd
 		// control.
-		if motion.AIName == "CasterAI" && target.Sess != nil && s != nil && s.aiVictimHasBreakableCC(motion, target.Sess) {
+		if motion.AIName == "CasterAI" && s != nil && ((target.Sess != nil && s.aiVictimHasBreakableCC(motion, target.Sess)) || s.aiCreatureVictimHasBreakableCC(motion, motion.TargetGUID)) {
 			// InterruptNonMeleeSpells -> Spell::cancel, so a deferral
 			// arm or a live channel broadcasts its cancel packets
 			// like every other non-melee interrupt, not silently.
@@ -7952,7 +8004,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// twin (Unit.h:1644, FLYING | DISABLE_GRAVITY). A player with
 			// no packet yet reads not flying, matching C++'s zero-flag
 			// default; creature victims never reach this tick.
-			if motion.AIName == "ArcherAI" && archerVictimFlying(target) {
+			if motion.AIName == "ArcherAI" && s.archerVictimFlying(target) {
 				faceAngle := float32(math.Atan2(float64(target.Y-motion.Y), float64(target.X-motion.X)))
 				if faceAngle < 0 {
 					faceAngle += 2 * math.Pi
@@ -8012,6 +8064,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 								tOrient := float32(0)
 								if target.Sess != nil && target.Sess.player != nil {
 									tOrient = target.Sess.player.Orientation
+								} else if victimMotion != nil {
+									tOrient = victimMotion.Orientation
 								}
 								absAngle := normalizeScriptAngle(tOrient + motion.ScriptChaseAngle)
 								destX = target.X + shorten*float32(math.Cos(float64(absAngle)))
@@ -8133,8 +8187,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if pct := s.creatureAuraDamageDonePct(creatureAuraKeyForMotion(motion)); pct != 1.0 {
 				damage = uint32(float64(damage) * pct)
 			}
-			// AutoBalance_UnitScript::ModifyMeleeDamage analog.
-			damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
+			// AutoBalance_UnitScript::ModifyMeleeDamage analog. The victim
+			// split is declared here, ahead of the armor leg that used to
+			// dereference target.Sess unconditionally below.
+			isPlayerVictim := target.Sess != nil && target.Sess.player != nil
+			if isPlayerVictim {
+				damage = s.autoBalanceModifyDealDamage(motion, target.Sess, damage)
+			} else {
+				damage = s.autoBalanceModifyDealDamageOnMap(motion, motion.Map, damage)
+			}
 			// Unit::CalculateMeleeDamage (Unit.cpp:1236-1237):
 			// MeleeDamageBonusTaken runs on the victim ahead of the armor
 			// reduction for every attacker type — the creature path never
@@ -8149,19 +8210,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					GUID: target.GUID, Map: target.Map, InstanceID: target.InstanceID,
 				}, false, true)
 			}
-			if target.Sess.player.Armor > 0 {
+			if isPlayerVictim && target.Sess.player.Armor > 0 {
 				armor := float64(target.Sess.player.Armor)
 				// The attacker's 123/269 ignore-resist arms run on the
 				// creature auto-swing path (Unit.cpp:1632-1650, null
 				// spellInfo).
 				armor = s.creatureIgnoreTargetResistArmor(creatureAuraKeyForMotion(motion), armor)
 				damage = calcArmorReducedDamage(armor, uint8(motion.Level), target.Sess.player.Level, damage)
+			} else if !isPlayerVictim {
+				// Creature victims fold their live armor the same way the
+				// spell twin does (liveCreatureArmor + ignore-resist arms).
+				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
+					armor := s.liveCreatureArmor(creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}, vm, float64(vm.Armor))
+					armor = s.creatureIgnoreTargetResistArmor(creatureAuraKeyForMotion(motion), armor)
+					if armor > 0 {
+						damage = calcArmorReducedDamage(armor, uint8(motion.Level), uint8(vm.Level), damage)
+					}
+				}
 			}
 			if damage < 1 {
 				damage = 1
 			}
 
-			isPlayerVictim := target.Sess != nil && target.Sess.player != nil
 			targetLevel := uint8(1)
 			if isPlayerVictim && target.Sess.player.Level > 0 {
 				targetLevel = target.Sess.player.Level
@@ -8389,6 +8459,18 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				} else if absorbed > 0 {
 					hitInfo |= protocol.HitInfoPartialAbsorb
 				}
+			} else if damage > 0 {
+				// Creature-victim absorb twin (spell twin's pool leg).
+				victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
+				bypass := absorbIgnoreBypass(damage, s.creatureAbsorbIgnorePct(victimKey, 1))
+				absorbed, rem := s.applyCreatureAbsorptionShields(victimKey, damage-bypass, 1)
+				absorbedDmg = absorbed
+				damage = rem + bypass
+				if rem == 0 && absorbed > 0 {
+					hitInfo |= protocol.HitInfoFullAbsorb
+				} else if absorbed > 0 {
+					hitInfo |= protocol.HitInfoPartialAbsorb
+				}
 			}
 			// Unit::DealDamage (Unit.cpp:735-737): CHEAT_GOD negates the damage
 			// after absorption (C++ absorbs before DealDamage) — the application
@@ -8398,11 +8480,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// pre-god value for the damage-shield gate below (Unit.cpp:1555:
 			// Damages is post-absorb but pre-god).
 			shieldGateDamage := damage
-			damage = target.Sess.negateGodModeDamage(damage)
+			if isPlayerVictim {
+				damage = target.Sess.negateGodModeDamage(damage)
+			}
 			// Unit::DealDamage (Unit.cpp:815-819): rage from fully absorbed
 			// damage — ahead of the application block the god arm skips (the
 			// god arm itself returns before this leg in C++).
-			if damage == 0 && absorbedDmg > 0 && !target.Sess.godCheatActive() {
+			if isPlayerVictim && damage == 0 && absorbedDmg > 0 && !target.Sess.godCheatActive() {
 				target.Sess.grantRageFromDamageTaken(ctx, absorbedDmg)
 				// Unit::DealDamage (Unit.cpp:742-747): absorbed damage still
 				// strips TAKE_DAMAGE-interrupt auras — the removal runs before
@@ -8413,7 +8497,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// player victim).
 				target.Sess.interruptAbsorbedCast()
 			}
-			if damage > 0 {
+			if damage > 0 && isPlayerVictim {
 				// Unit::CalcAbsorbResist (Unit.cpp:1977-2060):
 				// SPELL_AURA_SPLIT_DAMAGE (81/153) redirects part of the
 				// damage to the aura's caster, ahead of the 300 share leg.
@@ -8482,6 +8566,90 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					markPlayerInCombat(ctx, target.Sess, motion.GUID)
 				}
 			}
+			// Creature-victim application twin of the player block above:
+			// the split leg, then the spell twin's locked health mutation
+			// and death chain. The 300 share leg has no creature twin on
+			// the spell path (vehicle-session only) and stays out here too;
+			// the melee path carries no DamageTaken hook on either twin.
+			if damage > 0 && !isPlayerVictim {
+				victimKey := creatureAuraKey{Map: target.Map, InstanceID: target.InstanceID, GUID: target.GUID}
+				damage = s.splitDamageToCaster(ctx, target.GUID, false, victimKey, motion.GUID, damage, 1)
+				if damage > 0 {
+					var killed bool
+					var live *creatureMotion
+					var liveMaxHealth, liveNewHealth uint32
+					var liveX, liveY, liveZ float32
+					var liveFlags uint32
+					var liveCreatureType uint32
+					var rageNext uint32
+					var rageChanged bool
+					s.motionMu.Lock()
+					if m := s.findCreatureMotionLocked(motion.Map, motion.InstanceID, target.GUID); m != nil && m.Health > 0 {
+						live = m
+						if live.BossAI == nil {
+							live.BossAI = getBossAIForCreature(live, live.ScriptName)
+						}
+						liveMaxHealth = live.MaxHealth
+						liveCreatureType = live.CreatureType
+						if damage >= live.Health {
+							overkill = damage - live.Health
+							live.Health = 0
+							live.DynamicFlags |= unitDynFlagLootable
+							live.InCombat = false
+							live.TargetGUID = 0
+							live.Moving = false
+							if live.ThreatMgr != nil {
+								live.ThreatMgr.ClearThreat()
+							}
+							killed = true
+						} else {
+							live.Health -= damage
+							if next, changed := s.addCreatureRageLocked(live, live.Level, damage+absorbedDmg); changed {
+								rageNext, rageChanged = next, true
+							}
+						}
+						liveNewHealth = live.Health
+						liveX, liveY, liveZ = live.X, live.Y, live.Z
+						liveFlags = live.DynamicFlags
+					}
+					s.motionMu.Unlock()
+					if live == nil {
+						damage = 0
+					} else if killed {
+						target.IsDead = true
+						s.procCreatureLethalDamageAuras(victimKey, 0, damage, liveMaxHealth)
+						s.stopCreatureMotionInInstance(motion.Map, motion.InstanceID, target.GUID, liveX, liveY, liveZ)
+						s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, target.GUID, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})
+						s.broadcastThreatClearInInstance(motion.Map, motion.InstanceID, liveX, liveY, liveZ, target.GUID, live.PhaseMask)
+						if liveCreatureType != creatureTypeCritter {
+							s.fireCreatureMeleeAuraProcs(ctx, motion, target.GUID, procEventInfo{typeMask: procFlagKill, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: motion.GUID})
+							s.fireCreatureMeleeAuraProcs(ctx, live, motion.GUID, procEventInfo{typeMask: procFlagKilled, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: live.GUID})
+						}
+						s.fireCreatureMeleeAuraProcs(ctx, live, target.GUID, procEventInfo{typeMask: procFlagDeath, spellTypeMask: procSpellTypeMaskAll, spellPhaseMask: procSpellPhaseNone, hitMask: procHitNone, actorGUID: live.GUID})
+						s.clearCreatureAurasOnDeath(victimKey)
+						s.removeThreatVictimFromAllLists(motion.Map, motion.InstanceID, target.GUID)
+						s.clearCreatureDeathState(live)
+						s.fireCreatureTargetDied(ctx, motion, s.luaMotionCreature(live))
+						s.fireCreatureDiedByCreature(ctx, live, motion)
+						if live.BossAI != nil {
+							live.BossAI.OnDied(ctx, s, live)
+						}
+						s.fireCreatureDeathCast(ctx, live, motion.GUID)
+						s.recordCreatureKillLoot(live, motion)
+						s.grantCreatureKillReward(ctx, live, motion)
+						s.bindInstanceOnNoFunnelKill(ctx, live, motion)
+						s.creditNoFunnelKillingBlow(motion)
+						s.handleNoFunnelBattlegroundKill(live, motion)
+					} else {
+						healthUpdate := map[int]uint32{unitFieldHealth: liveNewHealth}
+						if rageChanged {
+							healthUpdate[unitFieldPower1+powerRage] = rageNext
+						}
+						s.broadcastCreatureValuesUpdateInInstance(motion.Map, motion.InstanceID, target.GUID, healthUpdate)
+						s.procCreatureDirectDamageAuras(victimKey, 0, damage, liveMaxHealth)
+					}
+				}
+			}
 			// Unit::DealMeleeDamage (Unit.cpp:1555-1579): a wild creature's
 			// melee hit from behind can daze the victim (SPELL_DAZED 1604,
 			// triggered). Fires on normal/crit/crushing/glancing outcomes;
@@ -8542,6 +8710,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// trigger spell targeting the creature attacker.
 			if isPlayerVictim && target.Sess != nil {
 				target.Sess.procVictimAuraTriggers(ctx, motion.GUID, outcome, hitInfo, targetState, blocked, damage)
+			} else if !isPlayerVictim {
+				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
+					s.fireCreatureAuraProcLoop(ctx, vm, motion.GUID, procEventInfo{typeMask: procFlagTakenMeleeAutoAttack, schoolMask: spellSchoolMaskNormal, spellTypeMask: procSpellTypeNone, spellPhaseMask: procSpellPhaseNone, hitMask: meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked), actorGUID: motion.GUID, damage: damage})
+				}
 			}
 			// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the player
 			// victim's SPELL_AURA_DAMAGE_SHIELD (15) effects strike the
@@ -8554,15 +8726,19 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					shieldGateDamage)
 			}
 			asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
-			target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
+			if target.Sess != nil {
+				target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
+			}
 			// Unit::SendAttackStateUpdate: SendMessageToSet on the attacker —
 			// the creature's visibility set; the creature has no session leg
 			// (the victim is reached through the set).
 			if s != nil {
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 			}
-			target.Sess.sendPlayerUpdate()
-			if s != nil {
+			if isPlayerVictim {
+				target.Sess.sendPlayerUpdate()
+			}
+			if s != nil && isPlayerVictim {
 				s.triggerPetDefensive(ctx, target.Map, target.InstanceID, target.GUID, motion.GUID, scripting.CreatureEventOnOwnerAttackedAt)
 			}
 			motion.LastAttack = now
@@ -9078,8 +9254,14 @@ func combatDistanceSpellRange(s *Server, motion *creatureMotion) float32 {
 // archerVictimFlying is Unit::IsFlying (Unit.h:1644) for the combat tick's
 // player victim: the session's last client movement packet carries FLYING
 // or DISABLE_GRAVITY, the same twin player:IsFlying uses (lua_player.go).
-func archerVictimFlying(target *playerPos) bool {
-	if target == nil || target.Sess == nil {
+func (s *Server) archerVictimFlying(target *playerPos) bool {
+	if target == nil {
+		return false
+	}
+	if target.Sess == nil {
+		if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
+			return vm.CanFly || vm.Flying
+		}
 		return false
 	}
 	if mi, ok := target.Sess.lastMovementInfoSnapshot(); ok {
@@ -9128,6 +9310,8 @@ func (s *Server) turretCanAIAttack(motion *creatureMotion, target playerPos, dis
 	victimReach := float32(1.5)
 	if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
 		victimReach = target.Sess.player.CombatReach
+	} else if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil && vm.CombatReach > 0 {
+		victimReach = vm.CombatReach
 	}
 	if dist3D >= maxRange+cReach+victimReach {
 		return false
