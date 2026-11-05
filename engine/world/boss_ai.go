@@ -12686,12 +12686,15 @@ func init() {
 	RegisterLuaBoss("npc_fel_orc_convert", 17083)
 
 	// Fight logic in
-	// lua_scripts/shatteredhalls/boss_warbringer_omrogg.lua.
+	// lua_scripts/shatteredhalls/boss_warbringer_omrogg.lua;
+	// own UpdateAI override, zero CASTING checks, no
+	// BossAI::UpdateAI call — no cast-state gate.
 	RegisterLuaBoss("boss_warbringer_omrogg", 16809)
 
 	// Fight logic in
 	// lua_scripts/shatteredhalls/boss_warchief_kargath_
-	// bladefist.lua.
+	// bladefist.lua; own UpdateAI override, zero CASTING
+	// checks, no BossAI::UpdateAI call — no cast-state gate.
 	RegisterLuaBoss("boss_warchief_kargath_bladefist", 16808)
 
 	// boss_shattered_executioner (17301, NPC_SHATTERED_
@@ -12700,14 +12703,16 @@ func init() {
 	// unregistered (no area-trigger/AuraScript/SpellScript
 	// bridges); the loot-mode/immune/quest/SetData arms
 	// have no bridges — see lua_scripts/shatteredhalls/
-	// boss_shattered_executioner.lua.
+	// boss_shattered_executioner.lua; own UpdateAI override,
+	// zero CASTING checks — cleave ungated.
 	RegisterLuaBoss("boss_shattered_executioner", 17301)
 
 	// boss_watchkeeper_gargolmar (17306): mortal wound /
 	// surge / retaliation / heal-yell boss; the
 	// MoveInLineOfSight SAY_TAUNT arm has no LoS-aggro
 	// bridge — see lua_scripts/hellfireramparts/
-	// boss_watchkeeper_gargolmar.lua.
+	// boss_watchkeeper_gargolmar.lua; own UpdateAI override,
+	// zero CASTING checks — no cast-state gate.
 	RegisterLuaBoss("boss_watchkeeper_gargolmar", 17306)
 
 	// boss_omor_the_unscarred (17308): orbital strike /
@@ -12715,7 +12720,9 @@ func init() {
 	// fiendish-hound summon boss; the summon, whip-pullback
 	// and movement-flag arms have no bridges — see
 	// lua_scripts/hellfireramparts/
-	// boss_omor_the_unscarred.lua.
+	// boss_omor_the_unscarred.lua; own UpdateAI override,
+	// zero CASTING gates (InterruptNonMeleeSpells legs are
+	// interrupt actions, interrupt-axis parked).
 	RegisterLuaBoss("boss_omor_the_unscarred", 17308)
 
 	// boss_vazruden_the_herald (17307): the herald's whole
@@ -12723,33 +12730,39 @@ func init() {
 	// SAY_INTRO engage arm is registered; the adds (Nazan
 	// 17536, Vazruden 17537) and the hellfire sentry (17517)
 	// carry the combat arms — see lua_scripts/
-	// hellfireramparts/boss_vazruden_the_herald.lua.
+	// hellfireramparts/boss_vazruden_the_herald.lua; own
+	// UpdateAI override, zero CASTING checks — no gate.
 	RegisterLuaBoss("boss_vazruden_the_herald", 17307)
 
 	// boss_nazan (17536): fireball / cone-of-fire boss; the
 	// flight waypoints, gravity/walk arms, early-land
 	// condition, heroic bellowing roar and liquid-fire
 	// summon have no bridges — see lua_scripts/
-	// hellfireramparts/boss_nazan.lua.
+	// hellfireramparts/boss_nazan.lua; own UpdateAI
+	// override, zero CASTING checks — no cast-state gate.
 	RegisterLuaBoss("boss_nazan", 17536)
 
 	// boss_vazruden (17537): revenge / wipe-yell boss; the
 	// heroic revenge variant and the DisappearAndDie arm
 	// have no bridges — see lua_scripts/hellfireramparts/
-	// boss_vazruden.lua.
+	// boss_vazruden.lua; own UpdateAI override, zero
+	// CASTING checks — no cast-state gate.
 	RegisterLuaBoss("boss_vazruden", 17537)
 
 	// npc_hellfire_sentry (17517): kidney-shot trash; the
 	// JustDied -> herald SentryDownBy relay has no
 	// cross-creature bridge — see lua_scripts/
-	// hellfireramparts/npc_hellfire_sentry.lua.
+	// hellfireramparts/npc_hellfire_sentry.lua; own
+	// UpdateAI override, zero CASTING checks — no gate.
 	RegisterLuaBoss("npc_hellfire_sentry", 17517)
 
 	// npc_millhouse_manastorm (20977): the Arcatraz zone
 	// script; the pre-combat intro machine runs on a
 	// spawn-started pump and the combat arms on an
 	// enter-combat pump — see lua_scripts/arcatraz/
-	// npc_millhouse_manastorm.lua. npc_warden_mellichar
+	// npc_millhouse_manastorm.lua; the pyroblast
+	// IsNonMeleeSpellCast gate is PORTED (creature:IsCasting).
+	// npc_warden_mellichar
 	// (20904) is documented there but not registered: its
 	// whole event machine is instance/summon driven.
 	RegisterLuaBoss("npc_millhouse_manastorm", 20977)
@@ -12765,7 +12778,8 @@ func init() {
 	// cross-creature arms and the out-of-combat
 	// EVENT_SOCCOTHRATES_DEATH machine have no
 	// cross-creature / data-set bridges — see lua_scripts/
-	// arcatraz/boss_dalliah_the_doomsayer.lua.
+	// arcatraz/boss_dalliah_the_doomsayer.lua; the
+	// UNIT_STATE_CASTING gates are PORTED (creature:IsCasting).
 	RegisterLuaBoss("boss_dalliah_the_doomsayer", 20885)
 
 	// boss_wrath_scryer_soccothrates (20886): felfire shock /
@@ -12775,7 +12789,8 @@ func init() {
 	// SetData / EVENT_DALLIAH_DEATH machine have no
 	// LoS / instance-data / cross-creature / data-set
 	// bridges — see lua_scripts/arcatraz/
-	// boss_wrath_scryer_soccothrates.lua.
+	// boss_wrath_scryer_soccothrates.lua; the
+	// UNIT_STATE_CASTING gates are PORTED (creature:IsCasting).
 	RegisterLuaBoss("boss_wrath_scryer_soccothrates", 20886)
 
 	// boss_harbinger_skyriss (20912): intro machine / image

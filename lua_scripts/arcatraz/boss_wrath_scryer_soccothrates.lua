@@ -59,9 +59,16 @@
 -- Dalliah's AI has no cross-creature bridge, so the yell is
 -- unreachable and the latch is bookkeeping only (omor
 -- summonedCount precedent). The C++ UNIT_STATE_CASTING early-
--- return gates (before and after the event switch) have no
--- cast-state bridge — the arms fire unconditionally
--- (netherspite precedent). Melee is engine-driven.
+-- return gates (before and after the event switch, boss_
+-- wrath_scryer_soccothrates.cpp:238/:263) are PORTED via
+-- the shared-pump gate idiom: each due arm carries `and
+-- not creature:IsCasting()` (live CastingUntil window,
+-- lua_creature_events.go:1950) — a gated arm fires
+-- nothing, consumes no re-arm, and stays due via the
+-- else-branch countdown, since C++ events.Update precedes
+-- the gate; the post-loop 25% latch is gated the same way
+-- (the C++ pre-loop return skips it while casting). Melee
+-- is engine-driven.
 -- OnTargetDied(3): Talk(SAY_SLAY) (C++ talks unconditionally —
 -- no player gate, C++-exact). OnDied(4): Talk(SAY_DEATH) +
 -- cleanup (the _JustDied arm is instance-blocked; the
@@ -98,9 +105,8 @@
 -- Talk(SAY_DALLIAH_DEATH)) — all via event 7 + creature:SetData
 -- (ScriptData store, lua_creature_events.go) + the
 -- FindNearestCreature / grid twin idiom (see bossTick, onAIUpdate
--- and the OnDied relay below); no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget)
--- — the UNIT_STATE_CASTING early-return gates unmodeled
--- (netherspite precedent); the unused spell enums (SPELL_
+-- and the OnDied relay below); the UNIT_STATE_CASTING
+-- early-return gates are PORTED (see bossTick); the unused spell enums (SPELL_
 -- FELFIRE_LINE_UP 35770 / SPELL_CHARGE_TARGETING 36038 /
 -- SPELL_CHARGE 35754) never fire in the C++ AI — the
 -- ScriptData "charge left to script" caveat is upstream,
@@ -162,10 +168,10 @@ local function bossTick(creature, guid)
 
     -- Felfire shock 35759: {12s,14s} init then {12s,14s} —
     -- TRIGGERED DoCastVictim (C++-exact), re-arm {12s,14s}
-    -- regardless (C++-exact). The C++ UNIT_STATE_CASTING
-    -- early-return gates have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm
-    -- fires unconditionally (netherspite precedent).
-    if st.felfireShock <= 1000 then
+    -- regardless (C++-exact). The C++ pre-loop + in-loop
+    -- CASTING gates are PORTED: a gated arm fires nothing
+    -- and stays due (else-branch countdown).
+    if st.felfireShock <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_FELFIRE_SHOCK, true)
         st.felfireShock = 12000 + math.random(0, 1999)
     else
@@ -176,7 +182,7 @@ local function bossTick(creature, guid)
     -- triggered DoCast on self (C++ DoCast(me), C++-exact),
     -- Talk(SAY_KNOCK_AWAY), re-arm {11s,12s} regardless
     -- (C++-exact).
-    if st.knockAway <= 1000 then
+    if st.knockAway <= 1000 and not creature:IsCasting() then
         creature:CastSpell(creature, SPELL_KNOCK_AWAY)
         creature:Talk(SAY_KNOCK_AWAY)
         st.knockAway = 11000 + math.random(0, 999)
@@ -192,7 +198,7 @@ local function bossTick(creature, guid)
     -- 200yd stands in for the instance GUID. Fires once: a guarded
     -- target costs the arm, as the C++ event is consumed on fire.
     if st.meFirst then
-        if st.meFirst <= 1000 then
+        if st.meFirst <= 1000 and not creature:IsCasting() then
             st.meFirst = nil
             local dalliah = creature:FindNearestCreature(ENTRY_DALLIAH, 200)
             if dalliah ~= nil and not dalliah:IsInCombat() then
@@ -211,7 +217,7 @@ local function bossTick(creature, guid)
     -- (dead-inclusive, twin-emperor precedent) talks on the
     -- first grid match with no alive/in-combat gate, and
     -- 200yd stands in for the instance GUID.
-    if not st.dalliahTaunt then
+    if not st.dalliahTaunt and not creature:IsCasting() then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 25 / 100) then

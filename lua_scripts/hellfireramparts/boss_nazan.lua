@@ -71,9 +71,10 @@
 -- VazrudenGUID latch, which has no bridge — the nearest
 -- search is the C++ condition's observable twin since only
 -- one Vazruden exists in the instance);
--- no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the C++ flight phase never calls
+-- the C++ flight phase never calls
 -- DoMeleeAttackIfReady but engine melee is always on in
--- this model (kargath in-blade precedent); the heroic-only
+-- this model (no melee-suppression bridge; kargath in-blade
+-- precedent); the heroic-only
 -- bellowing roar 39427 arm is ported below (IsHeroic() is
 -- bridged — blood_prince_council precedent); no summon
 -- bridge — the SpellHitTarget liquid-fire arm and the JustSummoned

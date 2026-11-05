@@ -67,8 +67,9 @@
 -- precedent); pyroblast 33975 — 1s init then 40s, Talk(SAY_
 -- PYRO), DoCastVictim (felmyst convention), re-arm 40000
 -- (C++-exact; the C++ !IsNonMeleeSpellCast(false) early-
--- return gate has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — netherspite
--- precedent — so the arm fires unconditionally); fireball
+-- return gate is PORTED via creature:IsCasting() — while
+-- casting, the tick returns before the arm, so pyroblast
+-- stays due and fireball does not advance); fireball
 -- 14034 — 2.5s init then 4s, DoCastVictim (felmyst
 -- convention), re-arm 4000 (C++-exact). Melee is
 -- engine-driven.
@@ -128,9 +129,15 @@
 -- instance gate (the phase-7 arm is PORTED via the bridged
 -- unit-flags surface — see introTick); no movement bridge —
 -- the AttackStart MoveChase(who, 25.0f) arm unmodeled (omor
--- SetCombatMovement precedent); no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the
--- pyroblast IsNonMeleeSpellCast(false) early-return gate
--- unmodeled (netherspite precedent); the unused C++ spells
+-- SetCombatMovement precedent); the pyroblast
+-- IsNonMeleeSpellCast(false) early-return gate is PORTED
+-- via creature:IsCasting() (live CastingUntil window,
+-- lua_creature_events.go:1950): while casting, combatTick
+-- returns before the pyroblast arm, so the pyroblast timer
+-- stays due and the fireball timer does not advance that
+-- tick (C++ return semantics); the intro machine and LowHp
+-- latch sit before the gate in C++ arm order and stay
+-- ungated; the unused C++ spells
 -- (ARCANE_MISSILES 33833 / CONE_OF_COLD 12611 / FIRE_BLAST
 -- 13341 / FROSTBOLT 15497) never fire in the C++ AI, so they
 -- are not added (the ScriptData "@todo make better combatAI
@@ -251,9 +258,13 @@ local function combatTick(creature, guid)
         st.lowhp = true
     end
     if st.pyro <= 1000 then
-        -- C++ waits for !IsNonMeleeSpellCast(false); no
-        -- cast-state bridge (netherspite precedent), so the
-        -- arm fires unconditionally.
+        -- C++ IsNonMeleeSpellCast(false) early return
+        -- (arcatraz.cpp:202): while casting, the tick ends
+        -- here — pyroblast stays due and fireball does not
+        -- advance this tick.
+        if creature:IsCasting() then
+            return
+        end
         creature:Talk(SAY_PYRO)
         creature:CastSpell(nil, SPELL_PYROBLAST)
         st.pyro = 40000

@@ -123,9 +123,13 @@
 -- H_SPELL_MANA_BURN 39020 {16s,32s} arm is PORTED (the old "no
 -- difficulty bridge" claim was stale — creature:IsHeroic() is
 -- bridged, lua_creature_events.go:260); no
--- cast-state bridge — the DoSplit InterruptNonMeleeSpells
--- arm and the fear/domination/mana-burn IsNonMeleeSpellCast
--- early-return gates unmodeled (netherspite precedent); the
+-- cast-state bridge — the fear/domination/mana-burn
+-- IsNonMeleeSpellCast early-return gates are PORTED via
+-- creature:IsCasting() (see combatTick); the DoSplit
+-- InterruptNonMeleeSpells arm stays out on interrupt-axis
+-- grounds (kelidan/channeler precedent, tick 103 PARKED
+-- note — a future interrupt-axis re-sweep may revisit it);
+-- the
 -- unused spell enums H_SPELL_MIND_REND 39017 / H_SPELL_
 -- DOMINATION 39019 never fire in the C++ AI — not bridged
 -- (millhouse unused-spells precedent); the ScriptData
