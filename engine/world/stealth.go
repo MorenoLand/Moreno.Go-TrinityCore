@@ -293,15 +293,22 @@ func canCreatureDetectStealthOfPlayer(motion *creatureMotion, targetSess *sessio
 		cLevel = motion.Level
 	}
 
-	detectionValue := int32(30) + int32(cLevel-1)*5
-	detectionValue -= targetSess.getStealthValue()
-
-	visibilityRange := float32(detectionValue)*0.3 + combatReach
-	if visibilityRange <= 0 {
-		return false
+	// Per stealth type (Object.cpp:1764): the seer's MOD_STEALTH_DETECT
+	// (17) sum for that type widens the range; every type the target
+	// carries must pass, as in the routed twin. The target value stays
+	// the global 16+154 sum by session-path convention.
+	for _, mv := range targetSess.stealthMiscValues() {
+		detectionValue := int32(30) + int32(cLevel-1)*5
+		if targetSess.server != nil && motion != nil {
+			detectionValue += targetSess.server.creatureAuraTypeSumByMisc(creatureAuraKeyForMotion(motion), spellAuraStealthDetect, mv)
+		}
+		detectionValue -= targetSess.getStealthValue()
+		visibilityRange := float32(detectionValue)*0.3 + combatReach
+		if visibilityRange <= 0 || dist > visibilityRange {
+			return false
+		}
 	}
-
-	return dist <= visibilityRange
+	return true
 }
 
 // creatureStealthAlertBand mirrors the checkAlert=true arm of
@@ -340,19 +347,39 @@ func creatureStealthAlertBand(motion *creatureMotion, targetSess *session, dist 
 		cLevel = motion.Level
 	}
 
-	detectionValue := int32(30) + int32(cLevel-1)*5
-	detectionValue -= targetSess.getStealthValue()
-
-	visibilityRange := float32(detectionValue)*0.3 + combatReach
-	if visibilityRange <= 0 {
+	// Per stealth type (Object.cpp:1764-1784): the seer's MOD_STEALTH_DETECT
+	// (17) sum for that type widens the range before the +8%/+1.5 alert
+	// addition. The band holds only when every type is inside its alert
+	// range and at least one type sits outside its normal range; the
+	// returned range is the widest alert range, so the caller's
+	// aggro-distance no-alert arm suppresses when any type reaches it.
+	alerted := false
+	maxAlert := float32(0)
+	for _, mv := range targetSess.stealthMiscValues() {
+		detectionValue := int32(30) + int32(cLevel-1)*5
+		if targetSess.server != nil && motion != nil {
+			detectionValue += targetSess.server.creatureAuraTypeSumByMisc(creatureAuraKeyForMotion(motion), spellAuraStealthDetect, mv)
+		}
+		detectionValue -= targetSess.getStealthValue()
+		visibilityRange := float32(detectionValue)*0.3 + combatReach
+		if visibilityRange <= 0 {
+			return false, 0
+		}
+		alertRange := visibilityRange*1.08 + 1.5
+		if dist > alertRange {
+			return false, 0
+		}
+		if dist > visibilityRange {
+			alerted = true
+			if alertRange > maxAlert {
+				maxAlert = alertRange
+			}
+		}
+	}
+	if !alerted {
 		return false, 0
 	}
-
-	alertRange := visibilityRange*1.08 + 1.5
-	if dist <= visibilityRange || dist > alertRange {
-		return false, 0
-	}
-	return true, alertRange
+	return true, maxAlert
 }
 
 // wildCreatureCanDetectTarget is the wild-creature-seer twin of
@@ -463,6 +490,13 @@ func (s *Server) seerCanDetectInvisibilityOfPlayer(seer canDetectSeer, ts *sessi
 	if ts == nil || ts.player == nil {
 		return true
 	}
+	// Player level of IsAlwaysDetectableFor (Player.cpp:22584-22597):
+	// a player target group-visible for a player controller seer is
+	// always detectable, so the invisibility arms never run for it.
+	// A wild seer (sess nil) never reaches this leg in C++.
+	if seer.sess != nil && ts.playerGroupAlwaysDetectable(seer.sess) {
+		return true
+	}
 	targetInvis := map[int32]int32{}
 	targetDetectHas := map[int32]bool{}
 	for _, aura := range ts.loadedAuras() {
@@ -531,6 +565,13 @@ func (s *Server) seerCanDetectStealthOfPlayer(seer canDetectSeer, ts *session) b
 	if seer.sess != nil {
 		ctrl := seer.sess
 		if ctrl.player == nil {
+			return true
+		}
+		// Player level of IsAlwaysDetectableFor (Player.cpp:22584-22597),
+		// as in the session twins: a group-visible player target is
+		// always detectable for its controller, so the range arms
+		// never run for it. The stalked arm stays the caller's.
+		if ts.playerGroupAlwaysDetectable(ctrl) {
 			return true
 		}
 		combatReach := float32(1.5)
@@ -671,9 +712,9 @@ func (s *Server) seerCanDetectStealthOfCreature(seer canDetectSeer, tm *creature
 // (GuardAI CanSeeAlways rides the scanner, not the controller), the
 // stalked arm judges by the resolved seer GUID, and a routed scanner
 // judges through the controller; a wild scanner keeps
-// canCreatureDetectStealthOfPlayer byte-identical, including its
-// global-value simplification (the per-type 17-sum gap stays a
-// follow-up). The passed dist is the scanner-to-target distance and is
+// canCreatureDetectStealthOfPlayer, which now carries the per-type
+// MOD_STEALTH_DETECT (17) sums as C++ does. The passed dist is the
+// scanner-to-target distance and is
 // used only on the wild path; routed paths recompute from the controller.
 func (s *Server) creatureSightCanDetectStealthOfPlayer(motion *creatureMotion, ts *session, dist float32) bool {
 	if ts == nil || ts.player == nil || !ts.isStealthed() {
@@ -727,8 +768,9 @@ func (s *Server) creatureSightCanDetectCreature(motion, victim *creatureMotion) 
 // alert addition, Object.cpp:1776-1781; a creature controller rides the
 // wild band with controller geometry), while the aggro-distance no-alert
 // arm stays the caller's scanner-side check and the turn/distract effect
-// stays scanner-side. A wild scanner keeps creatureStealthAlertBand
-// byte-identical, including its documented deltas.
+// stays scanner-side. A wild scanner keeps creatureStealthAlertBand,
+// which now carries the per-type MOD_STEALTH_DETECT (17) sums as C++
+// does, and a creature controller rides that same band.
 func (s *Server) creatureSightAlertBand(motion *creatureMotion, ts *session, dist float32) (bool, float32) {
 	if motion == nil || ts == nil || ts.player == nil || !ts.isStealthed() {
 		return false, 0
@@ -751,19 +793,45 @@ func (s *Server) creatureSightAlertBand(motion *creatureMotion, ts *session, dis
 		if ctrl.player.Level > 0 {
 			cLevel = uint32(ctrl.player.Level)
 		}
-		detectionValue := int32(30) + int32(cLevel-1)*5 - ts.getStealthValue()
-		visibilityRange := float32(detectionValue)*0.3 + combatReach
-		if visibilityRange > 30.0 {
-			visibilityRange = 30.0
-		}
-		if visibilityRange <= 0 {
+		// Player level of IsAlwaysDetectableFor (Player.cpp:22584-22597):
+		// a group-visible target is always detectable for its
+		// controller, so it never sits in the alert-only band.
+		if ts.playerGroupAlwaysDetectable(ctrl) {
 			return false, 0
 		}
-		alertRange := visibilityRange*1.08 + 1.5
-		if cdist <= visibilityRange || cdist > alertRange {
+		seerDetect := map[int32]int32{}
+		for _, aura := range ctrl.loadedAuras() {
+			if aura == nil || aura.Stopped || aura.AuraType != spellAuraStealthDetect {
+				continue
+			}
+			seerDetect[aura.MiscValue] += int32(aura.Amount)
+		}
+		alerted := false
+		maxAlert := float32(0)
+		for _, mv := range ts.stealthMiscValues() {
+			detectionValue := int32(30) + int32(cLevel-1)*5 + seerDetect[mv] - ts.getStealthValue()
+			visibilityRange := float32(detectionValue)*0.3 + combatReach
+			if visibilityRange > 30.0 {
+				visibilityRange = 30.0
+			}
+			if visibilityRange <= 0 {
+				return false, 0
+			}
+			alertRange := visibilityRange*1.08 + 1.5
+			if cdist > alertRange {
+				return false, 0
+			}
+			if cdist > visibilityRange {
+				alerted = true
+				if alertRange > maxAlert {
+					maxAlert = alertRange
+				}
+			}
+		}
+		if !alerted {
 			return false, 0
 		}
-		return true, alertRange
+		return true, maxAlert
 	}
 	if seer.motion != nil && seer.motion != motion {
 		cdist := float32(distance3D(seer.motion.X, seer.motion.Y, seer.motion.Z, ts.player.X, ts.player.Y, ts.player.Z))
