@@ -95,9 +95,7 @@
 -- is PORTED via ev19 below); no SpellScript bridge — spell_commander_
 -- sarannis_summon_reinforcements (HandleCast dummy-effect
 -- summons, heroic fourth summon at position [3]) documented
--- only, not bridged; no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the UpdateAI
--- UNIT_STATE_CASTING early-return gates unmodeled, the arms
--- fire unconditionally (netherspite precedent).
+-- only, not bridged; the UpdateAI UNIT_STATE_CASTING pre-loop (:112) + in-loop (:133) gates are PORTED via the shared-pump `and not creature:IsCasting()` idiom (dalliah precedent; live CastingUntil window, lua_creature_events.go:1950) — a gated arm fires nothing, consumes no re-arm, and stays expired via the else-branch countdown.
 
 local SPELL_ARCANE_RESONANCE = 34794
 local SPELL_ARCANE_DEVASTATION = 34799
@@ -143,9 +141,9 @@ end
 
 -- C++ UpdateAI in event arm order — 1s granularity exact
 -- for all C++ timers; the !UpdateVictim early return
--- collapses into the pump; the UNIT_STATE_CASTING gates
--- have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget), so the arms fire
--- unconditionally (netherspite precedent).
+-- collapses into the pump; the UNIT_STATE_CASTING pre-loop (:112) + in-loop (:133) gates
+-- are PORTED via the shared-pump `and not creature:IsCasting()` idiom (dalliah precedent;
+-- live CastingUntil window, lua_creature_events.go:1950).
 local function combatTick(creature, guid)
     local st = combatStates[guid]
     if not st then
@@ -154,7 +152,7 @@ local function combatTick(creature, guid)
 
     -- 1. Arcane resonance arm: Talk(SAY_ARCANE_RESONANCE) +
     -- TRIGGERED DoCastVictim (C++-exact), re-arm 42700.
-    if st.resonance <= 1000 then
+    if st.resonance <= 1000 and not creature:IsCasting() then
         creature:Talk(SAY_ARCANE_RESONANCE)
         creature:CastSpell(nil, SPELL_ARCANE_RESONANCE, true)
         st.resonance = 42700
@@ -164,7 +162,7 @@ local function combatTick(creature, guid)
 
     -- 2. Arcane devastation arm: Talk(SAY_ARCANE_DEVASTATION)
     -- + TRIGGERED DoCastVictim (C++-exact), re-arm {11s,19.2s}.
-    if st.devastation <= 1000 then
+    if st.devastation <= 1000 and not creature:IsCasting() then
         creature:Talk(SAY_ARCANE_DEVASTATION)
         creature:CastSpell(nil, SPELL_ARCANE_DEVASTATION, true)
         st.devastation = 11000 + math.random(0, 19200 - 11000)

@@ -47,9 +47,7 @@
 --    75000 (C++-exact). The DoCast(me, SPELL_SUMMON_FRAYER
 --    34557, true) arm is restored (spell-summon funnel fires
 --    ev19, which latches the frayer for the dead-frayer scan
---    and the Reset despawn below). The IsNonMeleeSpellCast/InterruptNonMeleeSpells
---    gate has no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the arm fires
---    unconditionally (netherspite precedent); the
+--    and the Reset despawn below). The IsNonMeleeSpellCast(false) gate is PORTED via creature:IsCasting() (live CastingUntil window, lua_creature_events.go:1950; kiljaeden precedent) + the bridged InterruptNonMeleeSpells(true) arm (lua_creature_events.go:1995); the
 --    RemoveAllAuras arm is bridged (creature:RemoveAllAuras —
 --    this run); the MoveIdle() arm has no movement bridge
 --    (omor precedent).
@@ -59,7 +57,7 @@
 --    the forced arm below is the fallback exit — when
 --    TreeForm - 30000 <= 1000, exit tree form (MoveFree =
 --    true; the summons.DespawnAll() is a no-op, the
---    InterruptNonMeleeSpells arm is bridged (no-op twin; MoveChase still blocks), the
+--    InterruptNonMeleeSpells arm is bridged (live cancel, lua_creature_events.go:1995; MoveChase still blocks), the
 --    RemoveAllAuras arm is bridged this run, the
 --    MoveChase(victim) arm has no movement
 --    bridge), C++-exact for the reachable model. At 1s
@@ -100,9 +98,7 @@
 -- bridged (creature:RemoveAllAuras — this run); no movement
 -- bridge — the
 -- tree-form MoveIdle() arm and the exit MoveChase(victim)
--- arm unmodeled (omor precedent); no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
--- the tree-form IsNonMeleeSpellCast/InterruptNonMeleeSpells
--- arms unmodeled (netherspite precedent); the unused say
+-- arm unmodeled (omor precedent); the tree-form IsNonMeleeSpellCast/InterruptNonMeleeSpells arms are PORTED (IsCasting live + bridged interrupt, see the pump); the unused say
 -- enums SAY_SUMMON = 3 / SAY_OOC_RANDOM = 5 never fire in
 -- the C++ AI — not bridged (millhouse unused-spells
 -- precedent); the ScriptData "SD%Complete: 90 / some
@@ -197,10 +193,13 @@ local function combatTick(creature, guid)
         -- tree-form casts are
         -- TRIGGERED in the C++ (C++-exact) — bridged with the
         -- triggered flag. The IsNonMeleeSpellCast gate /
-        -- InterruptNonMeleeSpells have no live cast-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget),
+        -- The IsNonMeleeSpellCast(false) gate is PORTED below via creature:IsCasting() (live CastingUntil window) + the bridged InterruptNonMeleeSpells(true) arm,
         -- the MoveIdle() arm has no movement bridge; the
         -- RemoveAllAuras arm is bridged this run (C++ arm
         -- order: strip before the casts).
+        if creature:IsCasting() then
+            creature:InterruptNonMeleeSpells(true)
+        end
         creature:RemoveAllAuras()
         creature:CastSpell(creature, SPELL_SUMMON_FRAYER, true)
         creature:CastSpell(creature, SPELL_TRANQUILITY, true)
@@ -236,9 +235,10 @@ local function combatTick(creature, guid)
         if st.deadAddsCount >= 3 then
             despawnFrayers(guid)
             st.deadAddsCount = 0
-            -- The InterruptNonMeleeSpells / MoveChase arms have
-            -- no bridges — the observable remainder is
-            -- RemoveAllAuras + MoveFree = true (C++ arm order).
+            -- The MoveChase arm has no movement bridge; the
+            -- InterruptNonMeleeSpells(true) arm is PORTED (bridged,
+            -- lua_creature_events.go:1995) + RemoveAllAuras + MoveFree = true (C++ arm order).
+            creature:InterruptNonMeleeSpells(true)
             creature:RemoveAllAuras()
             st.moveFree = true
         end

@@ -12808,9 +12808,7 @@ func init() {
 
 	// The Botanica (Tempest Keep) boss roster 1/5:
 	// boss_high_botanist_freywinn (17975): seedling / tree-form
-	// boss; the summon-frayer arms, the tree-form aura /
-	// movement / cast-state arms have no summon / aura /
-	// movement / cast-state bridges — see lua_scripts/
+	// boss; the tree-form IsNonMeleeSpellCast/InterruptNonMeleeSpells legs are PORTED (IsCasting live, lua_creature_events.go:1950; interrupt bridged :1995); the tree-form aura / movement arms have no aura / movement bridges — see lua_scripts/
 	// botanica/boss_high_botanist_freywinn.lua. instance_the_
 	// botanica.cpp stays blocked on the instance-script model.
 	RegisterLuaBoss("boss_high_botanist_freywinn", 17975)
@@ -12849,7 +12847,8 @@ func init() {
 	// boss_commander_sarannis (17976): arcane resonance /
 	// arcane devastation boss with a 50% HP summon-talk latch;
 	// the SPELL_SUMMON_REINFORCEMENTS effect is PORTED via the DamageTaken latch (four SummonCreature calls in C++ order +
-	// ev19 zone-in); no generic SpellScript bridge —
+	// ev19 zone-in); the UpdateAI UNIT_STATE_CASTING pre-loop + in-loop gates are PORTED (shared-pump IsCasting idiom) —
+	// no generic SpellScript bridge —
 	// see lua_scripts/botanica/boss_commander_sarannis.lua.
 	// instance_the_botanica.cpp stays blocked on the
 	// instance-script model.
