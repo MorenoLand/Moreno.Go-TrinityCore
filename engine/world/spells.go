@@ -40629,13 +40629,31 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			break
 		}
 		var burnCaster *session
+		var burnCasterMotion *creatureMotion
 		if ts.server != nil {
 			burnCaster = ts.server.findSessionByGUID(aura.CasterGUID)
+			if burnCaster == nil {
+				// SpellAuraEffects.cpp:5583-5586 — the tick fires for any
+				// caster unit type, so a creature caster resolves through
+				// its motion instead of dropping the tick (the tick-185
+				// creature-target twin).
+				burnCasterMotion = ts.server.findCreatureMotion(ts.player.Map, ts.player.InstanceID, aura.CasterGUID)
+			}
 		}
 		// C++ gates: caster and target alive, and the target's power type
 		// matches the effect. Go has no player PowerType model; the drain
 		// below no-ops when MaxPowers[burnPowerType] is 0.
-		if burnCaster == nil || burnCaster.player == nil || burnCaster.player.Health == 0 || burnCaster.isDeadOrGhost() || ts.player.Health == 0 || ts.isDeadOrGhost() {
+		if burnCaster == nil && burnCasterMotion == nil {
+			break
+		}
+		if burnCaster != nil {
+			if burnCaster.player == nil || burnCaster.player.Health == 0 || burnCaster.isDeadOrGhost() {
+				break
+			}
+		} else if burnCasterMotion.Health == 0 {
+			break
+		}
+		if ts.player.Health == 0 || ts.isDeadOrGhost() {
 			break
 		}
 		// SpellAuraEffects.cpp:5592-5596 — the immune gate
@@ -40686,11 +40704,12 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			burnDealt = oldBurnPower - ts.player.Powers[burnPowerType]
 		}
 		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
-		// (SpellInfo.cpp:528-536): the burn caster's mod-owner
-		// SPELLMOD_VALUE_MULTIPLIER folds via GetSpellModOwner —
-		// burnCaster is the live player caster session, so it folds its
-		// own mods.
-		dmg := effectValueMultiplied(burnDealt, ts.calcValueMultiplierForAura(aura.SpellID, spellAuraPowerBurn, burnCaster))
+		// (SpellInfo.cpp:528-536): the DBC ValueMultiplier half folds for
+		// any caster unit type; the mod-owner SPELLMOD_VALUE_MULTIPLIER fold
+		// resolves through GetSpellModOwner — the caster session itself for
+		// a player caster, its owner player for a pet/totem caster, nil for
+		// a wild creature caster (the null-modOwner path).
+		dmg := effectValueMultiplied(burnDealt, ts.calcValueMultiplierForAura(aura.SpellID, spellAuraPowerBurn, ts.server.spellModOwnerSession(ts.player.Map, ts.player.InstanceID, aura.CasterGUID)))
 		// Hybrid (melee+magic) spells skip the armor arm: C++ strips the
 		// NORMAL bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor
 		// is false for them, and the armor comparison moves into
@@ -40703,18 +40722,21 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			}
 		}
 		isHybridBurn := burnSpellKnown && burnSpell.SchoolMask&1 != 0 && burnSpell.SchoolMask&0x7E != 0
+		// Unit.cpp:1693 — the armor/resist curves key on the tick's live
+		// caster level, like C++'s attacker->GetLevel(); tickAttackerLevel
+		// resolves a creature caster's motion level the same way.
+		burnCasterLevel, _ := tickAttackerLevel(ts.server, ts.player.Map, ts.player.InstanceID, aura)
 		if !burnFixedDamage && aura.SchoolMask&1 != 0 && ts.player.Armor > 0 && !isHybridBurn && (!burnSpellKnown || burnSpell.Attributes&spellAttr0CUIgnoreArmor == 0) {
-			// Unit.cpp:1693 — the burn tick only runs with a live caster
-			// session (nil burnCaster returns above), so the armor curve
-			// keys on its live level, like C++'s attacker->GetLevel().
 			armor, arp := tickCasterArmorLegs(ts.server, ts.player.Map, ts.player.InstanceID, aura, burnSpell, burnSpellKnown, float64(ts.player.Armor), context.Background())
-			dmg = calcArmorReducedDamage(armor, burnCaster.player.Level, ts.player.Level, dmg, arp)
+			dmg = calcArmorReducedDamage(armor, burnCasterLevel, ts.player.Level, dmg, arp)
 		}
 		burnResisted := uint32(0)
 		burnPreResistDmg := dmg
-		if aura.SchoolMask > 1 && burnCaster.player.Level > 0 {
+		if aura.SchoolMask > 1 && burnCasterLevel > 0 {
+			// Spell penetration is a player-only stat; a creature caster
+			// contributes none (like the other tick pipelines).
 			pen := uint32(0)
-			if burnCaster.player != nil {
+			if burnCaster != nil && burnCaster.player != nil {
 				pen = burnCaster.player.SpellPenetration
 			}
 			// Unit::CalcSpellResistedDamage (Unit.cpp:1764-1770): the hybrid
@@ -40725,17 +40747,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			if isHybridBurn {
 				if ts.player.Armor > 0 {
 					armor, arp := tickCasterArmorLegs(ts.server, ts.player.Map, ts.player.InstanceID, aura, burnSpell, burnSpellKnown, float64(ts.player.Armor), context.Background())
-					hybridArmorReduced = calcArmorReducedDamage(armor, burnCaster.player.Level, ts.player.Level, dmg, arp)
+					hybridArmorReduced = calcArmorReducedDamage(armor, burnCasterLevel, ts.player.Level, dmg, arp)
 				} else {
 					hybridArmorReduced = dmg
 				}
 			}
-			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, burnCaster.player.Level, ts.player.Level, false, false, burnCaster.casterIgnoreResistPct(aura.SpellID, uint32(aura.SchoolMask)), spellResistInput{
+			burnResisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), ts.player.Resistances, burnCasterLevel, ts.player.Level, false, false, tickCasterIgnoreResistPct(ts.server, burnCaster, ts.player.Map, ts.player.InstanceID, aura, burnSpell, burnSpellKnown), spellResistInput{
 				ignoreResistances:  burnSpellKnown && burnSpell.AttributesEx4&spellAttr4IgnoreResistances != 0,
 				binary:             burnSpellKnown && burnSpell.AttributesCu&spellAttr0CuBinarySpell != 0,
 				hybrid:             isHybridBurn,
 				hybridArmorReduced: hybridArmorReduced,
-				targetResistMod:    burnCaster.casterTargetResistMod(uint32(aura.SchoolMask)),
+				targetResistMod:    tickCasterTargetResistMod(ts.server, burnCaster, ts.player.Map, ts.player.InstanceID, aura),
 			}, pen)
 		}
 		if dmg < 1 && burnResisted == 0 {
@@ -40775,23 +40797,38 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		logPkt162 := buildPeriodicNonMeleeDamageLog(aura.TargetGUID, aura.CasterGUID, aura.SpellID, dmg, burnOverkill, uint8(aura.SchoolMask), burnAbsorbed, burnResisted, 0)
 		// SpellAuraEffects.cpp:5291: the tick's log rides the caster's
 		// SendMessageToSet — the caster's visibility set, not the victim's
-		// session and not a nearby-only broadcast.
-		_ = burnCaster.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
-		if ts.server != nil {
-			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, burnCaster.player.Map, burnCaster.player.InstanceID, burnCaster.player.X, burnCaster.player.Y, burnCaster.player.Z, burnCaster)
+		// session and not a nearby-only broadcast. A creature caster has
+		// no session leg, so its broadcast rides its motion position
+		// (falling back to the target's).
+		if burnCaster != nil {
+			_ = burnCaster.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, true)
+			if ts.server != nil {
+				ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, burnCaster.player.Map, burnCaster.player.InstanceID, burnCaster.player.X, burnCaster.player.Y, burnCaster.player.Z, burnCaster)
+			}
+		} else if ts.server != nil {
+			bx, by, bz := ts.player.X, ts.player.Y, ts.player.Z
+			if burnCasterMotion != nil {
+				bx, by, bz = burnCasterMotion.X, burnCasterMotion.Y, burnCasterMotion.Z
+			}
+			ts.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt162, ts.player.Map, ts.player.InstanceID, bx, by, bz, nil)
 		}
 		_ = ts.applyPeriodicTickDamageToPlayer(dmg, burnTargetHealth, aura)
 		// Periodic-tick aura procs (SpellAuraEffects.cpp:5583-5623): the burn
 		// tail runs Unit::ProcSkillsAndAuras with DONE_PERIODIC on the caster
 		// side and TAKEN_PERIODIC | (TAKEN_DAMAGE when damage landed) on the
 		// victim side, PROC_SPELL_TYPE_NO_DMG_HEAL | (PROC_SPELL_TYPE_DAMAGE
-		// when damage landed), PROC_SPELL_PHASE_HIT. The tick only runs with
-		// a live caster session (burnCaster), which carries the done leg; the
+		// when damage landed), PROC_SPELL_PHASE_HIT. The done leg runs on
+		// the caster's session when online, else on the caster creature's
+		// own auras (C++ runs the done leg on any caster unit type); the
 		// taken leg runs on the victim's session.
 		if ts.server != nil && ts.server.Data != nil {
 			if burnTickSpell, found, err := ts.server.Data.Spell(aura.SpellID); err == nil && found {
 				procCtx := context.Background()
-				burnCaster.procPeriodicPowerBurnTickAuraTriggers(procCtx, burnTickSpell, aura.SchoolMask, aura.TargetGUID, burnAbsorbed, burnResisted, dmg)
+				if burnCaster != nil {
+					burnCaster.procPeriodicPowerBurnTickAuraTriggers(procCtx, burnTickSpell, aura.SchoolMask, aura.TargetGUID, burnAbsorbed, burnResisted, dmg)
+				} else if burnCasterMotion != nil {
+					ts.server.fireCreaturePeriodicPowerBurnTickProcs(procCtx, burnCasterMotion, nil, aura.TargetGUID, aura.CasterGUID, burnTickSpell, aura.SchoolMask, burnAbsorbed, burnResisted, dmg)
+				}
 				ts.procPeriodicPowerBurnTickTakenAuraTriggers(procCtx, burnTickSpell, aura.SchoolMask, aura.CasterGUID, burnAbsorbed, burnResisted, dmg)
 			}
 		}
@@ -42854,8 +42891,12 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 				s.server.motionMu.Unlock()
 			}
 		}
-		// gainMultiplier = 1.0 (no Go ValueMultiplier model); the damage
-		// equals the drained amount.
+		// gainMultiplier = SpellEffectInfo::CalcValueMultiplier
+		// (SpellInfo.cpp:528-536): the DBC ValueMultiplier half folds for
+		// any caster unit type; the mod-owner SPELLMOD_VALUE_MULTIPLIER fold
+		// resolves through GetSpellModOwner — the caster session itself, its
+		// owner player for a pet/totem caster, nil for a wild creature
+		// caster (the null-modOwner path).
 		// Unit::CalculateSpellDamageTaken (Unit.cpp:999-1000): FIXED_DAMAGE
 		// spells skip the armor leg; absorb/resist still run (below).
 		burnFixedDamage := false
@@ -42871,7 +42912,7 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		// caster level, like C++'s attacker->GetLevel(); tickAttackerLevel
 		// resolves a creature caster's motion level the same way.
 		burnCasterLevel, _ := tickAttackerLevel(s.server, key.Map, key.InstanceID, aura)
-		dmg := drained
+		dmg := effectValueMultiplied(drained, s.calcValueMultiplierForAura(aura.SpellID, spellAuraPowerBurn, s.server.spellModOwnerSession(key.Map, key.InstanceID, aura.CasterGUID)))
 		// Hybrid (melee+magic) spells skip the armor arm: C++ strips the
 		// NORMAL bit at load (SpellMgr.cpp:2830), so IsDamageReducedByArmor
 		// is false for them, and the armor comparison moves into
