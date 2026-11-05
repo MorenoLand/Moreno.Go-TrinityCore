@@ -29,9 +29,13 @@
 -- melee is engine-driven in Go (creature combat tick), like
 -- C++ DoMeleeAttackIfReady. C++ DoCast default is triggered=
 -- false (vaelastrasz convention). The C++ TaskScheduler's
--- SetValidator (!HasUnitState(UNIT_STATE_CASTING)) has no
--- cast-state bridge — the arms fire unconditionally
--- (netherspite precedent).
+-- SetValidator (!HasUnitState(UNIT_STATE_CASTING), zone_nagrand.cpp:444)
+-- is PORTED via per-arm `and not creature:IsCasting()` gates
+-- (sarannis/dalliah idiom; live CastingUntil window,
+-- lua_creature_events.go:1950) plus the spellbinder :519 early
+-- return — the stale "no cast-state bridge / constant false"
+-- claims are retracted. The validator's melee-callback leg stays
+-- unmodeled: melee is engine-driven in Go, not pump-driven.
 -- npc_maghar_captive / npc_kurenai_captive (the other two
 -- CreatureScripts AddSC_nagrand registers) are EscortAI:
 -- the waypoint machine, the OnQuestAccept escort start /
@@ -61,16 +65,14 @@
 -- interrupt_cooldown > 25000 -> non-triggered DoCastVictim
 -- SPELL_COUNTERSPELL 31999; DoCastVictim defaults to
 -- CastSpellExtraArgs{} = non-triggered, UnitAI.h:321):
--- the victim is a player, so the cast-state check rides the
--- live player:IsCasting bridge (lua_player.go:648, s.activeCast;
--- GetVictim returns the player object for player victims, and the
--- handler-surface IsCasting twin answers false for creature victims
--- per the halazzi precedent, so the call never nil-calls).
+-- victim cast-state via the live IsCasting bridge (CastingUntil
+-- window, lua_creature_events.go:1950); the stale "constant false /
+-- fire-and-forget axiom" claim is retracted.
 -- interrupt_cooldown accrues 1000/tick from the 20000 engage latch;
--- the C++ self-cast early-return (me->HasUnitState(CASTING)) is
--- vacuous under the fire-and-forget axiom (handler IsCasting is
--- constant false, lua_creature_events.go:242); C++ arm order kept
--- (accrual -> interrupt arm -> scheduler arms). The
+-- the C++ self-cast early-return (zone_nagrand.cpp:519) is PORTED:
+-- accrual first, then return before the interrupt arm and the
+-- scheduler arms. C++ arm order kept (accrual -> self-return ->
+-- interrupt arm -> scheduler arms). The
 -- DamageTaken flee latch (me->DoFleeToGetAssistance at 15%
 -- — HealthBelowPctDamaged(15)) PORTED via the bridged
 -- creature:FleeToGetAssistance (lua_creature_events.go:1706);
@@ -119,10 +121,12 @@
 -- escort / quest-accept / summon / movement bridges — the
 -- maghar and kurenai captive AIs documented only; no
 -- ConditionScript bridge — condition_nagrand_banner
--- documented only; the TaskScheduler validator and the spellbinder
--- interrupt arm stay unmodeled with the documented-only AI (the victim
--- is a player, so the cast-state check itself is bridgeable via
--- player IsCasting — not a no-bridge case);
+-- documented only; the maghar/kurenai escort pre-loop CASTING
+-- gates (zone_nagrand.cpp:171/:371) stay with those unported
+-- EscortAIs — no pump exists to gate, so the gate verdict rides
+-- the escort block, not a missing cast bridge. The TaskScheduler
+-- validator (:444) and the spellbinder self-cast return (:519)
+-- and victim-cast interrupt arm (:522) are PORTED, see above;
 -- SpellHit (event 14) IS bridged (stale "no
 -- SpellHit bridge" label retracted) — the base banner AI's
 -- bannered latch (SPELL_PLANT_WARMAUL_OGRE_BANNER
@@ -190,12 +194,15 @@ local function spellbinderTick(creature, guid)
         return
     end
 
-    -- Interrupt arm (C++ UpdateAI order: accrual first, then the arm,
-    -- then the scheduler): interrupt_cooldown += diff every tick.
+    -- C++ UpdateAI order: accrual, self-cast early return (:519),
+    -- interrupt arm (:522), scheduler arms (validator :444 gates
+    -- each arm, including the post-missiles re-check before chains).
     st.interrupt = st.interrupt + 1000
-    -- C++ me->HasUnitState(UNIT_STATE_CASTING) early-return is vacuous
-    -- (handler IsCasting constant false). Victim cast-state via the
-    -- player:IsCasting bridge; non-triggered DoCastVictim(31999).
+    if creature:IsCasting() then
+        return
+    end
+    -- Victim cast-state via live IsCasting; non-triggered
+    -- DoCastVictim(31999).
     if st.interrupt > 25000 then
         local victim = creature:GetVictim()
         if victim and victim:IsCasting() then
@@ -205,8 +212,8 @@ local function spellbinderTick(creature, guid)
     end
 
     -- Arcane missiles arm: 0s init then 2400-3800ms,
-    -- non-triggered DoCastVictim (C++-exact).
-    if st.missiles <= 1000 then
+    -- non-triggered DoCastVictim (C++-exact), validator-gated.
+    if st.missiles <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_ARCANE_MISSILES)
         st.missiles = 2400 + math.random(0, 1400)
     else
@@ -214,8 +221,9 @@ local function spellbinderTick(creature, guid)
     end
 
     -- Chains of ice arm: 3-6s init then 20-25s, TRIGGERED
-    -- on a random threat-list unit alive (C++-exact).
-    if st.chains <= 1000 then
+    -- on a random threat-list unit alive (C++-exact),
+    -- validator-gated (post-missiles re-check in C++ Dispatch).
+    if st.chains <= 1000 and not creature:IsCasting() then
         local target = randomThreatUnit(creature)
         if target then
             creature:CastSpell(target, SPELL_CHAINS_OF_ICE, true)
@@ -236,8 +244,10 @@ local function cultistTick(creature, guid)
     end
 
     -- Mind sear arm: 4.5s init then 7-11s, non-triggered
-    -- DoCastVictim (C++-exact).
-    if st.mindSear <= 1000 then
+    -- DoCastVictim (C++-exact), validator-gated (:444, base
+    -- UpdateAI has no separate early return — the validator is
+    -- the only gate).
+    if st.mindSear <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_MIND_SEAR)
         st.mindSear = 7000 + math.random(0, 4000)
     else
@@ -255,9 +265,9 @@ local function shamanTick(creature, guid)
     end
 
     -- Scorching totem arm: 2s one-shot, non-triggered
-    -- DoCastSelf (C++-exact, no repeat).
+    -- DoCastSelf (C++-exact, no repeat), validator-gated.
     if not st.totemDone then
-        if st.totem <= 1000 then
+        if st.totem <= 1000 and not creature:IsCasting() then
             creature:CastSpell(creature, SPELL_SCORCHING_TOTEM)
             st.totemDone = true
         else
@@ -266,8 +276,8 @@ local function shamanTick(creature, guid)
     end
 
     -- Frost shock arm: 6s init then 12s, non-triggered
-    -- DoCastVictim (C++-exact).
-    if st.frostShock <= 1000 then
+    -- DoCastVictim (C++-exact), validator-gated.
+    if st.frostShock <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_FROST_SHOCK)
         st.frostShock = 12000
     else

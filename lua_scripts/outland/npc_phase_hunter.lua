@@ -87,10 +87,13 @@
 -- SetInCombatWith legs (no Lua surface for either; its
 -- HasAura(34219) gate, UpdateEntry and SetHealth pct legs
 -- ARE bridged, so they no longer block it); no
--- aura-state / unit-state bridge — the phase-slip arm
+-- aura-type bridge — the phase-slip arm
 -- (HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) or UNIT_STATE_
--- ROOT -> DoCast(me, SPELL_PHASE_SLIP 36574)) unmodeled
--- (netherspite cast-state precedent); the stale "no
+-- ROOT -> DoCast(me, SPELL_PHASE_SLIP 36574)) stays out on
+-- the unbridged HasAuraType leg alone (the ROOT leg's
+-- HasUnitState IS bridged, lua_creature_events.go:1959, but
+-- the OR needs both legs; a ROOT-only port would miss the
+-- slow-only case); the stale "no
 -- quest-INCOMPLETE status bridge" claim is retracted —
 -- player:GetQuestStatus is bridged (lua_player.go:690,
 -- INCOMPLETE = 3, QuestDef.h:106) — so the Weak latch

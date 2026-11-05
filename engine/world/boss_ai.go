@@ -13118,13 +13118,15 @@ func init() {
 	// (scorching totem + frost shock + 50% healing-wave
 	// latch) — all entries verifiable from the C++ sources;
 	// see lua_scripts/outland/npc_nagrand_banner.lua. The
-	// spellbinder's victim-cast interrupt and 15% flee latches,
-	// the base AI's SpellHit bannered latch (17138 Warmaul
-	// reaver — no-op model), the maghar/kurenai captive
-	// EscortAIs and condition_nagrand_banner have no
-	// cast-state / flee / SpellHit / escort / quest-accept /
-	// summon / movement / ConditionScript bridges —
-	// documented only.
+	// spellbinder's victim-cast interrupt (:522), 15% flee latch,
+	// TaskScheduler validator (:444) and self-cast early return
+	// (:519) are PORTED via live IsCasting gates; the base AI's
+	// SpellHit bannered latch (17138 Warmaul reaver — no-op
+	// model), the maghar/kurenai captive EscortAIs (whose
+	// pre-loop gates :171/:371 ride the escort block) and
+	// condition_nagrand_banner have no SpellHit-observable /
+	// escort / quest-accept / summon / movement /
+	// ConditionScript bridges — documented only.
 	RegisterLuaBoss("npc_nagrand_banner", 17146)
 	RegisterLuaBoss("npc_nagrand_banner", 17147)
 	RegisterLuaBoss("npc_nagrand_banner", 17148)
