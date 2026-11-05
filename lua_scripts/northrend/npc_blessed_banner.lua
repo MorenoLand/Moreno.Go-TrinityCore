@@ -218,22 +218,31 @@ local intro1, intro2, intro3, startFight, waveSpawn, halofEvent, masonAction, en
 
 -- Wave/Halof summon leg (zone_icecrown.cpp:600-660, 665-688):
 -- DoSummon default (type 5 + 30000ms, crew precedent) + SetHomePosition
--- to the Dalfors fight pos + AttackStart on the banner. AttackStart is
--- the exact twin call, and the Go funnel now resolves creature victims
--- (bridge + engager-derived map/instance + combat-tick creature-victim
--- resolution + swing application branch), so waves pursue the banner
--- to the melee ring and swing at it; the MoveTo fight-pos leg stays
--- as the staging approximation (the C++ home, banner's neighborhood —
--- crew walk-in precedent). Latched into bannerSummons for the JustDied
--- drain and the victory DespawnEntry sweep. Spell-vs-creature inline
--- damage stays out (S4 follow-up): caster waves cast at the banner
--- packet-only, without a damage leg, until the wire-victim routing lands.
+-- to the Dalfors fight pos + AttackStart on the closest banner.
+-- C++ target (zone_icecrown.cpp:608): GetClosestCreatureWithEntry(me,
+-- NPC_BLESSED_BANNER, 100) EXCLUDES the caller (GridNotifiers.h
+-- self-GUID check), so single-banner it is NULL — UnitAI::AttackStart
+-- null-guards, and the real C++ engage is sight-aggro
+-- (CreatureAI::MoveInLineOfSight -> EngageWithTarget) — while
+-- multi-banner it is the nearest OTHER banner. Go FindNearestCreature
+-- excludes the caller the same way, so nearest-other-or-self
+-- reproduces the C++ target selection and keeps the single-banner
+-- engage direct through the funnel (bridge + engager-derived
+-- map/instance + combat-tick creature-victim resolution + swing
+-- application branch); creature-vs-creature sight-aggro is unmodeled
+-- in Go, so the self fallback stands in for the C++ sight engage.
+-- The MoveTo fight-pos leg stays as the staging approximation (the
+-- C++ home, banner's neighborhood — crew walk-in precedent).
+-- Latched into bannerSummons for the JustDied drain and the victory
+-- DespawnEntry sweep. Caster waves cast at the banner through the S4
+-- spell-inline wire-victim routing (creature twin), not packet-only.
 local function summonWaveCreature(creature, guid, entry, pos)
     local summon = creature:SummonCreature(entry, pos[1], pos[2], pos[3], pos[4], 5, 30000)
     if summon then
         summon:SetHomePosition(DALFORS_FIGHT_POS[1], DALFORS_FIGHT_POS[2], DALFORS_FIGHT_POS[3], DALFORS_FIGHT_POS[4])
         summon:MoveTo(0, DALFORS_FIGHT_POS[1], DALFORS_FIGHT_POS[2], DALFORS_FIGHT_POS[3])
-        summon:AttackStart(creature)
+        local target = creature:FindNearestCreature(BLESSED_BANNER_ENTRY, 100) or creature
+        summon:AttackStart(target)
         local list = bannerSummons[guid]
         if list then
             list[#list + 1] = summon
