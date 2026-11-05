@@ -215,8 +215,8 @@
 -- stale (SetFlag live, lua_creature_events.go:968+).
 -- spell_pursuing_spikes (AuraScript 65920/65922/65923) —
 -- PeriodicTick permafrost-caster check -> Spike Fail 66181 +
--- DisappearAndDie — no AuraScript binding bridge (razelikh
--- precedent) — documented-only.
+-- DisappearAndDie — PORTED (tick 193, RegisterAuraEvent — see
+-- below; the old "no AuraScript binding bridge" claim is stale).
 -- spell_impale (SpellScript) — HandleDamageCalc permafrost
 -- damage suppression — no SpellScript binding bridge (razelikh
 -- precedent) — documented-only.
@@ -496,6 +496,54 @@ RegisterCreatureEvent(ENTRY_SPIKE, 9, spikeDamageTaken)
 RegisterCreatureEvent(ENTRY_SPIKE, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_anubarak_trial.cpp:734: custom UpdateAI never calls DoMeleeAttackIfReady (chase/self-cast machine in C++, never melees)
 end)
+
+-- C++ spell_pursuing_spikes::PeriodicTick (boss_anubarak_trial.cpp:858-881):
+-- if the spike carries the difficulty-variant permafrost aura
+-- (GetSpellIdForDifficulty(SPELL_PERMAFROST, target): RAID_MODE
+-- 66193/67855/67856/67857, boss_anubarak_trial.cpp:110 — 10N/25N/10H/25H;
+-- IsHeroic + Is25ManRaid are the instance-row twins,
+-- lua_creature_events.go:3371/3391), PreventDefaultAction; the
+-- permafrost caster creature despawns in 3s (DespawnOrUnsummon);
+-- the spike self-casts Spike Fail 66181 (C++ CastSpell(nullptr, ...)
+-- passes empty targets, so the spell's implicit target resolves to
+-- the caster — the explicit self-cast twin, NOT the bridge's nil
+-- fallback to the victim, Object.cpp:2904-2920), strips all its
+-- auras, and disappears (DisappearAndDie = ForcedDespawn(0),
+-- Creature.h:77 — the immediate Despawn twin). Returns true, the
+-- PreventDefaultAction twin, so the Go default trigger cast does
+-- not also fire. One handler for all three pursuing-spikes auras
+-- (65920/65922/65923). Load()'s InstanceHasScript gate is unmodeled
+-- — the aura only exists in the trial instance.
+local SPELL_SPIKE_FAIL = 66181
+local PERMAFROST_SPELLS = { 66193, 67855, 67856, 67857 } -- [1]=10N [2]=25N [3]=10H [4]=25H
+
+local function pursuingSpikesTick(event, aura, target)
+    local permafrost = PERMAFROST_SPELLS[1]
+    if target:IsHeroic() then
+        if target:Is25ManRaid() then
+            permafrost = PERMAFROST_SPELLS[4]
+        else
+            permafrost = PERMAFROST_SPELLS[3]
+        end
+    elseif target:Is25ManRaid() then
+        permafrost = PERMAFROST_SPELLS[2]
+    end
+    local permafrostAura = target:GetAura(permafrost)
+    if permafrostAura then
+        local caster = permafrostAura:GetCaster()
+        if caster and caster:GetObjectType() == "Creature" then
+            caster:DespawnOrUnsummon(3000)
+        end
+        target:CastSpell(target, SPELL_SPIKE_FAIL)
+        target:RemoveAllAuras()
+        target:Despawn()
+        return true
+    end
+end
+
+RegisterAuraEvent(65920, 1, pursuingSpikesTick)
+RegisterAuraEvent(65922, 1, pursuingSpikesTick)
+RegisterAuraEvent(65923, 1, pursuingSpikesTick)
 
 -- C++ npc_frost_sphereAI::DamageTaken (boss_anubarak_trial.cpp:635-665):
 -- lethal damage is zeroed in both branches (ground: MoveIdle +

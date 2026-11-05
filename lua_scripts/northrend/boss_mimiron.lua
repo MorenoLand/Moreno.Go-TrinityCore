@@ -20,6 +20,13 @@
 --   SPELL_SUMMON_FLAMES_SPREAD (64564) triggered on the aura target
 --   (boss_mimiron.cpp:2615-2627). The EVENT_SUMMON_FLAMES boss-AI arm
 --   stays out (see below).
+--
+-- PORTED (tick 193, RegisterAuraEvent):
+--   spell_mimiron_weld (63339) HandleTick — the aura target (the
+--   player riding in Mimiron's vehicle) casts a random RepairSpell
+--   on the vehicle base every fifth tick and faces it every tick
+--   (boss_mimiron.cpp:2760-2772); the passenger GetVehicleBase twin
+--   is target:IsOnVehicle():GetOwner() (see below).
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   DoAction (:397) whole switch: DO_ACTIVATE_VX001 / DO_ACTIVATE_AERIAL /
 --     DO_ACTIVATE_V0L7R0N_1 / DO_ACTIVATE_V0L7R0N_2 / DO_ACTIVATE_HARD_MODE --
@@ -54,9 +61,14 @@
 --
 -- DEVIATIONS (checked against the CURRENT runtime, not memory):
 --   * JustEngagedWith's `if (!me->GetVehicleBase()) return` gate is not
---     modeled: no GetVehicleBase binding exists on the handler surface
---     (grep of lua_creature_events.go / lua_objects.go / scripting/
---     object.go). The self legs below fire unconditionally.
+--     modeled: no GetVehicleBase binding exists on the creature handler
+--     surface (grep of lua_creature_events.go / lua_objects.go /
+--     scripting/object.go). The self legs below fire unconditionally.
+--     (The weld aura arm below does NOT use this gate: its target is a
+--     passenger, and the passenger twin target:IsOnVehicle():GetOwner()
+--     — the Vehicle object the player rides, whose owner is the base
+--     unit (lua_player.go IsOnVehicle, lua_vehicle.go GetOwner) — is
+--     live. The boss's own vehicle-base gate stays unmodeled.)
 --   * RemoveAurasDueToSpell has no binding; creature:RemoveAura (bridged,
 --     lua_creature_events.go:1307) is the single-spell removal twin and
 --     is used for the WELD / SLEEP_VISUAL_1 removals.
@@ -201,3 +213,32 @@ local function summonFlamesSpreadTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SUMMON_FLAMES_SPREAD_TRIGGER, 1, summonFlamesSpreadTick)
+
+-- C++ spell_mimiron_weld_AuraScript::HandleTick
+-- (boss_mimiron.cpp:2760-2772): the aura target (the player riding in
+-- Mimiron's vehicle) casts one of the four RepairSpells on the vehicle
+-- base every fifth tick (GetTickNumber() % 5 == 0) and faces the
+-- vehicle every tick. GetVehicleBase has no direct binding; the
+-- passenger twin is target:IsOnVehicle():GetOwner() — the Vehicle
+-- object the player rides, whose owner is the base unit
+-- (lua_player.go IsOnVehicle, lua_vehicle.go GetOwner). The repair
+-- cast is non-triggered (C++ passes no triggered flag) and rides the
+-- player session path like every other non-triggered player cast. No
+-- PreventDefaultAction: the handler runs alongside the Go default
+-- trigger cast, like C++.
+local SPELL_WELD_REPAIR_SPELLS = { 52391, 63313, 63314, 63316 } -- boss_mimiron.cpp:334-340 (SPELL_SEAT_1/2/3/5)
+
+local function weldTick(event, aura, target)
+    local vehicle = target:IsOnVehicle()
+    if vehicle then
+        local base = vehicle:GetOwner()
+        if base then
+            if aura:GetTickNumber() % 5 == 0 then
+                target:CastSpell(base, SPELL_WELD_REPAIR_SPELLS[math.random(1, 4)])
+            end
+            target:SetFacingToObject(base)
+        end
+    end
+end
+
+RegisterAuraEvent(SPELL_WELD, 1, weldTick)

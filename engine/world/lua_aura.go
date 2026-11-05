@@ -282,6 +282,42 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{sp.Effects[index].TriggerSpell}, nil
 	}
+	// GetSpellEffectCalcValue(spellID[, effectIndex]) is
+	// SpellInfo::Effects[eff].CalcValue() (SpellInfo.cpp:402-440,
+	// the no-caster overload): the DBC base points plus the DieSides
+	// roll, with no level scaling (caster is null, so
+	// RealPointsPerLevel never applies). Reads the loaded Spell.dbc
+	// record for the given spell, not this aura's spell, so a handler
+	// can price another spell's effect — the blood-queen pact
+	// damage leg (boss_blood_queen_lana_thel.cpp:740-741). An unknown
+	// spell, a missing id, or an out-of-range index reads 0, the
+	// GetTriggerSpell convention, so a port that casts only on a
+	// nonzero value never fires a bogus 0-id cast.
+	methods["GetSpellEffectCalcValue"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{int32(0)}, nil
+		}
+		targetSpell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		index := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		if r.server == nil || r.server.Data == nil || index < 0 {
+			return []any{int32(0)}, nil
+		}
+		sp, found, err := r.server.Data.Spell(targetSpell)
+		if err != nil || !found || index >= len(sp.Effects) {
+			return []any{int32(0)}, nil
+		}
+		return []any{sp.Effects[index].CalcValue()}, nil
+	}
 	// GetProcChance is SpellInfo::ProcChance (Spell.dbc field 35,
 	// DBCStructure.h:1425): the roll_chance_i percent a C++
 	// periodic handler gates on. An unknown spell or a removed aura

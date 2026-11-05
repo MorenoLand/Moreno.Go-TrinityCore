@@ -774,6 +774,11 @@ func (s *session) luaPlayer() *scripting.Object {
 	// FALLING/FALLING_FAR movement flags. The movespline-falling
 	// leg has no Go model, so a spline-driven fall reads false.
 	methods["IsFalling"] = luaNoArgs(func() any { return s.isFalling || s.isFallingFar })
+	// GetFallTime is Player::m_movementInfo.fallTime (Player.cpp:
+	// UpdateFallInformationIfNeed, Player.cpp:25704-25708): the
+	// client-reported milliseconds since the current fall started,
+	// mirrored by the session's lastFallTime (movement.go).
+	methods["GetFallTime"] = luaNoArgs(func() any { return s.lastFallTime })
 	// CanSpeak is WorldSession::CanSpeak (WorldSession.cpp:723):
 	// the mute deadline has passed. Go clears an expired mute
 	// lazily in chat.go, so the comparison alone is exact.
@@ -2527,6 +2532,29 @@ func (s *session) luaPlayer() *scripting.Object {
 			return []any{nil}, nil
 		}
 		return []any{s.server.luaVehicleObject(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)}, nil
+	}
+	// GetTransport is Player::GetTransport (Player.h): the transport
+	// the player rides, or nil. Go tracks the ride in
+	// playerState.TransportGUID (movement.go) and the spawn in the
+	// transport registry; MO-transport GUIDs (0xF120/0x1FC0) resolve
+	// no gameobject (instance_hooks.go), so the bridge returns a
+	// minimal Transport object — truthy exactly when the player
+	// rides — carrying the spawn entry and GUID. A ride whose spawn
+	// is not in the registry reads nil, the same miss the
+	// gameobject twin would return.
+	methods["GetTransport"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil || s.player == nil || s.player.TransportGUID == 0 {
+			return []any{nil}, nil
+		}
+		guid := s.player.TransportGUID
+		spawn, attached := s.server.transportSpawnForGUID(guid)
+		if !attached {
+			return []any{nil}, nil
+		}
+		transportMethods := map[string]scripting.ObjectMethod{}
+		transportMethods["GetObjectType"] = luaNoArgs(func() any { return "Transport" })
+		transportMethods["GetEntry"] = luaNoArgs(func() any { return spawn.Entry })
+		return []any{&scripting.Object{Type: "Transport", Fields: map[string]any{"GUID": guid, "Entry": spawn.Entry}, Methods: transportMethods}}, nil
 	}
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)

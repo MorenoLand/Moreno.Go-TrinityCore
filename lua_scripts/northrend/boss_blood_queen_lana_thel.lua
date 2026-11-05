@@ -126,11 +126,13 @@
 -- spell_blood_queen_frenzied_bloodthirst (AuraScript) —
 -- bloodQueen->AI()->Talk(EMOTE_BLOODTHIRST 3, GetTarget()) OnApply
 -- and bloodQueen->AI()->Talk(SAY_MIND_CONTROL 2) OnRemove are
--- cross-AI Talk (no cross-AI-Talk bridge); the remaining AuraScript
--- + 5 SpellScript + 2 AchievementCriteriaScript legs join the
--- no-AuraScript-bridge / no-SpellScript-bridge /
--- no-achievement-criteria-bridge queues (the boss_moragg
--- optic-link precedent).
+-- cross-AI Talk (no cross-AI-Talk bridge); the
+-- spell_blood_queen_pact_of_the_darkfallen_dmg PeriodicTick is
+-- PORTED (tick 193, RegisterAuraEvent — see below); the remaining
+-- AuraScript (essence_of_the_blood_queen) + 5 SpellScript + 2
+-- AchievementCriteriaScript legs join the no-AuraScript-bridge /
+-- no-SpellScript-bridge / no-achievement-criteria-bridge queues
+-- (the boss_moragg optic-link precedent).
 -- All 13 Talk() calls in the file accounted for (13 =
 -- SAY_AGGRO 0 (1) + SAY_VAMPIRIC_BITE 1 (1, scheduler) +
 -- SAY_MIND_CONTROL 2 (1, cross-AI aura leg) +
@@ -480,3 +482,34 @@ RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 23, lanaThelReset)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 24, lanaThelReachHome)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 3, lanaThelKilledUnit)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 4, lanaThelJustDied)
+
+-- C++ spell_blood_queen_pact_of_the_darkfallen_dmg::PeriodicTick
+-- (boss_blood_queen_lana_thel.cpp:737-749, EFFECT_1): NO
+-- PreventDefaultAction — this is an additional effect, so the Go
+-- default trigger cast still fires alongside it, exactly like C++
+-- (the handler return is void, and the Go hook fires once per aura
+-- tick, so the cadence matches whichever effect Go models as the
+-- aura's trigger: default casts that effect's DBC trigger, the
+-- handler casts the damage spell with the scaled BP0). Damage is
+-- the DBC CalcValue of the damage spell (71341, EFFECT_0) scaled by
+-- 0.3375 + 0.1 * (tickNumber / 10) with integer division, then cast
+-- triggered on the target with the scaled value as BP0
+-- (CastSpellExtraArgs AddSpellBP0). GetTickNumber is the tick-191
+-- bridge; the DBC value read is the new aura:GetSpellEffectCalcValue
+-- bridge (lua_aura.go), the CalcValue() no-caster twin
+-- (SpellInfo.cpp:402-440: base points + DieSides roll, no level
+-- scaling). The nonzero gate is the GetTriggerSpell convention: the
+-- bridge reads 0 with no Spell.dbc loaded, so a zero value means
+-- "no data", never a real 0-damage cast.
+local SPELL_PACT_OF_THE_DARKFALLEN_DAMAGE = 71341
+
+local function pactOfTheDarkfallenDmgTick(event, aura, target)
+    local damage = aura:GetSpellEffectCalcValue(SPELL_PACT_OF_THE_DARKFALLEN_DAMAGE, 0)
+    if damage ~= 0 then
+        local multiplier = 0.3375 + 0.1 * math.floor(aura:GetTickNumber() / 10)
+        damage = math.floor(damage * multiplier)
+        target:CastCustomSpell(target, SPELL_PACT_OF_THE_DARKFALLEN_DAMAGE, true, damage)
+    end
+end
+
+RegisterAuraEvent(SPELL_PACT_OF_THE_DARKFALLEN, 1, pactOfTheDarkfallenDmgTick)
