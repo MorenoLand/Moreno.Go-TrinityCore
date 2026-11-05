@@ -19575,30 +19575,43 @@ func init() {
 	// Talk(SAY_SARA_KILL 5) carries an additional
 	// !IsInEvadeMode() gate with no Lua bridge — event 3
 	// deliberately not registered. Voice engage arms are ported (see below);
-	// brain arms, the
-	// keeper/illusion/gossip legs, Sara's phase-gated timer
-	// arms and all thirty-three spell scripts are bridge-
-	// blocked — documented in the lua header. Timer-driven
+	// the EVENT_ILLUSION chain is ported (2026-11-05, tick 241):
+	// sara lethal-hit / TRANSFORM_3 DoAction senders, voice
+	// ACTION_PHASE_TWO receiver + tentacle/illusion timers,
+	// brain ACTION_INDUCE_MADNESS / ACTION_TENTACLE_KILLED
+	// receivers, influence JustDied sender, keeper
+	// ACTION_PHASE_TWO receiver (destabilization matrix) —
+	// via the shared instanceData table in instance_ulduar.lua
+	// (map 603 hook); GO brain-room door legs stay out (no
+	// HandleGameObject bridge). Sara's phase-gated timer
+	// arms, the voice guardian/extinguish schedules, the Yogg
+	// body phase-three arms and all thirty-three spell scripts
+	// are bridge-blocked — documented in the lua header. Timer-driven
 	// cast ports (CreateLuaEvent): guardian DARK_VOLLEY,
 	// corruptor random-spell, crusher DIMINISH_POWER, immortal
 	// DRAIN_LIFE — all non-triggered, all 500ms IsCasting-deferred
 	// (own UpdateAI pre-loop CASTING returns: guardian :1208,
 	// corruptor :1277, crusher :1378, immortal :1507; the crusher
 	// return also fires on the shattered-illusion aura, out of
-	// family scope). Sara's phase-gated timer casts, the voice
-	// event machine, the Yogg body phase-three arms and the keeper
-	// DoAction arms are unported, so their CASTING gates (sara
-	// :802, yogg body :986, keeper :1657) cover unported arms only;
-	// voice UpdateAI has no gate and keeper JustEnteredCombat
-	// one-shots are ungated (separate hook).
+	// family scope). The keeper destabilization tick is likewise
+	// 500ms IsCasting-deferred (keeper UpdateAI :1657); the
+	// voice tentacle/illusion ticks are not (voice UpdateAI has
+	// no CASTING gate). Sara's phase-gated timer casts and the
+	// Yogg body phase-three arms are unported, so their CASTING
+	// gates (sara :802, yogg body :986) cover unported arms only;
+	// keeper JustEnteredCombat one-shots are ungated (separate hook).
 	RegisterLuaBoss("boss_yogg_saron", 33134)
 	RegisterLuaBoss("boss_yogg_saron", 33288)
 	// Voice of Yogg-Saron (33280, ulduar.h:203; boss_voice_of_yogg_saronAI : BossAI):
-	// engage sanity/insane casts ported in boss_yogg_saron.lua (events 1/19).
+	// engage sanity/insane casts ported in boss_yogg_saron.lua (events 1/19);
+	// EVENT_ILLUSION chain ported (ev38 DoAction receiver + tentacle/illusion
+	// timers, tick 241).
 	RegisterLuaBoss("boss_voice_of_yogg_saron", 33280)
 	// Brain of Yogg-Saron (33890; boss_brain_of_yogg_saronAI : PassiveAI):
 	// Reset arms ported in boss_yogg_saron.lua (ev23 RemoveFlag NOT_SELECTABLE
-	// + MATCH_HEALTH self-cast, cancelAll on ev2/4).
+	// + MATCH_HEALTH self-cast, summon despawn; brainCancelAll on ev2/4);
+	// ACTION_INDUCE_MADNESS / ACTION_TENTACLE_KILLED receivers ported (ev38,
+	// tick 241).
 	RegisterLuaBoss("boss_brain_of_yogg_saron", 33890)
 	// Algalon the Observer (Ulduar) — boss_algalon_the_observer.cpp,
 	// AddSC_boss_algalon_the_observer() (loader decl 123 / call 318) — the

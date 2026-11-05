@@ -97,11 +97,11 @@
 -- — PORTED in self-arm form (saraDamageTaken, event 9): the
 -- damage=health-1 rewrite (:719-722), PHASE_ONE first-lethal latch,
 -- and the 4700/9500/14300/14500ms Talk/heal/faction/transform/barrier
--- legs; only the cross-creature voice->AI()->DoAction(
+-- legs; the cross-creature voice->AI()->DoAction(
 -- ACTION_PHASE_TRANSFORM) (:728-729) and TRANSFORM_3's
--- DoAction(ACTION_PHASE_TWO) legs (:831/:833) stay out (dispatch IS
--- bridged — ev38 — but the voice/mimiron receiver arms ride the
--- unported phase/transform machine, not a missing dispatch).
+-- DoAction(ACTION_PHASE_TWO) legs (:831/:833) are PORTED below
+-- (saraDamageTaken / saratransform3, via the shared instanceData
+-- table; the voice/mimiron receivers are ported in this file).
 -- Yogg-Saron timer Talks — EVENT_YELL_BOW_DOWN (:993-995, Talk id 0,
 -- one-shot 3s) fires from Reset (:935) on the voice's cross-creature
 -- summon-driven Reset with SetPhase(PHASE_TWO) (:935-945; yogg is
@@ -140,12 +140,13 @@
 -- / SPELL_INSANE — PORTED via GetPlayersInWorld +
 -- player:RemoveAura in yoggSaronReset/yoggSaronDied; the removals
 -- are ungated in C++, only the whisper is PHASE_ONE-gated, and the
--- whisper keeps no phase bridge); timer Talks (cross-creature
--- EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE on
--- EVENT_EXTINGUISH_ALL_LIFE; EMOTE_YOGG_SARON_MADNESS +
--- SAY_YOGG_SARON_MADNESS on EVENT_ILLUSION) ride the
--- unbridgeable voice event machine (the mimiron
--- cross-creature precedent).
+-- whisper keeps no phase bridge); timer Talk EMOTE_YOGG_SARON_
+-- EXTINGUISH_ALL_LIFE on EVENT_EXTINGUISH_ALL_LIFE rides the
+-- unported voice event machine (the mimiron cross-creature
+-- precedent); EMOTE_YOGG_SARON_MADNESS + SAY_YOGG_SARON_MADNESS
+-- on EVENT_ILLUSION are PORTED below (illusionTick, event-38-
+-- seeded timer) with the tentacle summon arms and the brain
+-- ACTION_INDUCE_MADNESS dispatch.
 -- Brain of Yogg-Saron (33890, ulduar.h line 218) — Reset
 -- DoCast(me, SPELL_MATCH_HEALTH 64066) PORTED below (event 23);
 -- DamageTaken below-30% cascade (:1068-1093): DoCastAOE(
@@ -155,7 +156,9 @@
 -- InterruptNonMeleeSpells / cross-creature DoAction / instance legs
 -- (no bridges; the HasAura(64361) gate is bridged but the cascade
 -- cannot be split); DoAction ACTION_INDUCE_MADNESS /
--- ACTION_TENTACLE_KILLED have no Talk arms.
+-- ACTION_TENTACLE_KILLED are PORTED below (brainDoAction, event
+-- 38; the GO-door legs stay out — no HandleGameObject bridge)
+-- with the influence JustDied sender.
 -- npc_observation_ring_keeper — OnGossipSelect PORTED below
 -- (observationKeeperGossipSelect): menuId 10333 never reaches the
 -- Lua select hook (sender/action only — gossip.go:351), so the gate
@@ -341,15 +344,18 @@ RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
 -- returns, crusher :1378 aura arm) are out of family scope: Lua timers
 -- are wall-clock, the C++ pre-Update timer freeze is unmodeled. The blocked arms — all of Sara's
 -- EVENT_SARAS_* timer casts (phase-arg PHASE_ONE + spellvalue
--- target-selector legs on no-bridge SpellScripts), every voice-of-Yogg-Saron
--- timer arm (instance-GUID/phase legs), every Yogg-Saron body timer arm
--- (PHASE_TWO/PHASE_THREE-gated), the keeper arms (DoAction/phase-gated) —
--- stay documented-only in the header above (the gothik precedent);
+-- target-selector legs on no-bridge SpellScripts), every Yogg-Saron
+-- body timer arm (PHASE_TWO/PHASE_THREE-gated), the voice
+-- EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON / EVENT_EXTINGUISH_ALL_LIFE
+-- schedules (instance-GUID/phase legs) — stay documented-only in
+-- the header above (the gothik precedent); the voice phase-two
+-- tentacle + illusion timer arms and the keeper
+-- ACTION_PHASE_TWO destabilization arm are PORTED below
+-- (voiceDoAction / keeperDoAction, event 38).
 -- voice EVENT_LOCK_DOOR + JustEngagedWith one-shots, constrictor /
 -- influence / ominous-cloud / brain / turned-champion / observation-ring
 -- and yogg-keeper Reset one-shots, and keeper JustEnteredCombat entry-gated one-shots are ungated (not
--- DoAction-driven; the keeper DoAction arms stay out on unported senders — see
--- header) and ride event 1/23 below.
+-- DoAction-driven) and ride event 1/23 below.
 local ENTRY_GUARDIAN_OF_YOGG_SARON = 33136
 local ENTRY_CORRUPTOR_TENTACLE = 33985
 local ENTRY_CRUSHER_TENTACLE = 33966
@@ -394,6 +400,64 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- EVENT_ILLUSION chain (boss_yogg_saron.cpp:587-641 voice
+-- EVENT_ILLUSION + ACTION_PHASE_TWO receiver, :1096-1130 brain
+-- ACTION_INDUCE_MADNESS / ACTION_TENTACLE_KILLED receivers,
+-- :1425-1430 influence JustDied sender, :828-834 sara
+-- TRANSFORM_3 sender, :1675-1690 keeper ACTION_PHASE_TWO
+-- receiver) — PORTED 2026-11-05 (tick 241). Transport is the
+-- shared instanceData table (the_black_morass precedent):
+-- instance_ulduar.lua binds the map-603 instance hook, which
+-- installs the Map:GetInstanceData gate
+-- (engine/world/instance_hooks.go) and latches the voice/sara/
+-- brain objects + the illusion slot (C++ member default 0 =
+-- CHAMBER) at ON_CREATURE_CREATE; the mimiron keeper object is
+-- latched by the gossip summon below (the C++ KeeperGUIDs[3]
+-- leg, instance_ulduar.cpp:374-377); Yogg-Saron himself is
+-- stored from the voice's SummonCreature return (temp summons
+-- bypass the ON_CREATURE_CREATE funnel — instance_hooks.go).
+-- The brain-room GO-door legs (HandleGameObject close/open,
+-- :1106-1108/:1121) stay out — no HandleGameObject bridge.
+local ACTION_PHASE_TRANSFORM = 0 -- boss_yogg_saron.cpp:368
+local ACTION_PHASE_TWO = 1
+local ACTION_INDUCE_MADNESS = 3
+local ACTION_TENTACLE_KILLED = 6
+local ACTION_TOGGLE_SHATTERED_ILLUSION = 9
+local PHASE_TRANSFORM = 2 -- boss_yogg_saron.cpp:286
+local PHASE_TWO = 3
+local SPELL_CORRUPTOR_TENTACLE_SUMMON = 64143 -- boss_yogg_saron.cpp:123
+local SPELL_CONSTRICTOR_TENTACLE = 64132 -- boss_yogg_saron.cpp:121
+local SPELL_CRUSHER_TENTACLE_SUMMON = 64139 -- boss_yogg_saron.cpp:122
+local SPELL_INDUCE_MADNESS = 64059 -- boss_yogg_saron.cpp:166
+local SPELL_SHATTERED_ILLUSION = 64173 -- boss_yogg_saron.cpp:168
+local SPELL_DESTABILIZATION_MATRIX = 65206 -- boss_yogg_saron.cpp:210
+local SAY_YOGG_SARON_MADNESS = 1 -- boss_yogg_saron.cpp:54
+local EMOTE_YOGG_SARON_MADNESS = 2 -- boss_yogg_saron.cpp:55
+local EMOTE_BRAIN_ILLUSION_SHATTERED = 0 -- boss_yogg_saron.cpp:68
+local CHAMBER_ILLUSION = 0 -- ulduar.h:508
+local ICECROWN_ILLUSION = 1 -- ulduar.h:509
+local CREATURE_GROUP_PORTALS_10 = 1 -- boss_yogg_saron.cpp:381
+local CREATURE_GROUP_PORTALS_25 = 2 -- boss_yogg_saron.cpp:382
+local YOGG_SARON_SPAWN_X = 1980.43 -- boss_yogg_saron.cpp:384
+local YOGG_SARON_SPAWN_Y = -25.7708
+local YOGG_SARON_SPAWN_Z = 324.9724
+local YOGG_SARON_SPAWN_O = 3.141593
+
+local voicePhase = {}
+local voiceShattered = {}
+local voiceYogg = {}
+local brainTentaclesKilled = {}
+local brainSummons = {}
+local keeperPhase = {}
+
+local function yoggInstanceData(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
 end
 
 -- C++ SelectTarget(Random) draws the threat list (UnitAI.h), never the
@@ -652,13 +716,17 @@ end
 -- lethal hit also fires Talk(SAY_SARA_TRANSFORM_1 6) and schedules the
 -- one-shot transform chain (:732-735, 4700/9500/14300/14500ms). The
 -- chain's cross-creature legs — voice DoAction(ACTION_PHASE_TRANSFORM)
--- on the lethal hit, voice/mimiron DoAction(ACTION_PHASE_TWO) and the
--- SPELL_RIDE_YOGG_SARON_VEHICLE cast on Yogg at TRANSFORM_3/4 — have no
--- DoAction/cross-creature bridges and stay out; the phase-2 schedule
--- legs (EVENT_DEATH_RAY/MALADY/PSYCHOSIS/BRAIN_LINK, :842-845) ride the
--- unported phase machine and stay out. DamageTaken arms fire on lethal
--- hits, so no postDamage>0 guard (immortal precedent). The latch keeps
--- the one-shot chain first-lethal-only: C++ re-arms nothing once the
+-- on the lethal hit (:728-729) and voice/mimiron DoAction(
+-- ACTION_PHASE_TWO) at TRANSFORM_3 (:831-833) — are PORTED below via
+-- the shared instanceData table (dispatch IS bridged — ev38 — and
+-- both receivers are ported in this file); the
+-- SPELL_RIDE_YOGG_SARON_VEHICLE cast on Yogg at TRANSFORM_4 stays
+-- out (no Yogg object in sara's scope — the voice-stored twin does
+-- not apply here); the phase-2 schedule legs (EVENT_DEATH_RAY/
+-- MALADY/PSYCHOSIS/BRAIN_LINK, :842-845) ride the unported phase
+-- machine and stay out. DamageTaken arms fire on lethal hits, so no
+-- postDamage>0 guard (immortal precedent). The latch keeps the
+-- one-shot chain first-lethal-only: C++ re-arms nothing once the
 -- phase has left PHASE_ONE.
 local SAY_SARA_TRANSFORM_1 = 6
 local SAY_SARA_TRANSFORM_2 = 7
@@ -679,6 +747,13 @@ local function saraDamageTaken(event, creature, attacker, damage)
         local guid = creature:GetGUID()
         if not saraTransformed[guid] then
             saraTransformed[guid] = true
+            -- C++ DamageTaken (:728-729): voice DoAction(
+            -- ACTION_PHASE_TRANSFORM) BEFORE the Talk, in C++ order.
+            local data = yoggInstanceData(creature)
+            local voice = data and data.voice
+            if voice then
+                voice:DoAction(ACTION_PHASE_TRANSFORM)
+            end
             creature:Talk(SAY_SARA_TRANSFORM_1)
             schedule(guid, "saratransform1", 4700, function()
                 if creature:IsAlive() then
@@ -695,6 +770,18 @@ local function saraDamageTaken(event, creature, attacker, damage)
                     creature:Talk(SAY_SARA_TRANSFORM_4)
                     creature:CastSpell(creature, SPELL_FULL_HEAL)
                     creature:SetFaction(FACTION_MONSTER_2)
+                    -- C++ EVENT_TRANSFORM_3 (:831-833): voice then
+                    -- mimiron DoAction(ACTION_PHASE_TWO), in C++
+                    -- order, after the heal/faction legs.
+                    local data = yoggInstanceData(creature)
+                    if data then
+                        if data.voice then
+                            data.voice:DoAction(ACTION_PHASE_TWO)
+                        end
+                        if data.mimiron then
+                            data.mimiron:DoAction(ACTION_PHASE_TWO)
+                        end
+                    end
                 end
             end)
             schedule(guid, "saratransform4", 14500, function()
@@ -922,10 +1009,146 @@ end
 -- leg is MoveCirclePath (no bridge). The group spawn itself is the
 -- list-consuming site (creature:SummonCreatureGroup bridged 2026-11-05,
 -- tick 238); the clouds' own Reset visual cast rides ominousCloudReset
--- (event 23) below.
+-- (event 23) below. Reset also clears the phase-two latch, the
+-- shattered flag and the stored Yogg object (voiceDoAction state).
 local function voiceReset(event, creature)
     cancelTimers(creature:GetGUID())
+    voicePhase[creature:GetGUID()] = 1 -- C++ Reset: SetPhase(PHASE_ONE) (:493)
+    voiceShattered[creature:GetGUID()] = nil
+    voiceYogg[creature:GetGUID()] = nil
     creature:SummonCreatureGroup(0) -- CREATURE_GROUP_CLOUDS
+end
+
+-- C++ boss_voice_of_yogg_saronAI::UpdateAI tentacle arms
+-- (:575-585): DoCastAOE self-casts (DoCastAOE convention),
+-- non-triggered, PHASE_TWO-gated; repeats 30s / 25s / 60s.
+-- The _illusionShattered DelayEvents leg (:550-552) is twinned
+-- by a 1s poll re-arm with no cast while shattered (Lua timers
+-- are wall-clock — the C++ pre-Update freeze is unmodeled).
+local function corruptorTick(creature, guid)
+    if not creature:IsAlive() or voicePhase[guid] ~= PHASE_TWO then
+        return
+    end
+    if voiceShattered[guid] then
+        schedule(guid, "corruptor", 1000, function()
+            corruptorTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_CORRUPTOR_TENTACLE_SUMMON)
+    schedule(guid, "corruptor", 30000, function()
+        corruptorTick(creature, guid)
+    end)
+end
+
+local function constrictorTick(creature, guid)
+    if not creature:IsAlive() or voicePhase[guid] ~= PHASE_TWO then
+        return
+    end
+    if voiceShattered[guid] then
+        schedule(guid, "constrictor", 1000, function()
+            constrictorTick(creature, guid)
+        end)
+        return
+    end
+    -- C++ :581-582: DoCastAOE(SPELL_CONSTRICTOR_TENTACLE,
+    -- {SPELLVALUE_MAX_TARGETS, 1}) — the max-targets clamp has no
+    -- bridge and is dropped (voiceEnterCombat precedent).
+    creature:CastSpell(creature, SPELL_CONSTRICTOR_TENTACLE)
+    schedule(guid, "constrictor", 25000, function()
+        constrictorTick(creature, guid)
+    end)
+end
+
+local function crusherTick(creature, guid)
+    if not creature:IsAlive() or voicePhase[guid] ~= PHASE_TWO then
+        return
+    end
+    if voiceShattered[guid] then
+        schedule(guid, "crusher", 1000, function()
+            crusherTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_CRUSHER_TENTACLE_SUMMON)
+    schedule(guid, "crusher", 60000, function()
+        crusherTick(creature, guid)
+    end)
+end
+
+-- C++ boss_voice_of_yogg_saronAI::UpdateAI EVENT_ILLUSION
+-- (:587-604): yogg Talk EMOTE/SAY_MADNESS, portal groups
+-- (10-man always, 25-man extra), urand illusion 0-2 stored
+-- to instance DATA_ILLUSION, brain DoAction(
+-- ACTION_INDUCE_MADNESS), 80s repeat, PHASE_TWO-gated.
+local function illusionTick(creature, guid)
+    if not creature:IsAlive() or voicePhase[guid] ~= PHASE_TWO then
+        return
+    end
+    local yogg = voiceYogg[guid]
+    if yogg then
+        yogg:Talk(EMOTE_YOGG_SARON_MADNESS)
+        yogg:Talk(SAY_YOGG_SARON_MADNESS)
+    end
+    creature:SummonCreatureGroup(CREATURE_GROUP_PORTALS_10)
+    if creature:Is25ManRaid() then
+        creature:SummonCreatureGroup(CREATURE_GROUP_PORTALS_25)
+    end
+    local illusion = math.random(0, 2) -- C++ urand(CHAMBER, STORMWIND) (:599)
+    local data = yoggInstanceData(creature)
+    if data then
+        data.illusion = illusion
+        if data.brain then
+            data.brain:DoAction(ACTION_INDUCE_MADNESS)
+        end
+    end
+    schedule(guid, "illusion", 80000, function()
+        illusionTick(creature, guid)
+    end)
+end
+
+-- C++ boss_voice_of_yogg_saronAI::DoAction (:617-641): the
+-- ev38 receiver. ACTION_PHASE_TRANSFORM sets the phase latch
+-- and despawns the ominous clouds by entry sweep (the moroes
+-- grid-sweep twin of summons.DespawnEntry — the voice's clouds
+-- are the only 33292s in the arena). ACTION_PHASE_TWO sets
+-- the phase latch, summons Yogg-Saron (stored for the
+-- EVENT_ILLUSION Talk legs), pulls the brain into combat and
+-- seeds the tentacle + illusion timers (initials 5s / 7s /
+-- 5s / 60s, :630-633). ACTION_TOGGLE_SHATTERED_ILLUSION flips
+-- the shattered flag the tentacle ticks poll on.
+local function voiceDoAction(event, creature, action)
+    local guid = creature:GetGUID()
+    if action == ACTION_PHASE_TRANSFORM then
+        voicePhase[guid] = PHASE_TRANSFORM
+        for _, cloud in ipairs(creature:GetCreaturesInGrid(ENTRY_OMINOUS_CLOUD, 200)) do
+            cloud:Despawn()
+        end
+    elseif action == ACTION_PHASE_TWO then
+        voicePhase[guid] = PHASE_TWO
+        voiceYogg[guid] = creature:SummonCreature(ENTRY_YOGG_SARON,
+            YOGG_SARON_SPAWN_X, YOGG_SARON_SPAWN_Y, YOGG_SARON_SPAWN_Z, YOGG_SARON_SPAWN_O)
+        local data = yoggInstanceData(creature)
+        if data and data.brain then
+            -- C++ :629: DoZoneInCombat(brain) — the bridge takes no
+            -- argument and applies to the receiver object.
+            data.brain:DoZoneInCombat()
+        end
+        schedule(guid, "corruptor", 5000, function()
+            corruptorTick(creature, guid)
+        end)
+        schedule(guid, "constrictor", 7000, function()
+            constrictorTick(creature, guid)
+        end)
+        schedule(guid, "crusher", 5000, function()
+            crusherTick(creature, guid)
+        end)
+        schedule(guid, "illusion", 60000, function()
+            illusionTick(creature, guid)
+        end)
+    elseif action == ACTION_TOGGLE_SHATTERED_ILLUSION then
+        voiceShattered[guid] = not voiceShattered[guid]
+    end
 end
 
 -- C++ npc_constrictor_tentacleAI::Reset (:1317-1320): non-triggered
@@ -951,7 +1174,8 @@ end
 -- SPELL_NONDESCRIPT_1 64013 : SPELL_NONDESCRIPT_2 64010) (2-arg,
 -- non-triggered, ungated) — event 23; both entries registered (the
 -- conditional proves the script serves both; bindings are DB-side).
--- JustDied DoAction(ACTION_TENTACLE_KILLED) stays out.
+-- JustDied DoAction(ACTION_TENTACLE_KILLED) is PORTED below
+-- (influenceJustDied, event 4).
 local function influenceReset(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ Reset: DoCast(me, GetEntry()==NPC_SUIT_OF_ARMOR ?
@@ -964,6 +1188,18 @@ local function influenceReset(event, creature)
             creature:CastSpell(creature, SPELL_NONDESCRIPT_2)
         end
     end
+end
+
+-- C++ npc_influence_tentacleAI::JustDied (:1425-1430): brain
+-- DoAction(ACTION_TENTACLE_KILLED), ungated, via the shared
+-- instanceData table — PORTED (event 4); the brain receiver
+-- counts toward the illusion-shatter threshold.
+local function influenceJustDied(event, creature, killer)
+    local data = yoggInstanceData(creature)
+    if data and data.brain then
+        data.brain:DoAction(ACTION_TENTACLE_KILLED)
+    end
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ npc_ominous_cloudAI::Reset (:1158-1162): DoCast(me,
@@ -980,11 +1216,32 @@ end
 
 -- C++ boss_brain_of_yogg_saronAI::Reset (:1061-1066): RemoveFlag
 -- NOT_SELECTABLE + DoCast(me, SPELL_MATCH_HEALTH 64066)
--- (2-arg, non-triggered, ungated) — event 23. The
--- SetImmuneToPC/_summons.DespawnAll legs and DamageTaken legs
--- (:1070-1080, triggered casts + DoAction machine) stay out.
-local function brainReset(event, creature)
+-- (2-arg, non-triggered, ungated) — event 23. The SetImmuneToPC
+-- leg (:1064) stays out (no bridge); the _summons.DespawnAll
+-- leg is PORTED below (stored-summon twin, herald precedent);
+-- the DamageTaken legs (:1070-1080, triggered casts + DoAction
+-- machine) stay out.
+local function brainDespawnSummons(creature)
+    local list = brainSummons[creature:GetGUID()]
+    if list then
+        for _, summon in ipairs(list) do
+            summon:DespawnOrUnsummon()
+        end
+        brainSummons[creature:GetGUID()] = nil
+    end
+end
+
+-- Evade/died cancel (C++ EnterEvadeMode runs Reset, which
+-- despawns the summons — the same three legs as brainReset
+-- minus the flag/cast arms).
+local function brainCancelAll(event, creature)
     cancelTimers(creature:GetGUID())
+    brainTentaclesKilled[creature:GetGUID()] = nil
+    brainDespawnSummons(creature)
+end
+
+local function brainReset(event, creature)
+    brainCancelAll(event, creature)
     -- C++ Reset: RemoveFlag NOT_SELECTABLE (:1063), ungated,
     -- before the MATCH_HEALTH cast (:1065).
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
@@ -992,6 +1249,58 @@ local function brainReset(event, creature)
     -- (boss_yogg_saron.cpp:1065). Alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_MATCH_HEALTH)
+    end
+end
+
+-- C++ boss_brain_of_yogg_saronAI::JustSummoned (:1132-1135):
+-- _summons.Summon(summon) — the brain's summon list, tracked
+-- here as stored objects (herald guards precedent) for the
+-- DespawnAll legs in Reset and ACTION_TENTACLE_KILLED.
+local function brainJustSummoned(event, creature, summoned)
+    local guid = creature:GetGUID()
+    local list = brainSummons[guid]
+    if not list then
+        list = {}
+        brainSummons[guid] = list
+    end
+    list[#list + 1] = summoned
+end
+
+-- C++ boss_brain_of_yogg_saronAI::DoAction (:1096-1130): the
+-- ev38 receiver. ACTION_INDUCE_MADNESS resets the kill
+-- counter, summons the illusion group (the instance
+-- DATA_ILLUSION value, 0-2, read from the shared instanceData
+-- table) and casts INDUCE_MADNESS; the GO-door close legs
+-- (:1106-1108) stay out (no HandleGameObject bridge).
+-- ACTION_TENTACLE_KILLED increments the counter and, at the
+-- threshold (9 for ICECROWN, 8 otherwise, :1116), fires the
+-- shatter Talk, despawns the brain's summons, casts
+-- SHATTERED_ILLUSION (triggered) and toggles the voice's
+-- shattered flag; the GO-door open leg (:1121) stays out.
+local function brainDoAction(event, creature, action)
+    local guid = creature:GetGUID()
+    if action == ACTION_INDUCE_MADNESS then
+        brainTentaclesKilled[guid] = 0
+        local data = yoggInstanceData(creature)
+        creature:SummonCreatureGroup(data and data.illusion or 0)
+        -- C++ :1110: DoCastAOE(SPELL_INDUCE_MADNESS) —
+        -- self-cast, non-triggered (DoCastAOE convention).
+        creature:CastSpell(creature, SPELL_INDUCE_MADNESS)
+    elseif action == ACTION_TENTACLE_KILLED then
+        local killed = (brainTentaclesKilled[guid] or 0) + 1
+        brainTentaclesKilled[guid] = killed
+        local data = yoggInstanceData(creature)
+        local illusion = data and data.illusion or 0
+        if killed >= (illusion == ICECROWN_ILLUSION and 9 or 8) then
+            creature:Talk(EMOTE_BRAIN_ILLUSION_SHATTERED)
+            brainDespawnSummons(creature)
+            -- C++ :1120: DoCastAOE(SPELL_SHATTERED_ILLUSION,
+            -- triggered) — self-cast, triggered.
+            creature:CastSpell(creature, SPELL_SHATTERED_ILLUSION, true)
+            if data and data.voice then
+                data.voice:DoAction(ACTION_TOGGLE_SHATTERED_ILLUSION)
+            end
+        end
     end
 end
 
@@ -1033,6 +1342,7 @@ end
 -- passive ported this run).
 local function yoggKeeperReset(event, creature)
     cancelTimers(creature:GetGUID())
+    keeperPhase[creature:GetGUID()] = nil -- C++ Reset: SetPhase(PHASE_ONE) (:1606)
     -- C++ npc_yogg_saron_keeperAI::Reset (boss_yogg_saron.cpp:1607):
     -- me->SetReactState(REACT_PASSIVE), ungated, before RemoveAllAuras.
     creature:SetReactState(REACT_PASSIVE)
@@ -1082,26 +1392,72 @@ local function keeperEnterCombat(event, creature, target)
     end
 end
 
+-- C++ npc_yogg_saron_keeperAI::UpdateAI EVENT_DESTABILIZATION_MATRIX
+-- (:1663-1667): DoCastAOE(SPELL_DESTABILIZATION_MATRIX 65206,
+-- {SPELLVALUE_MAX_TARGETS, 1}) — self-cast, max-targets clamp
+-- dropped (voiceEnterCombat precedent) — {15s,25s} repeat,
+-- PHASE_TWO-gated.
+local function destabilizationMatrixTick(creature, guid)
+    if not creature:IsAlive() or keeperPhase[guid] ~= PHASE_TWO then
+        return
+    end
+    if creature:IsCasting() then
+        -- C++ keeper UpdateAI pre-loop CASTING return (:1657) —
+        -- the mal_ganis 500ms defer idiom (darkVolleyTick above).
+        schedule(guid, "destabilization", 500, function()
+            destabilizationMatrixTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_DESTABILIZATION_MATRIX)
+    schedule(guid, "destabilization", {15000, 25000}, function()
+        destabilizationMatrixTick(creature, guid)
+    end)
+end
+
+-- C++ npc_yogg_saron_keeperAI::DoAction (:1675-1690): the ev38
+-- receiver. ACTION_PHASE_TWO sets the phase latch and seeds
+-- EVENT_DESTABILIZATION_MATRIX at {5s,15s} — the C++ comment
+-- notes the phase set is only meaningful for Thorim and
+-- Mimiron, but the class serves all four keepers, so the
+-- handler is registered on all four entries; the sender
+-- (sara TRANSFORM_3) targets mimiron only. ACTION_PHASE_THREE
+-- stays out (sender is the unported brain DamageTaken cascade,
+-- :1082-1090); ACTION_SANITY_WELLS / ACTION_FLASH_FREEZE stay
+-- out (unported senders).
+local function keeperDoAction(event, creature, action)
+    if action == ACTION_PHASE_TWO then
+        local guid = creature:GetGUID()
+        keeperPhase[guid] = PHASE_TWO
+        schedule(guid, "destabilization", {5000, 15000}, function()
+            destabilizationMatrixTick(creature, guid)
+        end)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 1, voiceEnterCombat)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 19, voiceJustSummoned)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 23, voiceReset)
+RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 38, voiceDoAction)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 23, constrictorReset)
 RegisterCreatureEvent(ENTRY_INFLUENCE_TENTACLE, 2, cancelAll)
-RegisterCreatureEvent(ENTRY_INFLUENCE_TENTACLE, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_INFLUENCE_TENTACLE, 4, influenceJustDied)
 RegisterCreatureEvent(ENTRY_INFLUENCE_TENTACLE, 23, influenceReset)
 RegisterCreatureEvent(ENTRY_SUIT_OF_ARMOR, 2, cancelAll)
-RegisterCreatureEvent(ENTRY_SUIT_OF_ARMOR, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_SUIT_OF_ARMOR, 4, influenceJustDied)
 RegisterCreatureEvent(ENTRY_SUIT_OF_ARMOR, 23, influenceReset)
 RegisterCreatureEvent(ENTRY_OMINOUS_CLOUD, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_OMINOUS_CLOUD, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_OMINOUS_CLOUD, 23, ominousCloudReset)
-RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 2, cancelAll)
-RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 4, cancelAll)
+RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 2, brainCancelAll)
+RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 4, brainCancelAll)
+RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 19, brainJustSummoned)
 RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 23, brainReset)
+RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 38, brainDoAction)
 RegisterCreatureEvent(ENTRY_TURNED_CHAMPION, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_TURNED_CHAMPION, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_TURNED_CHAMPION, 23, turnedChampionReset)
@@ -1137,14 +1493,26 @@ local function observationKeeperGossipSelect(event, player, creature, sender, ac
     creature:Talk(SAY_KEEPER_CHOSEN_1, player)
     creature:Talk(SAY_KEEPER_CHOSEN_2, player)
     local entry = creature:GetEntry()
+    local summoned = nil
     if entry == ENTRY_OBSERVATION_RING_KEEPER_FREYA then
-        creature:SummonCreature(ENTRY_KEEPER_FREYA, 2036.873, 25.42513, 338.4984, 3.909538)
+        summoned = creature:SummonCreature(ENTRY_KEEPER_FREYA, 2036.873, 25.42513, 338.4984, 3.909538)
     elseif entry == ENTRY_OBSERVATION_RING_KEEPER_HODIR then
-        creature:SummonCreature(ENTRY_KEEPER_HODIR, 1939.045, -90.87457, 338.5426, 0.994837)
+        summoned = creature:SummonCreature(ENTRY_KEEPER_HODIR, 1939.045, -90.87457, 338.5426, 0.994837)
     elseif entry == ENTRY_OBSERVATION_RING_KEEPER_THORIM then
-        creature:SummonCreature(ENTRY_KEEPER_THORIM, 1939.148, 42.49035, 338.5427, 5.235988)
+        summoned = creature:SummonCreature(ENTRY_KEEPER_THORIM, 1939.148, 42.49035, 338.5427, 5.235988)
     elseif entry == ENTRY_OBSERVATION_RING_KEEPER_MIMIRON then
-        creature:SummonCreature(ENTRY_KEEPER_MIMIRON, 2036.658, -73.58822, 338.4985, 2.460914)
+        summoned = creature:SummonCreature(ENTRY_KEEPER_MIMIRON, 2036.658, -73.58822, 338.4985, 2.460914)
+    end
+    -- The mimiron keeper is the sara TRANSFORM_3 DoAction target
+    -- (DATA_MIMIRON_YS); latch it in the shared instanceData table
+    -- — the C++ KeeperGUIDs[3] leg (instance_ulduar.cpp:374-377),
+    -- which the instance ON_CREATURE_CREATE handler cannot see
+    -- (temp summons bypass the funnel — instance_hooks.go).
+    if summoned and entry == ENTRY_OBSERVATION_RING_KEEPER_MIMIRON then
+        local data = yoggInstanceData(creature)
+        if data then
+            data.mimiron = summoned
+        end
     end
     return false
 end
@@ -1156,15 +1524,19 @@ RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 1, keeperEnterCombat)
 RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 23, yoggKeeperReset)
+RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 38, keeperDoAction)
 RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 1, keeperEnterCombat)
 RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 23, yoggKeeperReset)
+RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 38, keeperDoAction)
 RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 1, keeperEnterCombat)
 RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 23, yoggKeeperReset)
+RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 38, keeperDoAction)
 RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 1, keeperEnterCombat)
 RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 23, yoggKeeperReset)
+RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 38, keeperDoAction)
