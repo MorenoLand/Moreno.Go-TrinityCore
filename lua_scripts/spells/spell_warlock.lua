@@ -33,6 +33,18 @@
 --   RemoveAurasDueToSpell bridge" note. Ordering is immaterial:
 --   the arm never queries the funnel aura itself, and C++ registers
 --   plain OnEffectRemove with no mode gate.
+-- PORTED (tick 202, RegisterAuraEvent):
+--   spell_warl_demonic_circle_summon HandleRemove (spell_warlock.cpp:349-354)
+--   + HandleDummyTick (:356-372) and spell_warl_demonic_circle_teleport
+--   HandleTeleport (:398-409); the GetGameObject/RemoveGameObject bridges
+--   (Unit::GetGameObject/RemoveGameObject, Unit.cpp:5199/5263) are new
+--   this tick. The tick's 40-yard range is 48020's DBC friendly max
+--   (SpellRange; the 40 yd tooltip range, wowwiki Demonic Circle /
+--   Demonic Circle: Teleport); the reach fold follows the maiden idiom
+--   (Object.cpp:1147-1165: IsWithinDist adds own + target combat reach;
+--   the circle GO carries none, the player 1.5).
+--   STILL BLOCKED leg: HandleTeleport's RemoveMovementImpairingAuras
+--   (false) — no bridge (root/snare removal has no Lua surface).
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   The same loader's CheckProc / HandleProc arms (:509-544,
 --   EFFECT_2 improved Drain Soul mana proc) are proc arms, not
@@ -113,3 +125,57 @@ local function hauntRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_HAUNT, 3, hauntRemove)
+
+local SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON = 48018 -- spell_warlock.cpp:41
+local SPELL_WARLOCK_DEMONIC_CIRCLE_TELEPORT = 48020 -- spell_warlock.cpp:42
+local SPELL_WARLOCK_DEMONIC_CIRCLE_ALLOW_CAST = 62388 -- spell_warlock.cpp:43
+local SPELL_WARLOCK_DEMONIC_CIRCLE_TELEPORT_RANGE = 40 -- 48020 DBC friendly max range (yards)
+
+-- C++ spell_warl_demonic_circle_summon::HandleRemove
+-- (spell_warlock.cpp:349-354): EFFECT_0 PERIODIC_DUMMY,
+-- REAL_OR_REAPPLY. On removal the summoned circle goes too (Go's
+-- remove hook fires only on genuine removal, never on reapply, so
+-- the C++ !(mode & REAPPLY) gate is satisfied by construction) and
+-- the allow-cast aura drops.
+local function demonicCircleSummonRemove(event, aura, target)
+    target:RemoveGameObject(SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON)
+    target:RemoveAura(SPELL_WARLOCK_DEMONIC_CIRCLE_ALLOW_CAST)
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON, 3, demonicCircleSummonRemove)
+
+-- C++ spell_warl_demonic_circle_summon::HandleDummyTick
+-- (spell_warlock.cpp:356-372): EFFECT_0 PERIODIC_DUMMY. While the
+-- circle exists, a target within the teleport spell's max range gains
+-- the allow-cast aura (62388); out of range it drops. No
+-- PreventDefault in C++, so the Go default tick still fires.
+local function demonicCircleSummonTick(event, aura, target)
+    local circle = target:GetGameObject(SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON)
+    if circle ~= nil then
+        if target:GetDistance(circle) <= SPELL_WARLOCK_DEMONIC_CIRCLE_TELEPORT_RANGE + 1.5 then
+            if not target:HasAura(SPELL_WARLOCK_DEMONIC_CIRCLE_ALLOW_CAST) then
+                target:CastSpell(target, SPELL_WARLOCK_DEMONIC_CIRCLE_ALLOW_CAST, true)
+            end
+        else
+            target:RemoveAura(SPELL_WARLOCK_DEMONIC_CIRCLE_ALLOW_CAST)
+        end
+    end
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON, 1, demonicCircleSummonTick)
+
+-- C++ spell_warl_demonic_circle_teleport::HandleTeleport
+-- (spell_warlock.cpp:398-409): EFFECT_0 MECHANIC_IMMUNITY, REAL. The
+-- player target teleports to its circle's position and orientation.
+-- RemoveMovementImpairingAuras stays out (no bridge).
+local function demonicCircleTeleportApply(event, aura, target)
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    local circle = target:GetGameObject(SPELL_WARLOCK_DEMONIC_CIRCLE_SUMMON)
+    if circle ~= nil then
+        target:TeleportNear(circle:GetX(), circle:GetY(), circle:GetZ(), circle:GetO())
+    end
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_DEMONIC_CIRCLE_TELEPORT, 2, demonicCircleTeleportApply)

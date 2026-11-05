@@ -1148,6 +1148,37 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsGM"] = luaNoArgs(func() any { return s.security > 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
+	// IsGuardian is Unit::IsGuardian (Unit.h:838 — the UNIT_MASK_GUARDIAN
+	// bit of m_unitTypeMask): players never carry the bit (Player never
+	// sets m_unitTypeMask; Unit ctor default UNIT_MASK_NONE), so this
+	// always reads false — the twin of the creature surface's motion
+	// flag, for aura arms that gate on the target being a guardian.
+	methods["IsGuardian"] = luaNoArgs(func() any { return false })
+	// GetGameObject is Unit::GetGameObject(spellId) (Unit.cpp:5199): the
+	// owned gameobject summoned by that spell, or nil. Backs the
+	// demonic-circle arms (spell_warlock.cpp:360-363, 403-407).
+	methods["GetGameObject"] = func(lctx context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		guid := s.server.gameObjectByOwnerSpell(s.playerGUID, spellID)
+		if guid == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.server.serverLuaGameObject(lctx, guid)}, nil
+	}
+	// RemoveGameObject is Unit::RemoveGameObject(spellid, del)
+	// (Unit.cpp:5263): despawns every owned gameobject of that spell id.
+	// Backs the demonic-circle remove arm (spell_warlock.cpp:350-352).
+	methods["RemoveGameObject"] = func(_ context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.removeGameObjectsByOwnerSpell(s.playerGUID, spellID)
+		return nil, nil
+	}
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
 	// IsDying is UnitMethods::IsDying (UnitMethods.h:316-324): Unit::isDying
 	// (Unit.h:1141) reads m_deathState == JUST_DIED. For players that state

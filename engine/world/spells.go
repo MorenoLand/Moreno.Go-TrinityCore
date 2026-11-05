@@ -739,6 +739,40 @@ const (
 	playerFieldByteTrackStealthed              uint32 = 0x00000002
 )
 
+// summonPropertiesIsGuardian mirrors the mask rule of
+// Map::SummonCreature (Object.cpp:1897-1947) for the UNIT_MASK_GUARDIAN
+// bit read by Unit::IsGuardian (Unit.h:838): the mask defaults to
+// UNIT_MASK_SUMMON, Control PET mints a Guardian, PUPPET/VEHICLE mint
+// their own masks, and under WILD/ALLY/UNK the MINION/GUARDIAN/
+// GUARDIAN2 titles mint a Guardian while TOTEM/LIGHTWELL,
+// VEHICLE/VEHICLE2 and MINIPET mint theirs — every other title falls
+// to the default leg, where only Flags & 512 (Mirror Image, Summon
+// Gargoyle) mints a Guardian. Note the PET title is NOT in the
+// guardian list: a PET-titled WILD/ALLY/UNK summon without the 512
+// flag stays UNIT_MASK_SUMMON (the EffectSummonType branch that calls
+// SummonGuardian does not change the Map mask). Callers pass resolved
+// properties only; a missing row never reaches here (the summon sites
+// skip it like C++'s `if (!SummonProperties) break`).
+func summonPropertiesIsGuardian(props wotlk.SummonProperties) bool {
+	switch props.Control {
+	case summonCategoryPet:
+		return true
+	case summonCategoryPuppet, summonCategoryVehicle:
+		return false
+	case summonCategoryWild, summonCategoryAlly, summonCategoryUnk:
+		switch props.Title {
+		case summonTitleMinion, summonTitleGuardian, summonTitleGuardian2:
+			return true
+		case summonTitleTotem, summonTitleLightwell, summonTitleVehicle, summonTitleVehicle2, summonTitleMinipet:
+			return false
+		default:
+			return props.Flags&512 != 0
+		}
+	default:
+		return false
+	}
+}
+
 // spellStartCastFlags mirrors the castFlags computation in
 // Spell::SendSpellStart (Spell.cpp:4220-4252): base CAST_FLAG_UNKNOWN_2,
 // CAST_FLAG_NO_GCD for rune spells (RuneCostID + POWER_RUNE),

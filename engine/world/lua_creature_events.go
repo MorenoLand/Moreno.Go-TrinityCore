@@ -3492,6 +3492,37 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{difficulty >= 1}, nil
 	}
+	// IsGuardian is Unit::IsGuardian (Unit.h:838 — the UNIT_MASK_GUARDIAN
+	// bit of m_unitTypeMask, minted by Map::SummonCreature's mask rule):
+	// the motion flag stamped by the spell-summon sites that resolve
+	// SummonProperties (summonPropertiesIsGuardian); DB spawns, pets
+	// and Lua SummonCreature summons read false.
+	methods["IsGuardian"] = luaNoArgs(func() any { return motion.IsGuardian })
+	// GetGameObject is Unit::GetGameObject(spellId) (Unit.cpp:5199): the
+	// owned gameobject summoned by that spell, or nil — the creature
+	// twin of the player bridge (the demonic-circle arms are
+	// player-only, but the C++ method is Unit-level).
+	methods["GetGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		guid := s.gameObjectByOwnerSpell(motion.GUID, spellID)
+		if guid == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.serverLuaGameObject(ctx, guid)}, nil
+	}
+	// RemoveGameObject is Unit::RemoveGameObject(spellid, del)
+	// (Unit.cpp:5263): despawns every owned gameobject of that spell id.
+	methods["RemoveGameObject"] = func(_ context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.removeGameObjectsByOwnerSpell(motion.GUID, spellID)
+		return nil, nil
+	}
 	// Is25ManRaid is Map::Is25ManRaid (Map.cpp:4254-4258) and ScriptedAI::Is25ManRaid
 	// (ScriptedCreature.h:247): raids only, and since 25-man difficulties are 1 and 3
 	// (DBCEnums.h:287-292) the test is difficulty & RAID_DIFFICULTY_MASK_25MAN (1).

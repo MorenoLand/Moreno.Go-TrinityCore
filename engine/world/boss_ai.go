@@ -4343,6 +4343,10 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 		if err != nil || !found {
 			continue
 		}
+		// The Map::SummonCreature mask for this effect's properties
+		// (summonPropertiesIsGuardian): every spawnOne below carries
+		// the same mask, so the flag is computed once per effect.
+		guardian := summonPropertiesIsGuardian(props)
 		// C++ damage (SpellEffects.cpp:2225-2242): the effect's calculated
 		// value at the caster's level; the numSummons property-ID list keys
 		// on it, so the multi-summon count is modelable on this path.
@@ -4374,6 +4378,11 @@ func (s *Server) creatureEffectSummonType(ctx context.Context, m *creatureMotion
 			summoned := s.summonTempCreature(ctx, s.summonOriginFromMotion(m), entry, x, y, z, m.Orientation, summonType, despawnMs)
 			if summoned == nil {
 				return nil
+			}
+			if guardian {
+				s.motionMu.Lock()
+				summoned.IsGuardian = true
+				s.motionMu.Unlock()
 			}
 			log := protocol.NewBuffer(32)
 			log.WritePackedGUID(m.GUID)
@@ -4612,6 +4621,11 @@ func (s *Server) creatureEffectSummonPet(ctx context.Context, m *creatureMotion,
 		summoned := s.summonTempCreature(ctx, s.summonOriginFromMotion(m), entry, baseX, baseY, baseZ, m.Orientation, summonType, despawnMs)
 		if summoned == nil {
 			continue
+		}
+		if summonPropertiesIsGuardian(props) {
+			s.motionMu.Lock()
+			summoned.IsGuardian = true
+			s.motionMu.Unlock()
 		}
 		if props.Control == summonCategoryAlly {
 			s.motionMu.Lock()

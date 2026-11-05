@@ -2137,12 +2137,41 @@ func (s *session) cancelFishingBobber() {
 // Unit.cpp:5263-5284). The owner link is cleared before the delete, so no
 // SMSG_FISH_ESCAPED goes out on this path (that packet only fires on the
 // bobber's bite-timeout arm, GameObject.cpp:585). The fishing bobber
-// (EffectTransmitted FISHINGNODE arm, SpellEffects.cpp:4982-5000) is the
-// only runtime GO a player channel summons in Go; without this an
-// interrupted fishing channel (movement, new cast, damage abort) left the
-// bobber in the world, still catchable at the 100-yard bobber use range.
-func (s *session) removeChannelGameObjects(spellID uint32) {
-	if s == nil || s.server == nil || spellID == 0 {
+// gameObjectByOwnerSpell mirrors Unit::GetGameObject(spellId) (Unit.cpp:5199):
+// the first gameobject in the caster's m_gameObj list whose spell id
+// matches. Go carries the owner link only on runtime-spawned GOs
+// (dynamicGameObjects / instanceGameObjects, OwnerGUID + SpellID stamped
+// at spawn — the Unit::AddGameObject twin, Unit.cpp:5208), so the scan
+// covers both registries and returns 0 when no such GO exists. Static DB
+// spawns carry OwnerGUID 0 and never match, like C++'s wild-summoned
+// objects that never enter m_gameObj (SpellEffects.cpp:3585).
+func (s *Server) gameObjectByOwnerSpell(ownerGUID uint64, spellID uint32) uint64 {
+	if s == nil || ownerGUID == 0 || spellID == 0 {
+		return 0
+	}
+	s.objectsMu.RLock()
+	defer s.objectsMu.RUnlock()
+	for _, state := range s.dynamicGameObjects {
+		if state != nil && state.IsRuntimeSpawn && state.OwnerGUID == ownerGUID && state.SpellID == spellID {
+			return state.GUID
+		}
+	}
+	for _, byGUID := range s.instanceGameObjects {
+		for _, state := range byGUID {
+			if state != nil && state.IsRuntimeSpawn && state.OwnerGUID == ownerGUID && state.SpellID == spellID {
+				return state.GUID
+			}
+		}
+	}
+	return 0
+}
+
+// removeGameObjectsByOwnerSpell mirrors Unit::RemoveGameObject(spellid, del)
+// (Unit.cpp:5263): every owned GO of that spell id has its owner link
+// cleared (Unit.cpp:5273) and is deleted. The channel-cleanup leg below
+// and the Lua RemoveGameObject bridge share this sweep.
+func (s *Server) removeGameObjectsByOwnerSpell(ownerGUID uint64, spellID uint32) {
+	if s == nil || ownerGUID == 0 || spellID == 0 {
 		return
 	}
 	type goRef struct {
@@ -2151,27 +2180,38 @@ func (s *session) removeChannelGameObjects(spellID uint32) {
 		guid       uint64
 	}
 	var refs []goRef
-	s.server.objectsMu.Lock()
+	s.objectsMu.Lock()
 	collect := func(state *dynamicGameObjectState) {
-		if state != nil && state.IsRuntimeSpawn && state.OwnerGUID == s.playerGUID && state.SpellID == spellID {
+		if state != nil && state.IsRuntimeSpawn && state.OwnerGUID == ownerGUID && state.SpellID == spellID {
 			state.OwnerGUID = 0 // C++ clears the owner link before Delete (Unit.cpp:5273)
 			refs = append(refs, goRef{mapID: state.Map, instanceID: state.InstanceID, guid: state.GUID})
 		}
 	}
-	for _, state := range s.server.dynamicGameObjects {
+	for _, state := range s.dynamicGameObjects {
 		collect(state)
 	}
-	for _, byGUID := range s.server.instanceGameObjects {
+	for _, byGUID := range s.instanceGameObjects {
 		for _, state := range byGUID {
 			collect(state)
 		}
 	}
-	s.server.objectsMu.Unlock()
+	s.objectsMu.Unlock()
 	for _, ref := range refs {
-		// OwnerGUID was cleared above, so the despawn skips SMSG_FISH_ESCAPED
-		// exactly like C++'s silent Delete.
-		s.server.despawnDynamicGameObjectInInstance(ref.mapID, ref.instanceID, ref.guid)
+		s.despawnDynamicGameObjectInInstance(ref.mapID, ref.instanceID, ref.guid)
 	}
+}
+
+// (EffectTransmitted FISHINGNODE arm, SpellEffects.cpp:4982-5000) is the
+// only runtime GO a player channel summons in Go; without this an
+// interrupted fishing channel (movement, new cast, damage abort) left the
+// bobber in the world, still catchable at the 100-yard bobber use range.
+func (s *session) removeChannelGameObjects(spellID uint32) {
+	if s == nil || s.server == nil || spellID == 0 {
+		return
+	}
+	// The shared sweep clears the owner link before Delete, so the
+	// despawn skips SMSG_FISH_ESCAPED exactly like C++'s silent Delete.
+	s.server.removeGameObjectsByOwnerSpell(s.playerGUID, spellID)
 }
 
 func (s *Server) despawnDynamicGameObject(guid uint64) {

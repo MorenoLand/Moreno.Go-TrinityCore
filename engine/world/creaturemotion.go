@@ -473,6 +473,17 @@ type creatureMotion struct {
 	// UNIT_MASK_PET instead, and DB-spawned creatures carry neither).
 	// Stamped only by the summon bridge (summonTempCreature); spell-
 	// effect summons have no Go producer, so no other path sets it.
+	IsGuardian bool
+	// IsGuardian is the Unit::IsGuardian twin (Unit.h:838 — the
+	// UNIT_MASK_GUARDIAN bit of m_unitTypeMask, minted by
+	// Map::SummonCreature's mask rule, Object.cpp:1897-1947). Stamped
+	// by the spell-summon sites that resolve SummonProperties
+	// (creatureEffectSummonType / creatureEffectSummonPet, via
+	// summonPropertiesIsGuardian); the Lua SummonCreature funnel and
+	// the pet path leave it false — C++ null-properties summons are
+	// UNIT_MASK_SUMMON and pets carry UNIT_MASK_PET instead.
+	// Read by Lua unit:IsGuardian on the creature surface; the player
+	// surface always reads false (Player never sets m_unitTypeMask).
 
 	// Looted mirrors Loot::isLooted (Loot.h:236 — gold == 0 && unlootedCount
 	// == 0): set when the corpse's loot window fully empties, cleared on

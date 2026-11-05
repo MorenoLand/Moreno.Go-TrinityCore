@@ -162,9 +162,11 @@
 -- DONE aura-remove + caster Z >= 750.0f) — no SpellScript/AuraScript
 -- binding bridge on the Lua surface (razelikh precedent) —
 -- documented-only.
+-- PORTED (tick 202, RegisterAuraEvent OnRemove):
 -- spell_hadronox_leeching_poison (53030 AuraScript: OnEffectRemove
 -- AURA_REMOVE_BY_DEATH (non-guardian) -> caster CastSpell(caster,
--- LEECH_POISON_HEAL 53800, triggered)) — no AuraScript binding bridge.
+-- LEECH_POISON_HEAL 53800, triggered)); the IsGuardian gate reads the
+-- new unit:IsGuardian bridge (Map::SummonCreature mask rule).
 -- spell_hadronox_web_doors (53177/53185 SpellScript: OnEffectHitTarget
 -- removes the three periodic-summon auras from the target) — no
 -- SpellScript binding bridge.
@@ -178,6 +180,28 @@ local ENTRY_CRUSHER = 28922
 
 local SPELL_PIERCE_ARMOR = 53418
 local SPELL_LEECH_POISON = 53030
+local SPELL_LEECH_POISON_HEAL = 53800 -- boss_hadronox.cpp:64
+local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
+
+-- C++ spell_hadronox_leeching_poison::HandleEffectRemove
+-- (boss_hadronox.cpp:1058-1066): EFFECT_0 PERIODIC_LEECH, REAL. On
+-- removal by death, if the target is not a guardian, the caster casts
+-- Leech Poison Heal 53800 on itself, triggered.
+local function leechingPoisonRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_DEATH then
+        return
+    end
+    if target:IsGuardian() then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, SPELL_LEECH_POISON_HEAL, true)
+end
+
+RegisterAuraEvent(SPELL_LEECH_POISON, 3, leechingPoisonRemove)
 local SPELL_WEB_GRAB = 57731
 local SPELL_ACID_CLOUD = 53400
 local SPELL_CRUSHER_FRENZY = 53801
