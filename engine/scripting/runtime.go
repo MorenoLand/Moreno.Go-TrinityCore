@@ -362,6 +362,14 @@ const (
 	CreatureEventOnDialogStatus            = 35
 	CreatureEventOnAdd                     = 36
 	CreatureEventOnRemove                  = 37
+	// CreatureEventOnDoAction is a Go-side extension (no C++ Eluna hook):
+	// CreatureAI::DoAction dispatches through the AI virtual table, which
+	// Lua-ported AIs have no bearer for, so creature:DoAction(action) is
+	// the transport — it fires (event, creature, action) on the entry
+	// then unique bindings, the void-hook twin of the other creature
+	// events (C++ DoAction returns void, so returns are discarded). 38
+	// is unused in the TrinityCore LuaEngine CreatureEvents numbering.
+	CreatureEventOnDoAction = 38
 )
 
 // AuraEvents contract for RegisterAuraEvent(spellID, event, fn). There is

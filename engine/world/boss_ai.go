@@ -13547,12 +13547,17 @@ func init() {
 	// ev14 bridge live, entry unverifiable), npc_lake_frog (EVENT_LAKEFROG_2/5
 	// timer Talk SAY_MAIDEN_0/1 — no-timer bridge; ReceiveEmote /
 	// gossip arms — no bridges), npc_rocket_propelled_warhead
-	// (VehicleAI PassengerBoarded/DoAction — no bridges), and the
-	// six spell loaders (spell_shredder_delivery,
-	// spell_infected_worgen_bite, spell_vehicle_warhead_fuse,
-	// spell_warhead_detonate, spell_z_check, spell_warhead_fuse —
-	// all SpellScript/AuraScript, no SpellScript bridge) are
-	// documented only.
+	// (VehicleAI PassengerBoarded / DoAction + spell_z_check 61678 /
+	// spell_warhead_fuse 49181 — ported 2026-11-05 in
+	// lua_scripts/northrend/npc_rocket_propelled_warhead.lua:
+	// DoAction bridge (event 38), RegisterVehicleEvent
+	// OnAddPassenger, ev14 SpellHit lumberboat arm, ev24 ReachHome
+	// reset; the 49250 detonate script legs run inline, no
+	// KnockbackFrom bridge), and the four remaining spell loaders
+	// (spell_shredder_delivery, spell_infected_worgen_bite,
+	// spell_vehicle_warhead_fuse, spell_warhead_detonate — all
+	// SpellScript, no SpellScript bridge) are documented only.
+	RegisterLuaBoss("npc_rocket_propelled_warhead", 27593)
 	RegisterLuaBoss("npc_emily", 26588)
 	// npc_apothecary_hanes (Howling Fjord zone script): the
 	// UpdateAI health arm — below 75% health the 10s PotTimer

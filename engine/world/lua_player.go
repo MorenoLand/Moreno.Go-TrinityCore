@@ -2699,6 +2699,15 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.server.luaVehicleObject(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)}, nil
 	}
+	// ExitVehicle is Unit::ExitVehicle (UnitMethods.h) = Unit::_ExitVehicle
+	// (Unit.cpp:13193): the session exitVehicle leg (vehicle.go) — seat
+	// removal, control release, and the OnRemovePassenger vehicle event
+	// for creature bases. A player who rides nothing no-ops there, like
+	// C++.
+	methods["ExitVehicle"] = func(ctx context.Context, _ []any) ([]any, error) {
+		s.exitVehicle(ctx)
+		return nil, nil
+	}
 	// GetTransport is Player::GetTransport (Player.h): the transport
 	// the player rides, or nil. Go tracks the ride in
 	// playerState.TransportGUID (movement.go) and the spawn in the

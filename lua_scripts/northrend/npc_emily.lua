@@ -92,14 +92,15 @@
 -- OnGossipSelect (zone_grizzly_hills.cpp:777-781: ungated DoCast(player,
 -- SPELL_SUMMON_ASHWOOD_BRAND 62554)) is PORTED below — no menuId or
 -- gossipListId gate in C++, so the Lua port gates on nothing either.
--- npc_rocket_propelled_warhead: VehicleAI PassengerBoarded DoCast
--- SPELL_VEHICLE_WARHEAD_FUSE + DoAction MovePoint chain — no
--- PassengerBoarded / no-DoAction / no-movement bridges.
--- spell_shredder_delivery / spell_infected_worgen_bite /
--- spell_vehicle_warhead_fuse / spell_warhead_detonate /
--- spell_z_check / spell_warhead_fuse: all SpellScript/AuraScript
--- — no SpellScript/AuraScript bridge anywhere in the model
--- (sindragosa ice_tomb_target precedent).
+-- npc_rocket_propelled_warhead + spell_z_check / spell_warhead_fuse:
+-- PORTED 2026-11-05 in lua_scripts/northrend/
+-- npc_rocket_propelled_warhead.lua (DoAction bridge event 38,
+-- RegisterVehicleEvent OnAddPassenger, ev14/ev24 arms) — the
+-- "no bridges" claim above is retracted for those three; the
+-- remaining spell loaders (spell_shredder_delivery /
+-- spell_infected_worgen_bite / spell_vehicle_warhead_fuse /
+-- spell_warhead_detonate) stay SpellScript-only, no SpellScript
+-- bridge anywhere in the model (sindragosa ice_tomb_target precedent).
 
 local ENTRY_EMILY = 26588
 local ENTRY_MRFLOPPY = 26589 -- zone_grizzly_hills.cpp:36 (NPC_MRFLOPPY)

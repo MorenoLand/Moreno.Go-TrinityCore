@@ -791,6 +791,31 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{data}, nil
 	}
+	// DoAction is the CreatureAI::DoAction dispatch twin (CreatureAI.h):
+	// the C++ call runs the AI's virtual override for the action id, and
+	// Lua-ported AIs have no AI object — so this fires the Go-side
+	// CREATURE_EVENT_ON_DO_ACTION (38) hook with (event, creature,
+	// action) on the entry then unique bindings, the void-hook twin of
+	// the other creature events (C++ DoAction returns void, so the hook
+	// returns are discarded). Aura scripts call it on the target creature
+	// exactly as the C++ scripts call target->AI()->DoAction(action).
+	methods["DoAction"] = func(ctx context.Context, args []any) ([]any, error) {
+		action, err := luaInt32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil || s.Features == nil || s.Features.Scripts == nil {
+			return nil, nil
+		}
+		creature := s.luaMotionCreature(motion)
+		if creature == nil {
+			return nil, nil
+		}
+		doArgs := []any{scripting.CreatureEventOnDoAction, creature, action}
+		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnDoAction, doArgs...)
+		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDoAction, doArgs...)
+		return nil, nil
+	}
 	// IsInBack(target[, arc]) is WorldObject::isInBack(target, arc) =
 	// !HasInArc(2*pi - arc, target) (Object.cpp:1417-1420), the event-surface
 	// twin of the session bridge (lua_objects.go:477-496); Eluna's arc
