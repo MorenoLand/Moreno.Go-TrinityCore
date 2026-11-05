@@ -15,12 +15,13 @@
 -- scheduler pump); melee is engine-driven in Go (creature combat
 -- tick), like C++ DoMeleeAttackIfReady. C++ DoCast default is
 -- triggered=false (vaelastrasz convention).
+-- Cast-state gates: NONE on ported arms — ScriptedAI own UpdateAI override, plain countdowns, zero HasUnitState(UNIT_STATE_CASTING) gates; mark/shadow-bolt fire ungated, C++-exact (the !UpdateVictim IsNonMeleeSpellCast check guards the unported channeling arm only).
 -- Fight shape (C++-exact for all modeled arms): Channeler
 -- (17653): OnEnterCombat(1): per-GUID reset to the C++
 -- Initialize() values (shadowBolt 1000+rand32()%1000 /
 -- markOfShadow 5000+rand32()%2000 — the C++ JustEngagedWith's
 -- ChannelerEngaged relay is cross-creature blocked, the
--- InterruptNonMeleeSpells arm has no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) and the
+-- InterruptNonMeleeSpells arm stays unmodeled (interrupt-axis verdict, mennu/thespia precedent; IsCasting is bridged — live CastingUntil window) and the
 -- DoStartMovement arm (= MoveChase(victim)) is subsumed by the engine combat chase) + 1s scheduler
 -- pump (a port of UpdateAI — 1s granularity exact for all C++
 -- timers; the !UpdateVictim early return collapses into the
@@ -48,9 +49,9 @@
 -- (who) relay) and the JustDied ChannelerDied(killer) relay
 -- (which drives Kelidan's all-channelers-dead activation —
 -- REACT_AGGRESSIVE + RemoveFlag(NON_ATTACKABLE) +
--- SetImmuneToAll(false) + AttackStart(killer)); no unit-state
--- bridge — the Reset/JustEngagedWith InterruptNonMeleeSpells
--- arms unmodeled (mennu/thespia precedent); H_SPELL_SHADOW_BOLT
+-- SetImmuneToAll(false) + AttackStart(killer)); IsCasting is bridged
+-- (live CastingUntil window) but the Reset/JustEngagedWith InterruptNonMeleeSpells
+-- arms stay unmodeled (interrupt-axis verdict, mennu/thespia precedent); H_SPELL_SHADOW_BOLT
 -- 15472 is an unused C++ enum member (the cast is
 -- unconditional); no movement bridge — the JustEngagedWith
 -- DoStartMovement arm is engine-chase-subsumed (see above).

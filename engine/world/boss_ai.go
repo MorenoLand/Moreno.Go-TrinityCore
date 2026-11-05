@@ -12632,6 +12632,10 @@ func init() {
 	// random player and shadow bolt on the victim; its pre-combat
 	// GetChanneled channeling machine and its Kelidan relays are
 	// cross-creature gated (bookkeeping only).
+	// Cast-state gates: NONE on either — kelidan's own UpdateAI
+	// override uses raw timers with zero CASTING checks (BossAI
+	// base gates inapplicable); channeler's ScriptedAI UpdateAI
+	// is plain countdowns, zero CASTING checks.
 	// Fight logic in lua_scripts/hellfirecitadel/boss_kelidan_the_
 	// breaker.lua and lua_scripts/hellfirecitadel/npc_shadowmoon_
 	// channeler.lua.
@@ -12646,6 +12650,9 @@ func init() {
 	// (SAY_KILL, 3-arg handler convention) and death (SAY_DIE).
 	// The BossAI ctor DATA_THE_MAKER bookkeeping has no
 	// instance-script bridge (timer bookkeeping exact).
+	// Cast-state gating PORTED on all 4 ticks: BossAI base gates
+	// (ScriptedCreature.cpp:571-589, no boss UpdateAI override)
+	// via the shared-pump and-not-IsCasting idiom (broggok precedent).
 	// Fight logic in lua_scripts/hellfirecitadel/boss_the_
 	// maker.lua.
 	RegisterLuaBoss("boss_the_maker", 17381)
@@ -12668,6 +12675,10 @@ func init() {
 	// npc_lesser_shadow_fissure documented only (all four AI
 	// overrides empty — ahune bunny empty-skeleton
 	// precedent).
+	// Cast-state gates: NONE — nethekurse's own UpdateAI override
+	// uses raw timers with zero CASTING checks (BossAI base gates
+	// inapplicable); convert's ScriptedAI UpdateAI is a plain
+	// EventMap loop, zero CASTING checks.
 	// Fight logic in lua_scripts/shatteredhalls/boss_nethe
 	// kurse.lua and lua_scripts/shatteredhalls/npc_fel_orc_
 	// convert.lua.

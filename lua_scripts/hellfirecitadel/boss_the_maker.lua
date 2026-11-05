@@ -127,6 +127,13 @@ local function freshState()
     }
 end
 
+-- Cast-state gating PORTED (BossAI base gates, ScriptedCreature.cpp:571-589:
+-- no boss UpdateAI override, so BossAI::UpdateAI's pre-loop :578 + in-loop
+-- :584 CASTING gates apply to all 4 arms): each expired arm carries
+-- `and not creature:IsCasting()` (broggok precedent) — while casting it
+-- fires nothing and consumes no re-arm, the timer staying expired via
+-- the else-branch countdown; unexpired arms keep counting down since
+-- C++ events.Update precedes the gate.
 local function bossTick(creature, guid)
     local st = states[guid]
     if not st then
@@ -136,7 +143,7 @@ local function bossTick(creature, guid)
     -- Acid spray 38153: 15s init then {15s,23s} — non-triggered
     -- DoCastVictim (felmyst convention), re-arm {15s,23s}
     -- regardless (C++-exact).
-    if st.acidSpray <= 1000 then
+    if st.acidSpray <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_ACID_SPRAY)
         st.acidSpray = math.random(15000, 23000)
     else
@@ -147,7 +154,7 @@ local function bossTick(creature, guid)
     -- threat-list player alive within 30 yd, nil pick casts nothing, non-triggered
     -- DoCast on the target (C++-exact), re-arm {4s,12s}
     -- regardless (C++-exact).
-    if st.explodingBreaker <= 1000 then
+    if st.explodingBreaker <= 1000 and not creature:IsCasting() then
         local target = pickRandomPlayerIn30Yd(creature)
         if target then
             creature:CastSpell(target, SPELL_EXPLODING_BREAKER)
@@ -161,7 +168,7 @@ local function bossTick(creature, guid)
     -- threat-list player alive, no distance limit, nil pick casts nothing, non-triggered
     -- DoCast on the target (C++-exact), re-arm 120000
     -- regardless (C++-exact).
-    if st.domination <= 1000 then
+    if st.domination <= 1000 and not creature:IsCasting() then
         local target = pickRandomThreatPlayer(creature)
         if target then
             creature:CastSpell(target, SPELL_DOMINATION)
@@ -174,7 +181,7 @@ local function bossTick(creature, guid)
     -- Knockdown 20276: 10s init then {4s,12s} — non-triggered
     -- DoCastVictim (C++-exact), re-arm {4s,12s} regardless
     -- (C++-exact).
-    if st.knockdown <= 1000 then
+    if st.knockdown <= 1000 and not creature:IsCasting() then
         creature:CastSpell(nil, SPELL_KNOCKDOWN)
         st.knockdown = math.random(4000, 12000)
     else

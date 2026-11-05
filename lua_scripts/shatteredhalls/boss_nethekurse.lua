@@ -25,6 +25,7 @@
 -- Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- C++ DoCast default is triggered=false (vaelastrasz
 -- convention).
+-- Cast-state gates: NONE on ported arms — own UpdateAI override, raw timers, zero HasUnitState(UNIT_STATE_CASTING) gates (BossAI base gates inapplicable); fissure/coil/spin/cleave fire ungated, C++-exact.
 -- Fight shape (C++-exact for all modeled arms): Nethekurse
 -- (16807): OnEnterCombat(1): per-GUID reset to the C++
 -- Initialize() values (deathCoil 20000 / shadowFissure 8000 /

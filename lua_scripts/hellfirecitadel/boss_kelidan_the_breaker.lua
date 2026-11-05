@@ -20,11 +20,12 @@
 -- (per-GUID scheduler pump); melee is engine-driven in Go (creature
 -- combat tick), like C++ DoMeleeAttackIfReady. C++ DoCast default is
 -- triggered=false (vaelastrasz convention).
+-- Cast-state gates: NONE on ported arms — own UpdateAI override, raw timers, zero HasUnitState(UNIT_STATE_CASTING) gates (BossAI base gates inapplicable); volley/corruption/burning-nova/firenova fire ungated, C++-exact.
 -- Fight shape (C++-exact for all modeled arms): Kelidan (17377):
 -- OnEnterCombat(1): per-GUID reset to the C++ Initialize() values
 -- (shadowVolley 1000 / burningNova 15000 / corruption 5000 / firenova
 -- false — the C++ JustEngagedWith does not schedule anything; the
--- InterruptNonMeleeSpells arm has no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) and the
+-- InterruptNonMeleeSpells arm stays unmodeled (interrupt-axis verdict, mennu/thespia precedent; IsCasting is bridged — live CastingUntil window, lua_creature_events.go:1950) and the
 -- DoStartMovement arm (= MoveChase(victim), ScriptedCreature.cpp:159-163) is subsumed by the engine combat chase) + Talk(SAY_WAKE) + 1s
 -- scheduler pump (a port of UpdateAI — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into the
@@ -41,7 +42,7 @@
 -- (C++ {30s,50s}) — non-triggered DoCastSelf (C++-exact), re-arm
 -- {30s,50s} regardless (C++-exact); burning nova: 15s init then
 -- 20000+rand32()%8000 (C++ {20s,28s}) — the InterruptNonMeleeSpells
--- arm has no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget); Talk(SAY_NOVA); the AddAura(SPELL_
+-- arm stays unmodeled (interrupt-axis verdict, mennu/thespia precedent; IsCasting is bridged — live CastingUntil window); Talk(SAY_NOVA); the AddAura(SPELL_
 -- BURNING_NOVA 30940, me) arm is ported below (stale "no aura
 -- bridge" claim retracted — creature AddAura is bridged); the
 -- IsHeroic() DoTeleportAll arm is ported below (stale "no teleport
@@ -84,9 +85,10 @@
 -- unconsumed in Go today — see the ev23 note), and with it the
 -- !UpdateVictim evocation (SPELL_
 -- EVOCATION 30935) check_Timer arm, which only fires in that
--- state; no live unit-state read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — the JustEngagedWith and burning-
--- nova InterruptNonMeleeSpells arms unmodeled (mennu/thespia
--- precedent); the burning-nova AddAura(30940) arm is ported
+-- state; IsCasting is bridged (live CastingUntil window,
+-- lua_creature_events.go:1950) but the JustEngagedWith and burning-
+-- nova InterruptNonMeleeSpells arms stay unmodeled (interrupt-axis verdict,
+-- mennu/thespia precedent); the burning-nova AddAura(30940) arm is ported
 -- (stale "no aura bridge" claim retracted); the heroic DoTeleportAll
 -- arm is ported below (stale "no teleport bridge" retracted —
 -- player:TeleportNear is bridged); the H_SPELL_ variants

@@ -17,6 +17,7 @@
 -- scheduler pump); melee is engine-driven in Go (creature
 -- combat tick), like C++ DoMeleeAttackIfReady. C++ DoCast
 -- default is triggered=false (vaelastrasz convention).
+-- Cast-state gates: NONE — ScriptedAI own UpdateAI override, plain EventMap loop, zero HasUnitState(UNIT_STATE_CASTING) gates; hemorrhage fires ungated, C++-exact.
 -- Fight shape (C++-exact for all modeled arms): Convert
 -- (17083): OnEnterCombat(1): per-GUID reset to the C++ Just
 -- EngagedWith schedule value (hemorrhage 3000) + 1s
