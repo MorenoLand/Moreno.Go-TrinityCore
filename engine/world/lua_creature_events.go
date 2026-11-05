@@ -5802,6 +5802,50 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{s.instanceBossState(mapID, instanceID, bossID)}, nil
 	}
+	// SendEncounterUnit(frameType, unit, param1, param2) bridges
+	// InstanceScript::SendEncounterUnit (InstanceScript.cpp:703-736)
+	// over sendEncounterUnit (instance_encounter_frame.go): the
+	// encounter-frame packet for the creature's instance. frameType is
+	// the EncounterFrame enum (InstanceScript.h:57-64): ENGAGE 0,
+	// DISENGAGE 1, UPDATE_PRIORITY 2, ADD_TIMER 3, ENABLE_OBJECTIVE 4,
+	// UPDATE_OBJECTIVE 5, DISABLE_OBJECTIVE 6, UNK7 7. unit is the
+	// frame's creature — a Lua creature/player object or a bare GUID —
+	// and defaults to the calling creature (the `me` at nearly every
+	// C++ site); an explicit nil unit sends nothing for the
+	// GUID-carrying types, C++-exact (the C++ early return). param1
+	// and param2 are optional uint8s defaulting to 0; the sender
+	// writes only the bytes each frame type carries. No return value,
+	// matching the C++ void.
+	methods["SendEncounterUnit"] = func(_ context.Context, args []any) ([]any, error) {
+		frameType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		unitGUID := motion.GUID
+		if len(args) > 1 && args[1] != nil {
+			unitGUID = luaObjectGUID(args[1])
+		}
+		var param1, param2 uint8
+		if len(args) > 2 {
+			p1, err := luaUint32Arg(args, 2)
+			if err != nil {
+				return nil, err
+			}
+			param1 = uint8(p1)
+		}
+		if len(args) > 3 {
+			p2, err := luaUint32Arg(args, 3)
+			if err != nil {
+				return nil, err
+			}
+			param2 = uint8(p2)
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		s.sendEncounterUnit(mapID, instanceID, unitGUID, frameType, param1, param2)
+		return nil, nil
+	}
 	// HasQuest is CreatureMethods::HasQuest (CreatureMethods.h):
 	// Creature::hasQuest (Creature.cpp:1851-1854) = the creature-quest
 	// starter relation (ObjectMgr.cpp:8439 loads creature_queststarter

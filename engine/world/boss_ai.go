@@ -18932,9 +18932,10 @@ func init() {
 	// Auriaya (33515), Ulduar —
 	// lua_scripts/northrend/boss_auriaya.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1; the BossAI::JustEngagedWith passthrough, the
-	// SendEncounterUnit engage leg and the five ScheduleEvent
-	// legs have no bridges); KilledUnit player-gated +
+	// (event 1; the BossAI::JustEngagedWith passthrough ports via
+	// SetCombatPulseDelay + DoZoneInCombat, the SendEncounterUnit
+	// engage leg ports, and the five ScheduleEvent legs port as
+	// CreateLuaEvent timers); KilledUnit player-gated +
 	// roll_chance_i(50) Talk(SAY_SLAY 1) (event 3 — razuvious
 	// player-gated variant precedent plus the chance gate:
 	// math.random(1, 100) <= 50; first chance-gated slay variant
@@ -18962,8 +18963,8 @@ func init() {
 	// / DATA_CRAZY_CAT_LADY 30063007) — no DoAction / GetData
 	// bridges; JustDied (DoPlaySoundToSet 15476 +
 	// SendEncounterUnit disengage + HandleCats(false) grid
-	// despawn — no Talk arms, no bridges; event 4 not
-	// registered); the UpdateAI event machine's remaining legs
+	// despawn — no Talk arms; the sound, disengage and
+	// HandleCats(false) legs port, event 4 registered); the UpdateAI event machine's remaining legs
 	// (EVENT_SWARNING_GUARDIAN random-target DoCast 64396 25-45s
 	// + summon leg — no target-search / summon bridges);
 	// npc_sanctum_sentry remaining legs (Reset self-buff 64369
@@ -19119,11 +19120,13 @@ func init() {
 	// (maiden/baltharus convention, GUID-keyed timers, cancel on
 	// events 2/4/23; cast-before-Talk order kept); event 1 models
 	// only the berserk timer leg — JustEngagedWith carries no
-	// Talk arms on the boss itself (BossAI passthrough +
-	// SendEncounterUnit + phase-machine ScheduleAirPhaseEvents +
-	// summons DoAction + HandleMusic legs have no bridges);
-	// JustDied carries no Talk arms (event 4 models only the
-	// timer wipe — the auriaya JustDied-wipe precedent).
+	// Talk arms on the boss itself (BossAI passthrough ports via
+	// SetCombatPulseDelay + DoZoneInCombat, the SendEncounterUnit
+	// engage leg ports; phase-machine ScheduleAirPhaseEvents +
+	// summons DoAction legs have no bridges; HandleMusic ports via
+	// UpdateWorldState);
+	// JustDied carries no Talk arms (event 4 models the timer wipe
+	// + HandleMusic(false) + the SendEncounterUnit disengage leg).
 	// Documented-only: the whole air/ground/perma-ground phase
 	// machine (DoAction ACTION_START_FIGHT / ACTION_GROUND_PHASE
 	// / ACTION_START_PERMA_GROUND / ACTION_RETURN_TO_BASE,

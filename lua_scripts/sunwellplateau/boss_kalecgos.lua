@@ -62,11 +62,15 @@
 -- creature DoAction, which now ports via grid sweep + 1s outro-start
 -- (kalecgosOutroStart below); the OUTRO_1/2/3 movement chain
 -- (SAY_OUTRO_1/2, gravity/liftoff/MovePoint/invisible/KillSelf arms)
--- stays out. OnDamageTaken(9, pre-damage hook): lethal from anyone but
+-- stays out. The encounter-frame disengage leg ports in
+-- kalecgosOutroStart below (bridge live 2026-11-05).
+-- OnDamageTaken(9, pre-damage hook): lethal from anyone but
 -- self -> damage rewritten to 0 (C++ damage = 0, C++-exact).
 -- OnTargetDied(3): player victim + 50% roll -> Talk(SAY_EVIL_SLAY).
 -- OnLeaveCombat(2)/OnReset(23): the EnterEvadeMode instance arms
--- (SendEncounterUnit disengage, DoRemoveAurasDueToSpellOnPlayers(
+-- (SendEncounterUnit disengage — PORTED on ev2 via
+-- creature:SendEncounterUnit, bridge live 2026-11-05;
+-- DoRemoveAurasDueToSpellOnPlayers(
 -- SPELL_SPECTRAL_REALM_AURA 46021, true, true — the
 -- includePets/includeControlled legs have no pet/controlled
 -- iteration bridge),
@@ -358,6 +362,7 @@ local function kalecgosEnterCombat(event, creature, target)
     cancelTimers(guid)
     kalecgosState[guid] = { enraged = false, banished = false }
     creature:Talk(SAY_EVIL_AGGRO)
+    creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE (boss_kalecgos.cpp:213; C++ sends before Talk, base-first convention here)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "arcanebuffet", 8000, function()
@@ -394,6 +399,10 @@ end
 
 local function kalecgosLeaveCombat(event, creature)
     kalecgosResetState(creature:GetGUID())
+    -- C++ EnterEvadeMode (boss_kalecgos.cpp:169): disengage before
+    -- DespawnPortals; DoRemoveAurasDueToSpellOnPlayers /
+    -- summons.DespawnAll / _DespawnAtEvade legs stay out (no bridges).
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
     -- C++ EnterEvadeMode's DespawnPortals (boss_kalecgos.cpp:172-186):
     -- every spectral-rift GO within the default 250yd grid scan is
     -- Delete()d; Lua Despawn is the hide-in-instance twin (the
@@ -417,7 +426,7 @@ end
 -- sets PHASE_OUTRO, stops regen, goes passive, interrupts casts, drops
 -- attackers, stops attacks, goes friendly, clears auras, disengages the
 -- encounter frame, and schedules OUTRO_1 3s. The encounter-frame leg
--- and the OUTRO_1/2/3 movement chain stay out; the combat-stop legs
+-- ports here; the OUTRO_1/2/3 movement chain stays out. The combat-stop legs
 -- port here. cancelTimers subsumes the phase reset: every combat timer
 -- in this file runs through schedule(), so cancelling them is the
 -- PHASE_OUTRO gate. Arm order is C++-exact.
@@ -439,6 +448,7 @@ local function kalecgosOutroStart(creature, guid)
     creature:AttackStop()
     creature:SetFaction(FACTION_FRIENDLY)
     creature:RemoveAllAuras()
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_kalecgos.cpp:321)
 end
 
 -- C++ DamageTaken: lethal from anyone but self -> damage = 0

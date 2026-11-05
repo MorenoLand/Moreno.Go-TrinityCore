@@ -30,8 +30,9 @@
 -- boss_auriaya.cpp):
 -- JustEngagedWith (:160-170) — Talk(SAY_AGGRO 0) + the five
 -- bridgeable timer legs below (event 1; the
--- BossAI::JustEngagedWith passthrough and the SendEncounterUnit
--- engage leg have no bridges — the boss_bookkeeping precedent).
+-- BossAI::JustEngagedWith passthrough ports via SetCombatPulseDelay
+-- + DoZoneInCombat, and the SendEncounterUnit engage leg ports via
+-- creature:SendEncounterUnit, bridge live 2026-11-05).
 -- EVENT_SONIC_SCREECH (:234-236) — DoCastVictim
 -- (SPELL_SONIC_SCREECH 64422) 2-arg non-triggered, 48s init
 -- (:165), re-arm {22s,30s}.
@@ -90,10 +91,10 @@
 -- JustDied (:206-212) — DoPlaySoundToSet(15476) ported via
 -- creature:PlayDirectSound (dedicated auriayaDied); HandleCats(false)
 -- despawn leg ported there too (see above); the SendEncounterUnit
--- disengage + HandleCats(true) respawn legs have no
--- instance/grid bridges; no Talk arms.
--- EnterEvadeMode (:214-218) — SendEncounterUnit disengage + BossAI
--- leg — no bridge.
+-- disengage leg ports there too (bridge live 2026-11-05); the
+-- HandleCats(true) respawn leg has no instance/grid bridge; no Talk arms.
+-- EnterEvadeMode (:214-218) — SendEncounterUnit disengage ports on
+-- event 2 (dedicated auriayaLeaveCombat); the BossAI leg has no bridge.
 -- The UNIT_STATE_CASTING gates (boss own UpdateAI pre-loop :227 +
 -- in-loop :268; sentry pre-loop :311 + in-loop :335) are PORTED as a
 -- 500ms IsCasting defer in every timer tick (mal_ganis idiom;
@@ -327,11 +328,12 @@ end
 
 -- C++ JustEngagedWith (:160-170): BossAI passthrough + Talk(AGGRO)
 -- + encounter-frame engage + the five ScheduleEvent legs — the
--- Talk and the four bridgeable timer legs are modeled here.
+-- Talk, the engage leg, and the four bridgeable timer legs are modeled here.
 local function auriayaEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_auriaya.cpp:162)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
+    creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE (boss_auriaya.cpp:164)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "sonic", 48000, function()
@@ -360,8 +362,10 @@ local function auriayaTargetDied(event, creature, victim)
     end
 end
 
--- Shared timer wipe for events 2/4/23 (auriaya JustDied :206-212
--- carries no Talk arms, so event 4 models only the wipe).
+-- Shared timer wipe for events 4/23 (and the sentry's event 2;
+-- auriaya's own event 2 runs auriayaLeaveCombat above, which
+-- disengages first). Auriaya JustDied :206-212 carries no Talk arms,
+-- so event 4 models only the wipe.
 local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
@@ -448,7 +452,8 @@ end
 -- creature:GetCreaturesInGrid is bridged, lua_creature_events.go:1204;
 -- entry 34014 registered, event 4 already wired). The HandleCats(true)
 -- Respawn leg on Reset PORTED 2026-10-24 in auriayaReset; the
--- _JustDied() and SendEncounterUnit disengage legs have no instance bridges.
+-- _JustDied() leg has no instance bridge; the SendEncounterUnit
+-- disengage leg ports in auriayaDied below (bridge live 2026-11-05).
 -- C++ boss_auriaya Reset (:139-145): _Reset() (instance state, no
 -- bridge) + flags + HandleCats(true) (:147-158): every dead sanctum
 -- sentry (34014) within 500.0f respawns. GetCreaturesInGrid enumerates
@@ -467,14 +472,23 @@ end
 
 local function auriayaDied(event, creature, killer)
     creature:PlayDirectSound(SOUND_AURIAYA_DEATH)
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_auriaya.cpp:210)
     cancelCombatTimers(event, creature)
     for _, sentry in ipairs(creature:GetCreaturesInGrid(ENTRY_SANCTUM_SENTRY, 500)) do
         sentry:Despawn()
     end
 end
 
+-- C++ EnterEvadeMode (:214-218): disengage first, then
+-- BossAI::EnterEvadeMode (no bridge). Event 2 only — the shared
+-- cancelCombatTimers stays on events 4/23, which carry no disengage.
+local function auriayaLeaveCombat(event, creature)
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
+    cancelCombatTimers(event, creature)
+end
+
 RegisterCreatureEvent(ENTRY_AURIAYA, 1, auriayaEnterCombat)
-RegisterCreatureEvent(ENTRY_AURIAYA, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_AURIAYA, 2, auriayaLeaveCombat)
 RegisterCreatureEvent(ENTRY_AURIAYA, 3, auriayaTargetDied)
 RegisterCreatureEvent(ENTRY_AURIAYA, 4, auriayaDied)
 RegisterCreatureEvent(ENTRY_AURIAYA, 23, auriayaReset)

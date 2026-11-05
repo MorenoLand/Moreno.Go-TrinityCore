@@ -328,7 +328,7 @@ end
 -- (C++ EVENT_THROW, the third scheduled task, is vehicle-bound —
 -- documented-only above.)
 local function enterCombat(event, creature, target)
-    creature:SetCombatPulseDelay(5) -- boss_northrend_beasts.cpp:251 (base JustEngagedWith arm 1; setActive/HandleInstanceProgress/SendEncounterUnit legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_northrend_beasts.cpp:251 (base JustEngagedWith arm 1; setActive/HandleInstanceProgress legs have no bridge)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "impale", 10000, function()
@@ -337,9 +337,27 @@ local function enterCombat(event, creature, target)
     schedule(guid, "stomp", 15000, function()
         stompTick(creature, guid)
     end)
+    -- C++ JustEngagedWith (:255): encounter-frame engage after
+    -- ScheduleTasks/HandleInstanceProgress (the two schedule() calls
+    -- above are the ScheduleTasks legs).
+    creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE
 end
 
 local function leaveCombat(event, creature)
+    -- C++ EnterEvadeMode (:284): disengage after the instance
+    -- SetData(DATA_DESPAWN_SNOBOLDS) leg (no bridge); the SetData
+    -- FAIL / stalker-despawn / summons.DespawnAll /
+    -- DespawnOrUnsummon legs stay out.
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ boss_northrend_beastsAI::JustDied (:296): disengage is the
+-- first arm; the SetData(TYPE_NORTHREND_BEASTS, GORMOK_DONE) leg
+-- has no bridge. The worm JustDied disengage (:719) stays out —
+-- the Acidmaw/Dreadscale AI is unported (no Lua handlers).
+local function gormokDied(event, creature, killer)
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
     cancelTimers(creature:GetGUID())
 end
 
@@ -350,4 +368,5 @@ end
 
 RegisterCreatureEvent(ENTRY_GORMOK, 1, enterCombat)
 RegisterCreatureEvent(ENTRY_GORMOK, 2, leaveCombat)
+RegisterCreatureEvent(ENTRY_GORMOK, 4, gormokDied)
 RegisterCreatureEvent(ENTRY_GORMOK, 23, reset)

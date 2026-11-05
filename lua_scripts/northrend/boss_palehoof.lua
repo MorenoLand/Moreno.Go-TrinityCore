@@ -52,8 +52,10 @@
 -- boss_palehoof JustEngagedWith (:222-230, base-first) — BossAI::
 -- JustEngagedWith arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
 -- (ScriptedCreature.cpp:540/542) ported before Talk(SAY_AGGRO 0)
--- (event 1; instance SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE) and
--- setActive legs out) — plus the three timer arms (BossAI-base-gated, see below),
+-- (event 1; the instance SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE)
+-- leg ports after the timer arms via creature:SendEncounterUnit,
+-- bridge live 2026-11-05; the setActive leg stays out) — plus the
+-- three timer arms (BossAI-base-gated, see below),
 -- scheduled here on the xt002 precedent (C++ schedules on
 -- JustEngagedWith, Go on event 1, same inits):
 --   EVENT_ARCING_SMASH (arm :236-239): DoCastVictim(SPELL_ARCING_SMASH
@@ -137,8 +139,12 @@
 -- entries above):
 -- boss_palehoof JustDied (:250-256) — DoPlaySoundToSet(PALEHOOF_SOUND_
 -- DEATH 13467) with no Talk ported via creature:PlayDirectSound
--- (dedicated palehoofDied); the instance SetBossState(DONE) +
--- SendEncounterUnit disengage legs have no instance bridges.
+-- (dedicated palehoofDied); the instance SetBossState(DONE) leg ports
+-- via creature:SetBossState (bridge live 2026-11-05) and the
+-- SendEncounterUnit disengage leg via creature:SendEncounterUnit.
+-- EnterEvadeMode (:260-265) — SendEncounterUnit disengage ports on
+-- event 2 (dedicated palehoofLeaveCombat); the summons.DespawnAll /
+-- _DespawnAtEvade legs stay out (no bridges).
 -- PalehoofMinionsBossAI Reset (:329-335) — DoCastSelf(SPELL_FREEZE
 -- 16245, true) PORTED as a triggered self-cast on event 23
 -- (minibossReset; the anubrekhan/auriaya/ichoron triggered-3rd-arg
@@ -333,8 +339,9 @@ local function witheringRoarTick(creature, guid)
 end
 
 -- C++ boss_palehoofAI::JustEngagedWith (:222-230): BossAI::JustEngagedWith
--- base-first (pulse + me-DoZone ported above Talk; SendEncounterUnit/
--- setActive legs out); Talk(SAY_AGGRO) — unconditional (the auriaya
+-- base-first (pulse + me-DoZone ported above Talk; SendEncounterUnit
+-- ports after the timer arms below — C++ sends it last, :229);
+-- Talk(SAY_AGGRO) — unconditional (the auriaya
 -- engage-port precedent) — plus the three event-schedule inits (:226-228)
 -- carried on event 1 on the xt002 precedent.
 local function palehoofEnterCombat(event, creature, target)
@@ -354,6 +361,7 @@ local function palehoofEnterCombat(event, creature, target)
     schedule(guid, "witheringroar", 12000, function()
         witheringRoarTick(creature, guid)
     end)
+    creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE (boss_palehoof.cpp:229)
 end
 
 -- C++ KilledUnit (:269-273): if (who->GetTypeId() == TYPEID_PLAYER)
@@ -538,12 +546,13 @@ local function palehoofReset(event, creature)
 end
 
 -- C++ boss_palehoofAI::JustDied (:250-256): events.Reset() +
--- instance->SetBossState(DATA_GORTOK_PALEHOOF, DONE) (no instance
--- bridge) + DoPlaySoundToSet(me, PALEHOOF_SOUND_DEATH 13467) +
--- SendEncounterUnit disengage (no bridge); no Talk arms.
+-- instance->SetBossState(DATA_GORTOK_PALEHOOF, DONE) + DoPlaySoundToSet(me, PALEHOOF_SOUND_DEATH 13467) +
+-- SendEncounterUnit disengage; no Talk arms. Arm order is C++-exact.
 local function palehoofDied(event, creature, killer)
-    creature:PlayDirectSound(SOUND_PALEHOOF_DEATH)
     cancelCombatTimers(event, creature)
+    creature:SetBossState(1, 3) -- DATA_GORTOK_PALEHOOF, DONE (boss_palehoof.cpp:257)
+    creature:PlayDirectSound(SOUND_PALEHOOF_DEATH)
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_palehoof.cpp:259)
     -- C++ instance_utgarde_pinnacle OnGameObjectCreate leg (sphere
     -- flagged NOT_SELECTABLE when GORTOK_PALEHOOF is DONE), run at
     -- DONE time: the static sphere never fires GO-create in Go
@@ -555,8 +564,17 @@ local function palehoofDied(event, creature, killer)
     end
 end
 
+-- C++ boss_palehoofAI::EnterEvadeMode (:260-265): disengage first,
+-- then events.Reset + summons.DespawnAll + _DespawnAtEvade (no
+-- bridges). Event 2 only — the minibosses keep the shared
+-- cancelCombatTimers on event 2 (no SendEncounterUnit in their AI).
+local function palehoofLeaveCombat(event, creature)
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
+    cancelCombatTimers(event, creature)
+end
+
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 1, palehoofEnterCombat)
-RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 2, palehoofLeaveCombat)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 3, palehoofKilledUnit)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 4, palehoofDied)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 23, palehoofReset)
