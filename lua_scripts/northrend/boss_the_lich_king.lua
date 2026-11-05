@@ -688,3 +688,38 @@ local function soulReaperTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SOUL_REAPER, 1, soulReaperTick)
+
+-- C++ spell_the_lich_king_necrotic_plague_jump_aura::OnApply
+-- (boss_the_lich_king.cpp:2078-2083): EFFECT_0 PERIODIC_DAMAGE,
+-- REAL_OR_REAPPLY. The caster (the Lich King) records the plague
+-- stack in its AI via SetData(DATA_PLAGUE_STACK = 70337, stack);
+-- C++ keeps the running max (_necroticPlagueStack = max(value, old)),
+-- reset only on encounter Reset, and the value is read by the "Been
+-- Waiting a Long Time" achievement check (stack >= 30,
+-- boss_the_lich_king.cpp:2831). The Go twin is the creature ScriptData
+-- store (creature:SetData/GetData, lua_creature_events.go), so the
+-- max() is done here in Lua: plain SetData would overwrite with a
+-- fresh stack-1 jump and lose the peak. DELTA: the Go apply hook is
+-- fresh-only (C++ REAL_OR_REAPPLY also fires on re-apply); each jump
+-- casts 70338 on a new target, so the per-jump fresh apply is the
+-- live path — same pre-existing delta as Renew (tick 199).
+-- STILL BLOCKED (same class): OnRemove (:2085-2100) needs
+-- AddSpellMod(SPELLVALUE_AURA_STACK, stack + 1) on the jump re-cast
+-- plus the caster self-cast of Plague Siphon (74074) — CastCustomSpell
+-- takes bp0/bp1/bp2 only, no aura-stack mod; OnDispel/AfterDispel
+-- (:2102-2125) need the _lastAmount state plus the same mod.
+local SPELL_NECROTIC_PLAGUE_JUMP = 70338 -- boss_the_lich_king.cpp:91
+local DATA_PLAGUE_STACK = 70337 -- boss_the_lich_king.cpp:369
+
+local function necroticPlagueJumpApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    local stack = aura:GetStackAmount()
+    if stack > caster:GetData(DATA_PLAGUE_STACK) then
+        caster:SetData(DATA_PLAGUE_STACK, stack)
+    end
+end
+
+RegisterAuraEvent(SPELL_NECROTIC_PLAGUE_JUMP, 2, necroticPlagueJumpApply)
