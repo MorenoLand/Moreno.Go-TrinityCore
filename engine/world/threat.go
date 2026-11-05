@@ -47,12 +47,16 @@ type ThreatManager struct {
 	tempMods map[uint64]int32
 	// suppressed mirrors ThreatReference ONLINE_STATE_SUPPRESSED for the
 	// school-immunity apply path (ThreatManager::EvaluateSuppressed,
-	// ThreatManager.cpp:290-304): victims marked here are skipped by
-	// victim selection until a taunt re-evaluates them (a taunted victim
-	// is never suppressed, ShouldBeSuppressed:112-115). The confuse /
-	// breakable-stun legs of ShouldBeSuppressed remain unmodeled; the
-	// offline leg is modeled below, fed only by callers that evaluate
-	// a ShouldBeOffline arm with motion context (see SetOfflineSet).
+	// ThreatManager.cpp:290-304): victims marked here sort below online
+	// victims in victim selection (CompareReferencesLT state precedence,
+	// ThreatManager.cpp:593-601) and are picked when no online victim
+	// remains; a taunted victim is never suppressed
+	// (ShouldBeSuppressed:112-115). The confuse / breakable-stun legs
+	// of ShouldBeSuppressed remain unmodeled, and suppressed never
+	// clears except on ClearThreat — there is no immunity-expiry hook
+	// to re-evaluate ShouldBeSuppressed. The offline leg is modeled
+	// below, fed only by callers that evaluate a ShouldBeOffline arm
+	// with motion context (see SetOfflineSet).
 	suppressed map[uint64]bool
 	// offline mirrors ThreatReference ONLINE_STATE_OFFLINE
 	// (ThreatManager.h:256): victims whose ShouldBeOffline arm
@@ -354,9 +358,8 @@ func (tm *ThreatManager) EntryGUIDs() []uint64 {
 // caller's fresh evaluation. Unknown GUIDs are dropped: a victim with
 // no entry cannot be a pick, and a stale flag must not survive the
 // victim's re-phase. Like SuppressVictim this marks no client update:
-// SortedEntries still carries the raw list (client-list exclusion is
-// a separate broadcast-site change), so dirtying here would broadcast
-// an unchanged list.
+// the broadcast sites read the filtered SortedEntriesAvailable on the
+// next tick, so dirtying here would broadcast an unchanged list.
 func (tm *ThreatManager) SetOfflineSet(off map[uint64]bool) {
 	if tm == nil {
 		return
@@ -841,8 +844,9 @@ func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (swi
 	tm.updateTimerMs = threatUpdateIntervalMs
 
 	// TauntUpdate's EvaluateSuppressed(true) tail re-evaluates aura-driven
-	// states; Go re-evaluates taunt expiries here (suppressed/offline ref
-	// states have no Go model).
+	// states; Go re-evaluates taunt expiries here. Suppressed refs have
+	// no re-evaluation (no immunity-expiry hook); offline flags refresh
+	// on the combat tick via SetOfflineSet.
 	now := time.Now()
 	for victim, exp := range tm.tauntExpiry {
 		if !exp.IsZero() && now.After(exp) {
@@ -870,42 +874,46 @@ func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (swi
 // comparator (ReselectVictim:537 UpdateOffline pass, 546-549 highest-
 // unavailable null); only the arms callers feed (phase, via the combat
 // tick) can flag a ref offline — death/evade removal still covers the
-// dead leg, and unfed arms stay online. The suppressed
-// leg is modeled for the school-immunity apply path (SuppressVictim) and
-// skipped here unless the victim is taunted, matching IsAvailable. DETAUNT
-// has no Go aura model, so the state precedence reduces to
-// TAUNT > NONE; among equal states the 110%/130% + melee dance is exact,
-// including the sorted-walk early-outs.
+// dead leg, and unfed arms stay online. Suppressed refs stay in the
+// run: IsAvailable includes SUPPRESSED, so a suppressed fixate is
+// preferred, a suppressed highest is picked when no online ref
+// remains, and the comparator's online-state precedence decides the
+// dance — an online candidate beats a suppressed old victim at any
+// threat. DETAUNT has no Go aura model, so the taunt precedence
+// reduces to TAUNT > NONE; among equal states the 110%/130% + melee
+// dance is exact, including the sorted-walk early-outs.
 func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 {
 	if len(tm.entries) == 0 {
 		return 0
 	}
 	// Fixated target is always preferred (ReselectVictim:540-541); a stale
 	// fixate whose entry is gone falls through like !IsAvailable(), as
-	// does an offline fixate (suppressed fixates stay preferred in C++
-	// since IsAvailable includes SUPPRESSED — Go's !suppressed gate here
-	// is pre-existing and unchanged by the offline port).
+	// does an offline fixate. A suppressed fixate stays preferred:
+	// IsAvailable includes SUPPRESSED (ThreatManager.h:263).
 	if tm.fixateGUID != 0 {
-		if _, ok := tm.entries[tm.fixateGUID]; ok && !tm.isSuppressedLocked(tm.fixateGUID) && !tm.isOfflineLocked(tm.fixateGUID) {
+		if _, ok := tm.entries[tm.fixateGUID]; ok && !tm.isOfflineLocked(tm.fixateGUID) {
 			return tm.fixateGUID
 		}
 		tm.fixateGUID = 0
 	}
 
 	type candidate struct {
-		guid    uint64
-		threat  float32
-		taunted bool
+		guid       uint64
+		threat     float32
+		taunted    bool
+		suppressed bool
 	}
 	cands := make([]candidate, 0, len(tm.entries))
 	for guid := range tm.entries {
-		if tm.isSuppressedLocked(guid) || tm.isOfflineLocked(guid) {
+		if tm.isOfflineLocked(guid) {
 			continue
 		}
-		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid)})
+		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid), suppressed: tm.isSuppressedLocked(guid)})
 	}
 	// C++ returns null when the highest reference is unavailable
-	// (ReselectVictim:553-554); every entry suppressed means the same.
+	// (ReselectVictim:553-554) — with every entry offline there is no
+	// candidate at all; every entry suppressed still picks the
+	// suppressed highest, since IsAvailable includes SUPPRESSED.
 	if len(cands) == 0 {
 		return 0
 	}
@@ -914,9 +922,14 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	// per-ref UpdateOffline pass (:537) runs before any pick. The
 	// flag set covers only the arms callers currently feed (phase);
 	// unfed arms stay online, they are not silently treated as offline.
-	// Comparator order: taunt state precedence (TAUNT > NONE), then threat
-	// descending — the heap order ReselectVictim walks.
+	// Comparator order is CompareReferencesLT (ThreatManager.cpp:593-601):
+	// online-state precedence (ONLINE > SUPPRESSED), then taunt-state
+	// precedence (TAUNT > NONE), then threat descending — the heap
+	// order ReselectVictim walks.
 	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].suppressed != cands[j].suppressed {
+			return !cands[i].suppressed
+		}
 		if cands[i].taunted != cands[j].taunted {
 			return cands[i].taunted
 		}
@@ -927,7 +940,9 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	if _, ok := tm.entries[old]; !ok {
 		old = 0
 	}
-	if tm.isSuppressedLocked(old) || tm.isOfflineLocked(old) {
+	// Only an offline old victim is nulled (ReselectVictim:546-548);
+	// a suppressed old victim stays in the dance.
+	if tm.isOfflineLocked(old) {
 		old = 0
 	}
 	highest := cands[0]
@@ -935,24 +950,16 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	if old == 0 || highest.guid == old {
 		return highest.guid
 	}
+	oldSuppressed := tm.isSuppressedLocked(old)
 	oldTaunted := tm.isTauntedLocked(old)
-	// Taunt-state precedence (CompareReferencesLT:593-601): a taunted
-	// highest beats a non-taunted old victim regardless of threat, and a
-	// taunted old victim keeps aggro against non-taunted candidates.
-	if highest.taunted != oldTaunted {
-		if highest.taunted {
-			return highest.guid
-		}
-		return old
-	}
 	oldThreat := tm.effectiveThreatLocked(old)
-	// If the highest doesn't break 110% of the old victim, nothing below it
-	// can either — old victim stays.
-	if !(oldThreat*1.1 < highest.threat) {
+	// The 110%/130% + melee dance runs through CompareReferencesLT:
+	// state precedence first (an online candidate beats a suppressed
+	// old victim at any threat), then taunt, then threat*weight.
+	if !tm.compareRefsLTLocked(oldSuppressed, oldTaunted, oldThreat, highest.suppressed, highest.taunted, highest.threat, 1.1) {
 		return old
 	}
-	// Above 130% it wins regardless of range.
-	if oldThreat*1.3 < highest.threat {
+	if tm.compareRefsLTLocked(oldSuppressed, oldTaunted, oldThreat, highest.suppressed, highest.taunted, highest.threat, 1.3) {
 		return highest.guid
 	}
 	// Between 110% and 130% it needs melee range.
@@ -965,10 +972,7 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 		if c.guid == old {
 			return old
 		}
-		if c.taunted != oldTaunted {
-			return old
-		}
-		if !(oldThreat*1.1 < c.threat) {
+		if !tm.compareRefsLTLocked(oldSuppressed, oldTaunted, oldThreat, c.suppressed, c.taunted, c.threat, 1.1) {
 			return old
 		}
 		if inMelee != nil && inMelee(c.guid) {
@@ -977,6 +981,21 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 	}
 	// C++ ABORTs here ("manager desync"); Go keeps the old victim.
 	return old
+}
+
+// compareRefsLTLocked mirrors ThreatManager::CompareReferencesLT
+// (ThreatManager.cpp:593-601): true when the old victim is LOWER than
+// the candidate — online-state precedence (ONLINE > SUPPRESSED), then
+// taunt-state precedence (TAUNT > NONE; DETAUNT has no Go model),
+// then oldThreat*weight < candidate threat. Callers hold tm.mu.
+func (tm *ThreatManager) compareRefsLTLocked(oldSuppressed, oldTaunted bool, oldThreat float32, candSuppressed, candTaunted bool, candThreat, weight float32) bool {
+	if oldSuppressed != candSuppressed {
+		return oldSuppressed
+	}
+	if oldTaunted != candTaunted {
+		return !oldTaunted
+	}
+	return oldThreat*weight < candThreat
 }
 
 // AddThreat adds threat for a victim and evaluates target switching.
@@ -1003,11 +1022,19 @@ func (tm *ThreatManager) reselectVictimLocked(inMelee func(uint64) bool) uint64 
 // The melee gate is per add, combat-reach-based via inMeleeThreatRange
 // (Unit::IsWithinMeleeRange -> GetMeleeRange, Unit.cpp:599-618), matching the
 // C++ per-candidate test positionally.
-// Documented no-bridge: the online/suppressed/offline ref states
-// (ShouldBeOffline/ShouldBeSuppressed: CanSeeOrDetect, _IsTargetAcceptable,
-// CanCreatureAttack, immune flags, melee-school immunity, confuse,
-// breakable stun) - Go refs are removed only via RemoveThreat/ClearThreat;
-// DETAUNT (SPELL_AURA_MOD_DETAUNT, no Go aura model);
+// Documented deltas: the offline amount gate reads the stored flag
+// (SetOfflineSet, refreshed on the combat step tick), so an amount
+// arriving between ticks gates on state up to one tick stale — the
+// same shape as C++, whose existing-ref leg gates on the state last
+// refreshed by ReselectVictim's UpdateOffline pass (ThreatManager.cpp:
+// 537). A NEW victim's first amount has no synchronous UpdateOffline
+// (ThreatManager.cpp:402): the manager never evaluates visibility
+// itself, so the flag lands on the next combat tick at most one step
+// tick later. Suppressed refs still accrue amounts (C++ drops them,
+// IsOnline gate :390): Go never re-evaluates ShouldBeSuppressed —
+// no immunity-expiry hook — so there is no promotion leg to gate on.
+// Unfed ShouldBeOffline arms stay online; DETAUNT
+// (SPELL_AURA_MOD_DETAUNT) has no Go aura model;
 // ProcessAIUpdates/JustStartedThreateningMe (boss hooks ride the new-victim
 // broadcast instead). FixateTarget and the taunt-state model are bridged:
 // the eager gate above honors fixate preference and taunt precedence, and
@@ -1070,6 +1097,13 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		if amount == 0 {
 			return false, tm.currentVictim
 		}
+		// ThreatManager::AddThreat (ThreatManager.cpp:379-393): an
+		// existing ref that is offline receives no amount — the
+		// IsOnline gate on the stored state. The entry survives and
+		// no victim leg runs.
+		if tm.isOfflineLocked(victim) {
+			return false, tm.currentVictim
+		}
 		// ThreatReference::AddThreat (ThreatManager.cpp:49) marks the
 		// client list dirty on every nonzero add.
 		tm.needClientUpdate = true
@@ -1086,7 +1120,10 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 	// away from it, and any add re-affirms it. A stale fixate whose entry
 	// is gone is dropped like C++'s !IsAvailable() fall-through.
 	if tm.fixateGUID != 0 {
-		if _, ok := tm.entries[tm.fixateGUID]; ok {
+		// ReselectVictim:540 prefers the fixated victim only while it
+		// IsAvailable; an offline fixate is dropped like the reselect
+		// drops it (a suppressed fixate stays preferred).
+		if _, ok := tm.entries[tm.fixateGUID]; ok && !tm.isOfflineLocked(tm.fixateGUID) {
 			switched := tm.currentVictim != tm.fixateGUID
 			tm.currentVictim = tm.fixateGUID
 			return switched, tm.fixateGUID
@@ -1094,7 +1131,14 @@ func (tm *ThreatManager) AddThreat(victim uint64, amount float32, inMelee bool) 
 		tm.fixateGUID = 0
 	}
 
+	// An offline adding victim never becomes the current victim:
+	// C++ UpdateVictim (ThreatManager.cpp:516-528) reselects null
+	// when the highest ref is unavailable, and the eager gate must
+	// not install a victim the tick's reselect would immediately drop.
 	if tm.currentVictim == 0 || tm.currentVictim == victim {
+		if tm.isOfflineLocked(victim) {
+			return false, tm.currentVictim
+		}
 		tm.currentVictim = victim
 		return false, victim
 	}
@@ -1151,10 +1195,11 @@ func (tm *ThreatManager) SetThreat(victim uint64, amount float32) (switched bool
 // MatchUnitThreatToHighestThreat sets the victim's threat equal to the highest threat currently on the creature.
 // Reference: TrinityCore ThreatManager::MatchUnitThreatToHighestThreat (ThreatManager.cpp:419-437).
 // The "highest" is the heap's top (CompareReferencesLT, ThreatManager.cpp:593-601):
-// taunt-state precedence first, then effective threat descending — with the
-// taunt-skip leg (ThreatManager.cpp:424-429): a taunting highest yields to a
-// next available ref with strictly more threat. Go entries have no
-// online/suppressed/offline states, so every entry is available.
+// online-state precedence first (ONLINE > SUPPRESSED), then taunt-state
+// precedence, then effective threat descending — with the taunt-skip leg
+// (ThreatManager.cpp:424-429): a taunting highest yields to a next
+// available ref with strictly more threat. Offline refs are skipped
+// (the highest-unavailable early return, :424-429).
 // The delta runs through the AddThreat entry legs
 // (ThreatManager.cpp:379-410) with ignoreModifiers/ignoreRedirects, which
 // keeps the redirect registry untouched: a missing entry is created
@@ -1182,16 +1227,17 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 	}
 
 	type candidate struct {
-		guid    uint64
-		threat  float32
-		taunted bool
+		guid       uint64
+		threat     float32
+		taunted    bool
+		suppressed bool
 	}
 	cands := make([]candidate, 0, len(tm.entries))
 	for guid := range tm.entries {
 		if tm.isOfflineLocked(guid) {
 			continue
 		}
-		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid)})
+		cands = append(cands, candidate{guid: guid, threat: tm.effectiveThreatLocked(guid), taunted: tm.isTauntedLocked(guid), suppressed: tm.isSuppressedLocked(guid)})
 	}
 	// C++ returns early when the highest ref is unavailable
 	// (ThreatManager.cpp:424-429): with every ref offline there is no
@@ -1200,6 +1246,9 @@ func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched
 		return false, tm.currentVictim
 	}
 	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].suppressed != cands[j].suppressed {
+			return !cands[i].suppressed
+		}
 		if cands[i].taunted != cands[j].taunted {
 			return cands[i].taunted
 		}
@@ -1253,6 +1302,9 @@ func (tm *ThreatManager) RemoveThreat(victim uint64) (switched bool, newVictim u
 
 	delete(tm.entries, victim)
 	delete(tm.tempMods, victim)
+	// A re-added victim starts ONLINE (new ref, ThreatManager.cpp:402-404);
+	// a stale suppressed flag must not survive the purge.
+	delete(tm.suppressed, victim)
 	// ThreatManager.cpp:809-810: purging the fixated reference clears the
 	// fixate; the victim's taunt state dies with its reference.
 	if tm.fixateGUID == victim {
@@ -1417,13 +1469,36 @@ func (tm *ThreatManager) IsEmpty() bool {
 }
 
 // SortedEntries returns protocol-ready ThreatEntry slice sorted descending by threat.
-// Reference: TrinityCore ThreatManager::SendThreatListToClients.
+// It is the raw list: every entry, including offline and suppressed refs —
+// the GetThreatList/GetThreatenedByMeList iteration C++ non-pick consumers
+// use (CreatureMethods::GetAITargets, GetAITargetsCount; membership checks).
+// Broadcasts and target picks use SortedEntriesAvailable instead.
 func (tm *ThreatManager) SortedEntries() []protocol.ThreatEntry {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+	return tm.sortedEntriesLocked(false)
+}
 
+// SortedEntriesAvailable returns the threat-desc entries with offline refs
+// removed: the SendThreatListToClients rule (ThreatManager.cpp:770-787 —
+// !IsAvailable refs are skipped, suppressed refs included) and the
+// SelectTargetList rule (UnitAI.h — offline refs skipped in both the
+// sorted and unsorted builds). Only broadcast sites and target picks
+// call this; raw iterators keep SortedEntries.
+func (tm *ThreatManager) SortedEntriesAvailable() []protocol.ThreatEntry {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.sortedEntriesLocked(true)
+}
+
+// sortedEntriesLocked builds the threat-desc protocol list; availableOnly
+// drops offline refs. Callers hold tm.mu.
+func (tm *ThreatManager) sortedEntriesLocked(availableOnly bool) []protocol.ThreatEntry {
 	list := make([]protocol.ThreatEntry, 0, len(tm.entries))
 	for guid := range tm.entries {
+		if availableOnly && tm.isOfflineLocked(guid) {
+			continue
+		}
 		// Client threat packets carry GetThreat (ThreatManager.cpp:212-213
 		// SendThreatListToClients) — base plus the temp modifier.
 		threat := tm.effectiveThreatLocked(guid)
@@ -1439,20 +1514,20 @@ func (tm *ThreatManager) SortedEntries() []protocol.ThreatEntry {
 }
 
 // threatDebugEntry is one sorted threat-list row for the ".debug threat"
-// report (cs_debug.cpp:769): the effective threat plus the live taunt and
-// suppressed markers of the C++ row text.
+// report (cs_debug.cpp:769): the effective threat plus the live taunt,
+// suppressed and offline markers of the C++ row text.
 type threatDebugEntry struct {
 	victimGUID uint64
 	threat     float32
 	taunted    bool
 	suppressed bool
+	offline    bool
 }
 
 // DebugEntries returns the threat list sorted descending by effective
 // threat, the GetSortedThreatList order of HandleDebugThreatListCommand.
-// Detaunt and offline markers have no Go model (no per-reference detaunt
-// state, no online/offline tracking), so only the taunt and suppressed
-// markers are reported.
+// The detaunt marker has no Go model (no per-reference detaunt state);
+// the offline marker reads the stored flag set.
 func (tm *ThreatManager) DebugEntries() []threatDebugEntry {
 	if tm == nil {
 		return nil
@@ -1466,6 +1541,7 @@ func (tm *ThreatManager) DebugEntries() []threatDebugEntry {
 			threat:     tm.effectiveThreatLocked(guid),
 			taunted:    tm.isTauntedLocked(guid),
 			suppressed: tm.isSuppressedLocked(guid),
+			offline:    tm.isOfflineLocked(guid),
 		})
 	}
 	sort.Slice(list, func(i, j int) bool {
@@ -2040,7 +2116,7 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	switched, newVictim := motion.ThreatMgr.MatchUnitThreatToHighestThreat(s.playerGUID)
 	if switched || newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
-		entries := motion.ThreatMgr.SortedEntries()
+		entries := motion.ThreatMgr.SortedEntriesAvailable()
 		switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 		if !isCreaturePassive(motion) {
 			switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
@@ -2486,7 +2562,7 @@ func (s *Server) distributeHealingThreatLocked(healerSess *session, mapID, insta
 		}
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
-			entries := m.ThreatMgr.SortedEntries()
+			entries := m.ThreatMgr.SortedEntriesAvailable()
 			pendingHighest = append(pendingHighest, pendingHighestThreatUpdate{creature: m.GUID, highest: newVictim, mapID: m.Map, instanceID: m.InstanceID, x: m.X, y: m.Y, z: m.Z, list: entries, phase: m.PhaseMask})
 			if !isCreaturePassive(m) {
 				pending = append(pending, pendingAttackStart{creature: m.GUID, victim: newVictim, mapID: m.Map, instanceID: m.InstanceID, x: m.X, y: m.Y, z: m.Z, phase: m.PhaseMask})

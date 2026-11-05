@@ -8764,7 +8764,7 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 				}
 				if switched && newVictim != targetMotion.TargetGUID {
 					targetMotion.TargetGUID = newVictim
-					entries := targetMotion.ThreatMgr.SortedEntries()
+					entries := targetMotion.ThreatMgr.SortedEntriesAvailable()
 					switchHighest = pendingHighestThreatUpdate{creature: targetMotion.GUID, highest: newVictim, mapID: targetMotion.Map, instanceID: targetMotion.InstanceID, x: targetMotion.X, y: targetMotion.Y, z: targetMotion.Z, list: entries, phase: targetMotion.PhaseMask}
 					if !passive {
 						switchStart = pendingAttackStart{creature: targetMotion.GUID, victim: newVictim, mapID: targetMotion.Map, instanceID: targetMotion.InstanceID, x: targetMotion.X, y: targetMotion.Y, z: targetMotion.Z, phase: targetMotion.PhaseMask}

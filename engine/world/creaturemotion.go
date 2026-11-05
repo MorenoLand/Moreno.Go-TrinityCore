@@ -2383,7 +2383,7 @@ func (s *Server) callCreatureForHelp(ctx context.Context, caller *creatureMotion
 	if caller.ThreatMgr != nil {
 		victimGUID = caller.ThreatMgr.GetCurrentVictim()
 		if victimGUID == 0 {
-			if entries := caller.ThreatMgr.SortedEntries(); len(entries) > 0 {
+			if entries := caller.ThreatMgr.SortedEntriesAvailable(); len(entries) > 0 {
 				victimGUID = entries[0].VictimGUID
 			}
 		}
@@ -2908,7 +2908,7 @@ func (s *Server) aiSpellThreatCandidates(m *creatureMotion, maxRange float32, pl
 	}
 	reach := m.combatReachOrDefault()
 	var candidates []uint64
-	for _, e := range m.ThreatMgr.SortedEntries() {
+	for _, e := range m.ThreatMgr.SortedEntriesAvailable() {
 		if e.VictimGUID == 0 {
 			continue
 		}
@@ -5383,7 +5383,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		oldTarget := motion.TargetGUID
 		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); !passive && switched && newVictim != 0 {
 			motion.TargetGUID = newVictim
-			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, motion.ThreatMgr.SortedEntries(), motion.PhaseMask)
+			s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, newVictim, motion.ThreatMgr.SortedEntriesAvailable(), motion.PhaseMask)
 			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, newVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 		} else if !passive && switched && newVictim == 0 && motion.ThreatMgr.IsOffline(oldTarget) {
 			// Every entry is offline (ReselectVictim null): C++
@@ -5392,22 +5392,23 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// Clearing TargetGUID keeps the combat head below from
 			// swinging at the offline victim; the TargetGUID==0 arm
 			// re-acquires on the next tick when a victim comes back
-			// online. Gated on the old target itself being offline so
-			// the all-suppressed reselect-0 case keeps today's behavior.
+			// online. Gated on the old target itself being offline:
+			// reselect returns 0 only when every entry is offline —
+			// suppressed victims are picked, per CompareReferencesLT.
 			motion.TargetGUID = 0
 			if dirty {
-				s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, motion.ThreatMgr.SortedEntries(), motion.PhaseMask)
+				s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, motion.ThreatMgr.SortedEntriesAvailable(), motion.PhaseMask)
 			}
 		} else if !passive && motion.TargetGUID == 0 {
 			if victim := motion.ThreatMgr.GetCurrentVictim(); victim != 0 {
 				motion.TargetGUID = victim
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, victim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
-				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, victim, motion.ThreatMgr.SortedEntries(), motion.PhaseMask)
+				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, victim, motion.ThreatMgr.SortedEntriesAvailable(), motion.PhaseMask)
 			}
 		} else if dirty {
 			// The list moved without a victim switch: SendThreatListToClients
 			// sends SMSG_THREAT_UPDATE (ThreatManager.cpp:524, 770-787).
-			s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, motion.ThreatMgr.SortedEntries(), motion.PhaseMask)
+			s.broadcastThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, motion.ThreatMgr.SortedEntriesAvailable(), motion.PhaseMask)
 		}
 	}
 	if motion.Moving {
@@ -5512,7 +5513,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
 				nextVictim := motion.ThreatMgr.GetCurrentVictim()
 				motion.TargetGUID = nextVictim
-				entries := motion.ThreatMgr.SortedEntries()
+				entries := motion.ThreatMgr.SortedEntriesAvailable()
 				s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries, motion.PhaseMask)
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 				return
@@ -5606,7 +5607,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
 					nextVictim := motion.ThreatMgr.GetCurrentVictim()
 					motion.TargetGUID = nextVictim
-					entries := motion.ThreatMgr.SortedEntries()
+					entries := motion.ThreatMgr.SortedEntriesAvailable()
 					s.broadcastHighestThreatUpdateInInstance(motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.GUID, nextVictim, entries, motion.PhaseMask)
 					s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, nextVictim), motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 					return

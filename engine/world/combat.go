@@ -1651,7 +1651,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				}
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
-					entries := motion.ThreatMgr.SortedEntries()
+					entries := motion.ThreatMgr.SortedEntriesAvailable()
 					switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 					if wasInCombat && !passive {
 						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
@@ -2481,7 +2481,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				}
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
-					entries := motion.ThreatMgr.SortedEntries()
+					entries := motion.ThreatMgr.SortedEntriesAvailable()
 					switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 					if wasInCombat && !passive {
 						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}

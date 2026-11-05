@@ -2870,7 +2870,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			switched, newVictim = motion.ThreatMgr.AddThreat(victimGUID, amount, false)
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
-				entries = motion.ThreatMgr.SortedEntries()
+				entries = motion.ThreatMgr.SortedEntriesAvailable()
 				mapID, instanceID, x, y, z, phase = motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask
 				if wasInCombat && !passive {
 					switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: mapID, instanceID: instanceID, x: x, y: y, z: z, phase: phase}

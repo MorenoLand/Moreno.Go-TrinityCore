@@ -4197,7 +4197,7 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 		motion.InCombat = true
 		motion.Moving = false
 		mapID := motion.Map
-		entries := motion.ThreatMgr.SortedEntries()
+		entries := motion.ThreatMgr.SortedEntriesAvailable()
 		targetGUID := motion.GUID
 		if wasInCombat && switched && victim != oldTarget && !passive {
 			switchStart = pendingAttackStart{creature: targetGUID, victim: victim, mapID: mapID, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
@@ -4265,7 +4265,7 @@ func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spe
 		switched, newVictim := motion.ThreatMgr.MatchUnitThreatToHighestThreat(m.GUID)
 		if switched || newVictim != motion.TargetGUID {
 			motion.TargetGUID = newVictim
-			entries := motion.ThreatMgr.SortedEntries()
+			entries := motion.ThreatMgr.SortedEntriesAvailable()
 			mapID := motion.Map
 			targetGUID := motion.GUID
 			s.motionMu.Unlock()

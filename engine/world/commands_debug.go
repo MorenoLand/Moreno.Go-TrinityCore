@@ -1025,11 +1025,10 @@ type debugThreatenedRow struct {
 
 // handleDebugThreat mirrors HandleDebugThreatListCommand (cs_debug.cpp:769):
 // ".debug threat" prints the target's threatened-by-me list, then its
-// threat list (sorted descending, [FIXATE]/[TAUNT]/[SUPPRESSED] markers) or
-// the cannot-have-list / not-engaged legs. Deltas: no threatened-by-me
-// index (rebuilt by scan, so only live creature lists contribute); no
-// detaunt/offline markers (no per-reference detaunt state, no online
-// tracking); the offline leg of a victim row is unmodeled.
+// threat list (sorted descending, [FIXATE]/[TAUNT]/[SUPPRESSED]/[OFFLINE]
+// markers) or the cannot-have-list / not-engaged legs. Deltas: no
+// threatened-by-me index (rebuilt by scan, so only live creature lists
+// contribute); no detaunt marker (no per-reference detaunt state).
 func (s *session) handleDebugThreat(ctx context.Context) {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
 		s.sendNotification("You do not have permission to use that command.")
@@ -1088,6 +1087,9 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 		if e.suppressed {
 			marker += " [SUPPRESSED]"
 		}
+		if e.offline {
+			marker += " [OFFLINE]"
+		}
 		s.sendSysMessage(fmt.Sprintf("   %d.   %s   (GUID %d)  - threat %f%s", i+1, s.debugUnitName(e.victimGUID), uint32(e.victimGUID&0x00FFFFFF), e.threat, marker))
 	}
 	s.sendSysMessage("End of threat list.")
@@ -1099,7 +1101,8 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 // multi-school modifier tables and the redirect info/registry have no Go
 // model (ThreatManager tracks only the temp modifier per victim), so the
 // report prints the modeled rows — fixate target, live taunts,
-// suppressions and per-victim temp modifiers — and says so for the rest.
+// suppressions, offline flags and per-victim temp modifiers — and
+// says so for the rest.
 func (s *session) handleDebugThreatInfo(ctx context.Context) {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
 		s.sendNotification("You do not have permission to use that command.")
@@ -1138,6 +1141,9 @@ func (s *session) handleDebugThreatInfo(ctx context.Context) {
 		}
 		if e.suppressed {
 			s.sendSysMessage(fmt.Sprintf(" - Suppressed victim: %s", s.debugUnitName(e.victimGUID)))
+		}
+		if e.offline {
+			s.sendSysMessage(fmt.Sprintf(" - Offline victim: %s", s.debugUnitName(e.victimGUID)))
 		}
 	}
 }

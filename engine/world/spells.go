@@ -23232,7 +23232,7 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 				}
 				if switched && newVictim != motion.TargetGUID {
 					motion.TargetGUID = newVictim
-					entries := motion.ThreatMgr.SortedEntries()
+					entries := motion.ThreatMgr.SortedEntriesAvailable()
 					switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 					if !passive {
 						switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
@@ -29516,7 +29516,7 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 	motion.InCombat = true
 	motion.Moving = false
 	mapID := motion.Map
-	entries := motion.ThreatMgr.SortedEntries()
+	entries := motion.ThreatMgr.SortedEntriesAvailable()
 	guid := motion.GUID
 	if wasInCombat && switched && victim != oldTarget && !passive {
 		switchStart = pendingAttackStart{creature: guid, victim: victim, mapID: mapID, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
@@ -38395,7 +38395,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 					var phase uint32
 					if switched && newVictim != m.TargetGUID {
 						m.TargetGUID = newVictim
-						entries = m.ThreatMgr.SortedEntries()
+						entries = m.ThreatMgr.SortedEntriesAvailable()
 						mapID, instanceID, x, y, z, phase = m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask
 						if wasInCombat && !passive {
 							switchStart = pendingAttackStart{creature: m.GUID, victim: newVictim, mapID: mapID, instanceID: instanceID, x: x, y: y, z: z, phase: phase}

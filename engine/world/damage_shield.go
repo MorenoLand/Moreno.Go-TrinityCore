@@ -625,7 +625,7 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 			switched, newVictim := m.ThreatMgr.AddThreat(attackerGUID, threat, true)
 			if switched && newVictim != m.TargetGUID {
 				m.TargetGUID = newVictim
-				entries := m.ThreatMgr.SortedEntries()
+				entries := m.ThreatMgr.SortedEntriesAvailable()
 				switchHighest = pendingHighestThreatUpdate{creature: key.GUID, highest: newVictim, mapID: key.Map, instanceID: key.InstanceID, x: m.X, y: m.Y, z: m.Z, list: entries, phase: m.PhaseMask}
 				if !passive {
 					switchStart = pendingAttackStart{creature: key.GUID, victim: newVictim, mapID: key.Map, instanceID: key.InstanceID, x: m.X, y: m.Y, z: m.Z, phase: m.PhaseMask}

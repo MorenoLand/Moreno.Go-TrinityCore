@@ -806,7 +806,7 @@ func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, target
 	if cm := s.findCreatureMotionLocked(caster.Map, caster.InstanceID, caster.GUID); cm != nil {
 		cm.InCombat = true
 	}
-	entries := motion.ThreatMgr.SortedEntries()
+	entries := motion.ThreatMgr.SortedEntriesAvailable()
 	mapID, instanceID := motion.Map, motion.InstanceID
 	mx, my, mz, mguid := motion.X, motion.Y, motion.Z, motion.GUID
 	mphase := motion.PhaseMask
@@ -869,7 +869,7 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	}
 	if switched && newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
-		entries := motion.ThreatMgr.SortedEntries()
+		entries := motion.ThreatMgr.SortedEntriesAvailable()
 		pendingHighest = append(pendingHighest, pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask})
 		if !isCreaturePassive(motion) {
 			pending = append(pending, pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask})
@@ -959,7 +959,7 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 	}
 	if switched && newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
-		entries := motion.ThreatMgr.SortedEntries()
+		entries := motion.ThreatMgr.SortedEntriesAvailable()
 		switchHighest = pendingHighestThreatUpdate{creature: motion.GUID, highest: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, list: entries, phase: motion.PhaseMask}
 		if !isCreaturePassive(motion) {
 			switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
@@ -1053,7 +1053,7 @@ func (s *session) forwardInitialAssistThreatLocked(threat float32, targetGUID ui
 		}
 		if switched && newVictim != m.TargetGUID {
 			m.TargetGUID = newVictim
-			entries := m.ThreatMgr.SortedEntries()
+			entries := m.ThreatMgr.SortedEntriesAvailable()
 			pendingHighest = append(pendingHighest, pendingHighestThreatUpdate{creature: m.GUID, highest: newVictim, mapID: m.Map, instanceID: m.InstanceID, x: m.X, y: m.Y, z: m.Z, list: entries, phase: m.PhaseMask})
 			if !isCreaturePassive(m) {
 				pending = append(pending, pendingAttackStart{creature: m.GUID, victim: newVictim, mapID: m.Map, instanceID: m.InstanceID, x: m.X, y: m.Y, z: m.Z, phase: m.PhaseMask})
