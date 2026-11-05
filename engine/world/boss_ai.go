@@ -21128,6 +21128,19 @@ func init() {
 	// vehicle kit, MovePoint, instance boss-state bridges absent).
 	RegisterLuaBoss("boss_leviathan_mk_ii", 33432)
 	// Checked-no-gate for ported arms: pre-loop + in-loop CASTING gates cover the unported event machine only (Reset arm is not an UpdateAI event).
+	// boss_mimiron (Ulduar, phase-machine controller) — ported arms in
+	// lua_scripts/northrend/boss_mimiron.lua: spawn react-passive, Reset
+	// flag/WELD legs, engage flag/WELD legs, JustDied + OUTTRO chain
+	// (7s/3s/11s). DoAction activation chains, vehicle/MovePoint/GO/
+	// instance legs and the OUTTRO_2 cache summon stay documented-only.
+	RegisterLuaBoss("boss_mimiron", 33350)
+	// boss_aerial_command_unit (Ulduar, Mimiron phase 3) — ported arms in
+	// lua_scripts/northrend/boss_aerial_command_unit.lua: spawn
+	// react-passive/gravity legs + DamageTaken lethal clamp legs.
+	// DoAction arms, UpdateAI summon timers, plasma-ball attack, phase
+	// branches, EnterEvadeMode, JustSummoned, KilledUnit, MovementInform
+	// stay documented-only (see file header).
+	RegisterLuaBoss("boss_aerial_command_unit", 33670)
 	// npc_aeranas (Hellfire Peninsula, Avruu's Orb summon) — ported
 	// arms in lua_scripts/outland/npc_aeranas.lua: Reset faction/
 	// questgiver/Talk + 8s monster-faction timer, combat shock/
