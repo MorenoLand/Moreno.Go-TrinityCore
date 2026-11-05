@@ -90,21 +90,22 @@
 -- DRAW_SPIRIT hit-target -> SummonCreature(NPC_SPIRIT_SHADE 15261) at the
 -- target's position, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT Eluna type 3,
 -- 50s, with the C++ TYPEID_PLAYER gate.
--- boss_taerar DamageTaken — Talk(SAY_TAERAR_SUMMON_SHADES 1) rides the
--- 25%-per-stage banish machine (3x triggered victim-cast shade summons
--- 24841/24842/24843 + DoCast SPELL_SHADE 24313 + NOT_SELECTABLE /
--- NON_ATTACKABLE flags + REACT_PASSIVE + 60s _banishedTimer) — event 9
--- IS bridged, and SetFlag/RemoveFlag (2026-10-23) + SetReactState
--- (lana_thel precedent) + AttackStop (2026-10-22) are now bridged too,
--- so the arm stays out only on the banish machine's unported shade
--- summons (24841/24842/24843 — no bearer, mandokir/nefarian precedent;
--- the _shades-- leg gates the banish exit) and the
--- no-InterruptNonMeleeSpells bridge (verified STAND 2026-10-23); the
--- flag/react/AttackStop legs ride the machine. The stale
--- "no-DamageTaken bridge" claim is retracted, and the stale
--- "no-SummonedCreatureDies bridge" claim is retracted too (event-21
--- dispatch bridged 2026-10-24) — the blocker is the missing summons,
--- not the dispatch.
+-- boss_taerar DamageTaken — PORTED (this run): the 25%-per-stage
+-- banish machine (boss_emerald_dragons.cpp:618-643) — InterruptNonMeleeSpells
+-- (false) + AttackStop + Talk(SAY_TAERAR_SUMMON_SHADES 1) + 3x triggered
+-- victim-cast shade summons 24841/24842/24843 + DoCast SPELL_SHADE 24313 +
+-- NOT_SELECTABLE / NON_ATTACKABLE flags + REACT_PASSIVE + 60s banish timer
+-- + SummonedCreatureDies _shades-- early exit (event 21). The stale
+-- "no-InterruptNonMeleeSpells bridge (verified STAND 2026-10-23)" claim
+-- is retracted: the bridge is live (lua_creature_events.go:1995,
+-- baltharus precedent this sweep) and the flag/react/AttackStop/ev21
+-- bridges were already live. The shade summons themselves are
+-- triggered victim casts like the ported ysondre/lethon visual casts
+-- (their Go spawn effect is unmodeled, as with lethon's draw-spirit
+-- shade); the _shades count therefore only ever decrements on real
+-- summoned-creature deaths, and the 60s timer is the guaranteed exit.
+-- Timer ticks defer 500ms while banished (C++ skips the base UpdateAI
+-- event loop while banished; the defer re-checks on exit).
 -- The four dragon ExecuteEvent arms ported above (EVENT_LIGHTNING_WAVE
 -- / EVENT_SHADOW_BOLT_WHIRL / EVENT_VOLATILE_INFECTION /
 -- EVENT_ARCANE_BLAST / EVENT_BELLOWING_ROAR).
@@ -149,6 +150,9 @@ local SPELL_ARCANE_BLAST = 24857 -- boss_emerald_dragons.cpp:568 (Taerar)
 local SPELL_BELLOWING_ROAR = 22686 -- boss_emerald_dragons.cpp:563 (Taerar)
 local SPELL_SHADE = 24313 -- boss_emerald_dragons.cpp:563 (Taerar self-cast
     -- in the 25%-stage banish machine; cleared by boss_taerarAI::Reset)
+local SPELL_SUMMON_SHADE_1 = 24841 -- boss_emerald_dragons.cpp:566
+local SPELL_SUMMON_SHADE_2 = 24842 -- boss_emerald_dragons.cpp:567
+local SPELL_SUMMON_SHADE_3 = 24843 -- boss_emerald_dragons.cpp:568
 local SPELL_SUMMON_DRUID_SPIRITS = 24795 -- boss_emerald_dragons.cpp:249 (Ysondre DamageTaken)
 local SPELL_DRAW_SPIRIT = 24811 -- boss_emerald_dragons.cpp:336 (Lethon DamageTaken)
 local SPELL_CORRUPTION_OF_EARTH = 24910 -- boss_emerald_dragons.cpp:474 (Emeriss DamageTaken)
@@ -162,10 +166,14 @@ local SPELL_SUMMON_PLAYER = 24776 -- boss_emerald_dragons.cpp:47 (base UpdateAI)
 local SPELL_PUTRID_MUSHROOM = 24904 -- boss_emerald_dragons.cpp:473,505 (Emeriss KilledUnit)
 
 local SAY_SUMMON = 1 -- SAY_YSONDRE_SUMMON_DRUIDS / SAY_LETHON_DRAW_SPIRIT /
-                     -- SAY_EMERISS_CAST_CORRUPTION (all 1)
+                     -- SAY_EMERISS_CAST_CORRUPTION / SAY_TAERAR_SUMMON_SHADES (all 1)
 
 -- per-GUID C++ _stage (Initialize/Reset sets 1; stages at 75/50/25%).
 local stages = {}
+
+-- per-GUID C++ _banished / _shades for boss_taerar's banish machine.
+local taerarBanished = {}
+local taerarShades = {}
 
 local timers = {}
 
@@ -251,6 +259,12 @@ end
 -- C++ boss_taerar::ExecuteEvent (:649-651): DoCast(SPELL_ARCANE_BLAST
 -- 24857) 1-arg (DoCastVictim); 12s init, randtime(7s,12s) repeat.
 local function arcaneBlastTick(creature, guid)
+    if taerarBanished[guid] then
+        schedule(guid, "arcane_blast", 500, function()
+            arcaneBlastTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "arcane_blast", 500, function()
             arcaneBlastTick(creature, guid)
@@ -269,6 +283,12 @@ end
 -- 0, so the target stays AITARGET_SELF — self-cast. 30s init,
 -- randtime(20s,30s) repeat.
 local function bellowingRoarTick(creature, guid)
+    if taerarBanished[guid] then
+        schedule(guid, "bellowing_roar", 500, function()
+            bellowingRoarTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "bellowing_roar", 500, function()
             bellowingRoarTick(creature, guid)
@@ -285,6 +305,12 @@ end
 -- SWEEP 15847) 2-arg (non-triggered); 4s init, 2s repeat. All four
 -- dragons fall through to the base ExecuteEvent for this event.
 local function tailSweepTick(creature, guid)
+    if taerarBanished[guid] then
+        schedule(guid, "tail_sweep", 500, function()
+            tailSweepTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "tail_sweep", 500, function()
             tailSweepTick(creature, guid)
@@ -300,6 +326,12 @@ end
 -- C++ emerald_dragonAI::ExecuteEvent (:127-130): DoCast(me, SPELL_NOXIOUS_
 -- BREATH 24818) 2-arg (non-triggered); randtime(7.5s,15s) init/repeat.
 local function noxiousBreathTick(creature, guid)
+    if taerarBanished[guid] then
+        schedule(guid, "noxious_breath", 500, function()
+            noxiousBreathTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "noxious_breath", 500, function()
             noxiousBreathTick(creature, guid)
@@ -318,6 +350,12 @@ end
 -- repeat. The fog-pair casts are self-casts; the summoned dream-fog
 -- creatures' own AI stays unported (motion machine, see below).
 local function seepingFogTick(creature, guid)
+    if taerarBanished[guid] then
+        schedule(guid, "seeping_fog", 500, function()
+            seepingFogTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "seeping_fog", 500, function()
             seepingFogTick(creature, guid)
@@ -348,6 +386,12 @@ end
 -- GetCombatReach read. C++ fires per tick; the 1s pump is coarser
 -- but converges on the same teleport once the player stays out.
 local function summonPlayerTick(creature, guid)
+    if taerarBanished[guid] then
+        schedule(guid, "summon_player", 500, function()
+            summonPlayerTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "summon_player", 500, function()
             summonPlayerTick(creature, guid)
@@ -443,6 +487,81 @@ local function emerissDamageTaken(event, creature, attacker, damage)
         creature:Talk(SAY_SUMMON)
         creature:CastSpell(creature, SPELL_CORRUPTION_OF_EARTH, true)
         stages[guid] = stage + 1
+    end
+end
+
+-- C++ boss_taerarAI::UpdateAI (:663, exit legs :673-677) banish exit: RemoveFlag +
+-- RemoveAurasDueToSpell(SPELL_SHADE) + SetReactState(REACT_AGGRESSIVE).
+-- Called by the 60s banish timer and by the SummonedCreatureDies
+-- early exit below; cancels the pending timer when called early
+-- (ragnaros emerge precedent).
+local function taerarEndBanish(creature, guid)
+    taerarBanished[guid] = nil
+    taerarShades[guid] = nil
+    local per = timers[guid]
+    if per and per["taerar_banish"] then
+        RemoveEventById(per["taerar_banish"])
+        per["taerar_banish"] = nil
+    end
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_NON_ATTACKABLE)
+    creature:RemoveAura(SPELL_SHADE)
+    creature:SetReactState(REACT_AGGRESSIVE)
+end
+
+-- C++ boss_taerarAI::DamageTaken (:618-643): if (!_banished &&
+-- !HealthAbovePct(100 - 25*_stage)) { _banished = true; 60s timer;
+-- InterruptNonMeleeSpells(false); DoStopAttack; Talk(1); 3x
+-- DoCastVictim(shade summons, triggered); _shades += 3; DoCast(SHADE);
+-- SetFlag(NOT_SELECTABLE|NON_ATTACKABLE); SetReactState(PASSIVE);
+-- ++_stage; }. C++ arm order kept. Pre-damage health + floor form
+-- (sibling-dragon convention); the _banished latch is the re-trigger
+-- guard (C++ leaves it set until the banish exit).
+local function taerarDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local stage = stages[guid] or 1
+    stages[guid] = stage
+    if taerarBanished[guid] then
+        return
+    end
+    local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
+    if maxHealth == 0 or health == 0 then
+        return
+    end
+    if health <= math.floor(maxHealth * (100 - 25 * stage) / 100) then
+        creature:InterruptNonMeleeSpells(false)
+        creature:AttackStop()
+        creature:Talk(SAY_SUMMON)
+        local victim = creature:GetVictim()
+        if victim then
+            creature:CastSpell(victim, SPELL_SUMMON_SHADE_1, true)
+            creature:CastSpell(victim, SPELL_SUMMON_SHADE_2, true)
+            creature:CastSpell(victim, SPELL_SUMMON_SHADE_3, true)
+        end
+        taerarShades[guid] = 3
+        taerarBanished[guid] = true
+        creature:CastSpell(creature, SPELL_SHADE)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_NON_ATTACKABLE)
+        creature:SetReactState(REACT_PASSIVE)
+        stages[guid] = stage + 1
+        schedule(guid, "taerar_banish", 60000, function()
+            taerarEndBanish(creature, guid)
+        end)
+    end
+end
+
+-- C++ boss_taerarAI::SummonedCreatureDies (:613-615): --_shades; the
+-- UpdateAI banish branch exits when !_shades. Taerar summons nothing
+-- else in the ported model, so any summoned-creature death while
+-- banished counts; the 60s timer is the guaranteed exit regardless.
+local function taerarSummonedDies(event, creature, summon, killer)
+    local guid = creature:GetGUID()
+    if not taerarBanished[guid] then
+        return
+    end
+    local shades = (taerarShades[guid] or 0) - 1
+    taerarShades[guid] = shades
+    if shades <= 0 then
+        taerarEndBanish(creature, guid)
     end
 end
 
@@ -561,7 +680,10 @@ local function emerissKilledUnit(event, creature, victim)
 end
 
 local function dragonLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    taerarBanished[guid] = nil
+    taerarShades[guid] = nil
 end
 
 local function dragonDied(event, creature, killer)
@@ -575,14 +697,13 @@ local function dragonReset(event, creature)
     -- C++ emerald_dragonAI::Reset (boss_emerald_dragons.cpp:100):
     -- RemoveFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE|NON_ATTACKABLE)
     -- (ported 2026-10-20); the banish-machine SetFlag pair (:638) is
-    -- unported — the flags now bridge but the pair rides the unported
-    -- banish machine (no SummonedCreatureDies / InterruptNonMeleeSpells
-    -- bridges), so this is the only flag leg at a registered site.
-    -- C++ :101's SetReactState(REACT_AGGRESSIVE) stays out: nothing in
-    -- the ported model ever sets the dragons non-aggressive (the
-    -- 25%-stage banish machine's REACT_PASSIVE :639 and its
-    -- UpdateAI-timeout AGGRESSIVE restore :677 are both unported),
-    -- and spawn default is AGGRESSIVE.
+    -- PORTED in taerarDamageTaken below (this run), so this Reset leg
+    -- only clears the base flags.
+    -- C++ :101's SetReactState(REACT_AGGRESSIVE) stays out for the
+    -- base Reset: the banish machine's own REACT_PASSIVE :639 /
+    -- AGGRESSIVE restore :677 are PORTED in taerarDamageTaken /
+    -- taerarEndBanish below (this run), and spawn default is
+    -- AGGRESSIVE, so no base-Reset react leg is needed.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_NON_ATTACKABLE)
     -- C++ emerald_dragonAI::Reset (:102): DoCast(me, SPELL_MARK_OF_NATURE_
     -- AURA 25041, triggered) — ported for C++-exactness; mechanically
@@ -600,6 +721,8 @@ end
 -- above (2026-10-20).
 local function taerarReset(event, creature)
     dragonReset(event, creature)
+    taerarBanished[creature:GetGUID()] = nil
+    taerarShades[creature:GetGUID()] = nil
     creature:RemoveAura(SPELL_SHADE)
 end
 
@@ -626,4 +749,6 @@ RegisterCreatureEvent(ENTRY_TAERAR,  1, taerarEnterCombat)
 RegisterCreatureEvent(ENTRY_TAERAR,  2, dragonLeaveCombat)
 RegisterCreatureEvent(ENTRY_TAERAR,  4, dragonDied)
 RegisterCreatureEvent(ENTRY_TAERAR,  3, dragonKilledUnit)
+RegisterCreatureEvent(ENTRY_TAERAR,  9, taerarDamageTaken)
+RegisterCreatureEvent(ENTRY_TAERAR,  21, taerarSummonedDies)
 RegisterCreatureEvent(ENTRY_TAERAR,  23, taerarReset)

@@ -20717,8 +20717,13 @@ func init() {
 	// DamageTaken arms (event 9, pre-damage health, floor-form 75/50/25%
 	// thresholds) — Talk(SAY_*_SUMMON 1) + 10x 24795 triggered / 24811 /
 	// 24910 triggered + ++_stage.
-	// Documented-only: taerar DamageTaken (event 9 bridges; the banish
-	// machine rides no-flag / no-react-state / no-summon-death bridges);
+	// Ported: taerar DamageTaken banish machine (event 9 + event 21) —
+	// InterruptNonMeleeSpells(false) + AttackStop + Talk(1) + 3x
+	// triggered victim-cast shade summons + SHADE self-cast +
+	// NOT_SELECTABLE/NON_ATTACKABLE + REACT_PASSIVE + 60s banish timer
+	// + SummonedCreatureDies early exit; timer ticks defer 500ms while
+	// banished. Retires the stale no-flag / no-react-state /
+	// no-summon-death / no-interrupt-bridge documented-only note.
 	// emerald_dragonAI / emeriss KilledUnit player-gated victim-self-casts
 	// (25040 / 24904, no Go spell effect); the Reset self-cast 25041 +
 	// RemoveFlag / SetReactState legs; the UpdateAI SPELL_SUMMON_PLAYER
