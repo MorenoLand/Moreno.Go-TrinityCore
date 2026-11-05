@@ -3011,6 +3011,25 @@ func breakableCCAuraPresent(auras map[uint32]*activeAura) bool {
 	return false
 }
 
+// breakableStunAuraPresent is the stun-only leg of breakableCCAuraPresent:
+// Unit::HasBreakableByDamageAuraType(SPELL_AURA_MOD_STUN) (Unit.cpp:663-671),
+// the stun leg of ThreatReference::ShouldBeSuppressed
+// (ThreatManager.cpp:118-119). The other four breakable CC types do not
+// suppress — only confuse (any aura, not just breakable) and breakable
+// stun feed ShouldBeSuppressed — so the five-type union above would
+// wrongly suppress feared, rooted and transformed victims.
+func breakableStunAuraPresent(auras map[uint32]*activeAura) bool {
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraModStun {
+			continue
+		}
+		if getSpellAuraInterruptFlags(aura.SpellID, aura.AuraInterruptFlags)&auraInterruptFlagTakeDamage != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // aiVictimHasBreakableCC bridges the CasterAI::UpdateAI guard
 // (CombatAI.cpp:155):
 // me->EnsureVictim()->HasBreakableByDamageCrowdControlAura(me)
@@ -5356,7 +5375,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// motion/session context (see threat.go seam). The
 		// always-visible exemption lifts detect flags only: phase
 		// precedes always-visible in CanSeeOrDetect, and the P3
-		// arms are separate ShouldBeOffline ORs.
+		// arms are separate ShouldBeOffline ORs. The suppressed
+		// set refreshes on the same tick (threatSuppressedSet):
+		// the offline set is computed first because an offline
+		// victim is never suppressed (single _online field), and
+		// the refresh runs ahead of the 1s reselect below so a
+		// victim whose immunity or CC expired is pickable as
+		// online again without waiting for a taunt update or a
+		// threat-caused promotion.
 		offline := s.threatPhaseOfflineSet(motion, players)
 		if offline == nil {
 			offline = make(map[uint64]bool)
@@ -5380,6 +5406,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			offline[guid] = true
 		}
 		motion.ThreatMgr.SetOfflineSet(offline)
+		motion.ThreatMgr.SetSuppressedSet(s.threatSuppressedSet(motion, players, offline))
 		oldTarget := motion.TargetGUID
 		if switched, newVictim, dirty := motion.ThreatMgr.Update(100, inMeleeOf); !passive && switched && newVictim != 0 {
 			motion.TargetGUID = newVictim
