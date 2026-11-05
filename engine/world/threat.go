@@ -50,20 +50,24 @@ type ThreatManager struct {
 	// ThreatManager.cpp:290-304): victims marked here sort below online
 	// victims in victim selection (CompareReferencesLT state precedence,
 	// ThreatManager.cpp:593-601) and are picked when no online victim
-	// remains; a taunted victim is never suppressed
-	// (ShouldBeSuppressed:112-115). The set is refreshed wholesale on
-	// the combat step tick by threatSuppressedSet (SetSuppressedSet),
-	// which re-evaluates ShouldBeSuppressed per victim — immunity to
-	// the owner's melee school, any confuse aura, any breakable stun —
-	// so a victim whose immunity or CC expires promotes back to online
-	// within one step tick; that tick refresh is Go's form of the
-	// EvaluateSuppressed re-evaluation hook (the synchronous C++
-	// AddThreat promotion leg, :386, is not ported — the manager never
-	// evaluates victim state itself — so an amount landing in the
-	// one-tick window after expiry is dropped where C++ would promote
-	// and add it, the same staleness shape as the offline gate). The
-	// offline leg is modeled below, fed only by callers that evaluate
-	// a ShouldBeOffline arm with motion context (see SetOfflineSet).
+	// remains. The stored flag persists through a taunt: ShouldBeSuppressed
+	// exempts taunting victims (:112-115), but no EvaluateSuppressed call
+	// ever touches a ref on this list for a taunt — EvaluateSuppressed
+	// iterates _threatenedByMe (ThreatManager.h:219), the owner as a victim
+	// on other lists — so a suppressed ref stays suppressed until AddThreat
+	// :386 promotes it (evaluateThreatVictimState, which re-evaluates
+	// ShouldBeSuppressed for the resolved victim). The set is refreshed
+	// wholesale on the combat step tick by threatSuppressedSet
+	// (SetSuppressedSet), which re-evaluates ShouldBeSuppressed per victim
+	// — immunity to the owner's melee school, any confuse aura, any
+	// breakable stun — and preserves the stored flag for taunted victims
+	// instead of clearing it, so a non-taunted victim whose immunity or
+	// CC expires promotes back to online within one step tick; that tick
+	// refresh is Go's form of the EvaluateSuppressed re-evaluation hook,
+	// with the same one-tick staleness shape as the offline gate for
+	// amounts landing in the window after expiry. The offline leg is
+	// modeled below, fed only by callers that evaluate a ShouldBeOffline
+	// arm with motion context (see SetOfflineSet).
 	suppressed map[uint64]bool
 	// offline mirrors ThreatReference ONLINE_STATE_OFFLINE
 	// (ThreatManager.h:256): victims whose ShouldBeOffline arm
@@ -218,10 +222,11 @@ func (tm *ThreatManager) GetFixateTarget() uint64 {
 // MOD_TAUNT aura effects; Go keys it per victim GUID with the aura's expiry,
 // which the Update tick re-evaluates. The EvaluateSuppressed(true) tail of
 // TauntUpdate (:459) iterates _threatenedByMe — the owner as a victim on
-// OTHER lists (ThreatManager.h:219) — which Go has no reverse index for;
-// its taunt-applied direction on the owner's own list rides the live taunt
-// read in isSuppressedLocked, and the tick refresh plus the :386 promotion
-// cover the rest.
+// OTHER lists (ThreatManager.h:219) — which Go has no reverse index for,
+// and it never touches a ref on the owner's own list: a suppressed ref
+// stays suppressed through a taunt until AddThreat :386 promotes it
+// (evaluateThreatVictimState), and the tick refresh preserves the stored
+// flag for taunted victims (threatSuppressedSet).
 // A non-positive duration means the aura carries no duration: the state lives
 // until the aura is removed.
 func (tm *ThreatManager) ApplyTaunt(victim uint64, durationMs uint32) {
@@ -287,15 +292,15 @@ func (s *Server) clearCreatureTaunt(key creatureAuraKey, casterGUID uint64) {
 }
 
 // isSuppressedLocked reports whether the victim's reference is suppressed
-// on this list. A taunted victim is never suppressed
-// (ThreatReference::ShouldBeSuppressed, ThreatManager.cpp:112-115), so a
-// live taunt exempts the victim even while the flag stands — the C++
-// EvaluateSuppressed(true) tail of TauntUpdate re-evaluates the same way.
-// Callers hold tm.mu.
+// on this list: a pure stored-flag read of ThreatReference::IsSuppressed
+// (ThreatManager.h:263, _online == ONLINE_STATE_SUPPRESSED). The taunt
+// exemption of ShouldBeSuppressed (ThreatManager.cpp:112-115) lives in
+// the evaluators, not in this read — no EvaluateSuppressed call ever
+// touches a ref on this list for a taunt (it iterates _threatenedByMe,
+// ThreatManager.h:219; the TauntUpdate :459 tail runs it on the owner's
+// manager), so a suppressed ref stays suppressed through a taunt until
+// AddThreat :386 promotes it (evaluateThreatVictimState). Callers hold tm.mu.
 func (tm *ThreatManager) isSuppressedLocked(victim uint64) bool {
-	if tm.isTauntedLocked(victim) {
-		return false
-	}
 	return tm.suppressed[victim]
 }
 
@@ -350,10 +355,12 @@ func (tm *ThreatManager) IsOffline(victim uint64) bool {
 }
 
 // IsSuppressed reports whether the victim's reference is suppressed on
-// this list, the stored-flag read of ThreatReference::ShouldBeSuppressed
-// (ThreatManager.cpp:112-121). A taunted victim reads unsuppressed even
-// while the flag stands (:112-115), the same live exemption
-// isSuppressedLocked applies for the combat tick and AddThreat.
+// this list, the stored-flag read of ThreatReference::IsSuppressed
+// (ThreatManager.h:263). A taunted victim with a stored suppressed flag
+// still reads suppressed: the ShouldBeSuppressed taunt exemption
+// (ThreatManager.cpp:112-115) only makes the evaluators return false,
+// so the :386 promotion in evaluateThreatVictimState fires on the next
+// threat the victim causes.
 func (tm *ThreatManager) IsSuppressed(victim uint64) bool {
 	if tm == nil || victim == 0 {
 		return false
@@ -887,23 +894,28 @@ func (s *Server) threatHeadOfflineSet(motion *creatureMotion) (map[uint64]bool, 
 // caller gate is the NORMAL-school damage immunity, as in
 // SuppressVictim), any confuse aura (HasAuraType SPELL_AURA_MOD_
 // CONFUSE), any breakable-by-damage stun (HasBreakableByDamageAuraType
-// SPELL_AURA_MOD_STUN, Unit.cpp:663-671). A taunted victim is never
-// suppressed (:112-115) and an offline victim is never suppressed
-// either — EvaluateSuppressed only promotes IsOnline refs (:292-296)
-// and the two states share the single _online field — so the offline
-// set computed first on the tick is passed in and skipped, and the
-// taunt state is read through IsTaunted. Unresolvable victims stay
-// unsuppressed, as in the phase/detect evaluators: a logged-out or
-// cross-map victim's entry drops on the death/logout/evade paths,
-// and a cross-map creature victim is offline-flagged by the phase arm
-// anyway. The AddThreat promotion leg (:386) now runs synchronously in
-// creatureAddThreat, which has the resolved victim; only the TauntUpdate
-// EvaluateSuppressed(true) tail (:459) stays tick-only — the
-// taunt-expiry direction (re-suppressing a victim whose taunt lapsed)
-// has no synchronous hook, while the taunt-applied direction rides the
-// live taunt read in isSuppressedLocked. The combat tick refresh
-// re-evaluates every step tick instead, so promotion lands at most one
-// step tick after expiry — the same staleness shape as the offline flag.
+// SPELL_AURA_MOD_STUN, Unit.cpp:663-671). An offline victim is never
+// suppressed either — EvaluateSuppressed only promotes IsOnline refs
+// (:292-296) and the two states share the single _online field — so the
+// offline set computed first on the tick is passed in and skipped. A
+// taunted victim keeps its stored state instead of being re-evaluated:
+// ShouldBeSuppressed exempts taunting victims (:112-115), but no
+// EvaluateSuppressed call ever touches a ref on this list for a taunt
+// (it iterates _threatenedByMe, ThreatManager.h:219; the TauntUpdate
+// :459 tail runs it on the owner's manager), so a suppressed victim
+// stays suppressed through the taunt until AddThreat :386 promotes it
+// and an online victim is not suppressed by a condition gained
+// mid-taunt. Unresolvable victims stay unsuppressed, as in the
+// phase/detect evaluators: a logged-out or cross-map victim's entry
+// drops on the death/logout/evade paths, and a cross-map creature
+// victim is offline-flagged by the phase arm anyway. The AddThreat
+// promotion leg (:386) runs synchronously in evaluateThreatVictimState,
+// which has the resolved victim. Residual wholesale-refresh
+// approximation: a condition gained mid-taunt re-suppresses the victim
+// on the tick after the taunt lapses, where C++ keeps them online
+// until the next suppress-triggering event; and a non-taunted victim
+// whose condition expires promotes within one step tick, where C++
+// waits for AddThreat — the same staleness shape as the offline flag.
 func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos, offline map[uint64]bool) map[uint64]bool {
 	if s == nil || motion == nil || motion.ThreatMgr == nil {
 		return nil
@@ -920,6 +932,13 @@ func (s *Server) threatSuppressedSet(motion *creatureMotion, players []playerPos
 			continue
 		}
 		if motion.ThreatMgr.IsTaunted(guid) {
+			// Preserve the stored flag: a taunt neither suppresses an
+			// online victim nor promotes a suppressed one on this list
+			// (see the header comment), so re-evaluating the legs here
+			// would invent both transitions.
+			if motion.ThreatMgr.IsSuppressed(guid) {
+				sup[guid] = true
+			}
 			continue
 		}
 		if sess := byGUID[guid]; sess != nil && sess.player != nil {
@@ -1374,9 +1393,11 @@ func (tm *ThreatManager) Update(elapsedMs int64, inMelee func(uint64) bool) (swi
 	}
 	tm.updateTimerMs = threatUpdateIntervalMs
 
-	// TauntUpdate's EvaluateSuppressed(true) tail re-evaluates aura-driven
-	// states; Go re-evaluates taunt expiries here, and the suppressed
-	// flag refreshes on the combat tick via SetSuppressedSet.
+	// TauntUpdate's EvaluateSuppressed(true) tail (:459) iterates
+	// _threatenedByMe (owner-as-victim on other lists) and never touches
+	// a ref on this list; Go re-evaluates taunt expiries here, and the
+	// suppressed flag refreshes on the combat tick via SetSuppressedSet
+	// (which preserves the stored flag for taunted victims).
 	now := time.Now()
 	for victim, exp := range tm.tauntExpiry {
 		if !exp.IsZero() && now.After(exp) {

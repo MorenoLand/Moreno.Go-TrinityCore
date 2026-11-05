@@ -5387,7 +5387,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// the refresh runs ahead of the 1s reselect below so a
 		// victim whose immunity or CC expired is pickable as
 		// online again without waiting for a taunt update or a
-		// threat-caused promotion.
+		// threat-caused promotion; a taunted victim keeps its
+		// stored suppressed flag through the taunt (preserve leg
+		// in threatSuppressedSet) until AddThreat :386 promotes it.
 		offline := s.threatPhaseOfflineSet(motion, players)
 		if offline == nil {
 			offline = make(map[uint64]bool)
