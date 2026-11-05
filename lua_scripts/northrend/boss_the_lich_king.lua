@@ -156,7 +156,9 @@
 -- bridges (the bronjahm npc_corrupted_soul_fragment precedent).
 -- npc_terenas_menethil (NPC_TERENAS_MENETHIL_FROSTMOURNE 36823,
 -- NPC_TERENAS_MENETHIL_FROSTMOURNE_H 39217) — DamageTaken PORTED
--- (terenasDamageTaken, ev9, this tick); Talks/DoAction legs below
+-- (terenasDamageTaken, ev9, this tick); DoAction ACTION_TELEPORT_BACK
+-- PORTED 2026-11-05 (tick 215) via terenasDoAction (ev38) + the
+-- spiritWardenDied JustDied relay (ev4). Talks/scheduler legs below
 -- remain NOT registered as stated:
 -- Talk(SAY_TERENAS_INTRO_1..3 0..2) (EVENT_FROSTMOURNE_TALK_1..3,
 -- DoAction ACTION_FROSTMOURNE_INTRO scheduler) and
@@ -308,6 +310,8 @@ local SPELL_DEFILE_AURA = 72743 -- boss_the_lich_king.cpp:115
 local SPELL_BROKEN_FROSTMOURNE = 72398 -- boss_the_lich_king.cpp:174
 local SPELL_TERENAS_LOSES_INSIDE = 72572 -- boss_the_lich_king.cpp:157
 local SPELL_DESTROY_SOUL = 74086 -- boss_the_lich_king.cpp:154
+local SPELL_RESTORE_SOUL = 72595 -- boss_the_lich_king.cpp:150
+local ACTION_TELEPORT_BACK = 8 -- boss_the_lich_king.cpp:343 (EncounterActions)
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local EMOTE_ONESHOT_EMERGE = 449 -- SharedDefines.h:2086
@@ -607,6 +611,21 @@ local function spiritWardenLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ npc_spirit_warden::JustDied (boss_the_lich_king.cpp:1838-1841):
+-- instance GetGuidData(DATA_TERENAS_MENETHIL) -> terenas DoAction
+-- (ACTION_TELEPORT_BACK). The instance GUID fetch rides the
+-- FindNearestCreature sweep (500yd, thorim preAddDied precedent);
+-- only one terenas of each entry exists in the Frostmourne room.
+local function spiritWardenDied(event, creature, killer)
+    local terenas = creature:FindNearestCreature(ENTRY_TERENAS, 500)
+    if not terenas then
+        terenas = creature:FindNearestCreature(ENTRY_TERENAS_HEROIC, 500)
+    end
+    if terenas then
+        terenas:DoAction(ACTION_TELEPORT_BACK)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 1, shamblingHorrorJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 2, shamblingHorrorLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 9, shamblingHorrorDamageTaken)
@@ -616,6 +635,7 @@ RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 2, ragingSpiritLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 23, ragingSpiritLeaveCombat)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 1, spiritWardenJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 2, spiritWardenLeaveCombat)
+RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 4, spiritWardenDied)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 23, spiritWardenLeaveCombat)
 
 -- C++ npc_terenas_menethil::DamageTaken (:1733-1752): lethal damage
@@ -650,6 +670,24 @@ end
 
 RegisterCreatureEvent(ENTRY_TERENAS, 9, terenasDamageTaken)
 RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 9, terenasDamageTaken)
+
+-- C++ npc_terenas_menethil::DoAction ACTION_TELEPORT_BACK
+-- (boss_the_lich_king.cpp:1714-1717): CastSpell(nullptr,
+-- SPELL_RESTORE_SOUL, TRIGGERED_NONE) + DespawnOrUnsummon(3s).
+-- PORTED 2026-11-05 (tick 215), census row 159, via the
+-- spiritWardenDied JustDied relay above. (The terenas UpdateAI
+-- EVENT_TELEPORT_BACK leg that sends the Lich King DoAction stays
+-- out — LK-side instance-GUID + phase machine.)
+local function terenasDoAction(event, creature, action)
+    if action ~= ACTION_TELEPORT_BACK then
+        return
+    end
+    creature:CastSpell(nil, SPELL_RESTORE_SOUL)
+    creature:DespawnOrUnsummon(3000)
+end
+
+RegisterCreatureEvent(ENTRY_TERENAS, 38, terenasDoAction)
+RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 38, terenasDoAction)
 
 -- C++ spell_the_lich_king_infest::OnPeriodic
 -- (boss_the_lich_king.cpp:2003-2009): EFFECT_0 SPELL_AURA_
