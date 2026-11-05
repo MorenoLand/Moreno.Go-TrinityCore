@@ -52,9 +52,10 @@
 -- SPELL_DREAMWALKERS_RAGE 71189, self-cast twin) + 3500ms
 -- EVENT_DREAM_SLIP DoCastSelf(SPELL_DREAM_SLIP 71196) + its SpellHit
 -- consequence (CLEAR_ALL + REPUTATION + invisible + NOT_SELECTABLE +
--- 4s despawn, event 14 valithriaSpellHit); still out:
+-- 4s despawn, event 14 valithriaSpellHit); SendEncounterUnit DISENGAGE
+-- (:328) PORTED in valithriaHealReceived (tick 222); still out:
 -- LowerPlayerDamageReq,
--- instance->SendEncounterUnit, Initialize, lichKing EnterEvadeMode
+-- Initialize, lichKing EnterEvadeMode
 -- (instance GUID), and the NOT_STARTED first-heal combat-start leg
 -- (FindNearestCreature archmage + archmage:DoZoneInCombat() — PORTED
 -- 2026-10-24 with a once-latch; the handler Talks nothing on that
@@ -67,14 +68,17 @@
 -- strand the encounter (algalon precedent);
 -- Talk(SAY_VALITHRIA_DEATH 4) rides the DamageTaken death-negated leg
 -- (damage = 0, _justDied flag — she never actually dies; the trigger
--- DoAction(ACTION_DEATH) cross-AI leg has no bridge);
+-- DoAction(ACTION_DEATH) cross-AI leg has no bridge); SendEncounterUnit
+-- DISENGAGE (:365) PORTED in valithriaDamageTaken (tick 222); the Reset
+-- DISENGAGE (:295) is PORTED in valithriaReset below (tick 222);
 -- Talk(SAY_VALITHRIA_ENTER_COMBAT 0) rides UpdateAI EVENT_INTRO_TALK /
 -- Talk(SAY_VALITHRIA_BERSERK 6) rides UpdateAI EVENT_BERSERK (heroic-only)
 -- — both schedules fire from DoAction ACTION_ENTER_COMBAT (:305-313),
 -- which is itself DoAction'ed from the bridge-blocked engagement chain
--- (:505-512: instance GUID fetch + DoZoneInCombat + SetBossState) — no
--- DoAction bridge (the timer bridge is CreateLuaEvent, live — the leg
--- origin is the blocker, not the timer);
+-- (:505-512: instance GUID fetch + DoZoneInCombat + SetBossState) — the
+-- DoAction bridge (event 38) is live, but the sender (green dragon
+-- combat trigger 38752, unregistered) never fires it, so the ENGAGE
+-- frame (:309) stays out with the timer arms (tick 222 triage);
 -- Talk(SAY_VALITHRIA_DREAM_PORTAL 1) rides UpdateAI EVENT_DREAM_PORTAL
 -- (non-heroic scheduler leg; the SUMMON_PORTAL DoCast legs have no-cast
 -- bridge).
@@ -90,7 +94,12 @@
 -- JustReachedHome me->setActive(false) (no bridge).
 -- npc_green_dragon_combat_trigger (38752) — no Talk; the DoAction
 -- ACTION_ENTER_COMBAT / ACTION_SETUP_ARCHMAGES / ACTION_DEATH machine
--- (no-DoAction bridge) — NOT registered.
+-- (DoAction bridge live as event 38, but the trigger's engagement chain
+-- — CheckRequiredBosses + instance GUID + SetBossState — is unported)
+-- — NOT registered. The ValithriaDespawner grid sweep (:215-250, 5s
+-- BasicEvent after ACTION_DEATH, DISENGAGE to valithria + despawn of
+-- the encounter adds in 333yd) has no BasicEvent bridge — stays out
+-- (tick 222 triage).
 -- PORTED (2026-10-13 retraction re-audit): npc_risen_archmage
 -- (37868) — FROSTBOLT_VOLLEY 70759 self-cast {5s,15s}/{8s,15s};
 -- MANA_VOID 71179 random-player {20s,25s}/{20s,25s} (POWER_MANA
@@ -407,6 +416,10 @@ local function valithriaDamageTaken(_, creature, _, damage)
             if not st.justDied then
                 st.justDied = true
                 creature:Talk(SAY_VALITHRIA_DEATH)
+                -- C++ :365 — SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE,
+                -- me), after Talk, before the trigger DoAction(ACTION_DEATH)
+                -- leg (out — trigger unregistered, cross-AI).
+                creature:SendEncounterUnit(1, creature)
             end
             return false, 0
         end
@@ -455,6 +468,9 @@ local function valithriaHealReceived(_, creature, healer, heal)
     if healed > math.floor(maxHealth * 100 / 100) and not st.done then
         st.done = true
         creature:Talk(SAY_VALITHRIA_SUCCESS)
+        -- C++ :328 — SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE, me),
+        -- after Talk, before the corruption-strip (tick 222).
+        creature:SendEncounterUnit(1, creature)
         creature:RemoveAura(SPELL_CORRUPTION_VALITHRIA)
         creature:CastSpell(creature, SPELL_ACHIEVEMENT_CHECK)
         creature:CastSpell(creature, SPELL_DREAMWALKERS_RAGE)
@@ -505,6 +521,9 @@ local function valithriaReset(event, creature)
     creature:ApplySpellImmune(0, 1, 20, true)
     creature:ApplySpellImmune(0, 0, 136, true)
     creature:ApplySpellImmune(0, 6, 56131, true)
+    -- C++ :295 — SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE, me), after
+    -- the immunities, before Initialize() (tick 222).
+    creature:SendEncounterUnit(1, creature)
 end
 
 -- C++ npc_blistering_zombie::JustDied — unconditional
