@@ -80,7 +80,7 @@
 -- InterruptSpell(CURRENT_GENERIC_SPELL) legs inside the
 -- conflagration/shadow-nova gates are vacuous there (they fire
 -- only when not casting; InterruptSpell is bridged at
--- lua_creature_events.go:962 but adds nothing in this position).
+-- lua_creature_events.go:987 but adds nothing in this position).
 -- Ungated per C++: the sacrolash shadow-image summon (:272-287,
 -- no gate), both 6min enrages (:306 sacrolash / alythess enrage
 -- block, no gate), shadow-image shadow fury (no gate). Shadow-
@@ -318,12 +318,14 @@ local function sacrolashConfoundingBlow(creature, guid)
     end)
 end
 
--- C++ EVENT enrage: Talk(YELL_ENRAGE) + DoCastSelf(46587);
--- 6min one-shot, Enraged once-guard (C++-exact).
+-- C++ EVENT enrage: InterruptSpell(CURRENT_GENERIC_SPELL) (:300) +
+-- Talk(YELL_ENRAGE) + DoCastSelf(46587); 6min one-shot, Enraged
+-- once-guard (C++-exact).
 local function sacrolashEnrage(creature, guid)
     local st = sacrolashState[guid]
     if st and not st.enraged then
         st.enraged = true
+        creature:InterruptSpell(1) -- CURRENT_GENERIC_SPELL (boss_eredar_twins.cpp:300)
         creature:Talk(YELL_ENRAGE)
         creature:CastSpell(creature, SPELL_ENRAGE)
     end
@@ -500,12 +502,14 @@ local function alythessPyrogenics(creature, guid)
     end)
 end
 
--- C++ EVENT enrage: Talk(YELL_BERSERK) + DoCastSelf(46587);
--- 6min one-shot, Enraged once-guard (C++-exact).
+-- C++ EVENT enrage: InterruptSpell(CURRENT_GENERIC_SPELL) (:635) +
+-- Talk(YELL_BERSERK) + DoCastSelf(46587); 6min one-shot, Enraged
+-- once-guard (C++-exact).
 local function alythessEnrage(creature, guid)
     local st = alythessState[guid]
     if st and not st.enraged then
         st.enraged = true
+        creature:InterruptSpell(1) -- CURRENT_GENERIC_SPELL (boss_eredar_twins.cpp:635)
         creature:Talk(YELL_BERSERK)
         creature:CastSpell(creature, SPELL_ENRAGE)
     end

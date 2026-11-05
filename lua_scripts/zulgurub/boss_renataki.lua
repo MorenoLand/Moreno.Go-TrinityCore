@@ -20,8 +20,10 @@
 -- triggered per C++ default DoCastVictim non-triggered).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate has no
 -- UNIT_STATE bridge — timers fire unconditionally (jeklik convention);
--- InterruptSpell(CURRENT_GENERIC_SPELL) is a no-op (no cast state in
--- Go) — skipped, the state flips still happen; the invisible/visible
+-- InterruptSpell(CURRENT_GENERIC_SPELL) is PORTED via the live
+-- creature:InterruptSpell(1) bridge (lua_creature_events.go:987;
+-- CURRENT_GENERIC_SPELL = 1) — the invisible/visible arms interrupt
+-- any pending generic cast C++-exact; the invisible/visible
 -- visual arms are PORTED (2026-10-21): SetEquipmentSlots main-hand
 -- swap + SetDisplayId(11686/15268) + UNIT_FLAG_NOT_SELECTABLE
 -- SetFlag/RemoveFlag (all bridged) — the boss actually goes
@@ -86,8 +88,8 @@ local function randomThreatPlayerInRange(creature, range)
     return out[math.random(#out)]
 end
 
--- C++ invisible timer :67-74: InterruptSpell is a no-op (no cast state
--- in Go) + SetEquipmentSlots(main-hand unequip) + SetDisplayId(11686) +
+-- C++ invisible timer :67-74: InterruptSpell(CURRENT_GENERIC_SPELL)
+-- + SetEquipmentSlots(main-hand unequip) + SetDisplayId(11686) +
 -- SetFlag(UNIT_FLAG_NOT_SELECTABLE); the state flip is C++-exact,
 -- re-arm {15s,30s}.
 local function onInvisible(creature, guid)
@@ -95,6 +97,7 @@ local function onInvisible(creature, guid)
     if st then
         st.invisible = true
     end
+    creature:InterruptSpell(1) -- CURRENT_GENERIC_SPELL (boss_renataki.cpp:69)
     creature:SetEquipmentSlots(0, 0xFFFFFFFF, 0xFFFFFFFF)
     creature:SetDisplayId(11686)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
@@ -125,15 +128,16 @@ local function onAmbush(creature, guid)
     end)
 end
 
--- C++ visible timer :99-106: 4s, gated on _ambushed; InterruptSpell is a
--- no-op (no cast state in Go) + SetDisplayId(15268) + SetEquipmentSlots
--- (EQUIP_ID_MAIN_HAND = 0, boss_renataki.cpp:30) + RemoveFlag(
--- UNIT_FLAG_NOT_SELECTABLE); clears _invisible C++-exact; re-arm 4000
--- C++-exact (idempotent while visible).
+-- C++ visible timer :99-106: 4s, gated on _ambushed;
+-- InterruptSpell(CURRENT_GENERIC_SPELL) + SetDisplayId(15268) +
+-- SetEquipmentSlots (EQUIP_ID_MAIN_HAND = 0, boss_renataki.cpp:30) +
+-- RemoveFlag(UNIT_FLAG_NOT_SELECTABLE); clears _invisible C++-exact;
+-- re-arm 4000 C++-exact (idempotent while visible).
 local function onVisible(creature, guid)
     local st = renatakiState[guid]
     if st and st.ambushed and st.invisible then
         st.invisible = false
+        creature:InterruptSpell(1) -- CURRENT_GENERIC_SPELL (boss_renataki.cpp:100)
         creature:SetDisplayId(15268)
         creature:SetEquipmentSlots(0, 0xFFFFFFFF, 0xFFFFFFFF)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
