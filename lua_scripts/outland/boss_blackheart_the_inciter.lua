@@ -37,7 +37,8 @@
 -- boss_blackheart_the_inciter::JustDied — Talk(SAY_DEATH 4) (line
 -- 101) — the sjonnir self-Talk precedent (event 4; the _JustDied()
 -- instance leg rides the no-instance bridge — documented-only).
--- DOCUMENTED-ONLY (in this header; only entry 18667 registered):
+-- DOCUMENTED-ONLY (in this header; entry 18667 registered for events
+-- 1/2/3/4/23, dummy entries 19300-19304 for event 22 only):
 -- boss_blackheart_the_inciter::Reset — me->SetReactState
 -- (REACT_AGGRESSIVE) is PORTED below on event 23 (the Oct-18
 -- "no-react-state bridge" note was stale — the bridge is live,
@@ -74,13 +75,20 @@
 -- charmed-player / no-instance bridges — documented-only.
 -- boss_blackheart_the_inciter_mc_dummy (NullCreatureAI;
 -- NPC_BLACKHEART_DUMMY1..5 = 19300-19304, shadow_labyrinth.h lines
--- 45-49) — IsSummonedBy casts SPELL_INCITE_CHAOS_B 33684 on the
--- summoner + dummy-threat juggling across all dummies and their
--- m_Controlled; DespawnOrUnsummon when m_Controlled empties;
--- GetAIForCharmedPlayer returns BlackheartCharmedPlayerAI —
--- zero Talk arms anywhere in the dummy script; no-summon /
--- no-threat / no-cast bridges — documented-only (dummies NOT
--- registered).
+-- 45-49) — IsSummonedBy: the SPELL_INCITE_CHAOS_B 33684 triggered
+-- cast on the summoner is PORTED below on event 22 (the ev22 bridge
+-- + the CastSpell triggered third arg, lua_creature_events.go);
+-- the dummy-threat juggling across all dummies and their
+-- m_Controlled stays OUT — no bridge enumerates the instance dummy
+-- GUID set (GetBlackheartDummies, instance_shadow_labyrinth.cpp:
+-- 183-188), no creature-by-GUID lookup (ObjectAccessor::GetCreature
+-- — the moroes "no GUID->creature lookup" precedent), no
+-- m_Controlled-set enumeration (GetCharmGUID is a single GUID, and
+-- AddThreat cannot be invoked on a GUID); DespawnOrUnsummon when
+-- m_Controlled empties stays OUT on the same missing bridge;
+-- GetAIForCharmedPlayer returns BlackheartCharmedPlayerAI — no
+-- charmed-player-actor bridge — documented-only. Zero Talk arms
+-- anywhere in the dummy script.
 -- spell_blackheart_incite_chaos SpellScript — HandleDummy cycles
 -- INCITE_SPELLS {33677, 33680, 33681, 33682, 33683} on hit units
 -- (EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT) — no SpellScript bridge
@@ -97,6 +105,7 @@ local SAY_DEATH = 4
 
 local SPELL_WAR_STOMP = 33707 -- boss_blackheart_the_inciter.cpp:34
 local SPELL_CHARGE = 33709 -- boss_blackheart_the_inciter.cpp:33
+local SPELL_INCITE_CHAOS_B = 33684 -- boss_blackheart_the_inciter.cpp:32
 
 local timers = {}
 
@@ -240,8 +249,28 @@ local function blackheartDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_blackheart_the_inciter_mc_dummy::IsSummonedBy (:168-173):
+-- Unit* who = whoWO->ToUnit(); if (!who) return;
+-- me->CastSpell(who, SPELL_INCITE_CHAOS_B 33684, true) — the triggered
+-- debuff cast on the summoner (the valithria-suppresser / shadowfiend
+-- ev22 precedent: handler receives (event, creature, summoner)).
+-- The threat-juggling legs (:175-188) stay out — no instance dummy
+-- GUID-set bridge, no creature-by-GUID lookup, no m_Controlled-set
+-- enumeration (see header).
+local BLACKHEART_DUMMY_ENTRIES = { 19300, 19301, 19302, 19303, 19304 } -- NPC_BLACKHEART_DUMMY1..5 (shadow_labyrinth.h:45-49)
+
+local function blackheartDummyIsSummonedBy(event, creature, summoner)
+    if not summoner then
+        return
+    end
+    creature:CastSpell(summoner, SPELL_INCITE_CHAOS_B, true)
+end
+
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 1, blackheartEnterCombat)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 2, blackheartLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 3, blackheartTargetDied)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 4, blackheartDied)
 RegisterCreatureEvent(ENTRY_BLACKHEART_THE_INCITER, 23, blackheartReset)
+for _, entry in ipairs(BLACKHEART_DUMMY_ENTRIES) do
+    RegisterCreatureEvent(entry, 22, blackheartDummyIsSummonedBy)
+end

@@ -65,8 +65,10 @@
 -- boss_the_lich_king DoAction — Talk(SAY_LK_INTRO_1 0) rides
 -- ACTION_START_ENCOUNTER; Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic)
 -- rides ACTION_TELEPORT_BACK (DoAction IS bridged — creature:DoAction
--- fires ev38, the terenas handler below proves it — but the sender is
--- the unported npc_strangulate_vehicle machine; the krick
+-- fires ev38, the terenas handler below proves it — but the sender
+-- chain (terenas EVENT_TELEPORT_BACK :1807-1810 + restore_soul
+-- SpellScript :2629, both unported) never fires it; the
+-- strangulate-vehicle receiver IS ported below — the krick
 -- ACTION_OUTRO precedent).
 -- boss_the_lich_king SpellHit — Talk(SAY_LK_FROSTMOURNE_KILL 9) on
 -- SPELL_HARVESTED_SOUL 72679 (:813-816), gated me->IsInCombat() &&
@@ -170,8 +172,10 @@
 -- (boss_the_lich_king.cpp:1073) + instance EVENT_TELEPORT_TO_FROSTMOURNE
 -- (instance_icecrown_citadel.cpp:1463), both unported; outro talks gated on the
 -- unported outro summon chain (broken-frostmourne ACTION_SUMMON_TERENAS,
--- :883/:1931) — ev22 IsSummonedBy dispatch exists but fires only for
--- player pets (pet_cooldowns.go:73); a bare ev22 port
+-- :883/:1931) — ev22 IsSummonedBy dispatch IS live for creature summons
+-- (lua_creature_events.go:191-199 + :6799-6820; the "fires only for
+-- player pets (pet_cooldowns.go:73)" claim was stale — corrected by
+-- the strangulate-vehicle ev22 port below); a bare ev22 port
 -- would fabricate outro Talks in the Frostmourne room (the FROSTMOURNE_INTRO
 -- cancel never fires in Lua)
 -- (gothik counterpoint).
@@ -206,12 +210,14 @@
 -- 1-arg DoCast(SPELL_DARK_HUNGER 69383) non-triggered (:1835) —
 -- target resolved from DBC AISpellInfo (UnitAI.cpp:113), kept as
 -- self-cast (self-buff aura).
--- npc_valkyr_shadowguard / npc_strangulate_vehicle /
--- npc_spirit_bomb / npc_broken_frostmourne — zero Talk lines —
+-- npc_valkyr_shadowguard / npc_spirit_bomb /
+-- npc_broken_frostmourne — zero Talk lines —
 -- NOT registered (the bronjahm npc_corrupted_soul_fragment
 -- precedent); the valkyr grab/life-siphon (SpellScript +
--- MovementInform), strangulate vehicle, bomb and frostmourne UpdateAI
--- machines ride unbridged legs.
+-- MovementInform), bomb and frostmourne UpdateAI
+-- machines ride unbridged legs. npc_strangulate_vehicle IS
+-- registered — IsSummonedBy + UpdateAI timer legs + DoAction
+-- ACTION_TELEPORT_BACK PORTED 2026-11-05 (see below).
 -- The 31 spell/aura legs + the generic spell_trigger_spell_from_caster
 -- with-args leg join the no-SpellScript-bridge / no-AuraScript-bridge
 -- queues (the boss_moragg optic-link precedent);
@@ -263,7 +269,8 @@
 -- (ice-sphere :750 PORTED in lichKingJustSummoned — SelectTarget
 -- approximated by the alive same-map/instance random-player pool,
 -- MoveFollow PORTED in lichKingJustSummoned; defile :761 PORTED (lichKingJustSummoned);
--- spirit_bomb/valkyr/strangulate stay unregistered as documented.)
+-- spirit_bomb/valkyr stay unregistered as documented; strangulate
+-- PORTED below (ev22 + UpdateAI timers + ev38).
 -- SpellScript legs: ice_burst_target_search REACT_PASSIVE (:2212-2221)
 -- and restore_soul REACT_PASSIVE on wicked spirits (:2632-2641) — no
 -- SpellScript bridge; both add AIs unregistered (restore_soul also rides LK-side ACTION_TELEPORT_BACK — ev38 dispatch
@@ -294,6 +301,7 @@ local ENTRY_SHADOW_TRAP = 39137 -- icecrown_citadel.h:332
 local ENTRY_DEFILE = 38757 -- icecrown_citadel.h:323
 local ENTRY_TERENAS = 36823 -- icecrown_citadel.h:316 (NPC_TERENAS_MENETHIL_FROSTMOURNE)
 local ENTRY_TERENAS_HEROIC = 39217 -- icecrown_citadel.h:318
+local ENTRY_STRANGULATE_VEHICLE = 36598 -- icecrown_citadel.h:327 (NPC_STRANGULATE_VEHICLE)
 local AREA_ICECROWN_CITADEL = 4812 -- icecrown_citadel.h:540
 local WEATHER_STATE_FOG = 1 -- Weather.h:48
 local WEATHER_STATE_BLACKSNOW = 106 -- Weather.h:61
@@ -327,6 +335,13 @@ local SPELL_BROKEN_FROSTMOURNE = 72398 -- boss_the_lich_king.cpp:174
 local SPELL_TERENAS_LOSES_INSIDE = 72572 -- boss_the_lich_king.cpp:157
 local SPELL_DESTROY_SOUL = 74086 -- boss_the_lich_king.cpp:154
 local SPELL_RESTORE_SOUL = 72595 -- boss_the_lich_king.cpp:150
+local SPELL_HARVEST_SOUL_VEHICLE = 68984 -- boss_the_lich_king.cpp:138
+local SPELL_HARVEST_SOUL_VISUAL = 71372 -- boss_the_lich_king.cpp:139
+local SPELL_HARVEST_SOUL_TELEPORT = 72546 -- boss_the_lich_king.cpp:140
+local SPELL_HARVEST_SOULS_TELEPORT = 73655 -- boss_the_lich_king.cpp:141
+local SPELL_HARVEST_SOUL_TELEPORT_BACK = 72597 -- boss_the_lich_king.cpp:142
+local SPELL_HARVEST_SOUL_10H = 74296 -- boss_the_lich_king.cpp:193 (HARVEST_SOUL RAID_MODE, 10H)
+local SPELL_HARVEST_SOUL_25H = 74297 -- boss_the_lich_king.cpp:193 (HARVEST_SOUL RAID_MODE, 25H)
 local ACTION_TELEPORT_BACK = 8 -- boss_the_lich_king.cpp:343 (EncounterActions)
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
@@ -733,6 +748,130 @@ end
 
 RegisterCreatureEvent(ENTRY_TERENAS, 38, terenasDoAction)
 RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 38, terenasDoAction)
+
+-- C++ npc_strangulate_vehicle (boss_the_lich_king.cpp:1590-1680,
+-- entry 36598) — PORTED 2026-11-05 (ev22 shape-2): IsSummonedBy +
+-- the UpdateAI timer legs + DoAction ACTION_TELEPORT_BACK. ev22
+-- fires on the summoned creature with (event, creature, summoner)
+-- from the summonTempCreature fire site
+-- (engine/world/lua_creature_events.go:191-199 + :6799-6820:
+-- creature summons reach ev22, not just player pets — the
+-- "pet-only" header claim below is retracted; the hodir /
+-- marrowgar bone-spike ev22 precedent). The live trigger is the
+-- LK's Harvest Soul cast (68980, DBC summon effect), itself
+-- unported (phase-THREE timer); the vehicle arms follow the
+-- raging-spirit / spirit-warden precedent of porting the summoned
+-- creature's arms ahead of the LK-side cast.
+-- C++ npc_strangulate_vehicle UpdateAI EVENT_DESPAWN_SELF
+-- (:1670-1674): the lichKing->AI()->SummonedCreatureDespawn(me) leg
+-- is BossAI summons-list bookkeeping with no Lua equivalent (the
+-- vehicle is not in the LK's SummonedCreatureDies list either,
+-- :795-808); DespawnOrUnsummon(1ms).
+local function onVehicleDespawnSelf(creature, guid)
+    creature:DespawnOrUnsummon(1)
+end
+
+-- C++ npc_strangulate_vehicle UpdateAI EVENT_MOVE_TO_LICH_KING
+-- (:1660-1669): if farther than 10yd from the Lich King, MovePoint(0)
+-- to a near position 7.5-12.5yd from the LK on the LK->vehicle angle.
+-- GetNearPosition / GetAbsoluteAngle have no bridge — computed here
+-- with math.atan2 + GetX/GetY at the LK's Z (the SetFacingToObject
+-- comment's atan2 twin, lua_creature_events.go:4341); the LK is
+-- resolved via FindNearestCreature (the terenasDamageTaken precedent)
+-- instead of instance GetGuidData. GetExactDist rides the object.go
+-- generic fallback (center-distance model; the C++ combat-reach
+-- subtraction is unmodeled, per the object.go comment).
+local function onVehicleMoveToLichKing(creature, guid)
+    local lichKing = creature:FindNearestCreature(ENTRY_THE_LICH_KING, 100.0)
+    if not lichKing then
+        return
+    end
+    if creature:GetExactDistance(lichKing) > 10.0 then
+        local angle = math.atan2(creature:GetY() - lichKing:GetY(), creature:GetX() - lichKing:GetX())
+        local dist = math.random() * 5.0 + 7.5
+        creature:MoveTo(0, lichKing:GetX() + dist * math.cos(angle), lichKing:GetY() + dist * math.sin(angle), lichKing:GetZ())
+    end
+end
+
+-- C++ npc_strangulate_vehicle UpdateAI EVENT_TELEPORT (:1639-1658):
+-- MotionMaster Clear + MoveIdle, then the summoner (the harvested
+-- player, via GetSummonerUnit) casts HARVEST_SOUL_VISUAL on itself
+-- (nil target), exits the vehicle, and casts HARVEST_SOUL_TELEPORT
+-- (non-heroic) or HARVEST_SOULS_TELEPORT + RemoveAurasDueToSpell
+-- (HARVEST_SOUL) (heroic); EVENT_DESPAWN_SELF in 65s. Deltas:
+-- MoveIdle is the StopMoving twin (no separate Clear bridge);
+-- RemoveAurasDueToSpell has no bridge — player:RemoveAura(spell) is
+-- the per-spell twin, with the heroic HARVEST_SOUL id picked by
+-- Is25ManRaid (74296 10H / 74297 25H, RAID_MODE :193); the player
+-- CastSpell path drops the triggered flag (lua_player.go:2752);
+-- C++ ExitVehicle(summoner) passes the summoner as the exit position,
+-- the Go bridge takes no args.
+local function onVehicleTeleport(creature, guid)
+    creature:MoveIdle()
+    local summoner = creature:GetSummonerUnit()
+    if summoner then
+        summoner:CastSpell(nil, SPELL_HARVEST_SOUL_VISUAL, true)
+        summoner:ExitVehicle()
+        if not creature:IsHeroic() then
+            summoner:CastSpell(summoner, SPELL_HARVEST_SOUL_TELEPORT, true)
+        else
+            summoner:CastSpell(summoner, SPELL_HARVEST_SOULS_TELEPORT, true)
+            if creature:Is25ManRaid() then
+                summoner:RemoveAura(SPELL_HARVEST_SOUL_25H)
+            else
+                summoner:RemoveAura(SPELL_HARVEST_SOUL_10H)
+            end
+        end
+    end
+    schedule(guid, "vehicle_despawn_self", 65000, function() onVehicleDespawnSelf(creature, guid) end)
+end
+
+-- C++ npc_strangulate_vehicle::IsSummonedBy (:1594-1609): face the
+-- summoner + DoCast(summoner, SPELL_HARVEST_SOUL_VEHICLE 68984) +
+-- schedule EVENT_MOVE_TO_LICH_KING 2s + EVENT_TELEPORT 6s. The
+-- lichKing->AI()->JustSummoned(me) leg is the LK-side bookkeeping arm
+-- (boss_the_lich_king.cpp:784-786, summons.Summon only) — no Lua
+-- equivalent, and lichKingJustSummoned has no vehicle branch.
+local function strangulateVehicleSummoned(_, creature, summoner)
+    if not summoner then
+        return
+    end
+    creature:SetFacingToObject(summoner)
+    creature:CastSpell(summoner, SPELL_HARVEST_SOUL_VEHICLE)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "vehicle_move_to_lich_king", 2000, function() onVehicleMoveToLichKing(creature, guid) end)
+    schedule(guid, "vehicle_teleport", 6000, function() onVehicleTeleport(creature, guid) end)
+end
+
+local function strangulateVehicleLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_strangulate_vehicle::DoAction ACTION_TELEPORT_BACK
+-- (:1611-1630): the vehicle casts HARVEST_SOUL_TELEPORT_BACK on the
+-- summoner + the summoner removes HARVEST_SOULS_TELEPORT, then the LK
+-- SummonedCreatureDespawn bookkeeping leg (no Lua equivalent) +
+-- DespawnOrUnsummon. The sender is the LK-side ACTION_TELEPORT_BACK
+-- relay (LK DoAction :642-646, unported) via EnterEvadeMode (:599-600)
+-- or terenas EVENT_TELEPORT_BACK (:1807-1810, unported), so this
+-- fires once that relay lands.
+local function strangulateVehicleDoAction(event, creature, action)
+    if action ~= ACTION_TELEPORT_BACK then
+        return
+    end
+    local summoner = creature:GetSummonerUnit()
+    if summoner then
+        creature:CastSpell(summoner, SPELL_HARVEST_SOUL_TELEPORT_BACK)
+        summoner:RemoveAura(SPELL_HARVEST_SOULS_TELEPORT)
+    end
+    creature:DespawnOrUnsummon()
+end
+
+RegisterCreatureEvent(ENTRY_STRANGULATE_VEHICLE, 2, strangulateVehicleLeaveCombat)
+RegisterCreatureEvent(ENTRY_STRANGULATE_VEHICLE, 22, strangulateVehicleSummoned)
+RegisterCreatureEvent(ENTRY_STRANGULATE_VEHICLE, 23, strangulateVehicleLeaveCombat)
+RegisterCreatureEvent(ENTRY_STRANGULATE_VEHICLE, 38, strangulateVehicleDoAction)
 
 -- C++ spell_the_lich_king_infest::OnPeriodic
 -- (boss_the_lich_king.cpp:2003-2009): EFFECT_0 SPELL_AURA_

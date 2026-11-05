@@ -22,7 +22,8 @@
 -- boss_hodir.cpp (+ the loader decl/call lines for
 -- AddSC_boss_hodir) only; zero sql/ hits for all twelve.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
--- 3 OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
+-- 3 OnTargetDied, 4 OnDied, 9 OnDamageTaken, 22 OnSummoned,
+-- 23 OnReset.
 -- Timer bridge: CreateLuaEvent harness, GUID-keyed timers
 -- table, cancel on events 2/4/23 (the maiden_of_virtue /
 -- moroes / curator / nightbane precedent). CastSpell(nil,
@@ -155,20 +156,27 @@
 -- (SPELL_SMITE 61923 / SPELL_LAVA_BURST 61924 /
 -- SPELL_WRATH 62793 / SPELL_FIREBALL 61909) have no cast
 -- bridges — no registrations.
--- npc_flash_freezeAI — IsSummonedBy: DoCast(target,
--- SPELL_BLOCK_OF_ICE 61969, true) (line 243), NearTeleportTo
--- teleport legs, DoAction(ACTION_CHEESE_THE_FREEZE) (lines
--- 246-247); UpdateAI despawn/die checks (lines 209-232) —
--- summon legs have no bridge (stale "no despawn / no teleport"
--- wording: creature:Despawn() and creature:Teleport ARE bridged,
--- but the bearer is an unregistered summon add and the arm rides
--- the summon machine, paired with gameobject-removal legs and a
--- DoAction leg); no registration.
--- npc_ice_blockAI — IsSummonedBy: DoCast(target,
--- SPELL_FLASH_FREEZE_HELPER 61990, true) (line 292);
--- DamageTaken -> hodir REACT_AGGRESSIVE / DoZoneInCombat /
--- AttackStart (lines 301-318) — summon / zone-in legs, no
--- bridges; no registration.
+-- npc_flash_freezeAI — PORTED (flashFreezeSummoned, below):
+-- IsSummonedBy (lines 232-249): AddThreat(summoner, 250) +
+-- DoCast(target, SPELL_BLOCK_OF_ICE 61969, true) (line 243) +
+-- NearTeleportTo the target's position + player-gated Hodir
+-- DoAction(ACTION_CHEESE_THE_FREEZE) (lines 246-248). ev22 fires
+-- on the summoned creature with (event, creature, summoner) from
+-- the summonTempCreature fire site (lua_creature_events.go:198);
+-- the stale "summon legs have no bridge" claim is retracted.
+-- SetInCombatWith has no bridge — the AddThreat engage leg covers
+-- it (Go AddThreat syncs TargetGUID + ATTACK_START on a switch).
+-- UpdateAI despawn/die checks (lines 209-232) stay out — separate
+-- arm, not this shape.
+-- npc_ice_blockAI — PORTED (iceBlockSummoned, below):
+-- IsSummonedBy (lines 278-296): summoner stun/root legs +
+-- AddThreat(summoner, 250) + the who-redirect AddThreat(me, 250,
+-- summoner) + the creature-summoner-only DoCast(target,
+-- SPELL_FLASH_FREEZE_HELPER 61990, true) (line 292) +
+-- NearTeleportTo. SetInCombatWith has no bridge (same AddThreat
+-- delta as above). DamageTaken -> hodir REACT_AGGRESSIVE /
+-- DoZoneInCombat / AttackStart (lines 301-318) stays out —
+-- AttackStart has no bridge.
 -- npc_icicleAI — icicleTimer arm (lines 584-600): entry
 -- 33169 NPC_ICICLE -> DoCast(me, SPELL_ICICLE_FALL 69428)
 -- + DoCast(me, SPELL_FALL_DAMAGE 62236, true); entry 33173
@@ -604,6 +612,73 @@ RegisterCreatureEvent(ENTRY_ICICLE_SNOWDRIFT, 23, icicleReset)
 RegisterCreatureEvent(ENTRY_ICICLE_SNOWDRIFT, 4, icicleDied)
 RegisterCreatureEvent(ENTRY_TOASTY_FIRE, 23, toastyFireReset)
 RegisterCreatureEvent(ENTRY_TOASTY_FIRE, 14, toastyFireSpellHit)
+
+-- C++ npc_flash_freezeAI::IsSummonedBy (boss_hodir.cpp:232-249):
+-- summoner nil-guarded like the C++ ToUnit() check; the stored
+-- targetGUID serves the unported UpdateAI only. AddThreat(summoner,
+-- 250) is the engage leg — SetInCombatWith has no bridge (the Go
+-- AddThreat bridge syncs TargetGUID + ATTACK_START on a switch).
+-- DoCast(target, SPELL_BLOCK_OF_ICE 61969, true) with target ==
+-- summoner -> CastSpell(summoner, 61969, true); NearTeleportTo the
+-- summoner's position; if the target is a player, Hodir (instance
+-- GetCreature(BOSS_HODIR)) -> DoAction(ACTION_CHEESE_THE_FREEZE 2)
+-- (ev38 dispatch; Hodir's DoAction arm itself is an unported
+-- achievement flag, documented-only above).
+local ENTRY_FLASH_FREEZE = 32926 -- boss_hodir.cpp:98
+local ENTRY_ICE_BLOCK = 32938 -- boss_hodir.cpp:97
+local SPELL_FLASH_FREEZE_HELPER = 61990 -- boss_hodir.cpp:64
+local BOSS_HODIR = 7 -- ulduar.h:43
+local ACTION_CHEESE_THE_FREEZE = 2 -- boss_hodir.cpp:140
+local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
+
+local function flashFreezeSummoned(_, creature, summoner)
+    if not summoner then
+        return
+    end
+    creature:AddThreat(summoner, 250)
+    creature:CastSpell(summoner, SPELL_BLOCK_OF_ICE, true)
+    creature:NearTeleport(summoner:GetX(), summoner:GetY(), summoner:GetZ(), summoner:GetO())
+    if summoner:GetObjectType() == "Player" then
+        local hodir = creature:GetInstanceCreature(BOSS_HODIR)
+        if hodir then
+            hodir:DoAction(ACTION_CHEESE_THE_FREEZE)
+        end
+    end
+end
+
+-- C++ npc_ice_blockAI::IsSummonedBy (boss_hodir.cpp:278-296):
+-- summoner nil-guarded like the C++ ToUnit() check. The stun/root
+-- legs hit the summoner itself: SetFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_STUNNED | UNIT_FLAG_PACIFIED) + SetControlled(true,
+-- UNIT_STATE_ROOT) -> summoner:SetFlag + summoner:SetRooted(true)
+-- (SetRooted IS the root leg, lua_creature_events.go:4021; both the
+-- creature and player surfaces carry SetFlag/SetRooted). AddThreat
+-- (summoner, 250) is the engage leg — SetInCombatWith has no bridge,
+-- as above. AddThreat(me, 250, summoner) is the C++ who-redirect
+-- (ScriptedCreature.cpp:202-209: who gains victim on ITS threat
+-- list) -> summoner:AddThreat(creature, 250). The cast/teleport
+-- legs sit under the C++ GetCreature(targetGUID) check, i.e. they
+-- run only when the summoner is a creature — the player-summoned
+-- case (SPELL_SUMMON_BLOCK_OF_ICE cast by the FlashFreeze target on
+-- itself, :544) skips them; DoCast(target, SPELL_FLASH_FREEZE_HELPER
+-- 61990, true) -> CastSpell(summoner, 61990, true) + NearTeleportTo
+-- the summoner's position.
+local function iceBlockSummoned(_, creature, summoner)
+    if not summoner then
+        return
+    end
+    summoner:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED + UNIT_FLAG_PACIFIED)
+    summoner:SetRooted(true)
+    creature:AddThreat(summoner, 250)
+    summoner:AddThreat(creature, 250)
+    if summoner:GetObjectType() == "Creature" then
+        creature:CastSpell(summoner, SPELL_FLASH_FREEZE_HELPER, true)
+        creature:NearTeleport(summoner:GetX(), summoner:GetY(), summoner:GetZ(), summoner:GetO())
+    end
+end
+
+RegisterCreatureEvent(ENTRY_FLASH_FREEZE, 22, flashFreezeSummoned)
+RegisterCreatureEvent(ENTRY_ICE_BLOCK, 22, iceBlockSummoned)
 
 RegisterCreatureEvent(ENTRY_HODIR, 1, hodirEnterCombat)
 RegisterCreatureEvent(ENTRY_HODIR, 2, hodirLeaveCombat)

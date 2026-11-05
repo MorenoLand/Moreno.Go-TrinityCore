@@ -73,14 +73,21 @@
 -- DATA_COLDFLAME_GUID player lookup) + GetNearPoint2D — Teleport and
 -- DoCast ARE bridged but the computed position is not — plus the
 -- UpdateAI EVENT_COLDFLAME_TRIGGER machine; not registered (the
--- bronjahm npc_corrupted_soul_fragment precedent). The vehicle legs
+-- bronjahm npc_corrupted_soul_fragment precedent; ev22 re-checked
+-- 2026-11-05, no-port stands — GetAbsoluteAngle / GetNearPoint2D /
+-- GetPosition absent from the creature surface, only GetZ exists).
+-- The vehicle legs
 -- (RIDE_VEHICLE cast + PassengerBoarded spline) belong to bone_spike's
 -- IsSummonedBy below, not to coldflame. npc_bone_spike (36619): the JustDied/KilledUnit
 -- DespawnOrUnsummon legs PORT (event 4 / event 3, below); the JustDied
 -- trapped-unit aura-removal leg PORTS via creature:GetSummonerUnit()
--- (bridged 2026-11-05, below); the rest (IsSummonedBy vehicle/cast/teleport
--- legs, UpdateAI EVENT_FAIL_BONED machine, DATA_BONED_ACHIEVEMENT
--- instance SetData leg) has no bridges.
+-- (bridged 2026-11-05, below); the IsSummonedBy DoCast(summoner,
+-- SPELL_IMPALED) + summoner->CastSpell(me, SPELL_RIDE_VEHICLE, true)
+-- legs PORT (event 22, below — player:CastSpell live, lua_player.go:
+-- 2752); the rest (8s EVENT_FAIL_BONED timer leg — its only effect is
+-- instance SetData(DATA_BONED_ACHIEVEMENT 14, false), no instance
+-- SetData bridge; PassengerBoarded spline leg; UpdateAI machine)
+-- has no bridges.
 -- boss_lord_marrowgar Reset scheduler legs (:148-152) — only
 -- EVENT_ENRAGE ports (above); EVENT_ENABLE_BONE_SLICE /
 -- EVENT_BONE_SPIKE_GRAVEYARD / EVENT_COLDFLAME / EVENT_WARN_BONE_STORM
@@ -135,6 +142,7 @@ local ENTRY_LORD_MARROWGAR = 36612
 local ENTRY_BONE_SPIKE = 36619 -- icecrown_citadel.h:171
 
 local SPELL_IMPALED = 69065 -- boss_lord_marrowgar.cpp:54
+local SPELL_RIDE_VEHICLE = 46598 -- boss_lord_marrowgar.cpp:55
 
 local SAY_AGGRO = 1
 local SAY_KILL = 4
@@ -264,5 +272,27 @@ local function boneSpikeKilledUnit(event, creature, victim)
     victim:RemoveAura(SPELL_IMPALED)
 end
 
+-- C++ npc_bone_spike::IsSummonedBy (boss_lord_marrowgar.cpp:439-447):
+-- DoCast(summoner, SPELL_IMPALED 69065) + summoner->CastSpell(me,
+-- SPELL_RIDE_VEHICLE 46598, true); the summoner is the trapped player
+-- (the graveyard SpellScript has the target cast the summon spell on
+-- itself, :590) and ev22 passes it as the second arg (the
+-- summonTempCreature player-summoner fire site,
+-- lua_creature_events.go:200-201; player:CastSpell live at
+-- lua_player.go:2752, inside luaPlayer()). C++ order kept: impaled,
+-- then ride-vehicle (triggered). The 8s EVENT_FAIL_BONED timer stays
+-- out — its only effect is instance SetData(DATA_BONED_ACHIEVEMENT
+-- 14, false), no instance SetData bridge. Dormant until the graveyard
+-- summon chain lands: no 69057/69062 handling in Go and
+-- SPELL_EFFECT_SUMMON has no session-path executor yet.
+local function boneSpikeIsSummonedBy(event, creature, summoner)
+    if not summoner then
+        return
+    end
+    creature:CastSpell(summoner, SPELL_IMPALED)
+    summoner:CastSpell(creature, SPELL_RIDE_VEHICLE, true)
+end
+
 RegisterCreatureEvent(ENTRY_BONE_SPIKE, 3, boneSpikeKilledUnit)
 RegisterCreatureEvent(ENTRY_BONE_SPIKE, 4, boneSpikeJustDied)
+RegisterCreatureEvent(ENTRY_BONE_SPIKE, 22, boneSpikeIsSummonedBy)

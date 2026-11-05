@@ -74,15 +74,18 @@
 -- (target, SPELL_FROST_TOMB_SUMMON 42714, true) -> creature:CastSpell
 -- (target, 42714, true) — the C++ comment says "checked from sniffs -
 -- the player casts the spell"; player:CastSpell is bridged
--- (lua_player.go:309) but the creature cast STAYS: the session
--- path does handle SPELL_EFFECT_SUMMON (spells.go finishSpellCast
--- case 28), so the old "no session summon" reason is RETRACTED —
--- switching alone still completes nothing, because the tomb's
--- IsSummonedBy leg needs event 22, which fires only from the
--- pet funnel (lua_creature_events.go fireCreaturePetSummoned),
--- never for spell summons; repeat
--- {14s,19s} regardless of target found,
--- C++-exact.
+-- (lua_player.go:2752) but the creature cast STAYS: ev22 IS bridged
+-- (runtime.go:354; fireCreaturePetSummoned,
+-- lua_creature_events.go:6812) and fires for this summon, but the
+-- summoner it delivers is the boss — the boss-cast summon funnels
+-- through summonTempCreature with SummonerMotion = the boss
+-- (lua_creature_events.go:190-198), so a direct ev22 port would cast
+-- SPELL_FROST_TOMB on Keleseth, not the tombed player. The
+-- player-cast route that would deliver the right summoner rides the
+-- pet funnel (handleSummonPet -> character_pet row, PetCommandFollow,
+-- no duration despawn, dismisses the victim's real pet), so the
+-- IsSummonedBy leg (:91-97) stays unported — see the frost-tomb note
+-- below; repeat {14s,19s} regardless of target found, C++-exact.
 -- JustDied (:165-169) — Talk(SAY_DEATH 5) (event 4 — the sjonnir
 -- JustDied-Talk precedent); the BossAI::_JustDied() passthrough has no
 -- bridge; the combat timers are wiped with it.
@@ -99,8 +102,18 @@
 -- npc_frost_tomb (NPC_FROSTTOMB 23965, :79-115) — NOT registered (no
 -- genuinely bridgeable arms, the yogg_saron adds precedent):
 -- IsSummonedBy DoCast(summoner, SPELL_FROST_TOMB 48400, true) (:91-97)
--- — no IsSummonedBy / summoner-carrying spawn bridge in the modeled
--- Eluna creature events; JustDied cross-creature SetData
+-- — ev22 IS bridged (runtime.go:354; fireCreaturePetSummoned,
+-- lua_creature_events.go:6812) but NOT portable C++-exact, verified
+-- 2026-11-05: on the working summon path the boss creature-casts
+-- 42714, so summonTempCreature fires ev22 with summoner = the boss
+-- (lua_creature_events.go:190-198) and a direct port would frost-tomb
+-- Keleseth. Switching the 42714 cast to the player (the C++ caster)
+-- would deliver the right summoner — the triggered player path does
+-- execute effect 28 (spells.go:27128-27171) — but only via the pet
+-- funnel (handleSummonPet: character_pet row, PetCommandFollow, no
+-- duration despawn, dismisses the victim's real pet — pets.go:2090-
+-- 2125, pet_cooldowns.go:73); there is no temp-summon route on the
+-- player path. JustDied cross-creature SetData
 -- (DATA_ON_THE_ROCKS false) via instance GetGuidData
 -- (DATA_PRINCE_KELESETH) (:101-105) — instance-GUID leg, no bridge.
 -- (The spell-summoned tomb from the FROST_TOMB arm therefore spawns
@@ -246,10 +259,13 @@ local function frostTombTick(creature, guid)
         creature:Talk(SAY_FROST_TOMB_EMOTE, target)
         creature:CastSpell(target, SPELL_FROST_TOMB_STUN, true)
         -- C++ comment: "checked from sniffs - the player casts the
-        -- spell" — player:CastSpell is bridged (lua_player.go:309),
-        -- but the creature cast stays: the tomb's IsSummonedBy leg
-        -- needs event 22, which fires only from the pet funnel, so
-        -- switching caster alone completes nothing (caster deviates).
+        -- spell" — player:CastSpell is bridged (lua_player.go:2752),
+        -- but the creature cast stays: ev22 fires for this summon
+        -- with summoner = the boss (summonTempCreature creature
+        -- branch), so an ev22 port would frost-tomb Keleseth; the
+        -- player-cast route rides the pet funnel (no temp-summon
+        -- route on the player path), so the IsSummonedBy leg
+        -- (:91-97) stays unported — see the frost-tomb note above.
         creature:CastSpell(target, SPELL_FROST_TOMB_SUMMON, true)
     end
     schedule(guid, "frosttomb", {14000, 19000}, function()
