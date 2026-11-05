@@ -126,9 +126,10 @@
 -- cast-state bridge — the fear/domination/mana-burn
 -- IsNonMeleeSpellCast early-return gates are PORTED via
 -- creature:IsCasting() (see combatTick); the DoSplit
--- InterruptNonMeleeSpells arm stays out on interrupt-axis
--- grounds (kelidan/channeler precedent, tick 103 PARKED
--- note — a future interrupt-axis re-sweep may revisit it);
+-- InterruptNonMeleeSpells arm is PORTED 2026-11-04 (doSplit:
+-- IsCasting-gated InterruptNonMeleeSpells(false) before Talk,
+-- kelidan precedent — the tick-103 PARKED note is closed for
+-- this leg by the live interrupt bridge);
 -- the
 -- unused spell enums H_SPELL_MIND_REND 39017 / H_SPELL_
 -- DOMINATION 39019 never fire in the C++ AI — not bridged
@@ -321,8 +322,9 @@ local function randomThreatPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
--- C++ DoSplit: InterruptNonMeleeSpells (no cast-state
--- bridge — netherspite precedent), Talk(SAY_IMAGE), then
+-- C++ DoSplit: InterruptNonMeleeSpells PORTED 2026-11-04
+-- (IsCasting-gated InterruptNonMeleeSpells(false) before Talk,
+-- kelidan precedent), Talk(SAY_IMAGE), then
 -- DoCast(me, SPELL_66/33_ILLUSION) non-triggered — the casts
 -- summon entries 21466/21467 via spell data (per the C++ enum
 -- comments) and the Go cast path's SUMMON arm funnels through
@@ -333,6 +335,15 @@ end
 -- illusions at 66%, 33-split at 33%).
 local function doSplit(creature, st, pct)
     st.splitPct = pct
+    -- C++ DoSplit :150-151: if (IsNonMeleeSpellCast(false))
+    -- InterruptNonMeleeSpells(false), before Talk — PORTED
+    -- 2026-11-04 via creature:IsCasting() (live CastingUntil
+    -- window, lua_creature_events.go:1950) + the bridged
+    -- InterruptNonMeleeSpells(false) arm (lua_creature_events.go:1995;
+    -- kelidan precedent).
+    if creature:IsCasting() then
+        creature:InterruptNonMeleeSpells(false)
+    end
     creature:Talk(SAY_IMAGE)
     if pct == 66 then
         creature:CastSpell(creature, SPELL_66_ILLUSION)

@@ -12722,8 +12722,10 @@ func init() {
 	// and movement-flag arms have no bridges — see
 	// lua_scripts/hellfireramparts/
 	// boss_omor_the_unscarred.lua; own UpdateAI override,
-	// zero CASTING gates (InterruptNonMeleeSpells legs are
-	// interrupt actions, interrupt-axis parked).
+	// zero CASTING gates; the summon InterruptNonMeleeSpells
+	// leg is PORTED in the pump (C++ :129) and the shadow-whip
+	// leg stays out — its FALLING_FAR gate has no bridge, so
+	// the interrupt would guard a cast that never fires.
 	RegisterLuaBoss("boss_omor_the_unscarred", 17308)
 
 	// boss_vazruden_the_herald (17307): the herald's whole
@@ -12796,7 +12798,9 @@ func init() {
 
 	// boss_harbinger_skyriss (20912): intro machine / image
 	// splits / mind rend / fear / domination boss; the
-	// wardens-shield / mellichar-kill intro arms, the DoSplit
+	// DoSplit InterruptNonMeleeSpells leg is PORTED 2026-11-04
+	// (IsCasting-gated interrupt before Talk, kelidan precedent);
+	// the wardens-shield / mellichar-kill intro arms, the DoSplit
 	// illusion summons (spell-cast summons — type/duration live
 	// in spell data, unverifiable — plus the JustSummoned
 	// AttackStart relay has no bridge and the illusion AI
