@@ -17249,6 +17249,9 @@ func init() {
 	// memory: no SpellScript binding bridge (razelikh precedent).
 	// C++ SD%Complete 50 % note carried.
 	RegisterLuaBoss("boss_eadric", 35119)
+	// Paletress (34928 NPC_PALETRESS): combat arms ported in boss_eadric.lua
+	// (ev1/2/4/9/23); same no-op factory convention as the eadric binding above.
+	RegisterLuaBoss("boss_paletress", 34928)
 
 	// boss_black_knight: Trial of the Champion dungeon boss script,
 	// CAST-STATE GATE CHECK (2026-11-04): none — ScriptedAI
@@ -19433,6 +19436,10 @@ func init() {
 	// Voice of Yogg-Saron (33280, ulduar.h:203; boss_voice_of_yogg_saronAI : BossAI):
 	// engage sanity/insane casts ported in boss_yogg_saron.lua (events 1/19).
 	RegisterLuaBoss("boss_voice_of_yogg_saron", 33280)
+	// Brain of Yogg-Saron (33890; boss_brain_of_yogg_saronAI : PassiveAI):
+	// Reset arms ported in boss_yogg_saron.lua (ev23 RemoveFlag NOT_SELECTABLE
+	// + MATCH_HEALTH self-cast, cancelAll on ev2/4).
+	RegisterLuaBoss("boss_brain_of_yogg_saron", 33890)
 	// Algalon the Observer (Ulduar) — boss_algalon_the_observer.cpp,
 	// AddSC_boss_algalon_the_observer() (loader decl 123 / call 318) — the
 	// FOURTEENTH group of the "// Ulduar" block, the last Ulduar boss group
