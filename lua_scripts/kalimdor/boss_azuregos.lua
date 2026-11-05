@@ -44,10 +44,13 @@
 --   23537; checked by a 1s per-GUID pump (sironas convention; C++
 --   checks every UpdateAI tick, i.e. combat only).
 -- - DoMeleeAttackIfReady: engine-driven in Go (ouro precedent).
--- - The UpdateAI casting-state early return (UNIT_STATE_CASTING skips
---   remaining events + the enrage/melee legs for the tick) has no
---   casting-state bridge (aeonus case); the ported pumps fire each arm
---   independently.
+-- - The UpdateAI casting-state gates (boss_azuregos.cpp:98 pre-loop
+--   + :141 in-loop UNIT_STATE_CASTING returns) are PORTED via the
+--   500ms IsCasting defer (kazzak idiom, live bridge
+--   lua_creature_events.go:1950): each due arm defers under its own
+--   key, no re-arm consumed, gate precedes picks/Talks; the enrage
+--   pump skips its cast while casting (its 1s pump keeps running).
+--   The stale "no casting-state bridge (aeonus case)" note is retracted.
 -- Documented-only (no bridges):
 -- - spell_mark_of_frost SpellScript (MarkOfFrostTargetSelector target
 --   filter + hit-effect aura 23186 application): no SpellScript
@@ -93,6 +96,12 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function castOnVictim(creature, guid, key, spell, rearm)
+    if creature:IsCasting() then
+        schedule(guid, key, 500, function()
+            castOnVictim(creature, guid, key, spell, rearm)
+        end)
+        return
+    end
     local victim = creature:GetVictim()
     if victim then
         creature:CastSpell(victim, spell)
@@ -105,6 +114,12 @@ end
 -- C++ SelectTarget(Random, 0, 60.0f, playerOnly=true): random alive
 -- player within 60yd from the threat list.
 local function onManaStorm(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "manastorm", 500, function()
+            onManaStorm(creature, guid)
+        end)
+        return
+    end
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
         if unit:GetObjectType() == "Player" and not unit:IsDead()
@@ -121,6 +136,12 @@ local function onManaStorm(creature, guid)
 end
 
 local function onTeleport(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "teleport", 500, function()
+            onTeleport(creature, guid)
+        end)
+        return
+    end
     creature:Talk(SAY_TELEPORT)
     local bx, by, bz = creature:GetX(), creature:GetY(), creature:GetZ()
     for _, unit in ipairs(creature:GetAITargets()) do
@@ -138,6 +159,12 @@ local function onTeleport(creature, guid)
 end
 
 local function onReflect(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "reflect", 500, function()
+            onReflect(creature, guid)
+        end)
+        return
+    end
     creature:CastSpell(creature, SPELL_REFLECT)
     schedule(guid, "reflect", math.random(20000, 35000), function()
         onReflect(creature, guid)
@@ -145,7 +172,7 @@ local function onReflect(creature, guid)
 end
 
 local function onEnragePump(creature, guid)
-    if not enraged[guid] then
+    if not enraged[guid] and not creature:IsCasting() then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 26 / 100) then
@@ -168,10 +195,10 @@ local function onEnterCombat(event, creature, target)
         onManaStorm(creature, guid)
     end)
     schedule(guid, "chill", math.random(10000, 30000), function()
-        castOnVictim(creature, guid, "chill", SPELL_CHILL, math.random(13000, 25000))
+        castOnVictim(creature, guid, "chill", SPELL_CHILL, {13000, 25000})
     end)
     schedule(guid, "breath", math.random(2000, 8000), function()
-        castOnVictim(creature, guid, "breath", SPELL_FROST_BREATH, math.random(10000, 15000))
+        castOnVictim(creature, guid, "breath", SPELL_FROST_BREATH, {10000, 15000})
     end)
     schedule(guid, "teleport", 30000, function()
         onTeleport(creature, guid)
