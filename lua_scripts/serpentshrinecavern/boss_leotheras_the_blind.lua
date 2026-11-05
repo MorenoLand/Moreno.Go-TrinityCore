@@ -84,8 +84,8 @@
 -- OnTargetDied(3): victim:GetObjectType() == "Player"
 -- -> Talk(demonForm and SAY_DEMON_SLAY or SAY_NIGHTELF_SLAY)
 -- (C++-exact per-form slay). OnDied(4): Talk(SAY_DEATH) +
--- cleanup (the demon-copy despawn is cross-creature blocked; the
--- SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
+-- cleanup (the demon-copy despawn PORTS below via the latched
+-- final-form copy; the SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state, restore the
 -- nightelf model + zeroed weapon slots (PORTED 2026-10-20, C++
 -- Reset :253-255 arm order; SetSpeedRate(MOVE_RUN, 2.0f) :252 PORTED
@@ -547,6 +547,10 @@ local function leotherasTick(creature, guid)
             creature:GetX(), creature:GetY(), creature:GetZ(),
             creature:GetO(), 3, 6000)
         if copy then
+            -- C++ :588 Demon latch: stored here for the JustDied
+            -- copy-despawn (:403); the :585 DespawnDemon arm despawns
+            -- inner demons, not this copy, and stays out.
+            st.demonCopy = copy
             -- C++ boss_leotheras_the_blind.cpp:590-594: AttackStart
             -- (boss victim) when a victim exists; DoZoneInCombat
             -- would engage every player instead of singling out
@@ -561,7 +565,9 @@ local function leotherasTick(creature, guid)
         creature:Talk(SAY_FINAL_FORM)
         -- C++ :597: SetDisplayId(MODEL_NIGHTELF) after Talk (the paired
         -- LoadEquipment weapon-restore leg has no item bridge; the
-        -- DespawnDemon arm stays out — no demon GUID is ever stored).
+        -- :585 DespawnDemon inner-demon arm stays out (inner demons
+        -- are timed 5s summons here; the copy latch above serves
+        -- only the JustDied arm).
         creature:SetDisplayId(MODEL_NIGHTELF)
     end
 end
@@ -592,8 +598,15 @@ local function leotherasTargetDied(event, creature, victim)
     end
 end
 
+-- C++ JustDied (boss_leotheras_the_blind.cpp:403): Talk(SAY_DEATH)
+-- + despawn the final-form demon copy (:588 Demon latch) +
+-- instance SetData(DONE) (blocked).
 local function leotherasDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    local st = leotherasState[creature:GetGUID()]
+    if st and st.demonCopy then
+        st.demonCopy:Despawn()
+    end
     resetCreature(leotherasTimers, leotherasState, creature:GetGUID())
 end
 

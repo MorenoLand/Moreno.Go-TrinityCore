@@ -668,10 +668,13 @@ local function twilightHalionReset(event, creature)
     fightPhaseThree = false
 end
 
--- C++ boss_twilight_halion::JustDied: _events.Reset() +
--- _summons.DespawnAll() (boss_halion.cpp:448-466) — the
--- DoCastSelf(SPELL_CLEAR_DEBUFFS) arm at :599-605 is
--- npc_halion_controllerAI::JustDied (entry 40146, unregistered).
+-- C++ boss_twilight_halion::JustDied (boss_halion.cpp:448-466):
+-- instance GetCreature(DATA_HALION) -> LowerPlayerDamageReq /
+-- Kill halion if alive + controller KillSelf + SendEncounterUnit
+-- disengage — all instance/cross-creature, blocked. The
+-- _events.Reset() + _summons.DespawnAll() + DoCastSelf(CLEAR_DEBUFFS)
+-- body is npc_halion_controllerAI::JustDied (entry 40146,
+-- unregistered), not twilight halion's.
 local function twilightHalionDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)

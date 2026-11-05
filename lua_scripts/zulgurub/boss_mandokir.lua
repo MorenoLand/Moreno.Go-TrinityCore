@@ -91,6 +91,8 @@ local SAY_WATCH = 2
 local timers = {}
 local state = {}
 
+local mandokirSpirits = {}
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -245,10 +247,16 @@ local function mandokirEnterCombat(event, creature, target)
     -- 20x SummonCreature(NPC_CHAINED_SPIRT, TEMPSUMMON_CORPSE_DESPAWN) —
     -- summon bridge (lua_creature_events.go:877); Ohgan's AI is registered
     -- above, so the summon fights; the spirits have no C++ AI either.
+    -- The spirits are latched below for the JustDied DespawnEntry arm (:137).
     creature:SummonCreature(ENTRY_OHGAN, creature:GetX() - 3, creature:GetY(), creature:GetZ(), creature:GetO(), 3, 35000)
+    local spirits = {}
     for _, pos in ipairs(POS_CHAINED_SPIRITS) do
-        creature:SummonCreature(ENTRY_CHAINED_SPIRT, pos[1], pos[2], pos[3], pos[4], 4)
+        local spirit = creature:SummonCreature(ENTRY_CHAINED_SPIRT, pos[1], pos[2], pos[3], pos[4], 4)
+        if spirit then
+            spirits[#spirits + 1] = spirit
+        end
     end
+    mandokirSpirits[guid] = spirits
     creature:DoZoneInCombat() -- C++ JustEngagedWith tail: engage every
     -- player on the dungeon map (DoZoneInCombat bridge live 2026-10-23).
     schedule(guid, "overpower", math.random(7000, 9000), function()
@@ -296,8 +304,22 @@ local function mandokirLeaveCombat(event, creature)
     mandokirResetState(creature:GetGUID())
 end
 
+-- C++ JustDied (boss_mandokir.cpp:135-139): summons.DespawnEntry
+-- (NPC_CHAINED_SPIRT) + instance SetBossState/SaveToDB (blocked).
+-- Only the chained-spirit entry despawns on death (Ohgan is not
+-- entry-latched here); Reset's DespawnAll is a separate arm.
 local function mandokirDied(event, creature, killer)
-    mandokirResetState(creature:GetGUID())
+    local guid = creature:GetGUID()
+    local spirits = mandokirSpirits[guid]
+    if spirits then
+        for _, spirit in ipairs(spirits) do
+            if spirit then
+                spirit:Despawn()
+            end
+        end
+        mandokirSpirits[guid] = nil
+    end
+    mandokirResetState(guid)
 end
 
 local function mandokirReset(event, creature)
