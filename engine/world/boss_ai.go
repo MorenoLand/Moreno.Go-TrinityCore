@@ -12847,6 +12847,8 @@ func init() {
 	// botanica/boss_thorngrin_the_tender.lua. instance_the_
 	// botanica.cpp stays blocked on the instance-script model.
 	RegisterLuaBoss("boss_thorngrin_the_tender", 17978)
+	// C++ CreatureScript name for the same entry (boss_thorngrin_the_tender.cpp:50):
+	RegisterLuaBoss("thorngrin_the_tender", 17978)
 
 	// The Botanica (Tempest Keep) boss roster 5/5 COMPLETE:
 	// boss_commander_sarannis (17976): arcane resonance /
@@ -19362,6 +19364,10 @@ func init() {
 	RegisterLuaBoss("boss_freya", 32915)
 	RegisterLuaBoss("boss_freya", 32914)
 	RegisterLuaBoss("boss_freya", 32913)
+	// C++ CreatureScript names for the same elder entries (boss_freya.cpp):
+	RegisterLuaBoss("boss_elder_brightleaf", 32915)
+	RegisterLuaBoss("boss_elder_stonebark", 32914)
+	RegisterLuaBoss("boss_elder_ironbranch", 32913)
 
 	// boss_thorim.lua (lua_scripts/northrend/boss_thorim.lua):
 	// 32865 Thorim (boss_thorim — ulduar.h NPC_THORIM line 79;
@@ -19859,6 +19865,8 @@ func init() {
 	// UpdateAI pre-loop :199 + in-loop :244 gates); DamageTaken phase
 	// flips stay ungated (separate hook).
 	RegisterLuaBoss("boss_forgemaster_garfrost", 36494)
+	// C++ CreatureScript name for the same entry (boss_forgemaster_garfrost.cpp:85):
+	RegisterLuaBoss("boss_garfrost", 36494)
 
 	// Krick and Ick (Pit of Saron) — bridgeable Talk + timer-driven cast
 	// arms ported from boss_krickandick.cpp; see
