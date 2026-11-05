@@ -1858,8 +1858,9 @@ type creatureAttackTarget struct {
 	isGM             bool
 	feignDeath       bool
 	combatReach      float32
-	pos              playerPos // players only, for the faction helpers
-	sess             *session  // players only, for stealth detection
+	pos              playerPos       // players only, for the faction helpers
+	sess             *session        // players only, for stealth detection
+	victim           *creatureMotion // creatures only, for the CanDetect leg
 }
 
 // creatureAttackTargetResolve resolves a Lua Unit argument for
@@ -1886,7 +1887,7 @@ func (s *Server) creatureAttackTargetResolve(arg any, mapID, instanceID uint32) 
 		return creatureAttackTarget{}
 	}
 	s.motionMu.Lock()
-	tgt := creatureAttackTarget{ok: true, guid: guid, level: target.Level, detected: s.creatureAuraTypeSum(creatureAuraKeyForMotion(target), spellAuraModDetectedRange), x: target.X, y: target.Y, z: target.Z, unitFlags: target.UnitFlags, faction: target.Faction, creatureType: target.CreatureType, playerControlled: target.UnitFlags&unitFlagPlayerControlled != 0, health: target.Health, evading: target.Evading, combatReach: target.CombatReach}
+	tgt := creatureAttackTarget{ok: true, guid: guid, level: target.Level, detected: s.creatureAuraTypeSum(creatureAuraKeyForMotion(target), spellAuraModDetectedRange), x: target.X, y: target.Y, z: target.Z, unitFlags: target.UnitFlags, faction: target.Faction, creatureType: target.CreatureType, playerControlled: target.UnitFlags&unitFlagPlayerControlled != 0, health: target.Health, evading: target.Evading, combatReach: target.CombatReach, victim: target}
 	s.motionMu.Unlock()
 	return tgt
 }
@@ -1960,8 +1961,9 @@ func (s *Server) creatureNeutralToAll(faction uint32) bool {
 // DELTAS, all documented at the arm: the vehicle arms of
 // _IsTargetAcceptable (no vehicle-target model on this path); the
 // UNIT_STATE_UNATTACKABLE arm of IsValidAttackTarget (no such state
-// in Go); the CanSeeOrDetect creature-target legs (the resolver drops
-// the victim motion, so no creature-aura detect sums are available); the
+// in Go); the CanSeeOrDetect creature-target legs ride the victim
+// motion the resolver now carries (creatureSightCanDetectCreature,
+// live creature auras); the
 // isInAccessiblePlaceFor victim-in-water leg rides the grid-liquid
 // twin (mapIsInWater, the IsInWater binding's helper), not per-unit
 // liquid status; CanAIAttack is the TurretAI band only
@@ -2114,15 +2116,21 @@ func (s *Server) creatureCanStartAttack(ctx context.Context, caller *creatureMot
 	if noGrayAggroBlocked(target.level, caller.Level, s.Config.NoGrayAggroAbove, s.Config.NoGrayAggroBelow) {
 		return false
 	}
-	// CanSeeOrDetect, invisibility leg for player targets (via
-	// creatureSightInvisibilityBlocked) plus the stealth half below;
-	// creature targets still carry no detect leg here (the resolver
-	// drops the victim motion, so no creature-aura sums are available).
+	// CanSeeOrDetect (Object.cpp:1664-1686, the MoveInLineOfSight gate
+	// the query mirrors): player targets via
+	// creatureSightInvisibilityBlocked plus the stealth half below;
+	// creature targets via creatureSightCanDetectCreature (stalked,
+	// then invisibility, then stealth, all from the victim's live
+	// creature auras, through the resolved seer for controlled
+	// scanners). No alert band: checkAlert is false on this path,
+	// as on the spell gate.
 	if target.isPlayer && s.creatureSightInvisibilityBlocked(caller, target.sess) {
 		return false
 	}
-	// CanSeeOrDetect, stealth half only for player targets.
 	if target.isPlayer && !s.creatureSightCanDetectStealthOfPlayer(caller, target.sess, dist3D) {
+		return false
+	}
+	if !target.isPlayer && target.victim != nil && !s.creatureSightCanDetectCreature(caller, target.victim) {
 		return false
 	}
 	return s.hasLineOfSight(caller.Map, caller.X, caller.Y, caller.Z, target.x, target.y, target.z)
