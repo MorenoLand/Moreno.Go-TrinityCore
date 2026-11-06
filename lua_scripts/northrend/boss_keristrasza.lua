@@ -47,8 +47,8 @@
 -- IsHeroic is bridged, engine/world/lua_creature_events.go:260;
 -- lavanthor precedent), 11s heroic repeat (DUNGEON_MODE(30s,11s)).
 -- The BossAI::JustEngagedWith base arms are PORTED in
--- keristraszaEnterCombat (pulse + me-form DoZone); the
--- instance/setActive/ScheduleTasks legs stay out.
+-- keristraszaEnterCombat (SetBossState + pulse + me-form DoZone);
+-- setActive/ScheduleTasks legs stay out.
 -- CASTING gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis
 -- idiom): own UpdateAI pre-loop :178 + in-loop :205 gates cover all
 -- 3 timer arms (breath/chains/tailsweep — defer precedes Talk/cast/
@@ -60,8 +60,9 @@
 -- -> Talk(SAY_ENRAGE 2) + Talk(SAY_FRENZY 5) + DoCast(me,
 -- SPELL_ENRAGE 8599) 2-arg non-triggered self-cast (the Oct-12
 -- "no health-pct bridge" claim was wrong, retracted this run).
--- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied bookkeeping has
--- no bridge — tharon_ja precedent).
+-- JustDied — Talk(SAY_DEATH 3) (event 4) + _JustDied SetBossState
+-- (DONE) PORTED 2026-11-05 (creature:SetBossState bridged,
+-- SetBossState census tick 249).
 -- KilledUnit — Talk(SAY_SLAY 1) (event 3 — C++-GATED: who->
 -- GetTypeId() == TYPEID_PLAYER; the nalorakk / kelthuzad player-gate
 -- variant — seventh ported variant, fifth identical to nalorakk /
@@ -78,7 +79,8 @@
 -- ports via the gossip handler below; re-evaluation on Reset is
 -- equivalent to a no-op in-instance because clicked spheres never
 -- deactivate, and the spawn-time prison state itself is DB/spawn-data
--- territory); _Reset() stays out (instance bookkeeping).
+-- territory); _Reset() SetBossState(NOT_STARTED, != DONE-gated)
+-- PORTED 2026-11-05 (creature:SetBossState bridged).
 -- (the Oct-12 "no timer-event / random-target / cast bridge" and
 -- "no IsHeroic bridge" claims were wrong, retracted — the heroic
 -- crystallize leg is ported above.)
@@ -112,6 +114,11 @@
 -- bridge (kelthuzad/thaddius precedent).
 
 local ENTRY_KERISTRASZA = 26723
+
+local DATA_KERISTRASZA = 4 -- nexus.h:34 (NEXDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
 local SAY_AGGRO = 0
 local SAY_SLAY  = 1
@@ -284,9 +291,11 @@ local function keristraszaEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_INTENSE_COLD)
     -- C++ JustEngagedWith base call (boss_keristrasza.cpp:99),
     -- after Talk + Intense Cold: BossAI::JustEngagedWith arms
-    -- (ScriptedCreature.cpp:540/542) — SetCombatPulseDelay(5) +
-    -- me-form DoZoneInCombat, before the timer schedules (C++
-    -- arm order); instance/setActive/ScheduleTasks legs out.
+    -- (ScriptedCreature.cpp:537-542) — SetBossState(IN_PROGRESS) +
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before the
+    -- timer schedules (C++ arm order); setActive/ScheduleTasks
+    -- legs out.
+    creature:SetBossState(DATA_KERISTRASZA, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     -- C++ JustEngagedWith (cpp:101-103): the three ScheduleEvent
@@ -318,15 +327,22 @@ local function keristraszaReset(event, creature)
     -- is unconditional — ported (the containment-sphere prison machine
     -- around it stays documented-only, instance/GO-gated).
     creature:RemoveFlag(59, 0x40000)
+    -- C++ Reset ends with _Reset() (boss_keristrasza.cpp:92) —
+    -- SetBossState(NOT_STARTED), != DONE-gated (ScriptedCreature.cpp:510).
+    if creature:GetBossState(DATA_KERISTRASZA) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_KERISTRASZA, BOSS_STATE_NOT_STARTED)
+    end
 end
 
--- C++ JustDied: Talk(SAY_DEATH) (the _JustDied bookkeeping has no
--- bridge — tharon_ja precedent).
+-- C++ JustDied: Talk(SAY_DEATH) first, then _JustDied()
+-- (boss_keristrasza.cpp:106-110); the _JustDied SetBossState(DONE)
+-- leg PORTED 2026-11-05 (ScriptedCreature.cpp:519).
 local function keristraszaDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     keristraszaEnraged[guid] = false
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_KERISTRASZA, BOSS_STATE_DONE)
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY) only when who->GetTypeId() ==

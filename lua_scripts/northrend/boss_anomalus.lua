@@ -32,20 +32,19 @@
 -- precedent); melee is engine-driven in Go (creature combat tick),
 -- like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the instance->
--- SetBossState(DATA_ANOMALUS, IN_PROGRESS) leg has no instance bridge
--- — tharon_ja precedent).
--- JustDied — Talk(SAY_DEATH 1) (event 4; the instance->
--- SetBossState(DATA_ANOMALUS, DONE) leg has no instance bridge —
--- tharon_ja precedent).
+-- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1) + instance->
+-- SetBossState(DATA_ANOMALUS, IN_PROGRESS) PORTED 2026-11-05
+-- (creature:SetBossState bridged, SetBossState census tick 249).
+-- JustDied — Talk(SAY_DEATH 1) (event 4) + instance->
+-- SetBossState(DATA_ANOMALUS, DONE) PORTED 2026-11-05.
 -- uiSparkTimer — randomPlayer(target) -> CastSpell(target, 47751),
 -- 5s init / 5s unconditional re-arm, non-triggered; scheduled on
 -- event 1, cancelled on 2/4/23 (see sparkTick comment for the C++
 -- mapping and the shield-phase caveat).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — Initialize() (Phase/timers/GUID/chaosTheory reset) +
--- instance->SetBossState(DATA_ANOMALUS, NOT_STARTED) — no instance
--- bridge.
+-- instance->SetBossState(DATA_ANOMALUS, NOT_STARTED) PORTED
+-- 2026-11-05 (creature:SetBossState bridged).
 -- GetData(DATA_CHAOS_THEORY) — chaosTheory cross-AI data leg consumed
 -- only by achievement_chaos_theory's OnCheck — creature:GetData IS
 -- bridged (ScriptData store, 2026-10-24) but there is no achievement
@@ -100,6 +99,11 @@
 
 local ENTRY_ANOMALUS = 26763
 local NPC_CHAOTIC_RIFT = 26918 -- boss_anomalus.cpp:38
+
+local DATA_ANOMALUS = 2 -- nexus.h:32 (NEXDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
 local SAY_AGGRO = 0
 local SAY_DEATH = 1
@@ -178,11 +182,11 @@ local function sparkTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: Talk(SAY_AGGRO) (the instance->SetBossState
--- (DATA_ANOMALUS, IN_PROGRESS) leg has no instance bridge — tharon_ja
--- precedent).
+-- C++ JustEngagedWith: Talk(SAY_AGGRO) + instance->SetBossState
+-- (DATA_ANOMALUS, IN_PROGRESS) (boss_anomalus.cpp:110-114).
 local function anomalusEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:SetBossState(DATA_ANOMALUS, BOSS_STATE_IN_PROGRESS)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "spark", 5000, function()
@@ -195,10 +199,11 @@ local function anomalusLeaveCombat(event, creature)
     chaos[creature:GetGUID()] = nil
 end
 
--- C++ JustDied: Talk(SAY_DEATH) (the instance->SetBossState(DATA_
--- ANOMALUS, DONE) leg has no instance bridge — tharon_ja precedent).
+-- C++ JustDied: Talk(SAY_DEATH) + instance->SetBossState(DATA_
+-- ANOMALUS, DONE) (boss_anomalus.cpp:116-121).
 local function anomalusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_ANOMALUS, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
     chaos[creature:GetGUID()] = nil
 end
@@ -206,6 +211,7 @@ end
 local function anomalusReset(event, creature)
     cancelTimers(creature:GetGUID())
     chaos[creature:GetGUID()] = true -- C++ Initialize(): chaosTheory = true
+    creature:SetBossState(DATA_ANOMALUS, BOSS_STATE_NOT_STARTED) -- C++ Reset (boss_anomalus.cpp:101-106), unconditional (ScriptedAI direct call)
 end
 
 -- C++ SummonedCreatureDies: chaosTheory = false when the dead summon's

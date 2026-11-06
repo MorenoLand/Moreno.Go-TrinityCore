@@ -21,8 +21,8 @@
 -- SPIKES (12s) + EVENT_TRAMPLE (10s) + EVENT_SPELL_REFLECTION
 -- (30s) + heroic EVENT_CRYSTALLINE_TANGLER (15s, IsHeroic
 -- bridged — lavanthor precedent); the BossAI::JustEngagedWith
--- base arms are PORTED in ormorokEnterCombat (pulse + me-form
--- DoZone); instance/setActive/ScheduleTasks legs out.
+-- base arms are PORTED in ormorokEnterCombat (SetBossState +
+-- pulse + me-form DoZone); setActive/ScheduleTasks legs out.
 -- EVENT_CRYSTAL_SPIKES — Talk(SAY_CRYSTAL_SPIKES 4) + DoCastVictim
 -- (SPELL_CRYSTAL_SPIKES 47958, 1-arg DoCast = victim cast) as
 -- creature:CastSpell(nil, spell), 12s init / 12s repeat.
@@ -51,7 +51,9 @@
 -- variant).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — BossAI::Reset + Initialize() (frenzy=false) — the latch
--- reset is ported on 2/4/23; the BossAI leg has no bridge.
+-- reset is ported on 2/4/23; the BossAI::_Reset SetBossState
+-- (NOT_STARTED, != DONE-gated) leg PORTED 2026-11-05
+-- (creature:SetBossState bridged, SetBossState census tick 249).
 -- CASTING gates PORTED 2026-11-04 (500ms IsCasting defer, mal_ganis
 -- idiom): own UpdateAI pre-loop :129 + in-loop :159 gates cover all
 -- 4 timer arms (spikes/trample/reflection/tangler — defer precedes
@@ -68,6 +70,11 @@
 -- MAX_COUNT 5 — no AuraScript bridge.
 
 local ENTRY_ORMOROK = 26794
+
+local DATA_ORMOROK = 3 -- nexus.h:33 (NEXDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
 local SAY_AGGRO = 1
 local SAY_DEATH = 2
@@ -189,16 +196,18 @@ local function tanglerTick(creature, guid)
 end
 
 -- C++ JustEngagedWith (:105-118): schedules + Talk(SAY_AGGRO 1);
--- the BossAI::JustEngagedWith instance leg has no bridge.
+-- the BossAI::JustEngagedWith SetBossState(IN_PROGRESS) leg
+-- PORTED 2026-11-05 (base-first, ScriptedCreature.cpp:537).
 local function ormorokEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     ormorokFrenzy[guid] = false
     -- C++ JustEngagedWith base call first (boss_ormorok.cpp:89):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
-    -- and the timer schedules (C++ arm order); instance/setActive/
-    -- ScheduleTasks legs out.
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:537-542) --
+    -- SetBossState(IN_PROGRESS) + SetCombatPulseDelay(5) + me-form
+    -- DoZoneInCombat, before Talk and the timer schedules (C++
+    -- arm order); setActive/ScheduleTasks legs out.
+    creature:SetBossState(DATA_ORMOROK, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -243,12 +252,14 @@ local function ormorokDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH 2) (the _JustDied bookkeeping has no
--- bridge — tharon_ja precedent).
+-- C++ JustDied: _JustDied() first, then Talk(SAY_DEATH 2)
+-- (boss_ormorok.cpp:110-114); the _JustDied SetBossState(DONE)
+-- leg PORTED 2026-11-05 (ScriptedCreature.cpp:519).
 local function ormorokDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     ormorokFrenzy[guid] = false
+    creature:SetBossState(DATA_ORMOROK, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
 end
 
@@ -261,7 +272,15 @@ local function ormorokTargetDied(event, creature, victim)
 end
 
 local function ormorokReset(event, creature)
-    ormorokLeaveCombat(event, creature)
+    -- C++ Reset (boss_ormorok.cpp:81-85): BossAI::Reset() first
+    -- (events/scheduler cancel + _Reset SetBossState NOT_STARTED,
+    -- != DONE-gated), then Initialize() (frenzy=false).
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    if creature:GetBossState(DATA_ORMOROK) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_ORMOROK, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
+    ormorokFrenzy[guid] = false
 end
 
 RegisterCreatureEvent(ENTRY_ORMOROK, 1, ormorokEnterCombat)

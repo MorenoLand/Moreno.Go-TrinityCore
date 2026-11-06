@@ -25,7 +25,9 @@
 -- AttackStop each tick, 4s, then RemoveFlag NOT_SELECTABLE);
 -- Phase 1/3 merge branch (all three magi dead -> CenterOfRoom
 -- leg skipped, see below; DoCastSelf TELESTRA_BACK 47714 +
--- SetVisible(true) + Phase 2/4 + waiting 4s + Talk SAY_MERGE 3);
+-- SetVisible(true) + Phase 2/4 + waiting 4s + Talk SAY_MERGE 3;
+-- C++ falls through in the merge tick to the split checks +
+-- timer arms, ported 2026-11-05 — no early return after merge);
 -- Phase 0 HealthBelowPct(50) split + heroic Phase 2
 -- HealthBelowPct(10) split (CastStop leg skipped, see below;
 -- RemoveAllAuras + SetVisible(false) + SetFlag NOT_SELECTABLE
@@ -49,13 +51,17 @@
 -- poll merges instead (deliberate anti-strand deviation).
 -- KilledUnit Talk(SAY_KILL 1) player-gated (event 3,
 -- commanders precedent); JustDied Talk(SAY_DEATH 2) +
--- SetVisible(true).
--- Unmodeled (no bridges — documented, not wired): Reset /
--- JustEngagedWith / JustDied instance bookkeeping
--- (SetBossState DATA_MAGUS_TELESTRA, no instance bridge);
+-- SetVisible(true); Reset / JustEngagedWith / JustDied
+-- SetBossState(DATA_MAGUS_TELESTRA, NOT_STARTED/IN_PROGRESS/
+-- DONE) PORTED 2026-11-05 — creature:SetBossState bridged
+-- (lua_creature_events.go:5917; SetBossState census tick 249),
+-- the old "no instance bridge" claim was stale.
+-- Unmodeled (no bridges — documented, not wired):
 -- Reset heroic Winter Veil hat aura (no game-event bridge);
--- split CastStop (InterruptNonMeleeSpells is a no-op twin,
--- not a cast stop); split UpdatePosition(CenterOfRoom)
+-- split CastStop (creature:StopSpellCast IS bridged,
+-- lua_creature_events.go:1022, but the leg is vacuous: all
+-- three spells are instant, tick-225 verdict); split
+-- UpdatePosition(CenterOfRoom)
 -- (no position-set bridge — the boss reappears where it
 -- split instead of room center); magi AttackStart relay
 -- ported 2026-10-24 (summoned:EngageWithTarget on a random
@@ -69,6 +75,11 @@
 -- window dies with that achievement leg.
 
 local ENTRY_TELESTRA = 26731
+
+local DATA_MAGUS_TELESTRA = 1 -- nexus.h:31 (NEXDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
 local NPC_FIRE_MAGUS = 26928
 local NPC_FROST_MAGUS = 26930
@@ -201,11 +212,15 @@ local function telestraPump(creature, guid)
             st.waiting = true
             st.waitTimer = 4000
             creature:Talk(SAY_MERGE)
+            -- C++ falls through in the merge tick (no return after the
+            -- merge leg): phase is now 2/4, so the split checks below
+            -- and the timer arms run in this same tick.
+        else
+            schedule(guid, "pump", 1000, function()
+                telestraPump(creature, guid)
+            end)
+            return
         end
-        schedule(guid, "pump", 1000, function()
-            telestraPump(creature, guid)
-        end)
-        return
     end
     if st.phase == 0 and creature:GetHealth() < math.floor(creature:GetMaxHealth() * 50 / 100) then
         splitPersonality(creature, st, 1)
@@ -280,6 +295,7 @@ local function telestraEnterCombat(event, creature)
         arcaneDead = false,
     }
     creature:Talk(SAY_AGGRO)
+    creature:SetBossState(DATA_MAGUS_TELESTRA, BOSS_STATE_IN_PROGRESS) -- C++ JustEngagedWith: Talk, then instance->SetBossState(IN_PROGRESS)
     schedule(guid, "pump", 1000, function()
         telestraPump(creature, guid)
     end)
@@ -298,6 +314,7 @@ end
 local function telestraDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetVisible(true)
+    creature:SetBossState(DATA_MAGUS_TELESTRA, BOSS_STATE_DONE) -- C++ JustDied: Talk, SetVisible, instance->SetBossState(DONE)
     cancelTimers(creature:GetGUID())
 end
 
@@ -305,6 +322,7 @@ local function telestraReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetVisible(true)
+    creature:SetBossState(DATA_MAGUS_TELESTRA, BOSS_STATE_NOT_STARTED) -- C++ Reset: instance->SetBossState(NOT_STARTED), unconditional (ScriptedAI direct call)
 end
 
 RegisterCreatureEvent(ENTRY_TELESTRA, 1, telestraEnterCombat)

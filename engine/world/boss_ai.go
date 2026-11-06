@@ -18313,9 +18313,12 @@ func init() {
 	// FIREBOMB 0s/2s random threat target 47773, all
 	// non-triggered (heroic H_ spell ids unused by the C++
 	// arms, like C++). KilledUnit Talk(1) player-gated;
-	// JustDied Talk(2) + SetVisible(true). DOCUMENTED-BLOCKED:
-	// instance bookkeeping; heroic Winter Veil hat aura (no
-	// game-event bridge); split CastStop; merge room-center
+	// JustDied Talk(2) + SetVisible(true); Reset / JustEngagedWith /
+	// JustDied SetBossState(1, NOT_STARTED/IN_PROGRESS/DONE) PORTED
+	// 2026-11-05 (creature:SetBossState bridged). DOCUMENTED-BLOCKED:
+	// heroic Winter Veil hat aura (no game-event bridge); split
+	// CastStop (vacuous — all three spells instant, tick-225); merge
+	// room-center
 	// UpdatePosition (no position-set bridge); magi AttackStart
 	// relay + magi spellcasting (no AI class in the C++ file,
 	// DB-side SmartAI); DoAction/GetData split-personality
@@ -18324,26 +18327,27 @@ func init() {
 
 	// Anomalus (26763), The Nexus —
 	// lua_scripts/northrend/boss_anomalus.lua.
-	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (instance->SetBossState(DATA_ANOMALUS, IN_PROGRESS) leg has no
-	// instance bridge — tharon_ja precedent); JustDied Talk(SAY_DEATH
-	// 1) (SetBossState(DONE) leg has no instance bridge);
+	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) +
+	// instance->SetBossState(DATA_ANOMALUS, IN_PROGRESS) PORTED
+	// 2026-11-05 (creature:SetBossState bridged); JustDied
+	// Talk(SAY_DEATH 1) + SetBossState(DONE) PORTED 2026-11-05;
 	// SummonedCreatureDies chaosTheory=false leg PORTED (event 21 —
 	// the stale "no summon bridge" is retracted; the latch is
 	// write-only, its only reader is the unbridged achievement).
 	// Documented-only: Reset Initialize + SetBossState(NOT_STARTED)
-	// (no instance bridge), GetData(DATA_CHAOS_THEORY) cross-AI leg
-	// (no GetData bridge), the UpdateAI home-position >60 evade hack
+	// PORTED 2026-11-05, GetData(DATA_CHAOS_THEORY) cross-AI leg
+	// (GetData self-read bridged; no achievement consumer), the
+	// UpdateAI home-position >60 evade hack
 	// (no position bridge), the RIFT_SHIELD HasAura + GUID-lookup +
 	// RemoveAurasDueToSpell machine (no aura/GUID bridges), the Phase
 	// 0 + HealthBelowPct(50) shield+Talk(SAY_SHIELD 3)+SummonCreature(
 	// CHAOTIC_RIFT 26918 entry-unverifiable local-enum-only)+AttackStart
 	// +Talk(SAY_RIFT 2) machine stays out: the summon bridge is live
-	// but 26918 has no template row (gothik-minions precedent), the
-	// rift's AttackStart has no bridge, and the rift AI (burst +
+	// but 26918 has no template row (gothik-minions precedent), and
+	// the rift AI (burst +
 	// wraith summons) has no bearer (herod precedent),
-	// uiSparkTimer SelectTarget(Random,0)->DoCast(
-	// SPARK 47751/57062) 5s/5s (no random-target SelectTarget bridge).
+	// uiSparkTimer SelectTarget(Random,0)->DoCast(SPARK 47751) 5s/5s
+	// PORTED via randomPlayer (GetAITargets; H_SPELL_SPARK unused).
 	// npc_chaotic_rift (26918 local-enum-only, gothik-minions
 	// precedent — entry-unverifiable) gets no registration: its burst
 	// timer (DoCast 47688/47737 via instance GetGuidData(DATA_ANOMALUS)
@@ -18358,7 +18362,8 @@ func init() {
 	// Ormorok the Tree-Shaper (26794), The Nexus —
 	// lua_scripts/northrend/boss_ormorok.lua. Entry wowhead-verified
 	// 2026-10-25 (no NPC_ORMOROK const in the C++ tree). Ported arms:
-	// JustEngagedWith Talk(1) + spikes 12s / trample 10s / reflection
+	// JustEngagedWith SetBossState(IN_PROGRESS) base-first + Talk(1) +
+	// spikes 12s / trample 10s / reflection
 	// 30s / heroic tangler 15s schedules; spikes Talk(4) + DoCastVictim
 	// 47958 12s; trample self-cast 48016 10s; reflection Talk(3) +
 	// self-cast 47981 30s; tangler threat-list pick with 2D >= 5yd
@@ -18366,11 +18371,13 @@ func init() {
 	// 15s; DamageTaken HealthBelowPct(25) CURRENT-health one-shot
 	// latch (not Damaged form — DamageTaken fires pre-application) +
 	// Talk(6) + self-cast 48017; KilledUnit Talk(5) player-gated;
-	// JustDied Talk(2). CASTING gates PORTED: own UpdateAI pre-loop
+	// JustDied _JustDied SetBossState(DONE) first + Talk(2) PORTED
+	// 2026-11-05; Reset _Reset SetBossState(NOT_STARTED, != DONE-gated)
+	// PORTED 2026-11-05. CASTING gates PORTED: own UpdateAI pre-loop
 	// :129 + in-loop :159 gates cover all 4 timer arms (500ms
 	// IsCasting defer, mal_ganis idiom); DamageTaken frenzy latch
 	// ungated per C++ (separate hook). Documented-only: BossAI
-	// instance legs, crystal-spike trigger AI + AuraScript
+	// setActive/ScheduleTasks legs, crystal-spike trigger AI + AuraScript
 	// (IsSummonedBy / GO-Use / GetData legs, no bridges).
 	RegisterLuaBoss("boss_ormorok", 26794)
 
@@ -18378,17 +18385,17 @@ func init() {
 	// lua_scripts/northrend/boss_keristrasza.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0) (the
 	// DoCastAOE(SPELL_INTENSE_COLD 48094) engage one-shot ported as
-	// self-cast; the
-	// BossAI::JustEngagedWith instance-bookkeeping leg has no bridge
-	// — tharon_ja precedent; the three events.ScheduleEvent legs have
-	// no timer-event bridge); KilledUnit Talk(SAY_SLAY 1) player-gated
+	// self-cast; the BossAI::JustEngagedWith SetBossState(IN_PROGRESS)
+	// leg PORTED 2026-11-05; the three events.ScheduleEvent legs ride
+	// CreateLuaEvent timers); KilledUnit Talk(SAY_SLAY 1) player-gated
 	// (nalorakk/kelthuzad variant — seventh ported variant, fifth
 	// identical to nalorakk/kelthuzad/gothik/thaddius); JustDied
-	// Talk(SAY_DEATH 3) (_JustDied bookkeeping has no bridge).
+	// Talk(SAY_DEATH 3) + _JustDied SetBossState(DONE) PORTED 2026-11-05.
 	// Documented-only: Reset Initialize + RemoveFlag(UNIT_FLAG_
 	// STUNNED) + RemovePrison(CheckContainmentSpheres()) + _Reset()
-	// (no instance/GO-state/flag bridges — containment-sphere prison
-	// machine documented-only); DamageTaken HealthBelowPctDamaged(25)
+	// SetBossState(NOT_STARTED, != DONE-gated) PORTED 2026-11-05
+	// (containment-sphere prison machine documented-only);
+	// DamageTaken HealthBelowPctDamaged(25)
 	// -> Talk(SAY_ENRAGE 2)+Talk(SAY_FRENZY 5)+DoCast(SPELL_ENRAGE
 	// 8599) one-shot latch PORTED (postDamage form); the UpdateAI event
 	// machine arms PORTED via CreateLuaEvent timers — EVENT_CRYSTAL_
