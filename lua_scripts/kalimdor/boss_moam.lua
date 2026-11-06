@@ -46,8 +46,14 @@
 -- - SPELL_TRAMPLE 15550: defined but never cast in C++ — dead.
 -- - EVENT_WIDE_SLASH / EVENT_TRASH: commented out in C++ — inactive.
 -- - BossAI ctor leg DATA_MOAM (ruins_of_ahnqiraj.h:30 = 2) and
---   _Reset() — instance bridge, standing.
+--   _Reset() — PORTED: ev1 IN_PROGRESS + ev23 NOT_STARTED legs
+--   (see onEnterCombat / onReset); ev4 DONE via base BossAI::JustDied
+--   (ScriptedCreature.h:330), see onDied.
 local ENTRY = 15340
+local DATA_MOAM = 2 -- ruins_of_ahnqiraj.h:30
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SPELL_SUMMON_MANA_FIEND_1 = 25681
 local SPELL_SUMMON_MANA_FIEND_2 = 25682
@@ -154,6 +160,13 @@ local function moamTick(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542; no
+    -- JustEngagedWith override in boss_moam.cpp, so the base runs):
+    -- instance->SetBossState(DATA_MOAM, IN_PROGRESS) ahead of the
+    -- pulse / DoZoneInCombat arms below (creature:SetBossState,
+    -- lua_creature_events.go:5917). The CheckRequiredBosses gate is
+    -- vacuous (no instance override in instance_ruins_of_ahnqiraj.cpp).
+    creature:SetBossState(DATA_MOAM, BOSS_STATE_IN_PROGRESS)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -184,6 +197,13 @@ local function onReset(event, creature)
     -- C++ Reset() :73: me->SetPower(POWER_MANA, 0) — the meter zeroes on
     -- reset (after _Reset, before Initialize/schedule).
     creature:SetPower(POWER_MANA, 0)
+    -- C++ Reset _Reset() leg (boss_moam.cpp:73; BossAI::_Reset
+    -- ScriptedCreature.cpp:499-511: alive-gated and != DONE-gated;
+    -- Go fires ev23 on the death path before ev4, moroes/algalon
+    -- precedent, so both gates are live here).
+    if creature:IsAlive() and creature:GetBossState(DATA_MOAM) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_MOAM, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 -- C++ DamageTaken: !_isStonePhase && HealthBelowPct(45) ->
@@ -214,6 +234,11 @@ local function onDied(event, creature, killer)
     cancelTimers(guid)
     cancelPump(guid)
     moamState[guid] = nil
+    -- C++ has no JustDied override for boss_moamAI, so base
+    -- BossAI::JustDied (ScriptedCreature.h:330) runs _JustDied() ->
+    -- SetBossState(DATA_MOAM, DONE) (ScriptedCreature.cpp:513-520);
+    -- the mal_ganis precedent.
+    creature:SetBossState(DATA_MOAM, BOSS_STATE_DONE)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

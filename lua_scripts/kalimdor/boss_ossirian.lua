@@ -79,10 +79,17 @@
 -- - DoAction(ACTION_TRIGGER_WEAKNESS): inlined into onCrystalGossip
 --   (trigger self-cast); ev38 dispatch IS bridged (creature:DoAction) —
 --   the inlined form just needs no dispatch.
--- - Cleanup()/EnterEvadeMode()/JustDied() instance legs: no bridge.
--- - BossAI ctor leg DATA_OSSIRIAN and _Reset() — instance bridge,
---   standing.
+-- - Cleanup()/EnterEvadeMode() instance legs: no bridge (Cleanup's
+--   crystal-GO Use leg stays out; the JustDied _JustDied DONE leg IS
+--   ported in onDied below).
+-- - BossAI ctor leg DATA_OSSIRIAN (ruins_of_ahnqiraj.h:33 = 5) and
+--   _Reset() — PORTED: ev1 IN_PROGRESS + ev23 NOT_STARTED legs
+--   (see onEnterCombat / onReset).
 local ENTRY = 15339
+local DATA_OSSIRIAN = 5 -- ruins_of_ahnqiraj.h:33
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 local ENTRY_SAND_VORTEX = 15428 -- NPC_SAND_VORTEX (ruins_of_ahnqiraj.h:50)
 
 local SPELL_CURSE_OF_TONGUES = 25195
@@ -241,6 +248,13 @@ local function spawnNextCrystal(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542,
+    -- base-first in boss_ossirian.cpp:154): instance->SetBossState
+    -- (DATA_OSSIRIAN, IN_PROGRESS) ahead of the pulse /
+    -- DoZoneInCombat arms below (creature:SetBossState,
+    -- lua_creature_events.go:5917). The CheckRequiredBosses gate is
+    -- vacuous (no instance override in instance_ruins_of_ahnqiraj.cpp).
+    creature:SetBossState(DATA_OSSIRIAN, BOSS_STATE_IN_PROGRESS)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -310,6 +324,13 @@ local function onReset(event, creature)
     for _, t in ipairs(creature:GetCreaturesInGrid(ENTRY_OSSIRIAN_TRIGGER, 500)) do
         t:Despawn()
     end
+    -- C++ Reset _Reset() leg (boss_ossirian.cpp:123;
+    -- BossAI::_Reset ScriptedCreature.cpp:499-511: alive-gated and
+    -- != DONE-gated; Go fires ev23 on the death path before ev4,
+    -- moroes/algalon precedent, so both gates are live here).
+    if creature:IsAlive() and creature:GetBossState(DATA_OSSIRIAN) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_OSSIRIAN, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY 3), victim ignored.
@@ -339,6 +360,12 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_ossirian.cpp:193-196): Cleanup() first, then
+    -- _JustDied(). Cleanup's crystal-GO Use leg stays out (no bridge);
+    -- BossAI::_JustDied (ScriptedCreature.cpp:513-520) writes
+    -- SetBossState(DATA_OSSIRIAN, DONE); the events.Reset / summons /
+    -- scheduler legs need no bridge.
+    creature:SetBossState(DATA_OSSIRIAN, BOSS_STATE_DONE)
 end
 
 -- C++ MoveInLineOfSight: one-shot Talk(SAY_INTRO 1) with the

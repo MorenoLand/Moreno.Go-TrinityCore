@@ -40,11 +40,17 @@
 --   SAY_KURINNAXX_DEATH 5, ...) where Ossirian comes from
 --   ObjectAccessor::GetCreature(*me, instance->GetGuidData(DATA_OSSIRIAN)).
 --   No instance-data bridge (standing), so the Talk arm is not wired.
--- - JustDied's _JustDied() boss-state bookkeeping — instance bridge,
---   standing.
+-- - JustDied's _JustDied() boss-state bookkeeping — PORTED in onDied
+--   (SetBossState DATA_KURINNAXX DONE; bridge live,
+--   lua_creature_events.go:5917).
 -- - BossAI ctor leg DATA_KURINNAXX (ruins_of_ahnqiraj.h:28 = 0) and
---   _Reset() — instance bridge, standing.
+--   _Reset() — PORTED: ev1 IN_PROGRESS + ev23 NOT_STARTED legs
+--   (see onEnterCombat / onReset).
 local ENTRY = 15348
+local DATA_KURINNAXX = 0 -- ruins_of_ahnqiraj.h:28
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SPELL_MORTAL_WOUND = 25646
 local SPELL_SAND_TRAP = 25648
@@ -186,6 +192,14 @@ local function onTrash(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542; no
+    -- JustEngagedWith override in boss_kurinnaxx.cpp, so the base
+    -- runs): instance->SetBossState(DATA_KURINNAXX, IN_PROGRESS)
+    -- ahead of the pulse / DoZoneInCombat arms below
+    -- (creature:SetBossState, lua_creature_events.go:5917). The
+    -- CheckRequiredBosses gate is vacuous (no instance override in
+    -- instance_ruins_of_ahnqiraj.cpp).
+    creature:SetBossState(DATA_KURINNAXX, BOSS_STATE_IN_PROGRESS)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -213,6 +227,13 @@ local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     kurinnaxxState[guid] = { enraged = false }
+    -- C++ Reset _Reset() leg (boss_kurinnaxx.cpp:67;
+    -- BossAI::_Reset ScriptedCreature.cpp:499-511: alive-gated and
+    -- != DONE-gated; Go fires ev23 on the death path before ev4,
+    -- moroes/algalon precedent, so both gates are live here).
+    if creature:IsAlive() and creature:GetBossState(DATA_KURINNAXX) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_KURINNAXX, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 -- C++ DamageTaken: !_enraged && HealthBelowPct(30) -> DoCast(me,
@@ -237,10 +258,14 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ JustDied: _JustDied() + the Ossirian SAY_KURINNAXX_DEATH yell —
--- both instance-bridge legs, unwired; cancel only.
+-- C++ JustDied (boss_kurinnaxx.cpp:84-88): _JustDied() first, then the
+-- Ossirian SAY_KURINNAXX_DEATH yell (instance GetGuidData leg, no
+-- bridge — stays out). BossAI::_JustDied (ScriptedCreature.cpp:513-520)
+-- writes SetBossState(DATA_KURINNAXX, DONE); the events.Reset /
+-- summons / scheduler legs need no bridge.
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_KURINNAXX, BOSS_STATE_DONE)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

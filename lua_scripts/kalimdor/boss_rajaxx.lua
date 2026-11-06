@@ -32,8 +32,14 @@
 -- - The `enraged` bool: initialized in Initialize() but never read
 --   or set in C++ — dead variable, nothing to port.
 -- - BossAI ctor leg DATA_RAJAXX (ruins_of_ahnqiraj.h:29 = 1) and
---   _Reset() — instance bridge, standing.
+--   _Reset() — PORTED: ev1 IN_PROGRESS + ev23 NOT_STARTED legs
+--   (see onEnterCombat / onReset); ev4 DONE via base BossAI::JustDied
+--   (ScriptedCreature.h:330), see onDied.
 local ENTRY = 15341
+local DATA_RAJAXX = 1 -- ruins_of_ahnqiraj.h:29
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SPELL_DISARM = 6713
 local SPELL_THUNDERCRASH = 25599
@@ -95,6 +101,13 @@ local function onThunderCrash(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542; no
+    -- JustEngagedWith override in boss_rajaxx.cpp, so the base runs):
+    -- instance->SetBossState(DATA_RAJAXX, IN_PROGRESS) ahead of the
+    -- pulse / DoZoneInCombat arms below (creature:SetBossState,
+    -- lua_creature_events.go:5917). The CheckRequiredBosses gate is
+    -- vacuous (no instance override in instance_ruins_of_ahnqiraj.cpp).
+    creature:SetBossState(DATA_RAJAXX, BOSS_STATE_IN_PROGRESS)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -113,11 +126,22 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset _Reset() leg (boss_rajaxx.cpp:79;
+    -- BossAI::_Reset ScriptedCreature.cpp:499-511: alive-gated and
+    -- != DONE-gated; Go fires ev23 on the death path before ev4,
+    -- moroes/algalon precedent, so both gates are live here).
+    if creature:IsAlive() and creature:GetBossState(DATA_RAJAXX) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_RAJAXX, BOSS_STATE_NOT_STARTED)
+    end
 end
 
--- C++ has no JustDied override for boss_rajaxxAI — cancel only.
+-- C++ has no JustDied override for boss_rajaxxAI, so base
+-- BossAI::JustDied (ScriptedCreature.h:330) runs _JustDied() ->
+-- SetBossState(DATA_RAJAXX, DONE) (ScriptedCreature.cpp:513-520);
+-- the mal_ganis precedent, not the old "cancel only" reading.
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_RAJAXX, BOSS_STATE_DONE)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

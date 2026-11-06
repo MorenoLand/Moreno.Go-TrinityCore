@@ -66,8 +66,14 @@
 --   all gated on instance GetBossState(DATA_AYAMISS) — no bridge.
 -- - instance->SetGuidData(DATA_PARALYZED, ...) — no bridge.
 -- - BossAI ctor leg DATA_AYAMISS (ruins_of_ahnqiraj.h:32 = 4) and
---   _Reset() — instance bridge, standing.
+--   _Reset() — PORTED: ev1 IN_PROGRESS + ev23 NOT_STARTED legs
+--   (see onEnterCombat / onReset); ev4 DONE via base BossAI::JustDied
+--   (ScriptedCreature.h:330), see onDied.
 local ENTRY = 15369
+local DATA_AYAMISS = 4 -- ruins_of_ahnqiraj.h:32
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SPELL_STINGER_SPRAY = 25749
 local SPELL_POISON_STINGER = 25748
@@ -310,6 +316,13 @@ local function checkFrenzy(creature, guid, damage)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542,
+    -- base-first in boss_ayamiss.cpp:142): instance->SetBossState
+    -- (DATA_AYAMISS, IN_PROGRESS) ahead of the pulse / DoZoneInCombat
+    -- arms below (creature:SetBossState, lua_creature_events.go:5917).
+    -- The CheckRequiredBosses gate is vacuous (no instance override
+    -- in instance_ruins_of_ahnqiraj.cpp).
+    creature:SetBossState(DATA_AYAMISS, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:SetCombatMovement(false) -- Reset arm, boss_ayamiss.cpp:98 (ranged AI stands and casts)
@@ -348,6 +361,13 @@ local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     ayamissState[guid] = { phase = PHASE_AIR, enraged = false }
+    -- C++ Reset _Reset() leg (boss_ayamiss.cpp:96;
+    -- BossAI::_Reset ScriptedCreature.cpp:499-511: alive-gated and
+    -- != DONE-gated; Go fires ev23 on the death path before ev4,
+    -- moroes/algalon precedent, so both gates are live here).
+    if creature:IsAlive() and creature:GetBossState(DATA_AYAMISS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_AYAMISS, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
@@ -360,6 +380,11 @@ local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     ayamissState[guid] = nil
+    -- C++ has no JustDied override for boss_ayamissAI, so base
+    -- BossAI::JustDied (ScriptedCreature.h:330) runs _JustDied() ->
+    -- SetBossState(DATA_AYAMISS, DONE) (ScriptedCreature.cpp:513-520);
+    -- the mal_ganis precedent.
+    creature:SetBossState(DATA_AYAMISS, BOSS_STATE_DONE)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

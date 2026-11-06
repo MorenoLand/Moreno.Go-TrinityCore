@@ -109,8 +109,11 @@
 --   (no instance / achievement bridges). The unconditional
 --   SetReactState(REACT_AGGRESSIVE) leg (:158) IS ported in onReset,
 --   and Reset re-rolls MovePoint = urand(0, 5) for the deep-breath row.
---   No JustDied override exists in C++ (no _JustDied call), so there
---   is no ev4 DONE leg — the base _JustDied never runs for this boss.
+--   No JustDied override exists in C++ — but base BossAI::JustDied
+--   (ScriptedCreature.h:330) runs _JustDied() by virtual dispatch when
+--   the derived class does not override, so the ev4 DONE leg IS
+--   ported in onDied (tick-276 "NO ev4" verdict corrected this tick;
+--   Go sets no boss state natively on death).
 -- - The C++ HasUnitState(UNIT_STATE_CASTING) gates are PORTED: every
 --   timer arm defers 500ms while creature:IsCasting() (phase START/END
 --   pre-loop + in-loop gates :346/:386, phase BREATH pre-loop +
@@ -637,6 +640,13 @@ end
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     clearState(creature:GetGUID())
+    -- C++: no JustDied override in boss_onyxia.cpp, so base
+    -- BossAI::JustDied (ScriptedCreature.h:330) runs _JustDied() ->
+    -- SetBossState(DATA_ONYXIA, DONE) (ScriptedCreature.cpp:513-520);
+    -- the mal_ganis precedent. Without this leg the boss stayed
+    -- IN_PROGRESS after the kill (Go writes boss state only via the
+    -- Lua bridge, lua_creature_events.go:5929).
+    creature:SetBossState(DATA_ONYXIA, BOSS_STATE_DONE)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

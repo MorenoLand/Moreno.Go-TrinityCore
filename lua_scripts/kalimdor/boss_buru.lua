@@ -58,8 +58,14 @@
 --   (ManageRespawn) — no bridge.
 -- - EnterEvadeMode egg respawn loop: cross-AI, no bridge.
 -- - BossAI ctor leg DATA_BURU (ruins_of_ahnqiraj.h:31 = 3) and
---   _Reset() — instance bridge, standing.
+--   _Reset() — PORTED: ev1 IN_PROGRESS + ev23 NOT_STARTED legs
+--   (see onEnterCombat / onReset); ev4 DONE via base BossAI::JustDied
+--   (ScriptedCreature.h:330), see onDied.
 local ENTRY = 15370
+local DATA_BURU = 3 -- ruins_of_ahnqiraj.h:31
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SPELL_DISMEMBER = 96
 local SPELL_GATHERING_SPEED = 1834
@@ -156,6 +162,13 @@ local function checkTransform(creature, guid, damage)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542,
+    -- base-first in boss_buru.cpp:89): instance->SetBossState
+    -- (DATA_BURU, IN_PROGRESS) ahead of the pulse / DoZoneInCombat
+    -- arms below (creature:SetBossState, lua_creature_events.go:5917).
+    -- The CheckRequiredBosses gate is vacuous (no instance override
+    -- in instance_ruins_of_ahnqiraj.cpp).
+    creature:SetBossState(DATA_BURU, BOSS_STATE_IN_PROGRESS)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     buruState[guid] = { phase = PHASE_EGG }
@@ -181,6 +194,14 @@ local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     buruState[guid] = { phase = PHASE_EGG }
+    -- C++ Reset: no Reset() override in boss_buru.cpp, so base
+    -- BossAI::Reset (ScriptedCreature.h:328) runs _Reset()
+    -- (ScriptedCreature.cpp:499-511: alive-gated and != DONE-gated;
+    -- Go fires ev23 on the death path before ev4, moroes/algalon
+    -- precedent, so both gates are live here).
+    if creature:IsAlive() and creature:GetBossState(DATA_BURU) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_BURU, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 -- C++ KilledUnit: player victim -> ChaseNewVictim in full (C++
@@ -222,6 +243,12 @@ local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     buruState[guid] = nil
+    -- C++ has no JustDied override for boss_buruAI (the JustDied at
+    -- boss_buru.cpp:225 belongs to npc_buru_eggAI), so base
+    -- BossAI::JustDied (ScriptedCreature.h:330) runs _JustDied() ->
+    -- SetBossState(DATA_BURU, DONE) (ScriptedCreature.cpp:513-520);
+    -- the mal_ganis precedent.
+    creature:SetBossState(DATA_BURU, BOSS_STATE_DONE)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
