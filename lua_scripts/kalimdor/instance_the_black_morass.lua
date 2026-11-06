@@ -48,6 +48,20 @@
 --   type (TIMED_DESPAWN_OUT_OF_COMBAT, 30s) and 0.0-threat-on-Medivh
 --   leg (inlined in the pump: DoSummonAtRift is a C++ method, not a
 --   Lua bridge).
+-- - Time-rift death on channel break (C++ npc_time_rift UpdateAI,
+--   the_black_morass.cpp:334-348: if not IsNonMeleeSpellCast(false)
+--   -> setDeathState(JUST_DIED) + SetData(TYPE_RIFT, SPECIAL) when
+--   IN_PROGRESS; IsNonMeleeSpellCast(false) counts channeled spells,
+--   Unit.cpp:3182): (a) the Aeonus rift is never channeled
+--   (DoSpawnPortal casts SPELL_RIFT_CHANNEL only for non-Aeonus
+--   bosses), so it dies on its first AI tick — the rift is killed
+--   in spawnPortal right after the boss summon, with no pump
+--   started; the SPECIAL leg is a no-op there (portalCount 18).
+--   (b) when DoSummonAtRift's medivhState gate fails on a real
+--   summon attempt it removes all auras, breaking the channel, so
+--   the rift dies on the same tick — the pump kills the rift after
+--   a failed-gate tick instead of rescheduling (a 0-entry tick
+--   returns before the gate check, so the channel survives it).
 -- Unmodeled (documented-only, no bridges):
 -- - OnPlayerEnter's WORLD_STATE_BM 0 send to the entering player:
 --   no per-player world-state bridge exists (creature:UpdateWorldState
@@ -167,6 +181,15 @@ local function spawnPortal(data, mapObj)
             rift:CastSpell(boss, SPELL_RIFT_CHANNEL, false)
         end
     end
+    -- C++ npc_time_rift UpdateAI (the_black_morass.cpp:334-348): a
+    -- rift that is not casting dies on its first AI tick. The Aeonus
+    -- rift is never channeled (no SPELL_RIFT_CHANNEL cast above),
+    -- so it dies at once and never pumps; the SPECIAL leg is a
+    -- no-op here (portalCount is 18, not < 7).
+    if entry == NPC_AEONUS then
+        rift:Kill()
+        return
+    end
     -- Time-rift wave pump state, started here (no spawn-time hook
     -- exists for TempSummons); the rift's OnDied handler cancels it.
     local guid = rift:GetGUID()
@@ -186,7 +209,7 @@ local function spawnPortal(data, mapObj)
         if data.medivhState ~= STATE_IN_PROGRESS then
             rift:InterruptNonMeleeSpells()
             rift:RemoveAllAuras()
-            return
+            return false
         end
         local angle = math.random() * 2 * math.pi
         local dist = 10 * math.random()
@@ -200,6 +223,7 @@ local function spawnPortal(data, mapObj)
         if summon and data.medivh then
             summon:AddThreat(data.medivh, 0.0)
         end
+        return true
     end
     local function pumpTick()
         local st = data["riftwave_" .. guid]
@@ -216,14 +240,27 @@ local function spawnPortal(data, mapObj)
         }
         local summonEntry = waves[st.wave + 1][st.count + 1]
         st.count = st.count + 1
+        local gateFailed = false
         if summonEntry ~= nil and summonEntry ~= 0 then
             local n = 1
             if summonEntry == 21818 then
                 n = 3
             end
             for _ = 1, n do
-                summonAtRift(summonEntry)
+                if not summonAtRift(summonEntry) then
+                    gateFailed = true
+                end
             end
+        end
+        -- C++ npc_time_rift UpdateAI (the_black_morass.cpp:334-348):
+        -- the failed-gate summon removed all auras above, breaking
+        -- the rift channel, so the rift dies on the same tick (the
+        -- SPECIAL leg is a no-op: the gate only fails once the event
+        -- has left IN_PROGRESS, and the FAIL leg already set rift
+        -- NOT_STARTED). No reschedule; OnDied cleans the pump state.
+        if gateFailed then
+            rift:Kill()
+            return
         end
         data["pump_" .. guid] = CreateLuaEvent(pumpTick, 15000, 1)
     end

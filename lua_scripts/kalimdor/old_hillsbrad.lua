@@ -66,14 +66,14 @@
 --   SummonCreature(SKARLOC_MOUNT 18798, 2488.64, 625.77, 58.26, 4.71,
 --   TIMED_DESPAWN, 10s) + DoUnmount() + SetRun(false); case 60
 --   HandleEmoteCommand(EMOTE_ONESHOT_EXCLAMATION) + escort-pause + gossip
---   flag + instance->SetData(TYPE_THRALL_PART2 5, DONE); case 64/81
+--   flag + instance->SetData(TYPE_THRALL_PART2 4, DONE); case 64/81
 --   SetRun(false); case 68 summons barn protector 18093 / lookout 18094 /
 --   2x guardsman 18092; case 83 summons church protector 23179 / lookout
 --   23177 / 2x guardsman 23175; case 84 Talk(SAY_TH_CHURCH_END 6); case 91
 --   SetWalk(true) + SetRun(false); case 93 summons inn protector 23180 /
 --   lookout 23178 / 2x guardsman 23176; case 94 Taretha (instance
 --   DATA_TARETHA 8 GUID) Talk(SAY_TA_ESCAPED 1, me); case 95
---   Talk(SAY_TH_MEET_TARETHA 7) + instance->SetData(TYPE_THRALL_PART3 6,
+--   Talk(SAY_TH_MEET_TARETHA 7) + instance->SetData(TYPE_THRALL_PART3 5,
 --   DONE) + escort-pause; case 96 Talk(SAY_TH_EPOCH_WONDER 8); case 97
 --   Talk(SAY_TH_EPOCH_KILL_TARETHA 9) + SetRun(); case 106: starts Taretha's
 --   escort (ENSURE_AI(EscortAI, Taretha->AI())->Start(false, true,
@@ -89,36 +89,38 @@
 --   (menu GOSSIP_ID_START 9568) when TYPE_BARREL_DIVERSION 1 == DONE and
 --   !TYPE_THRALL_EVENT 2; GOSSIP_ITEM_SKARLOC1 ("Taretha cannot see you,
 --   Thrall.", menu 9614) when TYPE_THRALL_PART1 3 == DONE and
---   !TYPE_THRALL_PART2 5; GOSSIP_ITEM_TARREN ("We're ready, Thrall.", menu
---   9597) when TYPE_THRALL_PART2 5 == DONE and !TYPE_THRALL_PART3 6.
+--   !TYPE_THRALL_PART2 4; GOSSIP_ITEM_TARREN ("We're ready, Thrall.", menu
+--   9597) when TYPE_THRALL_PART2 4 == DONE and !TYPE_THRALL_PART3 5.
 --   OnGossipSelect: action 1 -> SetData(TYPE_THRALL_EVENT 2, IN_PROGRESS) +
 --   SetData(TYPE_THRALL_PART1 3, IN_PROGRESS) + Talk(SAY_TH_START_EVENT_PART1
 --   0) + Start(true, true, playerGUID) + SetMaxPlayerDistance(100.0f) +
 --   SetDespawnAtEnd(false) + SetDespawnAtFar(false); action 2 ->
 --   GOSSIP_ITEM_SKARLOC2 chain (menus 9579 / 9580); action 20 ->
 --   SummonCreature(SKARLOC_MOUNT 18798, 2038.81, 270.26, 63.20, 5.41,
---   TIMED_DESPAWN, 12s) + SetData(TYPE_THRALL_PART2 5, IN_PROGRESS) +
+--   TIMED_DESPAWN, 12s) + SetData(TYPE_THRALL_PART2 4, IN_PROGRESS) +
 --   Talk(SAY_TH_START_EVENT_PART2 4) + StartWP() (escort unpause); action 3
---   -> SetData(TYPE_THRALL_PART3 6, IN_PROGRESS) + StartWP().
+--   -> SetData(TYPE_THRALL_PART3 5, IN_PROGRESS) + StartWP().
 -- - Thrall JustSummoned: barn guards/protectors/lookouts, SKARLOC_MOUNT,
 --   EROZION_ENTRY are exempt; every other summoned creature gets
 --   AttackStart(me) (summon-ownership bridge blocked, standing).
--- - npc_erozion (gossip-only, stale 'no gossip bridge' retracted —
---   bridged; no inventory bridge — documented,
---   not registered): OnGossipHello offers "I need a pack of Incendiary
---   Bombs." (GOSSIP_ACTION_INFO_DEF+1) when instance TYPE_BARREL_DIVERSION
+-- - npc_erozion (gossip-only — PORTED below, entry EROZION_ENTRY 18723):
+--   OnGossipHello offers "I need a pack of Incendiary Bombs."
+--   (GOSSIP_ACTION_INFO_DEF+1) when instance TYPE_BARREL_DIVERSION
 --   1 != DONE and the player lacks ITEM_ENTRY_BOMBS 25853, and "[PH]
 --   Teleport please, i'm tired." (action +2) when QUEST_ENTRY_RETURN 10285
 --   is complete (menu 9778); action +1 grants one Incendiary Bombs 25853
---   via CanStoreNewItem/StoreNewItem (menu 9515), action +2 just closes.
+--   via player:AddItem (menu 9515), action +2 just closes. The hello
+--   bombs-item gates (instance GetData, player HasItemCount) have no
+--   bridge — kalecgos precedent — so the item is offered unconditionally;
+--   the quest-status gate is live (player:GetQuestStatus, COMPLETE 1).
 -- - npc_taretha (EscortAI): WaypointReached case 6 Talk(SAY_TA_FREE 0),
 --   case 7 HandleEmoteCommand(EMOTE_ONESHOT_CHEER) — escort-only,
 --   documented. OnGossipHello shows GOSSIP_ITEM_EPOCH1 ("Strange
---   wizard?", menu 9610) when TYPE_THRALL_PART3 6 == DONE and
---   TYPE_THRALL_PART4 7 == NOT_STARTED; OnGossipSelect action 1001 ->
+--   wizard?", menu 9610) when TYPE_THRALL_PART3 5 == DONE and
+--   TYPE_THRALL_PART4 6 == NOT_STARTED; OnGossipSelect action 1001 ->
 --   EPOCH2 item + menu 9613 (pure menu nav), action 1002 ->
 --   CloseGossipMenuFor + the instance/summon machine (SetData
---   TYPE_THRALL_PART4 7 IN_PROGRESS, SummonCreature ENTRY_EPOCH 18096
+--   TYPE_THRALL_PART4 6 IN_PROGRESS, SummonCreature ENTRY_EPOCH 18096
 --   at 2639.13/698.55/65.43/4.59 TIMED_OR_DEAD_DESPAWN 2min if
 --   DATA_EPOCH 9 GUID empty, Thrall StartWP). PORTED below (entry
 --   TARETHA_ENTRY 18887: instance_old_hillsbrad.cpp:36): the hello
@@ -254,3 +256,57 @@ end
 
 RegisterCreatureGossipEvent(TARETHA_ENTRY, 1, tarethaGossipHello)
 RegisterCreatureGossipEvent(TARETHA_ENTRY, 2, tarethaGossipSelect)
+
+-- npc_erozion gossip (old_hillsbrad.cpp:55-98) — entry EROZION_ENTRY
+-- 18723 (old_hillsbrad.cpp:173).
+local EROZION_ENTRY = 18723
+
+local ITEM_ENTRY_BOMBS = 25853
+local QUEST_ENTRY_RETURN = 10285
+local QUEST_STATUS_COMPLETE = 1
+local GOSSIP_MENU_EROZION = 9778
+local GOSSIP_MENU_BOMBS = 9515
+local GOSSIP_ITEM_BOMBS = "I need a pack of Incendiary Bombs."
+local GOSSIP_ITEM_TELEPORT = "[PH] Teleport please, i'm tired."
+
+-- C++ OnGossipHello (old_hillsbrad.cpp:85-97): quest menu first when
+-- the creature is a quest giver (player:GossipAddQuests twin,
+-- npc_thrall_warchief.lua precedent); the bombs item only when
+-- instance TYPE_BARREL_DIVERSION 1 != DONE and the player lacks
+-- ITEM_ENTRY_BOMBS 25853, and the teleport item only when
+-- QUEST_ENTRY_RETURN 10285 is COMPLETE. Both bombs-item gates have no
+-- bridge (no instance GetData, no player HasItemCount) — kalecgos
+-- precedent — so the bombs item is offered unconditionally and the
+-- gate is documented in the header; the quest-status gate is live
+-- (player:GetQuestStatus, COMPLETE 1 per lua_player.go:3980-3983).
+local function erozionGossipHello(event, player, creature)
+    if creature:IsQuestGiver() then
+        player:GossipAddQuests(creature)
+    end
+    player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_BOMBS,
+        GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
+    if player:GetQuestStatus(QUEST_ENTRY_RETURN) == QUEST_STATUS_COMPLETE then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_TELEPORT,
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
+    end
+    player:GossipSendMenu(GOSSIP_MENU_EROZION, creature)
+end
+
+-- C++ OnGossipSelect (old_hillsbrad.cpp:66-83): action 1001 grants one
+-- Incendiary Bombs 25853 via CanStoreNewItem/StoreNewItem
+-- (player:AddItem twin, lua_player.go:2196-2206 — returns nil on a full
+-- inventory or unknown template, and the C++ sends menu 9515 either
+-- way, so the result is ignored) and sends menu 9515; action 1002
+-- just closes the menu.
+local function erozionGossipSelect(event, player, creature, sender, action)
+    player:GossipClearMenu()
+    if action == GOSSIP_ACTION_INFO_DEF + 1 then
+        player:AddItem(ITEM_ENTRY_BOMBS, 1)
+        player:GossipSendMenu(GOSSIP_MENU_BOMBS, creature)
+    elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
+        player:GossipComplete()
+    end
+end
+
+RegisterCreatureGossipEvent(EROZION_ENTRY, 1, erozionGossipHello)
+RegisterCreatureGossipEvent(EROZION_ENTRY, 2, erozionGossipSelect)

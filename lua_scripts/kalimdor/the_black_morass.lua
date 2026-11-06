@@ -56,6 +56,16 @@
 --   skip suppresses SAY_DEATH) + TYPE_MEDIVH FAIL + TYPE_RIFT
 --   NOT_STARTED; otherwise re-arm 1000/3000 from HasAura
 --   (AEONUS first, C++ order).
+--   DELIBERATE DELTA (C++ instance_the_black_morass.cpp:172):
+--   SetData(TYPE_MEDIVH, SPECIAL) decrements the shield ONLY while
+--   TYPE_MEDIVH == IN_PROGRESS; otherwise the else branch sets the
+--   encounter to SPECIAL (4), which would let a later player
+--   proximity re-trigger SAY_INTRO and restart a finished event.
+--   The expiry leg gates the decrement on IN_PROGRESS (a corrupt
+--   tick landing in the <=3s window after a win no longer drains
+--   the shield) but does NOT replicate the state=4 assignment,
+--   and the re-arm still runs from HasAura (C++ re-arms outside
+--   SetData).
 -- - npc_medivh_bm UpdateAI Check_Timer 5s arm (self-rescheduling
 --   one-shots, temporus timer idiom): shield latches -> Talk
 --   SAY_WEAK25 (4) / SAY_WEAK50 (3) / SAY_WEAK75 (2) in the C++
@@ -204,17 +214,26 @@ local function medivhCorruptExpiry(creature, guid)
     if not data then
         return
     end
-    local shield = data.shield or 100
-    if shield > 0 then
-        shield = shield - 1
-    end
-    data.shield = shield
-    creature:UpdateWorldState(WORLD_STATE_BM_SHIELD, shield)
-    if shield == 0 then
-        data.medivhState = STATE_FAIL
-        data.riftState = STATE_NOT_STARTED
-        creature:Kill(creature)
-        return
+    -- C++ SetData(TYPE_MEDIVH, SPECIAL) (instance_the_black_morass.
+    -- cpp:172) decrements the shield ONLY while TYPE_MEDIVH ==
+    -- IN_PROGRESS; otherwise the else branch sets the encounter to
+    -- SPECIAL (4) — deliberately not replicated (a later player
+    -- proximity would re-trigger SAY_INTRO and restart a finished
+    -- event). The re-arm below still runs: C++ re-arms outside
+    -- SetData, from HasAura.
+    if (data.medivhState or STATE_NOT_STARTED) == STATE_IN_PROGRESS then
+        local shield = data.shield or 100
+        if shield > 0 then
+            shield = shield - 1
+        end
+        data.shield = shield
+        creature:UpdateWorldState(WORLD_STATE_BM_SHIELD, shield)
+        if shield == 0 then
+            data.medivhState = STATE_FAIL
+            data.riftState = STATE_NOT_STARTED
+            creature:Kill(creature)
+            return
+        end
     end
     if creature:HasAura(SPELL_CORRUPT_AEONUS) then
         schedule(guid, "corrupt", 1000, function()
