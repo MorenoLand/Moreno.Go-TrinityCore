@@ -956,44 +956,54 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		return true
 	}
 	switch strings.ToLower(args[0]) {
-	case "areatriggers":
-		s.handleDebugAreaTriggers(ctx)
+	case "areatriggers", "threat", "lootrecipient", "arena", "wpgps", "combat", "los", "dummy", "threatinfo", "bg":
+		// No-arg debug arms take no further tokens (ChatCommand.h:112
+		// whole-string-consumed); the handlers below used to drop them.
+		if len(args) > 1 {
+			s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle")
+			return true
+		}
+		switch strings.ToLower(args[0]) {
+		case "areatriggers":
+			s.handleDebugAreaTriggers(ctx)
+		case "dummy":
+			s.handleDebugDummy(ctx)
+		case "lootrecipient":
+			s.handleDebugLootRecipient(ctx)
+		case "los":
+			s.handleDebugLoS(ctx)
+		case "threat":
+			s.handleDebugThreat(ctx)
+		case "threatinfo":
+			s.handleDebugThreatInfo(ctx)
+		case "combat":
+			s.handleDebugCombat(ctx)
+		case "wpgps":
+			s.handleDebugWPGPS(ctx)
+		case "arena":
+			s.handleDebugArena(ctx)
+		case "bg":
+			s.handleDebugBattleground(ctx)
+		}
+		return true
 	case "anim":
 		s.handleDebugAnim(ctx, args[1:])
 	case "worldstate":
 		s.handleDebugWorldState(ctx, args[1:])
 	case "objectcount":
 		s.handleDebugObjectCount(ctx, args[1:])
-	case "dummy":
-		s.handleDebugDummy(ctx)
 	case "neargraveyard":
 		s.handleDebugNearGraveyard(ctx, args[1:])
-	case "lootrecipient":
-		s.handleDebugLootRecipient(ctx)
 	case "instancespawn":
 		s.handleDebugInstanceSpawns(ctx, args[1:])
-	case "los":
-		s.handleDebugLoS(ctx)
 	case "play":
 		s.handleDebugPlay(ctx, args[1:])
 	case "send":
 		s.handleDebugSend(ctx, args[1:])
-	case "threat":
-		s.handleDebugThreat(ctx)
-	case "threatinfo":
-		s.handleDebugThreatInfo(ctx)
-	case "combat":
-		s.handleDebugCombat(ctx)
 	case "guidlimits":
 		s.handleDebugGuidLimits(ctx, args[1:])
-	case "wpgps":
-		s.handleDebugWPGPS(ctx)
 	case "transport":
 		s.handleDebugTransport(ctx, args[1:])
-	case "arena":
-		s.handleDebugArena(ctx)
-	case "bg":
-		s.handleDebugBattleground(ctx)
 	case "questreset":
 		s.handleDebugQuestReset(ctx, args[1:])
 	case "raidreset":
@@ -6190,12 +6200,12 @@ func (s *session) handleCmdDeserter(ctx context.Context, args []string) {
 		}
 	}
 	if adding {
-		if len(args) < 3 {
+		if len(args) != 3 {
 			s.sendSysMessage("Syntax: .deserter " + group + " add <time>")
 			return
 		}
-		secs, err := strconv.ParseUint(args[2], 10, 32)
-		if err != nil || secs == 0 {
+		secs, ok := parseCommandUint32(args[2])
+		if !ok || secs == 0 {
 			// LANG_BAD_VALUE: zero time, like the C++ !time check.
 			s.sendSysMessage("Incorrect value.")
 			return
@@ -6210,7 +6220,12 @@ func (s *session) handleCmdDeserter(ctx context.Context, args []string) {
 			return
 		}
 		// Aura::SetDuration(time * IN_MILLISECONDS).
-		target.applyAuraWithDuration(spellID, uint32(secs)*1000)
+		target.applyAuraWithDuration(spellID, secs*1000)
+		return
+	}
+	// HandleDeserterRemove takes no arguments (cs_deserter.cpp:143).
+	if len(args) != 2 {
+		s.sendSysMessage("Syntax: .deserter " + group + " remove")
 		return
 	}
 	target.removeAura(spellID)

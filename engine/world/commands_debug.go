@@ -40,16 +40,16 @@ func (s *session) handleDebugAnim(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .debug anim <emote>"
-	if len(args) == 0 {
+	if len(args) != 1 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	emote, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	emote, ok := parseCommandUint32(args[0])
+	if !ok || !debugEmoteValid(emote) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	if motion := s.castCommandSelectedCreature(); motion != nil {
+	if motion := s.debugSelectedCreatureMotion(); motion != nil {
 		s.npcCreatureEmote(motion, uint32(emote))
 	} else if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
@@ -86,17 +86,17 @@ func (s *session) handleDebugWorldState(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .debug worldstate <variable> <value>"
-	if len(args) < 2 {
+	if len(args) != 2 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	variable, err1 := strconv.ParseUint(args[0], 10, 32)
-	value, err2 := strconv.ParseUint(args[1], 10, 32)
-	if err1 != nil || err2 != nil {
+	variable, ok1 := parseCommandUint32(args[0])
+	value, ok2 := parseCommandUint32(args[1])
+	if !ok1 || !ok2 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	s.sendWorldState(uint32(variable), uint32(value))
+	s.sendWorldState(variable, value)
 }
 
 // handleDebugDummy mirrors HandleDebugDummyCommand (cs_debug.cpp:1792):
@@ -119,13 +119,17 @@ func (s *session) handleDebugObjectCount(ctx context.Context, args []string) {
 		return
 	}
 	var mapFilter *uint32
+	if len(args) > 1 {
+		s.sendSysMessage("Syntax: .debug objectcount [mapId]")
+		return
+	}
 	if len(args) > 0 {
-		id, err := strconv.ParseUint(args[0], 10, 32)
-		if err != nil {
+		id, ok := parseCommandUint32(args[0])
+		if !ok {
 			s.sendSysMessage("Syntax: .debug objectcount [mapId]")
 			return
 		}
-		v := uint32(id)
+		v := id
 		mapFilter = &v
 	}
 	if s.server == nil || s.player == nil {
@@ -254,10 +258,14 @@ func (s *session) handleDebugNearGraveyard(ctx context.Context, args []string) {
 		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
+	if len(args) > 1 || (len(args) == 1 && !strings.EqualFold(args[0], "linked")) {
+		s.sendSysMessage("Syntax: .debug neargraveyard [linked]")
+		return
+	}
 	if s.server == nil || s.player == nil || s.server.Data == nil {
 		return
 	}
-	linked := len(args) > 0 && strings.ToLower(args[0]) == "linked"
+	linked := len(args) > 0 && strings.EqualFold(args[0], "linked")
 	if linked {
 		loc, found := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, playerTeam(s.player.Race))
 		if !found {
@@ -304,6 +312,67 @@ func (s *session) handleDebugNearGraveyard(ctx context.Context, args []string) {
 		return
 	}
 	s.sendSysMessage(fmt.Sprintf("Nearest graveyard: %d at (%f, %f, %f)", nearest.id, nearest.x, nearest.y, nearest.z))
+}
+
+// debugEmoteValues is the Emote membership set (SharedDefines.h:1935):
+// 175 named values from 0 to 476 with gaps. C++ parses the enum arg by
+// membership (EnumUtils::IsValid), so a numeric outside this set fails.
+var debugEmoteValues = []uint32{0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33, 34, 35, 36, 37, 38, 39, 43, 44, 45, 48, 50, 51, 53, 54, 60, 61, 64, 65, 66, 68, 69, 70, 71, 92, 93, 94, 113, 133, 153, 173, 193, 213, 214, 233, 234, 253, 254, 273, 274, 275, 293, 313, 333, 353, 373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383, 384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398, 399, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 465, 466, 467, 468, 469, 470, 471, 473, 474, 475, 476}
+
+func debugEmoteValid(v uint32) bool {
+	i := sort.Search(len(debugEmoteValues), func(i int) bool { return debugEmoteValues[i] >= v })
+	return i < len(debugEmoteValues) && debugEmoteValues[i] == v
+}
+
+// debugSendEnumValid is the EnumUtils::IsValid membership check for the
+// debug send arms (ChatCommandArgs.h:184-200): buyerror/sellerror/
+// equiperror (ItemDefines.h), channelnotify (Channel.h:31), chatmessage
+// (SharedDefines.h MAX_CHAT_MSG_TYPE 0x34), qpartymsg (QuestShareMessages)
+// and qinvalidmsg (QuestFailedReason, QuestDef.h:55-79). Numeric-only is
+// the documented delta; an
+// out-of-range numeric fails where C++ rejects it.
+func debugSendEnumValid(arm string, value uint32) bool {
+	switch arm {
+	case "buyerror":
+		switch value {
+		case 0, 1, 2, 4, 5, 7, 8, 11, 12:
+			return true
+		}
+	case "sellerror":
+		return value >= 1 && value <= 7
+	case "equiperror":
+		return value <= 73 || (value >= 75 && value <= 82) || (value >= 84 && value <= 89)
+	case "channelnotify":
+		return value <= 35
+	case "chatmessage":
+		return value <= 51
+	case "qpartymsg":
+		return value <= 11
+	case "qinvalidmsg":
+		switch value {
+		case 0, 1, 6, 7, 12, 13, 16, 18, 21, 23, 26, 27, 29:
+			return true
+		}
+	}
+	return false
+}
+
+// debugSelectedCreatureMotion resolves the selected creature across
+// instances, the getSelectedUnit twin (Chat.cpp:312) for creature
+// targets: C++ resolves globally, while the session-scoped finder is
+// map-bound.
+func (s *session) debugSelectedCreatureMotion() *creatureMotion {
+	if s == nil || s.server == nil || s.selection == 0 {
+		return nil
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	for scope := range s.server.instanceCreatureMotion {
+		if m := s.server.findCreatureMotionLocked(scope.MapID, scope.InstanceID, s.selection); m != nil {
+			return m
+		}
+	}
+	return nil
 }
 
 // debugSelectedUnit resolves the getSelectedUnit twin (Chat.cpp:312) for
@@ -389,12 +458,12 @@ func (s *session) handleDebugPlay(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .debug play cinematic|movie|sound|music <id>"
-	if len(args) < 2 {
+	if len(args) != 2 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	id, err := strconv.ParseUint(args[1], 10, 32)
-	if err != nil {
+	id, ok := parseCommandUint32(args[1])
+	if !ok {
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -442,23 +511,23 @@ func (s *session) handleDebugSendSpellFail(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .debug send spellfail <result> [failArg1] [failArg2]"
-	if len(args) == 0 {
+	if len(args) == 0 || len(args) > 3 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	result, err := strconv.ParseUint(args[0], 10, 8)
-	if err != nil {
+	result, ok := parseCommandUint32(args[0])
+	if !ok || (result > 187 && result != 255) {
 		s.sendSysMessage(syntax)
 		return
 	}
 	var params []uint32
 	for _, arg := range args[1:] {
-		v, err := strconv.ParseUint(arg, 10, 32)
-		if err != nil {
+		v, ok := parseCommandUint32(arg)
+		if !ok {
 			s.sendSysMessage(syntax)
 			return
 		}
-		params = append(params, uint32(v))
+		params = append(params, v)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(0, 133, uint8(result), params...), true)
 }
@@ -485,19 +554,38 @@ func (s *session) handleDebugSend(ctx context.Context, args []string) {
 	case "spellfail":
 		s.handleDebugSendSpellFail(ctx, args[1:])
 	case "opcode":
+		if len(args) != 1 {
+			s.sendSysMessage(syntax)
+			return
+		}
 		s.handleDebugSendOpcode(ctx)
-	case "buyerror", "sellerror", "equiperror", "channelnotify", "chatmessage", "qpartymsg", "qinvalidmsg", "setphaseshift":
-		if len(args) < 2 {
+	case "buyerror", "sellerror", "equiperror", "channelnotify", "chatmessage", "qpartymsg", "qinvalidmsg":
+		if len(args) != 2 {
 			s.sendSysMessage(syntax)
 			return
 		}
-		value, err := strconv.ParseUint(args[1], 10, 32)
-		if err != nil {
+		value, ok := parseCommandUint32(args[1])
+		if !ok || !debugSendEnumValid(strings.ToLower(args[0]), value) {
 			s.sendSysMessage(syntax)
 			return
 		}
-		s.debugSendNumeric(strings.ToLower(args[0]), uint32(value))
+		s.debugSendNumeric(strings.ToLower(args[0]), value)
+	case "setphaseshift":
+		if len(args) != 2 {
+			s.sendSysMessage(syntax)
+			return
+		}
+		value, ok := parseCommandUint32(args[1])
+		if !ok {
+			s.sendSysMessage(syntax)
+			return
+		}
+		s.debugSendNumeric("setphaseshift", value)
 	case "largepacket":
+		if len(args) != 1 {
+			s.sendSysMessage(syntax)
+			return
+		}
 		var sb strings.Builder
 		for sb.Len() < 128000 {
 			sb.WriteString("This is a dummy string to push the packet's size beyond 128000 bytes. ")
@@ -803,19 +891,19 @@ func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) 
 		return
 	}
 	const syntax = "Syntax: .debug instancespawn <groupId|explain>"
-	if len(args) == 0 {
+	if len(args) != 1 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	explain := strings.ToLower(args[0]) == "explain"
+	explain := strings.EqualFold(args[0], "explain")
 	var groupID uint32
 	if !explain {
-		id, err := strconv.ParseUint(args[0], 10, 32)
-		if err != nil {
+		id, ok := parseCommandUint32(args[0])
+		if !ok {
 			s.sendSysMessage(syntax)
 			return
 		}
-		groupID = uint32(id)
+		groupID = id
 	}
 	mapID, instanceID := s.player.Map, s.player.InstanceID
 	mapName := fmt.Sprintf("Map %d", mapID)
@@ -946,7 +1034,7 @@ func (s *session) debugThreatTarget() (name string, guid uint64, alive, engaged 
 	if s == nil || s.player == nil {
 		return "", 0, false, false, nil
 	}
-	if m := s.castCommandSelectedCreature(); m != nil {
+	if m := s.debugSelectedCreatureMotion(); m != nil {
 		return m.Name, m.GUID, m.Health != 0, m.InCombat, m
 	}
 	if s.selection != 0 {
@@ -1098,8 +1186,10 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 }
 
 // handleDebugThreatInfo mirrors HandleDebugThreatInfoCommand
-// (cs_debug.cpp:854): ".debug threatinfo" requires a selected unit and
-// prints the modeled threat-manager state. Deltas: the single-school and
+// (cs_debug.cpp:854): ".debug threatinfo" reports the selected unit, else
+// the invoker (getSelectedUnit, Chat.cpp:312 — the no-selection error leg
+// is unreachable in-game), and prints the modeled threat-manager state.
+// Deltas: the single-school and
 // multi-school modifier tables and the redirect info/registry have no Go
 // model (ThreatManager tracks only the temp modifier per victim), so the
 // report prints the modeled rows — fixate target, live taunts,
@@ -1110,20 +1200,13 @@ func (s *session) handleDebugThreatInfo(ctx context.Context) {
 		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
-	motion := s.castCommandSelectedCreature()
-	var name string
-	var guid uint64
+	name, guid, _, _, motion := s.debugThreatTarget()
+	if guid == 0 {
+		return
+	}
 	var mgr *ThreatManager
 	if motion != nil {
-		name, guid, mgr = motion.Name, motion.GUID, motion.ThreatMgr
-	} else if s.selection != 0 {
-		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
-			name, guid = ts.player.Name, ts.playerGUID
-		}
-	}
-	if motion == nil && guid == 0 {
-		s.sendSysMessage("Select a character or creature.")
-		return
+		mgr = motion.ThreatMgr
 	}
 	s.sendSysMessage(fmt.Sprintf("Threat info for %s (%d):", name, guid))
 	s.sendSysMessage(" - Single-school threat modifiers: not modeled")
@@ -1183,13 +1266,17 @@ func (s *session) handleDebugGuidLimits(ctx context.Context, args []string) {
 		return
 	}
 	var mapFilter *uint32
+	if len(args) > 1 {
+		s.sendSysMessage("Syntax: .debug guidlimits [mapId]")
+		return
+	}
 	if len(args) > 0 {
-		id, err := strconv.ParseUint(args[0], 10, 32)
-		if err != nil {
+		id, ok := parseCommandUint32(args[0])
+		if !ok {
 			s.sendSysMessage("Syntax: .debug guidlimits [mapId]")
 			return
 		}
-		v := uint32(id)
+		v := id
 		mapFilter = &v
 	}
 	if s.server == nil || s.player == nil {
@@ -1287,14 +1374,20 @@ func (s *session) handleDebugWPGPS(ctx context.Context) {
 }
 
 // handleDebugTransport mirrors HandleDebugTransportCommand
-// (cs_debug.cpp:1317): ".debug transport [stop|start]" on the invoker's
-// continent transport. The stop/start legs ride the MovementPaused latch
-// (EnableMovement twin); any other argument prints the transport's name,
-// state and position. No transport reads a plain notice, the C++ false
-// return's Go equivalent.
+// (cs_debug.cpp:1317): ".debug transport <stop|start|other>" on the
+// invoker's continent transport; the operation arg is required, so a bare
+// ".debug transport" fails instead of printing info. The stop/start legs
+// ride the MovementPaused latch (EnableMovement twin); any other argument
+// prints the transport's name, state and position. Delta: C++ defers the
+// stop to the next stop frame (Transport _pendingStop), Go pauses at once.
+// No transport reads a plain notice, the C++ false return's Go equivalent.
 func (s *session) handleDebugTransport(ctx context.Context, args []string) {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
 		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	if len(args) != 1 {
+		s.sendSysMessage("Syntax: .debug transport <stop|start>")
 		return
 	}
 	if s.server == nil || s.player == nil || s.player.TransportGUID == 0 {
@@ -1314,10 +1407,7 @@ func (s *session) handleDebugTransport(ctx context.Context, args []string) {
 	}
 	if transport != nil {
 		transportName, paused, x, y, z, o := transport.Name, transport.MovementPaused, transport.Spawn.X, transport.Spawn.Y, transport.Spawn.Z, transport.Spawn.Orientation
-		op := ""
-		if len(args) > 0 {
-			op = strings.ToLower(args[0])
-		}
+		op := strings.ToLower(args[0])
 		if op == "stop" || op == "start" {
 			transport.MovementPaused = op == "stop"
 			paused = transport.MovementPaused
@@ -1555,15 +1645,19 @@ func (s *session) handleDebugRaidReset(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	mapID := uint32(cAtoi(args[0]))
+	mapID, ok := parseCommandUint32(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
 	difficulty := -1
 	if len(args) == 2 {
-		parsed, err := strconv.Atoi(args[1])
-		if err != nil || parsed < 0 {
+		parsed, ok := parseCppBase0Int(args[1])
+		if !ok || parsed < 0 || parsed > 255 {
 			s.sendSysMessage(syntax)
 			return
 		}
-		difficulty = parsed
+		difficulty = int(parsed)
 	}
 	entry, found, err := s.server.Data.Map(mapID)
 	if err != nil || !found {
@@ -1637,11 +1731,20 @@ func (s *session) handleDebugSpawnVehicle(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	entry := uint32(cAtoi(args[0]))
+	entry, ok := parseCommandUint32(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
 	vehicleID := uint32(0)
 	hasVehicleID := false
 	if len(args) == 2 {
-		vehicleID = uint32(cAtoi(args[1]))
+		vid, ok := parseCommandUint32(args[1])
+		if !ok {
+			s.sendSysMessage(syntax)
+			return
+		}
+		vehicleID = vid
 		hasVehicleID = true
 	}
 	if hasVehicleID {
@@ -1687,11 +1790,15 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	entry := uint32(cAtoi(args[0]))
+	entry, ok := parseCommandUint32(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return
+	}
 	seatID := int8(-1)
 	if len(args) == 2 {
-		parsed, err := strconv.ParseInt(args[1], 10, 8)
-		if err != nil {
+		parsed, ok := parseCppBase0Int(args[1])
+		if !ok || parsed < -128 || parsed > 127 {
 			s.sendSysMessage(syntax)
 			return
 		}
