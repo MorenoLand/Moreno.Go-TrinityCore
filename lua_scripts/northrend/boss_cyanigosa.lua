@@ -34,7 +34,9 @@
 -- boss_cyanigosa.cpp):
 -- boss_cyanigosaAI::JustEngagedWith (:55-59) — Talk(SAY_AGGRO 0) (:58)
 -- at event 1 (the auriaya precedent); the BossAI::JustEngagedWith(who)
--- base arms (:57) are ported base-first below; the ScheduleTasks seeding is carried by
+-- base arms (:57) — SetBossState(DATA_CYANIGOSA 2, IN_PROGRESS) via
+-- creature:SetBossState (lua_creature_events.go:5917), then pulse +
+-- me-zone — are ported base-first below; the ScheduleTasks seeding is carried by
 -- the event-1 CreateLuaEvent scheduling below.
 -- ARCANE_VACUUM (:86-90) — DoCastAOE(SPELL_ARCANE_VACUUM 58694) (:88,
 -- 1-arg = non-triggered) = self-cast per the in-tree DoCastAOE
@@ -66,8 +68,14 @@
 -- KilledUnit (:61-65) — if (victim->GetTypeId() == TYPEID_PLAYER)
 -- Talk(SAY_SLAY 1) — player-gated, event 3 (the razuvious variant
 -- precedent).
--- JustDied (:67-71) — Talk(SAY_DEATH 2) (:69); the _JustDied()
--- passthrough is unmodeled (the sjonnir JustDied-Talk precedent).
+-- JustDied (:67-71) — Talk(SAY_DEATH 2) (:69), then _JustDied() (:70)
+-- — SetBossState(DATA_CYANIGOSA 2, DONE) via creature:SetBossState
+-- (lua_creature_events.go:5917), ported in cyanigosaJustDied; the stale
+-- "_JustDied() passthrough is unmodeled" claim is retracted.
+-- BossAI::Reset (no override in the file) — _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_CYANIGOSA 2,
+-- NOT_STARTED), != DONE-gated, ported in cyanigosaReset (new ev23,
+-- split from ev2 — leave-combat does not call Reset in C++).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 31134):
 -- spell_cyanigosa_arcane_vacuum (:147-176) — SpellScript
 -- OnEffectHitTarget (:161): GetCaster()->CastSpell(GetHitUnit(),
@@ -85,6 +93,7 @@
 -- (grep -c "Talk(" = 3, all ported above): dead enum text.
 
 local ENTRY_CYANIGOSA = 31134
+local DATA_CYANIGOSA = 2
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -240,8 +249,10 @@ end
 -- per-tick); the BossAI::JustEngagedWith(who) base arms (:57)
 -- ported base-first below.
 local function cyanigosaEnterCombat(event, creature)
-    -- BossAI::JustEngagedWith (:57, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:57, base-first) — SetBossState
+    -- (DATA_CYANIGOSA 2, IN_PROGRESS) first (ScriptedCreature.cpp:527-542),
+    -- then SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    creature:SetBossState(DATA_CYANIGOSA, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -275,9 +286,23 @@ local function cyanigosaKilledUnit(event, creature, victim)
 end
 
 -- C++ JustDied (:67-71): Talk(SAY_DEATH) (the sjonnir precedent);
--- the _JustDied() passthrough is unmodeled.
+-- then _JustDied() (:70) — SetBossState(DATA_CYANIGOSA 2, DONE)
+-- (ScriptedCreature.cpp:513-520), after the death Talk per C++ order.
 local function cyanigosaJustDied(event, creature)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_CYANIGOSA, 3)
+end
+
+-- C++ BossAI::Reset (no override in boss_cyanigosa.cpp): _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_CYANIGOSA 2,
+-- NOT_STARTED) only when the stored state != DONE. Split from ev2
+-- (the keleseth/svala precedent): ev2 leave-combat does not call
+-- Reset in C++, so it stays wipe-only.
+local function cyanigosaReset(event, creature)
+    if creature:GetBossState(DATA_CYANIGOSA) ~= 3 then
+        creature:SetBossState(DATA_CYANIGOSA, 0)
+    end
+    cancelTimers(creature:GetGUID())
 end
 
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
@@ -300,5 +325,5 @@ RegisterCreatureEvent(ENTRY_CYANIGOSA, 2, cyanigosaCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 3, cyanigosaKilledUnit)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 4, cyanigosaCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 4, cyanigosaJustDied)
-RegisterCreatureEvent(ENTRY_CYANIGOSA, 23, cyanigosaCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_CYANIGOSA, 23, cyanigosaReset)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 27, cyanigosaMoveInLOS)

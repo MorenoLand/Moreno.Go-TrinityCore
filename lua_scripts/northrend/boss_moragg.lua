@@ -24,8 +24,17 @@
 -- 23 OnReset. Zero Talk lines in the C++ — none ported.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_moragg.cpp):
--- boss_moraggAI::JustEngagedWith (:52-55) — base arms (:54) ported
+-- boss_moraggAI::JustEngagedWith (:52-55) — base arms (:54) —
+-- SetBossState(DATA_MORAGG 3, IN_PROGRESS) via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone — ported
 -- base-first below; seeds the combat timers.
+-- BossAI::JustDied (no override in the file) — _JustDied()
+-- (ScriptedCreature.cpp:513-520) — SetBossState(DATA_MORAGG 3,
+-- DONE), ported in moraggJustDied (new ev4).
+-- BossAI::Reset (:47-50, base only) — _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_MORAGG 3,
+-- NOT_STARTED), != DONE-gated, ported in moraggReset (new ev23,
+-- split from ev2 — leave-combat does not call Reset in C++).
 -- ScheduleTasks Async leg (:74-78) — DoCast(me, SPELL_RAY_OF_PAIN
 -- 54438) + DoCast(me, SPELL_RAY_OF_SUFFERING 54442), both 2-arg =
 -- non-triggered — the two immediate self-casts fire once at combat
@@ -66,6 +75,7 @@
 -- DATA_MORAGG) leg — no instance-script bridge.
 
 local ENTRY_MORAGG = 29316
+local DATA_MORAGG = 3
 
 local SPELL_CORROSIVE_SALIVA = 54527
 local SPELL_OPTIC_LINK = 54396
@@ -161,11 +171,12 @@ local function corrosiveSalivaTick(creature, guid)
 end
 
 -- C++ boss_moraggAI::JustEngagedWith (:52-55): base arms (:54)
--- ported base-first below; the Async ray self-casts (:74-78) fire
--- once at combat start, then the two combat timers are seeded.
+-- ported base-first below — SetBossState(DATA_MORAGG 3, IN_PROGRESS)
+-- first (ScriptedCreature.cpp:527-542), then pulse + me-zone; the
+-- Async ray self-casts (:74-78) fire once at combat start, then the
+-- two combat timers are seeded.
 local function moraggEnterCombat(event, creature)
-    -- BossAI::JustEngagedWith (:54, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_MORAGG, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:CastSpell(creature, SPELL_RAY_OF_PAIN)
@@ -180,7 +191,27 @@ local function moraggEnterCombat(event, creature)
     end)
 end
 
--- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
+-- C++ BossAI::JustDied (no override in boss_moragg.cpp):
+-- _JustDied() (ScriptedCreature.cpp:513-520) — SetBossState
+-- (DATA_MORAGG 3, DONE).
+local function moraggJustDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_MORAGG, 3)
+end
+
+-- C++ BossAI::Reset (:47-50, base only): _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_MORAGG 3,
+-- NOT_STARTED) only when the stored state != DONE. Split from ev2
+-- (the keleseth/svala precedent): ev2 leave-combat does not call
+-- Reset in C++, so it stays wipe-only.
+local function moraggReset(event, creature)
+    if creature:GetBossState(DATA_MORAGG) ~= 3 then
+        creature:SetBossState(DATA_MORAGG, 0)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
+-- Shared timer wipe for events 2/4 (the svala / yogg_saron
 -- convention).
 local function moraggCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
@@ -188,8 +219,9 @@ end
 
 RegisterCreatureEvent(ENTRY_MORAGG, 1, moraggEnterCombat)
 RegisterCreatureEvent(ENTRY_MORAGG, 2, moraggCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_MORAGG, 4, moraggJustDied)
 RegisterCreatureEvent(ENTRY_MORAGG, 4, moraggCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_MORAGG, 23, moraggCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_MORAGG, 23, moraggReset)
 
 -- C++ spell_moragg_optic_link::OnPeriodic
 -- (boss_moragg.cpp:199-210): EFFECT_0 SPELL_AURA_PERIODIC_DAMAGE.

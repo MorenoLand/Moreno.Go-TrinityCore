@@ -37,12 +37,21 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) — unconditional (the auriaya
 -- engage-port precedent); seeds the two combat timers below; the
--- BossAI::JustEngagedWith base arms (:76) ported base-first below.
+-- BossAI::JustEngagedWith base arms (:76) — SetBossState(DATA_ZURAMAT
+-- 8, IN_PROGRESS) via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone — ported
+-- base-first below.
 -- KilledUnit — Talk(SAY_SLAY 1) player-gated (event 3 — the razuvious
 -- player-gated variant precedent).
 -- JustDied — Talk(SAY_DEATH 2) — unconditional (the sjonnir
--- JustDied-Talk precedent); the _JustDied() passthrough leg has no
--- bridge.
+-- JustDied-Talk precedent); then _JustDied() (:110) — SetBossState
+-- (DATA_ZURAMAT 8, DONE), ported in zuramatJustDied; the stale
+-- "_JustDied() passthrough leg has no bridge" claim is retracted.
+-- boss_zuramatAI::Reset (:68-72) — Initialize() (_voidDance = true,
+-- achievement latch only) + BossAI::Reset() — _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_ZURAMAT 8,
+-- NOT_STARTED), != DONE-gated, ported in zuramatReset (new ev23,
+-- split from ev2 — leave-combat does not call Reset in C++).
 -- ScheduleTasks VOID_SHIFT — SelectTarget(Random, 0, 60.0f, true) ->
 -- DoCast(target, SPELL_VOID_SHIFT 54361), 2-arg = non-triggered;
 -- init 9s / Repeat 15s — unconditional re-arm. Random-player pool
@@ -91,6 +100,7 @@
 -- cyanigosa / ichoron precedent).
 
 local ENTRY_ZURAMAT = 29314
+local DATA_ZURAMAT = 8
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -191,8 +201,10 @@ end
 local function zuramatEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    -- BossAI::JustEngagedWith (:76, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:76, base-first) — SetBossState
+    -- (DATA_ZURAMAT 8, IN_PROGRESS) first (ScriptedCreature.cpp:527-542),
+    -- then SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    creature:SetBossState(DATA_ZURAMAT, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -218,10 +230,26 @@ local function zuramatKilledUnit(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH) — unconditional; _JustDied()
--- (passthrough, no bridge) — the sjonnir JustDied-Talk precedent.
+-- C++ JustDied: Talk(SAY_DEATH) — unconditional; then _JustDied()
+-- (:110) — SetBossState(DATA_ZURAMAT 8, DONE)
+-- (ScriptedCreature.cpp:513-520), after the death Talk per C++ order.
 local function zuramatJustDied(event, creature)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_ZURAMAT, 3)
+end
+
+-- C++ boss_zuramatAI::Reset (:68-72): Initialize() (_voidDance =
+-- true, achievement latch only — its only consumer is the unported
+-- achievement_void_dance) + BossAI::Reset() — _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_ZURAMAT 8,
+-- NOT_STARTED) only when the stored state != DONE. Split from ev2
+-- (the keleseth/svala precedent): ev2 leave-combat does not call
+-- Reset in C++, so it stays wipe-only.
+local function zuramatReset(event, creature)
+    if creature:GetBossState(DATA_ZURAMAT) ~= 3 then
+        creature:SetBossState(DATA_ZURAMAT, 0)
+    end
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_ZURAMAT, 1, zuramatEnterCombat)
@@ -229,4 +257,4 @@ RegisterCreatureEvent(ENTRY_ZURAMAT, 2, zuramatCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 3, zuramatKilledUnit)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 4, zuramatJustDied)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 4, zuramatCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_ZURAMAT, 23, zuramatCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_ZURAMAT, 23, zuramatReset)

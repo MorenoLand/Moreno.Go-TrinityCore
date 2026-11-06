@@ -24,8 +24,17 @@
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_lavanthor.cpp):
 -- boss_lavanthorAI::JustEngagedWith (:45-49) — seeds the three combat
--- timers below; the BossAI::JustEngagedWith base arms (:47)
--- ported base-first below.
+-- timers below; the BossAI::JustEngagedWith base arms (:47) —
+-- SetBossState(DATA_LAVANTHOR 6, IN_PROGRESS) via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone — ported
+-- base-first below (the whole handler IS the base call in C++).
+-- BossAI::JustDied (no override in the file) — _JustDied()
+-- (ScriptedCreature.cpp:513-520) — SetBossState(DATA_LAVANTHOR 6,
+-- DONE), ported in lavanthorJustDied (new ev4).
+-- BossAI::Reset (:40-43, base only) — _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_LAVANTHOR 6,
+-- NOT_STARTED), != DONE-gated, ported in lavanthorReset (new ev23,
+-- split from ev2 — leave-combat does not call Reset in C++).
 -- ScheduleTasks firebolt leg (:67-72) — SelectTarget(Random, 0,
 -- 40.0f, true) (player-only) -> DoCast(target, SPELL_FIREBOLT 54235)
 -- (:70, 2-arg = non-triggered) -> CastSpell(target, 54235); init 1s,
@@ -58,6 +67,7 @@
 -- DATA_LAVANTHOR) leg — no instance-script bridge.
 
 local ENTRY_LAVANTHOR = 29312
+local DATA_LAVANTHOR = 6
 
 local SPELL_FIREBOLT = 54235
 local SPELL_FLAME_BREATH = 54282
@@ -193,10 +203,11 @@ local function cauterizingFlamesTick(creature, guid)
 end
 
 -- C++ boss_lavanthorAI::JustEngagedWith (:45-49): base arms (:47)
--- ported base-first below; seeds the three combat timers.
+-- ported base-first below — SetBossState(DATA_LAVANTHOR 6,
+-- IN_PROGRESS) first (ScriptedCreature.cpp:527-542), then pulse +
+-- me-zone; seeds the three combat timers.
 local function lavanthorEnterCombat(event, creature)
-    -- BossAI::JustEngagedWith (:47, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_LAVANTHOR, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     local guid = creature:GetGUID()
@@ -221,7 +232,27 @@ local function lavanthorEnterCombat(event, creature)
     end
 end
 
--- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
+-- C++ BossAI::JustDied (no override in boss_lavanthor.cpp):
+-- _JustDied() (ScriptedCreature.cpp:513-520) — SetBossState
+-- (DATA_LAVANTHOR 6, DONE).
+local function lavanthorJustDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_LAVANTHOR, 3)
+end
+
+-- C++ BossAI::Reset (:40-43, base only): _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_LAVANTHOR 6,
+-- NOT_STARTED) only when the stored state != DONE. Split from ev2
+-- (the keleseth/svala precedent): ev2 leave-combat does not call
+-- Reset in C++, so it stays wipe-only.
+local function lavanthorReset(event, creature)
+    if creature:GetBossState(DATA_LAVANTHOR) ~= 3 then
+        creature:SetBossState(DATA_LAVANTHOR, 0)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
+-- Shared timer wipe for events 2/4 (the svala / yogg_saron
 -- convention).
 local function lavanthorCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
@@ -229,5 +260,6 @@ end
 
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 1, lavanthorEnterCombat)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 2, lavanthorCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_LAVANTHOR, 4, lavanthorJustDied)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 4, lavanthorCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_LAVANTHOR, 23, lavanthorCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_LAVANTHOR, 23, lavanthorReset)

@@ -34,12 +34,20 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) — unconditional (the auriaya
 -- engage-port precedent); seeds the two combat timers below; the
--- BossAI::JustEngagedWith base arms (:96) ported base-first below.
+-- BossAI::JustEngagedWith base arms (:96) — SetBossState(DATA_XEVOZZ
+-- 7, IN_PROGRESS) via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone — ported
+-- base-first below.
 -- KilledUnit — Talk(SAY_SLAY 1) player-gated (event 3 — the razuvious
 -- player-gated variant precedent).
 -- JustDied — Talk(SAY_DEATH 2) — unconditional (the sjonnir
--- JustDied-Talk precedent); the _JustDied() passthrough leg has no
--- bridge.
+-- JustDied-Talk precedent); then _JustDied() (:121) — SetBossState
+-- (DATA_XEVOZZ 7, DONE), ported in xevozzJustDied; the stale
+-- "_JustDied() passthrough leg has no bridge" claim is retracted.
+-- BossAI::Reset (:89-92, base only) — _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_XEVOZZ 7,
+-- NOT_STARTED), != DONE-gated, ported in xevozzReset (new ev23,
+-- split from ev2 — leave-combat does not call Reset in C++).
 -- ScheduleTasks ARCANE_BARRAGE_VOLLEY — DoCastAOE(SPELL_ARCANE_
 -- BARRAGE_VOLLEY 54202) = self-cast per the in-tree DoCastAOE
 -- convention (boss_ai.go); init {8s,10s} / Repeat {8s,10s} —
@@ -91,6 +99,7 @@
 -- Ethereal Summon Target").
 
 local ENTRY_XEVOZZ = 29266
+local DATA_XEVOZZ = 7
 
 local SAY_AGGRO = 0
 local SAY_REPEAT_SUMMON = 5
@@ -237,8 +246,10 @@ end
 local function xevozzEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    -- BossAI::JustEngagedWith (:96, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:96, base-first) — SetBossState
+    -- (DATA_XEVOZZ 7, IN_PROGRESS) first (ScriptedCreature.cpp:527-542),
+    -- then SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    creature:SetBossState(DATA_XEVOZZ, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -267,10 +278,24 @@ local function xevozzKilledUnit(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH) — unconditional; _JustDied()
--- (passthrough, no bridge) — the sjonnir JustDied-Talk precedent.
+-- C++ JustDied: Talk(SAY_DEATH) — unconditional; then _JustDied()
+-- (:121) — SetBossState(DATA_XEVOZZ 7, DONE)
+-- (ScriptedCreature.cpp:513-520), after the death Talk per C++ order.
 local function xevozzJustDied(event, creature)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_XEVOZZ, 3)
+end
+
+-- C++ BossAI::Reset (:89-92, base only): _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_XEVOZZ 7,
+-- NOT_STARTED) only when the stored state != DONE. Split from ev2
+-- (the keleseth/svala precedent): ev2 leave-combat does not call
+-- Reset in C++, so it stays wipe-only.
+local function xevozzReset(event, creature)
+    if creature:GetBossState(DATA_XEVOZZ) ~= 3 then
+        creature:SetBossState(DATA_XEVOZZ, 0)
+    end
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_XEVOZZ, 1, xevozzEnterCombat)
@@ -278,4 +303,4 @@ RegisterCreatureEvent(ENTRY_XEVOZZ, 2, xevozzCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 3, xevozzKilledUnit)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 4, xevozzJustDied)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 4, xevozzCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_XEVOZZ, 23, xevozzCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_XEVOZZ, 23, xevozzReset)

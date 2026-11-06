@@ -35,8 +35,10 @@
 -- + DoCast(me, SPELL_EARTH_SHIELD 54479) (:75, 2-arg = non-triggered
 -- self-cast) -> CastSpell(creature, 54479) once at engage, cast order
 -- kept (the toravon FROZEN_MALLET engage self-cast precedent); the
--- BossAI::JustEngagedWith(who) base arms (:73) ported base-first below; the
--- ScheduleTasks seeding is carried by the event-1 scheduling below
+-- BossAI::JustEngagedWith(who) base arms (:73) — SetBossState
+-- (DATA_EREKEM 4, IN_PROGRESS) via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone — ported
+-- base-first below; the ScheduleTasks seeding is carried by the event-1 scheduling below
 -- (the EARTH_SHIELD 20s re-arm is NOT ported — documented below).
 -- BLOODLUST (:195-198) — DoCast(SPELL_BLOODLUST 54516) (:197, 1-arg
 -- = non-triggered self-cast) -> CastSpell(creature, 54516); 2s init,
@@ -54,8 +56,15 @@
 -- {8000, 13000} randtime re-arm.
 -- KilledUnit (:90-94) — player-gated Talk(SAY_SLAY 1) (event 3 — the
 -- razuvious precedent).
--- JustDied (:96-100) — Talk(SAY_DEATH 2) (:98); the _JustDied()
--- passthrough is unmodeled (the sjonnir precedent).
+-- JustDied (:96-100) — Talk(SAY_DEATH 2) (:98), then _JustDied() (:99)
+-- — SetBossState(DATA_EREKEM 4, DONE) via creature:SetBossState
+-- (lua_creature_events.go:5917), ported in erekemJustDied; the stale
+-- "_JustDied() passthrough is unmodeled" claim is retracted.
+-- boss_erekemAI::Reset (:64-69) — Initialize() (_phase = 0, phase
+-- machine unported) + BossAI::Reset() — _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_EREKEM 4,
+-- NOT_STARTED), != DONE-gated, ported in erekemReset (new ev23,
+-- split from ev2 — leave-combat does not call Reset in C++).
 -- DOCUMENTED DEVIATIONS:
 -- LIGHTNING_BOLT's SelectTarget (:204) passes no playerOnly flag
 -- (playerOnly=false default, UnitAI.h:170) — C++ would also consider
@@ -105,6 +114,7 @@
 -- ported above): dead enum text.
 
 local ENTRY_EREKEM = 29315
+local DATA_EREKEM = 4
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -225,8 +235,10 @@ end
 -- engage self-cast precedent); base arms (:73) ported base-first
 -- below; the ScheduleTasks seeding below.
 local function erekemEnterCombat(event, creature)
-    -- BossAI::JustEngagedWith (:73, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:73, base-first) — SetBossState
+    -- (DATA_EREKEM 4, IN_PROGRESS) first (ScriptedCreature.cpp:527-542),
+    -- then SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    creature:SetBossState(DATA_EREKEM, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -253,9 +265,25 @@ local function erekemKilledUnit(event, creature, victim)
 end
 
 -- C++ JustDied (:96-100): Talk(SAY_DEATH) (the sjonnir precedent);
--- the _JustDied() passthrough is unmodeled.
+-- then _JustDied() (:99) — SetBossState(DATA_EREKEM 4, DONE)
+-- (ScriptedCreature.cpp:513-520), after the death Talk per C++ order.
 local function erekemJustDied(event, creature)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_EREKEM, 3)
+end
+
+-- C++ boss_erekemAI::Reset (:64-69): Initialize() (_phase = 0, phase
+-- machine unported) + BossAI::Reset() — _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_EREKEM 4,
+-- NOT_STARTED) only when the stored state != DONE. Split from ev2
+-- (the keleseth/svala precedent): ev2 leave-combat does not call
+-- Reset in C++, so it stays wipe-only. SetCanDualWield(false) (:68)
+-- has no bridge and stays out.
+local function erekemReset(event, creature)
+    if creature:GetBossState(DATA_EREKEM) ~= 3 then
+        creature:SetBossState(DATA_EREKEM, 0)
+    end
+    cancelTimers(creature:GetGUID())
 end
 
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
@@ -269,4 +297,4 @@ RegisterCreatureEvent(ENTRY_EREKEM, 2, erekemCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_EREKEM, 3, erekemKilledUnit)
 RegisterCreatureEvent(ENTRY_EREKEM, 4, erekemCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_EREKEM, 4, erekemJustDied)
-RegisterCreatureEvent(ENTRY_EREKEM, 23, erekemCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_EREKEM, 23, erekemReset)

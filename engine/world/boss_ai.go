@@ -20073,7 +20073,13 @@ func init() {
 	// claiming only Talk arms were ported is corrected). The
 	// spell_cyanigosa_arcane_vacuum SpellScript hook and the
 	// achievement_defenseless GetData check stay out — documented in
-	// the lua header.
+	// the lua header. SetBossState legs: engage DATA_CYANIGOSA 2
+	// IN_PROGRESS (base-first), died DONE (after the death Talk),
+	// reset NOT_STARTED (!= DONE-gated, new ev23); the instance
+	// SetBossState-override leg (DATA_CYANIGOSA DONE -> SetData
+	// MAIN_EVENT_STATE DONE) stays out — no Lua twin for the
+	// main-event state machine, documented in
+	// instance_violet_hold.lua.
 	RegisterLuaBoss("boss_cyanigosa", 31134)
 	// AddSC_boss_erekem: Erekem (Violet Hold) — timer-driven cast ports
 	// (lua_scripts/northrend/boss_erekem.lua): bloodlust self-cast
@@ -20088,7 +20094,10 @@ func init() {
 	// cross-creature legs, the JustReachedHome SetData leg, the
 	// stormstrike UpdateAI lambda and the guard spell-timer machine
 	// stay out — documented in the lua header; npc_erekem_guard
-	// (29395) is not registered.
+	// (29395) is not registered. SetBossState legs: engage DATA_EREKEM
+	// 4 IN_PROGRESS (base-first), died DONE (after the death Talk),
+	// reset NOT_STARTED (!= DONE-gated, new ev23; Initialize _phase
+	// + SetCanDualWield(false) stay out — no bridge).
 	RegisterLuaBoss("boss_erekem", 29315)
 	// AddSC_boss_ichoron: Ichoron (Violet Hold) — timer-driven cast
 	// ports (lua_scripts/northrend/boss_ichoron.lua): water-bolt-volley
@@ -20101,7 +20110,10 @@ func init() {
 	// The volley/blast scheduler ticks carry the 500ms IsCasting defer
 	// (BossAI ctor scheduler validator, ScriptedCreature.cpp:493-496);
 	// the frenzy 1s poll models the pre-scheduler UpdateAI health check
-	// and stays ungated per C++.
+	// and stays ungated per C++. SetBossState legs: engage DATA_ICHORON
+	// 5 IN_PROGRESS (base-first), died DONE (after the death Talk),
+	// reset NOT_STARTED (!= DONE-gated, in the existing ev23
+	// ichoronReset, before the threat-proc cast per C++ Reset order).
 	RegisterLuaBoss("boss_ichoron", 29313)
 	// AddSC_boss_lavanthor: Lavanthor (Violet Hold) — timer-driven cast
 	// ports (lua_scripts/northrend/boss_lavanthor.lua): firebolt
@@ -20111,25 +20123,37 @@ func init() {
 	// (bridged) — documented in the lua header.
 	// All four scheduler ticks carry the 500ms IsCasting defer (BossAI
 	// ctor scheduler validator, ScriptedCreature.cpp:493-496).
+	// SetBossState legs: engage DATA_LAVANTHOR 6 IN_PROGRESS
+	// (base-first — the whole JustEngagedWith IS the base call), died
+	// DONE (BossAI::JustDied, no override — new ev4), reset
+	// NOT_STARTED (!= DONE-gated, new ev23).
 	RegisterLuaBoss("boss_lavanthor", 29312)
 	// AddSC_boss_moragg: Moragg (Violet Hold) — timer-driven cast ports
 	// (lua_scripts/northrend/boss_moragg.lua): engage-immediate ray of
 	// pain 54438 + ray of suffering 54442 self-casts, optic-link
 	// random-player 54396 15s/25s, corrosive-saliva DoCastVictim 54527
-	// 5s/10s; zero Talk lines in C++. The spell_moragg_ray and
-	// spell_moragg_optic_link AuraScripts stay out (no AuraScript
-	// bridge — the optic-link stage/damage ramp and the ray periodic
-	// triggers are documented gaps) — documented in the lua header.
+	// 5s/10s; zero Talk lines in C++. The spell_moragg_ray AuraScript
+	// stays out (no AuraScript bridge — the ray periodic triggers are
+	// a documented gap); the spell_moragg_optic_link OnPeriodic leg IS
+	// ported via RegisterAuraEvent (tick 194 — the stale "no AuraScript
+	// bridge" claim for it is corrected) and only the OnUpdate damage
+	// ramp stays out — documented in the lua header.
 	// The optic-link/saliva scheduler ticks carry the 500ms IsCasting
 	// defer (BossAI ctor scheduler validator,
 	// ScriptedCreature.cpp:493-496); the engage ray Async casts fire at
 	// combat start while the boss is not casting, ungated in effect.
+	// SetBossState legs: engage DATA_MORAGG 3 IN_PROGRESS
+	// (base-first), died DONE (BossAI::JustDied, no override — new
+	// ev4), reset NOT_STARTED (!= DONE-gated, new ev23).
 	RegisterLuaBoss("boss_moragg", 29316)
 	// AddSC_boss_xevozz: Xevozz (Violet Hold) — timer-driven cast
 	// ports (lua_scripts/northrend/boss_xevozz.lua): arcane-barrage-
 	// volley DoCastAOE 54202 {8s,10s}/{8s,10s}, arcane-buffet random-
 	// player 45y 54226 {10s,11s}/{15s,20s}; Talk 0/1/2 retained. The
-	// ethereal-sphere summon leg (summon + DoAction + heroic gates),
+	// ethereal-sphere summon leg IS ported (summonTick — random
+	// {54102,54137,54138} DoCast + heroic 2.5s second pick; the stale
+	// "whole summon leg stays out" claim is corrected) and only the
+	// 33-35s DoAction leg and the summoned sphere's own AI stay out;
 	// SpellHit SAY_SUMMON_ENERGY, MoveFollow/JustReachedHome instance
 	// legs and the SpellScript hook stay out — documented in the lua
 	// header.
@@ -20137,6 +20161,9 @@ func init() {
 	// IsCasting defer (BossAI ctor scheduler validator,
 	// ScriptedCreature.cpp:493-496; defer precedes the summon Talk+cast,
 	// and the heroic 2.5s sub-cast is gated the same way).
+	// SetBossState legs: engage DATA_XEVOZZ 7 IN_PROGRESS (base-first),
+	// died DONE (after the death Talk), reset NOT_STARTED
+	// (!= DONE-gated, new ev23).
 	RegisterLuaBoss("boss_xevozz", 29266)
 
 	// Zuramat the Obliterator (Violet Hold) — timer-driven cast ports
@@ -20149,7 +20176,10 @@ func init() {
 	// defer (BossAI ctor scheduler validator, ScriptedCreature.cpp:
 	// 493-496; Zuramat's own UpdateAI calls scheduler.Update directly
 	// but the validator lives on the scheduler object, so it gates
-	// despite the BossAI::UpdateAI bypass).
+	// despite the BossAI::UpdateAI bypass). SetBossState legs: engage
+	// DATA_ZURAMAT 8 IN_PROGRESS (base-first), died DONE (after the
+	// death Talk), reset NOT_STARTED (!= DONE-gated, new ev23;
+	// Initialize _voidDance is achievement-latch-only).
 	RegisterLuaBoss("boss_zuramat", 29314)
 
 	// Bronjahm (Forge of Souls) — full timer-arm port from

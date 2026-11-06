@@ -34,10 +34,17 @@
 -- fireCreatureSpawned dispatches 23 then 5 on the spawn funnel,
 -- lua_creature_events.go:3733 + creaturemotion.go:755; the old
 -- "no spawn-event bridge" note was stale); the BossAI::Reset
--- passthrough leg has no bridge.
+-- passthrough leg — _Reset() (ScriptedCreature.cpp:499-511) —
+-- SetBossState(DATA_ICHORON 5, NOT_STARTED), != DONE-gated, via
+-- creature:SetBossState (lua_creature_events.go:5917) — is ported in
+-- ichoronReset BEFORE the threat-proc cast, per the C++ Reset order
+-- (Initialize :95-97, BossAI::Reset :98, DoCast :100).
 -- boss_ichoronAI::JustEngagedWith (:103-107) — Talk(SAY_AGGRO 0)
 -- (:106) kept; seeds the three combat timers below (the
--- BossAI::JustEngagedWith base arms (:105) ported base-first below).
+-- BossAI::JustEngagedWith base arms (:105) — SetBossState
+-- (DATA_ICHORON 5, IN_PROGRESS) via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone — ported
+-- base-first below).
 -- ScheduleTasks water-bolt-volley leg (:213-217) — DoCastAOE
 -- (SPELL_WATER_BOLT_VOLLEY 54241) (:215, 2-arg = non-triggered) =
 -- self-cast per the in-tree DoCastAOE convention ->
@@ -50,8 +57,10 @@
 -- KilledUnit (:162-165) — if (victim->GetTypeId() == TYPEID_PLAYER)
 -- Talk(SAY_SLAY 1) — the razuvious player-gated variant precedent.
 -- JustDied (:167-171) — Talk(SAY_DEATH 2) — the sjonnir
--- JustDied-Talk precedent; the _JustDied() passthrough leg has no
--- bridge.
+-- JustDied-Talk precedent; then _JustDied() (:170) — SetBossState
+-- (DATA_ICHORON 5, DONE) via creature:SetBossState
+-- (lua_creature_events.go:5917), ported in ichoronJustDied; the stale
+-- "_JustDied() passthrough leg has no bridge" claim is retracted.
 -- UpdateAI frenzy leg (:194-198) — !_isFrenzy && HealthBelowPct(25) +
 -- no DRAINED aura -> Talk(SAY_ENRAGE 4) + DoCast(me, SPELL_FRENZY
 -- 54312, true), one-flip _isFrenzy latch. The Oct-era "no
@@ -120,6 +129,7 @@
 -- DATA_ICHORON) leg — no instance-script bridge.
 
 local ENTRY_ICHORON = 29313
+local DATA_ICHORON = 5
 local ENTRY_ICHOR_GLOBULE = 29321
 local SPELL_SPLASH = 59516
 
@@ -265,8 +275,10 @@ end
 -- C++ boss_ichoronAI::JustEngagedWith (:103-107): base arms (:105)
 -- ported base-first below, then Talk(SAY_AGGRO); seeds the combat timers.
 local function ichoronEnterCombat(event, creature, target)
-    -- BossAI::JustEngagedWith (:105, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:105, base-first) — SetBossState
+    -- (DATA_ICHORON 5, IN_PROGRESS) first (ScriptedCreature.cpp:527-542),
+    -- then SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    creature:SetBossState(DATA_ICHORON, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -285,8 +297,11 @@ local function ichoronEnterCombat(event, creature, target)
 end
 
 -- C++ boss_ichoronAI::Reset (:98-101): BossAI::Reset clears the
--- scheduler (mirrored by cancelTimers); DoCast(me, SPELL_THREAT_PROC,
--- true) — triggered self-cast.
+-- scheduler (mirrored by cancelTimers); the _Reset() state leg —
+-- SetBossState(DATA_ICHORON 5, NOT_STARTED), != DONE-gated — lands
+-- BEFORE the threat-proc cast per the C++ Reset order (Initialize,
+-- BossAI::Reset, DoCast); DoCast(me, SPELL_THREAT_PROC, true) —
+-- triggered self-cast.
 local function ichoronReset(event, creature)
     local guid = creature:GetGUID()
     for key in pairs(ichoronSummons) do
@@ -294,6 +309,9 @@ local function ichoronReset(event, creature)
     end
     cancelTimers(guid)
     frenzyFired[guid] = nil
+    if creature:GetBossState(DATA_ICHORON) ~= 3 then
+        creature:SetBossState(DATA_ICHORON, 0)
+    end
     -- C++ Reset(): DoCast(me, SPELL_THREAT_PROC, true) is Reset-only
     -- (boss_ichoron.cpp). Alive-gated; the timer cancel rides the death
     -- leg deliberately.
@@ -318,10 +336,12 @@ local function ichoronKilledUnit(event, creature, victim)
 end
 
 -- C++ JustDied (:167-171): Talk(SAY_DEATH) — the sjonnir
--- JustDied-Talk precedent; the _JustDied() passthrough leg has no
--- bridge.
+-- JustDied-Talk precedent; then _JustDied() (:170) — SetBossState
+-- (DATA_ICHORON 5, DONE) (ScriptedCreature.cpp:513-520), after the
+-- death Talk per C++ order.
 local function ichoronJustDied(event, creature)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_ICHORON, 3)
 end
 
 -- C++ JustSummoned (boss_ichoron.cpp:173-179): ichor-globule entry gate
