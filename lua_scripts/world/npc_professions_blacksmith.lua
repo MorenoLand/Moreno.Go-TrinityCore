@@ -1,11 +1,13 @@
 -- npc_professions (part 1) — Lua triage of
 -- src/server/scripts/World/npc_professions.cpp lines 409-846.
 --
--- All three classes are DOCUMENTED-ONLY (re-triaged 2026-10-26 on the
--- stale-bridge axis: the old "no GetSkillValue / no player:CastSpell"
--- claims are STALE — player:GetSkillValue (lua_player.go:326) and
--- player:CastSpell (lua_player.go:504) are both bridged; the verdict
--- stands on the remaining gaps: no SendListInventory/SendTrainerList/
+-- All three classes now have learn-side ports (tick 299): blacksmith in
+-- npc_prof_blacksmith.lua, tele_trinket in
+-- npc_engineering_tele_trinket.lua, soothsaying in
+-- go_soothsaying_for_dummies.lua. Unlearn arms stay out on the
+-- EquippedOk gap (GetItemByPos is a nil stub). The stale-bridge axis
+-- below is retired: player:GetSkillValue and player:CastSpell are both
+-- bridged; the remaining gaps are no SendListInventory/SendTrainerList/
 -- PrepareQuestMenu Lua surface, no GetReputationRank (GetReputation
 -- returns raw standing only), no GetGossipTextId, no
 -- ProcessUnlearnAction/EquippedOk (GetItemByPos is a nil stub).

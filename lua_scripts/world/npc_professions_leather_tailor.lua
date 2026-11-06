@@ -1,8 +1,9 @@
 -- npc_prof_leather + npc_prof_tailor — triage of npc_professions.cpp:847-1154.
--- DOCUMENTED-ONLY (both classes): re-triaged 2026-10-25 against the
+-- DOCUMENTED-ONLY (leather only): tailor PORTED in npc_prof_tailor.lua;
+-- re-triaged 2026-10-25 against the
 -- CURRENT runtime — three old "no bridge" claims are now STALE (player
 -- CastSpell, GetSkillValue, GetQuestRewardStatus all bridged, below),
--- but the port still stays out: the remaining blockers are EquippedOk
+-- but the leather port still stays out: the remaining blockers are EquippedOk
 -- (GetItemByPos is a nil stub), SendBuyError/SendEquipError, and the
 -- learn-trigger spell effect. No RegisterCreatureGossipEvent calls
 -- below — a hello hook that sends its own menu vetoes the default menu

@@ -49,7 +49,7 @@ local function onGossipHello(event, player, creature)
     local canLearn = false
     if cfg and player:HasSkill(SKILL_ENGINEERING) then
         npcTextId = cfg.text
-        if player:GetSkillValue(SKILL_ENGINEERING) >= cfg.skill and player:HasSpell(cfg.req) then
+        if player:GetBaseSkillValue(SKILL_ENGINEERING) >= cfg.skill and player:HasSpell(cfg.req) then
             if not player:HasSpell(cfg.spell) then
                 canLearn = true
             else

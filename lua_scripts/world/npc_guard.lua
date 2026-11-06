@@ -74,10 +74,11 @@ local SAY_GUARD_SIL_AGGRO = 0
 
 -- C++ npc_guard_generic::JustEngagedWith (entry-gated in C++ on
 -- NPC_CENARION_HOLD_INFANTRY): Talk(SAY_GUARD_SIL_AGGRO, who) — the
--- event-1 auriaya precedent (the target flattens per the moroes
--- precedent; the GuardAI::_combatScheduler legs have no bridges).
+-- event-1 auriaya precedent; Talk takes the victim as whisper target
+-- (lua_creature_events.go:1080-1090; the GuardAI::_combatScheduler legs
+-- have no bridges).
 local function guardGenericEnterCombat(event, creature, target)
-    creature:Talk(SAY_GUARD_SIL_AGGRO)
+    creature:Talk(SAY_GUARD_SIL_AGGRO, target)
 end
 
 RegisterCreatureEvent(ENTRY_CENARION_HOLD_INFANTRY, 1, guardGenericEnterCombat)
@@ -188,15 +189,10 @@ armBanish = function(creature, guid) -- C++ npc_guard.cpp:210 ScheduleVanish
                 local p = GetPlayerByGUID(pGUID)
                 if p then
                     -- C++ :223-224 temp->CastSpell(temp, ..., true) —
-                    -- explicit TRIGGERED_FULL_MASK. player:CastSpell
-                    -- is bridged (lua_player.go:309) but the creature
-                    -- cast STAYS: the pair's point is the banish
-                    -- teleport, and the session path's teleport-effect
-                    -- delivery is unverified — switching a teleport arm
-                    -- on an unverified leg risks its whole effect
-                    -- (caster deviates from C++).
-                    creature:CastSpell(p, SPELL_EXILE, true)
-                    creature:CastSpell(p, SPELL_BANISH_TELEPORT, true)
+                    -- explicit TRIGGERED_FULL_MASK; the PLAYER self-casts
+                    -- (player:CastSpell bridged, lua_player.go:2783).
+                    p:CastSpell(p, SPELL_EXILE, true)
+                    p:CastSpell(p, SPELL_BANISH_TELEPORT, true)
                 end
                 armBanish(creature, guid) -- C++ :226 ScheduleVanish() re-arm (unconditional)
             end

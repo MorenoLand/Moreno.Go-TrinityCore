@@ -145,6 +145,14 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
+-- UnitDefines.h: REACT_PASSIVE=0, REACT_DEFENSIVE=1, REACT_AGGRESSIVE=2
+-- (bridge comment lua_creature_events.go:3883-3889). Taerar's banish
+-- machine calls SetReactState at both ends; the consts were undefined
+-- globals before tick 299, aborting the handler before the 60s exit
+-- was scheduled (permanent banish).
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
+
 local SAY_AGGRO = 0 -- SAY_YSONDRE_AGGRO / SAY_LETHON_AGGRO /
                     -- SAY_EMERISS_AGGRO / SAY_TAERAR_AGGRO (all 0)
 
@@ -783,8 +791,8 @@ local function dragonReset(event, creature)
 end
 
 -- C++ boss_taerarAI::Reset (boss_emerald_dragons.cpp:596-600):
--- RemoveAurasDueToSpell(SPELL_SHADE) then Initialize(); it does NOT call
--- the base emerald_dragonAI::Reset. The apply leg (DoCast 24313 in the
+-- RemoveAurasDueToSpell(SPELL_SHADE) then Initialize(), then it DOES call
+-- the base emerald_dragonAI::Reset (C++ :602) — the apply leg (DoCast 24313 in the
 -- unported 25%-stage banish machine) never fires in Lua, so the removal
 -- is currently a no-op — kept C++-exact; the base Reset's RemoveFlag
 -- (NOT_SELECTABLE/NON_ATTACKABLE) legs are PORTED in dragonReset

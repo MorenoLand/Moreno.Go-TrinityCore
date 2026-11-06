@@ -21243,18 +21243,17 @@ func init() {
 	// npc_guard_generic (World guard script): the JustEngagedWith arm —
 	// Talk(SAY_GUARD_SIL_AGGRO 0, who) gated in C++ on
 	// me->GetEntry() == NPC_CENARION_HOLD_INFANTRY (15184) — the
-	// event-1 auriaya precedent; the player target flattens through the
-	// moroes precedent (Lua Talk takes no target); the GuardAI
+	// event-1 auriaya precedent; Talk takes the victim as whisper target
+	// (lua_creature_events.go:1080-1090); the GuardAI
 	// _combatScheduler melee/spell legs are SelectSpell machines (spell IDs
 	// unnamed in C++ — no bridge). Entry-verifiable: 15184 from the file's
 	// own GuardMisc enum; ScriptName bindings are DB-side as usual — see
 	// lua_scripts/world/npc_guard.lua. Ported too: the
 	// npc_guard_shattrath_faction ScheduleVanish banish machine (entry
 	// 18549, zero Talk — 5s victim-player gate -> 36671/36642
-	// non-triggered + 9s 39533/36643 triggered chain, unconditional
-	// re-arm; the exile/teleport legs deviate: player:CastSpell has no
-	// bridge, so the creature casts them on the player instead; cancel on
-	// 2/4/23) and the Stormwind/Orgrimmar ReceiveEmote reply legs
+	// non-triggered + 9s 39533/36643 triggered chain, player self-casts
+	// per C++ :223-224, unconditional
+	// re-arm; cancel on 2/4/23) and the Stormwind/Orgrimmar ReceiveEmote reply legs
 	// (entries 68/1976/3296, ev8 handler in npc_guard.lua, IsFriendlyTo
 	// bridge). Documented-only: the Reset 10-minute SelectSpell buff
 	// machine.

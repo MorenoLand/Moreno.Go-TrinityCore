@@ -52,9 +52,10 @@
 --     (lua_objects.go, zoneAndAreaID twin) — brewfest area dispatch and
 --     bells zone->soundId init now portable; remaining blocks are the
 --     holiday-adjacent legs and fire sites, not area/zone.
---   - No game-event hook in runtime.go at all — go_bells OnGameEvent(73)
---     has no fire path (re-verified 2026-10-24: zero OnGameEvent hits
---     in runtime.go + gameobject_hooks.go).
+--   - Server game-event hooks 34/35 DO fire (game_event_hooks.go:46-47)
+--     but carry only (event, gameeventid) with no GO handle, so
+--     go_bells OnGameEvent(73) still has no fire path (re-verified
+--     tick 299).
 --   - Bridged but unreachable: go:UseDoorOrButton([delay]) (lua_objects.go),
 --     player:HasAura (lua_objects.go:228), go:PlayMusic(id[, player]) =
 --     SMSG_PLAY_MUSIC with optional per-player target (lua_objects.go:106),
@@ -70,7 +71,11 @@
 -- NPC_CAPTIVE_CHILD 22314 (enum :679, bridged 2026-10-24 via
 -- go:GetCreaturesInGrid), player:KilledMonsterCredit
 -- (bridged), creature DespawnOrUnsummon/MovePoint/AI()->Talk(SAY_FREE_0 0,
--- enum :680) (no bridge) — sole blocks now MovePoint/Talk/DoAction.
+-- enum :680) — bridge-complete since tick 299 (MoveTo
+-- lua_creature_events.go:4499, Talk :1078, DespawnOrUnsummon :6135,
+-- DoAction :814); sole block now the entry (DB-side bind). Fidelity note
+-- if ever ported: C++ :701-707 calls MovePoint then GetMotionMaster()->
+-- Clear() (cancels the move) — port literally as MoveTo then MoveClear.
 
 -- DOCUMENTED-ONLY: go_frostblade_shrine (C++ :730-758)
 -- OnGossipHello (:739-753): me->UseDoorOrButton(10) bridged (delay arg);
@@ -172,9 +177,10 @@ end
 -- / BELLTOLLALLIANCE 6594 / BELLTOLLNIGHTELF 6674 / BELLTOLLDWARFGNOME 7234 /
 -- BELLTOLLKHARAZHAN 9154 (enum :1234-1241; zones 85/1497/267/10/1/1537/
 -- 141/1657/331 — enum :1243-1250).
--- OnGameEvent (:1327-1344, GAME_EVENT_HOURLY_BELLS 73 — enum :1258): no
--- game-event hook exists in runtime.go — no fire path at all (verified
--- this run; sole blocks now game-event hook + AIUpdate fire site).
+-- OnGameEvent (:1327-1344, GAME_EVENT_HOURLY_BELLS 73 — enum :1258): server
+-- game-event hooks fire (game_event_hooks.go:46-47) but carry no GO handle,
+-- so no fire path for this arm (verified tick 299; sole blocks now
+-- game-event hook + AIUpdate fire site).
 -- UpdateAI (:1346-1360): no AIUpdate fire site; ring arm is
 -- go:PlayDirectSound(_soundId) which IS bridged (lua_objects.go:120), and
 -- GetGameTime() exists, but the trigger and the zone init are dead, so
