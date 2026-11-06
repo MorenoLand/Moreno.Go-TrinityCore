@@ -1050,6 +1050,12 @@ func (s *session) handleCmdCheat(ctx context.Context, args []string) bool {
 	case "waterwalk":
 		s.handleCheatWaterwalk(ctx, args[1:])
 	case "status":
+		// HandleCheatStatusCommand takes no arguments; a trailing token
+		// fails the whole-string-consumed check (ChatCommand.h:112).
+		if len(args) > 1 {
+			s.sendSysMessage("Syntax: .cheat god|casttime|cooldown|power|waterwalk|status|taxi|explore")
+			break
+		}
 		s.handleCheatStatus(ctx)
 	case "taxi":
 		s.handleCheatTaxi(ctx, args[1:])
@@ -1063,8 +1069,12 @@ func (s *session) handleCmdCheat(ctx context.Context, args []string) bool {
 
 // cheatToggle mirrors the Optional<bool> toggle arms of cs_cheat.cpp: an
 // explicit argument sets the flag, a missing argument flips the current
-// state (HandleGodModeCheatCommand et al.).
+// state (HandleGodModeCheatCommand et al.). ChatCommand.h:112 — the entire
+// string must be consumed, so a trailing token fails the command.
 func (s *session) cheatToggle(flag uint32, args []string) (bool, bool) {
+	if len(args) > 1 {
+		return false, false
+	}
 	enable := s.player.ActiveCheats&flag == 0
 	if len(args) > 0 {
 		v, ok := cheatArgBool(args[0])
@@ -1219,6 +1229,13 @@ func (s *session) handleCheatTaxi(ctx context.Context, args []string) {
 		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
+	// Optional<bool> plus the whole-string-consumed check (ChatCommand.h:112):
+	// the framework parses the argument before the handler runs, so a
+	// trailing token fails before target resolution.
+	if len(args) > 1 {
+		s.sendSysMessage("Syntax: .cheat taxi [on|off]")
+		return
+	}
 	target := s
 	if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil {
@@ -1268,6 +1285,13 @@ func (s *session) handleCheatTaxi(ctx context.Context, args []string) {
 // the C++ loop (a known upstream quirk: the messages name the target while
 // the flags apply to self).
 func (s *session) handleCheatExplore(ctx context.Context, args []string) {
+	// The permission check runs before argument parsing in C++
+	// (ChatCommandNode::TryExecuteCommand checks IsInvokerVisible before
+	// the invoker parses its args); the sibling arms already check first.
+	if !s.commandAllowed(ctx, permissionCommandCheatExplore) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
 	syntax := "Syntax: .cheat explore on|off"
 	if len(args) != 1 {
 		s.sendSysMessage(syntax)
@@ -1276,10 +1300,6 @@ func (s *session) handleCheatExplore(ctx context.Context, args []string) {
 	reveal, ok := cheatArgBool(args[0])
 	if !ok {
 		s.sendSysMessage(syntax)
-		return
-	}
-	if !s.commandAllowed(ctx, permissionCommandCheatExplore) {
-		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
 	// ChatHandler::getSelectedPlayer (Chat.cpp:300-308): the handler's own
@@ -2452,17 +2472,15 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 		s.sendNotification("You do not have permission to use that command.")
 		return
 	}
-	spellID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		s.sendSysMessage("Invalid spell ID.")
+	const bareSyntax = "Syntax: .cast <spellId> [triggered]"
+	// ChatCommand.h:112 — the entire string must be consumed; a trailing
+	// token fails the command before the handler runs.
+	if len(args) > 2 {
+		s.sendSysMessage(bareSyntax)
 		return
 	}
-	if s.server == nil || s.server.Data == nil {
-		s.sendSysMessage("Spell data is unavailable.")
-		return
-	}
-	if _, found, err := s.server.Data.Spell(uint32(spellID)); err != nil || !found {
-		s.sendSysMessage("There is no such spell.")
+	spellID, ok := s.castCommandSpell(args[0])
+	if !ok {
 		return
 	}
 	// SpellMgr::IsSpellValid has no Go model; DBC-loaded spells are assumed
@@ -2472,26 +2490,38 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 		return
 	}
 	// GetTriggerFlags mirror: the optional flag must be a prefix of
-	// "triggered" (e.g. "trig"); anything else fails the command. Go's
-	// command cast pipeline only models triggered-cast semantics
-	// (TRIGGERED_FULL_MASK: no cast time, power, or proc rolls), so the
-	// TRIGGERED_NONE normal-cast path is a documented fidelity gap — the
-	// flag is accepted but changes nothing.
-	if len(args) > 1 && !strings.HasPrefix("triggered", strings.ToLower(args[1])) {
-		s.sendSysMessage("Syntax: .cast <spellId> [triggered]")
+	// "triggered" (e.g. "trig"); anything else fails the command. The C++
+	// match is case-sensitive (StringStartsWith, Util.h:335), so "Trig"
+	// fails. Go's command cast pipeline only models triggered-cast
+	// semantics (TRIGGERED_FULL_MASK: no cast time, power, or proc rolls),
+	// so the TRIGGERED_NONE normal-cast path is a documented fidelity gap
+	// — the flag is accepted but changes nothing.
+	if _, ok := castCommandTriggeredArg(s, args, 1, bareSyntax); !ok {
 		return
 	}
-	s.castSpellDirect(ctx, uint32(spellID), s.selection)
+	s.castSpellDirect(ctx, spellID, s.selection)
 }
 
 // castCommandSpell mirrors the bare arm's spell validation (cs_cast.cpp
 // CheckSpellExistsAndIsValid minus the IsSpellValid leg: DBC-loaded spells
-// are assumed structurally valid, as in the bare arm).
+// are assumed structurally valid, as in the bare arm). The C++ SpellInfo
+// argument also accepts a shift-clicked spell link
+// (ChatCommandArgs.cpp ArgInfo<SpellInfo const*>::TryConsume, via
+// SpellInfoVisitor over Hyperlink<spell>), so a |Hspell:id| token resolves
+// the same way (miscParseSpellArg precedent); enchant/glyph/talent/trade
+// links, which the visitor also resolves to a spell, stay out — no Go
+// model for those link forms on this path.
 func (s *session) castCommandSpell(spellArg string) (uint32, bool) {
-	spellID, err := strconv.ParseUint(spellArg, 10, 32)
-	if err != nil {
-		s.sendSysMessage("Invalid spell ID.")
-		return 0, false
+	var spellID uint64
+	if linkID := miscExtractLinkID(spellArg, "Hspell"); linkID != 0 {
+		spellID = uint64(linkID)
+	} else {
+		var err error
+		spellID, err = strconv.ParseUint(spellArg, 10, 32)
+		if err != nil {
+			s.sendSysMessage("Invalid spell ID.")
+			return 0, false
+		}
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Spell data is unavailable.")
@@ -2506,12 +2536,13 @@ func (s *session) castCommandSpell(spellArg string) (uint32, bool) {
 
 // castCommandTriggered mirrors GetTriggerFlags (cs_cast.cpp): an absent flag
 // is TRIGGERED_NONE, a prefix of "triggered" is TRIGGERED_FULL_DEBUG_MASK,
-// anything else fails the command with its syntax line.
+// anything else fails the command with its syntax line. The C++ match is
+// case-sensitive (StringStartsWith, Util.h:335), so "Trig" fails.
 func (s *session) castCommandTriggered(trigArg, syntax string) (bool, bool) {
 	if trigArg == "" {
 		return false, true
 	}
-	if !strings.HasPrefix("triggered", strings.ToLower(trigArg)) {
+	if !strings.HasPrefix("triggered", trigArg) {
 		s.sendSysMessage(syntax)
 		return false, false
 	}
@@ -2557,16 +2588,21 @@ func (s *session) handleCmdCastSelf(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .cast self <spellId> [triggered]"
-	if len(args) < 2 {
+	if len(args) < 2 || len(args) > 3 {
 		s.sendSysMessage(syntax)
+		return
+	}
+	// The framework parses the spell argument before the handler runs, so
+	// a nonexistent spell fails before the selection check (the 2026-11-03
+	// note had this backwards for the parse leg; the handler-internal
+	// selection-first order only governs an existing-but-invalid spell,
+	// whose IsSpellValid leg has no Go model).
+	spellID, ok := s.castCommandSpell(args[1])
+	if !ok {
 		return
 	}
 	if s.selection == 0 {
 		s.sendSysMessage("Select a character or creature.")
-		return
-	}
-	spellID, ok := s.castCommandSpell(args[1])
-	if !ok {
 		return
 	}
 	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
@@ -2593,17 +2629,19 @@ func (s *session) handleCmdCastBack(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .cast back <spellId> [triggered]"
-	if len(args) < 2 {
+	if len(args) < 2 || len(args) > 3 {
 		s.sendSysMessage(syntax)
+		return
+	}
+	// Framework-first spell order, as in the self arm: a nonexistent spell
+	// fails before the handler's selection check.
+	spellID, ok := s.castCommandSpell(args[1])
+	if !ok {
 		return
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a character or creature.")
-		return
-	}
-	spellID, ok := s.castCommandSpell(args[1])
-	if !ok {
 		return
 	}
 	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
@@ -2622,8 +2660,14 @@ func (s *session) handleCmdCastTarget(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .cast target <spellId> [triggered]"
-	if len(args) < 2 {
+	if len(args) < 2 || len(args) > 3 {
 		s.sendSysMessage(syntax)
+		return
+	}
+	// Framework-first spell order, as in the self arm; the victim check
+	// keeps its handler-internal place after the selection check.
+	spellID, ok := s.castCommandSpell(args[1])
+	if !ok {
 		return
 	}
 	motion := s.castCommandSelectedCreature()
@@ -2633,10 +2677,6 @@ func (s *session) handleCmdCastTarget(ctx context.Context, args []string) {
 	}
 	if motion.TargetGUID == 0 {
 		s.sendSysMessage("The selected target has no victim.")
-		return
-	}
-	spellID, ok := s.castCommandSpell(args[1])
-	if !ok {
 		return
 	}
 	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
@@ -2658,7 +2698,7 @@ func (s *session) handleCmdCastDist(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .cast dist <spellId> <dist> [triggered]"
-	if len(args) < 3 {
+	if len(args) < 3 || len(args) > 4 {
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -2696,14 +2736,13 @@ func (s *session) handleCmdCastDest(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .cast dest <spellId> <x> <y> <z> [triggered]"
-	if len(args) < 5 {
+	if len(args) < 5 || len(args) > 6 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	if s.selection == 0 {
-		s.sendSysMessage("Select a character or creature.")
-		return
-	}
+	// Framework-first order, as in the self arm: the spell and the three
+	// coordinates are all parsed before the handler runs, so they fail
+	// before the selection check.
 	spellID, ok := s.castCommandSpell(args[1])
 	if !ok {
 		return
@@ -2716,6 +2755,10 @@ func (s *session) handleCmdCastDest(ctx context.Context, args []string) {
 			return
 		}
 		coords[i] = float32(v)
+	}
+	if s.selection == 0 {
+		s.sendSysMessage("Select a character or creature.")
+		return
 	}
 	triggered, ok := castCommandTriggeredArg(s, args, 5, syntax)
 	if !ok {
@@ -7757,7 +7800,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, []string{"creature", "gameobject", "graveyard", "grid", "taxinode", "areatrigger", "zonexy", "xyz", "ticket", "offset", "instance", "boss"}, nil)
 	root.add("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, []string{"hp", "mana", "energy", "rage", "runicpower", "money", "honor", "arenapoints", "xp", "drunk", "scale", "spell", "standstate", "mount", "gender", "bit", "faction", "phase", "speed", "talentpoints", "reputation"}, nil)
 	root.add("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, []string{"set"}, nil)
-	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, nil, nil)
+	root.add("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, []string{"back", "dist", "self", "target", "dest"}, nil)
 	root.add("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, []string{"corpses", "debug", "exit", "idlerestart", "idleshutdown", "info", "motd", "plimit", "restart", "shutdown", "set"}, nil)
 	root.add("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, []string{"customize", "changefaction", "changerace", "changeaccount", "deleted", "erase", "level", "rename", "reputation", "titles"}, map[string]string{"char": "character"})
 	root.add("levelup", func(ctx context.Context, args []string) bool { s.handleCmdLevelup(ctx, args); return true }, nil, nil)
