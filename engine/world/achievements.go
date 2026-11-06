@@ -981,6 +981,17 @@ func (s *session) updateAchievementCriteriaWithCreatureTarget(criterionType, ass
 	s.updateAchievementCriteriaWithTargets(criterionType, asset, quantity, nil, victim)
 }
 
+// achievementCriteriaDisabled mirrors DisableMgr::IsDisabledFor(
+// DISABLE_TYPE_ACHIEVEMENT_CRITERIA, criteriaID, nullptr), consulted by
+// AchievementMgr::CanUpdateCriteria (AchievementMgr.cpp:1636).
+func (s *session) achievementCriteriaDisabled(ctx context.Context, criteriaID uint32) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var one int
+	return s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM disables WHERE sourceType = 4 AND entry = ?", criteriaID).Scan(&one) == nil
+}
+
 func (s *session) updateAchievementCriteriaWithTargets(criterionType, asset uint32, quantity uint32, target *session, victim *creatureMotion) {
 	if s.player == nil || s.server == nil {
 		return
@@ -1008,6 +1019,9 @@ func (s *session) updateAchievementCriteriaWithTargets(criterionType, asset uint
 	}
 
 	for _, criterion := range matched {
+		if s.achievementCriteriaDisabled(context.Background(), criterion.ID) {
+			continue
+		}
 		s.applyCriteriaProgressWithTargets(criterion, quantity, asset, target, victim)
 	}
 }
@@ -1204,6 +1218,9 @@ func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
 	}
 
 	for _, criterion := range matched {
+		if s.achievementCriteriaDisabled(context.Background(), criterion.ID) {
+			continue
+		}
 		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
 			continue
 		}

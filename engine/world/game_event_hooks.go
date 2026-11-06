@@ -19,8 +19,9 @@ import (
 // timer), and the map leg enumerates session-occupied maps.
 // DELTAS: only GAMEEVENT_NORMAL rows ever enter the cached set, so
 // only schedule-driven normal transitions fire — the .event start/stop
-// commands still refuse (their apply machinery is unported), so no
-// command-driven transition fires; the first tick after startup fires
+// commands flip only the cached override (no ApplyNewEvent spawn
+// application), so command-driven transitions fire the 34/35 hooks but
+// change no spawns; the first tick after startup fires
 // start for every already-active event, matching StartSystem's initial
 // Update (GameEventMgr.cpp:1075-1081); map-update fires only for maps
 // carrying at least one session, never for player-less maps.

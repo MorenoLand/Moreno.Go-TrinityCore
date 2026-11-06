@@ -6297,13 +6297,32 @@ func (s *session) handleCmdDisable(ctx context.Context, args []string) {
 	}
 	var info *disableCommandType
 	lowerType := strings.ToLower(args[1])
+	var matches []*disableCommandType
 	for i := range disableCommandTypes {
 		// The "achievement criteria" arm is spelled "achievement_criteria"
 		// in the C++ command table.
 		name := strings.ReplaceAll(disableCommandTypes[i].label, " ", "_")
-		if strings.HasPrefix(name, lowerType) {
+		if name == lowerType {
 			info = &disableCommandTypes[i]
+			matches = nil
 			break
+		}
+		if strings.HasPrefix(name, lowerType) {
+			matches = append(matches, &disableCommandTypes[i])
+		}
+	}
+	if info == nil {
+		if len(matches) == 1 {
+			info = matches[0]
+		} else if len(matches) > 1 {
+			// ChatCommand.cpp:266-288: a partial token matching two
+			// subcommands lists the candidates and executes nothing;
+			// "m" matches both map and mmap.
+			s.sendSysMessage("There are multiple commands matching '" + lowerType + "'. Did you mean:")
+			for _, m := range matches {
+				s.sendSysMessage(".disable " + mode + " " + strings.ReplaceAll(m.label, " ", "_"))
+			}
+			return
 		}
 	}
 	if info == nil {
@@ -6409,7 +6428,9 @@ func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType
 		// entry > MAX_OUTDOORPVP_TYPES ->
 		// LANG_COMMAND_NO_OUTDOOR_PVP_FORUND.
 		if entry > maxOutdoorPVPTypes {
-			s.sendSysMessage(fmt.Sprintf("No outdoor PvP found for entry %d.", entry))
+			// cs_disable.cpp:163 sends LANG_COMMAND_NO_OUTDOOR_PVP_FORUND
+			// with no entry argument.
+			s.sendSysMessage("No outdoor PvP found.")
 			return
 		}
 	}
@@ -6504,6 +6525,11 @@ func (s *session) handleCmdEvent(ctx context.Context, args []string) {
 	}
 	switch arm {
 	case "activelist":
+		// ChatCommand.h:112: the no-arg arm takes no trailing tokens.
+		if len(args) > 1 {
+			s.sendSysMessage(syntax)
+			return
+		}
 		s.handleEventActiveList(ctx)
 	case "info":
 		s.handleEventInfo(ctx, args[1:])
@@ -6555,7 +6581,8 @@ func (s *session) handleEventInfo(ctx context.Context, args []string) {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
-	if len(args) < 1 {
+	// ChatCommand.h:112: trailing tokens fail the single-arg parse.
+	if len(args) != 1 {
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -6607,7 +6634,8 @@ func (s *session) handleEventStart(ctx context.Context, args []string) {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
-	if len(args) < 1 {
+	// ChatCommand.h:112: trailing tokens fail the single-arg parse.
+	if len(args) != 1 {
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -6642,7 +6670,8 @@ func (s *session) handleEventStop(ctx context.Context, args []string) {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
-	if len(args) < 1 {
+	// ChatCommand.h:112: trailing tokens fail the single-arg parse.
+	if len(args) != 1 {
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -6949,15 +6978,25 @@ func gameEventNextCheck(ev gameEventFull, now int64) int64 {
 // parameter (cs_event.cpp): a bare event number, or an |Hgameevent:id|h link.
 func parseGameEventID(arg string) (int64, error) {
 	t := strings.TrimSpace(arg)
-	if i := strings.Index(t, "Hgameevent:"); i >= 0 {
-		t = t[i+len("Hgameevent:"):]
+	if strings.HasPrefix(t, "|Hgameevent:") {
+		t = t[len("|Hgameevent:"):]
 		j := 0
 		for j < len(t) && t[j] >= '0' && t[j] <= '9' {
 			j++
 		}
+		if j == 0 || j >= len(t) || t[j] != '|' {
+			return 0, fmt.Errorf("invalid game event id %q", arg)
+		}
 		t = t[:j]
 	}
-	return strconv.ParseInt(t, 10, 16)
+	// Variant<Hyperlink<gameevent>, uint16> parses base-0
+	// (StringConvert.h:43-69): 0x/0b accepted, never octal, no sign,
+	// no trailing junk, 0-65535.
+	v, ok := parseCppBase0Int(t)
+	if !ok || v < 0 || v > 65535 {
+		return 0, fmt.Errorf("invalid game event id %q", arg)
+	}
+	return v, nil
 }
 
 // cAtoi mirrors C's atoi (cs_ban.cpp gates durations with !atoi(durationStr)):

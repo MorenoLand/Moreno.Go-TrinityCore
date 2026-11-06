@@ -200,6 +200,11 @@ func (s *Server) loadGameEventDataMap(ctx context.Context) map[int64]gameEventFu
 		if err := rows.Scan(&event.Entry, &event.Start, &event.End, &event.Occurrence, &event.Length, &event.Holiday, &event.WorldEvent, &event.Description); err != nil {
 			continue
 		}
+		if event.Entry == 0 {
+			// GameEventMgr.cpp:250-254: event entry 0 is reserved and
+			// rejected at load.
+			continue
+		}
 		data[event.Entry] = event
 	}
 	return data

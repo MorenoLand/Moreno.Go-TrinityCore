@@ -227,7 +227,9 @@ func (s *session) mapDisabledForTeleport(ctx context.Context, entry wotlk.MapEnt
 		return true
 	}
 	if !entry.IsDungeon() {
-		return entry.InstanceType == 0 && flags == 0
+		// DisableMgr.cpp:394-395: a non-dungeon MAP_COMMON map is
+		// disabled regardless of the row's flags.
+		return entry.InstanceType == 0
 	}
 	var flag int64
 	switch difficulty {
@@ -235,9 +237,12 @@ func (s *session) mapDisabledForTeleport(ctx context.Context, entry wotlk.MapEnt
 		flag = 0x01
 	case 1:
 		flag = 0x02
-	case 4:
+	case 2:
+		// RAID_DIFFICULTY_10MAN_HEROIC (DBCEnums.h:288); the old
+		// cases 4/5 could never fire (difficulty is validated < 4).
 		flag = 0x04
-	case 5:
+	case 3:
+		// RAID_DIFFICULTY_25MAN_HEROIC (DBCEnums.h:289).
 		flag = 0x08
 	}
 	return flag != 0 && flags&flag != 0
