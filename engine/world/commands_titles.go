@@ -31,16 +31,20 @@ import (
 // persist to the characters table (chosenTitle / knownTitles columns) and
 // are broadcast with buildPlayerValuesUpdate, like handleSetTitle.
 //
-// Targeting mirrors getSelectedPlayer (online selected player only, no self
-// fallback) plus the HasLowerSecurity silent fail (s.security <
-// target.security). LANG texts are inlined from the TDB enUS recall (no
-// in-tree trinity_string seed).
+// Targeting mirrors getSelectedPlayer (Chat.cpp:301-309: no selection falls
+// back to the invoker; a set-but-offline selection reports
+// LANG_NO_CHAR_SELECTED) plus the HasLowerSecurity silent fail
+// (s.security < target.security). LANG texts are inlined from the TDB enUS
+// recall (no in-tree trinity_string seed).
 
 // parseTitleLink mirrors extractKeyFromLink("Htitle") + atoi (Chat.cpp:362):
 // a plain title id or a |Htitle:title_id|h[name]|h|r shift-click link. The
 // signed atoi value is preserved (C++ reports LANG_INVALID_TITLE_ID with
 // the raw id, so "-5" prints -5, not 0); only an empty or malformed link
-// returns ok=false (the C++ nullptr path, silent).
+// returns ok=false (the C++ nullptr path). A wrong link type ALSO sends
+// LANG_WRONG_LINK_TYPE (511, unseeded in-tree, not guessed) before the
+// framework prints help — callers print the arm syntax as the help
+// equivalent (tick-314 quest pattern).
 func parseTitleLink(arg string) (int32, bool) {
 	if strings.HasPrefix(arg, "|") {
 		i := strings.Index(arg, "Htitle:")
@@ -91,10 +95,46 @@ func (s *session) sendTitleEarned(maskID uint32, earned bool) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_TITLE_EARNED), packet.Bytes(), true)
 }
 
+// parseSScanfU64 mirrors sscanf(args, UI64FMTD) ("%llu", cs_titles.cpp:229):
+// leading whitespace skipped, optional sign, leading digit run, trailing
+// junk ignored, no digits -> 0, a leading '-' wraps modulo 2^64, overflow
+// clamps to ^uint64(0) (strtoull). ParseUint base 10 was wrong here:
+// "12abc" parses 12 in C++ (Go: error -> 0) and "-1" wraps to max (Go: 0).
+func parseSScanfU64(s string) uint64 {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\v' || s[i] == '\f' || s[i] == '\r') {
+		i++
+	}
+	neg := false
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		neg = s[i] == '-'
+		i++
+	}
+	var n uint64
+	digits := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		d := uint64(s[i] - '0')
+		if n > (^uint64(0)-d)/10 {
+			n = ^uint64(0)
+		} else {
+			n = n*10 + d
+		}
+		digits++
+		i++
+	}
+	if digits == 0 {
+		return 0
+	}
+	if neg {
+		return -n
+	}
+	return n
+}
+
 // titlesTarget mirrors getSelectedPlayer (Chat.cpp:301-309): no selection
-// resolves to the invoker; only an unresolvable selection reports
-// LANG_NO_CHAR_SELECTED. The HasLowerSecurity silent fail is the
-// s.security < target.security comparison.
+// resolves to the invoker (self fallback); only a set-but-unresolvable
+// selection reports LANG_NO_CHAR_SELECTED. The HasLowerSecurity silent fail
+// is the s.security < target.security comparison.
 func (s *session) titlesTarget() *session {
 	if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
@@ -258,10 +298,14 @@ func (s *session) handleTitlesAdd(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) == 0 {
+		// C++ extractKeyFromLink("") returns null -> handler false ->
+		// framework prints the arm help.
+		s.sendSysMessage("Syntax: .titles add <titleId>")
 		return
 	}
 	id, ok := parseTitleLink(args[0])
 	if !ok {
+		s.sendSysMessage("Syntax: .titles add <titleId>")
 		return
 	}
 	// C++ checks id <= 0 before target selection (cs_titles.cpp:131-137).
@@ -295,10 +339,14 @@ func (s *session) handleTitlesCurrent(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) == 0 {
+		// C++ extractKeyFromLink("") returns null -> handler false ->
+		// framework prints the arm help.
+		s.sendSysMessage("Syntax: .titles current <titleId>")
 		return
 	}
 	id, ok := parseTitleLink(args[0])
 	if !ok {
+		s.sendSysMessage("Syntax: .titles current <titleId>")
 		return
 	}
 	// C++ checks id <= 0 before target selection (cs_titles.cpp:92-98).
@@ -333,10 +381,14 @@ func (s *session) handleTitlesRemove(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) == 0 {
+		// C++ extractKeyFromLink("") returns null -> handler false ->
+		// framework prints the arm help.
+		s.sendSysMessage("Syntax: .titles remove <titleId>")
 		return
 	}
 	id, ok := parseTitleLink(args[0])
 	if !ok {
+		s.sendSysMessage("Syntax: .titles remove <titleId>")
 		return
 	}
 	// C++ checks id <= 0 before target selection (cs_titles.cpp:172-178).
@@ -393,10 +445,12 @@ func (s *session) handleTitlesSetMask(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) == 0 {
-		return // C++ !*args: silent, the set-level syntax line covers it
+		// C++ !*args -> handler false -> framework prints the arm help.
+		s.sendSysMessage("Syntax: .titles set mask <bitmask>")
+		return
 	}
 	// sscanf(UI64FMTD) leaves titles at 0 on a parse failure and continues.
-	mask, _ := strconv.ParseUint(args[0], 10, 64)
+	mask := parseSScanfU64(args[0])
 	target := s.titlesTarget()
 	if target == nil {
 		return
