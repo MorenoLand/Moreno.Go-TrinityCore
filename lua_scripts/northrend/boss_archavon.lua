@@ -32,9 +32,24 @@
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_archavon.cpp):
 -- boss_archavonAI::JustEngagedWith (:69-77) — the four ScheduleEvent
--- calls are carried by the event-1 CreateLuaEvent scheduling below
--- (the xt002 precedent); BossAI::JustEngagedWith(who) passthrough and
--- the zero Talk arms are unmodeled.
+-- calls (15s / 30s / 45s / 5min) seed the four combat timers below
+-- (EVENT_IMPALE rides the stomp chain, not a combat-start timer);
+-- BossAI::JustEngagedWith(who) is LAST in C++: _JustEngagedWith
+-- (ScriptedCreature.cpp:527-542) — SetBossState(DATA_ARCHAVON 0,
+-- IN_PROGRESS) PORTED tick 262 via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone at the handler
+-- tail; the CheckRequiredBosses gate has no bridge and stays out;
+-- zero Talk arms.
+-- BossAI::JustDied (no override in this file): _JustDied()
+-- (ScriptedCreature.cpp:513-520) — SetBossState(DATA_ARCHAVON 0,
+-- DONE) PORTED tick 262 in archavonJustDied, with the instance
+-- SetBossState-override DONE legs (instance_vault_of_archavon.cpp:
+-- 57-83: ArchavonDeath record + DoCastSpellOnPlayers(68308)) in the
+-- same handler, C++ order (state first, then the override legs).
+-- BossAI::Reset (no override in this file): _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_ARCHAVON 0,
+-- NOT_STARTED), != DONE-gated, PORTED tick 262 in archavonReset
+-- (new ev23, split from ev2 — leave-combat does not call Reset).
 -- EVENT_ROCK_SHARDS (:94-98) — SelectTarget(Random, 0) (:95, no
 -- distance filter) -> DoCast(target, SPELL_ROCK_SHARDS 58678) (:96,
 -- 2-arg = non-triggered) -> CastSpell(target, 58678); re-arm 15s
@@ -81,12 +96,14 @@
 -- NPC_ARCHAVON_WARDER 32353 — unreferenced by every arm in this file
 -- (no summon legs).
 -- DoMeleeAttackIfReady() (:127) — no bridge.
--- No JustDied, no KilledUnit, no DamageTaken, no DoAction arm exists in C++ on
+-- No KilledUnit, no DamageTaken, no DoAction arm exists in C++ on
 -- this AI (boss_archavon.cpp; zero DoAction hits in VaultOfArchavon), no
--- MovementInform, no EnterEvadeMode override — events 3/4 on the creature carry
--- only the timer wipe.
+-- MovementInform, no EnterEvadeMode override — events 2/23/4 on the
+-- creature carry the timer wipe plus the SetBossState legs above.
+-- JustDied rides the BossAI base (_JustDied DONE leg, ported tick 262).
 
 local ENTRY_ARCHAVON = 31125
+local DATA_ARCHAVON = 0
 
 local EMOTE_BERSERK = 0
 local EMOTE_LEAP = 1
@@ -96,6 +113,8 @@ local SPELL_CRUSHING_LEAP = 58960
 local SPELL_STOMP = 58663
 local SPELL_IMPALE = 58666
 local SPELL_BERSERK = 47008
+
+local SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK = 68308
 
 local timers = {}
 
@@ -265,6 +284,10 @@ local function archavonEnterCombat(event, creature)
         berserkTick(creature, guid)
     end)
     -- BossAI::JustEngagedWith(who) is LAST in C++ (after the ScheduleEvents):
+    -- _JustEngagedWith (ScriptedCreature.cpp:527-542) — SetBossState
+    -- (DATA_ARCHAVON 0, IN_PROGRESS) first, then SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat; the CheckRequiredBosses gate stays out.
+    creature:SetBossState(DATA_ARCHAVON, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
@@ -275,7 +298,46 @@ local function archavonCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ BossAI::JustDied (no override in boss_archavon.cpp): _JustDied()
+-- (ScriptedCreature.cpp:513-520) — events.Reset() + SetBossState
+-- (DATA_ARCHAVON 0, DONE); then the instance SetBossState override
+-- (instance_vault_of_archavon.cpp:57-83) records ArchavonDeath
+-- (GameTime::GetGameTime, seconds — os.time() here) and casts
+-- SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK 68308 on every instance
+-- player (player->CastSpell(player, spell, true), no alive gate —
+-- the loken GetPlayersInWorld idiom; the death time is banked in
+-- instanceData.archavonDeath for the criteria check).
+local function archavonJustDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_ARCHAVON, 3)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.archavonDeath = os.time()
+        end
+    end
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:CastSpell(p, SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK, true)
+        end
+    end
+end
+
+-- C++ BossAI::Reset (no override in boss_archavon.cpp): _Reset()
+-- (ScriptedCreature.cpp:499-511) — events.Reset() + SetBossState
+-- (DATA_ARCHAVON 0, NOT_STARTED) only when the stored state != DONE.
+-- Split from ev2 (the keleseth/svala precedent): ev2 leave-combat
+-- does not call Reset in C++, so it stays wipe-only.
+local function archavonReset(event, creature)
+    if creature:GetBossState(DATA_ARCHAVON) ~= 3 then
+        creature:SetBossState(DATA_ARCHAVON, 0)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_ARCHAVON, 1, archavonEnterCombat)
 RegisterCreatureEvent(ENTRY_ARCHAVON, 2, archavonCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_ARCHAVON, 4, archavonCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_ARCHAVON, 23, archavonCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_ARCHAVON, 4, archavonJustDied)
+RegisterCreatureEvent(ENTRY_ARCHAVON, 23, archavonReset)

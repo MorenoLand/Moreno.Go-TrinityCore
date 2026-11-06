@@ -26,8 +26,22 @@
 -- boss_toravon.cpp):
 -- boss_toravon::JustEngagedWith (:50-60) — the immediate DoCastSelf
 -- (SPELL_FROZEN_MALLET 71993) (:54, non-triggered) fires once before
--- the timers are scheduled, then seeds the three combat timers; the
--- BossAI::JustEngagedWith(who) passthrough is unmodeled.
+-- the timers are scheduled, then seeds the three combat timers;
+-- BossAI::JustEngagedWith(who) is LAST in C++: _JustEngagedWith
+-- (ScriptedCreature.cpp:527-542) — SetBossState(DATA_TORAVON 3,
+-- IN_PROGRESS) PORTED tick 262 via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone at the handler
+-- tail; the CheckRequiredBosses gate has no bridge and stays out.
+-- BossAI::JustDied (no override in this file): _JustDied()
+-- (ScriptedCreature.cpp:513-520) — SetBossState(DATA_TORAVON 3, DONE)
+-- PORTED tick 262 in toravonJustDied. NOTE: unlike the other three
+-- VoA bosses, Toravon DONE carries NO instance-override leg —
+-- instance_vault_of_archavon.cpp:57-83 default-returns for
+-- DATA_TORAVON (no death-time record, no 68308 cast).
+-- BossAI::Reset (no override in this file): _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_TORAVON 3,
+-- NOT_STARTED), != DONE-gated, PORTED tick 262 in toravonReset
+-- (new ev23, split from ev2 — leave-combat does not call Reset).
 -- EVENT_FROZEN_ORB (:76-82) — me->CastSpell(me, SPELL_FROZEN_ORB
 -- 72091, AddSpellMod(SPELLVALUE_MAX_TARGETS, RAID_MODE(1, 3)))
 -- (:79) -> CastSpell(creature, 72091); the max-targets raid-mode leg
@@ -74,6 +88,7 @@
 -- DoMeleeAttackIfReady() (:97) — no bridge.
 
 local ENTRY_TORAVON = 38433
+local DATA_TORAVON = 3
 
 local SPELL_FREEZING_GROUND = 72090
 local SPELL_FROZEN_ORB = 72091
@@ -211,6 +226,10 @@ local function toravonEnterCombat(event, creature)
         freezingGroundTick(creature, guid)
     end)
     -- BossAI::JustEngagedWith(who) is LAST in C++ (after the ScheduleEvents):
+    -- _JustEngagedWith (ScriptedCreature.cpp:527-542) — SetBossState
+    -- (DATA_TORAVON 3, IN_PROGRESS) first, then SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat; the CheckRequiredBosses gate stays out.
+    creature:SetBossState(DATA_TORAVON, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
@@ -221,7 +240,29 @@ local function toravonCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ BossAI::JustDied (no override in boss_toravon.cpp): _JustDied()
+-- (ScriptedCreature.cpp:513-520) — events.Reset() + SetBossState
+-- (DATA_TORAVON 3, DONE). No instance-override leg: the C++
+-- SetBossState override default-returns for DATA_TORAVON
+-- (instance_vault_of_archavon.cpp:57-83).
+local function toravonJustDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_TORAVON, 3)
+end
+
+-- C++ BossAI::Reset (no override in boss_toravon.cpp): _Reset()
+-- (ScriptedCreature.cpp:499-511) — events.Reset() + SetBossState
+-- (DATA_TORAVON 3, NOT_STARTED) only when the stored state != DONE.
+-- Split from ev2 (the keleseth/svala precedent): ev2 leave-combat
+-- does not call Reset in C++, so it stays wipe-only.
+local function toravonReset(event, creature)
+    if creature:GetBossState(DATA_TORAVON) ~= 3 then
+        creature:SetBossState(DATA_TORAVON, 0)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_TORAVON, 1, toravonEnterCombat)
 RegisterCreatureEvent(ENTRY_TORAVON, 2, toravonCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_TORAVON, 4, toravonCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_TORAVON, 23, toravonCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_TORAVON, 4, toravonJustDied)
+RegisterCreatureEvent(ENTRY_TORAVON, 23, toravonReset)

@@ -26,8 +26,22 @@
 -- boss_emalonAI::JustEngagedWith (:102-120) — the four ScheduleEvent
 -- calls seed the combat timers below; the summons-list
 -- minion-AttackStart leg is PORTED 2026-10-26 into emalonEnterCombat
--- (GetCreaturesInGrid + !GetVictim gate + EngageWithTarget). The
--- BossAI::JustEngagedWith(who) passthrough is unmodeled.
+-- (GetCreaturesInGrid + !GetVictim gate + EngageWithTarget).
+-- BossAI::JustEngagedWith(who) is LAST in C++: _JustEngagedWith
+-- (ScriptedCreature.cpp:527-542) — SetBossState(DATA_EMALON 1,
+-- IN_PROGRESS) PORTED tick 262 via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone at the handler
+-- tail; the CheckRequiredBosses gate has no bridge and stays out.
+-- BossAI::JustDied (no override in this file): _JustDied()
+-- (ScriptedCreature.cpp:513-520) — SetBossState(DATA_EMALON 1, DONE)
+-- PORTED tick 262 in emalonJustDied, with the instance
+-- SetBossState-override DONE legs (instance_vault_of_archavon.cpp:
+-- 57-83: EmalonDeath record + DoCastSpellOnPlayers(68308)) in the
+-- same handler, C++ order (state first, then the override legs).
+-- BossAI::Reset: _Reset() (ScriptedCreature.cpp:499-511) —
+-- SetBossState(DATA_EMALON 1, NOT_STARTED), != DONE-gated, PORTED
+-- tick 262 in emalonReset, first per C++ Reset order (_Reset :86 runs
+-- before the minion summons :88-90).
 -- EVENT_CHAIN_LIGHTNING (:136-139) — SelectTarget(Random, 0) (:137,
 -- no distance filter) -> DoCast(target, SPELL_CHAIN_LIGHTNING
 -- 64213) (:138, 2-arg = non-triggered) -> CastSpell(target, 64213);
@@ -69,10 +83,11 @@
 -- Lua draws from the live grid list — same outcome when all four
 -- minions are alive, benign delta otherwise.
 -- DOCUMENTED-ONLY (in this header; entries 33993 / 33998):
--- boss_emalonAI::Reset (:85-91) — four SummonCreature
--- (NPC_TEMPEST_MINION, TEMPSUMMON_CORPSE_DESPAWN) at TempestMinions[]
--- positions PORTED this run (emalonReset, event 23 — the old "no
--- SummonCreature bridge" claim is re-keyed): summonType 4 /
+-- boss_emalonAI::Reset (:85-91) — _Reset() SetBossState(DATA_EMALON
+-- 1, NOT_STARTED) PORTED tick 262 (!= DONE-gated, first per C++ order)
+-- + four SummonCreature (NPC_TEMPEST_MINION, TEMPSUMMON_CORPSE_DESPAWN)
+-- at TempestMinions[] positions PORTED (emalonReset, event 23 — the old
+-- "no SummonCreature bridge" claim is re-keyed): summonType 4 /
 -- despawnMs 0; documented delta: the corpse-despawn leg has no bridge
 -- — minion corpses stay on the normal corpse sweep.
 -- boss_emalonAI::JustSummoned (:93-100) — minion AttackStart leg: no
@@ -96,6 +111,7 @@
 
 local ENTRY_EMALON = 33993
 local ENTRY_TEMPEST_MINION = 33998
+local DATA_EMALON = 1
 
 local EMOTE_BERSERK = 2
 local EMOTE_OVERCHARGE = 0
@@ -107,6 +123,8 @@ local SPELL_BERSERK = 26662
 local SPELL_OVERCHARGED = 64217
 
 local SPELL_SHOCK = 64363
+
+local SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK = 68308
 
 local timers = {}
 
@@ -207,15 +225,20 @@ local TEMPEST_MINION_SPAWNS = {
     { -203.842529, -297.097015, 91.745163, 1.598807 },
 }
 
--- C++ boss_emalonAI::Reset (boss_emalon.cpp:85-91): _Reset() (timer
--- clear) then four SummonCreature(NPC_TEMPEST_MINION 33998,
--- TempestMinions[i], TEMPSUMMON_CORPSE_DESPAWN (4)) — the C++ call has
--- no despawn-time arg, so despawnMs 0. Documented delta: the
+-- C++ boss_emalonAI::Reset (boss_emalon.cpp:85-91): _Reset()
+-- (ScriptedCreature.cpp:499-511: timer clear + SetBossState
+-- (DATA_EMALON 1, NOT_STARTED), != DONE-gated — PORTED tick 262,
+-- first per C++ order) then four SummonCreature(NPC_TEMPEST_MINION
+-- 33998, TempestMinions[i], TEMPSUMMON_CORPSE_DESPAWN (4)) — the C++
+-- call has no despawn-time arg, so despawnMs 0. Documented delta: the
 -- corpse-despawn leg has no bridge — minion corpses stay on the normal
 -- corpse sweep. The JustSummoned AttackStart leg is ported via the
 -- ev19 emalonJustSummoned handler below; at Reset the C++ AttackStart
 -- is a nullptr-guarded no-op (no victim), so nothing is lost there.
 local function emalonReset(event, creature)
+    if creature:GetBossState(DATA_EMALON) ~= 3 then
+        creature:SetBossState(DATA_EMALON, 0)
+    end
     cancelTimers(creature:GetGUID())
     for _, p in ipairs(TEMPEST_MINION_SPAWNS) do
         creature:SummonCreature(ENTRY_TEMPEST_MINION, p[1], p[2], p[3], p[4], 4, 0)
@@ -288,6 +311,10 @@ local function emalonEnterCombat(event, creature, target)
         overchargeTick(creature, guid)
     end)
     -- BossAI::JustEngagedWith(who) is LAST in C++ (after the ScheduleEvents):
+    -- _JustEngagedWith (ScriptedCreature.cpp:527-542) — SetBossState
+    -- (DATA_EMALON 1, IN_PROGRESS) first, then SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat; the CheckRequiredBosses gate stays out.
+    creature:SetBossState(DATA_EMALON, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
@@ -296,6 +323,33 @@ end
 -- convention).
 local function emalonCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ BossAI::JustDied (no override in boss_emalon.cpp): _JustDied()
+-- (ScriptedCreature.cpp:513-520) — events.Reset() + SetBossState
+-- (DATA_EMALON 1, DONE); then the instance SetBossState override
+-- (instance_vault_of_archavon.cpp:57-83) records EmalonDeath
+-- (GameTime::GetGameTime, seconds — os.time() here) and casts
+-- SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK 68308 on every instance
+-- player (player->CastSpell(player, spell, true), no alive gate —
+-- the loken GetPlayersInWorld idiom; the death time is banked in
+-- instanceData.emalonDeath for the criteria check).
+local function emalonJustDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_EMALON, 3)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.emalonDeath = os.time()
+        end
+    end
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:CastSpell(p, SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK, true)
+        end
+    end
 end
 
 -- C++ boss_emalonAI::JustSummoned (boss_emalon.cpp:93-99):
@@ -314,7 +368,7 @@ end
 
 RegisterCreatureEvent(ENTRY_EMALON, 1, emalonEnterCombat)
 RegisterCreatureEvent(ENTRY_EMALON, 2, emalonCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_EMALON, 4, emalonCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_EMALON, 4, emalonJustDied)
 RegisterCreatureEvent(ENTRY_EMALON, 23, emalonReset)
 RegisterCreatureEvent(ENTRY_EMALON, 19, emalonJustSummoned)
 

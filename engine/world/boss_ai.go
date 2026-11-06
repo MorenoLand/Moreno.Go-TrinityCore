@@ -19978,16 +19978,21 @@ func init() {
 	// events 2/4/23): EVENT_ROCK_SHARDS 58678 (random player, 15s/15s),
 	// EVENT_CHOKING_CLOUD 58960 (random player, TRIGGERED) + Talk
 	// (EMOTE_LEAP 1, target) (30s/30s — the 10y min-range SelectTarget
-	// gate is unbridged), EVENT_STOMP 58663 + 3s EVENT_IMPALE 58666
+	// gate is ported via the IsWithinCombatRange twin), EVENT_STOMP
+	// 58663 + 3s EVENT_IMPALE 58666
 	// chain (45s re-arm; DoCastVictim), EVENT_BERSERK Talk(EMOTE_BERSERK
 	// 0) + DoCastSelf 47008 (5min one-shot) — all own-UpdateAI
 	// CASTING-gated (500ms IsCasting defer), non-triggered except
 	// Crushing Leap (the 2026-10-06
 	// "zero bridgeable arms" closure was stale "no-timer-bridge"
-	// doctrine). JustEngagedWith carries no Talk arms; no JustDied /
-	// KilledUnit / DamageTaken / DoAction arms exist. The
+	// doctrine). JustEngagedWith carries no Talk arms; no KilledUnit /
+	// DamageTaken / DoAction arms exist (JustDied rides the BossAI base
+	// _JustDied DONE leg). The
 	// spell_archavon_rock_shards SpellScript hook is bridge-blocked —
-	// documented in the lua header.
+	// documented in the lua header. SetBossState legs (tick 262):
+	// engage DATA_ARCHAVON 0 IN_PROGRESS (base-last), died DONE +
+	// instance-override ArchavonDeath + DoCastSpellOnPlayers 68308,
+	// reset NOT_STARTED (!= DONE-gated, new ev23).
 	// Cast-state gates (2026-11-04): all 5 timer arms (rock shards /
 	// choking cloud / stomp / impale chain / berserk) carry the 500ms
 	// IsCasting defer (own UpdateAI pre-loop :87 + in-loop :123).
@@ -19999,14 +20004,21 @@ func init() {
 	// 5s/25s), EVENT_LIGHTNING_NOVA 64216 (DoCastAOE = self-cast,
 	// 40s/40s), EVENT_BERSERK 26662 + Talk(EMOTE_BERSERK 2) (6min
 	// one-shot); Tempest Minion 33998 EVENT_SHOCK 64363 (DoCastVictim,
-	// 20s/20s). The EVENT_OVERCHARGE summons-list leg (+ Talk
-	// EMOTE_OVERCHARGE), the Reset-time SummonCreature x4, the
-	// overcharge self-stack loop (no GetAura stack-count bridge), the
-	// instance->GetGuidData(DATA_EMALON) legs, SetFullHealth,
-	// DespawnOrUnsummon, DoZoneInCombat are bridge-blocked; the
-	// UNIT_STATE_CASTING gates are ported as the 500ms IsCasting defer
+	// 20s/20s). Ported too: the EVENT_OVERCHARGE summons-list leg (+
+	// Talk EMOTE_OVERCHARGE), the Reset-time SummonCreature x4,
+	// SetFullHealth and DoZoneInCombat. The overcharge self-stack loop
+	// stays out because the seeding cast targets Emalon, not the
+	// minion — inert in C++ too — not for a missing GetStackAmount
+	// bridge, which is live; the instance->GetGuidData(DATA_EMALON)
+	// legs are twinned via grid lookups; DespawnOrUnsummon stays out.
+	// The UNIT_STATE_CASTING gates are ported as the 500ms IsCasting
+	// defer
 	// (boss pre-loop :129 + in-loop :166; minion pre-loop :239) —
 	// documented in the lua header.
+	// SetBossState legs (tick 262): engage DATA_EMALON 1 IN_PROGRESS
+	// (base-last), died DONE + instance-override EmalonDeath +
+	// DoCastSpellOnPlayers 68308, reset NOT_STARTED (!= DONE-gated,
+	// first in emalonReset before the minion summons).
 	// Cast-state gates (2026-11-04): boss chain/nova/berserk/overcharge
 	// + minion shock carry the 500ms IsCasting defer.
 	RegisterLuaBoss("boss_emalon", 33993)
@@ -20022,7 +20034,10 @@ func init() {
 	// loaders (spell_koralon_meteor_fists,
 	// spell_koralon_meteor_fists_damage, spell_flame_warder_meteor_fists)
 	// and the UNIT_STATE_CASTING gates are ported as the 500ms
-	// IsCasting defer — documented in the lua header.
+	// IsCasting defer — documented in the lua header. SetBossState legs
+	// (tick 262): engage DATA_KORALON 2 IN_PROGRESS (base-last), died
+	// DONE + instance-override KoralonDeath + DoCastSpellOnPlayers
+	// 68308, reset NOT_STARTED (!= DONE-gated, new ev23).
 	// Cast-state gates (2026-11-04): all 4 timer arms carry the
 	// 500ms IsCasting defer (own UpdateAI pre-loop + in-loop gates).
 	RegisterLuaBoss("boss_koralon", 35013)
@@ -20042,6 +20057,9 @@ func init() {
 	// Cast-state gates (2026-11-04): all 3 timer arms carry the
 	// 500ms IsCasting defer (own UpdateAI pre-loop + in-loop gates);
 	// the engage-time frozen-mallet cast stays ungated per C++.
+	// SetBossState legs (tick 262): engage DATA_TORAVON 3 IN_PROGRESS
+	// (base-last), died DONE, reset NOT_STARTED (!= DONE-gated, new
+	// ev23); no instance-override leg on Toravon DONE (C++ default).
 	RegisterLuaBoss("boss_toravon", 38433)
 	// AddSC_boss_cyanigosa: Cyanigosa (Violet Hold) — timer-driven cast
 	// ports (lua_scripts/northrend/boss_cyanigosa.lua): arcane-vacuum

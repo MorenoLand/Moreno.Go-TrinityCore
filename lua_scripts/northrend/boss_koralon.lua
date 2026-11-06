@@ -24,8 +24,22 @@
 -- boss_koralon.cpp):
 -- boss_koralonAI::JustEngagedWith (:54-68) — the immediate DoCast(me,
 -- SPELL_BURNING_FURY 66721) (:59, non-triggered) fires once before
--- the timers are scheduled, then seeds the four combat timers; the
--- BossAI::JustEngagedWith(who) passthrough is unmodeled.
+-- the timers are scheduled, then seeds the four combat timers;
+-- BossAI::JustEngagedWith(who) is LAST in C++: _JustEngagedWith
+-- (ScriptedCreature.cpp:527-542) — SetBossState(DATA_KORALON 2,
+-- IN_PROGRESS) PORTED tick 262 via creature:SetBossState
+-- (lua_creature_events.go:5917), then pulse + me-zone at the handler
+-- tail; the CheckRequiredBosses gate has no bridge and stays out.
+-- BossAI::JustDied (no override in this file): _JustDied()
+-- (ScriptedCreature.cpp:513-520) — SetBossState(DATA_KORALON 2, DONE)
+-- PORTED tick 262 in koralonJustDied, with the instance
+-- SetBossState-override DONE legs (instance_vault_of_archavon.cpp:
+-- 57-83: KoralonDeath record + DoCastSpellOnPlayers(68308)) in the
+-- same handler, C++ order (state first, then the override legs).
+-- BossAI::Reset (no override in this file): _Reset()
+-- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_KORALON 2,
+-- NOT_STARTED), != DONE-gated, PORTED tick 262 in koralonReset
+-- (new ev23, split from ev2 — leave-combat does not call Reset).
 -- EVENT_BURNING_FURY (:83-86) — DoCast(me, 66721) (:84,
 -- non-triggered) -> CastSpell(creature, 66721); re-arm 20s (:85).
 -- EVENT_BURNING_BREATH (:87-90) — DoCast(me, SPELL_BURNING_BREATH
@@ -57,11 +71,14 @@
 -- DoMeleeAttackIfReady() (:103) — no bridge.
 
 local ENTRY_KORALON = 35013
+local DATA_KORALON = 2
 
 local SPELL_BURNING_BREATH = 66665
 local SPELL_BURNING_FURY = 66721
 local SPELL_FLAME_CINDER_A = 66684
 local SPELL_METEOR_FISTS = 66725
+
+local SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK = 68308
 
 local timers = {}
 
@@ -169,6 +186,10 @@ local function koralonEnterCombat(event, creature)
         flameCinderTick(creature, guid)
     end)
     -- BossAI::JustEngagedWith(who) is LAST in C++ (after the ScheduleEvents):
+    -- _JustEngagedWith (ScriptedCreature.cpp:527-542) — SetBossState
+    -- (DATA_KORALON 2, IN_PROGRESS) first, then SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat; the CheckRequiredBosses gate stays out.
+    creature:SetBossState(DATA_KORALON, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
@@ -179,7 +200,46 @@ local function koralonCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ BossAI::JustDied (no override in boss_koralon.cpp): _JustDied()
+-- (ScriptedCreature.cpp:513-520) — events.Reset() + SetBossState
+-- (DATA_KORALON 2, DONE); then the instance SetBossState override
+-- (instance_vault_of_archavon.cpp:57-83) records KoralonDeath
+-- (GameTime::GetGameTime, seconds — os.time() here) and casts
+-- SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK 68308 on every instance
+-- player (player->CastSpell(player, spell, true), no alive gate —
+-- the loken GetPlayersInWorld idiom; the death time is banked in
+-- instanceData.koralonDeath for the criteria check).
+local function koralonJustDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_KORALON, 3)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.koralonDeath = os.time()
+        end
+    end
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
+            p:CastSpell(p, SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK, true)
+        end
+    end
+end
+
+-- C++ BossAI::Reset (no override in boss_koralon.cpp): _Reset()
+-- (ScriptedCreature.cpp:499-511) — events.Reset() + SetBossState
+-- (DATA_KORALON 2, NOT_STARTED) only when the stored state != DONE.
+-- Split from ev2 (the keleseth/svala precedent): ev2 leave-combat
+-- does not call Reset in C++, so it stays wipe-only.
+local function koralonReset(event, creature)
+    if creature:GetBossState(DATA_KORALON) ~= 3 then
+        creature:SetBossState(DATA_KORALON, 0)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
 RegisterCreatureEvent(ENTRY_KORALON, 1, koralonEnterCombat)
 RegisterCreatureEvent(ENTRY_KORALON, 2, koralonCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_KORALON, 4, koralonCancelCombatTimers)
-RegisterCreatureEvent(ENTRY_KORALON, 23, koralonCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_KORALON, 4, koralonJustDied)
+RegisterCreatureEvent(ENTRY_KORALON, 23, koralonReset)
