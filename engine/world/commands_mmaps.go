@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 )
@@ -25,7 +24,7 @@ import (
 // documented-blocked:
 //
 //   - `loc` is partially native: the grid tile location math (cs_mmaps.cpp:
-//     164-170) needs only the player position, which is modeled. The navmesh
+//     133-134) needs only the player position, which is modeled. The navmesh
 //     tile location (dtNavMeshQuery::findNearestPoly) has no Go bridge, so
 //     the arm ends with the C++-exact "NavMesh not loaded for current map."
 //     report, which is the true state of the Go tree (no navmesh is ever
@@ -47,15 +46,18 @@ import (
 //     (cs_mmaps.cpp:207) reports the navmesh as missing before printing
 //     anything, so the Go arm emits exactly that line.
 //   - `testarea` is partially native: the creature range search runs over
-//     the live motion map (same map + instance, alive only, 40yd 3D — the
-//     AnyUnitInObjectRangeCheck terms, GridNotifiers.h:1050-1055), but
-//     PathGenerator/dtNavMesh are unbuilt, so no path is actually computed:
-//     the paths count mirrors C++'s unconditional per-creature attempt
-//     count (cs_mmaps.cpp:301-305) over the measured sweep time.
+//     the live motion map (same map + instance, alive only, the
+//     AnyUnitInObjectRangeCheck terms — phase-mask overlap, 40yd 3D plus
+//     both combat reaches, strict < on squared distance,
+//     GridNotifiers.h:1050-1055), but PathGenerator/dtNavMesh are unbuilt,
+//     so no path is actually computed: the paths count mirrors C++'s
+//     unconditional per-creature attempt count (cs_mmaps.cpp:282-287) over
+//     the measured sweep time.
 //
 // Console-vs-chat branches are moot (Go commands are always sessioned).
 
-// handleCmdMMap dispatches the "mmap" root (cs_mmaps.cpp:52-66).
+// handleCmdMMap dispatches the "mmap" root (arm table cs_mmaps.cpp:51-55,
+// root table :59-62).
 func (s *session) handleCmdMMap(ctx context.Context, args []string) {
 	const syntax = "Syntax: .mmap loadedtiles|loc|path|stats|testarea"
 	if len(args) == 0 {
@@ -90,16 +92,18 @@ func (s *session) handleCmdMMap(ctx context.Context, args []string) {
 }
 
 // handleMmapLoadedTilesCommand mirrors HandleMmapLoadedTilesCommand
-// (cs_mmaps.cpp:205-229, RBAC 537). Documented-blocked: dtNavMesh has no Go
+// (cs_mmaps.cpp:189-212, RBAC 537). Documented-blocked: dtNavMesh has no Go
 // bridge.
 func (s *session) handleMmapLoadedTilesCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMMapLoadedTiles) {
 		return
 	}
+	// The C++ handler (cs_mmaps.cpp:196) reports the navmesh as missing
+	// before printing anything, so the Go arm emits exactly that line.
 	s.sendSysMessage("NavMesh not loaded for current map.")
 }
 
-// handleMmapLocCommand mirrors HandleMmapLocCommand (cs_mmaps.cpp:160-203,
+// handleMmapLocCommand mirrors HandleMmapLocCommand (cs_mmaps.cpp:126-187,
 // RBAC 538): the grid tile location is native math; the navmesh tile
 // location has no Go bridge.
 func (s *session) handleMmapLocCommand(ctx context.Context) {
@@ -108,26 +112,26 @@ func (s *session) handleMmapLocCommand(ctx context.Context) {
 	}
 	s.sendSysMessage("mmap tileloc:")
 	// int32 gx = 32 - player->GetPositionX() / SIZE_OF_GRIDS (cs_mmaps.cpp:
-	// 167-168); goSizeOfGrids mirrors SIZE_OF_GRIDS (MapDefines.h), already
-	// used by the .go grid arm (commands.go:1144).
+	// 133-134); goSizeOfGrids mirrors SIZE_OF_GRIDS (GridDefines.h:38),
+	// already used by the .go grid arm (commands.go:1923-1924).
 	gx := int32(32 - s.player.X/goSizeOfGrids)
 	gy := int32(32 - s.player.Y/goSizeOfGrids)
 	s.sendSysMessage(fmt.Sprintf("%03d%02d%02d.mmtile", s.player.Map, gx, gy))
 	s.sendSysMessage(fmt.Sprintf("tileloc [%d, %d]", gy, gx))
-	// The navmesh tile location (findNearestPoly / getTileAndPolyByRef,
-	// cs_mmaps.cpp:173-201) has no Go bridge; report the navmesh as missing
-	// exactly like the C++ handler does (cs_mmaps.cpp:178).
+	// The navmesh tile location (findNearestPoly :162 / getTileAndPolyByRef,
+	// cs_mmaps.cpp:140-187) has no Go bridge; report the navmesh as missing
+	// exactly like the C++ handler does (cs_mmaps.cpp:144).
 	s.sendSysMessage("NavMesh not loaded for current map.")
 }
 
-// handleMmapPathCommand mirrors HandleMmapPathCommand (cs_mmaps.cpp:94-140,
+// handleMmapPathCommand mirrors HandleMmapPathCommand (cs_mmaps.cpp:65-124,
 // RBAC 539). Documented-blocked: PathGenerator/dtNavMesh have no Go bridge.
 func (s *session) handleMmapPathCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMMapPath) {
 		return
 	}
-	// The C++ handler gates on the navmesh (cs_mmaps.cpp:97-101) before
-	// printing "mmap path:" (:103), so with no navmesh loaded the output
+	// The C++ handler gates on the navmesh (cs_mmaps.cpp:67-71) before
+	// printing "mmap path:" (:73), so with no navmesh loaded the output
 	// is exactly the missing report; the target-selection check is
 	// unreachable here.
 	s.sendSysMessage("NavMesh not loaded for current map.")
@@ -136,7 +140,7 @@ func (s *session) handleMmapPathCommand(ctx context.Context) {
 // mmapPathfindingEnabled mirrors DisableMgr::IsPathfindingEnabled
 // (DisableMgr.cpp:418-422): CONFIG_ENABLE_MMAPS and no DISABLE_TYPE_MMAP
 // (7) disables row for the map. For MMAP disables IsDisabledFor returns true
-// on the entry's mere presence (DisableMgr.cpp:404), so flags are ignored.
+// on the entry's mere presence (DisableMgr.cpp:404-405), so flags are ignored.
 func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool {
 	if s.server == nil || !s.server.Config.EnableMmaps {
 		return false
@@ -151,7 +155,7 @@ func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool
 }
 
 // handleMmapStatsCommand mirrors HandleMmapStatsCommand (cs_mmaps.cpp:
-// 231-278, RBAC 540): the header, pathfinding, and manager-counts lines
+// 214-260, RBAC 540): the header, pathfinding, and manager-counts lines
 // are native; the per-tile navmesh stats have no Go bridge.
 func (s *session) handleMmapStatsCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMMapStats) {
@@ -164,21 +168,22 @@ func (s *session) handleMmapStatsCommand(ctx context.Context) {
 	}
 	s.sendSysMessage(fmt.Sprintf("  global mmap pathfinding is %sabled", enabled))
 	// MMapManager::getLoadedMapsCount/getLoadedTilesCount
-	// (cs_mmaps.cpp:240) have no Go bridge, but the Go manager loads
+	// (cs_mmaps.cpp:221) have no Go bridge, but the Go manager loads
 	// nothing, so both counts are exactly 0 == the C++ output on an
 	// empty manager.
 	s.sendSysMessage(" 0 maps loaded with 0 tiles overall")
-	// The per-tile dtNavMesh stats (cs_mmaps.cpp:247-273) have no Go
+	// The per-tile dtNavMesh stats (cs_mmaps.cpp:233-258) have no Go
 	// bridge; report the navmesh as missing exactly like the C++ handler
-	// does (cs_mmaps.cpp:244).
+	// does (cs_mmaps.cpp:226).
 	s.sendSysMessage("NavMesh not loaded for current map.")
 }
 
-// handleMmapTestAreaCommand mirrors HandleMmapTestArea (cs_mmaps.cpp:280-312,
+// handleMmapTestAreaCommand mirrors HandleMmapTestArea (cs_mmaps.cpp:262-295,
 // RBAC 541): creatures within 40 yards of the invoker (alive only, same map
-// + instance — the AnyUnitInObjectRangeCheck terms), then one path
-// generation per creature. PathGenerator has no Go bridge, so the paths
-// count is C++'s per-creature attempt count, not computed paths.
+// + instance + phase, reach-extended strict distance — the
+// AnyUnitInObjectRangeCheck terms), then one path generation per creature.
+// PathGenerator has no Go bridge, so the paths count is C++'s per-creature
+// attempt count, not computed paths.
 func (s *session) handleMmapTestAreaCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandMMapTestArea) {
 		return
@@ -191,13 +196,28 @@ func (s *session) handleMmapTestAreaCommand(ctx context.Context) {
 	start := time.Now()
 	count := 0
 	if s.server != nil {
+		// AnyUnitInObjectRangeCheck (GridNotifiers.h:1050-1055) is IsAlive()
+		// && IsWithinDistInMap(u, 40): same map (motionMapLocked) + phase-mask
+		// overlap (Object.h:324-325) + _IsWithinDist (Object.cpp:1147-1167)
+		// with maxdist = 40 + own combat reach + target combat reach,
+		// strict < on the squared distance (Position.h:146-148).
+		playerPhase := s.currentPlayerPhaseMask()
+		ownReach := float64(miscPlayerCombatReach(s.player))
 		s.server.motionMu.Lock()
 		for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
 			if m == nil || m.Health == 0 {
 				continue // C++ IsAlive(): Go's health-based alive read (lua_objects.go IsAlive)
 			}
+			phase := m.PhaseMask
+			if phase == 0 {
+				phase = 1 // PHASEMASK_NORMAL, as for unset motions
+			}
+			if phase&playerPhase == 0 {
+				continue
+			}
+			maxDist := radius + ownReach + float64(m.CombatReach)
 			dx, dy, dz := float64(m.X-s.player.X), float64(m.Y-s.player.Y), float64(m.Z-s.player.Z)
-			if math.Sqrt(dx*dx+dy*dy+dz*dz) <= radius {
+			if dx*dx+dy*dy+dz*dz < maxDist*maxDist {
 				count++
 			}
 		}
