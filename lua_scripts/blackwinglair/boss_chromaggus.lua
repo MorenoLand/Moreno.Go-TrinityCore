@@ -41,17 +41,22 @@
 -- 500ms IsCasting defer on every ported timer tick (mal_ganis idiom;
 -- IsCasting live, lua_creature_events.go:1950; defer precedes picks,
 -- casts, Talks and re-arms, no re-arm consumed); no instance-script model —
--- boss admission via the luaBossAI shim (BossAI::_Reset/
--- JustEngagedWith and the DATA_CHROMAGGUS bookkeeping arms skipped);
+-- the instance SetData arms have no bearer; the boss's own
+-- BossAI::_Reset/JustEngagedWith/_JustDied bookkeeping writes ARE ported
+-- (creature:SetBossState, bridge live lua_creature_events.go:5917): ev1
+-- IN_PROGRESS (JustEngagedWith :197-199 calls the base first), ev23
+-- NOT_STARTED (Reset :190-195 calls _Reset(); alive + != DONE gate,
+-- ScriptedCreature.cpp:499-511), ev4 DONE (no JustDied override — base
+-- runs, ScriptedCreature.h:330);
 -- the go_chromaggus_lever GameObjectScript (door open + boss-state
 -- set + JustEngagedWith on lever gossip) is PORTED below
 -- (RegisterGameObjectGossipEvent, kirtonos-brazier precedent): the
--- instance SetBossState leg has no instance bridge, so the C++
--- DONE/IN_PROGRESS gate is approximated by the boss-alive + no-victim
--- gate (nil boss = dead/absent; live victim = fight already in
--- progress) — engage + door legs fire only on a fresh pull; the
--- lever's own SetFlag / SetGoState legs are unconditional in C++
--- and stay unconditional here (2026-10-26 GO-interaction strip).
+-- C++ DONE/IN_PROGRESS gate is read exactly now via
+-- boss:GetBossState(6) (bridge live lua_creature_events.go:5936) and
+-- the IN_PROGRESS write is a direct creature:SetBossState(6, 1) — the
+-- old no-victim approximation is retired; the lever's own SetFlag /
+-- SetGoState legs are unconditional in C++ and stay unconditional here
+-- (2026-10-26 GO-interaction strip).
 
 local ENTRY_CHROMAGGUS = 14020
 
@@ -270,6 +275,10 @@ end
 local function chromaggusEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_CHROMAGGUS=6
+    -- (blackwing_lair.h:37). C++ calls the base first (:199).
+    creature:SetBossState(6, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     state(guid).enraged = false
@@ -319,11 +328,22 @@ local function chromaggusLeaveCombat(event, creature)
 end
 
 local function chromaggusDied(event, creature, killer)
-    -- C++ JustDied has no AI override: timers stop, state untouched.
+    -- C++ JustDied: no override — base BossAI::JustDied
+    -- (ScriptedCreature.h:330) runs _JustDied(), writing
+    -- SetBossState(DATA_CHROMAGGUS 6, DONE). (The old "state
+    -- untouched" claim was wrong: the base runs by virtual dispatch.)
+    creature:SetBossState(6, 3)
     cancelTimers(creature:GetGUID())
 end
 
 local function chromaggusReset(event, creature)
+    -- C++ Reset (boss_chromaggus.cpp:190-195): _Reset() writes
+    -- SetBossState(DATA_CHROMAGGUS 6, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511); Go
+    -- fires ev23 on the death path too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
+        creature:SetBossState(6, 0)
+    end
     cancelTimers(creature:GetGUID())
     local st = chromaggusState[creature:GetGUID()]
     if st then
@@ -340,13 +360,15 @@ RegisterCreatureEvent(ENTRY_CHROMAGGUS, 23, chromaggusReset)
 
 -- C++ go_chromaggus_lever::OnGossipHello
 -- (boss_chromaggus.cpp:300-335): inside the boss-state gate
--- (not DONE, not IN_PROGRESS): SetBossState(IN_PROGRESS) — no
--- instance bridge, approximated by the no-victim gate below —
--- GetCreature(DATA_CHROMAGGUS) -> JustEngagedWith(player), then
--- HandleGameObject(true, door) = GO_STATE_ACTIVE 0
--- (InstanceScript.cpp:484); outside the gate, unconditionally:
--- SetFlag(GAMEOBJECT_FLAGS, NOT_SELECTABLE | IN_USE) + SetGoState
--- (GO_STATE_ACTIVE). C++ returns true (handled) == Lua true.
+-- (not DONE, not IN_PROGRESS): SetBossState(DATA_CHROMAGGUS 6,
+-- IN_PROGRESS) — direct write now (bridge live
+-- lua_creature_events.go:5917) — then GetCreature(DATA_CHROMAGGUS)
+-- -> JustEngagedWith(player), then HandleGameObject(true, door) =
+-- GO_STATE_ACTIVE 0 (InstanceScript.cpp:484); outside the gate,
+-- unconditionally: SetFlag(GAMEOBJECT_FLAGS, NOT_SELECTABLE | IN_USE)
+-- + SetGoState (GO_STATE_ACTIVE). C++ returns true (handled) == Lua
+-- true. FindNearestCreature stands in for the instance GetCreature
+-- (live-only twin: nil = dead/absent).
 local GO_CHROMAGGUS_LEVER = 179148 -- blackwing_lair.h:72
 local GO_CHROMAGGUS_DOOR = 179116 -- blackwing_lair.h:73
 local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
@@ -356,7 +378,8 @@ local GO_STATE_ACTIVE = 0 -- netherspite precedent: READY 1, ACTIVE 0
 
 local function onChromaggusLeverGossip(_, player, go)
     local boss = go:FindNearestCreature(ENTRY_CHROMAGGUS, 100)
-    if boss and not boss:GetVictim() then
+    if boss and boss:GetBossState(6) ~= 3 and boss:GetBossState(6) ~= 1 then
+        boss:SetBossState(6, 1) -- C++ lever: state write before engage
         boss:EngageWithTarget(player)
         local door = boss:FindNearestGameObject(GO_CHROMAGGUS_DOOR, 100)
         if door then

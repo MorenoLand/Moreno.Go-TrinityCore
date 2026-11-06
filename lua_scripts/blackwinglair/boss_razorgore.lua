@@ -34,11 +34,15 @@
 -- 500ms IsCasting defer on every ported phase-two timer tick
 -- (mal_ganis idiom; IsCasting live, lua_creature_events.go:1950;
 -- defer precedes target picks, casts and re-arms, no re-arm
--- consumed); no instance-script model — boss admission via the luaBossAI shim
--- (_Reset/_JustDied/BossAI::JustEngagedWith and the
--- DATA_RAZORGORE_THE_UNTAMED bookkeeping arms skipped); the
--- Reset/JustDied instance->SetData(DATA_EGG_EVENT, NOT_STARTED) arms
--- have no bearer; RemoveAllAuras/SetFullHealth in DoChangePhase are PORTED
+-- consumed); no instance-script model — the instance SetData /
+-- SetBossState-override arms have no bearer; the boss's own
+-- _Reset/_JustDied/BossAI::JustEngagedWith bookkeeping writes ARE
+-- ported (creature:SetBossState, bridge live lua_creature_events.go:5917):
+-- ev1 IN_PROGRESS (no JustEngagedWith override — base runs,
+-- ScriptedCreature.h:329), ev23 NOT_STARTED (Reset :84-89 calls _Reset();
+-- alive + != DONE gate, ScriptedCreature.cpp:499-511), ev4 DONE (JustDied
+-- :92-97 calls _JustDied()). The Reset/JustDied
+-- instance->SetData(DATA_EGG_EVENT, NOT_STARTED) arms have no bearer; RemoveAllAuras/SetFullHealth in DoChangePhase are PORTED
 -- (RemoveAllAuras live, lua_creature_events.go:1523; SetFullHealth rides
 -- SetHealth(GetMaxHealth())) — see doChangePhase below; the
 -- go_orb_of_domination OnGossipHello (instance
@@ -182,6 +186,11 @@ end
 local function razorgoreEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_RAZORGORE_THE_UNTAMED=0
+    -- (blackwing_lair.h:31). No JustEngagedWith override in C++ — the
+    -- base runs by virtual dispatch (ScriptedCreature.h:329).
+    creature:SetBossState(0, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     secondPhase[guid] = nil
@@ -206,16 +215,26 @@ local function razorgoreLeaveCombat(event, creature)
 end
 
 local function razorgoreDied(event, creature, killer)
-    -- C++ JustDied: _JustDied bookkeeping has no bridge; the
-    -- SetData(DATA_EGG_EVENT, NOT_STARTED) arm has no bearer.
+    -- C++ JustDied (boss_razorgore.cpp:92-97): _JustDied() writes
+    -- SetBossState(DATA_RAZORGORE_THE_UNTAMED 0, DONE) first, then
+    -- Talk(SAY_DEATH); the SetData(DATA_EGG_EVENT, NOT_STARTED) arm
+    -- has no bearer. The instance OnUnitDeath DONE path
+    -- (instance_blackwing_lair.cpp:233-237) stays instance-side — the
+    -- boss's own ev4 leg covers a normal kill.
+    creature:SetBossState(0, 3)
     creature:Talk(3) -- SAY_DEATH
     razorgoreResetState(creature:GetGUID())
 end
 
 local function razorgoreReset(event, creature)
-    -- C++ Reset's _Reset bookkeeping and SetData(DATA_EGG_EVENT,
-    -- NOT_STARTED) have no bridges — only the timer cancel and the
-    -- phase flag clear are modeled.
+    -- C++ Reset (boss_razorgore.cpp:84-89): _Reset() writes
+    -- SetBossState(DATA_RAZORGORE_THE_UNTAMED 0, NOT_STARTED), alive-
+    -- gated and skipped when already DONE (ScriptedCreature.cpp:499-511);
+    -- Go fires ev23 on the death path too, hence the gate. The
+    -- SetData(DATA_EGG_EVENT, NOT_STARTED) arm has no bearer.
+    if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0)
+    end
     razorgoreResetState(creature:GetGUID())
 end
 

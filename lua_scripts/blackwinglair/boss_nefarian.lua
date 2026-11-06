@@ -47,7 +47,8 @@
 -- Talk(12)/self 23414, death knight Talk(13)/self 49576; the re-arm
 -- fires unconditionally (C++-exact). OnTargetDied: 1-in-5
 -- (rand32() % 5 == 0, C++-exact) -> Talk(SAY_SLAY=2, victim).
--- OnDied: Talk(SAY_DEATH=3). Sub-20%: C++ UpdateAI checks
+-- OnDied: SetBossState(DATA_NEFARIAN 7, DONE) (_JustDied, :439-441) +
+-- Talk(SAY_DEATH=3). Sub-20%: C++ UpdateAI checks
 -- !Phase3 && HealthBelowPct(20) every tick — modeled on the
 -- pre-damage hook as post-damage health strictly below 20% (moroes
 -- convention), once, Talk(SAY_RAISE_SKELETONS=1); the bone-construct
@@ -59,9 +60,17 @@
 -- :487/:566) are ported as a 500ms IsCasting defer on every ported
 -- timer tick (mal_ganis idiom; IsCasting live,
 -- lua_creature_events.go:1950; defer precedes target picks, casts,
--- Talks and re-arms, no re-arm consumed); no instance-script model — boss admission via the luaBossAI shim
--- (BossAI::_Reset/JustEngagedWith, _JustDied, and the
--- DATA_NEFARIAN bookkeeping arms skipped); the gossip hello text
+-- Talks and re-arms, no re-arm consumed); no instance-script model —
+-- the instance SetData / SetBossState-override arms have no bearer;
+-- the bosses' own SetBossState legs ARE ported (bridge live
+-- lua_creature_events.go:5917): Nefarius BeginEvent :203-207 calls
+-- _JustEngagedWith -> IN_PROGRESS, his Reset :182-199 calls _Reset()
+-- only when no live Nefarian is found in 1000 yd -> NOT_STARTED, and
+-- his death (no JustDied override — base runs, ScriptedCreature.h:330)
+-- -> DONE; Nefarian JustDied :439-441 calls _JustDied() -> DONE.
+-- Nefarian ev1/ev23 stay out C++-exact: JustEngagedWith :428 never
+-- calls the base, and Reset :418-421 never calls _Reset(). The gossip
+-- hello text
 -- comes from the DB (menu 6045) and is approximated — the real text
 -- lives in the DB, not in C++ (vaelastrasz convention); the C++
 -- BeginEvent faction/stand-state/barrier/immune-to-PC/NPC-flag and
@@ -87,13 +96,13 @@
 -- 10339, EVENT_SUCCESS_1/2 portcullis gameobjects 164726/175186 +
 -- DespawnOrUnsummon, FindNearestGameObject) are not modeled.
 -- FindNearestCreature IS bridged (lua_creature_events.go:1237) — the
--- stale claim lumped it with FindNearestGameObject — but its two
--- consuming arms stay out: Reset()'s FindNearestCreature(NPC_
--- NEFARIAN 11583, 1000.0f, true) gates only the instance _Reset()
--- bookkeeping call (boss_nefarian.cpp:188, instance-blocked), and
--- EVENT_CHAOS_1's FindNearestCreature(NPC_GYTH 10339, 75.0f, true)
--- + SetFacingToObject leg (boss_nefarian.cpp:263-267) is
--- unreachable — no SetData bearer, no MovePath bridge. FindNearest_
+-- stale claim lumped it with FindNearestGameObject — and Reset()'s
+-- FindNearestCreature(NPC_NEFARIAN 11583, 1000.0f, true) gate IS
+-- ported now (see onNefariusReset): it guards the _Reset()
+-- NOT_STARTED write (boss_nefarian.cpp:187-189). EVENT_CHAOS_1's
+-- FindNearestCreature(NPC_GYTH 10339, 75.0f, true) + SetFacingToObject
+-- leg (boss_nefarian.cpp:263-267) stays out — unreachable, no SetData
+-- bearer, no MovePath bridge. FindNearest_
 -- GameObject IS bridged (lua_creature_events.go:2072; GO UseDoorOrButton /
 -- SetGoState / GetGoState too, :1127/:1095/:1080) — the stale "no bridge"
 -- claim is retracted — but the portcullis arms stay out: they fire only
@@ -347,6 +356,11 @@ end
 -- AttackStart arms have no bridge. Talk(SAY_GAMESBEGIN_2), then arm the
 -- fight.
 local function beginEvent(creature, guid)
+    -- C++ BeginEvent (boss_nefarian.cpp:203-207) calls
+    -- _JustEngagedWith(target) FIRST, writing SetBossState(DATA_NEFARIAN
+    -- 7, IN_PROGRESS) (ScriptedCreature.cpp:527; the CheckRequiredBosses
+    -- gate has no case for id 7, so it always passes).
+    creature:SetBossState(7, 1)
     local st = nefariusState[guid]
     if not st then
         nefariusInit(guid)
@@ -424,6 +438,15 @@ local function onNefariusReset(event, creature)
     -- SetVisible(true) rides the creature:SetVisible bridge
     -- (Unit::SetVisible, Unit.cpp:8656) in C++ order (first).
     if creature:GetMapId() == 469 then
+        -- C++ Reset (boss_nefarian.cpp:187-189): _Reset() only when no
+        -- live Nefarian is found within 1000 yd — the _Reset write is
+        -- SetBossState(DATA_NEFARIAN 7, NOT_STARTED), alive-gated and
+        -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+        if not creature:FindNearestCreature(ENTRY_NEFARIAN, 1000) then
+            if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
+                creature:SetBossState(7, 0)
+            end
+        end
         creature:SetVisible(true)
         -- C++ SetUInt32Value(UNIT_NPC_FLAGS, 1): whole-value set to the
         -- GOSSIP bit, bridged via SetNPCFlags on the event surface
@@ -436,6 +459,18 @@ local function onNefariusReset(event, creature)
         creature:SetStandState(UNIT_STAND_STATE_SIT_HIGH_CHAIR)
         creature:RemoveAura(SPELL_NEFARIANS_BARRIER)
     end
+end
+
+-- C++ JustDied: no override in boss_victor_nefariusAI — base
+-- BossAI::JustDied (ScriptedCreature.h:330) runs _JustDied(), writing
+-- SetBossState(DATA_NEFARIAN 7, DONE) (ScriptedCreature.cpp:513-519).
+-- The throne arms do NOT run on death (Reset never runs on death);
+-- only the timer cancel + state clear ride along (ev4 used to share
+-- onNefariusReset — the throne arms on the death path were unfaithful).
+local function onNefariusDied(event, creature)
+    creature:SetBossState(7, 3)
+    cancelTimers(creature:GetGUID())
+    nefariusInit(creature:GetGUID())
 end
 
 -- Nefarian: C++ EVENT_SHADOWFLAME — non-triggered DoCastVictim 12s.
@@ -562,6 +597,10 @@ end
 -- EVENT_TAILLASH schedule line is commented out upstream — the tail
 -- lash 23364 case is dead code and stays omitted C++-exact.
 local function nefarianEnterCombat(event, creature, target)
+    -- No SetBossState(IN_PROGRESS): C++ JustEngagedWith
+    -- (boss_nefarian.cpp:428) never calls the base, so the boss state
+    -- is not written on engage (the Nefarius BeginEvent leg already
+    -- wrote IN_PROGRESS for id 7).
     local guid = creature:GetGUID()
     cancelTimers(guid)
     nefarianState[guid] = { phase3 = false }
@@ -624,8 +663,10 @@ local function nefarianLeaveCombat(event, creature)
     nefarianClear(creature:GetGUID())
 end
 
--- C++ JustDied: Talk(SAY_DEATH).
+-- C++ JustDied (boss_nefarian.cpp:439-441): _JustDied() writes
+-- SetBossState(DATA_NEFARIAN 7, DONE) first, then Talk(SAY_DEATH).
 local function nefarianDied(event, creature, killer)
+    creature:SetBossState(7, 3)
     creature:Talk(SAY_DEATH)
     nefarianClear(creature:GetGUID())
 end
@@ -638,7 +679,10 @@ local nefarianDespawn = {}
 -- NPC_BONE_CONSTRUCT 14605 @ 500.0f. The 30s one-shot armed in Reset is the
 -- DespawnTimer twin; ev24 is the canDespawn latch. Fires once (C++ refires
 -- every UpdateAI tick, but SetBossState FAIL + the despawn loop are
--- idempotent once the constructs are gone).
+-- idempotent once the constructs are gone). The instance SetBossState
+-- override's FAIL follow-on (15min EVENT_RESPAWN_NEFARIUS +
+-- SetBossState NOT_STARTED, instance_blackwing_lair.cpp:196-199) stays
+-- instance-side — no instance-script bridge.
 local function nefarianDespawnCheck(creature, guid)
     local st = nefarianDespawn[guid]
     if not st or st.done or not st.ready or not st.home then
@@ -668,7 +712,8 @@ local function nefarianReachedHome(_, creature)
 end
 
 -- C++ boss_nefarianAI::Reset (boss_nefarian.cpp:418-421) = Initialize():
--- Phase3/canDespawn latch clears. The dragon's JustReachedHome
+-- Phase3/canDespawn latch clears. Reset never calls _Reset(), so there
+-- is no NOT_STARTED write here. The dragon's JustReachedHome
 -- (boss_nefarian.cpp:423-426) is canDespawn = true, feeding the
 -- DespawnTimer/FAIL arm ported below (ev24 registration, tick 236).
 local function nefarianReset(event, creature)
@@ -693,9 +738,13 @@ end
 RegisterCreatureGossipEvent(ENTRY_VICTOR_NEFARIUS, 1, onNefariusGossipHello)
 RegisterCreatureGossipEvent(ENTRY_VICTOR_NEFARIUS, 2, onNefariusGossipSelect)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 2, onNefariusReset)
-RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 4, onNefariusReset)
+RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 4, onNefariusDied)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 23, onNefariusReset)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 1, function(_, creature)
+    -- C++ engage: no JustEngagedWith override — base runs
+    -- (ScriptedCreature.h:329), writing IN_PROGRESS; idempotent with
+    -- beginEvent's write (the event is the only way combat starts).
+    creature:SetBossState(7, 1)
     creature:SetMeleeAttack(false) -- boss_nefarian.cpp:248: custom UpdateAI never calls DoMeleeAttackIfReady (event machine in C++, never melees)
 end)
 -- C++ boss_victor_nefariusAI::JustReachedHome (boss_nefarian.cpp:200-203)

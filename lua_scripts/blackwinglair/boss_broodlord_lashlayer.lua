@@ -29,9 +29,14 @@
 -- Deviations from C++: boss_broodlordAI overrides UpdateAI
 -- (boss_broodlord_lashlayer.cpp:88-129) with NO casting gate, so the
 -- BossAI base gate (ScriptedCreature.cpp:578/:584) never runs for
--- this boss — the ported timer ticks fire ungated, C++-exact; no instance-script model — boss admission via the
--- luaBossAI shim (_Reset/BossAI::JustEngagedWith and the
--- DATA_BROODLORD_LASHLAYER bookkeeping arms skipped); the
+-- this boss — the ported timer ticks fire ungated, C++-exact; no instance-script model —
+-- the instance SetData arms have no bearer; the boss's own
+-- _Reset/BossAI::JustEngagedWith/_JustDied bookkeeping writes ARE ported
+-- (creature:SetBossState, bridge live lua_creature_events.go:5917): ev1
+-- IN_PROGRESS (JustEngagedWith :66-68 calls the base first), ev23
+-- NOT_STARTED (no Reset override — base runs, ScriptedCreature.h:328;
+-- alive + != DONE gate, ScriptedCreature.cpp:499-511), ev4 DONE
+-- (JustDied :78-86 calls _JustDied() first); the
 -- knockback-arm ModifyThreatByPercent(victim, -50) PORTED 2026-10-24
 -- (threat bridge live) — the cast still lands and the 15-30s re-arm is kept;
 -- the EVENT_CHECK home-distance > 150 yd leash check: gate +
@@ -171,6 +176,10 @@ end
 local function broodlordEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_BROODLORD_LASHLAYER=2
+    -- (blackwing_lair.h:33). C++ calls the base first (:68).
+    creature:SetBossState(2, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
@@ -206,8 +215,9 @@ local function broodlordDied(event, creature, killer)
     -- per device; Deactivate() = SetGoState(ACTIVE) + SetFlag
     -- NOT_SELECTABLE (the _active latch + CancelEvent legs are moot:
     -- the device cast machine itself is unported, and both writes
-    -- are idempotent). The _JustDied() instance bookkeeping stays
-    -- out (no instance-script model).
+    -- are idempotent). _JustDied() runs first in C++ (:80), writing
+    -- SetBossState(DATA_BROODLORD_LASHLAYER 2, DONE).
+    creature:SetBossState(2, 3)
     for _, device in ipairs(creature:GetGameObjectsInGrid(GO_SUPPRESSION_DEVICE, 200)) do
         device:SetGoState(GO_STATE_ACTIVE)
         device:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
@@ -216,6 +226,14 @@ local function broodlordDied(event, creature, killer)
 end
 
 local function broodlordReset(event, creature)
+    -- C++ Reset: no override — base BossAI::Reset
+    -- (ScriptedCreature.h:328) runs _Reset(), writing
+    -- SetBossState(DATA_BROODLORD_LASHLAYER 2, NOT_STARTED), alive-
+    -- gated and skipped when already DONE (ScriptedCreature.cpp:499-511);
+    -- Go fires ev23 on the death path too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
+        creature:SetBossState(2, 0)
+    end
     broodlordResetState(creature:GetGUID())
 end
 

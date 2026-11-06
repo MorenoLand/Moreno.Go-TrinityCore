@@ -74,12 +74,19 @@
 -- YELL_FREE_OF_BONDS), clear flags, EVENT_ENTER_COMBAT at 2s)
 -- (instance / SetData / SelectTarget precedents: instance / the_beast /
 -- draenei_survivor).
--- Reset's _Reset() and JustDied's _JustDied() are internal
--- BossAI machinery covered by the cancel/re-arm on combat events
--- (halycon precedent); JustDied's UpdateRunes(GO_STATE_READY) is
--- PORTED below via creature:FindNearestGameObject (7 distinct rune
--- entries; C++ used instance GetGuidData). SetBossState(DONE) stays
--- out (instance precedent).
+-- Reset's _Reset() and JustDied's _JustDied() are NOT called in C++
+-- (Reset :83-99 schedules EVENT_RESPAWN instead; JustDied :118-124
+-- writes the boss state directly) — the cancel/re-arm on combat events
+-- is the _Reset/_JustDied bookkeeping equivalent. JustDied's
+-- UpdateRunes(GO_STATE_READY) is PORTED below via
+-- creature:FindNearestGameObject (7 distinct rune entries; C++ used
+-- instance GetGuidData), followed by the direct SetBossState(DONE)
+-- write (DATA_PYROGAURD_EMBERSEER = 9; live — instance
+-- SetBossNumber(23), doors + OnGameObjectCreate read state 9; gyth
+-- convention). No ev1 IN_PROGRESS leg: C++ JustEngagedWith never calls
+-- the BossAI base — IN_PROGRESS is written only by the unported
+-- EVENT_PLAYER_CHECK machine. The ev23 NOT_STARTED write is
+-- EVENT_RESPAWN (5s timer, unconditional — no _Reset != DONE gate).
 
 local SPELL_FIRE_SHIELD = 13376
 local SPELL_FIRENOVA = 23462
@@ -87,6 +94,7 @@ local SPELL_FLAMEBUFFET = 23341
 local SPELL_PYROBLAST = 17274
 
 local ENTRY_PYROGAURD_EMBERSEER = 9816
+local DATA_PYROGAURD_EMBERSEER = 9 -- blackrock_spire.h:39
 local EMBERSEER_RUNES = {175266, 175267, 175268, 175269, 175270, 175271, 175272} -- blackrock_spire.h:115-121
 
 local timers = {}
@@ -192,13 +200,30 @@ local function onCombatEnd(event, creature)
     -- first in arm order, before events.Reset and the aura cleanup.
     creature:SetFlag(59, 0x2000000)
     creature:SetFlag(59, 0x100)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
     if event == 4 then
-        -- C++ JustDied: UpdateRunes(GO_STATE_READY) (illidan event-4 precedent).
+        -- C++ JustDied (boss_pyroguard_emberseer.cpp:118-124):
+        -- UpdateRunes(GO_STATE_READY) first, then the direct
+        -- instance->SetBossState(DATA_PYROGAURD_EMBERSEER, DONE) write
+        -- (illidan event-4 precedent for the rune leg).
         for _, entry in ipairs(EMBERSEER_RUNES) do
             local rune = creature:FindNearestGameObject(entry, 100.0)
             if rune then rune:SetGoState(1) end -- GO_STATE_READY
         end
+        creature:SetBossState(DATA_PYROGAURD_EMBERSEER, 3) -- DONE
+    elseif event == 23 and creature:IsAlive() then
+        -- C++ EVENT_RESPAWN (boss_pyroguard_emberseer.cpp:183-188):
+        -- Reset schedules it 5s out; it writes SetBossState(NOT_STARTED)
+        -- unconditionally (no _Reset != DONE gate — Reset never calls
+        -- _Reset). The companion SetData(DATA_BLACKHAND_INCARCERATOR, 1)
+        -- leg stays out (no instance SetData bridge). Alive-gated: Go
+        -- fires ev23 on the death path too, and C++ JustDied owns DONE.
+        -- Cancelled on re-engage by onEnterCombat's cancelTimers,
+        -- matching C++ swallowing the event in the combat branch.
+        schedule(guid, "respawn", 5000, function()
+            creature:SetBossState(DATA_PYROGAURD_EMBERSEER, 0) -- NOT_STARTED
+        end)
     end
 end
 

@@ -18,8 +18,13 @@
 -- 500ms IsCasting defer on every ported timer tick (mal_ganis idiom;
 -- IsCasting live, lua_creature_events.go:1950; defer precedes picks,
 -- casts and re-arms, no re-arm consumed); no instance-script model —
--- boss admission via the luaBossAI shim (BossAI::JustEngagedWith and
--- the DATA_FIREMAW bookkeeping arms skipped); the wingbuffet-arm
+-- the instance SetData arms have no bearer; the boss's own
+-- BossAI::JustEngagedWith/_Reset/_JustDied bookkeeping writes ARE ported
+-- (creature:SetBossState, bridge live lua_creature_events.go:5917): ev1
+-- IN_PROGRESS (JustEngagedWith :45-47 calls the base first), ev23
+-- NOT_STARTED (no Reset override — base runs, ScriptedCreature.h:328;
+-- alive + != DONE gate, ScriptedCreature.cpp:499-511), ev4 DONE (no
+-- JustDied override — base runs, ScriptedCreature.h:330); the wingbuffet-arm
 -- GetThreat + ModifyThreatByPercent(victim, -75) PORTED 2026-10-24
 -- (threat bridge live) — the cast lands and the 30s re-arm is kept.
 
@@ -113,6 +118,10 @@ end
 local function firemawEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_FIREMAW=3 (blackwing_lair.h:34).
+    -- C++ calls the base first (:47).
+    creature:SetBossState(3, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "shadowflame", math.random(10000, 20000), function()
@@ -135,10 +144,22 @@ local function firemawLeaveCombat(event, creature)
 end
 
 local function firemawDied(event, creature, killer)
+    -- C++ JustDied: no override — base BossAI::JustDied
+    -- (ScriptedCreature.h:330) runs _JustDied(), writing
+    -- SetBossState(DATA_FIREMAW 3, DONE).
+    creature:SetBossState(3, 3)
     firemawResetState(creature:GetGUID())
 end
 
 local function firemawReset(event, creature)
+    -- C++ Reset: no override — base BossAI::Reset
+    -- (ScriptedCreature.h:328) runs _Reset(), writing
+    -- SetBossState(DATA_FIREMAW 3, NOT_STARTED), alive-gated and skipped
+    -- when already DONE (ScriptedCreature.cpp:499-511); Go fires ev23 on
+    -- the death path too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
+        creature:SetBossState(3, 0)
+    end
     firemawResetState(creature:GetGUID())
 end
 

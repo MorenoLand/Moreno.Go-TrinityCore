@@ -53,9 +53,13 @@
 -- defer precedes target picks, casts and re-arms, no re-arm
 -- consumed). The out-of-combat speech machine stays ungated per C++
 -- (the !UpdateVictim speech branch :133-162 has no casting gate); no instance-script model —
--- boss admission via the luaBossAI shim (_Reset/BossAI::
--- JustEngagedWith and the DATA_VAELASTRAZ_THE_CORRUPT bookkeeping
--- arms skipped); the
+-- the instance SetData arms have no bearer; the boss's own
+-- _Reset/BossAI::JustEngagedWith/_JustDied bookkeeping writes ARE ported
+-- (creature:SetBossState, bridge live lua_creature_events.go:5917): ev1
+-- IN_PROGRESS (JustEngagedWith :96-98 calls the base first), ev23
+-- NOT_STARTED (Reset :88-94 calls _Reset(); alive + != DONE gate,
+-- ScriptedCreature.cpp:499-511), ev4 DONE (no JustDied override — base
+-- runs, ScriptedCreature.h:330); the
 -- SetFaction(FACTION_DRAGONFLIGHT_BLACK) at speech_4 is ported (bridge:
 -- lua_creature_events.go:1208; the old "no bridge" claim was stale); the
 -- ctor SetFaction(FACTION_FRIENDLY) spawn-state leg is DB-template-driven
@@ -327,6 +331,10 @@ end
 local function onEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_VAELASTRAZ_THE_CORRUPT=1
+    -- (blackwing_lair.h:32). C++ calls the base first (:98).
+    creature:SetBossState(1, 1)
     local guid = creature:GetGUID()
     -- Entering combat drops pending speech events C++-exact (the C++
     -- combat branch consumes unmatched speech events without acting).
@@ -369,6 +377,10 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onDied(event, creature, killer)
+    -- C++ JustDied: no override — base BossAI::JustDied
+    -- (ScriptedCreature.h:330) runs _JustDied(), writing
+    -- SetBossState(DATA_VAELASTRAZ_THE_CORRUPT 1, DONE).
+    creature:SetBossState(1, 3)
     cancelTimers(creature:GetGUID())
 end
 
@@ -392,8 +404,15 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onReset(event, creature)
-    -- C++ Reset: SetStandState(UNIT_STAND_STATE_DEAD = 7).
-    -- Initialize() also clears HasYelled (C++-exact).
+    -- C++ Reset (boss_vaelastrasz.cpp:88-94): _Reset() writes
+    -- SetBossState(DATA_VAELASTRAZ_THE_CORRUPT 1, NOT_STARTED), alive-
+    -- gated and skipped when already DONE (ScriptedCreature.cpp:499-511);
+    -- Go fires ev23 on the death path too, hence the gate. Then
+    -- SetStandState(UNIT_STAND_STATE_DEAD = 7); Initialize() also
+    -- clears HasYelled (C++-exact).
+    if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
+        creature:SetBossState(1, 0)
+    end
     local guid = creature:GetGUID()
     creature:SetStandState(7)
     hasYelled[guid] = false
