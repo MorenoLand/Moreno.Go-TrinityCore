@@ -18484,8 +18484,9 @@ func init() {
 	// Evocate — joins the SpellHit-15-never-fires queue);
 	// spell_urom_frostbomb AuraScript joins the
 	// no-AuraScript-bridge queue (keristrasza precedent); the
-	// instance OnCreatureCreate SetPhaseMask leg has no instance
-	// bridge.
+	// instance OnCreatureCreate SetPhaseMask leg PORTED 2026-11-05
+	// in lua_scripts/northrend/instance_oculus.lua (ON_CREATURE_CREATE
+	// DONE-gated leg; SetBossState DONE legs ride the ON_UPDATE poll).
 	RegisterLuaBoss("boss_urom", 27655)
 	// Varos Cloudstrider (27447), The Oculus —
 	// lua_scripts/northrend/boss_varos.lua.
@@ -18497,9 +18498,12 @@ func init() {
 	// base-first; the DoCast(me, SPELL_DEATH_SPELL, true) leg stays out —
 	// summon delivery leg, no SPELL_EFFECT_SUMMON bridge).
 	// Documented-only: InitializeAI DoCast(SPELL_CENTRIFUGE_SHIELD
-	// 50053) gated on GetBossState(DATA_DRAKOS) != DONE — gate now
-	// bridged, leg stays out on the missing instance OnUnitDeath
-	// removal path (last construct death -> RemoveAllAuras);
+	// 50053) gated on GetBossState(DATA_DRAKOS) != DONE — PORTED
+	// 2026-11-05 (ev5 spawn, varosSpawn); its removal path ports
+	// the same tick in lua_scripts/northrend/
+	// npc_centrifuge_construct.lua (ev4 JustDied: last construct
+	// death -> RemoveAllAuras) + instance_oculus.lua
+	// (ON_CREATURE_CREATE counter ++);
 	// Reset (the _Reset() SetBossState(NOT_STARTED, != DONE-gated)
 	// leg is PORTED 2026-11-05; events.ScheduleEvent
 	// EVENT_AMPLIFY_MAGIC / EVENT_ENERGIZE_CORES_VISUAL /
@@ -18557,23 +18561,59 @@ func init() {
 	// achievement bridge — the kelthuzad / thaddius precedent).
 	RegisterLuaBoss("boss_eregos", 27656)
 
+	// Centrifuge Construct (27641), The Oculus —
+	// lua_scripts/northrend/npc_centrifuge_construct.lua.
+	// No C++ creature script for this entry: the leg lives in the
+	// instance script's OnUnitDeath (instance_oculus.cpp:126-136)
+	// and ports as the construct's own ev4 JustDied (same death
+	// instant, same entry gate): construct counter -- +
+	// UpdateWorldState(AMOUNT, count) + Varos RemoveAllAuras at 0.
+	// The create-time counter ++ leg ports in
+	// lua_scripts/northrend/instance_oculus.lua (ON_CREATURE_CREATE).
+	RegisterLuaBoss("npc_centrifuge_construct", 27641)
+
+	// Verdisa / Belgaristrasz / Eternos (27657/27658/27659) and the
+	// Ruby / Emerald / Amber drake vehicles (27756/27692/27755),
+	// The Oculus — lua_scripts/northrend/oculus.lua.
+	// Ported arms (C++-exact): gossip essence swap (select hook
+	// only — the DB menus 9573/9574/9575 load by default, a hello
+	// hook would veto them); drake SpellHit GPS whisper chain
+	// (ev14, creator latched at summon); drake IsSummonedBy
+	// (ev22: Eregos-IN_PROGRESS despawn, facing, ride-que cast,
+	// MoveTo land + arrival-poll SetDisableGravity(false));
+	// spell_oculus_stop_time apply (AuraEvent 2: 5x shock charge).
+	// The ride-que periodic aura was already ported in the same
+	// file. Documented-only: image of Belgaristrasz (entry-blocked,
+	// no C++ summon, no DB row, two web searches empty);
+	// PassengerBoarded + UpdateAI whisper machine (no bridge);
+	// the remaining SpellScripts/AuraScripts (no SpellScript
+	// bridge, no aura proc/calc-amount twins).
+	RegisterLuaBoss("npc_verdisa_beglaristrasz_eternos", 27657)
+	RegisterLuaBoss("npc_verdisa_beglaristrasz_eternos", 27658)
+	RegisterLuaBoss("npc_verdisa_beglaristrasz_eternos", 27659)
+	RegisterLuaBoss("npc_ruby_emerald_amber_drake", 27756)
+	RegisterLuaBoss("npc_ruby_emerald_amber_drake", 27692)
+	RegisterLuaBoss("npc_ruby_emerald_amber_drake", 27755)
+
 	// Malygos (28859), Eye of Eternity —
 	// lua_scripts/northrend/boss_malygos.lua.
-	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_START_P_ONE 1)
-	// (the setActive / CheckRequiredBosses / EnterEvadeMode /
-	// SetBossState / DoCast SPELL_BERSERK / DoStartTimedAchievement
-	// legs have no bridges — the tharon_ja BossAI-bookkeeping
-	// precedent); JustDied Talk(SAY_DEATH 17) (the _JustDied
-	// bookkeeping has no bridge; the gift-box-bunny GUID ->
-	// SummonGameObject GO_HEART_OF_MAGIC legs, the NPC_ALEXSTRASZA
-	// 32295 summon, and the 5s DespawnOrUnsummon have no instance /
-	// summon / despawn bridges — tharon_ja precedent).
+	// Ported arms (C++-exact): JustEngagedWith SetBossState(IN_PROGRESS)
+	// (state before Talk + DoCast SPELL_BERSERK, C++ order) +
+	// Talk(SAY_START_P_ONE 1) (the setActive / CheckRequiredBosses /
+	// EnterEvadeMode / DoStartTimedAchievement legs have no bridges —
+	// the tharon_ja BossAI-bookkeeping precedent); JustDied
+	// SetBossState(DONE) (the _JustDied twin, state first) +
+	// Talk(SAY_DEATH 17) + gift-box-bunny SummonGameObject
+	// GO_HEART_OF_MAGIC via the instanceData bind
+	// (instance_eye_of_eternity.lua) + NPC_ALEXSTRASZA 32295 summon
+	// + 5s DespawnOrUnsummon (all PORTED 2026-11-05).
 	// Documented-only: KilledUnit (player-gated Talk(SAY_KILLED_PLAYER_P_ONE 3 /
 	// P_TWO 8 / P_THREE 15) selected by the AI's internal _phase with a 5s
 	// kill-spam filter — no phase bridge, so no faithful port);
 	// Reset / Initialize (gravity / immunity / flags / flight-speed legs,
-	// SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE, SetBossState NOT_STARTED —
-	// no instance / phase / react-state bridges); the ~60-action DoAction
+	// SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE + SetBossState NOT_STARTED
+	// (!= DONE-gated, _Reset() position first in C++ Reset — PORTED
+	// 2026-11-05); the ~60-action DoAction
 	// machine (land-encounter start, platform-destroy intro, vortex legs,
 	// surge-of-power legs, respawn handling — ev38 dispatch bridged; sender instance ProcessEvent EVENT_FOCUSING_IRIS
 	// unported (instance_eye_of_eternity.cpp:173); motion / instance drivers

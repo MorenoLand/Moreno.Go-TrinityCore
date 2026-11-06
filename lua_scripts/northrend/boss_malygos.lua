@@ -42,11 +42,13 @@
 -- OnDied. No timers in the ported arms; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_START_P_ONE 1) +
+-- JustEngagedWith — SetBossState(IN_PROGRESS) + Talk(SAY_START_P_ONE 1) +
 -- DoCast(SPELL_BERSERK 60670) (event 1; the setActive /
--- CheckRequiredBosses / EnterEvadeMode / SetBossState /
+-- CheckRequiredBosses / EnterEvadeMode /
 -- DoStartTimedAchievement legs have no bridges —
--- the tharon_ja BossAI-bookkeeping precedent). The berserk is a
+-- the tharon_ja BossAI-bookkeeping precedent; the state leg is
+-- PORTED 2026-11-05 in malygosEnterCombat, C++ order: state
+-- before Talk + berserk). The berserk is a
 -- non-triggered self-cast at engage (1-arg DoCast, UnitAI.cpp default
 -- target self) -- the aura carries the 10-min timer itself.
 -- KilledUnit — C++-GATED on who->GetTypeId() == TYPEID_PLAYER,
@@ -67,14 +69,13 @@
 -- 14 once per hit target — the true C++ DoDamageAndTriggers twin — so
 -- this is 1:1 with the C++ per-hit SpellHit (the earlier per-effect
 -- caveat is retracted).
--- JustDied — Talk(SAY_DEATH 17) (event 4; the _JustDied
--- bookkeeping has no bridge — tharon_ja precedent; the
--- GetGuidData DATA_GIFT_BOX_BUNNY_GUID -> SummonGameObject
--- GO_HEART_OF_MAGIC legs and the NPC_ALEXSTRASZA 32295 summon
--- are instance-resolution blocked — the GetGuidData leg has no
--- bridge; creature:SummonGameObject / creature:SummonCreature
--- are bridged (lua_creature_events.go:664/:774), but the summoner
--- itself is unresolvable without the instance bridge. Documented-only.
+-- JustDied — SetBossState(DONE) + Talk(SAY_DEATH 17) (event 4; the
+-- _JustDied bookkeeping is the state leg, PORTED 2026-11-05 in
+-- malygosDied, C++ order: state first; the gift-box-bunny
+-- SummonGameObject GO_HEART_OF_MAGIC leg is PORTED the same tick
+-- via the instanceData.giftBoxBunny bind
+-- (instance_eye_of_eternity.lua) — the GetGuidData claim below
+-- is stale; the NPC_ALEXSTRASZA 32295 summon is ported.
 -- The 5s
 -- DespawnOrUnsummon IS ported (malygosDied below — stale
 -- "no despawn bridge" retracted; creature:Despawn() is bridged,
@@ -83,9 +84,12 @@
 -- Reset / Initialize (gravity / immunity / flags / flight-speed
 -- legs, SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE,
 -- SetBossState NOT_STARTED) — the gravity leg + flag-clear +
--- REACT_PASSIVE legs are ported (malygosReset); immunity /
--- flight-speed / phase / instance legs stay out (no immune surface,
--- no speed literal, no phase / instance bridges). DoAction (the ~60-action event/phase
+-- REACT_PASSIVE legs are ported (malygosReset), and the
+-- SetBossState NOT_STARTED leg is PORTED 2026-11-05 in
+-- malygosReset (!= DONE-gated, _Reset() position first in C++
+-- Reset :372); immunity / flight-speed / phase legs stay out
+-- (no immune surface, no speed literal, no phase bridge).
+-- DoAction (the ~60-action event/phase
 -- machine: ACTION_LAND_ENCOUNTER_START, platform-destroy
 -- intro, vortex legs, surge-of-power legs, respawn handling —
 -- all gated on MotionMaster / instance GUIDs / timed events) —
@@ -195,6 +199,16 @@
 -- unmodeled-achievement queue.
 
 local ENTRY_MALYGOS = 28859
+local DATA_MALYGOS_EVENT = 0 -- eye_of_eternity.h:28
+local BOSS_STATE_NOT_STARTED = 0 -- EncounterState (InstanceScript.h:68-76)
+local BOSS_STATE_IN_PROGRESS = 1 -- EncounterState (InstanceScript.h:68-76)
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+local GO_HEART_OF_MAGIC_10 = 194158 -- eye_of_eternity.h:70
+local GO_HEART_OF_MAGIC_25 = 194159 -- eye_of_eternity.h:71
+local HEART_OF_MAGIC_SPAWN_X = 755.351 -- boss_malygos.cpp:291
+local HEART_OF_MAGIC_SPAWN_Y = 1298.31 -- boss_malygos.cpp:291
+local HEART_OF_MAGIC_SPAWN_Z = 223.909 -- boss_malygos.cpp:291
+local HEART_OF_MAGIC_SPAWN_O = 0.0 -- boss_malygos.cpp:291
 local NPC_ALEXSTRASZA = 32295 -- eye_of_eternity.h:57
 
 local SAY_START_P_ONE = 1
@@ -218,6 +232,7 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 -- berserk self-cast are bridgeable; the instance legs are
 -- BossAI-bookkeeping with no bridge (tharon_ja precedent).
 local function malygosEnterCombat(event, creature, target)
+    creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_IN_PROGRESS)
     creature:Talk(SAY_START_P_ONE)
     creature:CastSpell(creature, SPELL_BERSERK)
 end
@@ -225,9 +240,10 @@ end
 -- C++ JustDied (boss_malygos.cpp:979-987): _JustDied() +
 -- Talk(SAY_DEATH) + gift-box-bunny GUID ->
 -- SummonGameObject(HEART_OF_MAGIC) + SummonCreature
--- NPC_ALEXSTRASZA + DespawnOrUnsummon(5s). The Talk arm is
--- ported; the gift-box-bunny SummonGameObject leg stays out —
--- the summoner resolves via instance GetGuidData (no bridge).
+-- NPC_ALEXSTRASZA + DespawnOrUnsummon(5s). All legs PORTED
+-- 2026-11-05: state DONE first (the _JustDied twin), Talk,
+-- gift-box-bunny SummonGameObject via the instanceData bind
+-- (instance_eye_of_eternity.lua), Alexstrasza summon, 5s despawn.
 -- The SummonCreature(NPC_ALEXSTRASZA 32295) leg IS ported
 -- 2026-10-23 (summoner is me — no instance leg; AlexstraszaSpawnPos
 -- boss_malygos.cpp:290; TEMPSUMMON_MANUAL_DESPAWN = 7, the bridge
@@ -237,26 +253,47 @@ end
 -- is needed (C++ DespawnOrUnsummon rides the creature's own
 -- despawn timer, not the EventMap).
 local function malygosDied(event, creature, killer)
+    creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
-    -- C++ arm order: the gift-box-bunny SummonGameObject leg is
-    -- instance-blocked (above); the Alexstrasza summon lands here.
+    -- C++ arm order: the gift-box-bunny SummonGameObject leg
+    -- (boss_malygos.cpp:982-983) resolves via the instanceData
+    -- bind (instance_eye_of_eternity.lua) — the GetGuidData
+    -- claim in the header is stale since this tick.
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.malygosDone = true
+            if data.giftBoxBunny then
+                local heart = GO_HEART_OF_MAGIC_10
+                if creature:Is25ManRaid() then
+                    heart = GO_HEART_OF_MAGIC_25
+                end
+                data.giftBoxBunny:SummonGameObject(heart, HEART_OF_MAGIC_SPAWN_X, HEART_OF_MAGIC_SPAWN_Y, HEART_OF_MAGIC_SPAWN_Z, HEART_OF_MAGIC_SPAWN_O, 0)
+            end
+        end
+    end
     creature:SummonCreature(NPC_ALEXSTRASZA, 854.551, 1225.31, 300.901, 0.0, 7, 0)
     CreateLuaEvent(function()
         creature:Despawn()
     end, 5000)
 end
 
--- C++ Reset (boss_malygos.cpp:376-385): me->SetDisableGravity(true) --
--- unconditional leg of boss_malygosAI::Reset (Malygos hovers at spawn /
--- after a wipe). The RemoveFlag(NOT_SELECTABLE) + REACT_PASSIVE legs
--- are PORTED below (both surfaces bridged; C++ JustEngagedWith sets
--- no react state, so PASSIVE at Reset strands nothing beyond C++).
--- The flight-speed (member value, no literal), SetPhase, instance
--- boss-state/achievement legs stay out. The DoAction land clear for
--- the immune flag rides the unported land machine; the 0x100/0x200
+-- C++ Reset (boss_malygos.cpp:368-390): _Reset() first (:372, the
+-- SetBossState NOT_STARTED != DONE-gated twin, PORTED 2026-11-05
+-- below) + Initialize() + SetDisableGravity(true) + SetImmuneToAll
+-- + RemoveFlag(NOT_SELECTABLE) + SetReactState(REACT_PASSIVE) +
+-- SetBossState(NOT_STARTED) re-asserted last (redundant with the
+-- _Reset() leg — same value, same gate outcome when not DONE).
+-- The flight-speed (member value, no literal), SetPhase, and
+-- achievement legs stay out. The DoAction land clear for the
+-- immune flag rides the unported land machine; the 0x100/0x200
 -- bits have no Go consumer today, so the Reset apply below is a
 -- faithful write with no behavior change until one lands.
 local function malygosReset(event, creature)
+    if creature:GetBossState(DATA_MALYGOS_EVENT) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_NOT_STARTED)
+    end
     creature:SetDisableGravity(true)
     creature:SetFlag(59, 0x300) -- SetImmuneToAll(true), C++ order before the NOT_SELECTABLE clear
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)

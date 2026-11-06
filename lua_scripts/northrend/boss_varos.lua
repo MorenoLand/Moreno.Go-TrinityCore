@@ -45,15 +45,12 @@
 -- (28) delivery leg).
 -- Unmodeled (no bridges — documented, not wired):
 -- InitializeAI — DoCast(me, SPELL_CENTRIFUGE_SHIELD 50053) gated
--- on instance->GetBossState(DATA_DRAKOS) != DONE — the GATE is
--- bridged now (creature:GetBossState, lua_creature_events.go) and
--- the cast is bridged, but the leg STAYS OUT on its removal path:
--- the shield comes off only via the instance OnUnitDeath leg
--- (instance_oculus.cpp:126-136: last centrifuge construct death ->
--- varos->RemoveAllAuras()), which has no Lua instance surface and
--- no construct-death trigger in Go — casting the shield on spawn
--- would leave Varos permanently passive + immune. Re-triage only
--- with a bridged instance OnUnitDeath / RemoveAllAuras path.
+-- on instance->GetBossState(DATA_DRAKOS) != DONE — PORTED
+-- 2026-11-05 in varosSpawn (event 5; the GATE is bridged,
+-- creature:GetBossState, and the removal path is bridged too:
+-- last construct death -> Varos RemoveAllAuras in
+-- npc_centrifuge_construct.lua, so the shield can no longer
+-- strand Varos passive + immune).
 -- Reset — _Reset() SetBossState(NOT_STARTED, != DONE-gated)
 -- PORTED 2026-11-05 in varosReset (event 23; _Reset() is first in
 -- C++ Reset, so the state leg precedes the timer cancel) + the
@@ -272,14 +269,39 @@ local function varosDied(event, creature, killer)
     creature:SetBossState(DATA_VAROS, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.varosDone = true
+        end
+    end
+end
+
+local SPELL_CENTRIFUGE_SHIELD = 50053 -- oculus.h:82
+
+-- C++ InitializeAI (boss_varos.cpp:76-81): DoCast(me,
+-- SPELL_CENTRIFUGE_SHIELD 50053) gated on
+-- instance->GetBossState(DATA_DRAKOS) != DONE. PORTED 2026-11-05
+-- on ev5 (ON_SPAWN, the InitializeAI twin — first spawn +
+-- respawn, never on evade, matching C++; the C++ Reset calls
+-- Initialize(), not InitializeAI). The removal path ports the
+-- same tick in npc_centrifuge_construct.lua (last construct death
+-- -> Varos RemoveAllAuras, instance_oculus.cpp:126-136), so the
+-- shield can no longer strand Varos passive + immune; the
+-- apply/remove legs were already ported below (RegisterAuraEvent).
+local function varosSpawn(event, creature)
+    if creature:GetBossState(DATA_DRAKOS) ~= BOSS_STATE_DONE then
+        creature:CastSpell(creature, SPELL_CENTRIFUGE_SHIELD)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_VAROS, 1, varosEnterCombat)
 RegisterCreatureEvent(ENTRY_VAROS, 2, varosCombatEnd)
 RegisterCreatureEvent(ENTRY_VAROS, 4, varosDied)
+RegisterCreatureEvent(ENTRY_VAROS, 5, varosSpawn)
 RegisterCreatureEvent(ENTRY_VAROS, 23, varosReset)
 
-local SPELL_CENTRIFUGE_SHIELD = 50053 -- oculus.h:82
 local UNIT_FLAG_UNK_6 = 0x00000040 -- UnitDefines.h:130
 local UNIT_FLAG_IMMUNE_TO_PC = 0x00000100 -- UnitDefines.h:132
 local UNIT_FLAG_IMMUNE_TO_NPC = 0x00000200 -- UnitDefines.h:133

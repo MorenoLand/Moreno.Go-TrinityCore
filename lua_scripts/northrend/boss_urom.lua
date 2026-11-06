@@ -16,7 +16,8 @@
 -- nexus_commanders kalecgos precedent); the CreatureScript
 -- ScriptName binding is DB-side as usual. The instance leg also
 -- gates SetPhaseMask(1, true) on GetBossState(DATA_VAROS) == DONE —
--- no instance bridge, documented only.
+-- PORTED 2026-11-05 in lua_scripts/northrend/instance_oculus.lua
+-- (ON_CREATURE_CREATE DONE-gated leg + ON_UPDATE DONE poll).
 -- Sole-source verified: whole-server-tree grep for "boss_urom"
 -- hits boss_urom.cpp + the loader decl/call lines only; grep for
 -- "spell_urom_frostbomb" hits boss_urom.cpp only (registered from
@@ -158,6 +159,13 @@ end
 local function uromDied(event, creature, killer)
     creature:SetBossState(DATA_UROM, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.uromDone = true
+        end
+    end
 end
 
 -- C++ Reset (boss_urom.cpp:132-140): the SetDisableGravity(false) leg is

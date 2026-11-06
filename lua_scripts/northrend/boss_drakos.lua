@@ -250,6 +250,13 @@ local function drakosDied(event, creature, killer)
     creature:SetBossState(DATA_DRAKOS, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.drakosDone = true
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_DRAKOS, 1, drakosEnterCombat)

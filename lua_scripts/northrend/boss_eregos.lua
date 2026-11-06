@@ -318,6 +318,13 @@ local function eregosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_EREGOS, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.eregosDone = true
+        end
+    end
 end
 
 -- C++ JustSummoned NPC_PLANAR_ANOMALY (boss_eregos.cpp:160-170):
