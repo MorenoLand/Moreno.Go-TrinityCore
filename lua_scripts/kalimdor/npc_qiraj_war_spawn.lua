@@ -42,20 +42,20 @@
 --   preamble me->RemoveAllAttackers() + me->AttackStop() is
 --   ported in onStonedChannel below (C++ order,
 --   zone_silithus.cpp SpellTimer4 arm), both methods bridged.
+-- - Target acquisition (C++ hasTarget/AttackStart arm): 1s pump,
+--   victimless-only; qiraji-side nearest kaldorei 15423 within 20y,
+--   kaldorei random qiraji entry nearest within 20y (no fallback);
+--   AttackStart = creature:EngageWithTarget, creature-victim funnel
+--   live (creaturemotion.go:1371 S1). The old stay-out is retired:
+--   the entries ARE registered (boss_ai.go:16803-16806, commit
+--   020ace72) and the arm is self-contained — it does not ride the
+--   unported cinematic/trigger machine.
+-- - Stoned aura arm: 1s pump; no Caelestrasz 15379 within 60y ->
+--   DoCast(self, SPELL_STONED 33652), all four entries. (The old
+--   header cited 15380 — that is Arygos; Caelestrasz is 15379.)
 -- Died/Reset cancel + re-arm per the C++ Reset latch (see below);
 -- the old leave-combat cancel was wrong (the C++ timers tick outside
 -- combat). Unmodeled (documented-only, no bridges):
--- - Target acquisition (C++ hasTarget/AttackStart via
---   me->FindNearestCreature(entry, 20, true) — kaldorei infantry
---   pick a random qiraji entry, qiraji-side picks nearest kaldorei):
---   the lookup itself is now bridgeable
---   (creature:FindNearestCreature, engine/world/lua_creature_events.go:2105;
---   old no-creature-lookup claim retracted), but the arms stay
---   documented-only — the war-spawn NPCs ride the unported
---   Anachronos cinematic switch and their entries are unregistered.
--- - Stoned aura arm: if no Caelestrasz within 60y
---   (FindNearestCreature(NPC_CAELESTRASZ 15380, 60)), DoCast(self,
---   SPELL_STONED 33652) every tick: unreachable (same bar).
 -- - JustDied: PORTED — me->DespawnOrUnsummon() as creature:Despawn()
 --   at the top of onDied (illidari_spawn precedent, C++-exact:
 --   despawn first, then the blocked leg). LiveCounter() on the
@@ -68,12 +68,14 @@ local ENTRY_QIRAJI_WASP       = 15414
 local ENTRY_QIRAJI_TANK       = 15422
 local ENTRY_KALDOREI_INFANTRY = 15423
 local ENTRY_ANUBISATH_CONQUEROR = 15424
+local ENTRY_CAELESTRASZ       = 15379
 
 local SPELL_POISON_CLOUD          = 28528
 local SPELL_SUMMON_POISON_CLOUD   = 24319
 local SPELL_FROST_DEBUFF          = 35871
 local SPELL_FIRE_EXPLOSION        = 42075
 local SPELL_STONED_CHANNEL_VISUAL = 15533
+local SPELL_STONED                = 33652
 
 local timers = {}
 
@@ -136,6 +138,52 @@ local function onStonedChannel(creature, guid)
     end)
 end
 
+-- C++ UpdateAI hasTarget/AttackStart arm + stoned-aura arm
+-- (zone_silithus.cpp:749-774): both tick every UpdateAI while the mob
+-- is alive; the Go twin is a 1s pump (per-tick cadence is unmodelable,
+-- same CreateLuaEvent approximation as the timer arms).
+-- Target acquisition: qiraji-side entries take the nearest living
+-- Kaldorei Infantry within 20y; Kaldorei Infantry picks one qiraji
+-- entry at random (C++ urand(0,2): 0 tank, 1 conqueror, 2 wasp) and
+-- takes the nearest living creature of that entry within 20y — a
+-- miss on the picked entry finds nothing (no fallback to the other
+-- entries). Only attempted while victimless (C++ hasTarget latch:
+-- re-armed only when UpdateVictim fails). AttackStart rides
+-- creature:EngageWithTarget (lua_creature_events.go:1276, AttackStart
+-- alias :6125; the creature-victim funnel is triggerCreatureAggro S1,
+-- creaturemotion.go:1371). FindNearestCreature(entry, 20) is the
+-- alive-only lookup (lua_creature_events.go:5592).
+-- Stoned aura: no Caelestrasz (15379, EternalBoard enum — NOT 15380,
+-- that is Arygos) within 60y -> DoCast(self, SPELL_STONED 33652),
+-- unconditional for all four entries.
+local QIRAJI_ENTRIES = {
+    ENTRY_QIRAJI_TANK,
+    ENTRY_ANUBISATH_CONQUEROR,
+    ENTRY_QIRAJI_WASP,
+}
+
+local function onAcquireAndStoned(creature, guid)
+    local entry = creature:GetEntry()
+    if not creature:GetVictim() then
+        local target = nil
+        if entry == ENTRY_QIRAJI_WASP or entry == ENTRY_QIRAJI_TANK
+            or entry == ENTRY_ANUBISATH_CONQUEROR then
+            target = creature:FindNearestCreature(ENTRY_KALDOREI_INFANTRY, 20)
+        elseif entry == ENTRY_KALDOREI_INFANTRY then
+            target = creature:FindNearestCreature(QIRAJI_ENTRIES[math.random(#QIRAJI_ENTRIES)], 20)
+        end
+        if target then
+            creature:AttackStart(target)
+        end
+    end
+    if not creature:FindNearestCreature(ENTRY_CAELESTRASZ, 60) then
+        creature:CastSpell(creature, SPELL_STONED)
+    end
+    schedule(guid, "acquire", 1000, function()
+        onAcquireAndStoned(creature, guid)
+    end)
+end
+
 -- C++ SpawnCast table (zone_silithus.cpp:289-295): {100000, 2000,
 -- 33652} Stoned / {38500, 300000, 28528} Poison Cloud / {58000,
 -- 300000, 35871} Frost Debuff / {80950, 300000, 42075} Fire
@@ -169,6 +217,11 @@ local function armTimers(creature, guid)
     end
     schedule(guid, "stoned", 100000, function()
         onStonedChannel(creature, guid)
+    end)
+    -- C++ UpdateAI hasTarget/AttackStart + stoned-aura arms, same
+    -- arming point as the spell timers (first engage / reset).
+    schedule(guid, "acquire", 1000, function()
+        onAcquireAndStoned(creature, guid)
     end)
     armed[guid] = true
 end
