@@ -25,8 +25,18 @@
 -- below):
 -- - Engage (C++ JustEngagedWith): no Talk in C++; latch flags reset
 --   (fresh per-GUID state here) + arm each timer at its C++
---   ScheduleEvent cooldown (5s / {6s,8s} / 4s / {17s,21s}); the
---   BossAI::JustEngagedWith instance leg is blocked (standing).
+--   ScheduleEvent cooldown (5s / {6s,8s} / 4s / {17s,21s}). There is
+--   NO BossAI::JustEngagedWith call in C++ (boss_mal_ganis.cpp:95-103
+--   never calls the base), so there is no IN_PROGRESS leg to port —
+--   the old header's "BossAI::JustEngagedWith instance leg is blocked
+--   (standing)" is corrected: the leg does not exist, it is not
+--   blocked. The Mal'Ganis IN_PROGRESS write, if any, rides the
+--   unported instance machine.
+-- - Reset (C++ :75-79): the override does NOT call _Reset() — it
+--   writes SetBossState(DATA_MAL_GANIS, NOT_STARTED) iff !_defeated,
+--   with no != DONE gate and no !IsAlive early return. PORTED
+--   2026-11-06 on ev23, C++-exact (the defeated latch reads
+--   defeated[guid]).
 -- - Carrion Swarm (EVENT_CARRION_SWARM): DoCastAOE(SPELL_CARRION_SWARM
 --   52720), non-triggered (DoCastAOE resolves to self-cast —
 --   kazrogal/illidan precedent), init 5s -> repeat 6s.
@@ -70,16 +80,21 @@
 --   the SetImmuneToAll(true) flag leg is PORTED (2026-10-23) on a 1s
 --   defeat pump (below) — the stale "no immune-to-all bridge" claim is
 --   retracted: SetFlag(59, 0x300) is bridged (Unit.cpp:8440-8451).
--- - Death (no JustDied override in C++ — the defeated machine
---   short-circuits it): cancel only.
+-- - Death: NO JustDied override in C++ — the base BossAI::JustDied
+--   (ScriptedCreature.h:330) runs _JustDied() -> SetBossState(DONE),
+--   PORTED 2026-11-06 on ev4. The defeated machine means damage can
+--   never kill the boss in normal play, but a script/GM kill still
+--   runs the base leg — the old "defeated machine short-circuits it:
+--   cancel only" note is corrected.
 -- Unmodeled (documented-only, no bridges):
 -- - GetAI's CoSScriptName instance gate + DATA_INSTANCE_PROGRESS <
 --   MALGANIS_IN_PROGRESS -> NullCreatureAI — no instance-data /
 --   instance-progress bridges (standing); the Lua registration is
 --   entry-based and has no CoS-instance gate.
--- - BossAI ctor (DATA_MAL_GANIS) / Reset's
---   SetBossState(DATA_MAL_GANIS, NOT_STARTED) — instance legs
---   blocked (standing).
+-- - BossAI ctor (DATA_MAL_GANIS) — instance leg, no port. Reset's
+--   SetBossState(DATA_MAL_GANIS, NOT_STARTED) is PORTED above (ev23);
+--   the old "instance legs blocked (standing)" note is retracted for
+--   the Reset leg.
 -- - DamageTaken lethal clamp — PORTED (this run): OnDamageTaken
 --   event 9 is bridged (midnight never-die clamp precedent); the
 --   damage = health-1 clamp and the _defeated once-latch ride the
@@ -113,6 +128,10 @@
 --   never Talked anywhere in the file.
 
 local ENTRY = 26533
+
+-- culling_of_stratholme.h:116-120 (EncounterState, InstanceScript.h:68-76:
+-- NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3).
+local DATA_MAL_GANIS = 3
 
 local SAY_SLAY      = 4
 local SAY_30HEALTH  = 6
@@ -418,10 +437,19 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset override (boss_mal_ganis.cpp:75-79): no _Reset() call —
+    -- SetBossState NOT_STARTED iff !_defeated, with no != DONE gate
+    -- and no !IsAlive early return (C++-exact; the override has neither).
+    if not defeated[creature:GetGUID()] then
+        creature:SetBossState(DATA_MAL_GANIS, 0) -- NOT_STARTED
+    end
 end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++: no JustDied override, so base BossAI::JustDied
+    -- (ScriptedCreature.h:330) runs _JustDied() -> SetBossState(DONE).
+    creature:SetBossState(DATA_MAL_GANIS, 3) -- DONE
 end
 
 -- C++ JustReachedHome (boss_mal_ganis.cpp:106-110): if (!_defeated)

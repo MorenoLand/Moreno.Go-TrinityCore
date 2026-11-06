@@ -43,14 +43,25 @@
 -- - Time Stop (EVENT_TIME_STOP, heroic-only): scheduled on engage
 --   under creature:IsHeroic(), DoCastAOE(58848) non-triggered
 --   self-cast, init 15s -> repeat 25s.
--- - Death (C++ JustDied): _JustDied() only — instance bookkeeping,
---   blocked (standing); the Go leg is cancel only.
+-- - Death (C++ JustDied): _JustDied() only — SetBossState(DATA_EPOCH,
+--   DONE) PORTED 2026-11-06 (ScriptedCreature.cpp:513-519; live bridge
+--   lua_creature_events.go:5917); the Go leg is state write + cancel.
+-- - Reset (BossAI::Reset -> _Reset, ScriptedCreature.h:328 /
+--   ScriptedCreature.cpp:499-510): SetCombatPulseDelay(0) +
+--   SetBossState(DATA_EPOCH, NOT_STARTED) unless already DONE, PORTED
+--   2026-11-06 on ev23 (zarithrian idiom, incl. the !IsAlive early
+--   return — Go fires ev23 on the death path before ev4); the
+--   summons/scheduler legs are the cancelTimers above.
+-- - Engage (C++ JustEngagedWith): BossAI::JustEngagedWith FIRST ->
+--   SetBossState(DATA_EPOCH, IN_PROGRESS) PORTED 2026-11-06 on ev1
+--   (base-first, ScriptedCreature.cpp:527-539); CheckRequiredBosses
+--   has no CoS instance override, so the write is unconditional.
+-- - InitializeAI (C++ :57-61): instance->GetBossState(DATA_EPOCH) ==
+--   DONE -> RemoveLootMode(LOOT_MODE_DEFAULT 1, SharedDefines.h:42)
+--   PORTED 2026-11-06 on ev5 (GetBossState live, :5936; RemoveLootMode
+--   live, lua_creature_events.go:2246-2250 — the old "instance-data
+--   bridge blocked" claim is retracted for the read + loot legs).
 -- Unmodeled (documented-only, no bridges):
--- - InitializeAI: instance->GetBossState(DATA_EPOCH) == DONE ->
---   me->RemoveLootMode(LOOT_MODE_DEFAULT) — instance-data bridge blocked
---   (standing).
--- - BossAI::_Reset / BossAI::_JustDied instance legs — blocked
---   (standing); engage pulse + me-DoZone PORTED (see onEnterCombat).
 -- - EVENT_TIME_STEP + SpellHitTarget (ported): ev15 (svala precedent;
 --   args (event, creature, target, spellId)) gated on SPELL_TIME_STEP_
 --   DUMMY 52736 + creature:IsHostileTo(target) (lua_creature_events.go
@@ -71,6 +82,11 @@
 --   (3) are the only Talked lines.
 
 local ENTRY = 26532
+
+-- culling_of_stratholme.h:116-120 (EncounterState, InstanceScript.h:68-76:
+-- NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3).
+local DATA_EPOCH = 2
+local LOOT_MODE_DEFAULT = 1 -- SharedDefines.h:42
 
 local SAY_TIME_WARP = 2
 local SAY_SLAY      = 3
@@ -266,6 +282,12 @@ local function onTimeStop(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_chrono_lord_epoch.cpp:66-68) calls
+    -- BossAI::JustEngagedWith FIRST: SetBossState(IN_PROGRESS) +
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+    -- (ScriptedCreature.cpp:527-539); CheckRequiredBosses has no CoS
+    -- instance override, so the state write is unconditional.
+    creature:SetBossState(DATA_EPOCH, 1) -- IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_chrono_lord_epoch.cpp:66-68)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
@@ -297,12 +319,33 @@ local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     stepState[guid] = nil
+    if creature:IsDead() then
+        return
+    end
+    -- C++ BossAI::Reset -> _Reset (ScriptedCreature.h:328 /
+    -- ScriptedCreature.cpp:499-510): SetCombatPulseDelay(0), then
+    -- SetBossState NOT_STARTED unless already DONE.
+    creature:SetCombatPulseDelay(0)
+    if creature:GetBossState(DATA_EPOCH) ~= 3 then
+        creature:SetBossState(DATA_EPOCH, 0) -- NOT_STARTED
+    end
 end
 
 local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
+    -- C++ JustDied (boss_chrono_lord_epoch.cpp:140-143): _JustDied()
+    -- only -> SetBossState(DONE).
+    creature:SetBossState(DATA_EPOCH, 3) -- DONE
     cancelTimers(guid)
     stepState[guid] = nil
+end
+
+-- C++ InitializeAI (boss_chrono_lord_epoch.cpp:57-61): when the boss
+-- is already DONE, the default loot mode is removed.
+local function onSpawn(event, creature)
+    if creature:GetBossState(DATA_EPOCH) == 3 then
+        creature:RemoveLootMode(LOOT_MODE_DEFAULT)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
@@ -314,4 +357,5 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
 end)
 RegisterCreatureEvent(ENTRY, 15, onSpellHitTarget)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 23, onReset)

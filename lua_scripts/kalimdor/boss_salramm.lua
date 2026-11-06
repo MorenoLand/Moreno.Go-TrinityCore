@@ -25,7 +25,24 @@
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer at
 --   its C++ ScheduleEvent cooldown ({19s,24s} / 2s / {25s,35s} /
 --   40s heroic-only); BossAI::JustEngagedWith pulse + me-DoZone
---   PORTED, instance legs stay blocked (standing).
+--   PORTED, and SetBossState(DATA_SALRAMM, IN_PROGRESS) PORTED
+--   2026-11-06 on ev1 (Talk-then-base in
+--   boss_salramm_the_fleshcrafter.cpp:73-76,
+--   ScriptedCreature.cpp:527-539; CheckRequiredBosses has no CoS
+--   instance override, so the write is unconditional).
+-- - Reset (BossAI::Reset -> _Reset, ScriptedCreature.h:328 /
+--   ScriptedCreature.cpp:499-510): SetCombatPulseDelay(0) +
+--   SetBossState(NOT_STARTED) unless already DONE, PORTED 2026-11-06
+--   on ev23 (zarithrian idiom, incl. the !IsAlive early return).
+-- - Death (C++ JustDied): Talk SAY_DEATH (3) + _JustDied() ->
+--   SetBossState(DONE) PORTED 2026-11-06 on ev4 (C++ order: Talk,
+--   _JustDied, SetData); the instance->SetData(DATA_NOTIFY_DEATH, 1)
+--   leg stays blocked (no instance SetData bridge, standing).
+-- - InitializeAI (C++ :66-71): Talk SAY_SPAWN (1) + GetBossState ==
+--   DONE -> RemoveLootMode(LOOT_MODE_DEFAULT 1, SharedDefines.h:42),
+--   both PORTED 2026-11-06 on ev5 (ev5 fires at the C++ JustAppeared
+--   moments; the old "no spawn/appear bridge" note is retracted —
+--   ev5 is live, lua_creature_events.go:6748).
 -- - Curse of Twisted Flesh (EVENT_CURSE_FLESH, heroic-only):
 --   DoCastVictim(SPELL_CURSE_OF_TWISTED_FLESH 58845), non-triggered,
 --   init 40s -> repeat 37s (C++ Repeat unconditional, nil victim ->
@@ -60,16 +77,7 @@
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): C++ gates on
 --   victim->GetTypeId() == TYPEID_PLAYER before Talk SAY_SLAY (2)
 --   (terestian_illhoof victim:GetObjectType() == "Player" convention).
--- - Death (C++ JustDied): Talk SAY_DEATH (3) + cancel; the _JustDied()
---   and instance->SetData(DATA_NOTIFY_DEATH, 1) legs are blocked
---   (standing).
 -- Unmodeled (documented-only, no bridges):
--- - InitializeAI: Talk(SAY_SPAWN) (1) — no spawn/appear bridge in the
---   Lua API (arthas JustAppeared precedent); instance->GetBossState
---   (DATA_SALRAMM) == DONE -> RemoveLootMode(LOOT_MODE_DEFAULT) — no
---   instance-data bridge (epoch InitializeAI precedent).
--- - BossAI::JustEngagedWith / BossAI::_Reset / BossAI::_JustDied
---   instance legs — blocked (standing).
 -- - spell_salramm_steal_flesh (AuraScript): HandlePeriodic on
 --   SPELL_AURA_PERIODIC_DUMMY EFFECT_0 — GetCaster()->CastSpell
 --   (caster, SPELL_STEAL_FLESH_BUFF 52712, triggered) + GetCaster()->
@@ -83,7 +91,13 @@
 
 local ENTRY = 26530
 
+-- culling_of_stratholme.h:116-120 (EncounterState, InstanceScript.h:68-76:
+-- NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3).
+local DATA_SALRAMM = 1
+local LOOT_MODE_DEFAULT = 1 -- SharedDefines.h:42
+
 local SAY_AGGRO        = 0
+local SAY_SPAWN        = 1
 local SAY_SLAY         = 2
 local SAY_DEATH        = 3
 local SAY_EXPLODE_GHOUL = 4
@@ -297,6 +311,11 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (boss_salramm_the_fleshcrafter.cpp:73-76):
+    -- Talk, then BossAI::JustEngagedWith -> SetBossState(IN_PROGRESS) +
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+    -- (ScriptedCreature.cpp:527-539).
+    creature:SetBossState(DATA_SALRAMM, 1) -- IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; Talk-then-base in boss_salramm_the_fleshcrafter.cpp:73-76)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     schedule(guid, "summonghouls", math.random(19000, 24000), function()
@@ -322,11 +341,34 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:IsDead() then
+        return
+    end
+    -- C++ BossAI::Reset -> _Reset (ScriptedCreature.h:328 /
+    -- ScriptedCreature.cpp:499-510): SetCombatPulseDelay(0), then
+    -- SetBossState NOT_STARTED unless already DONE.
+    creature:SetCombatPulseDelay(0)
+    if creature:GetBossState(DATA_SALRAMM) ~= 3 then
+        creature:SetBossState(DATA_SALRAMM, 0) -- NOT_STARTED
+    end
 end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_salramm_the_fleshcrafter.cpp:123-128): Talk
+    -- SAY_DEATH, then _JustDied() -> SetBossState(DONE), then the
+    -- unbridged instance SetData(DATA_NOTIFY_DEATH, 1).
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_SALRAMM, 3) -- DONE
+end
+
+-- C++ InitializeAI (boss_salramm_the_fleshcrafter.cpp:66-71):
+-- Talk SAY_SPAWN + RemoveLootMode when already DONE.
+local function onSpawn(event, creature)
+    creature:Talk(SAY_SPAWN)
+    if creature:GetBossState(DATA_SALRAMM) == 3 then
+        creature:RemoveLootMode(LOOT_MODE_DEFAULT)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
@@ -337,4 +379,5 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
     end
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 23, onReset)

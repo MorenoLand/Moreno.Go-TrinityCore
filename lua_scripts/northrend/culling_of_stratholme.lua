@@ -13,7 +13,13 @@
 -- Ported: GOSSIP_OFFSET_EXPLAIN_2 (1004) sends GOSSIP_TEXT_EXPLAIN_3
 -- 12952 with no items (kalecgos terminal-step idiom); the
 -- AdvanceDungeon leg drops (instance SetData) and the AddItem
--- (ITEM_ARCANE_DISRUPTOR 37888) leg drops (no item-grant bridge).
+-- (ITEM_ARCANE_DISRUPTOR 37888) leg is PORTED 2026-11-06:
+-- player:GetItemCount (lua_player.go:2146) + player:AddItem (:2206)
+-- are both live — the old "no item-grant bridge" note is retracted
+-- (tick-273's AddItem retraction holds here too). Delta: GetItemCount
+-- counts character_inventory incl. bank slots, while C++
+-- HasItemCount defaults inBankAlso=false — a disruptor sitting only
+-- in the bank suppresses the grant in Lua but not in C++.
 -- Documented-only: the instance-gated OnGossipHello menu (skip /
 -- explain arms ride instance->GetStableStateFor / AdvanceDungeon /
 -- SetGuidData — no instance bridge), the EXPLAIN / SKIP /
@@ -60,6 +66,7 @@ local GOSSIP_OFFSET_TELEPORT = 2
 local GOSSIP_OFFSET_EXPLAIN_2 = 4
 local GOSSIP_OFFSET_SKIP_1 = 5
 local GOSSIP_TEXT_EXPLAIN_3 = 12952
+local ITEM_ARCANE_DISRUPTOR = 37888
 local SPELL_TELEPORT_PLAYER = 53435
 
 local function chromieGossipSelect(event, player, creature, sender, action)
@@ -70,6 +77,13 @@ local function chromieGossipSelect(event, player, creature, sender, action)
     elseif action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_EXPLAIN_2 then
         player:GossipClearMenu()
         player:GossipSendMenu(GOSSIP_TEXT_EXPLAIN_3, creature)
+        -- C++ OnGossipSelect (culling_of_stratholme.cpp:407-411):
+        -- SendGossipMenuFor, then AdvanceDungeon (instance SetData,
+        -- out), then AddItem(ITEM_ARCANE_DISRUPTOR) iff the player
+        -- does not already have one.
+        if player:GetItemCount(ITEM_ARCANE_DISRUPTOR) == 0 then
+            player:AddItem(ITEM_ARCANE_DISRUPTOR, 1)
+        end
     end
     -- C++ OnGossipSelect returns false: the AI/native select arms
     -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them

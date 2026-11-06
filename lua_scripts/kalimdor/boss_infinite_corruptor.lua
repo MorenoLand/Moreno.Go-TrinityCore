@@ -26,7 +26,15 @@
 -- Ported arms (the self-contained in-combat legs; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer at
 --   its C++ ScheduleEvent cooldown (7s / 5s); BossAI::JustEngagedWith
---   pulse + me-DoZone PORTED, instance legs stay blocked (standing).
+--   pulse + me-DoZone PORTED, and SetBossState(DATA_INFINITE_CORRUPTOR,
+--   IN_PROGRESS) PORTED 2026-11-06 on ev1 (Talk-then-base in
+--   boss_infinite_corruptor.cpp:78-81, ScriptedCreature.cpp:527-539;
+--   CheckRequiredBosses has no CoS instance override, so the write is
+--   unconditional).
+-- - Reset (C++ :66-70): _Reset() -> SetCombatPulseDelay(0) +
+--   SetBossState(NOT_STARTED) unless already DONE, PORTED 2026-11-06 on
+--   ev23 (zarithrian idiom, incl. the !IsAlive early return); the
+--   DoCastAOE channel leg stays out below.
 -- - Corrupting Blight 60588 on SelectTarget(Random, 0, 60.0f, true) ->
 --   random alive threat-list player within 60m, offset 0 (no skip;
 --   UnitAI.h:172-174, Oct-25 CoS strip idiom), non-triggered
@@ -35,8 +43,14 @@
 --   too (nil target -> no cast).
 -- - Void Strike 60590 on the victim (C++ DoCastVictim — jeklik GetVictim
 --   + CastSpell convention), non-triggered, init 5s -> repeat 5s.
--- - Death (C++ JustDied): Talk SAY_DEATH (1) + cancel + guardian/rift
---   cleanup (below); the _JustDied() instance leg stays blocked.
+-- - Death (C++ JustDied): Talk SAY_DEATH (1) + _JustDied() ->
+--   SetBossState(DONE) PORTED 2026-11-06 on ev4 (C++ order: Talk,
+--   _JustDied, cleanup) + the instance SetBossState-override legs
+--   (instance_culling_of_stratholme.cpp:459-467: cancel guardian tick —
+--   no tick exists in the ported model — + UpdateWorldState
+--   TIME_GUARDIAN_SHOW 3932 -> 0 and TIME_GUARDIAN 3931 -> 0, marwyn
+--   precedent, creature:UpdateWorldState live
+--   lua_creature_events.go:5888) + guardian/rift cleanup (below).
 -- Unmodeled (documented-only, no bridges):
 -- - Reset's DoCastAOE(SPELL_CORRUPTION_OF_TIME_CHANNEL 60422), the
 --   "implicitly targets the Guardian" channel leg — stays out on
@@ -63,19 +77,33 @@
 --   react-state bridge (standing).
 -- - MovementInform(POINT_MOTION_TYPE, MOVEMENT_TIME_RIFT 1) ->
 --   DespawnOrUnsummon(2s) + SetBossState(DATA_INFINITE_CORRUPTOR, FAIL)
---   — no movement / instance-data bridges.
--- - DoAction(-ACTION_CORRUPTOR_LEAVE) (culling_of_stratholme.h:150):
---   SetReactState(REACT_PASSIVE) + Talk SAY_FAIL (2) +
---   FindNearestCreature(NPC_TIME_RIFT 28409, 300.0f) -> MovePoint to the
---   rift (or straight to MovementInform when already within 5.0f 2d,
---   or when no rift exists) — ev38 dispatch bridged; sender is the unported
--- instance guardian-timeout tick (instance_culling_of_stratholme.cpp:495); leg
--- body still blocked (MovePoint / react-state / SetBossState unbridged;
--- FindNearestCreature itself is live).
+--   — no MovementInform bridge; the FAIL write itself is bridged, but
+--   the arrival event has no Lua fire site.
+-- - DoAction(-ACTION_CORRUPTOR_LEAVE) (culling_of_stratholme.h:150,
+--   ACTION_CORRUPTOR_LEAVE = 2, so the action id is -2): SetReactState
+--   (REACT_PASSIVE, live lua_creature_events.go:3883) + Talk SAY_FAIL
+--   (2) + FindNearestCreature(NPC_TIME_RIFT 28409, 300.0f) (live) are
+--   all bridged, but the leg body stays out: the common branch is
+--   MovePoint to the rift (no methods["MovePoint"] anywhere in
+--   lua_creature_events.go — MoveChase/MoveFollow are not MovePoint),
+--   and its completion is the unbridged MovementInform arrival above,
+--   so the boss would walk to the rift and stand there instead of
+--   despawning + FAIL; the sender is the unported instance
+--   guardian-timeout tick (instance_culling_of_stratholme.cpp:495),
+--   so the receiver would be dormant even if ported. The within-5.0f
+--   and no-rift branches (inline MovementInform body) are severable
+--   but ride the same dormant sender — documented, not registered.
 -- - SAY_AGGRO (0) / SAY_DEATH (1) / SAY_FAIL (2) are the only Talked
 --   lines.
 
 local ENTRY = 32273
+
+-- culling_of_stratholme.h:116-120 (EncounterState, InstanceScript.h:68-76:
+-- NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3); worldstates
+-- instance_culling_of_stratholme.cpp:100-101.
+local DATA_INFINITE_CORRUPTOR = 4
+local WORLDSTATE_TIME_GUARDIAN = 3931
+local WORLDSTATE_TIME_GUARDIAN_SHOW = 3932
 
 local SAY_AGGRO = 0
 local SAY_DEATH = 1
@@ -183,6 +211,11 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (boss_infinite_corruptor.cpp:78-81): Talk,
+    -- then BossAI::JustEngagedWith -> SetBossState(IN_PROGRESS) +
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+    -- (ScriptedCreature.cpp:527-539).
+    creature:SetBossState(DATA_INFINITE_CORRUPTOR, 1) -- IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; Talk-then-base in boss_infinite_corruptor.cpp:78-81)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     schedule(guid, "corruptingblight", 7000, function()
@@ -199,17 +232,32 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:IsDead() then
+        return
+    end
+    -- C++ Reset (boss_infinite_corruptor.cpp:66-70) calls _Reset()
+    -- (ScriptedCreature.cpp:499-510): SetCombatPulseDelay(0), then
+    -- SetBossState NOT_STARTED unless already DONE. The DoCastAOE
+    -- channel leg in the same override stays out (implicit target).
+    creature:SetCombatPulseDelay(0)
+    if creature:GetBossState(DATA_INFINITE_CORRUPTOR) ~= 3 then
+        creature:SetBossState(DATA_INFINITE_CORRUPTOR, 0) -- NOT_STARTED
+    end
 end
 
--- C++ JustDied (:88-99): Talk SAY_DEATH + _JustDied() (instance,
--- blocked) + guardian/rift cleanup in C++ order: guardian within
--- 100.0f loses the corruption aura and despawns after 5s; rift
--- within 100.0f despawns at once. FindNearestCreature skips dead
--- creatures, so a dead guardian/rift reads as absent, like C++'s
--- live-pointer checks.
+-- C++ JustDied (:88-99): Talk SAY_DEATH + _JustDied() (SetBossState
+-- DONE) + the instance SetBossState-override worldstate clears
+-- (instance_culling_of_stratholme.cpp:459-467) + guardian/rift cleanup
+-- in C++ order: guardian within 100.0f loses the corruption aura and
+-- despawns after 5s; rift within 100.0f despawns at once.
+-- FindNearestCreature skips dead creatures, so a dead guardian/rift
+-- reads as absent, like C++'s live-pointer checks.
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_INFINITE_CORRUPTOR, 3) -- DONE
+    creature:UpdateWorldState(WORLDSTATE_TIME_GUARDIAN_SHOW, 0)
+    creature:UpdateWorldState(WORLDSTATE_TIME_GUARDIAN, 0)
     local guardian = creature:FindNearestCreature(NPC_GUARDIAN_OF_TIME, 100)
     if guardian then
         guardian:RemoveAura(SPELL_CORRUPTION_OF_TIME_TARGET)

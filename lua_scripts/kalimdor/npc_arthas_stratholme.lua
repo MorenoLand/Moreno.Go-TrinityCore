@@ -28,9 +28,16 @@
 --   SetHomePosition, and SplineChainMovementGenerator::GetResumeInfo legs
 --   are RP-state only. The engage starts the combat pump below.
 -- - UpdateAICombat: C++ gates the whole rotation on
---   !me->HasReactState(REACT_PASSIVE) — the react-state leg has no
---   bridge (documented below); the ported arms fire whenever Arthas is
---   actually engaged, which in C++ only happens in the non-passive phases.
+--   !me->HasReactState(REACT_PASSIVE) — the bridge for the read is
+--   LIVE (creature:GetReactState, lua_creature_events.go:3900-3910;
+--   the old "react-state leg has no bridge" note is retracted), but
+--   the gate stays ungated: its state transitions ride AdvanceToState's
+--   SetReactState (npc_arthas.cpp:571, per-progress-state
+--   target.ReactState) inside the unported RP machine, so gating the
+--   pump on the template read alone would mis-fire in the Mal'Ganis
+--   phase, where C++ flips Arthas aggressive. The ported arms fire
+--   whenever Arthas is actually engaged, which in C++ only happens in
+--   the non-passive phases.
 --   - Holy Light 52444: self-cast (C++ DoCastSelf) whenever
 --     HealthBelowPct(40), checked every AI tick with no cooldown — modeled
 --     as a 1s per-GUID pump (sironas convention); the 1s granularity is an
@@ -70,6 +77,14 @@
 --   nearby-creature / GO-state bridges DO (creature:SummonCreature,
 --   creature:FindNearestCreature, GO SetGoState) — the ~130 RP arms stay
 --   out on the unported RP event machine, not on the bridges.
+-- - JustEngagedWith writes no boss state (ScriptedAI, not BossAI —
+--   no _JustEngagedWith call); JustReachedHome / EnterEvadeMode write
+--   none either. The one SetBossState in the file,
+--   instance->SetBossState(DATA_MAL_GANIS, DONE) at npc_arthas.cpp:1434
+--   (RP5_EVENT_MALGANIS_DONE), rides the unported RP5 event machine
+--   (the ~130-handler chain below) and has no bridgeable firing
+--   context — it is NOT the Mal'Ganis boss's own death leg (that leg
+--   is the base _JustDied in boss_mal_ganis.lua ev4).
 -- - JustAppeared: DoCastSelf(SPELL_DEVOTION_AURA 52442) — ports on
 --   event 5 below (the old "no spawn/appear bridge" note predates the ev5
 --   spawn bridge, which fires at the exact C++ JustAppeared moments).
