@@ -2819,13 +2819,15 @@ func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
 	s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
 }
 
-// ahbotUint32 mirrors the C++ uint32 argument parse (StringTo<uint32> with
-// base 0, StringConvert.h:43-69): 0x is hex and 0b is binary, anything else
-// is base 10 — a leading 0 is NOT octal ("010" is 10, "08" is 8). No sign,
-// no underscores, and the value must fit in 32 bits.
-func ahbotUint32(s string) bool {
-	if s == "" || strings.ContainsAny(s, "_+") {
-		return false
+// parseCommandUint32 mirrors the C++ uint32 argument parse (StringTo<uint32>
+// with base 0, StringConvert.h:43-69): 0x is hex and 0b is binary, anything
+// else is base 10 — a leading 0 is NOT octal ("010" is 10, "08" is 8). No
+// sign, no underscores, no whitespace, and the value must fit in 32 bits.
+// std::from_chars rejects both '+' and '-' for unsigned types (verified
+// against the toolchain's <charconv>), so neither is accepted here.
+func parseCommandUint32(s string) (uint32, bool) {
+	if s == "" || strings.ContainsAny(s, "_+-") {
+		return 0, false
 	}
 	base, digits := 10, s
 	switch {
@@ -2835,10 +2837,18 @@ func ahbotUint32(s string) bool {
 		base, digits = 2, s[2:]
 	}
 	if digits == "" {
-		return false
+		return 0, false
 	}
-	_, err := strconv.ParseUint(digits, base, 32)
-	return err == nil
+	v, err := strconv.ParseUint(digits, base, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(v), true
+}
+
+func ahbotUint32(s string) bool {
+	_, ok := parseCommandUint32(s)
+	return ok
 }
 
 // ahbotQualityMatches lists the qualities a token prefix-matches
@@ -5064,20 +5074,39 @@ func (s *session) commandAllowed(ctx context.Context, permissionID uint32) bool 
 // splitQuotedArgs re-splits command fields after the dispatcher tokenized the
 // raw line on whitespace, keeping "double-quoted segments" together (quotes
 // retained), so the Trinity ChatCommand QuotedString arguments survive the
-// dispatcher's strings.Fields tokenization.
+// dispatcher's strings.Fields tokenization. A quote opens a segment only at
+// the start of a token (so O'Brien stays one literal token); backslash
+// escapes the next character inside a quoted segment, as
+// QuotedString::TryConsume does (ChatCommandTags.cpp:30-59). It returns nil
+// when a quoted segment is never closed: C++ rejects the unterminated
+// QuotedString parse outright.
 func splitQuotedArgs(args []string) []string {
 	line := strings.Join(args, " ")
 	var toks []string
 	var cur strings.Builder
-	inQuote := false
+	var quote byte
 	for i := 0; i < len(line); i++ {
 		c := line[i]
-		if c == '"' {
-			inQuote = !inQuote
+		if quote != 0 {
+			if c == '\\' && i+1 < len(line) {
+				i++
+				cur.WriteByte(line[i])
+				continue
+			}
+			if c == quote {
+				quote = 0
+				cur.WriteByte(c)
+				continue
+			}
 			cur.WriteByte(c)
 			continue
 		}
-		if c == ' ' && !inQuote {
+		if (c == '"' || c == '\'') && cur.Len() == 0 {
+			quote = c
+			cur.WriteByte(c)
+			continue
+		}
+		if c == ' ' {
 			if cur.Len() > 0 {
 				toks = append(toks, cur.String())
 				cur.Reset()
@@ -5086,15 +5115,20 @@ func splitQuotedArgs(args []string) []string {
 		}
 		cur.WriteByte(c)
 	}
+	if quote != 0 {
+		return nil
+	}
 	if cur.Len() > 0 {
 		toks = append(toks, cur.String())
 	}
 	return toks
 }
 
-// unquoteCommandToken mirrors the Trinity ChatCommand QuotedString unwrap.
+// unquoteCommandToken mirrors the Trinity ChatCommand QuotedString unwrap:
+// a matching quote pair (double or single) is stripped.
 func unquoteCommandToken(tok string) string {
-	if len(tok) >= 2 && strings.HasPrefix(tok, "\"") && strings.HasSuffix(tok, "\"") {
+	if len(tok) >= 2 && ((strings.HasPrefix(tok, "\"") && strings.HasSuffix(tok, "\"")) ||
+		(strings.HasPrefix(tok, "'") && strings.HasSuffix(tok, "'"))) {
 		return tok[1 : len(tok)-1]
 	}
 	return tok
@@ -5137,6 +5171,15 @@ func parseArenaTeamType(tok string) (uint32, bool) {
 	if matches == 1 {
 		return typ, true
 	}
+	// C++ enum parse falls back to the underlying numeric type
+	// (ChatCommandArgs.h:177-210): StringTo<uint8> base 0, so "0x2" and
+	// "0b11" are valid team types and "6" is not.
+	if v, ok := parseCommandUint32(tok); ok {
+		switch v {
+		case ArenaTeamType2v2, ArenaTeamType3v3, ArenaTeamType5v5:
+			return v, true
+		}
+	}
 	return 0, false
 }
 
@@ -5145,7 +5188,7 @@ func parseArenaTeamType(tok string) (uint32, bool) {
 // PlayerIdentifier::TryConsume): a numeric token is a character low GUID,
 // otherwise the token is normalized and looked up as a character name.
 func (s *session) resolveArenaCaptain(ctx context.Context, cdb *sql.DB, token string) (uint64, string, bool) {
-	if low, err := strconv.ParseUint(token, 10, 32); err == nil {
+	if low, ok := parseCommandUint32(token); ok {
 		var name string
 		if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", low).Scan(&name); err != nil {
 			return 0, "", false
@@ -5285,6 +5328,12 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
 		return
 	}
+	if len(rest) > 2 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
+		return
+	}
 	name := unquoteCommandToken(rest[0])
 	teamType, ok := parseArenaTeamType(rest[1])
 	if !ok {
@@ -5357,8 +5406,8 @@ func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .arena disband <teamId>")
 		return
 	}
-	id, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	id, ok := parseCommandUint32(args[0])
+	if !ok {
 		s.sendSysMessage("Invalid team ID.")
 		return
 	}
@@ -5368,8 +5417,15 @@ func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) {
 		return
 	}
 	teamID := uint32(id)
+	if len(args) > 1 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .arena disband <teamId>")
+		return
+	}
 	var name string
-	if err := cdb.QueryRowContext(ctx, "SELECT name FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&name); err != nil {
+	var teamType uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT name, type FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&name, &teamType); err != nil {
 		// LANG_ARENA_ERROR_NOT_FOUND (857).
 		s.sendSysMessage(fmt.Sprintf("Arena team with id %d not found.", teamID))
 		return
@@ -5378,6 +5434,23 @@ func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) {
 		// LANG_ARENA_ERROR_COMBAT (860).
 		s.sendSysMessage("Arena team is in combat.")
 		return
+	}
+	// ArenaTeam::Disband runs DelMember per member (ArenaTeam.cpp:406-409):
+	// each online member gets ERR_ARENA_TEAM_QUIT_S and its live slot
+	// fields cleared (ArenaTeam.cpp:353-357), as the captain-leave path
+	// in arena_team.go already does. Without this the members keep
+	// showing the team until relog.
+	if rows, err := cdb.QueryContext(ctx, "SELECT guid FROM arena_team_member WHERE arenaTeamId = ?", teamID); err == nil {
+		for rows.Next() {
+			var mGUID uint64
+			if rows.Scan(&mGUID) == nil {
+				if ms := s.server.findSessionByGUID(mGUID); ms != nil && ms.player != nil {
+					ms.sendArenaTeamCommandResult(arenaTeamQuitS, name, "", 0)
+					clearLiveArenaTeamSlot(ms, teamType)
+				}
+			}
+		}
+		rows.Close()
 	}
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team_member WHERE arenaTeamId = ?", teamID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM arena_team WHERE arenaTeamId = ?", teamID)
@@ -5394,6 +5467,12 @@ func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) {
 func (s *session) handleCmdArenaRename(ctx context.Context, args []string) {
 	toks := splitQuotedArgs(args)
 	if len(toks) < 2 {
+		s.sendSysMessage("Syntax: .arena rename \"<oldName>\" \"<newName>\"")
+		return
+	}
+	if len(toks) > 2 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
 		s.sendSysMessage("Syntax: .arena rename \"<oldName>\" \"<newName>\"")
 		return
 	}
@@ -5420,7 +5499,9 @@ func (s *session) handleCmdArenaRename(ctx context.Context, args []string) {
 		s.sendSysMessage("Arena team is in combat.")
 		return
 	}
-	if newName == "" || newName == oldName || len([]rune(newName)) > 24 {
+	if newName == "" || newName == oldName || len(newName) > 24 {
+		// ArenaTeam::SetName counts bytes (name.length(), ArenaTeam.cpp:276),
+		// not runes.
 		s.sendSysMessage("Invalid value.")
 		return
 	}
@@ -5441,8 +5522,8 @@ func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .arena captain <teamId> [<player>]")
 		return
 	}
-	id, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	id, ok := parseCommandUint32(args[0])
+	if !ok {
 		s.sendSysMessage("Invalid team ID.")
 		return
 	}
@@ -5452,9 +5533,16 @@ func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
 		return
 	}
 	teamID := uint32(id)
+	if len(args) > 2 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .arena captain <teamId> [<player>]")
+		return
+	}
 	var teamName string
 	var captainGUID uint64
-	if err := cdb.QueryRowContext(ctx, "SELECT name, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &captainGUID); err != nil {
+	var teamType uint32
+	if err := cdb.QueryRowContext(ctx, "SELECT name, captainGuid, type FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &captainGUID, &teamType); err != nil {
 		// LANG_ARENA_ERROR_NOT_FOUND (857).
 		s.sendSysMessage(fmt.Sprintf("Arena team with id %d not found.", teamID))
 		return
@@ -5498,6 +5586,15 @@ func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
 		s.sendSysMessage("Unknown error.")
 		return
 	}
+	// ArenaTeam::SetCaptain (ArenaTeam.cpp:287-310) flips the live member
+	// flag: the old captain's goes to 1, the new captain's to 0 (promote
+	// buttons), as the packet promote path in arena_team.go does.
+	if oldSess := s.server.findSessionByGUID(captainGUID); oldSess != nil && oldSess.player != nil {
+		setLiveArenaTeamMemberFlag(oldSess, teamType, false)
+	}
+	if newSess := s.server.findSessionByGUID(targetGUID); newSess != nil && newSess.player != nil {
+		setLiveArenaTeamMemberFlag(newSess, teamType, true)
+	}
 	// LANG_ARENA_CAPTAIN (867).
 	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" (id %d): captain changed from %s to %s.", teamName, teamID, oldCaptainName, targetName))
 	s.debug("arena team captain changed", "id", teamID, "from", oldCaptainName, "to", targetName)
@@ -5511,8 +5608,8 @@ func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .arena info <teamId>")
 		return
 	}
-	id, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	id, ok := parseCommandUint32(args[0])
+	if !ok {
 		s.sendSysMessage("Invalid team ID.")
 		return
 	}
@@ -5522,6 +5619,12 @@ func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) {
 		return
 	}
 	teamID := uint32(id)
+	if len(args) > 1 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .arena info <teamId>")
+		return
+	}
 	var name string
 	var rating uint32
 	var teamType uint32
@@ -5655,12 +5758,12 @@ func (s *session) bfBattleID(args []string, usage string) (uint32, bool) {
 		s.sendSysMessage(usage)
 		return 0, false
 	}
-	id, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil || uint32(id) != WGBattleID {
+	id, ok := parseCommandUint32(args[0])
+	if !ok || id != WGBattleID {
 		s.sendSysMessage("Invalid battlefield ID.")
 		return 0, false
 	}
-	return uint32(id), true
+	return id, true
 }
 
 // handleCmdBFStart processes ".bf start <battleId>" (cs_bf.cpp
@@ -5669,6 +5772,12 @@ func (s *session) bfBattleID(args []string, usage string) (uint32, bool) {
 // skipped in that case; the defender team is preserved from current state.
 func (s *session) handleCmdBFStart(ctx context.Context, args []string) {
 	if _, ok := s.bfBattleID(args, "Syntax: .bf start <battleId>"); !ok {
+		return
+	}
+	if len(args) > 1 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .bf start <battleId>")
 		return
 	}
 	wg := s.server.getOrCreateWGState()
@@ -5688,6 +5797,12 @@ func (s *session) handleCmdBFStop(ctx context.Context, args []string) {
 	if _, ok := s.bfBattleID(args, "Syntax: .bf stop <battleId>"); !ok {
 		return
 	}
+	if len(args) > 1 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .bf stop <battleId>")
+		return
+	}
 	s.server.EndWGBattle(true)
 	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command stop used)")
 }
@@ -5697,6 +5812,12 @@ func (s *session) handleCmdBFStop(ctx context.Context, args []string) {
 // vault and become the new defenders.
 func (s *session) handleCmdBFSwitch(ctx context.Context, args []string) {
 	if _, ok := s.bfBattleID(args, "Syntax: .bf switch <battleId>"); !ok {
+		return
+	}
+	if len(args) > 1 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .bf switch <battleId>")
 		return
 	}
 	s.server.EndWGBattle(false)
@@ -5714,9 +5835,15 @@ func (s *session) handleCmdBFTimer(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .bf timer <battleId> <time>")
 		return
 	}
-	secs, err := strconv.ParseUint(args[1], 10, 32)
-	if err != nil {
+	secs, ok := parseCommandUint32(args[1])
+	if !ok {
 		s.sendSysMessage("Invalid time value.")
+		return
+	}
+	if len(args) > 2 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .bf timer <battleId> <time>")
 		return
 	}
 	wg := s.server.getOrCreateWGState()
@@ -5734,6 +5861,12 @@ func (s *session) handleCmdBFTimer(ctx context.Context, args []string) {
 // player-enter-zone paths consult it (BattlefieldMgr.cpp:100, 130).
 func (s *session) handleCmdBFEnable(ctx context.Context, args []string) {
 	if _, ok := s.bfBattleID(args, "Syntax: .bf enable <battleId>"); !ok {
+		return
+	}
+	if len(args) > 1 {
+		// C++ ConsumeFromOffset requires the whole string to be consumed
+		// (ChatCommand.h:104-108); a trailing token fails the parse.
+		s.sendSysMessage("Syntax: .bf enable <battleId>")
 		return
 	}
 	wg := s.server.getOrCreateWGState()
@@ -6371,10 +6504,23 @@ func (n *commandNode) resolve(tokens []string) (*commandNode, commandTokens, int
 	rewritten := make(commandTokens, 0, len(tokens))
 	consumed := 0
 	nodeDepth := 0
-	// Once an invoke-bearing node is reached, remaining tokens are its
-	// handler's parameters: they are still canonicalized against its
-	// children (so 'spee' -> 'speed') but do not descend further.
+	// Once an invoke-bearing node is reached, the next token is its
+	// subcommand and is canonicalized against its children (so 'spee' ->
+	// 'speed'); every token after that is the handler's raw parameter and
+	// passes through verbatim. C++ TryExecuteCommand descends only
+	// through subcommand maps; once the leaf invoker is reached the
+	// remainder is the handler's raw args, so canonicalizing later tokens
+	// rewrites free-text parameters ('.ban account c ...' banned
+	// 'CHARACTER', '.arena lookup c' falsely reported ambiguity).
+	paramDone := false
 	for _, token := range tokens {
+		// The subcommand token is the only parameter token matched
+		// against this node's children; anything after it is the
+		// handler's raw argument and must not be rewritten or
+		// reported ambiguous against the sibling subcommands.
+		if node.invoke != nil && paramDone {
+			break
+		}
 		lower := strings.ToLower(token)
 		matches := make([]string, 0, 2)
 		for name := range node.children {
@@ -6419,7 +6565,11 @@ func (n *commandNode) resolve(tokens []string) (*commandNode, commandTokens, int
 			break
 		}
 		if node.invoke != nil {
-			// Parameter canonicalization for the already-selected handler.
+			// Parameter canonicalization for the already-selected handler:
+			// the subcommand token only. Later tokens are raw handler
+			// parameters and must not be rewritten against the sibling
+			// subcommands (see the resolve comment above).
+			paramDone = true
 			rewritten = append(rewritten, canonical)
 			consumed++
 			continue
@@ -6637,8 +6787,8 @@ func cAtoi(s string) int {
 }
 
 // isBanIPAddress mirrors the IsIPAddress argument check of the .ban ip /
-// .baninfo ip / .unban ip handlers (documented deviation: net.ParseIP also
-// accepts IPv6, which the C++ IPv4-only check rejects).
+// .baninfo ip / .unban ip handlers (Util.cpp:295-303): boost
+// make_address, which accepts IPv4 and IPv6, as net.ParseIP does.
 func isBanIPAddress(s string) bool {
 	return net.ParseIP(strings.TrimSpace(s)) != nil
 }
@@ -6999,7 +7149,11 @@ func (s *session) handleBanHelper(ctx context.Context, mode int, args []string) 
 		nameOrIP = normalizePlayerName(nameOrIP)
 	case banModeIP:
 		if !isBanIPAddress(nameOrIP) {
-			return // C++ returns false silently
+			// C++ returns false with no error message, so the dispatcher
+			// shows the command help (ChatCommand.cpp:296-311); the
+			// syntax line is the Go equivalent.
+			s.sendSysMessage(syntax)
+			return
 		}
 	}
 	author := s.banAuthorName()
@@ -7259,13 +7413,21 @@ func (s *session) handleCmdBanInfoIP(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) == 0 {
-		return // C++ returns false silently
+		// C++ returns false with no error message, so the dispatcher
+		// shows the command help (ChatCommand.cpp:296-311); the syntax
+		// line is the Go equivalent.
+		s.sendSysMessage("Syntax: .baninfo ip <ip>")
+		return
 	}
 	// C++ takes the whole remainder (strtok with an empty delimiter), so a
 	// trailing token fails the IsIPAddress check instead of being ignored.
 	ip := strings.Join(args, " ")
 	if !isBanIPAddress(ip) {
-		return // C++ returns false silently
+		// C++ returns false with no error message, so the dispatcher
+		// shows the command help (ChatCommand.cpp:296-311); the syntax
+		// line is the Go equivalent.
+		s.sendSysMessage("Syntax: .baninfo ip <ip>")
+		return
 	}
 	// C++ raw query: SELECT ip, FROM_UNIXTIME(bandate),
 	// FROM_UNIXTIME(unbandate), unbandate-UNIX_TIMESTAMP(), banreason,
@@ -7542,7 +7704,11 @@ func (s *session) handleUnBanHelper(ctx context.Context, mode int, args []string
 		nameOrIP = normalizePlayerName(nameOrIP)
 	case banModeIP:
 		if !isBanIPAddress(nameOrIP) {
-			return // C++ returns false silently
+			// C++ returns false with no error message, so the dispatcher
+			// shows the command help (ChatCommand.cpp:296-311); the
+			// syntax line is the Go equivalent.
+			s.sendSysMessage("Syntax: .unban account|playeraccount|ip <name|ip>")
+			return
 		}
 	}
 	// World::RemoveBanAccount (World.cpp:2878).

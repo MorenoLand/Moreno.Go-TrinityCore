@@ -443,8 +443,9 @@ func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string)
 	// self (Chat.cpp:657).
 	target := s.guildSelectionOrSelf()
 	var guid uint64
-	if len(args) > 0 {
-		name := normalizePlayerName(extractPlayerNameFromLink(unquoteCommandToken(splitQuotedArgs(args)[0])))
+	toks := splitQuotedArgs(args)
+	if len(toks) > 0 {
+		name := normalizePlayerName(extractPlayerNameFromLink(unquoteCommandToken(toks[0])))
 		if ts := s.server.findSessionByName(name); ts != nil && ts.player != nil {
 			target, guid = ts, ts.playerGUID
 		} else {
@@ -455,6 +456,11 @@ func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string)
 				return
 			}
 		}
+	} else if len(args) > 0 {
+		// splitQuotedArgs returned nil: unterminated quoted name, which
+		// the C++ PlayerIdentifier parse rejects outright.
+		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
+		return
 	} else if target.player != nil {
 		guid = target.playerGUID
 	}
