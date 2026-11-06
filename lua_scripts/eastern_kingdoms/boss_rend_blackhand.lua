@@ -12,9 +12,17 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (gyth / pyroguard_emberseer precedent).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h); the combat arms have no instance state.
--- Reset() _Reset() / JustDied _JustDied() are internal machinery
--- covered here by the cancel on combat events (halycon precedent).
+-- (blackrock_spire.h). SetBossState legs (BossAI DATA_WARCHIEF_REND_
+-- BLACKHAND = 10, blackrock_spire.h:40; < EncounterCount 23):
+-- ev1 IN_PROGRESS via base BossAI::JustEngagedWith (boss_rend_
+-- blackhand.cpp:186, base call first; _JustEngagedWith writes
+-- IN_PROGRESS at ScriptedCreature.cpp:537); ev23 NOT_STARTED via
+-- Reset's _Reset() (:176-182; _Reset gates on alive + state != DONE,
+-- ScriptedCreature.cpp:499-511) — Reset's gythEvent/victorGUID/
+-- portcullisGUID clears are pre-fight state, unmodeled; ev4 DONE via
+-- JustDied's _JustDied() (:198-203; ScriptedCreature.cpp:513-520) —
+-- JustDied's victor SetData(1, 2) arm stays documented-only below.
+-- Bridge live (lua_creature_events.go:5917; gyth convention).
 -- SPELL_FRENZY (8269) and SPELL_KNOCKDOWN (13360) are defined in the
 -- file's spell enum but never cast by the AI — omitted by design
 -- (shadowvosh ice-armor precedent).
@@ -126,6 +134,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_rend_blackhand.cpp:186 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_rend_blackhand.cpp:186 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_WARCHIEF_REND_BLACKHAND=10 (blackrock_spire.h:40).
+    creature:SetBossState(10, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "whirlwind", {13000, 15000}, function() onWhirlwind(creature, guid) end)
@@ -137,7 +148,26 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied (boss_rend_blackhand.cpp:198-203): _JustDied()
+-- bookkeeping (timer cancel) + SetBossState(DATA_WARCHIEF_REND_
+-- BLACKHAND=10, DONE). The victor SetData(1, 2) arm stays unmodeled.
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(10, 3)
+end
+
+-- C++ Reset (boss_rend_blackhand.cpp:176-182): _Reset() first, then
+-- the gythEvent/victorGUID/portcullisGUID clears (unmodeled pre-fight
+-- state). The _Reset() leg is alive-gated (Go fires ev23 on the death
+-- path too) and skipped when already DONE (ScriptedCreature.cpp:499-511).
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(10) ~= 3 then
+        creature:SetBossState(10, 0)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_WARCHIEF_REND_BLACKHAND, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_WARCHIEF_REND_BLACKHAND, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_WARCHIEF_REND_BLACKHAND, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_WARCHIEF_REND_BLACKHAND, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_WARCHIEF_REND_BLACKHAND, 4, onDied)
+RegisterCreatureEvent(ENTRY_WARCHIEF_REND_BLACKHAND, 23, onReset)

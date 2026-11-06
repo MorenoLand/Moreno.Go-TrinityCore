@@ -16,9 +16,16 @@
 -- boss_halycon.lua:97 (onDied) — 'unbridgeable' is stale, so
 -- Gizrul's own entry is verifiable here and registration is valid.
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h); the combat arms have no instance state.
--- Reset() _Reset() / JustDied _JustDied() are internal machinery
--- covered here by the cancel on combat events (halycon precedent).
+-- (blackrock_spire.h).
+-- SetBossState legs (DATA_GIZRUL_THE_SLAVENER = 6, blackrock_spire.h:36;
+-- EncounterCount = 23, blackrock_spire.h:23; instance calls
+-- SetBossNumber(23), instance_blackrock_spire.cpp:62): ev1 IN_PROGRESS
+-- via BossAI::JustEngagedWith (boss_gizrul_the_slavener.cpp:64 base call
+-- first; ScriptedCreature.cpp:537); ev23 NOT_STARTED via Reset's _Reset()
+-- (:54; ScriptedCreature.cpp:499-512, alive-gated, skipped when DONE);
+-- ev4 DONE via JustDied's _JustDied() (:71; ScriptedCreature.cpp:513-520).
+-- The _Reset()/_JustDied() bookkeeping (timers/summons) is covered by the
+-- cancel on combat events (halycon precedent).
 -- SPELL_FRENZY (8269) is defined in the file's spell enum but never
 -- cast by the AI — omitted by design (shadowvosh ice-armor precedent).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
@@ -100,6 +107,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_gizrul_the_slavener.cpp:64 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_gizrul_the_slavener.cpp:64 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_GIZRUL_THE_SLAVENER=6 (blackrock_spire.h:36).
+    creature:SetBossState(6, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "fatalbite", {17000, 20000}, function() onFatalBite(creature, guid) end)
@@ -110,7 +120,24 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_gizrul_the_slavener.cpp:52-55): _Reset() writes
+-- NOT_STARTED when alive and the state is not DONE (ScriptedCreature.cpp:499-512).
+-- Alive-gated: Go fires ev23 on the death path too (AQ40/RFD convention).
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
+        creature:SetBossState(6, 0)
+    end
+end
+
+-- C++ JustDied (boss_gizrul_the_slavener.cpp:69-72): _JustDied() writes DONE
+-- (ScriptedCreature.cpp:513-520).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(6, 3)
+end
+
 RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 4, onDied)
+RegisterCreatureEvent(ENTRY_GIZRUL_THE_SLAVENER, 23, onReset)

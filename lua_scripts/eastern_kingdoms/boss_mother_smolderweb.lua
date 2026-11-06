@@ -11,10 +11,14 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (boss_highlord_omokk / boss_halycon precedent).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h:129-132); the AI has no instance arms — Reset()
--- _Reset() is internal machinery covered here by the cancel/re-arm on
--- combat events (halycon precedent). JustDied _JustDied() likewise
--- covered by the cancel on OnDied(4).
+-- (blackrock_spire.h:129-132). BossAI state legs are LIVE
+-- (SetBossNumber(23), instance_blackrock_spire.cpp:62):
+-- JustEngagedWith's base call (boss_mother_smolderweb.cpp:56) writes
+-- SetBossState(DATA_MOTHER_SMOLDERWEB=3, IN_PROGRESS) via
+-- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537); Reset's
+-- _Reset() (:51) writes NOT_STARTED (ScriptedCreature.cpp:499-511,
+-- alive + != DONE gated); JustDied's _JustDied() (:63) writes DONE
+-- (ScriptedCreature.cpp:513-521) — see onEnterCombat/onReset/onDied.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset. Driven by CreateLuaEvent timers; melee
 -- is engine-driven in Go (creature combat tick), like C++
@@ -97,6 +101,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_mother_smolderweb.cpp:56 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_mother_smolderweb.cpp:56 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_MOTHER_SMOLDERWEB=3 (blackrock_spire.h:33).
+    creature:SetBossState(3, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     summonFired[guid] = nil
@@ -106,6 +113,24 @@ end
 
 local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ Reset (boss_mother_smolderweb.cpp:49-52): _Reset() bookkeeping (timer cancel
+-- above) + SetBossState(DATA_MOTHER_SMOLDERWEB=3, NOT_STARTED), gated on alive
+-- and state != DONE (ScriptedCreature.cpp:499-511). Alive-gated: Go fires
+-- ev23 on the death path too, and C++ Reset never runs on death.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
+        creature:SetBossState(3, 0)
+    end
+end
+
+-- C++ JustDied (boss_mother_smolderweb.cpp:61-64): _JustDied() bookkeeping (timer
+-- cancel) + SetBossState(DATA_MOTHER_SMOLDERWEB=3, DONE).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(3, 3)
 end
 
 local function onDamageTaken(_, creature, _, damage)
@@ -121,6 +146,6 @@ end
 
 RegisterCreatureEvent(ENTRY_MOTHER_SMOLDERWEB, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_MOTHER_SMOLDERWEB, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_MOTHER_SMOLDERWEB, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_MOTHER_SMOLDERWEB, 4, onDied)
 RegisterCreatureEvent(ENTRY_MOTHER_SMOLDERWEB, 9, onDamageTaken)
-RegisterCreatureEvent(ENTRY_MOTHER_SMOLDERWEB, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_MOTHER_SMOLDERWEB, 23, onReset)

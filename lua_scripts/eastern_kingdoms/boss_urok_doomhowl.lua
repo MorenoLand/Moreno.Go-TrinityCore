@@ -13,8 +13,9 @@
 -- (gizrul / rend_blackhand precedent).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
 -- (blackrock_spire.h); the combat arms have no instance state.
--- Reset() _Reset() / JustDied _JustDied() are internal machinery
--- covered here by the cancel on combat events (halycon precedent).
+-- Reset() _Reset() / JustDied _JustDied() state legs are ported below
+-- via creature:SetBossState (DATA_UROK_DOOMHOWL = 4); the timer-cancel
+-- half of that machinery stays on the combat events (halycon precedent).
 -- SPELL_INTIMIDATING_ROAR (16508) is defined in the file's spell enum
 -- but never cast by the AI — omitted by design (shadowvosh ice-armor
 -- precedent). SAY_SUMMON (0) is never spoken by the AI — enum-only.
@@ -46,6 +47,13 @@
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention). BossAI::JustEngagedWith(who) is the standard
 -- threat/aggro entry already modeled engine-side in Go.
+-- SetBossState legs (bridge live, lua_creature_events.go:5917;
+-- gyth precedent): ev1 IN_PROGRESS (base call first,
+-- boss_urok_doomhowl.cpp:58; ScriptedCreature.cpp:537), ev23
+-- NOT_STARTED via _Reset (boss_urok_doomhowl.cpp:51-55;
+-- ScriptedCreature.cpp:499-511, alive + != DONE gated), ev4 DONE via
+-- _JustDied (boss_urok_doomhowl.cpp:64-67; ScriptedCreature.cpp:513-521).
+-- DATA_UROK_DOOMHOWL = 4 < EncounterCount 23 (blackrock_spire.h:23,34).
 
 local SPELL_REND = 16509
 local SPELL_STRIKE = 15580
@@ -104,6 +112,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_urok_doomhowl.cpp:58 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_urok_doomhowl.cpp:58 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_UROK_DOOMHOWL=4 (blackrock_spire.h:34).
+    creature:SetBossState(4, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
@@ -115,7 +126,25 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_urok_doomhowl.cpp:51-55): _Reset() only, no
+-- interacting arms. BossAI::_Reset (ScriptedCreature.cpp:499-511):
+-- alive-gated, writes NOT_STARTED only when state != DONE. The alive
+-- gate is load-bearing: Go fires ev23 on the death path too.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
+        creature:SetBossState(4, 0)
+    end
+end
+
+-- C++ JustDied (boss_urok_doomhowl.cpp:64-67): _JustDied() only.
+-- BossAI::_JustDied (ScriptedCreature.cpp:513-521) writes DONE.
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(4, 3)
+end
+
 RegisterCreatureEvent(ENTRY_UROK_DOOMHOWL, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_UROK_DOOMHOWL, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_UROK_DOOMHOWL, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_UROK_DOOMHOWL, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_UROK_DOOMHOWL, 4, onDied)
+RegisterCreatureEvent(ENTRY_UROK_DOOMHOWL, 23, onReset)

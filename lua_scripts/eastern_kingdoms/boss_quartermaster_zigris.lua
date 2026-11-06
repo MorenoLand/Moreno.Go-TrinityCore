@@ -11,10 +11,10 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (boss_warmaster_voone / boss_the_beast precedent).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h:129-132); the AI has no instance arms —
--- Reset() _Reset() / JustDied _JustDied() are internal machinery
--- covered here by the cancel/re-arm on combat events (halycon
--- precedent). SPELL_HEALING_POTION (15504) and SPELL_HOOKEDNET
+-- (blackrock_spire.h:129-132). Reset() _Reset() / JustDied _JustDied()
+-- state legs are ported below via creature:SetBossState
+-- (DATA_QUARTERMASTER_ZIGRIS = 5); the timer-cancel half of that
+-- machinery stays on the combat events (halycon precedent). SPELL_HEALING_POTION (15504) and SPELL_HOOKEDNET
 -- (15609) are defined in the file's spell enum but never cast by the
 -- AI — omitted by design (shadowvosh ice-armor precedent).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
@@ -35,6 +35,14 @@
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1) and cancels on 2/4/23
 -- (maiden convention).
+-- SetBossState legs (bridge live, lua_creature_events.go:5917;
+-- gyth precedent): ev1 IN_PROGRESS (base call first,
+-- boss_quartermaster_zigris.cpp:52; ScriptedCreature.cpp:537), ev23
+-- NOT_STARTED via _Reset (boss_quartermaster_zigris.cpp:45-49;
+-- ScriptedCreature.cpp:499-511, alive + != DONE gated), ev4 DONE via
+-- _JustDied (boss_quartermaster_zigris.cpp:57-61;
+-- ScriptedCreature.cpp:513-521). DATA_QUARTERMASTER_ZIGRIS = 5 <
+-- EncounterCount 23 (blackrock_spire.h:23,35).
 
 local SPELL_SHOOT = 16496
 local SPELL_STUNBOMB = 16497
@@ -92,6 +100,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_quartermaster_zigris.cpp:52 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_quartermaster_zigris.cpp:52 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_QUARTERMASTER_ZIGRIS=5 (blackrock_spire.h:35).
+    creature:SetBossState(5, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "shoot", 1000, function() onShoot(creature, guid) end)
@@ -102,7 +113,25 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_quartermaster_zigris.cpp:45-49): _Reset() only, no
+-- interacting arms. BossAI::_Reset (ScriptedCreature.cpp:499-511):
+-- alive-gated, writes NOT_STARTED only when state != DONE. The alive
+-- gate is load-bearing: Go fires ev23 on the death path too.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
+        creature:SetBossState(5, 0)
+    end
+end
+
+-- C++ JustDied (boss_quartermaster_zigris.cpp:57-61): _JustDied() only.
+-- BossAI::_JustDied (ScriptedCreature.cpp:513-521) writes DONE.
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(5, 3)
+end
+
 RegisterCreatureEvent(ENTRY_QUARTERMASTER_ZIGRIS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_QUARTERMASTER_ZIGRIS, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_QUARTERMASTER_ZIGRIS, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_QUARTERMASTER_ZIGRIS, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_QUARTERMASTER_ZIGRIS, 4, onDied)
+RegisterCreatureEvent(ENTRY_QUARTERMASTER_ZIGRIS, 23, onReset)

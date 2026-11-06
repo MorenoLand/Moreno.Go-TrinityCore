@@ -10,9 +10,17 @@
 -- entry itself is C++-verifiable so the port is registered
 -- (boss_drakkisath / boss_moira_bronzebeard precedent).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h:129-132); the AI has no instance arms — Reset()
--- _Reset() and Initialize() are internal machinery covered here by the
--- cancel/re-arm on combat events.
+-- (blackrock_spire.h:129-132).
+-- SetBossState legs (DATA_HALYCON = 7, blackrock_spire.h:37;
+-- EncounterCount = 23, blackrock_spire.h:23; instance calls
+-- SetBossNumber(23), instance_blackrock_spire.cpp:62): ev1 IN_PROGRESS
+-- via BossAI::JustEngagedWith (boss_halycon.cpp:66 base call first;
+-- ScriptedCreature.cpp:537); ev23 NOT_STARTED via Reset's _Reset()
+-- (:60; ScriptedCreature.cpp:499-512, alive-gated, skipped when DONE).
+-- NO ev4 DONE leg: JustDied (:71-77) summons Gizrul + Talk and never
+-- calls _JustDied(), so the DONE write never happens in C++ (C'Thun /
+-- bug-trio precedent). Reset's Initialize() is write-only bool state
+-- covered by the cancel/re-arm on combat events.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -99,6 +107,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_halycon.cpp:66 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_halycon.cpp:66 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_HALYCON=7 (blackrock_spire.h:37).
+    creature:SetBossState(7, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "rend", {17000, 20000}, function() onRend(creature, guid) end)
@@ -109,6 +120,18 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_halycon.cpp:58-62): _Reset() writes NOT_STARTED when
+-- alive and the state is not DONE (ScriptedCreature.cpp:499-512).
+-- Alive-gated: Go fires ev23 on the death path too (AQ40/RFD convention).
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
+        creature:SetBossState(7, 0)
+    end
+end
+
+-- C++ JustDied (boss_halycon.cpp:71-77): summon + Talk only — no
+-- _JustDied() call, so NO SetBossState(DONE) leg (C'Thun / bug-trio precedent).
 local function onDied(_, creature)
     cancelTimers(creature:GetGUID())
     creature:SummonCreature(ENTRY_GIZRUL_THE_SLAVENER, -167.9561, -411.7844, 76.23057, 1.53589, 2, 300000)
@@ -118,4 +141,4 @@ end
 RegisterCreatureEvent(ENTRY_HALYCON, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_HALYCON, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HALYCON, 4, onDied)
-RegisterCreatureEvent(ENTRY_HALYCON, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_HALYCON, 23, onReset)

@@ -98,6 +98,14 @@
 -- spell_barreled_control_aura (50278) PeriodicTick EFFECT_0 is
 -- PORTED below (tick 190) — PreventDefaultAction + triggered
 -- cast 47442 on nil target.
+-- Unmodeled: the BossAI SetBossState legs (_Reset NOT_STARTED,
+-- base JustEngagedWith IN_PROGRESS, _JustDied DONE, DATA_COREN 28)
+-- are DEAD WRITES in C++ — the BRD instance script never calls
+-- SetBossNumber, so bosses.size() is 0 and InstanceScript::
+-- SetBossState drops id 28 at the id < bosses.size() guard
+-- (InstanceScript.cpp:342); no DATA_COREN consumer exists. Go's
+-- setInstanceBossState takes any id and runs spawn-group evaluation,
+-- so porting the legs would fabricate state C++ never stores.
 -- Unmodeled: JustDied LFG FinishDungeon(287) arm (sLFGMgr + group gates —
 -- no LFG bridge).
 -- Deviations from C++: the C++ UpdateAI pre-loop CASTING gate

@@ -10,9 +10,15 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (boss_magmus / boss_moira_bronzebeard precedent).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h:129-132); the AI has no instance arms — Reset()
--- _Reset() and JustDied() _JustDied() are internal BossAI machinery
--- covered here by the cancel/re-arm on combat events.
+-- (blackrock_spire.h:129-132). SetBossState legs (BossAI DATA_GENERAL_
+-- DRAKKISATH = 13, blackrock_spire.h:43; < EncounterCount 23):
+-- ev1 IN_PROGRESS via base BossAI::JustEngagedWith (boss_drakkisath.
+-- cpp:54, base call first; _JustEngagedWith writes IN_PROGRESS at
+-- ScriptedCreature.cpp:537); ev23 NOT_STARTED via Reset's _Reset()
+-- (:47-50; _Reset gates on alive + state != DONE, ScriptedCreature.
+-- cpp:499-511); ev4 DONE via JustDied's _JustDied() (:61-64;
+-- ScriptedCreature.cpp:513-520). Bridge live (lua_creature_events.
+-- go:5917; gyth convention).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -117,6 +123,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_drakkisath.cpp:54 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_drakkisath.cpp:54 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_GENERAL_DRAKKISATH=13 (blackrock_spire.h:43).
+    creature:SetBossState(13, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "firenova", 6000, function() onFireNova(creature, guid) end)
@@ -129,7 +138,24 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ JustDied (boss_drakkisath.cpp:61-64): _JustDied() bookkeeping
+-- (timer cancel) + SetBossState(DATA_GENERAL_DRAKKISATH=13, DONE).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(13, 3)
+end
+
+-- C++ Reset (boss_drakkisath.cpp:47-50): _Reset() only — alive-gated
+-- (Go fires ev23 on the death path too) and skipped when already DONE
+-- (ScriptedCreature.cpp:499-511).
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(13) ~= 3 then
+        creature:SetBossState(13, 0)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_DRAKKISATH, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_DRAKKISATH, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_DRAKKISATH, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_DRAKKISATH, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_DRAKKISATH, 4, onDied)
+RegisterCreatureEvent(ENTRY_DRAKKISATH, 23, onReset)

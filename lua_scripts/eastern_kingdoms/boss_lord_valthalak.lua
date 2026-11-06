@@ -12,7 +12,14 @@
 -- objective "NPC #16042 slain (1) — Lord Valthalak". The AI runs under
 -- BossAI(DATA_LORD_VALTHALAK = 14, blackrock_spire.h:44).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h); the combat arms have no instance state.
+-- (blackrock_spire.h). SetBossState legs (BossAI DATA_LORD_VALTHALAK
+-- = 14, blackrock_spire.h:44; < EncounterCount 23): ev1 IN_PROGRESS
+-- via base BossAI::JustEngagedWith (boss_lord_valthalak.cpp:69, base
+-- call first; _JustEngagedWith writes IN_PROGRESS at ScriptedCreature.
+-- cpp:537); ev23 NOT_STARTED via Reset's _Reset() (:61-65; _Reset
+-- gates on alive + state != DONE, ScriptedCreature.cpp:499-511).
+-- No ev4 leg — see Unmodeled below. Bridge live (lua_creature_events.
+-- go:5917; gyth convention).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset. Driven by CreateLuaEvent timers; melee
 -- is engine-driven in Go (creature combat tick), like C++
@@ -55,11 +62,13 @@
 -- not an object; the old :Cancel() method idiom errored at runtime and
 -- never cancelled)
 -- (maiden convention).
--- Unmodeled (documented-only): JustDied's instance->SetData(DATA_LORD_
--- VALTHALAK, DONE) — no instance bridge on the Lua surface (instance
--- precedent); Reset's _Reset() and JustDied's _JustDied() are internal
--- BossAI machinery covered by the cancel/re-arm on combat events
--- (halycon precedent).
+-- Unmodeled (documented-only): NO ev4 DONE leg — JustDied (:74-77)
+-- overrides without _JustDied(), and its instance->SetData(DATA_LORD_
+-- VALTHALAK, DONE) is a no-op in C++: instance SetData's switch
+-- (instance_blackrock_spire.cpp:294-313) handles only AREATRIGGER and
+-- DATA_BLACKHAND_INCARCERATOR, so the DONE write never happens
+-- (C'Thun / bug-trio precedent). Reset's _Reset() bookkeeping is
+-- covered by the cancel/re-arm on combat events (halycon precedent).
 
 local ENTRY_LORD_VALTHALAK = 16042
 
@@ -135,6 +144,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_lord_valthalak.cpp:69 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_lord_valthalak.cpp:69 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_LORD_VALTHALAK=14 (blackrock_spire.h:44).
+    creature:SetBossState(14, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     frenzy40[guid] = nil
@@ -145,6 +157,19 @@ end
 
 local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ Reset (boss_lord_valthalak.cpp:61-65): _Reset() first, then
+-- Initialize() (frenzy-flag reset, already done on enter combat).
+-- The _Reset() leg is alive-gated (Go fires ev23 on the death path
+-- too) and skipped when already DONE (ScriptedCreature.cpp:499-511).
+-- ev4 stays onCombatEnd (cancel only): JustDied writes no DONE — see
+-- header Unmodeled note.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(14) ~= 3 then
+        creature:SetBossState(14, 0)
+    end
 end
 
 local function onDamageTaken(_, creature, _, damage)
@@ -171,4 +196,4 @@ RegisterCreatureEvent(ENTRY_LORD_VALTHALAK, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_LORD_VALTHALAK, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_LORD_VALTHALAK, 4, onCombatEnd)
 RegisterCreatureEvent(ENTRY_LORD_VALTHALAK, 9, onDamageTaken)
-RegisterCreatureEvent(ENTRY_LORD_VALTHALAK, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_LORD_VALTHALAK, 23, onReset)

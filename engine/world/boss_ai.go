@@ -13517,8 +13517,9 @@ func init() {
 	// hemorrhage (DoCastVictim 30478, 5-8s engage / 12-168s
 	// re-arm) + kidney shot (DoCastVictim 30621, 12-15s
 	// engage / 20-26s re-arm) + Talk(SAY_AGGRO 0) on the
-	// 1s-pump pattern; the SpellHit text-counter machine has no
-	// SpellHit bridge (fizzule precedent) — documented only.
+	// 1s-pump pattern; the SpellHit text-counter machine is
+	// ported via ev14 (onSpellHit, branding-iron ladder) —
+	// the old "no SpellHit bridge" claim is stale.
 	// Entry 27394 verifiable from the C++ TorturerLeCraft enum
 	// — see lua_scripts/northrend/npc_torturer_lecraft.lua.
 	// npc_commander_eligor_dawnbringer (Naxxramas-wings talk

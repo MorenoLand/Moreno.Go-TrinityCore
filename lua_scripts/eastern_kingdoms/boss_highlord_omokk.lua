@@ -11,10 +11,16 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (boss_halycon / boss_drakkisath precedent).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h:129-132); the AI has no instance arms — Reset()
--- _Reset() is internal machinery covered here by the cancel/re-arm on
--- combat events (halycon precedent). JustDied _JustDied() likewise
--- covered by the cancel on OnDied(4).
+-- (blackrock_spire.h:129-132). SetBossState legs (bridge live,
+-- lua_creature_events.go:5917): DATA_HIGHLORD_OMOKK = 0
+-- (blackrock_spire.h:30; EncounterCount 23, so the write is live) —
+-- JustEngagedWith calls the base FIRST (boss_highlord_omokk.cpp:55),
+-- so BossAI::_JustEngagedWith writes IN_PROGRESS
+-- (ScriptedCreature.cpp:537); Reset's _Reset() (boss_highlord_omokk.
+-- cpp:51-54) writes NOT_STARTED gated on alive + state != DONE
+-- (ScriptedCreature.cpp:499-511); JustDied's _JustDied()
+-- (boss_highlord_omokk.cpp:63-66) writes DONE
+-- (ScriptedCreature.cpp:513-520). See onEnterCombat/onReset/onDied.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -90,6 +96,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_highlord_omokk.cpp:55 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_highlord_omokk.cpp:55 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_HIGHLORD_OMOKK=0 (blackrock_spire.h:30).
+    creature:SetBossState(0, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "frenzy", 20000, function() onFrenzy(creature, guid) end)
@@ -100,7 +109,25 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_highlord_omokk.cpp:51-54): _Reset() writes
+-- NOT_STARTED gated on alive + state != DONE (ScriptedCreature.cpp:
+-- 499-511). Alive-gated: Go fires ev23 on the death path too, and
+-- C++ Reset never runs on death.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0)
+    end
+end
+
+-- C++ JustDied (boss_highlord_omokk.cpp:63-66): _JustDied() writes
+-- DONE (ScriptedCreature.cpp:513-520).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(0, 3)
+end
+
 RegisterCreatureEvent(ENTRY_HIGHLORD_OMOKK, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_HIGHLORD_OMOKK, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_HIGHLORD_OMOKK, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_HIGHLORD_OMOKK, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_HIGHLORD_OMOKK, 4, onDied)
+RegisterCreatureEvent(ENTRY_HIGHLORD_OMOKK, 23, onReset)

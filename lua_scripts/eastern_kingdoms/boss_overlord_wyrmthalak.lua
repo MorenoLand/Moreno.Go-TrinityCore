@@ -11,10 +11,15 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (boss_mother_smolderweb / boss_highlord_omokk precedent).
 -- GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper only
--- (blackrock_spire.h:129-132); the AI has no instance arms — Reset()
--- _Reset() is internal machinery covered here by the cancel/re-arm on
--- combat events (halycon precedent). JustDied _JustDied() likewise
--- covered by the cancel on OnDied(4).
+-- (blackrock_spire.h:129-132). SetBossState legs (DATA_OVERLORD_WYRMTHALAK
+-- = 8, blackrock_spire.h:38; 8 < EncounterCount 23, live):
+-- ev1 IN_PROGRESS via the base call (boss_overlord_wyrmthalak.cpp:80,
+-- BossAI::_JustEngagedWith, ScriptedCreature.cpp:537); ev23 NOT_STARTED
+-- via Reset's _Reset() (:74, ScriptedCreature.cpp:499-507, alive-gated +
+-- state != DONE); ev4 DONE via JustDied's _JustDied() (:89,
+-- ScriptedCreature.cpp:513-518). The remaining _Reset()/_JustDied()
+-- bookkeeping is covered by the cancel/re-arm on combat events
+-- (halycon precedent).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken (51% summon latch), 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -206,6 +211,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_overlord_wyrmthalak.cpp:80 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_overlord_wyrmthalak.cpp:80 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_OVERLORD_WYRMTHALAK=8 (blackrock_spire.h:38).
+    creature:SetBossState(8, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     summoned[guid] = false
@@ -219,8 +227,27 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_overlord_wyrmthalak.cpp:72-76): _Reset() bookkeeping
+-- (timer cancel above; Initialize() re-arms the summon latch via
+-- cancelTimers) + the NOT_STARTED write (ScriptedCreature.cpp:499-507:
+-- alive-gated, state != DONE). Alive gate is load-bearing: Go fires
+-- ev23 on the death path too, and C++ Reset never runs on death.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(8) ~= 3 then
+        creature:SetBossState(8, 0)
+    end
+end
+
+-- C++ JustDied (boss_overlord_wyrmthalak.cpp:87-90): _JustDied()
+-- bookkeeping (timer cancel) + SetBossState(DATA_OVERLORD_WYRMTHALAK=8, DONE).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(8, 3)
+end
+
 RegisterCreatureEvent(ENTRY_OVERLORD_WYRMTHALAK, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_OVERLORD_WYRMTHALAK, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_OVERLORD_WYRMTHALAK, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_OVERLORD_WYRMTHALAK, 4, onDied)
 RegisterCreatureEvent(ENTRY_OVERLORD_WYRMTHALAK, 9, wyrmthalakDamageTaken)
-RegisterCreatureEvent(ENTRY_OVERLORD_WYRMTHALAK, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_OVERLORD_WYRMTHALAK, 23, onReset)

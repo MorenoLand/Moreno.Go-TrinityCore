@@ -11,10 +11,17 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (boss_shadow_hunter_voshgajin / boss_overlord_wyrmthalak
 -- precedent). GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper
--- only (blackrock_spire.h:129-132); the AI has no instance arms —
--- Reset() _Reset() / JustDied _JustDied() are internal machinery
--- covered here by the cancel/re-arm on combat events (halycon
--- precedent).
+-- only (blackrock_spire.h:129-132). SetBossState legs (DATA_THE_BEAST
+-- = 12, blackrock_spire.h:42; 12 < EncounterCount 23, live):
+-- ev1 IN_PROGRESS via the base call (boss_the_beast.cpp:150,
+-- BossAI::_JustEngagedWith, ScriptedCreature.cpp:537); ev23 NOT_STARTED
+-- via Reset's _Reset() (:83, ScriptedCreature.cpp:499-507, alive-gated +
+-- state != DONE) — Reset's MovePath arm stays out (no MotionMaster
+-- bridge); ev4 DONE via the base BossAI::JustDied — there is NO
+-- JustDied override in the file, so the base runs by virtual dispatch
+-- (ScriptedCreature.h:330 -> _JustDied(), ScriptedCreature.cpp:513-518).
+-- The remaining _Reset()/_JustDied() bookkeeping is covered by the
+-- cancel/re-arm on combat events (halycon precedent).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -192,6 +199,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_the_beast.cpp:150 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_the_beast.cpp:150 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_THE_BEAST=12 (blackrock_spire.h:42).
+    creature:SetBossState(12, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "flamebreak", 12000, function() onFlameBreak(creature, guid) end)
@@ -206,7 +216,28 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_the_beast.cpp:81-86): _Reset() bookkeeping (timer
+-- cancel above) + the NOT_STARTED write (ScriptedCreature.cpp:499-507:
+-- alive-gated, state != DONE). The _beastReached MovePath arm stays
+-- out (no MotionMaster bridge). Alive gate is load-bearing: Go fires
+-- ev23 on the death path too, and C++ Reset never runs on death.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(12) ~= 3 then
+        creature:SetBossState(12, 0)
+    end
+end
+
+-- No JustDied override in boss_the_beast.cpp: the base
+-- BossAI::JustDied runs by virtual dispatch (ScriptedCreature.h:330)
+-- -> _JustDied() (ScriptedCreature.cpp:513-518) bookkeeping (timer
+-- cancel) + SetBossState(DATA_THE_BEAST=12, DONE).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(12, 3)
+end
+
 RegisterCreatureEvent(ENTRY_THE_BEAST, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_THE_BEAST, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_THE_BEAST, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_THE_BEAST, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_THE_BEAST, 4, onDied)
+RegisterCreatureEvent(ENTRY_THE_BEAST, 23, onReset)

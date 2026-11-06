@@ -31,9 +31,10 @@
 -- them and they stay ungated per C++. The aura exclusion is bridged (HasAura on threat
 -- entries, brutallus precedent); the 0.0f any-range target is unlimited.
 -- The pick is C++-exact (threat-list any-unit, victim included).
--- The control-aura ticks are unported
--- AuraScripts (hellfire_peninsula precedent); only the engage casts
--- are ported.
+-- The control-aura ticks are PORTED in boss_coren_direbrew.lua
+-- (RegisterAuraEvent: 47369 send-mug picker tick, 50278 barreled
+-- tick, 47407 disarm grow tick + OnApply) — only the engage casts
+-- live in this file.
 -- Note: the DamageTaken sister summons in boss_coren_direbrew.cpp
 -- (:182-194) are PORTED in boss_coren_direbrew.lua (summonSister:
 -- SummonCreature(26764/26822, boss pos, type 6) + DoZoneInCombat

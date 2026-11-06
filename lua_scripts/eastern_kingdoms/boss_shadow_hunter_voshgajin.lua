@@ -11,11 +11,17 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (boss_overlord_wyrmthalak / boss_mother_smolderweb
 -- precedent). GetBlackrockSpireAI is a GetInstanceAI retrieval wrapper
--- only (blackrock_spire.h:129-132); the AI has no instance arms —
--- Reset() _Reset() is internal machinery covered here by the
--- cancel/re-arm on combat events (halycon precedent). JustDied
--- _JustDied() likewise covered by the cancel on OnDied(4). Reset()'s
--- DoCast(me, SPELL_ICEARMOR, true) is commented out in C++, so the
+-- only (blackrock_spire.h:129-132). SetBossState legs (bridge live,
+-- lua_creature_events.go:5917): DATA_SHADOW_HUNTER_VOSHGAJIN = 1
+-- (blackrock_spire.h:31; EncounterCount 23, so the write is live) —
+-- JustEngagedWith calls the base FIRST
+-- (boss_shadow_hunter_voshgajin.cpp:58), so BossAI::_JustEngagedWith
+-- writes IN_PROGRESS (ScriptedCreature.cpp:537); Reset's _Reset()
+-- (boss_shadow_hunter_voshgajin.cpp:51-55) writes NOT_STARTED gated
+-- on alive + state != DONE (ScriptedCreature.cpp:499-511); JustDied's
+-- _JustDied() (boss_shadow_hunter_voshgajin.cpp:65-68) writes DONE
+-- (ScriptedCreature.cpp:513-520). See onEnterCombat/onReset/onDied.
+-- Reset()'s DoCast(me, SPELL_ICEARMOR, true) is commented out in C++, so the
 -- port omits it by design (moira precedent — EVENT_HEAL unused).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
@@ -130,6 +136,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_shadow_hunter_voshgajin.cpp:58 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_shadow_hunter_voshgajin.cpp:58 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_SHADOW_HUNTER_VOSHGAJIN=1 (blackrock_spire.h:31).
+    creature:SetBossState(1, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "curseofblood", 2000, function() onCurseOfBlood(creature, guid) end)
@@ -141,7 +150,25 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_shadow_hunter_voshgajin.cpp:51-55): _Reset() writes
+-- NOT_STARTED gated on alive + state != DONE (ScriptedCreature.cpp:
+-- 499-511). Alive-gated: Go fires ev23 on the death path too, and
+-- C++ Reset never runs on death.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
+        creature:SetBossState(1, 0)
+    end
+end
+
+-- C++ JustDied (boss_shadow_hunter_voshgajin.cpp:65-68): _JustDied()
+-- writes DONE (ScriptedCreature.cpp:513-520).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(1, 3)
+end
+
 RegisterCreatureEvent(ENTRY_SHADOW_HUNTER_VOSHGAJIN, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_SHADOW_HUNTER_VOSHGAJIN, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_SHADOW_HUNTER_VOSHGAJIN, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_SHADOW_HUNTER_VOSHGAJIN, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_SHADOW_HUNTER_VOSHGAJIN, 4, onDied)
+RegisterCreatureEvent(ENTRY_SHADOW_HUNTER_VOSHGAJIN, 23, onReset)

@@ -11,10 +11,14 @@
 -- workspace), but the entry itself is C++-verifiable so the port is
 -- registered (boss_the_beast / boss_shadow_hunter_voshgajin
 -- precedent). GetBlackrockSpireAI is a GetInstanceAI retrieval
--- wrapper only (blackrock_spire.h:129-132); the AI has no instance
--- arms — Reset() _Reset() / JustDied _JustDied() are internal
--- machinery covered here by the cancel/re-arm on combat events
--- (halycon precedent).
+-- wrapper only (blackrock_spire.h:129-132). BossAI state legs are
+-- LIVE (SetBossNumber(23), instance_blackrock_spire.cpp:62):
+-- JustEngagedWith's base call (boss_warmaster_voone.cpp:58) writes
+-- SetBossState(DATA_WARMASTER_VOONE=2, IN_PROGRESS) via
+-- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537); Reset's
+-- _Reset() (:53) writes NOT_STARTED (ScriptedCreature.cpp:499-511,
+-- alive + != DONE gated); JustDied's _JustDied() (:69) writes DONE
+-- (ScriptedCreature.cpp:513-521) — see onEnterCombat/onReset/onDied.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Driven by CreateLuaEvent timers; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -160,6 +164,9 @@ end
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_warmaster_voone.cpp:58 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_warmaster_voone.cpp:58 base call first)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_WARMASTER_VOONE=2 (blackrock_spire.h:32).
+    creature:SetBossState(2, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "snapkick", 8000, function() onSnapKick(creature, guid) end)
@@ -174,7 +181,25 @@ local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_warmaster_voone.cpp:51-54): _Reset() bookkeeping (timer cancel
+-- above) + SetBossState(DATA_WARMASTER_VOONE=2, NOT_STARTED), gated on alive
+-- and state != DONE (ScriptedCreature.cpp:499-511). Alive-gated: Go fires
+-- ev23 on the death path too, and C++ Reset never runs on death.
+local function onReset(_, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
+        creature:SetBossState(2, 0)
+    end
+end
+
+-- C++ JustDied (boss_warmaster_voone.cpp:67-70): _JustDied() bookkeeping (timer
+-- cancel) + SetBossState(DATA_WARMASTER_VOONE=2, DONE).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(2, 3)
+end
+
 RegisterCreatureEvent(ENTRY_WARMASTER_VOONE, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_WARMASTER_VOONE, 2, onCombatEnd)
-RegisterCreatureEvent(ENTRY_WARMASTER_VOONE, 4, onCombatEnd)
-RegisterCreatureEvent(ENTRY_WARMASTER_VOONE, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_WARMASTER_VOONE, 4, onDied)
+RegisterCreatureEvent(ENTRY_WARMASTER_VOONE, 23, onReset)
