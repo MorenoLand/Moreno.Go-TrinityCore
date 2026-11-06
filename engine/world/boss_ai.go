@@ -16746,6 +16746,29 @@ func init() {
 	RegisterLuaBoss("npc_troll_volunteer", 40264)
 	RegisterLuaBoss("npc_troll_volunteer", 40260)
 
+	// npc_tiger_matriarch_credit: Durotar zone script, entry 40301
+	// (wowhead.com/cata/npc=40301 + mop-classic, verified 2026-11-06;
+	// no wowhead.com/classic page). Ported arms in
+	// lua_scripts/kalimdor/npc_tiger_matriarch_credit.lua: 2s/5s
+	// summon-aura check pump (GetCreaturesInGrid 40305 15yd, IsSummon
+	// + GetSummonerUnit gates, HasAura/IsInCombat gates, summoner
+	// AddAura 75213/75180 + triggered self-cast 75187 + Talk 0).
+	// The summon-effect cast spawns nothing on the player path yet
+	// (engine gap, documented in the lua file). Sibling
+	// npc_tiger_matriarch (40312) stays out: IsSummonedBy rides
+	// GetVehicle (no bridge) and its timers gate on _tigerGuid.
+	RegisterLuaBoss("npc_tiger_matriarch_credit", 40301)
+
+	// npc_nat_pagle: Dustwallow Marsh zone script, entry 12919
+	// (wowhead.com/classic/npc=12919, verified 2026-11-06). Ported
+	// arms in lua_scripts/kalimdor/npc_nat_pagle.lua: gossip hello
+	// (quest menu + vendor item 7640 when quest 8227 rewarded, else
+	// menu 7638) + gossip select (GOSSIP_ACTION_TRADE opens the
+	// vendor list). The ooze_zap / ooze_zap_channel_end /
+	// energize_aoe SpellScripts in the same file stay out (no
+	// SpellScript bridge).
+	RegisterLuaBoss("npc_nat_pagle", 12919)
+
 	// zulfarrak.cpp residual audit (loader decl :98 / call :214; Bly +
 	// Weegli + Zum'rah ported above): go_troll_cage (GameObjectScript —
 	// OnGossipHello sets instance EVENT_PYRAMID/CAGES_OPEN and herds

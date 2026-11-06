@@ -19,13 +19,17 @@
 -- FindNearestCreature(NPC_OMEN 15467) -> DespawnOrUnsummon,
 -- then self DespawnOrUnsummon.
 -- Deliberate deviations: C++ FindNearestCreature passes
--- alive=false, so a dead Omen within 5yd is also swept; the
--- Lua bridge returns live creatures only, so a dead Omen's
--- corpse is left to its own corpse timer. C++ Reset also runs
--- on evade; the spotlight never enters combat, so the
--- event-2 cancel is vacuous and the event-23 re-arm covers
--- the spawn case. GO RemoveFromWorld twins as the in-tree
--- GO:RemoveFromWorld hide-in-instance (lua_objects.go:1407).
+-- alive=false, so a dead Omen within 5yd is also swept; Go's
+-- FindNearestCreature is live-only (Health == 0 filtered,
+-- lua_creature_events.go:5592-5610), so the Omen leg uses
+-- GetCreaturesInGrid instead, which has no health filter and
+-- sweeps the corpse too (GUID-sorted first match instead of
+-- nearest, 2D instead of 3D metric — one Omen in practice).
+-- C++ Reset also runs on evade; the spotlight never enters
+-- combat, so the event-2 cancel is vacuous and the event-23
+-- re-arm covers the spawn case. GO RemoveFromWorld twins as
+-- the in-tree GO:RemoveFromWorld hide-in-instance
+-- (lua_objects.go:4233).
 -- The spotlight's own UpdateAI has no other arms; the
 -- constructor sets no state.
 
@@ -55,9 +59,12 @@ local function despawnSweep(creature, guid)
     if trap ~= nil then
         trap:RemoveFromWorld()
     end
-    local omen = creature:FindNearestCreature(ENTRY_OMEN, 5.0)
-    if omen ~= nil then
-        omen:Despawn()
+    local omens = creature:GetCreaturesInGrid(ENTRY_OMEN, 5.0)
+    if omens ~= nil then
+        for _, omen in ipairs(omens) do
+            omen:Despawn()
+            break
+        end
     end
     creature:Despawn()
 end
