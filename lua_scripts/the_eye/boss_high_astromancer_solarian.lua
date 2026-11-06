@@ -3,11 +3,10 @@
 -- boss_astromancer.cpp (boss_high_astromancer_solarian — the
 -- only boss CreatureScript AI class AddSC_boss_high_
 -- astromancer_solarian registers; npc_solarium_priest (18806)
--- documented only — its heal arm sits behind the cross-
--- creature/instance bridge (instance->GetGuidData(DATA_
--- ASTROMANCER), warp_splinter-treant / skyriss-illusion
--- precedent) and it is only spawned by the unmodeled portal
--- machine (unreachable); the spell_astromancer_wrath_of_the_
+-- PORTED in npc_solarium_priest.lua (tick 292) — its heal arm
+-- reads GetInstanceCreature(4), nil when unlatched (C++-exact
+-- per the tick-292 spec correction); spawned by the ported
+-- phase-3 machine; the spell_astromancer_wrath_of_the_
 -- astromancer AuraScript has no AuraScript bridge — AuraScript
 -- check handlers are not modeled, standing blocker,
 -- documented only).
@@ -27,9 +26,8 @@
 -- gargolmar precedent, C++-exact), SAY_DEATH = 4 (death —
 -- fired from the C++ JustDied, C++-exact), SAY_VOIDA = 5 and
 -- SAY_VOIDB = 6 (void — fired from the 20% phase-4 latch,
--- C++-exact); SAY_SUMMON1 = 1 / SAY_SUMMON2 = 2 never fire
--- in this model — they sit in the unmodeled Phase 2/3 portal
--- arms (millhouse SAY_ICEBLOCK precedent).
+-- C++-exact); SAY_SUMMON1 = 1 / SAY_SUMMON2 = 2 fire from the
+-- ported Phase 2/3 portal machine below (C++-exact).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset (the C++ does not
 -- override DamageTaken — no event 9; the 20% phase latch is a
@@ -88,31 +86,30 @@
 --    pick; no pick leaves the timer expired for a next-tick
 --    retry (C++-exact).
 -- 5. Portal transition arm (Phase1_Timer 50000): the whole
---    Phase 2/3 portal machine — the UpdatePosition teleports,
---    the NPC_ASTROMANCER_SOLARIAN_SPOTLIGHT 18928 /
---    NPC_SOLARIUM_AGENT 18925 / NPC_SOLARIUM_PRIEST 18806
---    summons, the SetVisible/SetFlag(NOT_SELECTABLE) arms and
---    the AppearDelay/StopMoving/AttackStop machine — unmodeled
---    (steamrigger / omor precedents); the summon/StopMoving/AttackStop/
---    visibility/flag bridges are all live now (2026-10-23), but the
---    machine still needs the motion-master Clear, cross-creature
---    AttackStart for the 12 agents + 2 priests (no bridge — they'd
---    spawn inert), and the npc_solarium_priest/agent minion AIs; Phase
---    stays 1 until the 20% latch. SAY_SUMMON1/SAY_SUMMON2 never
---    fire in this model.
+--    Phase 2/3 portal machine IS ported below (tick 293) —
+--    the UpdatePosition teleports (creature:Teleport,
+--    alar precedent), the NPC_ASTROMANCER_SOLARIAN_SPOTLIGHT
+--    18928 / NPC_SOLARIUM_AGENT 18925 / NPC_SOLARIUM_PRIEST
+--    18806 summons (SummonCreature returns the summoned
+--    creature; agents/priests AttackStart a random threat-list
+--    unit via the EngageWithTarget funnel; the priest's own Lua
+--    drives its combat once engaged; agents have no C++ AI class
+--    — default AI, melee only), the SetVisible/SetFlag(NOT_SELECTABLE)
+--    arms and the AppearDelay/StopMoving/AttackStop machine.
+--    Motion-master Clear rides the StopMoving (MoveClear) twin.
+--    SAY_SUMMON1/SAY_SUMMON2 fire from the machine (C++-exact).
 -- Phase 4 latch (C++ arm order — after the phase branches,
 -- every tick): if Phase ~= 4 and HealthBelowPct(20): Phase =
 -- 4 + Talk(SAY_VOIDA) + Talk(SAY_VOIDB) (C++-exact); the
 -- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms ARE
--- ported (2026-10-23 — the stale "paired with the reveal" rationale is
--- retracted: the Lua model never goes invisible, so the reveal is
--- vacuous, exactly like the display/scale arms); the
+-- ported (2026-10-23); non-vacuous now that the phase 2/3 machine
+-- conceals her — the latch can fire mid-phase-2/3; the
 -- SetArmor(31000) arm IS ported below via creature:SetArmor
 -- (armor bridge, lua_creature_events.go); the
 -- SetDisplayId(MODEL_VOIDWALKER 18988) arm IS ported (the stale
--- "paired with the reveal" rationale retracted 2026-10-21 — the Lua
--- model never goes invisible, so the phase-4 reveal is vacuous,
--- exactly like the already-ported scale arm);
+-- "paired with the reveal" rationale retracted 2026-10-21; the
+-- phase-4 reveal is non-vacuous now that the phase 2/3 machine
+-- conceals her);
 -- the SetObjectScale(x2.5) arm is ported below via
 -- creature:SetScale (scale bridge now exists).
 -- Phase 4 arms (C++ arm order): fear — 20s: non-triggered
@@ -145,22 +142,14 @@
 -- shim (instance_the_eye.cpp stays blocked on the instance-
 -- script model; the BossAI ctor DATA_HIGH_ASTROMANCER_
 -- SOLARIAN = 2 bookkeeping in Reset/JustEngagedWith/JustDied
--- skipped); 'no summon bridge' is stale (the bridge is live) —
--- per-arm: agent (18925)/priest (18806) stay out on the paired
--- Summoned->AI()->AttackStart(random target) legs (:184,
--- unbridged cross-creature relay; their role is combat);
--- spotlight (18928) stays out on the paired summon-side
--- self-cast SPELL_SPOTLIGHT 25824 (:322); no
--- movement bridge — the UpdatePosition teleports are teleport-
--- bridgeable and StopMoving/AttackStop bridges are live, but the
--- AppearDelay machine stays unmodeled (omor precedent) with the
--- unbridged motion-master Clear and the unported phase 2/3 machine;
--- the SetArmor arms ARE ported (phase-4 set + Reset restore,
--- armor bridge, lua_creature_events.go); the phase 2/3 SetVisible/SetFlag(NOT_SELECTABLE)
--- machine legs stay out with the machine (their bridges are live —
--- see the phase-2/3 note above); the phase-4/reset
--- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms ARE
--- ported (2026-10-23); the SetDisplayId arms are ported,
+-- skipped); the phase 2/3 portal machine IS ported (tick 293):
+-- UpdatePosition via creature:Teleport (alar precedent),
+-- motion-master Clear via the StopMoving (MoveClear) twin,
+-- spotlight/agent/priest summons via SummonCreature with the
+-- returned creature's AttackStart/CastSpell/SetFlag legs
+-- (EngageWithTarget funnel); the SetArmor arms ARE ported
+-- (phase-4 set + Reset restore, armor bridge,
+-- lua_creature_events.go); the SetDisplayId arms are ported,
 -- SetObjectScale ported via the scale bridge; the HasInArc
 -- victim fallback IS ported via the IsInBack twin; no cast-
 -- state bridge — the remaining InterruptNonMeleeSpells arms
@@ -177,6 +166,22 @@ local SPELL_WRATH_OF_THE_ASTROMANCER = 42783
 local SPELL_BLINDING_LIGHT = 33009
 local SPELL_FEAR = 34322
 local SPELL_VOID_BOLT = 39329
+local SPELL_SPOTLIGHT = 25824 -- boss_astromancer.cpp:53
+
+-- Portal machine constants (boss_astromancer.cpp:81-88).
+local CENTER_X = 432.909
+local CENTER_Y = -373.424
+local CENTER_Z = 17.9608
+local CENTER_O = 1.06421
+local SMALL_PORTAL_RADIUS = 12.6
+local LARGE_PORTAL_RADIUS = 26.0
+local PORTAL_Z = 17.005
+
+local NPC_SPOTLIGHT = 18928 -- boss_astromancer.cpp:64
+local NPC_SOLARIUM_AGENT = 18925 -- boss_astromancer.cpp:66
+local NPC_SOLARIUM_PRIEST = 18806 -- boss_astromancer.cpp:67
+local SUMMON_TIMED_DESPAWN = 2 -- Go 0-based TempSummonType (spells.go)
+local SUMMON_TIMED_DESPAWN_OUT_OF_COMBAT = 3 -- Go 0-based TempSummonType
 
 local ENTRY_SOLARIAN = 18805
 
@@ -187,6 +192,8 @@ local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117 (OBJECT_END+0x35)
 local UNIT_FLAG_NOT_SELECTABLE = 33554432 -- 0x02000000, UnitDefines.h:149
 
 local SAY_AGGRO = 0
+local SAY_SUMMON1 = 1
+local SAY_SUMMON2 = 2
 local SAY_KILL = 3
 local SAY_DEATH = 4
 local SAY_VOIDA = 5
@@ -269,14 +276,68 @@ local function randomThreatTarget(creature, playerOnly, maxDist)
     return pool[math.random(#pool)]
 end
 
+-- C++ Portal_X (boss_astromancer.cpp:198-203): urand(0, 1)
+-- flips the radius sign, then radius * (rand32() % 100) / 100
+-- offset from CENTER_X.
+local function portalX(radius)
+    local r = radius
+    if math.random(0, 1) == 1 then
+        r = -r
+    end
+    return r * math.random(0, 99) / 100 + CENTER_X
+end
+
+-- C++ Portal_Y (boss_astromancer.cpp:205-210): RAND(1.0f,
+-- -1.0f) times the circle residual, offset from CENTER_Y.
+local function portalY(x, radius)
+    local z = math.random() * 2 - 1
+    local dx = x - CENTER_X
+    return z * math.sqrt(radius * radius - dx * dx) + CENTER_Y
+end
+
+-- C++ SummonMinion (boss_astromancer.cpp:177-186):
+-- SummonCreature(entry, x, y, z, 0, TEMPSUMMON_TIMED_DESPAWN_
+-- OUT_OF_COMBAT, 5s); the summon then AttackStarts a random
+-- threat-list unit (SelectTarget Random, 0). The o = 0 falls
+-- back to the summoner orientation in the Go bridge.
+local function summonMinion(creature, entry, x, y, z)
+    local summoned = creature:SummonCreature(entry, x, y, z, 0,
+        SUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 5000)
+    if summoned then
+        local target = randomThreatUnit(creature)
+        if target then
+            summoned:AttackStart(target)
+        end
+    end
+end
+
 -- C++ UpdateAI in arm order — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into
--- the pump (it only runs in combat). Phase 2/3 arms are
--- unreachable behind the portal bridges (see header).
+-- the pump (it only runs in combat).
 local function combatTick(creature, guid)
     local st = solarianState[guid]
     if not st then
         return
+    end
+
+    -- C++ AppearDelay block (boss_astromancer.cpp:216-231) —
+    -- runs before the phase branches every tick while latched:
+    -- StopMoving + AttackStop, 2s timer; on expiry the Phase
+    -- == 2 concealment lands (SetFlag NOT_SELECTABLE +
+    -- SetVisible(false)), timer re-armed 2s.
+    if st.appearDelay then
+        creature:StopMoving()
+        creature:AttackStop()
+        if st.appearDelayTimer <= 1000 then
+            st.appearDelay = false
+            if st.phase == 2 then
+                creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+                creature:SetVisible(false)
+            end
+            st.appearDelayTimer = 2000
+        else
+            st.appearDelayTimer = st.appearDelayTimer - 1000
+        end
     end
 
     if st.phase == 1 then
@@ -355,9 +416,110 @@ local function combatTick(creature, guid)
         else
             st.wrathOfAstromancerTimer = st.wrathOfAstromancerTimer - 1000
         end
-        -- 5. Portal transition arm (Phase1_Timer 50000):
-        -- summon / teleport / visibility driven — unmodeled,
-        -- see header. Phase stays 1 until the 20% latch.
+        -- 5. Portal transition arm (Phase1_Timer 50000,
+        -- boss_astromancer.cpp:288-330): Phase = 2, re-arm
+        -- 50000; motion-master Clear (StopMoving twin) +
+        -- UpdatePosition teleport to the room center (alar
+        -- precedent: creature:Teleport + StopMoving); portal 0
+        -- on the small radius, portals 1-2 on the large radius
+        -- at PORTAL_Z; the 7-yard separation fix for portals
+        -- 1-2; 3 spotlight summons (TEMPSUMMON_TIMED_DESPAWN,
+        -- Phase2 + Phase3 + AppearDelay + 1700ms = 28700ms),
+        -- each flagged NOT_SELECTABLE and self-casting
+        -- SPELL_SPOTLIGHT 25824; AppearDelay latched. The
+        -- phase-2 branch does not run this tick (C++ else-if
+        -- chain, boss_astromancer.cpp:331).
+        if st.phase1Timer <= 1000 then
+            st.phase = 2
+            st.phase1Timer = 50000
+            creature:StopMoving()
+            creature:Teleport(CENTER_X, CENTER_Y, CENTER_Z, CENTER_O)
+            st.portals = {}
+            for i = 1, 3 do
+                local radius = SMALL_PORTAL_RADIUS
+                local z = CENTER_Z
+                if i > 1 then
+                    radius = LARGE_PORTAL_RADIUS
+                    z = PORTAL_Z
+                end
+                local x = portalX(radius)
+                st.portals[i] = { x, portalY(x, radius), z }
+            end
+            if math.abs(st.portals[3][1] - st.portals[2][1]) < 7
+                    and math.abs(st.portals[3][2] - st.portals[2][2]) < 7 then
+                local i = 1
+                if math.abs(CENTER_X + 26.0 - st.portals[3][1]) < 7 then
+                    i = -1
+                end
+                st.portals[3][1] = st.portals[3][1] + 7 * i
+                st.portals[3][2] = portalY(st.portals[3][1], LARGE_PORTAL_RADIUS)
+            end
+            for i = 1, 3 do
+                local spotlight = creature:SummonCreature(NPC_SPOTLIGHT,
+                    st.portals[i][1], st.portals[i][2], st.portals[i][3],
+                    CENTER_O, SUMMON_TIMED_DESPAWN, 28700)
+                if spotlight then
+                    spotlight:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+                    spotlight:CastSpell(spotlight, SPELL_SPOTLIGHT)
+                end
+            end
+            st.appearDelay = true
+        else
+            st.phase1Timer = st.phase1Timer - 1000
+        end
+    elseif st.phase == 2 then
+        -- Phase 2 arm (boss_astromancer.cpp:331-346): 10s
+        -- after Solarian disappears, 12 agents spawn out of
+        -- the three portals (4 each); Talk(SAY_SUMMON1);
+        -- Phase = 3, timer re-armed 10s. AttackStop +
+        -- StopMoving every tick (C++-exact).
+        creature:AttackStop()
+        creature:StopMoving()
+        if st.phase2Timer <= 1000 then
+            st.phase = 3
+            for i = 1, 3 do
+                for _ = 1, 4 do
+                    summonMinion(creature, NPC_SOLARIUM_AGENT,
+                        st.portals[i][1], st.portals[i][2], st.portals[i][3])
+                end
+            end
+            creature:Talk(SAY_SUMMON1)
+            st.phase2Timer = 10000
+        else
+            st.phase2Timer = st.phase2Timer - 1000
+        end
+    elseif st.phase == 3 then
+        -- Phase 3 arm (boss_astromancer.cpp:347-371): 15s
+        -- later Solarian reappears out of one of the 3 portals
+        -- (random) while 2 priests appear in the other two;
+        -- RemoveFlag(NOT_SELECTABLE) + SetVisible(true);
+        -- Talk(SAY_SUMMON2); AppearDelay latched (the reveal
+        -- concealment runs through the AppearDelay block, which
+        -- no-ops here since Phase is now 1); Phase = 1, timer
+        -- re-armed 15s. AttackStop + StopMoving every tick
+        -- (C++-exact).
+        creature:AttackStop()
+        creature:StopMoving()
+        if st.phase3Timer <= 1000 then
+            st.phase = 1
+            local i = math.random(1, 3)
+            creature:StopMoving()
+            creature:Teleport(st.portals[i][1], st.portals[i][2],
+                st.portals[i][3], CENTER_O)
+            for j = 1, 3 do
+                if j ~= i then
+                    summonMinion(creature, NPC_SOLARIUM_PRIEST,
+                        st.portals[j][1], st.portals[j][2], st.portals[j][3])
+                end
+            end
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:SetVisible(true)
+            creature:Talk(SAY_SUMMON2)
+            st.appearDelay = true
+            st.phase3Timer = 15000
+        else
+            st.phase3Timer = st.phase3Timer - 1000
+        end
     elseif st.phase == 4 then
         -- Fear arm — 20s: non-triggered self cast
         -- (C++-exact), re-arm 20000 (C++-exact).
@@ -395,10 +557,8 @@ local function combatTick(creature, guid)
             -- C++ arm order (boss_astromancer.cpp:400-401): the
             -- "make sure she wont be invisible or not selectable"
             -- guarantee — RemoveFlag(NOT_SELECTABLE) + SetVisible(true)
-            -- before the talks; vacuous in this model (phases 2/3 never
-            -- conceal her) but C++-exact; the stale "paired with the
-            -- reveal" rationale is retracted 2026-10-23, same as the
-            -- display/scale arms.
+            -- before the talks; non-vacuous now that the phase 2/3
+            -- machine conceals her (the latch can fire mid-phase-2/3).
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             creature:SetVisible(true)
             creature:Talk(SAY_VOIDA)
@@ -442,6 +602,12 @@ RegisterCreatureEvent(ENTRY_SOLARIAN, 1, function(_, creature)
         fearTimer = 20000,
         voidBoltTimer = 10000,
         blindingLight = false,
+        portals = {},
+        phase1Timer = 50000,
+        phase2Timer = 10000,
+        phase3Timer = 15000,
+        appearDelayTimer = 2000,
+        appearDelay = false,
     }
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
@@ -465,8 +631,8 @@ end)
 -- is instance-blocked); the SetObjectScale(defaultsize) restore
 -- arm is ported as a scale clear and the SetDisplayId(MODEL_HUMAN)
 -- restore as SetDisplayId(MODEL_HUMAN) (the stale "paired with the
--- unbridged reveal legs" rationale retracted — the Lua model never
--- goes invisible, so the reveal is vacuous).
+-- unbridged reveal legs" rationale retracted — the reveal is
+-- non-vacuous now that the phase 2/3 machine conceals her).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 4, function(_, creature)
     creature:SetScale(0)
     creature:SetDisplayId(MODEL_HUMAN)
@@ -490,9 +656,10 @@ RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
         creature:SetArmor(defaultArmor)
     end
     -- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) are
-    -- vacuous here (flag never set, never hidden) but C++-exact — the
-    -- stale "no visibility bridge / paired with the reveal" rationale
-    -- retracted 2026-10-23; then the scale clear and SetDisplayId restore.
+    -- C++-exact — non-vacuous now that the phase 2/3 machine
+    -- conceals her (an evade mid-phase-2 leaves her flagged
+    -- and hidden until Reset); then the scale clear and
+    -- SetDisplayId restore.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetVisible(true)
     creature:SetScale(0)
