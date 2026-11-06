@@ -309,6 +309,66 @@ const permissionCommandMailbox uint32 = 777
 // permissionCommandAchievementAdd mirrors rbac::RBAC_PERM_COMMAND_ACHIEVEMENT_ADD (RBAC.h:145).
 const permissionCommandAchievementAdd uint32 = 231
 
+// permissionCommandAccount mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT (RBAC.h:131).
+const permissionCommandAccount uint32 = 217
+
+// permissionCommandAccountAddon mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_ADDON (RBAC.h:132).
+const permissionCommandAccountAddon uint32 = 218
+
+// permissionCommandAccountCreate mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_CREATE (RBAC.h:133).
+const permissionCommandAccountCreate uint32 = 219
+
+// permissionCommandAccountDelete mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_DELETE (RBAC.h:134).
+const permissionCommandAccountDelete uint32 = 220
+
+// permissionCommandAccountLock mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_LOCK (RBAC.h:135).
+const permissionCommandAccountLock uint32 = 221
+
+// permissionCommandAccountLockCountry mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_LOCK_COUNTRY (RBAC.h:136).
+const permissionCommandAccountLockCountry uint32 = 222
+
+// permissionCommandAccountLockIP mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_LOCK_IP (RBAC.h:137).
+const permissionCommandAccountLockIP uint32 = 223
+
+// permissionCommandAccountOnlineList mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_ONLINE_LIST (RBAC.h:138).
+const permissionCommandAccountOnlineList uint32 = 224
+
+// permissionCommandAccountPassword mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_PASSWORD (RBAC.h:139).
+const permissionCommandAccountPassword uint32 = 225
+
+// permissionCommandAccountSet mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_SET (RBAC.h:140).
+const permissionCommandAccountSet uint32 = 226
+
+// permissionCommandAccountSetAddon mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_SET_ADDON (RBAC.h:141).
+const permissionCommandAccountSetAddon uint32 = 227
+
+// permissionCommandAccountSetSecLevel mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_SET_SECLEVEL (RBAC.h:142).
+const permissionCommandAccountSetSecLevel uint32 = 228
+
+// permissionCommandAccountSetPassword mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_SET_PASSWORD (RBAC.h:143).
+const permissionCommandAccountSetPassword uint32 = 229
+
+// permissionCommandAccountEmail mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_EMAIL (RBAC.h:177).
+const permissionCommandAccountEmail uint32 = 263
+
+// permissionCommandAccountSetSecEmail mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_SET_SEC_EMAIL (RBAC.h:179).
+const permissionCommandAccountSetSecEmail uint32 = 265
+
+// permissionCommandAccountSetSecRegmail mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_SET_SEC_REGMAIL (RBAC.h:180).
+const permissionCommandAccountSetSecRegmail uint32 = 266
+
+// permissionCommandAccount2FA mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_2FA (RBAC.h:250).
+const permissionCommandAccount2FA uint32 = 378
+
+// permissionCommandAccount2FASetup mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_2FA_SETUP (RBAC.h:251).
+const permissionCommandAccount2FASetup uint32 = 379
+
+// permissionCommandAccount2FARemove mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_2FA_REMOVE (RBAC.h:252).
+const permissionCommandAccount2FARemove uint32 = 380
+
+// permissionCommandAccountSet2FA mirrors rbac::RBAC_PERM_COMMAND_ACCOUNT_SET_2FA (RBAC.h:253).
+const permissionCommandAccountSet2FA uint32 = 381
+
 // permissionCommandArenaCaptain mirrors rbac::RBAC_PERM_COMMAND_ARENA_CAPTAIN (RBAC.h:147).
 const permissionCommandArenaCaptain uint32 = 233
 

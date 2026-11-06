@@ -2770,6 +2770,15 @@ func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
 	const blocked = "ahbot is not supported: the auction house bot engine has no Go model."
 	switch strings.ToLower(args[0]) {
 	case "items":
+		if len(args) >= 2 {
+			if matches := ahbotQualityMatches(args[1]); len(matches) > 1 {
+				s.sendSysMessage(fmt.Sprintf("Subcommand '%s' of command '.ahbot items' is ambiguous, please use one of the following:", args[1]))
+				for _, name := range matches {
+					s.sendSysMessage("  " + name)
+				}
+				return
+			}
+		}
 		if !ahbotItemsShape(args) {
 			s.sendSysMessage("Syntax: .ahbot items [gray|white|green|blue|purple|orange|yellow]")
 			return
@@ -2793,6 +2802,10 @@ func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
 		s.blockedCommandArm(ctx, permissionCommandAhbotRebuild, blocked)
 		return
 	case "reload":
+		if len(args) > 1 {
+			s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
+			return
+		}
 		s.blockedCommandArm(ctx, permissionCommandAhbotReload, blocked)
 		return
 	case "status":
@@ -2807,14 +2820,40 @@ func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
 }
 
 // ahbotUint32 mirrors the C++ uint32 argument parse (StringTo<uint32> with
-// base 0): plain digits, hex 0x and octal 0 prefixes accepted, no sign,
+// base 0, StringConvert.h:43-69): 0x is hex and 0b is binary, anything else
+// is base 10 — a leading 0 is NOT octal ("010" is 10, "08" is 8). No sign,
 // no underscores, and the value must fit in 32 bits.
 func ahbotUint32(s string) bool {
 	if s == "" || strings.ContainsAny(s, "_+") {
 		return false
 	}
-	_, err := strconv.ParseUint(s, 0, 32)
+	base, digits := 10, s
+	switch {
+	case len(s) > 2 && strings.EqualFold(s[:2], "0x"):
+		base, digits = 16, s[2:]
+	case len(s) > 2 && strings.EqualFold(s[:2], "0b"):
+		base, digits = 2, s[2:]
+	}
+	if digits == "" {
+		return false
+	}
+	_, err := strconv.ParseUint(digits, base, 32)
 	return err == nil
+}
+
+// ahbotQualityMatches lists the qualities a token prefix-matches
+// (ChatCommand.cpp:265-285: an ambiguous prefix lists its matches instead
+// of executing; only "g" is ambiguous, gray vs green).
+func ahbotQualityMatches(tok string) []string {
+	lower := strings.ToLower(tok)
+	qualities := []string{"gray", "white", "green", "blue", "purple", "orange", "yellow"}
+	var matches []string
+	for _, q := range qualities {
+		if strings.HasPrefix(q, lower) {
+			matches = append(matches, q)
+		}
+	}
+	return matches
 }
 
 // ahbotQualityToken resolves a quality token the way the C++ subcommand
@@ -3809,8 +3848,12 @@ func (s *session) accountNameByID(ctx context.Context, id uint32) string {
 	return name
 }
 
-// accountSecurityLevel mirrors AccountMgr::GetSecurity: highest access row
-// for this realm (or realm -1, the all-realms row) wins.
+// accountSecurityLevel mirrors AccountMgr::GetSecurity (AccountMgr.cpp:285):
+// LOGIN_GET_GMLEVEL_BY_REALMID returns the realm-specific row first
+// (ORDER BY RealmID DESC), falling back to the all-realms (-1) row, or
+// SEC_PLAYER when neither exists. MAX over both rows would wrongly promote
+// a global GM on a realm where they were explicitly demoted (same caveat as
+// the package-level accountSecurityLevel in server.go).
 func (s *session) accountSecurityLevel(ctx context.Context, id uint32) uint8 {
 	db := s.authDB()
 	if db == nil {
@@ -3818,7 +3861,7 @@ func (s *session) accountSecurityLevel(ctx context.Context, id uint32) uint8 {
 	}
 	var level uint8
 	if err := db.QueryRowContext(ctx,
-		"SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND (RealmID = ? OR RealmID = -1)",
+		"SELECT SecurityLevel FROM account_access WHERE AccountID = ? AND (RealmID = ? OR RealmID = -1) ORDER BY RealmID DESC LIMIT 1",
 		id, s.server.RealmID).Scan(&level); err != nil {
 		return 0
 	}
@@ -3915,6 +3958,11 @@ func (s *session) remoteIP() string {
 }
 
 func (s *session) handleCmdAccount(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccount) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) == 0 {
 		// HandleAccountCommand (cs_account.cpp:564): bare ".account" shows
 		// the session security level and the account's own email address.
@@ -4009,6 +4057,11 @@ func (s *session) accountSecurityForRealm(ctx context.Context, id uint32, realmI
 // follows UpdateAccountAccess (delete the account's access rows for the
 // realm scope, then insert only when the level is non-zero).
 func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountSetSecLevel) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	var targetID uint32
 	var targetAcct string
 	var sec uint64
@@ -4053,7 +4106,7 @@ func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string
 		return
 	}
 	if sec >= 4 { // SEC_CONSOLE = 4; HandleAccountSetSecLevelCommand rejects >= SEC_CONSOLE
-		s.sendSysMessage("Invalid security level (0-3).")
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
 		return
 	}
 	// can set security level only for a target with less security and to a
@@ -4103,6 +4156,11 @@ func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string
 // handleCmdAccountSetAddon mirrors HandleAccountSetAddonCommand
 // (cs_account.cpp:604): ".account set addon [<account>] <expansion>".
 func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountSetAddon) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	var targetID uint32
 	var targetName string
 	var expansion uint8
@@ -4155,6 +4213,11 @@ func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) {
 // handleCmdAccountSetPassword mirrors HandleAccountSetPasswordCommand
 // (cs_account.cpp:747): ".account set password <account> <password> <confirm>".
 func (s *session) handleCmdAccountSetPassword(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountSetPassword) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) < 3 {
 		s.sendSysMessage("Syntax: .account set password <account> <password> <confirm>")
 		return
@@ -4182,6 +4245,15 @@ func (s *session) handleCmdAccountSetPassword(ctx context.Context, args []string
 // HandleAccountSetRegEmailCommand (cs_account.cpp:862/917):
 // ".account set sec email|regmail <account> <email> <confirm>".
 func (s *session) handleCmdAccountSetSecEmail(ctx context.Context, action string, args []string) {
+	perm := permissionCommandAccountSetSecEmail
+	if action == "sec regmail" {
+		perm = permissionCommandAccountSetSecRegmail
+	}
+	if !s.commandAllowed(ctx, perm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) < 3 {
 		s.sendSysMessage("Syntax: .account set sec email|regmail <account> <email> <confirm>")
 		return
@@ -4208,6 +4280,11 @@ func (s *session) handleCmdAccountSetSecEmail(ctx context.Context, action string
 // handleCmdAccountAddon mirrors HandleAccountAddonCommand (cs_account.cpp:217):
 // ".account addon <expansion>" sets the caller's own expansion level.
 func (s *session) handleCmdAccountAddon(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountAddon) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) < 1 {
 		s.sendSysMessage("Syntax: .account addon <expansion>")
 		return
@@ -4231,6 +4308,11 @@ func (s *session) handleCmdAccountAddon(ctx context.Context, args []string) {
 // ".account email <oldEmail> <password> <newEmail> <confirmEmail>" changes
 // the caller's own email after verifying the old email and password.
 func (s *session) handleCmdAccountEmail(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountEmail) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) < 4 {
 		s.sendSysMessage("Syntax: .account email <oldEmail> <password> <newEmail> <confirmEmail>")
 		return
@@ -4253,7 +4335,7 @@ func (s *session) handleCmdAccountEmail(ctx context.Context, args []string) {
 		s.sendSysMessage("Wrong old password.")
 		return
 	}
-	if upperOnlyLatin(email) == upperOnlyLatin(oldEmail) {
+	if email == oldEmail { // cs_account.cpp:455: raw compare, not case-folded (the CheckEmail verification above correctly folds both sides)
 		s.sendSysMessage("Old email is the new email.")
 		return
 	}
@@ -4274,6 +4356,11 @@ func (s *session) handleCmdAccountEmail(ctx context.Context, args []string) {
 // email-confirmation branch (CONFIG_ACC_PASSCHANGESEC) has no config
 // counterpart here, so it is treated as PW_NONE.
 func (s *session) handleCmdAccountPassword(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountPassword) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) < 3 {
 		s.sendSysMessage("Syntax: .account password <oldPassword> <newPassword> <confirmPassword>")
 		return
@@ -4297,6 +4384,20 @@ func (s *session) handleCmdAccountPassword(ctx context.Context, args []string) {
 // handleCmdAccountLock mirrors HandleAccountLockIpCommand /
 // HandleAccountLockCountryCommand (cs_account.cpp:379/409):
 // ".account lock ip|country on|off".
+// parseAccountLockBool mirrors StringTo<bool> (StringConvert.h:146-164,
+// non-strict): 1/y/on/yes/true and 0/n/off/no/false, case-insensitive;
+// anything else fails the parse, so the caller shows usage instead of
+// silently unlocking.
+func parseAccountLockBool(s string) (bool, bool) {
+	switch strings.ToLower(s) {
+	case "1", "y", "on", "yes", "true":
+		return true, true
+	case "0", "n", "off", "no", "false":
+		return false, true
+	}
+	return false, false
+}
+
 func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
 	if len(args) < 2 {
 		s.sendSysMessage("Syntax: .account lock ip|country on|off")
@@ -4306,7 +4407,21 @@ func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
 	if db == nil {
 		return
 	}
-	state := strings.ToLower(args[1]) == "on"
+	// Lock ip (223) and lock country (222) carry separate permissions
+	// (cs_account.cpp accountCommandTable); the gate runs before the write.
+	lockPerm := permissionCommandAccountLockIP
+	if strings.EqualFold(args[0], "country") {
+		lockPerm = permissionCommandAccountLockCountry
+	}
+	if !s.commandAllowed(ctx, lockPerm) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	state, ok := parseAccountLockBool(args[1])
+	if !ok {
+		s.sendSysMessage("Syntax: .account lock ip|country on|off")
+		return
+	}
 	switch strings.ToLower(args[0]) {
 	case "ip":
 		var locked int
@@ -4327,7 +4442,7 @@ func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
 				country = s.server.ipLocations.Country(s.remoteIP())
 			}
 			if country == "" {
-				s.sendSysMessage("No IP location information - account not locked.")
+				s.sendSysMessage("No IP2Location information - account not locked") // cs_account.cpp:393 literal
 				return
 			}
 		}
@@ -4357,6 +4472,11 @@ const (
 // handleCmdAccountCreate mirrors HandleAccountCreateCommand (cs_account.cpp:238):
 // ".account create <account> <password> [<email>]".
 func (s *session) handleCmdAccountCreate(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountCreate) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) < 2 {
 		s.sendSysMessage("Syntax: .account create <account> <password> [<email>]")
 		return
@@ -4381,6 +4501,10 @@ func (s *session) handleCmdAccountCreate(ctx context.Context, args []string) {
 		s.sendSysMessage("Password too long.")
 	case accountOpNameAlreadyExist:
 		s.sendSysMessage("Account already exists.")
+	case accountOpDBInternalError:
+		// LANG_ACCOUNT_NOT_CREATED_SQL_ERROR (1007), distinct from
+		// LANG_ACCOUNT_NOT_CREATED (1008).
+		s.sendSysMessage(fmt.Sprintf("Account %s was not created (database error).", accountName))
 	default:
 		s.sendSysMessage(fmt.Sprintf("Account %s was not created.", accountName))
 	}
@@ -4423,6 +4547,11 @@ func (s *session) createAccount(ctx context.Context, username, password, email s
 // handleCmdAccountDelete mirrors HandleAccountDeleteCommand (cs_account.cpp:286):
 // ".account delete <account>".
 func (s *session) handleCmdAccountDelete(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountDelete) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) < 1 {
 		s.sendSysMessage("Syntax: .account delete <account>")
 		return
@@ -4444,6 +4573,10 @@ func (s *session) handleCmdAccountDelete(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Account %s deleted.", accountName))
 	case accountOpNameNotExist:
 		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", accountName))
+	case accountOpDBInternalError:
+		// LANG_ACCOUNT_NOT_DELETED_SQL_ERROR (1002), distinct from
+		// LANG_ACCOUNT_NOT_DELETED (1003).
+		s.sendSysMessage(fmt.Sprintf("Account %s was not deleted (database error).", accountName))
 	default:
 		s.sendSysMessage(fmt.Sprintf("Account %s was not deleted.", accountName))
 	}
@@ -4559,6 +4692,11 @@ func (s *session) deleteAccount(ctx context.Context, accountID uint32) accountOp
 // handleCmdAccountOnlineList mirrors HandleAccountOnlineListCommand
 // (cs_account.cpp:333): ".account onlinelist".
 func (s *session) handleCmdAccountOnlineList(ctx context.Context) {
+	if !s.commandAllowed(ctx, permissionCommandAccountOnlineList) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if s.server == nil || s.server.CharactersStore == nil || s.server.AuthStore == nil {
 		return
 	}
@@ -4658,6 +4796,11 @@ func (s *session) totpMasterKey() (key [16]byte, present bool) {
 
 // handleCmdAccount2FASetup mirrors HandleAccount2FASetupCommand (cs_account.cpp:85).
 func (s *session) handleCmdAccount2FASetup(ctx context.Context, token *uint32) {
+	if !s.commandAllowed(ctx, permissionCommandAccount2FASetup) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	masterKey, masterPresent := s.totpMasterKey()
 	if s.server == nil || s.server.AuthStore == nil || !masterPresent {
 		s.sendSysMessage("2FA commands are not set up (no TOTP master secret configured).")
@@ -4716,6 +4859,11 @@ func (s *session) handleCmdAccount2FASetup(ctx context.Context, token *uint32) {
 
 // handleCmdAccount2FARemove mirrors HandleAccount2FARemoveCommand (cs_account.cpp:149).
 func (s *session) handleCmdAccount2FARemove(ctx context.Context, token *uint32) {
+	if !s.commandAllowed(ctx, permissionCommandAccount2FARemove) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	masterKey, masterPresent := s.totpMasterKey()
 	if s.server == nil || s.server.AuthStore == nil || !masterPresent {
 		s.sendSysMessage("2FA commands are not set up (no TOTP master secret configured).")
@@ -4759,6 +4907,11 @@ func (s *session) handleCmdAccount2FARemove(ctx context.Context, token *uint32) 
 // handleCmdAccountSet2FA mirrors HandleAccountSet2FACommand (cs_account.cpp:798):
 // ".account set 2fa <account> <secret|off>".
 func (s *session) handleCmdAccountSet2FA(ctx context.Context, args []string) {
+	if !s.commandAllowed(ctx, permissionCommandAccountSet2FA) {
+		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+
 	if len(args) < 2 {
 		s.sendSysMessage("Syntax: .account set 2fa <account> <secret|off>")
 		return
@@ -4825,8 +4978,8 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .achievement add <achievementId>")
 		return
 	}
-	achievementID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	achievementID, ok := s.parseAchievementArgID(args[0])
+	if !ok {
 		s.sendSysMessage("Invalid achievement ID.")
 		return
 	}
@@ -4861,6 +5014,33 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 	}
 	// C++ sends no success message here; the completion itself notifies.
 	target.completeAchievement(uint32(achievementID))
+}
+
+// parseAchievementArgID mirrors the C++ AchievementEntry* argument parse
+// (ChatCommandArgs.cpp:34-44): a numeric id, or a pasted achievement
+// hyperlink validated the way LinkTags::achievement::StoreTo does
+// (parseAchievementLinkData); an unparseable argument fails the parse.
+func (s *session) parseAchievementArgID(arg string) (uint64, bool) {
+	if strings.HasPrefix(arg, "|c") {
+		info := parseSingleHyperlink(arg)
+		if !info.ok || info.tag != "achievement" {
+			return 0, false
+		}
+		t := &hyperlinkDataTokenizer{str: info.data}
+		if _, ok := s.parseAchievementLinkData(t); !ok {
+			return 0, false
+		}
+		id, err := strconv.ParseUint(strings.SplitN(info.data, ":", 2)[0], 10, 32)
+		if err != nil {
+			return 0, false
+		}
+		return id, true
+	}
+	id, err := strconv.ParseUint(arg, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 // commandAllowed mirrors WorldSession::HasPermission (RBAC.h:828):
