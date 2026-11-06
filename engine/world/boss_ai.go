@@ -19602,7 +19602,8 @@ func init() {
 	// lua_scripts/northrend/boss_hodir.lua. Ported arms:
 	// JustEngagedWith Talk(SAY_AGGRO 0) (event 1), KilledUnit
 	// player-gated Talk(SAY_SLAY 1) (event 3), DamageTaken
-	// lethal -> Talk(SAY_DEATH 4) + damage=0 rewrite (event 9).
+	// lethal -> Talk(SAY_DEATH 4) + damage=0 rewrite + _JustDied()
+	// SetBossState DONE (event 9, tick 259).
 	// Timer-event Talks (flash freeze / stalactite /
 	// hard-mode-failed / berserk), the DamageTaken companion
 	// legs (faction flip, despawn, kill credit), helper-NPC
@@ -19631,8 +19632,9 @@ func init() {
 	// Freya: KilledUnit player-gated Talk(SAY_SLAY 2)
 	// (event 3); DamageTaken lethal -> Talk(SAY_DEATH 3) +
 	// damage=0 rewrite (event 9; the manual JustDied(who)
-	// call's only bridgeable arm is the death Talk, inlined
-	// C++-exact — the hodir precedent applies verbatim).
+	// call's bridgeable arms are the death Talk + the
+	// _JustDied() SetBossState DONE leg + the elder shutdown
+	// sweep (tick 259) — the hodir precedent applies verbatim).
 	// Elders (identical): JustEngagedWith Talk(SAY_ELDER_AGGRO
 	// 0) gated by !HasAura(62467 DRAINED_OF_POWER) (event 1);
 	// KilledUnit player-gated Talk(SAY_ELDER_SLAY 1) (event 3);
@@ -19669,7 +19671,8 @@ func init() {
 	// file-birth order puts it at sixty-second).
 	// Talk(SAY_DEATH 7) lives in FinishEncounter() (called
 	// from the event machine, not from JustDied) — event 4
-	// deliberately not registered. Timer Talks, the pre-phase
+	// is registered cancel-only plus a true-kill DONE fallback
+	// (tick 259; base BossAI::JustDied). Timer Talks, the pre-phase
 	// DamageTaken SAY_JUMPDOWN arm (phase + instance-state
 	// condition), cross-creature Talk(SAY_SPECIAL),
 	// DoAction/SpellHit Talks (incl. cross-creature
@@ -19730,7 +19733,8 @@ func init() {
 	// Voice of Yogg-Saron (33280, ulduar.h:203; boss_voice_of_yogg_saronAI : BossAI):
 	// engage sanity/insane casts ported in boss_yogg_saron.lua (events 1/19);
 	// EVENT_ILLUSION chain ported (ev38 DoAction receiver + tentacle/illusion
-	// timers, tick 241).
+	// timers, tick 241); SetBossState legs ported tick 259 (lockdoor
+	// IN_PROGRESS 15s, JustDied DONE, Reset NOT_STARTED).
 	RegisterLuaBoss("boss_voice_of_yogg_saron", 33280)
 	// Brain of Yogg-Saron (33890; boss_brain_of_yogg_saronAI : PassiveAI):
 	// Reset arms ported in boss_yogg_saron.lua (ev23 RemoveFlag NOT_SELECTABLE
@@ -19752,7 +19756,8 @@ func init() {
 	// the _phaseTwo latch (event 9 — the moroes threshold+latch precedent).
 	// JustEngagedWith is _firstPull-gated (START_TIMER on first pull vs
 	// AGGRO later — no flag bridge, no single C++-exact yell), the 2.5%
-	// _fightWon damage=0 rides the unbridgeable outro machine, the
+	// _fightWon damage=0 + outro machine are ported (tick 259:
+	// OUTRO_START DONE + OUTRO_1..11 chain), the
 	// collapsing-star summon Talk-only pair and the big-bang phase-machine
 	// choreography are bridge-blocked — documented in the lua header.
 	// Timer-driven cast ports (CreateLuaEvent): QUANTUM_STRIKE,
@@ -21474,14 +21479,15 @@ func init() {
 	// FREEZE_ANIM 16245). Combat timers, DamageTaken lethal clamp,
 	// KilledUnit/MovementInform and the boss_mimiron / aerial-command
 	// / computer / fire-bot arms stay out (DoAction phase machine,
-	// vehicle kit, MovePoint, instance boss-state bridges absent).
+	// vehicle kit, MovePoint; instance boss-state legs ported tick 259).
 	RegisterLuaBoss("boss_leviathan_mk_ii", 33432)
 	// Checked-no-gate for ported arms: pre-loop + in-loop CASTING gates cover the unported event machine only (Reset arm is not an UpdateAI event).
 	// boss_mimiron (Ulduar, phase-machine controller) — ported arms in
 	// lua_scripts/northrend/boss_mimiron.lua: spawn react-passive, Reset
-	// flag/WELD legs, engage flag/WELD legs, JustDied + OUTTRO chain
-	// (7s/3s/11s). DoAction activation chains, vehicle/MovePoint/GO/
-	// instance legs and the OUTTRO_2 cache summon stay documented-only.
+	// flag/WELD legs + DONE gate + NOT_STARTED, engage flag/WELD legs +
+	// IN_PROGRESS, JustDied DONE + OUTTRO chain
+	// (7s/3s/11s). DoAction activation chains, vehicle/MovePoint/GO
+	// legs and the OUTTRO_2 cache summon stay documented-only.
 	RegisterLuaBoss("boss_mimiron", 33350)
 	// boss_aerial_command_unit (Ulduar, Mimiron phase 3) — ported arms in
 	// lua_scripts/northrend/boss_aerial_command_unit.lua: spawn

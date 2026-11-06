@@ -215,6 +215,7 @@
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
+local BOSS_YOGG_SARON = 12 -- ulduar.h:48
 
 local SAY_SARA_AGGRO = 2
 local SAY_SARA_KILL = 5
@@ -232,6 +233,14 @@ local SPELL_SANITY = 63050
 local SPELL_INSANE = 63120
 
 local REACT_PASSIVE = 0 -- UnitDefines.h:340
+
+local function yoggInstanceData(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
 
 -- C++ JustEngagedWith (boss_saraAI, ScriptedAI):
 -- Talk(SAY_SARA_AGGRO) + three ScheduleEvent legs — only
@@ -272,12 +281,18 @@ local function clearSanityAuras(creature)
 end
 
 -- C++ JustDied (boss_yogg_saronAI, PassiveAI):
--- Talk(SAY_YOGG_SARON_DEATH), then cross-creature kill /
--- disappear / evade legs and player sanity-aura removal —
--- only the Talk arm is bridgeable; the sjonnir
--- JustDied-Talk precedent.
+-- Talk(SAY_YOGG_SARON_DEATH), then Unit::Kill on the voice
+-- (boss_yogg_saron.cpp:962-963 — the voice's own JustDied then
+-- writes _JustDied() DONE, PORTED tick 259 in voiceDied below),
+-- cross-creature DisappearAndDie / keeper-evade legs (no bridges)
+-- and player sanity-aura removal — only the Talk + voice-kill +
+-- aura arms are bridgeable; the sjonnir JustDied-Talk precedent.
 local function yoggSaronDied(event, creature, killer)
     creature:Talk(SAY_YOGG_SARON_DEATH)
+    local data = yoggInstanceData(creature)
+    if data and data.voice then
+        data.voice:Kill(creature) -- C++ Unit::Kill(me, voice): Yogg is the killer (bridge takes the killer creature as arg 1)
+    end
     clearSanityAuras(creature)
 end
 
@@ -451,14 +466,6 @@ local voiceYogg = {}
 local brainTentaclesKilled = {}
 local brainSummons = {}
 local keeperPhase = {}
-
-local function yoggInstanceData(creature)
-    local mapObj = creature:GetMap()
-    if not mapObj then
-        return nil
-    end
-    return mapObj:GetInstanceData()
-end
 
 -- C++ SelectTarget(Random) draws the threat list (UnitAI.h), never the
 -- whole instance player pool — GetAITargets is the bridged threat list
@@ -958,12 +965,13 @@ local function voiceEnterCombat(event, creature, target)
         creature:CastSpell(creature, SPELL_SANITY_PERIODIC)
     end
     -- C++ EVENT_LOCK_DOOR: one-shot 15s -> DoCast(me,
-    -- SPELL_INSANE_PERIODIC) (:556-557); the companion
-    -- instance->SetBossState(BOSS_YOGG_SARON, IN_PROGRESS) leg has no
-    -- instance bridge — cast only.
+    -- SPELL_INSANE_PERIODIC) (:556-557) + instance->SetBossState(
+    -- BOSS_YOGG_SARON, IN_PROGRESS) (:558, PORTED tick 259 via
+    -- creature:SetBossState, lua_creature_events.go:5917).
     schedule(guid, "lockdoor", 15000, function()
         if creature:IsAlive() then
             creature:CastSpell(creature, SPELL_INSANE_PERIODIC)
+            creature:SetBossState(BOSS_YOGG_SARON, 1)
         end
     end)
 end
@@ -1012,6 +1020,7 @@ end
 -- (event 23) below. Reset also clears the phase-two latch, the
 -- shattered flag and the stored Yogg object (voiceDoAction state).
 local function voiceReset(event, creature)
+    creature:SetBossState(BOSS_YOGG_SARON, 0) -- _Reset() SetBossState(BOSS_YOGG_SARON 12, NOT_STARTED), first per C++ :490-492 (PORTED tick 259)
     cancelTimers(creature:GetGUID())
     voicePhase[creature:GetGUID()] = 1 -- C++ Reset: SetPhase(PHASE_ONE) (:493)
     voiceShattered[creature:GetGUID()] = nil
@@ -1437,7 +1446,17 @@ end
 
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 1, voiceEnterCombat)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 2, cancelAll)
-RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 4, cancelAll)
+-- C++ boss_voice_of_yogg_saronAI::JustDied (:530-536): summons.Despawn(
+-- yogg) (no bridge — removes Yogg from the voice's summon list without
+-- despawning his corpse) + _JustDied() SetBossState(BOSS_YOGG_SARON 12,
+-- DONE). PORTED tick 259. Fires when Yogg's own JustDied kills the voice
+-- (boss_yogg_saron.cpp:962-963) and on any direct voice kill.
+local function voiceDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(BOSS_YOGG_SARON, 3)
+end
+
+RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 4, voiceDied)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 19, voiceJustSummoned)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 23, voiceReset)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 38, voiceDoAction)

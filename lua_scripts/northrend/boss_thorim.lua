@@ -142,6 +142,7 @@
 -- no SpellScript / AuraScript / ConditionScript / achievement bridges.
 
 local ENTRY_THORIM = 32865
+local BOSS_THORIM = 8 -- ulduar.h:44
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_RENAME = 0x00000010
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
@@ -246,6 +247,7 @@ end
 -- SHEATH_OF_LIGHTNING removal rides the unbridged phase-2 machine, so the
 -- aura persists in Lua.
 local function thorimEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_THORIM, 1) -- BossAI::JustEngagedWith SetBossState(DATA_THORIM 8, IN_PROGRESS), base-first (boss_thorim.cpp:616; PORTED tick 259)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_thorim.cpp:616)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO_1)
@@ -293,6 +295,7 @@ local function thorimReset(event, creature)
     if thorimFinished[creature:GetGUID()] then
         return
     end
+    creature:SetBossState(BOSS_THORIM, 0) -- _Reset() SetBossState(DATA_THORIM 8, NOT_STARTED), first after the _encounterFinished guard per C++ :465-471 (PORTED tick 259)
     creature:SetReactState(0)
     creature:SetDisableGravity(true)
     creature:SetRooted(true)
@@ -340,8 +343,11 @@ end
 
 -- C++ FinishEncounter is a 1%-hp pseudo-death, not a hook: C++ never calls
 -- JustDied for Thorim, so no Talk is registered on event 4 — timers are
--- only cancelled.
+-- only cancelled. The true-kill fallback below writes DONE via the base
+-- BossAI::JustDied (_JustDied), which C++ would run if Thorim were killed
+-- outright (boss_thorimAI overrides no JustDied).
 local function thorimDied(event, creature, killer)
+    creature:SetBossState(BOSS_THORIM, 3) -- true-kill fallback: BossAI::JustDied -> _JustDied() DONE (PORTED tick 259)
     cancelTimers(creature:GetGUID())
 end
 
@@ -361,12 +367,14 @@ end
 -- FinishEncounter self-legs are ported in C++ order (:572-579, :597):
 -- credit DoCastAOE (self-cast, triggered) -> ReactPassive ->
 -- Interrupt -> RemoveAllAttackers -> AttackStop -> FactionFriendly ->
--- RENAME flag -> Talk(SAY_DEATH). The phase-1 jumpdown branch is the
+-- RENAME flag -> Talk(SAY_DEATH). The _JustDied() SetBossState
+-- (DATA_THORIM 8, DONE) leg PORTED tick 259 between the RENAME flag
+-- and Talk (C++ FinishEncounter order :597-599). The phase-1 jumpdown branch is the
 -- else-if's guard in C++, but it cannot fire this arm: Thorim enters
 -- phase 1 at full health, so no single hit can cross 99% of max
 -- health — the arm is effectively phase-2-only. Controller/pillar
--- aura clears, hard-mode Sif despawn, _JustDied instance-DONE and the
--- outro Talks 8-13 (hard-mode branch timing) stay out.
+-- aura clears, hard-mode Sif despawn and the outro Talks 8-13
+-- (hard-mode branch timing) stay out.
 local function thorimDamageTaken(event, creature, attacker, damage)
     local postDamage = creature:GetHealth() - damage
     if postDamage < math.floor(creature:GetMaxHealth() / 100) then
@@ -381,6 +389,7 @@ local function thorimDamageTaken(event, creature, attacker, damage)
         creature:AttackStop()
         creature:SetFaction(FACTION_FRIENDLY)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_RENAME)
+        creature:SetBossState(BOSS_THORIM, 3) -- FinishEncounter _JustDied() SetBossState(DATA_THORIM 8, DONE), C++ order after the RENAME flag, before Talk(SAY_DEATH) (:597-599; PORTED tick 259)
         creature:Talk(SAY_DEATH)
         return false, 0
     end

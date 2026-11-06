@@ -205,7 +205,8 @@
 -- — PORTED 2026-10-24 into freyaDied via the GetCreaturesInGrid elder
 -- scan (no instance GuidData needed); CombatStop is bridged
 -- (lua_creature_events.go, 2026-10-24) and ported into freyaDied below;
--- the elder _JustDied instance SetBossState has none — stays out. Freya's own
+-- the elder _JustDied SetBossState DONE legs PORTED tick 259 via the
+-- elder DoAction (ACTION_ELDER_FREYA_KILLED) + elderDied. Freya's own
 -- legs were PORTED 2026-10-21 into
 -- freyaDamageTaken (the stale "no cast / react-state / faction
 -- bridges" retraction): SetReactState REACT_PASSIVE, AttackStop,
@@ -256,6 +257,15 @@ local ENTRY_FREYA = 32906
 local ENTRY_BRIGHTLEAF = 32915
 local ENTRY_STONEBARK = 32914
 local ENTRY_IRONBRANCH = 32913
+local BOSS_FREYA = 9 -- ulduar.h:45
+-- Elder boss DATA ids (ulduar.h:50-52): Brightleaf 14, Ironbranch 15,
+-- Stonebark 16 — keyed by creature entry for the shared elder handlers.
+local ELDER_BOSS_DATA = {
+    [ENTRY_BRIGHTLEAF] = 14,
+    [ENTRY_IRONBRANCH] = 15,
+    [ENTRY_STONEBARK] = 16,
+}
+local ACTION_ELDER_FREYA_KILLED = 1 -- boss_freya.cpp:176
 local ENTRY_ANCIENT_CONSERVATOR = 33203
 local ENTRY_IRON_ROOTS = 33088 -- boss_freya.cpp:168
 local ENTRY_UNSTABLE_SUN_BEAM = 33050 -- boss_freya.cpp:167
@@ -476,6 +486,7 @@ end
 local function freyaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetBossState(BOSS_FREYA, 1) -- BossAI::JustEngagedWith SetBossState(DATA_FREYA 9, IN_PROGRESS), base-first (boss_freya.cpp:344; PORTED tick 259)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:344; me-form DoZone already ported below as the :345 arm)
     -- C++ :345 — me-form DoZoneInCombat after BossAI::JustEngagedWith,
     -- before the elder scan (C++ arm order).
@@ -566,11 +577,12 @@ end
 -- for each live elder (instance GuidData in C++, the GetCreaturesInGrid
 -- scan here — the engage-time precedent above): RemoveAllAuras +
 -- CombatStop(true) (AttackStop + RemoveAllAttackers + EndAllPvECombat
--- legs, bridged 2026-10-24) + the elder DoAction (DespawnOrUnsummon 10s,
--- fire-and-forget like the 7.5s self-despawn above, + the elder's
--- events.Reset as cancelTimers). The elder _JustDied instance SetBossState
--- has none; EngagementOver is freya-side housekeeping on the dying boss
--- (its Go analog, InCombat=false, rides CombatStop). Both stay out.
+-- legs, bridged 2026-10-24) + the elder DoAction
+-- (ACTION_ELDER_FREYA_KILLED, PORTED tick 259 via creature:DoAction,
+-- ev38 dispatch bridged lua_creature_events.go:802 — the handler does
+-- DespawnOrUnsummon(10s) + _JustDied() SetBossState DONE, C++ :783-789).
+-- EngagementOver is freya-side housekeeping on the dying boss (its Go
+-- analog, InCombat=false, rides CombatStop).
 local function freyaElderShutdown(creature)
     for _, entry in ipairs({ ENTRY_BRIGHTLEAF, ENTRY_STONEBARK, ENTRY_IRONBRANCH }) do
         for _, elder in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
@@ -578,9 +590,7 @@ local function freyaElderShutdown(creature)
                 elder:RemoveAllAuras()
                 elder:CombatStop(true)
                 cancelTimers(elder:GetGUID())
-                CreateLuaEvent(function()
-                    elder:Despawn()
-                end, 10000)
+                elder:DoAction(ACTION_ELDER_FREYA_KILLED)
             end
         end
     end
@@ -591,11 +601,16 @@ end
 -- is driven from freyaDamageTaken below; this stays as the
 -- event-4 fallback.
 local function freyaDied(event, creature, killer)
+    creature:SetBossState(BOSS_FREYA, 3) -- _JustDied() SetBossState(DATA_FREYA 9, DONE), PORTED tick 259 (C++ JustDied :628)
     cancelTimers(creature:GetGUID())
     freyaElderShutdown(creature)
 end
 
 local function freyaReset(event, creature)
+    if freyaFinished[creature:GetGUID()] then
+        return -- C++ Reset early-returns when _encounterFinished (:318-322): no _Reset(), no NOT_STARTED write
+    end
+    creature:SetBossState(BOSS_FREYA, 0) -- _Reset() SetBossState(DATA_FREYA 9, NOT_STARTED), PORTED tick 259 (the tick-258 auriaya convention)
     cancelTimers(creature:GetGUID())
 end
 
@@ -656,6 +671,7 @@ local function freyaDamageTaken(event, creature, attacker, damage)
             creature:Despawn()
         end, 7500)
         creature:CastSpell(creature, SPELL_KNOCK_ON_WOOD_CREDIT, true)
+        creature:SetBossState(BOSS_FREYA, 3) -- _JustDied() SetBossState(DATA_FREYA 9, DONE), PORTED tick 259 (C++ JustDied :628, after the credit cast, before the elder sweep)
         freyaElderShutdown(creature)
         return false, 0
     end
@@ -723,6 +739,7 @@ local function onFlux(creature, guid)
 end
 
 local function brightleafEnterCombat(event, creature, target)
+    creature:SetBossState(ELDER_BOSS_DATA[ENTRY_BRIGHTLEAF], 1) -- BossAI::JustEngagedWith SetBossState(BOSS_BRIGHTLEAF 14, IN_PROGRESS), base-first (boss_freya.cpp:733; PORTED tick 259)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:733)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
@@ -776,6 +793,7 @@ local function onTremor(creature, guid)
 end
 
 local function stonebarkEnterCombat(event, creature, target)
+    creature:SetBossState(ELDER_BOSS_DATA[ENTRY_STONEBARK], 1) -- BossAI::JustEngagedWith SetBossState(BOSS_STONEBARK 16, IN_PROGRESS), base-first (boss_freya.cpp:836; PORTED tick 259)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:836)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
@@ -836,6 +854,7 @@ local function onIronRoots(creature, guid)
 end
 
 local function ironbranchEnterCombat(event, creature, target)
+    creature:SetBossState(ELDER_BOSS_DATA[ENTRY_IRONBRANCH], 1) -- BossAI::JustEngagedWith SetBossState(BOSS_IRONBRANCH 15, IN_PROGRESS), base-first (boss_freya.cpp:945; PORTED tick 259)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:945)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
@@ -856,6 +875,7 @@ end
 -- + creature:RemoveAura (moorabi precedent); shared by all three
 -- elders (one handler, three registrations).
 local function elderReset(event, creature)
+    creature:SetBossState(ELDER_BOSS_DATA[creature:GetEntry()], 0) -- _Reset() SetBossState(elder DATA, NOT_STARTED), first per C++ :711/:814/:923 (PORTED tick 259)
     cancelTimers(creature:GetGUID())
     if creature:HasAura(SPELL_DRAINED_OF_POWER) then
         creature:RemoveAura(SPELL_DRAINED_OF_POWER)
@@ -875,8 +895,21 @@ end
 -- Talk(SAY_ELDER_DEATH) — the sjonnir JustDied-Talk
 -- precedent.
 local function elderDied(event, creature, killer)
+    creature:SetBossState(ELDER_BOSS_DATA[creature:GetEntry()], 3) -- _JustDied() SetBossState(elder DATA, DONE), first per C++ :725/:828/:937 (PORTED tick 259)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_ELDER_DEATH)
+end
+
+-- C++ elder DoAction ACTION_ELDER_FREYA_KILLED (boss_freya.cpp:783-790):
+-- DespawnOrUnsummon(10s) + _JustDied() SetBossState(elder DATA, DONE).
+-- Sent by freyaElderShutdown on Freya's death (C++ :639); the ev38
+-- dispatch is bridged (lua_creature_events.go:802). PORTED tick 259.
+local function elderDoAction(event, creature, action)
+    if action ~= ACTION_ELDER_FREYA_KILLED then
+        return
+    end
+    creature:DespawnOrUnsummon(10000)
+    creature:SetBossState(ELDER_BOSS_DATA[creature:GetEntry()], 3)
 end
 
 -- C++ boss_stonebarkAI::DamageTaken (boss_freya.cpp:841-855): if
@@ -905,6 +938,7 @@ RegisterCreatureEvent(ENTRY_BRIGHTLEAF, 2, elderLeaveCombat)
 RegisterCreatureEvent(ENTRY_BRIGHTLEAF, 3, elderTargetDied)
 RegisterCreatureEvent(ENTRY_BRIGHTLEAF, 4, elderDied)
 RegisterCreatureEvent(ENTRY_BRIGHTLEAF, 23, elderReset)
+RegisterCreatureEvent(ENTRY_BRIGHTLEAF, 38, elderDoAction)
 
 RegisterCreatureEvent(ENTRY_STONEBARK, 1, stonebarkEnterCombat)
 RegisterCreatureEvent(ENTRY_STONEBARK, 2, elderLeaveCombat)
@@ -912,12 +946,14 @@ RegisterCreatureEvent(ENTRY_STONEBARK, 3, elderTargetDied)
 RegisterCreatureEvent(ENTRY_STONEBARK, 4, elderDied)
 RegisterCreatureEvent(ENTRY_STONEBARK, 9, stonebarkDamageTaken)
 RegisterCreatureEvent(ENTRY_STONEBARK, 23, elderReset)
+RegisterCreatureEvent(ENTRY_STONEBARK, 38, elderDoAction)
 
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 1, ironbranchEnterCombat)
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 2, elderLeaveCombat)
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 3, elderTargetDied)
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 4, elderDied)
 RegisterCreatureEvent(ENTRY_IRONBRANCH, 23, elderReset)
+RegisterCreatureEvent(ENTRY_IRONBRANCH, 38, elderDoAction)
 
 -- C++ npc_ancient_conservator::JustEngagedWith
 -- (boss_freya.cpp:1293-1296): DoCast(who, SPELL_CONSERVATOR_GRIP

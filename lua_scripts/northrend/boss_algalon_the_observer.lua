@@ -41,12 +41,13 @@
 -- as a per-GUID Lua latch (script-lifetime, NOT wiped by event 23 —
 -- C++-exact). First pull also schedules EVENT_START_COMBAT (16s, :554-559)
 -- -> Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID 15878)
--- (ported as creature:PlayMusic — the bridged SMSG_PLAY_MUSIC twin;
--- the instance->SetBossState(IN_PROGRESS) companion leg has no bridge).
+-- (ported as creature:PlayMusic — the bridged SMSG_PLAY_MUSIC twin)
+-- + instance->SetBossState(IN_PROGRESS) (PORTED tick 259); later pulls
+-- write IN_PROGRESS in JustEngagedWith itself (BossAI passthrough,
+-- PORTED tick 259).
 -- The remaining JustEngagedWith legs (the SetFlag NOT_SELECTABLE /
 -- SetImmuneToNPC set legs, summons.DespawnEntry(NPC_AZEROTH),
--- instance->SetData, BossAI::JustEngagedWith boss-state / setActive
--- legs) stay out: the set leg is bridgeable but the boss sits
+-- instance->SetData, BossAI::JustEngagedWith setActive leg) stay out: the set leg is bridgeable but the boss sits
 -- REACT_PASSIVE from Reset through the intro, and C++ itself notes
 -- (EVENT_INTRO_TIMER_DONE) that PASSIVE + NOT_SELECTABLE at combat
 -- start makes the creature immediately evade — setting it at engage
@@ -88,8 +89,9 @@
 -- DamageTaken _fightWon branch — (health - damage) below 2.5% of max:
 -- damage = 0 + the outro event machine (REACT_PASSIVE, AttackStop,
 -- SPELL_SELF_STUN self-cast, summons.DespawnAll, EVENT_OUTRO_START ...)
--- — no Talk arm in this branch; a lone damage=0 return would strand the
--- boss unkillable without the outro, so it is not modeled.
+-- — PORTED tick 259 (outroStart..outro11 below); the MovePoint arrival
+-- gate for OUTRO_3 rides a documented 7s walk-time estimate, and the
+-- ResetThreatList / summons.DespawnAll legs stay out (no bridges).
 -- Timer Talks — 2026-10-14 retraction re-audit (C++ line refs): algalon's
 -- Cast-state gates PORTED 2026-11-04: quantum strike / phase punch /
 -- cosmic smash / ascend / big bang / collapsing star defer 500ms on
@@ -181,15 +183,31 @@
 -- unmodeled-achievement queue.
 
 local ENTRY_ALGALON = 32871
+local BOSS_ALGALON = 13 -- ulduar.h:49
+local NPC_BRANN_BRONZEBEARD_ALG = 34064 -- ulduar.h:230
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local UNIT_FLAG_IMMUNE_TO_NPC = 0x200
+local UNIT_FLAG_RENAME = 0x00000010
+local FACTION_FRIENDLY = 35
+local UNIT_STAND_STATE_STAND = 0
+local UNIT_STAND_STATE_KNEEL = 8 -- UnitDefines.h:41
 
 local SAY_ALGALON_START_TIMER = 3
 local SAY_ALGALON_AGGRO = 4
 local SAY_ALGALON_PHASE_TWO = 11
+local SAY_ALGALON_OUTRO_1 = 12
+local SAY_ALGALON_OUTRO_2 = 13
+local SAY_ALGALON_OUTRO_3 = 14
+local SAY_ALGALON_OUTRO_4 = 15
+local SAY_ALGALON_OUTRO_5 = 16
 local SAY_ALGALON_KILL = 20
+local SPELL_SELF_STUN = 65256 -- boss_algalon_the_observer.cpp:82
+local SPELL_KILL_CREDIT = 65184 -- boss_algalon_the_observer.cpp:83
+local SPELL_TELEPORT = 62940 -- boss_algalon_the_observer.cpp:84
+local SPELL_SUPERMASSIVE_FAIL = 65311 -- boss_algalon_the_observer.cpp:79 (moved above first use, tick 259)
+local ACTION_OUTRO = 4 -- Actions enum, boss_algalon_the_observer.cpp:170-175
 -- C++ ENGAGE_MUSIC_ID (boss_algalon_the_observer.cpp:64) — engage music,
 -- played via PlayDirectMusic on every engage (:373 later pulls, :557
 -- first-pull EVENT_START_COMBAT); creature:PlayMusic is the bridged twin
@@ -211,13 +229,17 @@ local algalonFirstPull = {}
 local function getState(guid)
     local state = algalonState[guid]
     if state == nil then
-        state = { phaseTwo = false, killYellUntil = 0 }
+        state = { phaseTwo = false, fightWon = false, killYellUntil = 0 }
         algalonState[guid] = state
     end
     return state
 end
 
 local timers = {}
+
+-- Forward declarations for the outro chain (tharon_ja/gal_darah
+-- idiom: plain assignments below, never `local function` re-declares).
+local outroStart, outro1, outro2, outro3, outro4, outro5, outro6, outro7, outro8, outro9, outro10, outro11
 
 -- C++ DamageTaken: if (!_phaseTwo && me->HealthBelowPctDamaged(20,
 -- damage)) { _phaseTwo = true; Talk(SAY_ALGALON_PHASE_TWO); <unbridgeable
@@ -227,11 +249,23 @@ local timers = {}
 -- cancelled one-shot (the summons.DespawnEntry constellation/star/
 -- black-hole/stalker legs + worm-hole DoSummon machine stay out —
 -- documented only).
--- The _fightWon 2.5% branch has no Talk arm and its damage=0 rewrite
--- rides the unbridgeable outro machine — deliberately not modeled.
+-- The _fightWon 2.5% branch (boss_algalon_the_observer.cpp:484-496):
+-- damage = 0 + the outro event machine — PORTED tick 259 (the old
+-- "deliberately not modeled" header note is retracted: every outro
+-- leg now has a bridge except the MovePoint arrival gate, see
+-- outro3 below). C++ order: _fightWon latch, damage = 0,
+-- SetPhase(PHASE_ROLE_PLAY) (no phase bridge), REACT_PASSIVE,
+-- AttackStop, NOT_SELECTABLE flag, DoCastSelf(SPELL_SELF_STUN),
+-- events.Reset() (cancelTimers), summons.DespawnAll (no bridge),
+-- EVENT_OUTRO_START 1.5s + EVENT_OUTRO_1 7s. No Talk arm in this
+-- branch. The if/else-if is C++-exact: a hit crossing both the 20%
+-- and 2.5% thresholds fires phase-two only.
 local function algalonDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local state = getState(guid)
+    if state.fightWon then
+        return false, 0
+    end
     if state.phaseTwo then
         return
     end
@@ -239,7 +273,8 @@ local function algalonDamageTaken(event, creature, attacker, damage)
     if maxHealth == 0 then
         return
     end
-    if (creature:GetHealth() - damage) < math.floor(maxHealth * 20 / 100) then
+    local postDamage = creature:GetHealth() - damage
+    if postDamage < math.floor(maxHealth * 20 / 100) then
         state.phaseTwo = true
         creature:Talk(SAY_ALGALON_PHASE_TWO)
         local per = timers[guid]
@@ -247,6 +282,29 @@ local function algalonDamageTaken(event, creature, attacker, damage)
             RemoveEventById(per["collapsingstar"])
             per["collapsingstar"] = nil
         end
+    elseif postDamage < math.floor(maxHealth * 25 / 1000) then
+        state.fightWon = true
+        creature:SetReactState(0) -- REACT_PASSIVE
+        creature:AttackStop()
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:CastSpell(creature, SPELL_SELF_STUN)
+        -- events.Reset(): cancelTimers is defined below this function
+        -- and out of scope here, so the timer-table clear is inlined
+        -- (same body, same effect).
+        local per = timers[guid]
+        if per then
+            for _, id in pairs(per) do
+                RemoveEventById(id)
+            end
+            timers[guid] = nil
+        end
+        CreateLuaEvent(function()
+            outroStart(creature, guid)
+        end, 1500)
+        CreateLuaEvent(function()
+            outro1(creature, guid)
+        end, 7000)
+        return false, 0
     end
 end
 
@@ -290,12 +348,144 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ outro event machine (boss_algalon_the_observer.cpp:630-690),
+-- PORTED tick 259. All links ride raw one-shot CreateLuaEvents, not
+-- the tracked timers table: C++ schedules them after events.Reset(),
+-- and a later ev2/ev23/ev4 timer clear must not cancel the outro
+-- (Algalon cannot evade mid-outro — self-stunned, REACT_PASSIVE,
+-- threat cleared by AttackStop — so the C++ evade-cancel is
+-- unreachable; the mimiron outtro-chain precedent).
+-- EVENT_OUTRO_START (:635): SetBossState(BOSS_ALGALON 13, DONE).
+outroStart = function(creature, guid)
+    creature:SetBossState(BOSS_ALGALON, 3)
+end
+
+-- EVENT_OUTRO_1 (:637-642): RemoveAllAuras, ResetThreatList (no
+-- bridge — stays out), SetFaction(FRIENDLY), RENAME flag, then
+-- OUTRO_2 in 2s.
+outro1 = function(creature, guid)
+    creature:RemoveAllAuras()
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_RENAME)
+    CreateLuaEvent(function()
+        outro2(creature, guid)
+    end, 2000)
+end
+
+-- EVENT_OUTRO_2 (:643-648): SetRegenerateHealth(false), CombatStop,
+-- MovePoint(POINT_ALGALON_OUTRO) — no MovePoint bridge, so the
+-- MovementInform arrival gate (:405-414, OUTRO_3 1s after arrival)
+-- is approximated: LandPos (1632.668, -302.7656) to OutroPos
+-- (1633.64, -317.78) is ~15yd at walk 2.5yd/s (~6s) + 1s inform
+-- delay = 7s. OUTRO_3 fires from this estimate, not from an
+-- arrival — documented timing approximation.
+outro2 = function(creature, guid)
+    creature:SetRegenerateHealth(false)
+    creature:CombatStop()
+    CreateLuaEvent(function()
+        outro3(creature, guid)
+    end, 7000)
+end
+
+-- EVENT_OUTRO_3 (:649-653): DoCastAOE(SPELL_KILL_CREDIT)
+-- (non-triggered self-cast), then OUTRO_4 in 1.4s, OUTRO_5 in 4.5s.
+outro3 = function(creature, guid)
+    creature:CastSpell(creature, SPELL_KILL_CREDIT)
+    CreateLuaEvent(function()
+        outro4(creature, guid)
+    end, 1400)
+    CreateLuaEvent(function()
+        outro5(creature, guid)
+    end, 4500)
+end
+
+-- EVENT_OUTRO_4 (:654-657): DoCastAOE(SPELL_SUPERMASSIVE_FAIL)
+-- (non-triggered self-cast), RemoveFlag NOT_SELECTABLE.
+outro4 = function(creature, guid)
+    creature:CastSpell(creature, SPELL_SUPERMASSIVE_FAIL)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+end
+
+-- EVENT_OUTRO_5 (:658-662): SummonCreature Brann at BrannOutroPos
+-- (boss_algalon_the_observer.cpp:233) + Brann DoAction(ACTION_OUTRO)
+-- (the Brann outro AI is unported, so the dispatch is a no-op until
+-- it lands — sender side is C++-exact); then OUTRO_6 in 10s.
+outro5 = function(creature, guid)
+    local brann = creature:SummonCreature(NPC_BRANN_BRONZEBEARD_ALG, 1631.989, -221.5439, 418.4091, 4.714909, 7, 0)
+    if brann then
+        brann:DoAction(ACTION_OUTRO)
+    end
+    CreateLuaEvent(function()
+        outro6(creature, guid)
+    end, 10000)
+end
+
+-- EVENT_OUTRO_6 (:663-667): Talk(SAY_ALGALON_OUTRO_1),
+-- SetStandState(KNEEL), then OUTRO_7 in 39s.
+outro6 = function(creature, guid)
+    creature:Talk(SAY_ALGALON_OUTRO_1)
+    creature:SetStandState(UNIT_STAND_STATE_KNEEL)
+    CreateLuaEvent(function()
+        outro7(creature, guid)
+    end, 39000)
+end
+
+-- EVENT_OUTRO_7 (:668-671): Talk(SAY_ALGALON_OUTRO_2), then OUTRO_8 in 18s.
+outro7 = function(creature, guid)
+    creature:Talk(SAY_ALGALON_OUTRO_2)
+    CreateLuaEvent(function()
+        outro8(creature, guid)
+    end, 18000)
+end
+
+-- EVENT_OUTRO_8 (:672-675): Talk(SAY_ALGALON_OUTRO_3), then OUTRO_9 in 12s.
+outro8 = function(creature, guid)
+    creature:Talk(SAY_ALGALON_OUTRO_3)
+    CreateLuaEvent(function()
+        outro9(creature, guid)
+    end, 12000)
+end
+
+-- EVENT_OUTRO_9 (:676-679): Talk(SAY_ALGALON_OUTRO_4), then OUTRO_10 in 24s.
+outro9 = function(creature, guid)
+    creature:Talk(SAY_ALGALON_OUTRO_4)
+    CreateLuaEvent(function()
+        outro10(creature, guid)
+    end, 24000)
+end
+
+-- EVENT_OUTRO_10 (:680-683): Talk(SAY_ALGALON_OUTRO_5), then OUTRO_11 in 15s.
+outro10 = function(creature, guid)
+    creature:Talk(SAY_ALGALON_OUTRO_5)
+    CreateLuaEvent(function()
+        outro11(creature, guid)
+    end, 15000)
+end
+
+-- EVENT_OUTRO_11 (:684-688): SetStandState(STAND), DoCastSelf(
+-- SPELL_TELEPORT), DespawnOrUnsummon(1.2s).
+outro11 = function(creature, guid)
+    creature:SetStandState(UNIT_STAND_STATE_STAND)
+    creature:CastSpell(creature, SPELL_TELEPORT)
+    creature:DespawnOrUnsummon(1200)
+end
+
 local function algalonReset(event, creature)
     algalonState[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
-    -- EnterEvadeMode (boss_algalon_the_observer.cpp:449-455): instance
-    -- SetBossState(FAIL) has no bridge, but the SetSheath(UNARMED) leg is
-    -- ported — Algalon drew his weapon at the intro timer (:563 MELEE).
+    -- EnterEvadeMode (boss_algalon_the_observer.cpp:449-455):
+    -- SetBossState(FAIL) then BossAI::EnterEvadeMode -> Reset() ->
+    -- _Reset() NOT_STARTED — PORTED tick 259 (FAIL first, then
+    -- NOT_STARTED, C++ order; the FAIL write is transient in the
+    -- same handler, matching C++ where Reset overwrites it at once).
+    -- Alive-gated: ev23 also pre-fires on the Go death path, where
+    -- C++ EnterEvadeMode never runs.
+    if creature:IsAlive() then
+        creature:SetBossState(BOSS_ALGALON, 2) -- FAIL
+        creature:SetBossState(BOSS_ALGALON, 0) -- _Reset() NOT_STARTED
+    end
+    -- The SetSheath(UNARMED) leg is ported — Algalon drew his weapon
+    -- at the intro timer (:563 MELEE).
     creature:SetSheath(0) -- SHEATH_STATE_UNARMED
     -- C++ boss_algalon_the_observer.cpp:305: me->SetReactState(REACT_PASSIVE)
     -- (Reset arm order: _Reset -> flip -> Initialize).
@@ -317,9 +507,12 @@ RegisterCreatureEvent(ENTRY_ALGALON, 23, algalonReset)
 -- 8s later pulls, :364-386) — the 2026-10-16 "re-pull 8s path always"
 -- deviation is superseded by the latch port above. (2)
 -- EVENT_ASCEND_TO_THE_HEAVENS schedules EVENT_EVADE 2.5s later
--- (EnterEvadeMode — boss-state FAIL, no bridge); only the Talk+cast arm is
--- ported, so the lua boss stays in combat ~2.5s past enrage. The evade
--- SetSheath(SHEATH_STATE_UNARMED) leg IS ported (algalonReset, bridge
+-- (EnterEvadeMode); only the Talk+cast arm is ported, so the lua
+-- boss stays in combat ~2.5s past enrage — the EVADE trigger itself
+-- has no bridge (no EnterEvadeMode binding, event 25 unused). The
+-- evade SetBossState FAIL + _Reset NOT_STARTED legs ARE ported in
+-- algalonReset (tick 259) for any evade the Go engine does drive.
+-- The evade SetSheath(SHEATH_STATE_UNARMED) leg IS ported (algalonReset, bridge
 -- landed 2026-10-20). (3)
 -- (3) EVENT_SUMMON_COLLAPSING_STAR (Talk 5/6 + four SummonCreature legs)
 -- is PORTED (2026-10-23, creature:SummonCreature bridge — 'no summon
@@ -337,7 +530,6 @@ local SPELL_ASCEND_TO_THE_HEAVENS = 64487
 local SPELL_COSMIC_SMASH = 62301
 local SPELL_ARCANE_BARRAGE = 64599
 local SPELL_COLLAPSE = 62018 -- boss_algalon_the_observer.cpp:94
-local SPELL_SUPERMASSIVE_FAIL = 65311 -- boss_algalon_the_observer.cpp:79
 local SPELL_BIG_BANG = 64443 -- boss_algalon_the_observer.cpp:82
 local SPELL_BLACK_HOLE_PHASE_SHIFTS = 62168
 local SPELL_BLACK_HOLE_DOT = 62169 -- boss_algalon_the_observer.cpp:106
@@ -529,20 +721,23 @@ local function algalonTimersStart(event, creature)
         introDelay = 26500
         -- C++ EVENT_START_COMBAT (:554-559, first-pull only, 16s):
         -- Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID)
-        -- (the instance->SetBossState(IN_PROGRESS) leg has no bridge).
+        -- + instance->SetBossState(IN_PROGRESS) (PORTED tick 259).
         -- cancelTimers above mirrors the C++ events.Reset() (:366),
         -- which also wipes a pending START_COMBAT on re-pull.
         schedule(guid, "startcombat", 16000, function()
             creature:Talk(SAY_ALGALON_AGGRO)
             creature:PlayMusic(ENGAGE_MUSIC_ID)
+            creature:SetBossState(BOSS_ALGALON, 1)
         end)
     else
         -- C++ JustEngagedWith later-pull leg (:370-376):
         -- Talk(SAY_ALGALON_AGGRO 4) + PlayDirectMusic(ENGAGE_MUSIC_ID)
-        -- + BossAI::JustEngagedWith (DoZoneInCombat leg; boss-state /
-        -- setActive legs have no bridge).
+        -- + BossAI::JustEngagedWith (SetBossState IN_PROGRESS PORTED
+        -- tick 259, base-first inside the passthrough; DoZoneInCombat
+        -- leg; setActive leg has no bridge).
         creature:Talk(SAY_ALGALON_AGGRO)
         creature:PlayMusic(ENGAGE_MUSIC_ID)
+        creature:SetBossState(BOSS_ALGALON, 1)
         creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1, later-pull branch only (boss_algalon_the_observer.cpp:374; ScriptedCreature.cpp:540)
         creature:DoZoneInCombat()
         introDelay = INTRO_DELAY

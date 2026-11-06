@@ -219,6 +219,7 @@
 -- queue.
 
 local ENTRY_HODIR = 32845
+local BOSS_HODIR = 7 -- ulduar.h:43 (moved above first use, tick 259: Lua local scope starts after its declaration — uses above it bind the nil global)
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -394,13 +395,15 @@ local function onBerserk(creature, guid)
 end
 
 -- C++ JustEngagedWith (lines 370-384): BossAI passthrough
--- (no bridge) + Talk(SAY_AGGRO) + DoCast(me,
+-- (SetBossState(DATA_HODIR 7, IN_PROGRESS) PORTED tick 259,
+-- base-first) + Talk(SAY_AGGRO) + DoCast(me,
 -- SPELL_BITING_COLD, true) -> CastSpell(creature, 62038,
 -- true); the six ScheduleEvent legs become CreateLuaEvent
 -- timers below.
 local function hodirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    creature:SetBossState(BOSS_HODIR, 1) -- BossAI::JustEngagedWith SetBossState(DATA_HODIR 7, IN_PROGRESS), base-first (boss_hodir.cpp:369)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_hodir.cpp:369)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
@@ -426,6 +429,7 @@ local function hodirLeaveCombat(event, creature)
 end
 
 local function hodirDied(event, creature, killer)
+    creature:SetBossState(BOSS_HODIR, 3) -- true-kill fallback: BossAI::JustDied -> _JustDied() DONE; the lethal path writes DONE in hodirDamageTaken below (C++ :420)
     cancelTimers(creature:GetGUID())
 end
 
@@ -450,6 +454,7 @@ local FROZEN_HELPER_POSITIONS = {
     {1976.60, -233.53, 432.767, 1.57},
 }
 local function hodirReset(event, creature)
+    creature:SetBossState(BOSS_HODIR, 0) -- _Reset() SetBossState(DATA_HODIR 7, NOT_STARTED), first per C++ :359-360 (Initialize() only resets latch booleans, no Lua state) — the tick-258 auriaya convention (unconditional; the death-path ev23 pre-fire is overwritten by the ev4 DONE write in the same tick)
     cancelTimers(creature:GetGUID())
     creature:SetReactState(REACT_PASSIVE)
     local helperCount = 4
@@ -490,7 +495,8 @@ end
 -- fire-and-forget 10s one-shot (the freyaDamageTaken precedent;
 -- C++ re-arms the despawn per hit, unreachable here — the machine
 -- leaves nothing able to land another hit), and _JustDied() as
--- cancelTimers. The numeric second return performs the C++-exact
+-- cancelTimers + SetBossState(DATA_HODIR 7, DONE) (PORTED tick 259,
+-- last per C++ :420). The numeric second return performs the C++-exact
 -- damage=0 rewrite (the moroes damage-rewrite precedent). No
 -- bridges: MoveIdle, the SetControlled stun leg, MotionMaster
 -- Clear, instance SetData(DATA_HODIR_RARE_CACHE) — documented-only.
@@ -512,6 +518,7 @@ local function hodirDamageTaken(event, creature, attacker, damage)
             creature:Despawn()
         end, 10000)
         cancelTimers(creature:GetGUID())
+        creature:SetBossState(BOSS_HODIR, 3) -- _JustDied() SetBossState(DATA_HODIR 7, DONE), last per C++ :420 (PORTED tick 259)
         return false, 0
     elseif not creature:IsInCombat() then
         -- C++ DamageTaken else-leg (lines 421-426): the out-of-combat
@@ -627,7 +634,6 @@ RegisterCreatureEvent(ENTRY_TOASTY_FIRE, 14, toastyFireSpellHit)
 local ENTRY_FLASH_FREEZE = 32926 -- boss_hodir.cpp:98
 local ENTRY_ICE_BLOCK = 32938 -- boss_hodir.cpp:97
 local SPELL_FLASH_FREEZE_HELPER = 61990 -- boss_hodir.cpp:64
-local BOSS_HODIR = 7 -- ulduar.h:43
 local ACTION_CHEESE_THE_FREEZE = 2 -- boss_hodir.cpp:140
 local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
 

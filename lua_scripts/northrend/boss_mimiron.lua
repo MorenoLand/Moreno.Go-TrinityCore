@@ -5,10 +5,19 @@
 --
 -- PORTED (engine-fired hooks only, C++-exact spell IDs / delays / order):
 --   constructor (:391) react-passive leg, on spawn (event 5).
---   Reset (:456): RemoveFlag NON_ATTACKABLE + self-cast WELD, on reset (23).
---   JustEngagedWith (:424): SetFlag NON_ATTACKABLE + WELD removal, on enter
---     combat (1). See DEVIATION note below for the unmodeled vehicle gate.
---   JustDied (:442) + EVENT_OUTTRO_1/2/3 chain: CombatStop, gravity off,
+--   Reset (:456): DONE early-return gate + _Reset() SetBossState
+--     NOT_STARTED (PORTED tick 259 via creature:SetBossState,
+--     lua_creature_events.go:5917) + RemoveFlag NON_ATTACKABLE +
+--     self-cast WELD, on reset (23). The DONE gate rides FIRST,
+--     before cancelTimers: C++ returns before _Reset() when DONE,
+--     so the outtro chain scheduled by JustDied survives a
+--     death-path reset (the thorim finished-guard precedent).
+--   JustEngagedWith (:424): SetBossState IN_PROGRESS PORTED tick 259
+--     (BossAI::JustEngagedWith passthrough, base-first) + SetFlag
+--     NON_ATTACKABLE + WELD removal, on enter combat (1). See
+--     DEVIATION note below for the unmodeled vehicle gate.
+--   JustDied (:442) + EVENT_OUTTRO_1/2/3 chain: SetBossState DONE
+--     PORTED tick 259 (first per C++), CombatStop, gravity off,
 --     SLEEP_VISUAL_1, DESPAWN_ASSAULT_BOTS (DoCastAOE = self-cast
 --     convention), then 7s OUTTRO_1 (SLEEP_VISUAL_1 removal, SLEEP_VISUAL_2,
 --     faction friendly), +3s OUTTRO_2 (Talk V07TRON_DEATH), +11s OUTTRO_3
@@ -47,12 +56,10 @@
 --     unbridged DO_ACTIVATE_HARD_MODE); EVENT_INTRO_1/2/3 -- out (INTRO_1
 --     Talk text is latch-gated SAY_HARDMODE_ON vs SAY_MKII_ACTIVATE,
 --     INTRO_2 legs are vehicle-base legs, INTRO_3 is a DoAction).
---   Reset instance/GO/cross-creature legs: DONE early-return, aerial
---     EnterEvadeMode (no bridge; event 25 unused), BossAI _Reset
---     (instance boss-state, no bridge), elevator/button GO legs, computer
+--   Reset instance/GO/cross-creature legs: aerial EnterEvadeMode
+--     (no bridge; event 25 unused), elevator/button GO legs, computer
 --     DoAction, SEAT_3 cast on MKII via instance GUID -- all out.
---   JustDied legs: SetBossState DONE -- out (no instance boss-state
---     bridge); ExitVehicle + compensating MoveJump -- out (no ExitVehicle
+--   JustDied legs: ExitVehicle + compensating MoveJump -- out (no ExitVehicle
 --     binding, so the exit-vehicle repositioning is unmodeled; no in-tree
 --     Lua MoveJump precedent to copy the speed mapping from).
 --   OUTTRO_2 cache summon -- out: the GO id is latch-gated
@@ -80,6 +87,7 @@
 --   * No berserk: SAY_BERSERK (14) has no scheduling event in this class.
 
 local NPC_MIMIRON = 33350
+local BOSS_MIMIRON = 10 -- ulduar.h:46
 
 local SPELL_WELD = 63339
 local SPELL_FLAMES_PERIODIC_TRIGGER = 64561 -- boss_mimiron.cpp:131
@@ -134,19 +142,26 @@ local function mimironSpawn(event, creature)
     creature:SetReactState(REACT_PASSIVE)
 end
 
--- C++ Reset (:456), creature-local legs in C++ order: RemoveFlag
--- NON_ATTACKABLE, then self-cast WELD. _Reset clears the event machine,
--- so Lua timers are cancelled here too.
+-- C++ Reset (:456), creature-local legs in C++ order: DONE
+-- early-return gate (:457-458), _Reset() SetBossState NOT_STARTED,
+-- then RemoveFlag NON_ATTACKABLE, then self-cast WELD. _Reset clears
+-- the event machine, so Lua timers are cancelled here too.
 local function mimironReset(event, creature)
+    if creature:GetBossState(BOSS_MIMIRON) == 3 then
+        return
+    end
+    creature:SetBossState(BOSS_MIMIRON, 0)
     cancelTimers(creature:GetGUID())
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     creature:CastSpell(creature, SPELL_WELD)
 end
 
 -- C++ JustEngagedWith (:424), creature-local legs in C++ order:
+-- BossAI::JustEngagedWith SetBossState IN_PROGRESS (base-first),
 -- SetFlag NON_ATTACKABLE, remove WELD. Vehicle-base cast, button GO leg,
 -- SUMMON_FLAMES and INTRO chain stay out (see header).
 local function mimironEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_MIMIRON, 1)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     creature:RemoveAura(SPELL_WELD)
 end
@@ -179,12 +194,14 @@ outtro1 = function(creature, guid)
     end)
 end
 
--- C++ JustDied (:442), creature-local legs in C++ order: events.Reset
--- (Lua timers cancelled), CombatStop(true), SetDisableGravity(false),
--- self-cast SLEEP_VISUAL_1, self-cast DESPAWN_ASSAULT_BOTS (DoCastAOE),
--- then OUTTRO_1 in 7s. SetBossState, ExitVehicle, MoveJump stay out.
+-- C++ JustDied (:442), creature-local legs in C++ order: SetBossState
+-- DONE first, events.Reset (Lua timers cancelled), CombatStop(true),
+-- SetDisableGravity(false), self-cast SLEEP_VISUAL_1, self-cast
+-- DESPAWN_ASSAULT_BOTS (DoCastAOE), then OUTTRO_1 in 7s. ExitVehicle,
+-- MoveJump stay out.
 local function mimironDied(event, creature, killer)
     local guid = creature:GetGUID()
+    creature:SetBossState(BOSS_MIMIRON, 3)
     cancelTimers(guid)
     creature:CombatStop(true)
     creature:SetDisableGravity(false)
