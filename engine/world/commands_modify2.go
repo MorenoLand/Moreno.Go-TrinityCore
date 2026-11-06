@@ -36,6 +36,61 @@ func modifyAtof(arg string) float64 {
 	if j < len(arg) && (arg[j] == '+' || arg[j] == '-') {
 		j++
 	}
+	// C strtod also parses hexadecimal floats ("0x10" is 16, "0x10.8" is
+	// 16.5, optional p-exponent); the decimal scan below would stop at the
+	// 'x' and read 0, so handle the hex form first.
+	if j+1 < len(arg) && arg[j] == '0' && (arg[j+1] == 'x' || arg[j+1] == 'X') {
+		k := j + 2
+		intVal := 0.0
+		intDigits := 0
+		for k < len(arg) && isHexDigit(arg[k]) {
+			intVal = intVal*16 + float64(hexDigitValue(arg[k]))
+			k++
+			intDigits++
+		}
+		fracVal := 0.0
+		fracDigits := 0
+		if k < len(arg) && arg[k] == '.' {
+			k++
+			div := 16.0
+			for k < len(arg) && isHexDigit(arg[k]) {
+				fracVal += float64(hexDigitValue(arg[k])) / div
+				div *= 16
+				k++
+				fracDigits++
+			}
+		}
+		if intDigits == 0 && fracDigits == 0 {
+			// C strtod("0x") consumes just the leading "0".
+			return 0
+		}
+		v := intVal + fracVal
+		if k < len(arg) && (arg[k] == 'p' || arg[k] == 'P') {
+			k++
+			negExp := false
+			if k < len(arg) && (arg[k] == '+' || arg[k] == '-') {
+				negExp = arg[k] == '-'
+				k++
+			}
+			exp := 0
+			expDigits := 0
+			for k < len(arg) && arg[k] >= '0' && arg[k] <= '9' {
+				exp = exp*10 + int(arg[k]-'0')
+				k++
+				expDigits++
+			}
+			if expDigits > 0 {
+				if negExp {
+					exp = -exp
+				}
+				v = math.Ldexp(v, exp)
+			}
+		}
+		if j > i && arg[i] == '-' {
+			return -v
+		}
+		return v
+	}
 	digits := 0
 	for j < len(arg) && arg[j] >= '0' && arg[j] <= '9' {
 		j++
@@ -70,6 +125,22 @@ func modifyAtof(arg string) float64 {
 		return 0
 	}
 	return v
+}
+
+// isHexDigit / hexDigitValue are the hex-float legs of modifyAtof.
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+func hexDigitValue(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	default:
+		return int(c-'A') + 10
+	}
 }
 
 // checkModifySpeedBounds mirrors modify_commandscript::CheckModifySpeed

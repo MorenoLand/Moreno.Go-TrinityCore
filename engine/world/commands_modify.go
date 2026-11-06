@@ -516,9 +516,11 @@ func (s *session) handleModifyDrunk(ctx context.Context, args []string) {
 		return
 	}
 	// No security gate in C++ for the drunk arm; the drunken state lives in
-	// PLAYER_BYTES_3, which is in-memory only (no characters column).
-	target.player.DrunkenState = uint16(drunklevel)
-	target.sendPlayerUpdate()
+	// PLAYER_BYTES_3, which is in-memory only (no characters column). The
+	// SetDrunkValue twin (spells.go) also fires the
+	// SMSG_CROSSED_INEBRIATION_THRESHOLD packet to self + the 100yd
+	// visibility set on a drunken-state-band change (itemID 0 here).
+	target.setPlayerDrunkValue(0, drunklevel)
 }
 
 // playerGUIDOf returns the character guid of the given target session.

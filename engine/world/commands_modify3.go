@@ -15,8 +15,10 @@ import (
 //   - gender is native: playerState.Gender drives both the update-field
 //     builder (unitFieldBytes0) and the race display-id lookup, which is the
 //     Go equivalent of the SetGender/SetNativeGender/InitDisplayIds triple.
-//   - bit has no Go bridge: update fields are built from playerState and
-//     there is no generic SetFlag/RemoveFlag unit-value store.
+//   - bit is wired on the selected unit via the indexed-value backends
+//     (lua_values.go): a field the backend reads AND writes round-trips
+//     with a change-only broadcast; valid-range but unbacked fields (and
+//     bits a partial-byte slot silently drops) report honestly.
 //   - faction is wired on the selected creature (motion Faction/UnitFlags/
 //     NPCFlags/DynamicFlags slots + values-update broadcast); the no-arg
 //     form reports the current values.
@@ -77,15 +79,69 @@ func (s *session) handleModifyGender(ctx context.Context, args []string) {
 		fmt.Sprintf("%s changed your gender to %s.", s.player.Name, genderFull))
 }
 
-// handleModifyBit is documented-blocked (cs_modify.cpp:614): toggling an
-// arbitrary unit-field flag bit needs a generic Unit value store with
-// SetFlag/RemoveFlag; the Go tree builds update fields from playerState and
-// has no such bridge.
-func (s *session) handleModifyBit(ctx context.Context) {
+// handleModifyBit mirrors HandleModifyBitCommand (cs_modify.cpp:616): the
+// selected unit (getSelectedUnit: selected creature, else selected player,
+// else self), security gate only for player targets, field = atoi, bit =
+// atoi, field in [OBJECT_END, GetValuesCount) (creature UNIT_END 148,
+// player PLAYER_END 1326, UpdateFields.h:30,175,392), bit in [1, 32], and
+// the bit toggles via HasFlag with LANG_SET_BIT / LANG_REMOVE_BIT in
+// (bit, field) order. The toggle rides the indexed-value backends
+// (lua_values.go): a field the backend reads AND writes round-trips, and
+// the backend's change-only broadcast carries it; a valid-range but
+// unbacked field (e.g. player bytes0/faction/attack-time, creature
+// offhand/ranged attack time) — or a bit the backend silently drops
+// (partial-byte slots: creature bytes0/bytes2, player bytes1/bytes2) —
+// reports honestly instead of claiming the toggle. The two LANG strings
+// are trinity_string 161/162 ("You remove/set bit %u in field %u."),
+// unseeded in-tree.
+func (s *session) handleModifyBit(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandModifyBit) {
 		return
 	}
-	s.sendSysMessage("modify bit is not supported: generic unit-field flag toggles have no Go bridge.")
+	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .modify bit <field> <bit>")
+		return
+	}
+	if motion := s.castCommandSelectedCreature(); motion != nil {
+		s.modifyBitUnit(ctx, motionIndexedValueBackend(s.server, motion), args, 148)
+		return
+	}
+	target := s.modifyTargetPlayer(ctx)
+	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
+		return
+	}
+	s.modifyBitUnit(ctx, playerIndexedValueBackend(target, target.player), args, 1326)
+}
+
+// modifyBitUnit is the shared toggle leg of handleModifyBit: range checks
+// against valuesCount, then a read-modify-write through the backend. A
+// write the backend cannot store (ok false, or stored == old so the bit
+// did not stick) is an honest not-supported, never a false SET/REMOVE.
+func (s *session) modifyBitUnit(ctx context.Context, backend indexedValueBackend, args []string, valuesCount int) {
+	_ = ctx
+	field := cAtoi(args[0])
+	bit := cAtoi(args[1])
+	if field < 6 || field >= valuesCount || bit < 1 || bit > 32 {
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
+		return
+	}
+	old, ok := backend.read(field)
+	if !ok {
+		s.sendSysMessage("modify bit is not supported for this field: no Go value store backs it.")
+		return
+	}
+	mask := uint32(1) << uint(bit-1)
+	fields, changed, ok := backend.write(field, func(v uint32) uint32 { return v ^ mask })
+	if !ok || !changed {
+		s.sendSysMessage("modify bit is not supported for this field: no Go value store backs it.")
+		return
+	}
+	backend.broadcast(fields)
+	if old&mask != 0 {
+		s.sendSysMessage(fmt.Sprintf("You remove bit %d in field %d.", bit, field))
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("You set bit %d in field %d.", bit, field))
 }
 
 // handleModifyFaction mirrors HandleModifyFactionCommand (cs_modify.cpp:209):
@@ -228,7 +284,13 @@ func (s *session) handleModifySpeed(ctx context.Context, args []string) {
 	case strings.HasPrefix("swim", sub):
 		s.modifySpeedType(ctx, permissionCommandModifySpeedSwim, rest, "swim", []int{moveTypeSwim}, true)
 	default:
-		s.sendSysMessage(syntax)
+		// Unmatched token: C++ TryExecuteCommand breaks out of the
+		// subcommand loop and invokes the last-matched node — the speed
+		// node itself, whose "" entry is the all-speeds handler
+		// (cs_modify.cpp:55, permission 561) — with the full unmatched
+		// tail, so "2.5x" / "0x10" / "foo" atof through CheckModifySpeed
+		// (2.5 / 16 / BAD_VALUE) instead of printing syntax.
+		s.modifySpeedAll(ctx, permissionCommandModifySpeed, args)
 	}
 }
 
@@ -342,7 +404,7 @@ func (s *session) handleModifyChunk2b(ctx context.Context, sub string, rest []st
 	case strings.HasPrefix("gender", sub):
 		s.handleModifyGender(ctx, rest)
 	case strings.HasPrefix("bit", sub):
-		s.handleModifyBit(ctx)
+		s.handleModifyBit(ctx, rest)
 	case strings.HasPrefix("faction", sub):
 		s.handleModifyFaction(ctx, rest)
 	case strings.HasPrefix("phase", sub):
