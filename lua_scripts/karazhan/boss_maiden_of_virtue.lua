@@ -8,8 +8,8 @@
 -- packet-visual), so timers fire unconditionally; SelectTarget(random, range)
 -- is drawn from the threat list (boss_maiden_of_virtue.cpp:100/:105,
 -- SelectTarget(Random, 0, 50/80, true): players alive within range);
--- instance encounter state binds through the luaBossAI shim in
--- engine/world/boss_ai.go (no Karazhan instance-script model exists yet).
+-- SetBossState arms port via creature:SetBossState (bridge live;
+-- DATA_MAIDEN_OF_VIRTUE = 2, karazhan.h:32).
 
 local ENTRY = 16457
 
@@ -82,6 +82,11 @@ local function onHolyWrath(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- BossAI::JustEngagedWith base-first (boss_maiden_of_virtue.cpp:70):
+    -- _JustEngagedWith (ScriptedCreature.cpp:527-542) sets IN_PROGRESS,
+    -- then pulse 5 + DoZoneInCombat. The CheckRequiredBosses gate is
+    -- vacuous (no instance override in instance_karazhan.cpp).
+    creature:SetBossState(2, 1) -- DATA_MAIDEN_OF_VIRTUE, IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -100,6 +105,14 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- No Reset override in boss_maiden_of_virtue.cpp, so base
+    -- BossAI::Reset (ScriptedCreature.h:328) runs _Reset()
+    -- (ScriptedCreature.cpp:499-511): alive-gated and != DONE-gated
+    -- SetBossState(NOT_STARTED). Go fires ev23 on the death path before
+    -- ev4 (moroes precedent), so both gates are live here.
+    if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
+        creature:SetBossState(2, 0) -- DATA_MAIDEN_OF_VIRTUE, NOT_STARTED
+    end
 end
 
 local function onTargetDied(event, creature, victim)
@@ -111,6 +124,10 @@ end
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++-exact arm order: Talk, then _JustDied()
+    -- (boss_maiden_of_virtue.cpp:64-65) -> SetBossState(DONE)
+    -- (ScriptedCreature.cpp:513-520).
+    creature:SetBossState(2, 3) -- DATA_MAIDEN_OF_VIRTUE, DONE
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

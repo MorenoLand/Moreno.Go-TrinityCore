@@ -3,14 +3,14 @@
 -- Creature entry: 17225 (karazhan.h NPC_NIGHTBANE; TDB creature_template
 -- ScriptName "boss_nightbane"). Instance data: DATA_NIGHTBANE = 11,
 -- DATA_MASTERS_TERRACE_DOOR_1 = 27, DATA_MASTERS_TERRACE_DOOR_2 = 28,
--- DATA_GO_BLACKENED_URN = 30 (karazhan.h:41,56-57,59); the encounter only
--- touches instance state for the terrace doors, the urn IN_USE flag, and
--- the BossAI admission — no Go instance-script model, so those arms are
--- skipped and DATA_NIGHTBANE is admission-only via the luaBossAI shim in
--- engine/world/boss_ai.go.
+-- DATA_GO_BLACKENED_URN = 30 (karazhan.h:41,56-57,59); the terrace doors
+-- and the urn IN_USE flag port via FindNearestGameObject, and the
+-- DATA_NIGHTBANE SetBossState legs port via creature:SetBossState (bridge
+-- live lua_creature_events.go:5917): ev1 IN_PROGRESS, ev23 NOT_STARTED,
+-- ev4 DONE, ev24 FAIL.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken (75/50/25% fly-phase arms + fly-phase never-die clamp),
--- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
+-- 23 OnReset, 24 OnReachHome. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Fight shape: ground phase (Cleave / Tail Sweep / Bellowing Roar /
 -- Charred Earth / Smoldering Breath / Distracting Ash) until a DamageTaken
@@ -34,8 +34,10 @@
 -- startPhaseFly below) split. GO gossip dispatch IS bridged
 -- (RegisterGameObjectGossipEvent), but the go_blackened_urn gossip arm
 -- (entry 194092) stays out: its boss-state gate (DATA_NIGHTBANE DONE /
--- IN_PROGRESS) has no instance bridge, its effect is a cross-creature
--- DoAction(ACTION_SUMMON) with no bridge, and the intro machine it
+-- IN_PROGRESS) is readable via creature:GetBossState (bridge live
+-- lua_creature_events.go:5936), so the gate is not the blocker — its
+-- effect is a cross-creature DoAction(ACTION_SUMMON) with no bridge,
+-- and the intro machine it
 -- triggers (EMOTE_SUMMON, IMMUNE_TO_PC until landing, DoZoneInCombat)
 -- is unported — so the port starts directly at the landing combat state.
 -- Rain of Bones (37098) is cast on the random target only — its
@@ -346,6 +348,11 @@ local function nightbaneInitState(guid)
 end
 
 local function nightbaneEnterCombat(event, creature, target)
+    -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
+    -- sets the boss state IN_PROGRESS; DATA_NIGHTBANE=11
+    -- (karazhan.h:41). C++ calls the base first (:186), before the
+    -- pulse (:540) and DoZoneInCombat (:542) arms.
+    creature:SetBossState(11, 1) -- DATA_NIGHTBANE, IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -372,6 +379,10 @@ end
 
 local function nightbaneDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (:147-151): _JustDied() first (:149), writing
+    -- SetBossState(DATA_NIGHTBANE 11, DONE) (ScriptedCreature.cpp:513-520),
+    -- then HandleTerraceDoors(true).
+    creature:SetBossState(11, 3) -- DATA_NIGHTBANE, DONE
     -- C++ JustDied: HandleTerraceDoors(true) = both terrace doors open
     -- (GO_STATE_ACTIVE) via the netherspite FindNearestGameObject precedent.
     -- The intro close (DoAction ACTION_SUMMON) stays out: no inbound
@@ -383,21 +394,31 @@ local function nightbaneDied(event, creature, killer)
 end
 
 -- C++ boss_nightbane.cpp:142-145: JustReachedHome -> _DespawnAtEvade()
--- (BossAI despawn with respawn delay + instance SetBossState(FAIL); the
--- instance leg has no bridge). Go fires event 24 at the same home-arrival
--- point; creature:Despawn() respawns DB-spawned creatures on their normal
--- spawntimesecs (opera precedent).
+-- (ScriptedCreature.cpp:596-618): DespawnOrUnsummon(0s, 30s) then
+-- instance SetBossState(DATA_NIGHTBANE 11, FAIL) (:616-617), ported below
+-- via creature:SetBossState (bridge live lua_creature_events.go:5917).
+-- Go fires event 24 at the same home-arrival point; creature:Despawn()
+-- respawns DB-spawned creatures on their normal spawntimesecs (opera
+-- precedent). C++ order kept: despawn first, then FAIL.
 local function nightbaneReachHome(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     nightbaneInitState(guid)
     creature:Despawn()
+    creature:SetBossState(11, 2) -- DATA_NIGHTBANE, FAIL
 end
 
 local function nightbaneReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     nightbaneInitState(guid)
+    -- C++ Reset (:126-133): _Reset() first (:128), writing
+    -- SetBossState(DATA_NIGHTBANE 11, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511); Go fires
+    -- ev23 on the death path too, hence the gate (broodlord precedent).
+    if creature:IsAlive() and creature:GetBossState(11) ~= 3 then
+        creature:SetBossState(11, 0)
+    end
     -- C++ boss_nightbane::Reset (:126-133): _Reset(), _flyCount = 0,
     -- me->SetDisableGravity(true) (:130) — bridged (lua_creature_events.go,
     -- PORTED 2026-10-22) + HandleTerraceDoors(true) (both doors open) +

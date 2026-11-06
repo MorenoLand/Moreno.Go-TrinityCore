@@ -2,8 +2,10 @@
 -- src/server/scripts/EasternKingdoms/Karazhan/boss_netherspite.cpp
 -- Creature entry: 15689 (TDB creature_template ScriptName "boss_netherspite").
 -- Instance data: DATA_NETHERSPITE = 8, DATA_GO_MASSIVE_DOOR = 22
--- (karazhan.h:38,50); the encounter never reads encounter state — the
--- door/instance arms have no Go model (see deviations).
+-- (karazhan.h:38,50). DATA_NETHERSPITE is never written by the C++: the AI
+-- derives ScriptedAI, not BossAI (boss_netherspite.cpp:81), and there is no
+-- instance->SetBossState in Reset (:141-147), JustEngagedWith (:266-270) or
+-- JustDied (:272-276) — so there are no SetBossState legs to port.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -22,8 +24,9 @@
 -- geometry still reads the stored spawn coordinates, so a nil summon
 -- (missing template) degrades to virtual coordinates instead of
 -- dropping the buffs. Red-beam AddThreat(100000) is ported (AddThreat
--- bridge). No instance-script model, so HandleDoors (the massive door)
--- is skipped. The phase switch waits for !IsNonMeleeSpellCast(false)
+-- bridge). HandleDoors (the massive door) IS ported via
+-- FindNearestGameObject (enter closes it, died/reset opens it). The phase
+-- switch waits for !IsNonMeleeSpellCast(false)
 -- (ported in onPhaseSwitch via IsCasting, lua_creature_events.go:2102;
 -- 500ms retry while casting).
 -- DATA_NETHERSPITE is admission-only via the luaBossAI shim in

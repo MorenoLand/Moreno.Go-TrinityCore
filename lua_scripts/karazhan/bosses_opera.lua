@@ -14,7 +14,8 @@
 -- npc_tito, npc_cyclone, npc_grandmother, boss_bigbadwolf, boss_julianne,
 -- boss_romulo.
 -- Instance data: DATA_OPERA_PERFORMANCE = 4, DATA_OPERA_OZ_DEATHCOUNT = 14
--- (karazhan.h:34,43); every instance arm has no Go model (see deviations).
+-- (karazhan.h:34,43); the JustDied SetBossState(DONE) arms port via
+-- creature:SetBossState (bridge live).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 9 OnDamageTaken (the Julianne/Romulo fake-death dance),
 -- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
@@ -32,9 +33,10 @@
 -- boss_bigbadwolf (17521) and boss_romulo (17533) are all registered, so
 -- a spawned one fights correctly once engaged (aran-elemental
 -- convention). No
--- instance-script model — the Oz death counter, DATA_OPERA_PERFORMANCE
--- SetBossState(DONE), and DoZoneInCombat arms are skipped
--- (instance-legs: re-evaluated 2026-10-23, stays out). No threat
+-- instance-script model — the Oz death counter and DoZoneInCombat arms
+-- are skipped (instance-legs: re-evaluated 2026-10-23, stays out); the
+-- JustDied SetBossState(DONE) arms ARE ported below (crone, wolf,
+-- julianne, romulo). No threat
 -- model — the wolf's chase threat juggling is skipped (chase is Talk +
 -- debuff + a fear/swipe freeze) and BackwardLunge picks a random alive
 -- player excluding the victim (approximates the C++ second-threat
@@ -724,6 +726,9 @@ end
 local function croneDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(CRONE_SAY_DEATH)
+    -- C++ JustDied (bosses_opera.cpp:717-721): Talk, then
+    -- SetBossState(DATA_OPERA_PERFORMANCE, DONE).
+    creature:SetBossState(4, 3)
 end
 
 
@@ -754,7 +759,8 @@ RegisterCreatureEvent(ENTRY_CRONE, 24, croneReachHome)
 -- Terrifying howl 30752 on the victim every 25-35s; wide swipe 30761 on
 -- the victim every 25-30s (first 5s); neither ticks while chasing.
 -- The death sound (9275) is ported via PlayDirectSound in wolfDied;
--- the SetBossState(DONE) arm has no instance-script model.
+-- the SetBossState(DONE) arm ports via creature:SetBossState(4, 3) in
+-- wolfDied (bosses_opera.cpp:909-910).
 local WOLF_SAY_AGGRO = 0
 local WOLF_SAY_SLAY = 1
 local WOLF_SAY_HOOD = 2
@@ -900,12 +906,14 @@ local function wolfTargetDied(event, creature, victim)
     end
 end
 
--- C++ boss_bigbadwolf::JustDied: DoPlaySoundToSet(me, SOUND_WOLF_DEATH
--- 9275) = creature:PlayDirectSound (SMSG_PLAY_SOUND); the
--- SetBossState(DONE) arm has no instance-script model. Cleanup.
+-- C++ boss_bigbadwolf::JustDied (bosses_opera.cpp:906-910):
+-- DoPlaySoundToSet(me, SOUND_WOLF_DEATH 9275) =
+-- creature:PlayDirectSound (SMSG_PLAY_SOUND), then
+-- SetBossState(DATA_OPERA_PERFORMANCE, DONE). Cleanup.
 local function wolfDied(event, creature, killer)
     local guid = creature:GetGUID()
     creature:PlayDirectSound(9275)
+    creature:SetBossState(4, 3)
     cancelTimers(guid)
     wolfState[guid] = nil
 end
@@ -1210,6 +1218,9 @@ local function julianneDied(event, creature, killer)
     rajDeadlines[guid] = nil
     raj.julianneFrozen = nil
     creature:Talk(JULIANNE_SAY_DEATH02)
+    -- C++ JustDied (bosses_opera.cpp:1150-1154): Talk, then
+    -- SetBossState(DATA_OPERA_PERFORMANCE, DONE).
+    creature:SetBossState(4, 3)
     if raj.julianneGuid == guid then
         raj.julianneFaking = false
         raj.romuloSummoned = false
@@ -1573,6 +1584,9 @@ local function romuloDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(ROMULO_SAY_DEATH)
+    -- C++ JustDied (bosses_opera.cpp:1302-1306): Talk, then
+    -- SetBossState(DATA_OPERA_PERFORMANCE, DONE).
+    creature:SetBossState(4, 3)
     if raj.romuloGuid == guid then
         raj.romuloFaking = false
         raj.phase = PHASE_ROMULO

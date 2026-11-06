@@ -2,9 +2,9 @@
 -- src/server/scripts/EasternKingdoms/Karazhan/boss_curator.cpp
 -- Creature entry 15691 (wowhead wotlk npc=15691/the-curator; TDB
 -- creature_template ScriptName "boss_curator"). Instance data:
--- DATA_CURATOR = 5 (karazhan.h:35); the encounter never reads/writes
--- instance state beyond the BossAI admission handled by the luaBossAI
--- shim in engine/world/boss_ai.go.
+-- DATA_CURATOR = 5 (karazhan.h:35). Reset/aggro/death SetBossState arms
+-- port via creature:SetBossState (bridge live 2026-11-05); the luaBossAI
+-- shim in engine/world/boss_ai.go handles admission only.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 9 OnDamageTaken (soft-enrage arm, damage untouched), 23 OnReset.
 -- Timers via CreateLuaEvent; melee is engine-driven in Go (creature combat
@@ -177,6 +177,11 @@ local function curatorJustSummoned(event, creature, summon)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_curator.cpp:80-82) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_CURATOR 5,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537), then SetCombatPulseDelay(5)
+    -- (:540) + DoZoneInCombat() (:542).
+    creature:SetBossState(5, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -197,6 +202,13 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (boss_curator.cpp:61-63): _Reset() writes
+    -- SetBossState(DATA_CURATOR 5, NOT_STARTED), alive-gated and skipped
+    -- when already DONE (ScriptedCreature.cpp:499-511); Go fires ev23 on
+    -- the death path too, hence the gate (broodlord precedent).
+    if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
+        creature:SetBossState(5, 0)
+    end
     -- C++ Reset() :65: ApplySpellImmune(0, IMMUNITY_DAMAGE,
     -- SPELL_SCHOOL_MASK_ARCANE=64, true) — arcane-damage immunity for
     -- the evocation mechanic (lua_creature_events.go bridge).
@@ -211,6 +223,10 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_curator.cpp:74-78): _JustDied() first, writing
+    -- SetBossState(DATA_CURATOR 5, DONE) (ScriptedCreature.cpp:513-519),
+    -- then Talk(SAY_DEATH).
+    creature:SetBossState(5, 3)
     creature:Talk(SAY_DEATH)
 end
 

@@ -39,9 +39,9 @@
 -- self-cast 29951 only). No C++ script exists for 18254/17161. The water elemental AI itself ("npc_aran_elemental") is
 -- registered for entry 17167 below so the summoned elementals cast
 -- waterbolt 31012 every 2-5s once engaged. No
--- instance-script model — the library-door open/close arms and the
--- DATA_ARAN SetBossState calls are skipped (admission-only via the
--- luaBossAI shim in engine/world/boss_ai.go). No threat model — the
+-- SetBossState arms port via creature:SetBossState (bridge live;
+-- DATA_ARAN = 6, karazhan.h:36); the library-door open/close arms port
+-- via FindNearestGameObject + SetGoState. No threat model — the
 -- flame-wreath target pool is random alive players in the instance rather
 -- than the threat list. No UNIT_STATE_CASTING model for the other timers —
 -- they fire unconditionally (same convention as the other Karazhan ports),
@@ -394,11 +394,13 @@ local function aranEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     aranInitState(guid)
-    -- C++ JustEngagedWith: Talk(SAY_AGGRO) + library-door close
+    -- C++ JustEngagedWith (boss_shade_of_aran.cpp:176-182): Talk(SAY_AGGRO),
+    -- SetBossState(IN_PROGRESS), library-door close
     -- (HandleGameObject(DATA_GO_LIBRARY_DOOR, false) = GO_STATE_READY;
     -- the 15s CloseDoorTimer close in UpdateAI is a redundant no-op once
-    -- the engage close lands). SetBossState(IN_PROGRESS) has no bridge.
+    -- the engage close lands).
     creature:Talk(SAY_AGGRO)
+    creature:SetBossState(6, 1) -- DATA_ARAN, IN_PROGRESS
     local libraryDoor = creature:FindNearestGameObject(GO_PRIVATE_LIBRARY_DOOR, 100.0)
     if libraryDoor then libraryDoor:SetGoState(1) end
     schedule(timers, guid, "normal", 1, function()
@@ -424,10 +426,11 @@ end
 local function aranDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
-    -- C++ JustDied: Talk(SAY_DEATH) + library-door re-open
-    -- (HandleGameObject true = GO_STATE_ACTIVE); SetBossState(DONE) has
-    -- no bridge.
+    -- C++ JustDied (boss_shade_of_aran.cpp:168-174): Talk(SAY_DEATH),
+    -- SetBossState(DONE), library-door re-open
+    -- (HandleGameObject true = GO_STATE_ACTIVE).
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(6, 3) -- DATA_ARAN, DONE
     local libraryDoor = creature:FindNearestGameObject(GO_PRIVATE_LIBRARY_DOOR, 100.0)
     if libraryDoor then libraryDoor:SetGoState(0) end
 end
@@ -436,7 +439,13 @@ local function aranReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     aranInitState(guid)
-    -- C++ Reset: library-door open (HandleGameObject true = GO_STATE_ACTIVE).
+    -- C++ Reset (boss_shade_of_aran.cpp:154-161): Initialize(),
+    -- SetBossState(NOT_STARTED), library-door open (HandleGameObject true
+    -- = GO_STATE_ACTIVE). Go fires ev23 on the death path before ev4
+    -- (moroes precedent), so the alive + != DONE gates are live here.
+    if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
+        creature:SetBossState(6, 0) -- DATA_ARAN, NOT_STARTED
+    end
     local libraryDoor = creature:FindNearestGameObject(GO_PRIVATE_LIBRARY_DOOR, 100.0)
     if libraryDoor then libraryDoor:SetGoState(0) end
 end

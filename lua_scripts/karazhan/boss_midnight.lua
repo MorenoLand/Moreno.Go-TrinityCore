@@ -4,9 +4,9 @@
 -- "boss_midnight"); 15550 (Attumen the Huntsman, unmounted) and 16152
 -- (Attumen the Huntsman, mounted), both ScriptName "boss_attumen" per the
 -- AddSC_boss_attumen registration. Instance data: DATA_ATTUMEN = 0
--- (karazhan.h:30); the encounter never reads/writes instance state beyond
--- the BossAI admission handled by the luaBossAI shim in
--- engine/world/boss_ai.go.
+-- (karazhan.h:30). Reset/aggro/death SetBossState arms port via
+-- creature:SetBossState (bridge live 2026-11-05); the luaBossAI shim in
+-- engine/world/boss_ai.go handles admission only.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 9 OnDamageTaken (returns false, newDamage for the never-die
 -- clamps), 14 OnHitBySpell (the SPELL_MOUNT merge arm), 23 OnReset.
@@ -167,6 +167,11 @@ local function onMidnightKnockdown(creature, guid)
 end
 
 local function midnightEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_midnight.cpp:340-342) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_ATTUMEN 0,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537), then SetCombatPulseDelay(5)
+    -- (:540) + DoZoneInCombat() (:542).
+    creature:SetBossState(0, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -269,6 +274,15 @@ local function midnightTargetDied(event, creature, victim)
     end
 end
 
+local function midnightDied(event, creature, killer)
+    -- C++ boss_midnightAI has no JustDied override, so base
+    -- BossAI::JustDied (ScriptedCreature.h:330) runs _JustDied(),
+    -- writing SetBossState(DATA_ATTUMEN 0, DONE)
+    -- (ScriptedCreature.cpp:513-519). Unreachable in normal play:
+    -- DamageTaken clamps Midnight at 1 HP (boss_midnight.cpp:311-312).
+    creature:SetBossState(0, 3)
+end
+
 local function midnightLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -283,6 +297,14 @@ local function midnightReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     midnightInitState(guid)
+    -- C++ Reset (boss_midnight.cpp:300-303): Initialize() then
+    -- BossAI::Reset() = _Reset(), writing SetBossState(DATA_ATTUMEN 0,
+    -- NOT_STARTED), alive-gated and skipped when already DONE
+    -- (ScriptedCreature.cpp:499-511); Go fires ev23 on the death path
+    -- too, hence the gate (broodlord precedent).
+    if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0)
+    end
     -- C++ boss_midnightAI::Reset (boss_midnight.cpp:300-306): SetVisible(true)
     -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656) +
     -- SetReactState(REACT_DEFENSIVE) (SetReactState bridge), in C++ order.
@@ -293,6 +315,7 @@ end
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 1, midnightEnterCombat)
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 2, midnightLeaveCombat)
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 3, midnightTargetDied)
+RegisterCreatureEvent(ENTRY_MIDNIGHT, 4, midnightDied)
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 9, midnightDamageTaken)
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 23, midnightReset)
 RegisterCreatureEvent(ENTRY_MIDNIGHT, 19, midnightJustSummoned)
@@ -341,6 +364,12 @@ local function onMountedKnockdown(creature, guid)
 end
 
 local function attumenEnterCombat(event, creature, target)
+    -- C++ boss_attumenAI has no JustEngagedWith override, so base
+    -- BossAI::JustEngagedWith runs (ScriptedCreature.h:329):
+    -- SetBossState(DATA_ATTUMEN 0, IN_PROGRESS)
+    -- (ScriptedCreature.cpp:537), then SetCombatPulseDelay(5) (:540)
+    -- + DoZoneInCombat() (:542).
+    creature:SetBossState(0, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -442,6 +471,11 @@ local function attumenDied(event, creature, killer)
     -- not keep firing on the corpse.
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_midnight.cpp:201-209): Talk(SAY_DEATH), then
+    -- midnight->KillSelf() (stays out: no midnight handle), then
+    -- _JustDied() writes SetBossState(DATA_ATTUMEN 0, DONE)
+    -- (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(0, 3)
 end
 
 local function attumenLeaveCombat(event, creature)
@@ -458,6 +492,14 @@ local function attumenReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     attumenInitState(guid)
+    -- C++ Reset (boss_midnight.cpp:88-92): Initialize() then
+    -- BossAI::Reset() = _Reset(), writing SetBossState(DATA_ATTUMEN 0,
+    -- NOT_STARTED), alive-gated and skipped when already DONE
+    -- (ScriptedCreature.cpp:499-511); Go fires ev23 on the death path
+    -- too, hence the gate (broodlord precedent).
+    if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_ATTUMEN, 1, attumenEnterCombat)

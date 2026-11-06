@@ -2,9 +2,8 @@
 -- src/server/scripts/EasternKingdoms/Karazhan/boss_terestian_illhoof.cpp
 -- Creature entry: 15688 (wowhead wotlk npc=15688/terestian-illhoof; C++
 -- ScriptName "boss_terestian_illhoof" per AddSC_boss_terestian_illhoof).
--- Instance data: DATA_TERESTIAN = 7 (karazhan.h:37); the encounter never
--- reads encounter state — the BossAI SetBossState arms have no Go model
--- (see deviations), admission is via the luaBossAI shim.
+-- Instance data: DATA_TERESTIAN = 7 (karazhan.h:37); the BossAI
+-- SetBossState arms port via creature:SetBossState (bridge live).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 14 OnHitBySpell (the BROKEN_PACT summon re-arm), 23 OnReset.
 -- Timers via CreateLuaEvent; melee is engine-driven in Go (creature combat
@@ -172,6 +171,9 @@ local function onEnrage(creature, guid)
 end
 
 local function terestianEnterCombat(event, creature, target)
+    -- BossAI::JustEngagedWith (boss_terestian_illhoof.cpp:91) runs base
+    -- first: SetBossState(DATA_TERESTIAN, IN_PROGRESS).
+    creature:SetBossState(7, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -252,10 +254,12 @@ end
 local function terestianDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
-    -- C++ JustDied: Talk(SAY_DEATH), then the portal-imp despawn arm
-    -- (sweep above); SetBossState has no model.
+    -- C++ JustDied (boss_terestian_illhoof.cpp:107-113): Talk(SAY_DEATH),
+    -- then the portal-imp despawn arm (sweep above), then _JustDied()
+    -- = SetBossState(DATA_TERESTIAN, DONE).
     creature:Talk(SAY_DEATH)
     despawnPortalMachine(creature)
+    creature:SetBossState(7, 3)
 end
 
 -- C++ SpellHit: re-arm EVENT_SUMMON_KILREK at 32s when hit by broken pact
@@ -274,6 +278,13 @@ local function terestianReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     despawnPortalMachine(creature)
+    -- C++ Reset (boss_terestian_illhoof.cpp:75-88): the imp despawn above,
+    -- then _Reset() (:79) = SetBossState(DATA_TERESTIAN, NOT_STARTED),
+    -- alive-gated and skipped when already DONE (razorgore/broodlord
+    -- idiom; Go fires ev23 on the death path too).
+    if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
+        creature:SetBossState(7, 0)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_TERESTIAN_ILLHOOF, 19, terestianJustSummoned)
