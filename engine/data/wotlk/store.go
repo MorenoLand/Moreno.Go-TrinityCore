@@ -343,6 +343,13 @@ func (m MapEntry) IsDungeon() bool {
 	return m.InstanceType == 1 || m.InstanceType == 2
 }
 
+// Instanceable mirrors MapEntry::Instanceable (DBCStructure.h:1100):
+// INSTANCE(1) | RAID(2) | BATTLEGROUND(3) | ARENA(4). IsDungeon covers
+// only 1|2, so BG/arena maps need this for the .group summon gates.
+func (m MapEntry) Instanceable() bool {
+	return m.InstanceType == 1 || m.InstanceType == 2 || m.InstanceType == 3 || m.InstanceType == 4
+}
+
 func (m MapEntry) IsNonRaidDungeon() bool {
 	return m.InstanceType == 1
 }

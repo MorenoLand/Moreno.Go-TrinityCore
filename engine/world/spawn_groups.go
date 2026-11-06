@@ -35,7 +35,6 @@ package world
 import (
 	"context"
 	"database/sql"
-	"strconv"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -462,8 +461,8 @@ func parseSpawnGroupArgs(args []string, spawnFlags bool) (groupID uint32, flagA,
 		return 0, false, false, false
 	}
 	for _, a := range args {
-		if v, err := strconv.ParseUint(a, 10, 32); err == nil {
-			groupID = uint32(v)
+		if v, ok := parseCommandUint32(a); ok {
+			groupID = v
 			continue
 		}
 		switch strings.ToLower(a) {

@@ -74,6 +74,18 @@ func dungeonMapID(srv *Server, mapID uint32) bool {
 	return mapID != 0 && mapID != 1 && mapID != 530 && mapID != 571
 }
 
+// instanceableMapID mirrors dungeonMapID for MapEntry::Instanceable
+// (DBCStructure.h:1100): dungeons, raids, battlegrounds and arenas.
+// The no-DBC fallback matches dungeonMapID (any non-continent map).
+func instanceableMapID(srv *Server, mapID uint32) bool {
+	if srv != nil && srv.Data != nil {
+		if m, ok, err := srv.Data.Map(mapID); ok && err == nil {
+			return m.Instanceable()
+		}
+	}
+	return mapID != 0 && mapID != 1 && mapID != 530 && mapID != 571
+}
+
 // updateLooter mirrors Group::UpdateLooterGuid with ifneed=true
 // (Group.cpp:1962-1994, ifneed arm at 1972-1978): keep the current looter
 // while still at reward distance, else advance to the next in-range

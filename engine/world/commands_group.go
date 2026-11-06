@@ -545,7 +545,7 @@ func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
 	srv := s.server
 	gmMapID := s.player.Map
 	gmInstance := s.player.InstanceID
-	toInstance := s.isDungeonMap(gmMapID)
+	toInstance := instanceableMapID(srv, gmMapID)
 	onlyLocalSummon := false
 	if toInstance {
 		// The group leader must be on our instance of the map, else no far
@@ -578,7 +578,7 @@ func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
 			playerMapID := player.player.Map
 			instanceable := false
 			if entry, found, err := srv.Data.Map(playerMapID); err == nil && found {
-				instanceable = entry.IsDungeon()
+				instanceable = entry.Instanceable()
 			}
 			if (onlyLocalSummon || (instanceable && playerMapID == gmMapID)) &&
 				(playerMapID != gmMapID || player.player.InstanceID != gmInstance) {
