@@ -122,6 +122,28 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{scripting.NewMapObject(state.Map, state.InstanceID, s.server.mapLive(state.Map, state.InstanceID))}, nil
 	}
+	// GetZoneId/GetAreaId are WorldObject::GetZoneId()/GetAreaId() via
+	// Map::GetZoneAndAreaId (Map.cpp:2641): the area id resolves from the
+	// player's map + position and the zone id is the area's ParentAreaID
+	// when set. The Go twin is Server.zoneAndAreaID (terrain.go), the
+	// same resolution the creature surface (lua_creature_events.go) and
+	// the gameobject surface (lua_objects.go) use. Both return 0 when
+	// the server or the position cannot be resolved. Backs the World
+	// item_scripts only-for-flight gates (item_scripts.cpp:52-75).
+	methods["GetZoneId"] = luaNoArgs(func() any {
+		if s.server == nil {
+			return uint32(0)
+		}
+		zoneID, _ := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, 0)
+		return zoneID
+	})
+	methods["GetAreaId"] = luaNoArgs(func() any {
+		if s.server == nil {
+			return uint32(0)
+		}
+		_, areaID := s.server.zoneAndAreaID(state.Map, state.X, state.Y, state.Z, 0)
+		return areaID
+	})
 	methods["GetObjectType"] = luaNoArgs(func() any { return "Player" })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
 	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
@@ -1330,6 +1352,15 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return false
 	})
+	// IsInFlight is Player::IsInFlight (Player.h): the motion master is
+	// running FLIGHT_MOTION_TYPE, i.e. the player is on a taxi flight.
+	// Go's twin is the live TaxiPath flag (achievements.go,
+	// battleground_wg.go): a non-empty taxi path means the player is
+	// mid-flight. Deliberately NOT IsFlying: taxi passengers read
+	// pre-boarding movement flags (see IsFlying above), so IsFlying is
+	// false mid-flight. Backs the World item_scripts only-for-flight
+	// gate (item_scripts.cpp:73).
+	methods["IsInFlight"] = luaNoArgs(func() any { return state.TaxiPath != "" })
 	// IsHostileTo(target) is WorldObject::IsHostileTo (Object.cpp:2842-2845)
 	// from the player side, via playerHostileToUnit: the target's faction
 	// template id resolves from a creature object (its motion's faction) or
@@ -3415,6 +3446,27 @@ func (s *session) luaPlayer() *scripting.Object {
 			return nil, err
 		}
 		s.sendCastResult(ctx, spellID, uint8(result))
+		return nil, nil
+	}
+	// SendEquipError(err, item) is Player::SendEquipError (Player.cpp):
+	// SMSG_INVENTORY_CHANGE_FAILURE with the InventoryResult code and
+	// the item GUID (ItemDefines.h). The item argument is the Lua item
+	// object (its GUID field) or a raw GUID; a missing item sends the
+	// code with a zero GUID. Backs the World item_scripts
+	// only-for-flight block (item_scripts.cpp:76,
+	// EQUIP_ERR_CANT_DO_RIGHT_NOW = 39, ItemDefines.h:65). Note the
+	// engine's OnUse tail sends EQUIP_ERR_NONE (59) itself whenever a
+	// Lua handler blocks the use (items.go), the Eluna::OnUse tail twin
+	// — the script's own 39 is sent first, exactly as in C++.
+	methods["SendEquipError"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("SendEquipError requires an error code and an item")
+		}
+		errCode, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.sendEquipError(uint8(errCode), luaObjectGUID(args[1]))
 		return nil, nil
 	}
 	// GetSpellEffectItemType(spellID, effectIndex) is the
