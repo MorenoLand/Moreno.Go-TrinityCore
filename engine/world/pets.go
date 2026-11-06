@@ -2315,9 +2315,9 @@ func (s *session) handleTameCreature(ctx context.Context, spellID uint32, target
 // (PetSpellInitialize), family passives, and the world spawn (AddToMap +
 // SetMinion). Shared by the wild-creature tame (effect 150) and the
 // MiscValue-entry pet creation (effect 153).
-func (s *session) createTamedPetFromEntry(ctx context.Context, cdb *sql.DB, spellID, creatureEntry, petLevel uint32) {
+func (s *session) createTamedPetFromEntry(ctx context.Context, cdb *sql.DB, spellID, creatureEntry, petLevel uint32) bool {
 	if cdb == nil {
-		return
+		return false
 	}
 	var maxPetID int64
 	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM character_pet").Scan(&maxPetID)
@@ -2337,9 +2337,14 @@ func (s *session) createTamedPetFromEntry(ctx context.Context, cdb *sql.DB, spel
 	maxHP, _, maxMP, _ := s.getPetStats(ctx, creatureEntry, petLevel, 1, newPetID)
 	now := time.Now().Unix()
 
-	_, _ = cdb.ExecContext(ctx,
+	// The character_pet INSERT is the creation: C++ CreateTamedPetFrom
+	// returns null on failure and the caller reports
+	// LANG_CREATURE_NON_TAMEABLE (cs_npc.cpp:1048).
+	if _, err := cdb.ExecContext(ctx,
 		"INSERT INTO character_pet (id, entry, owner, modelid, CreatedBySpell, PetType, level, exp, Reactstate, name, renamed, slot, curhealth, curmana, curhappiness, savetime, abdata) VALUES (?, ?, ?, ?, ?, 1, ?, 0, 1, ?, 0, 0, ?, ?, ?, ?, '')",
-		newPetID, creatureEntry, s.playerGUID, modelID, spellID, petLevel, cName, maxHP, maxMP, petTameStartHappiness, now)
+		newPetID, creatureEntry, s.playerGUID, modelID, spellID, petLevel, cName, maxHP, maxMP, petTameStartHappiness, now); err != nil {
+		return false
+	}
 
 	spells := getPetSpellsForLevel(creatureEntry, petLevel)
 	for _, sp := range spells {
@@ -2348,6 +2353,7 @@ func (s *session) createTamedPetFromEntry(ctx context.Context, cdb *sql.DB, spel
 	s.learnPetFamilyPassives(ctx, newPetID, creatureEntry)
 
 	s.spawnPet(ctx, newPetID, creatureEntry, cName, petLevel, modelID, maxHP, maxHP, maxMP, maxMP, 1)
+	return true
 }
 
 // hasStabledHunterPet mirrors the InitTamedPet refusal arm

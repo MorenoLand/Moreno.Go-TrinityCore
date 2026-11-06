@@ -162,11 +162,11 @@ func (s *session) handleNPCAddFormation(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCAddFormation) {
 		return
 	}
-	if len(args) < 1 {
+	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .npc add formation $leaderGUID")
 		return
 	}
-	leaderGUID, err := strconv.ParseUint(args[0], 10, 32)
+	leaderGUID, err := strconv.ParseUint(args[0], 0, 32)
 	if err != nil {
 		s.sendSysMessage("Invalid leader GUID.")
 		return
@@ -210,7 +210,7 @@ func npcItemTokenID(token string) (uint32, bool, bool) {
 	if id := miscExtractLinkID(token, "Hitem"); id != 0 {
 		return id, true, true
 	}
-	id64, err := strconv.ParseUint(token, 10, 32)
+	id64, err := strconv.ParseUint(token, 0, 32)
 	if err != nil || id64 == 0 {
 		return 0, false, false
 	}
@@ -219,9 +219,10 @@ func npcItemTokenID(token string) (uint32, bool, bool) {
 
 // npcVendorUintArg parses one of the optional uint32 vendor arguments
 // (maxcount, incrtime, extendedcost): C++ parses Optional<uint32>, so a
-// non-numeric token is a parser error, not atoi's 0.
+// non-numeric token is a parser error, not atoi's 0. StringTo<T>(token, 0)
+// is base 0 (ChatCommandArgs.h:54-72): 0x10 is 16, 0b101 is 5.
 func npcVendorUintArg(token string) (uint32, bool) {
-	v, err := strconv.ParseUint(token, 10, 32)
+	v, err := strconv.ParseUint(token, 0, 32)
 	if err != nil {
 		return 0, false
 	}
@@ -274,14 +275,19 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 	if db == nil {
 		return
 	}
+	// C++ checks the vendor selection before the nil-item leg
+	// (cs_npc.cpp:179): a link resolving to no template reaches the body
+	// as a nil item, so its LANG_COMMAND_NEEDITEMSEND reports only after
+	// the vendor gate. A numeric id with no template is a parser error in
+	// C++ and stays pre-vendor here.
 	var itemName string
+	itemMissing := false
 	if err := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName); err != nil {
-		if link {
-			s.sendSysMessage("You need to send an item.")
+		if !link {
+			s.sendSysMessage(fmt.Sprintf("Item %d does not exist.", itemID))
 			return
 		}
-		s.sendSysMessage(fmt.Sprintf("Item %d does not exist.", itemID))
-		return
+		itemMissing = true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -294,6 +300,10 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 	var npcFlag uint32
 	if err := db.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0) FROM creature_template WHERE entry = ?", vendorEntry).Scan(&npcFlag); err != nil || npcFlag&unitNPCFlagVendor == 0 {
 		s.sendSysMessage("You need to select a vendor.")
+		return
+	}
+	if itemMissing {
+		s.sendSysMessage("You need to send an item.")
 		return
 	}
 	if extendedcost != 0 {
@@ -379,7 +389,7 @@ func (s *session) handleNPCAddMove(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCAddMove) {
 		return
 	}
-	if len(args) == 0 {
+	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .npc add move <guid>")
 		return
 	}
@@ -411,7 +421,7 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCAdd) {
 		return
 	}
-	if len(args) == 0 {
+	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .npc add <entry>")
 		return
 	}
@@ -436,11 +446,30 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 		return
 	}
 	p := s.player
+	// SaveToDB (cs_npc.cpp:163): spawnMask is 1 << Map::GetSpawnMode —
+	// the instance difficulty (dungeon/raid) on instance maps, normal
+	// elsewhere — and phaseMask is GetPhaseMaskForSpawn: PHASEMASK_NORMAL
+	// for a GM, else the player's phase (a .modify phase override stands
+	// for the phase-aura leg). The GM-with-phase-aura leg and the
+	// transport leg (CreateNPCPassenger + transport offsets) have no Go
+	// bridge and stay open.
+	spawnMode := uint32(0)
+	if s.isDungeonMap(p.Map) {
+		spawnMode = uint32(p.DungeonDifficulty)
+	} else if raidMapID(s.server, p.Map) {
+		spawnMode = uint32(p.RaidDifficulty)
+	}
+	phaseMask := s.currentPlayerPhaseMask()
+	if p.PhaseMaskOverrideSet {
+		phaseMask = p.PhaseMaskOverride
+	} else if p.PlayerFlags&playerFlagGM != 0 || p.ExtraFlags&playerExtraGMOn != 0 {
+		phaseMask = 1
+	}
 	// spawntimesecs default mirrors the world DB column default for fresh
 	// rows; the live-spawn respawn-delay legs have no Go bridge.
 	if _, err := db.ExecContext(ctx,
-		"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?, 120, 0)",
-		guid, entry, p.Map, p.X, p.Y, p.Z, p.Orientation); err != nil {
+		"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 120, 0)",
+		guid, entry, p.Map, 1<<spawnMode, phaseMask, p.X, p.Y, p.Z, p.Orientation); err != nil {
 		return
 	}
 	// C++ reports success silently.
@@ -466,6 +495,10 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .npc move [guid]"
+	if len(args) > 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
 	var guid uint32
 	selected := s.castCommandSelectedCreature()
 	if len(args) == 0 {
@@ -541,6 +574,10 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .npc delete [guid]"
+	if len(args) > 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
 	var guid uint32
 	if len(args) == 0 {
 		selected := s.castCommandSelectedCreature()
@@ -585,14 +622,65 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 			return
 		}
 	}
-	res, err := db.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid)
-	if err != nil {
+	// Creature::DeleteFromDB (Creature.cpp:1861): the row must exist first,
+	// then every live creature with that spawn id on every map with the
+	// row's map id is despawned, and the creature, spawn_group and
+	// creature_addon rows are deleted. The respawn-time removal has no Go
+	// model and stays open.
+	var rowMap uint32
+	if err := db.QueryRowContext(ctx, "SELECT map FROM creature WHERE guid = ?", guid).Scan(&rowMap); err != nil {
+		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
 		return
 	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		s.sendSysMessage("Creature deleted.") // LANG_COMMAND_DELCREATMESSAGE 270
-	} else {
-		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
+	if s.server != nil {
+		s.npcDespawnLiveSpawn(ctx, guid, rowMap)
+	}
+	if _, err := db.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid); err != nil {
+		return
+	}
+	_, _ = db.ExecContext(ctx, "DELETE FROM spawn_group WHERE spawnType = 0 AND spawnId = ?", guid)
+	_, _ = db.ExecContext(ctx, "DELETE FROM creature_addon WHERE guid = ?", guid)
+	s.sendSysMessage("Creature deleted.") // LANG_COMMAND_DELCREATMESSAGE 270
+}
+
+// npcDespawnLiveSpawn is the DeleteFromDB live leg (Creature.cpp:1861):
+// every live creature with the spawn id, on every instance of the map,
+// leaves the world (destroy broadcast + OnRemove event, the temp-summon
+// UnSummon twin). Pets, temp summons and totems carry no spawn id and
+// never match.
+func (s *session) npcDespawnLiveSpawn(ctx context.Context, guid, mapID uint32) {
+	if s.server == nil {
+		return
+	}
+	type doomed struct {
+		motion                   *creatureMotion
+		mapID, instanceID, phase uint32
+		x, y, z                  float32
+	}
+	var dead []doomed
+	s.server.motionMu.Lock()
+	for key, motions := range s.server.instanceCreatureMotion {
+		if key.MapID != mapID {
+			continue
+		}
+		for _, motion := range motions {
+			if motion == nil || uint32(motion.GUID&0x00FFFFFF) != guid {
+				continue
+			}
+			if motionIsPet(motion) || motion.IsTempSummon || s.server.isTotemGUID(motion.GUID) {
+				continue
+			}
+			dead = append(dead, doomed{motion: motion, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask})
+			delete(motions, motion.GUID)
+		}
+	}
+	s.server.motionMu.Unlock()
+	for _, d := range dead {
+		destroyBuf := protocol.NewBuffer(9)
+		destroyBuf.WriteU64(d.motion.GUID)
+		destroyBuf.WriteU8(0)
+		s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), d.mapID, d.instanceID, d.x, d.y, d.z, d.phase)
+		s.server.fireCreatureLuaEvent(ctx, d.motion, scripting.CreatureEventOnRemove)
 	}
 }
 
@@ -610,6 +698,10 @@ func (s *session) handleNPCNear(ctx context.Context, args []string) {
 		return
 	}
 	distance := 10.0
+	if len(args) > 1 {
+		s.sendSysMessage("Syntax: .npc near [distance]")
+		return
+	}
 	if len(args) > 0 {
 		d, err := parseNPCFloat(args[0])
 		if err != nil {
@@ -646,8 +738,29 @@ func (s *session) handleNPCNear(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("%d creatures found within %g yards.", count, distance))
 }
 
+// parseNPCFloat mirrors the C++ float ArgInfo (ChatCommandArgs.h:54-72):
+// StringTo<float>(token, 0) is base-0 strtod with the whole string
+// consumed and non-finite values rejected — so 0x10 reads 16 and 0x10.8
+// reads 16.5, while 10abc, inf, nan and 1_000 are parser errors. Go's
+// Sscanf accepted the junk and rejected the hex; ParseFloat accepts inf,
+// nan and underscores and rejects bare hex, so the hex leg is normalized
+// to a p-exponent form first and the rest is rejected explicitly.
 func parseNPCFloat(arg string) (float64, error) {
-	var f float64
-	_, err := fmt.Sscanf(arg, "%f", &f)
-	return f, err
+	if arg == "" || strings.Contains(arg, "_") {
+		return 0, strconv.ErrSyntax
+	}
+	lower := strings.ToLower(arg)
+	if strings.Contains(lower, "inf") || strings.Contains(lower, "nan") {
+		return 0, strconv.ErrSyntax
+	}
+	s := arg
+	trimmed := strings.TrimPrefix(strings.TrimPrefix(lower, "+"), "-")
+	if strings.HasPrefix(trimmed, "0x") && !strings.ContainsAny(trimmed, "pP") {
+		s = arg + "p0"
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		return 0, strconv.ErrSyntax
+	}
+	return f, nil
 }

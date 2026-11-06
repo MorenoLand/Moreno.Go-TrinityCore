@@ -54,6 +54,32 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
+	// TryExecuteCommand (ChatCommand.cpp:246-300): a partial token matching
+	// more than one visible subcommand reports LANG_SUBCMD_AMBIGUOUS and
+	// lists the candidates; an exact match wins. The root resolve does
+	// this at the npc level already; the set sub-table did not.
+	setSubs := []string{"allowmove", "entry", "factionid", "flag", "level", "link", "model", "movetype", "phase", "wanderdistance", "spawntime", "data"}
+	exact := false
+	var matches []string
+	for _, name := range setSubs {
+		if name == sub {
+			exact = true
+			break
+		}
+		if strings.HasPrefix(name, sub) {
+			matches = append(matches, name)
+		}
+	}
+	if !exact {
+		if len(matches) != 1 {
+			if len(matches) > 1 {
+				s.sendSysMessage(fmt.Sprintf("Ambiguous subcommand %q: %s", args[0], strings.Join(matches, ", ")))
+				return
+			}
+			s.sendSysMessage(syntax)
+			return
+		}
+	}
 	switch {
 	case strings.HasPrefix("allowmove", sub):
 		s.handleNPCSetAllowMove(ctx)
@@ -145,7 +171,14 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 		if db == nil {
 			return
 		}
-		nodel := len(args) > 1 && strings.EqualFold(args[1], "nodel")
+		nodel := false
+		if len(args) > 1 {
+			if len(args) > 2 || !strings.EqualFold(args[1], "nodel") {
+				s.sendSysMessage(syntax)
+				return
+			}
+			nodel = true
+		}
 		s.server.motionMu.Lock()
 		guid := motion.GUID
 		motion.MoveType = uint32(moveType)
@@ -180,7 +213,14 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	nodel := len(args) > 2 && strings.EqualFold(args[2], "nodel")
+	nodel := false
+	if len(args) > 2 {
+		if len(args) > 3 || !strings.EqualFold(args[2], "nodel") {
+			s.sendSysMessage(syntax)
+			return
+		}
+		nodel = true
+	}
 	// A creature loaded in the GM's map/instance runs the live legs
 	// (ChatHandler::GetCreatureFromPlayerMapByDbGuid); unlike the
 	// selection form, C++ applies no pet gate on this form.
@@ -468,7 +508,84 @@ func (s *session) handleNPCSetFactionID(ctx context.Context, args []string) {
 	motion.Faction = faction
 	s.server.motionMu.Unlock()
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldFaction: faction})
-	_, _ = db.ExecContext(ctx, "UPDATE creature_template SET faction = ? WHERE entry = ?", faction, entry)
+	// WORLD_UPD_CREATURE_FACTION binds the faction as uint16
+	// (cs_npc.cpp:405); the live slot stays full uint32 in both trees.
+	_, _ = db.ExecContext(ctx, "UPDATE creature_template SET faction = ? WHERE entry = ?", uint16(faction), entry)
+}
+
+// npcSetFlagNames is the EnumUtils<NPCFlags> name table
+// (enuminfo_UnitDefines.cpp): constant first, title second. The C++
+// ArgInfo enum parse (ChatCommandArgs.h:128-210) matches a token by
+// case-insensitive exact match, else unique prefix, over both spellings —
+// so "UNIT_NPC_FLAG_VENDOR" sets VENDOR, "can" sets REPAIR ("can repair"
+// is the only title with that prefix), but bare "vendor" matches nothing
+// and "unit_npc_flag_vendor" is ambiguous across the five vendor flags.
+// A numeric value is accepted only when EnumUtils::IsValid holds, which
+// for this flags enum means exactly one listed flag (ToIndex is a plain
+// switch: 0 and combinations such as 0x81 are parser errors).
+var npcSetFlagNames = []struct {
+	constant string
+	title    string
+	value    uint32
+}{
+	{"UNIT_NPC_FLAG_GOSSIP", "has gossip menu", 0x00000001},
+	{"UNIT_NPC_FLAG_QUESTGIVER", "is quest giver", 0x00000002},
+	{"UNIT_NPC_FLAG_UNK1", "UNIT_NPC_FLAG_UNK1", 0x00000004},
+	{"UNIT_NPC_FLAG_UNK2", "UNIT_NPC_FLAG_UNK2", 0x00000008},
+	{"UNIT_NPC_FLAG_TRAINER", "is trainer", 0x00000010},
+	{"UNIT_NPC_FLAG_TRAINER_CLASS", "is class trainer", 0x00000020},
+	{"UNIT_NPC_FLAG_TRAINER_PROFESSION", "is profession trainer", 0x00000040},
+	{"UNIT_NPC_FLAG_VENDOR", "is vendor (generic)", 0x00000080},
+	{"UNIT_NPC_FLAG_VENDOR_AMMO", "is vendor (ammo)", 0x00000100},
+	{"UNIT_NPC_FLAG_VENDOR_FOOD", "is vendor (food)", 0x00000200},
+	{"UNIT_NPC_FLAG_VENDOR_POISON", "is vendor (poison)", 0x00000400},
+	{"UNIT_NPC_FLAG_VENDOR_REAGENT", "is vendor (reagents)", 0x00000800},
+	{"UNIT_NPC_FLAG_REPAIR", "can repair", 0x00001000},
+	{"UNIT_NPC_FLAG_FLIGHTMASTER", "is flight master", 0x00002000},
+	{"UNIT_NPC_FLAG_SPIRITHEALER", "is spirit healer", 0x00004000},
+	{"UNIT_NPC_FLAG_SPIRITGUIDE", "is spirit guide", 0x00008000},
+	{"UNIT_NPC_FLAG_INNKEEPER", "is innkeeper", 0x00010000},
+	{"UNIT_NPC_FLAG_BANKER", "is banker", 0x00020000},
+	{"UNIT_NPC_FLAG_PETITIONER", "handles guild/arena petitions", 0x00040000},
+	{"UNIT_NPC_FLAG_TABARDDESIGNER", "is guild tabard designer", 0x00080000},
+	{"UNIT_NPC_FLAG_BATTLEMASTER", "is battlemaster", 0x00100000},
+	{"UNIT_NPC_FLAG_AUCTIONEER", "is auctioneer", 0x00200000},
+	{"UNIT_NPC_FLAG_STABLEMASTER", "is stable master", 0x00400000},
+	{"UNIT_NPC_FLAG_GUILD_BANKER", "is guild banker", 0x00800000},
+	{"UNIT_NPC_FLAG_SPELLCLICK", "has spell click enabled", 0x01000000},
+	{"UNIT_NPC_FLAG_PLAYER_VEHICLE", "is player vehicle", 0x02000000},
+	{"UNIT_NPC_FLAG_MAILBOX", "is mailbox", 0x04000000},
+}
+
+func npcSetFlagParse(token string) (uint32, bool) {
+	for _, f := range npcSetFlagNames {
+		if strings.EqualFold(token, f.constant) || strings.EqualFold(token, f.title) {
+			return f.value, true
+		}
+	}
+	var matched uint32
+	found := false
+	for _, f := range npcSetFlagNames {
+		for _, key := range []string{f.constant, f.title} {
+			if strings.HasPrefix(strings.ToLower(key), strings.ToLower(token)) {
+				if found && matched != f.value {
+					return 0, false
+				}
+				matched, found = f.value, true
+			}
+		}
+	}
+	if found {
+		return matched, true
+	}
+	if v, err := strconv.ParseUint(token, 0, 32); err == nil {
+		for _, f := range npcSetFlagNames {
+			if uint32(v) == f.value {
+				return uint32(v), true
+			}
+		}
+	}
+	return 0, false
 }
 
 // handleNPCSetFlag mirrors HandleNpcSetFlagCommand (cs_npc.cpp:419):
@@ -488,7 +605,7 @@ func (s *session) handleNPCSetFlag(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	flags, ok := npcVendorUintArg(args[0])
+	flags, ok := npcSetFlagParse(args[0])
 	if !ok {
 		s.sendSysMessage(syntax)
 		return
@@ -726,7 +843,7 @@ func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string)
 		s.sendSysMessage(syntax)
 		return
 	}
-	dist, err := strconv.ParseFloat(args[0], 64)
+	dist, err := parseNPCFloat(args[0])
 	if err != nil {
 		s.sendSysMessage(syntax)
 		return
@@ -916,10 +1033,50 @@ func (s *session) handleNPCSetData(ctx context.Context, args []string) {
 // force): a numeric why is accepted and ignored
 // (CreatureAI::_EnterEvadeMode ignores its why argument), "force" arms
 // the clear-then-evade leg, anything else is a parser error.
+// npcEvadeReasonNames is the EnumUtils<CreatureAI::EvadeReason> table
+// (enuminfo_CreatureAI.cpp): constant and title are the same five
+// strings. The C++ ArgInfo enum parse (ChatCommandArgs.h:128-210)
+// matches by case-insensitive exact match, else unique prefix, and a
+// numeric value only when EnumUtils::IsValid holds — here exactly 0-4
+// (ToIndex is a plain switch). "evade_reason_boundary" evades, 99 is a
+// parser error.
+var npcEvadeReasonNames = []string{
+	"EVADE_REASON_NO_HOSTILES",
+	"EVADE_REASON_BOUNDARY",
+	"EVADE_REASON_NO_PATH",
+	"EVADE_REASON_SEQUENCE_BREAK",
+	"EVADE_REASON_OTHER",
+}
+
+func npcEvadeReasonParse(token string) (uint32, bool) {
+	for i, name := range npcEvadeReasonNames {
+		if strings.EqualFold(token, name) {
+			return uint32(i), true
+		}
+	}
+	var matched uint32
+	found := false
+	for i, name := range npcEvadeReasonNames {
+		if strings.HasPrefix(strings.ToLower(name), strings.ToLower(token)) {
+			if found && matched != uint32(i) {
+				return 0, false
+			}
+			matched, found = uint32(i), true
+		}
+	}
+	if found {
+		return matched, true
+	}
+	if v, err := strconv.ParseUint(token, 0, 32); err == nil && v <= 4 {
+		return uint32(v), true
+	}
+	return 0, false
+}
+
 func npcEvadeParse(args []string) (force bool, ok bool) {
 	i := 0
 	if i < len(args) {
-		if _, good := npcVendorUintArg(args[i]); good {
+		if _, good := npcEvadeReasonParse(args[i]); good {
 			i++
 		}
 	}
@@ -1162,7 +1319,12 @@ func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 		s.sendSysMessage("Player not found.")
 		return
 	}
-	if s.security < s.accountSecurityLevel(ctx, receiver.accountID) {
+	// HasLowerSecurity (Chat.cpp:54-102, strong=false): a handler holding
+	// RBAC_PERM_CHECK_FOR_LOWER_SECURITY (47) bypasses the check entirely
+	// unless CONFIG_GM_LOWER_SECURITY is on, and a failed check sends
+	// LANG_YOURS_SECURITY_IS_LOW.
+	if s.characterTargetLowerSecurity(ctx, characterTarget{online: receiver, guid: receiver.playerGUID, name: receiver.player.Name}) {
+		s.sendSysMessage("Your security level is too low.")
 		return
 	}
 	packet := protocol.BuildMonsterChatMessage(0x0F, languageUniversal, motion.GUID, motion.Name, text)
@@ -1170,8 +1332,12 @@ func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 }
 
 // handleNPCFollow handles "follow" and the two-level "follow stop" arm
-// (cs_npc.cpp:109-110, gated by RBAC_PERM_COMMAND_NPC_FOLLOW 578 and
-// RBAC_PERM_COMMAND_NPC_FOLLOW_STOP 579 respectively). "follow" arms the
+// (cs_npc.cpp:109-110): BOTH arms are gated by
+// RBAC_PERM_COMMAND_NPC_FOLLOW (578) — RBAC_PERM_COMMAND_NPC_FOLLOW_STOP
+// (579) is defined in RBAC.h:447 but referenced nowhere in the C++ tree.
+// A token after "follow" that matches no subcommand invokes the follow
+// node with a tail its handler takes no args for, so C++ shows the follow
+// help instead of following.
 // script-follow ACTIVE slot exactly as the Lua MoveFollow binding does
 // (chase slot cleared, same slot): PET_FOLLOW_DIST 1.0 (PetDefines.h:84)
 // and Unit::GetFollowAngle pi/2 (Unit.h:1655) — the temp-summon
@@ -1183,8 +1349,13 @@ func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 // when it targets the GM player (the C++ generator-target predicate);
 // otherwise it reports the creature is not following you, as in C++.
 func (s *session) handleNPCFollow(ctx context.Context, rest []string) {
+	const syntax = "Syntax: .npc follow [stop]"
 	if len(rest) > 0 && strings.HasPrefix("stop", strings.ToLower(rest[0])) {
-		if s.miscDeny(ctx, permissionCommandNPCFollowStop) {
+		if s.miscDeny(ctx, permissionCommandNPCFollow) {
+			return
+		}
+		if len(rest) != 1 {
+			s.sendSysMessage(syntax)
 			return
 		}
 		motion := s.castCommandSelectedCreature()
@@ -1209,6 +1380,10 @@ func (s *session) handleNPCFollow(ctx context.Context, rest []string) {
 			return
 		}
 		s.sendSysMessage(fmt.Sprintf("%s is no longer following you.", name))
+		return
+	}
+	if len(rest) > 0 {
+		s.sendSysMessage(syntax)
 		return
 	}
 	if s.miscDeny(ctx, permissionCommandNPCFollow) {
@@ -1564,7 +1739,13 @@ func (s *session) handleNPCTame(ctx context.Context) {
 	if wrapped := uint32(uint8(playerLevel - 5)); wrapped > petLevel {
 		petLevel = wrapped
 	}
-	s.createTamedPetFromEntry(ctx, s.server.CharactersStore.DB, 0, entry, petLevel)
+	// CreateTamedPetFrom returning null reports LANG_CREATURE_NON_TAMEABLE
+	// (cs_npc.cpp:1088-1093); the Go creation fails on the character_pet
+	// INSERT.
+	if !s.createTamedPetFromEntry(ctx, s.server.CharactersStore.DB, 0, entry, petLevel) {
+		s.sendSysMessage(fmt.Sprintf("Creature %d is not tameable.", entry))
+		return
+	}
 }
 
 // npcShowLootEntry mirrors _ShowLootEntry (cs_npc.cpp:1138): the count,
@@ -1601,6 +1782,11 @@ func (s *session) handleNPCShowLoot(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCShowLoot) {
 		return
 	}
+	const syntax = "Syntax: .npc showloot [all]"
+	if len(args) > 1 {
+		s.sendSysMessage(syntax)
+		return
+	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil || motionIsPet(motion) {
 		s.sendSysMessage("Select a creature first.")
@@ -1631,7 +1817,9 @@ func (s *session) handleNPCShowLoot(ctx context.Context, args []string) {
 		questItems = sortedLootItems(loot.QuestItems)
 	}
 	s.server.lootMu.Unlock()
-	if loot == nil || (money == 0 && len(items) == 0 && len(questItems) == 0) {
+	// Loot::empty (Loot.h:235) is items.empty() && gold == 0 — quest_items
+	// are excluded, so loot that is only quest items reports as no loot.
+	if loot == nil || (money == 0 && len(items) == 0) {
 		s.sendSysMessage(fmt.Sprintf("%s is not dead or has no loot.", snap.Name))
 		return
 	}
