@@ -37,10 +37,15 @@
 -- non-triggered).
 --
 -- PORTED ARMS (C++ line refs; all C++-exact for the modeled arms):
--- JustEngagedWith (:65-74) — Talk(SAY_AGGRO 0) (:67); seeds
---   EVENT_OBLITERATE {8000,13000}ms (:71), EVENT_WELL_OF_CORRUPTION
---   12000ms (:72), EVENT_CORRUPTED_FLESH 20000ms (:73),
---   EVENT_SHARED_SUFFERING {14000,15000}ms (:74).
+-- JustEngagedWith (:65-74) — Talk(SAY_AGGRO 0) (:67); DoZoneInCombat
+--   (:68) PORTED; instance->SetBossState (DATA_MARWYN 1, IN_PROGRESS)
+--   (:69) PORTED 2026-11-05 via creature:SetBossState
+--   (lua_creature_events.go:5917, the garfrost precedent) — in C++
+--   arm order, after Talk + DoZoneInCombat and before the timer
+--   seeds; seeds EVENT_OBLITERATE {8000,13000}ms (:71),
+--   EVENT_WELL_OF_CORRUPTION 12000ms (:72), EVENT_CORRUPTED_FLESH
+--   20000ms (:73), EVENT_SHARED_SUFFERING {14000,15000}ms (:74).
+--   The old "no instance-state bridge" claim for :69 is retracted.
 -- EVENT_OBLITERATE (:102-105) — DoCastVictim(SPELL_OBLITERATE 72360)
 --   non-triggered; CastSpell(nil, ...) is the victim-cast convention;
 --   re-arm {8000,13000}ms (:104).
@@ -62,10 +67,25 @@
 --   razuvious player-gated variant precedent.
 -- JustDied (:77-82) — Talk(SAY_DEATH 2) (:79) unconditional, the
 --   sjonnir JustDied-Talk precedent; events.Reset (:80) = timer
---   cancellation (initState).
---
+--   cancellation; instance->SetBossState (DATA_MARWYN 1, DONE) (:81)
+--   PORTED 2026-11-05 via creature:SetBossState, in C++ order AFTER
+--   Talk (unlike garfrost, whose _JustDied runs first); the
+--   instance SetBossState-override DONE legs
+--   (instance_halls_of_reflection.cpp:349-371) that are bridgeable
+--   are PORTED below in C++ order, right after the DONE write (the
+--   garfrost tyrannus-Talk precedent): bunny self-cast 72900, the
+--   Koreln/Loralen questgiver flag, DoUpdateWorldState(4884, 0), the
+--   Frostsworn General phase-mask. The old "no instance-state
+--   bridge" claim for :81 is retracted.
+-- Reset (:26-34 + boss_horAI.cpp:26-34) — _Reset() first:
+--   SetBossState(DATA_MARWYN 1, NOT_STARTED) only when the stored
+--   state != DONE (the bronjahm / cyanigosa precedent: ev23 fires on
+--   spawn too, and a DONE boss must stay DONE), PORTED 2026-11-05
+--   via creature:SetBossState in the ev23 leg (split from ev2 —
+--   leave-combat does not call Reset in C++). The SetVisible(false) /
+--   SetImmuneToAll(true) / REACT_PASSIVE + wave-wipe legs stay out
+--   (see the falric header, same boss_horAI base).
 -- DOCUMENTED-ONLY (no registration beyond entry 38113):
--- Reset (:26-34) — boss_horAI::Reset passthrough (see below).
 -- boss_horAI base (boss_horAI.h:27-33 / boss_horAI.cpp) — the
 --   ctor/Reset/DoAction/JustSummoned arms are documented-only: the flag
 --   twin (creature:SetFlag(59, 0x300)) IS bridged, but Reset's
@@ -77,7 +97,14 @@
 --   2026-10-23 SetImmuneToAll sweep).
 -- JustEngagedWith :68 DoZoneInCombat — PORTED (creature:DoZoneInCombat, event-1 handler, C++ arm order — live bridge engine/world/lua_creature_events.go, 2026-10-23).
 -- JustEngagedWith :69 / JustDied :81 instance->SetBossState
---   (DATA_MARWYN, IN_PROGRESS / DONE) — no instance-state bridge.
+--   (DATA_MARWYN, IN_PROGRESS / DONE) — PORTED 2026-11-05 via
+--   creature:SetBossState (see the PORTED ARMS note above); the old
+--   "no instance-state bridge" claim is retracted.
+-- Instance SetBossState-override DONE legs that stay out
+--   (instance_halls_of_reflection.cpp:349-371): the HandleGameObject
+--   door legs (no door model in the Go boss-state store),
+--   SpawnGunship() (CreateTransport, no bridge) and SpawnEscapeEvent()
+--   (instance SummonCreature + team latch, no bridge).
 -- UpdateAI :97 me->HasUnitState(UNIT_STATE_CASTING) gate — PORTED: the
 --   gate sits before ExecuteEvent (:100), so all four timer ticks
 --   defer 500ms via creature:IsCasting() (lua_creature_events.go:1950)
@@ -104,6 +131,13 @@
 --   replicated: re-arm runs even when no target qualifies.
 
 local ENTRY_MARWYN = 38113
+local DATA_MARWYN = 1 -- halls_of_reflection.h:38
+local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
+
+local SPELL_START_HALLS_OF_REFLECTION_QUEST_AE = 72900 -- halls_of_reflection.h:158
+local WORLD_STATE_HOR_WAVES_ENABLED = 4884 -- halls_of_reflection.h:170
+local UNIT_NPC_FLAGS = 82 -- UpdateFields.h:139 (baltharus precedent)
+local UNIT_NPC_FLAG_QUESTGIVER = 0x00000002 -- UnitDefines.h:187
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -246,13 +280,15 @@ end
 
 -- C++ :65-74 JustEngagedWith: Talk(SAY_AGGRO) (:67); DoZoneInCombat
 -- (:68) PORTED below (live bridge engine/world/lua_creature_events.go,
--- 2026-10-23); seeds the four timers (:71-74).
--- instance->SetBossState IN_PROGRESS (:69) has no bridge (see header).
+-- 2026-10-23); instance->SetBossState IN_PROGRESS (:69) PORTED
+-- 2026-11-05 via creature:SetBossState, in C++ arm order after
+-- DoZoneInCombat and before the seeds (garfrost precedent).
 local function marwynJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- C++ :68
+    creature:SetBossState(DATA_MARWYN, 1) -- C++ :69 IN_PROGRESS
     schedule(guid, "obliterate", {8000, 13000}, function() onObliterate(creature, guid) end)
     schedule(guid, "well", 12000, function() onWellOfCorruption(creature, guid) end)
     schedule(guid, "corruptedflesh", 20000, function() onCorruptedFlesh(creature, guid) end)
@@ -269,17 +305,53 @@ end
 
 -- C++ :77-82 JustDied: Talk(SAY_DEATH) (:79) — the sjonnir
 -- JustDied-Talk precedent; events.Reset (:80) = timer cancellation;
--- instance->SetBossState DONE (:81) has no bridge (see header).
+-- instance->SetBossState DONE (:81) PORTED 2026-11-05 via
+-- creature:SetBossState, in C++ order AFTER Talk. The bridgeable
+-- instance SetBossState-override DONE legs
+-- (instance_halls_of_reflection.cpp:349-371) run right after the DONE
+-- write, in C++ order (the garfrost tyrannus-Talk precedent):
+-- Frostmourne Altar Bunny self-cast 72900 (:352-354), Koreln/Loralen
+-- questgiver flag (:356-358), DoUpdateWorldState(4884, 0) (:362),
+-- Frostsworn General SetPhaseMask(1) (:363-364); the door /
+-- SpawnGunship / SpawnEscapeEvent legs stay out (see header).
+-- All cross-creature reads go through the instanceData mirror
+-- (instance_halls_of_reflection.lua binds) and are nil-guarded like
+-- the C++ GetCreature checks.
 local function marwynJustDied(event, creature, killer)
     initState(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_MARWYN, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            if data.frostmourneAltarBunny then
+                data.frostmourneAltarBunny:CastSpell(data.frostmourneAltarBunny, SPELL_START_HALLS_OF_REFLECTION_QUEST_AE, true)
+            end
+            if data.korelnOrLoralen then
+                data.korelnOrLoralen:SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_QUESTGIVER)
+            end
+            creature:UpdateWorldState(WORLD_STATE_HOR_WAVES_ENABLED, 0)
+            if data.frostswornGeneral then
+                data.frostswornGeneral:SetPhaseMask(1, true)
+            end
+        end
+    end
 end
 
 local function marwynLeaveCombat(event, creature)
     initState(creature:GetGUID())
 end
 
+-- C++ Reset (:26-34 + boss_horAI.cpp:26-34): _Reset() first —
+-- SetBossState(DATA_MARWYN 1, NOT_STARTED) only when the stored state
+-- != DONE (the bronjahm / cyanigosa precedent: ev23 fires on spawn
+-- too, and a DONE boss must stay DONE). ev23 is split from ev2
+-- (leave-combat does not call Reset in C++).
 local function marwynReset(event, creature)
+    if creature:GetBossState(DATA_MARWYN) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_MARWYN, 0)
+    end
     initState(creature:GetGUID())
 end
 

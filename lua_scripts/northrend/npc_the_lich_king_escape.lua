@@ -13,26 +13,39 @@
 -- "AddSC_halls_of_reflection" hits halls_of_reflection.cpp only (+ the
 -- loader decl/call lines).
 -- Eluna creature events: 2 OnLeaveCombat, 3 OnTargetDied,
--- 9 OnDamageTaken. The handler returns the
+-- 5 OnSpawn, 9 OnDamageTaken. The handler returns the
 -- rewritten damage as the second return (the
 -- engine/world/lua_creature_events.go fireCreatureDamageTaken
 -- convention); the boolean first return only gates the empty
 -- ScriptedAI::DamageTaken base, a provable no-op.
 --
 -- PORTED ARMS (C++ line refs; C++-exact for the modeled arm):
+-- Ctor (:1188-1195) — _instance->SetBossState
+--   (DATA_THE_LICH_KING_ESCAPE 2, NOT_STARTED) PORTED 2026-11-05 via
+--   creature:SetBossState in an ev5 OnSpawn handler (the ctor runs
+--   when the AI is created, i.e. at summon; the escape creature is
+--   re-summoned fresh on each escape attempt, so the spawn-time write
+--   is C++-exact — it also clears a stale FAIL after a previous
+--   evade, which is what lets at_hor_shadow_throne re-arm
+--   IN_PROGRESS). The old file had no spawn handler at all.
 -- DamageTaken (:1198-1202) — ungated clamp: if damage >= current
 --   health, damage = health - 1 (the Lich King cannot be killed during
 --   the escape chase). Event 9 fires pre-application, so
 --   creature:GetHealth() is the pre-damage value, exactly like C++'s
 --   me->GetHealth() in the hook.
 -- EnterEvadeMode (:1305-1316) — the _despawn once-latch (GUID-keyed, the
---   svalna captain precedent), DoPlaySoundToSet(SOUND_LK_FURY_OF_FROSTMOURNE
+--   svalna captain precedent), instance SetBossState
+--   (DATA_THE_LICH_KING_ESCAPE 2, FAIL) PORTED 2026-11-05 via
+--   creature:SetBossState FIRST, in C++ order (lua_creature_events.go:
+--   5917, the garfrost precedent — the old "no bridge" claim for this
+--   leg is retracted; the bridge writes the same store the C++
+--   override reads), then DoPlaySoundToSet(SOUND_LK_FURY_OF_FROSTMOURNE
 --   17224) = creature:PlayDirectSound (ScriptedAI::DoPlaySoundToSet calls
 --   source->PlayDirectSound — ScriptedCreature.cpp:188-200, broadcast-to-set
 --   SMSG_PLAY_SOUND, the engine/world/lua_objects.go PlayDirectSound bridge),
 --   and DoCastAOE(SPELL_FURY_OF_FROSTMOURNE 70063) = self-cast (the file's
 --   DoCastAOE idiom), in C++ order. StopMoving + the 12s delayed Despawn are
---   PORTED below; only the instance SetBossState(FAIL) leg has no bridge.
+--   PORTED below.
 -- KilledUnit (:1251-1255) — player-gated
 --   (victim:GetObjectType() == "Player", the razuvious precedent)
 --   DoPlaySoundToSet(RAND(SOUND_LK_SLAY_1 17214, SOUND_LK_SLAY_2 17215)) =
@@ -50,13 +63,16 @@
 -- MovementInform (:1204-1231) — MoveChase / Harvest Soul on the
 --   instance-GUID escape leader + gunship movement: no-MovementInform
 --   / no-instance-GetGuidData bridges.
--- EnterEvadeMode (:1305-1316) — the _despawn latch, Fury-of-Frostmourne
---   sound, cast, StopMoving and 12s delayed Despawn are ported above;
---   only the instance SetBossState(FAIL) leg has no bridge.
+-- EnterEvadeMode (:1305-1316) — the _despawn latch, SetBossState(FAIL),
+--   Fury-of-Frostmourne sound, cast, StopMoving and 12s delayed
+--   Despawn are all ported above; nothing in the arm stays out.
 -- JustSummoned / SummonedCreatureDies (:1233-1250) — summon bookkeeping
 --   with no summon-list bridge.
 
 local ENTRY_LICH_KING_ESCAPE = 36954
+local DATA_THE_LICH_KING_ESCAPE = 2 -- halls_of_reflection.h:39
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_FAIL = 2 -- InstanceScript.h:68-76
 
 local SPELL_FURY_OF_FROSTMOURNE = 70063
 
@@ -80,26 +96,37 @@ local function lichKingEscapeDamageTaken(event, creature, attacker, damage)
 end
 
 -- C++ npc_the_lich_king_escape_horAI::EnterEvadeMode (:1305-1316),
--- C++ order: instance SetBossState(FAIL) [no bridge] -> StopMoving ->
+-- C++ order: instance SetBossState(FAIL) -> StopMoving ->
 -- DoPlaySoundToSet(SOUND_LK_FURY_OF_FROSTMOURNE 17224) — PlayDirectSound
 -- (the DoPlaySoundToSet ≡ PlayDirectSound identity above) -> DoCastAOE
 -- (SPELL_FURY_OF_FROSTMOURNE 70063) non-triggered — self-cast (the file's
 -- DoCastAOE idiom) -> DespawnOrUnsummon(12s), modeled as a 12s
 -- CreateLuaEvent one-shot calling creature:Despawn (immediate bridge).
--- All ungated apart from the _despawn once-latch. Only the instance
--- SetBossState(FAIL) leg has no bridge.
+-- All ungated apart from the _despawn once-latch. The FAIL leg is
+-- PORTED 2026-11-05 via creature:SetBossState (garfrost precedent);
+-- the old "no bridge" claim is retracted.
 local function lichKingEscapeLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     if evadeFired[guid] then
         return
     end
     evadeFired[guid] = true
+    creature:SetBossState(DATA_THE_LICH_KING_ESCAPE, BOSS_STATE_FAIL)
     creature:StopMoving()
     creature:PlayDirectSound(SOUND_LK_FURY_OF_FROSTMOURNE)
     creature:CastSpell(creature, SPELL_FURY_OF_FROSTMOURNE)
     CreateLuaEvent(function()
         creature:Despawn()
     end, 12000)
+end
+
+-- C++ npc_the_lich_king_escape_horAI ctor (:1188-1195) — the AI is
+-- created at summon, so the SetBossState(NOT_STARTED) leg rides ev5
+-- OnSpawn (fireCreatureSpawned, lua_creature_events.go:3719; the
+-- ghoul/witch-doctor/abomination ev5 precedent in
+-- npc_hor_escape_trash.lua). PORTED 2026-11-05.
+local function lichKingEscapeSpawn(event, creature)
+    creature:SetBossState(DATA_THE_LICH_KING_ESCAPE, BOSS_STATE_NOT_STARTED)
 end
 
 -- C++ npc_the_lich_king_escape_horAI::KilledUnit (:1251-1255):
@@ -115,4 +142,5 @@ end
 
 RegisterCreatureEvent(ENTRY_LICH_KING_ESCAPE, 2, lichKingEscapeLeaveCombat)
 RegisterCreatureEvent(ENTRY_LICH_KING_ESCAPE, 3, lichKingEscapeTargetDied)
+RegisterCreatureEvent(ENTRY_LICH_KING_ESCAPE, 5, lichKingEscapeSpawn)
 RegisterCreatureEvent(ENTRY_LICH_KING_ESCAPE, 9, lichKingEscapeDamageTaken)

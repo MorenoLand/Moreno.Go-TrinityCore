@@ -38,12 +38,13 @@
 -- LK chain (common): summon LK + Uther EmoteState(431) COWER +
 --   Uther Talk(8 Jaina / 15 Sylvanas) 10s, LK Talk(0) 1s, Uther
 --   triggered 70693 + 5s despawn 9s, LK triggered 72729 + triggered
---   73220 8s, LK Talk(1) 10s, LK Talk(2) 10s, no-op 1s (Marwyn leg
---   out), no-op 5s (Falric leg out), no-op 4s (Falric leg out),
---   Talk(11 Jaina / 8 Sylvanas) 5s, LK Talk(3 Jaina / 4 Sylvanas)
---   5s, INTRO_END: LK 5s despawn + intro NPC 10s despawn.
--- The no-op LK steps carry no portable arm but preserve the
--- downstream timing exactly. Every cross-creature arm nil-guards
+--   73220 8s, LK Talk(1) 10s, Falric + Marwyn spawn-aura 72712 +
+--   visible + LK Talk(2) 10s, Marwyn Talk(4) 1s, Falric Talk(5) 5s,
+--   Falric Talk(6) 4s, Talk(11 Jaina / 8 Sylvanas) 5s, LK Talk(3
+--   Jaina / 4 Sylvanas) 5s, INTRO_END: LK 5s despawn + intro NPC 10s
+--   despawn. The Falric/Marwyn legs are PORTED 2026-11-05 via the
+--   instanceData mirror (instance_halls_of_reflection.lua binds);
+--   only the MovePoint legs in those steps stay out. Every cross-creature arm nil-guards
 -- its summon (C++ null-checks the same fetches; a nil summon skips
 -- the arm, it never nil-calls). Death (ev4) cancels the chain.
 -- SPELL_CAST_VISUAL 65633 is marked "wrong" in the C++ enum and is
@@ -63,9 +64,14 @@
 -- Koreln/Loralen arms (MovePoint + feign-death 29266): instance
 -- GetGuidData, no bridge. Frostmourne / impenetrable-door GO legs
 -- (HandleGameObject, phase mask): instance GetGuidData, no bridge.
--- Falric/Marwyn aura (72712) + visible + Talk legs: instance
--- GetGuidData, no bridge — proximity lookup would substitute a
--- different selection rule for the C++ GUID fetch, so it stays out.
+-- Falric/Marwyn aura (72712) + visible + Talk legs: PORTED 2026-11-05
+--   via the instanceData mirror (instance_halls_of_reflection.lua
+--   binds falric/marwyn; the old "instance GetGuidData, no bridge"
+--   claim is retracted — the mirror IS the GetGuidData bridge, and
+--   the fetch rule is the C++ GUID fetch, not a proximity lookup).
+--   The MovePoint legs in the same steps stay out (no movement
+--   bridge), as does ProcessEvent(EVENT_SPAWN_WAVES) in LK_9 (the
+--   unported instance wave machine).
 -- Instance SetData(DATA_INTRO_EVENT, DONE) + ProcessEvent
 -- (EVENT_SPAWN_WAVES): no instance bridge. LK SetWalk(true):
 -- no SetWalk bridge, moot without movement.
@@ -91,6 +97,11 @@ local SPELL_FROSTMOURNE_SOUNDS = 70667
 local SPELL_UTHER_DESPAWN = 70693
 local SPELL_TAKE_FROSTMOURNE = 72729
 local SPELL_FROSTMOURNE_VISUAL = 73220
+local SPELL_BOSS_SPAWN_AURA = 72712 -- halls_of_reflection.cpp:181
+
+local SAY_MARWYN_INTRO_1 = 4 -- halls_of_reflection.cpp:112
+local SAY_FALRIC_INTRO_1 = 5 -- halls_of_reflection.cpp:110
+local SAY_FALRIC_INTRO_2 = 6 -- halls_of_reflection.cpp:111
 
 local chainTimers = {}
 local chainState = {}
@@ -156,10 +167,6 @@ local function talkLK(id)
     end
 end
 
-local function noop()
-    return function(st) end
-end
-
 local function summonUther(st)
     local uther = st.creature:SummonCreature(ENTRY_UTHER,
         UTHER_SPAWN[1], UTHER_SPAWN[2], UTHER_SPAWN[3], UTHER_SPAWN[4])
@@ -212,6 +219,68 @@ local function utherNoAndTalk(id)
     end
 end
 
+-- C++ EVENT_INTRO_LK_6..9 Falric/Marwyn legs, via the instanceData
+-- mirror (instance_halls_of_reflection.lua binds falric/marwyn; the
+-- kelthuzad GetInstanceData precedent). Every fetch is nil-guarded
+-- like the C++ GetCreature checks.
+local function instanceBoss(st, key)
+    local mapObj = st.creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    local data = mapObj:GetInstanceData()
+    if not data then
+        return nil
+    end
+    return data[key]
+end
+
+-- C++ EVENT_INTRO_LK_6 (:668-682): Falric + Marwyn CastSpell(self,
+-- SPELL_BOSS_SPAWN_AURA 72712, true) + SetVisible(true), in C++ order,
+-- then LK Talk(SAY_LK_INTRO_3 2). The LK MovePoint walk-away and the
+-- 5s impenetrable-door open stay out (no movement / GO bridges).
+local function spawnBossesAndTalkLK(st)
+    local falric = instanceBoss(st, "falric")
+    if falric then
+        falric:CastSpell(falric, SPELL_BOSS_SPAWN_AURA, true)
+        falric:SetVisible(true)
+    end
+    local marwyn = instanceBoss(st, "marwyn")
+    if marwyn then
+        marwyn:CastSpell(marwyn, SPELL_BOSS_SPAWN_AURA, true)
+        marwyn:SetVisible(true)
+    end
+    talkLK(2)(st)
+end
+
+-- C++ EVENT_INTRO_LK_7 (:683-690): Marwyn Talk(SAY_MARWYN_INTRO_1 4);
+-- the MovePoint leg stays out.
+local function talkMarwynIntro(st)
+    local marwyn = instanceBoss(st, "marwyn")
+    if marwyn then
+        marwyn:Talk(SAY_MARWYN_INTRO_1)
+    end
+end
+
+-- C++ EVENT_INTRO_LK_8 (:691-698): Falric Talk(SAY_FALRIC_INTRO_1 5);
+-- the MovePoint leg stays out.
+local function talkFalricIntro1(st)
+    local falric = instanceBoss(st, "falric")
+    if falric then
+        falric:Talk(SAY_FALRIC_INTRO_1)
+    end
+end
+
+-- C++ EVENT_INTRO_LK_9 (:699-704): Falric Talk(SAY_FALRIC_INTRO_2 6);
+-- the ProcessEvent(EVENT_SPAWN_WAVES) leg stays out (unported
+-- instance wave machine).
+local function talkFalricIntro2(st)
+    local falric = instanceBoss(st, "falric")
+    if falric then
+        falric:Talk(SAY_FALRIC_INTRO_2)
+    end
+end
+
 local function introEnd(st)
     local lk = st.lk
     if lk then
@@ -233,10 +302,10 @@ local LK_STEPS = {
     { fn = banishUther, delay = 9000 },
     { fn = takeFrostmourne, delay = 8000 },
     { fn = talkLK(1), delay = 10000 },
-    { fn = talkLK(2), delay = 10000 },
-    { fn = noop(), delay = 1000 },
-    { fn = noop(), delay = 5000 },
-    { fn = noop(), delay = 4000 },
+    { fn = spawnBossesAndTalkLK, delay = 10000 },
+    { fn = talkMarwynIntro, delay = 1000 },
+    { fn = talkFalricIntro1, delay = 5000 },
+    { fn = talkFalricIntro2, delay = 4000 },
     { fn = function(st) st.creature:Talk(st.jaina and 11 or 8) end, delay = 5000 },
     { fn = function(st) if st.lk then st.lk:Talk(st.jaina and 3 or 4) end end, delay = 5000 },
     { fn = introEnd },

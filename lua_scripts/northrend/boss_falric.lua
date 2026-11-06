@@ -43,17 +43,34 @@
 -- phase-latch precedent.
 --
 -- PORTED ARMS (C++ line refs; all C++-exact for the modeled arms):
--- JustEngagedWith (:78-84) — Talk(SAY_AGGRO 0) (:78) unconditional; the
---   three ScheduleEvent seeds: EVENT_QUIVERING_STRIKE at 23000ms (:82),
+-- JustEngagedWith (:78-84) — Talk(SAY_AGGRO 0) (:78) unconditional;
+--   DoZoneInCombat (:79) PORTED 2026-10-23; instance->SetBossState
+--   (DATA_FALRIC 0, IN_PROGRESS) (:80) PORTED 2026-11-05 via
+--   creature:SetBossState (lua_creature_events.go:5917, the garfrost
+--   precedent) — in C++ arm order, after Talk + DoZoneInCombat and
+--   before the timer seeds; the three ScheduleEvent seeds:
+--   EVENT_QUIVERING_STRIKE at 23000ms (:82),
 --   EVENT_IMPENDING_DESPAIR at 9000ms (:83), EVENT_DEFILING_HORROR at
---   {21000,39000}ms randtime (:84). The DoZoneInCombat (:79) and
---   instance->SetBossState(DATA_FALRIC, IN_PROGRESS) (:80) legs have no
---   bridge.
+--   {21000,39000}ms randtime (:84). The old "no bridge" claim for :80
+--   is retracted.
 -- KilledUnit (:110) — Talk(SAY_SLAY 1) player-gated, the razuvious
 --   player-gated variant precedent.
 -- JustDied (:102-104) — Talk(SAY_DEATH 2) unconditional, the sjonnir
---   JustDied-Talk precedent; the events.Reset and instance->SetBossState
---   DONE legs (:103-104) have no bridge.
+--   JustDied-Talk precedent; events.Reset (:103) = timer cancellation;
+--   instance->SetBossState (DATA_FALRIC 0, DONE) (:104) PORTED
+--   2026-11-05 via creature:SetBossState, in C++ order AFTER Talk
+--   (unlike garfrost, whose _JustDied runs first). The old "no
+--   bridge" claim for :104 is retracted.
+-- Reset (:60-64 + boss_horAI.cpp:26-34) — _Reset() first:
+--   SetBossState(DATA_FALRIC 0, NOT_STARTED) only when the stored
+--   state != DONE (the bronjahm / cyanigosa precedent: ev23 fires on
+--   spawn too, and a DONE boss must stay DONE), PORTED 2026-11-05
+--   via creature:SetBossState in a new ev23 leg split from ev2
+--   (leave-combat does not call Reset in C++); then Initialize
+--   (_hopelessnessCount = 0, :67). The SetVisible(false) /
+--   SetImmuneToAll(true) / REACT_PASSIVE legs (:30-32) and the
+--   GetData(DATA_WAVE_COUNT) / ProcessEvent(EVENT_DO_WIPE) leg
+--   (:33-34) stay out — see the documented-only note below.
 -- DamageTaken (:89-96) — the hopelessness machine, floored single-flip
 --   latch: event 9 fires pre-application, so the post-damage health
 --   decides ((GetHealth()-damage), strictly below 66 / 33 / 10 like C++
@@ -93,7 +110,8 @@
 -- JustEngagedWith :79 DoZoneInCombat — PORTED 2026-10-23
 -- (creature:DoZoneInCombat, in arm order after Talk; bridge live at
 -- engine/world/lua_creature_events.go; the old "no bridge" claim was
--- stale) / :80 instance->SetBossState IN_PROGRESS — no bridge.
+-- stale) / :80 instance->SetBossState IN_PROGRESS — PORTED 2026-11-05
+-- (creature:SetBossState, see the PORTED ARMS note above).
 -- UpdateAI :120 HasUnitState(UNIT_STATE_CASTING) gate — PORTED: the
 --   gate sits before ExecuteEvent (:123), so all three timer ticks
 --   defer 500ms via creature:IsCasting() (lua_creature_events.go:1950)
@@ -125,6 +143,8 @@
 -- DoCast applied.
 
 local ENTRY_FALRIC = 38112
+local DATA_FALRIC = 0 -- halls_of_reflection.h:37
+local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -245,12 +265,15 @@ end
 -- ScheduleEvent seeds (23000 / 9000 / {21000,39000}ms). The
 -- DoZoneInCombat leg (:79) is PORTED 2026-10-23 — creature:DoZoneInCombat
 -- in arm order after Talk (bridge live engine/world/lua_creature_events.go);
--- instance->SetBossState IN_PROGRESS (:80) has no bridge.
+-- instance->SetBossState IN_PROGRESS (:80) is PORTED 2026-11-05 via
+-- creature:SetBossState, in C++ arm order after DoZoneInCombat and
+-- before the seeds (garfrost precedent).
 local function falricEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- C++ :79, in arm order after Talk (2026-10-23)
+    creature:SetBossState(DATA_FALRIC, 1) -- C++ :80 IN_PROGRESS
     schedule(guid, "quivering", 23000, function() onQuiveringStrike(creature, guid) end)
     schedule(guid, "despair", 9000, function() onImpendingDespair(creature, guid) end)
     schedule(guid, "horror", {21000, 39000}, function() onDefilingHorror(creature, guid) end)
@@ -296,18 +319,31 @@ local function falricKilledUnit(event, creature, victim)
 end
 
 -- C++ :99-104 JustDied: Talk(SAY_DEATH) unconditional — the sjonnir
--- JustDied-Talk precedent; the events.Reset and instance->SetBossState
--- DONE legs have no bridge.
+-- JustDied-Talk precedent; events.Reset (:103) = timer cancellation;
+-- instance->SetBossState DONE (:104) PORTED 2026-11-05 via
+-- creature:SetBossState, in C++ order AFTER Talk (unlike garfrost,
+-- whose _JustDied runs first).
 local function falricJustDied(event, creature)
-    clearState(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    clearState(creature:GetGUID())
+    creature:SetBossState(DATA_FALRIC, BOSS_STATE_DONE)
 end
 
 local function falricLeaveCombat(event, creature)
     clearState(creature:GetGUID())
 end
 
+-- C++ Reset (:60-64 + boss_horAI.cpp:26-34): _Reset() first —
+-- SetBossState(DATA_FALRIC 0, NOT_STARTED) only when the stored state
+-- != DONE (the bronjahm / cyanigosa precedent: ev23 fires on spawn
+-- too, and a DONE boss must stay DONE) — then Initialize
+-- (_hopelessnessCount = 0, via clearState). The SetVisible(false) /
+-- SetImmuneToAll(true) / REACT_PASSIVE + wave-wipe legs stay out (see
+-- header); ev23 is split from ev2 (leave-combat does not call Reset).
 local function falricReset(event, creature)
+    if creature:GetBossState(DATA_FALRIC) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_FALRIC, 0)
+    end
     clearState(creature:GetGUID())
 end
 
