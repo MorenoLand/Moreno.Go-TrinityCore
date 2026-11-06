@@ -13291,6 +13291,22 @@ func init() {
 	RegisterLuaBoss("npc_enraged_spirit", 21061)
 	RegisterLuaBoss("npc_enraged_spirit", 21060)
 	RegisterLuaBoss("npc_enraged_spirit", 21059)
+	// npc_unkor_the_ruthless (Terokkar Forest zone script, last
+	// in the Outland zone set per outland_script_loader.cpp
+	// order): quest-9889 submit machine — DamageTaken below
+	// 30% credits every qualifying group member (same map +
+	// instance, quest INCOMPLETE, 10 Boulderfist Invaders
+	// slain) or the solo attacker, then the next-tick submit
+	// (Talk 0, friendly faction, sit, auras cleared, combat
+	// stopped) and the 60s unfriendly timer restoring the ogre
+	// faction + stand; pulverize 2676 self-cast on a 3s/9s
+	// in-combat-gated timer — see lua_scripts/outland/
+	// npc_unkor_the_ruthless.lua. Entry 18262 cited from the
+	// quest-9889 page (Boulderfist Invader 18260 on the same
+	// page cross-checks the file's own enum); the SpellScript
+	// spell_skyguard_flare and the EnterEvadeMode walk-home
+	// leg stay out (no bridges) — documented only.
+	RegisterLuaBoss("npc_unkor_the_ruthless", 18262)
 	// npc_depth_charge (Azshara zone script): proximity-trap
 	// arms only — MoveInLineOfSight on a player within 5yd ->
 	// non-triggered DoCast SPELL_DEPTH_CHARGE_TRAP 38576, then
