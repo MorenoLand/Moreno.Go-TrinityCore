@@ -31,6 +31,38 @@
 --   GetSpellInfo()->StackAmount is 5 for every rank; GetSpellStackAmount
 --   reads the same value from Spell.dbc and falls back to 5 when the
 --   DBC row is unknown.
+--
+-- PORTED (tick 295, RegisterAuraEvent OnPeriodic = 1):
+--   spell_sha_astral_shift_visual_dummy::PeriodicTick
+--   (spell_shaman.cpp:276-292): EFFECT_0 PERIODIC_DUMMY. Each tick the
+--   visual aura removes itself unless the target still carries a
+--   stun, flee, or silence flag. No PreventDefaultAction in C++, so
+--   the Go default tick still fires (no return). Caveat: the leg is
+--   only as live as the Go UnitFlags mirror — if the engine never
+--   sets the STUNNED/FLEEING/SILENCED bits on the player state, it
+--   removes on the first tick.
+--   spell_sha_mana_tide::PeriodicTick (spell_shaman.cpp:1634-1656):
+--   EFFECT_0 PERIODIC_TRIGGER_SPELL. Each tick casts the effect's
+--   DBC trigger spell (aura:GetTriggerSpell(0), 0-skip) on nil with
+--   BP0 = the effect amount, triggered (CastSpellExtraArgs(aurEff)
+--   sets TRIGGERED_FULL_MASK, SpellDefines.h:166). PreventDefaultAction
+--   in C++ rides the return-true twin, suppressing the Go default
+--   trigger cast.
+--
+-- CLOSED (tick 295 census, all 50 loader classes): the other 46 are
+--   stay-outs — proc arms (ancestral awakening, earth shield,
+--   earthliving, flametongue, frozen power, glyphs, imp water shield,
+--   lightning overload/shield, nature guardian, shamanistic rage,
+--   spirit hunt, static shock, tidal force, t3 6p, t8/t9/t10 bonuses,
+--   windfury), absorb/calc arms (astral shift, shadow ward twin,
+--   rend twin), SpellScript-only (bloodlust, chain heal, cleansing
+--   pulse, earthen power, fire nova, healing/mana spring/tide totem,
+--   heroism, lava lash, stoneclaw, thunderstorm), AfterDispel (flame
+--   shock), summon-slot arms (sentry totem, totemic mastery — no
+--   totem-slot bridge; only the PET slot is modeled), and the t3 8p
+--   self-remove (family-flag GetAuraEffect overload unbridged).
+--   Astral shift + astral shift aura are proc/absorb, not the visual
+--   dummy above.
 
 local SPELL_SHAMAN_EARTHBIND_TOTEM = 6474 -- spell_shaman.cpp:460 (class spell_sha_earthbind_totem)
 local SPELL_SHAMAN_STORM_EARTH_AND_FIRE = 51483 -- spell_shaman.cpp:62
@@ -114,3 +146,29 @@ end
 RegisterAuraEvent(SPELL_SHAMAN_EARTHBIND_TOTEM, 2, earthbindApply)
 RegisterAuraEvent(SPELL_SHAMAN_EARTHBIND_TOTEM, 1, earthbindPeriodic)
 RegisterAuraEvent(SPELL_SHAMAN_MAELSTROM_WEAPON, 4, maelstromWeaponChangeAmount)
+
+local SPELL_SHAMAN_ASTRAL_SHIFT_VISUAL_DUMMY = 52179 -- spell_shaman.cpp:276 (class spell_sha_astral_shift_visual_dummy)
+local SPELL_SHAMAN_MANA_TIDE = 16191 -- spell_shaman.cpp:1634 (class spell_sha_mana_tide)
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117 (lua_player.go HasFlag twin)
+local UNIT_FLAG_SILENCED = 0x2000 -- UnitDefines.h:137
+local UNIT_FLAG_STUNNED = 0x40000 -- UnitDefines.h:142
+local UNIT_FLAG_FLEEING = 0x800000 -- UnitDefines.h:147
+
+local function astralShiftVisualDummyTick(event, aura, target)
+    if not target:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED + UNIT_FLAG_FLEEING + UNIT_FLAG_SILENCED) then
+        aura:Remove()
+    end
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_ASTRAL_SHIFT_VISUAL_DUMMY, 1, astralShiftVisualDummyTick)
+
+local function manaTideTick(event, aura, target)
+    local trigger = aura:GetTriggerSpell(0)
+    if trigger == 0 then
+        return true
+    end
+    target:CastCustomSpell(nil, trigger, true, aura:GetAmount(0))
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_MANA_TIDE, 1, manaTideTick)

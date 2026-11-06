@@ -45,6 +45,9 @@
 --   the circle GO carries none, the player 1.5).
 --   STILL BLOCKED leg: HandleTeleport's RemoveMovementImpairingAuras
 --   (false) — no bridge (root/snare removal has no Lua surface).
+--   (STALE as of tick 295: the bridge is live — player
+--   RemoveMovementImpairingAuras, lua_player.go:3473 — and the port
+--   below already calls it; the note is retired, not the leg.)
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   The same loader's CheckProc / HandleProc arms (:509-544,
 --   EFFECT_2 improved Drain Soul mana proc) are proc arms, not
@@ -182,3 +185,40 @@ local function demonicCircleTeleportApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_DEMONIC_CIRCLE_TELEPORT, 2, demonicCircleTeleportApply)
+
+-- PORTED (tick 295, RegisterAuraEvent OnRemove = 3):
+--   spell_warl_curse_of_doom::OnRemove (spell_warlock.cpp:275-296):
+--   EFFECT_0 PERIODIC_DAMAGE, REAL. On removal the doomguard
+--   (18662) is summoned only when the aura was removed by the
+--   target's death AND its duration had expired: GetRemoveMode() == 5
+--   (AURA_REMOVE_BY_DEATH, lua_aura.go GetRemoveMode twin) and
+--   GetDuration() == 0 on the remove snapshot (the IsExpired proxy;
+--   the snapshot carries the removed record's last remaining ms,
+--   lua_aura.go auraRemainingMs — a death-removed live aura reads
+--   > 0, a permanent aura reads -1). The C++ Load gate (caster is a
+--   player) rides a handler-side check, and the honor/XP-target gate
+--   rides IsHonorOrXPTarget. The cast is triggered (args(aurEff)
+--   sets TRIGGERED_FULL_MASK). Registered for rank 1 (603) only;
+--   rank 2 (30910) is not established in the C++ tree.
+local SPELL_WARLOCK_CURSE_OF_DOOM_R1 = 603 -- spell_warlock.cpp:261 (class spell_warl_curse_of_doom)
+local SPELL_WARLOCK_CURSE_OF_DOOM_EFFECT = 18662 -- spell_warlock.cpp:40
+local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:61-69
+
+local function curseOfDoomRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_DEATH then
+        return
+    end
+    if aura:GetDuration() ~= 0 then
+        return
+    end
+    if not caster:IsHonorOrXPTarget(target) then
+        return
+    end
+    caster:CastSpell(target, SPELL_WARLOCK_CURSE_OF_DOOM_EFFECT, true)
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_CURSE_OF_DOOM_R1, 3, curseOfDoomRemove)
