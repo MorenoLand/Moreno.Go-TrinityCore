@@ -18421,17 +18421,18 @@ func init() {
 	// Drakos the Interrogator (27654), The Oculus —
 	// lua_scripts/northrend/boss_drakos.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (the BossAI::JustEngagedWith instance-bookkeeping leg has no
-	// bridge — tharon_ja precedent; the MAGIC_PULL/STOMP timer legs
+	// (the BossAI::JustEngagedWith SetBossState(IN_PROGRESS) leg is
+	// PORTED 2026-11-05, base-first; the MAGIC_PULL/STOMP timer legs
 	// are ported via CreateLuaEvent); KilledUnit Talk(SAY_KILL 1)
 	// C++-UNCONDITIONAL (the anubrekhan unconditional variant —
 	// second unconditional, the eighth ported variant overall);
-	// JustDied Talk(SAY_DEATH 2) (_JustDied bookkeeping has no
-	// bridge; the instance->DoStartTimedAchievement(ACHIEV_TIMED_
-	// START_EVENT 18153) leg has no achievement bridge —
-	// kelthuzad/thaddius precedent).
-	// Documented-only: Reset Initialize + _Reset() (no timer-event /
-	// instance bridges); the UpdateAI event machine —
+	// JustDied Talk(SAY_DEATH 2) (the _JustDied SetBossState(DONE)
+	// leg is PORTED 2026-11-05, base-first; the instance->
+	// DoStartTimedAchievement(ACHIEV_TIMED_START_EVENT 18153) leg
+	// has no achievement bridge — kelthuzad/thaddius precedent).
+	// Documented-only: Reset Initialize (postPull=false, via timer
+	// cancel) + the _Reset() SetBossState(NOT_STARTED, != DONE-gated)
+	// leg PORTED 2026-11-05; the UpdateAI event machine —
 	// EVENT_BOMB_SUMMON SummonCreature(NPC_UNSTABLE_SPHERE 28166)
 	// 2s, EVENT_MAGIC_PULL DoCast(SPELL_MAGIC_PULL 51336) 15s,
 	// EVENT_STOMP Talk(SAY_STOMP 4)+DoCast(SPELL_THUNDERING_STOMP
@@ -18449,12 +18450,14 @@ func init() {
 
 	// Mage-Lord Urom (27655), The Oculus —
 	// lua_scripts/northrend/boss_urom.lua.
-	// Ported arms (C++-exact): KilledUnit Talk(SAY_PLAYER_KILL 7)
+	// Ported arms (C++-exact): JustEngagedWith BossAI base legs
+	// (SetBossState(IN_PROGRESS) + pulse + me-form DoZone, PORTED
+	// 2026-11-05, base-first); KilledUnit Talk(SAY_PLAYER_KILL 7)
 	// C++-GATED on TYPEID_PLAYER (the nalorakk / kelthuzad
 	// player-gate variant — ninth ported variant overall, sixth
 	// identical to nalorakk / kelthuzad / gothik / thaddius /
-	// keristrasza); JustDied Talk(SAY_DEATH 6) (_JustDied
-	// bookkeeping has no bridge — tharon_ja precedent; the
+	// keristrasza); JustDied Talk(SAY_DEATH 6) (the _JustDied
+	// SetBossState(DONE) leg is PORTED 2026-11-05, base-first; the
 	// DoCastSelf(SPELL_DEATH_SPELL) leg stays out — summon delivery
 	// leg, no SPELL_EFFECT_SUMMON bridge).
 	// Documented-only: JustEngagedWith / StartAttack Talk arms —
@@ -18464,7 +18467,9 @@ func init() {
 	// C++-inexact — no _platform-state / summon bridges (cast is
 	// bridged; the machine is not);
 	// Reset (SetControlled / SetDisableGravity / SetReactState /
-	// DoCastSelf SPELL_EVOCATE 51602 / _Reset());
+	// DoCastSelf SPELL_EVOCATE 51602 / _Reset() SetBossState
+	// (NOT_STARTED, != DONE-gated, PORTED 2026-11-05, last in C++
+	// Reset order));
 	// JustReachedHome (DoCastSelf SPELL_EVOCATE ported on events
 	// 23/24); EnterEvadeMode
 	// (center-gated, no evade / teleport / motion bridges);
@@ -18485,15 +18490,20 @@ func init() {
 	// Varos Cloudstrider (27447), The Oculus —
 	// lua_scripts/northrend/boss_varos.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (the BossAI::JustEngagedWith instance-bookkeeping leg has no
-	// bridge — tharon_ja precedent); JustDied Talk(SAY_DEATH 3)
-	// (_JustDied bookkeeping has no bridge — tharon_ja precedent;
-	// the DoCast(me, SPELL_DEATH_SPELL, true) leg stays out —
+	// (the BossAI::JustEngagedWith SetBossState(IN_PROGRESS) leg is
+	// PORTED 2026-11-05, base-first; the instance-bookkeeping leg has
+	// no bridge — tharon_ja precedent); JustDied Talk(SAY_DEATH 3)
+	// (the _JustDied SetBossState(DONE) leg is PORTED 2026-11-05,
+	// base-first; the DoCast(me, SPELL_DEATH_SPELL, true) leg stays out —
 	// summon delivery leg, no SPELL_EFFECT_SUMMON bridge).
 	// Documented-only: InitializeAI DoCast(SPELL_CENTRIFUGE_SHIELD
-	// 50053) gated on GetBossState(DATA_DRAKOS) != DONE; Reset
-	// (events.ScheduleEvent EVENT_AMPLIFY_MAGIC / EVENT_ENERGIZE_
-	// CORES_VISUAL / EVENT_CALL_AZURE); the UpdateAI energize-
+	// 50053) gated on GetBossState(DATA_DRAKOS) != DONE — gate now
+	// bridged, leg stays out on the missing instance OnUnitDeath
+	// removal path (last construct death -> RemoveAllAuras);
+	// Reset (the _Reset() SetBossState(NOT_STARTED, != DONE-gated)
+	// leg is PORTED 2026-11-05; events.ScheduleEvent
+	// EVENT_AMPLIFY_MAGIC / EVENT_ENERGIZE_CORES_VISUAL /
+	// EVENT_CALL_AZURE); the UpdateAI energize-
 	// cores / azure-captain / amplify-magic event machine — the
 	// timer-event / cast / random-target legs ARE bridged and the
 	// three arms are ported via CreateLuaEvent; CASTING gates PORTED
@@ -18512,18 +18522,19 @@ func init() {
 	// Ley-Guardian Eregos (27656), The Oculus —
 	// lua_scripts/northrend/boss_eregos.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 1)
-	// (the BossAI::JustEngagedWith instance-bookkeeping leg has
-	// no bridge — tharon_ja precedent; the drake-vehicle
+	// (the BossAI::JustEngagedWith SetBossState(IN_PROGRESS) leg is
+	// PORTED 2026-11-05, base-first; the drake-vehicle
 	// FindNearestCreature achievement-void legs have no
 	// creature-search bridge); KilledUnit Talk(SAY_KILL 3)
 	// C++-GATED on TYPEID_PLAYER (the nalorakk / kelthuzad
 	// player-gate variant — tenth ported variant overall,
 	// seventh identical to nalorakk / kelthuzad / gothik /
 	// thaddius / keristrasza / urom); JustDied Talk(SAY_DEATH 4)
-	// (_JustDied bookkeeping has no bridge — tharon_ja
-	// precedent).
+	// (the _JustDied SetBossState(DONE) leg is PORTED 2026-11-05,
+	// Talk-first per C++).
 	// Documented-only: Reset (Initialize _phase / void
-	// booleans + _Reset() + DoAction); DoAction schedules the
+	// booleans + the _Reset() SetBossState(NOT_STARTED, != DONE-gated)
+	// leg PORTED 2026-11-05 + DoAction); DoAction schedules the
 	// four PHASE_NORMAL events (no timer-event / phase bridge);
 	// the UpdateAI arcane event machine — EVENT_ARCANE_BARRAGE /
 	// EVENT_ARCANE_VOLLEY / EVENT_ENRAGED_ASSAULT are ported via

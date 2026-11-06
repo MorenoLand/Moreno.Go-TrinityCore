@@ -32,7 +32,10 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the BossAI::
 -- JustEngagedWith base arms are PORTED in drakosEnterCombat
--- (pulse + me-form DoZone; instance/setActive/ScheduleTasks legs out).
+-- (SetBossState(DATA_DRAKOS, IN_PROGRESS) + pulse + me-form
+-- DoZone, base-first per C++; instance/setActive/ScheduleTasks
+-- legs out). SetBossState PORTED 2026-11-05 (creature:SetBossState
+-- bridged, lua_creature_events.go:5917; SetBossState census).
 -- The two cast ScheduleEvent legs are ported
 -- as CreateLuaEvent timers seeded here, cancel on 2/4/23 (the
 -- krystallus/bjarngrim convention).
@@ -56,14 +59,17 @@
 -- KilledUnit — Talk(SAY_KILL 1) (event 3 — C++-UNCONDITIONAL: the
 -- Talk fires for any victim; no nalorakk gate here — the anubrekhan
 -- unconditional variant).
--- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied bookkeeping
--- has no bridge — tharon_ja precedent; the instance->
--- DoStartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT,
--- ACHIEV_TIMED_START_EVENT 18153) leg has no achievement bridge —
--- kelthuzad/thaddius precedent).
+-- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied
+-- SetBossState(DONE) leg is PORTED in drakosDied (base-first,
+-- 2026-11-05); the instance->DoStartTimedAchievement(
+-- ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_TIMED_START_EVENT 18153)
+-- leg has no achievement bridge — kelthuzad/thaddius precedent).
+-- Reset — _Reset() SetBossState(NOT_STARTED, != DONE-gated)
+-- PORTED 2026-11-05 in drakosReset (event 23; _Reset() is first
+-- in C++ Reset, so the state leg precedes the timer cancel) +
+-- Initialize() (postPull=false) via cancelTimers; the cast
+-- ScheduleEvent legs are ported above.
 -- Unmodeled (no bridges — documented, not wired):
--- Reset — Initialize() (postPull=false) + _Reset() — no instance
--- bridge; the cast ScheduleEvent legs are ported above.
 -- UpdateAI — EVENT_BOMB_SUMMON is PORTED (bombTick, below); the
 -- stale "no summon bridge" claim is retracted (gurtogg convention
 -- superseded).
@@ -87,6 +93,11 @@ local SAY_AGGRO = 0
 local SAY_KILL = 1
 local SAY_DEATH = 2
 local SAY_STOMP = 4
+
+local DATA_DRAKOS = 0 -- oculus.h:31 (OCDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
 local SPELL_MAGIC_PULL = 51336
 local SPELL_THUNDERING_STOMP = 50774
@@ -154,10 +165,11 @@ local function stompTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: Talk(SAY_AGGRO) (the BossAI::JustEngagedWith
--- instance-bookkeeping leg has no instance bridge — tharon_ja
--- precedent); the Reset ScheduleEvent legs (boss_drakos.cpp:76-78)
--- are ported as engage-seeded timers (krystallus convention).
+-- C++ JustEngagedWith: BossAI::JustEngagedWith first
+-- (boss_drakos.cpp:83-86) — SetBossState(IN_PROGRESS)
+-- (ScriptedCreature.cpp:537) + pulse + DoZone, then Talk(SAY_AGGRO);
+-- the Reset ScheduleEvent legs (boss_drakos.cpp:76-78) are ported
+-- as engage-seeded timers (krystallus convention).
 -- EVENT_BOMB_SUMMON (boss_drakos.cpp:103-111) is PORTED: for
 -- i <= (postPull ? 3 : 0) (1 pre-pull, 4 post-pull) x SummonCreature(
 -- NPC_UNSTABLE_SPHERE 28166, GetRandomNearPosition(frand(0,10)),
@@ -186,9 +198,11 @@ end
 
 local function drakosEnterCombat(event, creature, target)
     -- C++ JustEngagedWith base call first (boss_drakos.cpp:83-86):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
-    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:537-542) --
+    -- SetBossState(IN_PROGRESS) + SetCombatPulseDelay(5) + me-form
+    -- DoZoneInCombat, before Talk (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetBossState(DATA_DRAKOS, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -209,6 +223,18 @@ local function drakosLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_drakos.cpp:73-81): _Reset() FIRST —
+-- SetBossState(NOT_STARTED), != DONE-gated (ScriptedCreature.cpp:510),
+-- then the ScheduleEvent legs + Initialize() (postPull=false, via
+-- cancelTimers below; the cast legs seed on engage per the
+-- krystallus convention).
+local function drakosReset(event, creature)
+    if creature:GetBossState(DATA_DRAKOS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_DRAKOS, BOSS_STATE_NOT_STARTED)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ KilledUnit: Talk(SAY_KILL) — C++-UNCONDITIONAL: the Talk fires
 -- for any victim; no nalorakk gate here — the anubrekhan
 -- unconditional variant.
@@ -216,11 +242,12 @@ local function drakosTargetDied(event, creature, victim)
     creature:Talk(SAY_KILL)
 end
 
--- C++ JustDied: Talk(SAY_DEATH) (the _JustDied bookkeeping has no
--- bridge — tharon_ja precedent; the instance->DoStartTimedAchievement
--- (ACHIEV_TIMED_START_EVENT 18153) leg has no achievement bridge —
--- kelthuzad/thaddius precedent).
+-- C++ JustDied: _JustDied() first (boss_drakos.cpp:110-114) —
+-- SetBossState(DONE) (ScriptedCreature.cpp:519), then Talk(SAY_DEATH);
+-- the instance->DoStartTimedAchievement (ACHIEV_TIMED_START_EVENT
+-- 18153) leg has no achievement bridge — kelthuzad/thaddius precedent.
 local function drakosDied(event, creature, killer)
+    creature:SetBossState(DATA_DRAKOS, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
@@ -229,4 +256,4 @@ RegisterCreatureEvent(ENTRY_DRAKOS, 1, drakosEnterCombat)
 RegisterCreatureEvent(ENTRY_DRAKOS, 2, drakosLeaveCombat)
 RegisterCreatureEvent(ENTRY_DRAKOS, 3, drakosTargetDied)
 RegisterCreatureEvent(ENTRY_DRAKOS, 4, drakosDied)
-RegisterCreatureEvent(ENTRY_DRAKOS, 23, drakosLeaveCombat)
+RegisterCreatureEvent(ENTRY_DRAKOS, 23, drakosReset)

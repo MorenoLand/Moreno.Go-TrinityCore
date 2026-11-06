@@ -32,8 +32,9 @@
 -- player-gate variant — ninth ported variant overall, sixth
 -- identical to nalorakk / kelthuzad / gothik / thaddius /
 -- keristrasza).
--- JustDied — Talk(SAY_DEATH 6) (event 4; the _JustDied bookkeeping
--- has no bridge — tharon_ja precedent). The DoCastSelf(
+-- JustDied — Talk(SAY_DEATH 6) (event 4; the _JustDied
+-- SetBossState(DONE) leg is PORTED in uromDied (base-first,
+-- 2026-11-05). The DoCastSelf(
 -- SPELL_DEATH_SPELL 50415, true) leg STAYS OUT, decided 2026-10-14:
 -- the triggered cast bridge exists (CastSpell(creature, id, true)),
 -- but the engine's creature-cast path has no SPELL_EFFECT_SUMMON
@@ -51,9 +52,11 @@
 -- tionally would be C++-inexact, so both are documented-only here
 -- (no _platform / random-shuffle-group state bridge, no summon
 -- bridge (summon STRAND absent)). The BossAI::JustEngagedWith
--- base arms (pulse + me-form DoZone) are PORTED in uromEnterCombat
--- (base call first, boss_urom.cpp:147-150); StartAttack + the
--- platform Talk legs stay out (see above).
+-- base arms (SetBossState(DATA_UROM, IN_PROGRESS) + pulse + me-form
+-- DoZone) are PORTED in uromEnterCombat (base call first,
+-- boss_urom.cpp:147-150; SetBossState PORTED 2026-11-05,
+-- creature:SetBossState bridged, lua_creature_events.go:5917);
+-- StartAttack + the platform Talk legs stay out (see above).
 -- Reset — SetControlled(false, UNIT_STATE_ROOT) ports via
 -- creature:SetRooted(false) (uromReset); SetDisableGravity(false) is
 -- bridged AND ported in uromReset (the old "no bridge" line was
@@ -61,7 +64,9 @@
 -- never sets REACT_PASSIVE); the ungated DoCastSelf(
 -- SPELL_EVOCATE 51602) leg is ported on OnReset(23) (the Reset bullet's
 -- earlier "no cast bridge" line was stale — creature:CastSpell is
--- established in-tree); _Reset() has no bridge.
+-- established in-tree); _Reset() SetBossState(NOT_STARTED,
+-- != DONE-gated) is PORTED in uromReset (2026-11-05; _Reset() is
+-- LAST in C++ Reset, so the state leg follows the Evocate cast).
 -- JustReachedHome — DoCastSelf(SPELL_EVOCATE 51602) — ported below
 -- on event 24 (this tick; the old "no cast bridge" note was stale —
 -- the Reset leg's port above already uses the established CastSpell
@@ -132,6 +137,11 @@ local SAY_DEATH = 6
 
 local SPELL_EVOCATE = 51602
 
+local DATA_UROM = 2 -- oculus.h:33 (OCDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 -- C++ KilledUnit: Talk(SAY_PLAYER_KILL) only when who->GetTypeId()
 -- == TYPEID_PLAYER (nalorakk / kelthuzad player-gate variant).
 local function uromTargetDied(event, creature, victim)
@@ -140,11 +150,13 @@ local function uromTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH) (the _JustDied bookkeeping has no
--- bridge — tharon_ja precedent; the DoCastSelf(SPELL_DEATH_SPELL
--- 50415, true) leg stays out — no SPELL_EFFECT_SUMMON delivery leg
--- on the engine's creature-cast path, shazzrah precedent).
+-- C++ JustDied: _JustDied() first (boss_urom.cpp:310-314) —
+-- SetBossState(DONE) (ScriptedCreature.cpp:519), then Talk(SAY_DEATH);
+-- the DoCastSelf(SPELL_DEATH_SPELL 50415, true) leg stays out — no
+-- SPELL_EFFECT_SUMMON delivery leg on the engine's creature-cast
+-- path, shazzrah precedent.
 local function uromDied(event, creature, killer)
+    creature:SetBossState(DATA_UROM, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
 end
 
@@ -167,6 +179,13 @@ local function uromReset(event, creature)
     creature:SetDisableGravity(false)
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_EVOCATE)
+        -- C++ Reset ends with _Reset() (boss_urom.cpp:140) —
+        -- SetBossState(NOT_STARTED), != DONE-gated
+        -- (ScriptedCreature.cpp:510); _Reset() itself returns early
+        -- when dead, so the IsAlive guard above is C++-exact here.
+        if creature:GetBossState(DATA_UROM) ~= BOSS_STATE_DONE then
+            creature:SetBossState(DATA_UROM, BOSS_STATE_NOT_STARTED)
+        end
     end
 end
 
@@ -180,10 +199,11 @@ end
 
 -- C++ boss_uromAI::JustEngagedWith (boss_urom.cpp:147-150):
 -- BossAI::JustEngagedWith first, then StartAttack(). Only the base
--- arms port (ScriptedCreature.cpp:540/542) -- SetCombatPulseDelay(5)
--- + me-form DoZoneInCombat; StartAttack + the platform Talk legs
--- stay out (documented above).
+-- arms port (ScriptedCreature.cpp:537-542) -- SetBossState(IN_PROGRESS)
+-- + SetCombatPulseDelay(5) + me-form DoZoneInCombat; StartAttack +
+-- the platform Talk legs stay out (documented above).
 local function uromEnterCombat(event, creature, target)
+    creature:SetBossState(DATA_UROM, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
 end

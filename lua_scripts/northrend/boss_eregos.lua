@@ -34,7 +34,10 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 1) (event 1; the
 -- BossAI::JustEngagedWith base arms are PORTED in eregosEnterCombat
--- (pulse + me-form DoZone; instance/setActive/ScheduleTasks legs out)
+-- (SetBossState(DATA_EREGOS, IN_PROGRESS) + pulse + me-form DoZone,
+-- base-first per C++; instance/setActive/ScheduleTasks legs out).
+-- SetBossState PORTED 2026-11-05 (creature:SetBossState bridged,
+-- lua_creature_events.go:5917; SetBossState census)
 -- + the drake-vehicle
 -- FindNearestCreature achievement-void legs
 -- (boss_eregos.cpp:124-128; NPC_RUBY_DRAKE_VEHICLE 27756 /
@@ -51,11 +54,15 @@
 -- identical to nalorakk / kelthuzad / gothik / thaddius /
 -- keristrasza / urom).
 -- JustDied — Talk(SAY_DEATH 4) (event 4; the _JustDied
--- bookkeeping has no bridge — tharon_ja precedent).
+-- SetBossState(DONE) leg is PORTED in eregosDied (Talk-first,
+-- 2026-11-05 — C++ calls Talk before _JustDied here,
+-- boss_eregos.cpp:247-251).
 -- Unmodeled (no bridges — documented, not wired):
--- Reset — Initialize() (_phase = PHASE_NORMAL, all three void
--- booleans = true) + _Reset() + DoAction(
--- ACTION_SET_NORMAL_EVENTS) — no instance bridge.
+-- Reset — _Reset() SetBossState(NOT_STARTED, != DONE-gated)
+-- PORTED 2026-11-05 in eregosReset (event 23; _Reset() is first in
+-- C++ Reset) + Initialize() (_phase = PHASE_NORMAL, all three void
+-- booleans = true) + DoAction(ACTION_SET_NORMAL_EVENTS) — the
+-- timer legs seed on engage per the krystallus convention.
 -- DoAction(ACTION_SET_NORMAL_EVENTS) — events.SetPhase(
 -- PHASE_NORMAL) + ScheduleEvent x4 (EVENT_ARCANE_BARRAGE
 -- 3s/10s, EVENT_ARCANE_VOLLEY 10s/25s, EVENT_ENRAGED_ASSAULT
@@ -156,6 +163,11 @@ local NPC_RUBY_DRAKE_VEHICLE = 27756
 local NPC_EMERALD_DRAKE_VEHICLE = 27692
 local NPC_AMBER_DRAKE_VEHICLE = 27755
 
+local DATA_EREGOS = 3 -- oculus.h:34 (OCDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -242,9 +254,11 @@ end
 -- lua_creature_events.go:1237), ported below.
 local function eregosEnterCombat(event, creature, target)
     -- C++ JustEngagedWith base call first (boss_eregos.cpp:116-121):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
-    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:537-542) --
+    -- SetBossState(IN_PROGRESS) + SetCombatPulseDelay(5) + me-form
+    -- DoZoneInCombat, before Talk (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetBossState(DATA_EREGOS, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -277,6 +291,18 @@ local function eregosCombatEnd(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_eregos.cpp:105-110): _Reset() FIRST —
+-- SetBossState(NOT_STARTED), != DONE-gated (ScriptedCreature.cpp:510),
+-- then Initialize() (phase/void booleans, reseeded on engage below)
+-- + DoAction(ACTION_SET_NORMAL_EVENTS) (timer legs seed on engage
+-- per the krystallus convention).
+local function eregosReset(event, creature)
+    if creature:GetBossState(DATA_EREGOS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_EREGOS, BOSS_STATE_NOT_STARTED)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ KilledUnit: gated on who->GetTypeId() == TYPEID_PLAYER —
 -- the nalorakk / kelthuzad player-gate variant.
 local function eregosTargetDied(event, creature, victim)
@@ -285,10 +311,12 @@ local function eregosTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH) + _JustDied() (the _JustDied
--- bookkeeping has no bridge — tharon_ja precedent).
+-- C++ JustDied: Talk(SAY_DEATH) FIRST, then _JustDied()
+-- (boss_eregos.cpp:247-251) — SetBossState(DONE)
+-- (ScriptedCreature.cpp:519) follows the Talk here.
 local function eregosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_EREGOS, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
 end
 
@@ -308,5 +336,5 @@ RegisterCreatureEvent(ENTRY_EREGOS, 1, eregosEnterCombat)
 RegisterCreatureEvent(ENTRY_EREGOS, 2, eregosCombatEnd)
 RegisterCreatureEvent(ENTRY_EREGOS, 3, eregosTargetDied)
 RegisterCreatureEvent(ENTRY_EREGOS, 4, eregosDied)
-RegisterCreatureEvent(ENTRY_EREGOS, 23, eregosCombatEnd)
+RegisterCreatureEvent(ENTRY_EREGOS, 23, eregosReset)
 RegisterCreatureEvent(ENTRY_EREGOS, 19, eregosJustSummoned)

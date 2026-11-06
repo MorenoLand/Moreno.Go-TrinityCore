@@ -33,19 +33,32 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
 -- BossAI::JustEngagedWith base arms are PORTED in varosEnterCombat
--- (pulse + me-form DoZone; instance/setActive/ScheduleTasks legs out).
--- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied bookkeeping
--- has no bridge — tharon_ja precedent; the DoCast(me,
--- SPELL_DEATH_SPELL 50415, true) leg STAYS OUT — the urom verdict:
--- the triggered cast bridge exists, but the engine's creature-cast
--- path has no SPELL_EFFECT_SUMMON (28) delivery leg).
+-- (SetBossState(DATA_VAROS, IN_PROGRESS) + pulse + me-form DoZone,
+-- base-first per C++; instance/setActive/ScheduleTasks legs out).
+-- SetBossState PORTED 2026-11-05 (creature:SetBossState bridged,
+-- lua_creature_events.go:5917; SetBossState census).
+-- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied
+-- SetBossState(DONE) leg is PORTED in varosDied (base-first,
+-- 2026-11-05); the DoCast(me, SPELL_DEATH_SPELL 50415, true) leg
+-- STAYS OUT — the urom verdict: the triggered cast bridge exists,
+-- but the engine's creature-cast path has no SPELL_EFFECT_SUMMON
+-- (28) delivery leg).
 -- Unmodeled (no bridges — documented, not wired):
 -- InitializeAI — DoCast(me, SPELL_CENTRIFUGE_SHIELD 50053) gated
--- on instance->GetBossState(DATA_DRAKOS) != DONE — no instance /
--- cast bridges; the react-state / flag / immunity arms live in the
--- spell_varos_centrifuge_shield AuraScript below, also unbridged.
--- Reset — _Reset() + the three ScheduleEvent legs (AMPLIFY_MAGIC
--- 20s/25s, ENERGIZE_CORES_VISUAL 5s, CALL_AZURE 15s/30s) +
+-- on instance->GetBossState(DATA_DRAKOS) != DONE — the GATE is
+-- bridged now (creature:GetBossState, lua_creature_events.go) and
+-- the cast is bridged, but the leg STAYS OUT on its removal path:
+-- the shield comes off only via the instance OnUnitDeath leg
+-- (instance_oculus.cpp:126-136: last centrifuge construct death ->
+-- varos->RemoveAllAuras()), which has no Lua instance surface and
+-- no construct-death trigger in Go — casting the shield on spawn
+-- would leave Varos permanently passive + immune. Re-triage only
+-- with a bridged instance OnUnitDeath / RemoveAllAuras path.
+-- Reset — _Reset() SetBossState(NOT_STARTED, != DONE-gated)
+-- PORTED 2026-11-05 in varosReset (event 23; _Reset() is first in
+-- C++ Reset, so the state leg precedes the timer cancel) + the
+-- three ScheduleEvent legs (AMPLIFY_MAGIC 20s/25s,
+-- ENERGIZE_CORES_VISUAL 5s, CALL_AZURE 15s/30s) +
 -- Initialize() member state — the timer bridge is CreateLuaEvent
 -- (the stale "no timer-event bridge" claim is retracted); the
 -- ports seed from OnEnterCombat(1) and cancel on 2/4/23 per the
@@ -129,6 +142,12 @@ local SAY_AZURE_EMOTE = 2
 local SPELL_ENERGIZE_CORES_VISUAL = 62136
 local SPELL_CALL_AMPLIFY_MAGIC = 51054
 
+local DATA_VAROS = 1 -- oculus.h:32 (OCDataTypes)
+local DATA_DRAKOS = 0 -- oculus.h:31 (OCDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -202,13 +221,17 @@ local function azureTick(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith(who) +
--- Talk(SAY_AGGRO) — the Talk arm is unconditional.
+-- C++ JustEngagedWith: BossAI::JustEngagedWith(who) first
+-- (boss_varos.cpp:95-100) — SetBossState(IN_PROGRESS)
+-- (ScriptedCreature.cpp:537) + pulse + DoZone, then Talk(SAY_AGGRO)
+-- — the Talk arm is unconditional.
 local function varosEnterCombat(event, creature, target)
     -- C++ JustEngagedWith base call first (boss_varos.cpp:95-100):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
-    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:537-542) --
+    -- SetBossState(IN_PROGRESS) + SetCombatPulseDelay(5) + me-form
+    -- DoZoneInCombat, before Talk (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out.
+    creature:SetBossState(DATA_VAROS, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -229,12 +252,24 @@ local function varosCombatEnd(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ JustDied: _JustDied() + Talk(SAY_DEATH) + DoCast(me,
--- SPELL_DEATH_SPELL 50415, true) — the _JustDied bookkeeping has no
--- bridge (tharon_ja precedent); the DoCast leg stays out (urom
--- verdict: no SPELL_EFFECT_SUMMON delivery leg on the engine's
--- creature-cast path).
+-- C++ Reset (boss_varos.cpp:88-97): _Reset() FIRST —
+-- SetBossState(NOT_STARTED), != DONE-gated (ScriptedCreature.cpp:510),
+-- then the ScheduleEvent legs + Initialize() (member state; the timer
+-- legs seed on engage per the krystallus convention).
+local function varosReset(event, creature)
+    if creature:GetBossState(DATA_VAROS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_VAROS, BOSS_STATE_NOT_STARTED)
+    end
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ JustDied: _JustDied() first (boss_varos.cpp:158-162) —
+-- SetBossState(DONE) (ScriptedCreature.cpp:519), then Talk(SAY_DEATH)
+-- + DoCast(me, SPELL_DEATH_SPELL 50415, true); the DoCast leg stays
+-- out (urom verdict: no SPELL_EFFECT_SUMMON delivery leg on the
+-- engine's creature-cast path).
 local function varosDied(event, creature, killer)
+    creature:SetBossState(DATA_VAROS, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
@@ -242,7 +277,7 @@ end
 RegisterCreatureEvent(ENTRY_VAROS, 1, varosEnterCombat)
 RegisterCreatureEvent(ENTRY_VAROS, 2, varosCombatEnd)
 RegisterCreatureEvent(ENTRY_VAROS, 4, varosDied)
-RegisterCreatureEvent(ENTRY_VAROS, 23, varosCombatEnd)
+RegisterCreatureEvent(ENTRY_VAROS, 23, varosReset)
 
 local SPELL_CENTRIFUGE_SHIELD = 50053 -- oculus.h:82
 local UNIT_FLAG_UNK_6 = 0x00000040 -- UnitDefines.h:130
