@@ -45,8 +45,8 @@
 -- only; this clone carries no sql/ tree, so ScriptName bindings are
 -- DB-side by construction.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill
--- (player-gated), 4 OnDied, 9 OnDamageTaken, 23 OnReset. Timers via
--- CreateLuaEvent (GUID-keyed, cancelled on events 2/4/23); melee is
+-- (player-gated), 4 OnDied, 9 OnDamageTaken, 23 OnReset, 24 OnReachHome.
+-- Timers via CreateLuaEvent (GUID-keyed, cancelled on events 2/4/23); melee is
 -- engine-driven in Go.
 --
 -- DOCTRINE RETRACTION (2026-10-13): the earlier port of this file
@@ -74,10 +74,11 @@
 --   SPELL_MARK_OF_THE_FALLEN_CHAMPION 72293) (:311) is PORTED via
 --   GetPlayersInWorld + mapId/instanceId filter + player:RemoveAura
 --   (the moroes precedent — the stale "no instance bridge" claim
---   for this leg is retracted). The CheckRequiredBosses evade
---   branch, DoCastSpellOnPlayers and
---   instance->SetBossState(IN_PROGRESS) legs have no instance
---   bridge (DoZoneInCombat :289 is PORTED 2026-10-23 via the live
+--   for this leg is retracted). instance->SetBossState(IN_PROGRESS)
+--   (:312) PORTED 2026-11-05 via creature:SetBossState, last in the
+--   handler. The CheckRequiredBosses evade branch and
+--   DoCastSpellOnPlayers legs have no instance bridge
+--   (DoZoneInCombat :289 is PORTED 2026-10-23 via the live
 --   creature:DoZoneInCombat bridge — C++ arm order, after
 --   me->setActive(true)); the !_introDone branch (:293-298) PORTS via
 --   relayInterruptIntro below: DoCastSelf(SPELL_GRIP_OF_AGONY 70572) +
@@ -114,6 +115,8 @@
 --   Talk(SAY_FRENZY 11); the fight-won leg (:362-377): !_dead &&
 --   health-damage < FightWonValue (100000, :614, computed with the
 --   CAPPED damage) — cancel timers (the _JustDied events.Reset),
+--   SetBossState DONE (:364, _JustDied — PORTED 2026-11-05 via
+--   creature:SetBossState, first in the block),
 --   DoCastAOE(SPELL_REMOVE_MARKS_OF_THE_FALLEN_CHAMPION 72257) =
 --   non-triggered self-cast (:370), DoCastSelf(SPELL_ACHIEVEMENT
 --   72928, true) TRIGGERED (:371), Talk(SAY_DEATH 13) (:372),
@@ -135,7 +138,9 @@
 --   RemoveAurasDueToSpell(SPELL_BERSERK / SPELL_FRENZY) via the
 --   RemoveAura bridge (the arlokk / bronjahm idiom) + SetPower(ENERGY, 0)
 --   (:265) via the creature:SetPower bridge (lua_creature_events.go).
---   The _Reset() / SetPhase bookkeeping legs have no bridge.
+--   The _Reset() SetBossState NOT_STARTED leg (:261, != DONE-gated)
+--   PORTED 2026-11-05 via creature:SetBossState (the falric
+--   precedent); the SetPhase bookkeeping leg has no bridge.
 --   Mirrors the `if (_dead) return;` early-out (:277-278): after the
 --   fight-won leg the reset casts are skipped.
 -- JustDied (:315-317) is EMPTY in C++ — event 4 only cancels timers
@@ -179,9 +184,13 @@
 --   summons.Summon, DoZoneInCombat — no summon / cross-creature
 --   bridge. SummonedCreatureDies (:400-404), MovementInform
 --   (:406-411, instance GO leg), AttackStart/CanAIAttack transport
---   legs, EnterEvadeMode/JustReachedHome instance legs
---   (SetBossState FAIL / DoRemoveAurasDueToSpellOnPlayers) — no
---   instance / motion bridges.
+--   legs. EnterEvadeMode (:327-331) — the SetImmuneToPC(false) leg
+--   PORTS in ev2 (RemoveFlag 0x100 twin, intro-done + not-dead
+--   gated, 2026-11-05); the ScriptedAI base leg has no bridge.
+--   JustReachedHome (:334-342) — SetBossState FAIL + Reset() +
+--   DoRemoveAurasDueToSpellOnPlayers all PORT in the ev24 handler
+--   (the old "no instance / motion bridges" claim is retracted);
+--   MovementInform (:406-411, instance GO leg) stays out.
 -- EVENT_SCENT_OF_BLOOD (:520-526) — heroic-gated via creature:IsHeroic()
 --   (bridged — the berserk port in this file uses it) AND gated on
 --   !summons.empty() (no summon-list bridge); one-shot, never re-armed —
@@ -244,6 +253,11 @@
 --   pre-combat, the setup auras apply on the first evade instead.
 
 local ENTRY_DEATHBRINGER_SAURFANG = 37813
+local DATA_DEATHBRINGER_SAURFANG = 3 -- icecrown_citadel.h:77
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 local ENTRY_SE_HIGH_OVERLORD_SAURFANG = 37187 -- icecrown_citadel.h:216
 local ENTRY_SE_MURADIN_BRONZEBEARD = 37200 -- icecrown_citadel.h:214
 local ENTRY_SE_KOR_KRON_REAVER = 37920 -- icecrown_citadel.h:217
@@ -409,10 +423,10 @@ end
 
 -- C++ :275-313 JustEngagedWith: Talk(SAY_AGGRO 7) (:302), then the
 -- five combat scheduler seeds (:304-308). The CheckRequiredBosses
--- evade branch, DoCastSpellOnPlayers,
--- instance->SetBossState(IN_PROGRESS) and
--- DoRemoveAurasDueToSpellOnPlayers legs have no instance bridge
+-- evade branch and DoCastSpellOnPlayers legs have no instance bridge
 -- (DoZoneInCombat :289 is PORTED 2026-10-23, C++ arm order);
+-- instance->SetBossState(IN_PROGRESS) (:312) PORTED 2026-11-05 via
+-- creature:SetBossState, last in the handler.
 -- the !_introDone DoCastSelf(SPELL_GRIP_OF_AGONY) exploit leg
 -- (:293-298) rides the unbridged intro DoAction machine.
 -- C++ JustEngagedWith starts with `if (_dead) return;` (:277-278): after
@@ -536,10 +550,25 @@ local function saurfangJustEngagedWith(event, creature, target)
             p:RemoveAura(SPELL_MARK_OF_THE_FALLEN_CHAMPION)
         end
     end
+    -- C++ :312 — SetBossState IN_PROGRESS, last in JustEngagedWith,
+    -- PORTED 2026-11-05 via creature:SetBossState
+    -- (lua_creature_events.go:5917).
+    creature:SetBossState(DATA_DEATHBRINGER_SAURFANG, BOSS_STATE_IN_PROGRESS)
 end
 
 local function saurfangLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ boss_deathbringer_saurfang::EnterEvadeMode (:327-331):
+    -- ScriptedAI base + SetImmuneToPC(false) when _introDone — the
+    -- UNIT_FLAG_IMMUNE_TO_PC (0x100) clear twin, already used in the
+    -- engage handler (:293). Gated on the intro latch AND not-dead:
+    -- the fight-won path calls _EnterEvadeMode() (non-virtual), which
+    -- bypasses this virtual override, so a won fight stays immune.
+    local guid = creature:GetGUID()
+    local st = saurfangState[guid]
+    if saurfangIntroDone[guid] and not (st and st.dead) then
+        creature:RemoveFlag(59, 0x100)
+    end
 end
 
 -- C++ :257-273 Reset: no timer seeds in C++, so event 23 only
@@ -558,6 +587,16 @@ local function doSaurfangReset(creature)
     local st = saurfangState[guid]
     if st and st.dead then
         return
+    end
+    -- C++ Reset() :261 — _Reset() first (after the _dead guard):
+    -- SetBossState NOT_STARTED only when the stored state != DONE
+    -- (BossAI::_Reset, ScriptedCreature.cpp:499-509; the falric
+    -- precedent — ev23 fires on spawn/death/evade too, and a DONE
+    -- boss must stay DONE). PORTED 2026-11-05 via creature:SetBossState.
+    -- Shared with the reach-home arm, where C++ calls Reset() before
+    -- writing FAIL — the NOT_STARTED-then-FAIL order is C++-exact.
+    if creature:GetBossState(DATA_DEATHBRINGER_SAURFANG) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_DEATHBRINGER_SAURFANG, BOSS_STATE_NOT_STARTED)
     end
     saurfangState[guid] = { frenzied = false, dead = false }
     -- C++ Reset() :265: me->SetPower(POWER_ENERGY, 0) — the blood-power
@@ -612,7 +651,7 @@ local function saurfangReachHome(event, creature)
         return
     end
     doSaurfangReset(creature)
-    creature:SetBossState(3, 2) -- DATA_DEATHBRINGER_SAURFANG, FAIL (tick 236)
+    creature:SetBossState(DATA_DEATHBRINGER_SAURFANG, BOSS_STATE_FAIL) -- DATA_DEATHBRINGER_SAURFANG, FAIL (tick 236)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
@@ -664,6 +703,10 @@ local function saurfangDamageTaken(event, creature, attacker, damage)
     if not st.dead and health - newDamage < FIGHT_WON_VALUE then
         st.dead = true
         cancelTimers(guid)
+        -- C++ :364 — _JustDied() first in the fight-won block:
+        -- SetBossState DONE PORTED 2026-11-05 via creature:SetBossState,
+        -- before the flags/casts/Talk below (C++ order).
+        creature:SetBossState(DATA_DEATHBRINGER_SAURFANG, BOSS_STATE_DONE)
         -- C++ :368-369 arm order: SetFlag(UNIT_FLAG_NOT_SELECTABLE) then
         -- SetImmuneToPC(true) (= set UNIT_FLAG_IMMUNE_TO_PC); the NOT_SELECTABLE
         -- leg ports 2026-10-23 on the live creature:SetFlag bridge (the stale

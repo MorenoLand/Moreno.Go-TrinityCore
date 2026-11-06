@@ -32,7 +32,8 @@
 -- only (+ the loader decl/call lines); this clone carries no sql/
 -- tree, so ScriptName bindings are DB-side by construction.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill
--- (player-gated), 4 OnDied, 23 OnReset. Timers via CreateLuaEvent
+-- (player-gated), 4 OnDied, 9 OnDamageTaken, 14 OnHitBySpell, 23 OnReset.
+-- Timers via CreateLuaEvent
 -- (GUID-keyed, cancelled on events 2/23); melee is engine-driven in Go.
 --
 -- DOCTRINE RETRACTION (2026-10-13): the earlier port of this file
@@ -46,12 +47,13 @@
 -- PORTED ARMS (C++-exact for all modeled arms):
 -- boss JustEngagedWith (:281-342): Talk(SAY_AGGRO 7) (:338),
 -- RemoveAurasDueToSpell(SHADOW_CHANNELING) (:339), then
--- DoCastSelf(SPELL_MANA_BARRIER 70842, true) TRIGGERED (:340). The
--- CheckRequiredBosses evade branch,
--- instance->SetBossState, scheduler.CancelGroup(GROUP_INTRO) legs have
--- no bridge (the DoZoneInCombat leg :293 is PORTED in the event-1
--- handler — live bridge engine/world/lua_creature_events.go,
--- 2026-10-23). Phase-INDEPENDENT scheduler arms ported:
+-- DoCastSelf(SPELL_MANA_BARRIER 70842, true) TRIGGERED (:340), then
+-- instance->SetBossState IN_PROGRESS (:341) PORTED 2026-11-05 via
+-- creature:SetBossState (lua_creature_events.go:5917). The
+-- CheckRequiredBosses evade branch and
+-- scheduler.CancelGroup(GROUP_INTRO) legs have no bridge (the
+-- DoZoneInCombat leg :293 is PORTED in the event-1 handler — live
+-- bridge engine/world/lua_creature_events.go, 2026-10-23). Phase-INDEPENDENT scheduler arms ported:
 -- SPELL_BERSERK 26662 self-cast 10min one-shot + Talk(SAY_BERSERK 15)
 -- (:296-300); SPELL_DEATH_AND_DECAY 71001 — no GROUP arg, survives
 -- phase transition (:301-306): random-target cast init 17s / re-arm
@@ -159,10 +161,15 @@
 -- task is PORTED 2026-10-23 (onImproveCultist: GetCreaturesInGrid pool,
 -- cross-creature CastSpell + triggered flag, Talk — the "no
 -- friendly/cross-creature bridge" claim was stale).
--- CheckRequiredBosses / EnterEvadeMode / instance->DoCastSpellOnPlayers
--- / instance->SetBossState legs have no instance bridge (the
--- DoZoneInCombat :293 leg is PORTED in the event-1 handler — live
--- bridge engine/world/lua_creature_events.go, 2026-10-23).
+-- CheckRequiredBosses / instance->DoCastSpellOnPlayers legs have no
+-- instance bridge (the DoZoneInCombat :293 leg is PORTED in the
+-- event-1 handler — live bridge engine/world/lua_creature_events.go,
+-- 2026-10-23). SetBossState legs PORTED 2026-11-05 (engage
+-- IN_PROGRESS :341, died DONE :387, reset NOT_STARTED :222 via _Reset,
+-- evade FAIL via _DespawnAtEvade :390-396 in ev2, the LK-escape
+-- precedent); the darnavan DespawnOrUnsummon leg ports in ev2 too
+-- (the despawn-self half of _DespawnAtEvade has no twin —
+-- luaBossAI.OnEvade is empty, boss_ai.go:11694).
 -- boss_lady_deathwhisper DamageTaken — Talk(SAY_PHASE_2 8) +
 -- Talk(EMOTE_PHASE_2 9) ride the mana-power pct gate of the phase
 -- transition; the old "(no health-pct bridge; the garfrost
@@ -181,6 +188,8 @@
 -- rescue (SetFaction/CombatStop/SetReactState/Talk via FindNearestCreature
 -- liveness twin) + KilledMonsterCredit group loop (player:KilledMonsterCredit
 -- bridge) + npc_darnavan JustDied FailQuest loop (player:FailQuest bridge).
+-- The _JustDied() DONE leg (:387) PORTED 2026-11-05 via
+-- creature:SetBossState, last in the handler after the darnavan block.
 -- Stay out: Full House achievement legs (instance), DaranavanMoveEvent +
 -- MoveIdle (no motion bridge).
 -- Talk(SAY_ANIMATE_DEAD 13) is called by
@@ -231,6 +240,11 @@
 -- + animate-dead 13 (1) + darnavan rescued 1 (1)).
 
 local ENTRY_LADY_DEATHWHISPER = 36855
+local DATA_LADY_DEATHWHISPER = 1 -- icecrown_citadel.h:75
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 local ENTRY_CULT_FANATIC = 37890 -- icecrown_citadel.h:175
 local ENTRY_CULT_ADHERENT = 37949 -- icecrown_citadel.h:178
 local ENTRY_EMPOWERED_ADHERENT = 38136 -- icecrown_citadel.h:179
@@ -683,6 +697,10 @@ local function deathwhisperJustEngagedWith(event, creature, target)
     -- Reset, :226; the RemoveAura bridge).
     creature:RemoveAura(SPELL_SHADOW_CHANNELING)
     creature:CastSpell(creature, SPELL_MANA_BARRIER, true)
+    -- C++ :341 — SetBossState IN_PROGRESS, last in JustEngagedWith,
+    -- PORTED 2026-11-05 via creature:SetBossState
+    -- (lua_creature_events.go:5917).
+    creature:SetBossState(DATA_LADY_DEATHWHISPER, BOSS_STATE_IN_PROGRESS)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
     schedule(guid, "deathanddecay", 17000, function() onDeathAndDecay(creature, guid) end)
     schedule(guid, "shadowbolt", 2000, function() onShadowBolt(creature, guid) end)
@@ -700,10 +718,36 @@ local function deathwhisperLeaveCombat(event, creature)
     cancelTimers(guid)
     improvedCultists[guid] = nil
     deathwhisperPhase[guid] = nil
+    -- C++ boss_lady_deathwhisper::EnterEvadeMode (:390-396): scheduler.
+    -- CancelAll + summons.DespawnAll (the cancelTimers above) + darnavan
+    -- DespawnOrUnsummon + _DespawnAtEvade() (SetBossState FAIL,
+    -- ScriptedCreature.cpp:596-617; the despawn half has no twin —
+    -- luaBossAI.OnEvade is empty, boss_ai.go:11694). The FAIL leg is
+    -- PORTED 2026-11-05 via creature:SetBossState in ev2, the LK-escape
+    -- precedent (ev2 fires on evade, not on death/spawn); gated on
+    -- IN_PROGRESS so a DONE boss never re-fails.
+    local darnavan = creature:FindNearestCreature(ENTRY_DARNAVAN_10, 100.0)
+    if darnavan == nil then
+        darnavan = creature:FindNearestCreature(ENTRY_DARNAVAN_25, 100.0)
+    end
+    if darnavan ~= nil then
+        darnavan:Despawn()
+    end
+    if creature:GetBossState(DATA_LADY_DEATHWHISPER) == BOSS_STATE_IN_PROGRESS then
+        creature:SetBossState(DATA_LADY_DEATHWHISPER, BOSS_STATE_FAIL)
+    end
 end
 
 local function deathwhisperReset(event, creature)
     local guid = creature:GetGUID()
+    -- C++ Reset() :223 — _Reset() first: SetBossState NOT_STARTED
+    -- only when the stored state != DONE (BossAI::_Reset,
+    -- ScriptedCreature.cpp:499-509; the falric precedent — ev23
+    -- fires on spawn/death/evade too, and a DONE boss must stay
+    -- DONE). PORTED 2026-11-05 via creature:SetBossState.
+    if creature:GetBossState(DATA_LADY_DEATHWHISPER) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_LADY_DEATHWHISPER, BOSS_STATE_NOT_STARTED)
+    end
     cancelTimers(guid)
     improvedCultists[guid] = nil
     deathwhisperPhase[guid] = nil
@@ -783,6 +827,10 @@ local function deathwhisperJustDied(event, creature, killer)
             darnavanCredit(creature, killer)
         end
     end
+    -- C++ :387 — _JustDied() last in JustDied, after the darnavan
+    -- block: SetBossState DONE PORTED 2026-11-05 via
+    -- creature:SetBossState.
+    creature:SetBossState(DATA_LADY_DEATHWHISPER, BOSS_STATE_DONE)
 end
 
 -- C++ npc_darnavan::JustDied (:847-867): group FailQuest loop with the

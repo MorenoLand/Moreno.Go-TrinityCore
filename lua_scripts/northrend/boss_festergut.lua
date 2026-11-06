@@ -100,9 +100,14 @@
 -- relayProfessor: ACTION_FESTERGUT_GAS (Talk + triggered visual,
 -- in onInhaleBlight) and the ACTION_FESTERGUT_DEATH Talk leg at 4s
 -- (in festergutJustDied; its EnterEvadeMode leg stays out, no
--- bridge). JustReachedHome instance->SetBossState(FAIL) and
--- EnterEvadeMode cross-AI professor EnterEvadeMode stay out — no
--- instance / DoAction bridge.
+-- bridge). JustReachedHome instance->SetBossState(FAIL) (:141-144)
+-- PORTED 2026-11-05 via creature:SetBossState on ev24 OnReachHome
+-- (the opera ev24 precedent); the EnterEvadeMode cross-AI professor
+-- EnterEvadeMode leg stays out (no bridge). NO engage IN_PROGRESS
+-- leg exists: C++ JustEngagedWith sets no state — IN_PROGRESS is
+-- written by Putricide's MovementInform POINT_FESTERGUT
+-- (boss_professor_putricide.cpp:376) when he reaches the table, i.e.
+-- it rides the unported ACTION_FESTERGUT_COMBAT chain above.
 -- SpellHitTarget (boss_festergut.cpp:160-168) — STAYS OUT, retracted
 -- 2026-10-20: the 11:55 tick's ev15 port stripped INOCULATED from the
 -- boss himself (Go's cast path carries only the explicit target, so the
@@ -117,6 +122,10 @@
 -- (1) + SAY_BERSERK 8 (1) + SAY_DEATH 9 (1)).
 
 local ENTRY_FESTERGUT = 36626
+local DATA_FESTERGUT = 4 -- icecrown_citadel.h:78
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 
 local SAY_AGGRO = 1
 local SAY_KILL = 7
@@ -382,7 +391,9 @@ onGasSpore = function(creature, guid)
 end
 
 -- C++ boss_festergut::JustEngagedWith:
--- Talk(SAY_AGGRO) — the auriaya engage-port precedent.
+-- Talk(SAY_AGGRO) — the auriaya engage-port precedent. No
+-- SetBossState leg: C++ JustEngagedWith (:113-129) writes no state
+-- (IN_PROGRESS rides Putricide's MovementInform, see header).
 local function festergutJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -409,6 +420,14 @@ local function festergutReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     inhale[guid] = nil
+    -- C++ Reset() :94 — _Reset() first: SetBossState NOT_STARTED
+    -- only when the stored state != DONE (BossAI::_Reset,
+    -- ScriptedCreature.cpp:499-509; the falric precedent — ev23
+    -- fires on spawn/death/evade too, and a DONE boss must stay
+    -- DONE). PORTED 2026-11-05 via creature:SetBossState.
+    if creature:GetBossState(DATA_FESTERGUT) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_FESTERGUT, BOSS_STATE_NOT_STARTED)
+    end
     -- C++ Reset() (:92-110): me->RemoveAurasDueToSpell(SPELL_BERSERK2) —
     -- the RemoveAura bridge (the drakkari / falric idiom); then the
     -- RemoveBlight() loop (nearest alive gas dummy within 100yd gates
@@ -426,9 +445,10 @@ local function festergutKilledUnit(event, creature, victim)
     end
 end
 
--- C++ boss_festergut::JustDied: _JustDied() resets the EventMap
--- (boss_festergut.cpp:132) + Talk(SAY_DEATH) — the sjonnir
--- JustDied-Talk precedent. The timers must be cancelled here:
+-- C++ boss_festergut::JustDied: _JustDied() (:133) FIRST, then
+-- Talk(SAY_DEATH) (:134) — the DONE leg PORTED 2026-11-05 via
+-- creature:SetBossState, in C++ order BEFORE Talk (unlike marrowgar,
+-- whose _JustDied runs after Talk). The timers must be cancelled here:
 -- CreateLuaEvent timers have no death auto-cancel, so the
 -- self-re-arming inhale/gas-spore/gastric-bloat legs would keep
 -- firing on the corpse (the devourer death-cancel precedent).
@@ -436,6 +456,7 @@ local function festergutJustDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     inhale[guid] = nil
+    creature:SetBossState(DATA_FESTERGUT, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     -- C++ :136 — professor DoAction(ACTION_FESTERGUT_DEATH) schedules
     -- EVENT_FESTERGUT_DIES at 4s: Talk(SAY_FESTERGUT_DEATH 1) +
@@ -450,6 +471,16 @@ local function festergutJustDied(event, creature, killer)
     end)
     -- C++ order (:130-136): Talk(SAY_DEATH), then RemoveBlight().
     removeBlight(creature)
+end
+
+-- C++ boss_festergut::JustReachedHome (:141-144): _JustReachedHome()
+-- (setActive(false), unmodeled) then SetBossState(FAIL) PORTED
+-- 2026-11-05 via creature:SetBossState on ev24 OnReachHome
+-- (creaturemotion.go home-move finalize, the opera ev24 precedent).
+-- The EnterEvadeMode cross-AI professor EnterEvadeMode leg stays out
+-- (no bridge — EnterEvadeMode has no Lua bridge, boss_ai.go:5753-5754).
+local function festergutReachHome(event, creature)
+    creature:SetBossState(DATA_FESTERGUT, BOSS_STATE_FAIL)
 end
 
 -- C++ boss_festergut::SpellHitTarget (boss_festergut.cpp:160-168):
@@ -470,3 +501,4 @@ RegisterCreatureEvent(ENTRY_FESTERGUT, 2, festergutLeaveCombat)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 3, festergutKilledUnit)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 4, festergutJustDied)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 23, festergutReset)
+RegisterCreatureEvent(ENTRY_FESTERGUT, 24, festergutReachHome)

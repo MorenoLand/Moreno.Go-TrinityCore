@@ -29,7 +29,7 @@
 -- ScriptName bindings are DB-side by construction. No marrowgar lua
 -- existed.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill
--- (player-gated), 4 OnDied, 23 OnReset. Timers via CreateLuaEvent
+-- (player-gated), 4 OnDied, 23 OnReset, 24 OnReachHome. Timers via CreateLuaEvent
 -- (GUID-keyed, cancelled on events 2/4/23); melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady (:276).
 --
@@ -51,17 +51,20 @@
 -- boss_lord_marrowgar JustEngagedWith — Talk(SAY_AGGRO 1) (event 1 —
 -- the auriaya engage-port precedent; PORTED 2026-10-23:
 -- DoZoneInCombat (:162, me-form) via the live bridge — C++ arm
--- order, after Talk; the me->setActive(true),
--- instance->SetBossState IN_PROGRESS and five
--- ScheduleEvent legs have no bridge).
+-- order, after Talk; instance->SetBossState IN_PROGRESS (:163)
+-- PORTED 2026-11-05 via creature:SetBossState (lua_creature_events.go:
+-- 5917) — the old "no bridge" claim is retracted. The
+-- me->setActive(true) leg and the five ScheduleEvent legs have no
+-- bridge (only EVENT_ENRAGE ports, below).
 -- boss_lord_marrowgar KilledUnit — Talk(SAY_KILL 4) player-gated
 -- (event 3 — the razuvious player-gated variant precedent; the
 -- twelfth ported variant, tenth identical to
 -- nalorakk/kelthuzad/gothik/thaddius/garfrost/krick/tyrannus/falric/
 -- marwyn).
 -- boss_lord_marrowgar JustDied — Talk(SAY_DEATH 5) (event 4 — the
--- sjonnir JustDied-Talk precedent; the _JustDied BossAI helper has
--- no bridge by construction). Melee engine-driven.
+-- sjonnir JustDied-Talk precedent); the _JustDied() DONE leg (:170)
+-- PORTED 2026-11-05 via creature:SetBossState, in C++ order AFTER
+-- Talk. Melee engine-driven.
 -- boss_lord_marrowgar UpdateAI EVENT_ENRAGE (:261-263) — DoCast(me,
 -- SPELL_BERSERK 26662, true) + Talk(SAY_BERSERK 6), cast-before-Talk
 -- kept; 10min one-shot seeded on engage, no phase/machine/random-
@@ -118,8 +121,10 @@
 -- IsCasting live at lua_creature_events.go:1950);
 -- bone-storm-aura gate, bone-slice DoCastVictim legs and
 -- DoMeleeAttackIfReady have no bridge. JustReachedHome
--- instance-SetBossState(FAIL) and DATA_BONED_ACHIEVEMENT-reset legs
--- have no instance bridge; DoAction(ACTION_CLEAR_SPIKE_IMMUNITIES)
+-- instance-SetBossState(FAIL) (:175) PORTED 2026-11-05 via
+-- creature:SetBossState on ev24 OnReachHome (the opera ev24
+-- precedent); the DATA_BONED_ACHIEVEMENT-reset leg stays out (no
+-- instance SetData bridge). DoAction(ACTION_CLEAR_SPIKE_IMMUNITIES)
 -- and MovementInform have no bridge.
 -- Talk(SAY_ENTER_ZONE 0) rides DoAction(ACTION_TALK_ENTER_ZONE),
 -- which only fires from at_lord_marrowgar_entrance — ev38 dispatch bridged;
@@ -140,6 +145,12 @@
 
 local ENTRY_LORD_MARROWGAR = 36612
 local ENTRY_BONE_SPIKE = 36619 -- icecrown_citadel.h:171
+
+local DATA_LORD_MARROWGAR = 0 -- icecrown_citadel.h:74
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 
 local SPELL_IMPALED = 69065 -- boss_lord_marrowgar.cpp:54
 local SPELL_RIDE_VEHICLE = 46598 -- boss_lord_marrowgar.cpp:55
@@ -202,8 +213,11 @@ local function marrowgarJustEngagedWith(event, creature, target)
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ :162 — me-form DoZoneInCombat after Talk(SAY_AGGRO) and
-    -- me->setActive(true) (C++ arm order).
+    -- me->setActive(true) (C++ arm order); :163 SetBossState
+    -- IN_PROGRESS PORTED 2026-11-05 via creature:SetBossState
+    -- (lua_creature_events.go:5917).
     creature:DoZoneInCombat()
+    creature:SetBossState(DATA_LORD_MARROWGAR, BOSS_STATE_IN_PROGRESS)
     schedule(guid, "enrage", 600000, function() onEnrage(creature, guid) end)
 end
 
@@ -215,6 +229,14 @@ end
 
 local function marrowgarReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset() :144 — _Reset() first: SetBossState NOT_STARTED
+    -- only when the stored state != DONE (BossAI::_Reset,
+    -- ScriptedCreature.cpp:499-509; the falric precedent — ev23
+    -- fires on spawn/death/evade too, and a DONE boss must stay
+    -- DONE). PORTED 2026-11-05 via creature:SetBossState.
+    if creature:GetBossState(DATA_LORD_MARROWGAR) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_LORD_MARROWGAR, BOSS_STATE_NOT_STARTED)
+    end
     -- C++ Reset() :144-146: SetSpeedRate(MOVE_RUN, _baseSpeed) restores the
     -- template rate (_baseSpeed is GetSpeedRate(MOVE_RUN) captured in the AI
     -- constructor); rate <= 0 clears the script override, restoring the
@@ -237,11 +259,23 @@ local function marrowgarKilledUnit(event, creature, victim)
 end
 
 -- C++ boss_lord_marrowgar::JustDied: Talk(SAY_DEATH) — the sjonnir
--- JustDied-Talk precedent. cancelTimers stops the 10-min berserk timer
--- from firing on the corpse.
+-- JustDied-Talk precedent; _JustDied() (:170) PORTED 2026-11-05 via
+-- creature:SetBossState DONE, in C++ order AFTER Talk. cancelTimers
+-- stops the 10-min berserk timer from firing on the corpse.
 local function marrowgarJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_LORD_MARROWGAR, BOSS_STATE_DONE)
+end
+
+-- C++ boss_lord_marrowgar::JustReachedHome (:174-177): _JustReachedHome()
+-- (setActive(false), unmodeled) then SetBossState(FAIL) PORTED
+-- 2026-11-05 via creature:SetBossState on ev24 OnReachHome
+-- (creaturemotion.go home-move finalize, the opera ev24 precedent).
+-- The SetData(DATA_BONED_ACHIEVEMENT 14, true) reset leg stays out —
+-- no instance SetData bridge.
+local function marrowgarReachHome(event, creature)
+    creature:SetBossState(DATA_LORD_MARROWGAR, BOSS_STATE_FAIL)
 end
 
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 1, marrowgarJustEngagedWith)
@@ -249,6 +283,7 @@ RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 2, marrowgarLeaveCombat)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 3, marrowgarKilledUnit)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 4, marrowgarJustDied)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 23, marrowgarReset)
+RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 24, marrowgarReachHome)
 
 -- C++ npc_bone_spike::JustDied (boss_lord_marrowgar.cpp:424-431): the
 -- trapped-unit aura-removal leg rides ToTempSummon()->GetSummonerUnit()

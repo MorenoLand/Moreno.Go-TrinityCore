@@ -65,26 +65,36 @@
 --
 -- DOCUMENTED-ONLY (no registration beyond the 8 entries above):
 -- npc_gunship (the ship itself): JustDied / DamageTaken victory legs,
--- cross-creature DoAction mage summon (:698), instance machine — no
--- instance bridge (the instance_ulduar precedent). The :780
+-- cross-creature DoAction mage summon (:698), instance machine — the
+-- instance GetData (DATA_TEAM_IN_INSTANCE) / transport legs have no
+-- bridge (the instance_ulduar precedent); the SetBossState DONE/FAIL
+-- leg itself IS bridged (creature:SetBossState) but stays out on its
+-- trigger + isVictory (see FRAME TRIAGE below). The :780
 -- FindNearestCreature enemy-ship leg (HORDE ?
 -- NPC_ORGRIMS_HAMMER : NPC_THE_SKYBREAKER, 200.0f ->
 -- SPELL_TELEPORT_PLAYERS_ON_VICTORY + achievement/reputation
 -- cross-creature casts) rides the same instance/transport machine,
 -- and the ship entries have no Lua registration at all —
 -- documented-only.
--- FRAME TRIAGE (tick 222): the :713/:717 JustDied DISENGAGE legs (other
--- ship via FindNearestCreature 200yd + me) and the :902/:906/:1155/:1159
--- DoAction(ACTION_ENEMY_GUNSHIP_TALK) ENGAGE legs stay out as live code.
--- ENGAGE sender is instance_icecrown_citadel.cpp:1433 ProcessEvent(
+-- FRAME TRIAGE (tick 222, re-verified tick 267): the :713/:717 JustDied
+-- DISENGAGE legs (other ship via FindNearestCreature 200yd + me) and the
+-- :902/:906/:1155/:1159 DoAction(ACTION_ENEMY_GUNSHIP_TALK) ENGAGE legs
+-- stay out as live code. The SetBossState call itself IS bridged now
+-- (creature:SetBossState, lua_creature_events.go:5917, the tick-266
+-- falric/marwyn precedent) — the blockers are the senders, not the
+-- frame call. ENGAGE (:899/:1152 IN_PROGRESS) sender is
+-- instance_icecrown_citadel.cpp:1433 ProcessEvent(
 -- EVENT_ENEMY_GUNSHIP_COMBAT) — no instance-script bridge — so an ev38
--- receipt on the captains would never fire. DISENGAGE rides the ship
--- pseudo-death (DamageTaken calls JustDied at lethal damage, then caps
--- damage at health-1 so the ship never actually dies), driven by cannon
--- SpellScript damage (no-SpellScript bridge); isVictory needs
--- GetTransport entry (no bridge), so even the DONE/FAIL leg is
--- undecidable. FindNearestCreature itself IS bridged; the blockers are
--- the senders, not the frame call.
+-- receipt on the captains would never fire. DONE/FAIL (:710, npc_gunship
+-- JustDied, ship entries NPC_THE_SKYBREAKER 37540 / NPC_ORGRIMS_HAMMER
+-- 37215) rides the ship pseudo-death (DamageTaken calls JustDied at
+-- lethal damage, then caps damage at health-1 so the ship never actually
+-- dies), driven by cannon SpellScript damage (no-SpellScript bridge);
+-- isVictory needs GetTransport entry (no bridge — verified grep of the
+-- creature surface this tick), so even the DONE/FAIL leg is undecidable.
+-- FindNearestCreature itself IS bridged. Captains carry no state legs:
+-- ScriptedAI (not BossAI), no Reset override, no base call in
+-- JustEngagedWith (:867/:1121) — no engage/reset legs exist to port.
 -- Captains' intro Talk chains (:989-1009 / :1243-1266) + OnGossipSelect
 -- (:956-967) — intro Talk machine, out. EVENT_KEEP_PLAYER_IN_COMBAT
 -- (instance DoCastSpellOnPlayers — no instance bridge),
