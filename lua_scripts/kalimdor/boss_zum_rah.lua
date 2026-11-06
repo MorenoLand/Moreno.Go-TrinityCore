@@ -41,8 +41,13 @@
 -- Unmodeled (documented-only, no bridges):
 -- - Reset: only the at_zumrah areatrigger leg stays out (zulfarrak.cpp);
 --   the SetFaction(FACTION_FRIENDLY) restore is PORTED in onReset.
--- - JustDied: instance->SetData(DATA_ZUM_RAH, DONE) — no
---   instance-data bridge (standing); BossAI _JustDied ctor leg blocked.
+-- - JustDied: instance->SetData(DATA_ZUM_RAH, DONE) is a DEAD WRITE in
+--   C++ itself (tick 279): the instance SetData switch handles only
+--   EVENT_PYRAMID=1, so type DATA_ZUM_RAH=0 falls through; the instance
+--   has no SetBossState override and nothing reads GetBossState(0) in
+--   ZF. The derived JustDied never calls _JustDied and the Reset /
+--   JustEngagedWith overrides never call base — no boss-state leg
+--   exists to port; correctly absent, not blocked.
 
 local ENTRY = 7271
 
