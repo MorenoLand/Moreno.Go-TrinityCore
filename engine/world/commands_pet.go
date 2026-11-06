@@ -59,17 +59,31 @@ func (s *session) handleCmdPet(ctx context.Context, args []string) {
 	}
 }
 
-// petTargetOrSelf mirrors getSelectedPlayerOrSelf (Chat.cpp:344-360) for the
-// pet commands (cs_pet.cpp:38-48): the selected online player, else the
-// invoker. An unresolvable selection falls back to the invoker silently,
-// never nil in-session (same bug class the modify port fixed in dc89b37).
-// The C++ also accepts a selected pet unit directly; pet units have no Go
-// bridge (documented gap).
+// petTargetOrSelf mirrors GetSelectedPlayerPetOrOwn (cs_pet.cpp:38-48):
+// the selected player's pet, a selected pet unit's owner's pet, or the
+// invoker's own pet when nothing is selected. A selected non-pet creature
+// returns nullptr in C++ (LANG_SELECT_PLAYER_OR_PET), so it errors here
+// instead of falling back to the invoker's pet; a selection that resolves
+// to no unit at all (gameobject, stale GUID) falls through to the
+// invoker's pet, like getSelectedUnit returning null. Pet units resolve
+// via motionIsPet (creature_auras.go), the IsPet twin, and their owner via
+// the motion's OwnerGUID.
 func (s *session) petTargetOrSelf() (*session, bool) {
 	target := s
 	if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
 			target = ts
+		} else if motion := s.castCommandSelectedCreature(); motion != nil {
+			if !motionIsPet(motion) {
+				s.sendSysMessage("Select a player or their pet.") // LANG_SELECT_PLAYER_OR_PET 11016
+				return nil, false
+			}
+			owner := s.server.playerSessionForGUID(motion.OwnerGUID)
+			if owner == nil || owner.player == nil {
+				s.sendSysMessage("Select a player or their pet.") // LANG_SELECT_PLAYER_OR_PET 11016
+				return nil, false
+			}
+			target = owner
 		}
 	}
 	if target.player == nil {
@@ -101,7 +115,9 @@ func (s *session) petCommandMotion(ts *session) *creatureMotion {
 // invoker level - 5). C++ has no class gate here (unlike the hunter-only
 // tame spell), and InitTalentForLevel stays unmodeled; the playerLevel < 5
 // uint8 underflow wrap in the C++ formula is avoided (Go floors at the
-// invoker's level).
+// invoker's level). The level-1-then-level visual (SetUInt32Value(level-1),
+// AddToMap, SetUInt32Value(level), cs_pet.cpp:110-116) stays unmodeled:
+// createTamedPetFromEntry spawns at the final level.
 func (s *session) handlePetCreateCommand(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandPetCreate) {
 		return
@@ -178,11 +194,81 @@ func (s *session) petCommandLearnTarget() (*session, uint32, *creatureMotion, bo
 	return ts, ts.player.PetNumber, s.petCommandMotion(ts), true
 }
 
-// handlePetLearnCommand mirrors HandlePetLearnCommand (cs_pet.cpp:123-158)
-// for the supported legs: the spell id is parsed id-only (the C++ also
-// accepts |Hspell| links; the learn port documents the same gap), spell
-// existence is checked against the DBC, and the spell is taught via the
-// pet_spell table with SMSG_PET_LEARNED_SPELL, mirroring
+// petExtractSpellID mirrors ChatHandler::extractSpellIdFromLink
+// (Chat.cpp:530-577) over the multi-type extractKeyFromLink (Chat.cpp:398-470):
+// a plain token parses with atoul (cAtoi: leading digits, "12abc" -> 12,
+// "0x10" -> 0 — NOT the base-0 framework parse the learn arm uses), and a
+// |color|Htype:key|h[name]|h|r link resolves by type: Hspell/Henchant/Htrade
+// return the key, Htalent returns Talent.dbc SpellRank[rank] (rank from the
+// colon param, 0 when absent — the comma form never yields a param, so it
+// resolves rank 0 exactly like the C++ strtok walk; rank >= MAX_TALENT_RANK
+// (5) or an unknown talent returns 0), Hglyph returns GlyphProperties.dbc
+// SpellID for the prop id (unknown prop returns 0). An unknown link type
+// returns 0: the C++ sends LANG_WRONG_LINK_TYPE (511) and a null key, and
+// the tree convention (modify4/titles ports) is the silent null — the 511
+// text is unseeded, not guessed.
+func (s *session) petExtractSpellID(arg string) uint32 {
+	if !strings.HasPrefix(arg, "|") {
+		return uint32(cAtoi(arg))
+	}
+	segs := strings.Split(arg, "|")
+	linkIdx := 1
+	if len(segs) > 1 && strings.HasPrefix(segs[1], "c") {
+		linkIdx = 2
+	}
+	if linkIdx >= len(segs) {
+		return 0
+	}
+	parts := strings.SplitN(segs[linkIdx], ":", 2)
+	if len(parts) < 2 {
+		return 0
+	}
+	typ, keys := parts[0], parts[1]
+	keyParts := strings.Split(keys, ":")
+	id := uint32(cAtoi(keyParts[0]))
+	param1 := ""
+	if len(keyParts) > 1 {
+		param1 = keyParts[1]
+	}
+	switch typ {
+	case "Hspell", "Henchant", "Htrade":
+		return id
+	case "Htalent":
+		if s.server == nil || s.server.Data == nil {
+			return 0
+		}
+		rank := 0
+		if param1 != "" {
+			rank = cAtoi(param1)
+		}
+		if rank < 0 || rank >= 5 {
+			return 0
+		}
+		entry, found, err := s.server.Data.Talent(id)
+		if err != nil || !found {
+			return 0
+		}
+		return entry.SpellRank[rank]
+	case "Hglyph":
+		if s.server == nil || s.server.Data == nil {
+			return 0
+		}
+		entry, found, err := s.server.Data.GlyphProperties(uint32(cAtoi(param1)))
+		if err != nil || !found {
+			return 0
+		}
+		return entry.SpellID
+	default:
+		return 0
+	}
+}
+
+// handlePetLearnCommand mirrors HandlePetLearnCommand (cs_pet.cpp:123-158):
+// the spell id parses with extractSpellIdFromLink (atoul + link types, see
+// petExtractSpellID); a zero id or an unknown spell returns false and the
+// framework prints the leaf help — the syntax line here. The pet must
+// already know the spell for the "already has" message, and the spell is
+// taught via the pet_spell table with SMSG_PET_LEARNED_SPELL, mirroring
 // Pet::learnSpell. SpellMgr::IsSpellValid has no Go model, so DBC-loaded
 // spells are assumed structurally valid (same documented gap as the
 // cast/learn ports, so the LANG_COMMAND_SPELL_BROKEN branch is
@@ -200,8 +286,13 @@ func (s *session) handlePetLearnCommand(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
-	spellID, ok := s.learnParseSpellID(args[0])
-	if !ok {
+	spellID := s.petExtractSpellID(args[0])
+	if spellID == 0 || s.server == nil || s.server.Data == nil {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if _, found, err := s.server.Data.Spell(spellID); err != nil || !found {
+		s.sendSysMessage(syntax)
 		return
 	}
 	if ts.petKnowsSpell(ctx, motion, spellID) {
@@ -225,7 +316,10 @@ func (s *session) handlePetLearnCommand(ctx context.Context, args []string) {
 }
 
 // handlePetUnlearnCommand mirrors HandlePetUnlearnCommand
-// (cs_pet.cpp:160-182): a known spell is dropped from the pet_spell table
+// (cs_pet.cpp:160-182): the id parses with extractSpellIdFromLink (see
+// petExtractSpellID) and — unlike learn — is never checked against the
+// spell DBC: an unknown id simply reports "Pet doesn't have that spell"
+// via the HasSpell gate. A known spell is dropped from the pet_spell table
 // with SMSG_PET_UNLEARNED_SPELL, mirroring Pet::removeSpell.
 func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) {
 	const syntax = "Syntax: .pet unlearn <spellid>"
@@ -240,10 +334,7 @@ func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
-	spellID, ok := s.learnParseSpellID(args[0])
-	if !ok {
-		return
-	}
+	spellID := s.petExtractSpellID(args[0])
 	if !ts.petKnowsSpell(ctx, motion, spellID) {
 		s.sendSysMessage("Pet doesn't have that spell")
 		return
@@ -283,11 +374,13 @@ func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) {
 
 // handlePetLevelCommand mirrors HandlePetLevelCommand (cs_pet.cpp:184-211):
 // the delta defaults to ownerLevel - petLevel when no argument is given,
-// is bounded by +-STRONG_MAX_LEVEL (80) with LANG_BAD_VALUE (115) on
+// is bounded by +-STRONG_MAX_LEVEL (255) with LANG_BAD_VALUE (115) on
 // violation, and the result is clamped to [1, ownerLevel]. The level change
 // itself rides applyPetLevel (pet_progression.go), mirroring
-// Pet::GivePetLevel (XP reset to 0, next-level XP from the XP curve).
-// InitTalentForLevel has no Go bridge (documented gap, see commands.go).
+// Pet::GivePetLevel (XP reset to 0, next-level XP from the XP curve) —
+// including its same-level no-op (Pet.cpp:759-762), so a clamped
+// no-change delta returns silently. InitTalentForLevel has no Go bridge
+// (documented gap, see commands.go).
 func (s *session) handlePetLevelCommand(ctx context.Context, args []string) {
 	const syntax = "Syntax: .pet level [<leveldelta>]"
 	if s.miscDeny(ctx, permissionCommandPetLevel) {

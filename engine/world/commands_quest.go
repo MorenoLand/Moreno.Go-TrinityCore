@@ -50,13 +50,23 @@ const questStatusNoneValue = 0
 
 // parseQuestLink mirrors the extractKeyFromLink("Hquest") + atoul pattern in
 // the quest arms (cs_quest.cpp:73): a plain entry id or a
-// |Hquest:quest_id:quest_level|h[name]|h|r shift-click link.
-// extractKeyFromLink only returns nullptr on empty text (impossible here —
-// every arm gates on len(args)) or a totally malformed link; anything else,
-// including "0" and "abc", reaches atoul and yields 0, so a zero entry flows
-// to the template gate and its NOTFOUND message instead of failing silently.
-func parseQuestLink(arg string) uint32 {
-	if i := strings.Index(arg, "Hquest:"); i >= 0 {
+// |Hquest:quest_id:quest_level|h[name]|h|r shift-click link. Only a token
+// starting with '|' is link-parsed (Chat.cpp:362: text[0] != '|' returns the
+// first token verbatim, so a bare "Hquest:123" reaches atoul and yields 0);
+// a '|' token without an Hquest link is a wrong link type — the C++ sends
+// LANG_WRONG_LINK_TYPE (511) and the handler returns false, so ok=false and
+// the caller prints the arm syntax (the framework-help equivalent; the 511
+// text is unseeded in-tree, not guessed). extractKeyFromLink only returns
+// nullptr on empty text (impossible here — every arm gates on len(args)) or
+// a totally malformed link; anything else, including "0" and "abc", reaches
+// atoul and yields 0, so a zero entry flows to the template gate and its
+// NOTFOUND message instead of failing silently.
+func parseQuestLink(arg string) (uint32, bool) {
+	if strings.HasPrefix(arg, "|") {
+		i := strings.Index(arg, "Hquest:")
+		if i < 0 {
+			return 0, false
+		}
 		rest := arg[i+len("Hquest:"):]
 		num := ""
 		for _, r := range rest {
@@ -66,11 +76,11 @@ func parseQuestLink(arg string) uint32 {
 			num += string(r)
 		}
 		if num == "" {
-			return 0 // atoul of an empty key is 0 -> template gate reports NOTFOUND
+			return 0, true // atoul of an empty key is 0 -> template gate reports NOTFOUND
 		}
-		return uint32(cAtoi(num))
+		return uint32(cAtoi(num)), true
 	}
-	return uint32(cAtoi(arg)) // atoul: "0"/"abc" -> 0 -> template gate
+	return uint32(cAtoi(arg)), true // atoul: "0"/"abc" -> 0 -> template gate
 }
 
 // questTemplateGate mirrors sObjectMgr->GetQuestTemplate: the entry must
@@ -174,7 +184,11 @@ func (s *session) handleQuestAdd(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	entry := parseQuestLink(args[0])
+	entry, ok := parseQuestLink(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .quest add <entry>")
+		return
+	}
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
@@ -212,7 +226,11 @@ func (s *session) handleQuestRemove(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	entry := parseQuestLink(args[0])
+	entry, ok := parseQuestLink(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .quest remove <entry>")
+		return
+	}
 	if !s.questTemplateGate(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
@@ -242,7 +260,11 @@ func (s *session) handleQuestComplete(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	entry := parseQuestLink(args[0])
+	entry, ok := parseQuestLink(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .quest complete <entry>")
+		return
+	}
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
@@ -398,7 +420,11 @@ func (s *session) handleQuestReward(ctx context.Context, args []string) {
 	if target == nil {
 		return
 	}
-	entry := parseQuestLink(args[0])
+	entry, ok := parseQuestLink(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .quest reward <entry>")
+		return
+	}
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
 		return
