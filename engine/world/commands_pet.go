@@ -337,6 +337,7 @@ func (s *session) handlePetLevelCommand(ctx context.Context, args []string) {
 	}
 }
 
-// strongMaxLevel mirrors STRONG_MAX_LEVEL (SharedDefines.h), the delta
-// bound in HandlePetLevelCommand (cs_pet.cpp:196).
-const strongMaxLevel = 80
+// strongMaxLevel mirrors STRONG_MAX_LEVEL (DBCEnums.h:53), the delta
+// bound in HandlePetLevelCommand (cs_pet.cpp:196) and the absolute clamp in
+// HandleLevelUpCommand (cs_character.cpp:740).
+const strongMaxLevel = 255

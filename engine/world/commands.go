@@ -2889,6 +2889,33 @@ func parseCommandUint32(s string) (uint32, bool) {
 	return uint32(v), true
 }
 
+// parseCppBase0Int mirrors StringTo<T> with base 0 for signed integrals
+// (StringConvert.h:43-69): a 0x/0b prefix (case-insensitive) selects hex or
+// binary, anything else is decimal, never octal; the whole string must be
+// consumed. A leading '-' is accepted by from_chars, a leading '+' is
+// rejected, and "-0x10" fails (the prefix check runs before the sign, so the
+// "0x" is not at the front). Callers range-check to their C++ type.
+func parseCppBase0Int(s string) (int64, bool) {
+	if s == "" || strings.HasPrefix(s, "+") {
+		return 0, false
+	}
+	base, digits := 10, s
+	switch {
+	case len(s) > 2 && strings.EqualFold(s[:2], "0x"):
+		base, digits = 16, s[2:]
+	case len(s) > 2 && strings.EqualFold(s[:2], "0b"):
+		base, digits = 2, s[2:]
+	}
+	if digits == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(digits, base, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 func ahbotUint32(s string) bool {
 	_, ok := parseCommandUint32(s)
 	return ok
@@ -3118,9 +3145,10 @@ func (s *session) handleCmdCharacter(ctx context.Context, args []string) {
 
 // characterTarget mirrors the Trinity PlayerIdentifier resolve used by the
 // character command handlers: a connected session wins, otherwise the
-// character row supplies the guid. With no name the handler's own player is
-// used (the C++ FromTarget unit-selection has no command bridge, so
-// selection targeting is not modeled).
+// character row supplies the guid. With no name the C++ arms use
+// PlayerIdentifier::FromTargetOrSelf (selection if it is a connected player,
+// else the handler's own player); the FromTarget arms use
+// resolveCharacterTargetFromTarget instead, which fails with no selection.
 type characterTarget struct {
 	name   string
 	guid   uint64
@@ -3134,6 +3162,16 @@ type characterTarget struct {
 func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (characterTarget, []string, bool) {
 	var t characterTarget
 	if len(args) == 0 {
+		// PlayerIdentifier::FromTargetOrSelf (ChatCommandTags.cpp): the
+		// selected connected player wins; anything else falls back to self.
+		if s.selection != 0 && s.server != nil {
+			if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+				t.online = ts
+				t.guid = ts.playerGUID
+				t.name = ts.player.Name
+				return t, args, true
+			}
+		}
 		if s.player == nil {
 			s.sendSysMessage("Player not found.")
 			return t, args, false
@@ -3149,22 +3187,23 @@ func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (ch
 	var name string
 	if strings.HasPrefix(args[0], "|") {
 		name = normalizePlayerName(extractPlayerNameFromLink(args[0]))
-	} else if isAllDigits(args[0]) {
-		if guid64, err := strconv.ParseUint(args[0], 10, 32); err == nil && guid64 != 0 {
-			if online := s.server.playerSessionForGUID(guid64); online != nil && online.player != nil {
-				t.online = online
-				t.guid = online.playerGUID
-				t.name = online.player.Name
+	} else if guidVal, ok := parseCppBase0Int(args[0]); ok && guidVal > 0 && guidVal <= math.MaxUint32 {
+		// Base-0 GUID form (StringTo<uint32> base 0): "0x10" is GUID 16,
+		// "12abc" falls through to the name branch below.
+		guid64 := uint64(guidVal)
+		if online := s.server.playerSessionForGUID(guid64); online != nil && online.player != nil {
+			t.online = online
+			t.guid = online.playerGUID
+			t.name = online.player.Name
+			return t, args[1:], true
+		}
+		chars := s.server.CharactersStore
+		if chars != nil && chars.DB != nil {
+			var dbName string
+			if err := chars.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid64).Scan(&dbName); err == nil && dbName != "" {
+				t.guid = guid64
+				t.name = dbName
 				return t, args[1:], true
-			}
-			chars := s.server.CharactersStore
-			if chars != nil && chars.DB != nil {
-				var dbName string
-				if err := chars.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid64).Scan(&dbName); err == nil && dbName != "" {
-					t.guid = guid64
-					t.name = dbName
-					return t, args[1:], true
-				}
 			}
 		}
 		s.sendSysMessage("Player not found.")
@@ -3197,6 +3236,26 @@ func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (ch
 	return t, args[1:], true
 }
 
+// resolveCharacterTargetFromTarget mirrors the C++ FromTarget arms
+// (customize/changefaction/changerace/rename/changeaccount,
+// cs_character.cpp:292/397/421/445/469): with no name argument the target is
+// the selected connected player only — Player::GetSelectedPlayer returns
+// null with no selection or a non-player selection, so the handler fails
+// instead of falling back to self. With a name argument the shared
+// resolveCharacterTarget forms apply.
+func (s *session) resolveCharacterTargetFromTarget(ctx context.Context, args []string, syntax string) (characterTarget, []string, bool) {
+	if len(args) == 0 {
+		if s.selection != 0 && s.server != nil {
+			if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+				return characterTarget{online: ts, guid: ts.playerGUID, name: ts.player.Name}, args, true
+			}
+		}
+		s.sendSysMessage(syntax)
+		return characterTarget{}, args, false
+	}
+	return s.resolveCharacterTarget(ctx, args)
+}
+
 // characterArmBlocked RBAC-gates a documented-only character arm and reports
 // the missing bridge honestly instead of stubbing the behavior.
 func (s *session) characterArmBlocked(perm uint32, reason string) {
@@ -3208,12 +3267,13 @@ func (s *session) characterArmBlocked(perm uint32, reason string) {
 // (cs_character.cpp:394/418/442): online targets get the at-login flag set on
 // the live player, offline targets get CHAR_UPD_ADD_AT_LOGIN_FLAG.
 func (s *session) handleCharacterAtLoginFlag(ctx context.Context, args []string, flag uint64, what string) {
-	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	syntax := "Syntax: .character " + strings.ReplaceAll(what, " ", "") + " [$player]"
+	t, rest, ok := s.resolveCharacterTargetFromTarget(ctx, args, syntax)
 	if !ok {
 		return
 	}
 	if len(rest) != 0 {
-		s.sendSysMessage("Syntax: .character " + strings.ReplaceAll(what, " ", "") + " [$player]")
+		s.sendSysMessage(syntax)
 		return
 	}
 	if t.online != nil && t.online.player != nil {
@@ -3232,8 +3292,7 @@ func (s *session) handleCharacterAtLoginFlag(ctx context.Context, args []string,
 
 // handleCharacterLevel mirrors HandleLevelUpCommand (cs_character.cpp:740):
 // the level argument is a delta added to the current level, clamped to
-// 1..defaultMaxPlayerLevel (the C++ clamps to STRONG_MAX_LEVEL; the Go engine
-// models levels only up to defaultMaxPlayerLevel). Online targets are
+// 1..STRONG_MAX_LEVEL (255, DBCEnums.h:53). Online targets are
 // leveled in place with XP reset; offline targets get CHAR_UPD_LEVEL.
 // InitTalentForLevel has no Go bridge: talents are left untouched.
 func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
@@ -3245,11 +3304,13 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .character level [$player] <level-delta>")
 		return
 	}
-	delta, err := strconv.ParseInt(rest[0], 10, 16)
-	if err != nil {
+	// C++ level arg is int16 parsed base-0 (StringTo<int16>, base 0).
+	deltaVal, ok := parseCppBase0Int(rest[0])
+	if !ok || deltaVal < math.MinInt16 || deltaVal > math.MaxInt16 {
 		s.sendSysMessage("Syntax: .character level [$player] <level-delta>")
 		return
 	}
+	delta := int(deltaVal)
 	oldLevel := 0
 	if t.online != nil && t.online.player != nil {
 		oldLevel = int(t.online.player.Level)
@@ -3266,12 +3327,12 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 		}
 		oldLevel = int(lvl)
 	}
-	newLevel := oldLevel + int(delta)
+	newLevel := oldLevel + delta
 	if newLevel < 1 {
 		newLevel = 1
 	}
-	if newLevel > int(defaultMaxPlayerLevel) {
-		newLevel = int(defaultMaxPlayerLevel)
+	if newLevel > strongMaxLevel {
+		newLevel = strongMaxLevel
 	}
 	if t.online != nil && t.online.player != nil {
 		t.online.player.Level = uint8(newLevel)
@@ -3316,7 +3377,8 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 // RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME exemption have no Go
 // bridge: only name normalization and the duplicate-name DB check apply.
 func (s *session) handleCharacterRename(ctx context.Context, args []string) {
-	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	const syntax = "Syntax: .character rename [$player] [$newName]"
+	t, rest, ok := s.resolveCharacterTargetFromTarget(ctx, args, syntax)
 	if !ok {
 		return
 	}
@@ -3337,6 +3399,12 @@ func (s *session) handleCharacterRename(ctx context.Context, args []string) {
 		}
 		_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ADD_AT_LOGIN_FLAG"), uint16(atLoginRename), t.guid)
 		s.sendSysMessage(fmt.Sprintf("Set rename flag for %s (GUID: %d).", t.name, t.guid))
+		return
+	}
+	// ChatCommand.h:112 — the entire string must be consumed; a trailing
+	// token fails the command.
+	if len(rest) > 1 {
+		s.sendSysMessage(syntax)
 		return
 	}
 	newName := normalizePlayerName(rest[0])
@@ -3400,18 +3468,30 @@ func (s *session) characterTargetLowerSecurity(ctx context.Context, t characterT
 // CONFIG_CHARACTERS_PER_REALM. The sCharacterCache account-id update has no
 // Go bridge: the row read above is the source of truth.
 func (s *session) handleCharacterChangeAccount(ctx context.Context, args []string) {
-	t, rest, ok := s.resolveCharacterTarget(ctx, args)
+	const syntax = "Syntax: .character changeaccount [$player] $account"
+	t, rest, ok := s.resolveCharacterTargetFromTarget(ctx, args, syntax)
 	if !ok {
 		return
 	}
 	if len(rest) != 1 {
-		s.sendSysMessage("Syntax: .character changeaccount [$player] $account")
+		s.sendSysMessage(syntax)
 		return
 	}
 	accountName := rest[0]
 	newAccountID := s.accountIDByName(ctx, accountName)
 	if newAccountID == 0 {
-		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", accountName))
+		// AccountIdentifier::TryConsume (ChatCommandTags.cpp:62-83) tries
+		// the name first, then a base-10 numeric account id with a GetName
+		// existence check.
+		if id64, err := strconv.ParseUint(accountName, 10, 32); err == nil {
+			if name := s.accountNameByID(ctx, uint32(id64)); name != "" {
+				newAccountID = uint32(id64)
+				accountName = name
+			}
+		}
+	}
+	if newAccountID == 0 {
+		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", rest[0]))
 		return
 	}
 	chars := s.server.CharactersStore
@@ -3441,9 +3521,9 @@ func (s *session) handleCharacterChangeAccount(ctx context.Context, args []strin
 
 // handleCharacterReputation mirrors HandleCharacterReputationCommand
 // (cs_character.cpp:522) for connected targets: one line per known faction
-// with rank name and standing. FactionEntry localized names have no Go DBC
-// bridge, so the faction id is shown; offline targets are rejected exactly
-// like the C++ IsConnected check.
+// with rank name and standing. The faction name resolves via the Faction DBC
+// (enUS, field 23); the session-locale name has no Go bridge (D7). Offline
+// targets are rejected exactly like the C++ IsConnected check.
 func (s *session) handleCharacterReputation(ctx context.Context, args []string) {
 	t, rest, ok := s.resolveCharacterTarget(ctx, args)
 	if !ok {
@@ -3461,7 +3541,21 @@ func (s *session) handleCharacterReputation(ctx context.Context, args []string) 
 	for _, rep := range t.online.player.Reputations {
 		standing := int64(rep.Base) + int64(rep.Standing)
 		rank := reputationRank(standing)
-		line := fmt.Sprintf("%d - %s (%d)", rep.FactionID, rankNames[rank], standing)
+		// FactionEntry.Name is the enUS string at field 23
+		// (DBCStructure.h:671); a missing entry prints "#Not found#" like
+		// the C++ (cs_character.cpp:545). The link + locale-word shape
+		// follows handleLookupFaction.
+		factionName := "#Not found#"
+		if s.server != nil && s.server.Data != nil {
+			if file, fileErr := s.server.Data.File("Faction"); fileErr == nil && file != nil {
+				if record, ok := file.Find(rep.FactionID); ok {
+					if name, nerr := record.String(23); nerr == nil && name != "" {
+						factionName = name
+					}
+				}
+			}
+		}
+		line := fmt.Sprintf("%d - |cffffffff|Hfaction:%d|h[%s enUS]|h|r %s (%d)", rep.FactionID, rep.FactionID, factionName, rankNames[rank], standing)
 		if rep.Flags&factionFlagVisible != 0 {
 			line += " visible"
 		}
@@ -3498,11 +3592,40 @@ type deletedCharacterInfo struct {
 // delete|list|restore|old" (cs_character.cpp characterDeletedCommandTable),
 // gating each nested arm on its RBAC permission.
 func (s *session) handleCharacterDeleted(ctx context.Context, args []string) {
+	const syntax = "Syntax: .character deleted delete|list|restore|old ..."
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .character deleted delete|list|restore|old ...")
+		s.sendSysMessage(syntax)
 		return
 	}
+	// C++ TryExecuteCommand descends token-by-token through every subtable
+	// with prefix matching (ChatCommand.cpp:246); resolve() stops after the
+	// first subcommand token, so the nested token is canonicalized here
+	// (exact-name priority, ambiguity lists the matches).
 	sub := strings.ToLower(args[0])
+	matches := make([]string, 0, 2)
+	for _, name := range []string{"delete", "list", "restore", "old"} {
+		if strings.HasPrefix(name, sub) {
+			matches = append(matches, name)
+		}
+	}
+	for _, candidate := range matches {
+		if candidate == sub {
+			matches = []string{candidate}
+			break
+		}
+	}
+	if len(matches) == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	if len(matches) > 1 {
+		s.sendSysMessage("There are multiple commands matching '" + sub + "'. Did you mean:")
+		for _, candidate := range matches {
+			s.sendSysMessage(candidate)
+		}
+		return
+	}
+	sub = matches[0]
 	rest := args[1:]
 	var perm uint32
 	switch sub {
@@ -3589,9 +3712,10 @@ func isNumericString(str string) bool {
 }
 
 // sendDeletedCharacterList mirrors HandleCharacterDeletedListHelper
-// (cs_character.cpp:167): one line per deleted character.
+// (cs_character.cpp:167): one line per deleted character. The bars/header
+// print only for the console in C++ (!handler->GetSession()), so the in-game
+// path prints just the lines.
 func (s *session) sendDeletedCharacterList(found []deletedCharacterInfo) {
-	s.sendSysMessage("==== Deleted characters ====")
 	for _, info := range found {
 		accountName := info.accountName
 		if accountName == "" {
@@ -3600,12 +3724,18 @@ func (s *session) sendDeletedCharacterList(found []deletedCharacterInfo) {
 		dateStr := time.Unix(info.deleteDate, 0).UTC().Format("2006-01-02 15:04:05")
 		s.sendSysMessage(fmt.Sprintf("%d - %s [%s (%d)] deleted %s", info.guid, info.name, accountName, info.accountID, dateStr))
 	}
-	s.sendSysMessage("===========================")
 }
 
 // handleCharacterDeletedList mirrors HandleCharacterDeletedListCommand
 // (cs_character.cpp:581).
 func (s *session) handleCharacterDeletedList(ctx context.Context, args []string) {
+	// The needle is Optional in C++ (HandleCharacterDeletedListCommand,
+	// cs_character.cpp:581), but a second token fails the
+	// whole-string-consumed check (ChatCommand.h:112).
+	if len(args) > 1 {
+		s.sendSysMessage("Syntax: .character deleted list [$needle]")
+		return
+	}
 	needle := ""
 	if len(args) > 0 {
 		needle = args[0]
@@ -3624,7 +3754,7 @@ func (s *session) handleCharacterDeletedList(ctx context.Context, args []string)
 // account no longer exists, whose account is full (>= 10 characters, the C++
 // hardcoded cap), or whose name is taken by a live character.
 func (s *session) handleCharacterDeletedRestore(ctx context.Context, args []string) {
-	if len(args) == 0 {
+	if len(args) == 0 || len(args) > 3 {
 		s.sendSysMessage("Syntax: .character deleted restore $needle [$newName [$newAccount]]")
 		return
 	}
@@ -3647,7 +3777,9 @@ func (s *session) handleCharacterDeletedRestore(ctx context.Context, args []stri
 		return
 	}
 	info := found[0]
-	info.name = normalizePlayerName(args[1])
+	// The C++ assigns the new name verbatim (cs_character.cpp:614-655);
+	// normalizePlayerName here would restore "bob" as "Bob".
+	info.name = args[1]
 	if len(args) > 2 {
 		newAccountID := s.accountIDByName(ctx, args[2])
 		if newAccountID == 0 {
@@ -3686,7 +3818,7 @@ func (s *session) restoreDeletedCharacter(ctx context.Context, info deletedChara
 // (cs_character.cpp:672): every match is permanently wiped via the
 // Player::DeleteFromDB path (mail return sweep + owned-state cleanup).
 func (s *session) handleCharacterDeletedDelete(ctx context.Context, args []string) {
-	if len(args) == 0 {
+	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .character deleted delete $needle")
 		return
 	}
@@ -3711,23 +3843,35 @@ func (s *session) handleCharacterDeletedOld(ctx context.Context, args []string) 
 		s.sendSysMessage("Syntax: .character deleted old $days")
 		return
 	}
-	days, err := strconv.Atoi(args[0])
-	if err != nil || days <= 0 {
+	// C++ days is Optional<uint16> parsed base-0 (StringTo<uint16>, base 0);
+	// an explicit 0 is valid (DeleteOldCharacters(0) wipes every deleted
+	// character — the keep-days config only gates the no-arg form, D3).
+	daysVal, ok := parseCppBase0Int(args[0])
+	if !ok || daysVal < 0 || daysVal > math.MaxUint16 {
 		s.sendSysMessage("Syntax: .character deleted old $days")
 		return
 	}
+	days := int(daysVal)
 	cutoff := time.Now().Unix() - int64(days)*86400
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT guid FROM characters WHERE deleteDate IS NOT NULL AND deleteDate < ?", cutoff)
+	// CHAR_SEL_CHAR_OLD_CHARS selects the guid AND the owning account, like
+	// Player::DeleteOldCharacters (Player.cpp:4585-4600) — the account feeds
+	// the doomed-mail rehoming in DeleteFromDB instead of 0.
+	rows, err := s.server.CharactersStore.QueryStatement(ctx, database.StatementID("CHAR_SEL_CHAR_OLD_CHARS"), cutoff)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var guid uint64
-		if rows.Scan(&guid) != nil {
+		var account sql.NullInt64
+		if rows.Scan(&guid, &account) != nil {
 			continue
 		}
-		s.deleteCharacterFromDB(ctx, guid, 0)
+		var accountID uint32
+		if account.Valid {
+			accountID = uint32(account.Int64)
+		}
+		s.deleteCharacterFromDB(ctx, guid, accountID)
 	}
 	s.sendSysMessage(fmt.Sprintf("Deleted characters older than %d days.", days))
 }

@@ -153,8 +153,14 @@ func (s *session) handleCharacterTitles(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandCharacterTitles) {
 		return
 	}
-	t, _, ok := s.resolveCharacterTarget(ctx, args)
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
 	if !ok {
+		return
+	}
+	// The C++ takes only Optional<PlayerIdentifier>; a trailing token fails
+	// the whole-string-consumed check (ChatCommand.h:112).
+	if len(rest) != 0 {
+		s.sendSysMessage("Syntax: .character titles [$player]")
 		return
 	}
 	var target *session
@@ -171,14 +177,13 @@ func (s *session) handleCharacterTitles(ctx context.Context, args []string) {
 	if err != nil {
 		return
 	}
-	empty := true
-	for i := 0; i < file.Records(); i++ {
-		rec, rerr := file.Record(i)
-		if rerr != nil {
-			continue
-		}
-		id, ierr := rec.Uint32(0)
-		if ierr != nil || id == 0 {
+	// C++ iterates id < GetNumRows() with LookupEntry(id)
+	// (cs_character.cpp:255-258), so a CharTitles entry whose ID is at or
+	// above the row count is never listed; the loop below mirrors that
+	// instead of walking every record.
+	for id := uint32(0); id < uint32(file.Records()); id++ {
+		rec, ok := file.Find(id)
+		if !ok {
 			continue
 		}
 		maskID, merr := rec.Uint32(36)
@@ -191,15 +196,21 @@ func (s *session) handleCharacterTitles(ctx context.Context, args []string) {
 		}
 		name, _ := rec.String(2)
 		name1, _ := rec.String(19)
+		// The C++ falls back to the default locale when the session-locale
+		// name is empty, then skips a still-empty name (cs_character.cpp:
+		// 261-265); Go reads the enUS fields only, so an empty name skips.
+		title := titleName(target, name, name1)
+		if title == "" {
+			continue
+		}
 		active := ""
 		if target.player.ChosenTitle == maskID {
 			active = " (active)"
 		}
-		s.sendSysMessage(fmt.Sprintf("%d (idx:%d) - [%s]%s", id, maskID, titleName(target, name, name1), active)) // LANG_TITLE_LIST_CHAT
-		empty = false
-	}
-	if empty {
-		s.sendSysMessage("No titles known.")
+		// LANG_TITLE_LIST_CHAT shape: id (idx:mask) - [name locale] Known
+		// + active marker; the locale word is enUS (no session-locale
+		// bridge, D7) and "Known" is the inlined LANG_KNOWN text.
+		s.sendSysMessage(fmt.Sprintf("%d (idx:%d) - [%s enUS] Known%s", id, maskID, title, active))
 	}
 }
 
