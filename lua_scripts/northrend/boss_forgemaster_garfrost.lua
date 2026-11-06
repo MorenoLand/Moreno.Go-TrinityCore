@@ -50,13 +50,22 @@
 -- only in phase 3; no phase-1 casts are fabricated for phase-2/3 arms.
 --
 -- PORTED ARMS (C++ line refs; all C++-exact for the modeled arms):
--- JustEngagedWith (:107-114) — Talk(SAY_AGGRO 0) (:110) unconditional;
---   non-triggered self-cast DoCast(me, SPELL_PERMAFROST 70326) (:111);
+-- JustEngagedWith (:107-114) — BossAI base first: SetBossState
+--   (DATA_GARFROST 0, IN_PROGRESS) via creature:SetBossState, then
+--   Talk(SAY_AGGRO 0) (:110) unconditional; non-triggered self-cast
+--   DoCast(me, SPELL_PERMAFROST 70326) (:111);
 --   EVENT_THROW_SARONITE seed at 7000ms (:113).
 -- KilledUnit (:116-120) — Talk(SAY_SLAY 4) player-gated (:119), the
 --   razuvious player-gated variant precedent.
--- JustDied (:122-130) — Talk(SAY_DEATH 3) (:125) unconditional, the
---   sjonnir JustDied-Talk precedent.
+-- JustDied (:122-130) — _JustDied() first: SetBossState
+--   (DATA_GARFROST 0, DONE) via creature:SetBossState, then
+--   Talk(SAY_DEATH 3) (:125) unconditional, the sjonnir
+--   JustDied-Talk precedent; the tyrannus->AI()->Talk
+--   (SAY_TYRANNUS_DEATH 0) leg (:128-129) is PORTED via the
+--   instanceData mirror (see garfrostJustDied).
+-- Reset (:99-105) — _Reset() first: SetBossState(DATA_GARFROST 0,
+--   NOT_STARTED) != DONE-gated, then phase/equipment/init legs
+--   (see garfrostReset; SetPhase + SetEquipmentSlots(true) stay out).
 -- DamageTaken (:132-152) — simple latch: event 9 fires pre-application
 --   (DealDamage calls DamageTaken at Unit.cpp:701, before ModifyHealth
 --   at :894), so CURRENT health decides — !HealthAbovePct(66/33) is
@@ -117,10 +126,6 @@
 --   SetPhase(PHASE_ONE) (:102) is the phase init.
 -- JustDied :126 me->RemoveAllGameObjects() — no bridge (Go engine
 --   owns object cleanup).
--- JustDied :128-129 tyrannus->AI()->Talk(SAY_TYRANNUS_DEATH 0) via
---   instance->GetGuidData(DATA_TYRANNUS) — instance-driven Talk on
---   another creature's AI, no bridge (the instance_violet_hold
---   ScheduleCyanigosaIntro precedent).
 -- CallForHelp(70.0f) (:112) — no bridge.
 -- SpellHitTarget (:174-186) — SPELL_PERMAFROST_HELPER aura-stack
 --   capture into _permafrostStack: the hook bridge EXISTS
@@ -176,6 +181,7 @@
 -- SPELL_FORGE_BLADE so the phase-3 removal clears the phase-2 buff.)
 
 local ENTRY_GARFROST = 36494
+local DATA_GARFROST = 0 -- pit_of_saron.h:32
 
 local SAY_AGGRO = 0
 local SAY_PHASE2 = 1
@@ -184,6 +190,7 @@ local SAY_DEATH = 3
 local SAY_SLAY = 4
 local SAY_THROW_SARONITE = 5
 local SAY_CAST_DEEP_FREEZE = 6
+local SAY_TYRANNUS_DEATH = 0 -- garfrost's own enum (boss_forgemaster_garfrost.cpp:38), Talked by tyrannus
 
 local SPELL_PERMAFROST = 70326
 local SPELL_THROW_SARONITE = 68788
@@ -412,8 +419,11 @@ end
 local function garfrostEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
-    -- BossAI::JustEngagedWith (:107-115, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:107-115, base-first) — SetBossState
+    -- (DATA_GARFROST 0, IN_PROGRESS) via creature:SetBossState, then
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+    -- (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_GARFROST, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -458,19 +468,41 @@ local function garfrostKilledUnit(event, creature, victim)
     end
 end
 
--- C++ :122-130 JustDied: Talk(SAY_DEATH) unconditional — the sjonnir
--- JustDied-Talk precedent; the _JustDied() passthrough,
--- RemoveAllGameObjects(), and tyrannus->AI()->Talk legs have no bridge.
+-- C++ :122-130 JustDied: _JustDied() first — SetBossState
+-- (DATA_GARFROST 0, DONE) via creature:SetBossState — then
+-- Talk(SAY_DEATH) (:125) unconditional. The tyrannus->AI()->Talk
+-- (SAY_TYRANNUS_DEATH 0) leg (:128-129) is PORTED via the instance
+-- GetGuidData mirror (instance_pit_of_saron.lua binds tyrannus;
+-- kelthuzad GetInstanceData precedent), nil-guarded like the C++
+-- GetCreature check. RemoveAllGameObjects() stays out (Go engine
+-- owns object cleanup).
 local function garfrostJustDied(event, creature)
     clearState(creature:GetGUID())
+    creature:SetBossState(DATA_GARFROST, 3)
     creature:Talk(SAY_DEATH)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data and data.tyrannus then
+            data.tyrannus:Talk(SAY_TYRANNUS_DEATH)
+        end
+    end
 end
 
 local function garfrostLeaveCombat(event, creature)
     clearState(creature:GetGUID())
 end
 
+-- C++ Reset (:99-105): _Reset() first — SetBossState(DATA_GARFROST 0,
+-- NOT_STARTED) only when the stored state != DONE (the bronjahm /
+-- cyanigosa precedent: ev23 fires on spawn too, and a DONE boss must
+-- stay DONE) — then SetPhase(PHASE_ONE) / SetEquipmentSlots(true) /
+-- Initialize (phase init + template-equipment legs stay out, see
+-- header).
 local function garfrostReset(event, creature)
+    if creature:GetBossState(DATA_GARFROST) ~= 3 then
+        creature:SetBossState(DATA_GARFROST, 0)
+    end
     clearState(creature:GetGUID())
 end
 

@@ -47,8 +47,10 @@
 -- stays out).
 --
 -- PORTED ARMS (C++ line refs; all C++-exact for the modeled arms):
--- boss_ick JustEngagedWith (:163-173) — seeds EVENT_MIGHTY_KICK 20s (:170)
---   and EVENT_SPECIAL {30s,35s} (:173). The krick->AI()->Talk(SAY_KRICK_AGGRO 0)
+-- boss_ick JustEngagedWith (:163-173) — BossAI base first:
+--   SetBossState(DATA_ICK 1, IN_PROGRESS) via creature:SetBossState,
+--   then seeds EVENT_MIGHTY_KICK 20s (:170) and EVENT_SPECIAL
+--   {30s,35s} (:173). The krick->AI()->Talk(SAY_KRICK_AGGRO 0)
 --   leg (:167-168) is PORTED in ickEnterCombat below (FindNearestCreature
 --   boss Talk, mrfloppy/emily precedent); the EVENT_TOXIC_WASTE 5s /
 --   EVENT_SHADOW_BOLT 10s seeds (:171-172) are PORTED in ickEnterCombat
@@ -74,8 +76,12 @@
 --   { SPELLVALUE_MAX_TARGETS, 1 }) (:278), C++ order; one-shot.
 -- boss_ick JustDied / LeaveCombat / Reset (:176-189, :147-161) — timer
 --   cancellation plus, on death only, the cross-AI ACTION_OUTRO relay
---   (PORTED: ickDied — tyrannus tele-to/summon + krick MoveTo outroPos[0];
---   vehicle RemoveAllPassengers + ForceCombatStop(krick) stay out, see there).
+--   (PORTED: ickDied — _JustDied() first: SetBossState(DATA_ICK 1,
+--   DONE), then tyrannus tele-to/summon + krick MoveTo outroPos[0];
+--   vehicle RemoveAllPassengers + ForceCombatStop(krick) stay out, see
+--   there); Reset (:147-155) is PORTED in ickReset below (_Reset()
+--   first: SetBossState NOT_STARTED != DONE-gated, then the old-target
+--   threat clear).
 -- boss_krick KilledUnit (:324-330) — Talk(SAY_KRICK_SLAY 1) player-gated
 --   (event 3 — the razuvious player-gated variant precedent).
 --
@@ -142,6 +148,8 @@
 
 local ENTRY_ICK = 36476
 local ENTRY_KRICK = 36477
+local DATA_ICK = 1 -- pit_of_saron.h:33
+local DATA_KRICK = 4 -- pit_of_saron.h:36
 local ENTRY_TYRANNUS_EVENTS = 36794 -- pit_of_saron.h:55
 
 -- boss_krickandick.cpp:128-135 outroPos: [0] krick outro, [1] tyrannus tele-to.
@@ -444,15 +452,19 @@ end
 -- SAY_KRICK_AGGRO 0) leg (:167-168) is PORTED below — cross-creature
 -- Talk bridged via FindNearestCreature (the mrfloppy/emily precedent,
 -- nil-guard mirrors GetKrick()); the stale "no bridge" note is
--- retracted. The BossAI::JustEngagedWith passthrough stays out; the
--- EVENT_TOXIC_WASTE 5s / EVENT_SHADOW_BOLT 10s seeds (:171-172) are
+-- retracted. The BossAI::JustEngagedWith base legs are PORTED in
+-- ickEnterCombat below (SetBossState IN_PROGRESS base-first +
+-- SetCombatPulseDelay + DoZoneInCombat); the EVENT_TOXIC_WASTE 5s /
 -- PORTED below — cross-creature target-cast rides the barrage precedent
 -- (obtained-object CastSpell) plus the verified SelectTarget picks.
 local function ickEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
-    -- BossAI::JustEngagedWith (:163-175, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:163-175, base-first) — SetBossState
+    -- (DATA_ICK 1, IN_PROGRESS) via creature:SetBossState, then
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+    -- (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_ICK, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
@@ -471,10 +483,11 @@ local function ickCancelCombat(event, creature)
 end
 
 -- C++ boss_ick JustDied (:176-189) + boss_krick DoAction(ACTION_OUTRO)
--- (:342-367): _JustDied() is instance bookkeeping (no bridge); the
--- vehicle RemoveAllPassengers leg rides the unported vehicle machine;
--- ForceCombatStop(krick) is vacuous in Lua (krick is passive, holds no
--- victim or timers). PORTED: the cross-AI relay via the rotface /
+-- (:342-367): _JustDied() first — SetBossState(DATA_ICK 1, DONE) via
+-- creature:SetBossState (the stale "no bridge" note is retracted);
+-- the vehicle RemoveAllPassengers leg rides the unported vehicle
+-- machine; ForceCombatStop(krick) is vacuous in Lua (krick is
+-- passive, holds no victim or timers). PORTED: the cross-AI relay via the rotface /
 -- hadronox grid-sweep idiom — krick found by the file's established
 -- 40yd sweep (instance GetCreature(DATA_KRICK) twin); tyrannus found
 -- by a 500yd sweep for the unique events NPC (instance
@@ -488,6 +501,7 @@ end
 -- hook in Go (no event 28), so the chain has no fire site.
 local function ickDied(event, creature)
     initState(creature:GetGUID())
+    creature:SetBossState(DATA_ICK, 3)
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
     if krick == nil then
         return
@@ -521,7 +535,6 @@ end
 RegisterCreatureEvent(ENTRY_ICK, 1, ickEnterCombat)
 RegisterCreatureEvent(ENTRY_ICK, 2, ickCancelCombat)
 RegisterCreatureEvent(ENTRY_ICK, 4, ickDied)
-RegisterCreatureEvent(ENTRY_ICK, 23, ickCancelCombat)
 
 -- C++ boss_ick::DoAction (boss_krickandick.cpp:191-217) — the threat
 -- store/reset machine: ACTION_STORE_OLD_TARGET latches the current
@@ -573,6 +586,24 @@ local function ickDoAction(event, creature, action)
 end
 
 RegisterCreatureEvent(ENTRY_ICK, 38, ickDoAction)
+
+-- C++ boss_ick::Reset (boss_krickandick.cpp:147-155): _Reset() first —
+-- SetBossState(DATA_ICK 1, NOT_STARTED) only when the stored state !=
+-- DONE (the bronjahm / cyanigosa precedent: ev23 fires on spawn too,
+-- and a DONE boss must stay DONE) — then _oldTargetGUID.Clear() +
+-- _oldTargetThreat = 0 (the ickThreatStore clear below). Defined here,
+-- after the ickThreatStore local, so the clear binds the module-local
+-- table and not a nil global (the malown forward-reference rule).
+local function ickReset(event, creature)
+    local guid = creature:GetGUID()
+    if creature:GetBossState(DATA_ICK) ~= 3 then
+        creature:SetBossState(DATA_ICK, 0)
+    end
+    initState(guid)
+    ickThreatStore[guid] = nil
+end
+
+RegisterCreatureEvent(ENTRY_ICK, 23, ickReset)
 
 -- C++ boss_krickAI::Reset (boss_krickandick.cpp:315-322): unconditional
 -- me->SetReactState(REACT_PASSIVE) + SetFlag(UNIT_FIELD_FLAGS,

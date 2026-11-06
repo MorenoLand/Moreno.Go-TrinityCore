@@ -1,8 +1,8 @@
 -- Scourgelord Tyrannus + Rimefang (Pit of Saron) — Lua port of
 -- src/server/scripts/Northrend/FrozenHalls/PitOfSaron/boss_scourgelord_tyrannus.cpp
 -- (571 lines incl. license; 6 scripts — boss_tyrannus (CreatureScript via
--- GetPitOfSaronAI (BossAI), DATA_TYRANNUS = 6); boss_rimefang (CreatureScript
--- via GetPitOfSaronAI (ScriptedAI), DATA_RIMEFANG = 7);
+-- GetPitOfSaronAI (BossAI), DATA_TYRANNUS = 2); boss_rimefang (CreatureScript
+-- via GetPitOfSaronAI (ScriptedAI), DATA_RIMEFANG = 3);
 -- player_overlord_brandAI (PlayerAI pushed onto overlord-brand victims:
 -- DamageDealt -> SPELL_OVERLORD_BRAND_DAMAGE 69189, HealDone ->
 -- SPELL_OVERLORD_BRAND_HEAL 69190); spell_tyrannus_overlord_brand /
@@ -48,12 +48,14 @@
 -- JustReachedHome InstallAllAccessories :322-326) have no bridge and stay
 -- out — documented below.
 -- Ported arms (C++ line refs; C++-exact for all modeled arms):
--- Tyrannus JustEngagedWith (:164) — Talk(SAY_AGGRO 8); the
---   EVENT_COMBAT_START seed legs (:250-252) land here because Eluna event 1
---   fires when DoZoneInCombat() (:249) puts Tyrannus in combat — the
---   faithful combat-start anchor: OVERLORD_BRAND 69172 {5000,7000}ms,
---   FORCEFUL_SMASH 69155 {14000,16000}ms, MARK_OF_RIMEFANG 69275
---   {25000,27000}ms.
+-- Tyrannus JustEngagedWith (:164) — Talk(SAY_AGGRO 8); NO BossAI
+--   base call, so NO SetBossState(IN_PROGRESS) on engage — it lives
+--   in DoAction(ACTION_START_INTRO) (:217) behind the unported
+--   area-trigger machine. The EVENT_COMBAT_START seed legs (:250-252)
+--   land here because Eluna event 1 fires when DoZoneInCombat()
+--   (:249) puts Tyrannus in combat — the faithful combat-start
+--   anchor: OVERLORD_BRAND 69172 {5000,7000}ms, FORCEFUL_SMASH 69155
+--   {14000,16000}ms, MARK_OF_RIMEFANG 69275 {25000,27000}ms.
 -- EVENT_OVERLORD_BRAND (:254-257) — SelectTarget(Random, 1, 0.0f, true) ->
 --   random alive threat-list player past the first MaxThreat entry
 --   (GetAITargets[2..], eck precedent); DoCast(target, 69172);
@@ -71,8 +73,13 @@
 --   DoCast(target, 69275); re-arm {24000,26000}ms.
 -- Tyrannus KilledUnit (:187) — Talk(SAY_SLAY 9) player-gated (the
 --   razuvious player-gated variant precedent).
--- Tyrannus JustDied (:193) — Talk(SAY_DEATH 10); timers cancelled (the
---   sjonnir JustDied-Talk precedent).
+-- Tyrannus JustDied (:193) — Talk(SAY_DEATH 10) FIRST, then
+--   SetBossState(DATA_TYRANNUS 2, DONE) (C++ order :194/:196);
+--   timers cancelled (the sjonnir JustDied-Talk precedent).
+-- Tyrannus Reset (:150-162) / EnterEvadeMode (:178-186) — PORTED in
+--   tyrannusReset (ev23): FAIL on the evade path (state was
+--   IN_PROGRESS), NOT_STARTED otherwise (!= DONE); the REACT_PASSIVE
+--   + NON_ATTACKABLE arms stay out (see documented-only note).
 -- Rimefang DoAction(ACTION_START_RIMEFANG) (:328-336) — the EVENT_ICY_BLAST
 --   seed (15s, :335) lands on Rimefang's own Eluna event 1 (engine aggro —
 --   the faithful anchor for the unported DoAction relay): the :332 phase
@@ -115,20 +122,27 @@
 --   (:238-240), and the EVENT_COMBAT_START DoZoneInCombat /
 --   SPELL_FULL_HEAL 43979 / rimefang->AI()->DoAction(ACTION_START_RIMEFANG)
 --   legs (:242-249) ride it out with the machine.
--- Tyrannus Reset / InitializeAI (:142-162) — REACT_PASSIVE +
---   UNIT_FLAG_NON_ATTACKABLE + instance SetBossState(DATA_TYRANNUS,
---   NOT_STARTED/DONE) + DespawnOrUnsummon — no flag / instance
---   bridges (the react bridge exists — creature:SetReactState — but
---   the intro DoAction/area-trigger machine is unported, so the
---   PASSIVE arm stays out: porting it alone would strand the boss
---   passive).
--- Tyrannus AttackStart NON_ATTACKABLE gate (:169-176), EnterEvadeMode
---   (:178-186: instance SetBossState(FAIL) + rimefang EnterEvadeMode +
---   DespawnOrUnsummon) — no bridges.
--- Tyrannus JustDied instance legs (:193-206) — SetBossState(DONE) +
---   TEMPSUMMON_DEAD_DESPAWN + rimefang->AI()->DoAction(ACTION_END_COMBAT)
---   — no instance bridge; the DoAction leg rides the unported JustDied
---   instance block (dispatch IS bridged, ev38).
+-- Tyrannus Reset / InitializeAI (:142-162) — the SetBossState legs
+--   are PORTED in tyrannusReset below (Reset :156 NOT_STARTED direct
+--   instance call; EnterEvadeMode :180 FAIL on the evade path; the
+--   skadi / palehoof ev23 idiom). REACT_PASSIVE + UNIT_FLAG_NON_
+--   ATTACKABLE stay out: the intro DoAction/area-trigger machine is
+--   unported, so the PASSIVE arm stays out (porting it alone would
+--   strand the boss passive). InitializeAI (:142-148: GetBossState
+--   != DONE -> Reset, else DespawnOrUnsummon) has no spawn-hook fire
+--   site in Go. DespawnOrUnsummon (evade :185) stays out — the Go
+--   evade funnel owns evade-despawn timing.
+-- Tyrannus AttackStart NON_ATTACKABLE gate (:169-176) — no bridge.
+-- EnterEvadeMode (:178-186): the SetBossState(FAIL) leg is PORTED
+-- in tyrannusReset (ev23 evade path); the rimefang EnterEvadeMode
+-- leg is covered by rimefang's own ev2 (rimefangCancelCombat = its
+-- Reset arms); DespawnOrUnsummon stays out (see Reset note above).
+-- Tyrannus JustDied instance legs (:193-206) — SetBossState(DONE)
+-- is PORTED in tyrannusJustDied below (after Talk, C++ order);
+-- TEMPSUMMON_DEAD_DESPAWN + rimefang->AI()->DoAction(
+-- ACTION_END_COMBAT) stay out (no temp-summon-type / cross-AI
+-- DoAction bearer on the death path; the DoAction dispatch IS
+-- bridged, ev38).
 -- The Overlord Brand aura chain — spell_tyrannus_overlord_brand
 --   AuraScript OnApply pushes player_overlord_brandAI (:398-428) onto the
 --   victim (DamageDealt -> SPELL_OVERLORD_BRAND_DAMAGE 69189, HealDone ->
@@ -167,6 +181,7 @@
 
 local ENTRY_TYRANNUS = 36658
 local ENTRY_RIMEFANG = 36661
+local DATA_TYRANNUS = 2 -- pit_of_saron.h:34
 
 local SAY_AGGRO = 8
 local SAY_SLAY = 9
@@ -286,8 +301,14 @@ local function markOfRimefangTick(creature, guid)
     schedule(guid, "mark", {24000, 26000}, function() markOfRimefangTick(creature, guid) end)
 end
 
--- C++ :164 JustEngagedWith: Talk(SAY_AGGRO); the :250-252 EVENT_COMBAT_START
--- seed legs land here — Eluna event 1 fires at the same combat-start moment
+-- C++ :164 JustEngagedWith: Talk(SAY_AGGRO) — NOTE: unlike the other
+-- BossAI bosses in this strip, tyrannus does NOT call BossAI::
+-- JustEngagedWith here, so NO SetBossState(IN_PROGRESS) lands on
+-- engage (the trap a naive port would fall into). IN_PROGRESS is set
+-- only by DoAction(ACTION_START_INTRO) (:217), which rides the
+-- unported area-trigger intro machine — see the intro-machine note
+-- in the header. The :250-252 EVENT_COMBAT_START seed legs land here
+-- — Eluna event 1 fires at the same combat-start moment
 -- (DoZoneInCombat :249).
 local function tyrannusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
@@ -310,16 +331,43 @@ local function tyrannusKilledUnit(event, creature, victim)
     end
 end
 
--- Shared timer wipe for events 2/23 (the bronjahm convention).
+-- Shared timer wipe for event 2 (the bronjahm convention).
 local function tyrannusCancelCombat(event, creature)
     initState(creature:GetGUID())
 end
 
--- C++ :193 JustDied: Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent;
--- timers cancelled.
+-- C++ Reset (:150-162) + EnterEvadeMode (:178-186), routed through the
+-- single Go ev23 fire site (the skadi / palehoof idiom): ev23 fires on
+-- spawn pre-fire, on the death pre-fire, and on evade-reset. The
+-- death pre-fire is skipped via the IsAlive guard (DONE lands in
+-- ev4); the evade path (stored state IN_PROGRESS) sets FAIL — the
+-- EnterEvadeMode leg (:180); anything else (!= DONE) is the Reset
+-- leg (:156, direct instance call, no _Reset() — hence no DONE-gate
+-- in C++ either, but the spawn pre-fire must not revive a DONE boss,
+-- so the != DONE guard stands). The EnterEvadeMode rimefang leg is
+-- covered by rimefang's own ev2 (rimefangCancelCombat = its Reset
+-- arms); the DespawnOrUnsummon leg stays out — the Go evade funnel
+-- owns evade-despawn timing (boss_ai.go despawnAtEvade).
+local function tyrannusReset(event, creature)
+    if not creature:IsAlive() then
+        initState(creature:GetGUID())
+        return
+    end
+    if creature:GetBossState(DATA_TYRANNUS) == 1 then
+        creature:SetBossState(DATA_TYRANNUS, 2) -- FAIL: evade path
+    elseif creature:GetBossState(DATA_TYRANNUS) ~= 3 then
+        creature:SetBossState(DATA_TYRANNUS, 0) -- NOT_STARTED: Reset / spawn path
+    end
+    initState(creature:GetGUID())
+end
+
+-- C++ :193 JustDied: Talk(SAY_DEATH) FIRST (:194), then SetBossState
+-- (DATA_TYRANNUS 2, DONE) (:196) — the opposite order from bronjahm /
+-- garfrost / ick, where _JustDied() leads. Timers cancelled.
 local function tyrannusJustDied(event, creature)
     initState(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_TYRANNUS, 3)
 end
 
 -- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0) with
@@ -374,7 +422,7 @@ RegisterCreatureEvent(ENTRY_TYRANNUS, 1, tyrannusEnterCombat)
 RegisterCreatureEvent(ENTRY_TYRANNUS, 2, tyrannusCancelCombat)
 RegisterCreatureEvent(ENTRY_TYRANNUS, 3, tyrannusKilledUnit)
 RegisterCreatureEvent(ENTRY_TYRANNUS, 4, tyrannusJustDied)
-RegisterCreatureEvent(ENTRY_TYRANNUS, 23, tyrannusCancelCombat)
+RegisterCreatureEvent(ENTRY_TYRANNUS, 23, tyrannusReset)
 
 RegisterCreatureEvent(ENTRY_RIMEFANG, 1, rimefangEnterCombat)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 2, rimefangCancelCombat)
