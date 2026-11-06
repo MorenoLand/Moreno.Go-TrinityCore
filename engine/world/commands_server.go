@@ -323,8 +323,10 @@ func formatSecsFullText(total int64) string {
 		}
 	}
 	if secs > 0 || (days == 0 && hours == 0 && minutes == 0) {
-		if secs == 1 {
-			b.WriteString("1 Second")
+		// C++ uses the singular for 0 too (secs <= 1, Util.cpp:180-184:
+		// "0 Second."), not just for 1.
+		if secs <= 1 {
+			fmt.Fprintf(&b, "%d Second", secs)
 		} else {
 			fmt.Fprintf(&b, "%d Seconds", secs)
 		}

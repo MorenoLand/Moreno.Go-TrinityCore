@@ -181,6 +181,25 @@ func (s *Server) cancelShutdown(ctx context.Context) (remaining uint32, wasResta
 	return remaining, wasRestart, true
 }
 
+// loginShutdownNotice mirrors the login-time ShutdownMsg(true, player)
+// (CharacterHandler.cpp:989-990): a player logging in while a shutdown
+// timer runs is shown the countdown immediately. The reason is not
+// repeated here — ShutdownMsg's default reason is empty (World.cpp:3027),
+// it only rides the initiate broadcast — and idle timers never show
+// (ShutdownMsg early return, World.cpp:3029-3031).
+func (s *Server) loginShutdownNotice(sess *session) {
+	if s == nil || sess == nil {
+		return
+	}
+	s.shutdownMu.Lock()
+	active, mask, deadline := s.shutdown.active, s.shutdown.mask, s.shutdown.deadline
+	s.shutdownMu.Unlock()
+	if !active || mask&shutdownMaskIdle != 0 {
+		return
+	}
+	sess.sendSysMessage(shutdownCountdownMessage(mask, shutdownRemainingSecs(deadline, time.Now()), ""))
+}
+
 // updateShutdownTimer mirrors the World::Update shutdown leg, driven by
 // the 100ms world tick instead of the 1s C++ update: on expiry an idle
 // timer with live sessions re-arms at 1 second, anything else stops the
@@ -221,10 +240,13 @@ func (s *Server) updateShutdownTimer(ctx context.Context, now time.Time) {
 		return
 	}
 	if remaining != s.shutdown.lastBroadcastRemaining && shouldBroadcastShutdown(s.shutdown.mask, remaining) {
-		mask, reason := s.shutdown.mask, s.shutdown.reason
+		mask := s.shutdown.mask
 		s.shutdown.lastBroadcastRemaining = remaining
 		s.shutdownMu.Unlock()
-		s.broadcastShutdownMessage(shutdownCountdownMessage(mask, remaining, reason))
+		// The reason rides only the initiate broadcast (ShutdownServ,
+		// World.cpp:3020): the World::Update leg calls ShutdownMsg()
+		// with the default empty reason (World.cpp:2998-3000).
+		s.broadcastShutdownMessage(shutdownCountdownMessage(mask, remaining, ""))
 		return
 	}
 	s.shutdownMu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -39,10 +40,10 @@ import (
 // case-insensitive substring match (ObjectMgr::GetGameTele,
 // ObjectMgr.cpp:9020).
 //
-// Documented fidelity gaps (not stubs): the zone column written by
-// Player::SavePositionInDB is not rewritten on the name-offline leg
-// (sMapMgr::GetZoneId from a position has no Go bridge); the $home
-// offline leg does write it (the zoneId comes from the homebind row).
+// Documented fidelity gaps (not stubs): a game_tele literally named
+// "$home" wins over the homebind leg in C++ (the Variant tries GameTele
+// first, ChatCommandArgs.h:261-285); Go checks $home first, so that
+// deliberately-created row is unreachable by name.
 // A name miss in
 // teleResolveTele reports the LANG_COMMAND_TELE_NOTFOUND (164) stand-in —
 // C++ reports LANG_CMDPARSER_GAME_TELE_NO_EXIST (1512) whose enUS text is
@@ -121,9 +122,16 @@ func (s *session) teleResolveTele(ctx context.Context, token string) (teleLocati
 
 // handleCmdTele dispatches the ".tele" arms (cs_tele.cpp:46-54) with Trinity
 // per-level prefix matching; each arm gates its own leaf permission.
+// Args arrive as the dispatcher's whitespace split (executeCommand), which
+// is the C++ tokenize rule (ChatCommandHelpers.h:55-72: split on space, no
+// quote handling) — quotes stay literal characters in the token, so no
+// quote-aware re-splitting happens here: no arm takes a QuotedString, and
+// every handler arg (std::string, GameTele, PlayerIdentifier, $home)
+// consumes exactly one token, with trailing text failing the parse
+// ("the entire string must be consumed", ChatCommand.h:107-109).
 func (s *session) handleCmdTele(ctx context.Context, args []string) {
 	const syntax = "Syntax: .tele add <name>|.tele del <name>|.tele name [player] <tele|$home>|.tele group <tele>|.tele <name>"
-	toks := splitQuotedArgs(args)
+	toks := args
 	if len(toks) == 0 {
 		s.sendSysMessage(syntax)
 		return
@@ -167,11 +175,13 @@ func (s *session) handleTeleAddCommand(ctx context.Context, args []string) {
 		s.sendSysMessage("You must be in game to use that command.")
 		return
 	}
-	if len(args) == 0 {
+	if len(args) == 0 || len(args) > 1 {
 		s.sendSysMessage("Syntax: .tele add <name>")
 		return
 	}
-	name := unquoteCommandToken(strings.Join(args, " "))
+	// std::string consumes one token (ChatCommandArgs.h:93-102); trailing
+	// text fails the parse, it is never joined into the name.
+	name := args[0]
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("Database not available.")
 		return
@@ -201,11 +211,13 @@ func (s *session) handleTeleAddCommand(ctx context.Context, args []string) {
 // handleTeleDelCommand mirrors HandleTeleDelCommand (cs_tele.cpp:101-114,
 // RBAC 739, console allowed): deletes the resolved game_tele row.
 func (s *session) handleTeleDelCommand(ctx context.Context, args []string) {
-	if len(args) == 0 {
+	if len(args) == 0 || len(args) > 1 {
 		s.sendSysMessage("Syntax: .tele del <name>")
 		return
 	}
-	tele, ok := s.teleResolveTele(ctx, unquoteCommandToken(strings.Join(args, " ")))
+	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
+	// fails the parse, it is never joined into the lookup.
+	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
 		return
 	}
@@ -234,9 +246,20 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 	var name string
 	if len(args) == 2 {
 		var ok bool
-		target, guid, name, ok = s.miscResolvePlayerTarget(ctx, args[:1])
-		if !ok {
-			return
+		if _, err := strconv.ParseUint(args[0], 0, 32); err == nil {
+			// Bare numeric token: the ObjectGuid::LowType alternative of
+			// PlayerIdentifier::TryConsume (ChatCommandTags.cpp:90-103),
+			// base-0 like StringTo<uint32>(token, 0).
+			target, guid, name, ok = s.telePlayerByGUID(ctx, args[0])
+			if !ok {
+				s.sendSysMessage(miscPlayerNotFound)
+				return
+			}
+		} else {
+			target, guid, name, ok = s.miscResolvePlayerTarget(ctx, args[:1])
+			if !ok {
+				return
+			}
 		}
 	} else {
 		target = s.miscSelectedPlayerOrSelf()
@@ -246,8 +269,10 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 		}
 		guid, name = target.playerGUID, target.player.Name
 	}
-	dest := unquoteCommandToken(args[len(args)-1])
-	if dest == "$home" {
+	dest := args[len(args)-1]
+	// EXACT_SEQUENCE("$home") matches case-insensitively
+	// (ChatCommandTags.h:102-104: StringEqualI).
+	if strings.EqualFold(dest, "$home") {
 		s.teleToHomebind(ctx, target, guid)
 		return
 	}
@@ -265,9 +290,13 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 		}
 		s.sendSysMessage(fmt.Sprintf("Teleporting %s to %s.", miscPlayerLink(name), tele.name)) // LANG_TELEPORTING_TO (110)
 		// needReportToTarget (Chat.cpp:754): target is told only if the
-		// invoker is visible globally for the target.
-		if target != s && isVisibleGloballyFor(s, target) {
-			invokerName := ""
+		// invoker is visible globally FOR the target, i.e. the target is
+		// the viewer and the invoker the seen object
+		// (isVisibleGloballyFor(viewer, target), social.go:118); the
+		// console always reports (CliHandler::needReportToTarget,
+		// Chat.cpp:801-804, name "Console" per CliHandler::GetNameLink).
+		if target != s && (s.player == nil || isVisibleGloballyFor(target, s)) {
+			invokerName := "Console"
 			if s.player != nil {
 				invokerName = s.player.Name
 			}
@@ -285,13 +314,39 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 		return // C++ HasLowerSecurity: silent fail
 	}
 	s.sendSysMessage(fmt.Sprintf("Teleporting %s%s to %s.", miscPlayerLink(name), " (offline)", tele.name)) // LANG_TELEPORTING_TO (110) + LANG_OFFLINE (37)
-	// Player::SavePositionInDB: the zone column has no Go bridge
-	// (sMapMgr::GetZoneId is unbuilt), so only map + position are rewritten.
+	// Player::SavePositionInDB (Player.cpp:20545) writes map + position +
+	// orientation + zone; the zone is sMapMgr::GetZoneId(PHASEMASK_NORMAL,
+	// tele) (Map::GetZoneId, Map.cpp:2631), bridged by
+	// Server.zoneAndAreaID (terrain.go:109).
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		zoneID, _ := s.server.zoneAndAreaID(tele.mapID, tele.x, tele.y, tele.z, 0)
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-			"UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
-			tele.mapID, tele.x, tele.y, tele.z, tele.o, guid)
+			"UPDATE characters SET map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
+			tele.mapID, zoneID, tele.x, tele.y, tele.z, tele.o, guid)
 	}
+}
+
+// telePlayerByGUID resolves a bare numeric PlayerIdentifier token as a
+// player GUID low (ChatCommandTags.cpp:95-102): online first, then the
+// character row (the sCharacterCache leg).
+func (s *session) telePlayerByGUID(ctx context.Context, token string) (online *session, guid uint64, name string, ok bool) {
+	low, err := strconv.ParseUint(token, 0, 32)
+	if err != nil {
+		return nil, 0, "", false
+	}
+	if s.server != nil {
+		if sess := s.server.playerSessionForGUID(low); sess != nil && sess.player != nil {
+			return sess, sess.playerGUID, sess.player.Name, true
+		}
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var n string
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT name FROM characters WHERE guid = ? LIMIT 1", low).Scan(&n); err == nil && n != "" {
+			return nil, low, n, true
+		}
+	}
+	return nil, 0, "", false
 }
 
 // teleToHomebind mirrors the $home leg of HandleTeleNameCommand: online
@@ -355,11 +410,13 @@ func (s *session) teleGroupTarget() *session {
 // handleTeleGroupCommand mirrors HandleTeleGroupCommand (cs_tele.cpp:199-262,
 // RBAC 741): teleports every online member of the selected player's group.
 func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
-	if len(args) == 0 {
+	if len(args) == 0 || len(args) > 1 {
 		s.sendSysMessage("Syntax: .tele group <tele>")
 		return
 	}
-	tele, ok := s.teleResolveTele(ctx, unquoteCommandToken(strings.Join(args, " ")))
+	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
+	// fails the parse, it is never joined into the lookup.
+	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
 		return
 	}
@@ -404,8 +461,10 @@ func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
 		}
 		s.sendSysMessage(fmt.Sprintf("Teleporting %s to %s.", miscPlayerLink(player.player.Name), tele.name)) // LANG_TELEPORTING_TO (110)
 		// The C++ reports with the selected player's link (cs_tele.cpp:248);
-		// needReportToTarget (Chat.cpp:754) gates on invoker visibility.
-		if player != s && isVisibleGloballyFor(s, player) {
+		// needReportToTarget (Chat.cpp:754) gates on the invoker being
+		// visible globally FOR the member, i.e. the member is the viewer
+		// (social.go:118); the console always reports (Chat.cpp:801-804).
+		if player != s && (s.player == nil || isVisibleGloballyFor(player, s)) {
 			player.sendSysMessage(fmt.Sprintf("%s teleported you.", miscPlayerLink(selected.player.Name))) // LANG_TELEPORTED_TO_BY (111)
 		}
 		if player.isInFlight() {
@@ -426,7 +485,13 @@ func (s *session) handleTeleBareCommand(ctx context.Context, args []string) {
 		s.sendSysMessage("You must be in game to use that command.")
 		return
 	}
-	tele, ok := s.teleResolveTele(ctx, unquoteCommandToken(strings.Join(args, " ")))
+	if len(args) == 0 || len(args) > 1 {
+		s.sendSysMessage("Syntax: .tele <name>")
+		return
+	}
+	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
+	// fails the parse, it is never joined into the lookup.
+	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
 		return
 	}

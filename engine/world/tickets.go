@@ -75,6 +75,37 @@ func (s *session) sendGMTicketDefault() {
 	_ = s.write(uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET), buf.Bytes(), true)
 }
 
+// sendGMTicketState mirrors TicketMgr::SendTicket (TicketMgr.cpp:446) with a
+// live ticket: GmTicket::WritePacket (TicketMgr.cpp:120-144) — the
+// SMSG_GMTICKET_GETTICKET state packet (status, id, message, needMoreHelp,
+// last-modified age, oldest-open age, last-change age, escalated capped at
+// TICKET_IN_ESCALATION_QUEUE, viewed flag).
+func (s *session) sendGMTicketState(ctx context.Context, t *gmTicketRow) bool {
+	if s.server == nil {
+		return true
+	}
+	now := time.Now().Unix()
+	escalated := t.escalated
+	if escalated > 2 {
+		escalated = 2
+	}
+	var viewedFlag uint8
+	if t.viewed {
+		viewedFlag = 1
+	}
+	buf := protocol.NewBuffer(32 + len(t.description))
+	buf.WriteU32(gmTicketStatusHasText)
+	buf.WriteU32(t.id)
+	buf.WriteCString(t.description)
+	buf.WriteU8(t.needMoreHelp)
+	buf.WriteF32(ticketAgeDays(t.lastModifiedTime, now))
+	buf.WriteF32(s.oldestOpenTicketAge(ctx, now))
+	buf.WriteF32(ticketAgeDays(s.server.ticketsLastChange.Load(), now))
+	buf.WriteU8(uint8(escalated))
+	buf.WriteU8(viewedFlag)
+	return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET), buf.Bytes(), true) == nil
+}
+
 // sendQueryTimeResponse mirrors WorldSession::SendQueryTimeResponse
 // (QueryHandler.cpp:83). The daily-reset delta is nextDailyQuestResetTime(now)
 // minus now (World.cpp:3234-3237) — the same value handleQueryTime sends on
@@ -163,31 +194,14 @@ func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) b
 				return true
 			}
 			// TicketMgr.cpp:33 (GetAge): ages are days, not seconds.
-			now := time.Now().Unix()
-			age := ticketAgeDays(lastModifiedTime, now)
-			// TicketMgr.cpp:140: the escalated byte is min(status, 2)
-			// (TICKET_IN_ESCALATION_QUEUE); the viewed byte is the
-			// GMTICKET_OPENEDBYGM_STATUS_* flag.
-			if escalated > 2 {
-				escalated = 2
-			}
-			var viewedFlag uint8
-			if viewed != 0 {
-				viewedFlag = 1
-			}
-			buf := protocol.NewBuffer(32 + len(message))
-			buf.WriteU32(gmTicketStatusHasText)
-			buf.WriteU32(ticketID)
-			buf.WriteCString(message)
-			buf.WriteU8(needMoreHelp)
-			buf.WriteF32(age)
-			// TicketMgr.cpp:135-139 (GmTicket::WritePacket): oldest open
-			// ticket age, then the TicketMgr last-change age.
-			buf.WriteF32(s.oldestOpenTicketAge(ctx, now))
-			buf.WriteF32(ticketAgeDays(s.server.ticketsLastChange.Load(), now))
-			buf.WriteU8(escalated)
-			buf.WriteU8(viewedFlag)
-			return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET), buf.Bytes(), true) == nil
+			// TicketMgr.cpp:135-140 (GmTicket::WritePacket): the escalated
+			// byte is min(status, 2) (TICKET_IN_ESCALATION_QUEUE); the
+			// viewed byte is the GMTICKET_OPENEDBYGM_STATUS_* flag.
+			return s.sendGMTicketState(ctx, &gmTicketRow{
+				id: ticketID, description: message, needMoreHelp: needMoreHelp,
+				escalated: int64(escalated), viewed: viewed != 0,
+				lastModifiedTime: lastModifiedTime,
+			})
 		}
 	}
 

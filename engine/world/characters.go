@@ -1025,6 +1025,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_MOTD), buildMotd(s.server.Config.Motd), true); err != nil {
 		return false
 	}
+	// Show the shutdown countdown to a player logging in while a timer
+	// runs (CharacterHandler.cpp:989-990).
+	s.server.loginShutdownNotice(s)
 	if s.server.Config.ServerLoginInfo {
 		s.sendSysMessage(version.String())
 	}

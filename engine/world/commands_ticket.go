@@ -3,7 +3,11 @@ package world
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 // ticket command port: ticket_commandscript (cs_ticket.cpp), the "ticket"
@@ -32,14 +36,14 @@ import (
 // ticket creation (tickets.go). LANG texts are inlined from the TDB enUS
 // recall (no in-tree trinity_string seed).
 //
-// Documented no-bridge/deltas: the SMSG_GMTICKET_DELETETICKET packet to the
-// submitter (close/delete arms) and the SMSG_GMTICKET_GETTICKET responses
-// (complete/escalate arms) have no packet bridge in the Go tree, so those
-// legs are silent on the submitter side; GmTicket::FormatMessageString is
-// rendered as a compact one-line summary rather than the multi-line C++
-// layout; comment/response text joins the tokenized args with single spaces
-// (C++ takes the raw rest-of-line via strtok, so leading/multiple spaces are
-// not preserved — the framework tokenizes before the handler runs).
+// Documented no-bridge/deltas: GmTicket::FormatMessageString is rendered as
+// a compact one-line summary rather than the multi-line C++ layout;
+// comment/response text joins the tokenized args with single spaces (C++
+// takes the raw rest-of-line via strtok, so leading/multiple spaces are not
+// preserved — the framework tokenizes before the handler runs). The
+// submitter packets ARE bridged: close/delete send SMSG_GMTICKET_DELETETICKET,
+// complete sends SMSG_GMRESPONSE_RECEIVED, escalate sends SMSG_GMTICKET_GETTICKET
+// (sendGMTicketState, tickets.go).
 
 // gmTicketRow mirrors the gm_ticket columns the command arms touch.
 type gmTicketRow struct {
@@ -58,6 +62,7 @@ type gmTicketRow struct {
 	completed        bool
 	escalated        int64
 	viewed           bool
+	needMoreHelp     uint8
 }
 
 // loadGMTicket fetches one ticket by id.
@@ -67,18 +72,19 @@ func (s *session) loadGMTicket(ctx context.Context, id uint32) (*gmTicketRow, bo
 		return nil, false
 	}
 	t := &gmTicketRow{id: id}
-	var ticketType, closedBy, assignedTo, completed, viewed, resolvedBy int64
+	var ticketType, closedBy, assignedTo, completed, viewed, resolvedBy, needMoreHelp int64
 	err := cdb.QueryRowContext(ctx, `SELECT type, playerGuid, name, description, createTime, lastModifiedTime,
-		closedBy, assignedTo, comment, response, completed, escalated, viewed, resolvedBy
+		closedBy, assignedTo, comment, response, completed, escalated, viewed, resolvedBy, needMoreHelp
 		FROM gm_ticket WHERE id = ?`, id).Scan(
 		&ticketType, &t.playerGuid, &t.name, &t.description, &t.createTime, &t.lastModifiedTime,
-		&closedBy, &assignedTo, &t.comment, &t.response, &completed, &t.escalated, &viewed, &resolvedBy)
+		&closedBy, &assignedTo, &t.comment, &t.response, &completed, &t.escalated, &viewed, &resolvedBy, &needMoreHelp)
 	if err != nil {
 		return nil, false
 	}
 	t.closedBy, t.assignedTo = uint64(closedBy), uint64(assignedTo)
 	t.completed, t.viewed = completed != 0, viewed != 0
 	t.ticketType, t.resolvedBy = ticketType, uint64(resolvedBy)
+	t.needMoreHelp = uint8(needMoreHelp)
 	return t, true
 }
 
@@ -117,7 +123,10 @@ func (s *session) ticketAssignedName(ctx context.Context, guid uint64) string {
 func (s *session) ticketFormat(ctx context.Context, t *gmTicketRow) string {
 	assigned := s.ticketAssignedName(ctx, t.assignedTo)
 	status := "open"
-	if t.closedBy != 0 {
+	// IsClosed() is type-based (TicketMgr.h:97), not closedBy-based: a
+	// character-deleted ticket (type 2, CharacterDatabase.cpp:328) has closedBy 0
+	// and still counts as closed.
+	if t.ticketType != 0 {
 		status = "closed"
 	} else if t.completed {
 		status = "completed"
@@ -205,7 +214,10 @@ func (s *session) ticketOpenByID(ctx context.Context, args []string, syntax stri
 		return nil, false
 	}
 	t, ok := s.loadGMTicket(ctx, uint32(cAtoi(args[0])))
-	if !ok || t.closedBy != 0 {
+	// GmTicket::IsClosed() is type-based (TicketMgr.h:97): a ticket whose
+	// submitter's character was deleted carries type 2 with closedBy 0
+	// (CharacterDatabase.cpp:328), and is closed in C++.
+	if !ok || t.ticketType != 0 {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		return nil, false
 	}
@@ -217,12 +229,32 @@ func (s *session) ticketAssignedNotTo(t *gmTicketRow) bool {
 	return t.assignedTo != 0 && t.assignedTo != s.playerGUID
 }
 
+// sendTicketDeletedToSubmitter mirrors the SMSG_GMTICKET_DELETETICKET leg of
+// the close/delete arms (cs_ticket.cpp:163-168, 296-301): the online
+// submitter is told the ticket is gone (GMTICKET_RESPONSE_TICKET_DELETED).
+func (s *session) sendTicketDeletedToSubmitter(t *gmTicketRow) {
+	if s.server == nil {
+		return
+	}
+	if sess := s.server.playerSessionForGUID(t.playerGuid); sess != nil {
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(gmTicketResponseDeleted)
+		_ = sess.write(uint16(protocol.OpcodeSMSG_GMTICKET_DELETETICKET), buf.Bytes(), true)
+	}
+}
+
 // handleTicketAssign mirrors HandleGMTicketAssignToCommand (cs_ticket.cpp:80).
 func (s *session) handleTicketAssign(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandTicketAssign) {
 		return
 	}
 	if len(args) < 2 {
+		s.sendSysMessage("Syntax: .ticket assign <id> <name>")
+		return
+	}
+	// normalizePlayerName fails on invalid UTF-8 (ObjectMgr.cpp:141-156),
+	// and the handler returns false (syntax) there (cs_ticket.cpp:98-99).
+	if !utf8.ValidString(args[1]) {
 		s.sendSysMessage("Syntax: .ticket assign <id> <name>")
 		return
 	}
@@ -238,10 +270,14 @@ func (s *session) handleTicketAssign(ctx context.Context, args []string) {
 		_ = cdb.QueryRowContext(ctx, "SELECT guid, account FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1", targetName).Scan(&targetGuid, &targetAccount)
 	}
 	// Target must exist and have administrative rights (cs_ticket.cpp:103).
+	// The security level comes from account_access, not account.gmlevel:
+	// AccountMgr::GetSecurity (AccountMgr.cpp:285-293) reads
+	// LOGIN_GET_GMLEVEL_BY_REALMID, and gmlevel is a legacy column that
+	// stays 0 for real GMs.
 	canAssign := false
 	var sec uint8
 	if targetGuid != 0 && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
-		_ = s.server.AuthStore.DB.QueryRowContext(ctx, "SELECT gmlevel FROM account WHERE id = ?", targetAccount).Scan(&sec)
+		sec = s.accountSecurityLevel(ctx, targetAccount)
 		if hasPerm, err := accountHasPermission(ctx, s.server.AuthStore.DB, targetAccount, s.server.RealmID, sec, 32); err == nil && hasPerm { // RBAC_PERM_COMMANDS_BE_ASSIGNED_TICKET 32
 			canAssign = true
 		}
@@ -301,6 +337,9 @@ func (s *session) handleTicketClose(ctx context.Context, args []string) {
 	t.resolvedBy = s.playerGUID
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
+	// cs_ticket.cpp:163-168: the online submitter is told the ticket is
+	// gone (SMSG_GMTICKET_DELETETICKET, GMTICKET_RESPONSE_TICKET_DELETED).
+	s.sendTicketDeletedToSubmitter(t)
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d closed.", t.id))
 }
 
@@ -309,7 +348,7 @@ func (s *session) handleTicketClosedList(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandTicketClosedlist) {
 		return
 	}
-	s.ticketListQuery(ctx, "closedBy <> 0", "Closed tickets:")
+	s.ticketListQuery(ctx, "type <> 0", "Closed tickets:")
 }
 
 // handleTicketComment mirrors HandleGMTicketCommentCommand (cs_ticket.cpp:171).
@@ -360,8 +399,14 @@ func (s *session) handleTicketComplete(ctx context.Context, args []string) {
 	}
 	t.completed = true
 	t.resolvedBy = s.playerGUID
-	// C++ also sends SMSG_GMRESPONSE_RECEIVED to an online submitter;
-	// that packet has no Go bridge, so the submitter side stays silent.
+	// cs_ticket.cpp:256-258: the GM response goes to the online submitter
+	// (GmTicket::SendResponse, TicketMgr.cpp:147) before the ticket is
+	// marked completed and saved.
+	if s.server != nil {
+		if sess := s.server.playerSessionForGUID(t.playerGuid); sess != nil {
+			sess.sendGMResponseReceived(t.id, t.description, t.response)
+		}
+	}
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d completed.", t.id))
@@ -381,10 +426,15 @@ func (s *session) handleTicketDelete(ctx context.Context, args []string) {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		return
 	}
-	if t.closedBy == 0 {
+	// IsClosed() is type-based (TicketMgr.h:97): a character-deleted
+	// ticket (type 2) is closed even though closedBy is 0.
+	if t.ticketType == 0 {
 		s.sendSysMessage("Close the ticket first.") // LANG_COMMAND_TICKETCLOSEFIRST 2006
 		return
 	}
+	// cs_ticket.cpp:296-301: the online submitter is told the ticket is
+	// gone (SMSG_GMTICKET_DELETETICKET, GMTICKET_RESPONSE_TICKET_DELETED).
+	s.sendTicketDeletedToSubmitter(t)
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM gm_ticket WHERE id = ?", t.id)
 	}
@@ -406,10 +456,17 @@ func (s *session) handleTicketEscalate(ctx context.Context, args []string) {
 	}
 	t.escalated = 2 // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
 	s.saveGMTicket(ctx, t)
+	// cs_ticket.cpp:322-323: the refreshed ticket state goes to the online
+	// submitter (TicketMgr::SendTicket) before the last-change clock
+	// advances, so the packet still carries the pre-escalation age.
+	if s.server != nil {
+		if sess := s.server.playerSessionForGUID(t.playerGuid); sess != nil {
+			sess.sendGMTicketState(ctx, t)
+		}
+	}
 	s.noteTicketsChanged()
-	// C++ sends no message to the invoking GM here (the submitter gets the
-	// ticket packet via SendTicket, which has no Go bridge), so this arm is
-	// silent, == C++.
+	// C++ sends no message to the invoking GM here, so this arm stays
+	// silent on the GM side, == C++.
 }
 
 // handleTicketEscalatedList mirrors HandleGMTicketListEscalatedCommand.
@@ -417,7 +474,7 @@ func (s *session) handleTicketEscalatedList(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandTicketEscalatedlist) {
 		return
 	}
-	s.ticketListQuery(ctx, "escalated = 2 AND closedBy = 0", "Escalated tickets:") // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
+	s.ticketListQuery(ctx, "escalated = 2 AND type = 0", "Escalated tickets:") // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
 }
 
 // ticketListQuery prints open/closed/escalated ticket lists.
@@ -460,7 +517,7 @@ func (s *session) handleTicketList(ctx context.Context, onlineOnly bool) {
 	}
 	if !onlineOnly {
 		// TicketMgr::ShowList (TicketMgr.cpp:421): !IsClosed() && !IsCompleted().
-		s.ticketListQuery(ctx, "closedBy = 0 AND completed = 0", "Open tickets:")
+		s.ticketListQuery(ctx, "type = 0 AND completed = 0", "Open tickets:")
 		return
 	}
 	// Restrict to tickets whose submitter is online.
@@ -482,12 +539,20 @@ func (s *session) ticketListQueryOnline(ctx context.Context, guids []uint64, hea
 		return
 	}
 	s.sendSysMessage(header)
-	empty := true
+	// ShowList (TicketMgr.cpp:421-428) walks the id-ordered ticket map;
+	// the online sessions iterate in map order, so collect the ids and
+	// print them id-ascending like C++.
+	var ids []uint32
 	for _, g := range guids {
 		var id uint32
-		if err := cdb.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 AND completed = 0 LIMIT 1", g).Scan(&id); err != nil {
+		if err := cdb.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND type = 0 AND completed = 0 LIMIT 1", g).Scan(&id); err != nil {
 			continue
 		}
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	empty := true
+	for _, id := range ids {
 		if t, ok := s.loadGMTicket(ctx, id); ok {
 			s.sendSysMessage(s.ticketFormat(ctx, t))
 			empty = false
@@ -508,7 +573,9 @@ func (s *session) handleTicketReset(ctx context.Context) {
 		return
 	}
 	var openCount int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM gm_ticket WHERE closedBy = 0").Scan(&openCount)
+	// GetOpenTicketCount counts !IsClosed() (TicketMgr.h:226): type-based,
+	// so character-deleted tickets (type 2) do not block the reset.
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM gm_ticket WHERE type = 0").Scan(&openCount)
 	if openCount > 0 {
 		s.sendSysMessage("There are pending tickets.") // LANG_COMMAND_TICKETPENDING 2027
 		return
@@ -551,7 +618,9 @@ func (s *session) handleTicketUnassign(ctx context.Context, args []string) {
 	} else if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
 		var accountID uint32
 		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", t.assignedTo).Scan(&accountID)
-		_ = s.server.AuthStore.DB.QueryRowContext(ctx, "SELECT gmlevel FROM account WHERE id = ?", accountID).Scan(&assigneeSec)
+		// AccountMgr::GetSecurity (AccountMgr.cpp:285-293) reads
+		// account_access, not the legacy account.gmlevel column.
+		assigneeSec = s.accountSecurityLevel(ctx, accountID)
 	}
 	if assigneeSec > s.security {
 		s.sendSysMessage("You cannot unassign a ticket assigned to a higher security level.") // LANG_COMMAND_TICKETUNASSIGNSECURITY 2015
@@ -584,7 +653,8 @@ func (s *session) handleTicketViewID(ctx context.Context, args []string) {
 		return
 	}
 	t, ok := s.loadGMTicket(ctx, uint32(cAtoi(args[0])))
-	if !ok || t.closedBy != 0 || t.completed {
+	// IsClosed() is type-based (TicketMgr.h:97).
+	if !ok || t.ticketType != 0 || t.completed {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		return
 	}
@@ -614,6 +684,12 @@ func (s *session) handleTicketViewName(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .ticket viewname <name>")
 		return
 	}
+	// normalizePlayerName fails on invalid UTF-8 (ObjectMgr.cpp:141-156),
+	// and the handler returns false (syntax) there (cs_ticket.cpp:452-453).
+	if !utf8.ValidString(args[0]) {
+		s.sendSysMessage("Syntax: .ticket viewname <name>")
+		return
+	}
 	name := normalizePlayerName(args[0])
 	var guid uint64
 	if sess := s.sessionForPlayerName(name); sess != nil && sess.player != nil {
@@ -626,8 +702,10 @@ func (s *session) handleTicketViewName(ctx context.Context, args []string) {
 		return
 	}
 	var id uint32
+	// GetTicketByPlayer (TicketMgr.h:196-203) takes the lowest-id
+	// !IsClosed() ticket: type-based, not closedBy-based.
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil ||
-		s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 ORDER BY id ASC LIMIT 1", guid).Scan(&id) != nil {
+		s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND type = 0 ORDER BY id ASC LIMIT 1", guid).Scan(&id) != nil {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		return
 	}
