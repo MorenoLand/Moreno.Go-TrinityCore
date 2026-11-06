@@ -77,9 +77,11 @@
 -- ev22 would frost-tomb Keleseth; the player-cast form rides the pet
 -- funnel — effect 28, spells.go:16321, no temp-summon route on the
 -- player path); repeat {14s,19s} regardless of target found, C++-exact.
--- JustDied (:165-169) — Talk(SAY_DEATH 5) (event 4 — the sjonnir
--- JustDied-Talk precedent); the BossAI::_JustDied() passthrough has no
--- bridge; the combat timers are wiped with it.
+-- JustDied (:165-169) — _JustDied() SetBossState(DATA_PRINCE_KELESETH 0,
+-- DONE) PORTED tick 260 via creature:SetBossState
+-- (lua_creature_events.go:5917; the stale "passthrough has no bridge"
+-- claim is retracted) + Talk(SAY_DEATH 5) (event 4 — the sjonnir
+-- JustDied-Talk precedent); the combat timers are wiped with it.
 -- EVENT_SUMMON_SKELETONS (id 3; init 6s :139, arm :199-202):
 -- Talk(SAY_SUMMON_SKELETONS 2) + SummonSkeletons() (4x SummonCreature
 -- NPC_SKELETON 23970 at {156.2559, 259.2093}, Z 42.8668, :230-234 —
@@ -127,6 +129,7 @@
 -- joins the unmodeled-achievement queue.
 
 local ENTRY_KELESETH = 23953
+local DATA_PRINCE_KELESETH = 0 -- utgarde_keep.h:31
 local ENTRY_FROST_TOMB = 23965 -- NPC_FROSTTOMB (boss_keleseth.cpp:46)
 local ENTRY_SKELETON = 23970 -- NPC_SKELETON (boss_keleseth.cpp:47)
 local ENTRY_RUNEMAGE = 23960 -- NPC_RUNEMAGE (boss_keleseth.cpp:49)
@@ -418,8 +421,11 @@ local function skeletonDamageTaken(event, creature, attacker, damage)
 end
 
 local function kelesethEnterCombat(event, creature, target)
-    -- BossAI::JustEngagedWith (:146, base-first) — SetCombatPulseDelay(5)
+    -- BossAI::JustEngagedWith (:146, base-first) — SetBossState
+    -- (DATA_PRINCE_KELESETH 0, IN_PROGRESS) PORTED tick 260 via
+    -- creature:SetBossState (lua_creature_events.go:5917) + SetCombatPulseDelay(5)
     -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_PRINCE_KELESETH, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_START_COMBAT)
@@ -452,16 +458,28 @@ end
 
 -- C++ JustDied (:165-169): _JustDied() summons.DespawnAll() then
 -- Talk(SAY_DEATH 5) — the sjonnir JustDied-Talk precedent; the
--- despawn leg ports via the ev19 skeleton latch below.
+-- despawn leg ports via the ev19 skeleton latch below, and the
+-- SetBossState(DATA_PRINCE_KELESETH 0, DONE) leg PORTED tick 260 via
+-- creature:SetBossState (lua_creature_events.go:5917).
 local function kelesethDied(event, creature, killer)
+    creature:SetBossState(DATA_PRINCE_KELESETH, 3)
     despawnSkeletons(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
 
--- Shared timer wipe for events 2/23; C++ Reset (_Reset) also
--- summons.DespawnAll(), so the latched skeletons go with it.
-local function cancelCombatTimers(event, creature)
+-- C++ Reset (:134-136): _Reset() — SetBossState(DATA_PRINCE_KELESETH 0,
+-- NOT_STARTED) PORTED tick 260 via creature:SetBossState
+-- (lua_creature_events.go:5917), first per the auriaya/ignis precedent;
+-- _Reset also summons.DespawnAll(), so the latched skeletons go with it.
+-- Split from ev2 this tick (the sjonnir precedent): ev2 leave-combat
+-- does not call Reset in C++, so it stays cancel-only.
+local function kelesethLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function kelesethReset(event, creature)
+    creature:SetBossState(DATA_PRINCE_KELESETH, 0)
     despawnSkeletons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
 end
@@ -481,8 +499,8 @@ end
 
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
 RegisterCreatureEvent(ENTRY_KELESETH, 19, kelesethJustSummoned)
-RegisterCreatureEvent(ENTRY_KELESETH, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_KELESETH, 2, kelesethLeaveCombat)
 RegisterCreatureEvent(ENTRY_KELESETH, 4, kelesethDied)
-RegisterCreatureEvent(ENTRY_KELESETH, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_KELESETH, 23, kelesethReset)
 RegisterCreatureEvent(ENTRY_SKELETON, 9, skeletonDamageTaken)
 RegisterCreatureEvent(ENTRY_SKELETON, 23, skeletonReset)

@@ -47,8 +47,9 @@
 -- the four JustEngagedWith ScheduleEvent legs (C++ lines 165-168); the
 -- C++ early return on PHASE_EVENT / PHASE_UNDEAD is modeled with the
 -- engaged latch below — yell once per pull cycle, silent on the phase-2
--- re-engage (the auriaya engage-port precedent); BossAI passthrough has
--- no bridge.
+-- re-engage (the auriaya engage-port precedent); BossAI::JustEngagedWith
+-- SetBossState(DATA_INGVAR 2, IN_PROGRESS) PORTED tick 260 via
+-- creature:SetBossState (lua_creature_events.go:5917).
 -- EVENT_CLEAVE (id 1; init 6-12s at C++ line 165, arm at 215-216):
 -- DoCastVictim(SPELL_CLEAVE 42724), 1-arg = non-triggered ->
 -- CastSpell(nil, 42724); repeat 6-12s (line 216).
@@ -75,7 +76,9 @@
 -- fireCreatureDamageTaken; the anubarak-spike / halazzi precedent) —
 -- the latch returns false, 0 and any further PHASE_EVENT damage is
 -- zeroed too (C++ boss_ingvar_the_plunderer.cpp:139).
--- JustDied — Talk(SAY_DEATH 2) unconditional (event 4, both entries —
+-- JustDied — _JustDied() SetBossState(DATA_INGVAR 2, DONE) PORTED tick 260
+-- via creature:SetBossState (lua_creature_events.go:5917), first per C++
+-- :180, + Talk(SAY_DEATH 2) unconditional (event 4, both entries —
 -- the real (undead-phase) death yell; the sjonnir JustDied-Talk
 -- precedent).
 -- KilledUnit — Talk(SAY_SLAY 1) player-gated (event 3, both entries — no
@@ -140,6 +143,7 @@
 
 local ENTRY_INGVAR = 23954
 local ENTRY_INGVAR_UNDEAD = 23980
+local DATA_INGVAR = 2 -- utgarde_keep.h:33
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -271,7 +275,11 @@ local function ingvarEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- BossAI::JustEngagedWith (:161, after the phase gate the engaged
-    -- latch mirrors) — SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    -- latch mirrors) — SetBossState(DATA_INGVAR 2, IN_PROGRESS) PORTED
+    -- tick 260 via creature:SetBossState (lua_creature_events.go:5917),
+    -- before SetCombatPulseDelay(5) + me-form DoZoneInCombat (C++
+    -- BossAI::_JustEngagedWith order, ScriptedCreature.cpp:527-544).
+    creature:SetBossState(DATA_INGVAR, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -328,10 +336,13 @@ local function ingvarLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ JustDied: _JustDied() (passthrough, no bridge); Talk(SAY_DEATH) —
--- unconditional — the sjonnir JustDied-Talk precedent. Fires on the real
--- (undead-phase) death; the feign-death yell rides event 9 above.
+-- C++ JustDied: _JustDied() SetBossState(DATA_INGVAR 2, DONE) PORTED
+-- tick 260 via creature:SetBossState (lua_creature_events.go:5917),
+-- first per C++ :180; Talk(SAY_DEATH) — unconditional — the sjonnir
+-- JustDied-Talk precedent. Fires on the real (undead-phase) death; the
+-- feign-death yell rides event 9 above.
 local function ingvarJustDied(event, creature)
+    creature:SetBossState(DATA_INGVAR, 3)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
@@ -364,6 +375,11 @@ local function ingvarReset(event, creature)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+    -- C++ Reset (line 119): _Reset() — SetBossState(DATA_INGVAR 2,
+    -- NOT_STARTED) PORTED tick 260 via creature:SetBossState
+    -- (lua_creature_events.go:5917); placed after the flag re-arms per
+    -- C++ order (Reset body :113-117 runs before _Reset() :119).
+    creature:SetBossState(DATA_INGVAR, 0)
 end
 
 RegisterCreatureEvent(ENTRY_INGVAR, 1, ingvarEnterCombat)

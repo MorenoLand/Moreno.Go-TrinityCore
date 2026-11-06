@@ -109,8 +109,12 @@
 -- engage since ev23 fires ahead of ev4 on the death path). PORTED
 -- 2026-10-24: the ACTION_OTHER_JUST_DIED leg — first-death handler relays
 -- via relayDeathResponse (FindNearestCreature survivor + 2s timer keyed by
--- the survivor's GUID, maulgar precedent). STILL OUT: the triggered
--- ghost summon (summon leg), the summons-despawn leg, and _JustDied().
+-- the survivor's GUID, maulgar precedent). PORTED tick 260: the
+-- both-dead branch _JustDied() SetBossState(DATA_SKARVALD_DALRONN 1,
+-- DONE) leg via creature:SetBossState (lua_creature_events.go:5917) —
+-- C++ order :131 Talk, :132 DoAction, :133 _JustDied, so DONE lands
+-- after the death Talk, not before it. STILL OUT: the triggered
+-- ghost summon (summon leg) and the summons-despawn leg.
 -- DoAction(ACTION_OTHER_JUST_DIED) (lines 144-157) — schedules
 -- EVENT_DEATH_RESPONSE (2s) -> Talk(SAY_DEATH_RESPONSE 4) (lines
 -- 159-163); ports via relayDeathResponse (ev38 dispatch IS bridged,
@@ -123,11 +127,16 @@
 -- 10s, repeat {10s,30s} — PORTED 2026-10-25: creature:IsHeroic() is
 -- bridged (lua_creature_events.go:1806); the stale "BLOCKED per
 -- doctrine" claim is corrected.
--- Ghost-form Reset DoZoneInCombat (lines 108-116), BossAI
--- JustEngagedWith/_Reset/_JustDied passthroughs — no bridges.
+-- Ghost-form Reset DoZoneInCombat (lines 108-116) — no bridge needed:
+-- ghost entries 27390 / 27389 are not registered, so the gate is
+-- structural. BossAI JustEngagedWith / _Reset / _JustDied passthroughs
+-- PORTED tick 260 via creature:SetBossState (lua_creature_events.go:5917)
+-- in the engage / reset / both-dead-died handlers below; the stale
+-- "no bridges" claim is retracted.
 
 local ENTRY_SKARVALD = 24200
 local ENTRY_DALRONN = 24201
+local DATA_SKARVALD_DALRONN = 1 -- utgarde_keep.h:32
 
 local SAY_AGGRO = 0
 local SAY_DEATH = 1
@@ -269,7 +278,11 @@ local function skarvaldEnterCombat(event, creature, target)
     bossDeaths = 0
     -- generic_boss_controllerAI::JustEngagedWith (:192, base-first;
     -- generic base gates on !IsInGhostForm, structural: ghost entries
-    -- unregistered) — SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    -- unregistered) — SetBossState(DATA_SKARVALD_DALRONN 1, IN_PROGRESS)
+    -- PORTED tick 260 via creature:SetBossState (lua_creature_events.go:5917),
+    -- before SetCombatPulseDelay(5) + me-form DoZoneInCombat (C++
+    -- BossAI::_JustEngagedWith order, ScriptedCreature.cpp:527-544).
+    creature:SetBossState(DATA_SKARVALD_DALRONN, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -324,6 +337,11 @@ local function skarvaldDied(event, creature, killer)
     bossDeaths = bossDeaths + 1
     if bossDeaths >= 2 then
         creature:Talk(SAY_DEATH)
+        -- C++ both-dead branch (:131-133): Talk, DoAction
+        -- (ACTION_DESPAWN_SUMMONS, stays out), then _JustDied() —
+        -- SetBossState(DATA_SKARVALD_DALRONN 1, DONE) PORTED tick 260 via
+        -- creature:SetBossState (lua_creature_events.go:5917), after the Talk.
+        creature:SetBossState(DATA_SKARVALD_DALRONN, 3)
     else
         creature:Talk(SAY_DIED_FIRST)
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
@@ -332,6 +350,12 @@ local function skarvaldDied(event, creature, killer)
 end
 
 local function skarvaldReset(event, creature)
+    -- C++ generic_boss_controllerAI::Reset (:102-112): non-ghost
+    -- _Reset() — SetBossState(DATA_SKARVALD_DALRONN 1, NOT_STARTED)
+    -- PORTED tick 260 via creature:SetBossState (lua_creature_events.go:5917),
+    -- first per the auriaya/ignis precedent; the ghost-form
+    -- DoZoneInCombat leg is structural (ghosts unregistered).
+    creature:SetBossState(DATA_SKARVALD_DALRONN, 0)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     enraged[guid] = nil
@@ -428,7 +452,11 @@ local function dalronnEnterCombat(event, creature, target)
     bossDeaths = 0
     -- generic_boss_controllerAI::JustEngagedWith (:252, base-first;
     -- generic base gates on !IsInGhostForm, structural: ghost entries
-    -- unregistered) — SetCombatPulseDelay(5) + me-form DoZoneInCombat.
+    -- unregistered) — SetBossState(DATA_SKARVALD_DALRONN 1, IN_PROGRESS)
+    -- PORTED tick 260 via creature:SetBossState (lua_creature_events.go:5917),
+    -- before SetCombatPulseDelay(5) + me-form DoZoneInCombat (C++
+    -- BossAI::_JustEngagedWith order, ScriptedCreature.cpp:527-544).
+    creature:SetBossState(DATA_SKARVALD_DALRONN, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     schedule(guid, "shadowbolt", 1000, function() shadowBoltTick(creature, guid) end)
@@ -457,6 +485,11 @@ local function dalronnDied(event, creature, killer)
     bossDeaths = bossDeaths + 1
     if bossDeaths >= 2 then
         creature:Talk(SAY_DEATH)
+        -- C++ both-dead branch (:131-133): Talk, DoAction
+        -- (ACTION_DESPAWN_SUMMONS, stays out), then _JustDied() —
+        -- SetBossState(DATA_SKARVALD_DALRONN 1, DONE) PORTED tick 260 via
+        -- creature:SetBossState (lua_creature_events.go:5917), after the Talk.
+        creature:SetBossState(DATA_SKARVALD_DALRONN, 3)
     else
         creature:Talk(SAY_DIED_FIRST)
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
@@ -465,6 +498,12 @@ local function dalronnDied(event, creature, killer)
 end
 
 local function dalronnReset(event, creature)
+    -- C++ generic_boss_controllerAI::Reset (:102-112): non-ghost
+    -- _Reset() — SetBossState(DATA_SKARVALD_DALRONN 1, NOT_STARTED)
+    -- PORTED tick 260 via creature:SetBossState (lua_creature_events.go:5917),
+    -- first per the auriaya/ignis precedent; the ghost-form
+    -- DoZoneInCombat leg is structural (ghosts unregistered).
+    creature:SetBossState(DATA_SKARVALD_DALRONN, 0)
     cancelTimers(creature:GetGUID())
 end
 

@@ -19779,9 +19779,12 @@ func init() {
 	// boss_keleseth; next call is AddSC_boss_skarvald_dalronn()).
 	// Bridgeable arms: JustEngagedWith unconditional Talk(SAY_START_COMBAT
 	// 1) (event 1 — the auriaya engage-port precedent; the runemage /
-	// strategist guard AttackStart leg has no bridge), JustDied
-	// Talk(SAY_DEATH 5) (event 4 — the sjonnir JustDied-Talk precedent),
-	// EVENT_SHADOWBOLT DoCastVictim(43667) non-triggered {2s,3s}/{2s,3s},
+	// strategist guard AttackStart leg is ported in Lua — the stale "no
+	// bridge" claim is retracted), JustDied Talk(SAY_DEATH 5) (event 4 —
+	// the sjonnir JustDied-Talk precedent), SetBossState legs (tick 260):
+	// engage DATA_PRINCE_KELESETH 0 IN_PROGRESS base-first, died DONE,
+	// reset NOT_STARTED (ev23 split from ev2 — ev2 leave-combat does not
+	// call Reset in C++), EVENT_SHADOWBOLT DoCastVictim(43667) non-triggered {2s,3s}/{2s,3s},
 	// EVENT_FROST_TOMB random player 100y without the 48400 aura:
 	// Talk(3)+Talk(4, target)+DoCast(target, 42672, true)+target
 	// self-cast 42714, true, {14s,19s}/{14s,19s} (re-arm outside the
@@ -19814,11 +19817,15 @@ func init() {
 	// Talk(SAY_AGGRO 0) (EVENT_DELAYED_AGGRO_SAY); both bosses'
 	// KilledUnit player-gated Talk(SAY_KILL 3) (event 3); the
 	// !IsInGhostForm gates are satisfied structurally (ghost entries
-	// 27390 / 27389 not registered). The JustDied died-first/death
-	// split is instance-GuidData / cross-creature-gated, the
-	// EVENT_DEATH_RESPONSE Talk is DoAction-gated, and Dalronn's
-	// EVENT_SUMMON_SKELETONS is a heroic summon leg — all
-	// bridge-blocked, documented in the lua header.
+	// 27390 / 27389 not registered). The JustDied died-first/death split
+	// is ported via the per-pull death counter (2026-10-21), the
+	// EVENT_DEATH_RESPONSE Talk via relayDeathResponse (2026-10-24), and
+	// Dalronn's EVENT_SUMMON_SKELETONS as a heroic-gated timer
+	// (2026-10-25) — the stale "bridge-blocked" claims are retracted.
+	// SetBossState legs (tick 260): engage DATA_SKARVALD_DALRONN 1
+	// IN_PROGRESS base-first (both bosses), reset NOT_STARTED (ev23;
+	// ghost-form Reset is structural), died DONE only on the second death
+	// of the pull (both-dead branch, C++ order Talk then _JustDied).
 	// Cast-state gates (2026-11-04): BossAI::UpdateAI pre-loop :578 +
 	// in-loop :584 CASTING returns (neither boss overrides UpdateAI)
 	// ported as 500ms IsCasting defer on all timer arms incl. the delayed
@@ -19844,7 +19851,10 @@ func init() {
 	// unconditional (event 4, both entries); KilledUnit player-gated
 	// Talk(SAY_SLAY 1) (event 3, both entries). The undead entry 23980 is
 	// registered because phase-2 kills and the real death yell fire on
-	// it. All PHASE_UNDEAD arms (dark smash, dreadful roar, woe strike,
+	// it. SetBossState legs (tick 260): engage DATA_INGVAR 2 IN_PROGRESS
+	// (after the PHASE_EVENT/PHASE_UNDEAD early return), died DONE first
+	// (C++ :180), reset NOT_STARTED (after the flag re-arms per C++
+	// Reset order :113-119). All PHASE_UNDEAD arms (dark smash, dreadful roar, woe strike,
 	// shadow axe), EVENT_SUMMON_BANSHEE, EVENT_JUST_TRANSFORMED, the
 	// DoAction(ACTION_START_PHASE_2) machine, npc_annhylde_the_caller
 	// (MovementInform / instance-GuidData / cross-creature resurrect
