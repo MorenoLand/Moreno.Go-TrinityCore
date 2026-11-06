@@ -1,0 +1,26 @@
+-- Utgarde Pinnacle zone file — Lua port of
+-- src/server/scripts/Northrend/UtgardeKeep/UtgardePinnacle/utgarde_pinnacle.cpp
+-- (utgarde_pinnacle.h). The file holds no NPC/GO AI at all — its only
+-- registration is the Beast's Mark AuraScript below. Deliberately
+-- unported (documented only — the script has no bridgeable core):
+-- * spell_utgarde_pinnacle_beast_mark (48876 heroic / 59237 normal,
+--   utgarde_pinnacle.cpp:40-82): AuraScript on EFFECT_0
+--   SPELL_AURA_PROC_TRIGGER_SPELL. CheckProc (:53-66) fires only when
+--   the proc carries damage info, the attacker exists, the damage is
+--   non-zero, and the attacker is CREATURE_TYPE_BEAST; HandleProc
+--   (:68-75) PreventDefaultActions and has the target cast the damage
+--   spell on itself — 48877 when the aura is 59237 (normal), 48876
+--   when the aura is 48876 (heroic) (:33-37, :72).
+--   STAYS OUT: the Go runtime has no aura-proc bridge.
+--   RegisterAuraEvent (engine/scripting/runtime.go:375-411) exposes
+--   only Periodic (1), Apply (2), Remove (3) and ChangeAmount (4) —
+--   there is no OnEffectProc hook and no ProcEventInfo surface, so
+--   neither the CheckProc gate (attacker, damage amount, attacker
+--   creature type) nor the proc fire site can be evaluated; a
+--   periodic/apply registration would fire on the wrong trigger and
+--   fabricate casts. The target self-cast itself would be trivially
+--   bridgeable (target:CastSpell(target, spellId, true)) once a proc
+--   hook lands — re-activates when an aura-proc bridge lands.
+--   Registration is DB-side only (spell_script_names rows for 48876 /
+--   59237); no Lua registration is made here, so nothing in this file
+--   can fire a stub (the karazhan.lua documented-only precedent).

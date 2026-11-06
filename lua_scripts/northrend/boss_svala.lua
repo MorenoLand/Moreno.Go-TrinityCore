@@ -48,15 +48,17 @@
 -- OnReset.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_svala.cpp):
--- boss_svala JustEngagedWith (:173-177, base-first) — BossAI::
--- JustEngagedWith arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
--- (ScriptedCreature.cpp:540/542) ported before Talk(SAY_AGGRO 2)
--- (event 1; instance/setActive/ScheduleTasks legs out).
+-- boss_svala JustEngagedWith (:173-175, base-first) — BossAI::
+-- JustEngagedWith arms SetBossState(DATA_SVALA_SORROWGRAVE 0,
+-- IN_PROGRESS) PORTED tick 261 via creature:SetBossState
+-- (lua_creature_events.go:5917) + SetCombatPulseDelay(5) + me-form
+-- DoZoneInCombat (ScriptedCreature.cpp:540/542) ported before
+-- Talk(SAY_AGGRO 2) (event 1; setActive/ScheduleTasks legs out).
 -- boss_svala KilledUnit (:209-212) — Talk(SAY_SLAY 3) player-gated
 -- (event 3 — the razuvious player-gated variant precedent; the
 -- nil-guard is the hodir-port convention — Eluna event 3 always
 -- carries a victim, so C++-exactness is unaffected).
--- boss_svala JustDied (:217-221) — HandleEmoteCommand(EMOTE_ONESHOT_
+-- boss_svala JustDied (:214-221) — HandleEmoteCommand(EMOTE_ONESHOT_
 -- FLYDEATH 445) is unconditional in C++ (outside the SACRIFICING
 -- SetEquipmentSlots gate) and PerformEmote is bridged
 -- (lua_creature_events.go:347, Unit::HandleEmoteCommand lowering) —
@@ -64,7 +66,11 @@
 -- JustDied-Talk precedent); the SACRIFICING-gated SetEquipmentSlots
 -- leg is PORTED in svalaJustDied (bridged; the phase gate is the
 -- sacrificed latch — see the phase-machine section above). The
--- _JustDied() instance passthrough has no bridge.
+-- _JustDied() SetBossState(DATA_SVALA_SORROWGRAVE 0, DONE) leg is
+-- PORTED tick 261 in svalaJustDied via creature:SetBossState
+-- (lua_creature_events.go:5917), in C++ order (emote :218 -> _JustDied
+-- :219 -> Talk :220); the events.Reset twin rides with it (state wipe
+-- + cancelTimers).
 -- npc_scourge_hulk (26555) — the scourge hulk's two spell-timer arms
 -- are ungated in its UpdateAI (plain Reset-seeded countdowns, no phase groups —
 -- the yogg_saron adds precedent), scheduled here on event 1 with the
@@ -154,8 +160,19 @@
 --   SetDisableGravity(IsInPhase(NORMAL)): the intro never runs, so
 --   the boss is always in the post-intro hover form —
 --   SetDisableGravity(true) (bridged, lua_creature_events.go:784;
---   C++ Reset with _introCompleted -> NORMAL -> true).
--- JustDied (:216) — the SACRIFICING-gated SetEquipmentSlots(false,
+--   C++ Reset with _introCompleted -> NORMAL -> true). _Reset()
+--   (:157) — SetBossState(DATA_SVALA_SORROWGRAVE 0, NOT_STARTED)
+--   PORTED tick 261 via creature:SetBossState
+--   (lua_creature_events.go:5917) in a NEW ev23 handler split from
+--   ev2 (the keleseth precedent), != DONE-gated per
+--   ScriptedCreature.cpp:509-510 (creature:GetBossState bridged,
+--   lua_creature_events.go:5936; the hakkar precedent). The
+--   SetGuidData(DATA_SACRIFICED_PLAYER, Empty) leg (:170) stays out:
+--   the Lua SetGuidData bridge only latches the caller's GUID (no
+--   clear), and the key is read only by the unported channeler
+--   paralyze machine / paralyze SpellScript filter — no observable
+--   effect in the ported model.
+-- JustDied (:217) — the SACRIFICING-gated SetEquipmentSlots(false,
 --   EQUIP_UNEQUIP, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE) = (0,
 --   0xFFFFFFFF, 0xFFFFFFFF) (malchezaar ClearWeapons precedent;
 --   bridged); the phase gate is the sacrificed latch.
@@ -175,11 +192,17 @@
 -- SetCombatMovement(false) + DoCast(me, SPELL_RITUAL_OF_THE_SWORD
 -- 48276)) — summon / instance-GUID / MotionMaster legs, no bridges
 -- (the zarithrian Talk-fused-with-summon precedent). Stay out.
--- EVENT_SPAWN_RITUAL_CHANNELERS / EVENT_RITUAL_STRIKE /
--- EVENT_RITUAL_DISARM (:370-384) — all SACRIFICING-gated summon/
--- interrupt legs (SPELL_RITUAL_CHANNELER_{1,2,3} 48271/48274/48275,
--- SPELL_RITUAL_STRIKE_TRIGGER 48331, SPELL_RITUAL_DISARM 54159) — no
--- bridges. Stay out.
+-- EVENT_SPAWN_RITUAL_CHANNELERS / EVENT_RITUAL_STRIKE (:370-382) —
+-- SACRIFICING-gated summon legs (SPELL_RITUAL_CHANNELER_{1,2,3}
+-- 48271/48274/48275, SPELL_RITUAL_STRIKE_TRIGGER 48331) — no bridges.
+-- Stay out. EVENT_RITUAL_DISARM (:383-384, SPELL_RITUAL_DISARM 54159)
+-- is a plain self-cast but PHASE-DEAD in C++, so it stays out on
+-- fidelity, not bridge, grounds: it is SACRIFICING-grouped and due
+-- 200ms after STRIKE (:381), but the triggered 48331 -> 48277 hit
+-- flips the phase to NORMAL synchronously in SpellHitTarget, and
+-- EventMap::ExecuteEvent discards due events whose phase bits no
+-- longer match (src/common/Utilities/EventMap.cpp:81) — DISARM can
+-- never execute (verified tick 261).
 -- The whole intro Talk machine — Talk(SAY_SVALA_INTRO_0 0) on the
 -- pre-transform entry (EVENT_INTRO_SVALA_TALK_0), Talk(SAY_SVALA_
 -- INTRO_1 0) / Talk(SAY_SVALA_INTRO_2 1) on the boss entry
@@ -205,6 +228,7 @@
 -- future bridge lands on real state.
 
 local ENTRY_SVALA_SORROWGRAVE = 26668
+local DATA_SVALA_SORROWGRAVE = 0 -- utgarde_pinnacle.h:31
 local ENTRY_SCOURGE_HULK = 26555
 local ENTRY_RITUAL_CHANNELER = 27281
 local GO_UTGARDE_MIRROR = 191745
@@ -417,16 +441,21 @@ local function svalaSpellHitTarget(event, creature, target, spellId)
     enterNormalPhase(creature, guid)
 end
 
--- C++ boss_svalaAI::JustEngagedWith (:173-177): BossAI::JustEngagedWith(who)
--- base-first (pulse + me-DoZone ported above Talk; instance/setActive/
--- ScheduleTasks legs out); Talk(SAY_AGGRO) — unconditional (the auriaya
--- engage-port precedent).
+-- C++ boss_svalaAI::JustEngagedWith (:173-175): BossAI::JustEngagedWith(who)
+-- base-first — SetBossState(DATA_SVALA_SORROWGRAVE 0, IN_PROGRESS) PORTED
+-- tick 261 via creature:SetBossState (lua_creature_events.go:5917) +
+-- pulse + me-DoZone ported above Talk; setActive/ScheduleTasks legs out;
+-- Talk(SAY_AGGRO) — unconditional (the auriaya engage-port precedent).
 local function svalaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     svalaState[guid] = { sacrificed = false }
-    -- BossAI::JustEngagedWith (:175, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:174, base-first) — SetBossState
+    -- (DATA_SVALA_SORROWGRAVE 0, IN_PROGRESS) PORTED tick 261 via
+    -- creature:SetBossState (lua_creature_events.go:5917) +
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+    -- (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_SVALA_SORROWGRAVE, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -457,28 +486,36 @@ local function svalaKilledUnit(event, creature, victim)
     creature:Talk(SAY_SLAY)
 end
 
--- C++ JustDied (:217-221): HandleEmoteCommand(EMOTE_ONESHOT_FLYDEATH
--- 445) unconditional — ported (PerformEmote bridged); Talk(SAY_DEATH) —
--- unconditional — the sjonnir JustDied-Talk precedent; SACRIFICING-gated
--- SetEquipmentSlots + _JustDied() instance passthrough stay out
--- (phase-gated / no bridge).
+-- C++ JustDied (:214-221): HandleEmoteCommand(EMOTE_ONESHOT_FLYDEATH
+-- 445) unconditional — ported (PerformEmote bridged); the
+-- SACRIFICING-gated SetEquipmentSlots leg is PORTED above (phase gate
+-- = sacrificed latch); _JustDied() (:219) — events.Reset() +
+-- SetBossState(DATA_SVALA_SORROWGRAVE 0, DONE) PORTED tick 261 via
+-- creature:SetBossState (lua_creature_events.go:5917), in C++ order
+-- (emote :218 -> _JustDied :219 -> Talk :220); Talk(SAY_DEATH) —
+-- unconditional — the sjonnir JustDied-Talk precedent.
 local function svalaJustDied(event, creature)
     local guid = creature:GetGUID()
     local st = svalaState[guid]
-    -- C++ JustDied (:216): the SACRIFICING-gated SetEquipmentSlots
+    -- C++ JustDied (:217): the SACRIFICING-gated SetEquipmentSlots
     -- (false, EQUIP_UNEQUIP, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE) = (0,
     -- 0xFFFFFFFF, 0xFFFFFFFF) (malchezaar ClearWeapons precedent;
     -- bridged). The phase gate is the sacrificed latch.
     if st and st.sacrificed then
         creature:SetEquipmentSlots(EQUIP_UNEQUIP, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE)
     end
+    creature:PerformEmote(EMOTE_ONESHOT_FLYDEATH)
+    -- C++ JustDied (:219): _JustDied() — events.Reset() + SetBossState
+    -- (DATA_SVALA_SORROWGRAVE 0, DONE) PORTED tick 261 via
+    -- creature:SetBossState (lua_creature_events.go:5917).
     svalaState[guid] = nil
     cancelTimers(guid)
-    creature:PerformEmote(EMOTE_ONESHOT_FLYDEATH)
+    creature:SetBossState(DATA_SVALA_SORROWGRAVE, 3)
     creature:Talk(SAY_DEATH)
 end
 
--- Shared state wipe for events 2/23. C++ Reset (:155-170):
+-- Shared state wipe for event 2 (leave combat) and the ev23 reset
+-- handler below. C++ Reset (:155-170):
 -- SetCombatMovement(true) (bridged); SetDisableGravity
 -- (IsInPhase(NORMAL)) — the intro never runs, so the boss is always
 -- in the post-intro hover form: SetDisableGravity(true) (bridged,
@@ -490,6 +527,22 @@ local function svalaWipeCombat(event, creature)
     svalaState[guid] = nil
     creature:SetCombatMovement(true)
     creature:SetDisableGravity(true)
+end
+
+-- C++ Reset (:155-170): _Reset() — SetBossState(DATA_SVALA_SORROWGRAVE 0,
+-- NOT_STARTED) PORTED tick 261 via creature:SetBossState
+-- (lua_creature_events.go:5917), first per C++ order (_Reset :157 runs
+-- before the Reset body); _Reset sets NOT_STARTED only when the stored
+-- state != DONE (ScriptedCreature.cpp:509-510), so the gate below keeps
+-- a DONE boss DONE on the death-path ev23 fire (the hakkar GetBossState
+-- precedent — creature:GetBossState bridged, lua_creature_events.go:5936).
+-- Split from ev2 this tick (the keleseth precedent): ev2 leave-combat
+-- does not call Reset in C++, so it stays wipe-only.
+local function svalaReset(event, creature)
+    if creature:GetBossState(DATA_SVALA_SORROWGRAVE) ~= 3 then
+        creature:SetBossState(DATA_SVALA_SORROWGRAVE, 0)
+    end
+    svalaWipeCombat(event, creature)
 end
 
 -- C++ npc_ritual_channelerAI::Reset (:427-432): Initialize() (the
@@ -583,7 +636,7 @@ RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 3, svalaKilledUnit)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 4, svalaJustDied)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 9, svalaDamageTaken)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 15, svalaSpellHitTarget)
-RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 23, svalaWipeCombat)
+RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 23, svalaReset)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 19, svalaJustSummoned)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 1, hulkEnterCombat)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 2, hulkCancelCombatTimers)

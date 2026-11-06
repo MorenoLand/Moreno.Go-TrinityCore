@@ -50,13 +50,15 @@
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_palehoof.cpp):
 -- boss_palehoof JustEngagedWith (:222-230, base-first) — BossAI::
--- JustEngagedWith arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
--- (ScriptedCreature.cpp:540/542) ported before Talk(SAY_AGGRO 0)
--- (event 1; the instance SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE)
--- leg ports after the timer arms via creature:SendEncounterUnit,
--- bridge live 2026-11-05; the setActive leg stays out) — plus the
--- three timer arms (BossAI-base-gated, see below),
--- scheduled here on the xt002 precedent (C++ schedules on
+-- JustEngagedWith arms SetBossState(DATA_GORTOK_PALEHOOF 1,
+-- IN_PROGRESS) PORTED tick 261 via creature:SetBossState
+-- (lua_creature_events.go:5917) + SetCombatPulseDelay(5) + me-form
+-- DoZoneInCombat (ScriptedCreature.cpp:540/542) ported before
+-- Talk(SAY_AGGRO 0) (event 1; the instance SendEncounterUnit
+-- (ENCOUNTER_FRAME_ENGAGE) leg ports after the timer arms via
+-- creature:SendEncounterUnit, bridge live 2026-11-05; the setActive
+-- leg stays out) — plus the three timer arms (BossAI-base-gated, see
+-- below), scheduled here on the xt002 precedent (C++ schedules on
 -- JustEngagedWith, Go on event 1, same inits):
 --   EVENT_ARCING_SMASH (arm :236-239): DoCastVictim(SPELL_ARCING_SMASH
 --   48260), 1-arg = non-triggered -> CastSpell(nil, 48260); init 7s,
@@ -138,14 +140,28 @@
 -- unchanged.
 -- DOCUMENTED-ONLY (in this header; no registration beyond the five
 -- entries above):
--- boss_palehoof JustDied (:250-256) — DoPlaySoundToSet(PALEHOOF_SOUND_
+-- boss_palehoof JustDied (:254-260) — DoPlaySoundToSet(PALEHOOF_SOUND_
 -- DEATH 13467) with no Talk ported via creature:PlayDirectSound
 -- (dedicated palehoofDied); the instance SetBossState(DONE) leg ports
 -- via creature:SetBossState (bridge live 2026-11-05) and the
 -- SendEncounterUnit disengage leg via creature:SendEncounterUnit.
--- EnterEvadeMode (:260-265) — SendEncounterUnit disengage ports on
+-- EnterEvadeMode (:262-267) — SendEncounterUnit disengage ports on
 -- event 2 (dedicated palehoofLeaveCombat); the summons.DespawnAll /
--- _DespawnAtEvade legs stay out (no bridges).
+-- _DespawnAtEvade legs stay out (no bridges). C++ EnterEvadeMode does
+-- NOT call _Reset/BossAI::Reset, so ev2 carries no SetBossState leg;
+-- the _DespawnAtEvade FAIL leg rides the ev23 state-aware leg in
+-- palehoofReset (IN_PROGRESS -> FAIL, spawn path -> NOT_STARTED).
+-- boss_palehoof Reset (:200-210) — _Reset() SetBossState
+-- (DATA_GORTOK_PALEHOOF 1, NOT_STARTED) PORTED tick 261 via
+-- creature:SetBossState (lua_creature_events.go:5917), first per C++
+-- order (_Reset :202 runs before the sphere re-arm), != DONE-gated
+-- per ScriptedCreature.cpp:509-510 (creature:GetBossState bridged,
+-- lua_creature_events.go:5936; the hakkar precedent). The minibosses'
+-- own boss states are untouched in C++ and in Lua: PalehoofMinionsBossAI
+-- overrides Reset (:329-335), JustEngagedWith (:336-341) and JustDied
+-- (:353-357) WITHOUT base calls, so their DATA_* states never move —
+-- no SetBossState legs to port for 26683/26684/26685/26686 (verified
+-- tick 261).
 -- PalehoofMinionsBossAI Reset (:329-335) — DoCastSelf(SPELL_FREEZE
 -- 16245, true) PORTED as a triggered self-cast on event 23
 -- (minibossReset; the anubrekhan/auriaya/ichoron triggered-3rd-arg
@@ -161,6 +177,7 @@
 -- no-AuraScript-bridge queues.
 
 local ENTRY_GORTOK_PALEHOOF = 26687
+local DATA_GORTOK_PALEHOOF = 1 -- utgarde_pinnacle.h:32
 
 local SOUND_PALEHOOF_DEATH = 13467
 local GO_GORTOK_PALEHOOF_SPHERE = 188593 -- utgarde_pinnacle.h:94
@@ -340,14 +357,21 @@ local function witheringRoarTick(creature, guid)
 end
 
 -- C++ boss_palehoofAI::JustEngagedWith (:222-230): BossAI::JustEngagedWith
--- base-first (pulse + me-DoZone ported above Talk; SendEncounterUnit
+-- base-first — SetBossState(DATA_GORTOK_PALEHOOF 1, IN_PROGRESS) PORTED
+-- tick 261 via creature:SetBossState (lua_creature_events.go:5917) +
+-- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+-- (ScriptedCreature.cpp:540/542) ported above Talk; SendEncounterUnit
 -- ports after the timer arms below — C++ sends it last, :229);
 -- Talk(SAY_AGGRO) — unconditional (the auriaya
 -- engage-port precedent) — plus the three event-schedule inits (:226-228)
 -- carried on event 1 on the xt002 precedent.
 local function palehoofEnterCombat(event, creature, target)
-    -- BossAI::JustEngagedWith (:224, base-first) — SetCombatPulseDelay(5)
-    -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    -- BossAI::JustEngagedWith (:224, base-first) — SetBossState
+    -- (DATA_GORTOK_PALEHOOF 1, IN_PROGRESS) PORTED tick 261 via
+    -- creature:SetBossState (lua_creature_events.go:5917) +
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat
+    -- (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_GORTOK_PALEHOOF, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -534,8 +558,25 @@ end
 -- DATA_GORTOK_PALEHOOF_SPHERE) -> SetGoState(GO_STATE_READY) +
 -- RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE), via the
 -- kirtonos/gandling FindNearestGameObject precedent (100y room scale;
--- C++ uses the instance GUID, Lua the nearest entry match).
+-- C++ uses the instance GUID, Lua the nearest entry match). The _Reset()
+-- SetBossState(DATA_GORTOK_PALEHOOF 1, NOT_STARTED) leg is PORTED tick
+-- 261 via creature:SetBossState (lua_creature_events.go:5917), first
+-- per C++ order (_Reset :202 runs before the sphere re-arm), !=
+-- DONE-gated per ScriptedCreature.cpp:509-510 (creature:GetBossState
+-- bridged, lua_creature_events.go:5936; the hakkar precedent).
+-- Evade correction (in-house): C++ EnterEvadeMode (:262-267) overrides
+-- without Reset and ends in _DespawnAtEvade() -> FAIL
+-- (ScriptedCreature.cpp:617), so the evade-path fire (stored state
+-- IN_PROGRESS) sets FAIL; the spawn-path fire sets NOT_STARTED. The
+-- death pre-fire is skipped via the IsDead guard (DONE lands in ev4).
 local function palehoofReset(event, creature)
+    if not creature:IsDead() then
+        if creature:GetBossState(DATA_GORTOK_PALEHOOF) == 1 then
+            creature:SetBossState(DATA_GORTOK_PALEHOOF, 2) -- FAIL: evade path
+        elseif creature:GetBossState(DATA_GORTOK_PALEHOOF) ~= 3 then
+            creature:SetBossState(DATA_GORTOK_PALEHOOF, 0) -- NOT_STARTED: spawn path
+        end
+    end
     cancelCombatTimers(event, creature)
     if creature:IsAlive() then
         local sphere = creature:FindNearestGameObject(GO_GORTOK_PALEHOOF_SPHERE, 100.0)
@@ -546,12 +587,12 @@ local function palehoofReset(event, creature)
     end
 end
 
--- C++ boss_palehoofAI::JustDied (:250-256): events.Reset() +
+-- C++ boss_palehoofAI::JustDied (:254-260): events.Reset() +
 -- instance->SetBossState(DATA_GORTOK_PALEHOOF, DONE) + DoPlaySoundToSet(me, PALEHOOF_SOUND_DEATH 13467) +
 -- SendEncounterUnit disengage; no Talk arms. Arm order is C++-exact.
 local function palehoofDied(event, creature, killer)
     cancelCombatTimers(event, creature)
-    creature:SetBossState(1, 3) -- DATA_GORTOK_PALEHOOF, DONE (boss_palehoof.cpp:257)
+    creature:SetBossState(DATA_GORTOK_PALEHOOF, 3) -- DATA_GORTOK_PALEHOOF, DONE (boss_palehoof.cpp:257)
     creature:PlayDirectSound(SOUND_PALEHOOF_DEATH)
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_palehoof.cpp:259)
     -- C++ instance_utgarde_pinnacle OnGameObjectCreate leg (sphere
@@ -565,7 +606,7 @@ local function palehoofDied(event, creature, killer)
     end
 end
 
--- C++ boss_palehoofAI::EnterEvadeMode (:260-265): disengage first,
+-- C++ boss_palehoofAI::EnterEvadeMode (:262-267): disengage first,
 -- then events.Reset + summons.DespawnAll + _DespawnAtEvade (no
 -- bridges). Event 2 only — the minibosses keep the shared
 -- cancelCombatTimers on event 2 (no SendEncounterUnit in their AI).

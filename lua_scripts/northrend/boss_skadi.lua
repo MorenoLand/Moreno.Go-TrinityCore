@@ -50,22 +50,30 @@
 -- boss_skadi.cpp):
 -- boss_skadi KilledUnit — Talk(SAY_KILL 1) player-gated (event 3 — the
 -- razuvious player-gated variant precedent).
--- boss_skadi JustDied — Talk(SAY_DEATH 3) unconditional (event 4 — the
--- sjonnir JustDied-Talk precedent; the _JustDied() passthrough leg has
--- no bridge).
+-- boss_skadi JustDied — _JustDied() SetBossState(DATA_SKADI 2, DONE)
+-- PORTED tick 261 via creature:SetBossState (lua_creature_events.go:5917),
+-- first per C++ :217; Talk(SAY_DEATH 3) unconditional (event 4 — the
+-- sjonnir JustDied-Talk precedent; the events.Reset / scheduler.CancelAll
+-- legs are internal).
 -- boss_skadi inherited BossAI::JustEngagedWith (boss_skadiAI has NO
--- override — kelthuzad precedent) — SetCombatPulseDelay(5) + me-form
--- DoZoneInCombat (ScriptedCreature.cpp:540/542) ported into
+-- override — kelthuzad precedent) — SetBossState(DATA_SKADI 2,
+-- IN_PROGRESS) PORTED tick 261 via creature:SetBossState
+-- (lua_creature_events.go:5917) + SetCombatPulseDelay(5) + me-form
+-- DoZoneInCombat (ScriptedCreature.cpp:537/540/542) ported into
 -- skadiEnterCombat (instance/setActive/ScheduleTasks legs out; the
 -- DoAction encounter-start legs ride the collapsed ev1 model).
 -- boss_skadi gauntlet reset-check — DoAction(ACTION_START_ENCOUNTER,
--- :239-246) 6s scheduler: FindNearestCreature(NPC_TRIGGER_RESET 23472,
+-- :241-246) 6s scheduler: FindNearestCreature(NPC_TRIGGER_RESET 23472,
 -- 200.0f) -> trigger self-cast SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_
 -- CHECK 49308, triggered, Repeat 6s. PORTED on event 1 (the C++ start
 -- leg is the area trigger's DoAction call (:968, unported sender —
 -- dispatch IS bridged, ev38), so the Lua pump starts at first combat
 -- instead of encounter-start: gauntlet-window checks are missed, the
--- 6s cadence once running is C++-exact); cancelled on 2/4/23.
+-- 6s cadence once running is C++-exact); cancelled on 2/4/23. The
+-- SetBossState(IN_PROGRESS) :232 leg rides the same event-1 hook (see
+-- the engage leg above). The 2s DoCast(grauf, SPELL_RIDE_GRAUF 61791)
+-- leg (:247-251) stays out — the cast's effect is the vehicle board
+-- (PassengerBoarded machine), no vehicle bridge; re-verified tick 261.
 -- The ymirjar trash spell-timer kits run under the npc_skadi_trashAI
 -- TaskScheduler validator (!CASTING, boss_skadi.cpp ctor :476-479),
 -- so all six carry the 500ms IsCasting defer, ported with per-entry
@@ -119,6 +127,12 @@
 -- PASSIVE) (:170) + Grauf summon PORTED 2026-10-25 on event 23
 -- (skadiReset; the stale "event 23 not registered for Skadi" claim
 -- is corrected — event 23 was registered, as cancelCombatTimers).
+-- Boss-state leg (tick 261, corrected in-house): ev23 is state-aware
+-- — IN_PROGRESS (the evade-path fire, EnterEvadeMode :177-179 ->
+-- _DespawnAtEvade, ScriptedCreature.cpp:617) sets FAIL; any other
+-- stored state (!= DONE, the spawn/respawn-path fire where C++ Reset
+-- runs _Reset) sets NOT_STARTED. The death pre-fire is IsDead-guarded
+-- in skadiReset.
 -- Talk(SAY_AGGRO 0) rides DoAction(ACTION_START_ENCOUNTER) (area-trigger
 -- DoAction machine) — event 1 deliberately NOT registered (registering
 -- it would deviate from C++: ground-phase combat entry yells nothing
@@ -148,8 +162,10 @@
 -- spell_summon_gauntlet_mobs_periodic — SpellScript / AuraScript hooks
 -- only — join the no-SpellScript / no-AuraScript-bridge queues.
 -- achievement_girl_love_to_skadi (OnCheck: GetData(DATA_LOVE_TO_SKADI)
--- == 1) — no GetData / achievement bridges; joins the
--- unmodeled-achievement queue.
+-- == 1) — GetData/SetData exist as a per-motion ScriptData store
+-- (lua_creature_events.go:771-800, tick-261 re-check) but the achievement
+-- OnCheck consumer has no Lua hook; joins the unmodeled-achievement
+-- queue. The love counter itself is kept in harpoonState (see below).
 -- at_skadi_gaunlet — AreaTriggerScript, no bridge; documented only.
 
 local ENTRY_SKADI_THE_RUTHLESS = 26693
@@ -157,6 +173,7 @@ local ENTRY_YMIRJAR_WARRIOR = 26690
 local ENTRY_YMIRJAR_WITCH_DOCTOR = 26691
 local ENTRY_YMIRJAR_HARPOONER = 26692
 local ENTRY_GRAUF = 26893 -- utgarde_pinnacle.h:70
+local DATA_SKADI_THE_RUTHLESS = 2 -- utgarde_pinnacle.h:33
 local NPC_TRIGGER_RESET = 23472 -- utgarde_pinnacle.h:74
 local SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_CHECK = 49308 -- boss_skadi.cpp:54
 
@@ -253,10 +270,26 @@ end
 -- (NPC_GRAUF, GraufLoc) when the instance lacks Grauf. The ev23
 -- death-path pre-fire (23 then 4) is guarded: C++ Reset never runs
 -- on death, so a dead Skadi only cancels timers here.
+-- Boss-state leg (tick 261, corrected in-house): C++ Skadi OVERRIDES
+-- EnterEvadeMode (:177-179) with no Reset() call — evade runs
+-- summons.DespawnAll() + _DespawnAtEvade(), which sets FAIL
+-- (ScriptedCreature.cpp:617). But ev23 also fires on spawn/respawn
+-- (fireCreatureSpawned pre-fire, lua_creature_events.go:6762), where
+-- C++ Reset runs _Reset() -> NOT_STARTED (:509-510). The two paths
+-- are told apart by the stored state: IN_PROGRESS means this fire is
+-- the evade path -> FAIL; anything else (!= DONE) is the spawn path
+-- -> NOT_STARTED. The death pre-fire is guarded by the IsDead return
+-- above. PORTED tick 261 via creature:SetBossState
+-- (lua_creature_events.go:5917).
 local function skadiReset(event, creature)
     cancelTimers(creature:GetGUID())
     if creature:IsDead() then
         return
+    end
+    if creature:GetBossState(DATA_SKADI_THE_RUTHLESS) == 1 then
+        creature:SetBossState(DATA_SKADI_THE_RUTHLESS, 2) -- FAIL: evade path
+    elseif creature:GetBossState(DATA_SKADI_THE_RUTHLESS) ~= 3 then
+        creature:SetBossState(DATA_SKADI_THE_RUTHLESS, 0) -- NOT_STARTED: spawn path
     end
     -- C++ Initialize (:157-158) via Reset (:166-172): counters re-zeroed.
     harpoonState[creature:GetGUID()] = nil
@@ -311,21 +344,31 @@ local function skadiKilledUnit(event, creature, victim)
     end
 end
 
--- C++ JustDied (:217-220): _JustDied() (DespawnAll) before Talk.
+-- C++ JustDied (:217-220): _JustDied() (DespawnAll + SetBossState DONE,
+-- ScriptedCreature.cpp:519) before Talk (:218) — the DONE leg PORTED
+-- tick 261 via creature:SetBossState (lua_creature_events.go:5917).
 local function skadiJustDied(event, creature)
+    creature:SetBossState(DATA_SKADI_THE_RUTHLESS, 3) -- DONE
     despawnSkadiSummons(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
 
 -- C++ DoAction(ACTION_START_ENCOUNTER) reset-check scheduler
--- (boss_skadi.cpp:239-246): 6s first tick, Repeat 6s; the trigger
+-- (boss_skadi.cpp:241-246): 6s first tick, Repeat 6s; the trigger
 -- self-cast is the mandokir/fathomlord found-creature CastSpell
 -- precedent. Starts at first combat (area-trigger sender unported —
 -- see header).
 -- Inherited BossAI::JustEngagedWith arms (no override — kelthuzad
 -- precedent) ported at the handler tail (see header).
 local function skadiEnterCombat(event, creature)
+    -- C++ DoAction(ACTION_START_ENCOUNTER) :232 + BossAI::_JustEngagedWith
+    -- (ScriptedCreature.cpp:537): SetBossState(DATA_SKADI_THE_RUTHLESS,
+    -- IN_PROGRESS) — PORTED tick 261 via creature:SetBossState
+    -- (lua_creature_events.go:5917), first per the _JustEngagedWith order.
+    -- The area-trigger DoAction sender is unported, so the event-1 hook is
+    -- the only available one (same proxy as the reset-check pump below).
+    creature:SetBossState(DATA_SKADI_THE_RUTHLESS, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     local function resetCheckTick()
@@ -529,7 +572,7 @@ RegisterCreatureEvent(ENTRY_GRAUF, 4, graufJustDied)
 -- C++ npc_graufAI::SpellHit (boss_skadi.cpp:447-452): SPELL_LAUNCH_HARPOON
 -- hit on Grauf -> skadi DoAction(ACTION_HARPOON_HIT) (:291-295), counter
 -- only: _harpoonHit++, _loveSkadi = 1 on the first hit. Event 14 fires on
--- the hit target (boss_ai.go:3776, args event/creature/caster/spellid);
+-- the hit target (boss_ai.go:3813, args event/creature/caster/spellid);
 -- Skadi resolves via the graufJustDied FindNearestCreature precedent.
 -- Consumers (DRAKE_BREATH love 1->2, GetData achievement) stay out.
 local function graufSpellHit(event, creature, caster, spellId)

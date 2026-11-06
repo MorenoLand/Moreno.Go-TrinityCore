@@ -36,10 +36,11 @@
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_ymiron.cpp):
 -- JustEngagedWith (:141-149, base-first) — BossAI::JustEngagedWith
--- arms SetCombatPulseDelay(5) + me-form DoZoneInCombat
--- (ScriptedCreature.cpp:540/542) ported before Talk(SAY_AGGRO 0)
--- (event 1; instance/setActive/ScheduleTasks legs out) — plus the four
--- EVENT_GROUP_BASE_SPELLS timer inits
+-- arms SetBossState(DATA_KING_YMIRON 3, IN_PROGRESS) PORTED tick 261 via
+-- creature:SetBossState (lua_creature_events.go:5917) + SetCombatPulseDelay(5)
+-- + me-form DoZoneInCombat (ScriptedCreature.cpp:537/540/542) ported
+-- before Talk(SAY_AGGRO 0) (event 1; instance/setActive/ScheduleTasks
+-- legs out) — plus the four EVENT_GROUP_BASE_SPELLS timer inits
 -- carried on event 1 on the xt002 precedent (C++ schedules on
 -- JustEngagedWith, Go on event 1, same inits). All four arms run
 -- under BossAI::UpdateAI base gates (ScriptedCreature.cpp pre-loop
@@ -62,9 +63,15 @@
 --   DUNGEON_MODE({60s,65s},{45s,50s}) — difficulty-branched via
 --   creature:IsHeroic() (lua_creature_events.go:260, per-instance
 --   difficulty; the old "no difficulty bridge" claim was stale).
--- JustDied (:277) — Talk(SAY_DEATH 2) — unconditional (the sjonnir
--- JustDied-Talk precedent; the _JustDied() passthrough leg has no
--- bridge).
+-- JustDied (:277) — _JustDied() SetBossState(DATA_KING_YMIRON 3, DONE)
+-- PORTED tick 261 via creature:SetBossState (lua_creature_events.go:5917),
+-- first per C++ :279; Talk(SAY_DEATH 2) — unconditional (the sjonnir
+-- JustDied-Talk precedent; the events.Reset / scheduler.CancelAll legs
+-- are internal).
+-- Reset (:134-141) — _Reset() SetBossState(DATA_KING_YMIRON 3, NOT_STARTED)
+-- unless DONE + SetReactState(REACT_AGGRESSIVE) PORTED tick 261 on a NEW
+-- ev23 handler split from ev2 (the sjonnir precedent); Initialize() legs
+-- have no Lua mirrors (see ymironReset).
 -- KilledUnit (:283) — Talk(SAY_SLAY 1) player-gated (event 3 — the
 -- razuvious player-gated variant precedent).
 -- DOCUMENTED DEVIATION: the ancestor phase machine is unbridged — the
@@ -104,22 +111,29 @@
 -- with the ancestor summon — no MovementInform / summon bridges (the
 -- zarithrian Talk-fused-with-summon precedent). Stay out.
 -- The JustSummoned legs (NPC_SPIRIT_FOUNT 48380 self-cast + SetDisplayId
--- 11686; NPC_AVENGING_SPIRIT random-target AddThreat/AttackStart) —
--- summon legs, no bridges. Stay out.
+-- 11686; NPC_AVENGING_SPIRIT random-target AddThreat/AttackStart) stay out —
+-- the methods ARE bridged (SetDisplayId lua_creature_events.go:4170,
+-- AddThreat :2058, AttackStart :6125, tick-261 re-check) but the legs can
+-- never fire in the Lua model: their trigger summons come from the ancestor
+-- events, which ride the unbridged boat machine. A JustSummoned handler
+-- would be dead code.
 -- spell_dark_slash — SpellScript OnHit damage hook only; joins the
 -- no-SpellScript-bridge queue.
 -- The kingsBane SpellHitTarget latch (:153-157): if (target->GetTypeId()
 -- == TYPEID_PLAYER && spellInfo->Id == SPELL_BANE_HIT 59203) kingsBane =
 -- false — pure achievement bookkeeping feeding GetData(DATA_KINGS_BANE
--- 2157); no GetData / achievement consumer bridge, and a write-only
--- local would be dead code (Eluna CREATURE_EVENT_ON_SPELL_HIT_TARGET /
--- event 15 fires per boss_ai.go:2204, but nothing reads the latch).
+-- 2157). GetData/SetData exist as a per-motion ScriptData store
+-- (lua_creature_events.go:771-800, tick-261 re-check) and event 15 fires
+-- (boss_ai.go:4003), but the achievement OnCheck consumer has no Lua hook
+-- and nothing reads the latch — a write-only local would be dead code.
 -- Documented only.
 -- achievement_kings_bane (OnCheck: GetData(DATA_KINGS_BANE 2157) == 1) —
--- no GetData / achievement bridges; joins the unmodeled-achievement
--- queue.
+-- the achievement OnCheck consumer has no Lua hook (GetData itself exists
+-- as a ScriptData store, lua_creature_events.go:771-800); joins the
+-- unmodeled-achievement queue.
 
 local ENTRY_KING_YMIRON = 26861
+local DATA_KING_YMIRON = 3 -- utgarde_pinnacle.h:34
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -228,8 +242,12 @@ end
 -- precedent); the four base-spell schedule inits are carried here on
 -- the xt002 precedent.
 local function ymironEnterCombat(event, creature, target)
-    -- BossAI::JustEngagedWith (:143, base-first) — SetCombatPulseDelay(5)
+    -- BossAI::JustEngagedWith (:143, base-first) — SetBossState(DATA_KING_YMIRON,
+    -- IN_PROGRESS) PORTED tick 261 via creature:SetBossState
+    -- (lua_creature_events.go:5917), first per BossAI::_JustEngagedWith
+    -- (ScriptedCreature.cpp:537), before SetCombatPulseDelay(5)
     -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_KING_YMIRON, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -258,15 +276,40 @@ local function ymironKilledUnit(event, creature, victim)
     end
 end
 
--- C++ JustDied (:268-272): _JustDied() (passthrough, no bridge);
+-- C++ JustDied (:277-280): _JustDied() (SetBossState DONE,
+-- ScriptedCreature.cpp:519) then Talk (:280) — the DONE leg PORTED
+-- tick 261 via creature:SetBossState (lua_creature_events.go:5917);
 -- Talk(SAY_DEATH) — unconditional — the sjonnir JustDied-Talk precedent.
 local function ymironJustDied(event, creature)
+    creature:SetBossState(DATA_KING_YMIRON, 3) -- DONE
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ boss_ymironAI::Reset (:134-141): _Reset() — SetBossState(DATA_KING_YMIRON 3,
+-- NOT_STARTED) unless DONE (BossAI::_Reset, ScriptedCreature.cpp:509-510) PORTED
+-- tick 261 via creature:SetBossState (lua_creature_events.go:5917), gated on
+-- GetBossState (lua_creature_events.go:5936); the IsDead guard mirrors _Reset's
+-- !IsAlive return (:501) and covers the ev23 death-path pre-fire (23 then 4);
+-- then SetReactState(REACT_AGGRESSIVE) :140. Split from ev2 this tick (the
+-- sjonnir precedent): ev2 leave-combat does not call Reset in C++, so it stays
+-- cancel-only. Initialize() legs (kingsBane / ActivedNumber /
+-- HealthAmountModifier / GUID clears) have no Lua mirrors — the kingsBane latch
+-- is documented-only (see header) and the boat-machine counters ride the
+-- unbridged machine.
+local function ymironReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsDead() then
+        return
+    end
+    if creature:GetBossState(DATA_KING_YMIRON) ~= 3 then
+        creature:SetBossState(DATA_KING_YMIRON, 0)
+    end
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
 end
 
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 1, ymironEnterCombat)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 3, ymironKilledUnit)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 4, ymironJustDied)
-RegisterCreatureEvent(ENTRY_KING_YMIRON, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_KING_YMIRON, 23, ymironReset)
