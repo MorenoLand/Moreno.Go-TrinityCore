@@ -113,7 +113,9 @@
 
 local ENTRY_ANUBREKHAN = 15956
 local BOSS_ANUBREKHAN = 0 -- naxxramas.h:30 (NAXEncounter, first entry)
-local BOSS_STATE_DONE = 2
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76); the old DONE = 2 was FAIL, fixed 2026-11-05 (SetBossState census)
 local GROUP_INITIAL_25M = 1 -- boss_anubrekhan.cpp:64 (SpawnGroups)
 local GROUP_SINGLE_SPAWN = 2 -- boss_anubrekhan.cpp:65
 
@@ -315,6 +317,7 @@ local function berserkTick(creature, guid)
 end
 
 local function anubrekhanEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_ANUBREKHAN, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan/loatheb/razuvious precedent)
     creature:Talk(SAY_AGGRO)
@@ -379,6 +382,7 @@ end
 
 local function anubrekhanDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(BOSS_ANUBREKHAN, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
 end
 
 -- C++ JustSummoned (boss_anubrekhan.cpp:118-126): BossAI latch +
@@ -394,6 +398,9 @@ end
 
 local function anubrekhanReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(BOSS_ANUBREKHAN) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_ANUBREKHAN, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
 end
 
 -- C++ InitializeAI (boss_anubrekhan.cpp:97-104): alive + boss state !=

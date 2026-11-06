@@ -352,6 +352,11 @@ local function beginFighting(creature, guid, which)
     end
 end
 
+local BOSS_HORSEMEN = 12 -- naxxramas.h:42 (NAXEncounter)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local GAMEOBJECT_FLAGS = 9
 local GO_FLAG_NOT_SELECTABLE = 16
 local GO_NAXX_PORTAL_MILITARY = 181578 -- naxxramas.h:168
@@ -360,6 +365,7 @@ local GO_HORSEMEN_CHEST_HERO = 193426 -- naxxramas.h:116
 
 local function makeHandlers(which)
     local function enterCombat(event, creature)
+        creature:SetBossState(BOSS_HORSEMEN, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith via BeginEncounter (boss_four_horsemen.cpp:217), idempotent across the four engages
         local guid = creature:GetGUID()
         shouldSay[guid] = (which == "thane" or which == "sir")
         creature:Talk(SAY_AGGRO)
@@ -388,6 +394,7 @@ local function makeHandlers(which)
                 data[which .. "Done"] = true
                 if data.baronDone and data.thaneDone and data.ladyDone and data.sirDone and not data.horsemenDone then
                     data.horsemenDone = true
+                    creature:SetBossState(BOSS_HORSEMEN, BOSS_STATE_DONE) -- EncounterCleared (boss_four_horsemen.cpp:279), before the credit cast below
                     local chest = creature:FindNearestGameObject(GO_HORSEMEN_CHEST, 1000)
                     if not chest then
                         chest = creature:FindNearestGameObject(GO_HORSEMEN_CHEST_HERO, 1000)
@@ -408,6 +415,9 @@ local function makeHandlers(which)
     end
     local function reset(event, creature)
         cancelTimers(creature:GetGUID())
+        if creature:GetBossState(BOSS_HORSEMEN) ~= BOSS_STATE_DONE then
+            creature:SetBossState(BOSS_HORSEMEN, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+        end
         creature:SetReactState(2)
         creature:SetCombatMovement(false)
         creature:SetCombatPulseDelay(0)

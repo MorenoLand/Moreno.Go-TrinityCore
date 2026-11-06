@@ -194,6 +194,9 @@ local EMOTE_GUARDIAN_APPEAR = 1 -- boss_kelthuzad.cpp:848
 local ACTION_JUST_SUMMONED = 1 -- boss_kelthuzad.cpp:76 (Actions enum)
 local ACTION_BEGIN_ENCOUNTER = 0 -- boss_kelthuzad.cpp:74 (Actions enum)
 local BOSS_KELTHUZAD = 14 -- naxxramas.h NAXEncounter (0-based: ANUBREKHAN 0 .. SAPPHIRON 13, KELTHUZAD 14)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 local SPELL_VISUAL_CHANNEL = 29423 -- boss_kelthuzad.cpp:89
 local SAY_SUMMON_MINIONS = 14 -- boss_kelthuzad.cpp:40
 local SUMMON_GROUP_MINION_FIRST = 5 -- boss_kelthuzad.cpp:116
@@ -359,6 +362,9 @@ end
 local function kelthuzadReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if creature:GetBossState(BOSS_KELTHUZAD) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_KELTHUZAD, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
     despawnKelthuzadSummons(guid, false)
     creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0)
     -- C++ Reset (:223-235) zeroes the spawn-chain counts and _phaseThree;
@@ -391,6 +397,7 @@ end
 -- SetCombatPulseDelay(5) + me-form DoZoneInCombat at first engage; no Talk
 -- here (SAY_AGGRO rides EVENT_DESPAWN_MINIONS).
 local function kelthuzadEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_KELTHUZAD, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
@@ -513,6 +520,7 @@ local function kelthuzadDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     despawnKelthuzadSummons(creature:GetGUID(), true) -- C++ _JustDied (:280): non-guardian summons despawn; guardians flee, not despawned
     kelthuzadGuardianFlee(creature)
+    creature:SetBossState(BOSS_KELTHUZAD, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:Talk(SAY_DEATH)
     local throne = creature:FindNearestGameObject(GO_KELTHUZAD_THRONE, 1000)
     if throne then
@@ -997,7 +1005,7 @@ local function kelthuzadDoAction(event, creature, action)
         return
     end
     creature:RemoveFlag(59, 0x100) -- SetImmuneToPC(false)
-    creature:SetBossState(BOSS_KELTHUZAD, 1) -- IN_PROGRESS
+    creature:SetBossState(BOSS_KELTHUZAD, BOSS_STATE_IN_PROGRESS) -- IN_PROGRESS
     creature:DoZoneInCombat()
     creature:CastSpell(creature, SPELL_VISUAL_CHANNEL) -- DoCastAOE self-cast
     creature:Talk(SAY_SUMMON_MINIONS)

@@ -18,6 +18,9 @@
 -- no Lua consumer reads them yet, they mirror the C++ latch set);
 -- kelthuzadDoor (GO_ROOM_KELTHUZAD object found by sapphiron's
 -- onDied, opened at the end of the sapphiron chain);
+-- hadSapphironBirth (set by go_sapphiron_birth.lua on use; read by
+-- sapphiron's ev5 spawn handler — the C++ instance
+-- SetData(DATA_HAD_SAPPHIRON_BIRTH, 1) leg in Lua form);
 -- wingTaunt (next SAY_KELTHUZAD wing-taunt id, starts 16).
 -- Ported arms (C++-exact unless noted):
 -- - SetBossState DONE legs, re-expressed at DONE time (see below):
@@ -42,10 +45,10 @@
 -- Unmodeled (documented-only, no bridges):
 -- - Boss boundaries + door data: no boundary model and no
 --   boss-state door machine in Go (debug boundary axis blocked).
--- - OnGameObjectCreate portal/throne/birth legs in their C++
---   create-time form (static-create never fires; the DONE-time
---   form ports, see above); GO_BIRTH delete has no trigger at
---   all (no OnLootStateChanged fire site either).
+-- - OnGameObjectCreate portal/throne legs in their C++ create-time
+--   form (static-create never fires; the DONE-time form ports, see
+--   above); the GO_BIRTH create leg ports as the sapphironDone
+--   guard in go_sapphiron_birth.lua (had-birth is the use latch).
 -- - Sapphiron door-close on non-DONE SetBossState: Go observes
 --   only DONE (via onDied), so the HandleGameObject(false) leg
 --   runs at DONE, not on every state transition.

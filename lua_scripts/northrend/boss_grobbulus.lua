@@ -146,7 +146,13 @@ local function berserkTick(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK, true)
 end
 
+local BOSS_GROBBULUS = 7 -- naxxramas.h:37 (NAXEncounter)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local function grobbulusEnterCombat(event, creature)
+    creature:SetBossState(BOSS_GROBBULUS, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -170,6 +176,7 @@ end
 
 local function grobbulusDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(BOSS_GROBBULUS, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
 end
 
 local function grobbulusSpellHitTarget(event, creature, target, spellId)
@@ -181,6 +188,9 @@ end
 
 local function grobbulusReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(BOSS_GROBBULUS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_GROBBULUS, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
 end
 
 RegisterCreatureEvent(ENTRY_GROBBULUS, 1, grobbulusEnterCombat)

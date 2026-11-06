@@ -359,7 +359,13 @@ nothGround = function(creature, guid)
     enterPhaseGround(creature, guid)
 end
 
+local BOSS_NOTH = 3 -- naxxramas.h:33 (NAXEncounter)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local function nothEnterCombat(event, creature)
+    creature:SetBossState(BOSS_NOTH, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -386,6 +392,7 @@ local function nothTargetDied(event, creature, victim)
 end
 
 local function nothDied(event, creature, killer)
+    creature:SetBossState(BOSS_NOTH, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
@@ -407,6 +414,9 @@ local function nothJustSummoned(event, creature, summon)
 end
 
 local function nothReset(event, creature)
+    if creature:GetBossState(BOSS_NOTH) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_NOTH, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
     local guid = creature:GetGUID()
     local st = state[guid]
     if st ~= nil and st.phase == "balcony" then

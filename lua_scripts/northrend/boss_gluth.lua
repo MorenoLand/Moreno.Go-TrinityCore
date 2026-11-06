@@ -233,7 +233,13 @@ end
 -- C++ JustEngagedWith: schedules EVENT_WOUND (10s), EVENT_ENRAGE
 -- (randtime 16s,22s), EVENT_DECIMATE (randtime 110s,120s),
 -- EVENT_BERSERK (8min). No aggro Talk in C++.
+local BOSS_GLUTH = 8 -- naxxramas.h:38 (NAXEncounter)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local function gluthEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_GLUTH, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -261,10 +267,14 @@ end
 
 local function gluthDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(BOSS_GLUTH, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
 end
 
 local function gluthReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(BOSS_GLUTH) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_GLUTH, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
     -- C++ boss_gluthAI::Reset (boss_gluth.cpp:107-114): _Reset() +
     -- zombie GUID clear + state NORMAL + SetReactState(REACT_AGGRESSIVE)
     -- (:112) + SetSpeed 12.0f below. The react leg is a C++-exact

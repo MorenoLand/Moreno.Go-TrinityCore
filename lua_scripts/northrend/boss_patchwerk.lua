@@ -165,7 +165,13 @@ local function berserkTick(creature, guid)
     end)
 end
 
+local BOSS_PATCHWERK = 6 -- naxxramas.h:36 (NAXEncounter)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local function patchwerkEnterCombat(event, creature)
+    creature:SetBossState(BOSS_PATCHWERK, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -191,11 +197,15 @@ end
 
 local function patchwerkDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(BOSS_PATCHWERK, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:Talk(SAY_DEATH)
 end
 
 local function patchwerkReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(BOSS_PATCHWERK) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_PATCHWERK, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
 end
 
 RegisterCreatureEvent(ENTRY_PATCHWERK, 1, patchwerkEnterCombat)

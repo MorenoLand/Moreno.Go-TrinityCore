@@ -80,6 +80,11 @@ local SPELL_FRIGHTENING_SHOUT = 19134 -- boss_nexus_commanders.cpp:26
 local SPELL_FROZEN_PRISON = 47543 -- boss_nexus_commanders.cpp:28
 local SPELL_CHARGE = 60067 -- boss_nexus_commanders.cpp:25
 
+local DATA_COMMANDER = 0 -- nexus.h:30 (NEXDataTypes, BossAI boss id)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -191,6 +196,7 @@ end
 -- above via creature:RemoveAura (the old "no aura-removal bridge"
 -- claim was stale).
 local function commandersEnterCombat(event, creature, target)
+    creature:SetBossState(DATA_COMMANDER, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     -- C++ JustEngagedWith base call first (boss_nexus_commanders.cpp:56):
     -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
     -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
@@ -233,12 +239,16 @@ end
 -- C++ JustDied: Talk(SAY_DEATH 2) (the _JustDied bookkeeping has no
 -- bridge — tharon_ja precedent).
 local function commandersDied(event, creature, killer)
+    creature:SetBossState(DATA_COMMANDER, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
 
 local function commandersReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(DATA_COMMANDER) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_COMMANDER, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
 end
 
 RegisterCreatureEvent(ENTRY_STOUTBEARD, 1, commandersEnterCombat)

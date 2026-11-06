@@ -145,7 +145,13 @@ local function sporeTick(creature, guid)
     end)
 end
 
+local BOSS_LOATHEB = 5 -- naxxramas.h:35 (NAXEncounter)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+
 local function loathebEnterCombat(event, creature)
+    creature:SetBossState(BOSS_LOATHEB, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan precedent)
     local guid = creature:GetGUID()
@@ -177,6 +183,7 @@ local GO_NAXX_PORTAL_PLAGUE = 181577 -- naxxramas.h:167
 -- wing taunt (create-time form cannot fire — see instance file).
 local function loathebDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(BOSS_LOATHEB, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     local portal = creature:FindNearestGameObject(GO_NAXX_PORTAL_PLAGUE, 1000)
     if portal then
         portal:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
@@ -198,6 +205,9 @@ end
 
 local function loathebReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(BOSS_LOATHEB) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_LOATHEB, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, plr in ipairs(GetPlayersInWorld()) do
         if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then

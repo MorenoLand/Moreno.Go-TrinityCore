@@ -78,11 +78,16 @@
 -- EMOTE_AIR_PHASE (0), EVENT_BREATH EMOTE_BREATH (2), EVENT_LAND
 -- EMOTE_GROUND_PHASE (1).
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
+-- BossAI base legs PORTED 2026-11-05 (SetBossState census):
+-- IN_PROGRESS on ev1 (base-first), DONE on ev4, NOT_STARTED on
+-- ev23 when != DONE (ScriptedCreature.cpp:537/:519/:510); the
+-- tick-246 "boss-state legs PORTED" note was wrong — this file
+-- had zero SetBossState calls before this port.
 -- Unmodeled (no bridges — documented, not wired):
--- InitializeAI — instance GetBossState(BOSS_SAPPHIRON) / GetData(
--- DATA_HAD_SAPPHIRON_BIRTH) legs + visibility/flag/react-state legs —
--- instance-blocked (no instance bridge; flag/react-state ARE bridged in
--- isolation).
+-- InitializeAI — PORTED 2026-11-05 (SetBossState census): DONE-gated
+-- return + had-birth-gated invisibility via the shared instanceData
+-- table (go_sapphiron_birth.lua sets hadSapphironBirth); the
+-- BossAI::InitializeAI() tail is the Reset twin (ev23).
 -- Reset — PORTED 2026-10-25 for the flight-phase leg (player
 -- icebolt-aura strip via the loatheb GetPlayersInWorld idiom +
 -- SetReactState(REACT_AGGRESSIVE) + hover off, gated on the flight
@@ -104,8 +109,9 @@
 -- MovementInform (MovePoint 1 -> liftoff) — no motion bridge;
 -- the flight chain is timer-driven instead (see the port note
 -- above), so the travel leg is approximated away, not ported.
--- DoAction(ACTION_BIRTH) — cross-AI from go_sapphiron_birth — no
--- instance/cross-AI bridge.
+-- DoAction(ACTION_BIRTH) — PORTED 2026-11-05 (ev38 receiver +
+-- 23s birth tick; creature:DoAction is bridged, thaddius tick-248
+-- precedent; sender is go_sapphiron_birth.lua).
 -- GetGUID(DATA_BLIZZARD_TARGET) — summons-list filtering +
 -- BlizzardTargetSelector random target — no summon-list /
 -- random-target bridges (cairne/kazzak precedent).
@@ -133,7 +139,8 @@
 -- Explosion / Reset includePets/includeControlled aura-strip legs
 -- — no pet/controlled iteration bridge (player strip itself is
 -- ported via the loatheb idiom).
--- EVENT_BIRTH — visible/flag/react legs (no bridges).
+-- EVENT_BIRTH — PORTED 2026-11-05 as the 23s birth tick in
+-- sapphironDoAction (SetPhase(PHASE_BIRTH) has no Lua consumer).
 -- npc_sapphiron_blizzard (NPC_BLIZZARD 16474, C++-exact from the
 -- owner enum; ScriptedAI — no RegisterLuaBoss surface, razuvious
 -- precedent): Reset REACT_PASSIVE + TaskScheduler DoCastSelf(
@@ -144,10 +151,10 @@
 -- NPC_WING_BUFFET 17025 is C++-exact from the owner enum
 -- (entry-verifiable but summon STRAND absent — bridge-blocked
 -- queue).
--- go_sapphiron_birth (GameObjectScript — no GO bridge): GO_ACTIVATED
--- -> cross-AI DoAction(ACTION_BIRTH) via instance GetGuidData(
--- DATA_SAPPHIRON) + SetData(DATA_HAD_SAPPHIRON_BIRTH, 1) — joins
--- the instance/GO queue.
+-- go_sapphiron_birth — PORTED 2026-11-05 as
+-- go_sapphiron_birth.lua (OnUse 14 twin of the GO_ACTIVATED leg;
+-- instance SetData rides the shared instanceData table;
+-- JUST_DEACTIVATED delete rides the immediate Despawn).
 -- spell_sapphiron_change_blizzard_target (AuraScript) /
 -- spell_sapphiron_icebolt (AuraScript) /
 -- spell_sapphiron_summon_blizzard (SpellScript) — no AuraScript /
@@ -442,7 +449,16 @@ end
 -- precedent), EVENT_DRAIN (randtime 22s,28s, unmasked),
 -- EVENT_FLIGHT (48.5s), EVENT_BERSERK (15min, unmasked). No aggro
 -- Talk in C++.
+local BOSS_SAPPHIRON = 13 -- naxxramas.h:43 (NAXEncounter)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 2
+local ACTION_BIRTH = 1 -- boss_sapphiron.cpp:90
+
 local function sapphironEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_SAPPHIRON, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; anubrekhan/gothik precedent)
     local guid = creature:GetGUID()
@@ -483,6 +499,7 @@ local GO_STATE_READY = 1
 -- for the instance pump's chain-end open + DONE flag for the chain.
 local function sapphironDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(BOSS_SAPPHIRON, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:CastSpell(creature, SPELL_DIES, true)
     local door = creature:FindNearestGameObject(GO_ROOM_KELTHUZAD, 1000)
     if door then
@@ -507,6 +524,9 @@ local function sapphironReset(event, creature)
     local guid = creature:GetGUID()
     local wasFlying = flying[guid]
     cancelTimers(guid)
+    if creature:GetBossState(BOSS_SAPPHIRON) ~= BOSS_STATE_DONE then
+        creature:SetBossState(BOSS_SAPPHIRON, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+    end
     if wasFlying then
         creature:SetReactState(REACT_AGGRESSIVE)
         creature:PerformEmote(293) -- C++ Reset :162 (EMOTE_ONESHOT_LAND)
@@ -518,6 +538,45 @@ local function sapphironReset(event, creature)
             end
         end
     end
+end
+
+-- C++ InitializeAI (boss_sapphiron.cpp:133-149): DONE-gated return +
+-- had-birth-gated invisibility (SetVisible(false) +
+-- UNIT_FLAG_NON_ATTACKABLE + REACT_PASSIVE); the BossAI::InitializeAI()
+-- tail is the Reset twin (ev23). The had-birth latch rides the shared
+-- instanceData table (go_sapphiron_birth.lua sets it on use; nil
+-- before the first birth, so the pre-birth invisibility is the
+-- default, C++-exact).
+local function sapphironSpawn(event, creature)
+    if creature:GetBossState(BOSS_SAPPHIRON) == BOSS_STATE_DONE then
+        return
+    end
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if not (data and data.hadSapphironBirth) then
+        creature:SetVisible(false)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:SetReactState(REACT_PASSIVE)
+    end
+end
+
+-- C++ DoAction(ACTION_BIRTH 1) (boss_sapphiron.cpp:219-223): SetPhase(
+-- PHASE_BIRTH) + EVENT_BIRTH in 23s. The phase has no Lua consumer
+-- (the engage handler seeds the ground timers directly), so only the
+-- 23s birth tick ports: visible + flag clear + REACT_AGGRESSIVE
+-- (boss_sapphiron.cpp:403-407). Combat cannot start pre-birth
+-- (invisible + non-attackable + passive), so cancelTimers cannot
+-- eat this tick.
+local function sapphironDoAction(event, creature, action)
+    if action ~= ACTION_BIRTH then
+        return
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "birth", 23000, function()
+        creature:SetVisible(true)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:SetReactState(REACT_AGGRESSIVE)
+    end)
 end
 
 -- C++ DamageTaken (:171-176): while in PHASE_FLIGHT, a LETHAL hit only
@@ -535,6 +594,8 @@ local function sapphironDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 1, sapphironEnterCombat)
+RegisterCreatureEvent(ENTRY_SAPPHIRON, 5, sapphironSpawn)
+RegisterCreatureEvent(ENTRY_SAPPHIRON, 38, sapphironDoAction)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 2, sapphironLeaveCombat)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 4, sapphironDied)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 9, sapphironDamageTaken)
