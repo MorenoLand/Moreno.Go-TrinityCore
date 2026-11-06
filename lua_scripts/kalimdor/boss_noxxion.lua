@@ -124,11 +124,12 @@ onAdds = function(creature, guid)
     creature:SetFaction(FACTION_FRIENDLY)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetDisplayId(DISPLAY_INVISIBLE)
-    local x, y, z, o = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
+    local x, y, z = creature:GetX(), creature:GetY(), creature:GetZ()
     local victim = creature:GetVictim()
     for _ = 1, 5 do
+        -- C++ DoSpawnCreature angle arg is 0, not the summoner's orientation.
         local spore = creature:SummonCreature(NPC_SPORE,
-            x + math.random(-7, 7), y + math.random(-7, 7), z, o, 1, 90000)
+            x + math.random(-7, 7), y + math.random(-7, 7), z, 0, 1, 90000)
         if spore ~= nil and victim ~= nil then
             spore:EngageWithTarget(victim)
         end
