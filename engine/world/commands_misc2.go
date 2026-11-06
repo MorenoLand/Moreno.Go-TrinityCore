@@ -132,19 +132,6 @@ const (
 	misc2GraveNoData        = "Graveyard data is unavailable."
 )
 
-// misc2LowerSecurity mirrors the ChatHandler::HasLowerSecurity guard used by
-// the summon/kick/repair arms (cs_misc.cpp): the command fails when the
-// target account's security outranks the handler's.
-func (s *session) misc2LowerSecurity(ctx context.Context, online *session, guid uint64) bool {
-	var accountID uint32
-	if online != nil {
-		accountID = online.accountID
-	} else if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", guid).Scan(&accountID)
-	}
-	return s.security < s.accountSecurityLevel(ctx, accountID)
-}
-
 // misc2SessionForAccount finds an online session holding the given account
 // (the C++ HandleMuteCommand "find only player from same account" leg:
 // FindSession(accountId) when the named character itself is offline).
@@ -251,6 +238,11 @@ func (s *session) gpsSelectedTarget() (mapID, instanceID, phase uint32, x, y, z,
 		if motion := s.findCreatureMotion(s.selection); motion != nil {
 			return motion.Map, motion.InstanceID, gpsPhaseMask(motion.PhaseMask), motion.X, motion.Y, motion.Z, motion.Orientation, true
 		}
+	}
+	// C++ getSelectedUnit() falls back to self (Chat.cpp:312-320): a
+	// selection that resolves to no unit reports the invoker's position.
+	if s.player != nil {
+		return s.player.Map, s.player.InstanceID, s.currentPlayerPhaseMask(), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, true
 	}
 	s.sendSysMessage("Select a character or creature.") // LANG_SELECT_CHAR_OR_CREATURE 1
 	return 0, 0, 0, 0, 0, 0, 0, false
@@ -438,7 +430,59 @@ func (s *session) handleCmdGUID(ctx context.Context) {
 		s.sendSysMessage(misc2NoSelection)
 		return
 	}
-	s.sendSysMessage(fmt.Sprintf(misc2ObjectGUID, strconv.FormatUint(s.selection, 10)))
+	s.sendSysMessage(fmt.Sprintf(misc2ObjectGUID, miscGUIDToString(s.selection)))
+}
+
+// miscGUIDToString mirrors ObjectGuid::ToString (ObjectGuid.cpp:48-58):
+// "GUID Full: 0x%016x Type: <name>[ Entry: n | Pet number: n ] Low: <n>".
+// The entry leg applies to entry-carrying highs (GameObject/Transport/Unit/
+// Pet/Vehicle, default); the counter is the low 24 bits there and the full
+// low 32 bits for Player/Item/DynamicObject/Corpse/Mo_Transport/Instance/
+// Group (objectGUIDCounter, ObjectGuid.h:148-153).
+func miscGUIDToString(guid uint64) string {
+	high := uint16(guid >> 48)
+	var typeName string
+	switch high {
+	case 0x4000:
+		typeName = "Item"
+	case 0x0000:
+		typeName = "Player"
+	case 0xF110:
+		typeName = "Gameobject"
+	case 0xF120:
+		typeName = "Transport"
+	case 0xF130:
+		typeName = "Creature"
+	case 0xF140:
+		typeName = "Pet"
+	case 0xF150:
+		typeName = "Vehicle"
+	case 0xF100:
+		typeName = "DynObject"
+	case 0xF101:
+		typeName = "Corpse"
+	case 0x1FC0:
+		typeName = "MoTransport"
+	case 0x1F40:
+		typeName = "InstanceID"
+	case 0x1F50:
+		typeName = "Group"
+	default:
+		typeName = "<unknown>"
+	}
+	middle := ""
+	switch high {
+	case 0x0000, 0x4000, 0xF100, 0xF101, 0x1FC0, 0x1F40, 0x1F50:
+		// No entry leg (ObjectGuid.h:216-234).
+	default:
+		entry := uint32(guid>>24) & 0xFFFFFF
+		if high == 0xF140 {
+			middle = fmt.Sprintf(" Pet number: %d ", entry)
+		} else {
+			middle = fmt.Sprintf(" Entry: %d ", entry)
+		}
+	}
+	return fmt.Sprintf("GUID Full: 0x%016x Type: %s%s Low: %d", guid, typeName, middle, objectGUIDCounter(guid))
 }
 
 // handleCmdHelp2 mirrors HandleHelpCommand (cs_misc.cpp:695-703, RBAC 507):
@@ -653,15 +697,21 @@ func (s *session) handleCmdKickPlayer(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandKick) {
 		return
 	}
-	target, _, name, ok := s.miscResolvePlayerTarget(ctx, args)
+	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
+		return
+	}
+	if target == nil {
+		// C++ extractPlayerTarget (Chat.cpp:657-706) fails for offline
+		// targets: PLAYER_NOT_FOUND, no kick message.
+		s.sendSysMessage(miscPlayerNotFound)
 		return
 	}
 	if target == s {
 		s.sendSysMessage(misc2KickSelf)
 		return
 	}
-	if s.misc2LowerSecurity(ctx, target, 0) {
+	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
 		return
 	}
 	reason := "No reason."
@@ -1035,7 +1085,9 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) {
 			target = s.misc2SessionForAccount(accountID)
 		}
 	}
-	if s.misc2LowerSecurity(ctx, target, guid) {
+	// C++ HasLowerSecurity(..., true) (cs_misc.cpp:1865): strong — equal
+	// security also fails, no RBAC-47 bypass.
+	if s.characterTargetLowerSecurityStrong(ctx, characterTarget{online: target, guid: guid, name: name}) {
 		return
 	}
 	var accountID uint32
@@ -1415,16 +1467,26 @@ func (s *session) handleCmdRepairItems(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
-	if s.misc2LowerSecurity(ctx, target, guid) {
+	if target == nil {
+		// C++ extractPlayerTarget (cs_misc.cpp:2301-2302) fails for offline
+		// targets: PLAYER_NOT_FOUND, nothing repaired.
+		s.sendSysMessage(miscPlayerNotFound)
+		return
+	}
+	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
 		return
 	}
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
 	cdb := s.server.CharactersStore.DB
+	// Player::DurabilityRepairAll (Player.cpp:4996-5006) covers equipped,
+	// backpack and bag items only: bag 0 slots 0-38 and bags 19-22 slots
+	// 0-35. Bank, buyback and keys are not repaired.
 	rows, err := cdb.QueryContext(ctx,
 		`SELECT ii.guid, ii.itemEntry, ii.durability FROM character_inventory ci
-		 JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ?`, guid)
+		 JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ?
+		 AND ((ci.bag = 0 AND ci.slot < 39) OR (ci.bag >= 19 AND ci.bag < 23 AND ci.slot < 36))`, guid)
 	if err != nil {
 		return
 	}
@@ -1644,7 +1706,9 @@ func (s *session) handleCmdRevive2(ctx context.Context, args []string) {
 		return
 	}
 	if target != nil {
-		full := s.commandAllowed(ctx, permissionResurrectWithFullHPS)
+		// C++ checks the TARGET's permission (cs_misc.cpp:644), and is
+		// silent on success — no "Revived" message.
+		full := target.commandAllowed(ctx, permissionResurrectWithFullHPS)
 		pct := float32(0.5)
 		if full {
 			pct = 1.0
@@ -1652,7 +1716,6 @@ func (s *session) handleCmdRevive2(ctx context.Context, args []string) {
 		target.resurrectPlayer(ctx, pct)
 		target.spawnCorpseBones(ctx)
 		_ = target.savePlayerState(ctx, 1, false)
-		s.sendSysMessage(fmt.Sprintf("Revived %s.", miscPlayerLink(name)))
 		return
 	}
 	s.sendSysMessage(fmt.Sprintf("The offline revive of %s is not available: offline resurrection has no Go bridge yet.", miscPlayerLink(name)))
@@ -1681,11 +1744,12 @@ func (s *session) handleCmdSaveAll(ctx context.Context) {
 }
 
 // handleCmdSave2 mirrors HandleSaveCommand (cs_misc.cpp:848-871, RBAC 525):
-// save the selected player (or self) to the DB. The old position-only
-// handleCmdSave stub in commands.go is replaced by this full C++ port.
-// Documented fidelity gap (not a stub): CONFIG_INTERVAL_SAVE has no Go
-// config field, so the 20-second save throttle is skipped and the save is
-// unconditional outside the without-delay permission path.
+// the without-delay branch saves the selected player (or self); the
+// throttled branch saves the invoker only (cs_misc.cpp:867-869). The old
+// position-only handleCmdSave stub in commands.go is replaced by this full
+// C++ port. Documented fidelity gap (not a stub): CONFIG_INTERVAL_SAVE has
+// no Go config field, so the 20-second save throttle is skipped and the
+// save is unconditional outside the without-delay permission path.
 func (s *session) handleCmdSave2(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandSave) {
 		return
@@ -1702,7 +1766,7 @@ func (s *session) handleCmdSave2(ctx context.Context) {
 		s.sendSysMessage(misc2PlayerSaved)
 		return
 	}
-	if err := target.savePlayerState(ctx, 1, false); err != nil {
+	if err := s.savePlayerState(ctx, 1, false); err != nil {
 		s.sendSysMessage("Failed to save character: " + err.Error())
 	}
 }
@@ -1825,7 +1889,7 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 		s.sendSysMessage(miscCantTeleportSelf)
 		return
 	}
-	if s.misc2LowerSecurity(ctx, target, guid) {
+	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
 		return
 	}
 	if target != nil && target.player != nil {
@@ -1891,7 +1955,9 @@ func (s *session) handleCmdUnFreeze(ctx context.Context, args []string) {
 		name = normalizePlayerName(args[0])
 		target = s.sessionForPlayerName(name)
 	} else {
-		target = s.server.playerSessionForGUID(s.selection)
+		// C++ no-name leg uses getSelectedPlayer() (cs_misc.cpp:2429-2433):
+		// no selection falls back to self.
+		target = s.miscSelectedPlayerStrict()
 		if target != nil && target.player != nil {
 			name = target.player.Name
 		}
@@ -1932,7 +1998,9 @@ func (s *session) handleCmdUnmute(ctx context.Context, args []string) {
 			target = s.misc2SessionForAccount(accountID)
 		}
 	}
-	if s.misc2LowerSecurity(ctx, target, guid) {
+	// C++ HasLowerSecurity(..., true) (cs_misc.cpp:1932): strong — equal
+	// security also fails, no RBAC-47 bypass.
+	if s.characterTargetLowerSecurityStrong(ctx, characterTarget{online: target, guid: guid, name: name}) {
 		return
 	}
 	var accountID uint32
@@ -2020,19 +2088,24 @@ func (s *session) handleCmdUnstuck(ctx context.Context, args []string) {
 		return
 	}
 	target, _, name, ok := s.miscResolvePlayerTarget(ctx, args[:1])
-	if !ok || target == nil || target.player == nil {
+	if !ok {
 		return
 	}
-	if s.misc2LowerSecurity(ctx, target, 0) {
+	if target == nil || target.player == nil {
+		// C++ extractPlayerTarget fails for offline targets (cs_misc.cpp:937-938).
+		s.sendSysMessage(miscPlayerNotFound)
 		return
 	}
+	// C++ HandleUnstuckCommand (cs_misc.cpp:916-976) has no HasLowerSecurity gate.
+
 	if target.inFlight || target.attackTarget != 0 || target.player.UnitFlags&unitFlagInCombat != 0 {
 		s.sendSysMessage(fmt.Sprintf("%s cannot be unstuck while in flight or combat.", miscPlayerLink(name)))
 		return
 	}
 	loc := "inn"
 	if len(args) > 1 {
-		loc = strings.ToLower(args[1])
+		// C++ compares the raw token (cs_misc.cpp:956-966): "INN" is not "inn".
+		loc = args[1]
 	}
 	switch loc {
 	case "inn":

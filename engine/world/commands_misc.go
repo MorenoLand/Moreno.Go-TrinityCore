@@ -180,6 +180,18 @@ func (s *session) miscSelectedPlayerOrSelf() *session {
 	return nil
 }
 
+// miscSelectedPlayerStrict mirrors ChatHandler::getSelectedPlayer
+// (Chat.cpp:301-310) exactly: no selection falls back to self, but a set
+// selection resolves only to a connected player — a creature selection
+// yields nil, not self. The freeze/unfreeze arms depend on that nil leg
+// (cs_misc.cpp:2387-2391/2429-2433).
+func (s *session) miscSelectedPlayerStrict() *session {
+	if s.selection == 0 {
+		return s
+	}
+	return s.miscSelectedPlayerSession()
+}
+
 // handleAddItemCommand mirrors HandleAddItemCommand (cs_misc.cpp:1147-1273,
 // RBAC 488): [name]/link/id form, signed count (negative destroys), and the
 // selected-player-or-self target. The GM-self binding strip has no Go
@@ -684,7 +696,9 @@ func (s *session) handleCmdCombatStop(ctx context.Context, args []string) {
 		return
 	}
 	if target == nil {
-		s.sendSysMessage("Combat stop requires an online player.")
+		// C++ looks the name up online only (cs_misc.cpp:2267-2275):
+		// an offline target reports PLAYER_NOT_FOUND.
+		s.sendSysMessage(miscPlayerNotFound)
 		return
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
@@ -693,6 +707,9 @@ func (s *session) handleCmdCombatStop(ctx context.Context, args []string) {
 	victim := target.attackTarget
 	target.attackTarget = 0
 	_ = target.sendAttackStop(victim, false)
+	// Unit::CombatStop (Unit.cpp:5809-5826) ends PvE/PvP combat, not just
+	// the attack swing: clear the in-combat flag as well.
+	markPlayerOutOfCombat(ctx, target)
 }
 
 // handleCmdComeToMe mirrors HandleComeToMeCommand (cs_misc.cpp:2099-2114,
@@ -1191,32 +1208,51 @@ func (s *session) handleCmdDistance(ctx context.Context, args []string) {
 	}
 	var target *session
 	if len(args) > 0 && args[0] != "" {
-		guid := miscExtractLinkID(args[0], "Hplayer")
-		if guid == 0 {
-			if g64, err := strconv.ParseUint(args[0], 10, 32); err == nil {
-				guid = uint32(g64)
+		// C++ extractLowGuidFromLink (Chat.cpp:598-624) takes only |H...:|
+		// links: a bare number fails silently (cs_misc.cpp:768-770).
+		tag, data := gpsLinkTagData(args[0])
+		switch tag {
+		case "player":
+			name := normalizePlayerName(data)
+			if name == "" {
+				return
 			}
-		}
-		if s.server != nil {
-			target = s.server.playerSessionForGUID(uint64(guid))
-		}
-		if target == nil || target.player == nil {
+			target = s.sessionForPlayerName(name)
+			if target == nil || target.player == nil {
+				// The name resolves through the character cache even
+				// offline (Chat.cpp:611-614); only an unknown name
+				// fails silently, an offline player reports not-found.
+				if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+					var g uint64
+					if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? LIMIT 1", name).Scan(&g); err == nil && g != 0 {
+						s.sendSysMessage(miscPlayerNotFound)
+						return
+					}
+				}
+				return
+			}
+		case "creature", "gameobject":
 			s.sendSysMessage("Distance to creatures and gameobjects is unavailable: the Go tree has no unit/object bridge.")
+			return
+		default:
 			return
 		}
 	} else {
-		target = s.miscSelectedPlayerSession()
-		if target == nil || target.player == nil {
-			s.sendSysMessage(miscSelectCharOrCreat)
-			return
-		}
+		// C++ getSelectedUnit() falls back to self (Chat.cpp:312-320).
+		target = s
 	}
 	dx := float64(s.player.X - target.player.X)
 	dy := float64(s.player.Y - target.player.Y)
 	dz := float64(s.player.Z - target.player.Z)
-	dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
-	dist2d := math.Sqrt(dx*dx + dy*dy)
-	s.sendSysMessage(fmt.Sprintf("Distance: %.2f (2D: %.2f, exact: %.2f, exact 2D: %.2f)", dist, dist2d, dist, dist2d))
+	exact := math.Sqrt(dx*dx + dy*dy + dz*dz)
+	exact2d := math.Sqrt(dx*dx + dy*dy)
+	// WorldObject::GetDistance/GetDistance2d (Object.cpp:1169-1191) subtract
+	// both combat reaches and clamp at 0; GetExactDist is the raw center
+	// distance.
+	reach := float64(miscPlayerCombatReach(s.player) + miscPlayerCombatReach(target.player))
+	dist := math.Max(0, exact-reach)
+	dist2d := math.Max(0, exact2d-reach)
+	s.sendSysMessage(fmt.Sprintf("Distance: %.2f (2D: %.2f, exact: %.2f, exact 2D: %.2f)", dist, dist2d, exact, exact2d))
 }
 
 // handleCmdFlushArenaPoints mirrors HandleFlushArenaPointsCommand
@@ -1265,10 +1301,10 @@ func (s *session) handleCmdFreeze(ctx context.Context, args []string) {
 	canApply := false
 	getDurationFromConfig := false
 	if len(args) == 0 {
-		target = s.miscSelectedPlayerSession() // C++ case 1: bare .freeze freezes the selected player
+		target = s.miscSelectedPlayerStrict() // C++ case 1: bare .freeze freezes the selected player (getSelectedPlayer self-fallback)
 		getDurationFromConfig = true
 	} else if d, err := strconv.ParseUint(args[0], 10, 32); err == nil {
-		target = s.miscSelectedPlayerSession()
+		target = s.miscSelectedPlayerStrict()
 		freezeDuration = uint32(d)
 		canApply = true
 	} else {
@@ -1300,9 +1336,8 @@ func (s *session) handleCmdFreeze(ctx context.Context, args []string) {
 		s.sendSysMessage(miscFreezeError)
 		return
 	}
-	if s.characterTargetLowerSecurity(ctx, characterTarget{name: target.player.Name, guid: target.playerGUID, online: target}) {
-		return // C++ HasLowerSecurity: silent fail (implied by freeze targeting)
-	}
+	// C++ HandleFreezeCommand (cs_misc.cpp:2318-2415) has no HasLowerSecurity
+	// gate: any GM holding the command permission may freeze.
 	target.applyAuraWithDuration(freezeAuraSpellID, freezeDuration*1000)
 	s.sendSysMessage(fmt.Sprintf(miscFreeze, miscPlayerLink(target.player.Name)))
 	_ = target.savePlayerState(ctx, 1, false)

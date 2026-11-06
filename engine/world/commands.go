@@ -3642,6 +3642,25 @@ func (s *session) characterTargetLowerSecurity(ctx context.Context, t characterT
 	return s.security < s.accountSecurityLevel(ctx, accountID)
 }
 
+// characterTargetLowerSecurityStrong mirrors ChatHandler::HasLowerSecurity
+// with strong=true (Chat.cpp:54-102): equal security also fails, and the
+// RBAC_PERM_CHECK_FOR_LOWER_SECURITY bypass never applies to a strong check
+// (the bypass is gated on !strong). Used by the mute/unmute arms
+// (cs_misc.cpp:1865/1932).
+func (s *session) characterTargetLowerSecurityStrong(ctx context.Context, t characterTarget) bool {
+	var accountID uint32
+	if t.online != nil {
+		accountID = t.online.accountID
+	} else if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", t.guid).Scan(&accountID); err != nil {
+			return true
+		}
+	} else {
+		return true
+	}
+	return s.security <= s.accountSecurityLevel(ctx, accountID)
+}
+
 // handleCharacterChangeAccount mirrors HandleCharacterChangeAccountCommand
 // (cs_character.cpp:466): the target is kicked, CHAR_UPD_ACCOUNT_BY_GUID
 // moves the row, and the destination account's character count is capped at
