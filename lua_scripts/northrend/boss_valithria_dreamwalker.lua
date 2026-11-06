@@ -68,20 +68,17 @@
 -- strand the encounter (algalon precedent);
 -- Talk(SAY_VALITHRIA_DEATH 4) rides the DamageTaken death-negated leg
 -- (damage = 0, _justDied flag — she never actually dies; the trigger
--- DoAction(ACTION_DEATH) cross-AI leg has no bridge); SendEncounterUnit
+-- DoAction(ACTION_DEATH) cross-AI leg is PORTED 2026-11-06 below via
+-- the instance GUID + the trigger ev38 handler); SendEncounterUnit
 -- DISENGAGE (:365) PORTED in valithriaDamageTaken (tick 222); the Reset
 -- DISENGAGE (:295) is PORTED in valithriaReset below (tick 222);
--- Talk(SAY_VALITHRIA_ENTER_COMBAT 0) rides UpdateAI EVENT_INTRO_TALK /
--- Talk(SAY_VALITHRIA_BERSERK 6) rides UpdateAI EVENT_BERSERK (heroic-only)
--- — both schedules fire from DoAction ACTION_ENTER_COMBAT (:305-313),
--- which is itself DoAction'ed from the bridge-blocked engagement chain
--- (:505-512: instance GUID fetch + DoZoneInCombat + SetBossState) — the
--- DoAction bridge (event 38) is live, but the sender (green dragon
--- combat trigger 38752, unregistered) never fires it, so the ENGAGE
--- frame (:309) stays out with the timer arms (tick 222 triage);
--- Talk(SAY_VALITHRIA_DREAM_PORTAL 1) rides UpdateAI EVENT_DREAM_PORTAL
--- (non-heroic scheduler leg; the SUMMON_PORTAL DoCast legs have no-cast
--- bridge).
+-- PORTED (2026-11-06): Talk(SAY_VALITHRIA_ENTER_COMBAT 0) rides
+-- UpdateAI EVENT_INTRO_TALK + Talk(SAY_VALITHRIA_BERSERK 6) rides
+-- EVENT_BERSERK (heroic-only) + Talk(SAY_VALITHRIA_DREAM_PORTAL 1)
+-- rides EVENT_DREAM_PORTAL — all three schedules fire from DoAction
+-- ACTION_ENTER_COMBAT (:305-313), now received via valithriaDoAction
+-- (ev38) from the trigger engage leg; the SUMMON_PORTAL DoCast legs
+-- stay out (no-cast bridge);
 -- SAY_VALITHRIA_PLAYER_DEATH 5 is declared in the text enum but never
 -- referenced by a Talk() call — dead text evidence (no KilledUnit arm
 -- exists in the file).
@@ -95,13 +92,15 @@
 -- npc_green_dragon_combat_trigger (38752) — no Talk; the Reset
 -- SummonCreatureGroup legs + ACTION_SETUP_ARCHMAGES relay are PORTED
 -- below (greenDragonCombatTriggerReset, event 23 — the trigger was
--- registered 2026-11-05). The DoAction ACTION_ENTER_COMBAT /
--- ACTION_DEATH machine stays out — the trigger's engagement chain
--- (CheckRequiredBosses + instance GUID + SetBossState) is unported.
--- The ValithriaDespawner grid sweep (:215-250, 5s
--- BasicEvent after ACTION_DEATH, DISENGAGE to valithria + despawn of
--- the encounter adds in 333yd) has no BasicEvent bridge — stays out
--- (tick 222 triage).
+-- registered 2026-11-05). PORTED (2026-11-06): the SetBossState legs
+-- — Reset NOT_STARTED (ev23, != DONE-gated), engage IN_PROGRESS
+-- (ev1, + DoZoneInCombat + valithria/archmage DoAction relays),
+-- alive-leave-combat ACTION_DEATH NOT_STARTED (ev2), death DONE
+-- (ev4, BossAI base _JustDied), ev38 ACTION_DEATH receiver, ev5
+-- SetGuidData latch; the ValithriaDespawner grid sweep (:215-250, 5s
+-- BasicEvent after ACTION_DEATH) has no BasicEvent bridge — stays out
+-- (tick 222 triage); the CheckRequiredBosses gate + EngagementStart +
+-- setActive legs have no bridge — stay out.
 -- PORTED (2026-10-13 retraction re-audit): npc_risen_archmage
 -- (37868) — FROSTBOLT_VOLLEY 70759 self-cast {5s,15s}/{8s,15s};
 -- MANA_VOID 71179 random-player {20s,25s}/{20s,25s} (POWER_MANA
@@ -151,10 +150,14 @@ local ENTRY_SUPPRESSER = 37863 -- icecrown_citadel.h:291 (NPC_SUPPRESSER)
 local DATA_VALITHRIA_DREAMWALKER = 10 -- icecrown_citadel.h:84
 
 local SAY_LICH_KING_INTRO = 0
+local SAY_VALITHRIA_ENTER_COMBAT = 0
+local SAY_VALITHRIA_DREAM_PORTAL = 1
 local SAY_VALITHRIA_75_PERCENT = 2
 local SAY_VALITHRIA_25_PERCENT = 3
 local SAY_VALITHRIA_DEATH = 4
 local SAY_VALITHRIA_SUCCESS = 7
+local SAY_VALITHRIA_BERSERK = 6
+local SPELL_COPY_DAMAGE = 71948 -- boss_valithria_dreamwalker.cpp:49
 
 local SPELL_DREAMWALKERS_RAGE = 71189
 local SPELL_DREAM_SLIP = 71196
@@ -181,7 +184,12 @@ local SUMMON_GROUP_ALL = 1 -- boss_valithria_dreamwalker.cpp:154
 local SUMMON_GROUP_10 = 2 -- boss_valithria_dreamwalker.cpp:155
 local SUMMON_GROUP_25 = 3 -- boss_valithria_dreamwalker.cpp:156
 local ACTION_ENTER_COMBAT = 1 -- boss_valithria_dreamwalker.cpp:148
+local ACTION_DEATH = 3 -- boss_valithria_dreamwalker.cpp:150
 local ACTION_SETUP_ARCHMAGES = 4 -- boss_valithria_dreamwalker.cpp:151
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 local SPELL_CORRUPTION_ARCHMAGE = 70602 -- boss_valithria_dreamwalker.cpp:695
 local DATA_VALITHRIA_TRIGGER = 35 -- icecrown_citadel.h:111
 local DATA_VALITHRIA_LICH_KING = 36 -- icecrown_citadel.h:112
@@ -427,6 +435,14 @@ end
 -- SummonCreatureGroup tables, entry-filtered (group coords DB-side;
 -- creature:SummonCreatureGroup bridged 2026-11-05, tick 238).
 local function greenDragonCombatTriggerReset(event, creature)
+    -- C++ Reset() :478 — _Reset() first: SetBossState NOT_STARTED
+    -- only when the stored state != DONE (BossAI::_Reset,
+    -- ScriptedCreature.cpp:499-509; the rotface precedent — ev23
+    -- fires on spawn/death/evade too, and a DONE boss must stay
+    -- DONE). PORTED 2026-11-06 via creature:SetBossState.
+    if creature:GetBossState(DATA_VALITHRIA_DREAMWALKER) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_VALITHRIA_DREAMWALKER, BOSS_STATE_NOT_STARTED)
+    end
     creature:SetReactState(0) -- REACT_PASSIVE
     for _, archmage in ipairs(creature:GetCreaturesInGrid(ENTRY_RISEN_ARCHMAGE, 100)) do
         archmage:Despawn()
@@ -446,6 +462,76 @@ local function greenDragonCombatTriggerReset(event, creature)
             summon:DoAction(ACTION_SETUP_ARCHMAGES)
         end
     end
+end
+
+-- C++ npc_green_dragon_combat_trigger::DoAction ACTION_DEATH
+-- (boss_valithria_dreamwalker.cpp:529-537): SetBossState NOT_STARTED
+-- + 5s ValithriaDespawner + lichKing EnterEvadeMode. The despawner
+-- (BasicEvent grid sweep, :215-250) has no bridge and the
+-- cross-creature EnterEvadeMode has none either — both stay out;
+-- the state leg is the portable arm, shared by the ev2 (alive
+-- JustExitedCombat) and ev38 (cross-AI DoAction) paths below.
+local function triggerActionDeath(creature)
+    creature:SetBossState(DATA_VALITHRIA_DREAMWALKER, BOSS_STATE_NOT_STARTED)
+end
+
+local function greenDragonCombatTriggerDoAction(event, creature, action)
+    if action == ACTION_DEATH then
+        triggerActionDeath(creature)
+    end
+end
+
+-- C++ npc_green_dragon_combat_trigger::JustEnteredCombat (:496-513):
+-- CheckRequiredBosses gate (no bridge, stays out) then EngagementStart
+-- + setActive (no bridges) + DoZoneInCombat + SetBossState IN_PROGRESS
+-- + valithria DoAction(ACTION_ENTER_COMBAT) via the instance GUID +
+-- archmage summons DoAction(ACTION_ENTER_COMBAT). The archmage relay
+-- rides a grid sweep (the trigger Reset sweep precedent — exactly the
+-- summoned archmages are in the room). PORTED 2026-11-06.
+local function greenDragonCombatTriggerJustEngagedWith(event, creature, target)
+    creature:DoZoneInCombat()
+    creature:SetBossState(DATA_VALITHRIA_DREAMWALKER, BOSS_STATE_IN_PROGRESS)
+    local valithria = creature:GetInstanceCreature(DATA_VALITHRIA_DREAMWALKER)
+    if valithria then
+        valithria:DoAction(ACTION_ENTER_COMBAT)
+    end
+    for _, archmage in ipairs(creature:GetCreaturesInGrid(ENTRY_RISEN_ARCHMAGE, 100)) do
+        archmage:DoAction(ACTION_ENTER_COMBAT)
+    end
+end
+
+-- C++ npc_green_dragon_combat_trigger::JustExitedCombat (:515-525):
+-- EngagementOver + setActive(false) (no bridges); if the trigger is
+-- dead, return (the death path rides ev4 DONE below); alive, it
+-- DoActions ACTION_DEATH. The ev2 alive-gate is the C++ early return.
+local function greenDragonCombatTriggerLeaveCombat(event, creature)
+    if creature:IsAlive() then
+        triggerActionDeath(creature)
+    end
+end
+
+-- C++ BossAI base _JustDied: the trigger IS the BossAI for
+-- DATA_VALITHRIA_DREAMWALKER, so its death writes DONE (the encounter
+-- completes when Valithria's SpellHit kills the trigger, :388-390).
+-- PORTED 2026-11-06 via creature:SetBossState on ev4.
+local function greenDragonCombatTriggerJustDied(event, creature, killer)
+    creature:SetBossState(DATA_VALITHRIA_DREAMWALKER, BOSS_STATE_DONE)
+end
+
+-- C++ instance_icecrown_citadel.cpp OnCreatureCreate (:302-304) latches
+-- ValithriaTriggerGUID when NPC_GREEN_DRAGON_COMBAT_TRIGGER spawns;
+-- the Lua mirror is the ev5 SetGuidData latch (the valithriaSpawn
+-- precedent below) so GetInstanceCreature(DATA_VALITHRIA_TRIGGER)
+-- resolves for the Valithria lethal-damage leg. PORTED 2026-11-06.
+local function greenDragonCombatTriggerSpawn(event, creature)
+    creature:SetGuidData(DATA_VALITHRIA_TRIGGER)
+end
+
+-- C++ instance_icecrown_citadel.cpp OnCreatureCreate (:299-301) latches
+-- ValithriaLichKingGUID; same ev5 mirror (the lichKing controller
+-- engage Talk rides ev1 above). PORTED 2026-11-06.
+local function lichKingValithriaSpawn(event, creature)
+    creature:SetGuidData(DATA_VALITHRIA_LICH_KING)
 end
 
 -- C++ npc_blazing_skeleton::Reset — EVENT_FIREBALL {2s,4s},
@@ -521,8 +607,14 @@ local function valithriaDamageTaken(_, creature, _, damage)
                 creature:Talk(SAY_VALITHRIA_DEATH)
                 -- C++ :365 — SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE,
                 -- me), after Talk, before the trigger DoAction(ACTION_DEATH)
-                -- leg (out — trigger unregistered, cross-AI).
+                -- leg (:366-367) — PORTED 2026-11-06 via the instance GUID
+                -- (the trigger ev38 handler ports the NOT_STARTED leg;
+                -- the ev5 latch above resolves the GUID).
                 creature:SendEncounterUnit(1, creature)
+                local trigger = creature:GetInstanceCreature(DATA_VALITHRIA_TRIGGER)
+                if trigger then
+                    trigger:DoAction(ACTION_DEATH)
+                end
             end
             return false, 0
         end
@@ -596,8 +688,8 @@ end
 -- C++ order: DoCastSelf(CLEAR_ALL) + DoCastSelf(REPUTATION, triggered)
 -- + SetDisplayId(11686) + SetFlag(NOT_SELECTABLE) +
 -- DespawnOrUnsummon(4s, lich_king_escape one-shot CreateLuaEvent
--- precedent). Trigger Kill + lichKing chest legs stay out (instance
--- GetGuidData + cross-AI gates). If ev14 never fires for this cast
+-- precedent). Trigger Kill PORTED 2026-11-06 below; the lichKing chest
+-- cast stays out (cross-AI spell, no bridge). If ev14 never fires for this cast
 -- (spell-data gap), the arm is inert — no regression vs the old
 -- cast-only timer.
 local function valithriaSpellHit(event, creature, caster, spellId)
@@ -608,9 +700,75 @@ local function valithriaSpellHit(event, creature, caster, spellId)
     creature:CastSpell(creature, SPELL_REPUTATION_BOSS_KILL, true)
     creature:SetDisplayId(MODEL_INVISIBLE)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    -- C++ :388-390 — Unit::Kill(me, trigger): Valithria kills the
+    -- combat trigger; the trigger's ev4 BossAI base _JustDied then
+    -- writes DONE (the encounter completion leg). The lichKing chest
+    -- cast stays out (cross-AI spell, no bridge). PORTED 2026-11-06
+    -- via creature:Kill(killer) (lua_creature_events.go:2971).
+    local trigger = creature:GetInstanceCreature(DATA_VALITHRIA_TRIGGER)
+    if trigger then
+        trigger:Kill(creature)
+    end
     CreateLuaEvent(function()
         creature:Despawn()
     end, 4000)
+end
+
+-- C++ boss_valithria_dreamwalker UpdateAI EVENT_INTRO_TALK (:424-426):
+-- Talk(SAY_VALITHRIA_ENTER_COMBAT 0), one-shot 15s from DoAction
+-- ACTION_ENTER_COMBAT. The UpdateAI gate (:420: state must be
+-- IN_PROGRESS) is the re-check below.
+local function onValithriaIntroTalk(creature, guid)
+    if creature:GetBossState(DATA_VALITHRIA_DREAMWALKER) ~= BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    creature:Talk(SAY_VALITHRIA_ENTER_COMBAT)
+end
+
+-- C++ UpdateAI EVENT_DREAM_PORTAL (:431-440): non-heroic Talk(
+-- SAY_VALITHRIA_DREAM_PORTAL 1) + _portalCount DoCastSelf(SUMMON_PORTAL)
+-- + {45s,48s} re-arm. The portal-cast legs stay out (RAID_MODE
+-- spell-script summons, no-cast bridge — header triage); the Talk +
+-- re-arm port, gated on IN_PROGRESS (:420).
+local function onValithriaDreamPortal(creature, guid)
+    if creature:GetBossState(DATA_VALITHRIA_DREAMWALKER) ~= BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    if not creature:IsHeroic() then
+        creature:Talk(SAY_VALITHRIA_DREAM_PORTAL)
+    end
+    schedule(guid, "dream_portal", {45000, 48000}, function() onValithriaDreamPortal(creature, guid) end)
+end
+
+-- C++ UpdateAI EVENT_BERSERK (:427-430, heroic-only): Talk(
+-- SAY_VALITHRIA_BERSERK 6), one-shot 420s from DoAction
+-- ACTION_ENTER_COMBAT, gated on IN_PROGRESS (:420).
+local function onValithriaBerserk(creature, guid)
+    if creature:GetBossState(DATA_VALITHRIA_DREAMWALKER) ~= BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    creature:Talk(SAY_VALITHRIA_BERSERK)
+end
+
+-- C++ boss_valithria_dreamwalker::DoAction ACTION_ENTER_COMBAT (:305-313):
+-- DoCastSelf(SPELL_COPY_DAMAGE) + SendEncounterUnit ENGAGE +
+-- EVENT_INTRO_TALK 15s + EVENT_DREAM_PORTAL {45s,48s} + heroic
+-- EVENT_BERSERK 420s. Fired by the trigger engage leg (ev1 above);
+-- the UpdateAI IN_PROGRESS gate (:420) is re-checked in each timer
+-- callback. PORTED 2026-11-06 (the stale "sender never fires it"
+-- header claim is retracted).
+local function valithriaDoAction(event, creature, action)
+    if action ~= ACTION_ENTER_COMBAT then
+        return
+    end
+    local guid = creature:GetGUID()
+    creature:CastSpell(creature, SPELL_COPY_DAMAGE)
+    creature:SendEncounterUnit(0, creature)
+    schedule(guid, "intro_talk", 15000, function() onValithriaIntroTalk(creature, guid) end)
+    schedule(guid, "dream_portal", {45000, 48000}, function() onValithriaDreamPortal(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "berserk", 420000, function() onValithriaBerserk(creature, guid) end)
+    end
 end
 
 local function valithriaReset(event, creature)
@@ -677,6 +835,7 @@ RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 9, valithriaDamageTaken)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 11, valithriaHealReceived)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 14, valithriaSpellHit)
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 23, valithriaReset)
+RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 38, valithriaDoAction)
 RegisterCreatureEvent(ENTRY_SUPPRESSER, 22, suppresserIsSummonedBy)
 
 -- C++ boss_valithria::JustSummoned (boss_valithria_dreamwalker.cpp:390-403):
@@ -707,7 +866,13 @@ RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 1, risenArchmageJustEngagedWith)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 2, risenArchmageLeaveCombat)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 23, risenArchmageLeaveCombat)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 38, risenArchmageDoAction)
+RegisterCreatureEvent(ENTRY_GREEN_DRAGON_COMBAT_TRIGGER, 1, greenDragonCombatTriggerJustEngagedWith)
+RegisterCreatureEvent(ENTRY_GREEN_DRAGON_COMBAT_TRIGGER, 2, greenDragonCombatTriggerLeaveCombat)
+RegisterCreatureEvent(ENTRY_GREEN_DRAGON_COMBAT_TRIGGER, 4, greenDragonCombatTriggerJustDied)
+RegisterCreatureEvent(ENTRY_GREEN_DRAGON_COMBAT_TRIGGER, 5, greenDragonCombatTriggerSpawn)
 RegisterCreatureEvent(ENTRY_GREEN_DRAGON_COMBAT_TRIGGER, 23, greenDragonCombatTriggerReset)
+RegisterCreatureEvent(ENTRY_GREEN_DRAGON_COMBAT_TRIGGER, 38, greenDragonCombatTriggerDoAction)
+RegisterCreatureEvent(ENTRY_LICH_KING_VALITHRIA, 5, lichKingValithriaSpawn)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 1, blazingSkeletonJustEngagedWith)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 2, blazingSkeletonLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLAZING_SKELETON, 23, blazingSkeletonLeaveCombat)

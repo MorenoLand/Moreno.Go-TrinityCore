@@ -40,9 +40,10 @@
 -- boss_sindragosa JustEngagedWith — Talk(SAY_AGGRO 0) (event 1 —
 -- the auriaya engage-port precedent; the instance
 -- CheckRequiredBosses gate / EVADE_REASON_SEQUENCE_BREAK leg /
--- DoCastSpellOnPlayers LIGHT_S_HAMMER_TELEPORT leg / DoCastSelf
--- FROST_AURA+PERMAEATING_CHILL legs / SetBossState(IN_PROGRESS) /
--- setActive leg has no bridge; the SetCombatPulseDelay(5) +
+-- DoCastSpellOnPlayers LIGHT_S_HAMMER_TELEPORT leg / setActive leg
+-- have no bridge and stay out; DoCastSelf FROST_AURA+PERMAEATING_CHILL
+-- (:277-278) + SetBossState(IN_PROGRESS) (:280) PORTED 2026-11-06,
+-- in C++ arm order; the SetCombatPulseDelay(5) +
 -- SetFarVisible(true) arms are PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
 -- C++ arm order); the DoZoneInCombat tail (:284) is PORTED
@@ -89,8 +90,8 @@
 -- dispatch bridged; senders at_sindragosa_lair OnTrigger
 -- (boss_sindragosa.cpp:1505) + instance OnCreatureRemove
 -- (instance_icecrown_citadel.cpp:493) unported, receiver arm is the unported
--- flight machine); JustReachedHome SetBossState FAIL leg
--- (no instance bridge, no event-24 port precedent).
+-- flight machine); JustReachedHome SetBossState FAIL leg PORTED
+-- 2026-11-06 (sindragosaReachHome, ev24).
 -- spell_sindragosa_ice_tomb_target::HandleSindragosaTalk —
 -- creatureCaster->AI()->Talk(EMOTE_WARN_FROZEN_ORB 7, GetHitUnit())
 -- is cross-AI Talk (no cross-AI-Talk bridge).
@@ -144,6 +145,12 @@ local SAY_DEATH = 10
 local SAY_BERSERK = 9
 local EMOTE_BERSERK_RAID = 11
 local SAY_PHASE_2 = 6
+
+local DATA_SINDRAGOSA = 11 -- icecrown_citadel.h:85
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 
 local SPELL_TANK_MARKER = 71039
 local SPELL_MYSTIC_BUFFET = 70128
@@ -273,6 +280,11 @@ local function sindragosaJustEngagedWith(event, creature, target)
     creature:CastSpell(creature, SPELL_FROST_AURA)
     creature:CastSpell(creature, SPELL_PERMAEATING_CHILL)
     creature:Talk(SAY_AGGRO)
+    -- C++ :280 — instance->SetBossState(DATA_SINDRAGOSA, IN_PROGRESS),
+    -- after Talk, before SetCombatPulseDelay (C++ arm order). PORTED
+    -- 2026-11-06 via creature:SetBossState (the stale "no bridge"
+    -- header claim is retracted — lua_creature_events.go:5917).
+    creature:SetBossState(DATA_SINDRAGOSA, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- boss_sindragosa.cpp:281 (JustEngagedWith arm)
     creature:SetFarVisible(true) -- boss_sindragosa.cpp:283 (the setActive leg still has no bridge)
     creature:DoZoneInCombat() -- boss_sindragosa.cpp:284 (JustEngagedWith tail; bridge live engine/world/lua_creature_events.go, 2026-10-23)
@@ -280,12 +292,23 @@ local function sindragosaJustEngagedWith(event, creature, target)
 end
 
 -- C++ Reset() _Reset() timer machinery — cancel/re-arm on combat
--- events (the maiden convention).
+-- events (the maiden convention). C++ EnterEvadeMode override
+-- (:287-292) suppresses the evade when _isInAirPhase +
+-- EVADE_REASON_BOUNDARY — no air-phase flag exists in this port (the
+-- phase machine is unported), so the suppression stays out; the base
+-- evade path rides ev24 FAIL (ported above).
 local function sindragosaLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
 local function sindragosaReset(event, creature)
+    -- C++ Reset() — BossAI::Reset() runs _Reset() first: SetBossState
+    -- NOT_STARTED only when the stored state != DONE (the rotface
+    -- precedent — ev23 fires on spawn/death/evade too, and a DONE boss
+    -- must stay DONE). PORTED 2026-11-06 via creature:SetBossState.
+    if creature:GetBossState(DATA_SINDRAGOSA) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_SINDRAGOSA, BOSS_STATE_NOT_STARTED)
+    end
     cancelTimers(creature:GetGUID())
     sindragosaThirdPhase[creature:GetGUID()] = nil
     -- C++ Reset(): DoCastSelf(SPELL_TANK_MARKER, true) (:241),
@@ -304,13 +327,20 @@ local function sindragosaReset(event, creature)
 end
 
 -- C++ boss_sindragosa::JustReachedHome (:294-300): BossAI::JustReachedHome()
--- is instance bookkeeping (no bridge), instance->SetBossState(FAIL) has no
--- bridge; SetCanFly(false) (:298) / SetDisableGravity(false) (:299) /
+-- is instance bookkeeping (no bridge), instance->SetBossState(FAIL) PORTED
+-- 2026-11-06 via creature:SetBossState (ev24, marrowgar precedent);
+-- SetCanFly(false) (:298) / SetDisableGravity(false) (:299) /
 -- SetReactState(REACT_DEFENSIVE 1) (:300) ported in C++ arm order
 -- (bridges live, lua_creature_events.go). The old "no bridges" note was
 -- stale. Event 24 fires at the home-move completion (C++
 -- HomeMovementGenerator::DoFinalize twin).
 local function sindragosaReachHome(event, creature)
+    -- C++ :297 — instance->SetBossState(DATA_SINDRAGOSA, FAIL), after
+    -- BossAI::JustReachedHome() (no state) and before the fly/gravity/
+    -- react arms (C++ order). PORTED 2026-11-06 via creature:SetBossState
+    -- on ev24 (the marrowgar ev24 precedent; the stale "no event-24
+    -- port precedent" header claim is retracted).
+    creature:SetBossState(DATA_SINDRAGOSA, BOSS_STATE_FAIL)
     creature:SetCanFly(false)
     creature:SetDisableGravity(false)
     creature:SetReactState(1)
@@ -352,6 +382,9 @@ local function sindragosaJustDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     sindragosaThirdPhase[guid] = nil
+    -- C++ :260 — _JustDied() first: SetBossState DONE, before Talk
+    -- (:261, C++ order). PORTED 2026-11-06 via creature:SetBossState.
+    creature:SetBossState(DATA_SINDRAGOSA, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     -- C++ :262-264 — Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)-gated
     -- DoCastAOE(SPELL_FROST_INFUSION_CREDIT, true) via self-cast

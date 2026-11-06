@@ -62,14 +62,18 @@
 -- 2026-10-16; the !events.IsInPhase(PHASE_OUTRO) leg still has no
 -- bridge).
 -- DOCUMENTED-ONLY (in this header; only entry 36597 registered):
--- boss_the_lich_king DoAction — Talk(SAY_LK_INTRO_1 0) rides
--- ACTION_START_ENCOUNTER; Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic)
--- rides ACTION_TELEPORT_BACK (DoAction IS bridged — creature:DoAction
--- fires ev38, the terenas handler below proves it — but the sender
--- chain (terenas EVENT_TELEPORT_BACK :1807-1810 + restore_soul
--- SpellScript :2629, both unported) never fires it; the
--- strangulate-vehicle receiver IS ported below — the krick
--- ACTION_OUTRO precedent).
+-- boss_the_lich_king DoAction — PORTED 2026-11-06 (lichKingDoAction,
+-- ev38): ACTION_START_ENCOUNTER writes IN_PROGRESS + Talk(SAY_LK_INTRO_1 0)
+-- + SetStandState(STAND); Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic)
+-- rides ACTION_TELEPORT_BACK. Both receivers are dormant — the sender
+-- chains (Tirion intro / terenas EVENT_TELEPORT_BACK + restore_soul
+-- SpellScript) are unported — the krick ACTION_OUTRO receiver precedent.
+-- SetZoneMusic has no bridge; the strangulate-vehicle summons relay has
+-- no summon-list bridge (the vehicle ev38 receiver IS ported).
+-- No FAIL leg exists in C++ for the boss: no JustReachedHome override
+-- (the :1228 one belongs to npc_tirion_fordring_tft) and the
+-- EnterEvadeMode override (:594) calls _DespawnAtEvade() directly
+-- without the BossAI base — correctly absent.
 -- boss_the_lich_king SpellHit — Talk(SAY_LK_FROSTMOURNE_KILL 9) on
 -- SPELL_HARVESTED_SOUL 72679 (:813-816), gated me->IsInCombat() &&
 -- !IsHeroic() — stays unmodeled on trigger-path grounds. The C++ arm
@@ -311,6 +315,14 @@ local LIGHT_SOULSTORM = 2508 -- boss_the_lich_king.cpp:351
 
 local SAY_LK_KILL = 10
 local SAY_LK_BERSERK = 11
+local SAY_LK_INTRO_1 = 0 -- boss_the_lich_king.cpp:38
+local SAY_LK_FROSTMOURNE_ESCAPE = 8 -- boss_the_lich_king.cpp:45
+local DATA_THE_LICH_KING = 12 -- icecrown_citadel.h:86
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
+local ACTION_START_ENCOUNTER = 0 -- boss_the_lich_king.cpp:335 (EncounterActions)
 
 local SPELL_BERSERK2 = 47008
 local SPELL_HORROR_SHOCKWAVE = 72149
@@ -388,9 +400,35 @@ local function onBerserk(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK2)
 end
 
+-- C++ boss_the_lich_king::DoAction ACTION_START_ENCOUNTER (:615-622):
+-- SetBossState IN_PROGRESS + Talk(SAY_LK_INTRO_1) + SetZoneMusic
+-- (no bridge) + SetStandState(STAND) + EVENT_INTRO_MOVE_1 4s (the
+-- unported intro-movement machine). The sender is Tirion's intro
+-- chain (unregistered), so the receiver is dormant until that chain
+-- lands — the krick ACTION_OUTRO receiver precedent. PORTED 2026-11-06.
+-- ACTION_TELEPORT_BACK (:654-661): Talk(SAY_LK_FROSTMOURNE_ESCAPE 8,
+-- non-heroic) + strangulate-vehicle summons relay (no summon-list
+-- bridge — the vehicle ev38 receiver IS ported); the sender is the
+-- terenas EVENT_TELEPORT_BACK / restore_soul SpellScript chain, both
+-- unported, so this arm is dormant too.
+local function lichKingDoAction(event, creature, action)
+    if action == ACTION_START_ENCOUNTER then
+        creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_IN_PROGRESS)
+        creature:Talk(SAY_LK_INTRO_1)
+        creature:SetStandState(UNIT_STAND_STATE_STAND)
+    elseif action == ACTION_TELEPORT_BACK then
+        if not creature:IsHeroic() then
+            creature:Talk(SAY_LK_FROSTMOURNE_ESCAPE)
+        end
+    end
+end
+
 -- C++ boss_the_lich_king::JustEngagedWith schedules EVENT_BERSERK
 -- (:583); the phase-one machine arms are unbridged. No C++ Talk on
--- engage. Event 1 registered for the berserk timer only.
+-- engage, and JustEngagedWith writes NO boss state — IN_PROGRESS rides
+-- DoAction ACTION_START_ENCOUNTER (ported above), so no state leg is
+-- added here (the fabricated-leg trap). Event 1 registered for the
+-- berserk timer only.
 local function lichKingJustEngagedWith(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_the_lich_king.cpp:575 (JustEngagedWith arm; the setActive leg still has no bridge)
     creature:DoZoneInCombat() -- boss_the_lich_king.cpp:576 (JustEngagedWith arm; bridge live engine/world/lua_creature_events.go, 2026-10-23)
@@ -411,20 +449,32 @@ local function lichKingLeaveCombat(event, creature)
 end
 
 local function lichKingReset(event, creature)
+    -- C++ Reset :530 — _Reset() first: SetBossState NOT_STARTED only
+    -- when the stored state != DONE (the rotface precedent — ev23
+    -- fires on spawn/death/evade too, and a DONE boss must stay
+    -- DONE). PORTED 2026-11-06 via creature:SetBossState.
+    if creature:GetBossState(DATA_THE_LICH_KING) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_NOT_STARTED)
+    end
     cancelTimers(creature:GetGUID())
     -- C++ Reset :543: clear any light override (0, 5000ms).
     creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, 0, 5000)
 end
 
 -- C++ boss_the_lich_king::JustDied (boss_the_lich_king.cpp:549-562):
--- _JustDied() (instance boss-state machine, unported) then
--- DoCastAOE(SPELL_PLAY_MOVIE 73159, false). DoCastAOE is self-cast
--- per UnitAI.h:322, so creature:CastSpell(creature, SPELL_PLAY_MOVIE).
+-- _JustDied() first (:551, SetBossState DONE — PORTED 2026-11-06 via
+-- creature:SetBossState) then DoCastAOE(SPELL_PLAY_MOVIE 73159, false).
+-- DoCastAOE is self-cast per UnitAI.h:322, so
+-- creature:CastSpell(creature, SPELL_PLAY_MOVIE).
 -- The MoveFall and 25-man quest-credit legs ride unbridged machines;
 -- the FOG zone-light + zone-weather legs are ported below, in C++
 -- order (map:SetZoneOverrideLight, then map:SetZoneWeather).
 local function lichKingJustDied(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ :551 — _JustDied() first: SetBossState DONE, before the
+    -- PLAY_MOVIE cast (C++ order). PORTED 2026-11-06 via
+    -- creature:SetBossState.
+    creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_DONE)
     creature:CastSpell(creature, SPELL_PLAY_MOVIE)
     creature:SetDisableGravity(false) -- C++ :553, after the movie cast
     -- C++ :555-556: FindNearestCreature(NPC_FROSTMOURNE_TRIGGER, 50.0f)
@@ -518,6 +568,7 @@ RegisterCreatureEvent(ENTRY_THE_LICH_KING, 3, lichKingKilledUnit)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 4, lichKingJustDied)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 19, lichKingJustSummoned)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 38, lichKingDoAction)
 
 -- C++ boss_the_lich_king::SummonedCreatureDies (:795-808): the six add
 -- entries flip to TEMPSUMMON_CORPSE_DESPAWN on death so the corpse
