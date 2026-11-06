@@ -40,20 +40,27 @@ import (
 //     waypoints are entry-1 creature rows (the npc-add pattern); `off`
 //     removes all entry-1 rows.
 //
-// Creature selection uses the low 32 bits of s.selection (the spawn guid),
-// like the C++ getSelectedCreature. LANG texts are inlined from the TDB
-// enUS recall (no in-tree trinity_string seed).
+// Creature selection resolves through the live motion map — the
+// getSelectedCreature twin (Chat.cpp:336-341, ObjectAccessor::
+// GetCreatureOrPetOrVehicle). The selection GUID packs entry bits above the
+// low 24 (ObjectGuid.h:134), so truncating it to uint32 corrupts the spawn
+// guid for every entry != 0 mod 256; the old code also required a `creature`
+// DB row, so pets, vehicles, temp summons and every real creature selection
+// resolved as no target. The motion lookup type-checks for free (players and
+// gameobjects are never creature motions) and needs no DB row, matching the
+// C++ live-object resolution. LANG texts are inlined from the TDB enUS
+// recall (no in-tree trinity_string seed).
 
-// wpSelectedCreature resolves the selected creature's spawn guid and entry.
+// wpSelectedCreature resolves the selected creature's spawn guid and entry
+// via the live motion map (castCommandSelectedCreature precedent). The
+// spawn guid is the low 24 bits of the motion GUID (objectGUIDCounter);
+// motion.Entry is the template entry (1 = VISUAL_WAYPOINT).
 func (s *session) wpSelectedCreature(ctx context.Context) (guid, entry uint32, ok bool) {
-	if s.selection == 0 || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	motion := s.findCreatureMotion(s.selection)
+	if motion == nil {
 		return 0, 0, false
 	}
-	guid = uint32(s.selection)
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", guid).Scan(&entry); err != nil {
-		return 0, 0, false
-	}
-	return guid, entry, true
+	return objectGUIDCounter(motion.GUID), motion.Entry, true
 }
 
 // wpRefreshMotion refreshes a live creature's motion entry after a path
@@ -68,7 +75,10 @@ func (s *session) wpRefreshMotion(ctx context.Context, guid uint32, pathID uint3
 	}
 	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
-	motion := s.server.findCreatureMotionLocked(mapID, 0, uint64(guid))
+	// The motion map is keyed by the full world GUID (creatureWorldGUID:
+	// counter | entry<<24 | 0xF130<<48), so look up by the std key — the
+	// bare spawn counter never matches a motion with entry != 0.
+	motion := s.server.findCreatureMotionLocked(mapID, 0, creatureWorldGUID(guid, entry))
 	if motion == nil {
 		return
 	}
@@ -168,7 +178,9 @@ func (s *session) handleWpEvent(ctx context.Context, args []string) {
 	if wdb == nil {
 		return
 	}
-	show := strings.ToLower(args[0])
+	show := args[0] // C++ compares the inner verb exact-case (cs_wp.cpp:298:
+	// std::string ==, no ToLower); only the outer wp dispatch is
+	// case-insensitive (StringStartsWithI, ChatCommand.cpp:230).
 	var id uint32
 	if len(args) > 1 {
 		id = uint32(cAtoi(args[1]))
@@ -246,8 +258,7 @@ func (s *session) handleWpEvent(ctx context.Context, args []string) {
 // (cs_wp.cpp:413-527): sequential arg checks with the C++-exact literal
 // messages (including its "vallid"/"Wypoint scipt" typos), the setid special
 // branch (no existence check, updates the id column), and per-field update
-// messages. Field names are lowercased per the tree's dispatch convention
-// (C++ compares exact case).
+// messages. Field names compare exact-case, like the C++ validity list.
 func (s *session) handleWpEventMod(ctx context.Context, args []string) {
 	wdb := s.server.WorldStore.DB
 	if len(args) < 2 {
@@ -263,7 +274,9 @@ func (s *session) handleWpEventMod(ctx context.Context, args []string) {
 		s.sendSysMessage("ERROR: No argument present.")
 		return
 	}
-	field := strings.ToLower(args[2])
+	field := args[2] // C++ compares the mod field exact-case
+	// (cs_wp.cpp:440-451 validity list, 463+ branches); "DELAY" is not a
+	// valid field in C++.
 	if field != "setid" && field != "delay" && field != "command" && field != "datalong" &&
 		field != "datalong2" && field != "dataint" && field != "posx" && field != "posy" &&
 		field != "posz" && field != "orientation" {
@@ -289,13 +302,22 @@ func (s *session) handleWpEventMod(ctx context.Context, args []string) {
 		return
 	}
 	switch field {
-	case "posx", "posy", "posz", "orientation", "dataint":
-		cols := map[string]string{"posx": "x", "posy": "y", "posz": "z", "orientation": "o", "dataint": "dataint"}
-		names := map[string]string{"posx": "position_x", "posy": "position_y", "posz": "position_z", "orientation": "orientation", "dataint": "dataint"}
+	case "posx", "posy", "posz", "orientation":
+		cols := map[string]string{"posx": "x", "posy": "y", "posz": "z", "orientation": "o"}
+		names := map[string]string{"posx": "position_x", "posy": "position_y", "posz": "position_z", "orientation": "orientation"}
 		if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_scripts SET "+cols[field]+" = ? WHERE guid = ?", value, id); err != nil {
 			return
 		}
 		s.sendSysMessage(fmt.Sprintf("Waypoint script: %d %s updated.", id, names[field]))
+		return
+	case "dataint":
+		// C++ interpolates atoi(value) through '%u' (cs_wp.cpp:526-530), so
+		// "-5" stores 4294967291; the raw string as a bound parameter would
+		// clamp to 4294967295 (or error in strict mode).
+		if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_scripts SET dataint = ? WHERE guid = ?", uint32(cAtoi(value)), id); err != nil {
+			return
+		}
+		s.sendSysMessage(fmt.Sprintf("Waypoint script: %d dataint updated.", id))
 		return
 	case "delay", "command", "datalong", "datalong2":
 		if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_scripts SET "+field+" = ? WHERE guid = ?", value, id); err != nil {
@@ -318,7 +340,7 @@ func (s *session) handleWpLoad(ctx context.Context, args []string) {
 	}
 	guid, entry, ok := s.wpSelectedCreature(ctx)
 	if !ok {
-		s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE 199
+		s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE 2
 		return
 	}
 	if entry == 1 { // VISUAL_WAYPOINT
@@ -370,17 +392,23 @@ func (s *session) handleWpUnload(ctx context.Context) {
 	s.sendSysMessage("Path unloaded.")
 }
 
-// handleWpReload mirrors HandleWpReloadCommand (cs_wp.cpp:219): Go reads
-// waypoint_data on demand, so the probe is the reload.
+// handleWpReload mirrors HandleWpReloadCommand (cs_wp.cpp:231): Go reads
+// waypoint_data on demand, so the probe is the reload for motions started
+// after the edit — live patrollers keep their snapshot (motion.Points),
+// which ReloadPath would have replaced via the shared store (R4-refresh
+// OPEN: needs cross-map motion enumeration). Empty args or id 0 return
+// false in C++ (framework help), not silent.
 func (s *session) handleWpReload(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandWpReload) {
 		return
 	}
 	if len(args) == 0 {
+		s.sendSysMessage("Syntax: .wp reload <pathid>")
 		return
 	}
 	id := uint32(cAtoi(args[0]))
 	if id == 0 {
+		s.sendSysMessage("Syntax: .wp reload <pathid>")
 		return
 	}
 	wdb := s.server.WorldStore.DB
@@ -430,7 +458,9 @@ func (s *session) handleWpModify(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .wp modify delay|action|action_chance|move_type|del|move [value]")
 		return
 	}
-	show := strings.ToLower(args[0])
+	show := args[0] // C++ compares the inner verb exact-case (cs_wp.cpp:560-565:
+	// std::string ==, no ToLower); only the outer wp dispatch is
+	// case-insensitive.
 	switch show {
 	case "delay", "action", "action_chance", "move_type", "del", "move":
 	default:
@@ -514,7 +544,9 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 	if wdb == nil {
 		return
 	}
-	show := strings.ToLower(args[0])
+	show := args[0] // C++ compares the inner verb exact-case (cs_wp.cpp:778,
+	// 820, 918, 969, 1018: std::string ==, no ToLower); only the outer wp
+	// dispatch is case-insensitive.
 	// C++ pathid resolution (cs_wp.cpp:741-764): an explicit pathid wins and
 	// warns when a creature is also selected; otherwise the selected
 	// creature's path is used, and with neither the command errors.
@@ -527,7 +559,7 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 		pathID = uint32(cAtoi(args[1]))
 	} else {
 		if !hasTarget {
-			s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE 199
+			s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE 2
 			return
 		}
 		_ = wdb.QueryRowContext(ctx, "SELECT path_id FROM creature_addon WHERE guid = ?", guid).Scan(&pathID)
@@ -587,7 +619,10 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 			}
 			vrows.Close()
 		}
-		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = 0 WHERE id = ?", pathID)
+		// No blanket wpguid reset: C++ never touches waypoint_data.wpguid
+		// in `on` (cs_wp.cpp:820-874) — each re-spawned point overwrites
+		// its own row's wpguid, and a mid-loop spawn failure leaves the
+		// stale values behind.
 		pts, err := wdb.QueryContext(ctx, "SELECT point, position_x, position_y, position_z, orientation FROM waypoint_data WHERE id = ? ORDER BY point", pathID)
 		if err != nil {
 			return
@@ -610,12 +645,17 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 		} else {
 			s.sendSysMessage(fmt.Sprintf("DEBUG: wp last, PathID: %d", pathID))
 		}
-		order := "ORDER BY point ASC"
-		if show == "last" {
-			order = "ORDER BY point DESC"
-		}
 		var x, y, z, o float64
-		if wdb.QueryRowContext(ctx, "SELECT position_x, position_y, position_z, orientation FROM waypoint_data WHERE id = ? "+order+" LIMIT 1", pathID).Scan(&x, &y, &z, &o) != nil {
+		var qerr error
+		if show == "first" {
+			// C++ WORLD_SEL_WAYPOINT_DATA_POS_FIRST_BY_ID requires point 1
+			// (WorldDatabase.cpp:57); no point-1 row errors instead of
+			// showing the lowest existing point.
+			qerr = wdb.QueryRowContext(ctx, "SELECT position_x, position_y, position_z, orientation FROM waypoint_data WHERE point = 1 AND id = ?", pathID).Scan(&x, &y, &z, &o)
+		} else {
+			qerr = wdb.QueryRowContext(ctx, "SELECT position_x, position_y, position_z, orientation FROM waypoint_data WHERE id = ? ORDER BY point DESC LIMIT 1", pathID).Scan(&x, &y, &z, &o)
+		}
+		if qerr != nil {
 			s.sendSysMessage(fmt.Sprintf("Waypoint %d not found.", pathID)) // LANG_WAYPOINT_NOTFOUND 220 / NOTFOUNDLAST 221
 			return
 		}
@@ -623,6 +663,9 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 	case "off":
 		rows, err := wdb.QueryContext(ctx, "SELECT guid FROM creature WHERE id = 1")
 		if err != nil {
+			// C++ sends LANG_WAYPOINT_VP_NOTFOUND (227) whenever the query
+			// returns no rows (cs_wp.cpp:1024-1029), error included.
+			s.sendSysMessage("Visual waypoint not found.") // LANG_WAYPOINT_VP_NOTFOUND 227, TDB enUS recall
 			return
 		}
 		found := false
