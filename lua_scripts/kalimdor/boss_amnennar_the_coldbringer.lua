@@ -16,8 +16,16 @@
 -- Ported arms:
 -- - Engage (C++ JustEngagedWith): arm Amnennar's Wrath at 8s,
 --   Frostbolt at 1s, Frost Nova at {10s,15s}; Talk(SAY_AGGRO 0).
---   (BossAI::JustEngagedWith pulse + me-DoZone PORTED; instance legs
---   stay blocked — standing.)
+--   (BossAI::JustEngagedWith pulse + me-DoZone + SetBossState
+--   (DATA_AMNENNAR_THE_COLD_BRINGER, IN_PROGRESS) PORTED, bridge
+--   live lua_creature_events.go:5917; the CheckRequiredBosses
+--   SEQUENCE_BREAK leg stays blocked.)
+-- - Death (C++ JustDied, _JustDied): SetBossState
+--   (DATA_AMNENNAR_THE_COLD_BRINGER, DONE) PORTED in onDied.
+-- - Reset (event 23): the _Reset() SetBossState(NOT_STARTED) leg is
+--   PORTED (alive-gated + != DONE-gated, BossAI::_Reset
+--   ScriptedCreature.cpp:499-511); the Initialize() latch clears ride
+--   the fresh per-engage `st` table.
 -- - Amnennar's Wrath (EVENT_AMNENNARSWRATH): DoCastVictim
 --   (SPELL_AMNENNARSWRATH 13009), non-triggered (2-arg
 --   DoCastVictim); init 8s -> repeat 12s unconditional.
@@ -37,8 +45,11 @@
 --   frost-spectres summon 12642.
 --   One-shot latches cleared on Reset like C++ Initialize().
 -- Unmodeled (documented-only, no bridges):
--- - BossAI ctor / _Reset / _JustDied instance bookkeeping — no
---   instance bridge (standing).
+-- - The BossAI ctor DATA_AMNENNAR_THE_COLD_BRINGER = 3 registration
+--   is the boss id above; _Reset / _JustDied instance bookkeeping
+--   beyond the SetBossState legs (events.Reset / summons.DespawnAll /
+--   scheduler.CancelAll) needs no bridge (tick-driven AIs; the
+--   per-file cancelTimers covers the timer half).
 -- - The C++ UNIT_STATE_CASTING gates are PORTED (own pre-loop +
 --   in-loop gates: the 3 timer arms defer 500ms while IsCasting, and
 --   the health pump skips latch evaluation while IsCasting — the
@@ -48,6 +59,11 @@
 
 local ENTRY = 7358
 
+local DATA_AMNENNAR_THE_COLD_BRINGER = 3 -- razorfen_downs.h:34
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+-- EncounterState (InstanceScript.h:68-76).
 local SAY_AGGRO    = 0
 local SAY_SUMMON60 = 1
 local SAY_SUMMON30 = 2
@@ -175,8 +191,12 @@ local function healthPump(creature, guid, st)
     end)
 end
 
--- C++ JustEngagedWith: base arms + timers + Talk(SAY_AGGRO).
+-- C++ JustEngagedWith: base arms + timers + Talk(SAY_AGGRO). The base
+-- SetBossState(IN_PROGRESS) leg (ScriptedCreature.cpp:527-542,
+-- base-first in boss_amnennar_the_coldbringer.cpp:71-73) leads, ahead
+-- of the pulse / DoZoneInCombat arms below.
 local function onEnterCombat(event, creature, target)
+    creature:SetBossState(DATA_AMNENNAR_THE_COLD_BRINGER, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_amnennar_the_coldbringer.cpp:71-73)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
@@ -203,6 +223,24 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_amnennar_the_coldbringer.cpp:86-88):
+    -- _JustDied() only — BossAI::_JustDied
+    -- (ScriptedCreature.cpp:513-520) writes SetBossState
+    -- (DATA_AMNENNAR_THE_COLD_BRINGER, DONE).
+    creature:SetBossState(DATA_AMNENNAR_THE_COLD_BRINGER, BOSS_STATE_DONE)
+end
+
+-- C++ Reset (boss_amnennar_the_coldbringer.cpp:65-67): _Reset() first,
+-- then Initialize() (fresh per-engage `st` table above covers the
+-- latch half). The _Reset() SetBossState(NOT_STARTED) leg
+-- (BossAI::_Reset ScriptedCreature.cpp:499-511) is alive-gated and
+-- != DONE-gated (Go fires ev23 on the death path before ev4,
+-- moroes/algalon precedent, so both gates are live here).
+local function onReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(DATA_AMNENNAR_THE_COLD_BRINGER) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_AMNENNAR_THE_COLD_BRINGER, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
@@ -213,6 +251,4 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
     end
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
-RegisterCreatureEvent(ENTRY, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
-end)
+RegisterCreatureEvent(ENTRY, 23, onReset)

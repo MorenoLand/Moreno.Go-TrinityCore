@@ -61,9 +61,14 @@
 --   semantics change).
 -- - Died (event 4): clear timers + state; the 5s DespawnOrUnsummon leg
 --   ports via the freya delayed-despawn idiom (CreateLuaEvent one-shot
---   -> creature:Despawn, bridged); only the instance
---   SetBossState(DATA_EXTINGUISHING_THE_IDOL 6, DONE) leg stays out
---   (no instance bridge).
+--   -> creature:Despawn, bridged); the instance
+--   SetBossState(DATA_EXTINGUISHING_THE_IDOL 6, DONE) leg stays out —
+--   NOT for lack of a bridge (creature:SetBossState is live,
+--   lua_creature_events.go:5917) but because C++ drops the write:
+--   EncounterCount = 5, so id 6 >= bosses.size() 5 and
+--   InstanceScript::SetBossState returns false (InstanceScript.cpp).
+--   Writing it from Lua would fabricate state C++ never has — see
+--   instance_razorfen_downs.lua.
 -- Unmodeled (documented-only, no bridges):
 -- - MovementInform WAYPOINT id 17 (channeling start), the escort
 --   MovePath machine, EVENT_CHANNEL/IDOL_ROOM_SPAWNER/PROGRESS/
@@ -276,9 +281,12 @@ end
 local function onDied(event, creature, killer)
     clearState(creature:GetGUID())
     -- C++ npc_belnistraszAI::JustDied (razorfen_downs.cpp:125-128):
-    -- instance->SetBossState(DATA_EXTINGUISHING_THE_IDOL, DONE) has no
-    -- instance bridge (stays out); me->DespawnOrUnsummon(5s) ports via
-    -- the freya delayed-despawn idiom (CreateLuaEvent one-shot).
+    -- instance->SetBossState(DATA_EXTINGUISHING_THE_IDOL, DONE) is a
+    -- dead write in C++ (id 6 >= bosses.size() 5, EncounterCount = 5 —
+    -- InstanceScript::SetBossState returns false; see header), so it
+    -- is NOT ported despite the live creature:SetBossState bridge;
+    -- me->DespawnOrUnsummon(5s) ports via the freya delayed-despawn
+    -- idiom (CreateLuaEvent one-shot).
     CreateLuaEvent(function()
         creature:Despawn()
     end, 5000)

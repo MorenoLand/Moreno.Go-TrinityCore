@@ -12,10 +12,17 @@
 -- melee engine-driven in Go (DoMeleeAttackIfReady).
 -- Ported arms:
 -- - Engage (C++ JustEngagedWith): BossAI base arms PORTED (head of
---   onEnterCombat); Talk(SAY_AGGRO 0) + arm the 1s
---   health pump (the C++ UpdateAI polls HealthBelowPct every tick;
---   1s pump is the honest approximation — shade_of_aran
---   precedent).
+--   onEnterCombat) — SetBossState(DATA_GLUTTON, IN_PROGRESS) +
+--   pulse + me-DoZone (bridge live, lua_creature_events.go:5917);
+--   Talk(SAY_AGGRO 0) + arm the 1s health pump (the C++ UpdateAI
+--   polls HealthBelowPct every tick; 1s pump is the honest
+--   approximation — shade_of_aran precedent).
+-- - Death (C++ JustDied, _JustDied): SetBossState(DATA_GLUTTON,
+--   DONE) PORTED in onDied.
+-- - Reset (event 23): clears the hp50/hp15 latches + timers like
+--   C++ Reset, and the _Reset() SetBossState(NOT_STARTED) leg is
+--   PORTED (alive-gated + != DONE-gated, BossAI::_Reset
+--   ScriptedCreature.cpp:499-511).
 -- - 50% (C++ UpdateAI !hp50 && HealthBelowPct(50)): Talk(SAY_HP50
 --   2) one-shot latch.
 -- - 15% (C++ UpdateAI !hp15 && HealthBelowPct(15)): Talk(SAY_HP15
@@ -23,17 +30,23 @@
 --   (2-arg DoCast); one-shot latch.
 -- - KilledUnit (event 3): Talk(SAY_SLAY 1); C++ has no victim
 --   gate, so the port is ungated — faithful.
--- - Reset (event 23): clears the hp50/hp15 latches + timers like
---   C++ Reset.
 -- Unmodeled (documented-only, no bridges):
 -- - SPELL_DISEASE_CLOUD 12627 is declared in the C++ enum but never
 --   cast by this AI (no arm anywhere in boss_glutton.cpp) —
 --   correctly omitted, like C++'s declared-but-unused enums.
--- - BossAI ctor / _Reset / _JustDied instance bookkeeping — no
---   instance bridge (standing).
+-- - The BossAI ctor DATA_GLUTTON = 2 registration is the boss id
+--   above; _Reset / _JustDied instance bookkeeping beyond the
+--   SetBossState legs (events.Reset / summons.DespawnAll /
+--   scheduler.CancelAll) needs no bridge (tick-driven AIs; the
+--   per-file cancelTimers covers the timer half).
 
 local ENTRY = 8567
 
+local DATA_GLUTTON = 2 -- razorfen_downs.h:33
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+-- EncounterState (InstanceScript.h:68-76).
 local SAY_AGGRO = 0
 local SAY_SLAY  = 1
 local SAY_HP50  = 2
@@ -94,6 +107,11 @@ local function healthPump(creature, guid, st)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542,
+    -- base-first in boss_glutton.cpp:56-58): instance->SetBossState
+    -- (DATA_GLUTTON, IN_PROGRESS) ahead of the pulse / DoZoneInCombat
+    -- arms below (creature:SetBossState, lua_creature_events.go:5917).
+    creature:SetBossState(DATA_GLUTTON, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_glutton.cpp:56-58)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
@@ -111,6 +129,23 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_glutton.cpp:67-69): _JustDied() only —
+    -- BossAI::_JustDied (ScriptedCreature.cpp:513-520) writes
+    -- SetBossState(DATA_GLUTTON, DONE).
+    creature:SetBossState(DATA_GLUTTON, BOSS_STATE_DONE)
+end
+
+-- C++ Reset (boss_glutton.cpp:49-51): _Reset() first, then the hp50 /
+-- hp15 latches clear (fresh per-engage `st` table above covers the
+-- latch half). The _Reset() SetBossState(NOT_STARTED) leg
+-- (BossAI::_Reset ScriptedCreature.cpp:499-511) is alive-gated and
+-- != DONE-gated (Go fires ev23 on the death path before ev4,
+-- moroes/algalon precedent, so both gates are live here).
+local function onReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(DATA_GLUTTON) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_GLUTTON, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
@@ -119,6 +154,4 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
     creature:Talk(SAY_SLAY)
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
-RegisterCreatureEvent(ENTRY, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
-end)
+RegisterCreatureEvent(ENTRY, 23, onReset)

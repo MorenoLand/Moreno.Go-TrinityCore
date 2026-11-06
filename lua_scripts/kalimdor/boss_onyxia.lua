@@ -22,8 +22,10 @@
 -- instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer
 --   at its C++ ScheduleEvent cooldown ({10s,20s} / {15s,20s} /
---   {2s,5s} / {10s,20s}); BossAI::JustEngagedWith pulse + me-DoZone
---   PORTED; DoStartTimedAchievement + instance legs stay blocked.
+--   {2s,5s} / {10s,20s}); BossAI::JustEngagedWith pulse + me-DoZone +
+--   SetBossState(DATA_ONYXIA, IN_PROGRESS) PORTED (bridge live,
+--   lua_creature_events.go:5917); DoStartTimedAchievement + the
+--   CheckRequiredBosses SEQUENCE_BREAK leg stay blocked.
 -- - Flame Breath (EVENT_FLAME_BREATH): DoCastVictim
 --   (SPELL_FLAME_BREATH 18435), non-triggered; init {10s,20s} ->
 --   repeat {10s,20s} unconditional (C++ reschedules every fire).
@@ -97,12 +99,18 @@
 --   are cast by floor-eruption gameobjects (instance_onyxias_lair.cpp
 --   FloorEruption), never by onyxia, so onyxia's caster-side ev15
 --   arm never fires — not an instance-bridge gap.
--- - Initialize / Reset legs (SetCombatMovement, _Reset, instance
---   SetData(DATA_ONYXIA_PHASE), DoStartTimedAchievement /
---   DoStopTimedAchievement ACHIEV_TIMED_START_EVENT 6601) — no
---   instance / achievement / BossAI-Reset bridges; the unconditional
+-- - Initialize / Reset legs: SetCombatMovement(true) (:154-155) and
+--   the _Reset() SetBossState(DATA_ONYXIA, NOT_STARTED) leg (:157,
+--   BossAI::_Reset ScriptedCreature.cpp:499-511 — alive-gated and
+--   != DONE-gated) are PORTED in onReset (bridges live,
+--   lua_creature_events.go:4070/5917); instance SetData
+--   (DATA_ONYXIA_PHASE) + DoStartTimedAchievement /
+--   DoStopTimedAchievement ACHIEV_TIMED_START_EVENT 6601 stay out
+--   (no instance / achievement bridges). The unconditional
 --   SetReactState(REACT_AGGRESSIVE) leg (:158) IS ported in onReset,
 --   and Reset re-rolls MovePoint = urand(0, 5) for the deep-breath row.
+--   No JustDied override exists in C++ (no _JustDied call), so there
+--   is no ev4 DONE leg — the base _JustDied never runs for this boss.
 -- - The C++ HasUnitState(UNIT_STATE_CASTING) gates are PORTED: every
 --   timer arm defers 500ms while creature:IsCasting() (phase START/END
 --   pre-loop + in-loop gates :346/:386, phase BREATH pre-loop +
@@ -112,12 +120,23 @@
 -- - The instance script itself (AddSC_instance_onyxias_lair: boss
 --   boundaries, OnCreatureCreate GUID bind, OnGameObjectCreate /
 --   OnGameObjectRemove floor-trap tracking, FloorEruption BFS,
---   SetBossState, liftoff / whelp-counter / eruption Update, both
---   achievement criteria checks) — instance-script-model blocked
---   (culling_of_stratholme precedent), DOCUMENTED not wired.
+--   SetBossState override, liftoff / whelp-counter / eruption Update,
+--   both achievement criteria checks) — the bridgeable binds live in
+--   lua_scripts/kalimdor/instance_onyxias_lair.lua (OnCreatureCreate
+--   onyxia bind + whelp-spawner GO leg); the SetBossState override is
+--   a dead no-op in C++ (it re-calls SetBossState(1, IN_PROGRESS) and
+--   EncounterCount = 1, so id 1 >= bosses.size() 1 — InstanceScript::
+--   SetBossState returns false, InstanceScript.cpp); the floor-trap /
+--   eruption / Update / achievement legs have no bridges, DOCUMENTED
+--   in that file, not wired here.
 
 local ENTRY = 10184
 
+local DATA_ONYXIA = 0 -- onyxias_lair.h:28
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+-- EncounterState (InstanceScript.h:68-76).
 local SAY_AGGRO = 0
 local SAY_KILL  = 1
 local SAY_PHASE_2_TRANS = 2
@@ -552,6 +571,11 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542,
+    -- base-first in boss_onyxia.cpp:163-165): instance->SetBossState
+    -- (DATA_ONYXIA, IN_PROGRESS) ahead of the pulse / DoZoneInCombat
+    -- arms below (creature:SetBossState, lua_creature_events.go:5917).
+    creature:SetBossState(DATA_ONYXIA, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_onyxia.cpp:163-165)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
@@ -597,6 +621,16 @@ local function onReset(event, creature)
     -- deep-breath spell row, which the phase-2 port reads.
     local st = stateFor(guid)
     st.movePoint = math.random(0, 5)
+    -- SetCombatMovement(true) (:154-155; the !IsCombatMovementAllowed
+    -- guard is vacuous — setting true when already true is a no-op) and
+    -- the _Reset() SetBossState(NOT_STARTED) leg (:157,
+    -- BossAI::_Reset ScriptedCreature.cpp:499-511: alive-gated and
+    -- != DONE-gated; Go fires ev23 on the death path before ev4,
+    -- moroes/algalon precedent, so both gates are live here).
+    creature:SetCombatMovement(true)
+    if creature:IsAlive() and creature:GetBossState(DATA_ONYXIA) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_ONYXIA, BOSS_STATE_NOT_STARTED)
+    end
     creature:SetReactState(2) -- REACT_AGGRESSIVE
 end
 

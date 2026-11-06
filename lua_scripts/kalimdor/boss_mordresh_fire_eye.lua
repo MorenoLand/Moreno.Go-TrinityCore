@@ -23,8 +23,15 @@
 --   Talk(SAY_OOC_3 2), 14s -> OOC_1.
 -- - Engage (C++ JustEngagedWith): events.Reset() (kills the OOC
 --   chain) + Talk(SAY_AGGRO 3) + arm Fireball at 100ms and Fire
---   Nova at {8s,12s} (BossAI::JustEngagedWith pulse + me-DoZone
---   PORTED; instance legs stay blocked).
+--   Nova at {8s,12s} (BossAI::JustEngagedWith pulse + me-DoZone +
+--   SetBossState(DATA_MORDRESH_FIRE_EYE, IN_PROGRESS) PORTED, bridge
+--   live lua_creature_events.go:5917; the CheckRequiredBosses
+--   SEQUENCE_BREAK leg stays blocked).
+-- - Death (C++ JustDied, _JustDied): SetBossState
+--   (DATA_MORDRESH_FIRE_EYE, DONE) PORTED in onDied.
+-- - Reset (C++ Reset, event 23): the _Reset() SetBossState
+--   (NOT_STARTED) leg PORTED in onReset (alive-gated + != DONE-gated,
+--   BossAI::_Reset ScriptedCreature.cpp:499-511).
 -- - Fireball (EVENT_FIREBALL): DoCastVictim(SPELL_FIREBALL 12466),
 --   non-triggered (2-arg DoCastVictim); init 100ms -> repeat
 --   {2400ms,3800ms} unconditional (nil-victim keeps schedule —
@@ -32,8 +39,11 @@
 -- - Fire Nova (EVENT_FIRE_NOVA): DoCast(me, SPELL_FIRE_NOVA 12470),
 --   self-cast non-triggered; init {8s,12s} -> repeat {11s,16s}.
 -- Unmodeled (documented-only, no bridges):
--- - BossAI ctor / _Reset / _JustDied instance bookkeeping — no
---   instance bridge (standing).
+-- - The BossAI ctor DATA_MORDRESH_FIRE_EYE = 1 registration is the
+--   boss id above; _Reset / _JustDied instance bookkeeping beyond
+--   the SetBossState legs (events.Reset / summons.DespawnAll /
+--   scheduler.CancelAll) needs no bridge (tick-driven AIs; the
+--   per-file cancelTimers covers the timer half).
 -- - The C++ UNIT_STATE_CASTING gates are PORTED for the combat arms
 --   only (onFireball / onFireNova, 500ms IsCasting defer, own pre-loop
 --   + in-loop gates); the OOC talk loop is UNGATED in C++ (the
@@ -41,6 +51,11 @@
 
 local ENTRY = 7357
 
+local DATA_MORDRESH_FIRE_EYE = 1 -- razorfen_downs.h:32
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+-- EncounterState (InstanceScript.h:68-76).
 local SAY_OOC_1  = 0
 local SAY_OOC_2  = 1
 local SAY_OOC_3  = 2
@@ -144,8 +159,12 @@ local function onFireNova(creature, guid)
 end
 
 -- C++ JustEngagedWith: base arms + events.Reset() clears the OOC chain;
--- Talk(SAY_AGGRO); arm combat timers.
+-- Talk(SAY_AGGRO); arm combat timers. The base SetBossState
+-- (IN_PROGRESS) leg (ScriptedCreature.cpp:527-542, base-first in
+-- boss_mordresh_fire_eye.cpp:61-63) leads, ahead of the pulse /
+-- DoZoneInCombat arms below.
 local function onEnterCombat(event, creature, target)
+    creature:SetBossState(DATA_MORDRESH_FIRE_EYE, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_mordresh_fire_eye.cpp:61-63)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
@@ -173,11 +192,19 @@ local function onLeaveCombat(event, creature)
     cancelKey(guid, "firenova")
 end
 
--- C++ Reset: arm the OOC talk loop at 10s (fires out-of-combat
--- only; evade re-arms via Reset like C++).
+-- C++ Reset: _Reset() first (boss_mordresh_fire_eye.cpp:55-57), then
+-- arm the OOC talk loop at 10s (fires out-of-combat only; evade
+-- re-arms via Reset like C++). The _Reset() SetBossState(NOT_STARTED)
+-- leg (BossAI::_Reset ScriptedCreature.cpp:499-511) is alive-gated
+-- and != DONE-gated (Go fires ev23 on the death path before ev4,
+-- moroes/algalon precedent); the OOC schedule below is NOT gated —
+-- on the death path it is cancelled immediately by onDied, as before.
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if creature:IsAlive() and creature:GetBossState(DATA_MORDRESH_FIRE_EYE) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_MORDRESH_FIRE_EYE, BOSS_STATE_NOT_STARTED)
+    end
     schedule(guid, "ooc", 10000, function()
         oocLoop(creature, guid)
     end)
@@ -185,6 +212,10 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_mordresh_fire_eye.cpp:70-72): _JustDied() only —
+    -- BossAI::_JustDied (ScriptedCreature.cpp:513-520) writes
+    -- SetBossState(DATA_MORDRESH_FIRE_EYE, DONE).
+    creature:SetBossState(DATA_MORDRESH_FIRE_EYE, BOSS_STATE_DONE)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

@@ -33,7 +33,11 @@
 --   exists on the unit object — hyjal_trash/kodo precedents).
 -- - Engage (C++ JustEngagedWith): arm Web Spray at init {3s,5s} and
 --   Curse of Tuten'kash at init {9s,14s} (BossAI::JustEngagedWith
---   pulse + me-DoZone PORTED; instance legs stay blocked).
+--   pulse + me-DoZone + SetBossState(DATA_TUTEN_KASH, IN_PROGRESS)
+--   PORTED, bridge live lua_creature_events.go:5917; the
+--   CheckRequiredBosses SEQUENCE_BREAK leg stays blocked).
+-- - Death (C++ JustDied, _JustDied): SetBossState(DATA_TUTEN_KASH,
+--   DONE) PORTED in onDied.
 -- - Web Spray (EVENT_WEB_SPRAY): SelectTarget(Random, 0, 100, false)
 --   -> randomThreatTargetInRange(creature, 100) — threat-list pick, no
 --   Player filter (playerOnly=FALSE explicit in C++); position 0 means
@@ -46,14 +50,21 @@
 --   SPELL_CURSE_OF_TUTENKASH 12255) self-cast, non-triggered; repeat
 --   {15s,25s} unconditional.
 -- Unmodeled (documented-only, no bridges):
--- - The BossAI ctor legs (DATA_TUTEN_KASH = 0 boss-data registration,
---   _Reset / _JustDied instance-state bookkeeping) — no instance /
---   BossAI-Reset bridges (standing).
+-- - The BossAI ctor DATA_TUTEN_KASH = 0 registration is the boss id
+--   above; _Reset / _JustDied instance bookkeeping beyond the
+--   SetBossState legs (events.Reset / summons.DespawnAll /
+--   scheduler.CancelAll) needs no bridge (tick-driven AIs; the
+--   per-file cancelTimers covers the timer half).
 -- - The C++ UpdateAI CASTING gates are PORTED in onWebSpray /
 --   onCurseOfTutenkash below (500ms IsCasting defer).
 
 local ENTRY = 7355
 
+local DATA_TUTEN_KASH = 0 -- razorfen_downs.h:31
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+-- EncounterState (InstanceScript.h:68-76).
 local SPELL_THRASH              = 8876
 local SPELL_WEB_SPRAY           = 12252
 local SPELL_VIRULENT_POISON     = 12254
@@ -139,6 +150,11 @@ local function onCurseOfTutenkash(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542,
+    -- base-first in boss_tuten_kash.cpp:54-56): instance->SetBossState
+    -- (DATA_TUTEN_KASH, IN_PROGRESS) ahead of the pulse / DoZoneInCombat
+    -- arms below (creature:SetBossState, lua_creature_events.go:5917).
+    creature:SetBossState(DATA_TUTEN_KASH, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_tuten_kash.cpp:54-56)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     local guid = creature:GetGUID()
@@ -155,10 +171,17 @@ local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset: refresh the two self-buff auras under their HasAura
--- guards (Thrash 8876, Virulent Poison 12254).
+-- C++ Reset: _Reset() first (boss_tuten_kash.cpp:45-47), then refresh
+-- the two self-buff auras under their HasAura guards (Thrash 8876,
+-- Virulent Poison 12254). The _Reset() SetBossState(NOT_STARTED) leg
+-- (BossAI::_Reset ScriptedCreature.cpp:499-511) is alive-gated and
+-- != DONE-gated (Go fires ev23 on the death path before ev4,
+-- moroes/algalon precedent, so both gates are live here).
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:IsAlive() and creature:GetBossState(DATA_TUTEN_KASH) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_TUTEN_KASH, BOSS_STATE_NOT_STARTED)
+    end
     -- C++ Reset: non-triggered self-casts gated on !HasAura
     -- (Reset-only arms, boss_tuten_kash.cpp). Event 23 fires on
     -- death too (engine reset-then-died order) but C++ Reset()
@@ -173,6 +196,11 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_tuten_kash.cpp:61-63): _JustDied() only —
+    -- BossAI::_JustDied (ScriptedCreature.cpp:513-520) writes
+    -- SetBossState(DATA_TUTEN_KASH, DONE); the events.Reset /
+    -- summons / scheduler legs need no bridge.
+    creature:SetBossState(DATA_TUTEN_KASH, BOSS_STATE_DONE)
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
