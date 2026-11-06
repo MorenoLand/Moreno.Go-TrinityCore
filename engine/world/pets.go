@@ -1049,8 +1049,23 @@ func (s *session) resetActivePetTalents(ctx context.Context) bool {
 	}
 	// Pet::resetTalents ends with PetSpellInitialize + Player::ResetPetTalents
 	// with SendTalentsInfoData(true): resend the pet spell list and the talent
-	// frame.
+	// frame. The live motion follows the DB: Pet::resetTalents unlearns each
+	// talent spell (Pet::removeSpell recomputes the free-points byte), so the
+	// removed spells leave motion.Spells and a GM-set override drops.
 	if petGUID := s.petGUIDForNumber(petNumber); petGUID != 0 {
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID); motion != nil && motion.PetID == petNumber {
+			for _, spell := range talentSpells {
+				for j, sp := range motion.Spells {
+					if sp == spell {
+						motion.Spells = append(motion.Spells[:j], motion.Spells[j+1:]...)
+						break
+					}
+				}
+			}
+			motion.PetFreeTalentPointsOverrideSet = false
+		}
+		s.server.motionMu.Unlock()
 		s.sendPetSpells(ctx, petNumber, 0, 1)
 	}
 	_ = s.sendTalentsInfo(true)
@@ -2510,6 +2525,12 @@ func (s *session) teachPetSpell(ctx context.Context, spellID uint32) {
 		}
 	}
 	motion.Spells = append(motion.Spells, spellID)
+	// Pet::addSpell recomputes the free-points byte only when the learned
+	// spell carries a talent cost (Pet.cpp:1475-1483), so a GM-set override
+	// drops only for talent spells taught this way.
+	if cost, costErr := s.server.Data.TalentSpellCost(spellID); costErr == nil && cost > 0 {
+		motion.PetFreeTalentPointsOverrideSet = false
+	}
 	entry, reactState := motion.Entry, motion.ReactState
 	s.server.motionMu.Unlock()
 	petNumber := s.player.PetNumber
@@ -3981,6 +4002,31 @@ func (s *session) petMaxTalentPointsForLevel(level uint32) uint32 {
 	return 0
 }
 
+// petFreeTalentPoints mirrors Pet::GetFreeTalentPoints (Pet.h:137): the
+// UNIT_FIELD_BYTES_1 pet-talents byte. A GM-set override reads back
+// verbatim; otherwise the count is derived exactly as C++ maintains
+// m_usedTalentCount — petMaxTalentPointsForLevel minus the
+// TalentSpellCost sum over the live motion's known spells, floored at 0.
+func (s *session) petFreeTalentPoints(motion *creatureMotion) uint32 {
+	if motion != nil && motion.PetFreeTalentPointsOverrideSet {
+		return motion.PetFreeTalentPointsOverride
+	}
+	if motion == nil || s == nil || s.server == nil || s.server.Data == nil {
+		return 0
+	}
+	maxPoints := s.petMaxTalentPointsForLevel(motion.Level)
+	var usedPoints uint32
+	for _, sp := range motion.Spells {
+		if cost, costErr := s.server.Data.TalentSpellCost(sp); costErr == nil {
+			usedPoints += cost
+		}
+	}
+	if maxPoints > usedPoints {
+		return maxPoints - usedPoints
+	}
+	return 0
+}
+
 // learnPetTalent mirrors Player::LearnPetTalent (Player.cpp:25563-25702),
 // shared by CMSG_PET_LEARN_TALENT and CMSG_LEARN_PREVIEW_TALENTS_PET. The
 // pet GUID must resolve to the session's live pet and the talent must
@@ -4059,22 +4105,11 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 	// incremental cost talentRank-curtalent_maxrank+1, where
 	// curtalent_maxrank is curMax+1 (0 when nothing is known) — so the
 	// needed points are talentRank-curMax in Go's -1-based curMax. The free
-	// count is recomputed from the live spell list exactly as C++ maintains
-	// m_usedTalentCount: petMaxTalentPointsForLevel (base (level-16)/4 for
-	// level >= 20 plus the owner-aura MOD_PET_TALENT_POINTS bonus) minus
-	// the TalentSpellCost sum over known spells. Previously this gate was
-	// absent entirely, so a pet could learn past its point cap.
-	maxPoints := s.petMaxTalentPointsForLevel(motion.Level)
-	var usedPoints uint32
-	for _, sp := range motion.Spells {
-		if cost, costErr := s.server.Data.TalentSpellCost(sp); costErr == nil {
-			usedPoints += cost
-		}
-	}
-	var freePoints uint32
-	if maxPoints > usedPoints {
-		freePoints = maxPoints - usedPoints
-	}
+	// count is the live byte — a GM-set override reads back verbatim,
+	// otherwise the derived max-minus-used count (petFreeTalentPoints).
+	// Previously this gate was absent entirely, so a pet could learn past
+	// its point cap.
+	freePoints := s.petFreeTalentPoints(motion)
 	if freePoints < uint32(int(talentRank)-curMax) {
 		return false
 	}
@@ -4157,6 +4192,9 @@ func (s *session) learnPetTalent(ctx context.Context, petNumber uint32, petGUID 
 		}
 	}
 	motion.Spells = append(motion.Spells, spellID)
+	// Pet::addSpell recomputes the free-points byte from the new used
+	// count, so a GM-set override drops and the derived count reads back.
+	motion.PetFreeTalentPointsOverrideSet = false
 	s.server.motionMu.Unlock()
 	learnedBuf := protocol.NewBuffer(4)
 	learnedBuf.WriteU32(spellID)

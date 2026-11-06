@@ -266,6 +266,15 @@ func (s *session) sendTalentsInfo(pet bool) error {
 				}
 			}
 		}
+		// A GM-set free-points override on the live pet reads back verbatim
+		// (Pet::GetFreeTalentPoints returns the UNIT_FIELD_BYTES_1 byte the
+		// GM overwrote, Pet.h:137) even when the DB-derived count below
+		// differs — the byte, not the recomputation, is what the frame sends.
+		if s.player != nil {
+			if motion := s.controlledPetMotion(s.player.PetGUID); motion != nil && motion.PetFreeTalentPointsOverrideSet {
+				unspentPoints = motion.PetFreeTalentPointsOverride
+			}
+		}
 		buf.WriteU8(1)
 		buf.WriteU32(unspentPoints)
 		buf.WriteU8(uint8(len(learnedTalents)))

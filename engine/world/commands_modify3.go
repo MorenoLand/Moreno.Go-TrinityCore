@@ -28,8 +28,9 @@ import (
 //   - the speed sub-table needs a per-type speed-rate store; Go movement
 //     speeds are aura-derived (movementSpeeds).
 //   - talentpoints sets the session free-talent-points override
-//     (handleModifyTalentPoints); the pet arm stays out (no pet
-//     points store; selections resolve to player sessions only).
+//     (handleModifyTalentPoints); the pet arm sets the live motion's
+//     override on a permanent pet of a player owner and resends the
+//     owner's pet talents frame.
 
 // handleModifyGender mirrors HandleModifyGenderCommand (cs_modify.cpp:899):
 // "male"/"female" (prefix-matched with the case-sensitive C++ strncmp) on
@@ -363,11 +364,13 @@ func (s *session) checkModifySpeedTarget(ctx context.Context, args []string, che
 }
 
 // handleModifyTalentPoints mirrors HandleModifyTalentPointsCommand
-// (cs_modify.cpp:342): the player arm sets stored free talent points
-// and resends the talents frame. Go stores the value as the session
-// free-talent-points override; the pet arm stays out (Pet::
-// SetFreeTalentPoints writes the pet byte field, and Go selections
-// resolve to player sessions only).
+// (cs_modify.cpp:334-372): the player arm sets stored free talent points
+// and resends the talents frame; the pet arm sets the pet's
+// UNIT_FIELD_BYTES_1 pet-talents byte (Pet::SetFreeTalentPoints,
+// Pet.h:138) on a permanent pet of a player owner and resends the owner's
+// pet talents frame. Go stores the pet value as the live motion's
+// free-talent-points override, read back by petFreeTalentPoints and the
+// owner's pet frame.
 func (s *session) handleModifyTalentPoints(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandModifyTalentPoints) {
 		return
@@ -381,11 +384,22 @@ func (s *session) handleModifyTalentPoints(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .modify talentpoints <value>")
 		return
 	}
-	if s.castCommandSelectedCreature() != nil {
-		// C++ getSelectedUnit arm: a non-player, non-pet unit gets
-		// LANG_NO_CHAR_SELECTED instead of the invoker's points (the
-		// pet leg itself stays out: no pet points store).
-		s.sendSysMessage("No character selected.")
+	if motion := s.castCommandSelectedCreature(); motion != nil {
+		owner, silent := s.modifyTalentPointsPetOwner(ctx, motion)
+		if silent {
+			return
+		}
+		if owner == nil {
+			// C++ getSelectedUnit arm: a non-player, non-pet unit gets
+			// LANG_NO_CHAR_SELECTED instead of the invoker's points.
+			s.sendSysMessage("No character selected.")
+			return
+		}
+		s.server.motionMu.Lock()
+		motion.PetFreeTalentPointsOverride = uint32(tp)
+		motion.PetFreeTalentPointsOverrideSet = true
+		s.server.motionMu.Unlock()
+		_ = owner.sendTalentsInfo(true)
 		return
 	}
 	target := s.modifyTargetPlayer(ctx)
@@ -395,6 +409,58 @@ func (s *session) handleModifyTalentPoints(ctx context.Context, args []string) {
 	target.player.FreeTalentPointsOverride = uint32(tp)
 	target.player.FreeTalentPointsOverrideSet = true
 	_ = target.sendTalentsInfo(false)
+}
+
+// modifyTalentPointsPetOwner mirrors the pet leg of
+// HandleModifyTalentPointsCommand (cs_modify.cpp:356-366): the selected
+// unit must be a pet (Unit::IsPet) with a player owner, and a permanent
+// pet for that owner (Pet::IsPermanentPetFor, Pet.cpp:1832-1847), with the
+// lower-security guard on the owner. It returns the owner's session, or
+// nil when the leg does not apply (the caller prints
+// LANG_NO_CHAR_SELECTED); silent is true when the security guard failed
+// and the caller must stay silent.
+func (s *session) modifyTalentPointsPetOwner(ctx context.Context, motion *creatureMotion) (owner *session, silent bool) {
+	if motion == nil || !motionIsPet(motion) || motion.OwnerGUID == 0 || s.server == nil {
+		return nil, false
+	}
+	owner = s.server.findSessionByGUID(motion.OwnerGUID)
+	if owner == nil || owner.player == nil {
+		return nil, false
+	}
+	if !s.modifyPetIsPermanentForOwner(ctx, motion, owner) {
+		return nil, false
+	}
+	if s.modifyTargetLowerSecurity(ctx, owner) {
+		return nil, true
+	}
+	return owner, false
+}
+
+// modifyPetIsPermanentForOwner mirrors Pet::IsPermanentPetFor
+// (Pet.cpp:1832-1847): HUNTER_PET is always permanent; SUMMON_PET is
+// permanent for a warlock's demon or a death knight's undead pet. The
+// creature type comes from creature_template — pet motions carry no
+// CreatureType — matching the sendPetSpells precedent (pets.go:1842).
+func (s *session) modifyPetIsPermanentForOwner(ctx context.Context, motion *creatureMotion, owner *session) bool {
+	if motion == nil || owner == nil || owner.player == nil {
+		return false
+	}
+	switch motion.PetType {
+	case petTypeHunter:
+		return true
+	case petTypeSummon:
+		if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return false
+		}
+		var creatureType int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT type FROM creature_template WHERE entry = ?", motion.Entry).Scan(&creatureType); err != nil {
+			return false
+		}
+		return owner.player.Class == 9 && uint32(creatureType) == creatureTypeDemon ||
+			owner.player.Class == 6 && uint32(creatureType) == creatureTypeUndead
+	default:
+		return false
+	}
 }
 
 // handleModifyChunk2b extends the modify dispatcher with the chunk-2b arms.

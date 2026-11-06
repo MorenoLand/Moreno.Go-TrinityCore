@@ -235,6 +235,17 @@ type creatureMotion struct {
 	PetID          uint32
 	PetType        uint8
 	PetNextLevelXP uint32
+
+	// PetFreeTalentPointsOverride is the .modify talentpoints pet-leg
+	// value (Pet::SetFreeTalentPoints, Pet.h:138): while
+	// PetFreeTalentPointsOverrideSet, the pet's free talent points read
+	// back as this value instead of the derived max-minus-used count,
+	// mirroring the UNIT_FIELD_BYTES_1 pet-talents byte the GM overwrote.
+	// The byte is recomputed in C++ (and the override dropped) when the
+	// pet learns/unlearns a talent or its talents reset
+	// (Pet::addSpell/removeSpell/resetTalents).
+	PetFreeTalentPointsOverride    uint32
+	PetFreeTalentPointsOverrideSet bool
 	// KillCommandStacks is the pet-side half of the Kill Command (34026)
 	// stack machinery: the 58914 dummy-aura stacks stamped at 34026 apply
 	// (SpellAuraEffects.cpp:4367-4386) and consumed on the pet's attacks
