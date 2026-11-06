@@ -35,7 +35,10 @@
 -- the menu, Talk(SAY_SUMMON_MAJ), arm the 8s Ragnaros summon + 24s
 -- outro Talk(SAY_ARRIVAL2_MAJ).
 -- The defeat sequence's remaining legs stay out: EnterEvadeMode has no
--- bridge, and the instance DONE / _JustDied legs have no bridge. The
+-- bridge and UpdateEncounterStateForKilledCreature is instance-side;
+-- the _JustDied() DONE write (boss_majordomo_executus.cpp:116) IS
+-- ported in onDefeatPump below (creature:SetBossState, bridge live
+-- lua_creature_events.go:5917). The
 -- flamewakers are instance-summoned (instance_molten_core.cpp
 -- SummonMajordomoExecutus), but the presence check itself runs on the
 -- bridged FindNearestCreature gate, so the trigger + visible legs
@@ -52,11 +55,15 @@
 -- gate) via the live creature:IsCasting() bridge
 -- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
 -- casting tick defers 500ms under its own key, consuming no re-arm.
--- The defeat pump stays ungated (C++ defeat arm :108-118 precedes the
+-- The defeat pump stays ungated (C++ defeat arm :103-118 precedes the
 -- gate) and the DONE-branch outro ticks stay ungated (that branch has
 -- no gate). No instance-script model — boss admission via the
--- luaBossAI shim (BossAI::JustEngagedWith and the
--- BOSS_MAJORDOMO_EXECUTUS bookkeeping arms skipped).
+-- luaBossAI shim; the _Reset / _JustDied / _JustEngagedWith
+-- bookkeeping arms ARE ported below (creature:SetBossState, bridge live
+-- lua_creature_events.go:5917): ev1 IN_PROGRESS (JustEngagedWith
+-- :91-93 calls the base first, then Talk(SAY_AGGRO)), ev23 NOT_STARTED
+-- (no Reset override — base runs), ev4 DONE (no JustDied override —
+-- base runs by virtual dispatch).
 
 local ENTRY_MAJORDOMO_EXECUTUS = 12018
 local NPC_RAGNAROS = 11502
@@ -204,13 +211,15 @@ local function onTeleport(creature, guid)
     end)
 end
 
--- C++ UpdateAI defeat arm (boss_majordomo_executus.cpp:108-124): while
+-- C++ UpdateAI defeat arm (boss_majordomo_executus.cpp:103-118): while
 -- boss state != DONE (unmodeled — the pump only runs in combat, and the
 -- combat timers die with it), if no Flamewaker Healer (11663) and no
--- Flamewaker Elite (11664) is found within 100 yd -> SetFaction(35
--- FRIENDLY) + Talk(SAY_DEFEAT) + combat timers stop + EVENT_OUTRO_1
--- at 32s (NearTeleportTo RagnarosTelePos + gossip flag). EnterEvadeMode,
--- instance DONE and _JustDied legs have no bridge and stay out.
+-- Flamewaker Elite (11664) is found within 100 yd ->
+-- UpdateEncounterStateForKilledCreature (instance-side, stays out) +
+-- SetFaction(35 FRIENDLY) + EnterEvadeMode (no bridge, stays out) +
+-- Talk(SAY_DEFEAT) + _JustDied() (:116, writes SetBossState(8, DONE) —
+-- PORTED below) + EVENT_OUTRO_1 at 32s (NearTeleportTo RagnarosTelePos
+-- + gossip flag).
 local function onDefeatPump(creature, guid)
     if defeated[guid] then
         return
@@ -221,6 +230,9 @@ local function onDefeatPump(creature, guid)
         cancelTimers(guid)
         creature:SetFaction(FACTION_FRIENDLY)
         creature:Talk(SAY_DEFEAT)
+        -- C++ :116 _JustDied() writes SetBossState(BOSS_MAJORDOMO_EXECUTUS 8,
+        -- DONE); C++ order is faction, EnterEvadeMode (unported), Talk, _JustDied.
+        creature:SetBossState(8, 3)
         schedule(guid, "outro1", 32000, function()
             creature:Teleport(RAGNAROS_TELE_X, RAGNAROS_TELE_Y, RAGNAROS_TELE_Z, RAGNAROS_TELE_O)
             creature:SetFlag(82, UNIT_NPC_FLAG_GOSSIP)
@@ -240,6 +252,10 @@ local onAegisPump
 local function majordomoEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ JustEngagedWith (boss_majordomo_executus.cpp:91-93) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(BOSS_MAJORDOMO_EXECUTUS 8, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(8, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
@@ -305,10 +321,23 @@ local function majordomoLeaveCombat(event, creature)
 end
 
 local function majordomoDied(event, creature, killer)
+    -- No JustDied override in C++ — base BossAI::JustDied runs by
+    -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
+    -- SetBossState(BOSS_MAJORDOMO_EXECUTUS 8, DONE). (The normal
+    -- defeat path writes DONE earlier, in onDefeatPump :116.)
+    creature:SetBossState(8, 3)
     majordomoResetState(creature:GetGUID())
 end
 
 local function majordomoReset(event, creature)
+    -- No Reset override in C++ — base BossAI::Reset runs; _Reset()
+    -- writes SetBossState(BOSS_MAJORDOMO_EXECUTUS 8, NOT_STARTED),
+    -- alive-gated and skipped when already DONE
+    -- (ScriptedCreature.cpp:499-511); Go fires ev23 on the death path
+    -- too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(8) ~= 3 then
+        creature:SetBossState(8, 0)
+    end
     majordomoResetState(creature:GetGUID())
 end
 

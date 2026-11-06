@@ -26,8 +26,13 @@
 -- CastingUntil window) — a casting tick defers 500ms under its own
 -- key, consuming no re-arm. The Reset magma-spit arm is not an
 -- UpdateAI event and stays ungated. No instance-script model — boss
--- admission via the luaBossAI shim (BossAI::JustEngagedWith and the
--- BOSS_MAGMADAR bookkeeping arms skipped).
+-- admission via the luaBossAI shim; the _Reset / _JustDied /
+-- _JustEngagedWith bookkeeping arms ARE ported below
+-- (creature:SetBossState, bridge live lua_creature_events.go:5917):
+-- ev1 IN_PROGRESS (JustEngagedWith :67-69 calls the base first),
+-- ev23 NOT_STARTED (Reset :61-64 calls BossAI::Reset() first, then
+-- the magma-spit arm), ev4 DONE (no JustDied override — base runs
+-- by virtual dispatch).
 
 local ENTRY_MAGMADAR = 11982
 
@@ -134,6 +139,10 @@ end
 local function magmadarEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ JustEngagedWith (boss_magmadar.cpp:67-69) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(BOSS_MAGMADAR 1, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(1, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "frenzy", 30000, function()
@@ -156,12 +165,22 @@ local function magmadarLeaveCombat(event, creature)
 end
 
 local function magmadarDied(event, creature, killer)
+    -- No JustDied override in C++ — base BossAI::JustDied runs by
+    -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
+    -- SetBossState(BOSS_MAGMADAR 1, DONE).
+    creature:SetBossState(1, 3)
     magmadarResetState(creature:GetGUID())
 end
 
--- C++ Reset: triggered self-cast of magma spit 19449 (C++-exact);
--- the BossAI::Reset instance bookkeeping has no bridge.
+-- C++ Reset (boss_magmadar.cpp:61-64): BossAI::Reset() first, then the
+-- triggered self-cast of magma spit 19449 (C++-exact); _Reset() writes
+-- SetBossState(BOSS_MAGMADAR 1, NOT_STARTED), alive-gated and skipped
+-- when already DONE (ScriptedCreature.cpp:499-511); Go fires ev23 on
+-- the death path too, hence the gate.
 local function magmadarReset(event, creature)
+    if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
+        creature:SetBossState(1, 0)
+    end
     magmadarResetState(creature:GetGUID())
     -- Reset-only arm (boss_magmadar.cpp); alive-gated.
     if creature:IsAlive() then

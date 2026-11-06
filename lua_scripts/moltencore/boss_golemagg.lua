@@ -36,8 +36,12 @@
 -- key, consuming no re-arm. The earthquake tick is armed from
 -- DamageTaken but executes in the gated UpdateAI loop, so it is
 -- gated too. No instance-script model — boss admission via the
--- luaBossAI shim (BossAI::JustEngagedWith and the
--- BOSS_GOLEMAGG_THE_INCINERATOR bookkeeping arms skipped); the
+-- luaBossAI shim; the _Reset / _JustDied / _JustEngagedWith
+-- bookkeeping arms ARE ported below (creature:SetBossState, bridge live
+-- lua_creature_events.go:5917): ev1 IN_PROGRESS (JustEngagedWith
+-- :66-68 calls the base first), ev23 NOT_STARTED (Reset :60-62 calls
+-- BossAI::Reset() first, then the magmasplash arm), ev4 DONE (no
+-- JustDied override — base runs by virtual dispatch); the
 -- npc_core_rager AI in the same C++ file (mangle 19820 7s then 10s
 -- DoCastVictim; below 50% health adds Golemagg's trust 20553 to
 -- itself, Talk(EMOTE_LOWHP=0) and self full-heal while Golemagg is
@@ -133,6 +137,10 @@ end
 local function golemaggEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ JustEngagedWith (boss_golemagg.cpp:66-68) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(BOSS_GOLEMAGG_THE_INCINERATOR 7, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(7, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "pyroblast", 7000, function()
@@ -149,12 +157,23 @@ local function golemaggLeaveCombat(event, creature)
 end
 
 local function golemaggDied(event, creature, killer)
+    -- No JustDied override in C++ — base BossAI::JustDied runs by
+    -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
+    -- SetBossState(BOSS_GOLEMAGG_THE_INCINERATOR 7, DONE).
+    creature:SetBossState(7, 3)
     golemaggResetState(creature:GetGUID())
 end
 
--- C++ Reset: triggered self-cast of magmasplash 13879 (C++-exact);
--- the BossAI::Reset instance bookkeeping has no bridge.
+-- C++ Reset (boss_golemagg.cpp:60-62): BossAI::Reset() first, then the
+-- triggered self-cast of magmasplash 13879 (C++-exact); _Reset() writes
+-- SetBossState(BOSS_GOLEMAGG_THE_INCINERATOR 7, NOT_STARTED),
+-- alive-gated and skipped when already DONE
+-- (ScriptedCreature.cpp:499-511); Go fires ev23 on the death path too,
+-- hence the gate.
 local function golemaggReset(event, creature)
+    if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
+        creature:SetBossState(7, 0)
+    end
     golemaggResetState(creature:GetGUID())
     -- Reset-only arm (boss_golemagg.cpp); alive-gated.
     if creature:IsAlive() then

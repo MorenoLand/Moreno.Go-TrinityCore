@@ -18,8 +18,12 @@
 -- creature:IsCasting() bridge (engine/world/lua_creature_events.go:1950,
 -- CastingUntil window) — a casting tick defers 500ms under its own
 -- key, consuming no re-arm. No instance-script model — boss admission
--- via the luaBossAI shim (BossAI::JustEngagedWith and the
--- BOSS_GARR bookkeeping arms skipped); the npc_firesworn AI in the
+-- via the luaBossAI shim; the _Reset / _JustDied / _JustEngagedWith
+-- bookkeeping arms ARE ported below (creature:SetBossState, bridge live
+-- lua_creature_events.go:5917): ev1 IN_PROGRESS (JustEngagedWith
+-- :53-55 calls the base first), ev23 NOT_STARTED (no Reset override on
+-- the boss — base runs), ev4 DONE (no JustDied override — base runs by
+-- virtual dispatch); the npc_firesworn AI in the
 -- same file (immolate schedule 4s then {5s,10s} on a random target,
 -- separation-anxiety check vs NPC_GARR 20 yd, eruption+despawn below
 -- 10% health) is not registered — no NPC_FIRESWORN constant exists in
@@ -92,6 +96,10 @@ end
 local function garrEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ JustEngagedWith (boss_garr.cpp:53-55) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(BOSS_GARR 3, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(3, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "antimagicpulse", 25000, function()
@@ -111,10 +119,23 @@ local function garrLeaveCombat(event, creature)
 end
 
 local function garrDied(event, creature, killer)
+    -- No JustDied override in C++ — base BossAI::JustDied runs by
+    -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
+    -- SetBossState(BOSS_GARR 3, DONE).
+    creature:SetBossState(3, 3)
     garrResetState(creature:GetGUID())
 end
 
 local function garrReset(event, creature)
+    -- No Reset override on the boss in C++ — base BossAI::Reset runs;
+    -- _Reset() writes SetBossState(BOSS_GARR 3, NOT_STARTED),
+    -- alive-gated and skipped when already DONE
+    -- (ScriptedCreature.cpp:499-511); Go fires ev23 on the death path
+    -- too, hence the gate. (The npc_firesworn Reset at :122-125 is the
+    -- ScriptedAI add's own, not the boss's.)
+    if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
+        creature:SetBossState(3, 0)
+    end
     garrResetState(creature:GetGUID())
 end
 

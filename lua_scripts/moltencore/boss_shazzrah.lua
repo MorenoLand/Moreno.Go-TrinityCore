@@ -30,9 +30,13 @@
 -- gate triggered explosion, via the live creature:IsCasting() bridge
 -- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
 -- casting tick defers 500ms under its own key, consuming no re-arm.
--- No instance-script model — boss admission via the luaBossAI shim
--- (BossAI::JustEngagedWith and the BOSS_SHAZZRAH bookkeeping arms
--- skipped); the EVENT_SHAZZRAH_GATE
+-- No instance-script model — boss admission via the luaBossAI shim;
+-- the _Reset / _JustDied / _JustEngagedWith bookkeeping arms ARE
+-- ported below (creature:SetBossState, bridge live
+-- lua_creature_events.go:5917): ev1 IN_PROGRESS (JustEngagedWith
+-- :52-54 calls the base first), ev23 NOT_STARTED (no Reset override —
+-- base runs), ev4 DONE (no JustDied override — base runs by virtual
+-- dispatch); the EVENT_SHAZZRAH_GATE
 -- ResetThreatList arm IS ported (:154 — ResetAllThreat bridged,
 -- lua_objects.go:389); the spell_shazzrah_gate_dummy SpellScript
 -- (picks a random area target, that target casts 23139 teleporting
@@ -208,6 +212,10 @@ end
 local function shazzrahEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ JustEngagedWith (boss_shazzrah.cpp:52-54) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(BOSS_SHAZZRAH 4, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(4, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "arcaneexplosion", 6000, function()
@@ -236,10 +244,21 @@ local function shazzrahLeaveCombat(event, creature)
 end
 
 local function shazzrahDied(event, creature, killer)
+    -- No JustDied override in C++ — base BossAI::JustDied runs by
+    -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
+    -- SetBossState(BOSS_SHAZZRAH 4, DONE).
+    creature:SetBossState(4, 3)
     shazzrahResetState(creature:GetGUID())
 end
 
 local function shazzrahReset(event, creature)
+    -- No Reset override in C++ — base BossAI::Reset runs; _Reset()
+    -- writes SetBossState(BOSS_SHAZZRAH 4, NOT_STARTED), alive-gated
+    -- and skipped when already DONE (ScriptedCreature.cpp:499-511);
+    -- Go fires ev23 on the death path too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
+        creature:SetBossState(4, 0)
+    end
     shazzrahResetState(creature:GetGUID())
 end
 

@@ -37,9 +37,13 @@
 -- the live creature:IsCasting() bridge
 -- (engine/world/lua_creature_events.go:1950, CastingUntil window) — a
 -- casting tick defers 500ms under its own key, consuming no re-arm.
--- No instance-script model — boss admission via the luaBossAI shim
--- (BossAI::JustEngagedWith and the BOSS_SULFURON_HARBINGER
--- bookkeeping arms skipped).
+-- No instance-script model — boss admission via the luaBossAI shim;
+-- the _Reset / _JustDied / _JustEngagedWith bookkeeping arms ARE
+-- ported below (creature:SetBossState, bridge live
+-- lua_creature_events.go:5917): ev1 IN_PROGRESS (JustEngagedWith
+-- :69-71 calls the base first), ev23 NOT_STARTED (no Reset override on
+-- the boss — base runs), ev4 DONE (no JustDied override — base runs
+-- by virtual dispatch).
 
 local ENTRY_SULFURON_HARBINGER = 12098
 local ENTRY_FLAMEWAKER_HEALER = 11663 -- molten_core.h NPC_FLAMEWAKER_HEALER
@@ -199,6 +203,10 @@ end
 local function sulfuronEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ JustEngagedWith (boss_sulfuron_harbinger.cpp:69-71) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(BOSS_SULFURON_HARBINGER 6, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(6, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "darkstrike", 10000, function()
@@ -227,10 +235,23 @@ local function sulfuronLeaveCombat(event, creature)
 end
 
 local function sulfuronDied(event, creature, killer)
+    -- No JustDied override in C++ — base BossAI::JustDied runs by
+    -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
+    -- SetBossState(BOSS_SULFURON_HARBINGER 6, DONE).
+    creature:SetBossState(6, 3)
     sulfuronResetState(creature:GetGUID())
 end
 
 local function sulfuronReset(event, creature)
+    -- No Reset override on the boss in C++ — base BossAI::Reset runs;
+    -- _Reset() writes SetBossState(BOSS_SULFURON_HARBINGER 6,
+    -- NOT_STARTED), alive-gated and skipped when already DONE
+    -- (ScriptedCreature.cpp:499-511); Go fires ev23 on the death path
+    -- too, hence the gate. (The npc_flamewaker_priest Reset at :149-152
+    -- is the ScriptedAI add's own, not the boss's.)
+    if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
+        creature:SetBossState(6, 0)
+    end
     sulfuronResetState(creature:GetGUID())
 end
 

@@ -61,10 +61,14 @@
 -- C++ too (the submerge InterruptNonMeleeSpells arm is documented
 -- separately below; the old "no UNIT_STATE bridge" claim was stale).
 -- Deviations from C++: no instance-
--- script model — boss admission via the luaBossAI shim
--- (BossAI::JustEngagedWith and the BOSS_RAGNAROS bookkeeping arms
--- skipped), and the DATA_RAGNAROS_ADDS SetData/GetData arms and the
--- majordomo-executus kill arm are unmodeled; the intro sequence
+-- script model — boss admission via the luaBossAI shim; the
+-- _Reset / _JustDied / _JustEngagedWith bookkeeping arms ARE ported
+-- below (creature:SetBossState, bridge live lua_creature_events.go:5917):
+-- ev1 IN_PROGRESS (JustEngagedWith :109-111 calls the base first),
+-- ev23 NOT_STARTED (Reset :102-106 calls BossAI::Reset() first, then
+-- Initialize + emotestate 0), ev4 DONE (no JustDied override — base
+-- runs by virtual dispatch). Only the DATA_RAGNAROS_ADDS SetData/GetData
+-- arms and the majordomo-executus kill arm are unmodeled; the intro sequence
 -- (intro Talks SAY_ARRIVAL1_RAG/SAY_ARRIVAL3_RAG/SAY_ARRIVAL5_RAG,
 -- REACT_PASSIVE/AGGRESSIVE, UNIT_FLAG_NON_ATTACKABLE, SetImmuneToPC,
 -- the ObjectAccessor majordomo kill) — the react/flag/immune/
@@ -395,6 +399,10 @@ local function ragnarosEnterCombat(event, creature, target)
     creature:SetCombatMovement(false) -- BossAI ctor arm, boss_ragnaros.cpp:91 (ranged AI stands and casts)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ JustEngagedWith (boss_ragnaros.cpp:109-111) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(BOSS_RAGNAROS 9, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(9, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     state[guid] = { hasYelledMagmaBurst = false, hasSubmergedOnce = false }
@@ -438,10 +446,23 @@ local function ragnarosLeaveCombat(event, creature)
 end
 
 local function ragnarosDied(event, creature, killer)
+    -- No JustDied override on the boss in C++ — base BossAI::JustDied
+    -- runs by virtual dispatch (ScriptedCreature.h:330); _JustDied()
+    -- writes SetBossState(BOSS_RAGNAROS 9, DONE). (The JustDied at
+    -- boss_ragnaros.cpp:331-333 belongs to npc_son_of_flame, not the boss.)
+    creature:SetBossState(9, 3)
     ragnarosResetState(creature:GetGUID())
 end
 
 local function ragnarosReset(event, creature)
+    -- C++ Reset (boss_ragnaros.cpp:102-106): BossAI::Reset() first,
+    -- then Initialize() + emotestate 0; _Reset() writes
+    -- SetBossState(BOSS_RAGNAROS 9, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511); Go
+    -- fires ev23 on the death path too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
+        creature:SetBossState(9, 0)
+    end
     -- C++ boss_ragnaros.cpp:106: SetUInt32Value(UNIT_NPC_EMOTESTATE, 0)
     creature:EmoteState(0)
     ragnarosResetState(creature:GetGUID())

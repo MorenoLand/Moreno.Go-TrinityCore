@@ -24,8 +24,12 @@
 -- creature:IsCasting() bridge (engine/world/lua_creature_events.go:1950,
 -- CastingUntil window) — a casting tick defers 500ms under its own
 -- key, consuming no re-arm. No instance-script model — boss admission
--- via the luaBossAI shim (BossAI::JustEngagedWith and the
--- BOSS_GEHENNAS bookkeeping arms skipped); the SDComment "Adds
+-- via the luaBossAI shim; the _Reset / _JustDied / _JustEngagedWith
+-- bookkeeping arms ARE ported below (creature:SetBossState, bridge live
+-- lua_creature_events.go:5917): ev1 IN_PROGRESS (JustEngagedWith
+-- :55-57 calls the base first), ev23 NOT_STARTED (no Reset override —
+-- base runs), ev4 DONE (no JustDied override — base runs by virtual
+-- dispatch); the SDComment "Adds
 -- MC NYI" arms are absent from the C++ AI itself (the Flamewaker adds
 -- are not scripted in this file) and are not modeled.
 
@@ -163,6 +167,10 @@ end
 local function gehennasEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ JustEngagedWith (boss_gehennas.cpp:55-57) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(BOSS_GEHENNAS 2, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(2, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "curse", 12000, function()
@@ -185,10 +193,21 @@ local function gehennasLeaveCombat(event, creature)
 end
 
 local function gehennasDied(event, creature, killer)
+    -- No JustDied override in C++ — base BossAI::JustDied runs by
+    -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
+    -- SetBossState(BOSS_GEHENNAS 2, DONE).
+    creature:SetBossState(2, 3)
     gehennasResetState(creature:GetGUID())
 end
 
 local function gehennasReset(event, creature)
+    -- No Reset override in C++ — base BossAI::Reset runs; _Reset()
+    -- writes SetBossState(BOSS_GEHENNAS 2, NOT_STARTED), alive-gated
+    -- and skipped when already DONE (ScriptedCreature.cpp:499-511);
+    -- Go fires ev23 on the death path too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
+        creature:SetBossState(2, 0)
+    end
     gehennasResetState(creature:GetGUID())
 end
 
