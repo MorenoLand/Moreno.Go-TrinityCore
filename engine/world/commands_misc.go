@@ -500,7 +500,10 @@ func (s *session) handleCmdAppear(ctx context.Context, args []string) {
 // handleCmdAura mirrors HandleAuraCommand (cs_misc.cpp:304-323, RBAC 491):
 // apply the spell as an aura on the selected player, or on the invoker when
 // nothing is selected (getSelectedUnit falls back to self). Creature
-// selections have no Go unit bridge and keep the select message.
+// selections have no Go unit bridge and keep the select message. The aura
+// carries the DBC duration (Aura::CalcMaxDuration, SpellAuras.cpp:871-886)
+// and a same-caster re-cast refreshes/stacks via TryRefreshStackOrCreate
+// (SpellAuras.cpp:303) instead of replacing at stack 1.
 func (s *session) handleCmdAura(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandAura) {
 		return
@@ -515,14 +518,38 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) {
 		s.sendSysMessage(miscSelectCharOrCreat)
 		return
 	}
-	target.applyAura(spellID)
+	// SpellInfo::GetDuration (SpellInfo.cpp:3077-3082): the level-scaled
+	// SpellDuration.dbc value; -1 is permanent (Go 0, no expiry timer).
+	// An unresolvable duration keeps the legacy 30-minute floor. No
+	// SPELLMOD_DURATION fold: the shared apply path does not fold it
+	// either, and the command stays consistent with it.
+	durationMs := uint32(1800000)
+	if target.server != nil && target.server.Data != nil && target.player != nil {
+		if sp, found, _ := target.server.Data.Spell(spellID); found && sp.DurationIndex > 0 {
+			if dur, ok, _ := target.server.Data.SpellDuration(sp.DurationIndex, uint32(target.player.Level)); ok {
+				switch {
+				case dur == -1:
+					durationMs = 0
+				case dur > 0:
+					durationMs = uint32(dur)
+				}
+			}
+		}
+	}
+	if target.refreshCommandAura(spellID, durationMs) {
+		return
+	}
+	target.applyAuraWithDuration(spellID, durationMs)
 }
 
 // handleCmdUnAura mirrors HandleUnAuraCommand (cs_misc.cpp:325-349, RBAC
 // 529): remove a spell's auras — or all auras — from the selected player,
 // or from the invoker when nothing is selected (getSelectedUnit falls back
 // to self). Creature selections have no Go unit bridge and keep the select
-// message.
+// message. The "all" form is an exact sequence (trailing tokens fail the
+// parse, like C++ EXACT_SEQUENCE) and runs Unit::RemoveAllAuras through
+// the remove funnel per aura, including the auras this unit owns on other
+// targets — not the timer-only clearActiveAuras strip.
 func (s *session) handleCmdUnAura(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandUnAura) {
 		return
@@ -533,7 +560,17 @@ func (s *session) handleCmdUnAura(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) > 0 && strings.EqualFold(args[0], "all") {
-		target.clearActiveAuras()
+		if len(args) != 1 {
+			s.sendSysMessage("Syntax: .unaura <spellId|all>")
+			return
+		}
+		target.removeAllPlayerAuras()
+		if target.server != nil {
+			// Unit::RemoveAllAuras (Unit.cpp:4282) also strips the
+			// auras this unit owns on other targets, with the default
+			// mode — the leave-world sweep is that same strip.
+			target.server.sweepOwnedAurasOnLeaveWorld(target.playerGUID)
+		}
 		return
 	}
 	spellID, ok := miscParseSpellArg(ctx, s, args)
@@ -599,7 +636,10 @@ func miscSetPhaseMask(target *session, mask uint32) {
 
 // miscParseSpellArg parses a spell id from a bare id or a |Hspell:id|
 // shift-click link, validating it against the Spell.dbc store like the C++
-// SpellInfo argument parser.
+// SpellInfo argument parser. It stays silent on failure: each caller
+// reports the miss its own way (C++ sends exactly one message — the
+// framework help for .aura/.unaura, LANG_UNKNOWN_SPELL for .cooldown),
+// so a message here would double-report.
 func miscParseSpellArg(ctx context.Context, s *session, args []string) (uint32, bool) {
 	if len(args) == 0 {
 		return 0, false
@@ -618,7 +658,6 @@ func miscParseSpellArg(ctx context.Context, s *session, args []string) (uint32, 
 		return 0, false
 	}
 	if _, _, found, err := s.server.Data.SpellName(id); err != nil || !found {
-		s.sendSysMessage(fmt.Sprintf(miscUnknownSpell, args[0]))
 		return 0, false
 	}
 	return id, true

@@ -33631,6 +33631,31 @@ func (s *session) clearActiveAuras() {
 	}
 }
 
+// removeAllPlayerAuras mirrors Unit::RemoveAllAuras (Unit.cpp:4282) for the
+// player's own applied auras: every aura goes through the remove funnel
+// with AURA_REMOVE_BY_DEFAULT, so the remove legs run and the aura/slot
+// records clear. clearActiveAuras only stops timers and empties
+// activeAuras, leaving hasAura() true and the stat/mount legs applied —
+// the .unaura all gap. Logout/death callers keep clearActiveAuras; only
+// the .unaura all command uses this.
+func (s *session) removeAllPlayerAuras() {
+	if s == nil {
+		return
+	}
+	s.castMu.Lock()
+	var ids []uint32
+	for id := range s.activeAuras {
+		ids = append(ids, id)
+	}
+	s.castMu.Unlock()
+	// The lock is released: removeAuraWithMode takes castMu itself, and a
+	// remove leg may strip a later-listed aura first — the funnel no-ops
+	// on absent auras (clearDeathAuras precedent).
+	for _, id := range ids {
+		s.removeAura(id)
+	}
+}
+
 // spellDeathPersistent mirrors SpellInfo::IsDeathPersistent
 // (SpellInfo.cpp:1169): SPELL_ATTR3_DEATH_PERSISTENT auras survive
 // Unit::RemoveAllAurasOnDeath (Unit.cpp). A missing DBC row degrades to
@@ -33753,6 +33778,114 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		casterLevel = s.player.Level
 	}
 	s.applyAuraFromCaster(spellID, durationMs, s.playerGUID, casterLevel)
+}
+
+// refreshCommandAura mirrors the Unit::_TryStackingOrRefreshingExistingAura
+// merge arm (Unit.cpp:3326) the way the live-cast path does
+// (applyAuraToTarget): a same-caster re-cast merges into the live aura —
+// one more stack clamped to the spell's StackAmount (1 when not stackable),
+// charges reset to the max, duration refreshed to the new cast's duration,
+// timers re-armed — instead of replacing the aura at stack 1. The .aura
+// command self-casts (cs_misc.cpp:304-323, SetCaster(target)), so the merge
+// fires only when the live aura's caster is the target itself; a
+// foreign-caster aura is left alone and the caller falls through to a fresh
+// apply. Basepoints are unchanged across the re-cast (same spell, same
+// caster, same level), so only the stack rescale rewrites the amounts —
+// the live path's per-effect basepoint loop and rolling-periodic carryover
+// are no-ops here. The 137-stamina health-pct preserve of the live merge
+// arm is not replayed; the stat fold below recomputes from the rescaled
+// amounts.
+func (s *session) refreshCommandAura(spellID, durationMs uint32) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return false
+	}
+	spell, found, _ := s.server.Data.Spell(spellID)
+	if !found {
+		return false
+	}
+	// Aura::CalcMaxCharges fold (SpellAuras.cpp:951-962): the recorded
+	// caster's spell-mod owner folds SPELLMOD_CHARGES. The command
+	// self-casts, so the mod owner is this session; resolve it before
+	// taking castMu, like the live merge arm.
+	modOwner := s.server.spellModOwnerSession(s.player.Map, s.player.InstanceID, s.playerGUID)
+	maxCharges := calcAuraMaxChargesFor(spell, modOwner, modOwner != nil && modOwner == s)
+	s.castMu.Lock()
+	existing, ok := s.activeAuras[spellID]
+	if !ok || existing == nil || existing.Stopped || existing.CasterGUID != s.playerGUID {
+		s.castMu.Unlock()
+		return false
+	}
+	// Aura::ModStackAmount(+1, SpellAuras.cpp:1030): clamped to the
+	// spell's stack amount (1 when the spell is not stackable).
+	maxStack := int32(existing.StackAmount)
+	if maxStack == 0 {
+		maxStack = 1
+	}
+	cur := int32(existing.StackCount)
+	if cur == 0 {
+		cur = 1
+	}
+	oldCount := uint32(cur)
+	if cur++; cur > maxStack {
+		cur = maxStack
+	}
+	raised := uint32(cur) > oldCount
+	existing.StackCount = uint8(cur)
+	// Aura::ModStackAmount's refresh charge reset (SpellAuras.cpp:1055-1062).
+	existing.RemainingCharges = uint8(maxCharges)
+	// SetStackAmount recalc (SpellAuras.cpp:1008) on the increase only.
+	if raised {
+		s.refreshSkillBonusForAuraAmountChange(existing, func() {
+			rescaleAuraAmountsByStack(existing, oldCount, uint32(cur))
+		})
+	}
+	existing.DurationMs = durationMs
+	existing.RemainingMs = durationMs
+	existing.DurationUpdatedAt = time.Now()
+	// Aura::RefreshTimers(resetPeriodicTimer) (Spell.cpp:2854): a
+	// non-triggered re-cast resets the periodic timer only for
+	// non-stackable auras; the tick counter zeroes on every refresh.
+	resetPeriodic := spell.StackAmount < 2
+	if existing.Timer != nil {
+		existing.Timer.Stop()
+		existing.Timer = nil
+	}
+	existing.TickCount = 0
+	if resetPeriodic && existing.TickTimer != nil {
+		existing.TickTimer.Stop()
+		existing.TickTimer = nil
+	}
+	// Aura::RefreshDuration (SpellAuras.cpp:915-927) re-arms the 1s power
+	// upkeep on every refresh.
+	if auraUpkeepNeeded(spell) {
+		s.scheduleAuraUpkeepLocked(existing)
+	}
+	slot, positive := existing.Slot, existing.Positive
+	statsDirty := s.auraTouchesStats(existing)
+	resistDirty := s.auraTouchesResistance(existing)
+	periodMs := existing.PeriodMs
+	wireCount := auraWireStackCount(existing)
+	s.castMu.Unlock()
+	// AuraEffect::ChangeAmount (SpellAuraEffects.cpp:662-683): the merged
+	// aura's refreshed amounts update the live folds.
+	if statsDirty || resistDirty {
+		_ = s.calculatePlayerStats(context.Background(), s.player)
+	}
+	s.refreshSpellModValues(existing)
+	if resetPeriodic && periodMs > 0 {
+		s.schedulePlayerPeriodicTickInitial(existing, periodMs, periodicTickInitialDelay(spell, periodMs))
+	}
+	if durationMs > 0 && durationMs < 18000000 {
+		s.castMu.Lock()
+		if live := s.activeAuras[spellID]; live == existing && !live.Stopped {
+			live.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+				s.expirePlayerAura(spellID)
+			})
+		}
+		s.castMu.Unlock()
+	}
+	s.sendAuraUpdateWithStack(slot, spellID, false, positive, durationMs, durationMs, wireCount)
+	return true
 }
 
 // calcAuraMaxChargesFor mirrors the modifier fold of Aura::CalcMaxCharges
