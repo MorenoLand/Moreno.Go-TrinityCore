@@ -6548,6 +6548,27 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.server.luaMotionCreature(best)}, nil
 	}
+	// FindNearestGameObject is the player-surface twin of the creature
+	// bridge (WorldObject::FindNearestGameObject, Object.cpp): the
+	// nearest gameobject of entry within dist yards of the player (3D,
+	// via Server.nearestGameObjectByEntry, the same lookup the creature
+	// and gameobject surfaces use). Nil when none is in range. Backs
+	// the World item_scripts DEHTA trap-smasher scan
+	// (item_scripts.cpp:216-225).
+	methods["FindNearestGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dist32, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil || dist32 < 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.server.nearestGameObjectByEntry(ctx, state.Map, state.InstanceID, state.X, state.Y, state.Z, entry, dist32)}, nil
+	}
 	// SummonCreature is the player-surface twin of the creature bridge
 	// (WorldObject::SummonCreature, Object.cpp:2059-2062 fallbacks via
 	// the shared summonTempCreature funnel): same (entry, x, y, z, o,
