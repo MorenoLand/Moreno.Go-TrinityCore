@@ -13225,6 +13225,22 @@ func init() {
 	RegisterLuaBoss("npc_nagrand_banner", 17148)
 	RegisterLuaBoss("npc_nagrand_banner", 18391)
 	RegisterLuaBoss("npc_nagrand_banner", 18064)
+	// npc_commander_dawnforge (Netherstorm zone script, first in
+	// the file per AddSC_netherstorm order — before phase_hunter):
+	// quest-10198 "Information Gathering" area-trigger event —
+	// disguised player (aura 34603) with the quest INCOMPLETE
+	// starts the 10-phase Dawnforge/Ardonis/Pathaleon talk
+	// machine (4000ms first tick, then the C++ Phase_Timer
+	// chain: 16000/16000/16000/500/6000/8000/8000/12000/16000/
+	// 10000/4000/3000), Pathaleon summoned at the file's exact
+	// coords with TIMED_DESPAWN 90s, kneel/stand turns, quest
+	// credit on phase 10 — see lua_scripts/outland/
+	// npc_commander_dawnforge.lua. Entries are the file's own
+	// CreatureEntry table (19830/19831/21504); the trigger
+	// handler is trigger-ID-agnostic (C++ ignores its `at`
+	// param) and Pathaleon is held from the SummonCreature
+	// return instead of the JustSummoned GUID latch.
+	RegisterLuaBoss("npc_commander_dawnforge", 19831)
 	// npc_phase_hunter (Netherstorm zone script, fourth in the
 	// Outland zone set per outland_script_loader.cpp order):
 	// one CreatureScript AI class serving both entries — 18879
