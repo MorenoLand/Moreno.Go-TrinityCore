@@ -47,22 +47,24 @@
 -- then Talk(SAY_SLAY 1) — PORTED (event 3; the razuvious
 -- player-gated variant precedent: victim nil-guard,
 -- victim:GetObjectType() == "Player").
--- JustDied — Talk(SAY_DEATH 2) + the entry-switched SELF
--- RemoveAurasDueToSpell leg (SPELL_POWER_OF_TENEBRON 61248 /
--- SPELL_POWER_OF_SHADRON 58105 / SPELL_POWER_OF_VESPERON 61251 via
--- creature:RemoveAura — stale "only the Talk arm is bridgeable" claim
--- retracted) PORTED (event 4; the _canLoot / SetLootRecipient leg, the
--- DoRemoveAurasDueToSpellOnPlayers player-loop leg, the acolyte
+-- JustDied — PORTED 2026-11-05 (tick 255, dragonDied, C++ arm order):
+-- _canLoot / SetLootRecipient (ev5 seed resolves the default-0 trap) +
+-- entry-switched SetBossState (DATA_TENEBRON / DATA_SHADRON /
+-- DATA_VESPERON, DONE, sartharion != IN_PROGRESS gate) + acolyte
 -- KillSelf legs (FindNearestCreature NPC_ACOLYTE_OF_SHADRON 31218 /
--- NPC_ACOLYTE_OF_VESPERON 31219, 100.0f), the SetBossState
--- (DATA_TENEBRON / DATA_SHADRON / DATA_VESPERON, DONE) legs, and
--- the Twilight Revenge on Sartharion (SPELL_TWILIGHT_REVENGE 60639
--- DoCast via instance GUID fetch) have no loot / player-loop / kill /
--- instance / cast bridges — documented-only).
+-- NPC_ACOLYTE_OF_VESPERON 31219, 100.0f) + Talk(SAY_DEATH 2) + the
+-- entry-switched SELF RemoveAurasDueToSpell leg (SPELL_POWER_OF_TENEBRON
+-- 61248 / SPELL_POWER_OF_SHADRON 58105 / SPELL_POWER_OF_VESPERON 61251)
+-- + DoRemoveAurasDueToSpellOnPlayers via GetPlayersInGrid(500)
+-- (whole-instance twin; dead players skipped by the bridge) + Twilight
+-- Revenge on Sartharion (SPELL_TWILIGHT_REVENGE 60639 triggered
+-- DoCast via GetInstanceCreature, IN_PROGRESS gate).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entries
 -- 30452 / 30451 / 30449 — no bridgeable arms):
--- dummy_dragonAI Reset (flag clear + events.Reset + Initialize —
--- no bridge); SetData DATA_CAN_LOOT (_canLoot — no bridge);
+-- dummy_dragonAI Reset — flag clear PORTED in dragonReset; Initialize
+-- _canLoot=true seed PORTED in dragonSpawn (ev5); waypointId /
+-- _canMoveFree / portalRespawnTime have no Lua latches (MovementInform
+-- machine stays out, see below);
 -- MovementInform (the POINT_ID_INIT 100 / POINT_ID_LAND 200
 -- waypoint machine over dragonCommon[6]: instance-gated
 -- EnterEvadeMode, Clear + DoZoneInCombat (re-evaluated 2026-10-23
@@ -70,73 +72,60 @@
 -- random-target chase legs at the LAND point, waypointId wrap +
 -- EVENT_FREE_MOVEMENT — no motion / instance / target-selection
 -- bridges);
--- OpenPortal (portal grid search (GO_TWILIGHT_PORTAL 193988,
--- 50.0f), Tenebron egg summons (NPC_TWILIGHT_EGG 30882 /
--- NPC_SARTHARION_TWILIGHT_EGG 31204, six positions,
--- TEMPSUMMON_CORPSE_TIMED_DESPAWN 20s), Shadron / Vesperon
--- acolyte summons (NPC_ACOLYTE_OF_SHADRON 31218 /
--- NPC_ACOLYTE_OF_VESPERON 31219, two position sets per drake),
--- the Vesperon InterruptNonMeleeSpells + 32747 cast leg, the
--- Talk(WHISPER_OPEN_PORTAL 6 / WHISPER_OPENED_PORTAL 7) legs
--- (portal-entry Talk — no bridgeable combat event), the
--- portal SetRespawnTime(30000) leg — no cast / GO-respawn bridges
--- (the summon + creature-search bridges exist — creature:SummonCreature
--- and creature:FindNearestGameObject — but the arm is GO-respawn-gated);
--- the UpdateAI EVENT_FREE_MOVEMENT machine (no motion bridge).
+-- OpenPortal PORTED 2026-11-05 (tick 255) in openPortal below (egg /
+-- acolyte summons, Vesperon InterruptNonMeleeSpells + 32747 cast, both
+-- Talks); the portal SetRespawnTime(30000) leg stays PARKED — Go GO
+-- SetRespawnTime stores only the delay leg with no static-GO respawn
+-- consumer (lua_objects.go:4318); the UpdateAI EVENT_FREE_MOVEMENT
+-- machine stays out (no motion bridge).
 -- npc_tenebron — Reset (base); JustEngagedWith (base +
 -- ScheduleEvent EVENT_HATCH_EGGS 30s); UpdateAI EVENT_HATCH_EGGS ->
--- OpenPortal (obsidian_sanctum.cpp:451-453) — the timer bridge is
--- live (CreateLuaEvent), but the payload is OpenPortal only:
--- instance-gated egg summons (no summon / GO-grid-search /
--- instance bridges — GO grid search genuinely absent from the GO
--- surface; creature GetCreaturesInGrid is bridged but the arm is
--- GO-gated), so the timer arm stays out (the stale
--- "no timer bridge" claim is re-keyed: payload-unbridged, not
--- timer-unbridged).
+-- OpenPortal PORTED 2026-11-05 (tick 255, hatchEggsTick 30s/30s).
 -- npc_shadron — Reset (base + the self HasAura-gated aura strips
 -- SPELL_TWILIGHT_TORMENT_VESP 57948 / SPELL_GIFT_OF_TWILIGTH_SHA
--- 57835 PORTED — stale "no aura bridge" claim retracted;
--- SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) has no instance bridge —
--- documented); JustEngagedWith (base + ScheduleEvent
+-- 57835 PORTED; SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) PORTED
+-- 2026-11-05 (tick 255, SetBossState bridge live — IsAlive-guarded:
+-- the Go death funnel fires ev23 on death too, and C++ Reset never
+-- runs on a corpse)); JustEngagedWith (base + ScheduleEvent
 -- EVENT_ACOLYTE_SHADRON 1min); UpdateAI EVENT_ACOLYTE_SHADRON
--- (obsidian_sanctum.cpp:519-531: instance-gated OpenPortal +
--- SetBossState(DATA_PORTAL_OPEN, IN_PROGRESS)) — all payload legs
--- unbridged (no summon / instance bridges); timer arm stays out.
+-- PORTED 2026-11-05 (tick 255, shadronAcolyteTick: NOT_STARTED 10s
+-- re-poll, HasAura gift leg consumes the event with no re-arm, else
+-- OpenPortal + SetBossState(DATA_PORTAL_OPEN, IN_PROGRESS) +
+-- {60s,65s} re-arm).
 -- npc_vesperon — Reset (base); JustEngagedWith (base +
 -- ScheduleEvent EVENT_ACOLYTE_VESPERON 1min); UpdateAI
--- EVENT_ACOLYTE_VESPERON (obsidian_sanctum.cpp:590-597:
--- instance-gated OpenPortal + DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP
--- 57948), 60s/70s re-arm) — PORTED this run (tormentTick): the
--- victim-cast leg rides the live timer and CastSpell(nil, spell)
--- bridges. Documented deviation: the DATA_PORTAL_OPEN IN_PROGRESS
--- gate and the OpenPortal summon legs have no instance / summon
--- bridges, so in Lua the cast fires every 60-70s while the drake
--- lives instead of being skipped by the instance gate.
+-- EVENT_ACOLYTE_VESPERON PORTED 2026-11-05 (tick 255,
+-- vesperonAcolyteTick: IN_PROGRESS 10s re-poll, else OpenPortal +
+-- DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP 57948) + {60s,70s}
+-- re-arm; the old unconditional tormentTick is retired — the
+-- DATA_PORTAL_OPEN gate is bridged now).
 -- npc_acolyte_of_shadron (NPC_ACOLYTE_OF_SHADRON 31218,
 -- entry-verifiable from the local enum) — Reset self
--- AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) PORTED (the aura leg
--- is bridged); DespawnOrUnsummon(28s) PORTED below as a 28s
--- one-shot creature:Despawn (the old "inexpressible — Despawn
--- takes no delay arg" claim was stale: the delayed-Despawn
--- CreateLuaEvent precedent covers it); the instance-gated AddAura
--- gift-of-twilight 58766/57835 legs and JustDied's instance
--- SetBossState + player-loop cast/remove legs have no instance
--- bridges — documented-only.
+-- AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) PORTED; DespawnOrUnsummon(28s)
+-- PORTED below as a 28s one-shot creature:Despawn; the gift-aura legs
+-- (58766 on Sartharion when IN_PROGRESS, else 57835 on Shadron) PORTED
+-- 2026-11-05 (tick 255, GetInstanceCreature bridge live); JustDied
+-- PORTED 2026-11-05 (tick 255, acolyteShadronDied: SetBossState
+-- (DATA_PORTAL_OPEN, NOT_STARTED) + the player-loop de-phase casts
+-- (player:CastSpell + player:GetVictim bridges live) + the gift-aura
+-- strips on Sartharion/Shadron).
 -- npc_acolyte_of_vesperon (NPC_ACOLYTE_OF_VESPERON 31219) —
 -- Reset self AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) +
 -- DoCast(me, SPELL_TWILIGHT_TORMENT_VESP_ACO 58853) (2-arg
--- non-triggered self-cast) PORTED; JustDied self
--- RemoveAurasDueToSpell(58853) PORTED (the vesperon/player/instance
--- legs have no bridges — documented-only); UpdateAI melee.
+-- non-triggered self-cast) PORTED; JustDied PORTED 2026-11-05
+-- (tick 255, acolyteVesperonDied: self RemoveAura + Vesperon
+-- SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) + torment strip +
+-- the player-loop de-phase casts/removes + the three
+-- DoRemoveAurasDueToSpellOnPlayers legs via GetPlayersInGrid(500));
+-- UpdateAI melee.
 -- npc_twilight_eggs (NPC_TWILIGHT_EGG 30882 /
 -- NPC_SARTHARION_TWILIGHT_EGG 31204) — Reset self
 -- AddAura(SPELL_TWILIGHT_SHIFT_ENTER 57620) PORTED; the
 -- EVENT_TWILIGHT_EGGS 20s payload (SetBossState + SpawnWhelps whelp
 -- summons NPC_TWILIGHT_WHELP 30890 / NPC_SARTHARION_TWILIGHT_WHELP
--- 31214 + KillSelf) and JustSummoned (DoZoneInCombat — re-evaluated
--- 2026-10-23 against the live bridge: stays out, summon-leg call on
--- a different creature) have no summon / instance bridges —
--- documented-only.
+-- 31214 + KillSelf) PORTED 2026-11-05 (tick 255, twilightEggTick;
+-- IsAlive guards cover the Go Kill() ev23-refire artifact and
+-- player-killed eggs); JustSummoned DoZoneInCombat PORTED (ev19).
 -- npc_flame_tsunami (NPC_FLAME_TSUNAMI 30616, boss_sartharion.cpp
 -- enum) — EVENT_TSUNAMI_TIMER DoCast(me,
 -- SPELL_FLAME_TSUNAMI_DMG_AURA 57491) (2-arg non-triggered
@@ -191,6 +180,54 @@ local SPELL_FADE_ARMOR = 60708
 
 local ENTRY_TWILIGHT_WHELP = 30890
 local ENTRY_SARTHARION_TWILIGHT_WHELP = 31214
+
+-- Instance data (obsidian_sanctum.h OSDataTypes) + boss states.
+local DATA_SARTHARION = 0
+local DATA_TENEBRON = 1
+local DATA_SHADRON = 2
+local DATA_VESPERON = 3
+local DATA_PORTAL_OPEN = 4
+local DATA_CAN_LOOT = 0
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+
+local ENTRY_ACOLYTE_SHADRON = 31218
+local ENTRY_ACOLYTE_VESPERON = 31219
+local ENTRY_TWILIGHT_EGG = 30882
+local ENTRY_SARTHARION_TWILIGHT_EGG = 31204
+
+local WHISPER_OPEN_PORTAL = 6
+local WHISPER_OPENED_PORTAL = 7
+
+local SPELL_TWILIGHT_SHIFT = 57874
+local SPELL_TWILIGHT_SHIFT_REMOVAL_ALL = 61190
+local SPELL_TWILIGHT_RESIDUE = 61885
+local SPELL_TWILIGHT_REVENGE = 60639
+local SPELL_GIFT_OF_TWILIGTH_SAR = 58766
+local SPELL_VESPERON_PORTAL_CHANNEL = 32747 -- unnamed literal, obsidian_sanctum.cpp:290
+
+-- C++ TwilightEggs / TwilightEggsSarth (obsidian_sanctum.cpp:125-140).
+local TWILIGHT_EGGS = {
+    { 3219.28, 669.121, 88.5549 },
+    { 3221.55, 682.852, 90.5361 },
+    { 3239.77, 685.94, 90.3168 },
+    { 3250.33, 669.749, 88.7637 },
+    { 3246.6, 642.365, 84.8752 },
+    { 3233.68, 653.117, 85.7051 },
+}
+local TWILIGHT_EGGS_SARTH = {
+    { 3252.73, 515.762, 58.5501 },
+    { 3256.56, 521.119, 58.6061 },
+    { 3255.63, 527.513, 58.7568 },
+    { 3264.90, 525.865, 58.6436 },
+    { 3264.26, 516.364, 58.8011 },
+    { 3257.54, 502.285, 58.2077 },
+}
+local ACOLYTE_SHADRON_POS = { 3363.92, 534.703, 97.2683 }
+local ACOLYTE_SHADRON_POS2 = { 3246.57, 551.263, 58.6164 }
+local ACOLYTE_VESPERON_POS = { 3145.68, 520.71, 89.7 }
+local ACOLYTE_VESPERON_POS2 = { 3246.57, 551.263, 58.6164 }
 
 local timers = {}
 
@@ -261,16 +298,98 @@ local function shadowBreathTick(creature, guid)
     end)
 end
 
+-- C++ dummy_dragonAI::OpenPortal (obsidian_sanctum.cpp:257-315),
+-- PORTED 2026-11-05 (tick 255): entry-switched egg / acolyte summons
+-- (type 5 CORPSE_TIMED_DESPAWN, 20s eggs / 28s shadron acolyte /
+-- 20s vesperon acolyte) + the Vesperon InterruptNonMeleeSpells +
+-- 32747 self-cast leg + Talk(WHISPER_OPEN_PORTAL 6) +
+-- Talk(WHISPER_OPENED_PORTAL 7). The portal SetRespawnTime(30000)
+-- leg stays PARKED (Go GO SetRespawnTime has no static-GO respawn
+-- consumer, lua_objects.go:4318), so no FindNearestGameObject
+-- search runs — the search result feeds only that leg.
+local function openPortal(creature)
+    local entry = creature:GetEntry()
+    local sartharionInProgress = creature:GetBossState(DATA_SARTHARION) == BOSS_STATE_IN_PROGRESS
+    if entry == ENTRY_TENEBRON then
+        local eggs = TWILIGHT_EGGS
+        local eggEntry = ENTRY_TWILIGHT_EGG
+        if sartharionInProgress then
+            eggs = TWILIGHT_EGGS_SARTH
+            eggEntry = ENTRY_SARTHARION_TWILIGHT_EGG
+        end
+        for _, pos in ipairs(eggs) do
+            creature:SummonCreature(eggEntry, pos[1], pos[2], pos[3], 0.0, 5, 20000)
+        end
+    elseif entry == ENTRY_SHADRON then
+        local pos = ACOLYTE_SHADRON_POS
+        if sartharionInProgress then
+            pos = ACOLYTE_SHADRON_POS2
+        end
+        creature:SummonCreature(ENTRY_ACOLYTE_SHADRON, pos[1], pos[2], pos[3], 0.0, 5, 28000)
+    elseif entry == ENTRY_VESPERON then
+        local pos = ACOLYTE_VESPERON_POS
+        if sartharionInProgress then
+            pos = ACOLYTE_VESPERON_POS2
+        end
+        local acolyte = creature:SummonCreature(ENTRY_ACOLYTE_VESPERON, pos[1], pos[2], pos[3], 0.0, 5, 20000)
+        if acolyte then
+            creature:InterruptNonMeleeSpells(true)
+            acolyte:InterruptNonMeleeSpells(true)
+            creature:CastSpell(creature, SPELL_VESPERON_PORTAL_CHANNEL, false)
+        end
+    end
+    creature:Talk(WHISPER_OPEN_PORTAL)
+    creature:Talk(WHISPER_OPENED_PORTAL)
+end
+
+-- C++ npc_tenebron::UpdateAI EVENT_HATCH_EGGS
+-- (obsidian_sanctum.cpp:451-453): OpenPortal, unconditional 30s
+-- re-arm, 30s init.
+local function hatchEggsTick(creature, guid)
+    openPortal(creature)
+    schedule(guid, "hatcheggs", 30000, function()
+        hatchEggsTick(creature, guid)
+    end)
+end
+
+-- C++ npc_shadron::UpdateAI EVENT_ACOLYTE_SHADRON
+-- (obsidian_sanctum.cpp:519-531): DATA_PORTAL_OPEN NOT_STARTED ->
+-- 10s re-poll; else HasAura(GIFT_SHA) consumes the event with no
+-- re-arm (C++ `return` from UpdateAI); else OpenPortal +
+-- SetBossState(DATA_PORTAL_OPEN, IN_PROGRESS) + {60s,65s} re-arm.
+local function shadronAcolyteTick(creature, guid)
+    if creature:GetBossState(DATA_PORTAL_OPEN) == BOSS_STATE_NOT_STARTED then
+        schedule(guid, "acolyte", 10000, function()
+            shadronAcolyteTick(creature, guid)
+        end)
+        return
+    end
+    if creature:HasAura(SPELL_GIFT_OF_TWILIGTH_SHA) then
+        return
+    end
+    openPortal(creature)
+    creature:SetBossState(DATA_PORTAL_OPEN, BOSS_STATE_IN_PROGRESS)
+    schedule(guid, "acolyte", {60000, 65000}, function()
+        shadronAcolyteTick(creature, guid)
+    end)
+end
+
 -- C++ npc_vesperon::UpdateAI EVENT_ACOLYTE_VESPERON
--- (obsidian_sanctum.cpp:590-597): instance-gated OpenPortal +
--- DoCastVictim(SPELL_TWILIGHT_TORMENT_VESP 57948), non-triggered,
--- re-arm {60s,70s} — the victim-cast leg only; the DATA_PORTAL_OPEN
--- gate and OpenPortal summon legs have no bridges (documented
--- deviation in header).
-local function tormentTick(creature, guid)
+-- (obsidian_sanctum.cpp:590-597): DATA_PORTAL_OPEN IN_PROGRESS ->
+-- 10s re-poll; else OpenPortal + DoCastVictim
+-- (SPELL_TWILIGHT_TORMENT_VESP 57948, non-triggered) + {60s,70s}
+-- re-arm.
+local function vesperonAcolyteTick(creature, guid)
+    if creature:GetBossState(DATA_PORTAL_OPEN) == BOSS_STATE_IN_PROGRESS then
+        schedule(guid, "acolyte", 10000, function()
+            vesperonAcolyteTick(creature, guid)
+        end)
+        return
+    end
+    openPortal(creature)
     creature:CastSpell(nil, SPELL_TWILIGHT_TORMENT_VESP)
-    schedule(guid, "torment", {60000, 70000}, function()
-        tormentTick(creature, guid)
+    schedule(guid, "acolyte", {60000, 70000}, function()
+        vesperonAcolyteTick(creature, guid)
     end)
 end
 
@@ -280,10 +399,10 @@ end
 -- (the old "no target-selection bridge" claim for the fissure leg was
 -- stale — randomThreatPlayer); the DoZoneInCombat leg is PORTED
 -- 2026-10-23 (bridge live).
--- Plus the per-drake engage timers: EVENT_HATCH_EGGS
--- (tenebron) and EVENT_ACOLYTE_SHADRON (shadron) payloads are
--- unbridged; EVENT_ACOLYTE_VESPERON (vesperon) ports the
--- victim-cast leg only (tormentTick, 1min init).
+-- Plus the per-drake engage timers, PORTED 2026-11-05 (tick 255):
+-- EVENT_HATCH_EGGS (tenebron, hatchEggsTick 30s), EVENT_ACOLYTE_SHADRON
+-- (shadron, shadronAcolyteTick 1min), EVENT_ACOLYTE_VESPERON (vesperon,
+-- vesperonAcolyteTick 1min).
 local function dragonEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- obsidian_sanctum.cpp:189 (dummy_dragonAI::JustEngagedWith arm 2, C++ order; bridge live 2026-10-23)
@@ -295,9 +414,17 @@ local function dragonEnterCombat(event, creature, target)
     schedule(guid, "shadowfissure", 5000, function()
         shadowFissureTick(creature, guid)
     end)
-    if creature:GetEntry() == ENTRY_VESPERON then
-        schedule(guid, "torment", 60000, function()
-            tormentTick(creature, guid)
+    if creature:GetEntry() == ENTRY_TENEBRON then
+        schedule(guid, "hatcheggs", 30000, function()
+            hatchEggsTick(creature, guid)
+        end)
+    elseif creature:GetEntry() == ENTRY_SHADRON then
+        schedule(guid, "acolyte", 60000, function()
+            shadronAcolyteTick(creature, guid)
+        end)
+    elseif creature:GetEntry() == ENTRY_VESPERON then
+        schedule(guid, "acolyte", 60000, function()
+            vesperonAcolyteTick(creature, guid)
         end)
     end
 end
@@ -321,43 +448,61 @@ local powerAuraByEntry = {
     [ENTRY_VESPERON] = SPELL_POWER_OF_VESPERON,
 }
 
--- C++ dummy_dragonAI::JustDied: the _canLoot/SetLootRecipient,
--- entry-switched SetBossState(DATA_TENEBRON/SHADRON/VESPERON, DONE),
--- and acolyte KillSelf legs: SetLootRecipient bridge live, but the
--- _canLoot leg stays out on the cross-AI SetData relay
--- (documented); Talk(SAY_DEATH) + the entry-switched SELF
--- RemoveAurasDueToSpell(spellId) leg are PORTED — creature:RemoveAura
--- is bridged (stale "only the Talk arm is bridgeable" claim retracted).
--- DoRemoveAurasDueToSpellOnPlayers + Twilight Revenge on Sartharion
--- ride instance/player-list legs (documented). Precision on the
--- player-loop arm (obsidian_sanctum.cpp drake JustDied): the
--- player:RemoveAura / player:HasAura / GetPlayersInWorld pieces ARE
--- bridged, but the arm stays out — the !GetVictim() gate has no
--- player-surface bridge, and the arm's two player self-cast de-phase
--- spells (TWILIGHT_SHIFT_REMOVAL_ALL / TWILIGHT_RESIDUE) have no
--- player:CastSpell bridge, so a removals-only port would strip the
--- aura without the de-phase mechanic and would hit players the C++
--- keeps phased.
+-- C++ dummy_dragonAI::JustDied (obsidian_sanctum.cpp:318-377), PORTED
+-- 2026-11-05 (tick 255) in C++ arm order: _canLoot/SetLootRecipient
+-- (the ev5 SetData seed resolves the default-0 trap — a drake that
+-- never heard SetData reads 0, the C++ member default is true, so the
+-- read is only meaningful with the seed) + entry-switched
+-- SetBossState(DATA_TENEBRON/SHADRON/VESPERON, DONE, sartharion !=
+-- IN_PROGRESS gate) + Shadron/Vesperon acolyte KillSelf (nearest of
+-- own kind within 100yd) + Talk(SAY_DEATH) + entry-switched SELF
+-- RemoveAurasDueToSpell(spellId) + DoRemoveAurasDueToSpellOnPlayers
+-- via GetPlayersInGrid(500) (whole-instance twin — the instance spans
+-- ~220 units; dead players are skipped by the bridge, a documented
+-- deviation from the C++ all-players removal) + Twilight Revenge on
+-- Sartharion (IN_PROGRESS gate: RemoveAurasDueToSpell + triggered
+-- DoCast 60639 via GetInstanceCreature).
+local drakeDataByEntry = {
+    [ENTRY_TENEBRON] = DATA_TENEBRON,
+    [ENTRY_SHADRON] = DATA_SHADRON,
+    [ENTRY_VESPERON] = DATA_VESPERON,
+}
+
 local function dragonDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
-    creature:Talk(SAY_DEATH)
-    local spellId = powerAuraByEntry[creature:GetEntry()]
-    if spellId then
-        creature:RemoveAura(spellId)
+    if creature:GetData(DATA_CAN_LOOT) == 0 then
+        creature:SetLootRecipient()
     end
-    -- C++ dummy_dragonAI::JustDied (obsidian_sanctum.cpp:342-350): the
-    -- Shadron/Vesperon cases kill the nearest acolyte of their own kind
-    -- within 100yd (instance SetBossState legs stay out, no instance bridge).
+    local entry = creature:GetEntry()
+    local spellId = powerAuraByEntry[entry]
+    local dataId = drakeDataByEntry[entry]
+    if dataId and creature:GetBossState(DATA_SARTHARION) ~= BOSS_STATE_IN_PROGRESS then
+        creature:SetBossState(dataId, BOSS_STATE_DONE)
+    end
     local acolyteEntry = nil
-    if creature:GetEntry() == ENTRY_SHADRON then
-        acolyteEntry = 31218 -- NPC_ACOLYTE_OF_SHADRON, obsidian_sanctum.cpp:46
-    elseif creature:GetEntry() == ENTRY_VESPERON then
-        acolyteEntry = 31219 -- NPC_ACOLYTE_OF_VESPERON, obsidian_sanctum.cpp:39
+    if entry == ENTRY_SHADRON then
+        acolyteEntry = ENTRY_ACOLYTE_SHADRON
+    elseif entry == ENTRY_VESPERON then
+        acolyteEntry = ENTRY_ACOLYTE_VESPERON
     end
     if acolyteEntry ~= nil then
         local acolyte = creature:FindNearestCreature(acolyteEntry, 100.0)
         if acolyte ~= nil then
             acolyte:Kill()
+        end
+    end
+    creature:Talk(SAY_DEATH)
+    if spellId then
+        creature:RemoveAura(spellId)
+        for _, player in ipairs(creature:GetPlayersInGrid(500)) do
+            player:RemoveAura(spellId)
+        end
+    end
+    if creature:GetBossState(DATA_SARTHARION) == BOSS_STATE_IN_PROGRESS and spellId then
+        local sartharion = creature:GetInstanceCreature(DATA_SARTHARION)
+        if sartharion and sartharion:IsAlive() then
+            sartharion:RemoveAura(spellId)
+            creature:CastSpell(sartharion, SPELL_TWILIGHT_REVENGE, true)
         end
     end
 end
@@ -374,11 +519,30 @@ local function dragonReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ instance OnCreatureCreate latch (instance_obsidian_sanctum.cpp:60-78)
+-- mirrored via the ev5 SetGuidData population leg (the Go guid-store
+-- route; sartharionSpawn precedent — without this latch
+-- GetInstanceCreature(DATA_TENEBRON/SHADRON/VESPERON) reads nil and
+-- the tick-254 Sartharion FetchDragons / DrakeRespawn / CallDragon
+-- legs find no drakes) + the ctor Initialize _canLoot=true seed
+-- (dummy_dragonAI::Initialize, obsidian_sanctum.cpp:171-176). The
+-- ev5 fire is synchronous inside Respawn, so Sartharion's DrakeRespawn
+-- SetData(0) write still lands after the seed (C++ order: Respawn
+-- -> Initialize -> SetData).
+local function dragonSpawn(event, creature)
+    local dataId = drakeDataByEntry[creature:GetEntry()]
+    if dataId then
+        creature:SetGuidData(dataId)
+    end
+    creature:SetData(DATA_CAN_LOOT, 1)
+end
+
 for _, entry in ipairs({ ENTRY_TENEBRON, ENTRY_SHADRON, ENTRY_VESPERON }) do
     RegisterCreatureEvent(entry, 1, dragonEnterCombat)
     RegisterCreatureEvent(entry, 2, dragonLeaveCombat)
     RegisterCreatureEvent(entry, 3, dragonTargetDied)
     RegisterCreatureEvent(entry, 4, dragonDied)
+    RegisterCreatureEvent(entry, 5, dragonSpawn)
     RegisterCreatureEvent(entry, 23, dragonReset)
 end
 
@@ -394,6 +558,15 @@ local function shadronReset(event, creature)
     end
     if creature:HasAura(SPELL_GIFT_OF_TWILIGTH_SHA) then
         creature:RemoveAura(SPELL_GIFT_OF_TWILIGTH_SHA)
+    end
+    -- C++ npc_shadron::Reset (obsidian_sanctum.cpp:511-513): the
+    -- SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) leg, PORTED
+    -- 2026-11-05 (tick 255). IsAlive-guarded: the Go death funnel
+    -- fires ev23 on death too, and C++ Reset never runs on a corpse
+    -- (an unguarded write would flip the shared portal key while
+    -- Vesperon's acolyte cycle still reads it).
+    if creature:IsAlive() then
+        creature:SetBossState(DATA_PORTAL_OPEN, BOSS_STATE_NOT_STARTED)
     end
 end
 RegisterCreatureEvent(ENTRY_SHADRON, 23, shadronReset)
@@ -455,16 +628,7 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
 local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
 local UNIT_FLAG_INTRO_MASK = UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE
-local ENTRY_ACOLYTE_SHADRON = 31218
-local ENTRY_ACOLYTE_VESPERON = 31219
-local ENTRY_TWILIGHT_EGG = 30882
-local ENTRY_SARTHARION_TWILIGHT_EGG = 31204
 local ENTRY_FLAME_TSUNAMI = 30616
-
--- Shared ev4 cleanup for the acolytes' 28s despawn timers.
-local function acolyteDespawnCancel(event, creature)
-    cancelTimers(creature:GetGUID())
-end
 
 -- C++ npc_acolyte_of_shadron::Reset (obsidian_sanctum.cpp:632-650):
 -- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) — self-aura leg
@@ -474,7 +638,28 @@ end
 -- re-arm it; ev4 cancels it); the instance-gated gift-aura legs
 -- stay out.
 local function acolyteShadronReset(event, creature)
+    -- The Go Kill() funnel fires ev23 on death before ev4; a dead
+    -- acolyte must not re-arm the despawn timer or re-cast auras
+    -- (C++ Reset never runs on a corpse).
+    if not creature:IsAlive() then
+        return
+    end
     creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
+    -- C++ npc_acolyte_of_shadron::Reset gift legs
+    -- (obsidian_sanctum.cpp:639-648): Sartharion IN_PROGRESS -> the
+    -- boss gains GIFT_OF_TWILIGTH_SAR 58766, else Shadron gains
+    -- GIFT_OF_TWILIGTH_SHA 57835. PORTED 2026-11-05 (tick 255).
+    if creature:GetBossState(DATA_SARTHARION) == BOSS_STATE_IN_PROGRESS then
+        local sartharion = creature:GetInstanceCreature(DATA_SARTHARION)
+        if sartharion then
+            sartharion:AddAura(SPELL_GIFT_OF_TWILIGTH_SAR)
+        end
+    else
+        local shadron = creature:GetInstanceCreature(DATA_SHADRON)
+        if shadron then
+            shadron:AddAura(SPELL_GIFT_OF_TWILIGTH_SHA)
+        end
+    end
     local guid = creature:GetGUID()
     local per = timers[guid]
     if not (per and per["despawn"]) then
@@ -484,8 +669,40 @@ local function acolyteShadronReset(event, creature)
         end)
     end
 end
+-- C++ npc_acolyte_of_shadron::JustDied (obsidian_sanctum.cpp:653-684),
+-- PORTED 2026-11-05 (tick 255): SetBossState(DATA_PORTAL_OPEN,
+-- NOT_STARTED) when the Shadron GUID is latched + the player-loop
+-- de-phase legs (alive + HasAura(TWILIGHT_SHIFT 57874) + no victim:
+-- self-cast TWILIGHT_SHIFT_REMOVAL_ALL 61190 + TWILIGHT_RESIDUE
+-- 61885, triggered, then remove SHIFT + SHIFT_ENTER) + the gift-aura
+-- strips (Sartharion 58766 / Shadron 57835, alive + HasAura-gated).
+-- The stale "no player:CastSpell / no !GetVictim() bridge" claims are
+-- retracted (lua_player.go:2752 / :2957). Timer cancel folds in here
+-- (replaces the old acolyteDespawnCancel registration).
+local function acolyteShadronDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+    if creature:GetInstanceCreature(DATA_SHADRON) then
+        creature:SetBossState(DATA_PORTAL_OPEN, BOSS_STATE_NOT_STARTED)
+    end
+    for _, player in ipairs(creature:GetPlayersInGrid(500)) do
+        if player:IsAlive() and player:HasAura(SPELL_TWILIGHT_SHIFT) and not player:GetVictim() then
+            player:CastSpell(player, SPELL_TWILIGHT_SHIFT_REMOVAL_ALL, true)
+            player:CastSpell(player, SPELL_TWILIGHT_RESIDUE, true)
+            player:RemoveAura(SPELL_TWILIGHT_SHIFT)
+            player:RemoveAura(SPELL_TWILIGHT_SHIFT_ENTER)
+        end
+    end
+    local sartharion = creature:GetInstanceCreature(DATA_SARTHARION)
+    if sartharion and sartharion:IsAlive() and sartharion:HasAura(SPELL_GIFT_OF_TWILIGTH_SAR) then
+        sartharion:RemoveAura(SPELL_GIFT_OF_TWILIGTH_SAR)
+    end
+    local shadron = creature:GetInstanceCreature(DATA_SHADRON)
+    if shadron and shadron:IsAlive() and shadron:HasAura(SPELL_GIFT_OF_TWILIGTH_SHA) then
+        shadron:RemoveAura(SPELL_GIFT_OF_TWILIGTH_SHA)
+    end
+end
 RegisterCreatureEvent(ENTRY_ACOLYTE_SHADRON, 23, acolyteShadronReset)
-RegisterCreatureEvent(ENTRY_ACOLYTE_SHADRON, 4, acolyteDespawnCancel)
+RegisterCreatureEvent(ENTRY_ACOLYTE_SHADRON, 4, acolyteShadronDied)
 
 -- C++ npc_acolyte_of_vesperon::Reset (obsidian_sanctum.cpp:718-726):
 -- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) + DoCast(me,
@@ -493,6 +710,10 @@ RegisterCreatureEvent(ENTRY_ACOLYTE_SHADRON, 4, acolyteDespawnCancel)
 -- ported; DespawnOrUnsummon(28s) ports as a 28s one-shot
 -- self-despawn (same arm-if-absent/ev4-cancel terms as shadron).
 local function acolyteVesperonReset(event, creature)
+    -- Same Kill()-ev23 artifact guard as the Shadron acolyte.
+    if not creature:IsAlive() then
+        return
+    end
     creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
     creature:CastSpell(creature, SPELL_TWILIGHT_TORMENT_VESP_ACO)
     local guid = creature:GetGUID()
@@ -512,18 +733,85 @@ RegisterCreatureEvent(ENTRY_ACOLYTE_VESPERON, 23, acolyteVesperonReset)
 local function acolyteVesperonDied(event, creature, killer)
     creature:RemoveAura(SPELL_TWILIGHT_TORMENT_VESP_ACO)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_acolyte_of_vesperon::JustDied (obsidian_sanctum.cpp:728-766),
+    -- PORTED 2026-11-05 (tick 255): Vesperon SetBossState(DATA_PORTAL_OPEN,
+    -- NOT_STARTED) + torment strip (alive + HasAura-gated) + the
+    -- player-loop de-phase legs (same gates as the Shadron acolyte) +
+    -- the per-player torment removal + the three
+    -- DoRemoveAurasDueToSpellOnPlayers legs (58853 / 57935 / 58835,
+    -- unnamed literals in C++) via GetPlayersInGrid(500).
+    local vesperon = creature:GetInstanceCreature(DATA_VESPERON)
+    if vesperon then
+        creature:SetBossState(DATA_PORTAL_OPEN, BOSS_STATE_NOT_STARTED)
+        if vesperon:IsAlive() and vesperon:HasAura(SPELL_TWILIGHT_TORMENT_VESP) then
+            vesperon:RemoveAura(SPELL_TWILIGHT_TORMENT_VESP)
+        end
+    end
+    local players = creature:GetPlayersInGrid(500)
+    for _, player in ipairs(players) do
+        if player:IsAlive() and player:HasAura(SPELL_TWILIGHT_SHIFT) and not player:GetVictim() then
+            player:CastSpell(player, SPELL_TWILIGHT_SHIFT_REMOVAL_ALL, true)
+            player:CastSpell(player, SPELL_TWILIGHT_RESIDUE, true)
+            player:RemoveAura(SPELL_TWILIGHT_SHIFT)
+            player:RemoveAura(SPELL_TWILIGHT_SHIFT_ENTER)
+        end
+        if player:IsAlive() and player:HasAura(SPELL_TWILIGHT_TORMENT_VESP) and not player:GetVictim() then
+            player:RemoveAura(SPELL_TWILIGHT_TORMENT_VESP)
+        end
+    end
+    for _, player in ipairs(players) do
+        player:RemoveAura(SPELL_TWILIGHT_TORMENT_VESP_ACO)
+        player:RemoveAura(57935) -- TWILIGHT_TORMENT trigger component, obsidian_sanctum.cpp:764
+        player:RemoveAura(58835) -- TWILIGHT_TORMENT trigger component, obsidian_sanctum.cpp:765
+    end
 end
 RegisterCreatureEvent(ENTRY_ACOLYTE_VESPERON, 4, acolyteVesperonDied)
 
+-- C++ npc_twilight_eggs::UpdateAI EVENT_TWILIGHT_EGGS + SpawnWhelps
+-- (obsidian_sanctum.cpp:803-828), PORTED 2026-11-05 (tick 255): 20s
+-- from Reset; if the tenebron GUID is latched, SetBossState
+-- (DATA_PORTAL_OPEN, NOT_STARTED); RemoveAllAuras; summon the whelp
+-- at the egg's position (type 1 TIMED_OR_CORPSE_DESPAWN, 60s) —
+-- Sartharion variant when Sartharion is IN_PROGRESS; KillSelf. The
+-- ev19 JustSummoned handler below arms the whelp's zone combat.
+local function twilightEggTick(creature, guid)
+    if not creature:IsAlive() then
+        return
+    end
+    if creature:GetInstanceCreature(DATA_TENEBRON) then
+        creature:SetBossState(DATA_PORTAL_OPEN, BOSS_STATE_NOT_STARTED)
+    end
+    creature:RemoveAllAuras()
+    local whelpEntry = ENTRY_TWILIGHT_WHELP
+    if creature:GetBossState(DATA_SARTHARION) == BOSS_STATE_IN_PROGRESS then
+        whelpEntry = ENTRY_SARTHARION_TWILIGHT_WHELP
+    end
+    creature:SummonCreature(whelpEntry, creature:GetX(), creature:GetY(), creature:GetZ(), 0.0, 1, 60000)
+    creature:Kill()
+end
+
+local function twilightEggDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ npc_twilight_eggs::Reset (obsidian_sanctum.cpp:804-809):
 -- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) ported; the
--- EVENT_TWILIGHT_EGGS 20s payload (SetBossState + SpawnWhelps)
--- has no summon / instance bridges.
+-- EVENT_TWILIGHT_EGGS 20s payload is seeded here.
 local function twilightEggReset(event, creature)
+    -- The Go Kill() funnel fires ev23 on death before ev4; a dead egg
+    -- must not re-arm the hatch timer (C++ Reset never runs on a corpse).
+    if not creature:IsAlive() then
+        return
+    end
     creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
+    local guid = creature:GetGUID()
+    schedule(guid, "eggtick", 20000, function()
+        twilightEggTick(creature, guid)
+    end)
 end
 for _, entry in ipairs({ ENTRY_TWILIGHT_EGG, ENTRY_SARTHARION_TWILIGHT_EGG }) do
     RegisterCreatureEvent(entry, 23, twilightEggReset)
+    RegisterCreatureEvent(entry, 4, twilightEggDied)
 end
 for _, entry in ipairs({ ENTRY_TWILIGHT_EGG, ENTRY_SARTHARION_TWILIGHT_EGG }) do
     RegisterCreatureEvent(entry, 1, function(_, creature)
