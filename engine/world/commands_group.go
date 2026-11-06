@@ -19,7 +19,6 @@ package world
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -31,6 +30,39 @@ const (
 	groupMemberFlagMainTank   uint8 = 0x02 // MEMBER_FLAG_MAINTANK
 	groupMemberFlagMainAssist uint8 = 0x04 // MEMBER_FLAG_MAINASSIST
 )
+
+// groupMatchName mirrors the ChatCommandNode prefix match
+// (ChatCommand.cpp:261-288): case-insensitive, an exact name wins,
+// otherwise the token must uniquely prefix one candidate; ambiguous
+// tokens return the candidate list (LANG_SUBCMD_AMBIGUOUS = 7), no
+// match returns ok=false. Visibility filtering (invisible arms excluded
+// from the candidates) is not modeled: permission is checked on the leaf
+// after the match, per the tree's deny convention.
+func groupMatchName(token string, names []string) (string, []string, bool) {
+	token = strings.ToLower(token)
+	if token == "" {
+		return "", nil, false
+	}
+	var matches []string
+	for _, n := range names {
+		if n == token {
+			return n, nil, true
+		}
+		if strings.HasPrefix(n, token) {
+			matches = append(matches, n)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil, true
+	}
+	return "", matches, false
+}
+
+// groupAmbiguousMessage mirrors the LANG_SUBCMD_AMBIGUOUS branch
+// (ChatCommand.cpp:270-285): the ambiguous token plus each candidate.
+func (s *session) groupAmbiguousMessage(token string, candidates []string) {
+	s.sendSysMessage(fmt.Sprintf("Ambiguous subcommand '%s', matches: %s.", token, strings.Join(candidates, ", "))) // LANG_SUBCMD_AMBIGUOUS (7)
+}
 
 // handleCmdGroup dispatches the group sub-commands, mirroring
 // group_commandscript::GetCommands (cs_group.cpp:35-68).
@@ -51,7 +83,18 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) {
 		}
 		return false
 	}
-	switch sub := strings.ToLower(args[0]); sub {
+	// Subcommand names prefix-match (ChatCommand.cpp:261-288): ".group lea"
+	// reaches leader, ".group s" is ambiguous (set/summon) and lists both.
+	sub, cands, ok := groupMatchName(args[0], []string{"set", "leader", "disband", "remove", "join", "list", "summon"})
+	if !ok {
+		if len(cands) > 1 {
+			s.groupAmbiguousMessage(args[0], cands)
+			return
+		}
+		s.sendSysMessage(syntax)
+		return
+	}
+	switch sub {
 	case "set":
 		// The C++ groupSetCommandTable is a second nesting level; the
 		// Trinity parser prefix-matches at every level, mirrored here.
@@ -62,29 +105,38 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) {
 			s.sendSysMessage(syntax)
 			return
 		}
-		switch lvl := strings.ToLower(args[1]); {
-		case strings.HasPrefix("leader", lvl):
+		// ".group set main" is ambiguous (maintank/mainassist), not
+		// maintank: the old HasPrefix-first-match silently picked one.
+		setSub, setCands, setOK := groupMatchName(args[1], []string{"leader", "assistant", "maintank", "mainassist"})
+		if !setOK {
+			if len(setCands) > 1 {
+				s.groupAmbiguousMessage(args[1], setCands)
+				return
+			}
+			s.sendSysMessage(syntax)
+			return
+		}
+		switch setSub {
+		case "leader":
 			if deny(permissionCommandGroupLeader) {
 				return
 			}
 			s.handleGroupLeaderCommand(args[2:])
-		case strings.HasPrefix("assistant", lvl):
+		case "assistant":
 			if deny(permissionCommandGroupAssistant) {
 				return
 			}
 			s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagAssistant, "Assistant")
-		case strings.HasPrefix("maintank", lvl):
+		case "maintank":
 			if deny(permissionCommandGroupMainTank) {
 				return
 			}
 			s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagMainTank, "Main Tank")
-		case strings.HasPrefix("mainassist", lvl):
+		case "mainassist":
 			if deny(permissionCommandGroupMainAssist) {
 				return
 			}
 			s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagMainAssist, "Main Assist")
-		default:
-			s.sendSysMessage(syntax)
 		}
 	case "leader":
 		if deny(permissionCommandGroupLeader) {
@@ -116,8 +168,6 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) {
 			return
 		}
 		s.handleGroupSummonCommand(ctx, args[1:])
-	default:
-		s.sendSysMessage(syntax)
 	}
 }
 
@@ -383,6 +433,17 @@ func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("%s joined %s's group.", target.name, source.name)) // LANG_GROUP_PLAYER_JOINED (1146)
 }
 
+// groupAtoul mirrors atoul (cs_group.cpp:340): the leading decimal digit
+// run, wrapping mod 2^32 like the uint32 cast; no leading digit yields 0
+// and the name path.
+func groupAtoul(s string) uint32 {
+	var v uint32
+	for i := 0; i < len(s) && s[i] >= '0' && s[i] <= '9'; i++ {
+		v = v*10 + uint32(s[i]-'0')
+	}
+	return v
+}
+
 // handleGroupListCommand mirrors HandleGroupListCommand (cs_group.cpp:335):
 // the target may be a bare guid, a name, or (by selection) the GM's target.
 func (s *session) handleGroupListCommand(ctx context.Context, args []string) {
@@ -392,10 +453,12 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) {
 		playerSess *session
 	)
 	if len(args) > 0 && args[0] != "" {
-		if guid, err := strconv.ParseUint(args[0], 10, 32); err == nil && guid != 0 {
+		// atoul takes the leading digits, so "123abc" is guid 123 where
+		// the old ParseUint fell through to the name path.
+		if guid := groupAtoul(args[0]); guid != 0 {
 			// Bare guid form.
-			guidTarget = guid
-			playerSess = s.server.findSessionByGUID(guid)
+			guidTarget = uint64(guid)
+			playerSess = s.server.findSessionByGUID(uint64(guid))
 			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 				_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid).Scan(&nameTarget)
 			}
@@ -459,7 +522,22 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) {
 		var phase uint32
 		if p := s.server.findSessionByGUID(slot.GUID); p != nil && p.player != nil {
 			onlineState = "online"
-			zoneName = "" // AreaTable zone names have no Go bridge
+			// Zone name via the member's area row's parent (cs_group.cpp:418-426):
+			// AreaTable is bridged (Store.Area), so the old "" placeholder goes.
+			// A missing area or parent leaves it empty, as in C++ (where a
+			// missing lookup keeps the previous member's value; Go resets per
+			// member instead of carrying that stale value across rows).
+			zoneName = ""
+			if s.server != nil && s.server.Data != nil {
+				_, areaID := s.server.zoneAndAreaID(p.player.Map, p.player.X, p.player.Y, p.player.Z, 0)
+				if areaID != 0 {
+					if area, found, err := s.server.Data.Area(areaID); err == nil && found && area.ParentAreaID != 0 {
+						if zone, found, err := s.server.Data.Area(area.ParentAreaID); err == nil && found {
+							zoneName = zone.Name
+						}
+					}
+				}
+			}
 			if p.player.ExtraFlags&playerExtraGMOn == 0 {
 				phase = p.currentPlayerPhaseMask()
 			} else {
