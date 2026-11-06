@@ -39,7 +39,9 @@
 --   Talk(EMOTE_BERSERK 1) + self-cast BERSERK 26068.
 -- Unmodeled (documented-only, no bridges):
 -- - BossAI ctor leg DATA_HUHURAN (temple_of_ahnqiraj.h:33 = 3) and
---   _Reset() — instance bridge, standing.
+--   _Reset() PORTED as the ev1 IN_PROGRESS + ev23 NOT_STARTED legs
+--   (see onEnterCombat / onReset); ev4 DONE PORTED below.
+local DATA_HUHURAN = 3 -- temple_of_ahnqiraj.h:33
 local ENTRY = 15509
 
 local SPELL_FRENZY = 26051
@@ -189,6 +191,10 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     st(guid)
+    -- C++ has no JustEngagedWith override (boss_huhuran.cpp:82-86 is
+    -- Reset only) — base BossAI::JustEngagedWith writes
+    -- SetBossState(DATA_HUHURAN, IN_PROGRESS) by virtual dispatch.
+    creature:SetBossState(DATA_HUHURAN, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "frenzy", math.random(25000, 35000), function()
@@ -217,10 +223,19 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset _Reset() leg (boss_huhuran.cpp:82-86): alive-gated and
+    -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
+    if creature:IsAlive() and creature:GetBossState(DATA_HUHURAN) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_HUHURAN, BOSS_STATE_NOT_STARTED)
+    end
 end
 
--- C++ has no JustDied override for boss_huhuranAI — cancel only.
+-- C++ has no JustDied override for boss_huhuranAI — base
+-- BossAI::JustDied runs by virtual dispatch (rajaxx correction) and
+-- writes SetBossState(DATA_HUHURAN, DONE). The old "cancel only"
+-- header claim is retired this run.
 local function onDied(event, creature, killer)
+    creature:SetBossState(DATA_HUHURAN, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
 end
 

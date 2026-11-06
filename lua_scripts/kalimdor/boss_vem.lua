@@ -18,6 +18,7 @@
 -- 120s self-cast 34624 (akilzon precedent).
 -- Documented-only: JustDied instance DATA_VEM_DEATH +
 -- DATA_BUG_TRIO_DEATH + loot flag (no bridge).
+local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
 local ENTRY = 15544
 
 local SPELL_CHARGE = 26561
@@ -81,6 +82,10 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ has no JustEngagedWith override (boss_bug_trio.cpp:150-186)
+    -- — base BossAI::JustEngagedWith writes SetBossState(DATA_BUG_TRIO,
+    -- IN_PROGRESS) by virtual dispatch.
+    creature:SetBossState(DATA_BUG_TRIO, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "charge", math.random(15000, 27000), function()
@@ -99,8 +104,17 @@ end
 local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ Reset _Reset() leg (boss_bug_trio.cpp:172-176): alive-gated and
+    -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
+    if creature:IsAlive() and creature:GetBossState(DATA_BUG_TRIO) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_BUG_TRIO, BOSS_STATE_NOT_STARTED)
+    end
 end
 
+-- C++ JustDied (boss_bug_trio.cpp:178-184) overrides WITHOUT calling
+-- _JustDied() — SetData(DATA_VEM_DEATH) + lootable-flag + SetData
+-- (DATA_BUG_TRIO_DEATH) only — so base DONE never runs: NO ev4
+-- SetBossState leg (cthun precedent).
 local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)

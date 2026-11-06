@@ -47,10 +47,12 @@
 -- - Enrage bool: set false in Initialize(), never read anywhere
 --   in the file — dead in C++ (the SD%Complete:85 note's missing
 --   enrage; no Ouro enrage spell exists in this file).
--- - BossAI ctor leg DATA_OURO and _Reset() — instance bridge,
---   standing.
+-- - BossAI ctor leg DATA_OURO and _Reset() PORTED as the ev1
+--   IN_PROGRESS + ev23 NOT_STARTED legs (see onEnterCombat / onReset);
+--   ev4 DONE PORTED below.
 -- - UpdateVictim gating + DoMeleeAttackIfReady — engine-driven
 --   in Go, standing.
+local DATA_OURO = 8 -- temple_of_ahnqiraj.h:38
 local ENTRY = 15517
 
 local SPELL_SWEEP = 26103
@@ -224,6 +226,10 @@ local function onEnterCombat(event, creature, target)
     if victim then
         creature:CastSpell(victim, SPELL_BIRTH)
     end
+    -- C++ JustEngagedWith: DoCastVictim(SPELL_BIRTH) then
+    -- BossAI::JustEngagedWith (boss_ouro.cpp:84-88) —
+    -- SetBossState(DATA_OURO, IN_PROGRESS).
+    creature:SetBossState(DATA_OURO, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "sweep", math.random(5000, 10000), function()
@@ -245,16 +251,24 @@ local function onLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ has no JustDied arm, but a dead creature stops UpdateAI, so the
--- re-arming sweep / sandblast / submerge / back chain must be cancelled
--- on death or it keeps casting from the corpse forever (the submerged
--- latch clears in cancelTimers too).
+-- C++ has no JustDied override — base BossAI::JustDied runs by virtual
+-- dispatch (rajaxx correction) and writes SetBossState(DATA_OURO,
+-- DONE). A dead creature stops UpdateAI, so the re-arming sweep /
+-- sandblast / submerge / back chain must be cancelled on death or it
+-- keeps casting from the corpse forever (the submerged latch clears
+-- in cancelTimers too).
 local function onDied(event, creature, killer)
+    creature:SetBossState(DATA_OURO, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
 end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset _Reset() leg (boss_ouro.cpp:78-82): alive-gated and
+    -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
+    if creature:IsAlive() and creature:GetBossState(DATA_OURO) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_OURO, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

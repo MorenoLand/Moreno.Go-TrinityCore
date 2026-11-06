@@ -31,7 +31,8 @@
 --   on death.
 -- Unmodeled (documented-only, no bridges):
 -- - BossAI ctor leg DATA_SARTURA (temple_of_ahnqiraj.h:31 = 1)
---   and _Reset() — instance bridge, standing.
+--   and _Reset() PORTED as the ev1 IN_PROGRESS + ev23 NOT_STARTED
+--   legs (see onEnterCombat / onReset); ev4 DONE PORTED below.
 -- - Whirlwind random-target switch (WhirlWindRandom 3-7s:
 --   SelectTarget Random 100y + AddThreat + AttackStart) and the
 --   AggroReset arms (45-55s -> 2-5s re-arm, AggroResetEnd 5s ->
@@ -57,6 +58,7 @@
 --   KnockBack_Timer (10s -> 10-20s) leg calls
 --   DoCast(me, SPELL_WHIRLWINDADD) — the KnockBack 26027 constant
 --   is declared but never used.
+local DATA_SARTURA = 1 -- temple_of_ahnqiraj.h:31
 local ENTRY = 15516
 
 local SPELL_WHIRLWIND = 26083
@@ -277,6 +279,9 @@ local function onEnterCombat(event, creature, target)
     cancelTimers(guid)
     st(guid)
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith: Talk then BossAI::JustEngagedWith
+    -- (boss_sartura.cpp:96-100) — SetBossState(DATA_SARTURA, IN_PROGRESS).
+    creature:SetBossState(DATA_SARTURA, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "whirlwind", 30000, function()
@@ -296,14 +301,22 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset _Reset() leg (boss_sartura.cpp:90-94): alive-gated and
+    -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
+    if creature:IsAlive() and creature:GetBossState(DATA_SARTURA) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_SARTURA, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 local function onTargetDied(event, creature, victim)
     creature:Talk(SAY_SLAY)
 end
 
+-- C++ JustDied: Talk then _JustDied() (boss_sartura.cpp:102-106) —
+-- ev4 DONE leg in C++ order.
 local function onDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_SARTURA, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
 end
 

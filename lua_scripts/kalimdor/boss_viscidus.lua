@@ -50,10 +50,13 @@
 --   the no-placeholder-Lua rule, no npc_glob_of_viscidus.lua file
 --   is created (cthun tentacle precedent needs real content).
 -- - JustDied: the VISCIDUS_SUICIDE 26003 self-cast is ported (event
---   4); summons.DespawnAll() + _JustDied() instance legs — no bridge.
+--   4); summons.DespawnAll() stays out (no bridge); _JustDied()
+--   PORTED as the ev4 DONE leg (creature:SetBossState,
+--   lua_creature_events.go:5917).
 -- - EnterEvadeMode: summons.DespawnAll() + instance leg.
--- - BossAI ctor leg DATA_VISCIDUS and _Reset() — instance bridge,
---   standing.
+-- - BossAI ctor leg DATA_VISCIDUS and _Reset() PORTED as the ev1
+--   IN_PROGRESS + ev23 NOT_STARTED legs (see onEnterCombat / onReset).
+local DATA_VISCIDUS = 7 -- temple_of_ahnqiraj.h:37
 local ENTRY = 15299
 
 local SPELL_POISON_SHOCK      = 25993
@@ -108,6 +111,9 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustEngagedWith calls BossAI::JustEngagedWith first
+    -- (boss_viscidus.cpp:183-186) — SetBossState(DATA_VISCIDUS, IN_PROGRESS).
+    creature:SetBossState(DATA_VISCIDUS, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:CastSpell(creature, SPELL_TOXIN)
@@ -125,13 +131,20 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset _Reset() leg (boss_viscidus.cpp:109-111): alive-gated and
+    -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
+    if creature:IsAlive() and creature:GetBossState(DATA_VISCIDUS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_VISCIDUS, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 -- C++ boss_viscidusAI::JustDied (:203-208): non-triggered self-cast
--- SPELL_VISCIDUS_SUICIDE (2-arg DoCast(me, ...)); the summons.DespawnAll()
--- + _JustDied() instance legs have no bridge.
+-- SPELL_VISCIDUS_SUICIDE (2-arg DoCast(me, ...)); summons.DespawnAll()
+-- stays out (no bridge); _JustDied() PORTED as the ev4 DONE leg
+-- (C++ order: cast, DespawnAll, _JustDied).
 local function onDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_VISCIDUS_SUICIDE)
+    creature:SetBossState(DATA_VISCIDUS, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
 end
 

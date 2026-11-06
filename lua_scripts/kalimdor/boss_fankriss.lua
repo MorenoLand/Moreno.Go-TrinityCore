@@ -51,7 +51,9 @@
 -- - SOUND_SENTENCE_YOU/LAWS/TRESPASS/WILL_BE/SERVE_TO 8588-8592:
 --   zero Talk() calls in C++ ("sound not implemented").
 -- - BossAI ctor leg DATA_FRANKRIS (temple_of_ahnqiraj.h:32 = 2) and
---   _Reset() — instance bridge, standing.
+--   _Reset() PORTED as the ev1 IN_PROGRESS + ev23 NOT_STARTED legs
+--   (see onEnterCombat / onReset); ev4 DONE PORTED below.
+local DATA_FRANKRIS = 2 -- temple_of_ahnqiraj.h:32
 local ENTRY = 15510
 local ENTRY_HATCHLING = 15962
 
@@ -156,6 +158,10 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ has no JustEngagedWith override (boss_fankriss.cpp:73-77 is
+    -- Reset only) — base BossAI::JustEngagedWith writes
+    -- SetBossState(DATA_FRANKRIS, IN_PROGRESS) by virtual dispatch.
+    creature:SetBossState(DATA_FRANKRIS, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "mortalwound", math.random(10000, 15000), function()
@@ -172,10 +178,19 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset _Reset() leg (boss_fankriss.cpp:73-77): alive-gated and
+    -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
+    if creature:IsAlive() and creature:GetBossState(DATA_FRANKRIS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_FRANKRIS, BOSS_STATE_NOT_STARTED)
+    end
 end
 
--- C++ has no JustDied override for boss_fankrissAI — cancel only.
+-- C++ has no JustDied override for boss_fankrissAI — base
+-- BossAI::JustDied runs by virtual dispatch (rajaxx correction) and
+-- writes SetBossState(DATA_FRANKRIS, DONE). The old "cancel only"
+-- header claim is retired this run.
 local function onDied(event, creature, killer)
+    creature:SetBossState(DATA_FRANKRIS, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
 end
 

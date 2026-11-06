@@ -36,6 +36,13 @@
 -- FLESH_TENTACLE_KILLED counter (:878-886, consumer of the flesh
 -- tentacle JustDied relay — DoAction IS bridged, but the counter
 -- lives in the unported phase machine, so the relay stays out).
+-- SetBossState legs (tick 278): ev1 IN_PROGRESS + ev23 NOT_STARTED
+-- PORTED below. NO ev4 DONE leg: cthunAI::JustDied (boss_cthun.cpp:
+-- 838-842) overrides WITHOUT calling _JustDied()/BossAI::JustDied()
+-- — it only sets DATA_CTHUN_PHASE (no instance bridge) — so base
+-- DONE never runs. The inverse of the rajaxx correction: no override
+-- = base runs; an override that omits _JustDied = base does NOT run.
+local DATA_CTHUN = 5 -- temple_of_ahnqiraj.h:35
 local ENTRY = 15727
 local SPELL_TRANSFORM = 26232
 local SOUND_WHISPER = 8663
@@ -69,8 +76,15 @@ local function onWhisper(creature, guid)
     end, {90000, 300000})
 end
 
-local function startWhispers(_, creature)
+local function startWhispers(event, creature)
     local guid = creature:GetGUID()
+    -- C++ Reset _Reset() leg (boss_cthun.cpp:516-519): alive-gated and
+    -- != DONE-gated (ScriptedCreature.cpp:499-511); ev23 only — the
+    -- ev5 spawn pass shares this handler, and a spawn write would
+    -- clobber a saved DONE state.
+    if event == 23 and creature:IsAlive() and creature:GetBossState(DATA_CTHUN) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_CTHUN, BOSS_STATE_NOT_STARTED)
+    end
     -- C++ boss_cthunAI::Reset (boss_cthun.cpp:525): unconditional
     -- RemoveAurasDueToSpell(SPELL_TRANSFORM); the flag/visible/instance
     -- legs of the same Reset stay out (no instance bridge).
@@ -83,10 +97,17 @@ local function startWhispers(_, creature)
 end
 
 local function onEnterCombat(event, creature, target)
+    -- C++ cthunAI has no JustEngagedWith override (boss_cthun.cpp:462-890) —
+    -- base BossAI::JustEngagedWith writes SetBossState(DATA_CTHUN,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:499-542; creature:SetBossState,
+    -- lua_creature_events.go:5917).
+    creature:SetBossState(DATA_CTHUN, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
 
+-- C++ cthunAI::JustDied (boss_cthun.cpp:838-842) sets only
+-- DATA_CTHUN_PHASE and never calls _JustDied(): NO ev4 DONE leg.
 local function onDied(event, creature)
     cancelTimers(creature:GetGUID())
 end

@@ -22,8 +22,9 @@
 --   repeat 60min. The IsNonMeleeSpellCast gate is PORTED as a
 --   500ms IsCasting defer (doan precedent).
 -- Unmodeled (documented-only, no bridges):
--- - TwinReset / BossAI ctor leg DATA_TWIN_EMPERORS: instance
---   bridge, standing.
+-- - TwinReset / BossAI ctor leg DATA_TWIN_EMPERORS PORTED as the
+--   ev1 IN_PROGRESS + ev23 NOT_STARTED legs (see onEnterCombat /
+--   onReset); ev4 DONE PORTED below.
 -- - Shared health, DamageTaken half PORTED (boss_veklor precedent):
 --   the C++ GetOtherBoss leg (instance->GetCreature(DATA_VEKLOR))
 --   is reached via the bridged creature:FindNearestCreature
@@ -70,6 +71,7 @@
 --   other:IsInCombat() gate; the sibling otherAI->AttackStart(who)
 --   leg is PORTED 2026-10-24 via other:EngageWithTarget(target)
 --   (the veklor 20 yd MoveChase standoff is not modeled).
+local DATA_TWIN_EMPERORS = 4 -- temple_of_ahnqiraj.h:34
 local ENTRY = 15275
 local ENTRY_VEKLOR = 15276 -- temple_of_ahnqiraj.h:74
 local ENTRY_BUG_1 = 15316
@@ -340,6 +342,10 @@ local function onEnterCombat(event, creature, target)
     -- behind the !pOtherBoss->IsInCombat() gate (cross-AI — no
     -- bridge); per-creature port.
     creature:PlayDirectSound(SOUND_VN_AGGRO)
+    -- C++ base JustEngagedWith calls BossAI::JustEngagedWith first
+    -- (boss_twinemperors.cpp:152-154) — SetBossState(DATA_TWIN_EMPERORS,
+    -- IN_PROGRESS); the sound + other-twin pull follow.
+    creature:SetBossState(DATA_TWIN_EMPERORS, BOSS_STATE_IN_PROGRESS)
     schedule(guid, "us", math.random(8000, 18000), function()
         onUnbalancingStrike(creature, guid)
     end)
@@ -390,6 +396,12 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ TwinReset _Reset() leg (boss_twinemperors.cpp:104-108):
+    -- alive-gated and != DONE-gated (ScriptedCreature.cpp:499-511;
+    -- moroes/algalon precedent).
+    if creature:IsAlive() and creature:GetBossState(DATA_TWIN_EMPERORS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_TWIN_EMPERORS, BOSS_STATE_NOT_STARTED)
+    end
     -- C++ boss_veknilashAI::Reset() :429: ApplySpellImmune(0,
     -- IMMUNITY_DAMAGE, SPELL_SCHOOL_MASK_MAGIC=126, true) — Vek'nilash
     -- is immune to magic damage (Vek'lor takes the physical side).
@@ -403,9 +415,12 @@ end
 
 -- C++ JustDied: DoPlaySoundToSet(me, SOUND_VN_DEATH 8660) behind the
 -- cross-AI DontYellWhenDead latch (no cross-AI bridge — plays
--- per-creature); _JustDied() is the instance-model leg.
+-- per-creature); _JustDied() PORTED as the ev4 DONE leg
+-- (creature:SetBossState, lua_creature_events.go:5917; C++ order:
+-- other-twin kill, sound, _JustDied).
 local function onDied(event, creature, killer)
     creature:PlayDirectSound(SOUND_VN_DEATH)
+    creature:SetBossState(DATA_TWIN_EMPERORS, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUID())
 end
 

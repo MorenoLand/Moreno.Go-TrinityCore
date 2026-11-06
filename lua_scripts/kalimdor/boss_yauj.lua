@@ -15,6 +15,7 @@
 -- GetCreature(DATA_KRI/DATA_VEM) — no bridge; self-cast alone
 -- would misrepresent the random 1-of-3); Vem-dead Enrage (instance
 -- DATA_VEMISDEAD — no bridge).
+local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
 local ENTRY = 15543
 
 local SPELL_FEAR = 19408
@@ -63,6 +64,10 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ has no JustEngagedWith override (boss_bug_trio.cpp:237-259)
+    -- — base BossAI::JustEngagedWith writes SetBossState(DATA_BUG_TRIO,
+    -- IN_PROGRESS) by virtual dispatch.
+    creature:SetBossState(DATA_BUG_TRIO, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     schedule(guid, "fear", math.random(12000, 24000), function()
@@ -76,6 +81,13 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- No _Reset() in C++ Reset (boss_bug_trio.cpp:259-262, Initialize
+    -- only) — this leg models base BossAI::JustReachedHome ->
+    -- _JustReachedHome (NOT_STARTED, alive-gated and != DONE-gated,
+    -- ScriptedCreature.cpp:499-511; skeram precedent).
+    if creature:IsAlive() and creature:GetBossState(DATA_BUG_TRIO) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_BUG_TRIO, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 local function onDied(event, creature, killer)
@@ -90,7 +102,8 @@ local function onDied(event, creature, killer)
     -- before event 4 fires (kill.go), so GetAITargets still reads
     -- the fight's threat list here. The instance legs (RemoveFlag
     -- lootable + SetData DATA_BUG_TRIO_DEATH) stay out — no
-    -- instance bridge.
+    -- instance bridge. NO ev4 DONE leg either: JustDied (:264-268)
+    -- overrides WITHOUT calling _JustDied() (cthun precedent).
     local targets = creature:GetAITargets()
     if #targets > 0 then
         local x, y, z = creature:GetX(), creature:GetY(), creature:GetZ()

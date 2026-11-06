@@ -62,14 +62,18 @@
 -- - EnterEvadeMode image self-despawn PORTED below on the event-2
 --   evade proxy (creature:IsSummon gate; the boss itself never
 --   despawns on evade, C++-exact).
--- - BossAI ctor leg DATA_SKERAM and _Reset() — instance bridge,
---   standing.
+-- - BossAI ctor leg DATA_SKERAM PORTED as the ev1 IN_PROGRESS leg
+--   (see onEnterCombat); the ev23 NOT_STARTED leg models base
+--   BossAI::JustReachedHome — C++ Reset (:70-74) has NO _Reset()
+--   (Initialize + SetVisible only) — and the ev4 DONE leg is gated
+--   on !IsSummon (see onDied).
 -- - SelectTarget/AttackStart/GetThreatModifiers — the
 --   fulfillment pool now uses the threat list (GetAITargets,
 --   anastari precedent); the remaining SelectTarget arm is the
 --   JustSummoned image AttackStart pick (boss_skeram.cpp:109),
 --   which stays out with the summon-image AI (AttackStart is
 --   bridged, but the image AI itself is unreachable).
+local DATA_SKERAM = 0 -- temple_of_ahnqiraj.h:30
 local ENTRY = 15263
 
 local SPELL_ARCANE_EXPLOSION = 26192
@@ -259,6 +263,9 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     st(guid)
+    -- C++ JustEngagedWith calls BossAI::JustEngagedWith first
+    -- (boss_skeram.cpp:138-141) — SetBossState(DATA_SKERAM, IN_PROGRESS).
+    creature:SetBossState(DATA_SKERAM, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
@@ -293,6 +300,13 @@ local function onReset(event, creature)
     -- (split-hpct re-init, covered by st()) -> me->SetVisible(true)
     -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656).
     creature:SetVisible(true)
+    -- No _Reset() in C++ Reset — this leg models base
+    -- BossAI::JustReachedHome -> _JustReachedHome (NOT_STARTED, alive-
+    -- gated and != DONE-gated, ScriptedCreature.cpp:499-511): the
+    -- evade-home path that returns Skeram to NOT_STARTED.
+    if creature:IsAlive() and creature:GetBossState(DATA_SKERAM) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_SKERAM, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 local function onTargetDied(event, creature, victim)
@@ -300,13 +314,16 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onDied(event, creature, killer)
-    -- C++ boss_skeram.cpp:129-136 JustDied: images DespawnOrUn-
-    -- summon with no Talk; only the true boss Talks (the BossAI::
-    -- JustDied instance leg stays out — no instance bridge).
+    -- C++ boss_skeram.cpp:127-136 JustDied: images DespawnOrUn-
+    -- summon with no Talk; only the true boss Talks, then
+    -- BossAI::JustDied() — the ev4 DONE leg is PORTED (creature:
+    -- SetBossState, lua_creature_events.go:5917); the old "no
+    -- instance bridge" claim is retired this run.
     if creature:IsSummon() then
         creature:Despawn()
     else
         creature:Talk(SAY_DEATH)
+        creature:SetBossState(DATA_SKERAM, BOSS_STATE_DONE)
     end
     cancelTimers(creature:GetGUID())
 end
