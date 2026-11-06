@@ -279,7 +279,7 @@ var reloadAllGroups = map[string]reloadAllGroup{
 	"locales": {permissionCommandReloadAllLocales,
 		[]string{"achievement_reward_locale", "creature_template_locale", "creature_text_locale",
 			"gameobject_template_locale", "gossip_menu_option_locale", "item_template_locale",
-			"item_set_name_locale", "npc_text_locale", "page_text_locale", "points_of_interest_locale",
+			"npc_text_locale", "page_text_locale", "points_of_interest_locale",
 			"quest_template_locale", "quest_greeting_locale"}, "",
 		[]string{"quest_offer_reward_locale", "quest_request_item_locale"}},
 	"loot": {permissionCommandReloadAllLoot,
