@@ -37,11 +37,13 @@
 --   - Inferno 31299 on a random alive player within 100 (nil target is a
 --     no-op cast, Talk + re-arm still fire — same C++ leg as Swarm),
 --     non-triggered, init 45s -> 45s, Talk SAY_INFERNO (4).
--- - Engage (C++ JustEngagedWith, non-instance leg): Talk SAY_ONAGGRO (5).
+-- - Engage (C++ JustEngagedWith): SetBossState(DATA_ANETHERON 1,
+--   IN_PROGRESS) before Talk SAY_ONAGGRO (5) (boss_anetheron.cpp:90-94).
 -- - KilledUnit: Talk SAY_ONSLAY (1), TYPEID_PLAYER gate in C++
 --   (terestian_illhoof victim:GetObjectType() == "Player" convention) —
 --   event 3.
--- - Death (C++ JustDied, non-instance leg): Talk SAY_ONDEATH (0).
+-- - Death (C++ JustDied): SetBossState(DATA_ANETHERON 1, DONE) after
+--   hyjal_trashAI::JustDied, before Talk SAY_ONDEATH (0) (:114-118).
 -- Unmodeled (documented-only, no bridges):
 -- - The IsEvent escort machine: the go-flagged first-UpdateAI block adds
 --   8 C++-verbatim waypoints (4896.08,-1576.35,1333.65 /
@@ -53,10 +55,19 @@
 --   instance DATA_JAINAPROUDMOORE GUID — EscortAI movement plus
 --   instance-script model, both blocked (standing; the whole hyjal_trashAI
 --   escort/wave machine is blocked the same way, see hyjal_trash.lua).
--- - Reset/engage/death instance legs: SetData(DATA_ANETHERONEVENT,
---   NOT_STARTED / IN_PROGRESS / DONE) — instance-data bridge blocked
---   (standing). The constructor Initialize() timer reset collapses into
---   the engage re-arm (hyjal.lua convention).
+-- - SetBossState legs PORTED this tick (bridge live
+--   lua_creature_events.go:5917; the DATA_*EVENT slot 2 is the C++
+--   encounter-array id, the DATA id 1 is the Go boss-state key —
+--   ruby-sanctum convention): Reset writes NOT_STARTED (:84-87,
+--   alive-gated, NO != DONE gate — these AIs are hyjal_trashAI /
+--   EscortAI, not BossAI, so no _Reset gate applies; EscortAI::
+--   EnterEvadeMode calls Reset(), ScriptedEscortAI.cpp:114, so evade
+--   writes NOT_STARTED too, never FAIL — no ev2/ev24 leg). The C++
+--   `if (IsEvent)` gate collapses: the entry only ever fights as the
+--   event boss (summoned by hyjalAI::SummonCreature with IsEvent=true,
+--   hyjalAI.cpp:520-523), same as the combat arms ported unconditionally.
+--   The constructor Initialize() timer reset collapses into the engage
+--   re-arm (hyjal.lua convention).
 -- - hyjal_trashAI::JustDied: instance->SetData(DATA_TRASH, 0) wave signal
 --   plus the MINRAIDDAMAGE lootable-flag gate — blocked (standing).
 -- - npc_towering_infernal: IS registered in C++ (new
@@ -77,6 +88,13 @@
 --   check/proc handlers not modeled (blocked, standing).
 
 local ENTRY = 17808
+
+local DATA_ANETHERON = 1 -- hyjal.h:29
+
+-- EncounterState (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SAY_ONDEATH = 0
 local SAY_ONSLAY  = 1
@@ -175,6 +193,9 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustEngagedWith (:90-94): SetData(DATA_ANETHERONEVENT,
+    -- IN_PROGRESS) first, then Talk.
+    creature:SetBossState(DATA_ANETHERON, BOSS_STATE_IN_PROGRESS)
     creature:Talk(SAY_ONAGGRO)
     for i, spec in ipairs(SPELLS) do
         local id = i
@@ -191,10 +212,21 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (:84-87): Initialize() then SetData(NOT_STARTED).
+    -- Alive-gated: Go fires ev23 on the death path before ev4
+    -- (moroes/algalon precedent) and C++ Reset never runs on death.
+    -- NO != DONE gate (see header): this AI is hyjal_trashAI /
+    -- EscortAI, not BossAI.
+    if creature:IsAlive() then
+        creature:SetBossState(DATA_ANETHERON, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (:114-118): hyjal_trashAI::JustDied first, then
+    -- SetData(DONE), then Talk.
+    creature:SetBossState(DATA_ANETHERON, BOSS_STATE_DONE)
     creature:Talk(SAY_ONDEATH)
 end
 

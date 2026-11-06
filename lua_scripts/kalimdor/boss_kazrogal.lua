@@ -18,7 +18,8 @@
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs; the IsEvent escort
 -- machine needs an EscortAI + instance bridge and has none — see below):
--- - Engage (C++ JustEngagedWith, non-instance leg): Talk SAY_ONAGGRO (2)
+-- - Engage (C++ JustEngagedWith): SetBossState(DATA_KAZROGAL 8,
+--   IN_PROGRESS) before Talk SAY_ONAGGRO (2) (boss_kazrogal.cpp:90-94)
 --   + arm each timer at its C++ constructor-init cooldown (hyjal.lua
 --   convention); MarkTimerBase reset to 45000 on engage (C++
 --   Initialize() leg — the timer-reset half of Reset collapses into the
@@ -35,9 +36,11 @@
 --   expiry (C++ talks after the cast with no nil-target leg — AOE cast).
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): Talk
 --   SAY_ONSLAY (0); no TYPEID gate in C++ (shade_of_aran precedent).
--- - Death (C++ JustDied, non-instance leg): hyjal_trashAI::JustDied is
---   instance bookkeeping (blocked, standing); DoPlaySoundToSet(me,
---   11018) is ported via creature:PlayDirectSound in onDied.
+-- - Death (C++ JustDied): SetBossState(DATA_KAZROGAL 8, DONE) after
+--   hyjal_trashAI::JustDied, before DoPlaySoundToSet(me, 11018) (:113-118);
+--   hyjal_trashAI::JustDied is instance bookkeeping (blocked, standing);
+--   DoPlaySoundToSet(me, 11018) is ported via creature:PlayDirectSound
+--   in onDied.
 -- Unmodeled (documented-only, no bridges):
 -- - The IsEvent escort machine: the go-flagged first-UpdateAI block adds
 --   8 C++-verbatim waypoints (5492.91,-2404.61,1462.63 /
@@ -49,9 +52,17 @@
 --   instance DATA_THRALL GUID — EscortAI movement plus instance-script
 --   model, both blocked (standing; the whole hyjal_trashAI escort/wave
 --   machine is blocked the same way, see hyjal_trash.lua).
--- - Reset/engage/death instance legs: SetData(DATA_KAZROGALEVENT,
---   NOT_STARTED / IN_PROGRESS / DONE) — instance-data bridge blocked
---   (standing).
+-- - SetBossState legs PORTED this tick (bridge live
+--   lua_creature_events.go:5917; the DATA_*EVENT slot 9 is the C++
+--   encounter-array id, the DATA id 8 is the Go boss-state key —
+--   ruby-sanctum convention): Reset writes NOT_STARTED (:84-87,
+--   alive-gated, NO != DONE gate — these AIs are hyjal_trashAI /
+--   EscortAI, not BossAI, so no _Reset gate applies; EscortAI::
+--   EnterEvadeMode calls Reset(), ScriptedEscortAI.cpp:114, so evade
+--   writes NOT_STARTED too, never FAIL — no ev2/ev24 leg). The C++
+--   `if (IsEvent)` gate collapses: the entry only ever fights as the
+--   event boss (summoned by hyjalAI::SummonCreature with IsEvent=true,
+--   hyjalAI.cpp:520-523), same as the combat arms ported unconditionally.
 -- - hyjal_trashAI::JustDied: instance->SetData(DATA_TRASH, 0) wave signal
 --   plus the MINRAIDDAMAGE lootable-flag gate — blocked (standing).
 -- - spell_mark_of_kazrogal SpellScriptLoader: the SpellScript
@@ -63,6 +74,13 @@
 --   (tick 194) — the no-AuraScript-bridge block is stale (tick 188).
 
 local ENTRY = 17888
+
+local DATA_KAZROGAL = 8 -- hyjal.h:36
+
+-- EncounterState (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SAY_ONSLAY  = 0
 local SAY_MARK    = 1
@@ -137,6 +155,9 @@ local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     markBase[guid] = 45000
+    -- C++ JustEngagedWith (:90-94): SetData(DATA_KAZROGALEVENT,
+    -- IN_PROGRESS) first, then Talk.
+    creature:SetBossState(DATA_KAZROGAL, BOSS_STATE_IN_PROGRESS)
     creature:Talk(SAY_ONAGGRO)
     schedule(guid, "cleave", 5000, function()
         onCleave(creature, guid)
@@ -155,12 +176,21 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (:84-87): Initialize() then SetData(NOT_STARTED).
+    -- Alive-gated: Go fires ev23 on the death path before ev4
+    -- (moroes/algalon precedent) and C++ Reset never runs on death.
+    -- NO != DONE gate (see header): this AI is hyjal_trashAI /
+    -- EscortAI, not BossAI.
+    if creature:IsAlive() then
+        creature:SetBossState(DATA_KAZROGAL, BOSS_STATE_NOT_STARTED)
+    end
 end
 
--- C++ JustDied (non-instance leg): DoPlaySoundToSet(me, SOUND_ONDEATH
--- 11018) = creature:PlayDirectSound (SMSG_PLAY_SOUND); the IsEvent
--- instance SetData(DONE) leg is blocked on the instance-script model.
+-- C++ JustDied (:113-118): hyjal_trashAI::JustDied first, then
+-- SetData(DONE), then DoPlaySoundToSet(me, SOUND_ONDEATH 11018) =
+-- creature:PlayDirectSound (SMSG_PLAY_SOUND).
 local function onDied(event, creature, killer)
+    creature:SetBossState(DATA_KAZROGAL, BOSS_STATE_DONE)
     creature:PlayDirectSound(11018)
     cancelTimers(creature:GetGUID())
 end

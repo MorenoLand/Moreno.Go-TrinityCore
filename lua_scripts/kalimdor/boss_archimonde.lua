@@ -27,9 +27,11 @@
 -- - OnSpawn (event 5, storm_cloud convention): ACTION_CHANNEL_WORLD_TREE
 --   (C++ InitializeAI -> DoAction at spawn) — DoCastAOE(39140, triggered)
 --   resolves to a triggered self-cast (illidan precedent).
--- - Engage (C++ JustEngagedWith): Talk SAY_ONAGGRO (1) + arm each
---   bridgeable timer at its C++ ScheduleEvent cooldown;
---   BossAI::JustEngagedWith pulse + me-DoZone PORTED (instance legs out).
+-- - Engage (C++ JustEngagedWith): Talk SAY_ONAGGRO (1), then the
+--   BossAI::JustEngagedWith base arms — SetBossState(DATA_ARCHIMONDE 3,
+--   IN_PROGRESS) before SetCombatPulseDelay(5) + DoZoneInCombat
+--   (boss_archimonde.cpp:305-317; base order ScriptedCreature.cpp:527-544;
+--   the CheckRequiredBosses gate stays out, no bridge).
 -- - BossAI::UpdateAI CASTING gates (ScriptedCreature.cpp:578 pre-loop +
 --   :584 in-loop returns, thalnos precedent): the boss AI overrides no
 --   UpdateAI, so every ported event arm defers 500ms while
@@ -98,15 +100,23 @@
 --   self-cast, triggered aku_mai convention) + protected flag. The
 --   EVENT_SUMMON_WHISP leg scheduled here needs DoSpawnCreature — no
 --   bridge, not armed (see below).
--- - Death (C++ JustDied): Talk SAY_ONDEATH (6); the
---   instance->SetData(DATA_ARCHIMONDE, DONE) leg and BossAI::_JustDied
---   are instance bookkeeping (blocked, standing).
+-- - Death (C++ JustDied): Talk SAY_ONDEATH (6), then _JustDied() ->
+--   SetBossState(DATA_ARCHIMONDE 3, DONE) PORTED this tick (:460-465);
+--   the trailing instance->SetData(DATA_ARCHIMONDE, DONE) compat leg
+--   stays out (no instance-SetData bridge).
 -- - Reset (event 23): C++ Initialize() clears enraged/protected/charges
---   (modeled by clearState) + me->RemoveAllAuras() clears the
---   soul-charge auras (cpp:299 — now ported; stale "no RemoveAllAuras
---   bridge" claim retracted, creature:RemoveAllAuras() bridged,
---   engine/world/lua_creature_events.go:166, hor_gauntlet_trash
---   precedent); _Reset() is instance bookkeeping (blocked, standing).
+--   (modeled by clearState) + _Reset() -> SetBossState(DATA_ARCHIMONDE 3,
+--   NOT_STARTED), alive-gated and != DONE-gated (BossAI::_Reset,
+--   ScriptedCreature.cpp:499-511; Go fires ev23 on the death path before
+--   ev4 — moroes/algalon precedent) PORTED this tick, before
+--   me->RemoveAllAuras() (soul-charge auras, cpp:299 — now ported; stale
+--   "no RemoveAllAuras bridge" claim retracted, creature:RemoveAllAuras()
+--   bridged, engine/world/lua_creature_events.go:166, hor_gauntlet_trash
+--   precedent).
+-- - No ev24 state leg: C++ JustReachedHome (:456-459) only re-channels
+--   (DoAction ACTION_CHANNEL_WORLD_TREE, ported on ev24 below) and
+--   _JustReachedHome sets no state (ScriptedCreature.cpp:522-525) — no
+--   FAIL transition exists for this boss.
 -- Unmodeled (documented-only, no bridges):
 -- - EVENT_DOOMFIRE (Talk SAY_DOOMFIRE (2) + SummonDoomfire): the entire
 --   effect is summon choreography — SummonCreature(NPC_DOOMFIRE_SPIRIT
@@ -161,6 +171,13 @@
 -- above for when entries verify.
 
 local ENTRY = 17968
+
+local DATA_ARCHIMONDE = 3 -- hyjal.h:31
+
+-- EncounterState (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SAY_AGGRO      = 1
 local SAY_AIR_BURST  = 3
@@ -471,6 +488,11 @@ local function onEnterCombat(event, creature, target)
     clearState(guid)
     bossState(guid)
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (:305-317): Talk first, then BossAI::
+    -- JustEngagedWith -> _JustEngagedWith (ScriptedCreature.cpp:527-544):
+    -- SetBossState(IN_PROGRESS) after the CheckRequiredBosses gate
+    -- (stays out, no bridge), before SetCombatPulseDelay(5) + DoZoneInCombat.
+    creature:SetBossState(DATA_ARCHIMONDE, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; Talk-then-base in boss_archimonde.cpp:302-305)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
     schedule(guid, "fear", 42000, function()
@@ -498,8 +520,15 @@ local function onReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     clearState(guid)
-    -- C++ Reset: Initialize() (counter reset, above) +
-    -- me->RemoveAllAuras() (soul-charge auras, cpp:299).
+    -- C++ Reset (:298-303): Initialize() (counter reset, above) +
+    -- _Reset() (BossAI::_Reset, ScriptedCreature.cpp:499-511) ->
+    -- SetBossState(NOT_STARTED), alive-gated and != DONE-gated (Go
+    -- fires ev23 on the death path before ev4 — moroes/algalon
+    -- precedent), then me->RemoveAllAuras() (soul-charge auras, cpp:299).
+    if creature:IsAlive()
+            and creature:GetBossState(DATA_ARCHIMONDE) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_ARCHIMONDE, BOSS_STATE_NOT_STARTED)
+    end
     creature:RemoveAllAuras()
 end
 
@@ -508,6 +537,10 @@ local function onDied(event, creature, killer)
     cancelTimers(guid)
     clearState(guid)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (:460-465): Talk first, then _JustDied() ->
+    -- SetBossState(DONE); the trailing SetData(DATA_ARCHIMONDE, DONE)
+    -- compat leg stays out (no instance-SetData bridge).
+    creature:SetBossState(DATA_ARCHIMONDE, BOSS_STATE_DONE)
 end
 
 -- C++ DamageTaken: HealthBelowPctDamaged(10, damage) ->

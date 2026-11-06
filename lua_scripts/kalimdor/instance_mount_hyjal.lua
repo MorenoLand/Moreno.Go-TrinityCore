@@ -36,13 +36,10 @@
 --   mirror reads creature:GetBossState(DATA_AZGALOR 5)
 --   (lua_creature_events.go:5936) — the boss-state store keyed by the
 --   DATA_* boss id, the ruby-sanctum convention. DEPENDENCY (unresolved):
---   no Hyjal boss file calls creature:SetBossState today (boss_azgalor.lua
---   documents its SetData(DATA_AZGALOREVENT, DONE) death leg as blocked),
---   so the gate reads NOT_STARTED and Archimonde always hides on
---   materialize — correct for a fresh run; the post-Azgalor re-entry case
---   (Archimonde left visible) stays wrong until boss_azgalor.lua gains a
---   SetBossState(DATA_AZGALOR, DONE) death leg, at which point this leg
---   goes live with no edit here.
+--   boss_azgalor.lua now writes SetBossState(DATA_AZGALOR, DONE) on death
+--   (tick 272), so the gate reads DONE on post-Azgalor re-entry and
+--   Archimonde stays visible; on a fresh run it reads NOT_STARTED and
+--   Archimonde hides — correct in both cases, with no edit here.
 -- - OnGameObjectCreate: the GO binds above + the ancient-gem list append.
 --   Static template GOs never pass the GO-create funnel
 --   (instance_hooks.go:291-306, oculus precedent), so the gate binds are
@@ -60,10 +57,11 @@
 --   can be re-expressed here and no ON_UPDATE poll is added (the
 --   instance_icecrown_citadel.lua pattern):
 --   - DATA_*EVENT encounter writes (0-4): the five-boss encounter array
---     is never written in Go; the boss files document their SetData
---     reset/engage/death legs as blocked (boss_rage_winterchill.lua:48,
---     boss_anetheron.lua:56, boss_kazrogal.lua:52, boss_azgalor.lua:61,
---     boss_archimonde.lua:102).
+--     is still never written via instance SetData in Go (no bridge); the
+--     boss files now write the same states via creature:SetBossState on
+--     the DATA_* boss ids instead (tick 272 — rage 10, anetheron 1,
+--     kazrogal 8, azgalor 5, archimonde 3), which is what the
+--     GetBossState reads in this file mirror.
 --   - DATA_AZGALOREVENT DONE leg (:197-215): instance->LoadGrid has no
 --     bridge; the Archimonde reveal (SetVisible(true) +
 --     SetReactState(REACT_AGGRESSIVE)) is the inverse of the ported

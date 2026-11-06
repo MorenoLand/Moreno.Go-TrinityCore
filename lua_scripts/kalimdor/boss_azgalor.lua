@@ -20,7 +20,8 @@
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs; the IsEvent escort
 -- machine needs an EscortAI + instance bridge and has none — see below):
--- - Engage (C++ JustEngagedWith, non-instance leg): Talk SAY_ONAGGRO (3)
+-- - Engage (C++ JustEngagedWith): SetBossState(DATA_AZGALOR 5,
+--   IN_PROGRESS) before Talk SAY_ONAGGRO (3) (boss_azgalor.cpp:94-98)
 --   + arm each timer at its C++ constructor-init cooldown (hyjal.lua
 --   convention). SAY_DOOM (2) is marked "Not used?" in C++ and has no
 --   Talk arm — no C++-side Talk to port.
@@ -46,8 +47,11 @@
 --   PORTED 2026-10-24.
 -- - KilledUnit (event 3, wired — nalorakk DISCOVERY holds): Talk
 --   SAY_ONSLAY (1); no TYPEID gate in C++ (shade_of_aran precedent).
--- - Death (C++ JustDied, non-instance leg): hyjal_trashAI::JustDied is
---   instance bookkeeping (blocked, standing); Talk SAY_ONDEATH (0).
+-- - Death (C++ JustDied): SetBossState(DATA_AZGALOR 5, DONE) after
+--   hyjal_trashAI::JustDied, before Talk SAY_ONDEATH (0) (:117-121);
+--   hyjal_trashAI::JustDied is instance bookkeeping (blocked, standing).
+--   This DONE write is the writer the instance_mount_hyjal.lua
+--   Archimonde hide leg reads (tick-271 DEPENDENCY — now live).
 -- Unmodeled (documented-only, no bridges):
 -- - The IsEvent escort machine: the go-flagged first-UpdateAI block adds
 --   8 C++-verbatim waypoints (5492.91,-2404.61,1462.63 /
@@ -58,10 +62,19 @@
 --   SetDespawnAtEnd(false); WaypointReached(7) AddThreat(0) on the
 --   instance DATA_THRALL GUID — EscortAI movement plus instance-script
 --   model, both blocked (standing).
--- - Reset/engage/death instance legs: SetData(DATA_AZGALOREVENT,
---   NOT_STARTED / IN_PROGRESS / DONE) — instance-data bridge blocked
---   (standing); the constructor Initialize() timer reset collapses into
---   the engage re-arm (hyjal.lua convention).
+-- - SetBossState legs PORTED this tick (bridge live
+--   lua_creature_events.go:5917; the DATA_*EVENT slot 6 is the C++
+--   encounter-array id, the DATA id 5 is the Go boss-state key —
+--   ruby-sanctum convention): Reset writes NOT_STARTED (:88-91,
+--   alive-gated, NO != DONE gate — these AIs are hyjal_trashAI /
+--   EscortAI, not BossAI, so no _Reset gate applies; EscortAI::
+--   EnterEvadeMode calls Reset(), ScriptedEscortAI.cpp:114, so evade
+--   writes NOT_STARTED too, never FAIL — no ev2/ev24 leg). The C++
+--   `if (IsEvent)` gate collapses: the entry only ever fights as the
+--   event boss (summoned by hyjalAI::SummonCreature with IsEvent=true,
+--   hyjalAI.cpp:520-523), same as the combat arms ported unconditionally;
+--   the constructor Initialize() timer reset collapses into the engage
+--   re-arm (hyjal.lua convention).
 -- - hyjal_trashAI::JustDied: instance->SetData(DATA_TRASH, 0) wave signal
 --   plus the MINRAIDDAMAGE lootable-flag gate — blocked (standing).
 -- npc_lesser_doomguard: IS registered in C++ (new npc_lesser_doomguard()
@@ -82,6 +95,13 @@
 --   bridge, so the arm stays out (2026-10-23 re-triage).
 
 local ENTRY = 17842
+
+local DATA_AZGALOR = 5 -- hyjal.h:33
+
+-- EncounterState (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SAY_ONDEATH = 0
 local SAY_ONSLAY  = 1
@@ -216,6 +236,9 @@ end
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustEngagedWith (:94-98): SetData(DATA_AZGALOREVENT,
+    -- IN_PROGRESS) first, then Talk.
+    creature:SetBossState(DATA_AZGALOR, BOSS_STATE_IN_PROGRESS)
     creature:Talk(SAY_ONAGGRO)
     schedule(guid, "rain", 20000, function()
         onRain(creature, guid)
@@ -240,10 +263,21 @@ end
 
 local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (:88-91): Initialize() then SetData(NOT_STARTED).
+    -- Alive-gated: Go fires ev23 on the death path before ev4
+    -- (moroes/algalon precedent) and C++ Reset never runs on death.
+    -- NO != DONE gate (see header): this AI is hyjal_trashAI /
+    -- EscortAI, not BossAI.
+    if creature:IsAlive() then
+        creature:SetBossState(DATA_AZGALOR, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (:117-121): hyjal_trashAI::JustDied first, then
+    -- SetData(DONE), then Talk.
+    creature:SetBossState(DATA_AZGALOR, BOSS_STATE_DONE)
     creature:Talk(SAY_ONDEATH)
 end
 
