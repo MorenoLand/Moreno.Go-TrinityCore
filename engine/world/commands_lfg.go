@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -56,12 +55,12 @@ func (s *session) handleCmdLFG(ctx context.Context, args []string) {
 		if deny(permissionCommandLfgPlayer) {
 			return
 		}
-		s.handleLfgPlayerInfoCommand(ctx, strings.Join(rest, " "))
+		s.handleLfgPlayerInfoCommand(ctx, rest)
 	case strings.HasPrefix("group", sub):
 		if deny(permissionCommandLfgGroup) {
 			return
 		}
-		s.handleLfgGroupInfoCommand(ctx, strings.Join(rest, " "))
+		s.handleLfgGroupInfoCommand(ctx, rest)
 	case strings.HasPrefix("queue", sub):
 		if deny(permissionCommandLfgQueue) {
 			return
@@ -94,91 +93,58 @@ func (s *session) lfgPlayerInfoLine(target *session) {
 }
 
 // handleLfgPlayerInfoCommand mirrors HandleLfgPlayerInfoCommand (cs_lfg.cpp:68-81):
-// optional name, else selection, else self; an unresolvable target reports
-// LANG_PLAYER_NOT_FOUND (499) per tree convention (the C++
-// PlayerIdentifier::FromTargetOrSelf silently fails for offline players).
-func (s *session) handleLfgPlayerInfoCommand(ctx context.Context, name string) {
-	var target *session
-	if name != "" {
-		target = s.sessionForPlayerName(normalizePlayerName(name))
-		if target == nil {
-			s.sendSysMessage("Player not found.")
-			return
-		}
-	} else {
-		if ts := s.lookupSelectedPlayer(); ts != nil {
-			target = ts
-		} else {
-			target = s
-		}
-	}
-	if target.player == nil {
-		s.sendSysMessage("Player not found.")
+// the target is the framework-parsed Optional<PlayerIdentifier> (name, |Hplayer
+// link, or numeric low GUID, offline players resolved through the character
+// DB via resolveCharacterTarget); with no argument it is the selected
+// connected player, else self (PlayerIdentifier::FromTargetOrSelf,
+// ChatCommandTags.h:189). A resolved-but-offline player makes the C++
+// handler return false (GetConnectedPlayer() is null), so the framework
+// prints the leaf help — the Go equivalent is the leaf syntax line, not
+// "Player not found." (that text is kept for wholly unknown names, per the
+// tree convention).
+func (s *session) handleLfgPlayerInfoCommand(ctx context.Context, args []string) {
+	t, _, ok := s.resolveCharacterTarget(ctx, args)
+	if !ok {
 		return
 	}
-	s.lfgPlayerInfoLine(target)
+	if t.online == nil {
+		s.sendSysMessage("Syntax: .lfg player [player]")
+		return
+	}
+	s.lfgPlayerInfoLine(t.online)
 }
 
 // handleLfgGroupInfoCommand mirrors HandleLfgGroupInfoCommand (cs_lfg.cpp:83-117):
 // LANG_LFG_GROUP_INFO (9981) from the group's own LFG state (the Go tree keeps
 // IsLFG/LFGState/LFGDungeonID on groupState rather than in a separate LFG
 // group store), then one PrintPlayerInfo line per online member, else
-// "%s is offline.". No group -> LANG_LFG_NOT_IN_GROUP (9982). The group is
-// found via the member's online session, else the CHAR_SEL_GROUP_MEMBER
-// character-DB fallback used by the group port.
-func (s *session) handleLfgGroupInfoCommand(ctx context.Context, name string) {
-	var playerSess *session
-	nameTarget := ""
-	guidTarget := uint64(0)
-	if name != "" {
-		normalized := normalizePlayerName(name)
-		playerSess = s.sessionForPlayerName(normalized)
-		if playerSess == nil {
-			// HandleLfgGroupInfoCommand (cs_lfg.cpp:96-104): an offline named
-			// player still resolves through the character DB
-			// (CHAR_SEL_GROUP_MEMBER); only a wholly unknown name reports
-			// not-found.
-			if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-				s.sendSysMessage("Player not found.")
-				return
-			}
-			var charGUID uint64
-			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", normalized).Scan(&charGUID); err != nil || charGUID == 0 {
-				s.sendSysMessage("Player not found.")
-				return
-			}
-			nameTarget = normalized
-			guidTarget = charGUID
-		} else {
-			nameTarget = playerSess.player.Name
-			guidTarget = playerSess.playerGUID
-		}
-	} else {
-		playerSess = s.lookupSelectedPlayer()
-		if playerSess == nil {
-			playerSess = s
-		}
-		nameTarget = playerSess.player.Name
-		guidTarget = playerSess.playerGUID
+// "%s is offline.". No group -> LANG_LFG_NOT_IN_GROUP (9982). The target is
+// the framework-parsed Optional<PlayerIdentifier> via resolveCharacterTarget
+// (name, |Hplayer link, or numeric low GUID); the group is found via the
+// member's online session, else the CHAR_SEL_GROUP_MEMBER character-DB
+// fallback used by the group port. C++ only takes the CHAR_SEL_GROUP_MEMBER
+// branch when the named player is NOT connected (cs_lfg.cpp:96-104
+// else-branch); a connected player with no in-memory group reports
+// NOT_IN_GROUP, it never falls through to a possibly stale group_member row.
+func (s *session) handleLfgGroupInfoCommand(ctx context.Context, args []string) {
+	t, _, ok := s.resolveCharacterTarget(ctx, args)
+	if !ok {
+		return
 	}
 
 	var groupTarget *groupState
-	if playerSess != nil && playerSess.groupID != 0 {
-		groupTarget = s.server.findGroupByID(playerSess.groupID)
+	if t.online != nil && t.online.groupID != 0 {
+		groupTarget = s.server.findGroupByID(t.online.groupID)
 	}
-	// C++ only takes the CHAR_SEL_GROUP_MEMBER branch when the named
-	// player is NOT connected (cs_lfg.cpp:96-104 else-branch); a connected
-	// player with no in-memory group reports NOT_IN_GROUP, it never falls
-	// through to a possibly stale group_member row.
-	if groupTarget == nil && playerSess == nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+	if groupTarget == nil && t.online == nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		// CHAR_SEL_GROUP_MEMBER: find the group through the character DB.
 		var dbid uint64
-		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM group_member WHERE memberGuid = ? LIMIT 1", guidTarget).Scan(&dbid); err == nil && dbid != 0 {
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM group_member WHERE memberGuid = ? LIMIT 1", t.guid).Scan(&dbid); err == nil && dbid != 0 {
 			groupTarget = s.server.findGroupByDBID(dbid)
 		}
 	}
 	if groupTarget == nil {
-		s.sendSysMessage(fmt.Sprintf("%s is not in group", nameTarget)) // LANG_LFG_NOT_IN_GROUP (9982)
+		s.sendSysMessage(fmt.Sprintf("%s is not in group", t.name)) // LANG_LFG_NOT_IN_GROUP (9982)
 		return
 	}
 
@@ -218,19 +184,20 @@ func (s *session) handleLfgCleanCommand() {
 
 // handleLfgOptionsCommand mirrors HandleLfgOptionsCommand (cs_lfg.cpp:133-145):
 // an argument sets the options mask (C++ Optional<uint32> consumed via
-// StringTo<uint32> (ChatCommandArgs.h:62) — strict base-10 parse that fails
-// the command on garbage, so a bad value prints the syntax line == the
-// tree's LANG 1502 convention), then the current value is always reported:
-// LANG_LFG_OPTIONS_CHANGED (9985) / LANG_LFG_OPTIONS (9984).
+// StringTo<uint32> base 0 (ChatCommandArgs.h:62, StringConvert.h) — 0x/0b
+// prefixes accepted, trailing garbage fails the whole-string rule, so a
+// bad value prints the syntax line, the tree's LANG 1502 convention), then
+// the current value is always reported: LANG_LFG_OPTIONS_CHANGED (9985) /
+// LANG_LFG_OPTIONS (9984).
 func (s *session) handleLfgOptionsCommand(arg string) {
 	const syntax = "Syntax: .lfg options [options]"
 	if trimmed := strings.TrimSpace(arg); trimmed != "" {
-		options, err := strconv.ParseUint(trimmed, 10, 32)
-		if err != nil {
+		options, ok := parseCommandUint32(trimmed)
+		if !ok {
 			s.sendSysMessage(syntax)
 			return
 		}
-		s.server.Features.LFG.SetOptions(uint32(options))
+		s.server.Features.LFG.SetOptions(options)
 		s.sendSysMessage("LFG options changed.") // LANG_LFG_OPTIONS_CHANGED (9985)
 	}
 	s.sendSysMessage(fmt.Sprintf("LFG options: %d", s.server.Features.LFG.GetOptions())) // LANG_LFG_OPTIONS (9984)

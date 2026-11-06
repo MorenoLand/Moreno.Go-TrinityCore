@@ -36,8 +36,9 @@ import (
 //   - the aura talent mark is always empty: GetTalentSpellCost has no Go model
 //     (same gap as the learn port); the per-effect aura-type list is rebuilt
 //     from each aura's single stored AuraType;
-//   - only online players can be targeted for `auras`/`mail` (no offline
-//     CharacterCache name->GUID bridge in the Go tree); creature selections
+//   - only online players can be targeted for `auras` (no offline
+//     CharacterCache name->GUID bridge in the Go tree); `mail` resolves
+//     offline names/GUIDs through the character DB. Creature selections
 //     for `auras` report the missing selection honestly;
 //   - `respawns` has no Go bridge at all (no live map respawn registry, no
 //     spawn-group model, no IsBattlegroundOrArena-per-map state) and is
@@ -107,8 +108,8 @@ func (s *session) handleCmdList(ctx context.Context, args []string) {
 }
 
 // parseListEntryID mirrors the Variant<Hyperlink<...>, uint32> args of the
-// creature/object arms and the Hyperlink<item> arg of the item arm: it accepts
-// a |H<kind>:<id>...|h link or a bare numeric id.
+// creature/object arms (cs_list.cpp:69/347): it accepts a |H<kind>:<id>...|h
+// link or a bare numeric id.
 func parseListEntryID(arg, link string) (uint32, bool) {
 	t := strings.TrimSpace(arg)
 	if i := strings.Index(t, "H"+link+":"); i >= 0 {
@@ -120,6 +121,31 @@ func parseListEntryID(arg, link string) (uint32, bool) {
 		t = t[:j]
 	}
 	n, err := strconv.ParseUint(t, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(n), true
+}
+
+// parseListEntryIDLink parses only the |H<kind>:<id>...|h link form, for arms
+// whose C++ arg is a plain Hyperlink: the item arm (cs_list.cpp:154) takes
+// Hyperlink<item> with no uint32 variant, so a bare numeric id fails the
+// C++ parser (ChatCommandTags.h:204-235) and must fail here too.
+func parseListEntryIDLink(arg, link string) (uint32, bool) {
+	t := strings.TrimSpace(arg)
+	i := strings.Index(t, "H"+link+":")
+	if i < 0 {
+		return 0, false
+	}
+	t = t[i+len("H"+link+":"):]
+	j := 0
+	for j < len(t) && t[j] >= '0' && t[j] <= '9' {
+		j++
+	}
+	if j == 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(t[:j], 10, 32)
 	if err != nil {
 		return 0, false
 	}
@@ -299,19 +325,20 @@ func listItemPos(bag, slot uint32) string {
 	}
 }
 
-// handleListItemCommand mirrors HandleListItemCommand (cs_list.cpp:134-248):
+// handleListItemCommand mirrors HandleListItemCommand (cs_list.cpp:154-345):
 // item_instance copies are reported from character inventories, mail, the
 // auctionhouse and guild banks, each case keeping the C++ row order and
 // decrementing the remaining count exactly like the C++ does (auction does
-// not decrement, matching cs_list.cpp).
+// not decrement, matching cs_list.cpp). The entry arg is a plain
+// Hyperlink<item> (no bare-number form, unlike the creature/object arms).
 func (s *session) handleListItemCommand(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .list item <link|entry> [count]")
+		s.sendSysMessage("Syntax: .list item <link> [count]")
 		return
 	}
-	itemID, ok := parseListEntryID(args[0], "item")
+	itemID, ok := parseListEntryIDLink(args[0], "item")
 	if !ok {
-		s.sendSysMessage("Syntax: .list item <link|entry> [count]")
+		s.sendSysMessage("Syntax: .list item <link> [count]")
 		return
 	}
 	cdb := s.arenaCharactersDB()
@@ -321,7 +348,7 @@ func (s *session) handleListItemCommand(ctx context.Context, args []string) {
 	}
 	count, ok := listCountArg(args[1:])
 	if !ok {
-		s.sendSysMessage("Syntax: .list item <link|entry> [count]")
+		s.sendSysMessage("Syntax: .list item <link> [count]")
 		return
 	}
 	if count == 0 {
@@ -444,7 +471,22 @@ func decrementListCount(count uint32, resultCount uint64) uint32 {
 	return 0
 }
 
-// handleListAurasCommand mirrors HandleListAurasCommand (cs_list.cpp:320-355)
+// objectGUIDCounter mirrors ObjectGuid::GetCounter (ObjectGuid.h:148-153):
+// GUIDs whose HighGuid carries an entry (GameObject/Transport/Unit/Pet/
+// Vehicle, and default) expose only the low 24 bits as the counter — the
+// entry lives in bits 24-47. GUIDs without an entry (Player/Item/
+// DynamicObject/Corpse/Mo_Transport/Instance/Group, ObjectGuid.h:216-234)
+// expose the full low 32 bits.
+func objectGUIDCounter(guid uint64) uint32 {
+	switch uint16(guid >> 48) {
+	case 0x0000, 0x4000, 0xF100, 0xF101, 0x1FC0, 0x1F40, 0x1F50:
+		return uint32(guid)
+	default:
+		return uint32(guid & 0xFFFFFF)
+	}
+}
+
+// handleListAurasCommand mirrors HandleListAurasCommand (cs_list.cpp:433-478)
 // for the selected player: no selection reports LANG_SELECT_CHAR_OR_CREATURE
 // (1); creature selections have no bridge and report the same message
 // (documented gap). Detail lines carry effect mask, charges, stack, slot,
@@ -483,10 +525,13 @@ func (s *session) handleListAurasCommand() {
 			casterKind = "player"
 		}
 		// LANG_COMMAND_TARGET_AURADETAIL (468); talent mark empty (no
-		// GetTalentSpellCost bridge).
+		// GetTalentSpellCost bridge). The caster counter is
+		// ObjectGuid::GetCounter: low 24 bits for entry-carrying GUIDs
+		// (creature/gameobject/pet/vehicle casters), full low 32 for
+		// players — the raw low 32 would mix entry bits into the counter.
 		s.sendSysMessage(fmt.Sprintf("Aura %d: %s Effect mask: %d Charges: %d Stack: %d Slot: %d Duration: %d MaxDuration: %d %s %s Caster: %s %d",
 			id, link, aura.EffectMask, aura.RemainingCharges, aura.StackAmount, aura.Slot,
-			int32(aura.RemainingMs), int32(aura.DurationMs), passive, "", casterKind, uint32(aura.CasterGUID)))
+			int32(aura.RemainingMs), int32(aura.DurationMs), passive, "", casterKind, objectGUIDCounter(aura.CasterGUID)))
 	}
 	// The C++ second loop reports per-effect aura types; the Go model stores
 	// one AuraType per applied aura, so effects are grouped by the aura's own
@@ -535,9 +580,10 @@ var itemQualityColors = []uint32{
 	0xFFA335EE, 0xFFFF8000, 0xFFE6CC80, 0xFFE6CC80,
 }
 
-// handleListMailCommand mirrors HandleListMailCommand (cs_list.cpp:357-465):
-// optional name, else selection, else self; offline name resolution has no
-// Go bridge (only online players can be targeted, documented gap). Mail rows
+// handleListMailCommand mirrors HandleListMailCommand (cs_list.cpp:480-617):
+// optional name, else selection, else self; offline names/GUIDs resolve
+// through the character DB (|Hplayer link, numeric GUID, or plain name —
+// the C++ PlayerIdentifier forms, ChatCommandTags.cpp:88-121). Mail rows
 // come straight from the character database (CHAR_SEL_MAIL_LIST_COUNT/INFO
 // in CharacterDatabase.cpp:41-43), item rows from mail_items +
 // item_instance + item_template.

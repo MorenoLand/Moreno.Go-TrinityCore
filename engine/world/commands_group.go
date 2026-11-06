@@ -568,10 +568,14 @@ func groupFlagNames(flags uint8) string {
 	return strings.Join(parts, ", ")
 }
 
-// lfgRolesString mirrors lfg::GetRolesString (LFG.cpp:41-61): Tank/Healer/
-// Damage only — the PLAYER_ROLE_LEADER bit (0x01) is NOT rendered, and
-// no role bits yields the empty string, not "None". The English role
-// words are inlined; the C++ resolves them through trinity_string.
+// lfgRolesString mirrors lfg::GetRolesString (LFG.cpp:41-73): Tank/Healer/
+// Damage/Leader in that order, and LANG_LFG_ROLE_NONE ("None") when no
+// role bits are set. The English role words are inlined; the C++ resolves
+// them through trinity_string. (Second-pass correction: the tick-28 port
+// dropped the Leader leg and the None fallback by reading the masked
+// LFGQueue.cpp call sites instead of the function itself; both the
+// PrintPlayerInfo line and the cs_group.cpp:446 member line call the
+// function unmasked.)
 func lfgRolesString(roles uint8) string {
 	var parts []string
 	if roles&0x02 != 0 { // PLAYER_ROLE_TANK
@@ -583,10 +587,11 @@ func lfgRolesString(roles uint8) string {
 	if roles&0x08 != 0 { // PLAYER_ROLE_DAMAGE
 		parts = append(parts, "Damage")
 	}
-	// PLAYER_ROLE_LEADER (0x01) is deliberately not rendered: C++
-	// GetRolesString only appends Tank/Healer/Damage.
+	if roles&0x01 != 0 { // PLAYER_ROLE_LEADER
+		parts = append(parts, "Leader")
+	}
 	if len(parts) == 0 {
-		return ""
+		return "None"
 	}
 	return strings.Join(parts, ", ")
 }

@@ -46,6 +46,24 @@ const (
 	messageDisableOwnership = "Ownership of channel '%s' revoked."                                  // LANG_CHANNEL_DISABLE_OWNERSHIP 5023
 )
 
+// splitWorldText mirrors WorldWorldTextBuilder (World.cpp:2640-2672): the
+// formatted text is truncated to 2047 chars (vsnprintf(str, 2048, ...))
+// and split on '\n' with strtok semantics — consecutive, leading, and
+// trailing newlines produce no empty lines — so SendWorldText/SendGMText
+// emit one CHAT_MSG_SYSTEM packet per line.
+func splitWorldText(msg string) []string {
+	if len(msg) > 2047 {
+		msg = msg[:2047]
+	}
+	var lines []string
+	for _, line := range strings.Split(msg, "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
 // broadcastMessageChatAll sends a CHAT_MSG_SYSTEM line to every in-game
 // session, mirroring sWorld->SendWorldText (which builds CHAT_MSG_SYSTEM and
 // broadcasts globally).
@@ -53,7 +71,6 @@ func (s *Server) broadcastMessageChatAll(msg string) {
 	if s == nil {
 		return
 	}
-	payload := protocol.BuildSystemChatMessage(msg)
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
@@ -62,8 +79,11 @@ func (s *Server) broadcastMessageChatAll(msg string) {
 		}
 	}
 	s.sessionsMu.RUnlock()
-	for _, target := range targets {
-		_ = target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+	for _, line := range splitWorldText(msg) {
+		payload := protocol.BuildSystemChatMessage(line)
+		for _, target := range targets {
+			_ = target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+		}
 	}
 }
 
@@ -93,7 +113,6 @@ func (s *Server) broadcastMessageChatGM(ctx context.Context, msg string) {
 	if s == nil {
 		return
 	}
-	payload := protocol.BuildSystemChatMessage(msg)
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
@@ -106,8 +125,11 @@ func (s *Server) broadcastMessageChatGM(ctx context.Context, msg string) {
 		targets = append(targets, sess)
 	}
 	s.sessionsMu.RUnlock()
-	for _, target := range targets {
-		_ = target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+	for _, line := range splitWorldText(msg) {
+		payload := protocol.BuildSystemChatMessage(line)
+		for _, target := range targets {
+			_ = target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+		}
 	}
 }
 
@@ -358,17 +380,24 @@ func (s *session) messageDeny(ctx context.Context, perm uint32) bool {
 }
 
 // messageTailGate applies the shared gates of the six broadcast arms
-// (cs_message.cpp:123-211): non-empty tail, in-game player, per-arm RBAC.
+// (cs_message.cpp:123-211): per-arm RBAC first — the C++ framework's
+// IsInvokerVisible gates invocation before the handler runs
+// (ChatCommand.cpp:295-309), so an unauthorized user never sees the
+// handler's syntax text — then non-empty tail, then in-game player. The
+// tail is re-joined from the dispatcher's fields, so interior/trailing
+// whitespace is collapsed; the C++ Tail is verbatim (ChatCommandTags.h:116),
+// and recovering it needs raw-tail plumbing through executeCommand/
+// dispatchCommand (deferred: the dispatcher tokenizes with strings.Fields).
 func (s *session) messageTailGate(ctx context.Context, syntax string, perm uint32, args []string) (string, bool) {
+	if s.messageDeny(ctx, perm) {
+		return "", false
+	}
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return "", false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return "", false
-	}
-	if s.messageDeny(ctx, perm) {
 		return "", false
 	}
 	return strings.Join(args, " "), true
@@ -445,15 +474,16 @@ func (s *session) handleCmdGMNotifyCommand(ctx context.Context, args []string) {
 // the playerExtraAcceptWhispers flag (persisted like the .gm flag flips);
 // the off arm's ClearWhisperWhiteList is vacuous — no whitelist exists in
 // the Go tree. The `remove` sub-arm stays blocked on the missing whitelist
-// model and reports honestly instead of pretending to remove a name. Bool
+// model and reports honestly instead of pretending to remove a name; with
+// no name it prints syntax (C++ returns false, cs_message.cpp:236-237). Bool
 // tokens follow StringTo<bool> (StringConvert.h:146-166, case-insensitive):
 // 1/y/on/yes/true and 0/n/off/no/false; anything else is LANG_USE_BOL.
 func (s *session) handleCmdWhispers(ctx context.Context, args []string) {
-	if s.player == nil {
-		s.sendSysMessage("You must be in game to use that command.")
+	if s.messageDeny(ctx, permissionCommandWhispers) {
 		return
 	}
-	if s.messageDeny(ctx, permissionCommandWhispers) {
+	if s.player == nil {
+		s.sendSysMessage("You must be in game to use that command.")
 		return
 	}
 	if len(args) == 0 {
@@ -474,6 +504,13 @@ func (s *session) handleCmdWhispers(ctx context.Context, args []string) {
 		s.persistExtraFlags()
 		s.sendSysMessage("Whisper accepting off.") // LANG_COMMAND_WHISPEROFF
 	case "remove":
+		// C++ returns false with no name (cs_message.cpp:236-237), so the
+		// framework shows the leaf usage; the removal itself stays blocked
+		// on the missing whitelist model.
+		if len(args) < 2 {
+			s.sendSysMessage("Syntax: .whispers [on|off|remove [player]]")
+			return
+		}
 		s.sendSysMessage("Whisper white list removal is unavailable: the Go tree has no whisper white list model.")
 	default:
 		s.sendSysMessage("Use on/off.") // LANG_USE_BOL 259
