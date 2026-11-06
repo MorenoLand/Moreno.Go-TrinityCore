@@ -3451,6 +3451,20 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.removeAura(spell)
 		return nil, nil
 	}
+	// RemoveAurasByType is Unit::RemoveAurasByType (Unit.cpp:3884) for
+	// players: every live engine-applied aura whose stored AuraType
+	// matches is removed via the session removeAurasByType funnel
+	// (spells.go), the player twin of the handler-creature method
+	// (lua_creature_events.go). Backs the Vanish apply arm
+	// (spell_rogue.cpp:1188, SPELL_AURA_MOD_STALKED).
+	methods["RemoveAurasByType"] = func(_ context.Context, args []any) ([]any, error) {
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.removeAurasByType(auraType)
+		return nil, nil
+	}
 	// RemoveMovementImpairingAuras is Unit::RemoveMovementImpairingAuras
 	// (Unit.cpp:4193-4213): withRoot=true also drops root-mechanic auras,
 	// withRoot=false drops snare-mechanic auras only (Demonic Circle:
