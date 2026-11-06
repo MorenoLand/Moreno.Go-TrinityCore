@@ -49,9 +49,9 @@
 -- engine-driven; never spawns in this build (no summon model) but is
 -- registered so any that exist fight correctly.
 -- Deviations from C++: no instance-script model — boss admission via
--- the luaBossAI shim (_Reset/_JustDied/BossAI::JustEngagedWith, the
--- GetZulGurubAI bookkeeping, and the DATA_MARLI encounter-state arms
--- skipped); no summon model — the HATCH_EGGS 24083 AoE and the
+-- the luaBossAI shim (a no-op BossAI slot; the SetBossState legs are
+-- ported below via creature:SetBossState, bridge live 2026-11-05, and
+-- the GetZulGurubAI bookkeeping stays out); no summon model — the HATCH_EGGS 24083 AoE and the
 -- HATCH_SPIDER_EGG 24082 casts spawn nothing (only their re-arm cycles
 -- are modeled); the Reset egg Respawn scan is PORTED (marliReset,
 -- alive-gated vancleef idiom) and the gob_spider_egg
@@ -349,6 +349,10 @@ local function onSpawnStartSpiders(creature, guid)
 end
 
 local function marliEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_marli.cpp:112-114) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_MARLI 2,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(2, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -389,12 +393,22 @@ local function marliReset(event, creature)
         for _, egg in ipairs(creature:GetGameObjectsInGrid(GO_SPIDER_EGG, 250)) do
             egg:Respawn()
         end
+        -- C++ Reset tail (boss_marli.cpp:103): _Reset() runs last,
+        -- writing SetBossState(DATA_MARLI 2, NOT_STARTED), skipped when
+        -- already DONE (ScriptedCreature.cpp:499-511).
+        if creature:GetBossState(2) ~= 3 then
+            creature:SetBossState(2, 0)
+        end
     end
 end
 
 RegisterCreatureEvent(ENTRY_MARLI, 1, marliEnterCombat)
 RegisterCreatureEvent(ENTRY_MARLI, 2, marliWipe)
 RegisterCreatureEvent(ENTRY_MARLI, 4, function(event, creature, killer)
+    -- C++ JustDied (boss_marli.cpp:106-108): _JustDied() first, writing
+    -- SetBossState(DATA_MARLI 2, DONE) (ScriptedCreature.cpp:513-519),
+    -- then Talk(SAY_DEATH).
+    creature:SetBossState(2, 3)
     creature:Talk(SAY_DEATH)
     marliWipe(event, creature)
 end)

@@ -51,8 +51,9 @@
 -- but never used — not modeled; the six bloodseeker bats (11368) and the
 -- fixed SpawnBat coordinates never exist (no bearer); the per-10s
 -- frenzied bat (14965) summons ARE ported (2026-10-22 summon bridge); no instance-script model — boss admission
--- via the luaBossAI shim (_Reset/_JustDied/BossAI::JustEngagedWith and
--- the GetZulGurubAI bookkeeping arms skipped); no threat model — the
+-- via the luaBossAI shim (a no-op BossAI slot; the SetBossState legs are
+-- ported below via creature:SetBossState, bridge live 2026-11-05, and
+-- the GetZulGurubAI bookkeeping arms stay out); no threat model — the
 -- charge, shadow-word-pain, flying-bat and batrider-bomb targets are
 -- random threat-list players alive (no victim fallback);
 -- ResetThreatList PORTED 2026-10-19
@@ -289,6 +290,10 @@ local function jeklikResetState(guid)
 end
 
 local function jeklikEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_jeklik.cpp:99-101) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_JEKLIK 0,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(0, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -369,10 +374,20 @@ end
 
 local function jeklikDied(event, creature, killer)
     jeklikResetState(creature:GetGUID())
+    -- C++ JustDied (boss_jeklik.cpp:93-95): _JustDied() first, writing
+    -- SetBossState(DATA_JEKLIK 0, DONE) (ScriptedCreature.cpp:513-519),
+    -- then Talk(SAY_DEATH).
+    creature:SetBossState(0, 3)
     creature:Talk(SAY_DEATH)
 end
 
 local function jeklikReset(event, creature)
+    -- C++ Reset (boss_jeklik.cpp:88-90): _Reset() only, writing
+    -- SetBossState(DATA_JEKLIK 0, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0)
+    end
     jeklikResetState(creature:GetGUID())
     -- C++ Reset (:88-91) is _Reset() only — no SetCanFly leg exists
     -- (the old "SetCanFly restore / no bridge" note was stale twice

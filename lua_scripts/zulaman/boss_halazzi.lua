@@ -43,7 +43,9 @@
 -- SetHealth(600000-150000*TransformCount) (boss_halazzi.cpp:164-165,
 -- C++-exact; the old "no SetMaxHealth bridge" claim was stale — the
 -- bridge is live and used at the lynx/human entries below); no instance-script
--- model — admission only via the luaBossAI shim; the shock target's
+-- model — admission only via the luaBossAI shim (a no-op BossAI slot;
+-- the SetBossState legs are ported below via creature:SetBossState,
+-- bridge live 2026-11-05); the shock target's
 -- IsNonMeleeSpellCast check uses the live player IsCasting bridge
 -- (Go activeCast is the cast-bar phase, like C++'s non-melee check);
 -- the saber-lash defense
@@ -431,6 +433,10 @@ local function halazziResetState(guid)
 end
 
 local function halazziEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_halazzi.cpp:117-119) calls
+    -- BossAI::JustEngagedWith first: SetBossState(BOSS_HALAZZI 3,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(3, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_halazzi.cpp:117-119 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -457,10 +463,20 @@ end
 local function halazziDied(event, creature, killer)
     halazziResetState(creature:GetGUID())
     despawnHalazziSummons(creature:GetGUID())
+    -- C++ JustDied (boss_halazzi.cpp:326-328): _JustDied() first,
+    -- writing SetBossState(BOSS_HALAZZI 3, DONE)
+    -- (ScriptedCreature.cpp:513-519), then Talk(SAY_DEATH).
+    creature:SetBossState(3, 3)
     creature:Talk(SAY_DEATH)
 end
 
 local function halazziReset(event, creature)
+    -- C++ Reset (boss_halazzi.cpp:106-108): _Reset() first, writing
+    -- SetBossState(BOSS_HALAZZI 3, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
+        creature:SetBossState(3, 0)
+    end
     local guid = creature:GetGUID()
     despawnHalazziSummons(guid)
     halazziResetState(guid)

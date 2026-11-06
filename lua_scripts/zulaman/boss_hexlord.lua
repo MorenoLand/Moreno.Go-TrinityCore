@@ -63,9 +63,10 @@
 -- so a missing add is skipped and the remaining adds still engage);
 -- the 5s ResetTimer room-
 -- check EnterEvadeMode has no bearer; the add base AI's
--- GetBossState(IN_PROGRESS) evade gate has no bridge (no
--- instance-script model, so the BOSS_HEXLORD encounter bookkeeping never
--- runs) — its DoZoneInCombat arm is ported below (bridge live 2026-10-23); the SiphonSoul !target/!trigger EnterEvadeMode arm has no
+-- GetBossState(IN_PROGRESS) evade gate stays out — GetBossState is
+-- bridged (lua_creature_events.go:5936) but the gate's EnterEvadeMode
+-- leg has no bridge, so the read has no bearer; its DoZoneInCombat arm
+-- is ported below (bridge live 2026-10-23); the SiphonSoul !target/!trigger EnterEvadeMode arm has no
 -- bridge, so a missing siphon target is a no-op; the shadow-priest
 -- HasSpell(15473) redirect is ported via the player:HasSpell bridge;
 -- the C++ druid PlayerClass special case (class 11 -> index 11 of
@@ -394,6 +395,10 @@ onAbility = function(creature, guid)
 end
 
 local function hexlordEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_hexlord.cpp:290-292) calls
+    -- BossAI::JustEngagedWith first: SetBossState(BOSS_HEXLORD 4,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(4, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_hexlord.cpp:290-292 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -435,6 +440,10 @@ local function hexlordDied(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     state[guid] = nil
+    -- C++ JustDied (boss_hexlord.cpp:321-323): _JustDied() first,
+    -- writing SetBossState(BOSS_HEXLORD 4, DONE)
+    -- (ScriptedCreature.cpp:513-519), then Talk(YELL_DEATH).
+    creature:SetBossState(4, 3)
     creature:Talk(YELL_DEATH)
     -- C++ JustDied's add KillSelf arm (boss_hexlord.cpp:326-331):
     -- each picked add alive is killed (grid scan stands in for the
@@ -508,6 +517,12 @@ checkAddState = function(creature, guid)
 end
 
 local function hexlordReset(event, creature)
+    -- C++ Reset (boss_hexlord.cpp:282-284): _Reset() first, writing
+    -- SetBossState(BOSS_HEXLORD 4, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
+        creature:SetBossState(4, 0)
+    end
     local guid = creature:GetGUID()
     cancelTimers(timers, guid)
     state[guid] = nil
@@ -571,8 +586,9 @@ RegisterCreatureEvent(ENTRY_HEXLORD, 4, hexlordDied)
 RegisterCreatureEvent(ENTRY_HEXLORD, 23, hexlordReset)
 
 -- The eight hexlord adds. The base boss_hexlord_addAI contributes only
--- the GetBossState(IN_PROGRESS) evade gate, which has no bridge (no
--- instance-script model) — its DoZoneInCombat is ported in addEnterCombat
+-- the GetBossState(IN_PROGRESS) evade gate stays out — GetBossState is
+-- bridged (lua_creature_events.go:5936) but the gate's EnterEvadeMode leg
+-- has no bridge — its DoZoneInCombat is ported in addEnterCombat
 -- below (bridge live 2026-10-23) — so each add is just its C++ cast
 -- timers; melee is engine-driven. Table-driven: each arm is first delay,
 -- repeat range, and fire closure.

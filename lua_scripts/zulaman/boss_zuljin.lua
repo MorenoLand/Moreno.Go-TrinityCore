@@ -73,8 +73,8 @@
 -- aura self-cast stays but nothing zaps; the vortex UpdateAI
 -- melee-range re-target has no bridge (no AttackStart) — only its
 -- SpellHit zap-back is modeled; no instance-script model — admission
--- only via the luaBossAI shim (GetZulAmanAI/BossAI SetBossState arms
--- skipped); YELL_FIRE_BREATH (6) is defined in the C++ enum but never
+-- only via the luaBossAI shim (a no-op BossAI slot; the SetBossState legs
+-- are ported below via creature:SetBossState, bridge live 2026-11-05); YELL_FIRE_BREATH (6) is defined in the C++ enum but never
 -- used by the AI — not modeled.
 
 local ENTRY_ZULJIN = 23863
@@ -533,6 +533,10 @@ end
 -- C++ CreatureScript — they stand as aura totems, like C++ (the
 -- mandokir chained-spirit precedent).
 local function zuljinEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_zuljin.cpp:205-207) calls
+    -- BossAI::JustEngagedWith first: SetBossState(BOSS_ZULJIN 5,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(5, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_zuljin.cpp:205-207 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -577,12 +581,22 @@ end
 
 local function zuljinDied(event, creature, killer)
     zuljinResetState(creature:GetGUID())
+    -- C++ JustDied (boss_zuljin.cpp:222-224): _JustDied() first,
+    -- writing SetBossState(BOSS_ZULJIN 5, DONE)
+    -- (ScriptedCreature.cpp:513-519), then Talk(YELL_DEATH).
+    creature:SetBossState(5, 3)
     creature:Talk(YELL_DEATH)
 end
 
 -- C++ Reset(): SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID, 33975)
 -- (boss_zuljin.cpp:201) — the EQUIP_NO_CHANGE slots skip as 0xFFFFFFFF.
 local function zuljinReset(event, creature)
+    -- C++ Reset (boss_zuljin.cpp:192-194): _Reset() first, writing
+    -- SetBossState(BOSS_ZULJIN 5, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
+        creature:SetBossState(5, 0)
+    end
     zuljinResetState(creature:GetGUID())
     creature:SetEquipmentSlots(33975, 0xFFFFFFFF, 0xFFFFFFFF)
 end

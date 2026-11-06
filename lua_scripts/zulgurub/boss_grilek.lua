@@ -17,9 +17,10 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
 -- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-script
--- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
--- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); the avatar ModifyThreatByPercent(-50) victim arm is PORTED 2026-10-24
+-- model — boss admission via the luaBossAI shim (a no-op BossAI slot;
+-- the SetBossState legs are ported below via creature:SetBossState,
+-- bridge live 2026-11-05; GetZulGurubAI bookkeeping stays out);
+-- the avatar ModifyThreatByPercent(-50) victim arm is PORTED 2026-10-24
 -- (gate + cut after the cast, C++ order) and the AttackStart-on-random-player arm has no bridge (no
 -- movement model) — the avatar cast still lands C++-exact, but the
 -- boss keeps attacking its current victim; no Talk lines exist in the
@@ -85,6 +86,11 @@ local function grilekResetState(guid)
 end
 
 local function grilekEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_grilek.cpp:53-55) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_EDGE_OF_MADNESS
+    -- 9, IN_PROGRESS) (ScriptedCreature.cpp:537). All four Edge of
+    -- Madness bosses share id 9; killing any one sets it DONE.
+    creature:SetBossState(9, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -102,12 +108,20 @@ local function grilekLeaveCombat(event, creature)
 end
 
 local function grilekDied(event, creature, killer)
+    -- C++ JustDied (boss_grilek.cpp:48-50): _JustDied() only, writing
+    -- SetBossState(DATA_EDGE_OF_MADNESS 9, DONE)
+    -- (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(9, 3)
     grilekResetState(creature:GetGUID())
 end
 
 local function grilekReset(event, creature)
-    -- C++ Reset's _Reset bookkeeping has no bridge (no instance-script
-    -- model) — only the timer cancel is modeled.
+    -- C++ Reset (boss_grilek.cpp:43-45): _Reset() only, writing
+    -- SetBossState(DATA_EDGE_OF_MADNESS 9, NOT_STARTED), alive-gated
+    -- and skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
+        creature:SetBossState(9, 0)
+    end
     grilekResetState(creature:GetGUID())
 end
 

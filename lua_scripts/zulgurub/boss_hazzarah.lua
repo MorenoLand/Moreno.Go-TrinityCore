@@ -22,9 +22,10 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
 -- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-script
--- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
--- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); no Talk lines exist in the C++ AI.
+-- model — boss admission via the luaBossAI shim (a no-op BossAI slot;
+-- the SetBossState legs are ported below via creature:SetBossState,
+-- bridge live 2026-11-05; GetZulGurubAI bookkeeping stays out);
+-- no Talk lines exist in the C++ AI.
 
 local ENTRY_HAZZARAH = 15083
 local ENTRY_NIGHTMARE_ILLUSION = 15163
@@ -128,6 +129,11 @@ local function hazzarahResetState(guid)
 end
 
 local function hazzarahEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_hazzarah.cpp:55-57) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_EDGE_OF_MADNESS
+    -- 9, IN_PROGRESS) (ScriptedCreature.cpp:537). All four Edge of
+    -- Madness bosses share id 9; killing any one sets it DONE.
+    creature:SetBossState(9, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -148,12 +154,20 @@ local function hazzarahLeaveCombat(event, creature)
 end
 
 local function hazzarahDied(event, creature, killer)
+    -- C++ JustDied (boss_hazzarah.cpp:50-52): _JustDied() only, writing
+    -- SetBossState(DATA_EDGE_OF_MADNESS 9, DONE)
+    -- (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(9, 3)
     hazzarahResetState(creature:GetGUID())
 end
 
 local function hazzarahReset(event, creature)
-    -- C++ Reset's _Reset bookkeeping has no bridge (no instance-script
-    -- model) — only the timer cancel is modeled.
+    -- C++ Reset (boss_hazzarah.cpp:45-47): _Reset() only, writing
+    -- SetBossState(DATA_EDGE_OF_MADNESS 9, NOT_STARTED), alive-gated
+    -- and skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
+        creature:SetBossState(9, 0)
+    end
     hazzarahResetState(creature:GetGUID())
 end
 

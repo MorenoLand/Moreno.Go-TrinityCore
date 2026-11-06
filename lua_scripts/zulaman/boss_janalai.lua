@@ -65,8 +65,10 @@
 -- spawn hatchlings; the Reset egg display-id restore (HatchAllEggs(1),
 -- display 10056) is ported in janalaiReset via GetCreaturesInGrid;
 -- no instance-script model — admission only via the luaBossAI shim
--- (GetZulAmanAI/BossAI SetBossState arms skipped, the hatchling's
--- IN_PROGRESS DisappearAndDie arm skipped); the pre-fight trash
+-- (a no-op BossAI slot; the SetBossState legs are ported below via
+-- creature:SetBossState, bridge live 2026-11-05; the hatchling's
+-- IN_PROGRESS DisappearAndDie arm stays out — GetBossState is bridged
+-- but the gate rides UpdateAI with no Lua pump bearer); the pre-fight trash
 -- gauntlet's SAY_EVENT_STRANGERS/FRIENDS lines belong to zulaman.cpp,
 -- not this file's AI; the sub-25% enrage arm is a C++ UpdateAI
 -- HealthBelowPct, so the event-9 port tests projected post-damage health
@@ -401,6 +403,10 @@ local function janalaiResetState(guid)
 end
 
 local function janalaiEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_janalai.cpp:181-183) calls
+    -- BossAI::JustEngagedWith first: SetBossState(BOSS_JANALAI 2,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(2, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_janalai.cpp:181-183 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -484,9 +490,19 @@ end
 local function janalaiDied(event, creature, killer)
     janalaiResetState(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_janalai.cpp:169-173): Talk first, then
+    -- _JustDied(), writing SetBossState(BOSS_JANALAI 2, DONE)
+    -- (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(2, 3)
 end
 
 local function janalaiReset(event, creature)
+    -- C++ Reset (boss_janalai.cpp:160-162): _Reset() first, writing
+    -- SetBossState(BOSS_JANALAI 2, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
+        creature:SetBossState(2, 0)
+    end
     janalaiResetState(creature:GetGUID())
     -- C++ boss_janalai::Reset (boss_janalai.cpp:162-169): Initialize()
     -- -> position-gated MovePoint (no movement bridge) ->

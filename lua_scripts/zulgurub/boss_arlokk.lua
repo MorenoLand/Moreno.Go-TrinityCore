@@ -49,7 +49,9 @@
 -- (list-enumeration + spell-summon legs, see arlokkEnterCombat) and the
 -- SetData count arms are skipped; the go_gong_of_bethekk script IS
 -- ported (gong flag/anim/summon, see onGongGossip); no
--- instance-script model — boss admission via the luaBossAI shim, and
+-- instance-script model — boss admission via the luaBossAI shim (a
+-- no-op BossAI slot; the SetBossState legs are ported below via
+-- creature:SetBossState, bridge live 2026-11-05), and
 -- the EnterEvadeMode gong-flag arm is skipped (no EnterEvadeMode bridge;
 -- instance GO lookup unbridged); no threat model — mark-of-arlokk target is a random alive
 -- player (victim fallback); the vanish ResetThreatList arm IS
@@ -371,6 +373,10 @@ end
 -- footprint; single FindNearestCreature + direct SummonCreature cannot
 -- express either leg) — the 6s prowler timer is not scheduled.
 local function arlokkEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_arlokk.cpp:127-129) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_ARLOKK 3,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(3, 1)
     local guid = creature:GetGUID()
     arlokkResetState(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -394,9 +400,12 @@ local function arlokkLeaveCombat(event, creature)
     arlokkResetState(creature:GetGUID())
 end
 
--- C++ JustDied: _JustDied (instance, no bridge), Talk SAY_DEATH.
+-- C++ JustDied (boss_arlokk.cpp:121-123): _JustDied() first, writing
+-- SetBossState(DATA_ARLOKK 3, DONE) (ScriptedCreature.cpp:513-519),
+-- then Talk SAY_DEATH.
 local function arlokkDied(event, creature, killer)
     arlokkResetState(creature:GetGUID())
+    creature:SetBossState(3, 3)
     creature:Talk(SAY_DEATH)
 end
 
@@ -410,6 +419,13 @@ local function arlokkReset(event, creature)
     arlokkResetState(creature:GetGUID())
     if wasPanther and creature:IsAlive() then
         creature:ApplyDamagePctModifier(100 / 1.35 - 100)
+    end
+    -- C++ Reset (boss_arlokk.cpp:109-113): damage rollback, then
+    -- _Reset(), writing SetBossState(DATA_ARLOKK 3, NOT_STARTED),
+    -- alive-gated and skipped when already DONE
+    -- (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
+        creature:SetBossState(3, 0)
     end
     creature:SetEquipmentSlots(WEAPON_DAGGER, WEAPON_DAGGER, 0xFFFFFFFF)
 end

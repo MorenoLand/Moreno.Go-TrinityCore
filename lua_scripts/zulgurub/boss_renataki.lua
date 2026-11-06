@@ -31,8 +31,9 @@
 -- live creature:Teleport bridge (2026-10-24); the aggro-switch
 -- GetThreat/ModifyThreatByPercent(-50) arm is PORTED 2026-10-24; the AttackStart arm has no movement
 -- bridge (grilek convention) — only the 7-20s re-arm cycle is kept for that leg; no instance-script model — boss admission via the luaBossAI
--- shim (_Reset/BossAI::JustEngagedWith and the GetZulGurubAI
--- bookkeeping arms skipped); the C++ frozen-timer behavior (ambush,
+-- shim (a no-op BossAI slot; the SetBossState legs are ported below via
+-- creature:SetBossState, bridge live 2026-11-05; GetZulGurubAI
+-- bookkeeping stays out); the C++ frozen-timer behavior (ambush,
 -- aggro, thousand-blades timers hold their remainder while the gate is
 -- closed) is approximated as a full re-arm on gate close.
 
@@ -187,6 +188,12 @@ local function resetState(guid)
 end
 
 RegisterCreatureEvent(ENTRY_RENATAKI, 1, function(event, creature)
+    -- No C++ JustEngagedWith override (boss_renataki.cpp has none):
+    -- base BossAI::JustEngagedWith runs, writing
+    -- SetBossState(DATA_EDGE_OF_MADNESS 9, IN_PROGRESS)
+    -- (ScriptedCreature.cpp:537). All four Edge of Madness bosses
+    -- share id 9; killing any one sets it DONE.
+    creature:SetBossState(9, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -213,9 +220,19 @@ RegisterCreatureEvent(ENTRY_RENATAKI, 2, function(event, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_RENATAKI, 4, function(event, creature)
+    -- No C++ JustDied override: base BossAI::JustDied runs _JustDied,
+    -- writing SetBossState(DATA_EDGE_OF_MADNESS 9, DONE)
+    -- (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(9, 3)
     cancelTimers(creature:GetGUID())
 end)
 
 RegisterCreatureEvent(ENTRY_RENATAKI, 23, function(event, creature)
+    -- C++ Reset (boss_renataki.cpp:56-58): _Reset() writes
+    -- SetBossState(DATA_EDGE_OF_MADNESS 9, NOT_STARTED), alive-gated
+    -- and skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
+        creature:SetBossState(9, 0)
+    end
     cancelTimers(creature:GetGUID())
 end)

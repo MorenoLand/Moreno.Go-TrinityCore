@@ -69,9 +69,9 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate (thekal,
 -- lorkhan) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention); no instance-script model — boss admission via the luaBossAI
--- shim (_Reset/_JustDied/BossAI::JustEngagedWith, GetZulGurubAI
--- bookkeeping and the DATA_THEKAL/LORKHAN/ZATH encounter-state arms
--- skipped); the SetImmuneToPC/NPC flag arms and the RemoveFlag
+-- shim (a no-op BossAI slot; the SetBossState legs are ported below via
+-- creature:SetBossState, bridge live 2026-11-05; GetZulGurubAI
+-- bookkeeping stays out); the SetImmuneToPC/NPC flag arms and the RemoveFlag
 -- un-immune arms are ported via the SetFlag/RemoveFlag bridge
 -- (engine/world/lua_creature_events.go:407) — feign death sets
 -- IMMUNE_TO_PC|IMMUNE_TO_NPC (C++-exact targeting immunity) and further
@@ -457,6 +457,10 @@ local function thekalResetEncounter(e, creature)
 end
 
 local function thekalEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_thekal.cpp:154-156) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_THEKAL 4,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(4, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -513,7 +517,19 @@ end
 
 local function thekalDied(event, creature, killer)
     local e = encounterState(creature)
+    -- C++ JustDied (boss_thekal.cpp:140-142): _JustDied() first,
+    -- writing SetBossState(DATA_THEKAL 4, DONE)
+    -- (ScriptedCreature.cpp:513-519), then Talk(TALK_DEATH).
+    creature:SetBossState(4, 3)
     creature:Talk(TALK_DEATH)
+    -- C++ JustDied tail (boss_thekal.cpp:150-151): direct writes
+    -- SetBossState(DATA_LORKHAN 10, DONE) and SetBossState(DATA_ZATH
+    -- 11, DONE) — the zealots have no BossAI of their own, so thekal's
+    -- death closes their ids too. The KillSelf arms (:146-149) stay out
+    -- (instance->GetCreature lookup has no bridge); the state writes
+    -- are direct and ported.
+    creature:SetBossState(10, 3)
+    creature:SetBossState(11, 3)
     -- C++ KillSelf's the two adds here; the instance lookup
     -- (instance->GetCreature) has no bridge, so their timers
     -- are canceled instead and the encounter state is cleared.
@@ -521,6 +537,12 @@ local function thekalDied(event, creature, killer)
 end
 
 local function thekalReset(event, creature)
+    -- C++ Reset (boss_thekal.cpp:128-134): _Reset() writes
+    -- SetBossState(DATA_THEKAL 4, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
+        creature:SetBossState(4, 0)
+    end
     -- C++ Reset (boss_thekal.cpp:131): the phase-two damage rollback
     -- runs first, then SetControlled(false, UNIT_STATE_ROOT)
     -- (boss_thekal.cpp:132, SetRooted). The alive gate restores C++

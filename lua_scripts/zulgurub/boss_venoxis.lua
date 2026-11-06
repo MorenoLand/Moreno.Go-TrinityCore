@@ -30,8 +30,9 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate has no
 -- UNIT_STATE bridge — timers fire unconditionally (jeklik convention);
 -- no instance-script model — boss admission via the luaBossAI shim
--- (_Reset/_JustDied/BossAI::JustEngagedWith, GetZulGurubAI bookkeeping
--- and the DATA_VENOXIS encounter-state arms skipped); DoZoneInCombat is
+-- (a no-op BossAI slot; the SetBossState legs are ported below via
+-- creature:SetBossState, bridge live 2026-11-05; GetZulGurubAI
+-- bookkeeping stays out); DoZoneInCombat is
 -- PORTED (creature:DoZoneInCombat, event-1 handler tail in C++ arm
 -- order — live bridge engine/world/lua_creature_events.go, 2026-10-23);
 -- RemoveAllAuras is bridged
@@ -337,6 +338,10 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 1, function(event, creature)
+    -- C++ JustEngagedWith (boss_venoxis.cpp:125-127) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_VENOXIS 1,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(1, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; me-form DoZone already ported at handler tail, C++ :141)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -373,8 +378,10 @@ RegisterCreatureEvent(ENTRY_VENOXIS, 2, function(event, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 4, function(event, creature)
-    -- C++ JustDied: _JustDied, Talk(SAY_VENOXIS_DEATH), RemoveAllAuras
-    -- (bridged — creature:RemoveAllAuras).
+    -- C++ JustDied (boss_venoxis.cpp:118-120): _JustDied() first,
+    -- writing SetBossState(DATA_VENOXIS 1, DONE)
+    -- (ScriptedCreature.cpp:513-519), then Talk(SAY_VENOXIS_DEATH).
+    creature:SetBossState(1, 3)
     creature:Talk(TALK_VENOXIS_DEATH)
     creature:RemoveAllAuras()
     cancelTimers(creature:GetGUID())
@@ -383,9 +390,15 @@ end)
 RegisterCreatureEvent(ENTRY_VENOXIS, 9, onDamageTaken)
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 23, function(event, creature)
-    -- C++ boss_venoxisAI::Reset (boss_venoxis.cpp:107-116): _Reset,
-    -- RemoveAllAuras, SetReactState(REACT_PASSIVE), Initialize
-    -- (latch defaults), events.SetPhase(PHASE_ONE).
+    -- C++ boss_venoxisAI::Reset (boss_venoxis.cpp:107-109): _Reset()
+    -- first, writing SetBossState(DATA_VENOXIS 1, NOT_STARTED),
+    -- alive-gated and skipped when already DONE
+    -- (ScriptedCreature.cpp:499-511), then RemoveAllAuras,
+    -- SetReactState(REACT_PASSIVE), Initialize (latch defaults),
+    -- events.SetPhase(PHASE_ONE).
+    if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
+        creature:SetBossState(1, 0)
+    end
     local guid = creature:GetGUID()
     cancelTimers(guid)
     creature:RemoveAllAuras()

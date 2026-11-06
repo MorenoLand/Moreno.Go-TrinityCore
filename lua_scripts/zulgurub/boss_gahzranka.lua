@@ -17,9 +17,10 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
 -- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-script
--- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
--- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); massive geyser's summon arm is upstream-broken ("Not
+-- model — boss admission via the luaBossAI shim (a no-op BossAI slot;
+-- the SetBossState legs are ported below via creature:SetBossState,
+-- bridge live 2026-11-05; GetZulGurubAI bookkeeping stays out);
+-- massive geyser's summon arm is upstream-broken ("Not
 -- working. (summon)" in the C++ source) — the cast is still modeled
 -- C++-exact since the AI fires it regardless.
 
@@ -92,6 +93,10 @@ local function gahzrankaResetState(guid)
 end
 
 local function gahzrankaEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_gahzranka.cpp:55-57) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_GAHZRANKA 8,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(8, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -112,12 +117,19 @@ local function gahzrankaLeaveCombat(event, creature)
 end
 
 local function gahzrankaDied(event, creature, killer)
+    -- C++ JustDied (boss_gahzranka.cpp:50-52): _JustDied() only, writing
+    -- SetBossState(DATA_GAHZRANKA 8, DONE) (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(8, 3)
     gahzrankaResetState(creature:GetGUID())
 end
 
 local function gahzrankaReset(event, creature)
-    -- C++ Reset's _Reset bookkeeping has no bridge (no instance-script
-    -- model) — only the timer cancel is modeled.
+    -- C++ Reset (boss_gahzranka.cpp:45-47): _Reset() only, writing
+    -- SetBossState(DATA_GAHZRANKA 8, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(8) ~= 3 then
+        creature:SetBossState(8, 0)
+    end
     gahzrankaResetState(creature:GetGUID())
 end
 

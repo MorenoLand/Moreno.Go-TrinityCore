@@ -30,9 +30,9 @@
 -- casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is
 -- constant-false — Go casts are fire-and-forget)
 -- — timers fire unconditionally (jeklik convention); no instance-script
--- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
--- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); the at_zulgurub_entrance OnlyOnceAreaTriggerScript (the
+-- model — boss admission via the luaBossAI shim (a no-op BossAI slot;
+-- the SetBossState legs are ported below via creature:SetBossState,
+-- bridge live 2026-11-05; GetZulGurubAI bookkeeping stays out); the at_zulgurub_entrance OnlyOnceAreaTriggerScript (the
 -- SAY_ENTRANCE=4 / SAY_PROTECT_ALTAR=3 / SAY_MINION_DESTROY=2 Talk arms
 -- on trigger IDs 3957/3958/3960, gated on DATA_HAKKAR != DONE and
 -- instance->GetCreature) stays unregistered: the area-trigger bridge
@@ -188,6 +188,10 @@ local function hakkarResetState(guid)
 end
 
 local function hakkarEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_hakkar.cpp:85-87) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_HAKKAR 5,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(5, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -233,12 +237,19 @@ local function hakkarLeaveCombat(event, creature)
 end
 
 local function hakkarDied(event, creature, killer)
+    -- C++ JustDied (boss_hakkar.cpp:80-82): _JustDied() only, writing
+    -- SetBossState(DATA_HAKKAR 5, DONE) (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(5, 3)
     hakkarResetState(creature:GetGUID())
 end
 
 local function hakkarReset(event, creature)
-    -- C++ Reset's _Reset bookkeeping has no bridge (no instance-script
-    -- model) — only the timer cancel is modeled.
+    -- C++ Reset (boss_hakkar.cpp:75-77): _Reset() only, writing
+    -- SetBossState(DATA_HAKKAR 5, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
+        creature:SetBossState(5, 0)
+    end
     hakkarResetState(creature:GetGUID())
 end
 

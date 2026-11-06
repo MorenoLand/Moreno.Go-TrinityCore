@@ -27,7 +27,8 @@
 -- AttackStart wiring — so the YELL_NALORAKK_WAVE1-4 arms, the waypoint
 -- walks, and the SendAttacker arms never run and combat starts directly
 -- at the engaged state; no instance-script model — admission only via the
--- luaBossAI shim (GetZulAmanAI/BossAI SetBossState arms); no threat model
+-- luaBossAI shim (a no-op BossAI slot; the SetBossState legs are ported
+-- below via creature:SetBossState, bridge live 2026-11-05); no threat model
 -- — the surge target (C++ SelectTarget(Random,1,45,true), a random
 -- non-tank) is approximated by a random alive player within 45 yd; the
 -- commented-out SetUInt32Value equipment arms in C++ are dead code, not
@@ -286,6 +287,10 @@ local function nalorakkResetState(guid)
 end
 
 local function nalorakkEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_nalorakk.cpp:240-242) calls
+    -- BossAI::JustEngagedWith first: SetBossState(BOSS_NALORAKK 0,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(0, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_nalorakk.cpp:240-242 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -316,10 +321,20 @@ end
 
 local function nalorakkDied(event, creature, killer)
     nalorakkResetState(creature:GetGUID())
+    -- C++ JustDied (boss_nalorakk.cpp:247-249): _JustDied() first,
+    -- writing SetBossState(BOSS_NALORAKK 0, DONE)
+    -- (ScriptedCreature.cpp:513-519), then Talk(YELL_DEATH).
+    creature:SetBossState(0, 3)
     creature:Talk(YELL_DEATH)
 end
 
 local function nalorakkReset(event, creature)
+    -- C++ Reset (boss_nalorakk.cpp:129-131): _Reset() first, writing
+    -- SetBossState(BOSS_NALORAKK 0, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0)
+    end
     -- C++ Reset, MoveEvent branch (boss_nalorakk.cpp:133-140): the
     -- constructor inits MoveEvent true, so the spawn Reset sets run
     -- speed 2; the NOT_SELECTABLE/NON_ATTACKABLE flag pair stays out

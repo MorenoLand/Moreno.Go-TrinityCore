@@ -44,9 +44,10 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
 -- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-script
--- model — boss admission via the luaBossAI shim (_Reset/_JustDied/
--- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); no summon model for the spell path's totem title (the
+-- model — boss admission via the luaBossAI shim (a no-op BossAI slot;
+-- the SetBossState legs are ported below via creature:SetBossState,
+-- bridge live 2026-11-05; GetZulGurubAI bookkeeping stays out);
+-- no summon model for the spell path's totem title (the
 -- engine summon path skips totem titles, so 24262 never spawns) — the
 -- healing ward and the shades spawn only if their spells pass the
 -- engine DBC SummonProperties gates (unverifiable from the repo: no
@@ -212,6 +213,10 @@ local function jindoResetState(guid)
 end
 
 local function jindoEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_jindo.cpp:89-91) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_JINDO 7,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(7, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -239,12 +244,19 @@ local function jindoLeaveCombat(event, creature)
 end
 
 local function jindoDied(event, creature, killer)
+    -- C++ JustDied (boss_jindo.cpp:84-86): _JustDied() only, writing
+    -- SetBossState(DATA_JINDO 7, DONE) (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(7, 3)
     jindoResetState(creature:GetGUID())
 end
 
 local function jindoReset(event, creature)
-    -- C++ Reset's _Reset bookkeeping has no bridge (no instance-script
-    -- model) — only the timer cancel is modeled.
+    -- C++ Reset (boss_jindo.cpp:79-81): _Reset() only, writing
+    -- SetBossState(DATA_JINDO 7, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
+        creature:SetBossState(7, 0)
+    end
     jindoResetState(creature:GetGUID())
 end
 

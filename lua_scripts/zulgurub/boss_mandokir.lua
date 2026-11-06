@@ -37,9 +37,9 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gate has
 -- no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention); no instance-script model — boss admission via the
--- luaBossAI shim (_Reset/_JustDied/BossAI::JustEngagedWith, the
--- GetZulGurubAI bookkeeping, and the DATA_MANDOKIR encounter-state
--- arms skipped), so the pre-combat intro machine (Reset's
+-- luaBossAI shim (a no-op BossAI slot; the SetBossState legs are ported
+-- below via creature:SetBossState, bridge live 2026-11-05, and the
+-- GetZulGurubAI bookkeeping stays out), so the pre-combat intro machine (Reset's
 -- SetImmuneToAll(true) + EVENT_CHECK_START 1s poll of
 -- DATA_MANDOKIR == SPECIAL from the speaker's death, MovePoint to
 -- PosMandokir[1], EVENT_STARTED -> SetImmuneToAll(false) +
@@ -63,8 +63,9 @@
 -- spell_threatening_gaze (the 24314 -> 24315/24316 AuraScript OnRemove
 -- chain) is ported at the tail (tick 198, RegisterAuraEvent OnRemove);
 -- the speaker's
--- JustDied SetBossState(DATA_MANDOKIR, SPECIAL) arm has no bearer (no
--- instance-script model).
+-- JustDied SetBossState(DATA_MANDOKIR, SPECIAL) arm IS ported below
+-- (speaker ev4, bridge live 2026-11-05) — its consumer, the
+-- SPECIAL-gated intro machine (UpdateAI :213-231), stays out.
 
 local ENTRY_MANDOKIR = 11382
 local ENTRY_JINDO = 11380 -- NPC_JINDO_THE_HEXXER (zulgurub.h:56)
@@ -238,6 +239,10 @@ local POS_CHAINED_SPIRITS = {
 }
 
 local function mandokirEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_mandokir.cpp:147-149) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_MANDOKIR 6,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(6, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; me-form DoZone already ported at handler tail)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -337,7 +342,9 @@ local function mandokirLeaveCombat(event, creature)
 end
 
 -- C++ JustDied (boss_mandokir.cpp:135-139): summons.DespawnEntry
--- (NPC_CHAINED_SPIRT) + instance SetBossState/SaveToDB (blocked).
+-- (NPC_CHAINED_SPIRT), then the DIRECT instance SetBossState
+-- (DATA_MANDOKIR 6, DONE) (:138) — no _JustDied() call — then
+-- SaveToDB (:139, no bridge, stays out).
 -- Only the chained-spirit entry despawns on death (Ohgan is not
 -- entry-latched here); Reset's unconditional DespawnAll ports in
 -- mandokirLeaveCombat above (ev2-only: ev23 also fires on death,
@@ -345,21 +352,31 @@ end
 local function mandokirDied(event, creature, killer)
     local guid = creature:GetGUID()
     despawnMandokirSpirits(guid)
+    creature:SetBossState(6, 3)
     mandokirResetState(guid)
 end
 
 local function mandokirReset(event, creature)
-    -- C++ Reset's Z>140 intro/summon arms have no bridge (no movement,
-    -- instance-script, or summon model) — only the timer cancel, the
-    -- Z-gated SetImmuneToAll(true) (SetFlag 59, 0x300, in C++ order
-    -- after Initialize) and the Reset-tail Mount(MODEL_OHGAN_MOUNT
-    -- 15271) are modeled. The unconditional summons.DespawnAll (:131)
-    -- ports in mandokirLeaveCombat, not here (ev23 also fires on death,
-    -- where C++ JustDied keeps Ohgan). The EVENT_STARTED clear rides
-    -- the unported intro machine; the JustReachedHome clear is ported
-    -- below.
+    -- C++ Reset (boss_mandokir.cpp:119-123): _Reset() runs only inside
+    -- the Z > 140.0f gate, writing SetBossState(DATA_MANDOKIR 6,
+    -- NOT_STARTED), alive-gated and skipped when already DONE
+    -- (ScriptedCreature.cpp:499-511). A ground-level reset (Z <= 140)
+    -- skips it — NOT_STARTED then comes only from the unported
+    -- MovementInform leg (:202, no bearer: the intro path never
+    -- launches in Lua). The Z>140 intro/summon arms have no bridge (no
+    -- movement, instance-script, or summon model) — only the timer
+    -- cancel, the Z-gated SetImmuneToAll(true) (SetFlag 59, 0x300, in
+    -- C++ order after Initialize) and the Reset-tail
+    -- Mount(MODEL_OHGAN_MOUNT 15271) are modeled. The unconditional
+    -- summons.DespawnAll (:131) ports in mandokirLeaveCombat, not here
+    -- (ev23 also fires on death, where C++ JustDied keeps Ohgan). The
+    -- EVENT_STARTED clear rides the unported intro machine; the
+    -- JustReachedHome clear is ported below.
     mandokirResetState(creature:GetGUID())
     if creature:GetZ() > 140.0 then
+        if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
+            creature:SetBossState(6, 0)
+        end
         creature:SetFlag(59, 0x300) -- IMMUNE_TO_PC|IMMUNE_TO_NPC
     end
     creature:Mount(15271)
@@ -430,8 +447,9 @@ end)
 -- self-cast (non-triggered DoCast(me), C++-exact) / cleave 15284 {5s,8s}
 -- after Reset then {6s,9s} on the victim (triggered DoCastVictim,
 -- C++-exact); melee is engine-driven. The JustDied
--- SetBossState(DATA_MANDOKIR, SPECIAL) arm has no bearer (no
--- instance-script model) — not modeled.
+-- SetBossState(DATA_MANDOKIR 6, SPECIAL) arm is ported in the speaker
+-- ev4 handler below (boss_mandokir.cpp:377-380) — its consumer, the
+-- SPECIAL-gated intro machine, stays out.
 local function onDemoralizingShout(creature, guid)
     creature:CastSpell(creature, SPELL_DEMORALIZING_SHOUT)
     schedule(guid, "shout", math.random(22000, 30000), function()
@@ -478,6 +496,11 @@ RegisterCreatureEvent(ENTRY_SPEAKER, 2, function(event, creature)
     cancelTimers(creature:GetGUID())
 end)
 RegisterCreatureEvent(ENTRY_SPEAKER, 4, function(event, creature, killer)
+    -- C++ npc_vilebranch_speakerAI::JustDied (boss_mandokir.cpp:377-380):
+    -- direct SetBossState(DATA_MANDOKIR 6, SPECIAL). The speaker is a
+    -- separate creature (entry 11391, ScriptedAI) but the write is
+    -- keyed by map+instance, so it lands on the same encounter id.
+    creature:SetBossState(6, 4)
     cancelTimers(creature:GetGUID())
 end)
 RegisterCreatureEvent(ENTRY_SPEAKER, 23, speakerReset)

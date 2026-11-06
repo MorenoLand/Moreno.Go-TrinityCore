@@ -20,9 +20,10 @@
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING gate (skip the
 -- rest of the event queue while casting) has no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) —
 -- timers fire unconditionally (jeklik convention); no instance-script
--- model — boss admission via the luaBossAI shim (_Reset/
--- BossAI::JustEngagedWith and the GetZulGurubAI bookkeeping arms
--- skipped); the lightning-wave SelectTarget 100-yd range check is
+-- model — boss admission via the luaBossAI shim (a no-op BossAI slot;
+-- the SetBossState legs are ported below via creature:SetBossState,
+-- bridge live 2026-11-05; GetZulGurubAI bookkeeping stays out);
+-- the lightning-wave SelectTarget 100-yd range check is
 -- skipped (shared arena) — the pick is a random alive player in the
 -- instance.
 
@@ -103,6 +104,11 @@ local function wushoolayResetState(guid)
 end
 
 local function wushoolayEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_wushoolay.cpp:43-45) calls
+    -- BossAI::JustEngagedWith first: SetBossState(DATA_EDGE_OF_MADNESS
+    -- 9, IN_PROGRESS) (ScriptedCreature.cpp:537). All four Edge of
+    -- Madness bosses share id 9; killing any one sets it DONE.
+    creature:SetBossState(9, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     local guid = creature:GetGUID()
@@ -120,12 +126,20 @@ local function wushoolayLeaveCombat(event, creature)
 end
 
 local function wushoolayDied(event, creature, killer)
+    -- No C++ JustDied override: base BossAI::JustDied runs _JustDied,
+    -- writing SetBossState(DATA_EDGE_OF_MADNESS 9, DONE)
+    -- (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(9, 3)
     wushoolayResetState(creature:GetGUID())
 end
 
 local function wushoolayReset(event, creature)
-    -- C++ Reset's _Reset bookkeeping has no bridge (no instance-script
-    -- model) — only the timer cancel is modeled.
+    -- No C++ Reset override: base BossAI::Reset runs _Reset, writing
+    -- SetBossState(DATA_EDGE_OF_MADNESS 9, NOT_STARTED), alive-gated
+    -- and skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
+        creature:SetBossState(9, 0)
+    end
     wushoolayResetState(creature:GetGUID())
 end
 

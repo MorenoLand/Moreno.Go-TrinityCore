@@ -43,7 +43,8 @@
 -- is ported via player:CastSpell (2026-10-24 bridge).
 -- The C++ EnterEvadeMode arms (storm target gone) have no bridge, so a
 -- missing storm target is a no-op. No instance-script model — admission
--- only via the luaBossAI shim. AddThreat for eagles is skipped. The commented-
+-- only via the luaBossAI shim (a no-op BossAI slot; the SetBossState legs
+-- are ported below via creature:SetBossState, bridge live 2026-11-05). AddThreat for eagles is skipped. The commented-
 -- out static-disruption AOE visual arm in C++ is not modeled (dead code).
 
 local ENTRY_AKILZON = 23574
@@ -240,6 +241,10 @@ local function akilzonResetState(guid)
 end
 
 local function akilzonEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (boss_akilzon.cpp:116-118) calls
+    -- BossAI::JustEngagedWith first: SetBossState(BOSS_AKILZON 1,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(1, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_akilzon.cpp:116-118 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; bridge live 2026-10-23)
     local guid = creature:GetGUID()
@@ -278,9 +283,19 @@ end
 local function akilzonDied(event, creature, killer)
     akilzonResetState(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_akilzon.cpp:130-133): Talk first, then
+    -- _JustDied(), writing SetBossState(BOSS_AKILZON 1, DONE)
+    -- (ScriptedCreature.cpp:513-519).
+    creature:SetBossState(1, 3)
 end
 
 local function akilzonReset(event, creature)
+    -- C++ Reset (boss_akilzon.cpp:107-109): _Reset() first, writing
+    -- SetBossState(BOSS_AKILZON 1, NOT_STARTED), alive-gated and
+    -- skipped when already DONE (ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
+        creature:SetBossState(1, 0)
+    end
     akilzonResetState(creature:GetGUID())
     -- C++ boss_akilzon::Reset (boss_akilzon.cpp:403-407): Initialize()
     -- -> me->SetDisableGravity(true) (:406).
