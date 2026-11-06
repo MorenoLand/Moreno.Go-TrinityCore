@@ -16,11 +16,13 @@
 -- - ReceiveEmote (ev8): salute (TEXT_EMOTE_SALUTE 78) with
 --   FlareCount >= 2 and faction not already FRIENDLY runs
 --   DoFriend: RemoveAllAuras + CombatStop(true) + StopMoving +
---   AttackStop + SetFaction(FRIENDLY 35) + PerformEmote
+--   MoveIdle + AttackStop + SetFaction(FRIENDLY 35) + PerformEmote
 --   (EMOTE_ONESHOT_SALUTE 66).
 -- Unmodeled (documented-only, no bridges):
--- - DoFriend's MoveIdle (no Lua bridge). The 120s friend revert
---   IS ported: DoFriend schedules a 120s one-shot running the
+-- - MoveIdle is the StopMoving twin (lua_creature_events.go:2826:
+--   halt at the current position, no motion-generator stack in Go),
+--   so it rides the same call as StopMoving above.
+-- - The 120s friend revert IS ported: DoFriend schedules a 120s
 --   Reset legs (UpdateAI's EnterEvadeMode ends in Reset(),
 --   CreatureAI.cpp); the evade home-walk / aura-clear legs stay
 --   out, as in Reset.
@@ -111,6 +113,7 @@ local function fizzuleReceiveEmote(event, creature, player, textEmote)
         creature:RemoveAllAuras()
         creature:CombatStop(true)
         creature:StopMoving()
+        creature:MoveIdle()
         creature:AttackStop()
         creature:SetFaction(FACTION_FRIENDLY)
         creature:PerformEmote(EMOTE_ONESHOT_SALUTE)
