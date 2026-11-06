@@ -13512,6 +13512,20 @@ func init() {
 	// undercity — no invented registration. Undercity closes the
 	// EK zone set.
 	RegisterLuaBoss("npc_highborne_lamenter", 21628)
+	// npc_calvin_montague (Tirisfal Glades zone script): the
+	// quest-590 "A Rogue's Deal" duel — OnQuestAccept stores the
+	// player, SetFaction(FACTION_ENEMY 168), RemoveFlag questgiver,
+	// AttackStart; DamageTaken (lethal or below 15%) zeroes damage
+	// (return false, 0), CombatStop, then the 3s/2s/5s/12s/3s chain
+	// (rude emote, Talk 0, quest credit + drink 7737, questgiver
+	// flag back, stand); EnterEvadeMode has no bridge and
+	// SetImmuneToPC has no engine model — the surrender latch +
+	// zero-damage return replicate the immunity, and the native
+	// faction is restored via GetFaction/SetFaction. Entry 6784
+	// from classic.wowhead.com/npc=6784/calvin-montague (no NPC_
+	// constant in the C++ sources) — see lua_scripts/eastern_
+	// kingdoms/npc_calvin_montague.lua.
+	RegisterLuaBoss("npc_calvin_montague", 6784)
 	// npc_torturer_lecraft (Dragonblight zone script): the
 	// JustEngagedWith schedule + UpdateAI combat rotation —
 	// hemorrhage (DoCastVictim 30478, 5-8s engage / 12-168s
