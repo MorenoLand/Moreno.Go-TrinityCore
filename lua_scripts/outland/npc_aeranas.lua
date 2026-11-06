@@ -19,8 +19,12 @@
 --   event 9 with the nefarian postDamage > 0 guard, so it never
 --   fires on the killing blow): SetFaction(FRIENDLY) + SetFlag
 --   (QUESTGIVER) + RemoveAllAuras + CombatStop(true) + Talk
---   (SAY_FREE 1) + combat pumps cancelled. Fires once per
---   engagement (freed latch, cleared on Reset).
+--   (SAY_FREE 1) + combat pumps cancelled. C++ has NO once-per-
+--   engagement latch (UpdateAI :102-111 re-checks every in-combat
+--   tick): the arm ends combat on first fire so it normally fires
+--   once, but the 8s faction-timer quirk can re-hostile Aeranas
+--   and then it re-fires — the freed[] latch this file carried
+--   (tick 292) suppressed that re-fire, so it is removed.
 -- Unmodeled (documented-only, no bridges):
 -- - EngagementOver is the inline tail of the ported 30% arm
 --   (zone_hellfire_peninsula.cpp calls it right after CombatStop):
@@ -50,7 +54,6 @@ local UNIT_NPC_FLAGS_FIELD = 82
 local UNIT_NPC_FLAG_QUESTGIVER = 2
 
 local timers = {}
-local freed = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -103,7 +106,6 @@ end
 local function aeranasReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    freed[guid] = nil
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)
     creature:SetFaction(FACTION_FRIENDLY)
     creature:Talk(SAY_SUMMON)
@@ -127,16 +129,14 @@ local function aeranasLeaveCombat(event, creature)
 end
 
 local function aeranasDied(event, creature)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
-    freed[guid] = nil
+    cancelTimers(creature:GetGUID())
 end
 
 local function aeranasDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local health = creature:GetHealth()
     local maxHealth = creature:GetMaxHealth()
-    if maxHealth == 0 or health == 0 or freed[guid] then
+    if maxHealth == 0 or health == 0 then
         return false, damage
     end
     local postHealth = health - damage
@@ -144,7 +144,6 @@ local function aeranasDamageTaken(event, creature, attacker, damage)
         return false, damage
     end
     if postHealth < math.floor(maxHealth * 30 / 100) then
-        freed[guid] = true
         cancelKeys(guid, { "shock", "winds" })
         creature:SetFaction(FACTION_FRIENDLY)
         creature:SetFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)

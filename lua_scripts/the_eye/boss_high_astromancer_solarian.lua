@@ -168,9 +168,9 @@
 -- precedent); the wrath arms now pick from the threat list
 -- (GetAITargets), including the non-player 1s re-arm;
 -- npc_solarium_priest
--- (18806) documented only, not registered; no AuraScript
--- bridge — spell_astromancer_wrath_of_the_astromancer
--- documented only (standing blocker).
+-- (18806) PORTED in npc_solarium_priest.lua (tick 292); no
+-- AuraScript bridge — spell_astromancer_wrath_of_the_
+-- astromancer documented only (standing blocker).
 
 local SPELL_ARCANE_MISSILES = 33031
 local SPELL_WRATH_OF_THE_ASTROMANCER = 42783

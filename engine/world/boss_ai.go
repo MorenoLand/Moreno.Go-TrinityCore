@@ -13014,12 +13014,18 @@ func init() {
 	// timers, the arcane-missiles arm — plus the 20% health
 	// phase-4 latch into fear / void-bolt arms; the Phase 2/3
 	// portal machine (teleports, spotlight/agent/priest
-	// summons, visibility/flag arms), the wrath AuraScript,
-	// and the npc_solarium_priest AI have no
-	// movement/summon/visibility/display/AuraScript/cross-
-	// creature bridges — see lua_scripts/the_eye/
+	// summons, visibility/flag arms) and the wrath AuraScript
+	// stay out — see lua_scripts/the_eye/
 	// boss_high_astromancer_solarian.lua.
 	RegisterLuaBoss("boss_high_astromancer_solarian", 18805)
+
+	// npc_solarium_priest (18806): great-heal 33387 (9s,
+	// urand Solarian-via-GetInstanceCreature(4)/self — the
+	// Solarian leg never fires in C++, GetGuidData(4) has no
+	// instance case), holy smite 25054 (1ms/4s) and arcane
+	// torrent 33390 (15s/13s) DoCastVictim arms — see
+	// lua_scripts/the_eye/npc_solarium_priest.lua.
+	RegisterLuaBoss("npc_solarium_priest", 18806)
 
 	// boss_gatewatcher_iron_hand (19710 — wowhead-verified;
 	// mechanar.h carries no NPC_ constant; DATA_GATEWATCHER_
