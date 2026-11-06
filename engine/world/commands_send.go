@@ -243,6 +243,32 @@ func (s *session) handleSendMoney(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Mail sent to %s.", targetName)) // LANG_MAIL_SENT 169
 }
 
+// parseSendItemToken mirrors the C++ strtok parse of one itemN[:countN]
+// token (cs_send.cpp:145-153): the id is strtok(itemStr, ":") — leading
+// colons are skipped, so ":5" is item 5 — and the count is
+// strtok(nullptr, " ") — the remainder after the first colon, so "123:"
+// yields no count token and defaults to 1, and "123:5:6" counts 5 (atoi
+// stops at the second colon). A bare ":" would make C++ atoi(nullptr),
+// so it reports not-ok instead.
+// The count stays signed: C++ stores it in a uint32 (so "-5" wraps huge
+// and trips the MaxCount cap for limited items), but Go refuses negatives
+// outright rather than minting wrapped stacks (see file header), so the
+// caller's itemCount < 1 check must still see the negative.
+func parseSendItemToken(tok string) (uint32, int64, bool) {
+	trimmed := strings.TrimLeft(tok, ":")
+	if trimmed == "" {
+		return 0, 0, false
+	}
+	idStr, countStr := trimmed, "1"
+	if i := strings.Index(trimmed, ":"); i >= 0 {
+		idStr = trimmed[:i]
+		if tail := trimmed[i+1:]; tail != "" {
+			countStr = tail
+		}
+	}
+	return uint32(cAtoi(idStr)), int64(cAtoi(countStr)), true
+}
+
 // handleSendItems mirrors HandleSendItemsCommand (cs_send.cpp:102): each
 // itemN[:countN] token is validated against item_template, split across max
 // stacks, and capped at MAX_MAIL_ITEMS (12).
@@ -266,11 +292,10 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 	var items []itemPair
 	wdb := s.server.WorldStore.DB
 	for _, tok := range rest {
-		idStr, countStr := tok, "1"
-		if i := strings.Index(tok, ":"); i >= 0 {
-			idStr, countStr = tok[:i], tok[i+1:]
+		itemID, count, ok := parseSendItemToken(tok)
+		if !ok {
+			return
 		}
-		itemID := uint32(cAtoi(idStr))
 		if itemID == 0 {
 			return
 		}
@@ -279,7 +304,7 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 			s.sendSysMessage(fmt.Sprintf("Item id %d is invalid.", itemID)) // LANG_COMMAND_ITEMIDINVALID 435
 			return
 		}
-		itemCount := int64(cAtoi(countStr))
+		itemCount := count
 		if itemCount < 1 {
 			s.sendSysMessage(fmt.Sprintf("Invalid item count %d for item %d.", itemCount, itemID)) // LANG_COMMAND_INVALID_ITEM_COUNT 52
 			return
@@ -338,7 +363,10 @@ func (s *session) handleSendMessageCmd(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .send message <name> <message>")
 		return
 	}
-	target := s.sessionForPlayerName(normalizePlayerName(args[0]))
+	// C++ resolves the target with extractPlayerTarget (cs_send.cpp:265),
+	// which accepts a |Hplayer link as well as a bare name
+	// (Chat.cpp:extractPlayerNameFromLink); the target must be online.
+	target := s.sessionForPlayerName(normalizePlayerName(extractPlayerNameFromLink(args[0])))
 	if target == nil || target.player == nil {
 		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
 		return

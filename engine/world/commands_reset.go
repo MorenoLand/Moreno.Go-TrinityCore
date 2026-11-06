@@ -43,10 +43,20 @@
 //   - reset talents (cs_reset.cpp:212-270): online targets run the existing
 //     resetTalents(ctx, free=true) + SendTalentsInfoData(false); offline
 //     targets get at_login 0x010 (AT_LOGIN_RESET_PET_TALENTS), faithful to
-//     the C++ quirk of setting only the pet-talent flag. The hunter-pet
-//     selection branch and Pet::resetTalentsForAllPetsOf have no bridge: pet
-//     talents are unmodeled (the learn port documents the same gap), and Go
-//     selection tracks players only.
+//     the C++ quirk of setting only the pet-talent flag. The online pet leg
+//     is ported via resetActivePetTalents: Pet::resetTalentsForAllPetsOf
+//     (Pet.cpp:1702) clears the pending pet-talent at-login flag, resets
+//     the online pet's talents, and the handler sends the pet frame — but
+//     only when the pet survived ResetTalents, which dismisses it on the
+//     reset path (Player.cpp:4019), so GetPet() is null there and the leg
+//     is a no-op; on the no-talents path the pet stays and its talents
+//     reset. The stabled/offline DELETE leg is dead in C++ (inverted
+//     `if (!petIds.empty()) return;`, Pet.cpp:1724-1725) and is not ported.
+//     The hunter-pet selection branch (cs_reset.cpp:224-241) is dead in
+//     C++ too: extract with empty args returns the invoker for any in-game
+//     session (Chat.cpp:344-356) and console has no selection, so extract
+//     never fails with a pet selected; only its LANG_NO_CHAR_SELECTED
+//     fallthrough message is ported.
 //   - reset achievements (cs_reset.cpp:66-79): native — DELETE FROM
 //     character_achievement and character_achievement_progress (the Go
 //     equivalent of AchievementMgr::ResetAchievements / DeleteFromDB for
@@ -259,23 +269,43 @@ func (s *session) handleResetStats(ctx context.Context, args []string) {
 }
 
 // handleResetTalents mirrors HandleResetTalentsCommand (cs_reset.cpp:212-270).
-// The hunter-pet selection branch has no bridge (Go selection tracks players
-// only, and pet talents are unmodeled); it reports LANG_NO_CHAR_SELECTED
-// like the C++ fallthrough.
 func (s *session) handleResetTalents(ctx context.Context, args []string) {
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
+		// C++ sends LANG_NO_CHAR_SELECTED after extractPlayerTarget
+		// already sent LANG_PLAYER_NOT_FOUND (cs_reset.cpp:238-240);
+		// the hunter-pet selection branch above it is dead (see file
+		// header), so only the fallthrough message is ported.
+		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
 		return
 	}
 	if target != nil && target.player != nil {
 		// Player::ResetTalents(true) + SendTalentsInfoData(false) go out
-		// unconditionally — cs_reset.cpp ignores the return; the pet
-		// talent reset (Pet::resetTalentsForAllPetsOf) has no bridge.
+		// unconditionally — cs_reset.cpp ignores the return.
 		target.resetTalents(ctx, true)
 		_ = target.sendTalentsInfo(false)
 		target.sendSysMessage("Your talents have been reset.") // LANG_RESET_TALENTS 216
 		if s.player == nil || s.playerGUID != target.playerGUID {
 			s.sendSysMessage(miscPlayerLink(name) + "'s talents have been reset.") // LANG_RESET_TALENTS_ONLINE 213
+		}
+		// Pet::resetTalentsForAllPetsOf (Pet.cpp:1702-1706) clears the
+		// pending AT_LOGIN_RESET_PET_TALENTS flag before anything else.
+		if target.player.AtLogin&uint32(atLoginResetPetTalents) != 0 {
+			target.player.AtLogin &^= uint32(atLoginResetPetTalents)
+			if chars := s.server.CharactersStore; chars != nil && chars.DB != nil {
+				_, _ = chars.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~16 WHERE guid = ?", target.playerGUID)
+			}
+		}
+		// The online-pet leg runs only when the pet survived
+		// ResetTalents: the reset path dismisses it (Player.cpp:4019),
+		// so GetPet() is null there; on the no-talents path the pet
+		// stays. resetActivePetTalents sends the pet frame on success;
+		// C++ sends SendTalentsInfoData(true) whenever a pet exists
+		// (cs_reset.cpp:254-255), so send it when the reset no-ops.
+		if target.player.PetGUID != 0 {
+			if !target.resetActivePetTalents(ctx) {
+				_ = target.sendTalentsInfo(true)
+			}
 		}
 		return
 	}
