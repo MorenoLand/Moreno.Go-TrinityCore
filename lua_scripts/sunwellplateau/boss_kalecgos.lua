@@ -147,9 +147,12 @@
 -- (lua_creature_events.go:1950), consuming no re-arm. DamageTaken/
 -- TargetDied/Died/SpellHit hooks are not UpdateAI events and stay
 -- ungated. Deliberate deviations (documented in the file): no instance-script model — boss admission via the
--- luaBossAI shim (BossAI::JustEngagedWith/JustDied/Reset and the
--- DATA_KALECGOS/DATA_KALECGOS_DRAGON/DATA_KALECGOS_HUMAN/DATA_
--- SATHROVARR bookkeeping arms skipped); no cross-creature bridge —
+-- luaBossAI shim (the DATA_KALECGOS legs ARE ported — dragon ev1
+-- IN_PROGRESS / ev23 NOT_STARTED / ev4 DONE via base dispatch and
+-- sathrovarr ev1 / ev23 / ev4, creature:SetBossState bridge live
+-- lua_creature_events.go:5917; only the DATA_KALECGOS_DRAGON/
+-- DATA_KALECGOS_HUMAN/DATA_SATHROVARR instance-GUID bookkeeping
+-- arms are skipped); no cross-creature bridge —
 -- the human summon on pull, the sathrovarr GUID cache, the sathrovarr
 -- JustDied -> kalecgos ACTION_START_OUTRO relay, the sathrovarr
 -- check-timer kalecgos banish/tap-check arms, the kalecgos check-
@@ -173,6 +176,8 @@ local ENTRY_KALECGOS = 24850
 local ENTRY_KALECGOS_HUMAN = 24891
 local ENTRY_SATHROVARR = 24892
 local GO_SPECTRAL_RIFT = 187055
+
+local DATA_KALECGOS = 0 -- sunwell_plateau.h:30
 
 local SAY_EVIL_AGGRO = 0
 local SAY_EVIL_SLAY = 1
@@ -365,6 +370,11 @@ local function kalecgosEnterCombat(event, creature, target)
     creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE (boss_kalecgos.cpp:213; C++ sends before Talk, base-first convention here)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
+    -- C++ JustEngagedWith (boss_kalecgos.cpp:211-222) calls
+    -- BossAI::JustEngagedWith after SendEncounterUnit + Talk;
+    -- _JustEngagedWith writes SetBossState(DATA_KALECGOS 0,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(DATA_KALECGOS, 1)
     schedule(guid, "arcanebuffet", 8000, function()
         kalecgosArcaneBuffet(creature, guid)
     end)
@@ -414,10 +424,23 @@ local function kalecgosLeaveCombat(event, creature)
 end
 
 local function kalecgosDied(event, creature, killer)
+    -- No JustDied override on the dragon in C++ — base
+    -- BossAI::JustDied runs by virtual dispatch
+    -- (ScriptedCreature.h:330); _JustDied() writes
+    -- SetBossState(DATA_KALECGOS 0, DONE). The dragon dies only
+    -- via the outro KillSelf (MovementInform POINT_OUTRO_2).
+    creature:SetBossState(DATA_KALECGOS, 3)
     kalecgosResetState(creature:GetGUID())
 end
 
 local function kalecgosReset(event, creature)
+    -- C++ Reset (boss_kalecgos.cpp:150-158) calls _Reset(), which
+    -- writes SetBossState(DATA_KALECGOS 0, NOT_STARTED), alive-gated
+    -- and skipped when already DONE (ScriptedCreature.cpp:499-511);
+    -- Go fires ev23 on the death path too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(DATA_KALECGOS) ~= 3 then
+        creature:SetBossState(DATA_KALECGOS, 0)
+    end
     kalecgosResetState(creature:GetGUID())
 end
 
@@ -684,6 +707,11 @@ local function sathrovarrEnterCombat(event, creature, target)
     sathrovarrState[guid] = { enraged = false, banished = false }
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
+    -- C++ JustEngagedWith (boss_kalecgos.cpp:465-469) calls
+    -- BossAI::JustEngagedWith first, then Talk(SAY_SATH_AGGRO);
+    -- _JustEngagedWith writes SetBossState(DATA_KALECGOS 0,
+    -- IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(DATA_KALECGOS, 1)
     creature:Talk(SAY_SATH_AGGRO)
     schedule(guid, "shadowbolt", math.random(7000, 10000), function()
         sathrovarrShadowbolt(creature, guid)
@@ -729,10 +757,13 @@ local function stripSpectralRealmAuras(creature)
 end
 
 local function sathrovarrDied(event, creature, killer)
+    -- C++ JustDied (boss_kalecgos.cpp:507-516): _JustDied() first —
+    -- SetBossState(DATA_KALECGOS 0, DONE) — then Talk, the aura
+    -- strip and the outro relay (C++ arm order).
+    creature:SetBossState(DATA_KALECGOS, 3)
     creature:Talk(SAY_SATH_DEATH)
-    -- C++ JustDied (boss_kalecgos.cpp:508-516): _JustDied() is the
-    -- sathrovarrResetState below; Talk(SAY_SATH_DEATH) above;
-    -- DoRemoveAurasDueToSpellOnPlayers(SPELL_SPECTRAL_REALM_AURA 46021,
+    -- C++ JustDied (boss_kalecgos.cpp:507-516): Talk(SAY_SATH_DEATH)
+    -- above; DoRemoveAurasDueToSpellOnPlayers(SPELL_SPECTRAL_REALM_AURA 46021,
     -- true, true) — the player leg is PORTED via stripSpectralRealmAuras
     -- (C++ arm order; the kalecgos ACTION_START_OUTRO relay ports
     -- below via grid sweep + 1s outro-start).
@@ -760,6 +791,13 @@ local function sathrovarrLeaveCombat(event, creature)
 end
 
 local function sathrovarrReset(event, creature)
+    -- C++ Reset (boss_kalecgos.cpp:454-463) calls _Reset(), which
+    -- writes SetBossState(DATA_KALECGOS 0, NOT_STARTED), alive-gated
+    -- and skipped when already DONE (ScriptedCreature.cpp:499-511);
+    -- Go fires ev23 on the death path too, hence the gate.
+    if creature:IsAlive() and creature:GetBossState(DATA_KALECGOS) ~= 3 then
+        creature:SetBossState(DATA_KALECGOS, 0)
+    end
     sathrovarrResetState(creature:GetGUID())
 end
 

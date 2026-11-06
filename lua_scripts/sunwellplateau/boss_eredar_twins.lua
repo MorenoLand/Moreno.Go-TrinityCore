@@ -67,8 +67,10 @@
 -- RemoveFlag(79, LOOTABLE) on the sister-alive death (dynamic-flag
 -- bridge live, twin_valkyr precedent). OnReset(23):
 -- per-GUID reset (Enraged=false, SisterDeath=false) + cancel
--- timers; the instance sister respawn/threat relay and SetBossState
--- (NOT_STARTED) arms are blocked on the instance-script model.
+-- timers; the instance sister respawn/threat relay stays out (no
+-- instance-creature bridge); SetBossState(DATA_EREDAR_TWINS 3,
+-- NOT_STARTED) ports via creature:SetBossState (bridge live
+-- lua_creature_events.go:5917).
 -- OnLeaveCombat(2): cancel timers, drop per-GUID state. The
 -- UpdateAI cast-state gates (boss_eredar_twins.cpp, per-arm
 -- IsNonMeleeSpellCast(false) checks in the ScriptedAI UpdateAI
@@ -116,8 +118,10 @@
 -- (YELL_ALY_DEAD 6) is ported via the twinDead latch; the loot-
 -- flag arm ports as RemoveFlag(79, LOOTABLE) on the sister-alive
 -- death (dynamic-flag bridge live). OnReset(23): per-GUID reset + cancel
--- timers; the instance sister respawn/threat relay and SetBossState
--- arms blocked on the instance-script model. OnLeaveCombat(2):
+-- timers; the instance sister respawn/threat relay stays out (no
+-- instance-creature bridge); SetBossState(DATA_EREDAR_TWINS 3,
+-- NOT_STARTED) ports via creature:SetBossState (bridge live
+-- lua_creature_events.go:5917). OnLeaveCombat(2):
 -- cancel timers, drop per-GUID state. The SpellHitTarget arm (45235
 -- -> blaze-summon 45236 self-cast on the hit target; 45342/46771 ->
 -- flame touched 45348; 45329 -> dark touched 45347) — the
@@ -151,13 +155,15 @@
 -- out (AddThreat is self-threat only). DB-spawned images keep their
 -- own enter handler (felmyst-trail convention).
 -- Deliberate deviations (all await engine bridges): no instance-
--- script model — boss admission via the luaBossAI shim (BossAI::
--- JustEngagedWith/JustDied/Reset and the DATA_EREDAR_TWINS book-
--- keeping, sister AttackStart/respawn/threat relays skipped); the
--- sister-death detection + empower + sister-phase spell arms are
--- PORTED 2026-11-05 (GetInstanceCreature bridge + 1s poll, below);
--- the SetBossState (DONE) gates plus the alythess intro cross-Talk
--- stay unmodeled; all touched-spell chaining
+-- script model — boss admission via the luaBossAI shim (the twins
+-- are ScriptedAI with direct instance->SetBossState writes, no
+-- BossAI base involved; the DATA_EREDAR_TWINS legs ARE ported —
+-- ev1 IN_PROGRESS / ev23 NOT_STARTED on both twins, ev4 DONE on
+-- the second twin's death via the twinDead latch; the sister
+-- AttackStart/respawn/threat relays stay out); the sister-death
+-- detection + empower + sister-phase spell arms are PORTED
+-- 2026-11-05 (GetInstanceCreature bridge + 1s poll, below); the
+-- alythess intro cross-Talk stays unmodeled; all touched-spell chaining
 -- and the alythess blaze-summon (GO 187366) arms unmodeled; no
 -- summon bridge — the shadow-image spawns unmodeled; no flag/move/
 -- threat bridge — the AddThreat and intro-sighting arms stay
@@ -200,6 +206,7 @@ local YELL_SISTER_SACROLASH_DEAD = 7
 -- MADRIGOSA 9, ALYTHESS 10, SACROLASH 11).
 local DATA_ALYTHESS = 10
 local DATA_SACROLASH = 11
+local DATA_EREDAR_TWINS = 3 -- sunwell_plateau.h:34
 
 local timers = {}
 local sacrolashState = {}
@@ -455,7 +462,9 @@ local function sacrolashEnterCombat(event, creature, target)
     -- is fight-unique, so the scan is the instance lookup) engages
     -- the engager when alive and victimless. The back-relay fires
     -- Alythess's own enter handler, whose !GetVictim gate blocks the
-    -- return leg, so no loop. SetBossState stays out (no bridge).
+    -- return leg, so no loop. SetBossState(DATA_EREDAR_TWINS 3,
+    -- IN_PROGRESS) ports below (boss_eredar_twins.cpp:142;
+    -- creature:SetBossState bridge live lua_creature_events.go:5917).
     local victim = target or creature:GetVictim()
     if victim ~= nil then
         local sister = creature:FindNearestCreature(25166, 100)
@@ -463,6 +472,7 @@ local function sacrolashEnterCombat(event, creature, target)
             sister:EngageWithTarget(victim)
         end
     end
+    creature:SetBossState(DATA_EREDAR_TWINS, 1)
     creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:211: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
     sacrolashState[guid] = { enraged = false, sisterDeath = false }
@@ -493,16 +503,17 @@ local function sacrolashTargetDied(event, creature)
     end
 end
 
--- C++ JustDied (:150-163): if (SisterDeath) Talk(YELL_SAC_DEAD 4) —
+-- C++ JustDied (:151-163): if (SisterDeath) Talk(YELL_SAC_DEAD 4) +
+-- SetBossState(DATA_EREDAR_TWINS 3, DONE) (:156-158, Talk first) —
 -- the latch is twinDead.alythess (sister died first); the
--- SetBossState(DONE) arm has no instance bridge; the lootable-flag
--- arm ports as the else-branch RemoveFlag(79) (C++-verbatim:
--- sister-alive death clears LOOTABLE on me — Go's lethal path
--- auto-set it, twin_valkyr precedent).
+-- lootable-flag arm ports as the else-branch RemoveFlag(79)
+-- (C++-verbatim: sister-alive death clears LOOTABLE on me — Go's
+-- lethal path auto-set it, twin_valkyr precedent).
 local function sacrolashDied(event, creature)
     twinDead.sacrolash = true
     if twinDead.alythess then
         creature:Talk(YELL_SAC_DEAD)
+        creature:SetBossState(DATA_EREDAR_TWINS, 3)
     else
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
     end
@@ -521,6 +532,11 @@ local function sacrolashReset(event, creature)
     if not creature:IsDead() then
         twinDead.sacrolash = false
         twinDead.alythess = false
+        -- C++ Reset (boss_eredar_twins.cpp:114-132): direct
+        -- instance->SetBossState(DATA_EREDAR_TWINS 3, NOT_STARTED)
+        -- (:131), no gate in C++; Go fires ev23 on the death path
+        -- too, hence the alive gate (C++ Reset never runs on death).
+        creature:SetBossState(DATA_EREDAR_TWINS, 0)
     end
 end
 
@@ -685,7 +701,9 @@ local function alythessEnterCombat(event, creature, target)
     -- GuidData in C++, the FindNearestCreature idiom here — the entry
     -- is fight-unique) engages the engager when alive and
     -- victimless; the back-relay is gated by Sacrolash's own
-    -- !GetVictim check. SetBossState stays out (no bridge).
+    -- !GetVictim check. SetBossState(DATA_EREDAR_TWINS 3,
+    -- IN_PROGRESS) ports below (boss_eredar_twins.cpp:398;
+    -- creature:SetBossState bridge live lua_creature_events.go:5917).
     local victim = target or creature:GetVictim()
     if victim ~= nil then
         local sister = creature:FindNearestCreature(25165, 100)
@@ -693,6 +711,7 @@ local function alythessEnterCombat(event, creature, target)
             sister:EngageWithTarget(victim)
         end
     end
+    creature:SetBossState(DATA_EREDAR_TWINS, 1)
     creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:535: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_eredar_twins.cpp:335 (ranged AI stands and casts)
     local guid = creature:GetGUID()
@@ -724,15 +743,16 @@ local function alythessTargetDied(event, creature)
     end
 end
 
--- C++ JustDied (:431-441): if (SisterDeath) Talk(YELL_ALY_DEAD 6) —
+-- C++ JustDied (:433-441): if (SisterDeath) Talk(YELL_ALY_DEAD 6) +
+-- SetBossState(DATA_EREDAR_TWINS 3, DONE) (:436-438, Talk first) —
 -- the latch is twinDead.sacrolash (sister died first); the
--- SetBossState(DONE) arm has no instance bridge; the lootable-flag
--- arm ports as the else-branch RemoveFlag(79) (C++-verbatim, see
--- sacrolashDied above).
+-- lootable-flag arm ports as the else-branch RemoveFlag(79)
+-- (C++-verbatim, see sacrolashDied above).
 local function alythessDied(event, creature)
     twinDead.alythess = true
     if twinDead.sacrolash then
         creature:Talk(YELL_ALY_DEAD)
+        creature:SetBossState(DATA_EREDAR_TWINS, 3)
     else
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
     end
@@ -751,6 +771,11 @@ local function alythessReset(event, creature)
     if not creature:IsDead() then
         twinDead.sacrolash = false
         twinDead.alythess = false
+        -- C++ Reset (boss_eredar_twins.cpp:370-388): direct
+        -- instance->SetBossState(DATA_EREDAR_TWINS 3, NOT_STARTED)
+        -- (:387), no gate in C++; Go fires ev23 on the death path
+        -- too, hence the alive gate (C++ Reset never runs on death).
+        creature:SetBossState(DATA_EREDAR_TWINS, 0)
     end
 end
 

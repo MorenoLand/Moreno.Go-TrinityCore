@@ -48,12 +48,16 @@
 -- GetCreaturesInGrid 150yd + Despawn, anubarak precedent; shield orbs
 -- are boss-latched too — boss_kiljaeden.cpp:786-794 TIMER_SUMMON_
 -- SHILEDORB summons NPC_SHIELD_ORB via me, and JustSummoned latches
--- every summon unconditionally (:625-630)); the SetBossState(DONE)
--- arm is blocked on the instance-script model.
+-- every summon unconditionally (:625-630)); the SetBossState
+-- (DATA_KILJAEDEN 5, DONE) arm ports in kjDied too
+-- (boss_kiljaeden.cpp:632-638, Talk -> DespawnAll -> SetBossState;
+-- creature:SetBossState bridge live lua_creature_events.go:5917).
 -- OnReset(23)/OnLeaveCombat(2): timer/state cleanup (the evade-
 -- side controller Reset relay and the RemoveDynObject ring arm
--- have no cross-creature/GO bridges; the SetBossState arms are
--- instance-blocked). The SetCombatMovement(false) constructor arm
+-- have no cross-creature/GO bridges; KJ's own Reset (:587-598) and
+-- JustEngagedWith (:655-658, DoZoneInCombat only) write NO boss
+-- state in C++ — the DATA_KILJAEDEN NOT_STARTED/IN_PROGRESS legs
+-- live in the deceiver AI, boss_kiljaeden.cpp:946-950/:958-965). The SetCombatMovement(false) constructor arm
 -- has no movement bridge — KJ never moves in this model (C++-
 -- exact, since it never schedules movement).
 -- Scheduler pump (C++ UpdateAI 1:1): every 100ms, if waiting,
@@ -119,16 +123,22 @@
 -- PHASE4, ~28.5s SAY_KJ_PHASE5) — the interleaved kalecgos/
 -- anveena rows are cross-creature blocked.
 -- Hand of the Deceiver (25588). OnReset(23): re-arm the 1s upkeep
--- tick (C++-exact Initialize values for the combat timers).
+-- tick (C++-exact Initialize values for the combat timers) +
+-- SetBossState(DATA_KILJAEDEN 5, NOT_STARTED)
+-- (boss_kiljaeden.cpp:946-950, direct write, alive-gated in Lua —
+-- Go fires ev23 on the death path too).
 -- Upkeep tick: out of combat -> non-triggered self-cast shadow
 -- channeling 46757 (C++-exact); in combat and <20% without the
 -- 45772 aura -> triggered self-cast shadow infusion 45772 (C++-
--- exact). OnEnterCombat(1): arm shadow bolt volley {8s,14s} then
+-- exact). OnEnterCombat(1): SetBossState(DATA_KILJAEDEN 5,
+-- IN_PROGRESS) (boss_kiljaeden.cpp:958-965, first arm — the
+-- deceivers' engage is what writes KJ IN_PROGRESS in C++) + arm
+-- shadow bolt volley {8s,14s} then
 -- 12s, non-triggered DoCastVictim(45770). The felfire-portal arm
 -- (NPC_FELFIRE_PORTAL summon + cross-creature threat relay) IS PORTED
 -- in deceiverFelfire below (tick 236). OnDied(4): timer cleanup (the controller
 -- deceiverDeathCount++ relay is cross-creature blocked; the
--- SetBossState arms are instance-blocked). OnLeaveCombat(2):
+-- deceiver's JustDied writes no state in C++). OnLeaveCombat(2):
 -- cancel the volley schedule (the JustEngagedWith
 -- InterruptNonMeleeSpells(true) leg is ported in deceiverEnterCombat;
 -- the controller threat-relay arm is cross-creature-blocked).
@@ -170,9 +180,12 @@
 -- timer/state cleanup.
 --
 -- Deliberate deviations (standing gaps): no instance-script model
--- — boss admission via the luaBossAI shim (the SetBossState(
--- DATA_KILJAEDEN, NOT_STARTED/IN_PROGRESS/DONE) arms, the
--- deceiver/controller SetBossState arms and the DATA_MURU offcombat
+-- — boss admission via the luaBossAI shim (the DATA_KILJAEDEN legs
+-- ARE ported — boss ev4 DONE (:632-638) + deceiver ev23
+-- NOT_STARTED (:946-950) / ev1 IN_PROGRESS (:958-965), creature:
+-- SetBossState bridge live lua_creature_events.go:5917; KJ's own
+-- Reset/JustEngagedWith write no state in C++ — the controller
+-- SetBossState arms (none exist in C++) and the DATA_MURU offcombat
 -- gate are skipped — the JustEngagedWith DoZoneInCombat arm is ported
 -- below, bridge live 2026-10-23); no cross-creature bridge — the kalecgos/anveena
 -- speech rows, the controller<->deceiver death-count/threat/
@@ -226,6 +239,8 @@ local ENTRY_FELFIRE_PORTAL = 25603 -- NPC_FELFIRE_PORTAL (sunwell_plateau.h:86)
 local ENTRY_ARMAGEDDON_TARGET = 25735
 local ENTRY_SINISTER_REFLECTION = 25708
 local ENTRY_SHIELD_ORB = 25502
+
+local DATA_KILJAEDEN = 5 -- sunwell_plateau.h:36
 
 -- Yells (boss_kiljaeden.cpp Yells enum, KJ block)
 local SAY_KJ_DEATH = 0
@@ -662,7 +677,10 @@ end
 
 local function kjDied(event, creature, killer)
     creature:Talk(SAY_KJ_DEATH)
-    -- C++ JustDied (boss_kiljaeden.cpp:633-638): summons.DespawnAll().
+    -- C++ JustDied (boss_kiljaeden.cpp:632-638): Talk, then
+    -- summons.DespawnAll(), then SetBossState(DATA_KILJAEDEN 5,
+    -- DONE) — C++ arm order; the state write ports via
+    -- creature:SetBossState (bridge live lua_creature_events.go:5917).
     -- The boss's own summon list latches everything IT summons: the
     -- sinister reflections (:681, TEMPSUMMON_CORPSE_DESPAWN), the
     -- armageddon targets (:861, TEMPSUMMON_TIMED_DESPAWN) AND the
@@ -685,6 +703,7 @@ local function kjDied(event, creature, killer)
     for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_SHIELD_ORB, 150)) do
         add:Despawn()
     end
+    creature:SetBossState(DATA_KILJAEDEN, 3)
     kjCleanup(event, creature)
 end
 
@@ -742,6 +761,14 @@ local function deceiverReset(event, creature)
     schedule(guid, "upkeep", 1000, function()
         deceiverUpkeep(creature, guid)
     end)
+    -- C++ Reset (boss_kiljaeden.cpp:946-950): Initialize() (the
+    -- combat-timer values, re-armed by the upkeep/volley/felfire
+    -- schedules) then instance->SetBossState(DATA_KILJAEDEN 5,
+    -- NOT_STARTED), no gate in C++; Go fires ev23 on the death path
+    -- too, hence the alive gate (C++ Reset never runs on death).
+    if creature:IsAlive() then
+        creature:SetBossState(DATA_KILJAEDEN, 0)
+    end
 end
 
 -- C++ Felfire Portal arm (boss_kiljaeden.cpp:997-1000): spawn the portal
@@ -762,9 +789,14 @@ end
 
 local function deceiverEnterCombat(event, creature)
     local guid = creature:GetGUID()
-    -- C++ JustEngagedWith (boss_kiljaeden.cpp:964): instance
-    -- SetBossState + AddThreat to the controller stay blocked, but the
-    -- InterruptNonMeleeSpells(true) leg is ported (no-op twin).
+    -- C++ JustEngagedWith (boss_kiljaeden.cpp:958-965):
+    -- SetBossState(DATA_KILJAEDEN 5, IN_PROGRESS) first, then the
+    -- AddThreat(who, 1.0, controller) relay (stays out: cross-
+    -- creature threat, no bearer) and InterruptNonMeleeSpells(true)
+    -- (ported below). The deceivers' engage is what writes KJ
+    -- IN_PROGRESS in C++ — KJ's own JustEngagedWith (:655-658)
+    -- only calls DoZoneInCombat and writes no state.
+    creature:SetBossState(DATA_KILJAEDEN, 1)
     creature:InterruptNonMeleeSpells(true)
     schedule(guid, "volley", math.random(8000, 14000), function()
         deceiverVolley(creature, guid)

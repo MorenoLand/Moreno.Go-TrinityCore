@@ -49,18 +49,20 @@
 -- failed summon would leave muru unselectable at 1 HP with no
 -- entropius — a soft-lock (one-sided-port class). The post-summon
 -- JustSummoned arm itself is ported (muruJustSummoned, ev19). OnDied(4):
--- timer/state cleanup only (the _JustDied arm is blocked on the
--- instance-script model). OnReset(23)/OnLeaveCombat(2): timer/
--- state cleanup (the RemoveFlag(NOT_SELECTABLE) arm is vacuous —
--- the set side stays out, above; the _Reset instance bookkeeping and
--- the EnterEvadeMode
--- entropius relay are blocked on the instance-script/cross-creature
--- bridges). The
+-- timer/state cleanup only — Muru has NO JustDied override in C++
+-- (lethal damage is clamped to health-1 in DamageTaken, so Muru
+-- never dies; the DONE leg lives on Entropius's JustDied, below).
+-- OnReset(23)/OnLeaveCombat(2): timer/state cleanup + the _Reset
+-- NOT_STARTED leg (ports via creature:SetBossState, bridge live
+-- lua_creature_events.go:5917; the RemoveFlag(NOT_SELECTABLE) arm
+-- is vacuous — the set side stays out, above; the EnterEvadeMode
+-- entropius relay stays out on cross-creature grounds). The
 -- SetCombatMovement(false) constructor arm PORTED in muruEnterCombat
 -- (boss_muru.cpp:237; the stale "no movement bridge" claim is
 -- retracted — Muru never moves in this model, C++-exact). Entropius (25840). OnReset(23):
--- triggered self-cast entropius cosmetic spawn 46223 (C++-exact;
--- the _Reset instance bookkeeping is blocked). OnEnterCombat(1):
+-- triggered self-cast entropius cosmetic spawn 46223 (C++-exact)
+-- + the _Reset NOT_STARTED leg (ports via creature:SetBossState,
+-- bridge live lua_creature_events.go:5917). OnEnterCombat(1):
 -- 2s one-shot: DoResetPortals (100yd grid scan of entry 25770 ->
 -- RemoveAllAuras, C++-exact arm order — stale "no creature-
 -- enumeration bridge" retracted, GetCreaturesInGrid is bridged) +
@@ -70,10 +72,11 @@
 -- blackhole 46282 (the dark-fiend summon arm of 46269 lives in
 -- the unmodeled spell_muru_darkness SpellScript — below).
 -- UpdateAI melee is engine-driven (C++ DoMeleeAttackIfReady).
--- OnDied(4): timer cleanup only (the _JustDied + muru->
--- DisappearAndDie arms are blocked on the instance-script/
--- cross-creature/kill bridges). OnReset(23): timer cleanup + cosmetic
--- spawn (below). OnLeaveCombat(2): the EnterEvadeMode arm, PORTED
+-- OnDied(4): SetBossState(DATA_MURU 4, DONE) via creature:SetBossState
+-- (boss_muru.cpp:193-197, _JustDied() first, then the muru->
+-- DisappearAndDie relay, which stays out — instance GetCreature
+-- relay) + timer cleanup. OnReset(23): timer cleanup + cosmetic
+-- spawn + the _Reset NOT_STARTED leg (below). OnLeaveCombat(2): the EnterEvadeMode arm, PORTED
 -- (below) — muru relay stays out (instance GetCreature), the rest
 -- rides bridged calls.
 -- The entropius JustSummoned arms (NPC_DARK_FIENDS -> visual
@@ -138,9 +141,12 @@
 -- arm (Reset scheduler, cpp:528-531) is ported in blackholeReset
 -- via creature:Despawn — stale "no despawn bridge" retracted.
 -- Deliberate deviations (all await engine bridges): no instance-
--- script model — boss admission via the luaBossAI shim (BossAI::
--- JustEngagedWith/JustDied/Reset and the DATA_MURU bookkeeping
--- arms skipped); no cross-creature bridge — the muru/enrage,
+-- script model — boss admission via the luaBossAI shim (the
+-- DATA_MURU legs ARE ported — Muru ev1 IN_PROGRESS / ev23
+-- NOT_STARTED, Entropius ev1 / ev23 / ev4 DONE, creature:SetBossState
+-- bridge live lua_creature_events.go:5917; Muru itself has no
+-- JustDied override — no DONE leg exists for the Muru form);
+-- no cross-creature bridge — the muru/enrage,
 -- entropius-evade and entropius-death relays to DATA_MURU and
 -- the dark-fiend summoner-GUID target pick are unmodeled; no
 -- summon bridge — the blood-elf/void-spawn/void-sentinel/
@@ -217,6 +223,8 @@ local ENTRY_PORTAL = 25770
 local ENTRY_DARK_FIEND = 25744
 local ENTRY_VOID_SENTINEL = 25772
 local ENTRY_BLACKHOLE = 25879
+
+local DATA_MURU = 4 -- sunwell_plateau.h:35
 
 local timers = {}
 local muruState = {}
@@ -297,6 +305,10 @@ local function muruEnterCombat(event, creature)
     muruState[guid] = { phase = 1, hasEnraged = false }
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
+    -- C++ JustEngagedWith (boss_muru.cpp:279-284) calls
+    -- BossAI::JustEngagedWith first; _JustEngagedWith writes
+    -- SetBossState(DATA_MURU 4, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(DATA_MURU, 1)
     creature:CastSpell(creature, SPELL_OPEN_PORTAL_PERIODIC, true)
     creature:CastSpell(creature, SPELL_DARKNESS_PERIODIC, true)
     creature:CastSpell(creature, SPELL_NEGATIVE_ENERGY_PERIODIC, true)
@@ -362,13 +374,18 @@ local function muruDied(event, creature, killer)
 end
 
 local function muruReset(event, creature)
+    -- C++ boss_muruAI::Reset (boss_muru.cpp:247-253): _Reset() first —
+    -- SetBossState(DATA_MURU 4, NOT_STARTED), alive-gated and skipped
+    -- when already DONE (ScriptedCreature.cpp:499-511); Go fires ev23
+    -- on the death path too, hence the gate — then Initialize()
+    -- (timer re-init, covered by muruResetState) -> RemoveFlag(UNIT_
+    -- FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) (deliberately unported —
+    -- the set side stays out, see header) -> me->SetVisible(true)
+    -- (creature:SetVisible bridge, Unit::SetVisible, Unit.cpp:8656).
+    if creature:IsAlive() and creature:GetBossState(DATA_MURU) ~= 3 then
+        creature:SetBossState(DATA_MURU, 0)
+    end
     muruResetState(creature:GetGUID())
-    -- C++ boss_muruAI::Reset (boss_muru.cpp:247-253): _Reset() +
-    -- Initialize() (instance bookkeeping + timer re-init, covered by
-    -- muruResetState) -> RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_
-    -- SELECTABLE) (deliberately unported — the set side stays out, see
-    -- header) -> me->SetVisible(true) (creature:SetVisible bridge,
-    -- Unit::SetVisible, Unit.cpp:8656).
     creature:SetVisible(true)
 end
 
@@ -429,6 +446,11 @@ end
 local function entropiusEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
+    -- No JustEngagedWith override on Entropius in C++ — base
+    -- BossAI::JustEngagedWith runs by virtual dispatch
+    -- (ScriptedCreature.h:330); _JustEngagedWith writes
+    -- SetBossState(DATA_MURU 4, IN_PROGRESS) (ScriptedCreature.cpp:537).
+    creature:SetBossState(DATA_MURU, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "negativeenergy", 2000, function()
@@ -440,6 +462,11 @@ local function entropiusEnterCombat(event, creature)
 end
 
 local function entropiusCleanup(event, creature)
+    -- C++ boss_entropiusAI::JustDied (boss_muru.cpp:193-197):
+    -- _JustDied() first — SetBossState(DATA_MURU 4, DONE) — then the
+    -- muru->DisappearAndDie() relay (stays out: instance GetCreature
+    -- relay; Muru has no ev5 SetGuidData latch in this file).
+    creature:SetBossState(DATA_MURU, 3)
     cancelTimers(creature:GetGUID())
 end
 
@@ -468,11 +495,18 @@ local function entropiusLeaveCombat(event, creature)
     creature:Despawn()
 end
 
--- C++ Reset (boss_muru.cpp:144-148): triggered self-cast 46223 — spawn/evade-only,
--- never runs on death; the cast does not belong on the corpse.
+-- C++ Reset (boss_muru.cpp:144-148): _Reset() first — SetBossState
+-- (DATA_MURU 4, NOT_STARTED), alive-gated and skipped when already
+-- DONE (ScriptedCreature.cpp:499-511); Go fires ev23 on the death
+-- path too, hence the gate — then the triggered self-cast 46223,
+-- spawn/evade-only, never runs on death; the cast does not belong
+-- on the corpse.
 local function entropiusReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    if creature:IsAlive() and creature:GetBossState(DATA_MURU) ~= 3 then
+        creature:SetBossState(DATA_MURU, 0)
+    end
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_ENTROPIUS_COSMETIC_SPAWN, true)
     end

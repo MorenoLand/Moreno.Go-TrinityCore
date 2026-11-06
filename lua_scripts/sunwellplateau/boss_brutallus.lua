@@ -44,9 +44,16 @@
 -- Talk(YELL_INTRO*) / Madrigosa Talk(YELL_MADR_*) relays, frost
 -- blast 45203 / frostbolt 44843 / encapsulate 45665 / channelling
 -- 45661 cross-creature casts, Unit::Kill(Madrigosa), SetFullHealth
--- and the SetBossState(SPECIAL)/MoveInLineOfSight intro start all
--- have no instance-creature, cross-creature, flag or movement
--- bridges (blocked); the AttackStart Intro/IsIntro gate has no
+-- and the SetBossState(SPECIAL) MoveInLineOfSight intro-start
+-- arm (boss_brutallus.cpp:264-269: while Intro is true, every
+-- valid-attack-target sighting writes SPECIAL) stays out: Go's
+-- ev27 fires only from the per-tick aggro scan's engage branch
+-- (lua_creature_events.go:6562-6594, creaturemotion.go:9164) —
+-- insufficient for a pre-engage sighting write — and the write has
+-- no consumer in-tree (instance_sunwell_plateau.cpp has no
+-- SetBossState override and no door gated on DATA_BRUTALLUS), so
+-- it is a dead write in C++ itself; the Intro flag/machine is
+-- unported in any case. The AttackStart Intro/IsIntro gate has no
 -- bridge — the fight starts on pull (ragnaros-intro convention).
 -- The burn arm deviates once: the target-self-cast is modeled as
 -- target:AddAura(46394) (player:CastSpell bridged 2026-10-24;
@@ -154,7 +161,7 @@ local function brutallusBerserk(creature, guid)
 end
 
 -- C++ JustEngagedWith: Talk(YELL_AGGRO) + SetBossState(DATA_BRUTALLUS=1,
--- IN_PROGRESS) (boss_brutallus.cpp:120-126) + the four initial arms.
+-- IN_PROGRESS) (boss_brutallus.cpp:118-123) + the four initial arms.
 local function brutallusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -180,7 +187,7 @@ local function brutallusTargetDied(event, creature, victim)
     creature:Talk(YELL_KILL)
 end
 
--- C++ JustDied (boss_brutallus.cpp:130-139): Talk(YELL_DEATH) +
+-- C++ JustDied (boss_brutallus.cpp:130-138): Talk(YELL_DEATH) +
 -- SetBossState(DATA_BRUTALLUS=1, DONE); then SummonCreature(NPC_FELMYST
 -- 25038, death pos +30z, GetOrientation(), TEMPSUMMON_MANUAL_DESPAWN
 -- Eluna type 7) — the stale "no summon bridge" claim is retracted
@@ -206,7 +213,7 @@ end
 
 -- C++ Reset: Initialize (Enraged=false) + triggered self-cast
 -- dual wield 42459 (C++-exact) + SetBossState(DATA_BRUTALLUS=1,
--- NOT_STARTED) (boss_brutallus.cpp:110-116).
+-- NOT_STARTED) (boss_brutallus.cpp:109-116).
 local function brutallusReset(event, creature)
     local guid = creature:GetGUID()
     brutallusResetState(guid)
