@@ -5765,6 +5765,94 @@ func (s *session) storeOrStackItem(ctx context.Context, playerGUID uint64, itemE
 	return result, err
 }
 
+// partialStackFill is one existing partial pile of an entry plus the amount
+// a store would merge into it.
+type partialStackFill struct {
+	bagKey    int64
+	clientBag uint8
+	slot      uint8
+	itemGUID  uint64
+	curCount  uint32
+	space     uint32
+}
+
+// findAllPartialStacks mirrors the merge leg of Player::CanStoreNewItem
+// (Player.cpp:12070+): every partial pile of the entry in the backpack and
+// the equipped bags, in slot order — CanStoreNewItem fills all of them,
+// not just the first.
+func (s *session) findAllPartialStacks(ctx context.Context, playerGUID uint64, itemEntry, maxStack uint32) []partialStackFill {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || maxStack <= 1 {
+		return nil
+	}
+	cdb := s.server.CharactersStore.DB
+	var out []partialStackFill
+	collect := func(bagKey int64, clientBag uint8) {
+		rows, err := cdb.QueryContext(ctx, `SELECT ci.slot, ci.item, ii.count
+			FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ci.bag = ? AND ii.itemEntry = ? AND ii.count < ?
+			ORDER BY ci.slot ASC`, playerGUID, bagKey, itemEntry, maxStack)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var slot, guid, cur int64
+			if err := rows.Scan(&slot, &guid, &cur); err != nil || guid <= 0 || cur < 0 || uint32(cur) >= maxStack {
+				continue
+			}
+			out = append(out, partialStackFill{bagKey: bagKey, clientBag: clientBag, slot: uint8(slot), itemGUID: uint64(guid), curCount: uint32(cur), space: maxStack - uint32(cur)})
+		}
+	}
+	collect(0, 255)
+	for _, b := range s.getEquippedBags(ctx, playerGUID) {
+		collect(b.guid, b.slot)
+	}
+	return out
+}
+
+// addItemFittingCount mirrors the CanStoreNewItem probe behind
+// HandleAddItemCommand (cs_misc.cpp:1255-1262): how many of count the
+// target can still store — all partial-pile space plus one maxStack pile
+// per free slot — capped by the template MaxCount unique cap, the
+// CanTakeMoreSimilarItems gate canStoreNewItem applies first.
+func (s *session) addItemFittingCount(ctx context.Context, playerGUID uint64, itemEntry, count uint32) uint32 {
+	if s.server == nil || count == 0 {
+		return 0
+	}
+	info, ok := s.server.getItemStoreTemplateInfo(ctx, itemEntry)
+	if !ok {
+		return 0
+	}
+	maxStack := info.Stackable
+	if maxStack < 1 {
+		maxStack = 1
+	}
+	if info.MaxCount > 0 && info.MaxCount != 2147483647 {
+		if owned := s.ownedItemCount(ctx, playerGUID, itemEntry); owned >= uint32(info.MaxCount) {
+			return 0
+		} else if owned+count > uint32(info.MaxCount) {
+			count = uint32(info.MaxCount) - owned
+		}
+	}
+	var fitting uint32
+	for _, fill := range s.findAllPartialStacks(ctx, playerGUID, itemEntry, uint32(maxStack)) {
+		fitting += fill.space
+		if fitting >= count {
+			return count
+		}
+	}
+	remaining := count - fitting
+	if free := s.freeInventorySpace(ctx, playerGUID); free > 0 {
+		if add := free * uint32(maxStack); add < remaining {
+			fitting += add
+		} else {
+			fitting += remaining
+		}
+	}
+	return fitting
+}
+
 // itemTemplateDuration mirrors the duration-seeding arm of Item::Create
 // (Item.cpp:291): a freshly created item seeds ITEM_FIELD_DURATION from
 // the template's Duration at once. Query failure reads as no duration.
@@ -5807,43 +5895,52 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 	// template at once — every new stack carries it, never 0-forced.
 	newItemDuration := s.server.itemTemplateDuration(ctx, itemEntry)
 
-	// 1. Merge into an existing partial stack first.
-	bagKey, clientBag, slot, itemGUID, curCount, pileMax, canStack := s.findStackableInventorySlot(ctx, playerGUID, itemEntry)
-	if canStack && curCount < pileMax {
-		space := pileMax - curCount
-		if count <= space {
-			newCount := curCount + count
-			if _, err := cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", newCount, itemGUID); err != nil {
-				return nil, err
-			}
-			var totalCount int64
-			_ = cdb.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
-				JOIN item_instance AS ii ON ii.guid = ci.item
-				WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, itemEntry).Scan(&totalCount)
-
-			return &inventoryStoreResult{
-				BagKey:          bagKey,
-				ClientBag:       clientBag,
-				Slot:            slot,
-				ItemGUID:        itemGUID,
-				IsStack:         true,
-				NewCount:        newCount,
-				InventoryCount:  uint32(totalCount),
-				StackFillGUID:   itemGUID,
-				StackFillAmount: count,
-			}, nil
+	// 1. Merge into existing partial stacks first. Player::CanStoreNewItem
+	// fills every partial pile before opening new stacks; a single merge
+	// that covers the whole count keeps the old single-UPDATE fast path.
+	fills := s.findAllPartialStacks(ctx, playerGUID, itemEntry, maxStack)
+	var totalFillSpace uint32
+	for _, f := range fills {
+		totalFillSpace += f.space
+	}
+	if len(fills) == 1 && count <= totalFillSpace {
+		f := fills[0]
+		newCount := f.curCount + count
+		if _, err := cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", newCount, f.itemGUID); err != nil {
+			return nil, err
 		}
+		var totalCount int64
+		_ = cdb.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, itemEntry).Scan(&totalCount)
+
+		return &inventoryStoreResult{
+			BagKey:          f.bagKey,
+			ClientBag:       f.clientBag,
+			Slot:            f.slot,
+			ItemGUID:        f.itemGUID,
+			IsStack:         true,
+			NewCount:        newCount,
+			InventoryCount:  uint32(totalCount),
+			StackFillGUID:   f.itemGUID,
+			StackFillAmount: count,
+		}, nil
 	}
 
 	// 2. Split the remainder into maxStack-bounded stacks. Feasibility is
 	// checked before mutating anything, like CanStoreNewItem.
-	var fillGUID uint64
-	var fillAmount uint32
 	remaining := count
-	if canStack && curCount < pileMax {
-		fillAmount = pileMax - curCount
-		fillGUID = itemGUID
-		remaining -= fillAmount
+	var appliedFills []partialStackFill
+	for _, f := range fills {
+		if remaining == 0 {
+			break
+		}
+		take := f.space
+		if take > remaining {
+			take = remaining
+		}
+		appliedFills = append(appliedFills, partialStackFill{bagKey: f.bagKey, clientBag: f.clientBag, slot: f.slot, itemGUID: f.itemGUID, curCount: f.curCount, space: take})
+		remaining -= take
 	}
 	var newStacks []uint32
 	for r := remaining; r > 0; {
@@ -5863,8 +5960,8 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 	if err != nil {
 		return nil, err
 	}
-	if fillGUID != 0 {
-		if _, err = tx.ExecContext(ctx, "UPDATE item_instance SET count = count + ? WHERE guid = ?", fillAmount, fillGUID); err != nil {
+	for _, f := range appliedFills {
+		if _, err = tx.ExecContext(ctx, "UPDATE item_instance SET count = count + ? WHERE guid = ?", f.space, f.itemGUID); err != nil {
 			_ = tx.Rollback()
 			return nil, err
 		}
@@ -5922,6 +6019,28 @@ func (s *session) storeOrStackItemCore(ctx context.Context, playerGUID uint64, i
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, itemEntry).Scan(&totalCount)
 
+	if len(guids) == 0 {
+		// Pure fill: the whole count merged into existing partial piles,
+		// no new stack was opened — the result describes the first pile.
+		f := appliedFills[0]
+		return &inventoryStoreResult{
+			BagKey:          f.bagKey,
+			ClientBag:       f.clientBag,
+			Slot:            f.slot,
+			ItemGUID:        f.itemGUID,
+			IsStack:         true,
+			NewCount:        f.curCount + f.space,
+			InventoryCount:  uint32(totalCount),
+			StackFillGUID:   f.itemGUID,
+			StackFillAmount: f.space,
+		}, nil
+	}
+	var fillGUID uint64
+	var fillAmount uint32
+	if len(appliedFills) > 0 {
+		fillGUID = appliedFills[0].itemGUID
+		fillAmount = appliedFills[0].space
+	}
 	res := &inventoryStoreResult{
 		BagKey:          slots[0].bagKey,
 		ClientBag:       slots[0].clientBag,

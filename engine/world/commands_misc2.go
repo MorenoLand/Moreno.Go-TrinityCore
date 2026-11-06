@@ -1528,10 +1528,10 @@ func (s *session) handleCmdRepairItems(ctx context.Context, args []string) {
 }
 
 // handleCmdRespawn mirrors HandleRespawnCommand (cs_misc.cpp:1801-1840,
-// RBAC 522). A selection that resolves to a live creature takes the
-// selected leg (pets refused, dead creatures revived, live ones left
-// alone); any other selection falls through to the grid sweep, as C++
-// does when getSelectedCreature returns null.
+// RBAC 522). A selection that resolves to a creature takes the selected
+// leg (pets refused, dead creatures revived, live ones left alone); any
+// other selection falls through to the grid sweep, as C++ does when
+// getSelectedCreature returns null.
 func (s *session) handleCmdRespawn(ctx context.Context) {
 	if s.miscDeny(ctx, permissionCommandRespawn) {
 		return
@@ -1541,7 +1541,9 @@ func (s *session) handleCmdRespawn(ctx context.Context) {
 	}
 	if s.selection != 0 {
 		if motion := s.castCommandSelectedCreature(); motion != nil {
-			if motion.OwnerGUID != 0 {
+			// C++ refuses only pets on the selected leg (cs_misc.cpp:1807-1812);
+			// guardians and charmed creatures respawn like any other.
+			if motionIsPet(motion) {
 				s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE recall
 				return
 			}
@@ -1551,12 +1553,24 @@ func (s *session) handleCmdRespawn(ctx context.Context) {
 			return
 		}
 	}
-	// Grid sweep (cs_misc.cpp:1826-1839): RespawnDo over grid objects in range
-	// plus the map's respawn infos in the player's grid. Go has no grid index,
-	// so both legs collapse into grid-coord matching: every pending record and
-	// every dead live motion on the player's map/instance in the player's grid
-	// revives now; pets are excluded (their respawn rides the owner, not the
-	// grid sweep).
+	// Grid sweep (cs_misc.cpp:1826-1839). Leg 1 is RespawnDo over grid
+	// objects inside the player's grid activation range — the map
+	// visibility range (Object.cpp:1518; 100 yards on continents, 170 in
+	// instances) — and covers creatures AND gameobjects. Leg 2 is the
+	// map's respawn infos in the player's grid cell, which keeps the
+	// grid-coord match. Go has no gameobject respawn-time registry, so
+	// the GO half of leg 1 is the hidden-state sweep below and leg 2 has
+	// no GO counterpart. Documented delta: battleground/arena maps use
+	// 533 in C++; this path does not distinguish them.
+	activationRange := float64(100)
+	if s.player.InstanceID != 0 {
+		activationRange = 170
+	}
+	inRange := func(x, y float32) bool {
+		dx := float64(x - s.player.X)
+		dy := float64(y - s.player.Y)
+		return dx*dx+dy*dy <= activationRange*activationRange
+	}
 	gridX, gridY := gpsGridCoord(s.player.X, s.player.Y)
 	s.server.motionMu.Lock()
 	var records []creatureRespawn
@@ -1579,20 +1593,44 @@ func (s *session) handleCmdRespawn(ctx context.Context) {
 	var motions []*creatureMotion
 	if live := s.server.motionMapLocked(s.player.Map, s.player.InstanceID); live != nil {
 		for _, motion := range live {
-			if motion != nil && motion.Health <= 0 && motion.OwnerGUID == 0 {
-				if mx, my := gpsGridCoord(motion.X, motion.Y); mx == gridX && my == gridY {
-					motions = append(motions, motion)
-				}
+			// Sweep legs have no owner filter in C++ (cs_misc.cpp:1826-1833):
+			// RespawnDo visits every dead creature in range.
+			if motion != nil && motion.Health <= 0 && inRange(motion.X, motion.Y) {
+				motions = append(motions, motion)
 			}
 		}
 	}
 	s.server.motionMu.Unlock()
+	// GO leg of RespawnDo (GridNotifiers.h:651-659): GameObject::Respawn
+	// (GameObject.cpp:1338-1344) fires only for spawned-by-default objects
+	// with a live respawn time. In Go that is a hidden static gameobject
+	// whose script-set delay or DB spawntimesecs is positive — the
+	// fully-looted chest/goober the loot path hid.
+	var goRespawns []dynamicGameObjectState
+	for _, st := range s.server.gameObjectStatesInInstance(s.player.Map, s.player.InstanceID) {
+		if st.IsRuntimeSpawn || !s.server.isGameObjectHiddenInInstance(st.Map, st.InstanceID, st.GUID) || !inRange(st.X, st.Y) {
+			continue
+		}
+		var delay int64
+		if st.RespawnDelaySet {
+			delay = int64(st.RespawnDelaySec)
+		} else if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(spawntimesecs, 0) FROM gameobject WHERE guid = ? AND id = ? LIMIT 1", st.LowGUID, st.Entry).Scan(&delay)
+		}
+		if delay <= 0 {
+			continue
+		}
+		goRespawns = append(goRespawns, st)
+	}
 	for _, record := range records {
 		motion := s.server.findCreatureMotion(record.Map, record.InstanceID, creatureWorldGUID(record.GUID, record.Entry))
 		s.server.respawnCreatureNow(ctx, motion, record.GUID, record.Entry)
 	}
 	for _, motion := range motions {
 		s.server.respawnCreatureNow(ctx, motion, uint32(motion.GUID&0x00FFFFFF), uint32(motion.GUID>>24)&0x00FFFFFF)
+	}
+	for _, st := range goRespawns {
+		s.server.setGameObjectHiddenInInstance(st.Map, st.InstanceID, st.GUID, false)
 	}
 }
 

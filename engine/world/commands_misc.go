@@ -248,15 +248,54 @@ func (s *session) handleAddItemCommand(ctx context.Context, args []string) {
 	}
 	res, err := s.storeOrStackItem(ctx, target.playerGUID, itemID, uint32(count))
 	if err != nil || res == nil {
-		s.sendSysMessage(fmt.Sprintf(miscItemCannotCreate, itemID, uint32(count)))
+		// C++ CanStoreNewItem partial result (cs_misc.cpp:1255-1262):
+		// the reduced count still stores and only the un-stored
+		// remainder is reported — never all-or-nothing.
+		fitting := s.addItemFittingCount(ctx, target.playerGUID, itemID, uint32(count))
+		if fitting == 0 {
+			s.sendSysMessage(fmt.Sprintf(miscItemCannotCreate, itemID, uint32(count)))
+			return
+		}
+		res, err = s.storeOrStackItem(ctx, target.playerGUID, itemID, fitting)
+		if err != nil || res == nil {
+			s.sendSysMessage(fmt.Sprintf(miscItemCannotCreate, itemID, uint32(count)))
+			return
+		}
+		s.sendAddItemPushResult(target, res, itemID, fitting)
+		if target != s {
+			_ = target.sendInventoryItems(ctx)
+			target.sendPlayerUpdate()
+		} else {
+			_ = s.sendInventoryItems(ctx)
+			s.sendPlayerUpdate()
+		}
+		s.sendSysMessage(fmt.Sprintf(miscItemCannotCreate, itemID, uint32(count)-fitting))
 		return
 	}
+	s.sendAddItemPushResult(target, res, itemID, uint32(count))
 	if target != s {
 		_ = target.sendInventoryItems(ctx)
 		target.sendPlayerUpdate()
 	} else {
 		_ = s.sendInventoryItems(ctx)
 		s.sendPlayerUpdate()
+	}
+}
+
+// sendAddItemPushResult mirrors the SendNewItem tail of HandleAddItemCommand
+// (cs_misc.cpp:1263-1268): SMSG_ITEM_PUSH_RESULT goes to the invoker and,
+// when the target is another player, to the target as well.
+func (s *session) sendAddItemPushResult(target *session, res *inventoryStoreResult, itemID, count uint32) {
+	if s == nil || res == nil {
+		return
+	}
+	slot := uint32(res.Slot)
+	if res.IsStack {
+		slot = 0xFFFFFFFF
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, res.ClientBag, slot, itemID, count, res.InventoryCount, res.IsStack), true)
+	if target != nil && target != s && target.player != nil {
+		_ = target.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(target.playerGUID, res.ClientBag, slot, itemID, count, res.InventoryCount, res.IsStack), true)
 	}
 }
 
@@ -820,25 +859,47 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandCooldown) {
 		return
 	}
-	target := s.miscSelectedPlayerSession()
-	if target == nil {
-		target = s
+	// C++ HandleCooldownCommand (cs_misc.cpp:723-760): the selected unit;
+	// GetCharmerOrOwnerPlayerOrPlayerItself names the owner for the
+	// message, and the cooldowns cleared are the TARGET's own
+	// SpellHistory. A creature with no online charmer/owner player
+	// falls back to the invoker as both owner and target.
+	var owner *session
+	var creature *creatureMotion
+	if target := s.miscSelectedPlayerSession(); target != nil {
+		owner = target
+	} else if motion := s.castCommandSelectedCreature(); motion != nil {
+		creature = motion
+		if guid := motion.CharmerGUID; guid != 0 {
+			owner = s.server.playerSessionForGUID(guid)
+		} else if motion.OwnerGUID != 0 {
+			owner = s.server.playerSessionForGUID(motion.OwnerGUID)
+		}
+		if owner == nil {
+			owner = s
+			creature = nil
+		}
+	} else {
+		owner = s
 	}
-	if target.player == nil {
+	if owner == nil || owner.player == nil {
 		s.sendSysMessage(miscPlayerNotFound)
 		return
 	}
-	targetName := miscPlayerLink(target.player.Name)
+	targetName := miscPlayerLink(owner.player.Name)
 	// C++ names the owner link for the all-clear, but "you" for the
 	// single-spell and unknown-spell messages when the owner is the invoker
-	// (cs_misc.cpp:723-760); the no-selection fallback already made the
-	// invoker the target, so target == s is exactly that case.
+	// (cs_misc.cpp:723-760).
 	reportName := targetName
-	if target == s {
+	if owner == s {
 		reportName = miscYou
 	}
 	if len(args) == 0 {
-		target.clearPlayerCooldowns()
+		if creature != nil {
+			clearCreatureCooldowns(owner, creature)
+		} else {
+			owner.clearPlayerCooldowns()
+		}
 		s.sendSysMessage(fmt.Sprintf(miscRemoveAllCooldown, targetName))
 		return
 	}
@@ -847,8 +908,57 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf(miscUnknownSpell, reportName))
 		return
 	}
-	target.clearPlayerCooldown(spellID)
+	if creature != nil {
+		clearCreatureCooldown(owner, creature, spellID)
+	} else {
+		owner.clearPlayerCooldown(spellID)
+	}
 	s.sendSysMessage(fmt.Sprintf(miscRemoveCooldown, spellID, reportName))
+}
+
+// clearCreatureCooldowns mirrors SpellHistory::ResetAllCooldowns for a
+// creature target's cooldown maps, with the per-spell SMSG_CLEAR_COOLDOWN
+// to the owner that the player arm sends (clearPlayerCooldowns'
+// SendClearCooldowns mirror); the packet carries the creature GUID as the
+// caster, the resetPetSpellCooldownCheat shape.
+func clearCreatureCooldowns(owner *session, motion *creatureMotion) {
+	if owner == nil || motion == nil || owner.server == nil {
+		return
+	}
+	owner.server.motionMu.Lock()
+	ids := make([]uint32, 0, len(motion.SpellCooldowns))
+	for id := range motion.SpellCooldowns {
+		ids = append(ids, id)
+	}
+	motion.SpellCooldowns = nil
+	motion.SpellCategoryCooldowns = nil
+	motion.SpellCooldownCategories = nil
+	motion.SpellCooldownCategoryEnds = nil
+	owner.server.motionMu.Unlock()
+	for _, id := range ids {
+		_ = owner.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(motion.GUID, id), true)
+	}
+}
+
+// clearCreatureCooldown mirrors SpellHistory::ResetCooldown(spellId, true)
+// for a creature target: only the spell's own entry is erased, category
+// cooldowns untouched (SpellHistory.cpp:441-455), and SMSG_CLEAR_COOLDOWN
+// fires to the owner only when the spell held a cooldown.
+func clearCreatureCooldown(owner *session, motion *creatureMotion, spellID uint32) {
+	if owner == nil || motion == nil || owner.server == nil {
+		return
+	}
+	owner.server.motionMu.Lock()
+	_, removed := motion.SpellCooldowns[spellID]
+	if removed {
+		delete(motion.SpellCooldowns, spellID)
+		delete(motion.SpellCooldownCategories, spellID)
+		delete(motion.SpellCooldownCategoryEnds, spellID)
+	}
+	owner.server.motionMu.Unlock()
+	if removed {
+		_ = owner.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(motion.GUID, spellID), true)
+	}
 }
 
 // clearPlayerCooldowns mirrors SpellHistory::ResetAllCooldowns for the
@@ -1034,10 +1144,10 @@ func (s *session) resetPlayerCooldownsByCategory(category uint32, update bool) {
 }
 
 // handleCmdDamage mirrors HandleDamageCommand (cs_misc.cpp:2116-2261, RBAC
-// 498): the flat-melee-damage path on a selected player. The `go <guid>
-// <dmg>` destructible-building form is documented-blocked (no
-// GameObject::ModifyHealth bridge), and the school/armor/absorb and
-// spell-damage forms have no CalcArmorReducedDamage/CalcAbsorbResist bridge
+// 498): the flat-melee-damage path on a selected player plus the `go`
+// destructible-building form. The school/armor/absorb and spell-damage
+// forms have no CalcArmorReducedDamage/CalcAbsorbResist/DealSpellDamage
+// bridge, so they report honestly instead of dealing flat damage
 // (documented fidelity gap, not a stub).
 func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 	if s.player == nil {
@@ -1051,8 +1161,10 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .damage <amount> | .damage go <guid> <amount>")
 		return
 	}
-	if strings.EqualFold(args[0], "go") {
-		s.sendSysMessage("Damaging gameobjects is unavailable: the Go tree has no destructible-building bridge.")
+	// C++ strcmp is case-sensitive: ".damage GO ..." falls through to the
+	// unit form, where atoi("GO") is 0 and the command silently no-ops.
+	if args[0] == "go" {
+		s.damageGameObject(ctx, args[1:])
 		return
 	}
 	target := s.miscSelectedPlayerSession()
@@ -1073,12 +1185,39 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 	if target.player.Health == 0 {
 		return // C++ !IsAlive: silent no-op
 	}
-	dmg64, err := strconv.ParseInt(args[0], 10, 32)
-	if err != nil || dmg64 <= 0 {
+	// C++ atoi takes the leading int ("100abc" is 100); ParseInt would
+	// reject the whole token.
+	damageInt := cAtoi(args[0])
+	if damageInt <= 0 {
 		return // C++ damage_int <= 0: silent no-op
 	}
-	damage := uint32(dmg64)
-	if damage >= target.player.Health {
+	damage := uint32(damageInt)
+	if len(args) > 1 {
+		school := cAtoi(args[1])
+		if school < 0 || school >= schoolCount {
+			// C++ returns false past MAX_SPELL_SCHOOL (cs_misc.cpp:2227):
+			// the framework prints the command syntax.
+			s.sendSysMessage("Syntax: .damage <amount> | .damage go <guid> <amount>")
+			return
+		}
+		if len(args) > 2 {
+			// Spell-damage form: extractSpellIdFromLink + DealSpellDamage
+			// with SendSpellNonMeleeDamageLog — no Go bridge for the
+			// spell-damage application on a player target.
+			s.sendSysMessage("Spell damage is unavailable: the Go tree has no spell-damage application bridge for .damage.")
+			return
+		}
+		// School-damage form: CalcArmorReducedDamage (physical) and
+		// CalcAbsorbResist have no Go bridge.
+		s.sendSysMessage("School damage is unavailable: the Go tree has no armor/absorb reduction bridge for .damage.")
+		return
+	}
+	preHealth := target.player.Health
+	overkill := uint32(0)
+	if damage >= preHealth {
+		overkill = damage - preHealth
+	}
+	if damage >= preHealth {
 		target.player.Health = 0
 		target.sendPlayerUpdate()
 		// GM-issued damage has no player attacker in the kill chain, but
@@ -1086,10 +1225,73 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 		// Unit::Kill tail still fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6).
 		target.killPlayer(ctx, nil, false, false)
 		s.server.firePVPKillHook(ctx, s, target)
+	} else {
+		target.player.Health -= damage
+		target.sendPlayerUpdate()
+	}
+	if target != s {
+		s.sendDamageAttackState(target, damage, overkill)
+	}
+}
+
+// damageGameObject mirrors the `go` arm of HandleDamageCommand
+// (cs_misc.cpp:2125-2173): BAD_VALUE on a missing or zero guid/damage,
+// OBJNOTFOUND on an unloaded object, INVALID_GAMEOBJECT_TYPE off the
+// destructible-building gate, then GameObject::ModifyHealth with the
+// GAMEOBJECT_DAMAGED report.
+func (s *session) damageGameObject(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		s.sendSysMessage(misc2BadValue)
 		return
 	}
-	target.player.Health -= damage
-	target.sendPlayerUpdate()
+	guidLow := uint32(cAtoi(args[0]))
+	if guidLow == 0 {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	if len(args) < 2 {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	damageInt := cAtoi(args[1])
+	if damageInt == 0 {
+		s.sendSysMessage(misc2BadValue)
+		return
+	}
+	goState := s.gpsLiveGameObject(guidLow)
+	if goState == nil {
+		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %d) could not be found.", guidLow)) // LANG_COMMAND_OBJNOTFOUND (273)
+		return
+	}
+	if !s.server.gameObjectIsDestructibleBuilding(ctx, s.player.Map, s.player.InstanceID, goState.GUID) {
+		s.sendSysMessage("Invalid gameobject type.") // LANG_INVALID_GAMEOBJECT_TYPE
+		return
+	}
+	s.server.modifyDestructibleHealth(ctx, s.player.Map, s.player.InstanceID, goState.GUID, -int32(damageInt), s.playerGUID, 0, s)
+	rec, _, ok := s.server.destructibleHealthFor(ctx, s.player.Map, s.player.InstanceID, goState.GUID)
+	name := ""
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name FROM gameobject_template WHERE entry = ? LIMIT 1", goState.Entry).Scan(&name)
+	}
+	health := uint32(0)
+	if ok {
+		health = rec.Health
+	}
+	s.sendSysMessage(fmt.Sprintf("Gameobject %s (GUID: %d) damaged for %d. Health: %d.", name, guidLow, -damageInt, health)) // LANG_GAMEOBJECT_DAMAGED
+}
+
+// sendDamageAttackState mirrors the SendAttackStateUpdate tail of the flat
+// .damage path (cs_misc.cpp:2207-2211): a normal-school hit on a target
+// other than the invoker, fanned out to the attacker's visibility set.
+func (s *session) sendDamageAttackState(target *session, damage, overkill uint32) {
+	if s == nil || target == nil || target.player == nil || s.player == nil {
+		return
+	}
+	payload := protocol.BuildAttackerStateUpdate(s.playerGUID, target.playerGUID, damage, overkill, protocol.HitInfoAffectsVictim, protocol.VictimStateHit, 0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), payload, true)
+	if s.server != nil {
+		s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), payload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, s)
+	}
 }
 
 // handleCmdDev is the documented-blocked dev arm (cs_misc.cpp:159-181, RBAC
