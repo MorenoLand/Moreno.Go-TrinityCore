@@ -343,11 +343,10 @@ func (s *session) handleInstanceListBinds(ctx context.Context) {
 // player's binds except the one for the map the player is currently in,
 // printing "unbinding map: %d inst: %d perm: %s diff: %d resettable: %s
 // timeleft: %s" (5048) per bind and "instances unbound: %d" (5049). The C++
-// Player::UnbindInstance also erases the in-memory bind, drops the player
-// from the InstanceSave, and fires a calendar raid-lockout update for perm
-// binds; the Go tree keeps no in-memory InstanceSave objects, so the
-// character_instance row delete is the full observable state (documented
-// gap, not a stub).
+// Player::UnbindInstance also erases the in-memory bind and drops the
+// player from the InstanceSave; the Go tree keeps no in-memory InstanceSave
+// objects, so the character_instance row delete plus the calendar
+// raid-lockout removal for perm binds is the full observable state.
 func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 	const syntax = "Syntax: .instance unbind <map|all> [difficulty]"
 	if len(args) == 0 {
@@ -395,6 +394,16 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 		if _, err := s.server.CharactersStore.DB.ExecContext(ctx,
 			"DELETE FROM character_instance WHERE guid = ? AND instance = ?", target.playerGUID, b.instanceID); err != nil {
 			continue
+		}
+		// Player::UnbindInstance (Player.cpp:19113-19114) sends the
+		// calendar raid-lockout removal for permanent binds, to the
+		// bound player's own session.
+		if b.permanent {
+			var remaining uint32
+			if rt := b.resetTime - time.Now().Unix(); rt > 0 {
+				remaining = uint32(rt)
+			}
+			target.sendCalendarRaidLockout(b.mapID, uint32(b.difficulty), remaining, uint64(b.instanceID), false)
 		}
 		s.sendSysMessage(fmt.Sprintf("unbinding map: %d inst: %d perm: %s diff: %d resettable: %s timeleft: %s",
 			b.mapID, b.instanceID, yesNo(b.permanent),

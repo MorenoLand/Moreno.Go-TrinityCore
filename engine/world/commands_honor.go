@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +61,13 @@ func (s *session) handleCmdHonor(ctx context.Context, args []string) {
 		// The Trinity parser prefix-matches command names at every nesting
 		// level; the "kill" child wins over the "" (bare-amount) arm exactly
 		// like the C++ table order kill-then-"" (cs_honor.cpp:48-51).
+		// HandleHonorAddKillCommand takes no arguments, so trailing tokens
+		// fail the whole-string-consumed rule (ChatCommand.h:112).
 		if len(args) > 1 && strings.HasPrefix("kill", strings.ToLower(args[1])) {
+			if len(args) != 2 {
+				s.sendSysMessage(syntax)
+				return
+			}
 			if deny(permissionCommandHonorAddKill) {
 				return
 			}
@@ -74,6 +79,11 @@ func (s *session) handleCmdHonor(ctx context.Context, args []string) {
 		}
 		s.handleHonorAdd(ctx, args[1:])
 	case strings.HasPrefix("update", sub):
+		// HandleHonorUpdateCommand takes no arguments (ChatCommand.h:112).
+		if len(args) != 1 {
+			s.sendSysMessage(syntax)
+			return
+		}
 		if deny(permissionCommandHonorUpdate) {
 			return
 		}
@@ -93,8 +103,10 @@ func (s *session) handleHonorAdd(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .honor add <amount>")
 		return
 	}
-	amount, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	// The amount is a framework uint32: StringTo<uint32> base 0
+	// (ChatCommandArgs.h:62), so 0x/0b prefixes are accepted.
+	amount, ok := parseCommandUint32(args[0])
+	if !ok {
 		s.sendSysMessage("Syntax: .honor add <amount>")
 		return
 	}

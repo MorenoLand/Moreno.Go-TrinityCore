@@ -2988,6 +2988,30 @@ func parseCommandUint32(s string) (uint32, bool) {
 	return uint32(v), true
 }
 
+// parseCommandUint8 mirrors parseCommandUint32 for 8-bit unsigned args
+// (StringTo<uint8> with base 0, StringConvert.h:43-69): 0x hex, 0b binary,
+// else decimal, never octal; no sign, no underscores, must fit in 8 bits.
+func parseCommandUint8(s string) (uint8, bool) {
+	if s == "" || strings.ContainsAny(s, "_+-") {
+		return 0, false
+	}
+	base, digits := 10, s
+	switch {
+	case len(s) > 2 && strings.EqualFold(s[:2], "0x"):
+		base, digits = 16, s[2:]
+	case len(s) > 2 && strings.EqualFold(s[:2], "0b"):
+		base, digits = 2, s[2:]
+	}
+	if digits == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(digits, base, 8)
+	if err != nil {
+		return 0, false
+	}
+	return uint8(v), true
+}
+
 // parseCommandUint64 mirrors parseCommandUint32 for 64-bit unsigned args
 // (StringTo<uint64> with base 0, StringConvert.h:43-69): 0x hex, 0b binary,
 // else decimal, never octal; no sign, no underscores, must fit in 64 bits.
