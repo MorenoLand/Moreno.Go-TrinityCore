@@ -56,11 +56,16 @@
 -- EVENT_SOULSTORM one-shot chain (:195-199) — Talk(SAY_SOUL_STORM 3) (:196),
 --   triggered self-cast SOULSTORM_VISUAL 68870 (:197), non-triggered
 --   self-cast SOULSTORM 68872 (:198).
--- JustEngagedWith (:98-103) — Talk(SAY_AGGRO 0) (:101) unconditional;
---   RemoveAurasDueToSpell(SPELL_SOULSTORM_CHANNEL 69008) (:102) via the
---   RemoveAura bridge (the arlokk precedent).
+-- JustEngagedWith (:98-103) — BossAI::JustEngagedWith base-first:
+-- SetBossState(DATA_BRONJAHM 0, IN_PROGRESS), then Talk(SAY_AGGRO 0)
+-- (:101) unconditional; RemoveAurasDueToSpell(SPELL_SOULSTORM_CHANNEL
+-- 69008) (:102) via the RemoveAura bridge (the arlokk precedent).
 -- KilledUnit (:111-115) — Talk(SAY_SLAY 1) player-gated (:114).
--- JustDied (:105-109) — Talk(SAY_DEATH 2) (:108) unconditional.
+-- JustDied (:105-109) — _JustDied() first: SetBossState(DATA_BRONJAHM 0,
+-- DONE), then Talk(SAY_DEATH 2) (:108) unconditional. Reset (:83-90) —
+-- _Reset() first: SetBossState(DATA_BRONJAHM 0, NOT_STARTED), != DONE-gated
+-- (new ev23 leg; the stale "_JustDied passthrough, no bridge" note is
+-- retracted — creature:SetBossState is bridged, lua_creature_events.go:5917).
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 36497):
 -- The ctor SPELL_SOULSTORM_CHANNEL 69008 pre-fight cast (:80) has no
@@ -106,6 +111,7 @@
 -- !HealthAbovePct(30) is health <= floor(max*30/100), inclusive of exactly-30.
 
 local ENTRY_BRONJAHM = 36497
+local DATA_BRONJAHM = 0 -- forge_of_souls.h:31
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -304,8 +310,11 @@ end
 local function bronjahmEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
-    -- BossAI::JustEngagedWith (:98-103, base-first) — SetCombatPulseDelay(5)
+    -- BossAI::JustEngagedWith (:98-103, base-first) — SetBossState
+    -- (DATA_BRONJAHM 0, IN_PROGRESS) via creature:SetBossState
+    -- (lua_creature_events.go:5917), then SetCombatPulseDelay(5)
     -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_BRONJAHM, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -346,10 +355,12 @@ local function bronjahmKilledUnit(event, creature, victim)
     end
 end
 
--- C++ :105-109 JustDied: Talk(SAY_DEATH) — unconditional; _JustDied()
--- (passthrough, no bridge) — the sjonnir JustDied-Talk precedent.
+-- C++ :105-109 JustDied: _JustDied() first — SetBossState
+-- (DATA_BRONJAHM 0, DONE) via creature:SetBossState — then
+-- Talk(SAY_DEATH) (:108) unconditional.
 local function bronjahmJustDied(event, creature)
     initState(creature:GetGUID())
+    creature:SetBossState(DATA_BRONJAHM, 3)
     creature:Talk(SAY_DEATH)
 end
 
@@ -357,7 +368,15 @@ local function bronjahmLeaveCombat(event, creature)
     initState(creature:GetGUID())
 end
 
+-- C++ Reset (:83-90): _Reset() first — SetBossState(DATA_BRONJAHM 0,
+-- NOT_STARTED) only when the stored state != DONE (the cyanigosa /
+-- keleseth precedent: ev23 fires on spawn too, and a DONE boss must
+-- stay DONE) — then the phase-1 event seeds (which land on engage in
+-- this file, see bronjahmEnterCombat).
 local function bronjahmReset(event, creature)
+    if creature:GetBossState(DATA_BRONJAHM) ~= 3 then
+        creature:SetBossState(DATA_BRONJAHM, 0)
+    end
     initState(creature:GetGUID())
 end
 

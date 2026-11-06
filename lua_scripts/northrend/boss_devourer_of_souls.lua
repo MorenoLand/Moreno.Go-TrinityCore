@@ -136,6 +136,7 @@
 -- outro npc movement).
 
 local ENTRY_DEVOURER = 36502
+local DATA_DEVOURER_OF_SOULS = 1 -- forge_of_souls.h:29
 local ENTRY_CRUCIBLE = 37094 -- NPC_CRUCIBLE_OF_SOULS (forge_of_souls.h:57)
 
 local SAY_FACE_AGGRO = 0
@@ -490,8 +491,9 @@ end
 -- Talk(SAY_FACE_AGGRO) — unconditional — plus the five ScheduleEvent seeds
 -- (PHANTOM_BLAST 5000 / MIRRORED_SOUL 8000 / WELL_OF_SOULS 30000 /
 -- UNLEASHED_SOULS 20000 / WAILING_SOULS {60000,70000}ms). The
--- BossAI::JustEngagedWith passthrough leg and the NPC_CRUCIBLE_OF_SOULS
--- double-spawn-guard summon leg (:163-164) — C++ uses
+-- BossAI::JustEngagedWith base leg is ported base-first below
+-- (SetBossState DATA_DEVOURER_OF_SOULS 1, IN_PROGRESS); the
+-- NPC_CRUCIBLE_OF_SOULS double-spawn-guard summon leg (:163-164) — C++ uses
 -- instance->instance->SummonCreature (map spawn); the Lua port uses
 -- creature:SummonCreature (bridge live 2026-10-22, type 7 MANUAL_DESPAWN
 -- = the Map::SummonCreature default: TempSummon ctor banks MANUAL,
@@ -503,8 +505,11 @@ local function devourerEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     devourerState[guid] = {}
-    -- BossAI::JustEngagedWith (:158-161, base-first) — SetCombatPulseDelay(5)
+    -- BossAI::JustEngagedWith (:158-161, base-first) — SetBossState
+    -- (DATA_DEVOURER_OF_SOULS 1, IN_PROGRESS) via creature:SetBossState
+    -- (lua_creature_events.go:5917), then SetCombatPulseDelay(5)
     -- + me-form DoZoneInCombat (ScriptedCreature.cpp:540/542).
+    creature:SetBossState(DATA_DEVOURER_OF_SOULS, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_FACE_AGGRO)
@@ -539,23 +544,32 @@ local function devourerCancelCombat(event, creature)
     devourerState[guid] = nil
 end
 
--- C++ JustDied (:203): _JustDied() (passthrough, no bridge);
+-- C++ JustDied (:203-208): _JustDied() first — SetBossState
+-- (DATA_DEVOURER_OF_SOULS 1, DONE) via creature:SetBossState — then
 -- Talk(SAY_FACE_DEATH) — unconditional — the sjonnir JustDied-Talk
 -- precedent; the DATA_TEAM_IN_INSTANCE outro-summon loop and the
 -- summon->AI()->Talk(SAY_JAINA_OUTRO / SAY_SYLVANAS_OUTRO) legs are
 -- instance-driven Talk on other creatures with no bridge and do not port.
+-- (The stale "_JustDied() passthrough, no bridge" note is retracted.)
 local function devourerJustDied(event, creature)
     devourerCancelCombat(event, creature)
+    creature:SetBossState(DATA_DEVOURER_OF_SOULS, 3)
     creature:Talk(SAY_FACE_DEATH)
 end
 
--- C++ boss_devourer_of_soulsAI::Reset (:148-155): _Reset() (timer/state
--- wipe) + SetControlled(false, UNIT_STATE_ROOT) + SetDisplayId(
+-- C++ boss_devourer_of_soulsAI::Reset (:148-155): _Reset() first —
+-- SetBossState(DATA_DEVOURER_OF_SOULS 1, NOT_STARTED) only when the
+-- stored state != DONE (the cyanigosa / keleseth precedent: ev23 fires
+-- on spawn too, and a DONE boss must stay DONE) — then
+-- SetControlled(false, UNIT_STATE_ROOT) + SetDisplayId(
 -- DISPLAY_ANGER) + SetReactState(REACT_AGGRESSIVE) (bridge live since
 -- 2026-10-20 — the 13:00 "no bridge" claim was stale) +
 -- Initialize() (threeFaced latch — its only consumer is the unregistered
 -- ev15 SpellHitTarget arm, so it stays out).
 local function devourerReset(event, creature)
+    if creature:GetBossState(DATA_DEVOURER_OF_SOULS) ~= 3 then
+        creature:SetBossState(DATA_DEVOURER_OF_SOULS, 0)
+    end
     devourerCancelCombat(event, creature)
     creature:SetRooted(false)
     creature:SetDisplayId(DISPLAY_ANGER)
