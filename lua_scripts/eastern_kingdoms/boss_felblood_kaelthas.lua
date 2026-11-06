@@ -43,7 +43,9 @@
 -- gated — no instance SetData bridge) / EVENT_FIREBALL init 1ms
 -- repeat 2s500ms / EVENT_PHOENIX init 12s repeat 45s /
 -- EVENT_FLAME_STRIKE repeat 44s / EVENT_SHOCK_BARRIER repeat 1min /
--- EVENT_QUITE_SUICIDE 11s / DATA_KAELTHAS_SUNSTRIDER (boss id).
+-- EVENT_QUITE_SUICIDE 11s / DATA_KAELTHAS_SUNSTRIDER = 3
+-- (magisters_terrace.h:31-34: SELIN 0, VEXALLUS 1, DELRISSA 2,
+-- KAELTHAS 3; EncounterCount 4, so the writes are live-consumed).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset. Driven by CreateLuaEvent timers; melee
 -- is engine-driven in Go (creature combat tick), like C++
@@ -115,7 +117,10 @@
 -- The intro is SetData(DATA_
 -- KAELTHAS_INTRO)-gated (instance arm — no bridge); the intro talks
 -- are unreached (vaelastrasz gossip precedent). JustDied's
--- instance->SetBossState(DONE) has no bridge (instance precedent).
+-- instance->SetBossState(DONE) is PORTED below (creature:SetBossState
+-- bridge live 2026-11-05, moroes/karazhan precedent); the ev1
+-- IN_PROGRESS (base-first JustEngagedWith) and ev23 NOT_STARTED
+-- (_Reset, alive + != DONE gated) legs are ported below too.
 -- EnterEvadeMode's ClearFlight cast is ported (above); the
 -- summons.DespawnAll + _DespawnAtEvade legs have no bridge.
 -- JustSummoned's arcane-sphere MoveFollow and
@@ -409,6 +414,10 @@ local function onEnterCombat(_, creature)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
+    -- BossAI::JustEngagedWith base-first (boss_felblood_kaelthas.cpp:144-146
+    -- -> ScriptedCreature.cpp:527-542): SetBossState IN_PROGRESS, then
+    -- pulse 5 + DoZoneInCombat.
+    creature:SetBossState(3, 1) -- DATA_KAELTHAS_SUNSTRIDER, IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(guid, "fireball", 1, function() onFireball(creature, guid) end)
@@ -433,11 +442,31 @@ local function onLeaveCombat(_, creature)
     outroFired[guid] = nil
 end
 
-local function onCombatEnd(_, creature)
+-- C++ JustDied (boss_felblood_kaelthas.cpp:162-166): explicit
+-- instance->SetBossState(DATA_KAELTHAS_SUNSTRIDER, DONE) — NO _JustDied()
+-- call (the comment: it would re-trigger the death sequence). The outro
+-- chain already ran on lethal DamageTaken; the DONE write lands here.
+local function onDied(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
+    creature:SetBossState(3, 3) -- DATA_KAELTHAS_SUNSTRIDER, DONE
+end
+
+-- C++ Reset (boss_felblood_kaelthas.cpp:155-160): _Reset() ->
+-- SetBossState(NOT_STARTED), alive-gated and != DONE-gated
+-- (ScriptedCreature.cpp:499-511); Initialize() clears the gravity-lapse
+-- counters, mirrored by the per-guid flag clears. Go fires ev23 on the
+-- death path before ev4 (maiden precedent), so both gates are live here.
+local function onReset(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    phaseTwo[guid] = nil
+    outroFired[guid] = nil
+    if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
+        creature:SetBossState(3, 0) -- DATA_KAELTHAS_SUNSTRIDER, NOT_STARTED
+    end
 end
 
 local function onDamageTaken(_, creature, attacker, damage)
@@ -482,6 +511,6 @@ end
 
 RegisterCreatureEvent(ENTRY_KAELTHAS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 2, onLeaveCombat)
-RegisterCreatureEvent(ENTRY_KAELTHAS, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_KAELTHAS, 4, onDied)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 9, onDamageTaken)
-RegisterCreatureEvent(ENTRY_KAELTHAS, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_KAELTHAS, 23, onReset)

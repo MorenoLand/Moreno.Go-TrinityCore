@@ -70,12 +70,14 @@
 -- drains a crystal); the drain phase has no bridges (below), so the
 -- port's fel-explosion stays a straight loop — the faithful net
 -- observable of the ported arms.
--- Reset() _Reset() / JustDied() _JustDied() / DoAction(
--- ACTION_SWITCH_PHASE)'s phase reset are internal BossAI/event
--- machinery covered by the cancel/re-arm on combat events (halycon
--- precedent); Reset's crystal Respawn PORTED in onCombatEnd
--- (GetCreaturesInGrid bridge); CrystalGUID.Clear() is vacuous in the
--- Lua model (drain legs re-search the nearest crystal each time). DoAction(ACTION_SWITCH_PHASE) is
+-- BossAI state legs PORTED below (creature:SetBossState bridge live
+-- 2026-11-05, moroes/karazhan precedent): ev1 IN_PROGRESS (Talk-then-
+-- base, boss_selin_fireheart.cpp:134-137), ev23 NOT_STARTED (Reset's
+-- _Reset, alive + != DONE gated, ScriptedCreature.cpp:499-511), ev4
+-- DONE (JustDied's _JustDied, ScriptedCreature.cpp:513-520). Reset's
+-- crystal Respawn stays in onReset (GetCreaturesInGrid bridge);
+-- CrystalGUID.Clear() is vacuous in the Lua model (drain legs
+-- re-search the nearest crystal each time). DoAction(ACTION_SWITCH_PHASE) is
 -- only reachable from npc_fel_crystal's JustDied via the instance
 -- bridge — no caller exists on the Lua surface.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
@@ -229,12 +231,27 @@ local function onEnterCombat(_, creature)
     cancelTimers(guid)
     drainScheduled[guid] = nil
     creature:Talk(SAY_AGGRO)
+    -- Talk-then-base (boss_selin_fireheart.cpp:134-137 -> BossAI::
+    -- JustEngagedWith, ScriptedCreature.cpp:527-542): SetBossState
+    -- IN_PROGRESS, then pulse 5 + DoZoneInCombat.
+    creature:SetBossState(0, 1) -- DATA_SELIN_FIREHEART, IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(guid, "fel_explosion", 2100, function() onFelExplosion(creature, guid) end)
 end
 
-local function onCombatEnd(_, creature)
+local function onLeaveCombat(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    drainScheduled[guid] = nil
+end
+
+-- C++ Reset (boss_selin_fireheart.cpp:81-90): crystal respawn first,
+-- then _Reset() -> SetBossState(NOT_STARTED), alive-gated and
+-- != DONE-gated (ScriptedCreature.cpp:499-511). Go fires ev23 on the
+-- death path before ev4 (maiden precedent), so both gates are live
+-- here; the ev4 shatter below still runs after the respawn.
+local function onReset(_, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     drainScheduled[guid] = nil
@@ -242,6 +259,9 @@ local function onCombatEnd(_, creature)
     -- (live crystals are a Respawn no-op, matching force-respawn).
     for _, crystal in ipairs(creature:GetCreaturesInGrid(ENTRY_FEL_CRYSTAL, 250)) do
         crystal:Respawn()
+    end
+    if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0) -- DATA_SELIN_FIREHEART, NOT_STARTED
     end
 end
 
@@ -254,6 +274,10 @@ end
 local function onDied(_, creature)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (:163-166): Talk, then _JustDied() ->
+    -- SetBossState(DONE) (ScriptedCreature.cpp:513-520), then
+    -- ShatterRemainingCrystals (:125-131).
+    creature:SetBossState(0, 3) -- DATA_SELIN_FIREHEART, DONE
     -- C++ JustDied (:163-169) via ShatterRemainingCrystals (:125-131):
     -- every fel crystal within 250.0f kills itself.
     for _, crystal in ipairs(creature:GetCreaturesInGrid(ENTRY_FEL_CRYSTAL, 250)) do
@@ -262,10 +286,10 @@ local function onDied(_, creature)
 end
 
 RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 1, onEnterCombat)
-RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 2, onCombatEnd)
+RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 4, onDied)
-RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_SELIN_FIREHEART, 23, onReset)
 
 -- C++ boss_selin_fireheartAI spawn latch (tick-235 precedent: ev5
 -- SetGuidData on the DATA key) — the crystal relay reads it back via

@@ -10,7 +10,7 @@
 -- model).
 -- Entry (verifiable from the C++ sources): magisters_terrace.h names
 -- BOSS_VEXALLUS = 24744 in the MTCreatureIds enum (the AI runs under
--- BossAI(DATA_VEXALLUS = 2) via GetMagistersTerraceAI, a GetInstanceAI
+-- BossAI(DATA_VEXALLUS = 1) via GetMagistersTerraceAI, a GetInstanceAI
 -- retrieval wrapper only; the ported arms have no instance state). The
 -- creature_template ScriptName binding is DB-side (no TDB in this
 -- workspace), but the entry itself is C++-verifiable so the port is
@@ -75,9 +75,14 @@
 -- scheduler is driven from JustEngagedWith and drained by UpdateAI;
 -- the port schedules from OnEnterCombat(1)/OnDamageTaken(9) and
 -- cancels on 2/4/23 (maiden convention).
--- Reset() _Reset() / JustDied() _JustDied() are internal BossAI
--- machinery covered by the cancel/re-arm on combat events (halycon
--- precedent); JustDied has no C++ arms.
+-- BossAI state legs PORTED below (creature:SetBossState bridge live
+-- 2026-11-05, moroes/karazhan precedent): ev1 IN_PROGRESS (Talk-then-
+-- base, boss_vexallus.cpp:86-89), ev23 NOT_STARTED (Reset's _Reset,
+-- alive + != DONE gated, ScriptedCreature.cpp:499-511), ev4 DONE (no
+-- JustDied override in C++, so base BossAI::JustDied runs _JustDied,
+-- ScriptedCreature.h:330 + ScriptedCreature.cpp:513-520). The old
+-- "internal BossAI machinery covered by the cancel/re-arm" claim is
+-- retired — the state writes are real arms now.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - summons.Summon is internal BossAI machinery. PORTED:
 --   JustSummoned (boss_vexallus.cpp:98-102) —
@@ -207,6 +212,10 @@ local function onEnterCombat(_, creature)
     dischargeStage[guid] = 1
     enraged[guid] = false
     creature:Talk(SAY_AGGRO)
+    -- Talk-then-base (boss_vexallus.cpp:86-89 -> BossAI::JustEngagedWith,
+    -- ScriptedCreature.cpp:527-542): SetBossState IN_PROGRESS, then
+    -- pulse 5 + DoZoneInCombat.
+    creature:SetBossState(1, 1) -- DATA_VEXALLUS, IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(guid, "chain_lightning", 8000, function() onChainLightning(creature, guid) end)
@@ -215,6 +224,30 @@ end
 
 local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUID())
+end
+
+-- No JustDied override in boss_vexallus.cpp, so base BossAI::JustDied
+-- (ScriptedCreature.h:330) runs _JustDied() -> SetBossState(DONE)
+-- (ScriptedCreature.cpp:513-520).
+local function onDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(1, 3) -- DATA_VEXALLUS, DONE
+end
+
+-- C++ Reset (boss_vexallus.cpp:74-79): _Reset() -> SetBossState
+-- (NOT_STARTED), alive-gated and != DONE-gated
+-- (ScriptedCreature.cpp:499-511); _intervalHealthAmount = 1 and
+-- _enraged = false mirror the per-guid stage/enrage reset. Go fires
+-- ev23 on the death path before ev4 (maiden precedent), so both
+-- gates are live here.
+local function onReset(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    dischargeStage[guid] = 1
+    enraged[guid] = false
+    if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
+        creature:SetBossState(1, 0) -- DATA_VEXALLUS, NOT_STARTED
+    end
 end
 
 local function onTargetDied(_, creature)
@@ -252,7 +285,7 @@ end
 RegisterCreatureEvent(ENTRY_VEXALLUS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_VEXALLUS, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_VEXALLUS, 3, onTargetDied)
-RegisterCreatureEvent(ENTRY_VEXALLUS, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_VEXALLUS, 4, onDied)
 -- C++ JustSummoned (boss_vexallus.cpp:98-102): summoned follows a
 -- random target (MoveFollow, 0, 0). Previously documented-only for
 -- "no MoveFollow bridge" (midnight/halazzi precedent); MoveFollow is
@@ -270,4 +303,4 @@ end
 
 RegisterCreatureEvent(ENTRY_VEXALLUS, 19, onJustSummoned)
 RegisterCreatureEvent(ENTRY_VEXALLUS, 9, onDamageTaken)
-RegisterCreatureEvent(ENTRY_VEXALLUS, 23, onCombatEnd)
+RegisterCreatureEvent(ENTRY_VEXALLUS, 23, onReset)

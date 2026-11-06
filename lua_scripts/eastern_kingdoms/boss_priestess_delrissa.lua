@@ -85,10 +85,9 @@
 -- driven from JustEngagedWith and drained by UpdateAI; the port
 -- schedules from OnEnterCombat(1) and cancels on 2/4/23 (maiden
 -- convention).
--- Reset() _Reset() / JustDied() _JustDied() are internal ScriptedAI
--- machinery covered by the cancel/re-arm on combat events (halycon
--- precedent); Reset's InitializeLackeys() summon/resummon machine is
--- PORTED on event 23 (below).
+-- Reset() runs Initialize() + InitializeLackeys() (ScriptedAI — no
+-- BossAI _Reset, no state write); Reset's InitializeLackeys()
+-- summon/resummon machine is PORTED on event 23 (below).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - Reset()'s InitializeLackeys(): PORTED on event 23 — 4-of-8 random
 --   selection + SummonCreature at the slot locations (type 4
@@ -96,15 +95,24 @@
 --   FindNearestCreature liveness (garaxxas precedent; dead-but-
 --   undespawned corpses read as missing, the one divergence window).
 -- - JustReachedHome: instance->SetBossState(DATA_PRIESTESS_DELRISSA,
---   FAIL) — no instance bridge (standing blocker).
+--   FAIL) — PORTED below on ev24 (creature:SetBossState bridge live
+--   2026-11-05, nightbane JustReachedHome precedent; Go fires ev24 on
+--   home arrival, creaturemotion.go).
 -- - JustEngagedWith's lackey AddThreat(who, 0.0f, pAdd) ring: stays
 --   out — the AddThreat bridge is self-threat only (the 3rd-arg
 --   who-redirect is not expressible, lua_creature_events.go:581),
 --   AttackStart is not on the creature surface, and DoZoneInCombat
 --   engages only the caller; no bridge makes ANOTHER creature engage.
---   The SetBossState IN_PROGRESS arm — instance bridge.
+--   The SetBossState IN_PROGRESS arm is PORTED below (ev1, after Talk
+--   in C++ order: Talk, AddThreat ring, SetBossState).
 -- - JustDied's DATA_DELRISSA_DEATH_COUNT check and the lootable-flag
---   manipulation — instance bridge.
+--   manipulation — instance SetData/GetData bridge absent (closed axis:
+--   GetData/SetData consumer legs). The DONE write is therefore gated
+--   out: it fires only when the instance death count is 4 at her death
+--   (boss_priestess_delrissa.cpp:238-246), and the twin writer is the
+--   lackey-common JustDied (4th lackey death while she is already dead,
+--   :409-430, incl. the lootable-flag set) — both need the unbridged
+--   instance counter, so no ev4 DONE leg ports. Talk(SAY_DEATH) stays.
 -- - SW_PAIN machine (PORTED): DoCast(SelectTarget(Random, 0, 100,
 --   true), SPELL_SW_PAIN_NORMAL 14032) 5000ms init -> 10000ms loop —
 --   random-player-in-100yd port, re-arms unconditionally (C++ re-arms
@@ -366,6 +374,10 @@ local function onEnterCombat(_, creature)
     playersKilled[guid] = 0
     usedPotion[guid] = false
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (boss_priestess_delrissa.cpp:166-176): Talk,
+    -- lackey AddThreat ring (stays out, above), then SetBossState
+    -- IN_PROGRESS.
+    creature:SetBossState(2, 1) -- DATA_PRIESTESS_DELRISSA, IN_PROGRESS
     schedule(guid, "heal", 15000, function() onHeal(creature, guid) end)
     schedule(guid, "renew", 10000, function() onRenew(creature, guid) end)
     schedule(guid, "shield", 2000, function() onShield(creature, guid) end)
@@ -426,9 +438,18 @@ local function onDied(_, creature)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_priestess_delrissaAI::JustReachedHome (:161-164):
+-- instance->SetBossState(DATA_PRIESTESS_DELRISSA, FAIL). Go fires ev24
+-- on home arrival (creaturemotion.go), after the evade-path ev23 Reset
+-- (which writes nothing here — ScriptedAI, no _Reset).
+local function onReachedHome(_, creature)
+    creature:SetBossState(2, 2) -- DATA_PRIESTESS_DELRISSA, FAIL
+end
+
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 4, onDied)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 23, onReset)
+RegisterCreatureEvent(ENTRY_PRIESTESS_DELRISSA, 24, onReachedHome)
