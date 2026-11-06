@@ -28,19 +28,20 @@
 -- events 2/4/23); melee is engine-driven in Go.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 2) (event 1; the BossAI
--- bookkeeping passthrough, events.SetPhase(PHASE_NORMAL), the three
--- ScheduleEvent legs, and
+-- bookkeeping passthrough, events.SetPhase(PHASE_NORMAL), and
 -- instance->DoStartTimedAchievement(ACHIEV_TIMELY_DEATH_START_EVENT
--- 20384) have no bridges — the boss_bookkeeping precedent).
+-- 20384) have no bridges — the boss_bookkeeping precedent; the three
+-- ScheduleEvent legs are ported as CreateLuaEvent timers below).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER, then
 -- Talk(SAY_SLAY 4) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
 -- "Player") — sixteenth player-gated variant ported.
 -- JustDied — PORTED (event 4; arm order: Talk(SAY_DEATH 8) then
+-- _JustDied's SetBossState(DATA_LOKEN, DONE) (explicit — native
+-- luaBossAI.OnDied is empty) then
 -- instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_PULSING_SHOCKWAVE_AURA
 -- 59414), boss_loken.cpp:118, via GetPlayersInWorld + mapId/instanceId
--- filter + player:RemoveAura — the moroes precedent; the _JustDied boss
--- bookkeeping passthrough rides the Go native layer).
+-- filter + player:RemoveAura — the moroes precedent).
 -- EVENT_ARC_LIGHTNING — PORTED (see UpdateAI note above).
 -- EVENT_LIGHTNING_NOVA — PORTED 2026-10-17 (Talk(SAY_NOVA 3) +
 -- Talk(EMOTE_NOVA 9) + DoCastAOE(SPELL_LIGHTNING_NOVA 52960) self-cast
@@ -72,10 +73,11 @@
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28923):
 -- Instance script (instance_halls_of_lightning.cpp:87-93): SetBossState
--- DATA_LOKEN DONE -> LokenGlobe (GO_LOKEN_THRONE, bound on
--- OnGameObjectCreate) SendCustomAnim(0) — stays out: no Lua instance
--- bridge, and the sender is the instance boss-state transition, not
--- Loken's own JustDied, so no event-4 twin is valid here.
+-- DATA_LOKEN DONE -> LokenGlobe (GO_LOKEN_THRONE) SendCustomAnim(0) —
+-- PORTED in instance_halls_of_lightning.lua via the ON_UPDATE poll on
+-- the lokenDone flag written by lokenDied below (the earlier "no Lua
+-- instance bridge" claim is retracted: RegisterMapEvent + the
+-- drakos/maexxna Done-flag precedent supply the surface).
 -- boss_loken Reset / Initialize (_healthAmountModifier = 1 flag +
 -- instance->DoStopTimedAchievement(ACHIEV_TIMELY_DEATH_START_EVENT
 -- 20384) — no timed-achievement bridge); JustEngagedWith's
@@ -103,6 +105,9 @@
 -- joins the no-SpellScript-bridge queue.
 
 local ENTRY_LOKEN = 28923
+
+local DATA_LOKEN = 3 -- halls_of_lightning.h:34
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
 local SAY_INTRO_1 = 0 -- boss_loken.cpp:34
 local SAY_INTRO_2 = 1 -- :35
@@ -286,6 +291,19 @@ end
 -- pet/controlled iteration bridge and stay unmodeled.
 local function lokenDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ _JustDied() (boss_loken.cpp:118): SetBossState(DATA_LOKEN,
+    -- DONE) — creature:SetBossState is bridged
+    -- (lua_creature_events.go:5908; the drakos precedent). The
+    -- lokenDone write feeds the instance script's ON_UPDATE poll
+    -- (instance_halls_of_lightning.lua, the maexxna precedent).
+    creature:SetBossState(DATA_LOKEN, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.lokenDone = true
+        end
+    end
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then

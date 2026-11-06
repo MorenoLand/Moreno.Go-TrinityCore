@@ -28,23 +28,24 @@
 -- timers; melee is engine-driven in Go (creature combat tick),
 -- like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
--- instance->SetBossState(DATA_IONAR, IN_PROGRESS) leg has no
--- instance bridge — the boss_bookkeeping precedent).
+-- JustEngagedWith — Talk(SAY_AGGRO 0) + SetBossState(DATA_IONAR 2,
+-- IN_PROGRESS 1) PORTED (event 1; bridge lua_creature_events.go:5917,
+-- moroes precedent — the "no instance bridge" claim is retracted).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER, then
 -- Talk(SAY_SLAY 2) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
 -- "Player") — seventeenth player-gated variant ported.
--- JustDied — Talk(SAY_DEATH 3) (event 4; the lSparkList.DespawnAll()
--- and instance->SetBossState(DATA_IONAR, DONE) legs have no
--- bridges).
+-- JustDied — Talk(SAY_DEATH 3) + lSparkList.DespawnAll() (PORTED via
+-- ionarDespawnSparks) + SetBossState(DATA_IONAR 2, DONE 3) PORTED
+-- (event 4; bridge lua_creature_events.go:5917, moroes precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28546):
 -- boss_ionar Reset / Initialize — lSparkList.DespawnAll() +
 -- Initialize() flag/timer clears, RemoveFlag legs (PORTED in
 -- ionarCombatEnd — the field-59 flag surface is bridged),
--- instance->SetBossState(DATA_IONAR, NOT_STARTED) — no summon-list /
--- instance bridges; the flag SET side is PORTED in ionarSplit. The SetControlled(false, UNIT_STATE_ROOT)
+-- instance->SetBossState(DATA_IONAR, NOT_STARTED) PORTED in
+-- ionarCombatEnd (bridge lua_creature_events.go:5917, moroes
+-- precedent); the flag SET side is PORTED in ionarSplit. The SetControlled(false, UNIT_STATE_ROOT)
 -- leg ports via creature:SetRooted(false) (lua_creature_events.go)
 -- and the if (!IsVisible) SetVisible(true) leg via creature:SetVisible,
 -- both in ionarCombatEnd (C++-exact arms).
@@ -52,7 +53,9 @@
 -- trigger: the poll casts SPELL_DISPERSE 52770 and runs the split
 -- arms inline (five summons + AttackStop + invisible + flags +
 -- root + MoveIdle); no ev14 relay needed (self-cast trigger
--- collapsed into the poll — same arm order as C++).
+-- collapsed into the poll — same arm order as C++). C++ summons via
+-- SPELL_SUMMON_SPARK 52746 x5; Lua summons entry 28926 directly (same
+-- pos/entry; JustSummoned arms applied inline).
 -- CallBackSparks — PORTED 2026-11-03 (ionarCallbackSparks):
 -- 25s split timer, alive sparks SetSpeedRate(1, 2.0) + MoveTo(0,
 -- boss pos) with returning flag, dead sparks Despawned; tracked
@@ -104,8 +107,9 @@
 -- despawn is the spark-watch returning-flag poll (2s, 5yd),
 -- PORTED 2026-11-03; DamageTaken uiDamage = 0 stays REGISTERED
 -- (event 9, return false, 0 — halazzi precedent); UpdateAI >90
--- redirect PORTED in the watch, boss-state gate has no instance
--- bridge (Ionar death/evade despawn covers encounter end).
+-- redirect PORTED in the watch; boss-state gate PORTED in the watch
+-- via creature:GetBossState(2) (bridge lua_creature_events.go:5936;
+-- the "no instance bridge" claim is retracted 2026-11-05).
 -- No Talk arms anywhere in the script.
 
 local ENTRY_IONAR = 28546
@@ -208,8 +212,8 @@ end
 -- health check is a 500ms poll, not a per-tick check; (e) sparks
 -- summon as type 7 MANUAL (no timed despawn exists in C++ — every
 -- C++ despawn leg is explicit here); (f) the spark boss-state gate
--- has no instance bridge — Ionar death/evade despawn covers the
--- encounter-end leg.
+-- rides creature:GetBossState(2) in the watch (bridge live; the "no
+-- instance bridge" note is retracted 2026-11-05).
 local ionarState = {}
 
 local function ionarDespawnSparks(state)
@@ -339,6 +343,13 @@ ionarSparkWatch = function(creature, guid)
     if not state or timers[guid] == nil then
         return
     end
+    -- C++ spark UpdateAI (boss_ionar.cpp:348-351): if the encounter is
+    -- not IN_PROGRESS, despawn. The restore check still restores Ionar
+    -- once the list empties, as in C++.
+    if creature:GetBossState(2) ~= 1 then -- DATA_IONAR != IN_PROGRESS
+        ionarDespawnSparks(state)
+        return
+    end
     for sguid, entry in pairs(state.sparks) do
         if entry.obj:IsDead() then
             entry.obj:Despawn()
@@ -361,10 +372,10 @@ ionarSparkWatch = function(creature, guid)
 end
 
 -- C++ JustEngagedWith: Talk(AGGRO) +
--- instance->SetBossState(DATA_IONAR, IN_PROGRESS) — only the Talk
--- arm is bridgeable.
+-- instance->SetBossState(DATA_IONAR, IN_PROGRESS) — both PORTED.
 local function ionarEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:SetBossState(2, 1) -- DATA_IONAR, IN_PROGRESS (boss_ionar.cpp:128; moroes precedent)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     ionarState[guid] = { dispersed = false, disperseHealth = 45 + math.random(0, 10), split = false, splitPhase = true, sparks = {} }
@@ -396,6 +407,7 @@ local function ionarCombatEnd(event, creature)
     creature:SetVisible(true)
     creature:SetRooted(false)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(2, 0) -- DATA_IONAR, NOT_STARTED (boss_ionar.cpp:122; moroes precedent)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -407,12 +419,12 @@ local function ionarTargetDied(event, creature, victim)
 end
 
 -- C++ JustDied: Talk(DEATH) + lSparkList.DespawnAll() +
--- instance->SetBossState(DATA_IONAR, DONE) — only the Talk arm is
--- bridgeable.
+-- instance->SetBossState(DATA_IONAR, DONE) — all three PORTED.
 local function ionarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     ionarDespawnSparks(ionarState[creature:GetGUID()])
     ionarState[creature:GetGUID()] = nil
+    creature:SetBossState(2, 3) -- DATA_IONAR, DONE (boss_ionar.cpp:137; moroes precedent)
     cancelTimers(creature:GetGUID())
 end
 

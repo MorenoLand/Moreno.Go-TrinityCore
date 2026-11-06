@@ -55,24 +55,35 @@
 -- m_uiHealthAmountModifier flag clears + _Reset() + DespawnGolem +
 -- SetPhase(PHASE_INTRO) + EVENT_FORGE_CAST schedule — no bridges).
 -- AttackStart (0.0f AddThreat + SetInCombatWith both ways + the
--- m_bHasTemper-gated MoveChase leg — no motion / threat bridges).
+-- m_bHasTemper-gated MoveChase leg — no AttackStart hook; MoveChase
+-- is bridged now but the engine chase covers the leg).
 -- DespawnGolem (ObjectAccessor GUID loop over m_lGolemGUIDList,
 -- DespawnOrUnsummon — no ObjectAccessor / summon-list bridges).
 -- ShatterGolem (the brittle-golem-only CastSpell(SPELL_SHATTER
 -- 52429) + GolemsShattered increment machine, :175-193 — the real
 -- blocker is the summon-list/ObjectAccessor cross-creature chain,
--- not the cast form).
+-- not the cast form; a grid sweep could replace the list per the
+-- DespawnGolem port, but the chain head EVENT_SHATTER is gated on
+-- m_bCanShatterGolem, set only by the unported STOMP machine, so the
+-- arm can never legitimately fire).
 -- JustSummoned (NPC_MOLTEN_GOLEM 28695 SummonList latch +
 -- random-target MoveFollow + non-triggered SPELL_HEAT 52387
 -- cast via the CastSpellExtraArgs overload with SetOriginalCaster
 -- only (boss_volkhan.cpp:204 — no trigger flags; earlier header
--- claim of "triggered" corrected 2026-10-14) — no summon-list /
--- cast / motion / target-selection bridges).
+-- claim of "triggered" corrected 2026-10-14) — stay-out: no Lua
+-- summon source (phase 5 unported, so ev19 never fires), no
+-- summon-list bridge, and SelectTarget (random) still unbridged;
+-- MoveFollow + CastSpell ARE bridged now (2026-11-05 re-check), so
+-- motion/cast no longer block.
 -- MovementInform POINT_MOTION_TYPE / EVENT_FORGE_CAST (m_uiSummonPhase
 -- 2 -> SetOrientation(2.29f) (SetFacingTo twin bridged; the leg rides
 -- MovementInform POINT_MOTION_TYPE, unbridged) -> phase 3).
--- GetData(DATA_SHATTER_RESISTANT 2042) -> GolemsShattered (no
--- GetData bridge; consumer is achievement_shatter_resistant below).
+-- GetData(DATA_SHATTER_RESISTANT 2042) -> GolemsShattered (GetData /
+-- SetData ARE bridged as a per-handler ScriptData store, 2026-11-05
+-- re-check, lua_creature_events.go:771-796 — earlier "no GetData
+-- bridge" claim retracted; still stay-out: GolemsShattered is never
+-- written because ShatterGolem's chain head is dead, and the consumer
+-- is achievement_shatter_resistant below, which has no bridge).
 -- UpdateAI event machine: EVENT_PAUSE (m_bIsStriking resume-chase +
 -- flag clears, 3.5s); EVENT_SHATTERING_STOMP STAYS OUT — verdict
 -- decided 2026-10-14: the arm is gated on !m_bHasTemper &&
@@ -105,7 +116,11 @@
 -- sequence is a motion/target-selection machine (MovePoint :312,
 -- cross-creature Temper casts :324-325, triggered summon cast :349)
 -- with phase gating (PHASE_INTRO forge-cast :276-278, PHASE_NORMAL
--- gates :126-129) — no motion / target-selection bridges.
+-- gates :126-129) — 2026-11-05 re-check: MoveTo (MovePoint twin),
+-- MoveChase/MoveFollow and FindNearestCreature (GetClosestCreatureWithEntry
+-- twin) ARE bridged now, so motion/lookup no longer block; the live
+-- blockers are the MovementInform arrival (no ev28 in runtime.go)
+-- and SelectTarget (MaxThreat, :336) — still unbridged.
 -- npc_molten_golem (NPC_MOLTEN_GOLEM 28695) — TIMER ARMS PORTED
 -- (boss_volkhan.cpp:391-479, npc_molten_golemAI): entry 28695
 -- registered below.
@@ -129,10 +144,13 @@
 -- non-attackable flags ride the template unit_flags).
 -- DOCUMENTED DEVIATIONS: InterruptNonMeleeSpells is bridged (no-op
 -- twin, lua_creature_events.go) — the golem kill-shot leg is PORTED
--- below; volkhan's own :298 leg rides the unported temper-summon
--- machine (see header) + MotionMaster clear (no motion bridge) stay out.
--- AttackStart (:411-424: m_bIsFrozen-gated MoveChase) — no motion
--- bridge; melee is engine-driven in Go like DoMeleeAttackIfReady.
+-- below, as is its MotionMaster Clear (:440) via creature:StopMoving()
+-- (MoveClear alias, ported 2026-11-05); volkhan's own :298 interrupt
+-- leg rides the unported temper-summon machine and stays out.
+-- AttackStart (:411-424: m_bIsFrozen-gated MoveChase) — no AttackStart
+-- hook; MoveChase is bridged now but the engine chase covers the leg
+-- (frozen golems never chase via the brittle template); melee is
+-- engine-driven in Go like DoMeleeAttackIfReady.
 -- SpellHit (:444-449: SPELL_SHATTER 52429 dummy on a brittle golem
 -- -> DespawnOrUnsummon) — PORTED via event 14 (golemSpellHit below;
 -- golemFrozen latch = UpdateEntry(NPC_BRITTLE_GOLEM) proxy, set on the
@@ -340,7 +358,8 @@ end
 -- registrations (registered below for both entries — the C++ AI object
 -- keeps receiving hooks after the transform). AttackStop bridged
 -- 2026-10-22 (C++ order RemoveAllAuras -> AttackStop -> Interrupt).
--- MotionMaster stays out (no motion bridge; see header deviations).
+-- MotionMaster Clear (:440) PORTED 2026-11-05 as creature:StopMoving()
+-- (MoveClear alias of the StopMoving twin, lua_creature_events.go:2809-2825).
 local function golemDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     if damage >= creature:GetHealth() then
@@ -351,6 +370,11 @@ local function golemDamageTaken(event, creature, attacker, damage)
         -- RemoveAllAuras -> AttackStop).
         creature:AttackStop()
         creature:InterruptNonMeleeSpells(false) -- C++ :437, after AttackStop.
+        -- C++ boss_volkhan.cpp:440: me->GetMotionMaster()->Clear() —
+        -- MoveClear collapses to the StopMoving twin
+        -- (lua_creature_events.go:2809-2825; reliquary_of_souls
+        -- "MotionMaster-clear leg" precedent).
+        creature:StopMoving()
         golemFrozen[guid] = true
         golemCancelTimers(guid)
         return false, 0

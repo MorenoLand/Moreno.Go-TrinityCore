@@ -35,13 +35,15 @@
 -- victim engage the entering player (C++ CallOfHelpCreatureInRangeDo
 -- EngageWithTarget leg; IsEngaged skip via !GetVictim, LOS/faction/
 -- react gates unmodeled, 2D+reach scan vs C++ 3D absolute 30.0f).
--- instance->SetBossState(DATA_BJARNGRIM, IN_PROGRESS) has no bridge
--- — the boss_bookkeeping precedent.
+-- instance->SetBossState(DATA_BJARNGRIM, IN_PROGRESS) PORTED 2026-11-05
+-- via creature:SetBossState (lua_creature_events.go:5917; the
+-- boss_moroes.lua precedent) — the "no bridge" claim was stale.
 -- KilledUnit — Talk(SAY_SLAY 4) (event 3 — C++-UNCONDITIONAL: the Talk
 -- fires for any victim; no nalorakk gate here — the anubrekhan
 -- unconditional variant precedent).
 -- JustDied — Talk(SAY_DEATH 5) (event 4;
--- instance->SetBossState(DATA_BJARNGRIM, DONE) has no instance bridge).
+-- instance->SetBossState(DATA_BJARNGRIM, DONE) PORTED 2026-11-05 via
+-- creature:SetBossState — the "no instance bridge" claim was stale).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 28586
 -- — no bridgeable arms):
 -- PORTED: npc_stormforged_lieutenant (NPC_STORMFORGED_LIEUTENANT =
@@ -63,9 +65,11 @@
 -- canBuff AddAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE 52092) leg,
 -- boss_bjarngrim.cpp:163-167: re-buffs on Reset only if canBuff is true
 -- and the aura is absent); the m_auiStormforgedLieutenantGUID respawn
--- loop (C++ self-notes the GUIDs are never assigned) and
--- instance->SetBossState(DATA_BJARNGRIM, NOT_STARTED) stay out — no
--- summon / instance bridges. The stance-reset DoRemoveStanceAura +
+-- loop (C++ self-notes the GUIDs are never assigned) stays out
+-- (dead code, no bridge needed); the SetBossState(DATA_BJARNGRIM,
+-- NOT_STARTED) leg is PORTED 2026-11-05 via creature:SetBossState
+-- (ev23 tail, C++-last in Reset) — the "no instance bridge" claim
+-- was stale. The stance-reset DoRemoveStanceAura +
 -- DoCast(SPELL_DEFENSIVE_STANCE 53790) leg and the SetEquipmentSlots
 -- restore (EQUIP_SWORD 37871 / EQUIP_SHIELD 35642) are PORTED 2026-10-25
 -- on ev23 (inside bjarngrimReset below). (The stale "no equipment bridge"
@@ -99,6 +103,7 @@
 
 local ENTRY_BJARNGRIM = 28586
 local ENTRY_STORMFORGED_LIEUTENANT = 29240
+local DATA_BJARNGRIM = 0 -- halls_of_lightning.h:31 (HOLDataTypes)
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 4
@@ -259,9 +264,10 @@ local function bjarngrimStanceReset(creature)
 end
 
 -- C++ JustEngagedWith: Talk(AGGRO) + CallForHelp(30.0f) +
--- SetBossState(DATA_BJARNGRIM, IN_PROGRESS) — only the Talk arm is
--- bridgeable. C++ UpdateAI timers run only in combat and Reset
--- re-inits them, so ev1 (re)builds the whole stance state.
+-- SetBossState(DATA_BJARNGRIM, IN_PROGRESS) — all three legs ported
+-- (SetBossState via creature:SetBossState, 2026-11-05). C++ UpdateAI
+-- timers run only in combat and Reset re-inits them, so ev1 (re)builds
+-- the whole stance state.
 local function bjarngrimEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     if target then
@@ -271,6 +277,9 @@ local function bjarngrimEnterCombat(event, creature, target)
             end
         end
     end
+    -- C++ JustEngagedWith tail (boss_bjarngrim.cpp:208):
+    -- instance->SetBossState(DATA_BJARNGRIM, IN_PROGRESS).
+    creature:SetBossState(DATA_BJARNGRIM, 1)
     bjarngrimStanceStart(creature)
 end
 
@@ -281,9 +290,12 @@ local function bjarngrimTargetDied(event, creature, victim)
 end
 
 -- C++ JustDied: Talk(DEATH) + SetBossState(DATA_BJARNGRIM, DONE) —
--- only the Talk arm is bridgeable.
+-- both legs ported (SetBossState 2026-11-05).
 local function bjarngrimDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied tail (boss_bjarngrim.cpp:220):
+    -- instance->SetBossState(DATA_BJARNGRIM, DONE).
+    creature:SetBossState(DATA_BJARNGRIM, 3)
     bjarngrimStanceCancel(creature:GetGUID())
 end
 
@@ -400,6 +412,9 @@ local function bjarngrimReset(event, creature)
         creature:AddAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE)
     end
     bjarngrimStanceReset(creature)
+    -- C++ Reset tail (boss_bjarngrim.cpp:188):
+    -- instance->SetBossState(DATA_BJARNGRIM, NOT_STARTED).
+    creature:SetBossState(DATA_BJARNGRIM, 0)
 end
 RegisterCreatureEvent(ENTRY_BJARNGRIM, 2, bjarngrimLeaveCombat)
 RegisterCreatureEvent(ENTRY_BJARNGRIM, 23, bjarngrimReset)

@@ -18860,17 +18860,20 @@ func init() {
 	// Loken (28923), Halls of Lightning —
 	// lua_scripts/northrend/boss_loken.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 2)
-	// (event 1; BossAI bookkeeping passthrough, SetPhase,
-	// ScheduleEvent legs, and DoStartTimedAchievement(20384)
-	// have no bridges); KilledUnit player-gated Talk(SAY_SLAY 4)
+	// (event 1; BossAI bookkeeping passthrough, SetPhase, and
+	// DoStartTimedAchievement(20384) have no bridges — the three
+	// ScheduleEvent legs ride CreateLuaEvent timers);
+	// KilledUnit player-gated Talk(SAY_SLAY 4)
 	// (event 3 — razuvious player-gated variant precedent);
-	// JustDied Talk(SAY_DEATH 8) (event 4; _JustDied passthrough
-	// and DoRemoveAurasDueToSpellOnPlayers(59414) have no
-	// bridges).
-	// Documented-only: Reset / Initialize (timed-achievement
-	// stop, no bridge); MoveInLineOfSight intro Talk(0) (no
-	// MoveInLineOfSight bridge); EVENT_INTRO_DIALOGUE Talk(1)
-	// (no timer bridge); the UpdateAI timer machine
+	// JustDied Talk(SAY_DEATH 8) (event 4; _JustDied's
+	// SetBossState(DATA_LOKEN, DONE) ported explicitly (native
+	// luaBossAI.OnDied is empty) — drives the LokenGlobe
+	// SendCustomAnim(0) leg via instance_halls_of_lightning.lua;
+	// DoRemoveAurasDueToSpellOnPlayers (59414) ported via
+	// GetPlayersInWorld + player:RemoveAura);
+	// MoveInLineOfSight intro Talk(0) + EVENT_INTRO_DIALOGUE
+	// Talk(1) (event 27 + 20s timer; phase flip has no Lua phase
+	// model); the UpdateAI timer machine
 	// (ARC_LIGHTNING 52921; LIGHTNING_NOVA 52960 with Talk(3) +
 	// Talk(EMOTE 9); PULSING_SHOCKWAVE 52961 + aura 59414 —
 	// timer arms PORTED in boss_loken.lua (arc / nova / resume /
@@ -18878,8 +18881,10 @@ func init() {
 	// gate (plain while loop; the sole UNIT_STATE_CASTING hit is
 	// the :165 ClearUnitState resume workaround, not a gate) —
 	// ported ticks fire ungated, C++-exact; no gate ported);
-	// DamageTaken health-pct Talk arms (5 / 6 / 7) (no
-	// DamageTaken bridge); spell_loken_pulsing_shockwave
+	// DamageTaken health-pct Talk arms (5 / 6 / 7) (event 9,
+	// pre-application damage, no postDamage guard).
+	// Documented-only: Reset / Initialize (timed-achievement
+	// stop, no bridge); spell_loken_pulsing_shockwave
 	// (distance-scaled CalculateDamage SpellScript — no
 	// SpellScript bridge, joins the no-SpellScript-bridge
 	// queue).
