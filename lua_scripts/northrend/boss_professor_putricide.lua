@@ -106,16 +106,20 @@
 -- DamageTaken latches (:356,362) feeding the unported tear-gas/MovementInform phase
 -- machine.
 -- boss_professor_putricide JustEngagedWith instance legs —
--- instance->DoCastSpellOnPlayers(LIGHT_S_HAMMER_TELEPORT) /
--- instance->SetBossState(DATA_PROFESSOR_PUTRICIDE,
--- IN_PROGRESS) — no instance bridge (the DoZoneInCombat(me) :275 leg is
+-- instance->DoCastSpellOnPlayers(LIGHT_S_HAMMER_TELEPORT) stays out
+-- (no bridge); instance->SetBossState(DATA_PROFESSOR_PUTRICIDE,
+-- IN_PROGRESS) PORTED 2026-11-06 via creature:SetBossState (the
+-- DoZoneInCombat(me) :275 leg is
 -- PORTED in the event-1 handler — live bridge
 -- engine/world/lua_creature_events.go, 2026-10-23); JustDied DoCastAOE(
 -- SPELL_UNHOLY_INFUSION_CREDIT, true) leg PORTED (Is25ManRaid() +
 -- HasAura(SPELL_SHADOWS_FATE) gate, creature:Is25ManRaid() bridged;
 -- the old "no 25-man bridge" claim retracted);
--- JustReachedHome instance->SetBossState(FAIL) — no instance
--- bridge.
+-- JustReachedHome instance->SetBossState(FAIL) PORTED 2026-11-06
+-- via creature:SetBossState on ev24 OnReachHome (phase gate
+-- un-evaluable, see putricideReachHome); the MovementInform
+-- cross-boss IN_PROGRESS legs (:376/:383, festergut/rotface delayed
+-- gate close) stay out — the MovementInform sender is unported.
 -- npc_volatile_ooze / npc_gas_cloud (npc_putricide_oozeAI, lines
 -- 718–810) — zero Talk lines — NOT registered (the bronjahm
 -- npc_corrupted_soul_fragment precedent); the aura-application /
@@ -141,6 +145,14 @@
 -- scheduler) + SAY_DEATH 13 (1)).
 
 local ENTRY_PROFESSOR_PUTRICIDE = 36678
+
+local DATA_PROFESSOR_PUTRICIDE = 6 -- icecrown_citadel.h:80
+local DATA_ROTFACE = 5 -- icecrown_citadel.h:79
+local DATA_FESTERGUT = 4 -- icecrown_citadel.h:78
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 
 local SAY_AGGRO = 4
 local SAY_KILL = 11
@@ -259,6 +271,10 @@ local function putricideJustEngagedWith(event, creature, target)
     creature:CastSpell(creature, SPELL_OOZE_TANK_PROTECTION, true)
     creature:DoZoneInCombat() -- boss_professor_putricide.cpp:275 (JustEngagedWith arm; bridge live engine/world/lua_creature_events.go, 2026-10-23)
     creature:SetCombatPulseDelay(5) -- boss_professor_putricide.cpp:276 (JustEngagedWith arm)
+    -- C++ :277 — instance->SetBossState(DATA_PROFESSOR_PUTRICIDE,
+    -- IN_PROGRESS), last arm of JustEngagedWith (C++ arm order).
+    -- PORTED 2026-11-06 via creature:SetBossState.
+    creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_IN_PROGRESS)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
     -- C++ :267 — events.ScheduleEvent(EVENT_SLIME_PUDDLE, 10s).
     schedule(guid, "slimepuddle", 10000, function() slimePuddleTick(creature, guid) end)
@@ -270,18 +286,45 @@ local function putricideLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_professor_putricide::JustReachedHome (:282-286):
+-- _JustReachedHome() then SetWalk(false), then SetBossState(FAIL)
+-- gated on PHASE_COMBAT_1/2/3. The phase machine is unported and
+-- reach-home only fires post-combat in the Lua model, so the gate is
+-- always true here; the FAIL leg is PORTED 2026-11-06 via
+-- creature:SetBossState on ev24 OnReachHome (the marrowgar ev24
+-- precedent).
+local function putricideReachHome(event, creature)
+    creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_FAIL)
+end
+
 -- C++ Reset :236 instance->SetData(DATA_NAUSEA_ACHIEVEMENT, true) and ExtraEffect :1382 set it false:
 -- achievement criteria, no achievement bridge (the lich-king no-achievement-criteria-bridge precedent).
 -- DATA_EXPERIMENT_STAGE (:971-972) toggles inside the unbridged spell_putricide_unstable_experiment
 -- SpellScript and is only read there — the whole chain joins the no-SpellScript-bridge queue. Dropped, documented.
 local function putricideReset(event, creature)
+    -- C++ Reset :234-235 — instance->SetBossState(
+    -- DATA_PROFESSOR_PUTRICIDE, NOT_STARTED), gated on NOT being in
+    -- PHASE_ROTFACE/PHASE_FESTERGUT. The phase machine is unported and
+    -- Putricide never enters those phases in the Lua model, so the
+    -- gate is always true here (C++ arm order: before events.Reset
+    -- :238). PORTED 2026-11-06 via creature:SetBossState. No != DONE
+    -- gate: the C++ call is explicit, not _Reset().
+    creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_NOT_STARTED)
     cancelTimers(creature:GetGUID())
     -- C++ boss_professor_putricide.cpp:242: me->SetReactState(REACT_DEFENSIVE)
     -- (Reset: flip follows events.Reset).
     creature:SetReactState(1) -- REACT_DEFENSIVE
     -- C++ :246-249: the RemoveFlag(NOT_SELECTABLE) + SetImmuneToPC(false)
-    -- arms ride the Rotface+Festergut DONE instance boss-state gate, which
-    -- has no bridge, so they stay out with it.
+    -- arms ride the Rotface+Festergut DONE instance boss-state gate —
+    -- PORTED 2026-11-06: creature:GetBossState is live
+    -- (lua_creature_events.go:5936), so the gate is evaluable (the old
+    -- "has no bridge" claim is retracted); SetImmuneToPC(false) via the
+    -- RemoveFlag(59, 0x100) twin (the blood-prince-council precedent).
+    if creature:GetBossState(DATA_ROTFACE) == BOSS_STATE_DONE
+        and creature:GetBossState(DATA_FESTERGUT) == BOSS_STATE_DONE then
+        creature:RemoveFlag(59, 0x02000000) -- UNIT_FLAG_NOT_SELECTABLE
+        creature:RemoveFlag(59, 0x100) -- UNIT_FLAG_IMMUNE_TO_PC
+    end
 end
 
 -- C++ boss_professor_putricide::KilledUnit:
@@ -302,6 +345,9 @@ local function putricideJustDied(event, creature, killer)
     -- would keep firing on the corpse (festergut/rotface death-cancel
     -- precedent).
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied :296 — _JustDied() sets DONE, first arm (before
+    -- Talk). PORTED 2026-11-06 via creature:SetBossState.
+    creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     -- C++ :299-300 — Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)-gated
     -- DoCastAOE(SPELL_UNHOLY_INFUSION_CREDIT, true) via self-cast
@@ -369,4 +415,5 @@ RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 2, putricideLeaveCombat)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 3, putricideKilledUnit)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 4, putricideJustDied)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 23, putricideReset)
+RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 24, putricideReachHome)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 19, putricideJustSummoned)

@@ -37,9 +37,10 @@
 -- DOCUMENTED-BLOCKED (no registration beyond entry 37955):
 -- boss_blood_queen_lana_thel JustEngagedWith — instance legs
 -- (instance->CheckRequiredBosses / DoCastSpellOnPlayers(
--- LIGHT_S_HAMMER_TELEPORT) / instance->
--- SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, IN_PROGRESS)) have no
--- instance bridge; PORTED (2026-10-23): DoZoneInCombat (:184,
+-- LIGHT_S_HAMMER_TELEPORT)) have no instance bridge; SetBossState(
+-- DATA_BLOOD_QUEEN_LANA_THEL, IN_PROGRESS) PORTED 2026-11-06 via
+-- creature:SetBossState (lua_creature_events.go:5917). PORTED
+-- (2026-10-23): DoZoneInCombat (:184,
 -- me-form) via the live creature:DoZoneInCombat bridge
 -- (engine/world/lua_creature_events.go:426; the mandokir/algalon
 -- event-1 precedent) — C++ arm order (before Talk(SAY_AGGRO));
@@ -61,8 +62,8 @@
 -- boss_blood_queen_lana_thel JustReachedHome — the Talk(SAY_WIPE 9) leg
 -- SetDisableGravity(false) / SetReactState(2) / Talk(SAY_WIPE 9) ported
 -- on event 24 in C++ arm order (bridges live, lua_creature_events.go);
--- the instance->SetBossState(FAIL) leg has no instance bridge and stays
--- out (the old "no event-24 port precedent" note was stale).
+-- the instance->SetBossState(FAIL) leg (:275) PORTED 2026-11-06 via
+-- creature:SetBossState (the old "no instance bridge" note was stale).
 -- boss_blood_queen_lana_thel MovementInform — Talk(SAY_AIR_PHASE
 -- 7) rides the POINT_AIR movement-inform leg (no MovementInform
 -- bridge); the air-phase machine (MovePoint / SetDisableGravity /
@@ -144,6 +145,12 @@
 -- + SAY_DEATH 11 (1) + EMOTE_BERSERK_RAID 12 (1, scheduler)).
 
 local ENTRY_BLOOD_QUEEN_LANA_THEL = 37955
+
+local DATA_BLOOD_QUEEN_LANA_THEL = 8 -- icecrown_citadel.h:82
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 
 local SAY_AGGRO = 0
 local SAY_KILL = 8
@@ -406,9 +413,10 @@ local function lanaThelJustEngagedWith(event, creature, target)
     -- Talk(SAY_AGGRO) (C++ arm order; the mandokir/algalon event-1 precedent).
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    -- C++ JustEngagedWith (:184): CleanAuras() after Talk(SAY_AGGRO) /
-    -- SetBossState(IN_PROGRESS) (no instance bridge), before the
-    -- triggered self-cast auras below — C++ arm order kept.
+    -- C++ JustEngagedWith (:185): SetBossState(IN_PROGRESS) after
+    -- Talk(SAY_AGGRO), before CleanAuras() (C++ arm order). PORTED
+    -- 2026-11-06 via creature:SetBossState.
+    creature:SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, BOSS_STATE_IN_PROGRESS)
     cleanAuras(creature)
     -- C++ :188-190 — triggered self-cast auras (curator engage-cast
     -- precedent): DoCast(me, SPELL_SHROUD_OF_SORROW, true) +
@@ -431,6 +439,13 @@ local function lanaThelLeaveCombat(event, creature)
 end
 
 local function lanaThelReset(event, creature)
+    -- C++ Reset() :159 — _Reset() first: SetBossState NOT_STARTED
+    -- only when the stored state != DONE (BossAI::_Reset,
+    -- ScriptedCreature.cpp:499-509; the falric precedent). PORTED
+    -- 2026-11-06 via creature:SetBossState.
+    if creature:GetBossState(DATA_BLOOD_QUEEN_LANA_THEL) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, BOSS_STATE_NOT_STARTED)
+    end
     cancelTimers(creature:GetGUID())
     -- C++ Reset() ends with CleanAuras() (boss_blood_queen_lana_thel.cpp:168),
     -- after the timer arms; _vampires.clear()/Initialize() are unported
@@ -452,9 +467,11 @@ end
 
 local function lanaThelJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied :196 — _JustDied() sets DONE, first arm (before
+    -- Talk). PORTED 2026-11-06 via creature:SetBossState.
+    creature:SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
-    -- C++ JustDied (:195-218): _JustDied() is the cancelTimers(guid)
-    -- above; the Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)-gated
+    -- C++ JustDied (:195-218): the Is25ManRaid() + HasAura(SPELL_SHADOWS_FATE)-gated
     -- DoCastAOE(SPELL_BLOOD_INFUSION_CREDIT, true) leg (:199-200) ports
     -- via self-cast (DoCastAOE = self-cast convention); CleanAuras()
     -- (:221-233) ports via cleanAuras above (C++ order kept); the
@@ -468,12 +485,14 @@ end
 
 -- C++ boss_blood_queen_lana_thel::JustReachedHome: SetDisableGravity(false)
 -- (bridge live), then SetReactState(REACT_AGGRESSIVE 2) in C++ arm order
--- ahead of the Talk(SAY_WIPE 9); the instance FAIL leg has no instance
--- bridge and stays out. The old "no-gravity bridge" note was stale.
+-- ahead of the Talk(SAY_WIPE 9); the instance->SetBossState(FAIL)
+-- leg (:275, after Talk) is PORTED 2026-11-06 via creature:SetBossState.
+-- The old "no-gravity bridge" note was stale.
 local function lanaThelReachHome(event, creature)
     creature:SetDisableGravity(false)
     creature:SetReactState(2)
     creature:Talk(SAY_WIPE)
+    creature:SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, BOSS_STATE_FAIL)
 end
 
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 1, lanaThelJustEngagedWith)

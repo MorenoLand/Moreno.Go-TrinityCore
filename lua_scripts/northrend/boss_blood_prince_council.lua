@@ -125,7 +125,11 @@
 -- boss_blood_council_
 -- controller::JustDied (:322-336, prince kill sweep — the prince->
 -- LowerPlayerDamageReq(:331) + Unit::Kill legs, SetBossState(DONE)
--- :323) stays out — controller death handling unported.
+-- :323) stays out — controller death handling unported; re-verified
+-- 2026-11-06: no script anywhere in-tree kills the controller, so
+-- the DONE leg has no live fire path (the princes' own JustDied
+-- :466-486 calls no _JustDied, and the instance OnUnitDeath has no
+-- prince case).
 -- BloodPrincesBossAI::DoAction (:549-580) — Talk(SelectInvocationSay())
 -- + DoCastSelf(SPELL_INVOCATION_VISUAL_ACTIVE 71596, true) ride
 -- ACTION_CAST_INVOCATION, which arrives via SpellHit (:535-539) from the
@@ -323,6 +327,9 @@ end
 local ENTRY_DARK_NUCLEUS = 38369 -- icecrown_citadel.h:250 (NPC_DARK_NUCLEUS)
 local ENTRY_BLOOD_ORB_CONTROLLER = 38008 -- icecrown_citadel.h:248 (NPC_BLOOD_ORB_CONTROLLER)
 local DATA_BLOOD_PRINCE_COUNCIL = 7 -- icecrown_citadel.h:81
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 local DATA_PRINCE_KELESETH = 19 -- icecrown_citadel.h:95
 local DATA_PRINCE_TALDARAM = 20 -- icecrown_citadel.h:96
 local DATA_PRINCE_VALANAR = 21 -- icecrown_citadel.h:97
@@ -945,8 +952,11 @@ local function controllerEnterCombat(event, creature)
 end
 
 -- C++ EnterEvadeMode (boss_blood_prince_council.cpp:252-260): the
--- PrincesData DISENGAGE loop; summons.DespawnAll + _DespawnAtEvade
--- have no bridges — stay out.
+-- PrincesData DISENGAGE loop; summons.DespawnAll stays out (no
+-- bridge); _DespawnAtEvade (:260) sets FAIL (BossAI::_DespawnAtEvade,
+-- ScriptedCreature.cpp:617) — PORTED 2026-11-06 via
+-- creature:SetBossState on ev2 (the deathwhisper ev2 evade-FAIL
+-- precedent).
 local function controllerLeaveCombat(event, creature)
     for _, bossData in ipairs(PRINCES_DATA) do
         local prince = creature:GetInstanceCreature(bossData)
@@ -954,6 +964,7 @@ local function controllerLeaveCombat(event, creature)
             creature:SendEncounterUnit(1, prince) -- ENCOUNTER_FRAME_DISENGAGE
         end
     end
+    creature:SetBossState(DATA_BLOOD_PRINCE_COUNCIL, BOSS_STATE_FAIL)
 end
 
 -- C++ boss_blood_council_controller::Reset (boss_blood_prince_council.cpp:233-250):
@@ -965,6 +976,13 @@ end
 -- valanar SetHealth(max) + CastSpell(REMOVE_EMPOWERED_BLOOD)) stays out —
 -- no instance GetData bridge (creature:GetData is the per-motion latch).
 local function controllerReset(event, creature)
+    -- C++ boss_blood_council_controller::Reset :235 — _Reset() first:
+    -- SetBossState NOT_STARTED only when the stored state != DONE
+    -- (BossAI::_Reset, ScriptedCreature.cpp:499-509; the falric
+    -- precedent). PORTED 2026-11-06 via creature:SetBossState.
+    if creature:GetBossState(DATA_BLOOD_PRINCE_COUNCIL) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_BLOOD_PRINCE_COUNCIL, BOSS_STATE_NOT_STARTED)
+    end
     creature:SummonCreatureGroup(1) -- SUMMON_PRINCES_GROUP
 end
 

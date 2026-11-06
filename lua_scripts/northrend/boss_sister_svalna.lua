@@ -288,6 +288,11 @@
 local ENTRY_SISTER_SVALNA = 37126
 local ENTRY_CROK_SCOURGEBANE = 37129
 
+local DATA_SISTER_SVALNA = 9 -- icecrown_citadel.h:83
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+
 local ENTRY_YMIRJAR_BATTLE_MAIDEN = 37132
 local ENTRY_YMIRJAR_DEATHBRINGER = 38125
 local ENTRY_YMIRJAR_WARHAWK = 38154
@@ -506,9 +511,13 @@ local function svalnaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     -- C++ JustEngagedWith base call first (boss_sister_svalna.cpp:355):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) —
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before the crok
-    -- Talk leg (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:527-544) —
+    -- SetBossState(IN_PROGRESS) (:537, after the CheckRequiredBosses
+    -- gate — no bridge, stays out) + SetCombatPulseDelay(5) + me-form
+    -- DoZoneInCombat, before the crok Talk leg (C++ arm order);
+    -- instance/setActive/ScheduleTasks legs out. The IN_PROGRESS leg
+    -- is PORTED 2026-11-06 via creature:SetBossState.
+    creature:SetBossState(DATA_SISTER_SVALNA, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     -- C++ JustEngagedWith (boss_sister_svalna.cpp:355-356):
@@ -557,6 +566,9 @@ end
 -- the CaptainSurviveTalk cross-AI legs have no bridge.
 local function svalnaJustDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied :336 — _JustDied() sets DONE, first arm (before
+    -- Talk). PORTED 2026-11-06 via creature:SetBossState.
+    creature:SetBossState(DATA_SISTER_SVALNA, BOSS_STATE_DONE)
     creature:Talk(SAY_SVALNA_DEATH)
 end
 
@@ -567,6 +579,13 @@ end
 -- the intro DoAction machine is unported and porting PASSIVE alone
 -- would strand her passive (the tyrannus precedent).
 local function svalnaReset(event, creature)
+    -- C++ Reset :329 — _Reset() first: SetBossState NOT_STARTED only
+    -- when the stored state != DONE (BossAI::_Reset,
+    -- ScriptedCreature.cpp:499-509; the falric precedent). PORTED
+    -- 2026-11-06 via creature:SetBossState.
+    if creature:GetBossState(DATA_SISTER_SVALNA) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_SISTER_SVALNA, BOSS_STATE_NOT_STARTED)
+    end
     cancelTimers(creature:GetGUID())
     creature:SetReactState(1) -- REACT_DEFENSIVE
 end

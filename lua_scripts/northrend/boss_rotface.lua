@@ -74,8 +74,10 @@
 -- mapId/instanceId filter + player:RemoveAura (the moroes
 -- precedent — the stale "no instance bridge" claim is retracted);
 -- JustReachedHome
--- instance->SetBossState(DATA_ROTFACE, FAIL) + SetData(
--- DATA_OOZE_DANCE_ACHIEVEMENT) — no instance bridge; EnterEvadeMode
+-- instance->SetBossState(DATA_ROTFACE, FAIL) PORTED 2026-11-06 via
+-- creature:SetBossState on ev24 OnReachHome (the marrowgar ev24
+-- precedent); SetData(DATA_OOZE_DANCE_ACHIEVEMENT) stays out — no
+-- instance SetData bridge. EnterEvadeMode
 -- cross-AI professor EnterEvadeMode — no bridge; JustSummoned
 -- cross-AI professor CastSpell leg (VILE_GAS_H) — no bridge.
 -- JustSummoned latch PORTED 2026-11-03 (rotfaceJustSummoned,
@@ -149,6 +151,12 @@
 
 local ENTRY_ROTFACE = 36627
 local ENTRY_PROFESSOR_PUTRICIDE = 36678
+
+local DATA_ROTFACE = 5 -- icecrown_citadel.h:79
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 
 local SAY_AGGRO = 1
 local SAY_SLIME_SPRAY = 3
@@ -388,9 +396,26 @@ end
 
 local function rotfaceReset(event, creature)
     local guid = creature:GetGUID()
+    -- C++ Reset() :111 — _Reset() first: SetBossState NOT_STARTED
+    -- only when the stored state != DONE (BossAI::_Reset,
+    -- ScriptedCreature.cpp:499-509; the falric precedent — ev23
+    -- fires on spawn/death/evade too, and a DONE boss must stay
+    -- DONE). PORTED 2026-11-06 via creature:SetBossState.
+    if creature:GetBossState(DATA_ROTFACE) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_ROTFACE, BOSS_STATE_NOT_STARTED)
+    end
     despawnRotfaceSummons(guid)
     cancelTimers(guid)
     infection[guid] = nil
+end
+
+-- C++ boss_rotface::JustReachedHome (:153-156): _JustReachedHome()
+-- (setActive(false), unmodeled) then SetBossState(FAIL) PORTED
+-- 2026-11-06 via creature:SetBossState on ev24 OnReachHome (the
+-- marrowgar ev24 precedent). The SetData(DATA_OOZE_DANCE_ACHIEVEMENT)
+-- reset leg stays out — no instance SetData bridge.
+local function rotfaceReachHome(event, creature)
+    creature:SetBossState(DATA_ROTFACE, BOSS_STATE_FAIL)
 end
 
 -- C++ boss_rotface::KilledUnit:
@@ -439,6 +464,10 @@ local function rotfaceJustDied(event, creature, killer)
             end
         end
     end
+    -- C++ JustDied (:142) — _JustDied() sets DONE, after the aura
+    -- strip above and before Talk (C++ arm order). PORTED 2026-11-06
+    -- via creature:SetBossState.
+    creature:SetBossState(DATA_ROTFACE, BOSS_STATE_DONE)
     cancelTimers(guid)
     infection[guid] = nil
     creature:Talk(SAY_DEATH)
@@ -577,6 +606,7 @@ RegisterCreatureEvent(ENTRY_ROTFACE, 4, rotfaceJustDied)
 RegisterCreatureEvent(ENTRY_ROTFACE, 15, rotfaceSpellHitTarget)
 RegisterCreatureEvent(ENTRY_ROTFACE, 19, rotfaceJustSummoned)
 RegisterCreatureEvent(ENTRY_ROTFACE, 23, rotfaceReset)
+RegisterCreatureEvent(ENTRY_ROTFACE, 24, rotfaceReachHome)
 RegisterCreatureEvent(ENTRY_LITTLE_OOZE, 4, littleOozeDied)
 RegisterCreatureEvent(ENTRY_LITTLE_OOZE, 22, littleOozeSummoned)
 RegisterCreatureEvent(ENTRY_BIG_OOZE, 4, bigOozeDied)
