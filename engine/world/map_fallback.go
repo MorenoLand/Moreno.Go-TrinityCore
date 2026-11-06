@@ -30,8 +30,28 @@ func (s *session) validTrinityMapID(mapID uint32) bool {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return false
 	}
-	_, found, err := s.server.Data.Map(mapID)
-	return err == nil && found
+	entry, found, err := s.server.Data.Map(mapID)
+	if err != nil || !found {
+		return false
+	}
+	// MapManager::IsValidMAP(mapid, false) (MapManager.cpp:264-272): a
+	// dungeon map is valid only with an instance_template row.
+	if entry.IsDungeon() {
+		return s.hasInstanceTemplate(mapID)
+	}
+	return true
+}
+
+// hasInstanceTemplate reports whether instance_template carries a row for
+// the map (ObjectMgr::GetInstanceTemplate); a missing world DB fails
+// closed, matching the C++ null-template rejection.
+func (s *session) hasInstanceTemplate(mapID uint32) bool {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var found int
+	err := s.server.WorldStore.DB.QueryRowContext(context.Background(), "SELECT 1 FROM instance_template WHERE map = ? LIMIT 1", mapID).Scan(&found)
+	return err == nil && found == 1
 }
 
 func (s *session) validTrinityMapLocation(mapID uint32, x, y, z, orientation float32) bool {

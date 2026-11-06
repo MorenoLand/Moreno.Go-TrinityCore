@@ -597,6 +597,21 @@ func (s *session) handleCmdGM(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
 		return
 	}
+	// The C++ handlers take Optional<bool> or no args (cs_gm.cpp:73-216)
+	// and the dispatcher consumes the whole string (ChatCommand.h:112),
+	// so trailing tokens fail the command instead of being dropped.
+	switch strings.ToLower(args[0]) {
+	case "on", "off", "ingame", "list":
+		if len(args) != 1 {
+			s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
+			return
+		}
+	case "chat", "fly", "visible", "vis":
+		if len(args) > 2 {
+			s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
+			return
+		}
+	}
 	switch sub := strings.ToLower(args[0]); sub {
 	case "on":
 		s.handleCmdGMOn(ctx)
@@ -711,8 +726,9 @@ func (s *session) handleCmdGMChat(ctx context.Context, args []string) {
 // the integral ArgInfo (ChatCommandArgs.h:53-56), whose empty token returns
 // nullopt, so the dispatcher prints command help instead. A missing arg
 // therefore reports syntax rather than enabling fly (the old Go default).
-// Fidelity gap: the C++ broadcasts the SMSG_MOVE_SET/UNSET_CAN_FLY packet
-// via SendMessageToSet; the Go setFlyMode writes to the target session only.
+// The C++ broadcasts the SMSG_MOVE_SET/UNSET_CAN_FLY packet via
+// SendMessageToSet (cs_gm.cpp:108-115: target plus everyone in range);
+// setFlyMode fans the packet out to the nearby sessions as well.
 func (s *session) handleCmdGMFly(ctx context.Context, args []string) {
 	if !s.commandAllowed(ctx, permissionCommandGMFly) {
 		s.sendNotification("You do not have permission to use that command.")
@@ -1370,10 +1386,16 @@ func (s *session) setFlyMode(enable bool) {
 	buf := protocol.NewBuffer(16)
 	buf.WritePackedGUID(s.playerGUID)
 	buf.WriteU32(0) // movement counter
+	opcode := uint16(protocol.OpcodeSMSG_MOVE_UNSET_CAN_FLY)
 	if enable {
-		_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), buf.Bytes(), true)
-	} else {
-		_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_UNSET_CAN_FLY), buf.Bytes(), true)
+		opcode = uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY)
+	}
+	_ = s.write(opcode, buf.Bytes(), true)
+	// SendMessageToSet reaches the target and everyone in range; the
+	// direct write above covers the target, so fan the same packet out
+	// to the nearby sessions (broadcastToNearby excludes the source).
+	if s.server != nil {
+		s.server.broadcastToNearby(opcode, buf.Bytes(), s)
 	}
 }
 
@@ -1564,7 +1586,8 @@ const (
 // flight, then teleport. teleportTo is the Go Player::TeleportTo bridge.
 // DELTA: DoTeleport also rejects transport maps (IsTransportMap); that leg
 // is not enforced here because goDoTeleport is shared with appear/summon,
-// whose C++ paths do not reject them.
+// whose C++ paths do not reject them. The go arms that route through
+// DoTeleport use goDoTeleportChecked below instead.
 // The non-flight case snapshots the recall position (SaveRecallPosition,
 // Player.h:1989); the flight case finishes the taxi instead.
 func (s *session) goDoTeleport(ctx context.Context, mapID uint32, x, y, z, o float32) bool {
@@ -1583,6 +1606,34 @@ func (s *session) goDoTeleport(ctx context.Context, mapID uint32, x, y, z, o flo
 	return s.teleportTo(mapID, x, y, z, o)
 }
 
+// goDoTeleportChecked is the go-arm DoTeleport twin (cs_go.cpp:73-91): it
+// adds the transport-map rejection (IsTransportMap, ObjectMgr.h:1588) that
+// goDoTeleport omits for its shared callers. Only the arms whose C++
+// handler routes through DoTeleport use it (creature, creature id,
+// gameobject, gameobject id, taxinode, areatrigger, xyz, offset);
+// graveyard/grid/zonexy/ticket call TeleportTo directly in C++
+// (cs_go.cpp:198,228,307,349) and stay on goDoTeleport.
+func (s *session) goDoTeleportChecked(ctx context.Context, mapID uint32, x, y, z, o float32) bool {
+	if s.isTransportMap(ctx, mapID) {
+		s.sendSysMessage(fmt.Sprintf("You cannot teleport to given coordinates (%.2f, %.2f, map %d).", x, y, mapID))
+		return false
+	}
+	return s.goDoTeleport(ctx, mapID, x, y, z, o)
+}
+
+// isTransportMap mirrors ObjectMgr::IsTransportMap: a map is a transport
+// map when a MO_TRANSPORT (type 15) gameobject_template row carries it in
+// data0 (ObjectMgr.cpp:7638).
+func (s *session) isTransportMap(ctx context.Context, mapID uint32) bool {
+	db := s.goWorldDB()
+	if db == nil {
+		return false
+	}
+	var found int
+	err := db.QueryRowContext(ctx, "SELECT 1 FROM gameobject_template WHERE type = 15 AND data0 = ? LIMIT 1", mapID).Scan(&found)
+	return err == nil && found == 1
+}
+
 // handleCmdGo dispatches the ".go" arms (cs_go.cpp go_commandscript,
 // FIFTEENTH Commands file): creature, creature id, gameobject, gameobject id,
 // graveyard, grid, taxinode, areatrigger, zonexy, xyz, ticket, offset,
@@ -1592,6 +1643,15 @@ func (s *session) goDoTeleport(ctx context.Context, mapID uint32, x, y, z, o flo
 func (s *session) handleCmdGo(ctx context.Context, args []string) {
 	const syntax = "Syntax: .go creature <spawnId>|creature id <entry>|gameobject <spawnId>|gameobject id <entry>|graveyard <gyId>|grid <x> <y> [map]|taxinode <nodeId>|areatrigger <id>|zonexy <x> <y> [area]|xyz <x> <y> [z] [map] [o]|ticket <id>|offset <dx> [dy] [dz] [do]|instance <label...>|boss <name...>"
 	if len(args) == 0 {
+		s.sendSysMessage(syntax)
+		return
+	}
+	// The GO permission lives on the leaf arms (cs_go.cpp:48-61), so it is
+	// checked only once a subcommand matches; an unknown subcommand prints
+	// usage even for a session without the permission.
+	switch strings.ToLower(args[0]) {
+	case "creature", "gameobject", "graveyard", "grid", "taxinode", "areatrigger", "zonexy", "xyz", "ticket", "offset", "instance", "boss":
+	default:
 		s.sendSysMessage(syntax)
 		return
 	}
@@ -1655,12 +1715,23 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .go creature <spawnId> | .go creature id <entry>")
 		return
 	}
+	// The whole string must be consumed (ChatCommand.h:112): the spawn
+	// form takes exactly one token, the "id" form exactly two.
+	if goIDForm(args) {
+		if len(args) != 2 {
+			s.sendSysMessage("Syntax: .go creature <spawnId> | .go creature id <entry>")
+			return
+		}
+	} else if len(args) != 1 {
+		s.sendSysMessage("Syntax: .go creature <spawnId> | .go creature id <entry>")
+		return
+	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
 		return
 	}
-	if len(args) > 1 && strings.ToLower(args[0]) == "id" {
+	if goIDForm(args) {
 		entry, ok := goParseLinkOrUint(args[1], "creature_entry")
 		if !ok {
 			s.sendSysMessage("Invalid creature entry.")
@@ -1693,7 +1764,7 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 			s.sendSysMessage("More than one creature found with the given entry.") // LANG_COMMAND_GOCREATMULTIPLE (269)
 		}
 		first := spawns[0]
-		s.goDoTeleport(ctx, first.mapID, first.x, first.y, first.z, first.o)
+		s.goDoTeleportChecked(ctx, first.mapID, first.x, first.y, first.z, first.o)
 		return
 	}
 	spawnID, ok := goParseLinkOrUint(args[0], "creature")
@@ -1712,7 +1783,7 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Creature lookup error: %v", err))
 		return
 	}
-	s.goDoTeleport(ctx, mapID, x, y, z, o)
+	s.goDoTeleportChecked(ctx, mapID, x, y, z, o)
 }
 
 // handleCmdGoGameObject mirrors HandleGoGameObjectSpawnIdCommand (cs_go.cpp:136)
@@ -1725,14 +1796,25 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .go gameobject <spawnId> | .go gameobject id <entry>")
 		return
 	}
+	// The whole string must be consumed (ChatCommand.h:112): the spawn
+	// form takes exactly one token, the "id" form exactly two.
+	if goIDForm(args) {
+		if len(args) != 2 {
+			s.sendSysMessage("Syntax: .go gameobject <spawnId> | .go gameobject id <entry>")
+			return
+		}
+	} else if len(args) != 1 {
+		s.sendSysMessage("Syntax: .go gameobject <spawnId> | .go gameobject id <entry>")
+		return
+	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
 		return
 	}
-	if len(args) > 1 && strings.ToLower(args[0]) == "id" {
-		entry, err := strconv.ParseUint(args[1], 10, 32)
-		if err != nil {
+	if goIDForm(args) {
+		entry, ok := parseCommandUint32(args[1])
+		if !ok {
 			s.sendSysMessage("Invalid gameobject entry.")
 			return
 		}
@@ -1763,17 +1845,17 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 			s.sendSysMessage("More than one gameobject found with the given entry.") // LANG_COMMAND_GOCREATMULTIPLE (269)
 		}
 		first := spawns[0]
-		s.goDoTeleport(ctx, first.mapID, first.x, first.y, first.z, first.o)
+		s.goDoTeleportChecked(ctx, first.mapID, first.x, first.y, first.z, first.o)
 		return
 	}
-	spawnID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	spawnID, ok := parseCommandUint32(args[0])
+	if !ok {
 		s.sendSysMessage("Invalid spawn id.")
 		return
 	}
 	var mapID uint32
 	var x, y, z, o float32
-	err = db.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM gameobject WHERE guid = ?", uint32(spawnID)).Scan(&mapID, &x, &y, &z, &o)
+	err := db.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM gameobject WHERE guid = ?", uint32(spawnID)).Scan(&mapID, &x, &y, &z, &o)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage("Could not find gameobject.") // LANG_COMMAND_GOOBJNOTFOUND (267)
 		return
@@ -1782,7 +1864,7 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
 		return
 	}
-	s.goDoTeleport(ctx, mapID, x, y, z, o)
+	s.goDoTeleportChecked(ctx, mapID, x, y, z, o)
 }
 
 // handleCmdGoGraveyard mirrors HandleGoGraveyardCommand (cs_go.cpp:183):
@@ -1790,12 +1872,12 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 // (LANG_COMMAND_GRAVEYARDNOEXIST = 449), keeping the player's orientation.
 // The recall snapshot rides goDoTeleport (see above).
 func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) {
-	if len(args) < 1 {
+	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .go graveyard <gyId>")
 		return
 	}
-	gyID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	gyID, ok := parseCommandUint32(args[0])
+	if !ok {
 		s.sendSysMessage("Invalid graveyard id.")
 		return
 	}
@@ -1819,20 +1901,20 @@ func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) {
 // GetWaterLevel half (cs_go.cpp:228), so a water cell now reads the
 // surface; a missing grid keeps the player's Z.
 func (s *session) handleCmdGoGrid(ctx context.Context, args []string) {
-	if len(args) < 2 {
+	if len(args) < 2 || len(args) > 3 {
 		s.sendSysMessage("Syntax: .go grid <gridX> <gridY> [map]")
 		return
 	}
-	gridX, err1 := strconv.ParseFloat(args[0], 32)
-	gridY, err2 := strconv.ParseFloat(args[1], 32)
-	if err1 != nil || err2 != nil {
+	gridX, ok1 := parseCommandFloat(args[0])
+	gridY, ok2 := parseCommandFloat(args[1])
+	if !ok1 || !ok2 {
 		s.sendSysMessage("Invalid grid coordinates.")
 		return
 	}
 	mapID := s.player.Map
 	if len(args) > 2 {
-		m, err := strconv.ParseUint(args[2], 10, 32)
-		if err != nil {
+		m, ok := parseCommandUint32(args[2])
+		if !ok {
 			s.sendSysMessage("Syntax: .go grid <gridX> <gridY> [map]")
 			return
 		}
@@ -1854,7 +1936,7 @@ func (s *session) handleCmdGoGrid(ctx context.Context, args []string) {
 // teleport to the position of the given TaxiNodes.dbc node
 // (LANG_COMMAND_GOTAXINODENOTFOUND = 347).
 func (s *session) handleCmdGoTaxiNode(ctx context.Context, args []string) {
-	if len(args) < 1 {
+	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .go taxinode <nodeId>")
 		return
 	}
@@ -1872,14 +1954,14 @@ func (s *session) handleCmdGoTaxiNode(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Could not find taxinode %d.", nodeID))
 		return
 	}
-	s.goDoTeleport(ctx, uint32(node.ContinentID), node.X, node.Y, node.Z, 0)
+	s.goDoTeleportChecked(ctx, uint32(node.ContinentID), node.X, node.Y, node.Z, 0)
 }
 
 // handleCmdGoAreaTrigger mirrors HandleGoAreaTriggerCommand (cs_go.cpp:246):
 // teleport to the position of the given AreaTrigger.dbc entry
 // (LANG_COMMAND_GOAREATRNOTFOUND = 262).
 func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) {
-	if len(args) < 1 {
+	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .go areatrigger <id>")
 		return
 	}
@@ -1897,7 +1979,14 @@ func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Could not find areatrigger %d.", triggerID))
 		return
 	}
-	s.goDoTeleport(ctx, at.ContinentID, at.X, at.Y, at.Z, 0)
+	s.goDoTeleportChecked(ctx, at.ContinentID, at.X, at.Y, at.Z, 0)
+}
+
+// goIDForm reports whether args select the nested "creature id" /
+// "gameobject id" C++ row (cs_go.cpp:50,52): the dispatcher prefix-matches
+// the nested name, so any unique prefix of "id" ("i", "id") selects it.
+func goIDForm(args []string) bool {
+	return len(args) > 1 && len(args[0]) > 0 && strings.HasPrefix("id", strings.ToLower(args[0]))
 }
 
 // goParseLinkOrUint accepts a C++ Variant<Hyperlink<T>, uint32> argument: a
@@ -1906,13 +1995,13 @@ func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) {
 // wrong type fails the same way C++ fails the typed parse.
 func goParseLinkOrUint(arg, tag string) (uint32, bool) {
 	if linkTag, data := gpsLinkTagData(arg); linkTag == tag {
-		if id, err := strconv.ParseUint(data, 10, 32); err == nil {
-			return uint32(id), true
+		if id, ok := parseCommandUint32(data); ok {
+			return id, true
 		}
 		return 0, false
 	}
-	if id, err := strconv.ParseUint(arg, 10, 32); err == nil {
-		return uint32(id), true
+	if id, ok := parseCommandUint32(arg); ok {
+		return id, true
 	}
 	return 0, false
 }
@@ -1929,13 +2018,13 @@ func goParseLinkOrUint(arg, tag string) (uint32, bool) {
 // (the C++ not-listed fallback); a missing WorldMapArea.dbc file does the
 // same. A missing grid keeps the player's Z, as in the grid/xyz arms.
 func (s *session) handleCmdGoZoneXY(ctx context.Context, args []string) {
-	if len(args) < 2 {
+	if len(args) < 2 || len(args) > 3 {
 		s.sendSysMessage("Syntax: .go zonexy <x> <y> [area]")
 		return
 	}
-	x, err1 := strconv.ParseFloat(args[0], 32)
-	y, err2 := strconv.ParseFloat(args[1], 32)
-	if err1 != nil || err2 != nil {
+	x, ok1 := parseCommandFloat(args[0])
+	y, ok2 := parseCommandFloat(args[1])
+	if !ok1 || !ok2 {
 		s.sendSysMessage("Invalid coordinates.")
 		return
 	}
@@ -2002,21 +2091,21 @@ func zoneToMapCoordinates(x, y, locLeft, locRight, locTop, locBottom float32) (f
 // GetWaterLevel) of cs_go.cpp:331 via mapHeight + mapWaterLevel; a
 // missing grid keeps the player's Z.
 func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
-	if len(args) < 2 {
+	if len(args) < 2 || len(args) > 5 {
 		s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
 		return
 	}
-	x, err1 := strconv.ParseFloat(args[0], 32)
-	y, err2 := strconv.ParseFloat(args[1], 32)
-	if err1 != nil || err2 != nil {
+	x, ok1 := parseCommandFloat(args[0])
+	y, ok2 := parseCommandFloat(args[1])
+	if !ok1 || !ok2 {
 		s.sendSysMessage("Invalid coordinates.")
 		return
 	}
 	z := float64(s.player.Z)
 	zGiven := false
 	if len(args) > 2 {
-		zv, err := strconv.ParseFloat(args[2], 32)
-		if err != nil {
+		zv, ok := parseCommandFloat(args[2])
+		if !ok {
 			s.sendSysMessage("Invalid coordinates.")
 			return
 		}
@@ -2025,8 +2114,8 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 	}
 	mapID := s.player.Map
 	if len(args) > 3 {
-		m, err := strconv.ParseUint(args[3], 10, 32)
-		if err != nil {
+		m, ok := parseCommandUint32(args[3])
+		if !ok {
 			s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
 			return
 		}
@@ -2034,8 +2123,8 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 	}
 	var o float64
 	if len(args) > 4 {
-		ov, err := strconv.ParseFloat(args[4], 32)
-		if err != nil {
+		ov, ok := parseCommandFloat(args[4])
+		if !ok {
 			s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
 			return
 		}
@@ -2053,7 +2142,7 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 			z = float64(water)
 		}
 	}
-	s.goDoTeleport(ctx, mapID, float32(x), float32(y), float32(z), float32(o))
+	s.goDoTeleportChecked(ctx, mapID, float32(x), float32(y), float32(z), float32(o))
 }
 
 // handleCmdGoTicket mirrors HandleGoTicketCommand (cs_go.cpp:337): teleport
@@ -2061,12 +2150,12 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 // TicketMgr.cpp:251, uses orientation 0). LANG_COMMAND_TICKETNOTEXIST = 2005
 // sends without an error flag, so the arm reports and returns.
 func (s *session) handleCmdGoTicket(ctx context.Context, args []string) {
-	if len(args) < 1 {
+	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .go ticket <ticketId>")
 		return
 	}
-	ticketID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	ticketID, ok := parseCommandUint32(args[0])
+	if !ok {
 		s.sendSysMessage("Invalid ticket id.")
 		return
 	}
@@ -2077,7 +2166,7 @@ func (s *session) handleCmdGoTicket(ctx context.Context, args []string) {
 	}
 	var mapID uint32
 	var x, y, z float32
-	err = db.QueryRowContext(ctx, "SELECT mapId, posX, posY, posZ FROM gm_ticket WHERE id = ?", uint32(ticketID)).Scan(&mapID, &x, &y, &z)
+	err := db.QueryRowContext(ctx, "SELECT mapId, posX, posY, posZ FROM gm_ticket WHERE id = ?", uint32(ticketID)).Scan(&mapID, &x, &y, &z)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage("Ticket does not exist.")
 		return
@@ -2094,14 +2183,14 @@ func (s *session) handleCmdGoTicket(ctx context.Context, args []string) {
 // RelocateOffset (Position.cpp:36) applies the XY offset rotated by the
 // player's orientation; Z and orientation add linearly.
 func (s *session) handleCmdGoOffset(ctx context.Context, args []string) {
-	if len(args) < 1 {
+	if len(args) < 1 || len(args) > 4 {
 		s.sendSysMessage("Syntax: .go offset <dx> [dy] [dz] [do]")
 		return
 	}
 	vals := make([]float64, 4)
 	for i := 0; i < len(args) && i < 4; i++ {
-		v, err := strconv.ParseFloat(args[i], 32)
-		if err != nil {
+		v, ok := parseCommandFloat(args[i])
+		if !ok {
 			s.sendSysMessage("Invalid offset.")
 			return
 		}
@@ -2112,7 +2201,7 @@ func (s *session) handleCmdGoOffset(ctx context.Context, args []string) {
 	nx := s.player.X + float32(dx*math.Cos(o)+dy*math.Sin(o+math.Pi))
 	ny := s.player.Y + float32(dy*math.Cos(o)+dx*math.Sin(o))
 	nz := s.player.Z + float32(dz)
-	s.goDoTeleport(ctx, s.player.Map, nx, ny, nz, normalizeOrientation(float32(o+doff)))
+	s.goDoTeleportChecked(ctx, s.player.Map, nx, ny, nz, normalizeOrientation(float32(o+doff)))
 }
 
 // instanceGoBackTrigger mirrors ObjectMgr::GetGoBackTrigger (ObjectMgr.cpp:7246):
@@ -2921,6 +3010,39 @@ func parseCppBase0Int(s string) (int64, bool) {
 	}
 	v, err := strconv.ParseInt(digits, base, 64)
 	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// parseCommandFloat mirrors the C++ float ArgInfo (ChatCommandArgs.h:62-72):
+// StringTo<float> with base 0 via std::stold (hex floats accepted,
+// underscores rejected by the full-consume check) plus an explicit
+// isfinite rejection, so inf/nan never reach the handler. Go's ParseFloat
+// accepts underscores and inf/nan but rejects a hex float without a p
+// exponent, so both legs are normalized here (a bare 0x hex float gets a
+// p0 exponent, mirroring stold; 0b/0o prefixes fail in C++ too).
+func parseCommandFloat(s string) (float64, bool) {
+	if s == "" || strings.Contains(s, "_") {
+		return 0, false
+	}
+	switch strings.ToLower(s) {
+	case "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity", "nan", "+nan", "-nan":
+		return 0, false
+	}
+	digits := s
+	if len(digits) > 0 && (digits[0] == '+' || digits[0] == '-') {
+		digits = digits[1:]
+	}
+	if strings.HasPrefix(digits, "0b") || strings.HasPrefix(digits, "0B") || strings.HasPrefix(digits, "0o") || strings.HasPrefix(digits, "0O") {
+		return 0, false
+	}
+	text := s
+	if (strings.HasPrefix(digits, "0x") || strings.HasPrefix(digits, "0X")) && !strings.ContainsAny(digits, "pP") {
+		text = s + "p0"
+	}
+	v, err := strconv.ParseFloat(text, 32)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0, false
 	}
 	return v, true
