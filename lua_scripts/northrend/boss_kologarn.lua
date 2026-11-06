@@ -32,18 +32,25 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 5 OnSpawn, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (cpp:122, event 1; the
--- vehicle-kit DoZoneInCombat arms leg and the
--- BossAI::JustEngagedWith passthrough have no bridges — the
--- auriaya engage-port precedent).
+-- JustEngagedWith — Talk(SAY_AGGRO 0) (cpp:122, event 1) +
+-- _JustEngagedWith SetBossState(DATA_KOLOGARN 5, IN_PROGRESS)
+-- PORTED 2026-11-05 via creature:SetBossState
+-- (lua_creature_events.go:5917; the maiden_of_grief precedent) —
+-- the stale "no instance bridge" claim is retracted; the
+-- vehicle-kit DoZoneInCombat arms leg and the CheckRequiredBosses
+-- gate (EnterEvadeMode has no bridge) stay out. Base-last in C++
+-- (cpp:136), so the state leg sits after the schedules with
+-- SetCombatPulseDelay/DoZoneInCombat.
 -- KilledUnit — player-gated Talk(SAY_SLAY 1) (cpp:159, event
 -- 3; who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
 -- JustDied — Talk(SAY_DEATH 6) + SetFlag(UNIT_FIELD_FLAGS,
--- UNIT_FLAG_NOT_SELECTABLE) (cpp:148, event 4; the MoveTargetedHome
--- leg, the SetCorpseDelay(604800) leg and the _JustDied()
--- passthrough have no bridges — the sjonnir JustDied-Talk
--- precedent). The DoCast(SPELL_KOLOGARN_PACIFY 63726) leg has a
+-- UNIT_FLAG_NOT_SELECTABLE) (cpp:148, event 4) + _JustDied()
+-- SetBossState(DATA_KOLOGARN 5, DONE) PORTED 2026-11-05 via
+-- creature:SetBossState (lua_creature_events.go:5917; base-last in
+-- C++ cpp:155, so the state leg sits after Talk/SetFlag); the
+-- MoveTargetedHome leg and the SetCorpseDelay(604800) leg have no
+-- bridges. The DoCast(SPELL_KOLOGARN_PACIFY 63726) leg has a
 -- cast bridge (creature:CastSpell, lua_creature_events.go:62) but
 -- stays out as a no-op: corpse-management-cluster self-pacify on
 -- a dead caster — the Go combat tick already gates dead
@@ -78,8 +85,11 @@
 -- 64651) — PORTED (see kologarnSpawn below; SetCombatMovement(false)
 -- has no bridge — the root arm alone keeps him stationary via the
 -- Go chase-pause gate, the documented turret deviation).
--- Reset — _Reset() + RemoveFlag(NOT_SELECTABLE) +
--- eyebeamTarget.Clear() — no bridges.
+-- Reset — _Reset() SetBossState(DATA_KOLOGARN 5, NOT_STARTED)
+-- PORTED 2026-11-05 via creature:SetBossState
+-- (lua_creature_events.go:5917; the maiden_of_grief precedent) +
+-- RemoveFlag(NOT_SELECTABLE) (ported, see kologarnReset);
+-- eyebeamTarget.Clear() has no summon-list bridge.
 -- PassengerBoarded — Talk(SAY_LEFT_ARM_GONE 2) (cpp:170) /
 -- Talk(SAY_RIGHT_ARM_GONE 3) (cpp:180) on arm detach, arm-damage
 -- SPELL_ARM_DEAD_DAMAGE 63629 + rubble-stalker
@@ -159,6 +169,9 @@
 -- queue).
 
 local ENTRY_KOLOGARN = 32930
+
+-- DATA_KOLOGARN = 5 (ulduar.h:41).
+local DATA_KOLOGARN = 5
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -292,11 +305,13 @@ local function kologarnSpawn(event, creature)
     creature:CastSpell(creature, SPELL_KOLOGARN_REDUCE_PARRY)
 end
 
--- C++ JustEngagedWith: Talk(SAY_AGGRO) + the two bridgeable
--- event-scheduling legs (EVENT_FOCUSED_EYEBEAM 21s,
--- EVENT_ENRAGE 10min); the vehicle-kit DoZoneInCombat arms leg
--- and the BossAI::JustEngagedWith passthrough have no
--- bridges.
+-- C++ JustEngagedWith: Talk(SAY_AGGRO) + the bridgeable
+-- event-scheduling legs (EVENT_MELEE_CHECK 6s, EVENT_FOCUSED_EYEBEAM
+-- 21s, EVENT_ENRAGE 10min); the vehicle-kit DoZoneInCombat arms leg
+-- and the CheckRequiredBosses gate (EnterEvadeMode has no bridge)
+-- stay out; BossAI::JustEngagedWith is LAST (cpp:136) and its
+-- SetBossState/SetCombatPulseDelay/DoZoneInCombat arms are ported
+-- below in base order (ScriptedCreature.cpp:527-544).
 local function kologarnEnterCombat(event, creature, target)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_kologarn.cpp:114 (ranged AI stands and casts)
     creature:Talk(SAY_AGGRO)
@@ -312,7 +327,11 @@ local function kologarnEnterCombat(event, creature, target)
         meleeCheckTick(creature, guid)
     end)
     -- BossAI::JustEngagedWith(who) is LAST in C++ (boss_kologarn.cpp:136, after the schedules + vehicle-kit DoZone legs):
-    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    -- _JustEngagedWith base order (ScriptedCreature.cpp:527-544):
+    -- SetBossState(IN_PROGRESS) first, then SetCombatPulseDelay(5)
+    -- + me-form DoZoneInCombat.
+    creature:SetBossState(DATA_KOLOGARN, 1)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 2 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
 end
 
@@ -322,6 +341,11 @@ end
 
 local function kologarnReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset (boss_kologarn.cpp:140-144): _Reset() first —
+    -- SetBossState(DATA_KOLOGARN, NOT_STARTED)
+    -- (ScriptedCreature.cpp:499-511; the maiden_of_grief precedent
+    -- sets it unconditionally on ev23).
+    creature:SetBossState(DATA_KOLOGARN, 0)
     -- C++ boss_kologarn.cpp:142: me->RemoveFlag(UNIT_FIELD_FLAGS,
     -- UNIT_FLAG_NOT_SELECTABLE) (Reset: flip follows _Reset); JustDied
     -- sets the flag live (boss_kologarn.cpp:151), so the reset clear is
@@ -337,16 +361,20 @@ local function kologarnTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: DoCast PACIFY + MoveTargetedHome + SetFlag +
--- SetCorpseDelay + _JustDied() + Talk(SAY_DEATH) — the Talk and
--- SetFlag arms are ported (the PACIFY cast is bridgeable but a
--- no-op on a dead caster — see header).
+-- C++ JustDied: Talk(SAY_DEATH) first, then DoCast PACIFY +
+-- MoveTargetedHome + SetFlag + SetCorpseDelay, _JustDied() LAST —
+-- the Talk, SetFlag and SetBossState(DONE) arms are ported (the
+-- PACIFY cast is bridgeable but a no-op on a dead caster — see
+-- header).
 local function kologarnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     -- C++ boss_kologarnAI::JustDied (boss_kologarn.cpp:151): the corpse
     -- stays unselectable (SetCorpseDelay 604800 keeps the corpse a week).
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    -- C++ JustDied (boss_kologarn.cpp:155): _JustDied() is LAST —
+    -- SetBossState(DATA_KOLOGARN, DONE) (ScriptedCreature.cpp:513-520).
+    creature:SetBossState(DATA_KOLOGARN, 3)
 end
 
 RegisterCreatureEvent(ENTRY_KOLOGARN, 1, kologarnEnterCombat)

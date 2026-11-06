@@ -42,8 +42,12 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_xt002.cpp):
--- JustEngagedWith (:186-197) — Talk(SAY_AGGRO 0) (event 1; the
--- BossAI::JustEngagedWith passthrough, the phase-gated
+-- JustEngagedWith (:186-197) — Talk(SAY_AGGRO 0) (event 1) +
+-- the BossAI::JustEngagedWith base arms (SetBossState(DATA_XT002,
+-- IN_PROGRESS) + SetCombatPulseDelay(5) + me-form DoZoneInCombat,
+-- ScriptedCreature.cpp) PORTED 2026-11-05 via creature:SetBossState
+-- (lua_creature_events.go:5917; the maiden_of_grief precedent) —
+-- Talk-first per C++ (:188 Talk, :189 base); the phase-gated
 -- ScheduleEvent legs and the DoStartTimedAchievement leg have no
 -- bridges — the auriaya engage-port precedent).
 -- EVENT_ENRAGE (:362-365) — Talk(SAY_BERSERK 5) + DoCastSelf
@@ -65,18 +69,25 @@
 -- KilledUnit (:204-208) — player-gated Talk(SAY_SLAY 4) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
--- JustDied (:210-215) — Talk(SAY_DEATH 6) +
--- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
--- (event 4; the _JustDied() passthrough has no bridge — the sjonnir
--- JustDied-Talk precedent; the flag bridge is live: SetFlag/RemoveFlag
+-- JustDied (:210-215) — Talk(SAY_DEATH 6) + _JustDied()
+-- SetBossState(DATA_XT002, DONE) PORTED 2026-11-05 via
+-- creature:SetBossState (lua_creature_events.go:5917; the
+-- maiden_of_grief precedent — the sjonnir "no bridge" claim was
+-- stale) + RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+-- (event 4; the flag bridge is live: SetFlag/RemoveFlag
 -- on UNIT_FIELD_FLAGS (59) is honored, lua_creature_events.go:968);
+-- Talk-first per C++ (:212 Talk, :213 _JustDied, :214 RemoveFlag);
 -- also wipes the enrage timer.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33293):
--- Reset / Initialize / EnterEvadeMode — _Reset() +
--- events.SetPhase(PHASE_1) + SetReactState(REACT_DEFENSIVE) +
+-- Reset / Initialize / EnterEvadeMode — the _Reset()
+-- SetBossState(DATA_XT002, NOT_STARTED) leg PORTED 2026-11-05
+-- (new ev23 handler, split from ev2 — ev2 leave-combat does NOT
+-- call Reset in C++; the sjonnir precedent) via
+-- creature:SetBossState (lua_creature_events.go:5917); the rest
+-- (events.SetPhase(PHASE_1) + SetReactState(REACT_DEFENSIVE) +
 -- DoStopTimedAchievement(MUST_DECONSTRUCT_FASTER 21027) +
--- summons.DespawnAll — stays out: the summons are spell-spawned
+-- summons.DespawnAll) stays out: the summons are spell-spawned
 -- (scrapbot/pummeller/boombot/life-spark/void-zone), no Lua summon
 -- tracking exists to drain, and their entries are not verifiable
 -- from boss_xt002.cpp; the arm also rides _DespawnAtEvade.
@@ -111,13 +122,15 @@
 -- machine stays out (the gothik phase-gating precedent).
 -- EVENT_SEARING_LIGHT (:332-335) — DoCastSelf
 -- (SPELL_SEARING_LIGHT 63018), 9s/11s init (:190), re-arm
--- {16s,20s}, PHASE_1-gated + GROUP_SEARING_GRAVITY — porting on
+-- 16s (25-man) / 20s (10-man) (:334), PHASE_1-gated +
+-- GROUP_SEARING_GRAVITY — porting on
 -- a continuous timer would fabricate casts during the 30s
 -- PHASE_HEART exposures (gothik precedent); phase machine —
 -- left out.
 -- EVENT_GRAVITY_BOMB (:336-339) — DoCastSelf
 -- (SPELL_GRAVITY_BOMB 63024), 18s/21s init (:191), re-arm
--- {16s,20s}, PHASE_1-gated — same blocker; left out.
+-- 16s (25-man) / 20s (10-man) (:338), PHASE_1-gated — same
+-- blocker; left out.
 -- EVENT_TYMPANIC_TANTRUM (:340-346) — Talk(SAY_TYMPANIC_TANTRUM
 -- 3) + Talk(EMOTE_TYMPANIC_TANTRUM 10) + events.DelayEvents(10s,
 -- GROUP_SEARING_GRAVITY) + DoCastSelf(SPELL_TYMPANIC_TANTRUM
@@ -196,6 +209,9 @@
 local ENTRY_XT002 = 33293
 local ENTRY_LIFE_SPARK = 34004
 
+-- DATA_XT002 = 3 (ulduar.h:39).
+local DATA_XT002 = 3
+
 local SAY_AGGRO = 0
 local SAY_SLAY = 4
 local SAY_BERSERK = 5
@@ -250,12 +266,16 @@ local function enrageTick(creature, guid)
     creature:CastSpell(creature, SPELL_ENRAGE)
 end
 
--- C++ JustEngagedWith (:186-197): BossAI passthrough + Talk(AGGRO)
--- + the phase-gated ScheduleEvent legs + DoStartTimedAchievement —
--- only the Talk arm and the phase-free EVENT_ENRAGE timer leg are
--- bridgeable (event 1).
+-- C++ JustEngagedWith (:186-197): Talk(AGGRO) (:188) then
+-- BossAI::JustEngagedWith (:189) — SetBossState(DATA_XT002,
+-- IN_PROGRESS) + SetCombatPulseDelay(5) + me-form DoZoneInCombat —
+-- plus the phase-gated ScheduleEvent legs +
+-- DoStartTimedAchievement (unbridged); only the Talk arm, the base
+-- arms and the phase-free EVENT_ENRAGE timer leg are bridgeable
+-- (event 1). Talk-first per C++.
 local function xt002EnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
+    creature:SetBossState(DATA_XT002, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- Talk-then-base (boss_xt002.cpp:189)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     local guid = creature:GetGUID()
@@ -274,19 +294,32 @@ local function xt002TargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied (:210-215): _JustDied() passthrough + Talk
--- (SAY_DEATH) + RemoveFlag NOT_SELECTABLE (field 59, bridged);
+-- C++ JustDied (:210-215): Talk(SAY_DEATH) (:212) then
+-- _JustDied() — SetBossState(DATA_XT002, DONE) (:213) — then
+-- RemoveFlag NOT_SELECTABLE (field 59, bridged) (:214);
 -- the enrage timer is wiped with it.
 local function xt002Died(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_XT002, 3)
     cancelTimers(creature:GetGUID())
     -- C++ boss_xt002::JustDied (boss_xt002.cpp:214): the heart-phase
     -- NOT_SELECTABLE is cleared on death.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end
 
--- Shared timer wipe for events 2/23.
+-- Shared timer wipe for events 2/4 (leave-combat / died — C++
+-- ev2 does NOT call Reset).
 local function cancelCombatTimers(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ Reset (:171-178): _Reset() first —
+-- SetBossState(DATA_XT002, NOT_STARTED) — then SetPhase(PHASE_1)
+-- + SetReactState + Initialize + DoStopTimedAchievement (all
+-- unbridged); the bjarngrim / maiden_of_grief precedent sets the
+-- state unconditionally on ev23.
+local function xt002Reset(event, creature)
+    creature:SetBossState(DATA_XT002, 0)
     cancelTimers(creature:GetGUID())
 end
 
@@ -294,7 +327,7 @@ RegisterCreatureEvent(ENTRY_XT002, 1, xt002EnterCombat)
 RegisterCreatureEvent(ENTRY_XT002, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_XT002, 3, xt002TargetDied)
 RegisterCreatureEvent(ENTRY_XT002, 4, xt002Died)
-RegisterCreatureEvent(ENTRY_XT002, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_XT002, 23, xt002Reset)
 
 -- C++ npc_life_spark::JustEngagedWith (:630-638): DoCastSelf
 -- (SPELL_STATIC_CHARGED 64227) (2-arg non-triggered) at engage,

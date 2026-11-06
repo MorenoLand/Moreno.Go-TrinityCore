@@ -28,15 +28,18 @@
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
--- JustEngagedWith — Talk(SAY_AGGRO 0) (:147, event 1; the
--- BossAI::JustEngagedWith passthrough, the six ScheduleEvent legs and the
--- DoStartTimedAchievement leg have no bridges — boss_bookkeeping precedent
--- for the passthrough, no timed-achievement bridge for the last — the
--- auriaya engage-port precedent). The Oct-12/13 "no timer bridge" doctrine
--- is STALE: CreateLuaEvent (engine/scripting/runtime.go:798) is the timer
--- bridge, already used below; the SCORCH/SLAG_POT/CONSTRUCT/END_POT legs
--- stay unported because their ARMS contain blocked legs (summon / vehicle /
--- DoSummon), not because timers lack bridges.
+-- JustEngagedWith — Talk(SAY_AGGRO 0) (:147, event 1) + the
+-- BossAI::JustEngagedWith base arms ported into ignisEnterCombat:
+-- SetBossState(DATA_IGNIS 1, IN_PROGRESS) PORTED 2026-11-05 via
+-- creature:SetBossState (lua_creature_events.go:5917; the maiden
+-- precedent) — the "no instance bridge" claim for the passthrough was
+-- stale — plus SetCombatPulseDelay(5) + me-form DoZoneInCombat, base-first
+-- before Talk. The six ScheduleEvent legs: JET/SCORCH/CONSTRUCT/BERSERK
+-- scheduled below (CONSTRUCT ported 2026-11-05, see below); SLAG_POT +
+-- END_POT stay out — the slag vehicle chain has no bridge. The
+-- DoStartTimedAchievement leg has no timed-achievement bridge. The
+-- Oct-12/13 "no timer bridge" doctrine is STALE: CreateLuaEvent
+-- (engine/scripting/runtime.go:798) is the timer bridge, already used below.
 -- EVENT_JET — Talk(EMOTE_JETS 7) (:222) + DoCast(me,
 -- SPELL_FLAME_JETS 62680) 2-arg non-triggered self-cast (:223);
 -- 30s init (:148), re-arm randtime 35-40s (:224).
@@ -47,14 +50,20 @@
 -- KilledUnit — player-gated Talk(SAY_SLAY 4) (:175, event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
--- JustDied — Talk(SAY_DEATH 6) (:161, event 4; the _JustDied()
--- passthrough has no bridge — the sjonnir JustDied-Talk
--- precedent).
+-- JustDied — Talk(SAY_DEATH 6) (:161, event 4) + _JustDied()
+-- SetBossState(DATA_IGNIS 1, DONE) PORTED 2026-11-05 via
+-- creature:SetBossState (lua_creature_events.go:5917; the maiden
+-- precedent), base-first before Talk — the "no bridge" claim for the
+-- _JustDied() passthrough was stale.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33118):
--- Reset / Initialize — _Reset() + vehicle passenger removal +
--- DoStopTimedAchievement(ACHIEVEMENT_IGNIS_START_EVENT 20951) —
--- no bridges.
+-- Reset / Initialize — _Reset() SetBossState(DATA_IGNIS 1, NOT_STARTED)
+-- PORTED 2026-11-05 via creature:SetBossState (lua_creature_events.go:5917;
+-- the maiden precedent) into ignisReset (event 23); vehicle passenger
+-- removal (no vehicle bridge) + DoStopTimedAchievement(
+-- ACHIEVEMENT_IGNIS_START_EVENT 20951) (no timed-achievement bridge) stay
+-- out. Initialize() only clears Lua-absent state (_slagPotGUID / _shattered /
+-- _firstConstructKill) — nothing to port.
 -- GetData(DATA_SHATTERED 29252926) — creature:GetData IS bridged
 -- (ScriptData store, 2026-10-24) but the leg stays out: the producer
 -- is the DoAction(20) cross-AI relay (dispatch IS bridged — ev38 —
@@ -68,9 +77,9 @@
 -- summons latch, despawned from died (before Talk)/reset/leave.
 -- Deltas: SetImmuneToPC has no bridge and stays out; SetControlled(false,
 -- ROOT) is PORTED below as SetRooted(false) (bridged, tick 236);
--- constructs still never spawn in Lua (DoSummon leg blocked), so the
--- construct arm fires only on a direct summon, while
--- the scorch arm is live via the ported EVENT_SCORCH summon site.
+-- constructs now spawn live via the ported EVENT_CONSTRUCT arm
+-- (constructTick, summon type 3), as does the scorch ground via the ported
+-- EVENT_SCORCH summon site.
 -- DoAction(ACTION_REMOVE_BUFF 20) — RemoveAuraFromStack(SPELL_
 -- STRENGHT 64473) + the GameTime <5s shattered window (producer:
 -- npc_iron_construct DamageTaken, boss_ignis.cpp:333 — the construct
@@ -92,12 +101,19 @@
 -- SPELL_SCORCH 62546) self (C++ arm order); the stale "the SummonCreature
 -- leg has no bridge" claim was retracted — creature:SummonCreature is
 -- bridged (lua_creature_events.go:728).
--- EVENT_CONSTRUCT (:270-:275) — Talk(SAY_SUMMON 1) +
--- DoSummon(NPC_IRON_CONSTRUCT 33121, random spawn point) +
--- DoCast(SPELL_STRENGHT 64473) self + DoCast(me, SPELL_ACTIVATE_
--- CONSTRUCT 62488) self; 15s init, re-arm RAID_MODE(40s, 30s) —
--- DoSummon(NPC_IRON_CONSTRUCT) has no bridge and is the arm's purpose: arm
--- blocked, unported (Talk/self-cast legs would be individually bridgeable).
+-- EVENT_CONSTRUCT (:270-:275) — PORTED 2026-11-05 (constructTick):
+-- Talk(SAY_SUMMON 1) + DoSummon(NPC_IRON_CONSTRUCT 33121, random spawn
+-- point, 30s, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT) + DoCast(
+-- SPELL_STRENGHT 64473) self + DoCast(me, SPELL_ACTIVATE_CONSTRUCT 62488)
+-- self; 15s init, re-arm RAID_MODE(40s, 30s). The "DoSummon has no bridge"
+-- claim was stale: DoSummon is CreatureAI's thin SummonCreature wrapper
+-- and creature:SummonCreature is bridged (lua_creature_events.go:728) with
+-- summonType 3 = TIMED_DESPAWN_OUT_OF_COMBAT (the vancleef DoSummon
+-- precedent); RAID_MODE resolves via creature:Is25ManRaid() (bridged,
+-- lua_creature_events.go:3651; 25-man 30s, 10-man 40s). The summoned
+-- construct fires the ported ev19 JustSummoned arm. Its own AI stays
+-- unregistered (DamageTaken shatter leg blocked, see below), so the
+-- construct melees engine-driven without the HEAT/BRITTLE machine.
 -- npc_iron_construct (NPC_IRON_CONSTRUCT 33121 local enum —
 -- entry-verifiable but bridge-blocked; the npc_spark_of_ionar
 -- no-bridgeable-arms precedent — no registration): DamageTaken
@@ -106,8 +122,9 @@
 -- ACTION_REMOVE_BUFF) to Ignis + DespawnOrUnsummon(1s)) — damage-taken IS
 -- bridged (creature event 9, engine/world/lua_creature_events.go:286); the
 -- leg is blocked by the DoAction cross-AI arm (RemoveAuraFromStack also
--- unbridged) and DespawnOrUnsummon; the NPC never spawns in Lua (DoSummon
--- blocked) so no registration. UpdateAI HEAT-stack / MOLTEN / BRITTLE /
+-- unbridged) and DespawnOrUnsummon; the NPC now spawns live via the ported
+-- EVENT_CONSTRUCT arm but stays unregistered (arms blocked as above).
+-- UpdateAI HEAT-stack / MOLTEN / BRITTLE /
 -- IsInWater machine — aura-stack leg: GetStackAmount is bridged
 -- but self-reads only engine-applied auras (a Lua AddAura reads 0)
 -- and the HEAT source machine is unported; water-state (IsInWater)
@@ -134,7 +151,11 @@
 
 local ENTRY_IGNIS = 33118
 
+-- DATA_IGNIS = 1 (ulduar.h:37).
+local DATA_IGNIS = 1
+
 local SAY_AGGRO = 0
+local SAY_SUMMON = 1
 local SAY_SLAY = 4
 local SAY_DEATH = 6
 local SAY_BERSERK = 5
@@ -144,6 +165,8 @@ local EMOTE_JETS = 7
 local SPELL_FLAME_JETS = 62680
 local SPELL_BERSERK = 47008
 local SPELL_SCORCH = 62546 -- boss_ignis.cpp:267
+local SPELL_STRENGHT = 64473 -- boss_ignis.cpp:273 (C++ spelling)
+local SPELL_ACTIVATE_CONSTRUCT = 62488 -- boss_ignis.cpp:274
 
 local NPC_GROUND_SCORCH = 33221 -- boss_ignis.cpp:266
 local NPC_IRON_CONSTRUCT = 33121 -- boss_ignis.cpp:272
@@ -216,8 +239,9 @@ local function berserkTick(creature, guid)
 end
 
 -- C++ JustEngagedWith: BossAI passthrough + ScheduleEvent legs
--- + DoStartTimedAchievement — the Talk and the two bridgeable
--- timer casts ride here; the rest have no bridges.
+-- + DoStartTimedAchievement — the Talk, the SetBossState base leg and the
+-- bridgeable timer casts ride here; the slag vehicle chain and the
+-- timed-achievement leg have no bridges.
 -- C++ EVENT_SCORCH (boss_ignis.cpp:262-268): Talk(SAY_SCORCH 3) +
 -- SummonCreature(NPC_GROUND_SCORCH 33221) at the victim's position,
 -- TEMPSUMMON_TIMED_DESPAWN 45s + non-triggered DoCast(SPELL_SCORCH
@@ -240,6 +264,61 @@ local function scorchTick(creature, guid)
     creature:CastSpell(creature, SPELL_SCORCH)
     schedule(guid, "scorch", 25000, function()
         scorchTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_CONSTRUCT (boss_ignis.cpp:270-275): Talk(SAY_SUMMON 1) +
+-- DoSummon(NPC_IRON_CONSTRUCT 33121, random ConstructSpawnPosition,
+-- 30s, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT) + DoCast(SPELL_STRENGHT
+-- 64473) self + DoCast(me, SPELL_ACTIVATE_CONSTRUCT 62488) self; 15s
+-- init (:151) / re-arm RAID_MODE(40s, 30s) (:275). DoSummon is
+-- CreatureAI's SummonCreature wrapper — creature:SummonCreature with
+-- summonType 3 (TIMED_DESPAWN_OUT_OF_COMBAT) is the twin (vancleef
+-- precedent); RAID_MODE resolves via creature:Is25ManRaid() (bridged,
+-- lua_creature_events.go:3651). The summon fires the ported ev19
+-- JustSummoned arm (faction/react/flags + EngageWithTarget).
+-- ConstructSpawnPosition table, boss_ignis.cpp:92-113 (20 entries).
+local CONSTRUCT_SPAWN_POINTS = {
+    {630.366, 216.772, 360.891, 3.001970},
+    {630.594, 231.846, 360.891, 3.124140},
+    {630.435, 337.246, 360.886, 3.211410},
+    {630.493, 313.349, 360.886, 3.054330},
+    {630.444, 321.406, 360.886, 3.124140},
+    {630.366, 247.307, 360.888, 3.211410},
+    {630.698, 305.311, 360.886, 3.001970},
+    {630.500, 224.559, 360.891, 3.054330},
+    {630.668, 239.840, 360.890, 3.159050},
+    {630.384, 329.585, 360.886, 3.159050},
+    {543.220, 313.451, 360.886, 0.104720},
+    {543.356, 329.408, 360.886, 6.248280},
+    {543.076, 247.458, 360.888, 6.213370},
+    {543.117, 232.082, 360.891, 0.069813},
+    {543.161, 305.956, 360.886, 0.157080},
+    {543.277, 321.482, 360.886, 0.052360},
+    {543.316, 337.468, 360.886, 6.195920},
+    {543.280, 239.674, 360.890, 6.265730},
+    {543.265, 217.147, 360.891, 0.174533},
+    {543.256, 224.831, 360.891, 0.122173},
+}
+
+local function constructTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "construct", 500, function()
+            constructTick(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(SAY_SUMMON)
+    local pos = CONSTRUCT_SPAWN_POINTS[math.random(#CONSTRUCT_SPAWN_POINTS)]
+    creature:SummonCreature(NPC_IRON_CONSTRUCT, pos[1], pos[2], pos[3], pos[4], 3, 30000)
+    creature:CastSpell(creature, SPELL_STRENGHT)
+    creature:CastSpell(creature, SPELL_ACTIVATE_CONSTRUCT)
+    local delay = 40000
+    if creature:Is25ManRaid() then
+        delay = 30000
+    end
+    schedule(guid, "construct", delay, function()
+        constructTick(creature, guid)
     end)
 end
 
@@ -293,6 +372,11 @@ local function ignisJustSummoned(event, creature, summon)
 end
 
 local function ignisEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith: BossAI::JustEngagedWith first (boss_ignis.cpp:146) —
+    -- SetBossState(DATA_IGNIS, IN_PROGRESS) (ScriptedCreature.cpp base leg;
+    -- the maiden precedent), then SetCombatPulseDelay + DoZoneInCombat,
+    -- before Talk(SAY_AGGRO).
+    creature:SetBossState(DATA_IGNIS, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_ignis.cpp:146)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
@@ -304,6 +388,10 @@ local function ignisEnterCombat(event, creature, target)
     -- C++ JustEngagedWith: events.ScheduleEvent(EVENT_SCORCH, 25s).
     schedule(guid, "scorch", 25000, function()
         scorchTick(creature, guid)
+    end)
+    -- C++ JustEngagedWith: events.ScheduleEvent(EVENT_CONSTRUCT, 15s).
+    schedule(guid, "construct", 15000, function()
+        constructTick(creature, guid)
     end)
     schedule(guid, "berserk", 480000, function()
         berserkTick(creature, guid)
@@ -323,15 +411,17 @@ local function ignisTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: _JustDied() passthrough + Talk(SAY_DEATH) —
--- only the Talk arm is bridgeable.
+-- C++ JustDied: _JustDied() (SetBossState DATA_IGNIS, DONE — ported
+-- 2026-11-05, base-first) + Talk(SAY_DEATH).
 local function ignisDied(event, creature, killer)
+    creature:SetBossState(DATA_IGNIS, 3) -- C++ JustDied: _JustDied() first (boss_ignis.cpp:160), before Talk
     despawnIgnisSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
 local function ignisReset(event, creature)
+    creature:SetBossState(DATA_IGNIS, 0) -- C++ Reset: _Reset() first (boss_ignis.cpp:137)
     despawnIgnisSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
 end

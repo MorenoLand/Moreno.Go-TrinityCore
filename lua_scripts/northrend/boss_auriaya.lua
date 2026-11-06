@@ -30,9 +30,12 @@
 -- boss_auriaya.cpp):
 -- JustEngagedWith (:160-170) — Talk(SAY_AGGRO 0) + the five
 -- bridgeable timer legs below (event 1; the
--- BossAI::JustEngagedWith passthrough ports via SetCombatPulseDelay
+-- BossAI::JustEngagedWith passthrough ports via SetBossState
+-- (DATA_AURIAYA 6, IN_PROGRESS) + SetCombatPulseDelay
 -- + DoZoneInCombat, and the SendEncounterUnit engage leg ports via
--- creature:SendEncounterUnit, bridge live 2026-11-05).
+-- creature:SendEncounterUnit, bridge live 2026-11-05; the SetBossState
+-- leg PORTED tick 258 via creature:SetBossState
+-- (lua_creature_events.go:5917), base-first per C++ :162).
 -- EVENT_SONIC_SCREECH (:234-236) — DoCastVictim
 -- (SPELL_SONIC_SCREECH 64422) 2-arg non-triggered, 48s init
 -- (:165), re-arm {22s,30s}.
@@ -82,7 +85,9 @@
 -- latched by the ev5 SetGuidData in this file); sole consumer the
 -- now-ported achievement_crazy_cat_lady (boss_auriaya.cpp:690).
 -- DOCUMENTED-ONLY (no bridgeable arms):
--- Reset (:139-145) / HandleCats (:147-158) — _Reset() + flag resets
+-- Reset (:139-145) / HandleCats (:147-158) — _Reset() +
+-- SetBossState(DATA_AURIAYA 6, NOT_STARTED) PORTED tick 258 via
+-- creature:SetBossState (lua_creature_events.go:5917) + flag resets
 -- + grid RESPAWN of entry 34014 within 500.0f — PORTED 2026-10-24
 -- in auriayaReset (creature:Respawn bridge, lua_creature_events.go);
 -- the HandleCats(false) despawn half is ported in auriayaDied;
@@ -93,11 +98,13 @@
 -- DATA_CRAZY_CAT_LADY 30063007) — PORTED 2026-11-05 in auriayaDoAction
 -- (ev38) + the SetData latches in auriayaReset / auriayaLeaveCombat /
 -- auriayaSpawned; both relays ported (sentry :301, defender :452).
--- JustDied (:206-212) — DoPlaySoundToSet(15476) ported via
+-- JustDied (:206-212) — _JustDied() SetBossState(DATA_AURIAYA 6,
+-- DONE) PORTED tick 258 via creature:SetBossState
+-- (lua_creature_events.go:5917), base-first per C++ :208;
+-- DoPlaySoundToSet(15476) ported via
 -- creature:PlayDirectSound (dedicated auriayaDied); HandleCats(false)
 -- despawn leg ported there too (see above); the SendEncounterUnit
--- disengage leg ports there too (bridge live 2026-11-05); the
--- HandleCats(true) respawn leg has no instance/grid bridge; no Talk arms.
+-- disengage leg ports there too (bridge live 2026-11-05); no Talk arms.
 -- EnterEvadeMode (:214-218) — SendEncounterUnit disengage ports on
 -- event 2 (dedicated auriayaLeaveCombat); the BossAI leg has no bridge.
 -- The UNIT_STATE_CASTING gates (boss own UpdateAI pre-loop :227 +
@@ -349,6 +356,7 @@ end
 -- + encounter-frame engage + the five ScheduleEvent legs — the
 -- Talk, the engage leg, and the four bridgeable timer legs are modeled here.
 local function auriayaEnterCombat(event, creature, target)
+    creature:SetBossState(BOSS_AURIAYA_DATA, 1) -- BossAI::JustEngagedWith _JustEngagedWith: SetBossState(DATA_AURIAYA 6, IN_PROGRESS), base-first (boss_auriaya.cpp:162)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_auriaya.cpp:162)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
@@ -471,16 +479,21 @@ end
 -- creature:GetCreaturesInGrid is bridged, lua_creature_events.go:1204;
 -- entry 34014 registered, event 4 already wired). The HandleCats(true)
 -- Respawn leg on Reset PORTED 2026-10-24 in auriayaReset; the
--- _JustDied() leg has no instance bridge; the SendEncounterUnit
--- disengage leg ports in auriayaDied below (bridge live 2026-11-05).
--- C++ boss_auriaya Reset (:139-145): _Reset() (instance state, no
--- bridge) + flags + HandleCats(true) (:147-158): every dead sanctum
+-- _JustDied() SetBossState(DATA_AURIAYA 6, DONE) leg PORTED tick 258
+-- via creature:SetBossState (lua_creature_events.go:5917); the
+-- SendEncounterUnit disengage leg ports in auriayaDied below
+-- (bridge live 2026-11-05).
+-- C++ boss_auriaya Reset (:139-145): _Reset() — SetBossState
+-- (DATA_AURIAYA 6, NOT_STARTED) PORTED tick 258 via
+-- creature:SetBossState (lua_creature_events.go:5917), first per C++
+-- :141 — + flags + HandleCats(true) (:147-158): every dead sanctum
 -- sentry (34014) within 500.0f respawns. GetCreaturesInGrid enumerates
 -- dead motions still in the map (no health filter); IsDead reads the
 -- snapshot Health via the object.go fallback; creature:Respawn restores
 -- full health at home and fires event 23 on the sentry, running its
 -- Reset arm as C++ ai->Reset() does.
 local function auriayaReset(event, creature)
+    creature:SetBossState(BOSS_AURIAYA_DATA, 0)
     cancelCombatTimers(event, creature)
     -- C++ Reset (:139-145): _crazyCatLady = true, _nineLives = false.
     creature:SetData(DATA_CRAZY_CAT_LADY, 1)
@@ -493,6 +506,7 @@ local function auriayaReset(event, creature)
 end
 
 local function auriayaDied(event, creature, killer)
+    creature:SetBossState(BOSS_AURIAYA_DATA, 3) -- _JustDied() first per C++ :208
     creature:PlayDirectSound(SOUND_AURIAYA_DEATH)
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_auriaya.cpp:210)
     cancelCombatTimers(event, creature)

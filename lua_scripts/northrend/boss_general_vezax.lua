@@ -42,8 +42,13 @@
 -- boss_general_vezax.cpp):
 -- JustEngagedWith (:134-148) — Talk(SAY_AGGRO 0) + DoCast(me,
 -- SPELL_AURA_OF_DESPAIR 62692) 2-arg non-triggered self-cast
--- (:139) at engage (event 1; the BossAI::JustEngagedWith
--- passthrough, CheckShamanisticRage (PORTED this run —
+-- (:139) at engage (event 1; SetBossState(DATA_VEZAX 11,
+-- IN_PROGRESS 1) PORTED 2026-11-05 via creature:SetBossState
+-- (lua_creature_events.go:5917; maiden tick-257 precedent) — the
+-- BossAI::JustEngagedWith base arms (SetCombatPulseDelay(5) +
+-- DoZoneInCombat) were already ported; the CheckRequiredBosses /
+-- EnterEvadeMode gate has no bridge (stay-out);
+-- CheckShamanisticRage (PORTED this run —
 -- gal_darah GetPlayersInWorld precedent + player:HasSpell /
 -- player:CastSpell bridges, no longer "no map-player-scan
 -- bridge"), and the four unbridgeable ScheduleEvent legs are
@@ -76,7 +81,9 @@
 -- KilledUnit (:228-232) — player-gated Talk(SAY_SLAY 1) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
--- JustDied (:234-239) — _JustDied() passthrough + Talk(SAY_DEATH
+-- JustDied (:234-239) — _JustDied() SetBossState(DATA_VEZAX 11, DONE 3)
+-- PORTED 2026-11-05 via creature:SetBossState (lua_creature_events.go:5917;
+-- maiden tick-257 precedent) + Talk(SAY_DEATH
 -- 3) + DoRemoveAurasDueToSpellOnPlayers(SPELL_AURA_OF_DESPAIR
 -- 62692, true, true) player leg — PORTED via stripDespairAuras
 -- (GetPlayersInWorld + mapId/instanceId filter + player:RemoveAura —
@@ -85,8 +92,15 @@
 -- bridge — stay out); also wipes the surge/berserk timers.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33271):
--- Reset / Initialize — _Reset() + shadowDodger /
--- smellSaronite / animusDead / vaporCount init — no bridges.
+-- Reset / Initialize — _Reset() SetBossState(DATA_VEZAX 11,
+-- NOT_STARTED 0) PORTED 2026-11-05 as a NEW ev23 handler split
+-- from ev2 (ev2 leave-combat does NOT call Reset in C++ — the
+-- sjonnir precedent; maiden tick-257 pattern) via
+-- creature:SetBossState (lua_creature_events.go:5917); the
+-- shadowDodger / smellSaronite / animusDead / vaporCount
+-- Initialize() flags stay out (consumed only by the unported
+-- GetData / hard-mode machines — no bridge needed for the flags
+-- themselves, their readers are unported).
 -- SpellHitTarget — SPELL_SHADOW_CRASH_HIT 62659
 -- TYPEID_PLAYER leg -> shadowDodger = false (consumer:
 -- achievement_shadowdodger below) — stays out on spell-id-key grounds.
@@ -164,6 +178,8 @@
 -- bridges; both join the unmodeled-achievement queue.
 
 local ENTRY_GENERAL_VEZAX = 33271
+
+-- DATA_VEZAX = 11 (ulduar.h:47; BOSS_VEZAX).
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -372,12 +388,20 @@ local function checkShamanisticRage(creature)
     end
 end
 
--- C++ JustEngagedWith (:134-148): BossAI passthrough + Talk
+-- C++ JustEngagedWith (:134-148): BossAI::JustEngagedWith base
+-- (SetBossState(DATA_VEZAX, IN_PROGRESS) PORTED 2026-11-05;
+-- CheckRequiredBosses / EnterEvadeMode gate has no bridge —
+-- stay-out) + Talk
 -- (SAY_AGGRO) + DoCast(me, SPELL_AURA_OF_DESPAIR 62692) (:139,
 -- 2-arg non-triggered self-cast) + CheckShamanisticRage +
 -- ScheduleEvent legs — the four unbridgeable ScheduleEvent legs are
 -- the vapor/summon legs below (event 1).
 local function vezaxEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith (:134-148): BossAI::JustEngagedWith first
+    -- (:136) — SetBossState(DATA_VEZAX, IN_PROGRESS) before Talk;
+    -- the CheckRequiredBosses / EnterEvadeMode gate has no bridge
+    -- (stay-out); state leg PORTED 2026-11-05 (maiden tick-257).
+    creature:SetBossState(DATA_VEZAX, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_general_vezax.cpp:136)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
@@ -428,6 +452,10 @@ local function stripDespairAuras(creature)
 end
 
 local function vezaxDied(event, creature, killer)
+    -- C++ JustDied (:234-239): _JustDied() first — SetBossState
+    -- (DATA_VEZAX, DONE) before Talk(SAY_DEATH); PORTED 2026-11-05
+    -- (maiden tick-257 precedent).
+    creature:SetBossState(DATA_VEZAX, 3)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
     -- C++ JustDied (boss_general_vezax.cpp:234-239 — arm order: _JustDied,
@@ -438,13 +466,25 @@ local function vezaxDied(event, creature, killer)
     stripDespairAuras(creature)
 end
 
--- Shared timer wipe for events 2/23.
+-- Shared timer wipe for event 2 (leave-combat does NOT call Reset
+-- in C++ — the sjonnir precedent; ev23 below is the Reset handler).
 local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ Reset (boss_general_vezax.cpp:127-133): _Reset() —
+-- SetBossState(DATA_VEZAX, NOT_STARTED)
+-- (ScriptedCreature.cpp:499-511; the bjarngrim precedent sets it
+-- unconditionally on ev23; maiden tick-257 pattern). The
+-- Initialize() flag inits stay out (consumed only by the unported
+-- GetData / hard-mode machines).
+local function vezaxReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_VEZAX, 0)
 end
 
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 1, vezaxEnterCombat)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 3, vezaxTargetDied)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 4, vezaxDied)
-RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 23, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 23, vezaxReset)

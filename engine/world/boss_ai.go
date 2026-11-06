@@ -19081,6 +19081,7 @@ func init() {
 	// lua_scripts/northrend/boss_auriaya.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
 	// (event 1; the BossAI::JustEngagedWith passthrough ports via
+	// SetBossState(IN_PROGRESS) PORTED tick 258 +
 	// SetCombatPulseDelay + DoZoneInCombat, the SendEncounterUnit
 	// engage leg ports, and the five ScheduleEvent legs port as
 	// CreateLuaEvent timers); KilledUnit player-gated +
@@ -19105,6 +19106,7 @@ func init() {
 	// npc_sanctum_sentry (34014 local enum — newly registered):
 	// EVENT_RIP DoCastVictim 64375 6s/{10s,12s}.
 	// Ported tick 235: Reset / Initialize (_Reset() +
+	// SetBossState(NOT_STARTED) PORTED tick 258 +
 	// _crazyCatLady / _nineLives SetData latches + HandleCats(true));
 	// DoAction(ACTION_CRAZY_CAT_LADY 0 /
 	// ACTION_DEFENDER_DIED 1) / GetData(DATA_NINE_LIVES 30763077
@@ -19112,7 +19114,8 @@ func init() {
 	// latch; CRAZY_CAT_LADY sender sentry JustDied (boss_auriaya.cpp:301)
 	// relay ported; DEFENDER_DIED sender feral defender JustDied
 	// (boss_auriaya.cpp:452) relay ported, defender registered (34035);
-	// JustDied (DoPlaySoundToSet 15476 +
+	// JustDied (_JustDied() SetBossState(DONE) PORTED tick 258 +
+	// DoPlaySoundToSet 15476 +
 	// SendEncounterUnit disengage + HandleCats(false) grid
 	// despawn — no Talk arms; the sound, disengage and
 	// HandleCats(false) legs port, event 4 registered); the UpdateAI event machine's remaining legs
@@ -19149,7 +19152,8 @@ func init() {
 	// Flame Leviathan (33113), Ulduar —
 	// lua_scripts/northrend/boss_flame_leviathan.lua.
 	// Ported arms (C++-exact): JustDied Talk(SAY_DEATH 2)
-	// (event 4; the _JustDied() passthrough has no bridge and the
+	// (event 4; the _JustDied() SetBossState(DONE) leg PORTED tick 258
+	// and the
 	// flag/dynflag/npcflag comment legs are DB cosmetics — the
 	// sjonnir JustDied-Talk precedent; no KilledUnit talk in
 	// C++ — no event 3 arms exist — and the aggro talk is
@@ -19164,14 +19168,15 @@ func init() {
 	// DoCastAOE-as-self-cast 62375 15s/15s; UpdateAI CASTING gates
 	// (own pre-loop :394 + in-loop :473) PORTED as 500ms IsCasting
 	// defer in the ported timer ticks (mal_ganis idiom).
-	// Documented-only: Reset / Initialize / InitializeAI (no
-	// bridges); JustEngagedWith — ActiveTower() picks the aggro
+	// Documented-only: Initialize / InitializeAI (no bridges);
+	// Reset _Reset SetBossState(NOT_STARTED) PORTED tick 258 (ev23); JustEngagedWith — ActiveTower() picks the aggro
 	// talk conditionally on tower state (ActiveTowers false ->
 	// SAY_AGGRO 0; true + towers up -> SAY_HARDMODE 4; true +
 	// all down -> SAY_TOWER_NONE 5) — the tower-destruction /
-	// DoAction / vehicle state has no bridge, so event 1 is not
-	// registered (the malygos phase-select conditional-variant
-	// precedent); SpellHit (SPELL_START_THE_ENGINE /
+	// DoAction / vehicle state has no bridge, so the tower-conditional
+	// Talk stays out; event 1 IS registered, with the SetBossState
+	// (IN_PROGRESS) base leg PORTED tick 258 (the malygos
+	// phase-select conditional-variant precedent); SpellHit (SPELL_START_THE_ENGINE /
 	// SPELL_ELECTROSHOCK / SPELL_OVERLOAD_CIRCUIT ++Shutdown —
 	// no bridges); GetData / SetData / DoAction (tower
 	// destruction loot-mode stripping — no bridges); the
@@ -19224,13 +19229,15 @@ func init() {
 	// Ignis the Furnace Master (33118), Ulduar —
 	// lua_scripts/northrend/boss_ignis.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1; the BossAI::JustEngagedWith passthrough, the six
-	// ScheduleEvent legs and the DoStartTimedAchievement leg have
-	// no bridges — the auriaya engage-port precedent);
+	// (event 1; the BossAI::JustEngagedWith SetBossState(IN_PROGRESS)
+	// leg PORTED tick 258 via creature:SetBossState; the six
+	// ScheduleEvent legs (JET/SCORCH/CONSTRUCT/BERSERK ported,
+	// SLAG_POT/END_POT stay out — no vehicle bridge) and the
+	// DoStartTimedAchievement leg has no bridge);
 	// KilledUnit player-gated Talk(SAY_SLAY 4) (event 3 — the
 	// razuvious player-gated variant precedent); JustDied
-	// Talk(SAY_DEATH 6) (event 4; the _JustDied() passthrough has
-	// no bridge — the sjonnir JustDied-Talk precedent);
+	// Talk(SAY_DEATH 6) (event 4; the _JustDied() SetBossState(DONE)
+	// leg PORTED tick 258 — the sjonnir JustDied-Talk precedent);
 	// timer-driven casts via CreateLuaEvent (maiden/baltharus
 	// convention, GUID-keyed timers, cancel on events 2/4/23):
 	// EVENT_JET Talk(EMOTE_JETS 7) + DoCastSelf 62680
@@ -19238,7 +19245,8 @@ func init() {
 	// DoCastSelf 47008 triggered + Talk(SAY_BERSERK 5) 480s
 	// one-shot (cast-before-Talk order kept; fixed a stale header
 	// that documented the berserk as non-triggered).
-	// Documented-only: Reset / Initialize (vehicle passenger
+	// Documented-only: Reset / Initialize (_Reset SetBossState
+	// NOT_STARTED PORTED tick 258 (ev23); vehicle passenger
 	// removal + DoStopTimedAchievement — no bridges);
 	// GetData(DATA_SHATTERED 29252926) — no GetData bridge
 	// (consumer: achievement_ignis_shattered below); JustSummoned
@@ -19249,9 +19257,9 @@ func init() {
 	// (EVENT_SLAG_POT Talk(SAY_SLAG_POT 2) + GRAB_POT / CHANGE_POT
 	// / END_POT vehicle chain; EVENT_SCORCH Talk(SAY_SCORCH 3) +
 	// SummonCreature(NPC_GROUND_SCORCH 33221); EVENT_CONSTRUCT
-	// Talk(SAY_SUMMON 1) + DoSummon (self-casts left out — would
-	// diverge without the summon leg) — no timer-event / summon /
-	// target-selection / vehicle bridges);
+	// Talk(SAY_SUMMON 1) + DoSummon + self-casts PORTED tick 258
+	// (constructTick; SummonCreature bridge live) — SLAG_POT /
+	// END_POT vehicle chain still has no bridge);
 	// npc_iron_construct (33121 local enum — entry-verifiable
 	// but bridge-blocked: DamageTaken shatter leg + HEAT /
 	// MOLTEN / BRITTLE / IsInWater machine; no Talk arms — no
@@ -19277,11 +19285,13 @@ func init() {
 	// events 2/4/23; cast-before-Talk order kept); event 1 models
 	// only the berserk timer leg — JustEngagedWith carries no
 	// Talk arms on the boss itself (BossAI passthrough ports via
+	// SetBossState(IN_PROGRESS) PORTED tick 258 +
 	// SetCombatPulseDelay + DoZoneInCombat, the SendEncounterUnit
 	// engage leg ports; phase-machine ScheduleAirPhaseEvents +
 	// summons DoAction legs have no bridges; HandleMusic ports via
 	// UpdateWorldState);
-	// JustDied carries no Talk arms (event 4 models the timer wipe
+	// JustDied carries no Talk arms (event 4 models the _JustDied()
+	// SetBossState(DONE) leg PORTED tick 258 + the timer wipe
 	// + HandleMusic(false) + the SendEncounterUnit disengage leg).
 	// Documented-only: the whole air/ground/perma-ground phase
 	// machine (DoAction ACTION_START_FIGHT / ACTION_GROUND_PHASE
@@ -19344,7 +19354,8 @@ func init() {
 	// XT-002 Deconstructor (33293), Ulduar —
 	// lua_scripts/northrend/boss_xt002.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1; the BossAI::JustEngagedWith passthrough, the
+	// (event 1; the BossAI::JustEngagedWith SetBossState(IN_PROGRESS)
+	// leg PORTED tick 258 via creature:SetBossState; the
 	// phase-gated ScheduleEvent legs and the
 	// DoStartTimedAchievement leg have no bridges — the auriaya
 	// engage-port precedent); EVENT_ENRAGE Talk(SAY_BERSERK 5) +
@@ -19355,11 +19366,13 @@ func init() {
 	// timers, cancel on events 2/4/23 — Talk-before-cast order
 	// kept); KilledUnit player-gated Talk(SAY_SLAY 4) (event 3 —
 	// the razuvious player-gated variant precedent); JustDied
-	// Talk(SAY_DEATH 6) (event 4; the _JustDied() passthrough +
-	// RemoveFlag NOT_SELECTABLE leg is bridged (field 59) — the sjonnir
-	// JustDied-Talk precedent; also wipes the enrage timer).
+	// Talk(SAY_DEATH 6) (event 4; the _JustDied() SetBossState(DONE)
+	// leg PORTED tick 258 + RemoveFlag NOT_SELECTABLE leg bridged
+	// (field 59) — the sjonnir JustDied-Talk precedent; also wipes
+	// the enrage timer).
 	// Documented-only: Reset / Initialize / EnterEvadeMode
-	// (DoStopTimedAchievement 21027 — no bridges);
+	// (_Reset SetBossState NOT_STARTED PORTED tick 258 (ev23);
+	// DoStopTimedAchievement 21027 — no bridges);
 	// DoAction(ACTION_ENTER_HARD_MODE — ev38 dispatch IS bridged,
 	// creature:DoAction, lua_creature_events.go:802; sender is the
 	// unported npc_xt002_heart JustDied, boss_xt002.cpp:430);
@@ -19423,7 +19436,8 @@ func init() {
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
 	// + DoCast(me, SPELL_AURA_OF_DESPAIR 62692) 2-arg
 	// non-triggered self-cast at engage (event 1; the
-	// BossAI::JustEngagedWith passthrough, the
+	// BossAI::JustEngagedWith SetBossState(IN_PROGRESS) leg PORTED
+	// tick 258 via creature:SetBossState; the
 	// CheckShamanisticRage map-player-scan leg and the four
 	// unbridgeable ScheduleEvent legs have no bridges — the
 	// malygos engage-aura precedent); timer-driven casts via
@@ -19439,8 +19453,9 @@ func init() {
 	// (Talk-before-cast order kept); KilledUnit player-gated
 	// Talk(SAY_SLAY 1) (event 3 — the razuvious player-gated
 	// variant precedent); JustDied Talk(SAY_DEATH 3) (event 4;
-	// the _JustDied() passthrough + DoRemoveAurasDueToSpellOn
-	// Players(62692) leg has no bridge — the sjonnir JustDied-Talk
+	// the _JustDied() SetBossState(DONE) leg PORTED tick 258 +
+	// DoRemoveAurasDueToSpellOn Players(62692) leg has no bridge
+	// — the sjonnir JustDied-Talk
 	// precedent; also wipes the surge/berserk timers).
 	// CAST-STATE 2026-11-04: boss UpdateAI pre-loop (:157) +
 	// in-loop (:215) CASTING gates PORTED as a 500ms IsCasting
@@ -19449,7 +19464,8 @@ func init() {
 	// precedes Talk + target pick, no re-arm consumed);
 	// saronite_animus gates (:348/:363) guard only the unported
 	// profound-of-darkness machine.
-	// Documented-only: Reset / Initialize (shadowDodger /
+	// Documented-only: Reset / Initialize (_Reset SetBossState
+	// NOT_STARTED PORTED tick 258 (ev23); shadowDodger /
 	// smellSaronite / animusDead / vaporCount init — no bridges);
 	// SpellHitTarget (SPELL_SHADOW_CRASH_HIT 62659 player leg ->
 	// shadowDodger = false — ev15 bridge live, but the flag's
@@ -19512,9 +19528,11 @@ func init() {
 	// (random-target DoCast(SPELL_CHAIN_LIGHTNING 61879) via the
 	// GetAITargets twin — the razuvious idiom — 4s init,
 	// {7s,10s} repeat); KilledUnit player-gated Talk(SAY_SLAY 1)
-	// x3 (event 3); JustDied Talk(SAY_DEATH 3/4/4) x3 (event 4);
+	// x3 (event 3); JustDied Talk(SAY_DEATH 3/4/4) x3 (event 4) +
+	// _JustDied() SetBossState(DONE) PORTED tick 258 (last-death gated);
 	// RemoveAllAuras() on the event-23 Reset handlers (the
-	// _Reset()/phase legs have no bridges).
+	// _Reset() SetBossState(NOT_STARTED) leg PORTED tick 258
+	// (GetBossState-gated, ev23 x3); phase legs have no bridges).
 	// Documented-only (no bridges): DoAction
 	// ACTION_SUPERCHARGE 1 / ACTION_ADD_CHARGE 2 — the phase
 	// machine and the death-cascade never advance, so static
@@ -19527,7 +19545,8 @@ func init() {
 	// C++ case-2 DATA_STEELBREAKER copy-paste quirk);
 	// EVENT_MOVE_POSITION + the tendrils flight/land/ground
 	// machine (no motion/hover bridges); the DONE-branch kill
-	// credit (no instance GetBossState bridge); the three spell
+	// credit (GetBossState bridge live; DONE branch PORTED tick 258
+	// via last-death grid-sweep gate); the three spell
 	// scripts (no AuraScript/SpellScript bridges); the
 	// Cast-state gates PORTED: steelbreaker pre-loop :241 +
 	// in-loop :270, molgeim :386/:438, brundir :565/:653
@@ -19541,18 +19560,19 @@ func init() {
 	// Kologarn (32930), Ulduar —
 	// lua_scripts/northrend/boss_kologarn.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO
-	// 0) (event 1; the six ScheduleEvent legs, the vehicle-kit
-	// DoZoneInCombat arms leg and the BossAI::JustEngagedWith
-	// passthrough have no bridges — the auriaya engage-port
+	// 0) (event 1; the six ScheduleEvent legs and the vehicle-kit
+	// DoZoneInCombat arms leg have no bridges; the
+	// BossAI::JustEngagedWith SetBossState(IN_PROGRESS) leg PORTED
+	// tick 258 via creature:SetBossState — the auriaya engage-port
 	// precedent); KilledUnit player-gated Talk(SAY_SLAY 1)
 	// (event 3 — the razuvious player-gated variant precedent
 	// — the twenty-ninth player-gated variant ported);
 	// JustDied Talk(SAY_DEATH 6) (event 4; the DoCast
 	// SPELL_KOLOGARN_PACIFY 63726 leg, the MoveTargetedHome
 	// leg, the SetFlag(NOT_SELECTABLE) leg, the
-	// SetCorpseDelay(604800) leg and the _JustDied()
-	// passthrough have no bridges — the sjonnir JustDied-Talk
-	// precedent).
+	// SetCorpseDelay(604800) leg has no bridge; the _JustDied()
+	// SetBossState(DONE) leg PORTED tick 258 — the sjonnir
+	// JustDied-Talk precedent).
 	// Documented-only: Reset / PassengerBoarded
 	// (Talk(SAY_LEFT_ARM_GONE 2) / Talk(SAY_RIGHT_ARM_GONE 3)
 	// + SPELL_ARM_DEAD_DAMAGE 63629 / rubble-stalker casts /

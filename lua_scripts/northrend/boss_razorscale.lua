@@ -43,7 +43,12 @@
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_razorscale.cpp):
 -- JustEngagedWith (:356-365) — the BossAI::JustEngagedWith
--- passthrough ports via SetCombatPulseDelay + DoZoneInCombat, the
+-- passthrough ports via SetBossState(DATA_RAZORSCALE, IN_PROGRESS)
+-- (ScriptedCreature.cpp:527-543, base-first; PORTED 2026-11-05 tick
+-- 258 via creature:SetBossState, lua_creature_events.go:5917 — the
+-- header never claimed "no instance bridge", the leg was simply
+-- unported; the CheckRequiredBosses gate stays out — EnterEvadeMode
+-- has NO Lua bridge) + SetCombatPulseDelay + DoZoneInCombat, the
 -- SendEncounterUnit engage leg ports via creature:SendEncounterUnit
 -- (bridge live 2026-11-05); the ScheduleAirPhaseEvents leg (phase
 -- machine) and the summons.DoAction(ACTION_START_FIGHT) leg have no
@@ -57,13 +62,22 @@
 -- canceled — the auriaya/ignis triggered-berserk precedent;
 -- cast-before-Talk order kept).
 -- JustDied (:526-531) — _JustDied() + SendEncounterUnit disengage
--- + HandleMusic(false); no Talk arms; event 4 models the timer
+-- + HandleMusic(false); no Talk arms; event 4 models the _JustDied
+-- SetBossState(DATA_RAZORSCALE, DONE) leg (PORTED 2026-11-05 tick
+-- 258, base-first: state before disengage/music) plus the timer
 -- wipe plus the HandleMusic(false) leg via
 -- creature:UpdateWorldState (2026-10-22) plus the disengage leg
 -- (bridge live 2026-11-05). The EnterEvadeMode disengage (:519)
 -- stays out: it is gated on the evade reason (boundary evades
 -- outside PHASE_PERMA_GROUND return early) and Lua has no
 -- evade-reason bridge.
+-- Reset (:317-329) — _Reset() SetBossState(DATA_RAZORSCALE,
+-- NOT_STARTED) PORTED 2026-11-05 tick 258 on ev23, C++-exact with
+-- the _Reset guards (ScriptedCreature.cpp:499-511: early return if
+-- !IsAlive; write only if GetBossState != DONE — GetBossState
+-- bridged lua_creature_events.go:5936, hakkar precedent); the
+-- Initialize engineers=3 + SummonCreatureGroup(1/2/3) + SetCombat-
+-- Movement(false) legs were already ported on ev23/ev1.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33186):
 -- The whole air/ground/perma-ground phase machine — DoAction
@@ -219,6 +233,10 @@
 -- achievement bridges; both join the unmodeled-achievement queue).
 
 local ENTRY_RAZORSCALE = 33186
+
+-- DATA_RAZORSCALE = 2 (ulduar.h:38; BOSS_RAZORSCALE).
+local DATA_RAZORSCALE = 2
+
 local ENTRY_EXPEDITION_COMMANDER = 33210
 local ENTRY_EXPEDITION_ENGINEER = 33287
 local UNIT_FIELD_FLAGS = 59
@@ -282,6 +300,13 @@ end
 -- machine) + summons DoAction + HandleMusic — the engage leg and
 -- the EVENT_BERSERK timer leg are bridgeable.
 local function razorscaleEnterCombat(event, creature, target)
+    -- C++ JustEngagedWith base-first (boss_razorscale.cpp:358):
+    -- BossAI::JustEngagedWith (ScriptedCreature.cpp:527-543) —
+    -- SetBossState(DATA_RAZORSCALE, IN_PROGRESS) first, before
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat; the
+    -- CheckRequiredBosses gate stays out (EnterEvadeMode has no
+    -- Lua bridge).
+    creature:SetBossState(DATA_RAZORSCALE, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_razorscale.cpp:358)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE (boss_razorscale.cpp:359)
@@ -295,13 +320,20 @@ local function razorscaleEnterCombat(event, creature, target)
     end)
 end
 
--- Shared timer wipe for events 2/4/23. Events 2 (leave
--- combat / EnterEvadeMode :515-524) and 4 (JustDied :526-531)
--- also model the HandleMusic(false) leg via
--- creature:UpdateWorldState; event 23 (Reset :317-329) never
--- calls HandleMusic, so it wipes timers only.
+-- C++ Reset (:317-329): _Reset() first (ScriptedCreature.cpp:499-511)
+-- — events.Reset (the timer wipe) then SetBossState(DATA_RAZORSCALE,
+-- NOT_STARTED), guarded: early return if !IsAlive, write only if
+-- GetBossState != DONE (GetBossState bridged
+-- lua_creature_events.go:5936, hakkar precedent) — then Initialize
+-- (_engineersCount = 3), SummonCreatureGroup(1/2/3) and
+-- SetCombatMovement(false) (:329, modeled on ev1 where it persists
+-- into the air phase). Event 23 never calls HandleMusic.
 local function cancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ _Reset state leg (boss_razorscale.cpp:319, ScriptedCreature.cpp:499-511).
+    if creature:IsAlive() and creature:GetBossState(DATA_RAZORSCALE) ~= 3 then
+        creature:SetBossState(DATA_RAZORSCALE, 0)
+    end
     -- C++ Reset -> Initialize (boss_razorscale.cpp:307/317-319):
     -- _engineersCount = 3.
     engineersRemaining[creature:GetGUID()] = 3
@@ -317,20 +349,28 @@ local function cancelCombatTimers(event, creature)
     end
 end
 
--- C++ EnterEvadeMode (:515-524) / JustDied (:526-531) shared
--- handler: both model the HandleMusic(false) leg via
--- creature:UpdateWorldState. Event 4 also disengages the encounter
--- frame (JustDied :529); event 2 does NOT — the EnterEvadeMode
--- disengage (:519) is gated on the evade reason (boundary evades
--- outside PHASE_PERMA_GROUND return early) and Lua has no
--- evade-reason bridge, so it stays out.
-local function leaveCombatOrDied(event, creature)
+-- C++ EnterEvadeMode (:515-524) handler (event 2): the HandleMusic
+-- (false) leg only — no SetBossState leg in the evade path (the state
+-- returns to NOT_STARTED via Reset/ev23); the disengage (:519) stays
+-- out, gated on the evade reason (boundary evades outside
+-- PHASE_PERMA_GROUND return early) with no evade-reason bridge.
+-- Split from the died handler 2026-11-05 tick 258 (ev2 leave-combat
+-- does NOT call Reset in C++ — sjonnir precedent).
+local function leaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
-    -- C++ HandleMusic(false) (EnterEvadeMode :521, JustDied :530).
+    -- C++ HandleMusic(false) (EnterEvadeMode :521).
     creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 0)
-    if event == 4 then
-        creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_razorscale.cpp:529)
-    end
+end
+
+-- C++ JustDied (:526-531): _JustDied() first (ScriptedCreature.cpp:513-519
+-- — SetBossState(DATA_RAZORSCALE, DONE)), then SendEncounterUnit
+-- disengage (:529) + HandleMusic(false) (:530); no Talk arms.
+local function razorscaleDied(event, creature)
+    creature:SetBossState(DATA_RAZORSCALE, 3)
+    cancelTimers(creature:GetGUID())
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_razorscale.cpp:529)
+    -- C++ HandleMusic(false) (JustDied :530).
+    creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 0)
 end
 
 -- C++ boss_razorscale::SummonedCreatureDies (:486-494): an engineer
@@ -408,8 +448,8 @@ local function razorscaleDoAction(event, creature, action)
 end
 
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 1, razorscaleEnterCombat)
-RegisterCreatureEvent(ENTRY_RAZORSCALE, 2, leaveCombatOrDied)
-RegisterCreatureEvent(ENTRY_RAZORSCALE, 4, leaveCombatOrDied)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 2, leaveCombat)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 4, razorscaleDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 21, razorscaleSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 38, razorscaleDoAction)

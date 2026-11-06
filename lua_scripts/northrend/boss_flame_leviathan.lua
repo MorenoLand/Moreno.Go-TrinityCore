@@ -43,17 +43,32 @@
 -- UpdateAI CASTING gates (own pre-loop :394 + in-loop :473) are
 -- PORTED as a 500ms IsCasting defer in every ported timer tick
 -- (mal_ganis idiom; IsCasting bridged lua_creature_events.go:1950).
--- JustDied — Talk(SAY_DEATH 2) (event 4; :331; the _JustDied() passthrough
--- and the flag/dynflag/npcflag cosmetics have no bridges).
+-- JustDied — _JustDied() SetBossState(DATA_LEVIATHAN 0, DONE) PORTED
+-- 2026-11-05 via creature:SetBossState (lua_creature_events.go:5917;
+-- maiden precedent) + Talk(SAY_DEATH 2) (event 4; :325-331, state first,
+-- then Talk); the flag/dynflag/npcflag cosmetics have no bridges.
+-- Reset — _Reset() SetBossState(DATA_LEVIATHAN 0, NOT_STARTED) PORTED
+-- 2026-11-05 on ev23 (maiden precedent, unconditional per that
+-- convention; C++ gates on GetBossState != DONE, ScriptedCreature.cpp
+-- :503-512, vacuous here — ev23 only fires on a live boss, and DONE is
+-- only ever set by JustDied).
 -- DOCUMENTED-ONLY (no registration beyond entry 33113):
--- JustEngagedWith / ActiveTower() — the aggro talk is CONDITIONAL on tower
--- state (SAY_AGGRO 0 when ActiveTowers false; SAY_HARDMODE 4 when any tower
--- up; SAY_TOWER_NONE 5 when all destroyed). Tower state is driven by
--- DoAction(1..4) tower-destruction legs with no SetData/DoAction bridge;
--- porting Talk(0) unconditionally would mis-port the hardmode legs —
--- documented, not registered.
+-- JustEngagedWith / ActiveTower() — the BossAI::JustEngagedWith base leg
+-- SetBossState(DATA_LEVIATHAN 0, IN_PROGRESS) is PORTED 2026-11-05 via
+-- creature:SetBossState (lua_creature_events.go:5917; maiden precedent;
+-- base-first, :275-277, before SetCombatPulseDelay/DoZoneInCombat). The
+-- aggro talk is CONDITIONAL on tower state (SAY_AGGRO 0 when ActiveTowers
+-- false; SAY_HARDMODE 4 when any tower up; SAY_TOWER_NONE 5 when all
+-- destroyed). Tower state is driven by DoAction(1..4) tower-destruction
+-- legs with no SetData/DoAction bridge; porting Talk(0) unconditionally
+-- would mis-port the hardmode legs — documented, not registered.
 -- EVENT_SUMMON (1s init / 2s re-arm, :284 / :417-:422) — DoSummonFlyer
--- NPC_MECHANOLIFT 33214 leg — no summon bridge.
+-- NPC_MECHANOLIFT 33214 leg — SummonCreature (lua_creature_events.go:3399)
+-- and MoveRandom are bridged, but the leg stays out: the summons.size() < 15
+-- gate has no bridge (no summons-count method), DoSummonFlyer spawns at
+-- flightZ 30 / radius 50 (CreatureAI.cpp:448) with no flyer-spawn twin,
+-- and the mechanolift's own AI is unmodeled — flagged candidate for a
+-- dedicated tick, not ported here.
 -- EVENT_THORIM_S_HAMMER / EVENT_MIMIRON_S_INFERNO / EVENT_HODIR_S_FURY /
 -- EVENT_FREYA_S_WARD — hardmode tower-state-gated summon + Talk legs
 -- (SAY_TOWER_STORM 9 / SAY_TOWER_FLAME 7 / SAY_TOWER_FROST 6 /
@@ -134,6 +149,9 @@
 
 local ENTRY_FLAME_LEVIATHAN = 33113
 local ENTRY_POOL_OF_TAR = 33189
+
+-- DATA_LEVIATHAN = 0 (ulduar.h:36; BOSS_LEVIATHAN bossId).
+local DATA_LEVIATHAN = 0
 
 local SAY_TARGET = 3
 local SAY_DEATH  = 2
@@ -271,14 +289,22 @@ shutdownTick = function(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith + react state + ScheduleEvent
--- x6 + ActiveTower() — the four unconditional timer casts, the
--- REACT_PASSIVE arm (PORTED 2026-10-20 — creature:SetReactState) and
--- the EVENT_SHUTDOWN 150s timer path are bridgeable; the
--- tower-condition aggro talk, the shutdown early path and EVENT_SUMMON
--- are documented-only.
+-- C++ JustEngagedWith (:275-287): BossAI::JustEngagedWith + react state +
+-- ScheduleEvent x6 + ActiveTower() — the BossAI base SetBossState
+-- (DATA_LEVIATHAN, IN_PROGRESS) leg is PORTED (base-first, :277); the four
+-- unconditional timer casts, the REACT_PASSIVE arm (PORTED 2026-10-20 —
+-- creature:SetReactState) and the EVENT_SHUTDOWN 150s timer path are
+-- bridgeable; the tower-condition aggro talk, the shutdown early path
+-- and EVENT_SUMMON are documented-only.
 local function flameLeviathanEnterCombat(event, creature, target)
-    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_flame_leviathan.cpp:277)
+    -- C++ JustEngagedWith base-first (boss_flame_leviathan.cpp:277;
+    -- ScriptedCreature.cpp:527-543): SetBossState(IN_PROGRESS), then
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before the
+    -- tower-conditional Talk (ActiveTower, :287 — documented-only).
+    -- The CheckRequiredBosses gate (:532) has no bridge (EnterEvadeMode
+    -- unbridged) — stay-out, port only the state leg.
+    creature:SetBossState(DATA_LEVIATHAN, 1)
+    creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:SetMeleeAttack(false) -- boss_flame_leviathan.cpp:372: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
@@ -307,15 +333,24 @@ local function flameLeviathanLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ JustDied: _JustDied() + Talk(SAY_DEATH 2) — only the Talk arm
--- is bridgeable.
+-- C++ JustDied (boss_flame_leviathan.cpp:325-331): _JustDied() then
+-- Talk(SAY_DEATH 2) — SetBossState(DATA_LEVIATHAN, DONE) first, then Talk
+-- (maiden order); the flag/dynflag/npcflag cosmetics have no bridges.
 local function flameLeviathanDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_LEVIATHAN, 3)
     creature:Talk(SAY_DEATH)
+    cancelTimers(creature:GetGUID())
 end
 
+-- C++ Reset (boss_flame_leviathan.cpp:265-273): _Reset() —
+-- SetBossState(DATA_LEVIATHAN, NOT_STARTED) (ScriptedCreature.cpp:503-512;
+-- maiden precedent sets it unconditionally on ev23) — then Shutdown = 0 /
+-- _pursueTarget.Clear() (unmodeled Lua state, consumed only by the blocked
+-- shutdown-threshold / SpellHitTarget legs) and SetReactState
+-- (REACT_DEFENSIVE) last.
 local function flameLeviathanReset(event, creature)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_LEVIATHAN, 0)
     -- C++ boss_flame_leviathan.cpp:272: me->SetReactState(REACT_DEFENSIVE)
     -- (Reset last leg).
     creature:SetReactState(1) -- REACT_DEFENSIVE

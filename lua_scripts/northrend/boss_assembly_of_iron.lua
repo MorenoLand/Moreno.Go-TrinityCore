@@ -45,10 +45,26 @@
 -- spell enum value, yell index,
 -- init/re-arm delay and triggered flag re-verified C++-exact
 -- name-by-name this run.
+-- Re-audited 2026-11-05 (tick 258): the SetBossState legs ported on
+-- the maiden convention (DATA_ASSEMBLY_OF_IRON = 4, ulduar.h:40):
+-- engage -> IN_PROGRESS (1) x3, reset -> NOT_STARTED (0) x3
+-- (GetBossState-gated, four-horsemen precedent), died -> DONE (3)
+-- gated on the last death (assemblyBossesAlive grid sweep
+-- reproduces the InstanceScript::SetBossState DONE minion guard,
+-- InstanceScript.cpp:362-366 — Go's setInstanceBossState has no
+-- minion registry, so an unconditional DONE write would land DONE
+-- on the first death). The DONE branch (DoCastAOE SPELL_KILL_CREDIT
+-- 65195 triggered + Talk SAY_ENCOUNTER_DEFEATED 4/5/5) and the
+-- else-branch SetLootRecipient(nullptr) are ported with it — the
+-- old "no instance bridge" claims are retracted (SetBossState /
+-- GetBossState live at lua_creature_events.go:5917, SetLootRecipient
+-- at lua_creature_events.go:3932). The CheckRequiredBosses /
+-- EnterEvadeMode gate in _JustEngagedWith stays out (no bridge).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
--- boss_steelbreaker — JustEngagedWith: Talk(SAY_AGGRO 0)
+-- boss_steelbreaker — JustEngagedWith: SetBossState
+-- (DATA_ASSEMBLY_OF_IRON, IN_PROGRESS) + Talk(SAY_AGGRO 0)
 -- (event 1 — the auriaya precedent); DoCast(me,
 -- SPELL_HIGH_VOLTAGE 61890) (non-triggered self-cast) at
 -- engage; EVENT_BERSERK (Talk(SAY_BERSERK 5) +
@@ -56,42 +72,44 @@
 -- init, one-shot); EVENT_FUSION_PUNCH
 -- (DoCastVictim(SPELL_FUSION_PUNCH 61903) non-triggered,
 -- melee-range gated, 15s init, {13s,22s} repeat) — the maiden
--- CreateLuaEvent convention (the BossAI::JustEngagedWith
--- passthrough and SetPhase legs have no bridges); KilledUnit:
+-- CreateLuaEvent convention (the SetPhase leg has no bridge;
+-- the CheckRequiredBosses / EnterEvadeMode gate in
+-- BossAI::JustEngagedWith has no bridge); KilledUnit:
 -- player-gated
 -- Talk(SAY_SLAY 1) (event 3; who->GetTypeId() ==
 -- TYPEID_PLAYER — the razuvious player-gated variant
 -- precedent — the twenty-sixth player-gated variant ported;
 -- the phase == 3 DoCast SPELL_ELECTRICAL_CHARGE 61902 leg is
 -- phase-gated — out per the gothik precedent); JustDied:
--- Talk(SAY_DEATH 3) (event 4; the
--- _JustDied() passthrough, the instance GetBossState DONE
--- check, the DONE branch (Talk SAY_ENCOUNTER_DEFEATED 4 +
--- DoCastAOE SPELL_KILL_CREDIT 65195), the SetLootRecipient
--- leg and the supercharge DoAction cascade to the surviving
--- bosses — SetLootRecipient bridge live (lua_creature_events.go),
--- leg stays out on the instance DONE gate — the sjonnir JustDied-Talk
--- precedent).
--- boss_runemaster_molgeim — JustEngagedWith: Talk(SAY_AGGRO
+-- _JustDied() SetBossState(DONE) leg (last-death gated via
+-- assemblyBossesAlive) + GetBossState DONE branch (DoCastAOE
+-- SPELL_KILL_CREDIT 65195 triggered + Talk
+-- SAY_ENCOUNTER_DEFEATED 4) else SetLootRecipient(nullptr) +
+-- Talk(SAY_DEATH 3) (event 4) + the supercharge DoAction
+-- cascade to the surviving bosses (grid-sweep relay
+-- superchargeSurvivors).
+-- boss_runemaster_molgeim — JustEngagedWith: SetBossState
+-- (DATA_ASSEMBLY_OF_IRON, IN_PROGRESS) + Talk(SAY_AGGRO
 -- 0) (event 1 — the auriaya precedent); EVENT_BERSERK
 -- (Talk(SAY_BERSERK 6) + DoCast(SPELL_BERSERK 47008)
 -- non-triggered self-cast, 15min init, one-shot);
 -- EVENT_SHIELD_OF_RUNES (DoCast(me, SPELL_SHIELD_OF_RUNES
 -- 62274) non-triggered self-cast, 30s init, {27s,34s} repeat)
--- — the maiden CreateLuaEvent convention (the
--- BossAI::JustEngagedWith passthrough, SetPhase and
+-- — the maiden CreateLuaEvent convention (the SetPhase and
 -- EVENT_RUNE_OF_POWER legs have no bridges — rune of power
--- rides a random-ally instance-GUID leg); KilledUnit:
+-- rides a random-ally instance-GUID leg; the
+-- CheckRequiredBosses / EnterEvadeMode gate in
+-- BossAI::JustEngagedWith has no bridge); KilledUnit:
 -- player-gated Talk(SAY_SLAY 1) (event 3; the twenty-seventh
--- player-gated variant ported); JustDied: Talk(SAY_DEATH 4)
--- (event 4; the _JustDied() passthrough, the instance
--- GetBossState DONE check, the DONE branch (Talk
--- SAY_ENCOUNTER_DEFEATED 5 + DoCastAOE SPELL_KILL_CREDIT),
--- the SetLootRecipient leg and the supercharge DoAction
--- cascade — SetLootRecipient bridge live (lua_creature_events.go),
--- leg stays out on the instance DONE gate — the sjonnir JustDied-Talk
--- precedent).
--- boss_stormcaller_brundir — JustEngagedWith: Talk(SAY_AGGRO
+-- player-gated variant ported); JustDied: _JustDied()
+-- SetBossState(DONE) leg (last-death gated via
+-- assemblyBossesAlive) + GetBossState DONE branch (DoCastAOE
+-- SPELL_KILL_CREDIT 65195 triggered + Talk
+-- SAY_ENCOUNTER_DEFEATED 5) else SetLootRecipient(nullptr) +
+-- Talk(SAY_DEATH 4) (event 4) + the supercharge DoAction
+-- cascade (grid-sweep relay superchargeSurvivors).
+-- boss_stormcaller_brundir — JustEngagedWith: SetBossState
+-- (DATA_ASSEMBLY_OF_IRON, IN_PROGRESS) + Talk(SAY_AGGRO
 -- 0) (event 1 — the auriaya precedent); EVENT_BERSERK
 -- (Talk(SAY_BERSERK 6) + DoCast(SPELL_BERSERK 47008)
 -- non-triggered self-cast, 15min init, one-shot);
@@ -102,28 +120,30 @@
 -- 61879) non-triggered, SelectTarget(Random, 0) ->
 -- randomThreatTarget via the handler GetAITargets twin — the
 -- razuvious random-target idiom — 4s init, {7s,10s} repeat) —
--- the maiden CreateLuaEvent convention (the
--- BossAI::JustEngagedWith passthrough, SetPhase leg, the
+-- the maiden CreateLuaEvent convention (the SetPhase leg, the
 -- EVENT_MOVE_POSITION motion-machine leg, and the
 -- FindNearestCreature NPC_WORLD_TRIGGER 22515 trigger-GUID leg
--- have no bridges);
+-- have no bridges; the CheckRequiredBosses / EnterEvadeMode
+-- gate in BossAI::JustEngagedWith has no bridge);
 -- KilledUnit: player-gated Talk(SAY_SLAY 1) (event 3; the
 -- twenty-eighth player-gated variant ported); JustDied:
--- Talk(SAY_DEATH 4) (event 4; the _JustDied() passthrough, the
--- instance GetBossState DONE check, the DONE branch (Talk
--- SAY_ENCOUNTER_DEFEATED 5 + DoCastAOE SPELL_KILL_CREDIT),
--- the SetLootRecipient leg and the supercharge DoAction
--- cascade — SetLootRecipient bridge live (lua_creature_events.go),
--- leg stays out on the instance DONE gate — the sjonnir JustDied-Talk
--- precedent).
+-- _JustDied() SetBossState(DONE) leg (last-death gated via
+-- assemblyBossesAlive) + GetBossState DONE branch (DoCastAOE
+-- SPELL_KILL_CREDIT 65195 triggered + Talk
+-- SAY_ENCOUNTER_DEFEATED 5) else SetLootRecipient(nullptr) +
+-- Talk(SAY_DEATH 4) (event 4) + the supercharge DoAction
+-- cascade (grid-sweep relay superchargeSurvivors).
 -- DOCUMENTED-ONLY (in this header; no registration beyond
 -- entries 32867 / 32927 / 32857):
--- Reset / Initialize (all three) — the _Reset() + phase = 0
--- legs have no bridges; RemoveAllAuras() IS bridged (the
--- handler twin, engine/world/lua_creature_events.go:166) and
--- rides the three event-23 handlers; brundir's SetHover(false)
--- is bridged (lua_creature_events.go) and rides brundirReset in
--- C++ arm order (the old "no bridge" claim was stale). The
+-- Reset / Initialize (all three) — the _Reset()
+-- SetBossState(NOT_STARTED) leg is PORTED this run
+-- (GetBossState-gated, four-horsemen precedent; see the ev23
+-- handlers); the phase = 0 leg has no bridge; RemoveAllAuras()
+-- IS bridged (the handler twin,
+-- engine/world/lua_creature_events.go:166) and rides the three
+-- event-23 handlers; brundir's SetHover(false) is bridged
+-- (lua_creature_events.go) and rides brundirReset in C++ arm
+-- order (the old "no bridge" claim was stale). The
 -- interrupt/stun immunity-reset removes ride the
 -- creature:ApplySpellImmune bridge but are no-op removes — nothing
 -- ever adds those rows (the DoAction supercharge adds are unported),
@@ -194,22 +214,30 @@ local ENTRY_STEELBREAKER = 32867
 local ENTRY_MOLGEIM = 32927
 local ENTRY_BRUNDIR = 32857
 
+-- DATA_ASSEMBLY_OF_IRON = 4 (ulduar.h:40); all three AIs share this
+-- bossId (BossAI(creature, BOSS_ASSEMBLY_OF_IRON)).
+local DATA_ASSEMBLY_OF_IRON = 4
+
 local SAY_STEELBREAKER_AGGRO = 0
 local SAY_STEELBREAKER_SLAY = 1
 local SAY_STEELBREAKER_DEATH = 3
+local SAY_STEELBREAKER_ENCOUNTER_DEFEATED = 4
 local SAY_STEELBREAKER_BERSERK = 5
 local SAY_MOLGEIM_AGGRO = 0
 local SAY_MOLGEIM_SLAY = 1
 local SAY_MOLGEIM_DEATH = 4
+local SAY_MOLGEIM_ENCOUNTER_DEFEATED = 5
 local SAY_MOLGEIM_BERSERK = 6
 local SAY_BRUNDIR_AGGRO = 0
 local SAY_BRUNDIR_SLAY = 1
 local SAY_BRUNDIR_SPECIAL = 2
 local SAY_BRUNDIR_DEATH = 4
+local SAY_BRUNDIR_ENCOUNTER_DEFEATED = 5
 local SAY_BRUNDIR_BERSERK = 6
 local EMOTE_BRUNDIR_OVERLOAD = 7
 
 local SPELL_BERSERK = 47008
+local SPELL_KILL_CREDIT = 65195
 local SPELL_HIGH_VOLTAGE = 61890
 local SPELL_FUSION_PUNCH = 61903
 local SPELL_SHIELD_OF_RUNES = 62274
@@ -241,6 +269,31 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ InstanceScript::SetBossState(DONE) guard
+-- (InstanceScript.cpp:362-366): a DONE write is BLOCKED while any
+-- world-boss minion of the boss is still alive — all three assembly
+-- bosses are minions of BOSS_ASSEMBLY_OF_IRON
+-- (instance_ulduar.cpp:79-81). BossAI::_JustDied()
+-- (ScriptedCreature.cpp:513-521) therefore leaves the state at
+-- IN_PROGRESS on the first two deaths and only lands DONE on the
+-- third. Go's setInstanceBossState has no minion registry and would
+-- land DONE on the first death, so the gate is reproduced here with
+-- the in-file grid sweep: no alive assembly boss other than the
+-- dying one (self-GUID excluded) means this is the last death.
+-- Range 200 covers the room (CircleBoundary radius 90,
+-- instance_ulduar.cpp:39 — max separation under 180).
+local function assemblyBossesAlive(creature)
+    local selfGuid = creature:GetGUID()
+    for _, entry in ipairs({ENTRY_STEELBREAKER, ENTRY_MOLGEIM, ENTRY_BRUNDIR}) do
+        for _, other in ipairs(creature:GetCreaturesInGrid(entry, 200)) do
+            if other:GetGUID() ~= selfGuid and other:IsAlive() then
+                return true
+            end
+        end
+    end
+    return false
 end
 
 -- C++ JustDied relays (boss_assembly_of_iron.cpp:217/221,
@@ -331,10 +384,14 @@ local function steelbreakerBerserkTick(creature, guid)
 end
 
 -- C++ boss_steelbreaker::JustEngagedWith: BossAI passthrough
+-- (SetBossState(DATA_ASSEMBLY_OF_IRON, IN_PROGRESS) first —
+-- ScriptedCreature.cpp:527-538; the CheckRequiredBosses /
+-- EnterEvadeMode gate has no bridge — stay-out) + Talk(SAY_AGGRO)
 -- + DoCast(me, SPELL_HIGH_VOLTAGE 61890) (non-triggered
 -- self-cast) + SetPhase + ScheduleEvent(EVENT_BERSERK, 15min)
--- + ScheduleEvent(EVENT_FUSION_PUNCH, 15s) + Talk(SAY_AGGRO).
+-- + ScheduleEvent(EVENT_FUSION_PUNCH, 15s).
 local function steelbreakerEnterCombat(event, creature, target)
+    creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 1) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:537) -- base-first (boss_assembly_of_iron.cpp:162)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_assembly_of_iron.cpp:164)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_STEELBREAKER_AGGRO)
@@ -353,12 +410,19 @@ local function steelbreakerLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset: _Reset() + phase = 0 + me->RemoveAllAuras() — the
--- _Reset()/phase legs have no bridges; RemoveAllAuras rides the
--- handler twin (engine/world/lua_creature_events.go:166, the
+-- C++ Reset (:155-160): _Reset() + phase = 0 + me->RemoveAllAuras()
+-- — the _Reset() SetBossState(NOT_STARTED) leg is PORTED
+-- (GetBossState-gated: _Reset writes NOT_STARTED only if the state
+-- != DONE, ScriptedCreature.cpp:509-510 — the four-horsemen
+-- precedent; Go's setInstanceBossState also blocks DONE moving
+-- backwards); the phase leg has no bridge; RemoveAllAuras rides
+-- the handler twin (engine/world/lua_creature_events.go:166, the
 -- evade-leg twin).
 local function steelbreakerReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) ~= 3 then
+        creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 0)
+    end
     creature:RemoveAllAuras()
 end
 
@@ -371,18 +435,29 @@ local function steelbreakerTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: _JustDied() passthrough + instance
--- GetBossState DONE check + DONE branch (Talk
--- SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT) +
--- SetLootRecipient + supercharge DoAction cascade — the death
--- Talk rides the handler and the cascade rides
--- superchargeSurvivors (grid-sweep relay); the DONE branch
--- (Talk SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT)
--- and SetLootRecipient stay out (no instance bridge).
+-- C++ JustDied (:200-223): _JustDied() first — the SetBossState
+-- (DONE) leg lands only on the last death (InstanceScript minion
+-- guard, reproduced by assemblyBossesAlive) — then the
+-- GetBossState DONE check branches: DONE -> DoCastAOE
+-- (SPELL_KILL_CREDIT 65195, triggered) + Talk
+-- (SAY_ENCOUNTER_DEFEATED 4); else SetLootRecipient(nullptr) +
+-- Talk(SAY_DEATH 3) + supercharge DoAction cascade to survivors
+-- (grid-sweep relay superchargeSurvivors). SetLootRecipient bridge
+-- live (lua_creature_events.go:3932); GetBossState bridge live
+-- (lua_creature_events.go).
 local function steelbreakerDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
-    creature:Talk(SAY_STEELBREAKER_DEATH)
-    superchargeSurvivors(creature)
+    if not assemblyBossesAlive(creature) then
+        creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 3)
+    end
+    if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) == 3 then
+        creature:CastSpell(creature, SPELL_KILL_CREDIT, true)
+        creature:Talk(SAY_STEELBREAKER_ENCOUNTER_DEFEATED)
+    else
+        creature:SetLootRecipient(nil)
+        creature:Talk(SAY_STEELBREAKER_DEATH)
+        superchargeSurvivors(creature)
+    end
 end
 
 -- C++ EVENT_SHIELD_OF_RUNES: DoCast(me,
@@ -416,10 +491,14 @@ local function molgeimBerserkTick(creature, guid)
 end
 
 -- C++ boss_runemaster_molgeim::JustEngagedWith: BossAI
--- passthrough + SetPhase + ScheduleEvent(EVENT_BERSERK,
+-- passthrough (SetBossState(DATA_ASSEMBLY_OF_IRON, IN_PROGRESS)
+-- first — ScriptedCreature.cpp:527-538; the CheckRequiredBosses /
+-- EnterEvadeMode gate has no bridge — stay-out) + Talk(SAY_AGGRO)
+-- + SetPhase + ScheduleEvent(EVENT_BERSERK,
 -- 15min) + ScheduleEvent(EVENT_SHIELD_OF_RUNES, 30s) +
--- ScheduleEvent(EVENT_RUNE_OF_POWER, 20s) + Talk(SAY_AGGRO).
+-- ScheduleEvent(EVENT_RUNE_OF_POWER, 20s).
 local function molgeimEnterCombat(event, creature, target)
+    creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 1) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:537) -- base-first (boss_assembly_of_iron.cpp:310)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_assembly_of_iron.cpp:312)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_MOLGEIM_AGGRO)
@@ -437,12 +516,18 @@ local function molgeimLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset: _Reset() + phase = 0 + me->RemoveAllAuras() — the
--- _Reset()/phase legs have no bridges; RemoveAllAuras rides the
--- handler twin (engine/world/lua_creature_events.go:166, the
+-- C++ Reset (:303-308): _Reset() + phase = 0 + me->RemoveAllAuras()
+-- — the _Reset() SetBossState(NOT_STARTED) leg is PORTED
+-- (GetBossState-gated: _Reset writes NOT_STARTED only if the state
+-- != DONE, ScriptedCreature.cpp:509-510 — the four-horsemen
+-- precedent); the phase leg has no bridge; RemoveAllAuras rides
+-- the handler twin (engine/world/lua_creature_events.go:166, the
 -- evade-leg twin).
 local function molgeimReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) ~= 3 then
+        creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 0)
+    end
     creature:RemoveAllAuras()
 end
 
@@ -454,18 +539,27 @@ local function molgeimTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: _JustDied() passthrough + instance
--- GetBossState DONE check + DONE branch (Talk
--- SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT) +
--- SetLootRecipient + supercharge DoAction cascade — the death
--- Talk rides the handler and the cascade rides
--- superchargeSurvivors (grid-sweep relay); the DONE branch
--- (Talk SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT)
--- and SetLootRecipient stay out (no instance bridge).
+-- C++ JustDied (:348-371): _JustDied() first — the SetBossState
+-- (DONE) leg lands only on the last death (InstanceScript minion
+-- guard, reproduced by assemblyBossesAlive) — then the
+-- GetBossState DONE check branches: DONE -> DoCastAOE
+-- (SPELL_KILL_CREDIT 65195, triggered) + Talk
+-- (SAY_ENCOUNTER_DEFEATED 5); else SetLootRecipient(nullptr) +
+-- Talk(SAY_DEATH 4) + supercharge DoAction cascade to survivors
+-- (grid-sweep relay superchargeSurvivors).
 local function molgeimDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
-    creature:Talk(SAY_MOLGEIM_DEATH)
-    superchargeSurvivors(creature)
+    if not assemblyBossesAlive(creature) then
+        creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 3)
+    end
+    if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) == 3 then
+        creature:CastSpell(creature, SPELL_KILL_CREDIT, true)
+        creature:Talk(SAY_MOLGEIM_ENCOUNTER_DEFEATED)
+    else
+        creature:SetLootRecipient(nil)
+        creature:Talk(SAY_MOLGEIM_DEATH)
+        superchargeSurvivors(creature)
+    end
 end
 
 -- C++ SelectTarget(Random, 0) leg: alive units on the threat
@@ -539,13 +633,16 @@ local function brundirBerserkTick(creature, guid)
 end
 
 -- C++ boss_stormcaller_brundir::JustEngagedWith: BossAI
--- passthrough + SetPhase + ScheduleEvent(EVENT_MOVE_POSITION,
+-- passthrough (SetBossState(DATA_ASSEMBLY_OF_IRON, IN_PROGRESS)
+-- first — ScriptedCreature.cpp:527-538; the CheckRequiredBosses /
+-- EnterEvadeMode gate has no bridge — stay-out) + Talk(SAY_AGGRO)
+-- + SetPhase + ScheduleEvent(EVENT_MOVE_POSITION,
 -- 1s) + ScheduleEvent(EVENT_BERSERK, 15min) +
 -- ScheduleEvent(EVENT_CHAIN_LIGHTNING, 4s) +
 -- ScheduleEvent(EVENT_OVERLOAD, 60s, 120s) +
--- FindNearestCreature(NPC_WORLD_TRIGGER 22515) leg +
--- Talk(SAY_AGGRO).
+-- FindNearestCreature(NPC_WORLD_TRIGGER 22515) leg.
 local function brundirEnterCombat(event, creature, target)
+    creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 1) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:537) -- base-first (boss_assembly_of_iron.cpp:489)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_assembly_of_iron.cpp:491)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_BRUNDIR_AGGRO)
@@ -566,13 +663,19 @@ local function brundirLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ Reset: _Reset() + phase = 0 + me->RemoveAllAuras() +
--- me->SetHover(false) (:476) — the _Reset()/phase legs have no
--- bridges; RemoveAllAuras rides the handler twin
+-- C++ Reset (:471-483): _Reset() + phase = 0 + me->RemoveAllAuras() +
+-- me->SetHover(false) (:476) — the _Reset() SetBossState(NOT_STARTED)
+-- leg is PORTED (GetBossState-gated: _Reset writes NOT_STARTED only
+-- if the state != DONE, ScriptedCreature.cpp:509-510 — the
+-- four-horsemen precedent); the phase leg has no bridge;
+-- RemoveAllAuras rides the handler twin
 -- (engine/world/lua_creature_events.go:166, the evade-leg twin),
 -- and SetHover(false) follows in C++ arm order.
 local function brundirReset(event, creature)
     cancelTimers(creature:GetGUID())
+    if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) ~= 3 then
+        creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 0)
+    end
     creature:RemoveAllAuras()
     creature:SetHover(false)
 end
@@ -585,18 +688,27 @@ local function brundirTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: _JustDied() passthrough + instance
--- GetBossState DONE check + DONE branch (Talk
--- SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT) +
--- SetLootRecipient + supercharge DoAction cascade — the death
--- Talk rides the handler and the cascade rides
--- superchargeSurvivors (grid-sweep relay); the DONE branch
--- (Talk SAY_ENCOUNTER_DEFEATED + DoCastAOE SPELL_KILL_CREDIT)
--- and SetLootRecipient stay out (no instance bridge).
+-- C++ JustDied (:527-550): _JustDied() first — the SetBossState
+-- (DONE) leg lands only on the last death (InstanceScript minion
+-- guard, reproduced by assemblyBossesAlive) — then the
+-- GetBossState DONE check branches: DONE -> DoCastAOE
+-- (SPELL_KILL_CREDIT 65195, triggered) + Talk
+-- (SAY_ENCOUNTER_DEFEATED 5); else SetLootRecipient(nullptr) +
+-- Talk(SAY_DEATH 4) + supercharge DoAction cascade to survivors
+-- (grid-sweep relay superchargeSurvivors).
 local function brundirDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
-    creature:Talk(SAY_BRUNDIR_DEATH)
-    superchargeSurvivors(creature)
+    if not assemblyBossesAlive(creature) then
+        creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 3)
+    end
+    if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) == 3 then
+        creature:CastSpell(creature, SPELL_KILL_CREDIT, true)
+        creature:Talk(SAY_BRUNDIR_ENCOUNTER_DEFEATED)
+    else
+        creature:SetLootRecipient(nil)
+        creature:Talk(SAY_BRUNDIR_DEATH)
+        superchargeSurvivors(creature)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_STEELBREAKER, 1, steelbreakerEnterCombat)
