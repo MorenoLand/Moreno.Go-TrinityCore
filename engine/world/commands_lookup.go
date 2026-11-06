@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // lookup command ports lookup_commandscript (cs_lookup.cpp), the TWENTY-SECOND
@@ -99,9 +100,12 @@ func (s *session) lookupDBC(fileName, dataName string, nameField int, query, noM
 			continue
 		}
 		id, err := rec.Uint32(0)
-		if err != nil || id == 0 {
+		if err != nil {
 			continue
 		}
+		// No id == 0 skip: the C++ arms loop from id 0 and rely on the
+		// empty-name skip below — Map 0 is a real named record
+		// ("Azeroth", cs_lookup.cpp:1310-1377).
 		name, _ := rec.String(nameField)
 		if name == "" {
 			continue
@@ -123,7 +127,7 @@ func (s *session) lookupDBC(fileName, dataName string, nameField int, query, noM
 }
 
 // lookupWorldTable ports the C++ item_template/creature_template/
-// gameobject_template name searches (cs_lookup.cpp:404, 165, 577): a full
+// gameobject_template name searches (cs_lookup.cpp:400, 165, 577): a full
 // ordered scan of the world table with a case-insensitive substring match on
 // the enUS name column (item/gameobject locales are unmodeled).
 func (s *session) lookupWorldTable(table, nameCol, query, noMatchMsg string, line func(entry uint32, name string) string) {
@@ -166,7 +170,7 @@ func (s *session) lookupWorldTable(table, nameCol, query, noMatchMsg string, lin
 	}
 }
 
-// handleCmdLookup ports the lookup command table (cs_lookup.cpp:61-84): 19
+// handleCmdLookup ports the lookup command table (cs_lookup.cpp:52-88): 19
 // arms with Trinity per-level prefix matching, each gated on its own RBAC
 // permission (ChatCommand.cpp:487 checks only the invoker leaf node).
 func (s *session) handleCmdLookup(ctx context.Context, args []string) {
@@ -634,11 +638,12 @@ func (s *session) handleLookupPlayerIP(ctx context.Context, args []string) {
 		s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE last_ip = ?", []any{ts.remoteIP()}, -1)
 		return
 	}
+	// C++ is atoi(limitStr) (cs_lookup.cpp:1446): "abc" is 0, "12abc"
+	// is 12 — cAtoi keeps that behavior where strconv.Atoi would
+	// leave the limit unlimited.
 	limit := -1
 	if len(args) > 1 {
-		if l, err := strconv.Atoi(args[1]); err == nil {
-			limit = l
-		}
+		limit = cAtoi(args[1])
 	}
 	s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE last_ip = ?", []any{args[0]}, limit)
 }
@@ -651,13 +656,19 @@ func (s *session) handleLookupPlayerAccount(ctx context.Context, args []string) 
 		s.sendSysMessage("Syntax: .lookup player account <account> [limit]")
 		return
 	}
+	// C++ is atoi(limitStr) (cs_lookup.cpp:1463): "abc" is 0, "12abc"
+	// is 12 — cAtoi keeps that behavior where strconv.Atoi would
+	// leave the limit unlimited.
 	limit := -1
 	if len(args) > 1 {
-		if l, err := strconv.Atoi(args[1]); err == nil {
-			limit = l
-		}
+		limit = cAtoi(args[1])
 	}
-	s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE username = ?", []any{strings.ToUpper(args[0])}, limit)
+	upper, ok := upperLatinOnly(args[0])
+	if !ok {
+		s.sendSysMessage("Syntax: .lookup player account <account> [limit]")
+		return
+	}
+	s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE username = ?", []any{upper}, limit)
 }
 
 // handleLookupPlayerEmail ports HandleLookupPlayerEmailCommand
@@ -667,19 +678,40 @@ func (s *session) handleLookupPlayerEmail(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .lookup player email <email> [limit]")
 		return
 	}
+	// C++ is atoi(limitStr) (cs_lookup.cpp:1483): "abc" is 0, "12abc"
+	// is 12 — cAtoi keeps that behavior where strconv.Atoi would
+	// leave the limit unlimited.
 	limit := -1
 	if len(args) > 1 {
-		if l, err := strconv.Atoi(args[1]); err == nil {
-			limit = l
-		}
+		limit = cAtoi(args[1])
 	}
 	s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE email = ?", []any{args[0]}, limit)
 }
 
+// upperLatinOnly mirrors Utf8ToUpperOnlyLatin (Util.cpp:592-601): only
+// ASCII a-z are uppercased (wcharToUpperOnlyLatin, Util.h:250-253 —
+// isBasicLatinCharacter is a-zA-Z only); anything else, including
+// non-Latin letters, is left unchanged. Invalid UTF-8 fails, like
+// Utf8toWStr failing in the C++.
+func upperLatinOnly(s string) (string, bool) {
+	if !utf8.ValidString(s) {
+		return "", false
+	}
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'a' && c <= 'z' {
+			b[i] = c - ('a' - 'A')
+		}
+	}
+	return string(b), true
+}
+
 // lookupPlayerSearchCommand ports LookupPlayerSearchCommand
-// (cs_lookup.cpp:1496-1545): for each matching login account, the account line
-// then one line per character (CHAR_SEL_CHAR_GUID_NAME_BY_ACC). A zero
-// character count reports "No players found."
+// (cs_lookup.cpp:1492-1545): for each matching login account, the account line
+// then one line per character (CHAR_SEL_CHAR_GUID_NAME_BY_ACC) — the
+// account line is sent only when the account has at least one character
+// (the C++ prints it inside `if (result2)`). A zero character count
+// reports "No players found."
 func (s *session) lookupPlayerSearchCommand(ctx context.Context, accountQuery string, accountArgs []any, limit int) {
 	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil ||
 		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
@@ -710,16 +742,17 @@ func (s *session) lookupPlayerSearchCommand(ctx context.Context, accountQuery st
 		if err != nil {
 			continue
 		}
-		s.sendSysMessage(fmt.Sprintf("Account: %s (ID: %d)", accountName, accountID))
+		accountLineShown := false
 		for charRows.Next() {
-			if limit != -1 && counter >= limit {
-				break
-			}
 			var guid uint32
 			var name string
 			var online int64
 			if err := charRows.Scan(&guid, &name, &online); err != nil {
 				continue
+			}
+			if !accountLineShown {
+				s.sendSysMessage(fmt.Sprintf("Account: %s (ID: %d)", accountName, accountID))
+				accountLineShown = true
 			}
 			onlineStr := ""
 			if online != 0 {
@@ -727,6 +760,13 @@ func (s *session) lookupPlayerSearchCommand(ctx context.Context, accountQuery st
 			}
 			s.sendSysMessage(fmt.Sprintf(" %s (GUID: %d)%s", name, guid, onlineStr))
 			counter++
+			// The C++ checks the limit in the inner do-while condition,
+			// after printing: limit 0 still prints one character per
+			// account, and each later account prints one more (the
+			// counter is global across accounts).
+			if limit != -1 && counter >= limit {
+				break
+			}
 		}
 		charRows.Close()
 	}
@@ -847,20 +887,23 @@ func (s *session) handleLookupTaxinode(query string) {
 
 // handleLookupTele ports HandleLookupTeleCommand (cs_lookup.cpp:1167-1223):
 // game_tele search on the first token only, name-ordered, with the lookup
-// result cap applied like the C++ limitReached path. The C++ matches against
-// the pre-lowercased in-memory map; the Go query is case-insensitive for
-// ASCII through the DB LIKE, which is the faithful available equivalent.
+// result cap applied like the C++ limitReached path. The C++ matches by
+// substring against the pre-lowercased in-memory map (wnameLow.find), so
+// the match is done in Go — a SQL LIKE would let %/_ in the token act as
+// wildcards. The LANG_COMMAND_TELE_LOCATION (168) header wrapping the
+// reply stays open: the trinity_string text is unseeded in-tree.
 func (s *session) handleLookupTele(ctx context.Context, token string) {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
 		return
 	}
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT id, name FROM game_tele WHERE name LIKE ? ORDER BY name", "%"+token+"%")
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT id, name FROM game_tele ORDER BY name")
 	if err != nil {
 		s.sendSysMessage("No location found.")
 		return
 	}
 	defer rows.Close()
+	namePart := strings.ToLower(token)
 	maxResults := s.server.Config.MaxResultsLookupCommands
 	var count uint32
 	limitReached := false
@@ -869,6 +912,9 @@ func (s *session) handleLookupTele(ctx context.Context, token string) {
 		var id int64
 		var name string
 		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(name), namePart) {
 			continue
 		}
 		if maxResults != 0 && count == maxResults {

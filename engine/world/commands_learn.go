@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -18,7 +17,7 @@ import (
 // exactly its own C++ permission.
 
 // learnDebugSpellIDs mirrors the hardcoded list in
-// HandleLearnDebugSpellsCommand (cs_learn.cpp:322-330).
+// HandleLearnDebugSpellsCommand (cs_learn.cpp:320-328).
 var learnDebugSpellIDs = []uint32{63364, 1908, 27680, 62555, 64238, 72525, 66776}
 
 // learnLanguageSpellIDs mirrors lang_description[].spell_id
@@ -29,7 +28,7 @@ var learnLanguageSpellIDs = []uint32{
 }
 
 // skillInternalID mirrors SKILL_INTERNAL (SharedDefines.h:3022), the skill
-// line id HandleLearnAllGMCommand filters on (cs_learn.cpp:190).
+// line id HandleLearnAllGMCommand filters on (cs_learn.cpp:120-136).
 const skillInternalID = 769
 
 // learnTargetOrSelf mirrors ChatHandler::getSelectedPlayerOrSelf
@@ -51,7 +50,7 @@ func (s *session) learnTargetOrSelf() (*session, bool) {
 }
 
 // learnSelectedPlayer mirrors ChatHandler::getSelectedPlayer
-// (Chat.cpp:300-310, cs_learn.cpp:363, 397): no selection means the
+// (Chat.cpp:300-310, cs_learn.cpp:379, 473): no selection means the
 // invoker (getSelectedPlayer returns the session player when nothing is
 // targeted); only a selection that resolves to no connected player
 // reports LANG_NO_CHAR_SELECTED / LANG_PLAYER_NOT_FOUND.
@@ -72,11 +71,22 @@ func (s *session) learnSelectedPlayer(requireMsg string) (*session, bool) {
 }
 
 // learnParseSpellID parses the <spell> argument. The C++ SpellInfo parser
-// also accepts |Hspell:id|h links; Go commands only accept bare ids (the
-// cast port documents the same gap).
+// (ChatCommandArgs.cpp:94-100) accepts a |Hspell:id| link or a base-0
+// uint32 (StringTo<uint32>, StringConvert.h:43-69: 0x/0b accepted, never
+// octal); enchant/glyph/talent/trade links, which the visitor also
+// resolves, stay out — no Go model for those link forms on this path
+// (same documented gap as the cast port).
 func (s *session) learnParseSpellID(arg string) (uint32, bool) {
-	id, err := strconv.ParseUint(arg, 10, 32)
-	if err != nil || id == 0 {
+	var id uint32
+	if linkID := miscExtractLinkID(arg, "Hspell"); linkID != 0 {
+		id = linkID
+	} else if v, ok := parseCommandUint32(arg); ok {
+		id = v
+	} else {
+		s.sendSysMessage("Invalid spell ID.")
+		return 0, false
+	}
+	if id == 0 {
 		s.sendSysMessage("Invalid spell ID.")
 		return 0, false
 	}
@@ -95,13 +105,14 @@ func (s *session) learnParseSpellID(arg string) (uint32, bool) {
 }
 
 // learnParseAllRanks mirrors Optional<EXACT_SEQUENCE("all")>: the optional
-// second argument must be a prefix of "all" (Trinity per-level prefix
-// matching), anything else is a syntax error.
+// second argument must equal "all" case-insensitively and consume the
+// whole token (ChatCommandTags.h:93-106) — "a"/"al" are a mismatch error,
+// not a prefix match.
 func (s *session) learnParseAllRanks(args []string) (bool, bool) {
 	if len(args) < 2 {
 		return false, true
 	}
-	if !strings.HasPrefix("all", strings.ToLower(args[1])) {
+	if !strings.EqualFold(args[1], "all") {
 		return false, false
 	}
 	return true, true
@@ -181,7 +192,7 @@ func (s *session) removeSpellCascade(ctx context.Context, spellID uint32, visite
 
 // removeSpell mirrors Player::RemoveSpell (Player.cpp:3699) with
 // disabled=false, for callers that invoke RemoveSpell directly: the
-// .unlearn command (cs_learn.cpp:487, learn_low_rank = !allRanks) and
+// .unlearn command (cs_learn.cpp:471, learn_low_rank = !allRanks) and
 // EffectUnlearnSpecialization (SpellEffects.cpp:1261, default
 // learn_low_rank = true per Player.h:1428). Unlike removeSpellCascade
 // (the ActivateSpec disabled=true path), this runs the full body: the
@@ -518,7 +529,7 @@ func (s *session) spellsTaughtBySpell(ctx context.Context, spellID uint32) []uin
 
 // learnTalentDirect grants a talent rank bypassing the talent-point gate,
 // mirroring the LearnSpell + AddTalent pair in HandleLearnAllTalentsCommand
-// (cs_learn.cpp:280-283). Persistence follows learnTalent (skills.go): the
+// (cs_learn.cpp:221-222). Persistence follows learnTalent (skills.go): the
 // old rank's rows are cleared, character_talent is inserted, and the spell
 // itself rides the normal learnSpell path.
 func (s *session) learnTalentDirect(ctx context.Context, talentID uint32, rank uint8, spellID uint32) {
@@ -550,7 +561,7 @@ func (s *session) learnTalentDirect(ctx context.Context, talentID uint32, rank u
 }
 
 // learnSkillRecipesHelper mirrors HandleLearnSkillRecipesHelper
-// (cs_learn.cpp:434-462): learn every non-superseded, race/class-fitting
+// (cs_learn.cpp:437-465): learn every non-superseded, race/class-fitting
 // recipe spell of a skill line. IsSpellValid is assumed (documented gap,
 // same as the other arms).
 func (s *session) learnSkillRecipesHelper(ctx context.Context, target *session, skillID uint32) {
@@ -580,7 +591,7 @@ func (s *session) learnSkillRecipesHelper(ctx context.Context, target *session, 
 }
 
 // learnProfessionSkillLines iterates SkillLine.dbc for primary/secondary
-// professions with recipes (cs_learn.cpp:375-378, 407-412:
+// professions with recipes (cs_learn.cpp:363, 400:
 // SKILL_CATEGORY_PROFESSION = 11 / SKILL_CATEGORY_SECONDARY = 9, CanLink).
 func (s *session) learnProfessionSkillLines() []uint32 {
 	var ids []uint32
@@ -611,7 +622,7 @@ func (s *session) learnProfessionSkillLines() []uint32 {
 	return ids
 }
 
-// handleCmdLearn mirrors the learn command table (cs_learn.cpp:64-94):
+// handleCmdLearn mirrors the learn command table (cs_learn.cpp:45-76):
 //
 //	learn <spell> [all]            -> HandleLearnCommand            (RBAC_PERM_COMMAND_LEARN, 417)
 //	learn all blizzard             -> HandleLearnAllGMCommand       (RBAC_PERM_COMMAND_LEARN_ALL_GM, 424)
@@ -658,7 +669,7 @@ func (s *session) handleCmdLearn(ctx context.Context, args []string) {
 	}
 }
 
-// handleLearnSpell ports HandleLearnCommand (cs_learn.cpp:99-133).
+// handleLearnSpell ports HandleLearnCommand (cs_learn.cpp:78-118).
 func (s *session) handleLearnSpell(ctx context.Context, args []string) {
 	spellID, ok := s.learnParseSpellID(args[0])
 	if !ok {
@@ -666,6 +677,12 @@ func (s *session) handleLearnSpell(ctx context.Context, args []string) {
 	}
 	allRanks, ok := s.learnParseAllRanks(args)
 	if !ok {
+		s.sendSysMessage("Syntax: .learn <spellId> [all]")
+		return
+	}
+	if len(args) > 2 {
+		// Whole-string-consumed rule (ChatCommand.h:112): trailing
+		// tokens after the optional "all" are a syntax error.
 		s.sendSysMessage("Syntax: .learn <spellId> [all]")
 		return
 	}
@@ -690,7 +707,7 @@ func (s *session) handleLearnSpell(ctx context.Context, args []string) {
 			target.learnSpell(ctx, next)
 		}
 	}
-	// HandleLearnCommand (cs_learn.cpp:130-131) resends the talent panel
+	// HandleLearnCommand (cs_learn.cpp:114-115) resends the talent panel
 	// when the FIRST rank of the learned spell carries a talent cost.
 	if s.server != nil && s.server.Data != nil {
 		if first := s.server.getFirstSpellInChain(spellID); first != 0 {
@@ -715,11 +732,32 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 		return
 	}
 	sub := strings.ToLower(args[0])
+	// ChatCommand.cpp:264-285: a token prefix-matching more than one
+	// subcommand is ambiguous and lists its candidates instead of
+	// executing — only "d"/"de" collide here (debug/default). The check
+	// runs before any RBAC gate: no leaf is reached.
+	var matches []string
+	for _, name := range []string{"blizzard", "crafts", "debug", "default", "languages", "recipes", "talents", "pettalents"} {
+		if strings.HasPrefix(name, sub) {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) > 1 {
+		s.sendSysMessage("There are multiple commands matching '" + sub + "'. Did you mean:")
+		for _, m := range matches {
+			s.sendSysMessage(m)
+		}
+		return
+	}
 	switch {
 	case strings.HasPrefix("blizzard", sub):
-		// HandleLearnAllGMCommand (cs_learn.cpp:184-199): every spell whose
+		// HandleLearnAllGMCommand (cs_learn.cpp:120-136): every spell whose
 		// skill lines include SKILL_INTERNAL, taught to the invoker.
 		if deny(permissionCommandLearnAllGM) {
+			return
+		}
+		if len(args) > 1 {
+			s.sendSysMessage(allSyntax)
 			return
 		}
 		if s.server == nil || s.server.Data == nil {
@@ -757,23 +795,36 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 		// LANG_LEARNING_GM_SKILLS inlined from TDB enUS.
 		s.sendSysMessage("You have learned all GM skills.")
 	case strings.HasPrefix("crafts", sub):
-		// HandleLearnAllCraftsCommand (cs_learn.cpp:370-393).
+		// HandleLearnAllCraftsCommand (cs_learn.cpp:349-372).
 		if deny(permissionCommandLearnAllCrafts) {
 			return
 		}
-		target, ok := s.learnTargetOrSelf()
+		// Optional<PlayerIdentifier>: a supplied name/GUID/link
+		// selects that player (must be connected); absent, the
+		// selection-or-self fallback applies.
+		target, rest, ok := s.resolveCharacterTarget(ctx, args[1:])
 		if !ok {
 			return
 		}
+		if len(rest) > 0 || target.online == nil {
+			// C++ returns false (framework prints usage) for a
+			// trailing token or an offline player.
+			s.sendSysMessage(allSyntax)
+			return
+		}
 		for _, skillID := range s.learnProfessionSkillLines() {
-			s.learnSkillRecipesHelper(ctx, target, skillID)
+			s.learnSkillRecipesHelper(ctx, target.online, skillID)
 		}
 		// LANG_COMMAND_LEARN_ALL_CRAFT inlined from TDB enUS.
 		s.sendSysMessage("All crafts have been learned.")
 	case strings.HasPrefix("debug", sub):
-		// HandleLearnDebugSpellsCommand (cs_learn.cpp:322-331): the seven
+		// HandleLearnDebugSpellsCommand (cs_learn.cpp:320-330): the seven
 		// hardcoded debug spells, taught to the invoker, no message.
 		if deny(permissionCommandLearn) {
+			return
+		}
+		if len(args) > 1 {
+			s.sendSysMessage(allSyntax)
 			return
 		}
 		for _, id := range learnDebugSpellIDs {
@@ -788,11 +839,25 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 		if deny(permissionCommandLearnAllDefault) {
 			return
 		}
+		// Optional<PlayerIdentifier> like crafts: the identifier is
+		// still parsed before the blocked arm runs.
+		target, rest, ok := s.resolveCharacterTarget(ctx, args[1:])
+		if !ok {
+			return
+		}
+		if len(rest) > 0 || target.online == nil {
+			s.sendSysMessage(allSyntax)
+			return
+		}
 		s.sendSysMessage("learn all default is not supported: default skill/spell/quest-reward learning has no enumeration bridge.")
 	case strings.HasPrefix("languages", sub):
-		// HandleLearnAllLangCommand (cs_learn.cpp:313-320): the
+		// HandleLearnAllLangCommand (cs_learn.cpp:310-318): the
 		// lang_description spell ids, taught to the invoker.
 		if deny(permissionCommandLearnAllLang) {
+			return
+		}
+		if len(args) > 1 {
+			s.sendSysMessage(allSyntax)
 			return
 		}
 		for _, id := range learnLanguageSpellIDs {
@@ -801,22 +866,30 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 		// LANG_COMMAND_LEARN_ALL_LANG inlined from TDB enUS.
 		s.sendSysMessage("All languages have been learned.")
 	case strings.HasPrefix("recipes", sub):
-		// HandleLearnAllRecipesCommand (cs_learn.cpp:395-432).
+		// HandleLearnAllRecipesCommand (cs_learn.cpp:374-435).
 		if deny(permissionCommandLearnAllRecipes) {
 			return
 		}
 		s.handleLearnAllRecipes(ctx, args[1:])
 	case strings.HasPrefix("talents", sub):
-		// HandleLearnAllTalentsCommand (cs_learn.cpp:256-294).
+		// HandleLearnAllTalentsCommand (cs_learn.cpp:185-230).
 		if deny(permissionCommandLearnAllTalents) {
+			return
+		}
+		if len(args) > 1 {
+			s.sendSysMessage(allSyntax)
 			return
 		}
 		s.handleLearnAllTalents(ctx)
 	case strings.HasPrefix("pettalents", sub):
-		// HandleLearnAllPetTalentsCommand (cs_learn.cpp:296-311): blocked,
+		// HandleLearnAllPetTalentsCommand (cs_learn.cpp:232-308): blocked,
 		// not stubbed. Pet::learnSpellHighRank, the pet talent DB rows, and
 		// CreatureFamily PetTalentType gating have no Go bridge.
 		if deny(permissionCommandLearnMyPetTalents) {
+			return
+		}
+		if len(args) > 1 {
+			s.sendSysMessage(allSyntax)
 			return
 		}
 		s.sendSysMessage("learn all pettalents is not supported: pet talent learning has no bridge.")
@@ -826,7 +899,7 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 }
 
 // handleLearnAllRecipes ports HandleLearnAllRecipesCommand
-// (cs_learn.cpp:395-432): match a profession by (case-insensitive) name
+// (cs_learn.cpp:374-435): match a profession by (case-insensitive) name
 // substring, learn its recipes, and raise the skill to max.
 func (s *session) handleLearnAllRecipes(ctx context.Context, args []string) {
 	target, ok := s.learnSelectedPlayer("Player not found.")
@@ -834,7 +907,7 @@ func (s *session) handleLearnAllRecipes(ctx context.Context, args []string) {
 		return
 	}
 	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
-		// C++ returns false on an empty namePart (cs_learn.cpp:402-403),
+		// C++ returns false on an empty namePart (cs_learn.cpp:386),
 		// which the framework reports as a syntax error.
 		s.sendSysMessage("Syntax: .learn all recipes <profession>")
 		return
@@ -878,6 +951,9 @@ func (s *session) handleLearnAllRecipes(ctx context.Context, args []string) {
 		}
 	}
 	if skillID == 0 {
+		// No match: the C++ handler returns false and the framework
+		// prints the command help.
+		s.sendSysMessage("Syntax: .learn all recipes <profession>")
 		return
 	}
 	s.learnSkillRecipesHelper(ctx, target, skillID)
@@ -914,7 +990,7 @@ func (s *session) handleLearnAllRecipes(ctx context.Context, args []string) {
 }
 
 // handleLearnAllTalents ports HandleLearnAllTalentsCommand
-// (cs_learn.cpp:256-294): learn the highest rank of every talent whose tab
+// (cs_learn.cpp:185-230): learn the highest rank of every talent whose tab
 // matches the invoker's class. The trailing SetFreeTalentPoints(0)
 // (cs_learn.cpp:225) sets the session free-talent-points override to 0.
 func (s *session) handleLearnAllTalents(ctx context.Context) {
@@ -978,7 +1054,7 @@ func (s *session) handleLearnAllTalents(ctx context.Context) {
 	s.sendSysMessage("You have learned all your class talents.")
 }
 
-// handleLearnMy ports the learn-my sub-table (cs_learn.cpp:60-64). Both arms
+// handleLearnMy ports the learn-my sub-table (cs_learn.cpp:57-62). Both arms
 // are blocked, not stubbed.
 func (s *session) handleLearnMy(ctx context.Context, args []string) {
 	const mySyntax = "Syntax: .learn my trainer|quests"
@@ -986,27 +1062,48 @@ func (s *session) handleLearnMy(ctx context.Context, args []string) {
 		s.sendSysMessage(mySyntax)
 		return
 	}
-	if !s.commandAllowed(ctx, permissionCommandLearnAllMySpells) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+	// Both arms share RBAC_PERM_COMMAND_LEARN_ALL_MY_SPELLS (422), but
+	// the gate sits on the leaf: an unknown subcommand prints usage
+	// without a permission check, and trailing tokens are a syntax
+	// error (ChatCommand.h:112) rather than the blocked message.
+	deny := func() bool {
+		if !s.commandAllowed(ctx, permissionCommandLearnAllMySpells) {
+			s.sendNotification("You do not have permission to use that command.")
+			return true
+		}
+		return false
 	}
 	switch sub := strings.ToLower(args[0]); {
 	case strings.HasPrefix("trainer", sub):
-		// HandleLearnMySpellsCommand (cs_learn.cpp:219-254): iterates every
+		// HandleLearnMySpellsCommand (cs_learn.cpp:149-183): iterates every
 		// class trainer's spell list. The Go tree loads trainer spells per
 		// trainer GUID only; class-trainer enumeration has no bridge.
+		if deny() {
+			return
+		}
+		if len(args) > 1 {
+			s.sendSysMessage(mySyntax)
+			return
+		}
 		s.sendSysMessage("learn my trainer is not supported: class trainer enumeration has no bridge.")
 	case strings.HasPrefix("quests", sub):
-		// HandleLearnMyQuestsCommand (cs_learn.cpp:201-210): iterates every
+		// HandleLearnMyQuestsCommand (cs_learn.cpp:138-147): iterates every
 		// quest template. The Go tree has no quest-template enumeration
 		// bridge.
+		if deny() {
+			return
+		}
+		if len(args) > 1 {
+			s.sendSysMessage(mySyntax)
+			return
+		}
 		s.sendSysMessage("learn my quests is not supported: quest template enumeration has no bridge.")
 	default:
 		s.sendSysMessage(mySyntax)
 	}
 }
 
-// handleCmdUnLearn ports HandleUnLearnCommand (cs_learn.cpp:464-488).
+// handleCmdUnLearn ports HandleUnLearnCommand (cs_learn.cpp:471-496).
 // Syntax: .unlearn <spellId> [all] (RBAC_PERM_COMMAND_UNLEARN, 429).
 func (s *session) handleCmdUnLearn(ctx context.Context, args []string) {
 	const syntax = "Syntax: .unlearn <spellId> [all]"
@@ -1031,6 +1128,12 @@ func (s *session) handleCmdUnLearn(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
+	if len(args) > 2 {
+		// Whole-string-consumed rule (ChatCommand.h:112): trailing
+		// tokens after the optional "all" are a syntax error.
+		s.sendSysMessage(syntax)
+		return
+	}
 	// The C++ requires a selected player (LANG_NO_CHAR_SELECTED).
 	target, ok := s.learnSelectedPlayer("No character selected.")
 	if !ok {
@@ -1048,7 +1151,7 @@ func (s *session) handleCmdUnLearn(ctx context.Context, args []string) {
 		// LANG_FORGET_SPELL inlined from TDB enUS.
 		s.sendSysMessage("You have forgotten that spell.")
 	}
-	// HandleUnLearnCommand (cs_learn.cpp:487-492) resends the talent
+	// HandleUnLearnCommand (cs_learn.cpp:491-492) resends the talent
 	// panel whenever the unlearned spell carries a talent cost, whether
 	// or not it was known. The talent-point refund arm
 	// (m_usedTalentCount -= GetTalentSpellCost, Player.cpp:3751-3757)
