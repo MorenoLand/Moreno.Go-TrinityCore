@@ -42,10 +42,12 @@
 --    only; its AttackStart leg now has the EngageWithTarget twin
 --    (2026-10-26, grandmother/sartura precedent);
 --    at_area_52_entrance PORTED below (was in this class).
--- 3. no creature-motion bridges (SetWalk/MovePath/AddUnitState):
---    at_frostgrips_hollow (:449-512; quest 12877 + SummonCreature(29862/29861)
---    + MovePath(NPC*100)); quest-status gate bridged 2026-10-24, and its
---    trigger ID is DB-side only (not in the C++ file).
+-- 3. at_frostgrips_hollow (:449-512; quest 12877 + SummonCreature(29862/29861)
+--    + MovePath(NPC*100)): the old "no creature-motion bridges
+--    (SetWalk/MovePath/AddUnitState)" note is stale — SetWalk bridged
+--    (lua_creature_events.go:3258) and AddUnitState bridged (:2153);
+--    MovePath still has no bridge. Verdict unchanged: its trigger ID is
+--    DB-side only (not in the C++ file), so the class stays out.
 -- 4. at_brewfest PORTED below (:331-376): FindNearestCreature(24711/24710)
 --    bridged 2026-10-24 (lua_player.go), Talk(SAY_WELCOME 4, player) via the
 --    creature Talk whisper-target arm; 5s per-trigger cooldown on

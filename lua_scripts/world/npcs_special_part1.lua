@@ -215,11 +215,19 @@ RegisterCreatureEvent(POLE_BUNNY_ENTRY, 4, onBunnyReset)
 -- INCOMPLETE quest -- new player bridge this tick, lua_player.go --
 -- then doctor Reset); patient SpellHit :828-871 flags/stand/Talk legs
 -- (NOT_SELECTABLE on, IN_COMBAT off, SetStandState(0), Talk SAY_DOC 0).
--- Deviations (documented, no bridge): the 15-save mass-death is Despawn,
--- not setDeathState JUST_DIED (no bridge); SetWalk(false) + MovePoint
--- run-to legs stay out (no SetWalk/MovePoint bridges); the PatientDied
--- fail-after-5 path stays out (Lua patients floor at 2-6 HP on the
--- ported decay arm, never reaching the C++ death arm, so it cannot fire).
+-- Deviations (documented): none remaining on the doctor/patient machine —
+-- the 15-save mass-death is SetDeathState JUST_DIED (C++-exact, was
+-- Despawn before the SetDeathState bridge landed); SetWalk(false) +
+-- MoveTo run-to legs are ported (both bridges live); the PatientDied
+-- fail-after-5 path is ported via GetPlayerByGUID + FailQuest.
+-- Section B.1 verdict (2026-11-06): SetDeathState JUST_DIED on a temp
+-- summon does NOT resurrect it — applyCreatureDeathState arms a respawn
+-- record, but scheduleCreatureRespawn finds no DB row for the dynamic
+-- low GUID (>= 2000000, totems.go:260) so Entry stays 0 and
+-- processCreatureRespawns skips revival for Entry 0; the stray UPDATE
+-- matches no row and the junk characters row is the same inert record
+-- the damage-kill funnel already plants for temp summons (kill.go:1330).
+-- C++ agrees: Creature::SaveRespawnTime returns early for IsSummon().
 -- The cross-AI DoctorGUID/Coord write is modeled as module tables keyed
 -- by GUID (doctorState + patientDoctor), the timers-table idiom.
 -- Summon args are C++-exact: type 3 TIMED_DESPAWN_OUT_OF_COMBAT, 5000ms.
@@ -231,17 +239,16 @@ RegisterCreatureEvent(POLE_BUNNY_ENTRY, 4, onBunnyReset)
 -- note is stale);
 -- SpellHit :828-871 (spell 20804 from a player on quest 6624/6622 ->
 -- doctor->PatientSaved via DoctorGUID link, Talk SAY_DOC 0 — Talk IS bridged;
--- NOT_SELECTABLE / IN_COMBAT flags, stand-up, SetWalk, MovePoint to
--- A_RUNTOX/A_RUNTOY/A_RUNTOZ or H_RUNTOX/H_RUNTOY/H_RUNTOZ are not);
--- UpdateAI :873-888 first arm PORTED below (world-tick HP decay:
--- health > 6 -> SetHealth(GetHealth()-5) on OnAIUpdate 7, C++-exact;
--- the health <= 6 death arm stays out -- setDeathState has no bridge
--- and the PatientDied -> quest-fail chain rides the unbridged DoAction
--- relay (FailQuest itself bridged, lua_player.go:410)).
--- The quest credit/fail legs (FailQuest bridged, lua_player.go:410;
--- AreaExploredOrEventHappens + DoAction relay unbridged) keep the
--- doctor machine out; the Reset + UpdateAI-decay arms below are the
--- self-contained ported fragments.
+-- NOT_SELECTABLE / IN_COMBAT flags, stand-up, SetWalk, MoveTo run-to
+-- A_RUNTOX/A_RUNTOY/A_RUNTOZ or H_RUNTOX/H_RUNTOY/H_RUNTOZ — all
+-- bridged and ported below (the old "are not" note is stale);
+-- UpdateAI :873-888 PORTED below (world-tick HP decay: health > 6 ->
+-- SetHealth(GetHealth()-5) on OnAIUpdate 7, C++-exact; the health <= 6
+-- death arm is ported too — RemoveFlag IN_COMBAT, SetFlag
+-- NOT_SELECTABLE, setDeathState JUST_DIED, dynamic flag 32, doctor
+-- PatientDied via GetPlayerByGUID + FailQuest, all bridged).
+-- The Reset + UpdateAI arms below are the self-contained ported
+-- fragments; the SpellHit run-to legs are ported in the doctor machine.
 
 -- npc_injured_patient Reset arm — PORTED (C++ npcs_special.cpp:788-814).
 -- Entries are the literal C++ switch cases (never invented): 12923/12938
@@ -282,15 +289,24 @@ for _, patientEntry in ipairs(INJURED_PATIENT_ENTRIES) do
     RegisterCreatureEvent(patientEntry, 23, injuredPatientReset)
 end
 
--- npc_injured_patient UpdateAI decay arm -- PORTED (C++ npcs_special.cpp:873-878, first arm only).
--- C++ arm order: alive and health > 6 -> ModifyHealth(-5); the health <= 6
--- death arm (RemoveFlag IN_COMBAT, SetFlag NOT_SELECTABLE, setDeathState
--- JUST_DIED, dynamic flag 32, doctor PatientDied) stays out -- no
--- setDeathState bridge, and the PatientDied chain rides the unbridged
--- DoAction relay -- so patients floor at 2-6 HP instead of dying.
--- Event 7 fires on the 100ms world tick for every alive motion
--- (creaturemotion.go), matching the C++ per-tick decay; returns
--- nothing, so no veto of the engine combat step.
+-- npc_injured_patient UpdateAI decay + death arms -- PORTED (C++
+-- npcs_special.cpp:873-888). C++ arm order, both ifs in one UpdateAI:
+-- alive and health > 6 -> ModifyHealth(-5), then alive and health <= 6
+-- -> the death arm (RemoveFlag IN_COMBAT, SetFlag NOT_SELECTABLE,
+-- setDeathState JUST_DIED, dynamic flag 32 = UNIT_DYNFLAG_DEAD on field
+-- 79 = UNIT_FIELD_DYNAMIC_FLAGS, doctor PatientDied) — so a patient at
+-- 7-11 HP decays and dies in the same tick, mirrored by the re-check
+-- below on the fresh health value. doctorPatientDied is forward-declared
+-- here (the decay handler is defined before the doctor machine) and
+-- assigned below with a plain assignment, never re-local (the
+-- tharon_ja/gal_darah forward-declare idiom); the use-before-local-def
+-- scan enforces it. Event 7 fires on the 100ms world tick for every
+-- alive motion (creaturemotion.go), matching the C++ per-tick decay;
+-- returns nothing, so no veto of the engine combat step.
+local doctorPatientDied
+local doctorState
+local patientDoctor
+
 local function injuredPatientDecay(event, creature)
     if creature:IsDead() then
         return
@@ -298,6 +314,25 @@ local function injuredPatientDecay(event, creature)
     local health = creature:GetHealth()
     if health > 6 then
         creature:SetHealth(health - 5)
+        health = health - 5
+    end
+    if health <= 6 then
+        -- Literals, not the TRIAGE_FLAG_* locals: those are declared
+        -- below this handler (the injuredPatientReset precedent).
+        creature:RemoveFlag(59, 0x00080000) -- UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT
+        creature:SetFlag(59, 0x02000000) -- UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE
+        creature:SetDeathState(1) -- JUST_DIED (DeathState 0-4, Unit.h:200-207)
+        creature:SetFlag(79, 32) -- UNIT_FIELD_DYNAMIC_FLAGS, UNIT_DYNFLAG_DEAD
+        local doctorGUID = patientDoctor[creature:GetGUID()]
+        if doctorGUID then
+            local state = doctorState[doctorGUID]
+            if state then
+                local record = state.patients[creature:GetGUID()]
+                if record then
+                    doctorPatientDied(state, doctorGUID, record.coord)
+                end
+            end
+        end
     end
 end
 
@@ -344,8 +379,17 @@ local TRIAGE_FLAG_NOT_SELECTABLE = 0x02000000
 local TRIAGE_FLAG_IN_COMBAT = 0x00080000
 local TRIAGE_FLAG_PLAYER_CONTROLLED = 0x00000008
 
-local doctorState = {}
-local patientDoctor = {}
+-- Run-to points from the C++ #defines (npcs_special.cpp:576-577,
+-- :590-591): Horde patients run to H_RUNTO, Alliance to A_RUNTO.
+local TRIAGE_HORDE_RUNTO = { -1016.44, -3508.48, 62.96 }
+local TRIAGE_ALLIANCE_RUNTO = { -3742.96, -4531.52, 11.91 }
+
+-- Plain assignments, not re-locals: doctorState / patientDoctor are
+-- forward-declared above injuredPatientDecay (the decay handler reads
+-- them), so a second `local` here would shadow the forward slot and
+-- leave the decay handler's upvalues nil (the malown shadowing bug).
+doctorState = {}
+patientDoctor = {}
 
 local function doctorClearState(doctorGUID)
     local state = doctorState[doctorGUID]
@@ -397,6 +441,7 @@ local function doctorQuestAccept(event, player, creature, quest)
         coords = pool,
         count = 0,
         saved = 0,
+        died = 0,
         ticks = 0,
         patients = {},
     }
@@ -444,15 +489,15 @@ end
 
 -- C++ PatientSaved :710-746. Returns true when the event completed
 -- (15th save), so the caller skips the SpellHit tail: C++ runs that
--- tail on a JUST_DIED corpse (a visual no-op), while Lua already
--- despawned the patient and must not call methods on it.
+-- tail on a JUST_DIED corpse (a visual no-op), while Lua already set
+-- the patient JUST_DIED and must not walk a corpse to the run-to point.
 local function doctorPatientSaved(state, doctorGUID, patientGUID, player)
     state.saved = state.saved + 1
     local record = state.patients[patientGUID]
     if state.saved == 15 then
         for guid, rec in pairs(state.patients) do
             if rec.obj then
-                rec.obj:Despawn()
+                rec.obj:SetDeathState(1) -- JUST_DIED, C++-exact (was Despawn)
             end
             patientDoctor[guid] = nil
         end
@@ -474,12 +519,51 @@ local function doctorPatientSaved(state, doctorGUID, patientGUID, player)
     return false
 end
 
+-- C++ PatientDied :685-709. The player resolves by GUID (the
+-- GetPlayerByGUID global, runtime.go:1159 — the C++
+-- ObjectAccessor::GetPlayer twin) since the death arm fires from the
+-- patient's UpdateAI with no player in scope. Died-count > 5 fails the
+-- quest (FailQuest bridged, lua_player.go:4384) and resets the doctor;
+-- otherwise the bunk coord returns to the pool. No player, or the quest
+-- no longer incomplete, resets the doctor (C++-exact). The state
+-- table's existence is the C++ Event latch; the reset below mirrors
+-- Reset() via doctorClearState + the NOT_SELECTABLE flag clear.
+-- Plain assignment: forward-declared above injuredPatientDecay.
+doctorPatientDied = function(state, doctorGUID, coord)
+    local player = GetPlayerByGUID(state.playerGUID)
+    if player ~= nil and (player:GetQuestStatus(QUEST_TRIAGE_ALLIANCE) == QUEST_INCOMPLETE or player:GetQuestStatus(QUEST_TRIAGE_HORDE) == QUEST_INCOMPLETE) then
+        state.died = state.died + 1
+        if state.died > 5 then
+            if player:GetQuestStatus(QUEST_TRIAGE_ALLIANCE) == QUEST_INCOMPLETE then
+                player:FailQuest(QUEST_TRIAGE_ALLIANCE)
+            elseif player:GetQuestStatus(QUEST_TRIAGE_HORDE) == QUEST_INCOMPLETE then
+                player:FailQuest(QUEST_TRIAGE_HORDE)
+            end
+            local doctorObj = state.doctorObj
+            doctorClearState(doctorGUID)
+            if doctorObj then
+                doctorObj:RemoveFlag(59, TRIAGE_FLAG_NOT_SELECTABLE)
+            end
+            return
+        end
+        table.insert(state.coords, coord)
+        return
+    end
+    local doctorObj = state.doctorObj
+    doctorClearState(doctorGUID)
+    if doctorObj then
+        doctorObj:RemoveFlag(59, TRIAGE_FLAG_NOT_SELECTABLE)
+    end
+end
+
 -- C++ npc_injured_patient SpellHit :828-871. The caster->ToPlayer()
 -- gate is the GetQuestStatus-function check (object.go returns nil for
 -- unknown methods, so a creature caster reads nil, not an error).
 -- The flags/stand/Talk tail runs even without a doctor link or quest
 -- match (C++ order); only the 15-save completion skips it (see above).
--- SetWalk(false) + MovePoint run-to stay out: no bridges.
+-- SetWalk(false) + MoveTo run-to are ported below (SetWalk bridged
+-- lua_creature_events.go:3258; MoveTo(id, x, y, z) is the MovePoint
+-- twin, :4499; Horde patients run to H_RUNTO, Alliance to A_RUNTO).
 local function patientSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_TRIAGE_HEAL then
         return
@@ -507,6 +591,13 @@ local function patientSpellHit(event, creature, caster, spellId)
     creature:RemoveFlag(59, TRIAGE_FLAG_IN_COMBAT)
     creature:SetStandState(0)
     creature:Talk(0)
+    creature:SetWalk(false)
+    local runTo = TRIAGE_ALLIANCE_RUNTO
+    local entry = creature:GetEntry()
+    if entry == 12923 or entry == 12924 or entry == 12925 then
+        runTo = TRIAGE_HORDE_RUNTO
+    end
+    creature:MoveTo(0, runTo[1], runTo[2], runTo[3])
 end
 
 for _, doctorEntry in ipairs(DOCTOR_ENTRIES) do
