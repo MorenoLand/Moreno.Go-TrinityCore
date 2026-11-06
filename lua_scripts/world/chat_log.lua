@@ -10,17 +10,18 @@
 -- message. The ported handlers return nothing, so they neither cancel
 -- nor rewrite. TC_LOG_DEBUG maps to the PrintDebug global.
 --
--- Ported arms (chat_log.cpp:32-140): say/emote/yell (18), whisper (19),
+-- Ported arms (chat_log.cpp:32-155): say/emote/yell (18), whisper (19),
 -- party/party-leader/raid/raid-leader/raid-warning/battleground/
--- battleground-leader (20), guild/officer (21). The group arm's
--- "leader %s" resolves GetLeaderGUID against GetMembers() (online
--- members only; "<unknown>" when the leader is offline — C++ reads the
--- DB row via Group::GetLeaderName).
+-- battleground-leader (20), guild/officer (21), channel (22 — the
+-- numeric channel id resolves via player:GetChannelName /
+-- GetChannelFlags, channels.go channelForSpeakerByID; a custom channel
+-- (id 0) only resolves when the speaker is in exactly one of them,
+-- otherwise the C++ "<unknown>" name is logged).
+-- The group arm's "leader %s" resolves GetLeaderGUID against
+-- GetMembers() (online members only; "<unknown>" when the leader is
+-- offline — C++ reads the DB row via Group::GetLeaderName).
 --
 -- NOT ported (gap classes):
--- * Channel arm (chat_log.cpp:142-155): event 22 carries only the numeric
---   channel id (chat.go:447-455); no Lua bridge resolves it to a name or
---   to the TRADE/GENERAL/CITY/LFG system-channel flags.
 -- * LANG_ADDON branches: Go routes addon chat to ServerEvent 30
 --   (fireAddonMessageHook), never to the player chat events, so the
 --   chat.log.addon.* arms have no fire site here.
@@ -104,6 +105,30 @@ local function OnGroupChat(event, player, msg, type, lang, group)
     end
 end
 
+local CHANNEL_FLAG_TRADE = 0x04
+local CHANNEL_FLAG_GENERAL = 0x10
+local CHANNEL_FLAG_CITY = 0x20
+local CHANNEL_FLAG_LFG = 0x40
+
+local function OnChannelChat(event, player, msg, type, lang, channelId)
+    -- chat_log.cpp:142-155: system channels (TRADE/GENERAL/CITY/LFG)
+    -- log under chat.log.system; any other channel logs under
+    -- chat.log.channel.<name>, "<unknown>" when unresolvable.
+    local name = player:GetChannelName(channelId)
+    local flags = player:GetChannelFlags(channelId)
+    if name == nil then
+        name = "<unknown>"
+    end
+    if flags ~= nil and (bit32.band(flags, CHANNEL_FLAG_TRADE) ~= 0 or
+        bit32.band(flags, CHANNEL_FLAG_GENERAL) ~= 0 or
+        bit32.band(flags, CHANNEL_FLAG_CITY) ~= 0 or
+        bit32.band(flags, CHANNEL_FLAG_LFG) ~= 0) then
+        PrintDebug(string.format("chat.log.system: Player %s tells channel %s: %s", player:GetName(), name, msg))
+    else
+        PrintDebug(string.format("chat.log.channel.%s: Player %s tells channel %s: %s", name, player:GetName(), name, msg))
+    end
+end
+
 local function OnGuildChat(event, player, msg, type, lang, guild)
     local name = player:GetName()
     local gname = guildNameOf(guild)
@@ -118,3 +143,4 @@ RegisterPlayerEvent(18, OnChat)
 RegisterPlayerEvent(19, OnWhisper)
 RegisterPlayerEvent(20, OnGroupChat)
 RegisterPlayerEvent(21, OnGuildChat)
+RegisterPlayerEvent(22, OnChannelChat)

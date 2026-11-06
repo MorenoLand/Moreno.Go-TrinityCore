@@ -620,6 +620,42 @@ func (s *Server) channelIDFor(member *session, name string) uint32 {
 	return 0
 }
 
+// channelForSpeakerByID resolves a channel id — the Eluna
+// PLAYER_EVENT_ON_CHANNEL_CHAT routing extra — back to the channel the
+// speaker is a member of, the Channel::GetChannelName / GetFlags twin the
+// ChatLogScript channel arm needs. Membership disambiguates the id:
+// zone-scoped system channels share a DBC id across zones. Custom
+// channels all carry id 0, so an id-0 lookup only resolves when the
+// speaker is in exactly one of them; anything else reads empty, and the
+// Lua arm falls back to the C++ "<unknown>" name.
+func (s *Server) channelForSpeakerByID(member *session, id uint32) (string, uint8, bool) {
+	if s == nil || member == nil {
+		return "", 0, false
+	}
+	s.channelsMu.RLock()
+	defer s.channelsMu.RUnlock()
+	var found *worldChannel
+	for _, channel := range s.channels {
+		if channel == nil || channel.ID != id {
+			continue
+		}
+		if _, ok := channel.Members[member]; !ok {
+			continue
+		}
+		if id != 0 {
+			return channel.Name, channel.Flags, true
+		}
+		if found != nil {
+			return "", 0, false
+		}
+		found = channel
+	}
+	if found != nil {
+		return found.Name, found.Flags, true
+	}
+	return "", 0, false
+}
+
 // isChannelMuted reports whether the speaker carries the channel mute flag.
 func (s *Server) isChannelMuted(member *session, name string) bool {
 	key := member.scopedChannelKey(name)

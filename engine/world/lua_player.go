@@ -6569,6 +6569,41 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.server.nearestGameObjectByEntry(ctx, state.Map, state.InstanceID, state.X, state.Y, state.Z, entry, dist32)}, nil
 	}
+	// GetChannelName/GetChannelFlags resolve the numeric channel id the
+	// PLAYER_EVENT_ON_CHANNEL_CHAT (22) hook carries back to the channel
+	// the speaker is a member of (Server.channelForSpeakerByID): the
+	// Channel::GetChannelName / GetFlags twin. Flags use the C++
+	// CHANNEL_FLAG_* bits (Channel.h: TRADE 0x04, GENERAL 0x10, CITY
+	// 0x20, LFG 0x40). Both return nil when the id cannot be resolved.
+	// Backs the ChatLogScript channel arm (chat_log.cpp:142-155).
+	methods["GetChannelName"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil {
+			return []any{nil}, nil
+		}
+		name, _, ok := s.server.channelForSpeakerByID(s, id)
+		if !ok {
+			return []any{nil}, nil
+		}
+		return []any{name}, nil
+	}
+	methods["GetChannelFlags"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil {
+			return []any{nil}, nil
+		}
+		_, flags, ok := s.server.channelForSpeakerByID(s, id)
+		if !ok {
+			return []any{nil}, nil
+		}
+		return []any{flags}, nil
+	}
 	// SummonCreature is the player-surface twin of the creature bridge
 	// (WorldObject::SummonCreature, Object.cpp:2059-2062 fallbacks via
 	// the shared summonTempCreature funnel): same (entry, x, y, z, o,

@@ -6,17 +6,19 @@
 --   events — grep of engine/world and engine/scripting for AccountScript /
 --   OnAccountLogin returns no fire sites, and RegisterServerEvent only
 --   carries ServerEventAddonMessage (30) / ServerEventAreaTrigger (24)
---   (runtime.go:167-179).
+--   (runtime.go:167-179). (Failed-login logging already runs natively:
+--   auth/server.go recordFailedLogin writes LOGIN_INS_FALP_IP_LOGGING.)
 -- * CharacterActionIpLogger (:147-227): OnLogin/OnLogout do fire as player
 --   events 3/4 (characters.go:1310/4148) and OnDelete as event 2
---   (characters.go:687/724), but every arm writes the LoginDatabase
---   prepared statements LOGIN_INS_ALDL_IP_LOGGING /
---   LOGIN_INS_CHAR_IP_LOGGING / LOGIN_INS_FACL_IP_LOGGING — the Go repo
---   has no ip-log table or prepared-statement bridge for them (no
---   al_dl_ip/ip_logging schema anywhere; the AuthDBExecute raw-SQL global
---   exists but the last_ip vs last_attempt_ip two-statement split plus
---   realm/session-IP sourcing has no Lua surface).
+--   (characters.go:687/724), and the prepared statements exist in Go
+--   (LOGIN_INS_ALDL_IP_LOGGING / LOGIN_INS_FACL_IP_LOGGING /
+--   LOGIN_INS_CHAR_IP_LOGGING, database/statement_registry.go:62-64) —
+--   but they are Go-only: the Lua AuthDBExecute global takes raw SQL
+--   text, not a statement id with bound args, and there is no Lua
+--   bridge for the realm id (Server.RealmID, server.go:68) the rows
+--   require. The C++ delete arm needs (guid, accountId) while the Go
+--   event-2 fire site passes only the guid.
 -- * OnCreate (event 1) never fires — no player object exists at create
---   time (runtime.go:23); and the C++ delete arm needs (guid, accountId)
---   while the Go event-2 fire site passes only the guid. Awaits account
---   event fire sites and an IP-log DB bridge.
+--   time (runtime.go:23). Awaits account event fire sites, a Lua
+--   prepared-statement or realm-id bridge, and an accountId-carrying
+--   delete event.

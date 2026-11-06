@@ -1,15 +1,15 @@
 -- AchievementCriteriaScript BG/arena criteria checks --
--- Deliberately unported (documented only — no AchievementCriteria event
--- bridge): grep of engine/scripting for RegisterAchievement /
--- AchievementCriteria returns zero bindings, and the Lua surface has no
--- synchronous OnCheck(Player, Unit)->bool hook. The 16 classes in
--- achievement_scripts.cpp (AddSC_achievement_scripts, :324-343) also depend
--- on unbridged queries: Battleground::CheckAchievementCriteriaMeet /
--- IsAllNodesControlledByTeam (:32-37, :44-49, :56-61, :167-172, :180-185,
--- :236-243, :284-290), player HasAura of the IC refinery/quarry spells
--- (:68-74), GetVehicleCreatureBase entry checks for the glaive thrower /
--- keep cannon / SA artillery (:82-89, :97-104, :112-119), InArena +
--- GetBattleground()->GetArenaType (:131-143), ToPlayer()->IsMounted
--- (:153-160), GetAreaId + duel->IsMounted for the Argent Tournament rings
--- (:267-277), and isHonorOrXPTarget (:318-322). Awaits an achievement
--- criteria hook plus the battleground/vehicle query bridges.
+-- ENGINE-COVERED (no Lua needed): the Go criteria pipeline evaluates
+-- all 16 classes natively in checkAchievementCriteriaScript
+-- (engine/world/achievement_criteria_scripts.go, dispatched from
+-- achievements.go:954): 13 with live BG/arena/area/aura state
+-- (resilient_victory, control_all_nodes, save_the_day, resource_glut
+-- with the 68719/68720 refinery/quarry auras, arena 2v2/3v3/5v5,
+-- sickly_gazelle, everything_counts, av_perfection, defense_of_ancients,
+-- tilted, not_even_a_scratch, flirt_with_disaster perfume check,
+-- killed_exp_or_honor_target) and the 3 vehicle-entry arms
+-- (glaive_grave, mowed_down, sa_artillery) fail-closed to false — Go
+-- has no vehicle model, and C++ returns false when the checks can't be
+-- met. There is no Lua AchievementCriteria OnCheck hook (no
+-- RegisterAchievement binding), and none is needed: the dispatch is
+-- keyed by ScriptName exactly as C++ dispatches it.
