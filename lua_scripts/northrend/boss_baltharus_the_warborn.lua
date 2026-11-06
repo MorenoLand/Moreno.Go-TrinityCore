@@ -19,55 +19,84 @@
 -- "AddSC_boss_baltharus_the_warborn" hits boss_baltharus_the_warborn.cpp
 -- only (+ the loader decl/call lines); this clone carries no sql/ tree,
 -- so ScriptName bindings are DB-side by construction.
--- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill,
+-- 4 OnDied, 5 OnSpawn (boss GUID latch), 9 DamageTaken, 19 JustSummoned,
+-- 23 OnReset (boss + clone + xerestrasza).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_baltharus_the_warborn JustEngagedWith — InterruptNonMeleeSpells
--- (false) + Talk(SAY_AGGRO 1) (event 1 — the auriaya precedent for Talk;
--- the instance/setActive/ScheduleTasks legs have no bridges).
--- boss_baltharus_the_warborn JustDied — Talk(SAY_DEATH 4) (event 4 —
--- the sjonnir precedent; the _JustDied() instance leg has no instance
--- bridge and the xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH)
--- cross-AI leg ports in baltharusDied below (sweep + timed Talk chain).
+-- (false) + BossAI base (event 1): SetBossState(DATA_BALTHARUS_THE_WARBORN
+-- 0, IN_PROGRESS 1) PORTED this tick (creature:SetBossState, bridge live
+-- lua_creature_events.go:5917; base order Interrupt -> SetBossState ->
+-- pulse 5 -> DoZoneInCombat -> schedules -> Talk last, C++-exact) +
+-- Talk(SAY_AGGRO 1) (the auriaya precedent for Talk; setActive has no
+-- bridge, ScheduleTasks is an empty base no-op, ScriptedCreature.h:326;
+-- CheckRequiredBosses has no prior-boss gate to enforce here).
+-- boss_baltharus_the_warborn JustDied — _JustDied() SetBossState(DONE 3)
+-- PORTED this tick (event 4, first arm, moroes precedent) + Talk(SAY_DEATH 4)
+-- (the sjonnir precedent); the xerestrasza->AI()->DoAction(
+-- ACTION_BALTHARUS_DEATH) cross-AI leg ports in baltharusDied below
+-- (sweep + timed Talk chain).
+-- boss_baltharus_the_warborn Reset — _Reset() SetBossState(NOT_STARTED 0,
+-- != DONE-gated, ScriptedCreature.cpp:499-511) PORTED this tick on ev23
+-- (alive-gated: Go fires ev23 on the death path before ev4, moroes/algalon
+-- precedent); _cloneCount = 0 rides cloneCount[guid] = nil.
+-- boss_baltharus_the_warborn EnterEvadeMode — _DespawnAtEvade()
+-- SetBossState(FAIL 2) + DespawnOrUnsummon(0s, 30s) PORTED this tick on
+-- ev2 (blood-prince/shahraz ev2 evade-FAIL precedent; summons.DespawnAll
+-- rides the clone grid sweep). NO ev24 reach-home FAIL: Baltharus has no
+-- JustReachedHome override — BossAI::_JustReachedHome is only
+-- setActive(false) (ScriptedCreature.cpp:522-525, no bridge, no state
+-- change) — the FAIL leg lives in EnterEvadeMode, not on reach-home
+-- (contrast saurfang, whose C++ JustReachedHome sets FAIL explicitly).
 -- boss_baltharus_the_warborn KilledUnit — Talk(SAY_KILL 2) gated on
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
 -- player-gated variant precedent).
--- DOCUMENTED-ONLY (in this header; only entry 39751 registered):
+-- DOCUMENTED-ONLY (in this header):
 -- boss_baltharus_the_warborn DoAction ACTION_CLONE — ported inline
 -- (self-call from the boss's own UpdateAI scheduler: DoCastSelf
 -- CLEAR_DEBUFFS 34098 triggered + CLONE 74511 triggered +
 -- REPELLING_WAVE 74509 + Talk(SAY_CLONE 3)); the EVENT_CLONE timer
 -- rides the DamageTaken 50% latch below.
 -- boss_baltharus_the_warborn UpdateAI scheduler — Talk(SAY_BALTHARUS_INTRO
--- 0) rides EVENT_INTRO_TALK (no-timer-bridge; the EVENT_INTRO_TALK leg
--- itself rides DoAction(ACTION_INTRO_BALTHARUS) issued by
--- at_baltharus_plateau — no cross-AI-DoAction bridge; the
--- EVENT_SUMMONS_ATTACK leg (summons.DoZoneInCombat
--- (NPC_BALTHARUS_THE_WARBORN_CLONE) — summon-list + DoZoneInCombat,
--- both unbridged); the clone is summoned by DoCastSelf(SPELL_CLONE,
--- true) spell-effect dispatch (ACTION_CLONE :97-105) — not bridged,
--- no direct SummonCreature arm exists — so the JustSummoned
--- clone-health arm (boss_baltharus_the_warborn.cpp:139:
--- summon->SetHealth(me->GetHealth())) has no bearer: the 'event 19
--- fires only from the vancleef 50%-arm hook' claim is stale (event 19
--- fires for Lua summons, lua_creature_events.go:766) but the clone
--- never Lua-materializes. The clone spawns with template health
--- instead of the boss's current health;
--- documented-only. EVENT_CLEAVE
--- / EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND ported 2026-10-13 on
--- the maiden CreateLuaEvent convention (see below); EVENT_CLONE
--- ported 2026-10-14 via the DamageTaken latch below; the clone's own
--- AI (entry 39899) is now registered this tick (see below).
+-- 0) rides EVENT_INTRO_TALK, DOCUMENTED-ONLY: the leg rides
+-- DoAction(ACTION_INTRO_BALTHARUS) issued by at_baltharus_plateau (area
+-- trigger, no bridge to fire it; the DoAction bridge itself exists as
+-- ev38, lua_creature_events.go:804 — the issuer is the gap, not the
+-- dispatch). EVENT_SUMMONS_ATTACK + the JustSummoned clone-health arm
+-- (:136-141: summon->SetHealth(me->GetHealth()) + EVENT_SUMMONS_ATTACK
+-- 2s) PORTED this tick via ev19 (baltharusJustSummoned): creature
+-- spell-effect summons run creatureEffectSummonType (boss_ai.go:3298) ->
+-- summonTempCreature -> motionFor (ev23+ev5 on the summon) + ev19 on the
+-- summoner (lua_creature_events.go:190) — the old "clone never
+-- Lua-materializes / no direct SummonCreature arm exists" notes are
+-- retracted (SummonCreature is bridged, lua_creature_events.go:96).
+-- EVENT_CLEAVE / EVENT_BLADE_TEMPEST / EVENT_ENERVATING_BRAND ported
+-- 2026-10-13 on the maiden CreateLuaEvent convention (see below);
+-- ENERVATING_BRAND target count is raid-moded 2/4 via Is25ManRaid this
+-- tick (the "no difficulty bridge" note was stale — the bridge lives at
+-- lua_creature_events.go:3651 and this file already uses it in
+-- DamageTaken); EVENT_CLONE ported 2026-10-14 via the DamageTaken latch
+-- below; the clone's own AI (entry 39899) is registered (see below).
 -- npc_baltharus_the_warborn_clone (39899) — zero Talk lines —
--- REGISTERED this tick: the boss's ported SPELL_CLONE 74511 cast
--- spawns it in-engine, so it enters combat with the clone scheduler
--- (:255-264: CLEAVE 11s / BLADE_TEMPEST 15s / ENERVATING_BRAND 10s;
--- arms :293-308 — pure timer legs, no phase/summon/DoAction legs).
+-- REGISTERED: the boss's ported SPELL_CLONE 74511 cast spawns it
+-- in-engine via the spell-effect summon funnel, so it enters combat with
+-- the clone scheduler (:255-264: CLEAVE 11s / BLADE_TEMPEST 15s /
+-- ENERVATING_BRAND 10s; arms :296-308 — pure timer legs, no
+-- phase/summon/DoAction legs) once the 2s EVENT_SUMMONS_ATTACK
+-- DoZoneInCombat fires (baltharusJustSummoned, this tick).
 -- Deviation: blade tempest is DoCastVICTIM on the clone (:300-303,
 -- victim-cast, NOT the boss's DoCastSelf). The DamageTaken
--- DATA_BALTHARUS_SHARED_HEALTH write (:270-275), the JustDied
--- Unit::Kill(baltharus) leg (:277-282), and the UpdateAI shared-health
--- read (:290) ride instance/actor bridges that don't exist —
--- documented-only.
+-- DATA_BALTHARUS_SHARED_HEALTH write (:266-271) and the UpdateAI
+-- shared-health read (:285) stay DOCUMENTED-ONLY: instance->SetData /
+-- GetData have no bridge (creature:SetData is the per-AI ScriptData
+-- twin, lua_creature_events.go:779, not the instance store) and the
+-- per-tick UpdateAI read has no Lua bearer. The JustDied
+-- Unit::Kill(baltharus) leg (:273-279) is PORTED this tick (cloneDied:
+-- boss GUID latched by its ev5 SetGuidData, sjonnir precedent, resolved
+-- via GetInstanceCreature + creature:Kill). The clone carries NO
+-- SetBossState legs: its Reset (:249-253), JustEngagedWith (:255-264)
+-- and JustDied (:273-279) never call the BossAI base arms, and its
+-- EnterEvadeMode (:264) is empty.
 -- spell_baltharus_enervating_brand_trigger (SpellScript, OnHit
 -- HandleSiphonedMight: aura-caster CastSpell SPELL_SIPHONED_MIGHT) —
 -- joins the standing no-SpellScript-bridge queue.
@@ -77,6 +106,17 @@
 
 local ENTRY_BALTHARUS_THE_WARBORN = 39751
 local ENTRY_BALTHARUS_CLONE = 39899
+
+-- ruby_sanctum.h:31 DATA_BALTHARUS_THE_WARBORN = 0 (the brief's "= 1"
+-- is wrong — verified from the header this tick); :52
+-- DATA_BALTHARUS_CLONE = 19 (clone AI BossAI id; the clone never calls
+-- the base arms, so no SetBossState leg carries it). EncounterState
+-- (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3.
+local DATA_BALTHARUS_THE_WARBORN = 0
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
 
 -- UnitDefines.h react states (engine/world/lua_creature_events.go SetReactState bridge).
 local REACT_DEFENSIVE = 1
@@ -207,9 +247,9 @@ end
 
 -- C++ EVENT_ENERVATING_BRAND: DoCast(target, SPELL_ENERVATING_BRAND 74502)
 -- (non-triggered) x RAID_MODE(2,4,2,4) random targets in 45.0f excluding
--- SPELL_ENERVATING_BRAND holders; 13s init, Repeat(26s). Deviation: no
--- difficulty bridge, count fixed at the 10-man value of 2 (the
--- jaraxxus/kelidan precedent); the aura-exclusion is bridged via
+-- SPELL_ENERVATING_BRAND holders; 13s init, Repeat(26s). The count is
+-- raid-moded 2 (10-man) / 4 (25-man) via Is25ManRaid (bridge live
+-- lua_creature_events.go:3651); the aura-exclusion is bridged via
 -- HasAura (the netherspite precedent); targets are picked without
 -- replacement (table.remove) — C++ re-runs SelectTarget per iteration
 -- with the -SPELL_ENERVATING_BRAND filter, so the same target is never
@@ -222,7 +262,11 @@ local function enervatingBrandTick(creature, guid)
         end)
         return
     end
-    for i = 1, 2 do
+    local count = 2
+    if creature:Is25ManRaid() then
+        count = 4
+    end
+    for i = 1, count do
         if #candidates == 0 then
             break
         end
@@ -241,7 +285,7 @@ end
 -- events.ScheduleEvent(EVENT_ENERVATING_BRAND, Seconds(13), 0, PHASE_COMBAT);
 -- events.ScheduleEvent(EVENT_BLADE_TEMPEST, Seconds(18), 0, PHASE_COMBAT);
 -- Talk(SAY_AGGRO) last; the engage InterruptNonMeleeSpells(false)
--- (:112) is PORTED first in baltharusEnterCombat below (gal_darah
+-- (:111) is PORTED first in baltharusEnterCombat below (gal_darah
 -- precedent — the old "leg out" note rested on the stale pre-pending-model
 -- no-op-stub reading of the bridge, retracted; the bridge at
 -- lua_creature_events.go:1995 cancels pending/channel casts).
@@ -254,16 +298,18 @@ end
 -- including the 1ms EVENT_CLONE pump (stale maiden deviation
 -- retracted).
 local function baltharusEnterCombat(event, creature, target)
-    -- C++ JustEngagedWith (boss_baltharus_the_warborn.cpp:112-113):
+    -- C++ JustEngagedWith (boss_baltharus_the_warborn.cpp:110-120):
     -- InterruptNonMeleeSpells(false) first, then the BossAI base arms
-    -- (ScriptedCreature.cpp:540/542) — SetCombatPulseDelay(5) +
-    -- me-form DoZoneInCombat; instance/setActive/ScheduleTasks legs out.
-    -- Talk(SAY_AGGRO) fires last in C++ (after the timer seeds); the Lua
-    -- handler keeps Talk before the seeds, as before.
+    -- (ScriptedCreature.cpp:527-544) — SetBossState(IN_PROGRESS) +
+    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat; setActive has no
+    -- bridge, ScheduleTasks is an empty base no-op. events.Reset() +
+    -- SetPhase(PHASE_COMBAT) + the timer seeds follow; Talk(SAY_AGGRO)
+    -- fires last in C++ (after the seeds) — the Lua handler matches that
+    -- order this tick.
     creature:InterruptNonMeleeSpells(false)
+    creature:SetBossState(DATA_BALTHARUS_THE_WARBORN, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
-    creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "cleave", 13000, function()
@@ -275,18 +321,58 @@ local function baltharusEnterCombat(event, creature, target)
     schedule(guid, "bladetempest", 18000, function()
         bladeTempestTick(creature, guid)
     end)
+    creature:Talk(SAY_AGGRO)
+end
+
+-- C++ summons.DespawnAll() (boss EnterEvadeMode :171-173, _JustDied
+-- :513-521): the only summon is the clone; grid sweep is the
+-- instance-lookup twin (rotface relayProfessor idiom: unique entry, 100yd).
+local function despawnClones(creature)
+    for _, clone in ipairs(creature:GetCreaturesInGrid(ENTRY_BALTHARUS_CLONE, 100)) do
+        clone:Despawn()
+    end
 end
 
 local function baltharusLeaveCombat(event, creature)
     local guid = creature:GetGUID()
+    despawnClones(creature)
     cancelTimers(guid)
     cloneCount[guid] = nil
+    -- C++ EnterEvadeMode (boss_baltharus_the_warborn.cpp:171-176):
+    -- summons.DespawnAll() + events.Reset() + _DespawnAtEvade() ->
+    -- DespawnOrUnsummon(0s, 30s) + SetBossState(FAIL)
+    -- (ScriptedCreature.cpp:596-617) — PORTED this tick on ev2 (the
+    -- deathwhisper/blood-prince ev2 evade-FAIL precedent; shahraz
+    -- precedent for the Despawn half). State write lands before the
+    -- removal; the 30s respawn delay is not expressible via the bridge
+    -- (Eluna takes no forceRespawnTimer arg) — respawn rides the DB
+    -- spawntime, and the respawn ev23 re-writes NOT_STARTED.
+    creature:SetBossState(DATA_BALTHARUS_THE_WARBORN, BOSS_STATE_FAIL)
+    creature:Despawn()
 end
 
 local function baltharusReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     cloneCount[guid] = nil
+    -- C++ Reset (boss_baltharus_the_warborn.cpp:78-86): _Reset() first
+    -- (BossAI::_Reset, ScriptedCreature.cpp:499-511) — SetBossState
+    -- NOT_STARTED only when the stored state != DONE. PORTED this tick
+    -- via creature:SetBossState/GetBossState (bridge live
+    -- lua_creature_events.go:5917/5932). Alive-gated: Go fires ev23 on
+    -- the death path before ev4 (moroes/algalon precedent) and C++
+    -- Reset never runs on death; the != DONE gate keeps a DONE boss
+    -- DONE across respawn. The remaining Reset legs stay out:
+    -- SetPhase(PHASE_INTRO) (phase machine; only gates the unported
+    -- intro Talk), instance->SetData(DATA_BALTHARUS_SHARED_HEALTH)
+    -- (no instance-SetData bridge; creature:SetData is the per-AI
+    -- ScriptData twin), and the BARRIER_CHANNEL cast on the channel
+    -- target (DATA_CRYSTAL_CHANNEL_TARGET never latched — no spawn
+    -- handler for entry 26712 exists).
+    if creature:IsAlive()
+            and creature:GetBossState(DATA_BALTHARUS_THE_WARBORN) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_BALTHARUS_THE_WARBORN, BOSS_STATE_NOT_STARTED)
+    end
 end
 
 -- C++ boss_baltharus_the_warborn::KilledUnit:
@@ -302,7 +388,7 @@ end
 -- DoAction(ACTION_CLONE): DoCastSelf(SPELL_CLEAR_DEBUFFS 34098, true) +
 -- DoCastSelf(SPELL_CLONE 74511, true) + DoCastSelf(SPELL_REPELLING_WAVE
 -- 74509) + Talk(SAY_CLONE 3). Thresholds are difficulty-split (C++
--- DamageTaken :143-166; Is25ManRaid bridged, blood-queen precedent):
+-- DamageTaken :143-169; Is25ManRaid bridged, blood-queen precedent):
 -- 10-man _cloneCount == 0 and HealthBelowPctDamaged(50, damage);
 -- 25-man _cloneCount == 0 and HealthBelowPctDamaged(66, damage), then
 -- _cloneCount == 1 and HealthBelowPctDamaged(33, damage) — the elseif
@@ -364,17 +450,44 @@ local function baltharusDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ boss_baltharus_the_warborn::JustDied:
--- _JustDied();
--- Talk(SAY_DEATH);
+-- C++ boss_baltharus_the_warborn::JustSummoned (:136-141):
+-- summons.Summon(summon) (summon-list, no bridge) +
+-- summon->SetHealth(me->GetHealth()) +
+-- events.ScheduleEvent(EVENT_SUMMONS_ATTACK, 2s). PORTED this tick via
+-- ev19: the clone materializes through the spell-effect summon funnel
+-- (creatureEffectSummonType, boss_ai.go:3298), so ev19 fires on the
+-- boss with the clone as `summon` (lua_creature_events.go:190) and the
+-- health copy + 2s DoZoneInCombat both have bearers. The 2s timer rides
+-- the boss's timer table so boss ev2/ev4/ev23 cancel it, matching C++
+-- events.Reset; the IsAlive guard covers a clone that died inside the
+-- 2s window (DoZoneInCombat itself is nil-safe,
+-- lua_creature_events.go:1957).
+local function baltharusJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= ENTRY_BALTHARUS_CLONE then
+        return
+    end
+    summon:SetHealth(creature:GetHealth())
+    local guid = creature:GetGUID()
+    schedule(guid, "summonsattack", 2000, function()
+        if summon:IsAlive() then
+            summon:DoZoneInCombat()
+        end
+    end)
+end
+
+-- C++ boss_baltharus_the_warborn::JustDied (:122-129):
+-- _JustDied(); Talk(SAY_DEATH);
 -- if (Creature* xerestrasza = instance->GetCreature(DATA_XERESTRASZA))
 --     xerestrasza->AI()->DoAction(ACTION_BALTHARUS_DEATH) — the sjonnir
--- precedent (the _JustDied() instance leg has no bridge; the DoAction
--- leg ports below via grid sweep + timed Talk chain).
+-- precedent (the _JustDied() SetBossState(DONE) leg is PORTED this tick,
+-- first arm, moroes precedent; the DoAction leg ports below via grid
+-- sweep + timed Talk chain).
 local function baltharusDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    despawnClones(creature)
+    creature:SetBossState(DATA_BALTHARUS_THE_WARBORN, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
-    -- C++ JustDied relay (boss_baltharus_the_warborn.cpp:126-128) ->
+    -- C++ JustDied relay (boss_baltharus_the_warborn.cpp:127-128) ->
     -- xerestrasza DoAction(ACTION_BALTHARUS_DEATH) (ruby_sanctum.cpp:80-99):
     -- setActive(true) (no Lua bridge, stays out), SetFarVisible(true),
     -- Talk(EVENT 0), SetWalk(true), MovePoint(0, xerestraszaMovePos),
@@ -405,11 +518,22 @@ local function baltharusDied(event, creature, killer)
     end
 end
 
+-- C++ instance OnCreatureCreate latching (InstanceScript::AddObject):
+-- the boss GUID goes in the instance store under
+-- DATA_BALTHARUS_THE_WARBORN so the clone's JustDied relay can resolve
+-- it via GetInstanceCreature (sjonnir precedent). Fires on first spawn
+-- and on respawn (motionFor).
+local function baltharusSpawned(event, creature)
+    creature:SetGuidData(DATA_BALTHARUS_THE_WARBORN)
+end
+
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 1, baltharusEnterCombat)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 2, baltharusLeaveCombat)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 3, baltharusKilledUnit)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 4, baltharusDied)
+RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 5, baltharusSpawned)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 9, baltharusDamageTaken)
+RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 19, baltharusJustSummoned)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 23, baltharusReset)
 
 -- C++ npc_xerestrasza::Reset (ruby_sanctum.cpp:70-74): _events.Reset() +
@@ -463,12 +587,21 @@ local function cloneReset(event, creature)
     creature:SetReactState(REACT_DEFENSIVE)
 end
 
--- C++ npc_baltharus_the_warborn_clone::JustDied (:277-282): _JustDied()
--- + Unit::Kill(baltharus) — both legs ride instance/actor bridges that
--- don't exist; timers are cancelled so the clone's scheduler doesn't
--- fire on the corpse.
+-- C++ npc_baltharus_the_warborn_clone::JustDied (:273-279): _JustDied()
+-- is NOT called (no SetBossState leg for the clone) — Unit::Kill(killer,
+-- baltharus) only. PORTED this tick: the boss GUID is latched by its ev5
+-- SetGuidData (sjonnir precedent), resolved via GetInstanceCreature
+-- (lua_creature_events.go:5986), killed via creature:Kill(killer)
+-- (lua_creature_events.go:2971 — fires the boss's ev23-then-ev4 chain,
+-- i.e. its JustDied with SetBossState DONE + Talk + xerestrasza relay).
+-- Nil when the boss was never latched (the C++ nullptr twin). Timers
+-- are cancelled so the clone's scheduler doesn't fire on the corpse.
 local function cloneDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    local baltharus = creature:GetInstanceCreature(DATA_BALTHARUS_THE_WARBORN)
+    if baltharus ~= nil then
+        baltharus:Kill(killer)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 1, cloneEnterCombat)

@@ -21052,10 +21052,12 @@ func init() {
 	// player-gated variant precedent); JustDied Talk(SAY_DEATH 3)
 	// (event 4, the sjonnir precedent). No other bridgeable arm in the
 	// file: UpdateAI Talk(SAY_ADDS 2) rides EVENT_SUMMON_ADDS
-	// (no-timer-bridge); the Reset/CanAIAttack instance-state legs (no
-	// instance-script bridge); the JustSummoned add-registration and
-	// EnterEvadeMode summons.DespawnAll()/_DespawnAtEvade() legs (no
-	// summon-registry / evade-model bridges); the DoCastSelf/DoCastVictim
+	// (no-timer-bridge); tick 270 ported the SetBossState legs (ev1
+	// IN_PROGRESS, ev4 DONE, ev23 NOT_STARTED != DONE-gated +
+	// Saviana/Baltharus-DONE gate, ev2 FAIL via _DespawnAtEvade);
+	// CanAIAttack stays out (no hook); the JustSummoned
+	// add-registration and EnterEvadeMode summons.DespawnAll() legs
+	// stay out (no summon-registry bridge); the DoCastSelf/DoCastVictim
 	// legs (no-cast bridge); npc_onyx_flamecaller zero Talk (not
 	// registered) — all documented in the lua header. Fifth group of
 	// the "// Ruby Sanctum" block. UpdateAI CASTING gates (boss :133
@@ -21095,8 +21097,12 @@ func init() {
 	// player-gated variant precedent — material halion has no KilledUnit arm).
 	// No other bridgeable arm in the file: DamageTaken Talk(SAY_PHASE_TWO 4 /
 	// SAY_PHASE_THREE 2) has no-DamageTaken bridge; SpellHit Talk(SAY_REGENERATE 0)
-	// rides the SpellHit-15-never-fires queue; UpdateAI Talk(SAY_METEOR_STRIKE 3)
-	// rides EVENT_METEOR_STRIKE (no-timer-bridge); the controller's cross-AI
+	// rides the SpellHit-15-never-fires queue. Tick 270 ported the
+	// SetBossState legs (material ev1 IN_PROGRESS, ev4 DONE, ev23
+	// NOT_STARTED != DONE-gated + evade FAIL; twilight ev1
+	// IN_PROGRESS only — its JustDied/Reset set no state) and
+	// EVENT_METEOR_STRIKE + EVENT_FIERY_COMBUSTION via CreateLuaEvent;
+	// the controller's cross-AI
 	// Talk(SAY_INTRO 1 / EMOTE_CORPOREALITY_TOT 4 / TIT 3 / POT 8 / PIP 9)
 	// and the orb machine's Talk(EMOTE_WARN_LASER 0 / SAY_SPHERE_PULSE 1)
 	// have no cross-AI-Talk bridge; SAY_BERSERK 7 is dead text. Sixth and

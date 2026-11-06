@@ -17,20 +17,32 @@
 -- "AddSC_boss_saviana_ragefire" hits boss_saviana_ragefire.cpp
 -- only (+ the loader decl/call lines); this clone carries no sql/ tree,
 -- so ScriptName bindings are DB-side by construction.
--- Eluna creature events: 1 OnEnterCombat, 3 OnKill.
+-- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
+-- 3 OnKill, 4 OnDied, 23 OnReset. No 24 OnReachHome: C++ has no
+-- JustReachedHome override (base arm is setActive(false) only,
+-- ScriptedCreature.cpp:521-524) — see savianaReset below.
 -- Ported arms (C++-exact for all modeled arms):
--- boss_saviana_ragefire JustEngagedWith — Talk(SAY_AGGRO 0)
--- (event 1 — the auriaya precedent; the BossAI::JustEngagedWith /
--- events.Reset / ScheduleEvent(EVENT_ENRAGE / EVENT_FLAME_BREATH /
--- EVENT_FLIGHT) legs have no bridges).
+-- boss_saviana_ragefire JustEngagedWith — BossAI::JustEngagedWith
+-- SetBossState(IN_PROGRESS) (ScriptedCreature.cpp:537, base-first)
+-- + SetCombatPulseDelay(5) + DoZoneInCombat + Talk(SAY_AGGRO 0)
+-- (event 1 — the anubrekhan precedent; CheckRequiredBosses is
+-- vacuous here, default true per InstanceScript.h:246).
+-- boss_saviana_ragefire JustDied — BossAI::_JustDied SetBossState
+-- (DONE) (ScriptedCreature.cpp:519) + DoPlaySoundToSet(me,
+-- SOUND_ID_DEATH 17531) via creature:PlayDirectSound (event 4,
+-- _JustDied-first order per boss_saviana_ragefire.cpp:124-125).
+-- boss_saviana_ragefire Reset — BossAI::_Reset SetBossState
+-- (NOT_STARTED), != DONE-gated (ScriptedCreature.cpp:510), +
+-- SetReactState(REACT_AGGRESSIVE) + SetCanFly(false) +
+-- SetDisableGravity(false) (event 23); the EnterEvadeMode FAIL leg
+-- rides the ev23 evade fire (palehoof/tyrannus precedent — state ==
+-- IN_PROGRESS at evade -> FAIL, ScriptedCreature.cpp:617), since
+-- EnterEvadeMode itself has no Lua bridge (boss_ai.go:5753-5754)
+-- and the DespawnOrUnsummon leg is Go-owned (despawnAtEvade).
 -- boss_saviana_ragefire KilledUnit — Talk(SAY_KILL 3) gated on
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
 -- player-gated variant precedent).
 -- DOCUMENTED-ONLY (in this header; only entry 39747 registered):
--- boss_saviana_ragefire JustDied — _JustDied() instance leg (no
--- instance-script bridge) + DoPlaySoundToSet(me, SOUND_ID_DEATH
--- 17531) ported via creature:PlayDirectSound (savianaDied);
--- zero Talk lines in the arm.
 -- boss_saviana_ragefire MovementInform — Talk(SAY_CONFLAGRATION 1)
 -- rides POINT_FLIGHT (no-movement-inform bridge); the POINT_LAND /
 -- POINT_LAND_GROUND / POINT_TAKEOFF MotionMaster legs have no
@@ -46,7 +58,9 @@
 -- MovementInform(POINT_FLIGHT) (:113): an air-phase-gated cast behind
 -- the unbridged flight machine (the gothik precedent) — the cast and
 -- timer bridges exist, the phase machine is the blocker; the
--- EnterEvadeMode _DespawnAtEvade() leg has no evade-model bridge.
+-- EnterEvadeMode _DespawnAtEvade() FAIL leg rides the ev23 evade
+-- fire (see savianaReset below), only its DespawnOrUnsummon leg is
+-- Go-owned (despawnAtEvade).
 -- spell_saviana_conflagration_init (74452) — SpellScript:
 -- FilterTargets (OnObjectAreaTargetSelect, EFFECT_0,
 -- TARGET_UNIT_SRC_AREA_ENEMY; remove non-players; RandomResize
@@ -71,6 +85,12 @@ local SPELL_ENRAGE       = 78722
 local SPELL_FLAME_BREATH = 74403
 
 local SOUND_ID_DEATH = 17531
+
+local DATA_SAVIANA_RAGEFIRE = 2 -- ruby_sanctum.h:33 (RSDataTypes)
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
 local timers = {}
 
@@ -135,7 +155,8 @@ end
 -- EVENT_FLIGHT, Seconds(60), EVENT_GROUP_LAND_PHASE) — the auriaya
 -- precedent; the land-phase timer legs (EVENT_ENRAGE /
 -- EVENT_FLAME_BREATH) ride the maiden CreateLuaEvent convention now
--- (see below).
+-- (see below); the EVENT_FLIGHT schedule stays out (MotionMaster leg,
+-- no bridge).
 -- Caveat: C++ cancels the land-phase group at takeoff (EVENT_FLIGHT)
 -- and reschedules on landing; the flight legs ride the MotionMaster
 -- (no bridge), so the group-cancel can't be modeled — since flight
@@ -143,9 +164,14 @@ end
 -- continuous timers match the ground-phase behavior.
 local function savianaEnterCombat(event, creature, target)
     -- C++ JustEngagedWith base call first (boss_saviana_ragefire.cpp:91):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, base-first
-    -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:526-543) --
+    -- SetBossState(IN_PROGRESS) (:537) + SetCombatPulseDelay(5) (:540)
+    -- + me-form DoZoneInCombat (:542), base-first (C++ arm order;
+    -- anubrekhan precedent); CheckRequiredBosses (:530-535) is vacuous
+    -- here (default returns true, InstanceScript.h:246; the RS instance
+    -- script does not override it) and setActive(true)/ScheduleTasks()
+    -- have no bridge.
+    creature:SetBossState(DATA_SAVIANA_RAGEFIRE, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -163,20 +189,45 @@ local function savianaLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- JustDied's DoPlaySoundToSet arm ported via creature:PlayDirectSound
--- (savianaDied); the _JustDied() instance leg stays out (no bridge).
--- C++ boss_saviana_ragefireAI::JustDied: _JustDied() (instance leg —
--- no bridge) + DoPlaySoundToSet(me, SOUND_ID_DEATH 17531), ungated.
+-- JustDied's _JustDied() instance leg is PORTED via
+-- creature:SetBossState (DONE) + cancelTimers (events.Reset), C++
+-- order (ScriptedCreature.cpp:514-519: events.Reset, then
+-- SetBossState(DONE)); the DoPlaySoundToSet arm follows via
+-- creature:PlayDirectSound. C++ boss_saviana_ragefireAI::JustDied:
+-- _JustDied() first, then DoPlaySoundToSet(me, SOUND_ID_DEATH 17531);
+-- zero Talk lines in the arm.
 local function savianaDied(event, creature, killer)
-    creature:PlayDirectSound(SOUND_ID_DEATH)
     cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_SAVIANA_RAGEFIRE, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
+    creature:PlayDirectSound(SOUND_ID_DEATH)
 end
 
 local function savianaReset(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ boss_saviana_ragefire::Reset (boss_saviana_ragefire.cpp:80-86):
     -- _Reset() -> SetReactState(REACT_AGGRESSIVE) -> me->SetCanFly(false)
-    -- (:85) -> me->SetDisableGravity(false) (:86).
+    -- (:85) -> me->SetDisableGravity(false) (:86). BossAI::_Reset
+    -- (ScriptedCreature.cpp:499-511) early-returns when dead and sets
+    -- NOT_STARTED only when state != DONE (:509-510); the IsAlive guard
+    -- below also skips the death pre-fire (Go fires ev23 before ev4 on
+    -- death; DONE lands in ev4). The FAIL leg rides the ev23 evade fire
+    -- (palehoof/tyrannus precedent): Saviana's EnterEvadeMode
+    -- (:149-152) calls _DespawnAtEvade(), whose instance arm is
+    -- SetBossState(FAIL) (ScriptedCreature.cpp:617); Go's evade funnel
+    -- fires ev23 while state is still IN_PROGRESS
+    -- (creaturemotion.go:4505), and the DespawnOrUnsummon leg itself
+    -- stays out — the Go evade funnel owns evade-despawn timing
+    -- (boss_ai.go despawnAtEvade). No ev24 handler: C++ has no
+    -- JustReachedHome override, so the base arm is only
+    -- setActive(false) (ScriptedCreature.cpp:521-524) with no state
+    -- leg — an ev24 FAIL would fabricate one.
+    if creature:IsAlive() then
+        if creature:GetBossState(DATA_SAVIANA_RAGEFIRE) == BOSS_STATE_IN_PROGRESS then
+            creature:SetBossState(DATA_SAVIANA_RAGEFIRE, BOSS_STATE_FAIL) -- _DespawnAtEvade FAIL, evade path
+        elseif creature:GetBossState(DATA_SAVIANA_RAGEFIRE) ~= BOSS_STATE_DONE then
+            creature:SetBossState(DATA_SAVIANA_RAGEFIRE, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
+        end
+    end
     creature:SetReactState(2) -- REACT_AGGRESSIVE
     creature:SetCanFly(false)
     creature:SetDisableGravity(false)

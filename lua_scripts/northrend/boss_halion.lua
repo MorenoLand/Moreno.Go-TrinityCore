@@ -33,9 +33,27 @@
 -- bindings are DB-side by construction. Pre-existing lua coverage
 -- AUDITED this run — COMPLETE (see accounting below).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
+-- SetBossState legs (tick 270; DATA ids from ruby_sanctum.h:
+-- DATA_HALION 3 (:34), DATA_TWILIGHT_HALION 4 (:37); EncounterState
+-- NOT_STARTED 0 / IN_PROGRESS 1 / FAIL 2 / DONE 3, InstanceScript.h:
+-- 68-76; bridges creature:SetBossState / GetBossState,
+-- lua_creature_events.go:5917/:5936):
+-- material halion ev1 IN_PROGRESS (base-first, :242-248), ev4 DONE
+-- (_JustDied first, :263-268), ev23 FAIL-if-IN_PROGRESS else
+-- NOT_STARTED-if-!= DONE (skadi idiom; _Reset :499-510 + controller
+-- FAIL :619-634), NO ev24 (no C++ JustReachedHome FAIL leg) and NO
+-- ev2 state leg (EnterEvadeMode :234-239 sets no state);
+-- twilight halion ev1 IN_PROGRESS (base-first, :424-428), ev4 NO
+-- state leg (no _JustDied call :448-466), ev23 NO state leg (Reset
+-- empty :436). Full per-leg reasoning sits on the handlers below.
 -- Ported arms (C++-exact for all modeled arms):
--- boss_halion JustEngagedWith — Talk(SAY_AGGRO 2) + the three
--- phase-ungated timer arms (event 1 — the auriaya precedent):
+-- boss_halion JustEngagedWith — Talk(SAY_AGGRO 2) + the BossAI base
+-- (SetBossState(DATA_HALION 3, IN_PROGRESS) PORTED tick 270,
+-- base-first per C++ :242-248; pulse-5 + DoZoneInCombat already
+-- ported) + AddAura SPELL_TWILIGHT_PRECISION 78243 (PORTED tick 270;
+-- the old "absent bridge" claim was stale — creature:AddAura is
+-- self-only, lua_creature_events.go:2416) + the phase-ungated
+-- timer arms (event 1 — the auriaya precedent):
 -- EVENT_CLEAVE — DoCastVictim(SPELL_CLEAVE 74524) non-triggered,
 -- randtime(6s,10s) init / randtime(8s,10s) re-arm ->
 -- creature:CastSpell(nil, SPELL_CLEAVE); EVENT_TAIL_LASH —
@@ -44,20 +62,22 @@
 -- SPELL_TAIL_LASH) (the DoCastAOE self-cast lowering); EVENT_BREATH —
 -- DoCastSelf(SPELL_FLAME_BREATH 74525) non-triggered, randtime(5s,15s)
 -- init / randtime(16s,25s) re-arm -> creature:CastSpell(creature,
--- SPELL_FLAME_BREATH) (boss_halion.cpp:251-253/:335-344); the 75%
--- DamageTaken PHASE_TWO transition stops all three via
--- halionDamageTaken (event 9 — the bronjahm latch precedent); the
--- events.Reset / events.SetPhase(PHASE_ONE) / BossAI::JustEngagedWith /
--- DoCastSelf SPELL_TWILIGHT_PRECISION / EVENT_ACTIVATE_FIREWALL /
--- EVENT_FIERY_COMBUSTION / EVENT_METEOR_STRIKE ScheduleEvent /
--- controller->AI()->SetData(DATA_FIGHT_PHASE,
--- PHASE_ONE) legs have no bridges). SendEncounterUnit ENGAGE (param1 1)
--- PORTED in halionEnterCombat below (tick 222).
--- boss_halion JustDied — Talk(SAY_DEATH 5)
--- (event 4 — the sjonnir precedent; the _JustDied() instance leg and
--- the cross-creature twilightHalion->KillSelf() /
--- controller->KillSelf() legs have no bridges). SendEncounterUnit
--- DISENGAGE PORTED in halionDied below (tick 222).
+-- SPELL_FLAME_BREATH) (boss_halion.cpp:251-255/:335-368); the 75%
+-- DamageTaken PHASE_TWO transition stops all five phase-one arms via
+-- halionDamageTaken (event 9 — the bronjahm latch precedent).
+-- EVENT_FIERY_COMBUSTION / EVENT_METEOR_STRIKE PORTED tick 270 (see
+-- UpdateAI below); the events.Reset / events.SetPhase(PHASE_ONE) legs
+-- ride the phaseTwo latch, and the controller->AI()->SetData
+-- (DATA_FIGHT_PHASE, PHASE_ONE) leg has no bridge (no cross-AI
+-- SetData dispatch). SendEncounterUnit ENGAGE (param1 1) PORTED in
+-- halionEnterCombat below (tick 222).
+-- boss_halion JustDied — _JustDied() SetBossState(DATA_HALION 3,
+-- DONE) PORTED tick 270, FIRST before Talk(SAY_DEATH 5) (event 4 —
+-- the sjonnir precedent); the cross-creature
+-- twilightHalion->KillSelf() / controller->KillSelf() legs PORTED
+-- tick 270 (creature:Kill + grid scan, hexlord precedent — the old
+-- "absent bridges" claim was stale). SendEncounterUnit DISENGAGE
+-- PORTED in halionDied below (tick 222).
 -- boss_twilight_halion KilledUnit — Talk(SAY_KILL 6) gated on
 -- victim->GetTypeId() == TYPEID_PLAYER (event 3 — the razuvious
 -- player-gated variant precedent) + the UNGATED triggered victim-cast
@@ -82,7 +102,7 @@
 -- DOCUMENTED-ONLY (in this header; entries 39863 and 40142
 -- registered):
 -- boss_halion DamageTaken — PORTED (event 9, pre-damage): the 75%
--- PHASE_TWO transition — Talk(SAY_PHASE_TWO 4) + stop of the three
+-- PHASE_TWO transition — Talk(SAY_PHASE_TWO 4) + stop of the five
 -- phase-one timer arms on post-damage health < 75% max
 -- (boss_halion.cpp:286-296; HealthBelowPctDamaged strict-<, signed,
 -- unclamped — the zum_rah pre-damage latch precedent). PORTED this run:
@@ -112,25 +132,34 @@
 -- pre-loop-only :513) ported as 500ms IsCasting defer on material
 -- cleave/tail-lash/breath + twilight cleave/breath/tail-lash/
 -- soul-consumption; the firewall GO leg is non-cast and stays ungated.
--- Talk(SAY_METEOR_STRIKE 3) rides
--- EVENT_METEOR_STRIKE, phase-machine-gated (PHASE_ONE->TWO transition
--- via 75%-health DamageTaken + controller SetData, boss_halion.cpp:
--- 286-296); the EVENT_FIERY_COMBUSTION DoCastSelf leg rides the phase
--- machine (SetPhase :246/:288/:426/:477 + cross-creature controller SetData
--- :260/:296/:667 — no phase-machine bridge). EVENT_ACTIVATE_FIREWALL is
+-- EVENT_METEOR_STRIKE / EVENT_FIERY_COMBUSTION PORTED tick 270
+-- (meteorStrikeTick / fieryCombustionTick below): the old
+-- "phase-machine-gated" stay-out is retracted — EventMap
+-- ScheduleEvent defaults its phase arg to 0 (all phases,
+-- EventMap.cpp), so the ONLY phase gate on these arms is the
+-- UpdateAI PHASE_TWO early-return (:319-320), which the 75% latch
+-- + cancelTimers reproduces (plus a phaseTwo guard in each tick for
+-- the 500ms defer window); the target selection rides the
+-- randomTwilightPlayer idiom with the aura filter inverted, the
+-- meteor position cast rides creature:CastSpellAoF (non-triggered,
+-- 5th arg false), the fiery cast rides the triggered arlokk idiom.
+-- EVENT_ACTIVATE_FIREWALL is
 -- PORTED below: its C++ schedule carries no phase group, so the 5s
 -- engage-anchored one-shot fires regardless of phase. EVENT_BREATH /
 -- EVENT_CLEAVE / EVENT_TAIL_LASH are PORTED above (phase-ungated
 -- engage arms, stopped by the 75% latch).
--- boss_twilight_halion JustEngagedWith — zero Talk; the four
--- phase-ungated timer arms are PORTED (see twilightHalionEnterCombat
--- below — EVENT_SOUL_CONSUMPTION's ctor schedule re-anchored on
--- engage). C++ UpdateAI has no phase early-return (boss_halion.cpp:
--- 511-544), so the timers run identically in PHASE_TWO and
--- PHASE_THREE — engage-armed CreateLuaEvent timers are faithful
--- across both. The SendEncounterUnit ENGAGE (param1 2) leg is PORTED in
--- twilightHalionEnterCombat (tick 222); the DoCastSelf
--- SPELL_TWILIGHT_PRECISION leg rides an absent bridge.
+-- boss_twilight_halion JustEngagedWith — zero Talk; the BossAI base
+-- (SetBossState(DATA_TWILIGHT_HALION 4, IN_PROGRESS) PORTED tick 270,
+-- base-first per C++ :424-428; pulse-5 + DoZoneInCombat already
+-- ported) + AddAura SPELL_TWILIGHT_PRECISION (PORTED tick 270, as
+-- above) + the four phase-ungated timer arms are PORTED (see
+-- twilightHalionEnterCombat below — EVENT_SOUL_CONSUMPTION's ctor
+-- schedule re-anchored on engage). C++ UpdateAI has no phase
+-- early-return (boss_halion.cpp: 511-544), so the timers run
+-- identically in PHASE_TWO and PHASE_THREE — engage-armed
+-- CreateLuaEvent timers are faithful across both. The
+-- SendEncounterUnit ENGAGE (param1 2) leg is PORTED in
+-- twilightHalionEnterCombat (tick 222).
 -- EVENT_SOUL_CONSUMPTION 74792 — PORTED (soulConsumptionTick, below):
 -- SelectTarget(Random,1,0.0f,true,true,SPELL_TWILIGHT_REALM 74807) ->
 -- CastSpell(target, SOUL_CONSUMPTION 74792, TRIGGERED_IGNORE_SET_FACING),
@@ -143,16 +172,20 @@
 -- Constructor-side legs (boss_twilight_halionAI ctor, :405-421): DUSK_
 -- SHROUD 75476's triggered self-cast is bridgeable
 -- (creature:CastSpell(creature, id, true)) but the ctor fires at
--- creature creation and this runtime's CREATURE_EVENT_ON_SPAWN (5)
--- fires only on the respawn path — never on first summon or grid
--- activation (engine/world/lua_creature_events.go fireCreatureSpawned
--- comment) — so there is no faithful construction-time hook; stays
--- out. COPY_DAMAGE auras stay out: the C++ uses explicit cross-creature
+-- creature creation and there is no faithful construction-time hook:
+-- CREATURE_EVENT_ON_SPAWN (5) fires on first grid activation since
+-- 2026-10-19 (creaturemotion.go:1204) but temp summons bypass that
+-- funnel, and twilight halion is a temp summon — so it stays out
+-- (the old "ev5 fires only on the respawn path" sentence was stale).
+-- COPY_DAMAGE auras stay out: the C++ uses explicit cross-creature
 -- AddAura (halion->AddAura(SPELL_COPY_DAMAGE, me) to dodge
 -- SPELL_ATTR6_CANT_TARGET_SELF) and the other body is unreachable from
 -- Lua (no cross-creature bridge; the Lua AddAura bridge is self-only).
--- Health sync / phase-mask / react-state / combat-flag legs: only the
--- phase-mask leg rides an absent bridge (no creature SetPhaseMask method).
+-- Health sync / phase-mask / react-state / combat-flag legs: the
+-- phase-mask leg stays out for want of the same construction-time
+-- hook, NOT for want of a bridge — creature:SetPhaseMask IS bridged
+-- (lua_creature_events.go:3176), retracting the old "no creature
+-- SetPhaseMask method" claim.
 -- SetReactState and SetFlag ARE bridged (lua_creature_events.go:524;
 -- e.g. SetFlag(59,0x300) in the incarcerator port) — the react-state /
 -- IN_COMBAT-flag legs stay out for want of a construction-time hook, not
@@ -177,25 +210,40 @@
 -- idiom); CastStop ported (creature:StopSpellCast() before the Division
 -- cast, 2026-11-05); the
 -- PHASE_THREE controller->AI()->SetData(DATA_TWILIGHT_DAMAGE_TAKEN)
--- routing leg rides the no-cross-AI bridge.
+-- routing leg rides the no-cross-AI bridge. The :472-473 engage
+-- fallback (first damage runs JustEngagedWith when it never fired)
+-- PORTED tick 270 via the twilightEngaged latch.
 -- boss_halion EnterEvadeMode (:236) — forwards the evade to the
 -- controller creature when why == EVADE_REASON_BOUNDARY or the phase
 -- machine is in PHASE_ONE — stays out (EnterEvadeMode has no Lua
 -- bridge, boss_ai.go:5753-5754; the cross-creature forward rides the
--- no-cross-AI bridge).
+-- no-cross-AI bridge). Its encounter-state outcome is NOT lost: the
+-- controller's engagement-over JustExitedCombat sets DATA_HALION
+-- FAIL (:619-634), and that leg is borne by halionReset's ev23
+-- evade-fire (skadi idiom — see the SetBossState block above). No
+-- ev24 handler: C++ sets no FAIL on halion's JustReachedHome
+-- (BossAI::_JustReachedHome is setActive(false) only,
+-- ScriptedCreature.cpp:522-523).
 -- boss_twilight_halion SpellHit — Talk(SAY_REGENERATE 0) rides
 -- SPELL_TWILIGHT_MENDING 75509 — stays out on the same unported-
 -- controller trigger (boss_halion.cpp:732-735); the SPELL_TWILIGHT_
 -- DIVISION -> controller DoAction(ACTION_MONITOR_CORPOREALITY)
 -- leg stays out: the DoAction bridge (event 38) is live, but the
 -- receiver (controller 40146) is unregistered — see triage above.
--- boss_twilight_halion JustDied — zero Talk; the
+-- boss_twilight_halion JustDied — zero Talk; NO _JustDied() call in
+-- C++ (:448-466), so DATA_TWILIGHT_HALION is never set DONE — no
+-- state leg on ev4 (verified by whole-Ruby-Sanctum grep). The
+-- halion->Unit::Kill / controller->KillSelf legs PORTED tick 270
+-- (creature:Kill + grid scan, as in halionDied); the
+-- LowerPlayerDamageReq leg (:454) stays out (no bridge). The
 -- DoCastSelf(SPELL_CLEAR_DEBUFFS 75396) arm at boss_halion.cpp:599-605
 -- is npc_halion_controllerAI::JustDied (entry 40146, unregistered),
--- NOT twilight halion's — stays out (the halion->LowerPlayerDamageReq /
--- Unit::Kill / controller->KillSelf legs ride absent bridges).
--- boss_twilight_halion Reset — EMPTY in C++ (boss_halion.cpp:436);
--- the DoCastSelf(SPELL_CLEAR_DEBUFFS 75396) arm at :586-592 is
+-- NOT twilight halion's — stays out.
+-- boss_twilight_halion Reset — EMPTY in C++ (boss_halion.cpp:436),
+-- so no _Reset leg and NO SetBossState(DATA_TWILIGHT_HALION,
+-- NOT_STARTED) on ev23 (contrast material halion, whose inherited
+-- BossAI::Reset runs _Reset); ev23 stays timer-cancel only. The
+-- DoCastSelf(SPELL_CLEAR_DEBUFFS 75396) arm at :586-592 is
 -- npc_halion_controllerAI::Reset (entry 40146, unregistered) — stays
 -- out (the _summons / _events / Initialize legs ride absent bridges).
 -- npc_halion_controller (40146) — its intro machine issues cross-AI
@@ -236,8 +284,9 @@
 -- ported in the 75%/50% latches, 2026-11-05).
 -- SAY_BERSERK 7 — dead text, no Talk() call in the file.
 -- All 13 Talk() calls in the file accounted for (SAY_AGGRO 2 +
--- SAY_DEATH 5 + SAY_KILL 6 ported; SAY_PHASE_TWO 4 + SAY_REGENERATE 0
--- x2 + SAY_METEOR_STRIKE 3 + SAY_PHASE_THREE 2 + SAY_INTRO 1 +
+-- SAY_DEATH 5 + SAY_KILL 6 + SAY_METEOR_STRIKE 3 ported; SAY_PHASE_TWO 4
+-- + SAY_PHASE_THREE 2 ported via the DamageTaken latches;
+-- SAY_REGENERATE 0 x2 + SAY_INTRO 1 +
 -- EMOTE_CORPOREALITY_TOT/TIT/POT/PIP + EMOTE_WARN_LASER 0 +
 -- SAY_SPHERE_PULSE 1 documented above).
 -- Missing-cast audit 2026-10-16 (all 11): PORTED — 74808
@@ -252,7 +301,8 @@
 -- 74648 AOE_DAMAGE (:1006), 74713 FIRE_AURA_1 (:1007), 74641 COUNTDOWN
 -- (:1024), 40031 BIRTH_NO_VISUAL (:1025), 74718 FIRE_AURA_2 (:1079) —
 -- npc_meteor_strike_initial / npc_meteor_strike (unregistered), all
--- hanging off the phase-machine-gated boss EVENT_METEOR_STRIKE arm.
+-- hanging off the boss EVENT_METEOR_STRIKE arm (ported tick 270;
+-- the NPC scripts themselves stay unregistered).
 
 local ENTRY_HALION = 39863
 local ENTRY_TWILIGHT_HALION = 40142
@@ -260,9 +310,13 @@ local GO_FLAME_RING = 203007 -- ruby_sanctum.h:112
 local GO_TWILIGHT_FLAME_RING = 203624 -- ruby_sanctum.h:113
 local ENTRY_LIVING_INFERNO = 40681 -- ruby_sanctum.h:83
 local ENTRY_LIVING_EMBER = 40683 -- ruby_sanctum.h:84
+local DATA_HALION = 3 -- ruby_sanctum.h:34 (RSDataTypes)
+local DATA_TWILIGHT_HALION = 4 -- ruby_sanctum.h:37
+local ENTRY_HALION_CONTROLLER = 40146 -- ruby_sanctum.h:82
 
 local SAY_INTRO    = 1 -- (documented-only, rides the controller's cross-AI intro)
 local SAY_AGGRO    = 2
+local SAY_METEOR_STRIKE = 3
 local SAY_PHASE_TWO = 4
 local SAY_PHASE_THREE = 2
 local SAY_DEATH    = 5
@@ -277,7 +331,10 @@ local SPELL_TWILIGHT_PHASING = 74808 -- C++ enum :111 ("Phase spell from phase 1
 local SPELL_SUMMON_TWILIGHT_PORTAL = 74809 -- C++ enum :112 (summons GO 202794)
 local SPELL_SOUL_CONSUMPTION = 74792 -- C++ enum :81
 local SPELL_TWILIGHT_REALM = 74807 -- C++ enum :115 (SelectTarget aura filter)
-local SPELL_TWILIGHT_DIVISION = 75063 -- C++ enum :103 ("Phase spell from phase 2 to phase 3")
+local SPELL_TWILIGHT_DIVISION = 75063 -- C++ enum :109 ("Phase spell from phase 2 to phase 3")
+local SPELL_TWILIGHT_PRECISION = 78243 -- C++ enum :117 (AddAura self-cast, both engages)
+local SPELL_METEOR_STRIKE = 74637 -- C++ enum :64
+local SPELL_FIERY_COMBUSTION = 74562 -- C++ enum :67
 local GO_HALION_PORTAL_1 = 202794 -- ruby_sanctum.h:107
 local GO_HALION_PORTAL_2 = 202795 -- ruby_sanctum.h:108
 local GO_HALION_PORTAL_EXIT = 202796 -- ruby_sanctum.h:109
@@ -369,6 +426,102 @@ local phaseTwo = {}
 -- every combat-end / reset / died path of both halves.
 local fightPhaseThree = false
 
+-- C++ UpdateAI EVENT_METEOR_STRIKE (:352-361) / EVENT_FIERY_COMBUSTION
+-- (:363-368) target selection: SelectTarget(Random, pos, 0.0f, true,
+-- true, -SPELL_TWILIGHT_REALM 74807) — random alive player WITHOUT the
+-- twilight-realm aura (material realm), position 0 (meteor, victim
+-- included) or 1 (fiery, victim skipped). Mirrors
+-- randomTwilightPlayer below with the aura filter inverted (eck
+-- precedent); the position-1 offset pops the MaxThreat-ordered first
+-- entry before the filters (UnitAI.h offset-before-filter).
+local function randomMaterialPlayer(creature, skipVictim)
+    local targets = creature:GetAITargets()
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+    local candidates = {}
+    local aliveSeen = 0
+    for _, t in ipairs(targets) do
+        local skip = false
+        if skipVictim then
+            if victimGuid ~= nil then
+                skip = t:GetGUID() == victimGuid
+            elseif not t:IsDead() then
+                aliveSeen = aliveSeen + 1
+                skip = aliveSeen == 1
+            end
+        end
+        if not skip
+                and t:GetObjectType() == "Player" and t:IsAlive()
+                and not t:HasAura(SPELL_TWILIGHT_REALM) then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ UpdateAI EVENT_METEOR_STRIKE (:352-361): random material-realm
+-- player -> _meteorStrikePos = target position -> CastSpell(pos,
+-- SPELL_METEOR_STRIKE 74637, guid) NON-triggered -> Talk
+-- (SAY_METEOR_STRIKE 3), 18s init / 38s re-arm, the re-arm
+-- unconditional (outside the target-if). The position cast rides
+-- creature:CastSpellAoF (lua_creature_events.go; 5th arg false =
+-- non-triggered, the default true would wrongly trigger it); the
+-- target position rides target:GetX/Y/Z. Phase-one-only: C++
+-- UpdateAI early-returns in PHASE_TWO (:319-320), so the 75% latch's
+-- cancelTimers kills this arm and the phaseTwo guard below covers the
+-- 500ms defer window.
+local function meteorStrikeTick(creature, guid)
+    if phaseTwo[guid] then
+        return
+    end
+    local target = randomMaterialPlayer(creature, false)
+    if creature:IsCasting() then
+        schedule(guid, "meteor_strike", 500, function()
+            meteorStrikeTick(creature, guid)
+        end)
+        return
+    end
+    if target then
+        creature:CastSpellAoF(target:GetX(), target:GetY(), target:GetZ(), SPELL_METEOR_STRIKE, false)
+        creature:Talk(SAY_METEOR_STRIKE)
+    end
+    schedule(guid, "meteor_strike", 38000, function()
+        meteorStrikeTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_FIERY_COMBUSTION (:363-368): random material-realm
+-- player (victim skipped, position 1) -> CastSpell(target,
+-- SPELL_FIERY_COMBUSTION 74562, TRIGGERED_IGNORE_SET_FACING),
+-- randtime(15s,18s) init / 25s re-arm, the re-arm unconditional
+-- (outside the target-if). Triggered rides the arlokk
+-- CastSpell(target, id, true) idiom. Phase-one-only, same gate as
+-- meteorStrikeTick above.
+local function fieryCombustionTick(creature, guid)
+    if phaseTwo[guid] then
+        return
+    end
+    local target = randomMaterialPlayer(creature, true)
+    if creature:IsCasting() then
+        schedule(guid, "fiery_combustion", 500, function()
+            fieryCombustionTick(creature, guid)
+        end)
+        return
+    end
+    if target then
+        creature:CastSpell(target, SPELL_FIERY_COMBUSTION, true)
+    end
+    schedule(guid, "fiery_combustion", 25000, function()
+        fieryCombustionTick(creature, guid)
+    end)
+end
+
 -- C++ boss_halion::JustEngagedWith :242-262:
 -- Talk(SAY_AGGRO); events.Reset(); events.SetPhase(PHASE_ONE);
 -- BossAI::JustEngagedWith(who); me->AddAura(SPELL_TWILIGHT_PRECISION, me);
@@ -378,13 +531,13 @@ local fightPhaseThree = false
 -- events.ScheduleEvent(EVENT_TAIL_LASH, randtime(7s,12s));
 -- events.ScheduleEvent(EVENT_FIERY_COMBUSTION, randtime(15s,18s));
 -- events.ScheduleEvent(EVENT_METEOR_STRIKE, 18s) + SendEncounterUnit +
--- controller->AI()->SetData(DATA_FIGHT_PHASE, PHASE_ONE). The three
--- phase-ungated timer arms port below, plus the firewall ring-close
+-- controller->AI()->SetData(DATA_FIGHT_PHASE, PHASE_ONE). The five
+-- phase-one timer arms port below (cleave / tail-lash / breath /
+-- fiery-combustion / meteor-strike), plus the firewall ring-close
 -- (HandleGameObject false = READY 1 on both rings, cancelled on combat
 -- end by halionCombatEnd's cancelTimers, matching events.Reset); the
 -- encounter-frame leg is PORTED in halionEnterCombat (tick 222); the
--- fiery_combustion / meteor_strike / precision-aura /
--- controller legs have no bridges (documented above).
+-- controller leg has no bridge (documented above).
 local function halionEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
@@ -392,12 +545,18 @@ local function halionEnterCombat(event, creature, target)
     phaseTwo[guid] = nil
     fightPhaseThree = false
     -- C++ JustEngagedWith base call (boss_halion.cpp:248):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, after Talk and
-    -- phase setup, before the timer schedules (C++ arm order);
-    -- instance/setActive/ScheduleTasks legs out.
+    -- BossAI::JustEngagedWith (ScriptedCreature.cpp:527-539) — the
+    -- instance SetBossState(DATA_HALION 3, IN_PROGRESS) leg lands
+    -- first, then SetCombatPulseDelay(5) + me-form DoZoneInCombat,
+    -- after Talk and phase setup, before the timer schedules (C++
+    -- arm order); CheckRequiredBosses / setActive / ScheduleTasks
+    -- legs out. The AddAura SPELL_TWILIGHT_PRECISION leg (:249)
+    -- follows the base call (creature:AddAura is self-only,
+    -- lua_creature_events.go:2416 — state-only in Go's aura map).
+    creature:SetBossState(DATA_HALION, 1) -- IN_PROGRESS (EncounterState, InstanceScript.h:68-76)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
+    creature:AddAura(SPELL_TWILIGHT_PRECISION)
     schedule(guid, "mat_cleave", {6000, 10000}, function()
         matCleaveTick(creature, guid)
     end)
@@ -413,6 +572,15 @@ local function halionEnterCombat(event, creature, target)
         local twilightRing = creature:FindNearestGameObject(GO_TWILIGHT_FLAME_RING, 100)
         if twilightRing then twilightRing:SetGoState(1) end
     end)
+    -- C++ :254-255 — EVENT_FIERY_COMBUSTION randtime(15s,18s),
+    -- EVENT_METEOR_STRIKE 18s (see fieryCombustionTick /
+    -- meteorStrikeTick above for the phase-one gate).
+    schedule(guid, "fiery_combustion", {15000, 18000}, function()
+        fieryCombustionTick(creature, guid)
+    end)
+    schedule(guid, "meteor_strike", 18000, function()
+        meteorStrikeTick(creature, guid)
+    end)
     -- C++ :257 — SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE, me, 1), after
     -- the timer schedules, before the controller SetData leg (out);
     -- param1 1 = material halion (bridge live 2026-11-05, tick 220).
@@ -424,6 +592,46 @@ local function halionCombatEnd(event, creature)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     fightPhaseThree = false
+end
+
+-- C++ Reset for material halion is the inherited BossAI::Reset ->
+-- _Reset() (ScriptedCreature.cpp:499-510): SetCombatPulseDelay(0),
+-- events.Reset, summons.DespawnAll, scheduler.CancelAll, then
+-- SetBossState(DATA_HALION 3, NOT_STARTED) gated on the stored state
+-- != DONE (:509-510), alive-gated (:500-501). Go fires ev23 on evade
+-- (triggerCreatureEvade fires 23 then 2, creaturemotion.go), on
+-- respawn (fireCreatureSpawned pre-fire), and on the death path
+-- before ev4 (fireCreatureDied fires 23 then 4) — the three fires
+-- are told apart by the stored state, the skadi / tyrannus /
+-- palehoof idiom: the evade fire finds the state IN_PROGRESS and
+-- sets FAIL — C++ halion's own EnterEvadeMode (:234-239) calls
+-- neither _DespawnAtEvade nor Reset, but it forwards the evade to
+-- the controller (BOUNDARY or PHASE_ONE), whose engagement-over
+-- JustExitedCombat sets DATA_HALION FAIL, != DONE gated
+-- (:619-634); phase-two/three wipes reach the same FAIL via the
+-- controller's 5s EVENT_EVADE_CHECK (:614/:755-773). The
+-- spawn/respawn fire finds any other non-DONE state and sets
+-- NOT_STARTED (the _Reset leg). The death pre-fire is skipped via
+-- the IsDead guard (C++ _Reset never runs on death; DONE lands in
+-- ev4). NO ev24 handler: C++ has no JustReachedHome FAIL leg for
+-- halion (BossAI::_JustReachedHome is setActive(false) only,
+-- ScriptedCreature.cpp:522-523; halion has no override), so a
+-- reach-home FAIL would fabricate a leg — the FAIL rides this
+-- ev23 evade-fire instead.
+local function halionReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    phaseTwo[guid] = nil
+    fightPhaseThree = false
+    if creature:IsDead() then
+        return
+    end
+    creature:SetCombatPulseDelay(0) -- _Reset arm 1 (ScriptedCreature.cpp:502)
+    if creature:GetBossState(DATA_HALION) == 1 then
+        creature:SetBossState(DATA_HALION, 2) -- FAIL: evade path (controller :619-634)
+    elseif creature:GetBossState(DATA_HALION) ~= 3 then
+        creature:SetBossState(DATA_HALION, 0) -- NOT_STARTED: _Reset (:509-510), != DONE-gated
+    end
 end
 
 -- C++ boss_halion::DamageTaken :283-296:
@@ -491,17 +699,38 @@ local function halionDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ boss_halion::JustDied :267:
--- _JustDied(); Talk(SAY_DEATH) — the sjonnir precedent (the
--- _JustDied() instance leg and the cross-creature KillSelf legs have
--- no bridges).
+-- C++ boss_halion::JustDied :263-276:
+-- _JustDied() (:265) — events.Reset + summons.DespawnAll +
+-- SetBossState(DATA_HALION 3, DONE) (ScriptedCreature.cpp:513-518) —
+-- FIRST, before Talk(SAY_DEATH) (:267); SendEncounterUnit
+-- DISENGAGE (:268); twilight KillSelf (:270-272) + controller
+-- KillSelf (:274-276), each alive-guarded. The KillSelf legs ride
+-- creature:Kill (lua_creature_events.go:2971) over the grid scan
+-- (the hexlord JustDied precedent — no GUID->creature bridge, and
+-- the instance guid store is never latched for these temp summons).
 local function halionDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     fightPhaseThree = false
+    creature:SetBossState(DATA_HALION, 3) -- DONE (_JustDied, first arm)
     creature:Talk(SAY_DEATH)
     -- C++ :268 — SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE, me), after
-    -- Talk, before the twilight/controller KillSelf legs (out).
+    -- Talk, before the twilight/controller KillSelf legs.
     creature:SendEncounterUnit(1, creature)
+    -- C++ :270-272 — twilight KillSelf if alive; its JustDied runs
+    -- nested (halion already dead, so its halion-Kill is skipped;
+    -- the controller KillSelf lands inside that call).
+    for _, other in ipairs(creature:GetCreaturesInGrid(ENTRY_TWILIGHT_HALION, 500)) do
+        if not other:IsDead() then
+            other:Kill()
+        end
+    end
+    -- C++ :274-276 — controller KillSelf if alive (no Lua handlers on
+    -- 40146, so this only runs the engine death path).
+    for _, other in ipairs(creature:GetCreaturesInGrid(ENTRY_HALION_CONTROLLER, 500)) do
+        if not other:IsDead() then
+            other:Kill()
+        end
+    end
 end
 
 -- C++ boss_twilight_halion::KilledUnit :439-445:
@@ -521,7 +750,7 @@ RegisterCreatureEvent(ENTRY_HALION, 1, halionEnterCombat)
 RegisterCreatureEvent(ENTRY_HALION, 2, halionCombatEnd)
 RegisterCreatureEvent(ENTRY_HALION, 4, halionDied)
 RegisterCreatureEvent(ENTRY_HALION, 9, halionDamageTaken)
-RegisterCreatureEvent(ENTRY_HALION, 23, halionCombatEnd)
+RegisterCreatureEvent(ENTRY_HALION, 23, halionReset)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 3, twilightHalionKilledUnit)
 
 -- C++ UpdateAI EVENT_CLEAVE: DoCastVictim(SPELL_CLEAVE 74524)
@@ -648,17 +877,30 @@ local function soulConsumptionTick(creature, guid)
     end)
 end
 
-local function twilightHalionEnterCombat(event, creature, target)
+local twilightEngaged = {}
+
+-- C++ boss_twilight_halion::JustEngagedWith :424-434, shared by the
+-- ev1 handler below and the DamageTaken engage fallback (:472-473):
+-- events.SetPhase(PHASE_TWO) (:426); BossAI::JustEngagedWith (:428)
+-- = SetBossState(DATA_TWILIGHT_HALION 4, IN_PROGRESS) (base-first,
+-- ScriptedCreature.cpp:527-539) + SetCombatPulseDelay(5) + me-form
+-- DoZoneInCombat, after the phase set, before the timer schedules
+-- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+-- AddAura SPELL_TWILIGHT_PRECISION (:429) follows the base call
+-- (creature:AddAura is self-only, lua_creature_events.go:2416 —
+-- state-only in Go's aura map). The four timer arms bridge (the
+-- TAIL_LASH arm moves here from its constructor schedule;
+-- SOUL_CONSUMPTION's constructor schedule is re-anchored the same
+-- way — tailLashTick precedent).
+local function twilightEngage(creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     fightPhaseThree = false
-    -- C++ JustEngagedWith base call (boss_halion.cpp:428):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
-    -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, after the phase
-    -- set, before the timer schedules (C++ arm order);
-    -- instance/setActive/ScheduleTasks legs out.
+    twilightEngaged[guid] = true
+    creature:SetBossState(DATA_TWILIGHT_HALION, 1) -- IN_PROGRESS (EncounterState, InstanceScript.h:68-76)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
+    creature:AddAura(SPELL_TWILIGHT_PRECISION)
     schedule(guid, "cleave", 3000, function()
         cleaveTick(creature, guid)
     end)
@@ -680,6 +922,10 @@ local function twilightHalionEnterCombat(event, creature, target)
     creature:SendEncounterUnit(0, creature, 2)
 end
 
+local function twilightHalionEnterCombat(event, creature, target)
+    twilightEngage(creature)
+end
+
 local twilightPhaseThree = {}
 
 local function twilightHalionClearPhase(guid)
@@ -690,6 +936,7 @@ local function twilightHalionLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
+    twilightEngaged[guid] = nil
     fightPhaseThree = false
 end
 
@@ -701,24 +948,45 @@ local function twilightHalionReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
+    twilightEngaged[guid] = nil
     fightPhaseThree = false
 end
 
 -- C++ boss_twilight_halion::JustDied (boss_halion.cpp:448-466):
--- instance GetCreature(DATA_HALION) -> LowerPlayerDamageReq /
--- Kill halion if alive + controller KillSelf — instance/cross-creature,
--- blocked; SendEncounterUnit disengage PORTED in twilightHalionDied
--- below (tick 222). The
--- _events.Reset() + _summons.DespawnAll() + DoCastSelf(CLEAR_DEBUFFS)
--- body is npc_halion_controllerAI::JustDied (entry 40146,
--- unregistered), not twilight halion's.
+-- NO _JustDied() call — unlike material halion, twilight's JustDied
+-- never sets DATA_TWILIGHT_HALION DONE (verified: no SetBossState
+-- for DATA_TWILIGHT_HALION anywhere in the Ruby Sanctum files, and
+-- the instance SetBossState override only handles
+-- BALTHARUS/SAVIANA/ZARITHRIAN/HALION), so ev4 carries NO state
+-- leg. Order: halion Kill (:450-457) -> controller KillSelf
+-- (:460-462) -> SendEncounterUnit DISENGAGE last (:464). The
+-- LowerPlayerDamageReq leg (:454) has no bridge (loot-credit
+-- bookkeeping only). The Kill legs ride creature:Kill over the grid
+-- scan (hexlord precedent, as in halionDied above).
 local function twilightHalionDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
+    twilightEngaged[guid] = nil
     fightPhaseThree = false
+    -- C++ :450-457 — Unit::Kill(killer, halion) if alive; material's
+    -- JustDied runs nested (DONE + Talk + disengage; its twilight
+    -- KillSelf is skipped — already dead — and its controller
+    -- KillSelf lands inside that call).
+    for _, other in ipairs(creature:GetCreaturesInGrid(ENTRY_HALION, 500)) do
+        if not other:IsDead() then
+            other:Kill(killer)
+        end
+    end
+    -- C++ :460-462 — controller KillSelf if alive (no Lua handlers on
+    -- 40146, so this only runs the engine death path).
+    for _, other in ipairs(creature:GetCreaturesInGrid(ENTRY_HALION_CONTROLLER, 500)) do
+        if not other:IsDead() then
+            other:Kill()
+        end
+    end
     -- C++ :464 — SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE, me), last
-    -- in JustDied, after the halion-Kill / controller-KillSelf legs (out).
+    -- in JustDied, after the halion-Kill / controller-KillSelf legs.
     creature:SendEncounterUnit(1, creature)
 end
 
@@ -751,6 +1019,16 @@ local function twilightHalionDamageTaken(event, creature, attacker, damage)
     local capped = damage
     if damage >= health and not wasPhaseThree then
         capped = health - 1
+    end
+    -- C++ :472-473 — twilight spawns with UNIT_FLAG_IN_COMBAT, so
+    -- JustEngagedWith may never have fired ("otherwise
+    -- JustEngagedWith won't ever be called"); first damage engages
+    -- it. The latch keeps this to the one fallback call (ev1 sets it
+    -- in twilightEngage); the PHASE_THREE guard matches the C++
+    -- !IsInPhase(PHASE_TWO) && !IsInPhase(PHASE_THREE) condition
+    -- (PHASE_TWO here ⟺ engaged and not phase-three).
+    if not twilightEngaged[guid] and not twilightPhaseThree[guid] then
+        twilightEngage(creature)
     end
     -- HealthBelowPctDamaged strict-<, signed, unclamped
     -- (Unit.h:873; the zum_rah precedent) — evaluated on the capped
