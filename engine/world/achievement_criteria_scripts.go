@@ -20,6 +20,7 @@ const (
 	dataAuriayaNineLives      = 30763077 // boss_auriaya.cpp:108 DATA_NINE_LIVES
 	dataSjonnirAbuseTheOoze   = 2        // boss_sjonnir.cpp:54 DATA_ABUSE_THE_OOZE
 	dataKingDredRaptorsKilled = 2        // boss_king_dred.cpp:43 DATA_RAPTORS_KILLED
+	dataBrannSparklinNews     = 1        // halls_of_stone.cpp:121 DATA_BRANN_SPARKLIN_NEWS
 )
 
 // bossLatchData reads one CreatureAI::SetData slot off the killed
@@ -309,6 +310,21 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return false
 		}
 		return bossLatchData(source.server, victim, dataSjonnirAbuseTheOoze) >= 5
+
+	case "achievement_brann_spankin_new": // halls_of_stone.cpp:719-735
+		// OnCheck: Brann->AI()->GetData(DATA_BRANN_SPARKLIN_NEWS 1) —
+		// the latch starts true (Initialize :289) and Brann's
+		// DamageTaken (halls_of_stone.cpp:405-408) clears it the first
+		// time he takes damage while the tribunal is IN_PROGRESS; the
+		// Lua port keeps it in the boss motion's SetData store
+		// (npc_brann_hos.lua: ev5 spawn init + ev9 DamageTaken leg).
+		// The Reset re-init leg is vacuous: the latch can only be false
+		// while escorting, and Reset skips Initialize while escorting
+		// (halls_of_stone.cpp:304-313).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataBrannSparklinNews) != 0
 
 	case "achievement_king_dred": // boss_king_dred.cpp:286-303
 		// OnCheck: Dred->AI()->GetData(DATA_RAPTORS_KILLED 2) >= 6 —

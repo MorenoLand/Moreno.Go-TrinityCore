@@ -18977,13 +18977,16 @@ func init() {
 	// Maiden of Grief (27975), Halls of Stone —
 	// lua_scripts/northrend/boss_maiden_of_grief.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1; the BossAI::JustEngagedWith passthrough and the
+	// (event 1; the BossAI::JustEngagedWith passthrough ports via
+	// SetBossState(DATA_MAIDEN_OF_GRIEF, IN_PROGRESS) +
+	// SetCombatPulseDelay + DoZoneInCombat, tick 257) and the
 	// DoStartTimedAchievement(ACHIEV_GOOD_GRIEF_START_EVENT 20383)
-	// leg have no bridges); KilledUnit player-gated Talk(SAY_SLAY 1)
+	// leg has no bridge; KilledUnit player-gated Talk(SAY_SLAY 1)
 	// (event 3 — razuvious player-gated variant precedent,
 	// nineteenth player-gated variant ported); JustDied
-	// Talk(SAY_DEATH 2) (event 4; _JustDied passthrough has no
-	// bridge).
+	// Talk(SAY_DEATH 2) (event 4; _JustDied SetBossState DONE
+	// PORTED tick 257 via creature:SetBossState; Reset _Reset
+	// SetBossState NOT_STARTED PORTED tick 257 on ev23).
 	// Documented-only: Reset / Initialize (the four ScheduleEvent
 	// legs + _Reset() + DoStopTimedAchievement — no timer /
 	// achievement bridges); the UpdateAI event machine
@@ -19004,13 +19007,18 @@ func init() {
 	// Krystallus (27977), Halls of Stone —
 	// lua_scripts/northrend/boss_krystallus.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1; the BossAI::JustEngagedWith passthrough and the
-	// five ScheduleEvent legs have no bridges); KilledUnit
+	// (event 1; the BossAI::JustEngagedWith passthrough ports via
+	// SetBossState(DATA_KRYSTALLUS, IN_PROGRESS) +
+	// SetCombatPulseDelay + DoZoneInCombat, tick 257, and the
+	// five ScheduleEvent legs are ported except GROUND_SLAM /
+	// SHATTER); KilledUnit
 	// player-gated Talk(SAY_KILL 1) (event 3 — razuvious
 	// player-gated variant precedent, twentieth player-gated
 	// variant ported); JustDied Talk(SAY_DEATH 2) (event 4;
-	// _JustDied passthrough has no bridge).
-	// Documented-only: Reset (_Reset()); the UpdateAI event
+	// _JustDied SetBossState DONE PORTED tick 257 via
+	// creature:SetBossState; Reset _Reset SetBossState NOT_STARTED
+	// PORTED tick 257 on ev23).
+	// Documented-only: the UpdateAI event
 	// machine (BOULDER_TOSS random-target 50843; GROUND_SPIKE
 	// heroic-only random-target 59750; GROUND_SLAM self 50827 +
 	// SHATTER 10s chain; STOMP self 48131; SHATTER self 50810 —
@@ -19032,8 +19040,10 @@ func init() {
 	// Sjonnir the Ironshaper (27978), Halls of Stone —
 	// lua_scripts/northrend/boss_sjonnir.lua.
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
-	// (event 1; the CheckRequiredBosses / EnterEvadeMode gate and
-	// the BossAI::JustEngagedWith passthrough have no bridges;
+	// (event 1; the CheckRequiredBosses / EnterEvadeMode gate has
+	// no bridge and the BossAI::JustEngagedWith passthrough ports
+	// via SetBossState(DATA_SJONNIR, IN_PROGRESS) +
+	// SetCombatPulseDelay + DoZoneInCombat, tick 257;
 	// the six ScheduleEvent legs are ported via CreateLuaEvent);
 	// timer-driven casts (maiden convention): CHAIN_LIGHTNING
 	// random-target 50830; LIGHTNING_SHIELD self 50831;
@@ -19047,7 +19057,9 @@ func init() {
 	// player-gated Talk(SAY_SLAY 1) (event 3 — razuvious
 	// player-gated variant precedent, twenty-first player-gated
 	// variant ported); JustDied Talk(SAY_DEATH 2) (event 4;
-	// _JustDied passthrough has no bridge).
+	// _JustDied SetBossState DONE PORTED tick 257 via
+	// creature:SetBossState; Reset _Reset SetBossState NOT_STARTED
+	// PORTED tick 257 on ev23, split from the ev2 handler).
 	// Ported tick 235: Reset / Initialize (_Reset() +
 	// abuseTheOoze = 0, ev2/ev23); ev38 DoAction + sludge JustDied relay
 	// (boss_sjonnir.cpp:291) + ev5 SetGuidData latch; consumer

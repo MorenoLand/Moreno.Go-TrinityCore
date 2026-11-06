@@ -41,11 +41,16 @@
 -- Talk(SAY_KILL 1) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
 -- "Player") — twentieth player-gated variant ported.
--- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied() boss
--- bookkeeping passthrough has no bridge).
+-- JustDied — Talk(SAY_DEATH 2) (event 4) + _JustDied() SetBossState
+-- (DATA_KRYSTALLUS 0, DONE) PORTED 2026-11-05 via
+-- creature:SetBossState (lua_creature_events.go:5917; the
+-- boss_moroes.lua / bjarngrim precedent) — the "no bridge" claim
+-- was stale.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 27977):
--- Reset (_Reset() — no bridge).
+-- Reset — _Reset() SetBossState(DATA_KRYSTALLUS, NOT_STARTED)
+-- PORTED 2026-11-05 via creature:SetBossState on ev23 (the
+-- bjarngrim precedent).
 -- JustEngagedWith ScheduleEvent legs (EVENT_BOULDER_TOSS 3s/9s,
 -- EVENT_GROUND_SLAM 15s/18s, EVENT_GROUND_SPIKE 9s/14s
 -- heroic-only; EVENT_STOMP 20s/29s was PORTED before).
@@ -86,6 +91,9 @@
 -- no SpellScript bridge; joins the no-SpellScript-bridge queue).
 
 local ENTRY_KRYSTALLUS = 27977
+
+-- DATA_KRYSTALLUS = 0 (halls_of_stone.h:31).
+local DATA_KRYSTALLUS = 0
 
 local SAY_AGGRO = 0
 local SAY_KILL = 1
@@ -202,9 +210,11 @@ end
 local function krystallusEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith Talk-then-base (boss_krystallus.cpp:66-69):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:525-543) —
+    -- SetBossState(DATA_KRYSTALLUS, IN_PROGRESS) first, then
     -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, after Talk
     -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
+    creature:SetBossState(DATA_KRYSTALLUS, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     local guid = creature:GetGUID()
@@ -234,10 +244,20 @@ local function krystallusLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ JustDied: Talk(DEATH) + _JustDied() — only the Talk arm is
--- bridgeable.
+-- C++ Reset (boss_krystallus.cpp:61-63): _Reset() —
+-- SetBossState(DATA_KRYSTALLUS, NOT_STARTED)
+-- (ScriptedCreature.cpp:499-511; the bjarngrim precedent sets it
+-- unconditionally on ev23).
+local function krystallusReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_KRYSTALLUS, 0)
+end
+
+-- C++ JustDied (boss_krystallus.cpp:126-129): Talk(DEATH) then
+-- _JustDied() — SetBossState(DATA_KRYSTALLUS, DONE) after Talk.
 local function krystallusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_KRYSTALLUS, 3)
     cancelTimers(creature:GetGUID())
 end
 
@@ -245,4 +265,4 @@ RegisterCreatureEvent(ENTRY_KRYSTALLUS, 1, krystallusEnterCombat)
 RegisterCreatureEvent(ENTRY_KRYSTALLUS, 2, krystallusLeaveCombat)
 RegisterCreatureEvent(ENTRY_KRYSTALLUS, 3, krystallusTargetDied)
 RegisterCreatureEvent(ENTRY_KRYSTALLUS, 4, krystallusDied)
-RegisterCreatureEvent(ENTRY_KRYSTALLUS, 23, krystallusLeaveCombat)
+RegisterCreatureEvent(ENTRY_KRYSTALLUS, 23, krystallusReset)

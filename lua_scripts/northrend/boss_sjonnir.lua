@@ -33,9 +33,9 @@
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the
 -- CheckRequiredBosses / EnterEvadeMode gate has no
 -- required-bosses bridge; the BossAI::JustEngagedWith base arms
--- (SetCombatPulseDelay(5) + me-form DoZoneInCombat,
--- ScriptedCreature.cpp:540/542) are ported into
--- sjonnirEnterCombat; instance legs stay out; the six
+-- (SetBossState(DATA_SJONNIR, IN_PROGRESS) + SetCombatPulseDelay(5) +
+-- me-form DoZoneInCombat, ScriptedCreature.cpp:525-543) are ported
+-- into sjonnirEnterCombat; instance legs stay out; the six
 -- ScheduleEvent legs seed the timer machine — CreateLuaEvent
 -- is the timer bridge (the stale "no timer bridge for the legs"
 -- claim is retracted), and the seed moves to OnEnterCombat(1)
@@ -46,13 +46,18 @@
 -- player-gated variant precedent: victim nil-guard,
 -- victim:GetObjectType() == "Player") — twenty-first
 -- player-gated variant ported.
--- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied() boss
--- bookkeeping passthrough has no bridge).
+-- JustDied — Talk(SAY_DEATH 2) (event 4) + _JustDied() SetBossState
+-- (DATA_SJONNIR 3, DONE) PORTED 2026-11-05 via creature:SetBossState
+-- (lua_creature_events.go:5917; the boss_moroes.lua / bjarngrim
+-- precedent) — the "no bridge" claim was stale.
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 27978):
 -- Reset / Initialize — _Reset() + abuseTheOoze = 0 — PORTED 2026-11-05
 -- in sjonnirCombatEnd (ev2/ev23 share the handler; EnterEvadeMode ends
--- with Reset(), CreatureAI.cpp:237).
+-- with Reset(), CreatureAI.cpp:237); the _Reset() SetBossState
+-- (DATA_SJONNIR, NOT_STARTED) leg is PORTED 2026-11-05 in sjonnirReset
+-- below (ev23 only, the bjarngrim precedent — ev2 leave-combat does
+-- not call Reset in C++).
 -- DoAction(ACTION_OOZE_DEAD 1) / GetData(DATA_ABUSE_THE_OOZE 2)
 -- — abuseTheOoze counter — PORTED 2026-11-05 in sjonnirDoAction (ev38)
 -- + the iron-sludge JustDied relay below (boss_sjonnir.cpp:291);
@@ -308,10 +313,12 @@ end
 
 local function sjonnirEnterCombat(event, creature, target)
     -- C++ JustEngagedWith gate-then-base (boss_sjonnir.cpp:98-107):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:525-543) —
+    -- SetBossState(DATA_SJONNIR, IN_PROGRESS) first, then
     -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
     -- (C++ arm order); CheckRequiredBosses/EnterEvadeMode gate and
     -- instance/setActive/ScheduleTasks legs out.
+    creature:SetBossState(DATA_SJONNIR, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -358,9 +365,21 @@ end
 local function sjonnirCombatEnd(event, creature)
     despawnSjonnirSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
-    -- C++ Reset (:89): abuseTheOoze = 0; EnterEvadeMode ends with
+    -- C++ Reset (:92): abuseTheOoze = 0; EnterEvadeMode ends with
     -- Reset() (CreatureAI.cpp:237), and ev2/ev23 share this handler.
     creature:SetData(DATA_ABUSE_THE_OOZE, 0)
+end
+
+-- C++ Reset (boss_sjonnir.cpp:92-95): _Reset() —
+-- SetBossState(DATA_SJONNIR, NOT_STARTED)
+-- (ScriptedCreature.cpp:499-511; the bjarngrim precedent sets it
+-- unconditionally on ev23). Split from sjonnirCombatEnd: ev2
+-- leave-combat does not call Reset in C++, only ev23 does.
+local function sjonnirReset(event, creature)
+    despawnSjonnirSummons(creature:GetGUID())
+    cancelTimers(creature:GetGUID())
+    creature:SetData(DATA_ABUSE_THE_OOZE, 0)
+    creature:SetBossState(DATA_SJONNIR, 0)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then
@@ -371,10 +390,12 @@ local function sjonnirTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: _JustDied() then Talk(DEATH) — the despawn leg
--- ports via the ev19 summons latch below.
+-- C++ JustDied (boss_sjonnir.cpp:125-128): _JustDied() then
+-- Talk(DEATH) — SetBossState(DATA_SJONNIR, DONE) first; the despawn
+-- leg ports via the ev19 summons latch below.
 local function sjonnirDied(event, creature, killer)
     despawnSjonnirSummons(creature:GetGUID())
+    creature:SetBossState(DATA_SJONNIR, 3)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
@@ -424,7 +445,7 @@ RegisterCreatureEvent(ENTRY_SJONNIR, 2, sjonnirCombatEnd)
 RegisterCreatureEvent(ENTRY_SJONNIR, 3, sjonnirTargetDied)
 RegisterCreatureEvent(ENTRY_SJONNIR, 4, sjonnirDied)
 RegisterCreatureEvent(ENTRY_SJONNIR, 5, sjonnirSpawned)
-RegisterCreatureEvent(ENTRY_SJONNIR, 23, sjonnirCombatEnd)
+RegisterCreatureEvent(ENTRY_SJONNIR, 23, sjonnirReset)
 RegisterCreatureEvent(ENTRY_SJONNIR, 19, sjonnirJustSummoned)
 RegisterCreatureEvent(ENTRY_SJONNIR, 38, sjonnirDoAction)
 RegisterCreatureEvent(NPC_IRON_SLUDGE, 4, ironSludgeDied)

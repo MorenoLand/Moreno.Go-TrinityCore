@@ -14,8 +14,22 @@
 -- 1) once when health drops strictly below 30%, latch re-armed when healed back
 -- to >= 30%; rides the pre-damage event-9 hook with the nefarian postDamage > 0
 -- guard and the maulgar/ironaya floored-integer threshold.
+-- Ported: DamageTaken sparklin-news latch (halls_of_stone.cpp:405-408) —
+-- if the tribunal is IN_PROGRESS (GetBossState(DATA_TRIBUNAL_OF_AGES 2) ==
+-- 1), any damage taken clears the latch (SetData(DATA_BRANN_SPARKLIN_NEWS
+-- 1, 0)); the latch is initialized true on spawn (ev5, the ctor Initialize
+-- :289) and read by achievement_brann_spankin_new (ported in
+-- engine/world/achievement_criteria_scripts.go, the abuse_the_ooze
+-- precedent). The Reset re-init leg is vacuous: the latch can only be false
+-- while escorting, and Reset skips Initialize while escorting (:304-313).
 -- Documented-only: the full escort event machine (tribunal waypoints,
--- Sjonnir intro) — no escort/movement bridge.
+-- Sjonnir intro) — no escort/movement bridge; npc_tribuna_controller
+-- (halls_of_stone.cpp:134-267) — its UpdateAI arms (glare / dark matter /
+-- searing gaze) are gated on bKaddrakActivated / bMarnakActivated /
+-- bAbedneumActivated flags set only by Brann's escort steps (:8/:12/:18
+-- of UpdateEscortAI), so they are unreachable without the escort machine;
+-- its Reset HandleGameObject legs close faces the escort never opens in
+-- Lua; UpdateFacesList is commented out in C++.
 
 local ENTRY_BRANN_HOS = 28070
 
@@ -26,6 +40,11 @@ local GOSSIP_ITEM_START = "Brann, it would be our honor!"
 local TEXT_ID_START = 13100
 
 local SAY_LOW_HEALTH = 1
+
+-- DATA_TRIBUNAL_OF_AGES = 2 / DATA_BRANN_SPARKLIN_NEWS = 1
+-- (halls_of_stone.h:33 / halls_of_stone.cpp:121).
+local DATA_TRIBUNAL_OF_AGES = 2
+local DATA_BRANN_SPARKLIN_NEWS = 1
 
 local lowHpLatched = {}
 
@@ -39,6 +58,13 @@ local lowHpLatched = {}
 -- when post-damage health climbs back to >= the threshold (C++ re-arms
 -- the yell every UpdateAI tick).
 local function brannDamageTaken(_, creature, _, damage)
+    -- C++ DamageTaken (halls_of_stone.cpp:405-408): while the tribunal
+    -- is IN_PROGRESS, any damage taken clears the sparklin-news latch.
+    -- No postDamage guard: C++ DamageTaken fires pre-damage, including
+    -- on the killing blow, and the leg reads no damage value.
+    if creature:GetBossState(DATA_TRIBUNAL_OF_AGES) == 1 then
+        creature:SetData(DATA_BRANN_SPARKLIN_NEWS, 0)
+    end
     local guid = creature:GetGUID()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
@@ -53,6 +79,13 @@ local function brannDamageTaken(_, creature, _, damage)
     elseif postDamage >= math.floor(maxHealth * 30 / 100) then
         lowHpLatched[guid] = nil
     end
+end
+
+-- C++ ctor Initialize (halls_of_stone.cpp:289): brannSparklinNews
+-- starts true; the ev5 spawn leg is the ctor twin (respawn rebuilds
+-- the AI, same as the sjonnir ev5 SetGuidData precedent).
+local function brannSpawned(event, creature)
+    creature:SetData(DATA_BRANN_SPARKLIN_NEWS, 1)
 end
 
 local function brannGossipHello(event, player, creature)
@@ -70,4 +103,5 @@ end
 
 RegisterCreatureGossipEvent(ENTRY_BRANN_HOS, 1, brannGossipHello)
 RegisterCreatureGossipEvent(ENTRY_BRANN_HOS, 2, brannGossipSelect)
+RegisterCreatureEvent(ENTRY_BRANN_HOS, 5, brannSpawned)
 RegisterCreatureEvent(ENTRY_BRANN_HOS, 9, brannDamageTaken)

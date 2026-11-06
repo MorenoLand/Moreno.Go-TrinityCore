@@ -36,8 +36,11 @@
 -- Talk(SAY_SLAY 1) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
 -- "Player") — nineteenth player-gated variant ported.
--- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied() boss
--- bookkeeping passthrough has no bridge).
+-- JustDied — Talk(SAY_DEATH 2) (event 4) + _JustDied() SetBossState
+-- (DATA_MAIDEN_OF_GRIEF 1, DONE) PORTED 2026-11-05 via
+-- creature:SetBossState (lua_creature_events.go:5917; the
+-- boss_moroes.lua / bjarngrim precedent) — the "no bridge" claim
+-- was stale.
 -- UpdateAI EVENT_STORM_OF_GRIEF — PORTED (retraction re-audit
 -- 2026-10-14: the Oct-2 "no-timer-bridge" claim is stale):
 -- DoCastVictim(SPELL_STORM_OF_GRIEF 50752, triggered), 10s init
@@ -79,6 +82,9 @@
 -- has no bridge.
 
 local ENTRY_MAIDEN_OF_GRIEF = 27975
+
+-- DATA_MAIDEN_OF_GRIEF = 1 (halls_of_stone.h:32).
+local DATA_MAIDEN_OF_GRIEF = 1
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -245,9 +251,11 @@ end
 
 local function maidenEnterCombat(event, creature, target)
     -- C++ JustEngagedWith base-first (boss_maiden_of_grief.cpp:74-76):
-    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
+    -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:525-543) —
+    -- SetBossState(DATA_MAIDEN_OF_GRIEF, IN_PROGRESS) first, then
     -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
     -- (C++ arm order); instance/achievement legs out.
+    creature:SetBossState(DATA_MAIDEN_OF_GRIEF, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -284,9 +292,19 @@ local function maidenLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ JustDied: Talk(DEATH) + _JustDied() — only the Talk arm is
--- bridgeable.
+-- C++ Reset (boss_maiden_of_grief.cpp:61-63): _Reset() —
+-- SetBossState(DATA_MAIDEN_OF_GRIEF, NOT_STARTED)
+-- (ScriptedCreature.cpp:499-511; the bjarngrim precedent sets it
+-- unconditionally on ev23).
+local function maidenReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetBossState(DATA_MAIDEN_OF_GRIEF, 0)
+end
+
+-- C++ JustDied (boss_maiden_of_grief.cpp:88-91): _JustDied() then
+-- Talk(DEATH) — SetBossState(DATA_MAIDEN_OF_GRIEF, DONE) first.
 local function maidenDied(event, creature, killer)
+    creature:SetBossState(DATA_MAIDEN_OF_GRIEF, 3)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end
@@ -295,4 +313,4 @@ RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 1, maidenEnterCombat)
 RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 2, maidenLeaveCombat)
 RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 3, maidenTargetDied)
 RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 4, maidenDied)
-RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 23, maidenLeaveCombat)
+RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 23, maidenReset)
