@@ -8,11 +8,31 @@
 -- (500ms init -> 2.1s repeat; C++ SelectTarget Random,0 defaults —
 -- the Digestive Acid 26476 exclusion applies to the pick, not the
 -- pool, per the C++ cast leg).
--- Summon/positioning legs have no bridge — documented, not wired.
+-- The ctor portal summon + JustDied cross-kill legs are PORTED below
+-- (2026-11-07): the stored-object twin (netherspite portal precedent)
+-- needs no GUID->creature bridge.
 local ENTRY = 15334
+local ENTRY_GIANT_PORTAL = 15910 -- temple_of_ahnqiraj.h:66
 local SPELL_GREEN_BEAM = 26134
+local REACT_PASSIVE = 0
 
 local timers = {}
+
+-- C++ giant_eye_tentacleAI ctor (boss_cthun.cpp:1209-1219) summons
+-- the giant portal (TEMPSUMMON_CORPSE_DESPAWN, Lua type 4) at its own
+-- position, passive, and stores its GUID; JustDied (:1226-1230) kills
+-- it via ObjectAccessor. No GUID->creature bridge exists, so the port
+-- keeps the summoned object (netherspite portal precedent — the object
+-- closes over live motion) keyed by the tentacle GUID.
+local portals = {}
+
+local function killPortal(guid)
+    local portal = portals[guid]
+    portals[guid] = nil
+    if portal then
+        portal:Kill()
+    end
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -49,6 +69,19 @@ local function onGreenBeam(creature, guid)
     end
 end
 
+local function onSpawn(event, creature)
+    -- C++ ctor order (boss_cthun.cpp:1214-1219): SetCombatMovement(false),
+    -- then the portal summon above.
+    creature:SetCombatMovement(false)
+    local guid = creature:GetGUID()
+    local portal = creature:SummonCreature(ENTRY_GIANT_PORTAL,
+        creature:GetX(), creature:GetY(), creature:GetZ(), 0, 4)
+    if portal then
+        portal:SetReactState(REACT_PASSIVE)
+        portals[guid] = portal
+    end
+end
+
 local function onEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_cthun.cpp:1243: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     local guid = creature:GetGUID()
@@ -71,8 +104,10 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    killPortal(creature:GetGUID())
 end
 
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)

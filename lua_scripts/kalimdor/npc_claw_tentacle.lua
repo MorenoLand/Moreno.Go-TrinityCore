@@ -9,8 +9,9 @@
 -- a different AI — not copied here). The EvadeTimer leg is PORTED
 -- 2026-10-26 (onEvadeCheck: 1s out-of-melee-range poll, pause
 -- semantics; hide/teleport/portal/EngageWithTarget, acid-pick skip).
--- The ctor-summoned portal's JustDied/old-portal KillSelf legs stay
--- out (no GUID->creature bridge; Lua never summoned the ctor portal).
+-- The ctor-summoned portal's JustDied/old-portal KillSelf legs are
+-- PORTED below (2026-11-07): the stored-object twin (netherspite
+-- portal precedent) needs no GUID->creature bridge.
 local ENTRY = 15725
 local ENTRY_SMALL_PORTAL = 15904
 local SPELL_GROUND_RUPTURE = 26139
@@ -19,6 +20,24 @@ local SPELL_DIGESTIVE_ACID = 26476
 local REACT_PASSIVE = 0
 
 local timers = {}
+
+-- C++ claw_tentacleAI ctor (boss_cthun.cpp:971-986) summons the small
+-- portal (TEMPSUMMON_CORPSE_DESPAWN, Lua type 4) at its own position,
+-- passive, and stores its GUID; JustDied (:992-996) kills it via
+-- ObjectAccessor, and the EvadeTimer leg (:1020-1021) kills the old
+-- portal before the teleport re-summon (:1038-1041). No GUID->creature
+-- bridge exists, so the port keeps the summoned object (netherspite
+-- portal precedent — the object closes over live motion) keyed by the
+-- tentacle GUID.
+local portals = {}
+
+local function killPortal(guid)
+    local portal = portals[guid]
+    portals[guid] = nil
+    if portal then
+        portal:Kill()
+    end
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -73,9 +92,8 @@ end
 -- Lua form: a 1s poll accumulating out-of-range time (pause semantics
 -- kept: in-range polls neither add nor reset); the acid-pick leg
 -- keeps the elapsed count so the next poll re-fires, as C++ re-fires
--- every tick with an unreset timer. The ctor-summoned portal's
--- JustDied/old-portal KillSelf legs stay out (no GUID->creature
--- bridge; Lua never summoned the ctor portal).
+-- every tick with an unreset timer. The old-portal KillSelf leg is
+-- PORTED (killPortal at fire, before the hide).
 local evadeElapsed = {}
 
 local function onEvadeCheck(creature, guid)
@@ -84,6 +102,10 @@ local function onEvadeCheck(creature, guid)
         local elapsed = (evadeElapsed[guid] or 0) + 1000
         if elapsed >= 5000 then
             evadeElapsed[guid] = 0
+            -- C++ EvadeTimer leg (boss_cthun.cpp:1020-1021): kill the
+            -- old portal BEFORE the hide/teleport, even on the
+            -- acid-pick and empty-pick paths below.
+            killPortal(guid)
             creature:SetVisible(false)
             local candidates = {}
             for _, unit in ipairs(creature:GetAITargets()) do
@@ -105,6 +127,7 @@ local function onEvadeCheck(creature, guid)
                     creature:GetX(), creature:GetY(), creature:GetZ(), 0, 4)
                 if portal then
                     portal:SetReactState(REACT_PASSIVE)
+                    portals[guid] = portal
                 end
                 schedule(guid, "rupture", 500, function()
                     onGroundRupture(creature, guid)
@@ -123,6 +146,19 @@ local function onEvadeCheck(creature, guid)
         schedule(guid, "evade", 1000, function()
             onEvadeCheck(creature, guid)
         end)
+    end
+end
+
+local function onSpawn(event, creature)
+    -- C++ ctor order (boss_cthun.cpp:978-985): SetCombatMovement(false),
+    -- then the portal summon above.
+    creature:SetCombatMovement(false)
+    local guid = creature:GetGUID()
+    local portal = creature:SummonCreature(ENTRY_SMALL_PORTAL,
+        creature:GetX(), creature:GetY(), creature:GetZ(), 0, 4)
+    if portal then
+        portal:SetReactState(REACT_PASSIVE)
+        portals[guid] = portal
     end
 end
 
@@ -154,8 +190,10 @@ end
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     evadeElapsed[creature:GetGUID()] = nil
+    killPortal(creature:GetGUID())
 end
 
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)

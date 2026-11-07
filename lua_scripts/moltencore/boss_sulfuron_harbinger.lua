@@ -235,8 +235,8 @@ local function sulfuronLeaveCombat(event, creature)
 end
 
 local function sulfuronDied(event, creature, killer)
-    -- No JustDied override in C++ — base BossAI::JustDied runs by
-    -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
+    -- C++ JustDied (boss_sulfuron_harbinger.cpp:154-157) is
+    -- events.Reset() only; _JustDied() writes
     -- SetBossState(BOSS_SULFURON_HARBINGER 6, DONE).
     creature:SetBossState(6, 3)
     sulfuronResetState(creature:GetGUID())

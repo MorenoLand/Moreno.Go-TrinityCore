@@ -471,10 +471,19 @@ local function attumenDied(event, creature, killer)
     -- not keep firing on the corpse.
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
-    -- C++ JustDied (boss_midnight.cpp:201-209): Talk(SAY_DEATH), then
-    -- midnight->KillSelf() (stays out: no midnight handle), then
-    -- _JustDied() writes SetBossState(DATA_ATTUMEN 0, DONE)
-    -- (ScriptedCreature.cpp:513-519).
+    -- C++ JustDied (boss_midnight.cpp:201-209), C++ order: Talk, then
+    -- midnight->KillSelf() via the stored _midnightGUID (set at :332,
+    -- relayed to the mounted form at :156), then _JustDied() writes
+    -- SetBossState(DATA_ATTUMEN 0, DONE) (ScriptedCreature.cpp:513-519).
+    -- No GUID->creature bridge exists, so the port resolves Midnight
+    -- with the in-file FindNearestCreature(16151, 200) twin (same
+    -- lookup midnight's mount poll uses for Attumen, :195); the only
+    -- Midnight in the encounter is the stored one, and Kill() on an
+    -- already-dead target is a no-op.
+    local midnight = creature:FindNearestCreature(ENTRY_MIDNIGHT, 200)
+    if midnight then
+        midnight:Kill()
+    end
     creature:SetBossState(0, 3)
 end
 

@@ -11,14 +11,33 @@
 -- The 35s KillSelf is PORTED (boss_cthun.cpp:897,939-942 — UpdateAI
 -- KillSelfTimer, victim-gated in C++; the Lua one-shot runs only
 -- while in combat since ev2/ev4 cancel it, kj fiend precedent).
--- The portal summon/JustDied cross-kill legs stay out (no GUID->
--- creature bridge — documented, not wired). The JustEngagedWith DoZoneInCombat leg PORTED
+-- The ctor portal summon + JustDied cross-kill legs are PORTED below
+-- (2026-11-07): the stored-object twin (netherspite portal precedent)
+-- needs no GUID->creature bridge. The JustEngagedWith DoZoneInCombat leg PORTED
 -- 2026-10-23 (creature:DoZoneInCombat bridge live,
 -- engine/world/lua_creature_events.go).
 local ENTRY = 15726
+local ENTRY_SMALL_PORTAL = 15904 -- temple_of_ahnqiraj.h:61
 local SPELL_MIND_FLAY = 26143
+local REACT_PASSIVE = 0
 
 local timers = {}
+
+-- C++ eye_tentacleAI ctor (boss_cthun.cpp:897-905) summons the small
+-- portal (TEMPSUMMON_CORPSE_DESPAWN, Lua type 4) at its own position,
+-- passive, and stores its GUID; JustDied (:912-916) kills it via
+-- ObjectAccessor. No GUID->creature bridge exists, so the port keeps
+-- the summoned object (netherspite portal precedent — the object
+-- closes over live motion) keyed by the tentacle GUID.
+local portals = {}
+
+local function killPortal(guid)
+    local portal = portals[guid]
+    portals[guid] = nil
+    if portal then
+        portal:Kill()
+    end
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -56,6 +75,19 @@ local function onMindFlay(creature, guid)
     end
 end
 
+local function onSpawn(event, creature)
+    -- C++ ctor order (boss_cthun.cpp:899-905): portal summon first,
+    -- then SetCombatMovement(false).
+    local guid = creature:GetGUID()
+    local portal = creature:SummonCreature(ENTRY_SMALL_PORTAL,
+        creature:GetX(), creature:GetY(), creature:GetZ(), 0, 4)
+    if portal then
+        portal:SetReactState(REACT_PASSIVE)
+        portals[guid] = portal
+    end
+    creature:SetCombatMovement(false)
+end
+
 local function onEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- boss_cthun.cpp:927-930 (eye_tentacleAI::JustEngagedWith — sole arm; bridge live 2026-10-23)
     creature:SetMeleeAttack(false) -- boss_cthun.cpp:932: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
@@ -76,8 +108,10 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    killPortal(creature:GetGUID())
 end
 
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
