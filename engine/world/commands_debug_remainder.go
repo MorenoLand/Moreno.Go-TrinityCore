@@ -306,15 +306,21 @@ func (s *session) handleDebugGetItemValue(ctx context.Context, args []string) bo
 
 // handleDebugSetItemValue mirrors HandleDebugSetItemValueCommand
 // (cs_debug.cpp:1040): ".debug setitemvalue <guid> <index> <value>".
-// Column-backed fields persist to item_instance (owner, creator, gift
-// creator, stack count, duration, spell charges, flags, enchantments,
-// random property id, durability, played time) and the changed field is
-// sent to the owner, the C++ values-update leg. Identity and derived
-// fields (guid, type, entry, scale, contained, property seed, max
-// durability, padding, container slots/contents) have no DB twin — Go
-// rebuilds item fields from the row on every load, so the value is sent
-// to the client (the C++ immediate effect) but reverts on the next
-// inventory load.
+// Column-backed fields persist to item_instance (entry, owner, creator,
+// gift creator, stack count, duration, spell charges, flags,
+// enchantments, random property id, durability, played time) and the
+// changed field is sent to the owner, the C++ values-update leg. Entry
+// persists because Item::SaveToDB writes GetEntry() (Item.cpp:337) and
+// GetTemplate() re-resolves from the entry on every read (Item.cpp:536),
+// so a changed entry survives reload as the new template. The remaining
+// identity and derived fields (guid, type, scale, contained, property
+// seed, max durability, padding, container slots/contents) have no DB
+// twin: SaveToDB writes the guid from the object's m_guid, not the
+// values array (Item.cpp:326), and bag/slot positions come from
+// character_inventory, while type/scale/max durability/container slots
+// are template-derived and the property seed derives from the random
+// property id - so the value is sent to the client (the C++ immediate
+// effect) but reverts on the next inventory load.
 func (s *session) handleDebugSetItemValue(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
 		return false
@@ -345,6 +351,10 @@ func (s *session) handleDebugSetItemValue(ctx context.Context, args []string) bo
 	db := s.server.CharactersStore.DB
 	fields := map[int]uint32{int(index): value}
 	switch {
+	case index == 3:
+		if _, err := db.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ? WHERE guid = ?", value, row.guid); err != nil {
+			return false
+		}
 	case index == 6 || index == 7:
 		owner := uint64(values[6]) | uint64(values[7])<<32
 		if index == 6 {

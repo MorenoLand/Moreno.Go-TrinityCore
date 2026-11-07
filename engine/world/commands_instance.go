@@ -458,11 +458,16 @@ func (s *session) unbindInstanceBinds(ctx context.Context, match func(instanceBi
 }
 
 // handleInstanceStats mirrors HandleInstanceStatsCommand
-// (cs_instance.cpp:166-176): "Loaded instances" (sMapMgr->GetNumInstances,
-// 5050) has no Go bridge - the Go tree keeps no loaded-map registry - and is
-// omitted (documented gap). The remaining four lines are answered natively:
-// players in instances (online sessions on dungeon maps), instance saves
-// (instance row count), players bound (total player binds:
+// (cs_instance.cpp:166-176). "Loaded instances" (sMapMgr->GetNumInstances,
+// 5050; MapManager.cpp:291-307 counts loaded IsDungeon instance maps) has
+// no loaded-map registry in Go - maps exist only while a player occupies
+// them - so it counts the distinct (map, instance) pairs among online
+// players on dungeon maps, the same session-based model as the players-in
+// leg below. An instance with no players online is uncountable here (C++
+// keeps it loaded until its unload timer fires); that is the documented
+// delta. The remaining four lines are answered natively: players in
+// instances (online sessions on dungeon maps), instance saves (instance
+// row count), players bound (total player binds:
 // InstanceSaveManager::GetNumBoundPlayersTotal sums GetPlayerCount() over
 // every save, InstanceSaveMgr.cpp:719-726 - so COUNT(*), not DISTINCT),
 // groups bound (same over group_instance, :728-735).
@@ -471,6 +476,7 @@ func (s *session) handleInstanceStats(ctx context.Context) bool {
 		return true
 	}
 	playersIn := 0
+	loadedInstances := make(map[[2]uint32]struct{})
 	if s.server.Data != nil {
 		s.server.sessionsMu.RLock()
 		for sess := range s.server.sessions {
@@ -479,6 +485,7 @@ func (s *session) handleInstanceStats(ctx context.Context) bool {
 			}
 			if entry, found, err := s.server.Data.Map(sess.player.Map); err == nil && found && entry.IsDungeon() {
 				playersIn++
+				loadedInstances[[2]uint32{sess.player.Map, sess.player.InstanceID}] = struct{}{}
 			}
 		}
 		s.server.sessionsMu.RUnlock()
@@ -490,6 +497,7 @@ func (s *session) handleInstanceStats(ctx context.Context) bool {
 		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_instance").Scan(&playersBound)
 		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM group_instance").Scan(&groupsBound)
 	}
+	s.sendSysMessage(fmt.Sprintf("Loaded instances: %d", len(loadedInstances)))
 	s.sendSysMessage(fmt.Sprintf("Players in instances: %d", playersIn))
 	s.sendSysMessage(fmt.Sprintf("Instance saves: %d", saves))
 	s.sendSysMessage(fmt.Sprintf("Players bound: %d", playersBound))
