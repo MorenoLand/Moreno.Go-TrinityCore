@@ -1968,6 +1968,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Lock()
 		m := s.findCreatureMotionLocked(mapID, instanceID, guid)
 		if m != nil && m.Health > 0 {
+			wasInCombat := m.InCombat
 			if m.ThreatMgr == nil {
 				m.ThreatMgr = NewThreatManager(m)
 			}
@@ -1978,6 +1979,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 						s.creatureAddThreat(m, pm.GUID, 0.0, true, nil, pm)
 					}
 				}
+			}
+			// CreatureAI::DoZoneInCombat (CreatureAI.cpp:75-104) engages via
+			// EngageWithTarget -> AddThreat, so a fresh zone engage dismounts
+			// and re-homes (Creature::AtEngage, Creature.cpp:3435-3436,
+			// 3446-3447); later players add no second engage.
+			if !wasInCombat {
+				atEngageDismount(m)
+				atEngageSetHomePosition(m)
 			}
 			m.InCombat = true
 		}

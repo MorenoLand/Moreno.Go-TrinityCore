@@ -4204,6 +4204,15 @@ func (s *Server) creatureEffectThreat(ctx context.Context, m *creatureMotion, sp
 		passive := isCreaturePassive(motion)
 		var switchStart pendingAttackStart
 		switched, victim := s.creatureAddThreat(motion, m.GUID, float32(amount), inMelee, nil, m)
+		// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447): a fresh
+		// threat-effect engage dismounts and re-homes; AddThreat fires it
+		// in C++ (ThreatManager::AddThreat -> JustStartedThreateningMe ->
+		// EngagementStart), so the legs run here on the pre-add
+		// engagement state, in C++ order.
+		if !wasInCombat {
+			atEngageDismount(motion)
+			atEngageSetHomePosition(motion)
+		}
 		motion.TargetGUID = victim
 		motion.InCombat = true
 		motion.Moving = false
@@ -4273,6 +4282,13 @@ func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spe
 			s.motionMu.Unlock()
 			continue
 		}
+		// Spell::EffectTaunt (SpellEffects.cpp:3160-3163) matches threat
+		// only on a non-empty list: an empty-list taunt engages nothing in
+		// C++ (MatchUnitThreatToHighestThreat returns before AddThreat), so
+		// the combat set below rides the pre-match list state — a current
+		// victim is set exactly when the list is non-empty (ThreatManager
+		// installs one on the first ref and clears it with the list).
+		hadThreat := motion.ThreatMgr.GetCurrentVictim() != 0
 		switched, newVictim := s.matchUnitThreatToHighestThreat(motion, m.GUID, nil, m)
 		if switched || newVictim != motion.TargetGUID {
 			motion.TargetGUID = newVictim
@@ -4286,8 +4302,10 @@ func (s *Server) creatureEffectTaunt(ctx context.Context, m *creatureMotion, spe
 			}
 			s.motionMu.Lock()
 		}
-		motion.InCombat = true
-		motion.Moving = true
+		if hadThreat {
+			motion.InCombat = true
+			motion.Moving = true
+		}
 		s.motionMu.Unlock()
 	}
 }

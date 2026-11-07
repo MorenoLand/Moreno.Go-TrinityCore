@@ -317,13 +317,22 @@ func (s *session) applySharedDamageToCreature(ctx context.Context, key creatureA
 	if attackerSess != nil {
 		foldSess = attackerSess
 	}
-	threat, step1Gate := foldSess.damageThreatAmountWithModOwner(ctx, spellID, schoolMask, float32(share), motion.InCombat, attackerSess, attackerMotion)
+	wasInCombat := motion.InCombat
+	threat, step1Gate := foldSess.damageThreatAmountWithModOwner(ctx, spellID, schoolMask, float32(share), wasInCombat, attackerSess, attackerMotion)
 	if !step1Gate {
 		motion.InCombat = true
 		if threat > 0 && attackerSess != nil {
 			threat, _, _ = attackerSess.splitThreatRedirects(motion, threat)
 		}
 		s.server.creatureAddThreat(motion, attackerGUID, threat, false, attackerSess, attackerMotion)
+		// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447): a fresh
+		// share-damage engage dismounts and re-homes — the NODAMAGE split
+		// is a full DealDamage (Unit.cpp:766-788 -> :906 AddThreat ->
+		// JustStartedThreateningMe -> EngagementStart).
+		if !wasInCombat {
+			atEngageDismount(motion)
+			atEngageSetHomePosition(motion)
+		}
 	}
 	killed := share >= motion.Health
 	if killed {

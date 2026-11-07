@@ -797,6 +797,14 @@ func (s *Server) addCreatureInitialNegativeThreat(caster *creatureMotion, target
 		switched, newVictim = true, rVictim
 	}
 	wasInCombat := motion.InCombat
+	// Spell.cpp:5143 AddThreat fires AtEngage on a fresh engage
+	// (ThreatManager::AddThreat -> JustStartedThreateningMe ->
+	// EngagementStart, Creature.cpp:3435-3436, 3446-3447): a zero or
+	// negative add still creates the ref and engages.
+	if !wasInCombat {
+		atEngageDismount(motion)
+		atEngageSetHomePosition(motion)
+	}
 	if switched && newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
 	} else {
@@ -863,10 +871,18 @@ func (s *session) addInitialNegativeThreatLocked(targetGUID uint64, amount float
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 	var pending []pendingAttackStart
 	var pendingHighest []pendingHighestThreatUpdate
+	wasInCombat := motion.InCombat
 	amount, rSwitched, rVictim := s.splitThreatRedirects(motion, amount)
 	switched, newVictim := s.server.creatureAddThreat(motion, s.playerGUID, amount, inMelee, s, nil)
 	if rSwitched {
 		switched, newVictim = true, rVictim
+	}
+	// Spell.cpp:5143 AddThreat fires AtEngage on a fresh engage
+	// (ThreatManager::AddThreat -> JustStartedThreateningMe ->
+	// EngagementStart, Creature.cpp:3435-3436, 3446-3447).
+	if !wasInCombat {
+		atEngageDismount(motion)
+		atEngageSetHomePosition(motion)
 	}
 	if switched && newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
@@ -960,10 +976,18 @@ func (s *session) addDrainGainThreat(targetGUID uint64, auraSpellID uint32, tick
 	inMelee := inMeleeThreatRange(motion.CombatReach, s.player.CombatReach, dist)
 	var switchStart pendingAttackStart
 	var switchHighest pendingHighestThreatUpdate
+	wasInCombat := motion.InCombat
 	threat, rSwitched, rVictim := s.splitThreatRedirects(motion, threat)
 	switched, newVictim := s.server.creatureAddThreat(motion, s.playerGUID, threat, inMelee, s, nil)
 	if rSwitched {
 		switched, newVictim = true, rVictim
+	}
+	// SpellAuraEffects.cpp:5489-5491 AddThreat fires AtEngage on a fresh
+	// engage (ThreatManager::AddThreat -> JustStartedThreateningMe ->
+	// EngagementStart, Creature.cpp:3435-3436, 3446-3447).
+	if !wasInCombat {
+		atEngageDismount(motion)
+		atEngageSetHomePosition(motion)
 	}
 	if switched && newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
@@ -1034,6 +1058,13 @@ func (s *Server) addCreatureDrainGainThreat(caster *creatureMotion, targetGUID u
 	switched, newVictim := s.creatureAddThreat(motion, caster.GUID, share, inMelee, nil, caster)
 	if rSwitched {
 		switched, newVictim = true, rVictim
+	}
+	// SpellAuraEffects.cpp:5489-5491 AddThreat fires AtEngage on a fresh
+	// engage (ThreatManager::AddThreat -> JustStartedThreateningMe ->
+	// EngagementStart, Creature.cpp:3435-3436, 3446-3447).
+	if !wasInCombat {
+		atEngageDismount(motion)
+		atEngageSetHomePosition(motion)
 	}
 	if switched && newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim

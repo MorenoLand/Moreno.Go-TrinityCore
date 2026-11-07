@@ -623,6 +623,13 @@ func (s *Server) dealDirectDamageToCreature(ctx context.Context, attackerGUID ui
 		if !step1Gate {
 			m.InCombat = true
 			switched, newVictim := s.creatureAddThreat(m, attackerGUID, threat, true, attackerSess, attackerMotion)
+			// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447): a fresh
+			// DealDamage engage dismounts and re-homes (Unit::DealDamage
+			// :906 AddThreat -> JustStartedThreateningMe -> EngagementStart).
+			if !wasInCombat {
+				atEngageDismount(m)
+				atEngageSetHomePosition(m)
+			}
 			if switched && newVictim != m.TargetGUID {
 				m.TargetGUID = newVictim
 				entries := m.ThreatMgr.SortedEntriesAvailable()

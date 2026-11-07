@@ -8825,6 +8825,15 @@ func (s *session) executePetSpellDamage(ctx context.Context, caster *creatureMot
 					targetMotion.TargetGUID = targetMotion.ThreatMgr.GetCurrentVictim()
 				}
 			}
+			// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447): a fresh
+			// pet-spell-damage engage dismounts and re-homes (Unit::
+			// DealDamage :906 AddThreat -> JustStartedThreateningMe ->
+			// EngagementStart). The tail triggerCreatureAggro below cannot
+			// fire them, since InCombat is already true by then.
+			if !wasInCombat && !step1Gate {
+				atEngageDismount(targetMotion)
+				atEngageSetHomePosition(targetMotion)
+			}
 			consumeKillCommandStack(caster)
 			// Unit::DealDamage (Unit.cpp:915-924): rage from damage received;
 			// rage_damage folds the absorbed amount (Unit.cpp:919).

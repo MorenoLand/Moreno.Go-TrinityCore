@@ -23297,6 +23297,17 @@ func (s *session) executeDirectSpellDamageWithFlags(ctx context.Context, targetG
 					motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 				}
 			}
+			// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447): a fresh
+			// direct-spell-damage engage dismounts and re-homes (Unit::
+			// DealDamage :906 AddThreat -> JustStartedThreateningMe ->
+			// EngagementStart). The step-1 gate already excluded gated
+			// spells from both the threat add and the combat set above; the
+			// tail triggerCreatureAggro below cannot fire them, since
+			// InCombat is already true by then.
+			if !wasInCombat && !step1Gate {
+				atEngageDismount(motion)
+				atEngageSetHomePosition(motion)
+			}
 			motion.Moving = true
 		}
 		s.server.motionMu.Unlock()
@@ -29585,6 +29596,13 @@ func (s *session) applySpellThreat(ctx context.Context, spell wotlk.Spell, targe
 		switched, victim = s.server.creatureAddThreat(motion, s.playerGUID, threat, inMelee, s, nil)
 		if rSwitched {
 			switched, victim = true, rVictim
+		}
+		// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447): a fresh
+		// threat-effect engage dismounts and re-homes (Spell::EffectThreat
+		// :3485 AddThreat -> JustStartedThreateningMe -> EngagementStart).
+		if !wasInCombat {
+			atEngageDismount(motion)
+			atEngageSetHomePosition(motion)
 		}
 		motion.TargetGUID = victim
 	}
@@ -43946,6 +43964,16 @@ func (s *session) applyPeriodicTickDamageToCreature(ctx context.Context, dmg, ta
 					dmgThreat, _, _ = s.splitThreatRedirects(motion, dmgThreat)
 				}
 				s.server.creatureAddThreat(motion, s.playerGUID, dmgThreat, inMelee, s, nil)
+			}
+			// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447): a fresh
+			// DoT-tick engage dismounts and re-homes (Unit::DealDamage :906
+			// AddThreat -> JustStartedThreateningMe -> EngagementStart; the
+			// tick funnel is non-lethal here, the lethal arm returned
+			// above). The tail triggerCreatureAggro below cannot fire them,
+			// since InCombat is already true by then.
+			if !wasInCombat && !step1Gate {
+				atEngageDismount(motion)
+				atEngageSetHomePosition(motion)
 			}
 			motion.Moving = true
 		}

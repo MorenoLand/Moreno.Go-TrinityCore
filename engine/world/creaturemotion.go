@@ -3549,7 +3549,18 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 			if charmerSess == nil {
 				charmerMotion = s.findCreatureMotionLocked(mapID, instanceID, lastCharmer)
 			}
+			// CreatureAI::OnCharmed (CreatureAI.cpp:54-70) engages via
+			// EngageWithTarget -> AddThreat: a new threat ref fires AtEngage
+			// (JustStartedThreateningMe -> EngagementStart), but a charmer
+			// already on the CombatStop-kept threat list adds to an existing
+			// ref, which never reaches ProcessAIUpdates — so the dismount /
+			// home legs run only on a new ref.
+			charmerNew := !m.ThreatMgr.HasThreatEntry(lastCharmer)
 			s.creatureAddThreat(m, lastCharmer, 0, true, charmerSess, charmerMotion)
+			if charmerNew {
+				atEngageDismount(m)
+				atEngageSetHomePosition(m)
+			}
 			m.TargetGUID = lastCharmer
 			m.InCombat = true
 			engaged = true

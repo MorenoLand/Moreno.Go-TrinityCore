@@ -166,7 +166,18 @@ func (s *Server) memberEngagingTarget(ctx context.Context, motion *creatureMotio
 		if member.ThreatMgr == nil {
 			member.ThreatMgr = NewThreatManager(member)
 		}
+		wasInCombat := member.InCombat
 		s.creatureAddThreat(member, targetGUID, 0.0, true, targetSess, nil)
+		// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447) via
+		// CreatureGroup::MemberEngagingTarget (CreatureGroups.cpp:226-255)
+		// -> EngageWithTarget: each freshly engaged member dismounts and
+		// re-homes; an already-engaged member never re-fires (CreatureAI
+		// ::EngagementStart is _isEngaged-guarded), so the legs ride the
+		// pre-add engagement state.
+		if !wasInCombat {
+			atEngageDismount(member)
+			atEngageSetHomePosition(member)
+		}
 		member.TargetGUID = targetGUID
 		member.InCombat = true
 		member.Moving = false

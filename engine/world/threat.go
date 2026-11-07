@@ -3098,6 +3098,13 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	if motion.ThreatMgr.GetCurrentVictim() == s.playerGUID {
 		return
 	}
+	// Spell::EffectTaunt (SpellEffects.cpp:3160-3163) matches threat only
+	// on a non-empty list: an empty-list taunt engages nothing in C++
+	// (MatchUnitThreatToHighestThreat returns before AddThreat), so the
+	// combat set below rides the pre-match list state — a current victim
+	// is set exactly when the list is non-empty (ThreatManager installs
+	// one on the first ref and clears it with the list).
+	hadThreat := motion.ThreatMgr.GetCurrentVictim() != 0
 	switched, newVictim := s.server.matchUnitThreatToHighestThreat(motion, s.playerGUID, s, nil)
 	if switched || newVictim != motion.TargetGUID {
 		motion.TargetGUID = newVictim
@@ -3107,8 +3114,10 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 			switchStart = pendingAttackStart{creature: motion.GUID, victim: newVictim, mapID: motion.Map, instanceID: motion.InstanceID, x: motion.X, y: motion.Y, z: motion.Z, phase: motion.PhaseMask}
 		}
 	}
-	motion.InCombat = true
-	motion.Moving = true
+	if hadThreat {
+		motion.InCombat = true
+		motion.Moving = true
+	}
 }
 
 // distributeHealingThreat calculates and splits healing threat among all creatures
