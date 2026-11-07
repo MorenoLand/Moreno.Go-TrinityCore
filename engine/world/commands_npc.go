@@ -446,25 +446,14 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 		return
 	}
 	p := s.player
-	// SaveToDB (cs_npc.cpp:163): spawnMask is 1 << Map::GetSpawnMode —
-	// the instance difficulty (dungeon/raid) on instance maps, normal
-	// elsewhere — and phaseMask is GetPhaseMaskForSpawn: PHASEMASK_NORMAL
-	// for a GM, else the player's phase (a .modify phase override stands
-	// for the phase-aura leg). The GM-with-phase-aura leg and the
-	// transport leg (CreateNPCPassenger + transport offsets) have no Go
-	// bridge and stay open.
-	spawnMode := uint32(0)
-	if s.isDungeonMap(p.Map) {
-		spawnMode = uint32(p.DungeonDifficulty)
-	} else if raidMapID(s.server, p.Map) {
-		spawnMode = uint32(p.RaidDifficulty)
-	}
-	phaseMask := s.currentPlayerPhaseMask()
-	if p.PhaseMaskOverrideSet {
-		phaseMask = p.PhaseMaskOverride
-	} else if p.PlayerFlags&playerFlagGM != 0 || p.ExtraFlags&playerExtraGMOn != 0 {
-		phaseMask = 1
-	}
+	// SaveToDB (cs_npc.cpp:163): spawnMask is 1 << Map::GetSpawnMode and
+	// phaseMask is GetPhaseMaskForSpawn (Player.cpp:25279) — a GM reads
+	// the first SPELL_AURA_PHASE aura's misc value, else PHASEMASK_NORMAL;
+	// the result strips the normal bit when another phase bit is set. The
+	// transport leg (CreateNPCPassenger + transport offsets) has no Go
+	// bridge and stays open.
+	spawnMode := s.playerSpawnMode()
+	phaseMask := s.playerPhaseMaskForSpawn()
 	// spawntimesecs default mirrors the world DB column default for fresh
 	// rows; the live-spawn respawn-delay legs have no Go bridge.
 	if _, err := db.ExecContext(ctx,
@@ -624,22 +613,14 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 	}
 	// Creature::DeleteFromDB (Creature.cpp:1861): the row must exist first,
 	// then every live creature with that spawn id on every map with the
-	// row's map id is despawned, and the creature, spawn_group and
-	// creature_addon rows are deleted. The respawn-time removal has no Go
+	// row's map id is despawned, and the creature, spawn_group,
+	// creature_addon, game_event_creature, game_event_model_equip and
+	// linked_respawn rows are deleted. The respawn-time removal has no Go
 	// model and stays open.
-	var rowMap uint32
-	if err := db.QueryRowContext(ctx, "SELECT map FROM creature WHERE guid = ?", guid).Scan(&rowMap); err != nil {
+	if !s.deleteCreatureFromDB(ctx, guid) {
 		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
 		return
 	}
-	if s.server != nil {
-		s.npcDespawnLiveSpawn(ctx, guid, rowMap)
-	}
-	if _, err := db.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid); err != nil {
-		return
-	}
-	_, _ = db.ExecContext(ctx, "DELETE FROM spawn_group WHERE spawnType = 0 AND spawnId = ?", guid)
-	_, _ = db.ExecContext(ctx, "DELETE FROM creature_addon WHERE guid = ?", guid)
 	s.sendSysMessage("Creature deleted.") // LANG_COMMAND_DELCREATMESSAGE 270
 }
 
@@ -682,6 +663,39 @@ func (s *session) npcDespawnLiveSpawn(ctx context.Context, guid, mapID uint32) {
 		s.server.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), d.mapID, d.instanceID, d.x, d.y, d.z, d.phase)
 		s.server.fireCreatureLuaEvent(ctx, d.motion, scripting.CreatureEventOnRemove)
 	}
+}
+
+// deleteCreatureFromDB is the Creature::DeleteFromDB twin
+// (Creature.cpp:1861-1933): false when the spawn has no creature row
+// (GetCreatureData nil); on success every live creature with that spawn
+// id is despawned (npcDespawnLiveSpawn) and the creature, spawn-group,
+// creature_addon, game-event and linked-respawn rows are deleted. The
+// respawn-time removal has no Go model. The game_event_model_equip leg
+// (WORLD_DEL_GAME_EVENT_MODEL_EQUIP) and both linked_respawn legs
+// (guid + linkedGuid, linkType 0/1 and 0/3, SpawnData.h:109-112) were
+// missing from the npc-delete port; the wp arms share this helper.
+func (s *session) deleteCreatureFromDB(ctx context.Context, guid uint32) bool {
+	db := s.npcWorldDB()
+	if db == nil {
+		return false
+	}
+	var rowMap uint32
+	if err := db.QueryRowContext(ctx, "SELECT map FROM creature WHERE guid = ?", guid).Scan(&rowMap); err != nil {
+		return false
+	}
+	if s.server != nil {
+		s.npcDespawnLiveSpawn(ctx, guid, rowMap)
+	}
+	if _, err := db.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid); err != nil {
+		return false
+	}
+	_, _ = db.ExecContext(ctx, "DELETE FROM spawn_group WHERE spawnType = 0 AND spawnId = ?", guid)
+	_, _ = db.ExecContext(ctx, "DELETE FROM creature_addon WHERE guid = ?", guid)
+	_, _ = db.ExecContext(ctx, "DELETE FROM game_event_creature WHERE guid = ?", guid)
+	_, _ = db.ExecContext(ctx, "DELETE FROM game_event_model_equip WHERE guid = ?", guid)
+	_, _ = db.ExecContext(ctx, "DELETE FROM linked_respawn WHERE guid = ? AND linkType IN (0, 1)", guid)
+	_, _ = db.ExecContext(ctx, "DELETE FROM linked_respawn WHERE linkedGuid = ? AND linkType IN (0, 3)", guid)
+	return true
 }
 
 // handleNPCNear mirrors HandleNpcNearCommand (cs_npc.cpp:568): a distance-

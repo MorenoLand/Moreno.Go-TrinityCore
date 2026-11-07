@@ -27,18 +27,26 @@ import (
 //     position (new path = max id + 1 when no creature selected and no id).
 //   - `event add|del|mod|listid`: native waypoint_scripts table ops.
 //   - `load <pathid>`: native DB (creature_addon path_id upsert + creature
-//     MovementType = 2) plus live motion-map refresh.
+//     MovementType = 2) plus live motion-map refresh, creature Say, and
+//     walk-home on unload (MoveTargetedHome spline).
 //   - `modify delay|action|action_chance|move_type|del|move`: partial —
 //     needs a selected visual waypoint (entry 1); the wpguid link column may
 //     be absent, so the path/point is resolved by position proximity (the C++
-//     fallback query). The visual-creature respawn legs use plain creature
-//     table rows.
+//     fallback query). `del`/`move` run the DeleteFromDB twin (live despawn
+//     + multi-table cleanup, 242 on failure); `move` recreates with a new
+//     GUID and leaves wpguid stale, as C++ does. The 222 search message
+//     text is unseeded (TDB) and stays unsent.
 //   - `unload`: native DB (DELETE creature_addon, MovementType = 0) plus live
-//     motion-map refresh.
-//   - `reload <id>`: native probe — Go reads waypoint_data on demand.
-//   - `show on|off|first|last|info [pathid]`: partial-native — visual
-//     waypoints are entry-1 creature rows (the npc-add pattern); `off`
-//     removes all entry-1 rows.
+//     motion-map refresh, walk-home spline, and creature Say.
+//   - `reload <id>`: re-reads waypoint_data and replaces Points on every
+//     live motion patrolling that path (ReloadPath twin); a missing path
+//     is a silent no-op for live motions.
+//   - `show on|off|first|last|info [pathid]`: visual waypoints are entry-1
+//     creature rows (the npc-add pattern) spawned at the player's
+//     phase/spawn mode; `on`/`first`/`last` mimic the selected creature's
+//     display at half scale (`on` also sets level min(point, 255)) and
+//     abort with 228/230 on spawn failure; `on`/`off` cleanup runs the
+//     DeleteFromDB twin per visual (242 + TOOFAR trio on failure).
 //
 // Creature selection resolves through the live motion map — the
 // getSelectedCreature twin (Chat.cpp:336-341, ObjectAccessor::
@@ -63,25 +71,65 @@ func (s *session) wpSelectedCreature(ctx context.Context) (guid, entry uint32, o
 	return objectGUIDCounter(motion.GUID), motion.Entry, true
 }
 
+// playerPhaseMaskForSpawn is Player::GetPhaseMaskForSpawn
+// (Player.cpp:25279-25297) for the session player: a .modify phase
+// override stands as-is; a GM reads the first SPELL_AURA_PHASE aura's
+// misc value, else PHASEMASK_NORMAL; a non-GM reads the current phase
+// mask (phase-aura OR, else 1); the result strips the normal bit when
+// another phase bit is set, falling back to it. Mirrors the Lua
+// GetPhaseMaskForSpawn bridge (lua_player.go:827-852); the npc-add arm
+// shares it (cs_npc.cpp:163 SaveToDB phase leg).
+func (s *session) playerPhaseMaskForSpawn() uint32 {
+	if s == nil || s.player == nil {
+		return 1
+	}
+	if s.player.PhaseMaskOverrideSet {
+		return s.player.PhaseMaskOverride
+	}
+	var phase uint32
+	if s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0 {
+		phase = 1
+		s.castMu.Lock()
+		for _, aura := range s.activeAuras {
+			if aura != nil && !aura.Stopped && aura.AuraType == spellAuraPhase {
+				phase = uint32(aura.MiscValue)
+				break
+			}
+		}
+		s.castMu.Unlock()
+	} else {
+		phase = s.currentPlayerPhaseMask()
+	}
+	if stripped := phase &^ 1; stripped != 0 {
+		return stripped
+	}
+	return 1
+}
+
+// playerSpawnMode is Map::GetSpawnMode for the player's map (cs_npc.cpp:163
+// SaveToDB spawnMask leg): the instance difficulty (dungeon/raid) on
+// instance maps, normal elsewhere. Shared by npc-add and wp visual spawns.
+func (s *session) playerSpawnMode() uint32 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	if s.isDungeonMap(s.player.Map) {
+		return uint32(s.player.DungeonDifficulty)
+	}
+	if raidMapID(s.server, s.player.Map) {
+		return uint32(s.player.RaidDifficulty)
+	}
+	return 0
+}
+
 // wpRefreshMotion refreshes a live creature's motion entry after a path
 // load/unload (creaturemotion.go motion map).
-func (s *session) wpRefreshMotion(ctx context.Context, guid uint32, pathID uint32, moveType uint32) {
-	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return
-	}
-	var entry, mapID uint32
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map FROM creature WHERE guid = ?", guid).Scan(&entry, &mapID); err != nil {
+func (s *session) wpRefreshMotion(ctx context.Context, motion *creatureMotion, pathID uint32, moveType uint32) {
+	if s.server == nil || motion == nil {
 		return
 	}
 	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
-	// The motion map is keyed by the full world GUID (creatureWorldGUID:
-	// counter | entry<<24 | 0xF130<<48), so look up by the std key — the
-	// bare spawn counter never matches a motion with entry != 0.
-	motion := s.server.findCreatureMotionLocked(mapID, 0, creatureWorldGUID(guid, entry))
-	if motion == nil {
-		return
-	}
 	motion.MoveType = moveType
 	motion.PathID = pathID
 	motion.NextIdx = 0
@@ -360,7 +408,17 @@ func (s *session) handleWpLoad(ctx context.Context, args []string) {
 		_, _ = wdb.ExecContext(ctx, "INSERT INTO creature_addon (guid, path_id) VALUES (?, ?)", guid, pathID)
 	}
 	_, _ = wdb.ExecContext(ctx, "UPDATE creature SET MovementType = 2 WHERE guid = ?", guid)
-	s.wpRefreshMotion(ctx, guid, pathID, 2)
+	// LoadPath + SetDefaultMovementType(WAYPOINT) + Initialize
+	// (cs_wp.cpp:223-226): the live motion refreshes from the selected
+	// motion directly — the old DB-row lookup no-opped for pets, vehicles
+	// and temp summons, which C++ loads the path on all the same.
+	if motion := s.castCommandSelectedCreature(); motion != nil {
+		s.wpRefreshMotion(ctx, motion, pathID, 2)
+		// target->Say("Path loaded.", LANG_UNIVERSAL): the creature speaks
+		// in-world (npcCreatureChat twin), not a GM-only sysmessage.
+		s.npcCreatureChat(motion, 0x0C, languageUniversal, "Path loaded.", float64(s.server.Config.ChatListenRangeSay))
+		return
+	}
 	s.sendSysMessage("Path loaded.")
 }
 
@@ -388,16 +446,30 @@ func (s *session) handleWpUnload(ctx context.Context) {
 	}
 	_, _ = wdb.ExecContext(ctx, "DELETE FROM creature_addon WHERE guid = ?", guid)
 	_, _ = wdb.ExecContext(ctx, "UPDATE creature SET MovementType = 0 WHERE guid = ?", guid)
-	s.wpRefreshMotion(ctx, guid, 0, 0)
+	// LoadPath(0) + SetDefaultMovementType(IDLE) + MoveTargetedHome +
+	// Initialize + Say (cs_wp.cpp:268-279): the creature walks home on a
+	// HomeMovementGenerator spline (launchCreatureScriptSpline with the
+	// home move type, which fires OnReachHome on arrival) instead of
+	// standing where it was unloaded, then speaks in-world.
+	if motion := s.castCommandSelectedCreature(); motion != nil {
+		s.wpRefreshMotion(ctx, motion, 0, 0)
+		if s.server != nil {
+			s.server.motionMu.Lock()
+			homeX, homeY, homeZ := motion.HomeX, motion.HomeY, motion.HomeZ
+			s.server.motionMu.Unlock()
+			s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, true, movementGeneratorHome, false)
+		}
+		s.npcCreatureChat(motion, 0x0C, languageUniversal, "Path unloaded.", float64(s.server.Config.ChatListenRangeSay))
+		return
+	}
 	s.sendSysMessage("Path unloaded.")
 }
 
-// handleWpReload mirrors HandleWpReloadCommand (cs_wp.cpp:231): Go reads
-// waypoint_data on demand, so the probe is the reload for motions started
-// after the edit — live patrollers keep their snapshot (motion.Points),
-// which ReloadPath would have replaced via the shared store (R4-refresh
-// OPEN: needs cross-map motion enumeration). Empty args or id 0 return
-// false in C++ (framework help), not silent.
+// handleWpReload mirrors HandleWpReloadCommand (cs_wp.cpp:231):
+// ReloadPath re-reads waypoint_data into the shared store
+// (WaypointManager.cpp:85-130), so live patrollers on that path see the
+// new nodes. Empty args or id 0 return false in C++ (framework help),
+// not silent.
 func (s *session) handleWpReload(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandWpReload) {
 		return
@@ -416,7 +488,37 @@ func (s *session) handleWpReload(ctx context.Context, args []string) {
 		var one int
 		_ = wdb.QueryRowContext(ctx, "SELECT 1 FROM waypoint_data WHERE id = ? LIMIT 1", id).Scan(&one)
 	}
+	s.wpReloadLiveMotions(ctx, id)
 	s.sendSysMessage(fmt.Sprintf("Loading Path: %d", id))
+}
+
+// wpReloadLiveMotions is the ReloadPath live leg: every live motion
+// patrolling pathID on any map/instance re-reads the path (loadWaypoints
+// filters invalid move_type rows like ReloadPath does) and keeps its
+// current node, clamped when the new path is shorter. A missing path
+// leaves live motions untouched — C++ returns early on no rows.
+func (s *session) wpReloadLiveMotions(ctx context.Context, pathID uint32) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	points := s.server.loadWaypoints(ctx, pathID)
+	if len(points) == 0 {
+		return
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	for _, motions := range s.server.instanceCreatureMotion {
+		for _, motion := range motions {
+			if motion == nil || motion.PathID != pathID || motion.MoveType != 2 {
+				continue
+			}
+			motion.Points = points
+			if motion.NextIdx >= len(points) {
+				motion.NextIdx = 0
+			}
+			motion.Refreshed = time.Now()
+		}
+	}
 }
 
 // wpVisualPoint resolves the selected visual waypoint (entry 1) to its
@@ -483,22 +585,46 @@ func (s *session) handleWpModify(ctx context.Context, args []string) {
 	switch show {
 	case "del":
 		s.sendSysMessage(fmt.Sprintf("DEBUG: wp modify del, PathID: %d", pathID))
+		// DeleteFromDB first (cs_wp.cpp:650-674): on failure the waypoint
+		// row stays and LANG_WAYPOINT_NOTREMOVED (242) + error return.
+		if !s.deleteCreatureFromDB(ctx, guid) {
+			s.sendSysMessage(fmt.Sprintf("Waypoint %d not removed.", guid)) // LANG_WAYPOINT_NOTREMOVED 242, TDB enUS recall
+			return
+		}
 		_, _ = wdb.ExecContext(ctx, "DELETE FROM waypoint_data WHERE id = ? AND point = ?", pathID, point)
 		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET point = point - 1 WHERE id = ? AND point > ?", pathID, point)
-		_, _ = wdb.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid)
-		s.sendSysMessage("Waypoint removed.")
+		s.sendSysMessage("Waypoint removed.") // LANG_WAYPOINT_REMOVED 241
 		return
 	case "move":
 		if s.player == nil {
 			return
 		}
 		s.sendSysMessage(fmt.Sprintf("DEBUG: wp move, PathID: %d", pathID))
+		// DeleteFromDB + recreate (cs_wp.cpp:677-721): a delete failure or
+		// a failed recreate reports LANG_WAYPOINT_VP_NOTCREATED (228);
+		// the new visual gets a NEW spawn GUID at the player's
+		// position/phase, and waypoint_data.wpguid is NOT updated — it
+		// keeps pointing at the deleted GUID, so later modify/show arms
+		// fall back to the position-proximity query.
+		if !s.deleteCreatureFromDB(ctx, guid) {
+			s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228, TDB enUS recall
+			return
+		}
 		p := s.player
+		var newGUID uint32
+		if wdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM creature").Scan(&newGUID) != nil || newGUID == 0 {
+			s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228
+			return
+		}
+		if _, err := wdb.ExecContext(ctx,
+			"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 120, 0)",
+			newGUID, p.Map, 1<<s.playerSpawnMode(), s.playerPhaseMaskForSpawn(), p.X, p.Y, p.Z, p.Orientation); err != nil {
+			s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228
+			return
+		}
 		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE id = ? AND point = ?",
 			p.X, p.Y, p.Z, p.Orientation, pathID, point)
-		_, _ = wdb.ExecContext(ctx, "UPDATE creature SET position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
-			p.X, p.Y, p.Z, p.Orientation, guid)
-		s.sendSysMessage("Waypoint changed.")
+		s.sendSysMessage("Waypoint changed.") // LANG_WAYPOINT_CHANGED 236
 		return
 	}
 	if len(args) < 2 {
@@ -512,10 +638,20 @@ func (s *session) handleWpModify(ctx context.Context, args []string) {
 }
 
 // wpSpawnVisual spawns one visual-waypoint creature row (entry 1, the
-// npc-add pattern).
-func (s *session) wpSpawnVisual(ctx context.Context, x, y, z, o float64) uint32 {
+// npc-add pattern) at the player's map/phase/spawn mode
+// (cs_wp.cpp:854-857: Create + SaveToDB(map, 1 << spawnMode,
+// GetPhaseMaskForSpawn)). A failed INSERT returns 0 — the callers abort
+// with LANG_WAYPOINT_VP_NOTCREATED (228) / NOTCREATED (230) like C++.
+// When a creature is selected (displayID != 0), the fresh visual mimics
+// it live (cs_wp.cpp:868-872): its display id, half scale, and — for
+// `on` only — level min(point, 255). The row carries no display/scale
+// columns, so the mimic lands on the live motion materialized here
+// (motionFor twin of Create + LoadFromDB); DisplayIDKnown/ScriptScaleKnown
+// keep the sweep from re-affirming the template values, and LevelKnown
+// does the same for the level.
+func (s *session) wpSpawnVisual(ctx context.Context, x, y, z, o float64, displayID uint32, level uint32, withLevel bool) uint32 {
 	wdb := s.server.WorldStore.DB
-	if wdb == nil || s.player == nil {
+	if wdb == nil || s.player == nil || s.server == nil {
 		return 0
 	}
 	var guid uint32
@@ -523,11 +659,41 @@ func (s *session) wpSpawnVisual(ctx context.Context, x, y, z, o float64) uint32 
 		return 0
 	}
 	if _, err := wdb.ExecContext(ctx,
-		"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, 1, ?, 1, 1, ?, ?, ?, ?, 120, 0)",
-		guid, s.player.Map, x, y, z, o); err != nil {
+		"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 120, 0)",
+		guid, s.player.Map, 1<<s.playerSpawnMode(), s.playerPhaseMaskForSpawn(), x, y, z, o); err != nil {
 		return 0
 	}
+	if displayID != 0 {
+		var walkRate, runRate float64 = 1.0, 1.14286
+		_ = wdb.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(speed_walk, 0), 1.0), COALESCE(NULLIF(speed_run, 0), 1.14286) FROM creature_template WHERE entry = 1").Scan(&walkRate, &runRate)
+		motion := s.server.motionFor(ctx, guid, 1, s.player.Map, s.player.InstanceID, float32(x), float32(y), float32(z), float32(o), 0, 0, float32(walkRate), float32(runRate), 0)
+		if motion != nil {
+			s.server.motionMu.Lock()
+			motion.DisplayID = displayID
+			motion.DisplayIDKnown = true
+			motion.ScriptScale = 0.5
+			motion.ScriptScaleKnown = true
+			if withLevel {
+				motion.Level = level
+				motion.LevelKnown = true
+			}
+			s.server.motionMu.Unlock()
+		}
+	}
 	return guid
+}
+
+// wpSelectedDisplayID reads the selected creature's live display id for
+// the show mimic (cs_wp.cpp:868-872: SetDisplayId(target->GetDisplayId()));
+// 0 when nothing is selected.
+func (s *session) wpSelectedDisplayID() uint32 {
+	motion := s.castCommandSelectedCreature()
+	if motion == nil || s.server == nil {
+		return 0
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+	return motion.DisplayID
 }
 
 // handleWpShow mirrors HandleWpShowCommand (cs_wp.cpp:729): on, off, first,
@@ -609,15 +775,30 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("DEBUG: wp on, PathID: %d", pathID))
 		// Delete only this path's visuals (wpguids attached to its rows),
 		// not every visual waypoint in the world (cs_wp.cpp:818-843).
-		vrows, err := wdb.QueryContext(ctx, "SELECT wpguid FROM waypoint_data WHERE id = ? AND wpguid <> 0", pathID)
-		if err == nil {
+		// Each DeleteFromDB failure reports LANG_WAYPOINT_NOTREMOVED (242)
+		// for that guid, and any failure sends the TOOFAR trio (243-245)
+		// once; the spawn loop still runs (cs_wp.cpp:818-847).
+		var oldVisuals []uint32
+		if vrows, err := wdb.QueryContext(ctx, "SELECT wpguid FROM waypoint_data WHERE id = ? AND wpguid <> 0", pathID); err == nil {
 			for vrows.Next() {
 				var g uint32
 				if vrows.Scan(&g) == nil {
-					_, _ = wdb.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", g)
+					oldVisuals = append(oldVisuals, g)
 				}
 			}
 			vrows.Close()
+		}
+		hasError := false
+		for _, g := range oldVisuals {
+			if !s.deleteCreatureFromDB(ctx, g) {
+				s.sendSysMessage(fmt.Sprintf("Waypoint %d not removed.", g)) // LANG_WAYPOINT_NOTREMOVED 242, TDB enUS recall
+				hasError = true
+			}
+		}
+		if hasError {
+			s.sendSysMessage("Some visual waypoints are too far away to be removed.") // LANG_WAYPOINT_TOOFAR1 243, TDB enUS recall
+			s.sendSysMessage("They could not be removed from the database.")          // LANG_WAYPOINT_TOOFAR2 244, TDB enUS recall
+			s.sendSysMessage("Move closer and try again.")                            // LANG_WAYPOINT_TOOFAR3 245, TDB enUS recall
 		}
 		// No blanket wpguid reset: C++ never touches waypoint_data.wpguid
 		// in `on` (cs_wp.cpp:820-874) — each re-spawned point overwrites
@@ -628,15 +809,26 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 			return
 		}
 		defer pts.Close()
+		displayID := s.wpSelectedDisplayID()
 		for pts.Next() {
 			var point uint32
 			var x, y, z, o float64
 			if pts.Scan(&point, &x, &y, &z, &o) != nil {
 				continue
 			}
-			if vg := s.wpSpawnVisual(ctx, x, y, z, o); vg != 0 {
-				_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = ? WHERE id = ? AND point = ?", vg, pathID, point)
+			// A failed Create/LoadFromDB reports LANG_WAYPOINT_VP_NOTCREATED
+			// (228) and aborts the whole command (cs_wp.cpp:858-867); the
+			// mimic level is min(point, STRONG_MAX_LEVEL 255).
+			level := point
+			if level > 255 {
+				level = 255
 			}
+			vg := s.wpSpawnVisual(ctx, x, y, z, o, displayID, level, true)
+			if vg == 0 {
+				s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228, TDB enUS recall
+				return
+			}
+			_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = ? WHERE id = ? AND point = ?", vg, pathID, point)
 		}
 		s.sendSysMessage("Showing the current creature's path.")
 	case "first", "last":
@@ -659,7 +851,18 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 			s.sendSysMessage(fmt.Sprintf("Waypoint %d not found.", pathID)) // LANG_WAYPOINT_NOTFOUND 220 / NOTFOUNDLAST 221
 			return
 		}
-		s.wpSpawnVisual(ctx, x, y, z, o)
+		// Create/LoadFromDB failure aborts with LANG_WAYPOINT_VP_NOTCREATED
+		// (228, first) or LANG_WAYPOINT_NOTCREATED (230, last)
+		// (cs_wp.cpp:909-917, 955-963); the mimic is display + half scale,
+		// no level (unlike `on`).
+		if s.wpSpawnVisual(ctx, x, y, z, o, s.wpSelectedDisplayID(), 0, false) == 0 {
+			if show == "first" {
+				s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228, TDB enUS recall
+			} else {
+				s.sendSysMessage("Waypoint not created.") // LANG_WAYPOINT_NOTCREATED 230, TDB enUS recall
+			}
+			return
+		}
 	case "off":
 		rows, err := wdb.QueryContext(ctx, "SELECT guid FROM creature WHERE id = 1")
 		if err != nil {
@@ -668,21 +871,36 @@ func (s *session) handleWpShow(ctx context.Context, args []string) {
 			s.sendSysMessage("Visual waypoint not found.") // LANG_WAYPOINT_VP_NOTFOUND 227, TDB enUS recall
 			return
 		}
-		found := false
+		var guids []uint32
 		for rows.Next() {
 			var g uint32
 			if rows.Scan(&g) == nil {
-				_, _ = wdb.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", g)
-				found = true
+				guids = append(guids, g)
 			}
 		}
 		rows.Close()
-		if !found {
+		if len(guids) == 0 {
 			s.sendSysMessage("Visual waypoint not found.") // LANG_WAYPOINT_VP_NOTFOUND 227, TDB enUS recall
 			return
 		}
+		// Per-guid DeleteFromDB (cs_wp.cpp:973-1013): a failure reports
+		// LANG_WAYPOINT_NOTREMOVED (242) for that guid, and any failure
+		// sends the TOOFAR trio (243-245) once; the wpguid reset and the
+		// ALLREMOVED message still happen.
+		hasError := false
+		for _, g := range guids {
+			if !s.deleteCreatureFromDB(ctx, g) {
+				s.sendSysMessage(fmt.Sprintf("Waypoint %d not removed.", g)) // LANG_WAYPOINT_NOTREMOVED 242, TDB enUS recall
+				hasError = true
+			}
+		}
 		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = 0")
-		s.sendSysMessage("All visual waypoints removed.")
+		if hasError {
+			s.sendSysMessage("Some visual waypoints are too far away to be removed.") // LANG_WAYPOINT_TOOFAR1 243, TDB enUS recall
+			s.sendSysMessage("They could not be removed from the database.")          // LANG_WAYPOINT_TOOFAR2 244, TDB enUS recall
+			s.sendSysMessage("Move closer and try again.")                            // LANG_WAYPOINT_TOOFAR3 245, TDB enUS recall
+		}
+		s.sendSysMessage("All visual waypoints removed.") // LANG_WAYPOINT_VP_ALLREMOVED 229
 	default:
 		s.sendSysMessage("DEBUG: wpshow - no valid command found")
 	}

@@ -81,6 +81,7 @@ type creatureMotion struct {
 	Faction               uint32
 	PhaseMask             uint32 // WorldObject::GetPhaseMask live value (Object.h:323): the spawn c.phaseMask row for DB creatures (updateActiveCreatures sweep), the summoner phase for temp summons and pets; 0 = unset, read as PHASEMASK_NORMAL (1) by the totem phase helper
 	Level                 uint32
+	LevelKnown            bool // set by an explicit level override (wp show on mimic, SetLevel in C++ is a live slot the sweep must not re-affirm from the template); mirrors the ReactStateKnown pattern below
 	UnitFlags             uint32
 	DynamicFlags          uint32
 	FlagsExtra            uint32
@@ -4683,6 +4684,12 @@ func (s *Server) loadWaypoints(ctx context.Context, pathID uint32) []waypointPoi
 			continue
 		}
 		p.Point, p.X, p.Y, p.Z, p.Orientation, p.MoveType, p.Delay = uint32(point), float32(x), float32(y), float32(z), float32(orientation), uint32(moveType), uint32(delay)
+		// WaypointMgr::ReloadPath (WaypointManager.cpp:85-130) skips rows
+		// with move_type >= WAYPOINT_MOVE_TYPE_MAX (4, WaypointDefines.h:31);
+		// the shared store never holds them, so neither does this read.
+		if moveType >= 4 {
+			continue
+		}
 		points = append(points, p)
 	}
 	return points
@@ -4790,7 +4797,9 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			// template until respawn).
 			if !motion.EntryOverride {
 				motion.Faction = uint32(faction)
-				motion.Level = uint32(level)
+				if !motion.LevelKnown {
+					motion.Level = uint32(level)
+				}
 				motion.UnitFlags = uint32(unitFlags)
 				motion.DynamicFlags = uint32(dynamicFlags)
 				motion.FlagsExtra = uint32(flagsExtra)
