@@ -373,11 +373,18 @@ type Server struct {
 	terrainTiles           map[uint64][]terrainSpawn
 	terrainTileKnown       map[uint64]bool
 	terrainModels          map[string]*terrainModel
-	weatherMu              sync.Mutex
-	weather                map[uint32]*zoneWeather
-	weatherOverrides       map[uint32]zoneWeatherOverride
-	zoneLightOverrides     map[uint32][]zoneLightOverride
-	stopOnce               sync.Once
+	// vmapDisableMu/vmapDisableFlags cache the DISABLE_TYPE_VMAP rows
+	// (disables sourceType 6) per map, lazily loaded by
+	// Server.vmapDisabledFor (terrain.go); .reload disables drops the cache
+	// (commands_reload.go). Every other disables row is read live, but the
+	// terrain path is too hot for a query per LOS/height call.
+	vmapDisableMu      sync.RWMutex
+	vmapDisableFlags   map[uint32]uint8
+	weatherMu          sync.Mutex
+	weather            map[uint32]*zoneWeather
+	weatherOverrides   map[uint32]zoneWeatherOverride
+	zoneLightOverrides map[uint32][]zoneLightOverride
+	stopOnce           sync.Once
 }
 
 type session struct {

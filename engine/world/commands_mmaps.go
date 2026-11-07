@@ -141,6 +141,10 @@ func (s *session) handleMmapPathCommand(ctx context.Context) {
 // (DisableMgr.cpp:418-422): CONFIG_ENABLE_MMAPS and no DISABLE_TYPE_MMAP
 // (7) disables row for the map. For MMAP disables IsDisabledFor returns true
 // on the entry's mere presence (DisableMgr.cpp:404-405), so flags are ignored.
+// This stats display is the only Go enforcement of MMAP disables: the C++
+// pathfinding gate (PathGenerator.cpp:41) and tile-load gate (Map.cpp:169)
+// have no Go counterpart — Go runs no navmesh pathfinder
+// (creaturemotion.go:3920) and loads no mmap tiles.
 func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool {
 	if s.server == nil || !s.server.Config.EnableMmaps {
 		return false

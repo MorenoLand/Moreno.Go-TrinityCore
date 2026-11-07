@@ -6690,6 +6690,19 @@ type disableCommandType struct {
 
 // disableCommandTypes mirrors the arm names of the add/remove tables
 // (cs_disable.cpp:52-75) in table order.
+//
+// Enforcement status of the stored rows (D-5): the add/remove arms write
+// rows for all eight DisableTypes, but only some have Go consumers.
+// DISABLE_TYPE_OUTDOORPVP (5) has exactly one C++ consumer —
+// OutdoorPvPMgr::LoadFromDB (OutdoorPvPMgr.cpp:70) skips OutdoorPvP types
+// with a disables row — and Go has no OutdoorPvP manager (server.go:2613),
+// so outdoorpvp rows are stored but unenforced until a manager lands.
+// DISABLE_TYPE_MMAP (7) is consumed in C++ by PathGenerator::CalculatePath
+// (PathGenerator.cpp:41) and Map::LoadMMapTile (Map.cpp:169) via
+// IsPathfindingEnabled; Go runs no navmesh pathfinder (creaturemotion.go:3920)
+// and loads no mmap tiles, so mmap rows are enforced only in the `mmap stats`
+// display (commands_mmaps.go:144). DISABLE_TYPE_VMAP (6) is enforced on the
+// terrain path (terrain.go: vmapDisabledFor).
 var disableCommandTypes = []disableCommandType{
 	{disableTypeSpell, "spell", permissionCommandDisableAddSpell, permissionCommandDisableRemoveSpell},
 	{disableTypeQuest, "quest", permissionCommandDisableAddQuest, permissionCommandDisableRemoveQuest},
@@ -6972,9 +6985,16 @@ func (s *session) handleCmdEvent(ctx context.Context, args []string) {
 // handleEventActiveList mirrors HandleEventActiveListCommand
 // (cs_event.cpp:66-88): one line per active event, ascending by event id
 // (std::set<uint16> order), then "No event found." when the list is empty
-// (LANG_NOEVENTFOUND, 584). The console-vs-chat branch (LANG 1103 vs 583)
-// is moot here: Go commands always run in a session, so the plain line
-// is emitted.
+// (LANG_NOEVENTFOUND, 584). The line renders LANG_EVENT_ENTRY_LIST_CHAT
+// (583) exactly as the lookup arm does (cs_lookup.cpp:280-283): the same
+// LANG id with the same (id, id, description, active) args, so the two arms
+// share one rendering — the second id is the |Hgameevent:|h hyperlink id.
+// The console-vs-chat branch (LANG 1103 vs 583) is moot here: Go commands
+// always run in a session, so the chat form is emitted. TDB-TEXT GAP: the
+// LANG 583/584 format strings live in the trinity_string table (TDB data —
+// no data rows exist in Go sql/ or the C++ sql/ tree), so the wording and
+// separators follow the lookup arm's established form and are unverified
+// against the TDB text (same class as the tick-309 R3 blocker).
 func (s *session) handleEventActiveList(ctx context.Context) {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
@@ -6991,7 +7011,7 @@ func (s *session) handleEventActiveList(ctx context.Context) {
 		if ev, ok := data[id]; ok {
 			desc = ev.Description
 		}
-		s.sendSysMessage(fmt.Sprintf("%d %s Active", id, desc))
+		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hgameevent:%d|h[%s]|h|r Active", id, id, desc))
 	}
 	if len(ids) == 0 {
 		s.sendSysMessage("No event found.")
@@ -7005,6 +7025,13 @@ func (s *session) handleEventActiveList(ctx context.Context) {
 // The active marker comes from the same GAMEEVENT_NORMAL-only snapshot the
 // Go tree already computes; world-event rows (world_event != 0) report their
 // schedule columns but their state-driven active flag has no Go model.
+// The eight LANG 586 args print in C++ order across the six lines; the
+// occurrence/length render via secsToTimeStringFull (Util.cpp:97 FullText)
+// and the timestamps via timeToTimestampStr (Util.cpp:272), both verified
+// against the C++ helpers. TDB-TEXT GAP: the LANG 586 format string itself
+// lives in the trinity_string table (TDB data, not in-repo — see
+// handleEventActiveList), so the line labels and the single- vs multi-line
+// split follow the prior rendering and are unverified against the TDB text.
 func (s *session) handleEventInfo(ctx context.Context, args []string) {
 	const syntax = "Syntax: .event info <eventId>"
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {

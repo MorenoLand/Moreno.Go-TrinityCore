@@ -34,6 +34,61 @@ const (
 	terrainMaxHeight = float32(100000)
 )
 
+// vmapDisable* mirror the VMAP::VMAP_DISABLE_* bits (VMapManager2.h:71-74),
+// the disables-table flags for DISABLE_TYPE_VMAP rows (DisableMgr.h:33).
+// getObjectHitPos (VMapManager2.cpp:189) has no Go twin — no Go caller needs
+// a hit position — so only the LOS/height/areaflag/liquid legs are gated.
+const (
+	vmapDisableAreaFlag     = uint8(0x1)
+	vmapDisableHeight       = uint8(0x2)
+	vmapDisableLOS          = uint8(0x4)
+	vmapDisableLiquidStatus = uint8(0x8)
+)
+
+// vmapDisabledFor mirrors DisableMgr::IsVMAPDisabledFor
+// (DisableMgr.cpp:413-416): (row.flags & flag) != 0 for the map's
+// DISABLE_TYPE_VMAP row, false when the map has no row. The flags are cached
+// per map (the terrain path is too hot for a query per call) and dropped by
+// .reload disables (commands_reload.go), matching C++ LoadDisables
+// rebuilding the in-memory map; .disable add/remove alone do not refresh
+// them, exactly as in C++ (cs_disable.cpp only writes the DB row).
+func (s *Server) vmapDisabledFor(mapID uint32, flag uint8) bool {
+	if s == nil {
+		return false
+	}
+	s.vmapDisableMu.RLock()
+	flags, ok := s.vmapDisableFlags[mapID]
+	s.vmapDisableMu.RUnlock()
+	if ok {
+		return flags&flag != 0
+	}
+	var stored uint8
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		var rowFlags uint32
+		if err := s.WorldStore.DB.QueryRow("SELECT flags FROM disables WHERE sourceType = 6 AND entry = ?", mapID).Scan(&rowFlags); err == nil {
+			stored = uint8(rowFlags)
+		}
+	}
+	s.vmapDisableMu.Lock()
+	if s.vmapDisableFlags == nil {
+		s.vmapDisableFlags = make(map[uint32]uint8)
+	}
+	s.vmapDisableFlags[mapID] = stored
+	s.vmapDisableMu.Unlock()
+	return stored&flag != 0
+}
+
+// invalidateVMapDisableFlags drops the cached DISABLE_TYPE_VMAP flags so the
+// next terrain query re-reads the disables table.
+func (s *Server) invalidateVMapDisableFlags() {
+	if s == nil {
+		return
+	}
+	s.vmapDisableMu.Lock()
+	s.vmapDisableFlags = nil
+	s.vmapDisableMu.Unlock()
+}
+
 type terrainVector struct{ X, Y, Z float32 }
 type terrainSpawn struct {
 	Flags      uint32
@@ -1071,6 +1126,11 @@ func (s *Server) hasLineOfSightFlags(mapID uint32, x1, y1, z1, x2, y2, z2 float3
 	if s == nil || s.terrainTileKnown == nil || s.terrainTiles == nil || s.terrainModels == nil || x1 == x2 && y1 == y2 && z1 == z2 {
 		return true
 	}
+	// VMapManager2::isInLineOfSight (VMapManager2.cpp:166-167): a
+	// VMAP_DISABLE_LOS row for the map makes every LOS check pass.
+	if s.vmapDisabledFor(mapID, vmapDisableLOS) {
+		return true
+	}
 	gridX1 := int(float64(x1)/terrainGridSize + terrainCenterGrid)
 	gridY1 := int(float64(y1)/terrainGridSize + terrainCenterGrid)
 	gridX2 := int(float64(x2)/terrainGridSize + terrainCenterGrid)
@@ -1114,6 +1174,12 @@ func (s *Server) hasLineOfSightFlags(mapID uint32, x1, y1, z1, x2, y2, z2 float3
 }
 
 func (s *Server) mapWMOAreaID(mapID uint32, x, y, z float32) (uint32, bool) {
+	// VMapManager2::getAreaInfo (VMapManager2.cpp:238-239): a
+	// VMAP_DISABLE_AREAFLAG row makes the area-info leg report nothing, so
+	// the caller falls back to the grid area.
+	if s.vmapDisabledFor(mapID, vmapDisableAreaFlag) {
+		return 0, false
+	}
 	tileX := int(float64(x)/terrainGridSize + terrainCenterGrid)
 	tileY := int(float64(y)/terrainGridSize + terrainCenterGrid)
 	if tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64 {
@@ -1144,8 +1210,12 @@ func (s *Server) mapWMOAreaID(mapID uint32, x, y, z float32) (uint32, bool) {
 // (WMO and M2 alike), nearest hit winning. No height-calc toggle exists in
 // Go; an absent tile file reads no hit, the same as a disabled manager.
 // The phasemask overload's dynamic-tree leg (GetGameObjectFloor, Map.h:576)
-// is not modeled: Go has no dynamic GO collision tree.
+// is not modeled: Go has no dynamic GO collision tree. A VMAP_DISABLE_HEIGHT
+// row for the map (VMapManager2.cpp:219-220) makes the leg report no height.
 func (s *Server) mapVMapHeight(mapID uint32, x, y, z, maxSearchDist float32) (float32, bool) {
+	if s.vmapDisabledFor(mapID, vmapDisableHeight) {
+		return 0, false
+	}
 	tileX := int(float64(x)/terrainGridSize + terrainCenterGrid)
 	tileY := int(float64(y)/terrainGridSize + terrainCenterGrid)
 	if tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64 {
@@ -1214,6 +1284,12 @@ type vmapLiquid struct {
 // and grid liquid enabled.
 func (s *Server) mapVMapLiquidStatus(mapID uint32, x, y, z float32, reqLiquidType uint8) (vmapLiquid, bool) {
 	if s == nil || s.terrainTiles == nil || s.terrainModels == nil {
+		return vmapLiquid{}, false
+	}
+	// VMapManager2::GetLiquidLevel (VMapManager2.cpp:256-257): a
+	// VMAP_DISABLE_LIQUIDSTATUS row makes the vmap leg report no liquid,
+	// leaving the Map-level ground at INVALID_HEIGHT and grid liquid enabled.
+	if s.vmapDisabledFor(mapID, vmapDisableLiquidStatus) {
 		return vmapLiquid{}, false
 	}
 	tileX := int(float64(x)/terrainGridSize + terrainCenterGrid)

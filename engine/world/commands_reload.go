@@ -29,7 +29,16 @@ import (
 // these tables is read on demand straight from the world DB. "Reloading" a
 // table is therefore a probe read against the live DB (the Go equivalent of
 // the C++ Load* call, which re-reads the same tables) plus invalidation of
-// the few real Go caches (creatureStatsCache, the vehicle template maps).
+// the few real Go caches (creatureStatsCache, the vehicle template maps, the
+// per-map DISABLE_TYPE_VMAP flags cache in terrain.go). The `disables` arm
+// is the one place the probe alone would be a no-op: every other disables
+// row is read live, but the vmap flags are cached on the hot terrain path,
+// so the arm drops that cache (runReloadArm) and the "reloaded" message is
+// exact. C++ LoadDisables (DisableMgr.cpp:53) also validates rows and
+// CheckQuestDisables (:279) prunes quest rows for missing templates; Go has
+// no disables cache to rebuild and no quest cache to prune — a row for a
+// nonexistent quest can never match a live check — so there is no second
+// leg to port for that half of the C++ handler (cs_reload.cpp:1000-1008).
 // Each arm then broadcasts the same message the C++ arm sends via
 // SendGlobalGMSysMessage.
 //
@@ -212,6 +221,12 @@ func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) b
 	// must drop it or the next lookup would keep serving pre-reload rows.
 	if arm.table == "battleground_template" {
 		s.server.invalidateBattlegroundTemplates()
+	}
+	// The disables arm drops the cached DISABLE_TYPE_VMAP flags (terrain.go):
+	// the one disables cache in Go. The C++ handler (cs_reload.cpp:1000-1008)
+	// also runs CheckQuestDisables, which has no Go leg (see the file header).
+	if arm.table == "disables" {
+		s.server.invalidateVMapDisableFlags()
 	}
 	if !quiet && arm.msg != "" {
 		if arm.global {
