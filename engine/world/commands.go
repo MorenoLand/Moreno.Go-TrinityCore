@@ -7175,6 +7175,42 @@ func (n *commandNode) withPerm(perm uint32) *commandNode {
 // entry means the C++ node carries no permission (old-form sub-table
 // group: character deleted, account set/lock/2fa, gobject add/set,
 // lookup player, npc add/set) and stays visible.
+// group returns the named child group node, creating it when absent.
+// A group node carries no handler and no permission of its own (the
+// C++ sub-table has none; the family's bare handler lives on the ""
+// entry, ChatCommand.cpp:46-55): visibility falls through to its
+// children via commandNodeVisible. Existing bare children registered
+// by add/addWithPerms are reused, so a 2-level "set"/"lock"/"2fa"
+// entry deepens in place.
+func (n *commandNode) group(name string) *commandNode {
+	if n.children == nil {
+		n.children = make(map[string]*commandNode)
+	}
+	if child, ok := n.children[name]; ok {
+		if child.children == nil {
+			child.children = make(map[string]*commandNode)
+		}
+		if child.aliases == nil {
+			child.aliases = make(map[string]string)
+		}
+		return child
+	}
+	child := &commandNode{name: name, children: make(map[string]*commandNode), aliases: make(map[string]string)}
+	n.children[name] = child
+	return child
+}
+
+// leaf returns the named child leaf node with its handler and RBAC
+// permission, creating it when absent. The handler receives only the
+// tokens after the leaf name, as the C++ invoker receives the tail
+// after the deepest matched node (ChatCommand.cpp:246-300).
+func (n *commandNode) leaf(name string, invoke func(ctx context.Context, args []string) bool, perm uint32) *commandNode {
+	child := n.group(name)
+	child.invoke = invoke
+	child.perm = perm
+	return child
+}
+
 func (n *commandNode) addWithPerms(name string, invoke func(ctx context.Context, args []string) bool, subPerms map[string]uint32, aliases map[string]string) *commandNode {
 	child := &commandNode{name: name, invoke: invoke, children: make(map[string]*commandNode), aliases: make(map[string]string)}
 	for sub, perm := range subPerms {
@@ -7267,11 +7303,18 @@ func (n *commandNode) resolve(tokens []string, visible func(*commandNode) bool) 
 		if child == nil {
 			break
 		}
-		if node.invoke != nil {
-			// Parameter canonicalization for the already-selected handler:
-			// the subcommand token only. Later tokens are raw handler
-			// parameters and must not be rewritten against the sibling
-			// subcommands (see the resolve comment above).
+		// Descend into the child when it is structural: it carries its
+		// own handler or further subcommands (the 3-level groups the
+		// R13 census wires, e.g. account set sec email, debug play
+		// cinematic — C++ tokenizes multi-word table names into real
+		// tree levels, LoadCommandsIntoMap, ChatCommand.cpp:57-70, and
+		// TryExecuteCommand descends them with prefix matching at
+		// every level). A bare child with neither is a parameter name
+		// of the current handler (the 2-level registration): the
+		// subcommand token only. Later tokens are raw handler
+		// parameters and must not be rewritten against the sibling
+		// subcommands (see the resolve comment above).
+		if node.invoke != nil && child.invoke == nil && len(child.children) == 0 {
 			paramDone = true
 			rewritten = append(rewritten, canonical)
 			consumed++
@@ -8468,7 +8511,35 @@ func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
 	root.addWithPerms("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(ctx, args); return true }, map[string]uint32{"chat": permissionCommandGMChat, "fly": permissionCommandGMFly, "ingame": permissionCommandGMIngame, "list": permissionCommandGMList, "visible": permissionCommandGMVisible, "on": permissionCommandGM, "off": permissionCommandGM}, map[string]string{"vis": "visible"})
 	root.addWithPerms("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, map[string]uint32{"god": permissionCommandCheatGod, "casttime": permissionCommandCheatCasttime, "cooldown": permissionCommandCheatCooldown, "power": permissionCommandCheatPower, "waterwalk": permissionCommandCheatWaterwalk, "status": permissionCommandCheatStatus, "taxi": permissionCommandCheatTaxi, "explore": permissionCommandCheatExplore}, nil)
-	root.addWithPerms("debug", func(ctx context.Context, args []string) bool { return s.handleCmdDebug(ctx, args) }, map[string]uint32{"areatriggers": permissionCommandDebug, "anim": permissionCommandDebug, "worldstate": permissionCommandDebug, "objectcount": permissionCommandDebug, "dummy": permissionCommandDebug, "neargraveyard": permissionCommandDebug, "lootrecipient": permissionCommandDebug, "instancespawn": permissionCommandDebug, "los": permissionCommandDebug, "play": permissionCommandDebug, "send": permissionCommandDebug, "threat": permissionCommandDebug, "threatinfo": permissionCommandDebug, "combat": permissionCommandDebug, "guidlimits": permissionCommandDebug, "wpgps": permissionCommandDebug, "transport": permissionCommandDebug, "arena": permissionCommandDebug, "bg": permissionCommandDebug, "questreset": permissionCommandDebug, "raidreset": permissionCommandDebug, "spawnvehicle": permissionCommandDebug, "entervehicle": permissionCommandDebug}, nil)
+	debugNode := root.addWithPerms("debug", func(ctx context.Context, args []string) bool { return s.handleCmdDebug(ctx, args) }, map[string]uint32{"areatriggers": permissionCommandDebug, "anim": permissionCommandDebug, "worldstate": permissionCommandDebug, "objectcount": permissionCommandDebug, "dummy": permissionCommandDebug, "neargraveyard": permissionCommandDebug, "lootrecipient": permissionCommandDebug, "instancespawn": permissionCommandDebug, "los": permissionCommandDebug, "play": permissionCommandDebug, "send": permissionCommandDebug, "threat": permissionCommandDebug, "threatinfo": permissionCommandDebug, "combat": permissionCommandDebug, "guidlimits": permissionCommandDebug, "wpgps": permissionCommandDebug, "transport": permissionCommandDebug, "arena": permissionCommandDebug, "bg": permissionCommandDebug, "questreset": permissionCommandDebug, "raidreset": permissionCommandDebug, "spawnvehicle": permissionCommandDebug, "entervehicle": permissionCommandDebug}, nil)
+	// R13 depth (cs_debug.cpp:63-82): "play" and "send" are
+	// sub-tables, so debug play cinematic / debug send spellfail are
+	// 3-token paths with prefix matching at every level. The arm
+	// name is prepended for the existing exact-switch handlers, and
+	// the nil-player guard of handleCmdDebug is preserved: the leaf
+	// path bypasses the family handler.
+	debugPlay := debugNode.group("play")
+	for _, arm := range []string{"cinematic", "movie", "sound", "music"} {
+		arm := arm
+		debugPlay.leaf(arm, func(ctx context.Context, args []string) bool {
+			if s.player == nil {
+				return true
+			}
+			s.handleDebugPlay(ctx, append([]string{arm}, args...))
+			return true
+		}, permissionCommandDebug)
+	}
+	debugSend := debugNode.group("send")
+	for _, arm := range []string{"spellfail", "buyerror", "sellerror", "equiperror", "channelnotify", "chatmessage", "qpartymsg", "qinvalidmsg", "setphaseshift", "largepacket", "opcode"} {
+		arm := arm
+		debugSend.leaf(arm, func(ctx context.Context, args []string) bool {
+			if s.player == nil {
+				return true
+			}
+			s.handleDebugSend(ctx, append([]string{arm}, args...))
+			return true
+		}, permissionCommandDebug)
+	}
 	root.addWithPerms("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, map[string]uint32{"add": permissionCommandTeleAdd, "del": permissionCommandTeleDel, "name": permissionCommandTeleName, "group": permissionCommandTeleGroup}, nil)
 	root.addWithPerms("ticket", func(ctx context.Context, args []string) bool { s.handleCmdTicket(ctx, args); return true }, map[string]uint32{"assign": permissionCommandTicketAssign, "close": permissionCommandTicketClose, "closedlist": permissionCommandTicketClosedlist, "comment": permissionCommandTicketComment, "complete": permissionCommandTicketComplete, "delete": permissionCommandTicketDelete, "escalate": permissionCommandTicketEscalate, "escalatedlist": permissionCommandTicketEscalatedlist, "list": permissionCommandTicketList, "onlinelist": permissionCommandTicketOnlinelist, "reset": permissionCommandTicketReset, "response": permissionCommandTicketResponse, "togglesystem": permissionCommandTicketTogglesystem, "unassign": permissionCommandTicketUnassign, "viewid": permissionCommandTicketViewid, "viewname": permissionCommandTicketViewname}, nil).withPerm(permissionCommandTicket)
 	root.addWithPerms("titles", func(ctx context.Context, args []string) bool { s.handleCmdTitles(ctx, args); return true }, map[string]uint32{"add": permissionCommandTitlesAdd, "current": permissionCommandTitlesCurrent, "remove": permissionCommandTitlesRemove, "set": permissionCommandTitlesSet}, nil).withPerm(permissionCommandTitles)
@@ -8481,7 +8552,45 @@ func (s *session) buildCommandTree() *commandNode {
 	root.addWithPerms("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, map[string]uint32{"customize": permissionCommandCharacterCustomize, "changefaction": permissionCommandCharacterChangeFaction, "changerace": permissionCommandCharacterChangeRace, "changeaccount": permissionCommandCharacterChangeAccount, "deleted": 0, "erase": permissionCommandCharacterErase, "level": permissionCommandCharacterLevel, "rename": permissionCommandCharacterRename, "reputation": permissionCommandCharacterReputation, "titles": permissionCommandCharacterTitles}, map[string]string{"char": "character"})
 	root.add("levelup", func(ctx context.Context, args []string) bool { s.handleCmdLevelup(ctx, args); return true }, nil, nil).withPerm(permissionCommandLevelup)
 	root.addWithPerms("pdump", func(ctx context.Context, args []string) bool { s.handleCmdPDump(ctx, args); return true }, map[string]uint32{"copy": permissionCommandPDumpCopy, "load": permissionCommandPDumpLoad, "write": permissionCommandPDumpWrite}, nil)
-	root.addWithPerms("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, map[string]uint32{"set": 0, "password": permissionCommandAccountPassword, "addon": permissionCommandAccountAddon, "email": permissionCommandAccountEmail, "lock": 0, "2fa": 0, "create": permissionCommandAccountCreate, "delete": permissionCommandAccountDelete, "onlinelist": permissionCommandAccountOnlineList}, map[string]string{"acct": "account"})
+	accountNode := root.addWithPerms("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, map[string]uint32{"set": 0, "password": permissionCommandAccountPassword, "addon": permissionCommandAccountAddon, "email": permissionCommandAccountEmail, "lock": 0, "2fa": 0, "create": permissionCommandAccountCreate, "delete": permissionCommandAccountDelete, "onlinelist": permissionCommandAccountOnlineList}, map[string]string{"acct": "account"})
+	// R13 depth (cs_account.cpp:53-76): "set", "lock" and "2fa" are
+	// sub-tables and "sec regmail"/"sec email" multi-word names, so
+	// the C++ tree carries account set sec email as a 4-token path
+	// with prefix matching at every level. The family switch in
+	// handleCmdAccount stays as the fallback for an invisible group.
+	accountSet := accountNode.group("set")
+	accountSet.leaf("addon", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetAddon(ctx, args); return true }, permissionCommandAccountSetAddon)
+	accountSet.leaf("gmlevel", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetSecLevel(ctx, args); return true }, permissionCommandAccountSetSecLevel)
+	accountSet.leaf("seclevel", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetSecLevel(ctx, args); return true }, permissionCommandAccountSetSecLevel)
+	accountSet.leaf("password", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetPassword(ctx, args); return true }, permissionCommandAccountSetPassword)
+	accountSet.leaf("2fa", func(ctx context.Context, args []string) bool { s.handleCmdAccountSet2FA(ctx, args); return true }, permissionCommandAccountSet2FA)
+	accountSetSec := accountSet.group("sec")
+	accountSetSec.leaf("email", func(ctx context.Context, args []string) bool {
+		s.handleCmdAccountSetSecEmail(ctx, "sec email", args)
+		return true
+	}, permissionCommandAccountSetSecEmail)
+	accountSetSec.leaf("regmail", func(ctx context.Context, args []string) bool {
+		s.handleCmdAccountSetSecEmail(ctx, "sec regmail", args)
+		return true
+	}, permissionCommandAccountSetSecRegmail)
+	account2FA := accountNode.group("2fa")
+	account2FA.leaf("setup", func(ctx context.Context, args []string) bool {
+		s.handleCmdAccount2FA(ctx, append([]string{"setup"}, args...))
+		return true
+	}, permissionCommandAccount2FASetup)
+	account2FA.leaf("remove", func(ctx context.Context, args []string) bool {
+		s.handleCmdAccount2FA(ctx, append([]string{"remove"}, args...))
+		return true
+	}, permissionCommandAccount2FARemove)
+	accountLock := accountNode.group("lock")
+	accountLock.leaf("ip", func(ctx context.Context, args []string) bool {
+		s.handleCmdAccountLock(ctx, append([]string{"ip"}, args...))
+		return true
+	}, permissionCommandAccountLockIP)
+	accountLock.leaf("country", func(ctx context.Context, args []string) bool {
+		s.handleCmdAccountLock(ctx, append([]string{"country"}, args...))
+		return true
+	}, permissionCommandAccountLockCountry)
 	root.addWithPerms("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, map[string]uint32{"add": permissionCommandAchievementAdd}, nil)
 	root.addWithPerms("ahbot", func(ctx context.Context, args []string) bool { s.handleCmdAhbot(ctx, args); return true }, map[string]uint32{"items": permissionCommandAhbotItems, "ratio": permissionCommandAhbotRatio, "rebuild": permissionCommandAhbotRebuild, "reload": permissionCommandAhbotReload, "status": permissionCommandAhbotStatus}, nil)
 	root.addWithPerms("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, map[string]uint32{"create": permissionCommandArenaCreate, "disband": permissionCommandArenaDisband, "rename": permissionCommandArenaRename, "captain": permissionCommandArenaCaptain, "info": permissionCommandArenaInfo, "lookup": permissionCommandArenaLookup}, nil)
@@ -8570,7 +8679,78 @@ func (s *session) buildCommandTree() *commandNode {
 	root.addWithPerms("mmap", func(ctx context.Context, args []string) bool { s.handleCmdMMap(ctx, args); return true }, map[string]uint32{"loadedtiles": permissionCommandMMapLoadedTiles, "loc": permissionCommandMMapLoc, "path": permissionCommandMMapPath, "stats": permissionCommandMMapStats, "testarea": permissionCommandMMapTestArea}, nil).withPerm(permissionCommandMMap)
 	root.add("morph", func(ctx context.Context, args []string) bool { s.handleCmdMorph(ctx, args); return true }, nil, nil).withPerm(permissionCommandMorph)
 	root.add("demorph", func(ctx context.Context, args []string) bool { s.handleCmdDeMorph(ctx); return true }, nil, nil).withPerm(permissionCommandDeMorph)
-	root.addWithPerms("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, map[string]uint32{"add": 0, "set": 0, "move": permissionCommandNPCMove, "delete": permissionCommandNPCDelete, "near": permissionCommandNPCNear, "info": permissionCommandNPCInfo, "playemote": permissionCommandNPCPlayEmote, "say": permissionCommandNPCSay, "textemote": permissionCommandNPCTextEmote, "whisper": permissionCommandNPCWhisper, "yell": permissionCommandNPCYell, "tame": permissionCommandNPCTame, "spawngroup": permissionCommandNPCSpawnGroup, "despawngroup": permissionCommandNPCDespawnGroup, "follow": permissionCommandNPCFollow, "evade": permissionCommandNPCEvade, "showloot": permissionCommandNPCShowLoot}, nil)
+	npcNode := root.addWithPerms("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, map[string]uint32{"add": 0, "set": 0, "move": permissionCommandNPCMove, "delete": permissionCommandNPCDelete, "near": permissionCommandNPCNear, "info": permissionCommandNPCInfo, "playemote": permissionCommandNPCPlayEmote, "say": permissionCommandNPCSay, "textemote": permissionCommandNPCTextEmote, "whisper": permissionCommandNPCWhisper, "yell": permissionCommandNPCYell, "tame": permissionCommandNPCTame, "spawngroup": permissionCommandNPCSpawnGroup, "despawngroup": permissionCommandNPCDespawnGroup, "follow": permissionCommandNPCFollow, "evade": permissionCommandNPCEvade, "showloot": permissionCommandNPCShowLoot}, nil)
+	// R13 depth (cs_npc.cpp:61-86): "add" and "set" are sub-tables.
+	// The "add" group also carries the "" entry (HandleNpcAddCommand,
+	// ".npc add <entry>"), so the group node keeps its handler;
+	// "set" has no "" entry and stays handler-less. The nil-player
+	// guard of handleCmdNPC is preserved: the leaf path bypasses
+	// the family handler. handleNPCAddTable/handleNPCSetTable stay
+	// as the fallback for an invisible group.
+	npcAdd := npcNode.group("add")
+	npcAdd.invoke = func(ctx context.Context, args []string) bool {
+		if s.player == nil {
+			s.sendSysMessage("You must be in game to use that command.")
+			return true
+		}
+		s.handleNPCAddTable(ctx, args)
+		return true
+	}
+	npcAdd.leaf("formation", func(ctx context.Context, args []string) bool {
+		if s.player == nil {
+			s.sendSysMessage("You must be in game to use that command.")
+			return true
+		}
+		s.handleNPCAddFormation(ctx, args)
+		return true
+	}, permissionCommandNPCAddFormation)
+	npcAdd.leaf("item", func(ctx context.Context, args []string) bool {
+		if s.player == nil {
+			s.sendSysMessage("You must be in game to use that command.")
+			return true
+		}
+		s.handleNPCAddItem(ctx, args)
+		return true
+	}, permissionCommandNPCAddItem)
+	npcAdd.leaf("move", func(ctx context.Context, args []string) bool {
+		if s.player == nil {
+			s.sendSysMessage("You must be in game to use that command.")
+			return true
+		}
+		s.handleNPCAddMove(ctx, args)
+		return true
+	}, permissionCommandNPCAddMove)
+	npcAdd.leaf("temp", func(ctx context.Context, args []string) bool {
+		if s.player == nil {
+			s.sendSysMessage("You must be in game to use that command.")
+			return true
+		}
+		s.handleNPCAddTemp(ctx, args)
+		return true
+	}, permissionCommandNPCAddTemp)
+	npcSet := npcNode.group("set")
+	npcSetLeaf := func(name string, invoke func(ctx context.Context, args []string) bool, perm uint32) {
+		npcSet.leaf(name, func(ctx context.Context, args []string) bool {
+			if s.player == nil {
+				s.sendSysMessage("You must be in game to use that command.")
+				return true
+			}
+			invoke(ctx, args)
+			return true
+		}, perm)
+	}
+	npcSetLeaf("allowmove", func(ctx context.Context, args []string) bool { s.handleNPCSetAllowMove(ctx); return true }, permissionCommandNPCSetAllowMove)
+	npcSetLeaf("entry", func(ctx context.Context, args []string) bool { s.handleNPCSetEntry(ctx, args); return true }, permissionCommandNPCSetEntry)
+	npcSetLeaf("factionid", func(ctx context.Context, args []string) bool { s.handleNPCSetFactionID(ctx, args); return true }, permissionCommandNPCSetFactionID)
+	npcSetLeaf("flag", func(ctx context.Context, args []string) bool { s.handleNPCSetFlag(ctx, args); return true }, permissionCommandNPCSetFlag)
+	npcSetLeaf("level", func(ctx context.Context, args []string) bool { s.handleNPCSetLevel(ctx, args); return true }, permissionCommandNPCSetLevel)
+	npcSetLeaf("link", func(ctx context.Context, args []string) bool { s.handleNPCSetLink(ctx, args); return true }, permissionCommandNPCSetLink)
+	npcSetLeaf("model", func(ctx context.Context, args []string) bool { s.handleNPCSetModel(ctx, args); return true }, permissionCommandNPCSetModel)
+	npcSetLeaf("movetype", func(ctx context.Context, args []string) bool { s.handleNPCSetMoveType(ctx, args); return true }, permissionCommandNPCSetMoveType)
+	npcSetLeaf("phase", func(ctx context.Context, args []string) bool { s.handleNPCSetPhase(ctx, args); return true }, permissionCommandNPCSetPhase)
+	npcSetLeaf("wanderdistance", func(ctx context.Context, args []string) bool { s.handleNPCSetWanderDistance(ctx, args); return true }, permissionCommandNPCSetSpawnDist)
+	npcSetLeaf("spawntime", func(ctx context.Context, args []string) bool { s.handleNPCSetSpawnTime(ctx, args); return true }, permissionCommandNPCSetSpawnTime)
+	npcSetLeaf("data", func(ctx context.Context, args []string) bool { s.handleNPCSetData(ctx, args); return true }, permissionCommandNPCSetData)
 	root.add("npcbot", func(ctx context.Context, args []string) bool { s.handleCmdNpcBot(ctx, args); return true }, []string{"add", "remove", "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command", "info", "hide", "unhide", "show", "recall", "kill", "suicide", "distance", "order", "set"}, nil)
 	root.addWithPerms("quest", func(ctx context.Context, args []string) bool { s.handleCmdQuest(ctx, args); return true }, map[string]uint32{"add": permissionCommandQuestAdd, "complete": permissionCommandQuestComplete, "remove": permissionCommandQuestRemove, "reward": permissionCommandQuestReward}, nil).withPerm(permissionCommandQuest)
 	root.addWithPerms("pet", func(ctx context.Context, args []string) bool { s.handleCmdPet(ctx, args); return true }, map[string]uint32{"create": permissionCommandPetCreate, "learn": permissionCommandPetLearn, "unlearn": permissionCommandPetUnlearn, "level": permissionCommandPetLevel}, nil).withPerm(permissionCommandPet)
