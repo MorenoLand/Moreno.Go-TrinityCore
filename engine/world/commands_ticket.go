@@ -135,12 +135,16 @@ func (s *session) ticketFormat(ctx context.Context, t *gmTicketRow) string {
 }
 
 // handleCmdTicket dispatches the "ticket" root (cs_ticket.cpp:52-72).
-func (s *session) handleCmdTicket(ctx context.Context, args []string) {
+// The bool reports C++ handler success for the whole family: RBAC denial
+// and the C++ silent-false parse paths (empty args, missing token, bad
+// name) return false so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); paths that print a message return true.
+func (s *session) handleCmdTicket(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// Dead root perm (see header): bare ".ticket" prints the syntax
 		// listing with no gate, == C++.
 		s.sendSysMessage("Syntax: .ticket assign|close|closedlist|comment|complete|delete|escalate|escalatedlist|list|onlinelist|reset|response|togglesystem|unassign|viewid|viewname")
-		return
+		return true
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -165,45 +169,46 @@ func (s *session) handleCmdTicket(ctx context.Context, args []string) {
 		}
 		if !exact && matches > 1 {
 			s.sendSysMessage("Syntax: .ticket assign|close|closedlist|comment|complete|delete|escalate|escalatedlist|list|onlinelist|reset|response|togglesystem|unassign|viewid|viewname")
-			return
+			return true
 		}
 	}
 	switch {
 	case strings.HasPrefix("assign", sub) && sub != "unassign":
-		s.handleTicketAssign(ctx, rest)
+		return s.handleTicketAssign(ctx, rest)
 	case strings.HasPrefix("close", sub):
-		s.handleTicketClose(ctx, rest)
+		return s.handleTicketClose(ctx, rest)
 	case strings.HasPrefix("closedlist", sub):
-		s.handleTicketClosedList(ctx)
+		return s.handleTicketClosedList(ctx)
 	case strings.HasPrefix("comment", sub):
-		s.handleTicketComment(ctx, rest)
+		return s.handleTicketComment(ctx, rest)
 	case strings.HasPrefix("complete", sub):
-		s.handleTicketComplete(ctx, rest)
+		return s.handleTicketComplete(ctx, rest)
 	case strings.HasPrefix("delete", sub):
-		s.handleTicketDelete(ctx, rest)
+		return s.handleTicketDelete(ctx, rest)
 	case strings.HasPrefix("escalate", sub):
-		s.handleTicketEscalate(ctx, rest)
+		return s.handleTicketEscalate(ctx, rest)
 	case strings.HasPrefix("escalatedlist", sub):
-		s.handleTicketEscalatedList(ctx)
+		return s.handleTicketEscalatedList(ctx)
 	case strings.HasPrefix("list", sub):
-		s.handleTicketList(ctx, false)
+		return s.handleTicketList(ctx, false)
 	case strings.HasPrefix("onlinelist", sub):
-		s.handleTicketList(ctx, true)
+		return s.handleTicketList(ctx, true)
 	case strings.HasPrefix("reset", sub):
-		s.handleTicketReset(ctx)
+		return s.handleTicketReset(ctx)
 	case strings.HasPrefix("response", sub):
-		s.handleTicketResponse(ctx, rest)
+		return s.handleTicketResponse(ctx, rest)
 	case strings.HasPrefix("togglesystem", sub):
-		s.handleTicketToggleSystem(ctx)
+		return s.handleTicketToggleSystem(ctx)
 	case strings.HasPrefix("unassign", sub):
-		s.handleTicketUnassign(ctx, rest)
+		return s.handleTicketUnassign(ctx, rest)
 	case strings.HasPrefix("viewid", sub):
-		s.handleTicketViewID(ctx, rest)
+		return s.handleTicketViewID(ctx, rest)
 	case strings.HasPrefix("viewname", sub):
-		s.handleTicketViewName(ctx, rest)
+		return s.handleTicketViewName(ctx, rest)
 	default:
 		s.sendSysMessage("Syntax: .ticket assign|close|closedlist|comment|complete|delete|escalate|escalatedlist|list|onlinelist|reset|response|togglesystem|unassign|viewid|viewname")
 	}
+	return true
 }
 
 // ticketOpenByID loads the ticket and enforces the "exists and not closed"
@@ -244,23 +249,21 @@ func (s *session) sendTicketDeletedToSubmitter(t *gmTicketRow) {
 }
 
 // handleTicketAssign mirrors HandleGMTicketAssignToCommand (cs_ticket.cpp:80).
-func (s *session) handleTicketAssign(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketAssign) {
-		return
+func (s *session) handleTicketAssign(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketAssign) {
+		return false
 	}
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .ticket assign <id> <name>")
-		return
+		return false
 	}
 	// normalizePlayerName fails on invalid UTF-8 (ObjectMgr.cpp:141-156),
-	// and the handler returns false (syntax) there (cs_ticket.cpp:98-99).
+	// and the handler returns false silently there (cs_ticket.cpp:98-99).
 	if !utf8.ValidString(args[1]) {
-		s.sendSysMessage("Syntax: .ticket assign <id> <name>")
-		return
+		return false
 	}
 	t, ok := s.ticketOpenByID(ctx, args, "Syntax: .ticket assign <id> <name>")
 	if !ok {
-		return
+		return true
 	}
 	targetName := normalizePlayerName(args[1])
 	var targetGuid uint64
@@ -284,15 +287,15 @@ func (s *session) handleTicketAssign(ctx context.Context, args []string) {
 	}
 	if !canAssign {
 		s.sendSysMessage("Target must exist and have administrative rights.") // LANG_COMMAND_TICKETASSIGNERROR_A 2012
-		return
+		return true
 	}
 	if t.assignedTo == targetGuid {
 		s.sendSysMessage(fmt.Sprintf("Ticket %d is already assigned to that player.", t.id)) // LANG_COMMAND_TICKETASSIGNERROR_B 2013
-		return
+		return true
 	}
 	if s.ticketAssignedNotTo(t) {
 		s.sendSysMessage(fmt.Sprintf("Ticket %d is already assigned.", t.id)) // LANG_COMMAND_TICKETALREADYASSIGNED 2007
-		return
+		return true
 	}
 	t.assignedTo = targetGuid
 	// GmTicket::SetAssignedTo (TicketMgr.h:115-122): assigning to an admin
@@ -310,23 +313,27 @@ func (s *session) handleTicketAssign(ctx context.Context, args []string) {
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d assigned to %s.", t.id, targetName))
+	return true
 }
 
 // handleTicketClose mirrors HandleGMTicketCloseByIdCommand (cs_ticket.cpp:130).
-func (s *session) handleTicketClose(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketClose) {
-		return
+func (s *session) handleTicketClose(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketClose) {
+		return false
+	}
+	if len(args) == 0 {
+		return false
 	}
 	t, ok := s.ticketOpenByID(ctx, args, "Syntax: .ticket close <id>")
 	if !ok || t.completed {
 		if ok {
 			s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		}
-		return
+		return true
 	}
 	if s.ticketAssignedNotTo(t) {
 		s.sendSysMessage(fmt.Sprintf("You cannot close ticket %d.", t.id)) // LANG_COMMAND_TICKETCANNOTCLOSE 2016
-		return
+		return true
 	}
 	// ResolveAndCloseTicket (TicketMgr.cpp:393-404): SetClosedBy also
 	// flips type to TICKET_TYPE_CLOSED, and SetResolvedBy records the
@@ -341,59 +348,60 @@ func (s *session) handleTicketClose(ctx context.Context, args []string) {
 	// gone (SMSG_GMTICKET_DELETETICKET, GMTICKET_RESPONSE_TICKET_DELETED).
 	s.sendTicketDeletedToSubmitter(t)
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d closed.", t.id))
+	return true
 }
 
 // handleTicketClosedList mirrors HandleGMTicketListClosedCommand.
-func (s *session) handleTicketClosedList(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandTicketClosedlist) {
-		return
+func (s *session) handleTicketClosedList(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketClosedlist) {
+		return false
 	}
 	s.ticketListQuery(ctx, "type <> 0", "Closed tickets:")
+	return true
 }
 
 // handleTicketComment mirrors HandleGMTicketCommentCommand (cs_ticket.cpp:171).
-func (s *session) handleTicketComment(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketComment) {
-		return
+func (s *session) handleTicketComment(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketComment) {
+		return false
 	}
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .ticket comment <id> <comment>")
-		return
+		return false
 	}
 	t, ok := s.ticketOpenByID(ctx, args, "Syntax: .ticket comment <id> <comment>")
 	if !ok {
-		return
+		return true
 	}
 	if s.ticketAssignedNotTo(t) {
 		s.sendSysMessage(fmt.Sprintf("Ticket %d is already assigned.", t.id)) // LANG_COMMAND_TICKETALREADYASSIGNED 2007
-		return
+		return true
 	}
 	t.comment = strings.Join(args[1:], " ")
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("%s added comment to ticket %d: %s", s.player.Name, t.id, t.comment)) // LANG_COMMAND_TICKETLISTADDCOMMENT 2024
+	return true
 }
 
 // handleTicketComplete mirrors HandleGMTicketCompleteCommand (cs_ticket.cpp:210).
-func (s *session) handleTicketComplete(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketComplete) {
-		return
+func (s *session) handleTicketComplete(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketComplete) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .ticket complete <id> [response]")
-		return
+		return false
 	}
 	t, ok := s.ticketOpenByID(ctx, args, "Syntax: .ticket complete <id> [response]")
 	if !ok || t.completed {
 		if ok {
 			s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		}
-		return
+		return true
 	}
 	if len(args) > 1 {
 		if s.ticketAssignedNotTo(t) {
 			s.sendSysMessage(fmt.Sprintf("Ticket %d is already assigned.", t.id)) // LANG_COMMAND_TICKETALREADYASSIGNED 2007
-			return
+			return true
 		}
 		t.response += strings.Join(args[1:], " ")
 	}
@@ -410,27 +418,27 @@ func (s *session) handleTicketComplete(ctx context.Context, args []string) {
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d completed.", t.id))
+	return true
 }
 
 // handleTicketDelete mirrors HandleGMTicketDeleteByIdCommand (cs_ticket.cpp:274).
-func (s *session) handleTicketDelete(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketDelete) {
-		return
+func (s *session) handleTicketDelete(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketDelete) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .ticket delete <id>")
-		return
+		return false
 	}
 	t, ok := s.loadGMTicket(ctx, uint32(cAtoi(args[0])))
 	if !ok {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
-		return
+		return true
 	}
 	// IsClosed() is type-based (TicketMgr.h:97): a character-deleted
 	// ticket (type 2) is closed even though closedBy is 0.
 	if t.ticketType == 0 {
 		s.sendSysMessage("Close the ticket first.") // LANG_COMMAND_TICKETCLOSEFIRST 2006
-		return
+		return true
 	}
 	// cs_ticket.cpp:296-301: the online submitter is told the ticket is
 	// gone (SMSG_GMTICKET_DELETETICKET, GMTICKET_RESPONSE_TICKET_DELETED).
@@ -440,19 +448,23 @@ func (s *session) handleTicketDelete(ctx context.Context, args []string) {
 	}
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d deleted.", t.id))
+	return true
 }
 
 // handleTicketEscalate mirrors HandleGMTicketEscalateCommand (cs_ticket.cpp:308).
-func (s *session) handleTicketEscalate(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketEscalate) {
-		return
+func (s *session) handleTicketEscalate(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketEscalate) {
+		return false
+	}
+	if len(args) == 0 {
+		return false
 	}
 	t, ok := s.ticketOpenByID(ctx, args, "Syntax: .ticket escalate <id>")
 	if !ok || t.completed || t.escalated != 0 { // != TICKET_UNASSIGNED (TicketMgr.h:60)
 		if ok {
 			s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
 		}
-		return
+		return true
 	}
 	t.escalated = 2 // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
 	s.saveGMTicket(ctx, t)
@@ -467,14 +479,16 @@ func (s *session) handleTicketEscalate(ctx context.Context, args []string) {
 	s.noteTicketsChanged()
 	// C++ sends no message to the invoking GM here, so this arm stays
 	// silent on the GM side, == C++.
+	return true
 }
 
 // handleTicketEscalatedList mirrors HandleGMTicketListEscalatedCommand.
-func (s *session) handleTicketEscalatedList(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandTicketEscalatedlist) {
-		return
+func (s *session) handleTicketEscalatedList(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketEscalatedlist) {
+		return false
 	}
 	s.ticketListQuery(ctx, "escalated = 2 AND type = 0", "Escalated tickets:") // TICKET_IN_ESCALATION_QUEUE (TicketMgr.h:62)
+	return true
 }
 
 // ticketListQuery prints open/closed/escalated ticket lists.
@@ -507,18 +521,18 @@ func (s *session) ticketListQuery(ctx context.Context, where, header string) {
 
 // handleTicketList mirrors HandleGMTicketListCommand /
 // HandleGMTicketListOnlineCommand (cs_ticket.cpp:330-340).
-func (s *session) handleTicketList(ctx context.Context, onlineOnly bool) {
+func (s *session) handleTicketList(ctx context.Context, onlineOnly bool) bool {
 	perm := permissionCommandTicketList
 	if onlineOnly {
 		perm = permissionCommandTicketOnlinelist
 	}
-	if s.miscDeny(ctx, perm) {
-		return
+	if !s.commandAllowed(ctx, perm) {
+		return false
 	}
 	if !onlineOnly {
 		// TicketMgr::ShowList (TicketMgr.cpp:421): !IsClosed() && !IsCompleted().
 		s.ticketListQuery(ctx, "type = 0 AND completed = 0", "Open tickets:")
-		return
+		return true
 	}
 	// Restrict to tickets whose submitter is online.
 	s.server.sessionsMu.RLock()
@@ -530,6 +544,7 @@ func (s *session) handleTicketList(ctx context.Context, onlineOnly bool) {
 	}
 	s.server.sessionsMu.RUnlock()
 	s.ticketListQueryOnline(ctx, guids, "Tickets from online players:")
+	return true
 }
 
 // ticketListQueryOnline lists open tickets for the given player guids.
@@ -564,13 +579,13 @@ func (s *session) ticketListQueryOnline(ctx context.Context, guids []uint64, hea
 }
 
 // handleTicketReset mirrors HandleGMTicketResetCommand (cs_ticket.cpp:343).
-func (s *session) handleTicketReset(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandTicketReset) {
-		return
+func (s *session) handleTicketReset(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketReset) {
+		return false
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return
+		return true
 	}
 	var openCount int64
 	// GetOpenTicketCount counts !IsClosed() (TicketMgr.h:226): type-based,
@@ -578,16 +593,17 @@ func (s *session) handleTicketReset(ctx context.Context) {
 	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM gm_ticket WHERE type = 0").Scan(&openCount)
 	if openCount > 0 {
 		s.sendSysMessage("There are pending tickets.") // LANG_COMMAND_TICKETPENDING 2027
-		return
+		return true
 	}
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM gm_ticket")
 	s.sendSysMessage("Tickets reset.") // LANG_COMMAND_TICKETRESET 2028
+	return true
 }
 
 // handleTicketToggleSystem mirrors HandleToggleGMTicketSystem (cs_ticket.cpp:358).
-func (s *session) handleTicketToggleSystem(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandTicketTogglesystem) {
-		return
+func (s *session) handleTicketToggleSystem(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketTogglesystem) {
+		return false
 	}
 	enabled := !s.server.ticketsEnabled.Load()
 	s.server.ticketsEnabled.Store(enabled)
@@ -596,20 +612,24 @@ func (s *session) handleTicketToggleSystem(ctx context.Context) {
 	} else {
 		s.sendSysMessage("Ticket system disabled.") // LANG_DISALLOW_TICKETS 1135
 	}
+	return true
 }
 
 // handleTicketUnassign mirrors HandleGMTicketUnAssignCommand (cs_ticket.cpp:366).
-func (s *session) handleTicketUnassign(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketUnassign) {
-		return
+func (s *session) handleTicketUnassign(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketUnassign) {
+		return false
+	}
+	if len(args) == 0 {
+		return false
 	}
 	t, ok := s.ticketOpenByID(ctx, args, "Syntax: .ticket unassign <id>")
 	if !ok {
-		return
+		return true
 	}
 	if t.assignedTo == 0 {
 		s.sendSysMessage(fmt.Sprintf("Ticket %d is not assigned.", t.id)) // LANG_COMMAND_TICKETNOTASSIGNED 2014
-		return
+		return true
 	}
 	// The invoker's security must cover the assignee's (cs_ticket.cpp:390).
 	var assigneeSec uint8
@@ -624,7 +644,7 @@ func (s *session) handleTicketUnassign(ctx context.Context, args []string) {
 	}
 	if assigneeSec > s.security {
 		s.sendSysMessage("You cannot unassign a ticket assigned to a higher security level.") // LANG_COMMAND_TICKETUNASSIGNSECURITY 2015
-		return
+		return true
 	}
 	assignedName := s.ticketAssignedName(ctx, t.assignedTo)
 	t.assignedTo = 0
@@ -641,27 +661,28 @@ func (s *session) handleTicketUnassign(ctx context.Context, args []string) {
 	s.saveGMTicket(ctx, t)
 	s.noteTicketsChanged()
 	s.server.sendGlobalGMMessage(ctx, fmt.Sprintf("Ticket %d unassigned from %s.", t.id, assignedName))
+	return true
 }
 
 // handleTicketViewID mirrors HandleGMTicketGetByIdCommand (cs_ticket.cpp:419).
-func (s *session) handleTicketViewID(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketViewid) {
-		return
+func (s *session) handleTicketViewID(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketViewid) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .ticket viewid <id>")
-		return
+		return false
 	}
 	t, ok := s.loadGMTicket(ctx, uint32(cAtoi(args[0])))
 	// IsClosed() is type-based (TicketMgr.h:97).
 	if !ok || t.ticketType != 0 || t.completed {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
-		return
+		return true
 	}
 	t.viewed = true
 	s.saveGMTicket(ctx, t)
 	s.sendSysMessage(s.ticketFormat(ctx, t))
 	s.ticketShowDetail(t)
+	return true
 }
 
 // ticketShowDetail prints the comment/response legs of the C++ detailed
@@ -676,19 +697,17 @@ func (s *session) ticketShowDetail(t *gmTicketRow) {
 }
 
 // handleTicketViewName mirrors HandleGMTicketGetByNameCommand (cs_ticket.cpp:447).
-func (s *session) handleTicketViewName(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTicketViewname) {
-		return
+func (s *session) handleTicketViewName(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTicketViewname) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .ticket viewname <name>")
-		return
+		return false
 	}
 	// normalizePlayerName fails on invalid UTF-8 (ObjectMgr.cpp:141-156),
-	// and the handler returns false (syntax) there (cs_ticket.cpp:452-453).
+	// and the handler returns false silently there (cs_ticket.cpp:452-453).
 	if !utf8.ValidString(args[0]) {
-		s.sendSysMessage("Syntax: .ticket viewname <name>")
-		return
+		return false
 	}
 	name := normalizePlayerName(args[0])
 	var guid uint64
@@ -699,7 +718,7 @@ func (s *session) handleTicketViewName(ctx context.Context, args []string) {
 	}
 	if guid == 0 {
 		s.sendSysMessage("No players found.") // LANG_NO_PLAYERS_FOUND 330 (cs_ticket.cpp:462)
-		return
+		return true
 	}
 	var id uint32
 	// GetTicketByPlayer (TicketMgr.h:196-203) takes the lowest-id
@@ -707,27 +726,28 @@ func (s *session) handleTicketViewName(ctx context.Context, args []string) {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil ||
 		s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT id FROM gm_ticket WHERE playerGuid = ? AND type = 0 ORDER BY id ASC LIMIT 1", guid).Scan(&id) != nil {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
-		return
+		return true
 	}
 	t, ok := s.loadGMTicket(ctx, id)
 	if !ok {
 		s.sendSysMessage("Ticket does not exist.") // LANG_COMMAND_TICKETNOTEXIST 2005
-		return
+		return true
 	}
 	t.viewed = true
 	s.saveGMTicket(ctx, t)
 	s.sendSysMessage(s.ticketFormat(ctx, t))
 	s.ticketShowDetail(t)
+	return true
 }
 
 // handleTicketResponse dispatches the "ticket response" sub-table
 // (cs_ticket.cpp:52-53): append, appendln.
-func (s *session) handleTicketResponse(ctx context.Context, args []string) {
+func (s *session) handleTicketResponse(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// Dead response-node perm (see header): bare ".ticket response"
 		// prints the syntax listing with no gate, == C++.
 		s.sendSysMessage("Syntax: .ticket response append|appendln <id> <text>")
-		return
+		return true
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -738,42 +758,42 @@ func (s *session) handleTicketResponse(ctx context.Context, args []string) {
 	// stand-in), longer "appendl*" prefixes resolve to appendln.
 	switch {
 	case sub == "append":
-		if s.miscDeny(ctx, permissionCommandTicketResponseAppend) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandTicketResponseAppend) {
+			return false
 		}
 	case sub == "appendln":
 		newLine = true
-		if s.miscDeny(ctx, permissionCommandTicketResponseAppendln) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandTicketResponseAppendln) {
+			return false
 		}
 	case strings.HasPrefix("append", sub):
 		s.sendSysMessage("Syntax: .ticket response append|appendln <id> <text>")
-		return
+		return true
 	case strings.HasPrefix("appendln", sub):
 		newLine = true
-		if s.miscDeny(ctx, permissionCommandTicketResponseAppendln) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandTicketResponseAppendln) {
+			return false
 		}
 	default:
 		s.sendSysMessage("Syntax: .ticket response append|appendln <id> <text>")
-		return
+		return true
 	}
 	// Mirrors _HandleGMTicketResponseAppendCommand (cs_ticket.cpp:474).
 	if len(rest) < 2 {
-		s.sendSysMessage("Syntax: .ticket response append|appendln <id> <text>")
-		return
+		return false
 	}
 	t, ok := s.ticketOpenByID(ctx, rest, "Syntax: .ticket response append|appendln <id> <text>")
 	if !ok {
-		return
+		return true
 	}
 	if s.ticketAssignedNotTo(t) {
 		s.sendSysMessage(fmt.Sprintf("Ticket %d is already assigned.", t.id)) // LANG_COMMAND_TICKETALREADYASSIGNED 2007
-		return
+		return true
 	}
 	t.response += strings.Join(rest[1:], " ")
 	if newLine {
 		t.response += "\n"
 	}
 	s.saveGMTicket(ctx, t)
+	return true
 }

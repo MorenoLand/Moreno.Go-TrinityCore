@@ -8670,19 +8670,17 @@ func (s *session) buildCommandTree() *commandNode {
 		return s.handleDebugWardenForce(ctx, args)
 	}, permissionCommandDebug)
 	root.addWithPerms("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, map[string]uint32{"add": permissionCommandTeleAdd, "del": permissionCommandTeleDel, "name": permissionCommandTeleName, "group": permissionCommandTeleGroup}, nil)
-	ticketNode := root.addWithPerms("ticket", func(ctx context.Context, args []string) bool { s.handleCmdTicket(ctx, args); return true }, map[string]uint32{"assign": permissionCommandTicketAssign, "close": permissionCommandTicketClose, "closedlist": permissionCommandTicketClosedlist, "comment": permissionCommandTicketComment, "complete": permissionCommandTicketComplete, "delete": permissionCommandTicketDelete, "escalate": permissionCommandTicketEscalate, "escalatedlist": permissionCommandTicketEscalatedlist, "list": permissionCommandTicketList, "onlinelist": permissionCommandTicketOnlinelist, "reset": permissionCommandTicketReset, "response": permissionCommandTicketResponse, "togglesystem": permissionCommandTicketTogglesystem, "unassign": permissionCommandTicketUnassign, "viewid": permissionCommandTicketViewid, "viewname": permissionCommandTicketViewname}, nil).withPerm(permissionCommandTicket)
+	ticketNode := root.addWithPerms("ticket", func(ctx context.Context, args []string) bool { return s.handleCmdTicket(ctx, args) }, map[string]uint32{"assign": permissionCommandTicketAssign, "close": permissionCommandTicketClose, "closedlist": permissionCommandTicketClosedlist, "comment": permissionCommandTicketComment, "complete": permissionCommandTicketComplete, "delete": permissionCommandTicketDelete, "escalate": permissionCommandTicketEscalate, "escalatedlist": permissionCommandTicketEscalatedlist, "list": permissionCommandTicketList, "onlinelist": permissionCommandTicketOnlinelist, "reset": permissionCommandTicketReset, "response": permissionCommandTicketResponse, "togglesystem": permissionCommandTicketTogglesystem, "unassign": permissionCommandTicketUnassign, "viewid": permissionCommandTicketViewid, "viewname": permissionCommandTicketViewname}, nil).withPerm(permissionCommandTicket)
 	// R13 depth (cs_ticket.cpp:52-53): "response" is a sub-table
 	// with append/appendln leaves and no "" entry, so the group node
 	// stays handler-less. The family switch in handleCmdTicket stays
 	// as the fallback for an invisible group.
 	ticketResponse := ticketNode.group("response")
 	ticketResponse.leaf("append", func(ctx context.Context, args []string) bool {
-		s.handleTicketResponse(ctx, append([]string{"append"}, args...))
-		return true
+		return s.handleTicketResponse(ctx, append([]string{"append"}, args...))
 	}, permissionCommandTicketResponseAppend)
 	ticketResponse.leaf("appendln", func(ctx context.Context, args []string) bool {
-		s.handleTicketResponse(ctx, append([]string{"appendln"}, args...))
-		return true
+		return s.handleTicketResponse(ctx, append([]string{"appendln"}, args...))
 	}, permissionCommandTicketResponseAppendln)
 	root.addWithPerms("titles", func(ctx context.Context, args []string) bool { s.handleCmdTitles(ctx, args); return true }, map[string]uint32{"add": permissionCommandTitlesAdd, "current": permissionCommandTitlesCurrent, "remove": permissionCommandTitlesRemove, "set": permissionCommandTitlesSet}, nil).withPerm(permissionCommandTitles)
 	root.addWithPerms("wp", func(ctx context.Context, args []string) bool { s.handleCmdWp(ctx, args); return true }, map[string]uint32{"add": permissionCommandWpAdd, "event": permissionCommandWpEvent, "load": permissionCommandWpLoad, "modify": permissionCommandWpModify, "unload": permissionCommandWpUnload, "reload": permissionCommandWpReload, "show": permissionCommandWpShow}, nil).withPerm(permissionCommandWp)
