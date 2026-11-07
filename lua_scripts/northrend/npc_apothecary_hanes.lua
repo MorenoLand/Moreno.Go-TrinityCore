@@ -201,7 +201,7 @@ end
 
 -- C++ JustDied: FailQuest(QUEST_TRAIL_OF_FIRE 11241) on the
 -- escorted player — PORTED below (quest-11241 accept latch +
--- player:FailQuest bridge, lua_player.go:410). Death
+-- player:FailQuest bridge, lua_player.go:4442). Death
 -- ends the machine: cancel the pump + emote event and drop per-GUID
 -- state (mushroom precedent).
 local function onDied(_, creature)

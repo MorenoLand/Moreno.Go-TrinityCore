@@ -13516,6 +13516,12 @@ func init() {
 	RegisterLuaBoss("npc_enraged_spirit", 21061)
 	RegisterLuaBoss("npc_enraged_spirit", 21060)
 	RegisterLuaBoss("npc_enraged_spirit", 21059)
+	// npc_torloth_the_magnificent (Shadowmoon Valley zone script):
+	// JustDied quest-10781 group-credit leg (a) PORTED in
+	// lua_scripts/outland/npc_torloth_the_magnificent.lua; the
+	// LordIllidan EnterEvadeMode leg (b) stays out (no bridge).
+	// Entry 22076 wowhead-verified this tick.
+	RegisterLuaBoss("npc_torloth_the_magnificent", 22076)
 	// npc_unkor_the_ruthless (Terokkar Forest zone script, last
 	// in the Outland zone set per outland_script_loader.cpp
 	// order): quest-9889 submit machine — DamageTaken below
@@ -13591,11 +13597,17 @@ func init() {
 	// 373); the Reset SetCanDualWield arm has no dual-wield
 	// bridge; no SAY_LEGOSO_* line fires (no talk bridge);
 	// ACTION_LEGOSO_SIRONAS_KILLED: ev38 DoAction dispatch IS bridged
-	// (creature:DoAction, lua_creature_events.go:802); the arm stays out
+	// (creature:DoAction, lua_creature_events.go:827); the arm stays out
 	// because the sender is unported — npc_sironas JustDied
 	// (zone_bloodmyst_isle.cpp:278) cross-creature cascade, gated on
 	// killer/group/event-starter GUID, into legoso's unported escort machine.
 	RegisterLuaBoss("npc_demolitionist_legoso", 17982)
+	// npc_prospector_remtravel (Darkshore zone script):
+	// OnQuestAccept quest-731 escort start + JustDied FailQuest
+	// leg PORTED in lua_scripts/kalimdor/npc_prospector_remtravel.lua;
+	// the waypoint Talk / GroupEventHappens machine stays out.
+	// Entry 2917 wowhead-verified this tick.
+	RegisterLuaBoss("npc_prospector_remtravel", 2917)
 	// npc_aged_dying_ancient_kodo (Desolace zone script):
 	// SpellHit arm only — hit by SPELL_KODO_KOMBO_ITEM 18153
 	// -> if entry is 4700/4701/4702 and neither the caster has
@@ -13626,12 +13638,20 @@ func init() {
 	// Omen enum — see lua_scripts/kalimdor/npc_omen.lua. The
 	// constructor's SetImmuneToPC/MovePoint + MovementInform
 	// point-1 immunity drop await the immune / movement /
-	// world-search bridges; npc_clintar_spirit (quest-10965
-	// escort machine) awaits the escort / quest / talk / summon
-	// bridges; npc_giant_spotlight (5-min despawn sweep) ported —
+	// world-search bridges; npc_clintar_spirit's 41-waypoint
+	// escort machine stays out, but its IsSummonedBy latch +
+	// JustDied FailQuest leg is PORTED — see
+	// lua_scripts/kalimdor/npc_clintar_spirit.lua;
+	// npc_giant_spotlight (5-min despawn sweep) ported —
 	// see lua_scripts/kalimdor/npc_giant_spotlight.lua.
 	RegisterLuaBoss("npc_omen", 15467)
 	RegisterLuaBoss("npc_giant_spotlight", 15902)
+	// npc_clintar_spirit (Moonglade zone script): IsSummonedBy
+	// 5-yd quest-10965 latch + JustDied FailQuest leg PORTED in
+	// lua_scripts/kalimdor/npc_clintar_spirit.lua; the 41-waypoint
+	// escort machine stays out. Entry 22916 wowhead-verified
+	// this tick.
+	RegisterLuaBoss("npc_clintar_spirit", 22916)
 	// npc_thrall_warchief (Orgrimmar zone script): combat rotation
 	// only — chain lightning (16033, 2s init then 9s) + shock
 	// (16034, 8s init then 15s), both non-triggered DoCastVictim
@@ -13954,7 +13974,8 @@ func init() {
 	// the last enabled Northrend zone (dalaran, borean_tundra,
 	// dragonblight, grizzly_hills, howling_fjord, icecrown,
 	// sholazar_basin, storm_peaks, wintergrasp closed); the
-	// Northrend zone set is now CLOSED.
+	// Northrend zone set is now CLOSED except the Sholazar
+	// helice JustDied leg ported this tick (see below).
 	// Late-resolved quest_arms residuals (entries wowhead-verified
 	// this tick; the arms were parked entry-unverifiable): the
 	// etymidian OnQuestReward Talk arm and the injured-goblin
@@ -13963,6 +13984,12 @@ func init() {
 	// npc_injured_goblin.lua.
 	RegisterLuaBoss("npc_the_etymidian", 28092)
 	RegisterLuaBoss("npc_injured_goblin", 29434)
+	// npc_engineer_helice (Sholazar Basin zone script):
+	// OnQuestAccept quest-12688 escort start + JustDied FailQuest
+	// leg PORTED in lua_scripts/northrend/npc_engineer_helice.lua;
+	// the waypoint Talk / GroupEventHappens machine stays out.
+	// Entry 28787 wowhead-verified this tick.
+	RegisterLuaBoss("npc_engineer_helice", 28787)
 	// npc_brann_bronzebeard_keystone (Storm Peaks zone script, quest
 	// 13285 "Forging the Keystone" — the TaskScheduler-census deferred
 	// 13-event chain): OnGossipSelect starts the chain and the timed
@@ -21904,6 +21931,16 @@ func init() {
 	// wowhead-only. EngageWithTarget + 60s evade stay out (no
 	// bridges); DoZoneInCombat is dungeon-gated.
 	RegisterLuaBoss("npc_magister_aledis", 20159)
+	// npc_barada + npc_colonel_jules (Hellfire Peninsula zone
+	// scripts, Exorcism of Colonel Jules): Barada JustDied
+	// DoAction(4) + RemoveAllAuras relay + Jules ev38
+	// ACTION_JULES_MOVE_HOME arm PORTED in
+	// lua_scripts/outland/npc_barada.lua and
+	// lua_scripts/outland/npc_colonel_jules.lua; the rest of the
+	// exorcism machine stays out. Entries 22431/22432
+	// wowhead-verified this tick (22432 also C++ enum).
+	RegisterLuaBoss("npc_barada", 22431)
+	RegisterLuaBoss("npc_colonel_jules", 22432)
 	// Checked-no-gate: zero HasUnitState hits in zone_hellfire_peninsula.cpp — fireball/frostnova pumps stay ungated.
 	// npc_taskmaster_fizzule (Northern Barrens, Deep Cover) —
 	// ported arms in lua_scripts/kalimdor/npc_taskmaster_fizzule.lua:
