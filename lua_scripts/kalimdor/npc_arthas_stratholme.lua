@@ -57,11 +57,12 @@
 --   who->GetEntry() == NPC_RISEN_ZOMBIE (27737) before Talk
 --   LINE_SLAY_ZOMBIE (39), with who as the talk target.
 -- - Death (C++ JustDied, npc_arthas.cpp:1578-1582):
---   instance->SetData(DATA_ARTHAS_DIED, 1) stays out (no instance-data
---   bridge, standing); DespawnOrUnsummon(5s) is PORTED in onDied
+--   instance->SetData(DATA_ARTHAS_DIED, 1) is PORTED via the shared
+--   instanceData table (onDied sets instanceData.arthasDied; the
+--   instance_culling_of_stratholme.lua ON_UPDATE pump regresses to the
+--   stable state, forced); DespawnOrUnsummon(5s) is PORTED in onDied
 --   below (bridge live, lua_creature_events.go:5675, ms arg per
---   boss_mimiron.lua:136 precedent) — the despawn leg needs no
---   instance data, so it separates from the SetData leg.
+--   boss_mimiron.lua:136 precedent).
 -- Unmodeled (documented-only, no bridges):
 -- - The entire RP escort machine: AdvanceToState (snapback positions +
 --   SetReactState / SetImmuneToAll / gossip-flag legs for the 17
@@ -199,6 +200,15 @@ end
 
 local function onDied(event, creature, killer)
     cancelPump(creature:GetGUID())
+    -- C++ JustDied (npc_arthas.cpp:1578-1582): DespawnOrUnsummon(5000) +
+    -- instance SetData(DATA_ARTHAS_DIED) — the SetData leg rides the
+    -- shared instanceData table: instance_culling_of_stratholme.lua
+    -- consumes the flag on its ON_UPDATE pump and regresses to the
+    -- stable state, forced.
+    local data = creature:GetMap():GetInstanceData()
+    if data then
+        data.arthasDied = true
+    end
     creature:DespawnOrUnsummon(5000)
 end
 

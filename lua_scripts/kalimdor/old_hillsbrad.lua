@@ -136,12 +136,44 @@
 -- missing pre-event spawns + uncoordinated Thrall-escort speech, which the
 -- no-summon / EscortAI bridges above still block.
 
+-- PORTED 2026-11-07 (tick 397): the Thrall gossip writers (hello gates
+-- + select actions 1/2/20/3 writing instanceData.thrallEvent /
+-- thrallPart1-3 + Talk(0)/(4) + SKARLOC_MOUNT summon), the JustDied
+-- TYPE_THRALL_EVENT FAIL leg (20-fail cap), the Taretha action-1002
+-- machine (thrallPart4 + Epoch summon iff DATA_EPOCH empty), and the
+-- Erozyon bombs-item gates (instance barrelDiversion + GetItemCount)
+-- — the "no instance GetData/SetData bridge" claims in the paragraphs
+-- above are retracted for the slots this file now writes/reads via the
+-- shared instanceData table. Still out: Start/StartWP escort legs,
+-- the WaypointReached machine, the barrel counter itself (go_barrel GO
+-- entry is DB-side), and the boss-file GetData readers (skarloc /
+-- epoch-hunter / drake), which still read the C++ encounter array.
+
 local ENTRY = 17876
 
 local SAY_TH_RANDOM_LOW_HP = 11
 local SAY_TH_RANDOM_DIE    = 12
 local SAY_TH_RANDOM_AGGRO  = 13
 local SAY_TH_RANDOM_KILL   = 14
+
+-- EncounterState (InstanceScript.h:68-76) for the instanceData
+-- TYPE_* slots (old_hillsbrad.h:28-33): TYPE_BARREL_DIVERSION 1 /
+-- TYPE_THRALL_EVENT 2 / TYPE_THRALL_PART1 3 / PART2 4 / PART3 5 /
+-- PART4 6. The slots live in the shared instanceData table
+-- (instance_old_hillsbrad.lua binds); nil reads as NOT_STARTED.
+local STATE_NOT_STARTED = 0
+local STATE_IN_PROGRESS = 1
+local STATE_FAIL = 2
+local STATE_DONE = 3
+
+-- the_black_morass.lua instanceDataOf precedent.
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
 
 local lowHp = {}
 local lowHpPump = {}
@@ -204,6 +236,29 @@ local function onDied(event, creature, killer)
     if not killer or killer:GetGUID() ~= guid then
         creature:Talk(SAY_TH_RANDOM_DIE)
     end
+    -- C++ JustDied also sends instance->SetData(TYPE_THRALL_EVENT 2,
+    -- FAIL) (old_hillsbrad.cpp:193-196): the FAIL leg lives in
+    -- instance_old_hillsbrad.cpp:156-177 — fail-count-capped at 20, then
+    -- FAIL. PORTED 2026-11-07 via the shared instanceData table
+    -- (instanceDataOf below); the escort machine itself stays out.
+    local data = instanceDataOf(creature)
+    if data then
+        local fails = (data.thrallFailCount or 0) + 1
+        data.thrallFailCount = fails
+        if fails <= 20 then
+            data.thrallEvent = STATE_NOT_STARTED
+            data.thrallPart1 = STATE_NOT_STARTED
+            data.thrallPart2 = STATE_NOT_STARTED
+            data.thrallPart3 = STATE_NOT_STARTED
+            data.thrallPart4 = STATE_NOT_STARTED
+        else
+            data.thrallEvent = STATE_FAIL
+            data.thrallPart1 = STATE_FAIL
+            data.thrallPart2 = STATE_FAIL
+            data.thrallPart3 = STATE_FAIL
+            data.thrallPart4 = STATE_FAIL
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
@@ -217,7 +272,6 @@ RegisterCreatureEvent(ENTRY, 23, onReset)
 -- npc_taretha gossip (old_hillsbrad.cpp:597-629) — entry TARETHA_ENTRY
 -- 18887 (instance_old_hillsbrad.cpp:36).
 local TARETHA_ENTRY = 18887
-
 local GOSSIP_ICON_CHAT = 0
 local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
@@ -251,6 +305,20 @@ local function tarethaGossipSelect(event, player, creature, sender, action)
         player:GossipSendMenu(GOSSIP_MENU_EPOCH2, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
         player:GossipComplete()
+        -- C++ OnGossipSelect action 1002 (old_hillsbrad.cpp:605-620):
+        -- CloseGossipMenuFor + SetData(TYPE_THRALL_PART4 6, IN_PROGRESS)
+        -- + SummonCreature(ENTRY_EPOCH 18096, 2639.13, 698.55, 65.43,
+        -- 4.59, TIMED_OR_DEAD_DESPAWN, 2min) iff DATA_EPOCH 9 GUID empty
+        -- + Thrall StartWP. PORTED 2026-11-07 except Thrall StartWP
+        -- (no escort bridge); the epoch gate reads the
+        -- instance_old_hillsbrad.lua bind (nil = never summoned).
+        local data = instanceDataOf(creature)
+        if data then
+            data.thrallPart4 = STATE_IN_PROGRESS
+            if not data.epoch then
+                creature:SummonCreature(18096, 2639.13, 698.55, 65.43, 4.59, 0, 120000)
+            end
+        end
     end
 end
 
@@ -283,8 +351,21 @@ local function erozionGossipHello(event, player, creature)
     if creature:IsQuestGiver() then
         player:GossipAddQuests(creature)
     end
-    player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_BOMBS,
-        GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
+    -- C++ OnGossipHello (old_hillsbrad.cpp:85-97): the bombs item only
+    -- when instance TYPE_BARREL_DIVERSION 1 != DONE and the player lacks
+    -- ITEM_ENTRY_BOMBS 25853. The instance gate is now live
+    -- (instanceData.barrelDiversion, nil reads as NOT_STARTED) and the
+    -- item gate reads player:GetItemCount (lua_player.go:2146) — the
+    -- header's "no bridge" note is retracted 2026-11-07. The barrel
+    -- counter itself still has no writer (go_barrel GO entry is DB-side,
+    -- not in the C++ tree), so the gate reads NOT_STARTED until that port
+    -- lands.
+    local data = instanceDataOf(creature)
+    if (not data or (data.barrelDiversion or STATE_NOT_STARTED) ~= STATE_DONE)
+        and player:GetItemCount(ITEM_ENTRY_BOMBS) == 0 then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_BOMBS,
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
+    end
     if player:GetQuestStatus(QUEST_ENTRY_RETURN) == QUEST_STATUS_COMPLETE then
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_TELEPORT,
             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
@@ -310,3 +391,83 @@ end
 
 RegisterCreatureGossipEvent(EROZION_ENTRY, 1, erozionGossipHello)
 RegisterCreatureGossipEvent(EROZION_ENTRY, 2, erozionGossipSelect)
+
+-- npc_thrall_old_hillsbrad gossip (old_hillsbrad.cpp:176-192,
+-- 471-540) — PORTED 2026-11-07: the hello gates read the shared
+-- instanceData TYPE_* slots (the header's "no instance GetData
+-- bridge" is retracted for the slots this file now writes), and the
+-- select writers land the SetData legs. The escort legs
+-- (Start/StartWP/SetMaxPlayerDistance/SetDespawnAtEnd/SetDespawnAtFar)
+-- have no bridge and stay out — Talk + the state write are the live
+-- halves. At most one hello branch matches (gates are mutually
+-- exclusive: gate 1 needs !thrallEvent, gate 2 needs part1 DONE +
+-- !part2, gate 3 needs part2 DONE + !part3).
+local SAY_TH_START_EVENT_PART1 = 0
+local SAY_TH_START_EVENT_PART2 = 4
+local GOSSIP_ID_START = 9568
+local GOSSIP_ID_SKARLOC1 = 9614
+local GOSSIP_ID_SKARLOC2 = 9579
+local GOSSIP_ID_SKARLOC3 = 9580
+local GOSSIP_ID_TARREN = 9597
+local GOSSIP_ITEM_WALKING = "We are ready to get you out of here, Thrall. Let's go!"
+local GOSSIP_ITEM_SKARLOC1 = "Taretha cannot see you, Thrall."
+local GOSSIP_ITEM_SKARLOC2 = "The situation is rather complicated, Thrall. It would be best for you to head into the mountains now, before more of Blackmoore's men show up. We'll make sure Taretha is safe."
+local GOSSIP_ITEM_TARREN = "We're ready, Thrall."
+local SKARLOC_MOUNT = 18798
+
+local function thrallGossipHello(event, player, creature)
+    if creature:IsQuestGiver() then
+        player:GossipAddQuests(creature)
+    end
+    local data = instanceDataOf(creature)
+    local barrel = data and (data.barrelDiversion or STATE_NOT_STARTED) or STATE_NOT_STARTED
+    local thrallEvent = data and (data.thrallEvent or STATE_NOT_STARTED) or STATE_NOT_STARTED
+    local part1 = data and (data.thrallPart1 or STATE_NOT_STARTED) or STATE_NOT_STARTED
+    local part2 = data and (data.thrallPart2 or STATE_NOT_STARTED) or STATE_NOT_STARTED
+    local part3 = data and (data.thrallPart3 or STATE_NOT_STARTED) or STATE_NOT_STARTED
+    if barrel == STATE_DONE and thrallEvent == STATE_NOT_STARTED then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_WALKING,
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
+        player:GossipSendMenu(GOSSIP_ID_START, creature)
+    elseif part1 == STATE_DONE and part2 == STATE_NOT_STARTED then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_SKARLOC1,
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
+        player:GossipSendMenu(GOSSIP_ID_SKARLOC1, creature)
+    elseif part2 == STATE_DONE and part3 == STATE_NOT_STARTED then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_TARREN,
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 3)
+        player:GossipSendMenu(GOSSIP_ID_TARREN, creature)
+    end
+end
+
+local function thrallGossipSelect(event, player, creature, sender, action)
+    local data = instanceDataOf(creature)
+    if action == GOSSIP_ACTION_INFO_DEF + 1 then
+        player:GossipComplete()
+        if data then
+            data.thrallEvent = STATE_IN_PROGRESS
+            data.thrallPart1 = STATE_IN_PROGRESS
+        end
+        creature:Talk(SAY_TH_START_EVENT_PART1)
+    elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
+        player:GossipClearMenu()
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_ITEM_SKARLOC2,
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 20)
+        player:GossipSendMenu(GOSSIP_ID_SKARLOC2, creature)
+    elseif action == GOSSIP_ACTION_INFO_DEF + 20 then
+        player:GossipSendMenu(GOSSIP_ID_SKARLOC3, creature)
+        creature:SummonCreature(SKARLOC_MOUNT, 2038.81, 270.26, 63.20, 5.41, 1, 12000)
+        if data then
+            data.thrallPart2 = STATE_IN_PROGRESS
+        end
+        creature:Talk(SAY_TH_START_EVENT_PART2)
+    elseif action == GOSSIP_ACTION_INFO_DEF + 3 then
+        player:GossipComplete()
+        if data then
+            data.thrallPart3 = STATE_IN_PROGRESS
+        end
+    end
+end
+
+RegisterCreatureGossipEvent(ENTRY, 1, thrallGossipHello)
+RegisterCreatureGossipEvent(ENTRY, 2, thrallGossipSelect)
