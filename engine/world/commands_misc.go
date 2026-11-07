@@ -110,7 +110,25 @@ func (s *session) handleCmdAddItem(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandAddItem) {
 		return
 	}
-	s.handleAddItemCommand(ctx, args)
+	s.handleAddItemCommand(ctx, miscRejoinBracketName(args))
+}
+
+// miscRejoinBracketName re-assembles a "[Multi Word Name]" first token
+// split by the whitespace dispatcher (cs_misc.cpp:1157-1159: strtok(args,
+// "]") takes everything up to the first "]"). With no "]" anywhere, C++
+// strtok returns the whole string as the name and the count stays 1, so
+// all args join into one name token.
+func miscRejoinBracketName(args []string) []string {
+	if len(args) == 0 || !strings.HasPrefix(args[0], "[") || strings.Contains(args[0], "]") {
+		return args
+	}
+	for i := 1; i < len(args); i++ {
+		if strings.Contains(args[i], "]") {
+			joined := strings.Join(args[:i+1], " ")
+			return append([]string{joined}, args[i+1:]...)
+		}
+	}
+	return []string{strings.Join(args, " ")}
 }
 
 // miscExtractItemID mirrors the C++ id extraction in HandleAddItemCommand

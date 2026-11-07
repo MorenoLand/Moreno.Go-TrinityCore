@@ -186,6 +186,11 @@ const permissionChangeChannelNotModerator uint32 = 46
 // permissionCheckForLowerSecurity mirrors rbac::RBAC_PERM_CHECK_FOR_LOWER_SECURITY (RBAC.h:100).
 const permissionCheckForLowerSecurity uint32 = 47
 
+// permissionCommandsPInfoCheckPersonalData mirrors
+// rbac::RBAC_PERM_COMMANDS_PINFO_CHECK_PERSONAL_DATA (RBAC.h:101): the
+// .pinfo personal-data gate (cs_misc.cpp:1595-1596).
+const permissionCommandsPInfoCheckPersonalData uint32 = 48
+
 const permissionWhoSeeAllSecurityLevels uint32 = 35
 
 // permissionAllowGMFriend mirrors rbac::RBAC_PERM_ALLOW_GM_FRIEND (RBAC.h:93).

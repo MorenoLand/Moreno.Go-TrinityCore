@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -545,7 +546,8 @@ func (s *session) handleCmdShowArea(ctx context.Context, args []string) {
 }
 
 // handleCmdHideArea mirrors HandleHideAreaCommand (cs_misc.cpp:1113-1145,
-// RBAC 508): clear the area's explored bit on the selected player.
+// RBAC 508): XOR-toggle the area's explored bit on the selected player —
+// hiding an unexplored area explores it (cs_misc.cpp:1140).
 func (s *session) handleCmdHideArea(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandHideArea) {
 		return
@@ -569,7 +571,7 @@ func (s *session) handleCmdHideArea(ctx context.Context, args []string) {
 		s.sendSysMessage(misc2BadValue)
 		return
 	}
-	target.player.ExploredZones[offset] &^= mask
+	target.player.ExploredZones[offset] ^= mask
 	target.persistExploredZones(ctx)
 	target.sendPlayerValuesUpdate(map[int]uint32{playerExploredZonesStart + offset: target.player.ExploredZones[offset]})
 	s.sendSysMessage(misc2HideArea)
@@ -1271,59 +1273,284 @@ func (s *session) handleCmdNearGrave(ctx context.Context, args []string) {
 }
 
 // handleCmdPInfo mirrors HandlePInfoCommand (cs_misc.cpp:1430-1801, RBAC
-// 517): print character and account info. Partial port (documented fidelity
-// gaps, not stubs): the login-DB legs (ban info, mute info, last IP, OS,
-// emails, last login, failed logins) and the mail count have no Go bridge;
-// race/class/area names have no DBC-name bridge, so ids are printed. What is
-// printed comes from the live session or the characters/account tables.
+// 517): print character and account info in the C++ I-XXI order. The
+// login-DB legs (ban/mute/last login/IP/OS/emails, RBAC 48 personal-data
+// gate) and the mail count are live queries now; race/class/area names
+// still have no DBC-name bridge, so ids are printed. Deltas: no IP-location
+// country suffix (no IP-location bridge); the account-ban type prints
+// "Unknown", mirroring the C++ quirk where banType is only set to
+// "Character" on the character-ban fallback (cs_misc.cpp:1654-1659).
 func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandPInfo) {
 		return
 	}
-	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
+	// C++ tries atoul(args) -> GetCharacterNameByGuid first (cs_misc.cpp:1445-1450),
+	// so a bare numeric GUID resolves offline targets too; a name that
+	// is not a known guid falls through to the normal target resolution.
+	resolveArgs := args
+	if len(args) > 0 {
+		if n := cAtoi(args[0]); n > 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			var guidName string
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ? LIMIT 1", n).Scan(&guidName); err == nil && guidName != "" {
+				resolveArgs = []string{guidName}
+			}
+		}
+	}
+	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, resolveArgs)
 	if !ok {
 		return
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target, guid: guid, name: name}) {
 		return // C++ HasLowerSecurity: silent fail
 	}
-	s.sendSysMessage(fmt.Sprintf("Player %s (guid: %d)", miscPlayerLink(name), guid))
+	online := target != nil && target.player != nil
 	var accountID uint32
-	if target != nil && target.player != nil {
+	var level, race, class, gender uint8
+	var money, mapID, zoneID, totalTime uint32
+	var alive bool
+	var latency uint32
+	var phase uint32
+	isGM := false
+	haveBase := online
+	if online {
 		p := target.player
-		alive := "no"
-		if p.Health > 0 {
-			alive = "yes"
-		}
-		s.sendSysMessage(fmt.Sprintf("Level: %d, Race: %d, Class: %d, Alive: %s", p.Level, p.Race, p.Class, alive))
-		s.sendSysMessage(fmt.Sprintf("Money: %d, Map: %d, Zone: %d", p.Money, p.Map, p.Zone))
-		if p.GuildID != 0 {
-			s.sendSysMessage(fmt.Sprintf("Guild id: %d", p.GuildID))
-		}
 		accountID = target.accountID
+		level, race, class, gender = p.Level, p.Race, p.Class, p.Gender
+		money = p.Money
+		mapID, zoneID = p.Map, p.Zone
+		totalTime = p.TotalPlayedTime
+		alive = p.Health > 0
+		latency = target.latency.Load()
+		phase = target.currentPlayerPhaseMask()
+		isGM = sessionIsGameMaster(target)
 	} else if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		var level, race, class uint8
-		var money, health, maxHealth, mapID, zone uint32
-		var totalTime uint32
+		var health, playerFlags uint32
+		// CHAR_SEL_CHAR_PINFO (CharacterDatabase.cpp:412).
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
-			"SELECT level, race, class, money, health, maxHealth, map, zone, totaltime FROM characters WHERE guid = ?",
-			guid).Scan(&level, &race, &class, &money, &health, &maxHealth, &mapID, &zone, &totalTime); err != nil {
+			"SELECT totaltime, level, money, account, race, class, map, zone, gender, health, playerFlags FROM characters WHERE guid = ?",
+			guid).Scan(&totalTime, &level, &money, &accountID, &race, &class, &mapID, &zoneID, &gender, &health, &playerFlags); err != nil {
 			return // C++ returns false on no PINFO row, it does not print a level-0 row
 		}
-		alive := "no"
-		if health > 0 {
-			alive = "yes"
+		alive = health > 0 && playerFlags&playerFlagGhost == 0
+		haveBase = true
+	}
+	if !haveBase {
+		s.sendSysMessage(fmt.Sprintf("Player %s (guid: %d)", miscPlayerLink(name), guid))
+		return
+	}
+
+	// LOGIN_SEL_PINFO (LoginDatabase.cpp:87): username, email, reg_mail,
+	// last_ip, last_login, mutetime, mutereason, muteby, failed_logins,
+	// locked, OS. The personal-data fields stay "Unauthorized" unless the
+	// invoker holds RBAC 48 and outranks the target (cs_misc.cpp:1595-1614);
+	// the DB mutetime overwrites the live session value, as in C++.
+	userName, eMail, regMail, lastIP, lastLogin, osName := "error", "error", "error", "error", "error", "unknown"
+	muteReason, muteBy := "No reason", "Unknown"
+	var muteTime int64 = -1
+	var failedLogins uint32
+	var locked uint8
+	if online {
+		muteTime = target.muteTime
+	}
+	targetSecurity := s.accountSecurityLevel(ctx, accountID)
+	if db := s.authDB(); db != nil && accountID != 0 {
+		var dbUser, dbEmail, dbRegMail, dbLastIP, dbLastLogin, dbMuteReason, dbMuteBy, dbOS sql.NullString
+		var dbMuteTime, dbFailed, dbLocked sql.NullInt64
+		if err := db.QueryRowContext(ctx,
+			"SELECT username, email, reg_mail, last_ip, last_login, mutetime, mutereason, muteby, failed_logins, locked, OS FROM account WHERE id = ?",
+			accountID).Scan(&dbUser, &dbEmail, &dbRegMail, &dbLastIP, &dbLastLogin, &dbMuteTime, &dbMuteReason, &dbMuteBy, &dbFailed, &dbLocked, &dbOS); err == nil {
+			userName = dbUser.String
+			muteTime = dbMuteTime.Int64
+			muteReason = dbMuteReason.String
+			if muteReason == "" {
+				muteReason = "No reason"
+			}
+			muteBy = dbMuteBy.String
+			if muteBy == "" {
+				muteBy = "Unknown"
+			}
+			failedLogins = uint32(dbFailed.Int64)
+			locked = uint8(dbLocked.Int64)
+			osName = dbOS.String
+			if osName == "" {
+				osName = "unknown"
+			}
+			if s.commandAllowed(ctx, permissionCommandsPInfoCheckPersonalData) && s.security >= targetSecurity {
+				eMail = dbEmail.String
+				regMail = dbRegMail.String
+				lastIP = dbLastIP.String
+				lastLogin = dbLastLogin.String
+			} else {
+				eMail, regMail, lastIP, lastLogin = "Unauthorized", "Unauthorized", "Unauthorized", "Unauthorized"
+			}
 		}
-		s.sendSysMessage(fmt.Sprintf("Level: %d (offline), Race: %d, Class: %d, Alive: %s", level, race, class, alive))
-		s.sendSysMessage(fmt.Sprintf("Money: %d, Map: %d, Zone: %d, Played: %ds", money, mapID, zone, totalTime))
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", guid).Scan(&accountID)
 	}
-	if accountID != 0 {
-		accName := s.accountNameByID(ctx, accountID)
-		sec := s.accountSecurityLevel(ctx, accountID)
-		s.sendSysMessage(fmt.Sprintf("Account: %s (id: %d), GM level: %d", accName, accountID, sec))
+
+	// Ban legs (cs_misc.cpp:1645-1661): account_banned first (active,
+	// oldest bandate), else character_banned. banTime is 0 for a permanent
+	// ban (bandate == unbandate), else the unban timestamp; -1 means no ban.
+	banTime := int64(-1)
+	banType, banReason, bannedBy := "Unknown", "No reason", "Unknown"
+	if db := s.authDB(); db != nil && accountID != 0 {
+		var unban, permanent uint32
+		var by, reason string
+		if err := db.QueryRowContext(ctx,
+			"SELECT unbandate, bandate = unbandate, bannedby, banreason FROM account_banned WHERE id = ? AND active ORDER BY bandate ASC LIMIT 1",
+			accountID).Scan(&unban, &permanent, &by, &reason); err == nil {
+			if permanent != 0 {
+				banTime = 0
+			} else {
+				banTime = int64(unban)
+			}
+			banReason, bannedBy = reason, by
+		}
 	}
-	s.sendSysMessage("Ban/mute/login history, emails and mail counts are unavailable: the login-DB bridges are unbuilt.")
+	if banTime < 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var unban, permanent uint32
+		var by, reason string
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT unbandate, bandate = unbandate, bannedby, banreason FROM character_banned WHERE guid = ? AND active ORDER BY bandate ASC LIMIT 1",
+			guid).Scan(&unban, &permanent, &by, &reason); err == nil {
+			banType = "Character"
+			if permanent != 0 {
+				banTime = 0
+			} else {
+				banTime = int64(unban)
+			}
+			banReason, bannedBy = reason, by
+		}
+	}
+
+	// CHAR_SEL_PINFO_XP (CharacterDatabase.cpp:417): current xp plus the
+	// guild-member guid (non-zero when the character is in a guild).
+	var xp uint32
+	var guildMemberGUID uint32
+	if online {
+		xp = target.player.XP
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var dbXP, dbGuildGUID uint32
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT a.xp, b.guid FROM characters a LEFT JOIN guild_member b ON a.guid = b.guid WHERE a.guid = ?",
+			guid).Scan(&dbXP, &dbGuildGUID); err == nil {
+			xp = dbXP
+			guildMemberGUID = dbGuildGUID
+		}
+	}
+	var guildID uint32
+	var guildName, guildRank, guildNote, guildOffNote string
+	var guildRankID uint8
+	if guildMemberGUID != 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		// CHAR_SEL_GUILD_MEMBER_EXTENDED (CharacterDatabase.cpp:106).
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT g.guildid, g.name, gr.rname, gr.rid, gm.pnote, gm.offnote FROM guild g JOIN guild_member gm ON g.guildid = gm.guildid JOIN guild_rank gr ON g.guildid = gr.guildid AND gm.`rank` = gr.rid WHERE gm.guid = ?",
+			guid).Scan(&guildID, &guildName, &guildRank, &guildRankID, &guildNote, &guildOffNote)
+	}
+
+	// Output I. LANG_PINFO_PLAYER
+	offlineMark := ""
+	if !online {
+		offlineMark = "Offline "
+	}
+	s.sendSysMessage(fmt.Sprintf("Player %s%s (guid: %d)", offlineMark, miscPlayerLink(name), guid))
+	// Output II. LANG_PINFO_GM_ACTIVE
+	if online && isGM {
+		s.sendSysMessage("** GM Mode active, Phase: -1")
+	}
+	// Output III. LANG_PINFO_BANNED
+	if banTime >= 0 {
+		banLeft := "Permanently"
+		if banTime > 0 {
+			if remain := banTime - time.Now().Unix(); remain > 0 {
+				banLeft = secsToTimeStringShort(uint64(remain))
+			} else {
+				banLeft = secsToTimeStringShort(0)
+			}
+		}
+		s.sendSysMessage(fmt.Sprintf("** Banned: (Type: %s, Reason: %s, Time: %s, By: %s)", banType, banReason, banLeft, bannedBy))
+	}
+	// Output IV. LANG_PINFO_MUTED
+	if muteTime > 0 {
+		muteLeft := secsToTimeStringShort(0)
+		if remain := muteTime - time.Now().Unix(); remain > 0 {
+			muteLeft = secsToTimeStringShort(uint64(remain))
+		}
+		s.sendSysMessage(fmt.Sprintf("** Muted: (Reason: %s, Time: %s, By: %s)", muteReason, muteLeft, muteBy))
+	}
+	// Output V. LANG_PINFO_ACC_ACCOUNT
+	s.sendSysMessage(fmt.Sprintf("Account: %s (id: %d), GM level: %d", userName, accountID, targetSecurity))
+	// Output VI. LANG_PINFO_ACC_LASTLOGIN
+	s.sendSysMessage(fmt.Sprintf("Last Login: %s (Failed Logins: %d)", lastLogin, failedLogins))
+	// Output VII. LANG_PINFO_ACC_OS
+	s.sendSysMessage(fmt.Sprintf("Uses OS: %s - Latency: %d ms", osName, latency))
+	// Output VIII. LANG_PINFO_ACC_REGMAILS
+	s.sendSysMessage(fmt.Sprintf("Registration Email: %s - Email: %s", regMail, eMail))
+	// Output IX. LANG_PINFO_ACC_IP
+	lockedStr := "no"
+	if locked != 0 {
+		lockedStr = "yes"
+	}
+	s.sendSysMessage(fmt.Sprintf("Last IP: %s (Locked: %s)", lastIP, lockedStr))
+	// Output X. LANG_PINFO_CHR_LEVEL
+	maxLevel := uint32(defaultMaxPlayerLevel)
+	if s.server != nil && s.server.Config.MaxPlayerLevel != 0 {
+		maxLevel = s.server.Config.MaxPlayerLevel
+	}
+	if uint32(level) != maxLevel {
+		xpTotal := uint32(0)
+		if s.server != nil {
+			xpTotal = s.server.xpForLevel(ctx, uint32(level))
+		}
+		xpLeft := uint32(0)
+		if xpTotal > xp {
+			xpLeft = xpTotal - xp
+		}
+		s.sendSysMessage(fmt.Sprintf("Level: %d (%d/%d XP (%d XP left))", level, xp, xpTotal, xpLeft))
+	} else {
+		s.sendSysMessage(fmt.Sprintf("Level: %d", level))
+	}
+	// Output XI. LANG_PINFO_CHR_RACE
+	genderStr := "Male"
+	if gender != 0 {
+		genderStr = "Female"
+	}
+	s.sendSysMessage(fmt.Sprintf("Race: %s %d, Class: %d", genderStr, race, class))
+	// Output XII. LANG_PINFO_CHR_ALIVE
+	aliveStr := "no"
+	if alive {
+		aliveStr = "yes"
+	}
+	s.sendSysMessage(fmt.Sprintf("Alive: %s", aliveStr))
+	// Output XIII. LANG_PINFO_CHR_PHASE
+	if online && !isGM {
+		s.sendSysMessage(fmt.Sprintf("Phase: %d", phase))
+	}
+	// Output XIV. LANG_PINFO_CHR_MONEY
+	s.sendSysMessage(fmt.Sprintf("Money: %dg%ds%dc", money/10000, (money%10000)/100, money%100))
+	// Output XV. LANG_PINFO_CHR_MAP
+	s.sendSysMessage(fmt.Sprintf("Map: %d, Zone: %d", mapID, zoneID))
+	// Output XVI.-XIX. guild lines
+	if guildName != "" {
+		s.sendSysMessage(fmt.Sprintf("Guild: %s (Id: %d)", guildName, guildID))
+		s.sendSysMessage(fmt.Sprintf("Rank: %s (%d)", guildRank, guildRankID))
+		if guildNote != "" {
+			s.sendSysMessage(fmt.Sprintf("Note: %s", guildNote))
+		}
+		if guildOffNote != "" {
+			s.sendSysMessage(fmt.Sprintf("O. Note: %s", guildOffNote))
+		}
+	}
+	// Output XX. LANG_PINFO_CHR_PLAYEDTIME
+	s.sendSysMessage(fmt.Sprintf("Played time: %s", secsToTimeStringShort(uint64(totalTime))))
+	// Output XXI. LANG_PINFO_CHR_MAILS
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var readMail, totalMail sql.NullInt64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT SUM(CASE WHEN (checked & 1) THEN 1 ELSE 0 END), COUNT(*) FROM mail WHERE receiver = ?",
+			guid).Scan(&readMail, &totalMail); err == nil && totalMail.Int64 >= 1 {
+			s.sendSysMessage(fmt.Sprintf("Mails: %d Read/%d Total", readMail.Int64, totalMail.Int64))
+		}
+	}
 }
 
 // handleCmdPlayAll mirrors HandlePlayAllCommand (cs_misc.cpp:2509-2523, RBAC
@@ -2163,6 +2390,52 @@ func (s *session) handleCmdUnstuck(ctx context.Context, args []string) {
 // returns null otherwise, LANG_NO_WEATHER); the zone weather is then set to
 // the given type and grade via Weather::SetWeather, which no-ops on an
 // identical pair and otherwise broadcasts to the zone.
+// miscWeatherTypeNames is the EnumUtils search map for WeatherType
+// (SharedDefines.h:3146-3154, enuminfo_SharedDefines.cpp:2756-2769): the
+// constant names, matched case-insensitively by unique prefix
+// (ChatCommandArgs.h:128-200). A bare "rain" does not match — only the
+// "WEATHER_TYPE_*" constants do.
+var miscWeatherTypeNames = []struct {
+	name  string
+	value weatherType
+}{
+	{"WEATHER_TYPE_FINE", weatherFine},
+	{"WEATHER_TYPE_RAIN", weatherRain},
+	{"WEATHER_TYPE_SNOW", weatherSnow},
+	{"WEATHER_TYPE_STORM", weatherStorm},
+	{"WEATHER_TYPE_THUNDERS", weatherThunders},
+	{"WEATHER_TYPE_BLACKRAIN", weatherBlackRain},
+}
+
+// miscParseWeatherType mirrors the enum ArgInfo for WeatherType: a
+// case-insensitive unique-prefix name match first, then a numeric parse
+// that must be a valid enum value (0, 1, 2, 3, 86, 90 — not 0-5).
+func miscParseWeatherType(token string) (weatherType, bool) {
+	var match weatherType
+	matched := false
+	for _, entry := range miscWeatherTypeNames {
+		if len(token) > len(entry.name) || !strings.EqualFold(token, entry.name[:len(token)]) {
+			continue
+		}
+		if matched {
+			return 0, false // ambiguous prefix
+		}
+		match, matched = entry.value, true
+	}
+	if matched {
+		return match, true
+	}
+	val, err := strconv.ParseUint(token, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	switch weatherType(val) {
+	case weatherFine, weatherRain, weatherSnow, weatherStorm, weatherThunders, weatherBlackRain:
+		return weatherType(val), true
+	}
+	return 0, false
+}
+
 func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandChangeWeather) {
 		return
@@ -2175,8 +2448,8 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
 		return
 	}
-	typeVal, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	wtype, ok := miscParseWeatherType(args[0])
+	if !ok {
 		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
 		return
 	}
@@ -2193,7 +2466,7 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 		s.sendSysMessage("There is no weather in this zone.")
 		return
 	}
-	s.server.setZoneWeather(ctx, s.player.Zone, weatherType(typeVal), float32(intensity))
+	s.server.setZoneWeather(ctx, s.player.Zone, wtype, float32(intensity))
 }
 
 // handleCmdMailBox mirrors HandleMailBoxCommand (cs_misc.cpp:2566-2574, RBAC
