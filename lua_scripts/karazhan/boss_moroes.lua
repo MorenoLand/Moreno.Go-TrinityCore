@@ -33,7 +33,9 @@
 -- ARE ported via guest:EngageWithTarget(victim) + guest:DoZoneInCombat()
 -- (2026-10-20 EngageWithTarget bridge; guests found by entry with
 -- FindNearestCreature, alive-only, 60 yd — the despawn-sweep range).
--- The missing-add EnterEvadeMode arm stays out (no bridge).
+-- The missing-add EnterEvadeMode arm is ported in addsAttack below
+-- (bridge live 2026-10-07 tick 389; boss_moroes.cpp:240-255, evade
+-- call :252 — the file's old ":224-238" citation had drifted).
 
 local ENTRY_MOROES = 15687
 local ENTRY_DOROTHEA, ENTRY_RAFE, ENTRY_CATRIONA = 17007, 19872, 19873
@@ -221,30 +223,56 @@ local function onGouge(creature, guid)
     schedule(guid, "gouge", 40000, function() onGouge(creature, guid) end)
 end
 
--- C++ boss_moroes.cpp:224-238 AddsAttack + :268-279 CheckAdds: guests are
--- found by their picked entry (FindNearestCreature is alive-only, so a
--- dead/missing guest reads nil — the C++ EnterEvadeMode arm for that case
--- stays out, no bridge).
+-- C++ boss_moroes.cpp:240-255 AddsAttack + :268-279 CheckAdds: guests are
+-- found by their picked entry. A picked add whose GUID resolves to a
+-- dead/missing creature makes Moroes EnterEvadeMode (the else arm,
+-- :252); FindNearestCreature is alive-only, so a nil there would
+-- conflate a far-but-living guest with a dead one — the evade decision
+-- uses the 500 yd entry grid scan instead (no GUID->creature lookup;
+-- despawnAdds uses the same sweep convention), alive-filtered since
+-- GetCreaturesInGrid returns corpses too.
 local function liveGuest(creature, entry)
     return creature:FindNearestCreature(entry, 60)
 end
 
+-- Returns true when AddsAttack evaded Moroes (C++ :252): the caller
+-- skips the 5s CheckAdds schedule, since C++ UpdateAI (and its
+-- CheckAdds_Timer) does not run while evading.
 local function addsAttack(creature)
     local state = moroesState[creature:GetGUID()]
     if state == nil or state.addIds == nil then
-        return
+        return false
     end
     local victim = creature:GetVictim()
     if victim == nil then
-        return
+        return false
     end
+    local evaded = false
     for _, entry in ipairs(state.addIds) do
-        local guest = liveGuest(creature, entry)
-        if guest ~= nil then
-            guest:EngageWithTarget(victim)
-            guest:DoZoneInCombat()
+        local alive = false
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 500)) do
+            if not add:IsDead() then
+                alive = true
+                break
+            end
+        end
+        if not alive then
+            -- C++ boss_moroes.cpp:252: dead/missing add -> Moroes
+            -- EnterEvadeMode (bridge live 2026-10-07 tick 389). The
+            -- evade fires ev23 first, which respawns the adds, so the
+            -- loop re-finds them alive on later entries — the C++
+            -- Reset cascade (no re-check of this entry, as in C++).
+            creature:EnterEvadeMode()
+            evaded = true
+        else
+            local guest = liveGuest(creature, entry)
+            if guest ~= nil then
+                guest:EngageWithTarget(victim)
+                guest:DoZoneInCombat()
+            end
         end
     end
+    return evaded
 end
 
 local function onCheckAdds(creature, guid)
@@ -280,13 +308,16 @@ local function moroesEnterCombat(event, creature, target)
     schedule(guid, "vanish", 30000, function() onVanish(creature, guid) end)
     schedule(guid, "blind", 35000, function() onBlind(creature, guid) end)
     schedule(guid, "gouge", 23000, function() onGouge(creature, guid) end)
-    -- C++ JustEngagedWith's AddsAttack (boss_moroes.cpp:224-238) —
+    -- C++ JustEngagedWith's AddsAttack (boss_moroes.cpp:240-255) —
     -- temp->AI()->AttackStart(me->GetVictim()) + DoZoneInCombat(temp)
-    -- for each live add; the missing-add EnterEvadeMode arm stays out
-    -- (no bridge). The 5s CheckAdds poll (boss_moroes.cpp:268-279)
-    -- re-engages guests that lost their victim.
-    addsAttack(creature)
-    schedule(guid, "checkadds", 5000, function() onCheckAdds(creature, guid) end)
+    -- for each live add; the missing-add EnterEvadeMode arm (:252)
+    -- is ported in addsAttack. The 5s CheckAdds poll
+    -- (boss_moroes.cpp:268-279) re-engages guests that lost their
+    -- victim; it is skipped when AddsAttack evaded Moroes, since
+    -- C++ UpdateAI does not run while evading.
+    if not addsAttack(creature) then
+        schedule(guid, "checkadds", 5000, function() onCheckAdds(creature, guid) end)
+    end
 end
 
 -- Enrage: C++ UpdateAI checks HealthBelowPct(30) on the post-damage health
@@ -399,6 +430,11 @@ RegisterCreatureEvent(ENTRY_MOROES, 23, moroesReset)
 -- Healer guests (catriona, keira) pick a random alive co-add via the
 -- instance; with no instance-script model the fallback is the caster
 -- itself, like C++'s SelectGuestTarget returning me when no add is found.
+-- C++ boss_moroes_guestAI::UpdateAI (boss_moroes.cpp:364-370) evades a
+-- guest when the boss state is not IN_PROGRESS — vacuous in-flow: the
+-- boss Reset always despawns + respawns the guests (SpawnAdds,
+-- boss_moroes.cpp:184-211) before any guest tick could observe
+-- NOT_STARTED, so no relay is ported.
 local function guestHealTarget(creature)
     return creature
 end

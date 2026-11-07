@@ -4606,6 +4606,22 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		motion.Moving = false
 		return
 	}
+	// CreatureAI::_EnterEvadeMode (CreatureAI.cpp:294-298) no-ops on a
+	// creature already in evade mode (IsInEvadeMode / UNIT_STATE_EVADE):
+	// a re-entrant EnterEvadeMode — a Lua ev2 relay back to a creature
+	// already evading, or a repeated leash tick — is a no-op, not a
+	// second Reset + home relaunch.
+	if motion.Evading {
+		return
+	}
+	// CreatureAI::EnterEvadeMode (CreatureAI.cpp:214-236) sets the evade
+	// state (AddUnitState UNIT_STATE_EVADE) before Reset() runs, so a
+	// script override's relay reads the flag set. Go fires the Lua
+	// OnReset/OnLeaveCombat hooks ahead of the base evade, so the flag
+	// must be set before them: a two-way relay (muru/entropius,
+	// boss_muru.cpp:255-259) otherwise recurses with Evading still
+	// false throughout. A vetoed evade clears the flag again below.
+	motion.Evading = true
 	wasInCombat := motion.InCombat
 	// Eluna::EnterEvadeMode (CreatureHooks.cpp:202) calls On_Reset first —
 	// CREATURE_EVENT_ON_RESET, event 23, a void hook (START_HOOK at
@@ -4618,6 +4634,9 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 	if wasInCombat {
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReset)
 		if s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnLeaveCombat) {
+			// The evade was vetoed: the base evade never ran, so the
+			// flag set above is rolled back.
+			motion.Evading = false
 			return
 		}
 	}
@@ -4723,6 +4742,10 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			// finalized spline and finalizes immediately, so AI()->JustReachedHome()
 			// still fires (HomeMovementGenerator.cpp:139-151); the creature simply
 			// stays where it is instead of returning home at base run speed.
+			// DoFinalize clears UNIT_STATE_EVADE on the immediate finalize,
+			// so the flag set at evade start clears here, as in the
+			// already-home arm below.
+			motion.Evading = false
 			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 			return
 		}

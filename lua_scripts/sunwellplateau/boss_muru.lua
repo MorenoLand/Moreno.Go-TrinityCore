@@ -56,7 +56,9 @@
 -- NOT_STARTED leg (ports via creature:SetBossState, bridge live
 -- lua_creature_events.go:5917; the RemoveFlag(NOT_SELECTABLE) arm
 -- is vacuous — the set side stays out, above; the EnterEvadeMode
--- entropius relay stays out on cross-creature grounds). The
+-- entropius relay is a dead arm in C++ — Reset clears the
+-- _entropiusGUID latch before the relay reads it, see
+-- muruLeaveCombat). The
 -- SetCombatMovement(false) constructor arm PORTED in muruEnterCombat
 -- (boss_muru.cpp:237; the stale "no movement bridge" claim is
 -- retracted — Muru never moves in this model, C++-exact). Entropius (25840). OnReset(23):
@@ -369,14 +371,17 @@ end
 
 local function muruLeaveCombat(event, creature)
     muruResetState(creature:GetGUID())
-    -- NO entropius relay here: C++ boss_muruAI::EnterEvadeMode
-    -- (:255-259) relays to the latched _entropiusGUID, but Go sets
-    -- motion.Evading only AFTER the ev2 hooks fire
-    -- (creaturemotion.go:4733), so a two-way evade relay would
-    -- recurse on a phase-2 wipe (entropius ev2 -> muru evade ->
-    -- muru ev2 -> entropius evade, Evading still false throughout).
-    -- C++ sets the evade flag before the AI override; until the Go
-    -- ordering matches, the muru -> entropius leg stays out.
+    -- NO entropius relay here, on C++ grounds (not Go-ordering
+    -- grounds): C++ boss_muruAI::EnterEvadeMode (:255-259) calls
+    -- BossAI::EnterEvadeMode() FIRST, whose Reset() runs Initialize()
+    -- (:240-246) clearing _entropiusGUID (:244) — so the relay line
+    -- (:258) reads an empty GUID and never fires; the arm is dead in
+    -- C++ (BossAI adds no EnterEvadeMode override, so the base
+    -- CreatureAI::EnterEvadeMode Reset() always runs first). Go
+    -- mirrors the latch-clear: ev23 (muruReset) wipes muruState
+    -- before ev2 runs, so the latch is already gone here. Entropius
+    -- evades/despawns on its own path (its EnterEvadeMode relays to
+    -- muru first, :184-185, then DespawnOrUnsummon).
 end
 
 local function muruDied(event, creature, killer)
@@ -498,8 +503,10 @@ end
 -- entropiusCleanup: C++ JustDied despawns no summons.
 local function entropiusLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
-    -- C++ :184-185 first: muru evades with entropius. One-way only
-    -- (see muruLeaveCombat): muru's evade does not relay back.
+    -- C++ :184-185 first: muru evades with entropius. One-way only,
+    -- and C++-exact: muru's relay back is a dead arm (its Reset
+    -- clears the _entropiusGUID latch first — see muruLeaveCombat),
+    -- not a missing bridge.
     local muru = creature:GetInstanceCreature(DATA_MURU)
     if muru then
         muru:EnterEvadeMode()
