@@ -38,8 +38,10 @@ import (
 //     from each aura's single stored AuraType;
 //   - only online players can be targeted for `auras` (no offline
 //     CharacterCache name->GUID bridge in the Go tree); `mail` resolves
-//     offline names/GUIDs through the character DB. Creature selections
-//     for `auras` report the missing selection honestly;
+//     offline names/GUIDs through the character DB. No selection lists
+//     the invoker's own auras (getSelectedUnit falls back to self,
+//     Chat.cpp:312-321); creature selections have no aura model in the
+//     Go tree (auras live on sessions only) and report honestly;
 //   - `respawns` has no Go bridge at all (no live map respawn registry, no
 //     spawn-group model, no IsBattlegroundOrArena-per-map state) and is
 //     RBAC-gated with an honest message instead of a stub.
@@ -47,63 +49,63 @@ import (
 // handleCmdList ports the list command table (cs_list.cpp:52-64): 7 arms,
 // Trinity per-level prefix matching, each arm gated on its own RBAC permission
 // (ChatCommand.cpp:487 checks the invoker/leaf node only).
-func (s *session) handleCmdList(ctx context.Context, args []string) {
-	const syntax = "Syntax: .list creature|item|object|auras|mail|spawnpoints|respawns"
+func (s *session) handleCmdList(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
-			return true
-		}
-		return false
+		return !s.commandAllowed(ctx, perm)
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
 	switch {
 	case strings.HasPrefix("creature", sub):
 		if deny(permissionCommandListCreature) {
-			return
+			return false
 		}
-		s.handleListCreatureCommand(ctx, rest)
+		return s.handleListCreatureCommand(ctx, rest)
 	case strings.HasPrefix("item", sub):
 		if deny(permissionCommandListItem) {
-			return
+			return false
 		}
-		s.handleListItemCommand(ctx, rest)
+		return s.handleListItemCommand(ctx, rest)
 	case strings.HasPrefix("object", sub):
 		if deny(permissionCommandListObject) {
-			return
+			return false
 		}
-		s.handleListObjectCommand(ctx, rest)
+		return s.handleListObjectCommand(ctx, rest)
 	case strings.HasPrefix("auras", sub):
 		if deny(permissionCommandListAuras) {
-			return
+			return false
 		}
-		s.handleListAurasCommand()
+		if len(rest) > 0 {
+			return false
+		}
+		return s.handleListAurasCommand()
 	case strings.HasPrefix("mail", sub):
 		if deny(permissionCommandListMail) {
-			return
+			return false
 		}
-		s.handleListMailCommand(ctx, rest)
+		return s.handleListMailCommand(ctx, rest)
 	case strings.HasPrefix("spawnpoints", sub):
 		if deny(permissionCommandListSpawnpoints) {
-			return
+			return false
 		}
-		s.handleListSpawnPointsCommand(ctx)
+		if len(rest) > 0 {
+			return false
+		}
+		return s.handleListSpawnPointsCommand(ctx)
 	case strings.HasPrefix("respawns", sub):
 		if deny(permissionCommandListRespawns) {
-			return
+			return false
 		}
-		s.handleListRespawnsCommand(ctx, rest)
+		return s.handleListRespawnsCommand(ctx, rest)
 	default:
-		s.sendSysMessage(syntax)
+		return false
 	}
 }
 
@@ -119,12 +121,15 @@ func parseListEntryID(arg, link string) (uint32, bool) {
 			j++
 		}
 		t = t[:j]
+		n, err := strconv.ParseUint(t, 10, 32)
+		if err != nil {
+			return 0, false
+		}
+		return uint32(n), true
 	}
-	n, err := strconv.ParseUint(t, 10, 32)
-	if err != nil {
-		return 0, false
-	}
-	return uint32(n), true
+	// Bare numeric id: StringTo<uint32> base 0 (ChatCommandArgs.h:60-70),
+	// so 0x/0b forms parse like the C++ Variant arm (R13 D9).
+	return parseCommandUint32(t)
 }
 
 // parseListEntryIDLink parses only the |H<kind>:<id>...|h link form, for arms
@@ -161,11 +166,9 @@ func listCountArg(args []string) (uint32, bool) {
 	if len(args) == 0 {
 		return 10, true
 	}
-	n, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		return 0, false
-	}
-	return uint32(n), true
+	// Base-0 StringTo<uint32> (ChatCommandArgs.h:60-70): 0x/0b counts
+	// parse like the C++ Optional<uint32> arm (R13 D9).
+	return parseCommandUint32(args[0])
 }
 
 // handleListCreatureCommand mirrors HandleListCreatureCommand
@@ -173,43 +176,45 @@ func listCountArg(args []string) (uint32, bool) {
 // rows ordered by distance from the invoker (cs_list.cpp:96-99). Every row
 // renders with empty live fields: the live-map spawn registry
 // (Map::GetCreatureBySpawnIdStore) has no Go bridge (documented gap).
-func (s *session) handleListCreatureCommand(ctx context.Context, args []string) {
+func (s *session) handleListCreatureCommand(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .list creature <entry|link> [count]")
-		return
+		return false
 	}
 	entry, ok := parseListEntryID(args[0], "creature_entry")
 	if !ok {
 		s.sendSysMessage("Syntax: .list creature <entry|link> [count]")
-		return
-	}
-	db := s.goWorldDB()
-	if db == nil {
-		s.sendSysMessage("Database not available.")
-		return
-	}
-	var name string
-	if err := db.QueryRowContext(ctx, "SELECT name FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&name); err != nil {
-		s.sendSysMessage(fmt.Sprintf("Invalid creature ID %d.", entry)) // LANG_COMMAND_INVALIDCREATUREID (440)
-		return
+		return true
 	}
 	count, ok := listCountArg(args[1:])
 	if !ok {
 		s.sendSysMessage("Syntax: .list creature <entry|link> [count]")
-		return
+		return true
+	}
+	if len(args) > 2 {
+		return false
+	}
+	db := s.goWorldDB()
+	if db == nil {
+		s.sendSysMessage("Database not available.")
+		return true
+	}
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT name FROM creature_template WHERE entry = ? LIMIT 1", entry).Scan(&name); err != nil {
+		s.sendSysMessage(fmt.Sprintf("Invalid creature ID %d.", entry)) // LANG_COMMAND_INVALIDCREATUREID (440)
+		return true
 	}
 	if count == 0 {
-		return
+		return false
 	}
 	var creatureCount uint64
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(guid) FROM creature WHERE id = ?", entry).Scan(&creatureCount); err != nil {
 		s.sendSysMessage(fmt.Sprintf("List creature error: %v", err))
-		return
+		return true
 	}
 	rows, err := listCreatureRows(ctx, db, entry, count, s.player.X, s.player.Y, s.player.Z)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("List creature error: %v", err))
-		return
+		return true
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -226,6 +231,7 @@ func (s *session) handleListCreatureCommand(ctx context.Context, args []string) 
 	}
 	// LANG_COMMAND_LISTCREATUREMESSAGE (441)
 	s.sendSysMessage(fmt.Sprintf("List of creatures found: %d (entry %d)", creatureCount, entry))
+	return true
 }
 
 func listCreatureRows(ctx context.Context, db *sql.DB, entry uint32, count uint32, px, py, pz float32) (*sql.Rows, error) {
@@ -235,44 +241,46 @@ func listCreatureRows(ctx context.Context, db *sql.DB, entry uint32, count uint3
 
 // handleListObjectCommand mirrors HandleListObjectCommand
 // (cs_list.cpp:251-317), the gameobject twin of the creature arm.
-func (s *session) handleListObjectCommand(ctx context.Context, args []string) {
+func (s *session) handleListObjectCommand(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .list object <entry|link> [count]")
-		return
+		return false
 	}
 	entry, ok := parseListEntryID(args[0], "gameobject_entry")
 	if !ok {
 		s.sendSysMessage("Syntax: .list object <entry|link> [count]")
-		return
-	}
-	db := s.goWorldDB()
-	if db == nil {
-		s.sendSysMessage("Database not available.")
-		return
-	}
-	var name string
-	if err := db.QueryRowContext(ctx, "SELECT name FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&name); err != nil {
-		s.sendSysMessage(fmt.Sprintf("Invalid gameobject ID %d.", entry)) // LANG_COMMAND_LISTOBJINVALIDID (437)
-		return
+		return true
 	}
 	count, ok := listCountArg(args[1:])
 	if !ok {
 		s.sendSysMessage("Syntax: .list object <entry|link> [count]")
-		return
+		return true
+	}
+	if len(args) > 2 {
+		return false
+	}
+	db := s.goWorldDB()
+	if db == nil {
+		s.sendSysMessage("Database not available.")
+		return true
+	}
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT name FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&name); err != nil {
+		s.sendSysMessage(fmt.Sprintf("Invalid gameobject ID %d.", entry)) // LANG_COMMAND_LISTOBJINVALIDID (437)
+		return true
 	}
 	if count == 0 {
-		return
+		return false
 	}
 	var objectCount uint64
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(guid) FROM gameobject WHERE id = ?", entry).Scan(&objectCount); err != nil {
 		s.sendSysMessage(fmt.Sprintf("List object error: %v", err))
-		return
+		return true
 	}
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT guid, position_x, position_y, position_z, map FROM gameobject WHERE id = ?
 		ORDER BY (POW(position_x - %f, 2) + POW(position_y - %f, 2) + POW(position_z - %f, 2)) ASC LIMIT ?`, s.player.X, s.player.Y, s.player.Z), entry, count)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("List object error: %v", err))
-		return
+		return true
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -289,6 +297,7 @@ func (s *session) handleListObjectCommand(ctx context.Context, args []string) {
 	}
 	// LANG_COMMAND_LISTOBJMESSAGE (439)
 	s.sendSysMessage(fmt.Sprintf("List of gameobjects found: %d (entry %d)", objectCount, entry))
+	return true
 }
 
 // item bag/slot constants mirror Player.h: EQUIPMENT_SLOT_END=19,
@@ -331,28 +340,33 @@ func listItemPos(bag, slot uint32) string {
 // decrementing the remaining count exactly like the C++ does (auction does
 // not decrement, matching cs_list.cpp). The entry arg is a plain
 // Hyperlink<item> (no bare-number form, unlike the creature/object arms).
-func (s *session) handleListItemCommand(ctx context.Context, args []string) {
+func (s *session) handleListItemCommand(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .list item <link> [count]")
-		return
+		return false
 	}
 	itemID, ok := parseListEntryIDLink(args[0], "item")
 	if !ok {
-		s.sendSysMessage("Syntax: .list item <link> [count]")
-		return
-	}
-	cdb := s.arenaCharactersDB()
-	if cdb == nil {
-		s.sendSysMessage("Database not available.")
-		return
+		if strings.Contains(args[0], "Hitem:") {
+			s.sendSysMessage("Syntax: .list item <link> [count]")
+			return true
+		}
+		return false
 	}
 	count, ok := listCountArg(args[1:])
 	if !ok {
 		s.sendSysMessage("Syntax: .list item <link> [count]")
-		return
+		return true
+	}
+	if len(args) > 2 {
+		return false
+	}
+	cdb := s.arenaCharactersDB()
+	if cdb == nil {
+		s.sendSysMessage("Database not available.")
+		return true
 	}
 	if count == 0 {
-		return
+		return false
 	}
 
 	var inventoryCount, mailCount, auctionCount, guildCount uint64
@@ -455,11 +469,12 @@ func (s *session) handleListItemCommand(ctx context.Context, args []string) {
 	total := inventoryCount + mailCount + auctionCount + guildCount
 	if total == 0 {
 		s.sendSysMessage("No item found.") // LANG_COMMAND_NOITEMFOUND (436)
-		return
+		return true
 	}
 	// LANG_COMMAND_LISTITEMMESSAGE (438)
 	s.sendSysMessage(fmt.Sprintf("List of items found: %d (item %d, inventory: %d, mail: %d, auction: %d, guild bank: %d)",
 		total, itemID, inventoryCount, mailCount, auctionCount, guildCount))
+	return true
 }
 
 // decrementListCount mirrors the C++ count shrink after each case:
@@ -487,16 +502,17 @@ func objectGUIDCounter(guid uint64) uint32 {
 }
 
 // handleListAurasCommand mirrors HandleListAurasCommand (cs_list.cpp:433-478)
-// for the selected player: no selection reports LANG_SELECT_CHAR_OR_CREATURE
-// (1); creature selections have no bridge and report the same message
-// (documented gap). Detail lines carry effect mask, charges, stack, slot,
+// for the selected unit (getSelectedUnit, Chat.cpp:312-321): no selection
+// falls back to self; creature selections have no aura model in the Go
+// tree (auras live on sessions only) and report honestly instead of
+// listing. Detail lines carry effect mask, charges, stack, slot,
 // duration and the passive mark (AttributesEx bit 0x40); the talent mark is
 // always empty because GetTalentSpellCost has no Go model.
-func (s *session) handleListAurasCommand() {
-	target := s.lookupSelectedPlayer()
+func (s *session) handleListAurasCommand() bool {
+	target := s.lookupSelectedPlayerOrSelf()
 	if target == nil || target.player == nil {
-		s.sendSysMessage("Select a character or a creature.") // LANG_SELECT_CHAR_OR_CREATURE (1)
-		return
+		s.sendSysMessage("Creature auras are unavailable: the Go tree has no creature aura model.")
+		return true
 	}
 	ids := make([]uint32, 0, len(target.activeAuras))
 	for id, a := range target.activeAuras {
@@ -565,6 +581,7 @@ func (s *session) handleListAurasCommand() {
 			s.sendSysMessage(fmt.Sprintf("Effect %d Index %d Amount %d", l.spellID, l.index, l.amount))
 		}
 	}
+	return true
 }
 
 // listMailPlayerLink mirrors ChatHandler::playerLink (Chat.h:119); the Go
@@ -587,11 +604,14 @@ var itemQualityColors = []uint32{
 // come straight from the character database (CHAR_SEL_MAIL_LIST_COUNT/INFO
 // in CharacterDatabase.cpp:41-43), item rows from mail_items +
 // item_instance + item_template.
-func (s *session) handleListMailCommand(ctx context.Context, args []string) {
+func (s *session) handleListMailCommand(ctx context.Context, args []string) bool {
+	if len(args) > 1 {
+		return false
+	}
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	// C++ PlayerIdentifier (ChatCommandTags.cpp:88-121) accepts a |Hplayer
 	// link, a numeric player GUID, or a plain name; the old code only tried
@@ -607,19 +627,22 @@ func (s *session) handleListMailCommand(ctx context.Context, args []string) {
 			if online := s.sessionForPlayerName(name); online != nil && online.player != nil {
 				targetGUID, targetName = online.playerGUID, online.player.Name
 			} else if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&targetGUID); err != nil || targetGUID == 0 {
-				return
+				s.sendSysMessage("Player not found.")
+				return true
 			} else {
 				targetName = name
 			}
 		case isAllDigits(first):
 			guid64, err := strconv.ParseUint(first, 10, 32)
 			if err != nil || guid64 == 0 {
-				return
+				s.sendSysMessage("Player not found.")
+				return true
 			}
 			if online := s.server.playerSessionForGUID(guid64); online != nil && online.player != nil {
 				targetGUID, targetName = online.playerGUID, online.player.Name
 			} else if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid64).Scan(&targetName); err != nil || targetName == "" {
-				return
+				s.sendSysMessage("Player not found.")
+				return true
 			} else {
 				targetGUID = guid64
 			}
@@ -628,7 +651,8 @@ func (s *session) handleListMailCommand(ctx context.Context, args []string) {
 			if online := s.sessionForPlayerName(name); online != nil && online.player != nil {
 				targetGUID, targetName = online.playerGUID, online.player.Name
 			} else if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&targetGUID); err != nil || targetGUID == 0 {
-				return
+				s.sendSysMessage("Player not found.")
+				return true
 			} else {
 				targetName = name
 			}
@@ -639,13 +663,13 @@ func (s *session) handleListMailCommand(ctx context.Context, args []string) {
 		} else if s.player != nil {
 			targetGUID, targetName = s.playerGUID, s.player.Name
 		} else {
-			return
+			return false
 		}
 	}
 	var countMail uint64
 	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(id) FROM mail WHERE receiver = ?", targetGUID).Scan(&countMail); err != nil {
 		s.sendSysMessage(fmt.Sprintf("List mail error: %v", err))
-		return
+		return true
 	}
 	// LANG_LIST_MAIL_HEADER (1151)
 	s.sendSysMessage(fmt.Sprintf("%d mail(s) for %s (guid %d)", countMail, listMailPlayerLink(targetName), targetGUID))
@@ -655,7 +679,7 @@ func (s *session) handleListMailCommand(ctx context.Context, args []string) {
 		subject, deliver_time, expire_time, money, has_items FROM mail WHERE receiver = ?`, targetGUID)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("List mail error: %v", err))
-		return
+		return true
 	}
 	defer rows.Close()
 	found := false
@@ -717,17 +741,18 @@ func (s *session) handleListMailCommand(ctx context.Context, args []string) {
 	if !found {
 		s.sendSysMessage("No mail found.") // LANG_LIST_MAIL_NOT_FOUND (1156)
 	}
+	return true
 }
 
 // handleListSpawnPointsCommand mirrors HandleListSpawnPointsCommand
 // (cs_list.cpp:467-493): every creature/gameobject spawn row on the invoker's
 // map, filtered to a 5000-yard 2D radius unless the map is an instance,
 // battleground or arena (Map.dbc instance type != 0).
-func (s *session) handleListSpawnPointsCommand(ctx context.Context) {
+func (s *session) handleListSpawnPointsCommand(ctx context.Context) bool {
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	mapID := s.player.Map
 	mapName := ""
@@ -785,12 +810,17 @@ func (s *session) handleListSpawnPointsCommand(ctx context.Context) {
 		}
 		gobjectRows.Close()
 	}
+	return true
 }
 
 // handleListRespawnsCommand is the documented-blocked respawns arm
 // (cs_list.cpp:502-545, RBAC 860): it bottoms out in Map::GetRespawnInfo and
 // the spawn-group registry, which have no Go model. RBAC-gated with an
 // honest message, not a stub.
-func (s *session) handleListRespawnsCommand(ctx context.Context, args []string) {
+func (s *session) handleListRespawnsCommand(ctx context.Context, args []string) bool {
+	if len(args) > 1 {
+		return false
+	}
 	s.sendSysMessage("Respawn listing is unavailable: the Go tree has no live map respawn registry or spawn-group model.")
+	return true
 }

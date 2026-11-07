@@ -224,40 +224,33 @@ func (s *Server) broadcastNotificationGM(ctx context.Context, msg string) {
 // handleCmdChannel ports the "channel set ownership" table entry
 // (cs_message.cpp:47, sole arm): two-level dispatch mirroring the gobject
 // "set phase"/"set state" pattern.
-func (s *session) handleCmdChannel(ctx context.Context, args []string) {
-	const syntax = "Syntax: .channel set ownership <channel> <on|off>"
+func (s *session) handleCmdChannel(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
-			return true
-		}
-		return false
+		return !s.commandAllowed(ctx, perm)
 	}
 	switch sub := strings.ToLower(args[0]); sub {
 	case "set":
 		if len(args) < 2 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		switch lvl := strings.ToLower(args[1]); {
 		case strings.HasPrefix("ownership", lvl):
 			if deny(permissionCommandChannelSetOwnership) {
-				return
+				return false
 			}
-			s.handleChannelSetOwnershipCommand(ctx, args[2:])
+			return s.handleChannelSetOwnershipCommand(ctx, args[2:])
 		default:
-			s.sendSysMessage(syntax)
+			return false
 		}
 	default:
-		s.sendSysMessage(syntax)
+		return false
 	}
 }
 
@@ -275,11 +268,10 @@ func (s *session) handleCmdChannel(ctx context.Context, args []string) {
 // StringTo<bool> (StringConvert.h:146-166, case-insensitive), the same set
 // handleCmdWhispers accepts; anything else, or a missing arg, is syntax
 // (the C++ typed dispatcher fails the command).
-func (s *session) handleChannelSetOwnershipCommand(ctx context.Context, args []string) {
+func (s *session) handleChannelSetOwnershipCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .channel set ownership <channel> <on|off>"
 	if len(args) != 2 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	channelName := args[0]
 	var grant bool
@@ -290,7 +282,7 @@ func (s *session) handleChannelSetOwnershipCommand(ctx context.Context, args []s
 		grant = false
 	default:
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	// Reference: cs_message.cpp:64-91 — both scans take the FIRST row, in
 	// ascending id order, whose template/area name contains the channel
@@ -368,60 +360,68 @@ func (s *session) handleChannelSetOwnershipCommand(ctx context.Context, args []s
 	} else {
 		s.sendSysMessage(fmt.Sprintf(messageDisableOwnership, channelName))
 	}
+	return true
 }
 
-// messageDeny reports a per-arm RBAC denial the tree-standard way.
+// messageDeny reports a per-arm RBAC denial the R13 tree-standard way:
+// silent false — the framework shows the leaf help, never a notification.
 func (s *session) messageDeny(ctx context.Context, perm uint32) bool {
-	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return true
-	}
-	return false
+	return !s.commandAllowed(ctx, perm)
 }
+
+// messageTailGate outcomes for the shared gates of the six broadcast arms
+// (cs_message.cpp:123-211) and world chat.
+const (
+	messageGateProceed     = iota // tail present: caller proceeds with the text
+	messageGateSilentFalse        // denial or empty tail: return false, print nothing
+	messageGateMessageTrue        // player-nil message already printed: return true
+)
 
 // messageTailGate applies the shared gates of the six broadcast arms
 // (cs_message.cpp:123-211): per-arm RBAC first — the C++ framework's
 // IsInvokerVisible gates invocation before the handler runs
 // (ChatCommand.cpp:295-309), so an unauthorized user never sees the
-// handler's syntax text — then non-empty tail, then in-game player. The
-// tail is the verbatim C++ Tail (ChatCommandTags.h:116), recovered from
-// the dispatched line through commandTail, so interior whitespace is
-// preserved instead of collapsing to single spaces.
-func (s *session) messageTailGate(ctx context.Context, syntax string, perm uint32, args []string) (string, bool) {
+// handler's syntax text — then non-empty tail (an empty Tail is a C++
+// `return false` with no message, cs_message.cpp:122-197), then in-game
+// player. The tail is the verbatim C++ Tail (ChatCommandTags.h:116),
+// recovered from the dispatched line through commandTail, so interior
+// whitespace is preserved instead of collapsing to single spaces.
+func (s *session) messageTailGate(ctx context.Context, perm uint32, args []string) (string, int) {
 	if s.messageDeny(ctx, perm) {
-		return "", false
+		return "", messageGateSilentFalse
 	}
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return "", false
+		return "", messageGateSilentFalse
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return "", false
+		return "", messageGateMessageTrue
 	}
-	return s.commandTail(args), true
+	return s.commandTail(args), messageGateProceed
 }
 
 // handleCmdNameAnnounceCommand mirrors HandleNameAnnounceCommand
 // (cs_message.cpp:123-135, RBAC 469): the announcer's name in
 // LANG_ANNOUNCE_COLOR, broadcast to everyone. The C++ "Console" fallback is
 // unreachable: Go commands are always sessioned.
-func (s *session) handleCmdNameAnnounceCommand(ctx context.Context, args []string) {
-	msg, ok := s.messageTailGate(ctx, "Syntax: .nameannounce <text>", permissionCommandNameAnnounce, args)
-	if !ok {
-		return
+func (s *session) handleCmdNameAnnounceCommand(ctx context.Context, args []string) bool {
+	msg, gate := s.messageTailGate(ctx, permissionCommandNameAnnounce, args)
+	if gate != messageGateProceed {
+		return gate == messageGateMessageTrue
 	}
 	s.server.broadcastMessageChatAll(fmt.Sprintf(messageAnnounceColor, s.player.Name, msg))
+	return true
 }
 
 // handleCmdGMNameAnnounceCommand mirrors HandleGMNameAnnounceCommand
 // (cs_message.cpp:137-149, RBAC 467): LANG_GM_ANNOUNCE_COLOR to GMs only.
-func (s *session) handleCmdGMNameAnnounceCommand(ctx context.Context, args []string) {
-	msg, ok := s.messageTailGate(ctx, "Syntax: .gmnameannounce <text>", permissionCommandGMNameAnnounce, args)
-	if !ok {
-		return
+func (s *session) handleCmdGMNameAnnounceCommand(ctx context.Context, args []string) bool {
+	msg, gate := s.messageTailGate(ctx, permissionCommandGMNameAnnounce, args)
+	if gate != messageGateProceed {
+		return gate == messageGateMessageTrue
 	}
 	s.server.broadcastMessageChatGM(ctx, fmt.Sprintf(messageGMAnnounceColor, s.player.Name, msg))
+	return true
 }
 
 // serverMessageString is the SERVER_MSG_STRING id (World.h:45-52).
@@ -430,42 +430,46 @@ const serverMessageString int32 = 3
 // handleCmdAnnounceCommand mirrors HandleAnnounceCommand (cs_message.cpp:152-161,
 // RBAC 462): SendServerMessage(SERVER_MSG_STRING, LANG_SYSTEMMESSAGE % text)
 // emits SMSG_CHAT_SERVER_MESSAGE (World.cpp:3074), not CHAT_MSG_SYSTEM.
-func (s *session) handleCmdAnnounceCommand(ctx context.Context, args []string) {
-	msg, ok := s.messageTailGate(ctx, "Syntax: .announce <text>", permissionCommandAnnounce, args)
-	if !ok {
-		return
+func (s *session) handleCmdAnnounceCommand(ctx context.Context, args []string) bool {
+	msg, gate := s.messageTailGate(ctx, permissionCommandAnnounce, args)
+	if gate != messageGateProceed {
+		return gate == messageGateMessageTrue
 	}
 	s.server.broadcastServerMessageAll(serverMessageString, fmt.Sprintf(messageSystemMessage, msg))
+	return true
 }
 
 // handleCmdGMAnnounceCommand mirrors HandleGMAnnounceCommand (cs_message.cpp:164-172,
 // RBAC 466): SendGMText(LANG_GM_BROADCAST).
-func (s *session) handleCmdGMAnnounceCommand(ctx context.Context, args []string) {
-	msg, ok := s.messageTailGate(ctx, "Syntax: .gmannounce <text>", permissionCommandGMAnnounce, args)
-	if !ok {
-		return
+func (s *session) handleCmdGMAnnounceCommand(ctx context.Context, args []string) bool {
+	msg, gate := s.messageTailGate(ctx, permissionCommandGMAnnounce, args)
+	if gate != messageGateProceed {
+		return gate == messageGateMessageTrue
 	}
 	s.server.broadcastMessageChatGM(ctx, fmt.Sprintf(messageGMBroadcast, msg))
+	return true
 }
 
 // handleCmdNotifyCommand mirrors HandleNotifyCommand (cs_message.cpp:175-195,
 // RBAC 470): SMSG_NOTIFICATION to everyone with LANG_GLOBAL_NOTIFY + text.
-func (s *session) handleCmdNotifyCommand(ctx context.Context, args []string) {
-	msg, ok := s.messageTailGate(ctx, "Syntax: .notify <text>", permissionCommandNotify, args)
-	if !ok {
-		return
+func (s *session) handleCmdNotifyCommand(ctx context.Context, args []string) bool {
+	msg, gate := s.messageTailGate(ctx, permissionCommandNotify, args)
+	if gate != messageGateProceed {
+		return gate == messageGateMessageTrue
 	}
 	s.server.broadcastNotificationAll(messageGlobalNotify + msg)
+	return true
 }
 
 // handleCmdGMNotifyCommand mirrors HandleGMNotifyCommand (cs_message.cpp:198-211,
 // RBAC 468): SMSG_NOTIFICATION to GMs with LANG_GM_NOTIFY + text.
-func (s *session) handleCmdGMNotifyCommand(ctx context.Context, args []string) {
-	msg, ok := s.messageTailGate(ctx, "Syntax: .gmnotify <text>", permissionCommandGMNotify, args)
-	if !ok {
-		return
+func (s *session) handleCmdGMNotifyCommand(ctx context.Context, args []string) bool {
+	msg, gate := s.messageTailGate(ctx, permissionCommandGMNotify, args)
+	if gate != messageGateProceed {
+		return gate == messageGateMessageTrue
 	}
 	s.server.broadcastNotificationGM(ctx, messageGMNotify+msg)
+	return true
 }
 
 // handleCmdWhispers mirrors HandleWhispersCommand (cs_message.cpp:214-256,
@@ -474,16 +478,16 @@ func (s *session) handleCmdGMNotifyCommand(ctx context.Context, args []string) {
 // the off arm's ClearWhisperWhiteList is vacuous — no whitelist exists in
 // the Go tree. The `remove` sub-arm stays blocked on the missing whitelist
 // model and reports honestly instead of pretending to remove a name; with
-// no name it prints syntax (C++ returns false, cs_message.cpp:236-237). Bool
+// no name it returns false silently (C++ returns false, cs_message.cpp:236-237). Bool
 // tokens follow StringTo<bool> (StringConvert.h:146-166, case-insensitive):
 // 1/y/on/yes/true and 0/n/off/no/false; anything else is LANG_USE_BOL.
-func (s *session) handleCmdWhispers(ctx context.Context, args []string) {
+func (s *session) handleCmdWhispers(ctx context.Context, args []string) bool {
 	if s.messageDeny(ctx, permissionCommandWhispers) {
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	if len(args) == 0 {
 		onOff := "off" // LANG_OFF
@@ -491,28 +495,34 @@ func (s *session) handleCmdWhispers(ctx context.Context, args []string) {
 			onOff = "on" // LANG_ON
 		}
 		s.sendSysMessage(fmt.Sprintf("Whisper accepting: %s", onOff)) // LANG_COMMAND_WHISPERACCEPTING
-		return
+		return true
 	}
 	switch strings.ToLower(args[0]) {
 	case "1", "y", "on", "yes", "true":
 		s.player.ExtraFlags |= playerExtraAcceptWhispers
 		s.persistExtraFlags()
 		s.sendSysMessage("Whisper accepting on.") // LANG_COMMAND_WHISPERON
+		return true
 	case "0", "n", "off", "no", "false":
 		s.player.ExtraFlags &^= playerExtraAcceptWhispers
 		s.persistExtraFlags()
 		s.sendSysMessage("Whisper accepting off.") // LANG_COMMAND_WHISPEROFF
+		return true
 	case "remove":
 		// C++ returns false with no name (cs_message.cpp:236-237), so the
 		// framework shows the leaf usage; the removal itself stays blocked
 		// on the missing whitelist model.
 		if len(args) < 2 {
-			s.sendSysMessage("Syntax: .whispers [on|off|remove [player]]")
-			return
+			return false
+		}
+		if len(args) > 2 {
+			return false
 		}
 		s.sendSysMessage("Whisper white list removal is unavailable: the Go tree has no whisper white list model.")
+		return true
 	default:
 		s.sendSysMessage("Use on/off.") // LANG_USE_BOL 259
+		return true
 	}
 }
 
@@ -548,7 +558,7 @@ func worldChatNameLink(name string, race, class, gender uint8) string {
 
 // handleCmdWorldChat mirrors HandleWorldChatCommand (Custom/cs_world_chat.cpp:176-188,
 // RBAC_PERM_COMMAND_SAVE 525) under its .chat/.c/.world aliases:
-// empty args shows usage (C++ returns false, which shows the help text);
+// empty args returns false silently (C++ returns false, which shows the help text);
 // the censor arm ("unixmad") reports to GMs via SendGMText(17000) and mutes
 // the session one second (mutetimecensor); the played-time gate blocks
 // accounts under one second of played time (Playedtimetochat) with the
@@ -561,9 +571,9 @@ func worldChatNameLink(name string, race, class, gender uint8) string {
 // ported. The FACTION_SPECIFIC branch is compiled out (FACTION_SPECIFIC 0),
 // leaving the global broadcast. The 1024-char snprintf truncation is kept.
 func (s *session) handleCmdWorldChat(ctx context.Context, args []string) bool {
-	msg, ok := s.messageTailGate(ctx, "Syntax: .chat $message", permissionCommandSave, args)
-	if !ok {
-		return true
+	msg, gate := s.messageTailGate(ctx, permissionCommandSave, args)
+	if gate != messageGateProceed {
+		return gate == messageGateMessageTrue
 	}
 	s.updatePlayedTime(time.Now())
 	now := time.Now().Unix()

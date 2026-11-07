@@ -27,57 +27,63 @@ import (
 // player and group are Console::No in the C++ (moot here), Trinity per-level
 // prefix matching, each arm gated on its own RBAC permission
 // (ChatCommand.cpp:487 checks the invoker/leaf node only).
-func (s *session) handleCmdLFG(ctx context.Context, args []string) {
-	const syntax = "Syntax: .lfg player|group|queue|clean|options"
+func (s *session) handleCmdLFG(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
-	}
-	if s.player == nil {
-		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
-			return true
-		}
 		return false
-	}
-	if s.server == nil || s.server.Features == nil || s.server.Features.LFG == nil {
-		s.sendSysMessage("LFG is unavailable.")
-		return
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
+	// The C++ framework resolves the leaf and its RBAC visibility before
+	// the handler body runs (ChatCommand.cpp:207-237,481-488), so an
+	// unknown subcommand or a denied leaf answers silent false even when
+	// the Go-only gates below would fire first (R13 D2/D3).
+	var perm uint32
+	known := false
+	for _, arm := range []struct {
+		name string
+		perm uint32
+	}{
+		{"player", permissionCommandLfgPlayer},
+		{"group", permissionCommandLfgGroup},
+		{"queue", permissionCommandLfgQueue},
+		{"clean", permissionCommandLfgClean},
+		{"options", permissionCommandLfgOptions},
+	} {
+		if strings.HasPrefix(arm.name, sub) {
+			perm, known = arm.perm, true
+			break
+		}
+	}
+	if !known {
+		return false
+	}
+	if !s.commandAllowed(ctx, perm) {
+		return false
+	}
+	if s.player == nil {
+		s.sendSysMessage("You must be in game to use that command.")
+		return true
+	}
+	if s.server == nil || s.server.Features == nil || s.server.Features.LFG == nil {
+		s.sendSysMessage("LFG is unavailable.")
+		return true
+	}
 	switch {
 	case strings.HasPrefix("player", sub):
-		if deny(permissionCommandLfgPlayer) {
-			return
-		}
-		s.handleLfgPlayerInfoCommand(ctx, rest)
+		return s.handleLfgPlayerInfoCommand(ctx, rest)
 	case strings.HasPrefix("group", sub):
-		if deny(permissionCommandLfgGroup) {
-			return
-		}
-		s.handleLfgGroupInfoCommand(ctx, rest)
+		return s.handleLfgGroupInfoCommand(ctx, rest)
 	case strings.HasPrefix("queue", sub):
-		if deny(permissionCommandLfgQueue) {
-			return
-		}
-		s.handleLfgQueueInfoCommand(s.commandTailAfter(args, 1))
+		return s.handleLfgQueueInfoCommand(s.commandTailAfter(args, 1))
 	case strings.HasPrefix("clean", sub):
-		if deny(permissionCommandLfgClean) {
-			return
+		if len(rest) > 0 {
+			return false
 		}
-		s.handleLfgCleanCommand()
+		return s.handleLfgCleanCommand()
 	case strings.HasPrefix("options", sub):
-		if deny(permissionCommandLfgOptions) {
-			return
-		}
-		s.handleLfgOptionsCommand(s.commandTailAfter(args, 1))
+		return s.handleLfgOptionsCommand(s.commandTailAfter(args, 1))
 	default:
-		s.sendSysMessage(syntax)
+		return false
 	}
 }
 
@@ -98,20 +104,23 @@ func (s *session) lfgPlayerInfoLine(target *session) {
 // DB via resolveCharacterTarget); with no argument it is the selected
 // connected player, else self (PlayerIdentifier::FromTargetOrSelf,
 // ChatCommandTags.h:189). A resolved-but-offline player makes the C++
-// handler return false (GetConnectedPlayer() is null), so the framework
-// prints the leaf help — the Go equivalent is the leaf syntax line, not
-// "Player not found." (that text is kept for wholly unknown names, per the
-// tree convention).
-func (s *session) handleLfgPlayerInfoCommand(ctx context.Context, args []string) {
-	t, _, ok := s.resolveCharacterTarget(ctx, args)
+// handler return false (GetConnectedPlayer() is null), so the Go handler
+// returns false silently (R13); wholly unknown names keep the
+// "Player not found." message via resolveCharacterTarget (MESSAGE + TRUE,
+// per the tree convention).
+func (s *session) handleLfgPlayerInfoCommand(ctx context.Context, args []string) bool {
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
 	if !ok {
-		return
+		return true
+	}
+	if len(rest) > 0 {
+		return false
 	}
 	if t.online == nil {
-		s.sendSysMessage("Syntax: .lfg player [player]")
-		return
+		return false
 	}
 	s.lfgPlayerInfoLine(t.online)
+	return true
 }
 
 // handleLfgGroupInfoCommand mirrors HandleLfgGroupInfoCommand (cs_lfg.cpp:83-117):
@@ -126,10 +135,13 @@ func (s *session) handleLfgPlayerInfoCommand(ctx context.Context, args []string)
 // branch when the named player is NOT connected (cs_lfg.cpp:96-104
 // else-branch); a connected player with no in-memory group reports
 // NOT_IN_GROUP, it never falls through to a possibly stale group_member row.
-func (s *session) handleLfgGroupInfoCommand(ctx context.Context, args []string) {
-	t, _, ok := s.resolveCharacterTarget(ctx, args)
+func (s *session) handleLfgGroupInfoCommand(ctx context.Context, args []string) bool {
+	t, rest, ok := s.resolveCharacterTarget(ctx, args)
 	if !ok {
-		return
+		return true
+	}
+	if len(rest) > 0 {
+		return false
 	}
 
 	var groupTarget *groupState
@@ -145,7 +157,7 @@ func (s *session) handleLfgGroupInfoCommand(ctx context.Context, args []string) 
 	}
 	if groupTarget == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in group", t.name)) // LANG_LFG_NOT_IN_GROUP (9982)
-		return
+		return true
 	}
 
 	s.server.groupsMu.RLock()
@@ -168,18 +180,21 @@ func (s *session) handleLfgGroupInfoCommand(ctx context.Context, args []string) 
 			s.sendSysMessage(fmt.Sprintf("%s is offline.", slot.Name))
 		}
 	}
+	return true
 }
 
 // handleLfgQueueInfoCommand mirrors HandleLfgQueueInfoCommand (cs_lfg.cpp:140-145):
 // DumpQueueInfo with detail when any text follows (C++ Tail `full`).
-func (s *session) handleLfgQueueInfoCommand(full string) {
+func (s *session) handleLfgQueueInfoCommand(full string) bool {
 	s.sendSysMessage(s.server.Features.LFG.DumpQueueInfo(strings.TrimSpace(full) != ""))
+	return true
 }
 
 // handleLfgCleanCommand mirrors HandleLfgCleanCommand (cs_lfg.cpp:147-152).
-func (s *session) handleLfgCleanCommand() {
+func (s *session) handleLfgCleanCommand() bool {
 	s.sendSysMessage("LFG tables cleaned.") // LANG_LFG_CLEAN (9983)
 	s.server.Features.LFG.Clean()
+	return true
 }
 
 // handleLfgOptionsCommand mirrors HandleLfgOptionsCommand (cs_lfg.cpp:133-145):
@@ -189,16 +204,20 @@ func (s *session) handleLfgCleanCommand() {
 // bad value prints the syntax line, the tree's LANG 1502 convention), then
 // the current value is always reported: LANG_LFG_OPTIONS_CHANGED (9985) /
 // LANG_LFG_OPTIONS (9984).
-func (s *session) handleLfgOptionsCommand(arg string) {
+func (s *session) handleLfgOptionsCommand(arg string) bool {
 	const syntax = "Syntax: .lfg options [options]"
 	if trimmed := strings.TrimSpace(arg); trimmed != "" {
+		if strings.ContainsAny(trimmed, " \t") {
+			return false
+		}
 		options, ok := parseCommandUint32(trimmed)
 		if !ok {
 			s.sendSysMessage(syntax)
-			return
+			return true
 		}
 		s.server.Features.LFG.SetOptions(options)
 		s.sendSysMessage("LFG options changed.") // LANG_LFG_OPTIONS_CHANGED (9985)
 	}
 	s.sendSysMessage(fmt.Sprintf("LFG options: %d", s.server.Features.LFG.GetOptions())) // LANG_LFG_OPTIONS (9984)
+	return true
 }
