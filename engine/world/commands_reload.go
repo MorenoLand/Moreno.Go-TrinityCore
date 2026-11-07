@@ -500,9 +500,21 @@ func (s *session) handleReloadCreatureTemplate(ctx context.Context, args []strin
 		// Trinity::StringTo<uint32> (cs_reload.cpp:427): a parse failure
 		// yields 0 (not skipped), and entry 0 flows to the template query
 		// below, which reports LANG 817.
-		entry, err := strconv.ParseUint(tok, 10, 32)
-		if err != nil {
+		// std::from_chars unsigned base-10 (StringConvert.h:45-70, the
+		// default base of Trinity::StringTo<uint32>): no leading '+',
+		// a leading '-' wraps modulo 2^32.
+		var entry uint64
+		switch {
+		case strings.HasPrefix(tok, "-"):
+			if m, merr := strconv.ParseUint(tok[1:], 10, 32); merr == nil {
+				entry = uint64(-uint32(m))
+			}
+		case strings.HasPrefix(tok, "+"):
 			entry = 0
+		default:
+			if v, err := strconv.ParseUint(tok, 10, 32); err == nil {
+				entry = v
+			}
 		}
 		var one int
 		if wdb == nil || wdb.QueryRowContext(ctx, "SELECT 1 FROM creature_template WHERE entry = ?", uint32(entry)).Scan(&one) != nil {

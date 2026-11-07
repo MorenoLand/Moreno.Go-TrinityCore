@@ -270,9 +270,12 @@ func (s *session) handleCmdChannel(ctx context.Context, args []string) bool {
 // (the C++ typed dispatcher fails the command).
 func (s *session) handleChannelSetOwnershipCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .channel set ownership <channel> <on|off>"
-	if len(args) != 2 {
+	if len(args) < 2 {
 		return false
 	}
+	// The bool parse error wins over the trailing-token failure
+	// (framework consumes args left-to-right, ChatCommand.h:77-103):
+	// validate the bool before the arg-count check.
 	channelName := args[0]
 	var grant bool
 	switch strings.ToLower(args[1]) {
@@ -283,6 +286,9 @@ func (s *session) handleChannelSetOwnershipCommand(ctx context.Context, args []s
 	default:
 		s.sendSysMessage(syntax)
 		return true
+	}
+	if len(args) != 2 {
+		return false
 	}
 	// Reference: cs_message.cpp:64-91 — both scans take the FIRST row, in
 	// ascending id order, whose template/area name contains the channel

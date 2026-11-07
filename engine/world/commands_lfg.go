@@ -207,13 +207,18 @@ func (s *session) handleLfgCleanCommand() bool {
 func (s *session) handleLfgOptionsCommand(arg string) bool {
 	const syntax = "Syntax: .lfg options [options]"
 	if trimmed := strings.TrimSpace(arg); trimmed != "" {
-		if strings.ContainsAny(trimmed, " \t") {
-			return false
-		}
-		options, ok := parseCommandUint32(trimmed)
+		// The Optional<uint32> parse error wins over the trailing-token
+		// failure (framework consumes args left-to-right,
+		// ChatCommand.h:77-103): parse the first field before checking
+		// for extra tokens.
+		fields := strings.Fields(trimmed)
+		options, ok := parseCommandUint32(fields[0])
 		if !ok {
 			s.sendSysMessage(syntax)
 			return true
+		}
+		if len(fields) > 1 {
+			return false
 		}
 		s.server.Features.LFG.SetOptions(options)
 		s.sendSysMessage("LFG options changed.") // LANG_LFG_OPTIONS_CHANGED (9985)

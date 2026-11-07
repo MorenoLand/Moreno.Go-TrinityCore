@@ -38,9 +38,11 @@ const spellAuraNoPVPCredit = 159
 //
 // Trinity checks permission only on the invoker (leaf) node
 // (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission.
-// R13: denial returns false silently (C++ never invokes a denied leaf);
-// parse failures return false silently; message legs return true (C++
-// returns false with SetSentErrorMessage, which suppresses the help listing).
+// R13: denial returns false silently; missing/trailing args return false
+// silently; message legs return true (C++ returns false with
+// SetSentErrorMessage, which suppresses the help listing). R13 parse sweep
+// (tick 358): an unparseable non-empty amount token is a framework
+// LANG_CMDPARSER_* error leg — message + true, not silent false.
 func (s *session) handleCmdHonor(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		return false
@@ -97,10 +99,14 @@ func (s *session) handleHonorAdd(ctx context.Context, args []string) bool {
 		return false
 	}
 	// The amount is a framework uint32: StringTo<uint32> base 0
-	// (ChatCommandArgs.h:62), so 0x/0b prefixes are accepted.
+	// (ChatCommandArgs.h:62), so 0x/0b prefixes are accepted. An
+	// unparseable non-empty token is a framework parse error
+	// (LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage) —
+	// message + true under the narrowed tick-345 rule.
 	amount, ok := parseCommandUint32(args[0])
 	if !ok {
-		return false
+		s.sendSysMessage("Invalid amount.")
+		return true
 	}
 	target := s
 	if s.selection != 0 && s.server != nil {

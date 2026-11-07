@@ -132,29 +132,73 @@ func parseListEntryID(arg, link string) (uint32, bool) {
 	return parseCommandUint32(t)
 }
 
+// listLinkParse is the three-way outcome of a C++ Hyperlink<T> TryConsume
+// (ChatCommandTags.h:213-234): ok, a structural failure (ParseSingleHyperlink
+// rejects the shape, or the tag mismatches) -> nullopt -> silent false, or a
+// data failure (StoreTo rejects the data) -> LANG_CMDPARSER_LINKDATA_INVALID
+// -> message + true.
+type listLinkParse int
+
+const (
+	listLinkOK listLinkParse = iota
+	listLinkStructuralFail
+	listLinkBadData
+)
+
 // parseListEntryIDLink parses only the |H<kind>:<id>...|h link form, for arms
 // whose C++ arg is a plain Hyperlink: the item arm (cs_list.cpp:154) takes
 // Hyperlink<item> with no uint32 variant, so a bare numeric id fails the
-// C++ parser (ChatCommandTags.h:204-235) and must fail here too.
-func parseListEntryIDLink(arg, link string) (uint32, bool) {
+// C++ parser (ChatCommandTags.h:204-235) and must fail here too. The full
+// ParseSingleHyperlink structure (Hyperlinks.cpp:34) is validated: a
+// colorless, unterminated, or bad-hex link is a structural failure even
+// when it contains "H<kind>:<digits>", exactly like the C++ nullopt leg.
+func parseListEntryIDLink(arg, link string) (uint32, listLinkParse) {
 	t := strings.TrimSpace(arg)
-	i := strings.Index(t, "H"+link+":")
-	if i < 0 {
-		return 0, false
+	if !strings.HasPrefix(t, "|c") || len(t) < 10 {
+		return 0, listLinkStructuralFail
 	}
-	t = t[i+len("H"+link+":"):]
+	for i := 2; i < 10; i++ {
+		c := t[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return 0, listLinkStructuralFail
+		}
+	}
+	rest := t[10:]
+	if !strings.HasPrefix(rest, "|H") {
+		return 0, listLinkStructuralFail
+	}
+	rest = rest[2:]
+	bar := strings.Index(rest, "|")
+	if bar < 0 {
+		return 0, listLinkStructuralFail
+	}
+	tagData := rest[:bar]
+	rest = rest[bar+1:]
+	tag, data, found := strings.Cut(tagData, ":")
+	if !found || tag != link {
+		return 0, listLinkStructuralFail
+	}
+	if !strings.HasPrefix(rest, "h") {
+		return 0, listLinkStructuralFail
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, "|")
+	if end < 0 || end+4 > len(rest) || rest[end:end+4] != "|h|r" || len(rest) == 0 || rest[0] != '[' || rest[end-1] != ']' {
+		return 0, listLinkStructuralFail
+	}
+	firstField, _, _ := strings.Cut(data, ":")
 	j := 0
-	for j < len(t) && t[j] >= '0' && t[j] <= '9' {
+	for j < len(firstField) && firstField[j] >= '0' && firstField[j] <= '9' {
 		j++
 	}
-	if j == 0 {
-		return 0, false
+	if j == 0 || j != len(firstField) {
+		return 0, listLinkBadData
 	}
-	n, err := strconv.ParseUint(t[:j], 10, 32)
+	n, err := strconv.ParseUint(firstField, 10, 32)
 	if err != nil {
-		return 0, false
+		return 0, listLinkBadData
 	}
-	return uint32(n), true
+	return uint32(n), listLinkOK
 }
 
 // listCountArg mirrors the Optional<uint32> count args: default 10, zero
@@ -349,20 +393,34 @@ func (s *session) handleListItemCommand(ctx context.Context, args []string) bool
 	if len(args) == 0 {
 		return false
 	}
-	itemID, ok := parseListEntryIDLink(args[0], "item")
-	if !ok {
-		if strings.Contains(args[0], "Hitem:") {
-			s.sendSysMessage("Syntax: .list item <link> [count]")
-			return true
+	// A |Hitem| link's display text may contain spaces, and the C++
+	// Hyperlink arg consumes the whole link as one token
+	// (ParseSingleHyperlink, Hyperlinks.cpp:34) while Go's dispatcher
+	// splits on whitespace — rejoin the fields up to the one holding
+	// "|r" before validating the link structure.
+	linkArg := args[0]
+	rest := args[1:]
+	for i, a := range args {
+		if strings.Contains(a, "|r") {
+			linkArg = strings.Join(args[:i+1], " ")
+			rest = args[i+1:]
+			break
 		}
-		return false
 	}
-	count, ok := listCountArg(args[1:])
+	itemID, linkStatus := parseListEntryIDLink(linkArg, "item")
+	switch linkStatus {
+	case listLinkStructuralFail:
+		return false
+	case listLinkBadData:
+		s.sendSysMessage("Syntax: .list item <link> [count]")
+		return true
+	}
+	count, ok := listCountArg(rest)
 	if !ok {
 		s.sendSysMessage("Syntax: .list item <link> [count]")
 		return true
 	}
-	if len(args) > 2 {
+	if len(rest) > 1 {
 		return false
 	}
 	cdb := s.arenaCharactersDB()
@@ -613,9 +671,6 @@ var itemQualityColors = []uint32{
 // in CharacterDatabase.cpp:41-43), item rows from mail_items +
 // item_instance + item_template.
 func (s *session) handleListMailCommand(ctx context.Context, args []string) bool {
-	if len(args) > 1 {
-		return false
-	}
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Database not available.")
@@ -655,7 +710,7 @@ func (s *session) handleListMailCommand(ctx context.Context, args []string) bool
 				targetGUID = guid64
 			}
 		default:
-			name := normalizePlayerName(strings.Join(args, " "))
+			name := normalizePlayerName(first)
 			if online := s.sessionForPlayerName(name); online != nil && online.player != nil {
 				targetGUID, targetName = online.playerGUID, online.player.Name
 			} else if err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&targetGUID); err != nil || targetGUID == 0 {
@@ -673,6 +728,13 @@ func (s *session) handleListMailCommand(ctx context.Context, args []string) bool
 		} else {
 			return false
 		}
+	}
+	// The PlayerIdentifier parse error wins over the trailing-token
+	// failure (framework consumes args left-to-right, ChatCommand.h:77-103):
+	// an unresolvable first token prints + true above, while a resolvable
+	// first token with a trailing token is silent false here.
+	if len(args) > 1 {
+		return false
 	}
 	var countMail uint64
 	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(id) FROM mail WHERE receiver = ?", targetGUID).Scan(&countMail); err != nil {
@@ -826,6 +888,15 @@ func (s *session) handleListSpawnPointsCommand(ctx context.Context) bool {
 // the spawn-group registry, which have no Go model. RBAC-gated with an
 // honest message, not a stub.
 func (s *session) handleListRespawnsCommand(ctx context.Context, args []string) bool {
+	// Optional<uint32> is consumed before the trailing-token check
+	// (ChatCommand.h:77-103): a bad range token is a framework parse
+	// error — message + true — even with a trailing token after it.
+	if len(args) > 0 {
+		if _, ok := parseCommandUint32(args[0]); !ok {
+			s.sendSysMessage("Syntax: .list respawns [range]")
+			return true
+		}
+	}
 	if len(args) > 1 {
 		return false
 	}
