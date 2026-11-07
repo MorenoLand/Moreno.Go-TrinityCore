@@ -2849,12 +2849,14 @@ func (s *session) castCommandSpell(spellArg string) (uint32, bool) {
 	if linkID := miscExtractLinkID(spellArg, "Hspell"); linkID != 0 {
 		spellID = uint64(linkID)
 	} else {
-		var err error
-		spellID, err = strconv.ParseUint(spellArg, 10, 32)
-		if err != nil {
+		// The bare id parses base-0 (StringTo<uint32>, base 0); the link
+		// id above parses base-10 (base_tag StoreTo, Hyperlinks.h:107-131).
+		v, ok := parseCommandUint32(spellArg)
+		if !ok {
 			s.sendSysMessage("Invalid spell ID.")
 			return 0, false
 		}
+		spellID = uint64(v)
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Spell data is unavailable.")
@@ -3053,8 +3055,11 @@ func (s *session) handleCmdCastDist(ctx context.Context, args []string) bool {
 	if len(args) < 3 {
 		return false
 	}
-	dist, err := strconv.ParseFloat(args[2], 32)
-	if err != nil {
+	dist, ok := parseCommandFloat(args[2])
+	if !ok {
+		// Unparseable float token (cs_cast.cpp:134): the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage
+		// (non-finite rejected, ChatCommandArgs.h).
 		s.sendSysMessage(syntax)
 		return true
 	}
@@ -3101,8 +3106,11 @@ func (s *session) handleCmdCastDest(ctx context.Context, args []string) bool {
 	}
 	coords := make([]float32, 3)
 	for i := 0; i < 3; i++ {
-		v, err := strconv.ParseFloat(args[2+i], 32)
-		if err != nil {
+		v, ok := parseCommandFloat(args[2+i])
+		if !ok {
+			// Unparseable float token (cs_cast.cpp:201): the framework
+			// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+			// SetSentErrorMessage (non-finite rejected, ChatCommandArgs.h).
 			s.sendSysMessage(syntax)
 			return true
 		}

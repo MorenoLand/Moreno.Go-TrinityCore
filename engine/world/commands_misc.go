@@ -445,10 +445,15 @@ func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) bo
 	var setID uint32
 	if strings.Contains(args[0], "|Hitemset:") {
 		setID = miscExtractLinkID(args[0], "Hitemset")
-	} else if setID64, err := strconv.ParseUint(args[0], 10, 32); err == nil {
-		setID = uint32(setID64)
+	} else if v, ok := parseCommandUint32(args[0]); ok {
+		setID = v
 	} else {
-		return false
+		// Unparseable Variant<Hyperlink<itemset>, uint32> token
+		// (cs_misc.cpp:1275): the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		// The bare id parses base-0 (parseCommandUint32).
+		s.sendSysMessage(syntax)
+		return true
 	}
 	if setID == 0 {
 		s.sendSysMessage(fmt.Sprintf(miscNoItemsFromItemSet, setID))
@@ -626,14 +631,25 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAura) {
 		return false
 	}
+	// The framework parses the SpellInfo const* arg before the handler
+	// runs (cs_misc.cpp:304), so a bad token reports before the selection
+	// check, and a missing token is silent false even with no target
+	// (ChatCommandArgs.cpp:94-105).
+	spellID, status := miscParseSpellArg(ctx, s, args)
+	switch status {
+	case spellArgMissing, spellArgOtherLink, spellArgNoData:
+		return false
+	case spellArgInvalid, spellArgNoSpell:
+		// Unparseable token / numeric id or |Hspell| link with no
+		// SpellInfo: the framework prints LANG_CMDPARSER_* +
+		// SetSentErrorMessage.
+		s.sendSysMessage("Invalid spell.")
+		return true
+	}
 	target := s.miscSelectedUnitPlayer()
 	if target == nil {
 		s.sendSysMessage(miscSelectCharOrCreat)
 		return true
-	}
-	spellID, ok := miscParseSpellArg(ctx, s, args)
-	if !ok {
-		return false
 	}
 	// SpellInfo::GetDuration (SpellInfo.cpp:3077-3082): the level-scaled
 	// SpellDuration.dbc value; -1 is permanent (Go 0, no expiry timer).
@@ -672,14 +688,18 @@ func (s *session) handleCmdUnAura(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandUnAura) {
 		return false
 	}
-	target := s.miscSelectedUnitPlayer()
-	if target == nil {
-		s.sendSysMessage(miscSelectCharOrCreat)
-		return true
-	}
+	// The framework parses the Variant<SpellInfo const*, "all"> arg
+	// before the handler runs (cs_misc.cpp:325): a bad token reports
+	// before the selection check, and a missing token is silent false
+	// even with no target (ChatCommandArgs.cpp:94-105).
 	if len(args) > 0 && strings.EqualFold(args[0], "all") {
 		if len(args) != 1 {
 			return false
+		}
+		target := s.miscSelectedUnitPlayer()
+		if target == nil {
+			s.sendSysMessage(miscSelectCharOrCreat)
+			return true
 		}
 		target.removeAllPlayerAuras()
 		if target.server != nil {
@@ -690,9 +710,21 @@ func (s *session) handleCmdUnAura(ctx context.Context, args []string) bool {
 		}
 		return true
 	}
-	spellID, ok := miscParseSpellArg(ctx, s, args)
-	if !ok {
+	spellID, status := miscParseSpellArg(ctx, s, args)
+	switch status {
+	case spellArgMissing, spellArgOtherLink, spellArgNoData:
 		return false
+	case spellArgInvalid, spellArgNoSpell:
+		// Unparseable token / numeric id or |Hspell| link with no
+		// SpellInfo: the framework prints LANG_CMDPARSER_* +
+		// SetSentErrorMessage.
+		s.sendSysMessage("Invalid spell.")
+		return true
+	}
+	target := s.miscSelectedUnitPlayer()
+	if target == nil {
+		s.sendSysMessage(miscSelectCharOrCreat)
+		return true
 	}
 	target.removeAura(spellID)
 	return true
@@ -751,33 +783,56 @@ func miscSetPhaseMask(target *session, mask uint32) {
 	target.player.PhaseMaskOverrideSet = true
 }
 
+// spellArgStatus classifies a spell-token parse the way the C++ SpellInfo
+// const* framework argument does (ChatCommandArgs.cpp:94-105): a missing
+// token is bare-nullopt (silent false); an unparseable token, a numeric id
+// with no SpellInfo (LANG_CMDPARSER_SPELL_NO_EXIST), and a |Hspell| link
+// to a missing spell (LANG_CMDPARSER_LINKDATA_INVALID,
+// HyperlinkTags.cpp:183) are framework errors (message + true); a
+// well-formed enchant/glyph/talent/trade link Go cannot resolve yields
+// nullopt (silent false) — the visitor returns null for a rank/glyph with
+// no spell, and the success case has no Go model on this path.
+type spellArgStatus int
+
+const (
+	spellArgMissing spellArgStatus = iota
+	spellArgInvalid
+	spellArgNoSpell
+	spellArgOtherLink
+	spellArgNoData
+	spellArgOK
+)
+
 // miscParseSpellArg parses a spell id from a bare id or a |Hspell:id|
 // shift-click link, validating it against the Spell.dbc store like the C++
-// SpellInfo argument parser. It stays silent on failure: each caller
-// reports the miss its own way (C++ sends exactly one message — the
-// framework help for .aura/.unaura, LANG_UNKNOWN_SPELL for .cooldown),
-// so a message here would double-report.
-func miscParseSpellArg(ctx context.Context, s *session, args []string) (uint32, bool) {
+// SpellInfo argument parser. The bare id parses base-0
+// (parseCommandUint32, StringTo<uint32> with base 0); the link id parses
+// base-10 (base_tag StoreTo, Hyperlinks.h:107-131).
+func miscParseSpellArg(ctx context.Context, s *session, args []string) (uint32, spellArgStatus) {
 	if len(args) == 0 {
-		return 0, false
+		return 0, spellArgMissing
+	}
+	if info := parseSingleHyperlink(args[0]); info.ok {
+		switch info.tag {
+		case "enchant", "glyph", "talent", "trade":
+			return 0, spellArgOtherLink
+		}
 	}
 	var id uint32
 	if linkID := miscExtractLinkID(args[0], "Hspell"); linkID != 0 {
 		id = linkID
+	} else if v, ok := parseCommandUint32(args[0]); ok {
+		id = v
 	} else {
-		id64, err := strconv.ParseUint(args[0], 10, 32)
-		if err != nil || id64 == 0 {
-			return 0, false
-		}
-		id = uint32(id64)
+		return 0, spellArgInvalid
 	}
 	if s.server == nil || s.server.Data == nil {
-		return 0, false
+		return 0, spellArgNoData
 	}
 	if _, _, found, err := s.server.Data.SpellName(id); err != nil || !found {
-		return 0, false
+		return 0, spellArgNoSpell
 	}
-	return id, true
+	return id, spellArgOK
 }
 
 // handleCmdBank mirrors HandleBankCommand (cs_misc.cpp:1331-1335,
@@ -1018,8 +1073,22 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) bool {
 		s.sendSysMessage(fmt.Sprintf(miscRemoveAllCooldown, targetName))
 		return true
 	}
-	spellID, ok := miscParseSpellArg(ctx, s, args)
-	if !ok {
+	spellID, status := miscParseSpellArg(ctx, s, args)
+	switch status {
+	case spellArgOtherLink:
+		// A well-formed enchant/glyph/talent/trade link resolving to no
+		// spell yields nullopt in the framework (ChatCommandArgs.cpp:
+		// 94-105) — silent false, the handler never runs.
+		return false
+	case spellArgInvalid:
+		// Unparseable token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage("Invalid spell.")
+		return true
+	case spellArgMissing, spellArgNoSpell, spellArgNoData:
+		// Numeric id or |Hspell| link with no SpellInfo (or no spell
+		// data to check against): the handler's own unknown-spell
+		// report, as before (cs_misc.cpp:744-749).
 		s.sendSysMessage(fmt.Sprintf(miscUnknownSpell, reportName))
 		return true
 	}
@@ -1420,6 +1489,15 @@ func (s *session) handleCmdDev(ctx context.Context, args []string) bool {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
+	}
+	if len(args) > 0 {
+		// Optional<bool> (cs_misc.cpp:159): the loose bool token set
+		// (StringConvert.h:146-166); an unparseable token is a framework
+		// error (LANG_CMDPARSER_* + SetSentErrorMessage).
+		if _, ok := cheatArgBool(args[0]); !ok {
+			s.sendSysMessage("Invalid value.")
+			return true
+		}
 	}
 	s.sendSysMessage("Developer mode is unavailable: the Go tree has no developer-flag model.")
 	return true

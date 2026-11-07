@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -174,7 +173,7 @@ func misc2ParseMuteArgs(args []string) (nameArgs []string, minutes uint32, reaso
 	if len(args) == 0 {
 		return nil, 0, reasonStart, 1
 	}
-	if mins, err := strconv.ParseUint(args[0], 10, 32); err == nil {
+	if mins, ok := parseCommandUint32(args[0]); ok {
 		if len(args) > 1 {
 			reasonStart = 1
 		}
@@ -184,8 +183,8 @@ func misc2ParseMuteArgs(args []string) (nameArgs []string, minutes uint32, reaso
 		return nil, 0, reasonStart, 1
 	}
 	nameArgs = args[:1]
-	mins, err := strconv.ParseUint(args[1], 10, 32)
-	if err != nil {
+	mins, ok := parseCommandUint32(args[1])
+	if !ok {
 		return nil, 0, reasonStart, 2
 	}
 	if len(args) > 2 {
@@ -533,9 +532,13 @@ func (s *session) handleCmdShowArea(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	areaID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		return false
+	areaID, ok := parseCommandUint32(args[0])
+	if !ok {
+		// Unparseable uint32 token (cs_misc.cpp:1079/1113): the framework
+		// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+		// SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
 	target := s.server.playerSessionForGUID(s.selection)
 	if target == nil || target.player == nil {
@@ -564,9 +567,13 @@ func (s *session) handleCmdHideArea(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	areaID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		return false
+	areaID, ok := parseCommandUint32(args[0])
+	if !ok {
+		// Unparseable uint32 token (cs_misc.cpp:1079/1113): the framework
+		// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+		// SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
 	target := s.server.playerSessionForGUID(s.selection)
 	if target == nil || target.player == nil {
@@ -633,10 +640,13 @@ func (s *session) handleCmdItemMove(ctx context.Context, args []string) bool {
 	if len(args) < 2 {
 		return false
 	}
-	srcSlot, srcErr := strconv.ParseUint(args[0], 10, 8)
-	dstSlot, dstErr := strconv.ParseUint(args[1], 10, 8)
-	if srcErr != nil || dstErr != nil {
-		return false
+	srcSlot, ok1 := parseCommandUint8(args[0])
+	dstSlot, ok2 := parseCommandUint8(args[1])
+	if !ok1 || !ok2 {
+		// Unparseable uint8 token (cs_misc.cpp:704): the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
 	if srcSlot == dstSlot {
 		return true
@@ -785,9 +795,13 @@ func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	graveyardID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		return false
+	graveyardID, ok := parseCommandUint32(args[0])
+	if !ok {
+		// Unparseable uint32 token (cs_misc.cpp:977): the framework
+		// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+		// SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
 	team, ok := misc2GraveTeamArg(args, 1)
 	if !ok {
@@ -932,11 +946,13 @@ func misc2ParseSkillArg(arg string) (uint32, bool) {
 		}
 		return uint32(id), true
 	}
-	id, err := strconv.ParseUint(arg, 10, 32)
-	if err != nil {
+	// The bare id parses base-0 (StringTo<uint32>, base 0); the link
+	// data above parses base-10 (base_tag StoreTo, Hyperlinks.h:107-131).
+	id, ok := parseCommandUint32(arg)
+	if !ok {
 		return 0, false
 	}
-	return uint32(id), true
+	return id, true
 }
 
 // handleCmdMaxSkill mirrors HandleMaxSkillCommand (cs_misc.cpp:1363-1377,
@@ -1082,10 +1098,22 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) bool {
 	}
 	nameArgs, minutes, reasonStart, status := misc2ParseMuteArgs(args)
 	if status == 1 {
-		return false
+		// No args at all is bare-nullopt (silent false); a lone token
+		// is a framework error — the Optional<PlayerIdentifier> fails
+		// (CHAR_NAME_NO_EXIST) and the missing muteTime fails too
+		// (cs_misc.cpp:1841, ChatCommand.h:77-103 EITHER/OR).
+		if len(args) == 0 {
+			return false
+		}
+		s.sendSysMessage("Invalid mute time.")
+		return true
 	}
 	if status == 2 {
-		return false
+		// Unparseable uint32 muteTime (cs_misc.cpp:1841): the framework
+		// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+		// SetSentErrorMessage.
+		s.sendSysMessage("Invalid mute time.")
+		return true
 	}
 	reason := "No reason."
 	if reasonStart >= 0 {
@@ -1588,9 +1616,13 @@ func (s *session) handleCmdPlayAll(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	soundID, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
-		return false
+	soundID, ok := parseCommandUint32(args[0])
+	if !ok {
+		// Unparseable uint32 token (cs_misc.cpp:2509): the framework
+		// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+		// SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
 	payload := buildPlaySound(uint32(soundID))
 	if s.server != nil {
@@ -2088,20 +2120,32 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) bool {
 	}
 	skillID, ok := misc2ParseSkillArg(args[0])
 	if !ok {
-		return false
+		// Unparseable Variant<Hyperlink<skill>, uint32> token
+		// (cs_misc.cpp:1378): the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
-	level, err := strconv.ParseUint(args[1], 10, 32)
-	if err != nil {
-		return false
+	level, ok := parseCommandUint32(args[1])
+	if !ok {
+		// Unparseable uint32 token (cs_misc.cpp:1378): the framework
+		// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+		// SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
 	var maxArg uint32
 	hasMaxArg := false
 	if len(args) > 2 {
-		parsedMax, parseErr := strconv.ParseUint(args[2], 10, 32)
-		if parseErr != nil {
-			return false
+		parsedMax, ok := parseCommandUint32(args[2])
+		if !ok {
+			// Unparseable Optional<uint32> token (cs_misc.cpp:1378): the
+			// framework prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+			// SetSentErrorMessage.
+			s.sendSysMessage(misc2BadValue)
+			return true
 		}
-		maxArg = uint32(parsedMax)
+		maxArg = parsedMax
 		hasMaxArg = true
 	}
 	target := s.guildSelectionOrSelf()
@@ -2131,7 +2175,7 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) bool {
 	default:
 		max = uint16(level)
 	}
-	if level == 0 || level > uint64(max) {
+	if level == 0 || level > uint32(max) {
 		return false
 	}
 	applied := true
@@ -2477,8 +2521,8 @@ func miscParseWeatherType(token string) (weatherType, bool) {
 	if matched {
 		return match, true
 	}
-	val, err := strconv.ParseUint(token, 10, 32)
-	if err != nil {
+	val, ok := parseCommandUint32(token)
+	if !ok {
 		return 0, false
 	}
 	switch weatherType(val) {
@@ -2502,11 +2546,19 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) boo
 	}
 	wtype, ok := miscParseWeatherType(args[0])
 	if !ok {
-		return false
+		// Unparseable WeatherType token (cs_misc.cpp:1337): the
+		// framework prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+		// SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
-	intensity, err := strconv.ParseFloat(args[1], 32)
-	if err != nil || math.IsNaN(intensity) || math.IsInf(intensity, 0) {
-		return false
+	intensity, ok := parseCommandFloat(args[1])
+	if !ok {
+		// Unparseable float token (cs_misc.cpp:1337): the framework
+		// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
+		// SetSentErrorMessage (non-finite rejected, ChatCommandArgs.h).
+		s.sendSysMessage(misc2BadValue)
+		return true
 	}
 	if s.server == nil || !s.server.Config.WeatherEnabled {
 		s.sendSysMessage("Weather is disabled by config.")
