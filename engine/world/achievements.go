@@ -1559,7 +1559,7 @@ func (s *session) completeAchievement(achievementID uint32) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), true)
 		if s.server != nil {
 			if s.player != nil {
-				s.server.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, 25.0, s)
+				s.server.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, float64(s.server.Config.ChatListenRangeSay), s)
 			} else {
 				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s)
 			}
@@ -1605,8 +1605,8 @@ func (s *session) completeAchievement(achievementID uint32) {
 // the guild leg broadcasts CHAT_MSG_GUILD_ACHIEVEMENT to the earner's
 // guild (excluding the earner, Guild::BroadcastWorker) and the nearby leg
 // sends CHAT_MSG_ACHIEVEMENT to players in say range (ListenRange.Say,
-// default 25.0, World.cpp:1185 — the same range the SMSG_ACHIEVEMENT_EARNED
-// leg below uses). Both carry the BROADCAST_TEXT_ACHIEVEMENT_EARNED (29245)
+// World.cpp:1185 — the same range the SMSG_ACHIEVEMENT_EARNED leg below
+// uses). Both carry the BROADCAST_TEXT_ACHIEVEMENT_EARNED (29245)
 // text from the broadcast_text table, sent raw as C++ sends
 // BroadcastText::GetText (the client renders the $player/$achievement
 // tokens from the sender GUID and trailing achievement id). A missing row
@@ -1642,7 +1642,7 @@ func (s *session) sendAchievementEarnedChat(achievementID uint32) {
 	// broadcastToSetWithin shape below.
 	payload := protocol.BuildAchievementChatMessage(chatAchievement, language, s.playerGUID, text, s.chatTag(), achievementID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
-	s.server.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, 25.0, s)
+	s.server.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, float64(s.server.Config.ChatListenRangeSay), s)
 }
 
 // resetAchievements mirrors AchievementMgr::Reset (AchievementMgr.cpp:486-508):

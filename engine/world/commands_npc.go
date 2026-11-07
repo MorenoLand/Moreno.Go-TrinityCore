@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -89,16 +90,18 @@ const npcbotEntryMask = 0x04000000 | 0x08000000
 
 // handleCmdNPC dispatches the "npc" root (cs_npc.cpp:89-116). Chunk 1 covers
 // the "add" sub-table and the flat arms move/delete/near; the rest lands in
-// chunk 2.
-func (s *session) handleCmdNPC(ctx context.Context, args []string) {
+// chunk 2. The bool reports C++ handler success and propagates the move
+// arm's silent-false path; every other arm returns true (it prints its own
+// message or succeeds).
+func (s *session) handleCmdNPC(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .npc add|set|move|delete|near|info|playemote|say|textemote|whisper|yell|tame|spawngroup|despawngroup|follow|evade|showloot"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	// The Trinity parser prefix-matches command names at every nesting
 	// level; match the arm the same way here.
@@ -108,17 +111,18 @@ func (s *session) handleCmdNPC(ctx context.Context, args []string) {
 	case strings.HasPrefix("add", sub):
 		s.handleNPCAddTable(ctx, rest)
 	case strings.HasPrefix("move", sub):
-		s.handleNPCMove(ctx, rest)
+		return s.handleNPCMove(ctx, rest)
 	case strings.HasPrefix("delete", sub):
 		s.npcDeleteSub(ctx, rest)
 	case strings.HasPrefix("near", sub):
 		s.handleNPCNear(ctx, rest)
 	default:
 		if s.handleNPCChunk2(ctx, sub, rest) {
-			return
+			return true
 		}
 		s.sendSysMessage(syntax)
 	}
+	return true
 }
 
 // handleNPCAddTable dispatches the "add" sub-table (cs_npc.cpp:61-71).
@@ -279,11 +283,11 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 	if db == nil {
 		return
 	}
-	// C++ checks the vendor selection before the nil-item leg
-	// (cs_npc.cpp:179): a link resolving to no template reaches the body
-	// as a nil item, so its LANG_COMMAND_NEEDITEMSEND reports only after
-	// the vendor gate. A numeric id with no template is a parser error in
-	// C++ and stays pre-vendor here.
+	// C++ checks the nil-item leg before the vendor selection
+	// (cs_npc.cpp:179-192): a link resolving to no template reaches the
+	// body as a nil item, so its LANG_COMMAND_NEEDITEMSEND reports
+	// before the vendor gate. A numeric id with no template is a parser
+	// error in C++ and stays pre-vendor here.
 	var itemName string
 	itemMissing := false
 	if err := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName); err != nil {
@@ -292,6 +296,10 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 			return
 		}
 		itemMissing = true
+	}
+	if itemMissing {
+		s.sendSysMessage("You need to send an item.")
+		return
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -304,10 +312,6 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 	var npcFlag uint32
 	if err := db.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0) FROM creature_template WHERE entry = ?", vendorEntry).Scan(&npcFlag); err != nil || npcFlag&unitNPCFlagVendor == 0 {
 		s.sendSysMessage("You need to select a vendor.")
-		return
-	}
-	if itemMissing {
-		s.sendSysMessage("You need to send an item.")
 		return
 	}
 	if extendedcost != 0 {
@@ -349,10 +353,14 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 // type 4). An unknown template fails silently, the handleNPCAdd
 // precedent; success is silent as in C++. No DB row is written, so the
 // summon is temporary by construction, and no npcbot gate runs: C++'s
-// temp arm carries none (unlike the permanent add arm).
-func (s *session) handleNPCAddTemp(ctx context.Context, args []string) {
+// temp arm carries none (unlike the permanent add arm). The bool reports
+// C++ handler success: a non-loot/noloot first token and the unknown
+// template both return false silently (cs_npc.cpp:1025-1038), so
+// dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
+// success returns true.
+func (s *session) handleNPCAddTemp(ctx context.Context, args []string) bool {
 	if s.miscDeny(ctx, permissionCommandNPCAddTemp) {
-		return
+		return true
 	}
 	const syntax = "Syntax: .npc add temp [loot|noloot] <entry>"
 	summonType := uint8(4)
@@ -364,26 +372,35 @@ func (s *session) handleNPCAddTemp(ctx context.Context, args []string) {
 			rest = rest[1:]
 		case "noloot":
 			rest = rest[1:]
+		default:
+			// A first token that is neither loot nor noloot makes
+			// the C++ handler return false silently (the parser
+			// backtracks the optional lootStr onto the entry, so a
+			// lone unknown token stays a parse failure here).
+			if len(rest) > 1 {
+				return false
+			}
 		}
 	}
 	if len(rest) != 1 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	entry, ok := goParseLinkOrUint(rest[0], "creature_entry")
 	if !ok {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if _, ok := s.npcTemplateGate(ctx, entry); !ok {
-		return
+		return false
 	}
 	if s.server == nil || s.player == nil {
-		return
+		return true
 	}
 	p := s.player
 	origin := tempSummonOrigin{Map: p.Map, InstanceID: p.InstanceID, GUID: p.GUID, X: p.X, Y: p.Y, Z: p.Z, O: p.Orientation, Reach: float64(p.CombatReach)}
 	s.server.summonTempCreature(ctx, origin, entry, p.X, p.Y, p.Z, p.Orientation, summonType, 30000)
+	return true
 }
 
 // handleNPCAddMove mirrors HandleNpcAddMoveCommand (cs_npc.cpp:213): the
@@ -470,34 +487,37 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 
 // handleNPCMove mirrors HandleNpcMoveCommand (cs_npc.cpp:601): the GUID
 // form moves the spawn row to the handler's position, and the selection
-// form (no GUID arg) moves the selected creature's row instead — C++
-// returns false silently with neither, the file's convention reports the
-// missing selection. The live legs ride the motion map: the moved
-// creature's live position/home snap to the new row at full health (the
-// DespawnOrUnsummon respawn-at-new-location outcome), and a
-// differently-selected creature respawns home via npcMovementReset (no
-// path reload: a respawn does not LoadPath). Pets, totems and temp
-// summons carry no spawn id, so C++ reads GetCreatureData(0) and reports
-// GUID-not-found for them.
-func (s *session) handleNPCMove(ctx context.Context, args []string) {
+// form (no GUID arg) moves the selected creature's row instead. The live
+// legs ride the DespawnOrUnsummon(0s, 1s) twin (despawnAtEvade): the moved
+// creature disappears and respawns at the new row after 1s at full health,
+// and a differently-selected creature is despawned too and respawns at its
+// own home (no path reload: a respawn does not LoadPath). A selected pet,
+// temp summon or totem has no spawn row, so it is left live — the
+// despawn twin re-reads the spawn row and would delete it instead.
+// Pets, totems and temp summons carry no spawn id, so C++ reads
+// GetCreatureData(0) and reports GUID-not-found for them. The bool reports C++ handler success: with
+// neither a GUID nor a selection C++ returns false silently
+// (cs_npc.cpp:607-608), so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); the GUID-not-found, wrong-map and npcbot
+// paths print a message and return true.
+func (s *session) handleNPCMove(ctx context.Context, args []string) bool {
 	if s.miscDeny(ctx, permissionCommandNPCMove) {
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	const syntax = "Syntax: .npc move [guid]"
 	if len(args) > 1 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	var guid uint32
 	selected := s.castCommandSelectedCreature()
 	if len(args) == 0 {
 		if selected == nil {
-			s.sendSysMessage("Select a creature first.")
-			return
+			return false
 		}
 		if motionIsPet(selected) || selected.IsTempSummon || (s.server != nil && s.server.isTotemGUID(selected.GUID)) {
 			guid = 0
@@ -509,47 +529,47 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) {
 		guid, ok = goParseLinkOrUint(args[0], "creature")
 		if !ok {
 			s.sendSysMessage(syntax)
-			return
+			return true
 		}
 	}
 	var rowMap uint32
 	var entry uint32
 	if err := db.QueryRowContext(ctx, "SELECT map, id FROM creature WHERE guid = ?", guid).Scan(&rowMap, &entry); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
-		return
+		return true
 	}
 	if rowMap != s.player.Map {
 		s.sendSysMessage(fmt.Sprintf("Creature #%d is on a different map.", guid)) // LANG_COMMAND_CREATUREATSAMEMAP 272
-		return
+		return true
 	}
 	if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok {
 		if s.npcbotMoveBlocked(guid, entry, flagsExtra) {
-			return
+			return true
 		}
 	}
 	p := s.player
 	if _, err := db.ExecContext(ctx, "UPDATE creature SET position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
 		p.X, p.Y, p.Z, p.Orientation, guid); err != nil {
-		return
+		return true
 	}
 	if s.server != nil {
-		if moved := s.npcLiveCreatureBySpawnGUID(guid); moved != nil {
-			s.server.motionMu.Lock()
-			moved.X, moved.Y, moved.Z, moved.Orientation = p.X, p.Y, p.Z, p.Orientation
-			moved.HomeX, moved.HomeY, moved.HomeZ, moved.HomeO = p.X, p.Y, p.Z, p.Orientation
-			healthChanged := moved.Health != moved.MaxHealth
-			moved.Health = moved.MaxHealth
-			mapID, instanceID, mguid, maxHealth := moved.Map, moved.InstanceID, moved.GUID, moved.MaxHealth
-			s.server.motionMu.Unlock()
-			if healthChanged {
-				s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, mguid, map[int]uint32{unitFieldHealth: maxHealth})
-			}
+		// DespawnOrUnsummon(0s, 1s) (cs_npc.cpp:650-651): the moved
+		// creature disappears for 1s and the respawn leg re-reads the
+		// updated spawn row, so it re-materializes at the new position
+		// at full health; a differently-selected creature is despawned
+		// too and respawns at its own unchanged home. The despawnAtEvade
+		// machinery is the DespawnOrUnsummon(0s, delay) twin.
+		if moved := s.npcLiveCreatureBySpawnGUID(guid); moved != nil && !s.server.isTotemGUID(moved.GUID) {
+			s.server.despawnAtEvade(ctx, moved, time.Second)
 		}
 		if selected != nil && uint32(selected.GUID&0x00FFFFFF) != guid {
-			s.npcMovementReset(ctx, selected, false)
+			if selSpawn := s.npcLiveCreatureBySpawnGUID(uint32(selected.GUID & 0x00FFFFFF)); selSpawn != nil && !s.server.isTotemGUID(selSpawn.GUID) {
+				s.server.despawnAtEvade(ctx, selSpawn, time.Second)
+			}
 		}
 	}
 	s.sendSysMessage("Creature moved.") // LANG_COMMAND_CREATUREMOVED 271
+	return true
 }
 
 // handleNPCDelete mirrors HandleNpcDeleteCommand (cs_npc.cpp:302): the

@@ -148,34 +148,36 @@ func (s *session) handleNPCSetAllowMove(ctx context.Context) {
 // validated and messaged, never updated. Nodel skips the LoadPath(0) leg
 // (cs_npc.cpp:716: LoadPath runs only when doNotDelete is false) and
 // changes the message; the waypoint deletion itself is commented out in
-// C++ too.
-func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
+// C++ too. The bool reports C++ handler success: the selection form with
+// no/pet creature returns false silently (cs_npc.cpp:730-733), so
+// dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
+// paths that print a message return true.
+func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .npc set movetype [guid] <stay|random|way> [nodel]"
 	if s.miscDeny(ctx, permissionCommandNPCSetMoveType) {
-		return
+		return true
 	}
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if moveType, title, ok := parseNPCMoveType(args[0]); ok {
 		// Selection form: ".npc set movetype <stay|random|way> [nodel]".
 		motion := s.castCommandSelectedCreature()
 		if motion == nil || motionIsPet(motion) {
-			// C++ returns false silently here; the file's convention
-			// reports the missing selection instead.
-			s.sendSysMessage("Select a creature first.")
-			return
+			// C++ returns false silently here (cs_npc.cpp:730-733),
+			// so dispatchCommand shows the node's help listing.
+			return false
 		}
 		db := s.npcWorldDB()
 		if db == nil {
-			return
+			return true
 		}
 		nodel := false
 		if len(args) > 1 {
 			if len(args) > 2 || !strings.EqualFold(args[1], "nodel") {
 				s.sendSysMessage(syntax)
-				return
+				return true
 			}
 			nodel = true
 		}
@@ -193,31 +195,31 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 		} else {
 			s.sendSysMessage(fmt.Sprintf("Move type set to %s.", title))
 		}
-		return
+		return true
 	}
 	if len(args) < 2 {
 		s.sendSysMessage("npc set movetype needs a creature GUID: selected-unit creature targets have no Go bridge.")
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	guid, ok := goParseLinkOrUint(args[0], "creature")
 	if !ok {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	moveType, title, ok := parseNPCMoveType(args[1])
 	if !ok {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	nodel := false
 	if len(args) > 2 {
 		if len(args) > 3 || !strings.EqualFold(args[2], "nodel") {
 			s.sendSysMessage(syntax)
-			return
+			return true
 		}
 		nodel = true
 	}
@@ -238,12 +240,12 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 		} else {
 			s.sendSysMessage(fmt.Sprintf("Move type set to %s.", title))
 		}
-		return
+		return true
 	}
 	var exists uint32
 	if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE guid = ?", guid).Scan(&exists); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
-		return
+		return true
 	}
 	// No live creature means no SaveToDB in C++: the type change is lost
 	// and only the message is printed, so the row is left untouched.
@@ -254,6 +256,7 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) {
 	} else {
 		s.sendSysMessage(fmt.Sprintf("Move type set to %s.", title))
 	}
+	return true
 }
 
 // npcMovementReset mirrors the MotionMaster-Initialize + JUST_DIED-respawn
@@ -747,8 +750,17 @@ func (s *session) handleNPCSetModel(ctx context.Context, args []string) {
 // ".npc set phase <phasemask>". C++ rejects a zero mask BEFORE the
 // creature check (LANG_BAD_VALUE), then requires the selected creature
 // (LANG_SELECT_CREATURE), writes the live phase mask, and runs SaveToDB
-// only for non-pets (the spawn row's phaseMask). No visibility fan-out,
-// the modify-phase delta.
+// only for non-pets (the spawn row's phaseMask). Unit::SetPhaseMask
+// (Unit.cpp:12464-12477) also phases the controlled units (m_Controlled:
+// pets, charmed, minions) and the summon-slot creatures, so the live leg
+// fans the mask out over the motion owner graph (CharmerGUID/OwnerGUID,
+// the fanOutBytes2FlagToControlled precedent — the flat graph cannot
+// separate pure summons from minions, the same documented delta); the
+// fan-out is live-only, C++ saves only the top creature. The mask-equality
+// early return of Unit::SetPhaseMask gates the fan-out: re-setting the
+// current mask leaves controlled units untouched. No visibility fan-out:
+// the streaming re-reads PhaseMask, and RemoveNotOwnSingleTargetAuras has
+// no Go aura model.
 func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCSetPhase) {
 		return
@@ -777,8 +789,19 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
 		return
 	}
 	s.server.motionMu.Lock()
+	changed := motion.PhaseMask != mask
 	motion.PhaseMask = mask
+	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 	s.server.motionMu.Unlock()
+	if changed && s.server != nil {
+		s.server.motionMu.Lock()
+		for _, m := range s.server.motionMapLocked(mapID, instanceID) {
+			if m != nil && (m.CharmerGUID == guid || m.OwnerGUID == guid) {
+				m.PhaseMask = mask
+			}
+		}
+		s.server.motionMu.Unlock()
+	}
 	if !motionIsPet(motion) {
 		_, _ = db.ExecContext(ctx, "UPDATE creature SET phaseMask = ? WHERE guid = ?", mask, uint32(motion.GUID&0x00FFFFFF))
 	}
@@ -792,31 +815,37 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
 // succeeds, LANG_ERROR otherwise. The live leg is the seatCreatureEntry
 // re-seat (the Lua UpdateEntry twin, including its values-update broadcast);
 // like C++, no spawn row is rewritten, so a respawn re-derives the entry
-// from the DB row.
-func (s *session) handleNPCSetEntry(ctx context.Context, args []string) {
+// from the DB row. The bool reports C++ handler success: the zero-entry
+// path returns false so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); paths that print a message return true.
+func (s *session) handleNPCSetEntry(ctx context.Context, args []string) bool {
 	if s.miscDeny(ctx, permissionCommandNPCSetEntry) {
-		return
+		return true
 	}
 	const syntax = "Syntax: .npc set entry <entryId>"
 	if len(args) != 1 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	entry, ok := goParseLinkOrUint(args[0], "creature_entry")
-	if !ok || entry == 0 {
+	if !ok {
 		s.sendSysMessage(syntax)
-		return
+		return true
+	}
+	if entry == 0 {
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil || !s.server.seatCreatureEntry(ctx, motion, entry) {
 		s.sendSysMessage("Error.")
-		return
+		return true
 	}
 	s.sendSysMessage("Done.")
+	return true
 }
 
 // npcWanderMoveType is the HandleNpcSetWanderDistanceCommand movement-type
@@ -837,33 +866,37 @@ func npcWanderMoveType(dist float64) uint32 {
 // LANG_COMMAND_WANDER_DISTANCE. The MotionMaster-Initialize and
 // JUST_DIED-respawn legs ride npcMovementReset (no path reload: unlike
 // movetype, C++ does not call LoadPath here); C++ performs no SaveToDB on
-// this arm, so the row update stays at the two columns.
-func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string) {
+// this arm, so the row update stays at the two columns. The bool reports
+// C++ handler success: the negative-distance path sends LANG_BAD_VALUE and
+// still returns false (no SetSentErrorMessage, cs_npc.cpp:842-846), and
+// the no-creature path returns false silently (cs_npc.cpp:855-856), so
+// dispatchCommand shows the node's help listing in both cases
+// (ChatCommand.cpp:296-309); success returns true.
+func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string) bool {
 	if s.miscDeny(ctx, permissionCommandNPCSetSpawnDist) {
-		return
+		return true
 	}
 	const syntax = "Syntax: .npc set wanderdistance <distance>"
 	if len(args) != 1 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	dist, err := parseNPCFloat(args[0])
 	if err != nil {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if dist < 0 {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
-		s.sendSysMessage("Select a creature first.")
-		return
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	moveType := npcWanderMoveType(dist)
 	s.server.motionMu.Lock()
@@ -874,6 +907,7 @@ func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string)
 	s.npcMovementReset(ctx, motion, false)
 	_, _ = db.ExecContext(ctx, "UPDATE creature SET wander_distance = ?, MovementType = ? WHERE guid = ?", dist, moveType, uint32(guid&0x00FFFFFF))
 	s.sendSysMessage(fmt.Sprintf("Wander distance set to %g.", dist))
+	return true
 }
 
 // handleNPCSetSpawnTime mirrors HandleNpcSetSpawnTimeCommand (cs_npc.cpp:882):
@@ -881,29 +915,31 @@ func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string)
 // persists the spawn row (WORLD_UPD_CREATURE_SPAWN_TIME_SECS, the
 // spawntimesecs column the respawn-delay reader consults) and writes the live
 // respawn delay (the SetRespawnDelay twin's slot, consumed at death and
-// cleared on respawn) before reporting LANG_COMMAND_SPAWNTIME.
-func (s *session) handleNPCSetSpawnTime(ctx context.Context, args []string) {
+// cleared on respawn) before reporting LANG_COMMAND_SPAWNTIME. The bool
+// reports C++ handler success: the no-creature path returns false silently
+// (cs_npc.cpp:884-886), so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); success returns true.
+func (s *session) handleNPCSetSpawnTime(ctx context.Context, args []string) bool {
 	if s.miscDeny(ctx, permissionCommandNPCSetSpawnTime) {
-		return
+		return true
 	}
 	const syntax = "Syntax: .npc set spawntime <seconds>"
 	if len(args) != 1 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	secs, ok := npcVendorUintArg(args[0])
 	if !ok {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
-		s.sendSysMessage("Select a creature first.")
-		return
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	guid := motion.GUID
@@ -912,6 +948,7 @@ func (s *session) handleNPCSetSpawnTime(ctx context.Context, args []string) {
 	s.server.motionMu.Unlock()
 	_, _ = db.ExecContext(ctx, "UPDATE creature SET spawntimesecs = ? WHERE guid = ?", secs, uint32(guid&0x00FFFFFF))
 	s.sendSysMessage(fmt.Sprintf("Spawn time set to %d seconds.", secs))
+	return true
 }
 
 // npcLinkBlocked mirrors the ObjectMgr::SetCreatureLinkedRespawn
@@ -1001,8 +1038,10 @@ func npcSetDataAIOrScript(aiName, scriptName string) string {
 // (scripting runtime events 1-37 have no SetData hook), and the C++ base
 // ScriptedAI::SetData is a no-op unless the script overrides it, which a Go
 // Lua script cannot. The wired leg is the command's own effect: the message
-// with the creature's GUID, entry, name, data pair and AI/script-name tail.
-// The LANG_NPC_SETDATA wording is a plain-English recall (no in-tree seed).
+// with the creature's GUID, entry, name, data pair and AI/script-name tail,
+// in the C++ PSendSysMessage arg order (guidCounter, entry, name, data_1,
+// data_2, tail). The LANG_NPC_SETDATA wording is a plain-English recall
+// (no in-tree seed).
 func (s *session) handleNPCSetData(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCSetData) {
 		return
@@ -1029,7 +1068,7 @@ func (s *session) handleNPCSetData(ctx context.Context, args []string) {
 	s.server.motionMu.Lock()
 	guid, entry, name, aiName, scriptName := uint32(motion.GUID&0x00FFFFFF), motion.Entry, motion.Name, motion.AIName, motion.ScriptName
 	s.server.motionMu.Unlock()
-	s.sendSysMessage(fmt.Sprintf("Set data %d %d for creature %s (GUID %d, entry %d): %s", data1, data2, name, guid, entry, npcSetDataAIOrScript(aiName, scriptName)))
+	s.sendSysMessage(fmt.Sprintf("Creature GUID %d, entry %d, %s: set data %d %d: %s", guid, entry, name, data1, data2, npcSetDataAIOrScript(aiName, scriptName)))
 }
 
 // npcEvadeParse parses the optional ".npc evade [why] [force]" tail in
@@ -1096,9 +1135,13 @@ func npcEvadeParse(args []string) (force bool, ok bool) {
 // (C++ _EnterEvadeMode refuses dead creatures) or already evading without
 // force (C++ IsInEvadeMode refuses the re-entry), and the force leg clears
 // the evade state first so the evade re-runs. The IsAIEnabled gate is
-// vacuous in Go (no AI-disable model; every motion is AI-enabled), and the
-// charmed-creature owner-follow leg of C++ EnterEvadeMode is unmodeled (the
-// generic reset runs instead).
+// the npcbot leg: Creature::AIM_Create bails when bot_AI/bot_pet_AI is
+// set (Creature.cpp:1064-1071), and a live npcbot creature always has
+// bot_AI, so IsAIEnabled is false exactly for npcbot-flagged creatures
+// (Creature::IsNPCBot, flags_extra CREATURE_FLAG_EXTRA_NPCBOT|_PET) —
+// the gate reports LANG_CREATURE_NOT_AI_ENABLED (11015, plain-English
+// recall, no in-tree seed). The charmed-creature owner-follow leg of C++
+// EnterEvadeMode is unmodeled (the generic reset runs instead).
 func (s *session) handleNPCEvade(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandNPCEvade) {
 		return
@@ -1114,6 +1157,13 @@ func (s *session) handleNPCEvade(ctx context.Context, args []string) {
 		return
 	}
 	if s.server == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	entry := motion.Entry
+	s.server.motionMu.Unlock()
+	if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok && flagsExtra&npcbotEntryMask != 0 {
+		s.sendSysMessage("Creature is not AI enabled.")
 		return
 	}
 	s.server.motionMu.Lock()
@@ -1631,57 +1681,63 @@ func (s *session) handleNPCInfo(ctx context.Context) {
 // spawn-group manager: group id plus the force/ignorerespawn flags, the
 // bad-group message on an unknown, system, cross-map or memberless group,
 // and the spawn count on success. LANG wordings are plain-English recalls
-// (no in-tree seed); the despawn count line is literal C++ text.
-func (s *session) handleNPCSpawnGroup(ctx context.Context, args []string) {
+// (no in-tree seed); the despawn count line is literal C++ text. The bool
+// reports C++ handler success: empty opts return false silently
+// (cs_npc.cpp:1358-1359), so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); the bad-group message path returns true.
+func (s *session) handleNPCSpawnGroup(ctx context.Context, args []string) bool {
 	if s.miscDeny(ctx, permissionCommandNPCSpawnGroup) {
-		return
+		return true
 	}
 	groupID, force, ignoreRespawn, ok := parseSpawnGroupArgs(args, true)
 	if !ok {
-		s.sendSysMessage("Syntax: .npc spawngroup <groupId> [force] [ignorerespawn]")
-		return
+		return false
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	count, valid := s.server.spawnGroupSpawn(ctx, db, s.player.Map, s.player.InstanceID, groupID, ignoreRespawn, force)
 	if !valid {
 		s.sendSysMessage(fmt.Sprintf("Spawn group %d is not valid.", groupID))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Spawned %d objects.", count))
+	return true
 }
 
 // handleNPCDespawnGroup mirrors HandleNpcDespawnGroup (cs_npc.cpp:1397) on
 // the spawn-group manager: group id plus the removerespawntime flag, the
 // bad-group message on an unknown, system, cross-map or memberless group,
-// and the despawn count on success.
-func (s *session) handleNPCDespawnGroup(ctx context.Context, args []string) {
+// and the despawn count on success. The bool reports C++ handler success:
+// empty opts return false silently (cs_npc.cpp:1399-1400), so
+// dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
+// the bad-group message path returns true.
+func (s *session) handleNPCDespawnGroup(ctx context.Context, args []string) bool {
 	if s.miscDeny(ctx, permissionCommandNPCDespawnGroup) {
-		return
+		return true
 	}
 	groupID, removeRespawnTime, _, ok := parseSpawnGroupArgs(args, false)
 	if !ok {
-		s.sendSysMessage("Syntax: .npc despawngroup <groupId> [removerespawntime]")
-		return
+		return false
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	count, valid := s.server.spawnGroupDespawn(ctx, db, s.player.Map, s.player.InstanceID, groupID, removeRespawnTime)
 	if !valid {
 		s.sendSysMessage(fmt.Sprintf("Spawn group %d is not valid.", groupID))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Despawned a total of %d objects.", count))
+	return true
 }
 
 // handleNPCTame mirrors HandleNpcTameCommand (cs_npc.cpp:1048): the selected

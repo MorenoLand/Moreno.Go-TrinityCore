@@ -9148,7 +9148,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.addWithPerms("mmap", func(ctx context.Context, args []string) bool { s.handleCmdMMap(ctx, args); return true }, map[string]uint32{"loadedtiles": permissionCommandMMapLoadedTiles, "loc": permissionCommandMMapLoc, "path": permissionCommandMMapPath, "stats": permissionCommandMMapStats, "testarea": permissionCommandMMapTestArea}, nil).withPerm(permissionCommandMMap)
 	root.add("morph", func(ctx context.Context, args []string) bool { s.handleCmdMorph(ctx, args); return true }, nil, nil).withPerm(permissionCommandMorph)
 	root.add("demorph", func(ctx context.Context, args []string) bool { s.handleCmdDeMorph(ctx); return true }, nil, nil).withPerm(permissionCommandDeMorph)
-	npcNode := root.addWithPerms("npc", func(ctx context.Context, args []string) bool { s.handleCmdNPC(ctx, args); return true }, map[string]uint32{"add": 0, "set": 0, "move": permissionCommandNPCMove, "delete": permissionCommandNPCDelete, "near": permissionCommandNPCNear, "info": permissionCommandNPCInfo, "playemote": permissionCommandNPCPlayEmote, "say": permissionCommandNPCSay, "textemote": permissionCommandNPCTextEmote, "whisper": permissionCommandNPCWhisper, "yell": permissionCommandNPCYell, "tame": permissionCommandNPCTame, "spawngroup": permissionCommandNPCSpawnGroup, "despawngroup": permissionCommandNPCDespawnGroup, "follow": permissionCommandNPCFollow, "evade": permissionCommandNPCEvade, "showloot": permissionCommandNPCShowLoot}, nil)
+	npcNode := root.addWithPerms("npc", func(ctx context.Context, args []string) bool { return s.handleCmdNPC(ctx, args) }, map[string]uint32{"add": 0, "set": 0, "move": permissionCommandNPCMove, "delete": permissionCommandNPCDelete, "near": permissionCommandNPCNear, "info": permissionCommandNPCInfo, "playemote": permissionCommandNPCPlayEmote, "say": permissionCommandNPCSay, "textemote": permissionCommandNPCTextEmote, "whisper": permissionCommandNPCWhisper, "yell": permissionCommandNPCYell, "tame": permissionCommandNPCTame, "spawngroup": permissionCommandNPCSpawnGroup, "despawngroup": permissionCommandNPCDespawnGroup, "follow": permissionCommandNPCFollow, "evade": permissionCommandNPCEvade, "showloot": permissionCommandNPCShowLoot}, nil)
 	// R13 depth (cs_npc.cpp:61-86): "add" and "set" are sub-tables.
 	// The "add" group also carries the "" entry (HandleNpcAddCommand,
 	// ".npc add <entry>"), so the group node keeps its handler;
@@ -9194,8 +9194,7 @@ func (s *session) buildCommandTree() *commandNode {
 			s.sendSysMessage("You must be in game to use that command.")
 			return true
 		}
-		s.handleNPCAddTemp(ctx, args)
-		return true
+		return s.handleNPCAddTemp(ctx, args)
 	}, permissionCommandNPCAddTemp)
 	npcSet := npcNode.group("set")
 	npcSetLeaf := func(name string, invoke func(ctx context.Context, args []string) bool, perm uint32) {
@@ -9204,21 +9203,20 @@ func (s *session) buildCommandTree() *commandNode {
 				s.sendSysMessage("You must be in game to use that command.")
 				return true
 			}
-			invoke(ctx, args)
-			return true
+			return invoke(ctx, args)
 		}, perm)
 	}
 	npcSetLeaf("allowmove", func(ctx context.Context, args []string) bool { s.handleNPCSetAllowMove(ctx); return true }, permissionCommandNPCSetAllowMove)
-	npcSetLeaf("entry", func(ctx context.Context, args []string) bool { s.handleNPCSetEntry(ctx, args); return true }, permissionCommandNPCSetEntry)
+	npcSetLeaf("entry", s.handleNPCSetEntry, permissionCommandNPCSetEntry)
 	npcSetLeaf("factionid", func(ctx context.Context, args []string) bool { s.handleNPCSetFactionID(ctx, args); return true }, permissionCommandNPCSetFactionID)
 	npcSetLeaf("flag", func(ctx context.Context, args []string) bool { s.handleNPCSetFlag(ctx, args); return true }, permissionCommandNPCSetFlag)
 	npcSetLeaf("level", func(ctx context.Context, args []string) bool { s.handleNPCSetLevel(ctx, args); return true }, permissionCommandNPCSetLevel)
 	npcSetLeaf("link", func(ctx context.Context, args []string) bool { s.handleNPCSetLink(ctx, args); return true }, permissionCommandNPCSetLink)
 	npcSetLeaf("model", func(ctx context.Context, args []string) bool { s.handleNPCSetModel(ctx, args); return true }, permissionCommandNPCSetModel)
-	npcSetLeaf("movetype", func(ctx context.Context, args []string) bool { s.handleNPCSetMoveType(ctx, args); return true }, permissionCommandNPCSetMoveType)
+	npcSetLeaf("movetype", s.handleNPCSetMoveType, permissionCommandNPCSetMoveType)
 	npcSetLeaf("phase", func(ctx context.Context, args []string) bool { s.handleNPCSetPhase(ctx, args); return true }, permissionCommandNPCSetPhase)
-	npcSetLeaf("wanderdistance", func(ctx context.Context, args []string) bool { s.handleNPCSetWanderDistance(ctx, args); return true }, permissionCommandNPCSetSpawnDist)
-	npcSetLeaf("spawntime", func(ctx context.Context, args []string) bool { s.handleNPCSetSpawnTime(ctx, args); return true }, permissionCommandNPCSetSpawnTime)
+	npcSetLeaf("wanderdistance", s.handleNPCSetWanderDistance, permissionCommandNPCSetSpawnDist)
+	npcSetLeaf("spawntime", s.handleNPCSetSpawnTime, permissionCommandNPCSetSpawnTime)
 	npcSetLeaf("data", func(ctx context.Context, args []string) bool { s.handleNPCSetData(ctx, args); return true }, permissionCommandNPCSetData)
 	root.add("npcbot", func(ctx context.Context, args []string) bool { s.handleCmdNpcBot(ctx, args); return true }, []string{"add", "remove", "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command", "info", "hide", "unhide", "show", "recall", "kill", "suicide", "distance", "order", "set"}, nil)
 	root.addWithPerms("quest", func(ctx context.Context, args []string) bool { s.handleCmdQuest(ctx, args); return true }, map[string]uint32{"add": permissionCommandQuestAdd, "complete": permissionCommandQuestComplete, "remove": permissionCommandQuestRemove, "reward": permissionCommandQuestReward}, nil).withPerm(permissionCommandQuest)
