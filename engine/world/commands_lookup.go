@@ -348,7 +348,11 @@ func (s *session) handleCmdLookup(ctx context.Context, args []string) bool {
 			return false
 		}
 		if len(rest) == 0 {
-			return false
+			// R-LOOKUP-TELE-1: C++ sends LANG_COMMAND_TELE_PARAMETER +
+			// SetSentErrorMessage(true) and returns false (no further
+			// help); the empty-token leg below sends the syntax line +
+			// true, the same one-message shape.
+			return s.handleLookupTele(ctx, "")
 		}
 		return s.handleLookupTele(ctx, rest[0])
 	case strings.HasPrefix("title", sub):
@@ -896,6 +900,11 @@ func (s *session) handleLookupTele(ctx context.Context, token string) bool {
 	if token == "" {
 		s.sendSysMessage("Syntax: .lookup tele <name>")
 		return true
+	}
+	// R-LOOKUP-TELE-2: C++ Utf8toWStr fails -> return false silent
+	// (cs_lookup.cpp:1181-1182); the token must not reach the search.
+	if !utf8.ValidString(token) {
+		return false
 	}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")

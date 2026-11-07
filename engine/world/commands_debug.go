@@ -99,6 +99,268 @@ func (s *session) handleDebugWorldState(ctx context.Context, args []string) bool
 	return true
 }
 
+// debugValueTarget resolves the getSelectedUnit twin (Chat.cpp:312) for the
+// debug value arms: the selected creature, else the selected player, else
+// the invoker. It returns the value backend, its values count (UNIT_END 148
+// for creatures, PLAYER_END 1326 for players, UpdateFields.h:175/392) and
+// the unit's guid counter (the modifyFaction low-guid precedent).
+func (s *session) debugValueTarget(ctx context.Context) (indexedValueBackend, int, uint32, bool) {
+	if motion := s.debugSelectedCreatureMotion(); motion != nil {
+		return motionIndexedValueBackend(s.server, motion), 148, uint32(motion.GUID & 0x00FFFFFF), true
+	}
+	target := s.modifyTargetPlayer(ctx)
+	if target == nil {
+		return indexedValueBackend{}, 0, 0, false
+	}
+	return playerIndexedValueBackend(target, target.player), 1326, uint32(target.playerGUID & 0x00FFFFFF), true
+}
+
+// debugTooBigIndex mirrors the LANG_TOO_BIG_INDEX leg shared by the value
+// arms (cs_debug.cpp): C++ prints the message and returns false with NO
+// SetSentErrorMessage, so the framework help follows — Go returns false
+// for the same shape. The LANG text itself is unseeded in-tree.
+func (s *session) debugTooBigIndex(index uint32, valuesCount int, counter uint32) bool {
+	s.sendSysMessage(fmt.Sprintf("Index %d is too big (max %d) for unit %d.", index, valuesCount, counter))
+	return false
+}
+
+// handleDebugGetValue mirrors HandleDebugGetValueCommand (cs_debug.cpp:1145):
+// ".debug getvalue <index> <isInt>" reads the selected unit's field as a
+// uint32 or a float. getSelectedUnit falls back to the invoker (Chat.cpp:312),
+// so the no-target leg is unreachable in-game; the console path never reaches
+// here (handleCmdDebug returns early when s.player is nil).
+func (s *session) handleDebugGetValue(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
+	const syntax = "Syntax: .debug getvalue <index> <isInt>"
+	if len(args) != 2 {
+		return false
+	}
+	index, ok1 := parseCommandUint32(args[0])
+	isInt, ok2 := cheatArgBool(args[1])
+	if !ok1 || !ok2 {
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
+	}
+	backend, valuesCount, counter, ok := s.debugValueTarget(ctx)
+	if !ok {
+		return true
+	}
+	if int(index) >= valuesCount {
+		return s.debugTooBigIndex(index, valuesCount, counter)
+	}
+	value, ok := backend.read(int(index))
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("Field %d is not supported for this unit: no Go value store backs it.", index))
+		return true
+	}
+	if isInt {
+		s.sendSysMessage(fmt.Sprintf("Get uint32 field %d of %d: %d.", index, counter, value)) // LANG_GET_UINT_FIELD
+	} else {
+		s.sendSysMessage(fmt.Sprintf("Get float field %d of %d: %f.", index, counter, math.Float32frombits(value))) // LANG_GET_FLOAT_FIELD
+	}
+	return true
+}
+
+// handleDebugSetValue mirrors HandleDebugSetValueCommand (cs_debug.cpp:1115):
+// ".debug setvalue <index> <value>" writes the selected object's field.
+// The value is Variant<uint32, float>: uint32 first (base-0, like the
+// framework), then float. Gameobjects are the one gap: C++ takes
+// getSelectedObject, Go has no selected-gameobject value backend, so a
+// selected gameobject falls through to the invoker (documented, not silent).
+func (s *session) handleDebugSetValue(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
+	const syntax = "Syntax: .debug setvalue <index> <value>"
+	if len(args) != 2 {
+		return false
+	}
+	index, ok := parseCommandUint32(args[0])
+	if !ok {
+		s.sendSysMessage(syntax)
+		return true
+	}
+	var bits uint32
+	var isFloat bool
+	var floatVal float64
+	if v, ok := parseCommandUint32(args[1]); ok {
+		bits = v
+	} else if f, ok := parseCommandFloat(args[1]); ok {
+		isFloat, floatVal = true, f
+		bits = math.Float32bits(float32(f))
+	} else {
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
+	}
+	backend, valuesCount, counter, ok := s.debugValueTarget(ctx)
+	if !ok {
+		return true
+	}
+	if int(index) >= valuesCount {
+		return s.debugTooBigIndex(index, valuesCount, counter)
+	}
+	fields, _, ok := backend.write(int(index), func(uint32) uint32 { return bits })
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("Field %d is not supported for this unit: no Go value store backs it.", index))
+		return true
+	}
+	backend.broadcast(fields)
+	if isFloat {
+		s.sendSysMessage(fmt.Sprintf("Set float field %d of %d to %f.", index, counter, floatVal)) // LANG_SET_FLOAT_FIELD
+	} else {
+		s.sendSysMessage(fmt.Sprintf("Set uint32 field %d of %d to %d.", index, counter, bits)) // LANG_SET_UINT_FIELD
+	}
+	return true
+}
+
+// handleDebugSetBit mirrors HandleDebugSet32BitCommand (cs_debug.cpp:1228):
+// ".debug setbit <index> <bit>" sets the field to 1 << (bit-1), or 0 for
+// bit 0 — a SET, not the modify-bit toggle. A bit over 32 returns false
+// silent (cs_debug.cpp, no message); the framework rejects bit > 255 as a
+// uint8 parse failure. C++ does no values-count check here (release builds
+// write unchecked); Go refuses an unbacked index honestly instead.
+func (s *session) handleDebugSetBit(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
+	const syntax = "Syntax: .debug setbit <index> <bit>"
+	if len(args) != 2 {
+		return false
+	}
+	index, ok1 := parseCommandUint32(args[0])
+	bit, ok2 := parseCommandUint8(args[1])
+	if !ok1 || !ok2 {
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
+	}
+	if bit > 32 {
+		return false
+	}
+	var value uint32
+	if bit != 0 {
+		value = uint32(1) << (bit - 1)
+	}
+	backend, valuesCount, counter, ok := s.debugValueTarget(ctx)
+	if !ok {
+		return true
+	}
+	if int(index) >= valuesCount {
+		s.sendSysMessage(fmt.Sprintf("Field %d is not supported for this unit: no Go value store backs it.", index))
+		return true
+	}
+	fields, _, ok := backend.write(int(index), func(uint32) uint32 { return value })
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("Field %d is not supported for this unit: no Go value store backs it.", index))
+		return true
+	}
+	backend.broadcast(fields)
+	s.sendSysMessage(fmt.Sprintf("Set 32bit field %d of %d to %d.", index, counter, value)) // LANG_SET_32BIT_FIELD
+	return true
+}
+
+// handleDebugMod32Value mirrors HandleDebugMod32ValueCommand
+// (cs_debug.cpp:1177): ".debug Mod32Value <index> <value>" adds value to
+// the INVOKER's field (GetPlayer, not the selection) and reports the new
+// total. An index at or past PLAYER_END prints LANG_TOO_BIG_INDEX and
+// returns false with no SetSentErrorMessage (help follows).
+func (s *session) handleDebugMod32Value(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
+	const syntax = "Syntax: .debug Mod32Value <index> <value>"
+	if len(args) != 2 {
+		return false
+	}
+	index, ok1 := parseCommandUint32(args[0])
+	value, ok2 := parseCommandUint32(args[1])
+	if !ok1 || !ok2 {
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
+	}
+	if s.player == nil {
+		return true
+	}
+	backend := playerIndexedValueBackend(s, s.player)
+	const valuesCount = 1326 // PLAYER_END
+	counter := uint32(s.playerGUID & 0x00FFFFFF)
+	if int(index) >= valuesCount {
+		return s.debugTooBigIndex(index, valuesCount, counter)
+	}
+	current, ok := backend.read(int(index))
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("Field %d is not supported: no Go value store backs it.", index))
+		return true
+	}
+	current += value
+	fields, _, ok := backend.write(int(index), func(uint32) uint32 { return current })
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("Field %d is not supported: no Go value store backs it.", index))
+		return true
+	}
+	backend.broadcast(fields)
+	s.sendSysMessage(fmt.Sprintf("Changed 32bit field %d to %d.", index, current)) // LANG_CHANGE_32BIT_FIELD
+	return true
+}
+
+// handleDebugUpdate mirrors HandleDebugUpdateCommand (cs_debug.cpp:1195):
+// ".debug update <index> [value]" re-sends (LANG_UPDATE) or sets
+// (LANG_UPDATE_CHANGE) the selected unit's field. Index 0 and an index at
+// or past the unit's end return true silently, with no message.
+func (s *session) handleDebugUpdate(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
+	const syntax = "Syntax: .debug update <index> [value]"
+	if len(args) == 0 || len(args) > 2 {
+		return false
+	}
+	index, ok := parseCommandUint32(args[0])
+	if !ok {
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
+	}
+	var value *uint32
+	if len(args) == 2 {
+		v, ok := parseCommandUint32(args[1])
+		if !ok {
+			s.sendSysMessage(syntax)
+			return true
+		}
+		value = &v
+	}
+	backend, valuesCount, counter, ok := s.debugValueTarget(ctx)
+	if !ok {
+		return true
+	}
+	if index == 0 || int(index) >= valuesCount {
+		return true
+	}
+	if value == nil {
+		current, ok := backend.read(int(index))
+		if !ok {
+			s.sendSysMessage(fmt.Sprintf("Field %d is not supported for this unit: no Go value store backs it.", index))
+			return true
+		}
+		s.sendSysMessage(fmt.Sprintf("Update field %d of %d: %d.", index, counter, current)) // LANG_UPDATE
+		return true
+	}
+	fields, _, ok := backend.write(int(index), func(uint32) uint32 { return *value })
+	if !ok {
+		s.sendSysMessage(fmt.Sprintf("Field %d is not supported for this unit: no Go value store backs it.", index))
+		return true
+	}
+	backend.broadcast(fields)
+	s.sendSysMessage(fmt.Sprintf("Update field %d of %d to %d.", index, counter, *value)) // LANG_UPDATE_CHANGE
+	return true
+}
+
 // handleDebugDummy mirrors HandleDebugDummyCommand (cs_debug.cpp:1792):
 // the arm's whole C++ body is the literal no-op notice.
 func (s *session) handleDebugDummy(ctx context.Context) bool {

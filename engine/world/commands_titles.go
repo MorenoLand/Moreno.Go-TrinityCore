@@ -45,31 +45,59 @@ import (
 // C++ sends LANG_WRONG_LINK_TYPE 511 + framework help), and message legs
 // return true (SetSentErrorMessage in C++).
 
-// parseTitleLink mirrors extractKeyFromLink("Htitle") + atoi (Chat.cpp:362):
-// a plain title id or a |Htitle:title_id|h[name]|h|r shift-click link. The
-// signed atoi value is preserved (C++ reports LANG_INVALID_TITLE_ID with
-// the raw id, so "-5" prints -5, not 0); only an empty or malformed link
-// returns ok=false (the C++ nullptr path). A wrong link type ALSO sends
-// LANG_WRONG_LINK_TYPE (511, unseeded in-tree, not guessed) before the
-// framework prints help — callers print the arm syntax as the help
-// equivalent (tick-314 quest pattern).
-func parseTitleLink(arg string) (int32, bool) {
-	if strings.HasPrefix(arg, "|") {
-		i := strings.Index(arg, "Htitle:")
-		if i < 0 {
-			return 0, false // wrong link type: null in the C++ path too
-		}
-		rest := arg[i+len("Htitle:"):]
-		key := rest
-		if j := strings.IndexAny(rest, ":|"); j >= 0 {
-			key = rest[:j]
-		}
-		if key == "" {
-			return 0, false
-		}
-		return int32(cAtoi(key)), true
+// strtokToken mirrors C strtok(s, delims): skips leading delimiters and
+// returns the token up to the next delimiter plus the remainder after it.
+func strtokToken(s, delims string) (token, rest string, ok bool) {
+	i := strings.IndexFunc(s, func(r rune) bool { return !strings.ContainsRune(delims, r) })
+	if i < 0 {
+		return "", "", false
 	}
-	return int32(cAtoi(arg)), true
+	s = s[i:]
+	if j := strings.IndexAny(s, delims); j >= 0 {
+		return s[:j], s[j+1:], true
+	}
+	return s, "", true
+}
+
+// parseTitleLink mirrors extractKeyFromLink("Htitle") + atoi (Chat.cpp:362)
+// token by token: strtok(text, "|") skips the color, strtok(nullptr, ":")
+// takes the link type, strtok(nullptr, "|") takes the key segment, and
+// strtok(keySegment, ":|") takes the key. A plain title id or a
+// |Htitle:title_id|h[name]|h|r shift-click link both work. The signed atoi
+// value is preserved (C++ reports LANG_INVALID_TITLE_ID with the raw id,
+// so "-5" prints -5, not 0). A wrong link type sends LANG_WRONG_LINK_TYPE
+// (511, unseeded in-tree, not guessed) and returns null — callers print
+// the arm syntax as the help equivalent (tick-314 quest pattern).
+// R-TITLES-LINK-1: an empty key does NOT return null. For the colored form
+// |cffffffff|Htitle:|h[x]|h|r the key segment is the display text "h[x]",
+// so atoi gives 0 and the id<=0 leg reports it (verified by running the
+// C++ strtok sequence); the colorless form |Htitle:|h[x]|h|r fails the
+// link-type token instead and keeps the wrong-link-type disposition.
+func parseTitleLink(arg string) (int32, bool) {
+	if !strings.HasPrefix(arg, "|") {
+		return int32(cAtoi(arg)), true
+	}
+	// strtok(text, "|"): skip the color.
+	_, rest, ok := strtokToken(arg, "|")
+	if !ok {
+		return 0, false
+	}
+	// strtok(nullptr, ":"): the link type.
+	linkType, rest, ok := strtokToken(rest, ":")
+	if !ok || linkType != "Htitle" {
+		return 0, false // wrong link type: null in the C++ path too
+	}
+	// strtok(nullptr, "|"): the key segment.
+	keys, _, ok := strtokToken(rest, "|")
+	if !ok {
+		return 0, false
+	}
+	// strtok(keySegment, ":|"): the key.
+	key, _, ok := strtokToken(keys, ":|")
+	if !ok {
+		return 0, false
+	}
+	return int32(cAtoi(key)), true
 }
 
 // knowsTitleBit mirrors Player::HasTitle(uint32 bitIndex)

@@ -224,17 +224,29 @@ func (s *session) handleListCreatureCommand(ctx context.Context, args []string) 
 	if len(args) == 0 {
 		return false
 	}
-	entry, ok := parseListEntryID(args[0], "creature_entry")
+	// A |Hcreature_entry| link's display text may contain spaces; rejoin
+	// the fields up to the one holding "|r" before parsing, like the
+	// item arm — the remainder is the count args.
+	linkArg := args[0]
+	rest := args[1:]
+	for i, a := range args {
+		if strings.Contains(a, "|r") {
+			linkArg = strings.Join(args[:i+1], " ")
+			rest = args[i+1:]
+			break
+		}
+	}
+	entry, ok := parseListEntryID(linkArg, "creature_entry")
 	if !ok {
 		s.sendSysMessage("Syntax: .list creature <entry|link> [count]")
 		return true
 	}
-	count, ok := listCountArg(args[1:])
+	count, ok := listCountArg(rest)
 	if !ok {
 		s.sendSysMessage("Syntax: .list creature <entry|link> [count]")
 		return true
 	}
-	if len(args) > 2 {
+	if len(rest) > 1 {
 		return false
 	}
 	db := s.goWorldDB()
@@ -292,17 +304,29 @@ func (s *session) handleListObjectCommand(ctx context.Context, args []string) bo
 	if len(args) == 0 {
 		return false
 	}
-	entry, ok := parseListEntryID(args[0], "gameobject_entry")
+	// A |Hgameobject_entry| link's display text may contain spaces; rejoin
+	// the fields up to the one holding "|r" before parsing, like the
+	// item arm — the remainder is the count args.
+	linkArg := args[0]
+	rest := args[1:]
+	for i, a := range args {
+		if strings.Contains(a, "|r") {
+			linkArg = strings.Join(args[:i+1], " ")
+			rest = args[i+1:]
+			break
+		}
+	}
+	entry, ok := parseListEntryID(linkArg, "gameobject_entry")
 	if !ok {
 		s.sendSysMessage("Syntax: .list object <entry|link> [count]")
 		return true
 	}
-	count, ok := listCountArg(args[1:])
+	count, ok := listCountArg(rest)
 	if !ok {
 		s.sendSysMessage("Syntax: .list object <entry|link> [count]")
 		return true
 	}
-	if len(args) > 2 {
+	if len(rest) > 1 {
 		return false
 	}
 	db := s.goWorldDB()
