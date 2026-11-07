@@ -146,9 +146,10 @@
 -- NOT_STARTED, Entropius ev1 / ev23 / ev4 DONE, creature:SetBossState
 -- bridge live lua_creature_events.go:5917; Muru itself has no
 -- JustDied override — no DONE leg exists for the Muru form);
--- no cross-creature bridge — the muru/enrage,
--- entropius-evade and entropius-death relays to DATA_MURU and
--- the dark-fiend summoner-GUID target pick are unmodeled; no
+-- no cross-creature bridge — the muru/enrage relay and the
+-- dark-fiend summoner-GUID target pick are unmodeled; the
+-- entropius-evade (PORTED 2026-11-07 tick 390) and entropius-death
+-- (PORTED tick 383) relays to DATA_MURU ride GetInstanceCreature; no
 -- summon bridge — the blood-elf/void-spawn/void-sentinel/
 -- dark-fiend/entropius spawns and the entropius JustSummoned
 -- visual/passive arms unmodeled; no SpellScript/AuraScript
@@ -168,7 +169,8 @@
 -- NOT_SELECTABLE set stays out (summon-resolution ground, above)
 -- with the Reset RemoveFlag vacuous; the dark-fiend SetDisplayId(Modelid2) arm is ported (GetTemplateModelId bridge live
 -- 2026-10-22) while the REACT_PASSIVE half stays out (would strand the fiend); the black-hole 15s despawn is ported; the entropius
--- evade despawn-all arms stay unmodeled.
+-- evade despawn-all arms are ported in entropiusLeaveCombat
+-- (grid sweeps + Despawn).
 
 -- Cast-state gates (2026-11-04): muru + entropius are BossAI, so
 -- their ScheduleTasks arms dispatch under the BossAI ctor scheduler
@@ -367,6 +369,14 @@ end
 
 local function muruLeaveCombat(event, creature)
     muruResetState(creature:GetGUID())
+    -- NO entropius relay here: C++ boss_muruAI::EnterEvadeMode
+    -- (:255-259) relays to the latched _entropiusGUID, but Go sets
+    -- motion.Evading only AFTER the ev2 hooks fire
+    -- (creaturemotion.go:4733), so a two-way evade relay would
+    -- recurse on a phase-2 wipe (entropius ev2 -> muru evade ->
+    -- muru ev2 -> entropius evade, Evading still false throughout).
+    -- C++ sets the evade flag before the AI override; until the Go
+    -- ordering matches, the muru -> entropius leg stays out.
 end
 
 local function muruDied(event, creature, killer)
@@ -475,8 +485,9 @@ local function entropiusCleanup(event, creature)
 end
 
 -- C++ boss_entropiusAI::EnterEvadeMode (boss_muru.cpp:183-193), in
--- C++ arm order: muru relay (instance GetCreature, stays out) +
--- DoResetPortals + summons.DespawnAll + me->DespawnOrUnsummon.
+-- C++ arm order: muru relay (PORTED 2026-11-07 tick 390:
+-- GetInstanceCreature(DATA_MURU) + EnterEvadeMode — the tick-389
+-- bridge) + DoResetPortals + summons.DespawnAll + me->DespawnOrUnsummon.
 -- DoResetPortals is the 100yd entry-25770 aura strip (same loop as
 -- entropiusNegativeEnergy, without its cast); DespawnAll is twinned
 -- by grid sweep over the two entries entropius's JustSummoned
@@ -487,6 +498,12 @@ end
 -- entropiusCleanup: C++ JustDied despawns no summons.
 local function entropiusLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ :184-185 first: muru evades with entropius. One-way only
+    -- (see muruLeaveCombat): muru's evade does not relay back.
+    local muru = creature:GetInstanceCreature(DATA_MURU)
+    if muru then
+        muru:EnterEvadeMode()
+    end
     for _, portal in ipairs(creature:GetCreaturesInGrid(ENTRY_PORTAL, 100)) do
         portal:RemoveAllAuras()
     end

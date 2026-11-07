@@ -284,14 +284,27 @@ end
 -- Talk(SAY_YOGG_SARON_DEATH), then Unit::Kill on the voice
 -- (boss_yogg_saron.cpp:962-963 — the voice's own JustDied then
 -- writes _JustDied() DONE, PORTED tick 259 in voiceDied below),
--- cross-creature DisappearAndDie / keeper-evade legs (no bridges)
--- and player sanity-aura removal — only the Talk + voice-kill +
--- aura arms are bridgeable; the sjonnir JustDied-Talk precedent.
+-- DisappearAndDie(sara, brain) (:965-967 — no bridge, stays out),
+-- keeper EnterEvadeMode loop (:968-972 — PORTED 2026-11-07 tick
+-- 390 via the instanceData keeper latch below), and player
+-- sanity-aura removal; the sjonnir JustDied-Talk precedent.
 local function yoggSaronDied(event, creature, killer)
     creature:Talk(SAY_YOGG_SARON_DEATH)
     local data = yoggInstanceData(creature)
     if data and data.voice then
         data.voice:Kill(creature) -- C++ Unit::Kill(me, voice): Yogg is the killer (bridge takes the killer creature as arg 1)
+    end
+    -- C++ :968-972 keeper-evade loop, DATA_FREYA_YS..DATA_MIMIRON_YS
+    -- order; the keepers ride the Lua-side instanceData latch (temp
+    -- summons bypass the Go instance funnel — see the gossip
+    -- handler). EnterEvadeMode no-ops on dead/already-evading
+    -- keepers, matching the C++ void call on a found creature.
+    if data then
+        for _, keeper in ipairs({ data.freya, data.hodir, data.thorim, data.mimiron }) do
+            if keeper then
+                keeper:EnterEvadeMode()
+            end
+        end
     end
     clearSanityAuras(creature)
 end
@@ -1522,15 +1535,24 @@ local function observationKeeperGossipSelect(event, player, creature, sender, ac
     elseif entry == ENTRY_OBSERVATION_RING_KEEPER_MIMIRON then
         summoned = creature:SummonCreature(ENTRY_KEEPER_MIMIRON, 2036.658, -73.58822, 338.4985, 2.460914)
     end
-    -- The mimiron keeper is the sara TRANSFORM_3 DoAction target
-    -- (DATA_MIMIRON_YS); latch it in the shared instanceData table
-    -- — the C++ KeeperGUIDs[3] leg (instance_ulduar.cpp:374-377),
-    -- which the instance ON_CREATURE_CREATE handler cannot see
-    -- (temp summons bypass the funnel — instance_hooks.go).
-    if summoned and entry == ENTRY_OBSERVATION_RING_KEEPER_MIMIRON then
+    -- The keepers are the C++ KeeperGUIDs legs
+    -- (instance_ulduar.cpp:357-377, DATA_FREYA_YS..DATA_MIMIRON_YS);
+    -- latch all four in the shared instanceData table — the
+    -- instance ON_CREATURE_CREATE handler cannot see them (temp
+    -- summons bypass the funnel — instance_hooks.go). Mimiron is
+    -- also the sara TRANSFORM_3 DoAction target (DATA_MIMIRON_YS).
+    if summoned then
         local data = yoggInstanceData(creature)
         if data then
-            data.mimiron = summoned
+            if entry == ENTRY_OBSERVATION_RING_KEEPER_FREYA then
+                data.freya = summoned
+            elseif entry == ENTRY_OBSERVATION_RING_KEEPER_HODIR then
+                data.hodir = summoned
+            elseif entry == ENTRY_OBSERVATION_RING_KEEPER_THORIM then
+                data.thorim = summoned
+            elseif entry == ENTRY_OBSERVATION_RING_KEEPER_MIMIRON then
+                data.mimiron = summoned
+            end
         end
     end
     return false

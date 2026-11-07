@@ -48,14 +48,12 @@
 -- Reset-passive leg: Go's ev27 fires only at the aggro-engage branch
 -- (lua_creature_events.go:1447), unreachable for a REACT_PASSIVE
 -- creature — a one-sided Reset port would freeze the boss passive.
--- EVENT_SEND_GROUP (DoCastAOE(SUBBOSS_AGGRO_TRIGGER 52343, triggered),
--- 70s repeat) — stays out: triggered cast behind the unported
--- DoAction(ACTION_PET_ENGAGED) watcher machine (sender:
--- npc_gatewatcher_petAI JustEngagedWith,
--- boss_krikthir_the_gatewatcher.cpp:349), and the trigger's
--- whole effect is the SpellScript watcher-target selection
--- (HandleTargets — no SpellScript-binding bridge, razelikh
--- precedent).
+-- EVENT_SEND_GROUP — PORTED 2026-11-07 (tick 390): DoCastAOE
+-- (SUBBOSS_AGGRO_TRIGGER 52343, triggered), 70s repeat, driven by the
+-- DoAction machine below (PET_ENGAGED schedules it; a watcher death
+-- reschedules it 5s out). The trigger's SpellScript watcher-target
+-- selection stays out (no SpellScript-binding bridge, razelikh
+-- precedent); the cast itself is C++-exact and inert without it.
 -- EVENT_SWARM (DoCastAOE(SPELL_SWARM 52440) + Talk(SAY_SWARM 3), 5s
 -- EVENT_FRENZY (HealthBelowPct(10) _hadFrenzy latch -> DoCastSelf(Frenzy
 -- 28747) + DoCastAOE(CURSE_OF_FATIGUE 52592), 1s init, 15s repeat) —
@@ -69,58 +67,33 @@
 -- casting, no repeat re-arm (mal_ganis idiom). The _hadFrenzy
 -- latch-set via event 9 stays ungated (DamageTaken-modeled leg,
 -- taldaram precedent); the EVENT_FRENZY cast itself defers.
--- The DoAction machine (ev38 dispatch IS bridged,
--- creature:DoAction, lua_creature_events.go:802 — the senders are
--- the instance script (instance_azjol_nerub.cpp:88, GREET), the
--- watcher JustDied arms (:434/:512/:590, *_DIED), and the petAI
--- JustEngagedWith / EnterEvadeMode (:333/:349/:395), all unported;
--- the payload is instance-model anyway):
--- -ACTION_GATEWATCHER_GREET (instance SetData(DATA_GATEWATCHER_GREET,1)
--- + Talk(SAY_PREFIGHT 4)) — instance-script model absent (standing).
--- ACTION_GASHRA/NARJIL/SILTHIL_DIED (_watchersActive decrement +
--- EVENT_SEND_GROUP reschedule) — cross-AI bridge absent.
--- ACTION_WATCHER_ENGAGED / ACTION_PET_ENGAGED (Talk(SAY_AGGRO 0) +
--- EVENT_SEND_GROUP 70s — the real C++ aggro yell, not wired here)
--- / ACTION_PET_EVADE -> EnterEvadeMode (summons.DespawnAll — no despawn
--- bridge, terestian precedent; _DespawnAtEvade) — documented-only.
--- SpellHit(SPELL_SUBBOSS_AGGRO_TRIGGER) -> DoZoneInCombat and
--- SpellHitTarget(SPELL_SUBBOSS_AGGRO_TRIGGER) -> Talk(SAY_SEND_GROUP 5)
--- — stays out on trigger-path grounds: the trigger cast (EVENT_SEND_GROUP
--- DoCastAOE 52343) is unported behind the unported petAI DoAction
--- watcher sender (boss_krikthir_the_gatewatcher.cpp:349), so event 15
--- never fires for it in Go (event 15 itself is live — boss_ai.go:1904).
+-- The DoAction machine — PORTED 2026-11-07 (tick 390)
+-- (boss_krikthir_the_gatewatcher.cpp:214-251): ev38 krikThirDoAction
+-- below. The tick-389 EnterEvadeMode bridge unblocked the consumer
+-- (GetInstanceCreature :6157 + DoAction dispatch :827 were already
+-- live). ACTION_GATEWATCHER_GREET (-1, instance SetData + Talk
+-- SAY_PREFIGHT 4) stays out: instance-script model absent (standing).
+-- SpellHit / SpellHitTarget (SUBBOSS_AGGRO_TRIGGER -> DoZoneInCombat
+-- / Talk SAY_SEND_GROUP 5) stay out: the trigger cast has no modeled
+-- targets in Go, so event 15 never fires for it (event 15 itself is
+-- live — boss_ai.go:1904).
 -- npc_watcher_gashra / npc_watcher_narjil / npc_watcher_silthik —
--- ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (28730 / 28729 / 28731 from
--- azjol_nerub.h — kalecgos pass): zero registration. Their whole
--- engagement model is the unbridged npc_gatewatcher_petAI machine:
--- REACT_PASSIVE via DATA_PET_GROUP stamping (react-state bridge absent),
--- group aggro (SetReactState(AGGRESSIVE) + AttackStart on same-group
--- adds), summoner DoAction(ACTION_PET_ENGAGED / ACTION_WATCHER_ENGAGED)
--- (ev38 dispatch IS bridged, lua_creature_events.go:802; sender is the
--- unported petAI JustEngagedWith,
--- boss_krikthir_the_gatewatcher.cpp:333/:349), MoveInLineOfSight
--- passive-engage leg, JustDied
--- -> instance->GetCreature(DATA_KRIKTHIR)->AI()->DoAction(ACTION_*_DIED)
--- (instance model absent; sender is the watcher JustDied, :434/:512/
--- :590), EnterEvadeMode -> summoner DoAction(ACTION_PET_EVADE)
--- (sender is the petAI EnterEvadeMode, :395). Port-pattern-ready
--- rotation arms
--- — gashra: EVENT_ENRAGE DoCastSelf(ENRAGE 52470) 3-5s init, 12-20s
--- repeat + EVENT_INFECTED_BITE DoCastVictim(52469) 7-11s init, 23-27s
--- repeat; narjil: EVENT_BLINDING_WEBS DoCastVictim(52524) 13-18s init,
--- 23-27s repeat + EVENT_INFECTED_BITE DoCastVictim(52469) 7-11s init,
--- 20-25s repeat; silthik: EVENT_POISON_SPRAY DoCastVictim(52493) 16-19s
--- init, 13-19s repeat + EVENT_INFECTED_BITE DoCastVictim(52469) 3-5s
--- init, 20-24s repeat — stay unported: the watchers exist only as
--- SummonCreatureGroup summons (summon STRAND absent), so the bridged
--- arms would attach to creatures that never spawn, and wiring them
--- without the passive model fails the C++-exact port bar (amanitar
--- mushrooms precedent). The EVENT_WEB_WRAP arms (all three watchers,
--- DoCast(SelectTarget(Random, 0, 100.0f[, true]), WEB_WRAP 52086))
--- do NOT need a SelectTarget bridge: randomPlayer is the in-tree
--- bridge (anomalus spark / faerlina / eck precedents) — the
--- cairne/kazzak "absent bridge" verdict is retracted 2026-10-17;
--- the arms stay out on the host-blocked grounds above.
+-- PORTED 2026-11-07 (tick 390): entries 28730 / 28729 / 28731
+-- (azjol_nerub.h). Engage relays (petAI JustEngagedWith :330-352:
+-- WATCHER_ENGAGED once via summoner + PET_ENGAGED once), JustDied
+-- relays (:434/:512/:590 -> GetInstanceCreature(DATA_KRIKTHIR)
+-- -> DoAction), and rotation arms (gashra ENRAGE/WEB_WRAP/
+-- INFECTED_BITE; narjil BLINDING_WEBS/WEB_WRAP/INFECTED_BITE;
+-- silthik POISON_SPRAY/WEB_WRAP/INFECTED_BITE — inits/repeats
+-- C++-exact, see the rotation tables). WEB_WRAP target pick is the
+-- in-tree randomTarget helper (GetAITargets + alive; player-only for
+-- narjil/silthik per their SelectTarget(..., true), any-target for
+-- gashra). DORMANT until the SummonCreatureGroup strand lands
+-- (watchers spawn only from DB-side group summons) — phoenix-egg /
+-- void-sentry precedent. The passive pre-fight model stays out
+-- (REACT_PASSIVE stamping, group aggro, MoveInLineOfSight engage
+-- leg — see the header note above); the engage relays fire from ev1
+-- instead.
 -- npc_anub_ar_warrior / npc_anub_ar_skirmisher /
 -- npc_anub_ar_shadowcaster / npc_skittering_swarmer /
 -- npc_skittering_infector / npc_gatewatcher_web_wrap — ENTRY
@@ -166,14 +139,35 @@
 
 local ENTRY_KRIK_THIR = 28684
 
+local SAY_AGGRO = 0
 local SAY_SLAY  = 1
 local SAY_DEATH = 2
 local SAY_SWARM = 3
+local SAY_SEND_GROUP = 5
 
 local SPELL_MIND_FLAY = 52586
 local SPELL_SWARM = 52440
 local SPELL_FRENZY = 28747
 local SPELL_CURSE_OF_FATIGUE = 52592
+
+local SPELL_SUBBOSS_AGGRO_TRIGGER = 52343
+local SPELL_ENRAGE = 52470
+local SPELL_BLINDING_WEBS = 52524
+local SPELL_POISON_SPRAY = 52493
+local SPELL_WEB_WRAP = 52086
+local SPELL_INFECTED_BITE = 52469
+
+local DATA_KRIKTHIR = 0 -- azjol_nerub.h:31
+local ENTRY_WATCHER_NARJIL = 28729 -- azjol_nerub.h:50
+local ENTRY_WATCHER_GASHRA = 28730 -- azjol_nerub.h:51
+local ENTRY_WATCHER_SILTHIK = 28731 -- azjol_nerub.h:52
+
+local ACTION_GASHRA_DIED = 0
+local ACTION_NARJIL_DIED = 1
+local ACTION_SILTHIK_DIED = 2
+local ACTION_WATCHER_ENGAGED = 3
+local ACTION_PET_ENGAGED = 4
+local ACTION_PET_EVADE = 5
 
 local timers = {}
 
@@ -280,9 +274,179 @@ local function krikThirDamageTaken(event, creature, attacker, damage)
     end
 end
 
+
+-- C++ _watchersActive / _petsInCombat, keyed by boss GUID (Reset
+-- clears both; JustEngagedWith clears _petsInCombat only).
+local bossMachine = {}
+
+local function machineState(guid)
+    local st = bossMachine[guid]
+    if not st then
+        st = { active = 0, pets = false }
+        bossMachine[guid] = st
+    end
+    return st
+end
+
+-- C++ EVENT_SEND_GROUP (boss_krikthir_the_gatewatcher.cpp:265-268):
+-- DoCastAOE(SUBBOSS_AGGRO_TRIGGER, triggered), 70s repeat.
+local function sendGroupTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sendgroup", 500, function()
+            sendGroupTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUBBOSS_AGGRO_TRIGGER, true)
+    schedule(guid, "sendgroup", 70000, function()
+        sendGroupTick(creature, guid)
+    end)
+end
+
+-- C++ boss_krik_thirAI::DoAction (:214-251).
+local function krikThirDoAction(event, creature, action)
+    local guid = creature:GetGUID()
+    local st = machineState(guid)
+    if action == ACTION_GASHRA_DIED or action == ACTION_NARJIL_DIED
+        or action == ACTION_SILTHIK_DIED then
+        -- Zero active watchers means something is wrong -> evade;
+        -- else decrement, and when the last one dies send the next
+        -- group 5s out instead of waiting for the 70s repeat.
+        if st.active == 0 then
+            creature:EnterEvadeMode()
+            return
+        end
+        st.active = st.active - 1
+        if st.active == 0 then
+            schedule(guid, "sendgroup", 5000, function()
+                sendGroupTick(creature, guid)
+            end)
+        end
+    elseif action == ACTION_WATCHER_ENGAGED then
+        st.active = st.active + 1
+    elseif action == ACTION_PET_ENGAGED then
+        -- First pet engage only, and never while the boss is already
+        -- in combat; Talk(SAY_AGGRO 0) is the real C++ aggro yell.
+        if st.pets or creature:IsInCombat() then
+            return
+        end
+        st.pets = true
+        creature:Talk(SAY_AGGRO)
+        schedule(guid, "sendgroup", 70000, function()
+            sendGroupTick(creature, guid)
+        end)
+    elseif action == ACTION_PET_EVADE then
+        creature:EnterEvadeMode()
+    end
+end
+
+-- In-tree random-target bridge (anomalus spark / faerlina
+-- precedent): alive threat-list targets, player-only on request.
+local function randomTarget(creature, playersOnly)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() and (not playersOnly or t:GetObjectType() == "Player") then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- One rotation arm: mode "self" = DoCastSelf, "victim" =
+-- DoCastVictim, "random" = DoCast(SelectTarget Random, no player
+-- gate), "randomPlayer" = DoCast(SelectTarget Random, player-only).
+local function watcherArmTick(creature, guid, arm)
+    if creature:IsCasting() then
+        schedule(guid, arm.key, 500, function()
+            watcherArmTick(creature, guid, arm)
+        end)
+        return
+    end
+    if arm.mode == "self" then
+        creature:CastSpell(creature, arm.spell)
+    elseif arm.mode == "victim" then
+        creature:CastSpell(nil, arm.spell)
+    else
+        local target = randomTarget(creature, arm.mode == "randomPlayer")
+        if target then
+            creature:CastSpell(target, arm.spell)
+        end
+    end
+    schedule(guid, arm.key, math.random(arm.repMin, arm.repMax), function()
+        watcherArmTick(creature, guid, arm)
+    end)
+end
+
+-- C++ _JustEngagedWith inits + UpdateAI repeats, per watcher
+-- (gashra :425-428/:446-460; narjil :501-504/:521-541; silthik
+-- :580-583/:601-621).
+local watcherRotations = {
+    [ENTRY_WATCHER_GASHRA] = {
+        { key = "enrage", spell = SPELL_ENRAGE, mode = "self", initMin = 3000, initMax = 5000, repMin = 12000, repMax = 20000 },
+        { key = "webwrap", spell = SPELL_WEB_WRAP, mode = "random", initMin = 16000, initMax = 19000, repMin = 13000, repMax = 19000 },
+        { key = "bite", spell = SPELL_INFECTED_BITE, mode = "victim", initMin = 7000, initMax = 11000, repMin = 23000, repMax = 27000 },
+    },
+    [ENTRY_WATCHER_NARJIL] = {
+        { key = "webs", spell = SPELL_BLINDING_WEBS, mode = "victim", initMin = 13000, initMax = 18000, repMin = 23000, repMax = 27000 },
+        { key = "webwrap", spell = SPELL_WEB_WRAP, mode = "randomPlayer", initMin = 3000, initMax = 5000, repMin = 13000, repMax = 19000 },
+        { key = "bite", spell = SPELL_INFECTED_BITE, mode = "victim", initMin = 7000, initMax = 11000, repMin = 20000, repMax = 25000 },
+    },
+    [ENTRY_WATCHER_SILTHIK] = {
+        { key = "spray", spell = SPELL_POISON_SPRAY, mode = "victim", initMin = 16000, initMax = 19000, repMin = 13000, repMax = 19000 },
+        { key = "webwrap", spell = SPELL_WEB_WRAP, mode = "randomPlayer", initMin = 7000, initMax = 11000, repMin = 13000, repMax = 17000 },
+        { key = "bite", spell = SPELL_INFECTED_BITE, mode = "victim", initMin = 3000, initMax = 5000, repMin = 20000, repMax = 24000 },
+    },
+}
+
+-- C++ _isWatcher latch (:330-336) + passive group leg (:338-352):
+-- each fires once per watcher lifetime (never re-armed; the
+-- REACT_AGGRESSIVE flip after first engage blocks repeats).
+local watcherEngaged = {}
+
+local function makeWatcherEnterCombat(arms)
+    return function(event, creature)
+        local guid = creature:GetGUID()
+        if not watcherEngaged[guid] then
+            watcherEngaged[guid] = true
+            local summoner = creature:GetSummonerUnit()
+            if summoner then
+                summoner:DoAction(ACTION_WATCHER_ENGAGED)
+                summoner:DoAction(ACTION_PET_ENGAGED)
+            end
+        end
+        for _, arm in ipairs(arms) do
+            schedule(guid, arm.key, math.random(arm.initMin, arm.initMax), function()
+                watcherArmTick(creature, guid, arm)
+            end)
+        end
+    end
+end
+
+local function watcherLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ watcher JustDied (:430-435 / :508-513 / :586-591): relay to
+-- the boss only while it is alive.
+local function makeWatcherDied(action)
+    return function(event, creature, killer)
+        local guid = creature:GetGUID()
+        cancelTimers(guid)
+        watcherEngaged[guid] = nil
+        local krikthir = creature:GetInstanceCreature(DATA_KRIKTHIR)
+        if krikthir and krikthir:IsAlive() then
+            krikthir:DoAction(action)
+        end
+    end
+end
+
 local function krikThirEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    machineState(guid).pets = false
     schedule(guid, "mindflay", math.random(1000, 3000), function()
         mindFlayTick(creature, guid)
     end)
@@ -318,6 +482,7 @@ local function krikThirReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     hadFrenzy[guid] = nil
+    bossMachine[guid] = nil
 end
 
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 1, krikThirEnterCombat)
@@ -326,3 +491,17 @@ RegisterCreatureEvent(ENTRY_KRIK_THIR, 3, krikThirTargetDied)
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 4, krikThirDied)
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 9, krikThirDamageTaken)
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 23, krikThirReset)
+
+RegisterCreatureEvent(ENTRY_KRIK_THIR, 38, krikThirDoAction)
+RegisterCreatureEvent(ENTRY_WATCHER_GASHRA, 1, makeWatcherEnterCombat(watcherRotations[ENTRY_WATCHER_GASHRA]))
+RegisterCreatureEvent(ENTRY_WATCHER_GASHRA, 2, watcherLeaveCombat)
+RegisterCreatureEvent(ENTRY_WATCHER_GASHRA, 4, makeWatcherDied(ACTION_GASHRA_DIED))
+RegisterCreatureEvent(ENTRY_WATCHER_GASHRA, 23, watcherLeaveCombat)
+RegisterCreatureEvent(ENTRY_WATCHER_NARJIL, 1, makeWatcherEnterCombat(watcherRotations[ENTRY_WATCHER_NARJIL]))
+RegisterCreatureEvent(ENTRY_WATCHER_NARJIL, 2, watcherLeaveCombat)
+RegisterCreatureEvent(ENTRY_WATCHER_NARJIL, 4, makeWatcherDied(ACTION_NARJIL_DIED))
+RegisterCreatureEvent(ENTRY_WATCHER_NARJIL, 23, watcherLeaveCombat)
+RegisterCreatureEvent(ENTRY_WATCHER_SILTHIK, 1, makeWatcherEnterCombat(watcherRotations[ENTRY_WATCHER_SILTHIK]))
+RegisterCreatureEvent(ENTRY_WATCHER_SILTHIK, 2, watcherLeaveCombat)
+RegisterCreatureEvent(ENTRY_WATCHER_SILTHIK, 4, makeWatcherDied(ACTION_SILTHIK_DIED))
+RegisterCreatureEvent(ENTRY_WATCHER_SILTHIK, 23, watcherLeaveCombat)
