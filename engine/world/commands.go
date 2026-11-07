@@ -9136,8 +9136,8 @@ func (s *session) buildCommandTree() *commandNode {
 	gobjectSet.leaf("state", func(ctx context.Context, args []string) bool {
 		return s.handleCmdGObject(ctx, append([]string{"set", "state"}, args...))
 	}, permissionCommandGObjectSetState)
-	root.addWithPerms("group", func(ctx context.Context, args []string) bool { s.handleCmdGroup(ctx, args); return true }, map[string]uint32{"set": permissionCommandGroupSet, "leader": permissionCommandGroupLeader, "disband": permissionCommandGroupDisband, "remove": permissionCommandGroupRemove, "join": permissionCommandGroupJoin, "list": permissionCommandGroupList, "summon": permissionCommandGroupSummon}, nil).withPerm(permissionCommandGroup)
-	root.addWithPerms("guild", func(ctx context.Context, args []string) bool { s.handleCmdGuild(ctx, args); return true }, map[string]uint32{"create": permissionCommandGuildCreate, "delete": permissionCommandGuildDelete, "invite": permissionCommandGuildInvite, "uninvite": permissionCommandGuildUninvite, "rank": permissionCommandGuildRank, "rename": permissionCommandGuildRename, "info": permissionCommandGuildInfo}, nil).withPerm(permissionCommandGuild)
+	root.addWithPerms("group", func(ctx context.Context, args []string) bool { return s.handleCmdGroup(ctx, args) }, map[string]uint32{"set": permissionCommandGroupSet, "leader": permissionCommandGroupLeader, "disband": permissionCommandGroupDisband, "remove": permissionCommandGroupRemove, "join": permissionCommandGroupJoin, "list": permissionCommandGroupList, "summon": permissionCommandGroupSummon}, nil).withPerm(permissionCommandGroup)
+	root.addWithPerms("guild", func(ctx context.Context, args []string) bool { return s.handleCmdGuild(ctx, args) }, map[string]uint32{"create": permissionCommandGuildCreate, "delete": permissionCommandGuildDelete, "invite": permissionCommandGuildInvite, "uninvite": permissionCommandGuildUninvite, "rank": permissionCommandGuildRank, "rename": permissionCommandGuildRename, "info": permissionCommandGuildInfo}, nil).withPerm(permissionCommandGuild)
 	honorNode := root.addWithPerms("honor", func(ctx context.Context, args []string) bool { return s.handleCmdHonor(ctx, args) }, map[string]uint32{"add": permissionCommandHonorAdd, "update": permissionCommandHonorUpdate}, nil).withPerm(permissionCommandHonor)
 	// R13 depth (cs_honor.cpp:45-51): "add" is a sub-table with a
 	// kill leaf and a "" entry (the amount handler), so the group
@@ -9149,7 +9149,7 @@ func (s *session) buildCommandTree() *commandNode {
 	honorAdd.leaf("kill", func(ctx context.Context, args []string) bool {
 		return s.handleCmdHonor(ctx, append([]string{"add", "kill"}, args...))
 	}, permissionCommandHonorAddKill)
-	root.addWithPerms("instance", func(ctx context.Context, args []string) bool { s.handleCmdInstance(ctx, args); return true }, map[string]uint32{"listbinds": permissionCommandInstanceListBinds, "unbind": permissionCommandInstanceUnbind, "stats": permissionCommandInstanceStats, "savedata": permissionCommandInstanceSaveData, "setbossstate": permissionCommandInstanceSetBossState, "getbossstate": permissionCommandInstanceGetBossState}, nil).withPerm(permissionCommandInstance)
+	root.addWithPerms("instance", func(ctx context.Context, args []string) bool { return s.handleCmdInstance(ctx, args) }, map[string]uint32{"listbinds": permissionCommandInstanceListBinds, "unbind": permissionCommandInstanceUnbind, "stats": permissionCommandInstanceStats, "savedata": permissionCommandInstanceSaveData, "setbossstate": permissionCommandInstanceSetBossState, "getbossstate": permissionCommandInstanceGetBossState}, nil).withPerm(permissionCommandInstance)
 	learnNode := root.add("learn", func(ctx context.Context, args []string) bool { return s.handleCmdLearn(ctx, args) }, []string{"all", "my"}, nil)
 	// R13 depth (cs_learn.cpp:47-60, old-form tables): "all" and "my"
 	// are sub-tables with no "" entries (the bare learn handler

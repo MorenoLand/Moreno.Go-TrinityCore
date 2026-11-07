@@ -66,22 +66,16 @@ func (s *session) groupAmbiguousMessage(token string, candidates []string) {
 
 // handleCmdGroup dispatches the group sub-commands, mirroring
 // group_commandscript::GetCommands (cs_group.cpp:35-68).
-func (s *session) handleCmdGroup(ctx context.Context, args []string) {
-	const syntax = "Syntax: .group set leader|assistant|maintank|mainassist <name> | .group leader <name> | .group disband [name] | .group remove <name> | .group join <playerInGroup> <player> | .group list [player|guid] | .group summon <name>"
+func (s *session) handleCmdGroup(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
-			return true
-		}
-		return false
+		return !s.commandAllowed(ctx, perm)
 	}
 	// Subcommand names prefix-match (ChatCommand.cpp:261-288): ".group lea"
 	// reaches leader, ".group s" is ambiguous (set/summon) and lists both.
@@ -89,10 +83,9 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) {
 	if !ok {
 		if len(cands) > 1 {
 			s.groupAmbiguousMessage(args[0], cands)
-			return
+			return true
 		}
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	switch sub {
 	case "set":
@@ -102,8 +95,7 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) {
 		// strtok yields a null nameStr and GetPlayerGroupAndGUIDByName
 		// (Chat.cpp:806) falls back to the selected / own player.
 		if len(args) < 2 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		// ".group set main" is ambiguous (maintank/mainassist), not
 		// maintank: the old HasPrefix-first-match silently picked one.
@@ -111,64 +103,64 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) {
 		if !setOK {
 			if len(setCands) > 1 {
 				s.groupAmbiguousMessage(args[1], setCands)
-				return
+				return true
 			}
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		switch setSub {
 		case "leader":
 			if deny(permissionCommandGroupLeader) {
-				return
+				return false
 			}
-			s.handleGroupLeaderCommand(args[2:])
+			return s.handleGroupLeaderCommand(args[2:])
 		case "assistant":
 			if deny(permissionCommandGroupAssistant) {
-				return
+				return false
 			}
-			s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagAssistant, "Assistant")
+			return s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagAssistant, "Assistant")
 		case "maintank":
 			if deny(permissionCommandGroupMainTank) {
-				return
+				return false
 			}
-			s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagMainTank, "Main Tank")
+			return s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagMainTank, "Main Tank")
 		case "mainassist":
 			if deny(permissionCommandGroupMainAssist) {
-				return
+				return false
 			}
-			s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagMainAssist, "Main Assist")
+			return s.handleGroupFlagCommand(ctx, args[2:], groupMemberFlagMainAssist, "Main Assist")
 		}
 	case "leader":
 		if deny(permissionCommandGroupLeader) {
-			return
+			return false
 		}
-		s.handleGroupLeaderCommand(args[1:])
+		return s.handleGroupLeaderCommand(args[1:])
 	case "disband":
 		if deny(permissionCommandGroupDisband) {
-			return
+			return false
 		}
-		s.handleGroupDisbandCommand(ctx, args[1:])
+		return s.handleGroupDisbandCommand(ctx, args[1:])
 	case "remove":
 		if deny(permissionCommandGroupRemove) {
-			return
+			return false
 		}
-		s.handleGroupRemoveCommand(ctx, args[1:])
+		return s.handleGroupRemoveCommand(ctx, args[1:])
 	case "join":
 		if deny(permissionCommandGroupJoin) {
-			return
+			return false
 		}
-		s.handleGroupJoinCommand(ctx, args[1:])
+		return s.handleGroupJoinCommand(ctx, args[1:])
 	case "list":
 		if deny(permissionCommandGroupList) {
-			return
+			return false
 		}
-		s.handleGroupListCommand(ctx, args[1:])
+		return s.handleGroupListCommand(ctx, args[1:])
 	case "summon":
 		if deny(permissionCommandGroupSummon) {
-			return
+			return false
 		}
-		s.handleGroupSummonCommand(ctx, args[1:])
+		return s.handleGroupSummonCommand(ctx, args[1:])
 	}
+	return true
 }
 
 // groupPlayerTarget mirrors the player/group/guid triple filled by
@@ -237,40 +229,41 @@ func (s *Server) groupOfGUID(guid uint64) *groupState {
 
 // handleGroupLeaderCommand mirrors HandleGroupLeaderCommand
 // (cs_group.cpp:161): the named player's group gets a new leader.
-func (s *session) handleGroupLeaderCommand(args []string) {
+func (s *session) handleGroupLeaderCommand(args []string) bool {
 	t, _, ok := s.resolveGroupPlayer(context.Background(), args, false)
 	if !ok {
-		return
+		return true
 	}
 	g := s.server.groupOfGUID(t.guid)
 	if g == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", t.name)) // LANG_GROUP_NOT_IN_GROUP (1147)
-		return
+		return true
 	}
 	if g.LeaderGUID != t.guid {
 		s.server.setGroupLeader(g, t.guid)
 	}
+	return true
 }
 
 // handleGroupFlagCommand mirrors GroupFlagCommand (cs_group.cpp:187): the
 // assistant / main-tank / main-assist raid flags toggle for the named player.
-func (s *session) handleGroupFlagCommand(ctx context.Context, args []string, flag uint8, what string) {
+func (s *session) handleGroupFlagCommand(ctx context.Context, args []string, flag uint8, what string) bool {
 	t, _, ok := s.resolveGroupPlayer(ctx, args, false)
 	if !ok {
-		return
+		return true
 	}
 	g := s.server.groupOfGUID(t.guid)
 	if g == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", t.name)) // LANG_GROUP_NOT_IN_GROUP (1147)
-		return
+		return true
 	}
 	if !g.IsRaid {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a raid group.", t.name)) // LANG_GROUP_NOT_IN_RAID_GROUP (1185)
-		return
+		return true
 	}
 	if flag == groupMemberFlagAssistant && g.LeaderGUID == t.guid {
 		s.sendSysMessage("The leader cannot be an assistant.") // LANG_LEADER_CANNOT_BE_ASSISTANT (1187)
-		return
+		return true
 	}
 	srv := s.server
 	srv.groupsMu.Lock()
@@ -283,7 +276,7 @@ func (s *session) handleGroupFlagCommand(ctx context.Context, args []string, fla
 	}
 	if idx < 0 {
 		srv.groupsMu.Unlock()
-		return
+		return true
 	}
 	apply := g.Members[idx].Flags&flag == 0
 	// RemoveUniqueGroupMemberFlag: main tank / main assist are unique.
@@ -312,59 +305,60 @@ func (s *session) handleGroupFlagCommand(ctx context.Context, args []string, fla
 		when = "no longer"
 	}
 	s.sendSysMessage(fmt.Sprintf("%s is %s an %s.", t.name, when, what)) // LANG_GROUP_ROLE_CHANGED (1186)
+	return true
 }
 
 // handleGroupDisbandCommand mirrors HandleGroupDisbandCommand
 // (cs_group.cpp:246): the named player's whole group is disbanded.
-func (s *session) handleGroupDisbandCommand(ctx context.Context, args []string) {
+func (s *session) handleGroupDisbandCommand(ctx context.Context, args []string) bool {
 	t, _, ok := s.resolveGroupPlayer(ctx, args, false)
 	if !ok {
-		return
+		return true
 	}
 	g := s.server.groupOfGUID(t.guid)
 	if g == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", t.name)) // LANG_GROUP_NOT_IN_GROUP (1147)
-		return
+		return true
 	}
 	s.server.disbandGroup(ctx, g, false)
+	return true
 }
 
 // handleGroupRemoveCommand mirrors HandleGroupRemoveCommand
 // (cs_group.cpp:267): the named player is removed from their group.
-func (s *session) handleGroupRemoveCommand(ctx context.Context, args []string) {
+func (s *session) handleGroupRemoveCommand(ctx context.Context, args []string) bool {
 	t, _, ok := s.resolveGroupPlayer(ctx, args, false)
 	if !ok {
-		return
+		return true
 	}
 	g := s.server.groupOfGUID(t.guid)
 	if g == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", t.name)) // LANG_GROUP_NOT_IN_GROUP (1147)
-		return
+		return true
 	}
 	s.server.removeGroupMemberByGUID(ctx, g, t.guid, groupRemoveMethodDefault)
+	return true
 }
 
 // handleGroupJoinCommand mirrors HandleGroupJoinCommand (cs_group.cpp:288):
 // ".group join <playerInGroup> <player>" pulls the second player into the
 // first player's group.
-func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
-	const syntax = "Syntax: .group join <playerInGroup> <player>"
+func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	source, _, ok := s.resolveGroupPlayer(ctx, args[:1], true)
 	if !ok {
-		return
+		return true
 	}
-	if source.online == nil {
-		s.sendSysMessage("Player not found.") // C++ would dereference a null Player*; the name must be online
-		return
-	}
+	// resolveGroupPlayer always falls back to the selection/self player,
+	// exactly like GetPlayerGroupAndGUIDByName (Chat.cpp:806-844), so the
+	// online pointer is never nil here; the cached offline guid is unused
+	// by the C++ join handler, which adds the fallback player.
 	groupSource := s.server.groupOfGUID(source.guid)
 	if groupSource == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", source.name)) // LANG_GROUP_NOT_IN_GROUP (1147)
-		return
+		return true
 	}
 	targetArgs := args[1:2]
 	if len(args) < 2 { // C++ second strtok yields NULL -> selected/self fallback
@@ -372,18 +366,14 @@ func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 	}
 	target, _, ok := s.resolveGroupPlayer(ctx, targetArgs, true)
 	if !ok {
-		return
-	}
-	if target.online == nil {
-		s.sendSysMessage("Player not found.") // C++ Group::AddMember needs a live player
-		return
+		return true
 	}
 	// C++ (cs_group.cpp:313): any existing group membership — the target's
 	// own group OR the source group — rejects with ALREADY_IN_GROUP, not
 	// just membership in the source group.
 	if s.server.groupOfGUID(target.guid) != nil {
 		s.sendSysMessage(fmt.Sprintf("%s is already in a group.", target.name)) // LANG_GROUP_ALREADY_IN_GROUP (1145)
-		return
+		return true
 	}
 	cap := maxGroupSize
 	if groupSource.IsRaid {
@@ -394,7 +384,7 @@ func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 	s.server.groupsMu.RUnlock()
 	if full {
 		s.sendSysMessage("This group is full.") // LANG_GROUP_FULL (1148)
-		return
+		return true
 	}
 	subGroup := uint8(0)
 	if groupSource.IsRaid {
@@ -416,7 +406,7 @@ func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 		}
 		if subGroup == 8 {
 			s.sendSysMessage("This group is full.") // LANG_GROUP_FULL (1148)
-			return
+			return true
 		}
 	}
 	s.server.groupsMu.Lock()
@@ -431,6 +421,7 @@ func (s *session) handleGroupJoinCommand(ctx context.Context, args []string) {
 	}
 	s.server.broadcastGroupList(groupSource)                                         // Group::BroadcastGroupUpdate
 	s.sendSysMessage(fmt.Sprintf("%s joined %s's group.", target.name, source.name)) // LANG_GROUP_PLAYER_JOINED (1146)
+	return true
 }
 
 // groupAtoul mirrors atoul (cs_group.cpp:340): the leading decimal digit
@@ -446,7 +437,7 @@ func groupAtoul(s string) uint32 {
 
 // handleGroupListCommand mirrors HandleGroupListCommand (cs_group.cpp:335):
 // the target may be a bare guid, a name, or (by selection) the GM's target.
-func (s *session) handleGroupListCommand(ctx context.Context, args []string) {
+func (s *session) handleGroupListCommand(ctx context.Context, args []string) bool {
 	var (
 		nameTarget string
 		guidTarget uint64
@@ -470,25 +461,40 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) {
 			name := normalizePlayerName(args[0])
 			playerSess = s.sessionForPlayerName(name)
 			if playerSess == nil {
-				s.sendSysMessage("Player not found.")
-				return
+				// Offline named player: extractPlayerTarget still
+				// resolves the guid from the character cache
+				// (Chat.cpp:657-710); the group is then found from
+				// the DB below.
+				if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+					var dbGUID uint64
+					if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? LIMIT 1", name).Scan(&dbGUID); err == nil && dbGUID != 0 {
+						guidTarget = dbGUID
+						nameTarget = name
+					}
+				}
+				if guidTarget == 0 {
+					s.sendSysMessage("Player not found.")
+					return false
+				}
 			}
 		} else if s.selection != 0 && s.server != nil {
 			playerSess = s.server.playerSessionForGUID(s.selection)
 		}
-		if playerSess == nil {
-			playerSess = s
+		if guidTarget == 0 {
+			if playerSess == nil {
+				playerSess = s
+			}
+			if playerSess.player == nil {
+				s.sendSysMessage("Player not found.")
+				return false
+			}
+			nameTarget = playerSess.player.Name
+			guidTarget = playerSess.playerGUID
 		}
-		if playerSess.player == nil {
-			s.sendSysMessage("Player not found.")
-			return
-		}
-		nameTarget = playerSess.player.Name
-		guidTarget = playerSess.playerGUID
 	}
 	if nameTarget == "" {
 		s.sendSysMessage("Player not found.")
-		return
+		return false
 	}
 	var groupTarget *groupState
 	if playerSess != nil && playerSess.groupID != 0 {
@@ -503,7 +509,7 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) {
 	}
 	if groupTarget == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", nameTarget)) // LANG_GROUP_NOT_IN_GROUP (1147)
-		return
+		return false
 	}
 	s.server.groupsMu.RLock()
 	members := make([]groupMember, len(groupTarget.Members))
@@ -547,6 +553,7 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("%s: %s, Zone: %s, Phase: %d, Guid: %d, Flags: %s, Roles: %s",
 			slot.Name, onlineState, zoneName, phase, slot.GUID, flags, lfgRolesString(slot.Roles))) // LANG_GROUP_PLAYER_NAME_GUID (1150)
 	}
+	return true
 }
 
 // groupFlagNames mirrors the flag-label assembly in HandleGroupListCommand
@@ -598,14 +605,14 @@ func lfgRolesString(roles uint8) string {
 
 // handleGroupSummonCommand mirrors HandleGroupSummonCommand (cs_group.cpp:70):
 // every member of the target's group is summoned to the GM.
-func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
+func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) bool {
 	// extractPlayerTarget: name, selection, then self.
 	var target *session
 	if len(args) > 0 && args[0] != "" {
 		target = s.sessionForPlayerName(normalizePlayerName(args[0]))
 		if target == nil {
 			s.sendSysMessage("Player not found.")
-			return
+			return true
 		}
 	} else if s.selection != 0 && s.server != nil {
 		target = s.server.playerSessionForGUID(s.selection)
@@ -615,15 +622,17 @@ func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
 	}
 	if target.player == nil {
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target, guid: target.playerGUID, name: target.player.Name}) {
-		return // C++ HasLowerSecurity: silent fail
+		s.sendSysMessage("Your security level is too low.") // LANG_YOURS_SECURITY_IS_LOW (Chat.cpp:96-99)
+		return true
 	}
 	group := s.server.groupOfGUID(target.playerGUID)
 	if group == nil {
-		s.sendSysMessage(fmt.Sprintf("%s is not in your group.", target.player.Name)) // LANG_NOT_IN_GROUP (117)
-		return
+		// C++ prints LANG_NOT_IN_GROUP and returns false with no
+		// SetSentErrorMessage (cs_group.cpp:86-87): silent false.
+		return false
 	}
 	srv := s.server
 	gmMapID := s.player.Map
@@ -651,7 +660,8 @@ func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
 			continue
 		}
 		if s.characterTargetLowerSecurity(ctx, characterTarget{online: player, guid: player.playerGUID, name: player.player.Name}) {
-			continue // C++ HasLowerSecurity: silent fail
+			s.sendSysMessage("Your security level is too low.") // LANG_YOURS_SECURITY_IS_LOW (Chat.cpp:96-99)
+			continue
 		}
 		if player.isBeingTeleported() {
 			s.sendSysMessage(fmt.Sprintf(miscIsTeleported, miscPlayerLink(player.player.Name))) // LANG_IS_TELEPORTED (102)
@@ -689,4 +699,5 @@ func (s *session) handleGroupSummonCommand(ctx context.Context, args []string) {
 		cx, cy := miscClosePoint(s.player.X, s.player.Y, s.player.Orientation, miscPlayerCombatReach(s.player), miscPlayerCombatReach(player.player), 0)
 		player.teleportTo(gmMapID, cx, cy, s.player.Z, player.player.Orientation)
 	}
+	return true
 }

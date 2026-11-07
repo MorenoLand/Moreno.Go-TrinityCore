@@ -39,62 +39,65 @@ import (
 
 // handleCmdGuild dispatches the guild sub-commands, mirroring
 // guild_commandscript::GetCommands (cs_guild.cpp:46-69).
-func (s *session) handleCmdGuild(ctx context.Context, args []string) {
-	const syntax = "Syntax: .guild create [<player>] \"<name>\" | .guild delete \"<name>\" | .guild invite [<player>] \"<name>\" | .guild uninvite <player> | .guild rank [<player>] <rank> | .guild rename \"<old>\" \"<new>\" | .guild info [id|\"<name>\"]"
+func (s *session) handleCmdGuild(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
+		return !s.commandAllowed(ctx, perm)
+	}
+	// Subcommand names prefix-match (ChatCommand.cpp:261-288), like group:
+	// ".guild c" reaches create, ".guild i" is ambiguous (invite/info).
+	sub, cands, ok := groupMatchName(args[0], []string{"create", "delete", "invite", "uninvite", "rank", "rename", "info"})
+	if !ok {
+		if len(cands) > 1 {
+			s.groupAmbiguousMessage(args[0], cands)
 			return true
 		}
 		return false
 	}
-	switch sub := strings.ToLower(args[0]); sub {
+	switch sub {
 	case "create":
 		if deny(permissionCommandGuildCreate) {
-			return
+			return false
 		}
-		s.handleGuildCreateCommand(ctx, args[1:])
+		return s.handleGuildCreateCommand(ctx, args[1:])
 	case "delete":
 		if deny(permissionCommandGuildDelete) {
-			return
+			return false
 		}
-		s.handleGuildDeleteCommand(ctx, args[1:])
+		return s.handleGuildDeleteCommand(ctx, args[1:])
 	case "invite":
 		if deny(permissionCommandGuildInvite) {
-			return
+			return false
 		}
-		s.handleGuildInviteCommand(ctx, args[1:])
+		return s.handleGuildInviteCommand(ctx, args[1:])
 	case "uninvite":
 		if deny(permissionCommandGuildUninvite) {
-			return
+			return false
 		}
-		s.handleGuildUninviteCommand(ctx, args[1:])
+		return s.handleGuildUninviteCommand(ctx, args[1:])
 	case "rank":
 		if deny(permissionCommandGuildRank) {
-			return
+			return false
 		}
-		s.handleGuildRankCommand(ctx, args[1:])
+		return s.handleGuildRankCommand(ctx, args[1:])
 	case "rename":
 		if deny(permissionCommandGuildRename) {
-			return
+			return false
 		}
-		s.handleGuildRenameCommand(ctx, args[1:])
+		return s.handleGuildRenameCommand(ctx, args[1:])
 	case "info":
 		if deny(permissionCommandGuildInfo) {
-			return
+			return false
 		}
-		s.handleGuildInfoCommand(ctx, args[1:])
-	default:
-		s.sendSysMessage(syntax)
+		return s.handleGuildInfoCommand(ctx, args[1:])
 	}
+	return true
 }
 
 // guildCharactersDB mirrors the arenaCharactersDB accessor for the guild
@@ -286,16 +289,15 @@ func guildQuotedArg(tok string) (string, bool) {
 }
 
 // handleGuildCreateCommand mirrors HandleGuildCreateCommand
-// (cs_guild.cpp:76-137): `guild create [<player>] "<name>"`.
-func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) {
+// (cs_guild.cpp:73-127): `guild create [<player>] "<name>"`.
+func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) bool {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
-		return
+		return true
 	}
 	toks := splitQuotedArgs(args)
 	if len(toks) == 0 {
-		s.sendSysMessage("Syntax: .guild create [<player>] \"<name>\"")
-		return
+		return false
 	}
 	// *args != '"' -> the first token names the leader; otherwise the
 	// target is the selection/self and the first token is the guild name
@@ -307,36 +309,34 @@ func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) {
 		targetSess = s.server.findSessionByName(name)
 		if targetSess == nil || targetSess.player == nil {
 			s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-			return
+			return true
 		}
 		rest = toks[1:]
 	}
 	if len(rest) == 0 {
-		s.sendSysMessage("Syntax: .guild create [<player>] \"<name>\"")
-		return
+		return false
 	}
 	// extractQuotedArg (Chat.cpp:714) requires the guild name to be
 	// double-quoted; an unquoted name fails the handler outright.
 	guildName, ok := guildQuotedArg(rest[0])
 	if !ok {
-		s.sendSysMessage("Syntax: .guild create [<player>] \"<name>\"")
-		return
+		return false
 	}
 	targetGUID := targetSess.playerGUID
 
 	if targetSess.player.GuildID != 0 {
 		s.sendSysMessage("Player is in guild already.") // LANG_PLAYER_IN_GUILD 500
-		return
+		return true
 	}
 	if guildIDByName(ctx, cdb, guildName) != 0 {
 		s.sendSysMessage("There is already another guild with the same name.") // LANG_GUILD_RENAME_ALREADY_EXISTS 96
-		return
+		return true
 	}
 	// IsReservedName / IsValidCharterName have no Go bridge (documented
 	// gap); the empty and >24-char rejects are enforced (Guild.cpp:1224).
 	if guildName == "" || len(guildName) > 24 {
 		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 
 	// Guild::Create (Guild.cpp:1086): fresh id (in-memory NextGuildId has no
@@ -371,56 +371,54 @@ func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) {
 		return nil
 	}); err != nil {
 		s.sendSysMessage("Guild is not created.") // LANG_GUILD_NOT_CREATED 501
-		return
+		return true
 	}
 	// Guild::Create -> AddMember(trans, m_leaderGuid, GR_GUILDMASTER)
 	// (Guild.cpp:1131).
 	if !s.guildAddMember(ctx, cdb, guildID, targetGUID, 0, targetSess.player.Name) {
 		s.sendSysMessage("Guild is not created.") // LANG_GUILD_NOT_CREATED 501
-		return
+		return true
 	}
+	return true
 }
 
 // handleGuildDeleteCommand mirrors HandleGuildDeleteCommand
-// (cs_guild.cpp:139-156): `guild delete "<name>"`.
-func (s *session) handleGuildDeleteCommand(ctx context.Context, args []string) {
+// (cs_guild.cpp:128-148): `guild delete "<name>"`.
+func (s *session) handleGuildDeleteCommand(ctx context.Context, args []string) bool {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
-		return
+		return true
 	}
 	toks := splitQuotedArgs(args)
 	if len(toks) == 0 {
-		s.sendSysMessage("Syntax: .guild delete \"<name>\"")
-		return
+		return false
 	}
 	// extractQuotedArg (Chat.cpp:714) requires a double-quoted name.
 	guildName, ok := guildQuotedArg(toks[0])
 	if !ok {
-		s.sendSysMessage("Syntax: .guild delete \"<name>\"")
-		return
+		return false
 	}
 	guildID := guildIDByName(ctx, cdb, guildName)
 	if guildID == 0 {
 		// C++ returns false with no message; the framework shows the
 		// command help (ChatCommand.cpp:302-309).
-		s.sendSysMessage("Syntax: .guild delete \"<name>\"")
-		return
+		return false
 	}
 	// cs_guild.cpp:143 calls Guild::Disband(), which fires the script hooks.
 	s.disbandGuildWithLuaEvents(ctx, guildID)
+	return true
 }
 
 // handleGuildInviteCommand mirrors HandleGuildInviteCommand
-// (cs_guild.cpp:158-182): `guild invite [<player>] "<name>"`.
-func (s *session) handleGuildInviteCommand(ctx context.Context, args []string) {
+// (cs_guild.cpp:149-176): `guild invite [<player>] "<name>"`.
+func (s *session) handleGuildInviteCommand(ctx context.Context, args []string) bool {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
-		return
+		return true
 	}
 	toks := splitQuotedArgs(args)
 	if len(toks) == 0 {
-		s.sendSysMessage("Syntax: .guild invite [<player>] \"<name>\"")
-		return
+		return false
 	}
 	var targetGUID uint64
 	var targetName string
@@ -437,49 +435,46 @@ func (s *session) handleGuildInviteCommand(ctx context.Context, args []string) {
 		}
 		if targetGUID == 0 {
 			s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-			return
+			return true
 		}
 		rest = toks[1:]
 	} else {
 		targetSess := s.guildSelectionOrSelf()
 		if targetSess.player == nil {
 			s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-			return
+			return true
 		}
 		targetGUID, targetName = targetSess.playerGUID, targetSess.player.Name
 	}
 	if len(rest) == 0 {
-		s.sendSysMessage("Syntax: .guild invite [<player>] \"<name>\"")
-		return
+		return false
 	}
 	// extractQuotedArg (Chat.cpp:714) requires a double-quoted guild name.
 	guildName, ok := guildQuotedArg(rest[0])
 	if !ok {
-		s.sendSysMessage("Syntax: .guild invite [<player>] \"<name>\"")
-		return
+		return false
 	}
 	guildID := guildIDByName(ctx, cdb, guildName)
 	if guildID == 0 {
 		// C++ returns false with no message; the framework shows the
 		// command help (ChatCommand.cpp:302-309).
-		s.sendSysMessage("Syntax: .guild invite [<player>] \"<name>\"")
-		return
+		return false
 	}
 	// The C++ notes "player's guild membership checked in AddMember before
 	// add" (cs_guild.cpp:178); a failed AddMember returns false from the
 	// handler, which the framework shows as help.
 	if !s.guildAddMember(ctx, cdb, guildID, targetGUID, guildLowestRankID(ctx, cdb, guildID), targetName) {
-		s.sendSysMessage("Syntax: .guild invite [<player>] \"<name>\"")
-		return
+		return false
 	}
+	return true
 }
 
 // handleGuildUninviteCommand mirrors HandleGuildUninviteCommand
-// (cs_guild.cpp:184-202): `guild uninvite <player>`.
-func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string) {
+// (cs_guild.cpp:177-196): `guild uninvite <player>`.
+func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string) bool {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
-		return
+		return true
 	}
 	// extractPlayerTarget(args, &target, &targetGuid): name, selection, then
 	// self (Chat.cpp:657).
@@ -495,14 +490,14 @@ func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string)
 			target = nil
 			if guid == 0 {
 				s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-				return
+				return true
 			}
 		}
 	} else if len(args) > 0 {
 		// splitQuotedArgs returned nil: unterminated quoted name, which
 		// the C++ PlayerIdentifier parse rejects outright.
 		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-		return
+		return true
 	} else if target.player != nil {
 		guid = target.playerGUID
 	}
@@ -515,39 +510,44 @@ func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string)
 	if guildID == 0 {
 		// C++ returns false with no message; the framework shows the
 		// command help (ChatCommand.cpp:302-309).
-		s.sendSysMessage("Syntax: .guild uninvite <player>")
-		return
+		return false
 	}
 	var exists uint32
 	if err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&exists); err != nil {
-		s.sendSysMessage("Syntax: .guild uninvite <player>")
-		return
+		return false
 	}
 	// DeleteMember(trans, targetGuid, false, true, true) (cs_guild.cpp:200).
 	s.guildDeleteMember(ctx, cdb, guildID, guid, false)
+	return true
 }
 
-// handleGuildRankCommand mirrors HandleGuildRankCommand (cs_guild.cpp:204-221):
+// handleGuildRankCommand mirrors HandleGuildRankCommand (cs_guild.cpp:197-214):
 // `guild rank [<player>] <rank>`.
-func (s *session) handleGuildRankCommand(ctx context.Context, args []string) {
+func (s *session) handleGuildRankCommand(ctx context.Context, args []string) bool {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
-		return
+		return true
 	}
 	const syntax = "Syntax: .guild rank [<player>] <rank>"
 	toks := splitQuotedArgs(args)
 	// The C++ handler is framework-parsed (Optional<PlayerIdentifier>,
 	// uint8), so the whole string must be consumed (ChatCommand.h:112):
 	// trailing tokens fail the parse.
-	if len(toks) == 0 || len(toks) > 2 {
+	if len(toks) == 0 {
+		return false
+	}
+	if len(toks) > 2 {
+		// Trailing tokens: the Optional backtrack re-parses the player
+		// token as the uint8 and errors (ChatCommand.h:77-98), so the
+		// parser message survives -> message + true.
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	var guid uint64
 	var newRank uint8
 	if len(toks) == 1 {
 		// Optional<PlayerIdentifier> absent -> FromTargetOrSelf
-		// (cs_guild.cpp:207). The C++ Optional backtracks
+		// (cs_guild.cpp:201-202). The C++ Optional backtracks
 		// (ChatCommand.h:77-98), so even a numeric single token is the
 		// rank here, never a player GUID. A non-numeric single token is
 		// a player name with the rank missing; the parser rejects it.
@@ -556,7 +556,7 @@ func (s *session) handleGuildRankCommand(ctx context.Context, args []string) {
 		rank, ok := parseCommandUint8(toks[0])
 		if !ok {
 			s.sendSysMessage(syntax)
-			return
+			return true
 		}
 		newRank = rank
 		if target := s.guildSelectionOrSelf(); target.player != nil {
@@ -574,7 +574,7 @@ func (s *session) handleGuildRankCommand(ctx context.Context, args []string) {
 			}
 			if guid == 0 {
 				s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-				return
+				return true
 			}
 		} else if low, ok := parseCommandUint32(toks[0]); ok {
 			if ts := s.server.findSessionByGUID(uint64(low)); ts != nil && ts.player != nil {
@@ -583,7 +583,7 @@ func (s *session) handleGuildRankCommand(ctx context.Context, args []string) {
 				var dbName string
 				if err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ? LIMIT 1", low).Scan(&dbName); err != nil || dbName == "" {
 					s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-					return
+					return true
 				}
 				guid = uint64(low)
 			}
@@ -596,13 +596,13 @@ func (s *session) handleGuildRankCommand(ctx context.Context, args []string) {
 			}
 			if guid == 0 {
 				s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-				return
+				return true
 			}
 		}
 		rank, ok := parseCommandUint8(toks[1])
 		if !ok {
 			s.sendSysMessage(syntax)
-			return
+			return true
 		}
 		newRank = rank
 	}
@@ -615,49 +615,45 @@ func (s *session) handleGuildRankCommand(ctx context.Context, args []string) {
 	if guildID == 0 {
 		// C++ returns false with no message; the framework shows the
 		// command help (ChatCommand.cpp:302-309).
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	var exists uint32
 	if err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&exists); err != nil {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	// Guild::ChangeMemberRank (Guild.cpp:2336): rank must be an existing
 	// rank id and the target must be a member.
 	if newRank > guildLowestRankID(ctx, cdb, guildID) {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	var member uint64
 	if err := cdb.QueryRowContext(ctx, "SELECT guid FROM guild_member WHERE guildid = ? AND guid = ? LIMIT 1", guildID, guid).Scan(&member); err != nil {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	// Member::ChangeRank (Guild.cpp:577): DB row plus the online player's
 	// rank field.
 	if _, err := cdb.ExecContext(ctx, "UPDATE guild_member SET `rank` = ? WHERE guid = ? AND guildid = ?", newRank, guid, guildID); err != nil {
-		return
+		return true
 	}
 	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil && ts.player.GuildID == guildID {
 		ts.player.GuildRank = newRank
 		ts.sendPlayerUpdate()
 	}
+	return true
 }
 
 // handleGuildRenameCommand mirrors HandleGuildRenameCommand
-// (cs_guild.cpp:223-265): `guild rename "<old>" "<new>"`.
-func (s *session) handleGuildRenameCommand(ctx context.Context, args []string) {
+// (cs_guild.cpp:215-263): `guild rename "<old>" "<new>"`.
+func (s *session) handleGuildRenameCommand(ctx context.Context, args []string) bool {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
-		return
+		return true
 	}
 	toks := splitQuotedArgs(args)
 	if len(toks) < 1 {
 		// No args at all: the C++ handler returns false with no message
 		// and the framework shows the command help.
-		s.sendSysMessage("Syntax: .guild rename \"<old>\" \"<new>\"")
-		return
+		return false
 	}
 	// Both names come from extractQuotedArg (Chat.cpp:714): an unquoted
 	// old name fails with LANG_BAD_VALUE, an unquoted/missing new name
@@ -665,46 +661,47 @@ func (s *session) handleGuildRenameCommand(ctx context.Context, args []string) {
 	oldName, ok := guildQuotedArg(toks[0])
 	if !ok {
 		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	if len(toks) < 2 {
 		s.sendSysMessage("Insert guild name.") // LANG_INSERT_GUILD_NAME 498
-		return
+		return true
 	}
 	newName, ok := guildQuotedArg(toks[1])
 	if !ok {
 		s.sendSysMessage("Insert guild name.") // LANG_INSERT_GUILD_NAME 498
-		return
+		return true
 	}
 	guildID := guildIDByName(ctx, cdb, oldName)
 	if guildID == 0 {
 		s.sendSysMessage(fmt.Sprintf("The command couldn't find '%s'", oldName)) // LANG_COMMAND_COULDNOTFIND 434
-		return
+		return true
 	}
 	if guildIDByName(ctx, cdb, newName) != 0 {
 		s.sendSysMessage(fmt.Sprintf("There is already another guild with the same name.")) // LANG_GUILD_RENAME_ALREADY_EXISTS 96
-		return
+		return true
 	}
 	// Guild::SetName (Guild.cpp:1221): same name, empty, >24 chars,
 	// reserved or invalid charter name fail. The reserved/charter checks
 	// have no Go bridge (documented gap).
 	if newName == "" || len(newName) > 24 {
 		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	if _, err := cdb.ExecContext(ctx, "UPDATE guild SET name = ? WHERE guildid = ?", newName, guildID); err != nil {
 		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("'%s' Guild name changed to '%s'", oldName, newName)) // LANG_GUILD_RENAME_DONE 97
+	return true
 }
 
-// handleGuildInfoCommand mirrors HandleGuildInfoCommand (cs_guild.cpp:267-309):
+// handleGuildInfoCommand mirrors HandleGuildInfoCommand (cs_guild.cpp:264-306):
 // `guild info [id|"<name>"]`, defaulting to the selection's/self's guild.
-func (s *session) handleGuildInfoCommand(ctx context.Context, args []string) {
+func (s *session) handleGuildInfoCommand(ctx context.Context, args []string) bool {
 	cdb := s.guildCharactersDB()
 	if cdb == nil {
-		return
+		return true
 	}
 	var guildID uint32
 	// The C++ arm reads the whole remainder verbatim as the name
@@ -725,8 +722,7 @@ func (s *session) handleGuildInfoCommand(ctx context.Context, args []string) {
 	if guildID == 0 {
 		// C++ returns false with no message; the framework shows the
 		// command help (ChatCommand.cpp:302-309).
-		s.sendSysMessage("Syntax: .guild info [id|\"<name>\"]")
-		return
+		return false
 	}
 	var name, motd, info string
 	var leaderGUID uint64
@@ -735,8 +731,7 @@ func (s *session) handleGuildInfoCommand(ctx context.Context, args []string) {
 	err := cdb.QueryRowContext(ctx, "SELECT name, leaderguid, motd, info, createdate, BankMoney FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&name, &leaderGUID, &motd, &info, &createdDate, &bankMoney)
 	if err != nil {
 		// C++ GetGuildById misses -> return false -> framework help.
-		s.sendSysMessage("Syntax: .guild info [id|\"<name>\"]")
-		return
+		return false
 	}
 	s.sendSysMessage(fmt.Sprintf("Guild %s Id %d", name, guildID)) // LANG_GUILD_INFO_NAME 1177
 	var leaderName string
@@ -751,6 +746,7 @@ func (s *session) handleGuildInfoCommand(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Bank Gold %d", bankMoney/100/100)) // LANG_GUILD_INFO_BANK_GOLD 1181
 	s.sendSysMessage(fmt.Sprintf("MOTD %s", motd))                  // LANG_GUILD_INFO_MOTD 1182
 	s.sendSysMessage(fmt.Sprintf("Extra Info %s", info))            // LANG_GUILD_INFO_EXTRA_INFO 1183
+	return true
 }
 
 // isAllDigits mirrors the isNumeric(args) gate in HandleGuildInfoCommand

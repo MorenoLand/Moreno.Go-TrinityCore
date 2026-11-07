@@ -237,7 +237,7 @@ func (s *session) instancePlayerInDungeon(target *session) bool {
 }
 
 // handleCmdInstance mirrors the instance command table
-// (cs_instance.cpp:46-59):
+// (cs_instance.cpp:49-62):
 //
 //	instance listbinds                    -> HandleInstanceListBindsCommand   (RBAC_PERM_COMMAND_INSTANCE_LISTBINDS, 413)
 //	instance unbind <map|all> [difficulty] -> HandleInstanceUnbindCommand     (RBAC_PERM_COMMAND_INSTANCE_UNBIND, 414)
@@ -248,71 +248,73 @@ func (s *session) instancePlayerInDungeon(target *session) bool {
 //
 // Trinity checks permission only on the invoker (leaf) node
 // (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission.
-func (s *session) handleCmdInstance(ctx context.Context, args []string) {
-	const syntax = "Syntax: .instance listbinds | .instance unbind <map|all> [difficulty] | .instance stats | .instance savedata | .instance setbossstate <encounter> <state> [player] | .instance getbossstate <encounter> [player]"
+func (s *session) handleCmdInstance(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
+		return !s.commandAllowed(ctx, perm)
+	}
+	// Subcommand names prefix-match (ChatCommand.cpp:261-288), like group:
+	// ".instance s" is ambiguous (stats/savedata/setbossstate), not stats.
+	sub, cands, ok := groupMatchName(args[0], []string{"listbinds", "unbind", "stats", "savedata", "setbossstate", "getbossstate"})
+	if !ok {
+		if len(cands) > 1 {
+			s.groupAmbiguousMessage(args[0], cands)
 			return true
 		}
 		return false
 	}
-	sub := strings.ToLower(args[0])
-	switch {
-	case strings.HasPrefix("listbinds", sub):
+	switch sub {
+	case "listbinds":
 		if deny(permissionCommandInstanceListBinds) {
-			return
+			return false
 		}
-		s.handleInstanceListBinds(ctx)
-	case strings.HasPrefix("unbind", sub):
+		return s.handleInstanceListBinds(ctx)
+	case "unbind":
 		if deny(permissionCommandInstanceUnbind) {
-			return
+			return false
 		}
-		s.handleInstanceUnbind(ctx, args[1:])
-	case strings.HasPrefix("stats", sub):
+		return s.handleInstanceUnbind(ctx, args[1:])
+	case "stats":
 		if deny(permissionCommandInstanceStats) {
-			return
+			return false
 		}
-		s.handleInstanceStats(ctx)
-	case strings.HasPrefix("savedata", sub):
+		return s.handleInstanceStats(ctx)
+	case "savedata":
 		if deny(permissionCommandInstanceSaveData) {
-			return
+			return false
 		}
-		s.handleInstanceSaveData()
-	case strings.HasPrefix("setbossstate", sub):
+		return s.handleInstanceSaveData()
+	case "setbossstate":
 		if deny(permissionCommandInstanceSetBossState) {
-			return
+			return false
 		}
-		s.handleInstanceSetBossState(ctx, args[1:])
-	case strings.HasPrefix("getbossstate", sub):
+		return s.handleInstanceSetBossState(ctx, args[1:])
+	case "getbossstate":
 		if deny(permissionCommandInstanceGetBossState) {
-			return
+			return false
 		}
-		s.handleInstanceGetBossState(ctx, args[1:])
-	default:
-		s.sendSysMessage(syntax)
+		return s.handleInstanceGetBossState(ctx, args[1:])
 	}
+	return true
 }
 
 // handleInstanceListBinds mirrors HandleInstanceListBindsCommand
-// (cs_instance.cpp:95-124): per-bind "map: %d inst: %d perm: %s ext: %s
+// (cs_instance.cpp:80-119): per-bind "map: %d inst: %d perm: %s ext: %s
 // diff: %d resettable: %s timeleft: %s" (LANG_COMMAND_LIST_BIND_INFO, 5045),
 // then "player binds: %d" (5046), the group binds (ext printed as "-",
 // exactly like the C++), then "group binds: %d" (5047). Binds are read from
 // the character_instance/group_instance/instance rows, the Go tree's source
 // of truth for binds.
-func (s *session) handleInstanceListBinds(ctx context.Context) {
+func (s *session) handleInstanceListBinds(ctx context.Context) bool {
 	target, ok := s.instanceCommandTarget()
 	if !ok {
-		return
+		return true
 	}
 	binds := s.instanceBindsForCharacter(ctx, target.playerGUID)
 	counter := 0
@@ -336,10 +338,11 @@ func (s *session) handleInstanceListBinds(ctx context.Context) {
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("group binds: %d", counter))
+	return true
 }
 
 // handleInstanceUnbind mirrors HandleInstanceUnbindCommand
-// (cs_instance.cpp:126-167): "unbind <map|all> [difficulty]" deletes the
+// (cs_instance.cpp:120-165): "unbind <map|all> [difficulty]" deletes the
 // player's binds except the one for the map the player is currently in,
 // printing "unbinding map: %d inst: %d perm: %s diff: %d resettable: %s
 // timeleft: %s" (5048) per bind and "instances unbound: %d" (5049). The C++
@@ -347,15 +350,13 @@ func (s *session) handleInstanceListBinds(ctx context.Context) {
 // player from the InstanceSave; the Go tree keeps no in-memory InstanceSave
 // objects, so the character_instance row delete plus the calendar
 // raid-lockout removal for perm binds is the full observable state.
-func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
-	const syntax = "Syntax: .instance unbind <map|all> [difficulty]"
+func (s *session) handleInstanceUnbind(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	target, ok := s.instanceCommandTarget()
 	if !ok {
-		return
+		return true
 	}
 	var mapID uint32
 	if args[0] != "all" {
@@ -363,8 +364,7 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 		// keyword match is case-sensitive, unlike the tree's usual folding.
 		parsed, ok := parseInstanceMapID(args[0])
 		if !ok {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		mapID = parsed
 	}
@@ -376,7 +376,7 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 		diff = int(int8(cAtoi(args[1])))
 	}
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
+		return true
 	}
 	counter := 0
 	for _, b := range s.instanceBindsForCharacter(ctx, target.playerGUID) {
@@ -411,6 +411,7 @@ func (s *session) handleInstanceUnbind(ctx context.Context, args []string) {
 		counter++
 	}
 	s.sendSysMessage(fmt.Sprintf("instances unbound: %d", counter))
+	return true
 }
 
 // unbindInstanceBinds is the Player::UnbindInstance arm
@@ -443,7 +444,7 @@ func (s *session) unbindInstanceBinds(ctx context.Context, match func(instanceBi
 }
 
 // handleInstanceStats mirrors HandleInstanceStatsCommand
-// (cs_instance.cpp:169-179): "Loaded instances" (sMapMgr->GetNumInstances,
+// (cs_instance.cpp:166-176): "Loaded instances" (sMapMgr->GetNumInstances,
 // 5050) has no Go bridge - the Go tree keeps no loaded-map registry - and is
 // omitted (documented gap). The remaining four lines are answered natively:
 // players in instances (online sessions on dungeon maps), instance saves
@@ -451,9 +452,9 @@ func (s *session) unbindInstanceBinds(ctx context.Context, match func(instanceBi
 // InstanceSaveManager::GetNumBoundPlayersTotal sums GetPlayerCount() over
 // every save, InstanceSaveMgr.cpp:719-726 - so COUNT(*), not DISTINCT),
 // groups bound (same over group_instance, :728-735).
-func (s *session) handleInstanceStats(ctx context.Context) {
+func (s *session) handleInstanceStats(ctx context.Context) bool {
 	if s.server == nil {
-		return
+		return true
 	}
 	playersIn := 0
 	if s.server.Data != nil {
@@ -479,22 +480,24 @@ func (s *session) handleInstanceStats(ctx context.Context) {
 	s.sendSysMessage(fmt.Sprintf("Instance saves: %d", saves))
 	s.sendSysMessage(fmt.Sprintf("Players bound: %d", playersBound))
 	s.sendSysMessage(fmt.Sprintf("Groups bound: %d", groupsBound))
+	return true
 }
 
 // handleInstanceSaveData mirrors HandleInstanceSaveDataCommand
-// (cs_instance.cpp:181-197). The dungeon gate (LANG_NOT_DUNGEON, 5055) is
+// (cs_instance.cpp:177-199). The dungeon gate (LANG_NOT_DUNGEON, 5055) is
 // ported; the save itself needs the player's InstanceScript, which has no
 // Go bridge (boss scripts run in Lua, not in a per-instance C++ script
 // object), so it reports the gap honestly after the gate.
-func (s *session) handleInstanceSaveData() {
+func (s *session) handleInstanceSaveData() bool {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	if !s.instancePlayerInDungeon(s) {
-		return
+		return true
 	}
 	s.sendSysMessage("Instance scripts are not modeled in the Go tree, so there is no instance data to save.")
+	return true
 }
 
 // instanceBossStateTarget mirrors the player resolution shared by the
@@ -526,7 +529,7 @@ func (s *session) instanceBossStateTarget(args []string, playerIdx int) (*sessio
 }
 
 // handleInstanceSetBossState mirrors HandleInstanceSetBossStateCommand
-// (cs_instance.cpp:199-266): the syntax gates (encounter + state required),
+// (cs_instance.cpp:200-267): the syntax gates (encounter + state required),
 // the player resolution, the LANG_NOT_DUNGEON (5055) gate, the
 // LANG_NO_INSTANCE_DATA (5056) gate, and the state > TO_BE_DECIDED
 // LANG_BAD_VALUE gate are all ported in C++ order, then the live
@@ -537,49 +540,55 @@ func (s *session) instanceBossStateTarget(args []string, playerIdx int) (*sessio
 // one through to a wrapped enum), and the NO_INSTANCE_DATA gate is vacuous
 // (Go instances always carry the store; the dungeon gate above is the live
 // check). The message wording is a plain-English recall (LANG text is TDB).
-func (s *session) handleInstanceSetBossState(ctx context.Context, args []string) {
+func (s *session) handleInstanceSetBossState(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .instance setbossstate <encounter> <state> [player]"
+	if len(args) == 0 {
+		return false
+	}
 	if len(args) < 2 {
+		// State token missing: LANG_CMD_SYNTAX + SetSentErrorMessage
+		// (cs_instance.cpp:215-218) -> message + true.
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	target, ok := s.instanceBossStateTarget(args, 2)
 	if !ok {
-		return
+		return true
 	}
 	if !s.instancePlayerInDungeon(target) {
-		return
+		return true
 	}
 	encounterID := uint32(cAtoi(args[0]))
 	state := cAtoi(args[1])
 	if state < 0 || state > int(encounterStateToBeDecided) {
 		s.sendSysMessage("Bad value.")
-		return
+		return true
 	}
 	s.server.setInstanceBossState(ctx, target.player.Map, target.player.InstanceID, encounterID, uint8(state), effectiveTeamFor(target.player), true)
 	s.sendSysMessage(fmt.Sprintf("Boss state for encounter %d set to %s (%d).", encounterID, encounterStateName(uint8(state)), state))
+	return true
 }
 
 // handleInstanceGetBossState mirrors HandleInstanceGetBossStateCommand
-// (cs_instance.cpp:268-320): same gates as setbossstate in C++ order, then
+// (cs_instance.cpp:268-319): same gates as setbossstate in C++ order, then
 // the live store read and the LANG_COMMAND_INST_GET_BOSS_STATE line. Same
 // deltas as set: no encounter-count gate, wording is a recall.
-func (s *session) handleInstanceGetBossState(ctx context.Context, args []string) {
+func (s *session) handleInstanceGetBossState(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .instance getbossstate <encounter> [player]"
 	if len(args) < 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	target, ok := s.instanceBossStateTarget(args, 1)
 	if !ok {
-		return
+		return true
 	}
 	if !s.instancePlayerInDungeon(target) {
-		return
+		return true
 	}
 	encounterID := uint32(cAtoi(args[0]))
 	state := s.server.instanceBossState(target.player.Map, target.player.InstanceID, encounterID)
 	s.sendSysMessage(fmt.Sprintf("Boss state for encounter %d is %s (%d).", encounterID, encounterStateName(state), state))
+	return true
 }
 
 // parseInstanceMapID parses the <map|all> token's numeric form, mirroring
