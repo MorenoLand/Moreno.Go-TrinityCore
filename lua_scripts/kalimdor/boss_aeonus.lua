@@ -48,8 +48,9 @@
 -- - JustDied's instance legs: instance->SetData(TYPE_RIFT = 2, DONE) +
 --   instance->SetData(TYPE_MEDIVH = 1, DONE) (the "FIXME: later should be
 --   removed" comment is C++-verbatim) — PORTED via the shared
---   instanceData table (see instance_the_black_morass.lua); only the
---   DONE quest-credit branch stays out (no bridge).
+--   instanceData table (see instance_the_black_morass.lua), including
+--   the DONE quest-credit branch (10297 + 9836, inlined below).
+--   Medivh's check tick picks the DONE states up as its WIN leg.
 -- - SPELL_CLEAVE 40504 is declared in the C++ enum but never cast in
 --   C++ — no cast arm exists to port (the lieutenant_drake
 --   ExplodingShout_Timer case).
@@ -77,6 +78,10 @@ local SPELL_TIME_STOP     = 31422
 local SPELL_ENRAGE        = 37605
 local SPELL_SAND_BREATH   = 31473
 local H_SPELL_SAND_BREATH = 39049
+
+local QUEST_OPENING_PORTAL = 10297
+local QUEST_MASTER_TOUCH = 9836
+local QUEST_STATUS_INCOMPLETE = 3
 
 local timers = {}
 
@@ -177,6 +182,28 @@ local function onReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ SetData(TYPE_MEDIVH, DONE) quest-credit arm
+-- (instance_the_black_morass.cpp:204-220): every player in the
+-- instance with QUEST_OPENING_PORTAL 10297 / QUEST_MASTER_TOUCH 9836
+-- incomplete gets AreaExploredOrEventHappens for it, 10297 first.
+local function grantMedivhDoneCredit(mapObj)
+    if not mapObj then
+        return
+    end
+    local players = mapObj:GetPlayers()
+    if not players then
+        return
+    end
+    for _, player in ipairs(players) do
+        if player:GetQuestStatus(QUEST_OPENING_PORTAL) == QUEST_STATUS_INCOMPLETE then
+            player:AreaExploredOrEventHappens(QUEST_OPENING_PORTAL)
+        end
+        if player:GetQuestStatus(QUEST_MASTER_TOUCH) == QUEST_STATUS_INCOMPLETE then
+            player:AreaExploredOrEventHappens(QUEST_MASTER_TOUCH)
+        end
+    end
+end
+
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
@@ -185,8 +212,8 @@ local function onDied(event, creature, killer)
     -- "FIXME: later should be removed" comment is C++-verbatim).
     -- Written to the shared instanceData table (see
     -- instance_the_black_morass.lua); the DONE quest-credit branch
-    -- of SetData stays out (no quest-event-happens bridge). Medivh's
-    -- check tick picks the DONE states up as its WIN leg.
+    -- of SetData runs inline below (bridges live: map:GetPlayers,
+    -- player:GetQuestStatus, player:AreaExploredOrEventHappens).
     local mapObj = creature:GetMap()
     if mapObj then
         local data = mapObj:GetInstanceData()
@@ -194,6 +221,7 @@ local function onDied(event, creature, killer)
             data.riftState = 3
             data.medivhState = 3
         end
+        grantMedivhDoneCredit(mapObj)
     end
 end
 

@@ -69,7 +69,10 @@
 --   players present at start.
 -- - Quest credit on SetData TYPE_MEDIVH DONE (QUEST_OPENING_PORTAL
 --   10297 + QUEST_MASTER_TOUCH 9836 AreaExploredOrEventHappens):
---   no quest-event-happens bridge for players.
+--   PORTED at both DONE writers (Aeonus JustDied in boss_aeonus.lua,
+--   Medivh WIN leg in the_black_morass.lua); the old "no
+--   quest-event-happens bridge" note was stale
+--   (player:AreaExploredOrEventHappens live, lua_player.go:4457).
 -- - CanProgressEvent's empty-instance Clear (shield/counts/wave
 --   reset): ON_UPDATE fires only for instances with players, so the
 --   empty state is never observed here.

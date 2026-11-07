@@ -88,7 +88,10 @@
 -- - npc_medivh_bm JustEngagedWith: empty in C++ (no-op).
 -- - SetData TYPE_MEDIVH DONE quest credit (QUEST_OPENING_PORTAL
 --   10297 + QUEST_MASTER_TOUCH 9836 AreaExploredOrEventHappens):
---   no quest-event-happens bridge for players.
+--   PORTED — inlined at both DONE writers (Aeonus JustDied in
+--   boss_aeonus.lua, Medivh WIN leg in this file); the old
+--   "no quest-event-happens bridge" note was stale
+--   (player:AreaExploredOrEventHappens live, lua_player.go:4457).
 -- - SAY_ENTER (0) "where does this belong?", SAY_ORCS_ENTER (7),
 --   SAY_ORCS_ANSWER (8): declared in the MedivhBm enum but never
 --   Talked anywhere in C++ (archimonde SAY_SOUL_CHARGE case).
@@ -114,6 +117,10 @@ local WORLD_STATE_BM_RIFT = 2784
 local SPELL_CHANNEL = 31556
 local SPELL_CORRUPT = 31326
 local SPELL_CORRUPT_AEONUS = 37853
+
+local QUEST_OPENING_PORTAL = 10297
+local QUEST_MASTER_TOUCH = 9836
+local QUEST_STATUS_INCOMPLETE = 3
 
 local SAY_INTRO = 1
 local SAY_WEAK75 = 2
@@ -163,6 +170,28 @@ local function instanceDataOf(creature)
     return mapObj:GetInstanceData()
 end
 
+-- C++ SetData(TYPE_MEDIVH, DONE) quest-credit arm
+-- (instance_the_black_morass.cpp:204-220): every player in the
+-- instance with QUEST_OPENING_PORTAL 10297 / QUEST_MASTER_TOUCH 9836
+-- incomplete gets AreaExploredOrEventHappens for it, 10297 first.
+local function grantMedivhDoneCredit(mapObj)
+    if not mapObj then
+        return
+    end
+    local players = mapObj:GetPlayers()
+    if not players then
+        return
+    end
+    for _, player in ipairs(players) do
+        if player:GetQuestStatus(QUEST_OPENING_PORTAL) == QUEST_STATUS_INCOMPLETE then
+            player:AreaExploredOrEventHappens(QUEST_OPENING_PORTAL)
+        end
+        if player:GetQuestStatus(QUEST_MASTER_TOUCH) == QUEST_STATUS_INCOMPLETE then
+            player:AreaExploredOrEventHappens(QUEST_MASTER_TOUCH)
+        end
+    end
+end
+
 local function medivhCheckTick(creature, guid)
     -- The firing one-shot's id must clear first: a later hit/tick
     -- tests key presence for "timer running" (C++ SpellCorrupt_Timer
@@ -198,6 +227,10 @@ local function medivhCheckTick(creature, guid)
             creature:RemoveAura(SPELL_CHANNEL)
         end
         data.medivhState = STATE_DONE
+        -- C++ SetData(TYPE_MEDIVH, DONE) quest-credit arm
+        -- (instance_the_black_morass.cpp:204-220) runs inline here:
+        -- the second DONE writer (the first is Aeonus's JustDied).
+        grantMedivhDoneCredit(creature:GetMap())
         return
     end
     schedule(guid, "check", 5000, function()
