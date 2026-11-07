@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math/rand"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -173,6 +174,47 @@ func (s *Server) fireCreatureSpellDummyEffectForTargets(ctx context.Context, m *
 		}
 		seen[guid] = struct{}{}
 		s.fireCreatureSpellDummyEffect(ctx, m, spellID, effectIndex, guid)
+	}
+}
+
+// creatureBloodMirror mirrors spell_darkfallen_blood_mirror
+// (icecrown_citadel.cpp:1237-1283, spell 70450): FilterTargets keeps
+// players only, needs at least two, and picks two at random;
+// HandleMirror (OnEffectLaunch) casts BLOOD_MIRROR_2 (70451) on the
+// first and has the first cast DAMAGE_SHARE (70445) on the second,
+// both triggered. The selection runs on the pre-hit-roll list like C++
+// (OnEffectLaunch precedes the hit rolls); the two triggered casts
+// resolve their own hits. Dead or ghost players are not candidates
+// (C++ area-enemy selection takes live units). Assumes the spell
+// carries no second DUMMY effect; the script registers EFFECT_0 only.
+func (s *Server) creatureBloodMirror(ctx context.Context, m *creatureMotion, targetGUIDs []uint64) {
+	if s == nil || m == nil {
+		return
+	}
+	players := make([]uint64, 0, len(targetGUIDs))
+	seen := make(map[uint64]struct{}, len(targetGUIDs))
+	for _, guid := range targetGUIDs {
+		if guid == 0 {
+			continue
+		}
+		if _, dup := seen[guid]; dup {
+			continue
+		}
+		seen[guid] = struct{}{}
+		ts := s.findSessionByGUID(guid)
+		if ts == nil || ts.player == nil || ts.isDeadOrGhost() {
+			continue
+		}
+		players = append(players, guid)
+	}
+	if len(players) < 2 {
+		return
+	}
+	rand.Shuffle(len(players), func(a, b int) { players[a], players[b] = players[b], players[a] })
+	target, mirror := players[0], players[1]
+	s.castCreatureSpellInternal(ctx, m, 70451, target, true)
+	if ts := s.findSessionByGUID(target); ts != nil && ts.player != nil {
+		ts.castSpellDirect(ctx, 70445, mirror)
 	}
 }
 

@@ -350,6 +350,9 @@ end
 
 -- C++ EVENT_TWILIGHT_BLOODBOLT (:430-438): RandomResize(2/4 by
 -- Is25ManRaid) casts of 71446 + unconditional self-cast 71445.
+-- The 71446 resist leg runs Go-side (twilightBloodboltResist,
+-- boss_blood_queen_lana_thel.cpp:772-791: shadow + arcane resists
+-- summed on the full damage); the 71445 TARGET filter leg stays out.
 local function bloodboltTick(creature, guid)
     -- C++ boss UpdateAI pre-loop gate :344 (+ in-loop :459, single-tick
     -- no-op per the marrowgar precedent): 500ms IsCasting defer, no

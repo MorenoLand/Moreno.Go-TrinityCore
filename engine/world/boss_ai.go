@@ -3377,6 +3377,14 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			if spellInfo.Effects[i].Effect != spellEffectDummy {
 				continue
 			}
+			if spellID == 70450 && i == 0 {
+				// spell_darkfallen_blood_mirror
+				// (icecrown_citadel.cpp:1237-1283): the filter-and-pair
+				// runs once per cast at launch, not once per hit target,
+				// so it bypasses the per-target dummy hooks below.
+				s.creatureBloodMirror(ctx, m, bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart))
+				continue
+			}
 			s.fireCreatureSpellDummyEffectForTargets(ctx, m, spellID, uint8(i), bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 		}
 	}
@@ -7207,6 +7215,59 @@ func (s *Server) creatureEffectForceDeselect(ctx context.Context, m *creatureMot
 	}
 }
 
+// creatureMistressKissArea mirrors spell_mistress_kiss_area
+// (boss_lord_jaraxxus.cpp:496-530, spells 66336/67076/67077/67078):
+// FilterTargets removes mana players from the EFFECT_0
+// TARGET_UNIT_SRC_AREA_ENEMY list, picks one random survivor, and
+// HandleScript casts the effect value (the kiss aura, 66334 for 66336)
+// on the hit unit, triggered. The pick runs on the pre-hit-roll list
+// like C++ (selection precedes the miss roll), so a picked target that
+// evades, is immune, or misses takes no kiss — the same gates the
+// per-target loop applies — and a landed reflect retargets onto the
+// caster. Creatures stay candidates like C++ (only mana players are
+// removed). The kiss aura's own periodic tick (spell_mistress_kiss,
+// 66334/67905/67906/67907) stays out: no periodic-dummy arm is wired
+// for it. Assumes the spell carries no second SCRIPT_EFFECT effect;
+// the script registers EFFECT_0 only.
+func (s *Server) creatureMistressKissArea(ctx context.Context, m *creatureMotion, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	candidates := make([]uint64, 0, len(hitTargets))
+	seen := make(map[uint64]struct{}, len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		if _, dup := seen[guid]; dup {
+			continue
+		}
+		seen[guid] = struct{}{}
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil && playerPowerType(ts.player) == 0 {
+			continue
+		}
+		candidates = append(candidates, guid)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	picked := candidates[rand.Intn(len(candidates))]
+	if evaded[picked] || immune[picked] || missed[picked] != protocol.SpellMissNone {
+		return
+	}
+	if status, isReflected := reflected[picked]; isReflected {
+		if status != protocol.SpellMissNone {
+			return
+		}
+		picked = m.GUID
+	}
+	value := eff.CalcValue()
+	if value <= 0 {
+		return
+	}
+	s.castCreatureSpellInternal(ctx, m, uint32(value), picked, true)
+}
+
 // creatureEffectScriptEffect mirrors the SPELLFAMILY_GENERIC arms of
 // Spell::EffectScriptEffect (SpellEffects.cpp:3604) for a creature caster:
 // the HIT_TARGET arm. Onyxia Shadow Flame (22539, 22972, 22975-22985)
@@ -7225,6 +7286,14 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 		return
 	}
 	_ = ctx
+	switch spellID {
+	case 66336, 67076, 67077, 67078:
+		// spell_mistress_kiss_area (boss_lord_jaraxxus.cpp:496-530):
+		// the filter-and-pick runs once per cast, not once per hit
+		// target, so it bypasses the loop below.
+		s.creatureMistressKissArea(ctx, m, eff, hitTargets, reflected, evaded, immune, missed)
+		return
+	}
 	for _, guid := range hitTargets {
 		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
 			continue
@@ -9026,13 +9095,31 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 					armor := s.creatureIgnoreTargetResistArmorForSpell(creatureAuraKeyForMotion(m), float64(vs.player.Armor), spell, true)
 					hybridArmorReduced = calcArmorReducedDamage(armor, uint8(maxUint32(m.Level, 1)), vs.player.Level, damage)
 				}
-				resisted, damage = calcMagicSpellResistance(damage, schoolMask, vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, false, s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), spell, true, uint32(schoolMask)), spellResistInput{
-					ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
-					binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
-					hybrid:             isHybridSpell,
-					hybridArmorReduced: hybridArmorReduced,
-					targetResistMod:    targetResistMod,
-				})
+				if isTwilightBloodbolt(spell.ID) {
+					// spell_blood_queen_twilight_bloodbolt::HandleResistance
+					// (boss_blood_queen_lana_thel.cpp:772-791): the script
+					// replaces the resist with the sum of the shadow and
+					// arcane resists, each on the full pre-resist damage.
+					// The per-school target-resistance modifiers are the
+					// caster's MOD_TARGET_RESISTANCE amounts for that
+					// single school (Unit.cpp:1784-1795 twin).
+					var modShadow, modArcane int32
+					for _, amount := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(m), spellAuraModTargetResistance, 0x20) {
+						modShadow += amount
+					}
+					for _, amount := range s.creatureAuraTypeAmountsByMiscMask(creatureAuraKeyForMotion(m), spellAuraModTargetResistance, 0x40) {
+						modArcane += amount
+					}
+					resisted, damage = twilightBloodboltResist(damage, vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), spell, true, 0x20), s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), spell, true, 0x40), modShadow, modArcane)
+				} else {
+					resisted, damage = calcMagicSpellResistance(damage, schoolMask, vs.player.Resistances, uint8(maxUint32(m.Level, 1)), vs.player.Level, false, false, s.creatureIgnoreResistPctForSpell(creatureAuraKeyForMotion(m), spell, true, uint32(schoolMask)), spellResistInput{
+						ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+						binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
+						hybrid:             isHybridSpell,
+						hybridArmorReduced: hybridArmorReduced,
+						targetResistMod:    targetResistMod,
+					})
+				}
 			}
 			if damage > 0 {
 				bypass := absorbIgnoreBypass(preResistDmg, s.creatureAbsorbIgnorePctForSpell(creatureAuraKeyForMotion(m), uint32(schoolMask), spell.ID))
@@ -9262,13 +9349,28 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 					hybridArmorReduced = calcArmorReducedDamage(armor, attackerLevel, victimLevel, damage)
 				}
 				resistances := s.petFoldedResistances(victimKey, stats.Resistances)
-				resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, attackerLevel, victimLevel, true, false, s.creatureIgnoreResistPctForSpell(casterKey, spell, true, uint32(schoolMask)), spellResistInput{
-					ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
-					binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
-					hybrid:             isHybrid,
-					hybridArmorReduced: hybridArmorReduced,
-					targetResistMod:    targetResistMod,
-				})
+				if isTwilightBloodbolt(spell.ID) {
+					// spell_blood_queen_twilight_bloodbolt::HandleResistance
+					// (boss_blood_queen_lana_thel.cpp:772-791): the script
+					// replaces the resist with the sum of the shadow and
+					// arcane resists, each on the full pre-resist damage.
+					var modShadow, modArcane int32
+					for _, amount := range s.creatureAuraTypeAmountsByMiscMask(casterKey, spellAuraModTargetResistance, 0x20) {
+						modShadow += amount
+					}
+					for _, amount := range s.creatureAuraTypeAmountsByMiscMask(casterKey, spellAuraModTargetResistance, 0x40) {
+						modArcane += amount
+					}
+					resisted, damage = twilightBloodboltResist(damage, resistances, attackerLevel, victimLevel, true, s.creatureIgnoreResistPctForSpell(casterKey, spell, true, 0x20), s.creatureIgnoreResistPctForSpell(casterKey, spell, true, 0x40), modShadow, modArcane)
+				} else {
+					resisted, damage = calcMagicSpellResistance(damage, schoolMask, resistances, attackerLevel, victimLevel, true, false, s.creatureIgnoreResistPctForSpell(casterKey, spell, true, uint32(schoolMask)), spellResistInput{
+						ignoreResistances:  spell.AttributesEx4&spellAttr4IgnoreResistances != 0,
+						binary:             spell.AttributesCu&spellAttr0CuBinarySpell != 0,
+						hybrid:             isHybrid,
+						hybridArmorReduced: hybridArmorReduced,
+						targetResistMod:    targetResistMod,
+					})
+				}
 			}
 			if damage > 0 {
 				bypass := absorbIgnoreBypass(preResistDmg, s.creatureAbsorbIgnorePctForSpell(casterKey, uint32(schoolMask), spell.ID))

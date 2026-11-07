@@ -33546,6 +33546,33 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, resistances [7]ui
 	return resisted, remainingDamage
 }
 
+// isTwilightBloodbolt reports whether the spell carries the
+// spell_blood_queen_twilight_bloodbolt script
+// (boss_blood_queen_lana_thel.cpp:772-791): 71446 plus the 71478/71479/
+// 71480 ranks the script comment lists.
+func isTwilightBloodbolt(spellID uint32) bool {
+	return spellID == 71446 || spellID == 71478 || spellID == 71479 || spellID == 71480
+}
+
+// twilightBloodboltResist mirrors spell_blood_queen_twilight_bloodbolt::
+// HandleResistance (boss_blood_queen_lana_thel.cpp:772-791): the script
+// REPLACES the resist computation with the sum of two independent
+// per-school resists — shadow (0x20) plus arcane (0x40) — each computed
+// on the full pre-resist damage with a nil SpellInfo, so no binary skip
+// of the level term, no hybrid leg, and no SPELL_ATTR4_IGNORE_RESISTANCES
+// gate. The per-school ignore-resist percentages and target-resistance
+// modifiers are the caller's per-school values; the sum is clamped to
+// the damage like DamageInfo::ResistDamage clamps each leg.
+func twilightBloodboltResist(damage uint32, resistances [7]uint32, casterLevel, victimLevel uint8, victimIsCreature bool, ignoreShadowPct, ignoreArcanePct, targetResistModShadow, targetResistModArcane int32) (resisted uint32, remainingDamage uint32) {
+	shadowResisted, _ := calcMagicSpellResistance(damage, 0x20, resistances, casterLevel, victimLevel, victimIsCreature, false, ignoreShadowPct, spellResistInput{targetResistMod: targetResistModShadow})
+	arcaneResisted, _ := calcMagicSpellResistance(damage, 0x40, resistances, casterLevel, victimLevel, victimIsCreature, false, ignoreArcanePct, spellResistInput{targetResistMod: targetResistModArcane})
+	resisted = shadowResisted + arcaneResisted
+	if resisted > damage {
+		resisted = damage
+	}
+	return resisted, damage - resisted
+}
+
 func (s *Server) clearCreatureAuras(key creatureAuraKey) {
 	if s == nil || key.GUID == 0 {
 		return

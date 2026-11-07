@@ -182,8 +182,10 @@
 -- binding bridge (razelikh precedent) — documented-only.
 -- spell_mistress_kiss_area (SpellScript 66336/67076/67077/67078) —
 -- area-target filter (mana players) + HandleScript effect-value cast
--- — no SpellScript binding bridge (razelikh precedent) —
--- documented-only.
+-- — PORTED Go-side (creatureMistressKissArea): the cast of 66336 above
+-- now lands the kiss aura on one random non-mana player. The kiss
+-- aura's own periodic tick (spell_mistress_kiss 66334, 66359 on a
+-- casting target) stays out — no periodic-dummy arm is wired for it.
 -- spell_fel_streak_visual (SpellScript 66493) — HandleScript
 -- effect-value cast — no SpellScript binding bridge — documented-only.
 -- The three spell scripts join the SpellScript/AuraScript queue.

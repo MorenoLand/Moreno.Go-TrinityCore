@@ -170,7 +170,10 @@ local function darkfallenEngage(entry, creature)
         -- C++ npc_darkfallen_blood_knight::ScheduleSpells (:864-881):
         -- 500ms one-shot DoCastSelf(VAMPIRIC_AURA 71736); 8s
         -- DoCastVictim(UNHOLY_STRIKE 70437) then {8s,9s}; 6s
-        -- DoCastSelf(BLOOD_MIRROR 70450) then 34s.
+        -- DoCastSelf(BLOOD_MIRROR 70450) then 34s. The mirror's
+        -- filter-and-pair leg runs Go-side (creatureBloodMirror,
+        -- icecrown_citadel.cpp:1237-1283): the cast of 70450 now
+        -- pairs two random players (70451 + 70445).
         local function auraTick()
             -- Reset scheduler validator :786-791: 500ms IsCasting
             -- defer, cast not consumed.

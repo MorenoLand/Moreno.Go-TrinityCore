@@ -660,8 +660,12 @@ end
 -- Talk(EMOTE_ALGALON_BIG_BANG 8) + DoCastAOE(SPELL_BIG_BANG 64443)
 -- (non-triggered), 90s+introDelay init, Repeat(1min+30s+500ms).
 -- The phase-machine legs (SetPhase PHASE_BIG_BANG, constellation
--- DoAction ACTION_BIG_BANG, EVENT_RESUME_UPDATING 9s+500ms, and the
--- no-target ACTION_ASCEND via spell_algalon_big_bang) stay out.
+-- DoAction ACTION_BIG_BANG, EVENT_RESUME_UPDATING 9s+500ms) stay out.
+-- The no-target ACTION_ASCEND leg (spell_algalon_big_bang: if zero
+-- EFFECT_0 area-enemy targets, DoAction ACTION_ASCEND — cancels
+-- EVENT_RESUME_UPDATING and schedules EVENT_ASCEND_TO_THE_HEAVENS
+-- 1.5s) also stays out: it needs the DBC-radius area-enemy count at
+-- cast time plus an after-cast trigger, neither bridged to Lua.
 local function bigBangTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "bigbang", 500, function()
