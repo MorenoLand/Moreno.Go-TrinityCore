@@ -46,9 +46,11 @@
 -- through the fake-death window gated by the resurrecting latch, but
 -- STOP (no re-arm) once PHASE_GHOST arrives — C++ PHASE_GHOST case
 -- carries only death bite + marked death).
--- JustDied: DoCastSelf(Kill Credit 68663) on event
--- 4 (its instance SetBossState(BOSS_BLACK_KNIGHT, DONE) leg has no
--- bridge — instance model absent, standing). OnLeaveCombat(2) /
+-- JustDied: DoCastSelf(Kill Credit 68663) + instance
+-- SetBossState(BOSS_BLACK_KNIGHT, DONE) on event 4 — the SetBossState
+-- leg is PORTED (2026-11-07 tick 378; the old "no bridge" verdict is
+-- retracted — creature:SetBossState is bridged,
+-- lua_creature_events.go:6088). OnLeaveCombat(2) /
 -- OnDied(4) / OnReset(23) cancel the scheduler (gargolmar precedent).
 -- Ported arms, continued:
 -- boss_black_knight DamageTaken + resurrect machine — PORTED:
@@ -435,10 +437,16 @@ local function blackKnightLeaveCombat(event, creature)
     creature:SetRooted(false)
 end
 
--- C++ JustDied: DoCastSelf(Kill Credit 68663) (the
--- instance->SetBossState leg has no bridge).
+-- C++ JustDied: DoCastSelf(Kill Credit 68663) +
+-- instance->SetBossState(BOSS_BLACK_KNIGHT, DONE)
+-- (boss_black_knight.cpp:289-294; BOSS_BLACK_KNIGHT = 3,
+-- trial_of_the_champion.h TCData; DONE = 3).
+local BOSS_BLACK_KNIGHT = 3
+local DONE = 3
+
 local function blackKnightDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_KILL_CREDIT)
+    creature:SetBossState(BOSS_BLACK_KNIGHT, DONE)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     bkState[guid] = nil

@@ -85,8 +85,9 @@
 -- SetData(1) ->
 -- RemoveAura(SPELL_SHIELD 66515) — the "no aura-removal" wording
 -- is stale (creature:RemoveAura is bridged), but the arm is
--- triggered cross-AI via SetData (no bridge) from unregistered
--- npc_memory JustDied; DamageTaken / MovementInform — same bridges
+-- triggered cross-AI via SetData from unregistered npc_memory
+-- JustDied (no SetData dispatch event — the write would land in
+-- the ScriptData store unread); DamageTaken / MovementInform — same bridges
 -- absent as
 -- boss_eadric; uiHolyFireTimer — PORTED below: SelectTarget(Random,
 -- 0, 250, true) via threat-list randomPlayer -> DoCast(Holy Fire
@@ -135,18 +136,23 @@
 -- now EXISTS (randomPlayer) but npc_memory has zero registration
 -- (entry-unverifiable). JustDied cross-AI leg
 -- (ToTempSummon()->GetSummonerUnit()->GetAI()->SetData(1, 0)) —
--- no cross-AI SetData bridge (drakkari_colossus precedent).
--- npc_argent_soldier — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
--- (35309 NPC_ARGENT_LIGHWIELDER / 35305 NPC_ARGENT_MONK / 35307
--- NPC_PRIESTESS — trial_of_the_champion.h kalecgos pass): zero
--- registration. Whole AI is the EscortAI waypoint machine
+-- the bridges EXIST now (GetSummonerUnit, lua_creature_events.go:4999;
+-- creature:SetData store, :792) — the old "no cross-AI SetData bridge"
+-- verdict is retracted (2026-11-07 tick 378): the blocker is
+-- entry-only, and the paletress SetData(1) consumer would need a
+-- GetData poll since SetData fires no dispatch event.
+-- npc_argent_soldier — JustDied PORTED below (2026-11-07 tick 378):
+-- instance->SetData(DATA_ARGENT_SOLDIER_DEFEATED, +1) via the shared
+-- instanceData table (boss_aeonus.lua precedent); the 9-deaths
+-- un-gate leg polls it in instance_trial_of_the_champion.lua.
+-- Entries verifiable (35309 NPC_ARGENT_LIGHWIELDER / 35305
+-- NPC_ARGENT_MONK / 35307 NPC_PRIESTESS — trial_of_the_champion.h
+-- kalecgos pass). Whole AI is the EscortAI waypoint machine
 -- (SetData(uiType) -> per-entry AddWaypoint triplets +
 -- Start(false, true); WaypointReached(0) -> SetFacingTo
 -- (5.81f/4.60f/2.79f per uiWaypoint)) — escort / motion-master /
--- facing bridges absent (escort queue precedent). JustDied leg
--- (instance->SetData(DATA_ARGENT_SOLDIER_DEFEATED, +1)) —
--- instance-script model absent (standing). Joins the
--- entry-verifiable-but-bridge-blocked queue.
+-- facing bridges absent (escort queue precedent), so the machine
+-- stays out; only the JustDied arm is wired.
 -- spell_eadric_radiance — SpellScript (66935 Radiance:
 -- OnObjectAreaTargetSelect filter removes targets not in front
 -- within 2.5f / beyond 40y) — no SpellScript binding bridge
@@ -455,3 +461,30 @@ RegisterCreatureEvent(ENTRY_PALETRESS, 4, paletressDied)
 RegisterCreatureEvent(ENTRY_PALETRESS, 9, argentDamageTaken)
 RegisterCreatureEvent(ENTRY_PALETRESS, 9, paletressHealthLatch)
 RegisterCreatureEvent(ENTRY_PALETRESS, 23, paletressReset)
+
+-- npc_argent_soldier JustDied (boss_argent_challenge.cpp:603-606):
+-- instance->SetData(DATA_ARGENT_SOLDIER_DEFEATED,
+-- instance->GetData(DATA_ARGENT_SOLDIER_DEFEATED) + 1).
+-- DATA_ARGENT_SOLDIER_DEFEATED = 8 (trial_of_the_champion.h TCData).
+-- The instance SetData/GetData pair has no direct Lua bridge
+-- (creature:SetData is the per-AI store), so the counter lives in the
+-- shared instanceData table (boss_aeonus.lua precedent) and the
+-- 9-deaths un-gate leg polls it in instance_trial_of_the_champion.lua.
+-- The EscortAI waypoint machine stays out (no escort bridge).
+local ENTRY_ARGENT_SOLDIER_LIGHTWIELDER = 35309
+local ENTRY_ARGENT_SOLDIER_MONK = 35305
+local ENTRY_ARGENT_SOLDIER_PRIESTESS = 35307
+
+local function argentSoldierDied(event, creature, killer)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.argentSoldierDefeated = (data.argentSoldierDefeated or 0) + 1
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ARGENT_SOLDIER_LIGHTWIELDER, 4, argentSoldierDied)
+RegisterCreatureEvent(ENTRY_ARGENT_SOLDIER_MONK, 4, argentSoldierDied)
+RegisterCreatureEvent(ENTRY_ARGENT_SOLDIER_PRIESTESS, 4, argentSoldierDied)

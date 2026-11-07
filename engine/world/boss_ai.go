@@ -17643,7 +17643,8 @@ func init() {
 	// 25% one-shot as an ev9 postDamage latch (Holy Nova 66546 /
 	// Shield 66515 / Confess 66680; Summon Memory 66545 stays out),
 	// Reset RemoveAllAuras. Still out: constructor intro-machine legs,
-	// SetData(1) RemoveAura(SHIELD) (cross-AI SetData, no bridge),
+	// SetData(1) RemoveAura(SHIELD) (cross-AI SetData from unregistered npc_memory
+	// JustDied — no SetData dispatch event; the write lands in the ScriptData store unread),
 	// MovementInform, JustSummoned MemoryGUID latch (summon STRAND
 	// absent), memory/soldier/SpellScript machines. npc_memory: ENTRY UNVERIFIABLE (no NPC constant in C++
 	// — the memory creatures materialize via DB-side summon spells
@@ -17651,15 +17652,15 @@ func init() {
 	// bridgeable-but-entry-blocked queue (Waking Nightmare 66552
 	// 7s/7s self-cast port-pattern-ready; Old Wounds 66620 /
 	// Shadows Past 66619 behind the random-target bridge; JustDied
-	// cross-AI SetData(1,0) — no cross-AI SetData bridge).
-	// npc_argent_soldier: ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (35309
-	// NPC_ARGENT_LIGHWIELDER / 35305 NPC_ARGENT_MONK / 35307
-	// NPC_PRIESTESS — kalecgos pass): joins the
-	// entry-verifiable-but-bridge-blocked queue — whole AI is the
-	// EscortAI waypoint machine (escort queue precedent) + JustDied's
-	// instance SetData(DATA_ARGENT_SOLDIER_DEFEATED,+1) (instance
-	// model absent). spell_eadric_radiance / spell_paletress_summon_
-	// memory: no SpellScript binding bridge (razelikh precedent).
+	// cross-AI SetData(1,0) — bridges exist now (GetSummonerUnit +
+	// SetData store); blocker is entry-only, tick 378).
+	// npc_argent_soldier: JustDied PORTED in boss_eadric.lua (tick 378) —
+	// instance SetData(DATA_ARGENT_SOLDIER_DEFEATED,+1) via the shared
+	// instanceData table; the 9-deaths un-gate leg polls it in
+	// instance_trial_of_the_champion.lua. Whole AI is the EscortAI
+	// waypoint machine (escort queue precedent) — stays out.
+	// spell_eadric_radiance / spell_paletress_summon_memory: no SpellScript
+	// binding bridge (razelikh precedent).
 	// C++ SD%Complete 50 % note carried.
 	RegisterLuaBoss("boss_eadric", 35119)
 	// Paletress (34928 NPC_PALETRESS): combat arms ported in boss_eadric.lua
@@ -17687,7 +17688,8 @@ func init() {
 	// and are independent of the unbridged DamageTaken resurrect machine
 	// (boss_eadric precedent). JustDied: DoCastSelf(Kill Credit 68663)
 	// on event 4 (the instance->SetBossState(BOSS_BLACK_KNIGHT, DONE) leg
-	// has no bridge — instance model absent, standing); melee
+	// is PORTED in boss_black_knight.lua, tick 378 — creature:SetBossState
+	// is bridged); melee
 	// engine-driven. No Talk arms exist in C++ (no Say enum — "missing
 	// yells" in the SD%Complete 80 % note). Documented in the lua file,
 	// not wired: DamageTaken (damage > health && uiPhase <=
@@ -17727,6 +17729,30 @@ func init() {
 	// (escort queue precedent); joins the bridgeable-but-entry-blocked
 	// queue. Trial of the Champion block stays OPEN.
 	RegisterLuaBoss("boss_black_knight", 35451)
+
+	// boss_grand_champions: Trial of the Champion dungeon boss script,
+	// JustDied arms only (tick 378, JustDied census). Entries verified in
+	// trial_of_the_champion.h TCCreatureIds (kalecgos pass): warrior Jacob
+	// Alerius 34705 / Mokra 35572, mage Ambrose 34702 / Eressea 35569,
+	// shaman Colosos 34701 / Runok 35571, hunter Jaelyne 34657 / Zul'tore
+	// 35570, rogue Lana 34703 / Visceri 35617. All five JustDied arms are
+	// identical (boss_grand_champions.cpp:436/:580/:732/:893/:1019):
+	// instance->SetBossState(BOSS_GRAND_CHAMPIONS=0, DONE) — PORTED in
+	// lua_scripts/northrend/boss_grand_champions.lua via bridged
+	// creature:SetBossState. Combat rotations stay out (UpdateAI timers +
+	// mounted-vehicle legs unported). Instance-side counter is C++-dead
+	// (repeat DONE returns false, InstanceScript.cpp:353-360) and has no
+	// Lua boss-state-change hook — stays out, faithfully.
+	RegisterLuaBoss("boss_grand_champions", 34705)
+	RegisterLuaBoss("boss_grand_champions", 35572)
+	RegisterLuaBoss("boss_grand_champions", 34702)
+	RegisterLuaBoss("boss_grand_champions", 35569)
+	RegisterLuaBoss("boss_grand_champions", 34701)
+	RegisterLuaBoss("boss_grand_champions", 35571)
+	RegisterLuaBoss("boss_grand_champions", 34657)
+	RegisterLuaBoss("boss_grand_champions", 35570)
+	RegisterLuaBoss("boss_grand_champions", 34703)
+	RegisterLuaBoss("boss_grand_champions", 35617)
 	// boss_anubarak_trial: Trial of the Crusader dungeon boss script,
 	// entry 34564 (trial_of_the_crusader.h NPC_ANUBARAK — kalecgos
 	// pass). lua_scripts/northrend/boss_anubarak_trial.lua:
