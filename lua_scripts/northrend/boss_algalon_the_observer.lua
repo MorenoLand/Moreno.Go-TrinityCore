@@ -496,6 +496,26 @@ RegisterCreatureEvent(ENTRY_ALGALON, 3, algalonTargetDied)
 RegisterCreatureEvent(ENTRY_ALGALON, 9, algalonDamageTaken)
 RegisterCreatureEvent(ENTRY_ALGALON, 23, algalonReset)
 
+-- C++ spell_algalon_supermassive_fail::RecalculateDamage
+-- (boss_algalon_the_observer.cpp:1229-1236, OnHit, spell 65311): a
+-- hit player resets the NO_SPELL_HIT achievement criteria for this
+-- spell (evenIfCriteriaComplete = true). The arm mutates no damage,
+-- so timing is irrelevant and the caster-side SpellHitTarget leg
+-- (event 15) is the exact carrier — it fires once per landed hit
+-- target and skips evaded/immune/missed targets, the same observable
+-- outcome as C++ GetHitPlayer() being nil on a miss. PORTED tick
+-- 367 via the new player:ResetAchievementCriteria bridge
+-- (condition 9 = ACHIEVEMENT_CRITERIA_CONDITION_NO_SPELL_HIT; the
+-- bridge documents the evenIfCriteriaComplete delta: Go skips
+-- already-completed criteria, C++ with true resets them).
+local function algalonSupermassiveFail(event, creature, target, spellId)
+    if spellId == SPELL_SUPERMASSIVE_FAIL and target:GetObjectType() == "Player" then
+        target:ResetAchievementCriteria(9, SPELL_SUPERMASSIVE_FAIL)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ALGALON, 15, algalonSupermassiveFail)
+
 -- Timer-driven cast arms (the maiden CreateLuaEvent convention —
 -- GUID-keyed timers table, cancel on events 2/4/23;
 -- CastSpell(nil, spell) = DoCastVictim victim-cast,

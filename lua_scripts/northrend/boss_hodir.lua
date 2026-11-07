@@ -207,9 +207,13 @@
 -- lua_objects.go:1407, spotlight precedent) is the Go removal idiom.
 -- Ctor SetDisplayId(Modelid2) ported in toastyFireReset via
 -- GetTemplateModelId(2) (bridge live).
--- spell_biting_cold / spell_biting_cold_dot —
--- SpellScript / AuraScript — no SpellScript / AuraScript
--- bridges; both join the no-SpellScript-bridge queue.
+-- spell_biting_cold / spell_biting_cold_dot — PORTED tick 367
+-- via RegisterAuraEvent (the Nov-3 "no AuraScript bridge" claim is
+-- RETIRED: the periodic hook fires per aura tick on the player path
+-- and the tick-366 creature:IsMoving bridge gates both arms; the
+-- achievement legs — DATA_GETTING_COLD_IN_HERE stack check,
+-- ACTION_CHEESE_THE_FREEZE / ACTION_I_HAVE_THE_COOLEST_FRIENDS —
+-- still join the unmodeled-achievement queue).
 -- Achievement data legs (DATA_GETTING_COLD_IN_HERE /
 -- ACTION_CHEESE_THE_FREEZE /
 -- ACTION_I_HAVE_THE_COOLEST_FRIENDS /
@@ -232,6 +236,8 @@ local EMOTE_FREEZE = 7
 local EMOTE_BLOWS = 8
 
 local SPELL_BITING_COLD = 62038
+local SPELL_BITING_COLD_TRIGGERED = 62039 -- boss_hodir.cpp:56
+local SPELL_BITING_COLD_DAMAGE = 62188 -- boss_hodir.cpp:57
 local SPELL_FREEZE = 62469
 local SPELL_FROZEN_BLOWS = 62478
 local SPELL_BERSERK = 47008
@@ -685,6 +691,73 @@ end
 
 RegisterCreatureEvent(ENTRY_FLASH_FREEZE, 22, flashFreezeSummoned)
 RegisterCreatureEvent(ENTRY_ICE_BLOCK, 22, iceBlockSummoned)
+
+-- C++ spell_biting_cold::HandleEffectPeriodic
+-- (boss_hodir.cpp:996-1027, EFFECT_0 SPELL_AURA_PERIODIC_DUMMY,
+-- aura 62038): per-target stillness counter — the C++ list holds
+-- one entry per AuraScript instance and each instance's target is
+-- its own aura target, so a per-target-GUID table is the exact
+-- model. First tick inserts (guid, 1) with no cast; count >= 4
+-- casts 62039 triggered on the target and resets to 1 (the moving
+-- check does NOT run on the cast tick); otherwise moving resets to
+-- 1, still increments. No PreventDefaultAction — the
+-- PERIODIC_DUMMY default is a no-op in both engines. PORTED tick
+-- 367 via RegisterAuraEvent (the periodic hook fires per aura tick
+-- on the player path; target:IsMoving is the tick-366 bridge).
+local bitingColdCounters = {}
+
+local function bitingColdTick(event, aura, target)
+    local guid = target:GetGUID()
+    local count = bitingColdCounters[guid]
+    if not count then
+        bitingColdCounters[guid] = 1
+        return
+    end
+    if count >= 4 then
+        target:CastSpell(target, SPELL_BITING_COLD_TRIGGERED, true)
+        bitingColdCounters[guid] = 1
+    elseif target:IsMoving() then
+        bitingColdCounters[guid] = 1
+    else
+        bitingColdCounters[guid] = count + 1
+    end
+end
+
+-- C++ AuraScript destruction drops the per-instance list with the
+-- aura; the remove hook is the exact twin.
+local function bitingColdRemove(event, aura, target)
+    bitingColdCounters[target:GetGUID()] = nil
+end
+
+-- C++ spell_biting_cold_dot::HandleEffectPeriodic
+-- (boss_hodir.cpp:1052-1067, EFFECT_0 SPELL_AURA_PERIODIC_DUMMY,
+-- aura 62039): damage = 200 * 2^stacks, the caster casts 62188 on
+-- self triggered with the damage as BP0 (CastSpellExtraArgs
+-- AddSpellBP0, TRIGGERED_FULL_MASK); if the caster is moving,
+-- RemoveAuraFromStack(62039) drops ONE stack — SetStackAmount(n-1)
+-- with aura:Remove() at the last stack is the exact twin (Lua has
+-- no RemoveAuraFromStack bridge; RemoveAura would drop all stacks).
+-- PORTED tick 367 via RegisterAuraEvent.
+local function bitingColdDotTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if not caster then
+        return
+    end
+    local stacks = aura:GetStackAmount()
+    local damage = 200 * (2 ^ stacks)
+    caster:CastCustomSpell(caster, SPELL_BITING_COLD_DAMAGE, true, damage)
+    if caster:IsMoving() then
+        if stacks <= 1 then
+            aura:Remove()
+        else
+            aura:SetStackAmount(stacks - 1)
+        end
+    end
+end
+
+RegisterAuraEvent(SPELL_BITING_COLD, 1, bitingColdTick)
+RegisterAuraEvent(SPELL_BITING_COLD, 3, bitingColdRemove)
+RegisterAuraEvent(SPELL_BITING_COLD_TRIGGERED, 1, bitingColdDotTick)
 
 RegisterCreatureEvent(ENTRY_HODIR, 1, hodirEnterCombat)
 RegisterCreatureEvent(ENTRY_HODIR, 2, hodirLeaveCombat)

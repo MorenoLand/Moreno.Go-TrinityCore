@@ -4521,6 +4521,18 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		srv.objectsMuLockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil
 	}
+	// Delete is GameObject::Delete (GameObject.cpp) for runtime-spawned
+	// gameobjects: removes the dynamic object from its map/instance
+	// registry (despawnDynamicGameObjectInInstance, the same twin the
+	// SummonGameObject despawn timer uses), stopping its timers and
+	// firing the despawn hook. Despawn above only hides the object;
+	// Delete removes it. Saved (DB) gameobjects have no delete model
+	// in Go and are untouched by this call. Backs the sapphiron
+	// icebolt remove arm (boss_sapphiron.cpp:558-561).
+	methods["Delete"] = func(_ context.Context, _ []any) ([]any, error) {
+		srv.despawnDynamicGameObjectInInstance(state.Map, state.InstanceID, state.GUID)
+		return nil, nil
+	}
 	methods["Respawn"] = func(_ context.Context, _ []any) ([]any, error) {
 		srv.objectsMuUnlockGameObject(state.Map, state.InstanceID, state.GUID)
 		return nil, nil

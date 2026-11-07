@@ -155,15 +155,18 @@
 -- go_sapphiron_birth.lua (OnUse 14 twin of the GO_ACTIVATED leg;
 -- instance SetData rides the shared instanceData table;
 -- JUST_DEACTIVATED delete rides the immediate Despawn).
--- spell_sapphiron_change_blizzard_target (AuraScript) /
--- spell_sapphiron_icebolt (AuraScript) /
--- spell_sapphiron_summon_blizzard (SpellScript) — no AuraScript /
--- SpellScript binding bridge (razelikh precedent) — join the
--- SpellScript/AuraScript queue.
+-- spell_sapphiron_icebolt (AuraScript) — PORTED tick 367 via
+-- RegisterAuraEvent (the "no AuraScript bridge" claim is RETIRED:
+-- the periodic hook fires per aura tick on the player path, the
+-- tick-366 creature:IsMoving bridge gates the periodic arm, and the
+-- new player SummonGameObject / ApplySpellImmune /
+-- GetGameObjectByGUID bridges + GameObject:Delete carry the summon,
+-- immunity, and remove arms). spell_sapphiron_change_blizzard_target
+-- (AuraScript) / spell_sapphiron_summon_blizzard (SpellScript) still
+-- join the SpellScript/AuraScript queue.
 -- achievement_the_hundred_club (DATA_THE_HUNDRED_CLUB 21462147 /
 -- MAX_FROST_RESISTANCE 100) — no achievement-criteria bridge
 -- (tharon_ja precedent) — joins that queue.
--- GO_ICEBLOCK 181247 rides the unported icebolt AuraScript.
 
 local ENTRY_SAPPHIRON = 15989
 
@@ -177,6 +180,7 @@ local SPELL_CLEAVE = 19983
 local SPELL_TAIL_SWEEP = 55697
 local SPELL_LIFE_DRAIN = 28542
 local SPELL_ICEBOLT = 28522
+local GO_ICEBLOCK = 181247 -- boss_sapphiron.cpp:85
 local SPELL_FROST_MISSILE = 30101
 local SPELL_FROST_BREATH = 28524
 local SPELL_FROST_BREATH_ANTICHEAT = 29318
@@ -191,6 +195,7 @@ local timers = {}
 local flying = {}
 local delayedDrain = {}
 local iceboltTargets = {}
+local iceboltBlocks = {} -- target GUID -> summoned GO_ICEBLOCK GUID (the C++ _block member)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -600,3 +605,52 @@ RegisterCreatureEvent(ENTRY_SAPPHIRON, 2, sapphironLeaveCombat)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 4, sapphironDied)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 9, sapphironDamageTaken)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 23, sapphironReset)
+
+-- C++ spell_sapphiron_icebolt_AuraScript (boss_sapphiron.cpp:546-585,
+-- aura 28522): HandleApply grants the target immunity to 28522 frost
+-- damage (IMMUNITY_DAMAGE 3, SPELL_SCHOOL_MASK_FROST 16) and
+-- HandleRemove revokes it — the OnApply/OnRemove hooks fire once per
+-- fresh application / actual removal on the player path, so both legs
+-- are exact. HandlePeriodic (EFFECT_2 SPELL_AURA_PERIODIC_TRIGGER_SPELL)
+-- summons GO_ICEBLOCK 181247 at the target's position for 25s the
+-- first tick the target stands still, and no-ops while a block exists
+-- or the target is moving. No PreventDefaultAction anywhere — the Go
+-- default periodic-trigger cast still fires alongside the summon,
+-- exactly like C++. PORTED tick 367 via RegisterAuraEvent + the new
+-- player SummonGameObject / ApplySpellImmune / GetGameObjectByGUID
+-- bridges and GameObject:Delete (the remove leg deletes the block;
+-- Delete removes dynamic GOs, Despawn would only hide it).
+local function iceboltApply(event, aura, target)
+    target:ApplySpellImmune(SPELL_ICEBOLT, 3, 16, true)
+end
+
+local function iceboltRemove(event, aura, target)
+    local guid = target:GetGUID()
+    local blockGuid = iceboltBlocks[guid]
+    if blockGuid then
+        local block = target:GetGameObjectByGUID(blockGuid)
+        if block then
+            block:Delete()
+        end
+        iceboltBlocks[guid] = nil
+    end
+    target:ApplySpellImmune(SPELL_ICEBOLT, 3, 16, false)
+end
+
+local function iceboltPeriodic(event, aura, target)
+    local guid = target:GetGUID()
+    if iceboltBlocks[guid] then
+        return
+    end
+    if target:IsMoving() then
+        return
+    end
+    local blockGuid = target:SummonGameObject(GO_ICEBLOCK, target:GetX(), target:GetY(), target:GetZ(), 0, 25)
+    if blockGuid then
+        iceboltBlocks[guid] = blockGuid
+    end
+end
+
+RegisterAuraEvent(SPELL_ICEBOLT, 1, iceboltPeriodic)
+RegisterAuraEvent(SPELL_ICEBOLT, 2, iceboltApply)
+RegisterAuraEvent(SPELL_ICEBOLT, 3, iceboltRemove)

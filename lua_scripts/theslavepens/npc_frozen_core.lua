@@ -77,3 +77,22 @@ end)
 
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 23, function(_, creature)
 end)
+
+-- C++ spell_ahune_minion_despawner::HandleScript
+-- (boss_ahune.cpp:832-840, EFFECT_0 SPELL_EFFECT_APPLY_AURA, spell
+-- 46843): the hit creature despawns. The cast is already ported
+-- (OnDied above); the aura-apply leg is the carrier, not a
+-- SpellScript hook — RegisterAuraEvent OnApply (event 2) fires once
+-- per fresh application of 46843 on each hit creature
+-- (serverApplyAuraToCreatureTarget), i.e. exactly the C++ hit set,
+-- with no per-entry registration. PORTED tick 367. Caveat: the Go
+-- hook is fresh-application-only while C++ fires on every hit; the
+-- cast is one-shot (frozen-core death), so no refresh case exists in
+-- practice.
+local function minionDespawnerApply(event, aura, target)
+    if target:GetObjectType() == "Creature" then
+        target:Despawn()
+    end
+end
+
+RegisterAuraEvent(SPELL_MINION_DESPAWNER, 2, minionDespawnerApply)

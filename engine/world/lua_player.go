@@ -1246,6 +1246,64 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.server.removeGameObjectsByOwnerSpell(s.playerGUID, spellID)
 		return nil, nil
 	}
+	// GetGameObjectByGUID is ObjectAccessor::GetGameObject (ObjectAccessor.h)
+	// by packed GUID, the lookup the sapphiron icebolt remove arm needs
+	// (boss_sapphiron.cpp:559-561): unlike GetGameObject above it is not
+	// keyed on an owner spell, so it resolves runtime-spawned objects the
+	// player summoned (serverLuaGameObject reads the dynamic registries
+	// first, then the DB-saved rows). Nil when no such object is live.
+	methods["GetGameObjectByGUID"] = func(lctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.server.serverLuaGameObject(lctx, guid)}, nil
+	}
+	// ApplySpellImmune is Unit::ApplySpellImmune (Unit.cpp:8268) on the
+	// player surface, the twin of the creature bridge: with apply=true
+	// inserts (type, spellId) into m_spellImmune[op], with apply=false
+	// removes the (type, spellId) rows. Ops (SharedDefines.h:1426): 0
+	// EFFECT, 1 STATE, 2 SCHOOL, 3 DAMAGE, 4 DISPEL, 5 MECHANIC, 6 ID.
+	// The rows live on the session (addPlayerSpellImmuneRow) and are
+	// consulted by the player-target immunity chain in immunity.go at
+	// their C++ positions. Backs the sapphiron icebolt apply/remove arms
+	// (boss_sapphiron.cpp:551-552, 560-561: IMMUNITY_DAMAGE 3,
+	// SPELL_SCHOOL_MASK_FROST 16).
+	methods["ApplySpellImmune"] = func(_ context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		op, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if op > 6 {
+			return nil, fmt.Errorf("ApplySpellImmune supports ops 0-6, got %d", op)
+		}
+		immType, err := luaUint32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		apply := false
+		if len(args) >= 4 {
+			if b, ok := args[3].(bool); ok {
+				apply = b
+			}
+		}
+		if apply {
+			s.addPlayerSpellImmuneRow(op, immType, spellID)
+		} else {
+			s.removePlayerSpellImmuneRows(op, immType, spellID)
+		}
+		return nil, nil
+	}
 	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
 	// IsDying is UnitMethods::IsDying (UnitMethods.h:316-324): Unit::isDying
 	// (Unit.h:1141) reads m_deathState == JUST_DIED. For players that state
@@ -5642,6 +5700,31 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.resetAchievements(ctx)
 		return nil, nil
 	}
+	// ResetAchievementCriteria is Player::ResetAchievementCriteria
+	// (AchievementMgr.cpp:510-533) on the player surface: resets the
+	// progress of every criteria of the given condition whose asset
+	// matches assetID (0 = all). DELTA: C++ takes evenIfCriteriaComplete
+	// (default false) and the algalon supermassive-fail arm passes true,
+	// resetting already-completed criteria; Go's
+	// resetAchievementCriteriaByCondition has no such parameter and
+	// always behaves as false (skips already-completed criteria and
+	// already-earned achievements), so a completed-but-unearned criteria
+	// is not reset. Backs the algalon supermassive-fail arm
+	// (boss_algalon_the_observer.cpp:1230-1234: condition
+	// ACHIEVEMENT_CRITERIA_CONDITION_NO_SPELL_HIT 9, asset = the spell
+	// id), carried on the caster-side SpellHitTarget leg (event 15).
+	methods["ResetAchievementCriteria"] = func(_ context.Context, args []any) ([]any, error) {
+		condition, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		assetID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.resetAchievementCriteriaByCondition(condition, assetID)
+		return nil, nil
+	}
 	methods["GetReputation"] = func(_ context.Context, args []any) ([]any, error) {
 		faction, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -6675,6 +6758,81 @@ func (s *session) luaPlayer() *scripting.Object {
 			return []any{nil}, nil
 		}
 		return []any{s.server.luaMotionCreature(summoned)}, nil
+	}
+	// SummonGameObject is WorldObject::SummonGameObject
+	// (Object.cpp:2065-2096) on the player surface, the twin of the
+	// creature bridge: spawns a runtime gameobject of the given entry
+	// at (x, y, z, o) on the player's map/instance and returns its
+	// packed GUID. Eluna CreatureMethods::SummonGameObject signature
+	// (entry, x, y, z, o, respawnTime); respawnTime is seconds,
+	// default 0. A missing template logs and returns nil. All-zero
+	// coords fall back to a close point 2*combatReach in facing
+	// direction at the summoner (Object.cpp:2095-2099 -> GetClosePoint
+	// -> GetNearPoint2D; collision/ground folds unmodeled). The summon
+	// type is the C++ default GO_SUMMON_TIMED_OR_CORPSE_DESPAWN: a
+	// positive respawnTime despawns the object when it elapses
+	// (time.AfterFunc, the gobject-add-temp precedent), 0 persists.
+	// The summoner-GO tracking leg (Unit::AddGameObject, Unit.cpp) has
+	// no Lua-visible effect — Go carries OwnerGUID on the dyn state,
+	// which is what the instance hooks and rituals read. Backs the
+	// sapphiron icebolt arm (boss_sapphiron.cpp:567-572).
+	methods["SummonGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		o, err := luaFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		var respawnSecs uint32
+		if len(args) > 5 {
+			if respawnSecs, err = luaUint32Arg(args, 5); err != nil {
+				return nil, err
+			}
+		}
+		if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return []any{nil}, nil
+		}
+		tmpl, err := gobjectTemplateByEntry(ctx, s.server.WorldStore.DB, entry)
+		if err != nil || tmpl == nil {
+			return []any{nil}, nil
+		}
+		mapID, instanceID, ownerGUID := state.Map, state.InstanceID, state.GUID
+		phaseMask := s.currentPlayerPhaseMask()
+		sx, sy, sz, so := state.X, state.Y, state.Z, state.Orientation
+		reach := float64(state.CombatReach)
+		if x == 0 && y == 0 && z == 0 {
+			x = sx + float32(2*reach*math.Cos(float64(so)))
+			y = sy + float32(2*reach*math.Sin(float64(so)))
+			z, o = sz, so
+		}
+		lowGUID := s.server.nextDynamicGameObjectLowGUID()
+		newGUID := gameObjectGUID(lowGUID, entry)
+		size := tmpl.size
+		if size <= 0 {
+			size = 1.0
+		}
+		dyn := &dynamicGameObjectState{GUID: newGUID, LowGUID: lowGUID, Entry: entry, OwnerGUID: ownerGUID, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, Orientation: o, State: GameObjectStateReady, Type: tmpl.goType, DisplayID: tmpl.displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, PhaseMask: phaseMask, IsRuntimeSpawn: true}
+		if respawnSecs > 0 {
+			dyn.DespawnTimer = time.AfterFunc(time.Duration(respawnSecs)*time.Second, func() {
+				s.server.despawnDynamicGameObjectInInstance(dyn.Map, dyn.InstanceID, dyn.GUID)
+			})
+		}
+		s.server.spawnDynamicGameObject(dyn)
+		return []any{newGUID}, nil
 	}
 
 	// luaSendMenuObjectGUID resolves the WorldObject argument shared by

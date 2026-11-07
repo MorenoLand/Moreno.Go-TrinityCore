@@ -97,8 +97,10 @@
 -- unported proximity trigger out.
 -- spell_amanitar_potent_fungus — AuraScript (56648 Potent Fungus:
 -- on-apply, if the target HasAura(Mini 57055) remove it and drop
--- the aura): no SpellScript/AuraScript binding bridge (razelikh
--- precedent) — documented-only.
+-- the aura) — PORTED tick 367 via RegisterAuraEvent (the "no
+-- SpellScript/AuraScript binding bridge" claim is RETIRED for this
+-- arm: the OnApply hook fires once per fresh application on both
+-- apply paths).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler
 -- (gargolmar precedent); BossAI _Reset/_JustDied instance
 -- bookkeeping has no bridge.
@@ -516,3 +518,20 @@ RegisterCreatureEvent(ENTRY_AMANITAR, 19, amanitarJustSummoned)
 RegisterCreatureEvent(ENTRY_AMANITAR, 21, amanitarSummonedDied)
 RegisterCreatureEvent(NPC_HEALTHY_MUSHROOM, 4, mushroomDied)
 RegisterCreatureEvent(NPC_POISONOUS_MUSHROOM, 4, mushroomDied)
+
+-- C++ spell_amanitar_potent_fungus::OnApply
+-- (boss_amanitar.cpp:262-270, EFFECT_0 SPELL_AURA_MOD_SCALE,
+-- AURA_EFFECT_HANDLE_REAL, aura 56648): if the target has Mini
+-- (57055), remove Mini and remove the fungus aura itself. No
+-- PreventDefaultAction. PORTED tick 367 via RegisterAuraEvent
+-- OnApply (event 2) — the blackHolePhaseShiftsApply precedent;
+-- the engine fires it once per fresh application, after
+-- registration, on both the player and creature apply paths.
+local function potentFungusApply(event, aura, target)
+    if target:HasAura(SPELL_MINI) then
+        target:RemoveAura(SPELL_MINI)
+        aura:Remove()
+    end
+end
+
+RegisterAuraEvent(SPELL_POTENT_FUNGUS, 2, potentFungusApply)
