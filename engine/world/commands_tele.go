@@ -51,6 +51,13 @@ import (
 // non-Optional GameTele parse fails before the handler runs).
 // LANG texts are inlined from the TDB enUS recall (no in-tree
 // trinity_string seed).
+//
+// R13: the root and all 5 arms return bool — bare/unknown subcommands
+// return false (the framework shows the help listing), denial is a silent
+// false (the C++ framework denies before invoking the handler), framework
+// parse failures (empty/missing/trailing args) are silent false, message
+// legs return true (SetSentErrorMessage in C++), and the lower-security
+// legs message + true (HasLowerSecurity prints, Chat.cpp:96-99).
 
 // teleLocation is one game_tele row.
 type teleLocation struct {
@@ -129,73 +136,70 @@ func (s *session) teleResolveTele(ctx context.Context, token string) (teleLocati
 // every handler arg (std::string, GameTele, PlayerIdentifier, $home)
 // consumes exactly one token, with trailing text failing the parse
 // ("the entire string must be consumed", ChatCommand.h:107-109).
-func (s *session) handleCmdTele(ctx context.Context, args []string) {
-	const syntax = "Syntax: .tele add <name>|.tele del <name>|.tele name [player] <tele|$home>|.tele group <tele>|.tele <name>"
+func (s *session) handleCmdTele(ctx context.Context, args []string) bool {
 	toks := args
 	if len(toks) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	sub := strings.ToLower(toks[0])
 	rest := toks[1:]
 	switch {
 	case strings.HasPrefix("add", sub):
-		if s.miscDeny(ctx, permissionCommandTeleAdd) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandTeleAdd) {
+			return false
 		}
-		s.handleTeleAddCommand(ctx, rest)
+		return s.handleTeleAddCommand(ctx, rest)
 	case strings.HasPrefix("del", sub):
-		if s.miscDeny(ctx, permissionCommandTeleDel) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandTeleDel) {
+			return false
 		}
-		s.handleTeleDelCommand(ctx, rest)
+		return s.handleTeleDelCommand(ctx, rest)
 	case strings.HasPrefix("name", sub):
-		if s.miscDeny(ctx, permissionCommandTeleName) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandTeleName) {
+			return false
 		}
-		s.handleTeleNameCommand(ctx, rest)
+		return s.handleTeleNameCommand(ctx, rest)
 	case strings.HasPrefix("group", sub):
-		if s.miscDeny(ctx, permissionCommandTeleGroup) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandTeleGroup) {
+			return false
 		}
-		s.handleTeleGroupCommand(ctx, rest)
+		return s.handleTeleGroupCommand(ctx, rest)
 	default:
-		if s.miscDeny(ctx, permissionCommandTele) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandTele) {
+			return false
 		}
-		s.handleTeleBareCommand(ctx, toks)
+		return s.handleTeleBareCommand(ctx, toks)
 	}
 }
 
 // handleTeleAddCommand mirrors HandleTeleAddCommand (cs_tele.cpp:68-99,
 // RBAC 738): in-game only, saves the handler's current position to
 // game_tele (ObjectMgr::AddGameTele).
-func (s *session) handleTeleAddCommand(ctx context.Context, args []string) {
+func (s *session) handleTeleAddCommand(ctx context.Context, args []string) bool {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	if len(args) == 0 || len(args) > 1 {
-		s.sendSysMessage("Syntax: .tele add <name>")
-		return
+		return false
 	}
 	// std::string consumes one token (ChatCommandArgs.h:93-102); trailing
 	// text fails the parse, it is never joined into the name.
 	name := args[0]
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	var existing string
 	err := s.server.WorldStore.DB.QueryRowContext(ctx,
 		"SELECT name FROM game_tele WHERE LOWER(name) = LOWER(?) LIMIT 1", name).Scan(&existing)
 	if err == nil {
 		s.sendSysMessage("The location already exists.") // LANG_COMMAND_TP_ALREADYEXIST (462)
-		return
+		return true
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage(fmt.Sprintf("Teleport lookup error: %v", err))
-		return
+		return true
 	}
 	p := s.player
 	_, err = s.server.WorldStore.DB.ExecContext(ctx,
@@ -203,43 +207,43 @@ func (s *session) handleTeleAddCommand(ctx context.Context, args []string) {
 		name, p.Map, p.X, p.Y, p.Z, p.Orientation)
 	if err != nil {
 		s.sendSysMessage("Error adding location.") // LANG_COMMAND_TP_ADDEDERR (464)
-		return
+		return true
 	}
 	s.sendSysMessage("Location added.") // LANG_COMMAND_TP_ADDED (463)
+	return true
 }
 
 // handleTeleDelCommand mirrors HandleTeleDelCommand (cs_tele.cpp:101-114,
 // RBAC 739, console allowed): deletes the resolved game_tele row.
-func (s *session) handleTeleDelCommand(ctx context.Context, args []string) {
+func (s *session) handleTeleDelCommand(ctx context.Context, args []string) bool {
 	if len(args) == 0 || len(args) > 1 {
-		s.sendSysMessage("Syntax: .tele del <name>")
-		return
+		return false
 	}
 	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
 	// fails the parse, it is never joined into the lookup.
 	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
-		return
+		return true
 	}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	if _, err := s.server.WorldStore.DB.ExecContext(ctx, "DELETE FROM game_tele WHERE id = ?", tele.id); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Teleport delete error: %v", err))
-		return
+		return true
 	}
 	s.sendSysMessage("Location deleted.") // LANG_COMMAND_TP_DELETED (465)
+	return true
 }
 
 // handleTeleNameCommand mirrors HandleTeleNameCommand (cs_tele.cpp:117-196,
 // RBAC 740, console allowed): teleports [player] (default: target-or-self)
 // to <tele> or $home. Online targets ride teleportTo; offline targets get
 // their saved characters position rewritten.
-func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
+func (s *session) handleTeleNameCommand(ctx context.Context, args []string) bool {
 	if len(args) == 0 || len(args) > 2 {
-		s.sendSysMessage("Syntax: .tele name [player] <tele|$home>")
-		return
+		return false
 	}
 	var target *session
 	var guid uint64
@@ -253,19 +257,19 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 			target, guid, name, ok = s.telePlayerByGUID(ctx, args[0])
 			if !ok {
 				s.sendSysMessage(miscPlayerNotFound)
-				return
+				return true
 			}
 		} else {
 			target, guid, name, ok = s.miscResolvePlayerTarget(ctx, args[:1])
 			if !ok {
-				return
+				return true
 			}
 		}
 	} else {
 		target = s.miscSelectedPlayerOrSelf()
 		if target == nil || target.player == nil {
 			s.sendSysMessage("You must be in game to use that command.")
-			return
+			return true
 		}
 		guid, name = target.playerGUID, target.player.Name
 	}
@@ -274,19 +278,22 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 	// (ChatCommandTags.h:102-104: StringEqualI).
 	if strings.EqualFold(dest, "$home") {
 		s.teleToHomebind(ctx, target, guid)
-		return
+		return true
 	}
 	tele, ok := s.teleResolveTele(ctx, dest)
 	if !ok {
-		return
+		return true
 	}
 	if target != nil && target.player != nil {
 		if s.characterTargetLowerSecurity(ctx, characterTarget{online: target, guid: guid, name: name}) {
-			return // C++ HasLowerSecurity: silent fail
+			// HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+			// (Chat.cpp:96-99).
+			s.sendSysMessage("Your security level is too low.")
+			return true
 		}
 		if target.isBeingTeleported() {
 			s.sendSysMessage(fmt.Sprintf(miscIsTeleported, miscPlayerLink(name))) // LANG_IS_TELEPORTED (102)
-			return
+			return true
 		}
 		s.sendSysMessage(fmt.Sprintf("Teleporting %s to %s.", miscPlayerLink(name), tele.name)) // LANG_TELEPORTING_TO (110)
 		// needReportToTarget (Chat.cpp:754): target is told only if the
@@ -308,10 +315,13 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 			target.saveRecallPosition() // C++ SaveRecallPosition: save only in non-flight case
 		}
 		target.teleportTo(tele.mapID, tele.x, tele.y, tele.z, tele.o)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{guid: guid, name: name}) {
-		return // C++ HasLowerSecurity: silent fail
+		// HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+		// (Chat.cpp:96-99).
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Teleporting %s%s to %s.", miscPlayerLink(name), " (offline)", tele.name)) // LANG_TELEPORTING_TO (110) + LANG_OFFLINE (37)
 	// Player::SavePositionInDB (Player.cpp:20545) writes map + position +
@@ -324,6 +334,7 @@ func (s *session) handleTeleNameCommand(ctx context.Context, args []string) {
 			"UPDATE characters SET map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
 			tele.mapID, zoneID, tele.x, tele.y, tele.z, tele.o, guid)
 	}
+	return true
 }
 
 // telePlayerByGUID resolves a bare numeric PlayerIdentifier token as a
@@ -409,36 +420,38 @@ func (s *session) teleGroupTarget() *session {
 
 // handleTeleGroupCommand mirrors HandleTeleGroupCommand (cs_tele.cpp:199-262,
 // RBAC 741): teleports every online member of the selected player's group.
-func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
+func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) bool {
 	if len(args) == 0 || len(args) > 1 {
-		s.sendSysMessage("Syntax: .tele group <tele>")
-		return
+		return false
 	}
 	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
 	// fails the parse, it is never joined into the lookup.
 	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
-		return
+		return true
 	}
 	selected := s.teleGroupTarget()
 	if selected == nil || selected.player == nil {
-		return // teleGroupTarget already reported LANG_NO_CHAR_SELECTED
+		return true // teleGroupTarget already reported LANG_NO_CHAR_SELECTED
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: selected, guid: selected.playerGUID, name: selected.player.Name}) {
-		return // C++ HasLowerSecurity: silent fail
+		// HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+		// (Chat.cpp:96-99).
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	if entry, found, err := s.server.Data.Map(tele.mapID); err != nil || !found || teleIsBattlegroundOrArena(entry) {
 		s.sendSysMessage("You cannot teleport to a battleground or arena map.") // LANG_CANNOT_TELE_TO_BG (733)
-		return
+		return true
 	}
 	group := s.server.groupOfGUID(selected.playerGUID)
 	if group == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in your group.", selected.player.Name)) // LANG_NOT_IN_GROUP (117)
-		return
+		return true
 	}
 	srv := s.server
 	srv.groupsMu.RLock()
@@ -453,7 +466,10 @@ func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
 			continue // C++ skips members with no session
 		}
 		if s.characterTargetLowerSecurity(ctx, characterTarget{online: player, guid: player.playerGUID, name: player.player.Name}) {
-			return // C++ HasLowerSecurity: aborts the whole command
+			// HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+			// (Chat.cpp:96-99); the C++ aborts the whole command.
+			s.sendSysMessage("Your security level is too low.")
+			return true
 		}
 		if player.isBeingTeleported() {
 			s.sendSysMessage(fmt.Sprintf(miscIsTeleported, miscPlayerLink(player.player.Name))) // LANG_IS_TELEPORTED (102)
@@ -474,40 +490,40 @@ func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) {
 		}
 		player.teleportTo(tele.mapID, tele.x, tele.y, tele.z, tele.o)
 	}
+	return true
 }
 
 // handleTeleBareCommand mirrors HandleTeleCommand (cs_tele.cpp:264-296,
 // RBAC 737): teleports the handler to the named location, gated on combat
 // (in combat requires the name permission 740) and on battleground/arena
 // maps (allowed when already on that map or in GM mode).
-func (s *session) handleTeleBareCommand(ctx context.Context, args []string) {
+func (s *session) handleTeleBareCommand(ctx context.Context, args []string) bool {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	if len(args) == 0 || len(args) > 1 {
-		s.sendSysMessage("Syntax: .tele <name>")
-		return
+		return false
 	}
 	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
 	// fails the parse, it is never joined into the lookup.
 	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
-		return
+		return true
 	}
 	if s.isInCombat() && !s.commandAllowed(ctx, permissionCommandTeleName) {
 		s.sendSysMessage("You are in combat!") // LANG_YOU_IN_COMBAT (23)
-		return
+		return true
 	}
 	isGM := s.player.ExtraFlags&playerExtraGMOn != 0
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	if entry, found, err := s.server.Data.Map(tele.mapID); err != nil || !found ||
 		(teleIsBattlegroundOrArena(entry) && (s.player.Map != tele.mapID || !isGM)) {
 		s.sendSysMessage("You cannot teleport to a battleground or arena map.") // LANG_CANNOT_TELE_TO_BG (733)
-		return
+		return true
 	}
 	if s.isInFlight() {
 		s.finishTaxiFlight()
@@ -515,4 +531,5 @@ func (s *session) handleTeleBareCommand(ctx context.Context, args []string) {
 		s.saveRecallPosition() // C++ SaveRecallPosition: save only in non-flight case
 	}
 	s.teleportTo(tele.mapID, tele.x, tele.y, tele.z, tele.o)
+	return true
 }

@@ -33,9 +33,17 @@ import (
 //
 // Targeting mirrors getSelectedPlayer (Chat.cpp:301-309: no selection falls
 // back to the invoker; a set-but-offline selection reports
-// LANG_NO_CHAR_SELECTED) plus the HasLowerSecurity silent fail
-// (s.security < target.security). LANG texts are inlined from the TDB enUS
-// recall (no in-tree trinity_string seed).
+// LANG_NO_CHAR_SELECTED) plus the HasLowerSecurity message leg
+// (s.security < target.security; HasLowerSecurity prints, Chat.cpp:96-99).
+// LANG texts are inlined from the TDB enUS recall (no in-tree trinity_string seed).
+//
+// R13: the root and all 4 arms return bool — bare/unknown subcommands
+// return false (the framework shows the help listing), denial is a silent
+// false (the C++ framework denies before invoking the handler), empty args
+// are silent false (extractKeyFromLink("") returns null with no message),
+// wrong-link-type prints the arm syntax + true (tick-314 quest pattern:
+// C++ sends LANG_WRONG_LINK_TYPE 511 + framework help), and message legs
+// return true (SetSentErrorMessage in C++).
 
 // parseTitleLink mirrors extractKeyFromLink("Htitle") + atoi (Chat.cpp:362):
 // a plain title id or a |Htitle:title_id|h[name]|h|r shift-click link. The
@@ -139,10 +147,19 @@ func (s *session) titlesTarget() *session {
 	if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
 			if s.security < ts.security {
-				return nil // C++ HasLowerSecurity: silent fail
+				// HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+				// (Chat.cpp:96-99).
+				s.sendSysMessage("Your security level is too low.")
+				return nil
 			}
 			return ts
 		}
+		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
+		return nil
+	}
+	if s.player == nil {
+		// getSelectedPlayer is null without a session player
+		// (Chat.cpp:300-303): console reports LANG_NO_CHAR_SELECTED.
 		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
 		return nil
 	}
@@ -255,12 +272,12 @@ func (s *session) handleCharacterTitles(ctx context.Context, args []string) bool
 }
 
 // handleCmdTitles dispatches the "titles" root (cs_titles.cpp:49-52).
-func (s *session) handleCmdTitles(ctx context.Context, args []string) {
+func (s *session) handleCmdTitles(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// Dead root perm 761: the "titles" root is a pure SubCommandEntry
-		// container (deprecated 6-arg overload), ungated syntax listing.
-		s.sendSysMessage("Syntax: .titles add|current|remove|set mask")
-		return
+		// container (deprecated 6-arg overload) with no handler, so the
+		// framework shows the help listing.
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -268,15 +285,15 @@ func (s *session) handleCmdTitles(ctx context.Context, args []string) {
 	// level; match the arm the same way here.
 	switch {
 	case strings.HasPrefix("add", sub):
-		s.handleTitlesAdd(ctx, rest)
+		return s.handleTitlesAdd(ctx, rest)
 	case strings.HasPrefix("current", sub):
-		s.handleTitlesCurrent(ctx, rest)
+		return s.handleTitlesCurrent(ctx, rest)
 	case strings.HasPrefix("remove", sub):
-		s.handleTitlesRemove(ctx, rest)
+		return s.handleTitlesRemove(ctx, rest)
 	case strings.HasPrefix("set", sub):
-		s.handleTitlesSet(ctx, rest)
+		return s.handleTitlesSet(ctx, rest)
 	default:
-		s.sendSysMessage("Syntax: .titles add|current|remove|set mask")
+		return false
 	}
 }
 
@@ -293,34 +310,36 @@ func (s *session) titlesEntry(id uint32) (name, name1 string, maskID uint32, ok 
 }
 
 // handleTitlesAdd mirrors HandleTitlesAddCommand (cs_titles.cpp:123).
-func (s *session) handleTitlesAdd(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTitlesAdd) {
-		return
+func (s *session) handleTitlesAdd(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTitlesAdd) {
+		return false
 	}
 	if len(args) == 0 {
 		// C++ extractKeyFromLink("") returns null -> handler false ->
 		// framework prints the arm help.
-		s.sendSysMessage("Syntax: .titles add <titleId>")
-		return
+		return false
 	}
 	id, ok := parseTitleLink(args[0])
 	if !ok {
+		// Wrong link type: the C++ sends LANG_WRONG_LINK_TYPE (511) and
+		// the handler returns false, so the arm syntax prints as the
+		// framework-help equivalent (tick-314 quest pattern).
 		s.sendSysMessage("Syntax: .titles add <titleId>")
-		return
+		return true
 	}
 	// C++ checks id <= 0 before target selection (cs_titles.cpp:131-137).
 	if id <= 0 {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
-		return
+		return true
 	}
 	target := s.titlesTarget()
 	if target == nil {
-		return
+		return true
 	}
 	name, name1, maskID, ok := s.titlesEntry(uint32(id))
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
-		return
+		return true
 	}
 	wasKnown := target.knowsTitleBit(maskID)
 	if int(maskID/32) < len(target.player.KnownTitles) {
@@ -331,37 +350,40 @@ func (s *session) handleTitlesAdd(ctx context.Context, args []string) {
 	}
 	s.persistTitles(ctx, target)
 	s.sendSysMessage(fmt.Sprintf("Title %d (%s) added to %s.", id, titleName(target, name, name1), target.player.Name)) // LANG_TITLE_ADD_RES 353
+	return true
 }
 
 // handleTitlesCurrent mirrors HandleTitlesCurrentCommand (cs_titles.cpp:84).
-func (s *session) handleTitlesCurrent(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTitlesCurrent) {
-		return
+func (s *session) handleTitlesCurrent(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTitlesCurrent) {
+		return false
 	}
 	if len(args) == 0 {
 		// C++ extractKeyFromLink("") returns null -> handler false ->
 		// framework prints the arm help.
-		s.sendSysMessage("Syntax: .titles current <titleId>")
-		return
+		return false
 	}
 	id, ok := parseTitleLink(args[0])
 	if !ok {
+		// Wrong link type: the C++ sends LANG_WRONG_LINK_TYPE (511) and
+		// the handler returns false, so the arm syntax prints as the
+		// framework-help equivalent (tick-314 quest pattern).
 		s.sendSysMessage("Syntax: .titles current <titleId>")
-		return
+		return true
 	}
 	// C++ checks id <= 0 before target selection (cs_titles.cpp:92-98).
 	if id <= 0 {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
-		return
+		return true
 	}
 	target := s.titlesTarget()
 	if target == nil {
-		return
+		return true
 	}
 	name, name1, maskID, ok := s.titlesEntry(uint32(id))
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
-		return
+		return true
 	}
 	wasKnown := target.knowsTitleBit(maskID)
 	if int(maskID/32) < len(target.player.KnownTitles) {
@@ -373,37 +395,40 @@ func (s *session) handleTitlesCurrent(ctx context.Context, args []string) {
 	target.player.ChosenTitle = maskID
 	s.persistTitles(ctx, target)
 	s.sendSysMessage(fmt.Sprintf("Title %d (%s) set as current for %s.", id, titleName(target, name, name1), target.player.Name)) // LANG_TITLE_CURRENT_RES 355
+	return true
 }
 
 // handleTitlesRemove mirrors HandleTitlesRemoveCommand (cs_titles.cpp:164).
-func (s *session) handleTitlesRemove(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTitlesRemove) {
-		return
+func (s *session) handleTitlesRemove(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTitlesRemove) {
+		return false
 	}
 	if len(args) == 0 {
 		// C++ extractKeyFromLink("") returns null -> handler false ->
 		// framework prints the arm help.
-		s.sendSysMessage("Syntax: .titles remove <titleId>")
-		return
+		return false
 	}
 	id, ok := parseTitleLink(args[0])
 	if !ok {
+		// Wrong link type: the C++ sends LANG_WRONG_LINK_TYPE (511) and
+		// the handler returns false, so the arm syntax prints as the
+		// framework-help equivalent (tick-314 quest pattern).
 		s.sendSysMessage("Syntax: .titles remove <titleId>")
-		return
+		return true
 	}
 	// C++ checks id <= 0 before target selection (cs_titles.cpp:172-178).
 	if id <= 0 {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
-		return
+		return true
 	}
 	target := s.titlesTarget()
 	if target == nil {
-		return
+		return true
 	}
 	name, name1, maskID, ok := s.titlesEntry(uint32(id))
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("Invalid title id: %d.", id)) // LANG_INVALID_TITLE_ID 352
-		return
+		return true
 	}
 	wasKnown := target.knowsTitleBit(maskID)
 	if int(maskID/32) < len(target.player.KnownTitles) {
@@ -419,41 +444,40 @@ func (s *session) handleTitlesRemove(ctx context.Context, args []string) {
 		s.persistTitles(ctx, target)
 		s.sendSysMessage(fmt.Sprintf("Current title reset for %s.", target.player.Name)) // LANG_CURRENT_TITLE_RESET 356
 	}
+	return true
 }
 
 // handleTitlesSet dispatches the "titles set" sub-table (cs_titles.cpp:45):
 // only "mask".
-func (s *session) handleTitlesSet(ctx context.Context, args []string) {
+func (s *session) handleTitlesSet(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// Dead "set"-node perm 765: bare container (deprecated 6-arg
-		// overload), ungated syntax listing.
-		s.sendSysMessage("Syntax: .titles set mask <bitmask>")
-		return
+		// overload) with no handler, so the framework shows the help
+		// listing.
+		return false
 	}
 	if !strings.HasPrefix("mask", strings.ToLower(args[0])) {
-		s.sendSysMessage("Syntax: .titles set mask <bitmask>")
-		return
+		return false
 	}
-	s.handleTitlesSetMask(ctx, args[1:])
+	return s.handleTitlesSetMask(ctx, args[1:])
 }
 
 // handleTitlesSetMask mirrors HandleTitlesSetMaskCommand (cs_titles.cpp:215):
 // the raw 64-bit mask is written to KNOWN_TITLES after stripping bits that
 // belong to no CharTitles entry.
-func (s *session) handleTitlesSetMask(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandTitlesSetMask) {
-		return
+func (s *session) handleTitlesSetMask(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandTitlesSetMask) {
+		return false
 	}
 	if len(args) == 0 {
 		// C++ !*args -> handler false -> framework prints the arm help.
-		s.sendSysMessage("Syntax: .titles set mask <bitmask>")
-		return
+		return false
 	}
 	// sscanf(UI64FMTD) leaves titles at 0 on a parse failure and continues.
 	mask := parseSScanfU64(args[0])
 	target := s.titlesTarget()
 	if target == nil {
-		return
+		return true
 	}
 	// Strip bits with no CharTitles entry (cs_titles.cpp:233-236): only bits
 	// present in the DBC survive.
@@ -482,4 +506,5 @@ func (s *session) handleTitlesSetMask(ctx context.Context, args []string) {
 		s.persistTitles(ctx, target)
 		s.sendSysMessage(fmt.Sprintf("Current title reset for %s.", target.player.Name)) // LANG_CURRENT_TITLE_RESET 356
 	}
+	return true
 }
