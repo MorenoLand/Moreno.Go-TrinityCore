@@ -99,7 +99,9 @@
 -- but Akama;
 -- the elites' only role is attacking the unported Akama, so the arm
 -- stays out (kalecgos precedent). The akama DoAction(
--- ACTION_START_MINIONS) relay has no cross-creature bridge — skipped. 65% & phase<
+-- ACTION_START_MINIONS) relay is skipped — akama has no ev38
+-- receiver and the intro chain rides unported movement/instance
+-- machines (the DoAction dispatch itself IS bridged). 65% & phase<
 -- PHASE_2: the phase-1 timers are canceled and the air-phase timer
 -- chain starts (fly 1s -> warglaive point 6s -> throw warglaive
 -- 39849 2s, non-triggered self-cast -> throw warglaive 2 39635 1s,
@@ -122,13 +124,18 @@
 -- 65% entry (the warglaive-point movement and the pillar
 -- MovePoints have no movement bridge — the chain keeps the
 -- timers, the positions are unmodeled; the NOT_SELECTABLE flag
--- arm stays out — no finalize bearer, see the entry comment);
+-- arm stays out — the finalize bearer exists now (illidanDoAction,
+-- 2026-11-07), but the flag would strand the boss untargetable
+-- whenever the flames are ignored; see the entry comment);
 -- the two flame-of-azzinoth summons spawn from the DB summon
 -- group (Reset :476, no SummonCreatureGroup bridge), so the
 -- both-flames-dead finalize
 -- arm (middle move, glaive returns, land, resume-combat phase 3)
--- has no bearer and the air phase loops on the pillar timer —
--- documented. 30% & phase<PHASE_4: _isDemon -> _isDemon=false,
+-- HAS a bearer since 2026-11-07 (illidanDoAction — the middle
+-- MovePoint stays unmodeled, the landing + resume-combat legs
+-- are ported), so phase 3 starts when both flames die; the
+-- pillar loop is the fallback while they live.
+-- 30% & phase<PHASE_4: _isDemon -> _isDemon=false,
 -- cancel the demon-spell timers, triggered self-cast 40511, phase-4
 -- delayed 12s (the interrupt arm is PORTED 2026-11-04 below in the
 -- 30%-health branch; the root arm ports
@@ -169,8 +176,9 @@
 -- creature:SetRooted (2026-10-21), the gravity arm via
 -- creature:SetDisableGravity(false) (illidanCleanup) and the
 -- sheath arm via creature:SetSheath(0) (2026-10-22); the
--- JustDied instance SetBossState arm is blocked on the
--- instance-script model).
+-- JustDied SetBossState(DONE) arm IS ported (illidanCleanup,
+-- event 4 — stale "no instance bridge" retracted 2026-11-07,
+-- creature:SetBossState is bridged).
 -- Akama (23089): OnEnterCombat arms the healing-potion loop 1s:
 -- health strictly below 20% -> non-triggered self-cast 40535
 -- (C++-exact). OnDamageTaken(9): lethal damage rewritten to
@@ -199,8 +207,11 @@
 -- (C++ ChargeTargetSelector, C++-exact), repeat 5s with a target
 -- else 1s (C++-exact) / flame blast 40631 11s then 12s,
 -- non-triggered self-cast (C++ DoCastAOE). The JustDied
--- ACTION_FLAME_DEAD relay to illidan has no cross-creature
--- bridge — the air-phase finalize arm stays unmodeled.
+-- ACTION_FLAME_DEAD relay to illidan IS ported (flameCleanup,
+-- event 4 — FindNearestCreature + creature:DoAction, ev38
+-- bridge; stale "no cross-creature bridge" retracted
+-- 2026-11-07) and the air-phase finalize arm has a bearer
+-- (illidanDoAction, below).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel timers.
 -- Illidan DB target (23070): OnReset: non-triggered self-cast eye
 -- blast trigger 40017 (C++ DoCastSelf default is triggered=false —
@@ -267,10 +278,12 @@
 -- chain, the blade/shadowfiend scheduler legs, and all DamageTaken /
 -- JustEngagedWith hooks (separate hooks); no instance-
 -- script model — boss admission via the luaBossAI shim (BossAI::
--- JustEngagedWith/JustDied/Reset, the DATA_ILLIDAN_STORMRAGE /
--- DATA_AKAMA / DATA_MAIEV / DATA_ILLIDAN_MUSIC_CONTROLLER
--- bookkeeping arms and every instance->GetCreature DoAction relay
--- skipped); no movement bridge — the illidan liftoff/pillar/
+-- JustEngagedWith/JustDied/Reset, the DATA_AKAMA / DATA_MAIEV /
+-- DATA_ILLIDAN_MUSIC_CONTROLLER bookkeeping arms and the
+-- instance->GetCreature DoAction relays skipped, except the
+-- flame-dead relay, which rides the FindNearestCreature
+-- substitute (illidanDoAction, below)); no movement bridge —
+-- the illidan liftoff/pillar/
 -- glaive-point/middle MovePoints and the akama spline chains are
 -- unmodeled (the illidan air-phase timer chain is kept, the
 -- positions are not); 'no summon bridge' is stale as a blanket
@@ -293,11 +306,13 @@
 -- react arms stay out, documented per-arm; the throw-glaive-2 sheath
 -- arm IS ported via the creature:SetSheath bridge; the Reset
 -- sheath arm IS ported too (illidanCleanup, events 2/23 — 2026-10-22);
--- the intro/air-finalize sheath arms ride unported machines); the
--- air-phase
+-- the intro sheath arm rides an unported machine; the air-finalize
+-- sheath arm IS ported (illidanDoAction, below)); the air-phase
 -- finalize arm (both flames dead -> middle, glaive returns, land,
--- phase 3) has no bearer, so the air phase loops on the pillar
--- timer and phase 3 only ever starts via the resume-demon path;
+-- phase 3) HAS a bearer since 2026-11-07 (illidanDoAction: the
+-- MovePoint middle itself stays unmodeled, the landing + 3s
+-- resume-combat legs are ported, so phase 3 starts when both
+-- flames die instead of only via the resume-demon path);
 -- the 30s dark-barrage pillar extension is approximated by
 -- re-arming the pillar timer 30s from the barrage tick.
 
@@ -307,6 +322,9 @@ local ENTRY_ILLIDAN = 22917
 -- bridged (engine/world/lua_creature_events.go:968).
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+-- boss_illidan.cpp:216-222 (IllidanActions enum):
+-- ACTION_START_ENCOUNTER = 5, so ACTION_FLAME_DEAD = 11.
+local ACTION_FLAME_DEAD = 11
 local ENTRY_AKAMA = 23089
 local ENTRY_FLAME_OF_AZZINOTH = 22997
 local ENTRY_DB_TARGET = 23070
@@ -472,7 +490,7 @@ local function getIllidanState(guid)
     local state = illidanState[guid]
     if state == nil then
         state = { phase = PHASE_1, dead = false, isDemon = false,
-                  pillarIndex = 0 }
+                  pillarIndex = 0, flameCount = 0 }
         illidanState[guid] = state
     end
     return state
@@ -1007,8 +1025,8 @@ local function onFly(creature, guid)
 end
 
 -- C++ DoAction(ACTION_START_PHASE_4): cancel GROUP_PHASE_3 (here
--- the armed phase-1/2/3 timers — the air-phase cancel is a
--- documented extension since the finalize arm has no bearer),
+-- the armed phase-1/2/3 timers — the air-phase cancel is a safety
+-- net now that the finalize arm has a bearer (illidanDoAction)),
 -- triggered self-cast shadow prison 40647, Talk 500ms, summon
 -- maiev (cast kept, summon unmodeled) 9s, confront text 9s,
 -- resume combat 13s re-arming the phase-4 schedule. The REACT_
@@ -1017,10 +1035,11 @@ end
 -- the summon-DoAction arm has no bridge.
 local function startPhase4(creature, guid)
     cancelPhaseSchedule(guid)
-    -- The air-phase timers are canceled here too: the both-flames-
-    -- dead finalize arm has no bearer, so without this the pillar
-    -- loop would run under the phase-4 schedule (documented
-    -- extension of the C++ GROUP_PHASE_3 cancel). The minions weave
+    -- The air-phase timers are canceled here too as a safety net:
+    -- the both-flames-dead finalize (illidanDoAction) already
+    -- cancels them, but a phase-4 entry that bypasses the air
+    -- phase would otherwise leave the pillar loop running under
+    -- the phase-4 schedule. The minions weave
     -- (GROUP_PHASE_ALL) survives, C++-exact.
     cancelAirPhase(guid)
     creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
@@ -1139,7 +1158,8 @@ end
 local function illidanEnterCombat(event, creature)
     local guid = creature:GetGUID()
     illidanState[guid] = { phase = PHASE_1, dead = false,
-                           isDemon = false, pillarIndex = 0 }
+                           isDemon = false, pillarIndex = 0,
+                           flameCount = 0 }
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     -- C++ JustEngagedWith (:495-496): musicController->PlayDirectMusic
@@ -1243,10 +1263,11 @@ local function illidanDamageTaken(event, creature, attacker, damage)
         -- AttackStop (:597) and gravity-disable (:600) arms are
         -- PORTED below in C++ arm order. The flag arm (:598,
         -- NOT_SELECTABLE) stays out deliberately: C++ clears it at
-        -- RESUME_COMBAT (:935), which has no Lua bearer (the
-        -- flames-dead finalize never fires), so setting it here
-        -- would leave the boss untargetable through the pillar
-        -- loop and stall the 30% transition; the LIFTOFF emote
+        -- RESUME_COMBAT (:935), whose Lua bearer is the flames-dead
+        -- finalize (illidanDoAction, 2026-11-07) — but setting the
+        -- flag here would still leave the boss untargetable through
+        -- the pillar loop whenever the flames are ignored, stalling
+        -- the 30% transition; the LIFTOFF emote
         -- (:599, EMOTE_ONESHOT_LIFTOFF, SharedDefines.h:2003,
         -- value 254) ports via creature:PerformEmote, and the takeoff
         -- sound (:601, ILLIDAN_TAKEOFF_SOUND_ID 11479, boss_illidan.cpp:81)
@@ -1306,6 +1327,49 @@ local function illidanTargetDied(event, creature, victim)
     end
 end
 
+-- C++ boss_illidan_stormrageAI::DoAction, ACTION_FLAME_DEAD
+-- (boss_illidan.cpp:606-612): _flameCount++; at 2 -> _flameCount = 0
+-- and DoAction(ACTION_FINALIZE_AIR_PHASE). The count is per-GUID
+-- (C++ member, Reset :483); the relay sender is the flame's
+-- JustDied (flameCleanup, event 4, above).
+local function illidanDoAction(event, creature, action)
+    if action ~= ACTION_FLAME_DEAD then
+        return
+    end
+    local guid = creature:GetGUID()
+    local state = getIllidanState(guid)
+    state.flameCount = state.flameCount + 1
+    if state.flameCount < 2 then
+        return
+    end
+    state.flameCount = 0
+    -- C++ ACTION_FINALIZE_AIR_PHASE (boss_illidan.cpp:614-621):
+    -- InterruptNonMeleeSpells(false), motion Clear (no movement
+    -- bridge — skipped, documented), CancelEventGroup(GROUP_PHASE_2)
+    -- + CancelEvent(EVENT_FLY_TO_RANDOM_PILLAR), _phase = PHASE_3,
+    -- MovePoint(POINT_ILLIDAN_MIDDLE) (no movement bridge — skipped,
+    -- documented). GROUP_PHASE_2 is fireball/eyeBlast/darkBarrage
+    -- (:533-540); the pillar timer is the Lua's FLY_TO_RANDOM_PILLAR.
+    -- The GLAIVE_EMOTE landing legs (:928-932: SetDisableGravity(false),
+    -- SetSheath(MELEE), RESUME_COMBAT in 3s) follow here in C++ arm
+    -- order; RESUME_COMBAT (:934-938: RemoveFlag NOT_SELECTABLE,
+    -- REACT_AGGRESSIVE, ScheduleEvents(GROUP_PHASE_3)) lands in the
+    -- 3s callback — the flag arm stays out (the flag was never set at
+    -- the 65% entry, see illidanDamageTaken).
+    creature:InterruptNonMeleeSpells(false)
+    for _, key in ipairs({ "pillar", "fireball", "eyeBlast",
+            "darkBarrage" }) do
+        cancelTimer(guid, key)
+    end
+    state.phase = PHASE_3
+    creature:SetDisableGravity(false)
+    creature:SetSheath(1) -- SHEATH_STATE_MELEE
+    schedule(guid, "resumeCombat", 3000, function()
+        creature:SetReactState(2) -- REACT_AGGRESSIVE
+        armPhaseSchedule(creature, guid, PHASE_3)
+    end)
+end
+
 local function illidanCleanup(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -1323,10 +1387,12 @@ local function illidanCleanup(event, creature)
         creature:SetSheath(0) -- SHEATH_STATE_UNARMED (boss_illidan.cpp:478)
     end
     if event == 4 then
-        -- C++ boss_illidan_stormrage::JustDied (boss_illidan.cpp:649):
-        -- clear the NOT_SELECTABLE set by the defeat sequence (death
-        -- path only — the handler is shared with events 2/23).
+        -- C++ boss_illidan_stormrage::JustDied (boss_illidan.cpp:649-651):
+        -- clear the NOT_SELECTABLE set by the defeat sequence, then
+        -- instance->SetBossState(DATA_ILLIDAN_STORMRAGE = 8, DONE)
+        -- (death path only — the handler is shared with events 2/23).
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetBossState(8, 3) -- DATA_ILLIDAN_STORMRAGE, DONE
     end
 end
 
@@ -1334,6 +1400,7 @@ RegisterCreatureEvent(ENTRY_ILLIDAN, 1, illidanEnterCombat)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 2, illidanCleanup)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 3, illidanTargetDied)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 4, illidanCleanup)
+RegisterCreatureEvent(ENTRY_ILLIDAN, 38, illidanDoAction)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 9, illidanDamageTaken)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 23, illidanCleanup)
 
@@ -1499,6 +1566,18 @@ end
 
 local function flameCleanup(event, creature)
     cancelTimers(creature:GetGUID())
+    if event == 4 then
+        -- C++ npc_flame_of_azzinoth::JustDied (boss_illidan.cpp:1537-1541):
+        -- illidan->AI()->DoAction(ACTION_FLAME_DEAD); the instance-GUID
+        -- lookup is substituted with FindNearestCreature(22917, 100.0)
+        -- (the maievJustAppeared idiom) and the nil-guard mirrors the
+        -- C++ if; the DoAction fires ev38 on illidan (bridged,
+        -- lua_creature_events.go:827).
+        local illidan = creature:FindNearestCreature(ENTRY_ILLIDAN, 100.0)
+        if illidan then
+            illidan:DoAction(ACTION_FLAME_DEAD)
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_FLAME_OF_AZZINOTH, 1, flameEnterCombat)

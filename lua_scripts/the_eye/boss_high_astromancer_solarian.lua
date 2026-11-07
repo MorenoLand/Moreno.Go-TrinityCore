@@ -119,7 +119,9 @@
 -- (C++-exact). Melee is engine-driven.
 -- OnTargetDied(3): Talk(SAY_KILL) unconditionally (no player
 -- gate, C++-exact). OnDied(4): Talk(SAY_DEATH) + cleanup
--- (the _JustDied arm is instance-blocked); the SetObjectScale
+-- (the _JustDied SetBossState(DONE) arm IS ported below —
+-- stale "instance-blocked" retracted 2026-11-07,
+-- creature:SetBossState is bridged); the SetObjectScale
 -- restore arm is ported as a scale clear, and the
 -- RemoveFlag(NOT_SELECTABLE) + SetVisible(true) guarantee arms are
 -- ported too (2026-10-23 — visibility bridge is live; the stale
@@ -141,8 +143,10 @@
 -- instance-script model — boss admission via the luaBossAI
 -- shim (instance_the_eye.cpp stays blocked on the instance-
 -- script model; the BossAI ctor DATA_HIGH_ASTROMANCER_
--- SOLARIAN = 2 bookkeeping in Reset/JustEngagedWith/JustDied
--- skipped); the phase 2/3 portal machine IS ported (tick 293):
+-- SOLARIAN = 2 bookkeeping in Reset/JustEngagedWith is
+-- skipped, but the JustDied SetBossState(DONE) arm IS
+-- ported below (creature:SetBossState, bridged)); the phase
+-- 2/3 portal machine IS ported (tick 293):
 -- UpdatePosition via creature:Teleport (alar precedent),
 -- motion-master Clear via the StopMoving (MoveClear) twin,
 -- spotlight/agent/priest summons via SummonCreature with the
@@ -184,6 +188,8 @@ local SUMMON_TIMED_DESPAWN = 2 -- Go 0-based TempSummonType (spells.go)
 local SUMMON_TIMED_DESPAWN_OUT_OF_COMBAT = 3 -- Go 0-based TempSummonType
 
 local ENTRY_SOLARIAN = 18805
+-- the_eye.h:31 (TEDataTypes): DATA_HIGH_ASTROMANCER_SOLARIAN = 2.
+local DATA_HIGH_ASTROMANCER_SOLARIAN = 2
 
 local MODEL_HUMAN = 18239 -- boss_astromancer.cpp:72
 local MODEL_VOIDWALKER = 18988 -- boss_astromancer.cpp:73
@@ -627,16 +633,21 @@ RegisterCreatureEvent(ENTRY_SOLARIAN, 3, function(_, creature)
     creature:Talk(SAY_KILL)
 end)
 
--- C++ JustDied: Talk(SAY_DEATH) + cleanup (the _JustDied arm
--- is instance-blocked); the SetObjectScale(defaultsize) restore
--- arm is ported as a scale clear and the SetDisplayId(MODEL_HUMAN)
--- restore as SetDisplayId(MODEL_HUMAN) (the stale "paired with the
--- unbridged reveal legs" rationale retracted — the reveal is
--- non-vacuous now that the phase 2/3 machine conceals her).
+-- C++ JustDied (boss_astromancer.cpp:152-157): SetObjectScale
+-- (defaultsize) + SetDisplayId(MODEL_HUMAN) + Talk(SAY_DEATH) +
+-- _JustDied() -> SetBossState(DATA_HIGH_ASTROMANCER_SOLARIAN,
+-- DONE). The scale restore ports as a scale clear and the
+-- SetDisplayId restore as SetDisplayId(MODEL_HUMAN) (the stale
+-- "paired with the unbridged reveal legs" rationale retracted —
+-- the reveal is non-vacuous now that the phase 2/3 machine
+-- conceals her); the _JustDied arm IS ported below (stale
+-- "instance-blocked" retracted 2026-11-07, creature:SetBossState
+-- is bridged).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 4, function(_, creature)
     creature:SetScale(0)
     creature:SetDisplayId(MODEL_HUMAN)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(DATA_HIGH_ASTROMANCER_SOLARIAN, 3) -- DONE
     fullReset(creature:GetGUID())
 end)
 

@@ -10,8 +10,9 @@
 -- Entry: 19710 (wowhead-verified — mechanar.h carries no
 -- NPC_ constant for Iron-Hand; the creature_template
 -- ScriptName bindings are DB-side, no TDB in this
--- workspace). DATA_GATEWATCHER_IRON_HAND = 1 is
--- instance-side, unbridgeable.
+-- workspace). DATA_GATEWATCHER_IRON_HAND = 1
+-- (mechanar.h:31, MRDataTypes); the JustDied _JustDied arm
+-- IS ported below via creature:SetBossState (bridged).
 -- Talk: SAY_AGGRO = 0 (engage — OnEnterCombat, C++-exact),
 -- SAY_HAMMER = 1 (50% roll with the jackhammer arm —
 -- KilledUnit-style roll_chance_i(50), C++-exact), SAY_SLAY =
@@ -40,8 +41,9 @@
 --    H_SPELL_JACKHAMMER 39194 exist in the C++ enum but are
 --    NEVER used by UpdateAI — the port fires the normal
 --    spells always (C++-exact, not IsHeroic-gated).
--- OnDied(4): Talk(SAY_DEATH) (C++-exact); the BossAI
--- _JustDied arm is instance-blocked, unmodeled.
+-- OnDied(4): _JustDied() + Talk(SAY_DEATH) (C++-exact —
+-- the SetBossState(DONE) arm IS ported below, stale
+-- "instance-blocked" retracted 2026-11-07).
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() / BossAI _Reset() arms are instance-blocked).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
@@ -61,6 +63,8 @@ local SAY_DEATH = 3
 local EMOTE_HAMMER = 4
 
 local ENTRY_GATEWATCHER_IRON_HAND = 19710
+-- mechanar.h:31 (MRDataTypes): DATA_GATEWATCHER_IRON_HAND = 1.
+local DATA_GATEWATCHER_IRON_HAND = 1
 
 local timers = {}
 local states = {}
@@ -168,6 +172,10 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 4, function(_, creature)
+    -- C++ JustDied (boss_gatewatcher_ironhand.cpp:80-83): _JustDied()
+    -- -> SetBossState(DATA_GATEWATCHER_IRON_HAND, DONE), then
+    -- Talk(SAY_DEATH) — C++ arm order.
+    creature:SetBossState(DATA_GATEWATCHER_IRON_HAND, 3) -- DONE
     creature:Talk(SAY_DEATH)
     resetBoss(creature:GetGUID())
 end)
