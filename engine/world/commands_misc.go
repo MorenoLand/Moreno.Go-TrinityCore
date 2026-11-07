@@ -439,7 +439,9 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 // the same as a bare id.
 func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .additem set <itemsetId>"
-	if len(args) == 0 {
+	// ChatCommand.h:112 - the Variant<Hyperlink<itemset>, uint32> arg is
+	// exactly one token; a trailing token fails the parse.
+	if len(args) != 1 {
 		return false
 	}
 	var setID uint32
@@ -631,6 +633,10 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAura) {
 		return false
 	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) > 1 {
+		return false
+	}
 	// The framework parses the SpellInfo const* arg before the handler
 	// runs (cs_misc.cpp:304), so a bad token reports before the selection
 	// check, and a missing token is silent false even with no target
@@ -686,6 +692,10 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) bool {
 // targets — not the timer-only clearActiveAuras strip.
 func (s *session) handleCmdUnAura(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandUnAura) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) > 1 {
 		return false
 	}
 	// The framework parses the Variant<SpellInfo const*, "all"> arg
@@ -844,6 +854,10 @@ func (s *session) handleCmdBank(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandBank) {
 		return false
 	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) != 0 {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
@@ -862,6 +876,10 @@ func (s *session) handleCmdBank(ctx context.Context, args []string) bool {
 // the view-swap effect follows the engine's aura model (documented gap).
 func (s *session) handleCmdBindSight(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandBindSight) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) != 0 {
 		return false
 	}
 	if s.player == nil {
@@ -917,6 +935,10 @@ func (s *session) miscIsPossessing() bool {
 // defensive only.
 func (s *session) handleCmdUnBindSight(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandUnBindSight) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) != 0 {
 		return false
 	}
 	if s.player == nil {
@@ -990,6 +1012,10 @@ func (s *session) handleCmdComeToMe(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandComeToMe) {
 		return false
 	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) != 0 {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
@@ -1013,6 +1039,10 @@ func (s *session) handleCmdCommands(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCommands) {
 		return false
 	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) != 0 {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
@@ -1027,6 +1057,10 @@ func (s *session) handleCmdCommands(ctx context.Context, args []string) bool {
 // mirrors the C++ SpellInfo parser.
 func (s *session) handleCmdCooldown(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCooldown) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) > 1 {
 		return false
 	}
 	// C++ HandleCooldownCommand (cs_misc.cpp:723-760): the selected unit;
@@ -1486,6 +1520,10 @@ func (s *session) handleCmdDev(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDev) {
 		return false
 	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) > 1 {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
@@ -1510,6 +1548,10 @@ func (s *session) handleCmdDev(ctx context.Context, args []string) bool {
 // unmodeled (documented gap).
 func (s *session) handleCmdDie(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDie) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) != 0 {
 		return false
 	}
 	if s.player == nil {
@@ -1588,6 +1630,10 @@ func (s *session) dieSelectedCreature(ctx context.Context, motion *creatureMotio
 // selected player or self, with the not-mounted and in-flight gates.
 func (s *session) handleCmdDismount(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDismount) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) != 0 {
 		return false
 	}
 	target := s.miscSelectedPlayerSession()
@@ -1701,6 +1747,10 @@ func (s *session) handleCmdDistance(ctx context.Context, args []string) bool {
 // player gate and reports the total to the invoker instead.
 func (s *session) handleCmdFlushArenaPoints(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandFlushArenaPoints) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) != 0 {
 		return false
 	}
 	if s.player == nil {

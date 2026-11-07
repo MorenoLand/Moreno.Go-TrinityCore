@@ -529,7 +529,8 @@ func (s *session) handleCmdShowArea(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandShowArea) {
 		return false
 	}
-	if len(args) == 0 {
+	// ChatCommand.h:112 - the uint32 arg is exactly one token.
+	if len(args) != 1 {
 		return false
 	}
 	areaID, ok := parseCommandUint32(args[0])
@@ -564,7 +565,8 @@ func (s *session) handleCmdHideArea(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandHideArea) {
 		return false
 	}
-	if len(args) == 0 {
+	// ChatCommand.h:112 - the uint32 arg is exactly one token.
+	if len(args) != 1 {
 		return false
 	}
 	areaID, ok := parseCommandUint32(args[0])
@@ -632,6 +634,10 @@ func misc2ValidBag0Pos(slot uint8, explicit bool) bool {
 // packet on equip destinations.
 func (s *session) handleCmdItemMove(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandItemMove) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) > 2 {
 		return false
 	}
 	if s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
@@ -787,6 +793,10 @@ func misc2GraveTeamName(team uint32) string {
 // update is needed for the link to take effect.
 func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandLinkGrave) {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) > 2 {
 		return false
 	}
 	if s.player == nil || s.server == nil || s.server.Data == nil {
@@ -1242,6 +1252,10 @@ func (s *session) handleCmdNearGrave(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandNearGrave) {
 		return false
 	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) > 1 {
+		return false
+	}
 	if s.player == nil || s.server == nil || s.server.Data == nil {
 		return false
 	}
@@ -1613,7 +1627,8 @@ func (s *session) handleCmdPlayAll(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandPlayAll) {
 		return false
 	}
-	if len(args) == 0 {
+	// ChatCommand.h:112 - the uint32 arg is exactly one token.
+	if len(args) != 1 {
 		return false
 	}
 	soundID, ok := parseCommandUint32(args[0])
@@ -2306,6 +2321,10 @@ func (s *session) handleCmdUnFreeze(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandUnFreeze) {
 		return false
 	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	if len(args) > 1 {
+		return false
+	}
 	var name string
 	var target *session
 	if len(args) > 0 && args[0] != "" {
@@ -2536,12 +2555,14 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) boo
 	if !s.commandAllowed(ctx, permissionCommandChangeWeather) {
 		return false
 	}
+	// ChatCommand.h:112 - the (WeatherType, float) args are exactly
+	// two tokens; a trailing token fails the parse.
 	// The C++ framework parses the (WeatherType, float) args before the
 	// handler runs (ChatCommandArgs.h), so a bad arg is a syntax failure
 	// even with weather disabled, and the float parse rejects non-finite
 	// values (std::isfinite, ChatCommandArgs.h:69) — only then does
 	// HandleChangeWeather check CONFIG_WEATHER (cs_misc.cpp:1337).
-	if len(args) < 2 {
+	if len(args) != 2 {
 		return false
 	}
 	wtype, ok := miscParseWeatherType(args[0])

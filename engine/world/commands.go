@@ -9273,37 +9273,114 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("freeze", func(ctx context.Context, args []string) bool { return s.handleCmdFreeze(ctx, args) }, nil, nil).withPerm(permissionCommandFreeze)
 	root.add("revive", func(ctx context.Context, args []string) bool { return s.handleCmdRevive2(ctx, args) }, nil, nil).withPerm(permissionCommandRevive)
 	root.add("dismount", func(ctx context.Context, args []string) bool { return s.handleCmdDismount(ctx, args) }, nil, nil).withPerm(permissionCommandDismount)
-	root.add("saveall", func(ctx context.Context, args []string) bool { return s.handleCmdSaveAll(ctx) }, nil, nil).withPerm(permissionCommandSaveAll)
-	root.add("save", func(ctx context.Context, args []string) bool { return s.handleCmdSave2(ctx) }, nil, nil).withPerm(permissionCommandSave)
+	root.add("saveall", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdSaveAll(ctx)
+	}, nil, nil).withPerm(permissionCommandSaveAll)
+	root.add("save", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdSave2(ctx)
+	}, nil, nil).withPerm(permissionCommandSave)
 	root.add("gps", func(ctx context.Context, args []string) bool { return s.handleCmdGPS(ctx, args) }, nil, nil).withPerm(permissionCommandGPS)
-	root.add("guid", func(ctx context.Context, args []string) bool { return s.handleCmdGUID(ctx) }, nil, nil).withPerm(permissionCommandGUID)
+	root.add("guid", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdGUID(ctx)
+	}, nil, nil).withPerm(permissionCommandGUID)
 	root.add("help", func(ctx context.Context, args []string) bool { return s.handleCmdHelp2(ctx, args) }, nil, nil).withPerm(permissionCommandHelp)
 	root.add("hidearea", func(ctx context.Context, args []string) bool { return s.handleCmdHideArea(ctx, args) }, nil, nil).withPerm(permissionCommandHideArea)
 	root.add("itemmove", func(ctx context.Context, args []string) bool { return s.handleCmdItemMove(ctx, args) }, nil, nil).withPerm(permissionCommandItemMove)
 	root.add("kick", func(ctx context.Context, args []string) bool { return s.handleCmdKickPlayer(ctx, args) }, nil, nil).withPerm(permissionCommandKick)
 	root.add("linkgrave", func(ctx context.Context, args []string) bool { return s.handleCmdLinkGrave(ctx, args) }, nil, nil).withPerm(permissionCommandLinkGrave)
-	root.add("listfreeze", func(ctx context.Context, args []string) bool { return s.handleCmdListFreeze(ctx) }, nil, nil).withPerm(permissionCommandListFreeze)
-	root.add("maxskill", func(ctx context.Context, args []string) bool { return s.handleCmdMaxSkill(ctx) }, nil, nil).withPerm(permissionCommandMaxSkill)
-	root.add("movegens", func(ctx context.Context, args []string) bool { return s.handleCmdMovegens(ctx) }, nil, nil).withPerm(permissionCommandMovegens)
+	root.add("listfreeze", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdListFreeze(ctx)
+	}, nil, nil).withPerm(permissionCommandListFreeze)
+	root.add("maxskill", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdMaxSkill(ctx)
+	}, nil, nil).withPerm(permissionCommandMaxSkill)
+	root.add("movegens", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdMovegens(ctx)
+	}, nil, nil).withPerm(permissionCommandMovegens)
 	root.add("mute", func(ctx context.Context, args []string) bool { return s.handleCmdMute(ctx, args) }, nil, nil).withPerm(permissionCommandMute)
 	root.add("mutehistory", func(ctx context.Context, args []string) bool { return s.handleCmdMuteHistory(ctx, args) }, nil, nil).withPerm(permissionCommandMuteHistory)
 	root.add("neargrave", func(ctx context.Context, args []string) bool { return s.handleCmdNearGrave(ctx, args) }, nil, nil).withPerm(permissionCommandNearGrave)
 	root.add("pinfo", func(ctx context.Context, args []string) bool { return s.handleCmdPInfo(ctx, args) }, nil, nil).withPerm(permissionCommandPInfo)
 	root.add("playall", func(ctx context.Context, args []string) bool { return s.handleCmdPlayAll(ctx, args) }, nil, nil).withPerm(permissionCommandPlayAll)
-	root.add("possess", func(ctx context.Context, args []string) bool { return s.handleCmdPossess(ctx) }, nil, nil).withPerm(permissionCommandPossess)
-	root.add("pvpstats", func(ctx context.Context, args []string) bool { return s.handleCmdPvPstats(ctx) }, nil, nil).withPerm(permissionCommandPvPstats)
+	root.add("possess", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdPossess(ctx)
+	}, nil, nil).withPerm(permissionCommandPossess)
+	root.add("pvpstats", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdPvPstats(ctx)
+	}, nil, nil).withPerm(permissionCommandPvPstats)
 	root.add("recall", func(ctx context.Context, args []string) bool { return s.handleCmdRecall(ctx, args) }, nil, nil).withPerm(permissionCommandRecall)
 	root.add("repairitems", func(ctx context.Context, args []string) bool { return s.handleCmdRepairItems(ctx, args) }, nil, nil).withPerm(permissionCommandRepairItems)
-	root.add("respawn", func(ctx context.Context, args []string) bool { return s.handleCmdRespawn(ctx) }, nil, nil).withPerm(permissionCommandRespawn)
+	root.add("respawn", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdRespawn(ctx)
+	}, nil, nil).withPerm(permissionCommandRespawn)
 	root.add("setskill", func(ctx context.Context, args []string) bool { return s.handleCmdSetSkill(ctx, args) }, nil, nil).withPerm(permissionCommandSetSkill)
 	root.add("showarea", func(ctx context.Context, args []string) bool { return s.handleCmdShowArea(ctx, args) }, nil, nil).withPerm(permissionCommandShowArea)
 	root.add("summon", func(ctx context.Context, args []string) bool { return s.handleCmdSummon(ctx, args) }, nil, nil).withPerm(permissionCommandSummon)
 	root.add("unfreeze", func(ctx context.Context, args []string) bool { return s.handleCmdUnFreeze(ctx, args) }, nil, nil).withPerm(permissionCommandUnFreeze)
 	root.add("unmute", func(ctx context.Context, args []string) bool { return s.handleCmdUnmute(ctx, args) }, nil, nil).withPerm(permissionCommandUnMute)
-	root.add("unpossess", func(ctx context.Context, args []string) bool { return s.handleCmdUnPossess(ctx) }, nil, nil).withPerm(permissionCommandUnPossess)
+	root.add("unpossess", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdUnPossess(ctx)
+	}, nil, nil).withPerm(permissionCommandUnPossess)
 	root.add("unstuck", func(ctx context.Context, args []string) bool { return s.handleCmdUnstuck(ctx, args) }, nil, nil).withPerm(permissionCommandUnstuck)
 	root.add("wchange", func(ctx context.Context, args []string) bool { return s.handleCmdChangeWeather(ctx, args) }, nil, nil).withPerm(permissionCommandChangeWeather)
-	root.add("mailbox", func(ctx context.Context, args []string) bool { return s.handleCmdMailBox(ctx) }, nil, nil).withPerm(permissionCommandMailBox)
+	root.add("mailbox", func(ctx context.Context, args []string) bool {
+		// ChatCommand.h:112 - the C++ handler takes no args; a trailing
+		// token fails the whole-string-consumed check.
+		if len(args) > 0 {
+			return false
+		}
+		return s.handleCmdMailBox(ctx)
+	}, nil, nil).withPerm(permissionCommandMailBox)
 	root.addWithPerms("mmap", func(ctx context.Context, args []string) bool { return s.handleCmdMMap(ctx, args) }, map[string]uint32{"loadedtiles": permissionCommandMMapLoadedTiles, "loc": permissionCommandMMapLoc, "path": permissionCommandMMapPath, "stats": permissionCommandMMapStats, "testarea": permissionCommandMMapTestArea}, nil).withPerm(permissionCommandMMap)
 	root.add("morph", func(ctx context.Context, args []string) bool { return s.handleCmdMorph(ctx, args) }, nil, nil).withPerm(permissionCommandMorph)
 	root.add("demorph", func(ctx context.Context, args []string) bool { return s.handleCmdDeMorph(ctx) }, nil, nil).withPerm(permissionCommandDeMorph)
