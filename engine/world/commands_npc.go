@@ -90,14 +90,14 @@ const npcbotEntryMask = 0x04000000 | 0x08000000
 
 // handleCmdNPC dispatches the "npc" root (cs_npc.cpp:89-116). Chunk 1 covers
 // the "add" sub-table and the flat arms move/delete/near; the rest lands in
-// chunk 2. The bool reports C++ handler success and propagates the move
-// arm's silent-false path; every other arm returns true (it prints its own
-// message or succeeds).
+// chunk 2. R13: the bool reports C++ handler success — denial and parse
+// failures return false silently (dispatch shows the node's help listing),
+// message legs return true — and propagates every arm's bool through the
+// add/set/chunk dispatchers.
 func (s *session) handleCmdNPC(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .npc add|set|move|delete|near|info|playemote|say|textemote|whisper|yell|tame|spawngroup|despawngroup|follow|evade|showloot"
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -109,46 +109,38 @@ func (s *session) handleCmdNPC(ctx context.Context, args []string) bool {
 	rest := args[1:]
 	switch {
 	case strings.HasPrefix("add", sub):
-		s.handleNPCAddTable(ctx, rest)
+		return s.handleNPCAddTable(ctx, rest)
 	case strings.HasPrefix("move", sub):
 		return s.handleNPCMove(ctx, rest)
 	case strings.HasPrefix("delete", sub):
-		s.npcDeleteSub(ctx, rest)
+		return s.npcDeleteSub(ctx, rest)
 	case strings.HasPrefix("near", sub):
-		s.handleNPCNear(ctx, rest)
+		return s.handleNPCNear(ctx, rest)
 	default:
-		if s.handleNPCChunk2(ctx, sub, rest) {
-			return true
-		}
-		s.sendSysMessage(syntax)
+		return s.handleNPCChunk2(ctx, sub, rest)
 	}
-	return true
 }
 
 // handleNPCAddTable dispatches the "add" sub-table (cs_npc.cpp:61-71).
-func (s *session) handleNPCAddTable(ctx context.Context, args []string) {
+func (s *session) handleNPCAddTable(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .npc add [formation|item|move|temp] <args> | .npc add <entry>"
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandNPCAdd) {
-			return
-		}
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
 	switch {
 	case strings.HasPrefix("formation", sub):
-		s.handleNPCAddFormation(ctx, rest)
+		return s.handleNPCAddFormation(ctx, rest)
 	case strings.HasPrefix("item", sub):
-		s.handleNPCAddItem(ctx, rest)
+		return s.handleNPCAddItem(ctx, rest)
 	case strings.HasPrefix("move", sub):
-		s.handleNPCAddMove(ctx, rest)
+		return s.handleNPCAddMove(ctx, rest)
 	case strings.HasPrefix("temp", sub):
-		s.handleNPCAddTemp(ctx, rest)
+		return s.handleNPCAddTemp(ctx, rest)
 	default:
 		// The "" table entry: ".npc add <entry>".
-		s.handleNPCAdd(ctx, args)
+		return s.handleNPCAdd(ctx, args)
 	}
 }
 
@@ -162,27 +154,25 @@ func (s *session) handleNPCAddTable(ctx context.Context, args []string) {
 // exactly like C++, so the row stays inert until groupAI gains
 // FLAG_IDLE_IN_FORMATION (0x200) — LeaderStartedMoving skips members
 // without it, in both trees.
-func (s *session) handleNPCAddFormation(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCAddFormation) {
-		return
+func (s *session) handleNPCAddFormation(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCAddFormation) {
+		return false
 	}
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .npc add formation $leaderGUID")
-		return
+		return false
 	}
 	leaderGUID, err := strconv.ParseUint(args[0], 0, 32)
 	if err != nil {
-		s.sendSysMessage("Invalid leader GUID.")
-		return
+		return false
 	}
 	if uint16(s.selection>>48) != 0xF130 {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	memberLow := uint32(s.selection & 0x00FFFFFF)
 	if memberLow == 0 {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	server := s.server
 	// C++ checks the selected creature, then GetFormation() on the live
@@ -192,21 +182,22 @@ func (s *session) handleNPCAddFormation(ctx context.Context, args []string) {
 	member := s.findCreatureMotion(s.selection)
 	if member == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if row, ok := server.formationRowFor(memberLow); ok {
 		s.sendSysMessage(fmt.Sprintf("Selected creature is already member of group %d", row.leaderGUID))
-		return
+		return false
 	}
 	followAngle := (math.Atan2(float64(s.player.Y-member.Y), float64(s.player.X-member.X)) - float64(s.player.Orientation)) * 180.0 / math.Pi
 	followDist := math.Hypot(float64(s.player.X-member.X), float64(s.player.Y-member.Y))
 	if _, err := server.WorldStore.DB.ExecContext(ctx, "INSERT INTO creature_formations (leaderGUID, memberGUID, dist, angle, groupAI) VALUES (?, ?, ?, ?, ?)", uint32(leaderGUID), memberLow, float32(followAngle), float32(followDist), 0); err != nil {
 		s.sendSysMessage("Failed to store the formation row.")
-		return
+		return true
 	}
 	server.ensureFormationsLoaded(ctx)
 	server.addFormationRow(memberLow, formationRow{leaderGUID: uint32(leaderGUID), dist: float32(followAngle), angle: float32(followDist)})
 	s.sendSysMessage(fmt.Sprintf("Creature %d added to formation with leader %d", memberLow, uint32(leaderGUID)))
+	return true
 }
 
 // npcItemTokenID parses a C++ ItemTemplate command argument
@@ -249,26 +240,23 @@ func npcVendorUintArg(token string) (uint32, bool) {
 // loads vendor rows from the DB on every list/buy call, so the row is
 // immediately visible with no cache to refresh. Success reports
 // LANG_ITEM_ADDED_TO_LIST (id, name, maxcount, incrtime, extendedcost).
-func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCAddItem) {
-		return
+func (s *session) handleNPCAddItem(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCAddItem) {
+		return false
 	}
 	const syntax = "Syntax: .npc add item <itemId|itemLink> [maxcount] [incrtime] [extendedcost]"
 	if len(args) == 0 || len(args) > 4 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	itemID, link, ok := npcItemTokenID(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	var maxcount, incrtime, extendedcost uint32
 	for i, token := range args[1:] {
 		v, ok := npcVendorUintArg(token)
 		if !ok {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		switch i {
 		case 0:
@@ -281,7 +269,7 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	// C++ checks the nil-item leg before the vendor selection
 	// (cs_npc.cpp:179-192): a link resolving to no template reaches the
@@ -292,19 +280,18 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 	itemMissing := false
 	if err := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName); err != nil {
 		if !link {
-			s.sendSysMessage(fmt.Sprintf("Item %d does not exist.", itemID))
-			return
+			return false
 		}
 		itemMissing = true
 	}
 	if itemMissing {
 		s.sendSysMessage("You need to send an item.")
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	vendorEntry := motion.Entry
@@ -312,36 +299,37 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 	var npcFlag uint32
 	if err := db.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0) FROM creature_template WHERE entry = ?", vendorEntry).Scan(&npcFlag); err != nil || npcFlag&unitNPCFlagVendor == 0 {
 		s.sendSysMessage("You need to select a vendor.")
-		return
+		return true
 	}
 	if extendedcost != 0 {
 		if s.server == nil || s.server.Data == nil {
 			s.sendSysMessage(fmt.Sprintf("Extended cost %d does not exist.", extendedcost))
-			return
+			return true
 		}
 		if _, found, err := s.server.Data.ItemExtendedCost(extendedcost); err != nil || !found {
 			s.sendSysMessage(fmt.Sprintf("Extended cost %d does not exist.", extendedcost))
-			return
+			return true
 		}
 	}
 	if maxcount > 0 && incrtime == 0 {
 		s.sendSysMessage(fmt.Sprintf("MaxCount != 0 (%d) but IncrTime == 0", maxcount))
-		return
+		return true
 	}
 	if maxcount == 0 && incrtime > 0 {
 		s.sendSysMessage("MaxCount == 0 but IncrTime<>= 0")
-		return
+		return true
 	}
 	var exists int64
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM npc_vendor WHERE entry = ? AND item = ? AND ExtendedCost = ?", vendorEntry, itemID, extendedcost).Scan(&exists); err != nil || exists != 0 {
 		s.sendSysMessage(fmt.Sprintf("Item %d is already in the list (extended cost %d).", itemID, extendedcost))
-		return
+		return true
 	}
 	if _, err := db.ExecContext(ctx, "INSERT INTO npc_vendor (entry, item, maxcount, incrtime, extendedcost) VALUES (?, ?, ?, ?, ?)", vendorEntry, itemID, maxcount, incrtime, extendedcost); err != nil {
 		s.sendSysMessage("Failed to store the vendor row.")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Item %d (%s) added to vendor list (maxcount %d, incrtime %d, extendedcost %d).", itemID, itemName, maxcount, incrtime, extendedcost))
+	return true
 }
 
 // handleNPCAddTemp mirrors HandleNpcAddTempSpawnCommand (cs_npc.cpp:1025):
@@ -359,8 +347,8 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) {
 // dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
 // success returns true.
 func (s *session) handleNPCAddTemp(ctx context.Context, args []string) bool {
-	if s.miscDeny(ctx, permissionCommandNPCAddTemp) {
-		return true
+	if !s.commandAllowed(ctx, permissionCommandNPCAddTemp) {
+		return false
 	}
 	const syntax = "Syntax: .npc add temp [loot|noloot] <entry>"
 	summonType := uint8(4)
@@ -383,13 +371,11 @@ func (s *session) handleNPCAddTemp(ctx context.Context, args []string) bool {
 		}
 	}
 	if len(rest) != 1 {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	entry, ok := goParseLinkOrUint(rest[0], "creature_entry")
 	if !ok {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	if _, ok := s.npcTemplateGate(ctx, entry); !ok {
 		return false
@@ -406,65 +392,62 @@ func (s *session) handleNPCAddTemp(ctx context.Context, args []string) bool {
 // handleNPCAddMove mirrors HandleNpcAddMoveCommand (cs_npc.cpp:213): the
 // creature row must exist; movement_type becomes WAYPOINT (2). Pure DB leg,
 // fully native.
-func (s *session) handleNPCAddMove(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCAddMove) {
-		return
+func (s *session) handleNPCAddMove(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCAddMove) {
+		return false
 	}
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .npc add move <guid>")
-		return
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	guid, ok := goParseLinkOrUint(args[0], "creature")
 	if !ok {
-		s.sendSysMessage("Syntax: .npc add move <guid>")
-		return
+		return false
 	}
 	var exists uint32
 	if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE guid = ?", guid).Scan(&exists); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
-		return
+		return true
 	}
 	if _, err := db.ExecContext(ctx, "UPDATE creature SET MovementType = 2 WHERE guid = ?", guid); err != nil {
-		return
+		return true
 	}
 	s.sendSysMessage("Waypoint added.") // LANG_WAYPOINT_ADDED 234
+	return true
 }
 
 // handleNPCAdd mirrors HandleNpcAddCommand (cs_npc.cpp:117): the entry must
 // exist in creature_template and must not be an npcbot entry. The live spawn
 // legs (Creature::Create/AddToMap/grid) have no Go bridge, but creature
 // visibility is DB-driven, so the creature row insert IS the spawn.
-func (s *session) handleNPCAdd(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCAdd) {
-		return
+func (s *session) handleNPCAdd(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCAdd) {
+		return false
 	}
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .npc add <entry>")
-		return
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	entry, ok := goParseLinkOrUint(args[0], "creature_entry")
 	if !ok {
-		s.sendSysMessage("Syntax: .npc add <entry>")
-		return
+		return false
 	}
 	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
 	if !ok {
-		return // C++: silent false on unknown template
+		return false // C++: silent false on unknown template
 	}
 	if s.npcbotSpawnBlocked(entry, flagsExtra) {
-		return
+		return true
 	}
 	var guid uint32
 	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM creature").Scan(&guid); err != nil {
-		return
+		return true
 	}
 	p := s.player
 	// SaveToDB (cs_npc.cpp:163): spawnMask is 1 << Map::GetSpawnMode and
@@ -480,9 +463,10 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 	if _, err := db.ExecContext(ctx,
 		"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 120, 0)",
 		guid, entry, p.Map, 1<<spawnMode, phaseMask, p.X, p.Y, p.Z, p.Orientation); err != nil {
-		return
+		return true
 	}
 	// C++ reports success silently.
+	return true
 }
 
 // handleNPCMove mirrors HandleNpcMoveCommand (cs_npc.cpp:601): the GUID
@@ -501,8 +485,8 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) {
 // (ChatCommand.cpp:296-309); the GUID-not-found, wrong-map and npcbot
 // paths print a message and return true.
 func (s *session) handleNPCMove(ctx context.Context, args []string) bool {
-	if s.miscDeny(ctx, permissionCommandNPCMove) {
-		return true
+	if !s.commandAllowed(ctx, permissionCommandNPCMove) {
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
@@ -510,8 +494,7 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) bool {
 	}
 	const syntax = "Syntax: .npc move [guid]"
 	if len(args) > 1 {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	var guid uint32
 	selected := s.castCommandSelectedCreature()
@@ -528,8 +511,7 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) bool {
 		var ok bool
 		guid, ok = goParseLinkOrUint(args[0], "creature")
 		if !ok {
-			s.sendSysMessage(syntax)
-			return true
+			return false
 		}
 	}
 	var rowMap uint32
@@ -578,25 +560,24 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) bool {
 // selected creature — pet/totem -> LANG_SELECT_CREATURE, npcbot -> the
 // bot message, temp summon -> UnSummon (live removal + deleted message),
 // else the creature's spawn id down the DeleteFromDB path.
-func (s *session) handleNPCDelete(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCDelete) {
-		return
+func (s *session) handleNPCDelete(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCDelete) {
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	const syntax = "Syntax: .npc delete [guid]"
 	if len(args) > 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	var guid uint32
 	if len(args) == 0 {
 		selected := s.castCommandSelectedCreature()
 		if selected == nil || motionIsPet(selected) || (s.server != nil && s.server.isTotemGUID(selected.GUID)) {
 			s.sendSysMessage("Select a creature first.")
-			return
+			return true
 		}
 		var entry uint32
 		var tempSummon bool
@@ -607,7 +588,7 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 		}
 		if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok && flagsExtra&npcbotEntryMask != 0 {
 			s.sendSysMessage("Selected creature has botAI assigned, use '.npcbot delete' instead")
-			return
+			return true
 		}
 		if tempSummon {
 			// TempSummon::UnSummon twin: leave the world now, firing
@@ -624,15 +605,14 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 				s.server.fireCreatureLuaEvent(ctx, selected, scripting.CreatureEventOnRemove)
 			}
 			s.sendSysMessage("Creature deleted.") // LANG_COMMAND_DELCREATMESSAGE 270
-			return
+			return true
 		}
 		guid = uint32(selected.GUID & 0x00FFFFFF)
 	} else {
 		var ok bool
 		guid, ok = goParseLinkOrUint(args[0], "creature")
 		if !ok {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 	}
 	// Creature::DeleteFromDB (Creature.cpp:1861): the row must exist first,
@@ -643,9 +623,10 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) {
 	// model and stays open.
 	if !s.deleteCreatureFromDB(ctx, guid) {
 		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
-		return
+		return true
 	}
 	s.sendSysMessage("Creature deleted.") // LANG_COMMAND_DELCREATMESSAGE 270
+	return true
 }
 
 // npcDespawnLiveSpawn is the DeleteFromDB live leg (Creature.cpp:1861):
@@ -727,24 +708,22 @@ func (s *session) deleteCreatureFromDB(ctx context.Context, guid uint32) bool {
 // distance^2 unconditionally, so a negative distance searches |distance|
 // and prints the signed value; an unparseable token fails the C++ typed
 // parse (syntax here).
-func (s *session) handleNPCNear(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCNear) {
-		return
+func (s *session) handleNPCNear(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCNear) {
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	distance := 10.0
 	if len(args) > 1 {
-		s.sendSysMessage("Syntax: .npc near [distance]")
-		return
+		return false
 	}
 	if len(args) > 0 {
 		d, err := parseNPCFloat(args[0])
 		if err != nil {
-			s.sendSysMessage("Syntax: .npc near [distance]")
-			return
+			return false
 		}
 		distance = d
 	}
@@ -756,7 +735,7 @@ func (s *session) handleNPCNear(ctx context.Context, args []string) {
 		 ORDER BY (POW(c.position_x - ?, 2) + POW(c.position_y - ?, 2) + POW(c.position_z - ?, 2))`,
 		p.Map, p.X, p.Y, p.Z, distance*distance, p.X, p.Y, p.Z)
 	if err != nil {
-		return
+		return true
 	}
 	defer rows.Close()
 	var count uint32
@@ -774,6 +753,7 @@ func (s *session) handleNPCNear(ctx context.Context, args []string) {
 	}
 	// LANG_COMMAND_NEAR_NPC_MESSAGE 556.
 	s.sendSysMessage(fmt.Sprintf("%d creatures found within %g yards.", count, distance))
+	return true
 }
 
 // parseNPCFloat mirrors the C++ float ArgInfo (ChatCommandArgs.h:54-72):

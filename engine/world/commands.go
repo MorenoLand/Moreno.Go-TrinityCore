@@ -9182,32 +9182,28 @@ func (s *session) buildCommandTree() *commandNode {
 			s.sendSysMessage("You must be in game to use that command.")
 			return true
 		}
-		s.handleNPCAddTable(ctx, args)
-		return true
+		return s.handleNPCAddTable(ctx, args)
 	}
 	npcAdd.leaf("formation", func(ctx context.Context, args []string) bool {
 		if s.player == nil {
 			s.sendSysMessage("You must be in game to use that command.")
 			return true
 		}
-		s.handleNPCAddFormation(ctx, args)
-		return true
+		return s.handleNPCAddFormation(ctx, args)
 	}, permissionCommandNPCAddFormation)
 	npcAdd.leaf("item", func(ctx context.Context, args []string) bool {
 		if s.player == nil {
 			s.sendSysMessage("You must be in game to use that command.")
 			return true
 		}
-		s.handleNPCAddItem(ctx, args)
-		return true
+		return s.handleNPCAddItem(ctx, args)
 	}, permissionCommandNPCAddItem)
 	npcAdd.leaf("move", func(ctx context.Context, args []string) bool {
 		if s.player == nil {
 			s.sendSysMessage("You must be in game to use that command.")
 			return true
 		}
-		s.handleNPCAddMove(ctx, args)
-		return true
+		return s.handleNPCAddMove(ctx, args)
 	}, permissionCommandNPCAddMove)
 	npcAdd.leaf("temp", func(ctx context.Context, args []string) bool {
 		if s.player == nil {
@@ -9226,18 +9222,18 @@ func (s *session) buildCommandTree() *commandNode {
 			return invoke(ctx, args)
 		}, perm)
 	}
-	npcSetLeaf("allowmove", func(ctx context.Context, args []string) bool { s.handleNPCSetAllowMove(ctx); return true }, permissionCommandNPCSetAllowMove)
+	npcSetLeaf("allowmove", func(ctx context.Context, args []string) bool { return s.handleNPCSetAllowMove(ctx) }, permissionCommandNPCSetAllowMove)
 	npcSetLeaf("entry", s.handleNPCSetEntry, permissionCommandNPCSetEntry)
-	npcSetLeaf("factionid", func(ctx context.Context, args []string) bool { s.handleNPCSetFactionID(ctx, args); return true }, permissionCommandNPCSetFactionID)
-	npcSetLeaf("flag", func(ctx context.Context, args []string) bool { s.handleNPCSetFlag(ctx, args); return true }, permissionCommandNPCSetFlag)
-	npcSetLeaf("level", func(ctx context.Context, args []string) bool { s.handleNPCSetLevel(ctx, args); return true }, permissionCommandNPCSetLevel)
-	npcSetLeaf("link", func(ctx context.Context, args []string) bool { s.handleNPCSetLink(ctx, args); return true }, permissionCommandNPCSetLink)
-	npcSetLeaf("model", func(ctx context.Context, args []string) bool { s.handleNPCSetModel(ctx, args); return true }, permissionCommandNPCSetModel)
+	npcSetLeaf("factionid", func(ctx context.Context, args []string) bool { return s.handleNPCSetFactionID(ctx, args) }, permissionCommandNPCSetFactionID)
+	npcSetLeaf("flag", func(ctx context.Context, args []string) bool { return s.handleNPCSetFlag(ctx, args) }, permissionCommandNPCSetFlag)
+	npcSetLeaf("level", func(ctx context.Context, args []string) bool { return s.handleNPCSetLevel(ctx, args) }, permissionCommandNPCSetLevel)
+	npcSetLeaf("link", func(ctx context.Context, args []string) bool { return s.handleNPCSetLink(ctx, args) }, permissionCommandNPCSetLink)
+	npcSetLeaf("model", func(ctx context.Context, args []string) bool { return s.handleNPCSetModel(ctx, args) }, permissionCommandNPCSetModel)
 	npcSetLeaf("movetype", s.handleNPCSetMoveType, permissionCommandNPCSetMoveType)
-	npcSetLeaf("phase", func(ctx context.Context, args []string) bool { s.handleNPCSetPhase(ctx, args); return true }, permissionCommandNPCSetPhase)
+	npcSetLeaf("phase", func(ctx context.Context, args []string) bool { return s.handleNPCSetPhase(ctx, args) }, permissionCommandNPCSetPhase)
 	npcSetLeaf("wanderdistance", s.handleNPCSetWanderDistance, permissionCommandNPCSetSpawnDist)
 	npcSetLeaf("spawntime", s.handleNPCSetSpawnTime, permissionCommandNPCSetSpawnTime)
-	npcSetLeaf("data", func(ctx context.Context, args []string) bool { s.handleNPCSetData(ctx, args); return true }, permissionCommandNPCSetData)
+	npcSetLeaf("data", func(ctx context.Context, args []string) bool { return s.handleNPCSetData(ctx, args) }, permissionCommandNPCSetData)
 	root.add("npcbot", func(ctx context.Context, args []string) bool { return s.handleCmdNpcBot(ctx, args) }, []string{"add", "remove", "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command", "info", "hide", "unhide", "show", "recall", "kill", "suicide", "distance", "order", "set"}, nil)
 	root.addWithPerms("quest", func(ctx context.Context, args []string) bool { return s.handleCmdQuest(ctx, args) }, map[string]uint32{"add": permissionCommandQuestAdd, "complete": permissionCommandQuestComplete, "remove": permissionCommandQuestRemove, "reward": permissionCommandQuestReward}, nil).withPerm(permissionCommandQuest)
 	root.addWithPerms("pet", func(ctx context.Context, args []string) bool { return s.handleCmdPet(ctx, args) }, map[string]uint32{"create": permissionCommandPetCreate, "learn": permissionCommandPetLearn, "unlearn": permissionCommandPetUnlearn, "level": permissionCommandPetLevel}, nil).withPerm(permissionCommandPet)

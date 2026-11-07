@@ -46,11 +46,10 @@ import (
 // with no permission of its own, and RBAC_PERM_COMMAND_NPC_SET (RBAC.h:448,
 // 580) is referenced by no handler in C++ — so a bare ".npc set" prints the
 // help listing with no gate, same as the mmap container-root fix.
-func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
+func (s *session) handleNPCSetTable(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .npc set allowmove|entry|factionid|flag|level|link|model|movetype|phase|wanderdistance|spawntime|data <args>"
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -74,39 +73,38 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 		if len(matches) != 1 {
 			if len(matches) > 1 {
 				s.sendSysMessage(fmt.Sprintf("Ambiguous subcommand %q: %s", args[0], strings.Join(matches, ", ")))
-				return
+				return true
 			}
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 	}
 	switch {
 	case strings.HasPrefix("allowmove", sub):
-		s.handleNPCSetAllowMove(ctx)
+		return s.handleNPCSetAllowMove(ctx)
 	case strings.HasPrefix("entry", sub):
-		s.handleNPCSetEntry(ctx, rest)
+		return s.handleNPCSetEntry(ctx, rest)
 	case strings.HasPrefix("factionid", sub):
-		s.handleNPCSetFactionID(ctx, rest)
+		return s.handleNPCSetFactionID(ctx, rest)
 	case strings.HasPrefix("flag", sub):
-		s.handleNPCSetFlag(ctx, rest)
+		return s.handleNPCSetFlag(ctx, rest)
 	case strings.HasPrefix("level", sub):
-		s.handleNPCSetLevel(ctx, rest)
+		return s.handleNPCSetLevel(ctx, rest)
 	case strings.HasPrefix("link", sub):
-		s.handleNPCSetLink(ctx, rest)
+		return s.handleNPCSetLink(ctx, rest)
 	case strings.HasPrefix("model", sub):
-		s.handleNPCSetModel(ctx, rest)
+		return s.handleNPCSetModel(ctx, rest)
 	case strings.HasPrefix("movetype", sub):
-		s.handleNPCSetMoveType(ctx, rest)
+		return s.handleNPCSetMoveType(ctx, rest)
 	case strings.HasPrefix("phase", sub):
-		s.handleNPCSetPhase(ctx, rest)
+		return s.handleNPCSetPhase(ctx, rest)
 	case strings.HasPrefix("wanderdistance", sub):
-		s.handleNPCSetWanderDistance(ctx, rest)
+		return s.handleNPCSetWanderDistance(ctx, rest)
 	case strings.HasPrefix("spawntime", sub):
-		s.handleNPCSetSpawnTime(ctx, rest)
+		return s.handleNPCSetSpawnTime(ctx, rest)
 	case strings.HasPrefix("data", sub):
-		s.handleNPCSetData(ctx, rest)
+		return s.handleNPCSetData(ctx, rest)
 	default:
-		s.sendSysMessage(syntax)
+		return false
 	}
 }
 
@@ -116,12 +114,12 @@ func (s *session) handleNPCSetTable(ctx context.Context, args []string) {
 // World.h:619 that its actions are still to be implemented, so no Go
 // consumer reads it yet, and the default is movement allowed (World.cpp:115),
 // which the inverted creatureMoveDisabled slot preserves at zero value.
-func (s *session) handleNPCSetAllowMove(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandNPCSetAllowMove) {
-		return
+func (s *session) handleNPCSetAllowMove(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSetAllowMove) {
+		return false
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	disabled := !s.server.creatureMoveDisabled.Load()
 	s.server.creatureMoveDisabled.Store(disabled)
@@ -130,6 +128,7 @@ func (s *session) handleNPCSetAllowMove(ctx context.Context) {
 	} else {
 		s.sendSysMessage("Creature movement enabled.")
 	}
+	return true
 }
 
 // handleNPCSetMoveType mirrors HandleNpcSetMoveTypeCommand (cs_npc.cpp:716):
@@ -154,12 +153,11 @@ func (s *session) handleNPCSetAllowMove(ctx context.Context) {
 // paths that print a message return true.
 func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .npc set movetype [guid] <stay|random|way> [nodel]"
-	if s.miscDeny(ctx, permissionCommandNPCSetMoveType) {
-		return true
+	if !s.commandAllowed(ctx, permissionCommandNPCSetMoveType) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	if moveType, title, ok := parseNPCMoveType(args[0]); ok {
 		// Selection form: ".npc set movetype <stay|random|way> [nodel]".
@@ -176,8 +174,7 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) bool 
 		nodel := false
 		if len(args) > 1 {
 			if len(args) > 2 || !strings.EqualFold(args[1], "nodel") {
-				s.sendSysMessage(syntax)
-				return true
+				return false
 			}
 			nodel = true
 		}
@@ -198,8 +195,7 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) bool 
 		return true
 	}
 	if len(args) < 2 {
-		s.sendSysMessage("npc set movetype needs a creature GUID: selected-unit creature targets have no Go bridge.")
-		return true
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
@@ -207,19 +203,16 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) bool 
 	}
 	guid, ok := goParseLinkOrUint(args[0], "creature")
 	if !ok {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	moveType, title, ok := parseNPCMoveType(args[1])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	nodel := false
 	if len(args) > 2 {
 		if len(args) > 3 || !strings.EqualFold(args[2], "nodel") {
-			s.sendSysMessage(syntax)
-			return true
+			return false
 		}
 		nodel = true
 	}
@@ -357,50 +350,48 @@ func parseNPCMoveType(arg string) (uint8, string, bool) {
 }
 
 // handleNPCChunk2 extends the npc dispatcher with the chunk-2 arms. It
-// returns true when the sub-command was handled.
+// returns the arm's bool (false when the sub-command matched nothing).
 func (s *session) handleNPCChunk2(ctx context.Context, sub string, rest []string) bool {
 	switch {
 	case strings.HasPrefix("set", sub):
-		s.handleNPCSetTable(ctx, rest)
+		return s.handleNPCSetTable(ctx, rest)
 	case strings.HasPrefix("info", sub):
-		s.handleNPCInfo(ctx)
+		return s.handleNPCInfo(ctx)
 	case strings.HasPrefix("playemote", sub):
-		s.handleNPCPlayEmote(ctx, rest)
+		return s.handleNPCPlayEmote(ctx, rest)
 	case strings.HasPrefix("say", sub):
-		s.handleNPCSay(ctx, rest)
+		return s.handleNPCSay(ctx, rest)
 	case strings.HasPrefix("textemote", sub):
-		s.handleNPCTextEmote(ctx, rest)
+		return s.handleNPCTextEmote(ctx, rest)
 	case strings.HasPrefix("whisper", sub):
-		s.handleNPCWhisper(ctx, rest)
+		return s.handleNPCWhisper(ctx, rest)
 	case strings.HasPrefix("yell", sub):
-		s.handleNPCYell(ctx, rest)
+		return s.handleNPCYell(ctx, rest)
 	case strings.HasPrefix("tame", sub):
-		s.handleNPCTame(ctx)
+		return s.handleNPCTame(ctx)
 	case strings.HasPrefix("spawngroup", sub):
-		s.handleNPCSpawnGroup(ctx, rest)
+		return s.handleNPCSpawnGroup(ctx, rest)
 	case strings.HasPrefix("despawngroup", sub):
-		s.handleNPCDespawnGroup(ctx, rest)
+		return s.handleNPCDespawnGroup(ctx, rest)
 	case strings.HasPrefix("follow", sub):
-		s.handleNPCFollow(ctx, rest)
+		return s.handleNPCFollow(ctx, rest)
 	case strings.HasPrefix("evade", sub):
-		s.handleNPCEvade(ctx, rest)
+		return s.handleNPCEvade(ctx, rest)
 	case strings.HasPrefix("showloot", sub):
-		s.handleNPCShowLoot(ctx, rest)
+		return s.handleNPCShowLoot(ctx, rest)
 	default:
 		return false
 	}
-	return true
 }
 
 // npcDeleteSub handles the two-level "delete item" arm (cs_npc.cpp:108:
 // { "delete item", HandleNpcDeleteVendorItemCommand, ... }); plain "delete"
 // falls through to the chunk-1 guid arm.
-func (s *session) npcDeleteSub(ctx context.Context, rest []string) {
+func (s *session) npcDeleteSub(ctx context.Context, rest []string) bool {
 	if len(rest) > 0 && strings.HasPrefix("item", strings.ToLower(rest[0])) {
-		s.handleNPCDeleteItem(ctx, rest[1:])
-		return
+		return s.handleNPCDeleteItem(ctx, rest[1:])
 	}
-	s.handleNPCDelete(ctx, rest)
+	return s.handleNPCDelete(ctx, rest)
 }
 
 // handleNPCDeleteItem mirrors HandleNpcDeleteVendorItemCommand
@@ -415,34 +406,31 @@ func (s *session) npcDeleteSub(ctx context.Context, rest []string) {
 // reports LANG_ITEM_DELETED_FROM_LIST. The numeric-id parser error runs
 // before the body in C++, so it precedes the vendor check here too, while
 // the link-to-nothing nil-item message keeps its post-vendor position.
-func (s *session) handleNPCDeleteItem(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCDeleteItem) {
-		return
+func (s *session) handleNPCDeleteItem(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCDeleteItem) {
+		return false
 	}
 	const syntax = "Syntax: .npc delete item <itemId|itemLink>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	itemID, link, ok := npcItemTokenID(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	var itemName string
 	itemFound := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName) == nil
 	if !link && !itemFound {
-		s.sendSysMessage(fmt.Sprintf("Item %d does not exist.", itemID))
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("You need to select a vendor.")
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	entry, npcKnown, liveFlags := motion.Entry, motion.NPCFlagsKnown, motion.NPCFlags
@@ -451,27 +439,28 @@ func (s *session) handleNPCDeleteItem(ctx context.Context, args []string) {
 	if !npcKnown {
 		if err := db.QueryRowContext(ctx, "SELECT COALESCE(npcflag, 0) FROM creature_template WHERE entry = ?", entry).Scan(&flags); err != nil {
 			s.sendSysMessage("You need to select a vendor.")
-			return
+			return true
 		}
 	}
 	if flags&unitNPCFlagVendor == 0 {
 		s.sendSysMessage("You need to select a vendor.")
-		return
+		return true
 	}
 	if link && !itemFound {
 		s.sendSysMessage("You need to send an item.")
-		return
+		return true
 	}
 	res, err := db.ExecContext(ctx, "DELETE FROM npc_vendor WHERE entry = ? AND item = ?", entry, itemID)
 	if err != nil {
-		return
+		return true
 	}
 	removed, _ := res.RowsAffected()
 	if removed == 0 {
 		s.sendSysMessage(fmt.Sprintf("Item %d is not in the list.", itemID))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Item %d (%s) deleted from vendor list.", itemID, itemName))
+	return true
 }
 
 // handleNPCSetFactionID mirrors HandleNpcSetFactionIdCommand (cs_npc.cpp:381):
@@ -483,32 +472,30 @@ func (s *session) handleNPCDeleteItem(ctx context.Context, args []string) {
 // WORLD_UPD_CREATURE_FACTION update of creature_template for the entry,
 // which Go spawns read from the DB, so no in-memory template mutation is
 // needed. Silent on success, as in C++.
-func (s *session) handleNPCSetFactionID(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCSetFactionID) {
-		return
+func (s *session) handleNPCSetFactionID(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSetFactionID) {
+		return false
 	}
 	const syntax = "Syntax: .npc set factionid <factionId>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	faction, ok := npcVendorUintArg(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if _, found := s.factionTemplateEntry(faction); !found {
 		s.sendSysMessage(fmt.Sprintf("Wrong faction %d.", faction))
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	entry, mapID, instanceID, guid := motion.Entry, motion.Map, motion.InstanceID, motion.GUID
@@ -518,6 +505,7 @@ func (s *session) handleNPCSetFactionID(ctx context.Context, args []string) {
 	// WORLD_UPD_CREATURE_FACTION binds the faction as uint16
 	// (cs_npc.cpp:405); the live slot stays full uint32 in both trees.
 	_, _ = db.ExecContext(ctx, "UPDATE creature_template SET faction = ? WHERE entry = ?", uint16(faction), entry)
+	return true
 }
 
 // npcSetFlagNames is the EnumUtils<NPCFlags> name table
@@ -603,28 +591,26 @@ func npcSetFlagParse(token string) (uint32, bool) {
 // WHERE entry), reporting LANG_VALUE_SAVED_REJOIN on success. The live
 // write sets NPCFlagsKnown so the motion->spawn overlay keeps the live
 // value on re-stream (the SetNPCFlags twin).
-func (s *session) handleNPCSetFlag(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCSetFlag) {
-		return
+func (s *session) handleNPCSetFlag(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSetFlag) {
+		return false
 	}
 	const syntax = "Syntax: .npc set flag <npcFlags>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	flags, ok := npcSetFlagParse(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	entry, mapID, instanceID, guid := motion.Entry, motion.Map, motion.InstanceID, motion.GUID
@@ -634,6 +620,7 @@ func (s *session) handleNPCSetFlag(ctx context.Context, args []string) {
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCFlags: flags})
 	_, _ = db.ExecContext(ctx, "UPDATE creature_template SET npcflag = ? WHERE entry = ?", flags, entry)
 	s.sendSysMessage("Value saved, please rejoin.")
+	return true
 }
 
 // npcSetLevelHealth is the HandleNpcSetLevelCommand health rule
@@ -648,19 +635,17 @@ func npcSetLevelHealth(lvl uint32) uint32 { return 100 + 30*lvl }
 // persistent leg is the spawn row's curhealth; a respawn re-derives the
 // level from the template, and a temp summon gains no spawn row from the
 // targeted UPDATE (C++'s full SaveToDB would mint one).
-func (s *session) handleNPCSetLevel(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCSetLevel) {
-		return
+func (s *session) handleNPCSetLevel(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSetLevel) {
+		return false
 	}
 	const syntax = "Syntax: .npc set level <lvl>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	lvl, ok := npcVendorUintArg(args[0])
 	if !ok || lvl > 255 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	maxLevel := uint32(80)
 	if s.server != nil && s.server.Config.MaxPlayerLevel != 0 {
@@ -668,16 +653,16 @@ func (s *session) handleNPCSetLevel(ctx context.Context, args []string) {
 	}
 	if lvl < 1 || lvl > maxLevel+3 {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil || motionIsPet(motion) {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	health := npcSetLevelHealth(lvl)
 	s.server.motionMu.Lock()
@@ -688,6 +673,7 @@ func (s *session) handleNPCSetLevel(ctx context.Context, args []string) {
 	s.server.motionMu.Unlock()
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldLevel: lvl, unitFieldHealth: health, unitFieldMaxHealth: health})
 	_, _ = db.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", health, uint32(guid&0x00FFFFFF))
+	return true
 }
 
 // npcStoredModelID is the Creature::SaveToDB displayid rule
@@ -707,32 +693,30 @@ func npcStoredModelID(display, m1, m2, m3, m4 uint32) uint32 {
 // DisplayId and NativeDisplayId live, then SaveToDB (the spawn row's
 // modelid, 0 when the display equals a template model). The gender leg
 // of Unit::SetDisplayId has no Go creature slot and stays unmodeled.
-func (s *session) handleNPCSetModel(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCSetModel) {
-		return
+func (s *session) handleNPCSetModel(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSetModel) {
+		return false
 	}
 	const syntax = "Syntax: .npc set model <displayId>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	display, ok := npcVendorUintArg(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil || motionIsPet(motion) {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if !s.mountDisplayValid(display) {
 		s.sendSysMessage(fmt.Sprintf("Invalid parameter '%d'.", display))
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	entry, mapID, instanceID, guid := motion.Entry, motion.Map, motion.InstanceID, motion.GUID
@@ -744,6 +728,7 @@ func (s *session) handleNPCSetModel(ctx context.Context, args []string) {
 	var m1, m2, m3, m4 uint32
 	_ = db.QueryRowContext(ctx, "SELECT modelid1, modelid2, modelid3, modelid4 FROM creature_template WHERE entry = ?", entry).Scan(&m1, &m2, &m3, &m4)
 	_, _ = db.ExecContext(ctx, "UPDATE creature SET modelid = ? WHERE guid = ?", npcStoredModelID(display, m1, m2, m3, m4), uint32(guid&0x00FFFFFF))
+	return true
 }
 
 // handleNPCSetPhase mirrors HandleNpcSetPhaseCommand (cs_npc.cpp:814):
@@ -761,32 +746,30 @@ func (s *session) handleNPCSetModel(ctx context.Context, args []string) {
 // current mask leaves controlled units untouched. No visibility fan-out:
 // the streaming re-reads PhaseMask, and RemoveNotOwnSingleTargetAuras has
 // no Go aura model.
-func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCSetPhase) {
-		return
+func (s *session) handleNPCSetPhase(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSetPhase) {
+		return false
 	}
 	const syntax = "Syntax: .npc set phase <phasemask>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	mask, ok := npcVendorUintArg(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if mask == 0 {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	changed := motion.PhaseMask != mask
@@ -805,6 +788,7 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
 	if !motionIsPet(motion) {
 		_, _ = db.ExecContext(ctx, "UPDATE creature SET phaseMask = ? WHERE guid = ?", mask, uint32(motion.GUID&0x00FFFFFF))
 	}
+	return true
 }
 
 // handleNPCSetEntry mirrors HandleNpcSetEntryCommand (cs_npc.cpp:256):
@@ -819,18 +803,16 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) {
 // path returns false so dispatchCommand shows the node's help listing
 // (ChatCommand.cpp:296-309); paths that print a message return true.
 func (s *session) handleNPCSetEntry(ctx context.Context, args []string) bool {
-	if s.miscDeny(ctx, permissionCommandNPCSetEntry) {
-		return true
+	if !s.commandAllowed(ctx, permissionCommandNPCSetEntry) {
+		return false
 	}
 	const syntax = "Syntax: .npc set entry <entryId>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	entry, ok := goParseLinkOrUint(args[0], "creature_entry")
 	if !ok {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	if entry == 0 {
 		return false
@@ -873,18 +855,16 @@ func npcWanderMoveType(dist float64) uint32 {
 // dispatchCommand shows the node's help listing in both cases
 // (ChatCommand.cpp:296-309); success returns true.
 func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string) bool {
-	if s.miscDeny(ctx, permissionCommandNPCSetSpawnDist) {
-		return true
+	if !s.commandAllowed(ctx, permissionCommandNPCSetSpawnDist) {
+		return false
 	}
 	const syntax = "Syntax: .npc set wanderdistance <distance>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	dist, err := parseNPCFloat(args[0])
 	if err != nil {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	if dist < 0 {
 		s.sendSysMessage(misc2BadValue)
@@ -920,18 +900,16 @@ func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string)
 // (cs_npc.cpp:884-886), so dispatchCommand shows the node's help listing
 // (ChatCommand.cpp:296-309); success returns true.
 func (s *session) handleNPCSetSpawnTime(ctx context.Context, args []string) bool {
-	if s.miscDeny(ctx, permissionCommandNPCSetSpawnTime) {
-		return true
+	if !s.commandAllowed(ctx, permissionCommandNPCSetSpawnTime) {
+		return false
 	}
 	const syntax = "Syntax: .npc set spawntime <seconds>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	secs, ok := npcVendorUintArg(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -967,44 +945,42 @@ func npcLinkBlocked(masterMap, slaveMap, masterMask, slaveMask uint32, masterIns
 // (guid, linkedGuid, linkType 0). No in-memory store update is needed: the
 // respawn tick's linked-deferral leg reads the linked_respawn row directly,
 // so the row takes live effect at the next respawn check.
-func (s *session) handleNPCSetLink(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCSetLink) {
-		return
+func (s *session) handleNPCSetLink(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSetLink) {
+		return false
 	}
 	const syntax = "Syntax: .npc set link <linkguid>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	link, ok := npcVendorUintArg(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	guid := uint32(motion.GUID & 0x00FFFFFF)
 	var masterMap, masterMask uint32
 	if err := db.QueryRowContext(ctx, "SELECT map, spawnMask FROM creature WHERE guid = ?", guid).Scan(&masterMap, &masterMask); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Selected creature %d isn't in creature table", guid))
-		return
+		return true
 	}
 	if link == 0 {
 		_, _ = db.ExecContext(ctx, "DELETE FROM linked_respawn WHERE guid = ? AND linkType = 0", guid)
 		s.sendSysMessage(fmt.Sprintf("LinkGUID '%d' added to creature with DBTableGUID: '%d'", link, guid))
-		return
+		return true
 	}
 	var slaveMap, slaveMask uint32
 	if err := db.QueryRowContext(ctx, "SELECT map, spawnMask FROM creature WHERE guid = ?", link).Scan(&slaveMap, &slaveMask); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Selected creature can't link with guid '%d'", link))
-		return
+		return true
 	}
 	instanceable := false
 	if s.server != nil && s.server.Data != nil {
@@ -1014,10 +990,11 @@ func (s *session) handleNPCSetLink(ctx context.Context, args []string) {
 	}
 	if npcLinkBlocked(masterMap, slaveMap, masterMask, slaveMask, instanceable) {
 		s.sendSysMessage(fmt.Sprintf("Selected creature can't link with guid '%d'", link))
-		return
+		return true
 	}
 	_, _ = db.ExecContext(ctx, "REPLACE INTO linked_respawn (guid, linkedGuid, linkType) VALUES (?, ?, 0)", guid, link)
 	s.sendSysMessage(fmt.Sprintf("LinkGUID '%d' added to creature with DBTableGUID: '%d'", link, guid))
+	return true
 }
 
 // npcSetDataAIOrScript mirrors the HandleNpcSetDataCommand message tail
@@ -1042,33 +1019,32 @@ func npcSetDataAIOrScript(aiName, scriptName string) string {
 // in the C++ PSendSysMessage arg order (guidCounter, entry, name, data_1,
 // data_2, tail). The LANG_NPC_SETDATA wording is a plain-English recall
 // (no in-tree seed).
-func (s *session) handleNPCSetData(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCSetData) {
-		return
+func (s *session) handleNPCSetData(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSetData) {
+		return false
 	}
 	const syntax = "Syntax: .npc set data <data1> <data2>"
 	if len(args) != 2 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	data1, ok1 := npcVendorUintArg(args[0])
 	data2, ok2 := npcVendorUintArg(args[1])
 	if !ok1 || !ok2 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	guid, entry, name, aiName, scriptName := uint32(motion.GUID&0x00FFFFFF), motion.Entry, motion.Name, motion.AIName, motion.ScriptName
 	s.server.motionMu.Unlock()
 	s.sendSysMessage(fmt.Sprintf("Creature GUID %d, entry %d, %s: set data %d %d: %s", guid, entry, name, data1, data2, npcSetDataAIOrScript(aiName, scriptName)))
+	return true
 }
 
 // npcEvadeParse parses the optional ".npc evade [why] [force]" tail in
@@ -1142,29 +1118,28 @@ func npcEvadeParse(args []string) (force bool, ok bool) {
 // the gate reports LANG_CREATURE_NOT_AI_ENABLED (11015, plain-English
 // recall, no in-tree seed). The charmed-creature owner-follow leg of C++
 // EnterEvadeMode is unmodeled (the generic reset runs instead).
-func (s *session) handleNPCEvade(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCEvade) {
-		return
+func (s *session) handleNPCEvade(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCEvade) {
+		return false
 	}
 	force, ok := npcEvadeParse(args)
 	if !ok {
-		s.sendSysMessage("Syntax: .npc evade [why] [force]")
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil || motionIsPet(motion) {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	entry := motion.Entry
 	s.server.motionMu.Unlock()
 	if flagsExtra, ok := s.npcTemplateGate(ctx, entry); ok && flagsExtra&npcbotEntryMask != 0 {
 		s.sendSysMessage("Creature is not AI enabled.")
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	evading, dead := motion.Evading, motion.Health == 0
@@ -1173,9 +1148,10 @@ func (s *session) handleNPCEvade(ctx context.Context, args []string) {
 	}
 	s.server.motionMu.Unlock()
 	if dead || (evading && !force) {
-		return
+		return true
 	}
 	s.server.triggerCreatureEvade(ctx, motion, time.Now())
+	return true
 }
 
 // npcCreatureChat is the Unit::Talk fan-out (Unit.cpp:14040) for the npc
@@ -1227,102 +1203,100 @@ func npcSayOneshotEmote(text string) uint32 {
 // handleNPCSay mirrors HandleNpcSayCommand (cs_npc.cpp:899): ".npc say
 // <text>". Empty text returns false in C++ (the syntax arm here); the
 // creature Says with LANG_UNIVERSAL, then plays the trailing oneshot emote.
-func (s *session) handleNPCSay(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCSay) {
-		return
+func (s *session) handleNPCSay(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCSay) {
+		return false
 	}
 	const syntax = "Syntax: .npc say <text>"
 	text := s.commandTail(args)
 	if text == "" {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.npcCreatureChat(motion, 0x0C, languageUniversal, text, float64(s.server.Config.ChatListenRangeSay))
 	s.npcCreatureEmote(motion, npcSayOneshotEmote(text))
+	return true
 }
 
 // handleNPCYell mirrors HandleNpcYellCommand (cs_npc.cpp:1003): ".npc yell
 // <text>". Same shape as say, with MONSTER_YELL and the shout oneshot
 // (EMOTE_ONESHOT_SHOUT=22).
-func (s *session) handleNPCYell(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCYell) {
-		return
+func (s *session) handleNPCYell(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCYell) {
+		return false
 	}
 	const syntax = "Syntax: .npc yell <text>"
 	text := s.commandTail(args)
 	if text == "" {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.npcCreatureChat(motion, 0x0E, languageUniversal, text, float64(s.server.Config.ChatListenRangeYell))
 	s.npcCreatureEmote(motion, 22)
+	return true
 }
 
 // handleNPCTextEmote mirrors HandleNpcTextEmoteCommand (cs_npc.cpp:926):
 // ".npc textemote <text>". Unit::TextEmote with isBossEmote=false, so
 // MONSTER_EMOTE (0x10) at the text-emote listen range; no trailing emote.
-func (s *session) handleNPCTextEmote(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCTextEmote) {
-		return
+func (s *session) handleNPCTextEmote(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCTextEmote) {
+		return false
 	}
 	const syntax = "Syntax: .npc textemote <text>"
 	text := s.commandTail(args)
 	if text == "" {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.npcCreatureChat(motion, 0x10, languageUniversal, text, float64(s.server.Config.ChatListenRangeTextEmote))
+	return true
 }
 
 // handleNPCPlayEmote mirrors HandleNpcPlayEmoteCommand (cs_npc.cpp:662):
 // ".npc playemote <emote>". SetUInt32Value(UNIT_NPC_EMOTESTATE) on the
 // selected creature: the live slot plus the values-update broadcast, the
 // EmoteState twin's path. C++ returns true silently; so does this arm.
-func (s *session) handleNPCPlayEmote(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCPlayEmote) {
-		return
+func (s *session) handleNPCPlayEmote(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCPlayEmote) {
+		return false
 	}
 	const syntax = "Syntax: .npc playemote <emote>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	emote, ok := npcVendorUintArg(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
@@ -1330,6 +1304,7 @@ func (s *session) handleNPCPlayEmote(ctx context.Context, args []string) {
 	motion.EmoteStateKnown = true
 	s.server.motionMu.Unlock()
 	s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldNPCEmoteState: emote})
+	return true
 }
 
 // handleNPCWhisper mirrors HandleNpcWhisperCommand (cs_npc.cpp:981):
@@ -1341,37 +1316,34 @@ func (s *session) handleNPCPlayEmote(ctx context.Context, args []string) {
 // handleNPCWhisper mirrors HandleNpcWhisperCommand (cs_npc.cpp:981): the
 // receiver is a Hyperlink<player> variant, so a |Hplayer| link resolves by
 // its name; a wrong-type link fails the C++ typed parse (syntax here).
-func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCWhisper) {
-		return
+func (s *session) handleNPCWhisper(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCWhisper) {
+		return false
 	}
 	const syntax = "Syntax: .npc whisper <player> <text>"
 	if len(args) < 2 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	text := s.commandTailAfter(args, 1)
 	if text == "" {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	name := extractPlayerNameFromLink(args[0])
 	if name == "" {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	receiver := s.server.findSessionByName(name)
 	if receiver == nil || receiver.player == nil {
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	// HasLowerSecurity (Chat.cpp:54-102, strong=false): a handler holding
 	// RBAC_PERM_CHECK_FOR_LOWER_SECURITY (47) bypasses the check entirely
@@ -1379,10 +1351,11 @@ func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 	// LANG_YOURS_SECURITY_IS_LOW.
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: receiver, guid: receiver.playerGUID, name: receiver.player.Name}) {
 		s.sendSysMessage("Your security level is too low.")
-		return
+		return true
 	}
 	packet := protocol.BuildMonsterChatMessage(0x0F, languageUniversal, motion.GUID, motion.Name, text)
 	_ = receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
+	return true
 }
 
 // handleNPCFollow handles "follow" and the two-level "follow stop" arm
@@ -1402,23 +1375,22 @@ func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 // leaves the world clears the slot. "follow stop" clears the slot only
 // when it targets the GM player (the C++ generator-target predicate);
 // otherwise it reports the creature is not following you, as in C++.
-func (s *session) handleNPCFollow(ctx context.Context, rest []string) {
+func (s *session) handleNPCFollow(ctx context.Context, rest []string) bool {
 	const syntax = "Syntax: .npc follow [stop]"
 	if len(rest) > 0 && strings.HasPrefix("stop", strings.ToLower(rest[0])) {
-		if s.miscDeny(ctx, permissionCommandNPCFollow) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandNPCFollow) {
+			return false
 		}
 		if len(rest) != 1 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		motion := s.castCommandSelectedCreature()
 		if motion == nil {
 			s.sendSysMessage("Select a creature first.")
-			return
+			return true
 		}
 		if s.server == nil {
-			return
+			return true
 		}
 		s.server.motionMu.Lock()
 		name := motion.Name
@@ -1431,25 +1403,24 @@ func (s *session) handleNPCFollow(ctx context.Context, rest []string) {
 		s.server.motionMu.Unlock()
 		if !following {
 			s.sendSysMessage(fmt.Sprintf("%s is not following you.", name))
-			return
+			return true
 		}
 		s.sendSysMessage(fmt.Sprintf("%s is no longer following you.", name))
-		return
+		return true
 	}
 	if len(rest) > 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
-	if s.miscDeny(ctx, permissionCommandNPCFollow) {
-		return
+	if !s.commandAllowed(ctx, permissionCommandNPCFollow) {
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	motion.ScriptChaseTargetGUID = 0
@@ -1461,6 +1432,7 @@ func (s *session) handleNPCFollow(ctx context.Context, rest []string) {
 	name := motion.Name
 	s.server.motionMu.Unlock()
 	s.sendSysMessage(fmt.Sprintf("%s is now following you.", name))
+	return true
 }
 
 // npcSecsToTimeString mirrors secsToTimeString with TimeFormat::ShortText
@@ -1575,17 +1547,17 @@ func (s *session) npcInfoFlagLines(mask uint32, table []npcInfoFlagBit) {
 // delay reads 0 (no remaining-time model for dead creatures — selected
 // motions are live); the spawn id is the GUID counter, exact for DB
 // creatures; a missing template/spawn row leaves its fields at 0.
-func (s *session) handleNPCInfo(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandNPCInfo) {
-		return
+func (s *session) handleNPCInfo(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCInfo) {
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	snap := *motion
@@ -1675,6 +1647,7 @@ func (s *session) handleNPCInfo(ctx context.Context) {
 			s.sendSysMessage(fmt.Sprintf("* %s (0x%X)", npcMechanicNames[id], id))
 		}
 	}
+	return true
 }
 
 // handleNPCSpawnGroup mirrors HandleNpcSpawnGroup (cs_npc.cpp:1356) on the
@@ -1686,8 +1659,8 @@ func (s *session) handleNPCInfo(ctx context.Context) {
 // (cs_npc.cpp:1358-1359), so dispatchCommand shows the node's help listing
 // (ChatCommand.cpp:296-309); the bad-group message path returns true.
 func (s *session) handleNPCSpawnGroup(ctx context.Context, args []string) bool {
-	if s.miscDeny(ctx, permissionCommandNPCSpawnGroup) {
-		return true
+	if !s.commandAllowed(ctx, permissionCommandNPCSpawnGroup) {
+		return false
 	}
 	groupID, force, ignoreRespawn, ok := parseSpawnGroupArgs(args, true)
 	if !ok {
@@ -1717,8 +1690,8 @@ func (s *session) handleNPCSpawnGroup(ctx context.Context, args []string) bool {
 // dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
 // the bad-group message path returns true.
 func (s *session) handleNPCDespawnGroup(ctx context.Context, args []string) bool {
-	if s.miscDeny(ctx, permissionCommandNPCDespawnGroup) {
-		return true
+	if !s.commandAllowed(ctx, permissionCommandNPCDespawnGroup) {
+		return false
 	}
 	groupID, removeRespawnTime, _, ok := parseSpawnGroupArgs(args, false)
 	if !ok {
@@ -1756,40 +1729,40 @@ func (s *session) handleNPCDespawnGroup(ctx context.Context, args []string) bool
 // player orientation; the level-1-then-level visual effect is not
 // reproduced (spawnPet broadcasts the final level only); InitTalentForLevel
 // rides the pet_spell rows, not a separate talent init.
-func (s *session) handleNPCTame(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandNPCTame) {
-		return
+func (s *session) handleNPCTame(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCTame) {
+		return false
 	}
 	if s.player == nil || s.server == nil {
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil || motionIsPet(motion) {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	entry, creatureLevel := motion.Entry, motion.Level
 	s.server.motionMu.Unlock()
 	if s.player.PetGUID != 0 {
 		s.sendSysMessage("You already have a pet.")
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	var ctype, family, typeFlags int64
 	if err := db.QueryRowContext(ctx, "SELECT COALESCE(type, 0), COALESCE(family, 0), COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?", entry).Scan(&ctype, &family, &typeFlags); err != nil || !creatureTameable(ctype, family, typeFlags, s.canTameExoticPets()) {
 		s.sendSysMessage(fmt.Sprintf("Creature %d is not tameable.", entry))
-		return
+		return true
 	}
 	if s.hasStabledHunterPet(ctx) {
 		s.sendSysMessage(fmt.Sprintf("Creature %d is not tameable.", entry))
-		return
+		return true
 	}
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
+		return true
 	}
 	// std::max<uint8>(playerLevel-5, creatureLevel) (cs_npc.cpp:1095):
 	// the uint8 subtraction wraps below level 5, so a level-1..4 player
@@ -1804,8 +1777,9 @@ func (s *session) handleNPCTame(ctx context.Context) {
 	// INSERT.
 	if !s.createTamedPetFromEntry(ctx, s.server.CharactersStore.DB, 0, entry, petLevel) {
 		s.sendSysMessage(fmt.Sprintf("Creature %d is not tameable.", entry))
-		return
+		return true
 	}
+	return true
 }
 
 // npcShowLootEntry mirrors _ShowLootEntry (cs_npc.cpp:1138): the count,
@@ -1838,29 +1812,28 @@ func (s *session) npcShowLootEntry(ctx context.Context, itemID, count, quality u
 // quest/FFA/conditional maps have no Go twin, so the "all" quest section
 // lists the shared quest rows and the conditions filter is unmodeled; the
 // locale leg is enUS-only (item_template Name1, as in the npc vendor arms).
-func (s *session) handleNPCShowLoot(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCShowLoot) {
-		return
+func (s *session) handleNPCShowLoot(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCShowLoot) {
+		return false
 	}
 	const syntax = "Syntax: .npc showloot [all]"
 	if len(args) > 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil || motionIsPet(motion) {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.motionMu.Lock()
 	snap := *motion
 	s.server.motionMu.Unlock()
 	if snap.Health != 0 {
 		s.sendSysMessage(fmt.Sprintf("%s is not dead or has no loot.", snap.Name))
-		return
+		return true
 	}
 	s.server.lootMu.Lock()
 	loot := s.server.creatureLoot[lootObjectKey{MapID: snap.Map, InstanceID: snap.InstanceID, GUID: snap.GUID}]
@@ -1881,7 +1854,7 @@ func (s *session) handleNPCShowLoot(ctx context.Context, args []string) {
 	// are excluded, so loot that is only quest items reports as no loot.
 	if loot == nil || (money == 0 && len(items) == 0) {
 		s.sendSysMessage(fmt.Sprintf("%s is not dead or has no loot.", snap.Name))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Loot for %s (Entry: %d):", snap.Name, snap.Entry))
 	s.sendSysMessage(fmt.Sprintf("Money: %dg %ds %dc", money/10000, money%10000/100, money%100))
@@ -1912,4 +1885,5 @@ func (s *session) handleNPCShowLoot(ctx context.Context, args []string) {
 			s.npcShowLootEntry(ctx, item.ItemEntry, item.Count, item.Quality)
 		}
 	}
+	return true
 }
