@@ -67,37 +67,37 @@ import (
 // trinity_string seed).
 
 // serverShutdownTimed mirrors ShutdownServer (cs_server.cpp:457-521)
-// for one node: args are "<delay> [#exit_code] [reason]". Empty or
-// unparseable args print the syntax line (C++ returns false, which
-// ChatHandler answers with syntax). The force-threshold override
+// for one node: args are "<delay> [#exit_code] [reason]". The bool
+// reports C++ handler success: every parse failure (empty args, a
+// remainder over 255 chars, an unparseable delay or exit code) returns
+// false silently == C++, so dispatchCommand shows the node's help
+// listing (ChatCommand.cpp:296-309); the force-threshold leg prints its
+// message and returns true. The force-threshold override
 // (World.cpp:1027, cs_server.cpp:511-516) raises a sub-30s delay to 30s
 // while other players are connected, unless the force mask is set.
-func (s *session) serverShutdownTimed(ctx context.Context, args []string, mask uint32, defaultExitCode uint8, what string) {
+func (s *session) serverShutdownTimed(ctx context.Context, args []string, mask uint32, defaultExitCode uint8) bool {
 	// C++ rejects a remainder longer than 255 chars (cs_server.cpp:460);
 	// the tokenized args re-join approximates that remainder here.
 	if len(strings.Join(args, " ")) > 255 {
-		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
-		return
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
-		return
+		return false
 	}
 	delay, ok := parseShutdownDelay(args[0])
 	if !ok {
-		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
-		return
+		return false
 	}
 	exitCode, reason, ok := parseShutdownArgs(args[1:], defaultExitCode)
 	if !ok {
-		s.sendSysMessage(fmt.Sprintf("Syntax: .server %s <delay> [#exit_code] [reason]", what))
-		return
+		return false
 	}
 	if delay < forceShutdownThresholdSecs && mask&shutdownMaskForce == 0 && !s.serverIsOnlyUser() {
 		delay = forceShutdownThresholdSecs
 		s.sendSysMessage(fmt.Sprintf("Shutdown delayed to %d seconds.", delay))
 	}
 	s.server.initiateShutdown(ctx, delay, mask, exitCode, reason)
+	return true
 }
 
 // serverIsOnlyUser mirrors IsOnlyUser (cs_server.cpp:344-355) as far as
@@ -114,29 +114,37 @@ func (s *session) serverIsOnlyUser() bool {
 
 // serverShutdownCancel mirrors HandleServerShutDownCancelCommand
 // (cs_server.cpp:341-347): the shared cancel arm for all four nodes.
-func (s *session) serverShutdownCancel(ctx context.Context, perm uint32) {
-	if s.miscDeny(ctx, perm) {
-		return
+func (s *session) serverShutdownCancel(ctx context.Context, perm uint32) bool {
+	if !s.commandAllowed(ctx, perm) {
+		return false
 	}
 	remaining, wasRestart, ok := s.server.cancelShutdown(ctx)
 	if !ok {
 		// C++ ShutdownCancel returns 0 with no message when no timer runs.
-		return
+		return true
 	}
 	verb := "shutdown"
 	if wasRestart {
 		verb = "restart"
 	}
 	s.sendSysMessage(fmt.Sprintf("Server %s cancelled with %d seconds remaining.", verb, remaining))
+	return true
 }
 
 // handleCmdServer dispatches the "server" root (cs_server.cpp:99-110).
-func (s *session) handleCmdServer(ctx context.Context, args []string) {
+// The bool reports C++ handler success: RBAC denial returns false
+// silently so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); paths that print a message return true.
+// The ShutdownServer parse failures return false silently == C++
+// (cs_server.cpp:457-521: empty args, over-255 remainder, unparseable
+// delay or exit code); SetClosed's bad value prints LANG_USE_BOL and
+// returns true (C++ sends it with SetSentErrorMessage, :409-425).
+func (s *session) handleCmdServer(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// Bare ".server": the root perm 718 is dead in C++ (deprecated
 		// 6-arg nullptr+subtable overload), so this is ungated.
 		s.sendSysMessage("Syntax: .server corpses|debug|exit|idlerestart|idleshutdown|info|motd|plimit|restart|shutdown|set")
-		return
+		return true
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -144,29 +152,30 @@ func (s *session) handleCmdServer(ctx context.Context, args []string) {
 	// level; match the arm the same way here.
 	switch {
 	case strings.HasPrefix("corpses", sub):
-		s.handleServerCorpses(ctx)
+		return s.handleServerCorpses(ctx)
 	case strings.HasPrefix("debug", sub):
-		s.handleServerDebug(ctx)
+		return s.handleServerDebug(ctx)
 	case strings.HasPrefix("exit", sub):
-		s.handleServerExit(ctx)
+		return s.handleServerExit(ctx)
 	case strings.HasPrefix("idlerestart", sub):
-		s.handleServerIdleRestart(ctx, rest)
+		return s.handleServerIdleRestart(ctx, rest)
 	case strings.HasPrefix("idleshutdown", sub):
-		s.handleServerIdleShutdown(ctx, rest)
+		return s.handleServerIdleShutdown(ctx, rest)
 	case strings.HasPrefix("info", sub):
-		s.handleServerInfo(ctx)
+		return s.handleServerInfo(ctx)
 	case strings.HasPrefix("motd", sub):
-		s.handleServerMotd(ctx)
+		return s.handleServerMotd(ctx)
 	case strings.HasPrefix("plimit", sub):
-		s.handleServerPLimit(ctx, rest)
+		return s.handleServerPLimit(ctx, rest)
 	case strings.HasPrefix("restart", sub):
-		s.handleServerRestart(ctx, rest)
+		return s.handleServerRestart(ctx, rest)
 	case strings.HasPrefix("shutdown", sub):
-		s.handleServerShutdown(ctx, rest)
+		return s.handleServerShutdown(ctx, rest)
 	case strings.HasPrefix("set", sub):
-		s.handleServerSet(ctx, rest)
+		return s.handleServerSet(ctx, rest)
 	default:
 		s.sendSysMessage("Syntax: .server corpses|debug|exit|idlerestart|idleshutdown|info|motd|plimit|restart|shutdown|set")
+		return true
 	}
 }
 
@@ -174,23 +183,24 @@ func (s *session) handleCmdServer(ctx context.Context, args []string) {
 // force the expired-corpse sweep now (World::RemoveOldCorpses) and report
 // the count. The automatic sweep also runs from the world tick every 20
 // minutes (WUPDATE_CORPSES, World.cpp:2106).
-func (s *session) handleServerCorpses(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandServerCorpses) {
-		return
+func (s *session) handleServerCorpses(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerCorpses) {
+		return false
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.lastCorpseExpiry = time.Now()
 	// C++ returns true silently; the sweep itself is the effect.
 	s.server.expireOldCorpses(ctx)
+	return true
 }
 
 // handleServerDebug mirrors HandleServerDebugCommand (cs_server.cpp:126):
 // partial — Go runtime/build info, world DB version, listen port.
-func (s *session) handleServerDebug(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandServerDebug) {
-		return
+func (s *session) handleServerDebug(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerDebug) {
+		return false
 	}
 	s.sendSysMessage(fmt.Sprintf("%s", "Moreno.Go-TrinityCore (WotLK 3.3.5a 12340)"))
 	s.sendSysMessage(fmt.Sprintf("Using Go version: %s", runtime.Version()))
@@ -205,91 +215,87 @@ func (s *session) handleServerDebug(ctx context.Context) {
 		s.sendSysMessage(fmt.Sprintf("Using World DB: %s", dbVersion))
 	}
 	s.sendSysMessage(fmt.Sprintf("Worldserver listening connections on port %d", s.server.Config.WorldServerPort))
+	return true
 }
 
 // handleServerExit mirrors HandleServerExitCommand (cs_server.cpp:383):
 // native via Server.Stop().
-func (s *session) handleServerExit(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandServerExit) {
-		return
+func (s *session) handleServerExit(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerExit) {
+		return false
 	}
 	s.sendSysMessage("Exiting.") // LANG_COMMAND_EXIT 1000
 	s.server.Stop()
+	return true
 }
 
 // handleServerIdleRestart mirrors HandleServerIdleRestartCommand
 // (cs_server.cpp:373): cancel arm + the "" arm with
 // SHUTDOWN_MASK_RESTART | SHUTDOWN_MASK_IDLE.
-func (s *session) handleServerIdleRestart(ctx context.Context, args []string) {
+func (s *session) handleServerIdleRestart(ctx context.Context, args []string) bool {
 	// Sub-table names prefix-match like every other level (ChatCommand).
 	if len(args) > 0 && strings.HasPrefix("cancel", strings.ToLower(args[0])) {
-		s.serverShutdownCancel(ctx, permissionCommandServerIdlerestartCancel)
-		return
+		return s.serverShutdownCancel(ctx, permissionCommandServerIdlerestartCancel)
 	}
-	if s.miscDeny(ctx, permissionCommandServerIdlerestart) {
-		return
+	if !s.commandAllowed(ctx, permissionCommandServerIdlerestart) {
+		return false
 	}
-	s.serverShutdownTimed(ctx, args, shutdownMaskRestart|shutdownMaskIdle, restartExitCode, "idlerestart")
+	return s.serverShutdownTimed(ctx, args, shutdownMaskRestart|shutdownMaskIdle, restartExitCode)
 }
 
 // handleServerIdleShutdown mirrors HandleServerIdleShutDownCommand
 // (cs_server.cpp:368): cancel arm + the "" arm with SHUTDOWN_MASK_IDLE.
-func (s *session) handleServerIdleShutdown(ctx context.Context, args []string) {
+func (s *session) handleServerIdleShutdown(ctx context.Context, args []string) bool {
 	// Sub-table names prefix-match like every other level (ChatCommand).
 	if len(args) > 0 && strings.HasPrefix("cancel", strings.ToLower(args[0])) {
-		s.serverShutdownCancel(ctx, permissionCommandServerIdleshutdownCancel)
-		return
+		return s.serverShutdownCancel(ctx, permissionCommandServerIdleshutdownCancel)
 	}
-	if s.miscDeny(ctx, permissionCommandServerIdleshutdown) {
-		return
+	if !s.commandAllowed(ctx, permissionCommandServerIdleshutdown) {
+		return false
 	}
-	s.serverShutdownTimed(ctx, args, shutdownMaskIdle, shutdownExitCode, "idleshutdown")
+	return s.serverShutdownTimed(ctx, args, shutdownMaskIdle, shutdownExitCode)
 }
 
 // handleServerRestart mirrors HandleServerRestartCommand (cs_server.cpp:358)
 // plus the force node (cs_server.cpp:379): cancel / force / "" arms.
-func (s *session) handleServerRestart(ctx context.Context, args []string) {
+func (s *session) handleServerRestart(ctx context.Context, args []string) bool {
 	if len(args) > 0 {
 		// Sub-table names prefix-match: "c"/"forc" route like full words.
 		switch {
 		case strings.HasPrefix("cancel", strings.ToLower(args[0])):
-			s.serverShutdownCancel(ctx, permissionCommandServerRestartCancel)
-			return
+			return s.serverShutdownCancel(ctx, permissionCommandServerRestartCancel)
 		case strings.HasPrefix("force", strings.ToLower(args[0])):
-			if s.miscDeny(ctx, permissionCommandServerRestartForce) {
-				return
+			if !s.commandAllowed(ctx, permissionCommandServerRestartForce) {
+				return false
 			}
-			s.serverShutdownTimed(ctx, args[1:], shutdownMaskForce|shutdownMaskRestart, restartExitCode, "restart force")
-			return
+			return s.serverShutdownTimed(ctx, args[1:], shutdownMaskForce|shutdownMaskRestart, restartExitCode)
 		}
 	}
-	if s.miscDeny(ctx, permissionCommandServerRestart) {
-		return
+	if !s.commandAllowed(ctx, permissionCommandServerRestart) {
+		return false
 	}
-	s.serverShutdownTimed(ctx, args, shutdownMaskRestart, restartExitCode, "restart")
+	return s.serverShutdownTimed(ctx, args, shutdownMaskRestart, restartExitCode)
 }
 
 // handleServerShutdown mirrors HandleServerShutDownCommand (cs_server.cpp:353)
 // plus the force node (cs_server.cpp:374): cancel / force / "" arms.
-func (s *session) handleServerShutdown(ctx context.Context, args []string) {
+func (s *session) handleServerShutdown(ctx context.Context, args []string) bool {
 	if len(args) > 0 {
 		// Sub-table names prefix-match: "c"/"forc" route like full words.
 		switch {
 		case strings.HasPrefix("cancel", strings.ToLower(args[0])):
-			s.serverShutdownCancel(ctx, permissionCommandServerShutdownCancel)
-			return
+			return s.serverShutdownCancel(ctx, permissionCommandServerShutdownCancel)
 		case strings.HasPrefix("force", strings.ToLower(args[0])):
-			if s.miscDeny(ctx, permissionCommandServerShutdownForce) {
-				return
+			if !s.commandAllowed(ctx, permissionCommandServerShutdownForce) {
+				return false
 			}
-			s.serverShutdownTimed(ctx, args[1:], shutdownMaskForce, shutdownExitCode, "shutdown force")
-			return
+			return s.serverShutdownTimed(ctx, args[1:], shutdownMaskForce, shutdownExitCode)
 		}
 	}
-	if s.miscDeny(ctx, permissionCommandServerShutdown) {
-		return
+	if !s.commandAllowed(ctx, permissionCommandServerShutdown) {
+		return false
 	}
-	s.serverShutdownTimed(ctx, args, 0, shutdownExitCode, "shutdown")
+	return s.serverShutdownTimed(ctx, args, 0, shutdownExitCode)
 }
 
 // formatSecsFullText mirrors secsToTimeString FullText (Util.cpp:97):
@@ -335,9 +341,9 @@ func formatSecsFullText(total int64) string {
 }
 
 // handleServerInfo mirrors HandleServerInfoCommand (cs_server.cpp:240).
-func (s *session) handleServerInfo(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandServerInfo) {
-		return
+func (s *session) handleServerInfo(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerInfo) {
+		return false
 	}
 	s.server.sessionsMu.RLock()
 	online := len(s.server.sessions)
@@ -355,16 +361,18 @@ func (s *session) handleServerInfo(ctx context.Context) {
 			s.sendSysMessage(fmt.Sprintf("Server shutdown in %s.", formatSecsFullText(shutdownRemainingSecs(deadline, time.Now()))))
 		}
 	}
+	return true
 }
 
 // handleServerMotd mirrors HandleServerMotdCommand (cs_server.cpp:279).
-func (s *session) handleServerMotd(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandServerMotd) {
-		return
+func (s *session) handleServerMotd(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerMotd) {
+		return false
 	}
 	// C++ displays FormattedMotd: the stored text split on '@' into lines.
 	motd := strings.Join(strings.Split(s.server.Config.Motd, "@"), "\n")
 	s.sendSysMessage(fmt.Sprintf("MOTD: %s", motd)) // LANG_MOTD_CURRENT 56
+	return true
 }
 
 // handleServerPLimit mirrors HandleServerPLimitCommand (cs_server.cpp:285):
@@ -372,9 +380,9 @@ func (s *session) handleServerMotd(ctx context.Context) {
 // names and negative values set allowedSecurityLevel (admission enforces
 // it, server.go:10283); "reset" restores Config.PlayerLimit and reloads
 // the level from the realmlist row (LoadDBAllowedSecurityLevel).
-func (s *session) handleServerPLimit(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandServerPlimit) {
-		return
+func (s *session) handleServerPLimit(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerPlimit) {
+		return false
 	}
 	if len(args) > 0 {
 		arg := args[0]
@@ -408,6 +416,7 @@ func (s *session) handleServerPLimit(ctx context.Context, args []string) {
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Player limits: amount %d, min. security level %s.", s.server.playerLimit, serverSecurityLevelName(s.server.allowedSecurityLevel)))
+	return true
 }
 
 // serverSecurityLevelName mirrors the plimit status switch
@@ -436,60 +445,65 @@ func isStrncmpPrefix(arg, name string) bool {
 
 // handleServerSet dispatches the "server set" sub-table
 // (cs_server.cpp:92-94): loglevel, motd, closed.
-func (s *session) handleServerSet(ctx context.Context, args []string) {
+func (s *session) handleServerSet(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// Bare ".server set": the "set" node perm 729 is dead in C++ (the
 		// deprecated 6-arg nullptr+subtable overload drops it and there is
 		// no "" child), so this is ungated.
 		s.sendSysMessage("Syntax: .server set loglevel|motd|closed")
-		return
+		return true
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
 	switch {
 	case strings.HasPrefix("loglevel", sub):
-		s.handleServerSetLogLevel(ctx)
+		return s.handleServerSetLogLevel(ctx)
 	case strings.HasPrefix("motd", sub):
-		s.handleServerSetMotd(ctx, rest)
+		return s.handleServerSetMotd(ctx, rest)
 	case strings.HasPrefix("closed", sub):
-		s.handleServerSetClosed(ctx, rest)
+		return s.handleServerSetClosed(ctx, rest)
 	default:
 		s.sendSysMessage("Syntax: .server set loglevel|motd|closed")
+		return true
 	}
 }
 
 // handleServerSetLogLevel mirrors HandleServerSetLogLevelCommand
 // (cs_server.cpp:431): documented-blocked — the slog logger's level is fixed
 // at handler creation.
-func (s *session) handleServerSetLogLevel(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandServerSetLoglevel) {
-		return
+func (s *session) handleServerSetLogLevel(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerSetLoglevel) {
+		return false
 	}
 	s.sendSysMessage("Changing the log level at runtime is not supported by this server.")
+	return true
 }
 
 // handleServerSetMotd mirrors HandleServerSetMotdCommand (cs_server.cpp:393).
-func (s *session) handleServerSetMotd(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandServerSetMotd) {
-		return
+func (s *session) handleServerSetMotd(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerSetMotd) {
+		return false
 	}
 	motd := strings.Join(args, " ")
 	s.server.Config.Motd = motd
 	s.sendSysMessage(fmt.Sprintf("New MOTD: %s", motd)) // LANG_MOTD_NEW 1101
+	return true
 }
 
 // handleServerSetClosed mirrors HandleServerSetClosedCommand
 // (cs_server.cpp:409).
-func (s *session) handleServerSetClosed(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandServerSetClosed) {
-		return
+func (s *session) handleServerSetClosed(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandServerSetClosed) {
+		return false
 	}
 	// C++ compares the whole remainder with strncmp(args, "on", 3) /
 	// strncmp(args, "off", 4): only exactly "on"/"off" match, so extra
 	// tokens ("on extra") reject with LANG_USE_BOL, like empty input.
+	// The bad-value leg prints the message (SetSentErrorMessage in C++)
+	// and returns true, so no help listing follows.
 	if len(args) != 1 {
 		s.sendSysMessage("Use on/off.") // LANG_USE_BOL 259
-		return
+		return true
 	}
 	switch args[0] {
 	case "on":
@@ -509,4 +523,5 @@ func (s *session) handleServerSetClosed(ctx context.Context, args []string) {
 	default:
 		s.sendSysMessage("Use on/off.") // LANG_USE_BOL 259
 	}
+	return true
 }

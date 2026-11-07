@@ -6647,15 +6647,23 @@ const (
 // (cs_deserter.cpp:58-77): "deserter instance|bg add <time>" applies the
 // matching deserter aura with a custom duration (HandleDeserterAdd), and
 // "deserter instance|bg remove" drops it (HandleDeserterRemove).
-func (s *session) handleCmdDeserter(ctx context.Context, args []string) {
+// The bool reports C++ handler success: RBAC denial returns false
+// silently so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); the framework arg-parse failures (a missing
+// or unparseable time, extra tokens on remove) return false the same
+// way — C++ never invokes the handler there (ChatCommand.h:
+// ConsumeFromOffset, "the entire string must be consumed"). Paths that
+// print a message (no character selected, LANG_BAD_VALUE) return true:
+// C++ sends them with SetSentErrorMessage, which suppresses the help.
+func (s *session) handleCmdDeserter(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .deserter instance|bg add|remove [time]")
-		return
+		return true
 	}
 	group := strings.ToLower(args[0])
 	if len(args) < 2 {
 		s.sendSysMessage("Syntax: .deserter " + group + " add|remove [time]")
-		return
+		return true
 	}
 	var perm uint32
 	var spellID uint32
@@ -6685,15 +6693,14 @@ func (s *session) handleCmdDeserter(ctx context.Context, args []string) {
 		permAdd, permRemove = permissionCommandDeserterBGAdd, permissionCommandDeserterBGRemove
 	default:
 		s.sendSysMessage("Syntax: .deserter instance|bg add|remove [time]")
-		return
+		return true
 	}
 	if !matchArm(args[1]) {
 		s.sendSysMessage("Syntax: .deserter " + group + " add|remove [time]")
-		return
+		return true
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	// ChatHandler::getSelectedPlayer: own player when nothing is targeted,
 	// otherwise the connected player matching the selection (null, i.e. no
@@ -6701,44 +6708,46 @@ func (s *session) handleCmdDeserter(ctx context.Context, args []string) {
 	target := s
 	if s.selection != 0 {
 		if s.server == nil {
-			return
+			return true
 		}
 		target = s.server.playerSessionForGUID(s.selection)
 		if target == nil {
 			s.sendSysMessage("No character selected.")
-			return
+			return true
 		}
 	}
 	if adding {
 		if len(args) != 3 {
-			s.sendSysMessage("Syntax: .deserter " + group + " add <time>")
-			return
+			return false
 		}
 		secs, ok := parseCommandUint32(args[2])
-		if !ok || secs == 0 {
+		if !ok {
+			return false
+		}
+		if secs == 0 {
 			// LANG_BAD_VALUE: zero time, like the C++ !time check.
 			s.sendSysMessage("Incorrect value.")
-			return
+			return true
 		}
 		// Player::AddAura returns null when the spell entry is missing, which
 		// the C++ handler reports as LANG_BAD_VALUE.
 		if s.server == nil || s.server.Data == nil {
-			return
+			return true
 		}
 		if _, found, _ := s.server.Data.Spell(spellID); !found {
 			s.sendSysMessage("Incorrect value.")
-			return
+			return true
 		}
 		// Aura::SetDuration(time * IN_MILLISECONDS).
 		target.applyAuraWithDuration(spellID, secs*1000)
-		return
+		return true
 	}
 	// HandleDeserterRemove takes no arguments (cs_deserter.cpp:143).
 	if len(args) != 2 {
-		s.sendSysMessage("Syntax: .deserter " + group + " remove")
-		return
+		return false
 	}
 	target.removeAura(spellID)
+	return true
 }
 
 // ---- disable_commandscript (cs_disable.cpp) ----
@@ -6799,11 +6808,14 @@ var disableCommandTypes = []disableCommandType{
 // (cs_disable.cpp:58-84): the "disable" root with the "add" and "remove"
 // groups, each arm named after its DisableType and gated on the matching
 // RBAC_PERM_COMMAND_DISABLE_* permission (RBAC.h:221-237, all Console::Yes).
-func (s *session) handleCmdDisable(ctx context.Context, args []string) {
+// The bool reports C++ handler success: RBAC denial returns false
+// silently so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); paths that print a message return true.
+func (s *session) handleCmdDisable(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .disable add|remove <spell|quest|map|battleground|achievement_criteria|outdoorpvp|vmap|mmap> <entry> [flags] <comment>"
 	if len(args) < 2 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	// The Trinity parser prefix-matches command names at every nesting
 	// level; match the add/remove group and the type arm the same way here.
@@ -6816,7 +6828,7 @@ func (s *session) handleCmdDisable(ctx context.Context, args []string) {
 	}
 	if mode == "" {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	var info *disableCommandType
 	lowerType := strings.ToLower(args[1])
@@ -6845,55 +6857,66 @@ func (s *session) handleCmdDisable(ctx context.Context, args []string) {
 			for _, m := range matches {
 				s.sendSysMessage(".disable " + mode + " " + strings.ReplaceAll(m.label, " ", "_"))
 			}
-			return
+			return true
 		}
 	}
 	if info == nil {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	perm := info.permRemove
 	if mode == "add" {
 		perm = info.permAdd
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if mode == "add" {
-		s.handleDisableAdd(ctx, info, args[2:])
-	} else {
-		s.handleDisableRemove(ctx, info, args[2:])
+		return s.handleDisableAdd(ctx, info, args[2:])
 	}
+	return s.handleDisableRemove(ctx, info, args[2:])
 }
 
 // handleDisableAdd mirrors HandleAddDisables (cs_disable.cpp:93-217): the
 // entry is validated against the matching data store, duplicates are
 // rejected, and the row lands in the disables table (WORLD_INS_DISABLES).
-func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType, args []string) {
-	const syntax = "Syntax: .disable add <type> <entry> [flags] <comment>"
+// The bool reports C++ handler success: the missing-entry/missing-comment
+// and entry-0 legs return false silently (cs_disable.cpp:87,94), so
+// dispatchCommand shows the node's help listing; the outdoorpvp add arm
+// alone swallows that false (HandleAddDisableOutdoorPvPCommand ignores
+// HandleAddDisables' return, :258-265) and returns true — except on
+// empty args, where the wrapper's !*args gate (:260-261) still returns
+// false. Validation and already-disabled legs print their message and
+// return true: C++ sends them with SetSentErrorMessage, which
+// suppresses the help.
+func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType, args []string) bool {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return
+		return true
 	}
 	// C++: strtok(entry) missing or atoi == 0 -> return false, and a
-	// missing comment token -> return false, both with no message sent.
-	// The outdoorpvp add arm alone swallows that false (cs_disable.cpp:
-	// HandleAddDisableOutdoorPvPCommand ignores HandleAddDisables'
-	// return), so those two failures stay silent for outdoorpvp only.
+	// missing comment token -> return false, both with no message sent
+	// (cs_disable.cpp:87,94). The outdoorpvp add arm alone swallows
+	// that false (HandleAddDisableOutdoorPvPCommand ignores
+	// HandleAddDisables' return, :258-265), so those failures return
+	// true for outdoorpvp only — except on empty args, where the
+	// wrapper's !*args gate (:260-261) still returns false.
+	if len(args) == 0 {
+		return false
+	}
 	if len(args) < 3 {
-		if info.disableType != disableTypeOutdoorPvP {
-			s.sendSysMessage(syntax)
+		if info.disableType == disableTypeOutdoorPvP {
+			return true
 		}
-		return
+		return false
 	}
 	// C++: entry is uint32(atoi(entryStr)), flags uint8(atoi(flagsStr));
 	// cAtoi keeps the atoi leniency (leading-digit runs, sign, wrap).
 	entry := uint32(cAtoi(args[0]))
 	if entry == 0 {
-		if info.disableType != disableTypeOutdoorPvP {
-			s.sendSysMessage(syntax)
+		if info.disableType == disableTypeOutdoorPvP {
+			return true
 		}
-		return
+		return false
 	}
 	flags := uint8(cAtoi(args[1]))
 	comment := strings.Join(args[2:], " ")
@@ -6901,40 +6924,40 @@ func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType
 	case disableTypeSpell:
 		// sSpellMgr->GetSpellInfo -> LANG_COMMAND_NOSPELLFOUND.
 		if s.server.Data == nil {
-			return
+			return true
 		}
 		if _, found, _ := s.server.Data.Spell(entry); !found {
 			s.sendSysMessage("No spell found.")
-			return
+			return true
 		}
 	case disableTypeQuest:
 		// sObjectMgr->GetQuestTemplate -> LANG_COMMAND_QUEST_NOTFOUND.
 		if !characterQuestTemplateExists(ctx, s.server.WorldStore.DB, entry) {
 			s.sendSysMessage(fmt.Sprintf("No quest template found for entry %d.", entry))
-			return
+			return true
 		}
 	case disableTypeMap, disableTypeVMap, disableTypeMMap:
 		// sMapStore.LookupEntry -> LANG_COMMAND_NOMAPFOUND.
 		if s.server.Data == nil {
-			return
+			return true
 		}
 		if _, found, _ := s.server.Data.Map(entry); !found {
 			s.sendSysMessage("No map found.")
-			return
+			return true
 		}
 	case disableTypeBattleground:
 		// sBattlemasterListStore.LookupEntry ->
 		// LANG_COMMAND_NO_BATTLEGROUND_FOUND.
 		if s.server.Data == nil {
-			return
+			return true
 		}
 		file, fileErr := s.server.Data.File("BattlemasterList")
 		if fileErr != nil {
-			return
+			return true
 		}
 		if _, found := file.Find(entry); !found {
 			s.sendSysMessage("No battleground found.")
-			return
+			return true
 		}
 	case disableTypeAchievementCriteria:
 		// sAchievementMgr->GetAchievementCriteria ->
@@ -6945,7 +6968,7 @@ func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType
 		achievementIndex.mu.RUnlock()
 		if !found {
 			s.sendSysMessage("No achievement criteria found.")
-			return
+			return true
 		}
 	case disableTypeOutdoorPvP:
 		// entry > MAX_OUTDOORPVP_TYPES ->
@@ -6954,7 +6977,7 @@ func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType
 			// cs_disable.cpp:163 sends LANG_COMMAND_NO_OUTDOOR_PVP_FORUND
 			// with no entry argument.
 			s.sendSysMessage("No outdoor PvP found.")
-			return
+			return true
 		}
 	}
 	row, err := s.server.WorldStore.QueryRowStatement(ctx, database.StatementID("WORLD_SEL_DISABLES"), entry, info.disableType)
@@ -6965,31 +6988,33 @@ func (s *session) handleDisableAdd(ctx context.Context, info *disableCommandType
 	}
 	if alreadyDisabled {
 		s.sendSysMessage(fmt.Sprintf("This %s (Id: %d) is already disabled.", info.label, entry))
-		return
+		return true
 	}
 	if _, err := s.server.WorldStore.ExecStatement(ctx, database.StatementID("WORLD_INS_DISABLES"), entry, info.disableType, uint16(flags), comment); err != nil {
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Add Disabled %s (Id: %d) for reason %s", info.label, entry, comment))
+	return true
 }
 
 // handleDisableRemove mirrors HandleRemoveDisables (cs_disable.cpp:274-326):
 // the row is looked up in the disables table (WORLD_SEL_DISABLES) and
 // deleted (WORLD_DEL_DISABLES).
-func (s *session) handleDisableRemove(ctx context.Context, info *disableCommandType, args []string) {
-	const syntax = "Syntax: .disable remove <type> <entry>"
+// The bool reports C++ handler success: the missing-entry and entry-0
+// legs return false silently (cs_disable.cpp:286), so dispatchCommand
+// shows the node's help listing; the not-disabled leg prints its
+// message and returns true (SetSentErrorMessage in C++).
+func (s *session) handleDisableRemove(ctx context.Context, info *disableCommandType, args []string) bool {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return
+		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	// C++: uint32(atoi(entryStr)) with the same !atoi -> false gate as add.
 	entry := uint32(cAtoi(args[0]))
 	if entry == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	row, err := s.server.WorldStore.QueryRowStatement(ctx, database.StatementID("WORLD_SEL_DISABLES"), entry, info.disableType)
 	disabled := false
@@ -6999,12 +7024,13 @@ func (s *session) handleDisableRemove(ctx context.Context, info *disableCommandT
 	}
 	if !disabled {
 		s.sendSysMessage(fmt.Sprintf("This %s (Id: %d) is not disabled.", info.label, entry))
-		return
+		return true
 	}
 	if _, err := s.server.WorldStore.ExecStatement(ctx, database.StatementID("WORLD_DEL_DISABLES"), entry, info.disableType); err != nil {
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Remove Disabled %s (Id: %d)", info.label, entry))
+	return true
 }
 
 // handleCmdEvent mirrors event_commandscript::GetCommands (cs_event.cpp:42-64):
@@ -8739,7 +8765,7 @@ func (s *session) buildCommandTree() *commandNode {
 	}, permissionCommandModifySpeedSwim)
 	root.addWithPerms("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, map[string]uint32{"set": permissionCommandAddItemSet}, nil).withPerm(permissionCommandAddItem)
 	root.addWithPerms("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, map[string]uint32{"back": permissionCommandCastBack, "dist": permissionCommandCastDist, "self": permissionCommandCastSelf, "target": permissionCommandCastTarget, "dest": permissionCommandCastDest}, nil).withPerm(permissionCommandCast)
-	serverNode := root.addWithPerms("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, map[string]uint32{"corpses": permissionCommandServerCorpses, "debug": permissionCommandServerDebug, "exit": permissionCommandServerExit, "idlerestart": permissionCommandServerIdlerestart, "idleshutdown": permissionCommandServerIdleshutdown, "info": permissionCommandServerInfo, "motd": permissionCommandServerMotd, "plimit": permissionCommandServerPlimit, "restart": permissionCommandServerRestart, "shutdown": permissionCommandServerShutdown, "set": permissionCommandServerSet}, nil).withPerm(permissionCommandServer)
+	serverNode := root.addWithPerms("server", func(ctx context.Context, args []string) bool { return s.handleCmdServer(ctx, args) }, map[string]uint32{"corpses": permissionCommandServerCorpses, "debug": permissionCommandServerDebug, "exit": permissionCommandServerExit, "idlerestart": permissionCommandServerIdlerestart, "idleshutdown": permissionCommandServerIdleshutdown, "info": permissionCommandServerInfo, "motd": permissionCommandServerMotd, "plimit": permissionCommandServerPlimit, "restart": permissionCommandServerRestart, "shutdown": permissionCommandServerShutdown, "set": permissionCommandServerSet}, nil).withPerm(permissionCommandServer)
 	// R13 depth (cs_server.cpp:66-94): restart/shutdown/idlerestart/
 	// idleshutdown are sub-tables with cancel/force leaves and a ""
 	// entry (the timed handler), so those group nodes keep their
@@ -8747,60 +8773,47 @@ func (s *session) buildCommandTree() *commandNode {
 	// handler-less.
 	serverRestart := serverNode.group("restart")
 	serverRestart.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"restart"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"restart"}, args...))
 	}
 	serverRestart.leaf("cancel", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"restart", "cancel"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"restart", "cancel"}, args...))
 	}, permissionCommandServerRestartCancel)
 	serverRestart.leaf("force", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"restart", "force"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"restart", "force"}, args...))
 	}, permissionCommandServerRestartForce)
 	serverShutdown := serverNode.group("shutdown")
 	serverShutdown.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"shutdown"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"shutdown"}, args...))
 	}
 	serverShutdown.leaf("cancel", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"shutdown", "cancel"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"shutdown", "cancel"}, args...))
 	}, permissionCommandServerShutdownCancel)
 	serverShutdown.leaf("force", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"shutdown", "force"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"shutdown", "force"}, args...))
 	}, permissionCommandServerShutdownForce)
 	serverSet := serverNode.group("set")
 	serverSet.leaf("loglevel", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"set", "loglevel"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"set", "loglevel"}, args...))
 	}, permissionCommandServerSetLoglevel)
 	serverSet.leaf("motd", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"set", "motd"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"set", "motd"}, args...))
 	}, permissionCommandServerSetMotd)
 	serverSet.leaf("closed", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"set", "closed"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"set", "closed"}, args...))
 	}, permissionCommandServerSetClosed)
 	serverIdleRestart := serverNode.group("idlerestart")
 	serverIdleRestart.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"idlerestart"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"idlerestart"}, args...))
 	}
 	serverIdleRestart.leaf("cancel", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"idlerestart", "cancel"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"idlerestart", "cancel"}, args...))
 	}, permissionCommandServerIdlerestartCancel)
 	serverIdleShutdown := serverNode.group("idleshutdown")
 	serverIdleShutdown.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"idleshutdown"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"idleshutdown"}, args...))
 	}
 	serverIdleShutdown.leaf("cancel", func(ctx context.Context, args []string) bool {
-		s.handleCmdServer(ctx, append([]string{"idleshutdown", "cancel"}, args...))
-		return true
+		return s.handleCmdServer(ctx, append([]string{"idleshutdown", "cancel"}, args...))
 	}, permissionCommandServerIdleshutdownCancel)
 	characterNode := root.addWithPerms("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, map[string]uint32{"customize": permissionCommandCharacterCustomize, "changefaction": permissionCommandCharacterChangeFaction, "changerace": permissionCommandCharacterChangeRace, "changeaccount": permissionCommandCharacterChangeAccount, "deleted": 0, "erase": permissionCommandCharacterErase, "level": permissionCommandCharacterLevel, "rename": permissionCommandCharacterRename, "reputation": permissionCommandCharacterReputation, "titles": permissionCommandCharacterTitles}, map[string]string{"char": "character"})
 	// R13 depth (cs_character.cpp:57-60, old-form table): "deleted"
@@ -8872,29 +8885,25 @@ func (s *session) buildCommandTree() *commandNode {
 	root.addWithPerms("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanListAccount, "character": permissionCommandBanListCharacter, "ip": permissionCommandBanListIP}, nil)
 	root.addWithPerms("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, map[string]uint32{"account": permissionCommandUnBanAccount, "character": permissionCommandUnBanCharacter, "playeraccount": permissionCommandUnBanPlayerAccount, "ip": permissionCommandUnBanIP}, nil)
 	root.addWithPerms("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, map[string]uint32{"start": permissionCommandBfStart, "stop": permissionCommandBfStop, "switch": permissionCommandBfSwitch, "timer": permissionCommandBfTimer, "enable": permissionCommandBfEnable}, nil)
-	deserterNode := root.add("deserter", func(ctx context.Context, args []string) bool { s.handleCmdDeserter(ctx, args); return true }, []string{"instance", "bg"}, nil)
+	deserterNode := root.add("deserter", func(ctx context.Context, args []string) bool { return s.handleCmdDeserter(ctx, args) }, []string{"instance", "bg"}, nil)
 	// R13 depth (cs_deserter.cpp:44-53): "instance" and "bg" are
 	// sub-tables with add/remove leaves and no "" entries, so the
 	// group nodes stay handler-less.
 	deserterInstance := deserterNode.group("instance")
 	deserterInstance.leaf("add", func(ctx context.Context, args []string) bool {
-		s.handleCmdDeserter(ctx, append([]string{"instance", "add"}, args...))
-		return true
+		return s.handleCmdDeserter(ctx, append([]string{"instance", "add"}, args...))
 	}, permissionCommandDeserterInstanceAdd)
 	deserterInstance.leaf("remove", func(ctx context.Context, args []string) bool {
-		s.handleCmdDeserter(ctx, append([]string{"instance", "remove"}, args...))
-		return true
+		return s.handleCmdDeserter(ctx, append([]string{"instance", "remove"}, args...))
 	}, permissionCommandDeserterInstanceRemove)
 	deserterBG := deserterNode.group("bg")
 	deserterBG.leaf("add", func(ctx context.Context, args []string) bool {
-		s.handleCmdDeserter(ctx, append([]string{"bg", "add"}, args...))
-		return true
+		return s.handleCmdDeserter(ctx, append([]string{"bg", "add"}, args...))
 	}, permissionCommandDeserterBGAdd)
 	deserterBG.leaf("remove", func(ctx context.Context, args []string) bool {
-		s.handleCmdDeserter(ctx, append([]string{"bg", "remove"}, args...))
-		return true
+		return s.handleCmdDeserter(ctx, append([]string{"bg", "remove"}, args...))
 	}, permissionCommandDeserterBGRemove)
-	disableNode := root.add("disable", func(ctx context.Context, args []string) bool { s.handleCmdDisable(ctx, args); return true }, []string{"add", "remove"}, nil)
+	disableNode := root.add("disable", func(ctx context.Context, args []string) bool { return s.handleCmdDisable(ctx, args) }, []string{"add", "remove"}, nil)
 	// R13 depth (cs_disable.cpp:44-75, old-form tables): "add" and
 	// "remove" are sub-tables with spell/quest/map/battleground/
 	// achievement_criteria/outdoorpvp/vmap/mmap leaves and no ""
@@ -8917,8 +8926,7 @@ func (s *session) buildCommandTree() *commandNode {
 	} {
 		typ := typ
 		disableAdd.leaf(typ.name, func(ctx context.Context, args []string) bool {
-			s.handleCmdDisable(ctx, append([]string{"add", typ.name}, args...))
-			return true
+			return s.handleCmdDisable(ctx, append([]string{"add", typ.name}, args...))
 		}, typ.perm)
 	}
 	disableRemove := disableNode.group("remove")
@@ -8937,8 +8945,7 @@ func (s *session) buildCommandTree() *commandNode {
 	} {
 		typ := typ
 		disableRemove.leaf(typ.name, func(ctx context.Context, args []string) bool {
-			s.handleCmdDisable(ctx, append([]string{"remove", typ.name}, args...))
-			return true
+			return s.handleCmdDisable(ctx, append([]string{"remove", typ.name}, args...))
 		}, typ.perm)
 	}
 	root.addWithPerms("event", func(ctx context.Context, args []string) bool { s.handleCmdEvent(ctx, args); return true }, map[string]uint32{"activelist": permissionCommandEventActivelist, "start": permissionCommandEventStart, "stop": permissionCommandEventStop, "info": permissionCommandEventInfo}, nil)
