@@ -14,10 +14,12 @@ import (
 // (src/server/game/AI/NpcBots/botcommands.cpp:97-125). The "add", "remove",
 // "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command"
 // (standstill/stopfully/follow), "info", "hide", "unhide", "show", "recall",
-// "kill", "suicide", "distance" (follow + attack short/long/exact) and "order"
-// (cast) arms are converted; the first five give Recruit/AddBotFree/Add their
-// first real call sites. The remaining "set" sub-table (faction/owner/spec)
-// lands in a later unit.
+// "kill", "suicide", "distance" (follow + attack short/long/exact), "order"
+// (cast) and "set" (faction/owner/spec) arms are converted; the first five
+// give Recruit/AddBotFree/Add their first real call sites.
+// R13: every handler returns bool — denial false silently (C++ never invokes
+// a denied leaf), parse failures false silently, message legs true (C++
+// returns false with SetSentErrorMessage, which suppresses the help listing).
 //
 // The "add"/"remove" arms are selection-driven in C++ (owner->GetSelectedUnit()
 // must be a live uncontrolled/controlled npcbot creature). Go keeps no
@@ -72,15 +74,18 @@ const (
 )
 
 // handleCmdNpcBot dispatches the "npcbot" root (botcommands.cpp:124-126).
-func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
+// R13: denial returns false silently (C++ never invokes a denied leaf);
+// bare/unknown tokens return false silently (the dispatcher shows the help
+// listing); message legs return true (C++ returns false with
+// SetSentErrorMessage, which suppresses the help listing).
+func (s *session) handleCmdNpcBot(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .npcbot add|remove|spawn|move|delete|lookup|revive|reloadconfig|command|info|hide|unhide|show|recall|kill|suicide|distance|order|set"
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	// ChatCommandNode::TryExecuteCommand (ChatCommand.cpp:267-288): the token
 	// prefix-matches visible subcommands; an exact-name match wins, a token
@@ -102,53 +107,52 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 		}
 	}
 	if len(subMatches) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if len(subMatches) > 1 {
 		s.sendSysMessage("There are multiple npcbot subcommands matching '" + sub + "'. Did you mean:")
 		for _, candidate := range subMatches {
 			s.sendSysMessage(candidate)
 		}
-		return
+		return true
 	}
 	switch subMatches[0] {
 	case "add":
-		s.handleNpcBotAddCommand(ctx)
+		return s.handleNpcBotAddCommand(ctx)
 	case "remove":
-		s.handleNpcBotRemoveCommand(ctx)
+		return s.handleNpcBotRemoveCommand(ctx)
 	case "spawn":
-		s.handleNpcBotSpawnCommand(ctx, rest)
+		return s.handleNpcBotSpawnCommand(ctx, rest)
 	case "move":
-		s.handleNpcBotMoveCommand(ctx, rest)
+		return s.handleNpcBotMoveCommand(ctx, rest)
 	case "delete":
-		s.handleNpcBotDeleteCommand(ctx)
+		return s.handleNpcBotDeleteCommand(ctx)
 	case "lookup":
-		s.handleNpcBotLookupCommand(ctx, rest)
+		return s.handleNpcBotLookupCommand(ctx, rest)
 	case "revive":
-		s.handleNpcBotReviveCommand(ctx)
+		return s.handleNpcBotReviveCommand(ctx)
 	case "reloadconfig":
-		s.handleNpcBotReloadConfigCommand(ctx)
+		return s.handleNpcBotReloadConfigCommand(ctx)
 	case "command":
-		s.handleNpcBotCommandSubCommand(ctx, rest)
+		return s.handleNpcBotCommandSubCommand(ctx, rest)
 	case "info":
-		s.handleNpcBotInfoCommand(ctx)
+		return s.handleNpcBotInfoCommand(ctx)
 	case "hide":
-		s.handleNpcBotHideCommand(ctx)
+		return s.handleNpcBotHideCommand(ctx)
 	case "unhide", "show":
-		s.handleNpcBotUnhideCommand(ctx) // C++ maps "show" to HandleNpcBotUnhideCommand
+		return s.handleNpcBotUnhideCommand(ctx) // C++ maps "show" to HandleNpcBotUnhideCommand
 	case "recall":
-		s.handleNpcBotRecallCommand(ctx)
+		return s.handleNpcBotRecallCommand(ctx)
 	case "kill", "suicide":
-		s.handleNpcBotKillCommand(ctx) // C++ maps "suicide" to HandleNpcBotKillCommand
+		return s.handleNpcBotKillCommand(ctx) // C++ maps "suicide" to HandleNpcBotKillCommand
 	case "distance":
-		s.handleNpcBotDistanceCommand(ctx, rest)
+		return s.handleNpcBotDistanceCommand(ctx, rest)
 	case "order":
-		s.handleNpcBotOrderCommand(ctx, rest)
+		return s.handleNpcBotOrderCommand(ctx, rest)
 	case "set":
-		s.handleNpcBotSetCommand(ctx, rest)
+		return s.handleNpcBotSetCommand(ctx, rest)
 	default:
-		s.sendSysMessage(syntax)
+		return false
 	}
 }
 
@@ -156,13 +160,13 @@ func (s *session) handleCmdNpcBot(ctx context.Context, args []string) {
 // hires the selected uncontrolled npcbot through BotMgr::AddBot(bot, false),
 // the takeMoney=false arm == NPCBotManager.AddBotFree (the C++ command never
 // passes takeMoney=true; the paid path belongs to the gossip-hire flow).
-func (s *session) handleNpcBotAddCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandNPCBotAdd) {
-		return
+func (s *session) handleNpcBotAddCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotAdd) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	// C++: Unit* cre = owner->GetSelectedUnit(); no cre or not TYPEID_UNIT →
@@ -170,13 +174,13 @@ func (s *session) handleNpcBotAddCommand(ctx context.Context) {
 	sel := s.selection
 	if sel == 0 {
 		s.npcbotAddUsage()
-		return
+		return true
 	}
 	switch uint16(sel >> 48) {
 	case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
 	default:
 		s.npcbotAddUsage()
-		return
+		return true
 	}
 	entry := uint32((sel >> 24) & 0x00FFFFFF)
 	// C++: !bot->IsNPCBot() || bot->GetBotAI()->GetBotOwnerGuid() →
@@ -184,11 +188,11 @@ func (s *session) handleNpcBotAddCommand(ctx context.Context) {
 	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
 	if !ok || flagsExtra&npcbotCreatureFlagMask == 0 {
 		s.sendSysMessage("You must select uncontrolled npcbot")
-		return
+		return true
 	}
 	if data, ok := mgr.Get(entry); !ok || data.Owner != 0 {
 		s.sendSysMessage("You must select uncontrolled npcbot")
-		return
+		return true
 	}
 	result, err := mgr.AddBotFree(ctx, uint32(s.playerGUID), entry)
 	if err != nil {
@@ -198,9 +202,10 @@ func (s *session) handleNpcBotAddCommand(ctx context.Context) {
 	// (including the silent ALREADY_HAVE arm) answers the same failure line.
 	if err != nil || result != BotAddSuccess {
 		s.sendSysMessage("NpcBot is NOT added for some reason!")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("%s is now your npcbot", s.npcbotTemplateName(ctx, entry)))
+	return true
 }
 
 func (s *session) npcbotAddUsage() {
@@ -232,20 +237,20 @@ func (s *session) releaseNpcBotOwnerCache(guid uint64) {
 	s.server.Features.NPCBots.ReleaseOwnerCache(uint32(guid))
 }
 
-func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandNPCBotRemove) {
-		return
+func (s *session) handleNpcBotRemoveCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotRemove) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	sel := s.selection
 	if sel == 0 {
 		s.sendSysMessage(".npcbot remove")
 		s.sendSysMessage("Frees selected npcbot from it's owner. Select player to remove all npcbots")
-		return
+		return true
 	}
 	// C++: Player* master = u->ToPlayer() (HighGuid::Player == 0x0000).
 	if uint16(sel>>48) == 0x0000 {
@@ -258,19 +263,19 @@ func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 		owner := uint32(sel)
 		if mgr.dismissableCountByOwner(owner) == 0 {
 			s.sendSysMessage("Npcbots are not found!")
-			return
+			return true
 		}
 		if err := mgr.UpdateOwnerAll(ctx, owner, 0); err != nil {
 			s.debug("npcbot remove all failed", "account", s.accountName, "owner", owner, "error", err)
 			s.sendSysMessage("Some npcbots were not removed!")
-			return
+			return true
 		}
 		if mgr.dismissableCountByOwner(owner) != 0 {
 			s.sendSysMessage("Some npcbots were not removed!")
-			return
+			return true
 		}
 		s.sendSysMessage("Npcbots were successfully removed")
-		return
+		return true
 	}
 	// C++: Creature* cre = u->ToCreature(); requires IsNPCBot() and
 	// !IsFreeBot() (== persisted owner set); otherwise falls through to the
@@ -278,18 +283,18 @@ func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 	var high = uint16(sel >> 48)
 	if high != 0xF130 && high != 0xF140 && high != 0xF150 {
 		s.sendSysMessage("You must select player or controlled npcbot")
-		return
+		return true
 	}
 	entry := uint32((sel >> 24) & 0x00FFFFFF)
 	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
 	if !ok || flagsExtra&npcbotCreatureFlagMask == 0 {
 		s.sendSysMessage("You must select player or controlled npcbot")
-		return
+		return true
 	}
 	data, ok := mgr.Get(entry)
 	if !ok || data.Owner == 0 {
 		s.sendSysMessage("You must select player or controlled npcbot")
-		return
+		return true
 	}
 	// C++: master->GetBotMgr()->RemoveBot(cre->GetGUID(), BOT_REMOVE_DISMISS),
 	// then GetBot(guid) == nullptr → "NpcBot successfully removed".
@@ -302,18 +307,19 @@ func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 	// legs (group/unsummon/owner-reset) have no Go bridge.
 	if entry == npcBotEntryMirrorImage {
 		s.sendSysMessage("NpcBot was NOT removed for some stupid reason!")
-		return
+		return true
 	}
 	if err := mgr.Update(ctx, entry, NpcBotUpdateOwner, uint32(0)); err != nil {
 		s.debug("npcbot remove failed", "account", s.accountName, "entry", entry, "error", err)
 		s.sendSysMessage("NpcBot was NOT removed for some stupid reason!")
-		return
+		return true
 	}
 	if data, ok := mgr.Get(entry); !ok || data.Owner != 0 {
 		s.sendSysMessage("NpcBot was NOT removed for some stupid reason!")
-		return
+		return true
 	}
 	s.sendSysMessage("NpcBot successfully removed")
+	return true
 }
 
 // handleNpcBotSpawnCommand mirrors HandleNpcBotSpawnCommand
@@ -323,13 +329,13 @@ func (s *session) handleNpcBotRemoveCommand(ctx context.Context) {
 // (Creature::Create, LoadBotCreatureFromDB, AddCreatureToGrid) have no Go
 // bridge. The transport and instance gates (botcommands.cpp:1044/1058) have no
 // bridge either — Go keeps no player-transport or live-map model.
-func (s *session) handleNpcBotSpawnCommand(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCBotSpawn) {
-		return
+func (s *session) handleNpcBotSpawnCommand(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotSpawn) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	raw := strings.TrimSpace(strings.Join(args, " "))
@@ -337,43 +343,43 @@ func (s *session) handleNpcBotSpawnCommand(ctx context.Context, args []string) {
 		s.sendSysMessage(".npcbot spawn")
 		s.sendSysMessage("Adds new npcbot spawn of given entry in world. You can shift-link the npc")
 		s.sendSysMessage("Syntax: .npcbot spawn #entry")
-		return
+		return true
 	}
 	// C++: handler->extractKeyFromLink(args, "Hcreature_entry"); null →
 	// silent false. A non-link first token is used verbatim; a wrong link
 	// type yields no key (Chat.cpp:362).
 	key := extractNpcBotCreatureKey(raw)
 	if key == "" {
-		return
+		return false
 	}
 	id := uint32(cAtoi(key))
 	flagsExtra, ok := s.npcTemplateGate(ctx, id)
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("creature %d does not exist!", id))
-		return
+		return true
 	}
 	if flagsExtra&npcBotSpawnFlagNPCBot == 0 {
 		s.sendSysMessage(fmt.Sprintf("creature %d is not a npcbot!", id))
-		return
+		return true
 	}
 	// C++: BotDataMgr::SelectNpcBotData(id) → "already exists in
 	// `characters_npcbot` table".
 	if _, ok := mgr.Get(id); ok {
 		s.sendSysMessage(fmt.Sprintf("Npcbot %d already exists in `characters_npcbot` table!", id))
 		s.sendSysMessage("If you want to move this bot to a new location use '.npcbot move' command")
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return false
 	}
 	// C++: WORLD_SEL_CREATURE_BY_ID ("SELECT guid FROM creature WHERE id = ?").
 	var existing uint32
 	if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE id = ?", id).Scan(&existing); err != nil && err != sql.ErrNoRows {
-		return
+		return false
 	} else if err == nil {
 		s.sendSysMessage(fmt.Sprintf("Npcbot %d already exists in `creature` table!", id))
-		return
+		return true
 	}
 	// C++: chr->GetTransport() → "Cannot spawn bots on transport!"; no Go
 	// bridge (documented above).
@@ -383,17 +389,17 @@ func (s *session) handleNpcBotSpawnCommand(ctx context.Context, args []string) {
 	extras, ok := mgr.Extras(id)
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("No class/race data found for bot %d!", id))
-		return
+		return true
 	}
 	// C++: BotDataMgr::AddNpcBotData(id, bot_ai::DefaultRolesForClass(bclass),
 	// bot_ai::DefaultSpecForClass(bclass), creature->GetCreatureTemplate()->faction).
 	var faction uint32
 	if err := db.QueryRowContext(ctx, "SELECT COALESCE(faction, 0) FROM creature_template WHERE entry = ?", id).Scan(&faction); err != nil {
-		return
+		return false
 	}
 	if err := mgr.Add(ctx, id, defaultNpcBotRoles(extras.Class), defaultNpcBotSpec(extras.Class), faction); err != nil {
 		s.debug("npcbot spawn add failed", "account", s.accountName, "entry", id, "error", err)
-		return
+		return false
 	}
 	// C++: creature->SaveToDB(map->GetId(), (1 << map->GetSpawnMode()),
 	// chr->GetPhaseMaskForSpawn()). spawnMask 1 and phaseMask 1 match the
@@ -401,16 +407,17 @@ func (s *session) handleNpcBotSpawnCommand(ctx context.Context, args []string) {
 	// mirrors the world DB column default for fresh rows.
 	var guid uint32
 	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM creature").Scan(&guid); err != nil {
-		return
+		return false
 	}
 	p := s.player
 	if _, err := db.ExecContext(ctx,
 		"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, ?, ?, 1, 1, ?, ?, ?, ?, 120, 0)",
 		guid, id, p.Map, p.X, p.Y, p.Z, p.Orientation); err != nil {
 		s.debug("npcbot spawn insert failed", "account", s.accountName, "entry", id, "error", err)
-		return
+		return false
 	}
 	s.sendSysMessage("NpcBot successfully spawned")
+	return true
 }
 
 // handleNpcBotMoveCommand mirrors HandleNpcBotMoveCommand
@@ -420,13 +427,13 @@ func (s *session) handleNpcBotSpawnCommand(ctx context.Context, args []string) {
 // CreatureData spawn-point relocate, TeleportBot for free in-world bots) have
 // no Go bridge — Go keeps no live BotAI or creature-object model, so the DB
 // row IS the spawn point.
-func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCBotMove) {
-		return
+func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotMove) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	raw := strings.TrimSpace(strings.Join(args, " "))
@@ -441,7 +448,7 @@ func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) {
 		s.sendSysMessage(".npcbot move")
 		s.sendSysMessage("Moves npcbot to your location")
 		s.sendSysMessage("Syntax: .npcbot move [#ID]")
-		return
+		return true
 	}
 	// C++: extractKeyFromLink(args, "Hcreature_entry"); wrong link type or
 	// empty with no creature → silent false. A present key selects the args
@@ -453,7 +460,7 @@ func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) {
 			id, hasKey = uint32(cAtoi(key)), true
 		}
 		if !hasKey && selEntry == 0 {
-			return
+			return false
 		}
 		if !hasKey {
 			id = selEntry
@@ -464,20 +471,20 @@ func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) {
 	flagsExtra, ok := s.npcTemplateGate(ctx, id)
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf("creature id %d does not exist!", id))
-		return
+		return true
 	}
 	if flagsExtra&npcBotSpawnFlagNPCBot == 0 {
 		s.sendSysMessage(fmt.Sprintf("creature id %d is not a npcbot!", id))
-		return
+		return true
 	}
 	// C++: BotDataMgr::SelectNpcBotData(id) → "NpcBot %u is not spawned!".
 	if _, ok := mgr.Get(id); !ok {
 		s.sendSysMessage(fmt.Sprintf("NpcBot %d is not spawned!", id))
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return false
 	}
 	// C++: BotDataMgr::FindBot(id) → ASSERT + CreatureData lowguid. Go uses
 	// the world DB row the same way the spawn arm inserted it; a missing
@@ -485,7 +492,7 @@ func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) {
 	var guid uint32
 	if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE id = ? LIMIT 1", id).Scan(&guid); err != nil {
 		s.sendSysMessage(fmt.Sprintf("NpcBot %d is not spawned!", id))
-		return
+		return true
 	}
 	// C++: WorldDatabase.PExecute("UPDATE creature SET position_x = %.3f,
 	// ... orientation = %.3f, map = %u WHERE guid = %u", ...).
@@ -494,9 +501,10 @@ func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) {
 		"UPDATE creature SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ? WHERE guid = ?",
 		p.X, p.Y, p.Z, p.Orientation, p.Map, guid); err != nil {
 		s.debug("npcbot move failed", "account", s.accountName, "entry", id, "error", err)
-		return
+		return false
 	}
 	s.sendSysMessage(fmt.Sprintf("NpcBot %d (guid %d) was moved", id, guid))
+	return true
 }
 
 // handleNpcBotDeleteCommand mirrors HandleNpcBotDeleteCommand
@@ -508,38 +516,38 @@ func (s *session) handleNpcBotMoveCommand(ctx context.Context, args []string) {
 // NpcBotUpdateErase. The live legs (CombatStop, botAI Reset/canUpdate=false,
 // AddObjectToRemoveList, the receiver choice for the unequipped gear) have no
 // Go bridge — Go keeps no live BotAI, inventory, or remove-list model.
-func (s *session) handleNpcBotDeleteCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandNPCBotDelete) {
-		return
+func (s *session) handleNpcBotDeleteCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotDelete) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	// C++: chr->GetSelectedUnit(); null → the two usage lines.
 	if s.selection == 0 {
 		s.sendSysMessage(".npcbot delete")
 		s.sendSysMessage("Deletes selected npcbot spawn from world and DB")
-		return
+		return true
 	}
 	// C++: ToCreature() null or !IsNPCBot() → "No npcbot selected".
 	switch uint16(s.selection >> 48) {
 	case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
 	default:
 		s.sendSysMessage("No npcbot selected")
-		return
+		return true
 	}
 	entry := uint32((s.selection >> 24) & 0x00FFFFFF)
 	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
 	if !ok || flagsExtra&npcbotCreatureFlagMask == 0 {
 		s.sendSysMessage("No npcbot selected")
-		return
+		return true
 	}
 	data, ok := mgr.Get(entry)
 	if !ok {
 		s.sendSysMessage("No npcbot selected")
-		return
+		return true
 	}
 	// C++: !bot->GetBotAI()->UnEquipAll(receiver) → the unequip-failure
 	// line. The only bridgeable failure is the DB write; Go has no
@@ -547,7 +555,7 @@ func (s *session) handleNpcBotDeleteCommand(ctx context.Context) {
 	if err := mgr.Update(ctx, entry, NpcBotUpdateEquips, [BotInventorySize]uint32{}); err != nil {
 		s.debug("npcbot delete unequip failed", "account", s.accountName, "entry", entry, "error", err)
 		s.sendSysMessage(fmt.Sprintf("%s is unable to unequip some gear. Please remove equips before deleting bot!", s.npcbotTemplateName(ctx, entry)))
-		return
+		return true
 	}
 	// C++: botowner->GetBotMgr()->RemoveBot(bot->GetGUID(),
 	// BOT_REMOVE_DISMISS) — the persisted leg is the owner=0 update
@@ -570,9 +578,10 @@ func (s *session) handleNpcBotDeleteCommand(ctx context.Context) {
 	// C++: BotDataMgr::UpdateNpcBotData(bot->GetEntry(), NPCBOT_UPDATE_ERASE).
 	if err := mgr.Update(ctx, entry, NpcBotUpdateErase, nil); err != nil {
 		s.debug("npcbot delete erase failed", "account", s.accountName, "entry", entry, "error", err)
-		return
+		return false
 	}
 	s.sendSysMessage("Npcbot successfully deleted")
+	return true
 }
 
 // extractNpcBotCreatureKey mirrors ChatHandler::extractKeyFromLink(text,
@@ -686,13 +695,13 @@ func (s *session) npcbotPlayerName(ctx context.Context, guid uint32) string {
 // bridge (no session db-locale model; Go carries enUS text only — the chat.go
 // convention), so the template name is always used; empty names are skipped
 // == C++.
-func (s *session) handleNpcBotLookupCommand(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCBotLookup) {
-		return
+func (s *session) handleNpcBotLookupCommand(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotLookup) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	if len(args) == 0 {
@@ -714,18 +723,18 @@ func (s *session) handleNpcBotLookupCommand(ctx context.Context, args []string) 
 		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_DREADLORD = %d", BotClassDreadlord))
 		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_SPELLBREAKER = %d", BotClassSpellbreaker))
 		s.sendSysMessage(fmt.Sprintf("BOT_CLASS_DARK_RANGER = %d", BotClassDarkRanger))
-		return
+		return true
 	}
 	// C++: strtok(args, " ") takes the first token; (uint8)atoi classifies it.
 	botclass := uint8(cAtoi(args[0]))
 	if botclass == 0 || botclass >= npcBotClassEnd {
 		s.sendSysMessage(fmt.Sprintf("Unknown bot class %d", botclass))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Looking for bots of class %d...", botclass))
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return false
 	}
 	type npcBotLookupHit struct {
 		id   uint32
@@ -738,7 +747,7 @@ func (s *session) handleNpcBotLookupCommand(ctx context.Context, args []string) 
 	rows, err := db.QueryContext(ctx, "SELECT entry, COALESCE(name, '') FROM creature_template WHERE entry BETWEEN ? AND ? ORDER BY entry", npcBotEntryBegin, npcBotEntryEnd)
 	if err != nil {
 		s.debug("npcbot lookup query failed", "account", s.accountName, "error", err)
-		return
+		return false
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -769,13 +778,14 @@ func (s *session) handleNpcBotLookupCommand(ctx context.Context, args []string) 
 		// enUS default is hardcoded like other untranslated trinity_string
 		// references (chat.go convention — unseeded in world.sql).
 		s.sendSysMessage("No creature template found.")
-		return
+		return true
 	}
 	// C++: botlist.sort(&script_bot_commands::sortbots) — ascending id.
 	sort.Slice(hits, func(i, j int) bool { return hits[i].id < hits[j].id })
 	for _, hit := range hits {
 		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hcreature_entry:%d|h[%s]|h|r %s", hit.id, hit.id, hit.name, npcBotLookupRaceName(hit.race)))
 	}
+	return true
 }
 
 // npcBotLookupRaceName mirrors the race switch in HandleNpcBotLookupCommand
@@ -821,20 +831,20 @@ func npcBotLookupRaceName(race uint8) string {
 // keeps no live creature state for bots), and the IsAlive gate has no
 // bridgeable model either. The arm answers the C++ guard and success lines;
 // the revive itself is a state-change no-op.
-func (s *session) handleNpcBotReviveCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandNPCBotRevive) {
-		return
+func (s *session) handleNpcBotReviveCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotRevive) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	sel := s.selection
 	if sel == 0 {
 		s.sendSysMessage(".npcbot revive")
 		s.sendSysMessage("Revives selected npcbot. If player is selected, revives all selected player's npcbots")
-		return
+		return true
 	}
 	// C++: u->ToPlayer(); !HaveBot() → "%s has no npcbots!"; else
 	// ReviveAllBots() (no bridge) → "Npcbots revived".
@@ -842,10 +852,10 @@ func (s *session) handleNpcBotReviveCommand(ctx context.Context) {
 		guid := uint32(sel)
 		if mgr.CountByOwner(guid) == 0 {
 			s.sendSysMessage(fmt.Sprintf("%s has no npcbots!", s.npcbotPlayerName(ctx, guid)))
-			return
+			return true
 		}
 		s.sendSysMessage("Npcbots revived")
-		return
+		return true
 	}
 	// C++: u->ToCreature() + GetBotAI() — entry-level bridged as the template
 	// npcbot mask + persisted bot data, like the delete arm.
@@ -853,22 +863,23 @@ func (s *session) handleNpcBotReviveCommand(ctx context.Context) {
 	case 0xF130, 0xF140, 0xF150: // unit/pet/vehicle: the IsAnyTypeCreature set (mail.go:157)
 	default:
 		s.sendSysMessage("You must select player or npcbot")
-		return
+		return true
 	}
 	entry := uint32((sel >> 24) & 0x00FFFFFF)
 	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
 	if !ok || flagsExtra&npcbotCreatureFlagMask == 0 {
 		s.sendSysMessage("You must select player or npcbot")
-		return
+		return true
 	}
 	if _, ok := mgr.Get(entry); !ok {
 		s.sendSysMessage("You must select player or npcbot")
-		return
+		return true
 	}
 	// C++: bot->IsAlive() → "%s is not dead" has no Go model (no live
 	// creature state for bots); ReviveBot's legs are all live-only. The
 	// guards above match, so the success line is answered.
 	s.sendSysMessage(fmt.Sprintf("%s revived", s.npcbotTemplateName(ctx, entry)))
+	return true
 }
 
 // bot command state bits mirrored from botcommon.h:1017-1021; the Go tree keeps
@@ -898,43 +909,44 @@ const (
 // gates the GM permission and the NpcBots feature like its siblings, then
 // answers with the tree-standard not-supported line instead of claiming a
 // reload through the C++ global GM messages.
-func (s *session) handleNpcBotReloadConfigCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandNPCBotReloadConfig) {
-		return
+func (s *session) handleNpcBotReloadConfigCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotReloadConfig) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	s.sendSysMessage("Reload of NpcBot config is not supported by this server (config path not retained).")
+	return true
 }
 
 // handleNpcBotCommandSubCommand dispatches the ".npcbot command" sub-table
 // (botcommands.cpp:72-76: standstill/stopfully/follow). The arms are
 // PLAYER_COMMANDS, so no permission gate is applied — any in-game player may
 // use them (the root dispatcher already requires s.player != nil).
-func (s *session) handleNpcBotCommandSubCommand(ctx context.Context, args []string) {
+func (s *session) handleNpcBotCommandSubCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .npcbot command standstill|stopfully|follow"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	sub := strings.ToLower(args[0])
 	switch {
 	case strings.HasPrefix("standstill", sub):
-		s.handleNpcBotBotCommandState(ctx, botCommandStay, "STAY",
+		return s.handleNpcBotBotCommandState(ctx, botCommandStay, "STAY",
 			".npcbot command standstill",
 			"Forces your npcbots to stop all movement and remain stationed")
 	case strings.HasPrefix("stopfully", sub):
-		s.handleNpcBotBotCommandState(ctx, botCommandFullStop, "FULLSTOP",
+		return s.handleNpcBotBotCommandState(ctx, botCommandFullStop, "FULLSTOP",
 			".npcbot command stopfully",
 			"Forces your npcbots to stop all activity")
 	case strings.HasPrefix("follow", sub):
-		s.handleNpcBotBotCommandState(ctx, botCommandFollow, "FOLLOW",
+		return s.handleNpcBotBotCommandState(ctx, botCommandFollow, "FOLLOW",
 			".npcbot command follow",
 			"Allows npcbots to follow you again if stopped")
 	default:
-		s.sendSysMessage(syntax)
+		return false
 	}
 }
 
@@ -948,18 +960,18 @@ func (s *session) handleNpcBotCommandSubCommand(ctx context.Context, args []stri
 // and bot_ai::SetBotCommandState are live-AI-only (the Go tree keeps no BotMap),
 // so the state change itself is a documented no-bridge and the success lines
 // are answered as a state-change no-op.
-func (s *session) handleNpcBotBotCommandState(ctx context.Context, state uint8, stateName, syntaxArm, syntaxDesc string) {
+func (s *session) handleNpcBotBotCommandState(ctx context.Context, state uint8, stateName, syntaxArm, syntaxDesc string) bool {
 	_ = state // which BOT_COMMAND_* the arm would set; no live BotAI to receive it
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	owner := uint32(s.playerGUID)
 	if mgr.CountByOwner(owner) == 0 {
 		s.sendSysMessage(syntaxArm)
 		s.sendSysMessage(syntaxDesc)
-		return
+		return true
 	}
 	sel := s.selection
 	if sel != 0 {
@@ -968,11 +980,12 @@ func (s *session) handleNpcBotBotCommandState(ctx context.Context, state uint8, 
 			entry := uint32((sel >> 24) & 0x00FFFFFF)
 			if data, ok := mgr.Get(entry); ok && data.Owner == owner {
 				s.sendSysMessage(fmt.Sprintf("%s's command state set to '%s'", s.npcbotTemplateName(ctx, entry), stateName))
-				return
+				return true
 			}
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Bots' command state set to '%s'", stateName))
+	return true
 }
 
 // handleNpcBotDistanceCommand dispatches the ".npcbot distance" sub-table
@@ -981,20 +994,18 @@ func (s *session) handleNpcBotBotCommandState(ctx context.Context, state uint8, 
 // text against the "attack" arm first (empty input matches every arm name),
 // which then matches "short" — so bare ".npcbot distance" answers the short
 // arm's usage gate, and ".npcbot distance attack" (no range) does the same.
-func (s *session) handleNpcBotDistanceCommand(ctx context.Context, args []string) {
+func (s *session) handleNpcBotDistanceCommand(ctx context.Context, args []string) bool {
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	if len(args) == 0 {
-		s.handleNpcBotAttackDistanceCommand(ctx, nil)
-		return
+		return s.handleNpcBotAttackDistanceCommand(ctx, nil)
 	}
 	if strings.HasPrefix("attack", strings.ToLower(args[0])) {
-		s.handleNpcBotAttackDistanceCommand(ctx, args[1:])
-		return
+		return s.handleNpcBotAttackDistanceCommand(ctx, args[1:])
 	}
-	s.handleNpcBotFollowDistanceCommand(ctx, args)
+	return s.handleNpcBotFollowDistanceCommand(ctx, args)
 }
 
 // handleNpcBotFollowDistanceCommand mirrors HandleNpcBotFollowDistanceCommand
@@ -1003,12 +1014,12 @@ func (s *session) handleNpcBotDistanceCommand(ctx context.Context, args []string
 // SetBotFollowDist writes the live BotMgr _followdist field (botmgr.h:130),
 // which has no Go model, so the state change is a documented no-bridge and
 // the success line is answered as a state-change no-op.
-func (s *session) handleNpcBotFollowDistanceCommand(ctx context.Context, args []string) {
+func (s *session) handleNpcBotFollowDistanceCommand(ctx context.Context, args []string) bool {
 	owner := uint32(s.playerGUID)
 	if s.server.Features.NPCBots.CountByOwner(owner) == 0 || len(args) == 0 {
 		s.sendSysMessage(".npcbot distance #[attack] #newdist")
 		s.sendSysMessage("Sets follow / attack distance for bots")
-		return
+		return true
 	}
 	newdist, _ := strconv.Atoi(args[0])
 	if newdist < 0 {
@@ -1018,26 +1029,24 @@ func (s *session) handleNpcBotFollowDistanceCommand(ctx context.Context, args []
 		newdist = 100
 	}
 	s.sendSysMessage(fmt.Sprintf("Bots' follow distance is set to %d", newdist))
+	return true
 }
 
 // handleNpcBotAttackDistanceCommand dispatches npcbotAttackDistanceCommandTable
 // (botcommands.cpp:80-84: "short"/"long"/"" -> ExactCommand). Empty input
 // matches "short" first in C++; any token that is not a prefix of "short" or
 // "long" falls to the "" arm == HandleNpcBotAttackDistanceExactCommand.
-func (s *session) handleNpcBotAttackDistanceCommand(ctx context.Context, args []string) {
+func (s *session) handleNpcBotAttackDistanceCommand(ctx context.Context, args []string) bool {
 	if len(args) > 0 {
 		switch sub := strings.ToLower(args[0]); {
 		case strings.HasPrefix("short", sub):
-			s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeShort, "short")
-			return
+			return s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeShort, "short")
 		case strings.HasPrefix("long", sub):
-			s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeLong, "long")
-			return
+			return s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeLong, "long")
 		}
-		s.handleNpcBotAttackDistanceExactCommand(ctx, args)
-		return
+		return s.handleNpcBotAttackDistanceExactCommand(ctx, args)
 	}
-	s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeShort, "short")
+	return s.handleNpcBotAttackDistanceShortLong(ctx, botAttackRangeShort, "short")
 }
 
 // handleNpcBotAttackDistanceShortLong mirrors HandleNpcBotAttackDistanceShortCommand
@@ -1046,16 +1055,17 @@ func (s *session) handleNpcBotAttackDistanceCommand(ctx context.Context, args []
 // SetBotAttackRangeMode is live-BotMgr-only (botmgr.h:134), so the mode change
 // is a documented no-bridge and the success line is answered as a
 // state-change no-op.
-func (s *session) handleNpcBotAttackDistanceShortLong(ctx context.Context, mode uint8, modeName string) {
+func (s *session) handleNpcBotAttackDistanceShortLong(ctx context.Context, mode uint8, modeName string) bool {
 	_ = ctx
 	_ = mode // which BOT_ATTACK_RANGE_* the arm would set; no live BotMgr to receive it
 	owner := uint32(s.playerGUID)
 	if s.server.Features.NPCBots.CountByOwner(owner) == 0 {
 		s.sendSysMessage(fmt.Sprintf(".npcbot distance attack %s", modeName))
 		s.sendSysMessage("Sets attack distance for bots")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Bots' attack distance is set to '%s'", modeName))
+	return true
 }
 
 // handleNpcBotAttackDistanceExactCommand mirrors
@@ -1063,12 +1073,12 @@ func (s *session) handleNpcBotAttackDistanceShortLong(ctx context.Context, mode 
 // !HaveBot() || !dist_str gate answers the C++ usage lines verbatim; the
 // distance clamps to [0,50] == C++. The SetBotAttackRangeMode(EXACT, range)
 // leg is live-BotMgr-only — same documented no-bridge as the short/long arms.
-func (s *session) handleNpcBotAttackDistanceExactCommand(ctx context.Context, args []string) {
+func (s *session) handleNpcBotAttackDistanceExactCommand(ctx context.Context, args []string) bool {
 	owner := uint32(s.playerGUID)
 	if s.server.Features.NPCBots.CountByOwner(owner) == 0 || len(args) == 0 {
 		s.sendSysMessage(".npcbot distance attack #newdist")
 		s.sendSysMessage("Sets attack distance for bots")
-		return
+		return true
 	}
 	newdist, _ := strconv.Atoi(args[0])
 	if newdist < 0 {
@@ -1078,27 +1088,26 @@ func (s *session) handleNpcBotAttackDistanceExactCommand(ctx context.Context, ar
 		newdist = 50
 	}
 	s.sendSysMessage(fmt.Sprintf("Bots' attack distance is set to %d", newdist))
+	return true
 }
 
 // handleNpcBotOrderCommand dispatches the ".npcbot order" sub-table
 // (botcommands.cpp:92-95: only "cast"). Empty input matches "cast" in C++
 // (empty input matches every arm name), so bare ".npcbot order" answers the
 // cast arm's usage gate.
-func (s *session) handleNpcBotOrderCommand(ctx context.Context, args []string) {
+func (s *session) handleNpcBotOrderCommand(ctx context.Context, args []string) bool {
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	if len(args) == 0 || strings.HasPrefix("cast", strings.ToLower(args[0])) {
 		var rest []string
 		if len(args) > 0 {
 			rest = args[1:]
 		}
-		s.handleNpcBotOrderCastCommand(ctx, rest)
-		return
+		return s.handleNpcBotOrderCastCommand(ctx, rest)
 	}
-	s.sendSysMessage(".npcbot order cast #bot_name #spell_underscored_name #[target_token]")
-	s.sendSysMessage("Orders bot to cast a spell immediately")
+	return false
 }
 
 // handleNpcBotOrderCastCommand mirrors HandleNpcBotOrderCastCommand
@@ -1112,13 +1121,13 @@ func (s *session) handleNpcBotOrderCommand(ctx context.Context, args []string) {
 // unconverted, so the spell and order dispatch have no bridge. DEBUG_BOT_
 // ORDERS is 0 (botcommon.h:1036), meaning the C++ success path sends no
 // message, so the Go arm returns silently after the bridgeable guards pass.
-func (s *session) handleNpcBotOrderCastCommand(ctx context.Context, args []string) {
+func (s *session) handleNpcBotOrderCastCommand(ctx context.Context, args []string) bool {
 	mgr := s.server.Features.NPCBots
 	owner := uint32(s.playerGUID)
 	if mgr.CountByOwner(owner) == 0 || len(args) < 2 {
 		s.sendSysMessage(".npcbot order cast #bot_name #spell_underscored_name #[target_token]")
 		s.sendSysMessage("Orders bot to cast a spell immediately")
-		return
+		return true
 	}
 	botName := args[0]
 	spellName := strings.ReplaceAll(args[1], "_", " ")
@@ -1144,7 +1153,7 @@ func (s *session) handleNpcBotOrderCastCommand(ctx context.Context, args []strin
 	}
 	if !found {
 		s.sendSysMessage(fmt.Sprintf("Bot %s is not found!", botName))
-		return
+		return true
 	}
 
 	// Target token validation == C++ verbatim (botcommands.cpp:290-303); the
@@ -1155,13 +1164,14 @@ func (s *session) handleNpcBotOrderCastCommand(ctx context.Context, args []strin
 		default:
 			s.sendSysMessage(fmt.Sprintf("Invalid target token '%s'!", targetToken))
 			s.sendSysMessage("Valid target tokens:\n    '','bot','self', 'me','master', 'target', 'mytarget'")
-			return
+			return true
 		}
 	}
 	// Spell lookup (bot_ai::GetSpellMap), the IsAlive gate, cooldown check and
 	// AddOrder(BOT_ORDER_SPELLCAST, botcommon.h:1034) are live-only; the spell
 	// name was still underscore-normalized above == C++.
 	_ = spellName
+	return true
 }
 
 // handleNpcBotInfoCommand mirrors HandleNpcBotInfoCommand
@@ -1175,22 +1185,22 @@ func (s *session) handleNpcBotOrderCastCommand(ctx context.Context, args []strin
 // The per-class alive counts and GetNpcBotsCount's live BotMap walk have no
 // Go bridge (Go keeps no live-creature state for bots); the alive field is
 // answered as 0 and the count is the persisted owned-bot total.
-func (s *session) handleNpcBotInfoCommand(ctx context.Context) {
+func (s *session) handleNpcBotInfoCommand(ctx context.Context) bool {
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	sel := s.selection
 	if sel == 0 {
 		s.sendSysMessage(".npcbot info")
 		s.sendSysMessage("Lists NpcBots count of each class owned by selected player. You can use this on self and your party members")
-		return
+		return true
 	}
 	// C++: owner->GetSelectedPlayer() — only a player target qualifies.
 	if uint16(sel>>48) != 0x0000 {
 		s.sendSysMessage("No player selected")
-		return
+		return true
 	}
 	master := uint32(sel)
 	var accountID uint32
@@ -1199,11 +1209,11 @@ func (s *session) handleNpcBotInfoCommand(ctx context.Context) {
 	}
 	if s.security < s.accountSecurityLevel(ctx, accountID) {
 		s.sendSysMessage("Invalid target")
-		return
+		return true
 	}
 	if mgr.CountByOwner(master) == 0 {
 		s.sendSysMessage(fmt.Sprintf("%s has no NpcBots!", s.npcbotPlayerName(ctx, master)))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Listing NpcBots for %s", s.npcbotPlayerName(ctx, master)))
 	s.sendSysMessage(fmt.Sprintf("Owned NpcBots: %d", mgr.CountByOwner(master)))
@@ -1227,6 +1237,7 @@ func (s *session) handleNpcBotInfoCommand(ctx context.Context) {
 		}
 		s.sendSysMessage(fmt.Sprintf("%s: %d (alive: %d)", npcbotInfoClassLabel(class), counts[class], 0))
 	}
+	return true
 }
 
 // npcbotInfoClassLabel mirrors the class-label switch in
@@ -1277,26 +1288,27 @@ func npcbotInfoClassLabel(class uint8) string {
 // LANG_YOU_IN_COMBAT(23) (commands_tele.go:388). BotMgr::SetBotsHidden(true)
 // and the IsPartyInCombat party remainder are live-world legs with no Go
 // model (no BotMap), so the success line is answered as a state-change no-op.
-func (s *session) handleNpcBotHideCommand(ctx context.Context) {
+func (s *session) handleNpcBotHideCommand(ctx context.Context) bool {
 	_ = ctx
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	if s.server.Features.NPCBots.CountByOwner(uint32(s.playerGUID)) == 0 {
 		s.sendSysMessage(".npcbot hide")
 		s.sendSysMessage("Removes your owned npcbots from world temporarily")
-		return
+		return true
 	}
 	if s.isDeadOrGhost() {
 		s.sendNotification("You are dead")
-		return
+		return true
 	}
 	if s.isInCombat() {
 		s.sendNotification("You are in combat!") // LANG_YOU_IN_COMBAT (23)
-		return
+		return true
 	}
 	s.sendSysMessage("Bots hidden")
+	return true
 }
 
 // handleNpcBotUnhideCommand mirrors HandleNpcBotUnhideCommand
@@ -1304,26 +1316,27 @@ func (s *session) handleNpcBotHideCommand(ctx context.Context) {
 // "unhide" and "show" to this handler, so this covers both Go arms. The
 // guard chain and the SetBotsHidden(false) no-bridge delta are identical to
 // the hide arm above.
-func (s *session) handleNpcBotUnhideCommand(ctx context.Context) {
+func (s *session) handleNpcBotUnhideCommand(ctx context.Context) bool {
 	_ = ctx
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	if s.server.Features.NPCBots.CountByOwner(uint32(s.playerGUID)) == 0 {
 		s.sendSysMessage(".npcbot unhide | show")
 		s.sendSysMessage("Returns your temporarily hidden bots back")
-		return
+		return true
 	}
 	if s.isDeadOrGhost() {
 		s.sendNotification("You are dead")
-		return
+		return true
 	}
 	if s.isInCombat() {
 		s.sendNotification("You are in combat!") // LANG_YOU_IN_COMBAT (23)
-		return
+		return true
 	}
 	s.sendSysMessage("Bots unhidden")
+	return true
 }
 
 // npcbotSelectedOwnedBot bridges owner->GetBotMgr()->GetBot(guid) at the
@@ -1361,10 +1374,10 @@ func (s *session) npcbotSelectedOwnedBot(ctx context.Context, mgr *NPCBotManager
 // live-world legs with no Go model (no live creature state for bots), so the
 // recall is a documented state-change no-op; C++ returns true with no message
 // on success, mirrored here.
-func (s *session) handleNpcBotRecallCommand(ctx context.Context) {
+func (s *session) handleNpcBotRecallCommand(ctx context.Context) bool {
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	owner := uint32(s.playerGUID)
@@ -1372,19 +1385,20 @@ func (s *session) handleNpcBotRecallCommand(ctx context.Context) {
 	if sel == 0 || mgr.CountByOwner(owner) == 0 {
 		s.sendSysMessage(".npcbot recall")
 		s.sendSysMessage("Forces npcbots to move directly on your position. Select a npcbot you want to move or select yourself to move all bots")
-		return
+		return true
 	}
 	if s.isInCombat() {
 		s.sendNotification("You are in combat!") // LANG_YOU_IN_COMBAT (23)
-		return
+		return true
 	}
 	if uint16(sel>>48) == 0x0000 && uint32(sel) == owner {
-		return // C++: RecallAllBots() → true, no message
+		return true // C++: RecallAllBots() → true, no message
 	}
 	if _, ok := s.npcbotSelectedOwnedBot(ctx, mgr, owner, sel); ok {
-		return // C++: RecallBot(bot) → true, no message
+		return true // C++: RecallBot(bot) → true, no message
 	}
 	s.sendSysMessage("You must select one of your bots or yourself")
+	return true
 }
 
 // handleNpcBotKillCommand mirrors HandleNpcBotKillCommand (botcommands.cpp:473,
@@ -1395,10 +1409,10 @@ func (s *session) handleNpcBotRecallCommand(ctx context.Context) {
 // (botmgr.cpp:1106) perform zero DB writes (setDeathState(JUST_DIED) +
 // bot_ai::JustDied, live-only), so the kill is a documented state-change
 // no-op; C++ returns true with no message on success, mirrored here.
-func (s *session) handleNpcBotKillCommand(ctx context.Context) {
+func (s *session) handleNpcBotKillCommand(ctx context.Context) bool {
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	owner := uint32(s.playerGUID)
@@ -1406,15 +1420,16 @@ func (s *session) handleNpcBotKillCommand(ctx context.Context) {
 	if sel == 0 || mgr.CountByOwner(owner) == 0 {
 		s.sendSysMessage(".npcbot recall") // C++ quirk: kill's usage line says ".npcbot recall"
 		s.sendSysMessage("Makes your npcbot just drop dead. If you select yourself ALL your bots will die")
-		return
+		return true
 	}
 	if uint16(sel>>48) == 0x0000 && uint32(sel) == owner {
-		return // C++: KillAllBots() → true, no message
+		return true // C++: KillAllBots() → true, no message
 	}
 	if _, ok := s.npcbotSelectedOwnedBot(ctx, mgr, owner, sel); ok {
-		return // C++: KillBot(bot) → true, no message
+		return true // C++: KillBot(bot) → true, no message
 	}
 	s.sendSysMessage("You must select one of your bots or yourself")
+	return true
 }
 
 // handleNpcBotSetCommand dispatches the ".npcbot set" sub-table
@@ -1422,24 +1437,22 @@ func (s *session) handleNpcBotKillCommand(ctx context.Context) {
 // The C++ table matches empty input against "faction" first (empty input
 // matches every arm name), so bare ".npcbot set" answers the faction arm's
 // usage gate — the distance-arm precedent.
-func (s *session) handleNpcBotSetCommand(ctx context.Context, args []string) {
-	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
-		s.sendSysMessage("NpcBots is unavailable.")
-		return
-	}
+func (s *session) handleNpcBotSetCommand(ctx context.Context, args []string) bool {
+	// No Features gate here: the faction/owner/spec arms check denial first
+	// (C++ checks the leaf perm before invoking the leaf), and each arm
+	// answers the unavailable leg itself after its denial check.
 	if len(args) == 0 {
-		s.handleNpcBotSetFactionCommand(ctx, nil)
-		return
+		return s.handleNpcBotSetFactionCommand(ctx, nil)
 	}
 	switch sub := strings.ToLower(args[0]); {
 	case strings.HasPrefix("faction", sub):
-		s.handleNpcBotSetFactionCommand(ctx, args[1:])
+		return s.handleNpcBotSetFactionCommand(ctx, args[1:])
 	case strings.HasPrefix("owner", sub):
-		s.handleNpcBotSetOwnerCommand(ctx, args[1:])
+		return s.handleNpcBotSetOwnerCommand(ctx, args[1:])
 	case strings.HasPrefix("spec", sub):
-		s.handleNpcBotSetSpecCommand(ctx, args[1:])
+		return s.handleNpcBotSetSpecCommand(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .npcbot set faction|owner|spec")
+		return false
 	}
 }
 
@@ -1456,13 +1469,13 @@ func (s *session) handleNpcBotSetCommand(ctx context.Context, args []string) {
 // faction-template check == sFactionTemplateStore.LookupEntry via
 // factionTemplateEntry; bot->GetBotAI()->ReInitFaction() is a live bot_ai leg
 // (bot_ai is unconverted) with no Go model.
-func (s *session) handleNpcBotSetFactionCommand(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCBotSetFaction) {
-		return
+func (s *session) handleNpcBotSetFactionCommand(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotSetFaction) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	sel := s.selection
@@ -1470,7 +1483,7 @@ func (s *session) handleNpcBotSetFactionCommand(ctx context.Context, args []stri
 		s.sendSysMessage(".npcbot set faction #faction")
 		s.sendSysMessage("Sets faction for selected npcbot (saved in DB)")
 		s.sendSysMessage("Use 'a', 'h', 'm' or 'f' as argument to set faction to alliance, horde, monsters (hostile to all) or friends (friendly to all)")
-		return
+		return true
 	}
 	var entry uint32
 	free := false
@@ -1485,7 +1498,7 @@ func (s *session) handleNpcBotSetFactionCommand(ctx context.Context, args []stri
 	}
 	if !free {
 		s.sendSysMessage("You must select uncontrolled npcbot")
-		return
+		return true
 	}
 	var factionID uint32
 	switch args[0][0] {
@@ -1509,13 +1522,14 @@ func (s *session) handleNpcBotSetFactionCommand(ctx context.Context, args []stri
 		// trinity_string rows) and no local DB is available, so the exact
 		// wording is unverifiable — the semantic content is answered instead.
 		s.sendSysMessage(fmt.Sprintf("Invalid faction id %d", factionID))
-		return
+		return true
 	}
 	if err := mgr.Update(ctx, entry, NpcBotUpdateFaction, factionID); err != nil {
 		s.debug("npcbot set faction failed", "account", s.accountName, "entry", entry, "error", err)
-		return
+		return false
 	}
 	s.sendSysMessage(fmt.Sprintf("%s's faction set to %d", s.npcbotTemplateName(ctx, entry), factionID))
+	return true
 }
 
 // handleNpcBotSetOwnerCommand mirrors HandleNpcBotSetOwnerCommand
@@ -1529,20 +1543,20 @@ func (s *session) handleNpcBotSetFactionCommand(ctx context.Context, args []stri
 // !guidlow || !found answers "Player not found". BotDataMgr::UpdateNpcBotData(
 // NPCBOT_UPDATE_OWNER) == NPCBotManager.Update(NpcBotUpdateOwner); bot->
 // GetBotAI()->ReinitOwner() is a live bot_ai leg with no Go model.
-func (s *session) handleNpcBotSetOwnerCommand(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCBotSetOwner) {
-		return
+func (s *session) handleNpcBotSetOwnerCommand(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotSetOwner) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	sel := s.selection
 	if sel == 0 || len(args) == 0 {
 		s.sendSysMessage(".npcbot set owner #guid | #name")
 		s.sendSysMessage("Binds selected npcbot to new player owner using guid or name and updates owner in DB")
-		return
+		return true
 	}
 	var entry uint32
 	isBot := false
@@ -1555,7 +1569,7 @@ func (s *session) handleNpcBotSetOwnerCommand(ctx context.Context, args []string
 	}
 	if !isBot {
 		s.sendSysMessage("You must select a npcbot")
-		return
+		return true
 	}
 	var owner uint32
 	if data, ok := mgr.Get(entry); ok {
@@ -1563,7 +1577,7 @@ func (s *session) handleNpcBotSetOwnerCommand(ctx context.Context, args []string
 	}
 	if owner != 0 {
 		s.sendSysMessage("This npcbot already has owner")
-		return
+		return true
 	}
 	token := args[0]
 	guidlow, _ := strconv.Atoi(token)
@@ -1594,13 +1608,14 @@ func (s *session) handleNpcBotSetOwnerCommand(ctx context.Context, args []string
 	}
 	if guidlow == 0 || !found {
 		s.sendSysMessage("Player not found")
-		return
+		return true
 	}
 	if err := mgr.Update(ctx, entry, NpcBotUpdateOwner, uint32(guidlow)); err != nil {
 		s.debug("npcbot set owner failed", "account", s.accountName, "entry", entry, "error", err)
-		return
+		return false
 	}
 	s.sendSysMessage(fmt.Sprintf("%s's new owner is %s (guidlow: %d)", s.npcbotTemplateName(ctx, entry), characterName, guidlow))
+	return true
 }
 
 // handleNpcBotSetSpecCommand mirrors HandleNpcBotSetSpecCommand
@@ -1616,20 +1631,20 @@ func (s *session) handleNpcBotSetOwnerCommand(ctx context.Context, args []string
 // arm BotDataMgr::UpdateNpcBotData(NPCBOT_UPDATE_SPEC) == NPCBotManager.
 // Update(NpcBotUpdateSpec); the rest of SetSpec (UnsummonAll, spell/talent
 // re-init) is a live bot_ai leg with no Go model.
-func (s *session) handleNpcBotSetSpecCommand(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNPCBotSetSpec) {
-		return
+func (s *session) handleNpcBotSetSpecCommand(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNPCBotSetSpec) {
+		return false
 	}
 	if s.server == nil || s.server.Features == nil || s.server.Features.NPCBots == nil {
 		s.sendSysMessage("NpcBots is unavailable.")
-		return
+		return true
 	}
 	mgr := s.server.Features.NPCBots
 	sel := s.selection
 	if sel == 0 || len(args) == 0 {
 		s.sendSysMessage(".npcbot set spec #specnumber")
 		s.sendSysMessage("Changes talent spec for selected npcbot")
-		return
+		return true
 	}
 	var entry uint32
 	isBot := false
@@ -1642,17 +1657,18 @@ func (s *session) handleNpcBotSetSpecCommand(ctx context.Context, args []string)
 	}
 	if !isBot {
 		s.sendSysMessage("You must select a npcbot")
-		return
+		return true
 	}
 	n, _ := strconv.Atoi(args[0])
 	spec := uint8(n)           // (uint8)atoi == C++; values wrap (300 → 44)
 	if spec < 1 || spec > 31 { // BOT_SPEC_BEGIN..BOT_SPEC_END (botcommon.h:801-802)
 		s.sendSysMessage("Spec is out of range (1 to 3)!")
-		return
+		return true
 	}
 	if err := mgr.Update(ctx, entry, NpcBotUpdateSpec, spec); err != nil {
 		s.debug("npcbot set spec failed", "account", s.accountName, "entry", entry, "error", err)
-		return
+		return false
 	}
 	s.sendSysMessage(fmt.Sprintf("%s's new spec is %d", s.npcbotTemplateName(ctx, entry), spec))
+	return true
 }
