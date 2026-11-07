@@ -3,7 +3,7 @@
 -- (232 lines incl. license; 3 scripts — boss_zuramat (CreatureScript via
 -- GetVioletHoldAI (BossAI), DATA_ZURAMAT = 8); npc_void_sentry
 -- (CreatureScript via GetVioletHoldAI (ScriptedAI), zero Talk arms,
--- unbridged); achievement_void_dance (AchievementCriteriaScript OnCheck
+-- ported below: ev5/ev22/ev19/ev20/ev4); achievement_void_dance (AchievementCriteriaScript OnCheck
 -- AI()->GetData(DATA_VOID_DANCE)); all registered from inside
 -- AddSC_boss_zuramat(); loader decl 151 / call 346 per
 -- northrend_script_loader.cpp — the SEVENTH group of the
@@ -82,15 +82,14 @@
 -- erekem/ichoron/lavanthor precedent).
 -- The ScheduleTasks SUMMON_VOID_SENTRY leg (DoCast(me, SPELL_SUMMON_
 -- VOID_SENTRY 54369), 4s init / 7-10s Repeat) stays out: it is a
--- summon leg, and the summoned npc_void_sentry AI is unbridged — its
--- IsSummonedBy triggered self-cast SPELL_SUMMON_VOID_SENTRY_BALL
--- (58650), REACT_PASSIVE stance, and SummonedCreatureDespawn
--- DoAction(ACTION_DESPAWN_VOID_SENTRY_BALL) leg have no bridges;
--- casting it would spawn inert sentries. Joins the no-SummonList bridge queue;
--- the sentry DoAction leg stays out —
--- ev38 dispatch bridged, but sender zuramat SummonedCreatureDespawn
--- (boss_zuramat.cpp:89-96) is unported in Lua (no ev21 handler) and receiver
--- npc_void_sentry (29364) is unregistered. The boss-side SummonedCreatureDies
+-- summon leg, and casting it would spawn sentries whose boss-side
+-- SummonedCreatureDespawn relay (boss_zuramat.cpp:89-96, ev21) is
+-- unported in Lua. Joins the no-SummonList bridge queue. The sentry
+-- class itself IS ported below (ev5 REACT_PASSIVE, ev22 IsSummonedBy
+-- triggered self-cast 58650, ev19 ball latch + REACT_PASSIVE, ev20
+-- prune, ev4 DespawnAll) — the old "sentry AI unbridged" claim was
+-- stale; a sentry only exists in-game once the boss-side summon leg
+-- lands. The boss-side SummonedCreatureDies
 -- _voidDance = false flip (boss_zuramat.cpp) is dispatch-bridgeable via
 -- event-21 (2026-10-24), but _voidDance's only C++ consumer is
 -- GetData(DATA_VOID_DANCE) for achievement_void_dance (unbridged) — the
@@ -101,6 +100,9 @@
 
 local ENTRY_ZURAMAT = 29314
 local DATA_ZURAMAT = 8
+local NPC_VOID_SENTRY = 29364 -- violet_hold.h:102
+local NPC_VOID_SENTRY_BALL = 29365 -- violet_hold.h:103
+local SPELL_SUMMON_VOID_SENTRY_BALL = 58650 -- boss_zuramat.cpp:32
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -251,6 +253,65 @@ local function zuramatReset(event, creature)
     end
     cancelTimers(creature:GetGUID())
 end
+
+-- npc_void_sentry (boss_zuramat.cpp:164-197): ctor REACT_PASSIVE;
+-- IsSummonedBy (:172-175) triggered self-cast
+-- SPELL_SUMMON_VOID_SENTRY_BALL (58650); JustSummoned (:177-181)
+-- latches the ball + REACT_PASSIVE; DoAction(1) (:189-192) despawns
+-- all latched balls; JustDied (:194-197) fires DoAction(1). The
+-- _summons list is a module-local GUID-keyed table (the halazzi latch
+-- idiom); ev20 prunes balls that despawn on their own. Entry-keyed
+-- dispatch (runtime.go:825-827) — no RegisterLuaBoss line needed
+-- (ichor-globule / emalon-minion precedent). The sentry only exists
+-- in-game once Zuramat's SUMMON_VOID_SENTRY leg lands (stays out,
+-- header), so these handlers are dormant until then.
+local sentryBalls = {} -- sentry GUID -> {ball creature objects}
+
+local function sentrySpawn(event, creature)
+    creature:SetReactState(0) -- REACT_PASSIVE
+end
+
+local function sentrySummonedBy(event, creature, summoner)
+    creature:CastSpell(creature, SPELL_SUMMON_VOID_SENTRY_BALL, true)
+end
+
+local function sentrySummoned(event, creature, summoned)
+    if summoned:GetEntry() == NPC_VOID_SENTRY_BALL then
+        summoned:SetReactState(0) -- REACT_PASSIVE
+        local guid = creature:GetGUID()
+        sentryBalls[guid] = sentryBalls[guid] or {}
+        sentryBalls[guid][#sentryBalls[guid] + 1] = summoned
+    end
+end
+
+local function sentryBallDespawned(event, creature, summon)
+    local balls = sentryBalls[creature:GetGUID()]
+    if balls then
+        for i, ball in ipairs(balls) do
+            if ball == summon then
+                table.remove(balls, i)
+                break
+            end
+        end
+    end
+end
+
+local function sentryDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    local balls = sentryBalls[guid]
+    if balls then
+        for _, ball in ipairs(balls) do
+            ball:Despawn()
+        end
+    end
+    sentryBalls[guid] = nil
+end
+
+RegisterCreatureEvent(NPC_VOID_SENTRY, 5, sentrySpawn)
+RegisterCreatureEvent(NPC_VOID_SENTRY, 22, sentrySummonedBy)
+RegisterCreatureEvent(NPC_VOID_SENTRY, 19, sentrySummoned)
+RegisterCreatureEvent(NPC_VOID_SENTRY, 20, sentryBallDespawned)
+RegisterCreatureEvent(NPC_VOID_SENTRY, 4, sentryDied)
 
 RegisterCreatureEvent(ENTRY_ZURAMAT, 1, zuramatEnterCombat)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 2, zuramatCancelCombatTimers)

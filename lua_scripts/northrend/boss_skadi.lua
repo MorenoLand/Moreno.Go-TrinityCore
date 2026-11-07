@@ -154,8 +154,8 @@
 -- no cross-creature bridge, and the Reset trio (REACT_PASSIVE +
 -- no-regen + run speed 2.5) ports on event 23 below.
 -- npc_ymirjar_harpooner JustDied — DoCast(SPELL_SUMMON_HARPOON 56789)
--- is a pure summon leg (no bridge — the zarithrian precedent). Stay
--- out.
+-- is PORTED below (harpoonerDied, ev4): non-triggered self-cast, the
+-- viscidus-suicide-cast idiom (the old "no bridge" claim was stale).
 -- spell_freezing_cloud_area_left / right, spell_freezing_cloud_damage,
 -- spell_skadi_reset_check, spell_skadi_launch_harpoon,
 -- spell_skadi_poisoned_spear, spell_skadi_ride_vehicle,
@@ -192,6 +192,7 @@ local SPELL_SHRINK = 49089
 local SPELL_NET = 49092
 local SPELL_THROW = 49091
 local SPELL_LAUNCH_HARPOON = 48642 -- boss_skadi.cpp:39
+local SPELL_SUMMON_HARPOON = 56789 -- boss_skadi.cpp:62
 
 local timers = {}
 local harpoonState = {} -- per-Skadi-GUID { hits, love } for ACTION_HARPOON_HIT
@@ -480,6 +481,16 @@ local function harpoonerEnterCombat(event, creature)
     schedule(guid, "throw", 2000, throwTick)
 end
 
+-- C++ npc_ymirjar_harpoonerAI::JustDied (boss_skadi.cpp:622-625):
+-- 1-arg DoCast(SPELL_SUMMON_HARPOON 56789) on self, non-triggered
+-- (the viscidus-suicide-cast idiom — no `true` flag; the tick-384
+-- audit's triggered prescription is corrected here). Timer wipe rides
+-- along (cancelCombatTimers idiom).
+local function harpoonerDied(event, creature, killer)
+    cancelCombatTimers(event, creature)
+    creature:CastSpell(creature, SPELL_SUMMON_HARPOON)
+end
+
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 1, skadiEnterCombat)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 2, skadiLeaveCombat)
 RegisterCreatureEvent(ENTRY_SKADI_THE_RUTHLESS, 3, skadiKilledUnit)
@@ -496,7 +507,7 @@ RegisterCreatureEvent(ENTRY_YMIRJAR_WITCH_DOCTOR, 4, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_WITCH_DOCTOR, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 1, harpoonerEnterCombat)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 2, cancelCombatTimers)
-RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 4, harpoonerDied)
 RegisterCreatureEvent(ENTRY_YMIRJAR_HARPOONER, 23, cancelCombatTimers)
 
 -- C++ npc_graufAI::Reset (boss_skadi.cpp:343-348): REACT_PASSIVE +
