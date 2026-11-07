@@ -34,20 +34,17 @@ type debugObjectEntryCount struct {
 // SMSG_EMOTE (u32 emote + u64 guid) to the visibility set, which is the
 // npcCreatureEmote fan-out for creatures and the PerformEmote twin
 // (self write + visible-set fan-out) for players.
-func (s *session) handleDebugAnim(ctx context.Context, args []string) {
+func (s *session) handleDebugAnim(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug anim <emote>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	emote, ok := parseCommandUint32(args[0])
 	if !ok || !debugEmoteValid(emote) {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if motion := s.debugSelectedCreatureMotion(); motion != nil {
 		s.npcCreatureEmote(motion, uint32(emote))
@@ -63,6 +60,7 @@ func (s *session) handleDebugAnim(ctx context.Context, args []string) {
 	// C++ prints the emote's constant name ("Playing emote %s"); Go has
 	// no emote-name table, so the numeric id stands in.
 	s.sendSysMessage(fmt.Sprintf("Playing emote %d", emote))
+	return true
 }
 
 func (s *session) debugPlayerEmote(ts *session, emote uint32) {
@@ -80,60 +78,55 @@ func (s *session) debugPlayerEmote(ts *session, emote uint32) {
 // (cs_debug.cpp:426): ".debug worldstate <variable> <value>" sends the
 // SMSG_UPDATE_WORLD_STATE pair to the handler's own player via the
 // existing sendWorldState packet helper (battleground_av.go).
-func (s *session) handleDebugWorldState(ctx context.Context, args []string) {
+func (s *session) handleDebugWorldState(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug worldstate <variable> <value>"
 	if len(args) != 2 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	variable, ok1 := parseCommandUint32(args[0])
 	value, ok2 := parseCommandUint32(args[1])
 	if !ok1 || !ok2 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	s.sendWorldState(variable, value)
+	return true
 }
 
 // handleDebugDummy mirrors HandleDebugDummyCommand (cs_debug.cpp:1792):
 // the arm's whole C++ body is the literal no-op notice.
-func (s *session) handleDebugDummy(ctx context.Context) {
+func (s *session) handleDebugDummy(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	s.sendSysMessage("This command does nothing right now. Edit your local core (cs_debug.cpp) to make it do whatever you need for testing.")
+	return true
 }
 
 // handleDebugObjectCount mirrors HandleDebugObjectCountCommand plus
 // HandleDebugObjectCountMap (cs_debug.cpp:1715, 1770): ".debug objectcount
 // [mapId]" prints, per (map, instance), the live creature count and the
 // runtime gameobject count, then the top 5 creature entries by count.
-func (s *session) handleDebugObjectCount(ctx context.Context, args []string) {
+func (s *session) handleDebugObjectCount(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	var mapFilter *uint32
 	if len(args) > 1 {
-		s.sendSysMessage("Syntax: .debug objectcount [mapId]")
-		return
+		return false
 	}
 	if len(args) > 0 {
 		id, ok := parseCommandUint32(args[0])
 		if !ok {
-			s.sendSysMessage("Syntax: .debug objectcount [mapId]")
-			return
+			return false
 		}
 		v := id
 		mapFilter = &v
 	}
 	if s.server == nil || s.player == nil {
-		return
+		return false
 	}
 	rows := s.server.debugObjectCountRows(mapFilter, s.player.Map, s.player.InstanceID)
 	for _, c := range rows {
@@ -144,6 +137,7 @@ func (s *session) handleDebugObjectCount(ctx context.Context, args []string) {
 			s.sendSysMessage(fmt.Sprintf("Entry: %d Count: %d", e.entry, e.count))
 		}
 	}
+	return true
 }
 
 // debugObjectCountRows is the countable core of handleDebugObjectCount:
@@ -253,32 +247,30 @@ func (s *Server) debugObjectCountRows(mapFilter *uint32, selfMap, selfInstance u
 // battleground/battlefield GetClosestGraveyard legs have no Go model, so
 // the linked form always takes the ObjectMgr fallback. The LANG texts
 // (82/83) are unseeded in-tree, so plain prose stands in.
-func (s *session) handleDebugNearGraveyard(ctx context.Context, args []string) {
+func (s *session) handleDebugNearGraveyard(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if len(args) > 1 || (len(args) == 1 && !strings.EqualFold(args[0], "linked")) {
-		s.sendSysMessage("Syntax: .debug neargraveyard [linked]")
-		return
+		return false
 	}
 	if s.server == nil || s.player == nil || s.server.Data == nil {
-		return
+		return false
 	}
 	linked := len(args) > 0 && strings.EqualFold(args[0], "linked")
 	if linked {
 		loc, found := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, playerTeam(s.player.Race))
 		if !found {
 			s.sendSysMessage("No graveyard found.")
-			return
+			return true
 		}
 		s.sendSysMessage(fmt.Sprintf("Nearest graveyard: %d at (%f, %f, %f)", loc.ID, loc.X, loc.Y, loc.Z))
-		return
+		return true
 	}
 	file, err := s.server.Data.File("WorldSafeLocs")
 	if err != nil {
 		s.sendSysMessage("No graveyard found.")
-		return
+		return true
 	}
 	type safeLoc struct {
 		id      uint32
@@ -309,9 +301,10 @@ func (s *session) handleDebugNearGraveyard(ctx context.Context, args []string) {
 	}
 	if nearest == nil {
 		s.sendSysMessage("No graveyard found.")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Nearest graveyard: %d at (%f, %f, %f)", nearest.id, nearest.x, nearest.y, nearest.z))
+	return true
 }
 
 // debugEmoteValues is the Emote membership set (SharedDefines.h:1935):
@@ -409,13 +402,12 @@ func (s *session) debugSelectedUnit() (name string, guid uint64, x, y, z float32
 // obstructed on every line (C++ IsInMap gate, Object.cpp:1272). Positions
 // are raw: C++ adds collision heights and hit-sphere points, which Go's
 // LOS callers (totem legs) also skip.
-func (s *session) handleDebugLoS(ctx context.Context) {
+func (s *session) handleDebugLoS(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.server == nil || s.player == nil {
-		return
+		return true
 	}
 	name, _, ux, uy, uz, uMap, uInst := s.debugSelectedUnit()
 	sameMap := uMap == s.player.Map && uInst == s.player.InstanceID
@@ -435,6 +427,7 @@ func (s *session) handleDebugLoS(ctx context.Context) {
 		not = ""
 	}
 	s.sendSysMessage(fmt.Sprintf("%s is %sin line of sight of %s.", name, not, s.player.Name))
+	return true
 }
 
 // handleDebugPlay mirrors the debugPlayCommandTable (cs_debug.cpp:73-79):
@@ -452,20 +445,17 @@ func (s *session) handleDebugLoS(ctx context.Context) {
 // model, so unknown ids are sent and play nothing client-side instead of
 // reporting not-exist; the "You hear sound" wording is a prose recall of
 // the unseeded LANG text.
-func (s *session) handleDebugPlay(ctx context.Context, args []string) {
+func (s *session) handleDebugPlay(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug play cinematic|movie|sound|music <id>"
 	if len(args) != 2 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	id, ok := parseCommandUint32(args[1])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	switch strings.ToLower(args[0]) {
 	case "cinematic":
@@ -495,6 +485,7 @@ func (s *session) handleDebugPlay(ctx context.Context, args []string) {
 	default:
 		s.sendSysMessage(syntax)
 	}
+	return true
 }
 
 // handleDebugASANMemoryLeak mirrors HandleDebugMemoryLeak
@@ -504,10 +495,22 @@ func (s *session) handleDebugPlay(ctx context.Context, args []string) {
 // so the leaves are silent no-ops. Console::Yes in C++, so no
 // player is required and the leaf path bypasses handleCmdDebug.
 func (s *session) handleDebugASANMemoryLeak(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
+	if len(args) > 0 {
+		return false
+	}
 	return true
 }
 
 func (s *session) handleDebugASANOutOfBounds(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
+	if len(args) > 0 {
+		return false
+	}
 	return true
 }
 
@@ -518,16 +521,16 @@ func (s *session) handleDebugASANOutOfBounds(ctx context.Context, args []string)
 // parse as uint16 (ChatCommandArgs.h:62); a bad token prints the
 // node's syntax like the C++ parse failure.
 func (s *session) handleDebugWardenForce(ctx context.Context, args []string) bool {
-	const syntax = "Syntax: .debug warden force <checkId...>"
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return true
+		return false
 	}
 	for _, arg := range args {
 		v, ok := parseCommandUint32(arg)
 		if !ok || v > 0xFFFF {
-			s.sendSysMessage(syntax)
-			return true
+			return false
 		}
 	}
 	s.sendSysMessage("Warden system is not enabled")
@@ -542,31 +545,28 @@ func (s *session) handleDebugWardenForce(ctx context.Context, args []string) boo
 // parses as a numeric SpellCastResult; C++'s enum-name form has no Go
 // command parser. The remaining send arms are wired in handleDebugSend,
 // including opcode.
-func (s *session) handleDebugSendSpellFail(ctx context.Context, args []string) {
+func (s *session) handleDebugSendSpellFail(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug send spellfail <result> [failArg1] [failArg2]"
 	if len(args) == 0 || len(args) > 3 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	result, ok := parseCommandUint32(args[0])
 	if !ok || (result > 187 && result != 255) {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	var params []uint32
 	for _, arg := range args[1:] {
 		v, ok := parseCommandUint32(arg)
 		if !ok {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		params = append(params, v)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(0, 133, uint8(result), params...), true)
+	return true
 }
 
 // handleDebugSend mirrors the debugSendCommandTable (cs_debug.cpp:70-82):
@@ -577,59 +577,56 @@ func (s *session) handleDebugSendSpellFail(ctx context.Context, args []string) {
 // zero item/param fields exactly as C++ does; numeric args stand in for
 // C++'s enum-name forms, matching the spellfail precedent. Unknown
 // sub-arms report the syntax rather than silently succeeding.
-func (s *session) handleDebugSend(ctx context.Context, args []string) {
+func (s *session) handleDebugSend(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug send spellfail|buyerror|sellerror|equiperror|channelnotify|chatmessage|qpartymsg|qinvalidmsg|setphaseshift|largepacket|opcode <arg>"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	switch strings.ToLower(args[0]) {
 	case "spellfail":
-		s.handleDebugSendSpellFail(ctx, args[1:])
+		return s.handleDebugSendSpellFail(ctx, args[1:])
 	case "opcode":
 		if len(args) != 1 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
-		s.handleDebugSendOpcode(ctx)
+		return s.handleDebugSendOpcode(ctx)
 	case "buyerror", "sellerror", "equiperror", "channelnotify", "chatmessage", "qpartymsg", "qinvalidmsg":
 		if len(args) != 2 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		value, ok := parseCommandUint32(args[1])
 		if !ok || !debugSendEnumValid(strings.ToLower(args[0]), value) {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		s.debugSendNumeric(strings.ToLower(args[0]), value)
+		return true
 	case "setphaseshift":
 		if len(args) != 2 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		value, ok := parseCommandUint32(args[1])
 		if !ok {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		s.debugSendNumeric("setphaseshift", value)
+		return true
 	case "largepacket":
 		if len(args) != 1 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		var sb strings.Builder
 		for sb.Len() < 128000 {
 			sb.WriteString("This is a dummy string to push the packet's size beyond 128000 bytes. ")
 		}
 		s.sendSysMessage(sb.String())
+		return true
 	default:
 		s.sendSysMessage(syntax)
+		return true
 	}
 }
 
@@ -730,26 +727,24 @@ func stripOpcodeComments(data []byte) []byte {
 // selected, as getSelectedUnit does. The nearest gameobject within one
 // grid (SIZE_OF_GRIDS) supplies the goguid legs; a miss reports
 // OBJNOTFOUND and sends nothing, as C++ does. DELTAS: a missing
-// opcode.txt reports a plain message where C++ returns false to the
-// chat handler's generic failure; unknown types stop the token loop but
-// the packet still sends, as C++ logs and breaks before sending.
-func (s *session) handleDebugSendOpcode(ctx context.Context) {
+// opcode.txt returns false silently, the C++ false return; unknown types
+// stop the token loop but the packet still sends, as C++ logs and breaks
+// before sending.
+func (s *session) handleDebugSendOpcode(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	raw, err := os.ReadFile("opcode.txt")
 	if err != nil {
-		s.sendSysMessage("opcode.txt not found.")
-		return
+		return false
 	}
 	tokens := strings.Fields(string(stripOpcodeComments(raw)))
 	if len(tokens) == 0 {
-		return
+		return false
 	}
 	opcode, err := strconv.ParseUint(tokens[0], 10, 32)
 	if err != nil {
-		return
+		return false
 	}
 	unitName, unitGUID, ux, uy, uz, _, _ := s.debugSelectedUnit()
 	target := s
@@ -779,7 +774,7 @@ func (s *session) handleDebugSendOpcode(ctx context.Context) {
 		})
 		if goGUID == 0 {
 			s.sendSysMessage("Gameobject (GUID: 0) could not be found.")
-			return
+			return true
 		}
 	}
 	buf := protocol.NewBuffer(64)
@@ -867,6 +862,7 @@ func (s *session) handleDebugSendOpcode(ctx context.Context) {
 	}
 	_ = target.write(uint16(opcode), buf.Bytes(), true)
 	s.sendSysMessage(fmt.Sprintf("Opcode %d sent to %s.", opcode, unitName))
+	return true
 }
 
 // handleDebugLootRecipient mirrors HandleDebugGetLootRecipientCommand
@@ -877,14 +873,13 @@ func (s *session) handleDebugSendOpcode(ctx context.Context) {
 // "offline". The GUID counter and spawn id share the npc-info precedent
 // (GUID & 0x00FFFFFF); a group-only tap has no tracked player GUID, so it
 // reads "offline" like an unresolvable recipient.
-func (s *session) handleDebugLootRecipient(ctx context.Context) {
+func (s *session) handleDebugLootRecipient(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
-		return
+		return false
 	}
 	counter := uint32(motion.GUID & 0x00FFFFFF)
 	recipient := "no loot recipient"
@@ -895,6 +890,7 @@ func (s *session) handleDebugLootRecipient(ctx context.Context) {
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Loot recipient for creature %s (GUID %d, SpawnID %d) is %s", motion.Name, counter, counter, recipient))
+	return true
 }
 
 // debugInstanceSpawnTuple is one InstanceSpawnGroupInfo row as
@@ -919,26 +915,23 @@ type debugInstanceSpawnTuple struct {
 // "has no instance script" and "manages no groups" gates collapse into the
 // empty-rows message; a missing world DB reports unavailable rather than
 // the C++ script gates.
-func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) {
+func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.server == nil || s.player == nil {
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug instancespawn <groupId|explain>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	explain := strings.EqualFold(args[0], "explain")
 	var groupID uint32
 	if !explain {
 		id, ok := parseCommandUint32(args[0])
 		if !ok {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		groupID = id
 	}
@@ -951,11 +944,11 @@ func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) 
 	}
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("Instance spawn group data is unavailable.")
-		return
+		return true
 	}
 	if err := s.server.ensureInstanceSpawnGroups(ctx, s.server.WorldStore.DB); err != nil {
 		s.sendSysMessage("Instance spawn group data is unavailable.")
-		return
+		return true
 	}
 	s.server.instanceSpawnGroupMu.RLock()
 	rows := append([]instanceSpawnGroupInfo(nil), s.server.instanceSpawnGroups[mapID]...)
@@ -969,7 +962,7 @@ func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) 
 	if groupID != 0 {
 		if templates[groupID] == nil {
 			s.sendSysMessage(fmt.Sprintf("There is no spawn group with ID %d.", groupID))
-			return
+			return true
 		}
 	}
 	store := map[uint32][]debugInstanceSpawnTuple{}
@@ -990,11 +983,11 @@ func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) 
 	}
 	if groupID != 0 && len(store[groupID]) == 0 {
 		s.sendSysMessage(fmt.Sprintf("%s's instance script does not manage group '%s'.", mapName, templates[groupID].Name))
-		return
+		return true
 	}
 	if len(store) == 0 {
 		s.sendSysMessage(fmt.Sprintf("%s's instance script does not manage any spawn groups.", mapName))
-		return
+		return true
 	}
 	ids := make([]uint32, 0, len(store))
 	for id := range store {
@@ -1060,6 +1053,7 @@ func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) 
 			s.sendSysMessage(fmt.Sprintf(" | |=> '%s' is not active due to none of its rules being matched", tmpl.Name))
 		}
 	}
+	return true
 }
 
 // debugThreatTarget resolves the HandleDebugThreatListCommand target
@@ -1154,10 +1148,9 @@ type debugThreatenedRow struct {
 // [SUPPRESSED]/[OFFLINE] markers) or the cannot-have-list / not-engaged
 // legs. Deltas: no threatened-by-me index (rebuilt by scan, so only live
 // creature lists contribute).
-func (s *session) handleDebugThreat(ctx context.Context) {
+func (s *session) handleDebugThreat(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	name, guid, alive, engaged, motion := s.debugThreatTarget()
 	counter := uint32(guid & 0x00FFFFFF)
@@ -1167,7 +1160,7 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 			engagedNote = " (It is, however, engaged. Huh?)"
 		}
 		s.sendSysMessage(fmt.Sprintf("%s (GUID %d) is not alive.%s", name, counter, engagedNote))
-		return
+		return true
 	}
 	threatened := s.debugThreatenedByMe(guid)
 	if len(threatened) == 0 {
@@ -1185,7 +1178,7 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 		} else {
 			s.sendSysMessage(fmt.Sprintf("%s (GUID %d) is not currently engaged. (This unit cannot have a threat list.)", name, counter))
 		}
-		return
+		return true
 	}
 	entries := motion.ThreatMgr.DebugEntries()
 	if len(entries) == 0 {
@@ -1194,7 +1187,7 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 		} else {
 			s.sendSysMessage(fmt.Sprintf("%s (GUID %d, SpawnID %d) seems to be engaged, but does not have a threat list??", name, counter, counter))
 		}
-		return
+		return true
 	}
 	fixate := motion.ThreatMgr.GetFixateTarget()
 	if engaged {
@@ -1220,6 +1213,7 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 		s.sendSysMessage(fmt.Sprintf("   %d.   %s   (GUID %d)  - threat %f%s", i+1, s.debugUnitName(e.victimGUID), uint32(e.victimGUID&0x00FFFFFF), e.threat, marker))
 	}
 	s.sendSysMessage("End of threat list.")
+	return true
 }
 
 // handleDebugThreatInfo mirrors HandleDebugThreatInfoCommand
@@ -1232,14 +1226,14 @@ func (s *session) handleDebugThreat(ctx context.Context) {
 // report prints the modeled rows — fixate target, live taunts,
 // suppressions, offline flags and per-victim temp modifiers — and
 // says so for the rest.
-func (s *session) handleDebugThreatInfo(ctx context.Context) {
+func (s *session) handleDebugThreatInfo(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	name, guid, _, _, motion := s.debugThreatTarget()
 	if guid == 0 {
-		return
+		s.sendSysMessage("Select a character or creature.")
+		return true
 	}
 	var mgr *ThreatManager
 	if motion != nil {
@@ -1251,7 +1245,7 @@ func (s *session) handleDebugThreatInfo(ctx context.Context) {
 	s.sendSysMessage(" - No redirects being applied (redirects not modeled)")
 	s.sendSysMessage(" - No redirects are registered (redirects not modeled)")
 	if mgr == nil {
-		return
+		return true
 	}
 	fixate := mgr.GetFixateTarget()
 	if fixate != 0 {
@@ -1271,16 +1265,16 @@ func (s *session) handleDebugThreatInfo(ctx context.Context) {
 			s.sendSysMessage(fmt.Sprintf(" - Offline victim: %s", s.debugUnitName(e.victimGUID)))
 		}
 	}
+	return true
 }
 
 // handleDebugCombat mirrors HandleDebugCombatListCommand (cs_debug.cpp:929):
 // ".debug combat" prints the target's combat state line. Delta: Go has no
 // combat-reference list (only the InCombat/UnitFlags bits), so no [PvP] /
 // [PvE] ref rows follow the header.
-func (s *session) handleDebugCombat(ctx context.Context) {
+func (s *session) handleDebugCombat(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	_, _, _, engaged, _ := s.debugThreatTarget()
 	combatState := 0
@@ -1288,6 +1282,7 @@ func (s *session) handleDebugCombat(ctx context.Context) {
 		combatState = 1
 	}
 	s.sendSysMessage(fmt.Sprintf("Combat refs: (Combat state: %d | Manager state: %d)", combatState, combatState))
+	return true
 }
 
 // handleDebugGuidLimits mirrors HandleDebugGuidLimitsCommand plus
@@ -1297,27 +1292,24 @@ func (s *session) handleDebugCombat(ctx context.Context) {
 // the GUID warn/alert config levels have no Go config, so those two lines
 // are omitted; counters cover live motions and runtime gameobjects only,
 // not the DB spawn tables.
-func (s *session) handleDebugGuidLimits(ctx context.Context, args []string) {
+func (s *session) handleDebugGuidLimits(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	var mapFilter *uint32
 	if len(args) > 1 {
-		s.sendSysMessage("Syntax: .debug guidlimits [mapId]")
-		return
+		return false
 	}
 	if len(args) > 0 {
 		id, ok := parseCommandUint32(args[0])
 		if !ok {
-			s.sendSysMessage("Syntax: .debug guidlimits [mapId]")
-			return
+			return false
 		}
 		v := id
 		mapFilter = &v
 	}
 	if s.server == nil || s.player == nil {
-		return
+		return false
 	}
 	type guidMax struct {
 		mapID      uint32
@@ -1392,22 +1384,23 @@ func (s *session) handleDebugGuidLimits(ctx context.Context, args []string) {
 		s.sendSysMessage(fmt.Sprintf("Map Id: %d Name: '%s' Instance Id: %d Highest Guid Creature: %d GameObject: %d",
 			m.mapID, mapName, m.instanceID, m.creature, m.gameobject))
 	}
+	return true
 }
 
 // handleDebugWPGPS mirrors HandleWPGPSCommand (cs_debug.cpp:1311):
 // ".debug wpgps" logs the invoker's position as a waypoint SQL row and
 // reports that the row was written. Go has no sql.dev log file, so the row
 // goes to the session debug log instead.
-func (s *session) handleDebugWPGPS(ctx context.Context) {
+func (s *session) handleDebugWPGPS(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.player == nil {
-		return
+		return true
 	}
 	s.debug("waypoint sql", "row", fmt.Sprintf("(@PATH, XX, %.3f, %.3f, %.5f, %.5f, 0, 0, 0, 100, 0),", s.player.X, s.player.Y, s.player.Z, s.player.Orientation))
 	s.sendSysMessage("Waypoint SQL written to SQL Developer log")
+	return true
 }
 
 // handleDebugTransport mirrors HandleDebugTransportCommand
@@ -1417,19 +1410,16 @@ func (s *session) handleDebugWPGPS(ctx context.Context) {
 // ride the MovementPaused latch (EnableMovement twin); any other argument
 // prints the transport's name, state and position. Delta: C++ defers the
 // stop to the next stop frame (Transport _pendingStop), Go pauses at once.
-// No transport reads a plain notice, the C++ false return's Go equivalent.
-func (s *session) handleDebugTransport(ctx context.Context, args []string) {
+// No transport returns false silently, the C++ false return (no message).
+func (s *session) handleDebugTransport(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .debug transport <stop|start>")
-		return
+		return false
 	}
 	if s.server == nil || s.player == nil || s.player.TransportGUID == 0 {
-		s.sendSysMessage("You are not on a transport.")
-		return
+		return false
 	}
 	var transport *continentTransport
 	s.server.transportMu.Lock()
@@ -1454,7 +1444,7 @@ func (s *session) handleDebugTransport(ctx context.Context, args []string) {
 			} else {
 				s.sendSysMessage(fmt.Sprintf("Transport %s started", transportName))
 			}
-			return
+			return true
 		}
 		s.server.transportMu.Unlock()
 		state := "moving"
@@ -1463,10 +1453,10 @@ func (s *session) handleDebugTransport(ctx context.Context, args []string) {
 		}
 		s.sendSysMessage(fmt.Sprintf("Transport %s is %s", transportName, state))
 		s.sendSysMessage(fmt.Sprintf("Transport position: X: %f Y: %f Z: %f O: %f", x, y, z, o))
-		return
+		return true
 	}
 	s.server.transportMu.Unlock()
-	s.sendSysMessage("You are not on a transport.")
+	return false
 }
 
 // handleDebugBattleground mirrors HandleDebugBattlegroundCommand
@@ -1475,13 +1465,12 @@ func (s *session) handleDebugTransport(ctx context.Context, args []string) {
 // are unseeded in-tree, so plain prose stands in like the other unseeded
 // LANG_* notices; the queue consumers have no Go twin yet (see the
 // bgTesting field note in server.go).
-func (s *session) handleDebugBattleground(ctx context.Context) {
+func (s *session) handleDebugBattleground(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.bgTestingMu.Lock()
 	s.server.bgTesting = !s.server.bgTesting
@@ -1492,19 +1481,19 @@ func (s *session) handleDebugBattleground(ctx context.Context) {
 	} else {
 		s.server.broadcastMessageChatAll("Battleground debug mode disabled.")
 	}
+	return true
 }
 
 // handleDebugArena mirrors HandleDebugArenaCommand (cs_debug.cpp:763):
 // BattlegroundMgr::ToggleArenaTesting flips m_ArenaTesting and broadcasts
 // the ON/OFF world text (SendWorldText). LANG 737/738 prose and the
 // missing queue consumer match the battleground arm above.
-func (s *session) handleDebugArena(ctx context.Context) {
+func (s *session) handleDebugArena(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	s.server.bgTestingMu.Lock()
 	s.server.arenaTesting = !s.server.arenaTesting
@@ -1515,6 +1504,7 @@ func (s *session) handleDebugArena(ctx context.Context) {
 	} else {
 		s.server.broadcastMessageChatAll("Arena debug mode disabled.")
 	}
+	return true
 }
 
 // Quest-reset world states (SharedDefines.h:3867-3872).
@@ -1567,15 +1557,13 @@ func debugQuestResetTimeText(t time.Time) string {
 // (sQuestPoolMgr->ChangeDailyQuests and kin) has no Go model, and the
 // dungeon-finder quest clear inside ResetDailyQuestStatus has none
 // either; both stay unmodeled, not fabricated.
-func (s *session) handleDebugQuestReset(ctx context.Context, args []string) {
+func (s *session) handleDebugQuestReset(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug questreset <all|daily|weekly|monthly>"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	var daily, weekly, monthly bool
 	switch strings.ToUpper(args[0]) {
@@ -1588,8 +1576,7 @@ func (s *session) handleDebugQuestReset(ctx context.Context, args []string) {
 	case "MONTHLY":
 		monthly = true
 	default:
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if daily {
 		s.debugResetDailyQuests(ctx)
@@ -1600,6 +1587,7 @@ func (s *session) handleDebugQuestReset(ctx context.Context, args []string) {
 	if monthly {
 		s.debugResetMonthlyQuests(ctx)
 	}
+	return true
 }
 
 // debugResetQuestSessions collects the online sessions whose in-memory
@@ -1672,47 +1660,43 @@ func (s *session) debugResetMonthlyQuests(ctx context.Context) {
 // demote, respawn wipe and player invalidation). The next-reset
 // computation and warning schedule ride the scheduler's own tick, not
 // this command, matching Go's read-only resettime stance.
-func (s *session) handleDebugRaidReset(ctx context.Context, args []string) {
+func (s *session) handleDebugRaidReset(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug raidreset <mapId> [difficulty]"
 	if len(args) == 0 || len(args) > 2 || s.server == nil || s.server.Data == nil {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	mapID, ok := parseCommandUint32(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	difficulty := -1
 	if len(args) == 2 {
 		parsed, ok := parseCppBase0Int(args[1])
 		if !ok || parsed < 0 || parsed > 255 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		difficulty = int(parsed)
 	}
 	entry, found, err := s.server.Data.Map(mapID)
 	if err != nil || !found {
 		s.sendSysMessage("Invalid map specified.")
-		return
+		return true
 	}
 	if !entry.IsDungeon() {
 		s.sendSysMessage(fmt.Sprintf("'%s' is not a dungeon map.", entry.MapName))
-		return
+		return true
 	}
 	if difficulty >= 0 {
 		if difficulty >= 4 {
 			s.sendSysMessage(fmt.Sprintf("Invalid difficulty %d - specify in range [0,%d).", difficulty, 4))
-			return
+			return true
 		}
 		if _, found, err := s.server.Data.MapDifficulty(mapID, uint32(difficulty)); err != nil || !found {
 			s.sendSysMessage(fmt.Sprintf("Difficulty %d is not valid for '%s'.", difficulty, entry.MapName))
-			return
+			return true
 		}
 	}
 	if difficulty < 0 {
@@ -1727,14 +1711,15 @@ func (s *session) handleDebugRaidReset(ctx context.Context, args []string) {
 				s.server.resetInstanceGlobal(ctx, instanceResetKey{MapID: mapID, Difficulty: diff})
 			}
 		}
-		return
+		return true
 	}
 	if entry.IsNonRaidDungeon() && difficulty == 0 {
 		s.sendSysMessage(fmt.Sprintf("'%s' does not have any permanent saves for difficulty %d.", entry.MapName, difficulty))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Resetting difficulty %d for '%s'.", difficulty, entry.MapName))
 	s.server.resetInstanceGlobal(ctx, instanceResetKey{MapID: mapID, Difficulty: uint32(difficulty)})
+	return true
 }
 
 // debugClosePoint mirrors the spawnvehicle position leg
@@ -1758,52 +1743,52 @@ func (s *session) debugClosePoint() (x, y, z, o float32) {
 // template's VehicleId). Unknown entries fail silently, the summon
 // funnel's precedent; the C++ id form creates a full creature while Go
 // creates a temp summon, so no DB row backs the spawn.
-func (s *session) handleDebugSpawnVehicle(ctx context.Context, args []string) {
+func (s *session) handleDebugSpawnVehicle(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug spawnvehicle <entry> [vehicleId]"
-	if len(args) == 0 || len(args) > 2 || s.server == nil || s.player == nil {
-		s.sendSysMessage(syntax)
-		return
+	if len(args) == 0 || len(args) > 2 {
+		return false
+	}
+	if s.server == nil || s.player == nil {
+		return true
 	}
 	entry, ok := parseCommandUint32(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	vehicleID := uint32(0)
 	hasVehicleID := false
 	if len(args) == 2 {
 		vid, ok := parseCommandUint32(args[1])
 		if !ok {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		vehicleID = vid
 		hasVehicleID = true
 	}
 	if hasVehicleID {
 		if _, ok := s.npcTemplateGate(ctx, entry); !ok {
-			return
+			return false
 		}
 		if s.server.Data == nil {
-			return
+			return false
 		}
 		if _, ok, err := s.server.Data.Vehicle(vehicleID); err != nil || !ok {
-			return
+			return false
 		}
 	}
 	x, y, z, o := s.debugClosePoint()
 	origin := tempSummonOrigin{Map: s.player.Map, InstanceID: s.player.InstanceID, GUID: s.player.GUID, X: s.player.X, Y: s.player.Y, Z: s.player.Z, O: s.player.Orientation, Reach: float64(s.player.CombatReach)}
 	summoned := s.server.summonTempCreature(ctx, origin, entry, x, y, z, o, 7, 0)
 	if summoned == nil {
-		return
+		return false
 	}
 	if hasVehicleID {
 		s.server.createVehicleKit(summoned.Map, summoned.InstanceID, summoned.GUID, vehicleID, entry, false)
 	}
+	return true
 }
 
 // handleDebugEnterVehicle mirrors HandleDebugEnterVehicleCommand
@@ -1817,46 +1802,48 @@ func (s *session) handleDebugSpawnVehicle(ctx context.Context, args []string) {
 // same-entry vehicle never blocks the board. A missing vehicle, a
 // missing passenger, or an unparseable seat fails silently, the C++
 // false-return legs.
-func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) {
+func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .debug entervehicle <entry> [seatId]"
-	if len(args) == 0 || len(args) > 2 || s.server == nil || s.player == nil || s.selection == 0 {
-		s.sendSysMessage(syntax)
-		return
+	if len(args) == 0 || len(args) > 2 {
+		return false
+	}
+	if s.server == nil || s.player == nil {
+		return true
+	}
+	if s.selection == 0 {
+		return false
 	}
 	entry, ok := parseCommandUint32(args[0])
 	if !ok {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	seatID := int8(-1)
 	if len(args) == 2 {
 		parsed, ok := parseCppBase0Int(args[1])
 		if !ok || parsed < -128 || parsed > 127 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		seatID = int8(parsed)
 	}
 	vehicleGUID := s.selection
 	if s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID) == nil {
-		return
+		return false
 	}
 	if entry == 0 {
 		s.enterVehicle(ctx, vehicleGUID, seatID)
 		s.sendSysMessage(fmt.Sprintf("Unit %d entered vehicle %d", entry, seatID))
-		return
+		return true
 	}
 	passenger := s.debugVehiclePassenger(entry, vehicleGUID)
 	if passenger == nil {
-		return
+		return false
 	}
 	kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, vehicleGUID)
 	if kit == nil {
-		return
+		return false
 	}
 	assigned, _, ok := kit.AddPassenger(passenger.GUID, seatID, passenger.UnitFlags&0x02000000 != 0)
 	if ok {
@@ -1870,6 +1857,7 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) {
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Unit %d entered vehicle %d", entry, seatID))
+	return true
 }
 
 // debugVehiclePassenger mirrors the entervehicle passenger search

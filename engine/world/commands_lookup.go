@@ -80,15 +80,18 @@ func (s *session) lookupSelectedPlayerOrSelf() *session {
 // MaxResultsLookupCommands cap exactly like the C++ arms (cs_lookup.cpp:
 // `if (maxResults && count++ == maxResults)`). Locales beyond enUS are not
 // searched (documented gap).
-func (s *session) lookupDBC(fileName, dataName string, nameField int, query, noMatchMsg string, line func(id uint32, name string, rec lookupRecord) string) {
+func (s *session) lookupDBC(fileName, dataName string, nameField int, query, noMatchMsg string, line func(id uint32, name string, rec lookupRecord) string) bool {
+	if !utf8.ValidString(query) {
+		return false
+	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage(dataName + " data is unavailable.")
-		return
+		return true
 	}
 	file, err := s.server.Data.File(fileName)
 	if err != nil || file == nil {
 		s.sendSysMessage(dataName + " data is unavailable.")
-		return
+		return true
 	}
 	namePart := strings.ToLower(query)
 	maxResults := s.server.Config.MaxResultsLookupCommands
@@ -115,7 +118,7 @@ func (s *session) lookupDBC(fileName, dataName string, nameField int, query, noM
 		}
 		if maxResults != 0 && count == maxResults {
 			s.sendSysMessage(lookupMaxResultsMsg(maxResults))
-			return
+			return true
 		}
 		count++
 		s.sendSysMessage(line(id, name, rec))
@@ -124,21 +127,25 @@ func (s *session) lookupDBC(fileName, dataName string, nameField int, query, noM
 	if !found {
 		s.sendSysMessage(noMatchMsg)
 	}
+	return true
 }
 
 // lookupWorldTable ports the C++ item_template/creature_template/
 // gameobject_template name searches (cs_lookup.cpp:400, 165, 577): a full
 // ordered scan of the world table with a case-insensitive substring match on
 // the enUS name column (item/gameobject locales are unmodeled).
-func (s *session) lookupWorldTable(table, nameCol, query, noMatchMsg string, line func(entry uint32, name string) string) {
+func (s *session) lookupWorldTable(table, nameCol, query, noMatchMsg string, line func(entry uint32, name string) string) bool {
+	if !utf8.ValidString(query) {
+		return false
+	}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
-		return
+		return true
 	}
 	rows, err := s.server.WorldStore.DB.QueryContext(context.Background(), "SELECT entry, "+nameCol+" FROM "+table+" ORDER BY entry")
 	if err != nil {
 		s.sendSysMessage("World data is unavailable.")
-		return
+		return true
 	}
 	defer rows.Close()
 	namePart := strings.ToLower(query)
@@ -159,7 +166,7 @@ func (s *session) lookupWorldTable(table, nameCol, query, noMatchMsg string, lin
 		}
 		if maxResults != 0 && count == maxResults {
 			s.sendSysMessage(lookupMaxResultsMsg(maxResults))
-			return
+			return true
 		}
 		count++
 		s.sendSysMessage(line(entry, name))
@@ -168,27 +175,27 @@ func (s *session) lookupWorldTable(table, nameCol, query, noMatchMsg string, lin
 	if !found {
 		s.sendSysMessage(noMatchMsg)
 	}
+	return true
 }
 
 // handleCmdLookup ports the lookup command table (cs_lookup.cpp:52-88): 19
 // arms with Trinity per-level prefix matching, each gated on its own RBAC
 // permission (ChatCommand.cpp:487 checks only the invoker leaf node).
-func (s *session) handleCmdLookup(ctx context.Context, args []string) {
+// R13: bool handlers — RBAC denial and empty-args parse failures return
+// false silently so dispatchCommand shows the node's help listing
+// (ChatCommand.cpp:296-309); message legs return true.
+func (s *session) handleCmdLookup(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .lookup area|creature|event|faction|item [id|set]|object|quest [id]|player ip|account|email|skill|spell [id]|taxinode|tele|title|map [id] <name>"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
-			return true
-		}
-		return false
+		return !s.commandAllowed(ctx, perm)
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -196,213 +203,191 @@ func (s *session) handleCmdLookup(ctx context.Context, args []string) {
 	switch {
 	case strings.HasPrefix("area", sub):
 		if deny(permissionCommandLookupArea) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup area <name>")
-			return
+			return false
 		}
-		s.handleLookupArea(joinRest())
+		return s.handleLookupArea(joinRest())
 	case strings.HasPrefix("creature", sub):
 		if deny(permissionCommandLookupCreature) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup creature <name>")
-			return
+			return false
 		}
-		s.handleLookupCreature(joinRest())
+		return s.handleLookupCreature(joinRest())
 	case strings.HasPrefix("event", sub):
 		if deny(permissionCommandLookupEvent) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup event <name>")
-			return
+			return false
 		}
-		s.handleLookupEvent(ctx, joinRest())
+		return s.handleLookupEvent(ctx, joinRest())
 	case strings.HasPrefix("faction", sub):
 		if deny(permissionCommandLookupFaction) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup faction <name>")
-			return
+			return false
 		}
-		s.handleLookupFaction(joinRest())
+		return s.handleLookupFaction(joinRest())
 	case strings.HasPrefix("item", sub):
 		if len(rest) > 0 && strings.HasPrefix("id", strings.ToLower(rest[0])) {
 			if deny(permissionCommandLookupItemID) {
-				return
+				return false
 			}
 			if len(rest) < 2 {
-				s.sendSysMessage("Syntax: .lookup item id <id>")
-				return
+				return false
 			}
-			s.handleLookupItemID(rest[1])
-			return
+			return s.handleLookupItemID(rest[1])
 		}
 		if len(rest) > 0 && strings.HasPrefix("set", strings.ToLower(rest[0])) {
 			if deny(permissionCommandLookupItemSet) {
-				return
+				return false
 			}
 			if len(rest) < 2 {
-				s.sendSysMessage("Syntax: .lookup item set <name>")
-				return
+				return false
 			}
-			s.handleLookupItemSet(strings.Join(rest[1:], " "))
-			return
+			return s.handleLookupItemSet(strings.Join(rest[1:], " "))
 		}
 		if deny(permissionCommandLookupItem) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup item <name>")
-			return
+			return false
 		}
-		s.handleLookupItem(joinRest())
+		return s.handleLookupItem(joinRest())
 	case strings.HasPrefix("object", sub):
 		if deny(permissionCommandLookupObject) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup object <name>")
-			return
+			return false
 		}
-		s.handleLookupObject(joinRest())
+		return s.handleLookupObject(joinRest())
 	case strings.HasPrefix("quest", sub):
 		if len(rest) > 0 && strings.HasPrefix("id", strings.ToLower(rest[0])) {
 			if deny(permissionCommandLookupQuestID) {
-				return
+				return false
 			}
 			if len(rest) < 2 {
-				s.sendSysMessage("Syntax: .lookup quest id <id>")
-				return
+				return false
 			}
-			s.handleLookupQuestID(ctx, rest[1])
-			return
+			return s.handleLookupQuestID(ctx, rest[1])
 		}
 		if deny(permissionCommandLookupQuest) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup quest <name>")
-			return
+			return false
 		}
-		s.handleLookupQuest(ctx, joinRest())
+		return s.handleLookupQuest(ctx, joinRest())
 	case strings.HasPrefix("player", sub):
 		if len(rest) == 0 {
 			s.sendSysMessage("Syntax: .lookup player ip|account|email <arg> [limit]")
-			return
+			return true
 		}
 		playerSub := strings.ToLower(rest[0])
 		playerRest := rest[1:]
 		switch {
 		case strings.HasPrefix("ip", playerSub):
 			if deny(permissionCommandLookupPlayerIP) {
-				return
+				return false
 			}
-			s.handleLookupPlayerIP(ctx, playerRest)
+			return s.handleLookupPlayerIP(ctx, playerRest)
 		case strings.HasPrefix("account", playerSub):
 			if deny(permissionCommandLookupPlayerAccount) {
-				return
+				return false
 			}
-			s.handleLookupPlayerAccount(ctx, playerRest)
+			return s.handleLookupPlayerAccount(ctx, playerRest)
 		case strings.HasPrefix("email", playerSub):
 			if deny(permissionCommandLookupPlayerEmail) {
-				return
+				return false
 			}
-			s.handleLookupPlayerEmail(ctx, playerRest)
+			return s.handleLookupPlayerEmail(ctx, playerRest)
 		default:
 			s.sendSysMessage("Syntax: .lookup player ip|account|email <arg> [limit]")
 		}
 	case strings.HasPrefix("skill", sub):
 		if deny(permissionCommandLookupSkill) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup skill <name>")
-			return
+			return false
 		}
-		s.handleLookupSkill(joinRest())
+		return s.handleLookupSkill(joinRest())
 	case strings.HasPrefix("spell", sub):
 		if len(rest) > 0 && strings.HasPrefix("id", strings.ToLower(rest[0])) {
 			if deny(permissionCommandLookupSpellID) {
-				return
+				return false
 			}
 			if len(rest) < 2 {
-				s.sendSysMessage("Syntax: .lookup spell id <id>")
-				return
+				return false
 			}
-			s.handleLookupSpellID(ctx, rest[1])
-			return
+			return s.handleLookupSpellID(ctx, rest[1])
 		}
 		if deny(permissionCommandLookupSpell) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup spell <name>")
-			return
+			return false
 		}
-		s.handleLookupSpell(joinRest())
+		return s.handleLookupSpell(joinRest())
 	case strings.HasPrefix("taxinode", sub):
 		if deny(permissionCommandLookupTaxinode) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup taxinode <name>")
-			return
+			return false
 		}
-		s.handleLookupTaxinode(joinRest())
+		return s.handleLookupTaxinode(joinRest())
 	case strings.HasPrefix("tele", sub):
 		if deny(permissionCommandLookupTele) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup tele <name>")
-			return
+			return false
 		}
-		s.handleLookupTele(ctx, rest[0])
+		return s.handleLookupTele(ctx, rest[0])
 	case strings.HasPrefix("title", sub):
 		if deny(permissionCommandLookupTitle) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup title <name>")
-			return
+			return false
 		}
-		s.handleLookupTitle(joinRest())
+		return s.handleLookupTitle(joinRest())
 	case strings.HasPrefix("map", sub):
 		if len(rest) > 0 && strings.HasPrefix("id", strings.ToLower(rest[0])) {
 			if deny(permissionCommandLookupMapID) {
-				return
+				return false
 			}
 			if len(rest) < 2 {
-				s.sendSysMessage("Syntax: .lookup map id <id>")
-				return
+				return false
 			}
-			s.handleLookupMapID(rest[1])
-			return
+			return s.handleLookupMapID(rest[1])
 		}
 		if deny(permissionCommandLookupMap) {
-			return
+			return false
 		}
 		if len(rest) == 0 {
-			s.sendSysMessage("Syntax: .lookup map <name>")
-			return
+			return false
 		}
-		s.handleLookupMap(joinRest())
+		return s.handleLookupMap(joinRest())
 	default:
 		s.sendSysMessage(syntax)
 	}
+	return true
 }
 
 // handleLookupArea ports HandleLookupAreaCommand (cs_lookup.cpp:90-163):
 // AreaTable.dbc search, "id - [name]" lines. Only enUS is searched.
-func (s *session) handleLookupArea(query string) {
+func (s *session) handleLookupArea(query string) bool {
 	// AreaTableEntry.Name is the enUS string at field 11 (DBCStructure.h:176,
 	// wotlk.Store.Area).
-	s.lookupDBC("AreaTable", "Area", 11, query, "No area found.",
+	return s.lookupDBC("AreaTable", "Area", 11, query, "No area found.",
 		func(id uint32, name string, rec lookupRecord) string {
 			return fmt.Sprintf("%d - |cffffffff|Harea:%d|h[%s enUS]|h|r", id, id, name)
 		})
@@ -410,8 +395,8 @@ func (s *session) handleLookupArea(query string) {
 
 // handleLookupCreature ports HandleLookupCreatureCommand
 // (cs_lookup.cpp:165-241): creature_template search, "id - [name]" lines.
-func (s *session) handleLookupCreature(query string) {
-	s.lookupWorldTable("creature_template", "name", query, "No creature found.",
+func (s *session) handleLookupCreature(query string) bool {
+	return s.lookupWorldTable("creature_template", "name", query, "No creature found.",
 		func(entry uint32, name string) string {
 			return fmt.Sprintf("%d - |cffffffff|Hcreature_entry:%d|h[%s]|h|r", entry, entry, name)
 		})
@@ -420,9 +405,12 @@ func (s *session) handleLookupCreature(query string) {
 // handleLookupEvent ports HandleLookupEventCommand (cs_lookup.cpp:243-296):
 // game_event description search, ascending id order, with the active marker
 // from the cached active-event set.
-func (s *session) handleLookupEvent(ctx context.Context, query string) {
+func (s *session) handleLookupEvent(ctx context.Context, query string) bool {
+	if !utf8.ValidString(query) {
+		return false
+	}
 	if s.server == nil {
-		return
+		return true
 	}
 	events := s.server.loadGameEventDataMap(ctx)
 	active := s.server.cachedActiveGameEvents(ctx)
@@ -450,7 +438,7 @@ func (s *session) handleLookupEvent(ctx context.Context, query string) {
 		}
 		if maxResults != 0 && count == maxResults {
 			s.sendSysMessage(lookupMaxResultsMsg(maxResults))
-			return
+			return true
 		}
 		count++
 		activeStr := ""
@@ -463,15 +451,16 @@ func (s *session) handleLookupEvent(ctx context.Context, query string) {
 	if !found {
 		s.sendSysMessage("No event found.")
 	}
+	return true
 }
 
 // handleLookupFaction ports HandleLookupFactionCommand (cs_lookup.cpp:298-398):
 // Faction.dbc search. The C++ appends the target's reputation state; the Go
 // tree has no per-faction reputation bridge, so the no-reputation form is
 // always shown (documented gap).
-func (s *session) handleLookupFaction(query string) {
+func (s *session) handleLookupFaction(query string) bool {
 	// FactionEntry.Name is the enUS string at field 23 (DBCStructure.h:671).
-	s.lookupDBC("Faction", "Faction", 23, query, "No faction found.",
+	return s.lookupDBC("Faction", "Faction", 23, query, "No faction found.",
 		func(id uint32, name string, rec lookupRecord) string {
 			return fmt.Sprintf("%d - |cffffffff|Hfaction:%d|h[%s enUS]|h|r [no reputation]", id, id, name)
 		})
@@ -479,35 +468,39 @@ func (s *session) handleLookupFaction(query string) {
 
 // handleLookupItem ports HandleLookupItemCommand (cs_lookup.cpp:400-476):
 // item_template search, "id - [name]" lines.
-func (s *session) handleLookupItem(query string) {
-	s.lookupWorldTable("item_template", "name", query, "No item found.",
+func (s *session) handleLookupItem(query string) bool {
+	return s.lookupWorldTable("item_template", "name", query, "No item found.",
 		func(entry uint32, name string) string {
 			return fmt.Sprintf("%d - |cffffffff|Hitem:%d|h[%s]|h|r", entry, entry, name)
 		})
 }
 
 // handleLookupItemID ports HandleLookupItemIdCommand (cs_lookup.cpp:478-504).
-func (s *session) handleLookupItemID(arg string) {
+func (s *session) handleLookupItemID(arg string) bool {
+	if arg == "" {
+		return false
+	}
 	// C++ is uint32 id = atoi(args) (cs_lookup.cpp:482); cAtoi keeps the
 	// prefix-digit/negative/whitespace behavior ParseUint would reject.
 	id := uint32(cAtoi(arg))
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
-		return
+		return true
 	}
 	var name string
 	if err := s.server.WorldStore.DB.QueryRowContext(context.Background(), "SELECT name FROM item_template WHERE entry = ?", id).Scan(&name); err != nil || name == "" {
 		s.sendSysMessage("No item found.")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hitem:%d|h[%s]|h|r", id, id, name))
+	return true
 }
 
 // handleLookupItemSet ports HandleLookupItemSetCommand (cs_lookup.cpp:506-575):
 // ItemSet.dbc search, "id - [name]" lines.
-func (s *session) handleLookupItemSet(query string) {
+func (s *session) handleLookupItemSet(query string) bool {
 	// ItemSetEntry.Name is the enUS string at field 1 (DBCStructure.h:983).
-	s.lookupDBC("ItemSet", "Item set", 1, query, "No item set found.",
+	return s.lookupDBC("ItemSet", "Item set", 1, query, "No item set found.",
 		func(id uint32, name string, rec lookupRecord) string {
 			return fmt.Sprintf("%d - |cffffffff|Hitemset:%d|h[%s]|h|r [enUS]", id, id, name)
 		})
@@ -515,8 +508,8 @@ func (s *session) handleLookupItemSet(query string) {
 
 // handleLookupObject ports HandleLookupObjectCommand (cs_lookup.cpp:577-651):
 // gameobject_template search, "id - [name]" lines.
-func (s *session) handleLookupObject(query string) {
-	s.lookupWorldTable("gameobject_template", "name", query, "No gameobject found.",
+func (s *session) handleLookupObject(query string) bool {
+	return s.lookupWorldTable("gameobject_template", "name", query, "No gameobject found.",
 		func(entry uint32, name string) string {
 			return fmt.Sprintf("%d - |cffffffff|Hgameobject_entry:%d|h[%s]|h|r", entry, entry, name)
 		})
@@ -549,7 +542,10 @@ func (s *session) lookupQuestStatusStr(ctx context.Context, target *session, que
 // handleLookupQuest ports HandleLookupQuestCommand (cs_lookup.cpp:653-771):
 // quest_template title search with the selected-or-self target's quest
 // status. Quest locales are unmodeled (enUS Title only).
-func (s *session) handleLookupQuest(ctx context.Context, query string) {
+func (s *session) handleLookupQuest(ctx context.Context, query string) bool {
+	if !utf8.ValidString(query) {
+		return false
+	}
 	// getSelectedPlayerOrSelf (Chat.cpp:344): no selection or an unresolvable
 	// selection both fall back to the invoker; never nil in-session.
 	target := s.lookupSelectedPlayerOrSelf()
@@ -558,12 +554,12 @@ func (s *session) handleLookupQuest(ctx context.Context, query string) {
 	}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
-		return
+		return true
 	}
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT entry, Title, QuestLevel FROM quest_template ORDER BY entry")
 	if err != nil {
 		s.sendSysMessage("World data is unavailable.")
-		return
+		return true
 	}
 	defer rows.Close()
 	namePart := strings.ToLower(query)
@@ -584,7 +580,7 @@ func (s *session) handleLookupQuest(ctx context.Context, query string) {
 		}
 		if maxResults != 0 && count == maxResults {
 			s.sendSysMessage(lookupMaxResultsMsg(maxResults))
-			return
+			return true
 		}
 		count++
 		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hquest:%d:%d|h[%s]|h|r%s", entry, entry, level, title, s.lookupQuestStatusStr(ctx, target, entry)))
@@ -593,10 +589,14 @@ func (s *session) handleLookupQuest(ctx context.Context, query string) {
 	if !found {
 		s.sendSysMessage("No quest found.")
 	}
+	return true
 }
 
 // handleLookupQuestID ports HandleLookupQuestIdCommand (cs_lookup.cpp:773-821).
-func (s *session) handleLookupQuestID(ctx context.Context, arg string) {
+func (s *session) handleLookupQuestID(ctx context.Context, arg string) bool {
+	if arg == "" {
+		return false
+	}
 	// getSelectedPlayerOrSelf (Chat.cpp:344): no selection or an unresolvable
 	// selection both fall back to the invoker; never nil in-session.
 	target := s.lookupSelectedPlayerOrSelf()
@@ -608,15 +608,16 @@ func (s *session) handleLookupQuestID(ctx context.Context, arg string) {
 	id := uint32(cAtoi(arg))
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
-		return
+		return true
 	}
 	var title string
 	var level uint32
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Title, QuestLevel FROM quest_template WHERE entry = ?", id).Scan(&title, &level); err != nil || title == "" {
 		s.sendSysMessage("No quest found.")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hquest:%d:%d|h[%s]|h|r%s", id, id, level, title, s.lookupQuestStatusStr(ctx, target, id)))
+	return true
 }
 
 // handleLookupPlayerIP ports HandleLookupPlayerIpCommand
@@ -624,19 +625,16 @@ func (s *session) handleLookupQuestID(ctx context.Context, arg string) {
 // used (the selection is required and must not be the invoker, exactly like
 // the C++); otherwise the first arg is the IP and the optional second the
 // character row limit.
-func (s *session) handleLookupPlayerIP(ctx context.Context, args []string) {
+func (s *session) handleLookupPlayerIP(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		if s.selection == 0 || s.server == nil {
-			s.sendSysMessage("Syntax: .lookup player ip [<ip> [limit]]")
-			return
+			return false
 		}
 		ts := s.server.playerSessionForGUID(s.selection)
 		if ts == nil || ts.player == nil || ts.playerGUID == s.playerGUID {
-			s.sendSysMessage("Syntax: .lookup player ip [<ip> [limit]]")
-			return
+			return false
 		}
-		s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE last_ip = ?", []any{ts.remoteIP()}, -1)
-		return
+		return s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE last_ip = ?", []any{ts.remoteIP()}, -1)
 	}
 	// C++ is atoi(limitStr) (cs_lookup.cpp:1446): "abc" is 0, "12abc"
 	// is 12 — cAtoi keeps that behavior where strconv.Atoi would
@@ -645,16 +643,15 @@ func (s *session) handleLookupPlayerIP(ctx context.Context, args []string) {
 	if len(args) > 1 {
 		limit = cAtoi(args[1])
 	}
-	s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE last_ip = ?", []any{args[0]}, limit)
+	return s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE last_ip = ?", []any{args[0]}, limit)
 }
 
 // handleLookupPlayerAccount ports HandleLookupPlayerAccountCommand
 // (cs_lookup.cpp:1456-1474): account name lookup (upper-cased like the C++
 // Utf8ToUpperOnlyLatin).
-func (s *session) handleLookupPlayerAccount(ctx context.Context, args []string) {
+func (s *session) handleLookupPlayerAccount(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .lookup player account <account> [limit]")
-		return
+		return false
 	}
 	// C++ is atoi(limitStr) (cs_lookup.cpp:1463): "abc" is 0, "12abc"
 	// is 12 — cAtoi keeps that behavior where strconv.Atoi would
@@ -665,18 +662,16 @@ func (s *session) handleLookupPlayerAccount(ctx context.Context, args []string) 
 	}
 	upper, ok := upperLatinOnly(args[0])
 	if !ok {
-		s.sendSysMessage("Syntax: .lookup player account <account> [limit]")
-		return
+		return false
 	}
-	s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE username = ?", []any{upper}, limit)
+	return s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE username = ?", []any{upper}, limit)
 }
 
 // handleLookupPlayerEmail ports HandleLookupPlayerEmailCommand
 // (cs_lookup.cpp:1476-1494).
-func (s *session) handleLookupPlayerEmail(ctx context.Context, args []string) {
+func (s *session) handleLookupPlayerEmail(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .lookup player email <email> [limit]")
-		return
+		return false
 	}
 	// C++ is atoi(limitStr) (cs_lookup.cpp:1483): "abc" is 0, "12abc"
 	// is 12 — cAtoi keeps that behavior where strconv.Atoi would
@@ -685,7 +680,7 @@ func (s *session) handleLookupPlayerEmail(ctx context.Context, args []string) {
 	if len(args) > 1 {
 		limit = cAtoi(args[1])
 	}
-	s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE email = ?", []any{args[0]}, limit)
+	return s.lookupPlayerSearchCommand(ctx, "SELECT id, username FROM account WHERE email = ?", []any{args[0]}, limit)
 }
 
 // upperLatinOnly mirrors Utf8ToUpperOnlyLatin (Util.cpp:592-601): only
@@ -712,16 +707,16 @@ func upperLatinOnly(s string) (string, bool) {
 // account line is sent only when the account has at least one character
 // (the C++ prints it inside `if (result2)`). A zero character count
 // reports "No players found."
-func (s *session) lookupPlayerSearchCommand(ctx context.Context, accountQuery string, accountArgs []any, limit int) {
+func (s *session) lookupPlayerSearchCommand(ctx context.Context, accountQuery string, accountArgs []any, limit int) bool {
 	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil ||
 		s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		s.sendSysMessage("No players found.")
-		return
+		return true
 	}
 	accountRows, err := s.server.AuthStore.DB.QueryContext(ctx, accountQuery, accountArgs...)
 	if err != nil {
 		s.sendSysMessage("No players found.")
-		return
+		return true
 	}
 	defer accountRows.Close()
 	maxResults := s.server.Config.MaxResultsLookupCommands
@@ -730,7 +725,7 @@ func (s *session) lookupPlayerSearchCommand(ctx context.Context, accountQuery st
 	for accountRows.Next() {
 		if maxResults != 0 && count == maxResults {
 			s.sendSysMessage(lookupMaxResultsMsg(maxResults))
-			return
+			return true
 		}
 		count++
 		var accountID uint32
@@ -773,16 +768,17 @@ func (s *session) lookupPlayerSearchCommand(ctx context.Context, accountQuery st
 	if counter == 0 {
 		s.sendSysMessage("No players found.")
 	}
+	return true
 }
 
 // handleLookupSkill ports HandleLookupSkillCommand (cs_lookup.cpp:823-909):
 // SkillLine.dbc search. The C++ shows the target's skill values when the
 // target knows the skill; the Go tree has no skill-value bridge, so only the
 // name lines are emitted (documented gap).
-func (s *session) handleLookupSkill(query string) {
+func (s *session) handleLookupSkill(query string) bool {
 	// SkillLineEntry.DisplayName is the enUS string at field 3
 	// (DBCStructure.h:1316).
-	s.lookupDBC("SkillLine", "Skill", 3, query, "No skill found.",
+	return s.lookupDBC("SkillLine", "Skill", 3, query, "No skill found.",
 		func(id uint32, name string, rec lookupRecord) string {
 			return fmt.Sprintf("%d - |cffffffff|Hskill:%d|h[%s enUS]|h|r", id, id, name)
 		})
@@ -844,10 +840,10 @@ func (s *session) lookupSpellLine(id uint32, name, rankText string, target *sess
 // handleLookupSpell ports HandleLookupSpellCommand (cs_lookup.cpp:911-1021):
 // Spell.dbc name search. The known/active marks use the selected player; the
 // C++ also allows NULL (console), so a nil selection simply omits them.
-func (s *session) handleLookupSpell(query string) {
+func (s *session) handleLookupSpell(query string) bool {
 	target := s.lookupSelectedPlayerOrSelf()
 	// SpellName is the enUS string at field 136 (wotlk.Store.SpellName).
-	s.lookupDBC("Spell", "Spell", 136, query, "No spell found.",
+	return s.lookupDBC("Spell", "Spell", 136, query, "No spell found.",
 		func(id uint32, name string, rec lookupRecord) string {
 			rankText, _ := rec.String(153)
 			return s.lookupSpellLine(id, name, rankText, target)
@@ -855,27 +851,31 @@ func (s *session) handleLookupSpell(query string) {
 }
 
 // handleLookupSpellID ports HandleLookupSpellIdCommand (cs_lookup.cpp:1023-1091).
-func (s *session) handleLookupSpellID(ctx context.Context, arg string) {
+func (s *session) handleLookupSpellID(ctx context.Context, arg string) bool {
+	if arg == "" {
+		return false
+	}
 	// C++ is uint32 id = atoi(args) (cs_lookup.cpp:1027); cAtoi keeps the
 	// prefix-digit/negative/whitespace behavior ParseUint would reject.
 	id := uint32(cAtoi(arg))
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Spell data is unavailable.")
-		return
+		return true
 	}
 	name, rankText, found, err := s.server.Data.SpellName(id)
 	if err != nil || !found || name == "" {
 		s.sendSysMessage("No spell found.")
-		return
+		return true
 	}
 	s.sendSysMessage(s.lookupSpellLine(id, name, rankText, s.lookupSelectedPlayerOrSelf()))
+	return true
 }
 
 // handleLookupTaxinode ports HandleLookupTaxiNodeCommand (cs_lookup.cpp:1093-1165):
 // TaxiNodes.dbc search, "id - [name] (Map:m X:x Y:y Z:z)" lines.
-func (s *session) handleLookupTaxinode(query string) {
+func (s *session) handleLookupTaxinode(query string) bool {
 	// TaxiNodesEntry.Name is the enUS string at field 5 (DBCStructure.h:1698).
-	s.lookupDBC("TaxiNodes", "Taxi node", 5, query, "No taxinode found.",
+	return s.lookupDBC("TaxiNodes", "Taxi node", 5, query, "No taxinode found.",
 		func(id uint32, name string, rec lookupRecord) string {
 			continent, _ := rec.Uint32(1)
 			x, _ := rec.Float32(2)
@@ -892,15 +892,19 @@ func (s *session) handleLookupTaxinode(query string) {
 // the match is done in Go — a SQL LIKE would let %/_ in the token act as
 // wildcards. The LANG_COMMAND_TELE_LOCATION (168) header wrapping the
 // reply stays open: the trinity_string text is unseeded in-tree.
-func (s *session) handleLookupTele(ctx context.Context, token string) {
+func (s *session) handleLookupTele(ctx context.Context, token string) bool {
+	if token == "" {
+		s.sendSysMessage("Syntax: .lookup tele <name>")
+		return true
+	}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("World data is unavailable.")
-		return
+		return true
 	}
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT id, name FROM game_tele ORDER BY name")
 	if err != nil {
 		s.sendSysMessage("No location found.")
-		return
+		return true
 	}
 	defer rows.Close()
 	namePart := strings.ToLower(token)
@@ -928,19 +932,20 @@ func (s *session) handleLookupTele(ctx context.Context, token string) {
 	}
 	if reply.Len() == 0 {
 		s.sendSysMessage("No location found.")
-		return
+		return true
 	}
 	s.sendSysMessage(reply.String())
 	if limitReached {
 		s.sendSysMessage(lookupMaxResultsMsg(maxResults))
 	}
+	return true
 }
 
 // handleLookupTitle ports HandleLookupTitleCommand (cs_lookup.cpp:1225-1308):
 // CharTitles.dbc search, "id (idx:idx) - [name]" lines with the known/active
 // marks from the selected player's titles (female name variant unmodeled,
 // like the C++ @todo).
-func (s *session) handleLookupTitle(query string) {
+func (s *session) handleLookupTitle(query string) bool {
 	target := s.lookupSelectedPlayerOrSelf()
 	targetName := "NAME"
 	if target != nil && target.player != nil {
@@ -948,7 +953,7 @@ func (s *session) handleLookupTitle(query string) {
 	}
 	// CharTitlesEntry.Name is the enUS string at field 2, MaskID at field 36
 	// (wotlk.Store.CharTitle).
-	s.lookupDBC("CharTitles", "Title", 2, query, "No title found.",
+	return s.lookupDBC("CharTitles", "Title", 2, query, "No title found.",
 		func(id uint32, name string, rec lookupRecord) string {
 			maskID, _ := rec.Uint32(36)
 			titleName := strings.Replace(name, "%s", targetName, -1)
@@ -989,10 +994,10 @@ func lookupMapLine(id uint32, name string, instType uint32) string {
 
 // handleLookupMap ports HandleLookupMapCommand (cs_lookup.cpp:1310-1377):
 // Map.dbc name search.
-func (s *session) handleLookupMap(query string) {
+func (s *session) handleLookupMap(query string) bool {
 	// MapEntry.MapName is the enUS string at field 5, InstanceType at field 2
 	// (wotlk.Store.Map).
-	s.lookupDBC("Map", "Map", 5, query, "No map found.",
+	return s.lookupDBC("Map", "Map", 5, query, "No map found.",
 		func(id uint32, name string, rec lookupRecord) string {
 			instType, _ := rec.Uint32(2)
 			return lookupMapLine(id, name, instType)
@@ -1002,22 +1007,26 @@ func (s *session) handleLookupMap(query string) {
 // handleLookupMapID ports HandleLookupMapIdCommand (cs_lookup.cpp:1379-1424).
 // The C++ sends LANG_COMMAND_NOSPELLFOUND when the entry exists but its name
 // is empty (cs_lookup.cpp:1408); the quirk is mirrored.
-func (s *session) handleLookupMapID(arg string) {
+func (s *session) handleLookupMapID(arg string) bool {
+	if arg == "" {
+		return false
+	}
 	// C++ is uint32 id = atoi(args) (cs_lookup.cpp:1383); cAtoi keeps the
 	// prefix-digit/negative/whitespace behavior ParseUint would reject.
 	id := uint32(cAtoi(arg))
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Map data is unavailable.")
-		return
+		return true
 	}
 	info, found, err := s.server.Data.Map(id)
 	if err != nil || !found {
 		s.sendSysMessage("No map found.")
-		return
+		return true
 	}
 	if info.MapName == "" {
 		s.sendSysMessage("No spell found.")
-		return
+		return true
 	}
 	s.sendSysMessage(lookupMapLine(id, info.MapName, info.InstanceType))
+	return true
 }

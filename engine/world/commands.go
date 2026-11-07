@@ -1216,53 +1216,53 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		}
 		switch strings.ToLower(args[0]) {
 		case "areatriggers":
-			s.handleDebugAreaTriggers(ctx)
+			return s.handleDebugAreaTriggers(ctx)
 		case "dummy":
-			s.handleDebugDummy(ctx)
+			return s.handleDebugDummy(ctx)
 		case "lootrecipient":
-			s.handleDebugLootRecipient(ctx)
+			return s.handleDebugLootRecipient(ctx)
 		case "los":
-			s.handleDebugLoS(ctx)
+			return s.handleDebugLoS(ctx)
 		case "threat":
-			s.handleDebugThreat(ctx)
+			return s.handleDebugThreat(ctx)
 		case "threatinfo":
-			s.handleDebugThreatInfo(ctx)
+			return s.handleDebugThreatInfo(ctx)
 		case "combat":
-			s.handleDebugCombat(ctx)
+			return s.handleDebugCombat(ctx)
 		case "wpgps":
-			s.handleDebugWPGPS(ctx)
+			return s.handleDebugWPGPS(ctx)
 		case "arena":
-			s.handleDebugArena(ctx)
+			return s.handleDebugArena(ctx)
 		case "bg":
-			s.handleDebugBattleground(ctx)
+			return s.handleDebugBattleground(ctx)
 		}
 		return true
 	case "anim":
-		s.handleDebugAnim(ctx, args[1:])
+		return s.handleDebugAnim(ctx, args[1:])
 	case "worldstate":
-		s.handleDebugWorldState(ctx, args[1:])
+		return s.handleDebugWorldState(ctx, args[1:])
 	case "objectcount":
-		s.handleDebugObjectCount(ctx, args[1:])
+		return s.handleDebugObjectCount(ctx, args[1:])
 	case "neargraveyard":
-		s.handleDebugNearGraveyard(ctx, args[1:])
+		return s.handleDebugNearGraveyard(ctx, args[1:])
 	case "instancespawn":
-		s.handleDebugInstanceSpawns(ctx, args[1:])
+		return s.handleDebugInstanceSpawns(ctx, args[1:])
 	case "play":
-		s.handleDebugPlay(ctx, args[1:])
+		return s.handleDebugPlay(ctx, args[1:])
 	case "send":
-		s.handleDebugSend(ctx, args[1:])
+		return s.handleDebugSend(ctx, args[1:])
 	case "guidlimits":
-		s.handleDebugGuidLimits(ctx, args[1:])
+		return s.handleDebugGuidLimits(ctx, args[1:])
 	case "transport":
-		s.handleDebugTransport(ctx, args[1:])
+		return s.handleDebugTransport(ctx, args[1:])
 	case "questreset":
-		s.handleDebugQuestReset(ctx, args[1:])
+		return s.handleDebugQuestReset(ctx, args[1:])
 	case "raidreset":
-		s.handleDebugRaidReset(ctx, args[1:])
+		return s.handleDebugRaidReset(ctx, args[1:])
 	case "spawnvehicle":
-		s.handleDebugSpawnVehicle(ctx, args[1:])
+		return s.handleDebugSpawnVehicle(ctx, args[1:])
 	case "entervehicle":
-		s.handleDebugEnterVehicle(ctx, args[1:])
+		return s.handleDebugEnterVehicle(ctx, args[1:])
 	default:
 		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle")
 	}
@@ -1274,10 +1274,9 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 // reports each reached trigger id (MiscHandler.cpp:675). The trinity_string
 // texts (1202/1203) are unseeded in-tree, so plain prose stands in like the
 // other unseeded LANG_* notices.
-func (s *session) handleDebugAreaTriggers(ctx context.Context) {
+func (s *session) handleDebugAreaTriggers(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	s.player.debugAreaTriggers = !s.player.debugAreaTriggers
 	if s.player.debugAreaTriggers {
@@ -1285,6 +1284,7 @@ func (s *session) handleDebugAreaTriggers(ctx context.Context) {
 	} else {
 		s.sendSysMessage("Now no debug Area Triggers")
 	}
+	return true
 }
 
 // handleCmdCheat mirrors cheat_commandscript::GetCommands (cs_cheat.cpp:44):
@@ -1875,11 +1875,16 @@ func (s *session) isTransportMap(ctx context.Context, mapID uint32) bool {
 // instance, boss — each gated on RBAC_PERM_COMMAND_GO (377) per the C++
 // ChatCommandTable. All 14 arms are ported natively; zonexy rides the new
 // WorldMapArea store plus the AreaTable parent leg (see handleCmdGoZoneXY).
-func (s *session) handleCmdGo(ctx context.Context, args []string) {
+//
+// The bool reports C++ handler success: RBAC denial returns false silently
+// so dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
+// framework parse failures return false silently; paths that print a message
+// return true.
+func (s *session) handleCmdGo(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .go creature <spawnId>|creature id <entry>|gameobject <spawnId>|gameobject id <entry>|graveyard <gyId>|grid <x> <y> [map]|taxinode <nodeId>|areatrigger <id>|zonexy <x> <y> [area]|xyz <x> <y> [z] [map] [o]|ticket <id>|offset <dx> [dy] [dz] [do]|instance <label...>|boss <name...>"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	// The GO permission lives on the leaf arms (cs_go.cpp:48-61), so it is
 	// checked only once a subcommand matches; an unknown subcommand prints
@@ -1888,43 +1893,43 @@ func (s *session) handleCmdGo(ctx context.Context, args []string) {
 	case "creature", "gameobject", "graveyard", "grid", "taxinode", "areatrigger", "zonexy", "xyz", "ticket", "offset", "instance", "boss":
 	default:
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if !s.commandAllowed(ctx, permissionCommandGO) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	switch sub := strings.ToLower(args[0]); sub {
 	case "creature":
-		s.handleCmdGoCreature(ctx, args[1:])
+		return s.handleCmdGoCreature(ctx, args[1:])
 	case "gameobject":
-		s.handleCmdGoGameObject(ctx, args[1:])
+		return s.handleCmdGoGameObject(ctx, args[1:])
 	case "graveyard":
-		s.handleCmdGoGraveyard(ctx, args[1:])
+		return s.handleCmdGoGraveyard(ctx, args[1:])
 	case "grid":
-		s.handleCmdGoGrid(ctx, args[1:])
+		return s.handleCmdGoGrid(ctx, args[1:])
 	case "taxinode":
-		s.handleCmdGoTaxiNode(ctx, args[1:])
+		return s.handleCmdGoTaxiNode(ctx, args[1:])
 	case "areatrigger":
-		s.handleCmdGoAreaTrigger(ctx, args[1:])
+		return s.handleCmdGoAreaTrigger(ctx, args[1:])
 	case "zonexy":
-		s.handleCmdGoZoneXY(ctx, args[1:])
+		return s.handleCmdGoZoneXY(ctx, args[1:])
 	case "xyz":
-		s.handleCmdGoXYZ(ctx, args[1:])
+		return s.handleCmdGoXYZ(ctx, args[1:])
 	case "ticket":
-		s.handleCmdGoTicket(ctx, args[1:])
+		return s.handleCmdGoTicket(ctx, args[1:])
 	case "offset":
-		s.handleCmdGoOffset(ctx, args[1:])
+		return s.handleCmdGoOffset(ctx, args[1:])
 	case "instance":
-		s.handleCmdGoInstance(ctx, args[1:])
+		return s.handleCmdGoInstance(ctx, args[1:])
 	case "boss":
-		s.handleCmdGoBoss(ctx, args[1:])
+		return s.handleCmdGoBoss(ctx, args[1:])
 	default:
 		s.sendSysMessage(syntax)
+		return true
 	}
 }
 
@@ -1945,37 +1950,33 @@ func (s *session) goWorldDB() *sql.DB {
 // forms select the row orientation instead of keeping the player's. The
 // args accept their Variant<Hyperlink<...>, ...> link forms
 // (|Hcreature:| spawn guid, |Hcreature_entry:| entry).
-func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
+func (s *session) handleCmdGoCreature(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .go creature <spawnId> | .go creature id <entry>")
-		return
+		return false
 	}
 	// The whole string must be consumed (ChatCommand.h:112): the spawn
 	// form takes exactly one token, the "id" form exactly two.
 	if goIDForm(args) {
 		if len(args) != 2 {
-			s.sendSysMessage("Syntax: .go creature <spawnId> | .go creature id <entry>")
-			return
+			return false
 		}
 	} else if len(args) != 1 {
-		s.sendSysMessage("Syntax: .go creature <spawnId> | .go creature id <entry>")
-		return
+		return false
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	if goIDForm(args) {
 		entry, ok := goParseLinkOrUint(args[1], "creature_entry")
 		if !ok {
-			s.sendSysMessage("Invalid creature entry.")
-			return
+			return false
 		}
 		rows, err := db.QueryContext(ctx, "SELECT guid, map, position_x, position_y, position_z, orientation FROM creature WHERE id = ?", entry)
 		if err != nil {
 			s.sendSysMessage(fmt.Sprintf("Creature lookup error: %v", err))
-			return
+			return true
 		}
 		defer rows.Close()
 		type spawn struct {
@@ -1993,32 +1994,32 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 		}
 		if len(spawns) == 0 {
 			s.sendSysMessage("Could not find creature.") // LANG_COMMAND_GOCREATNOTFOUND (268)
-			return
+			return true
 		}
 		if len(spawns) > 1 {
 			s.sendSysMessage("More than one creature found with the given entry.") // LANG_COMMAND_GOCREATMULTIPLE (269)
 		}
 		first := spawns[0]
 		s.goDoTeleportChecked(ctx, first.mapID, first.x, first.y, first.z, first.o)
-		return
+		return true
 	}
 	spawnID, ok := goParseLinkOrUint(args[0], "creature")
 	if !ok {
-		s.sendSysMessage("Invalid spawn id.")
-		return
+		return false
 	}
 	var mapID uint32
 	var x, y, z, o float32
 	err := db.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM creature WHERE guid = ?", spawnID).Scan(&mapID, &x, &y, &z, &o)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage("Could not find creature.") // LANG_COMMAND_GOCREATNOTFOUND (268)
-		return
+		return true
 	}
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Creature lookup error: %v", err))
-		return
+		return true
 	}
 	s.goDoTeleportChecked(ctx, mapID, x, y, z, o)
+	return true
 }
 
 // handleCmdGoGameObject mirrors HandleGoGameObjectSpawnIdCommand (cs_go.cpp:136)
@@ -2026,37 +2027,33 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) {
 // arms, against the gameobject table (LANG_COMMAND_GOOBJNOTFOUND = 267).
 // The spawn orientation rides along, as in the creature arms; the C++ arms
 // take plain uint32 args, so no link forms here.
-func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
+func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .go gameobject <spawnId> | .go gameobject id <entry>")
-		return
+		return false
 	}
 	// The whole string must be consumed (ChatCommand.h:112): the spawn
 	// form takes exactly one token, the "id" form exactly two.
 	if goIDForm(args) {
 		if len(args) != 2 {
-			s.sendSysMessage("Syntax: .go gameobject <spawnId> | .go gameobject id <entry>")
-			return
+			return false
 		}
 	} else if len(args) != 1 {
-		s.sendSysMessage("Syntax: .go gameobject <spawnId> | .go gameobject id <entry>")
-		return
+		return false
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	if goIDForm(args) {
 		entry, ok := parseCommandUint32(args[1])
 		if !ok {
-			s.sendSysMessage("Invalid gameobject entry.")
-			return
+			return false
 		}
 		rows, err := db.QueryContext(ctx, "SELECT guid, map, position_x, position_y, position_z, orientation FROM gameobject WHERE id = ?", uint32(entry))
 		if err != nil {
 			s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
-			return
+			return true
 		}
 		defer rows.Close()
 		type spawn struct {
@@ -2074,58 +2071,57 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) {
 		}
 		if len(spawns) == 0 {
 			s.sendSysMessage("Could not find gameobject.") // LANG_COMMAND_GOOBJNOTFOUND (267)
-			return
+			return true
 		}
 		if len(spawns) > 1 {
 			s.sendSysMessage("More than one gameobject found with the given entry.") // LANG_COMMAND_GOCREATMULTIPLE (269)
 		}
 		first := spawns[0]
 		s.goDoTeleportChecked(ctx, first.mapID, first.x, first.y, first.z, first.o)
-		return
+		return true
 	}
 	spawnID, ok := parseCommandUint32(args[0])
 	if !ok {
-		s.sendSysMessage("Invalid spawn id.")
-		return
+		return false
 	}
 	var mapID uint32
 	var x, y, z, o float32
 	err := db.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM gameobject WHERE guid = ?", uint32(spawnID)).Scan(&mapID, &x, &y, &z, &o)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage("Could not find gameobject.") // LANG_COMMAND_GOOBJNOTFOUND (267)
-		return
+		return true
 	}
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
-		return
+		return true
 	}
 	s.goDoTeleportChecked(ctx, mapID, x, y, z, o)
+	return true
 }
 
 // handleCmdGoGraveyard mirrors HandleGoGraveyardCommand (cs_go.cpp:183):
 // teleport to the WorldSafeLocs.dbc entry with the given id
 // (LANG_COMMAND_GRAVEYARDNOEXIST = 449), keeping the player's orientation.
 // The recall snapshot rides goDoTeleport (see above).
-func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) {
+func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .go graveyard <gyId>")
-		return
+		return false
 	}
 	gyID, ok := parseCommandUint32(args[0])
 	if !ok {
-		s.sendSysMessage("Invalid graveyard id.")
-		return
+		return false
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("DBC data not available.")
-		return
+		return true
 	}
 	gy, found, err := s.server.Data.WorldSafeLoc(uint32(gyID))
 	if err != nil || !found {
 		s.sendSysMessage(fmt.Sprintf("Graveyard %d does not exist.", gyID))
-		return
+		return true
 	}
 	s.goDoTeleport(ctx, gy.MapID, gy.X, gy.Y, gy.Z, s.player.Orientation)
+	return true
 }
 
 // handleCmdGoGrid mirrors HandleGoGridCommand (cs_go.cpp:205): teleport to the
@@ -2135,23 +2131,20 @@ func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) {
 // mapHeight is exactly the GetHeight half, and mapWaterLevel is the
 // GetWaterLevel half (cs_go.cpp:228), so a water cell now reads the
 // surface; a missing grid keeps the player's Z.
-func (s *session) handleCmdGoGrid(ctx context.Context, args []string) {
+func (s *session) handleCmdGoGrid(ctx context.Context, args []string) bool {
 	if len(args) < 2 || len(args) > 3 {
-		s.sendSysMessage("Syntax: .go grid <gridX> <gridY> [map]")
-		return
+		return false
 	}
 	gridX, ok1 := parseCommandFloat(args[0])
 	gridY, ok2 := parseCommandFloat(args[1])
 	if !ok1 || !ok2 {
-		s.sendSysMessage("Invalid grid coordinates.")
-		return
+		return false
 	}
 	mapID := s.player.Map
 	if len(args) > 2 {
 		m, ok := parseCommandUint32(args[2])
 		if !ok {
-			s.sendSysMessage("Syntax: .go grid <gridX> <gridY> [map]")
-			return
+			return false
 		}
 		mapID = uint32(m)
 	}
@@ -2165,56 +2158,55 @@ func (s *session) handleCmdGoGrid(ctx context.Context, args []string) {
 		z = water
 	}
 	s.goDoTeleport(ctx, mapID, x, y, z, s.player.Orientation)
+	return true
 }
 
 // handleCmdGoTaxiNode mirrors HandleGoTaxinodeCommand (cs_go.cpp:234):
 // teleport to the position of the given TaxiNodes.dbc node
 // (LANG_COMMAND_GOTAXINODENOTFOUND = 347).
-func (s *session) handleCmdGoTaxiNode(ctx context.Context, args []string) {
+func (s *session) handleCmdGoTaxiNode(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .go taxinode <nodeId>")
-		return
+		return false
 	}
 	nodeID, ok := goParseLinkOrUint(args[0], "taxinode")
 	if !ok {
-		s.sendSysMessage("Invalid taxinode id.")
-		return
+		return false
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("DBC data not available.")
-		return
+		return true
 	}
 	node, found, err := s.server.Data.TaxiNode(nodeID)
 	if err != nil || !found {
 		s.sendSysMessage(fmt.Sprintf("Could not find taxinode %d.", nodeID))
-		return
+		return true
 	}
 	s.goDoTeleportChecked(ctx, uint32(node.ContinentID), node.X, node.Y, node.Z, 0)
+	return true
 }
 
 // handleCmdGoAreaTrigger mirrors HandleGoAreaTriggerCommand (cs_go.cpp:246):
 // teleport to the position of the given AreaTrigger.dbc entry
 // (LANG_COMMAND_GOAREATRNOTFOUND = 262).
-func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) {
+func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .go areatrigger <id>")
-		return
+		return false
 	}
 	triggerID, ok := goParseLinkOrUint(args[0], "areatrigger")
 	if !ok {
-		s.sendSysMessage("Invalid areatrigger id.")
-		return
+		return false
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("DBC data not available.")
-		return
+		return true
 	}
 	at, found, err := s.server.Data.AreaTrigger(triggerID)
 	if err != nil || !found {
 		s.sendSysMessage(fmt.Sprintf("Could not find areatrigger %d.", triggerID))
-		return
+		return true
 	}
 	s.goDoTeleportChecked(ctx, at.ContinentID, at.X, at.Y, at.Z, 0)
+	return true
 }
 
 // goIDForm reports whether args select the nested "creature id" /
@@ -2252,34 +2244,31 @@ func goParseLinkOrUint(arg, tag string) (uint32, bool) {
 // A WorldMapArea row missing for the zone leaves the coordinates unconverted
 // (the C++ not-listed fallback); a missing WorldMapArea.dbc file does the
 // same. A missing grid keeps the player's Z, as in the grid/xyz arms.
-func (s *session) handleCmdGoZoneXY(ctx context.Context, args []string) {
+func (s *session) handleCmdGoZoneXY(ctx context.Context, args []string) bool {
 	if len(args) < 2 || len(args) > 3 {
-		s.sendSysMessage("Syntax: .go zonexy <x> <y> [area]")
-		return
+		return false
 	}
 	x, ok1 := parseCommandFloat(args[0])
 	y, ok2 := parseCommandFloat(args[1])
 	if !ok1 || !ok2 {
-		s.sendSysMessage("Invalid coordinates.")
-		return
+		return false
 	}
 	areaID := s.player.Zone
 	if len(args) > 2 {
 		id, ok := goParseLinkOrUint(args[2], "area")
 		if !ok {
-			s.sendSysMessage("Invalid area id.")
-			return
+			return false
 		}
 		areaID = id
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("DBC data not available.")
-		return
+		return true
 	}
 	areaEntry, found, err := s.server.Data.Area(areaID)
 	if err != nil || !found || x < 0 || x > 100 || y < 0 || y > 100 {
 		s.sendSysMessage(fmt.Sprintf("Invalid zone coordinates (%.2f, %.2f, area %d).", x, y, areaID))
-		return
+		return true
 	}
 	zoneEntry := areaEntry
 	if areaEntry.ParentAreaID != 0 {
@@ -2290,11 +2279,11 @@ func (s *session) handleCmdGoZoneXY(ctx context.Context, args []string) {
 	mapEntry, found, err := s.server.Data.Map(zoneEntry.ContinentID)
 	if err != nil || !found {
 		s.sendSysMessage(fmt.Sprintf("You cannot teleport to given coordinates (%.2f, %.2f, map %d).", x, y, zoneEntry.ContinentID))
-		return
+		return true
 	}
 	if mapEntry.InstanceType != 0 {
 		s.sendSysMessage(fmt.Sprintf("Invalid zone map: area %d (%s) is on instance map %d (%s).", areaEntry.ID, areaEntry.Name, mapEntry.ID, mapEntry.MapName))
-		return
+		return true
 	}
 	fx, fy := float32(x), float32(y)
 	if wma, found, err := s.server.Data.WorldMapArea(zoneEntry.ID); err == nil && found {
@@ -2308,6 +2297,7 @@ func (s *session) handleCmdGoZoneXY(ctx context.Context, args []string) {
 		z = water
 	}
 	s.goDoTeleport(ctx, zoneEntry.ContinentID, fx, fy, z, s.player.Orientation)
+	return true
 }
 
 // zoneToMapCoordinates mirrors Zone2MapCoordinates (DBCStores.cpp:776):
@@ -2325,24 +2315,21 @@ func zoneToMapCoordinates(x, y, locLeft, locRight, locTop, locBottom float32) (f
 // orientation or 0. With Z omitted, the height is max(GetHeight,
 // GetWaterLevel) of cs_go.cpp:331 via mapHeight + mapWaterLevel; a
 // missing grid keeps the player's Z.
-func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
+func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) bool {
 	if len(args) < 2 || len(args) > 5 {
-		s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
-		return
+		return false
 	}
 	x, ok1 := parseCommandFloat(args[0])
 	y, ok2 := parseCommandFloat(args[1])
 	if !ok1 || !ok2 {
-		s.sendSysMessage("Invalid coordinates.")
-		return
+		return false
 	}
 	z := float64(s.player.Z)
 	zGiven := false
 	if len(args) > 2 {
 		zv, ok := parseCommandFloat(args[2])
 		if !ok {
-			s.sendSysMessage("Invalid coordinates.")
-			return
+			return false
 		}
 		z = zv
 		zGiven = true
@@ -2351,8 +2338,7 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 	if len(args) > 3 {
 		m, ok := parseCommandUint32(args[3])
 		if !ok {
-			s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
-			return
+			return false
 		}
 		mapID = uint32(m)
 	}
@@ -2360,8 +2346,7 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 	if len(args) > 4 {
 		ov, ok := parseCommandFloat(args[4])
 		if !ok {
-			s.sendSysMessage("Syntax: .go xyz <x> <y> [z] [map] [o]")
-			return
+			return false
 		}
 		o = ov
 	}
@@ -2378,56 +2363,54 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) {
 		}
 	}
 	s.goDoTeleportChecked(ctx, mapID, float32(x), float32(y), float32(z), float32(o))
+	return true
 }
 
 // handleCmdGoTicket mirrors HandleGoTicketCommand (cs_go.cpp:337): teleport
 // to the position recorded on the given GM ticket (GmTicket::TeleportTo,
 // TicketMgr.cpp:251, uses orientation 0). LANG_COMMAND_TICKETNOTEXIST = 2005
 // sends without an error flag, so the arm reports and returns.
-func (s *session) handleCmdGoTicket(ctx context.Context, args []string) {
+func (s *session) handleCmdGoTicket(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .go ticket <ticketId>")
-		return
+		return false
 	}
 	ticketID, ok := parseCommandUint32(args[0])
 	if !ok {
-		s.sendSysMessage("Invalid ticket id.")
-		return
+		return false
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	var mapID uint32
 	var x, y, z float32
 	err := db.QueryRowContext(ctx, "SELECT mapId, posX, posY, posZ FROM gm_ticket WHERE id = ?", uint32(ticketID)).Scan(&mapID, &x, &y, &z)
 	if errors.Is(err, sql.ErrNoRows) {
 		s.sendSysMessage("Ticket does not exist.")
-		return
+		return true
 	}
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Ticket lookup error: %v", err))
-		return
+		return true
 	}
 	s.goDoTeleport(ctx, mapID, x, y, z, 0)
+	return true
 }
 
 // handleCmdGoOffset mirrors HandleGoOffsetCommand (cs_go.cpp:358): shift the
 // player's position by the given offset and teleport there. Position::
 // RelocateOffset (Position.cpp:36) applies the XY offset rotated by the
 // player's orientation; Z and orientation add linearly.
-func (s *session) handleCmdGoOffset(ctx context.Context, args []string) {
+func (s *session) handleCmdGoOffset(ctx context.Context, args []string) bool {
 	if len(args) < 1 || len(args) > 4 {
-		s.sendSysMessage("Syntax: .go offset <dx> [dy] [dz] [do]")
-		return
+		return false
 	}
 	vals := make([]float64, 4)
 	for i := 0; i < len(args) && i < 4; i++ {
 		v, ok := parseCommandFloat(args[i])
 		if !ok {
-			s.sendSysMessage("Invalid offset.")
-			return
+			return false
 		}
 		vals[i] = v
 	}
@@ -2437,6 +2420,7 @@ func (s *session) handleCmdGoOffset(ctx context.Context, args []string) {
 	ny := s.player.Y + float32(dy*math.Cos(o)+dx*math.Sin(o))
 	nz := s.player.Z + float32(dz)
 	s.goDoTeleportChecked(ctx, s.player.Map, nx, ny, nz, normalizeOrientation(float32(o+doff)))
+	return true
 }
 
 // instanceGoBackTrigger mirrors ObjectMgr::GetGoBackTrigger (ObjectMgr.cpp:7246):
@@ -2515,20 +2499,19 @@ func (s *session) instanceEntranceTrigger(ctx context.Context, mapID uint32) (x,
 // LANG ids: 1189 no match, 1190/1191 multiple, 1193 no entrance,
 // 1194 no exit, 1195 went to gate, 1196 went to start, 1197 gate failed,
 // 1198 start failed.
-func (s *session) handleCmdGoInstance(ctx context.Context, args []string) {
+func (s *session) handleCmdGoInstance(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .go instance <label...>")
-		return
+		return false
 	}
 	db := s.goWorldDB()
 	if db == nil || s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	rows, err := db.QueryContext(ctx, "SELECT map, script FROM instance_template")
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Instance lookup error: %v", err))
-		return
+		return true
 	}
 	defer rows.Close()
 	type instanceMatch struct {
@@ -2560,7 +2543,7 @@ func (s *session) handleCmdGoInstance(ctx context.Context, args []string) {
 	}
 	if len(matches) == 0 {
 		s.sendSysMessage("No instances match your request.")
-		return
+		return true
 	}
 	var maxCount uint32
 	for _, m := range matches {
@@ -2581,7 +2564,7 @@ func (s *session) handleCmdGoInstance(ctx context.Context, args []string) {
 				s.sendSysMessage(fmt.Sprintf("%s (ID: %d), script: %s", m.mapName, m.mapID, m.script))
 			}
 		}
-		return
+		return true
 	}
 	var target instanceMatch
 	for _, m := range matches {
@@ -2598,7 +2581,7 @@ func (s *session) handleCmdGoInstance(ctx context.Context, args []string) {
 	if tMap, x, y, z, o, ok := s.instanceGoBackTrigger(ctx, target.mapID); ok {
 		if s.teleportTo(tMap, x, y, z, o+float32(math.Pi)) {
 			s.sendSysMessage(fmt.Sprintf("Teleported to the instance gate of %s (%d).", target.mapName, target.mapID))
-			return
+			return true
 		}
 		parentName := ""
 		if parent, found, err := s.server.Data.Map(tMap); err == nil && found {
@@ -2611,12 +2594,13 @@ func (s *session) handleCmdGoInstance(ctx context.Context, args []string) {
 	if x, y, z, o, ok := s.instanceEntranceTrigger(ctx, target.mapID); ok {
 		if s.teleportTo(target.mapID, x, y, z, o) {
 			s.sendSysMessage(fmt.Sprintf("Teleported to the instance start of %s (%d).", target.mapName, target.mapID))
-			return
+			return true
 		}
 		s.sendSysMessage(fmt.Sprintf("Could not teleport to the instance start of %s (%d).", target.mapName, target.mapID))
 	} else {
 		s.sendSysMessage(fmt.Sprintf("Instance %s (%d) has no entrance.", target.mapName, target.mapID))
 	}
+	return true
 }
 
 // goContainsFold reports whether hay contains needle, case-insensitively,
@@ -2632,21 +2616,20 @@ func goContainsFold(hay, needle string) bool {
 // plus their creature_template difficulty entries. Matching runs over both
 // the script name and the creature name. LANG ids: 1205 no match, 1206/1207
 // multiple, 1208/1209 multiple spawns, 1210 teleport failed, 1211 went to boss.
-func (s *session) handleCmdGoBoss(ctx context.Context, args []string) {
+func (s *session) handleCmdGoBoss(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .go boss <name...>")
-		return
+		return false
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	bossEntries := make(map[uint32]struct{})
 	rows, err := db.QueryContext(ctx, "SELECT creditEntry FROM instance_encounters WHERE creditType = 0")
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Boss lookup error: %v", err))
-		return
+		return true
 	}
 	var credits []uint32
 	for rows.Next() {
@@ -2713,7 +2696,7 @@ func (s *session) handleCmdGoBoss(ctx context.Context, args []string) {
 	}
 	if len(matches) == 0 {
 		s.sendSysMessage("No bosses match your request.")
-		return
+		return true
 	}
 	var maxCount uint32
 	for _, m := range matches {
@@ -2734,7 +2717,7 @@ func (s *session) handleCmdGoBoss(ctx context.Context, args []string) {
 				s.sendSysMessage(fmt.Sprintf("%s (ID: %d), script: %s", m.name, m.entry, m.script))
 			}
 		}
-		return
+		return true
 	}
 	var boss bossMatch
 	for _, m := range matches {
@@ -2754,7 +2737,7 @@ func (s *session) handleCmdGoBoss(ctx context.Context, args []string) {
 			}
 			s.sendSysMessage(fmt.Sprintf("Spawn %d on map %d (%s) at (%.2f, %.2f, %.2f, %.2f)", sp.guid, sp.mapID, mapName, sp.x, sp.y, sp.z, sp.o))
 		}
-		return
+		return true
 	}
 	if s.isInFlight() {
 		s.finishTaxiFlight()
@@ -2770,9 +2753,10 @@ func (s *session) handleCmdGoBoss(ctx context.Context, args []string) {
 			}
 		}
 		s.sendSysMessage(fmt.Sprintf("Could not teleport to spawn %d of boss %s (%d) on map %s.", sp.guid, boss.name, boss.entry, mapName))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Teleported to boss %s (%d), spawn %d.", boss.name, boss.entry, sp.guid))
+	return true
 }
 
 func (s *session) handleCmdCast(ctx context.Context, args []string) {
@@ -8663,8 +8647,7 @@ func (s *session) buildCommandTree() *commandNode {
 			if s.player == nil {
 				return true
 			}
-			s.handleDebugPlay(ctx, append([]string{arm}, args...))
-			return true
+			return s.handleDebugPlay(ctx, append([]string{arm}, args...))
 		}, permissionCommandDebug)
 	}
 	debugSend := debugNode.group("send")
@@ -8674,8 +8657,7 @@ func (s *session) buildCommandTree() *commandNode {
 			if s.player == nil {
 				return true
 			}
-			s.handleDebugSend(ctx, append([]string{arm}, args...))
-			return true
+			return s.handleDebugSend(ctx, append([]string{arm}, args...))
 		}, permissionCommandDebug)
 	}
 	// R13 depth (cs_debug.cpp:118-123): "asan" and "warden" are
@@ -8710,28 +8692,24 @@ func (s *session) buildCommandTree() *commandNode {
 	}, permissionCommandTicketResponseAppendln)
 	root.addWithPerms("titles", func(ctx context.Context, args []string) bool { s.handleCmdTitles(ctx, args); return true }, map[string]uint32{"add": permissionCommandTitlesAdd, "current": permissionCommandTitlesCurrent, "remove": permissionCommandTitlesRemove, "set": permissionCommandTitlesSet}, nil).withPerm(permissionCommandTitles)
 	root.addWithPerms("wp", func(ctx context.Context, args []string) bool { s.handleCmdWp(ctx, args); return true }, map[string]uint32{"add": permissionCommandWpAdd, "event": permissionCommandWpEvent, "load": permissionCommandWpLoad, "modify": permissionCommandWpModify, "unload": permissionCommandWpUnload, "reload": permissionCommandWpReload, "show": permissionCommandWpShow}, nil).withPerm(permissionCommandWp)
-	goNode := root.addWithPerms("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, map[string]uint32{"creature": permissionCommandGO, "gameobject": permissionCommandGO, "graveyard": permissionCommandGO, "grid": permissionCommandGO, "taxinode": permissionCommandGO, "areatrigger": permissionCommandGO, "zonexy": permissionCommandGO, "xyz": permissionCommandGO, "ticket": permissionCommandGO, "offset": permissionCommandGO, "instance": permissionCommandGO, "boss": permissionCommandGO}, nil)
+	goNode := root.addWithPerms("go", func(ctx context.Context, args []string) bool { return s.handleCmdGo(ctx, args) }, map[string]uint32{"creature": permissionCommandGO, "gameobject": permissionCommandGO, "graveyard": permissionCommandGO, "grid": permissionCommandGO, "taxinode": permissionCommandGO, "areatrigger": permissionCommandGO, "zonexy": permissionCommandGO, "xyz": permissionCommandGO, "ticket": permissionCommandGO, "offset": permissionCommandGO, "instance": permissionCommandGO, "boss": permissionCommandGO}, nil)
 	// R13 depth (cs_go.cpp:48-61): "creature id" and "gameobject id"
 	// are multi-word entries, so creature/gameobject are 3-token
 	// paths; each also carries the bare spawn-id handler, so the
 	// group node keeps its handler via the family switch.
 	goCreature := goNode.group("creature")
 	goCreature.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdGo(ctx, append([]string{"creature"}, args...))
-		return true
+		return s.handleCmdGo(ctx, append([]string{"creature"}, args...))
 	}
 	goCreature.leaf("id", func(ctx context.Context, args []string) bool {
-		s.handleCmdGo(ctx, append([]string{"creature", "id"}, args...))
-		return true
+		return s.handleCmdGo(ctx, append([]string{"creature", "id"}, args...))
 	}, permissionCommandGO)
 	goGameObject := goNode.group("gameobject")
 	goGameObject.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdGo(ctx, append([]string{"gameobject"}, args...))
-		return true
+		return s.handleCmdGo(ctx, append([]string{"gameobject"}, args...))
 	}
 	goGameObject.leaf("id", func(ctx context.Context, args []string) bool {
-		s.handleCmdGo(ctx, append([]string{"gameobject", "id"}, args...))
-		return true
+		return s.handleCmdGo(ctx, append([]string{"gameobject", "id"}, args...))
 	}, permissionCommandGO)
 	modifyNode := root.addWithPerms("modify", func(ctx context.Context, args []string) bool { return s.handleCmdModify(ctx, args) }, map[string]uint32{"hp": permissionCommandModifyHP, "mana": permissionCommandModifyMana, "energy": permissionCommandModifyEnergy, "rage": permissionCommandModifyRage, "runicpower": permissionCommandModifyRunicPower, "money": permissionCommandModifyMoney, "honor": permissionCommandModifyHonor, "arenapoints": permissionCommandModifyArenaPoints, "xp": permissionCommandModifyXP, "drunk": permissionCommandModifyDrunk, "scale": permissionCommandModifyScale, "spell": permissionCommandModifySpell, "standstate": permissionCommandModifyStandState, "mount": permissionCommandModifyMount, "gender": permissionCommandModifyGender, "bit": permissionCommandModifyBit, "faction": permissionCommandModifyFaction, "phase": permissionCommandModifyPhase, "speed": permissionCommandModifySpeed, "talentpoints": permissionCommandModifyTalentPoints, "reputation": permissionCommandModifyReputation}, nil).withPerm(permissionCommandModify)
 	// R13 depth (cs_modify.cpp:47-52): "speed" is a sub-table with
@@ -9011,7 +8989,7 @@ func (s *session) buildCommandTree() *commandNode {
 			return s.handleCmdLearn(ctx, append([]string{"my", arm}, args...))
 		}, permissionCommandLearnAllMySpells)
 	}
-	lookupNode := root.addWithPerms("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, map[string]uint32{"area": permissionCommandLookupArea, "creature": permissionCommandLookupCreature, "event": permissionCommandLookupEvent, "faction": permissionCommandLookupFaction, "item": permissionCommandLookupItem, "object": permissionCommandLookupObject, "quest": permissionCommandLookupQuest, "player": 0, "skill": permissionCommandLookupSkill, "spell": permissionCommandLookupSpell, "taxinode": permissionCommandLookupTaxinode, "tele": permissionCommandLookupTele, "title": permissionCommandLookupTitle, "map": permissionCommandLookupMap}, nil)
+	lookupNode := root.addWithPerms("lookup", func(ctx context.Context, args []string) bool { return s.handleCmdLookup(ctx, args) }, map[string]uint32{"area": permissionCommandLookupArea, "creature": permissionCommandLookupCreature, "event": permissionCommandLookupEvent, "faction": permissionCommandLookupFaction, "item": permissionCommandLookupItem, "object": permissionCommandLookupObject, "quest": permissionCommandLookupQuest, "player": 0, "skill": permissionCommandLookupSkill, "spell": permissionCommandLookupSpell, "taxinode": permissionCommandLookupTaxinode, "tele": permissionCommandLookupTele, "title": permissionCommandLookupTitle, "map": permissionCommandLookupMap}, nil)
 	// R13 depth (cs_lookup.cpp:66-80): "item id", "item set",
 	// "quest id", "spell id" and "map id" are multi-word entries, so
 	// item/quest/spell/map are 3-token paths; each also carries the
@@ -9020,56 +8998,44 @@ func (s *session) buildCommandTree() *commandNode {
 	// ip/account/email leaves and no "" entry.
 	lookupItem := lookupNode.group("item")
 	lookupItem.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"item"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"item"}, args...))
 	}
 	lookupItem.leaf("id", func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"item", "id"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"item", "id"}, args...))
 	}, permissionCommandLookupItemID)
 	lookupItem.leaf("set", func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"item", "set"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"item", "set"}, args...))
 	}, permissionCommandLookupItemSet)
 	lookupQuest := lookupNode.group("quest")
 	lookupQuest.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"quest"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"quest"}, args...))
 	}
 	lookupQuest.leaf("id", func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"quest", "id"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"quest", "id"}, args...))
 	}, permissionCommandLookupQuestID)
 	lookupSpell := lookupNode.group("spell")
 	lookupSpell.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"spell"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"spell"}, args...))
 	}
 	lookupSpell.leaf("id", func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"spell", "id"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"spell", "id"}, args...))
 	}, permissionCommandLookupSpellID)
 	lookupMap := lookupNode.group("map")
 	lookupMap.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"map"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"map"}, args...))
 	}
 	lookupMap.leaf("id", func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"map", "id"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"map", "id"}, args...))
 	}, permissionCommandLookupMapID)
 	lookupPlayer := lookupNode.group("player")
 	lookupPlayer.leaf("ip", func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"player", "ip"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"player", "ip"}, args...))
 	}, permissionCommandLookupPlayerIP)
 	lookupPlayer.leaf("account", func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"player", "account"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"player", "account"}, args...))
 	}, permissionCommandLookupPlayerAccount)
 	lookupPlayer.leaf("email", func(ctx context.Context, args []string) bool {
-		s.handleCmdLookup(ctx, append([]string{"player", "email"}, args...))
-		return true
+		return s.handleCmdLookup(ctx, append([]string{"player", "email"}, args...))
 	}, permissionCommandLookupPlayerEmail)
 	root.addWithPerms("lfg", func(ctx context.Context, args []string) bool { s.handleCmdLFG(ctx, args); return true }, map[string]uint32{"player": permissionCommandLfgPlayer, "group": permissionCommandLfgGroup, "queue": permissionCommandLfgQueue, "clean": permissionCommandLfgClean, "options": permissionCommandLfgOptions}, nil)
 	root.addWithPerms("list", func(ctx context.Context, args []string) bool { s.handleCmdList(ctx, args); return true }, map[string]uint32{"creature": permissionCommandListCreature, "item": permissionCommandListItem, "object": permissionCommandListObject, "auras": permissionCommandListAuras, "mail": permissionCommandListMail, "spawnpoints": permissionCommandListSpawnpoints, "respawns": permissionCommandListRespawns}, nil)
