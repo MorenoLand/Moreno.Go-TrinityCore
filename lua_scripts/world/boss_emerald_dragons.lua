@@ -114,17 +114,15 @@
 -- — re-keyed 2026-10-15 (timer doctrine): no-movement bridge is the
 -- true blocker (the timer leg bridges); with no registered Lua file
 -- the class stays out. The stale "no-timer" claim is corrected.
--- npc_spirit_shade — zero Talk; PORTED (this run): the IsSummonedBy
+-- npc_spirit_shade — zero Talk; PORTED: the IsSummonedBy
 -- MoveFollow leg (boss_emerald_dragons.cpp:430-438) via ev22, plus the
 -- MovementInform arrival leg (:440-446: dark-offering cast + 1s
--- DespawnOrUnsummon) modeled as a 1s proximity poll (midnight
--- mountpoll precedent) — ev28 itself has no bridge (no Go constant;
--- event 28 unused in C++ Eluna; the follow leg states the in-range
--- MovementInform has no hook, engine/world/creaturemotion.go:4211-
--- 4212). The stale "no-movement / no-summon-death / no-despawn
--- bridges" claim is retracted: MoveFollow (lua_creature_events.go:
--- 4636) and DespawnOrUnsummon (:6121) are both bridged, and no
--- summon-death arm exists on this class.
+-- DespawnOrUnsummon) on event 28 (spiritShadeMovementInform, tick
+-- 393 — the proximity poll it replaced is retired). The stale
+-- "no-movement / no-summon-death / no-despawn bridges" claim is
+-- retracted: MoveFollow (lua_creature_events.go:4636) and
+-- DespawnOrUnsummon (:6121) are both bridged, and no summon-death
+-- arm exists on this class.
 -- spell_dream_fog_sleep + spell_mark_of_nature (SpellScriptLoaders) —
 -- no-SpellScript bridge — NOT registered.
 -- All Talk() calls in the file accounted for (4 ported above +
@@ -191,9 +189,9 @@ local taerarShades = {}
 
 local timers = {}
 
--- per-GUID arrival-poll attempts for npc_spirit_shade (bounded by the
--- summon's 50s TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT lifetime).
-local shadePolls = {}
+-- per-shade summoner GUID counter for the spirit-shade MovementInform
+-- data comparison (C++ _summonerGuid.GetCounter()).
+local shadeSummonerLow = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -492,63 +490,43 @@ local function lethonSpellHitTarget(event, creature, target, spellId)
 end
 
 -- C++ npc_spirit_shadeAI::MovementInform (boss_emerald_dragons.cpp:
--- 440-446): if (moveType == FOLLOW_MOTION_TYPE && data ==
+-- 440-446, event 28): if (moveType == FOLLOW_MOTION_TYPE && data ==
 -- _summonerGuid.GetCounter()) { CastSpell(nullptr, SPELL_DARK_OFFERING,
--- false); DespawnOrUnsummon(1s); }. No ev28 bridge exists (see the
--- header), so the arrival is modeled as a 1s proximity poll on the
--- midnight mountpoll precedent: Go's follow leg stands the creature
--- inside range + both reaches + FOLLOW_RANGE_TOLERANCE (1.0)
--- (engine/world/creaturemotion.go:4200-4212), so arrival is
--- GetDistance <= 0 + both reaches + 1.0. The poll re-issues MoveFollow
--- each tick (midnight idiom) and stops after 50 attempts — the
--- summon's 50s lifetime (:391) — so a shade whose summoner dies or
--- never comes in range stops polling and the engine despawn cleans
--- it up. No 23 registration for the shade: spawn fires ev23, which
--- would cancel the ev22-seeded poll; cleanup rides 2/4 plus this bound.
-local function spiritShadeArrivalTick(creature, guid, summoner)
-    local attempts = (shadePolls[guid] or 0) + 1
-    shadePolls[guid] = attempts
-    if not summoner or summoner:IsDead() or attempts > 50 then
-        shadePolls[guid] = nil
+-- false); DespawnOrUnsummon(1s); }. The Go bridge fires ev28 with
+-- (FOLLOW_MOTION_TYPE 14, uint32(targetGUID)) once, when the follow
+-- leg closes in range (engine/world/creaturemotion.go:4386). The
+-- ev28 id is the low 32 bits of the GUID while GetGUIDLow is the
+-- low 24, so the comparison masks with % 2^24 (exact in doubles
+-- below 2^32); the shade only ever follows its summoner, so the
+-- masked comparison is the C++ data check.
+local FOLLOW_MOTION_TYPE = 14
+
+local function spiritShadeMovementInform(_, creature, moveType, id)
+    if moveType ~= FOLLOW_MOTION_TYPE then
         return
     end
-    local summonerReach = 1.5
-    if summoner:GetObjectType() ~= "Player" then
-        summonerReach = summoner:GetCombatReach()
-    end
-    if creature:GetDistance(summoner) <= creature:GetCombatReach() + summonerReach + 1.0 then
-        shadePolls[guid] = nil
+    local expected = shadeSummonerLow[creature:GetGUID()]
+    if expected ~= nil and id % 16777216 == expected then
         creature:CastSpell(creature, SPELL_DARK_OFFERING)
         creature:DespawnOrUnsummon(1000)
-        return
     end
-    creature:MoveFollow(summoner, 0, 0)
-    schedule(guid, "shade_arrival", 1000, function()
-        spiritShadeArrivalTick(creature, guid, summoner)
-    end)
 end
 
 -- C++ npc_spirit_shadeAI::IsSummonedBy (boss_emerald_dragons.cpp:430-
 -- 438): summoner ToUnit() non-nil -> store GUID, MoveFollow(summoner,
--- 0, 0). The GUID store has no Lua consumer (the ev28 data comparison
--- is replaced by the proximity poll above); the summoner object is
--- carried in the poll closure instead.
+-- 0, 0).
 local function spiritShadeSummoned(event, creature, summoner)
     if not summoner then
         return
     end
-    local guid = creature:GetGUID()
-    shadePolls[guid] = 0
+    shadeSummonerLow[creature:GetGUID()] = summoner:GetGUIDLow()
     creature:MoveFollow(summoner, 0, 0)
-    schedule(guid, "shade_arrival", 1000, function()
-        spiritShadeArrivalTick(creature, guid, summoner)
-    end)
 end
 
 local function spiritShadeCleanup(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    shadePolls[guid] = nil
+    shadeSummonerLow[guid] = nil
 end
 
 -- C++ boss_emeriss::DamageTaken (:515-523): if (!HealthAbovePct(100 -
@@ -818,6 +796,7 @@ RegisterCreatureEvent(ENTRY_LETHON,  9, lethonDamageTaken)
 RegisterCreatureEvent(ENTRY_LETHON,  15, lethonSpellHitTarget)
 RegisterCreatureEvent(ENTRY_LETHON,  23, dragonReset)
 RegisterCreatureEvent(ENTRY_SPIRIT_SHADE, 22, spiritShadeSummoned)
+RegisterCreatureEvent(ENTRY_SPIRIT_SHADE, 28, spiritShadeMovementInform)
 RegisterCreatureEvent(ENTRY_SPIRIT_SHADE, 2, spiritShadeCleanup)
 RegisterCreatureEvent(ENTRY_SPIRIT_SHADE, 4, spiritShadeCleanup)
 RegisterCreatureEvent(ENTRY_EMERISS, 1, emerissEnterCombat)

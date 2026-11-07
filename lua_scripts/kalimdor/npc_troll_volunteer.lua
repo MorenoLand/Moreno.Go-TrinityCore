@@ -18,10 +18,9 @@
 -- MOUNTING_CHECK (RemoveAurasDueToSpell twin: single-spell removal),
 -- Dismount, Talk(SAY_VOLUNTEER_END 1), MovePoint to the caster's
 -- position (MoveTo twin).
--- Deliberate deviations (await engine bridges): the MovePoint arrival
--- leg (MovementInform POINT_URUZIN -> DespawnOrUnsummon) stays out —
--- no ev28 arrival hook (krick precedent: the MoveTo is ported, the
--- arrival despawn documented); the mount-check AuraScript
+-- MovementInform arrival leg PORTED (event 28, C++-exact):
+-- POINT_URUZIN (4026400) arrival -> DespawnOrUnsummon.
+-- Deliberate deviations (await engine bridges): the mount-check AuraScript
 -- (spell_mount_check, cross-AI GetMountId consumer) is SpellScript
 -- class, out — the mount model is still stored per-GUID for it.
 -- Melee is engine-driven in Go, like C++ DoMeleeAttackIfReady
@@ -35,6 +34,9 @@ local SPELL_TURNIN = 73953
 local SPELL_AOE_TURNIN = 75107
 
 local NPC_URUZIN = 40253
+
+local POINT_MOTION_TYPE = 8
+local POINT_URUZIN = 4026400 -- zone_durotar.cpp:94
 
 local REACT_PASSIVE = 0
 
@@ -103,11 +105,23 @@ local function volunteerSpellHit(_, creature, caster, spellId)
     creature:RemoveAura(SPELL_MOUNTING_CHECK)
     creature:Dismount()
     creature:Talk(1)
-    creature:MoveTo(0, caster:GetX(), caster:GetY(), caster:GetZ())
+    creature:MoveTo(POINT_URUZIN, caster:GetX(), caster:GetY(), caster:GetZ())
+end
+
+-- C++ MovementInform (zone_durotar.cpp:336-343): POINT_URUZIN arrival
+-- -> DespawnOrUnsummon.
+local function volunteerMovementInform(_, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if id == POINT_URUZIN then
+        creature:DespawnOrUnsummon()
+    end
 end
 
 for _, entry in ipairs(VOLUNTEER_ENTRIES) do
     RegisterCreatureEvent(entry, 5, volunteerSpawn)
     RegisterCreatureEvent(entry, 23, volunteerReset)
     RegisterCreatureEvent(entry, 14, volunteerSpellHit)
+    RegisterCreatureEvent(entry, 28, volunteerMovementInform)
 end

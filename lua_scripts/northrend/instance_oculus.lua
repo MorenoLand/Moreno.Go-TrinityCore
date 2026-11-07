@@ -140,32 +140,23 @@ local function updateWorldState(data, field, value)
     end
 end
 
--- C++ MovementInform POINT_MOVE_OUT (oculus.cpp:193-205): the flag
--- lands on arrival, Belgaristrasz Talks. No ev28 in Go, so poll
--- 1s (emerald spirit-shade precedent); bounded — a stalled spline
--- stops polling after 90s instead of ticking forever.
-local function freeDragonPoll(data, key, entry, tries)
-    local dragon = data[key]
-    if not dragon then
+-- C++ MovementInform POINT_MOVE_OUT (oculus.cpp:193-205, event 28):
+-- on arrival, Belgaristrasz Talks (SAY_BELGARISTRASZ 0) and the
+-- gossip flag lands on all three heralds.
+local POINT_MOTION_TYPE = 8
+
+local function dragonMoveOutInform(_, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE or id ~= POINT_MOVE_OUT then
         return
     end
-    local move = DRAGON_MOVES[entry]
-    local dx = dragon:GetX() - move[1]
-    local dy = dragon:GetY() - move[2]
-    local dz = dragon:GetZ() - move[3]
-    if dx * dx + dy * dy + dz * dz < 4.0 then
-        if entry == NPC_BELGARISTRASZ then
-            dragon:Talk(SAY_BELGARISTRASZ)
-        end
-        dragon:SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP)
-        return
+    if creature:GetEntry() == NPC_BELGARISTRASZ then
+        creature:Talk(SAY_BELGARISTRASZ)
     end
-    if tries <= 0 then
-        return
-    end
-    CreateLuaEvent(function()
-        freeDragonPoll(data, key, entry, tries - 1)
-    end, 1000, 1)
+    creature:SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP)
+end
+
+for _, entry in ipairs({ NPC_VERDISA, NPC_BELGARISTRASZ, NPC_ETERNOS }) do
+    RegisterCreatureEvent(entry, 28, dragonMoveOutInform)
 end
 
 -- C++ FreeDragons (instance_oculus.cpp:278-297): SetWalk(true) +
@@ -179,7 +170,6 @@ local function freeDragons(data)
         if dragon then
             dragon:SetWalk(true)
             dragon:MoveTo(POINT_MOVE_OUT, move[1], move[2], move[3])
-            freeDragonPoll(data, key, entry, 90)
         end
     end
 end

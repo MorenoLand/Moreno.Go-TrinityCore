@@ -103,9 +103,8 @@
 -- the summon / movement machines stay out, same inert-until-summon
 -- standing as the registered DamageTaken arm below);
 -- MovementInform POINT_MOTION_TYPE / DATA_POINT_CALLBACK
--- DespawnOrUnsummon — no motion hook (no event 28); arrival
--- despawn is the spark-watch returning-flag poll (2s, 5yd),
--- PORTED 2026-11-03; DamageTaken uiDamage = 0 stays REGISTERED
+-- DespawnOrUnsummon — PORTED on event 28 (sparkMovementInform);
+-- DamageTaken uiDamage = 0 stays REGISTERED
 -- (event 9, return false, 0 — halazzi precedent); UpdateAI >90
 -- redirect PORTED in the watch; boss-state gate PORTED in the watch
 -- via creature:GetBossState(2) (bridge lua_creature_events.go:5936;
@@ -204,9 +203,9 @@ end
 -- bridged, and the invisible DamageTaken gate rides this own-state
 -- flag (no IsVisible bridge exists, but Lua knows it set
 -- invisible). Deltas: (a) SetInCombatWith has no bridge — MoveFollow
--- carries the follow leg; (b) MovementInform has no hook (no event
--- 28) — arrival despawn is a 2s poll on the returning flag
--- (callback or >90 redirect) with a 5yd threshold; (c) ball/static
+-- carries the follow leg; (b) MovementInform arrival despawn ports
+-- on event 28 (sparkMovementInform); the spark watch keeps only the
+-- >90yd redirect leg; (c) ball/static
 -- timers freeze in C++ while invisible — Lua cancels them at split
 -- and re-seeds fresh init ranges on restore; (d) the disperse
 -- health check is a 500ms poll, not a per-tick check; (e) sparks
@@ -360,9 +359,6 @@ ionarSparkWatch = function(creature, guid)
                 entry.obj:SetSpeedRate(1, 2.0)
                 entry.obj:MoveTo(0, creature:GetX(), creature:GetY(), creature:GetZ())
                 entry.returning = true
-            elseif entry.returning and dist < 5 then
-                entry.obj:Despawn()
-                state.sparks[sguid] = nil
             end
         end
     end
@@ -460,10 +456,28 @@ end)
 
 -- C++ npc_spark_of_ionar::Reset (boss_ionar.cpp:322-326): Initialize() +
 -- me->SetReactState(REACT_PASSIVE) — the spark never engages on its own
--- (its UpdateAI never attacks); the MovementInform callback leg stays
--- out (no motion bridge).
+-- (its UpdateAI never attacks); the MovementInform callback leg ports
+-- on event 28 (sparkMovementInform below).
 local function sparkReset(event, creature)
     creature:SetReactState(0) -- REACT_PASSIVE
 end
 
+-- C++ MovementInform (boss_ionar.cpp:330-336, event 28):
+-- POINT_MOTION_TYPE / DATA_POINT_CALLBACK (0) arrival ->
+-- DespawnOrUnsummon. The state prune is load-bearing: the
+-- restore check (ionarRestoreCheck) restores Ionar only once
+-- next(state.sparks) == nil, the twin of C++ SummonedCreatureDespawn
+-- (boss_ionar.cpp:222-226).
+local function sparkMovementInform(_, creature, moveType, id)
+    if moveType ~= 8 or id ~= 0 then
+        return
+    end
+    local guid = creature:GetGUID()
+    for _, state in pairs(ionarState) do
+        state.sparks[guid] = nil
+    end
+    creature:DespawnOrUnsummon()
+end
+
+RegisterCreatureEvent(ENTRY_SPARK_OF_IONAR, 28, sparkMovementInform)
 RegisterCreatureEvent(ENTRY_SPARK_OF_IONAR, 23, sparkReset)

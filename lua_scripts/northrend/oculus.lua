@@ -14,8 +14,8 @@
 --   (gossip.go select args). The swap closes the gossip
 --   (player:GossipComplete, the C++ SendCloseGossip twin).
 --   MovementInform POINT_MOVE_OUT (Belgaristrasz Talk 0 +
---   gossip flag on arrival) is NOT duplicated here — it ports
---   in instance_oculus.lua (FreeDragons arrival poll).
+--   gossip flag on arrival) ports in instance_oculus.lua
+--   (ev28 dragonMoveOutInform).
 -- - npc_ruby_emerald_amber_drake (27756/27692/27755):
 --   SpellHit GPS (oculus.cpp:289-310, ev14 — the fire site is
 --   live, boss_ai.go:3813): the whisper target is the drake's
@@ -28,7 +28,7 @@
 --   SetFacingToObject(summoner), per-entry ride-que cast on
 --   the summoner, MoveTo(POINT_LAND) at the summoner position;
 --   the MovementInform POINT_LAND -> SetDisableGravity(false)
---   leg rides a bounded 1s arrival poll (no ev28 in Go).
+--   leg ports on ev28 (drakeLandInform below).
 -- - spell_oculus_stop_time (49838, AuraScript AfterEffectApply,
 --   oculus.cpp:560-583): the stun apply casts
 --   SPELL_AMBER_SHOCK_CHARGE (49836) 5x on the target — ports
@@ -56,8 +56,8 @@
 --   2 apply / 3 remove / 4 stack-change only); dream funnel
 --   calc-amount (50344) — event 4 is stack-count change, not
 --   DoEffectCalcAmount.
--- - Drake MovementInform POINT_LAND in its C++ form (no ev28);
---   the arrival-poll twin ports above.
+-- - Drake MovementInform POINT_LAND now ports on ev28
+--   (drakeLandInform below).
 
 -- C++ spell_oculus_ride_ruby_emerald_amber_drake_que::HandlePeriodic
 -- (oculus.cpp:449-466): PreventDefaultAction; the aura target casts
@@ -207,23 +207,14 @@ local function drakeSpellHit(event, creature, caster, spellId)
     end
 end
 
--- C++ MovementInform POINT_LAND twin (oculus.cpp:345-349):
+-- C++ MovementInform POINT_LAND (oculus.cpp:316-320, event 28):
 -- SetDisableGravity(false) on arrival at the land position.
--- Bounded 30s poll (freeDragons idiom, instance_oculus.lua).
-local function drakeLandPoll(creature, guid, x, y, z, tries)
-    local dx = creature:GetX() - x
-    local dy = creature:GetY() - y
-    local dz = creature:GetZ() - z
-    if dx * dx + dy * dy + dz * dz < 4.0 then
+local POINT_MOTION_TYPE = 8
+
+local function drakeLandInform(_, creature, moveType, id)
+    if moveType == POINT_MOTION_TYPE and id == POINT_LAND then
         creature:SetDisableGravity(false)
-        return
     end
-    if tries <= 0 then
-        return
-    end
-    CreateLuaEvent(function()
-        drakeLandPoll(creature, guid, x, y, z, tries - 1)
-    end, 1000, 1)
 end
 
 -- C++ IsSummonedBy (oculus.cpp:312-343).
@@ -249,17 +240,14 @@ local function drakeSummoned(event, creature, summoner)
     else
         return
     end
-    local x = summoner:GetX()
-    local y = summoner:GetY()
-    local z = summoner:GetZ()
-    creature:MoveTo(POINT_LAND, x, y, z)
-    drakeLandPoll(creature, creature:GetGUID(), x, y, z, 30)
+    creature:MoveTo(POINT_LAND, summoner:GetX(), summoner:GetY(), summoner:GetZ())
 end
 
 local DRAKE_ENTRIES = { NPC_RUBY_DRAKE_VEHICLE, NPC_EMERALD_DRAKE_VEHICLE, NPC_AMBER_DRAKE_VEHICLE }
 for _, entry in ipairs(DRAKE_ENTRIES) do
     RegisterCreatureEvent(entry, 14, drakeSpellHit)
     RegisterCreatureEvent(entry, 22, drakeSummoned)
+    RegisterCreatureEvent(entry, 28, drakeLandInform)
 end
 
 -- C++ spell_oculus_stop_time::Apply (oculus.cpp:560-583):

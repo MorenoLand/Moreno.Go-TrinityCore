@@ -105,11 +105,12 @@
 --   restore them — no RemoveFlag / REACT_AGGRESSIVE anywhere in the C++).
 -- boss_krick DoAction(ACTION_OUTRO) (:342-367) — tyrannus NearTeleportTo /
 --   SummonCreature choreography + MovePoint(POINT_KRICK_INTRO): PORTED via
---   ickDied (the relay host); the MovementInform landing + outro chain
---   stay out (no arrival hook), see ickDied.
--- boss_krick MovementInform (:369-377) — POINT_KRICK_INTRO landing ->
---   Talk(SAY_KRICK_OUTRO_1 6) + PHASE_OUTRO flip: no-MovementInform bridge
---   (the violet_hold saboteur precedent).
+--   ickDied (the relay host); the MovementInform landing ports on event
+--   28 (krickMovementInform) — the EVENT_OUTRO_1..13 chain stays out
+--   (instance team-data + movement-flag bridges, see below).
+-- boss_krick MovementInform (:358-367) — POINT_KRICK_INTRO landing ->
+--   Talk(SAY_KRICK_OUTRO_1 6) + PHASE_OUTRO flip: PORTED on event 28;
+--   the _events.Reset() leg is vacuous (krick holds no Lua timers).
 -- boss_krick UpdateAI outro machine (:379-514) — EVENT_OUTRO_1..13 /
 --   EVENT_OUTRO_END: the timer-driven Talk(SAY_KRICK_OUTRO_3 7 /
 --   SAY_KRICK_OUTRO_5 8 / SAY_KRICK_OUTRO_8 9) legs ride the unbridged
@@ -165,6 +166,11 @@ local TYRANNUS_OUTRO_O = 0.2046099
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x00000002
 local REACT_PASSIVE = 0
+
+local SAY_KRICK_OUTRO_1 = 6
+local POINT_KRICK_INTRO = 364770
+
+local krickPhaseOutro = {}
 
 local SAY_KRICK_SLAY = 1
 local SAY_KRICK_BARRAGE_1 = 2
@@ -497,8 +503,9 @@ end
 -- SetFacingToObject twin); then krick MoveTo outroPos[0] (the
 -- MovePoint(POINT_KRICK_INTRO) twin, C++ order). STAYS OUT: the
 -- MovementInform landing (Talk SAY_KRICK_OUTRO_1 + PHASE_OUTRO flip)
--- and the whole EVENT_OUTRO_1..13 chain — MoveTo arrivals fire no
--- hook in Go (no event 28), so the chain has no fire site.
+-- ports on event 28 (krickMovementInform below); the whole
+-- EVENT_OUTRO_1..13 chain stays out (instance team-data + movement-flag
+-- bridges, see the file header).
 local function ickDied(event, creature)
     initState(creature:GetGUID())
     creature:SetBossState(DATA_ICK, 3)
@@ -520,7 +527,7 @@ local function ickDied(event, creature)
             summoned:SetFacingTo(face)
         end
     end
-    krick:MoveTo(0, KRICK_OUTRO_X, KRICK_OUTRO_Y, KRICK_OUTRO_Z)
+    krick:MoveTo(POINT_KRICK_INTRO, KRICK_OUTRO_X, KRICK_OUTRO_Y, KRICK_OUTRO_Z)
 end
 
 -- C++ boss_krickAI::KilledUnit (:324-330): if (victim->GetTypeId() !=
@@ -615,8 +622,21 @@ local function krickReset(event, creature)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
 end
 
+-- C++ boss_krick MovementInform (boss_krickandick.cpp:358-367,
+-- event 28): POINT_KRICK_INTRO arrival -> Talk(SAY_KRICK_OUTRO_1 6)
+-- + PHASE_OUTRO flip + _events.Reset() (vacuous in Lua) + schedule
+-- EVENT_OUTRO_1 (stays out — chain needs the team-data bridge).
+local function krickMovementInform(_, creature, moveType, id)
+    if moveType ~= 8 or id ~= POINT_KRICK_INTRO then
+        return
+    end
+    creature:Talk(SAY_KRICK_OUTRO_1)
+    krickPhaseOutro[creature:GetGUID()] = true
+end
+
 RegisterCreatureEvent(ENTRY_KRICK, 3, krickKilledUnit)
 RegisterCreatureEvent(ENTRY_KRICK, 23, krickReset)
+RegisterCreatureEvent(ENTRY_KRICK, 28, krickMovementInform)
 
 -- C++ spell_krick_explosive_barrage::HandlePeriodicTick
 -- (boss_krickandick.cpp:522-535): PreventDefaultAction; the caster
