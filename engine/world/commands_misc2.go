@@ -166,29 +166,32 @@ func (s *session) misc2AccountForGUID(ctx context.Context, guid uint64) uint32 {
 // selection (miscResolvePlayerTarget's no-name path); otherwise the first
 // token is the player name and the second is the minutes. Status is 0 on
 // success, 1 for a syntax error, 2 for an unparseable minutes value.
-func misc2ParseMuteArgs(args []string) (nameArgs []string, minutes uint32, reason string, status int) {
-	reason = "No reason."
+// reasonStart is the args index where the verbatim Tail reason begins
+// (-1 when no reason tokens follow); the caller reads it through
+// commandTailAfter so interior whitespace survives (cs_misc.cpp:1841).
+func misc2ParseMuteArgs(args []string) (nameArgs []string, minutes uint32, reasonStart int, status int) {
+	reasonStart = -1
 	if len(args) == 0 {
-		return nil, 0, reason, 1
+		return nil, 0, reasonStart, 1
 	}
 	if mins, err := strconv.ParseUint(args[0], 10, 32); err == nil {
 		if len(args) > 1 {
-			reason = strings.Join(args[1:], " ")
+			reasonStart = 1
 		}
-		return nil, uint32(mins), reason, 0
+		return nil, uint32(mins), reasonStart, 0
 	}
 	if len(args) < 2 {
-		return nil, 0, reason, 1
+		return nil, 0, reasonStart, 1
 	}
 	nameArgs = args[:1]
 	mins, err := strconv.ParseUint(args[1], 10, 32)
 	if err != nil {
-		return nil, 0, reason, 2
+		return nil, 0, reasonStart, 2
 	}
 	if len(args) > 2 {
-		reason = strings.Join(args[2:], " ")
+		reasonStart = 2
 	}
-	return nameArgs, uint32(mins), reason, 0
+	return nameArgs, uint32(mins), reasonStart, 0
 }
 
 // saveRecallPosition mirrors Player::SaveRecallPosition (Player.h:1989):
@@ -1070,7 +1073,7 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandMute) {
 		return
 	}
-	nameArgs, minutes, reason, status := misc2ParseMuteArgs(args)
+	nameArgs, minutes, reasonStart, status := misc2ParseMuteArgs(args)
 	if status == 1 {
 		s.sendSysMessage("Syntax: .mute [<player>] <minutes> [reason]")
 		return
@@ -1078,6 +1081,12 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) {
 	if status == 2 {
 		s.sendSysMessage(misc2BadValue)
 		return
+	}
+	reason := "No reason."
+	if reasonStart >= 0 {
+		if tail := s.commandTailAfter(args, reasonStart); tail != "" {
+			reason = tail
+		}
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, nameArgs)
 	if !ok {

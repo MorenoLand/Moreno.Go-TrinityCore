@@ -559,14 +559,80 @@ func (s *session) removeArenaSpellCooldowns() {
 }
 
 func (s *session) executeCommand(ctx context.Context, line string) bool {
+	// C++ TryExecuteCommand strips leading/trailing COMMAND_DELIMITER
+	// (' ') from the whole line before tokenizing (ChatCommand.cpp:253-255).
+	line = strings.Trim(line, " ")
+	s.commandRawLine = line
 	fields := strings.Fields(line)
+	s.commandFieldCount = len(fields)
 	if len(fields) == 0 {
+		s.commandRawLine = ""
+		s.commandFieldCount = 0
 		return false
 	}
 	// Commands resolve through the prefix-matching command tree
 	// (ChatCommandNode::TryExecuteCommand), so '.mod spee 10' dispatches
 	// to '.modify speed 10'.
-	return s.dispatchCommand(ctx, fields)
+	result := s.dispatchCommand(ctx, fields)
+	s.commandRawLine = ""
+	s.commandFieldCount = 0
+	return result
+}
+
+// rawTailAfterTokens mirrors Trinity::Impl::ChatCommands::tokenize
+// (ChatCommandHelpers.h:55-70): it skips count space-separated tokens,
+// each token running to the next ' ' with the following run of spaces
+// skipped, and returns the verbatim remainder. Interior whitespace of
+// the remainder is preserved; a line with fewer than count tokens (or
+// only spaces after the last) yields "".
+func rawTailAfterTokens(line string, count int) string {
+	rest := line
+	for i := 0; i < count; i++ {
+		delim := strings.IndexByte(rest, ' ')
+		if delim < 0 {
+			return ""
+		}
+		next := delim
+		for next < len(rest) && rest[next] == ' ' {
+			next++
+		}
+		if next >= len(rest) {
+			return ""
+		}
+		rest = rest[next:]
+	}
+	return rest
+}
+
+// commandTail returns the verbatim Tail for a handler's args: the raw
+// remainder of the dispatched line starting at args[0]. The dispatcher's
+// args are always a suffix of the token stream (resolve canonicalizes
+// spellings but never adds or drops tokens), so the tail starts
+// len(args) tokens before the end of the line. Without a dispatched
+// line (direct calls) it falls back to the joined args.
+func (s *session) commandTail(args []string) string {
+	return s.commandTailAfter(args, 0)
+}
+
+// commandTailAfter returns the verbatim remainder starting at
+// args[extra:] — the Tail after a handler consumed extra leading
+// tokens of its own args (e.g. the mute reason after player+minutes,
+// the npc-whisper text after the receiver name).
+func (s *session) commandTailAfter(args []string, extra int) string {
+	if s.commandRawLine == "" || s.commandFieldCount == 0 {
+		if extra >= len(args) {
+			return ""
+		}
+		return strings.Join(args[extra:], " ")
+	}
+	skip := s.commandFieldCount - len(args) + extra
+	if skip < 0 || skip > s.commandFieldCount {
+		if extra >= len(args) {
+			return ""
+		}
+		return strings.Join(args[extra:], " ")
+	}
+	return rawTailAfterTokens(s.commandRawLine, skip)
 }
 
 func (s *session) handleCmdHelp(args []string) {
@@ -5892,8 +5958,8 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 		return
 	}
 	// ArenaTeamMgr::GenerateArenaTeamId: NextArenaTeamId++.
-	var teamID uint32
-	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(arenaTeamId), 0) + 1 FROM arena_team").Scan(&teamID); err != nil {
+	teamID := s.server.generateArenaTeamID(ctx, cdb)
+	if teamID == 0 {
 		s.sendSysMessage("Unknown error.")
 		return
 	}
@@ -6187,7 +6253,7 @@ func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) {
 // only emits rows when handler->GetSession() is set; the Go command path is
 // always a session, so rows are always emitted.
 func (s *session) handleCmdArenaLookup(ctx context.Context, args []string) {
-	needle := strings.Join(args, " ")
+	needle := s.commandTail(args)
 	if strings.TrimSpace(needle) == "" {
 		s.sendSysMessage("Syntax: .arena lookup <name>")
 		return

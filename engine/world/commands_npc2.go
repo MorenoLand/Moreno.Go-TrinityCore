@@ -1178,7 +1178,7 @@ func (s *session) handleNPCSay(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .npc say <text>"
-	text := strings.Join(args, " ")
+	text := s.commandTail(args)
 	if text == "" {
 		s.sendSysMessage(syntax)
 		return
@@ -1203,7 +1203,7 @@ func (s *session) handleNPCYell(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .npc yell <text>"
-	text := strings.Join(args, " ")
+	text := s.commandTail(args)
 	if text == "" {
 		s.sendSysMessage(syntax)
 		return
@@ -1228,7 +1228,7 @@ func (s *session) handleNPCTextEmote(ctx context.Context, args []string) {
 		return
 	}
 	const syntax = "Syntax: .npc textemote <text>"
-	text := strings.Join(args, " ")
+	text := s.commandTail(args)
 	if text == "" {
 		s.sendSysMessage(syntax)
 		return
@@ -1296,7 +1296,7 @@ func (s *session) handleNPCWhisper(ctx context.Context, args []string) {
 		s.sendSysMessage(syntax)
 		return
 	}
-	text := strings.Join(args[1:], " ")
+	text := s.commandTailAfter(args, 1)
 	if text == "" {
 		s.sendSysMessage(syntax)
 		return

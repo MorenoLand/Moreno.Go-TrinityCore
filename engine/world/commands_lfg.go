@@ -65,7 +65,7 @@ func (s *session) handleCmdLFG(ctx context.Context, args []string) {
 		if deny(permissionCommandLfgQueue) {
 			return
 		}
-		s.handleLfgQueueInfoCommand(strings.Join(rest, " "))
+		s.handleLfgQueueInfoCommand(s.commandTailAfter(args, 1))
 	case strings.HasPrefix("clean", sub):
 		if deny(permissionCommandLfgClean) {
 			return
@@ -75,7 +75,7 @@ func (s *session) handleCmdLFG(ctx context.Context, args []string) {
 		if deny(permissionCommandLfgOptions) {
 			return
 		}
-		s.handleLfgOptionsCommand(strings.Join(rest, " "))
+		s.handleLfgOptionsCommand(s.commandTailAfter(args, 1))
 	default:
 		s.sendSysMessage(syntax)
 	}

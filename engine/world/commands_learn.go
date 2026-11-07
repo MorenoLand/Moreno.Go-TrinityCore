@@ -906,13 +906,13 @@ func (s *session) handleLearnAllRecipes(ctx context.Context, args []string) {
 	if !ok {
 		return
 	}
-	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
+	if len(args) == 0 || strings.TrimSpace(s.commandTail(args)) == "" {
 		// C++ returns false on an empty namePart (cs_learn.cpp:386),
 		// which the framework reports as a syntax error.
 		s.sendSysMessage("Syntax: .learn all recipes <profession>")
 		return
 	}
-	namePart := strings.ToLower(strings.Join(args, " "))
+	namePart := strings.ToLower(s.commandTail(args))
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Skill data is unavailable.")
 		return

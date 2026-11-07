@@ -173,6 +173,15 @@ type Server struct {
 	mailIDMu    sync.Mutex
 	mailIDNext  uint32
 	mailIDReady bool
+	// arenaTeamIDMu/arenaTeamIDNext/arenaTeamIDReady mirror
+	// ArenaTeamMgr::NextArenaTeamId (ArenaTeamMgr.cpp:29, 81-89; seeded
+	// from MAX(arenaTeamId)+1 by ObjectMgr, ObjectMgr.cpp:7323): the
+	// in-memory counter hands out consecutive arena team ids, so a
+	// disbanded max id is never reused the way per-create
+	// MAX(arenaTeamId)+1 queries could reuse it.
+	arenaTeamIDMu    sync.Mutex
+	arenaTeamIDNext  uint32
+	arenaTeamIDReady bool
 	// itemGUIDMu/itemGUIDNext mirror sObjectMgr's item GUID generator
 	// (ObjectGuidGenerator<HighGuid::Item>, seeded from MAX(guid)+1 at
 	// ObjectMgr::SetHighestGuids, ObjectMgr.cpp:7293-7301): the in-memory
@@ -406,6 +415,15 @@ type session struct {
 	addonCmdHadAck bool
 	addonCmdFailed bool
 	addonCmdActive bool
+	// commandRawLine/commandFieldCount carry the verbatim command line
+	// for the command currently dispatching (executeCommand, mirroring
+	// ChatCommandNode::TryExecuteCommand's cmdStr after its leading/
+	// trailing COMMAND_DELIMITER strip, ChatCommand.cpp:253-255): C++
+	// Tail args are the raw remainder, not a re-join of the tokenized
+	// fields, so handlers that need the verbatim tail read it through
+	// commandTail/commandTailAfter instead of strings.Join.
+	commandRawLine    string
+	commandFieldCount int
 	// calendarEventCooldown mirrors WorldSession's calendar event creation
 	// cooldown (CalendarHandler.cpp:262-265): unix time before which a new
 	// calendar event or copy may not be created
@@ -1077,6 +1095,38 @@ func (s *Server) generateMailID() uint32 {
 	}
 	id := s.mailIDNext
 	s.mailIDNext++
+	return id
+}
+
+// generateArenaTeamID mirrors ArenaTeamMgr::GenerateArenaTeamId
+// (ArenaTeamMgr.cpp:81-89): the next arena team id from the in-memory
+// counter, seeded once from MAX(arenaTeamId)+1 like ObjectMgr's startup
+// SetNextArenaTeamId (ObjectMgr.cpp:7323). At 0xFFFFFFFE the C++ side
+// logs an error and stops the server; the Go side logs and returns 0.
+func (s *Server) generateArenaTeamID(ctx context.Context, cdb *sql.DB) uint32 {
+	s.arenaTeamIDMu.Lock()
+	defer s.arenaTeamIDMu.Unlock()
+	if !s.arenaTeamIDReady {
+		var highest uint32
+		if cdb != nil {
+			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(arenaTeamId), 0) FROM arena_team").Scan(&highest)
+		}
+		if highest >= s.arenaTeamIDNext {
+			s.arenaTeamIDNext = highest + 1
+		}
+		if s.arenaTeamIDNext == 0 {
+			s.arenaTeamIDNext = 1
+		}
+		s.arenaTeamIDReady = true
+	}
+	if s.arenaTeamIDNext >= 0xFFFFFFFE {
+		if s.Logger != nil {
+			s.Logger.Error("arena: arena team ID overflow, cannot generate new arena team IDs")
+		}
+		return 0
+	}
+	id := s.arenaTeamIDNext
+	s.arenaTeamIDNext++
 	return id
 }
 

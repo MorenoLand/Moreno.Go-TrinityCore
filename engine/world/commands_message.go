@@ -384,10 +384,9 @@ func (s *session) messageDeny(ctx context.Context, perm uint32) bool {
 // IsInvokerVisible gates invocation before the handler runs
 // (ChatCommand.cpp:295-309), so an unauthorized user never sees the
 // handler's syntax text — then non-empty tail, then in-game player. The
-// tail is re-joined from the dispatcher's fields, so interior/trailing
-// whitespace is collapsed; the C++ Tail is verbatim (ChatCommandTags.h:116),
-// and recovering it needs raw-tail plumbing through executeCommand/
-// dispatchCommand (deferred: the dispatcher tokenizes with strings.Fields).
+// tail is the verbatim C++ Tail (ChatCommandTags.h:116), recovered from
+// the dispatched line through commandTail, so interior whitespace is
+// preserved instead of collapsing to single spaces.
 func (s *session) messageTailGate(ctx context.Context, syntax string, perm uint32, args []string) (string, bool) {
 	if s.messageDeny(ctx, perm) {
 		return "", false
@@ -400,7 +399,7 @@ func (s *session) messageTailGate(ctx context.Context, syntax string, perm uint3
 		s.sendSysMessage("You must be in game to use that command.")
 		return "", false
 	}
-	return strings.Join(args, " "), true
+	return s.commandTail(args), true
 }
 
 // handleCmdNameAnnounceCommand mirrors HandleNameAnnounceCommand
