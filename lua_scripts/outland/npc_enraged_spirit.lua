@@ -92,13 +92,12 @@
 -- Deliberate deviations (all await engine bridges): the
 -- earth spirit's JustDied DoCastSelf(SPELL_SUMMON_ENRAGED_EARTH_SHARD
 -- 38365) summons via spell data (entry unverifiable) — unmodeled
--- (sarannis "can't see inside a spell script" precedent); no
--- movement / quest-credit / dead-caster-cast bridges — the JustDied
--- totem legs past the faction flip (MovePoint to the totem,
--- KilledMonsterCredit(NPC_CREDIT_*) via the totem's player owner,
--- DoCast(totem, SPELL_SOUL_CAPTURED 36115)) unmodeled — the soul
--- spawns and stands for its 5s lifetime instead of walking to the
--- totem.
+-- (sarannis "can't see inside a spell script" precedent). The totem
+-- legs past the faction flip are PORTED 2026-11-07 (the bridges landed
+-- since: creature:MoveTo, creature:GetOwner + player:KilledMonsterCredit,
+-- dead-caster creature:CastSpell has no IsDead gate in the bridge): soul
+-- MovePoint to the totem, totem-owner kill credit, DoCast(totem,
+-- SPELL_SOUL_CAPTURED), C++ order.
 -- Zone set status: zone_shadowmoon_valley.cpp — the Torloth
 -- / Illidan cinematic event machine, the infernal summon
 -- pair, the mature/enslaved drake quest arms and the wilda
@@ -136,6 +135,16 @@ local SOUL_ENTRY = {
 }
 
 local FACTION_FRIENDLY = 35 -- SharedDefines.h
+
+local SPELL_SOUL_CAPTURED = 36115
+
+-- C++ JustDied kill-credit entries (zone_shadowmoon_valley.cpp:1329-1332).
+local CREDIT_ENTRY = {
+    [ENTRY_ENRAGED_FIRE_SPIRIT] = 21094,    -- NPC_CREDIT_FIRE
+    [ENTRY_ENRAGED_EARTH_SPIRIT] = 21092,   -- NPC_CREDIT_EARTH
+    [ENTRY_ENRAGED_AIR_SPIRIT] = 21096,     -- NPC_CREDIT_AIR
+    [ENTRY_ENRAGED_WATER_SPIRIT] = 21095,   -- NPC_CREDIT_WATER
+}
 
 local spiritState = {}
 local spiritPump = {}
@@ -257,11 +266,10 @@ end
 -- per spirit (C++ switch order). The earth spirit's
 -- DoCastSelf(SPELL_SUMMON_ENRAGED_EARTH_SHARD 38365) summons via spell
 -- data (entry unverifiable) — unmodeled (see deviations). The totem
--- legs: FindNearestCreature(ENTRY_TOTEM_OF_SPIRITS, 15) is bridged and
--- the SetFaction(FRIENDLY) leg is ported on the spawned soul; the
--- MovePoint-to-totem, KilledMonsterCredit and DoCast(totem,
--- SPELL_SOUL_CAPTURED) legs have no movement / quest-credit /
--- dead-caster-cast bridges — unmodeled (see deviations).
+-- legs are PORTED 2026-11-07 (see deviations): FindNearestCreature(
+-- ENTRY_TOTEM_OF_SPIRITS, 15) + SetFaction(FRIENDLY) + MovePoint to
+-- the totem + totem-owner KilledMonsterCredit + DoCast(totem,
+-- SPELL_SOUL_CAPTURED 36115), C++ order.
 local function onDied(_, creature)
     fullReset(creature:GetGUID())
     local soulEntry = SOUL_ENTRY[creature:GetEntry()]
@@ -270,9 +278,20 @@ local function onDied(_, creature)
     end
     local soul = creature:SummonCreature(soulEntry,
         creature:GetX(), creature:GetY(), creature:GetZ() + 1, 0, 0, 5000)
-    if soul and creature:FindNearestCreature(ENTRY_TOTEM_OF_SPIRITS, 15) then
-        soul:SetFaction(FACTION_FRIENDLY)
+    if not soul then
+        return
     end
+    local totem = creature:FindNearestCreature(ENTRY_TOTEM_OF_SPIRITS, 15)
+    if not totem then
+        return
+    end
+    soul:SetFaction(FACTION_FRIENDLY)
+    soul:MoveTo(0, totem:GetX(), totem:GetY(), soul:GetZ())
+    local owner = totem:GetOwner()
+    if owner then
+        owner:KilledMonsterCredit(CREDIT_ENTRY[creature:GetEntry()])
+    end
+    creature:CastSpell(totem, SPELL_SOUL_CAPTURED)
 end
 
 -- The C++ UpdateAI per-tick enrage latch (fire + air only)

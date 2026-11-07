@@ -13851,11 +13851,23 @@ func init() {
 	// charm-check / despawn bridges; spell_mindless_abomination_
 	// explosion_fx_master has no SpellScript bridge;
 	// npc_riven_widow_cocoon (JustDied player-killer summon /
-	// kill-credit machine) has no killer-player / cast-on-me
-	// path — all documented only. Howling Fjord is the fourth
+	// kill-credit machine) is ported in
+	// lua_scripts/northrend/npc_riven_widow_cocoon.lua (entry 24210
+	// Wowhead-verified, tick 381): the killer-player gate, triggered
+	// player:CastSpell and KilledMonsterCredit bridges are all live.
+	// Howling Fjord is the fourth
 	// Northrend zone (dalaran, borean_tundra, dragonblight,
 	// grizzly_hills closed).
 	RegisterLuaBoss("npc_apothecary_hanes", 23784)
+	// npc_riven_widow_cocoon — see the hanes comment above.
+	RegisterLuaBoss("npc_riven_widow_cocoon", 24210)
+	// npc_nerubar_victim (Borean Tundra zone script): the JustDied
+	// player-killer freed-peon machine (quest 11611 gate, one
+	// urand(0, 99) draw, 25% freed-peon cast + credit / 50% random
+	// victim-spell cast) ported in
+	// lua_scripts/northrend/npc_nerubar_victim.lua. Entry 25284
+	// Wowhead-verified, tick 381.
+	RegisterLuaBoss("npc_nerubar_victim", 25284)
 	// npc_trapped_mammoth_calf (Borean Tundra zone script): the Reset()
 	// trap-activation arm — scan the 22 mammoth-trap GOs in enum order,
 	// first found within 11.0 yards gets SetGoState(GO_STATE_ACTIVE) —

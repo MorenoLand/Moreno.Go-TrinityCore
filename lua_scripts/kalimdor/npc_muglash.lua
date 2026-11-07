@@ -17,14 +17,17 @@
 --   6641 (QUEST_VORSHA) -> Talk(SAY_MUG_START1 0, untargeted — the
 --   willix precedent). SetFaction(113
 --   FACTION_ESCORTEE_N_NEUTRAL_PASSIVE, C++ order: Talk, SetFaction,
---   Start) also ported; EscortAI::Start alone has no bridge —
---   documented-only.
+--   Start) also ported, including StartEscort(player) — the escort
+--   bridges landed since (ticks 372-373).
+-- - JustDied (zone_ashenvale.cpp:227-232, event 4) — PORTED 2026-11-07:
+--   if IsEscorted() then GetEscortPlayer():FailQuest(QUEST_VORSHA
+--   6641) (hanes precedent uses a GUID latch; the bridge idiom is
+--   the legoso healing arm).
 -- Unmodeled (documented-only, no bridges):
 -- - JustEngagedWith Talk(SAY_MUG_ON_GUARD 3, player-targeted) and
---   JustDied FailQuest(QUEST_VORSHA) + JustSummoned AttackStart —
---   the C++ legs are all escort-state-gated (HasEscortState), so
---   porting them without the escort machine would fabricate
---   behavior; no escort bridge exists.
+--   JustSummoned AttackStart — both escort-state-gated, and the
+--   waypoint machine that produces the summons is unported, so the
+--   arms would never fire in the Go model.
 -- - WaypointReached (waypoints 0/24/...): Talk arms SAY_MUG_START2
 --   1 / SAY_MUG_BRAZIER 2 / SAY_MUG_ON_GUARD 3 / SAY_MUG_VORSHA 4,
 --   plus SummonCreature naga-wave legs — the waypoint machine and
@@ -37,14 +40,27 @@ local SAY_MUG_START1 = 0
 local QUEST_VORSHA = 6641
 
 -- C++ OnQuestAccept for quest 6641 (zone_ashenvale.cpp:237-244, C++ order:
--- Talk, SetFaction, Start): Talk(0) + SetFaction(113); EscortAI::Start
--- alone has no bridge.
+-- Talk, SetFaction, Start): Talk(0) + SetFaction(113) + StartEscort.
 local function onQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_VORSHA then
         return
     end
     creature:Talk(SAY_MUG_START1)
     creature:SetFaction(113)
+    creature:StartEscort(player)
+end
+
+-- C++ JustDied (zone_ashenvale.cpp:227-232): if escorting, the escort
+-- player fails QUEST_VORSHA.
+local function onDied(_, creature)
+    if not creature:IsEscorted() then
+        return
+    end
+    local player = creature:GetEscortPlayer()
+    if player then
+        player:FailQuest(QUEST_VORSHA)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_MUGLASH, 31, onQuestAccept)
+RegisterCreatureEvent(ENTRY_MUGLASH, 4, onDied)
