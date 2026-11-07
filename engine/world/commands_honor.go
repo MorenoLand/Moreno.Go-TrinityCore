@@ -38,22 +38,19 @@ const spellAuraNoPVPCredit = 159
 //
 // Trinity checks permission only on the invoker (leaf) node
 // (ChatCommand.cpp:487), so each arm gates exactly its own C++ permission.
-func (s *session) handleCmdHonor(ctx context.Context, args []string) {
-	const syntax = "Syntax: .honor add <amount> | .honor add kill | .honor update"
+// R13: denial returns false silently (C++ never invokes a denied leaf);
+// parse failures return false silently; message legs return true (C++
+// returns false with SetSentErrorMessage, which suppresses the help listing).
+func (s *session) handleCmdHonor(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
-			return true
-		}
-		return false
+		return !s.commandAllowed(ctx, perm)
 	}
 	sub := strings.ToLower(args[0])
 	switch {
@@ -65,31 +62,28 @@ func (s *session) handleCmdHonor(ctx context.Context, args []string) {
 		// fail the whole-string-consumed rule (ChatCommand.h:112).
 		if len(args) > 1 && strings.HasPrefix("kill", strings.ToLower(args[1])) {
 			if len(args) != 2 {
-				s.sendSysMessage(syntax)
-				return
+				return false
 			}
 			if deny(permissionCommandHonorAddKill) {
-				return
+				return false
 			}
-			s.handleHonorAddKill(ctx)
-			return
+			return s.handleHonorAddKill(ctx)
 		}
 		if deny(permissionCommandHonorAdd) {
-			return
+			return false
 		}
-		s.handleHonorAdd(ctx, args[1:])
+		return s.handleHonorAdd(ctx, args[1:])
 	case strings.HasPrefix("update", sub):
 		// HandleHonorUpdateCommand takes no arguments (ChatCommand.h:112).
 		if len(args) != 1 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
 		if deny(permissionCommandHonorUpdate) {
-			return
+			return false
 		}
-		s.handleHonorUpdate(ctx)
+		return s.handleHonorUpdate(ctx)
 	default:
-		s.sendSysMessage(syntax)
+		return false
 	}
 }
 
@@ -98,35 +92,34 @@ func (s *session) handleCmdHonor(ctx context.Context, args []string) {
 // (ChatHandler::getSelectedPlayer falls back to self, Chat.cpp:300); an
 // unresolvable selection reports LANG_PLAYER_NOT_FOUND (499, "Player not
 // found." per the tree convention). HasLowerSecurity fails silently.
-func (s *session) handleHonorAdd(ctx context.Context, args []string) {
+func (s *session) handleHonorAdd(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .honor add <amount>")
-		return
+		return false
 	}
 	// The amount is a framework uint32: StringTo<uint32> base 0
 	// (ChatCommandArgs.h:62), so 0x/0b prefixes are accepted.
 	amount, ok := parseCommandUint32(args[0])
 	if !ok {
-		s.sendSysMessage("Syntax: .honor add <amount>")
-		return
+		return false
 	}
 	target := s
 	if s.selection != 0 && s.server != nil {
 		ts := s.server.playerSessionForGUID(s.selection)
 		if ts == nil || ts.player == nil {
 			s.sendSysMessage("Player not found.")
-			return
+			return true
 		}
 		target = ts
 	}
 	if target.player == nil {
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target}) {
-		return // C++ HasLowerSecurity: silent fail
+		return false // C++ HasLowerSecurity: silent fail
 	}
 	target.rewardHonorPoints(ctx, uint32(amount))
+	return true
 }
 
 // handleHonorAddKill mirrors HandleHonorAddKillCommand (cs_honor.cpp:79):
@@ -135,12 +128,12 @@ func (s *session) handleHonorAdd(ctx context.Context, args []string) {
 // player earns the kill credit. The creature-victim path has no Go bridge:
 // command selections resolve only to online player sessions, so a
 // non-player selection reports the gap honestly instead of stubbing.
-func (s *session) handleHonorAddKill(ctx context.Context) {
+func (s *session) handleHonorAddKill(ctx context.Context) bool {
 	if s.selection == 0 {
 		// getSelectedUnit falls back to self (Chat.cpp:312); RewardHonor
 		// on self runs the gates below, then returns false silently.
 		s.honorSelfKillTail()
-		return
+		return true
 	}
 	var victim *session
 	if s.server != nil {
@@ -148,16 +141,17 @@ func (s *session) handleHonorAddKill(ctx context.Context) {
 	}
 	if victim == nil || victim.player == nil {
 		s.sendSysMessage("honor add kill on a creature is not supported: selected-unit creature targets have no Go bridge.")
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: victim}) {
-		return // C++ HasLowerSecurity: silent fail
+		return false // C++ HasLowerSecurity: silent fail
 	}
 	if victim == s {
 		s.honorSelfKillTail()
-		return
+		return true
 	}
 	s.rewardHonorKill(ctx, victim)
+	return true
 }
 
 // honorSelfKillTail mirrors the victim==this path of Player::RewardHonor
@@ -175,26 +169,27 @@ func (s *session) honorSelfKillTail() {
 }
 
 // handleHonorUpdate mirrors HandleHonorUpdateCommand (cs_honor.cpp:98).
-func (s *session) handleHonorUpdate(ctx context.Context) {
+func (s *session) handleHonorUpdate(ctx context.Context) bool {
 	target := s
 	if s.selection != 0 && s.server != nil {
 		ts := s.server.playerSessionForGUID(s.selection)
 		if ts == nil || ts.player == nil {
 			s.sendSysMessage("Player not found.")
-			return
+			return true
 		}
 		target = ts
 	}
 	if target.player == nil {
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target}) {
-		return // C++ HasLowerSecurity: silent fail
+		return false // C++ HasLowerSecurity: silent fail
 	}
 	target.updateHonorFields()
 	target.persistHonorFields(ctx)
 	target.sendPlayerUpdate()
+	return true
 }
 
 // updateHonorFields mirrors Player::UpdateHonorFields (Player.cpp:6830):

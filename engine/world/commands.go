@@ -3480,10 +3480,9 @@ func ahbotRatioPerm(args []string) (uint32, bool) {
 // handleCmdCharacter dispatches ".character customize|changefaction|changerace|
 // changeaccount|deleted|erase|level|rename|reputation|titles"
 // (cs_character.cpp characterCommandTable), gating each arm on its RBAC permission.
-func (s *session) handleCmdCharacter(ctx context.Context, args []string) {
+func (s *session) handleCmdCharacter(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .character customize|changefaction|changerace|changeaccount|deleted|erase|level|rename|reputation|titles")
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -3511,35 +3510,34 @@ func (s *session) handleCmdCharacter(ctx context.Context, args []string) {
 	case "titles":
 		perm = permissionCommandCharacterTitles
 	default:
-		s.sendSysMessage("Syntax: .character customize|changefaction|changerace|changeaccount|deleted|erase|level|rename|reputation|titles")
-		return
+		return false
 	}
 	if !deletedNested && !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch sub {
 	case "customize":
-		s.handleCharacterAtLoginFlag(ctx, rest, atLoginCustomize, "customize")
+		return s.handleCharacterAtLoginFlag(ctx, rest, atLoginCustomize, "customize")
 	case "changefaction":
-		s.handleCharacterAtLoginFlag(ctx, rest, atLoginChangeFaction, "change faction")
+		return s.handleCharacterAtLoginFlag(ctx, rest, atLoginChangeFaction, "change faction")
 	case "changerace":
-		s.handleCharacterAtLoginFlag(ctx, rest, atLoginChangeRace, "change race")
+		return s.handleCharacterAtLoginFlag(ctx, rest, atLoginChangeRace, "change race")
 	case "changeaccount":
-		s.handleCharacterChangeAccount(ctx, rest)
+		return s.handleCharacterChangeAccount(ctx, rest)
 	case "deleted":
-		s.handleCharacterDeleted(ctx, rest)
+		return s.handleCharacterDeleted(ctx, rest)
 	case "erase":
-		s.handleCharacterErase(ctx, rest)
+		return s.handleCharacterErase(ctx, rest)
 	case "level":
-		s.handleCharacterLevel(ctx, rest)
+		return s.handleCharacterLevel(ctx, rest)
 	case "rename":
-		s.handleCharacterRename(ctx, rest)
+		return s.handleCharacterRename(ctx, rest)
 	case "reputation":
-		s.handleCharacterReputation(ctx, rest)
+		return s.handleCharacterReputation(ctx, rest)
 	case "titles":
-		s.handleCharacterTitles(ctx, rest)
+		return s.handleCharacterTitles(ctx, rest)
 	}
+	return false
 }
 
 // characterTarget mirrors the Trinity PlayerIdentifier resolve used by the
@@ -3554,11 +3552,38 @@ type characterTarget struct {
 	online *session
 }
 
+// resolveFailKind distinguishes the two C++ failure modes of a
+// PlayerIdentifier resolve: no target at all (nullopt -> the handler
+// returns false silently) vs a bad name/GUID token (framework parse error
+// -> the handler prints and returns true). The character family needs the
+// distinction because the same helper failure is silent-false for some arms
+// (level, at-login flags) and message+true for others (titles, reputation).
+type resolveFailKind int
+
+const (
+	resolveOK resolveFailKind = iota
+	resolveFailSilent
+	resolveFailMessage
+)
+
 // resolveCharacterTarget consumes an optional leading character name and
 // returns the resolved target plus the remaining args. It reports false and
 // sends the C++ LANG_PLAYER_NOT_FOUND equivalent when the name resolves to
-// nothing.
+// nothing. Learn/LFG keep this wrapper (their ticks classified the failure
+// as message+true); the character family uses resolveCharacterTargetKind
+// for the silent-vs-message split.
 func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (characterTarget, []string, bool) {
+	t, rest, fail := s.resolveCharacterTargetKind(ctx, args)
+	if fail != resolveOK {
+		s.sendSysMessage("Player not found.")
+		return t, rest, false
+	}
+	return t, rest, true
+}
+
+// resolveCharacterTargetKind is the message-free core of
+// resolveCharacterTarget: it classifies the failure instead of printing.
+func (s *session) resolveCharacterTargetKind(ctx context.Context, args []string) (characterTarget, []string, resolveFailKind) {
 	var t characterTarget
 	if len(args) == 0 {
 		// PlayerIdentifier::FromTargetOrSelf (ChatCommandTags.cpp): the
@@ -3568,17 +3593,16 @@ func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (ch
 				t.online = ts
 				t.guid = ts.playerGUID
 				t.name = ts.player.Name
-				return t, args, true
+				return t, args, resolveOK
 			}
 		}
 		if s.player == nil {
-			s.sendSysMessage("Player not found.")
-			return t, args, false
+			return t, args, resolveFailSilent
 		}
 		t.online = s
 		t.guid = s.playerGUID
 		t.name = s.player.Name
-		return t, args, true
+		return t, args, resolveOK
 	}
 	// C++ PlayerIdentifier::TryConsume (ChatCommandTags.cpp:88-121)
 	// accepts three forms in order: a |Hplayer link, a numeric player
@@ -3594,7 +3618,7 @@ func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (ch
 			t.online = online
 			t.guid = online.playerGUID
 			t.name = online.player.Name
-			return t, args[1:], true
+			return t, args[1:], resolveOK
 		}
 		chars := s.server.CharactersStore
 		if chars != nil && chars.DB != nil {
@@ -3602,18 +3626,16 @@ func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (ch
 			if err := chars.DB.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid64).Scan(&dbName); err == nil && dbName != "" {
 				t.guid = guid64
 				t.name = dbName
-				return t, args[1:], true
+				return t, args[1:], resolveOK
 			}
 		}
-		s.sendSysMessage("Player not found.")
-		return t, args, false
+		return t, args, resolveFailMessage
 	} else {
 		name = normalizePlayerName(args[0])
 	}
 	t.name = name
 	if name == "" {
-		s.sendSysMessage("Player not found.")
-		return t, args, false
+		return t, args, resolveFailMessage
 	}
 	if online := s.sessionForPlayerName(name); online != nil {
 		t.online = online
@@ -3621,18 +3643,16 @@ func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (ch
 		if online.player != nil {
 			t.name = online.player.Name
 		}
-		return t, args[1:], true
+		return t, args[1:], resolveOK
 	}
 	chars := s.server.CharactersStore
 	if chars == nil || chars.DB == nil {
-		s.sendSysMessage("Player not found.")
-		return t, args, false
+		return t, args, resolveFailMessage
 	}
 	if err := chars.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&t.guid); err != nil || t.guid == 0 {
-		s.sendSysMessage("Player not found.")
-		return t, args, false
+		return t, args, resolveFailMessage
 	}
-	return t, args[1:], true
+	return t, args[1:], resolveOK
 }
 
 // resolveCharacterTargetFromTarget mirrors the C++ FromTarget arms
@@ -3641,18 +3661,19 @@ func (s *session) resolveCharacterTarget(ctx context.Context, args []string) (ch
 // the selected connected player only — Player::GetSelectedPlayer returns
 // null with no selection or a non-player selection, so the handler fails
 // instead of falling back to self. With a name argument the shared
-// resolveCharacterTarget forms apply.
-func (s *session) resolveCharacterTargetFromTarget(ctx context.Context, args []string, syntax string) (characterTarget, []string, bool) {
+// resolveCharacterTarget forms apply. R13: no message is sent here; the
+// caller classifies the failure (silent-false for no selection, message+true
+// for a bad token).
+func (s *session) resolveCharacterTargetFromTarget(ctx context.Context, args []string) (characterTarget, []string, resolveFailKind) {
 	if len(args) == 0 {
 		if s.selection != 0 && s.server != nil {
 			if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
-				return characterTarget{online: ts, guid: ts.playerGUID, name: ts.player.Name}, args, true
+				return characterTarget{online: ts, guid: ts.playerGUID, name: ts.player.Name}, args, resolveOK
 			}
 		}
-		s.sendSysMessage(syntax)
-		return characterTarget{}, args, false
+		return characterTarget{}, args, resolveFailSilent
 	}
-	return s.resolveCharacterTarget(ctx, args)
+	return s.resolveCharacterTargetKind(ctx, args)
 }
 
 // characterArmBlocked RBAC-gates a documented-only character arm and reports
@@ -3665,28 +3686,31 @@ func (s *session) characterArmBlocked(perm uint32, reason string) {
 // HandleCharacterChangeFactionCommand and HandleCharacterChangeRaceCommand
 // (cs_character.cpp:394/418/442): online targets get the at-login flag set on
 // the live player, offline targets get CHAR_UPD_ADD_AT_LOGIN_FLAG.
-func (s *session) handleCharacterAtLoginFlag(ctx context.Context, args []string, flag uint64, what string) {
-	syntax := "Syntax: .character " + strings.ReplaceAll(what, " ", "") + " [$player]"
-	t, rest, ok := s.resolveCharacterTargetFromTarget(ctx, args, syntax)
-	if !ok {
-		return
+func (s *session) handleCharacterAtLoginFlag(ctx context.Context, args []string, flag uint64, what string) bool {
+	t, rest, fail := s.resolveCharacterTargetFromTarget(ctx, args)
+	if fail != resolveOK {
+		if fail == resolveFailMessage {
+			s.sendSysMessage("Player not found.")
+			return true
+		}
+		return false
 	}
 	if len(rest) != 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if t.online != nil && t.online.player != nil {
 		t.online.player.AtLogin |= uint32(flag)
 		t.online.sendPlayerUpdate()
 		s.sendSysMessage(fmt.Sprintf("Set %s flag for %s. Please relog.", what, t.name))
-		return
+		return true
 	}
 	chars := s.server.CharactersStore
 	if chars == nil {
-		return
+		return false
 	}
 	_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ADD_AT_LOGIN_FLAG"), uint16(flag), t.guid)
 	s.sendSysMessage(fmt.Sprintf("Set %s flag for %s (GUID: %d).", what, t.name, t.guid))
+	return true
 }
 
 // handleCharacterLevel mirrors HandleLevelUpCommand (cs_character.cpp:740):
@@ -3694,20 +3718,38 @@ func (s *session) handleCharacterAtLoginFlag(ctx context.Context, args []string,
 // 1..STRONG_MAX_LEVEL (255, DBCEnums.h:53). Online targets are
 // leveled in place with XP reset; offline targets get CHAR_UPD_LEVEL.
 // InitTalentForLevel has no Go bridge: talents are left untouched.
-func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
-	t, rest, ok := s.resolveCharacterTarget(ctx, args)
-	if !ok {
-		return
+func (s *session) handleCharacterLevel(ctx context.Context, args []string) bool {
+	t, rest, fail := s.resolveCharacterTargetKind(ctx, args)
+	if fail != resolveOK {
+		// D1: a lone token that fails the PlayerIdentifier resolve is
+		// retried as the int16 delta for self (Optional-consumer omit-path,
+		// cs_character.cpp:740-745) — ".character level 5" levels self +5.
+		if fail == resolveFailMessage && len(args) == 1 {
+			if deltaVal, ok := parseCppBase0Int(args[0]); ok && deltaVal >= math.MinInt16 && deltaVal <= math.MaxInt16 {
+				if self, _, selfFail := s.resolveCharacterTargetKind(ctx, nil); selfFail == resolveOK {
+					t, rest = self, args
+				} else {
+					return false
+				}
+			} else {
+				s.sendSysMessage("Player not found.")
+				return true
+			}
+		} else if fail == resolveFailMessage {
+			s.sendSysMessage("Player not found.")
+			return true
+		} else {
+			return false
+		}
 	}
 	if len(rest) != 1 {
-		s.sendSysMessage("Syntax: .character level [$player] <level-delta>")
-		return
+		return false
 	}
 	// C++ level arg is int16 parsed base-0 (StringTo<int16>, base 0).
 	deltaVal, ok := parseCppBase0Int(rest[0])
 	if !ok || deltaVal < math.MinInt16 || deltaVal > math.MaxInt16 {
 		s.sendSysMessage("Syntax: .character level [$player] <level-delta>")
-		return
+		return true
 	}
 	delta := int(deltaVal)
 	oldLevel := 0
@@ -3716,13 +3758,11 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 	} else {
 		chars := s.server.CharactersStore
 		if chars == nil || chars.DB == nil {
-			s.sendSysMessage("Player not found.")
-			return
+			return false
 		}
 		var lvl uint8
 		if err := chars.DB.QueryRowContext(ctx, "SELECT level FROM characters WHERE guid = ?", t.guid).Scan(&lvl); err != nil {
-			s.sendSysMessage("Player not found.")
-			return
+			return false
 		}
 		oldLevel = int(lvl)
 	}
@@ -3759,13 +3799,14 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 	} else {
 		chars := s.server.CharactersStore
 		if chars == nil {
-			return
+			return false
 		}
 		_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_LEVEL"), uint8(newLevel), t.guid)
 	}
 	if t.online == nil || t.online != s { // C++: handler line suppressed when invoker == target
 		s.sendSysMessage(fmt.Sprintf("Changed level of %s to %d.", t.name, newLevel))
 	}
+	return true
 }
 
 // handleCharacterRename mirrors HandleCharacterRenameCommand
@@ -3775,18 +3816,25 @@ func (s *session) handleCharacterLevel(ctx context.Context, args []string) {
 // ObjectMgr::CheckPlayerName rules and the reserved-name
 // RBAC_PERM_SKIP_CHECK_CHARACTER_CREATION_RESERVEDNAME exemption have no Go
 // bridge: only name normalization and the duplicate-name DB check apply.
-func (s *session) handleCharacterRename(ctx context.Context, args []string) {
-	const syntax = "Syntax: .character rename [$player] [$newName]"
-	t, rest, ok := s.resolveCharacterTargetFromTarget(ctx, args, syntax)
-	if !ok {
-		return
+func (s *session) handleCharacterRename(ctx context.Context, args []string) bool {
+	t, rest, fail := s.resolveCharacterTargetFromTarget(ctx, args)
+	if fail != resolveOK {
+		// D2: a single token is the new name with an empty player
+		// (Optional-consumer omit-path, cs_character.cpp:288-289) — silent
+		// false. With two tokens the first is an unresolvable player name:
+		// the parse-error leg prints.
+		if len(args) == 1 {
+			return false
+		}
+		s.sendSysMessage("Player not found.")
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, t) {
-		return // C++ HasLowerSecurity: silent fail
+		return false // C++ HasLowerSecurity: silent fail
 	}
 	chars := s.server.CharactersStore
 	if chars == nil {
-		return
+		return false
 	}
 	if len(rest) == 0 {
 		// At-login rename flag on the resolved target.
@@ -3794,28 +3842,27 @@ func (s *session) handleCharacterRename(ctx context.Context, args []string) {
 			t.online.player.AtLogin |= uint32(atLoginRename)
 			t.online.sendPlayerUpdate()
 			s.sendSysMessage(fmt.Sprintf("Set rename flag for %s. Please relog to choose a new name.", t.name))
-			return
+			return true
 		}
 		_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ADD_AT_LOGIN_FLAG"), uint16(atLoginRename), t.guid)
 		s.sendSysMessage(fmt.Sprintf("Set rename flag for %s (GUID: %d).", t.name, t.guid))
-		return
+		return true
 	}
 	// ChatCommand.h:112 — the entire string must be consumed; a trailing
 	// token fails the command.
 	if len(rest) > 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	newName := normalizePlayerName(rest[0])
 	if newName == "" {
 		s.sendSysMessage("Incorrect value.")
-		return
+		return true
 	}
 	if row, err := chars.QueryRowStatement(ctx, database.StatementID("CHAR_SEL_CHECK_NAME"), newName); err == nil {
 		var one int
 		if row.Scan(&one) == nil {
 			s.sendSysMessage(fmt.Sprintf("Name %s is already in use.", newName))
-			return
+			return true
 		}
 	}
 	_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_DEL_DECLINED_NAME"), t.guid)
@@ -3830,6 +3877,7 @@ func (s *session) handleCharacterRename(ctx context.Context, args []string) {
 	}
 	// sCharacterCache->UpdateCharacterData has no Go character-cache bridge.
 	s.sendSysMessage(fmt.Sprintf("Renamed player %s to %s.", t.name, newName))
+	return true
 }
 
 // characterTargetLowerSecurity mirrors ChatHandler::HasLowerSecurity
@@ -3885,15 +3933,17 @@ func (s *session) characterTargetLowerSecurityStrong(ctx context.Context, t char
 // moves the row, and the destination account's character count is capped at
 // CONFIG_CHARACTERS_PER_REALM. The sCharacterCache account-id update has no
 // Go bridge: the row read above is the source of truth.
-func (s *session) handleCharacterChangeAccount(ctx context.Context, args []string) {
-	const syntax = "Syntax: .character changeaccount [$player] $account"
-	t, rest, ok := s.resolveCharacterTargetFromTarget(ctx, args, syntax)
-	if !ok {
-		return
+func (s *session) handleCharacterChangeAccount(ctx context.Context, args []string) bool {
+	t, rest, fail := s.resolveCharacterTargetFromTarget(ctx, args)
+	if fail != resolveOK {
+		if fail == resolveFailMessage {
+			s.sendSysMessage("Player not found.")
+			return true
+		}
+		return false
 	}
 	if len(rest) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	accountName := rest[0]
 	newAccountID := s.accountIDByName(ctx, accountName)
@@ -3910,31 +3960,32 @@ func (s *session) handleCharacterChangeAccount(ctx context.Context, args []strin
 	}
 	if newAccountID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", rest[0]))
-		return
+		return true
 	}
 	chars := s.server.CharactersStore
 	if chars == nil || chars.DB == nil {
-		return
+		return false
 	}
 	var oldAccountID uint32
 	if err := chars.DB.QueryRowContext(ctx, "SELECT account FROM characters WHERE guid = ?", t.guid).Scan(&oldAccountID); err != nil {
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	if newAccountID == oldAccountID {
-		return // C++: nothing to do
+		return true // C++: nothing to do
 	}
 	var charCount int
 	_ = chars.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM characters WHERE account = ?", newAccountID).Scan(&charCount)
 	if charCount >= int(s.server.Config.CharactersPerRealm) {
 		s.sendSysMessage(fmt.Sprintf("Account %s (%d) has too many characters.", accountName, newAccountID))
-		return
+		return true
 	}
 	if t.online != nil {
 		s.kickSession(t.online)
 	}
 	_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ACCOUNT_BY_GUID"), newAccountID, t.guid)
 	s.sendSysMessage(fmt.Sprintf("Changed ownership of player %s from account %d to account %s.", t.name, oldAccountID, accountName))
+	return true
 }
 
 // handleCharacterReputation mirrors HandleCharacterReputationCommand
@@ -3942,18 +3993,17 @@ func (s *session) handleCharacterChangeAccount(ctx context.Context, args []strin
 // with rank name and standing. The faction name resolves via the Faction DBC
 // (enUS, field 23); the session-locale name has no Go bridge (D7). Offline
 // targets are rejected exactly like the C++ IsConnected check.
-func (s *session) handleCharacterReputation(ctx context.Context, args []string) {
+func (s *session) handleCharacterReputation(ctx context.Context, args []string) bool {
 	t, rest, ok := s.resolveCharacterTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if len(rest) != 0 {
-		s.sendSysMessage("Syntax: .character reputation [$player]")
-		return
+		return false
 	}
 	if t.online == nil || t.online.player == nil {
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	rankNames := [...]string{"Hated", "Hostile", "Unfriendly", "Neutral", "Friendly", "Honored", "Revered", "Exalted"}
 	for _, rep := range t.online.player.Reputations {
@@ -3994,6 +4044,7 @@ func (s *session) handleCharacterReputation(ctx context.Context, args []string) 
 		}
 		s.sendSysMessage(line)
 	}
+	return true
 }
 
 // deletedCharacterInfo mirrors character_commandscript::DeletedInfo
@@ -4009,11 +4060,9 @@ type deletedCharacterInfo struct {
 // handleCharacterDeleted dispatches ".character deleted
 // delete|list|restore|old" (cs_character.cpp characterDeletedCommandTable),
 // gating each nested arm on its RBAC permission.
-func (s *session) handleCharacterDeleted(ctx context.Context, args []string) {
-	const syntax = "Syntax: .character deleted delete|list|restore|old ..."
+func (s *session) handleCharacterDeleted(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	// C++ TryExecuteCommand descends token-by-token through every subtable
 	// with prefix matching (ChatCommand.cpp:246); resolve() stops after the
@@ -4033,15 +4082,14 @@ func (s *session) handleCharacterDeleted(ctx context.Context, args []string) {
 		}
 	}
 	if len(matches) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if len(matches) > 1 {
 		s.sendSysMessage("There are multiple commands matching '" + sub + "'. Did you mean:")
 		for _, candidate := range matches {
 			s.sendSysMessage(candidate)
 		}
-		return
+		return true
 	}
 	sub = matches[0]
 	rest := args[1:]
@@ -4056,32 +4104,33 @@ func (s *session) handleCharacterDeleted(ctx context.Context, args []string) {
 	case "old":
 		perm = permissionCommandCharacterDeletedOld
 	default:
-		s.sendSysMessage("Syntax: .character deleted delete|list|restore|old ...")
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch sub {
 	case "delete":
-		s.handleCharacterDeletedDelete(ctx, rest)
+		return s.handleCharacterDeletedDelete(ctx, rest)
 	case "list":
-		s.handleCharacterDeletedList(ctx, rest)
+		return s.handleCharacterDeletedList(ctx, rest)
 	case "restore":
-		s.handleCharacterDeletedRestore(ctx, rest)
+		return s.handleCharacterDeletedRestore(ctx, rest)
 	case "old":
-		s.handleCharacterDeletedOld(ctx, rest)
+		return s.handleCharacterDeletedOld(ctx, rest)
 	}
+	return false
 }
 
 // deletedCharacterInfoList mirrors GetDeletedCharacterInfoList
 // (cs_character.cpp:114): a numeric needle searches by guid, anything else by
-// normalized name, an empty needle lists every deleted character.
-func (s *session) deletedCharacterInfoList(ctx context.Context, needle string) []deletedCharacterInfo {
+// normalized name, an empty needle lists every deleted character. The bool
+// reports false only for an unnormalizable needle (C++ :122 returns false
+// silently); a valid needle with no matches returns an empty list with true.
+func (s *session) deletedCharacterInfoList(ctx context.Context, needle string) ([]deletedCharacterInfo, bool) {
 	chars := s.server.CharactersStore
 	if chars == nil {
-		return nil
+		return nil, true
 	}
 	var rows *sql.Rows
 	var err error
@@ -4091,10 +4140,14 @@ func (s *session) deletedCharacterInfoList(ctx context.Context, needle string) [
 	case isNumericString(needle):
 		rows, err = chars.QueryStatement(ctx, database.StatementID("CHAR_SEL_CHAR_DEL_INFO_BY_GUID"), needle)
 	default:
-		rows, err = chars.QueryStatement(ctx, database.StatementID("CHAR_SEL_CHAR_DEL_INFO_BY_NAME"), normalizePlayerName(needle))
+		if name := normalizePlayerName(needle); name == "" {
+			return nil, false
+		} else {
+			rows, err = chars.QueryStatement(ctx, database.StatementID("CHAR_SEL_CHAR_DEL_INFO_BY_NAME"), name)
+		}
 	}
 	if err != nil {
-		return nil
+		return nil, true
 	}
 	defer rows.Close()
 	var found []deletedCharacterInfo
@@ -4113,7 +4166,7 @@ func (s *session) deletedCharacterInfoList(ctx context.Context, needle string) [
 		info.accountName = s.accountNameByID(ctx, info.accountID)
 		found = append(found, info)
 	}
-	return found
+	return found, true
 }
 
 // isNumericString mirrors TrinityCore isNumeric for the deleted-list needle.
@@ -4146,24 +4199,27 @@ func (s *session) sendDeletedCharacterList(found []deletedCharacterInfo) {
 
 // handleCharacterDeletedList mirrors HandleCharacterDeletedListCommand
 // (cs_character.cpp:581).
-func (s *session) handleCharacterDeletedList(ctx context.Context, args []string) {
+func (s *session) handleCharacterDeletedList(ctx context.Context, args []string) bool {
 	// The needle is Optional in C++ (HandleCharacterDeletedListCommand,
 	// cs_character.cpp:581), but a second token fails the
 	// whole-string-consumed check (ChatCommand.h:112).
 	if len(args) > 1 {
-		s.sendSysMessage("Syntax: .character deleted list [$needle]")
-		return
+		return false
 	}
 	needle := ""
 	if len(args) > 0 {
 		needle = args[0]
 	}
-	found := s.deletedCharacterInfoList(ctx, needle)
+	found, ok := s.deletedCharacterInfoList(ctx, needle)
+	if !ok {
+		return false
+	}
 	if len(found) == 0 {
 		s.sendSysMessage("No deleted characters found.")
-		return
+		return true
 	}
 	s.sendDeletedCharacterList(found)
+	return true
 }
 
 // handleCharacterDeletedRestore mirrors HandleCharacterDeletedRestoreCommand
@@ -4171,16 +4227,31 @@ func (s *session) handleCharacterDeletedList(ctx context.Context, args []string)
 // which requires exactly one match. The restore skips characters whose
 // account no longer exists, whose account is full (>= 10 characters, the C++
 // hardcoded cap), or whose name is taken by a live character.
-func (s *session) handleCharacterDeletedRestore(ctx context.Context, args []string) {
+func (s *session) handleCharacterDeletedRestore(ctx context.Context, args []string) bool {
 	if len(args) == 0 || len(args) > 3 {
-		s.sendSysMessage("Syntax: .character deleted restore $needle [$newName [$newAccount]]")
-		return
+		return false
 	}
 	needle := args[0]
-	found := s.deletedCharacterInfoList(ctx, needle)
+	found, ok := s.deletedCharacterInfoList(ctx, needle)
+	if !ok {
+		return false
+	}
 	if len(found) == 0 {
 		s.sendSysMessage("No deleted characters found.")
-		return
+		return true
+	}
+	// D3(a): the new account is parsed before the handler runs in C++
+	// (AccountIdentifier::TryConsume), so a bad account errors before the
+	// "Restoring…" header and list print.
+	var newAccountID uint32
+	var newAccountName string
+	if len(args) > 2 {
+		newAccountID = s.accountIDByName(ctx, args[2])
+		if newAccountID == 0 {
+			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[2]))
+			return true
+		}
+		newAccountName = args[2]
 	}
 	s.sendSysMessage("Restoring deleted characters:")
 	s.sendDeletedCharacterList(found)
@@ -4188,26 +4259,22 @@ func (s *session) handleCharacterDeletedRestore(ctx context.Context, args []stri
 		for _, info := range found {
 			s.restoreDeletedCharacter(ctx, info)
 		}
-		return
+		return true
 	}
 	if len(found) != 1 {
 		s.sendSysMessage("Rename requires exactly one matching character.")
-		return
+		return true
 	}
 	info := found[0]
 	// The C++ assigns the new name verbatim (cs_character.cpp:614-655);
 	// normalizePlayerName here would restore "bob" as "Bob".
 	info.name = args[1]
 	if len(args) > 2 {
-		newAccountID := s.accountIDByName(ctx, args[2])
-		if newAccountID == 0 {
-			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[2]))
-			return
-		}
 		info.accountID = newAccountID
-		info.accountName = args[2]
+		info.accountName = newAccountName
 	}
 	s.restoreDeletedCharacter(ctx, info)
+	return true
 }
 
 // restoreDeletedCharacter mirrors HandleCharacterDeletedRestoreHelper
@@ -4229,37 +4296,39 @@ func (s *session) restoreDeletedCharacter(ctx context.Context, info deletedChara
 		return
 	}
 	_, _ = s.server.CharactersStore.ExecStatement(ctx, database.StatementID("CHAR_UPD_RESTORE_DELETE_INFO"), info.name, info.accountID, info.guid)
-	s.sendSysMessage(fmt.Sprintf("Restored %s (%d).", info.name, info.guid))
+	// C++ HandleCharacterDeletedRestoreHelper prints nothing on success.
 }
 
 // handleCharacterDeletedDelete mirrors HandleCharacterDeletedDeleteCommand
 // (cs_character.cpp:672): every match is permanently wiped via the
 // Player::DeleteFromDB path (mail return sweep + owned-state cleanup).
-func (s *session) handleCharacterDeletedDelete(ctx context.Context, args []string) {
+func (s *session) handleCharacterDeletedDelete(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .character deleted delete $needle")
-		return
+		return false
 	}
-	found := s.deletedCharacterInfoList(ctx, args[0])
+	found, ok := s.deletedCharacterInfoList(ctx, args[0])
+	if !ok {
+		return false
+	}
 	if len(found) == 0 {
 		s.sendSysMessage("No deleted characters found.")
-		return
+		return true
 	}
 	s.sendSysMessage("Deleting characters:")
 	s.sendDeletedCharacterList(found)
 	for _, info := range found {
 		s.deleteCharacterFromDB(ctx, info.guid, 0)
 	}
+	return true
 }
 
 // handleCharacterDeletedOld mirrors HandleCharacterDeletedOldCommand
 // (cs_character.cpp:706): permanently wipes characters deleted more than
 // $days ago. The C++ CONFIG_CHARDELETE_KEEP_DAYS config has no Go bridge,
 // so the days argument is required.
-func (s *session) handleCharacterDeletedOld(ctx context.Context, args []string) {
+func (s *session) handleCharacterDeletedOld(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
-		s.sendSysMessage("Syntax: .character deleted old $days")
-		return
+		return false
 	}
 	// C++ days is Optional<uint16> parsed base-0 (StringTo<uint16>, base 0);
 	// an explicit 0 is valid (DeleteOldCharacters(0) wipes every deleted
@@ -4267,7 +4336,7 @@ func (s *session) handleCharacterDeletedOld(ctx context.Context, args []string) 
 	daysVal, ok := parseCppBase0Int(args[0])
 	if !ok || daysVal < 0 || daysVal > math.MaxUint16 {
 		s.sendSysMessage("Syntax: .character deleted old $days")
-		return
+		return true
 	}
 	days := int(daysVal)
 	cutoff := time.Now().Unix() - int64(days)*86400
@@ -4276,7 +4345,7 @@ func (s *session) handleCharacterDeletedOld(ctx context.Context, args []string) 
 	// the doomed-mail rehoming in DeleteFromDB instead of 0.
 	rows, err := s.server.CharactersStore.QueryStatement(ctx, database.StatementID("CHAR_SEL_CHAR_OLD_CHARS"), cutoff)
 	if err != nil {
-		return
+		return false
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -4291,7 +4360,9 @@ func (s *session) handleCharacterDeletedOld(ctx context.Context, args []string) 
 		}
 		s.deleteCharacterFromDB(ctx, guid, accountID)
 	}
-	s.sendSysMessage(fmt.Sprintf("Deleted characters older than %d days.", days))
+	// C++ prints nothing and returns true (:717); the Go success line is
+	// dropped (D4).
+	return true
 }
 
 // deleteCharacterFromDB mirrors the Player::DeleteFromDB sweep used by the
@@ -4348,18 +4419,16 @@ func (s *session) deleteCharacterFromDB(ctx context.Context, guid uint64, accoun
 // handleCharacterErase mirrors HandleCharacterEraseCommand
 // (cs_character.cpp:720): the character is kicked if online, then permanently
 // wiped via the Player::DeleteFromDB path.
-func (s *session) handleCharacterErase(ctx context.Context, args []string) {
+func (s *session) handleCharacterErase(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .character erase $player") // C++ player arg is non-optional; never erase the invoker
-		return
+		return false
 	}
 	t, rest, ok := s.resolveCharacterTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if len(rest) != 0 {
-		s.sendSysMessage("Syntax: .character erase $player")
-		return
+		return false
 	}
 	var accountID uint32
 	if t.online != nil {
@@ -4371,26 +4440,25 @@ func (s *session) handleCharacterErase(ctx context.Context, args []string) {
 	accountName := s.accountNameByID(ctx, accountID)
 	s.deleteCharacterFromDB(ctx, t.guid, accountID)
 	s.sendSysMessage(fmt.Sprintf("Deleted character %s (%d) of account %s (%d).", t.name, t.guid, accountName, accountID))
+	return true
 }
 
 // handleCmdLevelup dispatches ".levelup" (cs_character.cpp commandTable), the
 // console-hidden alias of the character level arm gated on
 // RBAC_PERM_COMMAND_LEVELUP.
-func (s *session) handleCmdLevelup(ctx context.Context, args []string) {
+func (s *session) handleCmdLevelup(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandLevelup) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
-	s.handleCharacterLevel(ctx, args)
+	return s.handleCharacterLevel(ctx, args)
 }
 
 // handleCmdPDump dispatches ".pdump copy|load|write" (cs_character.cpp
 // pdumpCommandTable). The PlayerDump writer/reader has no Go bridge, so each
 // arm is RBAC-gated and reports the missing bridge honestly.
-func (s *session) handleCmdPDump(ctx context.Context, args []string) {
+func (s *session) handleCmdPDump(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .pdump copy|load|write ...")
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	var perm uint32
@@ -4402,15 +4470,14 @@ func (s *session) handleCmdPDump(ctx context.Context, args []string) {
 	case "write":
 		perm = permissionCommandPDumpWrite
 	default:
-		s.sendSysMessage("Syntax: .pdump copy|load|write ...")
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	s.characterArmBlocked(perm,
 		"pdump "+sub+" needs the PlayerDump writer/reader: no dump serialization exists in Go")
+	return true
 }
 
 // upperOnlyLatin mirrors TrinityCore Utf8ToUpperOnlyLatin: only ASCII
@@ -8787,29 +8854,25 @@ func (s *session) buildCommandTree() *commandNode {
 	serverIdleShutdown.leaf("cancel", func(ctx context.Context, args []string) bool {
 		return s.handleCmdServer(ctx, append([]string{"idleshutdown", "cancel"}, args...))
 	}, permissionCommandServerIdleshutdownCancel)
-	characterNode := root.addWithPerms("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, map[string]uint32{"customize": permissionCommandCharacterCustomize, "changefaction": permissionCommandCharacterChangeFaction, "changerace": permissionCommandCharacterChangeRace, "changeaccount": permissionCommandCharacterChangeAccount, "deleted": 0, "erase": permissionCommandCharacterErase, "level": permissionCommandCharacterLevel, "rename": permissionCommandCharacterRename, "reputation": permissionCommandCharacterReputation, "titles": permissionCommandCharacterTitles}, map[string]string{"char": "character"})
+	characterNode := root.addWithPerms("character", func(ctx context.Context, args []string) bool { return s.handleCmdCharacter(ctx, args) }, map[string]uint32{"customize": permissionCommandCharacterCustomize, "changefaction": permissionCommandCharacterChangeFaction, "changerace": permissionCommandCharacterChangeRace, "changeaccount": permissionCommandCharacterChangeAccount, "deleted": 0, "erase": permissionCommandCharacterErase, "level": permissionCommandCharacterLevel, "rename": permissionCommandCharacterRename, "reputation": permissionCommandCharacterReputation, "titles": permissionCommandCharacterTitles}, map[string]string{"char": "character"})
 	// R13 depth (cs_character.cpp:57-60, old-form table): "deleted"
 	// is a sub-table with delete/list/restore/old leaves and no ""
 	// entry, so the group node stays handler-less.
 	characterDeleted := characterNode.group("deleted")
 	characterDeleted.leaf("delete", func(ctx context.Context, args []string) bool {
-		s.handleCmdCharacter(ctx, append([]string{"deleted", "delete"}, args...))
-		return true
+		return s.handleCmdCharacter(ctx, append([]string{"deleted", "delete"}, args...))
 	}, permissionCommandCharacterDeletedDelete)
 	characterDeleted.leaf("list", func(ctx context.Context, args []string) bool {
-		s.handleCmdCharacter(ctx, append([]string{"deleted", "list"}, args...))
-		return true
+		return s.handleCmdCharacter(ctx, append([]string{"deleted", "list"}, args...))
 	}, permissionCommandCharacterDeletedList)
 	characterDeleted.leaf("restore", func(ctx context.Context, args []string) bool {
-		s.handleCmdCharacter(ctx, append([]string{"deleted", "restore"}, args...))
-		return true
+		return s.handleCmdCharacter(ctx, append([]string{"deleted", "restore"}, args...))
 	}, permissionCommandCharacterDeletedRestore)
 	characterDeleted.leaf("old", func(ctx context.Context, args []string) bool {
-		s.handleCmdCharacter(ctx, append([]string{"deleted", "old"}, args...))
-		return true
+		return s.handleCmdCharacter(ctx, append([]string{"deleted", "old"}, args...))
 	}, permissionCommandCharacterDeletedOld)
-	root.add("levelup", func(ctx context.Context, args []string) bool { s.handleCmdLevelup(ctx, args); return true }, nil, nil).withPerm(permissionCommandLevelup)
-	root.addWithPerms("pdump", func(ctx context.Context, args []string) bool { s.handleCmdPDump(ctx, args); return true }, map[string]uint32{"copy": permissionCommandPDumpCopy, "load": permissionCommandPDumpLoad, "write": permissionCommandPDumpWrite}, nil)
+	root.add("levelup", func(ctx context.Context, args []string) bool { return s.handleCmdLevelup(ctx, args) }, nil, nil).withPerm(permissionCommandLevelup)
+	root.addWithPerms("pdump", func(ctx context.Context, args []string) bool { return s.handleCmdPDump(ctx, args) }, map[string]uint32{"copy": permissionCommandPDumpCopy, "load": permissionCommandPDumpLoad, "write": permissionCommandPDumpWrite}, nil)
 	accountNode := root.addWithPerms("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, map[string]uint32{"set": 0, "password": permissionCommandAccountPassword, "addon": permissionCommandAccountAddon, "email": permissionCommandAccountEmail, "lock": 0, "2fa": 0, "create": permissionCommandAccountCreate, "delete": permissionCommandAccountDelete, "onlinelist": permissionCommandAccountOnlineList}, map[string]string{"acct": "account"})
 	// R13 depth (cs_account.cpp:53-76): "set", "lock" and "2fa" are
 	// sub-tables and "sec regmail"/"sec email" multi-word names, so
@@ -8943,18 +9006,16 @@ func (s *session) buildCommandTree() *commandNode {
 	}, permissionCommandGObjectSetState)
 	root.addWithPerms("group", func(ctx context.Context, args []string) bool { s.handleCmdGroup(ctx, args); return true }, map[string]uint32{"set": permissionCommandGroupSet, "leader": permissionCommandGroupLeader, "disband": permissionCommandGroupDisband, "remove": permissionCommandGroupRemove, "join": permissionCommandGroupJoin, "list": permissionCommandGroupList, "summon": permissionCommandGroupSummon}, nil).withPerm(permissionCommandGroup)
 	root.addWithPerms("guild", func(ctx context.Context, args []string) bool { s.handleCmdGuild(ctx, args); return true }, map[string]uint32{"create": permissionCommandGuildCreate, "delete": permissionCommandGuildDelete, "invite": permissionCommandGuildInvite, "uninvite": permissionCommandGuildUninvite, "rank": permissionCommandGuildRank, "rename": permissionCommandGuildRename, "info": permissionCommandGuildInfo}, nil).withPerm(permissionCommandGuild)
-	honorNode := root.addWithPerms("honor", func(ctx context.Context, args []string) bool { s.handleCmdHonor(ctx, args); return true }, map[string]uint32{"add": permissionCommandHonorAdd, "update": permissionCommandHonorUpdate}, nil).withPerm(permissionCommandHonor)
+	honorNode := root.addWithPerms("honor", func(ctx context.Context, args []string) bool { return s.handleCmdHonor(ctx, args) }, map[string]uint32{"add": permissionCommandHonorAdd, "update": permissionCommandHonorUpdate}, nil).withPerm(permissionCommandHonor)
 	// R13 depth (cs_honor.cpp:45-51): "add" is a sub-table with a
 	// kill leaf and a "" entry (the amount handler), so the group
 	// node keeps its handler via the family switch.
 	honorAdd := honorNode.group("add")
 	honorAdd.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdHonor(ctx, append([]string{"add"}, args...))
-		return true
+		return s.handleCmdHonor(ctx, append([]string{"add"}, args...))
 	}
 	honorAdd.leaf("kill", func(ctx context.Context, args []string) bool {
-		s.handleCmdHonor(ctx, append([]string{"add", "kill"}, args...))
-		return true
+		return s.handleCmdHonor(ctx, append([]string{"add", "kill"}, args...))
 	}, permissionCommandHonorAddKill)
 	root.addWithPerms("instance", func(ctx context.Context, args []string) bool { s.handleCmdInstance(ctx, args); return true }, map[string]uint32{"listbinds": permissionCommandInstanceListBinds, "unbind": permissionCommandInstanceUnbind, "stats": permissionCommandInstanceStats, "savedata": permissionCommandInstanceSaveData, "setbossstate": permissionCommandInstanceSetBossState, "getbossstate": permissionCommandInstanceGetBossState}, nil).withPerm(permissionCommandInstance)
 	learnNode := root.add("learn", func(ctx context.Context, args []string) bool { return s.handleCmdLearn(ctx, args) }, []string{"all", "my"}, nil)
@@ -9181,15 +9242,14 @@ func (s *session) buildCommandTree() *commandNode {
 	root.addWithPerms("quest", func(ctx context.Context, args []string) bool { return s.handleCmdQuest(ctx, args) }, map[string]uint32{"add": permissionCommandQuestAdd, "complete": permissionCommandQuestComplete, "remove": permissionCommandQuestRemove, "reward": permissionCommandQuestReward}, nil).withPerm(permissionCommandQuest)
 	root.addWithPerms("pet", func(ctx context.Context, args []string) bool { return s.handleCmdPet(ctx, args) }, map[string]uint32{"create": permissionCommandPetCreate, "learn": permissionCommandPetLearn, "unlearn": permissionCommandPetUnlearn, "level": permissionCommandPetLevel}, nil).withPerm(permissionCommandPet)
 	root.addWithPerms("rbac", func(ctx context.Context, args []string) bool { s.handleCmdRBAC(ctx, args); return true }, map[string]uint32{"account": permissionCommandRBACAcc, "list": permissionCommandRBACList}, nil).withPerm(permissionCommandRBAC)
-	reloadNode := root.addWithPerms("reload", func(ctx context.Context, args []string) bool { s.handleCmdReload(ctx, args); return true }, map[string]uint32{"all": permissionCommandReloadAll}, nil).withPerm(permissionCommandReload)
+	reloadNode := root.addWithPerms("reload", func(ctx context.Context, args []string) bool { return s.handleCmdReload(ctx, args) }, map[string]uint32{"all": permissionCommandReloadAll}, nil).withPerm(permissionCommandReload)
 	// R13 depth (cs_reload.cpp:63-73): "all" is a sub-table with
 	// achievement/area/gossips/item/locales/loot/npc/quest/scripts/
 	// spell leaves plus a "" entry (reload everything), so the group
 	// node keeps its handler via the family switch.
 	reloadAll := reloadNode.group("all")
 	reloadAll.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdReload(ctx, append([]string{"all"}, args...))
-		return true
+		return s.handleCmdReload(ctx, append([]string{"all"}, args...))
 	}
 	for _, group := range []struct {
 		name string
@@ -9208,8 +9268,7 @@ func (s *session) buildCommandTree() *commandNode {
 	} {
 		group := group
 		reloadAll.leaf(group.name, func(ctx context.Context, args []string) bool {
-			s.handleCmdReload(ctx, append([]string{"all", group.name}, args...))
-			return true
+			return s.handleCmdReload(ctx, append([]string{"all", group.name}, args...))
 		}, group.perm)
 	}
 	root.addWithPerms("reset", func(ctx context.Context, args []string) bool { s.handleCmdReset(ctx, args); return true }, map[string]uint32{"achievements": permissionCommandResetAchievements, "honor": permissionCommandResetHonor, "level": permissionCommandResetLevel, "spells": permissionCommandResetSpells, "stats": permissionCommandResetStats, "talents": permissionCommandResetTalents, "all": permissionCommandResetAll}, nil).withPerm(permissionCommandReset)

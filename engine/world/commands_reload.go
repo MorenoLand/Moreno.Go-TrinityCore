@@ -206,8 +206,11 @@ func (s *session) runReloadArm(ctx context.Context, arm reloadArm, quiet bool) b
 		if db != nil {
 			var one int
 			if err := db.QueryRowContext(ctx, "SELECT 1 FROM "+arm.table+" LIMIT 1").Scan(&one); err != nil && !errors.Is(err, sql.ErrNoRows) && !missingTable(err) {
+				// C++ handlers return true even when the Load* call logs
+				// errors (no false leg for load failure), so the message
+				// leg returns true too — false would show the help listing.
 				s.sendSysMessage("DB table `" + arm.table + "` reload failed.")
-				return false
+				return true
 			}
 		}
 	}
@@ -320,18 +323,20 @@ var reloadAllGroups = map[string]reloadAllGroup{
 }
 
 // handleCmdReload dispatches the "reload" root (cs_reload.cpp:59-175).
-func (s *session) handleCmdReload(ctx context.Context, args []string) {
+// R13: denial returns false silently (C++ never invokes a denied leaf);
+// bare/unknown tokens return false silently (the dispatcher shows the help
+// listing, as C++ does for the handler-less root); ambiguous tokens print
+// the candidate list and return true (ChatCommand.cpp:283).
+func (s *session) handleCmdReload(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// Bare ".reload": the root's RBAC_PERM_COMMAND_RELOAD is dead in C++
 		// (deprecated 6-arg nullptr+subtable overload drops it), so the help
-		// line prints with no gate, like the mmap/modify/npc/quest/pet/rbac roots.
-		s.sendSysMessage("Syntax: .reload <table>|all [group]")
-		return
+		// listing shows with no gate, like the mmap/modify/npc/quest/pet/rbac roots.
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	if sub == "all" {
-		s.handleReloadAll(ctx, args[1:])
-		return
+		return s.handleReloadAll(ctx, args[1:])
 	}
 	// The Trinity parser prefix-matches at every level (ChatCommand.cpp:
 	// 262-288): an exact token always wins, a token matching exactly one
@@ -342,8 +347,8 @@ func (s *session) handleCmdReload(ctx context.Context, args []string) {
 	// token silently executed the first flat prefix match). Candidate
 	// order is the C++ table order, specials in their table positions
 	// among themselves.
-	if s.dispatchReloadSpecial(ctx, sub, args[1:]) {
-		return
+	if handled, ok := s.dispatchReloadSpecial(ctx, sub, args[1:]); handled {
+		return ok
 	}
 	var matches []reloadArm
 	for i := range reloadArms {
@@ -365,54 +370,53 @@ func (s *session) handleCmdReload(ctx context.Context, args []string) {
 		for _, name := range specialMatches {
 			s.sendSysMessage("  " + name)
 		}
-		return
+		return true
 	}
 	if len(matches) == 1 {
-		if s.miscDeny(ctx, matches[0].perm) {
-			return
+		if !s.commandAllowed(ctx, matches[0].perm) {
+			return false
 		}
-		s.runReloadArm(ctx, matches[0], false)
-		return
+		return s.runReloadArm(ctx, matches[0], false)
 	}
 	if len(specialMatches) == 1 {
-		s.dispatchReloadSpecial(ctx, specialMatches[0], args[1:])
-		return
+		_, ok := s.dispatchReloadSpecial(ctx, specialMatches[0], args[1:])
+		return ok
 	}
-	s.sendSysMessage("Syntax: .reload <table>|all [group]")
+	return false
 }
 
 // reloadSpecialNames are the six non-table-probe arms in C++ table order.
 var reloadSpecialNames = []string{"config", "creature_template", "gm_tickets", "rbac", "vehicle_accessory", "vehicle_template_accessory"}
 
 // dispatchReloadSpecial runs a special arm by exact name and reports
-// whether the name was one. Exact tokens are checked before the prefix
-// scan so "creature_template" never falls through to a prefix match.
-func (s *session) dispatchReloadSpecial(ctx context.Context, name string, rest []string) bool {
+// whether the name was one, plus the arm's result. Exact tokens are checked
+// before the prefix scan so "creature_template" never falls through to a
+// prefix match.
+func (s *session) dispatchReloadSpecial(ctx context.Context, name string, rest []string) (bool, bool) {
 	switch name {
 	case "creature_template":
-		s.handleReloadCreatureTemplate(ctx, rest)
+		return true, s.handleReloadCreatureTemplate(ctx, rest)
 	case "config":
-		s.handleReloadConfig(ctx)
+		return true, s.handleReloadConfig(ctx)
 	case "gm_tickets":
-		s.handleReloadGMTickets(ctx)
+		return true, s.handleReloadGMTickets(ctx)
 	case "rbac":
-		s.handleReloadRBACData(ctx)
+		return true, s.handleReloadRBACData(ctx)
 	case "vehicle_accessory":
-		s.handleReloadVehicleAccessory(ctx)
+		return true, s.handleReloadVehicleAccessory(ctx)
 	case "vehicle_template_accessory":
-		s.handleReloadVehicleTemplateAccessory(ctx)
+		return true, s.handleReloadVehicleTemplateAccessory(ctx)
 	default:
-		return false
+		return false, false
 	}
-	return true
 }
 
 // handleReloadAll mirrors the `reload all` sub-table (cs_reload.cpp:62-73):
 // `reload all` runs everything; `reload all <group>` runs one group.
-func (s *session) handleReloadAll(ctx context.Context, args []string) {
+func (s *session) handleReloadAll(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandReloadAll) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandReloadAll) {
+			return false
 		}
 		// C++ HandleReloadAllCommand order (cs_reload.cpp:183-211):
 		// skill_fishing_base_level runs BEFORE the groups.
@@ -426,7 +430,7 @@ func (s *session) handleReloadAll(ctx context.Context, args []string) {
 		s.handleReloadVehicleAccessoryQuiet(ctx)
 		s.handleReloadVehicleTemplateAccessoryQuiet(ctx)
 		s.runReloadArms(ctx, "autobroadcast", "battleground_template")
-		return
+		return true
 	}
 	// Group dispatch follows the same Trinity prefix rule as the flat
 	// arms: exact wins, one prefix match executes, several print the
@@ -445,16 +449,15 @@ func (s *session) handleReloadAll(ctx context.Context, args []string) {
 		for _, name := range matches {
 			s.sendSysMessage("  " + name)
 		}
-		return
+		return true
 	}
 	if len(matches) == 1 {
-		if s.miscDeny(ctx, reloadAllGroups[matches[0]].perm) {
-			return
+		if !s.commandAllowed(ctx, reloadAllGroups[matches[0]].perm) {
+			return false
 		}
-		s.runReloadAllGroup(ctx, matches[0])
-		return
+		return s.runReloadAllGroup(ctx, matches[0])
 	}
-	s.sendSysMessage("Syntax: .reload all [achievement|area|gossips|item|locales|loot|npc|quest|scripts|spell]")
+	return false
 }
 
 // reloadAllGroupOrder is the C++ reloadAllCommandTable order.
@@ -464,10 +467,10 @@ var reloadAllGroupOrder = []string{"achievement", "area", "gossips", "item", "lo
 // message (the C++ handlers call the inner commands directly, bypassing
 // their individual RBAC checks). probes are extra world-DB tables the C++
 // group reloads through handlers with no command row (locales group only).
-func (s *session) runReloadAllGroup(ctx context.Context, name string) {
+func (s *session) runReloadAllGroup(ctx context.Context, name string) bool {
 	g, ok := reloadAllGroups[name]
 	if !ok {
-		return
+		return false
 	}
 	s.runReloadArms(ctx, g.arms...)
 	for _, table := range g.probes {
@@ -476,18 +479,20 @@ func (s *session) runReloadAllGroup(ctx context.Context, name string) {
 	if g.extra != "" {
 		s.server.sendGlobalGMMessage(ctx, g.extra)
 	}
+	return true
 }
 
 // handleReloadCreatureTemplate mirrors HandleReloadCreatureTemplateCommand
 // (cs_reload.cpp:422): entry args are verified in creature_template, then
-// the server's creatureStatsCache is dropped.
-func (s *session) handleReloadCreatureTemplate(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandReloadCreatureTemplate) {
-		return
+// the server's creatureStatsCache is dropped. Empty args return false
+// silently (cs_reload.cpp:425); missing entries print LANG 817 and the arm
+// still returns true.
+func (s *session) handleReloadCreatureTemplate(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandReloadCreatureTemplate) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .reload creature_template <entry> [<entry>...]")
-		return
+		return false
 	}
 	wdb := s.server.WorldStore.DB
 	for _, tok := range args {
@@ -509,23 +514,25 @@ func (s *session) handleReloadCreatureTemplate(ctx context.Context, args []strin
 	s.server.creatureStatsCache = nil
 	s.server.statsMu.Unlock()
 	s.server.sendGlobalGMMessage(ctx, "Creature template reloaded.")
+	return true
 }
 
 // handleReloadConfig is documented-blocked (cs_reload.cpp:331): the server
 // does not retain the config file path, so live worldserver.conf re-read
 // has no bridge.
-func (s *session) handleReloadConfig(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandReloadConfig) {
-		return
+func (s *session) handleReloadConfig(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandReloadConfig) {
+		return false
 	}
 	s.sendSysMessage("Reload of world config is not supported by this server (config path not retained).")
+	return true
 }
 
 // handleReloadGMTickets mirrors HandleReloadGMTicketsCommand
 // (cs_reload.cpp:177): silent, like the C++ arm.
-func (s *session) handleReloadGMTickets(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandReloadGmTickets) {
-		return
+func (s *session) handleReloadGMTickets(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandReloadGmTickets) {
+		return false
 	}
 	var db *sql.DB
 	if s.server.CharactersStore != nil {
@@ -535,13 +542,14 @@ func (s *session) handleReloadGMTickets(ctx context.Context) {
 		var one int
 		_ = db.QueryRowContext(ctx, "SELECT 1 FROM gm_ticket LIMIT 1").Scan(&one)
 	}
+	return true
 }
 
 // handleReloadRBACData mirrors HandleReloadRBACCommand (cs_reload.cpp:1180):
 // the auth-DB rbac tables are read on demand, so the probe is the reload.
-func (s *session) handleReloadRBACData(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandReloadRbac) {
-		return
+func (s *session) handleReloadRBACData(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandReloadRbac) {
+		return false
 	}
 	if s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
 		for _, t := range []string{"rbac_permissions", "rbac_linked_permissions", "rbac_default_permissions", "rbac_account_permissions"} {
@@ -550,16 +558,18 @@ func (s *session) handleReloadRBACData(ctx context.Context) {
 		}
 	}
 	s.server.sendGlobalGMMessage(ctx, "RBAC data reloaded.")
+	return true
 }
 
 // handleReloadVehicleAccessory mirrors HandleReloadVehicleAccessoryCommand
 // (cs_reload.cpp:1162): native, via the Go template loader.
-func (s *session) handleReloadVehicleAccessory(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandReloadVehicleAccesory) {
-		return
+func (s *session) handleReloadVehicleAccessory(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandReloadVehicleAccesory) {
+		return false
 	}
 	s.handleReloadVehicleAccessoryQuiet(ctx)
 	s.server.sendGlobalGMMessage(ctx, "Vehicle accessories reloaded.")
+	return true
 }
 
 func (s *session) handleReloadVehicleAccessoryQuiet(ctx context.Context) {
@@ -573,12 +583,13 @@ func (s *session) handleReloadVehicleAccessoryQuiet(ctx context.Context) {
 
 // handleReloadVehicleTemplateAccessory mirrors
 // HandleReloadVehicleTemplateAccessoryCommand (cs_reload.cpp:1170): native.
-func (s *session) handleReloadVehicleTemplateAccessory(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandReloadVehicleTemplateAccessory) {
-		return
+func (s *session) handleReloadVehicleTemplateAccessory(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandReloadVehicleTemplateAccessory) {
+		return false
 	}
 	s.handleReloadVehicleTemplateAccessoryQuiet(ctx)
 	s.server.sendGlobalGMMessage(ctx, "Vehicle template accessories reloaded.")
+	return true
 }
 
 func (s *session) handleReloadVehicleTemplateAccessoryQuiet(ctx context.Context) {

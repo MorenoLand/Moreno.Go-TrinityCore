@@ -189,33 +189,32 @@ func titleName(target *session, name, name1 string) string {
 // (cs_character.cpp:239): lists the target's known CharTitles. Previously
 // documented-blocked on the CharTitles DBC store; the wotlk.Store.CharTitle
 // bridge now exists, so the arm is native.
-func (s *session) handleCharacterTitles(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandCharacterTitles) {
-		return
+func (s *session) handleCharacterTitles(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandCharacterTitles) {
+		return false
 	}
 	t, rest, ok := s.resolveCharacterTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	// The C++ takes only Optional<PlayerIdentifier>; a trailing token fails
 	// the whole-string-consumed check (ChatCommand.h:112).
 	if len(rest) != 0 {
-		s.sendSysMessage("Syntax: .character titles [$player]")
-		return
+		return false
 	}
 	var target *session
 	if t.online != nil {
 		target = t.online
 	} else {
 		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-		return
+		return true
 	}
 	if target.player == nil || s.server.Data == nil {
-		return
+		return false
 	}
 	file, err := s.server.Data.File("CharTitles")
 	if err != nil {
-		return
+		return false
 	}
 	// C++ iterates id < GetNumRows() with LookupEntry(id)
 	// (cs_character.cpp:255-258), so a CharTitles entry whose ID is at or
@@ -252,6 +251,7 @@ func (s *session) handleCharacterTitles(ctx context.Context, args []string) {
 		// bridge, D7) and "Known" is the inlined LANG_KNOWN text.
 		s.sendSysMessage(fmt.Sprintf("%d (idx:%d) - [%s enUS] Known%s", id, maskID, title, active))
 	}
+	return true
 }
 
 // handleCmdTitles dispatches the "titles" root (cs_titles.cpp:49-52).
