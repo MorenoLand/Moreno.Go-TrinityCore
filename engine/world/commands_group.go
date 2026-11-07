@@ -541,7 +541,7 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) boo
 				}
 				if guidTarget == 0 {
 					s.sendSysMessage("Player not found.")
-					return false
+					return true
 				}
 			}
 		} else if s.selection != 0 && s.server != nil {
@@ -553,7 +553,7 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) boo
 			}
 			if playerSess.player == nil {
 				s.sendSysMessage("Player not found.")
-				return false
+				return true
 			}
 			nameTarget = playerSess.player.Name
 			guidTarget = playerSess.playerGUID
@@ -561,7 +561,7 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) boo
 	}
 	if nameTarget == "" {
 		s.sendSysMessage("Player not found.")
-		return false
+		return true
 	}
 	var groupTarget *groupState
 	if playerSess != nil && playerSess.groupID != 0 {
@@ -576,7 +576,7 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) boo
 	}
 	if groupTarget == nil {
 		s.sendSysMessage(fmt.Sprintf("%s is not in a group.", nameTarget)) // LANG_GROUP_NOT_IN_GROUP (1147)
-		return false
+		return true
 	}
 	s.server.groupsMu.RLock()
 	members := make([]groupMember, len(groupTarget.Members))

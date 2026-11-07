@@ -44,7 +44,9 @@ func (s *session) handleDebugAnim(ctx context.Context, args []string) bool {
 	}
 	emote, ok := parseCommandUint32(args[0])
 	if !ok || !debugEmoteValid(emote) {
-		return false
+		// Unparseable/out-of-set enum token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	if motion := s.debugSelectedCreatureMotion(); motion != nil {
 		s.npcCreatureEmote(motion, uint32(emote))
@@ -89,7 +91,9 @@ func (s *session) handleDebugWorldState(ctx context.Context, args []string) bool
 	variable, ok1 := parseCommandUint32(args[0])
 	value, ok2 := parseCommandUint32(args[1])
 	if !ok1 || !ok2 {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	s.sendWorldState(variable, value)
 	return true
@@ -120,7 +124,9 @@ func (s *session) handleDebugObjectCount(ctx context.Context, args []string) boo
 	if len(args) > 0 {
 		id, ok := parseCommandUint32(args[0])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid map ID.")
+			return true
 		}
 		v := id
 		mapFilter = &v
@@ -455,7 +461,9 @@ func (s *session) handleDebugPlay(ctx context.Context, args []string) bool {
 	}
 	id, ok := parseCommandUint32(args[1])
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	switch strings.ToLower(args[0]) {
 	case "cinematic":
@@ -518,8 +526,9 @@ func (s *session) handleDebugASANOutOfBounds(ctx context.Context, args []string)
 // (cs_debug.cpp:1666): an empty check list returns false, which the
 // C++ framework answers with the node's help; Go has no Warden, so
 // a non-empty list always reports the system disabled. Check ids
-// parse as uint16 (ChatCommandArgs.h:62); a bad token prints the
-// node's syntax like the C++ parse failure.
+// parse as uint16 (ChatCommandArgs.h:62); a bad token is a framework
+// parse failure (LANG_CMDPARSER_* + SetSentErrorMessage), so it
+// messages and returns true.
 func (s *session) handleDebugWardenForce(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDebug) {
 		return false
@@ -530,7 +539,9 @@ func (s *session) handleDebugWardenForce(ctx context.Context, args []string) boo
 	for _, arg := range args {
 		v, ok := parseCommandUint32(arg)
 		if !ok || v > 0xFFFF {
-			return false
+			// Unparseable/out-of-range typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid check ID.")
+			return true
 		}
 	}
 	s.sendSysMessage("Warden system is not enabled")
@@ -555,13 +566,17 @@ func (s *session) handleDebugSendSpellFail(ctx context.Context, args []string) b
 	}
 	result, ok := parseCommandUint32(args[0])
 	if !ok || (result > 187 && result != 255) {
-		return false
+		// Unparseable/out-of-set enum token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	var params []uint32
 	for _, arg := range args[1:] {
 		v, ok := parseCommandUint32(arg)
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 		params = append(params, v)
 	}
@@ -600,7 +615,9 @@ func (s *session) handleDebugSend(ctx context.Context, args []string) bool {
 		}
 		value, ok := parseCommandUint32(args[1])
 		if !ok || !debugSendEnumValid(strings.ToLower(args[0]), value) {
-			return false
+			// Unparseable/out-of-set enum token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 		s.debugSendNumeric(strings.ToLower(args[0]), value)
 		return true
@@ -610,7 +627,9 @@ func (s *session) handleDebugSend(ctx context.Context, args []string) bool {
 		}
 		value, ok := parseCommandUint32(args[1])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 		s.debugSendNumeric("setphaseshift", value)
 		return true
@@ -931,7 +950,9 @@ func (s *session) handleDebugInstanceSpawns(ctx context.Context, args []string) 
 	if !explain {
 		id, ok := parseCommandUint32(args[0])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 		groupID = id
 	}
@@ -1303,7 +1324,9 @@ func (s *session) handleDebugGuidLimits(ctx context.Context, args []string) bool
 	if len(args) > 0 {
 		id, ok := parseCommandUint32(args[0])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid map ID.")
+			return true
 		}
 		v := id
 		mapFilter = &v
@@ -1670,13 +1693,17 @@ func (s *session) handleDebugRaidReset(ctx context.Context, args []string) bool 
 	}
 	mapID, ok := parseCommandUint32(args[0])
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	difficulty := -1
 	if len(args) == 2 {
 		parsed, ok := parseCppBase0Int(args[1])
 		if !ok || parsed < 0 || parsed > 255 {
-			return false
+			// Unparseable/out-of-range typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 		difficulty = int(parsed)
 	}
@@ -1756,14 +1783,18 @@ func (s *session) handleDebugSpawnVehicle(ctx context.Context, args []string) bo
 	}
 	entry, ok := parseCommandUint32(args[0])
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	vehicleID := uint32(0)
 	hasVehicleID := false
 	if len(args) == 2 {
 		vid, ok := parseCommandUint32(args[1])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 		vehicleID = vid
 		hasVehicleID = true
@@ -1818,13 +1849,17 @@ func (s *session) handleDebugEnterVehicle(ctx context.Context, args []string) bo
 	}
 	entry, ok := parseCommandUint32(args[0])
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	seatID := int8(-1)
 	if len(args) == 2 {
 		parsed, ok := parseCppBase0Int(args[1])
 		if !ok || parsed < -128 || parsed > 127 {
-			return false
+			// Unparseable/out-of-range typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 		seatID = int8(parsed)
 	}

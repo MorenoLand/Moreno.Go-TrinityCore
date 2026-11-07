@@ -684,10 +684,10 @@ func (s *session) handleLearnSpell(ctx context.Context, args []string) bool {
 		return true
 	}
 	if len(args) > 2 {
-		// Whole-string-consumed rule (ChatCommand.h:112): trailing
-		// tokens after the optional "all" are a syntax error.
-		s.sendSysMessage("Syntax: .learn <spellId> [all]")
-		return true
+		// Whole-string-consumed rule (ChatCommand.h:104-112): a
+		// non-empty remainder after the last declared arg is a bare
+		// nullopt, no error message, so the framework shows help.
+		return false
 	}
 	target, ok := s.learnTargetOrSelf()
 	if !ok {
@@ -761,8 +761,9 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 			return false
 		}
 		if len(args) > 1 {
-			s.sendSysMessage(allSyntax)
-			return true
+			// No-arg handler (cs_learn.cpp): a trailing token leaves
+			// a non-empty remainder, bare nullopt, framework help.
+			return false
 		}
 		if s.server == nil || s.server.Data == nil {
 			s.sendSysMessage("Spell data is unavailable.")
@@ -812,9 +813,9 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 		}
 		if len(rest) > 0 || target.online == nil {
 			// C++ returns false (framework prints usage) for a
-			// trailing token or an offline player.
-			s.sendSysMessage(allSyntax)
-			return true
+			// trailing token or an offline player
+			// (cs_learn.cpp:352-354, no message, no SSE).
+			return false
 		}
 		for _, skillID := range s.learnProfessionSkillLines() {
 			s.learnSkillRecipesHelper(ctx, target.online, skillID)
@@ -828,8 +829,9 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 			return false
 		}
 		if len(args) > 1 {
-			s.sendSysMessage(allSyntax)
-			return true
+			// No-arg handler (cs_learn.cpp): a trailing token leaves
+			// a non-empty remainder, bare nullopt, framework help.
+			return false
 		}
 		for _, id := range learnDebugSpellIDs {
 			s.learnSpell(ctx, id)
@@ -850,8 +852,10 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 			return true
 		}
 		if len(rest) > 0 || target.online == nil {
-			s.sendSysMessage(allSyntax)
-			return true
+			// C++ returns false (framework prints usage) for a
+			// trailing token or an offline player
+			// (cs_learn.cpp:335-337, no message, no SSE).
+			return false
 		}
 		s.sendSysMessage("learn all default is not supported: default skill/spell/quest-reward learning has no enumeration bridge.")
 	case strings.HasPrefix("languages", sub):
@@ -861,8 +865,9 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 			return false
 		}
 		if len(args) > 1 {
-			s.sendSysMessage(allSyntax)
-			return true
+			// No-arg handler (cs_learn.cpp): a trailing token leaves
+			// a non-empty remainder, bare nullopt, framework help.
+			return false
 		}
 		for _, id := range learnLanguageSpellIDs {
 			s.learnSpell(ctx, id)
@@ -881,8 +886,9 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 			return false
 		}
 		if len(args) > 1 {
-			s.sendSysMessage(allSyntax)
-			return true
+			// No-arg handler (cs_learn.cpp): a trailing token leaves
+			// a non-empty remainder, bare nullopt, framework help.
+			return false
 		}
 		s.handleLearnAllTalents(ctx)
 	case strings.HasPrefix("pettalents", sub):
@@ -893,8 +899,9 @@ func (s *session) handleLearnAll(ctx context.Context, args []string, deny func(u
 			return false
 		}
 		if len(args) > 1 {
-			s.sendSysMessage(allSyntax)
-			return true
+			// No-arg handler (cs_learn.cpp): a trailing token leaves
+			// a non-empty remainder, bare nullopt, framework help.
+			return false
 		}
 		s.sendSysMessage("learn all pettalents is not supported: pet talent learning has no bridge.")
 	default:
@@ -1088,8 +1095,9 @@ func (s *session) handleLearnMy(ctx context.Context, args []string) bool {
 			return false
 		}
 		if len(args) > 1 {
-			s.sendSysMessage(mySyntax)
-			return true
+			// No-arg handler: a trailing token leaves a non-empty
+			// remainder, bare nullopt, framework help.
+			return false
 		}
 		s.sendSysMessage("learn my trainer is not supported: class trainer enumeration has no bridge.")
 	case strings.HasPrefix("quests", sub):
@@ -1100,8 +1108,9 @@ func (s *session) handleLearnMy(ctx context.Context, args []string) bool {
 			return false
 		}
 		if len(args) > 1 {
-			s.sendSysMessage(mySyntax)
-			return true
+			// No-arg handler: a trailing token leaves a non-empty
+			// remainder, bare nullopt, framework help.
+			return false
 		}
 		s.sendSysMessage("learn my quests is not supported: quest template enumeration has no bridge.")
 	default:
@@ -1135,10 +1144,10 @@ func (s *session) handleCmdUnLearn(ctx context.Context, args []string) bool {
 		return true
 	}
 	if len(args) > 2 {
-		// Whole-string-consumed rule (ChatCommand.h:112): trailing
-		// tokens after the optional "all" are a syntax error.
-		s.sendSysMessage(syntax)
-		return true
+		// Whole-string-consumed rule (ChatCommand.h:104-112): a
+		// non-empty remainder after the last declared arg is a bare
+		// nullopt, no error message, so the framework shows help.
+		return false
 	}
 	// The C++ requires a selected player (LANG_NO_CHAR_SELECTED).
 	target, ok := s.learnSelectedPlayer("No character selected.")

@@ -216,14 +216,19 @@ func (s *session) handleTeleAddCommand(ctx context.Context, args []string) bool 
 // handleTeleDelCommand mirrors HandleTeleDelCommand (cs_tele.cpp:101-114,
 // RBAC 739, console allowed): deletes the resolved game_tele row.
 func (s *session) handleTeleDelCommand(ctx context.Context, args []string) bool {
-	if len(args) == 0 || len(args) > 1 {
+	if len(args) == 0 {
 		return false
 	}
 	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
-	// fails the parse, it is never joined into the lookup.
+	// fails the parse, it is never joined into the lookup. The typed
+	// parse error wins over trailing text (ChatCommand.h:63-73), so the
+	// resolve runs before the length check.
 	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
 		return true
+	}
+	if len(args) > 1 {
+		return false
 	}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("Database not available.")
@@ -242,7 +247,31 @@ func (s *session) handleTeleDelCommand(ctx context.Context, args []string) bool 
 // to <tele> or $home. Online targets ride teleportTo; offline targets get
 // their saved characters position rewritten.
 func (s *session) handleTeleNameCommand(ctx context.Context, args []string) bool {
-	if len(args) == 0 || len(args) > 2 {
+	if len(args) > 2 {
+		// A parse error on an earlier arg wins over trailing text
+		// (ChatCommand.h:77-103): resolve the player and the destination
+		// first; either failure already messages, return true. If both
+		// resolve, the omit-player path still errors on token 1 as
+		// `where`, so the arm messages and returns true. Caveat: when
+		// token 1 is both a valid player name and a valid tele name C++
+		// is silent-false; this messages instead (one-token corner).
+		if _, err := strconv.ParseUint(args[0], 0, 32); err == nil {
+			if _, _, _, ok := s.telePlayerByGUID(ctx, args[0]); !ok {
+				s.sendSysMessage(miscPlayerNotFound)
+				return true
+			}
+		} else if _, _, _, ok := s.miscResolvePlayerTarget(ctx, args[:1]); !ok {
+			return true
+		}
+		if !strings.EqualFold(args[1], "$home") {
+			if _, ok := s.teleResolveTele(ctx, args[1]); !ok {
+				return true
+			}
+		}
+		s.sendSysMessage("Syntax: .tele name [player] <location|$home>")
+		return true
+	}
+	if len(args) == 0 {
 		return false
 	}
 	var target *session
@@ -421,14 +450,19 @@ func (s *session) teleGroupTarget() *session {
 // handleTeleGroupCommand mirrors HandleTeleGroupCommand (cs_tele.cpp:199-262,
 // RBAC 741): teleports every online member of the selected player's group.
 func (s *session) handleTeleGroupCommand(ctx context.Context, args []string) bool {
-	if len(args) == 0 || len(args) > 1 {
+	if len(args) == 0 {
 		return false
 	}
 	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
-	// fails the parse, it is never joined into the lookup.
+	// fails the parse, it is never joined into the lookup. The typed
+	// parse error wins over trailing text (ChatCommand.h:63-73), so the
+	// resolve runs before the length check.
 	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
 		return true
+	}
+	if len(args) > 1 {
+		return false
 	}
 	selected := s.teleGroupTarget()
 	if selected == nil || selected.player == nil {
@@ -502,14 +536,19 @@ func (s *session) handleTeleBareCommand(ctx context.Context, args []string) bool
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
 	}
-	if len(args) == 0 || len(args) > 1 {
+	if len(args) == 0 {
 		return false
 	}
 	// GameTele consumes one token (ChatCommandArgs.cpp:51); trailing text
-	// fails the parse, it is never joined into the lookup.
+	// fails the parse, it is never joined into the lookup. The typed
+	// parse error wins over trailing text (ChatCommand.h:63-73), so the
+	// resolve runs before the length check.
 	tele, ok := s.teleResolveTele(ctx, args[0])
 	if !ok {
 		return true
+	}
+	if len(args) > 1 {
+		return false
 	}
 	if s.isInCombat() && !s.commandAllowed(ctx, permissionCommandTeleName) {
 		s.sendSysMessage("You are in combat!") // LANG_YOU_IN_COMBAT (23)

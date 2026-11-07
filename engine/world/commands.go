@@ -1993,7 +1993,9 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) bool {
 	if goIDForm(args) {
 		entry, ok := goParseLinkOrUint(args[1], "creature_entry")
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid creature entry.")
+			return true
 		}
 		rows, err := db.QueryContext(ctx, "SELECT guid, map, position_x, position_y, position_z, orientation FROM creature WHERE id = ?", entry)
 		if err != nil {
@@ -2027,7 +2029,9 @@ func (s *session) handleCmdGoCreature(ctx context.Context, args []string) bool {
 	}
 	spawnID, ok := goParseLinkOrUint(args[0], "creature")
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid creature spawn ID.")
+		return true
 	}
 	var mapID uint32
 	var x, y, z, o float32
@@ -2070,7 +2074,9 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) bool
 	if goIDForm(args) {
 		entry, ok := parseCommandUint32(args[1])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid gameobject entry.")
+			return true
 		}
 		rows, err := db.QueryContext(ctx, "SELECT guid, map, position_x, position_y, position_z, orientation FROM gameobject WHERE id = ?", uint32(entry))
 		if err != nil {
@@ -2104,7 +2110,9 @@ func (s *session) handleCmdGoGameObject(ctx context.Context, args []string) bool
 	}
 	spawnID, ok := parseCommandUint32(args[0])
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid gameobject spawn ID.")
+		return true
 	}
 	var mapID uint32
 	var x, y, z, o float32
@@ -2131,7 +2139,9 @@ func (s *session) handleCmdGoGraveyard(ctx context.Context, args []string) bool 
 	}
 	gyID, ok := parseCommandUint32(args[0])
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid graveyard ID.")
+		return true
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("DBC data not available.")
@@ -2160,13 +2170,17 @@ func (s *session) handleCmdGoGrid(ctx context.Context, args []string) bool {
 	gridX, ok1 := parseCommandFloat(args[0])
 	gridY, ok2 := parseCommandFloat(args[1])
 	if !ok1 || !ok2 {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid grid coordinates.")
+		return true
 	}
 	mapID := s.player.Map
 	if len(args) > 2 {
 		m, ok := parseCommandUint32(args[2])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid map ID.")
+			return true
 		}
 		mapID = uint32(m)
 	}
@@ -2192,7 +2206,9 @@ func (s *session) handleCmdGoTaxiNode(ctx context.Context, args []string) bool {
 	}
 	nodeID, ok := goParseLinkOrUint(args[0], "taxinode")
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid taxinode.")
+		return true
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("DBC data not available.")
@@ -2216,7 +2232,9 @@ func (s *session) handleCmdGoAreaTrigger(ctx context.Context, args []string) boo
 	}
 	triggerID, ok := goParseLinkOrUint(args[0], "areatrigger")
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid areatrigger.")
+		return true
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("DBC data not available.")
@@ -2273,13 +2291,17 @@ func (s *session) handleCmdGoZoneXY(ctx context.Context, args []string) bool {
 	x, ok1 := parseCommandFloat(args[0])
 	y, ok2 := parseCommandFloat(args[1])
 	if !ok1 || !ok2 {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid zone coordinates.")
+		return true
 	}
 	areaID := s.player.Zone
 	if len(args) > 2 {
 		id, ok := goParseLinkOrUint(args[2], "area")
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid area.")
+			return true
 		}
 		areaID = id
 	}
@@ -2344,14 +2366,18 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) bool {
 	x, ok1 := parseCommandFloat(args[0])
 	y, ok2 := parseCommandFloat(args[1])
 	if !ok1 || !ok2 {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid coordinates.")
+		return true
 	}
 	z := float64(s.player.Z)
 	zGiven := false
 	if len(args) > 2 {
 		zv, ok := parseCommandFloat(args[2])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid height.")
+			return true
 		}
 		z = zv
 		zGiven = true
@@ -2360,7 +2386,9 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) bool {
 	if len(args) > 3 {
 		m, ok := parseCommandUint32(args[3])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid map ID.")
+			return true
 		}
 		mapID = uint32(m)
 	}
@@ -2368,7 +2396,9 @@ func (s *session) handleCmdGoXYZ(ctx context.Context, args []string) bool {
 	if len(args) > 4 {
 		ov, ok := parseCommandFloat(args[4])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid orientation.")
+			return true
 		}
 		o = ov
 	}
@@ -2398,7 +2428,9 @@ func (s *session) handleCmdGoTicket(ctx context.Context, args []string) bool {
 	}
 	ticketID, ok := parseCommandUint32(args[0])
 	if !ok {
-		return false
+		// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+		s.sendSysMessage("Invalid ticket ID.")
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
@@ -2432,7 +2464,9 @@ func (s *session) handleCmdGoOffset(ctx context.Context, args []string) bool {
 	for i := 0; i < len(args) && i < 4; i++ {
 		v, ok := parseCommandFloat(args[i])
 		if !ok {
-			return false
+			// Unparseable typed token: LANG_CMDPARSER_* + SetSentErrorMessage.
+			s.sendSysMessage("Invalid offset.")
+			return true
 		}
 		vals[i] = v
 	}
