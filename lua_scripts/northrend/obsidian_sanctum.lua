@@ -63,21 +63,25 @@
 -- 30452 / 30451 / 30449 — no bridgeable arms):
 -- dummy_dragonAI Reset — flag clear PORTED in dragonReset; Initialize
 -- _canLoot=true seed PORTED in dragonSpawn (ev5); waypointId /
--- _canMoveFree / portalRespawnTime have no Lua latches (MovementInform
--- machine stays out, see below);
--- MovementInform (the POINT_ID_INIT 100 / POINT_ID_LAND 200
--- waypoint machine over dragonCommon[6]: instance-gated
--- EnterEvadeMode, Clear + DoZoneInCombat (re-evaluated 2026-10-23
--- against the live bridge — stays out: movement-machine leg) +
--- random-target chase legs at the LAND point, waypointId wrap +
--- EVENT_FREE_MOVEMENT — no motion / instance / target-selection
--- bridges);
+-- _canMoveFree PORTED 2026-11-07 (tick 394, dragonFlight latch, see
+-- MovementInform below); portalRespawnTime stays out (SetRespawnTime
+-- has no static-GO consumer, see OpenPortal below);
+-- MovementInform — PORTED 2026-11-07 (tick 394, dragonMovementInform,
+-- ev28 live tick 392): POINT_ID_INIT 100 / POINT_ID_LAND 200 machine
+-- over dragonCommon[6] (waypointId wrap + EVENT_FREE_MOVEMENT 500ms)
+-- + LAND DoZoneInCombat + random-threat-player AddThreat(1.0) +
+-- Attack(true) + MoveChase; the != IN_PROGRESS -> EnterEvadeMode leg
+-- is OMITTED per the checkpoint head NEXT (the drake returns without
+-- moving when Sartharion is not IN_PROGRESS); the
+-- GetMotionMaster()->Clear() leg is vacuous post-arrival (the spline
+-- already landed).
 -- OpenPortal PORTED 2026-11-05 (tick 255) in openPortal below (egg /
 -- acolyte summons, Vesperon InterruptNonMeleeSpells + 32747 cast, both
 -- Talks); the portal SetRespawnTime(30000) leg stays PARKED — Go GO
 -- SetRespawnTime stores only the delay leg with no static-GO respawn
--- consumer (lua_objects.go:4318); the UpdateAI EVENT_FREE_MOVEMENT
--- machine stays out (no motion bridge).
+-- consumer (lua_objects.go:4318). The UpdateAI EVENT_FREE_MOVEMENT
+-- machine is PORTED 2026-11-07 (tick 394, freeMovementTick below) —
+-- the old "no motion bridge" claim is stale (ev28 + MoveTo live).
 -- npc_tenebron — Reset (base); JustEngagedWith (base +
 -- ScheduleEvent EVENT_HATCH_EGGS 30s); UpdateAI EVENT_HATCH_EGGS ->
 -- OpenPortal PORTED 2026-11-05 (tick 255, hatchEggsTick 30s/30s).
@@ -197,6 +201,21 @@ local ENTRY_ACOLYTE_VESPERON = 31219
 local ENTRY_TWILIGHT_EGG = 30882
 local ENTRY_SARTHARION_TWILIGHT_EGG = 31204
 
+local POINT_ID_INIT = 100 -- obsidian_sanctum.cpp:86 / boss_sartharion.cpp:72
+local POINT_ID_LAND = 200 -- obsidian_sanctum.cpp:87 / boss_sartharion.cpp:73
+local MAX_WAYPOINT = 6 -- obsidian_sanctum.cpp:95
+
+-- C++ dragonCommon (obsidian_sanctum.cpp:96-103): points around the
+-- raid "isle", counter clockwise.
+local DRAGON_COMMON = {
+    { 3214.012, 468.932, 98.652 },
+    { 3244.950, 468.427, 98.652 },
+    { 3283.520, 496.869, 98.652 },
+    { 3287.316, 555.875, 98.652 },
+    { 3250.479, 585.827, 98.652 },
+    { 3209.969, 566.523, 98.652 },
+}
+
 local WHISPER_OPEN_PORTAL = 6
 local WHISPER_OPENED_PORTAL = 7
 
@@ -295,6 +314,70 @@ local function shadowBreathTick(creature, guid)
     creature:CastSpell(nil, SPELL_SHADOW_BREATH)
     schedule(guid, "shadowbreath", {20000, 25000}, function()
         shadowBreathTick(creature, guid)
+    end)
+end
+
+-- C++ dummy_dragonAI::Initialize (obsidian_sanctum.cpp:171-176):
+-- waypointId = 0, _canMoveFree = false. Per-GUID latch; seeded in
+-- dragonSpawn (the ctor twin) and re-zeroed in dragonReset (C++
+-- Reset calls Initialize).
+local dragonFlight = {}
+
+-- C++ dummy_dragonAI::UpdateAI EVENT_FREE_MOVEMENT
+-- (obsidian_sanctum.cpp:371-379): one-shot — if _canMoveFree and
+-- waypointId < MAX_WAYPOINT, MovePoint(waypointId,
+-- dragonCommon[waypointId]); the next schedule comes from the next
+-- MovementInform arrival, never from here.
+local function freeMovementTick(creature, guid)
+    local flight = dragonFlight[guid]
+    if flight and flight.canMoveFree and flight.waypointId < MAX_WAYPOINT then
+        local pt = DRAGON_COMMON[flight.waypointId + 1]
+        creature:MoveTo(flight.waypointId, pt[1], pt[2], pt[3])
+    end
+end
+
+-- C++ dummy_dragonAI::MovementInform (obsidian_sanctum.cpp:202-245):
+-- POINT_MOTION_TYPE is moveType 8 (krick precedent); the instance-nil
+-- leg is vacuous (drakes always have an instance script). The
+-- GetBossState(DATA_SARTHARION) != IN_PROGRESS -> EnterEvadeMode leg
+-- is OMITTED per the checkpoint head NEXT (the drake returns without
+-- moving when Sartharion is not IN_PROGRESS). POINT_ID_LAND (200):
+-- DoZoneInCombat + random-threat-player AddThreat(1.0) + Attack(true)
+-- + MoveChase + _canMoveFree = false (the GetMotionMaster()->Clear()
+-- leg is vacuous post-arrival — the spline already landed). Any other
+-- point: waypointId = pointId + 1, wrap at MAX_WAYPOINT (6) with
+-- _canMoveFree = true, then EVENT_FREE_MOVEMENT in 500ms.
+local function dragonMovementInform(_, creature, moveType, id)
+    if moveType ~= 8 then
+        return
+    end
+    if creature:GetBossState(DATA_SARTHARION) ~= BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    local guid = creature:GetGUID()
+    local flight = dragonFlight[guid]
+    if not flight then
+        flight = { waypointId = 0, canMoveFree = false }
+        dragonFlight[guid] = flight
+    end
+    if id == POINT_ID_LAND then
+        creature:DoZoneInCombat()
+        local target = randomThreatPlayer(creature)
+        if target then
+            creature:AddThreat(target, 1.0)
+            creature:Attack(target, true)
+            creature:MoveChase(target)
+        end
+        flight.canMoveFree = false
+        return
+    end
+    flight.waypointId = id + 1
+    if flight.waypointId >= MAX_WAYPOINT then
+        flight.canMoveFree = true
+        flight.waypointId = 0
+    end
+    schedule(guid, "free_movement", 500, function()
+        freeMovementTick(creature, guid)
     end)
 end
 
@@ -517,6 +600,10 @@ local function dragonReset(event, creature)
         creature:RemoveFlag(59, 0x2)
     end
     cancelTimers(creature:GetGUID())
+    -- C++ Reset calls Initialize (:184): waypointId = 0,
+    -- _canMoveFree = false — the free-movement machine restarts from
+    -- the next INIT arrival.
+    dragonFlight[creature:GetGUID()] = { waypointId = 0, canMoveFree = false }
 end
 
 -- C++ instance OnCreatureCreate latch (instance_obsidian_sanctum.cpp:60-78)
@@ -535,6 +622,7 @@ local function dragonSpawn(event, creature)
         creature:SetGuidData(dataId)
     end
     creature:SetData(DATA_CAN_LOOT, 1)
+    dragonFlight[creature:GetGUID()] = { waypointId = 0, canMoveFree = false }
 end
 
 for _, entry in ipairs({ ENTRY_TENEBRON, ENTRY_SHADRON, ENTRY_VESPERON }) do
@@ -544,6 +632,7 @@ for _, entry in ipairs({ ENTRY_TENEBRON, ENTRY_SHADRON, ENTRY_VESPERON }) do
     RegisterCreatureEvent(entry, 4, dragonDied)
     RegisterCreatureEvent(entry, 5, dragonSpawn)
     RegisterCreatureEvent(entry, 23, dragonReset)
+    RegisterCreatureEvent(entry, 28, dragonMovementInform)
 end
 
 -- C++ npc_shadron::Reset: the self HasAura-gated strips of

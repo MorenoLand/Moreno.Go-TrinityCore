@@ -142,9 +142,13 @@
 -- 28467) PORTED 2026-11-05 (ev1-seeded 10-20s, 14-18s re-arm,
 -- victim-gated with 5s re-poll); abomination JustDied relay PORTED
 -- 2026-11-05 (ev4 -> kt:DoAction(2), see DoAction below);
--- UpdateRandomMovement hack stays out (no motion bridge — the
--- random-circle position math has no MoveTo twin without a
--- MovementInform re-arm, no ev28); MoveInLineOfSight 20yd aggro leg
+-- UpdateRandomMovement hack PORTED 2026-11-07 (tick 394, wanderTick /
+-- kelthuzadMinionMovementInform, ev28 live tick 392): ctor 4-12s seed
+-- (seedMinionWander, BEGIN_ENCOUNTER receiver only — fresh spawn-tick
+-- summons DoZoneInCombat at once, which zeroes the timer in C++ via
+-- AtEngage -> JustEngagedWith), MoveTo(1, circle point, 3.0yd) + ev28
+-- re-arm {2s,10s}+{2s,10s}; ev1 zeroes the timer (C++
+-- JustEngagedWith _movementTimer = 0). MoveInLineOfSight 20yd aggro leg
 -- stays out (ev27 is engage-only; the ev7-poll twin used by runthak
 -- is not seeded here — the ev1 pocket arm covers the engage path);
 -- SetData(DATA_MINION_POCKET_ID) is bridged (creature:SetData,
@@ -249,6 +253,7 @@ local SPELL_MORTAL_WOUND = 28467 -- boss_kelthuzad.cpp:105
 local SAY_AGGRO = 7 -- boss_kelthuzad.cpp:33
 local REACT_PASSIVE = 0 -- UnitDefines.h
 local REACT_AGGRESSIVE = 2 -- UnitDefines.h
+local MOVEMENT_MINION_RANDOM = 1 -- boss_kelthuzad.cpp:128 (Movements enum)
 
 local timers = {}
 
@@ -272,6 +277,71 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
+-- C++ GetRandomPositionOnCircle (boss_kelthuzad.cpp:158-165):
+-- uniform angle, relDistance = rand+rand folded to [0,1], radius 3.0,
+-- z = center z (the @hack note :589-592: the minion-cove floor is flat,
+-- so z is never recomputed).
+local function randomPositionOnCircle(hx, hy, hz, radius)
+    local angle = math.random() * 2 * math.pi
+    local relDistance = math.random() + math.random()
+    if relDistance > 1 then
+        relDistance = 1 - relDistance
+    end
+    return hx + math.sin(angle) * relDistance * radius, hy + math.cos(angle) * relDistance * radius, hz
+end
+
+-- Forward declaration (tharon_ja/gal_darah idiom): wanderTick is
+-- referenced by seedMinionWander / kelthuzadMinionMovementInform
+-- before its definition below; assigned by plain assignment, never
+-- re-`local function`.
+local wanderTick
+
+-- C++ npc_kelthuzad_minionAI::UpdateRandomMovement
+-- (boss_kelthuzad.cpp:670-683): timer expiry -> MovePoint
+-- (MOVEMENT_MINION_RANDOM 1, random circle point around _home, 3.0yd);
+-- the timer itself lives in the "wander" schedule key (seeded 4-12s
+-- at summon, re-armed 4-20s on arrival).
+wanderTick = function(creature, guid)
+    local hx, hy, hz = creature:GetHomePosition()
+    local x, y, z = randomPositionOnCircle(hx, hy, hz, 3.0)
+    creature:MoveTo(MOVEMENT_MINION_RANDOM, x, y, z)
+end
+
+-- C++ ctor seed (boss_kelthuzad.cpp:596): _movementTimer =
+-- urandms(4,12). Seeded only for the BEGIN_ENCOUNTER group summons
+-- (REACT_PASSIVE, no DoZoneInCombat); fresh spawn-tick summons engage
+-- at once via DoZoneInCombat -> AtEngage -> JustEngagedWith, which
+-- zeroes the timer in C++, so they never wander.
+local function seedMinionWander(summon)
+    local guid = summon:GetGUID()
+    schedule(guid, "wander", math.random(4000, 12000), function()
+        wanderTick(summon, guid)
+    end)
+end
+
+-- C++ npc_kelthuzad_minionAI::MovementInform (boss_kelthuzad.cpp:664-668):
+-- id == MOVEMENT_MINION_RANDOM -> _movementTimer =
+-- urandms(2,10) + urandms(2,10) (4000-20000ms). POINT_MOTION_TYPE is
+-- moveType 8 (krick precedent); the type is unchecked in C++ but the
+-- id can only arrive from a MoveTo here.
+local function kelthuzadMinionMovementInform(_, creature, moveType, id)
+    if moveType ~= 8 or id ~= MOVEMENT_MINION_RANDOM then
+        return
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "wander", math.random(2000, 10000) + math.random(2000, 10000), function()
+        wanderTick(creature, guid)
+    end)
 end
 
 local SAY_SLAY = 8
@@ -331,6 +401,9 @@ local function despawnKelthuzadSummons(guid, skipGuardians)
         end
     end
     for _, summon in ipairs(toDespawn) do
+        -- A wandering minion's pending "wander" timer must not fire on
+        -- the despawned creature (C++ despawn ends the AI outright).
+        cancelTimers(summon:GetGUID())
         summon:Despawn()
     end
 end
@@ -350,6 +423,9 @@ local function despawnMinionsTick(creature, guid)
             end
         end
         for _, summon in ipairs(toDespawn) do
+            -- A wandering minion's pending "wander" timer must not fire
+            -- on the despawned creature (C++ despawn ends the AI).
+            cancelTimers(summon:GetGUID())
             summon:Despawn()
         end
     end
@@ -1014,6 +1090,7 @@ local function kelthuzadDoAction(event, creature, action)
         for _, summon in ipairs(summoned) do
             summon:SetReactState(0) -- REACT_PASSIVE
             summon:SetData(DATA_MINION_POCKET_ID, group)
+            seedMinionWander(summon)
         end
     end
     local guid = creature:GetGUID()
@@ -1054,8 +1131,14 @@ local woundTick
 -- frozen out of combat, so the ev1 seed is its in-combat twin (fresh
 -- 10-20s each engage, bloodTapTick precedent).
 local function kelthuzadMinionEnterCombat(event, creature, target)
+    -- C++ npc_kelthuzad_minionAI::JustEngagedWith
+    -- (boss_kelthuzad.cpp:611): _movementTimer = 0 — once zero it is
+    -- never checked again, so the wander stops permanently on engage.
+    -- (A MovePoint already in flight still lands and re-arms via ev28,
+    -- the C++ MovementInform behavior — the spline is not cancelled.)
+    local guid = creature:GetGUID()
+    cancelKey(guid, "wander")
     if creature:GetEntry() == ENTRY_ABOMINATION then
-        local guid = creature:GetGUID()
         schedule(guid, "wound", math.random(10000, 20000), function()
             woundTick(creature, guid)
         end)
@@ -1103,6 +1186,14 @@ local function kelthuzadMinionLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ has no JustDied arm for skeleton/banshee (boss_kelthuzad.cpp:
+-- only the abomination relays); this handler is pure timer
+-- bookkeeping — a wander timer re-armed by an in-flight MoveTo
+-- landing after engage must not fire on the corpse.
+local function kelthuzadMinionDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
 -- C++ npc_kelthuzad_abominationAI::JustDied (:732-736): relay
 -- ACTION_ABOMINATION_DIED to Kel'Thuzad via DATA_KELTHUZAD (the
 -- _abominationDeathCount latch behind achievement_just_cant_get_enough;
@@ -1130,7 +1221,12 @@ RegisterCreatureEvent(ENTRY_SKELETON, 1, kelthuzadMinionEnterCombat)
 RegisterCreatureEvent(ENTRY_BANSHEE, 1, kelthuzadMinionEnterCombat)
 RegisterCreatureEvent(ENTRY_ABOMINATION, 1, kelthuzadMinionEnterCombat)
 RegisterCreatureEvent(ENTRY_ABOMINATION, 2, kelthuzadMinionLeaveCombat)
+RegisterCreatureEvent(ENTRY_SKELETON, 4, kelthuzadMinionDied)
+RegisterCreatureEvent(ENTRY_BANSHEE, 4, kelthuzadMinionDied)
 RegisterCreatureEvent(ENTRY_ABOMINATION, 4, kelthuzadAbominationDied)
+RegisterCreatureEvent(ENTRY_SKELETON, 28, kelthuzadMinionMovementInform)
+RegisterCreatureEvent(ENTRY_BANSHEE, 28, kelthuzadMinionMovementInform)
+RegisterCreatureEvent(ENTRY_ABOMINATION, 28, kelthuzadMinionMovementInform)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 2, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 4, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 23, kelthuzadGuardianReset)

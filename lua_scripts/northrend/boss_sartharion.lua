@@ -35,7 +35,8 @@
 -- (MovePoint twin) to the drake init positions, UNIT_FLAG_NON_ATTACKABLE
 -- legs — PORTED 2026-11-05 (tick 254) via GetInstanceCreature +
 -- CastSpell + AddLootMode; the INIT-arrival MovementInform machine
--- stays out — no event 28 — so drakes fly to INIT and stop) + the
+-- is PORTED 2026-11-07 (tick 394, dragonMovementInform in
+-- obsidian_sanctum.lua, ev28 live tick 392)) + the
 -- call-dragon one-shot seeds (30s/75s/120s, PORTED tick 254) and the
 -- remaining ScheduleEvent calls (lava strike / flame tsunami); the
 -- BossAI::JustEngagedWith bookkeeping (setActive / CheckRequiredBosses)
@@ -80,13 +81,15 @@
 -- (GetInstanceCreature + IsAlive / IsInCombat / GetVictim gates +
 -- self-casts 61248 / 58105 / 61251 / 61254 + loot-mode ladder +
 -- MoveTo(100, init) + NON_ATTACKABLE SetFlag; the INIT-arrival
--- MovementInform free-movement machine stays out — no event 28).
+-- MovementInform free-movement machine is PORTED 2026-11-07 (tick 394,
+-- dragonMovementInform in obsidian_sanctum.lua).
 -- CallDragon (EVENT_CALL_TENEBRON / SHADRON / VESPERON legs) —
 -- PORTED 2026-11-05 (tick 254) in callDragon below (one-shot
 -- 30s/75s/120s seeds; entry-switched Talk(SAY_SARTHARION_CALL_SHADRON
 -- 3 / CALL_TENEBRON 4 / CALL_VESPERON 5) + AddAura power-of legs +
 -- MoveTo(200, land); the LAND-arrival engage (MoveChase + AddThreat)
--- stays out — no event 28).
+-- is PORTED 2026-11-07 (tick 394, dragonMovementInform in
+-- obsidian_sanctum.lua).
 -- GetData TWILIGHT_ACHIEVEMENTS (drakeCount) — no achievement
 -- bridge; joins the unmodeled-achievement queue.
 -- CastLavaStrikeOnTarget — Cell::VisitAllObjects fire-cyclone
@@ -356,7 +359,8 @@ local DRAKE_INIT = {
 -- (61254) on self when any drake was pulled. drakeCount is stored per
 -- GUID for the latent GetData(TWILIGHT_ACHIEVEMENTS) arm (no achievement
 -- bridge yet). The INIT-arrival MovementInform free-movement machine
--- stays out — no event 28 — so drakes fly to INIT and stop.
+-- is PORTED 2026-11-07 (tick 394, dragonMovementInform in
+-- obsidian_sanctum.lua).
 local function fetchDragons(creature, guid)
     creature:ResetLootMode()
     local count = 0
@@ -394,7 +398,8 @@ local DRAKE_LAND = {
 -- without a victim — walk off, clear NON_ATTACKABLE, self-add its power
 -- aura, fly to the land point (MoveTo is the MovePoint twin), and
 -- sartharion Talks the call line. The LAND-arrival engage (MoveChase +
--- AddThreat, obsidian_sanctum.cpp:217-226) stays out — no event 28.
+-- AddThreat, obsidian_sanctum.cpp:217-226) is PORTED 2026-11-07 (tick 394,
+-- dragonMovementInform in obsidian_sanctum.lua).
 local function callDragon(creature, dataId)
     local drake = creature:GetInstanceCreature(dataId)
     if not (drake and drake:IsAlive() and not drake:GetVictim()) then
