@@ -6,7 +6,7 @@
 -- verified 2026-11-07; "Torloth the Magnificent <The Crimson
 -- Sigil>", Shadowmoon Valley; no NPC_ constant in the C++ file).
 -- Eluna creature events: 4 JustDied.
--- Ported arm (leg (a) only):
+-- Ported arm (legs (a) + (b)):
 -- - JustDied (zone_shadowmoon_valley.cpp:875-893, event 4): nil
 --   killer returns; TYPEID_PLAYER (4) killer ->
 --   killer:GroupEventHappens(10781, creature); TYPEID_UNIT (3)
@@ -15,13 +15,16 @@
 --   arg (lua_creature_events.go:3108), GetTypeId (object.go:160),
 --   GetOwner (lua_creature_events.go:627, returns the owning
 --   player object or nil), GroupEventHappens (lua_player.go:4511).
--- BLOCKED leg (b) (documented-only, no bridge):
 -- - JustDied :895-896: LordIllidan->AI()->EnterEvadeMode() —
---   EnterEvadeMode has NO Lua bridge (boss_ai.go:5753-5754
---   explicit). The LordIllidanGUID latch (IsSummonedBy / Reset)
---   is likewise unported; the evade leg never fires in Lua.
+--   PORTED via the EnterEvadeMode bridge (lua_creature_events.go,
+--   triggerCreatureEvade twin). The LordIllidanGUID latch is
+--   replaced by a live FindNearestCreature(22083, 50.0) — entry
+--   22083 from zone_shadowmoon_valley.cpp:1262 (the file's own
+--   Illidan lookup radius), nil-guarded like the C++ GetCreature
+--   check; the 50.0 radius matches that lookup.
 
 local ENTRY_TORLOTH = 22076
+local ENTRY_LORD_ILLIDAN = 22083
 
 local QUEST_BATTLE_OF_THE_CRIMSON_WATCH = 10781
 
@@ -29,7 +32,8 @@ local TYPEID_UNIT = 3
 local TYPEID_PLAYER = 4
 
 -- C++ JustDied leg (a): quest-10781 group credit via the killer
--- (player) or the killer's owner (pet/guardian).
+-- (player) or the killer's owner (pet/guardian); leg (b) below
+-- runs after it, in C++ order (:895-896).
 local function onDied(event, creature, killer)
     if not killer then
         return
@@ -41,6 +45,13 @@ local function onDied(event, creature, killer)
         if owner then
             owner:GroupEventHappens(QUEST_BATTLE_OF_THE_CRIMSON_WATCH, creature)
         end
+    end
+    -- C++ JustDied leg (b): LordIllidan->AI()->EnterEvadeMode()
+    -- — the GUID latch is a live nearest-creature lookup (see
+    -- header); nil-guarded like the C++ GetCreature check.
+    local illidan = creature:FindNearestCreature(ENTRY_LORD_ILLIDAN, 50.0)
+    if illidan then
+        illidan:EnterEvadeMode()
     end
 end
 

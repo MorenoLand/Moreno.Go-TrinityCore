@@ -4692,6 +4692,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, true)
 		return nil, nil
 	}
+	// EnterEvadeMode is CreatureAI::EnterEvadeMode (CreatureAI.cpp:294-316,
+	// via Eluna::EnterEvadeMode, CreatureHooks.cpp:202) over the
+	// triggerCreatureEvade leash twin (creaturemotion.go:4601), which the
+	// file already audits leg-by-leg against the C++ body: On_Reset (23)
+	// then On_LeaveCombat (2) ahead of the base evade, threat clear,
+	// CombatStop, aura clear, health restore, tap reset, cooldown clear,
+	// and the home walk firing On_ReachHome (24). The C++ guards ride
+	// along: already-evading and dead motions no-op (_EnterEvadeMode
+	// returns false on IsInEvadeMode / !IsAlive). No return value,
+	// matching the C++ void.
+	methods["EnterEvadeMode"] = func(ctx context.Context, args []any) ([]any, error) {
+		s.motionMu.Lock()
+		dead := motion.Health == 0
+		evading := motion.Evading
+		s.motionMu.Unlock()
+		if dead || evading {
+			return nil, nil
+		}
+		s.triggerCreatureEvade(ctx, motion, time.Now())
+		return nil, nil
+	}
 	// MoveConfused is UnitMethods::MoveConfused (UnitMethods.h:2240-2248)
 	// = MotionMaster::MoveConfused: the ConfusedMovementGenerator
 	// starts without the SetControlled side effects (no CastStop, no

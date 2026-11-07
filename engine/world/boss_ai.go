@@ -13354,8 +13354,10 @@ func init() {
 	// zone_blades_edge_mountains residuals (npc_nether_drake
 	// already ported at lua_scripts/outland/npc_nether_drake.lua
 	// per the earlier Outland zone-set work, SpellHit rotation
-	// ported 2026-11-03 with only the NIHIL-destination leg out
-	// on the missing EnterEvadeMode bridge): go_legion_obelisk
+	// ported 2026-11-03; the NIHIL-destination leg PORTED
+	// 2026-11-07 on the EnterEvadeMode bridge, with only the
+	// MovementInform arrival-despawn leg out on the missing
+	// event-28 bridge): go_legion_obelisk
 	// is ported at lua_scripts/outland/go_legion_obelisk.lua
 	// (quest-10821 gate via player:GetQuestStatus, shared
 	// five-obelisk flags, doomcryer summon on the fifth use);
@@ -13519,8 +13521,9 @@ func init() {
 	// npc_torloth_the_magnificent (Shadowmoon Valley zone script):
 	// JustDied quest-10781 group-credit leg (a) PORTED in
 	// lua_scripts/outland/npc_torloth_the_magnificent.lua; the
-	// LordIllidan EnterEvadeMode leg (b) stays out (no bridge).
-	// Entry 22076 wowhead-verified this tick.
+	// LordIllidan EnterEvadeMode leg (b) PORTED there too (bridge
+	// live in lua_creature_events.go, Illidan via FindNearest-
+	// Creature(22083, 50.0)). Entry 22076 wowhead-verified.
 	RegisterLuaBoss("npc_torloth_the_magnificent", 22076)
 	// npc_unkor_the_ruthless (Terokkar Forest zone script, last
 	// in the Outland zone set per outland_script_loader.cpp
