@@ -33,22 +33,18 @@ import (
 // multi-word child names break resolve's prefix canonicalization (a bare
 // "set" token ambiguates "set phase"/"set state", and "set ownership"-style
 // names never match per-word), so the handler owns the second level itself.
-func (s *session) handleCmdGObject(ctx context.Context, args []string) {
+// The bool reports C++ handler success: RBAC denial returns false silently
+// so dispatchCommand shows the node's help listing; paths that print a
+// message return true.
+func (s *session) handleCmdGObject(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .gobject activate <guid> | .gobject add <entry> [spawntime] | .gobject add temp <entry> [spawntime] | .gobject delete <guid> | .gobject info [guid] <entry|guid> | .gobject move <guid> [x y z] | .gobject near [dist] | .gobject target [entry|name] | .gobject turn <guid> [oz] [oy] [ox] | .gobject spawngroup <groupId> [force] [ignorerespawn] | .gobject despawngroup <groupId> [removerespawntime] | .gobject set phase <guid> <phaseMask> | .gobject set state <guid> <type> [state]"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	deny := func(perm uint32) bool {
-		if !s.commandAllowed(ctx, perm) {
-			s.sendNotification("You do not have permission to use that command.")
-			return true
-		}
-		return false
+		return true
 	}
 	needArgs := func(n int) bool {
 		if len(args) < n+1 {
@@ -59,83 +55,107 @@ func (s *session) handleCmdGObject(ctx context.Context, args []string) {
 	}
 	switch sub := strings.ToLower(args[0]); sub {
 	case "activate":
-		if deny(permissionCommandGObjectActivate) || !needArgs(1) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectActivate) {
+			return false
 		}
-		s.handleGObjectActivate(ctx, args[1:])
+		if !needArgs(1) {
+			return true
+		}
+		return s.handleGObjectActivate(ctx, args[1:])
 	case "delete":
-		if deny(permissionCommandGObjectDelete) || !needArgs(1) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectDelete) {
+			return false
 		}
-		s.handleGObjectDelete(ctx, args[1:])
+		if !needArgs(1) {
+			return true
+		}
+		return s.handleGObjectDelete(ctx, args[1:])
 	case "info":
-		if deny(permissionCommandGObjectInfo) || !needArgs(1) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectInfo) {
+			return false
 		}
-		s.handleGObjectInfo(ctx, args[1:])
+		if !needArgs(1) {
+			return true
+		}
+		return s.handleGObjectInfo(ctx, args[1:])
 	case "move":
-		if deny(permissionCommandGObjectMove) || !needArgs(1) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectMove) {
+			return false
 		}
-		s.handleGObjectMove(ctx, args[1:])
+		if !needArgs(1) {
+			return true
+		}
+		return s.handleGObjectMove(ctx, args[1:])
 	case "near":
-		if deny(permissionCommandGObjectNear) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectNear) {
+			return false
 		}
-		s.handleGObjectNear(ctx, args[1:])
+		return s.handleGObjectNear(ctx, args[1:])
 	case "target":
-		if deny(permissionCommandGObjectTarget) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectTarget) {
+			return false
 		}
-		s.handleGObjectTarget(ctx, args[1:])
+		return s.handleGObjectTarget(ctx, args[1:])
 	case "turn":
-		if deny(permissionCommandGObjectTurn) || !needArgs(1) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectTurn) {
+			return false
 		}
-		s.handleGObjectTurn(ctx, args[1:])
+		if !needArgs(1) {
+			return true
+		}
+		return s.handleGObjectTurn(ctx, args[1:])
 	case "spawngroup":
-		if deny(permissionCommandGObjectSpawnGroup) || !needArgs(1) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectSpawnGroup) {
+			return false
 		}
-		s.handleGObjectSpawnGroup(ctx, args[1:])
+		if !needArgs(1) {
+			return true
+		}
+		return s.handleGObjectSpawnGroup(ctx, args[1:])
 	case "despawngroup":
-		if deny(permissionCommandGObjectDespawnGroup) || !needArgs(1) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectDespawnGroup) {
+			return false
 		}
-		s.handleGObjectDespawnGroup(ctx, args[1:])
+		if !needArgs(1) {
+			return true
+		}
+		return s.handleGObjectDespawnGroup(ctx, args[1:])
 	case "add":
 		if len(args) > 1 && strings.HasPrefix("temp", strings.ToLower(args[1])) {
-			if deny(permissionCommandGObjectAddTemp) {
-				return
+			if !s.commandAllowed(ctx, permissionCommandGObjectAddTemp) {
+				return false
 			}
-			s.handleGObjectAddTemp(ctx, args[2:])
-			return
+			return s.handleGObjectAddTemp(ctx, args[2:])
 		}
-		if deny(permissionCommandGObjectAdd) || !needArgs(1) {
-			return
+		if !s.commandAllowed(ctx, permissionCommandGObjectAdd) {
+			return false
 		}
-		s.handleGObjectAdd(ctx, args[1:])
+		if !needArgs(1) {
+			return true
+		}
+		return s.handleGObjectAdd(ctx, args[1:])
 	case "set":
 		if !needArgs(2) {
-			return
+			return true
 		}
 		switch lvl := strings.ToLower(args[1]); {
 		case strings.HasPrefix("phase", lvl):
-			if deny(permissionCommandGObjectSetPhase) {
-				return
+			if !s.commandAllowed(ctx, permissionCommandGObjectSetPhase) {
+				return false
 			}
-			s.handleGObjectSetPhase(ctx, args[2:])
+			return s.handleGObjectSetPhase(ctx, args[2:])
 		case strings.HasPrefix("state", lvl):
-			if deny(permissionCommandGObjectSetState) {
-				return
+			if !s.commandAllowed(ctx, permissionCommandGObjectSetState) {
+				return false
 			}
-			s.handleGObjectSetState(ctx, args[2:])
+			return s.handleGObjectSetState(ctx, args[2:])
 		default:
 			s.sendSysMessage(syntax)
 		}
 	default:
 		s.sendSysMessage(syntax)
 	}
+	return true
 }
 
 // gobjectSpawnRow is the DB-facing subset of the gameobject table columns the
@@ -338,37 +358,38 @@ func (s *session) gobjectRefreshSpawn(ctx context.Context, db *sql.DB, spawnID u
 // Fidelity gap: GameObject::UseDoorOrButton (door auto-close timing from the
 // template, button press/loot-window packets) has no Go bridge beyond the
 // state flip pushed by broadcastGameObjectResetState.
-func (s *session) handleGObjectActivate(ctx context.Context, args []string) {
+func (s *session) handleGObjectActivate(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .gobject activate <guid>")
-		return
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	spawnID, parseOK := parseGObjectSpawnID(args[0])
 	if !parseOK {
 		s.sendSysMessage("Syntax: .gobject activate <guid>")
-		return
+		return true
 	}
 	if spawnID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
-		return
+		return true
 	}
 	row, ok := s.gobjectSpawnByGUID(ctx, db, uint32(spawnID))
 	if !ok {
-		return
+		return true
 	}
 	dyn, err := s.server.getOrLoadGameObjectState(ctx, gameObjectGUID(row.guid, row.entry), row.guid, row.entry, row.mapID, s.player.InstanceID)
 	if err != nil || dyn == nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %d) could not be found.", row.guid)) // LANG_COMMAND_OBJNOTFOUND (273)
-		return
+		return true
 	}
 	s.server.setGameObjectState(dyn.GUID, GameObjectStateReady)
 	s.server.broadcastGameObjectResetState(row.mapID, dyn.GUID)
 	s.sendSysMessage("Object activated!")
+	return true
 }
 
 // handleGObjectDelete mirrors HandleGameObjectDeleteCommand
@@ -376,31 +397,31 @@ func (s *session) handleGObjectActivate(ctx context.Context, args []string) {
 // (the C++ owner->RemoveGameObject path; a non-player owner blocks the delete
 // with LANG_COMMAND_DELOBJREFERCREATURE = 274), then GameObject::DeleteFromDB
 // (LANG_COMMAND_DELOBJMESSAGE = 275, LANG_COMMAND_OBJNOTFOUND = 273).
-func (s *session) handleGObjectDelete(ctx context.Context, args []string) {
+func (s *session) handleGObjectDelete(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
 		s.sendSysMessage("Syntax: .gobject delete <guid>")
-		return
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	spawnID, parseOK := parseGObjectSpawnID(args[0])
 	if !parseOK {
 		s.sendSysMessage("Syntax: .gobject delete <guid>")
-		return
+		return true
 	}
 	if spawnID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %s) could not be found.", args[0])) // LANG_COMMAND_OBJNOTFOUND (273)
-		return
+		return true
 	}
 	// C++ DeleteFromDB runs regardless of the live lookup (cs_gobject.cpp:301),
 	// so a cross-map DB row deletes too; only the owner gate needs the live
 	// object on the player's map.
 	row, ok := s.gobjectSpawnRowByGUID(ctx, db, uint32(spawnID))
 	if !ok {
-		return
+		return true
 	}
 	packed := gameObjectGUID(row.guid, row.entry)
 	if dyn := s.server.gameObjectState(row.mapID, s.player.InstanceID, packed); dyn != nil && dyn.OwnerGUID != 0 {
@@ -408,7 +429,7 @@ func (s *session) handleGObjectDelete(ctx context.Context, args []string) {
 		// (cs_gobject.cpp:309-320); another player's GO deletes fine.
 		if s.server.playerSessionForGUID(dyn.OwnerGUID) == nil {
 			s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %d) is in use by another object (GUID low %d).", row.guid, uint32(dyn.OwnerGUID))) // LANG_COMMAND_DELOBJREFERCREATURE (274)
-			return
+			return true
 		}
 		s.server.despawnDynamicGameObject(packed)
 	}
@@ -416,28 +437,29 @@ func (s *session) handleGObjectDelete(ctx context.Context, args []string) {
 	res, err := db.ExecContext(ctx, "DELETE FROM gameobject WHERE guid = ?", row.guid)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject delete error: %v", err))
-		return
+		return true
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %d) could not be found.", row.guid)) // LANG_COMMAND_OBJNOTFOUND (273)
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %d) removed", row.guid)) // LANG_COMMAND_DELOBJMESSAGE (275)
+	return true
 }
 
 // handleGObjectInfo mirrors HandleGameObjectInfoCommand (cs_gobject.cpp:454):
 // "info [guid] <entry|guid>" — the bare-number form is an entry (the C++
 // Variant resolves a bare uint32 to the entry alternative); the guid form
 // loads the spawn row for location/rotation lines.
-func (s *session) handleGObjectInfo(ctx context.Context, args []string) {
+func (s *session) handleGObjectInfo(ctx context.Context, args []string) bool {
 	if len(args) > 2 {
 		s.sendSysMessage("Syntax: .gobject info [guid] <entry|guid>")
-		return
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	var entry uint32
 	var spawn *gobjectSpawnRow
@@ -447,12 +469,12 @@ func (s *session) handleGObjectInfo(ctx context.Context, args []string) {
 		spawnID, ok := parseGObjectSpawnID(args[0])
 		if !ok {
 			s.sendSysMessage("Syntax: .gobject info [guid] <entry|guid>")
-			return
+			return true
 		}
 		var spawnOK bool
 		spawn, spawnOK = s.gobjectSpawnRowByGUID(ctx, db, spawnID)
 		if !spawnOK {
-			return
+			return true
 		}
 		entry = spawn.entry
 	} else if strings.ToLower(args[0]) == "guid" {
@@ -460,17 +482,17 @@ func (s *session) handleGObjectInfo(ctx context.Context, args []string) {
 		// must equal "guid"; abbreviated "g"/"gu"/"gui" do not match.
 		if len(args) < 2 {
 			s.sendSysMessage("Syntax: .gobject info [guid] <entry|guid>")
-			return
+			return true
 		}
 		spawnID, ok := parseGObjectSpawnID(args[1])
 		if !ok {
 			s.sendSysMessage("Syntax: .gobject info [guid] <entry|guid>")
-			return
+			return true
 		}
 		var spawnOK bool
 		spawn, spawnOK = s.gobjectSpawnRowByGUID(ctx, db, spawnID)
 		if !spawnOK {
-			return
+			return true
 		}
 		entry = spawn.entry
 	} else {
@@ -478,21 +500,21 @@ func (s *session) handleGObjectInfo(ctx context.Context, args []string) {
 		entry, ok = parseGObjectEntry(args[0])
 		if !ok {
 			s.sendSysMessage("Syntax: .gobject info [guid] <entry|guid>")
-			return
+			return true
 		}
 		if entry == 0 {
 			s.sendSysMessage(fmt.Sprintf("Gameobject (Entry: %s) does not exist.", args[0])) // LANG_GAMEOBJECT_NOT_EXIST (522)
-			return
+			return true
 		}
 	}
 	tmpl, err := gobjectTemplateByEntry(ctx, db, entry)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.sendSysMessage(fmt.Sprintf("Gameobject (Entry: %d) does not exist.", entry)) // LANG_GAMEOBJECT_NOT_EXIST (522)
-			return
+			return true
 		}
 		s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
-		return
+		return true
 	}
 	lootID := uint32(0)
 	if tmpl.goType == GameObjectTypeChest || tmpl.goType == GameObjectTypeFishingHole {
@@ -520,6 +542,7 @@ func (s *session) handleGObjectInfo(ctx context.Context, args []string) {
 	// bridge), LANG_OBJECTINFO_AITYPE (5083, no GameObjectAI model),
 	// LANG_SPAWNINFO_GROUP_ID (5070) / LANG_SPAWNINFO_COMPATIBILITY_MODE (5071)
 	// (no spawn-group / respawn-compatibility model).
+	return true
 }
 
 // handleGObjectMove mirrors HandleGameObjectMoveCommand (cs_gobject.cpp:372):
@@ -527,29 +550,32 @@ func (s *session) handleGObjectInfo(ctx context.Context, args []string) {
 // respawn trick (here: despawn + fresh create broadcast).
 // Fidelity gap: MapManager::IsValidMapCoord has no Go bridge, so coordinates
 // are stored as given without the C++ validity gate.
-func (s *session) handleGObjectMove(ctx context.Context, args []string) {
+func (s *session) handleGObjectMove(ctx context.Context, args []string) bool {
 	// C++ xyz is Optional<array<float,3>> (cs_gobject.cpp:372): exactly 0 or
 	// 3 coords; a partial xyz fails parsing instead of falling back to the
 	// player's position.
 	if len(args) != 1 && len(args) != 4 {
 		s.sendSysMessage("Syntax: .gobject move <guid> [x y z]")
-		return
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	spawnID, parseOK := parseGObjectSpawnID(args[0])
-	if !parseOK || spawnID == 0 {
-		// Variant operator! is !value (ChatCommandTags.h:257): guid 0 fails
-		// the handler and C++ shows help.
+	if !parseOK {
 		s.sendSysMessage("Syntax: .gobject move <guid> [x y z]")
-		return
+		return true
+	}
+	if spawnID == 0 {
+		// Variant operator! is !value (ChatCommandTags.h:283): guid 0 fails
+		// inside the handler (cs_gobject.cpp:373) with no message.
+		return false
 	}
 	row, ok := s.gobjectSpawnByGUID(ctx, db, uint32(spawnID))
 	if !ok {
-		return
+		return true
 	}
 	x, y, z := s.player.X, s.player.Y, s.player.Z
 	if len(args) == 4 {
@@ -558,7 +584,7 @@ func (s *session) handleGObjectMove(ctx context.Context, args []string) {
 			v, ok := parseCommandFloat(args[1+i])
 			if !ok {
 				s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-				return
+				return true
 			}
 			coords[i] = float32(v)
 		}
@@ -566,7 +592,7 @@ func (s *session) handleGObjectMove(ctx context.Context, args []string) {
 	}
 	if _, err := db.ExecContext(ctx, "UPDATE gameobject SET position_x = ?, position_y = ?, position_z = ? WHERE guid = ?", x, y, z, row.guid); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject move error: %v", err))
-		return
+		return true
 	}
 	s.gobjectRefreshSpawn(ctx, db, row.guid)
 	tmpl, _ := gobjectTemplateByEntry(ctx, db, row.entry)
@@ -576,21 +602,22 @@ func (s *session) handleGObjectMove(ctx context.Context, args []string) {
 	}
 	// C++ passes (spawnId, name, spawnId) (cs_gobject.cpp:405).
 	s.sendSysMessage(fmt.Sprintf("Move object (GUID: %d Name: %s Entry: %d)", row.guid, name, row.guid)) // LANG_COMMAND_MOVEOBJMESSAGE (277)
+	return true
 }
 
 // handleGObjectNear mirrors HandleGameObjectNearCommand (cs_gobject.cpp:429):
 // WORLD_SEL_GAMEOBJECT_NEAREST against the gameobject table ordered by
 // distance, default radius 10 (LANG_GO_LIST_CHAT = 517 per row,
 // LANG_COMMAND_NEAROBJMESSAGE = 581 summary).
-func (s *session) handleGObjectNear(ctx context.Context, args []string) {
+func (s *session) handleGObjectNear(ctx context.Context, args []string) bool {
 	if len(args) > 1 {
 		s.sendSysMessage("Syntax: .gobject near [dist]")
-		return
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	distance := 10.0
 	if len(args) > 0 {
@@ -599,7 +626,7 @@ func (s *session) handleGObjectNear(ctx context.Context, args []string) {
 		v, ok := parseCommandFloat(args[0])
 		if !ok {
 			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-			return
+			return true
 		}
 		distance = v
 	}
@@ -613,7 +640,7 @@ func (s *session) handleGObjectNear(ctx context.Context, args []string) {
 		s.player.X, s.player.X, s.player.Y, s.player.Y, s.player.Z, s.player.Z, distance*distance)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
-		return
+		return true
 	}
 	defer rows.Close()
 	var count uint32
@@ -630,6 +657,7 @@ func (s *session) handleGObjectNear(ctx context.Context, args []string) {
 		count++
 	}
 	s.sendSysMessage(fmt.Sprintf("Search in %d found %d gameobjects.", int(distance), count)) // LANG_COMMAND_NEAROBJMESSAGE (581)
+	return true
 }
 
 // handleGObjectTarget mirrors HandleGameObjectTargetCommand (cs_gobject.cpp:187):
@@ -640,15 +668,15 @@ func (s *session) handleGObjectNear(ctx context.Context, args []string) {
 // The detail line is LANG_GAMEOBJECT_DETAIL (524); empty results give
 // LANG_COMMAND_TARGETOBJNOTFOUND (266); the event clause mirrors the C++
 // eventFilter ("eventEntry IS NULL OR eventEntry IN (<active>)").
-func (s *session) handleGObjectTarget(ctx context.Context, args []string) {
+func (s *session) handleGObjectTarget(ctx context.Context, args []string) bool {
 	if len(args) > 1 {
 		s.sendSysMessage("Syntax: .gobject target [entry|name]")
-		return
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	distExpr := "((g.position_x - ?) * (g.position_x - ?) + (g.position_y - ?) * (g.position_y - ?) + (g.position_z - ?) * (g.position_z - ?))"
 	type targetRow struct {
@@ -704,13 +732,13 @@ func (s *session) handleGObjectTarget(ctx context.Context, args []string) {
 	}
 	if len(found) == 0 {
 		s.sendSysMessage("Cannot find any gameobject.") // LANG_COMMAND_TARGETOBJNOTFOUND (266)
-		return
+		return true
 	}
 	r := found[0]
 	tmpl, err := gobjectTemplateByEntry(ctx, db, r.entry)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (Entry: %d) does not exist.", r.entry)) // LANG_GAMEOBJECT_NOT_EXIST (522)
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("GUID: %d Name: %s SpawnId: %d Entry: %d Position: %f %f %f Map: %d Orientation: %f Phase: %d",
 		r.guid, tmpl.name, r.guid, r.entry, r.x, r.y, r.z, r.mapID, r.o, r.phase)) // LANG_GAMEOBJECT_DETAIL (524)
@@ -721,32 +749,36 @@ func (s *session) handleGObjectTarget(ctx context.Context, args []string) {
 	// Fidelity gaps: pool membership (no PoolMgr bridge), and live respawn
 	// timers (the dynamic state carries no respawn-delay model), so the
 	// respawn line reports zeros when a live state exists at all.
+	return true
 }
 
 // handleGObjectTurn mirrors HandleGameObjectTurnCommand (cs_gobject.cpp:333):
 // oz defaults to the player's orientation, oy/ox default to 0; the rotation is
 // stored via SetLocalRotationAngles semantics (Euler ZYX -> quaternion columns)
 // plus SaveToDB, then the delete/reload respawn trick.
-func (s *session) handleGObjectTurn(ctx context.Context, args []string) {
+func (s *session) handleGObjectTurn(ctx context.Context, args []string) bool {
 	if len(args) > 4 {
 		s.sendSysMessage("Syntax: .gobject turn <guid> [oz] [oy] [ox]")
-		return
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	spawnID, parseOK := parseGObjectSpawnID(args[0])
-	if !parseOK || spawnID == 0 {
-		// Variant operator! is !value (ChatCommandTags.h:257): guid 0 fails
-		// the handler and C++ shows help.
+	if !parseOK {
 		s.sendSysMessage("Syntax: .gobject turn <guid> [oz] [oy] [ox]")
-		return
+		return true
+	}
+	if spawnID == 0 {
+		// Variant operator! is !value (ChatCommandTags.h:283): guid 0 fails
+		// inside the handler (cs_gobject.cpp:334) with no message.
+		return false
 	}
 	row, ok := s.gobjectSpawnByGUID(ctx, db, uint32(spawnID))
 	if !ok {
-		return
+		return true
 	}
 	oz := float64(s.player.Orientation)
 	oy, ox := 0.0, 0.0
@@ -755,7 +787,7 @@ func (s *session) handleGObjectTurn(ctx context.Context, args []string) {
 		v, ok := parseCommandFloat(args[1+i])
 		if !ok {
 			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-			return
+			return true
 		}
 		*vals[i] = v
 	}
@@ -763,7 +795,7 @@ func (s *session) handleGObjectTurn(ctx context.Context, args []string) {
 	if _, err := db.ExecContext(ctx, "UPDATE gameobject SET orientation = ?, rotation0 = ?, rotation1 = ?, rotation2 = ?, rotation3 = ? WHERE guid = ?",
 		float32(oz), rotX, rotY, rotZ, rotW, row.guid); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject turn error: %v", err))
-		return
+		return true
 	}
 	s.gobjectRefreshSpawn(ctx, db, row.guid)
 	tmpl, _ := gobjectTemplateByEntry(ctx, db, row.entry)
@@ -773,6 +805,7 @@ func (s *session) handleGObjectTurn(ctx context.Context, args []string) {
 	}
 	// C++ passes (spawnId, name, spawnId) (cs_gobject.cpp:360).
 	s.sendSysMessage(fmt.Sprintf("Turn object (GUID: %d Name: %s Entry: %d)", row.guid, name, row.guid)) // LANG_COMMAND_TURNOBJMESSAGE (276)
+	return true
 }
 
 // handleGObjectAdd mirrors HandleGameObjectAddCommand (cs_gobject.cpp:106):
@@ -782,31 +815,34 @@ func (s *session) handleGObjectTurn(ctx context.Context, args []string) {
 // Fidelity gaps: the GameObjectDisplayInfo.dbc validity check (no DBC bridge),
 // the player's real phase mask for spawn (no PhaseMask on the Go player
 // state), and AddGameobjectToGrid (no server-side grid model).
-func (s *session) handleGObjectAdd(ctx context.Context, args []string) {
+func (s *session) handleGObjectAdd(ctx context.Context, args []string) bool {
 	if len(args) > 2 {
 		s.sendSysMessage("Syntax: .gobject add <entry> [spawntime]")
-		return
+		return true
 	}
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	entry, ok := parseGObjectEntry(args[0])
-	if !ok || entry == 0 {
-		// Variant operator! is !value (ChatCommandTags.h:257): entry 0
-		// fails the handler and C++ shows help; a bad token fails parsing.
+	if !ok {
 		s.sendSysMessage("Syntax: .gobject add <entry> [spawntime]")
-		return
+		return true
+	}
+	if entry == 0 {
+		// Variant operator! is !value (ChatCommandTags.h:283): entry 0
+		// fails inside the handler (cs_gobject.cpp:107) with no message.
+		return false
 	}
 	tmpl, err := gobjectTemplateByEntry(ctx, db, entry)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.sendSysMessage(fmt.Sprintf("Gameobject (Entry: %d) does not exist.", entry)) // LANG_GAMEOBJECT_NOT_EXIST (522)
-			return
+			return true
 		}
 		s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
-		return
+		return true
 	}
 	var spawnTimeSecs int64
 	if len(args) > 1 {
@@ -814,7 +850,7 @@ func (s *session) handleGObjectAdd(ctx context.Context, args []string) {
 		v, ok := parseCppBase0Int(args[1])
 		if !ok || v < -2147483648 || v > 2147483647 {
 			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-			return
+			return true
 		}
 		spawnTimeSecs = v
 	}
@@ -824,44 +860,45 @@ func (s *session) handleGObjectAdd(ctx context.Context, args []string) {
 		entry, s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, rotX, rotY, rotZ, rotW, spawnTimeSecs)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject add error: %v", err))
-		return
+		return true
 	}
 	spawnID, _ := res.LastInsertId()
 	s.gobjectRefreshSpawn(ctx, db, uint32(spawnID))
 	s.sendSysMessage(fmt.Sprintf("Add gameobject (Entry: %d Name: %s SpawnId: %d) at (%f, %f, %f)", entry, tmpl.name, spawnID, s.player.X, s.player.Y, s.player.Z)) // LANG_GAMEOBJECT_ADD (525)
+	return true
 }
 
 // handleGObjectAddTemp mirrors HandleGameObjectAddTempCommand (cs_gobject.cpp:168):
 // Player::SummonGameObject via the dynamic-spawn registry, default 300s.
 // Fidelity gap: the auto-despawn timer is a Go time.AfterFunc rather than the
 // engine's respawn scheduler.
-func (s *session) handleGObjectAddTemp(ctx context.Context, args []string) {
+func (s *session) handleGObjectAddTemp(ctx context.Context, args []string) bool {
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	if len(args) == 0 || len(args) > 2 {
 		s.sendSysMessage("Syntax: .gobject add temp <entry> [spawntime]")
-		return
+		return true
 	}
 	entry, ok := parseGObjectEntry(args[0])
 	if !ok {
 		s.sendSysMessage("Syntax: .gobject add temp <entry> [spawntime]")
-		return
+		return true
 	}
 	if entry == 0 {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (Entry: %s) does not exist.", args[0])) // LANG_GAMEOBJECT_NOT_EXIST (522)
-		return
+		return true
 	}
 	tmpl, err := gobjectTemplateByEntry(ctx, db, entry)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.sendSysMessage(fmt.Sprintf("Gameobject (Entry: %d) does not exist.", entry)) // LANG_GAMEOBJECT_NOT_EXIST (522)
-			return
+			return true
 		}
 		s.sendSysMessage(fmt.Sprintf("Gameobject lookup error: %v", err))
-		return
+		return true
 	}
 	rotX, rotY, rotZ, rotW := gobjectQuatFromEulerZYX(float64(s.player.Orientation), 0, 0)
 	spawnSecs := int64(300)
@@ -871,7 +908,7 @@ func (s *session) handleGObjectAddTemp(ctx context.Context, args []string) {
 		v, ok := parseCommandUint64(args[1])
 		if !ok {
 			s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-			return
+			return true
 		}
 		spawnSecs = int64(v)
 	}
@@ -898,43 +935,48 @@ func (s *session) handleGObjectAddTemp(ctx context.Context, args []string) {
 		s.server.despawnDynamicGameObject(dyn.GUID)
 	})
 	s.server.spawnDynamicGameObject(dyn)
+	return true
 }
 
 // handleGObjectSetPhase mirrors HandleGameObjectSetPhaseCommand
 // (cs_gobject.cpp:412): zero phaseMask is rejected (LANG_BAD_VALUE = 115),
 // then SetPhaseMask(true) + SaveToDB (the phase is persisted and the spawn
 // re-broadcast).
-func (s *session) handleGObjectSetPhase(ctx context.Context, args []string) {
+func (s *session) handleGObjectSetPhase(ctx context.Context, args []string) bool {
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	if len(args) != 2 {
 		s.sendSysMessage("Syntax: .gobject set phase <guid> <phaseMask>")
-		return
+		return true
 	}
 	spawnID, parseOK := parseGObjectSpawnID(args[0])
-	if !parseOK || spawnID == 0 {
-		// Variant operator! is !value (ChatCommandTags.h:257): guid 0 fails
-		// the handler and C++ shows help.
+	if !parseOK {
 		s.sendSysMessage("Syntax: .gobject set phase <guid> <phaseMask>")
-		return
+		return true
+	}
+	if spawnID == 0 {
+		// Variant operator! is !value (ChatCommandTags.h:283): guid 0 fails
+		// inside the handler (cs_gobject.cpp:430) with no message.
+		return false
 	}
 	row, ok := s.gobjectSpawnByGUID(ctx, db, uint32(spawnID))
 	if !ok {
-		return
+		return true
 	}
 	phaseMask, ok := parseCommandUint32(args[1])
 	if !ok || phaseMask == 0 {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-		return
+		return true
 	}
 	if _, err := db.ExecContext(ctx, "UPDATE gameobject SET phaseMask = ? WHERE guid = ?", uint32(phaseMask), row.guid); err != nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject set phase error: %v", err))
-		return
+		return true
 	}
 	s.gobjectRefreshSpawn(ctx, db, row.guid)
+	return true
 }
 
 // handleGObjectSetState mirrors HandleGameObjectSetStateCommand
@@ -943,52 +985,59 @@ func (s *session) handleGObjectSetPhase(ctx context.Context, args []string) {
 // byte <type> (0 state, 1 type, 2 artkit, 3 animprogress), 4 broadcasts
 // SMSG_GAMEOBJECT_CUSTOM_ANIM. Non-state bytes ride the bytes1 values
 // update; the state byte keeps the reset-state broadcast + hook path.
-func (s *session) handleGObjectSetState(ctx context.Context, args []string) {
+func (s *session) handleGObjectSetState(ctx context.Context, args []string) bool {
 	db := s.goWorldDB()
 	if db == nil {
 		s.sendSysMessage("Database not available.")
-		return
+		return true
 	}
 	if len(args) < 2 || len(args) > 3 {
 		s.sendSysMessage("Syntax: .gobject set state <guid> <type> [state]")
-		return
+		return true
 	}
 	spawnID, parseOK := parseGObjectSpawnID(args[0])
-	if !parseOK || spawnID == 0 {
-		// Variant operator! is !value (ChatCommandTags.h:257): guid 0 fails
-		// the handler and C++ shows help.
+	if !parseOK {
 		s.sendSysMessage("Syntax: .gobject set state <guid> <type> [state]")
-		return
+		return true
+	}
+	if spawnID == 0 {
+		// Variant operator! is !value (ChatCommandTags.h:283): guid 0 fails
+		// inside the handler (cs_gobject.cpp:590) with no message.
+		return false
 	}
 	row, ok := s.gobjectSpawnByGUID(ctx, db, uint32(spawnID))
 	if !ok {
-		return
+		return true
 	}
 	// C++ objectType is int32, base-0 (StringConvert.h:43-69).
 	objectType64, ok := parseCppBase0Int(args[1])
 	if !ok || objectType64 < -2147483648 || objectType64 > 2147483647 {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-		return
+		return true
 	}
 	objectType := int32(objectType64)
 	packed := gameObjectGUID(row.guid, row.entry)
 	if objectType < 0 {
 		if objectType == -1 {
 			s.server.broadcastGameObjectDespawn(row.mapID, packed)
-		} else if objectType == -2 {
-			// C++ returns false with no message (cs_gobject.cpp:609-611);
-			// the dispatcher shows the command help.
-			s.sendSysMessage("Syntax: .gobject set state <guid> <type> [state]")
+			return true
 		}
-		return
+		if objectType == -2 {
+			// C++ returns false with no message (cs_gobject.cpp:605-608);
+			// the dispatcher shows the command help.
+			return false
+		}
+		return true
 	}
 	if len(args) < 3 {
-		return
+		// C++ returns false with no message when no state is given
+		// (cs_gobject.cpp:610).
+		return false
 	}
 	objectState, ok := parseCommandUint32(args[2])
 	if !ok {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-		return
+		return true
 	}
 	applied := false
 	if objectType == 4 {
@@ -1011,51 +1060,62 @@ func (s *session) handleGObjectSetState(ctx context.Context, args []string) {
 	if applied {
 		s.sendSysMessage(fmt.Sprintf("Set gobject type %d state %d", objectType, objectState))
 	}
+	return true
 }
 
 // handleGObjectSpawnGroup runs HandleNpcSpawnGroup (cs_npc.cpp:1356, shared
 // by the gobject table) on the spawn-group manager; same messages as the
 // npc arm.
-func (s *session) handleGObjectSpawnGroup(ctx context.Context, args []string) {
+func (s *session) handleGObjectSpawnGroup(ctx context.Context, args []string) bool {
 	groupID, force, ignoreRespawn, ok := parseSpawnGroupArgs(args, true)
+	if len(args) == 0 {
+		// C++ returns false with no message on empty opts (cs_npc.cpp:1358).
+		return false
+	}
 	if !ok {
 		s.sendSysMessage("Syntax: .gobject spawngroup <groupId> [force] [ignorerespawn]")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	count, valid := s.server.spawnGroupSpawn(ctx, db, s.player.Map, s.player.InstanceID, groupID, ignoreRespawn, force)
 	if !valid {
 		s.sendSysMessage(fmt.Sprintf("Spawn group %d is not valid.", groupID))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Spawned %d objects.", count))
+	return true
 }
 
 // handleGObjectDespawnGroup runs HandleNpcDespawnGroup (cs_npc.cpp:1397,
 // shared by the gobject table) on the spawn-group manager.
-func (s *session) handleGObjectDespawnGroup(ctx context.Context, args []string) {
+func (s *session) handleGObjectDespawnGroup(ctx context.Context, args []string) bool {
 	groupID, removeRespawnTime, _, ok := parseSpawnGroupArgs(args, false)
+	if len(args) == 0 {
+		// C++ returns false with no message on empty opts (cs_npc.cpp:1399).
+		return false
+	}
 	if !ok {
 		s.sendSysMessage("Syntax: .gobject despawngroup <groupId> [removerespawntime]")
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
-		return
+		return true
 	}
 	count, valid := s.server.spawnGroupDespawn(ctx, db, s.player.Map, s.player.InstanceID, groupID, removeRespawnTime)
 	if !valid {
 		s.sendSysMessage(fmt.Sprintf("Spawn group %d is not valid.", groupID))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Despawned a total of %d objects.", count))
+	return true
 }

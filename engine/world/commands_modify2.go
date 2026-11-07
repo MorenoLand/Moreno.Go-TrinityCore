@@ -158,18 +158,19 @@ func checkModifySpeedBounds(arg string, minimumBound, maximumBound float64) (flo
 // handleModifyScale mirrors HandleModifyScaleCommand (cs_modify.cpp:474):
 // the selected unit (online player only in the Go tree) or the handler's own
 // player gets the object scale.
-func (s *session) handleModifyScale(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyScale) {
-		return
+func (s *session) handleModifyScale(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyScale) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify scale <val>")
-		return
+		// C++ returns false with no message on empty args
+		// (cs_modify.cpp:381-382 via CheckModifySpeed).
+		return false
 	}
 	scale, ok := checkModifySpeedBounds(args[0], 0.1, 10.0)
 	if !ok {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	if motion := s.castCommandSelectedCreature(); motion != nil {
 		// C++ scale targets the selected unit (cs_modify.cpp:490); a
@@ -191,11 +192,14 @@ func (s *session) handleModifyScale(ctx context.Context, args []string) {
 			s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
 				map[int]uint32{objectFieldScale: math.Float32bits(float32(effective))})
 		}
-		return
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	// LANG_YOU_CHANGE_SIZE 147 / LANG_YOURS_SIZE_CHANGED 148.
 	s.notifyModify(target,
@@ -203,19 +207,21 @@ func (s *session) handleModifyScale(ctx context.Context, args []string) {
 		fmt.Sprintf("%s changed your size to %f.", s.player.Name, scale))
 	target.scale = scale
 	target.sendPlayerUpdate()
+	return true
 }
 
 // handleModifySpell mirrors HandleModifySpellCommand (cs_modify.cpp:295):
 // SMSG_SET_FLAT_SPELL_MODIFIER (0x266) with uint8 flat id, uint8 op,
 // uint16 value, uint16 mark (default 65535) goes to the selected player or
 // the handler's own player.
-func (s *session) handleModifySpell(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifySpell) {
-		return
+func (s *session) handleModifySpell(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifySpell) {
+		return false
 	}
 	if len(args) < 3 {
-		s.sendSysMessage("Syntax: .modify spell <spellflatid> <op> <val> [mark]")
-		return
+		// C++ returns false with no message on a missing spellflatid/op/
+		// val token (cs_modify.cpp:282-292: null strtok results).
+		return false
 	}
 	// C++ uses atoi with uint8/uint8/uint16/uint16 truncation (mark
 	// defaults to 65535), so 300 becomes 44 and "abc" becomes 0 instead
@@ -228,8 +234,11 @@ func (s *session) handleModifySpell(ctx context.Context, args []string) {
 		mark = uint16(cAtoi(args[3]))
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	// LANG_YOU_CHANGE_SPELLFLATID 131 / LANG_YOURS_SPELLFLATID_CHANGED 132.
 	s.notifyModify(target,
@@ -241,25 +250,27 @@ func (s *session) handleModifySpell(ctx context.Context, args []string) {
 	packet.WriteU16(val)
 	packet.WriteU16(mark)
 	_ = target.write(uint16(protocol.OpcodeSMSG_SET_FLAT_SPELL_MODIFIER), packet.Bytes(), true)
+	return true
 }
 
 // handleModifyStandState mirrors HandleModifyStandStateCommand
 // (cs_modify.cpp:857): UNIT_NPC_EMOTESTATE on the handler's own player.
-func (s *session) handleModifyStandState(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyStandState) {
-		return
+func (s *session) handleModifyStandState(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyStandState) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify standstate <animid>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:856-857).
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	animID := uint32(cAtoi(args[0]))
 	s.player.EmoteState = animID
 	s.sendPlayerUpdate()
+	return true
 }
 
 // mountDisplayValid mirrors the sCreatureDisplayInfoStore.LookupEntry gate in
@@ -280,31 +291,35 @@ func (s *session) mountDisplayValid(mount uint32) bool {
 // the selected player or the handler's own player is mounted on the display
 // id, and the RUN/FLIGHT rates take the given speed via the SetSpeedRate
 // bridge (Unit.cpp:8825).
-func (s *session) handleModifyMount(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyMount) {
-		return
+func (s *session) handleModifyMount(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyMount) {
+		return false
 	}
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .modify mount <id> <speed>")
-		return
+		// C++ returns false with no message on a missing mount/speed
+		// token (cs_modify.cpp:510-513: null strtok results).
+		return false
 	}
 	mount := uint32(cAtoi(args[0]))
 	if !s.mountDisplayValid(mount) {
 		s.sendSysMessage("There is no such mount.") // LANG_NO_MOUNT 149
-		return
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	speed, ok := checkModifySpeedBounds(args[1], 0.1, 50.0)
 	if !ok {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	if target.isInFlight() {
 		s.sendSysMessage(miscCharInFlight) // LANG_CHAR_IN_FLIGHT 21
-		return
+		return true
 	}
 	// LANG_YOU_GIVE_MOUNT 150 / LANG_MOUNT_GIVED 151.
 	s.notifyModify(target,
@@ -318,25 +333,23 @@ func (s *session) handleModifyMount(ctx context.Context, args []string) {
 	// is display-only (no mount aura), so the rates land directly.
 	target.setGMSpeedRate(moveTypeRun, speed)
 	target.setGMSpeedRate(moveTypeFlight, speed)
+	return true
 }
 
 // extendModifyDispatcher adds the chunk-2a arms to the modify root. It is
-// called from handleCmdModify's dispatch switch.
-func (s *session) handleModifyChunk2a(ctx context.Context, sub string, rest []string) bool {
+// called from handleCmdModify's dispatch switch. It returns (handled, ok):
+// handled is false when no arm matched; ok is the matched arm's bool.
+func (s *session) handleModifyChunk2a(ctx context.Context, sub string, rest []string) (bool, bool) {
 	switch {
 	case strings.HasPrefix("scale", sub):
-		s.handleModifyScale(ctx, rest)
+		return true, s.handleModifyScale(ctx, rest)
 	case strings.HasPrefix("spell", sub):
-		s.handleModifySpell(ctx, rest)
+		return true, s.handleModifySpell(ctx, rest)
 	case strings.HasPrefix("standstate", sub):
-		s.handleModifyStandState(ctx, rest)
+		return true, s.handleModifyStandState(ctx, rest)
 	case strings.HasPrefix("mount", sub):
-		s.handleModifyMount(ctx, rest)
+		return true, s.handleModifyMount(ctx, rest)
 	default:
-		if s.handleModifyChunk2b(ctx, sub, rest) {
-			return true
-		}
-		return false
+		return s.handleModifyChunk2b(ctx, sub, rest)
 	}
-	return true
 }

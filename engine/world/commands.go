@@ -8733,35 +8733,29 @@ func (s *session) buildCommandTree() *commandNode {
 		s.handleCmdGo(ctx, append([]string{"gameobject", "id"}, args...))
 		return true
 	}, permissionCommandGO)
-	modifyNode := root.addWithPerms("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, map[string]uint32{"hp": permissionCommandModifyHP, "mana": permissionCommandModifyMana, "energy": permissionCommandModifyEnergy, "rage": permissionCommandModifyRage, "runicpower": permissionCommandModifyRunicPower, "money": permissionCommandModifyMoney, "honor": permissionCommandModifyHonor, "arenapoints": permissionCommandModifyArenaPoints, "xp": permissionCommandModifyXP, "drunk": permissionCommandModifyDrunk, "scale": permissionCommandModifyScale, "spell": permissionCommandModifySpell, "standstate": permissionCommandModifyStandState, "mount": permissionCommandModifyMount, "gender": permissionCommandModifyGender, "bit": permissionCommandModifyBit, "faction": permissionCommandModifyFaction, "phase": permissionCommandModifyPhase, "speed": permissionCommandModifySpeed, "talentpoints": permissionCommandModifyTalentPoints, "reputation": permissionCommandModifyReputation}, nil).withPerm(permissionCommandModify)
+	modifyNode := root.addWithPerms("modify", func(ctx context.Context, args []string) bool { return s.handleCmdModify(ctx, args) }, map[string]uint32{"hp": permissionCommandModifyHP, "mana": permissionCommandModifyMana, "energy": permissionCommandModifyEnergy, "rage": permissionCommandModifyRage, "runicpower": permissionCommandModifyRunicPower, "money": permissionCommandModifyMoney, "honor": permissionCommandModifyHonor, "arenapoints": permissionCommandModifyArenaPoints, "xp": permissionCommandModifyXP, "drunk": permissionCommandModifyDrunk, "scale": permissionCommandModifyScale, "spell": permissionCommandModifySpell, "standstate": permissionCommandModifyStandState, "mount": permissionCommandModifyMount, "gender": permissionCommandModifyGender, "bit": permissionCommandModifyBit, "faction": permissionCommandModifyFaction, "phase": permissionCommandModifyPhase, "speed": permissionCommandModifySpeed, "talentpoints": permissionCommandModifyTalentPoints, "reputation": permissionCommandModifyReputation}, nil).withPerm(permissionCommandModify)
 	// R13 depth (cs_modify.cpp:47-52): "speed" is a sub-table with
 	// all/backwalk/fly/walk/swim leaves plus a "" entry (the
 	// all-speeds handler), so the group node keeps its handler via
 	// the family switch.
 	modifySpeed := modifyNode.group("speed")
 	modifySpeed.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdModify(ctx, append([]string{"speed"}, args...))
-		return true
+		return s.handleCmdModify(ctx, append([]string{"speed"}, args...))
 	}
 	modifySpeed.leaf("all", func(ctx context.Context, args []string) bool {
-		s.handleCmdModify(ctx, append([]string{"speed", "all"}, args...))
-		return true
+		return s.handleCmdModify(ctx, append([]string{"speed", "all"}, args...))
 	}, permissionCommandModifySpeedAll)
 	modifySpeed.leaf("backwalk", func(ctx context.Context, args []string) bool {
-		s.handleCmdModify(ctx, append([]string{"speed", "backwalk"}, args...))
-		return true
+		return s.handleCmdModify(ctx, append([]string{"speed", "backwalk"}, args...))
 	}, permissionCommandModifySpeedBackwalk)
 	modifySpeed.leaf("fly", func(ctx context.Context, args []string) bool {
-		s.handleCmdModify(ctx, append([]string{"speed", "fly"}, args...))
-		return true
+		return s.handleCmdModify(ctx, append([]string{"speed", "fly"}, args...))
 	}, permissionCommandModifySpeedFly)
 	modifySpeed.leaf("walk", func(ctx context.Context, args []string) bool {
-		s.handleCmdModify(ctx, append([]string{"speed", "walk"}, args...))
-		return true
+		return s.handleCmdModify(ctx, append([]string{"speed", "walk"}, args...))
 	}, permissionCommandModifySpeedWalk)
 	modifySpeed.leaf("swim", func(ctx context.Context, args []string) bool {
-		s.handleCmdModify(ctx, append([]string{"speed", "swim"}, args...))
-		return true
+		return s.handleCmdModify(ctx, append([]string{"speed", "swim"}, args...))
 	}, permissionCommandModifySpeedSwim)
 	root.addWithPerms("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, map[string]uint32{"set": permissionCommandAddItemSet}, nil).withPerm(permissionCommandAddItem)
 	root.addWithPerms("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, map[string]uint32{"back": permissionCommandCastBack, "dist": permissionCommandCastDist, "self": permissionCommandCastSelf, "target": permissionCommandCastTarget, "dest": permissionCommandCastDest}, nil).withPerm(permissionCommandCast)
@@ -8949,7 +8943,7 @@ func (s *session) buildCommandTree() *commandNode {
 		}, typ.perm)
 	}
 	root.addWithPerms("event", func(ctx context.Context, args []string) bool { s.handleCmdEvent(ctx, args); return true }, map[string]uint32{"activelist": permissionCommandEventActivelist, "start": permissionCommandEventStart, "stop": permissionCommandEventStop, "info": permissionCommandEventInfo}, nil)
-	gobjectNode := root.addWithPerms("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, map[string]uint32{"activate": permissionCommandGObjectActivate, "delete": permissionCommandGObjectDelete, "info": permissionCommandGObjectInfo, "move": permissionCommandGObjectMove, "near": permissionCommandGObjectNear, "target": permissionCommandGObjectTarget, "turn": permissionCommandGObjectTurn, "spawngroup": permissionCommandGObjectSpawnGroup, "despawngroup": permissionCommandGObjectDespawnGroup, "add": 0, "set": 0}, map[string]string{"gob": "gobject"})
+	gobjectNode := root.addWithPerms("gobject", func(ctx context.Context, args []string) bool { return s.handleCmdGObject(ctx, args) }, map[string]uint32{"activate": permissionCommandGObjectActivate, "delete": permissionCommandGObjectDelete, "info": permissionCommandGObjectInfo, "move": permissionCommandGObjectMove, "near": permissionCommandGObjectNear, "target": permissionCommandGObjectTarget, "turn": permissionCommandGObjectTurn, "spawngroup": permissionCommandGObjectSpawnGroup, "despawngroup": permissionCommandGObjectDespawnGroup, "add": 0, "set": 0}, map[string]string{"gob": "gobject"})
 	// R13 depth (cs_gobject.cpp:61-71, old-form table): "add temp"
 	// and "set phase"/"set state" are multi-word entries, so add/set
 	// are 3-token paths; "add" also carries the bare handler, so the
@@ -8957,21 +8951,17 @@ func (s *session) buildCommandTree() *commandNode {
 	// has no "" entry and stays handler-less.
 	gobjectAdd := gobjectNode.group("add")
 	gobjectAdd.invoke = func(ctx context.Context, args []string) bool {
-		s.handleCmdGObject(ctx, append([]string{"add"}, args...))
-		return true
+		return s.handleCmdGObject(ctx, append([]string{"add"}, args...))
 	}
 	gobjectAdd.leaf("temp", func(ctx context.Context, args []string) bool {
-		s.handleCmdGObject(ctx, append([]string{"add", "temp"}, args...))
-		return true
+		return s.handleCmdGObject(ctx, append([]string{"add", "temp"}, args...))
 	}, permissionCommandGObjectAddTemp)
 	gobjectSet := gobjectNode.group("set")
 	gobjectSet.leaf("phase", func(ctx context.Context, args []string) bool {
-		s.handleCmdGObject(ctx, append([]string{"set", "phase"}, args...))
-		return true
+		return s.handleCmdGObject(ctx, append([]string{"set", "phase"}, args...))
 	}, permissionCommandGObjectSetPhase)
 	gobjectSet.leaf("state", func(ctx context.Context, args []string) bool {
-		s.handleCmdGObject(ctx, append([]string{"set", "state"}, args...))
-		return true
+		return s.handleCmdGObject(ctx, append([]string{"set", "state"}, args...))
 	}, permissionCommandGObjectSetState)
 	root.addWithPerms("group", func(ctx context.Context, args []string) bool { s.handleCmdGroup(ctx, args); return true }, map[string]uint32{"set": permissionCommandGroupSet, "leader": permissionCommandGroupLeader, "disband": permissionCommandGroupDisband, "remove": permissionCommandGroupRemove, "join": permissionCommandGroupJoin, "list": permissionCommandGroupList, "summon": permissionCommandGroupSummon}, nil).withPerm(permissionCommandGroup)
 	root.addWithPerms("guild", func(ctx context.Context, args []string) bool { s.handleCmdGuild(ctx, args); return true }, map[string]uint32{"create": permissionCommandGuildCreate, "delete": permissionCommandGuildDelete, "invite": permissionCommandGuildInvite, "uninvite": permissionCommandGuildUninvite, "rank": permissionCommandGuildRank, "rename": permissionCommandGuildRename, "info": permissionCommandGuildInfo}, nil).withPerm(permissionCommandGuild)
@@ -8989,7 +8979,7 @@ func (s *session) buildCommandTree() *commandNode {
 		return true
 	}, permissionCommandHonorAddKill)
 	root.addWithPerms("instance", func(ctx context.Context, args []string) bool { s.handleCmdInstance(ctx, args); return true }, map[string]uint32{"listbinds": permissionCommandInstanceListBinds, "unbind": permissionCommandInstanceUnbind, "stats": permissionCommandInstanceStats, "savedata": permissionCommandInstanceSaveData, "setbossstate": permissionCommandInstanceSetBossState, "getbossstate": permissionCommandInstanceGetBossState}, nil).withPerm(permissionCommandInstance)
-	learnNode := root.add("learn", func(ctx context.Context, args []string) bool { s.handleCmdLearn(ctx, args); return true }, []string{"all", "my"}, nil)
+	learnNode := root.add("learn", func(ctx context.Context, args []string) bool { return s.handleCmdLearn(ctx, args) }, []string{"all", "my"}, nil)
 	// R13 depth (cs_learn.cpp:47-60, old-form tables): "all" and "my"
 	// are sub-tables with no "" entries (the bare learn handler
 	// lives on the learn node itself), so both group nodes stay
@@ -9011,16 +9001,14 @@ func (s *session) buildCommandTree() *commandNode {
 	} {
 		arm := arm
 		learnAll.leaf(arm.name, func(ctx context.Context, args []string) bool {
-			s.handleCmdLearn(ctx, append([]string{"all", arm.name}, args...))
-			return true
+			return s.handleCmdLearn(ctx, append([]string{"all", arm.name}, args...))
 		}, arm.perm)
 	}
 	learnMy := learnNode.group("my")
 	for _, arm := range []string{"trainer", "quests"} {
 		arm := arm
 		learnMy.leaf(arm, func(ctx context.Context, args []string) bool {
-			s.handleCmdLearn(ctx, append([]string{"my", arm}, args...))
-			return true
+			return s.handleCmdLearn(ctx, append([]string{"my", arm}, args...))
 		}, permissionCommandLearnAllMySpells)
 	}
 	lookupNode := root.addWithPerms("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, map[string]uint32{"area": permissionCommandLookupArea, "creature": permissionCommandLookupCreature, "event": permissionCommandLookupEvent, "faction": permissionCommandLookupFaction, "item": permissionCommandLookupItem, "object": permissionCommandLookupObject, "quest": permissionCommandLookupQuest, "player": 0, "skill": permissionCommandLookupSkill, "spell": permissionCommandLookupSpell, "taxinode": permissionCommandLookupTaxinode, "tele": permissionCommandLookupTele, "title": permissionCommandLookupTitle, "map": permissionCommandLookupMap}, nil)
@@ -9100,7 +9088,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("chat", worldChatInvoke, nil, nil)
 	root.add("c", worldChatInvoke, nil, nil)
 	root.add("world", worldChatInvoke, nil, nil)
-	root.add("unlearn", func(ctx context.Context, args []string) bool { s.handleCmdUnLearn(ctx, args); return true }, nil, nil).withPerm(permissionCommandUnlearn)
+	root.add("unlearn", func(ctx context.Context, args []string) bool { return s.handleCmdUnLearn(ctx, args) }, nil, nil).withPerm(permissionCommandUnlearn)
 	root.add("appear", func(ctx context.Context, args []string) bool { s.handleCmdAppear(ctx, args); return true }, nil, nil).withPerm(permissionCommandAppear)
 	root.add("aura", func(ctx context.Context, args []string) bool { s.handleCmdAura(ctx, args); return true }, nil, nil).withPerm(permissionCommandAura)
 	root.add("unaura", func(ctx context.Context, args []string) bool { s.handleCmdUnAura(ctx, args); return true }, nil, nil).withPerm(permissionCommandUnAura)
@@ -9151,8 +9139,8 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("wchange", func(ctx context.Context, args []string) bool { s.handleCmdChangeWeather(ctx, args); return true }, nil, nil).withPerm(permissionCommandChangeWeather)
 	root.add("mailbox", func(ctx context.Context, args []string) bool { s.handleCmdMailBox(ctx); return true }, nil, nil).withPerm(permissionCommandMailBox)
 	root.addWithPerms("mmap", func(ctx context.Context, args []string) bool { s.handleCmdMMap(ctx, args); return true }, map[string]uint32{"loadedtiles": permissionCommandMMapLoadedTiles, "loc": permissionCommandMMapLoc, "path": permissionCommandMMapPath, "stats": permissionCommandMMapStats, "testarea": permissionCommandMMapTestArea}, nil).withPerm(permissionCommandMMap)
-	root.add("morph", func(ctx context.Context, args []string) bool { s.handleCmdMorph(ctx, args); return true }, nil, nil).withPerm(permissionCommandMorph)
-	root.add("demorph", func(ctx context.Context, args []string) bool { s.handleCmdDeMorph(ctx); return true }, nil, nil).withPerm(permissionCommandDeMorph)
+	root.add("morph", func(ctx context.Context, args []string) bool { return s.handleCmdMorph(ctx, args) }, nil, nil).withPerm(permissionCommandMorph)
+	root.add("demorph", func(ctx context.Context, args []string) bool { return s.handleCmdDeMorph(ctx) }, nil, nil).withPerm(permissionCommandDeMorph)
 	npcNode := root.addWithPerms("npc", func(ctx context.Context, args []string) bool { return s.handleCmdNPC(ctx, args) }, map[string]uint32{"add": 0, "set": 0, "move": permissionCommandNPCMove, "delete": permissionCommandNPCDelete, "near": permissionCommandNPCNear, "info": permissionCommandNPCInfo, "playemote": permissionCommandNPCPlayEmote, "say": permissionCommandNPCSay, "textemote": permissionCommandNPCTextEmote, "whisper": permissionCommandNPCWhisper, "yell": permissionCommandNPCYell, "tame": permissionCommandNPCTame, "spawngroup": permissionCommandNPCSpawnGroup, "despawngroup": permissionCommandNPCDespawnGroup, "follow": permissionCommandNPCFollow, "evade": permissionCommandNPCEvade, "showloot": permissionCommandNPCShowLoot}, nil)
 	// R13 depth (cs_npc.cpp:61-86): "add" and "set" are sub-tables.
 	// The "add" group also carries the "" entry (HandleNpcAddCommand,

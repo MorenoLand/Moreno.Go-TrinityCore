@@ -60,15 +60,20 @@ func (s *session) modifyTargetLowerSecurity(ctx context.Context, target *session
 // checkModifyResources mirrors modify_commandscript::CheckModifyResources
 // (cs_modify.cpp:101): both values come from the same argument; either
 // below 1 (or max below value) is LANG_BAD_VALUE (115, "Incorrect value."
-// per the tree convention).
-func (s *session) checkModifyResources(arg string) (res, resmax int32, ok bool) {
+// per the tree convention). The fourth result is true only for the silent
+// empty-args leg (cs_modify.cpp:103-104, no message): callers return false
+// on it and true on the messaged BAD_VALUE leg.
+func (s *session) checkModifyResources(arg string) (res, resmax int32, ok bool, silent bool) {
+	if arg == "" {
+		return 0, 0, false, true
+	}
 	v := cAtoi(arg)
 	res, resmax = int32(v), int32(v)
 	if res < 1 || resmax < 1 || resmax < res {
 		s.sendSysMessage("Incorrect value.")
-		return 0, 0, false
+		return 0, 0, false, false
 	}
-	return res, resmax, true
+	return res, resmax, true, false
 }
 
 // notifyModify mirrors modify_commandscript::NotifyModification
@@ -86,17 +91,18 @@ func (s *session) notifyModify(target *session, msg, targetMsg string) {
 // handleCmdMorph mirrors HandleModifyMorphCommand (cs_modify.cpp:811): the
 // selected unit (online player only in the Go tree) or the handler's own
 // player gets the display id via UNIT_FIELD_DISPLAYID.
-func (s *session) handleCmdMorph(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandMorph) {
-		return
+func (s *session) handleCmdMorph(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandMorph) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .morph <displayid>")
-		return
+		// C++ returns false with no message on empty args
+		// (cs_modify.cpp:814-815); the dispatcher shows the help listing.
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	displayID := uint32(cAtoi(args[0]))
 	if motion := s.castCommandSelectedCreature(); motion != nil {
@@ -106,29 +112,30 @@ func (s *session) handleCmdMorph(ctx context.Context, args []string) {
 		if s.server != nil {
 			s.server.setMotionDisplayID(ctx, motion, displayID)
 		}
-		return
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
 	if target == nil {
-		return
+		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return
+		return false
 	}
 	target.player.TransformDisplayID = displayID
 	target.sendPlayerUpdate()
+	return true
 }
 
 // handleCmdDeMorph mirrors HandleDeMorphCommand (cs_modify.cpp:941): the
 // selected unit (online player only in the Go tree) or the handler's own
 // player drops the morph.
-func (s *session) handleCmdDeMorph(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandDeMorph) {
-		return
+func (s *session) handleCmdDeMorph(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandDeMorph) {
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	if motion := s.castCommandSelectedCreature(); motion != nil {
 		// C++ demorph targets the selected unit (cs_modify.cpp:941); a
@@ -142,23 +149,26 @@ func (s *session) handleCmdDeMorph(ctx context.Context) {
 				s.server.setMotionDisplayID(ctx, motion, native)
 			}
 		}
-		return
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
 	if target == nil {
-		return
+		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return
+		return false
 	}
 	target.player.TransformDisplayID = 0
 	target.sendPlayerUpdate()
+	return true
 }
 
 // handleCmdModify dispatches the "modify" root (cs_modify.cpp:47-75). Chunk 1
 // covers hp, mana, energy, rage, runicpower, money, honor, arenapoints, xp
-// and drunk; the remaining arms land in chunk 2.
-func (s *session) handleCmdModify(ctx context.Context, args []string) {
+// and drunk; the remaining arms land in chunk 2. It returns the arm's bool;
+// its own message legs (bare syntax, ambiguous list, unmatched token)
+// return true, and it returns false only via an arm result.
+func (s *session) handleCmdModify(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .modify hp|mana|energy|rage|runicpower|money|honor|arenapoints|xp|drunk|scale|spell|standstate|mount|gender|bit|faction|phase|speed|talentpoints|reputation <val>"
 	if len(args) == 0 {
 		// Bare ".modify": the root entry uses the deprecated 6-arg
@@ -167,11 +177,11 @@ func (s *session) handleCmdModify(ctx context.Context, args []string) {
 		// container, so the help listing prints with no perm gate (same
 		// dead-root-perm pattern as the mmap port).
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	// The Trinity parser prefix-matches command names at every nesting
 	// level; match the arm the same way here. A partial token matching two
@@ -197,53 +207,61 @@ func (s *session) handleCmdModify(ctx context.Context, args []string) {
 		for _, name := range matches {
 			s.sendSysMessage("  " + name)
 		}
-		return
+		return true
 	}
 	switch {
 	case strings.HasPrefix("hp", sub):
-		s.handleModifyHP(ctx, rest)
+		return s.handleModifyHP(ctx, rest)
 	case strings.HasPrefix("mana", sub):
-		s.handleModifyPower(ctx, rest, 0, "mana", 1)
+		return s.handleModifyPower(ctx, rest, 0, "mana", 1)
 	case strings.HasPrefix("energy", sub):
-		s.handleModifyPower(ctx, rest, 3, "energy", 10)
+		return s.handleModifyPower(ctx, rest, 3, "energy", 10)
 	case strings.HasPrefix("rage", sub):
-		s.handleModifyPower(ctx, rest, 1, "rage", 10)
+		return s.handleModifyPower(ctx, rest, 1, "rage", 10)
 	case strings.HasPrefix("runicpower", sub):
-		s.handleModifyPower(ctx, rest, 6, "runic power", 10)
+		return s.handleModifyPower(ctx, rest, 6, "runic power", 10)
 	case strings.HasPrefix("money", sub):
-		s.handleModifyMoney(ctx, rest)
+		return s.handleModifyMoney(ctx, rest)
 	case strings.HasPrefix("honor", sub):
-		s.handleModifyHonor(ctx, rest)
+		return s.handleModifyHonor(ctx, rest)
 	case strings.HasPrefix("arenapoints", sub):
-		s.handleModifyArena(ctx, rest)
+		return s.handleModifyArena(ctx, rest)
 	case strings.HasPrefix("xp", sub):
-		s.handleModifyXP(ctx, rest)
+		return s.handleModifyXP(ctx, rest)
 	case strings.HasPrefix("drunk", sub):
-		s.handleModifyDrunk(ctx, rest)
+		return s.handleModifyDrunk(ctx, rest)
 	default:
-		if s.handleModifyChunk2a(ctx, sub, rest) {
-			return
+		if handled, ok := s.handleModifyChunk2a(ctx, sub, rest); handled {
+			return ok
 		}
 		s.sendSysMessage(syntax)
 	}
+	return true
 }
 
 // handleModifyHP mirrors HandleModifyHPCommand (cs_modify.cpp:131).
-func (s *session) handleModifyHP(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyHP) {
-		return
+func (s *session) handleModifyHP(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyHP) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify hp <val>")
-		return
+		// C++ returns false with no message on empty args
+		// (cs_modify.cpp:103-104 via CheckModifyResources).
+		return false
 	}
-	hp, hpmax, ok := s.checkModifyResources(args[0])
+	hp, hpmax, ok, silent := s.checkModifyResources(args[0])
 	if !ok {
-		return
+		if silent {
+			return false
+		}
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	// LANG_YOU_CHANGE_HP 118 / LANG_YOURS_HP_CHANGED 119.
 	s.notifyModify(target,
@@ -255,12 +273,13 @@ func (s *session) handleModifyHP(ctx context.Context, args []string) {
 		_, _ = chars.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", target.player.Health, target.playerGUIDOf(target))
 	}
 	target.sendPlayerUpdate()
+	return true
 }
 
 // handleModifyPower mirrors HandleModifyManaCommand / HandleModifyEnergyCommand /
 // HandleModifyRageCommand / HandleModifyRunicPowerCommand (cs_modify.cpp:147-205):
 // energy, rage and runic power take a x10 multiplier on the raw value.
-func (s *session) handleModifyPower(ctx context.Context, args []string, powerIdx int, label string, multiplier int32) {
+func (s *session) handleModifyPower(ctx context.Context, args []string, powerIdx int, label string, multiplier int32) bool {
 	var perm uint32
 	switch powerIdx {
 	case 0:
@@ -272,22 +291,26 @@ func (s *session) handleModifyPower(ctx context.Context, args []string, powerIdx
 	default:
 		perm = permissionCommandModifyRunicPower
 	}
-	if s.miscDeny(ctx, perm) {
-		return
+	if !s.commandAllowed(ctx, perm) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage(fmt.Sprintf("Syntax: .modify %s <val>", strings.ReplaceAll(label, " ", "")))
-		return
+		// C++ returns false with no message on empty args
+		// (cs_modify.cpp:103-104 via CheckModifyResources).
+		return false
 	}
 	v := cAtoi(args[0])
 	res, resmax := int32(v)*multiplier, int32(v)*multiplier
 	if res < 1 || resmax < 1 || resmax < res {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	shown, shownMax := res/multiplier, resmax/multiplier
 	switch powerIdx {
@@ -314,6 +337,7 @@ func (s *session) handleModifyPower(ctx context.Context, args []string, powerIdx
 		_, _ = chars.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET power%d = ? WHERE guid = ?", powerIdx+1), target.player.Powers[powerIdx], target.playerGUIDOf(target))
 	}
 	target.sendPlayerUpdate()
+	return true
 }
 
 // parseModifyMoney mirrors the moneyToAddO leg of HandleModifyMoneyCommand
@@ -368,21 +392,25 @@ func parseModifyMoney(arg string) (int32, bool) {
 
 // handleModifyMoney mirrors HandleModifyMoneyCommand (cs_modify.cpp:535-605),
 // including the take-all-money and MAX_MONEY_AMOUNT clamp legs.
-func (s *session) handleModifyMoney(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyMoney) {
-		return
+func (s *session) handleModifyMoney(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyMoney) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify money <val>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:549-550).
+		return false
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	moneyToAdd, ok := parseModifyMoney(strings.Join(args, " "))
 	if !ok {
-		return
+		// C++ StringTo failure returns false with no message (cs_modify.cpp:569-570).
+		return false
 	}
 	targetMoney := target.player.Money
 	if moneyToAdd < 0 {
@@ -422,20 +450,24 @@ func (s *session) handleModifyMoney(ctx context.Context, args []string) {
 	}
 	target.questMoneyChanged(ctx)
 	target.sendPlayerMoneyUpdate()
+	return true
 }
 
 // handleModifyHonor mirrors HandleModifyHonorCommand (cs_modify.cpp:651).
-func (s *session) handleModifyHonor(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyHonor) {
-		return
+func (s *session) handleModifyHonor(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyHonor) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify honor <val>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:672-673).
+		return false
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	amount := int32(cAtoi(args[0]))
 	newValue := int64(target.player.TotalHonorPoints) + int64(amount)
@@ -447,21 +479,22 @@ func (s *session) handleModifyHonor(ctx context.Context, args []string) {
 	target.sendPlayerUpdate()
 	// LANG_COMMAND_MODIFY_HONOR 299.
 	s.sendSysMessage(fmt.Sprintf("%s's honor points are now %d.", target.player.Name, target.player.TotalHonorPoints))
+	return true
 }
 
 // handleModifyArena mirrors HandleModifyArenaCommand (cs_modify.cpp:878).
 // C++ checks only target-non-null here (no security gate, unlike honor).
-func (s *session) handleModifyArena(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyArenaPoints) {
-		return
+func (s *session) handleModifyArena(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyArenaPoints) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify arenapoints <val>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:867-868).
+		return false
 	}
 	target := s.modifyTargetPlayer(ctx)
 	if target == nil {
-		return
+		return true
 	}
 	amount := int32(cAtoi(args[0]))
 	newValue := int64(target.player.ArenaPoints) + int64(amount)
@@ -475,45 +508,59 @@ func (s *session) handleModifyArena(ctx context.Context, args []string) {
 	target.sendPlayerUpdate()
 	// LANG_COMMAND_MODIFY_ARENA 306.
 	s.sendSysMessage(fmt.Sprintf("%s's arena points are now %d.", target.player.Name, target.player.ArenaPoints))
+	return true
 }
 
 // handleModifyXP mirrors HandleModifyXPCommand (cs_modify.cpp:966).
-func (s *session) handleModifyXP(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyXP) {
-		return
+func (s *session) handleModifyXP(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyXP) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify xp <val>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:966-967).
+		return false
 	}
 	xp := cAtoi(args[0])
 	if xp < 1 {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	target.grantXP(ctx, uint32(xp)) // Player::GiveXP
+	return true
 }
 
 // handleModifyDrunk mirrors HandleModifyDrunkCommand (cs_modify.cpp:673).
-func (s *session) handleModifyDrunk(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyDrunk) {
-		return
+func (s *session) handleModifyDrunk(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyDrunk) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify drunk <val>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:698-699).
+		return false
 	}
 	drunklevel := uint8(cAtoi(args[0])) // (uint8)atoi: wraps mod 256 like C++
 	if drunklevel > 100 {
 		drunklevel = 100
 	}
-	target := s.modifyTargetPlayer(ctx)
-	if target == nil {
-		return
+	// C++ returns true with no message when no player resolves
+	// (cs_modify.cpp:703-704: the SetDrunkValue call is conditional, the
+	// return is unconditional), so resolve the target without the
+	// "Player not found." print modifyTargetPlayer emits.
+	target := s
+	if s.selection != 0 && s.server != nil {
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {
+			target = ts
+		}
+	}
+	if target.player == nil {
+		return true
 	}
 	// No security gate in C++ for the drunk arm; the drunken state lives in
 	// PLAYER_BYTES_3, which is in-memory only (no characters column). The
@@ -521,6 +568,7 @@ func (s *session) handleModifyDrunk(ctx context.Context, args []string) {
 	// SMSG_CROSSED_INEBRIATION_THRESHOLD packet to self + the 100yd
 	// visibility set on a drunken-state-band change (itemID 0 here).
 	target.setPlayerDrunkValue(0, drunklevel)
+	return true
 }
 
 // playerGUIDOf returns the character guid of the given target session.

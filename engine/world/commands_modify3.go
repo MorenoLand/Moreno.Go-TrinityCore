@@ -36,34 +36,34 @@ import (
 // "male"/"female" (prefix-matched with the case-sensitive C++ strncmp) on
 // the selected player or the handler's own player. The sObjectMgr->GetPlayerInfo gate is
 // moot: race/class pairs are validated at character creation in the Go tree.
-func (s *session) handleModifyGender(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyGender) {
-		return
+func (s *session) handleModifyGender(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyGender) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify gender <male|female>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:889-890).
+		return false
 	}
 	target := s.modifyTargetPlayer(ctx)
 	if target == nil {
-		return
+		return true
 	}
 	genderStr := strings.Join(args, " ") // C++ matches the whole tail string, case-sensitive strncmp
 	var gender uint8
 	switch {
 	case strings.HasPrefix("male", genderStr):
 		if target.player.Gender == 0 {
-			return // already male: C++ returns true silently
+			return true // already male: C++ returns true silently
 		}
 		gender = 0
 	case strings.HasPrefix("female", genderStr):
 		if target.player.Gender == 1 {
-			return // already female: C++ returns true silently
+			return true // already female: C++ returns true silently
 		}
 		gender = 1
 	default:
 		s.sendSysMessage("You must specify male or female.") // LANG_MUST_MALE_OR_FEMALE 1119
-		return
+		return true
 	}
 	target.player.Gender = gender
 	if chars := s.server.CharactersStore; chars != nil && chars.DB != nil {
@@ -78,6 +78,7 @@ func (s *session) handleModifyGender(ctx context.Context, args []string) {
 	s.notifyModify(target,
 		fmt.Sprintf("You change %s's gender to %s.", target.player.Name, genderFull),
 		fmt.Sprintf("%s changed your gender to %s.", s.player.Name, genderFull))
+	return true
 }
 
 // handleModifyBit mirrors HandleModifyBitCommand (cs_modify.cpp:616): the
@@ -95,54 +96,59 @@ func (s *session) handleModifyGender(ctx context.Context, args []string) {
 // reports honestly instead of claiming the toggle. The two LANG strings
 // are trinity_string 161/162 ("You remove/set bit %u in field %u."),
 // unseeded in-tree.
-func (s *session) handleModifyBit(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyBit) {
-		return
+func (s *session) handleModifyBit(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyBit) {
+		return false
 	}
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .modify bit <field> <bit>")
-		return
+		// C++ returns false with no message on a missing field/bit token
+		// (cs_modify.cpp:638-644).
+		return false
 	}
 	if motion := s.castCommandSelectedCreature(); motion != nil {
-		s.modifyBitUnit(ctx, motionIndexedValueBackend(s.server, motion), args, 148)
-		return
+		return s.modifyBitUnit(ctx, motionIndexedValueBackend(s.server, motion), args, 148)
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
 	}
-	s.modifyBitUnit(ctx, playerIndexedValueBackend(target, target.player), args, 1326)
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
+	}
+	return s.modifyBitUnit(ctx, playerIndexedValueBackend(target, target.player), args, 1326)
 }
 
 // modifyBitUnit is the shared toggle leg of handleModifyBit: range checks
 // against valuesCount, then a read-modify-write through the backend. A
 // write the backend cannot store (ok false, or stored == old so the bit
 // did not stick) is an honest not-supported, never a false SET/REMOVE.
-func (s *session) modifyBitUnit(ctx context.Context, backend indexedValueBackend, args []string, valuesCount int) {
+// Every leg prints a message, so it always returns true.
+func (s *session) modifyBitUnit(ctx context.Context, backend indexedValueBackend, args []string, valuesCount int) bool {
 	_ = ctx
 	field := cAtoi(args[0])
 	bit := cAtoi(args[1])
 	if field < 6 || field >= valuesCount || bit < 1 || bit > 32 {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	old, ok := backend.read(field)
 	if !ok {
 		s.sendSysMessage("modify bit is not supported for this field: no Go value store backs it.")
-		return
+		return true
 	}
 	mask := uint32(1) << uint(bit-1)
 	fields, changed, ok := backend.write(field, func(v uint32) uint32 { return v ^ mask })
 	if !ok || !changed {
 		s.sendSysMessage("modify bit is not supported for this field: no Go value store backs it.")
-		return
+		return true
 	}
 	backend.broadcast(fields)
 	if old&mask != 0 {
 		s.sendSysMessage(fmt.Sprintf("You remove bit %d in field %d.", bit, field))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("You set bit %d in field %d.", bit, field))
+	return true
 }
 
 // handleModifyFaction mirrors HandleModifyFactionCommand (cs_modify.cpp:209):
@@ -153,14 +159,21 @@ func (s *session) modifyBitUnit(ctx context.Context, backend indexedValueBackend
 // the FactionTemplate.dbc lookup (LANG_WRONG_FACTION on a miss). The
 // writes ride the motion slots plus a creature values-update broadcast,
 // the SetFaction bridge pattern.
-func (s *session) handleModifyFaction(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyFaction) {
-		return
+func (s *session) handleModifyFaction(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyFaction) {
+		return false
+	}
+	if len(args) == 0 {
+		// C++ returns false with no message on empty args
+		// (cs_modify.cpp:212-213), before the creature check — so the
+		// bare form never reports; the report leg is the wrong-link-type
+		// branch below (cs_modify.cpp:225-232).
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	srv := s.server
 	srv.motionMu.Lock()
@@ -168,21 +181,17 @@ func (s *session) handleModifyFaction(ctx context.Context, args []string) {
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 	srv.motionMu.Unlock()
 	low := uint32(guid & 0x00FFFFFF)
-	if len(args) == 0 {
-		s.sendSysMessage(fmt.Sprintf("Current faction for creature %d is %d, flags %d, npcflags %d, dyflags %d.", low, faction, flags, npcflags, dyflags))
-		return
-	}
 	if strings.HasPrefix(args[0], "|") {
 		// C++ extractKeyFromLink (Chat.cpp:362): a |Hfaction:key| link
 		// yields the key and tokenizing continues after the link tail;
-		// a wrong link type yields null, i.e. the no-arg report. The
+		// a wrong link type yields null, i.e. the current-values report. The
 		// synthetic first arg keeps its link tail: cAtoi stops at the
 		// first non-digit, so it reads exactly the key.
 		joined := strings.Join(args, " ")
 		fi := strings.Index(joined, "Hfaction:")
 		if fi < 0 {
 			s.sendSysMessage(fmt.Sprintf("Current faction for creature %d is %d, flags %d, npcflags %d, dyflags %d.", low, faction, flags, npcflags, dyflags))
-			return
+			return true
 		}
 		rest := joined[fi+len("Hfaction:"):]
 		tail := ""
@@ -203,17 +212,18 @@ func (s *session) handleModifyFaction(ctx context.Context, args []string) {
 	}
 	if srv == nil || srv.Data == nil {
 		s.sendSysMessage("Faction data is unavailable.")
-		return
+		return true
 	}
 	if _, found := s.factionTemplateEntry(faction); !found {
 		s.sendSysMessage(fmt.Sprintf("Wrong faction %d.", faction))
-		return
+		return true
 	}
 	srv.motionMu.Lock()
 	motion.Faction, motion.UnitFlags, motion.NPCFlags, motion.DynamicFlags = faction, flags, npcflags, dyflags
 	srv.motionMu.Unlock()
 	srv.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldFaction: faction, unitFieldFlags: flags, unitFieldNPCFlags: npcflags, unitFieldDynamicFlags: dyflags})
 	s.sendSysMessage(fmt.Sprintf("You changed faction for creature %d to %d, flags %d, npcflags %d, dyflags %d.", low, faction, flags, npcflags, dyflags))
+	return true
 }
 
 // handleModifyPhase mirrors HandleModifyPhaseCommand (cs_modify.cpp:836):
@@ -225,13 +235,13 @@ func (s *session) handleModifyFaction(ctx context.Context, args []string) {
 // stored-mask semantics (Player::SetGameMaster itself writes
 // PHASEMASK_ANYWHERE into that slot). The player-target security guard
 // mirrors the other modify arms; creature targets carry none in C++.
-func (s *session) handleModifyPhase(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyPhase) {
-		return
+func (s *session) handleModifyPhase(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyPhase) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify phase <phasemask>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:835-836).
+		return false
 	}
 	mask := uint32(cAtoi(args[0]))
 	if motion := s.castCommandSelectedCreature(); motion != nil {
@@ -239,14 +249,18 @@ func (s *session) handleModifyPhase(ctx context.Context, args []string) {
 		srv.motionMu.Lock()
 		motion.PhaseMask = mask
 		srv.motionMu.Unlock()
-		return
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	target.player.PhaseMaskOverride = mask
 	target.player.PhaseMaskOverrideSet = true
+	return true
 }
 
 // handleModifySpeed implements the "speed" sub-table (cs_modify.cpp:47-56):
@@ -256,34 +270,35 @@ func (s *session) handleModifyPhase(ctx context.Context, args []string) {
 // (setGMSpeedRate): the SMSG_FORCE_*_SPEED_CHANGE to self and
 // MSG_MOVE_SET_*_SPEED to nearby are real, and the ACK bookkeeping covers
 // all nine move types.
-func (s *session) handleModifySpeed(ctx context.Context, args []string) {
+func (s *session) handleModifySpeed(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .modify speed [all|backwalk|fly|walk|swim] <val>"
 	if len(args) == 0 {
-		if s.miscDeny(ctx, permissionCommandModifySpeed) {
-			return
+		// Bare ".modify speed": the speed node is a sub-table container
+		// like the modify root, so its help listing prints (no arm runs).
+		if !s.commandAllowed(ctx, permissionCommandModifySpeed) {
+			return false
 		}
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
 	// Bare ".modify speed <val>" hits the "" table entry, which shares the
 	// all-speeds handler and the root speed permission (561).
 	if _, err := strconv.ParseFloat(sub, 32); err == nil {
-		s.modifySpeedAll(ctx, permissionCommandModifySpeed, args)
-		return
+		return s.modifySpeedAll(ctx, permissionCommandModifySpeed, args)
 	}
 	switch {
 	case strings.HasPrefix("all", sub):
-		s.modifySpeedAll(ctx, permissionCommandModifySpeedAll, rest)
+		return s.modifySpeedAll(ctx, permissionCommandModifySpeedAll, rest)
 	case strings.HasPrefix("backwalk", sub):
-		s.modifySpeedType(ctx, permissionCommandModifySpeedBackwalk, rest, "back", []int{moveTypeRunBack}, true)
+		return s.modifySpeedType(ctx, permissionCommandModifySpeedBackwalk, rest, "back", []int{moveTypeRunBack}, true)
 	case strings.HasPrefix("fly", sub):
-		s.modifySpeedType(ctx, permissionCommandModifySpeedFly, rest, "fly", []int{moveTypeFlight}, false)
+		return s.modifySpeedType(ctx, permissionCommandModifySpeedFly, rest, "fly", []int{moveTypeFlight}, false)
 	case strings.HasPrefix("walk", sub):
-		s.modifySpeedType(ctx, permissionCommandModifySpeedWalk, rest, "", []int{moveTypeRun}, true)
+		return s.modifySpeedType(ctx, permissionCommandModifySpeedWalk, rest, "", []int{moveTypeRun}, true)
 	case strings.HasPrefix("swim", sub):
-		s.modifySpeedType(ctx, permissionCommandModifySpeedSwim, rest, "swim", []int{moveTypeSwim}, true)
+		return s.modifySpeedType(ctx, permissionCommandModifySpeedSwim, rest, "swim", []int{moveTypeSwim}, true)
 	default:
 		// Unmatched token: C++ TryExecuteCommand breaks out of the
 		// subcommand loop and invokes the last-matched node — the speed
@@ -291,19 +306,22 @@ func (s *session) handleModifySpeed(ctx context.Context, args []string) {
 		// (cs_modify.cpp:55, permission 561) — with the full unmatched
 		// tail, so "2.5x" / "0x10" / "foo" atof through CheckModifySpeed
 		// (2.5 / 16 / BAD_VALUE) instead of printing syntax.
-		s.modifySpeedAll(ctx, permissionCommandModifySpeed, args)
+		return s.modifySpeedAll(ctx, permissionCommandModifySpeed, args)
 	}
 }
 
 // modifySpeedAll mirrors HandleModifyASpeedCommand (cs_modify.cpp:417):
 // the WALK, RUN, SWIM and FLIGHT rates are all set to the same value.
-func (s *session) modifySpeedAll(ctx context.Context, perm uint32, args []string) {
-	if s.miscDeny(ctx, perm) {
-		return
+func (s *session) modifySpeedAll(ctx context.Context, perm uint32, args []string) bool {
+	if !s.commandAllowed(ctx, perm) {
+		return false
 	}
-	speed, target, ok := s.checkModifySpeedTarget(ctx, args, true)
+	speed, target, ok, silent := s.checkModifySpeedTarget(ctx, args, true)
 	if !ok {
-		return
+		if silent {
+			return false
+		}
+		return true
 	}
 	// LANG_YOU_CHANGE_ASPEED 137 / LANG_YOURS_ASPEED_CHANGED 138.
 	s.notifyModify(target,
@@ -312,18 +330,22 @@ func (s *session) modifySpeedAll(ctx context.Context, perm uint32, args []string
 	for _, mtype := range []int{moveTypeWalk, moveTypeRun, moveTypeSwim, moveTypeFlight} {
 		target.setGMSpeedRate(mtype, speed)
 	}
+	return true
 }
 
 // modifySpeedType mirrors the single-type arms (cs_modify.cpp:434-492):
 // walk -> MOVE_RUN, backwalk -> MOVE_RUN_BACK, swim -> MOVE_SWIM,
 // fly -> MOVE_FLIGHT. Only fly skips the in-flight check.
-func (s *session) modifySpeedType(ctx context.Context, perm uint32, args []string, kind string, mtypes []int, checkInFlight bool) {
-	if s.miscDeny(ctx, perm) {
-		return
+func (s *session) modifySpeedType(ctx context.Context, perm uint32, args []string, kind string, mtypes []int, checkInFlight bool) bool {
+	if !s.commandAllowed(ctx, perm) {
+		return false
 	}
-	speed, target, ok := s.checkModifySpeedTarget(ctx, args, checkInFlight)
+	speed, target, ok, silent := s.checkModifySpeedTarget(ctx, args, checkInFlight)
 	if !ok {
-		return
+		if silent {
+			return false
+		}
+		return true
 	}
 	label := "speed"
 	if kind != "" {
@@ -335,32 +357,38 @@ func (s *session) modifySpeedType(ctx context.Context, perm uint32, args []strin
 	for _, mtype := range mtypes {
 		target.setGMSpeedRate(mtype, speed)
 	}
+	return true
 }
 
 // checkModifySpeedTarget mirrors modify_commandscript::CheckModifySpeed
 // (cs_modify.cpp:379): the value must parse inside [0.1, 50.0]
 // (LANG_BAD_VALUE 115), the target is the selected player or self with the
 // lower-security guard, and a target in flight is rejected unless the arm
-// skips the flight check (LANG_CHAR_IN_FLIGHT 21).
-func (s *session) checkModifySpeedTarget(ctx context.Context, args []string, checkInFlight bool) (float32, *session, bool) {
+// skips the flight check (LANG_CHAR_IN_FLIGHT 21). The fourth result is
+// true only for the silent legs (empty args, cs_modify.cpp:381-382, and
+// the lower-security guard, cs_modify.cpp:403-404): callers return false
+// on those and true on the messaged legs.
+func (s *session) checkModifySpeedTarget(ctx context.Context, args []string, checkInFlight bool) (float32, *session, bool, bool) {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify speed [all|backwalk|fly|walk|swim] <val>")
-		return 0, nil, false
+		return 0, nil, false, true
 	}
 	speed, ok := checkModifySpeedBounds(args[0], 0.1, 50.0)
 	if !ok {
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
-		return 0, nil, false
+		return 0, nil, false, false
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return 0, nil, false
+	if target == nil {
+		return 0, nil, false, false
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return 0, nil, false, true
 	}
 	if checkInFlight && target.isInFlight() {
 		s.sendSysMessage(miscCharInFlight) // LANG_CHAR_IN_FLIGHT 21
-		return 0, nil, false
+		return 0, nil, false, false
 	}
-	return speed, target, true
+	return speed, target, true, false
 }
 
 // handleModifyTalentPoints mirrors HandleModifyTalentPointsCommand
@@ -371,44 +399,48 @@ func (s *session) checkModifySpeedTarget(ctx context.Context, args []string, che
 // pet talents frame. Go stores the pet value as the live motion's
 // free-talent-points override, read back by petFreeTalentPoints and the
 // owner's pet frame.
-func (s *session) handleModifyTalentPoints(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandModifyTalentPoints) {
-		return
+func (s *session) handleModifyTalentPoints(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyTalentPoints) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .modify talentpoints <value>")
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:336-337).
+		return false
 	}
 	tp := cAtoi(args[0]) // C++ atoi: "abc" is 0 points, not a syntax error
 	if tp < 0 {
-		s.sendSysMessage("Syntax: .modify talentpoints <value>")
-		return
+		// C++ returns false with no message on a negative value (cs_modify.cpp:340-341).
+		return false
 	}
 	if motion := s.castCommandSelectedCreature(); motion != nil {
 		owner, silent := s.modifyTalentPointsPetOwner(ctx, motion)
 		if silent {
-			return
+			return false
 		}
 		if owner == nil {
 			// C++ getSelectedUnit arm: a non-player, non-pet unit gets
 			// LANG_NO_CHAR_SELECTED instead of the invoker's points.
 			s.sendSysMessage("No character selected.")
-			return
+			return true
 		}
 		s.server.motionMu.Lock()
 		motion.PetFreeTalentPointsOverride = uint32(tp)
 		motion.PetFreeTalentPointsOverrideSet = true
 		s.server.motionMu.Unlock()
 		_ = owner.sendTalentsInfo(true)
-		return
+		return true
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	target.player.FreeTalentPointsOverride = uint32(tp)
 	target.player.FreeTalentPointsOverrideSet = true
 	_ = target.sendTalentsInfo(false)
+	return true
 }
 
 // modifyTalentPointsPetOwner mirrors the pet leg of
@@ -464,23 +496,24 @@ func (s *session) modifyPetIsPermanentForOwner(ctx context.Context, motion *crea
 }
 
 // handleModifyChunk2b extends the modify dispatcher with the chunk-2b arms.
-// The chunk-2c arm (reputation) chains off the default case.
-func (s *session) handleModifyChunk2b(ctx context.Context, sub string, rest []string) bool {
+// The chunk-2c arm (reputation) chains off the default case. It returns
+// (handled, ok): handled is false when no arm matched; ok is the matched
+// arm's bool.
+func (s *session) handleModifyChunk2b(ctx context.Context, sub string, rest []string) (bool, bool) {
 	switch {
 	case strings.HasPrefix("gender", sub):
-		s.handleModifyGender(ctx, rest)
+		return true, s.handleModifyGender(ctx, rest)
 	case strings.HasPrefix("bit", sub):
-		s.handleModifyBit(ctx, rest)
+		return true, s.handleModifyBit(ctx, rest)
 	case strings.HasPrefix("faction", sub):
-		s.handleModifyFaction(ctx, rest)
+		return true, s.handleModifyFaction(ctx, rest)
 	case strings.HasPrefix("phase", sub):
-		s.handleModifyPhase(ctx, rest)
+		return true, s.handleModifyPhase(ctx, rest)
 	case strings.HasPrefix("speed", sub):
-		s.handleModifySpeed(ctx, rest)
+		return true, s.handleModifySpeed(ctx, rest)
 	case strings.HasPrefix("talentpoints", sub):
-		s.handleModifyTalentPoints(ctx, rest)
+		return true, s.handleModifyTalentPoints(ctx, rest)
 	default:
 		return s.handleModifyChunk2c(ctx, sub, rest)
 	}
-	return true
 }

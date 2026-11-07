@@ -68,29 +68,33 @@ func extractModifyFactionKey(raw string) (key, rest string) {
 // handleModifyReputation mirrors HandleModifyRepCommand (cs_modify.cpp:711):
 // ".modify reputation <factionid> <amount|rank> [delta]" on the selected
 // player or the handler's own player.
-func (s *session) handleModifyReputation(ctx context.Context, args []string) {
-	const syntax = "Syntax: .modify reputation <factionid> <amount|rank> [delta]"
-	if s.miscDeny(ctx, permissionCommandModifyReputation) {
-		return
+func (s *session) handleModifyReputation(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandModifyReputation) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		// C++ returns false with no message on empty args (cs_modify.cpp:713-714).
+		return false
 	}
 	target := s.modifyTargetPlayer(ctx)
-	if target == nil || s.modifyTargetLowerSecurity(ctx, target) {
-		return
+	if target == nil {
+		return true
+	}
+	if s.modifyTargetLowerSecurity(ctx, target) {
+		return false
 	}
 	factionKey, rest := extractModifyFactionKey(strings.Join(args, " "))
 	if factionKey == "" {
-		s.sendSysMessage(syntax)
-		return
+		// C++ returns false with no message on a null faction link key
+		// (cs_modify.cpp:728-729).
+		return false
 	}
 	factionID := uint32(cAtoi(factionKey))
 	fields := strings.Fields(rest)
 	if factionID == 0 || len(fields) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		// C++ returns false with no message on a missing faction id or
+		// rank token (cs_modify.cpp:735-736).
+		return false
 	}
 	rankTxt := fields[0]
 	deltaTxt := ""
@@ -112,7 +116,7 @@ func (s *session) handleModifyReputation(ctx context.Context, args []string) {
 					if delta < 0 || int32(delta) > modifyReputationPointsInRank[r]-1 {
 						// LANG_COMMAND_FACTION_DELTA.
 						s.sendSysMessage(fmt.Sprintf("Incorrect delta value. Expected parameter can be from 0 to %d.", modifyReputationPointsInRank[r]-1))
-						return
+						return true
 					}
 					amount += int32(delta)
 				}
@@ -123,18 +127,18 @@ func (s *session) handleModifyReputation(ctx context.Context, args []string) {
 		if !matched {
 			// LANG_COMMAND_INVALID_PARAM.
 			s.sendSysMessage(fmt.Sprintf("Invalid parameter '%s'.", rankTxt))
-			return
+			return true
 		}
 	}
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage("Faction data is unavailable.")
-		return
+		return true
 	}
 	rep, found, err := s.server.Data.Reputation(factionID, target.player.Race, target.player.Class)
 	if err != nil || !found {
 		// LANG_COMMAND_FACTION_UNKNOWN.
 		s.sendSysMessage(fmt.Sprintf("Unknown faction with id %d.", factionID))
-		return
+		return true
 	}
 	factionName := ""
 	if file, fileErr := s.server.Data.File("Faction"); fileErr == nil && file != nil {
@@ -145,7 +149,7 @@ func (s *session) handleModifyReputation(ctx context.Context, args []string) {
 	if rep.ReputationList < 0 {
 		// LANG_COMMAND_FACTION_NOREP_ERROR.
 		s.sendSysMessage(fmt.Sprintf("Faction '%s' with id %d can't have reputation.", factionName, factionID))
-		return
+		return true
 	}
 	// SetOneFactionReputation mirror (ReputationMgr.cpp:374): clamp the
 	// standing and store it net of the race/class base reputation.
@@ -206,13 +210,15 @@ func (s *session) handleModifyReputation(ctx context.Context, args []string) {
 	target.questReputationChanged(ctx, factionID)
 	// LANG_COMMAND_MODIFY_REP: the handler's message, like the C++.
 	s.sendSysMessage(fmt.Sprintf("You change %s faction's reputation (id %d) for %s to %d.", factionName, factionID, target.player.Name, newTotal))
+	return true
 }
 
 // handleModifyChunk2c extends the modify dispatcher with the chunk-2c arm.
-func (s *session) handleModifyChunk2c(ctx context.Context, sub string, rest []string) bool {
+// It returns (handled, ok): handled is false when no arm matched; ok is
+// the matched arm's bool.
+func (s *session) handleModifyChunk2c(ctx context.Context, sub string, rest []string) (bool, bool) {
 	if strings.HasPrefix("reputation", sub) {
-		s.handleModifyReputation(ctx, rest)
-		return true
+		return true, s.handleModifyReputation(ctx, rest)
 	}
-	return false
+	return false, false
 }
