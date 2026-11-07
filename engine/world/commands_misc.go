@@ -91,26 +91,28 @@ func miscPlayerLink(name string) string { return name }
 // handleCmdAddItem dispatches the "additem"/"additem set" arms
 // (cs_misc.cpp:47-48). The old xyz-only handleCmdAddItem in commands.go is
 // replaced by the full C++ port.
-func (s *session) handleCmdAddItem(ctx context.Context, args []string) {
+func (s *session) handleCmdAddItem(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .additem <id|[name]> [count] | .additem set <itemsetId>")
-		return
+		return false
+	}
+	if sub := strings.ToLower(args[0]); sub == "set" || strings.HasPrefix("set", sub) {
+		if !s.commandAllowed(ctx, permissionCommandAddItemSet) {
+			return false
+		}
+		if s.player == nil {
+			s.sendSysMessage("You must be in game to use that command.")
+			return true
+		}
+		return s.handleAddItemSetCommand(ctx, args[1:])
+	}
+	if !s.commandAllowed(ctx, permissionCommandAddItem) {
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
-	if sub := strings.ToLower(args[0]); sub == "set" || strings.HasPrefix("set", sub) {
-		if s.miscDeny(ctx, permissionCommandAddItemSet) {
-			return
-		}
-		s.handleAddItemSetCommand(ctx, args[1:])
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandAddItem) {
-		return
-	}
-	s.handleAddItemCommand(ctx, miscRejoinBracketName(args))
+	return s.handleAddItemCommand(ctx, miscRejoinBracketName(args))
 }
 
 // miscRejoinBracketName re-assembles a "[Multi Word Name]" first token
@@ -217,11 +219,10 @@ func (s *session) miscSelectedPlayerStrict() *session {
 // selected-player-or-self target. The GM-self binding strip has no Go
 // binding model (documented gap); the rest is wired through
 // storeOrStackItem.
-func (s *session) handleAddItemCommand(ctx context.Context, args []string) {
+func (s *session) handleAddItemCommand(ctx context.Context, args []string) bool {
 	itemID, ok := s.miscExtractItemID(ctx, args[0])
 	if !ok {
-		s.sendSysMessage("Syntax: .additem <id|[name]> [count]")
-		return
+		return false
 	}
 	count := int32(1)
 	if len(args) > 1 {
@@ -235,16 +236,16 @@ func (s *session) handleAddItemCommand(ctx context.Context, args []string) {
 	target := s.miscSelectedPlayerOrSelf()
 	if target == nil {
 		s.sendSysMessage(miscNoCharSelected)
-		return
+		return true
 	}
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage(fmt.Sprintf(miscItemIDInvalid, itemID))
-		return
+		return true
 	}
 	var exists uint32
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT entry FROM item_template WHERE entry = ? LIMIT 1", itemID).Scan(&exists); err != nil {
 		s.sendSysMessage(fmt.Sprintf(miscItemIDInvalid, itemID))
-		return
+		return true
 	}
 	targetName := miscPlayerLink(target.player.Name)
 	if count < 0 {
@@ -264,7 +265,7 @@ func (s *session) handleAddItemCommand(ctx context.Context, args []string) {
 			_ = s.sendInventoryItems(ctx)
 			s.sendPlayerUpdate()
 		}
-		return
+		return true
 	}
 	res, err := s.storeOrStackItem(ctx, target.playerGUID, itemID, uint32(count))
 	if err != nil || res == nil {
@@ -274,12 +275,12 @@ func (s *session) handleAddItemCommand(ctx context.Context, args []string) {
 		fitting := s.addItemFittingCount(ctx, target.playerGUID, itemID, uint32(count))
 		if fitting == 0 {
 			s.sendSysMessage(fmt.Sprintf(miscItemCannotCreate, itemID, uint32(count)))
-			return
+			return true
 		}
 		res, err = s.storeOrStackItem(ctx, target.playerGUID, itemID, fitting)
 		if err != nil || res == nil {
-			s.sendSysMessage(fmt.Sprintf(miscItemCannotCreate, itemID, uint32(count)))
-			return
+			s.sendSysMessage(fmt.Sprintf(miscItemCannotCreate, itemID, uint32(count)-fitting))
+			return true
 		}
 		s.sendAddItemPushResult(target, res, itemID, fitting)
 		if target != s {
@@ -290,7 +291,7 @@ func (s *session) handleAddItemCommand(ctx context.Context, args []string) {
 			s.sendPlayerUpdate()
 		}
 		s.sendSysMessage(fmt.Sprintf(miscItemCannotCreate, itemID, uint32(count)-fitting))
-		return
+		return true
 	}
 	s.sendAddItemPushResult(target, res, itemID, uint32(count))
 	if target != s {
@@ -300,6 +301,7 @@ func (s *session) handleAddItemCommand(ctx context.Context, args []string) {
 		_ = s.sendInventoryItems(ctx)
 		s.sendPlayerUpdate()
 	}
+	return true
 }
 
 // sendAddItemPushResult mirrors the SendNewItem tail of HandleAddItemCommand
@@ -435,11 +437,10 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 // matches gets one copy stored on the selected-player-or-self target. The
 // id is Variant<Hyperlink<itemset>, uint32>, so a |Hitemset:id| link parses
 // the same as a bare id.
-func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) {
+func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .additem set <itemsetId>"
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	var setID uint32
 	if strings.Contains(args[0], "|Hitemset:") {
@@ -447,26 +448,25 @@ func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) {
 	} else if setID64, err := strconv.ParseUint(args[0], 10, 32); err == nil {
 		setID = uint32(setID64)
 	} else {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if setID == 0 {
 		s.sendSysMessage(fmt.Sprintf(miscNoItemsFromItemSet, setID))
-		return
+		return true
 	}
 	target := s.miscSelectedPlayerOrSelf()
 	if target == nil {
 		s.sendSysMessage(miscNoCharSelected)
-		return
+		return true
 	}
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage(fmt.Sprintf(miscNoItemsFromItemSet, setID))
-		return
+		return true
 	}
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT entry FROM item_template WHERE itemset = ? ORDER BY entry", setID)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf(miscNoItemsFromItemSet, setID))
-		return
+		return true
 	}
 	defer rows.Close()
 	var entries []uint32
@@ -479,7 +479,7 @@ func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) {
 	_ = rows.Close()
 	if len(entries) == 0 {
 		s.sendSysMessage(fmt.Sprintf(miscNoItemsFromItemSet, setID))
-		return
+		return true
 	}
 	for _, entry := range entries {
 		if _, err := s.storeOrStackItem(ctx, target.playerGUID, entry, 1); err != nil {
@@ -493,6 +493,7 @@ func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) {
 		_ = s.sendInventoryItems(ctx)
 		s.sendPlayerUpdate()
 	}
+	return true
 }
 
 // extractPlayerNameFromLink mirrors ChatHandler::extractPlayerNameFromLink
@@ -564,24 +565,25 @@ func (s *session) miscResolvePlayerTarget(ctx context.Context, args []string) (o
 // instance-bind gates have no Go bridge (no BG model, no instance-save
 // manager), and the GetNearPoint LoS sweep and ground clamp have none
 // either, so the first close point stands.
-func (s *session) handleCmdAppear(ctx context.Context, args []string) {
+func (s *session) handleCmdAppear(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandAppear) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandAppear) {
-		return
+		return true
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if guid == s.playerGUID {
 		s.sendSysMessage(miscCantTeleportSelf)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
-		return // C++ HasLowerSecurity: silent fail
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf(miscAppearingAt, miscPlayerLink(name)))
 	if target != nil && target.player != nil {
@@ -596,20 +598,21 @@ func (s *session) handleCmdAppear(ctx context.Context, args []string) {
 		if s.goDoTeleport(ctx, p.Map, cx, cy, p.Z, facing) {
 			miscSetPhaseMask(s, targetPhase)
 		}
-		return
+		return true
 	}
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
+		return true
 	}
 	var mapID uint32
 	var x, y, z, o float64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM characters WHERE guid = ?", guid).Scan(&mapID, &x, &y, &z, &o); err != nil {
-		return
+		return true
 	}
 	// C++ keeps the invoker's orientation on the offline leg; the saved
 	// orientation is read only because LoadPositionFromDB fills it.
 	_ = o
 	s.goDoTeleport(ctx, mapID, float32(x), float32(y), float32(z), s.player.Orientation)
+	return true
 }
 
 // handleCmdAura mirrors HandleAuraCommand (cs_misc.cpp:304-323, RBAC 491):
@@ -619,19 +622,18 @@ func (s *session) handleCmdAppear(ctx context.Context, args []string) {
 // carries the DBC duration (Aura::CalcMaxDuration, SpellAuras.cpp:871-886)
 // and a same-caster re-cast refreshes/stacks via TryRefreshStackOrCreate
 // (SpellAuras.cpp:303) instead of replacing at stack 1.
-func (s *session) handleCmdAura(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandAura) {
-		return
-	}
-	spellID, ok := miscParseSpellArg(ctx, s, args)
-	if !ok {
-		s.sendSysMessage("Syntax: .aura <spellId>")
-		return
+func (s *session) handleCmdAura(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandAura) {
+		return false
 	}
 	target := s.miscSelectedUnitPlayer()
 	if target == nil {
 		s.sendSysMessage(miscSelectCharOrCreat)
-		return
+		return true
+	}
+	spellID, ok := miscParseSpellArg(ctx, s, args)
+	if !ok {
+		return false
 	}
 	// SpellInfo::GetDuration (SpellInfo.cpp:3077-3082): the level-scaled
 	// SpellDuration.dbc value; -1 is permanent (Go 0, no expiry timer).
@@ -652,9 +654,10 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) {
 		}
 	}
 	if target.refreshCommandAura(spellID, durationMs) {
-		return
+		return true
 	}
 	target.applyAuraWithDuration(spellID, durationMs)
+	return true
 }
 
 // handleCmdUnAura mirrors HandleUnAuraCommand (cs_misc.cpp:325-349, RBAC
@@ -665,19 +668,18 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) {
 // parse, like C++ EXACT_SEQUENCE) and runs Unit::RemoveAllAuras through
 // the remove funnel per aura, including the auras this unit owns on other
 // targets — not the timer-only clearActiveAuras strip.
-func (s *session) handleCmdUnAura(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandUnAura) {
-		return
+func (s *session) handleCmdUnAura(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandUnAura) {
+		return false
 	}
 	target := s.miscSelectedUnitPlayer()
 	if target == nil {
 		s.sendSysMessage(miscSelectCharOrCreat)
-		return
+		return true
 	}
 	if len(args) > 0 && strings.EqualFold(args[0], "all") {
 		if len(args) != 1 {
-			s.sendSysMessage("Syntax: .unaura <spellId|all>")
-			return
+			return false
 		}
 		target.removeAllPlayerAuras()
 		if target.server != nil {
@@ -686,14 +688,14 @@ func (s *session) handleCmdUnAura(ctx context.Context, args []string) {
 			// mode — the leave-world sweep is that same strip.
 			target.server.sweepOwnedAurasOnLeaveWorld(target.playerGUID)
 		}
-		return
+		return true
 	}
 	spellID, ok := miscParseSpellArg(ctx, s, args)
 	if !ok {
-		s.sendSysMessage("Syntax: .unaura <spellId|all>")
-		return
+		return false
 	}
 	target.removeAura(spellID)
+	return true
 }
 
 // miscSelectedPlayerSession returns the selected player session, or nil when
@@ -783,18 +785,19 @@ func miscParseSpellArg(ctx context.Context, s *session, args []string) (uint32, 
 // player's own GUID — latch m_currentBankerGUID, send SMSG_SHOW_BANK
 // carrying only that GUID. No interactability gate, unlike the
 // banker-activate opcode path (bank.go).
-func (s *session) handleCmdBank(ctx context.Context, args []string) {
+func (s *session) handleCmdBank(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandBank) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandBank) {
-		return
+		return true
 	}
 	s.currentBankerGUID = s.playerGUID
 	bank := protocol.NewBuffer(8)
 	bank.WriteU64(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true)
+	return true
 }
 
 // handleCmdBindSight mirrors HandleBindSightCommand (cs_misc.cpp:2545-2553,
@@ -802,20 +805,20 @@ func (s *session) handleCmdBank(ctx context.Context, args []string) {
 // themself when nothing is selected (getSelectedUnit falls back to self).
 // Creature selections have no Go unit bridge and keep the select message;
 // the view-swap effect follows the engine's aura model (documented gap).
-func (s *session) handleCmdBindSight(ctx context.Context, args []string) {
+func (s *session) handleCmdBindSight(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandBindSight) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandBindSight) {
-		return
+		return true
 	}
 	target := s.miscSelectedUnitPlayer()
 	if target == nil {
-		s.sendSysMessage(miscSelectCharOrCreat)
-		return
+		return false
 	}
 	s.castSpellDirect(ctx, 6277, target.playerGUID)
+	return true
 }
 
 // miscIsPossessing mirrors Unit::isPossessing (Unit.cpp:6415-6419):
@@ -857,26 +860,26 @@ func (s *session) miscIsPossessing() bool {
 // bridge, and creature bindsight is unreachable in Go
 // (handleCmdBindSight blocks creature targets), so that leg is
 // defensive only.
-func (s *session) handleCmdUnBindSight(ctx context.Context, args []string) {
+func (s *session) handleCmdUnBindSight(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandUnBindSight) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandUnBindSight) {
-		return
+		return true
 	}
 	if s.miscIsPossessing() {
-		return
+		return false
 	}
 	targetGUID := s.player.FarsightGUID
 	if targetGUID == 0 {
-		return
+		return true
 	}
 	if target := s.server.playerSessionForGUID(targetGUID); target != nil {
 		target.removeAurasByTypeFromCaster(spellAuraBindSight, s.playerGUID)
 		target.removeAurasByTypeFromCaster(spellAuraModPossess, s.playerGUID)
 		target.removeAurasByTypeFromCaster(spellAuraModPossessPet, s.playerGUID)
-		return
+		return true
 	}
 	if motion := s.findCreatureMotion(targetGUID); motion != nil {
 		key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
@@ -884,32 +887,34 @@ func (s *session) handleCmdUnBindSight(ctx context.Context, args []string) {
 		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraModPossess, s.playerGUID)
 		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraModPossessPet, s.playerGUID)
 	}
+	return true
 }
 
 // handleCmdCombatStop mirrors HandleCombatStopCommand (cs_misc.cpp:2263-2290,
 // RBAC 494): stop the target's current attack. The C++ victim-side attacker
 // clearing and spell interruption have no Go bridge (documented gap); the
 // attack-target clear and SMSG_ATTACK_STOP broadcast are wired.
-func (s *session) handleCmdCombatStop(ctx context.Context, args []string) {
+func (s *session) handleCmdCombatStop(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandCombatStop) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandCombatStop) {
-		return
+		return true
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if target == nil {
 		// C++ looks the name up online only (cs_misc.cpp:2267-2275):
 		// an offline target reports PLAYER_NOT_FOUND.
 		s.sendSysMessage(miscPlayerNotFound)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
-		return // C++ HasLowerSecurity: silent fail
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	victim := target.attackTarget
 	target.attackTarget = 0
@@ -917,6 +922,7 @@ func (s *session) handleCmdCombatStop(ctx context.Context, args []string) {
 	// Unit::CombatStop (Unit.cpp:5809-5826) ends PvE/PvP combat, not just
 	// the attack swing: clear the in-combat flag as well.
 	markPlayerOutOfCombat(ctx, target)
+	return true
 }
 
 // handleCmdComeToMe mirrors HandleComeToMeCommand (cs_misc.cpp:2099-2114,
@@ -925,21 +931,22 @@ func (s *session) handleCmdCombatStop(ctx context.Context, args []string) {
 // position. Straight-line spline: Go has no PathGenerator, the standing
 // MoveTo delta. No alive gate: C++ MovePoint carries none and the
 // corpse-state motion master still runs (launchCreatureScriptSpline).
-func (s *session) handleCmdComeToMe(ctx context.Context, args []string) {
+func (s *session) handleCmdComeToMe(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandComeToMe) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandComeToMe) {
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a creature first.")
-		return
+		return true
 	}
 	p := s.player
 	s.server.launchCreatureScriptSpline(motion, p.X, p.Y, p.Z, false, movementGeneratorPoint, true)
+	return true
 }
 
 // handleCmdCommands mirrors HandleCommandsCommand (cs_misc.cpp:602-606, RBAC
@@ -947,24 +954,25 @@ func (s *session) handleCmdComeToMe(ctx context.Context, args []string) {
 // filtered to the invoker-visible nodes (SendCommandHelpFor) now that the
 // R13 census wires per-node permissions; each arm still gates itself at
 // invocation.
-func (s *session) handleCmdCommands(ctx context.Context, args []string) {
+func (s *session) handleCmdCommands(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandCommands) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandCommands) {
-		return
+		return true
 	}
 	s.sendTopLevelCommandList(ctx)
+	return true
 }
 
 // handleCmdCooldown mirrors HandleCooldownCommand (cs_misc.cpp:723-760, RBAC
 // 497): clear spell cooldowns on the selected player (or self). The bare
 // form clears all; the spell form clears one. The spell-arg validity check
 // mirrors the C++ SpellInfo parser.
-func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandCooldown) {
-		return
+func (s *session) handleCmdCooldown(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandCooldown) {
+		return false
 	}
 	// C++ HandleCooldownCommand (cs_misc.cpp:723-760): the selected unit;
 	// GetCharmerOrOwnerPlayerOrPlayerItself names the owner for the
@@ -991,7 +999,7 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 	}
 	if owner == nil || owner.player == nil {
 		s.sendSysMessage(miscPlayerNotFound)
-		return
+		return true
 	}
 	targetName := miscPlayerLink(owner.player.Name)
 	// C++ names the owner link for the all-clear, but "you" for the
@@ -1008,12 +1016,12 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 			owner.clearPlayerCooldowns()
 		}
 		s.sendSysMessage(fmt.Sprintf(miscRemoveAllCooldown, targetName))
-		return
+		return true
 	}
 	spellID, ok := miscParseSpellArg(ctx, s, args)
 	if !ok {
 		s.sendSysMessage(fmt.Sprintf(miscUnknownSpell, reportName))
-		return
+		return true
 	}
 	if creature != nil {
 		clearCreatureCooldown(owner, creature, spellID)
@@ -1021,6 +1029,7 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) {
 		owner.clearPlayerCooldown(spellID)
 	}
 	s.sendSysMessage(fmt.Sprintf(miscRemoveCooldown, spellID, reportName))
+	return true
 }
 
 // clearCreatureCooldowns mirrors SpellHistory::ResetAllCooldowns for a
@@ -1256,23 +1265,21 @@ func (s *session) resetPlayerCooldownsByCategory(category uint32, update bool) {
 // forms have no CalcArmorReducedDamage/CalcAbsorbResist/DealSpellDamage
 // bridge, so they report honestly instead of dealing flat damage
 // (documented fidelity gap, not a stub).
-func (s *session) handleCmdDamage(ctx context.Context, args []string) {
+func (s *session) handleCmdDamage(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDamage) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandDamage) {
-		return
+		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .damage <amount> | .damage go <guid> <amount>")
-		return
+		return false
 	}
 	// C++ strcmp is case-sensitive: ".damage GO ..." falls through to the
 	// unit form, where atoi("GO") is 0 and the command silently no-ops.
 	if args[0] == "go" {
-		s.damageGameObject(ctx, args[1:])
-		return
+		return s.damageGameObject(ctx, args[1:])
 	}
 	target := s.miscSelectedPlayerSession()
 	if target == nil || target.player == nil {
@@ -1281,43 +1288,42 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 		// selection gets the honest block instead of the no-target text.
 		if s.castCommandSelectedCreature() != nil {
 			s.sendSysMessage("Damaging creatures is unavailable: the Go tree has no Unit::DealDamage bridge.")
-			return
+			return true
 		}
 		s.sendSysMessage(miscSelectCharOrCreat)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: target.player.Name, guid: target.playerGUID, online: target}) {
-		return // C++ HasLowerSecurity: silent fail
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	if target.player.Health == 0 {
-		return // C++ !IsAlive: silent no-op
+		return true // C++ !IsAlive: silent no-op
 	}
 	// C++ atoi takes the leading int ("100abc" is 100); ParseInt would
 	// reject the whole token.
 	damageInt := cAtoi(args[0])
 	if damageInt <= 0 {
-		return // C++ damage_int <= 0: silent no-op
+		return true // C++ damage_int <= 0: silent no-op
 	}
 	damage := uint32(damageInt)
 	if len(args) > 1 {
 		school := cAtoi(args[1])
 		if school < 0 || school >= schoolCount {
-			// C++ returns false past MAX_SPELL_SCHOOL (cs_misc.cpp:2227):
-			// the framework prints the command syntax.
-			s.sendSysMessage("Syntax: .damage <amount> | .damage go <guid> <amount>")
-			return
+			// C++ returns false past MAX_SPELL_SCHOOL (cs_misc.cpp:2226-2227), silently.
+			return false
 		}
 		if len(args) > 2 {
 			// Spell-damage form: extractSpellIdFromLink + DealSpellDamage
 			// with SendSpellNonMeleeDamageLog — no Go bridge for the
 			// spell-damage application on a player target.
 			s.sendSysMessage("Spell damage is unavailable: the Go tree has no spell-damage application bridge for .damage.")
-			return
+			return true
 		}
 		// School-damage form: CalcArmorReducedDamage (physical) and
 		// CalcAbsorbResist have no Go bridge.
 		s.sendSysMessage("School damage is unavailable: the Go tree has no armor/absorb reduction bridge for .damage.")
-		return
+		return true
 	}
 	preHealth := target.player.Health
 	overkill := uint32(0)
@@ -1339,6 +1345,7 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 	if target != s {
 		s.sendDamageAttackState(target, damage, overkill)
 	}
+	return true
 }
 
 // damageGameObject mirrors the `go` arm of HandleDamageCommand
@@ -1346,33 +1353,33 @@ func (s *session) handleCmdDamage(ctx context.Context, args []string) {
 // OBJNOTFOUND on an unloaded object, INVALID_GAMEOBJECT_TYPE off the
 // destructible-building gate, then GameObject::ModifyHealth with the
 // GAMEOBJECT_DAMAGED report.
-func (s *session) damageGameObject(ctx context.Context, args []string) {
+func (s *session) damageGameObject(ctx context.Context, args []string) bool {
 	if len(args) < 1 {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return true
 	}
 	guidLow := uint32(cAtoi(args[0]))
 	if guidLow == 0 {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return true
 	}
 	if len(args) < 2 {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return true
 	}
 	damageInt := cAtoi(args[1])
 	if damageInt == 0 {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return true
 	}
 	goState := s.gpsLiveGameObject(guidLow)
 	if goState == nil {
 		s.sendSysMessage(fmt.Sprintf("Gameobject (GUID: %d) could not be found.", guidLow)) // LANG_COMMAND_OBJNOTFOUND (273)
-		return
+		return true
 	}
 	if !s.server.gameObjectIsDestructibleBuilding(ctx, s.player.Map, s.player.InstanceID, goState.GUID) {
 		s.sendSysMessage("Invalid gameobject type.") // LANG_INVALID_GAMEOBJECT_TYPE
-		return
+		return true
 	}
 	s.server.modifyDestructibleHealth(ctx, s.player.Map, s.player.InstanceID, goState.GUID, -int32(damageInt), s.playerGUID, 0, s)
 	rec, _, ok := s.server.destructibleHealthFor(ctx, s.player.Map, s.player.InstanceID, goState.GUID)
@@ -1385,6 +1392,7 @@ func (s *session) damageGameObject(ctx context.Context, args []string) {
 		health = rec.Health
 	}
 	s.sendSysMessage(fmt.Sprintf("Gameobject %s (GUID: %d) damaged for %d. Health: %d.", name, guidLow, -damageInt, health)) // LANG_GAMEOBJECT_DAMAGED
+	return true
 }
 
 // sendDamageAttackState mirrors the SendAttackStateUpdate tail of the flat
@@ -1405,15 +1413,16 @@ func (s *session) sendDamageAttackState(target *session, damage, overkill uint32
 // 499): Player::IsDeveloper/SetDeveloper is a runtime flag with no Go model
 // and no consumers in the tree. RBAC-gated with an honest message, not a
 // stub.
-func (s *session) handleCmdDev(ctx context.Context, args []string) {
+func (s *session) handleCmdDev(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDev) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandDev) {
-		return
+		return true
 	}
 	s.sendSysMessage("Developer mode is unavailable: the Go tree has no developer-flag model.")
+	return true
 }
 
 // handleCmdDie mirrors HandleDieCommand (cs_misc.cpp:608-632, RBAC 500):
@@ -1421,28 +1430,29 @@ func (s *session) handleCmdDev(ctx context.Context, args []string) {
 // selected creature through the rage.go kill block below. The
 // CONFIG_DIE_COMMAND_MODE kill branch and the DealDamage branch are
 // unmodeled (documented gap).
-func (s *session) handleCmdDie(ctx context.Context, args []string) {
+func (s *session) handleCmdDie(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDie) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandDie) {
-		return
+		return true
 	}
 	target := s.miscSelectedPlayerSession()
 	if target == nil || target.player == nil {
 		if motion := s.castCommandSelectedCreature(); motion != nil {
 			s.dieSelectedCreature(ctx, motion)
-			return
+			return true
 		}
 		s.sendSysMessage(miscSelectCharOrCreat)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: target.player.Name, guid: target.playerGUID, online: target}) {
-		return // C++ HasLowerSecurity: silent fail
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	if target.player.Health == 0 {
-		return
+		return true
 	}
 	target.player.Health = 0
 	target.sendPlayerUpdate()
@@ -1451,6 +1461,7 @@ func (s *session) handleCmdDie(ctx context.Context, args []string) {
 	// still fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6).
 	target.killPlayer(ctx, nil, false, false)
 	s.server.firePVPKillHook(ctx, s, target)
+	return true
 }
 
 // dieSelectedCreature kills the selected creature through the rage.go kill
@@ -1497,9 +1508,9 @@ func (s *session) dieSelectedCreature(ctx context.Context, motion *creatureMotio
 // handleCmdDismount mirrors HandleDismountCommand (cs_misc.cpp:656-678, RBAC
 // 501), replacing the old dismount handler in commands.go: the target is the
 // selected player or self, with the not-mounted and in-flight gates.
-func (s *session) handleCmdDismount(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandDismount) {
-		return
+func (s *session) handleCmdDismount(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDismount) {
+		return false
 	}
 	target := s.miscSelectedPlayerSession()
 	if target == nil {
@@ -1507,15 +1518,15 @@ func (s *session) handleCmdDismount(ctx context.Context, args []string) {
 	}
 	if target.player == nil {
 		s.sendSysMessage(miscNoCharSelected)
-		return
+		return true
 	}
 	if !target.isPlayerMounted() {
 		s.sendSysMessage(miscCharNonMounted)
-		return
+		return true
 	}
 	if target.isInFlight() {
 		s.sendSysMessage(miscCharInFlight)
-		return
+		return true
 	}
 	for _, aura := range target.loadedAuras() {
 		if aura != nil && aura.AuraType == spellAuraMounted {
@@ -1524,6 +1535,7 @@ func (s *session) handleCmdDismount(ctx context.Context, args []string) {
 	}
 	target.player.MountDisplayID = 0
 	target.sendPlayerUpdate()
+	return true
 }
 
 // isPlayerMounted mirrors Player::IsMounted: the mount display id or any
@@ -1546,13 +1558,13 @@ func (s *session) isPlayerMounted() bool {
 // handleCmdDistance mirrors HandleGetDistanceCommand (cs_misc.cpp:762-823,
 // RBAC 502) for player targets: 3D and 2D distances from the GM. Creature
 // and gameobject link forms report the missing unit/object bridge honestly.
-func (s *session) handleCmdDistance(ctx context.Context, args []string) {
+func (s *session) handleCmdDistance(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDistance) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandDistance) {
-		return
+		return true
 	}
 	var target *session
 	if len(args) > 0 && args[0] != "" {
@@ -1563,7 +1575,7 @@ func (s *session) handleCmdDistance(ctx context.Context, args []string) {
 		case "player":
 			name := normalizePlayerName(data)
 			if name == "" {
-				return
+				return false
 			}
 			target = s.sessionForPlayerName(name)
 			if target == nil || target.player == nil {
@@ -1574,16 +1586,16 @@ func (s *session) handleCmdDistance(ctx context.Context, args []string) {
 					var g uint64
 					if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? LIMIT 1", name).Scan(&g); err == nil && g != 0 {
 						s.sendSysMessage(miscPlayerNotFound)
-						return
+						return true
 					}
 				}
-				return
+				return false
 			}
 		case "creature", "gameobject":
 			s.sendSysMessage("Distance to creatures and gameobjects is unavailable: the Go tree has no unit/object bridge.")
-			return
+			return true
 		default:
-			return
+			return false
 		}
 	} else {
 		// C++ getSelectedUnit() falls back to self (Chat.cpp:312-320).
@@ -1601,6 +1613,7 @@ func (s *session) handleCmdDistance(ctx context.Context, args []string) {
 	dist := math.Max(0, exact-reach)
 	dist2d := math.Max(0, exact2d-reach)
 	s.sendSysMessage(fmt.Sprintf("Distance: %.2f (2D: %.2f, exact: %.2f, exact 2D: %.2f)", dist, dist2d, exact, exact2d))
+	return true
 }
 
 // handleCmdFlushArenaPoints mirrors HandleFlushArenaPointsCommand
@@ -1608,23 +1621,24 @@ func (s *session) handleCmdDistance(ctx context.Context, args []string) {
 // runs via Server.FlushWeeklyArenaPoints (arena_rating.go). C++ takes no
 // player and sends world-text announcements; Go keeps the sessioned-command
 // player gate and reports the total to the invoker instead.
-func (s *session) handleCmdFlushArenaPoints(ctx context.Context, args []string) {
+func (s *session) handleCmdFlushArenaPoints(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandFlushArenaPoints) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandFlushArenaPoints) {
-		return
+		return true
 	}
 	if s.server == nil {
-		return
+		return false
 	}
 	total, err := s.server.FlushWeeklyArenaPoints(ctx)
 	if err != nil {
 		s.sendSysMessage("Arena point distribution failed.")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Arena points distributed: %d points granted.", total))
+	return true
 }
 
 // freezeAuraSpellID is the GM Freeze spell (cs_misc.cpp:2401).
@@ -1636,13 +1650,13 @@ const freezeAuraSpellID uint32 = 9454
 // 0 = permanent). The Freeze Spell AuraScript side effects (combat/flags)
 // have no Go bridge (documented gap); the aura application and duration are
 // wired, and the target's save mirrors the C++ SaveToDB.
-func (s *session) handleCmdFreeze(ctx context.Context, args []string) {
+func (s *session) handleCmdFreeze(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandFreeze) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandFreeze) {
-		return
+		return true
 	}
 	var target *session
 	var freezeDuration uint32
@@ -1674,19 +1688,20 @@ func (s *session) handleCmdFreeze(ctx context.Context, args []string) {
 		canApply = true
 	}
 	if !canApply {
-		return
+		return false
 	}
 	if target == nil || target.player == nil {
 		s.sendSysMessage(miscFreezeWrong)
-		return
+		return true
 	}
 	if target == s {
 		s.sendSysMessage(miscFreezeError)
-		return
+		return true
 	}
 	// C++ HandleFreezeCommand (cs_misc.cpp:2318-2415) has no HasLowerSecurity
 	// gate: any GM holding the command permission may freeze.
 	target.applyAuraWithDuration(freezeAuraSpellID, freezeDuration*1000)
 	s.sendSysMessage(fmt.Sprintf(miscFreeze, miscPlayerLink(target.player.Name)))
 	_ = target.savePlayerState(ctx, 1, false)
+	return true
 }
