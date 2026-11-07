@@ -281,11 +281,18 @@ func (s *session) guildSelectionOrSelf() *session {
 // an unquoted token makes extractQuotedArg return null, so the handler
 // fails. Single quotes do not count: the C++ quoter only recognizes '"',
 // and "" yields an empty name, like the C++ "" special case.
+// extractQuotedArg is strtok-based: it stops at the closing quote and
+// ignores trailing junk (`"Name"x` yields `Name`), and an unterminated
+// quote runs to end-of-string (D34).
 func guildQuotedArg(tok string) (string, bool) {
-	if len(tok) >= 2 && tok[0] == '"' && tok[len(tok)-1] == '"' {
-		return tok[1 : len(tok)-1], true
+	if len(tok) == 0 || tok[0] != '"' {
+		return "", false
 	}
-	return "", false
+	rest := tok[1:]
+	if i := strings.IndexByte(rest, '"'); i >= 0 {
+		return rest[:i], true
+	}
+	return rest, true
 }
 
 // handleGuildCreateCommand mirrors HandleGuildCreateCommand

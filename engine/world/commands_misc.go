@@ -439,9 +439,11 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 // the same as a bare id.
 func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .additem set <itemsetId>"
-	// ChatCommand.h:112 - the Variant<Hyperlink<itemset>, uint32> arg is
-	// exactly one token; a trailing token fails the parse.
-	if len(args) != 1 {
+	// The Variant<Hyperlink<itemset>, uint32> arg parses before the
+	// trailing check (ChatCommand.h:112 ConsumeFromOffset): a
+	// quote-prefixed first token fails the parse and messages instead
+	// of failing silent (D34).
+	if len(args) == 0 {
 		return false
 	}
 	var setID uint32
@@ -456,6 +458,10 @@ func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) bo
 		// The bare id parses base-0 (parseCommandUint32).
 		s.sendSysMessage(syntax)
 		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) != 1 {
+		return false
 	}
 	if setID == 0 {
 		s.sendSysMessage(fmt.Sprintf(miscNoItemsFromItemSet, setID))
@@ -633,14 +639,13 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAura) {
 		return false
 	}
-	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
-	if len(args) > 1 {
-		return false
-	}
 	// The framework parses the SpellInfo const* arg before the handler
 	// runs (cs_misc.cpp:304), so a bad token reports before the selection
 	// check, and a missing token is silent false even with no target
-	// (ChatCommandArgs.cpp:94-105).
+	// (ChatCommandArgs.cpp:94-105). The trailing-token check runs only
+	// after the parse (ChatCommand.h:112 ConsumeFromOffset): a
+	// quote-prefixed first token such as `"123` fails the numeric parse
+	// and messages even when more tokens follow (D34).
 	spellID, status := miscParseSpellArg(ctx, s, args)
 	switch status {
 	case spellArgMissing, spellArgOtherLink, spellArgNoData:
@@ -651,6 +656,10 @@ func (s *session) handleCmdAura(ctx context.Context, args []string) bool {
 		// SetSentErrorMessage.
 		s.sendSysMessage("Invalid spell.")
 		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) > 1 {
+		return false
 	}
 	target := s.miscSelectedUnitPlayer()
 	if target == nil {
@@ -694,14 +703,13 @@ func (s *session) handleCmdUnAura(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandUnAura) {
 		return false
 	}
-	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
-	if len(args) > 1 {
-		return false
-	}
 	// The framework parses the Variant<SpellInfo const*, "all"> arg
 	// before the handler runs (cs_misc.cpp:325): a bad token reports
 	// before the selection check, and a missing token is silent false
-	// even with no target (ChatCommandArgs.cpp:94-105).
+	// even with no target (ChatCommandArgs.cpp:94-105). The trailing
+	// check runs only after the parse (ChatCommand.h:112
+	// ConsumeFromOffset), so a quote-prefixed first token messages
+	// instead of failing silent (D34).
 	if len(args) > 0 && strings.EqualFold(args[0], "all") {
 		if len(args) != 1 {
 			return false
@@ -730,6 +738,10 @@ func (s *session) handleCmdUnAura(ctx context.Context, args []string) bool {
 		// SetSentErrorMessage.
 		s.sendSysMessage("Invalid spell.")
 		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) > 1 {
+		return false
 	}
 	target := s.miscSelectedUnitPlayer()
 	if target == nil {
@@ -1059,10 +1071,6 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCooldown) {
 		return false
 	}
-	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
-	if len(args) > 1 {
-		return false
-	}
 	// C++ HandleCooldownCommand (cs_misc.cpp:723-760): the selected unit;
 	// GetCharmerOrOwnerPlayerOrPlayerItself names the owner for the
 	// message, and the cooldowns cleared are the TARGET's own
@@ -1125,6 +1133,13 @@ func (s *session) handleCmdCooldown(ctx context.Context, args []string) bool {
 		// report, as before (cs_misc.cpp:744-749).
 		s.sendSysMessage(fmt.Sprintf(miscUnknownSpell, reportName))
 		return true
+	}
+	// ChatCommand.h:112 - the trailing check runs only after the
+	// framework parse (ConsumeFromOffset): a quote-prefixed first token
+	// fails the spell parse and messages instead of failing silent
+	// (D34).
+	if len(args) > 1 {
+		return false
 	}
 	if creature != nil {
 		clearCreatureCooldown(owner, creature, spellID)
@@ -1520,10 +1535,6 @@ func (s *session) handleCmdDev(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandDev) {
 		return false
 	}
-	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
-	if len(args) > 1 {
-		return false
-	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
@@ -1531,11 +1542,18 @@ func (s *session) handleCmdDev(ctx context.Context, args []string) bool {
 	if len(args) > 0 {
 		// Optional<bool> (cs_misc.cpp:159): the loose bool token set
 		// (StringConvert.h:146-166); an unparseable token is a framework
-		// error (LANG_CMDPARSER_* + SetSentErrorMessage).
+		// error (LANG_CMDPARSER_* + SetSentErrorMessage). The parse
+		// runs before the trailing check (ChatCommand.h:112
+		// ConsumeFromOffset), so a quote-prefixed token messages
+		// instead of failing silent (D34).
 		if _, ok := cheatArgBool(args[0]); !ok {
 			s.sendSysMessage("Invalid value.")
 			return true
 		}
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) > 1 {
+		return false
 	}
 	s.sendSysMessage("Developer mode is unavailable: the Go tree has no developer-flag model.")
 	return true

@@ -529,8 +529,11 @@ func (s *session) handleCmdShowArea(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandShowArea) {
 		return false
 	}
-	// ChatCommand.h:112 - the uint32 arg is exactly one token.
-	if len(args) != 1 {
+	// The uint32 arg parses before the trailing check
+	// (ChatCommand.h:112 ConsumeFromOffset): a quote-prefixed first
+	// token fails the parse and messages instead of failing silent
+	// (D34).
+	if len(args) == 0 {
 		return false
 	}
 	areaID, ok := parseCommandUint32(args[0])
@@ -540,6 +543,10 @@ func (s *session) handleCmdShowArea(ctx context.Context, args []string) bool {
 		// SetSentErrorMessage.
 		s.sendSysMessage(misc2BadValue)
 		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) != 1 {
+		return false
 	}
 	target := s.server.playerSessionForGUID(s.selection)
 	if target == nil || target.player == nil {
@@ -565,8 +572,11 @@ func (s *session) handleCmdHideArea(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandHideArea) {
 		return false
 	}
-	// ChatCommand.h:112 - the uint32 arg is exactly one token.
-	if len(args) != 1 {
+	// The uint32 arg parses before the trailing check
+	// (ChatCommand.h:112 ConsumeFromOffset): a quote-prefixed first
+	// token fails the parse and messages instead of failing silent
+	// (D34).
+	if len(args) == 0 {
 		return false
 	}
 	areaID, ok := parseCommandUint32(args[0])
@@ -576,6 +586,10 @@ func (s *session) handleCmdHideArea(ctx context.Context, args []string) bool {
 		// SetSentErrorMessage.
 		s.sendSysMessage(misc2BadValue)
 		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) != 1 {
+		return false
 	}
 	target := s.server.playerSessionForGUID(s.selection)
 	if target == nil || target.player == nil {
@@ -636,23 +650,37 @@ func (s *session) handleCmdItemMove(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandItemMove) {
 		return false
 	}
-	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
+	// The (uint8, uint8) args parse left to right before the trailing
+	// check (ChatCommand.h:112 ConsumeFromOffset) and before the
+	// handler body, so a quote-prefixed first token fails the parse
+	// and messages instead of failing silent, while a missing second
+	// arg after a good first is silent false (D34).
+	if len(args) == 0 {
+		return false
+	}
+	srcSlot, ok1 := parseCommandUint8(args[0])
+	if !ok1 {
+		// Unparseable uint8 token (cs_misc.cpp:704): the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
+	}
+	if len(args) < 2 {
+		return false
+	}
+	dstSlot, ok2 := parseCommandUint8(args[1])
+	if !ok2 {
+		// Unparseable uint8 token (cs_misc.cpp:704): the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(misc2BadValue)
+		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
 	if len(args) > 2 {
 		return false
 	}
 	if s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
-	}
-	if len(args) < 2 {
-		return false
-	}
-	srcSlot, ok1 := parseCommandUint8(args[0])
-	dstSlot, ok2 := parseCommandUint8(args[1])
-	if !ok1 || !ok2 {
-		// Unparseable uint8 token (cs_misc.cpp:704): the framework prints
-		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
-		s.sendSysMessage(misc2BadValue)
-		return true
 	}
 	if srcSlot == dstSlot {
 		return true
@@ -795,13 +823,10 @@ func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandLinkGrave) {
 		return false
 	}
-	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse before the handler runs.
-	if len(args) > 2 {
-		return false
-	}
-	if s.player == nil || s.server == nil || s.server.Data == nil {
-		return false
-	}
+	// The uint32 graveyard id parses before the trailing check
+	// (ChatCommand.h:112 ConsumeFromOffset) and before the handler
+	// body, so a quote-prefixed first token fails the parse and
+	// messages instead of failing silent (D34).
 	if len(args) == 0 {
 		return false
 	}
@@ -815,6 +840,13 @@ func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) bool {
 	}
 	team, ok := misc2GraveTeamArg(args, 1)
 	if !ok {
+		return false
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) > 2 {
+		return false
+	}
+	if s.player == nil || s.server == nil || s.server.Data == nil {
 		return false
 	}
 	if _, found, err := s.server.Data.WorldSafeLoc(uint32(graveyardID)); err != nil || !found {
@@ -1627,8 +1659,11 @@ func (s *session) handleCmdPlayAll(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandPlayAll) {
 		return false
 	}
-	// ChatCommand.h:112 - the uint32 arg is exactly one token.
-	if len(args) != 1 {
+	// The uint32 arg parses before the trailing check
+	// (ChatCommand.h:112 ConsumeFromOffset): a quote-prefixed first
+	// token fails the parse and messages instead of failing silent
+	// (D34).
+	if len(args) == 0 {
 		return false
 	}
 	soundID, ok := parseCommandUint32(args[0])
@@ -1638,6 +1673,10 @@ func (s *session) handleCmdPlayAll(ctx context.Context, args []string) bool {
 		// SetSentErrorMessage.
 		s.sendSysMessage(misc2BadValue)
 		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) != 1 {
+		return false
 	}
 	payload := buildPlaySound(uint32(soundID))
 	if s.server != nil {
@@ -2130,7 +2169,12 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandSetSkill) {
 		return false
 	}
-	if len(args) < 2 || len(args) > 3 {
+	// The (Variant<skill, uint32>, uint32, Optional<uint32>) args parse
+	// left to right before the trailing check (ChatCommand.h:112
+	// ConsumeFromOffset): a quote-prefixed first token fails the parse
+	// and messages instead of failing silent, while a missing later
+	// arg after a good earlier one is silent false (D34).
+	if len(args) == 0 {
 		return false
 	}
 	skillID, ok := misc2ParseSkillArg(args[0])
@@ -2140,6 +2184,9 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) bool {
 		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
 		s.sendSysMessage(misc2BadValue)
 		return true
+	}
+	if len(args) < 2 {
+		return false
 	}
 	level, ok := parseCommandUint32(args[1])
 	if !ok {
@@ -2162,6 +2209,10 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) bool {
 		}
 		maxArg = parsedMax
 		hasMaxArg = true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) > 3 {
+		return false
 	}
 	target := s.guildSelectionOrSelf()
 	if target == nil || target.player == nil {
@@ -2562,7 +2613,12 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) boo
 	// even with weather disabled, and the float parse rejects non-finite
 	// values (std::isfinite, ChatCommandArgs.h:69) — only then does
 	// HandleChangeWeather check CONFIG_WEATHER (cs_misc.cpp:1337).
-	if len(args) != 2 {
+	// The (WeatherType, float) args parse left to right before the
+	// trailing check (ChatCommand.h:112 ConsumeFromOffset): a
+	// quote-prefixed first token fails the parse and messages instead
+	// of failing silent, while a missing intensity after a good type
+	// is silent false (D34).
+	if len(args) == 0 {
 		return false
 	}
 	wtype, ok := miscParseWeatherType(args[0])
@@ -2573,6 +2629,9 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) boo
 		s.sendSysMessage(misc2BadValue)
 		return true
 	}
+	if len(args) < 2 {
+		return false
+	}
 	intensity, ok := parseCommandFloat(args[1])
 	if !ok {
 		// Unparseable float token (cs_misc.cpp:1337): the framework
@@ -2580,6 +2639,10 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) boo
 		// SetSentErrorMessage (non-finite rejected, ChatCommandArgs.h).
 		s.sendSysMessage(misc2BadValue)
 		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing token fails the parse.
+	if len(args) != 2 {
+		return false
 	}
 	if s.server == nil || !s.server.Config.WeatherEnabled {
 		s.sendSysMessage("Weather is disabled by config.")
