@@ -943,11 +943,10 @@ func (s *session) handleCmdComeToMe(ctx context.Context, args []string) {
 }
 
 // handleCmdCommands mirrors HandleCommandsCommand (cs_misc.cpp:602-606, RBAC
-// 496): list the available top-level commands from the live command tree.
-// Documented fidelity gap (not a stub): the C++ filters by the invoker's
-// RBAC grants (SendCommandHelpFor); the Go tree carries no per-node
-// permission mapping, so the full tree is listed and each arm still gates
-// itself at invocation.
+// 496): list the available top-level commands from the live command tree,
+// filtered to the invoker-visible nodes (SendCommandHelpFor) now that the
+// R13 census wires per-node permissions; each arm still gates itself at
+// invocation.
 func (s *session) handleCmdCommands(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -956,7 +955,7 @@ func (s *session) handleCmdCommands(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandCommands) {
 		return
 	}
-	s.sendTopLevelCommandList()
+	s.sendTopLevelCommandList(ctx)
 }
 
 // handleCmdCooldown mirrors HandleCooldownCommand (cs_misc.cpp:723-760, RBAC

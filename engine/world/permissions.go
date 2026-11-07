@@ -670,6 +670,9 @@ const permissionCommandHonorAddKill uint32 = 410
 // permissionCommandHonorUpdate mirrors rbac::RBAC_PERM_COMMAND_HONOR_UPDATE (RBAC.h:279).
 const permissionCommandHonorUpdate uint32 = 411
 
+// permissionCommandGroup mirrors rbac::RBAC_PERM_COMMAND_GROUP (RBAC.h:340).
+const permissionCommandGroup uint32 = 472
+
 // permissionCommandGroupLeader mirrors rbac::RBAC_PERM_COMMAND_GROUP_LEADER (RBAC.h:341).
 const permissionCommandGroupLeader uint32 = 473
 

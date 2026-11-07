@@ -496,7 +496,7 @@ func (s *session) handleCmdHelp2(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandHelp) {
 		return
 	}
-	s.handleCmdHelp(args)
+	s.handleCmdHelp(ctx, args)
 }
 
 // misc2ExploredBit resolves an area id to its explored-zone bit offset and
