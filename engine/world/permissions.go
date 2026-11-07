@@ -521,19 +521,25 @@ const permissionCommandPDumpCopy uint32 = 880
 // permissionReceiveGlobalGMTextMessage mirrors rbac::RBAC_PERM_RECEIVE_GLOBAL_GM_TEXTMESSAGE (RBAC.h:97).
 const permissionReceiveGlobalGMTextMessage uint32 = 44
 
-func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {
+// loadGrantedPermissions returns the account's effective permission set:
+// account rows plus the security level's rbac_default_permissions, minus
+// denied rows, all expanded through rbac_linked_permissions
+// (RBAC.cpp:223-232, LoadFromDBCallback). accountHasPermission answers one
+// membership question from it; the command tree loads it once per command
+// so the visibility filter does not re-query per candidate.
+func loadGrantedPermissions(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8) (map[uint32]struct{}, error) {
 	granted := make(map[uint32]struct{})
 	denied := make(map[uint32]struct{})
 	rows, err := db.QueryContext(ctx, "SELECT permissionId, granted FROM rbac_account_permissions WHERE accountId = ? AND (realmId = ? OR realmId = -1) ORDER BY permissionId, realmId", accountID, realmID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	for rows.Next() {
 		var id uint32
 		var allowed int64
 		if err := rows.Scan(&id, &allowed); err != nil {
 			_ = rows.Close()
-			return false, err
+			return nil, err
 		}
 		if allowed != 0 {
 			granted[id] = struct{}{}
@@ -543,20 +549,20 @@ func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID ui
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return false, err
+		return nil, err
 	}
 	if err := rows.Close(); err != nil {
-		return false, err
+		return nil, err
 	}
 	rows, err = db.QueryContext(ctx, "SELECT permissionId FROM rbac_default_permissions WHERE secId = ? AND (realmId = ? OR realmId = -1) ORDER BY permissionId", security, realmID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	for rows.Next() {
 		var id uint32
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return false, err
+			return nil, err
 		}
 		if _, blocked := denied[id]; !blocked {
 			granted[id] = struct{}{}
@@ -564,23 +570,30 @@ func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID ui
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return false, err
+		return nil, err
 	}
 	if err := rows.Close(); err != nil {
-		return false, err
+		return nil, err
 	}
 	links, err := loadPermissionLinks(ctx, db)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	granted = expandPermissions(granted, links)
 	denied = expandPermissions(denied, links)
-	_, ok := granted[permissionID]
-	if !ok {
-		return false, nil
+	for id := range denied {
+		delete(granted, id)
 	}
-	_, blocked := denied[permissionID]
-	return !blocked, nil
+	return granted, nil
+}
+
+func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {
+	granted, err := loadGrantedPermissions(ctx, db, accountID, realmID, security)
+	if err != nil {
+		return false, err
+	}
+	_, ok := granted[permissionID]
+	return ok, nil
 }
 
 func loadPermissionLinks(ctx context.Context, db *sql.DB) (map[uint32][]uint32, error) {

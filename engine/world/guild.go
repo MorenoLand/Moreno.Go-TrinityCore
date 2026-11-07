@@ -5669,10 +5669,12 @@ func (s *session) turnInArenaPetition(ctx context.Context, r *protocol.Buffer, p
 	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(arenaTeamId), 0) + 1 FROM arena_team").Scan(&teamID); err != nil {
 		return true
 	}
-	// Stats.Rating starts at CONFIG_ARENA_START_RATING (1500 default; Go
-	// carries no config field for it, and 1500 is the rating fallback the
-	// arena code already uses).
-	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team (arenaTeamId, name, captainGuid, type, rating, backgroundColor, emblemStyle, emblemColor, borderStyle, borderColor) VALUES (?, ?, ?, ?, 1500, ?, ?, ?, ?, ?)", teamID, teamName, s.playerGUID, petitionType, background, icon, iconColor, border, borderColor); err != nil {
+	// Stats.Rating starts at CONFIG_ARENA_START_RATING (World.cpp:1217,
+	// default 0); Stats.Rating is uint16 (ArenaTeam.h:106), so the config
+	// value truncates. The old 1500 literal confused the start rating with
+	// the matchmaker default (ArenaStartMatchmakerRating, World.cpp:1219).
+	teamRating := uint32(uint16(s.server.Config.ArenaStartRating))
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team (arenaTeamId, name, captainGuid, type, rating, backgroundColor, emblemStyle, emblemColor, borderStyle, borderColor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", teamID, teamName, s.playerGUID, petitionType, teamRating, background, icon, iconColor, border, borderColor); err != nil {
 		return true
 	}
 
@@ -5680,7 +5682,7 @@ func (s *session) turnInArenaPetition(ctx context.Context, r *protocol.Buffer, p
 	// RemovePetitionsAndSigns leg deletes this petition's rows — the
 	// signers list above is already copied, and the cleanup below is
 	// idempotent.
-	personalRating := arenaTeamJoinPersonalRating(s.server.Config.ArenaStartPersonalRating, 1500)
+	personalRating := arenaTeamJoinPersonalRating(s.server.Config.ArenaStartPersonalRating, teamRating)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, ?)", teamID, s.playerGUID, personalRating)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE playerguid = ? AND type = ?", s.playerGUID, petitionType)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", s.playerGUID, petitionType)

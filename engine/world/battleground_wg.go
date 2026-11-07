@@ -21,18 +21,18 @@ const (
 	// battlefield battle id registered with BattlefieldMgr.
 	WGBattleID uint32 = 1
 
-	// Durations
-	WGBattleDuration        = 30 * time.Minute  // 30 minutes war
-	WGNoWarDuration         = 150 * time.Minute // 2.5 hours peace
-	WGSouthTowerTimePenalty = 10 * time.Minute  // 10 minutes removed when all 3 south towers fall
-	WGStartGroupingDuration = 15 * time.Minute  // 15 minutes before war
-	wgMaxPlayersPerTeam     = 100               // Wintergrasp.PlayerMax default (World.cpp:1477)
-	wgMinPlayers            = 0                 // Wintergrasp.PlayerMin default (World.cpp:1478); the queue-invite gate below reads it
-	wgMinLevel              = 77                // Wintergrasp.PlayerMinLvl default (World.cpp:1479); the war-invite level leg below reads it
-	wgResurrectInterval     = 30 * time.Second  // RESURRECTION_INTERVAL (Battlefield.cpp:191-199)
-	wgInviteAcceptWindow    = 20 * time.Second  // m_TimeForAcceptInvite (BattlefieldWG.cpp:429)
-	wgKickDelay             = 10 * time.Second  // m_PlayersWillBeKick deadline (Battlefield.cpp:89, 253)
-	wgKickSweepInterval     = time.Second       // m_uiKickDontAcceptTimer / m_uiKickAfkPlayersTimer (Battlefield.cpp:60, 165-186)
+	// Durations (WGBattleDuration/WGNoWarDuration were the 30/150-minute
+	// config defaults; the live durations now come from
+	// Server.wgBattleDuration/wgNoWarDuration below).
+	WGSouthTowerTimePenalty = 10 * time.Minute // 10 minutes removed when all 3 south towers fall
+	WGStartGroupingDuration = 15 * time.Minute // 15 minutes before war
+	wgMaxPlayersPerTeam     = 100              // Wintergrasp.PlayerMax default (World.cpp:1477)
+	wgMinPlayers            = 0                // Wintergrasp.PlayerMin default (World.cpp:1478); the queue-invite gate below reads it
+	wgMinLevel              = 77               // Wintergrasp.PlayerMinLvl default (World.cpp:1479); the war-invite level leg below reads it
+	wgResurrectInterval     = 30 * time.Second // RESURRECTION_INTERVAL (Battlefield.cpp:191-199)
+	wgInviteAcceptWindow    = 20 * time.Second // m_TimeForAcceptInvite (BattlefieldWG.cpp:429)
+	wgKickDelay             = 10 * time.Second // m_PlayersWillBeKick deadline (Battlefield.cpp:89, 253)
+	wgKickSweepInterval     = time.Second      // m_uiKickDontAcceptTimer / m_uiKickAfkPlayersTimer (Battlefield.cpp:60, 165-186)
 
 	// Teams
 	WGTeamAlliance uint32 = 0
@@ -634,9 +634,9 @@ func (s *Server) StartWGBattle(defenderTeam uint32) {
 
 	wg.IsActive = true
 	wg.DefenderTeam = defenderTeam
-	wg.Timer = WGBattleDuration
-	wg.TotalDuration = WGBattleDuration
-	wg.EndTime = time.Now().Add(WGBattleDuration)
+	wg.Timer = s.wgBattleDuration()
+	wg.TotalDuration = s.wgBattleDuration()
+	wg.EndTime = time.Now().Add(s.wgBattleDuration())
 	wg.Winner = -1
 
 	wg.initWorkshops()
@@ -1031,9 +1031,9 @@ func (s *Server) EndWGBattle(endByTimer bool) {
 	// (DoCompleteOrIncrementAchievement(ACHIEVEMENTS_WIN_WG_TIMER_10) when
 	// !endByTimer && GetTimer() <= 10000); capture it here.
 	remainingBattleTime := wg.Timer
-	wg.Timer = WGNoWarDuration
-	wg.TotalDuration = WGNoWarDuration
-	wg.EndTime = time.Now().Add(WGNoWarDuration)
+	wg.Timer = s.wgNoWarDuration()
+	wg.TotalDuration = s.wgNoWarDuration()
+	wg.EndTime = time.Now().Add(s.wgNoWarDuration())
 
 	// Reward players: OnBattleEnd rewards and aura-strips reach
 	// m_PlayersInWar only (BattlefieldWG.cpp:704-731) — the old
@@ -2092,6 +2092,20 @@ func isWGGameObject(entry uint32) bool {
 	}
 }
 
+// wgBattleDuration mirrors BattlefieldWG::SetupBattlefield
+// (BattlefieldWG.cpp:424): m_BattleTime = CONFIG_WINTERGRASP_BATTLETIME
+// minutes (World.cpp:1480, default 30).
+func (s *Server) wgBattleDuration() time.Duration {
+	return time.Duration(s.Config.WintergraspBattleTime) * time.Minute
+}
+
+// wgNoWarDuration mirrors BattlefieldWG::SetupBattlefield
+// (BattlefieldWG.cpp:425): m_NoWarBattleTime =
+// CONFIG_WINTERGRASP_NOBATTLETIME minutes (World.cpp:1481, default 150).
+func (s *Server) wgNoWarDuration() time.Duration {
+	return time.Duration(s.Config.WintergraspNoBattleTime) * time.Minute
+}
+
 // getOrCreateWGState returns or initializes the singleton Wintergrasp state.
 func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 	s.wgMu.Lock()
@@ -2102,9 +2116,9 @@ func (s *Server) getOrCreateWGState() *wgBattlegroundState {
 			ZoneID:             WGZoneID,
 			IsActive:           false,
 			DefenderTeam:       WGTeamAlliance,
-			Timer:              WGNoWarDuration,
-			TotalDuration:      WGNoWarDuration,
-			EndTime:            time.Now().Add(WGNoWarDuration),
+			Timer:              s.wgNoWarDuration(),
+			TotalDuration:      s.wgNoWarDuration(),
+			EndTime:            time.Now().Add(s.wgNoWarDuration()),
 			Enabled:            true,
 			Winner:             -1,
 			PlayersInWar:       make(map[uint64]uint32),

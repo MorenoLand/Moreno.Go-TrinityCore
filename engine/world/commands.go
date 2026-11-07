@@ -5963,8 +5963,11 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 		s.sendSysMessage("Unknown error.")
 		return
 	}
-	// ArenaTeam::Create + CHAR_INS_ARENA_TEAM.
-	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team (arenaTeamId, name, captainGuid, type, rating, backgroundColor, emblemStyle, emblemColor, borderStyle, borderColor) VALUES (?, ?, ?, ?, 0, 4293102085, 101, 4293253939, 4, 4284049911)", teamID, name, captainGUID, teamType); err != nil {
+	// ArenaTeam::Create + CHAR_INS_ARENA_TEAM. Stats.Rating starts at
+	// CONFIG_ARENA_START_RATING (World.cpp:1217, default 0); Stats.Rating
+	// is uint16 (ArenaTeam.h:106), so the config value truncates.
+	teamRating := uint32(uint16(s.server.Config.ArenaStartRating))
+	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team (arenaTeamId, name, captainGuid, type, rating, backgroundColor, emblemStyle, emblemColor, borderStyle, borderColor) VALUES (?, ?, ?, ?, ?, 4293102085, 101, 4293253939, 4, 4284049911)", teamID, name, captainGUID, teamType, teamRating); err != nil {
 		s.sendSysMessage("Unknown error.")
 		return
 	}
@@ -5973,9 +5976,11 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE playerguid = ? AND type = ?", captainGUID, teamType)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE ownerguid = ? AND type = ?", captainGUID, teamType)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE ownerguid = ? AND type = ?", captainGUID, teamType)
-	// CHAR_INS_ARENA_TEAM_MEMBER; personal rating starts at the
-	// CONFIG_ARENA_START_PERSONAL_RATING default of 1000 (World.cpp:1218).
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, 1000)", teamID, captainGUID)
+	// CHAR_INS_ARENA_TEAM_MEMBER; the captain's personal rating follows
+	// the AddMember leg (ArenaTeam.cpp:126-131) via
+	// arenaTeamJoinPersonalRating.
+	personalRating := arenaTeamJoinPersonalRating(s.server.Config.ArenaStartPersonalRating, teamRating)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO arena_team_member (arenaTeamId, guid, weekGames, weekWins, seasonGames, seasonWins, personalRating) VALUES (?, ?, 0, 0, 0, 0, ?)", teamID, captainGUID, personalRating)
 	// ArenaTeam::Create runs AddMember(captain), which sets the online
 	// captain's live slot fields (ArenaTeam.cpp:175-178); the DB rows
 	// alone leave the client showing no team until relog.
@@ -7103,6 +7108,12 @@ type commandNode struct {
 	children map[string]*commandNode
 	aliases  map[string]string // alias -> canonical child name
 	invoke   func(ctx context.Context, args []string) bool
+	// perm is the node's RBAC permission (rbac::RBAC_PERM_COMMAND_*); 0
+	// means no permission wired yet and the node counts as visible (see
+	// commandNodeVisible). Group nodes carry 0 in C++ too: their table
+	// entries list no permission, so they are visible exactly when some
+	// subcommand is.
+	perm uint32
 }
 
 func (n *commandNode) add(name string, invoke func(ctx context.Context, args []string) bool, subs []string, aliases map[string]string) *commandNode {
@@ -7117,13 +7128,33 @@ func (n *commandNode) add(name string, invoke func(ctx context.Context, args []s
 	return child
 }
 
+// addWithPerms mirrors add but records the RBAC permission of each
+// subcommand, as the ChatCommandTable entries do (cs_arena.cpp:45-53,
+// cs_ban.cpp:51-76, cs_bf.cpp:44). resolve() filters prefix matches to the
+// invoker-visible nodes (FilteredCommandListIterator, ChatCommand.cpp:207-237).
+func (n *commandNode) addWithPerms(name string, invoke func(ctx context.Context, args []string) bool, subPerms map[string]uint32, aliases map[string]string) *commandNode {
+	child := &commandNode{name: name, invoke: invoke, children: make(map[string]*commandNode), aliases: make(map[string]string)}
+	for sub, perm := range subPerms {
+		child.children[sub] = &commandNode{name: sub, perm: perm}
+	}
+	for alias, target := range aliases {
+		child.aliases[alias] = target
+	}
+	n.children[name] = child
+	return child
+}
+
 // commandTokens holds the canonicalized tokens once resolution completes.
 type commandTokens []string
 
 // resolve walks the tree token by token, rewriting each token to the
 // canonical child name it matched (prefix or alias). Returns the deepest
 // node and the rewritten tokens; consumed counts matched structural tokens.
-func (n *commandNode) resolve(tokens []string) (*commandNode, commandTokens, int, []string, int) {
+// Only invoker-visible children match (FilteredCommandListIterator,
+// ChatCommand.cpp:207-237), so a prefix that matches several names but
+// leaves one visible resolves to it instead of reporting ambiguity; a nil
+// visible predicate matches everything.
+func (n *commandNode) resolve(tokens []string, visible func(*commandNode) bool) (*commandNode, commandTokens, int, []string, int) {
 	node := n
 	rewritten := make(commandTokens, 0, len(tokens))
 	consumed := 0
@@ -7147,21 +7178,26 @@ func (n *commandNode) resolve(tokens []string) (*commandNode, commandTokens, int
 		}
 		lower := strings.ToLower(token)
 		matches := make([]string, 0, 2)
-		for name := range node.children {
+		for name, child := range node.children {
+			if visible != nil && !visible(child) {
+				continue
+			}
 			if strings.HasPrefix(name, lower) {
 				matches = append(matches, name)
 			}
 		}
 		if target, ok := node.aliases[lower]; ok {
-			duplicate := false
-			for _, existing := range matches {
-				if existing == target {
-					duplicate = true
-					break
+			if visible == nil || visible(node.children[target]) {
+				duplicate := false
+				for _, existing := range matches {
+					if existing == target {
+						duplicate = true
+						break
+					}
 				}
-			}
-			if !duplicate {
-				matches = append(matches, target)
+				if !duplicate {
+					matches = append(matches, target)
+				}
 			}
 		}
 		if len(matches) == 0 {
@@ -8079,11 +8115,17 @@ func (s *session) handleCmdBanInfoIP(ctx context.Context, args []string) {
 	banTime := "Infinite" // LANG_BANINFO_INFINITE (419)
 	if !permanent {
 		unbanStr = time.Unix(unbandate, 0).Format("2006-01-02 15:04:05")
-		remaining := unbandate - timeNow()
-		if remaining < 0 {
-			remaining = 0
-		}
-		banTime = secsToTimeStringShort(uint64(remaining))
+		// C++ selects unbandate-UNIX_TIMESTAMP() raw (cs_ban.cpp:379)
+		// and prints it through secsToTimeString (Util.cpp:97). Both
+		// columns are int unsigned, so MySQL evaluates the subtraction
+		// in unsigned arithmetic and an expired row wraps to a huge
+		// uint64 (2^64 - elapsed) instead of going negative; GetUInt64
+		// keeps the wrap. Expired rows are reachable here: the cleanup
+		// statement (LoginDatabase.cpp:27) runs at authserver start and
+		// in the banlist handlers, not in baninfo. The uint64 conversion
+		// below reproduces the wrap exactly; the old clamp to 0 was an
+		// unintentional deviation.
+		banTime = secsToTimeStringShort(uint64(unbandate - timeNow()))
 	}
 	// LANG_BANINFO_IPENTRY (423).
 	s.sendSysMessage(fmt.Sprintf("%s | banned: %s | unban: %s | duration: %s | %s | by %s",
@@ -8399,12 +8441,12 @@ func (s *session) buildCommandTree() *commandNode {
 	root.add("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, []string{"set", "password", "addon", "email", "lock", "2fa", "create", "delete", "onlinelist"}, map[string]string{"acct": "account"})
 	root.add("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, []string{"add"}, nil)
 	root.add("ahbot", func(ctx context.Context, args []string) bool { s.handleCmdAhbot(ctx, args); return true }, []string{"items", "ratio", "rebuild", "reload", "status"}, nil)
-	root.add("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, []string{"create", "disband", "rename", "captain", "info", "lookup"}, nil)
-	root.add("ban", func(ctx context.Context, args []string) bool { s.handleCmdBan(ctx, args); return true }, []string{"account", "character", "playeraccount", "ip"}, nil)
-	root.add("baninfo", func(ctx context.Context, args []string) bool { s.handleCmdBanInfo(ctx, args); return true }, []string{"account", "character", "ip"}, nil)
-	root.add("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, []string{"account", "character", "ip"}, nil)
-	root.add("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, []string{"account", "character", "playeraccount", "ip"}, nil)
-	root.add("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, []string{"start", "stop", "switch", "timer", "enable"}, nil)
+	root.addWithPerms("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, map[string]uint32{"create": permissionCommandArenaCreate, "disband": permissionCommandArenaDisband, "rename": permissionCommandArenaRename, "captain": permissionCommandArenaCaptain, "info": permissionCommandArenaInfo, "lookup": permissionCommandArenaLookup}, nil)
+	root.addWithPerms("ban", func(ctx context.Context, args []string) bool { s.handleCmdBan(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanAccount, "character": permissionCommandBanCharacter, "playeraccount": permissionCommandBanPlayerAccount, "ip": permissionCommandBanIP}, nil)
+	root.addWithPerms("baninfo", func(ctx context.Context, args []string) bool { s.handleCmdBanInfo(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanInfoAccount, "character": permissionCommandBanInfoCharacter, "ip": permissionCommandBanInfoIP}, nil)
+	root.addWithPerms("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanListAccount, "character": permissionCommandBanListCharacter, "ip": permissionCommandBanListIP}, nil)
+	root.addWithPerms("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, map[string]uint32{"account": permissionCommandUnBanAccount, "character": permissionCommandUnBanCharacter, "playeraccount": permissionCommandUnBanPlayerAccount, "ip": permissionCommandUnBanIP}, nil)
+	root.addWithPerms("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, map[string]uint32{"start": permissionCommandBfStart, "stop": permissionCommandBfStop, "switch": permissionCommandBfSwitch, "timer": permissionCommandBfTimer, "enable": permissionCommandBfEnable}, nil)
 	root.add("deserter", func(ctx context.Context, args []string) bool { s.handleCmdDeserter(ctx, args); return true }, []string{"instance", "bg"}, nil)
 	root.add("disable", func(ctx context.Context, args []string) bool { s.handleCmdDisable(ctx, args); return true }, []string{"add", "remove"}, nil)
 	root.add("event", func(ctx context.Context, args []string) bool { s.handleCmdEvent(ctx, args); return true }, []string{"activelist", "start", "stop", "info"}, nil)
@@ -8496,6 +8538,46 @@ func (s *session) buildCommandTree() *commandNode {
 	return root
 }
 
+// commandNodeVisible mirrors ChatCommandNode::IsVisible (ChatCommand.h:200):
+// invoker-visible, or any visible subcommand. A node carrying a permission
+// is invoker-visible when the session holds it; a node with no permission
+// wired yet (perm 0) counts as visible while its family awaits the census,
+// so unwired families keep today's behaviour.
+func (s *session) commandNodeVisible(ctx context.Context, n *commandNode, allowed func(uint32) bool) bool {
+	if n == nil {
+		return false
+	}
+	if n.perm != 0 {
+		return allowed(n.perm)
+	}
+	if len(n.children) == 0 {
+		return true
+	}
+	for _, child := range n.children {
+		if s.commandNodeVisible(ctx, child, allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+// commandTreeVisible loads the invoker's permission set once per command
+// (FilteredCommandListIterator consults the same set for every candidate;
+// ChatCommand.cpp:207-237). With no auth DB to consult it falls back to the
+// commandAllowed rule (GM accounts keep their commands).
+func (s *session) commandTreeVisible(ctx context.Context) func(*commandNode) bool {
+	allowed := func(uint32) bool { return s.security >= 1 }
+	if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		if granted, err := loadGrantedPermissions(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security); err == nil {
+			allowed = func(perm uint32) bool {
+				_, ok := granted[perm]
+				return ok
+			}
+		}
+	}
+	return func(n *commandNode) bool { return s.commandNodeVisible(ctx, n, allowed) }
+}
+
 // dispatchCommand resolves a partial command like '.mod spee 10' to its
 // canonical invocation ('.modify speed 10') like ChatCommandNode::
 // TryExecuteCommand, reporting ambiguous matches with the TC wording.
@@ -8504,10 +8586,21 @@ func (s *session) dispatchCommand(ctx context.Context, fields []string) bool {
 		return false
 	}
 	root := s.buildCommandTree()
-	node, rewritten, _, ambiguous, nodeDepth := root.resolve(fields)
+	visible := s.commandTreeVisible(ctx)
+	node, rewritten, _, ambiguous, nodeDepth := root.resolve(fields, visible)
 	if ambiguous != nil {
 		s.sendSysMessage("There are multiple commands matching '" + strings.ToLower(fields[len(rewritten)]) + "'. Did you mean:")
 		for _, candidate := range ambiguous {
+			// ChatCommand.cpp:277-280 prints each candidate with the
+			// "..." suffix when it has visible subcommands.
+			if child := node.children[candidate]; child != nil {
+				for _, sub := range child.children {
+					if visible(sub) {
+						candidate += " ..."
+						break
+					}
+				}
+			}
 			s.sendSysMessage(candidate)
 		}
 		return true
