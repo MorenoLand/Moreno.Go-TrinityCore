@@ -7325,7 +7325,9 @@ func (s *Server) creatureAlgalonBigBangAscend(ctx context.Context, m *creatureMo
 // Wintergrasp RP-GG arms (57347/57349) gate on a player caster, Scarlet
 // ghoul summons (51904) need a position cast, Grab Crate (62482) needs a
 // vehicle model, and the sSpellScripts tail has no Go SpellScript bridge
-// (same stay-outs as the session twin).
+// (same stay-outs as the session twin). Krystallus Shatter (50810) removes
+// Stoned (50812) from the hit unit and makes it self-cast Shatter Effect
+// (50811) triggered (boss_krystallus.cpp).
 func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMotion, spellID uint32, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
 	if s == nil || m == nil || s.Data == nil {
 		return
@@ -7510,6 +7512,25 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 					continue
 				}
 				s.castCreatureSpellInternal(ctx, tm, 41131, guid, true)
+			}
+		case 50810:
+			// spell_krystallus_shatter (boss_krystallus.cpp): EFFECT_0 script
+			// effect — the hit unit loses Stoned (50812), then casts Shatter
+			// Effect (50811) triggered on itself (CastSpell(nullptr, ...) =
+			// self-cast). Dead hit units are not AOE targets in C++ and cast
+			// nothing (the 41126 precedent).
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				if ts.isDeadOrGhost() {
+					continue
+				}
+				ts.removeAura(50812)
+				ts.castSpellDirect(ctx, 50811, guid)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				if tm.Health == 0 {
+					continue
+				}
+				s.removeCreatureAura(creatureAuraKey{Map: m.Map, InstanceID: m.InstanceID, GUID: guid}, 50812)
+				s.castCreatureSpellInternal(ctx, tm, 50811, guid, true)
 			}
 		case 71806:
 			// spell_taldaram_glittering_sparks (boss_blood_prince_council.cpp):

@@ -2323,10 +2323,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return []any{escorted}, nil
 	}
 	// StartEscort is the ScriptedEscortAI::Start producer: it arms the
-	// escort-player GUID the IsEscorted gate reads. The waypoint
-	// machine itself is unported, so this only arms the escort state
-	// the respawn-block exemption (Map.cpp:3066) and the engage home
-	// leg (Creature.cpp:3446, atEngageSetHomePosition) consume.
+	// escort-player GUID the IsEscorted gate reads. The waypoint walk
+	// itself rides the MoveWaypoint bridge + the OnReachWP (6) arrival
+	// event, paused/resumed via SetEscortPaused; the EscortAI phase
+	// machine (WaypointReached scripts) lives in Lua ports.
 	methods["StartEscort"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("player is required")
@@ -2368,6 +2368,29 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	methods["StopEscort"] = func(_ context.Context, _ []any) ([]any, error) {
 		s.motionMu.Lock()
 		motion.EscortPlayerGUID = 0
+		motion.EscortPaused = false
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// SetEscortPaused is EscortAI::SetEscortPaused
+	// (ScriptedEscortAI.cpp:353-372): pausing sets STATE_ESCORT_PAUSED
+	// and pauses the waypoint generator; resuming clears the state and
+	// the generator continues with the next waypoint. The C++ call is a
+	// no-op while no escort runs, so the bridge ignores the set unless
+	// an escort player is armed. The Go arm is the waypoint launch gate
+	// in stepCreatureMotion (a spline already in flight still arrives).
+	methods["SetEscortPaused"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("paused is required")
+		}
+		paused, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("paused must be a boolean")
+		}
+		s.motionMu.Lock()
+		if motion.EscortPlayerGUID != 0 {
+			motion.EscortPaused = paused
+		}
 		s.motionMu.Unlock()
 		return nil, nil
 	}

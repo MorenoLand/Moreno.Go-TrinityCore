@@ -66,32 +66,34 @@
 -- 59750) non-triggered on randomPlayerInRange(creature, 100),
 -- IsHeroic()-gated seed {9s,14s} / {12s,17s} repeat.
 -- UpdateAI event machine (remaining):
--- EVENT_GROUND_SLAM (DoCast(SPELL_GROUND_SLAM 50827) + schedules
--- EVENT_SHATTER 10s, 15s/18s — SHATTER (50810) is
--- SpellScript-delivered (see below); porting SLAM alone would
--- leave SPELL_STONED (50812) unshattered — half-machine. Verdict
--- decided 2026-10-14: STAY-OUT stands (the bjarngrim
--- documented-deviation precedent — the leg stays out,
--- documented here); the slam self-cast is bridgeable but the
--- stoned->shatter->damage chain is not);
+-- EVENT_GROUND_SLAM — PORTED 2026-11-07 (tick 374): DoCast(me,
+-- SPELL_GROUND_SLAM 50827) non-triggered self-cast, {15s,18s} init /
+-- {15s,18s} re-arm, schedules EVENT_SHATTER 10s
+-- (boss_krystallus.cpp:72/:103-106). The Oct-14 half-machine
+-- STAY-OUT is retracted: the 50810 script-effect arm now lives in
+-- Go (boss_ai.go creatureEffectScriptEffect + session twin), so the
+-- stoned->shatter->damage chain is complete.
 -- EVENT_STOMP — PORTED (DoCast(me, SPELL_STOMP 48131)
 -- non-triggered self-cast, {20s,29s} init / {20s,29s} re-arm,
 -- zero gating legs — boss_krystallus.cpp:73/:108-110);
--- EVENT_SHATTER (DoCast(SPELL_SHATTER 50810)) — the
--- UNIT_STATE_CASTING gates and the DoMeleeAttackIfReady tail have
--- no bridges. (enum Yells SAY_SHATTER = 3 is declared but never
+-- EVENT_SHATTER — PORTED 2026-11-07 (tick 374): DoCast(me,
+-- SPELL_SHATTER 50810) non-triggered self-cast, one-shot armed by
+-- the slam tick (boss_krystallus.cpp:112-113). The
+-- UNIT_STATE_CASTING gate rides the IsCasting 500ms-retry
+-- convention shared with stomp/boulder/spike.
+-- (enum Yells SAY_SHATTER = 3 is declared but never
 -- Talk()ed in C++; nothing rides it.)
 -- spell_krystallus_shatter (SpellScriptLoader:
 -- EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT handler —
 -- RemoveAurasDueToSpell(SPELL_STONED 50812) + triggered
--- CastSpell(SPELL_SHATTER_EFFECT 50811) — no SpellScript bridge;
--- joins the no-SpellScript-bridge queue).
+-- CastSpell(SPELL_SHATTER_EFFECT 50811) — PORTED 2026-11-07
+-- (tick 374) into creatureEffectScriptEffect + the session twin;
+-- the "no SpellScript bridge" claim is retracted for this arm).
 -- spell_krystallus_shatter_effect (SpellScriptLoader: OnHit
 -- CalculateDamage — radius-scaled SetHitDamage via CalcRadius —
--- PORTED 2026-11-07 (tick 372) for the creature-caster leg via the
--- pre-damage OnHit dispatch in engine/world/spell_onhit.go; the
--- stoned-player caster leg is open — a stoned player routes through
--- the session cast pipeline, which has no dispatch yet).
+-- PORTED 2026-11-07 for the creature-caster leg (tick 372) via the
+-- pre-damage OnHit dispatch in engine/world/spell_onhit.go and for
+-- the stoned-player caster leg (tick 373) via the session dispatch).
 
 local ENTRY_KRYSTALLUS = 27977
 
@@ -103,6 +105,8 @@ local SAY_KILL = 1
 local SAY_DEATH = 2
 
 local SPELL_STOMP = 48131
+local SPELL_GROUND_SLAM = 50827
+local SPELL_SHATTER = 50810
 local SPELL_BOULDER_TOSS = 50843
 local SPELL_GROUND_SPIKE = 59750
 
@@ -208,6 +212,49 @@ local function stompTick(creature, guid)
     end)
 end
 
+-- Forward declaration (tharon_ja/gal_darah idiom): groundSlamTick's
+-- closure schedules shatterTick, which is assigned below; a later
+-- `local function shatterTick` would shadow this slot and nil the call.
+local shatterTick
+
+-- C++ UpdateAI EVENT_GROUND_SLAM (boss_krystallus.cpp:103-106):
+-- DoCast(me, SPELL_GROUND_SLAM 50827) non-triggered self-cast;
+-- schedules EVENT_SHATTER 10s and re-arms {15s,18s}. The Stoned
+-- (50812) application rides 50827's DBC; the shatter leg below
+-- completes the chain (50810 arm now in Go — boss_ai.go
+-- creatureEffectScriptEffect + the session twin).
+local function groundSlamTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "slam", 500, function()
+            groundSlamTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_GROUND_SLAM)
+    schedule(guid, "shatter", 10000, function()
+        shatterTick(creature, guid)
+    end)
+    schedule(guid, "slam", {15000, 18000}, function()
+        groundSlamTick(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_SHATTER (boss_krystallus.cpp:112-113):
+-- DoCast(me, SPELL_SHATTER 50810) non-triggered self-cast; one-shot,
+-- armed only by the slam tick 10s earlier. The 50810 script-effect
+-- arm (remove 50812 + triggered 50811 self-cast per hit target)
+-- lives in Go; the 50811 damage falloff rides the pre-damage OnHit
+-- dispatch (ticks 372/373).
+shatterTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shatter", 500, function()
+            shatterTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SHATTER)
+end
+
 -- C++ JustEngagedWith: Talk(AGGRO) + BossAI base arms +
 -- ScheduleEvent legs — the Talk, base, and EVENT_STOMP arms ported.
 local function krystallusEnterCombat(event, creature, target)
@@ -233,6 +280,9 @@ local function krystallusEnterCombat(event, creature, target)
             groundSpikeTick(creature, guid)
         end)
     end
+    schedule(guid, "slam", {15000, 18000}, function()
+        groundSlamTick(creature, guid)
+    end)
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER gate, then

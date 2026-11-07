@@ -50561,7 +50561,7 @@ func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, h
 // on player casts: clear debuffs (34098), Gal'darah clear puncture
 // (60022), throw shield (69222), glittering sparks self-cast (71806),
 // remove empowered blood (70939), draw soul (40904), flame burst
-// (41126), council judgement (41467). The remaining arms (Scarlet ghoul
+// (41126), council judgement (41467), krystallus shatter (50810). The remaining arms (Scarlet ghoul
 // summons, Grab Crate vehicle, Coyote Spirit/Blood Parrot despawns) need
 // temp-summon / position-cast / vehicle models Go lacks, and the sSpellScripts
 // tail has no Go SpellScript bridge (documented).
@@ -50910,6 +50910,25 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 				return
 			}
 			s.server.castCreatureSpellInternal(ctx, tm, 41131, targetGUID, true)
+		}
+	case 50810:
+		// spell_krystallus_shatter (boss_krystallus.cpp): EFFECT_0 script
+		// effect — the hit unit loses Stoned (50812), then casts Shatter
+		// Effect (50811) triggered on itself (CastSpell(nullptr, ...) =
+		// self-cast). Player-cast leg of the creatureEffectScriptEffect
+		// twin; dead hit units cast nothing (the 41126 precedent).
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			if ts.isDeadOrGhost() {
+				return
+			}
+			ts.removeAura(50812)
+			ts.castSpellDirect(ctx, 50811, targetGUID)
+		} else if tm := s.findCreatureMotion(targetGUID); tm != nil {
+			if tm.Health == 0 {
+				return
+			}
+			s.server.removeCreatureAura(creatureAuraKey{Map: tm.Map, InstanceID: tm.InstanceID, GUID: targetGUID}, 50812)
+			s.server.castCreatureSpellInternal(ctx, tm, 50811, targetGUID, true)
 		}
 	case 41467:
 		// spell_illidari_council_judgement (boss_illidari_council.cpp:716-750):

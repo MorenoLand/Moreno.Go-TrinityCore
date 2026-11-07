@@ -1204,6 +1204,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				// Same escort-state clear as the world path above: the
 				// respawned incarnation is not escorting.
 				motion.EscortPlayerGUID = 0
+				motion.EscortPaused = false
 				motion.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
 				flags := motion.DynamicFlags
 				s.server.motionMu.Unlock()
@@ -2693,6 +2694,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				// incarnation, so a respawned escort NPC is not escorting
 				// until an escort starts again.
 				motion.EscortPlayerGUID = 0
+				motion.EscortPaused = false
 				motion.PlayerDamageReq = respawn.Health / 2
 			}
 			s.motionMu.Unlock()

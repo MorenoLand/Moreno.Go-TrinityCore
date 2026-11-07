@@ -535,6 +535,14 @@ type creatureMotion struct {
 	// StartEscort bridge and consumed by the respawn-block exemption
 	// (Map.cpp:3066) and the engage home (Creature.cpp:3446).
 	EscortPlayerGUID uint64
+	// EscortPaused is the ScriptedEscortAI STATE_ESCORT_PAUSED twin
+	// (ScriptedEscortAI.h:33, ScriptedEscortAI.cpp:353-372): a paused
+	// escort does not continue with the next waypoint. Set by the
+	// SetEscortPaused Lua bridge; the waypoint launch leg in
+	// stepCreatureMotion is the observable arm. It clears with the
+	// escort state (StopEscort, respawn) — the C++ escort AI object
+	// dies with the escort, so a fresh escort starts unpaused.
+	EscortPaused bool
 	// PlayerDamageReq mirrors Creature::m_PlayerDamageReq
 	// (Creature.h:322-325): MaxHealth/2 at spawn, lowered by every
 	// player-attributed hit (Creature::LowerPlayerDamageReq,
@@ -9551,6 +9559,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		s.waypointNodeArrival(ctx, motion, motion.MoveEnds)
 	}
 	if now.Before(motion.WaitUntil) {
+		return
+	}
+	// EscortAI::SetEscortPaused (ScriptedEscortAI.cpp:353-372): a paused
+	// escort does not continue with the next waypoint (STATE_ESCORT_PAUSED).
+	// The launch gate is the observable arm — a spline already in flight
+	// still arrives (Go's atomic-spline model has no mid-leg pause; the
+	// arrival event fires and the next leg waits for the resume). The gate
+	// sits before the waypoint index advances, so a paused escort retries
+	// the same node on the next tick after resume. Random/idle legs carry
+	// no such gate: C++ pauses only the escort's waypoint generator.
+	if motion.MoveType == 2 && motion.EscortPaused {
 		return
 	}
 	if motion.MoveType == 2 && len(motion.Points) == 0 {
