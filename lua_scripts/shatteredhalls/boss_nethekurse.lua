@@ -270,6 +270,7 @@ RegisterCreatureEvent(ENTRY_NETHEKURSE, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_NETHEKURSE, 4, function(_, creature)
+    creature:SetBossState(0, 3) -- DATA_NETHEKURSE, DONE (boss_nethekurse.cpp:118-121: _JustDied then Talk)
     creature:Talk(SAY_DIE)
     resetBoss(creature:GetGUID())
 end)

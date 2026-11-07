@@ -298,6 +298,7 @@ RegisterCreatureEvent(ENTRY_PATHALEON, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_PATHALEON, 4, function(_, creature)
+    creature:SetBossState(4, 3) -- DATA_PATHALEON_THE_CALCULATOR, DONE (boss_pathaleon_the_calculator.cpp:94-97: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
     resetBoss(creature:GetGUID())
 end)

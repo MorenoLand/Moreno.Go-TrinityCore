@@ -544,14 +544,15 @@ local function died(event, creature, killer)
         creature:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
         sister:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
         -- C++ JustDied :248 — events.Reset() is the cancelTimers(guid)
-        -- at the top, instance->SetBossState(DATA_TWIN_VALKIRIES, DONE) has no
-        -- instance bridge; HandleRemoveAuras() ports via
-        -- stripHelperAuras (C++ order kept).
+        -- at the top; HandleRemoveAuras() ports via stripHelperAuras
+        -- (C++ order kept), then SetBossState(DATA_TWIN_VALKIRIES, DONE).
         stripHelperAuras(creature)
+        creature:SetBossState(3, 3) -- DATA_TWIN_VALKIRIES, DONE (boss_twin_valkyr.cpp:248)
     elseif sister ~= nil then
         -- Sister still fighting: not lootable (clears the lethal path's
         -- auto-set).
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        creature:SetBossState(3, 4) -- DATA_TWIN_VALKIRIES, SPECIAL (boss_twin_valkyr.cpp:255)
     end
     -- Sister not found: C++ takes neither flag branch (Talk only).
     -- C++ JustDied's trailing unconditional summons.DespawnAll()
@@ -597,9 +598,10 @@ RegisterCreatureEvent(ENTRY_EYDIS, 23, reset)
 -- at the home-move completion.
 local function reachHome(event, creature)
     -- C++ JustReachedHome :203-208 — instance->SetBossState(
-    -- DATA_TWIN_VALKIRIES, FAIL) has no instance bridge;
+    -- DATA_TWIN_VALKIRIES, FAIL) PORTED below (bridge live);
     -- HandleRemoveAuras() ports via stripHelperAuras (C++ order kept);
     -- summons.DespawnAll() is a no-op.
+    creature:SetBossState(3, 2) -- DATA_TWIN_VALKIRIES, FAIL
     stripHelperAuras(creature)
     creature:Despawn()
 end

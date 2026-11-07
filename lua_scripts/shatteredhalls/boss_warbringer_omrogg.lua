@@ -416,6 +416,7 @@ RegisterCreatureEvent(ENTRY_OMROGG, 2, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_OMROGG, 4, function(_, creature)
+    creature:SetBossState(1, 3) -- DATA_OMROGG, DONE (boss_warbringer_omrogg.cpp:257-263: _JustDied unconditional at top)
     -- C++ JustDied (boss_warbringer_omrogg.cpp:262-273): both heads
     -- must exist; left head talks YELL_DIE_L at once, right head
     -- talks YELL_DIE_R 4s later (SetData arm) then dies. The delayed

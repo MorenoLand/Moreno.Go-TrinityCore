@@ -385,9 +385,10 @@ end
 
 -- C++ boss_grandmaster_vorpilAI::JustDied:
 -- _JustDied(); Talk(SAY_DEATH); — the sjonnir self-Talk precedent
--- (event 4; the _JustDied() instance leg rides the no-instance
--- bridge — documented-only).
+-- (event 4); the _JustDied() instance leg is PORTED below via
+-- creature:SetBossState (bridge live).
 local function vorpilDied(event, creature, killer)
+    creature:SetBossState(2, 3) -- DATA_GRANDMASTER_VORPIL, DONE (boss_grandmaster_vorpil.cpp: _JustDied precedes Talk)
     creature:Talk(SAY_DEATH)
     local guid = creature:GetGUID()
     cancelTimers(guid)

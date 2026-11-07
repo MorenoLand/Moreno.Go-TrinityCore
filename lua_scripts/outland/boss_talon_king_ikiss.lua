@@ -316,6 +316,7 @@ end
 -- (instance leg — documented-only) + Talk(SAY_DEATH) — the sjonnir
 -- self-Talk precedent (event 4).
 local function ikissDied(event, creature, killer)
+    creature:SetBossState(1, 3) -- DATA_TALON_KING_IKISS, DONE (boss_talon_king_ikiss.cpp: _JustDied precedes Talk)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
     ikissState[creature:GetGUID()] = nil

@@ -341,6 +341,7 @@ end
 -- sjonnir self-Talk precedent (event 4).
 local function shaffarDied(event, creature, killer)
     creature:Talk(SAY_DEAD)
+    creature:SetBossState(2, 3) -- DATA_NEXUSPRINCE_SHAFFAR, DONE (boss_nexusprince_shaffar.cpp:140-141)
     local guid = creature:GetGUID()
     cancelTimers(guid)
 end

@@ -630,9 +630,11 @@ local function magtheridonTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH); the _JustDied arm is blocked.
+-- C++ JustDied (boss_magtheridon.cpp:207-212): Talk(SAY_DEATH);
+-- _JustDied() -> SetBossState(DATA_MAGTHERIDON 0, DONE) PORTED below.
 local function magtheridonDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(0, 3) -- DATA_MAGTHERIDON, DONE (boss_magtheridon.cpp:207-212)
     cancelTimers(creature:GetGUID())
     magState[creature:GetGUID()] = nil
 end

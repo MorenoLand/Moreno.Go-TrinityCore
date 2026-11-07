@@ -236,10 +236,11 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 3, function(_, creature)
     creature:Talk(KAEL_SAY_SLAY)
 end)
 
--- C++ JustDied: Talk(SAY_DEATH) (the _JustDied arm is
--- instance-blocked).
+-- C++ JustDied (boss_kaelthas.cpp:656-660): Talk(SAY_DEATH);
+-- _JustDied() -> SetBossState(DATA_KAELTHAS 0, DONE) PORTED below.
 RegisterCreatureEvent(ENTRY_KAELTHAS, 4, function(_, creature)
     creature:Talk(KAEL_SAY_DEATH)
+    creature:SetBossState(0, 3) -- DATA_KAELTHAS, DONE (boss_kaelthas.cpp:656-660)
 end)
 
 -- Kael'thas (19622): pre-encounter visual-target arms

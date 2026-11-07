@@ -235,6 +235,7 @@ RegisterCreatureEvent(ENTRY_SEPRETHREA, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SEPRETHREA, 4, function(_, creature)
+    creature:SetBossState(3, 3) -- DATA_NETHERMANCER_SEPETHREA, DONE (boss_nethermancer_sepethrea.cpp:89-92: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
     resetBoss(creature:GetGUID())
 end)

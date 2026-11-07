@@ -240,6 +240,7 @@ end)
 
 RegisterCreatureEvent(ENTRY_THESPIA, 4, function(_, creature)
     creature:Talk(SAY_DEAD)
+    creature:SetBossState(0, 3) -- DATA_HYDROMANCER_THESPIA, DONE (boss_hydromancer_thespia.cpp: Talk precedes _JustDied)
     resetThespia(creature:GetGUID())
 end)
 

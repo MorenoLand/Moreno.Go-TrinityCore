@@ -225,6 +225,8 @@ end)
 
 RegisterCreatureEvent(ENTRY_VOID_REAVER, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
+    creature:DoZoneInCombat()
+    creature:SetBossState(3, 3) -- DATA_VOID_REAVER, DONE (boss_void_reaver.cpp:75-81: Talk, DoZoneInCombat, _JustDied)
     resetBoss(creature:GetGUID())
 end)
 

@@ -266,6 +266,7 @@ end)
 
 RegisterCreatureEvent(ENTRY_STEAMRIGGER, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(1, 3) -- DATA_MEKGINEER_STEAMRIGGER, DONE (boss_mekgineer_steamrigger.cpp: Talk then SetBossState)
     resetBoss(creature:GetGUID())
 end)
 

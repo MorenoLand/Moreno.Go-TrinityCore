@@ -200,9 +200,10 @@ end
 
 -- C++ boss_ambassador_hellmawAI::JustDied:
 -- _instance->SetBossState(DATA_AMBASSADOR_HELLMAW, DONE);
--- Talk(SAY_DEATH); — the sjonnir self-Talk precedent (event 4; the
--- SetBossState leg has no-instance bridge).
+-- Talk(SAY_DEATH); — the sjonnir self-Talk precedent (event 4);
+-- the SetBossState leg is PORTED below (bridge live).
 local function hellmawDied(event, creature, killer)
+    creature:SetBossState(0, 3) -- DATA_AMBASSADOR_HELLMAW, DONE (boss_ambassador_hellmaw.cpp: SetBossState precedes Talk)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end

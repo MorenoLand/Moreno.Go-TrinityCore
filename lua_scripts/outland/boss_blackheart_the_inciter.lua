@@ -242,9 +242,10 @@ end
 
 -- C++ boss_blackheart_the_inciter::JustDied:
 -- _JustDied(); Talk(SAY_DEATH); — the sjonnir self-Talk precedent
--- (event 4; the _JustDied() instance leg rides the no-instance
--- bridge — documented-only).
+-- (event 4); the _JustDied() instance leg is PORTED below via
+-- creature:SetBossState (bridge live).
 local function blackheartDied(event, creature, killer)
+    creature:SetBossState(1, 3) -- DATA_BLACKHEART_THE_INCITER, DONE (boss_blackheart_the_inciter.cpp: _JustDied precedes Talk)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
 end

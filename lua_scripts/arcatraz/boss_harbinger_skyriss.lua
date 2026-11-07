@@ -566,6 +566,7 @@ end)
 
 RegisterCreatureEvent(ENTRY_SKYRISS, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(3, 3) -- DATA_HARBINGER_SKYRISS, DONE (boss_harbinger_skyriss.cpp:117-121: Talk then _JustDied)
     fullReset(creature:GetGUID())
 end)
 

@@ -261,6 +261,7 @@ end
 -- (FindNearestCreature(NPC_LAKKA 18956, 500.0f, true) → Talk(1))
 -- is PORTED below (bridge live, lua_creature_events.go:2332).
 local function sythDied(event, creature, killer)
+    creature:SetBossState(0, 3) -- DATA_DARKWEAVER_SYTH, DONE (boss_darkweaver_syth.cpp: _JustDied precedes Talk)
     creature:Talk(SAY_DEATH)
     local lakka = creature:FindNearestCreature(NPC_LAKKA, 500.0)
     if lakka then

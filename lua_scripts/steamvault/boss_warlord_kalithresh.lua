@@ -200,6 +200,7 @@ end)
 
 RegisterCreatureEvent(ENTRY_KALITHRESH, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(2, 3) -- DATA_WARLORD_KALITHRESH, DONE (boss_warlord_kalithresh.cpp: Talk then SetBossState)
     resetBoss(creature:GetGUID())
 end)
 

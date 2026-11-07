@@ -319,6 +319,7 @@ end
 -- C++ JustDied: Talk(SAY_DEATH); the _JustDied instance arm is
 -- blocked.
 local function gruulDied(event, creature, killer)
+    creature:SetBossState(1, 3) -- DATA_GRUUL, DONE (boss_gruul.cpp:119-122: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
     resetState(creature:GetGUID())
 end

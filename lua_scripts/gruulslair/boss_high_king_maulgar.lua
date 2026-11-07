@@ -346,6 +346,7 @@ end
 -- blocked on the instance-script model.
 local function maulgarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:121-126)
     maulgarResetState(creature:GetGUID())
 end
 
@@ -440,6 +441,7 @@ end
 -- besides the relay.
 local function olmDied(event, creature, killer)
     relayOgreDeath(creature)
+    creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:263-269)
     olmResetState(creature:GetGUID())
 end
 
@@ -524,6 +526,7 @@ end
 -- cleanup only besides the relay.
 local function kigglerDied(event, creature, killer)
     relayOgreDeath(creature)
+    creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:350-356)
     kigglerResetState(creature:GetGUID())
 end
 
@@ -587,6 +590,7 @@ end
 -- cleanup only besides the relay.
 local function blindeyeDied(event, creature, killer)
     relayOgreDeath(creature)
+    creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:442-448)
     blindeyeResetState(creature:GetGUID())
 end
 
@@ -701,6 +705,7 @@ end
 -- cleanup only besides the relay.
 local function kroshDied(event, creature, killer)
     relayOgreDeath(creature)
+    creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:525-531)
     kroshResetState(creature:GetGUID())
 end
 

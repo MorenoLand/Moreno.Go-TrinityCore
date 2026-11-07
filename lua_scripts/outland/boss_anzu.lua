@@ -267,10 +267,12 @@ local function anzuLeaveCombatOrReset(event, creature)
     anzuState[guid] = { under33 = false, under66 = false }
 end
 
--- C++ boss_anzuAI::JustDied (boss_anzu.cpp:95-98): _JustDied() is
--- instance-only — documented-only; event 4 exists only to cancel the
--- timer table (C++ UpdateAI stops on death).
+-- C++ boss_anzuAI::JustDied (boss_anzu.cpp:95-98): _JustDied() writes
+-- SetBossState(DATA_ANZU 2, DONE) — ported below (creature:SetBossState
+-- bridge live); event 4 also cancels the timer table (C++ UpdateAI
+-- stops on death). Anzu has no death Talk in C++.
 local function anzuDied(event, creature, killer)
+    creature:SetBossState(2, 3) -- DATA_ANZU, DONE (boss_anzu.cpp:95-98)
     cancelTimers(creature:GetGUID())
     anzuState[creature:GetGUID()] = nil
 end

@@ -313,6 +313,7 @@ RegisterCreatureEvent(ENTRY_DALLIAH, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 4, function(_, creature)
+    creature:SetBossState(1, 3) -- DATA_DALLIAH, DONE (boss_dalliah_the_doomsayer.cpp:77-81: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
     -- C++ JustDied relay (boss_dalliah_the_doomsayer.cpp:77-84):
     -- soccothrates alive and out of combat -> soccothrates->

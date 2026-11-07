@@ -254,6 +254,7 @@ RegisterCreatureEvent(ENTRY_MECHANO_LORD_CAPACITUS, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_MECHANO_LORD_CAPACITUS, 4, function(_, creature)
+    creature:SetBossState(2, 3) -- DATA_MECHANOLORD_CAPACITUS, DONE (boss_mechano_lord_capacitus.cpp:102-105: _JustDied then Talk)
     creature:Talk(YELL_DEATH)
     resetBoss(creature:GetGUID())
 end)

@@ -189,6 +189,7 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_GYROKILL, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_GYROKILL, 4, function(_, creature)
+    creature:SetBossState(0, 3) -- DATA_GATEWATCHER_GYROKILL, DONE (boss_gatewatcher_gyrokill.cpp:62-65: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
     resetBoss(creature:GetGUID())
 end)

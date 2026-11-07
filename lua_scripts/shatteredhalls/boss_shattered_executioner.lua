@@ -142,6 +142,7 @@ RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 2, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 4, function(_, creature)
+    creature:SetBossState(3, 3) -- DATA_SHATTERED_EXECUTIONER, DONE (shattered_halls.cpp: _JustDied then quest leg)
     resetBoss(creature:GetGUID())
 end)
 

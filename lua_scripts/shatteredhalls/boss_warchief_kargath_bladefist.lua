@@ -255,6 +255,7 @@ local function kargathLeaveCombat(event, creature)
 end
 
 local function kargathDied(event, creature, killer)
+    creature:SetBossState(2, 3) -- DATA_KARGATH, DONE (boss_warchief_kargath_bladefist.cpp:120-124: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
     local guid = creature:GetGUID()
     cancelKargath(guid)

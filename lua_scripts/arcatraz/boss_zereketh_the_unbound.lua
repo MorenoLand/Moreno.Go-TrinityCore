@@ -241,6 +241,7 @@ RegisterCreatureEvent(ENTRY_ZEREKETH, 3, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_ZEREKETH, 4, function(_, creature)
+    creature:SetBossState(0, 3) -- DATA_ZEREKETH, DONE (boss_zereketh_the_unbound.cpp:58-62: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
     resetBoss(creature:GetGUID())
 end)
