@@ -11,10 +11,14 @@
 // to take effect. Templates carry the C++ flag sanitization (unknown bits
 // dropped, SYSTEM|MANUAL_SPAWN loses MANUAL_SPAWN) and the synthetic groups
 // 0 ("Default Group", SYSTEM) and 1 ("Legacy Group",
-// SYSTEM|COMPATIBILITY_MODE). A member whose row is missing, whose group is
-// unknown, or whose map differs from the group's first member's map is
-// dropped, matching the C++ load errors; spawns with no spawn_group row
-// belong to group 0 and never appear in the member map.
+// SYSTEM|COMPATIBILITY_MODE). A member whose row is missing or whose group is
+// unknown is dropped; a spawn listed in two groups stays in the first
+// (ObjectMgr.cpp:2650-2654, every spawn defaults to group 0, so the second
+// listing sees a non-zero groupId and is skipped); a member whose map differs
+// from the group's first member's map is dropped unless the group is SYSTEM
+// (ObjectMgr.cpp:2661-2665, the cross-map check is skipped for SYSTEM
+// groups); spawns with no spawn_group row belong to group 0 and never appear
+// in the member map.
 //
 // Go creature/gameobject visibility is DB-driven (buildNearbyCreatureUpdates
 // / buildNearbyGameObjectUpdates read the spawn rows live), so the manager's
@@ -167,16 +171,20 @@ func (s *Server) ensureSpawnGroups(ctx context.Context, db *sql.DB) error {
 			if scanErr != nil {
 				continue
 			}
+			memberKey := spawnGroupMemberKey{Type: spawnType, SpawnID: spawnID}
+			if _, dup := memberGroup[memberKey]; dup {
+				continue
+			}
 			if !groupMapKnown[groupID] {
 				tmpl.MapID = rowMap
 				groupMapKnown[groupID] = true
-			} else if tmpl.MapID != rowMap {
+			} else if tmpl.MapID != rowMap && tmpl.Flags&spawnGroupFlagSystem == 0 {
 				continue
 			}
 			member.Type = spawnType
 			member.SpawnID = spawnID
 			groupMembers[groupID] = append(groupMembers[groupID], member)
-			memberGroup[spawnGroupMemberKey{Type: spawnType, SpawnID: spawnID}] = groupID
+			memberGroup[memberKey] = groupID
 		}
 		mrows.Close()
 		if err := mrows.Err(); err != nil {
