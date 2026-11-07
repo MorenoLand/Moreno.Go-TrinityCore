@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/Shopify/go-lua"
 )
@@ -20,15 +21,29 @@ import (
 // and cycles, but instance scripts store numbers/strings/bools/nested
 // tables in practice (data.riftState, data.nextPortalMs), and a JSON
 // bridge cannot represent a Lua closure. The decode side accepts only
-// this format; a C++-produced blob is not readable by it.
+// this format; a C++-produced blob is not readable by it. The blob also
+// carries a bossStates section (InstanceScript::WriteSaveDataBossStates,
+// Instances/InstanceScript.cpp:471-475, which writes each boss's raw
+// state in boss-id order): the section is optional, so blobs written
+// before it existed decode with no boss states.
 
 const instanceDataFormatVersion = 1
 
 const instanceDataMaxDepth = 32
 
 type instanceDataBlob struct {
-	Version int                 `json:"v"`
-	Entries []instanceDataEntry `json:"entries"`
+	Version    int                     `json:"v"`
+	Entries    []instanceDataEntry     `json:"entries"`
+	BossStates []instanceDataBossState `json:"bossStates,omitempty"`
+}
+
+// instanceDataBossState is one boss's saved state, in boss-id order:
+// C++ writes the raw EncounterState (0 NOT_STARTED .. 5 TO_BE_DECIDED)
+// and normalizes IN_PROGRESS/FAIL/SPECIAL to NOT_STARTED on load
+// (ReadSaveDataBossStates, InstanceScript.cpp:437-450), never on save.
+type instanceDataBossState struct {
+	BossID uint32 `json:"b"`
+	State  uint8  `json:"s"`
 }
 
 type instanceDataEntry struct {
@@ -50,17 +65,20 @@ type instanceDataJSONValue struct {
 }
 
 // MarshalInstanceData serializes the (map, instance) data table to the
-// base64 blob stored in instance.data. An instance with no data table
-// yet marshals as the empty table, matching C++ SaveToDB on a fresh
-// shim; a nil runtime reads empty.
-func (r *Runtime) MarshalInstanceData(mapID, instanceID uint32) (string, error) {
+// base64 blob stored in instance.data, plus the live boss states the
+// caller passes (nil when the caller has none; an instance with no data
+// table yet marshals as the empty table, matching C++ SaveToDB on a
+// fresh shim; a nil runtime reads empty). Boss states are written raw
+// and in boss-id order, matching C++ WriteSaveDataBossStates; the
+// load-side normalization lives in the caller.
+func (r *Runtime) MarshalInstanceData(mapID, instanceID uint32, bossStates map[uint32]uint8) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.state == nil {
 		return "", nil
 	}
 	obj := &Object{Type: "InstanceData", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID}}
-	blob := instanceDataBlob{Version: instanceDataFormatVersion}
+	blob := instanceDataBlob{Version: instanceDataFormatVersion, BossStates: sortedInstanceDataBossStates(bossStates)}
 	if !pushInstanceDataTable(r.state, obj, false) {
 		r.state.Pop(1)
 	} else {
@@ -79,31 +97,35 @@ func (r *Runtime) MarshalInstanceData(mapID, instanceID uint32) (string, error) 
 }
 
 // UnmarshalInstanceData replaces the (map, instance) data table with
-// the decoded blob: C++ Load swaps in the decoded table wholesale
+// the decoded blob and returns the boss states the blob carried (nil
+// when the blob has no bossStates section, as with blobs written before
+// the section existed): C++ Load swaps in the decoded table wholesale
 // (CreateInstanceData), so stale keys from a previous load do not
 // survive. The table keeps its registry identity — scripts only ever
-// hold the InstanceData userdata handle, never the raw table.
-func (r *Runtime) UnmarshalInstanceData(mapID, instanceID uint32, encoded string) error {
+// hold the InstanceData userdata handle, never the raw table. The
+// caller applies the boss states itself, normalizing them first
+// (InstanceScript::ReadSaveDataBossStates).
+func (r *Runtime) UnmarshalInstanceData(mapID, instanceID uint32, encoded string) (map[uint32]uint8, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.state == nil {
-		return nil
+		return nil, nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var blob instanceDataBlob
 	if err := json.Unmarshal(raw, &blob); err != nil {
-		return err
+		return nil, err
 	}
 	if blob.Version != instanceDataFormatVersion {
-		return fmt.Errorf("unsupported instance data version %d", blob.Version)
+		return nil, fmt.Errorf("unsupported instance data version %d", blob.Version)
 	}
 	obj := &Object{Type: "InstanceData", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID}}
 	if !pushInstanceDataTable(r.state, obj, true) {
 		r.state.Pop(1)
-		return fmt.Errorf("instance data table unavailable")
+		return nil, fmt.Errorf("instance data table unavailable")
 	}
 	clearInstanceDataTable(r.state)
 	for _, entry := range blob.Entries {
@@ -112,7 +134,39 @@ func (r *Runtime) UnmarshalInstanceData(mapID, instanceID uint32, encoded string
 		r.state.RawSet(-3)
 	}
 	r.state.Pop(1)
-	return nil
+	return decodedInstanceDataBossStates(blob.BossStates), nil
+}
+
+// sortedInstanceDataBossStates flattens the live boss map into
+// boss-id order, the order C++ writes them in.
+func sortedInstanceDataBossStates(bossStates map[uint32]uint8) []instanceDataBossState {
+	if len(bossStates) == 0 {
+		return nil
+	}
+	ids := make([]uint32, 0, len(bossStates))
+	for id := range bossStates {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	states := make([]instanceDataBossState, 0, len(ids))
+	for _, id := range ids {
+		states = append(states, instanceDataBossState{BossID: id, State: bossStates[id]})
+	}
+	return states
+}
+
+// decodedInstanceDataBossStates flattens the blob section back into a
+// boss map; later entries win, matching the C++ read loop, which sets
+// each boss id in turn.
+func decodedInstanceDataBossStates(states []instanceDataBossState) map[uint32]uint8 {
+	if len(states) == 0 {
+		return nil
+	}
+	bossStates := make(map[uint32]uint8, len(states))
+	for _, state := range states {
+		bossStates[state.BossID] = state.State
+	}
+	return bossStates
 }
 
 // marshalInstanceDataTable converts the table on top of the stack into
@@ -189,15 +243,27 @@ func marshalInstanceDataValue(state *lua.State, index int, depth int, ancestors 
 }
 
 // clearInstanceDataTable drops every key of the table on top of the
-// stack, leaving the table on top.
+// stack, leaving the table on top. The keys are collected first and
+// deleted after the iteration finishes: deleting the current key
+// inside the loop makes the next Next call fail with "invalid key to
+// 'next'" in this go-lua, because the deleted key is no longer in the
+// table's hash — the in-place delete-during-iteration idiom panics on
+// any non-empty table.
 func clearInstanceDataTable(state *lua.State) {
+	tableIndex := state.Top()
 	state.PushNil()
-	for state.Next(-2) {
+	keyCount := 0
+	for state.Next(tableIndex) {
 		state.Pop(1)
 		state.PushValue(-1)
-		state.PushNil()
-		state.RawSet(-4)
+		keyCount++
 	}
+	for i := 0; i < keyCount; i++ {
+		state.PushValue(tableIndex + 1 + i)
+		state.PushNil()
+		state.RawSet(tableIndex)
+	}
+	state.SetTop(tableIndex)
 }
 
 func pushInstanceDataKey(state *lua.State, key instanceDataJSONKey) {

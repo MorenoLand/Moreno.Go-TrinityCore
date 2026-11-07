@@ -52,6 +52,83 @@ func encounterStateName(state uint8) string {
 	}
 }
 
+// instanceBossStatesSnapshot copies the live boss states for one
+// instance, in the shape the save path marshals into the blob's
+// bossStates section (InstanceScript::WriteSaveDataBossStates writes
+// the raw states, normalization happens on load, never on save).
+func (s *Server) instanceBossStatesSnapshot(mapID, instanceID uint32) map[uint32]uint8 {
+	if s == nil {
+		return nil
+	}
+	s.instanceBossStateMu.RLock()
+	defer s.instanceBossStateMu.RUnlock()
+	bosses, ok := s.instanceBossStates[instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}]
+	if !ok || len(bosses) == 0 {
+		return nil
+	}
+	snapshot := make(map[uint32]uint8, len(bosses))
+	for id, state := range bosses {
+		snapshot[id] = state
+	}
+	return snapshot
+}
+
+// normalizeLoadedInstanceBossState is the load-side normalization in
+// InstanceScript::ReadSaveDataBossStates (InstanceScript.cpp:437-450):
+// a boss saved mid-fight, failed, or in a special state restarts
+// NOT_STARTED; DONE and NOT_STARTED survive the load.
+func normalizeLoadedInstanceBossState(state uint8) uint8 {
+	switch state {
+	case encounterStateInProgress, encounterStateFail, encounterStateSpecial:
+		return encounterStateNotStarted
+	default:
+		return state
+	}
+}
+
+// loadInstanceBossStates applies the boss states decoded from the
+// instance-data blob, mirroring InstanceScript::ReadSaveDataBossStates
+// (InstanceScript.cpp:437-450) plus its trailing UpdateSpawnGroups:
+// normalize first, skip states at or past TO_BE_DECIDED (C++ only sets
+// buff < TO_BE_DECIDED), take the loading branch for an unseen or
+// TO_BE_DECIDED boss (set, no per-boss spawn-group pass), keep the
+// live guards for a boss already set (same-state no-op, DONE never
+// moves backwards), then run the spawn-group pass once for the whole
+// load. The team is unknown on this path, so team-flagged rows stay
+// blocked, matching a team-less setInstanceBossState caller.
+func (s *Server) loadInstanceBossStates(ctx context.Context, mapID, instanceID uint32, states map[uint32]uint8) {
+	if s == nil || len(states) == 0 {
+		return
+	}
+	key := instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}
+	s.instanceBossStateMu.Lock()
+	bosses, ok := s.instanceBossStates[key]
+	if !ok {
+		bosses = make(map[uint32]uint8)
+		if s.instanceBossStates == nil {
+			s.instanceBossStates = make(map[instanceAdmissionKey]map[uint32]uint8)
+		}
+		s.instanceBossStates[key] = bosses
+	}
+	for bossID, raw := range states {
+		state := normalizeLoadedInstanceBossState(raw)
+		if state >= encounterStateToBeDecided {
+			continue
+		}
+		if current, seen := bosses[bossID]; seen {
+			if current == encounterStateDone {
+				continue
+			}
+			if current != encounterStateToBeDecided && current == state {
+				continue
+			}
+		}
+		bosses[bossID] = state
+	}
+	s.instanceBossStateMu.Unlock()
+	s.updateInstanceSpawnGroups(ctx, mapID, instanceID, 0, false)
+}
+
 // instanceBossState mirrors InstanceScript::GetBossState: the stored state,
 // or TO_BE_DECIDED for a boss never set in this instance.
 func (s *Server) instanceBossState(mapID, instanceID, bossID uint32) uint8 {

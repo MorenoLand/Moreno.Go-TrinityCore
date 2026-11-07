@@ -278,16 +278,18 @@ func (s *Server) isInstanceScriptMap(mapID uint32) bool {
 // saveInstanceData is InstanceScript::SaveToDB (Instances/
 // InstanceScript.cpp:60-71) for the Lua data table half: marshal the
 // registry table (Go JSON+base64 format, scripting.MarshalInstanceData)
-// and write it via CHAR_UPD_INSTANCE_DATA, preserving the
-// completedEncounters mask the encounter-credit path owns. A missing
-// instance row is a silent no-op (C++'s UPDATE affects zero rows);
-// non-instance maps never reach it (no shim exists outside dungeons
-// and raids, matching Eluna's instance-only install).
+// plus the live boss states (WriteSaveDataBossStates writes the raw
+// states; normalization happens on load, never here) and write it via
+// CHAR_UPD_INSTANCE_DATA, preserving the completedEncounters mask the
+// encounter-credit path owns. A missing instance row is a silent no-op
+// (C++'s UPDATE affects zero rows); non-instance maps never reach it
+// (no shim exists outside dungeons and raids, matching Eluna's
+// instance-only install).
 func (s *Server) saveInstanceData(ctx context.Context, mapID, instanceID uint32) error {
 	if s == nil || s.Features == nil || s.Features.Scripts == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || instanceID == 0 || !s.isInstanceScriptMap(mapID) {
 		return nil
 	}
-	encoded, err := s.Features.Scripts.MarshalInstanceData(mapID, instanceID)
+	encoded, err := s.Features.Scripts.MarshalInstanceData(mapID, instanceID, s.instanceBossStatesSnapshot(mapID, instanceID))
 	if err != nil {
 		return err
 	}
@@ -304,7 +306,9 @@ func (s *Server) saveInstanceData(ctx context.Context, mapID, instanceID uint32)
 // instance map loads: (event, instance_data, map). C++ loads the saved
 // data blob first (ElunaInstanceAI::Load base64-decodes + mar_decodes
 // it into a fresh table, or creates an empty table when data is empty)
-// and fires OnLoad on every load, empty or not. Go has no InstanceMap
+// and fires OnLoad on every load, empty or not; the boss states ride
+// in the blob's bossStates section and are normalized + applied before
+// the event (ReadSaveDataBossStates). Go has no InstanceMap
 // object lifecycle, so the load runs once per (map, instance) per
 // server run, at the first player entry after the instance row is
 // known to exist (persist/ensure run before both entry sites), and
@@ -334,8 +338,15 @@ func (s *session) fireInstanceLoad(ctx context.Context) {
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		var data string
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT data FROM instance WHERE id = ?", s.player.InstanceID).Scan(&data); err == nil && data != "" {
-			if err := s.server.Features.Scripts.UnmarshalInstanceData(s.player.Map, s.player.InstanceID, data); err != nil {
+			if bossStates, err := s.server.Features.Scripts.UnmarshalInstanceData(s.player.Map, s.player.InstanceID, data); err != nil {
 				s.debug("lua instance data load failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
+			} else {
+				// Boss states load before ON_LOAD fires, with the C++
+				// normalization (IN_PROGRESS/FAIL/SPECIAL to NOT_STARTED,
+				// TO_BE_DECIDED skipped) and one spawn-group pass —
+				// InstanceScript::ReadSaveDataBossStates, called from
+				// InstanceScript::Load ahead of ElunaInstanceAI::Load.
+				s.server.loadInstanceBossStates(ctx, s.player.Map, s.player.InstanceID, bossStates)
 			}
 		}
 	}

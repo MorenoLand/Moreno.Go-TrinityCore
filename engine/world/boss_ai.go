@@ -8935,6 +8935,15 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 			continue
 		}
 		damage := baseDamage
+		if spell.ID == 48292 {
+			// spell_dark_slash (boss_ymiron.cpp:315-334): the OnHit
+			// handler sets the hit damage to ceil(victim health / 2)
+			// before the effect loop, so the DBC base damage never
+			// applies; the taken/crit/resist legs below still run on
+			// the rewritten value. Health is pre-damage here, matching
+			// GetHitUnit()->GetHealth() at OnHit time.
+			damage = (vs.player.Health + 1) / 2
+		}
 		damageImmune := false
 		if damage > 0 {
 			damageImmune = vs.isImmuneToDamageSpell(spell, uint32(schoolMask))
@@ -9162,6 +9171,13 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		victimLevel := uint8(maxUint32(victim.Level, 1))
 		attackerLevel := uint8(maxUint32(m.Level, 1))
 		damage := baseDamage
+		if spell.ID == 48292 {
+			// spell_dark_slash (boss_ymiron.cpp:315-334): the OnHit
+			// handler sets the hit damage to ceil(victim health / 2)
+			// before the effect loop — the creature-victim twin of the
+			// player leg above, same pre-damage health read.
+			damage = (victimHealth + 1) / 2
+		}
 		var absorbed, resisted, blocked uint32
 		fullBlock := false
 		isCrit := false
