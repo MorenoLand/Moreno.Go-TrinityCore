@@ -1401,6 +1401,27 @@ func (s *Server) unloadTransportCreatureMotions(mapID uint32, transportGUID uint
 	}
 }
 
+// atEngageDismount mirrors the Dismount leg of Creature::AtEngage
+// (Creature.cpp:3435-3436): a creature entering combat dismounts unless
+// its template carries CREATURE_TYPE_FLAG_MOUNTED_COMBAT_ALLOWED
+// (creatureTypeFlagMountedCombatAllowed). Unit::Dismount (Unit.cpp:8365)
+// early-returns when not mounted (UNIT_FLAG_MOUNT 0x08000000 is
+// IsMounted); otherwise it clears UNIT_FIELD_MOUNTDISPLAYID and the
+// flag. MountKnown forces the 0 clear into the update mask, mirroring
+// the Dismount bridge. No motionMu here — the callers own the motion,
+// as with atEngageSetHomePosition below.
+func atEngageDismount(motion *creatureMotion) {
+	if motion == nil || motion.TypeFlags&creatureTypeFlagMountedCombatAllowed != 0 {
+		return
+	}
+	if motion.UnitFlags&0x08000000 == 0 { // not IsMounted
+		return
+	}
+	motion.Mount = 0
+	motion.UnitFlags &^= 0x08000000
+	motion.MountKnown = true
+}
+
 // atEngageSetHomePosition mirrors the SetHomePosition leg of
 // Creature::AtEngage (Creature.cpp:3446-3447): when the current
 // movement generator is WAYPOINT_MOTION_TYPE or POINT_MOTION_TYPE,
@@ -1413,8 +1434,10 @@ func (s *Server) unloadTransportCreatureMotions(mapID uint32, transportGUID uint
 // DoUpdate arm already refreshes home to each leg destination — but
 // the escort leg is live: an escorted creature engages away from its
 // spawn and must evade back to the engage point, not the spawn. The
-// Dismount and pet-speed legs of AtEngage have no Go model (creatures
-// never mount; no speed-step twin).
+// pet-speed leg of AtEngage is a verified no-op in Go (tick 376:
+// the minion-follow catchup arm is dead at engage — combat state is
+// set before NotifyAICombat — the RUN fold is refreshed on every aura
+// change, and SWIM/FLIGHT have no Go creature model).
 func atEngageSetHomePosition(motion *creatureMotion) {
 	if motion == nil {
 		return
@@ -1557,6 +1580,10 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		s.creatureAddThreat(motion, playerGUID, 0.0, true, playerSess, nil)
 		if !motion.InCombat {
 			enteredCombat = true
+			// Creature::AtEngage (Creature.cpp:3435-3436): entering
+			// combat dismounts unless the template allows mounted
+			// combat; the home leg (3446-3447) follows in C++ order.
+			atEngageDismount(motion)
 			// Creature::AtEngage (Creature.cpp:3446-3447): the home
 			// position becomes the current position on a waypoint /
 			// point generator or an escorted AI.
@@ -9289,6 +9316,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// AddThreat registers the new-victim entry and runs the victim
 			// leg on a zero add (ThreatManager::AddThreat new-target arm).
 			motion.InCombat = true
+			// Creature::AtEngage (Creature.cpp:3435-3436): entering
+			// combat dismounts unless the template allows mounted
+			// combat; the home leg (3446-3447) follows in C++ order.
+			atEngageDismount(motion)
 			// Creature::AtEngage (Creature.cpp:3446-3447): the home
 			// position becomes the current position on a waypoint /
 			// point generator or an escorted AI.
@@ -9514,6 +9545,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// creature victims from TargetGUID via live motion, and the
 			// swing (S3) already damages them — no combat-block change.
 			motion.InCombat = true
+			// Creature::AtEngage (Creature.cpp:3435-3436, 3446-3447):
+			// the dismount leg and the home leg, in C++ order — the
+			// creature-victim arm of this scan ran the full engage
+			// tail without either (tick 376).
+			atEngageDismount(motion)
+			atEngageSetHomePosition(motion)
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion)
 			}
