@@ -4744,10 +4744,9 @@ func (s *session) remoteIP() string {
 	return host
 }
 
-func (s *session) handleCmdAccount(ctx context.Context, args []string) {
+func (s *session) handleCmdAccount(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccount) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) == 0 {
@@ -4777,62 +4776,63 @@ func (s *session) handleCmdAccount(ctx context.Context, args []string) {
 		if s.commandAllowed(ctx, permissionMayCheckOwnEmail) {
 			if db := s.authDB(); db != nil {
 				var email string
-				if err := db.QueryRowContext(ctx, "SELECT email FROM account WHERE id = ?", s.accountID).Scan(&email); err == nil && email != "" {
+				if err := db.QueryRowContext(ctx, "SELECT email FROM account WHERE id = ?", s.accountID).Scan(&email); err == nil {
 					s.sendSysMessage(fmt.Sprintf("Email: %s", email))
 				}
 			}
 		}
-		return
+		return true
 	}
 	switch strings.ToLower(args[0]) {
 	case "set":
-		s.handleCmdAccountSet(ctx, args[1:])
+		return s.handleCmdAccountSet(ctx, args[1:])
 	case "addon":
-		s.handleCmdAccountAddon(ctx, args[1:])
+		return s.handleCmdAccountAddon(ctx, args[1:])
 	case "email":
-		s.handleCmdAccountEmail(ctx, args[1:])
+		return s.handleCmdAccountEmail(ctx, args[1:])
 	case "password":
-		s.handleCmdAccountPassword(ctx, args[1:])
+		return s.handleCmdAccountPassword(ctx, args[1:])
 	case "lock":
-		s.handleCmdAccountLock(ctx, args[1:])
+		return s.handleCmdAccountLock(ctx, args[1:])
 	case "create":
-		s.handleCmdAccountCreate(ctx, args[1:])
+		return s.handleCmdAccountCreate(ctx, args[1:])
 	case "delete":
-		s.handleCmdAccountDelete(ctx, args[1:])
+		return s.handleCmdAccountDelete(ctx, args[1:])
 	case "onlinelist":
-		s.handleCmdAccountOnlineList(ctx)
+		if len(args) > 1 {
+			return false
+		}
+		return s.handleCmdAccountOnlineList(ctx)
 	case "2fa":
-		s.handleCmdAccount2FA(ctx, args[1:])
+		return s.handleCmdAccount2FA(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .account [addon <expansion>|email <old> <password> <new> <confirm>|password <old> <new> <confirm> [<email>]|lock <ip|country> <on|off>|2fa setup|2fa remove|create <account> <password> [<email>]|delete <account>|onlinelist|set ...]")
+		return false
 	}
 }
 
 // handleCmdAccountSet dispatches the ".account set" subgroup
 // (cs_account.cpp accountSetCommandTable).
-func (s *session) handleCmdAccountSet(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountSet(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .account set gmlevel|seclevel|addon|password|sec|2fa <account> ...")
-		return
+		return false
 	}
 	switch strings.ToLower(args[0]) {
 	case "gmlevel", "seclevel":
-		s.handleCmdAccountSetSecLevel(ctx, args[1:])
+		return s.handleCmdAccountSetSecLevel(ctx, args[1:])
 	case "addon":
-		s.handleCmdAccountSetAddon(ctx, args[1:])
+		return s.handleCmdAccountSetAddon(ctx, args[1:])
 	case "password":
-		s.handleCmdAccountSetPassword(ctx, args[1:])
+		return s.handleCmdAccountSetPassword(ctx, args[1:])
 	case "2fa":
-		s.handleCmdAccountSet2FA(ctx, args[1:])
+		return s.handleCmdAccountSet2FA(ctx, args[1:])
 	default:
 		if len(args) >= 2 && strings.ToLower(args[0]) == "sec" {
 			switch strings.ToLower(args[1]) {
 			case "email", "regmail":
-				s.handleCmdAccountSetSecEmail(ctx, "sec "+strings.ToLower(args[1]), args[2:])
-				return
+				return s.handleCmdAccountSetSecEmail(ctx, "sec "+strings.ToLower(args[1]), args[2:])
 			}
 		}
-		s.sendSysMessage("Syntax: .account set gmlevel|seclevel|addon|password|sec|2fa <account> ...")
+		return false
 	}
 }
 
@@ -4915,8 +4915,7 @@ func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string
 			return true
 		}
 	default:
-		s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
-		return true
+		return false
 	}
 	if sec >= 4 { // SEC_CONSOLE = 4; HandleAccountSetSecLevelCommand rejects >= SEC_CONSOLE
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
@@ -5013,11 +5012,13 @@ func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) b
 		}
 		expansion = uint8(v)
 	default:
-		s.sendSysMessage("Syntax: .account set addon [<account>] <expansion>")
-		return true
+		return false
 	}
 	if targetID != s.accountID && !s.canModifyAccount(ctx, targetID) {
-		return false
+		// canModifyAccount prints "Your security level is too low."
+		// (HasLowerSecurityAccount + SetSentErrorMessage, Chat.cpp:74-102),
+		// so the leg is message + true, not message + help.
+		return true
 	}
 	if s.server != nil && uint32(expansion) > s.server.Config.Expansion { // CONFIG_EXPANSION
 		return false
@@ -5031,142 +5032,150 @@ func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) b
 
 // handleCmdAccountSetPassword mirrors HandleAccountSetPasswordCommand
 // (cs_account.cpp:747): ".account set password <account> <password> <confirm>".
-func (s *session) handleCmdAccountSetPassword(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountSetPassword(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccountSetPassword) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) < 3 {
-		s.sendSysMessage("Syntax: .account set password <account> <password> <confirm>")
-		return
+		return false
+	}
+	if len(args) > 3 {
+		return false
 	}
 	targetID := s.accountIDByName(ctx, args[0])
 	if targetID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
-		return
+		return true
 	}
 	if !s.canModifyAccount(ctx, targetID) {
-		return
+		return true
 	}
 	if args[1] != args[2] {
 		s.sendSysMessage("New passwords do not match.")
-		return
+		return true
 	}
 	if msg := s.changeAccountPassword(ctx, targetID, args[1]); msg != "" {
 		s.sendSysMessage(msg)
-		return
+		return true
 	}
 	s.sendSysMessage("Password changed.")
+	return true
 }
 
 // handleCmdAccountSetSecEmail mirrors HandleAccountSetEmailCommand /
 // HandleAccountSetRegEmailCommand (cs_account.cpp:862/917):
 // ".account set sec email|regmail <account> <email> <confirm>".
-func (s *session) handleCmdAccountSetSecEmail(ctx context.Context, action string, args []string) {
+func (s *session) handleCmdAccountSetSecEmail(ctx context.Context, action string, args []string) bool {
 	perm := permissionCommandAccountSetSecEmail
 	if action == "sec regmail" {
 		perm = permissionCommandAccountSetSecRegmail
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) < 3 {
-		s.sendSysMessage("Syntax: .account set sec email|regmail <account> <email> <confirm>")
-		return
+		return false
+	}
+	if len(args) > 3 {
+		return false
 	}
 	targetID := s.accountIDByName(ctx, args[0])
 	if targetID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
-		return
+		return true
 	}
 	if !s.canModifyAccount(ctx, targetID) {
-		return
+		return true
 	}
 	if args[1] != args[2] {
 		s.sendSysMessage("New emails do not match.")
-		return
+		return true
 	}
 	if msg := s.changeAccountEmail(ctx, targetID, args[1], strings.HasSuffix(action, "regmail")); msg != "" {
 		s.sendSysMessage(msg)
-		return
+		return true
 	}
 	s.sendSysMessage("Email changed.")
+	return true
 }
 
 // handleCmdAccountAddon mirrors HandleAccountAddonCommand (cs_account.cpp:217):
 // ".account addon <expansion>" sets the caller's own expansion level.
-func (s *session) handleCmdAccountAddon(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountAddon(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccountAddon) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) < 1 {
-		s.sendSysMessage("Syntax: .account addon <expansion>")
-		return
+		return false
 	}
 	expansion, err := strconv.ParseUint(args[0], 10, 8)
 	if err != nil {
 		s.sendSysMessage("Syntax: .account addon <expansion>")
-		return
+		return true
+	}
+	if len(args) > 1 {
+		return false
 	}
 	if s.server != nil && uint32(expansion) > s.server.Config.Expansion { // CONFIG_EXPANSION
 		s.sendSysMessage("Invalid expansion value.")
-		return
+		return true
 	}
 	if db := s.authDB(); db != nil {
 		_, _ = db.ExecContext(ctx, "UPDATE account SET expansion = ? WHERE id = ?", uint8(expansion), s.accountID)
 	}
 	s.sendSysMessage(fmt.Sprintf("Expansion set to %d.", expansion))
+	return true
 }
 
 // handleCmdAccountEmail mirrors HandleAccountEmailCommand (cs_account.cpp:430):
 // ".account email <oldEmail> <password> <newEmail> <confirmEmail>" changes
 // the caller's own email after verifying the old email and password.
-func (s *session) handleCmdAccountEmail(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountEmail(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccountEmail) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) < 4 {
-		s.sendSysMessage("Syntax: .account email <oldEmail> <password> <newEmail> <confirmEmail>")
-		return
+		return false
+	}
+	if len(args) > 4 {
+		return false
 	}
 	oldEmail, password, email, emailConfirm := args[0], args[1], args[2], args[3]
 	db := s.authDB()
 	if db == nil {
-		return
+		return true
 	}
 	var current string
 	if err := db.QueryRowContext(ctx, "SELECT email FROM account WHERE id = ?", s.accountID).Scan(&current); err != nil {
-		s.sendSysMessage("Could not change email.")
-		return
+		s.sendSysMessage("Wrong email.")
+		return true
 	}
 	if upperOnlyLatin(current) != upperOnlyLatin(oldEmail) { // AccountMgr::CheckEmail
 		s.sendSysMessage("Wrong email.")
-		return
+		return true
 	}
 	if !s.checkAccountPassword(ctx, s.accountID, password) {
 		s.sendSysMessage("Wrong old password.")
-		return
+		return true
 	}
 	if email == oldEmail { // cs_account.cpp:455: raw compare, not case-folded (the CheckEmail verification above correctly folds both sides)
 		s.sendSysMessage("Old email is the new email.")
-		return
+		return true
 	}
 	if email != emailConfirm {
 		s.sendSysMessage("New emails do not match.")
-		return
+		return true
 	}
 	if msg := s.changeAccountEmail(ctx, s.accountID, email, false); msg != "" {
 		s.sendSysMessage(msg)
-		return
+		return true
 	}
 	s.sendSysMessage("Email changed.")
+	return true
 }
 
 // handleCmdAccountPassword mirrors HandleAccountPasswordCommand
@@ -5176,20 +5185,21 @@ func (s *session) handleCmdAccountEmail(ctx context.Context, args []string) {
 // holds RBAC_PERM_EMAIL_CONFIRM_FOR_PASS_CHANGE (49), the optional fourth
 // argument must match the account email first (cs_account.cpp:517-528);
 // the email check runs before the new-password confirmation.
-func (s *session) handleCmdAccountPassword(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountPassword(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccountPassword) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) < 3 {
-		s.sendSysMessage("Syntax: .account password <oldPassword> <newPassword> <confirmPassword> [<email>]")
-		return
+		return false
+	}
+	if len(args) > 4 {
+		return false
 	}
 	oldPassword, newPassword, confirmPassword := args[0], args[1], args[2]
 	if !s.checkAccountPassword(ctx, s.accountID, oldPassword) {
 		s.sendSysMessage("Wrong old password.")
-		return
+		return true
 	}
 	pwConfig := s.passwordChangeSecurity()
 	if pwConfig == 1 || (pwConfig == 2 && s.commandAllowed(ctx, permissionEmailConfirmForPassChange)) {
@@ -5199,18 +5209,19 @@ func (s *session) handleCmdAccountPassword(ctx context.Context, args []string) {
 		}
 		if !s.checkAccountEmail(ctx, s.accountID, confirmEmail) {
 			s.sendSysMessage("Wrong email.")
-			return
+			return true
 		}
 	}
 	if newPassword != confirmPassword {
 		s.sendSysMessage("New passwords do not match.")
-		return
+		return true
 	}
 	if msg := s.changeAccountPassword(ctx, s.accountID, newPassword); msg != "" {
 		s.sendSysMessage(msg)
-		return
+		return true
 	}
 	s.sendSysMessage("Password changed.")
+	return true
 }
 
 // handleCmdAccountLock mirrors HandleAccountLockIpCommand /
@@ -5230,29 +5241,38 @@ func parseAccountLockBool(s string) (bool, bool) {
 	return false, false
 }
 
-func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountLock(ctx context.Context, args []string) bool {
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .account lock ip|country on|off")
-		return
+		return false
+	}
+	if len(args) > 2 {
+		return false
+	}
+	// Lock ip (223) and lock country (222) carry separate permissions
+	// (cs_account.cpp accountCommandTable). The subcommand resolves first:
+	// C++ shows help for an unknown subcommand before any leaf permission
+	// is consulted; only then is that leaf's permission checked.
+	lockPerm := permissionCommandAccountLockIP
+	switch strings.ToLower(args[0]) {
+	case "ip":
+	case "country":
+		lockPerm = permissionCommandAccountLockCountry
+	default:
+		return false
+	}
+	if !s.commandAllowed(ctx, lockPerm) {
+		return false
 	}
 	db := s.authDB()
 	if db == nil {
-		return
-	}
-	// Lock ip (223) and lock country (222) carry separate permissions
-	// (cs_account.cpp accountCommandTable); the gate runs before the write.
-	lockPerm := permissionCommandAccountLockIP
-	if strings.EqualFold(args[0], "country") {
-		lockPerm = permissionCommandAccountLockCountry
-	}
-	if !s.commandAllowed(ctx, lockPerm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return true
 	}
 	state, ok := parseAccountLockBool(args[1])
 	if !ok {
+		// Unparseable bool token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
 		s.sendSysMessage("Syntax: .account lock ip|country on|off")
-		return
+		return true
 	}
 	switch strings.ToLower(args[0]) {
 	case "ip":
@@ -5266,6 +5286,7 @@ func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
 		} else {
 			s.sendSysMessage("Account unlocked.")
 		}
+		return true
 	case "country":
 		country := "00"
 		if state {
@@ -5275,7 +5296,7 @@ func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
 			}
 			if country == "" {
 				s.sendSysMessage("No IP2Location information - account not locked") // cs_account.cpp:393 literal
-				return
+				return true
 			}
 		}
 		_, _ = db.ExecContext(ctx, "UPDATE account SET lock_country = ? WHERE id = ?", country, s.accountID)
@@ -5284,8 +5305,9 @@ func (s *session) handleCmdAccountLock(ctx context.Context, args []string) {
 		} else {
 			s.sendSysMessage("Account unlocked.")
 		}
+		return true
 	default:
-		s.sendSysMessage("Syntax: .account lock ip|country on|off")
+		return false
 	}
 }
 
@@ -5303,15 +5325,16 @@ const (
 
 // handleCmdAccountCreate mirrors HandleAccountCreateCommand (cs_account.cpp:238):
 // ".account create <account> <password> [<email>]".
-func (s *session) handleCmdAccountCreate(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountCreate(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccountCreate) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .account create <account> <password> [<email>]")
-		return
+		return false
+	}
+	if len(args) > 3 {
+		return false
 	}
 	accountName, password := args[0], args[1]
 	email := ""
@@ -5321,7 +5344,7 @@ func (s *session) handleCmdAccountCreate(ctx context.Context, args []string) {
 	if strings.Contains(accountName, "@") {
 		// LANG_ACCOUNT_USE_BNET_COMMANDS (cs_account.cpp:241)
 		s.sendSysMessage("Use battlenet account commands for battlenet accounts.")
-		return
+		return true
 	}
 	switch s.createAccount(ctx, accountName, password, email) {
 	case accountOpOK:
@@ -5340,6 +5363,7 @@ func (s *session) handleCmdAccountCreate(ctx context.Context, args []string) {
 	default:
 		s.sendSysMessage(fmt.Sprintf("Account %s was not created.", accountName))
 	}
+	return true
 }
 
 // createAccount mirrors AccountMgr::CreateAccount (AccountMgr.cpp:45): utf8
@@ -5378,27 +5402,28 @@ func (s *session) createAccount(ctx context.Context, username, password, email s
 
 // handleCmdAccountDelete mirrors HandleAccountDeleteCommand (cs_account.cpp:286):
 // ".account delete <account>".
-func (s *session) handleCmdAccountDelete(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountDelete(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccountDelete) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) < 1 {
-		s.sendSysMessage("Syntax: .account delete <account>")
-		return
+		return false
+	}
+	if len(args) > 1 {
+		return false
 	}
 	accountName := args[0]
 	targetID := s.accountIDByName(ctx, accountName)
 	if targetID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", accountName))
-		return
+		return true
 	}
 	// cs_account.cpp: commands can delete only accounts with lower security
 	// (this also rejects self-application); mirrors the canModifyAccount
 	// HasLowerSecurityAccount guard used by the set subgroup.
 	if !s.canModifyAccount(ctx, targetID) {
-		return
+		return true
 	}
 	switch s.deleteAccount(ctx, targetID) {
 	case accountOpOK:
@@ -5412,6 +5437,7 @@ func (s *session) handleCmdAccountDelete(ctx context.Context, args []string) {
 	default:
 		s.sendSysMessage(fmt.Sprintf("Account %s was not deleted.", accountName))
 	}
+	return true
 }
 
 // deleteAccount mirrors AccountMgr::DeleteAccount (AccountMgr.cpp): kicks
@@ -5523,18 +5549,20 @@ func (s *session) deleteAccount(ctx context.Context, accountID uint32) accountOp
 
 // handleCmdAccountOnlineList mirrors HandleAccountOnlineListCommand
 // (cs_account.cpp:333): ".account onlinelist".
-func (s *session) handleCmdAccountOnlineList(ctx context.Context) {
+func (s *session) handleCmdAccountOnlineList(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccountOnlineList) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if s.server == nil || s.server.CharactersStore == nil || s.server.AuthStore == nil {
-		return
+		return true
 	}
 	rows, err := s.server.CharactersStore.QueryStatement(ctx, "CHAR_SEL_CHARACTER_ONLINE")
 	if err != nil {
-		return
+		// C++ treats a missing result as the empty list
+		// (cs_account.cpp:336-341, LANG_ACCOUNT_LIST_EMPTY).
+		s.sendSysMessage("No characters online.")
+		return true
 	}
 	defer rows.Close()
 	type onlineChar struct {
@@ -5547,13 +5575,13 @@ func (s *session) handleCmdAccountOnlineList(ctx context.Context) {
 	for rows.Next() {
 		var c onlineChar
 		if err := rows.Scan(&c.name, &c.account, &c.mapID, &c.zone); err != nil {
-			return
+			return true
 		}
 		online = append(online, c)
 	}
 	if len(online) == 0 {
 		s.sendSysMessage("No characters online.")
-		return
+		return true
 	}
 	// LANG_ACCOUNT_LIST_BAR_HEADER (1015) + LANG_ACCOUNT_LIST_HEADER (1010)
 	// + LANG_ACCOUNT_LIST_BAR (1012) frame the rows, and a final bar closes
@@ -5579,6 +5607,7 @@ func (s *session) handleCmdAccountOnlineList(ctx context.Context) {
 			username, c.name, lastIP, c.mapID, c.zone, expansion.Int64, security.Int64))
 	}
 	s.sendSysMessage("================================================") // LANG_ACCOUNT_LIST_BAR (1012), closing frame
+	return true
 }
 
 // totpSuggestions mirrors the static suggestions map in
@@ -5590,28 +5619,17 @@ var (
 )
 
 // handleCmdAccount2FA dispatches ".account 2fa setup|remove".
-func (s *session) handleCmdAccount2FA(ctx context.Context, args []string) {
+func (s *session) handleCmdAccount2FA(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .account 2fa setup [<token>] | .account 2fa remove [<token>]")
-		return
-	}
-	var token *uint32
-	if len(args) > 1 {
-		t, err := strconv.ParseUint(args[1], 10, 32)
-		if err != nil {
-			s.sendSysMessage("Invalid token.")
-			return
-		}
-		t32 := uint32(t)
-		token = &t32
+		return false
 	}
 	switch strings.ToLower(args[0]) {
 	case "setup":
-		s.handleCmdAccount2FASetup(ctx, token)
+		return s.handleCmdAccount2FASetup(ctx, args[1:])
 	case "remove":
-		s.handleCmdAccount2FARemove(ctx, token)
+		return s.handleCmdAccount2FARemove(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .account 2fa setup [<token>] | .account 2fa remove [<token>]")
+		return false
 	}
 }
 
@@ -5634,31 +5652,45 @@ func (s *session) totpMasterKey() (key [16]byte, present bool) {
 }
 
 // handleCmdAccount2FASetup mirrors HandleAccount2FASetupCommand (cs_account.cpp:85).
-func (s *session) handleCmdAccount2FASetup(ctx context.Context, token *uint32) {
+func (s *session) handleCmdAccount2FASetup(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccount2FASetup) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
+	}
+	if len(args) > 1 {
+		return false
+	}
+	var token *uint32
+	if len(args) == 1 {
+		t, err := strconv.ParseUint(args[0], 10, 32)
+		if err != nil {
+			// Unparseable Optional<uint32> token: the framework prints
+			// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+			s.sendSysMessage("Invalid token.")
+			return true
+		}
+		t32 := uint32(t)
+		token = &t32
 	}
 
 	masterKey, masterPresent := s.totpMasterKey()
 	if s.server == nil || s.server.AuthStore == nil || !masterPresent {
 		s.sendSysMessage("2FA commands are not set up (no TOTP master secret configured).")
-		return
+		return true
 	}
 	accountID := s.accountID
 	var existing []byte
 	totpRow, err := s.server.AuthStore.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_TOTP_SECRET", accountID)
 	if err != nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	if err := totpRow.Scan(&existing); err != nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	if len(existing) != 0 {
 		s.sendSysMessage("2FA is already set up on this account.")
-		return
+		return true
 	}
 	totpSuggestionsMu.Lock()
 	secret, ok := totpSuggestions[accountID]
@@ -5667,7 +5699,7 @@ func (s *session) handleCmdAccount2FASetup(ctx context.Context, token *uint32) {
 		if _, err := rand.Read(secret); err != nil {
 			totpSuggestionsMu.Unlock()
 			s.sendSysMessage("Unknown error.")
-			return
+			return true
 		}
 		totpSuggestions[accountID] = secret
 	}
@@ -5678,127 +5710,145 @@ func (s *session) handleCmdAccount2FASetup(ctx context.Context, token *uint32) {
 			stored := append([]byte(nil), secret...)
 			if err := crypto.EncryptWithRandomIV(&stored, masterKey); err != nil {
 				s.sendSysMessage("Unknown error.")
-				return
+				return true
 			}
 			if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_TOTP_SECRET", stored, accountID); err != nil {
 				s.sendSysMessage("Unknown error.")
-				return
+				return true
 			}
 			totpSuggestionsMu.Lock()
 			delete(totpSuggestions, accountID)
 			totpSuggestionsMu.Unlock()
 			s.sendSysMessage("2FA setup complete.")
-			return
+			return true
 		}
 		s.sendSysMessage("Invalid token.")
 	}
 	// New suggestion, or no token specified: output the TOTP parameters.
 	s.sendSysMessage(fmt.Sprintf("Suggested 2FA secret: %s", crypto.Base32Encode(secret)))
+	return true
 }
 
 // handleCmdAccount2FARemove mirrors HandleAccount2FARemoveCommand (cs_account.cpp:149).
-func (s *session) handleCmdAccount2FARemove(ctx context.Context, token *uint32) {
+func (s *session) handleCmdAccount2FARemove(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccount2FARemove) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
+	}
+	if len(args) > 1 {
+		return false
+	}
+	var token *uint32
+	if len(args) == 1 {
+		t, err := strconv.ParseUint(args[0], 10, 32)
+		if err != nil {
+			// Unparseable Optional<uint32> token: the framework prints
+			// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+			s.sendSysMessage("Invalid token.")
+			return true
+		}
+		t32 := uint32(t)
+		token = &t32
 	}
 
 	masterKey, masterPresent := s.totpMasterKey()
 	if s.server == nil || s.server.AuthStore == nil || !masterPresent {
 		s.sendSysMessage("2FA commands are not set up (no TOTP master secret configured).")
-		return
+		return true
 	}
 	accountID := s.accountID
 	var stored []byte
 	totpRow, err := s.server.AuthStore.QueryRowStatement(ctx, "LOGIN_SEL_ACCOUNT_TOTP_SECRET", accountID)
 	if err != nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	if err := totpRow.Scan(&stored); err != nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	if len(stored) == 0 {
 		s.sendSysMessage("2FA is not set up on this account.")
-		return
+		return true
 	}
 	if token != nil {
 		secret := append([]byte(nil), stored...)
 		if err := crypto.DecryptWithTrailingIVAndTag(&secret, masterKey); err != nil {
 			s.debug("account 2fa remove: invalid ciphertext", "account", s.accountName)
 			s.sendSysMessage("Unknown error.")
-			return
+			return true
 		}
 		if crypto.ValidateTOTP(secret, *token, time.Now()) {
 			if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_TOTP_SECRET", nil, accountID); err != nil {
 				s.sendSysMessage("Unknown error.")
-				return
+				return true
 			}
 			s.sendSysMessage("2FA removed.")
-			return
+			return true
 		}
 		s.sendSysMessage("Invalid token.")
 	}
 	s.sendSysMessage("You must supply your current token to remove 2FA.")
+	return true
 }
 
 // handleCmdAccountSet2FA mirrors HandleAccountSet2FACommand (cs_account.cpp:798):
 // ".account set 2fa <account> <secret|off>".
-func (s *session) handleCmdAccountSet2FA(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountSet2FA(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandAccountSet2FA) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .account set 2fa <account> <secret|off>")
-		return
+		return false
+	}
+	if len(args) > 2 {
+		return false
 	}
 	targetID := s.accountIDByName(ctx, args[0])
 	if targetID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
-		return
+		return true
 	}
 	// HandleAccountSet2FACommand uses the HasLowerSecurityAccount guard.
 	if !s.canModifyAccount(ctx, targetID) {
-		return
+		return true
 	}
 	if s.server == nil || s.server.AuthStore == nil {
-		return
+		return true
 	}
 	if args[1] == "off" {
 		if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_TOTP_SECRET", nil, targetID); err != nil {
 			s.sendSysMessage("Unknown error.")
-			return
+			return true
 		}
 		s.sendSysMessage("2FA removed.")
-		return
+		return true
 	}
 	masterKey, masterPresent := s.totpMasterKey()
 	if !masterPresent {
 		s.sendSysMessage("2FA commands are not set up (no TOTP master secret configured).")
-		return
+		return true
 	}
 	decoded, err := crypto.Base32Decode(args[1])
 	if err != nil {
 		s.sendSysMessage("Invalid 2FA secret.")
-		return
+		return true
 	}
 	if len(decoded)+crypto.AESIVSize+crypto.AESTagSize > 128 {
 		s.sendSysMessage("2FA secret too long.")
-		return
+		return true
 	}
 	stored := append([]byte(nil), decoded...)
 	if err := crypto.EncryptWithRandomIV(&stored, masterKey); err != nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_TOTP_SECRET", stored, targetID); err != nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("2FA secret set for account %s.", args[0]))
+	return true
 }
 
 // handleCmdAchievement processes ".achievement add" (cs_achievement.cpp,
@@ -5807,29 +5857,31 @@ func (s *session) handleCmdAccountSet2FA(ctx context.Context, args []string) {
 // nothing is targeted), mirroring Player::CompletedAchievement through
 // completeAchievement. Gated by RBAC_PERM_COMMAND_ACHIEVEMENT_ADD (231);
 // Console::No has no Go console path to suppress.
-func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
-	if len(args) == 0 || !strings.EqualFold(args[0], "add") {
-		s.sendSysMessage("Syntax: .achievement add <achievementId>")
-		return
-	}
-	args = args[1:]
-	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .achievement add <achievementId>")
-		return
-	}
+func (s *session) handleCmdAchievement(ctx context.Context, args []string) bool {
 	// C++ order: the dispatch-time permission check (IsInvokerVisible) runs
 	// before the AchievementEntry* argument parse, so a denied caller with
 	// a bad id is denied, not parse-failed; the parse (including the store
 	// lookup) runs before the handler body.
-	allowed := s.commandAllowed(ctx, permissionCommandAchievementAdd)
-	if !allowed {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+	if !s.commandAllowed(ctx, permissionCommandAchievementAdd) {
+		return false
+	}
+	if len(args) == 0 || !strings.EqualFold(args[0], "add") {
+		return false
+	}
+	args = args[1:]
+	if len(args) == 0 || len(args) > 1 {
+		return false
 	}
 	achievementID, ok := s.parseAchievementArgID(args[0])
 	if !ok {
+		// A bad hyperlink form returns bare nullopt in C++
+		// (ChatCommandArgs.cpp:34-44) -> silent false; a non-numeric plain
+		// token prints LANG_CMDPARSER_STRING_VALUE_INVALID -> message + true.
+		if strings.HasPrefix(args[0], "|c") {
+			return false
+		}
 		s.sendSysMessage("Invalid achievement ID.")
-		return
+		return true
 	}
 	// The Trinity ChatCommand parser resolves the AchievementEntry* argument
 	// against sAchievementStore before invoking the handler; an unknown id
@@ -5838,8 +5890,13 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 	_, found := achievementIndex.achieveByID[uint32(achievementID)]
 	achievementIndex.mu.RUnlock()
 	if !found {
+		// Unknown id via hyperlink -> bare nullopt -> silent false; via a
+		// plain numeric token -> LANG_CMDPARSER_ACHIEVEMENT_NO_EXIST.
+		if strings.HasPrefix(args[0], "|c") {
+			return false
+		}
 		s.sendSysMessage("Unknown achievement ID.")
-		return
+		return true
 	}
 	// ChatHandler::getSelectedPlayer: own player when nothing is targeted,
 	// otherwise the connected player matching the selection (null, i.e. no
@@ -5847,16 +5904,17 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 	target := s
 	if s.selection != 0 {
 		if s.server == nil {
-			return
+			return true
 		}
 		target = s.server.playerSessionForGUID(s.selection)
 		if target == nil {
 			s.sendSysMessage("No character selected.")
-			return
+			return true
 		}
 	}
 	// C++ sends no success message here; the completion itself notifies.
 	target.completeAchievement(uint32(achievementID))
+	return true
 }
 
 // parseAchievementArgID mirrors the C++ AchievementEntry* argument parse
@@ -5980,16 +6038,17 @@ func normalizePlayerName(name string) string {
 // parseArenaTeamType mirrors the Trinity ChatCommand enum parse for
 // ArenaTeamTypes (cs_arena.cpp HandleArenaCreateCommand): case-insensitive
 // prefix match against the EnumUtils titles ARENA_TEAM_2v2/3v3/5v5
-// (enuminfo_ArenaTeam.cpp:34-36). The numeric and short aliases are a
-// Go-side convenience; the C++ parser only accepts the constant-name
-// prefixes.
+// (enuminfo_ArenaTeam.cpp:34-36), then the numeric fallback
+// StringTo<uint8> (ChatCommandArgs.h:177-210). "2v2"/"3v3"/"5v5" are NOT
+// valid: Match() needs a prefix of the constant name and StringTo<uint8>
+// rejects them, so C++ surfaces LANG_CMDPARSER_STRING_VALUE_INVALID.
 func parseArenaTeamType(tok string) (uint32, bool) {
 	switch strings.ToLower(tok) {
-	case "2", "2v2":
+	case "2":
 		return ArenaTeamType2v2, true
-	case "3", "3v3":
+	case "3":
 		return ArenaTeamType3v3, true
-	case "5", "5v5":
+	case "5":
 		return ArenaTeamType5v5, true
 	}
 	lower := strings.ToLower(tok)
@@ -6088,10 +6147,9 @@ func (s *session) arenaCharactersDB() *sql.DB {
 // handleCmdArena dispatches ".arena" (cs_arena.cpp,
 // AddSC_arena_commandscript): create|disband|rename|captain|info|lookup, each
 // gated by its RBAC_PERM_COMMAND_ARENA_* permission (RBAC.h:147-152).
-func (s *session) handleCmdArena(ctx context.Context, args []string) {
+func (s *session) handleCmdArena(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .arena create|disband|rename|captain|info|lookup ...")
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -6110,26 +6168,26 @@ func (s *session) handleCmdArena(ctx context.Context, args []string) {
 	case "lookup":
 		perm = permissionCommandArenaLookup
 	default:
-		s.sendSysMessage("Syntax: .arena create|disband|rename|captain|info|lookup ...")
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch sub {
 	case "create":
-		s.handleCmdArenaCreate(ctx, rest)
+		return s.handleCmdArenaCreate(ctx, rest)
 	case "disband":
-		s.handleCmdArenaDisband(ctx, rest)
+		return s.handleCmdArenaDisband(ctx, rest)
 	case "rename":
-		s.handleCmdArenaRename(ctx, rest)
+		return s.handleCmdArenaRename(ctx, rest)
 	case "captain":
-		s.handleCmdArenaCaptain(ctx, rest)
+		return s.handleCmdArenaCaptain(ctx, rest)
 	case "info":
-		s.handleCmdArenaInfo(ctx, rest)
+		return s.handleCmdArenaInfo(ctx, rest)
 	case "lookup":
-		s.handleCmdArenaLookup(ctx, rest)
+		return s.handleCmdArenaLookup(ctx, rest)
+	default:
+		return false
 	}
 }
 
@@ -6139,43 +6197,51 @@ func (s *session) handleCmdArena(ctx context.Context, args []string) {
 // borderStyle 4, borderColor 4284049911) are the C++-exact ArenaTeam::Create
 // call constants; the rating starts at the CONFIG_ARENA_START_RATING default
 // of 0 (World.cpp:1217).
-func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
+func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) bool {
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	toks := splitQuotedArgs(args)
+	if toks == nil {
+		return false
+	}
 	var captainGUID uint64
 	var captainName string
 	rest := toks
 	// Optional<PlayerIdentifier> captain: the first token is the captain only
 	// when it resolves to a character; otherwise it is the team name.
-	if len(toks) > 0 && !strings.HasPrefix(toks[0], "\"") && len(toks) >= 3 {
+	if len(toks) > 0 && !strings.HasPrefix(toks[0], "\"") {
 		if guid, name, ok := s.resolveArenaCaptain(ctx, cdb, toks[0]); ok {
 			captainGUID, captainName = guid, name
 			rest = toks[1:]
+		} else if len(toks) >= 3 {
+			// Optional<PlayerIdentifier> try-with fails with
+			// LANG_CMDPARSER_CHAR_NAME_NO_EXIST (message + true); the
+			// omit-branch then fails on the unconsumed token too.
+			s.sendSysMessage("Character not found.")
+			return true
 		}
 	}
 	if len(rest) < 2 {
-		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
-		return
+		return false
 	}
 	if len(rest) > 2 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
-		return
+		return false
 	}
 	name := unquoteCommandToken(rest[0])
 	teamType, ok := parseArenaTeamType(rest[1])
 	if !ok {
+		// Bad enum token: LANG_CMDPARSER_STRING_VALUE_INVALID + flag.
 		s.sendSysMessage("Invalid arena team type. Use 2, 3 or 5.")
-		return
+		return true
 	}
 	if name == "" {
 		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
-		return
+		return true
 	}
 	// LANG_ARENA_ERROR_NAME_EXISTS (858). C++ checks the name before the
 	// captain fallback (cs_arena.cpp HandleArenaCreateCommand), so a taken
@@ -6183,13 +6249,13 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 	var clash uint32
 	if err := cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE name = ?", name).Scan(&clash); err == nil {
 		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" already exists.", name))
-		return
+		return true
 	}
 	if captainGUID == 0 {
 		guid, name, ok := s.arenaTargetOrSelf(ctx, cdb)
 		if !ok {
-			s.sendSysMessage("No character selected.")
-			return
+			// cs_arena.cpp:70-73: bare `return false`, no message, no flag.
+			return false
 		}
 		captainGUID, captainName = guid, name
 	}
@@ -6198,21 +6264,22 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 	var existingTeam uint32
 	if err := cdb.QueryRowContext(ctx, "SELECT m.arenaTeamId FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ? AND t.type = ?", captainGUID, teamType).Scan(&existingTeam); err == nil {
 		s.sendSysMessage(fmt.Sprintf("%s already has an arena team of the same type.", captainName))
-		return
+		return true
 	}
 	// ArenaTeamMgr::GenerateArenaTeamId: NextArenaTeamId++.
 	teamID := s.server.generateArenaTeamID(ctx, cdb)
 	if teamID == 0 {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	// ArenaTeam::Create + CHAR_INS_ARENA_TEAM. Stats.Rating starts at
 	// CONFIG_ARENA_START_RATING (World.cpp:1217, default 0); Stats.Rating
 	// is uint16 (ArenaTeam.h:106), so the config value truncates.
 	teamRating := uint32(uint16(s.server.Config.ArenaStartRating))
 	if _, err := cdb.ExecContext(ctx, "INSERT INTO arena_team (arenaTeamId, name, captainGuid, type, rating, backgroundColor, emblemStyle, emblemColor, borderStyle, borderColor) VALUES (?, ?, ?, ?, ?, 4293102085, 101, 4293253939, 4, 4284049911)", teamID, name, captainGUID, teamType, teamRating); err != nil {
-		s.sendSysMessage("Unknown error.")
-		return
+		// ArenaTeam::Create failure prints LANG_BAD_VALUE (cs_arena.cpp:85-89).
+		s.sendSysMessage("Invalid value.")
+		return true
 	}
 	// ArenaTeam::AddMember(captain): Player::RemovePetitionsAndSigns with the
 	// arena charter type, which equals the team type (SharedDefines.h:3790).
@@ -6233,45 +6300,45 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) {
 	// LANG_ARENA_CREATE (864).
 	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" created with id %d (type %dv%d, captain guid %d).", name, teamID, teamType, teamType, captainGUID))
 	s.debug("arena team created", "id", teamID, "name", name, "captain", captainName)
+	return true
 }
 
 // handleCmdArenaDisband processes ".arena disband <teamId>"
 // (cs_arena.cpp HandleArenaDisbandCommand), mirroring the parameterless
 // ArenaTeam::Disband: per-member cleanup followed by CHAR_DEL_ARENA_TEAM and
 // CHAR_DEL_ARENA_TEAM_MEMBERS.
-func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) {
+func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) bool {
 	if len(args) < 1 {
-		s.sendSysMessage("Syntax: .arena disband <teamId>")
-		return
+		return false
 	}
 	id, ok := parseCommandUint32(args[0])
 	if !ok {
+		// Unparseable uint32 token: LANG_CMDPARSER_STRING_VALUE_INVALID.
 		s.sendSysMessage("Invalid team ID.")
-		return
+		return true
 	}
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	teamID := uint32(id)
 	if len(args) > 1 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .arena disband <teamId>")
-		return
+		return false
 	}
 	var name string
 	var teamType uint32
 	if err := cdb.QueryRowContext(ctx, "SELECT name, type FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&name, &teamType); err != nil {
 		// LANG_ARENA_ERROR_NOT_FOUND (857).
 		s.sendSysMessage(fmt.Sprintf("Arena team with id %d not found.", teamID))
-		return
+		return true
 	}
 	if s.arenaTeamIsFighting(ctx, cdb, teamID) {
 		// LANG_ARENA_ERROR_COMBAT (860).
 		s.sendSysMessage("Arena team is in combat.")
-		return
+		return true
 	}
 	// ArenaTeam::Disband runs DelMember per member (ArenaTeam.cpp:406-409):
 	// each online member gets ERR_ARENA_TEAM_QUIT_S and its live slot
@@ -6295,6 +6362,7 @@ func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) {
 	// LANG_ARENA_DISBAND (865).
 	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" (id %d) disbanded.", name, teamID))
 	s.debug("arena team disbanded", "id", teamID, "name", name)
+	return true
 }
 
 // handleCmdArenaRename processes ".arena rename <oldName> <newName>"
@@ -6302,80 +6370,78 @@ func (s *session) handleCmdArenaDisband(ctx context.Context, args []string) {
 // rename fails (LANG_BAD_VALUE) when the name is unchanged, empty, or longer
 // than 24 characters. The reserved-name and charter-name validations have no
 // Go bridge and are documented as a gap.
-func (s *session) handleCmdArenaRename(ctx context.Context, args []string) {
+func (s *session) handleCmdArenaRename(ctx context.Context, args []string) bool {
 	toks := splitQuotedArgs(args)
 	if len(toks) < 2 {
-		s.sendSysMessage("Syntax: .arena rename \"<oldName>\" \"<newName>\"")
-		return
+		return false
 	}
 	if len(toks) > 2 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .arena rename \"<oldName>\" \"<newName>\"")
-		return
+		return false
 	}
 	oldName, newName := unquoteCommandToken(toks[0]), unquoteCommandToken(toks[1])
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	var teamID uint32
 	if err := cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE name = ?", oldName).Scan(&teamID); err != nil {
 		// LANG_ARENA_ERROR_NAME_NOT_FOUND (861).
 		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" not found.", oldName))
-		return
+		return true
 	}
 	var clash uint32
 	if err := cdb.QueryRowContext(ctx, "SELECT arenaTeamId FROM arena_team WHERE name = ?", newName).Scan(&clash); err == nil {
 		// LANG_ARENA_ERROR_NAME_EXISTS (858).
 		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" already exists.", newName))
-		return
+		return true
 	}
 	if s.arenaTeamIsFighting(ctx, cdb, teamID) {
 		// LANG_ARENA_ERROR_COMBAT (860).
 		s.sendSysMessage("Arena team is in combat.")
-		return
+		return true
 	}
 	if newName == "" || newName == oldName || len(newName) > 24 {
 		// ArenaTeam::SetName counts bytes (name.length(), ArenaTeam.cpp:276),
 		// not runes.
 		s.sendSysMessage("Invalid value.")
-		return
+		return true
 	}
 	if _, err := cdb.ExecContext(ctx, "UPDATE arena_team SET name = ? WHERE arenaTeamId = ?", newName, teamID); err != nil {
 		s.sendSysMessage("Invalid value.")
-		return
+		return true
 	}
 	// LANG_ARENA_RENAME (866).
 	s.sendSysMessage(fmt.Sprintf("Arena team %d renamed from \"%s\" to \"%s\".", teamID, oldName, newName))
 	s.debug("arena team renamed", "id", teamID, "from", oldName, "to", newName)
+	return true
 }
 
 // handleCmdArenaCaptain processes ".arena captain <teamId> [<player>]"
 // (cs_arena.cpp HandleArenaCaptainCommand), mirroring ArenaTeam::SetCaptain
 // (CHAR_UPD_ARENA_TEAM_CAPTAIN).
-func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
+func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) bool {
 	if len(args) < 1 {
-		s.sendSysMessage("Syntax: .arena captain <teamId> [<player>]")
-		return
+		return false
 	}
 	id, ok := parseCommandUint32(args[0])
 	if !ok {
+		// Unparseable uint32 token: LANG_CMDPARSER_STRING_VALUE_INVALID.
 		s.sendSysMessage("Invalid team ID.")
-		return
+		return true
 	}
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	teamID := uint32(id)
 	if len(args) > 2 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .arena captain <teamId> [<player>]")
-		return
+		return false
 	}
 	var teamName string
 	var captainGUID uint64
@@ -6383,12 +6449,12 @@ func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
 	if err := cdb.QueryRowContext(ctx, "SELECT name, captainGuid, type FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&teamName, &captainGUID, &teamType); err != nil {
 		// LANG_ARENA_ERROR_NOT_FOUND (857).
 		s.sendSysMessage(fmt.Sprintf("Arena team with id %d not found.", teamID))
-		return
+		return true
 	}
 	if s.arenaTeamIsFighting(ctx, cdb, teamID) {
 		// LANG_ARENA_ERROR_COMBAT (860).
 		s.sendSysMessage("Arena team is in combat.")
-		return
+		return true
 	}
 	var targetGUID uint64
 	var targetName string
@@ -6396,14 +6462,14 @@ func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
 		guid, name, ok := s.resolveArenaCaptain(ctx, cdb, args[1])
 		if !ok {
 			s.sendSysMessage("Character not found.")
-			return
+			return true
 		}
 		targetGUID, targetName = guid, name
 	} else {
 		guid, name, ok := s.arenaTargetOrSelf(ctx, cdb)
 		if !ok {
-			s.sendSysMessage("No character selected.")
-			return
+			// cs_arena.cpp:178-181: bare `return false`, no message.
+			return false
 		}
 		targetGUID, targetName = guid, name
 	}
@@ -6411,18 +6477,18 @@ func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
 	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", teamID, targetGUID).Scan(&isMember); err != nil || isMember == 0 {
 		// LANG_ARENA_ERROR_NOT_MEMBER (862).
 		s.sendSysMessage(fmt.Sprintf("%s is not a member of arena team \"%s\".", targetName, teamName))
-		return
+		return true
 	}
 	if captainGUID == targetGUID {
 		// LANG_ARENA_ERROR_CAPTAIN (863).
 		s.sendSysMessage(fmt.Sprintf("%s is already the captain of arena team \"%s\".", targetName, teamName))
-		return
+		return true
 	}
 	oldCaptainName := "<unknown>"
 	_ = cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", captainGUID).Scan(&oldCaptainName)
 	if _, err := cdb.ExecContext(ctx, "UPDATE arena_team SET captainGuid = ? WHERE arenaTeamId = ?", targetGUID, teamID); err != nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	// ArenaTeam::SetCaptain (ArenaTeam.cpp:287-310) flips the live member
 	// flag: the old captain's goes to 1, the new captain's to 0 (promote
@@ -6436,32 +6502,32 @@ func (s *session) handleCmdArenaCaptain(ctx context.Context, args []string) {
 	// LANG_ARENA_CAPTAIN (867).
 	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" (id %d): captain changed from %s to %s.", teamName, teamID, oldCaptainName, targetName))
 	s.debug("arena team captain changed", "id", teamID, "from", oldCaptainName, "to", targetName)
+	return true
 }
 
 // handleCmdArenaInfo processes ".arena info <teamId>"
 // (cs_arena.cpp HandleArenaInfoCommand): header plus one line per member,
 // with the "- Captain" marker on the captain's line.
-func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) {
+func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) bool {
 	if len(args) < 1 {
-		s.sendSysMessage("Syntax: .arena info <teamId>")
-		return
+		return false
 	}
 	id, ok := parseCommandUint32(args[0])
 	if !ok {
+		// Unparseable uint32 token: LANG_CMDPARSER_STRING_VALUE_INVALID.
 		s.sendSysMessage("Invalid team ID.")
-		return
+		return true
 	}
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	teamID := uint32(id)
 	if len(args) > 1 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .arena info <teamId>")
-		return
+		return false
 	}
 	var name string
 	var rating uint32
@@ -6470,13 +6536,13 @@ func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) {
 	if err := cdb.QueryRowContext(ctx, "SELECT name, rating, type, captainGuid FROM arena_team WHERE arenaTeamId = ?", teamID).Scan(&name, &rating, &teamType, &captainGUID); err != nil {
 		// LANG_ARENA_ERROR_NOT_FOUND (857).
 		s.sendSysMessage(fmt.Sprintf("Arena team with id %d not found.", teamID))
-		return
+		return true
 	}
 	// LANG_ARENA_INFO_HEADER (868).
 	s.sendSysMessage(fmt.Sprintf("Arena team \"%s\" (id %d): rating %d, type %dv%d.", name, teamID, rating, teamType, teamType))
 	rows, err := cdb.QueryContext(ctx, "SELECT m.guid, COALESCE(c.name, ''), m.personalRating FROM arena_team_member AS m LEFT JOIN characters AS c ON c.guid = m.guid WHERE m.arenaTeamId = ?", teamID)
 	if err != nil {
-		return
+		return true
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -6493,6 +6559,7 @@ func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) {
 		// LANG_ARENA_INFO_MEMBERS (869).
 		s.sendSysMessage(fmt.Sprintf("%s (%d): personal rating %d%s", memberName, guid, personalRating, captainMark))
 	}
+	return true
 }
 
 // handleCmdArenaLookup processes ".arena lookup <name>"
@@ -6500,21 +6567,21 @@ func (s *session) handleCmdArenaInfo(ctx context.Context, args []string) {
 // over all arena teams, like TrinityCore StringContainsStringI. The C++ loop
 // only emits rows when handler->GetSession() is set; the Go command path is
 // always a session, so rows are always emitted.
-func (s *session) handleCmdArenaLookup(ctx context.Context, args []string) {
+func (s *session) handleCmdArenaLookup(ctx context.Context, args []string) bool {
 	needle := s.commandTail(args)
 	if strings.TrimSpace(needle) == "" {
-		s.sendSysMessage("Syntax: .arena lookup <name>")
-		return
+		// cs_arena.cpp:226-227: bare `return false`, no message.
+		return false
 	}
 	cdb := s.arenaCharactersDB()
 	if cdb == nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	rows, err := cdb.QueryContext(ctx, "SELECT arenaTeamId, name, type FROM arena_team")
 	if err != nil {
 		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	defer rows.Close()
 	found := false
@@ -6536,6 +6603,7 @@ func (s *session) handleCmdArenaLookup(ctx context.Context, args []string) {
 		// LANG_ARENA_ERROR_NAME_NOT_FOUND (861).
 		s.sendSysMessage(fmt.Sprintf("Arena team with name \"%s\" not found.", needle))
 	}
+	return true
 }
 
 // handleCmdBF dispatches ".bf" (cs_bf.cpp, AddSC_bf_commandscript):
@@ -8953,7 +9021,7 @@ func (s *session) buildCommandTree() *commandNode {
 	}, permissionCommandCharacterDeletedOld)
 	root.add("levelup", func(ctx context.Context, args []string) bool { return s.handleCmdLevelup(ctx, args) }, nil, nil).withPerm(permissionCommandLevelup)
 	root.addWithPerms("pdump", func(ctx context.Context, args []string) bool { return s.handleCmdPDump(ctx, args) }, map[string]uint32{"copy": permissionCommandPDumpCopy, "load": permissionCommandPDumpLoad, "write": permissionCommandPDumpWrite}, nil)
-	accountNode := root.addWithPerms("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, map[string]uint32{"set": 0, "password": permissionCommandAccountPassword, "addon": permissionCommandAccountAddon, "email": permissionCommandAccountEmail, "lock": 0, "2fa": 0, "create": permissionCommandAccountCreate, "delete": permissionCommandAccountDelete, "onlinelist": permissionCommandAccountOnlineList}, map[string]string{"acct": "account"})
+	accountNode := root.addWithPerms("account", func(ctx context.Context, args []string) bool { return s.handleCmdAccount(ctx, args) }, map[string]uint32{"set": 0, "password": permissionCommandAccountPassword, "addon": permissionCommandAccountAddon, "email": permissionCommandAccountEmail, "lock": 0, "2fa": 0, "create": permissionCommandAccountCreate, "delete": permissionCommandAccountDelete, "onlinelist": permissionCommandAccountOnlineList}, map[string]string{"acct": "account"})
 	// R13 depth (cs_account.cpp:53-76): "set", "lock" and "2fa" are
 	// sub-tables and "sec regmail"/"sec email" multi-word names, so
 	// the C++ tree carries account set sec email as a 4-token path
@@ -8963,38 +9031,32 @@ func (s *session) buildCommandTree() *commandNode {
 	accountSet.leaf("addon", func(ctx context.Context, args []string) bool { return s.handleCmdAccountSetAddon(ctx, args) }, permissionCommandAccountSetAddon)
 	accountSet.leaf("gmlevel", func(ctx context.Context, args []string) bool { return s.handleCmdAccountSetSecLevel(ctx, args) }, permissionCommandAccountSetSecLevel)
 	accountSet.leaf("seclevel", func(ctx context.Context, args []string) bool { return s.handleCmdAccountSetSecLevel(ctx, args) }, permissionCommandAccountSetSecLevel)
-	accountSet.leaf("password", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetPassword(ctx, args); return true }, permissionCommandAccountSetPassword)
-	accountSet.leaf("2fa", func(ctx context.Context, args []string) bool { s.handleCmdAccountSet2FA(ctx, args); return true }, permissionCommandAccountSet2FA)
+	accountSet.leaf("password", func(ctx context.Context, args []string) bool { return s.handleCmdAccountSetPassword(ctx, args) }, permissionCommandAccountSetPassword)
+	accountSet.leaf("2fa", func(ctx context.Context, args []string) bool { return s.handleCmdAccountSet2FA(ctx, args) }, permissionCommandAccountSet2FA)
 	accountSetSec := accountSet.group("sec")
 	accountSetSec.leaf("email", func(ctx context.Context, args []string) bool {
-		s.handleCmdAccountSetSecEmail(ctx, "sec email", args)
-		return true
+		return s.handleCmdAccountSetSecEmail(ctx, "sec email", args)
 	}, permissionCommandAccountSetSecEmail)
 	accountSetSec.leaf("regmail", func(ctx context.Context, args []string) bool {
-		s.handleCmdAccountSetSecEmail(ctx, "sec regmail", args)
-		return true
+		return s.handleCmdAccountSetSecEmail(ctx, "sec regmail", args)
 	}, permissionCommandAccountSetSecRegmail)
 	account2FA := accountNode.group("2fa")
 	account2FA.leaf("setup", func(ctx context.Context, args []string) bool {
-		s.handleCmdAccount2FA(ctx, append([]string{"setup"}, args...))
-		return true
+		return s.handleCmdAccount2FA(ctx, append([]string{"setup"}, args...))
 	}, permissionCommandAccount2FASetup)
 	account2FA.leaf("remove", func(ctx context.Context, args []string) bool {
-		s.handleCmdAccount2FA(ctx, append([]string{"remove"}, args...))
-		return true
+		return s.handleCmdAccount2FA(ctx, append([]string{"remove"}, args...))
 	}, permissionCommandAccount2FARemove)
 	accountLock := accountNode.group("lock")
 	accountLock.leaf("ip", func(ctx context.Context, args []string) bool {
-		s.handleCmdAccountLock(ctx, append([]string{"ip"}, args...))
-		return true
+		return s.handleCmdAccountLock(ctx, append([]string{"ip"}, args...))
 	}, permissionCommandAccountLockIP)
 	accountLock.leaf("country", func(ctx context.Context, args []string) bool {
-		s.handleCmdAccountLock(ctx, append([]string{"country"}, args...))
-		return true
+		return s.handleCmdAccountLock(ctx, append([]string{"country"}, args...))
 	}, permissionCommandAccountLockCountry)
-	root.addWithPerms("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, map[string]uint32{"add": permissionCommandAchievementAdd}, nil)
+	root.addWithPerms("achievement", func(ctx context.Context, args []string) bool { return s.handleCmdAchievement(ctx, args) }, map[string]uint32{"add": permissionCommandAchievementAdd}, nil)
 	root.addWithPerms("ahbot", func(ctx context.Context, args []string) bool { return s.handleCmdAhbot(ctx, args) }, map[string]uint32{"items": permissionCommandAhbotItems, "ratio": permissionCommandAhbotRatio, "rebuild": permissionCommandAhbotRebuild, "reload": permissionCommandAhbotReload, "status": permissionCommandAhbotStatus}, nil)
-	root.addWithPerms("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, map[string]uint32{"create": permissionCommandArenaCreate, "disband": permissionCommandArenaDisband, "rename": permissionCommandArenaRename, "captain": permissionCommandArenaCaptain, "info": permissionCommandArenaInfo, "lookup": permissionCommandArenaLookup}, nil)
+	root.addWithPerms("arena", func(ctx context.Context, args []string) bool { return s.handleCmdArena(ctx, args) }, map[string]uint32{"create": permissionCommandArenaCreate, "disband": permissionCommandArenaDisband, "rename": permissionCommandArenaRename, "captain": permissionCommandArenaCaptain, "info": permissionCommandArenaInfo, "lookup": permissionCommandArenaLookup}, nil)
 	root.addWithPerms("ban", func(ctx context.Context, args []string) bool { s.handleCmdBan(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanAccount, "character": permissionCommandBanCharacter, "playeraccount": permissionCommandBanPlayerAccount, "ip": permissionCommandBanIP}, nil)
 	root.addWithPerms("baninfo", func(ctx context.Context, args []string) bool { s.handleCmdBanInfo(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanInfoAccount, "character": permissionCommandBanInfoCharacter, "ip": permissionCommandBanInfoIP}, nil)
 	root.addWithPerms("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanListAccount, "character": permissionCommandBanListCharacter, "ip": permissionCommandBanListIP}, nil)
