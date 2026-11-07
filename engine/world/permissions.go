@@ -110,6 +110,10 @@ const permissionChatUseStaffBadge uint32 = 37
 
 const permissionInstantLogout uint32 = 1
 
+// permissionCannotEarnAchievements mirrors
+// rbac::RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS (RBAC.h:61).
+const permissionCannotEarnAchievements uint32 = 8
+
 // permissionSkipQueue mirrors rbac::RBAC_PERM_SKIP_QUEUE (RBAC.h:55).
 const permissionSkipQueue uint32 = 2
 
@@ -143,6 +147,17 @@ const permissionSkipCheckChatChannelReq uint32 = 19
 // Player::UpdateSpeakTime (Player.cpp:20513-20515) skips flood accounting for
 // sessions holding this permission.
 const permissionSkipCheckChatSpam uint32 = 22
+
+// permissionEmailConfirmForPassChange mirrors
+// rbac::RBAC_PERM_EMAIL_CONFIRM_FOR_PASS_CHANGE (RBAC.h:102): with
+// Account.PasswordChangeSecurity = 2 (PW_RBAC) the holder must confirm the
+// account email when changing their own password (cs_account.cpp:517).
+const permissionEmailConfirmForPassChange uint32 = 49
+
+// permissionMayCheckOwnEmail mirrors rbac::RBAC_PERM_MAY_CHECK_OWN_EMAIL
+// (RBAC.h:103): bare ".account" shows the account's own email only to
+// holders (cs_account.cpp:585).
+const permissionMayCheckOwnEmail uint32 = 50
 
 const permissionTwoSideInteractionChat uint32 = 25
 

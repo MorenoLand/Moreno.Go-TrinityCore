@@ -4512,6 +4512,31 @@ func (s *session) canModifyAccount(ctx context.Context, targetID uint32) bool {
 
 // checkAccountPassword mirrors AccountMgr::CheckPassword: the SRP6 verifier
 // stored for the account must validate against the supplied password.
+// passwordChangeSecurity mirrors sWorld->getIntConfig(CONFIG_ACC_PASSCHANGESEC)
+// (World.cpp:1442): 0 = PW_NONE, 1 = PW_EMAIL, 2 = PW_RBAC (AccountMgr.h:36-38).
+// With no server config the default PW_NONE applies.
+func (s *session) passwordChangeSecurity() int32 {
+	if s.server == nil {
+		return 0
+	}
+	return s.server.Config.AccountPassChangeSecurity
+}
+
+// checkAccountEmail mirrors AccountMgr::CheckEmail as used by the account
+// handlers (cs_account.cpp:455,517): the stored and supplied emails compare
+// after upperOnlyLatin folding.
+func (s *session) checkAccountEmail(ctx context.Context, accountID uint32, email string) bool {
+	db := s.authDB()
+	if db == nil {
+		return false
+	}
+	var current string
+	if err := db.QueryRowContext(ctx, "SELECT email FROM account WHERE id = ?", accountID).Scan(&current); err != nil {
+		return false
+	}
+	return upperOnlyLatin(current) == upperOnlyLatin(email)
+}
+
 func (s *session) checkAccountPassword(ctx context.Context, accountID uint32, password string) bool {
 	name := s.accountNameByID(ctx, accountID)
 	if name == "" {
@@ -4596,12 +4621,34 @@ func (s *session) handleCmdAccount(ctx context.Context, args []string) {
 
 	if len(args) == 0 {
 		// HandleAccountCommand (cs_account.cpp:564): bare ".account" shows
-		// the session security level and the account's own email address.
+		// the session security level, the password-change security type
+		// (CONFIG_ACC_PASSCHANGESEC), the RBAC email-required line when
+		// PW_RBAC and the caller holds RBAC_PERM_EMAIL_CONFIRM_FOR_PASS_CHANGE
+		// (49), and the account's own email only to holders of
+		// RBAC_PERM_MAY_CHECK_OWN_EMAIL (50).
 		s.sendSysMessage(fmt.Sprintf("Your account security level: %d.", s.security))
-		if db := s.authDB(); db != nil {
-			var email string
-			if err := db.QueryRowContext(ctx, "SELECT email FROM account WHERE id = ?", s.accountID).Scan(&email); err == nil && email != "" {
-				s.sendSysMessage(fmt.Sprintf("Email: %s", email))
+		pwConfig := s.passwordChangeSecurity()
+		switch pwConfig {
+		case 0: // PW_NONE
+			s.sendSysMessage("Lowest level: No Email input required.")
+		case 1: // PW_EMAIL
+			s.sendSysMessage("Highest level: Email input required.")
+		case 2: // PW_RBAC
+			s.sendSysMessage("Special level: Your account may require email input depending on settings. That is the case if another line is printed.")
+		default:
+			s.sendSysMessage("Unknown security level: Config error?")
+		}
+		if pwConfig == 2 && s.commandAllowed(ctx, permissionEmailConfirmForPassChange) {
+			// LANG_RBAC_EMAIL_REQUIRED; the trinity_string text is unseeded
+			// in-tree, so plain prose stands in like the other LANG notices.
+			s.sendSysMessage("Email input is required to change your password.")
+		}
+		if s.commandAllowed(ctx, permissionMayCheckOwnEmail) {
+			if db := s.authDB(); db != nil {
+				var email string
+				if err := db.QueryRowContext(ctx, "SELECT email FROM account WHERE id = ?", s.accountID).Scan(&email); err == nil && email != "" {
+					s.sendSysMessage(fmt.Sprintf("Email: %s", email))
+				}
 			}
 		}
 		return
@@ -4626,7 +4673,7 @@ func (s *session) handleCmdAccount(ctx context.Context, args []string) {
 	case "2fa":
 		s.handleCmdAccount2FA(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .account [addon <expansion>|email <old> <password> <new> <confirm>|password <old> <new> <confirm>|lock <ip|country> <on|off>|2fa setup|2fa remove|create <account> <password> [<email>]|delete <account>|onlinelist|set ...]")
+		s.sendSysMessage("Syntax: .account [addon <expansion>|email <old> <password> <new> <confirm>|password <old> <new> <confirm> [<email>]|lock <ip|country> <on|off>|2fa setup|2fa remove|create <account> <password> [<email>]|delete <account>|onlinelist|set ...]")
 	}
 }
 
@@ -4687,10 +4734,14 @@ func (s *session) accountSecurityForRealm(ctx context.Context, id uint32, realmI
 // higher-rank test (LOGIN_SEL_ACCOUNT_ACCESS_SECLEVEL_TEST), and the write
 // follows UpdateAccountAccess (delete the account's access rows for the
 // realm scope, then insert only when the level is non-zero).
-func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string) bool {
+	// The bool reports C++ handler success: the silent-false paths (no
+	// selected player) return false so dispatchCommand shows the node's
+	// help listing (ChatCommand.cpp:296-309); paths that print a message
+	// return true. The RBAC denial also returns false: C++ never invokes
+	// a denied leaf, the walk stops at the parent and shows its help.
 	if !s.commandAllowed(ctx, permissionCommandAccountSetSecLevel) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	var targetID uint32
@@ -4701,14 +4752,14 @@ func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string
 	case 1:
 		target := s.lookupSelectedPlayerOrSelf()
 		if target == nil {
-			return // C++ getSelectedPlayer null -> return false, silently
+			return false // C++ getSelectedPlayer null -> return false, silently
 		}
 		targetID = target.accountID
 		targetAcct = s.accountNameByID(ctx, targetID)
 		v, err := strconv.ParseUint(args[0], 10, 8)
 		if err != nil {
 			s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
-			return
+			return true
 		}
 		sec = v
 	case 2, 3:
@@ -4716,29 +4767,29 @@ func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string
 		v, err := strconv.ParseUint(args[1], 10, 8)
 		if err != nil {
 			s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
-			return
+			return true
 		}
 		sec = v
 		if len(args) == 3 {
 			r, err := strconv.ParseInt(args[2], 10, 32)
 			if err != nil {
 				s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
-				return
+				return true
 			}
 			realmID = int32(r)
 		}
 		targetID = s.accountIDByName(ctx, targetAcct)
 		if targetID == 0 {
 			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", targetAcct))
-			return
+			return true
 		}
 	default:
 		s.sendSysMessage("Syntax: .account set gmlevel [<account>] <level> [<realm>]")
-		return
+		return true
 	}
 	if sec >= 4 { // SEC_CONSOLE = 4; HandleAccountSetSecLevelCommand rejects >= SEC_CONSOLE
 		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE (115)
-		return
+		return true
 	}
 	// can set security level only for a target with less security and to a
 	// level less than we have (also restricts setting our own security).
@@ -4752,7 +4803,7 @@ func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string
 	}
 	if targetSecurity >= playerSecurity || uint8(sec) >= playerSecurity {
 		s.sendSysMessage("Your security level is too low.")
-		return
+		return true
 	}
 	// Check and abort if the target gm has a higher rank on one of the
 	// realms and the new realm is -1.
@@ -4763,13 +4814,13 @@ func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string
 				"SELECT 1 FROM account_access WHERE AccountID = ? AND SecurityLevel > ?",
 				targetID, sec).Scan(&one); err == nil {
 				s.sendSysMessage("Your security level is too low.")
-				return
+				return true
 			}
 		}
 	}
 	if realmID < -1 {
 		s.sendSysMessage("Invalid realm ID.")
-		return
+		return true
 	}
 	if db := s.authDB(); db != nil {
 		if realmID == -1 {
@@ -4782,14 +4833,20 @@ func (s *session) handleCmdAccountSetSecLevel(ctx context.Context, args []string
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Security level for %s set to %d.", targetAcct, sec))
+	return true
 }
 
 // handleCmdAccountSetAddon mirrors HandleAccountSetAddonCommand
 // (cs_account.cpp:604): ".account set addon [<account>] <expansion>".
-func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) {
+func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) bool {
+	// The bool reports C++ handler success: the silent-false paths (no
+	// selected player, lower-security target, expansion above
+	// CONFIG_EXPANSION) return false so dispatchCommand shows the node's
+	// help listing (ChatCommand.cpp:296-309); paths that print a message
+	// return true. The RBAC denial also returns false: C++ never invokes
+	// a denied leaf, the walk stops at the parent and shows its help.
 	if !s.commandAllowed(ctx, permissionCommandAccountSetAddon) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 
 	var targetID uint32
@@ -4801,44 +4858,44 @@ func (s *session) handleCmdAccountSetAddon(ctx context.Context, args []string) {
 		// selection resolves to the invoker), not unconditionally self.
 		target := s.lookupSelectedPlayerOrSelf()
 		if target == nil {
-			return // C++ getSelectedPlayer null -> return false, silently
+			return false // C++ getSelectedPlayer null -> return false, silently
 		}
 		targetID = target.accountID
 		targetName = s.accountNameByID(ctx, targetID)
 		v, err := strconv.ParseUint(args[0], 10, 8)
 		if err != nil {
 			s.sendSysMessage("Syntax: .account set addon [<account>] <expansion>")
-			return
+			return true
 		}
 		expansion = uint8(v)
 	case 2:
 		targetID = s.accountIDByName(ctx, args[0])
 		if targetID == 0 {
 			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
-			return
+			return true
 		}
 		targetName = args[0]
 		v, err := strconv.ParseUint(args[1], 10, 8)
 		if err != nil {
 			s.sendSysMessage("Syntax: .account set addon [<account>] <expansion>")
-			return
+			return true
 		}
 		expansion = uint8(v)
 	default:
 		s.sendSysMessage("Syntax: .account set addon [<account>] <expansion>")
-		return
+		return true
 	}
 	if targetID != s.accountID && !s.canModifyAccount(ctx, targetID) {
-		return
+		return false
 	}
 	if s.server != nil && uint32(expansion) > s.server.Config.Expansion { // CONFIG_EXPANSION
-		s.sendSysMessage("Invalid expansion value.")
-		return
+		return false
 	}
 	if db := s.authDB(); db != nil {
 		_, _ = db.ExecContext(ctx, "UPDATE account SET expansion = ? WHERE id = ?", expansion, targetID)
 	}
 	s.sendSysMessage(fmt.Sprintf("Expansion for account %s [%d] set to %d.", targetName, targetID, expansion))
+	return true
 }
 
 // handleCmdAccountSetPassword mirrors HandleAccountSetPasswordCommand
@@ -4982,10 +5039,12 @@ func (s *session) handleCmdAccountEmail(ctx context.Context, args []string) {
 }
 
 // handleCmdAccountPassword mirrors HandleAccountPasswordCommand
-// (cs_account.cpp:499): ".account password <old> <new> <confirm>" changes
-// the caller's own password after verifying the old one. The optional
-// email-confirmation branch (CONFIG_ACC_PASSCHANGESEC) has no config
-// counterpart here, so it is treated as PW_NONE.
+// (cs_account.cpp:499): ".account password <old> <new> <confirm> [email]"
+// changes the caller's own password after verifying the old one. With
+// CONFIG_ACC_PASSCHANGESEC = PW_EMAIL (1), or PW_RBAC (2) when the caller
+// holds RBAC_PERM_EMAIL_CONFIRM_FOR_PASS_CHANGE (49), the optional fourth
+// argument must match the account email first (cs_account.cpp:517-528);
+// the email check runs before the new-password confirmation.
 func (s *session) handleCmdAccountPassword(ctx context.Context, args []string) {
 	if !s.commandAllowed(ctx, permissionCommandAccountPassword) {
 		s.sendNotification("You do not have permission to use that command.")
@@ -4993,13 +5052,24 @@ func (s *session) handleCmdAccountPassword(ctx context.Context, args []string) {
 	}
 
 	if len(args) < 3 {
-		s.sendSysMessage("Syntax: .account password <oldPassword> <newPassword> <confirmPassword>")
+		s.sendSysMessage("Syntax: .account password <oldPassword> <newPassword> <confirmPassword> [<email>]")
 		return
 	}
 	oldPassword, newPassword, confirmPassword := args[0], args[1], args[2]
 	if !s.checkAccountPassword(ctx, s.accountID, oldPassword) {
 		s.sendSysMessage("Wrong old password.")
 		return
+	}
+	pwConfig := s.passwordChangeSecurity()
+	if pwConfig == 1 || (pwConfig == 2 && s.commandAllowed(ctx, permissionEmailConfirmForPassChange)) {
+		confirmEmail := ""
+		if len(args) > 3 {
+			confirmEmail = args[3]
+		}
+		if !s.checkAccountEmail(ctx, s.accountID, confirmEmail) {
+			s.sendSysMessage("Wrong email.")
+			return
+		}
 	}
 	if newPassword != confirmPassword {
 		s.sendSysMessage("New passwords do not match.")
@@ -5354,7 +5424,13 @@ func (s *session) handleCmdAccountOnlineList(ctx context.Context) {
 		s.sendSysMessage("No characters online.")
 		return
 	}
+	// LANG_ACCOUNT_LIST_BAR_HEADER (1015) + LANG_ACCOUNT_LIST_HEADER (1010)
+	// + LANG_ACCOUNT_LIST_BAR (1012) frame the rows, and a final bar closes
+	// the list (cs_account.cpp:346-348,377); the "=" bar is the established
+	// Go rendering of LANG_ACCOUNT_LIST_BAR (commands_list.go).
+	s.sendSysMessage("================================================")
 	s.sendSysMessage("Account | Character | LastIP | Map | Zone | Expansion | GM")
+	s.sendSysMessage("================================================")
 	for _, c := range online {
 		// LOGIN_SEL_ACCOUNT_INFO: username, last_ip, SecurityLevel, expansion.
 		var username, lastIP string
@@ -5371,6 +5447,7 @@ func (s *session) handleCmdAccountOnlineList(ctx context.Context) {
 		s.sendSysMessage(fmt.Sprintf("%s | %s | %s | %d | %d | %d | %d",
 			username, c.name, lastIP, c.mapID, c.zone, expansion.Int64, security.Int64))
 	}
+	s.sendSysMessage("================================================") // LANG_ACCOUNT_LIST_BAR (1012), closing frame
 }
 
 // totpSuggestions mirrors the static suggestions map in
@@ -5609,14 +5686,18 @@ func (s *session) handleCmdAchievement(ctx context.Context, args []string) {
 		s.sendSysMessage("Syntax: .achievement add <achievementId>")
 		return
 	}
-	achievementID, ok := s.parseAchievementArgID(args[0])
-	if !ok {
-		s.sendSysMessage("Invalid achievement ID.")
-		return
-	}
+	// C++ order: the dispatch-time permission check (IsInvokerVisible) runs
+	// before the AchievementEntry* argument parse, so a denied caller with
+	// a bad id is denied, not parse-failed; the parse (including the store
+	// lookup) runs before the handler body.
 	allowed := s.commandAllowed(ctx, permissionCommandAchievementAdd)
 	if !allowed {
 		s.sendNotification("You do not have permission to use that command.")
+		return
+	}
+	achievementID, ok := s.parseAchievementArgID(args[0])
+	if !ok {
+		s.sendSysMessage("Invalid achievement ID.")
 		return
 	}
 	// The Trinity ChatCommand parser resolves the AchievementEntry* argument
@@ -8753,9 +8834,9 @@ func (s *session) buildCommandTree() *commandNode {
 	// with prefix matching at every level. The family switch in
 	// handleCmdAccount stays as the fallback for an invisible group.
 	accountSet := accountNode.group("set")
-	accountSet.leaf("addon", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetAddon(ctx, args); return true }, permissionCommandAccountSetAddon)
-	accountSet.leaf("gmlevel", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetSecLevel(ctx, args); return true }, permissionCommandAccountSetSecLevel)
-	accountSet.leaf("seclevel", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetSecLevel(ctx, args); return true }, permissionCommandAccountSetSecLevel)
+	accountSet.leaf("addon", func(ctx context.Context, args []string) bool { return s.handleCmdAccountSetAddon(ctx, args) }, permissionCommandAccountSetAddon)
+	accountSet.leaf("gmlevel", func(ctx context.Context, args []string) bool { return s.handleCmdAccountSetSecLevel(ctx, args) }, permissionCommandAccountSetSecLevel)
+	accountSet.leaf("seclevel", func(ctx context.Context, args []string) bool { return s.handleCmdAccountSetSecLevel(ctx, args) }, permissionCommandAccountSetSecLevel)
 	accountSet.leaf("password", func(ctx context.Context, args []string) bool { s.handleCmdAccountSetPassword(ctx, args); return true }, permissionCommandAccountSetPassword)
 	accountSet.leaf("2fa", func(ctx context.Context, args []string) bool { s.handleCmdAccountSet2FA(ctx, args); return true }, permissionCommandAccountSet2FA)
 	accountSetSec := accountSet.group("sec")
@@ -9255,7 +9336,15 @@ func (s *session) dispatchCommand(ctx context.Context, fields []string) bool {
 		s.sendSysMessage("Usage: ." + strings.Join(rewritten, " "))
 		return true
 	}
-	return node.invoke(ctx, args)
+	// ChatCommand.cpp:296-309: a handler that returns false without having
+	// sent an error message makes the framework show the node's help
+	// listing. Handlers that print their own message return true, so only
+	// the silent-false paths (no selection, lower-security refusal,
+	// over-limit expansion, ...) reach this arm.
+	if !node.invoke(ctx, args) {
+		s.sendCommandHelp(ctx, node)
+	}
+	return true
 }
 
 // handleSetFactionCheat processes CMSG_SET_FACTION_CHEAT (0x126).

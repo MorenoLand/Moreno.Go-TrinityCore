@@ -328,7 +328,11 @@ func (s *session) npcLiveCreatureBySpawnGUID(spawnGUID uint32) *creatureMotion {
 	s.server.motionMu.Lock()
 	defer s.server.motionMu.Unlock()
 	for _, motion := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
-		if motion != nil && uint32(motion.GUID&0x00FFFFFF) == spawnGUID {
+		// C++ GetCreatureFromPlayerMapByDbGuid looks up by spawn id; pets
+		// and temp summons have no spawn id and are never found, so a pet
+		// motion whose low GUID bits collide with a spawn guid must not
+		// match (cs_npc triage L10).
+		if motion != nil && !motionIsPet(motion) && !motion.IsTempSummon && uint32(motion.GUID&0x00FFFFFF) == spawnGUID {
 			return motion
 		}
 	}

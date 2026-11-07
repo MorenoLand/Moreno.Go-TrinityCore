@@ -181,13 +181,17 @@ func (s *session) handleNPCAddFormation(ctx context.Context, args []string) {
 		return
 	}
 	server := s.server
-	if row, ok := server.formationRowFor(memberLow); ok {
-		s.sendSysMessage(fmt.Sprintf("Selected creature is already member of group %d", row.leaderGUID))
-		return
-	}
+	// C++ checks the selected creature, then GetFormation() on the live
+	// creature (cs_npc triage L9): the live-motion check precedes the
+	// loaded-row check, so a creature with no live motion is not reported
+	// as already grouped from a stale row.
 	member := s.findCreatureMotion(s.selection)
 	if member == nil {
 		s.sendSysMessage("Select a creature first.")
+		return
+	}
+	if row, ok := server.formationRowFor(memberLow); ok {
+		s.sendSysMessage(fmt.Sprintf("Selected creature is already member of group %d", row.leaderGUID))
 		return
 	}
 	followAngle := (math.Atan2(float64(s.player.Y-member.Y), float64(s.player.X-member.X)) - float64(s.player.Orientation)) * 180.0 / math.Pi

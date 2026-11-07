@@ -28,6 +28,25 @@ func BuildSystemChatMessage(message string) []byte {
 	return BuildChatMessage(0, 0, 0, 0, message, "")
 }
 
+// BuildAchievementChatMessage builds an SMSG_MESSAGECHAT payload for
+// CHAT_MSG_ACHIEVEMENT (0x30) / CHAT_MSG_GUILD_ACHIEVEMENT (0x31).
+// Reference: TrinityCore Chat.cpp:203-265 — the achievement arms write the
+// receiver GUID (0) with no sender name, then the message, chat tag, and
+// the trailing achievement id the client renders as the achievement link.
+func BuildAchievementChatMessage(chatType uint8, language uint32, senderGUID uint64, message string, chatTag uint8, achievementID uint32) []byte {
+	packet := NewBuffer(48 + len(message))
+	packet.WriteU8(chatType)
+	packet.WriteU32(language)
+	packet.WriteU64(senderGUID)
+	packet.WriteU32(0)
+	packet.WriteU64(0)
+	packet.WriteU32(uint32(len(message) + 1))
+	packet.WriteCString(message)
+	packet.WriteU8(chatTag)
+	packet.WriteU32(achievementID)
+	return packet.Bytes()
+}
+
 // BuildChatServerMessage builds an SMSG_CHAT_SERVER_MESSAGE payload:
 // int32 MessageID followed by the string parameter, mirroring
 // WorldPackets::Chat::ChatServerMessage::Write (ChatPackets.cpp:33-39).

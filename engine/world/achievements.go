@@ -1511,13 +1511,28 @@ func (s *session) checkSingleAchievementComplete(achievementID uint32) {
 // SMSG_ACHIEVEMENT_EARNED (packed earner, id, time, initial=1) to the player
 // and nearby players, persisted to character_achievement.
 func (s *session) completeAchievement(achievementID uint32) {
+	// AchievementMgr::CompletedAchievement (AchievementMgr.cpp:1506-1509):
+	// disabled for GameMasters with GM-mode enabled
+	// (Player::IsGameMaster = PLAYER_EXTRA_GM_ON, Player.h:959 — chatGMMode
+	// is the exact Go twin) or for sessions holding
+	// RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS (8). The RBAC half is checked
+	// against the live grant set only; without an auth DB it is skipped
+	// rather than guessed from the security level.
+	if chatGMMode(s) {
+		return
+	}
+	if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		if granted, err := loadGrantedPermissions(context.Background(), s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security); err == nil {
+			if _, ok := granted[permissionCannotEarnAchievements]; ok {
+				return
+			}
+		}
+	}
 	if _, done := s.earnedAchievements[achievementID]; done {
 		return
 	}
 	// AchievementMgr::CompletedAchievement (AchievementMgr.cpp:1506): counter
-	// achievements are statistics that can never complete. The GM-mode /
-	// RBAC_PERM_CANNOT_EARN_ACHIEVEMENTS arm at the same site has no Go
-	// model (no GM-mode/RBAC state on the session) and stays unbridged.
+	// achievements are statistics that can never complete.
 	achievementIndex.mu.RLock()
 	entry, hasEntry := achievementIndex.achieveByID[achievementID]
 	achievementIndex.mu.RUnlock()
@@ -1537,6 +1552,10 @@ func (s *session) completeAchievement(achievementID uint32) {
 	packet.WritePackedTime(time.Unix(int64(now), 0))
 	packet.WriteU32(0)
 	if !s.playerLoading && !s.hiddenAchievement(achievementID) {
+		// SendAchievementEarned (AchievementMgr.cpp:664-720) announces the
+		// earn in chat before the SMSG_ACHIEVEMENT_EARNED packet below:
+		// guild chat, then nearby chat in say range.
+		s.sendAchievementEarnedChat(achievementID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), true)
 		if s.server != nil {
 			if s.player != nil {
@@ -1579,6 +1598,51 @@ func (s *session) completeAchievement(achievementID uint32) {
 	// Reference: AchievementMgr::CompletedAchievement mails the configured
 	// achievement_reward row (AchievementMgr.cpp:1544-1578).
 	s.sendAchievementRewardMail(achievementID)
+}
+
+// sendAchievementEarnedChat mirrors the chat legs of
+// AchievementMgr::SendAchievementEarned (AchievementMgr.cpp:664-720):
+// the guild leg broadcasts CHAT_MSG_GUILD_ACHIEVEMENT to the earner's
+// guild (excluding the earner, Guild::BroadcastWorker) and the nearby leg
+// sends CHAT_MSG_ACHIEVEMENT to players in say range (ListenRange.Say,
+// default 25.0, World.cpp:1185 — the same range the SMSG_ACHIEVEMENT_EARNED
+// leg below uses). Both carry the BROADCAST_TEXT_ACHIEVEMENT_EARNED (29245)
+// text from the broadcast_text table, sent raw as C++ sends
+// BroadcastText::GetText (the client renders the $player/$achievement
+// tokens from the sender GUID and trailing achievement id). A missing row
+// drops silently, the broadcast_text precedent in lua_player WhisperText.
+func (s *session) sendAchievementEarnedChat(achievementID uint32) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.player == nil {
+		return
+	}
+	var text string
+	var language uint32
+	if err := s.server.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT Text, LanguageID FROM broadcast_text WHERE ID = ?", 29245).Scan(&text, &language); err != nil || text == "" {
+		return
+	}
+	// Guild leg (AchievementMgr.cpp:678-683).
+	if s.player.GuildID != 0 {
+		payload := protocol.BuildAchievementChatMessage(chatGuildAchieve, language, s.playerGUID, text, s.chatTag(), achievementID)
+		s.server.sessionsMu.RLock()
+		targets := make([]*session, 0, 8)
+		for value := range s.server.sessions {
+			if value == s || !value.authed || !value.worldReady.Load() || value.player == nil || value.player.GuildID != s.player.GuildID {
+				continue
+			}
+			targets = append(targets, value)
+		}
+		s.server.sessionsMu.RUnlock()
+		for _, target := range targets {
+			_ = target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+		}
+	}
+	// Nearby leg (AchievementMgr.cpp:701-709): the earner plus players in
+	// say range, mirroring the SMSG_ACHIEVEMENT_EARNED self-write +
+	// broadcastToSetWithin shape below.
+	payload := protocol.BuildAchievementChatMessage(chatAchievement, language, s.playerGUID, text, s.chatTag(), achievementID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true)
+	s.server.broadcastToSetWithin(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, 25.0, s)
 }
 
 // resetAchievements mirrors AchievementMgr::Reset (AchievementMgr.cpp:486-508):

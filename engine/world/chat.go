@@ -31,6 +31,8 @@ const (
 	chatBattleground   = 0x2C
 	chatBattleLeader   = 0x2D
 	chatPartyLeader    = 0x33
+	chatAchievement    = 0x30 // CHAT_MSG_ACHIEVEMENT (SharedDefines.h:3210)
+	chatGuildAchieve   = 0x31 // CHAT_MSG_GUILD_ACHIEVEMENT (SharedDefines.h:3211)
 	maxChatMessageType = 0x34
 	languageUniversal  = uint32(0)
 	languageAddon      = ^uint32(0)
