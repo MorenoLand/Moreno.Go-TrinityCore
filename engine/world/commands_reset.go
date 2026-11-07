@@ -2,13 +2,20 @@
 // with 7 arms (achievements, honor, level, spells, stats, talents, all).
 // THIRTY-FOURTH of 40 Commands groups (cs_script_loader.cpp decl 52 /
 // call 97; call order reload(96) -> reset(97)). Trinity checks permission
-// only on the invoker leaf node (ChatCommand.cpp:487), so each arm gates
+// Trinity checks permission only on the invoker leaf node (ChatCommand.cpp:487), so each arm gates
 // exactly its own C++ permission (RBAC.h:579-585, 7 constants in
 // permissions.go); the root's RBAC_PERM_COMMAND_RESET 710 is dead in C++
 // (deprecated 6-arg nullptr+subtable overload drops it, same as the
-// reload/rbac/pet/quest/modify/mmap roots), so bare ".reset" prints the
-// syntax line ungated and permissionCommandReset stays in permissions.go
-// as documentation.
+// reload/rbac/pet/quest/modify/mmap roots), so bare ".reset" returns false
+// (the framework shows the help listing) and permissionCommandReset stays
+// in permissions.go as documentation.
+//
+// R13: the root and all 7 arms return bool — bare/unknown subcommands return
+// false, denial is a silent false, ambiguous subcommands list both and
+// return true, and every message leg returns true. extractPlayerTarget
+// failures already sent "Player not found." by miscResolvePlayerTarget, so
+// those arms return true; the talents no-target leg prints
+// LANG_NO_CHAR_SELECTED and returns true.
 //
 // Player targeting mirrors ChatHandler::extractPlayerTarget via
 // miscResolvePlayerTarget (name -> selection -> self, offline guids resolved
@@ -72,10 +79,9 @@
 //   - reset all (cs_reset.cpp:272-312): native — ORs the at-login flag onto
 //     every characters row (CHAR_UPD_ALL_AT_LOGIN_FLAGS) and every online
 //     session, then broadcasts the C++ world text. Only the exact case names
-//     "spells" and "talents" match, like the C++ == comparison. Deliberate
-//     delta: with no case arg C++ returns false and the framework prints the
-//     help-generic pair (SendCommandHelp on the "all" node); the Go port
-//     prints its syntax line instead, per tree convention.
+//     "spells" and "talents" match, like the C++ == comparison. With no case
+//     arg C++ returns false with no message, so the Go arm returns false
+//     too (the framework shows the help listing).
 //
 // LANG texts are inlined from TDB enUS (no in-tree trinity_string seed), per
 // tree convention; the LANG id is cited on each message.
@@ -89,14 +95,12 @@ import (
 )
 
 // handleCmdReset dispatches the "reset" arms (cs_reset.cpp:51-62).
-func (s *session) handleCmdReset(ctx context.Context, args []string) {
-	const syntax = "Syntax: .reset achievements|honor|level|spells|stats|talents [$player] | .reset all spells|talents"
+func (s *session) handleCmdReset(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// Bare ".reset": the root's RBAC_PERM_COMMAND_RESET is dead in C++
-		// (deprecated 6-arg nullptr+subtable overload drops it), so the help
-		// line prints with no gate, like the reload/rbac/pet/quest/modify/mmap roots.
-		s.sendSysMessage(syntax)
-		return
+		// (deprecated 6-arg nullptr+subtable overload drops it) and the
+		// root has no handler, so the framework shows the help listing.
+		return false
 	}
 	// The Trinity parser prefix-matches (ChatCommand.cpp:262-288): an
 	// exact token wins, one prefix match executes, and several print the
@@ -104,11 +108,10 @@ func (s *session) handleCmdReset(ctx context.Context, args []string) {
 	// "a" silently ran achievements and "s" silently ran spells, where
 	// C++ lists achievements+all and spells+stats). Order is the C++
 	// table order (cs_reset.cpp:51-57).
-	sub := strings.ToLower(args[0])
 	type resetArm struct {
 		name string
 		perm uint32
-		run  func(context.Context, []string)
+		run  func(context.Context, []string) bool
 	}
 	arms := []resetArm{
 		{"achievements", permissionCommandResetAchievements, s.handleResetAchievements},
@@ -119,67 +122,64 @@ func (s *session) handleCmdReset(ctx context.Context, args []string) {
 		{"talents", permissionCommandResetTalents, s.handleResetTalents},
 		{"all", permissionCommandResetAll, s.handleResetAll},
 	}
+	names := make([]string, len(arms))
+	for i, arm := range arms {
+		names[i] = arm.name
+	}
+	sub, cands, ok := groupMatchName(args[0], names)
+	if !ok {
+		if len(cands) > 1 {
+			s.groupAmbiguousMessage(args[0], cands)
+			return true
+		}
+		return false
+	}
 	for _, arm := range arms {
 		if arm.name == sub {
-			if s.miscDeny(ctx, arm.perm) {
-				return
+			if !s.commandAllowed(ctx, arm.perm) {
+				return false
 			}
-			arm.run(ctx, args[1:])
-			return
+			return arm.run(ctx, args[1:])
 		}
 	}
-	var matches []resetArm
-	for _, arm := range arms {
-		if strings.HasPrefix(arm.name, sub) {
-			matches = append(matches, arm)
-		}
-	}
-	if len(matches) > 1 {
-		s.sendSysMessage("Subcommand '" + sub + "' of command '.reset' is ambiguous, please use one of the following:")
-		for _, arm := range matches {
-			s.sendSysMessage("  " + arm.name)
-		}
-		return
-	}
-	if len(matches) == 1 {
-		if s.miscDeny(ctx, matches[0].perm) {
-			return
-		}
-		matches[0].run(ctx, args[1:])
-		return
-	}
-	s.sendSysMessage(syntax)
+	return false
 }
 
 // handleResetAchievements mirrors HandleResetAchievementsCommand
 // (cs_reset.cpp:66-79): online targets get their achievement state wiped and
 // the client refreshed; offline targets get the DB rows deleted.
-func (s *session) handleResetAchievements(ctx context.Context, args []string) {
+func (s *session) handleResetAchievements(ctx context.Context, args []string) bool {
 	target, guid, _, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		// extractPlayerTarget already sent LANG_PLAYER_NOT_FOUND.
+		return true
 	}
 	chars := s.server.CharactersStore
 	if chars == nil || chars.DB == nil {
-		return
+		return false
 	}
 	_, _ = chars.DB.ExecContext(ctx, "DELETE FROM character_achievement WHERE guid = ?", guid)
 	_, _ = chars.DB.ExecContext(ctx, "DELETE FROM character_achievement_progress WHERE guid = ?", guid)
 	if target != nil {
 		target.resetAchievements(ctx)
 	}
+	return true
 }
 
 // handleResetHonor mirrors HandleResetHonorCommand (cs_reset.cpp:81-95):
 // online targets only.
-func (s *session) handleResetHonor(ctx context.Context, args []string) {
+func (s *session) handleResetHonor(ctx context.Context, args []string) bool {
 	target, _, _, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		// extractPlayerTarget already sent LANG_PLAYER_NOT_FOUND.
+		return true
 	}
 	if target == nil || target.player == nil {
+		// The 2-arg C++ extract allows online targets only: an offline
+		// named player prints LANG_PLAYER_NOT_FOUND and returns false
+		// (Chat.cpp:657-710), i.e. message + true here.
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	t := target
 	t.player.TotalHonorPoints = 0     // Player::SetHonorPoints(0)
@@ -194,6 +194,7 @@ func (s *session) handleResetHonor(ctx context.Context, args []string) {
 	// current lifetime kills (AchievementMgr.cpp:1039), which this arm just
 	// zeroed — so this is a set-to-zero, not an increment.
 	t.setAchievementCriteria(criteriaTypeEarnHonorableKill, 0, t.player.TotalKills)
+	return true
 }
 
 // handleResetLevel mirrors HandleResetLevelCommand (cs_reset.cpp:129-163):
@@ -201,14 +202,17 @@ func (s *session) handleResetHonor(ctx context.Context, args []string) {
 // and the Init*ForLevel / pet-sync / script-hook steps have no Go bridge
 // (see file header); the native core resets level and XP to the configured
 // start level.
-func (s *session) handleResetLevel(ctx context.Context, args []string) {
+func (s *session) handleResetLevel(ctx context.Context, args []string) bool {
 	target, _, _, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		// extractPlayerTarget already sent LANG_PLAYER_NOT_FOUND.
+		return true
 	}
 	if target == nil || target.player == nil {
+		// Online-only arm (2-arg extract): offline named player prints
+		// LANG_PLAYER_NOT_FOUND (Chat.cpp:657-710), message + true.
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	t := target
 	startLevel := uint8(1)
@@ -227,13 +231,15 @@ func (s *session) handleResetLevel(ctx context.Context, args []string) {
 	// AutoBalance_PlayerScript::OnLevelChanged (AutoBalance.cpp).
 	t.autoBalanceOnLevelChanged()
 	t.sendPlayerUpdate()
+	return true
 }
 
 // handleResetSpells mirrors HandleResetSpellsCommand (cs_reset.cpp:165-192).
-func (s *session) handleResetSpells(ctx context.Context, args []string) {
+func (s *session) handleResetSpells(ctx context.Context, args []string) bool {
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		// extractPlayerTarget already sent LANG_PLAYER_NOT_FOUND.
+		return true
 	}
 	if target != nil && target.player != nil {
 		// Player::ResetSpells(), run immediately via the at-login reset
@@ -243,41 +249,47 @@ func (s *session) handleResetSpells(ctx context.Context, args []string) {
 		if s.player == nil || s.playerGUID != target.playerGUID {
 			s.sendSysMessage(miscPlayerLink(name) + "'s spells have been reset.") // LANG_RESET_SPELLS_ONLINE 211
 		}
-		return
+		return true
 	}
 	chars := s.server.CharactersStore
 	if chars == nil {
-		return
+		return false
 	}
 	_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ADD_AT_LOGIN_FLAG"), uint16(atLoginResetSpells), guid)
 	s.sendSysMessage("Spells of " + miscPlayerLink(name) + " will be reset on next login.") // LANG_RESET_SPELLS_OFFLINE 212
+	return true
 }
 
 // handleResetStats mirrors HandleResetStatsCommand (cs_reset.cpp:194-210):
 // online targets only. The helper and Init*ForLevel recompute steps have no
 // Go bridge (see file header); the native core is a client refresh.
-func (s *session) handleResetStats(ctx context.Context, args []string) {
+func (s *session) handleResetStats(ctx context.Context, args []string) bool {
 	target, _, _, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		// extractPlayerTarget already sent LANG_PLAYER_NOT_FOUND.
+		return true
 	}
 	if target == nil || target.player == nil {
+		// Online-only arm (2-arg extract): offline named player prints
+		// LANG_PLAYER_NOT_FOUND (Chat.cpp:657-710), message + true.
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	target.sendPlayerUpdate()
+	return true
 }
 
 // handleResetTalents mirrors HandleResetTalentsCommand (cs_reset.cpp:212-270).
-func (s *session) handleResetTalents(ctx context.Context, args []string) {
+func (s *session) handleResetTalents(ctx context.Context, args []string) bool {
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
 		// C++ sends LANG_NO_CHAR_SELECTED after extractPlayerTarget
 		// already sent LANG_PLAYER_NOT_FOUND (cs_reset.cpp:238-240);
 		// the hunter-pet selection branch above it is dead (see file
-		// header), so only the fallthrough message is ported.
+		// header), so only the fallthrough message is ported. C++ returns
+		// false with SetSentErrorMessage: message + true here.
 		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
-		return
+		return true
 	}
 	if target != nil && target.player != nil {
 		// Player::ResetTalents(true) + SendTalentsInfoData(false) go out
@@ -307,27 +319,28 @@ func (s *session) handleResetTalents(ctx context.Context, args []string) {
 				_ = target.sendTalentsInfo(true)
 			}
 		}
-		return
+		return true
 	}
 	if guid != 0 {
 		chars := s.server.CharactersStore
 		if chars == nil {
-			return
+			return false
 		}
 		// C++ sets AT_LOGIN_NONE | AT_LOGIN_RESET_PET_TALENTS.
 		_, _ = chars.ExecStatement(ctx, database.StatementID("CHAR_UPD_ADD_AT_LOGIN_FLAG"), uint16(atLoginResetPetTalents), guid)
 		s.sendSysMessage("Talents of " + miscPlayerLink(name) + " will be reset on next login.") // LANG_RESET_TALENTS_OFFLINE 214
-		return
+		return true
 	}
 	s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED 116
+	return true
 }
 
 // handleResetAll mirrors HandleResetAllCommand (cs_reset.cpp:272-312): only
 // the exact case names "spells" and "talents" match.
-func (s *session) handleResetAll(ctx context.Context, args []string) {
+func (s *session) handleResetAll(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .reset all spells|talents")
-		return
+		// C++ returns false with no message (cs_reset.cpp:274-275).
+		return false
 	}
 	// C++ compares the whole tail string (caseName == "spells"), so a
 	// multi-token tail like "spells foo" is unknown, not a spells reset
@@ -345,8 +358,10 @@ func (s *session) handleResetAll(ctx context.Context, args []string) {
 		}
 	}
 	if worldText == "" {
+		// C++ prints LANG_RESETALL_UNKNOWN_CASE + SetSentErrorMessage and
+		// returns false: message + true here.
 		s.sendSysMessage("Unknown case " + strings.Join(args, " ") + ". Use one of: spells, talents.") // LANG_RESETALL_UNKNOWN_CASE 217
-		return
+		return true
 	}
 	// CHAR_UPD_ALL_AT_LOGIN_FLAGS: UPDATE characters SET at_login = at_login | ?.
 	if chars := s.server.CharactersStore; chars != nil && chars.DB != nil {
@@ -363,4 +378,5 @@ func (s *session) handleResetAll(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage(worldText)
 	}
+	return true
 }

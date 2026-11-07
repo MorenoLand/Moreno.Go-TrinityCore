@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 )
@@ -21,6 +20,13 @@ import (
 // so each arm gates exactly its own permission. All C++ table entries are
 // console=true, which is moot here (Go commands are always sessioned), so the
 // arms run in-game with the same RBAC gates.
+//
+// R13: the root and all 5 arms return bool — bare/unknown subcommands return
+// false (the framework shows the help listing), denial is a silent false,
+// and every message leg returns true. ReadParams failures that print
+// (wrong id/realm, unknown account, lower-security) return true; the silent
+// unresolvable-selected-player failures return false, via readRBACParams'
+// `messaged` return.
 //
 // The Go tree has no RBACData object (RBAC.cpp): the granted/denied/default
 // permission model is reimplemented at the auth DB level, which is where the
@@ -74,9 +80,12 @@ type rbacCommandParams struct {
 // the id/realm legs parse exactly like the C++ strtok walk (two tokens means
 // id-from-param1 + selected player; three tokens means param1 is the account
 // name). checkParams=false (the list arm) keeps the C++ defaults (id 0,
-// realm -1) and only resolves the account. A false return means the C++
-// returned nullptr (error message already sent where the C++ sends one).
-func (s *session) readRBACParams(ctx context.Context, tokens []string, checkParams bool) (*rbacCommandParams, bool) {
+// realm -1) and only resolves the account. A false `ok` means the C++
+// returned nullptr; `messaged` says whether the C++ sent an error message
+// with it (wrong id/realm, unknown account, lower-security: true — the arm
+// returns true; unresolvable selected player: false — the arm returns
+// false and the framework shows help).
+func (s *session) readRBACParams(ctx context.Context, tokens []string, checkParams bool) (*rbacCommandParams, bool, bool) {
 	var p1, p2, p3 string
 	if len(tokens) > 0 {
 		p1 = tokens[0]
@@ -106,11 +115,11 @@ func (s *session) readRBACParams(ctx context.Context, tokens []string, checkPara
 		}
 		if p.id == 0 {
 			s.sendSysMessage(fmt.Sprintf(rbacWrongParamID, p.id))
-			return nil, false
+			return nil, false, true
 		}
 		if p.realmID < -1 || p.realmID == 0 {
 			s.sendSysMessage(fmt.Sprintf(rbacWrongParamRealm, p.realmID))
-			return nil, false
+			return nil, false, true
 		}
 	} else if p1 == "" {
 		useSelected = true
@@ -124,12 +133,12 @@ func (s *session) readRBACParams(ctx context.Context, tokens []string, checkPara
 		if s.selection != 0 && s.server != nil {
 			ts := s.server.playerSessionForGUID(s.selection)
 			if ts == nil || ts.player == nil {
-				return nil, false
+				return nil, false, false
 			}
 			target = ts
 		}
 		if target.player == nil {
-			return nil, false
+			return nil, false, false
 		}
 		p.accountID = target.accountID
 		p.accountName = s.accountNameByID(ctx, target.accountID)
@@ -138,14 +147,16 @@ func (s *session) readRBACParams(ctx context.Context, tokens []string, checkPara
 		p.accountID = s.accountIDByName(ctx, p.accountName)
 		if p.accountID == 0 {
 			s.sendSysMessage(fmt.Sprintf(rbacAccountNotExist, p.accountName))
-			return nil, false
+			return nil, false, true
 		}
 	}
 
 	if checkParams && !s.canModifyAccount(ctx, p.accountID) {
-		return nil, false
+		// canModifyAccount prints "Your security level is too low."
+		// (HasLowerSecurityAccount prints, Chat.cpp:96-99).
+		return nil, false, true
 	}
-	return p, true
+	return p, true, false
 }
 
 // loadRBACAccountLists mirrors RBACData::LoadFromDB + LoadFromDBCallback
@@ -279,67 +290,78 @@ func (s *session) deleteRBACPermission(ctx context.Context, p *rbacCommandParams
 }
 
 // handleCmdRBAC dispatches the "rbac" root (cs_rbac.cpp:59-85) with Trinity
-// per-level prefix matching. A bare ".rbac" prints the syntax line with no
-// permission gate: the root's own 200 is dead in C++ (ChatCommand.h
-// deprecated 6-arg overload). "rbac account" is a three-level path,
-// dispatched two-level like the channel "set ownership" arm.
-func (s *session) handleCmdRBAC(ctx context.Context, args []string) {
-	const syntax = "Syntax: .rbac account list|grant|deny|revoke <args> | .rbac list [id]"
+// per-level prefix matching. A bare ".rbac" returns false with no permission
+// gate: the root's own 200 is dead in C++ (ChatCommand.h deprecated 6-arg
+// overload) and the root has no handler, so the framework shows the help
+// listing. "rbac account" is a three-level path, dispatched two-level like
+// the channel "set ownership" arm.
+func (s *session) handleCmdRBAC(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
-	switch sub := strings.ToLower(args[0]); sub {
+	sub, cands, ok := groupMatchName(args[0], []string{"account", "list"})
+	if !ok {
+		if len(cands) > 1 {
+			s.groupAmbiguousMessage(args[0], cands)
+			return true
+		}
+		return false
+	}
+	switch sub {
 	case "account":
 		if len(args) < 2 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
-		switch lvl := strings.ToLower(args[1]); {
-		case strings.HasPrefix("list", lvl):
-			s.handleRBACAccountListCommand(ctx, args[2:])
-		case strings.HasPrefix("grant", lvl):
-			s.handleRBACAccountGrantCommand(ctx, args[2:])
-		case strings.HasPrefix("deny", lvl):
-			s.handleRBACAccountDenyCommand(ctx, args[2:])
-		case strings.HasPrefix("revoke", lvl):
-			s.handleRBACAccountRevokeCommand(ctx, args[2:])
-		default:
-			s.sendSysMessage(syntax)
+		lvl, lvlCands, lvlOK := groupMatchName(args[1], []string{"list", "grant", "deny", "revoke"})
+		if !lvlOK {
+			if len(lvlCands) > 1 {
+				s.groupAmbiguousMessage(args[1], lvlCands)
+				return true
+			}
+			return false
 		}
+		switch lvl {
+		case "list":
+			return s.handleRBACAccountListCommand(ctx, args[2:])
+		case "grant":
+			return s.handleRBACAccountGrantCommand(ctx, args[2:])
+		case "deny":
+			return s.handleRBACAccountDenyCommand(ctx, args[2:])
+		case "revoke":
+			return s.handleRBACAccountRevokeCommand(ctx, args[2:])
+		}
+		return false
 	case "list":
-		if s.miscDeny(ctx, permissionCommandRBACList) {
-			return
-		}
-		s.handleRBACListPermissionsCommand(ctx, args[1:])
-	default:
-		s.sendSysMessage(syntax)
+		return s.handleRBACListPermissionsCommand(ctx, args[1:])
 	}
+	return false
 }
 
 // handleRBACAccountGrantCommand mirrors HandleRBACPermGrantCommand
 // (cs_rbac.cpp:169-205, RBAC 203): the RBACData::GrantPermission result
 // ladder with the LANG_RBAC_PERM_GRANTED* messages.
-func (s *session) handleRBACAccountGrantCommand(ctx context.Context, tokens []string) {
-	if s.miscDeny(ctx, permissionCommandRBACAccPermGrant) {
-		return
+func (s *session) handleRBACAccountGrantCommand(ctx context.Context, tokens []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandRBACAccPermGrant) {
+		return false
 	}
-	p, ok := s.readRBACParams(ctx, tokens, true)
+	p, ok, messaged := s.readRBACParams(ctx, tokens, true)
 	if !ok {
-		return
+		return messaged
 	}
 	name, ok := s.rbacPermissionName(ctx, p.id)
 	if !ok {
+		// C++ prints WRONG_PARAMETER_ID for RBAC_ID_DOES_NOT_EXISTS and
+		// returns true (cs_rbac.cpp:191-194 / :227-230 / :263-266).
 		s.sendSysMessage(fmt.Sprintf(rbacWrongParamID, p.id))
-		return
+		return true
 	}
 	granted, denied, ok := s.loadRBACAccountLists(ctx, p.accountID)
 	if !ok {
-		return
+		return false
 	}
 	who := []any{p.id, name, p.realmID, p.accountID, p.accountName}
 	switch {
@@ -351,26 +373,29 @@ func (s *session) handleRBACAccountGrantCommand(ctx context.Context, tokens []st
 		s.saveRBACPermission(ctx, p, true)
 		s.sendSysMessage(fmt.Sprintf(rbacPermGranted, who...))
 	}
+	return true
 }
 
 // handleRBACAccountDenyCommand mirrors HandleRBACPermDenyCommand
 // (cs_rbac.cpp:207-243, RBAC 204).
-func (s *session) handleRBACAccountDenyCommand(ctx context.Context, tokens []string) {
-	if s.miscDeny(ctx, permissionCommandRBACAccPermDeny) {
-		return
+func (s *session) handleRBACAccountDenyCommand(ctx context.Context, tokens []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandRBACAccPermDeny) {
+		return false
 	}
-	p, ok := s.readRBACParams(ctx, tokens, true)
+	p, ok, messaged := s.readRBACParams(ctx, tokens, true)
 	if !ok {
-		return
+		return messaged
 	}
 	name, ok := s.rbacPermissionName(ctx, p.id)
 	if !ok {
+		// C++ prints WRONG_PARAMETER_ID for RBAC_ID_DOES_NOT_EXISTS and
+		// returns true (cs_rbac.cpp:191-194 / :227-230 / :263-266).
 		s.sendSysMessage(fmt.Sprintf(rbacWrongParamID, p.id))
-		return
+		return true
 	}
 	granted, denied, ok := s.loadRBACAccountLists(ctx, p.accountID)
 	if !ok {
-		return
+		return false
 	}
 	who := []any{p.id, name, p.realmID, p.accountID, p.accountName}
 	switch {
@@ -382,50 +407,54 @@ func (s *session) handleRBACAccountDenyCommand(ctx context.Context, tokens []str
 		s.saveRBACPermission(ctx, p, false)
 		s.sendSysMessage(fmt.Sprintf(rbacPermDenied, who...))
 	}
+	return true
 }
 
 // handleRBACAccountRevokeCommand mirrors HandleRBACPermRevokeCommand
 // (cs_rbac.cpp:245-274, RBAC 205).
-func (s *session) handleRBACAccountRevokeCommand(ctx context.Context, tokens []string) {
-	if s.miscDeny(ctx, permissionCommandRBACAccPermRevoke) {
-		return
+func (s *session) handleRBACAccountRevokeCommand(ctx context.Context, tokens []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandRBACAccPermRevoke) {
+		return false
 	}
-	p, ok := s.readRBACParams(ctx, tokens, true)
+	p, ok, messaged := s.readRBACParams(ctx, tokens, true)
 	if !ok {
-		return
+		return messaged
 	}
 	name, ok := s.rbacPermissionName(ctx, p.id)
 	if !ok {
+		// C++ prints WRONG_PARAMETER_ID for RBAC_ID_DOES_NOT_EXISTS and
+		// returns true (cs_rbac.cpp:191-194 / :227-230 / :263-266).
 		s.sendSysMessage(fmt.Sprintf(rbacWrongParamID, p.id))
-		return
+		return true
 	}
 	granted, denied, ok := s.loadRBACAccountLists(ctx, p.accountID)
 	if !ok {
-		return
+		return false
 	}
 	who := []any{p.id, name, p.realmID, p.accountID, p.accountName}
 	if !containsID(granted, p.id) && !containsID(denied, p.id) {
 		s.sendSysMessage(fmt.Sprintf(rbacRevokedNotInList, who...))
-		return
+		return true
 	}
 	s.deleteRBACPermission(ctx, p)
 	s.sendSysMessage(fmt.Sprintf(rbacPermRevoked, who...))
+	return true
 }
 
 // handleRBACAccountListCommand mirrors HandleRBACPermListCommand
 // (cs_rbac.cpp:276-316, RBAC 202): the granted/denied/default-by-security
 // sections with their LANG_RBAC_LIST_HEADER_* headers.
-func (s *session) handleRBACAccountListCommand(ctx context.Context, tokens []string) {
-	if s.miscDeny(ctx, permissionCommandRBACAccPermList) {
-		return
+func (s *session) handleRBACAccountListCommand(ctx context.Context, tokens []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandRBACAccPermList) {
+		return false
 	}
-	p, ok := s.readRBACParams(ctx, tokens, false)
+	p, ok, messaged := s.readRBACParams(ctx, tokens, false)
 	if !ok {
-		return
+		return messaged
 	}
 	granted, denied, ok := s.loadRBACAccountLists(ctx, p.accountID)
 	if !ok {
-		return
+		return false
 	}
 	s.sendSysMessage(fmt.Sprintf(rbacListHeaderGranted, p.accountID, p.accountName))
 	s.sortedRBACIDs(ctx, granted)
@@ -434,6 +463,7 @@ func (s *session) handleRBACAccountListCommand(ctx context.Context, tokens []str
 	secLevel := s.accountSecurityLevel(ctx, p.accountID)
 	s.sendSysMessage(fmt.Sprintf(rbacListHeaderBySec, p.accountID, p.accountName, secLevel))
 	s.sortedRBACIDs(ctx, s.rbacDefaultPermissions(ctx, secLevel))
+	return true
 }
 
 // rbacDefaultPermissions mirrors
@@ -465,10 +495,13 @@ func (s *session) rbacDefaultPermissions(ctx context.Context, secLevel uint8) ma
 // handleRBACListPermissionsCommand mirrors HandleRBACListPermissionsCommand
 // (cs_rbac.cpp:318-355, RBAC 206): the full permission catalog, or a single
 // permission with its linked permissions (rbac_linked_permissions).
-func (s *session) handleRBACListPermissionsCommand(ctx context.Context, tokens []string) {
+func (s *session) handleRBACListPermissionsCommand(ctx context.Context, tokens []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandRBACList) {
+		return false
+	}
 	db := s.authDB()
 	if db == nil {
-		return
+		return false
 	}
 	var id uint32
 	if len(tokens) > 0 {
@@ -478,36 +511,38 @@ func (s *session) handleRBACListPermissionsCommand(ctx context.Context, tokens [
 		s.sendSysMessage(rbacListPermsHeader)
 		rows, err := db.QueryContext(ctx, "SELECT id, name FROM rbac_permissions ORDER BY id")
 		if err != nil {
-			return
+			return false
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var pid uint32
 			var name string
 			if err := rows.Scan(&pid, &name); err != nil {
-				return
+				return false
 			}
 			s.sendSysMessage(fmt.Sprintf(rbacListElement, pid, name))
 		}
-		return
+		return true
 	}
 	name, ok := s.rbacPermissionName(ctx, id)
 	if !ok {
+		// C++ prints WRONG_PARAMETER_ID + SetSentErrorMessage and returns
+		// false (cs_rbac.cpp:335-340): message + true here.
 		s.sendSysMessage(fmt.Sprintf(rbacWrongParamID, id))
-		return
+		return true
 	}
 	s.sendSysMessage(rbacListPermsHeader)
 	s.sendSysMessage(fmt.Sprintf(rbacListElement, id, name))
 	s.sendSysMessage(rbacListLinkedHeader)
 	rows, err := db.QueryContext(ctx, "SELECT linkedId FROM rbac_linked_permissions WHERE id = ? ORDER BY linkedId", id)
 	if err != nil {
-		return
+		return false
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var lid uint32
 		if err := rows.Scan(&lid); err != nil {
-			return
+			return false
 		}
 		lname, ok := s.rbacPermissionName(ctx, lid)
 		if !ok {
@@ -515,6 +550,7 @@ func (s *session) handleRBACListPermissionsCommand(ctx context.Context, tokens [
 		}
 		s.sendSysMessage(fmt.Sprintf(rbacListElement, lid, lname))
 	}
+	return true
 }
 
 // containsID reports set membership for the uint32 permission sets.

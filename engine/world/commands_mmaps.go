@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -55,60 +54,70 @@ import (
 //     the measured sweep time.
 //
 // Console-vs-chat branches are moot (Go commands are always sessioned).
+//
+// R13: the root and all 5 arms return bool — bare/unknown subcommands return
+// false (the framework shows the help listing), denial is a silent false
+// (the C++ framework denies before invoking the handler), and every
+// message leg returns true.
 
 // handleCmdMMap dispatches the "mmap" root (arm table cs_mmaps.cpp:51-55,
-// root table :59-62).
-func (s *session) handleCmdMMap(ctx context.Context, args []string) {
-	const syntax = "Syntax: .mmap loadedtiles|loc|path|stats|testarea"
+// root table :59-62). Bare ".mmap" returns false: the container root node
+// carries no permission in C++ (the 536 perm is dropped by the deprecated
+// ChatCommandBuilder overload) and has no handler, so the framework shows
+// the help listing.
+func (s *session) handleCmdMMap(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		// Bare ".mmap" matches the container root node, which carries no
-		// permission in C++ (the 536 perm is dropped by the deprecated
-		// ChatCommandBuilder overload); print the syntax line with no
-		// gate, per the audited gobject container-root convention.
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	// The Trinity parser prefix-matches command names at every nesting
-	// level; match the arm the same way here.
-	sub := strings.ToLower(args[0])
-	switch {
-	case strings.HasPrefix("loadedtiles", sub):
-		s.handleMmapLoadedTilesCommand(ctx)
-	case strings.HasPrefix("loc", sub):
-		s.handleMmapLocCommand(ctx)
-	case strings.HasPrefix("path", sub):
-		s.handleMmapPathCommand(ctx)
-	case strings.HasPrefix("stats", sub):
-		s.handleMmapStatsCommand(ctx)
-	case strings.HasPrefix("testarea", sub):
-		s.handleMmapTestAreaCommand(ctx)
-	default:
-		s.sendSysMessage(syntax)
+	// level; match the arm the same way here. ".mmap l" / ".mmap lo" are
+	// ambiguous (loadedtiles/loc) and list both, like C++.
+	sub, cands, ok := groupMatchName(args[0], []string{"loadedtiles", "loc", "path", "stats", "testarea"})
+	if !ok {
+		if len(cands) > 1 {
+			s.groupAmbiguousMessage(args[0], cands)
+			return true
+		}
+		return false
 	}
+	switch sub {
+	case "loadedtiles":
+		return s.handleMmapLoadedTilesCommand(ctx)
+	case "loc":
+		return s.handleMmapLocCommand(ctx)
+	case "path":
+		return s.handleMmapPathCommand(ctx)
+	case "stats":
+		return s.handleMmapStatsCommand(ctx)
+	case "testarea":
+		return s.handleMmapTestAreaCommand(ctx)
+	}
+	return false
 }
 
 // handleMmapLoadedTilesCommand mirrors HandleMmapLoadedTilesCommand
 // (cs_mmaps.cpp:189-212, RBAC 537). Documented-blocked: dtNavMesh has no Go
 // bridge.
-func (s *session) handleMmapLoadedTilesCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandMMapLoadedTiles) {
-		return
+func (s *session) handleMmapLoadedTilesCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandMMapLoadedTiles) {
+		return false
 	}
 	// The C++ handler (cs_mmaps.cpp:196) reports the navmesh as missing
 	// before printing anything, so the Go arm emits exactly that line.
 	s.sendSysMessage("NavMesh not loaded for current map.")
+	return true
 }
 
 // handleMmapLocCommand mirrors HandleMmapLocCommand (cs_mmaps.cpp:126-187,
 // RBAC 538): the grid tile location is native math; the navmesh tile
 // location has no Go bridge.
-func (s *session) handleMmapLocCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandMMapLoc) {
-		return
+func (s *session) handleMmapLocCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandMMapLoc) {
+		return false
 	}
 	s.sendSysMessage("mmap tileloc:")
 	// int32 gx = 32 - player->GetPositionX() / SIZE_OF_GRIDS (cs_mmaps.cpp:
@@ -122,19 +131,21 @@ func (s *session) handleMmapLocCommand(ctx context.Context) {
 	// cs_mmaps.cpp:140-187) has no Go bridge; report the navmesh as missing
 	// exactly like the C++ handler does (cs_mmaps.cpp:144).
 	s.sendSysMessage("NavMesh not loaded for current map.")
+	return true
 }
 
 // handleMmapPathCommand mirrors HandleMmapPathCommand (cs_mmaps.cpp:65-124,
 // RBAC 539). Documented-blocked: PathGenerator/dtNavMesh have no Go bridge.
-func (s *session) handleMmapPathCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandMMapPath) {
-		return
+func (s *session) handleMmapPathCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandMMapPath) {
+		return false
 	}
 	// The C++ handler gates on the navmesh (cs_mmaps.cpp:67-71) before
 	// printing "mmap path:" (:73), so with no navmesh loaded the output
 	// is exactly the missing report; the target-selection check is
 	// unreachable here.
 	s.sendSysMessage("NavMesh not loaded for current map.")
+	return true
 }
 
 // mmapPathfindingEnabled mirrors DisableMgr::IsPathfindingEnabled
@@ -161,9 +172,9 @@ func (s *session) mmapPathfindingEnabled(ctx context.Context, mapID uint32) bool
 // handleMmapStatsCommand mirrors HandleMmapStatsCommand (cs_mmaps.cpp:
 // 214-260, RBAC 540): the header, pathfinding, and manager-counts lines
 // are native; the per-tile navmesh stats have no Go bridge.
-func (s *session) handleMmapStatsCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandMMapStats) {
-		return
+func (s *session) handleMmapStatsCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandMMapStats) {
+		return false
 	}
 	s.sendSysMessage("mmap stats:")
 	enabled := "dis"
@@ -180,6 +191,7 @@ func (s *session) handleMmapStatsCommand(ctx context.Context) {
 	// bridge; report the navmesh as missing exactly like the C++ handler
 	// does (cs_mmaps.cpp:226).
 	s.sendSysMessage("NavMesh not loaded for current map.")
+	return true
 }
 
 // handleMmapTestAreaCommand mirrors HandleMmapTestArea (cs_mmaps.cpp:262-295,
@@ -188,13 +200,13 @@ func (s *session) handleMmapStatsCommand(ctx context.Context) {
 // AnyUnitInObjectRangeCheck terms), then one path generation per creature.
 // PathGenerator has no Go bridge, so the paths count is C++'s per-creature
 // attempt count, not computed paths.
-func (s *session) handleMmapTestAreaCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandMMapTestArea) {
-		return
+func (s *session) handleMmapTestAreaCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandMMapTestArea) {
+		return false
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	const radius = 40.0
 	start := time.Now()
@@ -229,8 +241,9 @@ func (s *session) handleMmapTestAreaCommand(ctx context.Context) {
 	}
 	if count == 0 {
 		s.sendSysMessage("No creatures in 40.000000 yard range.")
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Found %d Creatures.", count))
 	s.sendSysMessage(fmt.Sprintf("Generated %d paths in %d ms", count, time.Since(start).Milliseconds()))
+	return true
 }
