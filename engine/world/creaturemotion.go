@@ -184,9 +184,27 @@ type creatureMotion struct {
 	// ScriptMoveType is the MovementGeneratorType (MovementDefines.h)
 	// stamped by a script Move* launch: POINT 8, RANDOM 1, HOME 6,
 	// CONFUSED 4, FOLLOW 14, EFFECT 16. GetMovementType reads it only while the spline is in
-	// flight (Moving and now before MoveEnds), so no clear site is
-	// needed — a stamp past MoveEnds is never read.
+	// flight (Moving and now before MoveEnds); the prologue landing gate
+	// reads it once more at MoveEnds to dispatch the MovementInform /
+	// ReachHome arrival, then consumes the stamp.
 	ScriptMoveType uint32
+	// ScriptMovePointID is the MovePoint/MoveJump id stamped by a script
+	// launch, the MovementInform id arg (PointMovementGenerator.cpp:163
+	// passes _movementId). ScriptMoveDestX/Y/Z are the launch
+	// destination: the landing gate fires the inform only when the
+	// creature still sits on the stamped destination, so a spline
+	// superseded mid-flight (evade, fear, a fresh Lua Move*) never
+	// informs for a point it never reached.
+	ScriptMovePointID uint32
+	ScriptMoveDestX   float32
+	ScriptMoveDestY   float32
+	ScriptMoveDestZ   float32
+	// ScriptFollowInformed latches the once-per-follow MovementInform
+	// (FOLLOW_MOTION_TYPE): FollowMovementGenerator clears its
+	// INFORM_ENABLED flag after the first in-range inform
+	// (FollowMovementGenerator.cpp:98-104), so the standing branch
+	// fires once per MoveFollow assignment.
+	ScriptFollowInformed bool
 	// ScriptChaseTargetGUID/Dist/Angle are the MotionMaster::MoveChase
 	// (MotionMaster.cpp:594-602) ACTIVE-slot ChaseMovementGenerator:
 	// ChaseRange(dist) stop distance and ChaseAngle(angle, pi/4
@@ -4020,7 +4038,7 @@ const (
 // and, while in flight, temporarily overrides pursuit: C++ slot
 // priority (ACTIVE chase over DEFAULT point) is unmodeled, so the
 // tick resumes pursuit only once the spline lands.
-func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, allowDead bool) bool {
+func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -4044,6 +4062,11 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 	motion.Moving = true
 	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
 	motion.ScriptMoveType = moveType
+	motion.ScriptMovePointID = pointID
+	motion.ScriptMoveDestX = destX
+	motion.ScriptMoveDestY = destY
+	motion.ScriptMoveDestZ = destZ
+	motion.ScriptFollowInformed = false
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, walk, 0, false, phase, transportGUID)
 	return true
@@ -4067,7 +4090,7 @@ func (s *Server) launchCreatureConfusedSpline(motion *creatureMotion) bool {
 	destY := motion.Y + float32(dist*math.Sin(angle))
 	destZ := motion.Z
 	s.motionMu.Unlock()
-	if !s.launchCreatureScriptSpline(motion, destX, destY, destZ, true, movementGeneratorConfused, false) {
+	if !s.launchCreatureScriptSpline(motion, destX, destY, destZ, true, movementGeneratorConfused, 0, false) {
 		return false
 	}
 	s.motionMu.Lock()
@@ -4237,9 +4260,9 @@ func jumpParabolicParams(speedZ float32, durationMs uint32) (amplitude, vertical
 // params, and the code, not the comment, is the contract), vertical
 // profile from speedZ (the Eluna 5th arg, maxHeight). speedXY below
 // 0.01 launches nothing (MotionMaster.cpp:790). The jump takes the
-// ACTIVE slot, so it clears any chase/follow slot; its id is accepted
-// but unrecorded — the arrival arm is MovementInform EFFECT, event 28,
-// which Go never registered. No facing arm: Eluna never passes an
+// ACTIVE slot, so it clears any chase/follow slot; its id is recorded
+// on the motion (ScriptMovePointID/dest) so the prologue landing gate
+// can fire the MovementInform EFFECT arrival (event 28). No facing arm: Eluna never passes an
 // orientation (hasOrientation=false). The server snaps to the
 // destination at launch on the atomic-spline precedent; clients arc
 // through the parabolic wire flags.
@@ -4264,6 +4287,11 @@ func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, 
 	motion.MoveEnds = time.Now().Add(time.Duration(duration) * time.Millisecond)
 	motion.JumpUntil = motion.MoveEnds
 	motion.ScriptMoveType = movementGeneratorEffect
+	motion.ScriptMovePointID = id
+	motion.ScriptMoveDestX = destX
+	motion.ScriptMoveDestY = destY
+	motion.ScriptMoveDestZ = destZ
+	motion.ScriptFollowInformed = false
 	motion.ScriptChaseTargetGUID = 0
 	motion.ScriptChaseDist = 0
 	motion.ScriptChaseAngle = 0
@@ -4272,7 +4300,6 @@ func (s *Server) launchCreatureJumpSpline(motion *creatureMotion, destX, destY, 
 	motion.ScriptFollowAngle = 0
 	s.motionMu.Unlock()
 	s.broadcastMonsterMoveJumpInInstance(mapID, instanceID, rawGUID, fromX, fromY, fromZ, destX, destY, destZ, duration, verticalAccel, phase, transportGUID)
-	_ = id
 	return true
 }
 
@@ -4323,8 +4350,9 @@ func (s *Server) scriptFollowTarget(motion *creatureMotion, players []playerPos,
 // collision re-checks unmodeled); walk follows the target's walk state
 // in C++ (SetWalk(target.IsWalking())) but Go has no target-walk
 // signal, so follow runs at run speed; the in-range MovementInform
-// (FOLLOW_MOTION_TYPE) has no hook (event 28 unregistered).
-func (s *Server) stepScriptFollow(motion *creatureMotion, players []playerPos, now time.Time) bool {
+// (FOLLOW_MOTION_TYPE, event 28) fires once per follow assignment
+// (ScriptFollowInformed latch) in the standing branch below.
+func (s *Server) stepScriptFollow(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -4343,6 +4371,20 @@ func (s *Server) stepScriptFollow(motion *creatureMotion, players []playerPos, n
 	reachSum := ownerReach + tReach
 	dist := float32(distance3D(motion.X, motion.Y, motion.Z, tx, ty, tz))
 	if dist <= reachSum+motion.ScriptFollowDist+1.0 {
+		// FollowMovementGenerator::Update (FollowMovementGenerator.cpp:96-104):
+		// in range on the check timer, once per generator
+		// (INFORM_ENABLED clears after the first inform) —
+		// AI()->MovementInform(FOLLOW_MOTION_TYPE, target GUID
+		// counter), Eluna CREATURE_EVENT_ON_MOVEMENT_INFORM (28).
+		// The Go check runs every tick, so ScriptFollowInformed is
+		// the INFORM_ENABLED twin; MoveFollow clears it on
+		// assignment. The spline-finalize inform (:110-116) is the
+		// same single inform, already covered when the re-path
+		// spline lands in range on a later tick.
+		if !motion.ScriptFollowInformed {
+			motion.ScriptFollowInformed = true
+			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorFollow), uint32(targetGUID))
+		}
 		return true
 	}
 	curRel := normalizeScriptAngle(float32(math.Atan2(float64(motion.Y-ty), float64(motion.X-tx))) - tOrient)
@@ -5630,13 +5672,46 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if motion.SeekAssistPending {
 			s.finishCreatureSeekAssistance(ctx, motion, now)
 		}
-		// A script MoveHome spline landing finalizes like the
-		// HomeMovementGenerator (HomeMovementGenerator.cpp:151):
-		// AI()->JustReachedHome(), Eluna CREATURE_EVENT_ON_REACH_HOME
-		// (24). Evade-home splines never stamp ScriptMoveType, so
-		// they cannot double-fire with the evade block below.
-		if motion.ScriptMoveType == movementGeneratorHome {
-			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+		// MovementInform arrival dispatch: this gate is the single
+		// landing site — the section-3 Moving gate below never sees
+		// a landed spline, this gate clears Moving first. A script
+		// MovePoint/MoveJump spline finalizes like its C++ generator
+		// (PointMovementGenerator.cpp:153-163): AI()->MovementInform
+		// (type, id), Eluna CREATURE_EVENT_ON_MOVEMENT_INFORM (28),
+		// args (event, creature, type, id). A script MoveHome spline
+		// finalizes like the HomeMovementGenerator
+		// (HomeMovementGenerator.cpp:151): AI()->JustReachedHome(),
+		// Eluna CREATURE_EVENT_ON_REACH_HOME (24). Both arms are
+		// destination-gated: Go snaps to the launch destination, so
+		// a spline superseded mid-flight (evade, fear, a fresh Lua
+		// Move*) sits on a different position and never informs for
+		// a point it never reached. Evade-home splines never stamp
+		// ScriptMoveType, so they cannot double-fire with the evade
+		// block below. A patrol leg landing (MoveType 2, no script
+		// stamp) finalizes like WaypointMovementGenerator::OnArrived
+		// — CREATURE_EVENT_ON_REACH_WP (6) via waypointNodeArrival.
+		// The stamp is consumed on every landing so a later spline
+		// cannot re-fire it. Chase (CHASE_MOTION_TYPE) has no
+		// finalize arm here: Go's chase re-paths instead of
+		// finalizing, and no in-tree consumer needs the chase inform.
+		scriptSpline := motion.ScriptMoveType != 0
+		switch motion.ScriptMoveType {
+		case movementGeneratorPoint, movementGeneratorEffect:
+			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
+				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, motion.ScriptMoveType, motion.ScriptMovePointID)
+			}
+		case movementGeneratorHome:
+			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
+				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
+			}
+		}
+		motion.ScriptMoveType = 0
+		motion.ScriptMovePointID = 0
+		motion.ScriptMoveDestX = 0
+		motion.ScriptMoveDestY = 0
+		motion.ScriptMoveDestZ = 0
+		if !scriptSpline && motion.MoveType == 2 {
+			s.waypointNodeArrival(ctx, motion, motion.MoveEnds)
 		}
 	}
 
@@ -9691,7 +9766,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// returns false only when the target left the world and the slot
 	// cleared, letting the tick fall through to formation/wander.
 	if motion.ScriptFollowTargetGUID != 0 && !motion.InCombat {
-		if s.stepScriptFollow(motion, players, now) {
+		if s.stepScriptFollow(ctx, motion, players, now) {
 			return
 		}
 	}

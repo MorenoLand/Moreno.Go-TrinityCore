@@ -328,8 +328,11 @@ const (
 // RegisterUniqueCreatureEvent. The world engine fires these through
 // TriggerCreatureEvent; scripts use the raw event numbers. Numbering is the
 // TrinityCore LuaEngine numbering (LuaEngine/GlobalMethods.h CreatureEvents,
-// hooks fired in LuaEngine/CreatureHooks.cpp): 16-18, 25, 28-29, 32-33
-// are UNUSED in C++ and carry no Go constant. 11 is likewise unused by
+// hooks fired in LuaEngine/CreatureHooks.cpp): 16-18, 25, 29, 32-33
+// are UNUSED in C++ and carry no Go constant. 28 is likewise unused
+// in C++ Eluna; Go assigns it to CreatureEventOnMovementInform below,
+// a Go-side extension on the free slot (the DoAction-38 precedent),
+// matching the event number every in-tree "no ev28" note cites. 11 is likewise unused by
 // C++ Eluna (CreatureHooks has no heal hook); Go uses it for
 // CreatureEventOnHealReceived, a Go-side extension fired from the
 // Unit::DealHeal AI-hook arm, not a C++ Eluna event.
@@ -357,12 +360,21 @@ const (
 	CreatureEventOnReachHome               = 24
 	CreatureEventOnCorpseRemoved           = 26
 	CreatureEventOnMoveInLOS               = 27
-	CreatureEventOnDummyEffect             = 30
-	CreatureEventOnQuestAccept             = 31
-	CreatureEventOnQuestReward             = 34
-	CreatureEventOnDialogStatus            = 35
-	CreatureEventOnAdd                     = 36
-	CreatureEventOnRemove                  = 37
+	// CreatureEventOnMovementInform is the Go-side MovementInform hook
+	// (event 28, args (event, creature, type, id)): C++ motion-master
+	// generators call AI->MovementInform(type, id) on finalize, and
+	// Eluna turns WAYPOINT_MOTION_TYPE into ON_REACH_WP (6) while the
+	// other types reach this hook — POINT (8, MovePoint id),
+	// EFFECT (16, MoveJump id), FOLLOW (14, target GUID counter).
+	// CHASE (5) has no Go finalize arm (Go's chase re-paths instead
+	// of finalizing) and no in-tree consumer needs it.
+	CreatureEventOnMovementInform = 28
+	CreatureEventOnDummyEffect    = 30
+	CreatureEventOnQuestAccept    = 31
+	CreatureEventOnQuestReward    = 34
+	CreatureEventOnDialogStatus   = 35
+	CreatureEventOnAdd            = 36
+	CreatureEventOnRemove         = 37
 	// CreatureEventOnDoAction is a Go-side extension (no C++ Eluna hook):
 	// CreatureAI::DoAction dispatches through the AI virtual table, which
 	// Lua-ported AIs have no bearer for, so creature:DoAction(action) is

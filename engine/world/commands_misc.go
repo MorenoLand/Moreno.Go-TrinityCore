@@ -1038,7 +1038,7 @@ func (s *session) handleCmdComeToMe(ctx context.Context, args []string) bool {
 		return true
 	}
 	p := s.player
-	s.server.launchCreatureScriptSpline(motion, p.X, p.Y, p.Z, false, movementGeneratorPoint, true)
+	s.server.launchCreatureScriptSpline(motion, p.X, p.Y, p.Z, false, movementGeneratorPoint, 0, true)
 	return true
 }
 

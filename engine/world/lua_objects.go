@@ -416,7 +416,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	// session-creature twin of the handler binding; a motion that no
 	// longer resolves is a no-op.
 	methods["MoveTo"] = func(_ context.Context, args []any) ([]any, error) {
-		if _, err := luaUint32Arg(args, 0); err != nil {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
 			return nil, err
 		}
 		x, err := luaGenericFloat32Arg(args, 1)
@@ -432,7 +433,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			return nil, err
 		}
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
-			s.server.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, true)
+			s.server.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, id, true)
 		}
 		return nil, nil
 	}
@@ -454,7 +455,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			s.server.motionMu.Lock()
 			fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 			s.server.motionMu.Unlock()
-			s.server.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom, false)
+			s.server.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom, 0, false)
 		}
 		return nil, nil
 	}
@@ -468,7 +469,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			s.server.motionMu.Unlock()
 			if !owned {
 				s.server.clearScriptChaseFollow(motion)
-				s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, true)
+				s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, 0, true)
 			}
 		}
 		return nil, nil
@@ -568,6 +569,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			motion.ScriptFollowTargetGUID = targetGUID
 			motion.ScriptFollowDist = dist
 			motion.ScriptFollowAngle = angle
+			motion.ScriptFollowInformed = false
 			s.server.motionMu.Unlock()
 		}
 		return nil, nil

@@ -1486,6 +1486,7 @@ func (s *session) handleNPCFollow(ctx context.Context, rest []string) bool {
 	motion.ScriptFollowTargetGUID = s.playerGUID
 	motion.ScriptFollowDist = 1.0
 	motion.ScriptFollowAngle = float32(math.Pi / 2)
+	motion.ScriptFollowInformed = false
 	name := motion.Name
 	s.server.motionMu.Unlock()
 	s.sendSysMessage(fmt.Sprintf("%s is now following you.", name))

@@ -18,11 +18,11 @@
 -- bunny and the spell_oscillating_field SpellScript are
 -- documented-only (see deviations).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
--- 23 OnReset, 14 OnHitBySpell, 27 OnMoveInLineOfSight (the C++
--- overrides no KilledUnit/JustDied/DamageTaken; the SpellHit
--- phase-modulator rotation is fully ported — only the
--- MovementInform arrival-despawn leg stays out, on the missing
--- event-28 bridge).
+-- 23 OnReset, 14 OnHitBySpell, 27 OnMoveInLineOfSight, 28
+-- OnMovementInform (the C++ overrides no KilledUnit/JustDied/
+-- DamageTaken; the SpellHit phase-modulator rotation is fully
+-- ported, and the MovementInform arrival-despawn leg is ported
+-- below on the event-28 bridge).
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI in
 -- C++ arm order — the IsNihil branch runs as its own 1s speech
 -- pump, see below); melee is engine-driven in Go
@@ -75,12 +75,12 @@
 -- 5000ms-re-arm timer (Initialize() value, C++-exact), then
 -- phase 4 sets NOT_SELECTABLE and flies off +50x/+50z via
 -- MoveTo(0, ...).
--- DELTA: the MovementInform arrival leg (point 0 ->
--- DespawnOrUnsummon(1ms), zone_blades_edge_mountains.cpp:121-
--- 125) stays out — Go never registered the MovementInform
--- hook (no event 28 in scripting/runtime.go), so no hook can
--- observe the landing; the drake flies off and stays at the
--- fly-off point instead of despawning.
+-- MovementInform arrival leg PORTED (event 28, C++-exact):
+-- point 0 -> DespawnOrUnsummon(1ms)
+-- (zone_blades_edge_mountains.cpp:121-125); the fly-off
+-- MoveTo(0, ...) in nihilTick phase 4 is the only MovePoint
+-- the drake ever launches, so the id gate is the C++ point
+-- check and the type gate is POINT_MOTION_TYPE (8).
 -- bunny's SummonCreature / SummonGameObject arms stay out — the
 -- unit is unregistered (no entry constant in the C++ sources) and its
 -- IsSummonedBy player-capture has no bridge (event 19 fires on the
@@ -343,6 +343,19 @@ local function onSpellHit(_, creature, caster, spellId)
     end
 end
 
+-- C++ MovementInform (zone_blades_edge_mountains.cpp:121-125):
+-- non-POINT_MOTION_TYPE arrivals return; point 0 despawns after
+-- 1ms. POINT_MOTION_TYPE is 8 (MovementDefines.h).
+local POINT_MOTION_TYPE = 8
+local function onMovementInform(_, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if id == 0 then
+        creature:DespawnOrUnsummon(1)
+    end
+end
+
 for _, entry in ipairs(NETHER_DRAKE_ENTRIES) do
     RegisterCreatureEvent(entry, 1, onEnterCombat)
     RegisterCreatureEvent(entry, 2, onLeaveCombat)
@@ -351,4 +364,5 @@ for _, entry in ipairs(NETHER_DRAKE_ENTRIES) do
     RegisterCreatureEvent(entry, 23, onLeaveCombat)
     RegisterCreatureEvent(entry, 14, onSpellHit)
     RegisterCreatureEvent(entry, 27, onMoveInLineOfSight)
+    RegisterCreatureEvent(entry, 28, onMovementInform)
 end

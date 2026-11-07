@@ -4614,15 +4614,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	}
 	// MoveTo is UnitMethods::MoveTo (UnitMethods.h:2267-2283) =
 	// MotionMaster::MovePoint(id, x, y, z, genPath) (MotionMaster.cpp:635),
-	// via the shared script-spline launch. The id is accepted but
-	// unrecorded: its arrival arm is Eluna MovementInform
-	// (POINT_MOTION_TYPE), which Go never registered (no event 28 in
-	// scripting/runtime.go), so no hook can observe it. genPath is
-	// accepted and ignored — Go has no PathGenerator, so the spline
-	// is straight-line like every other script launch. The player
+	// via the shared script-spline launch. The id is recorded on the
+	// motion (ScriptMovePointID/dest) so the prologue landing gate can
+	// fire the MovementInform arrival (POINT_MOTION_TYPE, event 28).
+	// genPath is accepted and ignored — Go has no PathGenerator, so the
+	// spline is straight-line like every other script launch. The player
 	// surface stays out (client-driven movement).
 	methods["MoveTo"] = func(_ context.Context, args []any) ([]any, error) {
-		if _, err := luaUint32Arg(args, 0); err != nil {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
 			return nil, err
 		}
 		x, err := luaFloat32Arg(args, 1)
@@ -4637,7 +4637,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, true)
+		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, id, true)
 		return nil, nil
 	}
 	// MoveRandom is UnitMethods::MoveRandom (UnitMethods.h:2178-2198) =
@@ -4665,7 +4665,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Lock()
 		fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 		s.motionMu.Unlock()
-		s.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom, false)
+		s.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom, 0, false)
 		return nil, nil
 	}
 	// MoveHome is UnitMethods::MoveHome (UnitMethods.h:2199-2206) =
@@ -4689,7 +4689,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		// with Clear(): the ACTIVE chase/follow slots drop with the
 		// engagement.
 		s.clearScriptChaseFollow(motion)
-		s.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, true)
+		s.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, 0, true)
 		return nil, nil
 	}
 	// EnterEvadeMode is CreatureAI::EnterEvadeMode (CreatureAI.cpp:294-316,
@@ -4821,6 +4821,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.ScriptFollowTargetGUID = targetGUID
 		motion.ScriptFollowDist = dist
 		motion.ScriptFollowAngle = angle
+		motion.ScriptFollowInformed = false
 		s.motionMu.Unlock()
 		return nil, nil
 	}

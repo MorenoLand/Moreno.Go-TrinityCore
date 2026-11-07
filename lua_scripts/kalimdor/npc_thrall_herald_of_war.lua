@@ -51,11 +51,13 @@
 --   (jaina, C++ 5s) / DespawnOrUnsummon() (portal) all bridged.
 --   The reset step calls Reset() (C++ EVENT_HERALD_RESET), which
 --   re-arms MoveWaypoint and clears the scene latch + timers.
+-- MovementInform point-2 re-path PORTED (event 28, C++-exact):
+-- zone_orgrimmar.cpp:622-629 — POINT_MOTION_TYPE arrival with
+-- pointId 2 re-arms MovePath(spawnId * 10, true), ported as
+-- creature:MoveWaypoint() (the Reset arm, same call). The scene
+-- machine's own MoveTo(2, ...) at step 15 is the only MovePoint(2)
+-- thrall launches, so the id gate is the C++ point check.
 -- Unmodeled (documented-only, no bridges):
--- - The MovementInform point-2 re-path (zone_orgrimmar.cpp:622-629) —
---   POINT_MOTION_TYPE arrival has no bridge (event 28 never registered
---   in Go; ev6 is waypoint-only). The leg itself is MoveWaypoint-ready
---   once a point-motion arrival bridge exists.
 -- - The area-trigger dispatch (areatrigger_orgrimmar_herald_of_war,
 --   zone_orgrimmar.cpp:811-831: player alive + quest 13257 COMPLETE
 --   + nearest thrall within 50yd -> thrall:DoAction(0)). The fire site
@@ -362,6 +364,21 @@ local function heraldDoAction(event, creature, action)
     end)
 end
 
+-- C++ MovementInform (zone_orgrimmar.cpp:622-629): non-POINT_
+-- MOTION_TYPE arrivals return; pointId 2 re-arms the assigned
+-- path (MovePath(spawnId * 10, true)). POINT_MOTION_TYPE is 8
+-- (MovementDefines.h).
+local POINT_MOTION_TYPE = 8
+local function heraldMovementInform(_, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if pointId == 2 then
+        creature:MoveWaypoint()
+    end
+end
+
 RegisterCreatureEvent(ENTRY_HERALD, 23, heraldReset)
 RegisterCreatureEvent(ENTRY_HERALD, 4, heraldDied)
 RegisterCreatureEvent(ENTRY_HERALD, 38, heraldDoAction)
+RegisterCreatureEvent(ENTRY_HERALD, 28, heraldMovementInform)
