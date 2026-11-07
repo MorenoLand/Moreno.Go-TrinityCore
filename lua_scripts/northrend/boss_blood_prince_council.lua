@@ -182,11 +182,12 @@
 -- the 1s EVENT_BOMB_DESPAWN leg (:1018-1022) fires from the ported
 -- aura tick; see the handler comment.
 -- spell_blood_council_shadow_prison HandleDummyTick (:1300-1304,
--- EFFECT_0, aura 73001) — NOT PORTED tick 189: the gate is
--- GetTarget()->isMoving() on a prince creature (the aura is
--- DoCastSelf by the princes), and IsMoving exists only on the
--- player surface (lua_player.go:1620). Porting the 72999 cast
--- ungated would fabricate damage ticks while stationary.
+-- EFFECT_0, aura 73001) — PORTED tick 366 (shadowPrisonTick,
+-- RegisterAuraEvent 73001 / 1): moving target casts 72999 on self.
+-- Bridge: creature:IsMoving (lua_creature_events.go, Unit.h:1641
+-- twin — the tick-189 "IsMoving exists only on the player surface"
+-- blocker is closed). 72999's AddExtraDamage SpellScript leg
+-- (:1316-1324) stays out — no SpellScript bridge.
 -- valanar EVENT_SHOCK_VORTEX (:826-838) — the EMPOWERED leg
 -- DoCastSelf(SPELL_EMPOWERED_SHOCK_VORTEX 72039) +
 -- Talk(EMOTE_VALANAR_SHOCK_VORTEX 3) + Repeat(30s) is
@@ -231,9 +232,9 @@
 -- precedent now has a bridge).
 -- The 6 spell scripts join the no-SpellScript-bridge queue, the 5 aura
 -- scripts the no-AuraScript-bridge queue (except the kinetic-bomb
--- aura's periodic tick, ported tick 189 via RegisterAuraEvent; the
--- shadow-prison aura stays out — creature IsMoving unbridged, see
--- above), and
+-- aura's periodic tick, ported tick 189 via RegisterAuraEvent, and
+-- the shadow-prison aura's periodic tick, ported tick 366 via
+-- RegisterAuraEvent + the new creature:IsMoving bridge), and
 -- at_blood_prince_council_start_intro the no-AreaTrigger bridge queue
 -- (the boss_anubrekhan at_anubrekhan_entrance precedent).
 --
@@ -374,6 +375,7 @@ local SPELL_KINETIC_BOMB_TARGET = 72053
 local SPELL_SHOCK_VORTEX = 72037
 local SPELL_SHADOW_PRISON = 72998
 local SPELL_SHADOW_PRISON_DUMMY = 73001
+local SPELL_SHADOW_PRISON_DAMAGE = 72999 -- boss_blood_prince_council.cpp:1312
 
 -- entry-switched kill texts (C++ BloodPrincesBossAI::KilledUnit :505):
 -- keleseth SAY_KELESETH_KILL = 3, taldaram SAY_TALDARAM_KILL = 4,
@@ -671,6 +673,23 @@ local function kineticBombAuraTick(event, aura, target)
         bomb:RemoveAura(SPELL_KINETIC_BOMB_VISUAL)
         target:RemoveAura(SPELL_KINETIC_BOMB)
         bomb:DoAction(SPELL_KINETIC_BOMB_EXPLOSION)
+    end
+end
+
+-- C++ spell_blood_council_shadow_prison (boss_blood_prince_council.cpp:1290-1310):
+-- EFFECT_0 SPELL_AURA_PERIODIC_DUMMY. Each tick, a moving target casts
+-- the damage spell on itself (CastSpell with the aura effect as the
+-- triggered-by-aura attribution, not a triggered cast). No
+-- PreventDefaultAction in C++ — the handler returns nothing, so the
+-- default PERIODIC_DUMMY tick (a no-op in both engines) runs.
+-- Bridge: creature:IsMoving (lua_creature_events.go, Unit.h:1641 twin).
+-- DEVIATION: 72999's AddExtraDamage SpellScript leg (:1316-1324, the
+-- existing 72999 aura's EFFECT_1 amount added to the damage) is
+-- unported — no SpellScript bridge; the Lua cast reproduces the DBC
+-- damage only.
+local function shadowPrisonTick(event, aura, target)
+    if target:IsMoving() then
+        target:CastSpell(target, SPELL_SHADOW_PRISON_DAMAGE)
     end
 end
 
@@ -1070,3 +1089,4 @@ RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 9, nucleusDamageTaken)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 23, nucleusReset)
 
 RegisterAuraEvent(SPELL_KINETIC_BOMB, 1, kineticBombAuraTick)
+RegisterAuraEvent(SPELL_SHADOW_PRISON_DUMMY, 1, shadowPrisonTick)

@@ -168,14 +168,14 @@
 -- Algalon takes the first-pull intro in Lua where C++ takes the 8s one.
 -- go_celestial_planetarium_access (GameObjectScript) — no GO bridge;
 -- documented only.
--- The ten spell scripts (spell_algalon_phase_constellation /
--- spell_algalon_trigger_3_adds / spell_algalon_collapse /
--- spell_algalon_big_bang / spell_algalon_remove_phase /
--- spell_algalon_cosmic_smash / spell_algalon_cosmic_smash_damage /
--- spell_algalon_supermassive_fail) — SpellScript / AuraScript — no
--- SpellScript / AuraScript bridges; all join the no-SpellScript /
--- no-AuraScript-bridge queues. spell_algalon_phase_punch and
--- spell_algalon_black_hole_phase_shifts are PORTED below (RegisterAuraEvent
+-- The remaining spell scripts (spell_algalon_phase_constellation /
+-- spell_algalon_trigger_3_adds / spell_algalon_big_bang /
+-- spell_algalon_remove_phase / spell_algalon_cosmic_smash /
+-- spell_algalon_cosmic_smash_damage / spell_algalon_supermassive_fail)
+-- — SpellScript / AuraScript — no SpellScript / AuraScript bridges;
+-- all join the no-SpellScript / no-AuraScript-bridge queues.
+-- spell_algalon_phase_punch, spell_algalon_black_hole_phase_shifts
+-- and spell_algalon_collapse are PORTED below (RegisterAuraEvent
 -- periodic / apply / remove — the RemoveAura single-application twin
 -- covers their RemoveAurasDueToSpell legs).
 -- achievement_he_feeds_on_your_tears (OnCheck: GetData
@@ -892,3 +892,18 @@ end
 
 RegisterAuraEvent(SPELL_PHASE_PUNCH, 1, phasePunchPeriodic)
 RegisterAuraEvent(SPELL_PHASE_PUNCH, 3, phasePunchRemove)
+
+-- C++ spell_algalon_collapse (boss_algalon_the_observer.cpp:1121-1137):
+-- EFFECT_0 SPELL_AURA_PERIODIC_DUMMY. Each tick PreventDefaultAction;
+-- the target deals 1% of its max health to itself (NODAMAGE).
+-- DealDamage's default school-7 leg is the NODAMAGE twin (raw damage,
+-- no armor/absorb — the armor leg lives in the spell-ID branch of
+-- luaUnitDealDamage); CountPctFromMaxHealth is the live builder-owned
+-- read on the creature surface. The aura is cast triggered on the
+-- collapsing-star summons (algalonJustSummoned, above).
+local function collapseTick(event, aura, target)
+    target:DealDamage(target, target:CountPctFromMaxHealth(1))
+    return true
+end
+
+RegisterAuraEvent(SPELL_COLLAPSE, 1, collapseTick)

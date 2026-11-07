@@ -482,6 +482,19 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		defer s.motionMu.Unlock()
 		return []any{!motion.Moving}, nil
 	}
+	// IsMoving is Unit::isMoving (Unit.h:1641):
+	// HasUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING). The Go twin is
+	// the live spline flight (motion.Moving && now before MoveEnds,
+	// the formation.go:307 idiom); a stamp past MoveEnds is never
+	// read (creaturemotion.go:187-188). DELTA: falling / knockback
+	// have no creature model, so they read as not-moving; the
+	// player surface already carries its own IsMoving
+	// (lua_player.go:1732) from the session movement flags.
+	methods["IsMoving"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return []any{motion.Moving && time.Now().Before(motion.MoveEnds)}, nil
+	}
 	// GetClassAsString/GetRaceAsString/GetControllerGUID/
 	// GetControllerGUIDS mirror the session-creature twins in
 	// lua_objects.go: ChrClasses Name[locale] for the motion's
