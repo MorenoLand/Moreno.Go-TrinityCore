@@ -2312,6 +2312,48 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{false}, nil
 	}
+	// IsEscorted is Creature::IsEscorted (Creature.cpp:3446's
+	// AI()->IsEscorted() leg): ScriptedEscortAI::IsEscorted()
+	// (ScriptedEscortAI.h:58) is the escort-player GUID non-empty;
+	// the base CreatureAI returns false.
+	methods["IsEscorted"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		escorted := motion.IsEscorted()
+		s.motionMu.Unlock()
+		return []any{escorted}, nil
+	}
+	// StartEscort is the ScriptedEscortAI::Start producer: it arms the
+	// escort-player GUID the IsEscorted gate reads. The waypoint
+	// machine itself is unported, so this only arms the escort state
+	// the respawn-block exemption (Map.cpp:3066) consumes; the engage
+	// home leg (Creature.cpp:3446) has no AtEngage fire site in Go.
+	methods["StartEscort"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		playerGUID, ok := objectUint64Field(target, "GUID")
+		if !ok || playerGUID == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		s.motionMu.Lock()
+		motion.EscortPlayerGUID = playerGUID
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// StopEscort clears the escort-player GUID when the escort ends
+	// (quest complete/fail, waypoint end): the escort AI object dies
+	// with the escort in C++, so in Go the state needs an explicit
+	// clear — respawn also clears it (kill.go).
+	methods["StopEscort"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		motion.EscortPlayerGUID = 0
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// GetLootRecipient is CreatureMethods::GetLootRecipient: the tapping
 	// player object, nil when untapped (Eluna::Push((Player*)nullptr)).
 	// Handler-surface twin of the session binding (lua_objects.go:990).

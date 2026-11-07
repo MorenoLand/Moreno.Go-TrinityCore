@@ -88,7 +88,10 @@
 -- joins the no-SpellScript-bridge queue).
 -- spell_krystallus_shatter_effect (SpellScriptLoader: OnHit
 -- CalculateDamage — radius-scaled SetHitDamage via CalcRadius —
--- no SpellScript bridge; joins the no-SpellScript-bridge queue).
+-- PORTED 2026-11-07 (tick 372) for the creature-caster leg via the
+-- pre-damage OnHit dispatch in engine/world/spell_onhit.go; the
+-- stoned-player caster leg is open — a stoned player routes through
+-- the session cast pipeline, which has no dispatch yet).
 
 local ENTRY_KRYSTALLUS = 27977
 

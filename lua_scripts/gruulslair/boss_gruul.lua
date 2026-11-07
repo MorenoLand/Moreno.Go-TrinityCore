@@ -65,10 +65,15 @@
 -- knock back 24199) — Go reports the cast target (Gruul himself on
 -- the self-cast) while C++ iterates the actual AoE hit players, so the
 -- player-gated arm would never fire faithfully. The two
--- SpellScripts are unmodeled (standing SpellScript gap):
+-- SpellScripts are unmodeled (standing SpellScript gap), except the
+-- shatter-effect damage leg:
 -- spell_gruul_shatter (33525-hit -> RemoveAurasDueToSpell(stoned
 -- 33652) + triggered 33671 shatter effect) and spell_gruul_
--- shatter_effect (distance-scaled 33671 damage).
+-- shatter_effect (distance-scaled 33671 damage — PORTED 2026-11-07
+-- (tick 372) for the creature-caster leg via the pre-damage OnHit
+-- dispatch in engine/world/spell_onhit.go; the stoned-player caster
+-- leg is open — a stoned player routes through the session cast
+-- pipeline, which has no dispatch yet).
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (the
 -- BossAI::JustEngagedWith/JustDied/Reset DATA_GRUUL SetBossState

@@ -101,8 +101,10 @@
 
 -- spell_loken_pulsing_shockwave (SpellScript OnEffectHitTarget
 -- CalculateDamage: damage *= distance2d when > 1.0f,
--- SPELL_PULSING_SHOCKWAVE 52961 EFFECT_0) — no SpellScript bridge;
--- joins the no-SpellScript-bridge queue.
+-- SPELL_PULSING_SHOCKWAVE 52961 EFFECT_0) — PORTED 2026-11-07 (tick
+-- 372): the pre-damage OnHit dispatch in engine/world/spell_onhit.go
+-- (spellScriptOnHitDamage) rewrites the hit damage in the
+-- creature-caster damage arms; the cast itself was already ported.
 
 local ENTRY_LOKEN = 28923
 

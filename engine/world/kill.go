@@ -1201,6 +1201,9 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
 				s.server.motionMu.Lock()
 				motion.TapPlayerGUID, motion.TapGroupID = 0, 0
+				// Same escort-state clear as the world path above: the
+				// respawned incarnation is not escorting.
+				motion.EscortPlayerGUID = 0
 				motion.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
 				flags := motion.DynamicFlags
 				s.server.motionMu.Unlock()
@@ -2099,24 +2102,24 @@ func dynamicRespawnScalingDelay(delay uint32, rate float64, minimum uint32, play
 }
 
 // dynamicModeRespawnDelay mirrors Map::ApplyDynamicModeRespawnScaling
-// (Map.cpp:3333-3361) for creatures: it runs only when Respawn.
-// DynamicMode is 1 (World.cpp:1319, default 0), never on battleground or
-// arena maps, and only for spawns whose group carries SPAWNGROUP_FLAG_
-// DYNAMIC_SPAWN_RATE. The zone player count is the live session count on
-// this (map, instance, zone) — the Go twin of Map::_zonePlayerCountMap
-// (Map.cpp:760-764, maintained on every player zone change); the
-// creature's zone comes from its spawn position via zoneAndAreaID. The
-// gameobject leg has no call site: Go tracks no gameobject respawns
-// (spawn_groups.go). The count runs only on the flagged+enabled path, so
-// the default-off mode costs nothing per kill.
-func (s *Server) dynamicModeRespawnDelay(ctx context.Context, mapID, instanceID, spawnID uint32, x, y, z float32, delay uint32) uint32 {
+// (Map.cpp:3333-3361): it runs only when Respawn.DynamicMode is 1
+// (World.cpp:1319, default 0), never on battleground or arena maps, and
+// only for spawns whose group carries SPAWNGROUP_FLAG_DYNAMIC_SPAWN_RATE.
+// The zone player count is the live session count on this (map, instance,
+// zone) — the Go twin of Map::_zonePlayerCountMap (Map.cpp:760-764,
+// maintained on every player zone change); the spawn's zone comes from
+// its spawn position via zoneAndAreaID. The rate/minimum pair is per
+// spawn type (Map.cpp:3340-3347): creature keys for creatures, gameobject
+// keys for gameobjects. The count runs only on the flagged+enabled path,
+// so the default-off mode costs nothing per kill.
+func (s *Server) dynamicModeRespawnDelay(ctx context.Context, spawnType uint8, mapID, instanceID, spawnID uint32, x, y, z float32, delay uint32) uint32 {
 	if s == nil || s.Config.RespawnDynamicMode != 1 || isBattlegroundMap(mapID) {
 		return delay
 	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return delay
 	}
-	_, tmpl, ok := s.spawnGroupOfMember(ctx, s.WorldStore.DB, spawnTypeCreature, spawnID, mapID, instanceID)
+	_, tmpl, ok := s.spawnGroupOfMember(ctx, s.WorldStore.DB, spawnType, spawnID, mapID, instanceID)
 	if !ok || tmpl == nil || tmpl.Flags&spawnGroupFlagDynamicSpawnRate == 0 {
 		return delay
 	}
@@ -2132,7 +2135,11 @@ func (s *Server) dynamicModeRespawnDelay(ctx context.Context, mapID, instanceID,
 		}
 	}
 	s.sessionsMu.RUnlock()
-	return dynamicRespawnScalingDelay(delay, s.Config.RespawnDynamicRateCreature, uint32(s.Config.RespawnDynamicMinimumCreature), playerCount)
+	rate, minimum := s.Config.RespawnDynamicRateCreature, uint32(s.Config.RespawnDynamicMinimumCreature)
+	if spawnType == spawnTypeGameObject {
+		rate, minimum = s.Config.RespawnDynamicRateGameObject, uint32(s.Config.RespawnDynamicMinimumGameObject)
+	}
+	return dynamicRespawnScalingDelay(delay, rate, minimum, playerCount)
 }
 
 // scheduleCreatureRespawn stores spawn health to restore after
@@ -2175,7 +2182,7 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	// runs on the effective delay — after the SetRespawnDelay override
 	// above and the 300s default. C++ scales m_respawnDelay, which the
 	// override already replaced; a 0 delay scales to itself.
-	seconds = int64(s.dynamicModeRespawnDelay(ctx, uint32(mapID), 0, guid, float32(x), float32(y), float32(z), uint32(seconds)))
+	seconds = int64(s.dynamicModeRespawnDelay(ctx, spawnTypeCreature, uint32(mapID), 0, guid, float32(x), float32(y), float32(z), uint32(seconds)))
 	// Creature::RemoveCorpse (Creature.cpp:393/429) is the sole
 	// CREATURE_EVENT_ON_CORPSE_REMOVED (26) fire site; it now fires from
 	// processCreatureCorpseRemovals at removal time, not here. The
@@ -2281,7 +2288,7 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 		seconds = 300
 	}
 	// Map::ApplyDynamicModeRespawnScaling, same as the world path above.
-	seconds = int64(s.dynamicModeRespawnDelay(ctx, target.Map, target.InstanceID, guid, float32(x), float32(y), float32(z), uint32(seconds)))
+	seconds = int64(s.dynamicModeRespawnDelay(ctx, spawnTypeCreature, target.Map, target.InstanceID, guid, float32(x), float32(y), float32(z), uint32(seconds)))
 	// Corpse-removed hook and DealDamage pickpocket arm: same as the
 	// world path above (Creature::RemoveCorpse; Unit.cpp:11376-11381).
 	corpseDelay := s.creatureCorpseDelaySeconds(ctx, uint32(spawnEntry))
@@ -2552,6 +2559,29 @@ func (s *Server) checkRespawnLinkedDeferral(ctx context.Context, respawn creatur
 	return time.Time{}, false, false
 }
 
+// IsEscorted mirrors CreatureAI::IsEscorted via ScriptedEscortAI
+// (ScriptedEscortAI.h:58): the escort-player GUID is non-empty.
+func (m *creatureMotion) IsEscorted() bool {
+	return m != nil && m.EscortPlayerGUID != 0
+}
+
+// escortRespawnExempt mirrors the escort arm of Map::CheckRespawn
+// (Map.cpp:3066-3072): with CONFIG_RESPAWN_DYNAMIC_ESCORTNPC set and
+// SPAWNGROUP_FLAG_ESCORTQUESTNPC on the spawn's group, a live instance
+// that IsEscorted() does not block the respawn — escort NPCs may
+// respawn while all other instances are already escorting. A live
+// instance that is not escorting still blocks.
+func (s *Server) escortRespawnExempt(ctx context.Context, spawnID, mapID, instanceID uint32, liveEscorted bool) bool {
+	if s == nil || !s.Config.RespawnDynamicEscortNPC || !liveEscorted {
+		return false
+	}
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return false
+	}
+	_, tmpl, ok := s.spawnGroupOfMember(ctx, s.WorldStore.DB, spawnTypeCreature, spawnID, mapID, instanceID)
+	return ok && tmpl != nil && tmpl.Flags&spawnGroupFlagEscortQuestNPC != 0
+}
+
 func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
@@ -2599,14 +2629,20 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			// CheckRespawn order: the alive-instance arm runs before the linked
 			// arm. An alive instance deletes the respawn (respawnTime = 0),
 			// so a live creature is never reset to spawn health/position
-			// here; the escort exception needs IsEscorted + spawn-group flag
-			// data Go does not track, so it stays unmodeled.
+			// here — unless the escort exemption applies (Map.cpp:3066),
+			// in which case the respawn proceeds alongside the escorting
+			// instance.
 			s.motionMu.Lock()
 			alive := false
+			escorted := false
 			if m := s.findCreatureMotionLocked(respawn.Map, 0, rawGUID); m != nil && m.Health > 0 {
 				alive = true
+				escorted = m.IsEscorted()
 			}
 			s.motionMu.Unlock()
+			if alive && s.escortRespawnExempt(ctx, respawn.GUID, respawn.Map, respawn.InstanceID, escorted) {
+				alive = false
+			}
 			if alive {
 				s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)
 				continue
@@ -2652,6 +2688,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				// Creature::JUST_RESPAWNED (Creature.cpp:2121-2125):
 				// SetLootRecipient(nullptr) + ResetPlayerDamageReq().
 				motion.TapPlayerGUID, motion.TapGroupID = 0, 0
+				// Creature::Respawn re-inits from the DB row (fresh C++
+				// Creature): the escort-player GUID dies with the old
+				// incarnation, so a respawned escort NPC is not escorting
+				// until an escort starts again.
+				motion.EscortPlayerGUID = 0
 				motion.PlayerDamageReq = respawn.Health / 2
 			}
 			s.motionMu.Unlock()
@@ -2685,7 +2726,11 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 		s.motionMu.Lock()
 		motion := s.findCreatureMotionLocked(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))
 		alive := motion != nil && motion.Health > 0
+		escorted := motion != nil && motion.IsEscorted()
 		s.motionMu.Unlock()
+		if alive && s.escortRespawnExempt(ctx, respawn.GUID, respawn.Map, respawn.InstanceID, escorted) {
+			alive = false
+		}
 		if alive {
 			s.deleteCreatureRespawnRow(ctx, respawn.GUID, respawn.Map, respawn.InstanceID)
 			continue

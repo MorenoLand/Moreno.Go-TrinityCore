@@ -65,9 +65,11 @@
 -- half IS ported via the 1s meleerange poll (see meleeRangeTick).
 -- spell_murmur_sonic_boom (33923 → CastSpell(33666) triggered),
 -- spell_murmur_sonic_boom_effect (33666 damage = 80% of target max
--- health), spell_murmur_thundering_storm (25-100y target band) —
--- all SpellScript — no SpellScript bridge (instance_ulduar
--- precedent) — documented-only.
+-- health — PORTED 2026-11-07 (tick 372) via the pre-damage OnHit
+-- dispatch in engine/world/spell_onhit.go),
+-- spell_murmur_thundering_storm (25-100y target band) —
+-- SpellScript — no SpellScript bridge (instance_ulduar
+-- precedent) — documented-only, except the 33666 damage leg above.
 
 local ENTRY_MURMUR = 18708 -- DB-side; no NPC_MURMUR in shadow_labyrinth.h
 

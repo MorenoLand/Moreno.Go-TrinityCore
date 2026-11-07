@@ -526,6 +526,15 @@ type creatureMotion struct {
 	// the group half feeds the group loot-permission check.
 	TapPlayerGUID uint64
 	TapGroupID    uint64
+	// EscortPlayerGUID is the ScriptedEscortAI escort-player twin
+	// (ScriptedEscortAI.h:58): the player GUID set when an escort
+	// starts, empty while no escort runs. CreatureAI::IsEscorted()
+	// is false at base — only the escort AI sets it — so this field
+	// is the IsEscorted() producer Go was missing; the waypoint
+	// machine itself is unported, so the state is armed by the
+	// StartEscort bridge and consumed by the respawn-block exemption
+	// (Map.cpp:3066) and the engage home (Creature.cpp:3446).
+	EscortPlayerGUID uint64
 	// PlayerDamageReq mirrors Creature::m_PlayerDamageReq
 	// (Creature.h:322-325): MaxHealth/2 at spawn, lowered by every
 	// player-attributed hit (Creature::LowerPlayerDamageReq,

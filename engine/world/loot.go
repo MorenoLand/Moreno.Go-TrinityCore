@@ -4059,6 +4059,13 @@ func (s *session) despawnFullyLootedChestOrGoober(goState *dynamicGameObjectStat
 	if respawnDelay <= 0 {
 		return
 	}
+	// Map::ApplyDynamicModeRespawnScaling, gameobject leg
+	// (GameObject.cpp:859, Map.cpp:3333-3361): the fully-looted respawn
+	// reads m_respawnDelayTime, which the script override above already
+	// replaced, and scales it by the zone player count when the spawn's
+	// group carries SPAWNGROUP_FLAG_DYNAMIC_SPAWN_RATE — the
+	// gameobject rate/minimum pair, not the creature pair.
+	respawnDelay = int64(srv.dynamicModeRespawnDelay(ctx, spawnTypeGameObject, goState.Map, goState.InstanceID, lowGUID, goState.X, goState.Y, goState.Z, uint32(respawnDelay)))
 	time.AfterFunc(time.Duration(respawnDelay)*time.Second, func() {
 		srv.setGameObjectHiddenInInstance(goState.Map, goState.InstanceID, goState.GUID, false)
 	})
