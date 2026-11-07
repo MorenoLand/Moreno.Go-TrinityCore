@@ -570,19 +570,157 @@ func (s *session) executeCommand(ctx context.Context, line string) bool {
 }
 
 func (s *session) handleCmdHelp(args []string) {
+	s.sendCommandHelpFor(args)
+}
+
+// sendCommandHelpFor mirrors Trinity::ChatCommands::SendCommandHelpFor
+// (ChatCommand.cpp:322-500): the raw tail is walked token by token
+// through the command tree with case-insensitive prefix matching (an
+// exact name wins over partial matches, as in resolve). A token with
+// no match at the top level is LANG_CMD_INVALID; below a matched
+// parent the parent's help prints first, then LANG_SUBCMD_INVALID; a
+// token matching several names prints the ambiguity list; a fully
+// resolved path prints that node's help. An empty tail lists the
+// top-level commands and then the help for "help" itself, as
+// HandleHelpCommand does (cs_misc.cpp:695-703). The Go tree carries
+// no per-node help text or permission mapping, so every node prints
+// the generic header + no-help line and the full tree is listed
+// (same documented gap as handleCmdCommands); LANG wordings are
+// plain-English recalls (no TDB seed in-tree).
+func (s *session) sendCommandHelpFor(args []string) {
+	tree := s.buildCommandTree()
+	if len(args) == 0 {
+		s.sendTopLevelCommandList()
+		if helpNode := tree.children["help"]; helpNode != nil {
+			s.sendCommandHelp(helpNode)
+		}
+		return
+	}
+	node := tree
+	var path []string
+	for _, token := range args {
+		matches := commandNodePrefixMatches(node, token)
+		if len(matches) == 0 {
+			if len(path) == 0 {
+				s.sendSysMessage(fmt.Sprintf("%s is not a valid command.", token))
+			} else {
+				s.sendCommandHelp(node)
+				s.sendSysMessage(fmt.Sprintf("%s is not a valid subcommand of %s.", token, strings.Join(path, " ")))
+			}
+			return
+		}
+		if len(matches) > 1 {
+			s.sendSysMessage("There are multiple commands matching '" + strings.ToLower(token) + "'. Did you mean:")
+			for _, candidate := range matches {
+				s.sendSysMessage(candidate)
+			}
+			return
+		}
+		child := node.children[matches[0]]
+		if child == nil {
+			return
+		}
+		node = child
+		path = append(path, matches[0])
+	}
+	s.sendCommandHelp(node)
+}
+
+// commandNodePrefixMatches mirrors the FilteredCommandListIterator
+// prefix match in SendCommandHelpFor (ChatCommand.cpp:322-500) and the
+// matching arm of resolve: children whose name starts with the token
+// (case-insensitive), plus an alias target, with an exact name
+// winning over partial matches. Candidates come back sorted, as the
+// ambiguity list prints them.
+func commandNodePrefixMatches(node *commandNode, token string) []string {
+	if node == nil {
+		return nil
+	}
+	lower := strings.ToLower(token)
+	matches := make([]string, 0, 2)
+	for name := range node.children {
+		if strings.HasPrefix(name, lower) {
+			matches = append(matches, name)
+		}
+	}
+	if target, ok := node.aliases[lower]; ok {
+		duplicate := false
+		for _, existing := range matches {
+			if existing == target {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			matches = append(matches, target)
+		}
+	}
+	for _, candidate := range matches {
+		if candidate == lower {
+			return []string{candidate}
+		}
+	}
+	sort.Strings(matches)
+	return matches
+}
+
+// sendCommandHelp mirrors ChatCommandNode::SendCommandHelp
+// (ChatCommand.cpp:172-208) for a resolved node: the node's help
+// text, or the generic header + no-help line when the tree stores
+// none, followed by the visible-subcommand list (an entry takes the
+// "..." suffix when the subcommand itself has subcommands).
+func (s *session) sendCommandHelp(node *commandNode) {
+	if node == nil {
+		return
+	}
+	s.sendSysMessage(fmt.Sprintf("Command: %s", node.name))
+	s.sendSysMessage(fmt.Sprintf("No help available for command '%s'.", node.name))
+	if len(node.children) == 0 {
+		return
+	}
+	s.sendSysMessage("Available subcommands:")
+	subs := make([]string, 0, len(node.children))
+	for sub := range node.children {
+		subs = append(subs, sub)
+	}
+	sort.Strings(subs)
+	for _, sub := range subs {
+		line := "    " + sub
+		if len(node.children[sub].children) > 0 {
+			line += " ..."
+		}
+		s.sendSysMessage(line)
+	}
+}
+
+// sendTopLevelCommandList renders the empty-tail arm of
+// SendCommandHelpFor (ChatCommand.cpp:322-500): LANG_AVAILABLE_CMDS
+// plus one line per top-level command, in the ".name sub1|sub2" form
+// handleCmdCommands established. Shared by .commands and bare .help.
+func (s *session) sendTopLevelCommandList() {
+	tree := s.buildCommandTree()
+	if tree == nil {
+		return
+	}
+	names := make([]string, 0, len(tree.children))
+	for name := range tree.children {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	s.sendSysMessage("=== Available Commands ===")
-	s.sendSysMessage(".gm on|off|chat|fly|visible|ingame|list - Toggle GM modes")
-	s.sendSysMessage(".tele <name> - Teleport to location")
-	s.sendSysMessage(".go creature|gameobject|graveyard|grid|taxinode|areatrigger|zonexy|xyz|ticket|offset|instance|boss ... - Teleport commands")
-	s.sendSysMessage(".modify hp|mana|speed|fly|scale|money|level <val>")
-	s.sendSysMessage(".additem <itemId> [count] - Add item to inventory")
-	s.sendSysMessage(".learn <spellId> | .unlearn <spellId> - Manage spells")
-	s.sendSysMessage(".cast <spellId> [triggered] - Cast a spell at the selected unit")
-	s.sendSysMessage(".cheat god|casttime|cooldown|power|waterwalk|status|taxi|explore - Toggle cheat flags")
-	s.sendSysMessage(".lookup item|spell|creature|tele|quest <name>")
-	s.sendSysMessage(".server info|motd - Server status and info")
-	s.sendSysMessage(".character level|rename|customize|changefaction|changerace")
-	s.sendSysMessage(".account addon|email|password|lock ... | .account set gmlevel|addon|password|sec ...")
+	for _, name := range names {
+		node := tree.children[name]
+		subs := make([]string, 0, len(node.children))
+		for sub := range node.children {
+			subs = append(subs, sub)
+		}
+		sort.Strings(subs)
+		line := "." + name
+		if len(subs) > 0 {
+			line += " " + strings.Join(subs, "|")
+		}
+		s.sendSysMessage(line)
+	}
 }
 
 // gmVisualAura is the VISUAL_AURA spell id applied while GM-invisible

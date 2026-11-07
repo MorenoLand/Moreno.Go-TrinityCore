@@ -317,15 +317,54 @@ func (s *session) sendAddItemPushResult(target *session, res *inventoryStoreResu
 	}
 }
 
-// destroyPlayerItemCount mirrors Player::DestroyItemCount (Player.cpp): it
-// removes up to count items of entry from the target's item_instance rows
-// (inventory, bank and bags alike) and returns how many were destroyed.
+// destroyItemCountSlotRank orders a (bag, slot) pair by the victim
+// order of Player::DestroyItemCount (Player.cpp:12727): backpack
+// items (23-38), keyring/currency (86-149), inventory-bag contents
+// (bags 19-22), equipment + bag items (0-22), bank items (39-66),
+// bank-bag contents (bags 67-73). Buyback slots 74-85 never appear
+// here — C++ never visits them (Player.h: BuyBackSlots).
+func destroyItemCountSlotRank(bag, slot uint32) int {
+	if bag == 0 {
+		switch {
+		case slot >= 23 && slot < 39:
+			return 0
+		case slot >= 86 && slot < 150:
+			return 1
+		case slot < 23:
+			return 3
+		case slot >= 39 && slot < 67:
+			return 4
+		}
+		return 6
+	}
+	if bag >= 19 && bag < 23 {
+		return 2
+	}
+	if bag >= 67 && bag < 74 {
+		return 5
+	}
+	return 6
+}
+
+// destroyPlayerItemCount mirrors Player::DestroyItemCount
+// (Player.cpp:12727-12906): it removes up to count items of entry
+// from the target's inventory in C++ victim order and returns
+// remcount — the count destroyed by whole-stack DestroyItem legs
+// ONLY. A partial-stack leg removes (count - remcount) from its
+// stack but returns the remcount accumulated so far, so a
+// single-stack partial destroy returns 0 and the caller reports
+// REMOVEITEM_FAILURE for the full count despite the destroy
+// (the C++ quirk, ported verbatim). Scope is the C++ one: inventory,
+// keyring, bags, equipment and bank — the character_inventory join
+// excludes buyback slots 74-85 and rows with no inventory slot
+// (mail/auction/guild-bank items C++ never visits). In-trade items
+// have no Go marker (C++ skips IsInTrade items; documented gap).
 func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64, itemEntry uint32, count uint32) uint32 {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || count == 0 {
 		return 0
 	}
 	db := s.server.CharactersStore.DB
-	rows, err := db.QueryContext(ctx, "SELECT guid, `count` FROM item_instance WHERE owner_guid = ? AND itemEntry = ? ORDER BY guid", targetGUID, itemEntry)
+	rows, err := db.QueryContext(ctx, "SELECT ci.item, ii.`count`, ci.bag, ci.slot FROM item_instance ii JOIN character_inventory ci ON ci.item = ii.guid AND ci.guid = ii.owner_guid WHERE ii.owner_guid = ? AND ii.itemEntry = ? AND NOT (ci.bag = 0 AND ci.slot >= 74 AND ci.slot <= 85)", targetGUID, itemEntry)
 	if err != nil {
 		return 0
 	}
@@ -333,28 +372,34 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 	type inst struct {
 		guid  uint64
 		count uint32
+		bag   uint32
+		slot  uint32
 	}
 	var items []inst
 	for rows.Next() {
 		var it inst
-		var c uint32
-		if err := rows.Scan(&it.guid, &c); err != nil {
+		if err := rows.Scan(&it.guid, &it.count, &it.bag, &it.slot); err != nil {
 			continue
 		}
-		it.count = c
 		items = append(items, it)
 	}
 	_ = rows.Close()
-	var destroyed uint32
+	sort.Slice(items, func(i, j int) bool {
+		ri, rj := destroyItemCountSlotRank(items[i].bag, items[i].slot), destroyItemCountSlotRank(items[j].bag, items[j].slot)
+		if ri != rj {
+			return ri < rj
+		}
+		if items[i].bag != items[j].bag {
+			return items[i].bag < items[j].bag
+		}
+		return items[i].slot < items[j].slot
+	})
+	var remcount uint32
 	for _, it := range items {
-		if destroyed >= count {
+		if remcount >= count {
 			break
 		}
-		take := it.count
-		if destroyed+take > count {
-			take = count - destroyed
-		}
-		if take >= it.count {
+		if it.count+remcount <= count {
 			// Player::DestroyItemCount (Player.cpp:12727) funnels whole-stack
 			// removals through DestroyItem, so OnItemRemove fires; partial
 			// decrements never reach DestroyItem and fire nothing. The
@@ -369,12 +414,18 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 			// A fully-destroyed item drops its persisted container loot
 			// (LootItemStorage::RemoveStoredLootForContainer).
 			s.server.removeStoredContainerLoot(ctx, it.guid)
+			remcount += it.count
+			if remcount >= count {
+				return remcount
+			}
 		} else {
-			_, _ = db.ExecContext(ctx, "UPDATE item_instance SET `count` = `count` - ? WHERE guid = ?", take, it.guid)
+			// Partial-stack leg: remove only what is still owed and
+			// return the whole-stack remcount so far (C++ quirk above).
+			_, _ = db.ExecContext(ctx, "UPDATE item_instance SET `count` = `count` - ? WHERE guid = ?", count-remcount, it.guid)
+			return remcount
 		}
-		destroyed += take
 	}
-	return destroyed
+	return remcount
 }
 
 // handleAddItemSetCommand mirrors HandleAddItemSetCommand
@@ -760,10 +811,45 @@ func (s *session) handleCmdBindSight(ctx context.Context, args []string) {
 	s.castSpellDirect(ctx, 6277, target.playerGUID)
 }
 
+// miscIsPossessing mirrors Unit::isPossessing (Unit.cpp:6415-6419):
+// the player has a charmed unit that is possessed — a live
+// MOD_POSSESS / MOD_POSSESS_PET creature aura cast by the player on
+// the player's map instance. Scan mirrors hasCharmedCreature
+// (lfg.go), which covers only the MOD_CHARM/AOE_CHARM legs.
+func (s *session) miscIsPossessing() bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return false
+	}
+	s.server.auraMu.Lock()
+	defer s.server.auraMu.Unlock()
+	for key, auras := range s.server.activeCreatureAuras {
+		if key.Map != s.player.Map || key.InstanceID != s.player.InstanceID {
+			continue
+		}
+		for _, aura := range auras {
+			if aura == nil {
+				continue
+			}
+			if aura.CasterGUID == s.playerGUID && (aura.AuraType == spellAuraModPossess || aura.AuraType == spellAuraModPossessPet) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // handleCmdUnBindSight mirrors HandleUnbindSightCommand
-// (cs_misc.cpp:2555-2564, RBAC 530): stop bind sight unless possessing.
-// Possession state has no Go model, so the isPossessing gate is moot
-// (documented gap).
+// (cs_misc.cpp:2555-2564, RBAC 530): a possessing player cannot
+// unbind sight (C++ returns false, silently in Go); otherwise
+// Player::StopCastingBindSight (Player.cpp:24605-24616) removes the
+// BIND_SIGHT / MOD_POSSESS / MOD_POSSESS_PET auras cast by the
+// invoker from the viewpoint target (PLAYER_FARSIGHT) — not from the
+// invoker themself, and nothing at all with no viewpoint. The
+// bind-sight aura's remove leg clears the caster's FarsightGUID
+// (removeAuraWithMode, spells.go); the creature leg has no such
+// bridge, and creature bindsight is unreachable in Go
+// (handleCmdBindSight blocks creature targets), so that leg is
+// defensive only.
 func (s *session) handleCmdUnBindSight(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -772,7 +858,25 @@ func (s *session) handleCmdUnBindSight(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandUnBindSight) {
 		return
 	}
-	s.removeAura(6277)
+	if s.miscIsPossessing() {
+		return
+	}
+	targetGUID := s.player.FarsightGUID
+	if targetGUID == 0 {
+		return
+	}
+	if target := s.server.playerSessionForGUID(targetGUID); target != nil {
+		target.removeAurasByTypeFromCaster(spellAuraBindSight, s.playerGUID)
+		target.removeAurasByTypeFromCaster(spellAuraModPossess, s.playerGUID)
+		target.removeAurasByTypeFromCaster(spellAuraModPossessPet, s.playerGUID)
+		return
+	}
+	if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraBindSight, s.playerGUID)
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraModPossess, s.playerGUID)
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraModPossessPet, s.playerGUID)
+	}
 }
 
 // handleCmdCombatStop mirrors HandleCombatStopCommand (cs_misc.cpp:2263-2290,
@@ -844,29 +948,7 @@ func (s *session) handleCmdCommands(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandCommands) {
 		return
 	}
-	tree := s.buildCommandTree()
-	if tree == nil {
-		return
-	}
-	names := make([]string, 0, len(tree.children))
-	for name := range tree.children {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	s.sendSysMessage("=== Available Commands ===")
-	for _, name := range names {
-		node := tree.children[name]
-		subs := make([]string, 0, len(node.children))
-		for sub := range node.children {
-			subs = append(subs, sub)
-		}
-		sort.Strings(subs)
-		line := "." + name
-		if len(subs) > 0 {
-			line += " " + strings.Join(subs, "|")
-		}
-		s.sendSysMessage(line)
-	}
+	s.sendTopLevelCommandList()
 }
 
 // handleCmdCooldown mirrors HandleCooldownCommand (cs_misc.cpp:723-760, RBAC

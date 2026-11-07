@@ -2183,7 +2183,14 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 			}
 		}
 		s.sendSysMessage(fmt.Sprintf(miscSummoning, miscPlayerLink(name), ""))
-		target.sendSysMessage(fmt.Sprintf(miscSummonedBy, miscPlayerLink(s.player.Name)))
+		// needReportToTarget (Chat.cpp:754-758, commands_tele.go
+		// precedent): the target is told only when the invoker is
+		// visible globally for them — an invisible GM summoning leaks
+		// no presence. The invoker != target leg is already enforced
+		// above (miscCantTeleportSelf).
+		if isVisibleGloballyFor(target, s) {
+			target.sendSysMessage(fmt.Sprintf(miscSummonedBy, miscPlayerLink(s.player.Name)))
+		}
 		// C++ stops the GM's flight (not the target's) or saves the GM's
 		// recall position (cs_misc.cpp:570-574, mirrored as written).
 		if s.isInFlight() {

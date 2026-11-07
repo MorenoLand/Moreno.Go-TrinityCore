@@ -7193,6 +7193,27 @@ func (s *session) removeAurasByType(auraType uint32) {
 	}
 }
 
+// removeAurasByTypeFromCaster is the caster-filtered twin of
+// removeAurasByType (Unit::RemoveAurasByType(auraType, casterGUID),
+// Unit.cpp:3884): only auras of the type cast by casterGUID come off,
+// so one GM's unbindsight never strips another caster's aura.
+func (s *session) removeAurasByTypeFromCaster(auraType uint32, casterGUID uint64) {
+	if s == nil || s.player == nil {
+		return
+	}
+	var ids []uint32
+	s.castMu.Lock()
+	for _, aura := range s.activeAuras {
+		if aura != nil && aura.AuraType == auraType && aura.CasterGUID == casterGUID {
+			ids = append(ids, aura.SpellID)
+		}
+	}
+	s.castMu.Unlock()
+	for _, id := range ids {
+		s.removeAura(id)
+	}
+}
+
 // removeFakeDeath mirrors the feign-death strip repeated across the C++
 // handlers (AuctionHouseHandler.cpp:52-53, ItemHandler.cpp:398,
 // BankHandler.cpp:56-57): a player faking death — UNIT_STATE_DIED, which the
@@ -44153,6 +44174,29 @@ func (s *Server) removeCreatureAurasByType(key creatureAuraKey, auraType uint32)
 	if s.activeCreatureAuras != nil {
 		for _, aura := range s.activeCreatureAuras[key] {
 			if aura != nil && aura.AuraType == auraType {
+				ids = append(ids, aura.SpellID)
+			}
+		}
+	}
+	s.auraMu.Unlock()
+	for _, id := range ids {
+		s.removeCreatureAura(key, id)
+	}
+}
+
+// removeCreatureAurasByTypeFromCaster is the caster-filtered twin of
+// removeCreatureAurasByType (Unit::RemoveAurasByType(auraType,
+// casterGUID), Unit.cpp:3884): only auras of the type cast by
+// casterGUID come off.
+func (s *Server) removeCreatureAurasByTypeFromCaster(key creatureAuraKey, auraType uint32, casterGUID uint64) {
+	if s == nil || key.GUID == 0 {
+		return
+	}
+	var ids []uint32
+	s.auraMu.Lock()
+	if s.activeCreatureAuras != nil {
+		for _, aura := range s.activeCreatureAuras[key] {
+			if aura != nil && aura.AuraType == auraType && aura.CasterGUID == casterGUID {
 				ids = append(ids, aura.SpellID)
 			}
 		}
