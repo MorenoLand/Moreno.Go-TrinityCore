@@ -6609,14 +6609,12 @@ func (s *session) handleCmdArenaLookup(ctx context.Context, args []string) bool 
 // handleCmdBF dispatches ".bf" (cs_bf.cpp, AddSC_bf_commandscript):
 // start|stop|switch|timer|enable, each gated by its RBAC_PERM_COMMAND_BF_*
 // permission (RBAC.h:172-176).
-func (s *session) handleCmdBF(ctx context.Context, args []string) {
+func (s *session) handleCmdBF(ctx context.Context, args []string) bool {
 	if s.server == nil {
-		s.sendSysMessage("Unknown error.")
-		return
+		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .bf start|stop|switch|timer|enable <battleId> [time]")
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -6633,58 +6631,63 @@ func (s *session) handleCmdBF(ctx context.Context, args []string) {
 	case "enable":
 		perm = permissionCommandBfEnable
 	default:
-		s.sendSysMessage("Syntax: .bf start|stop|switch|timer|enable <battleId> [time]")
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch sub {
 	case "start":
-		s.handleCmdBFStart(ctx, rest)
+		return s.handleCmdBFStart(ctx, rest)
 	case "stop":
-		s.handleCmdBFStop(ctx, rest)
+		return s.handleCmdBFStop(ctx, rest)
 	case "switch":
-		s.handleCmdBFSwitch(ctx, rest)
+		return s.handleCmdBFSwitch(ctx, rest)
 	case "timer":
-		s.handleCmdBFTimer(ctx, rest)
+		return s.handleCmdBFTimer(ctx, rest)
 	case "enable":
-		s.handleCmdBFEnable(ctx, rest)
+		return s.handleCmdBFEnable(ctx, rest)
 	}
+	return false
 }
 
 // bfBattleID parses the <battleId> argument. It mirrors
 // BattlefieldMgr::GetBattlefieldByBattleId: WGBattleID (1,
 // BATTLEFIELD_BATTLEID_WG, Battlefield.h:34) is the only registered battle id,
 // so any other id fails the command exactly like the C++ null-battlefield
-// return-false path.
-func (s *session) bfBattleID(args []string, usage string) (uint32, bool) {
+// return-false path. The second return reports whether the caller may
+// proceed; when false, the third is the bool the caller must return: a
+// missing id or an unknown id is silent false, while an unparseable
+// non-empty token prints the parser error and returns true
+// (ChatCommandArgs.h numeric ArgInfo: LANG_CMDPARSER_STRING_VALUE_INVALID
+// + SetSentErrorMessage suppresses help).
+func (s *session) bfBattleID(args []string) (uint32, bool, bool) {
 	if len(args) < 1 {
-		s.sendSysMessage(usage)
-		return 0, false
+		return 0, false, false
 	}
 	id, ok := parseCommandUint32(args[0])
-	if !ok || id != WGBattleID {
+	if !ok {
 		s.sendSysMessage("Invalid battlefield ID.")
-		return 0, false
+		return 0, false, true
 	}
-	return id, true
+	if id != WGBattleID {
+		return 0, false, false
+	}
+	return id, true, true
 }
 
 // handleCmdBFStart processes ".bf start <battleId>" (cs_bf.cpp
 // HandleBattlefieldStart). Battlefield::StartBattle (Battlefield.cpp:316) is a
 // no-op when the battle is already active, so the native StartWGBattle is
 // skipped in that case; the defender team is preserved from current state.
-func (s *session) handleCmdBFStart(ctx context.Context, args []string) {
-	if _, ok := s.bfBattleID(args, "Syntax: .bf start <battleId>"); !ok {
-		return
+func (s *session) handleCmdBFStart(ctx context.Context, args []string) bool {
+	if _, proceed, ret := s.bfBattleID(args); !proceed {
+		return ret
 	}
 	if len(args) > 1 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .bf start <battleId>")
-		return
+		return false
 	}
 	wg := s.server.getOrCreateWGState()
 	wg.mu.Lock()
@@ -6695,62 +6698,61 @@ func (s *session) handleCmdBFStart(ctx context.Context, args []string) {
 		s.server.StartWGBattle(defender)
 	}
 	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command start used)")
+	return true
 }
 
 // handleCmdBFStop processes ".bf stop <battleId>" (cs_bf.cpp
 // HandleBattlefieldEnd): EndBattle(true) — the defenders hold the fortress.
-func (s *session) handleCmdBFStop(ctx context.Context, args []string) {
-	if _, ok := s.bfBattleID(args, "Syntax: .bf stop <battleId>"); !ok {
-		return
+func (s *session) handleCmdBFStop(ctx context.Context, args []string) bool {
+	if _, proceed, ret := s.bfBattleID(args); !proceed {
+		return ret
 	}
 	if len(args) > 1 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .bf stop <battleId>")
-		return
+		return false
 	}
 	s.server.EndWGBattle(true)
 	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command stop used)")
+	return true
 }
 
 // handleCmdBFSwitch processes ".bf switch <battleId>" (cs_bf.cpp
 // HandleBattlefieldSwitch): EndBattle(false) — the attackers breached the
 // vault and become the new defenders.
-func (s *session) handleCmdBFSwitch(ctx context.Context, args []string) {
-	if _, ok := s.bfBattleID(args, "Syntax: .bf switch <battleId>"); !ok {
-		return
+func (s *session) handleCmdBFSwitch(ctx context.Context, args []string) bool {
+	if _, proceed, ret := s.bfBattleID(args); !proceed {
+		return ret
 	}
 	if len(args) > 1 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .bf switch <battleId>")
-		return
+		return false
 	}
 	s.server.EndWGBattle(false)
 	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command switch used)")
+	return true
 }
 
 // handleCmdBFTimer processes ".bf timer <battleId> <time>" (cs_bf.cpp
 // HandleBattlefieldTimer): SetTimer(time * IN_MILLISECONDS) then
 // SendInitWorldStatesToAll.
-func (s *session) handleCmdBFTimer(ctx context.Context, args []string) {
-	if _, ok := s.bfBattleID(args, "Syntax: .bf timer <battleId> <time>"); !ok {
-		return
+func (s *session) handleCmdBFTimer(ctx context.Context, args []string) bool {
+	if _, proceed, ret := s.bfBattleID(args); !proceed {
+		return ret
 	}
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .bf timer <battleId> <time>")
-		return
+		return false
 	}
 	secs, ok := parseCommandUint32(args[1])
 	if !ok {
 		s.sendSysMessage("Invalid time value.")
-		return
+		return true
 	}
 	if len(args) > 2 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .bf timer <battleId> <time>")
-		return
+		return false
 	}
 	wg := s.server.getOrCreateWGState()
 	wg.mu.Lock()
@@ -6759,21 +6761,21 @@ func (s *session) handleCmdBFTimer(ctx context.Context, args []string) {
 	wg.mu.Unlock()
 	s.server.broadcastWGInitWorldStates()
 	s.server.sendGlobalGMMessage(ctx, "Wintergrasp (Command timer used)")
+	return true
 }
 
 // handleCmdBFEnable processes ".bf enable <battleId>" (cs_bf.cpp
 // HandleBattlefieldEnable): toggles Battlefield::m_IsEnabled
 // (ToggleBattlefield), mirrored on wgBattlegroundState.Enabled; the Update and
 // player-enter-zone paths consult it (BattlefieldMgr.cpp:100, 130).
-func (s *session) handleCmdBFEnable(ctx context.Context, args []string) {
-	if _, ok := s.bfBattleID(args, "Syntax: .bf enable <battleId>"); !ok {
-		return
+func (s *session) handleCmdBFEnable(ctx context.Context, args []string) bool {
+	if _, proceed, ret := s.bfBattleID(args); !proceed {
+		return ret
 	}
 	if len(args) > 1 {
 		// C++ ConsumeFromOffset requires the whole string to be consumed
 		// (ChatCommand.h:104-108); a trailing token fails the parse.
-		s.sendSysMessage("Syntax: .bf enable <battleId>")
-		return
+		return false
 	}
 	wg := s.server.getOrCreateWGState()
 	wg.mu.Lock()
@@ -6785,6 +6787,7 @@ func (s *session) handleCmdBFEnable(ctx context.Context, args []string) {
 	} else {
 		s.server.sendGlobalGMMessage(ctx, "Wintergrasp is disabled")
 	}
+	return true
 }
 
 // sendGlobalGMMessage mirrors ChatHandler::SendGlobalGMSysMessage /
@@ -7238,11 +7241,10 @@ func (s *session) handleDisableRemove(ctx context.Context, info *disableCommandT
 // Console::Yes). The Trinity parser prefix-matches arm names; the same
 // first-match rule applies here (C++ table order: activelist, start, stop,
 // info).
-func (s *session) handleCmdEvent(ctx context.Context, args []string) {
+func (s *session) handleCmdEvent(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .event activelist|start|stop|info [eventId]"
 	if len(args) < 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	arms := []struct {
 		name string
@@ -7264,28 +7266,26 @@ func (s *session) handleCmdEvent(ctx context.Context, args []string) {
 		}
 	}
 	if arm == "" {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch arm {
 	case "activelist":
 		// ChatCommand.h:112: the no-arg arm takes no trailing tokens.
 		if len(args) > 1 {
-			s.sendSysMessage(syntax)
-			return
+			return false
 		}
-		s.handleEventActiveList(ctx)
+		return s.handleEventActiveList(ctx)
 	case "info":
-		s.handleEventInfo(ctx, args[1:])
+		return s.handleEventInfo(ctx, args[1:])
 	case "start":
-		s.handleEventStart(ctx, args[1:])
+		return s.handleEventStart(ctx, args[1:])
 	case "stop":
-		s.handleEventStop(ctx, args[1:])
+		return s.handleEventStop(ctx, args[1:])
 	}
+	return false
 }
 
 // handleEventActiveList mirrors HandleEventActiveListCommand
@@ -7301,9 +7301,9 @@ func (s *session) handleCmdEvent(ctx context.Context, args []string) {
 // no data rows exist in Go sql/ or the C++ sql/ tree), so the wording and
 // separators follow the lookup arm's established form and are unverified
 // against the TDB text (same class as the tick-309 R3 blocker).
-func (s *session) handleEventActiveList(ctx context.Context) {
+func (s *session) handleEventActiveList(ctx context.Context) bool {
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return
+		return true
 	}
 	data := s.server.loadGameEventDataMap(ctx)
 	active := s.server.cachedActiveGameEvents(ctx)
@@ -7322,6 +7322,7 @@ func (s *session) handleEventActiveList(ctx context.Context) {
 	if len(ids) == 0 {
 		s.sendSysMessage("No event found.")
 	}
+	return true
 }
 
 // handleEventInfo mirrors HandleEventInfoCommand (cs_event.cpp:90-123): the
@@ -7338,26 +7339,25 @@ func (s *session) handleEventActiveList(ctx context.Context) {
 // lives in the trinity_string table (TDB data, not in-repo — see
 // handleEventActiveList), so the line labels and the single- vs multi-line
 // split follow the prior rendering and are unverified against the TDB text.
-func (s *session) handleEventInfo(ctx context.Context, args []string) {
+func (s *session) handleEventInfo(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .event info <eventId>"
-	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return
-	}
 	// ChatCommand.h:112: trailing tokens fail the single-arg parse.
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	id, err := parseGameEventID(args[0])
 	if err != nil {
 		s.sendSysMessage(syntax)
-		return
+		return true
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
 	}
 	data := s.server.loadGameEventDataMap(ctx)
 	ev, ok := data[id]
 	if !ok || !ev.isValid() {
 		s.sendSysMessage(fmt.Sprintf("Event %d does not exist.", id))
-		return
+		return true
 	}
 	_, isActive := s.server.cachedActiveGameEvents(ctx)[id]
 	activeStr := ""
@@ -7379,6 +7379,7 @@ func (s *session) handleEventInfo(ctx context.Context, args []string) {
 	s.sendSysMessage(fmt.Sprintf("Occurence: %s", secsToTimeStringFull(uint64(ev.Occurrence)*60)))
 	s.sendSysMessage(fmt.Sprintf("Length: %s", secsToTimeStringFull(uint64(ev.Length)*60)))
 	s.sendSysMessage(fmt.Sprintf("Next: %s", nextStr))
+	return true
 }
 
 // handleEventStart mirrors HandleEventStartCommand (cs_event.cpp:125-152):
@@ -7393,32 +7394,32 @@ func (s *session) handleEventInfo(ctx context.Context, args []string) {
 // layer), and the hook fires on the next tick rather than synchronously;
 // the override persists until the opposite call instead of expiring with
 // the schedule window.
-func (s *session) handleEventStart(ctx context.Context, args []string) {
+func (s *session) handleEventStart(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .event start <eventId>"
-	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return
-	}
 	// ChatCommand.h:112: trailing tokens fail the single-arg parse.
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	id, err := parseGameEventID(args[0])
 	if err != nil {
 		s.sendSysMessage(syntax)
-		return
+		return true
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
 	}
 	data := s.server.loadGameEventDataMap(ctx)
 	ev, ok := data[id]
 	if !ok || id < 1 || !ev.isValid() {
 		s.sendSysMessage(fmt.Sprintf("Event %d does not exist.", id))
-		return
+		return true
 	}
 	if _, isActive := s.server.cachedActiveGameEvents(ctx)[id]; isActive {
 		s.sendSysMessage(fmt.Sprintf("Event %d is already active.", id))
-		return
+		return true
 	}
 	s.server.luaGameEventControl(uint32(id), true, true)
+	return true
 }
 
 // handleEventStop mirrors HandleEventStopCommand (cs_event.cpp:154-182):
@@ -7431,32 +7432,32 @@ func (s *session) handleEventStart(ctx context.Context, args []string) {
 // cleanup; spawn removal is query-time). DELTAS vs C++: no forced-state
 // DB reset, and the hook fires on the next tick rather than
 // synchronously.
-func (s *session) handleEventStop(ctx context.Context, args []string) {
+func (s *session) handleEventStop(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .event stop <eventId>"
-	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-		return
-	}
 	// ChatCommand.h:112: trailing tokens fail the single-arg parse.
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	id, err := parseGameEventID(args[0])
 	if err != nil {
 		s.sendSysMessage(syntax)
-		return
+		return true
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
 	}
 	data := s.server.loadGameEventDataMap(ctx)
 	ev, ok := data[id]
 	if !ok || id < 1 || !ev.isValid() {
 		s.sendSysMessage(fmt.Sprintf("Event %d does not exist.", id))
-		return
+		return true
 	}
 	if _, isActive := s.server.cachedActiveGameEvents(ctx)[id]; !isActive {
 		s.sendSysMessage(fmt.Sprintf("Event %d is not active.", id))
-		return
+		return true
 	}
 	s.server.luaGameEventControl(uint32(id), false, true)
+	return true
 }
 
 // persistExtraFlags writes extra_flags immediately so GM mode survives
@@ -8167,10 +8168,9 @@ func (s *session) worldRemoveBanCharacter(ctx context.Context, name string) bool
 
 // handleCmdBan dispatches ".ban account|character|playeraccount|ip"
 // (cs_ban.cpp banCommandTable), gating each arm on its RBAC permission.
-func (s *session) handleCmdBan(ctx context.Context, args []string) {
+func (s *session) handleCmdBan(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .ban account|character|playeraccount|ip ...")
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -8185,44 +8185,37 @@ func (s *session) handleCmdBan(ctx context.Context, args []string) {
 	case "ip":
 		perm = permissionCommandBanIP
 	default:
-		s.sendSysMessage("Syntax: .ban account|character|playeraccount|ip ...")
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch sub {
 	case "account":
-		s.handleBanHelper(ctx, banModeAccount, rest)
+		return s.handleBanHelper(ctx, banModeAccount, rest)
 	case "character":
-		s.handleCmdBanCharacter(ctx, rest)
+		return s.handleCmdBanCharacter(ctx, rest)
 	case "playeraccount":
-		s.handleBanHelper(ctx, banModeCharacter, rest)
+		return s.handleBanHelper(ctx, banModeCharacter, rest)
 	case "ip":
-		s.handleBanHelper(ctx, banModeIP, rest)
+		return s.handleBanHelper(ctx, banModeIP, rest)
 	}
+	return false
 }
 
 // handleBanHelper mirrors HandleBanHelper (cs_ban.cpp:183): parses
 // "<name|ip> <duration> <reason...>", validates per mode, and applies
 // World::BanAccount, reporting BAN_SUCCESS / BAN_NOTFOUND / BAN_EXISTS.
-func (s *session) handleBanHelper(ctx context.Context, mode int, args []string) {
-	syntax := "Syntax: .ban account|playeraccount <name> <duration> <reason>"
-	if mode == banModeIP {
-		syntax = "Syntax: .ban ip <ip> <duration> <reason>"
-	}
+func (s *session) handleBanHelper(ctx context.Context, mode int, args []string) bool {
 	if len(args) < 3 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	nameOrIP := args[0]
 	durationStr := args[1]
 	reason := strings.Join(args[2:], " ")
 	// C++: if (!durationStr || !atoi(durationStr)) return false.
 	if cAtoi(durationStr) == 0 || reason == "" {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	switch mode {
 	case banModeAccount:
@@ -8230,23 +8223,20 @@ func (s *session) handleBanHelper(ctx context.Context, mode int, args []string) 
 			// LANG_ACCOUNT_NOT_EXIST (413): Utf8ToUpperOnlyLatin fails
 			// on invalid UTF-8 (Util.cpp) instead of passing the name on.
 			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", nameOrIP))
-			return
+			return true
 		}
 		nameOrIP = upperOnlyLatin(nameOrIP)
 	case banModeCharacter:
 		if nameOrIP == "" || !utf8.ValidString(nameOrIP) {
 			// LANG_PLAYER_NOT_FOUND (499).
 			s.sendSysMessage("Player not found.")
-			return
+			return true
 		}
 		nameOrIP = normalizePlayerName(nameOrIP)
 	case banModeIP:
 		if !isBanIPAddress(nameOrIP) {
-			// C++ returns false with no error message, so the dispatcher
-			// shows the command help (ChatCommand.cpp:296-311); the
-			// syntax line is the Go equivalent.
-			s.sendSysMessage(syntax)
-			return
+			// C++ returns false with no error message (cs_ban.cpp:198-199).
+			return false
 		}
 	}
 	author := s.banAuthorName()
@@ -8266,7 +8256,7 @@ func (s *session) handleBanHelper(ctx context.Context, mode int, args []string) 
 			s.sendSysMessage(fmt.Sprintf("You have permanently banned %s, reason: %s.", nameOrIP, reason))
 		}
 	case banSyntaxError:
-		s.sendSysMessage(syntax)
+		return false
 	case banNotFound:
 		// LANG_BAN_NOTFOUND (410).
 		kind := "account"
@@ -8280,26 +8270,25 @@ func (s *session) handleBanHelper(ctx context.Context, mode int, args []string) 
 		// LANG_BAN_EXISTS (1188).
 		s.sendSysMessage("Account is already banned.")
 	}
+	return true
 }
 
 // handleCmdBanCharacter processes ".ban character <name> <duration> <reason>"
 // (cs_ban.cpp HandleBanCharacterCommand).
-func (s *session) handleCmdBanCharacter(ctx context.Context, args []string) {
+func (s *session) handleCmdBanCharacter(ctx context.Context, args []string) bool {
 	if len(args) < 3 {
-		s.sendSysMessage("Syntax: .ban character <name> <duration> <reason>")
-		return
+		return false
 	}
 	name := args[0]
 	durationStr := args[1]
 	reason := strings.Join(args[2:], " ")
 	if cAtoi(durationStr) == 0 || reason == "" {
-		s.sendSysMessage("Syntax: .ban character <name> <duration> <reason>")
-		return
+		return false
 	}
 	if name == "" || !utf8.ValidString(name) {
 		// LANG_PLAYER_NOT_FOUND (499).
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	name = normalizePlayerName(name)
 	author := s.banAuthorName()
@@ -8321,14 +8310,14 @@ func (s *session) handleCmdBanCharacter(ctx context.Context, args []string) {
 		// other result falls through to return true with no message
 		// (cs_ban.cpp HandleBanCharacterCommand), so no syntax line here.
 	}
+	return true
 }
 
 // handleCmdBanInfo dispatches ".baninfo account|character|ip"
 // (cs_ban.cpp baninfoCommandTable).
-func (s *session) handleCmdBanInfo(ctx context.Context, args []string) {
+func (s *session) handleCmdBanInfo(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .baninfo account|character|ip ...")
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -8341,21 +8330,20 @@ func (s *session) handleCmdBanInfo(ctx context.Context, args []string) {
 	case "ip":
 		perm = permissionCommandBanInfoIP
 	default:
-		s.sendSysMessage("Syntax: .baninfo account|character|ip ...")
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch sub {
 	case "account":
-		s.handleCmdBanInfoAccount(ctx, rest)
+		return s.handleCmdBanInfoAccount(ctx, rest)
 	case "character":
-		s.handleCmdBanInfoCharacter(ctx, rest)
+		return s.handleCmdBanInfoCharacter(ctx, rest)
 	case "ip":
-		s.handleCmdBanInfoIP(ctx, rest)
+		return s.handleCmdBanInfoIP(ctx, rest)
 	}
+	return false
 }
 
 // banHistoryEntry is one row of account_banned / character_banned for the
@@ -8412,13 +8400,12 @@ func collectBanHistory(rows *sql.Rows) ([]banHistoryEntry, error) {
 
 // handleCmdBanInfoAccount processes ".baninfo account <name>"
 // (cs_ban.cpp HandleBanInfoAccountCommand / HandleBanInfoHelper).
-func (s *session) handleCmdBanInfoAccount(ctx context.Context, args []string) {
+func (s *session) handleCmdBanInfoAccount(ctx context.Context, args []string) bool {
 	if s.server == nil || s.server.AuthStore == nil {
-		return
+		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .baninfo account <name>")
-		return
+		return false
 	}
 	// C++ takes the whole remainder as the account name.
 	accountName := upperOnlyLatin(strings.Join(args, " "))
@@ -8427,7 +8414,7 @@ func (s *session) handleCmdBanInfoAccount(ctx context.Context, args []string) {
 	if err != nil || row.Scan(&accountID) != nil || accountID == 0 {
 		// LANG_ACCOUNT_NOT_EXIST (413).
 		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", accountName))
-		return
+		return true
 	}
 	// C++ raw query: SELECT FROM_UNIXTIME(bandate), unbandate-bandate,
 	// active, unbandate, banreason, bannedby FROM account_banned
@@ -8435,30 +8422,33 @@ func (s *session) handleCmdBanInfoAccount(ctx context.Context, args []string) {
 	// timestamp is formatted in Go as local time instead).
 	rows, err := s.server.AuthStore.DB.QueryContext(ctx, "SELECT bandate, unbandate-bandate, active, unbandate, banreason, bannedby FROM account_banned WHERE id = ? ORDER BY bandate ASC", accountID)
 	if err != nil {
-		return
+		// C++ !result prints LANG_BANINFO_NOACCOUNTBAN (cs_ban.cpp:282-285).
+		s.sendSysMessage(fmt.Sprintf("No ban history for account %s.", accountName))
+		return true
 	}
 	entries, err := collectBanHistory(rows)
 	rows.Close()
 	if err != nil {
-		return
+		s.sendSysMessage(fmt.Sprintf("No ban history for account %s.", accountName))
+		return true
 	}
 	if len(entries) == 0 {
 		// LANG_BANINFO_NOACCOUNTBAN (416).
 		s.sendSysMessage(fmt.Sprintf("No ban history for account %s.", accountName))
-		return
+		return true
 	}
 	s.sendBanHistory(accountName, entries, "2006-01-02 15:04:05")
+	return true
 }
 
 // handleCmdBanInfoCharacter processes ".baninfo character <name>"
 // (cs_ban.cpp HandleBanInfoCharacterCommand).
-func (s *session) handleCmdBanInfoCharacter(ctx context.Context, args []string) {
+func (s *session) handleCmdBanInfoCharacter(ctx context.Context, args []string) bool {
 	if s.server == nil || s.server.CharactersStore == nil {
-		return
+		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .baninfo character <name>")
-		return
+		return false
 	}
 	// C++ takes the whole remainder as the name (std::string name(args));
 	// a trailing token makes the lookup miss instead of being ignored.
@@ -8466,7 +8456,7 @@ func (s *session) handleCmdBanInfoCharacter(ctx context.Context, args []string) 
 	if name == "" || !utf8.ValidString(name) {
 		// LANG_BANINFO_NOCHARACTER (414).
 		s.sendSysMessage("Character not found.")
-		return
+		return true
 	}
 	name = normalizePlayerName(name)
 	var guid uint64
@@ -8478,49 +8468,47 @@ func (s *session) handleCmdBanInfoCharacter(ctx context.Context, args []string) 
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ?", name).Scan(&guid); err != nil || guid == 0 {
 			// LANG_BANINFO_NOCHARACTER (414).
 			s.sendSysMessage("Character not found.")
-			return
+			return true
 		}
 	}
 	// CHAR_SEL_BANINFO.
 	rows, err := s.server.CharactersStore.QueryStatement(ctx, "CHAR_SEL_BANINFO", guid)
 	if err != nil {
-		return
+		// C++ !result prints LANG_CHAR_NOT_BANNED (cs_ban.cpp:341-344).
+		s.sendSysMessage(fmt.Sprintf("%s is not banned.", name))
+		return true
 	}
 	entries, err := collectBanHistory(rows)
 	rows.Close()
 	if err != nil {
-		return
+		s.sendSysMessage(fmt.Sprintf("%s is not banned.", name))
+		return true
 	}
 	if len(entries) == 0 {
 		// LANG_CHAR_NOT_BANNED (1136).
 		s.sendSysMessage(fmt.Sprintf("%s is not banned.", name))
-		return
+		return true
 	}
 	s.sendBanHistory(name, entries, "2006-01-02_15-04-05")
+	return true
 }
 
 // handleCmdBanInfoIP processes ".baninfo ip <ip>"
 // (cs_ban.cpp HandleBanInfoIPCommand).
-func (s *session) handleCmdBanInfoIP(ctx context.Context, args []string) {
+func (s *session) handleCmdBanInfoIP(ctx context.Context, args []string) bool {
 	if s.server == nil || s.server.AuthStore == nil {
-		return
+		return true
 	}
 	if len(args) == 0 {
-		// C++ returns false with no error message, so the dispatcher
-		// shows the command help (ChatCommand.cpp:296-311); the syntax
-		// line is the Go equivalent.
-		s.sendSysMessage("Syntax: .baninfo ip <ip>")
-		return
+		// C++ returns false with no error message (cs_ban.cpp:365-366).
+		return false
 	}
 	// C++ takes the whole remainder (strtok with an empty delimiter), so a
 	// trailing token fails the IsIPAddress check instead of being ignored.
 	ip := strings.Join(args, " ")
 	if !isBanIPAddress(ip) {
-		// C++ returns false with no error message, so the dispatcher
-		// shows the command help (ChatCommand.cpp:296-311); the syntax
-		// line is the Go equivalent.
-		s.sendSysMessage("Syntax: .baninfo ip <ip>")
-		return
+		// C++ returns false with no error message (cs_ban.cpp:372-373).
+		return false
 	}
 	// C++ raw query: SELECT ip, FROM_UNIXTIME(bandate),
 	// FROM_UNIXTIME(unbandate), unbandate-UNIX_TIMESTAMP(), banreason,
@@ -8531,7 +8519,7 @@ func (s *session) handleCmdBanInfoIP(ctx context.Context, args []string) {
 	if err != nil {
 		// LANG_BANINFO_NOIP (415).
 		s.sendSysMessage("IP address is not banned.")
-		return
+		return true
 	}
 	permanent := unbandate == bandate
 	unbanStr := "Never"   // LANG_BANINFO_NEVER (420)
@@ -8553,16 +8541,16 @@ func (s *session) handleCmdBanInfoIP(ctx context.Context, args []string) {
 	// LANG_BANINFO_IPENTRY (423).
 	s.sendSysMessage(fmt.Sprintf("%s | banned: %s | unban: %s | duration: %s | %s | by %s",
 		ip, time.Unix(bandate, 0).Format("2006-01-02 15:04:05"), unbanStr, banTime, reason, by))
+	return true
 }
 
 // handleCmdBanList dispatches ".banlist account|character|ip [filter]"
 // (cs_ban.cpp banlistCommandTable). The Go command path is always a
 // session, so only the C++ GetSession() short-output branches are ported
 // (same treatment as the arena lookup port).
-func (s *session) handleCmdBanList(ctx context.Context, args []string) {
+func (s *session) handleCmdBanList(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .banlist account|character|ip [filter]")
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -8575,28 +8563,27 @@ func (s *session) handleCmdBanList(ctx context.Context, args []string) {
 	case "ip":
 		perm = permissionCommandBanListIP
 	default:
-		s.sendSysMessage("Syntax: .banlist account|character|ip [filter]")
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch sub {
 	case "account":
-		s.handleCmdBanListAccount(ctx, rest)
+		return s.handleCmdBanListAccount(ctx, rest)
 	case "character":
-		s.handleCmdBanListCharacter(ctx, rest)
+		return s.handleCmdBanListCharacter(ctx, rest)
 	case "ip":
-		s.handleCmdBanListIP(ctx, rest)
+		return s.handleCmdBanListIP(ctx, rest)
 	}
+	return false
 }
 
 // handleCmdBanListAccount processes ".banlist account [filter]"
 // (cs_ban.cpp HandleBanListAccountCommand).
-func (s *session) handleCmdBanListAccount(ctx context.Context, args []string) {
+func (s *session) handleCmdBanListAccount(ctx context.Context, args []string) bool {
 	if s.server == nil || s.server.AuthStore == nil {
-		return
+		return true
 	}
 	auth := s.server.AuthStore
 	// LOGIN_DEL_EXPIRED_IP_BANS runs at the top of the handler.
@@ -8615,7 +8602,9 @@ func (s *session) handleCmdBanListAccount(ctx context.Context, args []string) {
 		rows, err = auth.QueryStatement(ctx, "LOGIN_SEL_ACCOUNT_BANNED_BY_FILTER", filter)
 	}
 	if err != nil {
-		return
+		// C++ !result prints LANG_BANLIST_NOACCOUNT (cs_ban.cpp:420-423).
+		s.sendSysMessage("No banned accounts found.")
+		return true
 	}
 	var ids []uint32
 	for rows.Next() {
@@ -8623,7 +8612,7 @@ func (s *session) handleCmdBanListAccount(ctx context.Context, args []string) {
 		var uname string
 		if err := rows.Scan(&id, &uname); err != nil {
 			rows.Close()
-			return
+			return true
 		}
 		ids = append(ids, id)
 	}
@@ -8631,7 +8620,7 @@ func (s *session) handleCmdBanListAccount(ctx context.Context, args []string) {
 	if len(ids) == 0 {
 		// LANG_BANLIST_NOACCOUNT (425).
 		s.sendSysMessage("No banned accounts found.")
-		return
+		return true
 	}
 	// LANG_BANLIST_MATCHINGACCOUNT (428).
 	s.sendSysMessage("Matching banned accounts:")
@@ -8641,23 +8630,25 @@ func (s *session) handleCmdBanListAccount(ctx context.Context, args []string) {
 			s.sendSysMessage(uname)
 		}
 	}
+	return true
 }
 
 // handleCmdBanListCharacter processes ".banlist character <filter>"
 // (cs_ban.cpp HandleBanListCharacterCommand).
-func (s *session) handleCmdBanListCharacter(ctx context.Context, args []string) {
+func (s *session) handleCmdBanListCharacter(ctx context.Context, args []string) bool {
 	if s.server == nil || s.server.CharactersStore == nil {
-		return
+		return true
 	}
 	chars := s.server.CharactersStore
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .banlist character <filter>")
-		return
+		return false
 	}
 	// CHAR_SEL_GUID_BY_NAME_FILTER.
 	rows, err := chars.QueryStatement(ctx, "CHAR_SEL_GUID_BY_NAME_FILTER", args[0])
 	if err != nil {
-		return
+		// C++ !result prints LANG_BANLIST_NOCHARACTER (cs_ban.cpp:520-523).
+		s.sendSysMessage("No banned characters found.")
+		return true
 	}
 	var guids []uint64
 	for rows.Next() {
@@ -8665,7 +8656,7 @@ func (s *session) handleCmdBanListCharacter(ctx context.Context, args []string) 
 		var name string
 		if err := rows.Scan(&guid, &name); err != nil {
 			rows.Close()
-			return
+			return true
 		}
 		guids = append(guids, guid)
 	}
@@ -8673,7 +8664,7 @@ func (s *session) handleCmdBanListCharacter(ctx context.Context, args []string) 
 	if len(guids) == 0 {
 		// LANG_BANLIST_NOCHARACTER (426).
 		s.sendSysMessage("No banned characters found.")
-		return
+		return true
 	}
 	// LANG_BANLIST_MATCHINGCHARACTER (1131).
 	s.sendSysMessage("Matching banned characters:")
@@ -8688,13 +8679,14 @@ func (s *session) handleCmdBanListCharacter(ctx context.Context, args []string) 
 			s.sendSysMessage(name)
 		}
 	}
+	return true
 }
 
 // handleCmdBanListIP processes ".banlist ip [filter]"
 // (cs_ban.cpp HandleBanListIPCommand).
-func (s *session) handleCmdBanListIP(ctx context.Context, args []string) {
+func (s *session) handleCmdBanListIP(ctx context.Context, args []string) bool {
 	if s.server == nil || s.server.AuthStore == nil {
-		return
+		return true
 	}
 	auth := s.server.AuthStore
 	// LOGIN_DEL_EXPIRED_IP_BANS runs at the top of the handler.
@@ -8713,7 +8705,9 @@ func (s *session) handleCmdBanListIP(ctx context.Context, args []string) {
 		rows, err = auth.QueryStatement(ctx, "LOGIN_SEL_IP_BANNED_BY_IP", filter)
 	}
 	if err != nil {
-		return
+		// C++ !result prints LANG_BANLIST_NOIP (cs_ban.cpp:617-620).
+		s.sendSysMessage("No banned IPs found.")
+		return true
 	}
 	var ips []string
 	for rows.Next() {
@@ -8722,7 +8716,7 @@ func (s *session) handleCmdBanListIP(ctx context.Context, args []string) {
 		var by, reason string
 		if err := rows.Scan(&ip, &bandate, &unbandate, &by, &reason); err != nil {
 			rows.Close()
-			return
+			return true
 		}
 		ips = append(ips, ip)
 	}
@@ -8730,21 +8724,21 @@ func (s *session) handleCmdBanListIP(ctx context.Context, args []string) {
 	if len(ips) == 0 {
 		// LANG_BANLIST_NOIP (424).
 		s.sendSysMessage("No banned IPs found.")
-		return
+		return true
 	}
 	// LANG_BANLIST_MATCHINGIP (427).
 	s.sendSysMessage("Matching banned IPs:")
 	for _, ip := range ips {
 		s.sendSysMessage(ip)
 	}
+	return true
 }
 
 // handleCmdUnBan dispatches ".unban account|character|playeraccount|ip"
 // (cs_ban.cpp unbanCommandTable).
-func (s *session) handleCmdUnBan(ctx context.Context, args []string) {
+func (s *session) handleCmdUnBan(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .unban account|character|playeraccount|ip ...")
-		return
+		return false
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -8759,30 +8753,28 @@ func (s *session) handleCmdUnBan(ctx context.Context, args []string) {
 	case "ip":
 		perm = permissionCommandUnBanIP
 	default:
-		s.sendSysMessage("Syntax: .unban account|character|playeraccount|ip ...")
-		return
+		return false
 	}
 	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	switch sub {
 	case "account":
-		s.handleUnBanHelper(ctx, banModeAccount, rest)
+		return s.handleUnBanHelper(ctx, banModeAccount, rest)
 	case "character":
-		s.handleCmdUnBanCharacter(ctx, rest)
+		return s.handleCmdUnBanCharacter(ctx, rest)
 	case "playeraccount":
-		s.handleUnBanHelper(ctx, banModeCharacter, rest)
+		return s.handleUnBanHelper(ctx, banModeCharacter, rest)
 	case "ip":
-		s.handleUnBanHelper(ctx, banModeIP, rest)
+		return s.handleUnBanHelper(ctx, banModeIP, rest)
 	}
+	return false
 }
 
 // handleUnBanHelper mirrors HandleUnBanHelper (cs_ban.cpp:683).
-func (s *session) handleUnBanHelper(ctx context.Context, mode int, args []string) {
+func (s *session) handleUnBanHelper(ctx context.Context, mode int, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .unban account|playeraccount|ip <name|ip>")
-		return
+		return false
 	}
 	nameOrIP := args[0]
 	switch mode {
@@ -8791,23 +8783,20 @@ func (s *session) handleUnBanHelper(ctx context.Context, mode int, args []string
 			// LANG_ACCOUNT_NOT_EXIST (413): Utf8ToUpperOnlyLatin fails
 			// on invalid UTF-8 (Util.cpp) instead of passing the name on.
 			s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", nameOrIP))
-			return
+			return true
 		}
 		nameOrIP = upperOnlyLatin(nameOrIP)
 	case banModeCharacter:
 		if nameOrIP == "" || !utf8.ValidString(nameOrIP) {
 			// LANG_PLAYER_NOT_FOUND (499).
 			s.sendSysMessage("Player not found.")
-			return
+			return true
 		}
 		nameOrIP = normalizePlayerName(nameOrIP)
 	case banModeIP:
 		if !isBanIPAddress(nameOrIP) {
-			// C++ returns false with no error message, so the dispatcher
-			// shows the command help (ChatCommand.cpp:296-311); the
-			// syntax line is the Go equivalent.
-			s.sendSysMessage("Syntax: .unban account|playeraccount|ip <name|ip>")
-			return
+			// C++ returns false with no error message (cs_ban.cpp:745-746).
+			return false
 		}
 	}
 	// World::RemoveBanAccount (World.cpp:2878).
@@ -8818,28 +8807,29 @@ func (s *session) handleUnBanHelper(ctx context.Context, mode int, args []string
 		// LANG_UNBAN_ERROR (412).
 		s.sendSysMessage(fmt.Sprintf("Failed to unban %s.", nameOrIP))
 	}
+	return true
 }
 
 // handleCmdUnBanCharacter processes ".unban character <name>"
 // (cs_ban.cpp HandleUnBanCharacterCommand).
-func (s *session) handleCmdUnBanCharacter(ctx context.Context, args []string) {
+func (s *session) handleCmdUnBanCharacter(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .unban character <name>")
-		return
+		return false
 	}
 	name := args[0]
 	if name == "" || !utf8.ValidString(name) {
 		// LANG_PLAYER_NOT_FOUND (499).
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
 	name = normalizePlayerName(name)
 	// World::RemoveBanCharacter (World.cpp:2947); no success message in C++.
 	if !s.worldRemoveBanCharacter(ctx, name) {
 		// LANG_PLAYER_NOT_FOUND (499).
 		s.sendSysMessage("Player not found.")
-		return
+		return true
 	}
+	return true
 }
 
 // buildCommandTree assembles the command hierarchy with the canonical
@@ -9057,11 +9047,11 @@ func (s *session) buildCommandTree() *commandNode {
 	root.addWithPerms("achievement", func(ctx context.Context, args []string) bool { return s.handleCmdAchievement(ctx, args) }, map[string]uint32{"add": permissionCommandAchievementAdd}, nil)
 	root.addWithPerms("ahbot", func(ctx context.Context, args []string) bool { return s.handleCmdAhbot(ctx, args) }, map[string]uint32{"items": permissionCommandAhbotItems, "ratio": permissionCommandAhbotRatio, "rebuild": permissionCommandAhbotRebuild, "reload": permissionCommandAhbotReload, "status": permissionCommandAhbotStatus}, nil)
 	root.addWithPerms("arena", func(ctx context.Context, args []string) bool { return s.handleCmdArena(ctx, args) }, map[string]uint32{"create": permissionCommandArenaCreate, "disband": permissionCommandArenaDisband, "rename": permissionCommandArenaRename, "captain": permissionCommandArenaCaptain, "info": permissionCommandArenaInfo, "lookup": permissionCommandArenaLookup}, nil)
-	root.addWithPerms("ban", func(ctx context.Context, args []string) bool { s.handleCmdBan(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanAccount, "character": permissionCommandBanCharacter, "playeraccount": permissionCommandBanPlayerAccount, "ip": permissionCommandBanIP}, nil)
-	root.addWithPerms("baninfo", func(ctx context.Context, args []string) bool { s.handleCmdBanInfo(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanInfoAccount, "character": permissionCommandBanInfoCharacter, "ip": permissionCommandBanInfoIP}, nil)
-	root.addWithPerms("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanListAccount, "character": permissionCommandBanListCharacter, "ip": permissionCommandBanListIP}, nil)
-	root.addWithPerms("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, map[string]uint32{"account": permissionCommandUnBanAccount, "character": permissionCommandUnBanCharacter, "playeraccount": permissionCommandUnBanPlayerAccount, "ip": permissionCommandUnBanIP}, nil)
-	root.addWithPerms("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, map[string]uint32{"start": permissionCommandBfStart, "stop": permissionCommandBfStop, "switch": permissionCommandBfSwitch, "timer": permissionCommandBfTimer, "enable": permissionCommandBfEnable}, nil)
+	root.addWithPerms("ban", func(ctx context.Context, args []string) bool { return s.handleCmdBan(ctx, args) }, map[string]uint32{"account": permissionCommandBanAccount, "character": permissionCommandBanCharacter, "playeraccount": permissionCommandBanPlayerAccount, "ip": permissionCommandBanIP}, nil)
+	root.addWithPerms("baninfo", func(ctx context.Context, args []string) bool { return s.handleCmdBanInfo(ctx, args) }, map[string]uint32{"account": permissionCommandBanInfoAccount, "character": permissionCommandBanInfoCharacter, "ip": permissionCommandBanInfoIP}, nil)
+	root.addWithPerms("banlist", func(ctx context.Context, args []string) bool { return s.handleCmdBanList(ctx, args) }, map[string]uint32{"account": permissionCommandBanListAccount, "character": permissionCommandBanListCharacter, "ip": permissionCommandBanListIP}, nil)
+	root.addWithPerms("unban", func(ctx context.Context, args []string) bool { return s.handleCmdUnBan(ctx, args) }, map[string]uint32{"account": permissionCommandUnBanAccount, "character": permissionCommandUnBanCharacter, "playeraccount": permissionCommandUnBanPlayerAccount, "ip": permissionCommandUnBanIP}, nil)
+	root.addWithPerms("bf", func(ctx context.Context, args []string) bool { return s.handleCmdBF(ctx, args) }, map[string]uint32{"start": permissionCommandBfStart, "stop": permissionCommandBfStop, "switch": permissionCommandBfSwitch, "timer": permissionCommandBfTimer, "enable": permissionCommandBfEnable}, nil)
 	deserterNode := root.add("deserter", func(ctx context.Context, args []string) bool { return s.handleCmdDeserter(ctx, args) }, []string{"instance", "bg"}, nil)
 	// R13 depth (cs_deserter.cpp:44-53): "instance" and "bg" are
 	// sub-tables with add/remove leaves and no "" entries, so the
@@ -9125,7 +9115,7 @@ func (s *session) buildCommandTree() *commandNode {
 			return s.handleCmdDisable(ctx, append([]string{"remove", typ.name}, args...))
 		}, typ.perm)
 	}
-	root.addWithPerms("event", func(ctx context.Context, args []string) bool { s.handleCmdEvent(ctx, args); return true }, map[string]uint32{"activelist": permissionCommandEventActivelist, "start": permissionCommandEventStart, "stop": permissionCommandEventStop, "info": permissionCommandEventInfo}, nil)
+	root.addWithPerms("event", func(ctx context.Context, args []string) bool { return s.handleCmdEvent(ctx, args) }, map[string]uint32{"activelist": permissionCommandEventActivelist, "start": permissionCommandEventStart, "stop": permissionCommandEventStop, "info": permissionCommandEventInfo}, nil)
 	gobjectNode := root.addWithPerms("gobject", func(ctx context.Context, args []string) bool { return s.handleCmdGObject(ctx, args) }, map[string]uint32{"activate": permissionCommandGObjectActivate, "delete": permissionCommandGObjectDelete, "info": permissionCommandGObjectInfo, "move": permissionCommandGObjectMove, "near": permissionCommandGObjectNear, "target": permissionCommandGObjectTarget, "turn": permissionCommandGObjectTurn, "spawngroup": permissionCommandGObjectSpawnGroup, "despawngroup": permissionCommandGObjectDespawnGroup, "add": 0, "set": 0}, map[string]string{"gob": "gobject"})
 	// R13 depth (cs_gobject.cpp:61-71, old-form table): "add temp"
 	// and "set phase"/"set state" are multi-word entries, so add/set
