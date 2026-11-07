@@ -74,8 +74,8 @@
 -- UpdateAI melee is engine-driven (C++ DoMeleeAttackIfReady).
 -- OnDied(4): SetBossState(DATA_MURU 4, DONE) via creature:SetBossState
 -- (boss_muru.cpp:193-197, _JustDied() first, then the muru->
--- DisappearAndDie relay, which stays out — instance GetCreature
--- relay) + timer cleanup. OnReset(23): timer cleanup + cosmetic
+-- DisappearAndDie relay, PORTED below via creature:GetInstanceCreature
+-- (DATA_MURU) + Despawn()) + timer cleanup. OnReset(23): timer cleanup + cosmetic
 -- spawn + the _Reset NOT_STARTED leg (below). OnLeaveCombat(2): the EnterEvadeMode arm, PORTED
 -- (below) — muru relay stays out (instance GetCreature), the rest
 -- rides bridged calls.
@@ -464,9 +464,13 @@ end
 local function entropiusCleanup(event, creature)
     -- C++ boss_entropiusAI::JustDied (boss_muru.cpp:193-197):
     -- _JustDied() first — SetBossState(DATA_MURU 4, DONE) — then the
-    -- muru->DisappearAndDie() relay (stays out: instance GetCreature
-    -- relay; Muru has no ev5 SetGuidData latch in this file).
+    -- muru->DisappearAndDie() relay via GetInstanceCreature(DATA_MURU)
+    -- (lua_creature_events.go:6157; nil when unlatched / off-map).
     creature:SetBossState(DATA_MURU, 3)
+    local muru = creature:GetInstanceCreature(DATA_MURU)
+    if muru then
+        muru:Despawn()
+    end
     cancelTimers(creature:GetGUID())
 end
 

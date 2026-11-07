@@ -88,10 +88,11 @@
 -- SetControlled bridge — the phase-change root/unroot arms are PORTED
 -- via SetRooted (lua_creature_events.go) and only the _isChangingPhase
 -- melee skip has no bearer (melee is engine-driven); no summon model — the SPELL_SUMMONTIGERS tigers never
--- spawn; thekal's JustDied KillSelf of the two adds stays out on
--- the instance lookup (instance->GetCreature(DATA_LORKHAN/ZATH) has
--- no bridge — creature:Kill() itself is bridged now); their timers
--- are canceled instead; Lor'Khan's greater-heal 100-yd
+-- spawn; thekal's JustDied KillSelf of the two adds IS ported below
+-- via the latched encounter refs (GetInstanceCreature is bridged; the
+-- lookup itself is replaced by the shared encounter state) with a
+-- grid-sweep fallback for never-engaged zealots; Lor'Khan's
+-- greater-heal 100-yd
 -- range check is skipped.
 
 local ENTRY_THEKAL = 14509
@@ -515,6 +516,25 @@ local function thekalLeaveCombat(event, creature)
     thekalResetEncounter(encounterState(creature), creature)
 end
 
+-- C++ boss_thekal.cpp:146-149 KillSelf arm: kill the latched zealot if
+-- alive; a zealot that never entered combat has no latch, so fall back
+-- to a grid sweep over its entry. Kill() fires the zealot ev4 handler
+-- (lorkhanReset/zathReset: cancel timers, clear feign-death aura +
+-- immune flags) — benign and idempotent.
+local function killZealot(zealot, entry, thekal)
+    if zealot then
+        if not zealot:IsDead() then
+            zealot:Kill()
+        end
+        return
+    end
+    for _, z in ipairs(thekal:GetCreaturesInGrid(entry, 100)) do
+        if not z:IsDead() then
+            z:Kill()
+        end
+    end
+end
+
 local function thekalDied(event, creature, killer)
     local e = encounterState(creature)
     -- C++ JustDied (boss_thekal.cpp:140-142): _JustDied() first,
@@ -522,17 +542,17 @@ local function thekalDied(event, creature, killer)
     -- (ScriptedCreature.cpp:513-519), then Talk(TALK_DEATH).
     creature:SetBossState(4, 3)
     creature:Talk(TALK_DEATH)
+    -- C++ JustDied (boss_thekal.cpp:146-149): KillSelf Zealot Lor'Khan
+    -- and Zealot Zath — the adds are still feign-deathing, so they die
+    -- when the encounter ends — before the DONE writes below.
+    killZealot(e.lorkhan, ENTRY_LORKHAN, creature)
+    killZealot(e.zath, ENTRY_ZATH, creature)
     -- C++ JustDied tail (boss_thekal.cpp:150-151): direct writes
     -- SetBossState(DATA_LORKHAN 10, DONE) and SetBossState(DATA_ZATH
     -- 11, DONE) — the zealots have no BossAI of their own, so thekal's
-    -- death closes their ids too. The KillSelf arms (:146-149) stay out
-    -- (instance->GetCreature lookup has no bridge); the state writes
-    -- are direct and ported.
+    -- death closes their ids too.
     creature:SetBossState(10, 3)
     creature:SetBossState(11, 3)
-    -- C++ KillSelf's the two adds here; the instance lookup
-    -- (instance->GetCreature) has no bridge, so their timers
-    -- are canceled instead and the encounter state is cleared.
     thekalResetEncounter(e, creature)
 end
 

@@ -41,11 +41,11 @@
 -- the mandokir chained-spirit precedent); the four feather vortices
 -- ARE ported below (eagle-phase transform summons + lynx-phase
 -- cleanup sweep, 2026-10-24) while the column-of-fire pillars never
--- spawn, so the spirit Siphon Soul 43501 casts and the spirit
--- death-state arms (incl. JustDied's UNIT_STAND_STATE_DEAD —
--- SetStandState is bridged, the old "no SetUInt32Value bridge" note
--- was stale, but the arm is vacuous since the spirits never spawn)
--- are skipped; the teleport is ported below via
+-- spawn, so the spirit Siphon Soul 43501 casts are skipped;
+-- JustDied's UNIT_STAND_STATE_DEAD arm on the 4th spirit IS ported
+-- below via creature:SetStandState(7) on the latched summon ref
+-- (SetStandState is bridged; the old "no SetUInt32Value bridge" note
+-- was stale); the teleport is ported below via
 -- creature:Teleport (120.148811, 703.713684, 45.111477, 100) on
 -- phase change; the UNIT_VIRTUAL_ITEM_SLOT_ID arms are ported
 -- via creature:SetEquipmentSlots (33975 on reset, 0 on phase change); no
@@ -161,7 +161,7 @@ local function zuljinState(guid)
     local st = state[guid]
     if not st then
         st = { phase = PHASE_TROLL, introActive = false, sequence = nil,
-               seqCount = 0 }
+               seqCount = 0, spirits = {} }
         state[guid] = st
     end
     return st
@@ -524,7 +524,7 @@ end
 local function zuljinResetState(guid)
     cancelTimers(timers, guid)
     state[guid] = { phase = PHASE_TROLL, introActive = false,
-                    sequence = nil, seqCount = 0 }
+                    sequence = nil, seqCount = 0, spirits = {} }
 end
 
 -- C++ JustEngagedWith: Talk YELL_INTRO, SpawnAdds, EnterPhase(0)
@@ -544,9 +544,10 @@ local function zuljinEnterCombat(event, creature, target)
     local st = zuljinState(guid)
     st.introActive = true
     creature:Talk(YELL_INTRO)
-    for _, info in ipairs(ZULJIN_SPIRITS) do
+    for i, info in ipairs(ZULJIN_SPIRITS) do
         local spirit = creature:SummonCreature(info[1], info[2], info[3], info[4], info[5], 6)
         if spirit then
+            st.spirits[i] = spirit
             spirit:CastSpell(spirit, SPELL_SPIRIT_AURA, true)
             spirit:SetFlag(59, 0x2)
             spirit:RemoveFlag(59, 0x02000000) -- boss_zuljin.cpp:271: NOT_SELECTABLE cleared after the aura+flag legs
@@ -580,12 +581,21 @@ local function zuljinTargetDied(event, creature, victim)
 end
 
 local function zuljinDied(event, creature, killer)
-    zuljinResetState(creature:GetGUID())
-    -- C++ JustDied (boss_zuljin.cpp:222-224): _JustDied() first,
+    -- C++ JustDied (boss_zuljin.cpp:222-229): _JustDied() first,
     -- writing SetBossState(BOSS_ZULJIN 5, DONE)
-    -- (ScriptedCreature.cpp:513-519), then Talk(YELL_DEATH).
+    -- (ScriptedCreature.cpp:513-519), then Talk(YELL_DEATH), then the
+    -- 4th spirit (SpiritGUID[3], entry 23879 dragonhawk) slumps dead
+    -- (UNIT_STAND_STATE_DEAD 7). Capture the latched spirit before the
+    -- reset below wipes the state table; nil-guarded for
+    -- TEMPSUMMON_DEAD_DESPAWN timing (C++ proves it alive at JustDied).
+    local st = zuljinState(creature:GetGUID())
+    local spirit = st.spirits and st.spirits[4]
+    zuljinResetState(creature:GetGUID())
     creature:SetBossState(5, 3)
     creature:Talk(YELL_DEATH)
+    if spirit then
+        spirit:SetStandState(7)
+    end
 end
 
 -- C++ Reset(): SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID, 33975)
