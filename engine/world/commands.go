@@ -1205,7 +1205,7 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|setitemvalue|setaurastate|itemexpire|moveflags")
+		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|getitemstate|setitemvalue|setaurastate|itemexpire|moveflags")
 		return true
 	}
 	switch strings.ToLower(args[0]) {
@@ -1213,7 +1213,7 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		// No-arg debug arms take no further tokens (ChatCommand.h:112
 		// whole-string-consumed); the handlers below used to drop them.
 		if len(args) > 1 {
-			s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|setitemvalue|setaurastate|itemexpire|moveflags")
+			s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|getitemstate|setitemvalue|setaurastate|itemexpire|moveflags")
 			return true
 		}
 		switch strings.ToLower(args[0]) {
@@ -1277,6 +1277,8 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		return s.handleDebugUpdate(ctx, args[1:])
 	case "getitemvalue":
 		return s.handleDebugGetItemValue(ctx, args[1:])
+	case "getitemstate":
+		return s.handleDebugGetItemState(ctx, args[1:])
 	case "setitemvalue":
 		return s.handleDebugSetItemValue(ctx, args[1:])
 	case "setaurastate":
@@ -1286,7 +1288,7 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 	case "moveflags":
 		return s.handleDebugMoveflags(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|setitemvalue|setaurastate|itemexpire|moveflags")
+		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|getitemstate|setitemvalue|setaurastate|itemexpire|moveflags")
 	}
 	return true
 }

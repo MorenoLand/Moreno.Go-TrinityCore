@@ -420,6 +420,222 @@ func (s *session) handleDebugSetItemValue(ctx context.Context, args []string) bo
 	return true
 }
 
+// debug inventory slot bounds (Player.h:526-529, 586-587): the state and
+// check_all legs iterate PLAYER_SLOT_START..PLAYER_SLOT_END skipping the
+// buyback range.
+const (
+	debugPlayerSlotStart  = 0
+	debugPlayerSlotEnd    = 150
+	debugBuybackSlotStart = 74
+	debugBuybackSlotEnd   = 86
+)
+
+// debugInventoryItem is one character_inventory row joined to its
+// item_instance owner/entry, the DB twin of Player::GetItemByPos: bag 0
+// rows are the top-level slots, rows with bag = a container item's guid
+// are that bag's contents.
+type debugInventoryItem struct {
+	bag   int64
+	slot  int64
+	guid  uint64
+	entry uint32
+	owner uint64
+}
+
+// debugInventoryWalk reads the target player's whole inventory in one
+// query (the bank.go join shape), split into the bag-0 slot map and the
+// per-container slot maps. First row wins per (bag, slot): the table keys
+// one item per position, so a later duplicate is corrupt data the C++
+// in-memory slots could never hold.
+func (s *session) debugInventoryWalk(ctx context.Context, playerGUID uint64) (map[int64]debugInventoryItem, map[uint64]map[int64]debugInventoryItem) {
+	top := make(map[int64]debugInventoryItem)
+	contents := make(map[uint64]map[int64]debugInventoryItem)
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || playerGUID == 0 {
+		return top, contents
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.owner_guid
+		FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+		WHERE ci.guid = ? ORDER BY ci.bag, ci.slot`, playerGUID)
+	if err != nil {
+		return top, contents
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item debugInventoryItem
+		var guid, owner int64
+		if err := rows.Scan(&item.bag, &item.slot, &guid, &item.entry, &owner); err != nil || guid <= 0 {
+			continue
+		}
+		item.guid = uint64(guid)
+		item.owner = uint64(owner)
+		if item.bag == 0 {
+			if _, dup := top[item.slot]; !dup {
+				top[item.slot] = item
+			}
+			continue
+		}
+		bySlot, ok := contents[uint64(item.bag)]
+		if !ok {
+			bySlot = make(map[int64]debugInventoryItem)
+			contents[uint64(item.bag)] = bySlot
+		}
+		if _, dup := bySlot[item.slot]; !dup {
+			bySlot[item.slot] = item
+		}
+	}
+	return top, contents
+}
+
+// debugItemBagSize is the GetBagSize twin: the template's ContainerSlots,
+// 0 when the item is not a container or its template is unknown (a
+// missing template can never be a bag in C++ either — the bag object
+// comes from the template).
+func (s *session) debugItemBagSize(ctx context.Context, entry uint32) int64 {
+	if data, err := s.loadItemQueryData(ctx, entry); err == nil {
+		return int64(data.ContainerSlots)
+	}
+	return 0
+}
+
+// handleDebugGetItemState mirrors HandleDebugGetItemStateCommand
+// (cs_debug.cpp:491): ".debug getitemstate
+// <unchanged|changed|new|removed|queue|check_all>". The arg is a single
+// std::string token (ChatCommandArgs.h:91-103), so a missing arg, an
+// unknown token, or any trailing token returns false silently. The
+// target is the selected player, else the invoker (Chat.cpp:300-308).
+// Go persists every item immediately, so every item is ITEM_UNCHANGED
+// (Item.h:53-56) and there is no update queue: the changed/new/removed
+// legs print the header only, the queue leg always prints "The player's
+// updatequeue is empty", and the check_all queue legs never fire. The
+// state leg walks PLAYER_SLOT_START..END skipping buyback, one level
+// into each bag (GetBagSize from the template, cached per entry); the
+// check_all leg validates owner on both levels and prints "All OK!"
+// when clean. The slot and container legs are carried literally but
+// cannot fire here: the DB slot is the single source of truth (the
+// walk keys by it, so item.slot always equals its position), and a
+// row's bag IS its container (a bag-0 row has no container by
+// construction, a contents row's container is the bag it was read
+// under) — in C++ they guard in-memory corruption the DB-backed
+// model cannot hold.
+func (s *session) handleDebugGetItemState(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandDebug) {
+		return false
+	}
+	if len(args) != 1 {
+		return false
+	}
+	stateName := args[0]
+	listQueue := stateName == "queue"
+	checkAll := stateName == "check_all"
+	var state uint32 // ITEM_UNCHANGED
+	switch stateName {
+	case "unchanged":
+		state = 0
+	case "changed":
+		state = 1
+	case "new":
+		state = 2
+	case "removed":
+		state = 3
+	case "queue", "check_all":
+	default:
+		return false
+	}
+	playerGUID := s.playerGUID
+	if s.server != nil {
+		if ts := s.server.playerSessionForGUID(s.selection); ts != nil {
+			playerGUID = ts.playerGUID
+		}
+	}
+	if playerGUID == 0 {
+		return false
+	}
+	top, contents := s.debugInventoryWalk(ctx, playerGUID)
+	bagSizes := make(map[uint32]int64)
+	bagSize := func(entry uint32) int64 {
+		if size, ok := bagSizes[entry]; ok {
+			return size
+		}
+		size := s.debugItemBagSize(ctx, entry)
+		bagSizes[entry] = size
+		return size
+	}
+	itemFullGUID := func(guid uint64) uint64 { return guid | (uint64(0x4000) << 48) }
+	if !listQueue && !checkAll {
+		s.sendSysMessage("The player has the following " + stateName + " items: ")
+		if state == 0 {
+			for i := int64(debugPlayerSlotStart); i < debugPlayerSlotEnd; i++ {
+				if i >= debugBuybackSlotStart && i < debugBuybackSlotEnd {
+					continue
+				}
+				item, ok := top[i]
+				if !ok {
+					continue
+				}
+				if size := bagSize(item.entry); size > 0 {
+					for j := int64(0); j < size; j++ {
+						inner, ok := contents[item.guid][j]
+						if !ok {
+							continue
+						}
+						s.sendSysMessage(fmt.Sprintf("bag: 255 slot: %d %s owner: %s", inner.slot, miscGUIDToString(itemFullGUID(inner.guid)), miscGUIDToString(inner.owner)))
+					}
+					continue
+				}
+				s.sendSysMessage(fmt.Sprintf("bag: 255 slot: %d %s owner: %s", item.slot, miscGUIDToString(itemFullGUID(item.guid)), miscGUIDToString(item.owner)))
+			}
+		}
+		return true
+	}
+	if listQueue {
+		s.sendSysMessage("The player's updatequeue is empty")
+		return true
+	}
+	errorFound := false
+	playerGUIDString := miscGUIDToString(playerGUID)
+	for i := int64(debugPlayerSlotStart); i < debugPlayerSlotEnd; i++ {
+		if i >= debugBuybackSlotStart && i < debugBuybackSlotEnd {
+			continue
+		}
+		item, ok := top[i]
+		if !ok {
+			continue
+		}
+		if item.slot != i {
+			s.sendSysMessage(fmt.Sprintf("Item with slot %d and guid %d has an incorrect slot value: %d", i, item.guid, item.slot))
+			errorFound = true
+			continue
+		}
+		if item.owner != playerGUID {
+			s.sendSysMessage(fmt.Sprintf("The item with slot %d %s does have non-matching owner guid %s and %s!", item.slot, miscGUIDToString(itemFullGUID(item.guid)), miscGUIDToString(item.owner), playerGUIDString))
+			errorFound = true
+			continue
+		}
+		if size := bagSize(item.entry); size > 0 {
+			for j := int64(0); j < size; j++ {
+				inner, ok := contents[item.guid][j]
+				if !ok {
+					continue
+				}
+				if inner.slot != j {
+					s.sendSysMessage(fmt.Sprintf("The item in bag %d and slot %d (guid: %d) has an incorrect slot value: %d", item.slot, j, inner.guid, inner.slot))
+					errorFound = true
+					continue
+				}
+				if inner.owner != playerGUID {
+					s.sendSysMessage(fmt.Sprintf("The item in bag %d at slot %d and %s, the owner (%s) and the player (%s) don't match!", item.slot, inner.slot, miscGUIDToString(itemFullGUID(inner.guid)), miscGUIDToString(inner.owner), playerGUIDString))
+					errorFound = true
+					continue
+				}
+			}
+		}
+	}
+	if !errorFound {
+		s.sendSysMessage("All OK!")
+	}
+	return true
+}
+
 // handleDebugItemExpire mirrors HandleDebugItemExpireCommand
 // (cs_debug.cpp:1055): ".debug itemexpire <guid>" fires the expire hook
 // and destroys the item (Item::UpdateDuration, Item.cpp:305-320: the
