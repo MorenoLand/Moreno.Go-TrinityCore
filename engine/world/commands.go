@@ -8540,16 +8540,179 @@ func (s *session) buildCommandTree() *commandNode {
 			return true
 		}, permissionCommandDebug)
 	}
+	// R13 depth (cs_debug.cpp:118-123): "asan" and "warden" are
+	// multi-word sub-tables (debug asan memoryleak, debug warden
+	// force), so they are 3-token paths with prefix matching at
+	// every level. The asan arms are #ifdef ASAN only in C++ and
+	// silent no-ops on a non-ASAN build; warden force has no Go
+	// Warden and always reports the system disabled.
+	debugASAN := debugNode.group("asan")
+	debugASAN.leaf("memoryleak", func(ctx context.Context, args []string) bool {
+		return s.handleDebugASANMemoryLeak(ctx, args)
+	}, permissionCommandDebug)
+	debugASAN.leaf("outofbounds", func(ctx context.Context, args []string) bool {
+		return s.handleDebugASANOutOfBounds(ctx, args)
+	}, permissionCommandDebug)
+	debugWarden := debugNode.group("warden")
+	debugWarden.leaf("force", func(ctx context.Context, args []string) bool {
+		return s.handleDebugWardenForce(ctx, args)
+	}, permissionCommandDebug)
 	root.addWithPerms("tele", func(ctx context.Context, args []string) bool { s.handleCmdTele(ctx, args); return true }, map[string]uint32{"add": permissionCommandTeleAdd, "del": permissionCommandTeleDel, "name": permissionCommandTeleName, "group": permissionCommandTeleGroup}, nil)
-	root.addWithPerms("ticket", func(ctx context.Context, args []string) bool { s.handleCmdTicket(ctx, args); return true }, map[string]uint32{"assign": permissionCommandTicketAssign, "close": permissionCommandTicketClose, "closedlist": permissionCommandTicketClosedlist, "comment": permissionCommandTicketComment, "complete": permissionCommandTicketComplete, "delete": permissionCommandTicketDelete, "escalate": permissionCommandTicketEscalate, "escalatedlist": permissionCommandTicketEscalatedlist, "list": permissionCommandTicketList, "onlinelist": permissionCommandTicketOnlinelist, "reset": permissionCommandTicketReset, "response": permissionCommandTicketResponse, "togglesystem": permissionCommandTicketTogglesystem, "unassign": permissionCommandTicketUnassign, "viewid": permissionCommandTicketViewid, "viewname": permissionCommandTicketViewname}, nil).withPerm(permissionCommandTicket)
+	ticketNode := root.addWithPerms("ticket", func(ctx context.Context, args []string) bool { s.handleCmdTicket(ctx, args); return true }, map[string]uint32{"assign": permissionCommandTicketAssign, "close": permissionCommandTicketClose, "closedlist": permissionCommandTicketClosedlist, "comment": permissionCommandTicketComment, "complete": permissionCommandTicketComplete, "delete": permissionCommandTicketDelete, "escalate": permissionCommandTicketEscalate, "escalatedlist": permissionCommandTicketEscalatedlist, "list": permissionCommandTicketList, "onlinelist": permissionCommandTicketOnlinelist, "reset": permissionCommandTicketReset, "response": permissionCommandTicketResponse, "togglesystem": permissionCommandTicketTogglesystem, "unassign": permissionCommandTicketUnassign, "viewid": permissionCommandTicketViewid, "viewname": permissionCommandTicketViewname}, nil).withPerm(permissionCommandTicket)
+	// R13 depth (cs_ticket.cpp:52-53): "response" is a sub-table
+	// with append/appendln leaves and no "" entry, so the group node
+	// stays handler-less. The family switch in handleCmdTicket stays
+	// as the fallback for an invisible group.
+	ticketResponse := ticketNode.group("response")
+	ticketResponse.leaf("append", func(ctx context.Context, args []string) bool {
+		s.handleTicketResponse(ctx, append([]string{"append"}, args...))
+		return true
+	}, permissionCommandTicketResponseAppend)
+	ticketResponse.leaf("appendln", func(ctx context.Context, args []string) bool {
+		s.handleTicketResponse(ctx, append([]string{"appendln"}, args...))
+		return true
+	}, permissionCommandTicketResponseAppendln)
 	root.addWithPerms("titles", func(ctx context.Context, args []string) bool { s.handleCmdTitles(ctx, args); return true }, map[string]uint32{"add": permissionCommandTitlesAdd, "current": permissionCommandTitlesCurrent, "remove": permissionCommandTitlesRemove, "set": permissionCommandTitlesSet}, nil).withPerm(permissionCommandTitles)
 	root.addWithPerms("wp", func(ctx context.Context, args []string) bool { s.handleCmdWp(ctx, args); return true }, map[string]uint32{"add": permissionCommandWpAdd, "event": permissionCommandWpEvent, "load": permissionCommandWpLoad, "modify": permissionCommandWpModify, "unload": permissionCommandWpUnload, "reload": permissionCommandWpReload, "show": permissionCommandWpShow}, nil).withPerm(permissionCommandWp)
-	root.addWithPerms("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, map[string]uint32{"creature": permissionCommandGO, "gameobject": permissionCommandGO, "graveyard": permissionCommandGO, "grid": permissionCommandGO, "taxinode": permissionCommandGO, "areatrigger": permissionCommandGO, "zonexy": permissionCommandGO, "xyz": permissionCommandGO, "ticket": permissionCommandGO, "offset": permissionCommandGO, "instance": permissionCommandGO, "boss": permissionCommandGO}, nil)
-	root.addWithPerms("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, map[string]uint32{"hp": permissionCommandModifyHP, "mana": permissionCommandModifyMana, "energy": permissionCommandModifyEnergy, "rage": permissionCommandModifyRage, "runicpower": permissionCommandModifyRunicPower, "money": permissionCommandModifyMoney, "honor": permissionCommandModifyHonor, "arenapoints": permissionCommandModifyArenaPoints, "xp": permissionCommandModifyXP, "drunk": permissionCommandModifyDrunk, "scale": permissionCommandModifyScale, "spell": permissionCommandModifySpell, "standstate": permissionCommandModifyStandState, "mount": permissionCommandModifyMount, "gender": permissionCommandModifyGender, "bit": permissionCommandModifyBit, "faction": permissionCommandModifyFaction, "phase": permissionCommandModifyPhase, "speed": permissionCommandModifySpeed, "talentpoints": permissionCommandModifyTalentPoints, "reputation": permissionCommandModifyReputation}, nil).withPerm(permissionCommandModify)
+	goNode := root.addWithPerms("go", func(ctx context.Context, args []string) bool { s.handleCmdGo(ctx, args); return true }, map[string]uint32{"creature": permissionCommandGO, "gameobject": permissionCommandGO, "graveyard": permissionCommandGO, "grid": permissionCommandGO, "taxinode": permissionCommandGO, "areatrigger": permissionCommandGO, "zonexy": permissionCommandGO, "xyz": permissionCommandGO, "ticket": permissionCommandGO, "offset": permissionCommandGO, "instance": permissionCommandGO, "boss": permissionCommandGO}, nil)
+	// R13 depth (cs_go.cpp:48-61): "creature id" and "gameobject id"
+	// are multi-word entries, so creature/gameobject are 3-token
+	// paths; each also carries the bare spawn-id handler, so the
+	// group node keeps its handler via the family switch.
+	goCreature := goNode.group("creature")
+	goCreature.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdGo(ctx, append([]string{"creature"}, args...))
+		return true
+	}
+	goCreature.leaf("id", func(ctx context.Context, args []string) bool {
+		s.handleCmdGo(ctx, append([]string{"creature", "id"}, args...))
+		return true
+	}, permissionCommandGO)
+	goGameObject := goNode.group("gameobject")
+	goGameObject.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdGo(ctx, append([]string{"gameobject"}, args...))
+		return true
+	}
+	goGameObject.leaf("id", func(ctx context.Context, args []string) bool {
+		s.handleCmdGo(ctx, append([]string{"gameobject", "id"}, args...))
+		return true
+	}, permissionCommandGO)
+	modifyNode := root.addWithPerms("modify", func(ctx context.Context, args []string) bool { s.handleCmdModify(ctx, args); return true }, map[string]uint32{"hp": permissionCommandModifyHP, "mana": permissionCommandModifyMana, "energy": permissionCommandModifyEnergy, "rage": permissionCommandModifyRage, "runicpower": permissionCommandModifyRunicPower, "money": permissionCommandModifyMoney, "honor": permissionCommandModifyHonor, "arenapoints": permissionCommandModifyArenaPoints, "xp": permissionCommandModifyXP, "drunk": permissionCommandModifyDrunk, "scale": permissionCommandModifyScale, "spell": permissionCommandModifySpell, "standstate": permissionCommandModifyStandState, "mount": permissionCommandModifyMount, "gender": permissionCommandModifyGender, "bit": permissionCommandModifyBit, "faction": permissionCommandModifyFaction, "phase": permissionCommandModifyPhase, "speed": permissionCommandModifySpeed, "talentpoints": permissionCommandModifyTalentPoints, "reputation": permissionCommandModifyReputation}, nil).withPerm(permissionCommandModify)
+	// R13 depth (cs_modify.cpp:47-52): "speed" is a sub-table with
+	// all/backwalk/fly/walk/swim leaves plus a "" entry (the
+	// all-speeds handler), so the group node keeps its handler via
+	// the family switch.
+	modifySpeed := modifyNode.group("speed")
+	modifySpeed.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdModify(ctx, append([]string{"speed"}, args...))
+		return true
+	}
+	modifySpeed.leaf("all", func(ctx context.Context, args []string) bool {
+		s.handleCmdModify(ctx, append([]string{"speed", "all"}, args...))
+		return true
+	}, permissionCommandModifySpeedAll)
+	modifySpeed.leaf("backwalk", func(ctx context.Context, args []string) bool {
+		s.handleCmdModify(ctx, append([]string{"speed", "backwalk"}, args...))
+		return true
+	}, permissionCommandModifySpeedBackwalk)
+	modifySpeed.leaf("fly", func(ctx context.Context, args []string) bool {
+		s.handleCmdModify(ctx, append([]string{"speed", "fly"}, args...))
+		return true
+	}, permissionCommandModifySpeedFly)
+	modifySpeed.leaf("walk", func(ctx context.Context, args []string) bool {
+		s.handleCmdModify(ctx, append([]string{"speed", "walk"}, args...))
+		return true
+	}, permissionCommandModifySpeedWalk)
+	modifySpeed.leaf("swim", func(ctx context.Context, args []string) bool {
+		s.handleCmdModify(ctx, append([]string{"speed", "swim"}, args...))
+		return true
+	}, permissionCommandModifySpeedSwim)
 	root.addWithPerms("additem", func(ctx context.Context, args []string) bool { s.handleCmdAddItem(ctx, args); return true }, map[string]uint32{"set": permissionCommandAddItemSet}, nil).withPerm(permissionCommandAddItem)
 	root.addWithPerms("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, map[string]uint32{"back": permissionCommandCastBack, "dist": permissionCommandCastDist, "self": permissionCommandCastSelf, "target": permissionCommandCastTarget, "dest": permissionCommandCastDest}, nil).withPerm(permissionCommandCast)
-	root.addWithPerms("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, map[string]uint32{"corpses": permissionCommandServerCorpses, "debug": permissionCommandServerDebug, "exit": permissionCommandServerExit, "idlerestart": permissionCommandServerIdlerestart, "idleshutdown": permissionCommandServerIdleshutdown, "info": permissionCommandServerInfo, "motd": permissionCommandServerMotd, "plimit": permissionCommandServerPlimit, "restart": permissionCommandServerRestart, "shutdown": permissionCommandServerShutdown, "set": permissionCommandServerSet}, nil).withPerm(permissionCommandServer)
-	root.addWithPerms("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, map[string]uint32{"customize": permissionCommandCharacterCustomize, "changefaction": permissionCommandCharacterChangeFaction, "changerace": permissionCommandCharacterChangeRace, "changeaccount": permissionCommandCharacterChangeAccount, "deleted": 0, "erase": permissionCommandCharacterErase, "level": permissionCommandCharacterLevel, "rename": permissionCommandCharacterRename, "reputation": permissionCommandCharacterReputation, "titles": permissionCommandCharacterTitles}, map[string]string{"char": "character"})
+	serverNode := root.addWithPerms("server", func(ctx context.Context, args []string) bool { s.handleCmdServer(ctx, args); return true }, map[string]uint32{"corpses": permissionCommandServerCorpses, "debug": permissionCommandServerDebug, "exit": permissionCommandServerExit, "idlerestart": permissionCommandServerIdlerestart, "idleshutdown": permissionCommandServerIdleshutdown, "info": permissionCommandServerInfo, "motd": permissionCommandServerMotd, "plimit": permissionCommandServerPlimit, "restart": permissionCommandServerRestart, "shutdown": permissionCommandServerShutdown, "set": permissionCommandServerSet}, nil).withPerm(permissionCommandServer)
+	// R13 depth (cs_server.cpp:66-94): restart/shutdown/idlerestart/
+	// idleshutdown are sub-tables with cancel/force leaves and a ""
+	// entry (the timed handler), so those group nodes keep their
+	// handler via the family switch; "set" has no "" entry and stays
+	// handler-less.
+	serverRestart := serverNode.group("restart")
+	serverRestart.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"restart"}, args...))
+		return true
+	}
+	serverRestart.leaf("cancel", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"restart", "cancel"}, args...))
+		return true
+	}, permissionCommandServerRestartCancel)
+	serverRestart.leaf("force", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"restart", "force"}, args...))
+		return true
+	}, permissionCommandServerRestartForce)
+	serverShutdown := serverNode.group("shutdown")
+	serverShutdown.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"shutdown"}, args...))
+		return true
+	}
+	serverShutdown.leaf("cancel", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"shutdown", "cancel"}, args...))
+		return true
+	}, permissionCommandServerShutdownCancel)
+	serverShutdown.leaf("force", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"shutdown", "force"}, args...))
+		return true
+	}, permissionCommandServerShutdownForce)
+	serverSet := serverNode.group("set")
+	serverSet.leaf("loglevel", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"set", "loglevel"}, args...))
+		return true
+	}, permissionCommandServerSetLoglevel)
+	serverSet.leaf("motd", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"set", "motd"}, args...))
+		return true
+	}, permissionCommandServerSetMotd)
+	serverSet.leaf("closed", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"set", "closed"}, args...))
+		return true
+	}, permissionCommandServerSetClosed)
+	serverIdleRestart := serverNode.group("idlerestart")
+	serverIdleRestart.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"idlerestart"}, args...))
+		return true
+	}
+	serverIdleRestart.leaf("cancel", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"idlerestart", "cancel"}, args...))
+		return true
+	}, permissionCommandServerIdlerestartCancel)
+	serverIdleShutdown := serverNode.group("idleshutdown")
+	serverIdleShutdown.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"idleshutdown"}, args...))
+		return true
+	}
+	serverIdleShutdown.leaf("cancel", func(ctx context.Context, args []string) bool {
+		s.handleCmdServer(ctx, append([]string{"idleshutdown", "cancel"}, args...))
+		return true
+	}, permissionCommandServerIdleshutdownCancel)
+	characterNode := root.addWithPerms("character", func(ctx context.Context, args []string) bool { s.handleCmdCharacter(ctx, args); return true }, map[string]uint32{"customize": permissionCommandCharacterCustomize, "changefaction": permissionCommandCharacterChangeFaction, "changerace": permissionCommandCharacterChangeRace, "changeaccount": permissionCommandCharacterChangeAccount, "deleted": 0, "erase": permissionCommandCharacterErase, "level": permissionCommandCharacterLevel, "rename": permissionCommandCharacterRename, "reputation": permissionCommandCharacterReputation, "titles": permissionCommandCharacterTitles}, map[string]string{"char": "character"})
+	// R13 depth (cs_character.cpp:57-60, old-form table): "deleted"
+	// is a sub-table with delete/list/restore/old leaves and no ""
+	// entry, so the group node stays handler-less.
+	characterDeleted := characterNode.group("deleted")
+	characterDeleted.leaf("delete", func(ctx context.Context, args []string) bool {
+		s.handleCmdCharacter(ctx, append([]string{"deleted", "delete"}, args...))
+		return true
+	}, permissionCommandCharacterDeletedDelete)
+	characterDeleted.leaf("list", func(ctx context.Context, args []string) bool {
+		s.handleCmdCharacter(ctx, append([]string{"deleted", "list"}, args...))
+		return true
+	}, permissionCommandCharacterDeletedList)
+	characterDeleted.leaf("restore", func(ctx context.Context, args []string) bool {
+		s.handleCmdCharacter(ctx, append([]string{"deleted", "restore"}, args...))
+		return true
+	}, permissionCommandCharacterDeletedRestore)
+	characterDeleted.leaf("old", func(ctx context.Context, args []string) bool {
+		s.handleCmdCharacter(ctx, append([]string{"deleted", "old"}, args...))
+		return true
+	}, permissionCommandCharacterDeletedOld)
 	root.add("levelup", func(ctx context.Context, args []string) bool { s.handleCmdLevelup(ctx, args); return true }, nil, nil).withPerm(permissionCommandLevelup)
 	root.addWithPerms("pdump", func(ctx context.Context, args []string) bool { s.handleCmdPDump(ctx, args); return true }, map[string]uint32{"copy": permissionCommandPDumpCopy, "load": permissionCommandPDumpLoad, "write": permissionCommandPDumpWrite}, nil)
 	accountNode := root.addWithPerms("account", func(ctx context.Context, args []string) bool { s.handleCmdAccount(ctx, args); return true }, map[string]uint32{"set": 0, "password": permissionCommandAccountPassword, "addon": permissionCommandAccountAddon, "email": permissionCommandAccountEmail, "lock": 0, "2fa": 0, "create": permissionCommandAccountCreate, "delete": permissionCommandAccountDelete, "onlinelist": permissionCommandAccountOnlineList}, map[string]string{"acct": "account"})
@@ -8599,16 +8762,210 @@ func (s *session) buildCommandTree() *commandNode {
 	root.addWithPerms("banlist", func(ctx context.Context, args []string) bool { s.handleCmdBanList(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanListAccount, "character": permissionCommandBanListCharacter, "ip": permissionCommandBanListIP}, nil)
 	root.addWithPerms("unban", func(ctx context.Context, args []string) bool { s.handleCmdUnBan(ctx, args); return true }, map[string]uint32{"account": permissionCommandUnBanAccount, "character": permissionCommandUnBanCharacter, "playeraccount": permissionCommandUnBanPlayerAccount, "ip": permissionCommandUnBanIP}, nil)
 	root.addWithPerms("bf", func(ctx context.Context, args []string) bool { s.handleCmdBF(ctx, args); return true }, map[string]uint32{"start": permissionCommandBfStart, "stop": permissionCommandBfStop, "switch": permissionCommandBfSwitch, "timer": permissionCommandBfTimer, "enable": permissionCommandBfEnable}, nil)
-	root.add("deserter", func(ctx context.Context, args []string) bool { s.handleCmdDeserter(ctx, args); return true }, []string{"instance", "bg"}, nil)
-	root.add("disable", func(ctx context.Context, args []string) bool { s.handleCmdDisable(ctx, args); return true }, []string{"add", "remove"}, nil)
+	deserterNode := root.add("deserter", func(ctx context.Context, args []string) bool { s.handleCmdDeserter(ctx, args); return true }, []string{"instance", "bg"}, nil)
+	// R13 depth (cs_deserter.cpp:44-53): "instance" and "bg" are
+	// sub-tables with add/remove leaves and no "" entries, so the
+	// group nodes stay handler-less.
+	deserterInstance := deserterNode.group("instance")
+	deserterInstance.leaf("add", func(ctx context.Context, args []string) bool {
+		s.handleCmdDeserter(ctx, append([]string{"instance", "add"}, args...))
+		return true
+	}, permissionCommandDeserterInstanceAdd)
+	deserterInstance.leaf("remove", func(ctx context.Context, args []string) bool {
+		s.handleCmdDeserter(ctx, append([]string{"instance", "remove"}, args...))
+		return true
+	}, permissionCommandDeserterInstanceRemove)
+	deserterBG := deserterNode.group("bg")
+	deserterBG.leaf("add", func(ctx context.Context, args []string) bool {
+		s.handleCmdDeserter(ctx, append([]string{"bg", "add"}, args...))
+		return true
+	}, permissionCommandDeserterBGAdd)
+	deserterBG.leaf("remove", func(ctx context.Context, args []string) bool {
+		s.handleCmdDeserter(ctx, append([]string{"bg", "remove"}, args...))
+		return true
+	}, permissionCommandDeserterBGRemove)
+	disableNode := root.add("disable", func(ctx context.Context, args []string) bool { s.handleCmdDisable(ctx, args); return true }, []string{"add", "remove"}, nil)
+	// R13 depth (cs_disable.cpp:44-75, old-form tables): "add" and
+	// "remove" are sub-tables with spell/quest/map/battleground/
+	// achievement_criteria/outdoorpvp/vmap/mmap leaves and no ""
+	// entries, so the group nodes stay handler-less. The family
+	// switch keeps its own per-type perm gate and its map/mmap
+	// ambiguity listing as the fallback for an invisible group.
+	disableAdd := disableNode.group("add")
+	for _, typ := range []struct {
+		name string
+		perm uint32
+	}{
+		{"spell", permissionCommandDisableAddSpell},
+		{"quest", permissionCommandDisableAddQuest},
+		{"map", permissionCommandDisableAddMap},
+		{"battleground", permissionCommandDisableAddBattleground},
+		{"achievement_criteria", permissionCommandDisableAddAchievementCriteria},
+		{"outdoorpvp", permissionCommandDisableAddOutdoorPvP},
+		{"vmap", permissionCommandDisableAddVMap},
+		{"mmap", permissionCommandDisableAddMMap},
+	} {
+		typ := typ
+		disableAdd.leaf(typ.name, func(ctx context.Context, args []string) bool {
+			s.handleCmdDisable(ctx, append([]string{"add", typ.name}, args...))
+			return true
+		}, typ.perm)
+	}
+	disableRemove := disableNode.group("remove")
+	for _, typ := range []struct {
+		name string
+		perm uint32
+	}{
+		{"spell", permissionCommandDisableRemoveSpell},
+		{"quest", permissionCommandDisableRemoveQuest},
+		{"map", permissionCommandDisableRemoveMap},
+		{"battleground", permissionCommandDisableRemoveBattleground},
+		{"achievement_criteria", permissionCommandDisableRemoveAchievementCriteria},
+		{"outdoorpvp", permissionCommandDisableRemoveOutdoorPvP},
+		{"vmap", permissionCommandDisableRemoveVMap},
+		{"mmap", permissionCommandDisableRemoveMMap},
+	} {
+		typ := typ
+		disableRemove.leaf(typ.name, func(ctx context.Context, args []string) bool {
+			s.handleCmdDisable(ctx, append([]string{"remove", typ.name}, args...))
+			return true
+		}, typ.perm)
+	}
 	root.addWithPerms("event", func(ctx context.Context, args []string) bool { s.handleCmdEvent(ctx, args); return true }, map[string]uint32{"activelist": permissionCommandEventActivelist, "start": permissionCommandEventStart, "stop": permissionCommandEventStop, "info": permissionCommandEventInfo}, nil)
-	root.addWithPerms("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, map[string]uint32{"activate": permissionCommandGObjectActivate, "delete": permissionCommandGObjectDelete, "info": permissionCommandGObjectInfo, "move": permissionCommandGObjectMove, "near": permissionCommandGObjectNear, "target": permissionCommandGObjectTarget, "turn": permissionCommandGObjectTurn, "spawngroup": permissionCommandGObjectSpawnGroup, "despawngroup": permissionCommandGObjectDespawnGroup, "add": 0, "set": 0}, map[string]string{"gob": "gobject"})
+	gobjectNode := root.addWithPerms("gobject", func(ctx context.Context, args []string) bool { s.handleCmdGObject(ctx, args); return true }, map[string]uint32{"activate": permissionCommandGObjectActivate, "delete": permissionCommandGObjectDelete, "info": permissionCommandGObjectInfo, "move": permissionCommandGObjectMove, "near": permissionCommandGObjectNear, "target": permissionCommandGObjectTarget, "turn": permissionCommandGObjectTurn, "spawngroup": permissionCommandGObjectSpawnGroup, "despawngroup": permissionCommandGObjectDespawnGroup, "add": 0, "set": 0}, map[string]string{"gob": "gobject"})
+	// R13 depth (cs_gobject.cpp:61-71, old-form table): "add temp"
+	// and "set phase"/"set state" are multi-word entries, so add/set
+	// are 3-token paths; "add" also carries the bare handler, so the
+	// group node keeps its handler via the family switch, while "set"
+	// has no "" entry and stays handler-less.
+	gobjectAdd := gobjectNode.group("add")
+	gobjectAdd.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdGObject(ctx, append([]string{"add"}, args...))
+		return true
+	}
+	gobjectAdd.leaf("temp", func(ctx context.Context, args []string) bool {
+		s.handleCmdGObject(ctx, append([]string{"add", "temp"}, args...))
+		return true
+	}, permissionCommandGObjectAddTemp)
+	gobjectSet := gobjectNode.group("set")
+	gobjectSet.leaf("phase", func(ctx context.Context, args []string) bool {
+		s.handleCmdGObject(ctx, append([]string{"set", "phase"}, args...))
+		return true
+	}, permissionCommandGObjectSetPhase)
+	gobjectSet.leaf("state", func(ctx context.Context, args []string) bool {
+		s.handleCmdGObject(ctx, append([]string{"set", "state"}, args...))
+		return true
+	}, permissionCommandGObjectSetState)
 	root.addWithPerms("group", func(ctx context.Context, args []string) bool { s.handleCmdGroup(ctx, args); return true }, map[string]uint32{"set": permissionCommandGroupSet, "leader": permissionCommandGroupLeader, "disband": permissionCommandGroupDisband, "remove": permissionCommandGroupRemove, "join": permissionCommandGroupJoin, "list": permissionCommandGroupList, "summon": permissionCommandGroupSummon}, nil).withPerm(permissionCommandGroup)
 	root.addWithPerms("guild", func(ctx context.Context, args []string) bool { s.handleCmdGuild(ctx, args); return true }, map[string]uint32{"create": permissionCommandGuildCreate, "delete": permissionCommandGuildDelete, "invite": permissionCommandGuildInvite, "uninvite": permissionCommandGuildUninvite, "rank": permissionCommandGuildRank, "rename": permissionCommandGuildRename, "info": permissionCommandGuildInfo}, nil).withPerm(permissionCommandGuild)
-	root.addWithPerms("honor", func(ctx context.Context, args []string) bool { s.handleCmdHonor(ctx, args); return true }, map[string]uint32{"add": permissionCommandHonorAdd, "update": permissionCommandHonorUpdate}, nil).withPerm(permissionCommandHonor)
+	honorNode := root.addWithPerms("honor", func(ctx context.Context, args []string) bool { s.handleCmdHonor(ctx, args); return true }, map[string]uint32{"add": permissionCommandHonorAdd, "update": permissionCommandHonorUpdate}, nil).withPerm(permissionCommandHonor)
+	// R13 depth (cs_honor.cpp:45-51): "add" is a sub-table with a
+	// kill leaf and a "" entry (the amount handler), so the group
+	// node keeps its handler via the family switch.
+	honorAdd := honorNode.group("add")
+	honorAdd.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdHonor(ctx, append([]string{"add"}, args...))
+		return true
+	}
+	honorAdd.leaf("kill", func(ctx context.Context, args []string) bool {
+		s.handleCmdHonor(ctx, append([]string{"add", "kill"}, args...))
+		return true
+	}, permissionCommandHonorAddKill)
 	root.addWithPerms("instance", func(ctx context.Context, args []string) bool { s.handleCmdInstance(ctx, args); return true }, map[string]uint32{"listbinds": permissionCommandInstanceListBinds, "unbind": permissionCommandInstanceUnbind, "stats": permissionCommandInstanceStats, "savedata": permissionCommandInstanceSaveData, "setbossstate": permissionCommandInstanceSetBossState, "getbossstate": permissionCommandInstanceGetBossState}, nil).withPerm(permissionCommandInstance)
-	root.add("learn", func(ctx context.Context, args []string) bool { s.handleCmdLearn(ctx, args); return true }, []string{"all", "my"}, nil)
-	root.addWithPerms("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, map[string]uint32{"area": permissionCommandLookupArea, "creature": permissionCommandLookupCreature, "event": permissionCommandLookupEvent, "faction": permissionCommandLookupFaction, "item": permissionCommandLookupItem, "object": permissionCommandLookupObject, "quest": permissionCommandLookupQuest, "player": 0, "skill": permissionCommandLookupSkill, "spell": permissionCommandLookupSpell, "taxinode": permissionCommandLookupTaxinode, "tele": permissionCommandLookupTele, "title": permissionCommandLookupTitle, "map": permissionCommandLookupMap}, nil)
+	learnNode := root.add("learn", func(ctx context.Context, args []string) bool { s.handleCmdLearn(ctx, args); return true }, []string{"all", "my"}, nil)
+	// R13 depth (cs_learn.cpp:47-60, old-form tables): "all" and "my"
+	// are sub-tables with no "" entries (the bare learn handler
+	// lives on the learn node itself), so both group nodes stay
+	// handler-less. The family switch stays as the fallback for an
+	// invisible group.
+	learnAll := learnNode.group("all")
+	for _, arm := range []struct {
+		name string
+		perm uint32
+	}{
+		{"blizzard", permissionCommandLearnAllGM},
+		{"debug", permissionCommandLearn},
+		{"crafts", permissionCommandLearnAllCrafts},
+		{"default", permissionCommandLearnAllDefault},
+		{"languages", permissionCommandLearnAllLang},
+		{"recipes", permissionCommandLearnAllRecipes},
+		{"talents", permissionCommandLearnAllTalents},
+		{"pettalents", permissionCommandLearnMyPetTalents},
+	} {
+		arm := arm
+		learnAll.leaf(arm.name, func(ctx context.Context, args []string) bool {
+			s.handleCmdLearn(ctx, append([]string{"all", arm.name}, args...))
+			return true
+		}, arm.perm)
+	}
+	learnMy := learnNode.group("my")
+	for _, arm := range []string{"trainer", "quests"} {
+		arm := arm
+		learnMy.leaf(arm, func(ctx context.Context, args []string) bool {
+			s.handleCmdLearn(ctx, append([]string{"my", arm}, args...))
+			return true
+		}, permissionCommandLearnAllMySpells)
+	}
+	lookupNode := root.addWithPerms("lookup", func(ctx context.Context, args []string) bool { s.handleCmdLookup(ctx, args); return true }, map[string]uint32{"area": permissionCommandLookupArea, "creature": permissionCommandLookupCreature, "event": permissionCommandLookupEvent, "faction": permissionCommandLookupFaction, "item": permissionCommandLookupItem, "object": permissionCommandLookupObject, "quest": permissionCommandLookupQuest, "player": 0, "skill": permissionCommandLookupSkill, "spell": permissionCommandLookupSpell, "taxinode": permissionCommandLookupTaxinode, "tele": permissionCommandLookupTele, "title": permissionCommandLookupTitle, "map": permissionCommandLookupMap}, nil)
+	// R13 depth (cs_lookup.cpp:66-80): "item id", "item set",
+	// "quest id", "spell id" and "map id" are multi-word entries, so
+	// item/quest/spell/map are 3-token paths; each also carries the
+	// bare name handler, so those group nodes keep their handler via
+	// the family switch. "player" is a real sub-table with
+	// ip/account/email leaves and no "" entry.
+	lookupItem := lookupNode.group("item")
+	lookupItem.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"item"}, args...))
+		return true
+	}
+	lookupItem.leaf("id", func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"item", "id"}, args...))
+		return true
+	}, permissionCommandLookupItemID)
+	lookupItem.leaf("set", func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"item", "set"}, args...))
+		return true
+	}, permissionCommandLookupItemSet)
+	lookupQuest := lookupNode.group("quest")
+	lookupQuest.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"quest"}, args...))
+		return true
+	}
+	lookupQuest.leaf("id", func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"quest", "id"}, args...))
+		return true
+	}, permissionCommandLookupQuestID)
+	lookupSpell := lookupNode.group("spell")
+	lookupSpell.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"spell"}, args...))
+		return true
+	}
+	lookupSpell.leaf("id", func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"spell", "id"}, args...))
+		return true
+	}, permissionCommandLookupSpellID)
+	lookupMap := lookupNode.group("map")
+	lookupMap.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"map"}, args...))
+		return true
+	}
+	lookupMap.leaf("id", func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"map", "id"}, args...))
+		return true
+	}, permissionCommandLookupMapID)
+	lookupPlayer := lookupNode.group("player")
+	lookupPlayer.leaf("ip", func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"player", "ip"}, args...))
+		return true
+	}, permissionCommandLookupPlayerIP)
+	lookupPlayer.leaf("account", func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"player", "account"}, args...))
+		return true
+	}, permissionCommandLookupPlayerAccount)
+	lookupPlayer.leaf("email", func(ctx context.Context, args []string) bool {
+		s.handleCmdLookup(ctx, append([]string{"player", "email"}, args...))
+		return true
+	}, permissionCommandLookupPlayerEmail)
 	root.addWithPerms("lfg", func(ctx context.Context, args []string) bool { s.handleCmdLFG(ctx, args); return true }, map[string]uint32{"player": permissionCommandLfgPlayer, "group": permissionCommandLfgGroup, "queue": permissionCommandLfgQueue, "clean": permissionCommandLfgClean, "options": permissionCommandLfgOptions}, nil)
 	root.addWithPerms("list", func(ctx context.Context, args []string) bool { s.handleCmdList(ctx, args); return true }, map[string]uint32{"creature": permissionCommandListCreature, "item": permissionCommandListItem, "object": permissionCommandListObject, "auras": permissionCommandListAuras, "mail": permissionCommandListMail, "spawnpoints": permissionCommandListSpawnpoints, "respawns": permissionCommandListRespawns}, nil)
 	root.add("channel", func(ctx context.Context, args []string) bool { s.handleCmdChannel(ctx, args); return true }, []string{"set"}, nil)
@@ -8755,7 +9112,37 @@ func (s *session) buildCommandTree() *commandNode {
 	root.addWithPerms("quest", func(ctx context.Context, args []string) bool { s.handleCmdQuest(ctx, args); return true }, map[string]uint32{"add": permissionCommandQuestAdd, "complete": permissionCommandQuestComplete, "remove": permissionCommandQuestRemove, "reward": permissionCommandQuestReward}, nil).withPerm(permissionCommandQuest)
 	root.addWithPerms("pet", func(ctx context.Context, args []string) bool { s.handleCmdPet(ctx, args); return true }, map[string]uint32{"create": permissionCommandPetCreate, "learn": permissionCommandPetLearn, "unlearn": permissionCommandPetUnlearn, "level": permissionCommandPetLevel}, nil).withPerm(permissionCommandPet)
 	root.addWithPerms("rbac", func(ctx context.Context, args []string) bool { s.handleCmdRBAC(ctx, args); return true }, map[string]uint32{"account": permissionCommandRBACAcc, "list": permissionCommandRBACList}, nil).withPerm(permissionCommandRBAC)
-	root.addWithPerms("reload", func(ctx context.Context, args []string) bool { s.handleCmdReload(ctx, args); return true }, map[string]uint32{"all": permissionCommandReloadAll}, nil).withPerm(permissionCommandReload)
+	reloadNode := root.addWithPerms("reload", func(ctx context.Context, args []string) bool { s.handleCmdReload(ctx, args); return true }, map[string]uint32{"all": permissionCommandReloadAll}, nil).withPerm(permissionCommandReload)
+	// R13 depth (cs_reload.cpp:63-73): "all" is a sub-table with
+	// achievement/area/gossips/item/locales/loot/npc/quest/scripts/
+	// spell leaves plus a "" entry (reload everything), so the group
+	// node keeps its handler via the family switch.
+	reloadAll := reloadNode.group("all")
+	reloadAll.invoke = func(ctx context.Context, args []string) bool {
+		s.handleCmdReload(ctx, append([]string{"all"}, args...))
+		return true
+	}
+	for _, group := range []struct {
+		name string
+		perm uint32
+	}{
+		{"achievement", permissionCommandReloadAllAchievement},
+		{"area", permissionCommandReloadAllArea},
+		{"gossips", permissionCommandReloadAllGossip},
+		{"item", permissionCommandReloadAllItem},
+		{"locales", permissionCommandReloadAllLocales},
+		{"loot", permissionCommandReloadAllLoot},
+		{"npc", permissionCommandReloadAllNpc},
+		{"quest", permissionCommandReloadAllQuest},
+		{"scripts", permissionCommandReloadAllScripts},
+		{"spell", permissionCommandReloadAllSpell},
+	} {
+		group := group
+		reloadAll.leaf(group.name, func(ctx context.Context, args []string) bool {
+			s.handleCmdReload(ctx, append([]string{"all", group.name}, args...))
+			return true
+		}, group.perm)
+	}
 	root.addWithPerms("reset", func(ctx context.Context, args []string) bool { s.handleCmdReset(ctx, args); return true }, map[string]uint32{"achievements": permissionCommandResetAchievements, "honor": permissionCommandResetHonor, "level": permissionCommandResetLevel, "spells": permissionCommandResetSpells, "stats": permissionCommandResetStats, "talents": permissionCommandResetTalents, "all": permissionCommandResetAll}, nil).withPerm(permissionCommandReset)
 	root.addWithPerms("send", func(ctx context.Context, args []string) bool { s.handleCmdSend(ctx, args); return true }, map[string]uint32{"items": permissionCommandSendItems, "mail": permissionCommandSendMail, "message": permissionCommandSendMessage, "money": permissionCommandSendMoney}, nil).withPerm(permissionCommandSend)
 	return root

@@ -497,6 +497,43 @@ func (s *session) handleDebugPlay(ctx context.Context, args []string) {
 	}
 }
 
+// handleDebugASANMemoryLeak mirrors HandleDebugMemoryLeak
+// (cs_debug.cpp:1657) and handleDebugASANOutOfBounds mirrors
+// HandleDebugOutOfBounds (:1646): both bodies are #ifdef ASAN, so a
+// non-ASAN build returns true with no output. Go has no ASAN build,
+// so the leaves are silent no-ops. Console::Yes in C++, so no
+// player is required and the leaf path bypasses handleCmdDebug.
+func (s *session) handleDebugASANMemoryLeak(ctx context.Context, args []string) bool {
+	return true
+}
+
+func (s *session) handleDebugASANOutOfBounds(ctx context.Context, args []string) bool {
+	return true
+}
+
+// handleDebugWardenForce mirrors HandleDebugWardenForce
+// (cs_debug.cpp:1666): an empty check list returns false, which the
+// C++ framework answers with the node's help; Go has no Warden, so
+// a non-empty list always reports the system disabled. Check ids
+// parse as uint16 (ChatCommandArgs.h:62); a bad token prints the
+// node's syntax like the C++ parse failure.
+func (s *session) handleDebugWardenForce(ctx context.Context, args []string) bool {
+	const syntax = "Syntax: .debug warden force <checkId...>"
+	if len(args) == 0 {
+		s.sendSysMessage(syntax)
+		return true
+	}
+	for _, arg := range args {
+		v, ok := parseCommandUint32(arg)
+		if !ok || v > 0xFFFF {
+			s.sendSysMessage(syntax)
+			return true
+		}
+	}
+	s.sendSysMessage("Warden system is not enabled")
+	return true
+}
+
 // handleDebugSendSpellFail mirrors HandleDebugSendSpellFailCommand
 // (cs_debug.cpp:221): ".debug send spellfail <result> [failArg1] [failArg2]"
 // writes SMSG_CAST_FAILED with cast id 0 and spell 133 (Fireball) through
