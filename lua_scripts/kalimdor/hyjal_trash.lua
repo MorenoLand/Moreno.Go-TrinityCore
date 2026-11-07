@@ -49,6 +49,21 @@
 --   the victim is within 20 (StopMoving/Clear, re-arm {2s,3s}) and otherwise
 --   MovePoints toward it with StrikeTimer = 0 — no movement bridge, so the
 --   out-of-range leg is modeled as a 1s retry. Non-triggered.
+-- - hyjal_trashAI::DamageTaken + ::JustDied (hyjal_trash.cpp:195-199 /
+--   :401-408): ev9 player/pet damage accumulator (per-GUID damageTaken
+--   + instanceData.raidDamage, clamped at MINRAIDDAMAGE 700000) and
+--   the ev4 base arm (IsEvent-gated Trash-- + world state 2454 via the
+--   shared instanceData table, the Map:GetInstanceData twin of
+--   instance->SetData; loot gate via RemoveFlag LOOTABLE). The IsEvent
+--   latch is set only by the unported wave machine (hyjalAI.cpp:524),
+--   so the wave-signal leg is wired but dormant; the world-boss
+--   disjunct never fires for these entries (none is a world boss)
+--   but is ported C++-exact.
+-- - npc_frost_wyrm / npc_gargoyle JustDied overrides
+--   (hyjal_trash.cpp:1206-1215 / :1336-1343): ground drop via
+--   Map:GetHeight + MoveTo(0, x, y, groundZ) + SetFacing(0); frost
+--   wyrm signals Trash without the world-boss check and skips the
+--   base arm (no loot leg); gargoyle drops first, then calls base.
 -- Unmodeled (documented-only, no bridges):
 -- - The entire hyjal_trashAI escort machine: IsEvent/IsOverrun wave
 --   waypoints (HordeWPs / AllianceWPs / FrostWyrmWPs / GargoyleWPs /
@@ -57,19 +72,10 @@
 --   DATA_JAINAPROUDMOORE), DespawnOrUnsummon / SetDespawnAtEnd arms, the
 --   IsOverrun DummyTarget gargoyle strike leg — EscortAI movement plus
 --   instance-script model, both blocked (standing).
--- - hyjal_trashAI::DamageTaken: instance->SetData(DATA_RAIDDAMAGE, damage)
---   raid-damage accounting (instance-data bridge blocked); ::JustDied:
---   instance->SetData(DATA_TRASH, 0) wave signal (blocked) and
---   RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE) (hyjal_trash.cpp:406-407)
---   below the MINRAIDDAMAGE (700000) / world-boss damageTaken gate —
---   the old "no flag bridge" claim was stale (the dynamic-flag bridge
---   is live, lua_creature_events.go:1033+); the arm stays out on its
---   gates: the non-world-boss disjunct reads instance->GetData(
---   DATA_RAIDDAMAGE) < MINRAIDDAMAGE (no instance-data bridge), and the
---   world-boss disjunct (damageTaken < GetMaxHealth()/4, bridgeable in
---   isolation via a per-GUID event-9 accumulator + creature:IsWorldBoss())
---   never fires for the registered trash entries (none carries the
---   BOSS_MOB type flag), so it would be inert code.
+-- - hyjal_trashAI::DamageTaken / ::JustDied: PORTED — see Ported arms.
+--   The DATA_RESET_TRASH_COUNT / DATA_RESET_RAIDDAMAGE reset legs
+--   stay out (hyjalAI.cpp:417/:907, faction-leader Reset/JustDied in
+--   the unported wave machine).
 -- - npc_giant_infernal: the meteor spawn choreography PORTED
 --   (hyjal_trash.cpp:418-530): spawn captures the native display, sets
 --   UNIT_FLAG_NOT_SELECTABLE + MODEL_INVIS 11686 (Delay = rand32()%30000,
@@ -91,12 +97,12 @@
 --   spawnTimer/FlameBuffetTimer/imol — the reveal re-arms at 2000ms).
 -- - npc_frost_wyrm: Reset's SetDisableGravity(true) ports via the
 --   creature:SetDisableGravity bridge (onReset, entry-gated);
---   the chase/StopMoving/Clear movement legs and the JustDied
---   ground-position despawn visuals have no bridges.
+--   the chase/StopMoving/Clear movement legs have no bridges (the
+--   JustDied ground drop is ported — see Ported arms).
 -- - npc_gargoyle: Reset's SetDisableGravity(true) ports via the same
 --   bridge (onReset, entry-gated); the Zpos-descending MovePoint
---   approach, forcemove random-target AttackStart and the JustDied
---   ground-position visuals have no bridges.
+--   approach and forcemove random-target AttackStart have no bridges
+--   (the JustDied ground drop is ported — see Ported arms).
 -- - npc_necromancer: KilledUnit PORTED (hyjal_trash.cpp:808-823 +
 --   JustSummoned :789-795): urand(0,2) -> 2x 17902 at +/-3, 2x 17903 at
 --   +/-3, or 1x RAND(17902,17903) at +3; DoSpawnCreature = SummonCreature
@@ -207,6 +213,128 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Instance-data twin (hyjal.h DATA ids; instance_hyjal.cpp SetData/GetData).
+-- The instance script has no SetData hook in Go — the shared per-(map,
+-- instance) table behind Map:GetInstanceData (the_black_morass.lua
+-- instanceDataOf precedent; instance_hooks.go instanceDataObject) is
+-- the writer+reader twin: trash/raidDamage counters live here, written
+-- by the ev9/ev4 arms below and read by the wave machine when it lands.
+local MIN_RAID_DAMAGE = 700000 -- MINRAIDDAMAGE, hyjal.h
+local WORLD_STATE_ENEMYCOUNT = 2454 -- hyjal.h WORLD_STATE_ENEMYCOUNT
+local UNIT_DYNAMIC_FLAGS = 79 -- UpdateFields.h: OBJECT_END+0x49 (eredar-twins precedent)
+local UNIT_DYNFLAG_LOOTABLE = 0x0001 -- SharedDefines.h:3128
+local TYPEID_PLAYER = 4
+local TYPEID_UNIT = 3
+
+-- Per-GUID hyjal_trashAI members (hyjal_trash.cpp ctor): damageTaken
+-- (accumulated by DamageTaken, zeroed at spawn) and the IsEvent latch
+-- (set only by hyjalAI::SummonCreature, hyjalAI.cpp:524 — the wave
+-- machine is unported, hyjal.lua, so the latch stays false until it
+-- lands and the wave-signal leg below is wired but dormant; the
+-- krik'thir dormant-latch precedent).
+local trashDamage = {}
+local trashEvent = {}
+
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
+
+-- C++ DamageTaken filter (hyjal_trash.cpp:197): a nil attacker counts
+-- (the !done_by arm), else player or pet. Go has no IsPet method; the
+-- in-tree approximation is a nonzero OwnerGUID (GetAggroRange,
+-- lua_creature_events.go:3890) — it over-counts totems/guardians, which
+-- deal little damage next to pets, where player-only would under-count.
+local function isPlayerOrPet(attacker)
+    if attacker == nil then
+        return true
+    end
+    local t = attacker:GetTypeId()
+    if t == TYPEID_PLAYER then
+        return true
+    end
+    return t == TYPEID_UNIT and attacker:GetOwnerGUID() ~= 0
+end
+
+-- C++ hyjal_trashAI::DamageTaken (hyjal_trash.cpp:195-199): raid-damage
+-- accounting. Event 9 fires pre-damage with the final damage amount
+-- (fireCreatureDamageTaken); this is a DamageTaken arm, so no
+-- postDamage > 0 guard — the killing blow counts, as in C++.
+-- instance->SetData(DATA_RAIDDAMAGE, damage) accumulates and clamps at
+-- MINRAIDDAMAGE (instance_hyjal.cpp:257-260).
+local function onDamageTaken(event, creature, attacker, damage)
+    if not isPlayerOrPet(attacker) then
+        return
+    end
+    local guid = creature:GetGUID()
+    trashDamage[guid] = (trashDamage[guid] or 0) + damage
+    local data = instanceDataOf(creature)
+    if data then
+        data.raidDamage = math.min(MIN_RAID_DAMAGE, (data.raidDamage or 0) + damage)
+    end
+end
+
+-- C++ instance->SetData(DATA_TRASH, 0) (instance_hyjal.cpp:204-208):
+-- Trash-- + DoUpdateWorldState(WORLD_STATE_ENEMYCOUNT, Trash). Trash is
+-- uint32, so a decrement from 0 wraps (luaUint32Arg rejects negatives).
+local function signalTrashDead(creature, data)
+    if not data then
+        return
+    end
+    local trash = (data.trash or 0) - 1
+    if trash < 0 then
+        trash = 4294967295
+    end
+    data.trash = trash
+    creature:UpdateWorldState(WORLD_STATE_ENEMYCOUNT, trash)
+end
+
+-- C++ hyjal_trashAI::JustDied (hyjal_trash.cpp:401-408) — the shared
+-- base arm: IsEvent-gated wave signal + loot gate. The loot gate reads
+-- the live raidDamage accumulator above; the world-boss disjunct
+-- (damageTaken < GetMaxHealth()/4) never fires for these nine entries
+-- (none carries the world-boss flag) but is ported C++-exact.
+local function trashDiedBase(creature, guid)
+    local worldBoss = creature:IsWorldBoss()
+    local data = instanceDataOf(creature)
+    if trashEvent[guid] and not worldBoss then
+        signalTrashDead(creature, data)
+    end
+    local raidDamage = 0
+    if data then
+        raidDamage = data.raidDamage or 0
+    end
+    if (raidDamage < MIN_RAID_DAMAGE and not worldBoss)
+        or ((trashDamage[guid] or 0) < math.floor(creature:GetMaxHealth() / 4) and worldBoss) then
+        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+    end
+end
+
+-- Frost wyrm / gargoyle JustDied ground drop (hyjal_trash.cpp:1206-1215
+-- / :1336-1343): UpdateGroundPositionZ + MovePoint(0, x, y, groundZ) +
+-- UpdatePosition(x, y, z, 0). Map:GetHeight is the ground-Z twin
+-- (nil when the .map height is unavailable — drop skipped, no
+-- fabricated Z); creature:MoveTo(0, ...) is the MovePoint twin
+-- (launchCreatureScriptSpline takes allowDead=true) and sets the
+-- server position at once like UpdatePosition; SetFacing(0) is the
+-- orientation leg.
+local function groundDrop(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return
+    end
+    local x, y = creature:GetX(), creature:GetY()
+    local gz = mapObj:GetHeight(x, y)
+    if gz == nil then
+        return
+    end
+    creature:MoveTo(0, x, y, gz)
+    creature:SetFacing(0)
 end
 
 local function resolveTarget(creature, spec)
@@ -444,9 +572,23 @@ end
 
 local function onDied(event, creature, killer)
     local guid = creature:GetGUID()
+    local entry = creature:GetEntry()
+    if entry == 17907 then -- FROST_WYRM: own override, no base call
+        if trashEvent[guid] then
+            signalTrashDead(creature, instanceDataOf(creature))
+        end
+        groundDrop(creature)
+    elseif entry == 17906 then -- GARGOYLE: drop first, then base
+        groundDrop(creature)
+        trashDiedBase(creature, guid)
+    else
+        trashDiedBase(creature, guid)
+    end
     cancelTimers(guid)
     infernalState[guid] = nil
     necroSummons[guid] = nil
+    trashDamage[guid] = nil
+    trashEvent[guid] = nil
 end
 
 -- C++ legs ahead of the UpdateVictim gate (abomination disease-cloud
@@ -455,11 +597,14 @@ end
 -- legs hand off cleanly at engage.
 local function onSpawn(name)
     return function(event, creature)
+        local guid = creature:GetGUID()
+        -- C++ hyjal_trashAI ctor: damageTaken = 0, IsEvent = false.
+        trashDamage[guid] = 0
+        trashEvent[guid] = nil
         if name == "npc_giant_infernal" then
             onInfernalSpawn(event, creature)
             return
         end
-        local guid = creature:GetGUID()
         for i, spec in ipairs(SPELLS[name]) do
             if spec.spawn then
                 local n, id = name, i
@@ -476,16 +621,6 @@ local function onSpawn(name)
         end
     end
 end
-
-local function hasSpawnArm(name)
-    for _, spec in ipairs(SPELLS[name]) do
-        if spec.spawn then
-            return true
-        end
-    end
-    return false
-end
-
 
 -- npc_necromancer KilledUnit (hyjal_trash.cpp:808-823 + JustSummoned
 -- :789-795). See the header note for the full arm description.
@@ -540,10 +675,9 @@ for name, entry in pairs(MOB) do
     RegisterCreatureEvent(entry, 1, onEnterCombat(name))
     RegisterCreatureEvent(entry, 2, onLeaveCombat)
     RegisterCreatureEvent(entry, 4, onDied)
+    RegisterCreatureEvent(entry, 5, onSpawn(name))
+    RegisterCreatureEvent(entry, 9, onDamageTaken)
     RegisterCreatureEvent(entry, 23, onReset)
-    if hasSpawnArm(name) or name == "npc_giant_infernal" then
-        RegisterCreatureEvent(entry, 5, onSpawn(name))
-    end
 end
 
 RegisterCreatureEvent(17899, 3, onNecromancerKilledUnit)

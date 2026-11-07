@@ -30,12 +30,15 @@
 -- - Engage (C++ JustEngagedWith): arm Web at init {5s,8s}.
 -- - Web (EVENT_WEB): DoCastVictim(SPELL_WEB 745), reschedule {7s,16s}
 --   unconditional (C++ Repeat sits outside any gate — faithful).
+-- - JustDied (C++ JustDied): instance->SetData(DATA_WAVE,
+--   me->GetEntry()) — the fiend/reaver kill counters + gong re-arm,
+--   via the shared instanceData table (the Map:GetInstanceData twin
+--   of the instance SetData switch; gong object from instanceData.gong,
+--   stashed by the gong gossip handler, FindNearestGameObject
+--   fallback). The gong-ring (IN_PROGRESS) half lives in
+--   npc_belnistrasz.lua.
 -- - LeaveCombat/Died cancel timers (hyjal.lua convention); Reset
 --   cancels timers too.
--- Unmodeled (documented-only, no bridges):
--- - JustDied: instance->SetData(DATA_WAVE, me->GetEntry()) — no
---   instance-data bridge (standing); the wave counter is owned by
---   instance_razorfen_downs (RFDDataTypes DATA_WAVE = 5).
 
 local ENTRY_TOMB_FIEND  = 7349
 local ENTRY_TOMB_REAVER = 7351
@@ -113,8 +116,54 @@ local function onReset(event, creature)
     end
 end
 
+local GO_GONG = 148917 -- razorfen_downs.h:50
+local GAMEOBJECT_FLAGS = 9 -- UpdateFields.h: OBJECT_END 6 + 3 (arlokk precedent)
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
+
+-- C++ instance->SetData(DATA_WAVE, me->GetEntry()) (razorfen_downs.cpp:330)
+-- -> instance_razorfen_downs.cpp:100-190: fiendsKilled/reaversKilled
+-- counters; at 10 fiends / 4 reavers the gong loses NOT_SELECTABLE
+-- (re-armed for the next wave). The counters live in the shared
+-- instanceData table (no instance SetData hook in Go); the gong object
+-- is instanceData.gong, stashed by the gong gossip handler (the C++
+-- OnGameObjectCreate latch twin for the static gong, which never fires
+-- the Go create hook), with a FindNearestGameObject fallback.
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    local data = instanceDataOf(creature)
+    if not data then
+        return
+    end
+    local entry = creature:GetEntry()
+    local key, target
+    if entry == ENTRY_TOMB_FIEND then
+        key, target = "fiendsKilled", 10
+    elseif entry == ENTRY_TOMB_REAVER then
+        key, target = "reaversKilled", 4
+    else
+        return
+    end
+    local killed = (data[key] or 0) + 1
+    if killed == target then
+        data[key] = 0
+        local gong = data.gong
+        if gong == nil then
+            gong = creature:FindNearestGameObject(GO_GONG, 100.0)
+        end
+        if gong ~= nil then
+            gong:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+        end
+    else
+        data[key] = killed
+    end
 end
 
 local ENTRIES = { ENTRY_TOMB_FIEND, ENTRY_TOMB_REAVER }

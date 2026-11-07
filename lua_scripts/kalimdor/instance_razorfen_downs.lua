@@ -12,7 +12,13 @@
 -- Shared instanceData keys (one table per (map, instance)):
 -- gong — the GO object bound by ON_GAMEOBJECT_CREATE (the C++
 -- OnGameObjectCreate GO_GONG latch, :72-76); the live part for
--- future consumers, the flag leg below stays out.
+-- future consumers, the flag leg below stays out. Also stashed by
+-- the gong gossip handler (npc_belnistrasz.lua) — the static gong
+-- never fires the create hook, so the gossip stash is what makes
+-- instanceData.gong live for the tomb-death re-arm.
+-- gongWave / fiendsKilled / reaversKilled / summonLowRange /
+-- summonHighRange / summonCreature — the DATA_WAVE machine counters
+-- (npc_belnistrasz.lua gossip leg, npc_tomb_creature.lua death leg).
 -- Ported arms (C++-exact unless noted):
 -- - OnGameObjectCreate (:68-86), gong bind only: GO_GONG (148917)
 --   binds instanceData.gong. Static-spawn delta: the Go GO-create
@@ -45,13 +51,13 @@
 --   over all seven DATA ids whose every arm is an empty break — a
 --   pure no-op switch beyond the base call, which the boss files
 --   already drive via creature:SetBossState. Nothing to port.
--- - SetData (:109-190), the gong wave machine: DATA_WAVE
---   IN_PROGRESS summons Tomb Fiends / Tomb Reavers / Tuten'kash at
---   PosSummonTutenkash + MovePoint, and tomb-creature deaths count
---   fiends/reavers killed to re-arm the gong — no instance SetData
---   bridge (closed axis, hyjal header settles it). The drivers
---   (go_gong gossip, npc_tomb_creature JustDied) document the same
---   block in their own files.
+-- - SetData (:109-190), the gong wave machine: PORTED — the DATA_WAVE
+--   IN_PROGRESS leg lives in the go_gong gossip handler
+--   (npc_belnistrasz.lua: summons at PosSummonTutenkash + MovePoint,
+--   gong flag + gongWave counter) and the tomb-creature death leg
+--   lives in npc_tomb_creature.lua (fiends/reavers kill counters +
+--   gong re-arm), both via the shared instanceData table (no
+--   instance SetData hook in Go; the table is the writer+reader).
 -- - This C++ file has NO OnCreatureCreate and NO GetGuidData
 --   override — there are no creature binds or GUID mirrors to port.
 -- - DATA_GONG (4) is in range for SetBossState but nothing ever

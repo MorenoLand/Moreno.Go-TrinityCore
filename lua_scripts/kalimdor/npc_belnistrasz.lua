@@ -83,9 +83,9 @@
 --   Death's Head Geomancer 7335, Withered Quilguard 7329,
 --   Plaguemaw the Rotting 7356) — zero bridges, no registration.
 -- - go_gong ("go_gong", GO 148917): OnGossipHello PORTED below
---   (go:SendCustomAnim(0), bridged lua_objects.go); the instance
---   SetData(DATA_WAVE 5, IN_PROGRESS) leg stays out (no instance-data
---   bridge) — the anim is transient, no persistent wrong state.
+--   (SendCustomAnim(0) + the instance SetData(DATA_WAVE 5, IN_PROGRESS)
+--   wave machine via the shared instanceData table — summons, gong
+--   flag, gongWave counter; see the handler).
 
 local ENTRY_BELNISTRASZ = 8516
 local GO_GONG = 148917 -- razorfen_downs.cpp:373 (go_gong)
@@ -299,10 +299,77 @@ RegisterCreatureEvent(ENTRY_BELNISTRASZ, 23, onReset)
 RegisterCreatureEvent(ENTRY_BELNISTRASZ, 31, onQuestAccept)
 
 -- C++ go_gong::OnGossipHello (razorfen_downs.cpp:383-389): SendCustomAnim(0)
--- PORTED; instance->SetData(DATA_WAVE, IN_PROGRESS) stays out (no
--- instance-data bridge); C++ returns true (handled) == Lua true.
+-- + instance->SetData(DATA_WAVE, IN_PROGRESS) — the gong wave machine
+-- (instance_razorfen_downs.cpp:109-190), via the shared instanceData
+-- table: the gong goes NOT_SELECTABLE, wave gongWave summons Tomb
+-- Fiends (wave 0, 10x at PosSummonTutenkash[0..9]) / Tomb Reavers
+-- (wave 1, 4x at [10..13]) / Tuten'kash (wave 2, 1x at [14]), each
+-- MovePoint(0, 2533.479±5, 870.020±5, 47.678); gongWave++. The go
+-- object is stashed as instanceData.gong (the C++ OnGameObjectCreate
+-- latch twin — the static gong never fires the Go create hook) for
+-- the tomb-creature death counter in npc_tomb_creature.lua. C++
+-- returns true (handled) == Lua true. Summons use the C++ default
+-- (WorldObject::SummonCreature, MANUAL_DESPAWN = Go type 7 default).
+local NPC_TOMB_FIEND = 7349 -- razorfen_downs.h:38
+local NPC_TOMB_REAVER = 7351 -- razorfen_downs.h:39
+local NPC_TUTEN_KASH = 7355 -- razorfen_downs.h:40
+local GAMEOBJECT_FLAGS = 9 -- UpdateFields.h: OBJECT_END 6 + 3 (arlokk precedent)
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+
+-- PosSummonTutenkash, instance_razorfen_downs.cpp:28-44 (verbatim).
+local POS_SUMMON_TUTENKASH = {
+    { 2487.339, 805.9111, 43.08361, 2.844887 },
+    { 2485.405, 804.1145, 43.68511, 3.054326 },
+    { 2488.431, 801.2809, 42.70374, 4.29351 },
+    { 2489.914, 804.7949, 43.25175, 1.658063 },
+    { 2541.246, 907.0941, 46.64201, 2.024582 },
+    { 2544.701, 907.6331, 46.38007, 1.605703 },
+    { 2541.49, 911.1756, 46.26493, 4.817109 },
+    { 2544.693, 912.8887, 46.39912, 2.129302 },
+    { 2524.036, 834.4852, 48.37031, 0.8028514 },
+    { 2527.017, 829.9793, 48.06498, 0.6981317 },
+    { 2542.818, 904.9359, 46.80911, 4.642576 },
+    { 2543.287, 911.2448, 46.32785, 0.6806784 },
+    { 2489.083, 806.5914, 43.21102, 3.682645 },
+    { 2486.828, 802.8737, 43.19883, 2.9147 },
+    { 2487.939, 804.2224, 43.10735, 1.692969 },
+}
+
 local function onGongGossip(_, player, go)
     go:SendCustomAnim(0)
+    local mapObj = go:GetMap()
+    local data = nil
+    if mapObj then
+        data = mapObj:GetInstanceData()
+    end
+    if data == nil then
+        return true
+    end
+    data.gong = go
+    go:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    local wave = data.gongWave or 0
+    -- C++ switch (gongWave) sets the summon range/entry, then the
+    -- summon loop runs over the stored members; wave >= 3 reuses the
+    -- stale wave-2 members (unreachable — the gong stays
+    -- NOT_SELECTABLE after wave 2, Tuten'kash's death never re-arms
+    -- it), mirrored here by persisting the members in instanceData.
+    local low, high, entry = data.summonLowRange or 0, data.summonHighRange or 0, data.summonCreature or 0
+    if wave == 0 then
+        low, high, entry = 0, 10, NPC_TOMB_FIEND
+    elseif wave == 1 then
+        low, high, entry = 10, 14, NPC_TOMB_REAVER
+    elseif wave == 2 then
+        low, high, entry = 14, 15, NPC_TUTEN_KASH
+    end
+    data.summonLowRange, data.summonHighRange, data.summonCreature = low, high, entry
+    for i = low, high - 1 do
+        local pos = POS_SUMMON_TUTENKASH[i + 1]
+        local summoned = go:SummonCreature(entry, pos[1], pos[2], pos[3], pos[4])
+        if summoned ~= nil then
+            summoned:MoveTo(0, 2533.479 + math.random(-5, 5), 870.020 + math.random(-5, 5), 47.678)
+        end
+    end
+    data.gongWave = wave + 1
     return true
 end
 

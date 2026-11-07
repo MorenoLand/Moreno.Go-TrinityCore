@@ -23,6 +23,9 @@
 -- elfGate — the GO objects bound by ON_GAMEOBJECT_CREATE (:96-116);
 -- ancientGems — the GO list appended by the same handler (:113-115,
 -- C++ m_uiAncientGemGUID push_back order).
+-- trash / raidDamage — the DATA_TRASH (14) / DATA_RAIDDAMAGE (18)
+-- counters, written by the hyjal_trash.lua ev9/ev4 arms (see the
+-- SetData note below) and read by the wave machine when it lands.
 -- Ported arms (C++-exact unless noted):
 -- - OnCreatureCreate: the binds above. Fires on materialization
 --   (motionFor funnel, instance_hooks.go:311-320); a static template
@@ -69,9 +72,13 @@
 --     Talk(YELL_ARCHIMONDE_INTRO 8) rides the same leg. Covered by the
 --     DEPENDENCY note above once a fire site exists.
 --   - DATA_TRASH / DoUpdateWorldState(WORLD_STATE_ENEMYCOUNT 2454,
---     :227-233): creature:UpdateWorldState is bridged
---     (lua_creature_events.go:5893) but there is no fire site; the
---     hyjal_trash.lua JustDied wave signal documents the same block.
+--     :227-233): PORTED in hyjal_trash.lua — the ev4 JustDied arm
+--     writes instanceData.trash + creature:UpdateWorldState(2454,
+--     trash), the SetData twin (no instance SetData hook in Go; the
+--     shared table is the writer+reader). The Trash INCREMENT side
+--     (SummonNextWave SetData(DATA_TRASH, EnemyCount)) stays with
+--     the unported wave machine, as do the DATA_RESET_TRASH_COUNT /
+--     DATA_RESET_RAIDDAMAGE legs (hyjalAI.cpp:417/:907).
 --   - TYPE_RETREAT (:234-246): DoRespawnGameObject(*itr, 24h) has no
 --     bridge (tree-wide grep: no DoRespawnGameObject in the Go engine);
 --     the ancientGems list above is the live half, for a future consumer.
@@ -81,12 +88,15 @@
 --     retreat-gate HandleGameObject legs in OnGameObjectCreate (:99-109)
 --     stay out for the same reason. SaveToDB has no bridge either
 --     (SaveInstanceData no-ops, engine/scripting/globals.go:1434-1440).
---   - DATA_RAIDDAMAGE accumulator (:257-260) / DATA_RESET_TRASH_COUNT /
---     DATA_RESET_RAIDDAMAGE: no fire site; the hyjal_trash.lua
---     DamageTaken leg documents the same block.
+--   - DATA_RAIDDAMAGE accumulator (:257-260): PORTED in
+--     hyjal_trash.lua — the ev9 DamageTaken arm writes
+--     instanceData.raidDamage (clamped at MINRAIDDAMAGE).
+--     DATA_RESET_TRASH_COUNT / DATA_RESET_RAIDDAMAGE: no fire site
+--     (hyjalAI.cpp:417/:907, wave machine).
 -- - GetData (:262-280): no instance GetData bridge; the Lua mirror is
---   instanceData table fields (trash/retreat/raid-damage counters have
---   no writers, see above) and GetBossState for the encounter states.
+--   instanceData table fields (trash/raidDamage now have writers in
+--   hyjal_trash.lua; retreat counters still unwritten, see above)
+--   and GetBossState for the encounter states.
 -- - Load (:291-306) / GetSaveData (:282-285): ON_LOAD (2) has no Go
 --   instance-data load path (engine/scripting/runtime.go:171-178); the
 --   table lives for the runtime lifetime only (black-morass delta).
