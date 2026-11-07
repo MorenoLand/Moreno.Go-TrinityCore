@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -1132,7 +1133,10 @@ func (s *session) handleCmdMuteHistory(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandMuteHistory) {
 		return
 	}
-	if len(args) == 0 || args[0] == "" {
+	// The C++ framework consumes the whole arg string (ChatCommand.h:
+	// ConsumeFromOffset returns nullopt on leftover args), so extra
+	// tokens fail the parse and print help — they are never ignored.
+	if len(args) != 1 || args[0] == "" {
 		s.sendSysMessage("Syntax: .mutehistory <account>")
 		return
 	}
@@ -2042,7 +2046,9 @@ func (s *session) handleCmdSave2(ctx context.Context) {
 // player or self, and an unknown SkillLine id is refused. A known skill
 // keeps its step and takes the new value/max; a new skill enters at step 1
 // with max defaulting to the level, and a known skill's max defaults to its
-// pure max. Level 0 or level above max is a silent no-op, as in C++.
+// pure max. Level 0 or level above max is a silent no-op, as in C++; a
+// new skill with no free slot still prints the set message (the
+// Player::SetSkill no-op does not suppress the handler's message).
 // The apply leg follows the Lua SetSkill bridge (lua_player.go): persist,
 // learn rewarded spells, reach/learn achievement criteria, and the
 // bonus-aura reapply on the add arm only. Documented fidelity gaps (not
@@ -2052,7 +2058,7 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandSetSkill) {
 		return
 	}
-	if len(args) < 2 {
+	if len(args) < 2 || len(args) > 3 {
 		s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
 		return
 	}
@@ -2082,11 +2088,16 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED
 		return
 	}
-	if s.server != nil && s.server.Data != nil {
-		if _, found, err := s.server.Data.SkillLineCategory(skillID); err == nil && !found {
-			s.sendSysMessage(fmt.Sprintf("Invalid skill ID %d.", skillID))
-			return
-		}
+	// C++ validates against sSkillLineStore unconditionally; with no
+	// DBC store to check against, refuse rather than inventing a skill
+	// entry (the nil-WorldStore -> ITEMIDINVALID precedent in additem).
+	if s.server == nil || s.server.Data == nil {
+		s.sendSysMessage(fmt.Sprintf("Invalid skill ID %d.", skillID))
+		return
+	}
+	if _, found, err := s.server.Data.SkillLineCategory(skillID); err == nil && !found {
+		s.sendSysMessage(fmt.Sprintf("Invalid skill ID %d.", skillID))
+		return
 	}
 	index := misc2SkillIndex(target.player.Skills, skillID)
 	targetHasSkill := target.playerSkillTotalValue(skillID) != 0
@@ -2102,6 +2113,7 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 	if level == 0 || level > uint64(max) {
 		return
 	}
+	applied := true
 	if index >= 0 {
 		step := uint16(1)
 		if targetHasSkill {
@@ -2111,17 +2123,22 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 		target.player.Skills[index].Value = uint16(level)
 		target.player.Skills[index].Max = max
 		misc2PersistSkill(ctx, target, target.player.Skills[index])
+	} else if len(target.player.Skills) >= playerMaxSkills {
+		// C++ Player::SetSkill finds no free slot and no-ops, but the
+		// handler still prints LANG_SET_SKILL unconditionally
+		// (cs_misc.cpp:1426-1427) — so the message below still fires
+		// while the rewarded-spell/criteria legs stay skipped.
+		applied = false
 	} else {
-		if len(target.player.Skills) >= playerMaxSkills {
-			return
-		}
 		target.player.Skills = append(target.player.Skills, playerSkill{Skill: uint16(skillID), Step: 1, Value: uint16(level), Max: max})
 		misc2PersistSkill(ctx, target, target.player.Skills[len(target.player.Skills)-1])
 		target.reapplySkillBonusAuras(skillID)
 	}
-	target.learnSkillRewardedSpells(ctx, skillID, uint32(level))
-	target.setAchievementCriteria(criteriaTypeReachSkillLevel, skillID, uint32(level))
-	target.setAchievementCriteria(criteriaTypeLearnSkillLevel, skillID, uint32(max))
+	if applied {
+		target.learnSkillRewardedSpells(ctx, skillID, uint32(level))
+		target.setAchievementCriteria(criteriaTypeReachSkillLevel, skillID, uint32(level))
+		target.setAchievementCriteria(criteriaTypeLearnSkillLevel, skillID, uint32(max))
+	}
 	if name := s.misc2SkillLineName(skillID); name != "" {
 		s.sendSysMessage(fmt.Sprintf("Skill %d (%s) set to %d (max %d) for %s.", skillID, name, level, max, target.player.Name))
 	} else {
@@ -2447,10 +2464,11 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 	if s.miscDeny(ctx, permissionCommandChangeWeather) {
 		return
 	}
-	if s.server == nil || !s.server.Config.WeatherEnabled {
-		s.sendSysMessage("Weather is disabled by config.")
-		return
-	}
+	// The C++ framework parses the (WeatherType, float) args before the
+	// handler runs (ChatCommandArgs.h), so a bad arg is a syntax failure
+	// even with weather disabled, and the float parse rejects non-finite
+	// values (std::isfinite, ChatCommandArgs.h:69) — only then does
+	// HandleChangeWeather check CONFIG_WEATHER (cs_misc.cpp:1337).
 	if len(args) < 2 {
 		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
 		return
@@ -2461,8 +2479,12 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 		return
 	}
 	intensity, err := strconv.ParseFloat(args[1], 32)
-	if err != nil {
+	if err != nil || math.IsNaN(intensity) || math.IsInf(intensity, 0) {
 		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
+		return
+	}
+	if s.server == nil || !s.server.Config.WeatherEnabled {
+		s.sendSysMessage("Weather is disabled by config.")
 		return
 	}
 	if s.player == nil {

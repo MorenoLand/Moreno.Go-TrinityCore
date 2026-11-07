@@ -4512,7 +4512,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint)
+		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, true)
 		return nil, nil
 	}
 	// MoveRandom is UnitMethods::MoveRandom (UnitMethods.h:2178-2198) =
@@ -4540,7 +4540,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Lock()
 		fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 		s.motionMu.Unlock()
-		s.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom)
+		s.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom, false)
 		return nil, nil
 	}
 	// MoveHome is UnitMethods::MoveHome (UnitMethods.h:2199-2206) =
@@ -4564,7 +4564,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		// with Clear(): the ACTIVE chase/follow slots drop with the
 		// engagement.
 		s.clearScriptChaseFollow(motion)
-		s.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome)
+		s.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, true)
 		return nil, nil
 	}
 	// MoveConfused is UnitMethods::MoveConfused (UnitMethods.h:2240-2248)

@@ -3908,21 +3908,27 @@ const (
 // script Move* legs, on the flee/waypoint precedent: the server snaps
 // to the destination at launch and broadcasts SMSG_MONSTER_MOVE, so
 // clients interpolate while the tick's Moving gate pauses combat and
-// wander until MoveEnds. Dead creatures never launch (C++ generators
-// never run on a corpse) and a sub-0.001 speed fails validation with
+// wander until MoveEnds. A sub-0.001 speed fails validation with
 // no spline and no packet (MoveSpline.cpp:210), like the flee leg.
+// Whether a dead creature launches depends on the generator: the
+// CORPSE arm of Creature::Update still runs Unit::Update, which runs
+// the motion master (Unit.cpp), and PointMovementGenerator's
+// DoInitialize/DoUpdate carry no IsAlive gate, so point and home
+// splines move a corpse — but RandomMovementGenerator (DoInitialize,
+// :80) and ConfusedMovementGenerator (:48) refuse a dead owner, so
+// random and confused legs stay refused (allowDead false).
 // The genPath / pathfinding arm of MovePoint has no bridge — Go has
 // no PathGenerator, so every script spline is straight-line, the
 // standing chase-leg delta. A script spline does not clear Evading
 // and, while in flight, temporarily overrides pursuit: C++ slot
 // priority (ACTIVE chase over DEFAULT point) is unmodeled, so the
 // tick resumes pursuit only once the spline lands.
-func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32) bool {
+func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, allowDead bool) bool {
 	if s == nil || motion == nil {
 		return false
 	}
 	s.motionMu.Lock()
-	if motion.Health == 0 {
+	if motion.Health == 0 && !allowDead {
 		s.motionMu.Unlock()
 		return false
 	}
@@ -3964,7 +3970,7 @@ func (s *Server) launchCreatureConfusedSpline(motion *creatureMotion) bool {
 	destY := motion.Y + float32(dist*math.Sin(angle))
 	destZ := motion.Z
 	s.motionMu.Unlock()
-	if !s.launchCreatureScriptSpline(motion, destX, destY, destZ, true, movementGeneratorConfused) {
+	if !s.launchCreatureScriptSpline(motion, destX, destY, destZ, true, movementGeneratorConfused, false) {
 		return false
 	}
 	s.motionMu.Lock()

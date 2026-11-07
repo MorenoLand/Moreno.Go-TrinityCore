@@ -432,7 +432,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			return nil, err
 		}
 		if motion := s.luaCreatureMotion(state.GUID, state.Entry); motion != nil {
-			s.server.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint)
+			s.server.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, true)
 		}
 		return nil, nil
 	}
@@ -454,7 +454,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			s.server.motionMu.Lock()
 			fromX, fromY, fromZ := motion.X, motion.Y, motion.Z
 			s.server.motionMu.Unlock()
-			s.server.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom)
+			s.server.launchCreatureScriptSpline(motion, fromX+float32(dist*math.Cos(angle)), fromY+float32(dist*math.Sin(angle)), fromZ, true, movementGeneratorRandom, false)
 		}
 		return nil, nil
 	}
@@ -468,7 +468,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			s.server.motionMu.Unlock()
 			if !owned {
 				s.server.clearScriptChaseFollow(motion)
-				s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome)
+				s.server.launchCreatureScriptSpline(motion, homeX, homeY, homeZ, false, movementGeneratorHome, true)
 			}
 		}
 		return nil, nil

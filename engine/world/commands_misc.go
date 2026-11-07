@@ -133,7 +133,11 @@ func miscRejoinBracketName(args []string) []string {
 
 // miscExtractItemID mirrors the C++ id extraction in HandleAddItemCommand
 // (cs_misc.cpp:1147-1185): the [name] manual form goes through a world DB
-// name lookup, otherwise the id comes from a |Hitem:id| link or a bare id.
+// name lookup, otherwise the id comes from extractKeyFromLink + atoul
+// (Chat.cpp:362): a |Hitem:id| link key, or the bare token's leading
+// digit run — "12abc" is 12, a non-numeric token is 0. A 0 flows through
+// to the template check (ITEMIDINVALID), it is never a syntax failure.
+// A |-link of another type is the wrong-link-type failure (false).
 func (s *session) miscExtractItemID(ctx context.Context, token string) (uint32, bool) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -155,18 +159,20 @@ func (s *session) miscExtractItemID(ctx context.Context, token string) (uint32, 
 		}
 		return entry, true
 	}
-	if id := miscExtractLinkID(token, "Hitem"); id != 0 {
-		return id, true
+	if strings.HasPrefix(token, "|") {
+		if !strings.Contains(token, "|Hitem:") {
+			return 0, false
+		}
+		return miscExtractLinkID(token, "Hitem"), true
 	}
-	id64, err := strconv.ParseUint(token, 10, 32)
-	if err != nil || id64 == 0 {
-		return 0, false
-	}
-	return uint32(id64), true
+	return uint32(cAtoi(token)), true
 }
 
 // miscExtractLinkID pulls the numeric id out of a |color|Htype:id:...|h
-// shift-click link, returning 0 when the token is not such a link.
+// shift-click link, returning 0 when the token is not such a link. The
+// key parses with atoul semantics (ChatHandler::extractKeyFromLink,
+// Chat.cpp:362, then atoul at the call site): a leading digit run, so
+// "12abc" is 12 and a non-numeric key is 0.
 func miscExtractLinkID(token, linkType string) uint32 {
 	idx := strings.Index(token, "|"+linkType+":")
 	if idx < 0 {
@@ -177,11 +183,7 @@ func miscExtractLinkID(token, linkType string) uint32 {
 	if end >= 0 {
 		rest = rest[:end]
 	}
-	id64, err := strconv.ParseUint(rest, 10, 32)
-	if err != nil {
-		return 0
-	}
-	return uint32(id64)
+	return uint32(cAtoi(rest))
 }
 
 // miscSelectedPlayerOrSelf mirrors handler->getSelectedPlayer() with the
@@ -223,9 +225,9 @@ func (s *session) handleAddItemCommand(ctx context.Context, args []string) {
 	}
 	count := int32(1)
 	if len(args) > 1 {
-		if c, err := strconv.ParseInt(args[1], 10, 32); err == nil {
-			count = int32(c)
-		}
+		// C++ strtol (cs_misc.cpp:1187-1190): a leading digit run,
+		// so "5abc" is 5 and a non-numeric token is 0 (then 1 below).
+		count = int32(cAtoi(args[1]))
 	}
 	if count == 0 {
 		count = 1
@@ -430,19 +432,24 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 
 // handleAddItemSetCommand mirrors HandleAddItemSetCommand
 // (cs_misc.cpp:1275-1329, RBAC 489): every item_template row whose itemset
-// matches gets one copy stored on the selected-player-or-self target.
+// matches gets one copy stored on the selected-player-or-self target. The
+// id is Variant<Hyperlink<itemset>, uint32>, so a |Hitemset:id| link parses
+// the same as a bare id.
 func (s *session) handleAddItemSetCommand(ctx context.Context, args []string) {
 	const syntax = "Syntax: .additem set <itemsetId>"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
 		return
 	}
-	setID64, err := strconv.ParseUint(args[0], 10, 32)
-	if err != nil {
+	var setID uint32
+	if strings.Contains(args[0], "|Hitemset:") {
+		setID = miscExtractLinkID(args[0], "Hitemset")
+	} else if setID64, err := strconv.ParseUint(args[0], 10, 32); err == nil {
+		setID = uint32(setID64)
+	} else {
 		s.sendSysMessage(syntax)
 		return
 	}
-	setID := uint32(setID64)
 	if setID == 0 {
 		s.sendSysMessage(fmt.Sprintf(miscNoItemsFromItemSet, setID))
 		return
@@ -916,7 +923,8 @@ func (s *session) handleCmdCombatStop(ctx context.Context, args []string) {
 // RBAC 495): the selected creature rides the shared script spline (the Lua
 // MoveTo MovePoint precedent, launchCreatureScriptSpline) to the GM's
 // position. Straight-line spline: Go has no PathGenerator, the standing
-// MoveTo delta; a dead creature never launches, as in C++.
+// MoveTo delta. No alive gate: C++ MovePoint carries none and the
+// corpse-state motion master still runs (launchCreatureScriptSpline).
 func (s *session) handleCmdComeToMe(ctx context.Context, args []string) {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
@@ -931,7 +939,7 @@ func (s *session) handleCmdComeToMe(ctx context.Context, args []string) {
 		return
 	}
 	p := s.player
-	s.server.launchCreatureScriptSpline(motion, p.X, p.Y, p.Z, false, movementGeneratorPoint)
+	s.server.launchCreatureScriptSpline(motion, p.X, p.Y, p.Z, false, movementGeneratorPoint, true)
 }
 
 // handleCmdCommands mirrors HandleCommandsCommand (cs_misc.cpp:602-606, RBAC
