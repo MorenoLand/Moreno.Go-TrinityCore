@@ -90,7 +90,11 @@
 --   DoCastSelf(SPELL_QUIET_SUICIDE 3617) arm that ends the feign-death
 --   in C++ cannot fire (the mandokir/nefarian no-bearer precedent).
 -- - JustDied: RemoveFlag + instance->SetBossState(DATA_APOTHECARY_HUMMEL,
---   DONE) + sLFGMgr->FinishDungeon(288) — no instance/LFG bridges.
+--   DONE) + sLFGMgr->FinishDungeon(288) — the SetBossState leg stays out
+--   as a C++ DEAD WRITE (tick 380: instance_shadowfang_keep.cpp never
+--   calls SetBossNumber, so bosses is empty and SetBossState(6) returns
+--   false; creature:SetBossState IS bridged — the old "no instance
+--   bridge" claim was stale); the LFG leg has no bridge.
 -- - START_FIGHT: the SetImmuneToAll(false) leg is PORTED (2026-10-23) as
 --   RemoveFlag(59, 0x300) in onStartFight (the keepCombat=false combat-end
 --   leg drops, no bridge); the DoZoneInCombat (:220) leg IS PORTED
@@ -395,7 +399,9 @@ local function onDied(event, creature)
     -- C++ JustDied (boss_apothecary_hummel.cpp:179), in C++ order after
     -- events.Reset: RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29 |
     -- UNIT_FLAG_NOT_SELECTABLE) = RemoveFlag(59, 0x20000000|0x2000000);
-    -- the instance->SetBossState/LFG legs have no bridges.
+    -- the instance->SetBossState leg is a C++ dead write (see header:
+    -- no SetBossNumber in instance_shadowfang_keep.cpp) and the LFG
+    -- FinishDungeon leg has no bridge.
     creature:RemoveFlag(59, 0x22000000)
 end
 

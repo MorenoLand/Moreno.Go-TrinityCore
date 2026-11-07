@@ -14677,9 +14677,9 @@ func init() {
 	RegisterLuaBoss("npc_unworthy_initiate", 29566)
 	RegisterLuaBoss("npc_unworthy_initiate", 29567)
 	// AddSC_the_scarlet_enclave_c1 (chapter1.cpp, EK loader decl :95 /
-	// call :273): full-file audit 2026-10-07. Of the 14 scripts only
-	// npc_unworthy_initiate is ported/registered (above). The remaining
-	// 13 have zero Lua bridges — documented-only: npc_unworthy_initiate_
+	// call :273): full-file audit 2026-10-07. Of the 14 scripts
+	// npc_unworthy_initiate (above) and npc_ros_dark_rider (below, tick
+	// 380) are ported/registered. The remaining 12 are documented-only: npc_unworthy_initiate_
 	// anchor (PassiveAI SetGUID/GetGUID prisoner store), go_acherus_
 	// soul_prison (GO gossip -> EventStart; no gameobject-gossip bridge),
 	// spell_death_knight_initiate_visual (display-ID 25354-25373 ->
@@ -14693,12 +14693,22 @@ func init() {
 	// salanar_the_horseman (gossip 9739 realm-of-shadows cast, MoveInLineOf
 	// Sight vehicle machine; no gossip/vehicle bridges), spell_stable_
 	// master_repo (AuraScript; no bridge), spell_deliver_stolen_horse
-	// (SpellScript; no bridge), npc_ros_dark_rider (EnterVehicle /
-	// deathcharger faction flip; no vehicle bridge), npc_dkc1_gothik
+	// (SpellScript; no bridge), npc_dkc1_gothik
 	// (MoveInLineOfSight ghoul-collect; no proximity bridge), npc_scarlet_
 	// ghoul (owner/minion machines; no minion bridges), spell_gift_of_
-	// the_harvester (SpellScript; no bridge). No new registrations,
-	// no Lua files.
+	// the_harvester (SpellScript; no bridge). npc_ros_dark_rider is
+	// ported/registered below (tick 380): its JustDied deathcharger
+	// flip (SetFlag SPELLCLICK + RemoveFlag NOT_SELECTABLE + SetFaction
+	// 2096) rides the live creature:IsVehicle bridge (the Oct-7 "no
+	// vehicle bridge" claim is stale for that arm); its Reset/engage
+	// EnterVehicle legs stay out — no creature EnterVehicle bridge.
+	// npc_ros_dark_rider (entry 28654, wowhead-verified via spell 52266
+	// summon link; no NPC_ constant in chapter1.cpp): JustDied
+	// deathcharger flip ported in lua_scripts/eastern_kingdoms/
+	// npc_ros_dark_rider.lua (FindNearestCreature 28782 + killer
+	// player gate + IsVehicle + flag/faction legs); Reset/engage
+	// EnterVehicle legs stay out (no bridge).
+	RegisterLuaBoss("npc_ros_dark_rider", 28654)
 	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
 	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver
 	// (entry 28912, chapter2.cpp :90 BloodyBreakout enum — quest-12727
@@ -16921,9 +16931,11 @@ func init() {
 	// (razorfen_downs.cpp:238-247: post-ExecuteEvent return consumes
 	// the event — not the 500ms defer used for pre-loop gates);
 	// MovementInform/idol-ritual machine (SummonCreature NPC 8611,
-	// Talk 1-5 progress, GO summons, GroupEventHappens credit) and
-	// JustDied's instance SetBossState + 5s despawn have no bridges —
-	// documented in the lua file, not wired.
+	// Talk 1-5 progress, GO summons, GroupEventHappens credit) is
+	// documented-only in the lua file, not wired; JustDied's 5s
+	// DespawnOrUnsummon IS ported (freya delayed-despawn idiom) while
+	// its instance SetBossState(6, DONE) stays out as a C++ dead write
+	// (EncounterCount = 5) — see the lua file header.
 	RegisterLuaBoss("npc_belnistrasz", 8516)
 
 	// npc_willix: Razorfen Kraul zone script, entry 4508

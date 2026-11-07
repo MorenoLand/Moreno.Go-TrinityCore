@@ -28,8 +28,14 @@
 --   interval; if no valid target, C++ leaves the timer expired so the
 --   next UpdateAI tick retries — modeled as a 1s retry (batrider
 --   bomb precedent).
--- - Death: Talk DEATH (6) (C++ JustDied leg; the respawn/invisible/wave
---   bookkeeping has no bridge).
+-- - Death: Talk DEATH (6) (C++ JustDied leg; the respawn/invisible legs
+--   stay out on the unbridgeable IsDummy gate, tick 380: creature:Respawn
+--   and creature:SetVisible ARE bridged now, but the overrun dummy Jaina
+--   is summoned with the SAME entry 17772 (hyjalAI.cpp:632) and retreat
+--   sets IsDummy on the real NPCs (:778), so an unconditional
+--   Respawn + 120s re-show would revive copies C++ leaves dead; the
+--   wave RespawnNearPos / Summons.DespawnAll / instance SetData legs
+--   have no bridge).
 -- - Reset / leave combat: timers canceled (no C++ timer arm on Reset; the
 --   timers arm only on engage); Reset re-casts SPELL_BRILLIANCE_AURA
 --   31260 triggered on self for Jaina (hyjalAI.cpp:395) and sets
@@ -216,7 +222,9 @@ local function onReset(event, creature)
     end
 end
 
--- C++ JustDied: Talk DEATH (the wave/instance bookkeeping has no bridge).
+-- C++ JustDied: Talk DEATH (the respawn/invisible legs stay out on the
+-- unbridgeable IsDummy gate — see header — and the wave/instance
+-- bookkeeping has no bridge).
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(YELL_DEATH)
