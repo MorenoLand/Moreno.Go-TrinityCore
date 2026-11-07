@@ -25,7 +25,11 @@ import (
 // scripts run in Lua, not in a per-instance C++ script object. The arms that
 // can be answered from the DB rows are ported natively; the arms that need
 // the live save/script machinery are RBAC-gated and report the missing
-// bridge honestly (never stubbed).
+// bridge honestly (never stubbed). The boss-state arms gate on the
+// per-map instance-script census (instanceScriptEncounterCounts, D40/D41):
+// presence is the GetInstanceScript() check and the count is the
+// GetEncounterCount() check, so the gates are live even though the script
+// objects themselves have no Go bridge.
 
 // instanceExtendExpired/instanceExtendNormal/instanceExtendExtended mirror
 // InstanceExtendState (Player.h:762-764); listbinds prints "expired" for
@@ -494,16 +498,21 @@ func (s *session) handleInstanceStats(ctx context.Context) bool {
 }
 
 // handleInstanceSaveData mirrors HandleInstanceSaveDataCommand
-// (cs_instance.cpp:177-199). The dungeon gate (LANG_NOT_DUNGEON, 5055) is
-// ported; the save itself needs the player's InstanceScript, which has no
-// Go bridge (boss scripts run in Lua, not in a per-instance C++ script
-// object), so it reports the gap honestly after the gate.
+// (cs_instance.cpp:177-199). The dungeon gate (LANG_NOT_DUNGEON, 5055)
+// and the LANG_NO_INSTANCE_DATA (5056) gate are ported in C++ order; the
+// save itself needs the player's InstanceScript, which has no Go bridge
+// (boss scripts run in Lua, not in a per-instance C++ script object), so
+// it reports the gap honestly after the gates.
 func (s *session) handleInstanceSaveData() bool {
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
 	}
 	if !s.instancePlayerInDungeon(s) {
+		return true
+	}
+	if _, ok := instanceScriptEncounterCount(s.player.Map); !ok {
+		s.sendSysMessage("No instance data.")
 		return true
 	}
 	s.sendSysMessage("Instance scripts are not modeled in the Go tree, so there is no instance data to save.")
@@ -538,21 +547,117 @@ func (s *session) instanceBossStateTarget(args []string, playerIdx int) (*sessio
 	return target, true
 }
 
+// instanceScriptEncounterCounts is the D40/D41 per-map census: every map
+// carrying a C++ InstanceMapScript (InstanceMapScript("name", mapId) in
+// src/server/scripts/**/instance_*.cpp, 74 scripts, no duplicate map) and
+// that script's encounter count (SetBossNumber, resolved through the
+// file's/sibling header's EncounterCount/MAX_ENCOUNTER/NUM_ENCOUNTER;
+// scripts with no SetBossNumber count 0, bosses.size()==0). Presence in
+// this table is the GetInstanceScript() gate (D40); the count is the
+// GetEncounterCount() gate (D41). Generated from the census JSON by
+// d40_d41_instance_census.py; re-run that script to refresh.
+var instanceScriptEncounterCounts = map[uint32]uint32{
+	33:  0,  // shadowfang_keep
+	34:  0,  // the_stockade
+	36:  7,  // deadmines
+	43:  0,  // wailing_caverns
+	47:  0,  // razorfen_kraul
+	48:  3,  // blackfathom_deeps
+	70:  0,  // uldaman
+	90:  5,  // gnomeregan
+	109: 0,  // sunken_temple
+	129: 5,  // razorfen_downs
+	189: 9,  // scarlet_monastery
+	209: 0,  // zulfarrak
+	229: 23, // blackrock_spire
+	230: 0,  // blackrock_depths
+	249: 1,  // onyxias_lair
+	269: 0,  // the_black_morass
+	289: 8,  // scholomance
+	309: 12, // zulgurub
+	329: 0,  // stratholme
+	349: 0,  // maraudon
+	389: 0,  // ragefire_chasm
+	409: 10, // molten_core
+	429: 17, // dire_maul
+	469: 8,  // blackwing_lair
+	509: 6,  // ruins_of_ahnqiraj
+	531: 9,  // temple_of_ahnqiraj
+	532: 12, // karazhan
+	533: 15, // naxxramas
+	534: 0,  // hyjal
+	540: 4,  // shattered_halls
+	542: 3,  // blood_furnace
+	543: 4,  // hellfire_ramparts
+	544: 1,  // magtheridons_lair
+	545: 3,  // steam_vault
+	546: 0,  // the_underbog
+	547: 0,  // the_slave_pens
+	548: 0,  // serpent_shrine
+	550: 4,  // the_eye
+	552: 4,  // arcatraz
+	553: 0,  // the_botanica
+	554: 5,  // mechanar
+	555: 4,  // shadow_labyrinth
+	556: 3,  // sethekk_halls
+	557: 4,  // mana_tombs
+	558: 2,  // auchenai_crypts
+	560: 0,  // old_hillsbrad
+	564: 9,  // black_temple
+	565: 2,  // gruuls_lair
+	568: 6,  // zulaman
+	574: 3,  // utgarde_keep
+	575: 4,  // utgarde_pinnacle
+	576: 5,  // nexus
+	578: 4,  // oculus
+	580: 6,  // sunwell_plateau
+	585: 4,  // magisters_terrace
+	595: 5,  // culling_of_stratholme
+	599: 4,  // halls_of_stone
+	600: 4,  // drak_tharon_keep
+	601: 3,  // azjol_nerub
+	602: 4,  // halls_of_lightning
+	603: 17, // ulduar
+	604: 5,  // gundrak
+	608: 3,  // violet_hold
+	615: 5,  // obsidian_sanctum
+	616: 1,  // eye_of_eternity
+	619: 5,  // ahnkahet
+	624: 4,  // vault_of_archavon
+	631: 13, // icecrown_citadel
+	632: 2,  // forge_of_souls
+	649: 6,  // trial_of_the_crusader
+	650: 4,  // trial_of_the_champion
+	658: 3,  // pit_of_saron
+	668: 3,  // halls_of_reflection
+	724: 4,  // ruby_sanctum
+}
+
+// instanceScriptEncounterCount mirrors InstanceMap::GetInstanceScript()
+// presence plus InstanceScript::GetEncounterCount(): the second return is
+// false when the map carries no instance script at all.
+func instanceScriptEncounterCount(mapID uint32) (uint32, bool) {
+	count, ok := instanceScriptEncounterCounts[mapID]
+	return count, ok
+}
+
 // handleInstanceSetBossState mirrors HandleInstanceSetBossStateCommand
 // (cs_instance.cpp:200-267): the syntax gates (encounter + state required),
 // the player resolution, the LANG_NOT_DUNGEON (5055) gate, the
-// LANG_NO_INSTANCE_DATA (5056) gate, and the state > TO_BE_DECIDED
-// LANG_BAD_VALUE gate are all ported in C++ order, then the live
-// boss-state store takes the set and the LANG_COMMAND_INST_SET_BOSS_STATE
-// line prints unconditionally, as in C++ (the SetBossState return is
-// ignored there too). A negative state passes the gate like C++ (the
-// check is `state > TO_BE_DECIDED` only, cs_instance.cpp:256): it wraps
-// to the uint8 enum, and the name prints INVALID via encounterStateName,
-// exactly as GetBossStateName does for the wrapped value. DELTAS: no
-// encounter-count gate (Go has no per-script boss count; the table is a
-// census job, D41) and the NO_INSTANCE_DATA gate is vacuous (Go instances
-// always carry the store; the dungeon gate above is the live check, D40).
-// The message wording is a plain-English recall (LANG text is TDB).
+// LANG_NO_INSTANCE_DATA (5056) gate, and the combined state >
+// TO_BE_DECIDED / encounterId > GetEncounterCount() LANG_BAD_VALUE gate
+// are all ported in C++ order, then the live boss-state store takes the
+// set and the LANG_COMMAND_INST_SET_BOSS_STATE line prints
+// unconditionally, as in C++ (the SetBossState return is ignored there
+// too). A negative state passes the gate like C++ (the check is `state >
+// TO_BE_DECIDED` only, cs_instance.cpp:256): it wraps to the uint8 enum,
+// and the name prints INVALID via encounterStateName, exactly as
+// GetBossStateName does for the wrapped value. The encounter-count gate
+// reads instanceScriptEncounterCounts (D41 census); an encounterId equal
+// to the count passes the gate but is NOT stored — C++ SetBossState
+// ignores id >= bosses.size() (InstanceScript.cpp) while the success
+// message still prints. The message wording is a plain-English recall
+// (LANG text is TDB).
 func (s *session) handleInstanceSetBossState(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .instance setbossstate <encounter> <state> [player]"
 	if len(args) == 0 {
@@ -571,24 +676,35 @@ func (s *session) handleInstanceSetBossState(ctx context.Context, args []string)
 	if !s.instancePlayerInDungeon(target) {
 		return true
 	}
+	encounterCount, ok := instanceScriptEncounterCount(target.player.Map)
+	if !ok {
+		s.sendSysMessage("No instance data.")
+		return true
+	}
 	encounterID := uint32(cAtoi(args[0]))
 	state := cAtoi(args[1])
-	// C++ rejects only state > TO_BE_DECIDED (cs_instance.cpp:256); a
+	// C++ rejects state > TO_BE_DECIDED or encounterId >
+	// GetEncounterCount() in one check (cs_instance.cpp:256-260); a
 	// negative state passes and wraps into the EncounterState enum, so
 	// it is set (uint8(state)) and reported INVALID, not Bad value.
-	if state > int(encounterStateToBeDecided) {
+	if state > int(encounterStateToBeDecided) || encounterID > encounterCount {
 		s.sendSysMessage("Bad value.")
 		return true
 	}
-	s.server.setInstanceBossState(ctx, target.player.Map, target.player.InstanceID, encounterID, uint8(state), effectiveTeamFor(target.player), true)
+	// encounterId == count passes the gate but SetBossState ignores
+	// id >= bosses.size(); only an in-range id reaches the store.
+	if encounterID < encounterCount {
+		s.server.setInstanceBossState(ctx, target.player.Map, target.player.InstanceID, encounterID, uint8(state), effectiveTeamFor(target.player), true)
+	}
 	s.sendSysMessage(fmt.Sprintf("Boss state for encounter %d set to %s (%d).", encounterID, encounterStateName(uint8(state)), state))
 	return true
 }
 
 // handleInstanceGetBossState mirrors HandleInstanceGetBossStateCommand
 // (cs_instance.cpp:268-319): same gates as setbossstate in C++ order, then
-// the live store read and the LANG_COMMAND_INST_GET_BOSS_STATE line. Same
-// deltas as set: no encounter-count gate, wording is a recall.
+// the live store read and the LANG_COMMAND_INST_GET_BOSS_STATE line. An
+// encounterId equal to the count passes the gate and reads TO_BE_DECIDED,
+// matching C++ GetBossState for id >= bosses.size(). Wording is a recall.
 func (s *session) handleInstanceGetBossState(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .instance getbossstate <encounter> [player]"
 	if len(args) < 1 {
@@ -601,7 +717,16 @@ func (s *session) handleInstanceGetBossState(ctx context.Context, args []string)
 	if !s.instancePlayerInDungeon(target) {
 		return true
 	}
+	encounterCount, ok := instanceScriptEncounterCount(target.player.Map)
+	if !ok {
+		s.sendSysMessage("No instance data.")
+		return true
+	}
 	encounterID := uint32(cAtoi(args[0]))
+	if encounterID > encounterCount {
+		s.sendSysMessage("Bad value.")
+		return true
+	}
 	state := s.server.instanceBossState(target.player.Map, target.player.InstanceID, encounterID)
 	s.sendSysMessage(fmt.Sprintf("Boss state for encounter %d is %s (%d).", encounterID, encounterStateName(state), state))
 	return true
