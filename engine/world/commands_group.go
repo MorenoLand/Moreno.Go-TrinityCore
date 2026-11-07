@@ -338,6 +338,11 @@ func (s *session) handleGroupFlagCommand(ctx context.Context, args []string, fla
 	}
 	if idx < 0 {
 		srv.groupsMu.Unlock()
+		// C++ GetMemberFlags returns 0 for a missing slot, so the flag
+		// command still takes the "now" branch and prints
+		// LANG_GROUP_ROLE_CHANGED (cs_group.cpp:218-230); the
+		// SetGroupMemberFlag call no-ops, so nothing persists.
+		s.sendSysMessage(fmt.Sprintf("%s is now an %s.", t.name, what)) // LANG_GROUP_ROLE_CHANGED (1186)
 		return true
 	}
 	apply := g.Members[idx].Flags&flag == 0
@@ -583,19 +588,20 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) boo
 		typ = "raid"
 	}
 	s.sendSysMessage(fmt.Sprintf("Group type: %s. Members count: %d.", typ, len(members))) // LANG_GROUP_TYPE (1149)
+	// zoneName lives outside the loop (cs_group.cpp:342, initially empty):
+	// the online branch assigns it only on a successful area+parent
+	// lookup, so a miss keeps the previous member's value; the offline
+	// branch sets "<ERROR>" (cs_group.cpp:418-431).
+	zoneName := ""
 	for _, slot := range members {
 		flags := groupFlagNames(slot.Flags)
 		onlineState := "Offline"
-		zoneName := "<ERROR>"
 		var phase uint32
 		if p := s.server.findSessionByGUID(slot.GUID); p != nil && p.player != nil {
 			onlineState = "online"
 			// Zone name via the member's area row's parent (cs_group.cpp:418-426):
-			// AreaTable is bridged (Store.Area), so the old "" placeholder goes.
-			// A missing area or parent leaves it empty, as in C++ (where a
-			// missing lookup keeps the previous member's value; Go resets per
-			// member instead of carrying that stale value across rows).
-			zoneName = ""
+			// AreaTable is bridged (Store.Area). A missing area or parent
+			// leaves the previous member's value in place, as in C++.
 			if s.server != nil && s.server.Data != nil {
 				_, areaID := s.server.zoneAndAreaID(p.player.Map, p.player.X, p.player.Y, p.player.Z, 0)
 				if areaID != 0 {
@@ -611,6 +617,9 @@ func (s *session) handleGroupListCommand(ctx context.Context, args []string) boo
 			} else {
 				phase = ^uint32(0) // C++ assigns -1 to the uint32 phase
 			}
+		} else {
+			// C++ offline branch (cs_group.cpp:427-431).
+			zoneName = "<ERROR>"
 		}
 		s.sendSysMessage(fmt.Sprintf("%s: %s, Zone: %s, Phase: %d, Guid: %d, Flags: %s, Roles: %s",
 			slot.Name, onlineState, zoneName, phase, slot.GUID, flags, lfgRolesString(slot.Roles))) // LANG_GROUP_PLAYER_NAME_GUID (1150)

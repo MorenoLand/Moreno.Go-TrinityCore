@@ -6261,10 +6261,8 @@ func (s *session) handleCmdArenaCreate(ctx context.Context, args []string) bool 
 		s.sendSysMessage("Invalid arena team type. Use 2, 3 or 5.")
 		return true
 	}
-	if name == "" {
-		s.sendSysMessage("Syntax: .arena create [<captain>] \"<name>\" <2|3|5>")
-		return true
-	}
+	// No empty-name leg: C++ has none (QuotedString "" parses, Create
+	// only checks captain-exists + name-taken, ArenaTeam.cpp:48-56).
 	// LANG_ARENA_ERROR_NAME_EXISTS (858). C++ checks the name before the
 	// captain fallback (cs_arena.cpp HandleArenaCreateCommand), so a taken
 	// name reports here even when no captain target resolves.
