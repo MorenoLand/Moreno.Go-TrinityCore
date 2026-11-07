@@ -25,6 +25,11 @@ type gameEvent struct {
 
 const gameEventStateNormal = 0
 
+// gameEventStateInternal is GAMEEVENT_INTERNAL (GameEventMgr.h:40): like
+// NORMAL it takes the StartEvent branch that writes the worldstate, and
+// it is never handled by the update loop.
+const gameEventStateInternal = 5
+
 // activeGameEvents computes the currently active event set the way
 // GameEventMgr does for GAMEEVENT_NORMAL rows: the event is active when now
 // lies inside [start, end) and inside the current occurrence window.
@@ -132,12 +137,14 @@ func (s *Server) withGameEventOverrides(base map[int64]struct{}) map[int64]struc
 // StopGameEvent (inactive) override. GameEventMgr::StartEvent/StopEvent
 // (GameEventMgr.cpp:134/185) reduce, for GAMEEVENT_NORMAL events, to
 // AddActiveEvent/RemoveActiveEvent plus the start/stop hook fire, and the
-// 34/35 hook leg already diffs this cached set on the world tick, so the
-// override reproduces the Lua-observable legs. DELTAS: no ApplyNewEvent
-// spawn application, no worldstate write, no schedule rewrite (the force
-// argument is accepted and ignored), and an override persists until the
-// opposite call — a forced-active event is not expired by its schedule
-// window and a forced-inactive one does not rejoin at its next occurrence.
+// 34/35 hook leg already diffs this cached set on the world tick; the
+// ApplyNewEvent/UnApplyEvent legs (spawn application via the query-time
+// event clause, model/equip and vendor rows; announce and worldstate
+// writes) run on the same tick transition in applyGameEventTransition.
+// DELTAS: no schedule rewrite (the force argument is accepted and
+// ignored), and an override persists until the opposite call — a
+// forced-active event is not expired by its schedule window and a
+// forced-inactive one does not rejoin at its next occurrence.
 func (s *Server) setGameEventOverride(eventID int64, active bool) {
 	s.gameEventOverrideMu.Lock()
 	defer s.gameEventOverrideMu.Unlock()
@@ -164,13 +171,16 @@ func (s *Server) cachedActiveGameHolidays(ctx context.Context) map[int64]struct{
 	return refreshedHolidays
 }
 
-// gameEventFull extends gameEvent with the description column so the event
-// command arms can render the GameEventDataMap the way cs_event.cpp does
-// (GameEventData.description plus the schedule columns). isValid mirrors
-// GameEventData::isValid (GameEventMgr.h:77): length > 0 || state > GAMEEVENT_NORMAL.
+// gameEventFull extends gameEvent with the description and announce
+// columns so the event command arms can render the GameEventDataMap the
+// way cs_event.cpp does (GameEventData.description plus the schedule
+// columns) and ApplyNewEvent can gate its world text
+// (GameEventMgr.cpp:1182-1188). isValid mirrors GameEventData::isValid
+// (GameEventMgr.h:77): length > 0 || state > GAMEEVENT_NORMAL.
 type gameEventFull struct {
 	gameEvent
 	Description string
+	Announce    int64
 }
 
 // isValid mirrors GameEventData::isValid.
@@ -186,9 +196,9 @@ func (s *Server) loadGameEventDataMap(ctx context.Context) map[int64]gameEventFu
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return data
 	}
-	query := "SELECT eventEntry, COALESCE(UNIX_TIMESTAMP(start_time), 0), COALESCE(UNIX_TIMESTAMP(end_time), 0), occurence, length, holiday, world_event, description FROM game_event"
+	query := "SELECT eventEntry, COALESCE(UNIX_TIMESTAMP(start_time), 0), COALESCE(UNIX_TIMESTAMP(end_time), 0), occurence, length, holiday, world_event, description, announce FROM game_event"
 	if s.WorldStore.Backend == database.BackendSQLite {
-		query = "SELECT eventEntry, CAST(strftime('%s', start_time) AS INTEGER), CAST(strftime('%s', end_time) AS INTEGER), occurence, length, holiday, world_event, description FROM game_event"
+		query = "SELECT eventEntry, CAST(strftime('%s', start_time) AS INTEGER), CAST(strftime('%s', end_time) AS INTEGER), occurence, length, holiday, world_event, description, announce FROM game_event"
 	}
 	rows, err := s.WorldStore.DB.QueryContext(ctx, query)
 	if err != nil {
@@ -197,7 +207,7 @@ func (s *Server) loadGameEventDataMap(ctx context.Context) map[int64]gameEventFu
 	defer rows.Close()
 	for rows.Next() {
 		var event gameEventFull
-		if err := rows.Scan(&event.Entry, &event.Start, &event.End, &event.Occurrence, &event.Length, &event.Holiday, &event.WorldEvent, &event.Description); err != nil {
+		if err := rows.Scan(&event.Entry, &event.Start, &event.End, &event.Occurrence, &event.Length, &event.Holiday, &event.WorldEvent, &event.Description, &event.Announce); err != nil {
 			continue
 		}
 		if event.Entry == 0 {
@@ -1841,14 +1851,18 @@ func (s *Server) activeEventList(ctx context.Context) []int64 {
 }
 
 // gameEventSpawnClause builds the SQL fragment and args filtering event
-// spawns: positive entries spawn only while active, negative entries are
-// removed while active (TC mGameEventCreatureGuids semantics).
+// spawns (GameEventMgr::GameEventSpawn/Unspawn, GameEventMgr.cpp:1281-1420):
+// an untagged row always shows, a positive entry shows only while its
+// event is active, and a negative entry shows only while its event is NOT
+// active. The old form ANDed the positive arm with a negative arm that
+// degenerated to `column IS NULL` (the active set never holds negative
+// ids, so its placeholder list was always empty): every tagged row was
+// hidden whenever any event was active, and negative-tagged rows were
+// hidden even with no event active. A guid with two passing tag rows
+// yields two joined rows; the bulk sweep loops dedupe by guid.
 func gameEventSpawnClause(column string, active []int64, args *[]any) string {
-	if len(active) == 0 {
-		return "(" + column + " IS NULL OR " + column + " = 0)"
-	}
-	positive := "(" + column + " IS NULL OR " + column + " = 0"
 	placeholders := ""
+	var ids []any
 	for _, entry := range active {
 		if entry <= 0 {
 			continue
@@ -1857,28 +1871,18 @@ func gameEventSpawnClause(column string, active []int64, args *[]any) string {
 			placeholders += ", "
 		}
 		placeholders += "?"
-		*args = append(*args, entry)
+		ids = append(ids, entry)
 	}
+	clause := "(" + column + " IS NULL OR " + column + " = 0"
 	if placeholders != "" {
-		positive += " OR " + column + " IN (" + placeholders + ")"
+		clause += " OR " + column + " IN (" + placeholders + ")"
+		clause += " OR (" + column + " < 0 AND -" + column + " NOT IN (" + placeholders + "))"
+		*args = append(*args, ids...)
+		*args = append(*args, ids...)
+	} else {
+		clause += " OR " + column + " < 0"
 	}
-	positive += ")"
-	negative := column + " IS NULL"
-	negPlaceholders := ""
-	for _, entry := range active {
-		if entry >= 0 {
-			continue
-		}
-		if negPlaceholders != "" {
-			negPlaceholders += ", "
-		}
-		negPlaceholders += "?"
-		*args = append(*args, -entry)
-	}
-	if negPlaceholders != "" {
-		negative = "(" + column + " IS NULL OR " + column + " NOT IN (" + negPlaceholders + "))"
-	}
-	return positive + " AND " + negative
+	return clause + ")"
 }
 
 // gameEventNPCFlagJoin returns a COALESCE-able sum of event npc flags that
@@ -1897,4 +1901,61 @@ func (s *Server) gameEventNPCFlagClause(ctx context.Context, args *[]any) (strin
 		*args = append(*args, entry)
 	}
 	return "(SELECT COALESCE(SUM(nf.npcflag), 0) FROM game_event_npcflag nf WHERE nf.guid = c.guid AND nf.eventEntry IN (" + placeholders + "))", true
+}
+
+// gameEventModelEquipOverride is one game_event_model_equip row for an
+// active event with its equipment items resolved (GameEventMgr::
+// ChangeEquipOrModel, GameEventMgr.cpp:1422-1479; load
+// GameEventMgr.cpp:501-545): equipment_id 0 clears the three virtual
+// item slots (Creature::LoadEquipment(0), Creature.cpp:1798-1807), and a
+// positive equipment_id with no creature_equip_template row drops the
+// whole row at load, so the fetch excludes it.
+type gameEventModelEquipOverride struct {
+	modelID     uint32
+	equipmentID uint32
+	item1       uint32
+	item2       uint32
+	item3       uint32
+}
+
+// gameEventModelEquipOverrides loads the active events' model/equipment
+// changes keyed by creature guid, lowest event first when two active
+// events change the same guid (C++ applies in activation order; Go has
+// no activation order, so the choice is deterministic rather than exact).
+func (s *Server) gameEventModelEquipOverrides(ctx context.Context, active []int64) map[uint32]gameEventModelEquipOverride {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || len(active) == 0 {
+		return nil
+	}
+	placeholders := ""
+	args := make([]any, 0, len(active))
+	for _, entry := range active {
+		if entry <= 0 {
+			continue
+		}
+		if placeholders != "" {
+			placeholders += ", "
+		}
+		placeholders += "?"
+		args = append(args, entry)
+	}
+	if placeholders == "" {
+		return nil
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, `SELECT gem.guid, gem.modelid, gem.equipment_id, COALESCE(eq.ItemID1, 0), COALESCE(eq.ItemID2, 0), COALESCE(eq.ItemID3, 0) FROM game_event_model_equip gem JOIN creature c ON c.guid = gem.guid LEFT JOIN creature_equip_template eq ON eq.CreatureID = c.id AND eq.ID = gem.equipment_id WHERE gem.eventEntry IN (`+placeholders+`) AND (gem.equipment_id = 0 OR eq.CreatureID IS NOT NULL) ORDER BY gem.eventEntry`, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	overrides := make(map[uint32]gameEventModelEquipOverride)
+	for rows.Next() {
+		var guid, modelID, equipmentID, item1, item2, item3 int64
+		if err := rows.Scan(&guid, &modelID, &equipmentID, &item1, &item2, &item3); err != nil {
+			continue
+		}
+		if _, dup := overrides[uint32(guid)]; dup {
+			continue
+		}
+		overrides[uint32(guid)] = gameEventModelEquipOverride{modelID: uint32(modelID), equipmentID: uint32(equipmentID), item1: uint32(item1), item2: uint32(item2), item3: uint32(item3)}
+	}
+	return overrides
 }

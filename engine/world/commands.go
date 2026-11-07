@@ -7080,11 +7080,13 @@ func (s *session) handleEventInfo(ctx context.Context, args []string) {
 // StartEvent(eventId, true) runs through the forced-override layer behind
 // the StartGameEvent Lua global (luaGameEventControl, conditions.go):
 // the event joins the cached active set at once, and the 100ms world-tick
-// 34/35 diff fires the start transition. DELTAS vs C++: no ApplyNewEvent
-// spawn application, no worldstate write, no start/end schedule rewrite
-// (force accepted, ignored by the override layer), and the hook fires on
-// the next tick rather than synchronously; the override persists until
-// the opposite call instead of expiring with the schedule window.
+// 34/35 diff fires the start transition; the ApplyNewEvent legs run on
+// the same tick transition (applyGameEventTransition: announce +
+// worldstate write; spawn application is query-time). DELTAS vs C++: no
+// start/end schedule rewrite (force accepted, ignored by the override
+// layer), and the hook fires on the next tick rather than synchronously;
+// the override persists until the opposite call instead of expiring with
+// the schedule window.
 func (s *session) handleEventStart(ctx context.Context, args []string) {
 	const syntax = "Syntax: .event start <eventId>"
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
@@ -7118,9 +7120,11 @@ func (s *session) handleEventStart(ctx context.Context, args []string) {
 // StopEvent(eventId, true) runs through the forced-override layer behind
 // the StopGameEvent Lua global (luaGameEventControl, conditions.go):
 // the event leaves the cached active set at once, and the 100ms
-// world-tick 34/35 diff fires the stop transition. DELTAS vs C++: no
-// UnApplyEvent spawn removal, no worldstate cleanup, no forced-state DB
-// reset, and the hook fires on the next tick rather than synchronously.
+// world-tick 34/35 diff fires the stop transition; the UnApplyEvent legs
+// run on the same tick transition (applyGameEventTransition: worldstate
+// cleanup; spawn removal is query-time). DELTAS vs C++: no forced-state
+// DB reset, and the hook fires on the next tick rather than
+// synchronously.
 func (s *session) handleEventStop(ctx context.Context, args []string) {
 	const syntax = "Syntax: .event stop <eventId>"
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {

@@ -87,6 +87,26 @@ func creatureSpawnHealth(regenerate bool, current, maximum uint32) uint32 {
 	return current
 }
 
+// applyGameEventModelEquip applies one game_event_model_equip override
+// to a sweep spawn (GameEventMgr::ChangeEquipOrModel,
+// GameEventMgr.cpp:1422-1479): modelid replaces the display only when
+// positive (the C++ apply guard), equipment_id 0 clears the virtual
+// item slots (Creature::LoadEquipment(0), Creature.cpp:1798-1807) and a
+// positive id swaps in the resolved template items.
+func applyGameEventModelEquip(spawn *creatureSpawn, over gameEventModelEquipOverride) {
+	if spawn == nil {
+		return
+	}
+	if over.modelID > 0 {
+		spawn.Model = over.modelID
+	}
+	if over.equipmentID == 0 {
+		spawn.Item1, spawn.Item2, spawn.Item3 = 0, 0, 0
+	} else {
+		spawn.Item1, spawn.Item2, spawn.Item3 = over.item1, over.item2, over.item3
+	}
+}
+
 func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerState, phaseMask uint32, observer *session) (*protocol.Packet, int, error) {
 	distance := s.visibilityRangeForMap(state.Map)
 	if distance <= 0 {
@@ -123,8 +143,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	if flagClause, ok := s.gameEventNPCFlagClause(ctx, &selectArgs); ok {
 		npcFlagExpr = flagClause
 	}
+	activeEvents := s.activeEventList(ctx)
 	var eventArgs []any
-	eventClause := gameEventSpawnClause("gec.eventEntry", s.activeEventList(ctx), &eventArgs)
+	eventClause := gameEventSpawnClause("gec.eventEntry", activeEvents, &eventArgs)
+	modelEquipOverrides := s.gameEventModelEquipOverrides(ctx, activeEvents)
 	// IsSpiritService (Unit.h:1021) tests the live UNIT_NPC_FLAGS
 	// (template | spawn npcflag override), so the ghost-visibility predicate
 	// uses COALESCE(NULLIF(c.npcflag,0),t.npcflag,0), not the template
@@ -197,6 +219,9 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 				continue
 			}
 			spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: 1, WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), FlagsExtra: uint32(flagsExtra), TypeFlags: uint32(typeFlags)}
+			if over, ok := modelEquipOverrides[spawn.GUID]; ok {
+				applyGameEventModelEquip(&spawn, over)
+			}
 			spawns = append(spawns, spawn)
 			count++
 		}
@@ -237,6 +262,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		packet, err := updates.BuildPacket(0)
 		return packet, count, err
 	}
+	// A guid with two passing game_event_creature rows joins twice; the
+	// grid holds it once (GameEventSpawn is idempotent per guid), so the
+	// second row is dropped here.
+	seenGUIDs := make(map[uint32]struct{})
 	spawns := make([]creatureSpawn, 0)
 	count := 0
 	for rows.Next() {
@@ -245,6 +274,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3, &flagsExtra, &typeFlags); err != nil {
 			return nil, count, err
 		}
+		if _, dup := seenGUIDs[uint32(guid)]; dup {
+			continue
+		}
+		seenGUIDs[uint32(guid)] = struct{}{}
 		visRange := distance
 		if s.creatureScriptFarVisible(state.Map, state.InstanceID, uint32(guid), uint32(entry)) {
 			visRange = maxVisibilityDistance
@@ -253,6 +286,9 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			continue
 		}
 		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), RegenerateHealth: regenerateHealth != 0, Mana: uint32(mana), Scale: float32(scale), HoverHeight: float32(hoverHeight), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3), FlagsExtra: uint32(flagsExtra), TypeFlags: uint32(typeFlags)}
+		if over, ok := modelEquipOverrides[spawn.GUID]; ok {
+			applyGameEventModelEquip(&spawn, over)
+		}
 		spawns = append(spawns, spawn)
 		count++
 	}

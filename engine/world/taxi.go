@@ -237,10 +237,15 @@ func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
 		faction     uint32
 	}
 	masters := make([]flightmaster, 0)
+	seenMasters := make(map[uint32]struct{})
 	for rows.Next() {
 		var guid, entry, faction, npcFlags int64
 		var x, y, z float64
 		if rows.Scan(&guid, &entry, &x, &y, &z, &faction, &npcFlags) == nil && uint32(npcFlags)&unitNPCFlagFlightmaster != 0 && validMovementPosition(float32(x), float32(y), float32(z), 0) && math.Sqrt((x-float64(s.player.X))*(x-float64(s.player.X))+(y-float64(s.player.Y))*(y-float64(s.player.Y))+(z-float64(s.player.Z))*(z-float64(s.player.Z))) <= distance {
+			if _, dup := seenMasters[uint32(guid)]; dup {
+				continue
+			}
+			seenMasters[uint32(guid)] = struct{}{}
 			masters = append(masters, flightmaster{guid: uint32(guid), entry: uint32(entry), x: float32(x), y: float32(y), z: float32(z), faction: uint32(faction)})
 		}
 	}

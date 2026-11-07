@@ -205,6 +205,9 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 	defer rows.Close()
 	updates := protocol.NewUpdateData()
 	count := 0
+	// A guid with two passing game_event_gameobject rows joins twice; the
+	// grid holds it once, so the second row is dropped here.
+	seenGUIDs := make(map[uint32]struct{})
 	for rows.Next() {
 		var spawn gameObjectSpawn
 		var guid, entry, mapID, stateValue, animProgress, objectType, displayID, flags, faction, artKit int64
@@ -212,6 +215,10 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &rotationX, &rotationY, &rotationZ, &rotationW, &stateValue, &animProgress, &objectType, &displayID, &size, &flags, &faction, &artKit, &parentRotation0, &parentRotation1, &parentRotation2, &parentRotation3); err != nil {
 			return nil, count, err
 		}
+		if _, dup := seenGUIDs[uint32(guid)]; dup {
+			continue
+		}
+		seenGUIDs[uint32(guid)] = struct{}{}
 		if math.Hypot(x-float64(state.X), y-float64(state.Y)) > distance || !validMovementPosition(float32(x), float32(y), float32(z), float32(orientation)) {
 			continue
 		}

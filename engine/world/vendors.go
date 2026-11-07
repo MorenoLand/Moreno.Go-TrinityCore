@@ -256,7 +256,54 @@ func (s *session) expandedVendorRows(ctx context.Context, vendorEntry uint32) []
 		_ = rows.Close()
 		return out
 	}
-	return expand(vendorEntry)
+	rows := expand(vendorEntry)
+	for _, r := range s.gameEventVendorRows(ctx, vendorEntry) {
+		if validRow(r) {
+			rows = append(rows, r)
+		}
+	}
+	return rows
+}
+
+// gameEventVendorRows loads the active events' vendor additions for one
+// creature entry (GameEventMgr::UpdateEventNPCVendor,
+// GameEventMgr.cpp:1255-1267; load GameEventMgr.cpp:828-879): the table
+// is keyed by spawn guid, resolved to the entry through creature, and
+// the rows append after the base npc_vendor list in event, guid, slot
+// order. The (template | event) vendor-flag validity leg
+// (ObjectMgr::IsVendorItemValid, ObjectMgr.cpp:9629) rides the gossip
+// option gate, which already ORs the event npcflag into the live flags.
+func (s *session) gameEventVendorRows(ctx context.Context, vendorEntry uint32) []expandedVendorRow {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil
+	}
+	active := s.server.activeEventList(ctx)
+	if len(active) == 0 {
+		return nil
+	}
+	placeholders := ""
+	args := []any{vendorEntry}
+	for _, entry := range active {
+		if placeholders != "" {
+			placeholders += ", "
+		}
+		placeholders += "?"
+		args = append(args, entry)
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT gev.item, gev.maxcount, gev.incrtime, gev.ExtendedCost FROM game_event_npc_vendor gev JOIN creature c ON c.guid = gev.guid WHERE c.id = ? AND gev.eventEntry IN (`+placeholders+`) ORDER BY gev.eventEntry, gev.guid, gev.slot`, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []expandedVendorRow
+	for rows.Next() {
+		var r expandedVendorRow
+		if err := rows.Scan(&r.item, &r.maxCount, &r.incrTime, &r.extCost); err != nil {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // vendorTemplateInfo carries the item_template columns the vendor list and
